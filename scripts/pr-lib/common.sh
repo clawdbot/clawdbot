@@ -6,6 +6,22 @@ require_artifact() {
   fi
 }
 
+validate_pr_temp_storage() {
+  local temp_dir="${TMPDIR:-/tmp}"
+  local probe=""
+  if ! probe=$(mktemp "${temp_dir%/}/openclaw-pr.XXXXXX"); then
+    :
+  elif ! printf 'openclaw-pr-temp-probe\n' >"$probe"; then
+    rm -f "$probe" 2>/dev/null || true
+  elif rm -f "$probe"; then
+    return 0
+  fi
+
+  echo "scripts/pr temporary-storage preflight failed under TMPDIR=$temp_dir." >&2
+  echo "Free disk space or set TMPDIR to a writable filesystem, then retry." >&2
+  return 1
+}
+
 path_is_docsish() {
   local path="$1"
   case "$path" in
@@ -16,58 +32,39 @@ path_is_docsish() {
   return 1
 }
 
-path_is_testish() {
-  local path="$1"
-  case "$path" in
-    *__tests__/*|*.test.*|*.spec.*|test/*|tests/*)
-      return 0
-      ;;
-  esac
-  return 1
-}
-
-path_is_maintainer_workflow_only() {
-  local path="$1"
-  case "$path" in
-    .agents/*|scripts/pr|scripts/pr-*|docs/subagent.md)
-      return 0
-      ;;
-  esac
-  return 1
-}
-
 file_list_is_docsish_only() {
   local files="$1"
   local saw_any=false
   local path
-  while IFS= read -r path; do
+  while [ -n "$files" ]; do
+    path="${files%%$'\n'*}"
+    if [ "$path" = "$files" ]; then
+      files=""
+    else
+      files="${files#*$'\n'}"
+    fi
     [ -n "$path" ] || continue
     saw_any=true
     if ! path_is_docsish "$path"; then
       return 1
     fi
-  done <<<"$files"
+  done
 
   [ "$saw_any" = "true" ]
 }
 
 changelog_required_for_changed_files() {
-  local files="$1"
-  local saw_any=false
-  local path
-  while IFS= read -r path; do
-    [ -n "$path" ] || continue
-    saw_any=true
-    if path_is_docsish "$path" || path_is_testish "$path" || path_is_maintainer_workflow_only "$path"; then
-      continue
-    fi
-    return 0
-  done <<<"$files"
+  # CHANGELOG.md is release-owned. Normal PRs carry release-note context in
+  # PR bodies and commit messages; release automation generates the file.
+  return 1
+}
 
-  if [ "$saw_any" = "false" ]; then
-    return 1
-  fi
-
+root_changelog_update_allowed_for_pr() {
+  case "${OPENCLAW_ALLOW_ROOT_CHANGELOG_PR:-}" in
+    1|true|TRUE|yes|YES|on|ON)
+      return 0
+      ;;
+  esac
   return 1
 }
 
@@ -148,6 +145,60 @@ bootstrap_deps_if_needed() {
   fi
 }
 
+read_pr_view_json() {
+  local pr="$1"
+  local fields="$2"
+  local max_attempts=3
+  local temp_dir
+  temp_dir=$(mktemp -d "${TMPDIR:-/tmp}/openclaw-pr-view.XXXXXX") || {
+    echo "Unable to create temporary storage for GitHub PR metadata." >&2
+    return 1
+  }
+  local stdout_file="$temp_dir/stdout"
+  local stderr_file="$temp_dir/stderr"
+  local attempt exit_code reason
+
+  for attempt in $(seq 1 "$max_attempts"); do
+    exit_code=0
+    if gh pr view "$pr" --json "$fields" >"$stdout_file" 2>"$stderr_file"; then
+      if [ -s "$stdout_file" ] && jq -se 'length == 1 and (.[0] | type == "object")' "$stdout_file" >/dev/null 2>&1; then
+        cat "$stdout_file"
+        rm -rf "$temp_dir"
+        return 0
+      fi
+      if [ ! -s "$stdout_file" ]; then
+        reason="gh pr view returned empty stdout"
+      else
+        reason="gh pr view did not return one JSON object"
+      fi
+    else
+      exit_code=$?
+      reason="gh pr view exited with status $exit_code"
+    fi
+    [ "$attempt" -eq "$max_attempts" ] || sleep "$attempt"
+  done
+
+  echo "GitHub API failure while reading PR #$pr: $reason after $max_attempts attempts." >&2
+  [ ! -s "$stderr_file" ] || cat "$stderr_file" >&2
+  rm -rf "$temp_dir"
+  return 1
+}
+
+pr_view_string_field() {
+  local json="$1" field="$2" pr="$3" remedy="${4:-Retry the command.}" label value
+  case "$field" in
+    headRefOid) label="a head SHA" ;;
+    baseRefName) label="a base branch" ;;
+    headRefName) label="a head branch" ;;
+    *) label="a non-empty .$field string" ;;
+  esac
+  if ! value=$(printf '%s\n' "$json" | jq -er --arg field "$field" '.[$field] | if type == "string" and length > 0 then . else error("missing string field") end' 2>/dev/null); then
+    echo "GitHub PR metadata for #$pr did not include $label. $remedy" >&2
+    return 1
+  fi
+  printf '%s\n' "$value"
+}
+
 wait_for_pr_head_sha() {
   local pr="$1"
   local expected_sha="$2"
@@ -168,27 +219,6 @@ wait_for_pr_head_sha() {
   done
 
   return 1
-}
-
-is_author_email_merge_error() {
-  local msg="$1"
-  printf '%s\n' "$msg" | rg -qi 'author.?email|email.*associated|associated.*email|invalid.*email'
-}
-
-merge_author_email_candidates() {
-  local reviewer="$1"
-  local reviewer_id="$2"
-
-  local gh_email
-  gh_email=$(gh api user --jq '.email // ""' 2>/dev/null || true)
-  local git_email
-  git_email=$(git config user.email 2>/dev/null || true)
-
-  printf '%s\n' \
-    "$gh_email" \
-    "$git_email" \
-    "${reviewer_id}+${reviewer}@users.noreply.github.com" \
-    "${reviewer}@users.noreply.github.com" | awk 'NF && !seen[$0]++'
 }
 
 pr_contributor_allows_human_trailers() {
@@ -231,38 +261,33 @@ common_repo_root() {
 worktree_path_for_branch() {
   local branch="$1"
   local ref="refs/heads/$branch"
-
-  git worktree list --porcelain | awk -v ref="$ref" '
-    /^worktree / {
-      worktree=$2
-      next
-    }
-    /^branch / {
-      if ($2 == ref) {
-        print worktree
-        found=1
-      }
-    }
-    END {
-      if (!found) {
-        exit 1
-      }
-    }
-  '
+  local field worktree="" match=""
+  # Drain foreground Git before the supervisor checks for leftover children.
+  git worktree list --porcelain -z | {
+    while IFS= read -r -d '' field; do
+      case "$field" in
+        worktree\ *) worktree="${field#worktree }" ;;
+        "branch $ref") match="$worktree" ;;
+        "") worktree="" ;;
+      esac
+    done
+    [ -n "$match" ] || return 1
+    printf '%s\n' "$match"
+  }
 }
 
 worktree_is_registered() {
   local path="$1"
-  git worktree list --porcelain | awk -v target="$path" '
-    /^worktree / {
-      if ($2 == target) {
-        found=1
-      }
-    }
-    END {
-      exit found ? 0 : 1
-    }
-  '
+  local field found=false
+  # Git must finish before a successful operation can release its lock.
+  git worktree list --porcelain -z | {
+    while IFS= read -r -d '' field; do
+      case "$field" in
+        worktree\ *) [ "${field#worktree }" != "$path" ] || found=true ;;
+      esac
+    done
+    [ "$found" = true ]
+  }
 }
 
 resolve_existing_dir_path() {
@@ -303,26 +328,81 @@ is_repo_pr_worktree_dir() {
   return 1
 }
 
+has_worktree_merge_output() {
+  local path="$1" capture
+  for capture in "$path/.local/merge-output.log" "$path"/.local/merge-output.*.log; do
+    if [ -e "$capture" ] || [ -L "$capture" ]; then return 0; fi
+  done
+  return 1
+}
+
+require_worktree_cleanup_evidence() (
+  local path="$1" pr
+  has_worktree_merge_output "$path" || return 0
+  # Keep loader state separate from an uninterrupted merge's live outcome owner.
+  # Even an empty capture can be the only evidence of an earlier dispatch.
+  source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/merge-outcome.sh" || return 1
+  if pr=$(pr_number_from_worktree_dir "$path") &&
+    merge_outcome_load_local "$pr" && [ -n "$MERGE_OUTCOME_OID" ]; then
+    return 0
+  fi
+  echo "Preserving $path: merge output has no valid retained merge outcome. Keep the worktree, metadata, and local branches; reconcile the earlier request manually before cleanup." >&2
+  return 1
+)
+
 remove_worktree_if_present() {
   local path="$1"
+  local registered_path=""
+  local registered_parent=""
+  registered_parent=$(resolve_existing_dir_path "$(dirname "$path")" 2>/dev/null || true)
+  if [ -n "$registered_parent" ]; then
+    registered_path="$registered_parent/$(basename "$path")"
+  fi
+
   if [ ! -e "$path" ]; then
+    # A torn-down PR worktree once left a stale registration that poisoned
+    # every later worktree add until the registration was pruned.
+    if [ -n "$registered_path" ] && worktree_is_registered "$registered_path"; then
+      git worktree prune || true
+      if worktree_is_registered "$registered_path"; then
+        echo "Warning: failed to remove registered worktree $path"
+      fi
+    fi
     return 0
   fi
 
-  if worktree_is_registered "$path"; then
-    git worktree remove "$path" --force >/dev/null 2>&1 || true
-  fi
-
-  if [ ! -e "$path" ]; then
+  if [ -L "$path" ] || ! is_repo_pr_worktree_dir "$path"; then
+    echo "Warning: refusing to remove non-canonical PR-worktree path $path"
     return 0
   fi
 
-  if worktree_is_registered "$path"; then
+  require_worktree_cleanup_evidence "$path" || return 1
+
+  if [ -n "$registered_path" ] && worktree_is_registered "$registered_path"; then
+    local remove_error
+    if ! remove_error=$(git worktree remove --force "$registered_path" 2>&1); then
+      echo "Warning: git worktree remove failed for $path: $remove_error"
+    fi
+  fi
+
+  if [ ! -e "$path" ]; then
+    # See the stale-registration recovery above: removal can delete the path
+    # while leaving Git's linked-worktree metadata behind.
+    if [ -n "$registered_path" ] && worktree_is_registered "$registered_path"; then
+      git worktree prune || true
+      if worktree_is_registered "$registered_path"; then
+        echo "Warning: failed to remove registered worktree $path"
+      fi
+    fi
+    return 0
+  fi
+
+  if [ -n "$registered_path" ] && worktree_is_registered "$registered_path"; then
     echo "Warning: failed to remove registered worktree $path"
     return 0
   fi
 
-  if ! is_repo_pr_worktree_dir "$path"; then
+  if [ -L "$path" ] || ! is_repo_pr_worktree_dir "$path"; then
     echo "Warning: refusing to trash non-PR-worktree path $path"
     return 0
   fi
@@ -363,4 +443,17 @@ delete_local_branch_if_safe() {
 
   echo "Warning: failed to delete local branch $branch"
   return 0
+}
+
+cleanup_pr_worktree() {
+  local path="$1" pr branch complete=true
+  pr=$(pr_number_from_worktree_dir "$path") || return 1
+  remove_worktree_if_present "$path" || return 1
+  # Refusal or incomplete removal preserves the branches with the worktree.
+  [ ! -e "$path" ] && [ ! -L "$path" ] || return 1
+  for branch in "temp/pr-$pr" "pr-$pr" "pr-$pr-prep"; do
+    delete_local_branch_if_safe "$branch" || return 1
+    if git show-ref --verify --quiet "refs/heads/$branch"; then complete=false; fi
+  done
+  [ "$complete" = true ]
 }

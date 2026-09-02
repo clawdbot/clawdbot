@@ -1,7 +1,8 @@
+// Elevenlabs helper module supports config compat behavior.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { isRecord } from "openclaw/plugin-sdk/text-runtime";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 const ELEVENLABS_API_KEY_ENV = "ELEVENLABS_API_KEY";
 const PROFILE_CANDIDATES = [".profile", ".zprofile", ".zshrc", ".bashrc"] as const;
@@ -62,7 +63,7 @@ function hasLegacyTalkFields(value: unknown): value is JsonRecord {
   if (!talk) {
     return false;
   }
-  return LEGACY_TALK_FIELD_KEYS.some((key) => Object.prototype.hasOwnProperty.call(talk, key));
+  return LEGACY_TALK_FIELD_KEYS.some((key) => Object.hasOwn(talk, key));
 }
 
 function resolveTalkMigrationTargetProviderId(talk: JsonRecord): string | null {
@@ -117,7 +118,7 @@ export function migrateElevenLabsLegacyTalkConfig<T>(raw: T): { config: T; chang
   const movedKeys: string[] = [];
 
   for (const key of LEGACY_TALK_FIELD_KEYS) {
-    if (!Object.prototype.hasOwnProperty.call(nextTalk, key)) {
+    if (!Object.hasOwn(nextTalk, key)) {
       continue;
     }
     legacyFields[key] = nextTalk[key];

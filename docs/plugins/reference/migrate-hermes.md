@@ -16,4 +16,4 @@ Imports Hermes configuration, memories, skills, and supported credentials into O
 
 ## Surface
 
-contracts: migrationProviders
+contracts: `migrationProviders`

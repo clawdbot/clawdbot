@@ -1,4 +1,5 @@
-import { z } from "openclaw/plugin-sdk/zod";
+// Voice Call type declarations define plugin contracts.
+import { z } from "zod";
 import type { CallMode } from "./config.js";
 
 // -----------------------------------------------------------------------------
@@ -105,6 +106,10 @@ const NormalizedEventSchema = z.discriminatedUnion("type", [
     text: z.string(),
   }),
   BaseEventSchema.extend({
+    type: z.literal("call.assistant-speech"),
+    transcript: z.string(),
+  }),
+  BaseEventSchema.extend({
     type: z.literal("call.speech"),
     transcript: z.string(),
     isFinal: z.boolean(),
@@ -157,6 +162,8 @@ export const CallRecordSchema = z.object({
   from: z.string(),
   to: z.string(),
   sessionKey: z.string().optional(),
+  /** Agent selected when the call was created. Optional for legacy records. */
+  agentId: z.string().optional(),
   startedAt: z.number(),
   answeredAt: z.number().optional(),
   endedAt: z.number().optional(),
@@ -178,6 +185,8 @@ export type WebhookVerificationResult = {
   isReplay?: boolean;
   /** Stable key derived from authenticated request material. */
   verifiedRequestKey?: string;
+  /** Release only this delivery's replay reservation when processing fails. */
+  releaseReplay?: () => void;
 };
 
 export type WebhookParseOptions = {
@@ -215,6 +224,15 @@ export type InitiateCallInput = {
   inlineTwiml?: string;
   /** TwiML to serve once before normal webhook-driven call handling resumes. */
   preConnectTwiml?: string;
+  /**
+   * Optional `wss://` URL the carrier should open for bidirectional Media
+   * Streaming on call connect. Used by carriers (e.g. Telnyx) that attach
+   * streaming at dial time. Twilio learns the URL from TwiML so it ignores
+   * this field.
+   */
+  streamUrl?: string;
+  /** Per-call auth token the carrier echoes back on the WS upgrade. */
+  streamAuthToken?: string;
 };
 
 export type InitiateCallResult = {
@@ -231,6 +249,15 @@ export type HangupCallInput = {
 export type AnswerCallInput = {
   callId: CallId;
   providerCallId: ProviderCallId;
+  /**
+   * Optional `wss://` URL the carrier should open for bidirectional Media
+   * Streaming on answer. Used by carriers (e.g. Telnyx) that attach
+   * streaming at answer time. Twilio learns the URL from TwiML so it ignores
+   * this field.
+   */
+  streamUrl?: string;
+  /** Per-call auth token the carrier echoes back on the WS upgrade. */
+  streamAuthToken?: string;
 };
 
 export type PlayTtsInput = {
@@ -239,6 +266,8 @@ export type PlayTtsInput = {
   text: string;
   voice?: string;
   locale?: string;
+  /** Keep collecting speech after playback when the provider owns the listening XML. */
+  listenAfterPlayback?: boolean;
 };
 
 export type SendDtmfInput = {
@@ -290,4 +319,6 @@ export type OutboundCallOptions = {
   dtmfSequence?: string;
   /** Session that initiated the call, used for agent context/delegated message routing */
   requesterSessionKey?: string;
+  /** Agent selected for this call instead of the plugin default. */
+  agentId?: string;
 };

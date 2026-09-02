@@ -1,4 +1,5 @@
-import type { DiscordAccountConfig } from "openclaw/plugin-sdk/config-types";
+// Discord tests cover provider.allowlist plugin behavior.
+import type { DiscordAccountConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createNonExitingRuntimeEnv } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import * as resolveChannelsModule from "../resolve-channels.js";
@@ -87,7 +88,8 @@ describe("resolveDiscordAllowlistConfig", () => {
     expect(logs).toContain(
       "discord channels unresolved: 145/c404 (guild:Ops; channel:missing-room)",
     );
-    expect(logs).toContain("discord users resolved: 387→Peter (id:387)");
+    expect(logs).toContain("discord users resolved: 387→Peter");
+    expect(logs).not.toContain("(id:387)");
   });
 
   it("groups resolved discord channel aliases under one target line", async () => {

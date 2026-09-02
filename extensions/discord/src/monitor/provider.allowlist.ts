@@ -1,3 +1,4 @@
+// Discord provider module implements model/runtime integration.
 import {
   addAllowlistUserEntriesFromConfigEntry,
   buildAllowlistResolutionSummary,
@@ -5,11 +6,11 @@ import {
   patchAllowlistUsersInConfigEntries,
   summarizeMapping,
 } from "openclaw/plugin-sdk/allow-from";
-import type { DiscordAccountConfig, DiscordGuildEntry } from "openclaw/plugin-sdk/config-types";
+import type { DiscordAccountConfig, DiscordGuildEntry } from "openclaw/plugin-sdk/config-contracts";
 import { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/dangerous-name-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
-import { normalizeStringEntries } from "openclaw/plugin-sdk/text-runtime";
+import { normalizeStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveDiscordChannelAllowlist } from "../resolve-channels.js";
 import { resolveDiscordUserAllowlist } from "../resolve-users.js";
 
@@ -89,15 +90,18 @@ function formatDiscordChannelUnresolved(entry: DiscordChannelLogEntry): string {
   ]);
 }
 
-function formatDiscordUserResolved(entry: DiscordUserLogEntry): string {
+function formatDiscordUserResolved(entry: DiscordUserLogEntry): string | null {
   const displayName = entry.name?.trim();
   const target = displayName || entry.id;
   const base = formatResolvedBase(entry.input, target);
-  return formatResolutionLogDetails(base, [
-    displayName && entry.id ? `id:${entry.id}` : undefined,
+  const formatted = formatResolutionLogDetails(base, [
+    // Repeating the id is only useful when the input was not already that id.
+    displayName && entry.id && entry.id !== entry.input ? `id:${entry.id}` : undefined,
     entry.guildName ? `guild:${entry.guildName}` : undefined,
     entry.note,
   ]);
+  // An id that resolved to itself with no metadata carries no information.
+  return formatted === entry.input ? null : formatted;
 }
 
 function formatDiscordUserUnresolved(entry: DiscordUserLogEntry): string {

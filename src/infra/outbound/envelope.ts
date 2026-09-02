@@ -1,8 +1,12 @@
+import { expectDefined } from "@openclaw/normalization-core";
+// Outbound envelopes wrap payload projections, metadata, and delivery JSON for
+// tool responses while flattening simple delivery-only results.
 import type { ReplyPayload } from "../../auto-reply/types.js";
 import type { OutboundDeliveryJson } from "./format.js";
 import { normalizeOutboundPayloadsForJson, type OutboundPayloadJson } from "./payloads.js";
 
-export type OutboundResultEnvelope = {
+/** Structured result returned by outbound helpers when payloads/meta wrap delivery data. */
+type OutboundResultEnvelope = {
   payloads?: OutboundPayloadJson[];
   meta?: unknown;
   delivery?: OutboundDeliveryJson;
@@ -19,6 +23,7 @@ const isOutboundPayloadJson = (
   payload: ReplyPayload | OutboundPayloadJson,
 ): payload is OutboundPayloadJson => "mediaUrl" in payload;
 
+/** Builds the outbound result envelope, flattening plain delivery-only results by default. */
 export function buildOutboundResultEnvelope(
   params: BuildEnvelopeParams,
 ): OutboundResultEnvelope | OutboundDeliveryJson {
@@ -28,7 +33,7 @@ export function buildOutboundResultEnvelope(
       ? undefined
       : params.payloads.length === 0
         ? []
-        : isOutboundPayloadJson(params.payloads[0])
+        : isOutboundPayloadJson(expectDefined(params.payloads[0], "payloads entry at 0"))
           ? [...(params.payloads as readonly OutboundPayloadJson[])]
           : normalizeOutboundPayloadsForJson(params.payloads as readonly ReplyPayload[]);
 

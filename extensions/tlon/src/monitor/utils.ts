@@ -1,4 +1,20 @@
-import { formatErrorMessage as sharedFormatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { resolveAllowlistMatchByCandidates } from "openclaw/plugin-sdk/allow-from";
+import {
+  formatAgentEnvelope,
+  implicitMentionKindWhen,
+  resolveEnvelopeFormatOptions,
+  resolveInboundMentionDecision,
+} from "openclaw/plugin-sdk/channel-inbound";
+import {
+  resolveChannelImplicitMentions,
+  resolveStableChannelMessageIngress,
+  type ChannelIngressContextBinding,
+  type StableChannelIngressIdentityParams,
+} from "openclaw/plugin-sdk/channel-ingress-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+// Tlon helper module supports utils behavior.
+import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
+import { asNullableRecord, readStringField } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { normalizeShip } from "../targets.js";
 
 export interface ParsedCite {
@@ -11,7 +27,6 @@ export interface ParsedCite {
   where?: string;
 }
 
-// Extract all cites from message content
 export function extractCites(content: unknown): ParsedCite[] {
   if (!content || !Array.isArray(content)) {
     return [];
@@ -55,7 +70,9 @@ export function formatModelName(modelString?: string | null): string {
   if (!modelString) {
     return "AI";
   }
-  const modelName = modelString.includes("/") ? modelString.split("/")[1] : modelString;
+  const modelName = modelString.includes("/")
+    ? expectDefined(modelString.split("/").at(1), "provider/model second segment")
+    : modelString;
   const modelMappings: Record<string, string> = {
     "claude-opus-4-5": "Claude Opus 4.5",
     "claude-sonnet-4-5": "Claude Sonnet 4.5",
@@ -67,8 +84,9 @@ export function formatModelName(modelString?: string | null): string {
     "gemini-pro": "Gemini Pro",
   };
 
-  if (modelMappings[modelName]) {
-    return modelMappings[modelName];
+  const mappedName = modelMappings[modelName];
+  if (mappedName !== undefined) {
+    return mappedName;
   }
   return modelName
     .replace(/-/g, " ")
@@ -86,12 +104,10 @@ export function isBotMentioned(
     return false;
   }
 
-  // Check for @all mention
   if (/@all\b/i.test(messageText)) {
     return true;
   }
 
-  // Check for ship mention
   const normalizedBotShip = normalizeShip(botShipName);
   const escapedShip = normalizedBotShip.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const mentionPattern = new RegExp(`(^|\\s)${escapedShip}(?=\\s|$)`, "i");
@@ -99,7 +115,6 @@ export function isBotMentioned(
     return true;
   }
 
-  // Check for nickname mention (case-insensitive, word boundary)
   if (nickname) {
     const escapedNickname = nickname.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
     const nicknamePattern = new RegExp(`(^|\\s)${escapedNickname}(?=\\s|$|[,!?.])`, "i");
@@ -111,10 +126,6 @@ export function isBotMentioned(
   return false;
 }
 
-/**
- * Strip bot ship mention from message text for command detection.
- * "~bot-ship /status" → "/status"
- */
 export function stripBotMention(messageText: string, botShipName: string): string {
   if (!messageText || !botShipName) {
     return messageText;
@@ -122,37 +133,119 @@ export function stripBotMention(messageText: string, botShipName: string): strin
   return messageText.replace(normalizeShip(botShipName), "").trim();
 }
 
-export function isDmAllowed(senderShip: string, allowlist: string[] | undefined): boolean {
-  if (!allowlist || allowlist.length === 0) {
-    return false;
-  }
-  const normalizedSender = normalizeShip(senderShip);
-  return allowlist.map((ship) => normalizeShip(ship)).some((ship) => ship === normalizedSender);
+const tlonIngressIdentity = {
+  key: "sender-ship",
+  normalize: normalizeShip,
+  sensitivity: "pii",
+  isWildcardEntry: () => false,
+  entryIdPrefix: "tlon-entry",
+} satisfies StableChannelIngressIdentityParams;
+
+export async function isDmAllowedWithIngress(
+  senderShip: string,
+  allowlist: string[] | undefined,
+): Promise<boolean> {
+  const access = await resolveTlonMessageIngress({
+    senderShip,
+    allowFrom: allowlist ?? [],
+    conversation: { kind: "direct", id: "direct" },
+    dmPolicy: "allowlist",
+  });
+  return access.senderAccess.allowed;
 }
 
-/**
- * Check if a group invite from a ship should be auto-accepted.
- *
- * SECURITY: Fail-safe to deny. If allowlist is empty or undefined,
- * ALL invites are rejected - even if autoAcceptGroupInvites is enabled.
- * This prevents misconfigured bots from accepting malicious invites.
- */
+export async function resolveTlonMessageIngress(params: {
+  senderShip: string;
+  allowFrom: string[];
+  conversation: { kind: "direct" | "group"; id: string };
+  accountId?: string;
+  dmPolicy?: "open" | "allowlist";
+  groupPolicy?: "open" | "allowlist";
+  contextBinding?: ChannelIngressContextBinding;
+}) {
+  return await resolveStableChannelMessageIngress({
+    channelId: "tlon",
+    accountId: params.accountId ?? "default",
+    identity: tlonIngressIdentity,
+    subject: { stableId: params.senderShip },
+    conversation: params.conversation,
+    contextBinding: params.contextBinding,
+    dmPolicy: params.dmPolicy ?? "allowlist",
+    groupPolicy: params.groupPolicy ?? "open",
+    allowFrom: params.allowFrom,
+    groupAllowFrom: params.allowFrom,
+  });
+}
+
+export async function resolveTlonCommandAuthorizationWithIngress(params: {
+  senderShip: string;
+  ownerShip: string | null | undefined;
+  useAccessGroups: boolean;
+}) {
+  const normalizedOwner = params.ownerShip ? normalizeShip(params.ownerShip) : null;
+  return await resolveStableChannelMessageIngress({
+    channelId: "tlon",
+    accountId: "default",
+    identity: tlonIngressIdentity,
+    useAccessGroups: params.useAccessGroups,
+    subject: { stableId: params.senderShip },
+    conversation: {
+      kind: "direct",
+      id: "command",
+    },
+    event: {
+      authMode: "none",
+      mayPair: false,
+    },
+    dmPolicy: "allowlist",
+    groupPolicy: "open",
+    allowFrom: normalizedOwner ? [normalizedOwner] : [],
+    command: {},
+  });
+}
+
+export function resolveTlonGroupMentionDecision(params: {
+  cfg: OpenClawConfig;
+  accountId: string;
+  wasMentioned: boolean;
+  botParticipatedInThread: boolean;
+}) {
+  const implicitMentions = resolveChannelImplicitMentions({
+    cfg: params.cfg,
+    channel: "tlon",
+    accountId: params.accountId,
+  });
+  return resolveInboundMentionDecision({
+    facts: {
+      canDetectMention: true,
+      wasMentioned: params.wasMentioned,
+      implicitMentionKinds: implicitMentionKindWhen(
+        "bot_thread_participant",
+        params.botParticipatedInThread,
+      ),
+    },
+    policy: {
+      isGroup: true,
+      requireMention: true,
+      implicitMentions,
+      allowTextCommands: false,
+      hasControlCommand: false,
+      commandAuthorized: false,
+    },
+  });
+}
+
 export function isGroupInviteAllowed(
   inviterShip: string,
   allowlist: string[] | undefined,
 ): boolean {
-  // SECURITY: Fail-safe to deny when no allowlist configured
-  if (!allowlist || allowlist.length === 0) {
-    return false;
-  }
   const normalizedInviter = normalizeShip(inviterShip);
-  return allowlist.map((ship) => normalizeShip(ship)).some((ship) => ship === normalizedInviter);
+  return resolveAllowlistMatchByCandidates({
+    allowList: (allowlist ?? []).map((ship) => normalizeShip(ship)),
+    candidates: [{ value: normalizedInviter, source: "ship" }],
+  }).allowed;
 }
 
-/**
- * Resolve quoted/cited content only after the caller has passed authorization.
- * Unauthorized paths must keep raw text and must not trigger cross-channel cite fetches.
- */
 export async function resolveAuthorizedMessageText(params: {
   rawText: string;
   content: unknown;
@@ -167,24 +260,6 @@ export async function resolveAuthorizedMessageText(params: {
   return citedContent + rawText;
 }
 
-export const asRecord = asNullableObjectRecord;
-export const formatErrorMessage = sharedFormatErrorMessage;
-export const readString = readStringField;
-
-function asNullableObjectRecord(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
-}
-
-function readStringField(
-  record: Record<string, unknown> | null | undefined,
-  field: string,
-): string | undefined {
-  const value = record?.[field];
-  return typeof value === "string" ? value : undefined;
-}
-
 // Helper to recursively extract text from inline content
 function renderInlineItem(
   item: unknown,
@@ -197,11 +272,11 @@ function renderInlineItem(
   if (typeof item === "string") {
     return item;
   }
-  const record = asRecord(item);
+  const record = asNullableRecord(item);
   if (!record) {
     return "";
   }
-  const ship = readString(record, "ship");
+  const ship = readStringField(record, "ship");
   if (ship) {
     return ship;
   }
@@ -217,18 +292,18 @@ function renderInlineItem(
   if (options?.allowBreak && "break" in record) {
     return "\n";
   }
-  const inlineCode = readString(record, "inline-code");
+  const inlineCode = readStringField(record, "inline-code");
   if (inlineCode) {
     return `\`${inlineCode}\``;
   }
-  const code = readString(record, "code");
+  const code = readStringField(record, "code");
   if (code) {
     return `\`${code}\``;
   }
-  const link = asRecord(record.link);
-  const linkHref = link ? readString(link, "href") : undefined;
+  const link = asNullableRecord(record.link);
+  const linkHref = link ? readStringField(link, "href") : undefined;
   if (link && linkHref) {
-    const linkContent = readString(link, "content");
+    const linkContent = readStringField(link, "content");
     return options?.linkMode === "href" ? linkHref : linkContent || linkHref;
   }
   if (Array.isArray(record.bold)) {
@@ -257,7 +332,7 @@ export function extractMessageText(content: unknown): string {
 
   return content
     .map((verse) => {
-      const verseRecord = asRecord(verse);
+      const verseRecord = asNullableRecord(verse);
       if (!verseRecord) {
         return "";
       }
@@ -276,30 +351,30 @@ export function extractMessageText(content: unknown): string {
       }
 
       // Handle block content (images, code blocks, etc.)
-      const block = asRecord(verseRecord.block);
+      const block = asNullableRecord(verseRecord.block);
       if (block) {
-        const image = asRecord(block.image);
+        const image = asNullableRecord(block.image);
 
         // Image blocks
         if (image) {
-          const imageSrc = readString(image, "src");
+          const imageSrc = readStringField(image, "src");
           if (imageSrc) {
-            const altText = readString(image, "alt");
+            const altText = readStringField(image, "alt");
             const alt = altText ? ` (${altText})` : "";
             return `\n${imageSrc}${alt}\n`;
           }
         }
 
         // Code blocks
-        const codeBlock = asRecord(block.code);
+        const codeBlock = asNullableRecord(block.code);
         if (codeBlock) {
-          const lang = readString(codeBlock, "lang") ?? "";
-          const code = readString(codeBlock, "code") ?? "";
+          const lang = readStringField(codeBlock, "lang") ?? "";
+          const code = readStringField(codeBlock, "code") ?? "";
           return `\n\`\`\`${lang}\n${code}\n\`\`\`\n`;
         }
 
         // Header blocks
-        const header = asRecord(block.header);
+        const header = asNullableRecord(block.header);
         if (header) {
           const headerContent = Array.isArray(header.content) ? header.content : [];
           const text =
@@ -308,14 +383,14 @@ export function extractMessageText(content: unknown): string {
         }
 
         // Cite/quote blocks - parse the reference structure
-        const cite = asRecord(block.cite);
+        const cite = asNullableRecord(block.cite);
         if (cite) {
-          const chanCite = asRecord(cite.chan);
+          const chanCite = asNullableRecord(cite.chan);
 
           // ChanCite - reference to a channel message
           if (chanCite) {
-            const nest = readString(chanCite, "nest");
-            const where = readString(chanCite, "where");
+            const nest = readStringField(chanCite, "nest");
+            const where = readStringField(chanCite, "where");
             // where is typically /msg/~author/timestamp
             const whereMatch = where?.match(/\/msg\/(~[a-z-]+)\/(.+)/);
             if (whereMatch) {
@@ -326,25 +401,25 @@ export function extractMessageText(content: unknown): string {
           }
 
           // GroupCite - reference to a group
-          const group = readString(cite, "group");
+          const group = readStringField(cite, "group");
           if (group) {
             return `\n> [ref: group ${group}]\n`;
           }
 
           // DeskCite - reference to an app/desk
-          const desk = asRecord(cite.desk);
+          const desk = asNullableRecord(cite.desk);
           if (desk) {
-            const flag = readString(desk, "flag");
+            const flag = readStringField(desk, "flag");
             if (flag) {
               return `\n> [ref: ${flag}]\n`;
             }
           }
 
           // BaitCite - reference with group+graph context
-          const bait = asRecord(cite.bait);
+          const bait = asNullableRecord(cite.bait);
           if (bait) {
-            const graph = readString(bait, "graph");
-            const groupName = readString(bait, "group");
+            const graph = readStringField(bait, "graph");
+            const groupName = readStringField(bait, "group");
             if (graph && groupName) {
               return `\n> [ref: ${graph} in ${groupName}]\n`;
             }
@@ -369,4 +444,27 @@ export function isSummarizationRequest(messageText: string): boolean {
     /tldr/i,
   ];
   return patterns.some((pattern) => pattern.test(messageText));
+}
+
+/**
+ * Formats channel history for a summarization request. Each entry is rendered
+ * through the shared inbound envelope so timestamps honor the configured user
+ * timezone instead of the host process zone (matches Mattermost/Feishu).
+ */
+export function formatSummarizationHistoryText(
+  history: ReadonlyArray<{ author: string; content: string; timestamp: number }>,
+  cfg?: OpenClawConfig,
+): string {
+  const envelopeOptions = resolveEnvelopeFormatOptions(cfg);
+  return history
+    .map((msg) =>
+      formatAgentEnvelope({
+        channel: "Tlon",
+        from: msg.author,
+        timestamp: msg.timestamp,
+        body: msg.content,
+        envelope: envelopeOptions,
+      }),
+    )
+    .join("\n");
 }

@@ -1,9 +1,10 @@
+// Discord plugin module implements runtime.messaging.reactions behavior.
 import {
   jsonResult,
-  readNumberParam,
+  readPositiveIntegerParam,
   readReactionParams,
   readStringParam,
-} from "../runtime-api.js";
+} from "openclaw/plugin-sdk/channel-actions";
 import { discordMessagingActionRuntime } from "./runtime.messaging.runtime.js";
 import type { DiscordMessagingActionContext } from "./runtime.messaging.shared.js";
 
@@ -21,6 +22,7 @@ export async function handleDiscordReactionMessagingAction(ctx: DiscordMessaging
         removeErrorMessage: "Emoji is required to remove a Discord reaction.",
       });
       if (remove) {
+        await ctx.assertReadTargetAllowed({ channelId });
         await discordMessagingActionRuntime.removeReactionDiscord(
           channelId,
           messageId,
@@ -30,6 +32,7 @@ export async function handleDiscordReactionMessagingAction(ctx: DiscordMessaging
         return jsonResult({ ok: true, removed: emoji });
       }
       if (isEmpty) {
+        await ctx.assertReadTargetAllowed({ channelId });
         const removed = await discordMessagingActionRuntime.removeOwnReactionsDiscord(
           channelId,
           messageId,
@@ -37,6 +40,7 @@ export async function handleDiscordReactionMessagingAction(ctx: DiscordMessaging
         );
         return jsonResult({ ok: true, removed: removed.removed });
       }
+      await ctx.assertReadTargetAllowed({ channelId });
       await discordMessagingActionRuntime.reactMessageDiscord(
         channelId,
         messageId,
@@ -53,7 +57,8 @@ export async function handleDiscordReactionMessagingAction(ctx: DiscordMessaging
       const messageId = readStringParam(ctx.params, "messageId", {
         required: true,
       });
-      const limit = readNumberParam(ctx.params, "limit");
+      const limit = readPositiveIntegerParam(ctx.params, "limit");
+      await ctx.assertReadTargetAllowed({ channelId });
       const reactions = await discordMessagingActionRuntime.fetchReactionsDiscord(
         channelId,
         messageId,

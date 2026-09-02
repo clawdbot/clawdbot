@@ -1,8 +1,5 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
-
-vi.hoisted(() => {
-  vi.resetModules();
-});
+// Provider flow tests cover provider setup prompts and config mutations.
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 type ResolveProviderInstallCatalogEntries =
   typeof import("../plugins/provider-install-catalog.js").resolveProviderInstallCatalogEntries;
@@ -13,7 +10,11 @@ type ResolveProviderWizardOptions =
 type ResolveProviderModelPickerEntries =
   typeof import("../plugins/provider-wizard.js").resolveProviderModelPickerEntries;
 type ResolvePluginProviders =
-  typeof import("../plugins/providers.runtime.js").resolvePluginProviders;
+  typeof import("../plugins/providers.runtime.js").resolvePluginProvidersCore;
+type ResolveProviderSetupFlowContributions =
+  typeof import("./provider-flow.js").resolveProviderSetupFlowContributions;
+type ResolveProviderModelPickerFlowContributions =
+  typeof import("./provider-flow.runtime.js").resolveProviderModelPickerFlowContributions;
 
 const resolveProviderInstallCatalogEntries = vi.hoisted(() =>
   vi.fn<ResolveProviderInstallCatalogEntries>(() => []),
@@ -40,15 +41,29 @@ vi.mock("../plugins/provider-wizard.js", () => ({
   resolveProviderModelPickerEntries,
 }));
 
-const resolvePluginProviders = vi.hoisted(() => vi.fn<ResolvePluginProviders>(() => []));
+const resolvePluginProvidersCore = vi.hoisted(() => vi.fn<ResolvePluginProviders>(() => []));
 vi.mock("../plugins/providers.runtime.js", () => ({
-  resolvePluginProviders,
+  resolvePluginProvidersCore,
 }));
 
-import { resolveProviderSetupFlowContributions } from "./provider-flow.js";
-import { resolveProviderModelPickerFlowContributions } from "./provider-flow.runtime.js";
+let resolveProviderSetupFlowContributions: ResolveProviderSetupFlowContributions;
+let resolveProviderModelPickerFlowContributions: ResolveProviderModelPickerFlowContributions;
+
+function requireFirstMockCall(mock: { mock: { calls: unknown[][] } }, label: string): unknown[] {
+  const call = mock.mock.calls[0];
+  if (!call) {
+    throw new Error(`expected ${label} call`);
+  }
+  return call;
+}
 
 describe("provider flow install catalog contributions", () => {
+  beforeAll(async () => {
+    vi.resetModules();
+    ({ resolveProviderSetupFlowContributions } = await import("./provider-flow.js"));
+    ({ resolveProviderModelPickerFlowContributions } = await import("./provider-flow.runtime.js"));
+  });
+
   beforeEach(() => {
     resolveManifestProviderAuthChoices.mockReset();
     resolveManifestProviderAuthChoices.mockReturnValue([]);
@@ -58,8 +73,8 @@ describe("provider flow install catalog contributions", () => {
     resolveProviderWizardOptions.mockReturnValue([]);
     resolveProviderModelPickerEntries.mockReset();
     resolveProviderModelPickerEntries.mockReturnValue([]);
-    resolvePluginProviders.mockReset();
-    resolvePluginProviders.mockReturnValue([]);
+    resolvePluginProvidersCore.mockReset();
+    resolvePluginProvidersCore.mockReturnValue([]);
   });
 
   it("surfaces manifest provider auth choices before setup runtime loads", () => {
@@ -103,13 +118,58 @@ describe("provider flow install catalog contributions", () => {
         source: "manifest",
       },
     ]);
-    expect(resolveManifestProviderAuthChoices).toHaveBeenCalledWith(
-      expect.objectContaining({
-        includeUntrustedWorkspacePlugins: false,
-      }),
+    expect(resolveManifestProviderAuthChoices).toHaveBeenCalledTimes(1);
+    const [authChoiceOptions] = requireFirstMockCall(
+      resolveManifestProviderAuthChoices,
+      "manifest auth choices",
     );
+    expect(
+      (authChoiceOptions as { includeUntrustedWorkspacePlugins?: boolean })
+        .includeUntrustedWorkspacePlugins,
+    ).toBe(false);
     expect(resolveProviderWizardOptions).not.toHaveBeenCalled();
-    expect(resolvePluginProviders).not.toHaveBeenCalled();
+    expect(resolvePluginProvidersCore).not.toHaveBeenCalled();
+  });
+
+  it("resolves text and media setup choices in one metadata-only pass", () => {
+    resolveManifestProviderAuthChoices.mockReturnValue([
+      {
+        pluginId: "fal",
+        providerId: "fal",
+        methodId: "api-key",
+        choiceId: "fal-api-key",
+        choiceLabel: "fal API key",
+        onboardingScopes: ["image-generation", "music-generation"],
+      },
+      {
+        pluginId: "openai",
+        providerId: "openai",
+        methodId: "api-key",
+        choiceId: "openai-api-key",
+        choiceLabel: "OpenAI API key",
+      },
+    ]);
+    resolveProviderInstallCatalogEntries.mockReturnValue([
+      {
+        pluginId: "vydra",
+        providerId: "vydra",
+        methodId: "api-key",
+        choiceId: "vydra-api-key",
+        choiceLabel: "Vydra API key",
+        onboardingScopes: ["image-generation"],
+        label: "Vydra",
+        origin: "bundled",
+        install: { npmSpec: "@openclaw/vydra-provider" },
+      },
+    ]);
+
+    expect(
+      resolveProviderSetupFlowContributions({ scope: "all" }).map(({ option }) => option.value),
+    ).toEqual(expect.arrayContaining(["fal-api-key", "openai-api-key", "vydra-api-key"]));
+    expect(resolveManifestProviderAuthChoices).toHaveBeenCalledOnce();
+    expect(resolveProviderInstallCatalogEntries).toHaveBeenCalledOnce();
+    expect(resolveProviderWizardOptions).not.toHaveBeenCalled();
+    expect(resolvePluginProvidersCore).not.toHaveBeenCalled();
   });
 
   it("prefers manifest setup contributions over duplicate install-catalog entries", () => {
@@ -198,11 +258,15 @@ describe("provider flow install catalog contributions", () => {
         source: "install-catalog",
       },
     ]);
-    expect(resolveProviderInstallCatalogEntries).toHaveBeenCalledWith(
-      expect.objectContaining({
-        includeUntrustedWorkspacePlugins: false,
-      }),
+    expect(resolveProviderInstallCatalogEntries).toHaveBeenCalledTimes(1);
+    const [installCatalogOptions] = requireFirstMockCall(
+      resolveProviderInstallCatalogEntries,
+      "provider install catalog",
     );
+    expect(
+      (installCatalogOptions as { includeUntrustedWorkspacePlugins?: boolean })
+        .includeUntrustedWorkspacePlugins,
+    ).toBe(false);
   });
 
   it("adds a fallback group when install-catalog entries omit group metadata", () => {
@@ -265,7 +329,7 @@ describe("provider flow install catalog contributions", () => {
           },
         },
       }),
-    ).toEqual([]);
+    ).toStrictEqual([]);
   });
 
   it("hides install-catalog choices outside a configured plugin allowlist", () => {
@@ -293,7 +357,7 @@ describe("provider flow install catalog contributions", () => {
           },
         },
       }),
-    ).toEqual([]);
+    ).toStrictEqual([]);
   });
 
   it("keeps setup contributions on cold metadata instead of runtime wizard options", () => {
@@ -341,11 +405,11 @@ describe("provider flow install catalog contributions", () => {
       },
     ]);
     expect(resolveProviderWizardOptions).not.toHaveBeenCalled();
-    expect(resolvePluginProviders).not.toHaveBeenCalled();
+    expect(resolvePluginProvidersCore).not.toHaveBeenCalled();
   });
 
   it("keeps docs attached to runtime model-picker contributions", () => {
-    resolvePluginProviders.mockReturnValue([
+    resolvePluginProvidersCore.mockReturnValue([
       {
         id: "openai",
         label: "OpenAI",

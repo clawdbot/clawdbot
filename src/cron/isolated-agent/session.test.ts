@@ -1,14 +1,15 @@
+// Isolated agent session tests cover session creation and metadata for cron runs.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
-
-vi.mock("../../config/sessions/store-load.js", () => ({
-  loadSessionStore: vi.fn(),
-}));
+import type { SessionEntry, SessionOrigin } from "../../config/sessions/types.js";
+import { normalizeLegacySessionEntryDelivery } from "../../infra/state-migrations.legacy-session-store.js";
+import { projectSessionDeliveryFields } from "../../utils/delivery-context.shared.js";
+import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 
 vi.mock("../../config/sessions/paths.js", () => ({
-  resolveStorePath: vi.fn().mockReturnValue("/tmp/test-store.json"),
+  resolveSessionStorePathCore: vi.fn().mockReturnValue("/tmp/test-store.json"),
   resolveSessionFilePathOptions: vi.fn().mockReturnValue({ sessionsDir: "/tmp" }),
-  resolveSessionFilePath: vi.fn((sessionId: string) => `/tmp/${sessionId}.jsonl`),
+  resolveSessionFilePathCore: vi.fn((sessionId: string) => `/tmp/${sessionId}.jsonl`),
 }));
 
 vi.mock("../../config/sessions/reset-policy.js", () => ({
@@ -18,6 +19,11 @@ vi.mock("../../config/sessions/reset-policy.js", () => ({
 
 vi.mock("../../agents/bootstrap-cache.js", () => ({
   clearBootstrapSnapshot: vi.fn(),
+  clearBootstrapSnapshotOnSessionBoundary: vi.fn(({ sessionKey, boundaryAppended }) => {
+    if (sessionKey && boundaryAppended) {
+      clearBootstrapSnapshot(sessionKey);
+    }
+  }),
   clearBootstrapSnapshotOnSessionRollover: vi.fn(({ sessionKey, previousSessionId }) => {
     if (sessionKey && previousSessionId) {
       clearBootstrapSnapshot(sessionKey);
@@ -25,37 +31,65 @@ vi.mock("../../agents/bootstrap-cache.js", () => ({
   }),
 }));
 
+vi.mock("../../agents/sessions/reset-boundary.js", () => ({
+  appendSessionResetBoundary: vi.fn(() => ({
+    boundaryEntryId: "cron-reset-boundary",
+    keptEntryIds: [],
+  })),
+}));
+
 import { clearBootstrapSnapshot } from "../../agents/bootstrap-cache.js";
 import { evaluateSessionFreshness } from "../../config/sessions/reset-policy.js";
-import { loadSessionStore } from "../../config/sessions/store-load.js";
 import { resolveCronSession } from "./session.js";
 
 const NOW_MS = 1_737_600_000_000;
 
-type SessionStore = ReturnType<typeof loadSessionStore>;
-type SessionStoreEntry = SessionStore[string];
-type MockSessionStoreEntry = Partial<SessionStoreEntry>;
+type SessionStore = Record<string, SessionEntry>;
+type MockSessionStoreEntry = Partial<SessionEntry> & {
+  deliveryContext?: DeliveryContext;
+  origin?: SessionOrigin;
+  channel?: string;
+  lastChannel?: string;
+  lastTo?: string;
+  lastAccountId?: string;
+  lastThreadId?: string | number;
+};
+type ProjectedSessionEntry = SessionEntry & ReturnType<typeof projectSessionDeliveryFields>;
 
 function resolveWithStoredEntry(params?: {
   sessionKey?: string;
+  sourceSessionKey?: string;
   entry?: MockSessionStoreEntry;
   forceNew?: boolean;
   fresh?: boolean;
 }) {
   const sessionKey = params?.sessionKey ?? "webhook:stable-key";
+  const sourceSessionKey = params?.sourceSessionKey;
   const store: SessionStore = params?.entry
-    ? ({ [sessionKey]: params.entry as SessionStoreEntry } as SessionStore)
+    ? {
+        [sourceSessionKey ?? sessionKey]: normalizeLegacySessionEntryDelivery(
+          params.entry as SessionEntry,
+        ),
+      }
     : {};
-  vi.mocked(loadSessionStore).mockReturnValue(store);
   vi.mocked(evaluateSessionFreshness).mockReturnValue({ fresh: params?.fresh ?? true });
 
-  return resolveCronSession({
+  const result = resolveCronSession({
     cfg: {} as OpenClawConfig,
     sessionKey,
+    sourceSessionKey,
     agentId: "main",
     nowMs: NOW_MS,
     forceNew: params?.forceNew,
+    store,
   });
+  return {
+    ...result,
+    sessionEntry: {
+      ...result.sessionEntry,
+      ...projectSessionDeliveryFields(result.sessionEntry.delivery),
+    } as ProjectedSessionEntry,
+  };
 }
 
 describe("resolveCronSession", () => {
@@ -108,6 +142,84 @@ describe("resolveCronSession", () => {
     expect(result.isNewSession).toBe(true);
   });
 
+  it("assigns a collision-proof lifecycle revision to each resolved run", () => {
+    const first = resolveWithStoredEntry({ sessionKey: "agent:main:cron:new-job" });
+    const second = resolveWithStoredEntry({ sessionKey: "agent:main:cron:new-job" });
+
+    expect(first.lifecycleRevision).toBe(first.sessionEntry.lifecycleRevision);
+    expect(second.lifecycleRevision).toBe(second.sessionEntry.lifecycleRevision);
+    expect(first.lifecycleRevision).not.toBe(second.lifecycleRevision);
+  });
+
+  it("rejects archived persistent sessions before rollover", () => {
+    expect(() =>
+      resolveWithStoredEntry({
+        sessionKey: "agent:main:main",
+        entry: {
+          sessionId: "archived-session-id",
+          updatedAt: NOW_MS - 1000,
+          archivedAt: NOW_MS,
+        },
+        forceNew: true,
+      }),
+    ).toThrow('Session "agent:main:main" is archived. Restore it before starting new work.');
+    expect(clearBootstrapSnapshot).not.toHaveBeenCalled();
+  });
+
+  it("rolls an archived isolated heartbeat session into a fresh run", () => {
+    const result = resolveWithStoredEntry({
+      sessionKey: "agent:main:main:heartbeat",
+      entry: {
+        sessionId: "archived-heartbeat-session-id",
+        updatedAt: NOW_MS - 1000,
+        archivedAt: NOW_MS,
+        heartbeatIsolatedBaseSessionKey: "agent:main:main",
+      },
+      forceNew: true,
+    });
+
+    expect(result.isNewSession).toBe(true);
+    expect(result.previousSessionId).toBe("archived-heartbeat-session-id");
+    expect(result.sessionEntry.sessionId).not.toBe("archived-heartbeat-session-id");
+    expect(result.sessionEntry.archivedAt).toBeUndefined();
+    expect(result.sessionEntry.heartbeatIsolatedBaseSessionKey).toBeUndefined();
+  });
+
+  it("keeps an initializing isolated heartbeat blocked during forced rollover", () => {
+    expect(() =>
+      resolveWithStoredEntry({
+        sessionKey: "agent:main:main:heartbeat",
+        entry: {
+          sessionId: "initializing-heartbeat-session-id",
+          updatedAt: NOW_MS - 1000,
+          archivedAt: NOW_MS,
+          initializationPending: true,
+          heartbeatIsolatedBaseSessionKey: "agent:main:main",
+        },
+        forceNew: true,
+      }),
+    ).toThrow(
+      'Session "agent:main:main:heartbeat" is still initializing. Retry after initialization completes.',
+    );
+    expect(clearBootstrapSnapshot).not.toHaveBeenCalled();
+  });
+
+  it("keeps an archived isolated heartbeat read-only without forceNew", () => {
+    expect(() =>
+      resolveWithStoredEntry({
+        sessionKey: "agent:main:main:heartbeat",
+        entry: {
+          sessionId: "archived-heartbeat-session-id",
+          updatedAt: NOW_MS - 1000,
+          archivedAt: NOW_MS,
+          heartbeatIsolatedBaseSessionKey: "agent:main:main",
+        },
+      }),
+    ).toThrow(
+      'Session "agent:main:main:heartbeat" is archived. Restore it before starting new work.',
+    );
+  });
+
   // New tests for session reuse behavior (#18027)
   describe("session reuse for webhooks/cron", () => {
     it("reuses existing sessionId when session is fresh", () => {
@@ -130,27 +242,60 @@ describe("resolveCronSession", () => {
       expect(clearBootstrapSnapshot).not.toHaveBeenCalled();
     });
 
-    it("creates new sessionId when session is stale", () => {
+    it("appends a boundary without changing sessionId when session is stale", () => {
       const result = resolveWithStoredEntry({
         entry: {
           sessionId: "old-session-id",
+          sessionFile: "/tmp/legacy-session.jsonl",
           updatedAt: NOW_MS - 86_400_000, // 1 day ago
           systemSent: true,
           modelOverride: "gpt-4.1-mini",
           providerOverride: "openai",
+          agentHarnessId: "codex",
+          claudeCliSessionId: "native-before-boundary",
+          compactionCount: 9,
           sendPolicy: "allow",
         },
         fresh: false,
       });
 
-      expect(result.sessionEntry.sessionId).not.toBe("old-session-id");
+      expect(result.sessionEntry.sessionId).toBe("old-session-id");
       expect(result.isNewSession).toBe(true);
-      expect(result.previousSessionId).toBe("old-session-id");
+      expect(result.previousSessionId).toBeUndefined();
       expect(result.systemSent).toBe(false);
       expect(result.sessionEntry.modelOverride).toBe("gpt-4.1-mini");
       expect(result.sessionEntry.providerOverride).toBe("openai");
+      expect(result.sessionEntry.agentHarnessId).toBeUndefined();
+      expect(result.sessionEntry.claudeCliSessionId).toBeUndefined();
+      expect(result.sessionEntry.compactionCount).toBe(0);
       expect(result.sessionEntry.sendPolicy).toBe("allow");
-      expect(clearBootstrapSnapshot).toHaveBeenCalledWith("webhook:stable-key");
+      expect(result.sessionEntry).not.toHaveProperty("sessionFile");
+      expect(result.resetBoundaryPending).toMatchObject({ reason: "cron-stale" });
+      expect(clearBootstrapSnapshot).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      { name: "stale reset", fresh: false, forceNew: false },
+      { name: "forced rollover", fresh: true, forceNew: true },
+    ])("preserves required creation provenance across $name", ({ fresh, forceNew }) => {
+      const provenance = {
+        createdAt: NOW_MS - 86_400_000,
+        createdVia: "cron" as const,
+        createdActor: {
+          type: "human" as const,
+          source: "profile" as const,
+          id: "profile-cron-creator",
+        },
+        sandbox: "required" as const,
+      };
+      const result = resolveWithStoredEntry({
+        sessionKey: "agent:main:cron:required",
+        entry: { sessionId: "required-session", updatedAt: NOW_MS - 1_000, ...provenance },
+        fresh,
+        forceNew,
+      });
+      expect(result.isNewSession).toBe(true);
+      expect(result.sessionEntry).toMatchObject(provenance);
     });
 
     it("creates new sessionId when forceNew is true", () => {
@@ -173,6 +318,39 @@ describe("resolveCronSession", () => {
       expect(result.sessionEntry.modelOverride).toBe("sonnet-4");
       expect(result.sessionEntry.providerOverride).toBe("anthropic");
       expect(clearBootstrapSnapshot).toHaveBeenCalledWith("webhook:stable-key");
+    });
+
+    it("preserves pin state when rolling to a fresh session", () => {
+      const pinnedAt = NOW_MS - 500;
+      const result = resolveWithStoredEntry({
+        entry: {
+          sessionId: "existing-session-id-pinned",
+          updatedAt: NOW_MS - 1000,
+          pinnedAt,
+        },
+        fresh: true,
+        forceNew: true,
+      });
+
+      expect(result.isNewSession).toBe(true);
+      expect(result.sessionEntry.pinnedAt).toBe(pinnedAt);
+    });
+
+    it("drops a standalone runtime override without a retained model selection", () => {
+      const result = resolveWithStoredEntry({
+        entry: {
+          sessionId: "existing-session-id-runtime",
+          updatedAt: NOW_MS - 1000,
+          agentRuntimeOverride: "openclaw",
+          agentHarnessId: "codex",
+        },
+        fresh: true,
+        forceNew: true,
+      });
+
+      expect(result.isNewSession).toBe(true);
+      expect(result.sessionEntry.agentRuntimeOverride).toBeUndefined();
+      expect(result.sessionEntry.agentHarnessId).toBeUndefined();
     });
 
     it("clears stale sessionFile when forceNew rolls to a fresh session", () => {
@@ -209,6 +387,8 @@ describe("resolveCronSession", () => {
             threadId: "1737500000.123456",
           },
           modelOverride: "gpt-5.4",
+          agentRuntimeOverride: "openclaw",
+          agentHarnessId: "codex",
         },
         fresh: true,
         forceNew: true,
@@ -225,6 +405,8 @@ describe("resolveCronSession", () => {
       expect(result.sessionEntry.deliveryContext).toBeUndefined();
       // Per-session overrides must be preserved
       expect(result.sessionEntry.modelOverride).toBe("gpt-5.4");
+      expect(result.sessionEntry.agentRuntimeOverride).toBe("openclaw");
+      expect(result.sessionEntry.agentHarnessId).toBeUndefined();
     });
 
     it("clears stale run-scoped state when forceNew rolls to a fresh session", () => {
@@ -247,23 +429,25 @@ describe("resolveCronSession", () => {
           cliSessionBindings: {},
           claudeCliSessionId: "old-claude-session",
           liveModelSwitchPending: true,
-          fallbackNoticeSelectedModel: "anthropic/claude-opus-4-6",
-          fallbackNoticeActiveModel: "anthropic/claude-sonnet-4-6",
-          fallbackNoticeReason: "rate limit",
+          fallbackNotice: {
+            kind: "active",
+            selectedModel: "anthropic/claude-opus-4-6",
+            activeModel: "anthropic/claude-sonnet-4-6",
+            reason: "rate limit",
+          },
           inputTokens: 1,
           outputTokens: 2,
           totalTokens: 3,
           totalTokensFresh: true,
           estimatedCostUsd: 0.01,
-          execAsk: "always",
           execHost: "gateway",
           execNode: "node-1",
-          execSecurity: "allowlist",
           cacheRead: 4,
           cacheWrite: 5,
           contextTokens: 200_000,
+          contextTokensSource: "runtime",
           compactionCount: 9,
-          memoryFlushAt: NOW_MS - 500,
+          memoryFlush: { kind: "succeeded", compactionCount: 9 },
           abortCutoffMessageSid: "old-message",
           spawnedBy: "agent:main:session:parent",
           skillsSnapshot: {
@@ -309,7 +493,6 @@ describe("resolveCronSession", () => {
             lastActivityAt: NOW_MS - 1_000,
           },
           authProfileOverride: "auto-auth",
-          authProfileOverrideSource: "auto",
           authProfileOverrideCompactionCount: 2,
           modelOverride: "auto-model",
           providerOverride: "anthropic",
@@ -335,23 +518,20 @@ describe("resolveCronSession", () => {
       expect(result.sessionEntry.cliSessionBindings).toBeUndefined();
       expect(result.sessionEntry.claudeCliSessionId).toBeUndefined();
       expect(result.sessionEntry.liveModelSwitchPending).toBeUndefined();
-      expect(result.sessionEntry.fallbackNoticeSelectedModel).toBeUndefined();
-      expect(result.sessionEntry.fallbackNoticeActiveModel).toBeUndefined();
-      expect(result.sessionEntry.fallbackNoticeReason).toBeUndefined();
+      expect(result.sessionEntry.fallbackNotice).toBeUndefined();
       expect(result.sessionEntry.inputTokens).toBeUndefined();
       expect(result.sessionEntry.outputTokens).toBeUndefined();
       expect(result.sessionEntry.totalTokens).toBeUndefined();
       expect(result.sessionEntry.totalTokensFresh).toBeUndefined();
       expect(result.sessionEntry.estimatedCostUsd).toBeUndefined();
-      expect(result.sessionEntry.execAsk).toBeUndefined();
       expect(result.sessionEntry.execHost).toBeUndefined();
       expect(result.sessionEntry.execNode).toBeUndefined();
-      expect(result.sessionEntry.execSecurity).toBeUndefined();
       expect(result.sessionEntry.cacheRead).toBeUndefined();
       expect(result.sessionEntry.cacheWrite).toBeUndefined();
       expect(result.sessionEntry.contextTokens).toBeUndefined();
+      expect(result.sessionEntry.contextTokensSource).toBeUndefined();
       expect(result.sessionEntry.compactionCount).toBeUndefined();
-      expect(result.sessionEntry.memoryFlushAt).toBeUndefined();
+      expect(result.sessionEntry.memoryFlush).toBeUndefined();
       expect(result.sessionEntry.abortCutoffMessageSid).toBeUndefined();
       expect(result.sessionEntry.spawnedBy).toBeUndefined();
       expect(result.sessionEntry.skillsSnapshot).toBeUndefined();
@@ -388,6 +568,7 @@ describe("resolveCronSession", () => {
           modelOverride: "claude-sonnet-4-6",
           providerOverride: "anthropic",
           modelOverrideSource: "user",
+          agentRuntimeOverride: "openclaw",
           authProfileOverride: "work-profile",
           authProfileOverrideSource: "user",
           authProfileOverrideCompactionCount: 3,
@@ -400,12 +581,29 @@ describe("resolveCronSession", () => {
       expect(result.sessionEntry.modelOverride).toBe("claude-sonnet-4-6");
       expect(result.sessionEntry.providerOverride).toBe("anthropic");
       expect(result.sessionEntry.modelOverrideSource).toBe("user");
+      expect(result.sessionEntry.agentRuntimeOverride).toBe("openclaw");
       expect(result.sessionEntry.authProfileOverride).toBe("work-profile");
       expect(result.sessionEntry.authProfileOverrideSource).toBe("user");
       expect(result.sessionEntry.authProfileOverrideCompactionCount).toBe(3);
     });
 
-    it("preserves ambient session context for non-isolated expiration rollovers", () => {
+    it("stamps a legacy source-less user auth override on fresh sessions", () => {
+      const result = resolveWithStoredEntry({
+        entry: {
+          sessionId: "existing-session-id-legacy-auth",
+          updatedAt: NOW_MS - 1_000,
+          authProfileOverride: "work-profile",
+        },
+        fresh: true,
+        forceNew: true,
+      });
+
+      expect(result.sessionEntry.authProfileOverride).toBe("work-profile");
+      expect(result.sessionEntry.authProfileOverrideSource).toBe("user");
+      expect(result.sessionEntry.authProfileOverrideCompactionCount).toBeUndefined();
+    });
+
+    it("preserves non-delivery ambient session context for non-isolated expiration rollovers", () => {
       const result = resolveWithStoredEntry({
         entry: {
           sessionId: "existing-session-id-321",
@@ -423,8 +621,8 @@ describe("resolveCronSession", () => {
       expect(result.sessionEntry.elevatedLevel).toBe("full");
       expect(result.sessionEntry.sendPolicy).toBe("deny");
       expect(result.sessionEntry.queueMode).toBe("collect");
-      expect(result.sessionEntry.channel).toBe("discord");
-      expect(result.sessionEntry.origin).toEqual({ provider: "discord", to: "old-channel" });
+      expect(result.sessionEntry.channel).toBeUndefined();
+      expect(result.sessionEntry.origin).toBeUndefined();
     });
 
     it("clears delivery routing metadata when session is stale", () => {
@@ -489,13 +687,10 @@ describe("resolveCronSession", () => {
         },
       });
 
-      expect(result).toMatchObject({
-        isNewSession: true,
-        sessionEntry: {
-          sessionId: expect.any(String),
-          modelOverride: "some-model",
-        },
-      });
+      expect(result.isNewSession).toBe(true);
+      expect(typeof result.sessionEntry.sessionId).toBe("string");
+      expect(result.sessionEntry.sessionId).not.toHaveLength(0);
+      expect(result.sessionEntry.modelOverride).toBe("some-model");
     });
   });
 });

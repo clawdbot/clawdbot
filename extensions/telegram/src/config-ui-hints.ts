@@ -1,3 +1,4 @@
+import { createChannelConfigUiHints } from "openclaw/plugin-sdk/channel-config-ui-hints";
 import type { ChannelConfigUiHint } from "openclaw/plugin-sdk/channel-core";
 
 export const telegramChannelConfigUiHints = {
@@ -13,105 +14,44 @@ export const telegramChannelConfigUiHints = {
     label: "Telegram Bot Token",
     help: "Telegram bot token used to authenticate Bot API requests for this account/provider config. Use secret/env substitution and rotate tokens if exposure is suspected.",
   },
-  dmPolicy: {
-    label: "Telegram DM Policy",
-    help: 'Direct message access control ("pairing" recommended). "open" requires channels.telegram.allowFrom=["*"].',
+  joinIntro: {
+    label: "Telegram Group Join Introduction",
+    help: "Send one room-aware introduction when the bot joins an allowed group or supergroup (default: true). Telegram cannot provide message history from before the bot joined.",
   },
-  "dm.threadReplies": {
-    label: "Telegram DM Thread Replies",
-    help: 'Controls whether Telegram DMs with message_thread_id use flat sessions ("off", default) or thread-scoped sessions ("inbound" or "always"). Thread IDs are still preserved for replies when sessions stay flat.',
-  },
-  "direct.*.threadReplies": {
-    label: "Telegram Per-DM Thread Replies",
-    help: 'Per-DM override for message_thread_id session threading. Use "inbound" only when a specific direct chat intentionally uses Telegram DM topics as separate sessions.',
-  },
-  configWrites: {
-    label: "Telegram Config Writes",
-    help: "Allow Telegram to write config in response to channel events/commands (default: true).",
-  },
-  "commands.native": {
-    label: "Telegram Native Commands",
-    help: 'Override native commands for Telegram (bool or "auto").',
-  },
-  "commands.nativeSkills": {
-    label: "Telegram Native Skill Commands",
-    help: 'Override native skill commands for Telegram (bool or "auto").',
-  },
-  streaming: {
-    label: "Telegram Streaming Mode",
-    help: 'Unified Telegram stream preview mode: "off" | "partial" | "block" | "progress" (default: "partial"). "progress" keeps a single editable progress draft until final delivery. Legacy boolean/streamMode keys are detected; run doctor --fix to migrate.',
-  },
-  "streaming.mode": {
-    label: "Telegram Streaming Mode",
-    help: 'Canonical Telegram preview mode: "off" | "partial" | "block" | "progress" (default: "partial").',
-  },
-  "streaming.chunkMode": {
-    label: "Telegram Chunk Mode",
-    help: 'Chunking mode for outbound Telegram text delivery: "length" (default) or "newline".',
-  },
-  "streaming.block.enabled": {
-    label: "Telegram Block Streaming Enabled",
-    help: 'Enable chunked block-style Telegram preview delivery when channels.telegram.streaming.mode="block".',
-  },
-  "streaming.block.coalesce": {
-    label: "Telegram Block Streaming Coalesce",
-    help: "Merge streamed Telegram block replies before sending final delivery.",
-  },
-  "streaming.preview.chunk.minChars": {
-    label: "Telegram Draft Chunk Min Chars",
-    help: 'Minimum chars before emitting a Telegram block preview chunk when channels.telegram.streaming.mode="block".',
-  },
-  "streaming.preview.chunk.maxChars": {
-    label: "Telegram Draft Chunk Max Chars",
-    help: 'Target max size for a Telegram block preview chunk when channels.telegram.streaming.mode="block".',
-  },
-  "streaming.preview.chunk.breakPreference": {
-    label: "Telegram Draft Chunk Break Preference",
-    help: "Preferred breakpoints for Telegram draft chunks (paragraph | newline | sentence).",
-  },
-  "streaming.preview.toolProgress": {
-    label: "Telegram Draft Tool Progress",
-    help: "Show tool/progress activity in the live draft preview message (default: true when preview streaming is active). Set false to keep tool updates out of the edited Telegram preview.",
-  },
-  "streaming.preview.commandText": {
-    label: "Telegram Draft Command Text",
-    help: 'Command/exec detail in preview tool-progress lines: "raw" preserves released behavior; "status" shows only the tool label.',
-  },
-  "streaming.progress.label": {
-    label: "Telegram Progress Label",
-    help: 'Initial progress draft title. Use "auto" for built-in single-word labels, a custom string, or false to hide the title.',
-  },
-  "streaming.progress.labels": {
-    label: "Telegram Progress Label Pool",
-    help: 'Candidate labels for streaming.progress.label="auto". Leave unset to use OpenClaw built-in progress labels.',
-  },
-  "streaming.progress.maxLines": {
-    label: "Telegram Progress Max Lines",
-    help: "Maximum number of compact progress lines to keep below the draft label (default: 8).",
-  },
-  "streaming.progress.toolProgress": {
-    label: "Telegram Progress Tool Lines",
-    help: "Show compact tool/progress lines in progress draft mode (default: true). Set false to keep only the label until final delivery.",
-  },
-  "streaming.progress.commandText": {
-    label: "Telegram Progress Command Text",
-    help: 'Command/exec detail in progress draft lines: "raw" preserves released behavior; "status" shows only the tool label.',
-  },
-  "retry.attempts": {
-    label: "Telegram Retry Attempts",
-    help: "Max retry attempts for outbound Telegram API calls (default: 3).",
-  },
-  "retry.minDelayMs": {
-    label: "Telegram Retry Min Delay (ms)",
-    help: "Minimum retry delay in ms for Telegram outbound calls.",
-  },
-  "retry.maxDelayMs": {
-    label: "Telegram Retry Max Delay (ms)",
-    help: "Maximum retry delay cap in ms for Telegram outbound calls.",
-  },
-  "retry.jitter": {
-    label: "Telegram Retry Jitter",
-    help: "Jitter factor (0-1) applied to Telegram retry delays.",
+  ...createChannelConfigUiHints({
+    channelLabel: "Telegram",
+    dmPolicy: { channelKey: "telegram" },
+    configWrites: true,
+    mentionPatterns: {
+      targetDescription: "Telegram group chat IDs or chatId:topic:threadId topic IDs",
+      policyNote: "Native Telegram bot mentions still trigger even when regex patterns are denied.",
+      denyNote: "Native bot mentions still trigger.",
+    },
+    nativeCommands: true,
+    streaming: {
+      "": 'Unified Telegram stream preview mode: "off" | "partial" | "block" | "progress" (default: "progress"). "progress" keeps a single editable progress draft until final delivery. Legacy boolean/streamMode keys are detected; run doctor --fix to migrate.',
+      mode: 'Canonical Telegram preview mode: "off" | "partial" | "block" | "progress" (default: "progress").',
+      chunkMode:
+        'Chunking mode for outbound Telegram text delivery: "length" (default) or "newline".',
+      "block.enabled":
+        "Enable normal Telegram block replies. This takes precedence over editable preview delivery.",
+      "block.coalesce": "Merge streamed Telegram block replies before sending final delivery.",
+      "preview.chunk.minChars":
+        'Minimum chars before emitting a Telegram block preview chunk when channels.telegram.streaming.mode="block".',
+      "preview.chunk.maxChars":
+        'Target max size for a Telegram block preview chunk when channels.telegram.streaming.mode="block".',
+      "preview.chunk.breakPreference":
+        "Preferred breakpoints for Telegram draft chunks (paragraph | newline | sentence).",
+      "preview.toolProgress":
+        "Show tool/progress activity in the live draft preview message (default: true when preview streaming is active). Set false to keep tool updates out of the edited Telegram preview.",
+      "preview.commandText":
+        'Command/exec detail in preview tool-progress lines: "status" is the safe default; "raw" opts into command text.',
+    },
+    progress: { includeCommentary: true, commentaryOrder: "after-command" },
+  }),
+  richMessages: {
+    label: "Telegram Rich Messages",
+    help: "Opt into Bot API 10.3 rich text sends and edits, including native tables and rich media. Default: false because some current Telegram clients render these messages as unsupported.",
   },
   "network.autoSelectFamily": {
     label: "Telegram autoSelectFamily",
@@ -120,18 +60,6 @@ export const telegramChannelConfigUiHints = {
   "network.dangerouslyAllowPrivateNetwork": {
     label: "Telegram Dangerously Allow Private Network",
     help: "Dangerous opt-in for trusted fake-IP or transparent-proxy environments where Telegram media downloads resolve api.telegram.org to private/internal/special-use addresses.",
-  },
-  timeoutSeconds: {
-    label: "Telegram API Timeout (seconds)",
-    help: "Max seconds before Telegram API requests are aborted (default: 500 per grammY).",
-  },
-  mediaGroupFlushMs: {
-    label: "Telegram Media Group Flush (ms)",
-    help: "Milliseconds to buffer Telegram albums/media groups before dispatching them as one inbound message. Default: 500.",
-  },
-  pollingStallThresholdMs: {
-    label: "Telegram Polling Stall Threshold (ms)",
-    help: "Milliseconds without completed Telegram getUpdates liveness before the polling watchdog restarts the polling runner. Default: 120000.",
   },
   silentErrorReplies: {
     label: "Telegram Silent Error Replies",
@@ -143,7 +71,7 @@ export const telegramChannelConfigUiHints = {
   },
   trustedLocalFileRoots: {
     label: "Telegram Trusted Local File Roots",
-    help: "Trusted local filesystem roots for self-hosted Telegram Bot API absolute file_path values. Only absolute paths inside these roots are read directly; all other absolute paths are rejected.",
+    help: "Trusted local filesystem roots for self-hosted Telegram Bot API file_path values. Exact in-root paths are read directly; container paths under /var/lib/telegram-bot-api can map into a host volume mount. Other absolute paths are rejected.",
   },
   autoTopicLabel: {
     label: "Telegram Auto Topic Label",
@@ -187,11 +115,11 @@ export const telegramChannelConfigUiHints = {
   },
   "threadBindings.enabled": {
     label: "Telegram Thread Binding Enabled",
-    help: "Enable Telegram conversation binding features (/focus, /unfocus, /agents, and /session idle|max-age). Overrides session.threadBindings.enabled when set.",
+    help: "Enable Telegram conversation-bound session spawning, routing, and delivery. Manage bindings with /agents and /session unbind|idle|max-age. Overrides session.threadBindings.enabled when set.",
   },
   "threadBindings.idleHours": {
     label: "Telegram Thread Binding Idle Timeout (hours)",
-    help: "Inactivity window in hours for Telegram bound sessions. Set 0 to disable idle auto-unfocus (default: 24). Overrides session.threadBindings.idleHours when set.",
+    help: "Inactivity window in hours for Telegram bound sessions. Set 0 to disable idle expiry (default: 24). Overrides session.threadBindings.idleHours when set.",
   },
   "threadBindings.maxAgeHours": {
     label: "Telegram Thread Binding Max Age (hours)",

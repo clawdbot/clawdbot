@@ -1,4 +1,7 @@
+// Provider registry tests cover runtime provider loading, normalization aliases,
+// manifest-only hook hydration, and config-derived image providers.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { describeImageWithModel, describeImagesWithModel } from "./image-runtime.js";
 import {
   buildMediaUnderstandingRegistry,
   getMediaUnderstandingProvider,
@@ -18,6 +21,17 @@ function createMediaProvider(
   return params;
 }
 
+function requireMediaProvider(
+  registry: Map<string, MediaUnderstandingProvider>,
+  providerId: string,
+): MediaUnderstandingProvider {
+  const provider = getMediaUnderstandingProvider(providerId, registry);
+  if (!provider) {
+    throw new Error(`expected media-understanding provider ${providerId}`);
+  }
+  return provider;
+}
+
 describe("media-understanding provider registry", () => {
   beforeEach(() => {
     resolvePluginCapabilityProvidersMock.mockReset();
@@ -32,12 +46,75 @@ describe("media-understanding provider registry", () => {
 
     const registry = buildMediaUnderstandingRegistry();
 
-    expect(getMediaUnderstandingProvider("groq", registry)?.id).toBe("groq");
-    expect(getMediaUnderstandingProvider("deepgram", registry)?.id).toBe("deepgram");
+    expect(requireMediaProvider(registry, "groq").id).toBe("groq");
+    expect(typeof requireMediaProvider(registry, "groq").describeImage).toBe("function");
+    expect(typeof requireMediaProvider(registry, "groq").describeImages).toBe("function");
+    expect(requireMediaProvider(registry, "deepgram").id).toBe("deepgram");
     expect(resolvePluginCapabilityProvidersMock).toHaveBeenCalledWith({
       key: "mediaUnderstandingProviders",
       cfg: undefined,
     });
+  });
+
+  it("hydrates manifest-only image providers with model-backed image hooks", () => {
+    resolvePluginCapabilityProvidersMock.mockReturnValue([
+      createMediaProvider({
+        id: "zai",
+        capabilities: ["image"],
+        defaultModels: { image: "glm-4.6v" },
+      }),
+    ]);
+
+    const registry = buildMediaUnderstandingRegistry();
+    const provider = requireMediaProvider(registry, "zai");
+
+    expect(provider.defaultModels?.image).toBe("glm-4.6v");
+    expect(provider.describeImage).toBe(describeImageWithModel);
+    expect(provider.describeImages).toBe(describeImagesWithModel);
+  });
+
+  it("resets earlier custom hooks when a prepared owner explicitly requests generic hooks", () => {
+    const customImage = vi.fn(async () => ({ text: "custom image" }));
+    const customImages = vi.fn(async () => ({ text: "custom images" }));
+    const registry = buildMediaUnderstandingRegistry(undefined, undefined, [
+      createMediaProvider({
+        id: "zai",
+        capabilities: ["image"],
+        describeImage: customImage,
+        describeImages: customImages,
+      }),
+      createMediaProvider({
+        id: "zai",
+        capabilities: ["image"],
+        defaultModels: { image: "glm-4.6v" },
+        describeImage: undefined,
+        describeImages: undefined,
+      }),
+    ]);
+
+    const provider = requireMediaProvider(registry, "zai");
+    expect(provider.defaultModels?.image).toBe("glm-4.6v");
+    expect(provider.describeImage).toBe(describeImageWithModel);
+    expect(provider.describeImages).toBe(describeImagesWithModel);
+  });
+
+  it("keeps partial explicit overrides ahead of hydrated prepared hooks", () => {
+    const overrideImage = vi.fn(async () => ({ text: "override image" }));
+    const registry = buildMediaUnderstandingRegistry(
+      {
+        zai: createMediaProvider({
+          id: "zai",
+          capabilities: ["image"],
+          describeImage: overrideImage,
+        }),
+      },
+      undefined,
+      [createMediaProvider({ id: "zai", capabilities: ["image"] })],
+    );
+
+    const provider = requireMediaProvider(registry, "zai");
+    expect(provider.describeImage).toBe(overrideImage);
+    expect(provider.describeImages).toBe(describeImagesWithModel);
   });
 
   it("keeps provider id normalization behavior for capability providers", () => {
@@ -47,7 +124,7 @@ describe("media-understanding provider registry", () => {
 
     const registry = buildMediaUnderstandingRegistry();
 
-    expect(getMediaUnderstandingProvider("gemini", registry)?.id).toBe("google");
+    expect(requireMediaProvider(registry, "gemini").id).toBe("google");
   });
 
   it("auto-registers media-understanding for config providers with image-capable models (#51392)", () => {
@@ -64,15 +141,13 @@ describe("media-understanding provider registry", () => {
       },
     } as never;
     const registry = buildMediaUnderstandingRegistry(undefined, cfg);
-    const glmProvider = getMediaUnderstandingProvider("glm", registry);
+    const glmProvider = requireMediaProvider(registry, "glm");
     const textOnlyProvider = getMediaUnderstandingProvider("textOnly", registry);
 
-    expect(glmProvider).toMatchObject({
-      id: "glm",
-      capabilities: ["image"],
-      describeImage: expect.any(Function),
-      describeImages: expect.any(Function),
-    });
+    expect(glmProvider.id).toBe("glm");
+    expect(glmProvider.capabilities).toEqual(["image"]);
+    expect(typeof glmProvider.describeImage).toBe("function");
+    expect(typeof glmProvider.describeImages).toBe("function");
     expect(textOnlyProvider).toBeUndefined();
   });
 
@@ -96,11 +171,19 @@ describe("media-understanding provider registry", () => {
     } as never;
 
     const registry = buildMediaUnderstandingRegistry(undefined, cfg);
-    const provider = getMediaUnderstandingProvider("google", registry);
+    const provider = requireMediaProvider(registry, "google");
 
-    expect(provider?.capabilities).toEqual(["image", "audio", "video"]);
-    expect(await provider?.describeImage?.({} as never)).toEqual({ text: "plugin image" });
-    expect(await provider?.transcribeAudio?.({} as never)).toEqual({ text: "plugin audio" });
+    expect(provider.capabilities).toEqual(["image", "audio", "video"]);
+    expect(provider.describeImage).toBeTypeOf("function");
+    if (!provider.describeImage) {
+      throw new Error("expected google describeImage provider hook");
+    }
+    expect(provider.transcribeAudio).toBeTypeOf("function");
+    if (!provider.transcribeAudio) {
+      throw new Error("expected google transcribeAudio provider hook");
+    }
+    expect(await provider.describeImage({} as never)).toEqual({ text: "plugin image" });
+    expect(await provider.transcribeAudio({} as never)).toEqual({ text: "plugin audio" });
     expect(resolvePluginCapabilityProvidersMock).toHaveBeenCalledWith({
       key: "mediaUnderstandingProviders",
       cfg,

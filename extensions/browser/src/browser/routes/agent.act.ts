@@ -1,8 +1,15 @@
-import { formatErrorMessage } from "../../infra/errors.js";
+import { setTimeout as sleep } from "node:timers/promises";
+/**
+ * Browser agent action route registration and existing-session execution.
+ *
+ * Dispatches normalized actions to either Playwright-backed OpenClaw browser
+ * control or Chrome MCP existing-session operations with navigation guards.
+ */
+import { formatErrorMessage, toErrorObject } from "../../infra/errors.js";
 import {
+  ChromeMcpDocumentUnavailableError,
   clickChromeMcpElement,
   clickChromeMcpCoords,
-  closeChromeMcpTab,
   dragChromeMcpElement,
   evaluateChromeMcpScript,
   fillChromeMcpElement,
@@ -10,9 +17,12 @@ import {
   hoverChromeMcpElement,
   pressChromeMcpKey,
   resizeChromeMcpPage,
+  withChromeMcpDocument,
+  type ChromeMcpOperationOptions,
   type ChromeMcpProfileOptions,
 } from "../chrome-mcp.js";
 import type { BrowserActRequest } from "../client-actions.types.js";
+import { normalizeBrowserEvaluateFunctionSource } from "../evaluate-source.js";
 import {
   assertBrowserNavigationResultAllowed,
   type BrowserNavigationPolicyOptions,
@@ -20,6 +30,7 @@ import {
 } from "../navigation-guard.js";
 import { getBrowserProfileCapabilities } from "../profile-capabilities.js";
 import type { BrowserRouteContext } from "../server-context.js";
+import { clearSnapshotKeysForTab } from "../snapshot-delta-cache.js";
 import { matchBrowserUrlPattern } from "../url-pattern.js";
 import { registerBrowserAgentActDownloadRoutes } from "./agent.act.download.js";
 import {
@@ -28,9 +39,10 @@ import {
   jsonActError,
 } from "./agent.act.errors.js";
 import { registerBrowserAgentActHookRoutes } from "./agent.act.hooks.js";
-import { normalizeActRequest, validateBatchTargetIds } from "./agent.act.normalize.js";
+import { canonicalizeActTargetIds, normalizeActRequest } from "./agent.act.normalize.js";
 import { type ActKind, isActKind } from "./agent.act.shared.js";
 import {
+  browserNavigationPolicyForProfile,
   readBody,
   requirePwAi,
   resolveTargetIdFromBody,
@@ -38,28 +50,27 @@ import {
   withRouteTabContext,
   SELECTOR_UNSUPPORTED_MESSAGE,
 } from "./agent.shared.js";
-import { resolveTargetIdAfterNavigate } from "./agent.snapshot-target.js";
+import {
+  captureBrowserOperationTarget,
+  resolveOperationTargetOutcome,
+} from "./agent.snapshot-target.js";
 import { EXISTING_SESSION_LIMITS } from "./existing-session-limits.js";
+import { readRoutePositiveInteger, readRouteTimerTimeoutMs } from "./route-numeric.js";
 import type { BrowserRouteRegistrar } from "./types.js";
-import { asyncBrowserRoute, jsonError, toNumber, toStringOrEmpty } from "./utils.js";
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
+import { jsonError, toStringOrEmpty } from "./utils.js";
 
 const EXISTING_SESSION_INTERACTION_NAVIGATION_RECHECK_DELAYS_MS = [0, 250, 500] as const;
 
-async function readExistingSessionLocationHref(params: {
+type ExistingSessionOperation = ChromeMcpOperationOptions & {
   profileName: string;
   profile?: ChromeMcpProfileOptions;
   userDataDir?: string;
   targetId: string;
-}): Promise<string> {
+};
+
+async function readExistingSessionLocationHref(params: ExistingSessionOperation): Promise<string> {
   const currentUrl = await evaluateChromeMcpScript({
-    profileName: params.profileName,
-    profile: params.profile,
-    userDataDir: params.userDataDir,
-    targetId: params.targetId,
+    ...params,
     fn: "() => window.location.href",
   });
   if (typeof currentUrl !== "string") {
@@ -72,17 +83,17 @@ async function readExistingSessionLocationHref(params: {
   return normalizedUrl;
 }
 
-async function assertExistingSessionPostInteractionNavigationAllowed(params: {
-  profileName: string;
-  profile?: ChromeMcpProfileOptions;
-  userDataDir?: string;
-  targetId: string;
-  ssrfPolicy?: BrowserNavigationPolicyOptions["ssrfPolicy"];
-  listTabs: () => Promise<Array<{ targetId: string; url: string }>>;
-  initialTabTargetIds: ReadonlySet<string>;
-}): Promise<void> {
-  const ssrfPolicyOpts = withBrowserNavigationPolicy(params.ssrfPolicy);
-  if (!ssrfPolicyOpts.ssrfPolicy) {
+async function assertExistingSessionPostInteractionNavigationAllowed(
+  params: ExistingSessionOperation &
+    BrowserNavigationPolicyOptions & {
+      listTabs: () => Promise<Array<{ targetId: string; url: string }>>;
+      initialTabTargetIds: ReadonlySet<string>;
+    },
+): Promise<void> {
+  const navigationPolicy = withBrowserNavigationPolicy(params.ssrfPolicy, {
+    browserProxyMode: params.browserProxyMode,
+  });
+  if (!navigationPolicy.ssrfPolicy && !navigationPolicy.browserProxyMode) {
     return;
   }
   const listTabs = params.listTabs;
@@ -96,7 +107,7 @@ async function assertExistingSessionPostInteractionNavigationAllowed(params: {
       }
       await assertBrowserNavigationResultAllowed({
         url: tab.url,
-        ...ssrfPolicyOpts,
+        ...navigationPolicy,
       });
     }
   };
@@ -105,18 +116,19 @@ async function assertExistingSessionPostInteractionNavigationAllowed(params: {
   let sawStableAllowedUrl = false;
   for (const delayMs of EXISTING_SESSION_INTERACTION_NAVIGATION_RECHECK_DELAYS_MS) {
     if (delayMs > 0) {
-      await sleep(delayMs);
+      await sleep(delayMs, undefined, { signal: params.signal });
     }
     let currentUrl: string;
     try {
       currentUrl = await readExistingSessionLocationHref(params);
     } catch {
+      params.signal?.throwIfAborted();
       sawStableAllowedUrl = false;
       continue;
     }
     await assertBrowserNavigationResultAllowed({
       url: currentUrl,
-      ...ssrfPolicyOpts,
+      ...navigationPolicy,
     });
     if (currentUrl === lastObservedUrl) {
       sawStableAllowedUrl = true;
@@ -139,46 +151,24 @@ async function assertExistingSessionPostInteractionNavigationAllowed(params: {
       EXISTING_SESSION_INTERACTION_NAVIGATION_RECHECK_DELAYS_MS[
         EXISTING_SESSION_INTERACTION_NAVIGATION_RECHECK_DELAYS_MS.length - 1
       ];
-    await sleep(lastDelay);
+    await sleep(lastDelay, undefined, { signal: params.signal });
     try {
       const followUpUrl = await readExistingSessionLocationHref(params);
       await assertBrowserNavigationResultAllowed({
         url: followUpUrl,
-        ...ssrfPolicyOpts,
+        ...navigationPolicy,
       });
       if (followUpUrl === lastObservedUrl) {
         await assertNewTabsAllowed();
         return;
       }
     } catch {
+      params.signal?.throwIfAborted();
       // Probe failed — fall through to throw
     }
   }
 
   throw new Error("Unable to verify stable post-interaction navigation");
-}
-
-async function runExistingSessionActionWithNavigationGuard<T>(params: {
-  execute: () => Promise<T>;
-  guard?: Parameters<typeof assertExistingSessionPostInteractionNavigationAllowed>[0];
-}): Promise<T> {
-  let actionError: unknown;
-  let result: T | undefined;
-  try {
-    result = await params.execute();
-  } catch (error) {
-    actionError = error;
-  }
-
-  if (params.guard) {
-    await assertExistingSessionPostInteractionNavigationAllowed(params.guard);
-  }
-
-  if (actionError) {
-    throw actionError;
-  }
-
-  return result as T;
 }
 
 function buildExistingSessionWaitPredicate(params: {
@@ -188,46 +178,56 @@ function buildExistingSessionWaitPredicate(params: {
   loadState?: "load" | "domcontentloaded" | "networkidle";
   fn?: string;
 }): string | null {
-  const checks: string[] = [];
-  if (params.text) {
-    checks.push(`Boolean(document.body?.innerText?.includes(${JSON.stringify(params.text)}))`);
-  }
-  if (params.textGone) {
-    checks.push(`!document.body?.innerText?.includes(${JSON.stringify(params.textGone)})`);
-  }
-  if (params.selector) {
-    checks.push(`Boolean(document.querySelector(${JSON.stringify(params.selector)}))`);
-  }
-  if (params.loadState === "domcontentloaded") {
-    checks.push(`document.readyState === "interactive" || document.readyState === "complete"`);
-  } else if (params.loadState === "load") {
-    checks.push(`document.readyState === "complete"`);
-  }
-  if (params.fn) {
-    checks.push(`Boolean(await (${params.fn})())`);
-  }
-  if (checks.length === 0) {
-    return null;
-  }
-  return checks.length === 1 ? checks[0] : checks.map((check) => `(${check})`).join(" && ");
+  const checks = [
+    params.text && `Boolean(document.body?.innerText?.includes(${JSON.stringify(params.text)}))`,
+    params.textGone && `!document.body?.innerText?.includes(${JSON.stringify(params.textGone)})`,
+    params.selector &&
+      `(function visible(node) {
+      if (!node) return false;
+      if (node.nodeType === 1) {
+        // Like managed waits, display:contents is visible through rendered children.
+        if (getComputedStyle(node).display === "contents") {
+          return Array.from(node.childNodes).some(visible);
+        }
+        if (!node.checkVisibility({ visibilityProperty: true })) return false;
+      } else if (node.nodeType !== 3) {
+        return false;
+      }
+      const range = document.createRange();
+      range.selectNode(node);
+      const rect = node.nodeType === 1 ? node.getBoundingClientRect() : range.getBoundingClientRect();
+      return rect.width > 0 && rect.height > 0;
+    })(document.querySelector(${JSON.stringify(params.selector)}))`,
+    params.loadState === "domcontentloaded" &&
+      `document.readyState === "interactive" || document.readyState === "complete"`,
+    params.loadState === "load" && `document.readyState === "complete"`,
+    // `fn` is admitted only by the same evaluateEnabled gate as evaluate.
+    // Preserve its async semantics; document binding guards scheduler rebinding.
+    params.fn && `Boolean(await (${normalizeBrowserEvaluateFunctionSource(params.fn)})())`,
+  ];
+  return (
+    checks
+      .filter(Boolean)
+      .map((check) => `(${check})`)
+      .join(" && ") || null
+  );
 }
 
-async function waitForExistingSessionCondition(params: {
-  profileName: string;
-  profile?: ChromeMcpProfileOptions;
-  userDataDir?: string;
-  targetId: string;
-  timeMs?: number;
-  text?: string;
-  textGone?: string;
-  selector?: string;
-  url?: string;
-  loadState?: "load" | "domcontentloaded" | "networkidle";
-  fn?: string;
-  timeoutMs?: number;
-}): Promise<void> {
+async function waitForExistingSessionCondition(
+  params: ExistingSessionOperation & {
+    timeMs?: number;
+    text?: string;
+    textGone?: string;
+    selector?: string;
+    url?: string;
+    loadState?: "load" | "domcontentloaded" | "networkidle";
+    fn?: string;
+    ssrfPolicy?: BrowserNavigationPolicyOptions["ssrfPolicy"];
+    browserProxyMode?: BrowserNavigationPolicyOptions["browserProxyMode"];
+  },
+): Promise<void> {
   if (params.timeMs && params.timeMs > 0) {
-    await sleep(params.timeMs);
+    await sleep(params.timeMs, undefined, { signal: params.signal });
   }
   const predicate = buildExistingSessionWaitPredicate(params);
   if (!predicate && !params.url) {
@@ -236,32 +236,76 @@ async function waitForExistingSessionCondition(params: {
   const timeoutMs = Math.max(250, params.timeoutMs ?? 10_000);
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    let ready = true;
-    if (predicate) {
-      ready = Boolean(
-        await evaluateChromeMcpScript({
-          profileName: params.profileName,
-          profile: params.profile,
-          userDataDir: params.userDataDir,
-          targetId: params.targetId,
-          fn: `async () => ${predicate}`,
-        }),
-      );
-    }
-    if (ready && params.url) {
-      const currentUrl = await evaluateChromeMcpScript({
-        profileName: params.profileName,
-        profile: params.profile,
-        userDataDir: params.userDataDir,
-        targetId: params.targetId,
-        fn: "() => window.location.href",
+    try {
+      const ready = await withChromeMcpDocument(params, async (document) => {
+        const readAllowedUrl = async () => {
+          const url = await document.evaluate(`(root) => {
+            const boundDocument = root?.nodeType === 9 ? root : root?.ownerDocument;
+            return boundDocument === globalThis.document ? globalThis.location.href : null;
+          }`);
+          if (typeof url !== "string" || !url.trim()) {
+            return null;
+          }
+          await assertBrowserNavigationResultAllowed({
+            url,
+            ...withBrowserNavigationPolicy(params.ssrfPolicy, {
+              browserProxyMode: params.browserProxyMode,
+            }),
+          });
+          return url;
+        };
+        const currentUrl = await readAllowedUrl();
+        if (!currentUrl) {
+          return false;
+        }
+        if (params.url && !matchBrowserUrlPattern(params.url, currentUrl)) {
+          return false;
+        }
+        if (!predicate) {
+          return true;
+        }
+        const outcome = await document.evaluate(`async (root) => {
+          const boundDocument = root?.nodeType === 9 ? root : root?.ownerDocument;
+          if (boundDocument !== globalThis.document) return { kind: "navigation" };
+          try {
+            return { kind: "result", ready: Boolean(await (${predicate})) };
+          } catch (error) {
+            const message = error && typeof error === "object" && "message" in error
+              ? String(error.message)
+              : String(error);
+            return { kind: "error", message };
+          }
+        }`);
+        if (!outcome || typeof outcome !== "object") {
+          throw new Error("Document-bound wait returned an invalid result");
+        }
+        if ("kind" in outcome && outcome.kind === "error") {
+          throw new Error(
+            "message" in outcome && typeof outcome.message === "string"
+              ? outcome.message
+              : "Wait predicate failed",
+          );
+        }
+        const predicateReady =
+          "kind" in outcome &&
+          outcome.kind === "result" &&
+          "ready" in outcome &&
+          outcome.ready === true;
+        if (!predicateReady || !params.url) {
+          return predicateReady;
+        }
+        const finalUrl = await readAllowedUrl();
+        return finalUrl !== null && matchBrowserUrlPattern(params.url, finalUrl);
       });
-      ready = typeof currentUrl === "string" && matchBrowserUrlPattern(params.url, currentUrl);
+      if (ready) {
+        return;
+      }
+    } catch (error) {
+      if (!(error instanceof ChromeMcpDocumentUnavailableError)) {
+        throw error;
+      }
     }
-    if (ready) {
-      return;
-    }
-    await sleep(250);
+    await sleep(250, undefined, { signal: params.signal });
   }
   throw new Error("Timed out waiting for condition");
 }
@@ -276,6 +320,12 @@ const SELECTOR_ALLOWED_KINDS: ReadonlySet<string> = new Set([
   "type",
   "wait",
 ]);
+
+function shouldEnforceCurrentUrlForAct(action: BrowserActRequest): boolean {
+  // Batch stays guarded because nested actions can read or return page data.
+  return action.kind !== "resize" && action.kind !== "close";
+}
+
 function getExistingSessionUnsupportedMessage(action: BrowserActRequest): string | null {
   switch (action.kind) {
     case "click":
@@ -331,7 +381,7 @@ function getExistingSessionUnsupportedMessage(action: BrowserActRequest): string
         ? EXISTING_SESSION_LIMITS.act.waitNetworkIdle
         : null;
     case "evaluate":
-      return action.timeoutMs !== undefined ? EXISTING_SESSION_LIMITS.act.evaluateTimeout : null;
+      return null;
     case "batch":
       return EXISTING_SESSION_LIMITS.act.batch;
     case "resize":
@@ -341,70 +391,84 @@ function getExistingSessionUnsupportedMessage(action: BrowserActRequest): string
   throw new Error("Unsupported browser act kind");
 }
 
+/** Register browser action endpoints, including hook and download subroutes. */
 export function registerBrowserAgentActRoutes(
   app: BrowserRouteRegistrar,
   ctx: BrowserRouteContext,
 ) {
-  app.post(
-    "/act",
-    asyncBrowserRoute(async (req, res) => {
-      const body = readBody(req);
-      const kindRaw = toStringOrEmpty(body.kind);
-      if (!isActKind(kindRaw)) {
-        return jsonActError(res, 400, ACT_ERROR_CODES.kindRequired, "kind is required");
-      }
-      const kind: ActKind = kindRaw;
-      let action: BrowserActRequest;
-      try {
-        action = normalizeActRequest(body);
-      } catch (err) {
-        return jsonActError(res, 400, ACT_ERROR_CODES.invalidRequest, formatErrorMessage(err));
-      }
-      const targetId = resolveTargetIdFromBody(body);
-      if (Object.hasOwn(body, "selector") && !SELECTOR_ALLOWED_KINDS.has(kind)) {
-        return jsonActError(
-          res,
-          400,
-          ACT_ERROR_CODES.selectorUnsupported,
-          SELECTOR_UNSUPPORTED_MESSAGE,
-        );
-      }
-      const earlyFn = action.kind === "wait" || action.kind === "evaluate" ? action.fn : "";
-      if (
-        (action.kind === "evaluate" || (action.kind === "wait" && earlyFn)) &&
-        !ctx.state().resolved.evaluateEnabled
-      ) {
-        return jsonActError(
-          res,
-          403,
-          ACT_ERROR_CODES.evaluateDisabled,
-          browserEvaluateDisabledMessage(action.kind === "evaluate" ? "evaluate" : "wait"),
-        );
-      }
-
-      await withRouteTabContext({
-        req,
+  app.post("/act", async (req, res) => {
+    const body = readBody(req);
+    const kindRaw = toStringOrEmpty(body.kind);
+    if (!isActKind(kindRaw)) {
+      return jsonActError(res, 400, ACT_ERROR_CODES.kindRequired, "kind is required");
+    }
+    const kind: ActKind = kindRaw;
+    let action: BrowserActRequest;
+    try {
+      action = normalizeActRequest(body);
+    } catch (err) {
+      return jsonActError(res, 400, ACT_ERROR_CODES.invalidRequest, formatErrorMessage(err));
+    }
+    const targetId = resolveTargetIdFromBody(body);
+    if (Object.hasOwn(body, "selector") && !SELECTOR_ALLOWED_KINDS.has(kind)) {
+      return jsonActError(
         res,
-        ctx,
-        targetId,
-        run: async ({ profileCtx, cdpUrl, tab, resolveTabUrl }) => {
-          const evaluateEnabled = ctx.state().resolved.evaluateEnabled;
-          const ssrfPolicy = ctx.state().resolved.ssrfPolicy;
-          const isExistingSession = getBrowserProfileCapabilities(profileCtx.profile).usesChromeMcp;
-          const hasNavigationResultPolicy = Boolean(
-            withBrowserNavigationPolicy(ssrfPolicy).ssrfPolicy,
-          );
+        400,
+        ACT_ERROR_CODES.selectorUnsupported,
+        SELECTOR_UNSUPPORTED_MESSAGE,
+      );
+    }
+    const earlyFn = action.kind === "wait" || action.kind === "evaluate" ? action.fn : "";
+    if (
+      (action.kind === "evaluate" || (action.kind === "wait" && earlyFn)) &&
+      !ctx.state().resolved.evaluateEnabled
+    ) {
+      return jsonActError(
+        res,
+        403,
+        ACT_ERROR_CODES.evaluateDisabled,
+        browserEvaluateDisabledMessage(action.kind === "evaluate" ? "evaluate" : "wait"),
+      );
+    }
+
+    await withRouteTabContext({
+      req,
+      res,
+      ctx,
+      targetId,
+      enforceCurrentUrlAllowed: shouldEnforceCurrentUrlForAct(action),
+      run: async ({ profileCtx, cdpUrl, tab, signal, resolveTabUrl }) => {
+        const evaluateEnabled = ctx.state().resolved.evaluateEnabled;
+        const navigationPolicy = browserNavigationPolicyForProfile(ctx, profileCtx);
+        const isExistingSession = getBrowserProfileCapabilities(profileCtx.profile).usesChromeMcp;
+        const requestedTimeoutMs =
+          "timeoutMs" in action && typeof action.timeoutMs === "number"
+            ? action.timeoutMs
+            : undefined;
+        const existingSessionCallOptions: ChromeMcpOperationOptions = {
+          timeoutMs: requestedTimeoutMs ?? ctx.state().resolved.actionTimeoutMs,
+          signal,
+        };
+        const hasNavigationResultPolicy = Boolean(
+          navigationPolicy.ssrfPolicy || navigationPolicy.browserProxyMode,
+        );
+        const resolveRelayTarget = await captureBrowserOperationTarget({
+          ctx,
+          profileName: profileCtx.profile.name,
+          targetId: tab.targetId,
+        });
+        try {
           const jsonOk = async (
             extra?: Record<string, unknown>,
-            options?: { resolveCurrentTarget?: boolean },
+            options?: { resolveCurrentTarget?: boolean; operationTargetId?: string },
           ) => {
             const shouldResolveCurrentTarget =
               options?.resolveCurrentTarget && (!isExistingSession || hasNavigationResultPolicy);
             const responseTargetId = shouldResolveCurrentTarget
-              ? await resolveTargetIdAfterNavigate({
-                  oldTargetId: tab.targetId,
-                  navigatedUrl: tab.url,
-                  listTabs: () => profileCtx.listTabs(),
+              ? await resolveOperationTargetOutcome({
+                  actedOnTargetId: tab.targetId,
+                  operationTargetId: options?.operationTargetId,
+                  resolveRelayTarget,
                 })
               : tab.targetId;
             const url =
@@ -415,6 +479,7 @@ export function registerBrowserAgentActRoutes(
                     profileCtx,
                     targetId: responseTargetId,
                     fallbackUrl: tab.url,
+                    ...(isExistingSession ? existingSessionCallOptions : {}),
                   });
             return res.json({
               ok: true,
@@ -423,25 +488,36 @@ export function registerBrowserAgentActRoutes(
               ...extra,
             });
           };
-          if (action.targetId && action.targetId !== tab.targetId) {
-            return jsonActError(
-              res,
-              403,
-              ACT_ERROR_CODES.targetIdMismatch,
-              "action targetId must match request targetId",
-            );
+          // Nested batch aliases can differ from the request alias, so prefixes
+          // must stay unique across the full tab set before canonicalization.
+          const actionTabs =
+            action.kind === "batch" && !isExistingSession ? await profileCtx.listTabs() : [tab];
+          if (!actionTabs.some((candidate) => candidate.targetId === tab.targetId)) {
+            actionTabs.unshift(tab);
+          }
+          const targetIdError = canonicalizeActTargetIds(action, tab, actionTabs);
+          if (targetIdError) {
+            return jsonActError(res, 403, ACT_ERROR_CODES.targetIdMismatch, targetIdError);
           }
           const profileName = profileCtx.profile.name;
           if (isExistingSession) {
-            const initialTabTargetIds = hasNavigationResultPolicy
-              ? new Set((await profileCtx.listTabs()).map((currentTab) => currentTab.targetId))
-              : new Set<string>();
-            const existingSessionNavigationGuard = {
+            const existingSessionTarget: ExistingSessionOperation = {
               profileName,
               profile: profileCtx.profile,
               targetId: tab.targetId,
-              ssrfPolicy,
-              listTabs: () => profileCtx.listTabs(),
+              ...existingSessionCallOptions,
+            };
+            const initialTabTargetIds = hasNavigationResultPolicy
+              ? new Set(
+                  (await profileCtx.listTabs(existingSessionCallOptions)).map(
+                    (currentTab) => currentTab.targetId,
+                  ),
+                )
+              : new Set<string>();
+            const existingSessionNavigationGuard = {
+              ...existingSessionTarget,
+              ...navigationPolicy,
+              listTabs: () => profileCtx.listTabs(existingSessionCallOptions),
               initialTabTargetIds,
             };
             const unsupportedMessage = getExistingSessionUnsupportedMessage(action);
@@ -453,178 +529,154 @@ export function registerBrowserAgentActRoutes(
                 unsupportedMessage,
               );
             }
+            const runGuardedAction = async <T>(execute: () => Promise<T>): Promise<T> => {
+              let actionError: unknown;
+              let result: T | undefined;
+              try {
+                result = await execute();
+              } catch (error) {
+                actionError = error;
+              }
+              await assertExistingSessionPostInteractionNavigationAllowed(
+                existingSessionNavigationGuard,
+              );
+              if (actionError) {
+                throw toErrorObject(actionError, "Non-Error thrown");
+              }
+              return result as T;
+            };
             switch (action.kind) {
               case "click":
-                await runExistingSessionActionWithNavigationGuard({
-                  execute: () =>
-                    clickChromeMcpElement({
-                      profileName,
-                      profile: profileCtx.profile,
-                      targetId: tab.targetId,
-                      uid: action.ref!,
-                      doubleClick: action.doubleClick ?? false,
-                      timeoutMs: action.timeoutMs,
-                      signal: req.signal,
-                    }),
-                  guard: existingSessionNavigationGuard,
-                });
+                await runGuardedAction(() =>
+                  clickChromeMcpElement({
+                    ...existingSessionTarget,
+                    uid: action.ref!,
+                    doubleClick: action.doubleClick ?? false,
+                  }),
+                );
                 return await jsonOk(undefined, { resolveCurrentTarget: true });
               case "clickCoords":
-                await runExistingSessionActionWithNavigationGuard({
-                  execute: () =>
-                    clickChromeMcpCoords({
-                      profileName,
-                      profile: profileCtx.profile,
-                      targetId: tab.targetId,
-                      x: action.x,
-                      y: action.y,
-                      doubleClick: action.doubleClick ?? false,
-                      button: action.button as "left" | "right" | "middle" | undefined,
-                      delayMs: action.delayMs,
-                    }),
-                  guard: existingSessionNavigationGuard,
-                });
+                await runGuardedAction(() =>
+                  clickChromeMcpCoords({
+                    ...existingSessionTarget,
+                    x: action.x,
+                    y: action.y,
+                    doubleClick: action.doubleClick ?? false,
+                    button: action.button as "left" | "right" | "middle" | undefined,
+                    delayMs: action.delayMs,
+                  }),
+                );
                 return await jsonOk(undefined, { resolveCurrentTarget: true });
               case "type":
-                await runExistingSessionActionWithNavigationGuard({
-                  execute: async () => {
-                    await fillChromeMcpElement({
-                      profileName,
-                      profile: profileCtx.profile,
-                      targetId: tab.targetId,
-                      uid: action.ref!,
-                      value: action.text,
+                await runGuardedAction(async () => {
+                  await fillChromeMcpElement({
+                    ...existingSessionTarget,
+                    uid: action.ref!,
+                    value: action.text,
+                  });
+                  if (action.submit) {
+                    await pressChromeMcpKey({
+                      ...existingSessionTarget,
+                      key: "Enter",
                     });
-                    if (action.submit) {
-                      await pressChromeMcpKey({
-                        profileName,
-                        profile: profileCtx.profile,
-                        targetId: tab.targetId,
-                        key: "Enter",
-                      });
-                    }
-                  },
-                  guard: existingSessionNavigationGuard,
+                  }
                 });
                 return await jsonOk(undefined, { resolveCurrentTarget: true });
               case "press":
-                await runExistingSessionActionWithNavigationGuard({
-                  execute: () =>
-                    pressChromeMcpKey({
-                      profileName,
-                      profile: profileCtx.profile,
-                      targetId: tab.targetId,
-                      key: action.key,
-                    }),
-                  guard: existingSessionNavigationGuard,
-                });
+                await runGuardedAction(() =>
+                  pressChromeMcpKey({
+                    ...existingSessionTarget,
+                    key: action.key,
+                  }),
+                );
                 return await jsonOk(undefined, { resolveCurrentTarget: true });
               case "hover":
-                await runExistingSessionActionWithNavigationGuard({
-                  execute: () =>
-                    hoverChromeMcpElement({
-                      profileName,
-                      profile: profileCtx.profile,
-                      targetId: tab.targetId,
-                      uid: action.ref!,
-                    }),
-                  guard: existingSessionNavigationGuard,
-                });
-                return await jsonOk();
+                await runGuardedAction(() =>
+                  hoverChromeMcpElement({
+                    ...existingSessionTarget,
+                    uid: action.ref!,
+                  }),
+                );
+                return await jsonOk(undefined, { resolveCurrentTarget: true });
               case "scrollIntoView":
-                await runExistingSessionActionWithNavigationGuard({
-                  execute: () =>
-                    evaluateChromeMcpScript({
-                      profileName,
-                      profile: profileCtx.profile,
-                      targetId: tab.targetId,
-                      fn: `(el) => { el.scrollIntoView({ block: "center", inline: "center" }); return true; }`,
-                      args: [action.ref!],
-                    }),
-                  guard: existingSessionNavigationGuard,
-                });
-                return await jsonOk();
+                await runGuardedAction(() =>
+                  evaluateChromeMcpScript({
+                    ...existingSessionTarget,
+                    fn: `(el) => { el.scrollIntoView({ block: "center", inline: "center" }); return true; }`,
+                    args: [action.ref!],
+                  }),
+                );
+                return await jsonOk(undefined, { resolveCurrentTarget: true });
               case "drag":
-                await runExistingSessionActionWithNavigationGuard({
-                  execute: () =>
-                    dragChromeMcpElement({
-                      profileName,
-                      profile: profileCtx.profile,
-                      targetId: tab.targetId,
-                      fromUid: action.startRef!,
-                      toUid: action.endRef!,
-                    }),
-                  guard: existingSessionNavigationGuard,
-                });
-                return await jsonOk();
+                await runGuardedAction(() =>
+                  dragChromeMcpElement({
+                    ...existingSessionTarget,
+                    fromUid: action.startRef!,
+                    toUid: action.endRef!,
+                  }),
+                );
+                return await jsonOk(undefined, { resolveCurrentTarget: true });
               case "select":
-                await runExistingSessionActionWithNavigationGuard({
-                  execute: () =>
-                    fillChromeMcpElement({
-                      profileName,
-                      profile: profileCtx.profile,
-                      targetId: tab.targetId,
-                      uid: action.ref!,
-                      value: action.values[0] ?? "",
-                    }),
-                  guard: existingSessionNavigationGuard,
-                });
-                return await jsonOk();
+                await runGuardedAction(() =>
+                  fillChromeMcpElement({
+                    ...existingSessionTarget,
+                    uid: action.ref!,
+                    value: action.values[0] ?? "",
+                  }),
+                );
+                return await jsonOk(undefined, { resolveCurrentTarget: true });
               case "fill":
-                await runExistingSessionActionWithNavigationGuard({
-                  execute: () =>
-                    fillChromeMcpForm({
-                      profileName,
-                      profile: profileCtx.profile,
-                      targetId: tab.targetId,
-                      elements: action.fields.map((field) => ({
-                        uid: field.ref,
-                        value: String(field.value ?? ""),
-                      })),
-                    }),
-                  guard: existingSessionNavigationGuard,
-                });
-                return await jsonOk();
+                await runGuardedAction(() =>
+                  fillChromeMcpForm({
+                    ...existingSessionTarget,
+                    elements: action.fields.map((field) => ({
+                      uid: field.ref,
+                      value: String(field.value ?? ""),
+                    })),
+                  }),
+                );
+                return await jsonOk(undefined, { resolveCurrentTarget: true });
               case "resize":
                 await resizeChromeMcpPage({
-                  profileName,
-                  profile: profileCtx.profile,
-                  targetId: tab.targetId,
+                  ...existingSessionTarget,
                   width: action.width,
                   height: action.height,
                 });
                 return await jsonOk();
               case "wait":
-                await waitForExistingSessionCondition({
-                  profileName,
-                  profile: profileCtx.profile,
-                  targetId: tab.targetId,
-                  timeMs: action.timeMs,
-                  text: action.text,
-                  textGone: action.textGone,
-                  selector: action.selector,
-                  url: action.url,
-                  loadState: action.loadState,
-                  fn: action.fn,
-                  timeoutMs: action.timeoutMs,
-                });
+                await runGuardedAction(() =>
+                  waitForExistingSessionCondition({
+                    ...existingSessionTarget,
+                    timeMs: action.timeMs,
+                    text: action.text,
+                    textGone: action.textGone,
+                    selector: action.selector,
+                    url: action.url,
+                    loadState: action.loadState,
+                    fn: action.fn,
+                    ...navigationPolicy,
+                  }),
+                );
                 return await jsonOk();
               case "evaluate": {
-                const result = await runExistingSessionActionWithNavigationGuard({
-                  execute: () =>
-                    evaluateChromeMcpScript({
-                      profileName,
-                      profile: profileCtx.profile,
-                      targetId: tab.targetId,
-                      fn: action.fn,
-                      args: action.ref ? [action.ref] : undefined,
-                    }),
-                  guard: existingSessionNavigationGuard,
-                });
-                return await jsonOk({ result });
+                const result = await runGuardedAction(() =>
+                  evaluateChromeMcpScript({
+                    ...existingSessionTarget,
+                    fn: normalizeBrowserEvaluateFunctionSource(
+                      action.fn,
+                      action.ref ? { argumentName: "el" } : undefined,
+                    ),
+                    args: action.ref ? [action.ref] : undefined,
+                  }),
+                );
+                return await jsonOk({ result }, { resolveCurrentTarget: true });
               }
               case "close":
-                await closeChromeMcpTab(profileName, tab.targetId, profileCtx.profile);
+                await profileCtx.closeTab(tab.targetId, {
+                  ...existingSessionCallOptions,
+                  exactTargetId: true,
+                });
+                clearSnapshotKeysForTab(ctx, profileCtx.profile.name, tab.targetId);
                 return await jsonOk();
               case "batch":
                 return jsonActError(
@@ -640,120 +692,147 @@ export function registerBrowserAgentActRoutes(
           if (!pw) {
             return;
           }
-          if (action.kind === "batch") {
-            const targetIdError = validateBatchTargetIds(action.actions, tab.targetId);
-            if (targetIdError) {
-              return jsonActError(res, 403, ACT_ERROR_CODES.targetIdMismatch, targetIdError);
-            }
-          }
           const result = await pw.executeActViaPlaywright({
             cdpUrl,
             action,
             targetId: tab.targetId,
             evaluateEnabled,
-            ssrfPolicy,
-            signal: req.signal,
+            ...navigationPolicy,
+            signal,
           });
+          const resultTargetOptions = {
+            resolveCurrentTarget: true,
+            operationTargetId: result.targetId,
+          };
+          if (result.blockedByDialog) {
+            return await jsonOk({
+              blockedByDialog: true,
+              browserState: result.browserState,
+            });
+          }
+          const downloads = result.downloads;
+          if (action.kind === "close" || result.aborted?.reason === "closed") {
+            clearSnapshotKeysForTab(ctx, profileCtx.profile.name, tab.targetId);
+          }
           switch (action.kind) {
             case "batch":
               return await jsonOk(
-                { results: result.results ?? [] },
-                { resolveCurrentTarget: true },
+                {
+                  results: result.results ?? [],
+                  ...(result.aborted ? { aborted: result.aborted } : {}),
+                  ...(downloads ? { downloads } : {}),
+                },
+                {
+                  ...resultTargetOptions,
+                  resolveCurrentTarget: result.aborted?.reason !== "closed",
+                },
               );
             case "evaluate":
-              return await jsonOk({ result: result.result }, { resolveCurrentTarget: true });
+              return await jsonOk(
+                { result: result.result, ...(downloads ? { downloads } : {}) },
+                resultTargetOptions,
+              );
             case "click":
             case "clickCoords":
-              return await jsonOk(undefined, { resolveCurrentTarget: true });
+              return await jsonOk(downloads ? { downloads } : undefined, resultTargetOptions);
             case "resize":
-              return await jsonOk();
+            case "close":
+              return await jsonOk(downloads ? { downloads } : undefined);
             default:
-              return await jsonOk(undefined, { resolveCurrentTarget: true });
+              return await jsonOk(downloads ? { downloads } : undefined, resultTargetOptions);
           }
-        },
-      });
-    }),
-  );
+        } finally {
+          await resolveRelayTarget?.release();
+        }
+      },
+    });
+  });
 
   registerBrowserAgentActHookRoutes(app, ctx);
   registerBrowserAgentActDownloadRoutes(app, ctx);
 
-  app.post(
-    "/response/body",
-    asyncBrowserRoute(async (req, res) => {
-      const body = readBody(req);
-      const targetId = resolveTargetIdFromBody(body);
-      const url = toStringOrEmpty(body.url);
-      const timeoutMs = toNumber(body.timeoutMs);
-      const maxChars = toNumber(body.maxChars);
-      if (!url) {
-        return jsonError(res, 400, "url is required");
-      }
+  app.post("/response/body", async (req, res) => {
+    const body = readBody(req);
+    const targetId = resolveTargetIdFromBody(body);
+    const url = toStringOrEmpty(body.url);
+    let timeoutMs: number | undefined;
+    let maxChars: number | undefined;
+    try {
+      timeoutMs = readRouteTimerTimeoutMs(body.timeoutMs);
+      maxChars = readRoutePositiveInteger(body.maxChars, "maxChars");
+    } catch (err) {
+      return jsonError(res, 400, formatErrorMessage(err));
+    }
+    if (!url) {
+      return jsonError(res, 400, "url is required");
+    }
 
-      await withRouteTabContext({
-        req,
-        res,
-        ctx,
-        targetId,
-        enforceCurrentUrlAllowed: true,
-        run: async ({ profileCtx, cdpUrl, tab, resolveTabUrl }) => {
-          if (getBrowserProfileCapabilities(profileCtx.profile).usesChromeMcp) {
-            return jsonError(res, 501, EXISTING_SESSION_LIMITS.responseBody);
-          }
-          const pw = await requirePwAi(res, "response body");
-          if (!pw) {
-            return;
-          }
-          const result = await pw.responseBodyViaPlaywright({
-            cdpUrl,
-            targetId: tab.targetId,
-            url,
-            timeoutMs: timeoutMs ?? undefined,
-            maxChars: maxChars ?? undefined,
-          });
+    await withRouteTabContext({
+      req,
+      res,
+      ctx,
+      targetId,
+      enforceCurrentUrlAllowed: true,
+      run: async ({ profileCtx, cdpUrl, tab, signal, resolveTabUrl }) => {
+        if (getBrowserProfileCapabilities(profileCtx.profile).usesChromeMcp) {
+          return jsonError(res, 501, EXISTING_SESSION_LIMITS.responseBody);
+        }
+        const pw = await requirePwAi(res, "response body");
+        if (!pw) {
+          return;
+        }
+        const result = await pw.responseBodyViaPlaywright({
+          cdpUrl,
+          targetId: tab.targetId,
+          signal,
+          url,
+          timeoutMs: timeoutMs ?? undefined,
+          maxChars: maxChars ?? undefined,
+        });
+        signal.throwIfAborted();
+        const currentUrl = await resolveTabUrl(tab.url);
+        res.json({
+          ok: true,
+          targetId: tab.targetId,
+          ...(currentUrl ? { url: currentUrl } : {}),
+          response: result,
+        });
+      },
+    });
+  });
+
+  app.post("/highlight", async (req, res) => {
+    const body = readBody(req);
+    const targetId = resolveTargetIdFromBody(body);
+    const ref = toStringOrEmpty(body.ref);
+    if (!ref) {
+      return jsonError(res, 400, "ref is required");
+    }
+
+    await withRouteTabContext({
+      req,
+      res,
+      ctx,
+      targetId,
+      enforceCurrentUrlAllowed: true,
+      run: async ({ profileCtx, cdpUrl, tab, signal, resolveTabUrl }) => {
+        const jsonOk = async () => {
           const currentUrl = await resolveTabUrl(tab.url);
-          res.json({
+          return res.json({
             ok: true,
             targetId: tab.targetId,
             ...(currentUrl ? { url: currentUrl } : {}),
-            response: result,
           });
-        },
-      });
-    }),
-  );
-
-  app.post(
-    "/highlight",
-    asyncBrowserRoute(async (req, res) => {
-      const body = readBody(req);
-      const targetId = resolveTargetIdFromBody(body);
-      const ref = toStringOrEmpty(body.ref);
-      if (!ref) {
-        return jsonError(res, 400, "ref is required");
-      }
-
-      await withRouteTabContext({
-        req,
-        res,
-        ctx,
-        targetId,
-        run: async ({ profileCtx, cdpUrl, tab, resolveTabUrl }) => {
-          const jsonOk = async () => {
-            const currentUrl = await resolveTabUrl(tab.url);
-            return res.json({
-              ok: true,
-              targetId: tab.targetId,
-              ...(currentUrl ? { url: currentUrl } : {}),
-            });
-          };
-          if (getBrowserProfileCapabilities(profileCtx.profile).usesChromeMcp) {
-            await evaluateChromeMcpScript({
-              profileName: profileCtx.profile.name,
-              profile: profileCtx.profile,
-              targetId: tab.targetId,
-              args: [ref],
-              fn: `(el) => {
+        };
+        if (getBrowserProfileCapabilities(profileCtx.profile).usesChromeMcp) {
+          await evaluateChromeMcpScript({
+            profileName: profileCtx.profile.name,
+            profile: profileCtx.profile,
+            targetId: tab.targetId,
+            args: [ref],
+            timeoutMs: ctx.state().resolved.actionTimeoutMs,
+            signal,
+            fn: `(el) => {
               if (!(el instanceof Element)) {
                 return false;
               }
@@ -768,21 +847,22 @@ export function registerBrowserAgentActRoutes(
               }, 2000);
               return true;
             }`,
-            });
-            return await jsonOk();
-          }
-          const pw = await requirePwAi(res, "highlight");
-          if (!pw) {
-            return;
-          }
-          await pw.highlightViaPlaywright({
-            cdpUrl,
-            targetId: tab.targetId,
-            ref,
           });
-          await jsonOk();
-        },
-      });
-    }),
-  );
+          return await jsonOk();
+        }
+        const pw = await requirePwAi(res, "highlight");
+        if (!pw) {
+          return;
+        }
+        await pw.highlightViaPlaywright({
+          cdpUrl,
+          targetId: tab.targetId,
+          ref,
+        });
+        await jsonOk();
+      },
+    });
+  });
 }
+
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

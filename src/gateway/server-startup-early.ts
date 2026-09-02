@@ -1,31 +1,25 @@
+// Gateway early-startup runtime helpers.
+// Starts discovery, remote skills, task maintenance, and delayed maintenance setup.
+import { isNixMode } from "../config/paths.js";
 import type { GatewayTailscaleMode } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { resolveCronStorePath } from "../cron/store.js";
+import type { GatewayActiveWorkInspectors } from "../infra/gateway-active-work.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
-
-type Awaitable<T> = T | Promise<T>;
-
-type GatewayStartupTrace = {
-  measure: <T>(name: string, run: () => Awaitable<T>) => Promise<T>;
-};
+import { measureStartup, type GatewayStartupTrace } from "./server-startup-trace.js";
 
 type StartGatewayMaintenanceTimers =
   typeof import("./server-maintenance.js").startGatewayMaintenanceTimers;
 type GatewayMaintenanceParams = Parameters<StartGatewayMaintenanceTimers>[0];
 
-async function measureStartup<T>(
-  startupTrace: GatewayStartupTrace | undefined,
-  name: string,
-  run: () => Awaitable<T>,
-): Promise<T> {
-  return startupTrace ? startupTrace.measure(name, run) : await run();
-}
+const loadRemoteSkillsRuntimeModule = async () => await import("../skills/runtime/remote.js");
 
+/** Start plugin discovery and return the Bonjour shutdown callback when discovery is active. */
 export async function startGatewayPluginDiscovery(params: {
   minimalTestGateway: boolean;
   cfgAtStart: OpenClawConfig;
   port: number;
   gatewayTls: { enabled: boolean; fingerprintSha256?: string };
+  gatewayDirectReachable: boolean;
   tailscaleMode: GatewayTailscaleMode;
   logDiscovery: {
     info: (msg: string) => void;
@@ -50,7 +44,8 @@ export async function startGatewayPluginDiscovery(params: {
       gatewayTls: params.gatewayTls.enabled
         ? { enabled: true, fingerprintSha256: params.gatewayTls.fingerprintSha256 }
         : undefined,
-      wideAreaDiscoveryEnabled: params.cfgAtStart.discovery?.wideArea?.enabled === true,
+      gatewayDirectReachable: params.gatewayDirectReachable,
+      wideAreaDiscoveryEnabled: Boolean(params.cfgAtStart.discovery?.wideArea?.domain?.trim()),
       wideAreaDiscoveryDomain: params.cfgAtStart.discovery?.wideArea?.domain,
       tailscaleMode: params.tailscaleMode,
       mdnsMode: params.cfgAtStart.discovery?.mdns?.mode,
@@ -61,11 +56,13 @@ export async function startGatewayPluginDiscovery(params: {
   });
 }
 
+/** Start early Gateway side runtimes before the main server is fully ready. */
 export async function startGatewayEarlyRuntime(params: {
   minimalTestGateway: boolean;
   cfgAtStart: OpenClawConfig;
   port: number;
   gatewayTls: { enabled: boolean; fingerprintSha256?: string };
+  gatewayDirectReachable: boolean;
   tailscaleMode: GatewayTailscaleMode;
   log: {
     info: (msg: string) => void;
@@ -75,20 +72,23 @@ export async function startGatewayEarlyRuntime(params: {
     info: (msg: string) => void;
     warn: (msg: string) => void;
   };
-  nodeRegistry: Parameters<typeof import("../infra/skills-remote.js").setSkillsRemoteRegistry>[0];
+  nodeRegistry: Parameters<typeof import("../skills/runtime/remote.js").setSkillsRemoteRegistry>[0];
+  swapBonjourStop: (next: (() => Promise<void>) | null) => (() => Promise<void>) | null;
   pluginRegistry?: PluginRegistry;
   broadcast: GatewayMaintenanceParams["broadcast"];
   nodeSendToAllSubscribed: Parameters<StartGatewayMaintenanceTimers>[0]["nodeSendToAllSubscribed"];
   getPresenceVersion: GatewayMaintenanceParams["getPresenceVersion"];
   getHealthVersion: GatewayMaintenanceParams["getHealthVersion"];
   refreshGatewayHealthSnapshot: GatewayMaintenanceParams["refreshGatewayHealthSnapshot"];
+  restartRunningChannels: GatewayMaintenanceParams["restartRunningChannels"];
+  refreshPresence: GatewayMaintenanceParams["refreshPresence"];
+  resetEventLoopHealth: GatewayMaintenanceParams["resetEventLoopHealth"];
   logHealth: GatewayMaintenanceParams["logHealth"];
   dedupe: GatewayMaintenanceParams["dedupe"];
   chatAbortControllers: GatewayMaintenanceParams["chatAbortControllers"];
+  chatQueuedTurns: GatewayMaintenanceParams["chatQueuedTurns"];
+  restartRecoveryCandidates: GatewayMaintenanceParams["restartRecoveryCandidates"];
   chatRunState: GatewayMaintenanceParams["chatRunState"];
-  chatRunBuffers: GatewayMaintenanceParams["chatRunBuffers"];
-  chatDeltaSentAt: GatewayMaintenanceParams["chatDeltaSentAt"];
-  chatDeltaLastBroadcastLen: GatewayMaintenanceParams["chatDeltaLastBroadcastLen"];
   removeChatRun: GatewayMaintenanceParams["removeChatRun"];
   agentRunSeq: GatewayMaintenanceParams["agentRunSeq"];
   nodeSendToSession: GatewayMaintenanceParams["nodeSendToSession"];
@@ -99,8 +99,17 @@ export async function startGatewayEarlyRuntime(params: {
   getRuntimeConfig: () => OpenClawConfig;
   startupTrace?: GatewayStartupTrace;
 }) {
-  const bonjourStop = await measureStartup(params.startupTrace, "runtime.early.discovery", () =>
-    startGatewayPluginDiscovery(params),
+  if (!params.minimalTestGateway) {
+    await measureStartup(params.startupTrace, "runtime.early.task-state", async () => {
+      const { ensureTaskRuntimeStateReady } = await import("../tasks/runtime-internal.js");
+      ensureTaskRuntimeStateReady();
+    });
+  }
+  // Startup failure can occur immediately after discovery; publish its owner first.
+  params.swapBonjourStop(
+    await measureStartup(params.startupTrace, "runtime.early.discovery", () =>
+      startGatewayPluginDiscovery(params),
+    ),
   );
   let getActiveTaskCount = () => 0;
 
@@ -108,15 +117,16 @@ export async function startGatewayEarlyRuntime(params: {
     const [{ primeRemoteSkillsCache, setSkillsRemoteRegistry }, taskRegistryMaintenance] =
       await measureStartup(params.startupTrace, "runtime.early.lazy-runtime-imports", () =>
         Promise.all([
-          import("../infra/skills-remote.js"),
+          loadRemoteSkillsRuntimeModule(),
           import("../tasks/task-registry.maintenance.js"),
         ]),
       );
     setSkillsRemoteRegistry(params.nodeRegistry);
     void primeRemoteSkillsCache();
+    // Task registry maintenance is authoritative in the Gateway process so
+    // restart-blocker counts reflect the same live cron runtime.
     taskRegistryMaintenance.configureTaskRegistryMaintenance({
-      cronStorePath: resolveCronStorePath(params.cfgAtStart.cron?.store),
-      cronRuntimeAuthoritative: true,
+      runtimeAuthoritative: true,
     });
     taskRegistryMaintenance.startTaskRegistryMaintenance();
     getActiveTaskCount = () =>
@@ -124,30 +134,50 @@ export async function startGatewayEarlyRuntime(params: {
   }
 
   const skillsChangeUnsub = params.minimalTestGateway
-    ? () => {}
+    ? async () => {}
     : await measureStartup(params.startupTrace, "runtime.early.skills-listener", async () => {
-        const [{ registerSkillsChangeListener }, { refreshRemoteBinsForConnectedNodes }] =
-          await Promise.all([
-            import("../agents/skills/refresh.js"),
-            import("../infra/skills-remote.js"),
-          ]);
-        return registerSkillsChangeListener((event) => {
+        const skillsRuntimePromise = import("../skills/runtime/refresh.js");
+        const remoteSkillsRuntimePromise = loadRemoteSkillsRuntimeModule();
+        const { closeSkillsWatchers, registerSkillsChangeListener } = await skillsRuntimePromise;
+        const { refreshRemoteBinsForConnectedNodes } = await remoteSkillsRuntimePromise;
+        const unregister = registerSkillsChangeListener((event) => {
           if (event.reason === "remote-node") {
+            // The snapshot invalidation runs after remote descriptors/bins change;
+            // clients can now refetch authoritative skills.status without racing the probe.
+            params.broadcast("skills.changed", { reason: event.reason });
             return;
           }
+          // Coalesce local skill changes before refreshing connected remote
+          // nodes so bulk plugin/skill updates do not stampede node refreshes.
           const existingTimer = params.getSkillsRefreshTimer();
           if (existingTimer) {
             clearTimeout(existingTimer);
           }
           const nextTimer = setTimeout(() => {
             params.setSkillsRefreshTimer(null);
-            void refreshRemoteBinsForConnectedNodes(params.getRuntimeConfig());
+            void refreshRemoteBinsForConnectedNodes(params.getRuntimeConfig()).then(
+              () => {
+                params.broadcast("skills.changed", { reason: event.reason });
+              },
+              (error: unknown) => {
+                params.log.warn(
+                  `failed to refresh remote bins after skills change: ${String(error)}`,
+                );
+                params.broadcast("skills.changed", { reason: event.reason });
+              },
+            );
           }, params.skillsRefreshDelayMs);
           params.setSkillsRefreshTimer(nextTimer);
         });
+        return async () => {
+          unregister();
+          await closeSkillsWatchers();
+        };
       });
 
-  const startMaintenance = async () => {
+  const startMaintenance = async (activeWorkInspectors: Partial<GatewayActiveWorkInspectors>) => {
+    // Defer periodic maintenance until the caller has finished ready-state
+    // wiring, but keep the lazy import owned by this early-runtime bundle.
     if (params.minimalTestGateway) {
       return null;
     }
@@ -159,16 +189,21 @@ export async function startGatewayEarlyRuntime(params: {
         getPresenceVersion: params.getPresenceVersion,
         getHealthVersion: params.getHealthVersion,
         refreshGatewayHealthSnapshot: params.refreshGatewayHealthSnapshot,
+        restartRunningChannels: params.restartRunningChannels,
+        activeWorkInspectors,
+        refreshPresence: params.refreshPresence,
+        resetEventLoopHealth: params.resetEventLoopHealth,
         logHealth: params.logHealth,
         dedupe: params.dedupe,
         chatAbortControllers: params.chatAbortControllers,
+        chatQueuedTurns: params.chatQueuedTurns,
+        restartRecoveryCandidates: params.restartRecoveryCandidates,
         chatRunState: params.chatRunState,
-        chatRunBuffers: params.chatRunBuffers,
-        chatDeltaSentAt: params.chatDeltaSentAt,
-        chatDeltaLastBroadcastLen: params.chatDeltaLastBroadcastLen,
         removeChatRun: params.removeChatRun,
         agentRunSeq: params.agentRunSeq,
         nodeSendToSession: params.nodeSendToSession,
+        isNixMode,
+        getRuntimeConfig: params.getRuntimeConfig,
         ...(typeof params.mediaCleanupTtlMs === "number"
           ? { mediaCleanupTtlMs: params.mediaCleanupTtlMs }
           : {}),
@@ -177,7 +212,6 @@ export async function startGatewayEarlyRuntime(params: {
   };
 
   return {
-    bonjourStop,
     getActiveTaskCount,
     skillsChangeUnsub,
     startMaintenance,

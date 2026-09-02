@@ -1,36 +1,41 @@
-import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
+// Channel setup status helpers format channel setup progress and docs links.
+import { formatDocsLink } from "../../packages/terminal-core/src/links.js";
+import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
+import { resolveAgentWorkspaceDir, resolveAmbientOwnerAgentId } from "../agents/agent-scope.js";
 import { listChatChannels } from "../channels/chat-meta.js";
-import { listChannelPluginCatalogEntries } from "../channels/plugins/catalog.js";
+import type { ChannelPluginCatalogEntry } from "../channels/plugins/catalog.js";
 import { listChannelSetupPlugins } from "../channels/plugins/setup-registry.js";
-import type { ChannelSetupPlugin } from "../channels/plugins/setup-wizard-types.js";
+import type {
+  ChannelSetupPlugin,
+  ChannelSetupStatus,
+  ChannelSetupWizardAdapter,
+  SetupChannelsOptions,
+} from "../channels/plugins/setup-wizard-types.js";
 import type { ChannelMeta } from "../channels/plugins/types.core.js";
 import { formatChannelPrimerLine, formatChannelSelectionLine } from "../channels/registry.js";
 import { formatCliCommand } from "../cli/command-format.js";
-import { resolveChannelSetupEntries } from "../commands/channel-setup/discovery.js";
-import { shouldShowChannelInSetup } from "../commands/channel-setup/discovery.js";
+import {
+  resolveChannelSetupEntries,
+  shouldShowChannelInSetup,
+} from "../commands/channel-setup/discovery.js";
 import { resolveChannelSetupWizardAdapterForPlugin } from "../commands/channel-setup/registry.js";
-import type {
-  ChannelSetupWizardAdapter,
-  ChannelSetupStatus,
-  SetupChannelsOptions,
-} from "../commands/channel-setup/types.js";
 import type { ChannelChoice } from "../commands/onboard-types.js";
 import { isChannelConfigured } from "../config/channel-configured.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import {
   findBundledPluginSourceInMap,
   resolveBundledPluginSources,
   type BundledPluginSource,
 } from "../plugins/bundled-sources.js";
-import { formatDocsLink } from "../terminal/links.js";
-import { sanitizeTerminalText } from "../terminal/safe-text.js";
+import { t, wizardT } from "../wizard/i18n/index.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import type { FlowContribution } from "./types.js";
 
 type ChannelStatusSummary = {
   installedPlugins: ChannelSetupPlugin[];
-  catalogEntries: ReturnType<typeof listChannelPluginCatalogEntries>;
-  installedCatalogEntries: ReturnType<typeof listChannelPluginCatalogEntries>;
+  catalogEntries: ChannelPluginCatalogEntry[];
+  installedCatalogEntries: ChannelPluginCatalogEntry[];
   statusByChannel: Map<ChannelChoice, ChannelSetupStatus>;
   statusLines: string[];
 };
@@ -49,9 +54,42 @@ type ChannelSetupSelectionEntry = {
     label: string;
     selectionLabel?: string;
     exposure?: { setup?: boolean };
-    showConfigured?: boolean;
-    showInSetup?: boolean;
   };
+};
+
+export function resolveChannelSetupWorkspaceDir(cfg: OpenClawConfig): string {
+  const agentId = resolveAmbientOwnerAgentId(cfg, undefined, {
+    surface: "channel setup",
+    hint: "Set agents.defaults.systemAgent.agentId before configuring channels.",
+  });
+  return resolveAgentWorkspaceDir(cfg, agentId);
+}
+
+const CHANNEL_PRIMER_BLURB_KEYS: Record<string, string> = {
+  clickclack: "wizard.channelsPrimer.blurbs.clickclack",
+  discord: "wizard.channelsPrimer.blurbs.discord",
+  feishu: "wizard.channelsPrimer.blurbs.feishu",
+  googlechat: "wizard.channelsPrimer.blurbs.googlechat",
+  imessage: "wizard.channelsPrimer.blurbs.imessage",
+  irc: "wizard.channelsPrimer.blurbs.irc",
+  line: "wizard.channelsPrimer.blurbs.line",
+  mattermost: "wizard.channelsPrimer.blurbs.mattermost",
+  matrix: "wizard.channelsPrimer.blurbs.matrix",
+  msteams: "wizard.channelsPrimer.blurbs.msteams",
+  "nextcloud-talk": "wizard.channelsPrimer.blurbs.nextcloudTalk",
+  nostr: "wizard.channelsPrimer.blurbs.nostr",
+  qqbot: "wizard.channelsPrimer.blurbs.qqbot",
+  signal: "wizard.channelsPrimer.blurbs.signal",
+  slack: "wizard.channelsPrimer.blurbs.slack",
+  "synology-chat": "wizard.channelsPrimer.blurbs.synologyChat",
+  telegram: "wizard.channelsPrimer.blurbs.telegram",
+  tlon: "wizard.channelsPrimer.blurbs.tlon",
+  twitch: "wizard.channelsPrimer.blurbs.twitch",
+  wecom: "wizard.channelsPrimer.blurbs.wecom",
+  whatsapp: "wizard.channelsPrimer.blurbs.whatsapp",
+  yuanbao: "wizard.channelsPrimer.blurbs.yuanbao",
+  zalo: "wizard.channelsPrimer.blurbs.zalo",
+  zalouser: "wizard.channelsPrimer.blurbs.zalouser",
 };
 
 function buildChannelSetupSelectionContribution(params: {
@@ -115,20 +153,143 @@ function formatSetupDisplayList(values: readonly string[] | undefined): string[]
 }
 
 function formatSetupDisplayMeta(meta: ChannelMeta): ChannelMeta {
+  const { selectionDocsPrefix, ...displayMeta } = meta;
   const safeId = formatSetupDisplayText(meta.id, "<invalid channel>");
   const safeLabel = formatSetupDisplayText(meta.label, safeId);
-  const safeSelectionDocsPrefix = formatSetupOptionalDisplayText(meta.selectionDocsPrefix);
+  const safeSelectionDocsPrefix =
+    selectionDocsPrefix === "" ? "" : formatSetupOptionalDisplayText(selectionDocsPrefix?.trim());
   const safeSelectionExtras = formatSetupDisplayList(meta.selectionExtras);
   return {
-    ...meta,
+    ...displayMeta,
     id: safeId,
     label: safeLabel,
     selectionLabel: formatSetupDisplayText(meta.selectionLabel, safeLabel),
     docsPath: formatSetupDisplayText(meta.docsPath, "/"),
     ...(meta.docsLabel ? { docsLabel: formatSetupDisplayText(meta.docsLabel, safeId) } : {}),
     blurb: formatSetupFreeText(meta.blurb),
-    ...(safeSelectionDocsPrefix ? { selectionDocsPrefix: safeSelectionDocsPrefix } : {}),
+    ...(safeSelectionDocsPrefix !== undefined
+      ? { selectionDocsPrefix: safeSelectionDocsPrefix }
+      : {}),
     ...(safeSelectionExtras ? { selectionExtras: safeSelectionExtras } : {}),
+  };
+}
+
+function formatChannelPrimerBlurb(channel: { id: string; blurb: string }): string {
+  const key = CHANNEL_PRIMER_BLURB_KEYS[channel.id];
+  if (!key) {
+    return channel.blurb;
+  }
+  const englishBlurb = wizardT(key, undefined, { locale: "en" });
+  return channel.blurb === englishBlurb ? t(key) : channel.blurb;
+}
+
+function formatChannelSelectionMeta(meta: ChannelMeta): ChannelMeta {
+  const formatted = formatSetupDisplayMeta({
+    ...meta,
+    blurb: formatChannelPrimerBlurb(meta),
+  });
+  formatted.selectionDocsPrefix ??= t("common.docs");
+  return formatted;
+}
+
+function localizeChannelStatusLabel(label: string): string {
+  switch (label) {
+    case "configured":
+      return t("wizard.channels.statusConfigured");
+    case "not configured":
+      return t("wizard.channels.statusNotConfigured");
+    case "configured (plugin disabled)":
+      return t("wizard.channels.statusConfiguredPluginDisabled");
+    case "installed":
+      return t("wizard.channels.statusInstalled");
+    case "installed (plugin disabled)":
+      return t("wizard.channels.statusInstalledPluginDisabled");
+    case "bundled · enable to use":
+      return t("wizard.channels.statusBundledEnable");
+    case "install plugin to enable":
+      return t("wizard.channels.statusInstallPluginEnable");
+    case "needs app credentials":
+      return t("wizard.channels.statusNeedsAppCredentials");
+    case "needs app creds":
+      return t("wizard.channels.statusNeedsAppCreds");
+    case "needs auth":
+      return t("wizard.channels.statusNeedsAuth");
+    case "needs host + nick":
+      return t("wizard.channels.statusNeedsHostNick");
+    case "needs private key":
+      return t("wizard.channels.statusNeedsPrivateKey");
+    case "needs QR login":
+      return t("wizard.channels.statusNeedsQrLogin");
+    case "needs service account":
+      return t("wizard.channels.statusNeedsServiceAccount");
+    case "needs setup":
+      return t("wizard.channels.statusNeedsSetup");
+    case "needs token":
+      return t("wizard.channels.statusNeedsToken");
+    case "needs tokens":
+      return t("wizard.channels.statusNeedsTokens");
+    case "needs token + incoming webhook":
+      return t("wizard.channels.statusNeedsTokenIncomingWebhook");
+    case "needs token + secret":
+      return t("wizard.channels.statusNeedsTokenSecret");
+    case "needs token + url":
+      return t("wizard.channels.statusNeedsTokenUrl");
+    case "needs username, token, and clientId":
+      return t("wizard.channels.statusNeedsUsernameTokenClientId");
+    case "linked":
+      return t("wizard.channels.statusLinked");
+    case "logged in":
+      return t("wizard.channels.statusLoggedIn");
+    case "not linked":
+      return t("wizard.channels.statusNotLinked");
+    case "recommended · configured":
+      return t("wizard.channels.statusRecommendedConfigured");
+    case "recommended · logged in":
+      return t("wizard.channels.statusRecommendedLoggedIn");
+    case "recommended · newcomer-friendly":
+      return t("wizard.channels.statusRecommendedNewcomerFriendly");
+    case "recommended · QR login":
+      return t("wizard.channels.statusRecommendedQrLogin");
+    case "self-hosted chat":
+      return t("wizard.channels.statusSelfHostedChat");
+    case "signal-cli found":
+      return t("wizard.channels.statusSignalCliFound");
+    case "signal-cli missing":
+      return t("wizard.channels.statusSignalCliMissing");
+    case "urbit messenger":
+      return t("wizard.channels.statusUrbitMessenger");
+    case "configured (connection not verified)":
+      return t("wizard.channels.statusConfiguredConnectionNotVerified");
+    default:
+      break;
+  }
+  const connectedAsPrefix = "connected as ";
+  if (label.startsWith(connectedAsPrefix)) {
+    return t("wizard.channels.statusConnectedAs", { name: label.slice(connectedAsPrefix.length) });
+  }
+  return label;
+}
+
+function localizeChannelStatusLine(line: string): string {
+  const separator = ": ";
+  const index = line.lastIndexOf(separator);
+  if (index < 0) {
+    return localizeChannelStatusLabel(line);
+  }
+  return `${line.slice(0, index + separator.length)}${localizeChannelStatusLabel(
+    line.slice(index + separator.length),
+  )}`;
+}
+
+function localizeChannelSetupStatus<T extends { selectionHint?: string; statusLines: string[] }>(
+  status: T,
+): T {
+  return {
+    ...status,
+    statusLines: status.statusLines.map(localizeChannelStatusLine),
+    ...(status.selectionHint
+      ? { selectionHint: localizeChannelStatusLabel(status.selectionHint) }
+      : {}),
   };
 }
 
@@ -191,13 +352,14 @@ export function findBundledSourceForCatalogChannel(params: {
 
 export async function collectChannelStatus(params: {
   cfg: OpenClawConfig;
+  workspaceDir?: string;
   options?: SetupChannelsOptions;
   accountOverrides: Partial<Record<ChannelChoice, string>>;
   installedPlugins?: ChannelSetupPlugin[];
   resolveAdapter?: (channel: ChannelChoice) => ChannelSetupWizardAdapter | undefined;
 }): Promise<ChannelStatusSummary> {
   const installedPlugins = params.installedPlugins ?? listChannelSetupPlugins();
-  const workspaceDir = resolveAgentWorkspaceDir(params.cfg, resolveDefaultAgentId(params.cfg));
+  const workspaceDir = params.workspaceDir ?? resolveChannelSetupWorkspaceDir(params.cfg);
   const { installedCatalogEntries, installableCatalogEntries } = resolveChannelSetupEntries({
     cfg: params.cfg,
     installedPlugins,
@@ -210,23 +372,38 @@ export async function collectChannelStatus(params: {
       resolveChannelSetupWizardAdapterForPlugin(
         installedPlugins.find((plugin) => plugin.id === channel),
       ));
-  const statusEntries = await Promise.all(
-    installedPlugins.flatMap((plugin) => {
-      if (!shouldShowChannelInSetup(plugin.meta)) {
-        return [];
-      }
-      const adapter = resolveAdapter(plugin.id);
-      if (!adapter) {
-        return [];
-      }
-      return adapter.getStatus({
-        cfg: params.cfg,
-        options: params.options,
-        accountOverrides: params.accountOverrides,
-      });
-    }),
+  const statusEntries = (
+    await Promise.all(
+      installedPlugins
+        .filter((plugin) => shouldShowChannelInSetup(plugin.meta))
+        .map(async (plugin): Promise<ChannelSetupStatus | undefined> => {
+          try {
+            const adapter = resolveAdapter(plugin.id);
+            if (!adapter) {
+              return undefined;
+            }
+            return await adapter.getStatus({
+              cfg: params.cfg,
+              options: params.options,
+              accountOverrides: params.accountOverrides,
+            });
+          } catch (error) {
+            const detail = formatSetupFreeText(formatErrorMessage(error));
+            return {
+              channel: plugin.id,
+              configured: isChannelConfigured(params.cfg, plugin.id),
+              statusLines: [
+                `${formatSetupSelectionLabel(plugin.meta.label, plugin.id)}: status unavailable (${detail})`,
+              ],
+              selectionHint: "status unavailable",
+            };
+          }
+        }),
+    )
+  ).filter((status): status is ChannelSetupStatus => status !== undefined);
+  const statusByChannel = new Map(
+    statusEntries.map((entry: ChannelSetupStatus) => [entry.channel, entry]),
   );
-  const statusByChannel = new Map(statusEntries.map((entry) => [entry.channel, entry]));
   const fallbackStatuses = listChatChannels()
     .filter((meta) => shouldShowChannelInSetup(meta))
     .filter((meta) => !statusByChannel.has(meta.id))
@@ -283,7 +460,7 @@ export async function collectChannelStatus(params: {
     ...fallbackStatuses,
     ...discoveredPluginStatuses,
     ...catalogStatuses,
-  ];
+  ].map(localizeChannelSetupStatus);
   const mergedStatusByChannel = new Map(combinedStatuses.map((entry) => [entry.channel, entry]));
   const statusLines = combinedStatuses.flatMap((entry) => entry.statusLines);
   return {
@@ -311,7 +488,7 @@ export async function noteChannelStatus(params: {
     resolveAdapter: params.resolveAdapter,
   });
   if (statusLines.length > 0) {
-    await params.prompter.note(statusLines.join("\n"), "Channel status");
+    await params.prompter.note(statusLines.join("\n"), t("wizard.channels.statusTitle"));
   }
 }
 
@@ -326,23 +503,27 @@ export async function noteChannelPrimer(
         label: channel.label,
         selectionLabel: channel.label,
         docsPath: "/",
-        blurb: channel.blurb,
+        blurb: formatChannelPrimerBlurb(channel),
       }),
     ),
   );
   await prompter.note(
     [
-      "DM security: default is pairing; unknown DMs get a pairing code.",
-      `Approve with: ${formatCliCommand("openclaw pairing approve <channel> <code>")}`,
-      'Public DMs require dmPolicy="open" + allowFrom=["*"].',
-      "Multi-user DMs: run: " +
-        formatCliCommand('openclaw config set session.dmScope "per-channel-peer"') +
-        ' (or "per-account-channel-peer" for multi-account channels) to isolate sessions.',
-      `Docs: ${formatDocsLink("/channels/pairing", "channels/pairing")}`,
+      t("wizard.channelsPrimer.inboundSafety"),
+      t("wizard.channelsPrimer.approveWith", {
+        command: formatCliCommand("openclaw pairing approve <channel> <code>"),
+      }),
+      t("wizard.channelsPrimer.openDm"),
+      t("wizard.channelsPrimer.multiUserDm", {
+        command: formatCliCommand('openclaw config set session.dmScope "per-channel-peer"'),
+      }),
+      t("wizard.channelsPrimer.docs", {
+        link: formatDocsLink("/channels/pairing", "channels/pairing"),
+      }),
       "",
       ...channelLines,
     ].join("\n"),
-    "How channels work",
+    t("wizard.channelsPrimer.title"),
   );
 }
 
@@ -363,19 +544,20 @@ export function resolveQuickstartDefault(
 
 export function resolveChannelSelectionNoteLines(params: {
   cfg: OpenClawConfig;
+  workspaceDir?: string;
   installedPlugins: ChannelSetupPlugin[];
   selection: ChannelChoice[];
 }): string[] {
   const { entries } = resolveChannelSetupEntries({
     cfg: params.cfg,
     installedPlugins: params.installedPlugins,
-    workspaceDir: resolveAgentWorkspaceDir(params.cfg, resolveDefaultAgentId(params.cfg)),
+    workspaceDir: params.workspaceDir ?? resolveChannelSetupWorkspaceDir(params.cfg),
   });
   const selectionNotes = new Map<string, string>();
   for (const entry of entries) {
     selectionNotes.set(
       entry.id,
-      formatChannelSelectionLine(formatSetupDisplayMeta(entry.meta), formatDocsLink),
+      formatChannelSelectionLine(formatChannelSelectionMeta(entry.meta), formatDocsLink),
     );
   }
   return params.selection

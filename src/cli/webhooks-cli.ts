@@ -1,4 +1,9 @@
+import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
+// Webhook CLI registrations, currently Gmail Pub/Sub setup and service runner commands.
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { Command } from "commander";
+import { formatDocsLink } from "../../packages/terminal-core/src/links.js";
+import { theme } from "../../packages/terminal-core/src/theme.js";
 import { danger } from "../globals.js";
 import {
   type GmailRunOptions,
@@ -16,11 +21,11 @@ import {
   DEFAULT_GMAIL_SUBSCRIPTION,
   DEFAULT_GMAIL_TOPIC,
 } from "../hooks/gmail.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { defaultRuntime } from "../runtime.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
-import { formatDocsLink } from "../terminal/links.js";
-import { theme } from "../terminal/theme.js";
+import { formatCliCommand } from "./command-format.js";
 
+/** Register webhook-related subcommands on the root Commander program. */
 export function registerWebhooksCli(program: Command) {
   const webhooks = program
     .command("webhooks")
@@ -67,7 +72,10 @@ export function registerWebhooksCli(program: Command) {
         const parsed = parseGmailSetupOptions(opts);
         await runGmailSetup(parsed);
       } catch (err) {
-        defaultRuntime.error(danger(String(err)));
+        if (opts.json) {
+          throw new Error(formatErrorMessage(err), { cause: err });
+        }
+        defaultRuntime.error(danger(formatErrorMessage(err)));
         defaultRuntime.exit(1);
       }
     });
@@ -99,7 +107,7 @@ export function registerWebhooksCli(program: Command) {
         const parsed = parseGmailRunOptions(opts);
         await runGmailService(parsed);
       } catch (err) {
-        defaultRuntime.error(danger(String(err)));
+        defaultRuntime.error(danger(formatErrorMessage(err)));
         defaultRuntime.exit(1);
       }
     });
@@ -109,7 +117,9 @@ function parseGmailSetupOptions(raw: Record<string, unknown>): GmailSetupOptions
   const accountRaw = raw.account;
   const account = normalizeOptionalString(accountRaw) ?? "";
   if (!account) {
-    throw new Error("--account is required");
+    throw new Error(
+      `--account is required. Example: ${formatCliCommand("openclaw webhooks gmail setup --account default")}.`,
+    );
   }
   const common = parseGmailCommonOptions(raw);
   return {
@@ -138,12 +148,12 @@ function parseGmailCommonOptions(raw: Record<string, unknown>) {
     hookToken: normalizeOptionalString(raw.hookToken),
     pushToken: normalizeOptionalString(raw.pushToken),
     bind: normalizeOptionalString(raw.bind),
-    port: numberOption(raw.port),
+    port: numberOption(raw.port, "--port"),
     path: normalizeOptionalString(raw.path),
     includeBody: booleanOption(raw.includeBody),
-    maxBytes: numberOption(raw.maxBytes),
-    renewEveryMinutes: numberOption(raw.renewMinutes),
-    tailscaleRaw: normalizeOptionalString(raw.tailscale),
+    maxBytes: numberOption(raw.maxBytes, "--max-bytes"),
+    renewEveryMinutes: numberOption(raw.renewMinutes, "--renew-minutes"),
+    tailscale: tailscaleModeOption(raw.tailscale),
     tailscalePath: normalizeOptionalString(raw.tailscalePath),
     tailscaleTarget: normalizeOptionalString(raw.tailscaleTarget),
   };
@@ -165,21 +175,32 @@ function gmailOptionsFromCommon(
     includeBody: common.includeBody,
     maxBytes: common.maxBytes,
     renewEveryMinutes: common.renewEveryMinutes,
-    tailscale: common.tailscaleRaw as GmailRunOptions["tailscale"],
+    tailscale: common.tailscale,
     tailscalePath: common.tailscalePath,
     tailscaleTarget: common.tailscaleTarget,
   };
 }
 
-function numberOption(value: unknown): number | undefined {
+function tailscaleModeOption(value: unknown): GmailRunOptions["tailscale"] {
   if (value === undefined || value === null) {
     return undefined;
   }
-  const n = typeof value === "number" ? value : Number(value);
-  if (!Number.isFinite(n) || n <= 0) {
+  const mode = normalizeOptionalString(value);
+  if (mode === "funnel" || mode === "serve" || mode === "off") {
+    return mode;
+  }
+  throw new Error("Invalid --tailscale (must be funnel, serve, or off).");
+}
+
+function numberOption(value: unknown, label: string): number | undefined {
+  if (value === undefined || value === null) {
     return undefined;
   }
-  return Math.floor(n);
+  const n = parseStrictPositiveInteger(value);
+  if (n === undefined) {
+    throw new Error(`${label} must be a positive integer.`);
+  }
+  return n;
 }
 
 function booleanOption(value: unknown): boolean | undefined {

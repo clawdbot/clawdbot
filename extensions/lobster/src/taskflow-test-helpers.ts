@@ -1,3 +1,4 @@
+// Lobster helper module supports taskflow test helpers behavior.
 import { vi } from "vitest";
 import type { OpenClawPluginApi } from "../runtime-api.js";
 
@@ -15,10 +16,12 @@ export function createFakeTaskFlow(overrides?: Partial<BoundTaskFlow>): BoundTas
     status: "running" as const,
     goal: "Run Lobster workflow",
   };
+  const createManaged = vi.fn().mockReturnValue(baseFlow);
 
   return {
     sessionKey: "agent:main:main",
-    createManaged: vi.fn().mockReturnValue(baseFlow),
+    createManaged,
+    tryCreateManaged: vi.fn((params) => createManaged(params)),
     get: vi.fn(),
     list: vi.fn().mockReturnValue([]),
     findLatest: vi.fn(),

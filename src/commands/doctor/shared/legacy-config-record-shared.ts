@@ -1,24 +1,111 @@
-type JsonRecord = Record<string, unknown>;
-
+// Shared record helpers for legacy config migration modules.
+import { isBlockedObjectKey } from "../../../infra/prototype-keys.js";
 import { isRecord } from "../../../utils.js";
+type JsonRecord = Record<string, unknown>;
 
 export type { JsonRecord };
 export { isRecord };
 
+/** Visit mutable agent entries before or after read-time roster normalization. */
+export function visitAgentEntries(
+  raw: JsonRecord,
+  visitor: (entry: JsonRecord, path: string) => void,
+): void {
+  const agents = isRecord(raw.agents) ? raw.agents : undefined;
+  if (isRecord(agents?.entries)) {
+    for (const [agentId, entry] of Object.entries(agents.entries)) {
+      if (!isBlockedObjectKey(agentId) && isRecord(entry)) {
+        visitor(entry, `agents.entries.${agentId}`);
+      }
+    }
+    // Roster conversion discards a residual list; its settings must not affect other owners.
+    return;
+  }
+  if (Array.isArray(agents?.list)) {
+    agents.list.forEach((entry, index) => {
+      if (isRecord(entry) && !(typeof entry.id === "string" && isBlockedObjectKey(entry.id))) {
+        visitor(entry, `agents.list[${index}]`);
+      }
+    });
+  }
+}
+
+/** Visit agent defaults and authored entries without copying their mutable fields. */
+export function visitAgentConfigScopes(
+  raw: JsonRecord,
+  visitor: (scope: JsonRecord, path: string) => void,
+): void {
+  const agents = isRecord(raw.agents) ? raw.agents : undefined;
+  if (isRecord(agents?.defaults)) {
+    visitor(agents.defaults, "agents.defaults");
+  }
+  visitAgentEntries(raw, visitor);
+}
+
+/** Clone a record-like config section, treating undefined as an empty object. */
 export function cloneRecord<T extends JsonRecord>(value: T | undefined): T {
   return { ...value } as T;
 }
 
-export function ensureRecord(target: JsonRecord, key: string): JsonRecord {
-  const current = target[key];
-  if (isRecord(current)) {
-    return current;
-  }
-  const next: JsonRecord = {};
-  target[key] = next;
-  return next;
+/** Own-property guard used by migrations that must preserve falsy values. */
+export function hasOwnKey(target: JsonRecord, key: string): boolean {
+  return Object.hasOwn(target, key);
 }
 
-export function hasOwnKey(target: JsonRecord, key: string): boolean {
-  return Object.prototype.hasOwnProperty.call(target, key);
+/** Delete a nested retired config path, with `*` matching record entries. */
+export function deleteRetiredPath(owner: unknown, path: readonly string[], index = 0): boolean {
+  if (!isRecord(owner)) {
+    return false;
+  }
+  const key = path[index];
+  if (!key) {
+    return false;
+  }
+  if (key === "*") {
+    let changed = false;
+    for (const value of Object.values(owner)) {
+      changed = deleteRetiredPath(value, path, index + 1) || changed;
+    }
+    return changed;
+  }
+  if (index === path.length - 1) {
+    if (!Object.hasOwn(owner, key)) {
+      return false;
+    }
+    delete owner[key];
+    return true;
+  }
+  const child = owner[key];
+  if (!isRecord(child) || !deleteRetiredPath(child, path, index + 1)) {
+    return false;
+  }
+  if (Object.keys(child).length === 0) {
+    delete owner[key];
+  }
+  return true;
+}
+
+/** Visit a channel root followed by its object-shaped accounts in config order. */
+export function visitChannelEntries(
+  raw: JsonRecord,
+  channelId: string,
+  visitor: (entry: JsonRecord, path: string) => void,
+): void {
+  const channels = raw.channels;
+  if (!isRecord(channels)) {
+    return;
+  }
+  const channel = channels[channelId];
+  if (!isRecord(channel)) {
+    return;
+  }
+  visitor(channel, `channels.${channelId}`);
+  if (!isRecord(channel.accounts)) {
+    return;
+  }
+  for (const [accountId, account] of Object.entries(channel.accounts)) {
+    if (isRecord(account)) {
+      visitor(account, `channels.${channelId}.accounts.${accountId}`);
+    }
+  }
 }

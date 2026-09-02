@@ -1,12 +1,20 @@
+/**
+ * Gateway health endpoint integration tests.
+ */
 import { randomUUID } from "node:crypto";
-import { afterAll, beforeAll, describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { emitHeartbeatEvent } from "../infra/heartbeat-events.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { startGatewayServerHarness, type GatewayServerHarness } from "./server.e2e-ws-harness.js";
 import { installGatewayTestHooks, onceMessage } from "./test-helpers.js";
 
-installGatewayTestHooks({ scope: "suite" });
+// Health/presence coverage does not exercise post-restart delivery recovery.
+// Keep that auto-reply graph in the dedicated restart-sentinel suite.
+vi.mock("./server-restart-sentinel.js", () => ({
+  recoverPendingRestartContinuationDeliveries: vi.fn(async () => undefined),
+}));
+
 const HEALTH_E2E_TIMEOUT_MS = 20_000;
 const PRESENCE_EVENT_TIMEOUT_MS = 6_000;
 const SHUTDOWN_EVENT_TIMEOUT_MS = 3_000;
@@ -14,13 +22,16 @@ const FINGERPRINT_TIMEOUT_MS = 3_000;
 const CLI_PRESENCE_TIMEOUT_MS = 3_000;
 
 let harness: GatewayServerHarness;
+let harnessClose: Promise<void> | undefined;
 
-beforeAll(async () => {
-  harness = await startGatewayServerHarness();
-});
-
-afterAll(async () => {
-  await harness.close();
+installGatewayTestHooks({
+  scope: "suite",
+  setup: async () => {
+    harness = await startGatewayServerHarness();
+  },
+  cleanup: async () => {
+    await (harnessClose ?? harness?.close());
+  },
 });
 
 describe("gateway server health/presence", () => {
@@ -133,6 +144,27 @@ describe("gateway server health/presence", () => {
     },
   );
 
+  test("system-event accepts exact-session routing fields", async () => {
+    const { ws } = await harness.openClient();
+    const responseP = onceMessage(ws, (o) => o.type === "res" && o.id === "targeted-event");
+
+    ws.send(
+      JSON.stringify({
+        type: "req",
+        id: "targeted-event",
+        method: "system-event",
+        params: {
+          text: "post-update welcome",
+          sessionKey: "agent:main:main",
+          wake: false,
+        },
+      }),
+    );
+
+    expect(await responseP).toMatchObject({ ok: true, payload: { ok: true } });
+    ws.close();
+  });
+
   test("agent events stream with seq", { timeout: PRESENCE_EVENT_TIMEOUT_MS }, async () => {
     const { ws } = await harness.openClient();
 
@@ -154,20 +186,6 @@ describe("gateway server health/presence", () => {
     expect(data?.msg).toBe("hi");
 
     ws.close();
-  });
-
-  test("shutdown event is broadcast on close", { timeout: PRESENCE_EVENT_TIMEOUT_MS }, async () => {
-    const localHarness = await startGatewayServerHarness();
-    const { ws } = await localHarness.openClient();
-    const shutdownP = onceMessage(
-      ws,
-      (o) => o.type === "event" && o.event === "shutdown",
-      SHUTDOWN_EVENT_TIMEOUT_MS,
-    );
-    await localHarness.close();
-    const evt = await shutdownP;
-    const evtPayload = evt.payload as { reason?: unknown } | undefined;
-    expect(evtPayload?.reason).toEqual(expect.any(String));
   });
 
   test(
@@ -282,5 +300,20 @@ describe("gateway server health/presence", () => {
     expect(entries.map((entry) => entry.instanceId)).not.toContain(cliId);
 
     ws.close();
+  });
+
+  // Close the suite owner last; another startup would reset process-wide config under live peers.
+  test("shutdown event is broadcast on close", { timeout: PRESENCE_EVENT_TIMEOUT_MS }, async () => {
+    const { ws } = await harness.openClient();
+    const shutdownP = onceMessage(
+      ws,
+      (o) => o.type === "event" && o.event === "shutdown",
+      SHUTDOWN_EVENT_TIMEOUT_MS,
+    );
+    harnessClose = harness.close();
+    await harnessClose;
+    const evt = await shutdownP;
+    const evtPayload = evt.payload as { reason?: unknown } | undefined;
+    expect(evtPayload?.reason).toBe("gateway stopping");
   });
 });

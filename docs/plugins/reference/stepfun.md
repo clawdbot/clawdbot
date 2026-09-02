@@ -12,11 +12,11 @@ Adds StepFun, StepFun Plan model provider support to OpenClaw.
 ## Distribution
 
 - Package: `@openclaw/stepfun-provider`
-- Install route: included in OpenClaw
+- Install route: npm; ClawHub: `clawhub:@openclaw/stepfun-provider`
 
 ## Surface
 
-providers: stepfun, stepfun-plan
+providers: `stepfun`, `stepfun-plan`
 
 ## Related docs
 

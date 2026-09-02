@@ -1,5 +1,6 @@
 import AppKit
 import Observation
+import OpenClawKit
 import SwiftUI
 
 struct SettingsRootView: View {
@@ -7,111 +8,164 @@ struct SettingsRootView: View {
     private let permissionMonitor = PermissionMonitor.shared
     @State private var monitoringPermissions = false
     @State private var selectedTab: SettingsTab = .general
+    @State private var cachedTabs: Set<SettingsTab>
+    @State private var inferenceConfiguration: InferenceConfiguration
+    @State private var trackedInferenceGatewayID: String?
+    @State private var inferenceRefreshTrigger = InferenceRefreshTrigger.invalidate(UUID())
+    @State private var systemAgentChatIdentity = UUID()
+    @State private var deferredTab: SettingsTab?
+    @State private var columnVisibility: NavigationSplitViewVisibility = .all
     @State private var snapshotPaths: (configPath: String?, stateDir: String?) = (nil, nil)
     let updater: UpdaterProviding?
-    private let isPreview = ProcessInfo.processInfo.isPreview
+    private let isPreview = ProcessInfo.processInfo.isPreview || ProcessInfo.processInfo.isRunningTests
     private let isNixMode = ProcessInfo.processInfo.isNixMode
 
-    init(state: AppState, updater: UpdaterProviding?, initialTab: SettingsTab? = nil) {
+    init(
+        state: AppState,
+        updater: UpdaterProviding?,
+        initialTab: SettingsTab? = nil,
+        configuredInferenceModel: String? = nil)
+    {
+        let initial = initialTab ?? .general
         self.state = state
         self.updater = updater
-        self._selectedTab = State(initialValue: initialTab ?? .general)
+        _selectedTab = State(initialValue: initial)
+        _cachedTabs = State(initialValue: [initial])
+        _inferenceConfiguration = State(initialValue: configuredInferenceModel.map {
+            .loaded($0)
+        } ?? .loading)
+        _trackedInferenceGatewayID = State(initialValue: nil)
+        _deferredTab = State(initialValue: nil)
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            if self.isNixMode {
-                self.nixManagedBanner
-            }
-            TabView(selection: self.$selectedTab) {
-                GeneralSettings(state: self.state)
-                    .tabItem { Label("General", systemImage: "gearshape") }
-                    .tag(SettingsTab.general)
-
-                ChannelsSettings()
-                    .tabItem { Label("Channels", systemImage: "link") }
-                    .tag(SettingsTab.channels)
-
-                VoiceWakeSettings(state: self.state, isActive: self.selectedTab == .voiceWake)
-                    .tabItem { Label("Voice Wake", systemImage: "waveform.circle") }
-                    .tag(SettingsTab.voiceWake)
-
-                ConfigSettings()
-                    .tabItem { Label("Config", systemImage: "slider.horizontal.3") }
-                    .tag(SettingsTab.config)
-
-                InstancesSettings()
-                    .tabItem { Label("Instances", systemImage: "network") }
-                    .tag(SettingsTab.instances)
-
-                SessionsSettings()
-                    .tabItem { Label("Sessions", systemImage: "clock.arrow.circlepath") }
-                    .tag(SettingsTab.sessions)
-
-                CronSettings()
-                    .tabItem { Label("Cron", systemImage: "calendar") }
-                    .tag(SettingsTab.cron)
-
-                SkillsSettings(state: self.state)
-                    .tabItem { Label("Skills", systemImage: "sparkles") }
-                    .tag(SettingsTab.skills)
-
-                PermissionsSettings(
-                    status: self.permissionMonitor.status,
-                    refresh: self.refreshPerms,
-                    showOnboarding: { DebugActions.restartOnboarding() })
-                    .tabItem { Label("Permissions", systemImage: "lock.shield") }
-                    .tag(SettingsTab.permissions)
-
-                if self.state.debugPaneEnabled {
-                    DebugSettings(state: self.state)
-                        .tabItem { Label("Debug", systemImage: "ant") }
-                        .tag(SettingsTab.debug)
+        NavigationSplitView(columnVisibility: self.animatedColumnVisibility) {
+            List(selection: self.sidebarSelection) {
+                ForEach(self.visibleGroups) { group in
+                    Section(group.title) {
+                        ForEach(group.tabs) { tab in
+                            Label(tab.title, systemImage: tab.systemImage)
+                                .tag(tab as SettingsTab?)
+                        }
+                    }
                 }
-
-                AboutSettings(updater: self.updater)
-                    .tabItem { Label("About", systemImage: "info.circle") }
-                    .tag(SettingsTab.about)
             }
+            .listStyle(.sidebar)
+            .navigationSplitViewColumnWidth(SettingsLayout.sidebarWidth)
+        } detail: {
+            self.detailContainer
         }
-        .padding(.horizontal, 28)
-        .padding(.vertical, 22)
-        .frame(width: SettingsTab.windowWidth, height: SettingsTab.windowHeight, alignment: .topLeading)
+        .navigationSplitViewStyle(.balanced)
+        .defaultAppStorage(AppDefaults.standard)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .onReceive(NotificationCenter.default.publisher(for: .openclawSelectSettingsTab)) { note in
             if let tab = note.object as? SettingsTab {
                 withAnimation(.spring(response: 0.32, dampingFraction: 0.85)) {
-                    self.selectedTab = tab
+                    self.selectRequestedTab(tab)
                 }
             }
         }
         .onAppear {
             if let pending = SettingsTabRouter.consumePending() {
-                self.selectedTab = self.validTab(for: pending)
+                self.selectRequestedTab(pending)
+            } else {
+                self.selectRequestedTab(self.selectedTab)
             }
+            self.cacheSelectedTab()
             self.updatePermissionMonitoring(for: self.selectedTab)
+            self.trackedInferenceGatewayID = MacChatTranscriptCache.currentGatewayID()
         }
         .onChange(of: self.state.debugPaneEnabled) { _, enabled in
             if !enabled, self.selectedTab == .debug {
                 self.selectedTab = .general
             }
         }
+        .onChange(of: self.inferenceConfiguration) { _, configuration in
+            if !SystemAgentAvailability.shouldShow(configuredModel: configuration.configuredModel),
+               self.selectedTab == .systemAgent
+            {
+                self.selectedTab = .general
+            }
+        }
         .onChange(of: self.selectedTab) { _, newValue in
+            self.cachedTabs.insert(newValue)
             self.updatePermissionMonitoring(for: newValue)
         }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
-            guard self.selectedTab == .permissions else { return }
-            Task { await self.refreshPerms() }
+            if self.selectedTab == .permissions {
+                Task { await self.refreshPerms() }
+            }
+            self.scheduleInferenceRefresh(clearPrevious: false)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .openclawConfigDidChange)) { _ in
+            let gatewayID = MacChatTranscriptCache.currentGatewayID()
+            let plan = Self.configRefreshPlan(
+                selectedTab: self.selectedTab,
+                previousGatewayID: self.trackedInferenceGatewayID,
+                currentGatewayID: gatewayID)
+            self.trackedInferenceGatewayID = gatewayID
+            self.scheduleInferenceRefresh(
+                clearPrevious: plan.clearsPrevious,
+                resetSystemAgent: plan.resetsSystemAgent)
         }
         .onDisappear { self.stopPermissionMonitoring() }
         .task {
             guard !self.isPreview else { return }
             await self.refreshPerms()
         }
-        .task(id: self.state.connectionMode) {
+        .onChange(of: self.state.connectionMode) { _, _ in
+            self.trackedInferenceGatewayID = MacChatTranscriptCache.currentGatewayID()
+            self.scheduleInferenceRefresh(clearPrevious: true, resetSystemAgent: true)
+        }
+        .task(id: self.inferenceRefreshTrigger) {
             guard !self.isPreview else { return }
             await self.refreshSnapshotPaths()
+            await self.refreshInferenceConfiguration(
+                clearPrevious: self.inferenceRefreshTrigger.clearsPrevious)
         }
+    }
+
+    private var visibleGroups: [SettingsTabGroup] {
+        SettingsTabGroup.defaultGroups(
+            showDebug: self.state.debugPaneEnabled,
+            showSystemAgent: SystemAgentAvailability.shouldShow(
+                configuredModel: self.inferenceConfiguration.configuredModel))
+    }
+
+    private var sidebarSelection: Binding<SettingsTab?> {
+        Binding(
+            get: { self.selectedTab },
+            set: { tab in
+                guard let tab else { return }
+                self.selectRequestedTab(tab)
+            })
+    }
+
+    private var animatedColumnVisibility: Binding<NavigationSplitViewVisibility> {
+        Binding(
+            get: { self.columnVisibility },
+            set: { visibility in
+                withAnimation(.easeInOut(duration: 0.22)) {
+                    self.columnVisibility = visibility
+                }
+            })
+    }
+
+    private var detailContainer: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            if self.isNixMode {
+                self.nixManagedBanner
+            }
+            self.cachedDetailViews
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .padding(.horizontal, SettingsLayout.detailHorizontalPadding)
+        .padding(.vertical, SettingsLayout.detailVerticalPadding)
+    }
+
+    private var cachedDetailTabs: [SettingsTab] {
+        let cached = self.cachedTabs.union([self.selectedTab])
+        return self.visibleGroups.flatMap(\.tabs).filter { cached.contains($0) }
     }
 
     private var nixManagedBanner: some View {
@@ -129,8 +183,8 @@ struct SettingsRootView: View {
             }
 
             VStack(alignment: .leading, spacing: 2) {
-                Text("Config: \(configPath)")
-                Text("State:  \(stateDir)")
+                Text(String(format: String(localized: "Config: %@"), configPath))
+                Text(String(format: String(localized: "State:  %@"), stateDir))
             }
             .font(.caption.monospaced())
             .foregroundStyle(.secondary)
@@ -144,15 +198,261 @@ struct SettingsRootView: View {
         .cornerRadius(10)
     }
 
-    private func validTab(for requested: SettingsTab) -> SettingsTab {
-        if requested == .debug, !self.state.debugPaneEnabled { return .general }
+    private var cachedDetailViews: some View {
+        ZStack(alignment: .topLeading) {
+            ForEach(self.cachedDetailTabs) { tab in
+                self.detailView(for: tab)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                    // Keep inactive native scroll views mounted but zero-area; full-size overlaps steal wheel events.
+                    .frame(
+                        width: tab == self.selectedTab ? nil : 0,
+                        height: tab == self.selectedTab ? nil : 0)
+                    .opacity(tab == self.selectedTab ? 1 : 0)
+                    .allowsHitTesting(tab == self.selectedTab)
+                    .disabled(tab != self.selectedTab)
+                    .accessibilityHidden(tab != self.selectedTab)
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+
+    private func detailView(for tab: SettingsTab) -> AnyView {
+        guard let dashboardRoute = tab.dashboardRoute else {
+            return self.nativeDetailView(for: tab)
+        }
+        guard self.state.nativeSettingsPanesEnabled else {
+            return AnyView(DashboardHandoffSettingsView(tab: tab, dashboardRoute: dashboardRoute))
+        }
+        return AnyView(VStack(alignment: .leading, spacing: 10) {
+            self.legacyDashboardBanner(route: dashboardRoute)
+            self.nativeDetailView(for: tab)
+        })
+    }
+
+    private func nativeDetailView(for tab: SettingsTab) -> AnyView {
+        switch tab {
+        case .general:
+            AnyView(GeneralSettings(state: self.state, page: .general, isActive: self.selectedTab == tab))
+        case .connection:
+            AnyView(GeneralSettings(state: self.state, page: .connection, isActive: self.selectedTab == tab))
+        case .gateways:
+            AnyView(GatewaySettings())
+        case .permissions:
+            AnyView(PermissionsSettings(
+                state: self.state,
+                status: self.permissionMonitor.status,
+                refresh: self.refreshPerms,
+                showOnboarding: { DebugActions.restartOnboarding() }))
+        case .voiceWake:
+            AnyView(VoiceWakeSettings(state: self.state, isActive: self.selectedTab == .voiceWake))
+        case .systemAgent:
+            AnyView(SystemAgentSettings(
+                isActive: self.selectedTab == tab,
+                onReplyReceived: {
+                    self.scheduleInferenceRefresh(clearPrevious: false)
+                })
+                .id(self.systemAgentChatIdentity))
+        case .channels:
+            AnyView(ChannelsSettings(isActive: self.selectedTab == tab))
+        case .skills:
+            AnyView(SkillsSettings(state: self.state))
+        case .cron:
+            AnyView(CronSettings(isActive: self.selectedTab == tab))
+        case .execApprovals:
+            AnyView(ExecApprovalsSettings())
+        case .sessions:
+            AnyView(SessionsSettings())
+        case .instances:
+            AnyView(InstancesSettings(isActive: self.selectedTab == tab))
+        case .config:
+            AnyView(ConfigSettings())
+        case .debug:
+            AnyView(DebugSettings(state: self.state))
+        case .about:
+            AnyView(AboutSettings(updater: self.updater))
+        }
+    }
+
+    private func legacyDashboardBanner(route: String) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .foregroundStyle(.secondary)
+            Text("Legacy pane — this now lives in the Dashboard")
+                .font(.callout.weight(.semibold))
+                .foregroundStyle(.secondary)
+            Spacer(minLength: 8)
+            Button("Open in Dashboard") {
+                Task { await DashboardManager.shared.show(atPath: route) }
+            }
+            .buttonStyle(.link)
+        }
+        .padding(.vertical, 8)
+        .padding(.horizontal, 10)
+        .background(Color.gray.opacity(0.12))
+        .cornerRadius(10)
+    }
+
+    private func selectRequestedTab(_ requested: SettingsTab) {
+        let selection = Self.tabSelection(
+            requested: requested,
+            showDebug: self.state.debugPaneEnabled,
+            inferenceConfiguration: self.inferenceConfiguration)
+        self.deferredTab = selection.deferred
+        self.selectedTab = selection.selected
+    }
+
+    struct TabSelection: Equatable {
+        let selected: SettingsTab
+        let deferred: SettingsTab?
+    }
+
+    static func tabSelection(
+        requested: SettingsTab,
+        showDebug: Bool,
+        inferenceConfiguration: InferenceConfiguration) -> TabSelection
+    {
+        let showSystemAgent = SystemAgentAvailability.shouldShow(
+            configuredModel: inferenceConfiguration.configuredModel)
+        let deferred = requested == .systemAgent && !showSystemAgent && !inferenceConfiguration.isLoaded
+            ? requested
+            : nil
+        return TabSelection(
+            selected: Self.normalizedTab(
+                requested,
+                showDebug: showDebug,
+                showSystemAgent: showSystemAgent),
+            deferred: deferred)
+    }
+
+    static func normalizedTab(
+        _ requested: SettingsTab,
+        showDebug: Bool,
+        showSystemAgent: Bool) -> SettingsTab
+    {
+        if requested == .debug, !showDebug {
+            return .general
+        }
+        if requested == .systemAgent, !showSystemAgent {
+            return .general
+        }
         return requested
+    }
+
+    private func cacheSelectedTab() {
+        self.cachedTabs.insert(self.selectedTab)
     }
 
     @MainActor
     private func refreshSnapshotPaths() async {
         let paths = await GatewayConnection.shared.snapshotPaths()
         self.snapshotPaths = paths
+    }
+
+    @MainActor
+    private func refreshInferenceConfiguration(clearPrevious: Bool) async {
+        if clearPrevious {
+            self.inferenceConfiguration = .loading
+        }
+        guard let route = await GatewayConnection.shared.captureRoute() else { return }
+        do {
+            let model = try await GatewayConnection.shared.configuredInferenceModel(
+                ifCurrentRoute: route)
+            guard !Task.isCancelled else { return }
+            self.inferenceConfiguration = Self.configurationAfterInferenceRefresh(
+                current: self.inferenceConfiguration,
+                result: .confirmed(model))
+            if let deferredTab {
+                self.selectRequestedTab(deferredTab)
+            }
+        } catch is CancellationError {
+            // A route change or task cancellation must not apply stale gateway state.
+        } catch {
+            guard !Task.isCancelled else { return }
+            // Preserve only route-confirmed truth. If this route has never loaded, stay hidden
+            // until app activation, config invalidation, or a route change triggers another probe.
+            self.inferenceConfiguration = Self.configurationAfterInferenceRefresh(
+                current: self.inferenceConfiguration,
+                result: .failed)
+        }
+    }
+
+    enum InferenceConfiguration: Equatable {
+        case loading
+        case loaded(String?)
+
+        var configuredModel: String? {
+            switch self {
+            case .loading: nil
+            case let .loaded(model): model
+            }
+        }
+
+        var isLoaded: Bool {
+            if case .loaded = self {
+                true
+            } else {
+                false
+            }
+        }
+    }
+
+    enum InferenceRefreshResult {
+        case confirmed(String?)
+        case failed
+    }
+
+    enum InferenceRefreshTrigger: Equatable {
+        case invalidate(UUID)
+        case verify(UUID)
+
+        var clearsPrevious: Bool {
+            switch self {
+            case .invalidate: true
+            case .verify: false
+            }
+        }
+    }
+
+    struct ConfigRefreshPlan: Equatable {
+        let clearsPrevious: Bool
+        let resetsSystemAgent: Bool
+    }
+
+    static func configRefreshPlan(
+        selectedTab: SettingsTab,
+        previousGatewayID: String?,
+        currentGatewayID: String?) -> ConfigRefreshPlan
+    {
+        let routeChanged = previousGatewayID != currentGatewayID
+        return ConfigRefreshPlan(
+            clearsPrevious: routeChanged || selectedTab != .systemAgent,
+            resetsSystemAgent: routeChanged)
+    }
+
+    static func configurationAfterInferenceRefresh(
+        current: InferenceConfiguration,
+        result: InferenceRefreshResult) -> InferenceConfiguration
+    {
+        switch result {
+        case let .confirmed(model): .loaded(model)
+        case .failed: current
+        }
+    }
+
+    private func scheduleInferenceRefresh(clearPrevious: Bool, resetSystemAgent: Bool = false) {
+        if resetSystemAgent {
+            // OpenClaw sessions are gateway-owned. Re-key the cached detail so a route
+            // change cannot send old conversation state to a new endpoint.
+            self.systemAgentChatIdentity = UUID()
+        }
+        if clearPrevious {
+            // Preserve an active or pending OpenClaw request while config truth is revalidated.
+            // A confirmed model restores it; a confirmed missing model leaves General selected.
+            let requestedTab = self.deferredTab ?? self.selectedTab
+            self.inferenceConfiguration = .loading
+            self.selectRequestedTab(requestedTab)
+        }
+        self.inferenceRefreshTrigger = clearPrevious ? .invalidate(UUID()) : .verify(UUID())
     }
 
     @MainActor
@@ -171,21 +471,59 @@ struct SettingsRootView: View {
     }
 }
 
-enum SettingsTab: CaseIterable {
-    case general, channels, skills, sessions, cron, config, instances, voiceWake, permissions, debug, about
-    static let windowWidth: CGFloat = 824 // wider
-    static let windowHeight: CGFloat = 790 // +10% (more room)
+struct SettingsTabGroup: Identifiable {
+    let title: String
+    let tabs: [SettingsTab]
+
+    var id: String {
+        self.title
+    }
+
+    static func defaultGroups(showDebug: Bool, showSystemAgent: Bool) -> [SettingsTabGroup] {
+        let basicTabs: [SettingsTab] = showSystemAgent
+            ? [.general, .connection, .gateways, .permissions, .voiceWake, .systemAgent]
+            : [.general, .connection, .gateways, .permissions, .voiceWake]
+        var groups = [
+            SettingsTabGroup(title: "Basics", tabs: basicTabs),
+            SettingsTabGroup(title: "Automation", tabs: [.channels, .skills, .cron, .execApprovals]),
+            SettingsTabGroup(title: "Data", tabs: [.sessions, .instances]),
+            SettingsTabGroup(title: "Advanced", tabs: [.config]),
+            SettingsTabGroup(title: "OpenClaw", tabs: [.about]),
+        ]
+
+        if showDebug {
+            groups.insert(SettingsTabGroup(title: "Developer", tabs: [.debug]), at: groups.count - 1)
+        }
+
+        return groups
+    }
+}
+
+enum SettingsTab: CaseIterable, Identifiable, Hashable {
+    case general, connection, gateways, permissions, voiceWake, systemAgent, channels, skills, cron
+    case execApprovals, sessions, instances, config, debug, about
+    static let windowWidth: CGFloat = 1120
+    static let windowHeight: CGFloat = 790
+
+    var id: Self {
+        self
+    }
+
     var title: String {
         switch self {
         case .general: "General"
+        case .connection: "Connection"
+        case .gateways: "Gateways"
+        case .permissions: "Permissions"
+        case .voiceWake: "Voice & Talk"
+        case .systemAgent: "OpenClaw"
         case .channels: "Channels"
         case .skills: "Skills"
-        case .sessions: "Sessions"
-        case .cron: "Cron"
-        case .config: "Config"
+        case .cron: "Cron Jobs"
+        case .execApprovals: "Exec Approvals"
+        case .sessions: "Threads"
         case .instances: "Instances"
-        case .voiceWake: "Voice Wake"
-        case .permissions: "Permissions"
+        case .config: "Config"
         case .debug: "Debug"
         case .about: "About"
         }
@@ -194,16 +532,32 @@ enum SettingsTab: CaseIterable {
     var systemImage: String {
         switch self {
         case .general: "gearshape"
+        case .connection: "point.3.connected.trianglepath.dotted"
+        case .gateways: "server.rack"
+        case .permissions: "lock.shield"
+        case .voiceWake: "waveform.circle"
+        case .systemAgent: "lifepreserver"
         case .channels: "link"
         case .skills: "sparkles"
+        case .cron: "calendar.badge.clock"
+        case .execApprovals: "terminal"
         case .sessions: "clock.arrow.circlepath"
-        case .cron: "calendar"
-        case .config: "slider.horizontal.3"
         case .instances: "network"
-        case .voiceWake: "waveform.circle"
-        case .permissions: "lock.shield"
+        case .config: "slider.horizontal.3"
         case .debug: "ant"
         case .about: "info.circle"
+        }
+    }
+
+    var dashboardRoute: String? {
+        switch self {
+        case .channels: DashboardRouteMap.channelsSettingsPath
+        case .skills: DashboardRouteMap.skillsPagePath
+        case .cron: DashboardRouteMap.cronJobsPagePath
+        case .sessions: DashboardRouteMap.sessionsPagePath
+        case .instances: DashboardRouteMap.devicesSettingsPath
+        case .general, .connection, .gateways, .permissions, .voiceWake, .systemAgent,
+             .execApprovals, .config, .debug, .about: nil
         }
     }
 }
@@ -230,7 +584,11 @@ extension Notification.Name {
 struct SettingsRootView_Previews: PreviewProvider {
     static var previews: some View {
         ForEach(SettingsTab.allCases, id: \.self) { tab in
-            SettingsRootView(state: .preview, updater: DisabledUpdaterController(), initialTab: tab)
+            SettingsRootView(
+                state: .preview,
+                updater: DisabledUpdaterController(),
+                initialTab: tab,
+                configuredInferenceModel: tab == .systemAgent ? "openai/gpt-5.6-sol" : nil)
                 .previewDisplayName(tab.title)
                 .frame(width: SettingsTab.windowWidth, height: SettingsTab.windowHeight)
         }

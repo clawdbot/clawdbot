@@ -1,54 +1,75 @@
+// Whatsapp tests cover web auto reply utils plugin behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { normalizeMainKey } from "openclaw/plugin-sdk/routing";
-import { saveSessionStore } from "openclaw/plugin-sdk/session-store-runtime";
-import { withTempDir } from "openclaw/plugin-sdk/test-env";
-import { describe, expect, it, vi } from "vitest";
-import type { WhatsAppSendResult } from "../inbound/send-result.js";
 import {
   evaluateSessionFreshness,
-  loadSessionStore,
+  getSessionEntry,
+  normalizeSessionDeliveryState,
   resolveChannelResetConfig,
   resolveSessionKey,
   resolveSessionResetPolicy,
   resolveSessionResetType,
   resolveStorePath,
   resolveThreadFlag,
-} from "./config.runtime.js";
-import {
-  debugMention,
-  isBotMentionedFromTargets,
-  resolveMentionTargets,
-  resolveOwnerList,
-} from "./mentions.js";
-import type { WebInboundMsg } from "./types.js";
+  sessionDeliveryChannel,
+  upsertSessionEntry,
+} from "openclaw/plugin-sdk/session-store-runtime";
+import { withTempDir } from "openclaw/plugin-sdk/test-env";
+import { describe, expect, it, vi } from "vitest";
+import { createTestWebInboundMessage } from "../inbound/test-message.test-helper.js";
+import type { AdmittedWebInboundMessage } from "../inbound/types.js";
+import { debugMention, resolveOwnerList } from "./mentions.js";
 import { elide, isLikelyWhatsAppCryptoError } from "./util.js";
 
-function acceptedSendResult(kind: "media" | "text", id: string): WhatsAppSendResult {
-  return {
-    kind,
-    messageId: id,
-    keys: [{ id }],
-    providerAccepted: true,
-  };
-}
+type TestMessageOverrides = {
+  admission?: NonNullable<Parameters<typeof createTestWebInboundMessage>[0]>["admission"];
+  body?: string;
+  mentionedJids?: string[];
+  selfE164?: string;
+  selfJid?: string;
+  selfLid?: string;
+};
 
-const makeMsg = (overrides: Partial<WebInboundMsg>): WebInboundMsg =>
-  ({
-    id: "m1",
-    from: "120363401234567890@g.us",
-    conversationId: "120363401234567890@g.us",
-    to: "15551234567@s.whatsapp.net",
-    accountId: "default",
-    body: "",
-    chatType: "group",
-    chatId: "120363401234567890@g.us",
-    sendComposing: async () => {},
-    reply: async () => acceptedSendResult("text", "r1"),
-    sendMedia: async () => acceptedSendResult("media", "m1"),
-    ...overrides,
-  }) as WebInboundMsg;
+const makeMsg = (overrides: TestMessageOverrides): AdmittedWebInboundMessage => {
+  const conversationId = overrides.admission?.conversation?.id ?? "120363401234567890@g.us";
+  const conversationKind = overrides.admission?.conversation?.kind ?? "group";
+  return createTestWebInboundMessage({
+    event: { id: "m1" },
+    payload: { body: overrides.body ?? "" },
+    platform: {
+      chatJid: conversationId,
+      recipientJid: "15551234567@s.whatsapp.net",
+      selfE164: overrides.selfE164,
+      selfJid: overrides.selfJid,
+      selfLid: overrides.selfLid,
+    },
+    admission: {
+      ...overrides.admission,
+      accountId: overrides.admission?.accountId ?? "default",
+      conversation: {
+        kind: conversationKind,
+        id: conversationId,
+        ...overrides.admission?.conversation,
+      },
+      sender: {
+        id: conversationId,
+        ...overrides.admission?.sender,
+      },
+      senderAccess: {
+        reasonCode:
+          conversationKind === "direct" ? "dm_policy_allowlisted" : "group_policy_allowed",
+        ...overrides.admission?.senderAccess,
+      },
+    },
+    group: {
+      mentions: {
+        jids: overrides.mentionedJids,
+      },
+    },
+  });
+};
 
 function getSessionSnapshotForTest(
   cfg: OpenClawConfig,
@@ -71,8 +92,10 @@ function getSessionSnapshotForTest(
       { From: from, To: "", Body: "" },
       normalizeMainKey(sessionCfg?.mainKey),
     );
-  const store = loadSessionStore(resolveStorePath(sessionCfg?.store));
-  const entry = store[key];
+  const entry = getSessionEntry({
+    sessionKey: key,
+    storePath: resolveStorePath(sessionCfg?.store),
+  });
   const isThread = resolveThreadFlag({
     sessionKey: key,
     messageThreadId: ctx?.messageThreadId ?? null,
@@ -86,7 +109,7 @@ function getSessionSnapshotForTest(
     resetType,
     resetOverride: resolveChannelResetConfig({
       sessionCfg,
-      channel: entry?.lastChannel ?? entry?.channel,
+      channel: sessionDeliveryChannel(entry),
     }),
   });
   const freshness = entry
@@ -108,17 +131,42 @@ describe("isBotMentionedFromTargets", () => {
   const mentionCfg = { mentionRegexes: [/\bopenclaw\b/i] };
 
   function expectMentioned(
-    msg: WebInboundMsg,
+    msg: AdmittedWebInboundMessage,
     cfg: { mentionRegexes: RegExp[]; allowFrom?: Array<string | number>; isSelfChat?: boolean },
     expected: boolean,
   ) {
-    const targets = resolveMentionTargets(msg);
-    expect(isBotMentionedFromTargets(msg, cfg, targets)).toBe(expected);
+    expect(debugMention(msg, cfg).wasMentioned).toBe(expected);
   }
 
-  it("ignores regex matches when other mentions are present", () => {
+  it("honors configured mention patterns when only other members are @-mentioned (#109488)", () => {
+    // Previously a native @-mention of a non-bot member short-circuited the
+    // gate to false before mentionPatterns were evaluated, silently dropping
+    // messages like "marlow, look at @SomeoneElse's message".
     const msg = makeMsg({
       body: "@OpenClaw please help",
+      mentionedJids: ["19998887777@s.whatsapp.net"],
+      selfE164: "+15551234567",
+      selfJid: "15551234567@s.whatsapp.net",
+    });
+    expectMentioned(msg, mentionCfg, true);
+  });
+
+  it("still rejects third-party mentions when no configured pattern matches", () => {
+    const msg = makeMsg({
+      body: "look at @SomeoneElse's message",
+      mentionedJids: ["19998887777@s.whatsapp.net"],
+      selfE164: "+15551234567",
+      selfJid: "15551234567@s.whatsapp.net",
+    });
+    expectMentioned(msg, mentionCfg, false);
+  });
+
+  it("keeps the self-number digit fallback suppressed when other members are @-mentioned", () => {
+    // An @-tag of another member injects that member's number into the body,
+    // so loose digit matching stays disabled in this shape — only explicit
+    // mentionPatterns can rescue the message (#109488).
+    const msg = makeMsg({
+      body: "call me at +15551234567 and ask @SomeoneElse",
       mentionedJids: ["19998887777@s.whatsapp.net"],
       selfE164: "+15551234567",
       selfJid: "15551234567@s.whatsapp.net",
@@ -151,9 +199,12 @@ describe("isBotMentionedFromTargets", () => {
       // Direct chat with self, not a group — the original "ignore mentions
       // in self-chat" suppression still applies here so that mentioning the
       // owner in their own DM does not falsely trigger the bot.
-      from: "999@s.whatsapp.net",
-      conversationId: "999@s.whatsapp.net",
-      chatType: "direct",
+      admission: {
+        conversation: {
+          kind: "direct",
+          id: "999@s.whatsapp.net",
+        },
+      },
       body: "@owner ping",
       mentionedJids: ["999@s.whatsapp.net"],
       selfE164: "+999",
@@ -162,9 +213,12 @@ describe("isBotMentionedFromTargets", () => {
     expectMentioned(msg, cfg, false);
 
     const msgTextMention = makeMsg({
-      from: "999@s.whatsapp.net",
-      conversationId: "999@s.whatsapp.net",
-      chatType: "direct",
+      admission: {
+        conversation: {
+          kind: "direct",
+          id: "999@s.whatsapp.net",
+        },
+      },
       body: "openclaw ping",
       selfE164: "+999",
       selfJid: "999@s.whatsapp.net",
@@ -224,32 +278,31 @@ describe("resolveMentionTargets with @lid mapping", () => {
         JSON.stringify("+1777"),
       );
 
-      const mentionTargets = resolveMentionTargets(
+      const mentionDetails = debugMention(
         makeMsg({
           body: "ping",
           mentionedJids: ["777@lid"],
           selfE164: "+15551234567",
           selfJid: "15551234567@s.whatsapp.net",
         }),
+        { mentionRegexes: [] },
         authDir,
-      );
-      expect(mentionTargets.normalizedMentions).toEqual([
-        expect.objectContaining({
-          jid: null,
-          lid: "777@lid",
-          e164: "+1777",
-        }),
-      ]);
+      ).details;
+      expect(mentionDetails.normalizedMentionedJids).toEqual([["+1777", "777@lid"]]);
 
-      const selfTargets = resolveMentionTargets(
+      const selfDetails = debugMention(
         makeMsg({
           body: "ping",
           selfJid: "777@lid",
         }),
+        { mentionRegexes: [] },
         authDir,
-      );
-      expect(selfTargets.self.e164).toBe("+1777");
-      expect(selfTargets.self.lid).toBe("777@lid");
+      ).details;
+      expect(selfDetails.resolvedSelf).toEqual({
+        jid: null,
+        lid: "777@lid",
+        e164: "+1777",
+      });
     });
   });
 });
@@ -263,11 +316,13 @@ describe("getSessionSnapshot", () => {
         const storePath = path.join(root, "sessions.json");
         const sessionKey = "agent:main:whatsapp:dm:s1";
 
-        await saveSessionStore(storePath, {
-          [sessionKey]: {
+        await upsertSessionEntry({
+          storePath,
+          sessionKey,
+          entry: {
             sessionId: "snapshot-session",
             updatedAt: new Date(2026, 0, 18, 3, 30, 0).getTime(),
-            lastChannel: "whatsapp",
+            delivery: normalizeSessionDeliveryState({ context: { channel: "whatsapp" } }),
           },
         });
 
@@ -300,7 +355,11 @@ describe("web auto-reply util", () => {
   describe("mentions diagnostics", () => {
     it("returns normalized debug fields and mention outcome", () => {
       const msg = makeMsg({
-        from: "777@lid",
+        admission: {
+          conversation: {
+            id: "777@lid",
+          },
+        },
         body: "openclaw ping",
         selfE164: "+15551234567",
         selfJid: "15551234567@s.whatsapp.net",
@@ -326,6 +385,15 @@ describe("web auto-reply util", () => {
   });
 
   describe("elide", () => {
+    const hasLoneSurrogate = (value: string): boolean =>
+      Array.from(value).some((char) => {
+        if (char.length !== 1) {
+          return false;
+        }
+        const codeUnit = char.charCodeAt(0);
+        return codeUnit >= 0xd800 && codeUnit <= 0xdfff;
+      });
+
     it("returns undefined for undefined input", () => {
       expect(elide(undefined)).toBe(undefined);
     });
@@ -337,16 +405,30 @@ describe("web auto-reply util", () => {
     it("truncates and annotates when over limit", () => {
       expect(elide("abcdef", 3)).toBe("abc… (truncated 3 chars)");
     });
+
+    it("does not split surrogate pairs when the limit lands inside an emoji", () => {
+      const output = elide("😀😀😀", 5);
+
+      expect(output).toBe("😀😀… (truncated 2 chars)");
+      expect(hasLoneSurrogate(output ?? "")).toBe(false);
+    });
+
+    it("keeps a complete astral character when it fits before the limit", () => {
+      const output = elide("ab😀cd", 4);
+
+      expect(output).toBe("ab😀… (truncated 2 chars)");
+      expect(hasLoneSurrogate(output ?? "")).toBe(false);
+    });
   });
 
   describe("isLikelyWhatsAppCryptoError", () => {
     it("matches known Baileys crypto auth errors (Error)", () => {
       const err = new Error("bad mac");
-      err.stack = "at something\nat @whiskeysockets/baileys/noise-handler\n";
+      err.stack = "at something\nat baileys/noise-handler\n";
       expect(isLikelyWhatsAppCryptoError(err)).toBe(true);
     });
 
-    it("does not throw on circular objects", () => {
+    it("returns false for circular objects", () => {
       const circular: Record<string, unknown> = {};
       circular.self = circular;
       expect(isLikelyWhatsAppCryptoError(circular)).toBe(false);

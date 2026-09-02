@@ -1,3 +1,4 @@
+// Nextcloud Talk tests cover channel.core plugin behavior.
 import { describe, expect, it } from "vitest";
 import {
   nextcloudTalkConfigAdapter,

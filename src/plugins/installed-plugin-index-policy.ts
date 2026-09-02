@@ -1,8 +1,11 @@
+// Applies policy checks to installed plugin index records.
 import type { OpenClawConfig } from "../config/types.js";
+import { readBundledDiscoveryModeMemoized } from "./bundled-discovery-state.js";
 import { listPluginCompatRecords } from "./compat/registry.js";
 import { normalizePluginsConfig } from "./config-state.js";
 import { hashJson } from "./installed-plugin-index-hash.js";
 
+/** Hashes plugin compat registry state that can affect installed index validity. */
 export function resolveCompatRegistryVersion(): string {
   return hashJson(
     listPluginCompatRecords().map((record) => ({
@@ -11,12 +14,19 @@ export function resolveCompatRegistryVersion(): string {
       deprecated: record.deprecated,
       warningStarts: record.warningStarts,
       removeAfter: record.removeAfter,
+      removalGate: record.removalGate,
       replacement: record.replacement,
     })),
   );
 }
 
-export function resolveInstalledPluginIndexPolicyHash(config: OpenClawConfig | undefined): string {
+/** Hashes config policy inputs that can change installed plugin activation. */
+export function resolveInstalledPluginIndexPolicyHash(
+  config: OpenClawConfig | undefined,
+  // Callers scoped to an explicit env hash that env's state-root mode so
+  // persisted indexes cannot leak activation decisions across roots.
+  env?: NodeJS.ProcessEnv,
+): string {
   const normalized = normalizePluginsConfig(config?.plugins);
   const channelPolicy: Record<string, boolean> = {};
   const channels = config?.channels;
@@ -35,6 +45,10 @@ export function resolveInstalledPluginIndexPolicyHash(config: OpenClawConfig | u
       enabled: normalized.enabled,
       allow: normalized.allow,
       deny: normalized.deny,
+      // Machine-state discovery mode changes activation for bundled plugins;
+      // omitting it left persisted indexes stale across doctor's compat
+      // migration (allow-listed installs stayed mass-disabled after --fix).
+      bundledDiscovery: readBundledDiscoveryModeMemoized(env) ?? null,
       slots: normalized.slots,
       entries: Object.fromEntries(
         Object.entries(normalized.entries)

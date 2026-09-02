@@ -1,3 +1,4 @@
+// Memory Core plugin module implements manager search preflight behavior.
 export function resolveMemorySearchPreflight(params: {
   query: string;
   hasIndexedContent: boolean;

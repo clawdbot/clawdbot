@@ -1,3 +1,4 @@
+// Memory Core tests cover manager search preflight plugin behavior.
 import { describe, expect, it } from "vitest";
 import { resolveMemorySearchPreflight } from "./manager-search-preflight.js";
 

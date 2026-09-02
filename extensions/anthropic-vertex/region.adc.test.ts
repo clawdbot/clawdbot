@@ -1,3 +1,4 @@
+// Anthropic Vertex tests cover region.adc plugin behavior.
 import { platform } from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
@@ -26,6 +27,10 @@ vi.mock("node:fs", async () => {
     },
   };
 });
+
+vi.mock("openclaw/plugin-sdk/secret-file-runtime", () => ({
+  tryReadSecretFileSync: (pathname: string) => readFileSyncMock(pathname, "utf8"),
+}));
 
 import { hasAnthropicVertexAvailableAuth, resolveAnthropicVertexProjectId } from "./region.js";
 

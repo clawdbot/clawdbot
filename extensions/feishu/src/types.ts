@@ -1,4 +1,5 @@
-import type { MessageReceipt } from "openclaw/plugin-sdk/channel-message";
+// Feishu type declarations define plugin contracts.
+import type { MessageReceipt } from "openclaw/plugin-sdk/channel-outbound";
 import type { BaseProbeResult } from "openclaw/plugin-sdk/core";
 import type { FeishuConfigSchema, FeishuAccountConfigSchema, z } from "./config-schema.js";
 import type { MentionTarget } from "./mention-target.types.js";
@@ -35,10 +36,12 @@ export type FeishuMessageContext = {
   chatId: string;
   messageId: string;
   replyTargetMessageId?: string;
+  typingTargetMessageId?: string;
   suppressReplyTarget?: boolean;
   senderId: string;
   senderOpenId: string;
   senderName?: string;
+  senderType: "user" | "bot";
   chatType: FeishuChatType;
   mentionedBot: boolean;
   hasAnyMention?: boolean;
@@ -73,6 +76,8 @@ export type FeishuMessageInfo = {
   content: string;
   contentType: string;
   createTime?: number;
+  /** Root message ID for replies inside Feishu topics. */
+  rootId?: string;
   /** Feishu thread ID (omt_xxx) — present when the message belongs to a topic thread. */
   threadId?: string;
 };
@@ -84,9 +89,9 @@ export interface FeishuProbeResult extends BaseProbeResult {
 }
 
 export type FeishuMediaInfo = {
-  path: string;
+  path?: string;
   contentType?: string;
-  placeholder: string;
+  kind: Exclude<import("openclaw/plugin-sdk/media-runtime").MediaKind, "unknown">;
 };
 
 export type FeishuToolsConfig = {
@@ -96,6 +101,8 @@ export type FeishuToolsConfig = {
   drive?: boolean;
   perm?: boolean;
   scopes?: boolean;
+  /** Bitable/Base operations (default: true). */
+  bitable?: boolean;
 };
 
 export type DynamicAgentCreationConfig = {

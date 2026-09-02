@@ -1,3 +1,7 @@
+// Channel catalog contract tests cover bundled and registry-backed channel catalog invariants.
+import fs from "node:fs";
+import path from "node:path";
+import { isPrereleaseSemverVersion } from "../../../infra/npm-registry-spec.js";
 import {
   describeBundledMetadataOnlyChannelCatalogContract,
   describeChannelCatalogEntryContract,
@@ -19,6 +23,22 @@ const whatsappMeta = {
   blurb: "works with your own number; recommend a separate phone + eSIM.",
 };
 
+const whatsappPackageJson = JSON.parse(
+  fs.readFileSync(path.join(process.cwd(), "extensions", "whatsapp", "package.json"), "utf8"),
+) as {
+  name?: string;
+  version?: string;
+  openclaw?: { install?: { npmSpec?: string } };
+};
+const whatsappNpmSpec = whatsappPackageJson.openclaw?.install?.npmSpec ?? whatsappPackageJson.name;
+const whatsappVersion = whatsappPackageJson.version;
+if (!whatsappNpmSpec || !whatsappVersion) {
+  throw new Error("missing package metadata for whatsapp");
+}
+const whatsappOfficialFallbackNpmSpec = isPrereleaseSemverVersion(whatsappVersion)
+  ? `${whatsappNpmSpec}@${whatsappVersion}`
+  : whatsappNpmSpec;
+
 describeBundledMetadataOnlyChannelCatalogContract({
   pluginId: "whatsapp",
   packageName: "@openclaw/whatsapp",
@@ -29,7 +49,7 @@ describeBundledMetadataOnlyChannelCatalogContract({
 
 describeOfficialFallbackChannelCatalogContract({
   channelId: "whatsapp",
-  npmSpec: "@openclaw/whatsapp",
+  npmSpec: whatsappOfficialFallbackNpmSpec,
   meta: whatsappMeta,
   packageName: "@openclaw/whatsapp",
   pluginId: "whatsapp",
@@ -39,12 +59,18 @@ describeOfficialFallbackChannelCatalogContract({
 
 describeChannelCatalogEntryContract({
   channelId: "wecom",
-  npmSpec: "@wecom/wecom-openclaw-plugin@2026.4.23",
+  npmSpec: "@wecom/wecom-openclaw-plugin@2026.7.2",
   alias: "wework",
 });
 
 describeChannelCatalogEntryContract({
   channelId: "yuanbao",
-  npmSpec: "openclaw-plugin-yuanbao@2.11.0",
+  npmSpec: "openclaw-plugin-yuanbao@2.18.2",
   alias: "yb",
+});
+
+describeChannelCatalogEntryContract({
+  channelId: "openclaw-zaloclawbot",
+  npmSpec: "@zalo-platforms/openclaw-zaloclawbot@0.1.4",
+  alias: "zaloclawbot",
 });

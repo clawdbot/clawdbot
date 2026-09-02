@@ -1,5 +1,6 @@
+// Discord plugin module implements message handler.preflight logging behavior.
+import { logDebug } from "openclaw/plugin-sdk/logging-core";
 import { logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
-import { logDebug } from "openclaw/plugin-sdk/text-runtime";
 import type { DiscordChannelConfigResolved } from "./allow-list.js";
 
 export function logDiscordPreflightChannelConfig(params: {

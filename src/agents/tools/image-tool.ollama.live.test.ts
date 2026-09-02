@@ -1,7 +1,8 @@
+// Live Ollama image tool smoke test for providerless local vision-model config.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createImageTool } from "./image-tool.js";
 
@@ -12,6 +13,8 @@ const OLLAMA_BASE_URL =
 const OLLAMA_IMAGE_MODEL = process.env.OPENCLAW_LIVE_OLLAMA_IMAGE_MODEL?.trim() || "qwen2.5vl:7b";
 
 function resolveLiveNumCtx(): number {
+  // Ollama vision models can fail with tiny context windows; clamp live smoke
+  // config to a usable minimum while still letting operators override it.
   const parsed = Number.parseInt(process.env.OPENCLAW_LIVE_OLLAMA_IMAGE_NUM_CTX ?? "2048", 10);
   return Number.isFinite(parsed) ? Math.max(512, parsed) : 2048;
 }
@@ -40,7 +43,9 @@ async function withLiveImageWorkspace<T>(
 
 describe.skipIf(!LIVE)("image tool Ollama live", () => {
   it("describes a local image through a providerless configured Ollama image model", async () => {
-    process.env.OLLAMA_API_KEY ||= "ollama-local";
+    if (!process.env.OLLAMA_API_KEY) {
+      vi.stubEnv("OLLAMA_API_KEY", "ollama-local");
+    }
     await withLiveImageWorkspace(async ({ agentDir, workspaceDir, imagePath }) => {
       const cfg: OpenClawConfig = {
         agents: {
@@ -72,27 +77,35 @@ describe.skipIf(!LIVE)("image tool Ollama live", () => {
         },
         tools: {
           media: {
+            models: [
+              {
+                provider: "ollama",
+                model: OLLAMA_IMAGE_MODEL,
+                timeoutSeconds: 300,
+                capabilities: ["image"],
+              },
+            ],
             image: {
               timeoutSeconds: 180,
-              models: [{ provider: "ollama", model: OLLAMA_IMAGE_MODEL, timeoutSeconds: 300 }],
             },
           },
         },
       };
       const tool = createImageTool({ config: cfg, agentDir, workspaceDir });
-      expect(tool).not.toBeNull();
+      expect(typeof tool?.execute).toBe("function");
+      if (!tool) {
+        throw new Error("expected image tool");
+      }
 
-      const result = await tool!.execute("live-ollama-image", {
+      const result = await tool.execute("live-ollama-image", {
         prompt: "Describe this image in one short sentence.",
-        image: imagePath,
+        path: imagePath,
       });
 
-      expect(result).toMatchObject({
-        content: [expect.objectContaining({ type: "text" })],
-      });
-      const text = (
-        result as { content?: Array<{ type?: string; text?: string }> }
-      ).content?.[0]?.text?.trim();
+      const content = (result as { content?: Array<{ type?: string; text?: string }> }).content;
+      expect(Array.isArray(content)).toBe(true);
+      expect(content?.[0]?.type).toBe("text");
+      const text = content?.[0]?.text?.trim();
       expect(text?.length ?? 0).toBeGreaterThan(0);
     });
   }, 180_000);

@@ -1,9 +1,14 @@
+// Diagnostic support redaction helpers scrub support bundle files and paths.
 import path from "node:path";
+import { isSensitiveUrlQueryParamName } from "@openclaw/net-policy/redact-sensitive-url";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { REDACTED_SENTINEL } from "../config/redact-snapshot.js";
 import { isSecretRefShape } from "../config/redact-snapshot.secret-ref.js";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
-import { isSensitiveUrlQueryParamName } from "../shared/net/redact-sensitive-url.js";
 import { redactSensitiveText } from "./redact.js";
 
+// Redaction helpers for support bundles; preserve operational shape while removing private data.
 const SECRET_SUPPORT_FIELD_RE =
   /(?:authorization|cookie|credential|key|password|passwd|secret|token)/iu;
 const PAYLOAD_SUPPORT_FIELD_RE =
@@ -14,10 +19,12 @@ const PRIVATE_MAP_SUPPORT_FIELD_RE = /^(?:accounts|chats|conversations|messages|
 const CONFIG_PRIVATE_FIELD_RE =
   /(?:allow[-_]?from|allow[-_]?to|deny[-_]?from|deny[-_]?to|blocked[-_]?from|blocked[-_]?users|owner[-_]?id|sender[-_]?id|recipient[-_]?id)/iu;
 const SENSITIVE_COMMAND_ARG_RE =
-  /^--(?:api[-_]?key|hook[-_]?token|password|password-file|passwd|secret|token)(?:=.*)?$/iu;
+  /^--(?:aws[-_]?secret[-_]?access[-_]?key|awsSecretAccessKey|SecretAccessKey|api[-_]?key|hook[-_]?token|password|password-file|passwd|secret|token)(?:=.*)?$/iu;
 const BASIC_AUTH_RE = /\bBasic\s+[A-Za-z0-9+/]+={0,2}/giu;
 const COOKIE_HEADER_RE = /\b(Cookie|Set-Cookie)\s*:\s*[^\r\n]+/giu;
 const AWS_ACCESS_KEY_ID_RE = /\b(?:AKIA|ASIA)[A-Z0-9]{16}\b/gu;
+const AWS_SECRET_ACCESS_KEY_RE =
+  /(?<![A-Za-z0-9/+=_,-])(?<!;base64,[A-Za-z0-9+/=]*)(?=[A-Za-z0-9/+=]{40}(?![A-Za-z0-9/+=]))(?=[A-Za-z0-9/+=]{0,39}[A-Z])(?=[A-Za-z0-9/+=]{0,39}[a-z])(?=[A-Za-z0-9/+=]{0,39}[0-9/+=])(?=[A-Za-z0-9/+=]{0,39}[^A-Fa-f0-9])[A-Za-z0-9/+=]{40}(?![A-Za-z0-9/+=_,-])/gu;
 const JWT_RE = /\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b/gu;
 const URL_USERINFO_RE = /\b([a-z][a-z0-9+.-]*:\/\/)([^/@\s:?#]+)(?::([^/@\s?#]+))?@/giu;
 const URL_PARAM_RE = /([?&])([^=&\s]+)=([^&#\s]+)/giu;
@@ -34,6 +41,7 @@ const MAX_SUPPORT_OBJECT_ENTRIES = 1000;
 const DEFAULT_TRUNCATION_SUFFIX = "...<truncated>";
 const TRUNCATED_SUPPORT_FIELD = "<truncated>";
 
+/** Context needed to redact paths and environment-derived private prefixes. */
 export type SupportRedactionContext = {
   env: NodeJS.ProcessEnv;
   stateDir: string;
@@ -59,13 +67,6 @@ type LimitedSupportArray = {
   count: number;
   items: unknown[];
 };
-
-function asRecord(value: unknown): Record<string, unknown> | undefined {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return undefined;
-  }
-  return value as Record<string, unknown>;
-}
 
 function isPrivateSupportField(key: string): boolean {
   return (
@@ -100,14 +101,10 @@ function createSupportRecord(): Record<string, unknown> {
   return Object.create(null) as Record<string, unknown>;
 }
 
-function hasOwnRecordKey(record: Record<string, unknown>, key: string): boolean {
-  return Object.prototype.hasOwnProperty.call(record, key);
-}
-
 function countOwnObjectEntries(record: Record<string, unknown>): number {
   let count = 0;
   for (const key in record) {
-    if (hasOwnRecordKey(record, key)) {
+    if (Object.hasOwn(record, key)) {
       count += 1;
     }
   }
@@ -121,7 +118,7 @@ function limitedSupportObjectEntries(record: Record<string, unknown>): {
   let count = 0;
   const entries: SupportObjectEntry[] = [];
   for (const key in record) {
-    if (!hasOwnRecordKey(record, key)) {
+    if (!Object.hasOwn(record, key)) {
       continue;
     }
     count += 1;
@@ -235,7 +232,13 @@ function isSupportAbsolutePath(value: string): boolean {
   return path.isAbsolute(value) || isWindowsAbsolutePath(value);
 }
 
-export function redactPathForSupport(file: string, options: SupportRedactionContext): string {
+export function redactPathForSupport(
+  file: string | null | undefined,
+  options: SupportRedactionContext,
+): string {
+  if (file == null || typeof file !== "string") {
+    return "";
+  }
   if (file.startsWith("$")) {
     return file;
   }
@@ -281,8 +284,8 @@ function redactKnownPathPrefixesForSupport(
 }
 
 export function redactTextForSupport(value: string): string {
-  let redacted = redactSensitiveTextForSupport(value);
-  redacted = redactCommonCredentialTextForSupport(redacted);
+  let redacted = redactCommonCredentialTextForSupport(value);
+  redacted = redactSensitiveTextForSupport(redacted);
   redacted = redactUrlSecretsForSupport(redacted);
   redacted = redactServiceIdentifiersForSupport(redacted);
   redacted = redactContactIdentifiersForSupport(redacted);
@@ -298,7 +301,8 @@ function redactCommonCredentialTextForSupport(value: string): string {
     .replace(BASIC_AUTH_RE, "Basic <redacted>")
     .replace(COOKIE_HEADER_RE, "$1: <redacted>")
     .replace(AWS_ACCESS_KEY_ID_RE, "<redacted-aws-key>")
-    .replace(JWT_RE, "<redacted-jwt>");
+    .replace(JWT_RE, "<redacted-jwt>")
+    .replace(AWS_SECRET_ACCESS_KEY_RE, "<redacted-aws-secret-key>");
 }
 
 function redactUrlSecretsForSupport(value: string): string {
@@ -316,10 +320,13 @@ function redactContactIdentifiersForSupport(value: string): string {
 }
 
 function redactServiceIdentifiersForSupport(value: string): string {
+  // Saved support artifacts can pass through redaction again; preserve our exact path marker.
   return value
     .replace(MATRIX_USER_ID_RE, "<redacted-matrix-user>")
     .replace(MATRIX_ROOM_ID_RE, "<redacted-matrix-room>")
-    .replace(MATRIX_EVENT_ID_RE, "<redacted-matrix-event>");
+    .replace(MATRIX_EVENT_ID_RE, (eventId) =>
+      eventId === "$OPENCLAW_STATE_DIR" ? eventId : "<redacted-matrix-event>",
+    );
 }
 
 function redactLongIdentifiersForSupport(value: string): string {
@@ -340,7 +347,7 @@ export function redactSupportString(
   if (pathRedacted.length <= maxLength) {
     return pathRedacted;
   }
-  return `${pathRedacted.slice(0, maxLength)}${truncationSuffix}`;
+  return `${truncateUtf16Safe(pathRedacted, maxLength)}${truncationSuffix}`;
 }
 
 function sanitizeCommandArguments(args: unknown[], redaction: SupportRedactionContext): unknown[] {
@@ -364,6 +371,7 @@ function sanitizeCommandArguments(args: unknown[], redaction: SupportRedactionCo
   });
 }
 
+/** Sanitizes general diagnostic snapshots while keeping bounded object/array structure. */
 export function sanitizeSupportSnapshotValue(
   value: unknown,
   redaction: SupportRedactionContext,
@@ -385,6 +393,7 @@ export function sanitizeSupportSnapshotValue(
   if (Array.isArray(value)) {
     const { count, items } = limitedSupportArray(value);
     if (key === "programArguments") {
+      // Command arguments get flag-aware redaction so "--token value" redacts the following item.
       return supportArrayResult(sanitizeCommandArguments(items, redaction), count);
     }
     return supportArrayResult(
@@ -392,7 +401,7 @@ export function sanitizeSupportSnapshotValue(
       count,
     );
   }
-  const record = asRecord(value);
+  const record = asOptionalRecord(value);
   if (!record) {
     return "<unsupported>";
   }
@@ -410,6 +419,7 @@ export function sanitizeSupportSnapshotValue(
   return sanitized;
 }
 
+/** Sanitizes config-shaped values with stricter private field handling. */
 export function sanitizeSupportConfigValue(
   value: unknown,
   redaction: SupportRedactionContext,
@@ -423,6 +433,9 @@ export function sanitizeSupportConfigValue(
     return isPrivateConfigField(key) ? "<redacted>" : value;
   }
   if (typeof value === "string") {
+    if (value === REDACTED_SENTINEL) {
+      return "<redacted>";
+    }
     return isPrivateConfigField(key) ? "<redacted>" : redactSupportString(value, redaction);
   }
   if (depth >= MAX_SUPPORT_SNAPSHOT_DEPTH) {
@@ -441,7 +454,7 @@ export function sanitizeSupportConfigValue(
       count,
     );
   }
-  const record = asRecord(value);
+  const record = asOptionalRecord(value);
   if (!record) {
     return "<unsupported>";
   }

@@ -1,10 +1,4 @@
-import { describeAccountSnapshot } from "openclaw/plugin-sdk/account-helpers";
-import { formatNormalizedAllowFromEntries } from "openclaw/plugin-sdk/allow-from";
-import {
-  adaptScopedAccountAccessor,
-  createScopedChannelConfigAdapter,
-} from "openclaw/plugin-sdk/channel-config-helpers";
-import type { ChannelMessageActionName } from "openclaw/plugin-sdk/channel-contract";
+// Googlechat plugin module implements channel behavior.
 import { createChatChannelPlugin } from "openclaw/plugin-sdk/channel-core";
 import { buildPassiveProbedChannelStatusSummary } from "openclaw/plugin-sdk/extension-shared";
 import { createLazyRuntimeNamedExport } from "openclaw/plugin-sdk/lazy-runtime";
@@ -13,9 +7,12 @@ import {
   createDefaultChannelRuntimeState,
 } from "openclaw/plugin-sdk/status-helpers";
 import { extractToolSend } from "openclaw/plugin-sdk/tool-send";
-import { googleChatApprovalAuth } from "./approval-auth.js";
 import {
-  formatAllowFromEntry,
+  googleChatApprovalCapability,
+  shouldSuppressLocalGoogleChatExecApprovalPrompt,
+} from "./approval-native.js";
+import { createGoogleChatPluginBase, GOOGLECHAT_CHANNEL_ID } from "./channel-base.js";
+import {
   googlechatDirectoryAdapter,
   googlechatGroupsAdapter,
   googlechatMessageAdapter,
@@ -30,12 +27,8 @@ import {
   GoogleChatConfigSchema,
   isGoogleChatSpaceTarget,
   isGoogleChatUserTarget,
-  listGoogleChatAccountIds,
   normalizeGoogleChatTarget,
-  type GoogleChatConfigAccessorAccount,
-  resolveGoogleChatConfigAccessorAccount,
-  resolveDefaultGoogleChatAccountId,
-  resolveGoogleChatAccount,
+  resolveGoogleChatOutboundSessionRoute,
   type ChannelMessageActionAdapter,
   type ChannelStatusIssue,
   type ResolvedGoogleChatAccount,
@@ -46,76 +39,17 @@ import {
 } from "./doctor-contract.js";
 import { collectGoogleChatMutableAllowlistWarnings } from "./doctor.js";
 import { startGoogleChatGatewayAccount } from "./gateway.js";
+import { describeGoogleChatMessageTool } from "./message-tool-api.js";
 import { collectRuntimeConfigAssignments, secretTargetRegistryEntries } from "./secret-contract.js";
-import { googlechatSetupAdapter } from "./setup-core.js";
-import { googlechatSetupWizard } from "./setup-surface.js";
 
 const loadGoogleChatChannelRuntime = createLazyRuntimeNamedExport(
   () => import("./channel.runtime.js"),
   "googleChatChannelRuntime",
 );
 
-const meta = {
-  id: "googlechat",
-  label: "Google Chat",
-  selectionLabel: "Google Chat (Chat API)",
-  docsPath: "/channels/googlechat",
-  docsLabel: "googlechat",
-  blurb: "Google Workspace Chat app with HTTP webhook.",
-  aliases: ["gchat", "google-chat"],
-  order: 55,
-  detailLabel: "Google Chat",
-  systemImage: "message.badge",
-  markdownCapable: true,
-};
-
-const googleChatConfigAdapter = createScopedChannelConfigAdapter<
-  ResolvedGoogleChatAccount,
-  GoogleChatConfigAccessorAccount
->({
-  sectionKey: "googlechat",
-  listAccountIds: listGoogleChatAccountIds,
-  resolveAccount: adaptScopedAccountAccessor(resolveGoogleChatAccount),
-  resolveAccessorAccount: resolveGoogleChatConfigAccessorAccount,
-  defaultAccountId: resolveDefaultGoogleChatAccountId,
-  clearBaseFields: [
-    "serviceAccount",
-    "serviceAccountFile",
-    "audienceType",
-    "audience",
-    "webhookPath",
-    "webhookUrl",
-    "botUser",
-    "name",
-  ],
-  resolveAllowFrom: (account) => account.config.dm?.allowFrom,
-  formatAllowFrom: (allowFrom) =>
-    formatNormalizedAllowFromEntries({
-      allowFrom,
-      normalizeEntry: formatAllowFromEntry,
-    }),
-  resolveDefaultTo: (account) => account.config.defaultTo,
-});
-
 const googlechatActions: ChannelMessageActionAdapter = {
-  describeMessageTool: ({ cfg, accountId }) => {
-    const accounts = accountId
-      ? [resolveGoogleChatAccount({ cfg, accountId })].filter(
-          (account) => account.enabled && account.credentialSource !== "none",
-        )
-      : listGoogleChatAccountIds(cfg)
-          .map((id) => resolveGoogleChatAccount({ cfg, accountId: id }))
-          .filter((account) => account.enabled && account.credentialSource !== "none");
-    if (accounts.length === 0) {
-      return null;
-    }
-    const actions = new Set<ChannelMessageActionName>(["send", "upload-file"]);
-    if (accounts.some((account) => account.config.actions?.reactions !== false)) {
-      actions.add("react");
-      actions.add("reactions");
-    }
-    return { actions: Array.from(actions) };
-  },
+  describeMessageTool: describeGoogleChatMessageTool,
+  supportsAction: ({ action }) => action === "send",
   extractToolSend: ({ args }) => extractToolSend(args, "sendMessage"),
   handleAction: async (ctx) => {
     const { googlechatMessageActions } = await import("./actions.js");
@@ -128,36 +62,10 @@ const googlechatActions: ChannelMessageActionAdapter = {
 
 export const googlechatPlugin = createChatChannelPlugin({
   base: {
-    id: "googlechat",
-    meta: { ...meta },
-    setup: googlechatSetupAdapter,
-    setupWizard: googlechatSetupWizard,
-    capabilities: {
-      chatTypes: ["direct", "group", "thread"],
-      reactions: true,
-      threads: true,
-      media: true,
-      nativeCommands: false,
-      blockStreaming: true,
-    },
-    streaming: {
-      blockStreamingCoalesceDefaults: { minChars: 1500, idleMs: 1000 },
-    },
-    reload: { configPrefixes: ["channels.googlechat"] },
-    configSchema: buildChannelConfigSchema(GoogleChatConfigSchema),
-    config: {
-      ...googleChatConfigAdapter,
-      isConfigured: (account) => account.credentialSource !== "none",
-      describeAccount: (account) =>
-        describeAccountSnapshot({
-          account,
-          configured: account.credentialSource !== "none",
-          extra: {
-            credentialSource: account.credentialSource,
-          },
-        }),
-    },
-    approvalCapability: googleChatApprovalAuth,
+    ...createGoogleChatPluginBase({
+      configSchema: buildChannelConfigSchema(GoogleChatConfigSchema),
+    }),
+    approvalCapability: googleChatApprovalCapability,
     secrets: {
       secretTargetRegistryEntries,
       collectRuntimeConfigAssignments,
@@ -165,7 +73,19 @@ export const googlechatPlugin = createChatChannelPlugin({
     groups: googlechatGroupsAdapter,
     messaging: {
       targetPrefixes: ["googlechat", "google-chat", "gchat"],
+      targetIdComparison: "case-sensitive",
       normalizeTarget: normalizeGoogleChatTarget,
+      inferTargetChatType: ({ to }) => {
+        const target = normalizeGoogleChatTarget(to);
+        if (!target) {
+          return undefined;
+        }
+        if (isGoogleChatUserTarget(target)) {
+          return "direct";
+        }
+        return isGoogleChatSpaceTarget(target) ? "group" : undefined;
+      },
+      resolveOutboundSessionRoute: (params) => resolveGoogleChatOutboundSessionRoute(params),
       targetResolver: {
         looksLikeId: (raw, normalized) => {
           const value = normalized ?? raw.trim();
@@ -200,7 +120,7 @@ export const googlechatPlugin = createChatChannelPlugin({
     },
     actions: googlechatActions,
     doctor: {
-      dmAllowFromMode: "nestedOnly",
+      dmAllowFromMode: "topOnly",
       groupModel: "route",
       groupAllowFromFallbackToAllowFrom: false,
       warnOnEmptyGroupSenderAllowlist: false,
@@ -221,7 +141,7 @@ export const googlechatPlugin = createChatChannelPlugin({
           const issues: ChannelStatusIssue[] = [];
           if (!entry.audience) {
             issues.push({
-              channel: "googlechat",
+              channel: GOOGLECHAT_CHANNEL_ID,
               accountId,
               kind: "config",
               message: "Google Chat audience is missing (set channels.googlechat.audience).",
@@ -230,7 +150,7 @@ export const googlechatPlugin = createChatChannelPlugin({
           }
           if (!entry.audienceType) {
             issues.push({
-              channel: "googlechat",
+              channel: GOOGLECHAT_CHANNEL_ID,
               accountId,
               kind: "config",
               message: "Google Chat audienceType is missing (app-url or project-number).",
@@ -256,11 +176,12 @@ export const googlechatPlugin = createChatChannelPlugin({
         configured: account.credentialSource !== "none",
         extra: {
           credentialSource: account.credentialSource,
+          tokenStatus: account.tokenStatus,
           audienceType: account.config.audienceType,
           audience: account.config.audience,
           webhookPath: account.config.webhookPath,
           webhookUrl: account.config.webhookUrl,
-          dmPolicy: account.config.dm?.policy ?? "pairing",
+          dmPolicy: account.config.dmPolicy ?? "pairing",
         },
       }),
     }),
@@ -273,5 +194,17 @@ export const googlechatPlugin = createChatChannelPlugin({
   },
   security: googlechatSecurityAdapter,
   threading: googlechatThreadingAdapter,
-  outbound: googlechatOutboundAdapter,
+  outbound: {
+    ...googlechatOutboundAdapter,
+    base: {
+      ...googlechatOutboundAdapter.base,
+      shouldSuppressLocalPayloadPrompt: ({ cfg, accountId, payload, hint }) =>
+        shouldSuppressLocalGoogleChatExecApprovalPrompt({
+          cfg,
+          accountId,
+          payload,
+          hint,
+        }),
+    },
+  },
 });

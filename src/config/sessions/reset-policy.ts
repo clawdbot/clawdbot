@@ -1,7 +1,8 @@
+// Session reset policy resolves automatic freshness for direct, group, and thread sessions.
 import type { SessionConfig, SessionResetConfig } from "../types.base.js";
-import { DEFAULT_IDLE_MINUTES } from "./types.js";
 
-export type SessionResetMode = "daily" | "idle";
+export type SessionResetMode = "none" | "daily" | "idle";
+type SessionStaleReason = Exclude<SessionResetMode, "none">;
 export type SessionResetType = "direct" | "group" | "thread";
 
 export type SessionResetPolicy = {
@@ -15,21 +16,26 @@ export type SessionFreshness = {
   fresh: boolean;
   dailyResetAt?: number;
   idleExpiresAt?: number;
+  staleReason?: SessionStaleReason;
 };
 
-export const DEFAULT_RESET_MODE: SessionResetMode = "daily";
-export const DEFAULT_RESET_AT_HOUR = 4;
+const DEFAULT_RESET_MODE: SessionResetMode = "none";
+const DEFAULT_RESET_AT_HOUR = 4;
+const DEFAULT_IDLE_MINUTES = 0;
 
-export function resolveDailyResetAtMs(now: number, atHour: number): number {
+/** Returns the most recent daily reset boundary for the supplied wall-clock time. */
+function resolveDailyResetAtMs(now: number, atHour: number): number {
   const normalizedAtHour = normalizeResetAtHour(atHour);
   const resetAt = new Date(now);
   resetAt.setHours(normalizedAtHour, 0, 0, 0);
   if (now < resetAt.getTime()) {
+    // Before today's reset hour, the active reset boundary is yesterday's scheduled reset.
     resetAt.setDate(resetAt.getDate() - 1);
   }
   return resetAt.getTime();
 }
 
+/** Resolves the effective reset policy for direct, group, or thread sessions. */
 export function resolveSessionResetPolicy(params: {
   sessionCfg?: SessionConfig;
   resetType: SessionResetType;
@@ -37,24 +43,19 @@ export function resolveSessionResetPolicy(params: {
 }): SessionResetPolicy {
   const sessionCfg = params.sessionCfg;
   const baseReset = params.resetOverride ?? sessionCfg?.reset;
-  // Backward compat: accept legacy "dm" key as alias for "direct"
-  const typeReset = params.resetOverride
-    ? undefined
-    : (sessionCfg?.resetByType?.[params.resetType] ??
-      (params.resetType === "direct"
-        ? (sessionCfg?.resetByType as { dm?: SessionResetConfig } | undefined)?.dm
-        : undefined));
-  const hasExplicitReset = Boolean(baseReset || sessionCfg?.resetByType);
-  const legacyIdleMinutes = params.resetOverride ? undefined : sessionCfg?.idleMinutes;
-  const configured = Boolean(baseReset || typeReset || legacyIdleMinutes != null);
+  const typeReset = params.resetOverride ? undefined : sessionCfg?.resetByType?.[params.resetType];
+  const configured = Boolean(baseReset || typeReset);
+  const inheritedTypeMode = typeReset && baseReset?.mode !== "none" ? baseReset?.mode : undefined;
   const mode =
     typeReset?.mode ??
+    inheritedTypeMode ??
+    (typeReset ? "daily" : undefined) ??
     baseReset?.mode ??
-    (!hasExplicitReset && legacyIdleMinutes != null ? "idle" : DEFAULT_RESET_MODE);
+    (baseReset ? "daily" : DEFAULT_RESET_MODE);
   const atHour = normalizeResetAtHour(
     typeReset?.atHour ?? baseReset?.atHour ?? DEFAULT_RESET_AT_HOUR,
   );
-  const idleMinutesRaw = typeReset?.idleMinutes ?? baseReset?.idleMinutes ?? legacyIdleMinutes;
+  const idleMinutesRaw = typeReset?.idleMinutes ?? baseReset?.idleMinutes;
 
   let idleMinutes: number | undefined;
   if (idleMinutesRaw != null) {
@@ -69,6 +70,7 @@ export function resolveSessionResetPolicy(params: {
   return { mode, atHour, idleMinutes, configured };
 }
 
+/** Evaluates whether a persisted session is still fresh under the resolved reset policy. */
 export function evaluateSessionFreshness(params: {
   updatedAt: number;
   sessionStartedAt?: number;
@@ -76,10 +78,20 @@ export function evaluateSessionFreshness(params: {
   now: number;
   policy: SessionResetPolicy;
 }): SessionFreshness {
+  // Older releases persisted updatedAt=0 as an explicit pending reset marker.
+  // Honor that one-time tombstone even when automatic resets are disabled.
+  if (params.updatedAt === 0) {
+    return { fresh: false };
+  }
+  if (params.policy.mode === "none") {
+    return { fresh: true };
+  }
   const updatedAt = resolveTimestamp(params.updatedAt, params.now) ?? 0;
   const sessionStartedAt = resolveTimestamp(params.sessionStartedAt, params.now) ?? updatedAt;
   const lastInteractionAt =
     resolveTimestamp(params.lastInteractionAt, params.now) ?? sessionStartedAt;
+  // Daily reset uses session start, while idle reset uses last interaction; a continued session can
+  // stay idle-fresh even when its original transcript is old.
   const dailyResetAt =
     params.policy.mode === "daily"
       ? resolveDailyResetAtMs(params.now, params.policy.atHour)
@@ -90,10 +102,22 @@ export function evaluateSessionFreshness(params: {
       : undefined;
   const staleDaily = dailyResetAt != null && sessionStartedAt < dailyResetAt;
   const staleIdle = idleExpiresAt != null && params.now > idleExpiresAt;
+  const staleReason =
+    staleDaily && staleIdle
+      ? // When both policies mark the session stale, report the boundary that went stale first.
+        (dailyResetAt ?? Number.POSITIVE_INFINITY) <= (idleExpiresAt ?? Number.POSITIVE_INFINITY)
+        ? "daily"
+        : "idle"
+      : staleIdle
+        ? "idle"
+        : staleDaily
+          ? "daily"
+          : undefined;
   return {
     fresh: !(staleDaily || staleIdle),
     dailyResetAt,
     idleExpiresAt,
+    ...(staleReason ? { staleReason } : {}),
   };
 }
 

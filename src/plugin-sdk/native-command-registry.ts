@@ -1,3 +1,6 @@
+/**
+ * Public SDK subpath for chat/native command definitions and argument helpers.
+ */
 export {
   buildCommandTextFromArgs,
   findCommandByNativeName,
@@ -5,6 +8,7 @@ export {
   listChatCommands,
   listNativeCommandSpecs,
   listNativeCommandSpecsForConfig,
+  mergeNativeCommandSpecs,
   parseCommandArgs,
   resolveCommandArgChoices,
   resolveCommandArgMenu,

@@ -1,25 +1,23 @@
+// Discord plugin module implements agent components.plugin interactive behavior.
 import { ChannelType } from "discord-api-types/v10";
-import { logError } from "openclaw/plugin-sdk/text-runtime";
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
+import { logError } from "openclaw/plugin-sdk/logging-core";
 import {
   dispatchDiscordPluginInteractiveHandler,
   type DiscordInteractiveHandlerContext,
 } from "../interactive-dispatch.js";
 import type { TopLevelComponents } from "../internal/discord.js";
 import { editDiscordComponentMessage } from "../send.components.js";
-import {
-  resolveDiscordInteractionId,
-  type AgentComponentContext,
-  type AgentComponentInteraction,
-  type ComponentInteractionContext,
-  type DiscordChannelContext,
+import type {
+  AgentComponentContext,
+  AgentComponentInteraction,
+  ComponentInteractionContext,
+  DiscordChannelContext,
 } from "./agent-components-helpers.js";
 
-let conversationRuntimePromise: Promise<typeof import("./agent-components.runtime.js")> | undefined;
-
-async function loadConversationRuntime() {
-  conversationRuntimePromise ??= import("./agent-components.runtime.js");
-  return await conversationRuntimePromise;
-}
+const loadConversationRuntime = createLazyRuntimeModule(
+  () => import("./agent-components.runtime.js"),
+);
 
 export async function dispatchPluginDiscordInteractiveEvent(params: {
   ctx: AgentComponentContext;
@@ -67,10 +65,11 @@ export async function dispatchPluginDiscordInteractiveEvent(params: {
     },
     reply: async ({ text, ephemeral = true }: { text: string; ephemeral?: boolean }) => {
       responded = true;
-      await params.interaction.reply({
-        content: text,
-        ephemeral,
-      });
+      const payload = { content: text, ephemeral };
+      // Deferred component replies edit the public source; follow-ups preserve reply visibility.
+      await (acknowledged
+        ? params.interaction.followUp(payload)
+        : params.interaction.reply(payload));
     },
     followUp: async ({ text, ephemeral = true }: { text: string; ephemeral?: boolean }) => {
       responded = true;
@@ -144,10 +143,10 @@ export async function dispatchPluginDiscordInteractiveEvent(params: {
   }
   const dispatched = await dispatchDiscordPluginInteractiveHandler({
     data: params.data,
-    interactionId: resolveDiscordInteractionId(params.interaction),
+    interactionId: params.interaction.id,
     ctx: {
       accountId: params.ctx.accountId,
-      interactionId: resolveDiscordInteractionId(params.interaction),
+      interactionId: params.interaction.id,
       conversationId: normalizedConversationId,
       parentConversationId: params.channelCtx.parentId,
       guildId: params.interactionCtx.rawGuildId,

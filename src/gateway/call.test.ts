@@ -1,17 +1,46 @@
+// Gateway call tests cover connection detail resolution, local/remote URL choice,
+// auth token assembly, device identity, and client command metadata.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { HelloOk } from "../../packages/gateway-protocol/src/schema/frames.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import type { DeviceIdentity } from "../infra/device-identity.js";
-import { captureEnv } from "../test-utils/env.js";
+import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import { setActivePluginRegistry } from "../plugins/runtime.js";
+import type { DeviceAuthEntry } from "../shared/device-auth.js";
+import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
+import type { GatewayClientOptions, GatewayClientRequestOptions } from "./client.js";
 import {
-  loadConfigMock as getRuntimeConfig,
   pickPrimaryLanIPv4Mock as pickPrimaryLanIPv4,
   pickPrimaryTailnetIPv4Mock as pickPrimaryTailnetIPv4,
-  resolveGatewayPortMock as resolveGatewayPort,
 } from "./gateway-connection.test-mocks.js";
+
+const TLS_FINGERPRINT = "ab".repeat(32);
+
+const gatewayConfigMocks = vi.hoisted(() => ({
+  getRuntimeConfig: vi.fn(),
+  inspectGatewayTlsCertificate: vi.fn(),
+  resolveConfigPath: vi.fn(
+    (env: NodeJS.ProcessEnv, stateDir: string) =>
+      env.OPENCLAW_CONFIG_PATH ?? `${stateDir}/openclaw.json`,
+  ),
+  resolveGatewayPort: vi.fn(),
+  resolveStateDir: vi.fn((env: NodeJS.ProcessEnv) => env.OPENCLAW_STATE_DIR ?? "/tmp/openclaw"),
+  useActualDispatchConfig: false,
+}));
+const getRuntimeConfig = gatewayConfigMocks.getRuntimeConfig;
+const resolveGatewayPort = gatewayConfigMocks.resolveGatewayPort;
+
+function waitForFast<T>(
+  callback: () => T | Promise<T>,
+  options: { timeout?: number; interval?: number } = {},
+) {
+  return vi.waitFor(callback, { interval: 1, ...options });
+}
 
 const deviceIdentityState = vi.hoisted(() => ({
   value: {
@@ -21,6 +50,20 @@ const deviceIdentityState = vi.hoisted(() => ({
   } satisfies DeviceIdentity,
   throwOnLoad: false,
 }));
+const loadOrCreateDeviceIdentityMock = vi.hoisted(() => vi.fn());
+const loadDeviceIdentityIfPresentMock = vi.hoisted(() => vi.fn());
+const loadDeviceAuthTokenMock = vi.hoisted(() =>
+  vi.fn<(...args: unknown[]) => DeviceAuthEntry | null>(() => null),
+);
+const loadDeviceAuthTokenReadOnlyMock = vi.hoisted(() =>
+  vi.fn<(...args: unknown[]) => DeviceAuthEntry | null>(() => null),
+);
+const loadOriginDeviceTokenMock = vi.hoisted(() =>
+  vi.fn<(...args: unknown[]) => DeviceAuthEntry | null>(() => null),
+);
+const loadOriginDeviceTokenReadOnlyMock = vi.hoisted(() =>
+  vi.fn<(...args: unknown[]) => DeviceAuthEntry | null>(() => null),
+);
 
 const eventLoopReadyState = vi.hoisted(() => ({
   calls: [] as Array<{ maxWaitMs?: number } | undefined>,
@@ -40,84 +83,202 @@ const eventLoopReadyState = vi.hoisted(() => ({
   },
 }));
 
-let lastClientOptions: {
-  url?: string;
-  token?: string;
-  password?: string;
-  tlsFingerprint?: string;
-  preauthHandshakeTimeoutMs?: number;
-  clientName?: string;
-  clientDisplayName?: string;
-  mode?: string;
-  scopes?: string[];
-  deviceIdentity?: unknown;
-  onHelloOk?: (hello: { features?: { methods?: string[] } }) => void | Promise<void>;
-  onClose?: (code: number, reason: string) => void;
-} | null = null;
+const connectAssemblyErrorState = vi.hoisted(() => {
+  const errors = new WeakSet<Error>();
+  return {
+    create(message: string): Error {
+      const error = new Error(message);
+      errors.add(error);
+      return error;
+    },
+    has(value: unknown): value is Error {
+      return value instanceof Error && errors.has(value);
+    },
+  };
+});
+
+vi.mock("../config/gateway-dispatch-config.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../config/gateway-dispatch-config.js")>();
+  return {
+    ...actual,
+    readGatewayDispatchConfig: () =>
+      gatewayConfigMocks.useActualDispatchConfig
+        ? actual.readGatewayDispatchConfig()
+        : gatewayConfigMocks.getRuntimeConfig(),
+    readGatewayDispatchConfigWithShellEnvFallback: async () =>
+      gatewayConfigMocks.useActualDispatchConfig
+        ? await actual.readGatewayDispatchConfigWithShellEnvFallback()
+        : gatewayConfigMocks.getRuntimeConfig(),
+  };
+});
+
+vi.mock("../config/paths.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../config/paths.js")>();
+  return {
+    ...actual,
+    resolveConfigPath: gatewayConfigMocks.resolveConfigPath,
+    resolveGatewayPort: gatewayConfigMocks.resolveGatewayPort,
+    resolveStateDir: gatewayConfigMocks.resolveStateDir,
+  };
+});
+
+vi.mock("../infra/device-auth-store.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../infra/device-auth-store.js")>();
+  return {
+    ...actual,
+    loadDeviceAuthToken: loadDeviceAuthTokenMock,
+    loadDeviceAuthTokenReadOnly: loadDeviceAuthTokenReadOnlyMock,
+    loadOriginDeviceToken: loadOriginDeviceTokenMock,
+    loadOriginDeviceTokenReadOnly: loadOriginDeviceTokenReadOnlyMock,
+  };
+});
+
+vi.mock("../infra/device-identity.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../infra/device-identity.js")>();
+  return {
+    ...actual,
+    loadOrCreateDeviceIdentity: () => {
+      loadOrCreateDeviceIdentityMock();
+      if (deviceIdentityState.throwOnLoad) {
+        throw new Error("read-only identity dir");
+      }
+      return deviceIdentityState.value;
+    },
+    loadDeviceIdentityIfPresent: () => {
+      loadDeviceIdentityIfPresentMock();
+      if (deviceIdentityState.throwOnLoad) {
+        throw new Error("read-only identity dir");
+      }
+      return deviceIdentityState.value;
+    },
+  };
+});
+
+vi.mock("../infra/tls/gateway.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../infra/tls/gateway.js")>();
+  return {
+    ...actual,
+    inspectGatewayTlsCertificate: gatewayConfigMocks.inspectGatewayTlsCertificate,
+  };
+});
+
+let lastClientOptions: GatewayClientOptions | null = null;
 let lastRequestOptions: {
   method?: string;
   params?: unknown;
-  opts?: { expectFinal?: boolean; timeoutMs?: number | null };
+  opts?: GatewayClientRequestOptions;
 } | null = null;
-type StartMode = "hello" | "close" | "silent" | "startup-retry-then-hello";
+type StartMode =
+  | "hello"
+  | "close"
+  | "connect-error"
+  | "connect-error-close"
+  | "silent"
+  | "startup-retry-then-hello"
+  | "clean-prehello-close-then-hello"
+  | "repeated-clean-prehello-close";
 let startMode: StartMode = "hello";
 let startCalls = 0;
 let closeCode = 1006;
 let closeReason = "";
+let helloCapabilities: string[] | undefined = [];
 let helloMethods: string[] | undefined = ["health", "secrets.resolve"];
+let connectError: Error | null = null;
+
+function makeStubGatewayHello(): HelloOk {
+  return {
+    type: "hello-ok",
+    protocol: 1,
+    server: { version: "test", connId: "test-connection" },
+    features: { capabilities: helloCapabilities ?? [], methods: helloMethods ?? [], events: [] },
+    snapshot: {
+      presence: [],
+      health: {},
+      stateVersion: { presence: 0, health: 0 },
+      uptimeMs: 0,
+    },
+    auth: { role: "operator", scopes: [] },
+    policy: { maxPayload: 1, maxBufferedBytes: 1, tickIntervalMs: 1 },
+  };
+}
+
+function startStubGatewayClient() {
+  startCalls += 1;
+  if (startMode === "hello") {
+    lastClientOptions?.onHelloOk?.(makeStubGatewayHello());
+  } else if (startMode === "startup-retry-then-hello") {
+    lastClientOptions?.onHelloOk?.(makeStubGatewayHello());
+  } else if (startMode === "clean-prehello-close-then-hello") {
+    lastClientOptions?.onClose?.(1000, "", {
+      phase: "pre-hello",
+      socketOpened: true,
+      transportValidated: true,
+      connectRequestSent: true,
+      transientPreHelloCleanClose: true,
+    });
+    lastClientOptions?.onHelloOk?.(makeStubGatewayHello());
+  } else if (startMode === "repeated-clean-prehello-close") {
+    lastClientOptions?.onClose?.(1000, "", {
+      phase: "pre-hello",
+      socketOpened: true,
+      transportValidated: true,
+      connectRequestSent: true,
+      transientPreHelloCleanClose: true,
+    });
+    lastClientOptions?.onClose?.(1000, "", {
+      phase: "pre-hello",
+      socketOpened: true,
+      transportValidated: true,
+      connectRequestSent: true,
+      transientPreHelloCleanClose: true,
+    });
+  } else if (startMode === "connect-error") {
+    lastClientOptions?.onConnectError?.(
+      connectError ?? connectAssemblyErrorState.create("device private key invalid"),
+    );
+  } else if (startMode === "connect-error-close") {
+    lastClientOptions?.onConnectError?.(
+      connectError ?? connectAssemblyErrorState.create("device private key invalid"),
+    );
+    lastClientOptions?.onClose?.(closeCode, closeReason, {
+      phase: "pre-hello",
+      socketOpened: true,
+      transportValidated: true,
+      transientPreHelloCleanClose: false,
+    });
+  } else if (startMode === "close") {
+    lastClientOptions?.onClose?.(closeCode, closeReason);
+  }
+}
+
+type GatewayClientRequestImpl = (
+  method: string,
+  params: unknown,
+  opts?: GatewayClientRequestOptions,
+) => Promise<unknown>;
+let gatewayClientRequest: GatewayClientRequestImpl = async (method, params, opts) => {
+  lastRequestOptions = { method, params, opts };
+  return { ok: true };
+};
+let gatewayClientStart = startStubGatewayClient;
+let gatewayClientStopAndWait = async () => {};
 
 vi.mock("./client.js", () => ({
-  describeGatewayCloseCode: (code: number) => {
-    if (code === 1000) {
-      return "normal closure";
-    }
-    if (code === 1006) {
-      return "abnormal closure (no close frame)";
-    }
-    return undefined;
-  },
+  isGatewayConnectAssemblyError: (value: unknown) => connectAssemblyErrorState.has(value),
   GatewayClient: class {
-    constructor(opts: {
-      url?: string;
-      token?: string;
-      password?: string;
-      preauthHandshakeTimeoutMs?: number;
-      clientName?: string;
-      clientDisplayName?: string;
-      mode?: string;
-      scopes?: string[];
-      onHelloOk?: (hello: { features?: { methods?: string[] } }) => void | Promise<void>;
-      onClose?: (code: number, reason: string) => void;
-    }) {
+    constructor(opts: GatewayClientOptions) {
       lastClientOptions = opts;
     }
-    async request(
-      method: string,
-      params: unknown,
-      opts?: { expectFinal?: boolean; timeoutMs?: number | null },
-    ) {
-      lastRequestOptions = { method, params, opts };
-      return { ok: true };
+    async request(method: string, params: unknown, opts?: GatewayClientRequestOptions) {
+      return await gatewayClientRequest(method, params, opts);
     }
     start() {
-      startCalls += 1;
-      if (startMode === "hello") {
-        void lastClientOptions?.onHelloOk?.({
-          features: {
-            methods: helloMethods,
-          },
-        });
-      } else if (startMode === "startup-retry-then-hello") {
-        void lastClientOptions?.onHelloOk?.({
-          features: {
-            methods: helloMethods,
-          },
-        });
-      } else if (startMode === "close") {
-        lastClientOptions?.onClose?.(closeCode, closeReason);
-      }
+      gatewayClientStart();
     }
     stop() {}
+    async stopAndWait() {
+      await gatewayClientStopAndWait();
+    }
   },
 }));
 
@@ -132,62 +293,29 @@ vi.mock("./event-loop-ready.js", () => ({
 }));
 
 const {
-  __testing,
   buildGatewayConnectionDetails,
+  buildGatewayProbeConnectionDetails,
   callGateway,
   callGatewayCli,
-  callGatewayScoped,
+  formatGatewayAuthErrorJson,
+  formatGatewayClientRequestErrorJson,
+  formatGatewayTransportErrorJson,
+  GatewayCredentialsRequiredError,
+  GatewayExplicitAuthRequiredError,
+  isImplicitLocalGatewayTarget,
   isGatewayTransportError,
 } = await import("./call.js");
-
-class StubGatewayClient {
-  constructor(opts: {
-    url?: string;
-    token?: string;
-    password?: string;
-    preauthHandshakeTimeoutMs?: number;
-    clientName?: string;
-    clientDisplayName?: string;
-    mode?: string;
-    scopes?: string[];
-    onHelloOk?: (hello: { features?: { methods?: string[] } }) => void | Promise<void>;
-    onClose?: (code: number, reason: string) => void;
-  }) {
-    lastClientOptions = opts;
-  }
-  async request(
-    method: string,
-    params: unknown,
-    opts?: { expectFinal?: boolean; timeoutMs?: number | null },
-  ) {
-    lastRequestOptions = { method, params, opts };
-    return { ok: true };
-  }
-  start() {
-    startCalls += 1;
-    if (startMode === "hello") {
-      void lastClientOptions?.onHelloOk?.({
-        features: {
-          methods: helloMethods,
-        },
-      });
-    } else if (startMode === "startup-retry-then-hello") {
-      void lastClientOptions?.onHelloOk?.({
-        features: {
-          methods: helloMethods,
-        },
-      });
-    } else if (startMode === "close") {
-      lastClientOptions?.onClose?.(closeCode, closeReason);
-    }
-  }
-  stop() {}
-  async stopAndWait() {}
-}
+const { GatewaySecretRefUnavailableError } = await import("./credentials.js");
 
 function resetGatewayCallMocks() {
-  getRuntimeConfig.mockClear();
-  resolveGatewayPort.mockClear();
+  getRuntimeConfig.mockReset().mockReturnValue({});
+  resolveGatewayPort.mockReset().mockReturnValue(18789);
+  gatewayConfigMocks.resolveConfigPath.mockClear();
+  gatewayConfigMocks.resolveStateDir.mockClear();
+  gatewayConfigMocks.inspectGatewayTlsCertificate
+    .mockReset()
+    .mockResolvedValue({ ok: false, error: "gateway tls is disabled" });
+  gatewayConfigMocks.useActualDispatchConfig = false;
   pickPrimaryTailnetIPv4.mockClear();
   pickPrimaryLanIPv4.mockClear();
   lastClientOptions = null;
@@ -205,25 +333,36 @@ function resetGatewayCallMocks() {
   startCalls = 0;
   closeCode = 1006;
   closeReason = "";
+  helloCapabilities = [];
   helloMethods = ["health", "secrets.resolve"];
-  const loadConfigForTests = getRuntimeConfig as unknown as () => OpenClawConfig;
-  const resolveGatewayPortForTests = resolveGatewayPort as unknown as (
-    cfg?: OpenClawConfig,
-    env?: NodeJS.ProcessEnv,
-  ) => number;
-  __testing.setDepsForTests({
-    createGatewayClient: (opts) =>
-      new StubGatewayClient(opts as ConstructorParameters<typeof StubGatewayClient>[0]) as never,
-    getRuntimeConfig: loadConfigForTests,
-    loadOrCreateDeviceIdentity: () => {
-      if (deviceIdentityState.throwOnLoad) {
-        throw new Error("read-only identity dir");
-      }
-      return deviceIdentityState.value;
-    },
-    resolveGatewayPort: resolveGatewayPortForTests,
-  });
+  connectError = null;
+  gatewayClientRequest = async (method, params, opts) => {
+    lastRequestOptions = { method, params, opts };
+    return { ok: true };
+  };
+  gatewayClientStart = startStubGatewayClient;
+  gatewayClientStopAndWait = async () => {};
   deviceIdentityState.throwOnLoad = false;
+  loadOrCreateDeviceIdentityMock.mockReset();
+  loadDeviceIdentityIfPresentMock.mockReset();
+  loadDeviceAuthTokenMock.mockReset();
+  loadDeviceAuthTokenMock.mockReturnValue({
+    token: "paired-device-token",
+    role: "operator",
+    scopes: ["operator.read"],
+    updatedAtMs: 123,
+  });
+  loadDeviceAuthTokenReadOnlyMock.mockReset();
+  loadDeviceAuthTokenReadOnlyMock.mockReturnValue({
+    token: "paired-device-token",
+    role: "operator",
+    scopes: ["operator.read"],
+    updatedAtMs: 123,
+  });
+  loadOriginDeviceTokenMock.mockReset();
+  loadOriginDeviceTokenMock.mockReturnValue(null);
+  loadOriginDeviceTokenReadOnlyMock.mockReset();
+  loadOriginDeviceTokenReadOnlyMock.mockReturnValue(null);
 }
 
 function setGatewayNetworkDefaults(port = 18789) {
@@ -231,8 +370,20 @@ function setGatewayNetworkDefaults(port = 18789) {
   pickPrimaryTailnetIPv4.mockReturnValue(undefined);
 }
 
+function setGatewayConfig(gateway: NonNullable<OpenClawConfig["gateway"]>) {
+  getRuntimeConfig.mockReturnValue({ gateway });
+}
+
+function setEnvSecretGatewayConfig(gateway: NonNullable<OpenClawConfig["gateway"]>) {
+  const config = {
+    gateway,
+    secrets: { providers: { default: { source: "env" } } },
+  } satisfies OpenClawConfig;
+  getRuntimeConfig.mockReturnValue(config);
+}
+
 function setLocalLoopbackGatewayConfig(port = 18789) {
-  getRuntimeConfig.mockReturnValue({ gateway: { mode: "local", bind: "loopback" } });
+  setGatewayConfig({ mode: "local", bind: "loopback" });
   setGatewayNetworkDefaults(port);
 }
 
@@ -257,19 +408,37 @@ describe("callGateway url resolution", () => {
   ]);
 
   beforeEach(() => {
+    resetConfigRuntimeState();
     envSnapshot.restore();
-    delete process.env.OPENCLAW_ALLOW_INSECURE_PRIVATE_WS;
-    delete process.env.OPENCLAW_CONFIG_PATH;
-    delete process.env.OPENCLAW_GATEWAY_PORT;
-    delete process.env.OPENCLAW_GATEWAY_URL;
-    delete process.env.OPENCLAW_GATEWAY_TOKEN;
-    delete process.env.OPENCLAW_STATE_DIR;
+    deleteTestEnvValue("OPENCLAW_ALLOW_INSECURE_PRIVATE_WS");
+    deleteTestEnvValue("OPENCLAW_CONFIG_PATH");
+    deleteTestEnvValue("OPENCLAW_GATEWAY_PORT");
+    deleteTestEnvValue("OPENCLAW_GATEWAY_URL");
+    deleteTestEnvValue("OPENCLAW_GATEWAY_TOKEN");
+    deleteTestEnvValue("OPENCLAW_STATE_DIR");
     resetGatewayCallMocks();
   });
 
+  it("classifies only the implicit configured local Gateway as local", async () => {
+    setLocalLoopbackGatewayConfig();
+    await expect(isImplicitLocalGatewayTarget({})).resolves.toBe(true);
+
+    setGatewayConfig({ mode: "remote", remote: { url: "wss://gateway.example/ws" } });
+    await expect(isImplicitLocalGatewayTarget({})).resolves.toBe(false);
+    await expect(isImplicitLocalGatewayTarget({ localPortOverride: 19082 })).resolves.toBe(true);
+
+    setLocalLoopbackGatewayConfig();
+    await expect(isImplicitLocalGatewayTarget({ url: "ws://127.0.0.1:18789" })).resolves.toBe(
+      false,
+    );
+
+    process.env.OPENCLAW_GATEWAY_URL = "wss://gateway.example/ws";
+    await expect(isImplicitLocalGatewayTarget({})).resolves.toBe(false);
+  });
+
   afterEach(() => {
+    resetConfigRuntimeState();
     envSnapshot.restore();
-    __testing.resetDepsForTests();
   });
 
   it.each([
@@ -282,7 +451,7 @@ describe("callGateway url resolution", () => {
       tailnetIp: undefined,
     },
   ])("local auto-bind: $label", async ({ tailnetIp }) => {
-    getRuntimeConfig.mockReturnValue({ gateway: { mode: "local", bind: "auto" } });
+    setGatewayConfig({ mode: "local", bind: "auto" });
     resolveGatewayPort.mockReturnValue(18800);
     pickPrimaryTailnetIPv4.mockReturnValue(tailnetIp);
 
@@ -339,9 +508,7 @@ describe("callGateway url resolution", () => {
   });
 
   it("uses url override in remote mode even when remote url is missing", async () => {
-    getRuntimeConfig.mockReturnValue({
-      gateway: { mode: "remote", bind: "loopback", remote: {} },
-    });
+    setGatewayConfig({ mode: "remote", bind: "loopback", remote: {} });
     resolveGatewayPort.mockReturnValue(18789);
     pickPrimaryTailnetIPv4.mockReturnValue(undefined);
 
@@ -371,6 +538,55 @@ describe("callGateway url resolution", () => {
     expect(lastClientOptions?.token).toBe("test-token");
   });
 
+  it("still connects to an explicit secure url when config cannot be loaded", async () => {
+    // A secure target reads config only for gateway.remote.edgeAuth, so an invalid
+    // config must not block a connection the flags already fully describe.
+    getRuntimeConfig.mockImplementation(() => {
+      throw new Error("invalid config");
+    });
+
+    await callGatewayCli({
+      method: "health",
+      url: "wss://override.example/ws",
+      token: "test-token",
+    });
+
+    expect(getRuntimeConfig).toHaveBeenCalled();
+    expect(lastClientOptions?.url).toBe("wss://override.example/ws");
+    expect(lastClientOptions?.token).toBe("test-token");
+    expect(lastClientOptions?.edgeAuthHeaders).toBeUndefined();
+  });
+
+  it("reconnects with admin only after sessions.create cwd returns structured escalation", async () => {
+    const scopeAttempts: Array<readonly string[] | undefined> = [];
+    gatewayClientRequest = async () => {
+      scopeAttempts.push(lastClientOptions?.scopes);
+      if (scopeAttempts.length === 1) {
+        throw Object.assign(new Error("missing scope: operator.admin"), {
+          name: "GatewayClientRequestError",
+          gatewayCode: "FORBIDDEN",
+          details: {
+            code: "MISSING_SCOPE",
+            missingScope: "operator.admin",
+            requiredScopes: ["operator.admin"],
+          },
+          retryable: false,
+        });
+      }
+      return { key: "agent:main:dashboard:created" };
+    };
+    setLocalLoopbackGatewayConfig();
+
+    await expect(
+      callGatewayCli({
+        method: "sessions.create",
+        params: { cwd: "/outside/configured/workspaces" },
+      }),
+    ).resolves.toEqual({ key: "agent:main:dashboard:created" });
+
+    expect(scopeAttempts).toEqual([["operator.write"], ["operator.admin"]]);
+  });
+
   it("keeps direct-local backend shared-token auth independent of paired device state", async () => {
     setLocalLoopbackGatewayConfig();
 
@@ -386,7 +602,121 @@ describe("callGateway url resolution", () => {
     expect(lastClientOptions?.deviceIdentity).toBeNull();
   });
 
-  it("keeps device identity enabled for explicit CLI loopback shared-token auth", async () => {
+  it("keeps device identity for dotted-localhost shared-token auth", async () => {
+    await callGateway({
+      method: "health",
+      url: "ws://localhost.:18789",
+      token: "explicit-token",
+    });
+
+    expect(lastClientOptions?.deviceIdentity).toEqual(deviceIdentityState.value);
+  });
+
+  it("fails before opening a websocket when backend token auth has no shared or paired credential", async () => {
+    setGatewayConfig({ mode: "local", bind: "loopback", auth: { mode: "token" } });
+    setGatewayNetworkDefaults();
+    loadDeviceAuthTokenMock.mockReturnValue(null);
+
+    await expect(callGateway({ method: "sessions.list" })).rejects.toThrow(
+      "requires credentials before opening a websocket",
+    );
+
+    expect(lastClientOptions).toBeNull();
+    expect(startCalls).toBe(0);
+    expect(loadDeviceAuthTokenMock).toHaveBeenCalledWith({
+      deviceId: "test-device-identity",
+      role: "operator",
+      env: process.env,
+    });
+  });
+
+  it.each(["token", "password"] as const)(
+    "keeps %s auth preflight reads off writable shared state in read-only mode",
+    async (authMode) => {
+      setGatewayConfig({ mode: "local", bind: "loopback", auth: { mode: authMode } });
+      setGatewayNetworkDefaults();
+      loadDeviceAuthTokenReadOnlyMock.mockReturnValue({
+        token: "paired-device-token",
+        role: "operator",
+        scopes: ["operator.read"],
+        updatedAtMs: 123,
+      });
+      loadDeviceAuthTokenMock.mockReturnValue(null);
+
+      await callGateway({ method: "sessions.list", sharedStateMode: "read-only" });
+
+      expect(loadDeviceAuthTokenReadOnlyMock).toHaveBeenCalledWith({
+        deviceId: "test-device-identity",
+        role: "operator",
+        env: process.env,
+      });
+      expect(loadDeviceAuthTokenMock).not.toHaveBeenCalled();
+      expect(lastClientOptions?.sharedStateMode).toBe("read-only");
+    },
+  );
+
+  it("fails before opening a websocket when default token auth has no shared or paired credential", async () => {
+    setGatewayConfig({ mode: "local", bind: "loopback" });
+    setGatewayNetworkDefaults();
+    loadDeviceAuthTokenMock.mockReturnValue(null);
+
+    await expect(callGateway({ method: "sessions.list" })).rejects.toThrow(
+      "requires credentials before opening a websocket",
+    );
+
+    expect(lastClientOptions).toBeNull();
+    expect(startCalls).toBe(0);
+  });
+
+  it("allows paired backend device auth without explicit shared credentials", async () => {
+    setGatewayConfig({ mode: "local", bind: "loopback", auth: { mode: "token" } });
+    setGatewayNetworkDefaults();
+    loadDeviceAuthTokenMock.mockReturnValue({
+      token: "paired-device-token",
+      role: "operator",
+      scopes: ["operator.read"],
+      updatedAtMs: 123,
+    });
+
+    await callGateway({ method: "sessions.list" });
+
+    expect(lastClientOptions?.url).toBe("ws://127.0.0.1:18789");
+    expect(lastClientOptions?.token).toBeUndefined();
+    expect(lastClientOptions?.deviceIdentity).toEqual(deviceIdentityState.value);
+  });
+
+  it("allows Tailscale-authenticated backend calls without client-side credentials", async () => {
+    setGatewayConfig({
+      mode: "remote",
+      remote: { url: "wss://openclaw.example.test" },
+      auth: { mode: "token", allowTailscale: true },
+    });
+    setGatewayNetworkDefaults();
+
+    await callGateway({ method: "sessions.list" });
+
+    expect(lastClientOptions?.url).toBe("wss://openclaw.example.test");
+    expect(lastClientOptions?.token).toBeUndefined();
+    expect(lastClientOptions?.password).toBeUndefined();
+  });
+
+  it("allows Tailscale Serve backend calls without explicit allowTailscale", async () => {
+    setGatewayConfig({
+      mode: "remote",
+      remote: { url: "wss://openclaw.example.test" },
+      auth: { mode: "token" },
+      tailscale: { mode: "serve" },
+    });
+    setGatewayNetworkDefaults();
+
+    await callGateway({ method: "sessions.list" });
+
+    expect(lastClientOptions?.url).toBe("wss://openclaw.example.test");
+    expect(lastClientOptions?.token).toBeUndefined();
+    expect(lastClientOptions?.password).toBeUndefined();
+  });
+
+  it("omits device identity for explicit CLI loopback shared-token auth", async () => {
     setLocalLoopbackGatewayConfig();
 
     await callGateway({
@@ -398,6 +728,17 @@ describe("callGateway url resolution", () => {
 
     expect(lastClientOptions?.url).toBe("ws://127.0.0.1:18789");
     expect(lastClientOptions?.token).toBe("explicit-token");
+    expect(lastClientOptions?.deviceIdentity).toBeNull();
+  });
+
+  it("keeps CLI device identity when an ambient token is inactive under auth mode none", async () => {
+    setGatewayConfig({ mode: "local", bind: "loopback", auth: { mode: "none" } });
+    setGatewayNetworkDefaults();
+    process.env.OPENCLAW_GATEWAY_TOKEN = "inactive-env-token";
+
+    await callGatewayCli({ method: "health" });
+
+    expect(lastClientOptions?.token).toBe("inactive-env-token");
     expect(lastClientOptions?.deviceIdentity).toEqual(deviceIdentityState.value);
   });
 
@@ -447,9 +788,7 @@ describe("callGateway url resolution", () => {
   });
 
   it("uses OPENCLAW_GATEWAY_URL env override in remote mode when remote URL is missing", async () => {
-    getRuntimeConfig.mockReturnValue({
-      gateway: { mode: "remote", bind: "loopback", remote: {} },
-    });
+    setGatewayConfig({ mode: "remote", bind: "loopback", remote: {} });
     resolveGatewayPort.mockReturnValue(18789);
     pickPrimaryTailnetIPv4.mockReturnValue(undefined);
     process.env.OPENCLAW_GATEWAY_URL = "wss://gateway-in-container.internal:9443/ws";
@@ -464,21 +803,54 @@ describe("callGateway url resolution", () => {
     expect(lastClientOptions?.password).toBeUndefined();
   });
 
+  it("lets an explicit local port override bypass gateway env URL and port", async () => {
+    setGatewayConfig({ mode: "local", bind: "loopback" });
+    resolveGatewayPort.mockImplementation((_config?: unknown, env?: unknown) => {
+      const candidateEnv = env as NodeJS.ProcessEnv | undefined;
+      return Number(candidateEnv?.OPENCLAW_GATEWAY_PORT ?? 18789);
+    });
+    pickPrimaryTailnetIPv4.mockReturnValue(undefined);
+    process.env.OPENCLAW_GATEWAY_URL = "wss://gateway-in-container.internal:9443/ws";
+    process.env.OPENCLAW_GATEWAY_PORT = "19001";
+    process.env.OPENCLAW_GATEWAY_TOKEN = "env-token";
+
+    await callGateway({
+      method: "health",
+      token: "explicit-token",
+      localPortOverride: 19082,
+    });
+
+    expect(lastClientOptions?.url).toBe("ws://127.0.0.1:19082");
+    expect(lastClientOptions?.token).toBe("explicit-token");
+  });
+
+  it("lets an explicit local port override bypass the configured remote URL", async () => {
+    setGatewayConfig({
+      mode: "remote",
+      bind: "loopback",
+      remote: { url: "wss://gateway.example/ws", token: "remote-token" },
+    });
+    resolveGatewayPort.mockReturnValue(18789);
+    pickPrimaryTailnetIPv4.mockReturnValue(undefined);
+
+    await callGateway({
+      method: "health",
+      token: "explicit-token",
+      localPortOverride: 19082,
+    });
+
+    expect(lastClientOptions?.url).toBe("ws://127.0.0.1:19082");
+    expect(lastClientOptions?.token).toBe("explicit-token");
+  });
+
   it("uses env URL override credentials without resolving local password SecretRefs", async () => {
-    getRuntimeConfig.mockReturnValue({
-      gateway: {
-        mode: "local",
-        auth: {
-          mode: "password",
-          password: { source: "env", provider: "default", id: "MISSING_LOCAL_PASSWORD" },
-        },
+    setEnvSecretGatewayConfig({
+      mode: "local",
+      auth: {
+        mode: "password",
+        password: { source: "env", provider: "default", id: "MISSING_LOCAL_PASSWORD" },
       },
-      secrets: {
-        providers: {
-          default: { source: "env" },
-        },
-      },
-    } as unknown as OpenClawConfig);
+    });
     resolveGatewayPort.mockReturnValue(18789);
     pickPrimaryTailnetIPv4.mockReturnValue(undefined);
     process.env.OPENCLAW_GATEWAY_URL = "wss://gateway-in-container.internal:9443/ws";
@@ -494,13 +866,11 @@ describe("callGateway url resolution", () => {
   });
 
   it("uses remote tlsFingerprint with env URL override", async () => {
-    getRuntimeConfig.mockReturnValue({
-      gateway: {
-        mode: "remote",
-        remote: {
-          url: "wss://remote.example:9443/ws",
-          tlsFingerprint: "remote-fingerprint",
-        },
+    setGatewayConfig({
+      mode: "remote",
+      remote: {
+        url: "wss://remote.example:9443/ws",
+        tlsFingerprint: `sha256:${TLS_FINGERPRINT.toUpperCase()}`,
       },
     });
     setGatewayNetworkDefaults(18789);
@@ -512,17 +882,15 @@ describe("callGateway url resolution", () => {
       method: "health",
     });
 
-    expect(lastClientOptions?.tlsFingerprint).toBe("remote-fingerprint");
+    expect(lastClientOptions?.tlsFingerprint).toBe(TLS_FINGERPRINT);
   });
 
   it("does not apply remote tlsFingerprint for CLI url override", async () => {
-    getRuntimeConfig.mockReturnValue({
-      gateway: {
-        mode: "remote",
-        remote: {
-          url: "wss://remote.example:9443/ws",
-          tlsFingerprint: "remote-fingerprint",
-        },
+    setGatewayConfig({
+      mode: "remote",
+      remote: {
+        url: "wss://remote.example:9443/ws",
+        tlsFingerprint: `sha256:${TLS_FINGERPRINT}`,
       },
     });
     setGatewayNetworkDefaults(18789);
@@ -554,6 +922,60 @@ describe("callGateway url resolution", () => {
     expect(lastClientOptions?.scopes).toEqual(expectedScopes);
   });
 
+  it.each([
+    [
+      "device dispatch",
+      "sessions.dispatch",
+      { key: "agent:main:thread", deviceId: "device-1" },
+      ["operator.write"],
+    ],
+    [
+      "profile dispatch",
+      "sessions.dispatch",
+      { key: "agent:main:thread", profileId: "development" },
+      ["operator.admin"],
+    ],
+    [
+      "gateway move",
+      "sessions.move",
+      {
+        key: "agent:main:thread",
+        expected: { generation: 1, environmentId: "environment-1", ownerEpoch: 1 },
+        target: { kind: "gateway" },
+      },
+      ["operator.write"],
+    ],
+    [
+      "device move",
+      "sessions.move",
+      {
+        key: "agent:main:thread",
+        expected: { generation: 1, environmentId: "environment-1", ownerEpoch: 1 },
+        target: { kind: "device", deviceId: "device-1" },
+      },
+      ["operator.write"],
+    ],
+    [
+      "profile move",
+      "sessions.move",
+      {
+        key: "agent:main:thread",
+        expected: { generation: 1, environmentId: "environment-1", ownerEpoch: 1 },
+        target: { kind: "profile", profileId: "development" },
+      },
+      ["operator.admin"],
+    ],
+  ] as const)(
+    "selects least-privilege CLI scopes for %s",
+    async (_name, method, params, scopes) => {
+      setLocalLoopbackGatewayConfig();
+
+      await callGatewayCli({ method, params });
+
+      expect(lastClientOptions?.scopes).toEqual(scopes);
+    },
+  );
+
   it("keeps legacy broad scopes for unclassified explicit CLI methods", async () => {
     setLocalLoopbackGatewayConfig();
 
@@ -564,6 +986,30 @@ describe("callGateway url resolution", () => {
       "operator.read",
       "operator.write",
       "operator.approvals",
+      "operator.questions",
+      "operator.pairing",
+      "operator.talk.secrets",
+    ]);
+  });
+
+  it("falls back to broad operator scopes for unresolved plugin session actions", async () => {
+    setLocalLoopbackGatewayConfig();
+    setActivePluginRegistry(createEmptyPluginRegistry());
+
+    await callGatewayCli({
+      method: "plugins.sessionAction",
+      params: {
+        pluginId: "remote-plugin",
+        actionId: "approve",
+      },
+    });
+
+    expect(lastClientOptions?.scopes).toEqual([
+      "operator.admin",
+      "operator.read",
+      "operator.write",
+      "operator.approvals",
+      "operator.questions",
       "operator.pairing",
       "operator.talk.secrets",
     ]);
@@ -572,11 +1018,365 @@ describe("callGateway url resolution", () => {
   it("passes explicit scopes through, including empty arrays", async () => {
     setLocalLoopbackGatewayConfig();
 
-    await callGatewayScoped({ method: "health", scopes: ["operator.read"] });
+    await callGateway({ method: "health", scopes: ["operator.read"] });
     expect(lastClientOptions?.scopes).toEqual(["operator.read"]);
 
-    await callGatewayScoped({ method: "health", scopes: [] });
-    expect(lastClientOptions?.scopes).toEqual([]);
+    await callGateway({ method: "health", scopes: [] });
+    expect(lastClientOptions?.scopes).toStrictEqual([]);
+  });
+
+  it("reuses stored device auth without requesting stronger scopes", async () => {
+    setLocalLoopbackGatewayConfig();
+    loadDeviceAuthTokenMock.mockReturnValue({
+      token: "paired-device-token",
+      role: "operator",
+      scopes: ["operator.read", "operator.pairing"],
+      updatedAtMs: 123,
+    });
+
+    await callGatewayCli({ method: "node.list", useStoredDeviceAuth: true });
+
+    expect(lastClientOptions?.token).toBeUndefined();
+    expect(lastClientOptions?.password).toBeUndefined();
+    expect(lastClientOptions?.scopes).toBeUndefined();
+    expect(lastClientOptions?.deviceIdentity).toEqual(deviceIdentityState.value);
+    expect(lastClientOptions?.preparedDeviceAuth).toEqual({
+      token: "paired-device-token",
+      role: "operator",
+      scopes: ["operator.read", "operator.pairing"],
+      updatedAtMs: 123,
+    });
+  });
+
+  it("keeps explicit credentials and diagnostic scopes ahead of stored device auth", async () => {
+    setLocalLoopbackGatewayConfig();
+
+    await callGatewayCli({
+      method: "node.list",
+      token: "explicit-token",
+      useStoredDeviceAuth: true,
+      requiredStoredDeviceAuthScopes: ["operator.read", "operator.pairing"],
+    });
+
+    expect(lastClientOptions?.token).toBe("explicit-token");
+    expect(lastClientOptions?.scopes).toEqual(["operator.read", "operator.pairing"]);
+  });
+
+  it("prefers stored device auth over configured local credentials", async () => {
+    setGatewayConfig({
+      mode: "local",
+      bind: "loopback",
+      auth: { mode: "token", token: "configured-token" },
+    });
+    setGatewayNetworkDefaults();
+
+    await callGatewayCli({ method: "node.list", useStoredDeviceAuth: true });
+
+    expect(lastClientOptions?.token).toBeUndefined();
+    expect(lastClientOptions?.scopes).toBeUndefined();
+  });
+
+  it("does not resolve configured local SecretRefs when using stored device auth", async () => {
+    setEnvSecretGatewayConfig({
+      mode: "local",
+      bind: "loopback",
+      auth: {
+        mode: "password",
+        password: { source: "env", provider: "default", id: "MISSING_LOCAL_PASSWORD" },
+      },
+    });
+    setGatewayNetworkDefaults();
+
+    await callGatewayCli({ method: "node.list", useStoredDeviceAuth: true });
+
+    expect(lastClientOptions?.password).toBeUndefined();
+    expect(lastClientOptions?.deviceIdentity).toEqual(deviceIdentityState.value);
+  });
+
+  it("rejects stored device auth that lacks caller-required scopes", async () => {
+    setLocalLoopbackGatewayConfig();
+    loadDeviceAuthTokenMock.mockReturnValue({
+      token: "paired-device-token",
+      role: "operator",
+      scopes: ["operator.read"],
+      updatedAtMs: 123,
+    });
+
+    await expect(
+      callGatewayCli({
+        method: "node.list",
+        useStoredDeviceAuth: true,
+        requiredStoredDeviceAuthScopes: ["operator.read", "operator.pairing"],
+      }),
+    ).rejects.toMatchObject({ name: "GatewayStoredDeviceAuthUnavailableError" });
+
+    expect(lastClientOptions).toBeNull();
+  });
+
+  it("uses stored device auth for the exact configured remote gateway origin", async () => {
+    getRuntimeConfig.mockReturnValue(makeRemotePasswordGatewayConfig("remote-password"));
+    setGatewayNetworkDefaults();
+    loadOriginDeviceTokenMock.mockReturnValue({
+      token: "remote-device-token",
+      role: "operator",
+      scopes: ["operator.read"],
+      updatedAtMs: 123,
+    });
+
+    await callGatewayCli({ method: "node.list", useStoredDeviceAuth: true });
+
+    expect(lastClientOptions?.token).toBeUndefined();
+    expect(lastClientOptions?.password).toBeUndefined();
+    expect(lastClientOptions?.scopes).toBeUndefined();
+    expect(lastClientOptions?.deviceAuthScope).toBe("wss://remote.example:18789");
+    expect(loadOriginDeviceTokenMock).toHaveBeenCalledWith({
+      gatewayScope: "wss://remote.example:18789",
+      deviceId: deviceIdentityState.value.deviceId,
+      role: "operator",
+      env: process.env,
+    });
+  });
+
+  it("keeps remote CLI identity and stored auth reads off writable shared state", async () => {
+    getRuntimeConfig.mockReturnValue(makeRemotePasswordGatewayConfig("remote-password"));
+    setGatewayNetworkDefaults();
+    loadOriginDeviceTokenReadOnlyMock.mockReturnValue({
+      token: "remote-device-token",
+      role: "operator",
+      scopes: ["operator.read"],
+      updatedAtMs: 123,
+    });
+
+    await callGatewayCli({
+      method: "node.list",
+      useStoredDeviceAuth: true,
+      sharedStateMode: "read-only",
+    });
+
+    expect(lastClientOptions?.deviceIdentity).toEqual(deviceIdentityState.value);
+    expect(lastClientOptions?.sharedStateMode).toBe("read-only");
+    expect(loadDeviceIdentityIfPresentMock).toHaveBeenCalledOnce();
+    expect(loadOrCreateDeviceIdentityMock).not.toHaveBeenCalled();
+    expect(loadOriginDeviceTokenReadOnlyMock).toHaveBeenCalledWith({
+      gatewayScope: "wss://remote.example:18789",
+      deviceId: deviceIdentityState.value.deviceId,
+      role: "operator",
+      env: process.env,
+    });
+    expect(loadOriginDeviceTokenMock).not.toHaveBeenCalled();
+  });
+
+  it("isolates the accepted-hello observer from the RPC", async () => {
+    let observedHello: HelloOk | undefined;
+    const onHelloOk = vi.fn((hello: HelloOk) => {
+      observedHello = hello;
+      throw new Error("observer failed");
+    });
+
+    await expect(
+      callGateway({
+        method: "status",
+        scopes: ["operator.read"],
+        sharedStateMode: "read-only",
+        preauthHandshakeTimeoutMs: 2_345,
+        onHelloOk,
+      }),
+    ).resolves.toEqual({ ok: true });
+
+    expect(onHelloOk).toHaveBeenCalledOnce();
+    expect(observedHello).toEqual(makeStubGatewayHello());
+    expect(lastRequestOptions?.method).toBe("status");
+    expect(lastClientOptions?.sharedStateMode).toBe("read-only");
+    expect(lastClientOptions?.preauthHandshakeTimeoutMs).toBe(2_345);
+  });
+
+  it("uses stored device auth for the exact normalized url override origin", async () => {
+    setLocalLoopbackGatewayConfig();
+    loadOriginDeviceTokenMock.mockImplementation((...args: unknown[]) =>
+      (args[0] as { gatewayScope: string }).gatewayScope === "wss://other.example/rpc"
+        ? {
+            token: "remote-device-token",
+            role: "operator",
+            scopes: ["operator.read"],
+            updatedAtMs: 123,
+          }
+        : null,
+    );
+
+    await callGatewayCli({
+      method: "node.list",
+      url: "wss://other.example/rpc/?ignored=1",
+      useStoredDeviceAuth: true,
+    });
+
+    expect(lastClientOptions?.token).toBeUndefined();
+    expect(lastClientOptions?.deviceAuthScope).toBe("wss://other.example/rpc");
+    expect(loadOriginDeviceTokenMock).toHaveBeenCalledWith({
+      gatewayScope: "wss://other.example/rpc",
+      deviceId: deviceIdentityState.value.deviceId,
+      role: "operator",
+      env: process.env,
+    });
+  });
+
+  it("does not reuse stored device auth from a different url override origin", async () => {
+    setLocalLoopbackGatewayConfig();
+    loadOriginDeviceTokenMock.mockImplementation((...args: unknown[]) =>
+      (args[0] as { gatewayScope: string }).gatewayScope === "wss://first.example/rpc"
+        ? {
+            token: "first-origin-device-token",
+            role: "operator",
+            scopes: ["operator.read"],
+            updatedAtMs: 123,
+          }
+        : null,
+    );
+
+    await expect(
+      callGatewayCli({
+        method: "node.list",
+        url: "wss://second.example/rpc",
+        useStoredDeviceAuth: true,
+      }),
+    ).rejects.toMatchObject({
+      name: "GatewayStoredDeviceAuthUnavailableError",
+      message: expect.stringMatching(/tui --url.*Settings -> Devices.*devices approve --latest/s),
+    });
+
+    expect(loadOriginDeviceTokenMock).toHaveBeenCalledWith({
+      gatewayScope: "wss://second.example/rpc",
+      deviceId: deviceIdentityState.value.deviceId,
+      role: "operator",
+      env: process.env,
+    });
+    expect(lastClientOptions).toBeNull();
+  });
+
+  it("explains how to pair when remote origin device auth is unavailable", async () => {
+    getRuntimeConfig.mockReturnValue(makeRemotePasswordGatewayConfig("remote-password"));
+    setGatewayNetworkDefaults();
+
+    await expect(
+      callGatewayCli({ method: "node.list", useStoredDeviceAuth: true }),
+    ).rejects.toMatchObject({
+      name: "GatewayStoredDeviceAuthUnavailableError",
+      message: expect.stringMatching(/tui --url.*Settings -> Devices.*devices approve --latest/s),
+    });
+
+    expect(lastClientOptions).toBeNull();
+  });
+
+  it("lets explicit url auth win while binding issued tokens to that origin", async () => {
+    setLocalLoopbackGatewayConfig();
+
+    await callGatewayCli({
+      method: "node.list",
+      url: "wss://other.example/rpc/?ignored=1",
+      token: "explicit-token",
+      useStoredDeviceAuth: true,
+      requiredStoredDeviceAuthScopes: ["operator.read", "operator.pairing"],
+    });
+
+    expect(lastClientOptions?.token).toBe("explicit-token");
+    expect(lastClientOptions?.deviceAuthScope).toBe("wss://other.example/rpc");
+    expect(lastClientOptions?.scopes).toEqual(["operator.read", "operator.pairing"]);
+    expect(loadOriginDeviceTokenMock).not.toHaveBeenCalled();
+  });
+
+  it("fails before connecting when stored device auth is unavailable", async () => {
+    setGatewayConfig({ mode: "local", bind: "loopback", auth: { mode: "none" } });
+    setGatewayNetworkDefaults();
+    loadDeviceAuthTokenMock.mockReturnValue(null);
+
+    await expect(
+      callGatewayCli({ method: "node.list", useStoredDeviceAuth: true }),
+    ).rejects.toThrow("requires credentials before opening a websocket");
+
+    expect(lastClientOptions).toBeNull();
+    expect(startCalls).toBe(0);
+  });
+
+  it("uses local backend shared auth without a device identity when required", async () => {
+    setLocalLoopbackGatewayConfig();
+
+    await callGateway({
+      method: "node.list",
+      token: "explicit-token",
+      scopes: ["operator.read", "operator.pairing"],
+      requireLocalBackendSharedAuth: true,
+    });
+
+    expect(lastClientOptions?.clientName).toBe(GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT);
+    expect(lastClientOptions?.mode).toBe(GATEWAY_CLIENT_MODES.BACKEND);
+    expect(lastClientOptions?.scopes).toEqual(["operator.read", "operator.pairing"]);
+    expect(lastClientOptions?.deviceIdentity).toBeNull();
+  });
+
+  it("uses local backend auth-none without a device identity when required", async () => {
+    setGatewayConfig({ mode: "local", bind: "loopback", auth: { mode: "none" } });
+    setGatewayNetworkDefaults();
+
+    await callGateway({
+      method: "node.list",
+      scopes: ["operator.read", "operator.pairing"],
+      requireLocalBackendSharedAuth: true,
+    });
+
+    expect(lastClientOptions?.clientName).toBe(GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT);
+    expect(lastClientOptions?.mode).toBe(GATEWAY_CLIENT_MODES.BACKEND);
+    expect(lastClientOptions?.scopes).toEqual(["operator.read", "operator.pairing"]);
+    expect(lastClientOptions?.token).toBeUndefined();
+    expect(lastClientOptions?.password).toBeUndefined();
+    expect(lastClientOptions?.deviceIdentity).toBeNull();
+  });
+
+  it("rejects required local backend shared auth for remote targets", async () => {
+    await expect(
+      callGateway({
+        method: "node.list",
+        url: "wss://remote.example.test",
+        token: "explicit-token",
+        scopes: ["operator.read", "operator.pairing"],
+        requireLocalBackendSharedAuth: true,
+      }),
+    ).rejects.toMatchObject({ name: "GatewayLocalBackendSharedAuthUnavailableError" });
+
+    expect(lastClientOptions).toBeNull();
+  });
+
+  it("rejects required local backend shared auth for loopback URL overrides", async () => {
+    await expect(
+      callGateway({
+        method: "node.list",
+        url: "ws://127.0.0.1:18789",
+        token: "explicit-token",
+        scopes: ["operator.read", "operator.pairing"],
+        requireLocalBackendSharedAuth: true,
+      }),
+    ).rejects.toMatchObject({ name: "GatewayLocalBackendSharedAuthUnavailableError" });
+
+    expect(lastClientOptions).toBeNull();
+  });
+
+  it("rejects required local backend shared auth for remote-mode loopback tunnels", async () => {
+    setGatewayConfig({
+      mode: "remote",
+      remote: {
+        url: "ws://127.0.0.1:18789",
+        token: "remote-token",
+      },
+    });
+    setGatewayNetworkDefaults();
+
+    await expect(
+      callGateway({
+        method: "node.list",
+        scopes: ["operator.read", "operator.pairing"],
+        requireLocalBackendSharedAuth: true,
+      }),
+    ).rejects.toMatchObject({ name: "GatewayLocalBackendSharedAuthUnavailableError" });
+
+    expect(lastClientOptions).toBeNull();
   });
 
   it("uses backend client metadata for explicit scoped default calls", async () => {
@@ -603,6 +1403,40 @@ describe("callGateway url resolution", () => {
     expect(lastClientOptions?.clientDisplayName).toBe("gateway:sessions.delete");
   });
 
+  it("sends internal agent handoffs as backend gateway calls", async () => {
+    setLocalLoopbackGatewayConfig();
+    helloMethods = ["agent"];
+
+    await callGateway({
+      method: "agent",
+      params: {
+        message: "resume",
+        sessionEffects: "internal",
+        suppressPromptPersistence: true,
+      },
+    });
+
+    expect(lastClientOptions?.clientName).toBe(GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT);
+    expect(lastClientOptions?.mode).toBe(GATEWAY_CLIENT_MODES.BACKEND);
+    expect(lastRequestOptions?.method).toBe("agent");
+    expect(lastRequestOptions?.params).toMatchObject({
+      sessionEffects: "internal",
+      suppressPromptPersistence: true,
+    });
+  });
+
+  it("passes approval runtime tokens to backend gateway clients", async () => {
+    setLocalLoopbackGatewayConfig();
+
+    await callGateway({
+      method: "exec.approval.waitDecision",
+      scopes: ["operator.approvals"],
+      approvalRuntimeToken: "runtime-token",
+    });
+
+    expect(lastClientOptions?.approvalRuntimeToken).toBe("runtime-token");
+  });
+
   it("does not synthesize display names for CLI calls", async () => {
     setLocalLoopbackGatewayConfig();
 
@@ -614,13 +1448,15 @@ describe("callGateway url resolution", () => {
   it("waits for event-loop readiness before starting CLI pairing requests", async () => {
     setLocalLoopbackGatewayConfig();
 
-    let resolveReady!: (result: {
-      ready: boolean;
-      elapsedMs: number;
-      maxDriftMs: number;
-      checks: number;
-      aborted: boolean;
-    }) => void;
+    let resolveReady:
+      | ((result: {
+          ready: boolean;
+          elapsedMs: number;
+          maxDriftMs: number;
+          checks: number;
+          aborted: boolean;
+        }) => void)
+      | undefined;
     eventLoopReadyState.promise = new Promise((resolve) => {
       resolveReady = resolve;
     });
@@ -631,13 +1467,16 @@ describe("callGateway url resolution", () => {
       clientName: GATEWAY_CLIENT_NAMES.CLI,
     });
 
-    await vi.waitFor(() => {
+    await waitForFast(() => {
       expect(eventLoopReadyState.calls).toHaveLength(1);
     });
     expect(eventLoopReadyState.calls[0]?.maxWaitMs).toBe(10_000);
     expect(lastClientOptions?.clientName).toBe(GATEWAY_CLIENT_NAMES.CLI);
     expect(startCalls).toBe(0);
 
+    if (!resolveReady) {
+      throw new Error("Expected gateway event-loop readiness resolver to be initialized");
+    }
     resolveReady({ ready: true, elapsedMs: 0, maxDriftMs: 0, checks: 2, aborted: false });
     await promise;
 
@@ -666,10 +1505,109 @@ describe("buildGatewayConnectionDetails", () => {
     expect(details.message).toContain("Source: cli --url");
   });
 
-  it("emits a remote fallback note when remote url is missing", () => {
-    getRuntimeConfig.mockReturnValue({
-      gateway: { mode: "remote", bind: "loopback", remote: {} },
+  it("reuses gateway call TLS resolution for local probe connection details", async () => {
+    const config = {
+      gateway: {
+        mode: "local",
+        bind: "loopback",
+        tls: { enabled: true },
+      },
+    } satisfies OpenClawConfig;
+    resolveGatewayPort.mockReturnValue(18800);
+    gatewayConfigMocks.inspectGatewayTlsCertificate.mockResolvedValue({
+      ok: true,
+      value: { cert: "public-certificate", fingerprintSha256: TLS_FINGERPRINT },
     });
+
+    const details = await buildGatewayProbeConnectionDetails({ config });
+
+    expect(details.url).toBe("wss://127.0.0.1:18800");
+    expect(details.tlsFingerprint).toBe(TLS_FINGERPRINT);
+    expect(details.preauthHandshakeTimeoutMs).toBeUndefined();
+  });
+
+  it("lets probe details local port override bypass gateway env URL and port", async () => {
+    const config = {
+      gateway: {
+        mode: "local",
+        bind: "loopback",
+      },
+    } satisfies OpenClawConfig;
+    resolveGatewayPort.mockImplementation((_config?: unknown, env?: unknown) => {
+      const candidateEnv = env as NodeJS.ProcessEnv | undefined;
+      return Number(candidateEnv?.OPENCLAW_GATEWAY_PORT ?? 18789);
+    });
+    const prevUrl = process.env.OPENCLAW_GATEWAY_URL;
+    const prevPort = process.env.OPENCLAW_GATEWAY_PORT;
+    try {
+      process.env.OPENCLAW_GATEWAY_URL = "wss://env-gateway.example/ws";
+      process.env.OPENCLAW_GATEWAY_PORT = "19001";
+
+      const details = await buildGatewayProbeConnectionDetails({
+        config,
+        localPortOverride: 19082,
+      });
+
+      expect(details.url).toBe("ws://127.0.0.1:19082");
+      expect(details.urlSource).toBe("local loopback");
+    } finally {
+      if (prevUrl === undefined) {
+        delete process.env.OPENCLAW_GATEWAY_URL;
+      } else {
+        process.env.OPENCLAW_GATEWAY_URL = prevUrl;
+      }
+      if (prevPort === undefined) {
+        delete process.env.OPENCLAW_GATEWAY_PORT;
+      } else {
+        process.env.OPENCLAW_GATEWAY_PORT = prevPort;
+      }
+    }
+  });
+
+  it("lets a bound remote call keep its config URL over the gateway env override", async () => {
+    const config = {
+      gateway: {
+        mode: "remote",
+        remote: { url: "wss://selected-gateway.example/ws" },
+      },
+    } satisfies OpenClawConfig;
+    const prevUrl = process.env.OPENCLAW_GATEWAY_URL;
+    try {
+      process.env.OPENCLAW_GATEWAY_URL = "wss://unrelated-gateway.example/ws";
+
+      const details = await buildGatewayProbeConnectionDetails({
+        config,
+        ignoreEnvUrlOverride: true,
+      });
+
+      expect(details.url).toBe("wss://selected-gateway.example/ws");
+      expect(details.urlSource).toBe("config gateway.remote.url");
+    } finally {
+      if (prevUrl === undefined) {
+        delete process.env.OPENCLAW_GATEWAY_URL;
+      } else {
+        process.env.OPENCLAW_GATEWAY_URL = prevUrl;
+      }
+    }
+  });
+
+  it("redacts credential-bearing target URLs from connection messages", () => {
+    setLocalLoopbackGatewayConfig(18800);
+
+    const details = buildGatewayConnectionDetails({
+      url: "wss://user:pass@example.com/ws?token=secret-token&keep=visible",
+    });
+
+    expect(details.url).toBe("wss://user:pass@example.com/ws?token=secret-token&keep=visible");
+    expect(details.message).toContain(
+      "Gateway target: wss://***:***@example.com/ws?token=***&keep=visible",
+    );
+    expect(details.message).not.toContain("user:pass");
+    expect(details.message).not.toContain("secret-token");
+  });
+
+  it("emits a remote fallback note when remote url is missing", () => {
+    setGatewayConfig({ mode: "remote", bind: "loopback", remote: {} });
     resolveGatewayPort.mockReturnValue(18789);
     pickPrimaryTailnetIPv4.mockReturnValue(undefined);
 
@@ -709,12 +1647,10 @@ describe("buildGatewayConnectionDetails", () => {
   });
 
   it("prefers remote url when configured", () => {
-    getRuntimeConfig.mockReturnValue({
-      gateway: {
-        mode: "remote",
-        bind: "tailnet",
-        remote: { url: "wss://remote.example.com/ws" },
-      },
+    setGatewayConfig({
+      mode: "remote",
+      bind: "tailnet",
+      remote: { url: "wss://remote.example.com/ws" },
     });
     resolveGatewayPort.mockReturnValue(18800);
     pickPrimaryTailnetIPv4.mockReturnValue("100.64.0.9");
@@ -728,7 +1664,7 @@ describe("buildGatewayConnectionDetails", () => {
   });
 
   it("uses env OPENCLAW_GATEWAY_URL when set", () => {
-    getRuntimeConfig.mockReturnValue({ gateway: { mode: "local", bind: "loopback" } });
+    setGatewayConfig({ mode: "local", bind: "loopback" });
     resolveGatewayPort.mockReturnValue(18800);
     pickPrimaryTailnetIPv4.mockReturnValue(undefined);
     const prevUrl = process.env.OPENCLAW_GATEWAY_URL;
@@ -749,34 +1685,102 @@ describe("buildGatewayConnectionDetails", () => {
     }
   });
 
-  it("falls back to the default config loader when test deps drift", () => {
-    const tempStateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-gateway-call-"));
-    process.env.OPENCLAW_STATE_DIR = tempStateDir;
-    process.env.OPENCLAW_CONFIG_PATH = path.join(tempStateDir, "missing-config.json");
+  it("lets a local port override bypass gateway env URL and port in connection details", () => {
+    setGatewayConfig({ mode: "local", bind: "loopback" });
+    resolveGatewayPort.mockImplementation((_config?: unknown, env?: unknown) => {
+      const candidateEnv = env as NodeJS.ProcessEnv | undefined;
+      return Number(candidateEnv?.OPENCLAW_GATEWAY_PORT ?? 18789);
+    });
+    pickPrimaryTailnetIPv4.mockReturnValue(undefined);
+    const prevUrl = process.env.OPENCLAW_GATEWAY_URL;
+    const prevPort = process.env.OPENCLAW_GATEWAY_PORT;
     try {
-      getRuntimeConfig.mockReturnValue({ gateway: { mode: "local", bind: "loopback" } });
-      resolveGatewayPort.mockReturnValue(18800);
-      __testing.setDepsForTests({
-        getRuntimeConfig: {} as never,
-        resolveGatewayPort: () => 18789,
-      });
+      process.env.OPENCLAW_GATEWAY_URL = "wss://browser-gateway.local:9443/ws";
+      process.env.OPENCLAW_GATEWAY_PORT = "19001";
 
-      const details = buildGatewayConnectionDetails();
+      const details = buildGatewayConnectionDetails({ localPortOverride: 19082 });
 
-      expect(details.url).toBe("ws://127.0.0.1:18789");
+      expect(details.url).toBe("ws://127.0.0.1:19082");
       expect(details.urlSource).toBe("local loopback");
+      expect(details.bindDetail).toBe("Bind: loopback");
     } finally {
+      if (prevUrl === undefined) {
+        delete process.env.OPENCLAW_GATEWAY_URL;
+      } else {
+        process.env.OPENCLAW_GATEWAY_URL = prevUrl;
+      }
+      if (prevPort === undefined) {
+        delete process.env.OPENCLAW_GATEWAY_PORT;
+      } else {
+        process.env.OPENCLAW_GATEWAY_PORT = prevPort;
+      }
+    }
+  });
+
+  it("uses the reduced dispatch config for default RPC loading", async () => {
+    resetConfigRuntimeState();
+    const tempStateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-gateway-call-"));
+    const configPath = path.join(tempStateDir, "openclaw.json");
+    fs.writeFileSync(
+      configPath,
+      JSON.stringify({
+        gateway: { mode: "local", bind: "loopback", port: 18800, auth: { mode: "none" } },
+        channels: { telegram: { dmPolicy: 42 } },
+      }),
+    );
+    setTestEnvValue("OPENCLAW_STATE_DIR", tempStateDir);
+    setTestEnvValue("OPENCLAW_CONFIG_PATH", configPath);
+    try {
+      gatewayConfigMocks.useActualDispatchConfig = true;
+      deviceIdentityState.throwOnLoad = true;
+      loadDeviceAuthTokenMock.mockReturnValue(null);
+      resolveGatewayPort.mockImplementation((config) => config?.gateway?.port ?? 18789);
+
+      await expect(callGateway({ method: "health" })).resolves.toEqual({ ok: true });
+
+      expect(lastClientOptions?.url).toBe("ws://127.0.0.1:18800");
+      expect(lastClientOptions?.deviceIdentity).toBeNull();
+    } finally {
+      resetConfigRuntimeState();
+      fs.rmSync(tempStateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps the active runtime snapshot authoritative for default RPC loading", async () => {
+    resetConfigRuntimeState();
+    const tempStateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-gateway-call-"));
+    const configPath = path.join(tempStateDir, "openclaw.json");
+    fs.writeFileSync(
+      configPath,
+      JSON.stringify({
+        gateway: { mode: "local", bind: "loopback", port: 18800, auth: { mode: "none" } },
+      }),
+    );
+    setTestEnvValue("OPENCLAW_STATE_DIR", tempStateDir);
+    setTestEnvValue("OPENCLAW_CONFIG_PATH", configPath);
+    setRuntimeConfigSnapshot({
+      gateway: { mode: "local", bind: "loopback", port: 18801, auth: { mode: "none" } },
+    });
+    try {
+      gatewayConfigMocks.useActualDispatchConfig = true;
+      deviceIdentityState.throwOnLoad = true;
+      loadDeviceAuthTokenMock.mockReturnValue(null);
+      resolveGatewayPort.mockImplementation((config) => config?.gateway?.port ?? 18789);
+
+      await expect(callGateway({ method: "health" })).resolves.toEqual({ ok: true });
+
+      expect(lastClientOptions?.url).toBe("ws://127.0.0.1:18801");
+    } finally {
+      resetConfigRuntimeState();
       fs.rmSync(tempStateDir, { recursive: true, force: true });
     }
   });
 
   it("throws for insecure ws:// remote URLs (CWE-319)", () => {
-    getRuntimeConfig.mockReturnValue({
-      gateway: {
-        mode: "remote",
-        bind: "loopback",
-        remote: { url: "ws://remote.example.com:18789" },
-      },
+    setGatewayConfig({
+      mode: "remote",
+      bind: "loopback",
+      remote: { url: "ws://remote.example.com:18789" },
     });
     resolveGatewayPort.mockReturnValue(18789);
     pickPrimaryTailnetIPv4.mockReturnValue(undefined);
@@ -795,14 +1799,31 @@ describe("buildGatewayConnectionDetails", () => {
     expect((thrown as Error).message).toContain("openclaw doctor --fix");
   });
 
-  it("allows ws:// private remote URLs only when OPENCLAW_ALLOW_INSECURE_PRIVATE_WS=1", () => {
-    process.env.OPENCLAW_ALLOW_INSECURE_PRIVATE_WS = "1";
-    getRuntimeConfig.mockReturnValue({
-      gateway: {
-        mode: "remote",
-        bind: "loopback",
-        remote: { url: "ws://10.0.0.8:18789" },
-      },
+  it("redacts credential-bearing target URLs from insecure ws:// errors", () => {
+    setGatewayConfig({
+      mode: "remote",
+      bind: "loopback",
+      remote: { url: "ws://user:pass@remote.example.com:18789/ws?token=secret-token" },
+    });
+    resolveGatewayPort.mockReturnValue(18789);
+
+    expect(() => buildGatewayConnectionDetails()).toThrow(
+      'Gateway URL "ws://***:***@remote.example.com:18789/ws?token=***" uses plaintext',
+    );
+    try {
+      buildGatewayConnectionDetails();
+    } catch (error) {
+      expect(error).toBeInstanceOf(Error);
+      expect((error as Error).message).not.toContain("user:pass");
+      expect((error as Error).message).not.toContain("secret-token");
+    }
+  });
+
+  it("allows ws:// private remote URLs for trusted LAN and Tailnet configs", () => {
+    setGatewayConfig({
+      mode: "remote",
+      bind: "loopback",
+      remote: { url: "ws://10.0.0.8:18789" },
     });
     resolveGatewayPort.mockReturnValue(18789);
 
@@ -814,12 +1835,10 @@ describe("buildGatewayConnectionDetails", () => {
 
   it("allows ws:// hostname remote URLs when OPENCLAW_ALLOW_INSECURE_PRIVATE_WS=1", () => {
     process.env.OPENCLAW_ALLOW_INSECURE_PRIVATE_WS = "1";
-    getRuntimeConfig.mockReturnValue({
-      gateway: {
-        mode: "remote",
-        bind: "loopback",
-        remote: { url: "ws://openclaw-gateway.ai:18789" },
-      },
+    setGatewayConfig({
+      mode: "remote",
+      bind: "loopback",
+      remote: { url: "ws://openclaw-gateway.ai:18789" },
     });
     resolveGatewayPort.mockReturnValue(18789);
 
@@ -865,12 +1884,16 @@ describe("callGateway error details", () => {
     expect(err?.message).toContain("Source: local loopback");
     expect(err?.message).toContain("Bind: loopback");
     expect(isGatewayTransportError(err)).toBe(true);
-    expect(err).toMatchObject({
-      name: "GatewayTransportError",
-      kind: "closed",
-      code: 1006,
-      reason: "no close reason",
-    });
+    const transportError = err as {
+      name?: string;
+      kind?: string;
+      code?: number;
+      reason?: string;
+    };
+    expect(transportError.name).toBe("GatewayTransportError");
+    expect(transportError.kind).toBe("closed");
+    expect(transportError.code).toBe(1006);
+    expect(transportError.reason).toBe("no close reason");
   });
 
   it("keeps the request alive through internally retried startup-unavailable handshakes", async () => {
@@ -882,13 +1905,251 @@ describe("callGateway error details", () => {
     expect(lastRequestOptions?.method).toBe("health");
   });
 
+  it("keeps the request alive through one transient pre-hello clean close", async () => {
+    startMode = "clean-prehello-close-then-hello";
+    setLocalLoopbackGatewayConfig();
+
+    await expect(callGateway({ method: "health" })).resolves.toEqual({ ok: true });
+
+    expect(lastRequestOptions?.method).toBe("health");
+  });
+
+  it("surfaces repeated transient pre-hello clean closes", async () => {
+    startMode = "repeated-clean-prehello-close";
+    setLocalLoopbackGatewayConfig();
+
+    let err: Error | null = null;
+    try {
+      await callGateway({ method: "health" });
+    } catch (caught) {
+      err = caught as Error;
+    }
+
+    expect(err?.message).toContain("gateway closed (1000 normal closure): no close reason");
+    expect(lastRequestOptions).toBeNull();
+  });
+
+  it("rejects immediately when the client reports a connect error", async () => {
+    startMode = "connect-error";
+    setLocalLoopbackGatewayConfig();
+
+    let err: unknown;
+    await callGateway({ method: "health", timeoutMs: 10_000 }).catch((caught: unknown) => {
+      err = caught;
+    });
+
+    expect(err).toBeInstanceOf(Error);
+    expect((err as Error).message).toBe("device private key invalid");
+    expect(lastRequestOptions).toBeNull();
+  });
+
+  it("preserves allowlisted rate-limit details before the following close", async () => {
+    startMode = "connect-error-close";
+    closeCode = 1008;
+    closeReason = "unauthorized: too many failed authentication attempts (retry later)";
+    connectError = Object.assign(
+      new Error("unauthorized: too many failed authentication attempts (retry later)"),
+      {
+        name: "GatewayClientRequestError",
+        gatewayCode: "INVALID_REQUEST",
+        details: {
+          code: "AUTH_RATE_LIMITED",
+          authReason: "rate_limited",
+          recommendedNextStep: "wait_then_retry",
+        },
+        retryable: true,
+        retryAfterMs: 60_000,
+      },
+    );
+    setLocalLoopbackGatewayConfig();
+
+    let error: unknown;
+    await callGateway({ method: "health" }).catch((caught: unknown) => {
+      error = caught;
+    });
+
+    expect(error).toBe(connectError);
+    expect(formatGatewayClientRequestErrorJson(error)).toEqual({
+      ok: false,
+      error: {
+        type: "gateway_request_error",
+        code: "INVALID_REQUEST",
+        message: "unauthorized: too many failed authentication attempts (retry later)",
+        details: {
+          code: "AUTH_RATE_LIMITED",
+          authReason: "rate_limited",
+          recommendedNextStep: "wait_then_retry",
+        },
+        retryable: true,
+        retryAfterMs: 60_000,
+      },
+    });
+  });
+
+  it("surfaces a websocket upgrade rejection carried by close info", async () => {
+    startMode = "silent";
+    setLocalLoopbackGatewayConfig();
+    const upgradeError = Object.assign(
+      new Error(
+        "gateway rejected websocket upgrade (HTTP 503): Gateway websocket admission closed",
+      ),
+      {
+        name: "GatewayClientRequestError",
+        gatewayCode: "UNAVAILABLE",
+        details: { reason: "websocket-upgrade-rejected", httpStatus: 503 },
+        retryable: true,
+      },
+    );
+
+    const request = callGateway({ method: "health" });
+    await waitForFast(() => expect(lastClientOptions).not.toBeNull());
+    lastClientOptions?.onClose?.(1006, "", {
+      phase: "pre-hello",
+      socketOpened: false,
+      transportValidated: false,
+      transientPreHelloCleanClose: false,
+      connectError: upgradeError,
+    });
+
+    await expect(request).rejects.toBe(upgradeError);
+  });
+
+  it.each(["ECONNREFUSED", "ECONNRESET", "EHOSTUNREACH", "ETIMEDOUT"])(
+    "renders %s connect failures as an actionable gateway-unreachable message",
+    async (code) => {
+      startMode = "silent";
+      setLocalLoopbackGatewayConfig();
+      const socketError = Object.assign(new Error(`connect ${code} 127.0.0.1:18789`), { code });
+
+      const request = callGateway({ method: "health" });
+      await waitForFast(() => expect(lastClientOptions).not.toBeNull());
+      lastClientOptions?.onClose?.(1006, "", {
+        phase: "pre-hello",
+        socketOpened: false,
+        transportValidated: false,
+        transientPreHelloCleanClose: false,
+        connectError: socketError,
+      });
+
+      let error: unknown;
+      await request.catch((caught: unknown) => {
+        error = caught;
+      });
+      expect(isGatewayTransportError(error)).toBe(true);
+      expect(error).toMatchObject({ kind: "closed" });
+      expect(error).not.toHaveProperty("code");
+      const message = (error as Error).message;
+      expect(message).toContain(`Gateway not reachable at ws://127.0.0.1:18789 (${code}).`);
+      expect(message).toContain(
+        "Start it with `openclaw gateway run` or check `openclaw gateway status`.",
+      );
+      expect(message).not.toContain(`connect ${code}`);
+    },
+  );
+
+  it.each([
+    {
+      name: "another structured auth rejection",
+      error: Object.assign(new Error("unauthorized: gateway token mismatch"), {
+        name: "GatewayClientRequestError",
+        gatewayCode: "INVALID_REQUEST",
+        details: { code: "AUTH_TOKEN_MISMATCH" },
+        retryable: false,
+      }),
+    },
+    {
+      name: "rate-limit-looking text without structured details",
+      error: Object.assign(
+        new Error("unauthorized: too many failed authentication attempts (retry later)"),
+        {
+          name: "GatewayClientRequestError",
+          gatewayCode: "INVALID_REQUEST",
+          retryable: true,
+        },
+      ),
+    },
+    { name: "ordinary connect error", error: new Error("ordinary connect failure") },
+  ])("keeps $name on the existing transport-close path", async ({ error: connectFailure }) => {
+    startMode = "connect-error-close";
+    closeCode = 1008;
+    closeReason = "connect failed";
+    connectError = connectFailure;
+    setLocalLoopbackGatewayConfig();
+
+    let error: unknown;
+    await callGateway({ method: "health" }).catch((caught: unknown) => {
+      error = caught;
+    });
+
+    expect(formatGatewayTransportErrorJson(error)).toEqual({
+      ok: false,
+      error: {
+        type: "gateway_transport_error",
+        kind: "closed",
+        message: "gateway closed (1008): connect failed",
+        code: 1008,
+        reason: "connect failed",
+      },
+      gateway: {
+        url: "ws://127.0.0.1:18789",
+        urlSource: "local loopback",
+        bindDetail: "Bind: loopback",
+      },
+    });
+  });
+
+  it("surfaces agent runtime identity connect request errors", async () => {
+    startMode = "connect-error";
+    connectError = new Error(
+      "gateway rejected required agent runtime identity auth field; refusing to retry without it",
+    );
+    setLocalLoopbackGatewayConfig();
+
+    await expect(
+      callGateway({
+        method: "cron.remove",
+        token: "explicit-token",
+        agentRuntimeIdentityToken: "identity-token",
+      }),
+    ).rejects.toThrow(
+      "gateway rejected required agent runtime identity auth field; refusing to retry without it",
+    );
+
+    expect(lastClientOptions?.agentRuntimeIdentityToken).toBe("identity-token");
+    expect(lastRequestOptions).toBeNull();
+  });
+
+  it("surfaces stored device auth handshake failures for credential fallback", async () => {
+    startMode = "connect-error";
+    connectError = Object.assign(new Error("unauthorized: device token mismatch"), {
+      name: "GatewayClientRequestError",
+      gatewayCode: "INVALID_REQUEST",
+      details: { code: "AUTH_DEVICE_TOKEN_MISMATCH" },
+    });
+    setLocalLoopbackGatewayConfig();
+
+    vi.useFakeTimers();
+    const promise = callGatewayCli({
+      method: "node.list",
+      timeoutMs: 5,
+      useStoredDeviceAuth: true,
+    });
+    const rejection = expect(promise).rejects.toMatchObject({
+      name: "GatewayClientRequestError",
+      details: { code: "AUTH_DEVICE_TOKEN_MISMATCH" },
+    });
+    await vi.advanceTimersByTimeAsync(5);
+
+    await rejection;
+  });
+
   it("includes connection details on timeout", async () => {
     startMode = "silent";
     setLocalLoopbackGatewayConfig();
 
     vi.useFakeTimers();
     let errMessage = "";
-    const promise = callGateway({ method: "health", timeoutMs: 5 }).catch((caught) => {
+    const promise = callGateway({ method: "health", timeoutMs: 5 }).catch((caught: unknown) => {
       errMessage = caught instanceof Error ? caught.message : String(caught);
     });
 
@@ -907,7 +2168,7 @@ describe("callGateway error details", () => {
 
     vi.useFakeTimers();
     let err: unknown;
-    const promise = callGateway({ method: "health", timeoutMs: 5 }).catch((caught) => {
+    const promise = callGateway({ method: "health", timeoutMs: 5 }).catch((caught: unknown) => {
       err = caught;
     });
 
@@ -915,11 +2176,150 @@ describe("callGateway error details", () => {
     await promise;
 
     expect(isGatewayTransportError(err)).toBe(true);
-    expect(err).toMatchObject({
-      name: "GatewayTransportError",
-      kind: "timeout",
-      timeoutMs: 5,
+    const transportError = err as { name?: string; kind?: string; timeoutMs?: number };
+    expect(transportError.name).toBe("GatewayTransportError");
+    expect(transportError.kind).toBe("timeout");
+    expect(transportError.timeoutMs).toBe(5);
+  });
+
+  it("formats typed transport errors for CLI JSON output", async () => {
+    startMode = "close";
+    closeCode = 1006;
+    closeReason = "";
+    setLocalLoopbackGatewayConfig();
+
+    let err: unknown;
+    await callGateway({ method: "health" }).catch((caught: unknown) => {
+      err = caught;
     });
+
+    expect(formatGatewayTransportErrorJson(err)).toEqual({
+      ok: false,
+      error: {
+        type: "gateway_transport_error",
+        kind: "closed",
+        message: "gateway closed (1006 abnormal closure (no close frame)): no close reason",
+        code: 1006,
+        reason: "no close reason",
+      },
+      gateway: {
+        url: "ws://127.0.0.1:18789",
+        urlSource: "local loopback",
+        bindDetail: "Bind: loopback",
+      },
+    });
+  });
+
+  it("redacts credential-bearing URLs echoed in remote close reasons", async () => {
+    startMode = "close";
+    closeCode = 1008;
+    closeReason = "rejected ws://user:secret@gw.example.com:18789?token=abc123";
+    setLocalLoopbackGatewayConfig();
+
+    let err: unknown;
+    await callGateway({ method: "health" }).catch((caught: unknown) => {
+      err = caught;
+    });
+
+    const json = formatGatewayTransportErrorJson(err);
+    const serialized = JSON.stringify(json);
+    expect(serialized).not.toContain("secret");
+    expect(serialized).not.toContain("abc123");
+    expect(json?.error.reason).toContain("ws://***:***@gw.example.com:18789?token=***");
+    expect(json?.error.message).toContain("ws://***:***@gw.example.com:18789?token=***");
+  });
+
+  it("does not over-claim a gateway crash on a 1006 abnormal close", async () => {
+    startMode = "close";
+    closeCode = 1006;
+    closeReason = "";
+    setLocalLoopbackGatewayConfig();
+
+    let err: unknown;
+    await callGateway({ method: "health" }).catch((caught: unknown) => {
+      err = caught;
+    });
+
+    const message = (err as { message: string }).message;
+    expect(message).toContain(
+      "Connection dropped without a close frame (retry; check network and gateway load)",
+    );
+    expect(message).not.toContain("crashed or was terminated unexpectedly");
+    expect(message).toContain("Run `openclaw doctor`");
+  });
+
+  it("formats typed request errors for CLI JSON output", () => {
+    const error = Object.assign(new Error("unauthorized role: operator"), {
+      name: "GatewayClientRequestError",
+      gatewayCode: "INVALID_REQUEST",
+      details: { method: "skills.bins" },
+      retryable: false,
+      retryAfterMs: 250,
+    });
+
+    expect(formatGatewayClientRequestErrorJson(error)).toEqual({
+      ok: false,
+      error: {
+        type: "gateway_request_error",
+        code: "INVALID_REQUEST",
+        message: "unauthorized role: operator",
+        details: { method: "skills.bins" },
+        retryable: false,
+        retryAfterMs: 250,
+      },
+    });
+    expect(
+      formatGatewayClientRequestErrorJson(
+        Object.assign(new Error("unauthorized role: operator"), {
+          name: "GatewayClientRequestError",
+          gatewayCode: "INVALID_REQUEST",
+          retryable: "no",
+        }),
+      ),
+    ).toBeNull();
+    expect(
+      formatGatewayClientRequestErrorJson(
+        Object.assign(new Error("unauthorized role: operator"), {
+          name: "GatewayClientRequestError",
+          gatewayCode: "INVALID_REQUEST",
+          retryable: false,
+          retryAfterMs: -1,
+        }),
+      ),
+    ).toBeNull();
+  });
+
+  it.each([
+    [
+      "configured credentials",
+      new GatewayCredentialsRequiredError({
+        method: "health",
+        configPath: "/tmp/openclaw.json",
+      }),
+      "gateway health requires credentials before opening a websocket",
+    ],
+    [
+      "explicit URL credentials",
+      new GatewayExplicitAuthRequiredError("gateway url override requires explicit credentials"),
+      "gateway url override requires explicit credentials",
+    ],
+    [
+      "unavailable SecretRef credentials",
+      new GatewaySecretRefUnavailableError("gateway.auth.token"),
+      "gateway.auth.token is configured as a secret reference but is unavailable",
+    ],
+  ])("formats %s as the shipped auth error envelope", (_label, error, message) => {
+    expect(formatGatewayAuthErrorJson(error)).toEqual({
+      ok: false,
+      error: {
+        type: "gateway_credentials_required",
+        message: expect.stringContaining(message),
+      },
+    });
+  });
+
+  it("does not turn unrelated failures into gateway auth errors", () => {
+    expect(formatGatewayAuthErrorJson(new Error("config unavailable"))).toBeNull();
   });
 
   it("charges event-loop readiness against the wrapper timeout", async () => {
@@ -929,11 +2329,11 @@ describe("callGateway error details", () => {
 
     vi.useFakeTimers();
     let errMessage = "";
-    const promise = callGateway({ method: "health", timeoutMs: 5 }).catch((caught) => {
+    const promise = callGateway({ method: "health", timeoutMs: 5 }).catch((caught: unknown) => {
       errMessage = caught instanceof Error ? caught.message : String(caught);
     });
 
-    await vi.waitFor(() => {
+    await waitForFast(() => {
       expect(eventLoopReadyState.calls).toHaveLength(1);
     });
     expect(eventLoopReadyState.calls[0]?.maxWaitMs).toBe(5);
@@ -956,36 +2356,19 @@ describe("callGateway error details", () => {
       aborted: false,
     };
 
-    await expect(callGateway({ method: "health", timeoutMs: 5 })).rejects.toMatchObject({
-      name: "GatewayTransportError",
-      kind: "timeout",
-      timeoutMs: 5,
+    let err: unknown;
+    await callGateway({ method: "health", timeoutMs: 5 }).catch((caught: unknown) => {
+      err = caught;
     });
+    expect(isGatewayTransportError(err)).toBe(true);
+    const transportError = err as { name?: string; kind?: string; timeoutMs?: number };
+    expect(transportError.name).toBe("GatewayTransportError");
+    expect(transportError.kind).toBe("timeout");
+    expect(transportError.timeoutMs).toBe(5);
     expect(eventLoopReadyState.calls).toHaveLength(1);
     expect(eventLoopReadyState.calls[0]?.maxWaitMs).toBe(5);
-    expect(lastClientOptions).not.toBeNull();
+    expect(lastClientOptions?.url).toBe("ws://127.0.0.1:18789");
     expect(startCalls).toBe(0);
-  });
-
-  it("keeps the default wrapper timeout aligned with configured handshake timeout", async () => {
-    startMode = "silent";
-    getRuntimeConfig.mockReturnValue({
-      gateway: { mode: "local", bind: "loopback", handshakeTimeoutMs: 30_000 },
-    });
-    setGatewayNetworkDefaults();
-
-    vi.useFakeTimers();
-    let errMessage = "";
-    const promise = callGateway({ method: "health" }).catch((caught) => {
-      errMessage = caught instanceof Error ? caught.message : String(caught);
-    });
-
-    await vi.advanceTimersByTimeAsync(10_000);
-    expect(errMessage).toBe("");
-    await vi.advanceTimersByTimeAsync(20_000);
-    await promise;
-
-    expect(errMessage).toContain("gateway timeout after 30000ms");
   });
 
   it("keeps the default wrapper timeout aligned with env handshake timeout", async () => {
@@ -997,7 +2380,7 @@ describe("callGateway error details", () => {
 
       vi.useFakeTimers();
       let errMessage = "";
-      const promise = callGateway({ method: "health" }).catch((caught) => {
+      const promise = callGateway({ method: "health" }).catch((caught: unknown) => {
         errMessage = caught instanceof Error ? caught.message : String(caught);
       });
 
@@ -1018,9 +2401,11 @@ describe("callGateway error details", () => {
 
     vi.useFakeTimers();
     let errMessage = "";
-    const promise = callGateway({ method: "health", timeoutMs: 2_592_010_000 }).catch((caught) => {
-      errMessage = caught instanceof Error ? caught.message : String(caught);
-    });
+    const promise = callGateway({ method: "health", timeoutMs: 2_592_010_000 }).catch(
+      (caught: unknown) => {
+        errMessage = caught instanceof Error ? caught.message : String(caught);
+      },
+    );
 
     await vi.advanceTimersByTimeAsync(1);
     expect(errMessage).toBe("");
@@ -1040,15 +2425,183 @@ describe("callGateway error details", () => {
     expect(lastRequestOptions?.opts?.timeoutMs).toBe(45_000);
   });
 
-  it("passes configured gateway handshake timeout to the client watchdog", async () => {
-    getRuntimeConfig.mockReturnValue({
-      gateway: { mode: "local", bind: "loopback", handshakeTimeoutMs: 30_000 },
+  it("keeps the startup deadline when the request timeout is disabled", async () => {
+    startMode = "silent";
+    setLocalLoopbackGatewayConfig();
+    vi.useFakeTimers();
+    let err: unknown;
+
+    const promise = callGateway({ method: "health", timeoutMs: null }).catch((caught: unknown) => {
+      err = caught;
     });
-    setGatewayNetworkDefaults();
 
-    await callGateway({ method: "health" });
+    await vi.advanceTimersByTimeAsync(10_000);
+    await promise;
 
-    expect(lastClientOptions?.preauthHandshakeTimeoutMs).toBe(30_000);
+    expect(isGatewayTransportError(err)).toBe(true);
+    expect(err).toMatchObject({ kind: "timeout", timeoutMs: 10_000 });
+    expect(lastRequestOptions).toBeNull();
+  });
+
+  it("disables the request and wrapper deadline when timeout is null", async () => {
+    setLocalLoopbackGatewayConfig();
+    vi.useFakeTimers();
+    let releaseRequest: (() => void) | undefined;
+
+    gatewayClientRequest = async (method, params, requestOpts) => {
+      lastRequestOptions = { method, params, opts: requestOpts };
+      await new Promise<void>((resolve) => {
+        releaseRequest = resolve;
+      });
+      return { ok: true };
+    };
+
+    let settled = false;
+    const promise = callGateway({ method: "health", timeoutMs: null }).then((result) => {
+      settled = true;
+      return result;
+    });
+
+    await waitForFast(() => {
+      expect(lastRequestOptions?.opts?.timeoutMs).toBeNull();
+    });
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(settled).toBe(false);
+
+    if (!releaseRequest) {
+      throw new Error("Expected request release callback to be initialized");
+    }
+    releaseRequest();
+    await expect(promise).resolves.toEqual({ ok: true });
+  });
+
+  it("forwards caller abort signal and accepted callback to client requests", async () => {
+    setLocalLoopbackGatewayConfig();
+    const controller = new AbortController();
+    const onAccepted = vi.fn();
+
+    await callGateway({
+      method: "agent",
+      expectFinal: true,
+      signal: controller.signal,
+      onAccepted,
+    });
+
+    expect(lastRequestOptions?.method).toBe("agent");
+    expect(lastRequestOptions?.opts?.signal).toBe(controller.signal);
+    expect(lastRequestOptions?.opts?.onAccepted).toBe(onAccepted);
+  });
+
+  it("runs the signal abort hook on the active gateway connection before teardown", async () => {
+    setLocalLoopbackGatewayConfig();
+
+    const controller = new AbortController();
+    const abortRequests: Array<{
+      method: string;
+      params: unknown;
+      opts?: { timeoutMs?: number | null };
+    }> = [];
+    let stopStarted = false;
+
+    gatewayClientRequest = async (method, params, requestOpts) => {
+      lastRequestOptions = { method, params, opts: requestOpts };
+      if (method === "agent") {
+        return await new Promise((_, reject) => {
+          requestOpts?.signal?.addEventListener(
+            "abort",
+            () => {
+              const err = new Error("gateway request aborted for agent");
+              err.name = "AbortError";
+              reject(err);
+            },
+            { once: true },
+          );
+        });
+      }
+      abortRequests.push({ method, params, opts: requestOpts });
+      return { ok: true };
+    };
+    gatewayClientStopAndWait = async () => {
+      stopStarted = true;
+    };
+
+    const promise = callGateway({
+      method: "agent",
+      expectFinal: true,
+      signal: controller.signal,
+      onSignalAbort: async (request) => {
+        await request("chat.abort", { sessionKey: "main", runId: "run-1" }, { timeoutMs: 5_000 });
+      },
+    });
+
+    await waitForFast(() => {
+      expect(lastRequestOptions?.method).toBe("agent");
+    });
+    controller.abort();
+
+    await expect(promise).rejects.toThrow("gateway request aborted for agent");
+    expect(abortRequests).toEqual([
+      {
+        method: "chat.abort",
+        params: { sessionKey: "main", runId: "run-1" },
+        opts: { timeoutMs: 5_000 },
+      },
+    ]);
+    expect(stopStarted).toBe(true);
+  });
+
+  it("does not dispatch a request when its hello observer aborts the connection", async () => {
+    setLocalLoopbackGatewayConfig();
+    const controller = new AbortController();
+    const onSignalAbort = vi.fn();
+    const stop = vi.fn(async () => {});
+    gatewayClientStopAndWait = stop;
+
+    await expect(
+      callGateway({
+        method: "agent",
+        signal: controller.signal,
+        onHelloOk: () => controller.abort(),
+        onSignalAbort,
+      }),
+    ).rejects.toMatchObject({ name: "AbortError" });
+
+    expect(lastRequestOptions).toBeNull();
+    expect(onSignalAbort).not.toHaveBeenCalled();
+    expect(stop).toHaveBeenCalledOnce();
+  });
+
+  it("skips the signal abort hook before the primary request starts", async () => {
+    setLocalLoopbackGatewayConfig();
+
+    const controller = new AbortController();
+    const onSignalAbort = vi.fn(async () => undefined);
+    let startCalled = false;
+    let stopStarted = false;
+
+    gatewayClientStart = () => {
+      startCalled = true;
+    };
+    gatewayClientStopAndWait = async () => {
+      stopStarted = true;
+    };
+
+    const promise = callGateway({
+      method: "agent",
+      expectFinal: true,
+      signal: controller.signal,
+      onSignalAbort,
+    });
+
+    await waitForFast(() => {
+      expect(startCalled).toBe(true);
+    });
+    controller.abort();
+
+    await expect(promise).rejects.toThrow("gateway request aborted for agent");
+    expect(onSignalAbort).not.toHaveBeenCalled();
+    expect(lastRequestOptions).toBeNull();
+    expect(stopStarted).toBe(true);
   });
 
   it("does not inject wrapper timeout defaults into expectFinal requests", async () => {
@@ -1064,58 +2617,33 @@ describe("callGateway error details", () => {
   it("waits for gateway client teardown before resolving", async () => {
     setLocalLoopbackGatewayConfig();
 
-    let releaseStop!: () => void;
+    let releaseStop: (() => void) | undefined;
     let stopStarted = false;
     let stopFinished = false;
     let callResolved = false;
 
-    __testing.setDepsForTests({
-      createGatewayClient: (opts) =>
-        ({
-          async request(
-            method: string,
-            params: unknown,
-            requestOpts?: { expectFinal?: boolean; timeoutMs?: number | null },
-          ) {
-            lastRequestOptions = { method, params, opts: requestOpts };
-            return { ok: true };
-          },
-          start() {
-            opts.onHelloOk?.({
-              features: {
-                methods: helloMethods ?? [],
-                events: [],
-              },
-            } as unknown as Parameters<NonNullable<typeof opts.onHelloOk>>[0]);
-          },
-          stop() {},
-          async stopAndWait() {
-            stopStarted = true;
-            await new Promise<void>((resolve) => {
-              releaseStop = () => {
-                stopFinished = true;
-                resolve();
-              };
-            });
-          },
-        }) as never,
-      getRuntimeConfig: getRuntimeConfig as unknown as () => OpenClawConfig,
-      loadOrCreateDeviceIdentity: () => deviceIdentityState.value,
-      resolveGatewayPort: resolveGatewayPort as unknown as (
-        cfg?: OpenClawConfig,
-        env?: NodeJS.ProcessEnv,
-      ) => number,
-    });
+    gatewayClientStopAndWait = async () => {
+      stopStarted = true;
+      await new Promise<void>((resolve) => {
+        releaseStop = () => {
+          stopFinished = true;
+          resolve();
+        };
+      });
+    };
 
     const promise = callGateway({ method: "health" }).then(() => {
       callResolved = true;
     });
 
-    await vi.waitFor(() => {
+    await waitForFast(() => {
       expect(stopStarted).toBe(true);
     });
     expect(callResolved).toBe(false);
 
+    if (!releaseStop) {
+      throw new Error("Expected gateway stop release callback to be initialized");
+    }
     releaseStop();
     await promise;
 
@@ -1127,61 +2655,34 @@ describe("callGateway error details", () => {
     setLocalLoopbackGatewayConfig();
 
     vi.useFakeTimers();
-    let releaseStop!: () => void;
+    let releaseStop: (() => void) | undefined;
     let stopStarted = false;
 
-    __testing.setDepsForTests({
-      createGatewayClient: (opts) =>
-        ({
-          async request(
-            method: string,
-            params: unknown,
-            requestOpts?: { expectFinal?: boolean; timeoutMs?: number | null },
-          ) {
-            lastRequestOptions = { method, params, opts: requestOpts };
-            return { ok: true };
-          },
-          start() {
-            opts.onHelloOk?.({
-              features: {
-                methods: helloMethods ?? [],
-                events: [],
-              },
-            } as unknown as Parameters<NonNullable<typeof opts.onHelloOk>>[0]);
-          },
-          stop() {},
-          async stopAndWait() {
-            stopStarted = true;
-            await new Promise<void>((resolve) => {
-              releaseStop = resolve;
-            });
-          },
-        }) as never,
-      getRuntimeConfig: getRuntimeConfig as unknown as () => OpenClawConfig,
-      loadOrCreateDeviceIdentity: () => deviceIdentityState.value,
-      resolveGatewayPort: resolveGatewayPort as unknown as (
-        cfg?: OpenClawConfig,
-        env?: NodeJS.ProcessEnv,
-      ) => number,
-    });
+    gatewayClientStopAndWait = async () => {
+      stopStarted = true;
+      await new Promise<void>((resolve) => {
+        releaseStop = resolve;
+      });
+    };
 
     const promise = callGateway<{ ok: true }>({ method: "health", timeoutMs: 5 });
 
-    await vi.waitFor(() => {
+    await waitForFast(() => {
       expect(stopStarted).toBe(true);
     });
 
     await vi.advanceTimersByTimeAsync(5);
 
+    if (!releaseStop) {
+      throw new Error("Expected gateway stop release callback to be initialized");
+    }
     releaseStop();
 
     await expect(promise).resolves.toEqual({ ok: true });
   });
 
   it("fails fast when remote mode is missing remote url", async () => {
-    getRuntimeConfig.mockReturnValue({
-      gateway: { mode: "remote", bind: "loopback", remote: {} },
-    });
+    setGatewayConfig({ mode: "remote", bind: "loopback", remote: {} });
     await expect(
       callGateway({
         method: "health",
@@ -1198,7 +2699,22 @@ describe("callGateway error details", () => {
         method: "secrets.resolve",
         requiredMethods: ["secrets.resolve"],
       }),
-    ).rejects.toThrow(/does not support required method "secrets\.resolve"/i);
+    ).rejects.toThrow(
+      /does not support required method "secrets\.resolve".*update or restart the active gateway/i,
+    );
+  });
+
+  it("fails before request when a required gateway capability is missing", async () => {
+    setLocalLoopbackGatewayConfig();
+    helloCapabilities = [];
+    await expect(
+      callGateway({
+        method: "gateway.restart.request",
+        requiredCapabilities: ["gateway-restart-target-safe-v1"],
+      }),
+    ).rejects.toThrow(
+      /does not support required capability "gateway-restart-target-safe-v1".*update or restart the active gateway/i,
+    );
   });
 });
 
@@ -1225,28 +2741,26 @@ describe("callGateway url override auth requirements", () => {
   it("throws when url override is set without explicit credentials", async () => {
     process.env.OPENCLAW_GATEWAY_TOKEN = "env-token";
     process.env.OPENCLAW_GATEWAY_PASSWORD = "env-password";
-    getRuntimeConfig.mockReturnValue({
-      gateway: {
-        mode: "local",
-        auth: { token: "local-token", password: "local-password" },
-      },
+    setGatewayConfig({
+      mode: "local",
+      auth: { token: "local-token", password: "local-password" },
     });
 
     await expect(
       callGateway({ method: "health", url: "wss://override.example/ws" }),
-    ).rejects.toThrow("explicit credentials");
+    ).rejects.toThrow(/remove --url to use the configured target/i);
   });
 
   it("throws when env URL override is set without env credentials", async () => {
     process.env.OPENCLAW_GATEWAY_URL = "wss://override.example/ws";
-    getRuntimeConfig.mockReturnValue({
-      gateway: {
-        mode: "local",
-        auth: { token: "local-token", password: "local-password" },
-      },
+    setGatewayConfig({
+      mode: "local",
+      auth: { token: "local-token", password: "local-password" },
     });
 
-    await expect(callGateway({ method: "health" })).rejects.toThrow("explicit credentials");
+    await expect(callGateway({ method: "health" })).rejects.toThrow(
+      /OPENCLAW_GATEWAY_TOKEN or OPENCLAW_GATEWAY_PASSWORD/i,
+    );
   });
 });
 
@@ -1308,7 +2822,7 @@ describe("callGateway password resolution", () => {
       expectedPassword: "secret",
     },
     {
-      label: "prefers env password over local config password",
+      label: "prefers local config password over env password",
       envPassword: "from-env",
       config: {
         gateway: {
@@ -1317,7 +2831,7 @@ describe("callGateway password resolution", () => {
           auth: { password: "from-config" },
         },
       },
-      expectedPassword: "from-env",
+      expectedPassword: "from-config",
     },
     {
       label: "uses remote password in remote mode when env is unset",
@@ -1344,67 +2858,44 @@ describe("callGateway password resolution", () => {
 
   it("resolves gateway.auth.password SecretInput refs for gateway calls", async () => {
     process.env.LOCAL_REF_PASSWORD = "resolved-local-ref-password"; // pragma: allowlist secret
-    getRuntimeConfig.mockReturnValue({
-      gateway: {
-        mode: "local",
-        bind: "loopback",
-        auth: {
-          mode: "password",
-          password: { source: "env", provider: "default", id: "LOCAL_REF_PASSWORD" },
-        },
+    setEnvSecretGatewayConfig({
+      mode: "local",
+      bind: "loopback",
+      auth: {
+        mode: "password",
+        password: { source: "env", provider: "default", id: "LOCAL_REF_PASSWORD" },
       },
-      secrets: {
-        providers: {
-          default: { source: "env" },
-        },
-      },
-    } as unknown as OpenClawConfig);
+    });
 
     await callGateway({ method: "health" });
 
     expect(lastClientOptions?.password).toBe("resolved-local-ref-password");
   });
 
-  it("does not resolve local password ref when env password takes precedence", async () => {
+  it("does not let env password mask an unresolved local password ref", async () => {
     process.env.OPENCLAW_GATEWAY_PASSWORD = "from-env";
-    getRuntimeConfig.mockReturnValue({
-      gateway: {
-        mode: "local",
-        bind: "loopback",
-        auth: {
-          mode: "password",
-          password: { source: "env", provider: "default", id: "MISSING_LOCAL_REF_PASSWORD" },
-        },
+    setEnvSecretGatewayConfig({
+      mode: "local",
+      bind: "loopback",
+      auth: {
+        mode: "password",
+        password: { source: "env", provider: "default", id: "MISSING_LOCAL_REF_PASSWORD" },
       },
-      secrets: {
-        providers: {
-          default: { source: "env" },
-        },
-      },
-    } as unknown as OpenClawConfig);
+    });
 
-    await callGateway({ method: "health" });
-
-    expect(lastClientOptions?.password).toBe("from-env");
+    await expect(callGateway({ method: "health" })).rejects.toThrow("gateway.auth.password");
   });
 
   it("does not resolve local password ref when token auth can win", async () => {
-    getRuntimeConfig.mockReturnValue({
-      gateway: {
-        mode: "local",
-        bind: "loopback",
-        auth: {
-          mode: "token",
-          token: "token-auth",
-          password: { source: "env", provider: "default", id: "MISSING_LOCAL_REF_PASSWORD" },
-        },
+    setEnvSecretGatewayConfig({
+      mode: "local",
+      bind: "loopback",
+      auth: {
+        mode: "token",
+        token: "token-auth",
+        password: { source: "env", provider: "default", id: "MISSING_LOCAL_REF_PASSWORD" },
       },
-      secrets: {
-        providers: {
-          default: { source: "env" },
-        },
-      },
-    } as unknown as OpenClawConfig);
+    });
 
     await callGateway({ method: "health" });
 
@@ -1413,21 +2904,14 @@ describe("callGateway password resolution", () => {
 
   it("resolves local password ref before unresolved local token ref can block auth", async () => {
     process.env.LOCAL_FALLBACK_PASSWORD = "resolved-local-fallback-password"; // pragma: allowlist secret
-    getRuntimeConfig.mockReturnValue({
-      gateway: {
-        mode: "local",
-        bind: "loopback",
-        auth: {
-          token: { source: "env", provider: "default", id: "MISSING_LOCAL_REF_TOKEN" },
-          password: { source: "env", provider: "default", id: "LOCAL_FALLBACK_PASSWORD" },
-        },
+    setEnvSecretGatewayConfig({
+      mode: "local",
+      bind: "loopback",
+      auth: {
+        token: { source: "env", provider: "default", id: "MISSING_LOCAL_REF_TOKEN" },
+        password: { source: "env", provider: "default", id: "LOCAL_FALLBACK_PASSWORD" },
       },
-      secrets: {
-        providers: {
-          default: { source: "env" },
-        },
-      },
-    } as unknown as OpenClawConfig);
+    });
 
     await callGateway({ method: "health" });
 
@@ -1437,44 +2921,30 @@ describe("callGateway password resolution", () => {
 
   it("fails closed when unresolved local token SecretRef would otherwise fall back to remote token", async () => {
     process.env.LOCAL_REMOTE_FALLBACK_TOKEN = "resolved-local-remote-fallback-token";
-    getRuntimeConfig.mockReturnValue({
-      gateway: {
-        mode: "local",
-        bind: "loopback",
-        auth: {
-          mode: "token",
-          token: { source: "env", provider: "default", id: "MISSING_LOCAL_REF_TOKEN" },
-        },
-        remote: {
-          token: { source: "env", provider: "default", id: "LOCAL_REMOTE_FALLBACK_TOKEN" },
-        },
+    setEnvSecretGatewayConfig({
+      mode: "local",
+      bind: "loopback",
+      auth: {
+        mode: "token",
+        token: { source: "env", provider: "default", id: "MISSING_LOCAL_REF_TOKEN" },
       },
-      secrets: {
-        providers: {
-          default: { source: "env" },
-        },
+      remote: {
+        token: { source: "env", provider: "default", id: "LOCAL_REMOTE_FALLBACK_TOKEN" },
       },
-    } as unknown as OpenClawConfig);
+    });
 
     await expect(callGateway({ method: "health" })).rejects.toThrow("gateway.auth.token");
   });
 
   it("ignores unresolved local password ref when auth mode is none", async () => {
-    getRuntimeConfig.mockReturnValue({
-      gateway: {
-        mode: "local",
-        bind: "loopback",
-        auth: {
-          mode: "none",
-          password: { source: "env", provider: "default", id: "MISSING_LOCAL_REF_PASSWORD" },
-        },
+    setEnvSecretGatewayConfig({
+      mode: "local",
+      bind: "loopback",
+      auth: {
+        mode: "none",
+        password: { source: "env", provider: "default", id: "MISSING_LOCAL_REF_PASSWORD" },
       },
-      secrets: {
-        providers: {
-          default: { source: "env" },
-        },
-      },
-    } as unknown as OpenClawConfig);
+    });
 
     await callGateway({ method: "health" });
 
@@ -1484,21 +2954,14 @@ describe("callGateway password resolution", () => {
 
   it("resolves local password refs when auth mode is trusted-proxy", async () => {
     process.env.LOCAL_TRUSTED_PROXY_PASSWORD = "resolved-trusted-proxy-password";
-    getRuntimeConfig.mockReturnValue({
-      gateway: {
-        mode: "local",
-        bind: "loopback",
-        auth: {
-          mode: "trusted-proxy",
-          password: { source: "env", provider: "default", id: "LOCAL_TRUSTED_PROXY_PASSWORD" },
-        },
+    setEnvSecretGatewayConfig({
+      mode: "local",
+      bind: "loopback",
+      auth: {
+        mode: "trusted-proxy",
+        password: { source: "env", provider: "default", id: "LOCAL_TRUSTED_PROXY_PASSWORD" },
       },
-      secrets: {
-        providers: {
-          default: { source: "env" },
-        },
-      },
-    } as unknown as OpenClawConfig);
+    });
 
     await callGateway({ method: "health" });
 
@@ -1507,45 +2970,31 @@ describe("callGateway password resolution", () => {
   });
 
   it("fails closed when trusted-proxy local password ref cannot resolve", async () => {
-    getRuntimeConfig.mockReturnValue({
-      gateway: {
-        mode: "local",
-        bind: "loopback",
-        auth: {
-          mode: "trusted-proxy",
-          password: { source: "env", provider: "default", id: "MISSING_LOCAL_REF_PASSWORD" },
-        },
+    setEnvSecretGatewayConfig({
+      mode: "local",
+      bind: "loopback",
+      auth: {
+        mode: "trusted-proxy",
+        password: { source: "env", provider: "default", id: "MISSING_LOCAL_REF_PASSWORD" },
       },
-      secrets: {
-        providers: {
-          default: { source: "env" },
-        },
-      },
-    } as unknown as OpenClawConfig);
+    });
 
     await expect(callGateway({ method: "health" })).rejects.toThrow("gateway.auth.password");
   });
 
   it("does not resolve local password ref when remote password is already configured", async () => {
-    getRuntimeConfig.mockReturnValue({
-      gateway: {
-        mode: "remote",
-        bind: "loopback",
-        auth: {
-          mode: "password",
-          password: { source: "env", provider: "default", id: "MISSING_LOCAL_REF_PASSWORD" },
-        },
-        remote: {
-          url: "wss://remote.example:18789",
-          password: "remote-secret",
-        },
+    setEnvSecretGatewayConfig({
+      mode: "remote",
+      bind: "loopback",
+      auth: {
+        mode: "password",
+        password: { source: "env", provider: "default", id: "MISSING_LOCAL_REF_PASSWORD" },
       },
-      secrets: {
-        providers: {
-          default: { source: "env" },
-        },
+      remote: {
+        url: "wss://remote.example:18789",
+        password: "remote-secret",
       },
-    } as unknown as OpenClawConfig);
+    });
 
     await callGateway({ method: "health" });
 
@@ -1554,22 +3003,15 @@ describe("callGateway password resolution", () => {
 
   it("resolves gateway.remote.token SecretInput refs when remote token is required", async () => {
     process.env.REMOTE_REF_TOKEN = "resolved-remote-ref-token";
-    getRuntimeConfig.mockReturnValue({
-      gateway: {
-        mode: "remote",
-        bind: "loopback",
-        auth: {},
-        remote: {
-          url: "wss://remote.example:18789",
-          token: { source: "env", provider: "default", id: "REMOTE_REF_TOKEN" },
-        },
+    setEnvSecretGatewayConfig({
+      mode: "remote",
+      bind: "loopback",
+      auth: {},
+      remote: {
+        url: "wss://remote.example:18789",
+        token: { source: "env", provider: "default", id: "REMOTE_REF_TOKEN" },
       },
-      secrets: {
-        providers: {
-          default: { source: "env" },
-        },
-      },
-    } as unknown as OpenClawConfig);
+    });
 
     await callGateway({ method: "health" });
 
@@ -1578,22 +3020,15 @@ describe("callGateway password resolution", () => {
 
   it("resolves gateway.remote.password SecretInput refs when remote password is required", async () => {
     process.env.REMOTE_REF_PASSWORD = "resolved-remote-ref-password"; // pragma: allowlist secret
-    getRuntimeConfig.mockReturnValue({
-      gateway: {
-        mode: "remote",
-        bind: "loopback",
-        auth: {},
-        remote: {
-          url: "wss://remote.example:18789",
-          password: { source: "env", provider: "default", id: "REMOTE_REF_PASSWORD" },
-        },
+    setEnvSecretGatewayConfig({
+      mode: "remote",
+      bind: "loopback",
+      auth: {},
+      remote: {
+        url: "wss://remote.example:18789",
+        password: { source: "env", provider: "default", id: "REMOTE_REF_PASSWORD" },
       },
-      secrets: {
-        providers: {
-          default: { source: "env" },
-        },
-      },
-    } as unknown as OpenClawConfig);
+    });
 
     await callGateway({ method: "health" });
 
@@ -1601,23 +3036,16 @@ describe("callGateway password resolution", () => {
   });
 
   it("does not resolve remote token ref when remote password already wins", async () => {
-    getRuntimeConfig.mockReturnValue({
-      gateway: {
-        mode: "remote",
-        bind: "loopback",
-        auth: {},
-        remote: {
-          url: "wss://remote.example:18789",
-          token: { source: "env", provider: "default", id: "MISSING_REMOTE_TOKEN" },
-          password: "remote-password", // pragma: allowlist secret
-        },
+    setEnvSecretGatewayConfig({
+      mode: "remote",
+      bind: "loopback",
+      auth: {},
+      remote: {
+        url: "wss://remote.example:18789",
+        token: { source: "env", provider: "default", id: "MISSING_REMOTE_TOKEN" },
+        password: "remote-password", // pragma: allowlist secret
       },
-      secrets: {
-        providers: {
-          default: { source: "env" },
-        },
-      },
-    } as unknown as OpenClawConfig);
+    });
 
     await callGateway({ method: "health" });
 
@@ -1627,23 +3055,16 @@ describe("callGateway password resolution", () => {
 
   it("resolves remote token ref before unresolved remote password ref can block auth", async () => {
     process.env.REMOTE_REF_TOKEN = "resolved-remote-ref-token";
-    getRuntimeConfig.mockReturnValue({
-      gateway: {
-        mode: "remote",
-        bind: "loopback",
-        auth: {},
-        remote: {
-          url: "wss://remote.example:18789",
-          token: { source: "env", provider: "default", id: "REMOTE_REF_TOKEN" },
-          password: { source: "env", provider: "default", id: "MISSING_REMOTE_PASSWORD" },
-        },
+    setEnvSecretGatewayConfig({
+      mode: "remote",
+      bind: "loopback",
+      auth: {},
+      remote: {
+        url: "wss://remote.example:18789",
+        token: { source: "env", provider: "default", id: "REMOTE_REF_TOKEN" },
+        password: { source: "env", provider: "default", id: "MISSING_REMOTE_PASSWORD" },
       },
-      secrets: {
-        providers: {
-          default: { source: "env" },
-        },
-      },
-    } as unknown as OpenClawConfig);
+    });
 
     await callGateway({ method: "health" });
 
@@ -1652,23 +3073,16 @@ describe("callGateway password resolution", () => {
   });
 
   it("does not resolve remote password ref when remote token already wins", async () => {
-    getRuntimeConfig.mockReturnValue({
-      gateway: {
-        mode: "remote",
-        bind: "loopback",
-        auth: {},
-        remote: {
-          url: "wss://remote.example:18789",
-          token: "remote-token",
-          password: { source: "env", provider: "default", id: "MISSING_REMOTE_PASSWORD" },
-        },
+    setEnvSecretGatewayConfig({
+      mode: "remote",
+      bind: "loopback",
+      auth: {},
+      remote: {
+        url: "wss://remote.example:18789",
+        token: "remote-token",
+        password: { source: "env", provider: "default", id: "MISSING_REMOTE_PASSWORD" },
       },
-      secrets: {
-        providers: {
-          default: { source: "env" },
-        },
-      },
-    } as unknown as OpenClawConfig);
+    });
 
     await callGateway({ method: "health" });
 
@@ -1678,22 +3092,15 @@ describe("callGateway password resolution", () => {
 
   it("resolves remote token refs on local-mode calls when fallback token can win", async () => {
     process.env.LOCAL_FALLBACK_REMOTE_TOKEN = "resolved-local-fallback-remote-token";
-    getRuntimeConfig.mockReturnValue({
-      gateway: {
-        mode: "local",
-        bind: "loopback",
-        auth: {},
-        remote: {
-          token: { source: "env", provider: "default", id: "LOCAL_FALLBACK_REMOTE_TOKEN" },
-          password: { source: "env", provider: "default", id: "MISSING_REMOTE_PASSWORD" },
-        },
+    setEnvSecretGatewayConfig({
+      mode: "local",
+      bind: "loopback",
+      auth: {},
+      remote: {
+        token: { source: "env", provider: "default", id: "LOCAL_FALLBACK_REMOTE_TOKEN" },
+        password: { source: "env", provider: "default", id: "MISSING_REMOTE_PASSWORD" },
       },
-      secrets: {
-        providers: {
-          default: { source: "env" },
-        },
-      },
-    } as unknown as OpenClawConfig);
+    });
 
     await callGateway({ method: "health" });
 
@@ -1702,23 +3109,16 @@ describe("callGateway password resolution", () => {
   });
 
   it("does not resolve remote refs on non-remote gateway calls when auth mode is none", async () => {
-    getRuntimeConfig.mockReturnValue({
-      gateway: {
-        mode: "local",
-        bind: "loopback",
-        auth: { mode: "none" },
-        remote: {
-          url: "wss://remote.example:18789",
-          token: { source: "env", provider: "default", id: "MISSING_REMOTE_TOKEN" },
-          password: { source: "env", provider: "default", id: "MISSING_REMOTE_PASSWORD" },
-        },
+    setEnvSecretGatewayConfig({
+      mode: "local",
+      bind: "loopback",
+      auth: { mode: "none" },
+      remote: {
+        url: "wss://remote.example:18789",
+        token: { source: "env", provider: "default", id: "MISSING_REMOTE_TOKEN" },
+        password: { source: "env", provider: "default", id: "MISSING_REMOTE_PASSWORD" },
       },
-      secrets: {
-        providers: {
-          default: { source: "env" },
-        },
-      },
-    } as unknown as OpenClawConfig);
+    });
 
     await callGateway({ method: "health" });
 
@@ -1727,23 +3127,16 @@ describe("callGateway password resolution", () => {
   });
 
   it("does not resolve remote refs on non-remote gateway calls when auth mode is trusted-proxy", async () => {
-    getRuntimeConfig.mockReturnValue({
-      gateway: {
-        mode: "local",
-        bind: "loopback",
-        auth: { mode: "trusted-proxy" },
-        remote: {
-          url: "wss://remote.example:18789",
-          token: { source: "env", provider: "default", id: "MISSING_REMOTE_TOKEN" },
-          password: { source: "env", provider: "default", id: "MISSING_REMOTE_PASSWORD" },
-        },
+    setEnvSecretGatewayConfig({
+      mode: "local",
+      bind: "loopback",
+      auth: { mode: "trusted-proxy" },
+      remote: {
+        url: "wss://remote.example:18789",
+        token: { source: "env", provider: "default", id: "MISSING_REMOTE_TOKEN" },
+        password: { source: "env", provider: "default", id: "MISSING_REMOTE_PASSWORD" },
       },
-      secrets: {
-        providers: {
-          default: { source: "env" },
-        },
-      },
-    } as unknown as OpenClawConfig);
+    });
 
     await callGateway({ method: "health" });
 
@@ -1752,17 +3145,12 @@ describe("callGateway password resolution", () => {
   });
 
   it.each(explicitAuthCases)("uses explicit $label when url override is set", async (testCase) => {
-    process.env[testCase.envKey] = testCase.envValue;
+    setTestEnvValue(testCase.envKey, testCase.envValue);
     const auth = { [testCase.authKey]: testCase.configValue } as {
       password?: string;
       token?: string;
     };
-    getRuntimeConfig.mockReturnValue({
-      gateway: {
-        mode: "local",
-        auth,
-      },
-    });
+    setGatewayConfig({ mode: "local", auth });
 
     await callGateway({
       method: "health",
@@ -1773,3 +3161,4 @@ describe("callGateway password resolution", () => {
     expect(lastClientOptions?.[testCase.authKey]).toBe(testCase.explicitValue);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

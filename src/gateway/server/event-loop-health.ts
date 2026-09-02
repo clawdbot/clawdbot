@@ -1,19 +1,24 @@
+// Event-loop health monitor samples delay, utilization, and CPU pressure for gateway readiness snapshots.
 import { monitorEventLoopDelay, performance } from "node:perf_hooks";
 
 const EVENT_LOOP_MONITOR_RESOLUTION_MS = 20;
 const EVENT_LOOP_DELAY_WARN_MS = 1_000;
 const EVENT_LOOP_UTILIZATION_WARN = 0.95;
 const CPU_CORE_RATIO_WARN = 0.9;
+const PERSISTENT_DEGRADATION_WARN_AFTER_MS = 60_000;
+// Load counters can spike during frequent short async wakeups; delay is the blocking signal.
+const LOAD_DEGRADATION_DELAY_COEVIDENCE_MS = 25;
 const SUSTAINED_LOAD_SAMPLE_MIN_INTERVAL_MS = 1_000;
 
 type EventLoopDelayMonitor = ReturnType<typeof monitorEventLoopDelay>;
 type EventLoopUtilization = ReturnType<typeof performance.eventLoopUtilization>;
 type CpuUsage = ReturnType<typeof process.cpuUsage>;
 
-export type GatewayEventLoopHealthReason = "event_loop_delay" | "event_loop_utilization" | "cpu";
+type GatewayEventLoopHealthReason = "event_loop_delay" | "event_loop_utilization" | "cpu";
 
 export type GatewayEventLoopHealth = {
   degraded: boolean;
+  degradedSinceMs: number | null;
   reasons: GatewayEventLoopHealthReason[];
   intervalMs: number;
   delayP99Ms: number;
@@ -22,8 +27,10 @@ export type GatewayEventLoopHealth = {
   cpuCoreRatio: number;
 };
 
-export type GatewayEventLoopHealthMonitor = {
+type GatewayEventLoopHealthMonitor = {
   snapshot: () => GatewayEventLoopHealth | undefined;
+  persistentDegradationSnapshot: () => GatewayEventLoopHealth | undefined;
+  reset: () => void;
   stop: () => void;
 };
 
@@ -38,6 +45,11 @@ type GatewayEventLoopHealthMonitorDeps = {
   createDelayMonitor?: EventLoopDelayMonitorFactory;
 };
 
+type GatewayEventLoopHealthMetrics = Pick<
+  GatewayEventLoopHealth,
+  "intervalMs" | "delayP99Ms" | "delayMaxMs" | "utilization" | "cpuCoreRatio"
+>;
+
 function roundMetric(value: number, digits = 3): number {
   if (!Number.isFinite(value)) {
     return 0;
@@ -50,26 +62,33 @@ function nanosecondsToMilliseconds(value: number): number {
   return roundMetric(value / 1_000_000, 1);
 }
 
-function resolveGatewayEventLoopHealthReasons(params: {
-  intervalMs: number;
-  delayP99Ms: number;
-  delayMaxMs: number;
-  utilization: number;
-  cpuCoreRatio: number;
-}): GatewayEventLoopHealthReason[] {
+function classifyGatewayEventLoopHealthReasons(
+  metrics: GatewayEventLoopHealthMetrics,
+): GatewayEventLoopHealthReason[] {
   const reasons: GatewayEventLoopHealthReason[] = [];
-  const hasSustainedLoadWindow = params.intervalMs >= SUSTAINED_LOAD_SAMPLE_MIN_INTERVAL_MS;
 
   if (
-    params.delayP99Ms >= EVENT_LOOP_DELAY_WARN_MS ||
-    params.delayMaxMs >= EVENT_LOOP_DELAY_WARN_MS
+    metrics.delayP99Ms >= EVENT_LOOP_DELAY_WARN_MS ||
+    metrics.delayMaxMs >= EVENT_LOOP_DELAY_WARN_MS
   ) {
     reasons.push("event_loop_delay");
   }
-  if (hasSustainedLoadWindow && params.utilization >= EVENT_LOOP_UTILIZATION_WARN) {
+
+  if (metrics.intervalMs < SUSTAINED_LOAD_SAMPLE_MIN_INTERVAL_MS) {
+    return reasons;
+  }
+
+  const hasDelayCoEvidence =
+    metrics.delayP99Ms >= LOAD_DEGRADATION_DELAY_COEVIDENCE_MS ||
+    metrics.delayMaxMs >= LOAD_DEGRADATION_DELAY_COEVIDENCE_MS;
+  if (!hasDelayCoEvidence) {
+    return reasons;
+  }
+
+  if (metrics.utilization >= EVENT_LOOP_UTILIZATION_WARN) {
     reasons.push("event_loop_utilization");
   }
-  if (hasSustainedLoadWindow && params.cpuCoreRatio >= CPU_CORE_RATIO_WARN) {
+  if (metrics.cpuCoreRatio >= CPU_CORE_RATIO_WARN) {
     reasons.push("cpu");
   }
 
@@ -79,7 +98,7 @@ function resolveGatewayEventLoopHealthReasons(params: {
 export function createGatewayEventLoopHealthMonitor(
   deps: GatewayEventLoopHealthMonitorDeps = {},
 ): GatewayEventLoopHealthMonitor {
-  const nowMs = deps.now ?? Date.now;
+  const nowMs = deps.now ?? performance.now.bind(performance);
   const readCpuUsage = deps.cpuUsage ?? process.cpuUsage.bind(process);
   const readEventLoopUtilization =
     deps.eventLoopUtilization ?? performance.eventLoopUtilization.bind(performance);
@@ -87,9 +106,11 @@ export function createGatewayEventLoopHealthMonitor(
     deps.createDelayMonitor ??
     ((resolutionMs: number) => monitorEventLoopDelay({ resolution: resolutionMs }));
   let monitor: EventLoopDelayMonitor | null = null;
-  let lastWallAt = nowMs();
+  let lastWallAt: number | null = nowMs();
   let lastCpuUsage: CpuUsage | null = readCpuUsage();
   let lastEventLoopUtilization: EventLoopUtilization | null = readEventLoopUtilization();
+  let lastSnapshot: GatewayEventLoopHealth | undefined;
+  let firstDegradedAtMs: number | null = null;
 
   try {
     monitor = createDelayMonitor(EVENT_LOOP_MONITOR_RESOLUTION_MS);
@@ -99,60 +120,93 @@ export function createGatewayEventLoopHealthMonitor(
     monitor = null;
   }
 
+  const snapshot = (): GatewayEventLoopHealth | undefined => {
+    if (!monitor || !lastCpuUsage || !lastEventLoopUtilization || lastWallAt === null) {
+      return undefined;
+    }
+
+    const now = nowMs();
+    const intervalMs = Math.max(1, now - lastWallAt);
+    const delayP99Ms = nanosecondsToMilliseconds(monitor.percentile(99));
+    const delayMaxMs = nanosecondsToMilliseconds(monitor.max);
+    const hasDelayWarning =
+      delayP99Ms >= EVENT_LOOP_DELAY_WARN_MS || delayMaxMs >= EVENT_LOOP_DELAY_WARN_MS;
+
+    if (!hasDelayWarning && intervalMs < SUSTAINED_LOAD_SAMPLE_MIN_INTERVAL_MS) {
+      return lastSnapshot;
+    }
+
+    const cpuUsage = readCpuUsage(lastCpuUsage);
+    const currentEventLoopUtilization = readEventLoopUtilization();
+    const utilization = roundMetric(
+      readEventLoopUtilization(currentEventLoopUtilization, lastEventLoopUtilization).utilization,
+    );
+    const cpuTotalMs = roundMetric((cpuUsage.user + cpuUsage.system) / 1_000, 1);
+    const cpuCoreRatio = roundMetric(cpuTotalMs / intervalMs);
+    const reasons = classifyGatewayEventLoopHealthReasons({
+      intervalMs,
+      delayP99Ms,
+      delayMaxMs,
+      utilization,
+      cpuCoreRatio,
+    });
+    const degraded = reasons.length > 0;
+    if (degraded) {
+      firstDegradedAtMs ??= now;
+    } else {
+      firstDegradedAtMs = null;
+    }
+
+    const health: GatewayEventLoopHealth = {
+      degraded,
+      degradedSinceMs:
+        firstDegradedAtMs === null ? null : Math.max(0, Math.round(now - firstDegradedAtMs)),
+      reasons,
+      intervalMs,
+      delayP99Ms,
+      delayMaxMs,
+      utilization,
+      cpuCoreRatio,
+    };
+
+    monitor.reset();
+    lastWallAt = now;
+    lastCpuUsage = readCpuUsage();
+    lastEventLoopUtilization = currentEventLoopUtilization;
+    lastSnapshot = health;
+
+    return health;
+  };
+
+  const reset = () => {
+    monitor?.reset();
+    lastWallAt = nowMs();
+    lastCpuUsage = readCpuUsage();
+    lastEventLoopUtilization = readEventLoopUtilization();
+    lastSnapshot = undefined;
+    firstDegradedAtMs = null;
+  };
+
   return {
-    snapshot: () => {
-      if (!monitor || !lastCpuUsage || !lastEventLoopUtilization || lastWallAt <= 0) {
-        return undefined;
-      }
-
-      const now = nowMs();
-      const intervalMs = Math.max(1, now - lastWallAt);
-      const delayP99Ms = nanosecondsToMilliseconds(monitor.percentile(99));
-      const delayMaxMs = nanosecondsToMilliseconds(monitor.max);
-      const hasDelayWarning =
-        delayP99Ms >= EVENT_LOOP_DELAY_WARN_MS || delayMaxMs >= EVENT_LOOP_DELAY_WARN_MS;
-
-      if (!hasDelayWarning && intervalMs < SUSTAINED_LOAD_SAMPLE_MIN_INTERVAL_MS) {
-        monitor.reset();
-        return undefined;
-      }
-
-      const cpuUsage = readCpuUsage(lastCpuUsage);
-      const currentEventLoopUtilization = readEventLoopUtilization();
-      const utilization = roundMetric(
-        readEventLoopUtilization(currentEventLoopUtilization, lastEventLoopUtilization).utilization,
-      );
-      const cpuTotalMs = roundMetric((cpuUsage.user + cpuUsage.system) / 1_000, 1);
-      const cpuCoreRatio = roundMetric(cpuTotalMs / intervalMs);
-      const reasons = resolveGatewayEventLoopHealthReasons({
-        intervalMs,
-        delayP99Ms,
-        delayMaxMs,
-        utilization,
-        cpuCoreRatio,
-      });
-
-      monitor.reset();
-      lastWallAt = now;
-      lastCpuUsage = readCpuUsage();
-      lastEventLoopUtilization = currentEventLoopUtilization;
-
-      return {
-        degraded: reasons.length > 0,
-        reasons,
-        intervalMs,
-        delayP99Ms,
-        delayMaxMs,
-        utilization,
-        cpuCoreRatio,
-      };
+    snapshot,
+    // The diagnostic heartbeat is the timer owner. This filtered pull keeps
+    // persistence policy with the monitor without adding another gateway loop.
+    persistentDegradationSnapshot: () => {
+      const current = snapshot();
+      return current?.degradedSinceMs != null &&
+        current.degradedSinceMs >= PERSISTENT_DEGRADATION_WARN_AFTER_MS
+        ? current
+        : undefined;
     },
+    reset,
     stop: () => {
       monitor?.disable();
       monitor = null;
-      lastWallAt = 0;
+      lastWallAt = null;
       lastCpuUsage = null;
       lastEventLoopUtilization = null;
+      lastSnapshot = undefined;
+      firstDegradedAtMs = null;
     },
   };
 }

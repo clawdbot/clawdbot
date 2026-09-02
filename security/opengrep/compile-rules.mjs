@@ -116,7 +116,7 @@ function toPortablePath(filePath, repoRoot = REPO_ROOT) {
 
 function rewriteRule(rule, params) {
   const originalId = String(rule.id ?? "rule");
-  const metadata = { ...(rule.metadata ?? {}) };
+  const metadata = { ...rule.metadata };
   const sourceId = sourceIdFromMetadata(metadata);
   if (!sourceId) {
     throw new Error(
@@ -183,7 +183,7 @@ async function listYamlFiles(dir) {
     }
   }
   await walk(dir);
-  return out.toSorted();
+  return out.toSorted((a, b) => a.localeCompare(b));
 }
 
 async function compile(opts) {
@@ -596,7 +596,9 @@ async function main() {
   printSummary(buckets, manifest, opts.outDir);
 }
 
-main().catch((err) => {
-  console.error(`compile-rules: error: ${err.message ?? err}`);
-  process.exit(1);
-});
+main().catch(
+  /** @param {unknown} err */ (err) => {
+    console.error(`compile-rules: error: ${err.message ?? err}`);
+    process.exit(1);
+  },
+);

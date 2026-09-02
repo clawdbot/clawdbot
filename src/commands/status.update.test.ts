@@ -1,3 +1,4 @@
+// Status update tests cover update check display and availability formatting.
 import { describe, expect, it } from "vitest";
 import type { UpdateCheckResult } from "../infra/update-check.js";
 import { VERSION } from "../version.js";
@@ -156,6 +157,31 @@ describe("formatUpdateOneLiner", () => {
     expect(formatUpdateOneLiner(update)).toBe(
       `Update: npm · up to date · npm beta ${VERSION} · deps ok`,
     );
+  });
+
+  it("renders an installed version newer than extended-stable as ahead", () => {
+    const update = buildUpdate({
+      installKind: "package",
+      packageManager: "npm",
+      registry: { latestVersion: "1.0.0", tag: "extended-stable" },
+    });
+
+    expect(formatUpdateOneLiner(update)).toBe("Update: npm · ahead of extended-stable (1.0.0)");
+  });
+
+  it("renders structured extended-stable resolver failures", () => {
+    const update = buildUpdate({
+      installKind: "git",
+      packageManager: "pnpm",
+      registry: {
+        latestVersion: null,
+        tag: "extended-stable",
+        error: "unsupported_git_channel",
+        reason: "unsupported_git_channel",
+      },
+    });
+
+    expect(formatUpdateOneLiner(update)).toContain("extended-stable requires a package install");
   });
 
   it("renders package-manager mode with registry error", () => {

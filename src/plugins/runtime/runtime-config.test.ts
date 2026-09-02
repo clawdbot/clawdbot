@@ -1,12 +1,11 @@
+// Runtime config tests cover plugin runtime config normalization and lookup.
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
 
 const getRuntimeConfigMock = vi.fn();
 const mutateConfigFileMock = vi.fn();
 const replaceConfigFileMock = vi.fn();
-const logWarnMock = vi.fn();
 
-vi.mock("../../config/config.js", () => ({
+vi.mock("../../config/io.runtime.js", () => ({
   getRuntimeConfig: () => getRuntimeConfigMock(),
 }));
 
@@ -15,65 +14,37 @@ vi.mock("../../config/mutate.js", () => ({
   replaceConfigFile: (...args: unknown[]) => replaceConfigFileMock(...args),
 }));
 
-vi.mock("../../logger.js", () => ({
-  logWarn: (...args: unknown[]) => logWarnMock(...args),
-}));
-
 const { createRuntimeConfig } = await import("./runtime-config.js");
-const deprecatedConfigCode = "runtime-config-load-write";
 
 describe("createRuntimeConfig", () => {
   beforeEach(() => {
     getRuntimeConfigMock.mockReset();
     mutateConfigFileMock.mockReset();
     replaceConfigFileMock.mockReset();
-    logWarnMock.mockClear();
     getRuntimeConfigMock.mockReturnValue({ plugins: {} });
-    mutateConfigFileMock.mockResolvedValue({ previousHash: null, nextHash: "next" });
-    replaceConfigFileMock.mockResolvedValue({ previousHash: null, nextHash: "next" });
   });
 
-  it("reads config from the runtime snapshot for current and deprecated loadConfig", () => {
+  it("reads config from the runtime snapshot", () => {
     const runtimeConfig = { plugins: { entries: {} } };
     getRuntimeConfigMock.mockReturnValue(runtimeConfig);
-    const configApi = createRuntimeConfig();
 
-    expect(configApi.current()).toBe(runtimeConfig);
-    expect(configApi.loadConfig()).toBe(runtimeConfig);
-    expect(getRuntimeConfigMock).toHaveBeenCalledTimes(2);
-    expect(logWarnMock).toHaveBeenCalledWith(
-      `plugin runtime config.loadConfig() is deprecated (${deprecatedConfigCode}); use config.current().`,
-    );
+    expect(createRuntimeConfig().current()).toBe(runtimeConfig);
   });
 
-  it("routes deprecated writeConfigFile through replaceConfigFile with afterWrite", async () => {
+  it("exposes canonical mutation helpers", async () => {
+    mutateConfigFileMock.mockResolvedValue({ result: "updated" });
+    replaceConfigFileMock.mockResolvedValue({ persistedHash: "hash" });
     const configApi = createRuntimeConfig();
-    const nextConfig = { plugins: { entries: {} } } as OpenClawConfig;
+    const mutateParams = { mutate: vi.fn() };
+    const replaceParams = { nextConfig: { plugins: {} } };
 
-    await configApi.writeConfigFile(nextConfig);
-
-    expect(logWarnMock).toHaveBeenCalledWith(
-      `plugin runtime config.writeConfigFile() is deprecated (${deprecatedConfigCode}); use config.mutateConfigFile(...) or config.replaceConfigFile(...).`,
-    );
-    expect(replaceConfigFileMock).toHaveBeenCalledWith({
-      nextConfig,
-      afterWrite: { mode: "auto" },
-      writeOptions: undefined,
+    await expect(configApi.mutateConfigFile(mutateParams as never)).resolves.toEqual({
+      result: "updated",
     });
-  });
-
-  it("preserves explicit afterWrite intent for deprecated writeConfigFile", async () => {
-    const configApi = createRuntimeConfig();
-    const nextConfig = { plugins: { entries: {} } } as OpenClawConfig;
-
-    await configApi.writeConfigFile(nextConfig, {
-      afterWrite: { mode: "none", reason: "test-controlled" },
+    await expect(configApi.replaceConfigFile(replaceParams as never)).resolves.toEqual({
+      persistedHash: "hash",
     });
-
-    expect(replaceConfigFileMock).toHaveBeenCalledWith({
-      nextConfig,
-      afterWrite: { mode: "none", reason: "test-controlled" },
-      writeOptions: { afterWrite: { mode: "none", reason: "test-controlled" } },
-    });
+    expect(mutateConfigFileMock).toHaveBeenCalledWith(mutateParams);
+    expect(replaceConfigFileMock).toHaveBeenCalledWith(replaceParams);
   });
 });

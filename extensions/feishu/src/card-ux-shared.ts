@@ -1,3 +1,4 @@
+// Feishu plugin module implements card ux shared behavior.
 import type { FeishuCardInteractionEnvelope } from "./card-interaction.js";
 
 export function buildFeishuCardButton(params: {

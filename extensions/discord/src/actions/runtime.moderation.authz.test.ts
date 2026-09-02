@@ -1,11 +1,10 @@
+// Discord tests cover runtime.moderation.authz plugin behavior.
 import { PermissionFlagsBits } from "discord-api-types/v10";
-import type { DiscordActionConfig } from "openclaw/plugin-sdk/config-types";
+import type { DiscordActionConfig } from "openclaw/plugin-sdk/config-contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { EMPTY_DISCORD_TEST_CONFIG } from "../test-support/config.js";
-import {
-  discordModerationActionRuntime,
-  handleDiscordModerationAction,
-} from "./runtime.moderation.js";
+import { discordModerationActionRuntime } from "./runtime-deps.js";
+import { handleDiscordModerationAction } from "./runtime.moderation.js";
 
 const originalDiscordModerationActionRuntime = { ...discordModerationActionRuntime };
 const banMemberDiscord = vi.fn(async () => ({ ok: true }));

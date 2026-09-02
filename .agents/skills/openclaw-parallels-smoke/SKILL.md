@@ -1,6 +1,6 @@
 ---
 name: openclaw-parallels-smoke
-description: Run, rerun, debug, or interpret OpenClaw Parallels install, onboarding, gateway smoke, and upgrade checks.
+description: Prepare, snapshot, run, rerun, debug, or interpret OpenClaw Parallels guest install, onboarding, gateway smoke, and upgrade checks across macOS, Windows, and Linux.
 ---
 
 # OpenClaw Parallels Smoke
@@ -9,7 +9,28 @@ Use this skill for Parallels guest workflows and smoke interpretation. Do not lo
 
 ## Global rules
 
-- Use the snapshot most closely matching the requested fresh baseline.
+- Parallels is postpublish-confidence coverage by default, not a prerequisite
+  for the bounded beta-publish phase. Run it against one exact published
+  package version and record the Validation SHA + Tooling SHA run tuple that
+  authorized that package. Validation SHA maps to its Code SHA or Release SHA;
+  it is not a third release identity.
+- A failed postpublish Parallels lane does not retroactively unpublish a beta.
+  Classify it as product, harness/tooling/provenance, infrastructure/credential,
+  or wrapper failure. Only a confirmed product defect enters the next beta.
+- Use one coordinator and one lane per independent guest family. Diagnose and
+  retry one failed family once, then reassess; do not restart the aggregate
+  matrix automatically.
+- Inventory existing VMs and snapshots before provisioning anything. When a preconfigured pristine
+  snapshot matches the requested baseline, switch to it and reuse its user, tools, and base setup.
+  Do not create a new VM, reinstall macOS, or rebuild the guest baseline for a "fresh" run.
+- "Fresh" means restoring the closest existing pristine snapshot, not creating another snapshot.
+  Do not create ad-hoc snapshots unless the user explicitly asks or no suitable baseline exists;
+  restore the original snapshot and leave the guest stopped after an ad-hoc run.
+- Inspect the snapshot state before restoring it. A pristine `poweron` snapshot can contain the
+  preconfigured logged-in session; switch to it normally so Parallels resumes that session. Do not
+  pass `--skip-resume` at test entry unless the run intentionally needs to discard the saved session
+  and boot from the login window. `--skip-resume` is acceptable for final cleanup that must leave the
+  restored source guest stopped.
 - Gateway verification in smoke runs should use `openclaw gateway status --deep --require-rpc` unless the stable version being checked does not support it yet.
 - Stable `2026.3.12` pre-upgrade diagnostics may require a plain `gateway status --deep` fallback.
 - Treat `precheck=latest-ref-fail` on that stable pre-upgrade lane as baseline, not automatically a regression.
@@ -56,9 +77,9 @@ Use this skill for Parallels guest workflows and smoke interpretation. Do not lo
 - For unpublished targets, pack the candidate on the host, serve the `.tgz` over the harness HTTP server, and point the guest updater at that served package. Prefer `openclaw update --tag http://<host-ip>:<port>/openclaw-<version>.tgz --yes --json`; when channel persistence also matters, pass `--channel <stable|beta>` and set `OPENCLAW_UPDATE_PACKAGE_SPEC` to the same served URL in the guest update environment. The command under test must still be `openclaw update`, not direct npm.
 - For unpublished local-fix validation, remember the old baseline updater code still controls the first hop. A fix that lives only in the new updater code cannot change that already-running old process; the served candidate must either keep package/plugin metadata compatible with the baseline host or the baseline itself must include the updater fix.
 - For beta/stable verification, resolve the tag immediately before the run (`npm view openclaw@beta version dist.tarball` or `npm view openclaw@latest ...`). Tags can move while a long VM matrix is already running; restart the matrix when the intended prerelease appears after an earlier registry 404/tag-lag check.
-- Source Peter's profile in the host shell (`set -a; source "$HOME/.profile"; set +a`) before OpenAI/Anthropic lanes. Do not print profile contents or env dumps; pass provider secrets through the guest exec environment.
+- Use the configured secret workflow to inject only the provider keys needed by OpenAI/Anthropic lanes. Do not print secrets or env dumps; pass provider secrets through the guest exec environment.
 - Same-guest update verification should set the default model explicitly to `openai/gpt-5.4` before the agent turn and use a fresh explicit `--session-id` so old session model state does not leak into the check.
-- The aggregate npm-update wrapper must resolve the Linux VM with the same Ubuntu fallback policy as `parallels-linux-smoke.sh` before both fresh and update lanes. Treat any Ubuntu guest with major version `>= 24` as acceptable when the exact default VM is missing, preferring the closest version match. On Peter's current host today, missing `Ubuntu 24.04.3 ARM64` should fall back to `Ubuntu 25.10`.
+- The aggregate npm-update wrapper must resolve the Linux VM with the same Ubuntu fallback policy as `parallels-linux-smoke.sh` before both fresh and update lanes. Treat any Ubuntu guest with major version `>= 24` as acceptable when the exact default VM is missing, preferring the newest versioned Ubuntu guest with a fresh poweroff snapshot. On Peter's current host today, use `Ubuntu 26.04`.
 - On macOS same-guest update checks, restart the gateway after the npm upgrade before `gateway status` / `agent`; launchd can otherwise report a loaded service while the old process has exited and the fresh process is not RPC-ready yet.
 - The npm-update aggregate's macOS update leg writes the guest update script as root, then runs it as the desktop user. If `prlctl exec "$MACOS_VM" --current-user ...` cannot authenticate, retry through plain root `prlctl exec` plus `sudo -u <desktop-user> /usr/bin/env HOME=/Users/<desktop-user> USER=<desktop-user> LOGNAME=<desktop-user> PATH=/opt/homebrew/bin:/opt/homebrew/opt/node/bin:/usr/bin:/bin:/usr/sbin:/sbin ...`. That is a Parallels transport fallback; still verify `openclaw --version`, gateway RPC, and an agent turn after the update.
 - On Windows same-guest update checks, restart the gateway after the npm upgrade before `gateway status` / `agent`; in-place global npm updates can otherwise leave stale hashed `dist/*` module imports alive in the running service.
@@ -93,8 +114,8 @@ Use this skill for Parallels guest workflows and smoke interpretation. Do not lo
 - If that release-to-dev lane fails with `reason=preflight-no-good-commit` and repeated `sh: pnpm: command not found` tails from `preflight build`, treat it as an updater regression first. The fix belongs in the git/dev updater bootstrap path, not in Parallels retry logic.
 - Until the public stable train includes that updater bootstrap fix, the macOS release-to-dev lane may seed a temporary guest-local `pnpm` shim immediately before `openclaw update --channel dev`. Keep that workaround scoped to the smoke harness and remove it once the latest stable no longer needs it.
 - In Tahoe `prlctl exec --current-user` runs, prefer explicit `node .../openclaw.mjs ...` invocations for the release->dev handoff itself and for post-update verification. The shebanged global `openclaw` wrapper can fail with `env: node: No such file or directory`, and self-updating through the wrapper is a weaker lane than invoking the entrypoint under a fixed `node`.
-- Default to the snapshot closest to `macOS 26.3.1 latest`.
-- On Peter's Tahoe VM, `fresh-latest-march-2026` can hang in `prlctl snapshot-switch`; if restore times out there, rerun with `--snapshot-hint 'macOS 26.3.1 latest'` before blaming auth or the harness.
+- Default to the snapshot closest to `macOS 26.5 latest`.
+- On Peter's Tahoe VM, `fresh-latest-march-2026` can hang in `prlctl snapshot-switch`; if restore times out there, rerun with `--snapshot-hint 'macOS 26.5 latest'` before blaming auth or the harness.
 - `parallels-macos-smoke.sh` now retries `snapshot-switch` once after force-stopping a stuck running/suspended guest. If Tahoe still times out after that recovery path, then treat it as a real Parallels/host issue and rerun manually.
 - The macOS smoke should include a dashboard load phase after gateway health: resolve the tokenized URL with `openclaw dashboard --no-open`, verify the served HTML contains the Control UI title/root shell, then open Safari and require an established localhost TCP connection from Safari to the gateway port.
 - For Tahoe `fresh.gateway-status`, prefer non-TTY `prlctl exec --current-user ... openclaw gateway status ...` plus a few short retries. `prlctl enter` can spam TTY control bytes and hang the phase log even when the CLI itself is healthy.
@@ -110,8 +131,27 @@ Use this skill for Parallels guest workflows and smoke interpretation. Do not lo
 
 ## Windows flow
 
+- This repo owns the general Windows VM lifecycle: remote `prlctl` management, clean-state checks, WSL 2, Git/Node, snapshot creation/restoration, and OpenClaw smoke. Assume Parallels Desktop is installed/activated and a Windows 11 VM has been downloaded, then run:
+
+  ```bash
+  pnpm test:parallels:windows:prepare -- inventory
+  pnpm test:parallels:windows:prepare -- prepare
+  pnpm test:parallels:windows:prepare -- verify
+  ```
+
+- `prepare` inventories before mutation, requires Parallels Tools and a logged-in desktop session, rejects OpenClaw CLI/app/tray/process state and WSL distros, creates a dated power-off clean-OS snapshot only on an unprepared guest, enables WSL/Virtual Machine Platform, installs the signed Microsoft WSL package, sets WSL 2 as default, installs Git and Node/npm, verifies the Windows hypervisor is active and no reboot is pending, and creates a power-off `pre-openclaw-native-e2e-<date>` snapshot.
+- When today's E2E snapshot already exists, `prepare` restores and verifies that snapshot instead of trusting its name. Treat `prepare` as destructive to post-snapshot guest changes, just like an explicit restore.
+- Package elevation resolves the exact version and SHA-256 from Microsoft's official WinGet manifests, validates the expected Authenticode publisher, and copies into a freshly ACL-restricted SYSTEM directory before execution. Keep this generic mechanism here; companion-specific package choices stay in the Windows app repo.
+- Restore `clean`, `e2e`, an exact name, or an id:
+
+  ```bash
+  pnpm test:parallels:windows:prepare -- restore --snapshot e2e
+  ```
+
+- Restoring discards all post-snapshot changes. Inventory first and do not restore while another developer or lane owns the VM. `e2e` selects the newest `pre-openclaw-native-e2e-*`; use an exact snapshot for historical reproduction.
+- For native companion work, read `../../../../openclaw-windows-node/.agents/skills/openclaw-proof-validation/PARALLELS.md`. That optional macOS sidecar reuses this controller and adds only .NET, Windows SDK, WebView2, the app checkout, app-layer snapshots, build/tests, and native proof.
 - Preferred entrypoint: `pnpm test:parallels:windows`
-- Use the snapshot closest to `pre-openclaw-native-e2e-2026-03-12`.
+- Use the newest verified `pre-openclaw-native-e2e-*` snapshot and pass its exact name with `--snapshot-hint`.
 - Default upgrade coverage on Windows should now include: fresh snapshot -> site installer pinned to the requested stable tag -> `openclaw update --channel dev` on the guest. Keep the older host-tgz upgrade path only when the caller explicitly passes `--target-package-spec`.
 - Optional exact npm-tag baseline on Windows: `bash scripts/e2e/parallels-windows-smoke.sh --mode upgrade --target-package-spec openclaw@<tag> --json`. That lane installs the published npm tarball as baseline, then runs `openclaw update --channel dev`.
 - Optional forward-fix Windows validation: `bash scripts/e2e/parallels-windows-smoke.sh --mode upgrade --upgrade-from-packed-main --json`. That lane installs the packed current-main npm tgz as baseline, then runs `openclaw update --channel dev`.
@@ -136,12 +176,17 @@ Use this skill for Parallels guest workflows and smoke interpretation. Do not lo
 - If standalone Windows upgrade fails with a gateway token mismatch but `pnpm test:parallels:npm-update` passes, trust the mismatch as a standalone ref-onboard ordering bug first; the npm-update helper does not re-run ref-mode onboard on the same guest.
 - Keep onboarding and status output ASCII-clean in logs; fancy punctuation becomes mojibake in current capture paths.
 - If you hit an older run with `rc=255` plus an empty `fresh.install-main.log` or `upgrade.install-main.log`, treat it as a likely `prlctl exec` transport drop after guest start-up, not immediate proof of an npm/package failure.
+- If WSL features are enabled but `wsl.exe --version` fails, rerun `prepare`; the inbox features and the signed WSL package are separate prerequisites. If the default reverts to 1, set `wsl.exe --set-default-version 2` and rerun `verify`.
+- If `winget` detaches or prints nothing over `prlctl`, call it through `cmd.exe /d /s /c`. Avoid remote UAC: download as the desktop user, then let the controller verify the trusted manifest hash/publisher and install from its protected SYSTEM staging directory.
+- If snapshot restore reports incompatible saved CPU state, make a power-off replacement snapshot from the known-good disk state and use its exact name. Never bypass snapshot restore for a two-lane fresh+upgrade claim.
+- If baseline verification reports OpenClaw state, restore `clean` or remove the product state deliberately; never bless a dirty guest. Check `%APPDATA%` and `%LOCALAPPDATA%` for both stable and dev companion identities plus Inno uninstall registration.
+- Long Windows installers can remain quiet while healthy. Inspect `tasklist` and installer/MSI logs before declaring a hang; keep long operations behind a background runner with short host-bounded polling calls.
 
 ## Linux flow
 
 - Preferred entrypoint: `pnpm test:parallels:linux`
-- Use the snapshot closest to fresh `Ubuntu 24.04.3 ARM64`.
-- If that exact VM is missing on the host, any Ubuntu guest with major version `>= 24` is acceptable; prefer the closest versioned Ubuntu guest with a fresh poweroff snapshot. On Peter's host today, that is `Ubuntu 25.10`.
+- Use the newest versioned Ubuntu guest with a fresh poweroff snapshot. On Peter's host today, that is `Ubuntu 26.04`.
+- If an exact requested Ubuntu VM is missing on the host, any Ubuntu guest with major version `>= 24` is acceptable; prefer the newest versioned Ubuntu guest over older fallback snapshots.
 - Use plain `prlctl exec`; `--current-user` is not the right transport on this snapshot.
 - Fresh snapshots may be missing `curl`, and `apt-get update` can fail on clock skew. Bootstrap with `apt-get -o Acquire::Check-Date=false update` and install `curl ca-certificates`.
 - Fresh `main` tgz smoke still needs the latest-release installer first because the snapshot has no Node or npm before bootstrap.

@@ -1,99 +1,53 @@
-import { randomBytes } from "node:crypto";
-import { rmSync } from "node:fs";
-import { readdir, readFile, stat, unlink } from "node:fs/promises";
+// Zalo plugin module implements outbound media behavior.
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { join } from "node:path";
-import { loadOutboundMediaFromUrl } from "openclaw/plugin-sdk/outbound-media";
-import { privateFileStore } from "openclaw/plugin-sdk/security-runtime";
-import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
+import {
+  asDateTimestampMs,
+  resolveExpiresAtMsFromDurationMs,
+} from "openclaw/plugin-sdk/number-runtime";
+import {
+  createHostedOutboundMediaStore,
+  type HostedOutboundMediaChunkRecord,
+  type HostedOutboundMediaMetaRecord,
+  type HostedOutboundMediaStore,
+} from "openclaw/plugin-sdk/outbound-media";
+import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
 import { resolveWebhookPath } from "openclaw/plugin-sdk/webhook-ingress";
+import { getZaloRuntime } from "./runtime.js";
+import { ZALO_OUTBOUND_MEDIA_TTL_MS } from "./timeouts.js";
 
-const ZALO_OUTBOUND_MEDIA_TTL_MS = 2 * 60_000;
 const ZALO_OUTBOUND_MEDIA_SEGMENT = "media";
 const ZALO_OUTBOUND_MEDIA_PREFIX = `/${ZALO_OUTBOUND_MEDIA_SEGMENT}/`;
-const ZALO_OUTBOUND_MEDIA_DIR = join(
-  resolvePreferredOpenClawTmpDir(),
-  "openclaw-zalo-outbound-media",
-);
 const ZALO_OUTBOUND_MEDIA_ID_RE = /^[a-f0-9]{24}$/;
+const ZALO_OUTBOUND_MEDIA_NAMESPACE = "hosted-outbound-media";
+const ZALO_OUTBOUND_MEDIA_CHUNKS_NAMESPACE = "hosted-outbound-media-chunks";
+const ZALO_OUTBOUND_MEDIA_MAX_ENTRIES = 64;
+const ZALO_OUTBOUND_MEDIA_CHUNK_ROWS_PER_ENTRY_BUDGET = 256;
+const ZALO_OUTBOUND_MEDIA_MAX_CHUNK_ROWS =
+  ZALO_OUTBOUND_MEDIA_MAX_ENTRIES * ZALO_OUTBOUND_MEDIA_CHUNK_ROWS_PER_ENTRY_BUDGET;
 
-type HostedZaloMediaMetadata = {
-  routePath: string;
-  token: string;
-  contentType?: string;
-  expiresAt: number;
-};
+let hostedZaloMediaStore: HostedOutboundMediaStore | undefined;
 
-function resolveHostedZaloMediaMetadataPath(id: string): string {
-  return join(ZALO_OUTBOUND_MEDIA_DIR, `${id}.json`);
+function createHostedZaloMediaStore(): HostedOutboundMediaStore {
+  const runtime = getZaloRuntime();
+  return createHostedOutboundMediaStore({
+    metadataStore: runtime.state.openKeyedStore<HostedOutboundMediaMetaRecord>({
+      namespace: ZALO_OUTBOUND_MEDIA_NAMESPACE,
+      maxEntries: ZALO_OUTBOUND_MEDIA_MAX_ENTRIES + 16,
+    }),
+    chunkStore: runtime.state.openKeyedStore<HostedOutboundMediaChunkRecord>({
+      namespace: ZALO_OUTBOUND_MEDIA_CHUNKS_NAMESPACE,
+      maxEntries: ZALO_OUTBOUND_MEDIA_MAX_CHUNK_ROWS,
+    }),
+    ttlMs: ZALO_OUTBOUND_MEDIA_TTL_MS,
+    maxEntries: ZALO_OUTBOUND_MEDIA_MAX_ENTRIES,
+    maxChunkRows: ZALO_OUTBOUND_MEDIA_MAX_CHUNK_ROWS,
+    resolveExpiresAtMs: (ttlMs) => resolveExpiresAtMsFromDurationMs(ttlMs),
+  });
 }
 
-function resolveHostedZaloMediaBufferPath(id: string): string {
-  return join(ZALO_OUTBOUND_MEDIA_DIR, `${id}.bin`);
-}
-
-function createHostedZaloMediaId(): string {
-  return randomBytes(12).toString("hex");
-}
-
-function createHostedZaloMediaToken(): string {
-  return randomBytes(24).toString("hex");
-}
-
-async function ensureHostedZaloMediaDir(): Promise<void> {
-  await privateFileStore(ZALO_OUTBOUND_MEDIA_DIR).writeText(".ready", "");
-  await unlink(join(ZALO_OUTBOUND_MEDIA_DIR, ".ready")).catch(() => undefined);
-}
-
-async function deleteHostedZaloMediaEntry(id: string): Promise<void> {
-  await Promise.all([
-    unlink(resolveHostedZaloMediaMetadataPath(id)).catch(() => undefined),
-    unlink(resolveHostedZaloMediaBufferPath(id)).catch(() => undefined),
-  ]);
-}
-
-async function cleanupExpiredHostedZaloMedia(nowMs = Date.now()): Promise<void> {
-  let fileNames: string[];
-  try {
-    fileNames = await readdir(ZALO_OUTBOUND_MEDIA_DIR);
-  } catch {
-    return;
-  }
-
-  await Promise.all(
-    fileNames
-      .filter((fileName) => fileName.endsWith(".json"))
-      .map(async (fileName) => {
-        const id = fileName.slice(0, -5);
-        try {
-          const metadataRaw = await readFile(resolveHostedZaloMediaMetadataPath(id), "utf8");
-          const metadata = JSON.parse(metadataRaw) as HostedZaloMediaMetadata;
-          if (metadata.expiresAt <= nowMs) {
-            await deleteHostedZaloMediaEntry(id);
-          }
-        } catch {
-          await deleteHostedZaloMediaEntry(id);
-        }
-      }),
-  );
-}
-
-async function readHostedZaloMediaEntry(id: string): Promise<{
-  metadata: HostedZaloMediaMetadata;
-  buffer: Buffer;
-} | null> {
-  try {
-    const [metadataRaw, buffer] = await Promise.all([
-      readFile(resolveHostedZaloMediaMetadataPath(id), "utf8"),
-      readFile(resolveHostedZaloMediaBufferPath(id)),
-    ]);
-    return {
-      metadata: JSON.parse(metadataRaw) as HostedZaloMediaMetadata,
-      buffer,
-    };
-  } catch {
-    return null;
-  }
+function getHostedZaloMediaStore(): HostedOutboundMediaStore {
+  hostedZaloMediaStore ??= createHostedZaloMediaStore();
+  return hostedZaloMediaStore;
 }
 
 export function resolveHostedZaloMediaRoutePrefix(params: {
@@ -127,44 +81,36 @@ export async function prepareHostedZaloMediaUrl(params: {
   maxBytes: number;
   proxyUrl?: string;
 }): Promise<string> {
-  await ensureHostedZaloMediaDir();
-  await cleanupExpiredHostedZaloMedia();
-
-  const media = await loadOutboundMediaFromUrl(params.mediaUrl, {
-    maxBytes: params.maxBytes,
-    ...(params.proxyUrl ? { proxyUrl: params.proxyUrl } : {}),
-  });
+  const now = asDateTimestampMs(Date.now());
+  const expiresAt =
+    now === undefined
+      ? undefined
+      : resolveExpiresAtMsFromDurationMs(ZALO_OUTBOUND_MEDIA_TTL_MS, { nowMs: now });
+  if (expiresAt === undefined) {
+    throw new Error("Zalo outbound media expiry could not be resolved");
+  }
 
   const routePath = resolveHostedZaloMediaRoutePath({
     webhookUrl: params.webhookUrl,
     webhookPath: params.webhookPath,
   });
-  const id = createHostedZaloMediaId();
-  const token = createHostedZaloMediaToken();
   const publicBaseUrl = new URL(params.webhookUrl).origin;
 
-  const store = privateFileStore(ZALO_OUTBOUND_MEDIA_DIR);
-  await store.writeText(`${id}.bin`, media.buffer);
-  try {
-    await store.writeJson(`${id}.json`, {
-      routePath,
-      token,
-      contentType: media.contentType,
-      expiresAt: Date.now() + ZALO_OUTBOUND_MEDIA_TTL_MS,
-    } satisfies HostedZaloMediaMetadata);
-  } catch (error) {
-    await deleteHostedZaloMediaEntry(id);
-    throw error;
-  }
-
-  return `${publicBaseUrl}${routePath}${id}?token=${token}`;
+  return await getHostedZaloMediaStore().prepareUrl({
+    mediaUrl: params.mediaUrl,
+    routePath,
+    publicBaseUrl,
+    maxBytes: params.maxBytes,
+    ...(params.proxyUrl ? { proxyUrl: params.proxyUrl } : {}),
+  });
 }
 
 export async function tryHandleHostedZaloMediaRequest(
   req: IncomingMessage,
   res: ServerResponse,
 ): Promise<boolean> {
-  await cleanupExpiredHostedZaloMedia();
+  const store = getHostedZaloMediaStore();
+  await store.cleanupExpired();
 
   const method = req.method ?? "GET";
   if (method !== "GET" && method !== "HEAD") {
@@ -192,48 +138,64 @@ export async function tryHandleHostedZaloMediaRequest(
     return true;
   }
 
-  const entry = await readHostedZaloMediaEntry(id);
-  if (!entry || entry.metadata.routePath !== routePath) {
-    res.statusCode = 404;
-    res.end("Not Found");
-    return true;
-  }
-
-  if (entry.metadata.expiresAt <= Date.now()) {
-    await deleteHostedZaloMediaEntry(id);
+  const now = asDateTimestampMs(Date.now());
+  if (now === undefined) {
+    await store.delete(id);
     res.statusCode = 410;
     res.end("Expired");
     return true;
   }
 
-  if (url.searchParams.get("token") !== entry.metadata.token) {
+  const metadata = await store.readMetadata(id, now);
+  if (!metadata || metadata.routePath !== routePath) {
+    res.statusCode = 404;
+    res.end("Not Found");
+    return true;
+  }
+
+  const expiresAt = asDateTimestampMs(metadata.expiresAt);
+  if (expiresAt === undefined || expiresAt <= now) {
+    await store.delete(id);
+    res.statusCode = 410;
+    res.end("Expired");
+    return true;
+  }
+
+  const token = url.searchParams.get("token");
+  if (!safeEqualSecret(token, metadata.token)) {
     res.statusCode = 401;
     res.end("Unauthorized");
     return true;
   }
 
-  if (entry.metadata.contentType) {
-    res.setHeader("Content-Type", entry.metadata.contentType);
+  let servedMetadata = metadata;
+  let body: Buffer | undefined;
+  if (method === "GET") {
+    const entry = await store.read(id, now);
+    if (
+      !entry ||
+      entry.metadata.routePath !== routePath ||
+      !safeEqualSecret(token, entry.metadata.token)
+    ) {
+      res.statusCode = 404;
+      res.end("Not Found");
+      return true;
+    }
+    servedMetadata = entry.metadata;
+    body = entry.buffer;
+  }
+
+  if (servedMetadata.contentType) {
+    res.setHeader("Content-Type", servedMetadata.contentType);
   }
   res.setHeader("Cache-Control", "no-store");
   res.setHeader("X-Content-Type-Options", "nosniff");
-  const bufferStats = await stat(resolveHostedZaloMediaBufferPath(id)).catch(() => null);
-  if (bufferStats) {
-    res.setHeader("Content-Length", String(bufferStats.size));
-  }
-
+  res.setHeader("Content-Length", String(servedMetadata.byteLength));
+  res.statusCode = 200;
+  res.end(body);
   if (method === "HEAD") {
-    res.statusCode = 200;
-    res.end();
     return true;
   }
-
-  res.statusCode = 200;
-  res.end(entry.buffer);
-  await deleteHostedZaloMediaEntry(id);
+  await store.delete(id);
   return true;
-}
-
-export function clearHostedZaloMediaForTest(): void {
-  rmSync(ZALO_OUTBOUND_MEDIA_DIR, { recursive: true, force: true });
 }

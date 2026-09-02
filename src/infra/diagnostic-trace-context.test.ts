@@ -1,4 +1,5 @@
-import { afterEach, describe, expect, it } from "vitest";
+// Tests diagnostic trace context propagation and reset behavior.
+import { describe, expect, it } from "vitest";
 import {
   createChildDiagnosticTraceContext,
   createDiagnosticTraceContext,
@@ -10,7 +11,6 @@ import {
   isValidDiagnosticTraceFlags,
   isValidDiagnosticTraceId,
   parseDiagnosticTraceparent,
-  resetDiagnosticTraceContextForTest,
   runWithDiagnosticTraceContext,
 } from "./diagnostic-trace-context.js";
 
@@ -19,10 +19,6 @@ const SPAN_ID = "00f067aa0ba902b7";
 const CHILD_SPAN_ID = "7ad6b9a982deb2c9";
 
 describe("diagnostic-trace-context", () => {
-  afterEach(() => {
-    resetDiagnosticTraceContextForTest();
-  });
-
   it("validates W3C trace ids, span ids, and trace flags", () => {
     expect(isValidDiagnosticTraceId(TRACE_ID)).toBe(true);
     expect(isValidDiagnosticSpanId(SPAN_ID)).toBe(true);
@@ -180,8 +176,12 @@ describe("diagnostic-trace-context", () => {
       });
     });
 
-    expect(createDiagnosticTraceContextFromActiveScope({ spanId: CHILD_SPAN_ID })).toEqual({
-      traceId: expect.stringMatching(/^[0-9a-f]{32}$/),
+    const fallbackScoped = createDiagnosticTraceContextFromActiveScope({ spanId: CHILD_SPAN_ID });
+    expect(typeof fallbackScoped.traceId).toBe("string");
+    expect(fallbackScoped.traceId).toHaveLength(32);
+    expect(/^[0-9a-f]+$/.test(fallbackScoped.traceId)).toBe(true);
+    expect(fallbackScoped).toEqual({
+      traceId: fallbackScoped.traceId,
       spanId: CHILD_SPAN_ID,
       traceFlags: "01",
     });

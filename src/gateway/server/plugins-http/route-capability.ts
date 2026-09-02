@@ -1,3 +1,4 @@
+// Plugin HTTP route capability helpers discover node-authorized route surfaces from plugin registrations.
 import type { PluginRegistry } from "../../../plugins/registry.js";
 import {
   resolvePluginNodeCapabilityTtlMs,
@@ -6,8 +7,12 @@ import {
 import type { PluginRoutePathContext } from "./path-context.js";
 import { findMatchingPluginHttpRoutes } from "./route-match.js";
 
+/**
+ * Node-capability route discovery for plugin HTTP routes.
+ */
 type PluginHttpRouteEntry = NonNullable<PluginRegistry["httpRoutes"]>[number];
 
+/** Registered plugin route enriched with its node capability surface. */
 export type PluginNodeCapabilityRoute = PluginHttpRouteEntry & {
   nodeCapability: PluginNodeCapabilitySurface;
 };
@@ -28,7 +33,8 @@ function resolvePluginNodeCapabilityRouteSurface(
   };
 }
 
-export function findMatchingPluginNodeCapabilityRoutes(
+/** Lists all node-capability routes matching the already canonicalized path context. */
+function findMatchingPluginNodeCapabilityRoutes(
   registry: PluginRegistry,
   context: PluginRoutePathContext,
 ): PluginNodeCapabilityRoute[] {
@@ -41,6 +47,7 @@ export function findMatchingPluginNodeCapabilityRoutes(
     );
 }
 
+/** Returns the highest-priority node-capability route for a plugin HTTP path. */
 export function findMatchingPluginNodeCapabilityRoute(
   registry: PluginRegistry,
   context: PluginRoutePathContext,
@@ -48,10 +55,7 @@ export function findMatchingPluginNodeCapabilityRoute(
   return findMatchingPluginNodeCapabilityRoutes(registry, context)[0];
 }
 
-export function listPluginNodeCapabilitySurfaces(registry: PluginRegistry): string[] {
-  return listPluginNodeCapabilities(registry).map((entry) => entry.surface);
-}
-
+/** Lists unique node-capability surfaces, preferring the shortest TTL per surface. */
 export function listPluginNodeCapabilities(
   registry: PluginRegistry,
 ): PluginNodeCapabilitySurface[] {

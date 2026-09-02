@@ -1,3 +1,8 @@
+/**
+ * Inbound channel contract testkit.
+ *
+ * Builds dispatch capture mocks for plugin inbound contract suites.
+ */
 import { vi } from "vitest";
 
 export function buildDispatchInboundCaptureMock<T extends Record<string, unknown>>(

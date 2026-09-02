@@ -1,10 +1,10 @@
+// Feishu plugin module implements perm behavior.
 import type * as Lark from "@larksuiteoapi/node-sdk";
 import type { OpenClawPluginApi } from "../runtime-api.js";
-import { listEnabledFeishuAccounts } from "./accounts.js";
 import { FeishuPermSchema, type FeishuPermParams } from "./perm-schema.js";
 import { createFeishuToolClient, resolveAnyEnabledFeishuToolsConfig } from "./tool-account.js";
 import {
-  jsonToolResult,
+  feishuExternalToolResult as jsonResult,
   toolExecutionErrorResult,
   unknownToolActionResult,
 } from "./tool-result.js";
@@ -117,12 +117,7 @@ export function registerFeishuPermTools(api: OpenClawPluginApi) {
     return;
   }
 
-  const accounts = listEnabledFeishuAccounts(api.config);
-  if (accounts.length === 0) {
-    return;
-  }
-
-  const toolsCfg = resolveAnyEnabledFeishuToolsConfig(accounts);
+  const toolsCfg = resolveAnyEnabledFeishuToolsConfig(api.config);
   if (!toolsCfg.perm) {
     return;
   }
@@ -134,6 +129,7 @@ export function registerFeishuPermTools(api: OpenClawPluginApi) {
       const defaultAccountId = ctx.agentAccountId;
       return {
         name: "feishu_perm",
+        resultContentSource: "network",
         label: "Feishu Perm",
         description: "Feishu permission management. Actions: list, add, remove",
         parameters: FeishuPermSchema,
@@ -144,16 +140,17 @@ export function registerFeishuPermTools(api: OpenClawPluginApi) {
               api,
               executeParams: p,
               defaultAccountId,
+              requiredTool: { family: "perm", label: "Perm" },
             });
             switch (p.action) {
               case "list":
-                return jsonToolResult(await listMembers(client, p.token, p.type));
+                return jsonResult(await listMembers(client, p.token, p.type));
               case "add":
-                return jsonToolResult(
+                return jsonResult(
                   await addMember(client, p.token, p.type, p.member_type, p.member_id, p.perm),
                 );
               case "remove":
-                return jsonToolResult(
+                return jsonResult(
                   await removeMember(client, p.token, p.type, p.member_type, p.member_id),
                 );
               default:

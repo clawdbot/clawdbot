@@ -1,4 +1,5 @@
-import { GatewayClient } from "../../../src/gateway/client.js";
+// OpenClaw SDK module implements transport behavior.
+import { GatewayClient } from "@openclaw/gateway-client";
 import { EventHub } from "./event-hub.js";
 import type {
   ConnectableOpenClawTransport,
@@ -7,6 +8,8 @@ import type {
   OpenClawTransport,
 } from "./types.js";
 
+// Gateway transport adapter that converts the lower-level GatewayClient into the
+// SDK transport interface and replays raw events for late subscribers.
 type GatewayClientLike = {
   request<T = unknown>(
     method: string,
@@ -18,10 +21,10 @@ type GatewayClientLike = {
 
 const RAW_EVENT_REPLAY_LIMIT = 1000;
 
-export type GatewayClientTransportOptions = {
+/** Options passed through to the Gateway websocket client. */
+type GatewayClientTransportOptions = {
   url?: string;
   connectChallengeTimeoutMs?: number;
-  connectDelayMs?: number;
   preauthHandshakeTimeoutMs?: number;
   tickWatchMinIntervalMs?: number;
   requestTimeoutMs?: number;
@@ -66,6 +69,7 @@ function toGatewayEvent(event: unknown): GatewayEvent {
   };
 }
 
+/** Connectable SDK transport backed by @openclaw/gateway-client. */
 export class GatewayClientTransport implements ConnectableOpenClawTransport {
   private readonly eventsHub = new EventHub<GatewayEvent>({
     replayLimit: RAW_EVENT_REPLAY_LIMIT,
@@ -73,17 +77,23 @@ export class GatewayClientTransport implements ConnectableOpenClawTransport {
   private readonly options: GatewayClientTransportOptions;
   private client: GatewayClientLike | null = null;
   private connectPromise: Promise<void> | null = null;
+  private rejectPendingConnect: ((error: Error) => void) | null = null;
   private closePromise: Promise<void> | null = null;
+  private closed = false;
 
   constructor(options: GatewayClientTransportOptions = {}) {
     this.options = options;
   }
 
   connect(): Promise<void> {
+    if (this.closed) {
+      return Promise.reject(new Error("gateway transport is closed"));
+    }
     if (this.connectPromise) {
       return this.connectPromise;
     }
     this.connectPromise = new Promise<void>((resolve, reject) => {
+      this.rejectPendingConnect = reject;
       const client = new GatewayClient({
         ...this.options,
         onEvent: (event: unknown) => {
@@ -92,21 +102,42 @@ export class GatewayClientTransport implements ConnectableOpenClawTransport {
           this.options.onEvent?.(normalized);
         },
         onHelloOk: (_hello: unknown) => {
-          this.options.onHelloOk?.(_hello);
-          resolve();
+          try {
+            this.options.onHelloOk?.(_hello);
+          } finally {
+            // A retired client's late hello must not settle its replacement's connection.
+            if (this.client === client && this.rejectPendingConnect === reject) {
+              this.rejectPendingConnect = null;
+              resolve();
+            }
+          }
         },
         onConnectError: (error: Error) => {
-          this.options.onConnectError?.(error);
-          if (this.client === client) {
-            this.client = null;
+          try {
+            this.options.onConnectError?.(error);
+          } finally {
+            // Established reconnects belong to the GatewayClient; only initial failure retires it.
+            if (this.client === client && this.rejectPendingConnect === reject) {
+              this.client = null;
+              this.connectPromise = null;
+              this.rejectPendingConnect = null;
+              void client.stopAndWait().catch(() => {});
+              reject(error);
+            }
           }
-          if (this.connectPromise) {
-            this.connectPromise = null;
-          }
-          void client.stopAndWait().catch(() => {});
-          reject(error);
         },
-        onReconnectPaused: this.options.onReconnectPaused,
+        onReconnectPaused: (info: unknown) => {
+          try {
+            this.options.onReconnectPaused?.(info);
+          } finally {
+            // A terminal reconnect has no retry owner, so future connects need a fresh client.
+            if (this.client === client && this.rejectPendingConnect === null) {
+              this.client = null;
+              this.connectPromise = null;
+              void client.stopAndWait().catch(() => {});
+            }
+          }
+        },
         onClose: this.options.onClose,
         onGap: this.options.onGap,
       } as never);
@@ -137,9 +168,16 @@ export class GatewayClientTransport implements ConnectableOpenClawTransport {
     if (this.closePromise) {
       return await this.closePromise;
     }
+    if (this.closed) {
+      return;
+    }
+    this.closed = true;
     this.eventsHub.close();
     const client = this.client;
     this.client = null;
+    const rejectPendingConnect = this.rejectPendingConnect;
+    this.rejectPendingConnect = null;
+    rejectPendingConnect?.(new Error("gateway transport closed before connect completed"));
     this.connectPromise = null;
     this.closePromise = client?.stopAndWait() ?? Promise.resolve();
     await this.closePromise;
@@ -147,6 +185,7 @@ export class GatewayClientTransport implements ConnectableOpenClawTransport {
   }
 }
 
+/** Narrow an SDK transport to one that supports explicit connect. */
 export function isConnectableTransport(
   transport: OpenClawTransport,
 ): transport is ConnectableOpenClawTransport {

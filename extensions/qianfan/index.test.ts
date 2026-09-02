@@ -1,3 +1,4 @@
+// Qianfan tests cover index plugin behavior.
 import {
   registerSingleProviderPlugin,
   resolveProviderPluginChoice,
@@ -6,11 +7,15 @@ import { resolveAgentModelPrimaryValue } from "openclaw/plugin-sdk/provider-onbo
 import { describe, expect, it } from "vitest";
 import { runSingleProviderCatalog } from "../test-support/provider-model-test-helpers.js";
 import qianfanPlugin from "./index.js";
-import {
-  applyQianfanConfig,
-  applyQianfanProviderConfig,
-  QIANFAN_DEFAULT_MODEL_REF,
-} from "./onboard.js";
+import { applyQianfanConfig, QIANFAN_DEFAULT_MODEL_REF } from "./onboard.js";
+import manifest from "./openclaw.plugin.json" with { type: "json" };
+
+function expectRecord<T>(value: T | null | undefined, label: string): NonNullable<T> {
+  if (!value) {
+    throw new Error(`Expected ${label}`);
+  }
+  return value;
+}
 
 describe("qianfan provider plugin", () => {
   it("registers Qianfan with api-key auth wizard metadata", async () => {
@@ -25,67 +30,194 @@ describe("qianfan provider plugin", () => {
     expect(provider.docsPath).toBe("/providers/qianfan");
     expect(provider.envVars).toEqual(["QIANFAN_API_KEY"]);
     expect(provider.auth).toHaveLength(1);
-    expect(resolved).not.toBeNull();
-    expect(resolved?.provider.id).toBe("qianfan");
-    expect(resolved?.method.id).toBe("api-key");
+    const resolvedChoice = expectRecord(resolved, "Qianfan provider choice");
+    expect({
+      providerId: resolvedChoice.provider.id,
+      methodId: resolvedChoice.method.id,
+    }).toEqual({
+      providerId: "qianfan",
+      methodId: "api-key",
+    });
   });
 
   it("builds the static Qianfan model catalog", async () => {
     const provider = await registerSingleProviderPlugin(qianfanPlugin);
-    const catalogProvider = await runSingleProviderCatalog(provider);
+    const catalogProvider = await runSingleProviderCatalog({ catalog: provider.staticCatalog });
 
     expect(catalogProvider.api).toBe("openai-completions");
     expect(catalogProvider.baseUrl).toBe("https://qianfan.baidubce.com/v2");
-    expect(catalogProvider.models?.map((model) => model.id)).toEqual([
+    const models = expectRecord(catalogProvider.models, "Qianfan catalog models");
+    expect(models.map((model) => model.id)).toEqual([
+      "deepseek-v4-pro",
+      "ernie-5.1",
+      "ernie-5.0",
       "deepseek-v3.2",
       "ernie-5.0-thinking-preview",
     ]);
-    expect(catalogProvider.models?.find((model) => model.id === "deepseek-v3.2")).toMatchObject({
-      name: "DEEPSEEK V3.2",
-      reasoning: true,
-      input: ["text"],
-      contextWindow: 98304,
-      maxTokens: 32768,
-    });
-    expect(
-      catalogProvider.models?.find((model) => model.id === "ernie-5.0-thinking-preview"),
-    ).toMatchObject({
-      name: "ERNIE-5.0-Thinking-Preview",
-      reasoning: true,
-      input: ["text", "image"],
-      contextWindow: 119000,
-      maxTokens: 64000,
-    });
-  });
-
-  it("adds Qianfan provider defaults without changing primary model in provider-only mode", () => {
-    const cfg = applyQianfanProviderConfig({
-      agents: {
-        defaults: {
-          model: { primary: "anthropic/claude-opus-4-6" },
+    const expectedModels = [
+      {
+        id: "deepseek-v4-pro",
+        name: "DeepSeek V4 Pro",
+        reasoning: true,
+        input: ["text"],
+        contextWindow: 1000000,
+        maxTokens: 393216,
+        cost: {
+          input: 1.771957,
+          output: 3.543915,
+          cacheRead: 0.147663,
+          cacheWrite: 0,
         },
       },
-    });
+      {
+        id: "ernie-5.1",
+        name: "ERNIE 5.1",
+        reasoning: false,
+        input: ["text"],
+        contextWindow: 128000,
+        maxTokens: 65536,
+        cost: {
+          input: 0.590652,
+          output: 2.657936,
+          cacheRead: 0,
+          cacheWrite: 0,
+          tieredPricing: [
+            {
+              input: 0.590652,
+              output: 2.657936,
+              cacheRead: 0,
+              cacheWrite: 0,
+              range: [0, 32001] as [number, number],
+            },
+            {
+              input: 0.885979,
+              output: 3.248589,
+              cacheRead: 0,
+              cacheWrite: 0,
+              range: [32001] as [number],
+            },
+          ],
+        },
+      },
+      {
+        id: "ernie-5.0",
+        name: "ERNIE 5.0",
+        reasoning: true,
+        input: ["text", "image"],
+        contextWindow: 128000,
+        maxTokens: 65536,
+        cost: {
+          input: 0.885979,
+          output: 3.543915,
+          cacheRead: 0,
+          cacheWrite: 0,
+          tieredPricing: [
+            {
+              input: 0.885979,
+              output: 3.543915,
+              cacheRead: 0,
+              cacheWrite: 0,
+              range: [0, 32001] as [number, number],
+            },
+            {
+              input: 1.476631,
+              output: 5.906525,
+              cacheRead: 0,
+              cacheWrite: 0,
+              range: [32001] as [number],
+            },
+          ],
+        },
+      },
+      {
+        id: "deepseek-v3.2",
+        name: "DeepSeek V3.2",
+        reasoning: false,
+        input: ["text"],
+        contextWindow: 128000,
+        maxTokens: 32768,
+        cost: {
+          input: 0.295326,
+          output: 0.442989,
+          cacheRead: 0.059065,
+          cacheWrite: 0,
+          tieredPricing: [
+            {
+              input: 0.295326,
+              output: 0.442989,
+              cacheRead: 0.059065,
+              cacheWrite: 0,
+              range: [0, 32001] as [number, number],
+            },
+            {
+              input: 0.590652,
+              output: 0.885979,
+              cacheRead: 0.059065,
+              cacheWrite: 0,
+              range: [32001] as [number],
+            },
+          ],
+        },
+      },
+      {
+        id: "ernie-5.0-thinking-preview",
+        name: "ERNIE-5.0-Thinking-Preview",
+        reasoning: true,
+        input: ["text", "image"],
+        contextWindow: 128000,
+        maxTokens: 65536,
+        cost: {
+          input: 0.885979,
+          output: 3.543915,
+          cacheRead: 0,
+          cacheWrite: 0,
+          tieredPricing: [
+            {
+              input: 0.885979,
+              output: 3.543915,
+              cacheRead: 0,
+              cacheWrite: 0,
+              range: [0, 32001] as [number, number],
+            },
+            {
+              input: 1.476631,
+              output: 5.906525,
+              cacheRead: 0,
+              cacheWrite: 0,
+              range: [32001] as [number],
+            },
+          ],
+        },
+      },
+    ] satisfies Array<Partial<(typeof models)[number]>>;
+    for (const expected of expectedModels) {
+      expect(
+        expectRecord(
+          models.find((model) => model.id === expected.id),
+          `${expected.id} model`,
+        ),
+      ).toMatchObject(expected);
+    }
 
-    expect(cfg.models?.providers?.qianfan).toMatchObject({
-      api: "openai-completions",
-      baseUrl: "https://qianfan.baidubce.com/v2",
-    });
-    expect(cfg.models?.providers?.qianfan?.models?.map((model) => model.id)).toEqual([
-      "deepseek-v3.2",
-      "ernie-5.0-thinking-preview",
-    ]);
-    expect(cfg.agents?.defaults?.models?.[QIANFAN_DEFAULT_MODEL_REF]?.alias).toBe("QIANFAN");
-    expect(resolveAgentModelPrimaryValue(cfg.agents?.defaults?.model)).toBe(
-      "anthropic/claude-opus-4-6",
-    );
+    const manifestRows = manifest.modelCatalog.providers.qianfan.models as Array<
+      Record<string, unknown>
+    >;
+    for (const [id, replacedBy] of [
+      ["deepseek-v3.2", "deepseek-v4-pro"],
+      ["ernie-5.0-thinking-preview", "ernie-5.0"],
+    ]) {
+      expect(manifestRows.find((model) => model.id === id)).toMatchObject({
+        status: "deprecated",
+        replacedBy,
+      });
+    }
   });
 
   it("sets Qianfan as the agent primary model in full onboarding mode", () => {
     const cfg = applyQianfanConfig({});
 
-    expect(resolveAgentModelPrimaryValue(cfg.agents?.defaults?.model)).toBe(
-      QIANFAN_DEFAULT_MODEL_REF,
-    );
+    const agentsConfig = expectRecord(cfg.agents, "agents config");
+    const agentDefaults = expectRecord(agentsConfig.defaults, "agent defaults");
+    expect(resolveAgentModelPrimaryValue(agentDefaults.model)).toBe(QIANFAN_DEFAULT_MODEL_REF);
   });
 });

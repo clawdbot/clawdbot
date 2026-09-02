@@ -1,43 +1,37 @@
+/**
+ * Provider auth env/evidence lookup facade for agent auth code. It keeps
+ * provider-env-var source paths centralized while exposing API-key oriented
+ * helper names to model/auth modules.
+ */
 import {
   listKnownProviderAuthEnvVarNames,
-  resolveProviderAuthEvidence,
-  resolveProviderAuthEnvVarCandidates,
+  resolveProviderAuthLookupMaps,
 } from "../secrets/provider-env-vars.js";
 import type {
   ProviderAuthEvidence,
+  ProviderAuthLookupMaps,
   ProviderEnvVarLookupParams,
 } from "../secrets/provider-env-vars.js";
 
-export function resolveProviderEnvApiKeyCandidates(
+/** Resolves both env-var candidates and richer auth evidence from one manifest snapshot. */
+export function resolveProviderEnvAuthLookupMaps(
   params?: ProviderEnvVarLookupParams,
-): Record<string, readonly string[]> {
-  return resolveProviderAuthEnvVarCandidates(params);
+): ProviderAuthLookupMaps {
+  return resolveProviderAuthLookupMaps(params);
 }
 
-export function resolveProviderEnvAuthEvidence(
-  params?: ProviderEnvVarLookupParams,
-): Record<string, readonly ProviderAuthEvidence[]> {
-  return resolveProviderAuthEvidence(params);
-}
-
+/** Lists every provider key represented by either env candidates or auth evidence. */
 export function listProviderEnvAuthLookupKeys(params: {
   envCandidateMap: Readonly<Record<string, readonly string[]>>;
   authEvidenceMap: Readonly<Record<string, readonly ProviderAuthEvidence[]>>;
 }): string[] {
+  // Evidence-only providers still need status/discovery rows even when they do not expose env vars.
   return Array.from(
     new Set([...Object.keys(params.envCandidateMap), ...Object.keys(params.authEvidenceMap)]),
   ).toSorted((a, b) => a.localeCompare(b));
 }
 
-export function resolveProviderEnvAuthLookupKeys(params?: ProviderEnvVarLookupParams): string[] {
-  return listProviderEnvAuthLookupKeys({
-    envCandidateMap: resolveProviderEnvApiKeyCandidates(params),
-    authEvidenceMap: resolveProviderEnvAuthEvidence(params),
-  });
-}
-
-export const PROVIDER_ENV_API_KEY_CANDIDATES = resolveProviderEnvApiKeyCandidates();
-
+/** Lists known provider API-key env var names for redaction and marker matching. */
 export function listKnownProviderEnvApiKeyNames(): string[] {
   return listKnownProviderAuthEnvVarNames();
 }

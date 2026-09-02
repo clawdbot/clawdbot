@@ -1,25 +1,36 @@
+/** Runtime entrypoint for image generation with provider fallback and override normalization. */
 import { describeFailoverError, isFailoverError } from "../agents/failover-error.js";
 import type { FallbackAttempt } from "../agents/model-fallback.types.js";
 import { resolveAgentModelTimeoutMsValue } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { parseImageGenerationModelRef } from "../media-generation/model-ref.js";
+import {
+  getImageGenerationProvider,
+  listImageGenerationProviders,
+} from "../media-generation/registry.js";
 import {
   buildMediaGenerationNormalizationMetadata,
   buildNoCapabilityModelConfiguredMessage,
+  recordCapabilityCandidateFailure,
   resolveCapabilityModelCandidates,
+  resolveReferenceImageCapabilityError,
+  resolveMediaProviderRequestTimeoutMs,
   throwCapabilityGenerationFailure,
 } from "../media-generation/runtime-shared.js";
 import { getProviderEnvVars } from "../secrets/provider-env-vars.js";
-import { parseImageGenerationModelRef } from "./model-ref.js";
+import { resolveImageGenerationMaxInputImages } from "./capabilities.js";
 import { resolveImageGenerationOverrides } from "./normalization.js";
-import { getImageGenerationProvider, listImageGenerationProviders } from "./provider-registry.js";
 import type { GenerateImageParams, GenerateImageRuntimeResult } from "./runtime-types.js";
 import type { ImageGenerationResult } from "./types.js";
 
 const log = createSubsystemLogger("image-generation");
 
-export type ImageGenerationRuntimeDeps = {
+// Runtime dependency seam for tests and plugin-host callers. Production uses
+// the plugin registry and provider-env helpers by default.
+/** Dependency seam used by image-generation runtime tests and plugin host callers. */
+type ImageGenerationRuntimeDeps = {
   getProvider?: typeof getImageGenerationProvider;
   listProviders?: typeof listImageGenerationProviders;
   getProviderEnvVars?: typeof getProviderEnvVars;
@@ -35,12 +46,13 @@ function buildNoImageGenerationModelConfiguredMessage(
   const listProviders = deps.listProviders ?? listImageGenerationProviders;
   return buildNoCapabilityModelConfiguredMessage({
     capabilityLabel: "image-generation",
-    modelConfigKey: "imageGenerationModel",
+    modelConfigKey: "mediaModels.image",
     providers: listProviders(cfg),
     getProviderEnvVars: deps.getProviderEnvVars,
   });
 }
 
+/** Lists image-generation providers visible for the current config. */
 export function listRuntimeImageGenerationProviders(
   params?: { config?: OpenClawConfig },
   deps: ImageGenerationRuntimeDeps = {},
@@ -55,12 +67,12 @@ export async function generateImage(
   const getProvider = deps.getProvider ?? getImageGenerationProvider;
   const listProviders = deps.listProviders ?? listImageGenerationProviders;
   const logger = deps.log ?? log;
-  const timeoutMs =
+  const requestedTimeoutMs =
     params.timeoutMs ??
-    resolveAgentModelTimeoutMsValue(params.cfg.agents?.defaults?.imageGenerationModel);
+    resolveAgentModelTimeoutMsValue(params.cfg.agents?.defaults?.mediaModels?.image);
   const candidates = resolveCapabilityModelCandidates({
     cfg: params.cfg,
-    modelConfig: params.cfg.agents?.defaults?.imageGenerationModel,
+    modelConfig: params.cfg.agents?.defaults?.mediaModels?.image,
     modelOverride: params.modelOverride,
     parseModelRef: parseImageGenerationModelRef,
     agentDir: params.agentDir,
@@ -74,6 +86,8 @@ export async function generateImage(
   const attempts: FallbackAttempt[] = [];
   let lastError: unknown;
 
+  // Try configured/fallback models in order and return the first provider whose
+  // entire image batch is present and non-empty; preserve failed attempts for diagnostics.
   for (const candidate of candidates) {
     const provider = getProvider(candidate.provider, params.cfg);
     if (!provider) {
@@ -90,17 +104,58 @@ export async function generateImage(
       continue;
     }
 
+    const inputImageCount = params.inputImages?.length ?? 0;
+    const maxInputImages = resolveImageGenerationMaxInputImages({
+      provider,
+      model: candidate.model,
+    });
+    const referenceImageError = resolveReferenceImageCapabilityError({
+      candidateRef: `${candidate.provider}/${candidate.model}`,
+      inputImageCount,
+      edit: {
+        enabled: provider.capabilities.edit.enabled,
+        ...(maxInputImages !== undefined ? { maxInputImages } : {}),
+      },
+    });
+    if (referenceImageError) {
+      recordCapabilityCandidateFailure({
+        attempts,
+        provider: candidate.provider,
+        model: candidate.model,
+        error: referenceImageError,
+      });
+      lastError = new Error(referenceImageError);
+      logger.warn(`image-generation candidate skipped: ${referenceImageError}`);
+      continue;
+    }
+
     try {
+      const timeoutMs = resolveMediaProviderRequestTimeoutMs({
+        timeoutMs: requestedTimeoutMs,
+        providerDefaultTimeoutMs: provider.defaultTimeoutMs,
+      });
+      const modelResolutions =
+        provider.capabilities.geometry?.resolutionsByModel?.[candidate.model];
+      const modeCapabilities = params.inputImages?.length
+        ? provider.capabilities.edit
+        : provider.capabilities.generate;
+      const inferredResolution =
+        modeCapabilities.supportsResolution === false || modelResolutions?.length === 0
+          ? undefined
+          : params.inferredResolution;
       const sanitized = resolveImageGenerationOverrides({
         provider,
+        model: candidate.model,
         size: params.size,
         aspectRatio: params.aspectRatio,
-        resolution: params.resolution,
+        resolution: params.resolution ?? inferredResolution,
         quality: params.quality,
         outputFormat: params.outputFormat,
         background: params.background,
         inputImages: params.inputImages,
       });
+      // Providers receive only supported overrides. Ignored/normalized values
+      // are returned to callers so user-facing replies can explain adjustments.
       const result: ImageGenerationResult = await provider.generateImage({
         provider: candidate.provider,
         model: candidate.model,
@@ -118,15 +173,23 @@ export async function generateImage(
         inputImages: params.inputImages,
         ...(timeoutMs !== undefined ? { timeoutMs } : {}),
         providerOptions: params.providerOptions,
+        ssrfPolicy: params.ssrfPolicy,
       });
       if (!Array.isArray(result.images) || result.images.length === 0) {
         throw new Error("Image generation provider returned no images.");
+      }
+      const emptyImageIndex = result.images.findIndex((image) => image.buffer.byteLength === 0);
+      if (emptyImageIndex >= 0) {
+        throw new Error(
+          `Image generation provider returned an empty image buffer at index ${emptyImageIndex}.`,
+        );
       }
       return {
         images: result.images,
         provider: candidate.provider,
         model: result.model ?? candidate.model,
         attempts,
+        ...(sanitized.resolution ? { appliedResolution: sanitized.resolution } : {}),
         normalization: sanitized.normalization,
         metadata: {
           ...result.metadata,

@@ -1,3 +1,4 @@
+/** Lists manifest contribution ids from installed plugin registry snapshots. */
 import {
   listPluginContributionIds,
   loadPluginRegistrySnapshot,
@@ -6,15 +7,15 @@ import {
   type PluginRegistrySnapshot,
 } from "./plugin-registry.js";
 
-export type ListManifestContributionIdsParams = LoadPluginRegistryParams & {
+/** Parameters for listing manifest contribution ids from a registry snapshot. */
+type ListManifestContributionIdsParams = LoadPluginRegistryParams & {
   contribution: PluginRegistryContributionKey;
   index?: PluginRegistrySnapshot;
   includeDisabled?: boolean;
 };
 
-export function listManifestContributionIds(
-  params: ListManifestContributionIdsParams,
-): readonly string[] {
+/** Lists ids contributed by plugin manifests for one contribution kind. */
+function listManifestContributionIds(params: ListManifestContributionIdsParams): readonly string[] {
   const env = params.env ?? process.env;
   const index =
     params.index ??
@@ -35,20 +36,12 @@ export function listManifestContributionIds(
   });
 }
 
+/** Lists channel ids contributed by plugin manifests. */
 export function listManifestChannelContributionIds(
   params: Omit<ListManifestContributionIdsParams, "contribution"> = {},
 ): readonly string[] {
   return listManifestContributionIds({
     ...params,
     contribution: "channels",
-  });
-}
-
-export function listManifestProviderContributionIds(
-  params: Omit<ListManifestContributionIdsParams, "contribution"> = {},
-): readonly string[] {
-  return listManifestContributionIds({
-    ...params,
-    contribution: "providers",
   });
 }

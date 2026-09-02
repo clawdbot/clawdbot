@@ -1,3 +1,4 @@
+// Voice Call plugin module implements test fixtures behavior.
 import type { VoiceCallConfig } from "./config.js";
 import { DEFAULT_VOICE_CALL_REALTIME_INSTRUCTIONS } from "./realtime-defaults.js";
 
@@ -21,7 +22,7 @@ export function createVoiceCallBaseConfig(params?: {
     maxConcurrentCalls: 1,
     sessionScope: "per-phone",
     serve: { port: 3334, bind: "127.0.0.1", path: "/voice/webhook" },
-    tailscale: { mode: "off", path: "/voice/webhook" },
+    tailscale: { mode: "off", port: 443, path: "/voice/webhook" },
     tunnel: {
       provider: params?.tunnelProvider ?? "none",
       allowNgrokFreeTierLoopbackBypass: false,
@@ -64,7 +65,6 @@ export function createVoiceCallBaseConfig(params?: {
         enabled: false,
         maxChars: 6000,
         includeIdentity: true,
-        includeSystemPrompt: true,
         includeWorkspaceFiles: true,
         files: ["SOUL.md", "IDENTITY.md", "USER.md"],
       },

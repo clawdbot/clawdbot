@@ -1,41 +1,39 @@
-import type { TelegramNetworkConfig } from "openclaw/plugin-sdk/config-types";
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { TelegramNetworkConfig } from "openclaw/plugin-sdk/config-contracts";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("openclaw/plugin-sdk/runtime-env", () => ({
-  isTruthyEnvValue: (value: string | undefined) =>
-    typeof value === "string" && /^(1|true|yes|on)$/i.test(value.trim()),
+vi.mock("openclaw/plugin-sdk/runtime-env", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/runtime-env")>()),
   isWSL2Sync: vi.fn(() => false),
 }));
 
 let isWSL2Sync: typeof import("openclaw/plugin-sdk/runtime-env").isWSL2Sync;
-let resetTelegramNetworkConfigStateForTests: typeof import("./network-config.js").resetTelegramNetworkConfigStateForTests;
 let resolveTelegramAutoSelectFamilyDecision: typeof import("./network-config.js").resolveTelegramAutoSelectFamilyDecision;
 let resolveTelegramDnsResultOrderDecision: typeof import("./network-config.js").resolveTelegramDnsResultOrderDecision;
 
 async function loadModule() {
-  ({ isWSL2Sync } = await import("openclaw/plugin-sdk/runtime-env"));
-  ({
-    resetTelegramNetworkConfigStateForTests,
-    resolveTelegramAutoSelectFamilyDecision,
-    resolveTelegramDnsResultOrderDecision,
-  } = await import("./network-config.js"));
+  const { isWSL2Sync: loadedIsWSL2Sync } = await import("openclaw/plugin-sdk/runtime-env");
+  isWSL2Sync = loadedIsWSL2Sync;
+  ({ resolveTelegramAutoSelectFamilyDecision, resolveTelegramDnsResultOrderDecision } =
+    await import("./network-config.js"));
 }
 
+beforeAll(async () => {
+  vi.resetModules();
+  await loadModule();
+});
+
+afterAll(() => {
+  vi.doUnmock("openclaw/plugin-sdk/runtime-env");
+  vi.resetModules();
+});
+
 describe("resolveTelegramAutoSelectFamilyDecision", () => {
-  beforeAll(async () => {
-    await loadModule();
-  });
-
   beforeEach(() => {
-    vi.clearAllMocks();
+    vi.mocked(isWSL2Sync).mockReset().mockReturnValue(false);
   });
 
-  afterEach(async () => {
+  afterEach(() => {
     vi.restoreAllMocks();
-    if (!resetTelegramNetworkConfigStateForTests) {
-      await loadModule();
-    }
-    resetTelegramNetworkConfigStateForTests();
   });
 
   it.each([
@@ -83,9 +81,6 @@ describe("resolveTelegramAutoSelectFamilyDecision", () => {
       expected: { value: true, source: "config" },
     },
   ])("$name", ({ env, network, expected }) => {
-    if (!resolveTelegramAutoSelectFamilyDecision) {
-      throw new Error("network-config module not loaded");
-    }
     const decision = resolveTelegramAutoSelectFamilyDecision({
       env,
       network,
@@ -105,6 +100,12 @@ describe("resolveTelegramAutoSelectFamilyDecision", () => {
   });
 
   describe("WSL2 detection", () => {
+    beforeEach(async () => {
+      vi.resetModules();
+      await loadModule();
+      vi.mocked(isWSL2Sync).mockReset().mockReturnValue(false);
+    });
+
     it.each([
       {
         name: "disables autoSelectFamily on WSL2",
@@ -132,9 +133,6 @@ describe("resolveTelegramAutoSelectFamilyDecision", () => {
         expected: { value: true, source: "default-node22" },
       },
     ])("$name", ({ env, network, expected, wsl2 = true }) => {
-      if (!isWSL2Sync) {
-        throw new Error("runtime-env mock not loaded");
-      }
       vi.mocked(isWSL2Sync).mockReturnValue(wsl2);
       const decision = resolveTelegramAutoSelectFamilyDecision({
         env,
@@ -146,10 +144,15 @@ describe("resolveTelegramAutoSelectFamilyDecision", () => {
 
     it("memoizes WSL2 detection across repeated defaults", () => {
       vi.mocked(isWSL2Sync).mockReturnValue(true);
-      vi.mocked(isWSL2Sync).mockClear();
+      expect(resolveTelegramAutoSelectFamilyDecision({ env: {}, nodeMajor: 22 })).toEqual({
+        value: false,
+        source: "default-wsl2",
+      });
       vi.mocked(isWSL2Sync).mockReturnValue(false);
-      resolveTelegramAutoSelectFamilyDecision({ env: {}, nodeMajor: 22 });
-      resolveTelegramAutoSelectFamilyDecision({ env: {}, nodeMajor: 22 });
+      expect(resolveTelegramAutoSelectFamilyDecision({ env: {}, nodeMajor: 22 })).toEqual({
+        value: false,
+        source: "default-wsl2",
+      });
       expect(isWSL2Sync).toHaveBeenCalledTimes(1);
     });
   });

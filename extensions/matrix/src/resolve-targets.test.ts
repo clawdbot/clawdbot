@@ -1,3 +1,4 @@
+// Matrix tests cover resolve targets plugin behavior.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelDirectoryEntry } from "../runtime-api.js";
 
@@ -140,8 +141,8 @@ describe("resolveMatrixTargets (users)", () => {
       kind: "group",
     });
 
-    expect(userResults.filter((entry) => !entry.resolved)).toEqual([]);
-    expect(groupResults.filter((entry) => !entry.resolved)).toEqual([]);
+    expect(userResults.every((entry) => entry.resolved)).toBe(true);
+    expect(groupResults.every((entry) => entry.resolved)).toBe(true);
     expect(listMatrixDirectoryPeersLive).toHaveBeenCalledTimes(1);
     expect(listMatrixDirectoryGroupsLive).toHaveBeenCalledTimes(1);
   });

@@ -1,3 +1,4 @@
+// Voice Call tests cover allowlist plugin behavior.
 import { describe, expect, it } from "vitest";
 import { isAllowlistedCaller, normalizePhoneNumber } from "./allowlist.js";
 

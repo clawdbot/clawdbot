@@ -4,12 +4,18 @@
  * Tests the hook runner methods directly since session init is deeply integrated.
  */
 import { describe, expect, it, vi } from "vitest";
-import { createHookRunnerWithRegistry } from "./hooks.test-helpers.js";
+import {
+  addTestHook,
+  createHookRunnerWithRegistry,
+  TEST_PLUGIN_AGENT_CTX,
+} from "./hooks.test-fixtures.js";
 import type {
-  PluginHookSessionContext,
+  PluginHookHandlerMap,
   PluginHookSessionEndEvent,
   PluginHookSessionStartEvent,
 } from "./types.js";
+
+type PluginHookSessionContext = Parameters<PluginHookHandlerMap["session_start"]>[1];
 
 async function expectSessionHookCall(params: {
   hookName: "session_start" | "session_end";
@@ -52,6 +58,21 @@ describe("session hook runner methods", () => {
     },
   ] as const)("$name", async ({ hookName, event }) => {
     await expectSessionHookCall({ hookName, event, sessionCtx });
+  });
+
+  it("delivers the prior transcript to before_reset hooks registered after runner creation", async () => {
+    const { registry, runner } = createHookRunnerWithRegistry([]);
+    const handler = vi.fn(async () => {});
+    addTestHook({ registry, pluginId: "reset-observer", hookName: "before_reset", handler });
+    const event = {
+      messages: [{ role: "user", content: "Keep this context before reset." }],
+      sessionFile: "/tmp/prior-session.jsonl",
+      reason: "new",
+    };
+
+    await expect(runner.runBeforeReset(event, TEST_PLUGIN_AGENT_CTX)).resolves.toBeUndefined();
+    expect(handler).toHaveBeenCalledOnce();
+    expect(handler).toHaveBeenCalledWith(event, TEST_PLUGIN_AGENT_CTX);
   });
 
   it("hasHooks returns true for registered session hooks", () => {

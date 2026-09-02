@@ -1,3 +1,4 @@
+// Discord tests cover allow list plugin behavior.
 import { describe, expect, it } from "vitest";
 import { normalizeDiscordDisplaySlug, normalizeDiscordSlug } from "./allow-list.js";
 

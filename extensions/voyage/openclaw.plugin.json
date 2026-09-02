@@ -5,10 +5,15 @@
   },
   "enabledByDefault": true,
   "contracts": {
-    "memoryEmbeddingProviders": ["voyage"]
+    "embeddingProviders": ["voyage"]
   },
-  "providerAuthEnvVars": {
-    "voyage": ["VOYAGE_API_KEY"]
+  "setup": {
+    "providers": [
+      {
+        "id": "voyage",
+        "envVars": ["VOYAGE_API_KEY"]
+      }
+    ]
   },
   "configSchema": {
     "type": "object",

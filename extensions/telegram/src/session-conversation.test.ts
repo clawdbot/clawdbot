@@ -1,5 +1,9 @@
+// Telegram tests cover session conversation plugin behavior.
 import { describe, expect, it } from "vitest";
-import { resolveTelegramSessionConversation } from "./session-conversation.js";
+import {
+  resolveTelegramSessionConversation,
+  resolveTelegramSessionTarget,
+} from "./session-conversation.js";
 
 describe("resolveTelegramSessionConversation", () => {
   it("owns topic session parsing and parent fallback candidates", () => {
@@ -31,5 +35,37 @@ describe("resolveTelegramSessionConversation", () => {
         rawId: "-1001",
       }),
     ).toBeNull();
+    expect(
+      resolveTelegramSessionConversation({
+        kind: "group",
+        rawId: "-1001:direct-topic:77",
+      }),
+    ).toMatchObject({
+      id: "-1001",
+      threadId: "direct-topic:77",
+      baseConversationId: "-1001",
+    });
+  });
+});
+
+describe("resolveTelegramSessionTarget", () => {
+  it("normalizes group session ids to numeric chat ids", () => {
+    expect(resolveTelegramSessionTarget({ kind: "group", id: "-1001" })).toBe("-1001");
+    expect(
+      resolveTelegramSessionTarget({
+        kind: "group",
+        id: "-1001",
+        threadId: "direct-topic:77",
+      }),
+    ).toBe("-1001:direct-topic:77");
+    expect(resolveTelegramSessionTarget({ kind: "group", id: "-1001", threadId: "77" })).toBe(
+      "-1001:topic:77",
+    );
+  });
+
+  it("normalizes channel session ids to lookup targets", () => {
+    expect(resolveTelegramSessionTarget({ kind: "channel", id: "@OpenClawTeam" })).toBe(
+      "@OpenClawTeam",
+    );
   });
 });

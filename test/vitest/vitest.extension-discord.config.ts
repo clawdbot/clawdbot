@@ -1,4 +1,5 @@
-import { createSingleChannelExtensionVitestConfig } from "./vitest.extension-channel-single-config.ts";
+// Vitest extension discord config wires the extension discord test shard.
+import { createSingleChannelExtensionVitestConfig } from "./vitest.extension-config.ts";
 
 export function createExtensionDiscordVitestConfig(
   env: Record<string, string | undefined> = process.env,

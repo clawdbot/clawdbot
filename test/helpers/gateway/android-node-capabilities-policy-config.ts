@@ -1,9 +1,10 @@
+// Android node capability policy config fixture describes gateway policy config.
+import { asRecord } from "@openclaw/normalization-core/record-coerce";
 import type { OpenClawConfig } from "../../../src/config/config.js";
 
-function asRecord(value: unknown): Record<string, unknown> {
-  return typeof value === "object" && value !== null ? (value as Record<string, unknown>) : {};
-}
+// Test helper for unwrapping gateway config.get response shapes.
 
+/** Unwrap current and legacy remote config snapshot envelopes. */
 export function unwrapRemoteConfigSnapshot(raw: unknown): OpenClawConfig {
   const rawObj = asRecord(raw);
   const resolved = asRecord(rawObj.resolved);
@@ -27,7 +28,7 @@ export function unwrapRemoteConfigSnapshot(raw: unknown): OpenClawConfig {
     return legacyConfig as OpenClawConfig;
   }
 
-  if (Object.keys(rawObj).length > 0 && !Object.prototype.hasOwnProperty.call(rawObj, "payload")) {
+  if (Object.keys(rawObj).length > 0 && !Object.hasOwn(rawObj, "payload")) {
     return rawObj as OpenClawConfig;
   }
 

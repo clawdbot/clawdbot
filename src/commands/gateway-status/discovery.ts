@@ -1,10 +1,12 @@
+/** Discovery helpers for turning gateway remote URLs and Bonjour beacons into SSH targets. */
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { GatewayBonjourBeacon } from "../../infra/bonjour-discovery.js";
 import {
   buildGatewayDiscoveryTarget,
   serializeGatewayDiscoveryBeacon,
 } from "../../infra/gateway-discovery-targets.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
 
+/** Infers a user@host SSH target from a configured remote websocket URL. */
 export function inferSshTargetFromRemoteUrl(rawUrl?: string | null): string | null {
   if (typeof rawUrl !== "string") {
     return null;
@@ -13,7 +15,7 @@ export function inferSshTargetFromRemoteUrl(rawUrl?: string | null): string | nu
   if (!trimmed) {
     return null;
   }
-  let host: string | null = null;
+  let host: string | null;
   try {
     host = new URL(trimmed).hostname || null;
   } catch {
@@ -40,6 +42,7 @@ function buildSshTarget(input: { user?: string; host?: string; port?: number }):
   return base;
 }
 
+/** Resolves an SSH target through ssh-config while preserving explicit identity choices. */
 export async function resolveSshTarget(params: {
   rawTarget: string;
   identity: string | null;
@@ -77,6 +80,7 @@ export async function resolveSshTarget(params: {
   return { target, identity: identityFile };
 }
 
+/** Picks the first Bonjour-derived SSH target that parses as a valid tunnel target. */
 export function pickAutoSshTargetFromDiscovery(params: {
   discovery: GatewayBonjourBeacon[];
   parseSshTarget: (target: string) => unknown;

@@ -1,3 +1,4 @@
+// Telegram tests cover security audit plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../runtime-api.js";
 import type { ResolvedTelegramAccount } from "./accounts.js";
@@ -19,6 +20,7 @@ function createTelegramAccount(
     enabled: true,
     token: "t",
     tokenSource: "config",
+    tokenStatus: "available",
     config,
   };
 }
@@ -29,6 +31,15 @@ function getTelegramConfig(cfg: OpenClawConfig) {
     throw new Error("expected telegram config");
   }
   return config;
+}
+
+function expectFindingSeverity(
+  findings: Awaited<ReturnType<typeof collectTelegramSecurityAuditFindings>>,
+  checkId: string,
+  severity: string,
+): void {
+  const finding = findings.find((entry) => entry.checkId === checkId);
+  expect(finding?.severity).toBe(severity);
 }
 
 describe("Telegram security audit findings", () => {
@@ -55,14 +66,7 @@ describe("Telegram security audit findings", () => {
       accountId: "default",
     });
 
-    expect(findings).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          checkId: "channels.telegram.groups.allowFrom.missing",
-          severity: "critical",
-        }),
-      ]),
-    );
+    expectFindingSeverity(findings, "channels.telegram.groups.allowFrom.missing", "critical");
   });
 
   it("warns when allowFrom entries are non-numeric legacy @username configs", async () => {
@@ -84,14 +88,7 @@ describe("Telegram security audit findings", () => {
       accountId: "default",
     });
 
-    expect(findings).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          checkId: "channels.telegram.allowFrom.invalid_entries",
-          severity: "warn",
-        }),
-      ]),
-    );
+    expectFindingSeverity(findings, "channels.telegram.allowFrom.invalid_entries", "warn");
   });
 
   it("warns about invalid DM allowFrom entries even when groups are not enabled", async () => {
@@ -113,12 +110,8 @@ describe("Telegram security audit findings", () => {
       accountId: "default",
     });
 
-    expect(findings).toEqual([
-      expect.objectContaining({
-        checkId: "channels.telegram.allowFrom.invalid_entries",
-        severity: "warn",
-      }),
-    ]);
+    expect(findings).toHaveLength(1);
+    expectFindingSeverity(findings, "channels.telegram.allowFrom.invalid_entries", "warn");
     expect(readChannelAllowFromStoreMock).not.toHaveBeenCalled();
   });
 
@@ -142,12 +135,8 @@ describe("Telegram security audit findings", () => {
       accountId: "default",
     });
 
-    expect(findings).toEqual([
-      expect.objectContaining({
-        checkId: "channels.telegram.allowFrom.invalid_entries",
-        severity: "warn",
-      }),
-    ]);
+    expect(findings).toHaveLength(1);
+    expectFindingSeverity(findings, "channels.telegram.allowFrom.invalid_entries", "warn");
     expect(readChannelAllowFromStoreMock).not.toHaveBeenCalled();
   });
 });

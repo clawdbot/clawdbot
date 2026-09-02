@@ -1,3 +1,4 @@
+// Searxng plugin entrypoint registers its OpenClaw integration.
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import { createSearxngWebSearchProvider } from "./src/searxng-search-provider.js";
 

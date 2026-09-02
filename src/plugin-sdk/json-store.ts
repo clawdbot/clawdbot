@@ -1,3 +1,4 @@
+// JSON store helpers provide small atomic persistence primitives for plugin runtime state.
 import "../infra/fs-safe-defaults.js";
 import { pathExists } from "../infra/fs-safe.js";
 import { tryReadJson, tryReadJsonSync, writeJson, writeJsonSync } from "../infra/json-files.js";

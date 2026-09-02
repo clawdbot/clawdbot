@@ -1,15 +1,18 @@
+// Resolves bundled source overlays used by plugin packaging.
 import fs from "node:fs";
 import path from "node:path";
-import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
+import { decodeMountInfoPath } from "@openclaw/normalization-core/mountinfo-path";
+import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { buildLegacyBundledRootPath } from "./bundled-load-path-aliases.js";
+import {
+  pluginCacheExistsSync,
+  pluginCacheStatSync,
+  readPluginCacheDirectory,
+} from "./plugin-cache-files.js";
+import { getPluginCache } from "./plugin-cache.js";
 
-function decodeMountInfoPath(value: string): string {
-  return value.replace(/\\([0-7]{3})/g, (_match, octal: string) =>
-    String.fromCharCode(Number.parseInt(octal, 8)),
-  );
-}
-
-export function parseLinuxMountInfoMountPoints(mountInfo: string): Set<string> {
+/** Parses Linux mountinfo content into absolute mount points. */
+function parseLinuxMountInfoMountPoints(mountInfo: string): Set<string> {
   const mountPoints = new Set<string>();
   for (const line of mountInfo.split(/\r?\n/u)) {
     const trimmed = line.trim();
@@ -26,22 +29,24 @@ export function parseLinuxMountInfoMountPoints(mountInfo: string): Set<string> {
   return mountPoints;
 }
 
-function readLinuxMountPoints(): Set<string> {
-  try {
-    return parseLinuxMountInfoMountPoints(fs.readFileSync("/proc/self/mountinfo", "utf8"));
-  } catch {
-    return new Set();
+function readLinuxMountPoints(): ReadonlySet<string> {
+  const metadata = getPluginCache().metadata;
+  if (!metadata.discoveryMountPoints) {
+    try {
+      metadata.discoveryMountPoints = parseLinuxMountInfoMountPoints(
+        fs.readFileSync("/proc/self/mountinfo", "utf8"),
+      );
+    } catch {
+      metadata.discoveryMountPoints = new Set();
+    }
   }
+  return metadata.discoveryMountPoints;
 }
 
 function isFilesystemMountPoint(targetPath: string): boolean {
-  try {
-    const target = fs.statSync(targetPath);
-    const parent = fs.statSync(path.dirname(targetPath));
-    return target.dev !== parent.dev || target.ino === parent.ino;
-  } catch {
-    return false;
-  }
+  const target = pluginCacheStatSync(targetPath);
+  const parent = pluginCacheStatSync(path.dirname(targetPath));
+  return Boolean(target && parent && (target.dev !== parent.dev || target.ino === parent.ino));
 }
 
 function sourceOverlaysDisabled(env: NodeJS.ProcessEnv): boolean {
@@ -49,6 +54,7 @@ function sourceOverlaysDisabled(env: NodeJS.ProcessEnv): boolean {
   return raw === "1" || raw === "true";
 }
 
+/** True when a path appears to be a mounted bundled source overlay. */
 export function isBundledSourceOverlayPath(params: {
   sourcePath: string;
   mountPoints?: ReadonlySet<string>;
@@ -58,6 +64,7 @@ export function isBundledSourceOverlayPath(params: {
   return mountPoints.has(resolved) || isFilesystemMountPoint(resolved);
 }
 
+/** Lists source overlay directories that shadow packaged bundled plugin dirs. */
 export function listBundledSourceOverlayDirs(params: {
   bundledRoot?: string;
   env?: NodeJS.ProcessEnv;
@@ -68,13 +75,13 @@ export function listBundledSourceOverlayDirs(params: {
     return [];
   }
   const legacyRoot = buildLegacyBundledRootPath(params.bundledRoot);
-  if (!legacyRoot || !fs.existsSync(legacyRoot)) {
+  if (!legacyRoot || !pluginCacheExistsSync(legacyRoot)) {
     return [];
   }
 
   let entries: fs.Dirent[];
   try {
-    entries = fs.readdirSync(legacyRoot, { withFileTypes: true });
+    entries = readPluginCacheDirectory(legacyRoot);
   } catch {
     return [];
   }
@@ -91,7 +98,7 @@ export function listBundledSourceOverlayDirs(params: {
     }
     const sourceDir = path.join(legacyRoot, entry.name);
     const bundledPeer = path.join(params.bundledRoot, entry.name);
-    if (!fs.existsSync(bundledPeer)) {
+    if (!pluginCacheExistsSync(bundledPeer)) {
       continue;
     }
     if (

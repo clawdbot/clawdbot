@@ -1,3 +1,4 @@
+// Core command registry that lazily imports command groups based on parsed argv.
 import type { Command } from "commander";
 import { resolveCliArgvInvocation } from "../argv-invocation.js";
 import { shouldRegisterPrimaryCommandOnly } from "../command-registration-policy.js";
@@ -10,8 +11,7 @@ import {
 import type { ProgramContext } from "./context.js";
 import {
   getCoreCliCommandDescriptors,
-  getCoreCliCommandNames as getCoreDescriptorNames,
-  getCoreCliCommandsWithSubcommands,
+  getCoreCliCommandNamesCore,
 } from "./core-command-descriptors.js";
 import {
   registerCommandGroupByName,
@@ -19,17 +19,10 @@ import {
   type CommandGroupEntry,
 } from "./register-command-groups.js";
 
-export { getCoreCliCommandDescriptors, getCoreCliCommandsWithSubcommands };
-
 type CommandRegisterParams = {
   program: Command;
   ctx: ProgramContext;
   argv: string[];
-};
-
-export type CommandRegistration = {
-  id: string;
-  register: (params: CommandRegisterParams) => void;
 };
 
 function withProgramOnlySpecs(
@@ -52,12 +45,7 @@ const coreEntrySpecs: readonly CommandGroupDescriptorSpec<
   ...withProgramOnlySpecs(
     defineImportedProgramCommandGroupSpecs([
       {
-        commandNames: ["crestodian"],
-        loadModule: () => import("./register.crestodian.js"),
-        exportName: "registerCrestodianCommand",
-      },
-      {
-        commandNames: ["setup"],
+        commandNames: ["setup", "crestodian"], // hidden alias
         loadModule: () => import("./register.setup.js"),
         exportName: "registerSetupCommand",
       },
@@ -77,9 +65,19 @@ const coreEntrySpecs: readonly CommandGroupDescriptorSpec<
         exportName: "registerConfigCli",
       },
       {
+        commandNames: ["claws"],
+        loadModule: () => import("../claws-cli.js"),
+        exportName: "registerClawsCli",
+      },
+      {
         commandNames: ["backup"],
         loadModule: () => import("./register.backup.js"),
         exportName: "registerBackupCommand",
+      },
+      {
+        commandNames: ["database"],
+        loadModule: () => import("./register.database.js"),
+        exportName: "registerDatabaseCommand",
       },
       {
         commandNames: ["migrate"],
@@ -87,7 +85,12 @@ const coreEntrySpecs: readonly CommandGroupDescriptorSpec<
         exportName: "registerMigrateCommand",
       },
       {
-        commandNames: ["doctor", "dashboard", "reset", "uninstall"],
+        commandNames: ["audit"],
+        loadModule: () => import("./register.audit.js"),
+        exportName: "registerAuditCommand",
+      },
+      {
+        commandNames: ["doctor", "triage", "dashboard", "reset", "uninstall"],
         loadModule: () => import("./register.maintenance.js"),
         exportName: "registerMaintenanceCommands",
       },
@@ -107,21 +110,33 @@ const coreEntrySpecs: readonly CommandGroupDescriptorSpec<
         loadModule: () => import("../mcp-cli.js"),
         exportName: "registerMcpCli",
       },
+      {
+        commandNames: ["transcripts"],
+        loadModule: () => import("./register.transcripts.js"),
+        exportName: "registerTranscriptsCli",
+      },
     ]),
   ),
   defineImportedCommandGroupSpec(
-    ["agent", "agents"],
-    () => import("./register.agent.js"),
+    ["agent"],
+    () => import("./register.agent-turn.js"),
     (mod, { program, ctx }) => {
-      mod.registerAgentCommands(program, {
+      mod.registerAgentTurnCommand(program, {
         agentChannelOptions: ctx.agentChannelOptions,
       });
+    },
+  ),
+  defineImportedCommandGroupSpec(
+    ["agents"],
+    () => import("./register.agent.js"),
+    (mod, { program }) => {
+      mod.registerAgentsCommands(program);
     },
   ),
   ...withProgramOnlySpecs(
     defineImportedProgramCommandGroupSpecs([
       {
-        commandNames: ["status", "health", "sessions", "commitments", "tasks"],
+        commandNames: ["status", "health", "sessions", "tasks"],
         loadModule: () => import("./register.status-health-sessions.js"),
         exportName: "registerStatusHealthSessionsCommands",
       },
@@ -130,17 +145,19 @@ const coreEntrySpecs: readonly CommandGroupDescriptorSpec<
 ];
 
 function resolveCoreCommandGroups(ctx: ProgramContext, argv: string[]): CommandGroupEntry[] {
-  return buildCommandGroupEntries(
-    getCoreCliCommandDescriptors(),
-    coreEntrySpecs,
-    (register) => async (program) => {
-      await register({ program, ctx, argv });
-    },
+  const descriptors = getCoreCliCommandDescriptors();
+  const visibleCommandNames = new Set(descriptors.map((descriptor) => descriptor.name));
+  const visibleEntrySpecs = coreEntrySpecs.filter((spec) =>
+    spec.commandNames.every((name) => visibleCommandNames.has(name)),
   );
+  // Descriptor metadata and import specs stay separate so help can stay cheap.
+  return buildCommandGroupEntries(descriptors, visibleEntrySpecs, (register) => async (program) => {
+    await register({ program, ctx, argv });
+  });
 }
 
 export function getCoreCliCommandNames(): string[] {
-  return getCoreDescriptorNames();
+  return getCoreCliCommandNamesCore();
 }
 
 export async function registerCoreCliByName(

@@ -1,10 +1,17 @@
 #!/usr/bin/env -S pnpm tsx
+// Release Beta Smoke script supports OpenClaw repository automation.
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readdirSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import {
+  booleanFlag,
+  parseFlagArgs,
+  stringFlag,
+  stripLeadingPackageManagerSeparator,
+} from "./lib/arg-utils.mts";
 
-interface Options {
+type Options = {
   beta: string;
   model: string;
   providerMode: string;
@@ -12,7 +19,27 @@ interface Options {
   repo: string;
   skipParallels: boolean;
   skipTelegram: boolean;
-}
+};
+
+export type RunOptions = {
+  capture?: boolean;
+  timeoutMs?: number;
+};
+
+type WorkflowRunInfo = {
+  conclusion: string | null;
+  html_url: string;
+  status: string;
+  updated_at: string;
+};
+
+type PollRunOptions = {
+  pollIntervalMs?: number;
+  readRun?: (repo: string, runId: string) => WorkflowRunInfo;
+  sleep?: (ms: number) => Promise<void>;
+  timeoutMs?: number;
+  now?: () => number;
+};
 
 function usage(): string {
   return `Usage: pnpm release:beta-smoke -- --beta beta4 [options]
@@ -29,7 +56,10 @@ Options:
 `;
 }
 
-function parseArgs(argv: string[]): Options {
+export function parseArgs(argv: string[]): Options {
+  const args = stripLeadingPackageManagerSeparator(argv);
+  const terminatorIndex = args.indexOf("--");
+  const cliArgs = terminatorIndex === -1 ? args : args.slice(0, terminatorIndex);
   const options: Options = {
     beta: "beta",
     model: "openai/gpt-5.4",
@@ -39,61 +69,98 @@ function parseArgs(argv: string[]): Options {
     skipParallels: false,
     skipTelegram: false,
   };
-  for (let i = 0; i < argv.length; i++) {
-    const arg = argv[i];
-    switch (arg) {
-      case "--":
-        break;
-      case "--beta":
-        options.beta = requireValue(argv, ++i, arg);
-        break;
-      case "--model":
-        options.model = requireValue(argv, ++i, arg);
-        break;
-      case "--provider-mode":
-        options.providerMode = requireValue(argv, ++i, arg);
-        break;
-      case "--ref":
-        options.ref = requireValue(argv, ++i, arg);
-        break;
-      case "--repo":
-        options.repo = requireValue(argv, ++i, arg);
-        break;
-      case "--skip-parallels":
-        options.skipParallels = true;
-        break;
-      case "--skip-telegram":
-        options.skipTelegram = true;
-        break;
-      case "-h":
-      case "--help":
-        process.stdout.write(usage());
-        process.exit(0);
-      default:
+  const helpIndex = cliArgs.findIndex((arg: string) => arg === "-h" || arg === "--help");
+  parseFlagArgs(
+    helpIndex === -1 ? cliArgs : cliArgs.slice(0, helpIndex),
+    options,
+    [
+      ...(
+        [
+          ["--beta", "beta"],
+          ["--model", "model"],
+          ["--provider-mode", "providerMode"],
+          ["--ref", "ref"],
+          ["--repo", "repo"],
+        ] as const
+      ).map(([flag, key]) =>
+        stringFlag(flag, key, {
+          allowInline: false,
+          rejectShortOptions: true,
+          repeatable: true,
+        }),
+      ),
+      booleanFlag("--skip-parallels", "skipParallels", true, { repeatable: true }),
+      booleanFlag("--skip-telegram", "skipTelegram", true, { repeatable: true }),
+    ],
+    {
+      onUnhandledArg(arg: string) {
         throw new Error(`unknown option: ${arg}`);
-    }
+      },
+    },
+  );
+  if (helpIndex !== -1) {
+    process.stdout.write(usage());
+    process.exit(0);
+  }
+  if (options.skipParallels && options.skipTelegram) {
+    throw new Error("--skip-parallels and --skip-telegram cannot be used together");
   }
   return options;
 }
 
-function requireValue(argv: string[], index: number, flag: string): string {
-  const value = argv[index];
-  if (!value || value.startsWith("-")) {
-    throw new Error(`${flag} requires a value`);
+const CAPTURE_MAX_BUFFER_BYTES = 32 * 1024 * 1024;
+const DEFAULT_COMMAND_TIMEOUT_MS = readPositiveInt(
+  process.env.OPENCLAW_RELEASE_BETA_SMOKE_COMMAND_MS,
+  10 * 60_000,
+  "OPENCLAW_RELEASE_BETA_SMOKE_COMMAND_MS",
+);
+const TELEGRAM_POLL_INTERVAL_MS = readPositiveInt(
+  process.env.OPENCLAW_RELEASE_BETA_SMOKE_POLL_INTERVAL_MS,
+  30_000,
+  "OPENCLAW_RELEASE_BETA_SMOKE_POLL_INTERVAL_MS",
+);
+const TELEGRAM_POLL_TIMEOUT_MS = readPositiveInt(
+  process.env.OPENCLAW_RELEASE_BETA_SMOKE_POLL_TIMEOUT_MS,
+  4 * 60 * 60_000,
+  "OPENCLAW_RELEASE_BETA_SMOKE_POLL_TIMEOUT_MS",
+);
+
+export function readPositiveInt(
+  raw: string | undefined,
+  fallback: number,
+  label = "value",
+): number {
+  const text = (raw ?? "").trim();
+  if (!text) {
+    return fallback;
   }
-  return value;
+  if (!/^\d+$/u.test(text)) {
+    throw new Error(`${label} must be a positive integer. Got: ${JSON.stringify(raw)}`);
+  }
+  const parsed = Number(text);
+  if (!Number.isSafeInteger(parsed) || parsed <= 0) {
+    throw new Error(`${label} must be a positive integer. Got: ${JSON.stringify(raw)}`);
+  }
+  return parsed;
 }
 
-function run(command: string, args: string[], input?: { capture?: boolean }): string {
+export function run(command: string, args: string[], input?: RunOptions): string {
+  const timeoutMs = input?.timeoutMs ?? DEFAULT_COMMAND_TIMEOUT_MS;
   const result = spawnSync(command, args, {
     encoding: "utf8",
+    killSignal: "SIGKILL",
+    maxBuffer: CAPTURE_MAX_BUFFER_BYTES,
     stdio: input?.capture ? ["ignore", "pipe", "pipe"] : "inherit",
+    timeout: timeoutMs,
   });
-  if (result.status !== 0) {
+  if (result.error || result.status !== 0) {
+    const errorCode = (result.error as NodeJS.ErrnoException | undefined)?.code;
+    const reason =
+      errorCode === "ETIMEDOUT"
+        ? `timed out after ${timeoutMs}ms`
+        : (result.status ?? result.signal ?? result.error?.message ?? "unknown");
     const stderr = result.stderr ? `\n${result.stderr}` : "";
-    throw new Error(
-      `${command} ${args.join(" ")} failed with ${result.status ?? "signal"}${stderr}`,
-    );
+    throw new Error(`${command} ${args.join(" ")} failed with ${reason}${stderr}`);
   }
   return result.stdout ?? "";
 }
@@ -156,93 +223,53 @@ function runParallels(beta: string, model: string): void {
     "150m",
     ...forwarded.map(shellQuote),
   ].join(" ");
-  run("bash", ["-lc", command]);
+  run("bash", ["-lc", command], { timeoutMs: 155 * 60_000 });
 }
 
 function ghJson(repo: string, pathSuffix: string): unknown {
-  return JSON.parse(run("gh", ["api", `repos/${repo}/${pathSuffix}`], { capture: true }));
+  const url = `https://api.github.com/repos/${repo}/${pathSuffix}`;
+  const result = spawnSync(
+    "bash",
+    [
+      "-lc",
+      [
+        "set -euo pipefail",
+        'token="$(gh auth token)"',
+        'curl -fsS -H "Authorization: Bearer ${token}" -H "Accept: application/vnd.github+json" -H "X-GitHub-Api-Version: 2022-11-28" "${OPENCLAW_GITHUB_REST_URL}"',
+      ].join("\n"),
+    ],
+    {
+      encoding: "utf8",
+      env: { ...process.env, OPENCLAW_GITHUB_REST_URL: url },
+      killSignal: "SIGKILL",
+      maxBuffer: CAPTURE_MAX_BUFFER_BYTES,
+      stdio: ["ignore", "pipe", "pipe"],
+      timeout: DEFAULT_COMMAND_TIMEOUT_MS,
+    },
+  );
+  if (result.error || result.status !== 0) {
+    const reason = result.status ?? result.signal ?? result.error?.message ?? "unknown";
+    const stderr = result.stderr ? `\n${result.stderr}` : "";
+    throw new Error(`GitHub REST request failed for ${pathSuffix} with ${reason}${stderr}`);
+  }
+  return JSON.parse(result.stdout ?? "");
 }
 
 export function parseWorkflowRunIdFromOutput(output: string): string | undefined {
   return /\/actions\/runs\/(\d+)/u.exec(output)?.[1];
 }
 
-type WorkflowRunListEntry = {
-  createdAt?: string;
-  databaseId?: number | string;
-};
-
-function normalizeRunId(value: unknown): string | undefined {
-  if (typeof value === "number" && Number.isFinite(value)) {
-    return String(value);
+export function requireWorkflowRunIdFromOutput(output: string, workflow: string): string {
+  const runId = parseWorkflowRunIdFromOutput(output);
+  if (!runId) {
+    throw new Error(
+      `gh workflow run ${workflow} did not return an Actions run URL; refusing to guess from recent workflow_dispatch runs`,
+    );
   }
-  if (typeof value === "string" && value.trim()) {
-    return value.trim();
-  }
-  return undefined;
-}
-
-export function selectNewestDispatchedRunId(params: {
-  beforeIds: ReadonlySet<string>;
-  runs: readonly WorkflowRunListEntry[];
-}): string | undefined {
-  return params.runs
-    .filter((entry) => {
-      const id = normalizeRunId(entry.databaseId);
-      return id !== undefined && !params.beforeIds.has(id);
-    })
-    .toSorted((a, b) => (b.createdAt ?? "").localeCompare(a.createdAt ?? ""))
-    .map((entry) => normalizeRunId(entry.databaseId))
-    .find((id): id is string => id !== undefined);
-}
-
-function listWorkflowDispatchRuns(repo: string, workflow: string): WorkflowRunListEntry[] {
-  return JSON.parse(
-    run(
-      "gh",
-      [
-        "run",
-        "list",
-        "--repo",
-        repo,
-        "--workflow",
-        workflow,
-        "--event",
-        "workflow_dispatch",
-        "--limit",
-        "50",
-        "--json",
-        "databaseId,createdAt",
-      ],
-      { capture: true },
-    ),
-  ) as WorkflowRunListEntry[];
-}
-
-async function findDispatchedWorkflowRunId(params: {
-  beforeIds: ReadonlySet<string>;
-  repo: string;
-  workflow: string;
-}): Promise<string> {
-  for (let attempt = 0; attempt < 60; attempt++) {
-    const runId = selectNewestDispatchedRunId({
-      beforeIds: params.beforeIds,
-      runs: listWorkflowDispatchRuns(params.repo, params.workflow),
-    });
-    if (runId) {
-      return runId;
-    }
-    await new Promise((resolve) => setTimeout(resolve, 5_000));
-  }
-  throw new Error(`could not find dispatched run for ${params.workflow}`);
+  return runId;
 }
 
 async function dispatchTelegram(options: Options, packageSpec: string): Promise<string> {
-  const beforeIds = new Set(
-    listWorkflowDispatchRuns(options.repo, TELEGRAM_BETA_WORKFLOW_FILE)
-      .map((entry) => normalizeRunId(entry.databaseId))
-      .filter((id): id is string => id !== undefined),
-  );
   const output = run(
     "gh",
     [
@@ -262,25 +289,29 @@ async function dispatchTelegram(options: Options, packageSpec: string): Promise<
     ],
     { capture: true },
   );
-  const runId = parseWorkflowRunIdFromOutput(output);
-  if (runId) {
-    return runId;
-  }
-  return await findDispatchedWorkflowRunId({
-    beforeIds,
-    repo: options.repo,
-    workflow: TELEGRAM_BETA_WORKFLOW_FILE,
-  });
+  return requireWorkflowRunIdFromOutput(output, TELEGRAM_BETA_WORKFLOW_FILE);
 }
 
-async function pollRun(repo: string, runId: string): Promise<void> {
+export async function pollRun(
+  repo: string,
+  runId: string,
+  options: PollRunOptions = {},
+): Promise<void> {
+  const started = (options.now ?? Date.now)();
+  const timeoutMs = Math.max(1, options.timeoutMs ?? TELEGRAM_POLL_TIMEOUT_MS);
+  const pollIntervalMs = Math.max(1, options.pollIntervalMs ?? TELEGRAM_POLL_INTERVAL_MS);
+  const sleep =
+    options.sleep ??
+    ((ms: number) =>
+      new Promise<void>((resolve) => {
+        setTimeout(resolve, ms);
+      }));
+  const readRun =
+    options.readRun ??
+    ((currentRepo: string, currentRunId: string) =>
+      ghJson(currentRepo, `actions/runs/${currentRunId}`) as WorkflowRunInfo);
   for (;;) {
-    const info = ghJson(repo, `actions/runs/${runId}`) as {
-      conclusion: string | null;
-      html_url: string;
-      status: string;
-      updated_at: string;
-    };
+    const info = readRun(repo, runId);
     console.log(
       `Telegram workflow ${runId}: ${info.status}${info.conclusion ? `/${info.conclusion}` : ""} updated=${info.updated_at}`,
     );
@@ -293,7 +324,11 @@ async function pollRun(repo: string, runId: string): Promise<void> {
       console.log(info.html_url);
       return;
     }
-    await new Promise((resolve) => setTimeout(resolve, 30_000));
+    const elapsedMs = (options.now ?? Date.now)() - started;
+    if (elapsedMs >= timeoutMs) {
+      throw new Error(`Telegram workflow ${runId} did not complete within ${timeoutMs}ms`);
+    }
+    await sleep(Math.min(pollIntervalMs, timeoutMs - elapsedMs));
   }
 }
 
@@ -341,25 +376,80 @@ function findFile(root: string, basename: string): string {
   return "";
 }
 
+export function mergeTelegramProofIntoReleaseBody(body: string, telegramLine: string): string {
+  if (body.includes(telegramLine)) {
+    return body;
+  }
+
+  const marker = "### Release verification";
+  const telegramProofPattern = /^- npm Telegram beta E2E: .*$/mu;
+  if (telegramProofPattern.test(body)) {
+    return body.replace(telegramProofPattern, telegramLine);
+  }
+  if (!body.includes(marker)) {
+    return `${body.trimEnd()}\n\n${marker}\n\n${telegramLine}\n`;
+  }
+
+  const markerIndex = body.indexOf(marker);
+  const afterMarkerIndex = markerIndex + marker.length;
+  const nextHeading = /\n#{1,6} /u.exec(body.slice(afterMarkerIndex));
+  const insertionIndex = nextHeading === null ? -1 : afterMarkerIndex + nextHeading.index;
+  if (insertionIndex === -1) {
+    return `${body.trimEnd()}\n${telegramLine}\n`;
+  }
+  return `${body.slice(0, insertionIndex).trimEnd()}\n${telegramLine}\n${body.slice(insertionIndex)}`;
+}
+
+function appendTelegramProofToRelease(repo: string, version: string, runId: string): void {
+  const tag = `v${version}`;
+  const release = ghJson(repo, `releases/tags/${encodeURIComponent(tag)}`) as {
+    body?: string;
+    html_url?: string;
+  };
+  const body = release.body ?? "";
+  const telegramLine = `- npm Telegram beta E2E: https://github.com/${repo}/actions/runs/${runId}`;
+  const notesFile = path.join(
+    "/tmp",
+    `openclaw-${version.replace(/[^a-zA-Z0-9.-]/g, "-")}-release-notes-${process.pid}.md`,
+  );
+  const nextBody = mergeTelegramProofIntoReleaseBody(body, telegramLine);
+  if (nextBody === body) {
+    return;
+  }
+  writeFileSync(notesFile, nextBody);
+  run("gh", ["release", "edit", tag, "--repo", repo, "--notes-file", notesFile]);
+  console.log(
+    `Updated release proof: ${release.html_url ?? `https://github.com/${repo}/releases/tag/${tag}`}`,
+  );
+}
+
 async function main(): Promise<void> {
   const options = parseArgs(process.argv.slice(2));
   const version = resolveBetaVersion(options.beta);
   const packageSpec = `openclaw@${version}`;
   console.log(`Resolved beta target: ${packageSpec}`);
 
-  if (!options.skipParallels) {
-    runParallels(options.beta, options.model);
+  let telegramRunId: string | undefined;
+  if (!options.skipTelegram) {
+    telegramRunId = await dispatchTelegram(options, packageSpec);
+    console.log(
+      `Dispatched Telegram workflow: https://github.com/${options.repo}/actions/runs/${telegramRunId}`,
+    );
   }
 
-  if (!options.skipTelegram) {
-    const runId = await dispatchTelegram(options, packageSpec);
-    await pollRun(options.repo, runId);
-    const artifactDir = downloadTelegramArtifact(options.repo, runId);
-    const report = findFile(artifactDir, "telegram-qa-report.md");
+  if (!options.skipParallels) {
+    runParallels(version, options.model);
+  }
+
+  if (telegramRunId) {
+    await pollRun(options.repo, telegramRunId);
+    const artifactDir = downloadTelegramArtifact(options.repo, telegramRunId);
+    const report = findFile(artifactDir, "qa-suite-report.md");
     if (report && existsSync(report)) {
       console.log(`\nTelegram report: ${report}\n`);
       console.log(readFileSync(report, "utf8"));
     }
+    appendTelegramProofToRelease(options.repo, version, telegramRunId);
   }
 }
 

@@ -1,9 +1,12 @@
+// Plugin hook tests cover hook discovery from plugin manifests and packages.
 import fs from "node:fs";
 import fsp from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { setCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata.test-support.js";
+import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import {
   clearInternalHooks,
   createInternalHookEvent,
@@ -11,6 +14,7 @@ import {
   triggerInternalHook,
 } from "./internal-hooks.js";
 import { loadInternalHooks } from "./loader.js";
+import { resolvePluginHookDirs } from "./plugin-hooks.js";
 import { loadWorkspaceHookEntries } from "./workspace.js";
 
 describe("bundle plugin hooks", () => {
@@ -33,6 +37,8 @@ describe("bundle plugin hooks", () => {
   });
 
   afterEach(() => {
+    setCurrentPluginMetadataSnapshot(undefined);
+    vi.restoreAllMocks();
     clearInternalHooks();
     setInternalHooksEnabled(true);
     if (previousBundledHooksDir === undefined) {
@@ -98,6 +104,15 @@ describe("bundle plugin hooks", () => {
     };
   }
 
+  function requireOnlyHookEntry(entries: ReturnType<typeof loadWorkspaceHookEntries>) {
+    expect(entries).toHaveLength(1);
+    const [entry] = entries;
+    if (!entry) {
+      throw new Error("Expected bundled hook entry");
+    }
+    return entry;
+  }
+
   it("exposes enabled bundle hook dirs as plugin-managed hook entries", async () => {
     const bundleRoot = await writeBundleHookFixture();
 
@@ -105,14 +120,32 @@ describe("bundle plugin hooks", () => {
       config: createConfig(true),
     });
 
-    expect(entries).toHaveLength(1);
-    expect(entries[0]?.hook.name).toBe("bundle-hook");
-    expect(entries[0]?.hook.source).toBe("openclaw-plugin");
-    expect(entries[0]?.hook.pluginId).toBe("sample-bundle");
-    expect(entries[0]?.hook.baseDir).toBe(
+    const entry = requireOnlyHookEntry(entries);
+    expect(entry.hook.name).toBe("bundle-hook");
+    expect(entry.hook.source).toBe("openclaw-plugin");
+    expect(entry.hook.pluginId).toBe("sample-bundle");
+    expect(entry.hook.baseDir).toBe(
       fs.realpathSync.native(path.join(bundleRoot, "hooks", "bundle-hook")),
     );
-    expect(entries[0]?.metadata?.events).toEqual(["command:new"]);
+    expect(entry.metadata?.events).toEqual(["command:new"]);
+  });
+
+  it("reuses published plugin metadata without rescanning manifests", async () => {
+    const bundleRoot = await writeBundleHookFixture();
+    const config = createConfig(true);
+    const snapshot = loadPluginMetadataSnapshot({ config, workspaceDir, env: process.env });
+    setCurrentPluginMetadataSnapshot(snapshot, { config, workspaceDir });
+    const hookDir = fs.realpathSync.native(path.join(bundleRoot, "hooks"));
+    const manifestRegistry = await import("../plugins/manifest-registry-installed.js");
+    const scanManifests = vi.spyOn(manifestRegistry, "loadPluginManifestRegistryForInstalledIndex");
+
+    for (let iteration = 0; iteration < 2; iteration += 1) {
+      expect(resolvePluginHookDirs({ workspaceDir, config })).toEqual([
+        { dir: hookDir, pluginId: "sample-bundle" },
+      ]);
+    }
+
+    expect(scanManifests).not.toHaveBeenCalled();
   });
 
   it("loads and executes enabled bundle hooks through the internal hook loader", async () => {

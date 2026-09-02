@@ -1,3 +1,4 @@
+// Device Pair plugin module implements pair command auth behavior.
 type PairingCommandAuthParams = {
   channel: string;
   gatewayClientScopes?: readonly string[] | null;
@@ -7,13 +8,26 @@ type PairingCommandAuthParams = {
 type PairingCommandAuthState = {
   isInternalGatewayCaller: boolean;
   isMissingPairingPrivilege: boolean;
+  isMissingSetupHandoffPrivilege: boolean;
+  canIssueFullAccessSetup: boolean;
   approvalCallerScopes?: readonly string[];
 };
 
 const COMMAND_OWNER_PAIRING_SCOPES = ["operator.pairing"] as const;
+const PAIRING_SCOPE = "operator.pairing";
+const ADMIN_SCOPE = "operator.admin";
+const TALK_SECRETS_SCOPE = "operator.talk.secrets";
 
 function isInternalGatewayPairingCaller(params: PairingCommandAuthParams): boolean {
   return params.channel === "webchat" || Array.isArray(params.gatewayClientScopes);
+}
+
+function hasPairingPrivilege(scopes: readonly string[]): boolean {
+  return scopes.includes(PAIRING_SCOPE) || scopes.includes(ADMIN_SCOPE);
+}
+
+function hasSetupHandoffPrivilege(scopes: readonly string[]): boolean {
+  return scopes.includes(TALK_SECRETS_SCOPE) || scopes.includes(ADMIN_SCOPE);
 }
 
 export function resolvePairingCommandAuthState(
@@ -24,13 +38,11 @@ export function resolvePairingCommandAuthState(
     const approvalCallerScopes = Array.isArray(params.gatewayClientScopes)
       ? params.gatewayClientScopes
       : [];
-    const isMissingPairingPrivilege =
-      !approvalCallerScopes.includes("operator.pairing") &&
-      !approvalCallerScopes.includes("operator.admin");
-
     return {
       isInternalGatewayCaller,
-      isMissingPairingPrivilege,
+      isMissingPairingPrivilege: !hasPairingPrivilege(approvalCallerScopes),
+      isMissingSetupHandoffPrivilege: !hasSetupHandoffPrivilege(approvalCallerScopes),
+      canIssueFullAccessSetup: approvalCallerScopes.includes(ADMIN_SCOPE),
       approvalCallerScopes,
     };
   }
@@ -39,6 +51,8 @@ export function resolvePairingCommandAuthState(
     return {
       isInternalGatewayCaller,
       isMissingPairingPrivilege: false,
+      isMissingSetupHandoffPrivilege: false,
+      canIssueFullAccessSetup: true,
       approvalCallerScopes: COMMAND_OWNER_PAIRING_SCOPES,
     };
   }
@@ -46,6 +60,8 @@ export function resolvePairingCommandAuthState(
   return {
     isInternalGatewayCaller,
     isMissingPairingPrivilege: true,
+    isMissingSetupHandoffPrivilege: true,
+    canIssueFullAccessSetup: false,
     approvalCallerScopes: undefined,
   };
 }
@@ -53,5 +69,11 @@ export function resolvePairingCommandAuthState(
 export function buildMissingPairingScopeReply(): { text: string } {
   return {
     text: "⚠️ This command requires operator.pairing.",
+  };
+}
+
+export function buildMissingSetupHandoffScopeReply(): { text: string } {
+  return {
+    text: "⚠️ Setup code handoff includes Talk secrets and requires operator.talk.secrets.",
   };
 }

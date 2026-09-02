@@ -1,4 +1,5 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+// Telegram tests cover reaction level plugin behavior.
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { resolveTelegramReactionLevel } from "./reaction-level.js";
 
@@ -121,6 +122,24 @@ describe("resolveTelegramReactionLevel", () => {
     expectExtensiveFlags(result);
   });
 
+  it("resolves omitted-account reaction level from the configured defaultAccount (#61012)", () => {
+    const cfg: OpenClawConfig = {
+      channels: {
+        telegram: {
+          botToken: "tok-default",
+          reactionLevel: "off",
+          defaultAccount: "work",
+          accounts: {
+            work: { botToken: "tok-work", reactionLevel: "extensive" },
+          },
+        },
+      },
+    };
+
+    const result = resolveTelegramReactionLevel({ cfg });
+    expectExtensiveFlags(result);
+  });
+
   it("falls back to global level when account has no reactionLevel", () => {
     const cfg: OpenClawConfig = {
       channels: {
@@ -135,5 +154,50 @@ describe("resolveTelegramReactionLevel", () => {
 
     const result = resolveTelegramReactionLevel({ cfg, accountId: "work" });
     expectMinimalFlags(result);
+  });
+
+  // Regression for #75433: prompt-prep reaction guidance reads raw config
+  // before the active runtime snapshot has resolved channel credentials.
+  it("preserves configured reactionLevel when botToken is an unresolved SecretRef", () => {
+    const cfg = {
+      channels: {
+        telegram: {
+          botToken: { source: "exec", provider: "default", id: "telegram-token" },
+          reactionLevel: "off",
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    expect(() => resolveTelegramReactionLevel({ cfg })).not.toThrow();
+    const result = resolveTelegramReactionLevel({ cfg });
+    expectReactionFlags(result, {
+      level: "off",
+      ackEnabled: false,
+      agentReactionsEnabled: false,
+    });
+  });
+
+  it("preserves scoped account reactionLevel when token is an unresolved SecretRef", () => {
+    const cfg = {
+      channels: {
+        telegram: {
+          reactionLevel: "minimal",
+          accounts: {
+            ops: {
+              botToken: { source: "exec", provider: "default", id: "telegram-ops" },
+              reactionLevel: "ack",
+            },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    expect(() => resolveTelegramReactionLevel({ cfg, accountId: "ops" })).not.toThrow();
+    const result = resolveTelegramReactionLevel({ cfg, accountId: "ops" });
+    expectReactionFlags(result, {
+      level: "ack",
+      ackEnabled: true,
+      agentReactionsEnabled: false,
+    });
   });
 });

@@ -1,7 +1,9 @@
+// Verifies Docker sandbox config security audit findings.
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { withEnvAsync } from "../test-utils/env.js";
 import {
   collectSandboxDangerousConfigFindings,
   collectSandboxDockerNoopFindings,
@@ -43,12 +45,8 @@ describe("security audit sandbox docker config", () => {
 
   it("evaluates sandbox docker config findings", async () => {
     const isolatedHome = path.join(os.tmpdir(), "openclaw-security-audit-home");
-    const previousHome = process.env.HOME;
-    const previousUserProfile = process.env.USERPROFILE;
-    process.env.HOME = isolatedHome;
-    process.env.USERPROFILE = isolatedHome;
     vi.spyOn(os, "homedir").mockReturnValue(isolatedHome);
-    try {
+    await withEnvAsync({ HOME: isolatedHome, USERPROFILE: isolatedHome }, async () => {
       const cases = [
         {
           name: "mode off with docker config only",
@@ -74,7 +72,7 @@ describe("security audit sandbox docker config", () => {
                   docker: { image: "ghcr.io/example/sandbox:latest" },
                 },
               },
-              list: [{ id: "ops", sandbox: { mode: "all" } }],
+              entries: { ops: { sandbox: { mode: "all" } } },
             },
           } as OpenClawConfig,
           expectedFindings: [],
@@ -173,12 +171,15 @@ describe("security audit sandbox docker config", () => {
             ...collectSandboxDockerNoopFindings(testCase.cfg),
             ...collectSandboxDangerousConfigFindings(testCase.cfg),
           ];
-          if (testCase.expectedFindings.length > 0) {
-            expect(findings, testCase.name).toEqual(
-              expect.arrayContaining(
-                testCase.expectedFindings.map((finding) => expect.objectContaining(finding)),
-              ),
-            );
+          for (const expectedFinding of testCase.expectedFindings) {
+            const finding = findings.find((entry) => entry.checkId === expectedFinding.checkId);
+            expect(finding?.checkId, testCase.name).toBe(expectedFinding.checkId);
+            if ("severity" in expectedFinding) {
+              expect(finding?.severity, testCase.name).toBe(expectedFinding.severity);
+            }
+            if ("title" in expectedFinding) {
+              expect(finding?.title, testCase.name).toBe(expectedFinding.title);
+            }
           }
           expectFindingSet({
             findings,
@@ -187,17 +188,34 @@ describe("security audit sandbox docker config", () => {
           });
         }),
       );
-    } finally {
-      if (previousHome === undefined) {
-        delete process.env.HOME;
-      } else {
-        process.env.HOME = previousHome;
-      }
-      if (previousUserProfile === undefined) {
-        delete process.env.USERPROFILE;
-      } else {
-        process.env.USERPROFILE = previousUserProfile;
-      }
-    }
+    });
+  });
+
+  it("reports canonical agent paths for docker sandbox findings", () => {
+    const config = {
+      agents: {
+        entries: {
+          ops: {
+            sandbox: {
+              mode: "off",
+              docker: {
+                image: "ghcr.io/example/sandbox:latest",
+                binds: ["/etc/passwd:/mnt/passwd:ro"],
+              },
+            },
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    const noOpFinding = collectSandboxDockerNoopFindings(config).find(
+      (entry) => entry.checkId === "sandbox.docker_config_mode_off",
+    );
+    expect(noOpFinding?.detail).toContain("agents.entries.ops.sandbox.docker");
+
+    const dangerousFinding = collectSandboxDangerousConfigFindings(config).find(
+      (entry) => entry.checkId === "sandbox.dangerous_bind_mount",
+    );
+    expect(dangerousFinding?.detail).toContain("agents.entries.ops.sandbox.docker.binds");
   });
 });

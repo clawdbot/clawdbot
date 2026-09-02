@@ -1,3 +1,4 @@
+// Covers APNs auth config and registration invalidation helpers.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -6,7 +7,6 @@ import {
   normalizeApnsEnvironment,
   resolveApnsAuthConfigFromEnv,
   shouldClearStoredApnsRegistration,
-  shouldInvalidateApnsRegistration,
 } from "./push-apns.js";
 
 const tempDirs = createTrackedTempDirs();
@@ -36,14 +36,10 @@ describe("push APNs auth and helper coverage", () => {
       OPENCLAW_APNS_PRIVATE_KEY: "ignored",
     } as NodeJS.ProcessEnv);
 
-    expect(resolved).toMatchObject({
-      ok: true,
-      value: {
-        teamId: "TEAM123",
-        keyId: "KEY123",
-      },
-    });
+    expect(resolved.ok).toBe(true);
     if (resolved.ok) {
+      expect(resolved.value.teamId).toBe("TEAM123");
+      expect(resolved.value.keyId).toBe("KEY123");
       expect(resolved.value.privateKey).toContain("\nline-a\n");
       expect(resolved.value.privateKey).not.toBe("ignored");
     }
@@ -58,14 +54,14 @@ describe("push APNs auth and helper coverage", () => {
         "-----BEGIN PRIVATE KEY-----\\nline-c\\nline-d\\n-----END PRIVATE KEY-----", // pragma: allowlist secret
     } as NodeJS.ProcessEnv);
 
-    expect(resolved).toMatchObject({
-      ok: true,
-      value: {
-        teamId: "TEAM123",
-        keyId: "KEY123",
-        privateKey: "-----BEGIN PRIVATE KEY-----\nline-c\nline-d\n-----END PRIVATE KEY-----",
-      },
-    });
+    expect(resolved.ok).toBe(true);
+    if (resolved.ok) {
+      expect(resolved.value.teamId).toBe("TEAM123");
+      expect(resolved.value.keyId).toBe("KEY123");
+      expect(resolved.value.privateKey).toBe(
+        "-----BEGIN PRIVATE KEY-----\nline-c\nline-d\n-----END PRIVATE KEY-----",
+      );
+    }
   });
 
   it("reads APNs private keys from OPENCLAW_APNS_PRIVATE_KEY_PATH", async () => {
@@ -83,14 +79,14 @@ describe("push APNs auth and helper coverage", () => {
       OPENCLAW_APNS_PRIVATE_KEY_PATH: keyPath,
     } as NodeJS.ProcessEnv);
 
-    expect(resolved).toMatchObject({
-      ok: true,
-      value: {
-        teamId: "TEAM123",
-        keyId: "KEY123",
-        privateKey: "-----BEGIN PRIVATE KEY-----\nline-e\nline-f\n-----END PRIVATE KEY-----",
-      },
-    });
+    expect(resolved.ok).toBe(true);
+    if (resolved.ok) {
+      expect(resolved.value.teamId).toBe("TEAM123");
+      expect(resolved.value.keyId).toBe("KEY123");
+      expect(resolved.value.privateKey).toBe(
+        "-----BEGIN PRIVATE KEY-----\nline-e\nline-f\n-----END PRIVATE KEY-----",
+      );
+    }
   });
 
   it("reports missing auth fields and path read failures", async () => {
@@ -114,15 +110,6 @@ describe("push APNs auth and helper coverage", () => {
         `failed reading OPENCLAW_APNS_PRIVATE_KEY_PATH (${missingPath})`,
       );
     }
-  });
-
-  it("invalidates only real bad-token APNs failures", () => {
-    expect(shouldInvalidateApnsRegistration({ status: 410, reason: "Unregistered" })).toBe(true);
-    expect(shouldInvalidateApnsRegistration({ status: 400, reason: " BadDeviceToken " })).toBe(
-      true,
-    );
-    expect(shouldInvalidateApnsRegistration({ status: 400, reason: "BadTopic" })).toBe(false);
-    expect(shouldInvalidateApnsRegistration({ status: 429, reason: "BadDeviceToken" })).toBe(false);
   });
 
   it("clears only direct registrations without an environment override mismatch", () => {

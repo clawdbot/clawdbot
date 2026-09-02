@@ -1,3 +1,6 @@
+/**
+ * Tests channel config helper authorization and write-scope behavior.
+ */
 import { describe, expect, it } from "vitest";
 import { formatPairingApproveHint } from "../channels/plugins/helpers.js";
 import { DEFAULT_ACCOUNT_ID } from "../routing/session-key.js";
@@ -67,6 +70,9 @@ type DemoDmAccount = {
   allowFrom?: string[];
 };
 
+type DemoDmPolicy = ReturnType<ReturnType<typeof createDemoDmSecurityResolver>>;
+type ExpectedDemoDmPolicy = Omit<DemoDmPolicy, "normalizeEntry">;
+
 function createDemoDmSecurityResolver(
   params: {
     inheritSharedDefaultsFromDefaultAccount?: boolean;
@@ -80,6 +86,17 @@ function createDemoDmSecurityResolver(
     normalizeEntry: (raw) => raw.toLowerCase(),
     ...params,
   });
+}
+
+function expectDemoDmPolicy(policy: DemoDmPolicy, expected: ExpectedDemoDmPolicy) {
+  const { normalizeEntry, ...rest } = policy;
+
+  expect(rest).toEqual(expected);
+  expect(normalizeEntry).toBeTypeOf("function");
+  if (typeof normalizeEntry !== "function") {
+    throw new Error("expected normalizeEntry to be a function");
+  }
+  expect(normalizeEntry("OWNER")).toBe("owner");
 }
 
 describe("mapAllowFromEntries", () => {
@@ -444,7 +461,7 @@ describe("createScopedDmSecurityResolver", () => {
   it("builds account-aware DM policy payloads", () => {
     const resolveDmPolicy = createDemoDmSecurityResolver();
 
-    expect(
+    expectDemoDmPolicy(
       resolveDmPolicy({
         cfg: {
           channels: {
@@ -462,14 +479,14 @@ describe("createScopedDmSecurityResolver", () => {
           allowFrom: ["Owner"],
         },
       }),
-    ).toEqual({
-      policy: "allowlist",
-      allowFrom: ["Owner"],
-      policyPath: "channels.demo.accounts.alt.dmPolicy",
-      allowFromPath: "channels.demo.accounts.alt.",
-      approveHint: formatPairingApproveHint("demo"),
-      normalizeEntry: expect.any(Function),
-    });
+      {
+        policy: "allowlist",
+        allowFrom: ["Owner"],
+        policyPath: "channels.demo.accounts.alt.dmPolicy",
+        allowFromPath: "channels.demo.accounts.alt.",
+        approveHint: formatPairingApproveHint("demo"),
+      },
+    );
   });
 
   it("uses accounts.default paths when named accounts inherit shared defaults", () => {
@@ -477,7 +494,7 @@ describe("createScopedDmSecurityResolver", () => {
       inheritSharedDefaultsFromDefaultAccount: true,
     });
 
-    expect(
+    expectDemoDmPolicy(
       resolveDmPolicy({
         cfg: {
           channels: {
@@ -499,20 +516,20 @@ describe("createScopedDmSecurityResolver", () => {
           allowFrom: ["Owner"],
         },
       }),
-    ).toEqual({
-      policy: "allowlist",
-      allowFrom: ["Owner"],
-      policyPath: "channels.demo.accounts.default.dmPolicy",
-      allowFromPath: "channels.demo.accounts.default.",
-      approveHint: formatPairingApproveHint("demo"),
-      normalizeEntry: expect.any(Function),
-    });
+      {
+        policy: "allowlist",
+        allowFrom: ["Owner"],
+        policyPath: "channels.demo.accounts.default.dmPolicy",
+        allowFromPath: "channels.demo.accounts.default.",
+        approveHint: formatPairingApproveHint("demo"),
+      },
+    );
   });
 
   it("ignores accounts.default paths unless the channel opts into shared default-account inheritance", () => {
     const resolveDmPolicy = createDemoDmSecurityResolver();
 
-    expect(
+    expectDemoDmPolicy(
       resolveDmPolicy({
         cfg: {
           channels: {
@@ -536,14 +553,14 @@ describe("createScopedDmSecurityResolver", () => {
           allowFrom: ["*"],
         },
       }),
-    ).toEqual({
-      policy: "pairing",
-      allowFrom: ["*"],
-      policyPath: "channels.demo.dmPolicy",
-      allowFromPath: "channels.demo.",
-      approveHint: formatPairingApproveHint("demo"),
-      normalizeEntry: expect.any(Function),
-    });
+      {
+        policy: "pairing",
+        allowFrom: ["*"],
+        policyPath: "channels.demo.dmPolicy",
+        allowFromPath: "channels.demo.",
+        approveHint: formatPairingApproveHint("demo"),
+      },
+    );
   });
 });
 

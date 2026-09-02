@@ -4,7 +4,7 @@
 
 ## Tech Stack
 
-- **Runtime**: Node 22+ (Bun also supported for dev/scripts)
+- **Runtime**: Node 22.22.3+, 24.15+, or 25.9+ (Bun also supported for dev/scripts)
 - **Language**: TypeScript (ESM, strict mode)
 - **Package Manager**: pnpm (keep `pnpm-lock.yaml` in sync)
 - **Lint/Format**: Oxlint, Oxfmt (`pnpm check`)
@@ -56,9 +56,9 @@
 
 - **Package manager**: pnpm (`pnpm install`)
 - **Dev**: `pnpm openclaw ...` or `pnpm dev`
-- **Type-check**: `pnpm tsgo` (core production), `pnpm tsgo:prod` (core + extension production), `pnpm check:test-types` (tests)
+- **Type-check**: `pnpm tsgo` (core production), `pnpm tsgo:prod` (core + UI + extension production), `pnpm check:test-types` (tests)
 - **Lint/format**: `pnpm check`
 - **Tests**: `pnpm test`
 - **Build**: `pnpm build`
 
-If you are coding together with a human, do NOT use scripts/committer, but git directly and run the above commands manually to ensure quality.
+If you are coding together with a human, use Git directly and run the above commands manually to ensure quality.

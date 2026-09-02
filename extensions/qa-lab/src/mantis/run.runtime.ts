@@ -1,8 +1,11 @@
+// Qa Lab plugin module implements run behavior.
 import { spawn, type SpawnOptions } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { ensureRepoBoundDirectory, resolveRepoRelativeOutputDir } from "../cli-paths.js";
+import { QA_EVIDENCE_FILENAME, validateQaEvidenceSummaryJson } from "../evidence-summary.js";
+import { trimToValue } from "../mantis-options.runtime.js";
 
 export type MantisBeforeAfterOptions = {
   allowFailures?: boolean;
@@ -22,7 +25,7 @@ export type MantisBeforeAfterOptions = {
   transport?: string;
 };
 
-export type MantisBeforeAfterResult = {
+type MantisBeforeAfterResult = {
   comparisonPath: string;
   manifestPath: string;
   outputDir: string;
@@ -44,6 +47,14 @@ type DiscordQaSummary = {
     status?: string;
     title?: string;
   }[];
+};
+
+type NormalizedScenarioSummary = {
+  details?: string;
+  screenshotPath?: string;
+  status: string;
+  summaryPath: string;
+  videoPath?: string;
 };
 
 type LaneResult = {
@@ -124,11 +135,6 @@ const MANTIS_SCENARIO_CONFIGS: Record<string, MantisScenarioConfig> = {
   },
 };
 
-function trimToValue(value: string | undefined) {
-  const trimmed = value?.trim();
-  return trimmed && trimmed.length > 0 ? trimmed : undefined;
-}
-
 function normalizeRequiredLiteral<T extends string>(
   value: string | undefined,
   defaultValue: T,
@@ -193,6 +199,18 @@ async function readLaneResult(params: {
   publishedLaneDir: string;
   scenario: string;
 }) {
+  const normalized = await readNormalizedLaneResult(params);
+  if (normalized) {
+    return {
+      outputDir: params.publishedLaneDir,
+      scenarioDetails: normalized.details,
+      screenshotPath: normalized.screenshotPath,
+      status: normalized.status,
+      summaryPath: normalized.summaryPath,
+      videoPath: normalized.videoPath,
+    } satisfies LaneResult;
+  }
+
   const summaryPath = path.join(params.publishedLaneDir, "discord-qa-summary.json");
   const summary = JSON.parse(await fs.readFile(summaryPath, "utf8")) as DiscordQaSummary;
   const scenarioSummary =
@@ -208,6 +226,35 @@ async function readLaneResult(params: {
     summaryPath,
     videoPath,
   } satisfies LaneResult;
+}
+
+async function readNormalizedLaneResult(params: {
+  publishedLaneDir: string;
+  scenario: string;
+}): Promise<NormalizedScenarioSummary | undefined> {
+  const summaryPath = path.join(params.publishedLaneDir, QA_EVIDENCE_FILENAME);
+  let rawSummary: string;
+  try {
+    rawSummary = await fs.readFile(summaryPath, "utf8");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return undefined;
+    }
+    throw error;
+  }
+
+  const summary = validateQaEvidenceSummaryJson(JSON.parse(rawSummary));
+  const entry =
+    summary.entries.find((candidate) => candidate.test.id === params.scenario) ??
+    summary.entries[0];
+  const artifacts = entry?.execution?.artifacts ?? [];
+  return {
+    details: entry?.result.failure?.reason,
+    screenshotPath: artifacts.find((artifact) => artifact.kind === "screenshot")?.path,
+    status: entry?.result.status ?? "fail",
+    summaryPath,
+    videoPath: artifacts.find((artifact) => artifact.kind === "video")?.path,
+  };
 }
 
 function renderReport(params: {
@@ -406,7 +453,7 @@ async function runLane(params: {
   const worktreeOutputDir = path.join(".artifacts", "qa-e2e", "mantis", "run", params.lane);
   await runCommand({
     command: "git",
-    args: ["worktree", "add", "--detach", worktreeDir, params.ref],
+    args: ["worktree", "add", "--detach", "--", worktreeDir, params.ref],
     cwd: params.repoRoot,
     runner: params.runner,
   });

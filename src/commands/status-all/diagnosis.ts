@@ -1,9 +1,21 @@
+// Appends the read-only diagnosis section for `openclaw status --all`.
+// Every line that can include logs, config, or connection details is redacted before display.
+
+import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensitive-url";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { sanitizeTerminalText } from "../../../packages/terminal-core/src/safe-text.js";
 import type { ProgressReporter } from "../../cli/progress.js";
 import { formatConfigIssueLine } from "../../config/issue-format.js";
-import { resolveGatewayLogPaths, resolveGatewayRestartLogPath } from "../../daemon/restart-logs.js";
 import {
+  resolveGatewayLogPaths,
+  resolveGatewayRestartLogPath,
+  resolveGatewaySupervisorLogPaths,
+} from "../../daemon/restart-logs.js";
+import {
+  classifyPortListener,
   formatPortDiagnostics,
   isDualStackLoopbackGatewayListeners,
+  isExpectedGatewayListeners,
   type PortUsage,
 } from "../../infra/ports.js";
 import {
@@ -14,9 +26,18 @@ import {
   formatPluginCompatibilityNotice,
   type PluginCompatibilityNotice,
 } from "../../plugins/status.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
+import { formatDeliveryQueueHealthLine } from "../health-format.js";
+import type {
+  resolveStatusGatewayHealthSafe,
+  StatusGatewayDiagnosticsResult,
+} from "../status-runtime-shared.ts";
+import {
+  formatUpdateRestartActionLines,
+  formatUpdateRestartStatusValue,
+} from "../status-update-restart.ts";
 import type { NodeOnlyGatewayInfo } from "../status.node-mode.js";
-import { formatTimeAgo, redactSecrets } from "./format.js";
+import { formatTelemetryExporterSummary } from "../telemetry-exporter-summary.js";
+import { formatTimeAgo, redactStatusSecrets } from "./format.js";
 import { readFileTailLines, summarizeLogTail } from "./gateway.js";
 
 type ConfigIssueLike = { path: string; message: string };
@@ -50,6 +71,77 @@ type ChannelIssueLike = {
   fix?: string;
 };
 
+type DeliveryDiagnosticsLike = {
+  summary?: {
+    byType?: Record<string, number>;
+  };
+  events?: Array<{
+    type?: string;
+    ts?: number;
+    channel?: string;
+    outcome?: string;
+    reason?: string;
+  }>;
+};
+
+type AgentStatusLike = {
+  totalSessions: number;
+  agents: Array<{
+    id: string;
+    lastActiveAgeMs?: number | null;
+  }>;
+};
+
+const AGENT_ACTIVITY_SOFT_WARNING_MS = 30 * 60_000;
+
+function countRecentAgentSessions(agentStatus: AgentStatusLike, thresholdMs: number): number {
+  return agentStatus.agents.filter(
+    (agent) => agent.lastActiveAgeMs != null && agent.lastActiveAgeMs <= thresholdMs,
+  ).length;
+}
+
+function countGatewayListenerPids(portUsage: PortUsageLike): number {
+  const pids = new Set<number>();
+  for (const listener of portUsage.listeners) {
+    if (classifyPortListener(listener, portUsage.port) !== "gateway") {
+      continue;
+    }
+    if (typeof listener.pid === "number" && Number.isFinite(listener.pid)) {
+      pids.add(listener.pid);
+    }
+  }
+  return pids.size;
+}
+
+function isDeliveryDiagnosticsLike(value: unknown): value is DeliveryDiagnosticsLike {
+  return Boolean(value && typeof value === "object");
+}
+
+function countDeliveryEvent(snapshot: DeliveryDiagnosticsLike, type: string): number {
+  const value = snapshot.summary?.byType?.[type];
+  return typeof value === "number" && Number.isFinite(value) ? value : 0;
+}
+
+function latestDeliveryEventAgeMs(snapshot: DeliveryDiagnosticsLike): number | null {
+  // Only inbound/dispatch lifecycle events count as delivery freshness signals.
+  const latestTs = (snapshot.events ?? [])
+    .filter((event) =>
+      [
+        "message.received",
+        "message.dispatch.started",
+        "message.dispatch.completed",
+        "session.turn.created",
+        "message.processed",
+      ].includes(event.type ?? ""),
+    )
+    .reduce((max, event) => {
+      const ts = event.ts;
+      return typeof ts === "number" && Number.isFinite(ts) ? Math.max(max, ts) : max;
+    }, 0);
+  return latestTs > 0 ? Date.now() - latestTs : null;
+}
+
+/** Appends config, gateway, channel, delivery, and log diagnostics to the status-all report. */
 export async function appendStatusAllDiagnosis(params: {
   lines: string[];
   progress: ProgressReporter;
@@ -72,8 +164,11 @@ export async function appendStatusAllDiagnosis(params: {
   pluginCompatibility: PluginCompatibilityNotice[];
   channelsStatus: unknown;
   channelIssues: ChannelIssueLike[];
+  deliveryDiagnostics: StatusGatewayDiagnosticsResult | null;
+  exporterDiagnostics: StatusGatewayDiagnosticsResult | null;
+  agentStatus?: AgentStatusLike;
   gatewayReachable: boolean;
-  health: unknown;
+  health: Awaited<ReturnType<typeof resolveStatusGatewayHealthSafe>> | null | undefined;
   nodeOnlyGateway: NodeOnlyGatewayInfo | null;
 }) {
   const { lines, muted, ok, warn, fail } = params;
@@ -83,10 +178,21 @@ export async function appendStatusAllDiagnosis(params: {
     const colored = status === "ok" ? ok(label) : status === "warn" ? warn(label) : fail(label);
     lines.push(`${icon} ${colored}`);
   };
+  const emitUnavailableDiagnostics = (diagnostic: {
+    label: string;
+    detail: string;
+    retry: string;
+  }) => {
+    emitCheck(`${diagnostic.label}: unavailable`, "warn");
+    lines.push(
+      `  ${muted(sanitizeTerminalText(redactStatusSecrets(redactSensitiveUrlLikeString(diagnostic.detail))))}`,
+    );
+    lines.push(`  ${muted(`Retry: ${diagnostic.retry}`)}`);
+  };
 
   lines.push("");
   lines.push(muted("Gateway connection details:"));
-  for (const line of redactSecrets(params.connectionDetailsForReport)
+  for (const line of redactStatusSecrets(params.connectionDetailsForReport)
     .split("\n")
     .map((l) => l.trimEnd())) {
     lines.push(`  ${muted(line)}`);
@@ -97,6 +203,7 @@ export async function appendStatusAllDiagnosis(params: {
     const status = !params.snap.exists ? "fail" : params.snap.valid ? "ok" : "warn";
     emitCheck(`Config: ${params.snap.path ?? "(unknown)"}`, status);
     const issues = [...(params.snap.legacyIssues ?? []), ...(params.snap.issues ?? [])];
+    // Legacy and current schema checks can report the same path/message pair.
     const uniqueIssues = issues.filter(
       (issue, index) =>
         issues.findIndex((x) => x.path === issue.path && x.message === issue.message) === index,
@@ -122,7 +229,7 @@ export async function appendStatusAllDiagnosis(params: {
     params.secretDiagnostics.length === 0 ? "ok" : "warn",
   );
   for (const diagnostic of params.secretDiagnostics.slice(0, 10)) {
-    lines.push(`  - ${muted(redactSecrets(diagnostic))}`);
+    lines.push(`  - ${muted(redactStatusSecrets(diagnostic))}`);
   }
   if (params.secretDiagnostics.length > 10) {
     lines.push(`  ${muted(`… +${params.secretDiagnostics.length - 10} more`)}`);
@@ -133,16 +240,26 @@ export async function appendStatusAllDiagnosis(params: {
     lines.push(
       `  ${muted(`${summarizeRestartSentinel(params.sentinel.payload)} · ${formatTimeAgo(Date.now() - params.sentinel.payload.ts)}`)}`,
     );
+    const updateRestartValue = formatUpdateRestartStatusValue(params.sentinel.payload, {
+      formatTimeAgo,
+    });
+    if (updateRestartValue) {
+      lines.push(`  ${muted(`Update restart: ${updateRestartValue}`)}`);
+    }
+    for (const line of formatUpdateRestartActionLines(params.sentinel.payload)) {
+      lines.push(`  ${muted(line)}`);
+    }
   } else {
     emitCheck("Restart sentinel: none", "ok");
   }
 
   const lastErrClean = normalizeOptionalString(params.lastErr) ?? "";
+  // Restart logs sometimes end with a single brace from truncated JSON; suppress that noise.
   const isTrivialLastErr = lastErrClean.length < 8 || lastErrClean === "}" || lastErrClean === "{";
   if (lastErrClean && !isTrivialLastErr) {
     lines.push("");
     lines.push(muted("Gateway last log line:"));
-    lines.push(`  ${muted(redactSecrets(lastErrClean))}`);
+    lines.push(`  ${muted(redactStatusSecrets(lastErrClean))}`);
   }
 
   if (params.portUsage) {
@@ -150,9 +267,21 @@ export async function appendStatusAllDiagnosis(params: {
       params.portUsage.listeners,
       params.port,
     );
-    const portOk = params.portUsage.listeners.length === 0 || benignDualStackLoopback;
+    const expectedGatewayListeners = isExpectedGatewayListeners(
+      params.portUsage.listeners,
+      params.port,
+    );
+    const portOk =
+      params.portUsage.status === "free" ||
+      (params.portUsage.status === "busy" && expectedGatewayListeners);
     emitCheck(`Port ${params.port}`, portOk ? "ok" : "warn");
     if (!portOk) {
+      const gatewayPidCount = countGatewayListenerPids(params.portUsage);
+      if (gatewayPidCount > 1) {
+        lines.push(
+          `  ${muted(`${gatewayPidCount} OpenClaw gateway processes appear to be listening on port ${params.port}; stop stale gateway processes before trusting channel health.`)}`,
+        );
+      }
       for (const line of formatPortDiagnostics(params.portUsage)) {
         lines.push(`  ${muted(line)}`);
       }
@@ -160,6 +289,8 @@ export async function appendStatusAllDiagnosis(params: {
       lines.push(
         `  ${muted("Detected dual-stack loopback listeners (127.0.0.1 + ::1) for one gateway process.")}`,
       );
+    } else if (expectedGatewayListeners) {
+      lines.push(`  ${muted("Detected OpenClaw Gateway listener on the configured port.")}`);
     }
   }
 
@@ -171,7 +302,7 @@ export async function appendStatusAllDiagnosis(params: {
       params.tailscaleMode === "off"
         ? `Tailscale exposure: off · daemon ${backend}${params.tailscale.dnsName ? ` · ${params.tailscale.dnsName}` : ""}`
         : `Tailscale exposure: ${params.tailscaleMode} · daemon ${backend}${params.tailscale.dnsName ? ` · ${params.tailscale.dnsName}` : ""}`;
-    emitCheck(label, okBackend && (params.tailscaleMode === "off" || hasDns) ? "ok" : "warn");
+    emitCheck(label, params.tailscaleMode === "off" || (okBackend && hasDns) ? "ok" : "warn");
     if (params.tailscale.error) {
       lines.push(`  ${muted(`error: ${params.tailscale.error}`)}`);
     }
@@ -208,10 +339,107 @@ export async function appendStatusAllDiagnosis(params: {
     lines.push(`  ${muted(`… +${params.pluginCompatibility.length - 12} more`)}`);
   }
 
+  if (params.agentStatus) {
+    const recentSessions = countRecentAgentSessions(
+      params.agentStatus,
+      AGENT_ACTIVITY_SOFT_WARNING_MS,
+    );
+    const hasKnownSessions = params.agentStatus.totalSessions > 0;
+    const shouldWarn = hasKnownSessions && recentSessions === 0;
+    emitCheck(
+      `Agent activity: ${recentSessions} active in 30m · ${params.agentStatus.totalSessions} sessions`,
+      shouldWarn ? "warn" : "ok",
+    );
+    if (shouldWarn) {
+      lines.push(
+        `  ${muted("No agent session was updated in the last 30m; if channels received messages, verify inbound dispatch and turn creation.")}`,
+      );
+    }
+  }
+
+  if (!params.nodeOnlyGateway && params.exporterDiagnostics) {
+    if (params.exporterDiagnostics.ok) {
+      const exporterSummary = formatTelemetryExporterSummary(params.exporterDiagnostics.value);
+      if (exporterSummary) {
+        emitCheck(exporterSummary.title, exporterSummary.status);
+        for (const line of exporterSummary.lines) {
+          lines.push(`  ${muted(line)}`);
+        }
+      }
+    } else {
+      emitUnavailableDiagnostics({
+        label: "Telemetry exporters",
+        detail: `Exporter diagnostics failed: ${params.exporterDiagnostics.error}`,
+        retry: "openclaw gateway stability --type telemetry.exporter",
+      });
+    }
+  }
+
+  if (!params.nodeOnlyGateway && params.deliveryDiagnostics?.ok) {
+    if (isDeliveryDiagnosticsLike(params.deliveryDiagnostics.value)) {
+      const deliveryDiagnostics = params.deliveryDiagnostics.value;
+      const received = countDeliveryEvent(deliveryDiagnostics, "message.received");
+      const dispatchStarted = countDeliveryEvent(deliveryDiagnostics, "message.dispatch.started");
+      const dispatchCompleted = countDeliveryEvent(
+        deliveryDiagnostics,
+        "message.dispatch.completed",
+      );
+      const turnsCreated = countDeliveryEvent(deliveryDiagnostics, "session.turn.created");
+      const processed = countDeliveryEvent(deliveryDiagnostics, "message.processed");
+      const hasReceivedWithoutDispatch = received > 0 && dispatchStarted === 0 && processed === 0;
+      const hasDispatchWithoutTurn =
+        dispatchStarted > 0 && turnsCreated === 0 && processed < dispatchStarted;
+      const dispatchGap = dispatchStarted - dispatchCompleted;
+      const hasDispatchGap = dispatchGap >= 2;
+      const latestAgeMs = latestDeliveryEventAgeMs(deliveryDiagnostics);
+      emitCheck(
+        `Inbound delivery telemetry: received ${received} · dispatch ${dispatchStarted}/${dispatchCompleted} · turns ${turnsCreated} · processed ${processed}`,
+        hasReceivedWithoutDispatch || hasDispatchWithoutTurn || hasDispatchGap ? "warn" : "ok",
+      );
+      if (latestAgeMs != null) {
+        lines.push(`  ${muted(`latest delivery event: ${formatTimeAgo(latestAgeMs)}`)}`);
+      }
+      if (hasReceivedWithoutDispatch) {
+        lines.push(
+          `  ${muted("Messages were received, but no gateway dispatch started; inspect inbound routing and dispatch handoff.")}`,
+        );
+      }
+      if (hasDispatchWithoutTurn) {
+        lines.push(
+          `  ${muted("Gateway dispatch started, but no agent turn was created; inspect reply resolver and session creation.")}`,
+        );
+      }
+      if (hasDispatchGap) {
+        lines.push(
+          `  ${muted("Multiple gateway dispatches have not completed yet; if this persists, inspect stuck sessions or model runs.")}`,
+        );
+      }
+    } else {
+      emitUnavailableDiagnostics({
+        label: "Inbound delivery telemetry",
+        detail: "Delivery diagnostics returned an invalid response.",
+        retry: "openclaw gateway stability",
+      });
+    }
+  } else if (
+    !params.nodeOnlyGateway &&
+    params.deliveryDiagnostics &&
+    !params.deliveryDiagnostics.ok
+  ) {
+    emitUnavailableDiagnostics({
+      label: "Inbound delivery telemetry",
+      detail: `Delivery diagnostics failed: ${params.deliveryDiagnostics.error}`,
+      retry: "openclaw gateway stability",
+    });
+  }
+
   params.progress.setLabel("Reading logs…");
   const logPaths = (() => {
     try {
-      return resolveGatewayLogPaths(process.env);
+      // macOS supervised installs write stdout/stderr differently than node-managed gateway logs.
+      return process.platform === "darwin"
+        ? resolveGatewaySupervisorLogPaths(process.env, { platform: "darwin" })
+        : resolveGatewayLogPaths(process.env);
     } catch {
       return null;
     }
@@ -219,27 +447,32 @@ export async function appendStatusAllDiagnosis(params: {
   if (logPaths) {
     params.progress.setLabel("Reading logs…");
     const restartLogPath = resolveGatewayRestartLogPath(process.env);
+    const readStderr = process.platform !== "darwin";
     const [stderrTail, stdoutTail, restartTail] = await Promise.all([
-      readFileTailLines(logPaths.stderrPath, 40).catch(() => []),
+      readStderr ? readFileTailLines(logPaths.stderrPath, 40).catch(() => []) : [],
       readFileTailLines(logPaths.stdoutPath, 40).catch(() => []),
       readFileTailLines(restartLogPath, 30).catch(() => []),
     ]);
     if (stderrTail.length > 0 || stdoutTail.length > 0) {
       lines.push("");
       lines.push(muted(`Gateway logs (tail, summarized): ${logPaths.logDir}`));
-      lines.push(`  ${muted(`# stderr: ${logPaths.stderrPath}`)}`);
-      for (const line of summarizeLogTail(stderrTail, { maxLines: 22 }).map(redactSecrets)) {
-        lines.push(`  ${muted(line)}`);
+      if (readStderr) {
+        lines.push(`  ${muted(`# stderr: ${logPaths.stderrPath}`)}`);
+        for (const line of summarizeLogTail(stderrTail, { maxLines: 22 }).map(
+          redactStatusSecrets,
+        )) {
+          lines.push(`  ${muted(line)}`);
+        }
       }
       lines.push(`  ${muted(`# stdout: ${logPaths.stdoutPath}`)}`);
-      for (const line of summarizeLogTail(stdoutTail, { maxLines: 22 }).map(redactSecrets)) {
+      for (const line of summarizeLogTail(stdoutTail, { maxLines: 22 }).map(redactStatusSecrets)) {
         lines.push(`  ${muted(line)}`);
       }
     }
     if (restartTail.length > 0) {
       lines.push("");
       lines.push(muted(`Gateway restart attempts (tail): ${restartLogPath}`));
-      for (const line of summarizeLogTail(restartTail, { maxLines: 16 }).map(redactSecrets)) {
+      for (const line of summarizeLogTail(restartTail, { maxLines: 16 }).map(redactStatusSecrets)) {
         lines.push(`  ${muted(line)}`);
       }
     }
@@ -272,31 +505,19 @@ export async function appendStatusAllDiagnosis(params: {
     );
   }
 
-  const healthErr = (() => {
-    if (!params.health || typeof params.health !== "object") {
-      return "";
+  if (params.health) {
+    if ("error" in params.health) {
+      if (params.health.error) {
+        lines.push("");
+        lines.push(muted("Gateway health:"));
+        lines.push(`  ${muted(redactStatusSecrets(params.health.error))}`);
+      }
+    } else {
+      const deliveryQueueLine = formatDeliveryQueueHealthLine(params.health);
+      if (deliveryQueueLine) {
+        emitCheck(redactStatusSecrets(deliveryQueueLine), "warn");
+      }
     }
-    const record = params.health as Record<string, unknown>;
-    if (!("error" in record)) {
-      return "";
-    }
-    const value = record.error;
-    if (!value) {
-      return "";
-    }
-    if (typeof value === "string") {
-      return value;
-    }
-    try {
-      return JSON.stringify(value, null, 2);
-    } catch {
-      return "[unserializable error]";
-    }
-  })();
-  if (healthErr) {
-    lines.push("");
-    lines.push(muted("Gateway health:"));
-    lines.push(`  ${muted(redactSecrets(healthErr))}`);
   }
 
   lines.push("");

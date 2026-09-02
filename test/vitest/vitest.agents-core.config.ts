@@ -1,11 +1,15 @@
-import { agentsCoreTestPatterns } from "./vitest.agents-paths.mjs";
+// Vitest agents core config wires the agents core test shard.
+import { agentVitestProjectOwners } from "./vitest.agents-paths.mjs";
 import { createScopedVitestConfig } from "./vitest.scoped-config.ts";
 
 export function createAgentsCoreVitestConfig(env?: Record<string, string | undefined>) {
-  return createScopedVitestConfig(agentsCoreTestPatterns, {
-    dir: "src/agents",
+  const owner = agentVitestProjectOwners.core;
+  return createScopedVitestConfig(owner.include, {
+    dir: owner.dir,
     env,
-    name: "agents-core",
+    exclude: owner.exclude,
+    fileParallelism: false,
+    name: owner.name,
   });
 }
 

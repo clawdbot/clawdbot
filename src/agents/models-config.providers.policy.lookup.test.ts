@@ -1,3 +1,4 @@
+// Verifies custom providers route to the correct provider-policy plugin key.
 import { describe, expect, it } from "vitest";
 import { resolveProviderPluginLookupKey } from "./models-config.providers.policy.lookup.js";
 
@@ -50,22 +51,23 @@ describe("resolveProviderPluginLookupKey", () => {
     ).toBe("google");
   });
 
-  it("does not throw when runtime provider models is an object map", () => {
-    expect(() =>
+  it("falls through when runtime provider models is an object map", () => {
+    // Runtime object maps are not catalog arrays, so model-level API sniffing must not run.
+    expect(
       resolveProviderPluginLookupKey("openrouter", {
         baseUrl: "https://openrouter.ai/api/v1",
         models: { "some/model": { api: "openai-completions" } } as never,
       }),
-    ).not.toThrow();
+    ).toBe("openrouter");
   });
 
-  it("does not throw when runtime provider models is undefined", () => {
-    expect(() =>
+  it("falls through when runtime provider models is undefined", () => {
+    expect(
       resolveProviderPluginLookupKey("openrouter", {
         baseUrl: "https://openrouter.ai/api/v1",
         models: undefined as never,
       }),
-    ).not.toThrow();
+    ).toBe("openrouter");
   });
 
   it("falls through to the provider key when runtime provider models is non-array", () => {

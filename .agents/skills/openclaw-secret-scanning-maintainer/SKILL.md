@@ -34,10 +34,10 @@ Supports single or multiple alerts. For multiple alerts, process in ascending or
 For each alert:
 
 1. **Identify** — `fetch-alert` + `fetch-content` to get metadata and body
-2. **Decide** — Agent reads the body file, identifies all secrets, produces redacted version
-3. **Redact** — `redact-body` for issue/PR body; skip for comments (delete directly)
+2. **Decide** — Agent reads the body file, identifies whether plaintext secrets remain, and produces a redacted version only when needed
+3. **Redact** — `redact-body-if-needed` for issue/PR body; skip for comments (delete directly)
 4. **Purge** — `delete-comment` + `recreate-comment` for comments; cannot purge body history
-5. **Notify** — `notify` posts the right template per location type
+5. **Notify** — `notify` posts the right template per location type, unless the current issue/PR body is already redacted
 6. **Resolve** — `resolve` closes the alert
 7. **Summary** — `summary` prints formatted results
 
@@ -81,10 +81,19 @@ The `fetch-content` output includes:
 The agent reads the body file from `fetch-content` output and:
 
 1. Identifies ALL secrets in the content (there may be more than the alert flagged)
-2. Replaces each secret with `[REDACTED <secret_type>]` — **no partial values, no prefix/suffix**
-3. Saves the redacted content to a new temp file
+2. Determines whether any plaintext credential remains in the current body
+3. Replaces each remaining secret with `[REDACTED <secret_type>]` — **no partial values, no prefix/suffix**
+4. Saves the redacted content to a new temp file
 
 This is the only step that requires semantic understanding. Everything else is mechanical.
+
+For `issue_body` and `pull_request_body`: if the current body has already been redacted by the author and no plaintext credential remains, **do not post a public notification comment**. Resolve the alert with a maintainer-only resolution comment such as:
+
+```bash
+node secret-scanning.mjs resolve <ALERT_NUMBER> revoked "Current issue/PR body is already redacted; no public notification posted."
+```
+
+This avoids creating a fresh public pointer to historical sensitive content.
 
 ## Step 3: Redact
 
@@ -95,8 +104,10 @@ This is the only step that requires semantic understanding. Everything else is m
 ### For issue_body / pull_request_body
 
 ```bash
-node secret-scanning.mjs redact-body <issue|pr> <NUMBER> <redacted-body-file>
+node secret-scanning.mjs redact-body-if-needed <issue|pr> <NUMBER> <current-body-file> <redacted-body-file> <result-file>
 ```
+
+Use the `body_file` from `fetch-content` as `<current-body-file>`. The command writes `notify_required` to `<result-file>` and only PATCHes the body when the redacted file differs from the current body.
 
 ## Step 4: Purge Edit History
 
@@ -134,9 +145,11 @@ The recreated comment should follow this format:
 <redacted original content>
 ```
 
-### issue_body / pull_request_body — Cannot Purge
+### issue_body / pull_request_body — Cannot Purge Edit History
 
 Editing creates an edit history revision with the pre-edit plaintext. This cannot be cleared via API.
+
+Do not advise authors publicly to delete/recreate issues or close/reopen PRs. That can draw attention to historical content. Keep purge guidance maintainer-only.
 
 **Output to maintainer terminal only (never in public comments):**
 
@@ -155,12 +168,13 @@ Cannot clean. Notify author to delete branch or force-push (for unmerged PRs).
 ## Step 5: Notify
 
 ```bash
-node secret-scanning.mjs notify <TARGET> <AUTHOR> <LOCATION_TYPE> <SECRET_TYPES> [REPLY_TO_NODE_ID]
+node secret-scanning.mjs notify <TARGET> <AUTHOR> <LOCATION_TYPE> <SECRET_TYPES> [REPLY_TO_NODE_ID|BODY_REDACTION_RESULT_FILE]
 ```
 
 - For non-discussion types, `<TARGET>` is the issue/PR number.
 - For `discussion_comment`, `<TARGET>` is the `discussion_node_id` returned by `fetch-content`.
 - For reply-style `discussion_comment` locations, pass the optional `reply_to_node_id` from `fetch-content` so the notification stays in the same thread.
+- For `issue_body` and `pull_request_body`, pass the `<result-file>` from `redact-body-if-needed`. The script skips notification when `notify_required` is `false` and refuses body notifications without this file.
 
 Secret types are comma-separated: `"Discord Bot Token,Feishu App Secret"`
 
@@ -170,6 +184,8 @@ The script picks the right template:
 - **body types**: "your issue/PR description … redacted in place"
 - **commit**: "code you committed"
 
+For `issue_body` and `pull_request_body`, only notify when the current body still contained plaintext and maintainers redacted it. If the user already redacted the current body, skip this step and resolve silently.
+
 ## Step 6: Resolve
 
 ```bash
@@ -178,7 +194,7 @@ node secret-scanning.mjs resolve <ALERT_NUMBER>
 node secret-scanning.mjs resolve <ALERT_NUMBER> revoked "Custom comment"
 ```
 
-Resolution is `revoked` by default. As maintainers we cannot control whether users rotate — our responsibility is to redact + notify. The `revoked` means "this secret should be considered leaked", not "I confirmed it was revoked".
+Resolution is `revoked` by default. As maintainers we cannot control whether users rotate — our responsibility is to remove current plaintext exposure and notify only when public notification is useful. The `revoked` means "this secret should be considered leaked", not "I confirmed it was revoked".
 
 ## Step 7: Summary
 

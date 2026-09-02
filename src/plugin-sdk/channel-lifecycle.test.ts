@@ -1,3 +1,6 @@
+/**
+ * Tests channel lifecycle hooks and SDK-visible lifecycle dispatch behavior.
+ */
 import { EventEmitter } from "node:events";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {

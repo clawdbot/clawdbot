@@ -1,23 +1,34 @@
+// Captures plugin registrations for controlled registry assembly.
+import {
+  normalizeStringEntries,
+  normalizeUniqueStringEntries,
+} from "@openclaw/normalization-core/string-normalization";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type {
   AgentToolResultMiddleware,
   AgentToolResultMiddlewareOptions,
 } from "./agent-tool-result-middleware-types.js";
-import { normalizeAgentToolResultMiddlewareRuntimes } from "./agent-tool-result-middleware.js";
-import { buildPluginApi } from "./api-builder.js";
+import {
+  agentToolResultMiddlewareRegistrationCoversTool,
+  normalizeAgentToolResultMiddlewareRuntimes,
+} from "./agent-tool-result-middleware.js";
+import { buildPluginApi, createUnavailableRuntime } from "./api-builder.js";
 import type { CodexAppServerExtensionFactory } from "./codex-app-server-extension-types.js";
+import type { EmbeddingProviderAdapter } from "./embedding-providers.js";
 import type {
   PluginAgentEventSubscriptionRegistration,
   PluginControlUiDescriptor,
   PluginRuntimeLifecycleRegistration,
+  PluginSessionActionRegistration,
   PluginSessionSchedulerJobRegistration,
   PluginSessionExtensionRegistration,
   PluginToolMetadataRegistration,
   PluginTrustedToolPolicyRegistration,
 } from "./host-hooks.js";
-import type { MemoryEmbeddingProviderAdapter } from "./memory-embedding-providers.js";
 import type { PluginAgentToolResultMiddlewareRegistration } from "./registry-types.js";
-import type { PluginRuntime } from "./runtime/types.js";
+import { createPluginRuntime } from "./runtime/index.js";
+import type { SessionCatalogProvider } from "./session-catalog.js";
+import { normalizePluginToolMatcher } from "./tool-hook-matcher.js";
 import type {
   AnyAgentTool,
   AgentHarness,
@@ -25,25 +36,28 @@ import type {
   OpenClawPluginApi,
   ImageGenerationProviderPlugin,
   MediaUnderstandingProviderPlugin,
+  TranscriptSourceProvider,
   MigrationProviderPlugin,
   MusicGenerationProviderPlugin,
-  OpenClawPluginCliCommandDescriptor,
+  OpenClawPluginCliRootCommandDescriptor,
   OpenClawPluginCliRegistrar,
   PluginTextTransformRegistration,
   ProviderPlugin,
   RealtimeTranscriptionProviderPlugin,
   RealtimeVoiceProviderPlugin,
   SpeechProviderPlugin,
+  UnifiedModelCatalogProviderPlugin,
   VideoGenerationProviderPlugin,
   WebFetchProviderPlugin,
   WebSearchProviderPlugin,
+  WorkerProvider,
 } from "./types.js";
 
 type CapturedPluginCliRegistration = {
   register: OpenClawPluginCliRegistrar;
   parentPath: string[];
   commands: string[];
-  descriptors: OpenClawPluginCliCommandDescriptor[];
+  descriptors: OpenClawPluginCliRootCommandDescriptor[];
 };
 
 export type CapturedPluginRegistration = {
@@ -55,17 +69,19 @@ export type CapturedPluginRegistration = {
   textTransforms: PluginTextTransformRegistration[];
   codexAppServerExtensionFactories: CodexAppServerExtensionFactory[];
   agentToolResultMiddlewares: PluginAgentToolResultMiddlewareRegistration[];
+  embeddingProviders: EmbeddingProviderAdapter[];
   speechProviders: SpeechProviderPlugin[];
   realtimeTranscriptionProviders: RealtimeTranscriptionProviderPlugin[];
   realtimeVoiceProviders: RealtimeVoiceProviderPlugin[];
   mediaUnderstandingProviders: MediaUnderstandingProviderPlugin[];
+  transcriptSourceProviders: TranscriptSourceProvider[];
   imageGenerationProviders: ImageGenerationProviderPlugin[];
   videoGenerationProviders: VideoGenerationProviderPlugin[];
   musicGenerationProviders: MusicGenerationProviderPlugin[];
   webFetchProviders: WebFetchProviderPlugin[];
   webSearchProviders: WebSearchProviderPlugin[];
+  workerProviders: WorkerProvider[];
   migrationProviders: MigrationProviderPlugin[];
-  memoryEmbeddingProviders: MemoryEmbeddingProviderAdapter[];
   sessionExtensions: PluginSessionExtensionRegistration[];
   trustedToolPolicies: PluginTrustedToolPolicyRegistration[];
   toolMetadata: PluginToolMetadataRegistration[];
@@ -73,7 +89,10 @@ export type CapturedPluginRegistration = {
   runtimeLifecycles: PluginRuntimeLifecycleRegistration[];
   agentEventSubscriptions: PluginAgentEventSubscriptionRegistration[];
   sessionSchedulerJobs: PluginSessionSchedulerJobRegistration[];
+  sessionActions: PluginSessionActionRegistration[];
   tools: AnyAgentTool[];
+  modelCatalogProviders: UnifiedModelCatalogProviderPlugin[];
+  sessionCatalogs: SessionCatalogProvider[];
 };
 
 export function createCapturedPluginRegistration(params?: {
@@ -90,17 +109,19 @@ export function createCapturedPluginRegistration(params?: {
   const textTransforms: PluginTextTransformRegistration[] = [];
   const codexAppServerExtensionFactories: CodexAppServerExtensionFactory[] = [];
   const agentToolResultMiddlewares: PluginAgentToolResultMiddlewareRegistration[] = [];
+  const embeddingProviders: EmbeddingProviderAdapter[] = [];
   const speechProviders: SpeechProviderPlugin[] = [];
   const realtimeTranscriptionProviders: RealtimeTranscriptionProviderPlugin[] = [];
   const realtimeVoiceProviders: RealtimeVoiceProviderPlugin[] = [];
   const mediaUnderstandingProviders: MediaUnderstandingProviderPlugin[] = [];
+  const transcriptSourceProviders: TranscriptSourceProvider[] = [];
   const imageGenerationProviders: ImageGenerationProviderPlugin[] = [];
   const videoGenerationProviders: VideoGenerationProviderPlugin[] = [];
   const musicGenerationProviders: MusicGenerationProviderPlugin[] = [];
   const webFetchProviders: WebFetchProviderPlugin[] = [];
   const webSearchProviders: WebSearchProviderPlugin[] = [];
+  const workerProviders: WorkerProvider[] = [];
   const migrationProviders: MigrationProviderPlugin[] = [];
-  const memoryEmbeddingProviders: MemoryEmbeddingProviderAdapter[] = [];
   const sessionExtensions: PluginSessionExtensionRegistration[] = [];
   const trustedToolPolicies: PluginTrustedToolPolicyRegistration[] = [];
   const toolMetadata: PluginToolMetadataRegistration[] = [];
@@ -108,10 +129,15 @@ export function createCapturedPluginRegistration(params?: {
   const runtimeLifecycles: PluginRuntimeLifecycleRegistration[] = [];
   const agentEventSubscriptions: PluginAgentEventSubscriptionRegistration[] = [];
   const sessionSchedulerJobs: PluginSessionSchedulerJobRegistration[] = [];
+  const sessionActions: PluginSessionActionRegistration[] = [];
+  let capturedSessionTurnCount = 0;
   const tools: AnyAgentTool[] = [];
+  const modelCatalogProviders: UnifiedModelCatalogProviderPlugin[] = [];
+  const sessionCatalogs: SessionCatalogProvider[] = [];
   const pluginId = params?.id ?? "captured-plugin-registration";
   const pluginName = params?.name ?? "Captured Plugin Registration";
   const pluginSource = params?.source ?? "captured-plugin-registration";
+  const registrationMode = params?.registrationMode ?? "full";
   const noopLogger = {
     info() {},
     warn() {},
@@ -127,17 +153,19 @@ export function createCapturedPluginRegistration(params?: {
     textTransforms,
     codexAppServerExtensionFactories,
     agentToolResultMiddlewares,
+    embeddingProviders,
     speechProviders,
     realtimeTranscriptionProviders,
     realtimeVoiceProviders,
     mediaUnderstandingProviders,
+    transcriptSourceProviders,
     imageGenerationProviders,
     videoGenerationProviders,
     musicGenerationProviders,
     webFetchProviders,
     webSearchProviders,
+    workerProviders,
     migrationProviders,
-    memoryEmbeddingProviders,
     sessionExtensions,
     trustedToolPolicies,
     toolMetadata,
@@ -145,34 +173,46 @@ export function createCapturedPluginRegistration(params?: {
     runtimeLifecycles,
     agentEventSubscriptions,
     sessionSchedulerJobs,
+    sessionActions,
     tools,
+    modelCatalogProviders,
+    sessionCatalogs,
     api: buildPluginApi({
       id: pluginId,
       name: pluginName,
       source: pluginSource,
-      registrationMode: params?.registrationMode ?? "full",
+      registrationMode,
       config: params?.config ?? ({} as OpenClawConfig),
-      runtime: {} as PluginRuntime,
+      runtime:
+        registrationMode === "cli-metadata" || registrationMode === "setup-only"
+          ? createUnavailableRuntime(registrationMode, pluginId)
+          : createPluginRuntime(),
       logger: noopLogger,
       resolvePath: (input) => input,
       handlers: {
         registerCli(registrar, opts) {
-          const parentPath = (opts?.parentPath ?? [])
-            .map((segment) => segment.trim())
-            .filter(Boolean);
+          const parentPath = normalizeStringEntries(opts?.parentPath ?? []);
+          const rootRegistration = parentPath.length === 0;
           const descriptors = (opts?.descriptors ?? [])
-            .map((descriptor) => ({
-              name: descriptor.name.trim(),
-              description: descriptor.description.trim(),
-              hasSubcommands: descriptor.hasSubcommands,
-            }))
+            .map((descriptor) => {
+              const machineOutput = rootRegistration
+                ? (descriptor as OpenClawPluginCliRootCommandDescriptor).machineOutput
+                : undefined;
+              const normalized: OpenClawPluginCliRootCommandDescriptor = {
+                name: descriptor.name.trim(),
+                description: descriptor.description.trim(),
+                hasSubcommands: descriptor.hasSubcommands,
+              };
+              if (machineOutput) {
+                normalized.machineOutput = machineOutput;
+              }
+              return normalized;
+            })
             .filter((descriptor) => descriptor.name && descriptor.description);
-          const commands = [
+          const commands = normalizeUniqueStringEntries([
             ...(opts?.commands ?? []),
             ...descriptors.map((descriptor) => descriptor.name),
-          ]
-            .map((command) => command.trim())
-            .filter(Boolean);
+          ]);
           if (commands.length === 0) {
             return;
           }
@@ -186,6 +226,12 @@ export function createCapturedPluginRegistration(params?: {
         registerProvider(provider: ProviderPlugin) {
           providers.push(provider);
         },
+        registerModelCatalogProvider(provider: UnifiedModelCatalogProviderPlugin) {
+          modelCatalogProviders.push(provider);
+        },
+        registerSessionCatalog(provider: SessionCatalogProvider) {
+          sessionCatalogs.push(provider);
+        },
         registerAgentHarness(harness: AgentHarness) {
           agentHarnesses.push(harness);
         },
@@ -197,20 +243,43 @@ export function createCapturedPluginRegistration(params?: {
           options?: AgentToolResultMiddlewareOptions,
         ) {
           const runtimes = normalizeAgentToolResultMiddlewareRuntimes(options);
-          agentToolResultMiddlewares.push({
+          const matcher = normalizePluginToolMatcher(options?.matcher);
+          const scopedHandler: AgentToolResultMiddleware = (event, ctx) => {
+            if (
+              !agentToolResultMiddlewareRegistrationCoversTool(
+                registration,
+                ctx.runtime,
+                event.toolName,
+              )
+            ) {
+              return;
+            }
+            return handler(event, ctx);
+          };
+          const registration: PluginAgentToolResultMiddlewareRegistration = {
             pluginId,
             pluginName,
             rawHandler: handler,
-            handler,
+            handler: scopedHandler,
             runtimes,
+            scopes: [
+              {
+                runtimes,
+                ...(matcher ? { matcher } : {}),
+              },
+            ],
             source: pluginSource,
-          });
+          };
+          agentToolResultMiddlewares.push(registration);
         },
         registerCliBackend(backend: CliBackendPlugin) {
           cliBackends.push(backend);
         },
         registerTextTransforms(transforms: PluginTextTransformRegistration) {
           textTransforms.push(transforms);
+        },
+        registerEmbeddingProvider(provider: EmbeddingProviderAdapter) {
+          embeddingProviders.push(provider);
         },
         registerSpeechProvider(provider: SpeechProviderPlugin) {
           speechProviders.push(provider);
@@ -223,6 +292,9 @@ export function createCapturedPluginRegistration(params?: {
         },
         registerMediaUnderstandingProvider(provider: MediaUnderstandingProviderPlugin) {
           mediaUnderstandingProviders.push(provider);
+        },
+        registerTranscriptSourceProvider(provider: TranscriptSourceProvider) {
+          transcriptSourceProviders.push(provider);
         },
         registerImageGenerationProvider(provider: ImageGenerationProviderPlugin) {
           imageGenerationProviders.push(provider);
@@ -239,17 +311,18 @@ export function createCapturedPluginRegistration(params?: {
         registerWebSearchProvider(provider: WebSearchProviderPlugin) {
           webSearchProviders.push(provider);
         },
+        registerWorkerProvider(provider: WorkerProvider) {
+          workerProviders.push(provider);
+        },
         registerMigrationProvider(provider: MigrationProviderPlugin) {
           migrationProviders.push(provider);
-        },
-        registerMemoryEmbeddingProvider(adapter: MemoryEmbeddingProviderAdapter) {
-          memoryEmbeddingProviders.push(adapter);
         },
         registerSessionExtension(extension: PluginSessionExtensionRegistration) {
           sessionExtensions.push(extension);
         },
         registerTrustedToolPolicy(policy: PluginTrustedToolPolicyRegistration) {
-          trustedToolPolicies.push(policy);
+          const matcher = normalizePluginToolMatcher(policy.matcher);
+          trustedToolPolicies.push({ ...policy, ...(matcher ? { matcher } : {}) });
         },
         registerToolMetadata(metadata: PluginToolMetadataRegistration) {
           toolMetadata.push(metadata);
@@ -263,15 +336,30 @@ export function createCapturedPluginRegistration(params?: {
         registerAgentEventSubscription(subscription: PluginAgentEventSubscriptionRegistration) {
           agentEventSubscriptions.push(subscription);
         },
+        emitAgentEvent: () => ({ emitted: false, reason: "captured registration" }),
         registerSessionSchedulerJob(job: PluginSessionSchedulerJobRegistration) {
           sessionSchedulerJobs.push(job);
           return {
             id: job.id,
-            pluginId: "captured-plugin-registration",
+            pluginId,
             sessionKey: job.sessionKey,
             kind: job.kind,
           };
         },
+        registerSessionAction(action: PluginSessionActionRegistration) {
+          sessionActions.push(action);
+        },
+        sendSessionAttachment: async () => ({ ok: false, error: "captured registration" }),
+        scheduleSessionTurn: async (schedule) => {
+          capturedSessionTurnCount += 1;
+          return {
+            id: `captured-session-turn-${capturedSessionTurnCount}`,
+            pluginId,
+            sessionKey: schedule.sessionKey,
+            kind: "session-turn",
+          };
+        },
+        unscheduleSessionTurnsByTag: async () => ({ removed: 0, failed: 0 }),
         registerTool(tool) {
           if (typeof tool !== "function") {
             tools.push(tool);
@@ -282,10 +370,12 @@ export function createCapturedPluginRegistration(params?: {
   };
 }
 
-export function capturePluginRegistration(params: {
-  register(api: OpenClawPluginApi): void;
-}): CapturedPluginRegistration {
-  const captured = createCapturedPluginRegistration();
+export function capturePluginRegistration(
+  params: NonNullable<Parameters<typeof createCapturedPluginRegistration>[0]> & {
+    register(api: OpenClawPluginApi): void;
+  },
+): CapturedPluginRegistration {
+  const captured = createCapturedPluginRegistration(params);
   params.register(captured.api);
   return captured;
 }

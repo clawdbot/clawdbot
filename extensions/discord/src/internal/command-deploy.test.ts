@@ -1,8 +1,16 @@
-import type { APIApplicationCommand } from "discord-api-types/v10";
-import { describe, expect, test } from "vitest";
-import { __testing } from "./command-deploy.js";
-
-const { commandsEqual } = __testing;
+// Discord tests cover command deploy plugin behavior.
+/* oxlint-disable typescript/unbound-method -- vitest mocks of RequestClient methods (createRest) intentionally expose vi.fn refs via `restA.get`/`.post`; not unbound class methods. */
+import {
+  ApplicationCommandType,
+  type APIApplicationCommand,
+  type APIApplicationCommandOption,
+} from "discord-api-types/v10";
+import { describe, expect, test, vi } from "vitest";
+import type { DiscordCommandDeployHashStore } from "../command-deploy-store.js";
+import { commandsEqual } from "./command-comparison.js";
+import { DiscordCommandDeployer } from "./command-deploy.js";
+import { BaseCommand } from "./commands.js";
+import type { RequestClient } from "./rest.js";
 
 /**
  * Regression tests for Discord slash-command reconcile/deploy equality.
@@ -61,7 +69,7 @@ describe("commandsEqual", () => {
           name_localizations: null,
           description: "Skill name",
           description_localizations: null,
-        } as any,
+        } as APIApplicationCommandOption,
       ],
     });
     const desired = desiredFromLocal({
@@ -74,7 +82,9 @@ describe("commandsEqual", () => {
     const current = currentFromDiscord({
       name: "skill",
       description: "Run a skill.",
-      options: [{ type: 3, name: "name", description: "Skill name" } as any],
+      options: [
+        { type: 3, name: "name", description: "Skill name" } as APIApplicationCommandOption,
+      ],
     });
     const desired = desiredFromLocal({
       name: "skill",
@@ -88,7 +98,9 @@ describe("commandsEqual", () => {
     const current = currentFromDiscord({
       name: "skill",
       description: "Run a skill.",
-      options: [{ type: 3, name: "name", description: "Skill name" } as any],
+      options: [
+        { type: 3, name: "name", description: "Skill name" } as APIApplicationCommandOption,
+      ],
     });
     const desired = desiredFromLocal({
       name: "skill",
@@ -147,7 +159,7 @@ describe("commandsEqual", () => {
           name: "name",
           description: "Skill name",
           description_localizations: { "zh-CN": "技能名称。直接输入。" },
-        } as any,
+        } as APIApplicationCommandOption,
       ],
     });
     const desired = desiredFromLocal({
@@ -193,5 +205,191 @@ describe("commandsEqual", () => {
     const current = currentFromDiscord({ description: "ping the bot" });
     const desired = desiredFromLocal({ description: "ping\nthe bot" });
     expect(commandsEqual(current, desired)).toBe(true);
+  });
+});
+/**
+ * Regression for #77359: persisted hashes are scoped by Discord application id.
+ * Identical command sets for separate bots must never suppress each other's deploy.
+ */
+describe("DiscordCommandDeployer SQLite cache", () => {
+  class StaticCommand extends BaseCommand {
+    readonly commandKind = "leaf";
+    name: string;
+    override description = "ping the bot";
+    type = ApplicationCommandType.ChatInput;
+
+    constructor(name: string) {
+      super();
+      this.name = name;
+    }
+
+    serializeOptions() {
+      return undefined;
+    }
+  }
+
+  function createRest(): RequestClient {
+    return {
+      get: vi.fn(async () => []),
+      post: vi.fn(async () => undefined),
+      patch: vi.fn(async () => undefined),
+      put: vi.fn(async () => undefined),
+      delete: vi.fn(async () => undefined),
+    } as unknown as RequestClient;
+  }
+
+  function createHashStore(initial: Record<string, string> = {}): {
+    rows: Map<string, string>;
+    store: DiscordCommandDeployHashStore;
+  } {
+    const rows = new Map(Object.entries(initial));
+    return {
+      rows,
+      store: {
+        lookup: vi.fn(async (key: string) => rows.get(key)),
+        register: vi.fn(async (key: string, value: string) => {
+          rows.set(key, value);
+        }),
+      },
+    };
+  }
+
+  test("two applications with identical command sets each reconcile their own application", async () => {
+    const { store, rows } = createHashStore();
+    const commands = [new StaticCommand("ping")];
+    const restA = createRest();
+    const restB = createRest();
+
+    await Promise.all([
+      new DiscordCommandDeployer({
+        clientId: "app-default",
+        commands,
+        hashStore: store,
+        rest: () => restA,
+      }).deploy({ mode: "reconcile" }),
+      new DiscordCommandDeployer({
+        clientId: "app-secondary",
+        commands,
+        hashStore: store,
+        rest: () => restB,
+      }).deploy({ mode: "reconcile" }),
+    ]);
+
+    expect(restA.get).toHaveBeenCalledTimes(1);
+    expect(restA.post).toHaveBeenCalledTimes(1);
+    expect(restB.get).toHaveBeenCalledTimes(1);
+    expect(restB.post).toHaveBeenCalledTimes(1);
+    expect([...rows.keys()].toSorted()).toEqual([
+      "app:app-default:global:reconcile",
+      "app:app-secondary:global:reconcile",
+    ]);
+  });
+
+  test("skips unchanged command deploys across deployer restarts", async () => {
+    const { store } = createHashStore();
+    const commands = [new StaticCommand("ping")];
+    const firstRest = createRest();
+
+    await new DiscordCommandDeployer({
+      clientId: "app-default",
+      commands,
+      hashStore: store,
+      rest: () => firstRest,
+    }).deploy({ mode: "reconcile" });
+
+    const secondRest = createRest();
+    await new DiscordCommandDeployer({
+      clientId: "app-default",
+      commands,
+      hashStore: store,
+      rest: () => secondRest,
+    }).deploy({ mode: "reconcile" });
+
+    expect(firstRest.get).toHaveBeenCalledTimes(1);
+    expect(firstRest.post).toHaveBeenCalledTimes(1);
+    expect(secondRest.get).not.toHaveBeenCalled();
+    expect(secondRest.post).not.toHaveBeenCalled();
+    expect(store.lookup).toHaveBeenLastCalledWith("app:app-default:global:reconcile");
+  });
+
+  test("loads only the exact scoped key needed by a deployment", async () => {
+    const { store } = createHashStore({
+      "app:other:global:reconcile": "unrelated",
+    });
+    const rest = createRest();
+
+    await new DiscordCommandDeployer({
+      clientId: "app-default",
+      commands: [new StaticCommand("ping")],
+      hashStore: store,
+      rest: () => rest,
+    }).deploy({ mode: "reconcile" });
+
+    expect(store.lookup).toHaveBeenCalledOnce();
+    expect(store.lookup).toHaveBeenCalledWith("app:app-default:global:reconcile");
+  });
+
+  test("treats a SQLite lookup failure as a cache miss and repairs the row", async () => {
+    const register = vi.fn(async () => undefined);
+    const store: DiscordCommandDeployHashStore = {
+      lookup: vi.fn(async () => {
+        throw new Error("database unavailable");
+      }),
+      register,
+    };
+    const rest = createRest();
+
+    await new DiscordCommandDeployer({
+      clientId: "app-default",
+      commands: [new StaticCommand("ping")],
+      hashStore: store,
+      rest: () => rest,
+    }).deploy({ mode: "reconcile" });
+
+    expect(rest.get).toHaveBeenCalledTimes(1);
+    expect(rest.post).toHaveBeenCalledTimes(1);
+    expect(register).toHaveBeenCalledOnce();
+  });
+
+  test("keeps successful deploys successful when SQLite persistence fails", async () => {
+    const store: DiscordCommandDeployHashStore = {
+      lookup: vi.fn(async () => undefined),
+      register: vi.fn(async () => {
+        throw new Error("database unavailable");
+      }),
+    };
+    const rest = createRest();
+    const deployer = new DiscordCommandDeployer({
+      clientId: "app-default",
+      commands: [new StaticCommand("ping")],
+      hashStore: store,
+      rest: () => rest,
+    });
+
+    await deployer.deploy({ mode: "reconcile" });
+    await deployer.deploy({ mode: "reconcile" });
+
+    expect(rest.get).toHaveBeenCalledTimes(1);
+    expect(rest.post).toHaveBeenCalledTimes(1);
+    expect(store.register).toHaveBeenCalledOnce();
+  });
+
+  test("does not persist a hash when Discord deployment fails", async () => {
+    const { store } = createHashStore();
+    const rest = createRest();
+    rest.post = vi.fn(async () => {
+      throw new Error("Discord rejected deploy");
+    }) as RequestClient["post"];
+
+    await expect(
+      new DiscordCommandDeployer({
+        clientId: "app-default",
+        commands: [new StaticCommand("ping")],
+        hashStore: store,
+        rest: () => rest,
+      }).deploy({ mode: "reconcile" }),
+    ).rejects.toThrow("Discord rejected deploy");
+
+    expect(store.register).not.toHaveBeenCalled();
   });
 });

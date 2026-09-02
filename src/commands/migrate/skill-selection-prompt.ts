@@ -1,3 +1,4 @@
+/** Custom Clack multi-select prompt for Codex migration skill/plugin choices. */
 import { styleText } from "node:util";
 import { MultiSelectPrompt, settings, wrapTextWithPrefix } from "@clack/core";
 import {
@@ -9,35 +10,23 @@ import {
   S_CHECKBOX_SELECTED,
   symbol,
   symbolBar,
+  type MultiSelectOptions,
+  type Option,
 } from "@clack/prompts";
 import {
+  MIGRATION_SELECTION_ACCEPT,
+  reconcileInteractiveMigrationEnterValues,
   reconcileInteractiveMigrationShortcutValues,
   reconcileInteractiveMigrationSkillToggleValues,
 } from "./selection.js";
 
-type MigrationSkillSelectionOption = {
-  value: string;
-  label?: string;
-  hint?: string;
-  disabled?: boolean;
-};
-
-export type MigrationSkillSelectionPromptOptions = {
-  message: string;
-  options: MigrationSkillSelectionOption[];
-  initialValues?: string[];
-  maxItems?: number;
-  required?: boolean;
-  cursorAt?: string;
-  input?: NodeJS.ReadStream;
-  output?: NodeJS.WriteStream;
-  signal?: AbortSignal;
-  withGuide?: boolean;
+/** Options for the migration selection prompt, including testable IO streams. */
+type MigrationSkillSelectionPromptOptions = Omit<MultiSelectOptions<string>, "required"> & {
   selectableValues: readonly string[];
 };
 
 function formatOption(
-  option: MigrationSkillSelectionOption,
+  option: Option<string>,
   state:
     | "active"
     | "active-selected"
@@ -70,24 +59,17 @@ function formatOption(
   return withHint;
 }
 
+/** Prompts for migration selection values and reconciles all/none/recommended shortcuts. */
 export function promptMigrationSkillSelectionValues(
   opts: MigrationSkillSelectionPromptOptions,
 ): Promise<string[] | symbol | undefined> {
-  const required = opts.required ?? true;
-  const prompt = new MultiSelectPrompt<MigrationSkillSelectionOption>({
+  const prompt = new MultiSelectPrompt<Option<string>>({
     options: opts.options,
     signal: opts.signal,
     input: opts.input,
     output: opts.output,
     initialValues: opts.initialValues,
-    required,
     cursorAt: opts.cursorAt,
-    validate(value) {
-      if (required && (value === undefined || value.length === 0)) {
-        return "Please select at least one option.";
-      }
-      return undefined;
-    },
     render() {
       const withGuide = opts.withGuide ?? settings.withGuide;
       const message = wrapTextWithPrefix(
@@ -98,7 +80,7 @@ export function promptMigrationSkillSelectionValues(
       );
       const header = `${withGuide ? `${styleText("gray", S_BAR)}\n` : ""}${message}\n`;
       const value = this.value ?? [];
-      const optionState = (option: MigrationSkillSelectionOption, active: boolean) => {
+      const optionState = (option: Option<string>, active: boolean) => {
         if (option.disabled) {
           return formatOption(option, "disabled");
         }
@@ -172,21 +154,69 @@ export function promptMigrationSkillSelectionValues(
     },
   });
   let lastSelectedValues = [...(prompt.value ?? [])];
+  let lastSpaceDeselectedValue: string | undefined;
 
   prompt.on("cursor", (key) => {
     if (key !== "space") {
+      lastSpaceDeselectedValue = undefined;
       return;
     }
     const activatedValue = prompt.options[prompt.cursor]?.value;
+    // Space on the "Accept recommended" sentinel snaps the visual selection
+    // back to the recommended set so the user can see what would be submitted
+    // by Enter. The sentinel itself is never persisted in the value list.
+    if (activatedValue === MIGRATION_SELECTION_ACCEPT) {
+      prompt.value = [...(opts.initialValues ?? [])];
+      lastSpaceDeselectedValue = undefined;
+      lastSelectedValues = [...(prompt.value ?? [])];
+      return;
+    }
+    const previousValues = lastSelectedValues;
+    const selectedValuesAfterClack = prompt.value ?? [];
     prompt.value = reconcileInteractiveMigrationSkillToggleValues(
-      prompt.value ?? [],
+      selectedValuesAfterClack,
       activatedValue,
       opts.selectableValues,
     );
+    lastSpaceDeselectedValue =
+      activatedValue !== undefined &&
+      opts.selectableValues.includes(activatedValue) &&
+      previousValues.includes(activatedValue) &&
+      !(prompt.value ?? []).includes(activatedValue)
+        ? activatedValue
+        : undefined;
     lastSelectedValues = [...(prompt.value ?? [])];
   });
 
-  prompt.on("key", (key) => {
+  prompt.on("key", (key, info) => {
+    if (info.name === "return") {
+      const activatedOption = prompt.options[prompt.cursor];
+      const activatedValue = activatedOption?.disabled ? undefined : activatedOption?.value;
+      // Enter on "Accept recommended" submits with the picker's initialValues
+      // (the recommended set) regardless of any toggles the user made.
+      if (activatedValue === MIGRATION_SELECTION_ACCEPT) {
+        prompt.value = [...(opts.initialValues ?? [])];
+        lastSpaceDeselectedValue = undefined;
+        lastSelectedValues = [...(prompt.value ?? [])];
+        return;
+      }
+      prompt.value = reconcileInteractiveMigrationEnterValues(
+        prompt.value ?? [],
+        activatedValue,
+        opts.selectableValues,
+        {
+          preserveDeselectedActivatedValue:
+            activatedValue !== undefined &&
+            activatedValue === lastSpaceDeselectedValue &&
+            !(prompt.value ?? []).includes(activatedValue),
+        },
+      );
+      // Enter can submit the active row without a Space event; keep the local
+      // selection cache aligned for subsequent shortcut reconciliation.
+      lastSpaceDeselectedValue = undefined;
+      lastSelectedValues = [...(prompt.value ?? [])];
+      return;
+    }
     if (key !== "a" && key !== "i") {
       return;
     }
@@ -196,6 +226,7 @@ export function promptMigrationSkillSelectionValues(
       opts.selectableValues,
       key,
     );
+    lastSpaceDeselectedValue = undefined;
     lastSelectedValues = [...(prompt.value ?? [])];
   });
 

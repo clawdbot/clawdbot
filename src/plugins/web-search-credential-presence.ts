@@ -1,3 +1,5 @@
+// Checks web-search credential presence from config and plugin metadata.
+import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { loadManifestMetadataSnapshot } from "./manifest-contract-eligibility.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
@@ -9,27 +11,24 @@ function hasConfiguredCredentialValue(value: unknown): boolean {
   return value !== undefined && value !== null;
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
-}
-
 function hasConfiguredSearchCredentialCandidate(searchConfig: unknown): boolean {
-  if (!isRecord(searchConfig)) {
+  const record = asOptionalObjectRecord(searchConfig);
+  if (!record) {
     return false;
   }
-  return Object.entries(searchConfig).some(
+  return Object.entries(record).some(
     ([key, value]) => key !== "enabled" && hasConfiguredCredentialValue(value),
   );
 }
 
 function hasConfiguredPluginWebSearchCandidate(config: OpenClawConfig): boolean {
-  const entries = isRecord(config.plugins?.entries) ? config.plugins.entries : undefined;
+  const entries = asOptionalObjectRecord(config.plugins?.entries);
   if (!entries) {
     return false;
   }
   return Object.values(entries).some((entry) => {
-    const pluginConfig = isRecord(entry) ? entry.config : undefined;
-    return isRecord(pluginConfig) && hasConfiguredSearchCredentialCandidate(pluginConfig.webSearch);
+    const pluginConfig = asOptionalObjectRecord(entry)?.config;
+    return hasConfiguredSearchCredentialCandidate(asOptionalObjectRecord(pluginConfig)?.webSearch);
   });
 }
 
@@ -52,13 +51,8 @@ function hasManifestWebSearchEnvCredentialCandidate(params: {
     if ((plugin.contracts?.webSearchProviders?.length ?? 0) === 0) {
       return false;
     }
-    const providerAuthEnvVars = plugin.providerAuthEnvVars;
-    if (!providerAuthEnvVars) {
-      return false;
-    }
-    return Object.values(providerAuthEnvVars)
-      .flat()
-      .some((envVar) => hasConfiguredCredentialValue(env[envVar]));
+    const envVars = (plugin.setup?.providers ?? []).flatMap((provider) => provider.envVars ?? []);
+    return envVars.some((envVar) => hasConfiguredCredentialValue(env[envVar]));
   });
 }
 
@@ -67,7 +61,6 @@ export function hasConfiguredWebSearchCredential(params: {
   env?: NodeJS.ProcessEnv;
   searchConfig?: Record<string, unknown>;
   origin?: PluginManifestRecord["origin"];
-  bundledAllowlistCompat?: boolean;
 }): boolean {
   const searchConfig =
     params.searchConfig ??

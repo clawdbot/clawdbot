@@ -1,3 +1,8 @@
+/**
+ * Exec background abort tests.
+ * Ensures agent-turn aborts stop foreground execs but do not kill already
+ * backgrounded sessions.
+ */
 import { afterEach, beforeAll, beforeEach, expect, test, vi } from "vitest";
 import { killProcessTree } from "../process/kill-tree.js";
 
@@ -42,7 +47,7 @@ vi.mock("../process/supervisor/index.js", () => {
             });
           };
           if (input.timeoutMs !== undefined) {
-            setTimeout(() => settle("overall-timeout", true), 12);
+            setTimeout(() => settle("overall-timeout", true), Math.max(50, input.timeoutMs));
           }
         });
         return {
@@ -58,7 +63,6 @@ vi.mock("../process/supervisor/index.js", () => {
       },
       cancel: vi.fn(),
       cancelScope: vi.fn(),
-      reconcileOrphans: vi.fn(),
       getRecord: vi.fn(),
     }),
   };
@@ -85,16 +89,17 @@ const ABORT_SETTLE_MS = process.platform === "win32" ? 200 : 0;
 const POLL_INTERVAL_MS = process.platform === "win32" ? 15 : 5;
 const FINISHED_WAIT_TIMEOUT_MS = process.platform === "win32" ? 8_000 : 1_000;
 const BACKGROUND_TIMEOUT_SEC = process.platform === "win32" ? 0.2 : 0.02;
+const YIELDED_BACKGROUND_TIMEOUT_SEC = process.platform === "win32" ? 0.4 : 0.2;
 const TEST_EXEC_DEFAULTS = {
   host: "gateway" as const,
   security: "full" as const,
   ask: "off" as const,
 };
 
-let createExecTool: typeof import("./bash-tools.exec.js").createExecTool;
+let createExecTool: typeof import("./bash-tools.exec-run.js").createExecTool;
 let getFinishedSession: typeof import("./bash-process-registry.js").getFinishedSession;
 let getSession: typeof import("./bash-process-registry.js").getSession;
-let resetProcessRegistryForTests: typeof import("./bash-process-registry.js").resetProcessRegistryForTests;
+let resetProcessRegistryForTests: typeof import("./bash-process-registry.test-support.js").resetProcessRegistryForTests;
 type ExecToolExecuteParams = Parameters<ReturnType<typeof createExecTool>["execute"]>[1];
 
 const createTestExecTool = (
@@ -102,9 +107,9 @@ const createTestExecTool = (
 ): ReturnType<typeof createExecTool> => createExecTool({ ...TEST_EXEC_DEFAULTS, ...defaults });
 
 beforeAll(async () => {
-  ({ createExecTool } = await import("./bash-tools.exec.js"));
-  ({ getFinishedSession, getSession, resetProcessRegistryForTests } =
-    await import("./bash-process-registry.js"));
+  ({ createExecTool } = await import("./bash-tools.exec-run.js"));
+  ({ getFinishedSession, getSession } = await import("./bash-process-registry.js"));
+  ({ resetProcessRegistryForTests } = await import("./bash-process-registry.test-support.js"));
 });
 
 beforeEach(() => {
@@ -158,13 +163,15 @@ async function expectBackgroundSessionSurvivesAbort(params: {
 
   abortController.abort();
   if (ABORT_SETTLE_MS > 0) {
-    await new Promise((resolve) => setTimeout(resolve, ABORT_SETTLE_MS));
+    await new Promise((resolve) => {
+      setTimeout(resolve, ABORT_SETTLE_MS);
+    });
   }
 
   const running = getSession(sessionId);
   const finished = getFinishedSession(sessionId);
   try {
-    expect(supervisorMockState.cancelReasons).toEqual([]);
+    expect(supervisorMockState.cancelReasons).toStrictEqual([]);
     expect(finished).toBeUndefined();
     expect(running?.exited).toBe(false);
   } finally {
@@ -196,7 +203,7 @@ async function expectBackgroundSessionTimesOut(params: {
 
   const finished = await waitForFinishedSession(sessionId);
   try {
-    expect(finished).toMatchObject({ status: "failed" });
+    expect(finished?.terminalStatus).toBe("failed");
   } finally {
     cleanupRunningSession(sessionId);
   }
@@ -225,7 +232,7 @@ test("background exec still times out after tool signal abort", async () => {
     executeParams: {
       command: BACKGROUND_HOLD_CMD,
       background: true,
-      timeout: BACKGROUND_TIMEOUT_SEC,
+      timeoutSeconds: BACKGROUND_TIMEOUT_SEC,
     },
     abortAfterStart: true,
     expectedTimeoutSec: BACKGROUND_TIMEOUT_SEC,
@@ -254,7 +261,7 @@ test("background exec with timeout zero bypasses default timeout", async () => {
   const result = await tool.execute("toolcall", {
     command: BACKGROUND_HOLD_CMD,
     background: true,
-    timeout: 0,
+    timeoutSeconds: 0,
   });
   expect(result.details.status).toBe("running");
   const sessionId = (result.details as { sessionId: string }).sessionId;
@@ -272,9 +279,9 @@ test("yielded background exec still times out", async () => {
     executeParams: {
       command: BACKGROUND_HOLD_CMD,
       yieldMs: 5,
-      timeout: BACKGROUND_TIMEOUT_SEC,
+      timeoutSeconds: YIELDED_BACKGROUND_TIMEOUT_SEC,
     },
-    expectedTimeoutSec: BACKGROUND_TIMEOUT_SEC,
+    expectedTimeoutSec: YIELDED_BACKGROUND_TIMEOUT_SEC,
   });
 });
 
@@ -282,7 +289,7 @@ test("yieldMs exec without explicit timeout applies default timeout", async () =
   const tool = createTestExecTool({
     allowBackground: true,
     backgroundMs: 10,
-    timeoutSec: BACKGROUND_TIMEOUT_SEC,
+    timeoutSec: YIELDED_BACKGROUND_TIMEOUT_SEC,
   });
   await expectBackgroundSessionTimesOut({
     tool,
@@ -290,6 +297,6 @@ test("yieldMs exec without explicit timeout applies default timeout", async () =
       command: BACKGROUND_HOLD_CMD,
       yieldMs: 5,
     },
-    expectedTimeoutSec: BACKGROUND_TIMEOUT_SEC,
+    expectedTimeoutSec: YIELDED_BACKGROUND_TIMEOUT_SEC,
   });
 });

@@ -15,6 +15,15 @@ read_when:
 | API      | OpenAI-compatible          |
 | Base URL | `https://api.deepseek.com` |
 
+## Install plugin
+
+Install the official plugin, then restart Gateway:
+
+```bash
+openclaw plugins install @openclaw/deepseek-provider
+openclaw gateway restart
+```
+
 ## Getting started
 
 <Steps>
@@ -26,7 +35,7 @@ read_when:
     openclaw onboard --auth-choice deepseek-api-key
     ```
 
-    This will prompt for your API key and set `deepseek/deepseek-v4-flash` as the default model.
+    Prompts for your API key and sets `deepseek/deepseek-v4-pro` as the default model.
 
   </Step>
   <Step title="Verify models are available">
@@ -34,8 +43,7 @@ read_when:
     openclaw models list --provider deepseek
     ```
 
-    To inspect the bundled static catalog without requiring a running Gateway,
-    use:
+    To inspect the plugin's static catalog without a running Gateway:
 
     ```bash
     openclaw models list --all --provider deepseek
@@ -61,56 +69,65 @@ read_when:
 </AccordionGroup>
 
 <Warning>
-If the Gateway runs as a daemon (launchd/systemd), make sure `DEEPSEEK_API_KEY`
-is available to that process (for example, in `~/.openclaw/.env` or via
+If Gateway runs as a daemon (launchd/systemd), make sure `DEEPSEEK_API_KEY` is
+available to that process (for example, in `~/.openclaw/.env` or via
 `env.shellEnv`).
 </Warning>
 
 ## Built-in catalog
 
-| Model ref                    | Name              | Input | Context   | Max output | Notes                                      |
-| ---------------------------- | ----------------- | ----- | --------- | ---------- | ------------------------------------------ |
-| `deepseek/deepseek-v4-flash` | DeepSeek V4 Flash | text  | 1,000,000 | 384,000    | Default model; V4 thinking-capable surface |
-| `deepseek/deepseek-v4-pro`   | DeepSeek V4 Pro   | text  | 1,000,000 | 384,000    | V4 thinking-capable surface                |
-| `deepseek/deepseek-chat`     | DeepSeek Chat     | text  | 131,072   | 8,192      | DeepSeek V3.2 non-thinking surface         |
-| `deepseek/deepseek-reasoner` | DeepSeek Reasoner | text  | 131,072   | 65,536     | Reasoning-enabled V3.2 surface             |
+| Model ref                               | Name                                    | Input       | Context   | Max output | Notes                            |
+| --------------------------------------- | --------------------------------------- | ----------- | --------- | ---------- | -------------------------------- |
+| `deepseek/deepseek-v4-flash`            | DeepSeek V4 Flash                       | text        | 1,000,000 | 384,000    | Fast V4 thinking-capable surface |
+| `deepseek/deepseek-v4-pro`              | DeepSeek V4 Pro                         | text        | 1,000,000 | 384,000    | Default; strongest V4 model      |
+| `deepseek/deepseek-v4-flash-vision-exp` | DeepSeek V4 Flash Vision (Experimental) | text, image | 1,000,000 | 384,000    | Experimental image understanding |
+
+<Warning>
+DeepSeek retired `deepseek-chat` and `deepseek-reasoner` on July 24, 2026 at
+15:59 UTC. Those model IDs are no longer accessible. Move configured model refs
+to `deepseek/deepseek-v4-flash` or `deepseek/deepseek-v4-pro`.
+</Warning>
+
+OpenClaw's local costs are estimates. The vision model's bundled estimate uses
+DeepSeek's peak rates; its published off-peak rates are half those amounts.
+DeepSeek can change rates; its
+[Models & Pricing](https://api-docs.deepseek.com/quick_start/pricing/) page is
+authoritative for billing.
+
+For image inputs, select `deepseek/deepseek-v4-flash-vision-exp`. The regular
+Flash and Pro models are text-only. DeepSeek's experimental vision model accepts
+PNG, JPEG, GIF, and WebP images through the same API and API key. See
+[DeepSeek vision](https://api-docs.deepseek.com/guides/vision) for image limits.
 
 <Tip>
 V4 models support DeepSeek's `thinking` control. OpenClaw also replays
 DeepSeek `reasoning_content` on follow-up turns so thinking sessions with tool
 calls can continue.
 Use `/think xhigh` or `/think max` with DeepSeek V4 models to request DeepSeek's
-maximum `reasoning_effort`.
+maximum `reasoning_effort`; both map to `"max"`.
 </Tip>
 
 ## Thinking and tools
 
-DeepSeek V4 thinking sessions have a stricter replay contract than most
-OpenAI-compatible providers: after a thinking-enabled turn uses tools, DeepSeek
-expects replayed assistant messages from that turn to include
-`reasoning_content` on follow-up requests. OpenClaw handles this inside the
-DeepSeek plugin, so normal multi-turn tool use works with
-`deepseek/deepseek-v4-flash` and `deepseek/deepseek-v4-pro`.
+DeepSeek V4 thinking sessions require replayed assistant messages from a
+thinking-enabled turn to include `reasoning_content` on follow-up requests.
+OpenClaw's DeepSeek plugin backfills that field automatically, so normal
+multi-turn tool use works on `deepseek/deepseek-v4-flash`,
+`deepseek/deepseek-v4-flash-vision-exp`, and `deepseek/deepseek-v4-pro` even when history came from another
+OpenAI-compatible provider (no native `reasoning_content`) or from a plain
+assistant message. No `/new` required after switching providers mid-session.
 
-If you switch an existing session from another OpenAI-compatible provider to a
-DeepSeek V4 model, older assistant tool-call turns may not have native
-DeepSeek `reasoning_content`. OpenClaw fills that missing field on replayed
-assistant messages for DeepSeek V4 thinking requests so the provider can accept
-the history without requiring `/new`.
+When thinking is disabled (including the UI **None** selection), OpenClaw
+sends `thinking: { type: "disabled" }` and strips replayed `reasoning_content`
+from outgoing history, keeping the session on the non-thinking DeepSeek path.
 
-When thinking is disabled in OpenClaw (including the UI **None** selection),
-OpenClaw sends DeepSeek `thinking: { type: "disabled" }` and strips replayed
-`reasoning_content` from the outgoing history. This keeps disabled-thinking
-sessions on the non-thinking DeepSeek path.
-
-Use `deepseek/deepseek-v4-flash` for the default fast path. Use
-`deepseek/deepseek-v4-pro` when you want the stronger V4 model and can accept
-higher cost or latency.
+Fresh onboarding selects the stronger `deepseek/deepseek-v4-pro` model. Use
+`deepseek/deepseek-v4-flash` when lower cost or latency matters more than
+maximum capability.
 
 ## Live testing
 
-The direct live model suite includes DeepSeek V4 in the modern model set. To
-run only the DeepSeek V4 direct-model checks:
+To run only the DeepSeek V4 direct-model checks from the modern model live suite:
 
 ```bash
 OPENCLAW_LIVE_PROVIDERS=deepseek \
@@ -118,17 +135,27 @@ OPENCLAW_LIVE_MODELS="deepseek/deepseek-v4-flash,deepseek/deepseek-v4-pro" \
 pnpm test:live src/agents/models.profiles.live.test.ts
 ```
 
-That live check verifies both V4 models can complete and that thinking/tool
-follow-up turns preserve the replay payload DeepSeek requires.
+Verifies both V4 models complete and that thinking/tool follow-up turns
+preserve the replay payload DeepSeek requires.
+
+To check the experimental vision model with the same `DEEPSEEK_API_KEY`:
+
+```bash
+OPENCLAW_LIVE_DEEPSEEK_MODEL=deepseek-v4-flash-vision-exp \
+pnpm test:live extensions/deepseek/deepseek.live.test.ts
+```
+
+This runs text, generated-image recognition, and thinking replay checks against
+the selected model.
 
 ## Config example
 
 ```json5
 {
-  env: { DEEPSEEK_API_KEY: "sk-..." },
+  env: { vars: { DEEPSEEK_API_KEY: "sk-..." } },
   agents: {
     defaults: {
-      model: { primary: "deepseek/deepseek-v4-flash" },
+      model: { primary: "deepseek/deepseek-v4-pro" },
     },
   },
 }

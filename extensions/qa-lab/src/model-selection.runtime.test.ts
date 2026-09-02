@@ -1,3 +1,4 @@
+// Qa Lab tests cover model selection plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const { resolveEnvApiKey, loadAuthProfileStoreForRuntime, listProfilesForProvider } = vi.hoisted(
@@ -19,7 +20,7 @@ vi.mock("openclaw/plugin-sdk/agent-runtime", () => ({
 
 import {
   defaultQaRuntimeModelForMode,
-  resolveQaPreferredLiveModel,
+  resolveQaRuntimeModelPair,
 } from "./model-selection.runtime.js";
 
 describe("qa model selection runtime", () => {
@@ -27,50 +28,127 @@ describe("qa model selection runtime", () => {
     vi.clearAllMocks();
     resolveEnvApiKey.mockReturnValue(undefined);
     loadAuthProfileStoreForRuntime.mockReturnValue({ profiles: {} });
-    listProfilesForProvider.mockReturnValue([]);
+    listProfilesForProvider.mockImplementation((store: { profiles?: Record<string, unknown> }) =>
+      Object.keys(store.profiles ?? {}),
+    );
   });
 
   it("keeps the OpenAI live default when an API key is configured", () => {
     resolveEnvApiKey.mockReturnValue({ apiKey: "sk-test" });
 
-    expect(resolveQaPreferredLiveModel()).toBeUndefined();
-    expect(defaultQaRuntimeModelForMode("live-frontier")).toBe("openai/gpt-5.5");
+    expect(defaultQaRuntimeModelForMode("live-frontier")).toBe("openai/gpt-5.6");
+    expect(resolveQaRuntimeModelPair({ providerMode: "live-frontier" })).toEqual({
+      primaryModel: "openai/gpt-5.6",
+      alternateModel: "openai/gpt-5.6-luna",
+    });
     expect(loadAuthProfileStoreForRuntime).not.toHaveBeenCalled();
   });
 
-  it("prefers the Codex OAuth live default when only Codex auth profiles are available", () => {
-    listProfilesForProvider.mockImplementation((_store: unknown, provider: string) =>
-      provider === "openai-codex" ? ["openai-codex:user@example.com"] : [],
-    );
+  it.each(["oauth", "token"] as const)(
+    "prefers the Codex live default for a stored %s profile",
+    (type) => {
+      loadAuthProfileStoreForRuntime.mockReturnValue({
+        profiles: {
+          "openai:user@example.com": {
+            provider: "openai",
+            type,
+          },
+        },
+      });
 
-    expect(resolveQaPreferredLiveModel()).toBe("openai/gpt-5.5");
-    expect(defaultQaRuntimeModelForMode("live-frontier")).toBe("openai/gpt-5.5");
-    expect(loadAuthProfileStoreForRuntime).toHaveBeenCalledWith(undefined, {
-      readOnly: true,
-      allowKeychainPrompt: false,
-      externalCliProviderIds: ["openai-codex"],
+      expect(resolveQaRuntimeModelPair({ providerMode: "live-frontier" })).toEqual({
+        primaryModel: "openai/gpt-5.6-luna",
+        alternateModel: "openai/gpt-5.6-sol",
+      });
+      expect(loadAuthProfileStoreForRuntime).toHaveBeenCalledWith(undefined, {
+        readOnly: true,
+        allowKeychainPrompt: false,
+        externalCliProviderIds: ["openai"],
+      });
+    },
+  );
+
+  it("keeps the OpenAI live default when stored OpenAI profiles are available", () => {
+    loadAuthProfileStoreForRuntime.mockReturnValue({
+      profiles: {
+        "openai:api-key": {
+          provider: "openai",
+          type: "api_key",
+        },
+      },
+    });
+
+    expect(defaultQaRuntimeModelForMode("live-frontier")).toBe("openai/gpt-5.6");
+  });
+
+  it.each(["openai/gpt-5.6", "openai/gpt-5.6-sol"])(
+    "derives Luna after explicit Sol primary %s",
+    (primaryModel) => {
+      expect(resolveQaRuntimeModelPair({ providerMode: "live-frontier", primaryModel })).toEqual({
+        primaryModel,
+        alternateModel: "openai/gpt-5.6-luna",
+      });
+    },
+  );
+
+  it("derives Sol after an explicit Luna primary", () => {
+    expect(
+      resolveQaRuntimeModelPair({
+        providerMode: "live-frontier",
+        primaryModel: "openai/gpt-5.6-luna",
+      }),
+    ).toEqual({
+      primaryModel: "openai/gpt-5.6-luna",
+      alternateModel: "openai/gpt-5.6-sol",
     });
   });
 
-  it("keeps the OpenAI live default when stored OpenAI profiles are available", () => {
-    listProfilesForProvider.mockImplementation((_store: unknown, provider: string) =>
-      provider === "openai" || provider === "openai-codex" ? [`${provider}:user@example.com`] : [],
-    );
+  it("falls back through the provider default for an unmapped primary", () => {
+    expect(
+      resolveQaRuntimeModelPair({
+        providerMode: "live-frontier",
+        primaryModel: "anthropic/claude-sonnet-4-6",
+      }),
+    ).toEqual({
+      primaryModel: "anthropic/claude-sonnet-4-6",
+      alternateModel: "openai/gpt-5.6",
+    });
+  });
 
-    expect(resolveQaPreferredLiveModel()).toBeUndefined();
-    expect(defaultQaRuntimeModelForMode("live-frontier")).toBe("openai/gpt-5.5");
+  it("preserves an explicit alternate model", () => {
+    expect(
+      resolveQaRuntimeModelPair({
+        providerMode: "live-frontier",
+        primaryModel: "openai/gpt-5.6",
+        alternateModel: "openai/gpt-5.6-terra",
+      }),
+    ).toEqual({
+      primaryModel: "openai/gpt-5.6",
+      alternateModel: "openai/gpt-5.6-terra",
+    });
+  });
+
+  it.each([
+    ["openai/gpt-5.4", "openai/gpt-5.4"],
+    ["openai/gpt-5.6", "openai/gpt-5.6-sol"],
+  ])("preserves the explicit model pair %s / %s", (primaryModel, alternateModel) => {
+    expect(
+      resolveQaRuntimeModelPair({
+        providerMode: "live-frontier",
+        primaryModel,
+        alternateModel,
+      }),
+    ).toEqual({ primaryModel, alternateModel });
   });
 
   it("leaves mock defaults unchanged", () => {
-    listProfilesForProvider.mockImplementation((_store: unknown, provider: string) =>
-      provider === "openai-codex" ? ["openai-codex:user@example.com"] : [],
-    );
-
-    expect(defaultQaRuntimeModelForMode("mock-openai")).toBe("mock-openai/gpt-5.5");
+    expect(defaultQaRuntimeModelForMode("mock-openai")).toBe("mock-openai/gpt-5.6-luna");
     expect(defaultQaRuntimeModelForMode("mock-openai", { alternate: true })).toBe(
-      "mock-openai/gpt-5.5-alt",
+      "mock-openai/gpt-5.6-luna-alt",
     );
-    expect(defaultQaRuntimeModelForMode("aimock")).toBe("aimock/gpt-5.5");
-    expect(defaultQaRuntimeModelForMode("aimock", { alternate: true })).toBe("aimock/gpt-5.5-alt");
+    expect(defaultQaRuntimeModelForMode("aimock")).toBe("aimock/gpt-5.6-luna");
+    expect(defaultQaRuntimeModelForMode("aimock", { alternate: true })).toBe(
+      "aimock/gpt-5.6-luna-alt",
+    );
   });
 });

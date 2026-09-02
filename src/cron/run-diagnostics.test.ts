@@ -1,11 +1,17 @@
+// Cron run diagnostics tests cover diagnostic event formatting for scheduled runs.
 import { describe, expect, it } from "vitest";
+import { setReplyPayloadMetadata } from "../auto-reply/reply-payload.js";
 import {
+  createCronRunDiagnosticsFromMissingWebSearchProvider,
   createCronRunDiagnosticsFromAgentResult,
   createCronRunDiagnosticsFromError,
   mergeCronRunDiagnostics,
   normalizeCronRunDiagnostics,
   summarizeCronRunDiagnostics,
 } from "./run-diagnostics.js";
+
+const MISSING_WEB_SEARCH_PROVIDER_DIAGNOSTIC_MESSAGE =
+  "web_search tool requested in toolsAllow but no web search provider is selected. Configure one with: openclaw configure --section web, or set tools.web.search.provider.";
 
 describe("cron run diagnostics", () => {
   it("normalizes and bounds diagnostic entries", () => {
@@ -21,10 +27,33 @@ describe("cron run diagnostics", () => {
 
     expect(diagnostics?.entries).toHaveLength(10);
     expect(diagnostics?.entries[0]?.message).toBe("entry 2");
-    expect(diagnostics?.entries.at(-1)?.message).toMatch(/…$/);
+    expect(diagnostics?.entries.at(-1)?.message.endsWith("…")).toBe(true);
     expect(diagnostics?.entries.at(-1)?.message).not.toContain("sk-1234567890abcdef");
     expect(diagnostics?.entries.at(-1)?.truncated).toBe(true);
     expect(diagnostics?.summary).toHaveLength(2_000);
+  });
+
+  it("keeps bounded diagnostic text valid at UTF-16 boundaries", () => {
+    const diagnostics = normalizeCronRunDiagnostics({
+      summary: `${"s".repeat(1_998)}😀tail`,
+      entries: [
+        {
+          ts: 1,
+          source: "exec",
+          severity: "error",
+          message: `${"m".repeat(998)}😀tail`,
+        },
+      ],
+    });
+
+    expect(diagnostics?.summary).toBe(`${"s".repeat(1_998)}…`);
+    expect(diagnostics?.entries[0]).toEqual({
+      ts: 1,
+      source: "exec",
+      severity: "error",
+      message: `${"m".repeat(998)}…`,
+      truncated: true,
+    });
   });
 
   it("preserves later terminal diagnostics when capping entries", () => {
@@ -47,7 +76,8 @@ describe("cron run diagnostics", () => {
 
     expect(diagnostics?.entries).toHaveLength(10);
     expect(diagnostics?.entries.map((entry) => entry.message)).not.toContain("tool warning 0");
-    expect(diagnostics?.entries.at(-1)).toMatchObject({
+    expect(diagnostics?.entries.at(-1)).toEqual({
+      ts: 11,
       source: "delivery",
       severity: "error",
       message: "delivery failed",
@@ -58,6 +88,21 @@ describe("cron run diagnostics", () => {
     expect(normalizeCronRunDiagnostics({ entries: [] })).toBeUndefined();
     expect(normalizeCronRunDiagnostics({ entries: [{ source: "exec" }] })).toBeUndefined();
     expect(summarizeCronRunDiagnostics(undefined)).toBeUndefined();
+  });
+
+  it("bounds fallback summaries at valid UTF-16 boundaries", () => {
+    expect(
+      summarizeCronRunDiagnostics({
+        entries: [
+          {
+            ts: 1,
+            source: "exec",
+            severity: "error",
+            message: `${"s".repeat(1_998)}😀tail`,
+          },
+        ],
+      }),
+    ).toBe(`${"s".repeat(1_998)}…`);
   });
 
   it("creates diagnostics from errors and prefers the latest error summary", () => {
@@ -75,6 +120,42 @@ describe("cron run diagnostics", () => {
       "delivery failed",
     ]);
     expect(summarizeCronRunDiagnostics(merged)).toBe("delivery failed");
+  });
+
+  it("warns when cron toolsAllow requests web_search without a provider", () => {
+    const diagnostics = createCronRunDiagnosticsFromMissingWebSearchProvider({
+      toolsAllow: ["web_*"],
+      hasWebSearchProvider: false,
+      nowMs: () => 900,
+    });
+
+    expect(diagnostics).toEqual({
+      summary: MISSING_WEB_SEARCH_PROVIDER_DIAGNOSTIC_MESSAGE,
+      entries: [
+        {
+          ts: 900,
+          source: "cron-preflight",
+          severity: "warn",
+          message: MISSING_WEB_SEARCH_PROVIDER_DIAGNOSTIC_MESSAGE,
+          toolName: "web_search",
+        },
+      ],
+    });
+  });
+
+  it("does not warn for wildcard toolsAllow or configured web_search providers", () => {
+    expect(
+      createCronRunDiagnosticsFromMissingWebSearchProvider({
+        toolsAllow: ["*"],
+        hasWebSearchProvider: false,
+      }),
+    ).toBeUndefined();
+    expect(
+      createCronRunDiagnosticsFromMissingWebSearchProvider({
+        toolsAllow: ["web_search"],
+        hasWebSearchProvider: true,
+      }),
+    ).toBeUndefined();
   });
 
   it("keeps a later delivery error summary ahead of an earlier warning", () => {
@@ -118,11 +199,126 @@ describe("cron run diagnostics", () => {
       "retry limit exceeded",
       "SYSTEM_RUN_DENIED",
     ]);
-    expect(diagnostics?.entries[1]).toMatchObject({
+    expect(diagnostics?.entries[1]).toEqual({
+      ts: 123,
       source: "exec",
+      severity: "warn",
+      message: "stdout\nstderr failure",
       toolName: "exec",
       exitCode: 2,
     });
+  });
+
+  it("prefers a terminal tool failure over a generic failed-tool payload", () => {
+    const diagnostics = createCronRunDiagnosticsFromAgentResult(
+      {
+        payloads: [{ text: "⚠️ Exec failed", isError: true, toolName: "exec" }],
+        meta: {
+          terminalToolFailure: {
+            source: "tool",
+            toolName: "exec",
+            code: "UNKNOWN_TOOL_ID",
+          },
+        },
+      },
+      { nowMs: () => 123 },
+    );
+
+    expect(diagnostics?.summary).toBe("Code Mode could not resolve a configured MCP tool.");
+    expect(diagnostics?.entries).toEqual([
+      {
+        ts: 123,
+        source: "tool",
+        severity: "error",
+        message: "⚠️ Exec failed",
+        toolName: "exec",
+      },
+      {
+        ts: 123,
+        source: "tool",
+        severity: "error",
+        message: "Code Mode could not resolve a configured MCP tool.",
+        toolName: "exec",
+      },
+    ]);
+  });
+
+  it("downgrades a recovered terminal tool failure to a warning", () => {
+    const diagnostics = createCronRunDiagnosticsFromAgentResult(
+      {
+        meta: {
+          terminalToolFailure: {
+            source: "tool",
+            toolName: "exec",
+            code: "UNKNOWN_TOOL_ID",
+          },
+        },
+      },
+      { nowMs: () => 123, finalStatus: "ok" },
+    );
+
+    expect(diagnostics).toEqual({
+      summary: "Code Mode could not resolve a configured MCP tool.",
+      entries: [
+        {
+          ts: 123,
+          source: "tool",
+          severity: "warn",
+          message: "Code Mode could not resolve a configured MCP tool.",
+          toolName: "exec",
+        },
+      ],
+    });
+  });
+
+  it("reconstructs a safe diagnostic from terminal tool metadata", () => {
+    const diagnostics = createCronRunDiagnosticsFromAgentResult(
+      {
+        meta: {
+          terminalToolFailure: {
+            source: "tool",
+            toolName: "exec",
+            code: "UNKNOWN_TOOL_ID",
+            message: "private-path /home/operator/.config/token",
+          },
+        },
+      },
+      { nowMs: () => 123 },
+    );
+
+    expect(diagnostics).toEqual({
+      summary: "Code Mode could not resolve a configured MCP tool.",
+      entries: [
+        {
+          ts: 123,
+          source: "tool",
+          severity: "error",
+          message: "Code Mode could not resolve a configured MCP tool.",
+          toolName: "exec",
+        },
+      ],
+    });
+  });
+
+  it("keeps failed exec output tails valid at UTF-16 boundaries", () => {
+    const diagnostics = createCronRunDiagnosticsFromAgentResult(
+      {
+        payloads: [
+          {
+            toolName: "exec",
+            details: {
+              status: "completed",
+              exitCode: 2,
+              aggregated: `x😀${"y".repeat(1_999)}`,
+            },
+          },
+        ],
+      },
+      { nowMs: () => 123 },
+    );
+
+    expect(diagnostics?.summary).toBe("y".repeat(1_999));
+    expect(diagnostics?.entries[0]?.message).toBe(`${"y".repeat(999)}…`);
   });
 
   it("does not capture harmless successful exec output", () => {
@@ -145,27 +341,99 @@ describe("cron run diagnostics", () => {
     ).toBeUndefined();
   });
 
-  it("captures silent failed exec details with a fallback message", () => {
-    const diagnostics = createCronRunDiagnosticsFromAgentResult({
-      payloads: [
-        {
-          toolName: "exec",
-          details: {
-            status: "completed",
-            exitCode: 2,
-          },
-        },
-      ],
-    });
+  it("keeps non-terminal tool warnings as warning diagnostics for successful runs", () => {
+    const toolWarning = setReplyPayloadMetadata(
+      {
+        toolName: "exec",
+        text: "⚠️ Exec failed",
+        isError: true,
+      },
+      { nonTerminalToolErrorWarning: true },
+    );
+
+    const diagnostics = createCronRunDiagnosticsFromAgentResult(
+      {
+        payloads: [{ text: "Queued 3 topics." }, toolWarning],
+      },
+      { finalStatus: "ok", nowMs: () => 700 },
+    );
 
     expect(diagnostics?.entries).toEqual([
-      expect.objectContaining({
+      {
+        ts: 700,
+        source: "tool",
+        severity: "warn",
+        message: "⚠️ Exec failed",
+        toolName: "exec",
+      },
+    ]);
+    expect(diagnostics?.summary).toBe("⚠️ Exec failed");
+  });
+
+  it("downgrades recovered tool errors for successful runs", () => {
+    const diagnostics = createCronRunDiagnosticsFromAgentResult(
+      {
+        payloads: [
+          {
+            toolName: "exec",
+            text: "⚠️ 🛠️ jq -s '{total:length}' (agent) failed",
+            isError: true,
+            details: {
+              status: "failed",
+              exitCode: 1,
+              aggregated: "jq syntax error",
+            },
+          },
+        ],
+      },
+      { finalStatus: "ok", nowMs: () => 800 },
+    );
+
+    expect(diagnostics?.entries).toEqual([
+      {
+        ts: 800,
+        source: "exec",
+        severity: "warn",
+        message: "jq syntax error",
+        toolName: "exec",
+        exitCode: 1,
+      },
+      {
+        ts: 800,
+        source: "tool",
+        severity: "warn",
+        message: "⚠️ 🛠️ jq -s '{total:length}' (agent) failed",
+        toolName: "exec",
+      },
+    ]);
+    expect(diagnostics?.summary).toBe("⚠️ 🛠️ jq -s '{total:length}' (agent) failed");
+  });
+
+  it("captures silent failed exec details with a fallback message", () => {
+    const diagnostics = createCronRunDiagnosticsFromAgentResult(
+      {
+        payloads: [
+          {
+            toolName: "exec",
+            details: {
+              status: "completed",
+              exitCode: 2,
+            },
+          },
+        ],
+      },
+      { nowMs: () => 500 },
+    );
+
+    expect(diagnostics?.entries).toEqual([
+      {
+        ts: 500,
         source: "exec",
         severity: "warn",
         message: "exec failed with exit code 2",
         toolName: "exec",
         exitCode: 2,
-      }),
+      },
     ]);
   });
 });

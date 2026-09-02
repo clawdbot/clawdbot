@@ -1,19 +1,26 @@
+// OpenClaw SDK module implements event hub behavior.
 import type { GatewayEvent } from "./types.js";
 
+// Async event hub with bounded replay for SDK event streams.
 type Listener<T> = (event: T) => void;
 
-export type EventHubOptions = {
+/** Replay settings for EventHub streams. */
+type EventHubOptions = {
   replayLimit?: number;
 };
 
-export type EventStreamOptions = {
+/** Per-stream options for including replayed events. */
+type EventStreamOptions = {
   replay?: boolean;
 };
 
+/** Small publish/subscribe hub used by SDK transports and normalized events. */
 export class EventHub<T> {
   private readonly replayLimit: number;
   private readonly replayEvents: T[] = [];
   private closed = false;
+  private closeError: unknown;
+  private hasCloseError = false;
   private readonly listeners = new Set<Listener<T>>();
   private readonly waiters = new Set<() => void>();
 
@@ -37,7 +44,12 @@ export class EventHub<T> {
     }
   }
 
-  close(): void {
+  close(error?: unknown): void {
+    const hasError = arguments.length > 0;
+    if (hasError) {
+      this.closeError = error;
+      this.hasCloseError = true;
+    }
     this.closed = true;
     this.replayEvents.length = 0;
     this.listeners.clear();
@@ -56,20 +68,24 @@ export class EventHub<T> {
       [Symbol.asyncIterator]: (): AsyncIterator<T> => {
         const queue: T[] = options.replay ? this.snapshot(filter) : [];
         let stopped = false;
-        let wake: (() => void) | null = null;
-        const wakePending = () => {
-          const pending = wake;
-          if (!pending) {
-            return;
-          }
-          wake = null;
-          this.waiters.delete(pending);
-          pending();
+        let streamError: unknown;
+        let hasStreamError = false;
+        type PendingRead = {
+          resolve: (result: IteratorResult<T>) => void;
+          reject: (error: unknown) => void;
+          wake: () => void;
         };
-        const listener = (event: T) => {
-          if (!filter || filter(event)) {
-            queue.push(event);
-            wakePending();
+        const pendingReads: PendingRead[] = [];
+        const finishPendingReads = () => {
+          for (const pending of pendingReads.splice(0)) {
+            this.waiters.delete(pending.wake);
+            if (hasStreamError) {
+              pending.reject(streamError);
+            } else if (this.hasCloseError) {
+              pending.reject(this.closeError);
+            } else {
+              pending.resolve({ done: true, value: undefined });
+            }
           }
         };
         const cleanup = () => {
@@ -78,41 +94,66 @@ export class EventHub<T> {
           }
           stopped = true;
           this.listeners.delete(listener);
-          wakePending();
+          finishPendingReads();
+        };
+        const listener = (event: T) => {
+          let matches: boolean;
+          try {
+            matches = !filter || filter(event);
+          } catch (error) {
+            streamError = error;
+            hasStreamError = true;
+            cleanup();
+            return;
+          }
+          if (!matches) {
+            return;
+          }
+          const pending = pendingReads.shift();
+          if (pending) {
+            this.waiters.delete(pending.wake);
+            pending.resolve({ done: false, value: event });
+            return;
+          }
+          queue.push(event);
         };
 
         this.listeners.add(listener);
 
         return {
           next: async (): Promise<IteratorResult<T>> => {
-            while (true) {
-              if (stopped) {
-                break;
+            if (stopped) {
+              if (hasStreamError) {
+                throw streamError;
               }
-              if (queue.length > 0) {
-                return { done: false, value: queue.shift() as T };
+              if (this.hasCloseError) {
+                throw this.closeError;
               }
-              if (this.closed) {
-                break;
-              }
-              await new Promise<void>((resolve) => {
-                const wakeCurrent = () => {
-                  if (wake === wakeCurrent) {
-                    wake = null;
-                  }
-                  this.waiters.delete(wakeCurrent);
-                  resolve();
+              return { done: true, value: undefined };
+            }
+            if (queue.length > 0) {
+              return { done: false, value: queue.shift() as T };
+            }
+            if (!this.closed) {
+              return await new Promise<IteratorResult<T>>((resolve, reject) => {
+                const pending: PendingRead = {
+                  resolve,
+                  reject,
+                  wake: () => cleanup(),
                 };
-                wake = wakeCurrent;
-                this.waiters.add(wakeCurrent);
+                pendingReads.push(pending);
+                this.waiters.add(pending.wake);
               });
             }
             cleanup();
-            return { done: true, value: undefined as never };
+            if (this.hasCloseError) {
+              throw this.closeError;
+            }
+            return { done: true, value: undefined };
           },
           return: async (): Promise<IteratorResult<T>> => {
             cleanup();
-            return { done: true, value: undefined as never };
+            return { done: true, value: undefined };
           },
         };
       },

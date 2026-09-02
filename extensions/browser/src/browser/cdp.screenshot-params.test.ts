@@ -1,3 +1,4 @@
+// Browser tests cover cdp.screenshot params plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { withCdpSocket } from "./cdp.helpers.js";
 import { captureScreenshot } from "./cdp.js";
@@ -9,13 +10,8 @@ const sentMessages = vi.hoisted(() => {
   return msgs;
 });
 
-// Tracks whether emulation has been cleared so post-clear Runtime.evaluate
-// can return different values for the "emulated tab" vs "non-emulated tab" tests.
 const mockState = vi.hoisted(() => ({
-  emulationCleared: false,
-  emulatedTab: true,
-  viewport: { w: 800, h: 600, dpr: 2, sw: 800, sh: 600 } as Record<string, unknown>,
-  naturalViewport: { w: 1920, h: 1080, dpr: 1 },
+  bringToFrontError: undefined as Error | undefined,
 }));
 
 vi.mock("./cdp.helpers.js", () => ({
@@ -27,36 +23,11 @@ vi.mock("./cdp.helpers.js", () => ({
     ) => {
       const send = (method: string, params?: Record<string, unknown>) => {
         sentMessages.push({ method, params });
+        if (method === "Page.bringToFront" && mockState.bringToFrontError) {
+          return Promise.reject(mockState.bringToFrontError);
+        }
         if (method === "Page.captureScreenshot") {
           return Promise.resolve({ data: "AAAA" });
-        }
-        if (method === "Page.getLayoutMetrics") {
-          return Promise.resolve({
-            cssContentSize: { width: 1200, height: 3000 },
-            contentSize: { width: 1200, height: 3000 },
-          });
-        }
-        if (method === "Emulation.clearDeviceMetricsOverride") {
-          mockState.emulationCleared = true;
-          return Promise.resolve({});
-        }
-        if (method === "Emulation.setDeviceMetricsOverride") {
-          mockState.emulationCleared = false;
-          return Promise.resolve({});
-        }
-        if (method === "Runtime.evaluate") {
-          if (mockState.emulationCleared && mockState.emulatedTab) {
-            return Promise.resolve({
-              result: {
-                value: mockState.naturalViewport,
-              },
-            });
-          }
-          return Promise.resolve({
-            result: {
-              value: mockState.viewport,
-            },
-          });
         }
         return Promise.resolve({});
       };
@@ -88,10 +59,7 @@ const localProfile: ResolvedBrowserProfile = {
 
 beforeEach(() => {
   sentMessages.length = 0;
-  mockState.emulationCleared = false;
-  mockState.emulatedTab = true;
-  mockState.viewport = { w: 800, h: 600, dpr: 2, sw: 800, sh: 600 };
-  mockState.naturalViewport = { w: 1920, h: 1080, dpr: 1 };
+  mockState.bringToFrontError = undefined;
 });
 
 function requireSentMessage(method: string) {
@@ -107,17 +75,45 @@ describe("CDP screenshot params", () => {
     await captureScreenshot({ wsUrl: "ws://localhost:9222/devtools/page/X", format: "png" });
 
     const call = requireSentMessage("Page.captureScreenshot");
-    expect(call.params).toMatchObject({
-      format: "png",
-    });
+    expect(call.params?.format).toBe("png");
     expect(call.params).not.toHaveProperty("fromSurface");
     expect(call.params).not.toHaveProperty("captureBeyondViewport");
     expect(call.params).not.toHaveProperty("clip");
+
+    const methods = sentMessages.map((message) => message.method);
+    expect(methods).toContain("Page.bringToFront");
+    expect(methods.indexOf("Page.enable")).toBeLessThan(methods.indexOf("Page.bringToFront"));
+    expect(methods.indexOf("Page.bringToFront")).toBeLessThan(
+      methods.indexOf("Page.captureScreenshot"),
+    );
 
     const emulationCalls = sentMessages.filter(
       (m) => m.method === "Emulation.setDeviceMetricsOverride",
     );
     expect(emulationCalls).toHaveLength(0);
+  });
+
+  it("captures when Page.bringToFront is unsupported", async () => {
+    mockState.bringToFrontError = new Error("unsupported");
+
+    await captureScreenshot({ wsUrl: "ws://localhost:9222/devtools/page/X" });
+
+    requireSentMessage("Page.captureScreenshot");
+  });
+
+  it.each([
+    { name: "headed managed browser", headless: false, activates: false },
+    { name: "headless managed browser", headless: true, activates: true },
+  ])("activates only when needed for a $name", async ({ headless, activates }) => {
+    await captureScreenshot({
+      wsUrl: "ws://localhost:9222/devtools/page/X",
+      format: "png",
+      headless,
+    });
+
+    const methods = sentMessages.map((message) => message.method);
+    expect(methods.includes("Page.bringToFront")).toBe(activates);
+    expect(methods).toContain("Page.captureScreenshot");
   });
 
   it("uses the requested timeout as the raw CDP command timeout", async () => {
@@ -127,77 +123,24 @@ describe("CDP screenshot params", () => {
       timeoutMs: 12_345,
     });
 
-    expect(withCdpSocket).toHaveBeenCalledWith(
-      "ws://localhost:9222/devtools/page/X",
-      expect.any(Function),
-      { commandTimeoutMs: 12_345 },
-    );
+    const [wsUrl, sendCallback, options] =
+      (withCdpSocket as unknown as { mock: { calls: Array<Array<unknown>> } }).mock.calls.at(-1) ??
+      [];
+    expect(wsUrl).toBe("ws://localhost:9222/devtools/page/X");
+    expect(typeof sendCallback).toBe("function");
+    expect(options).toEqual({ commandTimeoutMs: 12_345 });
   });
 
-  it("fullPage on emulated tab: clears, detects drift, re-applies saved emulation", async () => {
-    mockState.emulatedTab = true;
-
+  it("captures the full document without writing or guessing emulation state", async () => {
     await captureScreenshot({
       wsUrl: "ws://localhost:9222/devtools/page/X",
       format: "png",
       fullPage: true,
     });
 
-    const setCalls = sentMessages.filter((m) => m.method === "Emulation.setDeviceMetricsOverride");
-    expect(setCalls.length).toBe(2);
-    const [firstSetCall, secondSetCall] = setCalls;
-    if (!firstSetCall || !secondSetCall) {
-      throw new Error("expected two viewport updates");
-    }
-
-    // Expand: uses saved DPR, mobile defaults to false
-    expect(firstSetCall.params).toMatchObject({
-      width: 1200,
-      height: 3000,
-      deviceScaleFactor: 2,
-      mobile: false,
-    });
-
-    // Clear is called first in the finally block
-    requireSentMessage("Emulation.clearDeviceMetricsOverride");
     const captureCall = requireSentMessage("Page.captureScreenshot");
-    expect(captureCall.params).toMatchObject({ captureBeyondViewport: true });
-
-    // Viewport drifted after clear → re-apply saved dimensions
-    expect(secondSetCall.params).toMatchObject({
-      width: 800,
-      height: 600,
-      deviceScaleFactor: 2,
-      mobile: false,
-      screenWidth: 800,
-      screenHeight: 600,
-    });
-  });
-
-  it("fullPage on non-emulated tab: clears and does NOT re-apply emulation", async () => {
-    mockState.emulatedTab = false;
-    mockState.viewport = { w: 1920, h: 1080, dpr: 1, sw: 1920, sh: 1080 };
-    mockState.naturalViewport = { w: 1920, h: 1080, dpr: 1 };
-
-    await captureScreenshot({
-      wsUrl: "ws://localhost:9222/devtools/page/X",
-      format: "png",
-      fullPage: true,
-    });
-
-    const setCalls = sentMessages.filter((m) => m.method === "Emulation.setDeviceMetricsOverride");
-    // Only the expand call — no re-apply after clear
-    expect(setCalls).toHaveLength(1);
-
-    requireSentMessage("Emulation.clearDeviceMetricsOverride");
-  });
-
-  it("fullPage viewport dimensions never shrink below current innerWidth/Height", async () => {
-    await captureScreenshot({ wsUrl: "ws://localhost:9222/devtools/page/X", fullPage: true });
-
-    const expandCall = requireSentMessage("Emulation.setDeviceMetricsOverride");
-    expect(Number(expandCall.params?.width)).toBeGreaterThanOrEqual(800);
-    expect(Number(expandCall.params?.height)).toBeGreaterThanOrEqual(600);
+    expect(captureCall.params?.captureBeyondViewport).toBe(true);
+    expect(sentMessages.some(({ method }) => method.startsWith("Emulation."))).toBe(false);
   });
 });
 

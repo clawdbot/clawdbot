@@ -1,3 +1,4 @@
+// Talk diagnostics tests cover realtime voice diagnostic event output.
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   onInternalDiagnosticEvent,
@@ -54,19 +55,43 @@ describe("talk diagnostics", () => {
     });
 
     recordTalkDiagnosticEvent(talkEvent);
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
 
     expect(diagnostics).toHaveLength(1);
-    expect(diagnostics[0]).toMatchObject({
+    const [diagnostic] = diagnostics;
+    if (!diagnostic) {
+      throw new Error("Expected talk diagnostic event");
+    }
+    expect({
+      ...diagnostic,
+      event: {
+        ...diagnostic.event,
+        tsType: typeof diagnostic.event.ts,
+        ts: undefined,
+      },
+    }).toEqual({
       trusted: true,
       event: {
         type: "talk.event",
-        talkEventType: "input.audio.delta",
         sessionId: "talk-session",
         turnId: "turn-1",
+        captureId: undefined,
+        seq: 1,
+        ts: undefined,
+        tsType: "number",
+        trace: undefined,
+        talkEventType: "input.audio.delta",
+        mode: "realtime",
+        transport: "gateway-relay",
+        brain: "agent-consult",
+        provider: "openai",
+        final: undefined,
+        durationMs: undefined,
         byteLength: 320,
       },
     });
-    expect(JSON.stringify(diagnostics[0]?.event)).not.toContain("private transcript");
+    expect(JSON.stringify(diagnostic.event)).not.toContain("private transcript");
   });
 });

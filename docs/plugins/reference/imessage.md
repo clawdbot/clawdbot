@@ -12,12 +12,12 @@ Adds the iMessage channel surface for sending and receiving OpenClaw messages.
 ## Distribution
 
 - Package: `@openclaw/imessage`
-- Install route: included in OpenClaw
+- Install route: npm; ClawHub: `clawhub:@openclaw/imessage`
 
 ## Surface
 
-channels: imessage
+channels: `imessage`; skills
 
 ## Related docs
 
-- [imessage](/channels/imessage)
+- [iMessage](/channels/imessage)

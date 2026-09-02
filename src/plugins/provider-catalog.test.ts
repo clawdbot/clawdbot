@@ -1,3 +1,4 @@
+// Covers provider catalog entries derived from plugin metadata.
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { ModelProviderConfig } from "../config/types.models.js";
@@ -130,14 +131,14 @@ describe("buildSingleProviderApiKeyCatalog", () => {
       expected: { provider: "Demo Provider", id: "demo-model" },
     },
     {
-      name: "matches provider templates across canonical provider aliases",
+      name: "does not match provider templates across provider id variants",
       entries: [
         { provider: "z.ai", id: "glm-4.7" },
         { provider: "other", id: "fallback" },
       ],
       providerId: "z-ai",
       templateIds: ["GLM-4.7"],
-      expected: { provider: "z.ai", id: "glm-4.7" },
+      expected: undefined,
     },
   ] as const)("$name", ({ entries, providerId, templateIds, expected }) => {
     expectCatalogTemplateMatch({
@@ -184,9 +185,9 @@ describe("buildSingleProviderApiKeyCatalog", () => {
       }),
     },
     {
-      name: "matches explicit base url config across canonical provider aliases",
+      name: "matches explicit base url config for exact provider ids",
       ctx: createCatalogContext({
-        apiKeys: { zai: "secret-key" },
+        apiKeys: { "z.ai": "secret-key" },
         config: {
           models: {
             providers: {
@@ -203,7 +204,7 @@ describe("buildSingleProviderApiKeyCatalog", () => {
         baseUrl: "https://api.z.ai/custom",
         apiKey: "secret-key",
       }),
-      providerId: "z-ai",
+      providerId: "z.ai",
       buildProvider: () => createProviderConfig({ baseUrl: "https://default.example/zai" }),
     },
   ] as const)(
@@ -225,6 +226,32 @@ describe("buildSingleProviderApiKeyCatalog", () => {
         apiKeys: { "test-provider": "secret-key" },
       }),
       expected: createPairedCatalogProviders("secret-key"),
+    });
+  });
+
+  it("omits unreadable paired provider catalog entries", async () => {
+    const unreadableProvider = new Proxy(createProviderConfig(), {
+      ownKeys() {
+        throw new Error("mockplugin provider config keys failed");
+      },
+    });
+    const result = await buildPairedProviderApiKeyCatalog({
+      ctx: createCatalogContext({
+        apiKeys: { fuzzplugin: "secret-key" },
+      }),
+      providerId: "fuzzplugin",
+      buildProviders: async () =>
+        ({
+          readable: createProviderConfig({ baseUrl: "https://fuzzplugin.test/v1" }),
+          unreadable: unreadableProvider,
+        }) as Record<string, ModelProviderConfig>,
+    });
+
+    expectPairedCatalogProviders(result, {
+      readable: {
+        ...createProviderConfig({ baseUrl: "https://fuzzplugin.test/v1" }),
+        apiKey: "secret-key",
+      },
     });
   });
 });

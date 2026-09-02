@@ -1,4 +1,6 @@
-import { loadBundledPluginPublicArtifactModuleSync } from "./public-surface-loader.js";
+// Extracts web content public artifacts from plugin manifests.
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { loadBundledPluginPublicArtifactModuleFromCandidatesSync } from "./public-surface-loader.js";
 import type {
   PluginWebContentExtractorEntry,
   WebContentExtractorPlugin,
@@ -9,10 +11,7 @@ const WEB_CONTENT_EXTRACTOR_ARTIFACT_CANDIDATES = [
   "web-content-extractor-api.js",
 ] as const;
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
+/** Checks public artifact exports before adding them to runtime extractor registration. */
 function isWebContentExtractorPlugin(value: unknown): value is WebContentExtractorPlugin {
   return (
     isRecord(value) &&
@@ -23,28 +22,7 @@ function isWebContentExtractorPlugin(value: unknown): value is WebContentExtract
   );
 }
 
-function tryLoadBundledPublicArtifactModule(params: {
-  dirName: string;
-}): Record<string, unknown> | null {
-  for (const artifactBasename of WEB_CONTENT_EXTRACTOR_ARTIFACT_CANDIDATES) {
-    try {
-      return loadBundledPluginPublicArtifactModuleSync<Record<string, unknown>>({
-        dirName: params.dirName,
-        artifactBasename,
-      });
-    } catch (error) {
-      if (
-        error instanceof Error &&
-        error.message.startsWith("Unable to resolve bundled plugin public surface ")
-      ) {
-        continue;
-      }
-      throw error;
-    }
-  }
-  return null;
-}
-
+/** Collects zero-arg factory exports in deterministic order for prompt-cache stability. */
 function collectExtractorFactories(mod: Record<string, unknown>): WebContentExtractorPlugin[] {
   const extractors: WebContentExtractorPlugin[] = [];
   for (const [name, exported] of Object.entries(mod).toSorted(([left], [right]) =>
@@ -66,11 +44,15 @@ function collectExtractorFactories(mod: Record<string, unknown>): WebContentExtr
   return extractors;
 }
 
+/** Loads bundled web content extractor entries from public plugin artifacts. */
 export function loadBundledWebContentExtractorEntriesFromDir(params: {
   dirName: string;
   pluginId: string;
 }): PluginWebContentExtractorEntry[] | null {
-  const mod = tryLoadBundledPublicArtifactModule({ dirName: params.dirName });
+  const mod = loadBundledPluginPublicArtifactModuleFromCandidatesSync<Record<string, unknown>>({
+    dirName: params.dirName,
+    artifactCandidates: WEB_CONTENT_EXTRACTOR_ARTIFACT_CANDIDATES,
+  });
   if (!mod) {
     return null;
   }

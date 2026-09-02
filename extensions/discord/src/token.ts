@@ -1,7 +1,11 @@
+// Discord plugin module implements token behavior.
 import type { BaseTokenResolution } from "openclaw/plugin-sdk/channel-contract";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
-import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/routing";
-import { resolveAccountEntry } from "openclaw/plugin-sdk/routing";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import {
+  DEFAULT_ACCOUNT_ID,
+  normalizeAccountId,
+  resolveAccountEntry,
+} from "openclaw/plugin-sdk/routing";
 import {
   normalizeResolvedSecretInputString,
   resolveSecretInputString,
@@ -65,8 +69,7 @@ export function resolveDiscordToken(
   const discordCfg = selectedCfg?.channels?.discord;
   const accountCfg = resolveAccountEntry(discordCfg?.accounts, accountId);
   const hasAccountToken = Boolean(
-    accountCfg &&
-    Object.prototype.hasOwnProperty.call(accountCfg as Record<string, unknown>, "token"),
+    accountCfg && Object.hasOwn(accountCfg as Record<string, unknown>, "token"),
   );
   const accountToken = resolveDiscordTokenValue({
     cfg: selectedCfg,

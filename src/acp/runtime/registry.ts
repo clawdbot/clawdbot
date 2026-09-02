@@ -1,8 +1,10 @@
+/** Process-wide registry for ACP runtime backends contributed by plugins. */
+import type { AcpRuntime } from "@openclaw/acp-core/runtime/types";
+import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
-import { normalizeOptionalLowercaseString } from "../../shared/string-coerce.js";
 import { AcpRuntimeError } from "./errors.js";
-import type { AcpRuntime } from "./types.js";
 
+/** Registered ACP backend with optional health probe used for auto-selection. */
 export type AcpRuntimeBackend = {
   id: string;
   runtime: AcpRuntime;
@@ -19,13 +21,15 @@ function resolveAcpRuntimeRegistryGlobalState(): AcpRuntimeRegistryGlobalState {
   const processStore = process as NodeJS.Process & Record<PropertyKey, unknown>;
   const existing = processStore[ACP_RUNTIME_REGISTRY_STATE_KEY];
   if (existing) {
-    return existing as AcpRuntimeRegistryGlobalState;
+    (globalThis as Record<PropertyKey, unknown>)[ACP_RUNTIME_REGISTRY_STATE_KEY] = existing;
   }
   const created = resolveGlobalSingleton<AcpRuntimeRegistryGlobalState>(
     ACP_RUNTIME_REGISTRY_STATE_KEY,
     () => ({
       backendsById: new Map<string, AcpRuntimeBackend>(),
     }),
+    (state) => state.backendsById.clear(),
+    "plugin-registry",
   );
   // ACP runtime backends are registered from bundled plugin code and read from
   // core/test code. In Vitest and Jiti, those can run in different globalThis
@@ -47,6 +51,7 @@ function isBackendHealthy(backend: AcpRuntimeBackend): boolean {
   }
 }
 
+/** Registers or replaces an ACP runtime backend by normalized id. */
 export function registerAcpRuntimeBackend(backend: AcpRuntimeBackend): void {
   const id = normalizeOptionalLowercaseString(backend.id) || "";
   if (!id) {
@@ -61,6 +66,7 @@ export function registerAcpRuntimeBackend(backend: AcpRuntimeBackend): void {
   });
 }
 
+/** Removes a registered ACP runtime backend by id. */
 export function unregisterAcpRuntimeBackend(id: string): void {
   const normalized = normalizeOptionalLowercaseString(id) || "";
   if (!normalized) {
@@ -69,6 +75,7 @@ export function unregisterAcpRuntimeBackend(id: string): void {
   ACP_BACKENDS_BY_ID.delete(normalized);
 }
 
+/** Resolves a backend by id, or the first healthy backend when no id is supplied. */
 export function getAcpRuntimeBackend(id?: string): AcpRuntimeBackend | null {
   const normalized = normalizeOptionalLowercaseString(id) || "";
   if (normalized) {
@@ -85,6 +92,7 @@ export function getAcpRuntimeBackend(id?: string): AcpRuntimeBackend | null {
   return ACP_BACKENDS_BY_ID.values().next().value ?? null;
 }
 
+/** Resolves a healthy backend or throws a typed ACP runtime error. */
 export function requireAcpRuntimeBackend(id?: string): AcpRuntimeBackend {
   const normalized = normalizeOptionalLowercaseString(id) || "";
   const backend = getAcpRuntimeBackend(normalized || undefined);
@@ -109,7 +117,7 @@ export function requireAcpRuntimeBackend(id?: string): AcpRuntimeBackend {
   return backend;
 }
 
-export const __testing = {
+export const testing = {
   resetAcpRuntimeBackendsForTests() {
     ACP_BACKENDS_BY_ID.clear();
   },

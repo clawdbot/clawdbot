@@ -1,3 +1,4 @@
+// Bundled hook directory helpers locate packaged hook definitions.
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";

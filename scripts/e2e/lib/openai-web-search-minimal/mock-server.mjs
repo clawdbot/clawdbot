@@ -1,26 +1,26 @@
+// Mock server for minimal OpenAI web-search E2E scenarios.
 import fs from "node:fs";
 import http from "node:http";
+import https from "node:https";
+import { readTcpPortEnv } from "../env-limits.mjs";
+import {
+  boundedRequestLogBody,
+  isRequestBodyTooLargeError,
+  readBody,
+  writeRequestLogEntryOrFail,
+  writeJson,
+  writeSse,
+} from "../mock-openai-http.mjs";
 
-const port = Number(process.env.MOCK_PORT);
+const port = readTcpPortEnv("MOCK_PORT");
 const requestLog = process.env.MOCK_REQUEST_LOG;
 const successMarker = process.env.SUCCESS_MARKER;
 const rawSchemaError = process.env.RAW_SCHEMA_ERROR;
+const tlsCertPath = process.env.MOCK_TLS_CERT?.trim();
+const tlsKeyPath = process.env.MOCK_TLS_KEY?.trim();
 
-function readBody(req) {
-  return new Promise((resolve, reject) => {
-    let body = "";
-    req.setEncoding("utf8");
-    req.on("data", (chunk) => {
-      body += chunk;
-    });
-    req.on("end", () => resolve(body));
-    req.on("error", reject);
-  });
-}
-
-function writeJson(res, status, body) {
-  res.writeHead(status, { "content-type": "application/json" });
-  res.end(JSON.stringify(body));
+if (Boolean(tlsCertPath) !== Boolean(tlsKeyPath)) {
+  throw new Error("MOCK_TLS_CERT and MOCK_TLS_KEY must be set together");
 }
 
 function writeOpenAiReject(res) {
@@ -96,63 +96,90 @@ function responseEvents(text) {
   ];
 }
 
-function writeSse(res, events) {
-  res.writeHead(200, {
-    "content-type": "text/event-stream",
-    "cache-control": "no-store",
-    connection: "keep-alive",
-  });
-  for (const event of events) {
-    res.write(`data: ${JSON.stringify(event)}\n\n`);
-  }
-  res.write("data: [DONE]\n\n");
-  res.end();
-}
+const handleRequest = (req, res) => {
+  void (async () => {
+    const url = new URL(req.url ?? "/", "https://api.openai.com");
+    if (req.method === "GET" && url.pathname === "/health") {
+      writeJson(res, 200, { ok: true });
+      return;
+    }
+    if (req.method === "GET" && url.pathname === "/v1/models") {
+      writeJson(res, 200, {
+        object: "list",
+        data: [{ id: "gpt-5", object: "model", owned_by: "openclaw-e2e" }],
+      });
+      return;
+    }
 
-const server = http.createServer(async (req, res) => {
-  const url = new URL(req.url ?? "/", "http://127.0.0.1");
-  if (req.method === "GET" && url.pathname === "/health") {
-    writeJson(res, 200, { ok: true });
-    return;
-  }
-  if (req.method === "GET" && url.pathname === "/v1/models") {
-    writeJson(res, 200, {
-      object: "list",
-      data: [{ id: "gpt-5", object: "model", owned_by: "openclaw-e2e" }],
+    let bodyText;
+    try {
+      bodyText = await readBody(req);
+    } catch (error) {
+      if (isRequestBodyTooLargeError(error)) {
+        writeJson(res, 413, { error: { message: error.message } });
+        return;
+      }
+      throw error;
+    }
+    let body;
+    try {
+      body = bodyText ? JSON.parse(bodyText) : {};
+    } catch {
+      body = {};
+    }
+    if (
+      writeRequestLogEntryOrFail(res, {
+        requestLog,
+        required: true,
+        label: "mock-openai-web-search",
+        entry: {
+          method: req.method,
+          path: url.pathname,
+          body: boundedRequestLogBody(body, bodyText),
+        },
+      })
+    ) {
+      return;
+    }
+
+    if (req.method === "POST" && url.pathname === "/v1/responses") {
+      if (bodyContainsForceReject(body)) {
+        writeOpenAiReject(res);
+        return;
+      }
+      if (body?.reasoning?.effort === "minimal" && hasWebSearchTool(body.tools)) {
+        writeOpenAiReject(res);
+        return;
+      }
+      writeSse(res, responseEvents(successMarker));
+      return;
+    }
+
+    writeJson(res, 404, {
+      error: { message: `unhandled mock route: ${req.method} ${url.pathname}` },
     });
-    return;
-  }
-
-  const bodyText = await readBody(req);
-  let body = {};
-  try {
-    body = bodyText ? JSON.parse(bodyText) : {};
-  } catch {
-    body = {};
-  }
-  fs.appendFileSync(
-    requestLog,
-    `${JSON.stringify({ method: req.method, path: url.pathname, body })}\n`,
-  );
-
-  if (req.method === "POST" && url.pathname === "/v1/responses") {
-    if (bodyContainsForceReject(body)) {
-      writeOpenAiReject(res);
+  })().catch((/** @type {unknown} */ error) => {
+    const message = error instanceof Error ? error.message : String(error);
+    console.error(`mock-openai-web-search request handler failed: ${message}`);
+    if (!res.headersSent) {
+      writeJson(res, 500, { error: { message: `mock OpenAI handler failed: ${message}` } });
       return;
     }
-    if (body?.reasoning?.effort === "minimal" && hasWebSearchTool(body.tools)) {
-      writeOpenAiReject(res);
-      return;
-    }
-    writeSse(res, responseEvents(successMarker));
-    return;
-  }
-
-  writeJson(res, 404, {
-    error: { message: `unhandled mock route: ${req.method} ${url.pathname}` },
+    res.destroy(error instanceof Error ? error : new Error(message));
   });
-});
+};
+
+const server =
+  tlsCertPath && tlsKeyPath
+    ? https.createServer(
+        {
+          cert: fs.readFileSync(tlsCertPath),
+          key: fs.readFileSync(tlsKeyPath),
+        },
+        handleRequest,
+      )
+    : http.createServer(handleRequest);
 
 server.listen(port, "127.0.0.1", () => {
-  console.log(`mock-openai listening on ${port}`);
+  console.log(`mock-openai listening on ${port} (${tlsCertPath ? "HTTPS" : "HTTP"})`);
 });

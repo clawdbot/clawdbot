@@ -1,3 +1,5 @@
+// Ts Topology tests cover ts topology script behavior.
+import { spawnSync } from "node:child_process";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { analyzeTopology, filterRecordsForReport } from "../../scripts/lib/ts-topology/analyze.js";
@@ -34,42 +36,116 @@ function deriveReportEnvelope(report: Parameters<typeof filterRecordsForReport>[
 const singleOwnerEnvelope = deriveReportEnvelope("single-owner-shared");
 const unusedEnvelope = deriveReportEnvelope("unused-public-surface");
 
-describe("ts-topology", () => {
-  it("collapses canonical symbols exported by multiple public subpaths", () => {
-    const sharedThing = publicSurfaceEnvelope.records.find((record) =>
-      record.exportNames.includes("sharedThing"),
-    );
+function requireRecordByExport(exportName: string) {
+  const record = publicSurfaceEnvelope.records.find((entry) =>
+    entry.exportNames.includes(exportName),
+  );
+  if (!record) {
+    throw new Error(`Expected topology record for ${exportName}`);
+  }
+  return record;
+}
 
-    expect(sharedThing).toMatchObject({
-      declarationPath: "src/lib/shared.ts",
-      declarationLine: 1,
-      productionExtensions: ["alpha", "beta"],
-      productionPackages: ["src"],
-      productionOwners: ["extension:alpha", "extension:beta", "src"],
+describe("ts-topology", () => {
+  it("runs the CLI entrypoint when invoked from a filesystem path", () => {
+    const scriptPath = path.resolve("scripts/ts-topology.ts");
+    const result = spawnSync(process.execPath, ["--import", "tsx", scriptPath, "--help"], {
+      encoding: "utf8",
     });
-    expect(sharedThing?.publicSpecifiers).toEqual(["fixture-sdk", "fixture-sdk/extra"]);
+
+    expect(result.status).toBe(1);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toContain("Usage: ts-topology");
   });
 
-  it("counts renamed imports, namespace imports, type-only imports, and test-only consumers", () => {
-    const aliasedThing = publicSurfaceEnvelope.records.find((record) =>
-      record.exportNames.includes("aliasedThing"),
-    );
-    const sharedType = publicSurfaceEnvelope.records.find((record) =>
-      record.exportNames.includes("SharedType"),
-    );
-    const testOnlyThing = publicSurfaceEnvelope.records.find((record) =>
-      record.exportNames.includes("testOnlyThing"),
-    );
+  it("collapses canonical symbols exported by multiple public subpaths", () => {
+    const sharedThing = requireRecordByExport("sharedThing");
 
-    expect(aliasedThing?.productionRefCount).toBe(1);
-    expect(sharedType).toMatchObject({
-      isTypeOnlyCandidate: true,
+    expect(sharedThing).toEqual({
+      aliasName: undefined,
+      canonicalKey: "src/lib/shared.ts:2:sharedThing",
+      declarationPath: "src/lib/shared.ts",
+      declarationLine: 2,
+      entrypoints: ["extra", "index"],
+      exportNames: ["aliasedSharedThing", "sharedThing"],
+      internalConsumers: [],
+      internalImportCount: 0,
+      internalRefCount: 0,
+      isTypeOnlyCandidate: false,
+      kind: "function",
+      moveBackToOwnerScore: 0,
+      productionConsumers: [
+        "extensions/alpha/src/use.ts",
+        "extensions/beta/src/use.ts",
+        "src/internal/use.ts",
+      ],
       productionExtensions: ["alpha", "beta"],
-      productionRefCount: 2,
+      productionImportCount: 4,
+      productionPackages: ["src"],
+      productionRefCount: 4,
+      productionOwners: ["extension:alpha", "extension:beta", "src"],
+      publicSpecifiers: ["fixture-sdk", "fixture-sdk/extra"],
+      sharednessScore: 90,
+      testConsumers: [],
+      testImportCount: 0,
+      testRefCount: 0,
     });
-    expect(testOnlyThing).toMatchObject({
+  });
+
+  it("counts renamed imports, namespace imports, and test-only consumers without runtime-counting type-only imports", () => {
+    const aliasedThing = requireRecordByExport("aliasedThing");
+    const sharedType = requireRecordByExport("SharedType");
+    const testOnlyThing = requireRecordByExport("testOnlyThing");
+
+    expect(aliasedThing.productionRefCount).toBe(1);
+    expect(sharedType).toEqual({
+      aliasName: undefined,
+      canonicalKey: "src/lib/shared.ts:22:SharedType",
+      declarationLine: 22,
+      declarationPath: "src/lib/shared.ts",
+      entrypoints: ["index"],
+      exportNames: ["SharedType"],
+      internalConsumers: [],
+      internalImportCount: 0,
+      internalRefCount: 0,
+      isTypeOnlyCandidate: true,
+      kind: "type",
+      moveBackToOwnerScore: 20,
+      productionConsumers: [],
+      productionExtensions: [],
+      productionImportCount: 0,
+      productionOwners: [],
+      productionPackages: [],
       productionRefCount: 0,
+      publicSpecifiers: ["fixture-sdk"],
+      sharednessScore: 15,
+      testConsumers: [],
+      testImportCount: 0,
+      testRefCount: 0,
+    });
+    expect(testOnlyThing).toEqual({
+      aliasName: undefined,
+      canonicalKey: "src/lib/shared.ts:14:testOnlyThing",
+      declarationLine: 14,
+      declarationPath: "src/lib/shared.ts",
+      entrypoints: ["index"],
+      exportNames: ["testOnlyThing"],
+      internalConsumers: [],
+      internalImportCount: 0,
+      internalRefCount: 0,
+      isTypeOnlyCandidate: false,
+      kind: "function",
+      moveBackToOwnerScore: 30,
+      productionConsumers: [],
+      productionExtensions: [],
+      productionImportCount: 0,
+      productionOwners: [],
+      productionPackages: [],
+      productionRefCount: 0,
+      publicSpecifiers: ["fixture-sdk"],
+      sharednessScore: 0,
       testRefCount: 1,
+      testImportCount: 1,
       testConsumers: ["tests/public.test.ts"],
     });
   });
@@ -81,23 +157,28 @@ describe("ts-topology", () => {
     expect(singleOwnerEnvelope.records.map((record) => record.exportNames[0])).not.toContain(
       "sharedThing",
     );
-    expect(unusedEnvelope.records.map((record) => record.exportNames[0])).toEqual(["unusedThing"]);
+    expect(unusedEnvelope.records.map((record) => record.exportNames[0])).toEqual([
+      "SharedType",
+      "unusedThing",
+    ]);
   });
 
   it("renders stable text summaries for the public-surface report", () => {
-    expect(renderTextReport({ ...publicSurfaceEnvelope, limit: 3 }, 3)).toMatchInlineSnapshot(`
+    expect(
+      renderTextReport({ ...publicSurfaceEnvelope, limit: 3 } as typeof publicSurfaceEnvelope, 3),
+    ).toMatchInlineSnapshot(`
       "Scope: custom
       Public exports analyzed: 6
-      Production-used exports: 4
+      Production-used exports: 3
       Single-owner shared exports: 2
-      Unused public exports: 1
+      Unused public exports: 2
       
       Top 2 candidate-to-move exports:
-      - fixture-sdk:aliasedThing -> src/lib/shared.ts:9 (prodRefs=1, owners=extension:alpha, sharedness=35, move=85)
-      - fixture-sdk:singleOwnerHelper -> src/lib/shared.ts:5 (prodRefs=1, owners=extension:alpha, sharedness=35, move=85)
+      - fixture-sdk:aliasedThing -> src/lib/shared.ts:10 (prodRefs=1, owners=extension:alpha, sharedness=35, move=85)
+      - fixture-sdk:singleOwnerHelper -> src/lib/shared.ts:6 (prodRefs=1, owners=extension:alpha, sharedness=35, move=85)
       
       Top 1 duplicated public exports:
-      - fixture-sdk:sharedThing via fixture-sdk, fixture-sdk/extra (src/lib/shared.ts:1)"
+      - fixture-sdk:sharedThing via fixture-sdk, fixture-sdk/extra (src/lib/shared.ts:2)"
     `);
   });
 
@@ -124,11 +205,32 @@ describe("ts-topology", () => {
 
     expect(renderTextReport(deriveReportEnvelope("consumer-topology"), 2)).toMatchInlineSnapshot(`
       "Scope: custom
-      Records with consumers: 5
+      Records with consumers: 4
       
       Top 2 consumer-topology records:
       - fixture-sdk:sharedThing prod=3 test=0 internal=0
-      - fixture-sdk:SharedType prod=2 test=0 internal=0"
+      - fixture-sdk:aliasedThing prod=1 test=0 internal=0"
     `);
+  });
+
+  it("rejects malformed CLI limits", async () => {
+    const captured = createCapturedIo();
+    const exitCode = await main(["--limit=abc"], captured.io);
+
+    expect(exitCode).toBe(1);
+    expect(captured.readStderr()).toContain("--limit must be a positive integer");
+    expect(captured.readStdout()).toBe("");
+  });
+
+  it("throws a clear error for invalid text report names", () => {
+    expect(() =>
+      renderTextReport(
+        {
+          ...publicSurfaceEnvelope,
+          report: "missing-report" as typeof publicSurfaceEnvelope.report,
+        },
+        2,
+      ),
+    ).toThrow("Unsupported topology report: missing-report");
   });
 });

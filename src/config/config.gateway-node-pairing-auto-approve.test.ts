@@ -1,8 +1,9 @@
+// Covers gateway node-pairing auto-approve config parsing.
 import { describe, expect, it } from "vitest";
 import { validateConfigObject } from "./config.js";
 
 describe("gateway node pairing auto-approve config", () => {
-  it("keeps CIDR auto-approval disabled when unset", () => {
+  it("keeps local auto-approval implicit and CIDR auto-approval disabled when unset", () => {
     const result = validateConfigObject({
       gateway: {
         nodes: {},
@@ -11,7 +12,40 @@ describe("gateway node pairing auto-approve config", () => {
 
     expect(result.ok).toBe(true);
     if (result.ok) {
+      expect(result.config.gateway?.nodes?.pairing?.autoApproveLocal).toBeUndefined();
       expect(result.config.gateway?.nodes?.pairing?.autoApproveCidrs).toBeUndefined();
+    }
+  });
+
+  it.each([true, false])("accepts autoApproveLocal=%s", (autoApproveLocal) => {
+    const result = validateConfigObject({
+      gateway: {
+        nodes: {
+          pairing: { autoApproveLocal },
+        },
+      },
+    });
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.config.gateway?.nodes?.pairing?.autoApproveLocal).toBe(autoApproveLocal);
+    }
+  });
+
+  it("rejects non-boolean autoApproveLocal shape", () => {
+    const result = validateConfigObject({
+      gateway: {
+        nodes: {
+          pairing: { autoApproveLocal: "false" },
+        },
+      },
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(
+        result.issues.some((issue) => issue.path === "gateway.nodes.pairing.autoApproveLocal"),
+      ).toBe(true);
     }
   });
 

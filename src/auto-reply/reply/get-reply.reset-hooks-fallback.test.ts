@@ -1,12 +1,17 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+// Tests reset hook fallback behavior inside the get-reply directive pipeline.
+import { expectDefined } from "@openclaw/normalization-core";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   buildNativeResetContext,
   createGetReplyContinueDirectivesResult,
   createGetReplySessionState,
+  registerGetReplyBaselineBypass,
   registerGetReplyRuntimeOverrides,
 } from "./get-reply.test-fixtures.js";
 import { loadGetReplyModuleForTest } from "./get-reply.test-loader.js";
 import "./get-reply.test-runtime-mocks.js";
+
+registerGetReplyBaselineBypass();
 
 const mocks = vi.hoisted(() => ({
   resolveReplyDirectives: vi.fn(),
@@ -42,8 +47,11 @@ function createContinueDirectivesResult(resetHookTriggered: boolean) {
 }
 
 describe("getReplyFromConfig reset-hook fallback", () => {
-  beforeEach(async () => {
+  beforeAll(async () => {
     await loadGetReplyRuntimeForTest();
+  });
+
+  beforeEach(() => {
     vi.stubEnv("OPENCLAW_ALLOW_SLOW_REPLY_TESTS", "1");
     mocks.resolveReplyDirectives.mockReset();
     mocks.handleInlineActions.mockReset();
@@ -71,16 +79,28 @@ describe("getReplyFromConfig reset-hook fallback", () => {
 
   it("emits reset hooks when inline actions return early without marking resetHookTriggered", async () => {
     mocks.handleInlineActions.mockResolvedValue({ kind: "reply", reply: undefined });
+    const onObservedReplyDelivery = vi.fn();
 
-    await getReplyFromConfig(buildNativeResetContext(), undefined, {});
+    await getReplyFromConfig(buildNativeResetContext(), { onObservedReplyDelivery }, {});
 
     expect(mocks.emitResetCommandHooks).toHaveBeenCalledTimes(1);
-    expect(mocks.emitResetCommandHooks).toHaveBeenCalledWith(
-      expect.objectContaining({
-        action: "new",
-        sessionKey: "agent:main:telegram:direct:123",
-      }),
+    const [hookParams] = expectDefined(
+      (
+        mocks.emitResetCommandHooks.mock.calls as unknown as Array<
+          [
+            {
+              action?: string;
+              onObservedReplyDelivery?: () => Promise<void> | void;
+              sessionKey?: string;
+            },
+          ]
+        >
+      )[0],
+      "reset hook params",
     );
+    expect(hookParams.action).toBe("new");
+    expect(hookParams.onObservedReplyDelivery).toBe(onObservedReplyDelivery);
+    expect(hookParams.sessionKey).toBe("agent:main:telegram:direct:123");
   });
 
   it("does not emit fallback hooks when resetHookTriggered is already set", async () => {

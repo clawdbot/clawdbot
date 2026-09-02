@@ -1,3 +1,4 @@
+// Hook public types describe install specs and runtime hook metadata.
 export type HookInstallSpec = {
   id?: string;
   kind: "bundled" | "npm" | "git";

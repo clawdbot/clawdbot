@@ -1,20 +1,27 @@
-import fs from "node:fs/promises";
+// File Transfer plugin module implements dir list behavior.
 import path from "node:path";
-import {
-  FsSafeError,
-  resolveAbsolutePathForRead,
-  root,
-} from "openclaw/plugin-sdk/security-runtime";
+import { parseStrictNonNegativeInteger } from "openclaw/plugin-sdk/number-runtime";
 import { mimeFromExtension } from "../shared/mime.js";
+import type { PathBinding } from "../shared/path-binding.js";
+import { listCanonicalDirectory } from "./dir-list-worker.js";
+import {
+  classifyFsSafeReadError,
+  readAbsolutePath,
+  resolveBoundReadDirectory,
+  statRequiredDirectory,
+} from "./path-errors.js";
 
-export const DIR_LIST_DEFAULT_MAX_ENTRIES = 200;
-export const DIR_LIST_HARD_MAX_ENTRIES = 5000;
+const DIR_LIST_DEFAULT_MAX_ENTRIES = 200;
+const DIR_LIST_HARD_MAX_ENTRIES = 5000;
 
 type DirListParams = {
   path?: unknown;
   pageToken?: unknown;
   maxEntries?: unknown;
   followSymlinks?: unknown;
+  preflightOnly?: unknown;
+  expectedCanonicalPath?: unknown;
+  expectedBinding?: unknown;
 };
 
 type DirListEntry = {
@@ -32,6 +39,8 @@ type DirListOk = {
   entries: DirListEntry[];
   nextPageToken?: string;
   truncated: boolean;
+  preflight?: true;
+  binding: PathBinding;
 };
 
 type DirListErrCode =
@@ -40,6 +49,7 @@ type DirListErrCode =
   | "PERMISSION_DENIED"
   | "IS_FILE"
   | "SYMLINK_REDIRECT"
+  | "CANONICAL_PATH_CHANGED"
   | "READ_ERROR";
 
 type DirListErr = {
@@ -58,17 +68,17 @@ function clampMaxEntries(input: unknown): number {
   return Math.min(Math.floor(input), DIR_LIST_HARD_MAX_ENTRIES);
 }
 
+function parsePageOffset(input: unknown): number {
+  if (typeof input !== "string") {
+    return 0;
+  }
+  return parseStrictNonNegativeInteger(input) ?? 0;
+}
+
 function classifyFsError(err: unknown): DirListErrCode {
-  if (err instanceof FsSafeError) {
-    if (err.code === "not-found") {
-      return "NOT_FOUND";
-    }
-    if (err.code === "symlink") {
-      return "SYMLINK_REDIRECT";
-    }
-    if (err.code === "invalid-path") {
-      return "INVALID_PATH";
-    }
+  const safeCode = classifyFsSafeReadError(err);
+  if (safeCode) {
+    return safeCode;
   }
   const code = (err as { code?: string } | null)?.code;
   if (code === "ENOENT") {
@@ -81,90 +91,69 @@ function classifyFsError(err: unknown): DirListErrCode {
 }
 
 export async function handleDirList(params: DirListParams): Promise<DirListResult> {
-  const requestedPath = params.path;
-  if (typeof requestedPath !== "string" || requestedPath.length === 0) {
-    return { ok: false, code: "INVALID_PATH", message: "path required" };
-  }
-  if (requestedPath.includes("\0")) {
-    return { ok: false, code: "INVALID_PATH", message: "path contains NUL byte" };
-  }
-  if (!path.isAbsolute(requestedPath)) {
-    return { ok: false, code: "INVALID_PATH", message: "path must be absolute" };
+  const requestedPath = readAbsolutePath(params.path);
+  if (typeof requestedPath !== "string") {
+    return requestedPath;
   }
 
   const maxEntries = clampMaxEntries(params.maxEntries);
-  const offset =
-    typeof params.pageToken === "string" && params.pageToken.length > 0
-      ? Math.max(0, Number.parseInt(params.pageToken, 10) || 0)
-      : 0;
+  const offset = parsePageOffset(params.pageToken);
 
   const followSymlinks = params.followSymlinks === true;
 
-  let canonical: string;
-  try {
-    canonical = (
-      await resolveAbsolutePathForRead(requestedPath, {
-        symlinks: followSymlinks ? "follow" : "reject",
-      })
-    ).canonicalPath;
-  } catch (err) {
-    const code = classifyFsError(err);
-    const canonicalPath =
-      err instanceof FsSafeError &&
-      err.cause &&
-      typeof err.cause === "object" &&
-      "canonicalPath" in err.cause &&
-      typeof err.cause.canonicalPath === "string"
-        ? err.cause.canonicalPath
-        : undefined;
+  const directory = await resolveBoundReadDirectory({
+    requestedPath,
+    followSymlinks,
+    classifyError: classifyFsError,
+    notFoundMessage: "path not found",
+    expectedCanonicalPath: params.expectedCanonicalPath,
+    expectedBinding: params.expectedBinding,
+  });
+  if (!directory.ok) {
+    return directory;
+  }
+  const { canonicalPath: canonical, identity } = directory;
+  if (params.preflightOnly === true) {
     return {
-      ok: false,
-      code,
-      message:
-        code === "NOT_FOUND"
-          ? "path not found"
-          : code === "SYMLINK_REDIRECT"
-            ? "path traverses a symlink; refusing because followSymlinks=false (set plugins.entries.file-transfer.config.nodes.<node>.followSymlinks=true to allow, or update allowReadPaths to the canonical path)"
-            : `realpath failed: ${String(err)}`,
-      ...(canonicalPath ? { canonicalPath } : {}),
+      ok: true,
+      path: canonical,
+      entries: [],
+      truncated: false,
+      preflight: true,
+      binding: { kind: "existing", ...identity },
     };
   }
 
-  let stats: Awaited<ReturnType<typeof fs.stat>>;
-  try {
-    stats = await fs.stat(canonical);
-  } catch (err) {
-    const code = classifyFsError(err);
-    return { ok: false, code, message: `stat failed: ${String(err)}`, canonicalPath: canonical };
-  }
-
-  if (!stats.isDirectory()) {
+  const listing = await listCanonicalDirectory({
+    directoryPath: canonical,
+    expectedCanonicalPath: canonical,
+    expectedDevice: identity.device,
+    expectedInode: identity.inode,
+    maxEntries,
+    offset,
+  });
+  if (!listing.ok) {
+    if (listing.code === "CANONICAL_PATH_CHANGED") {
+      return {
+        ok: false,
+        code: "CANONICAL_PATH_CHANGED",
+        message: "canonical path differs from the authorized target",
+        canonicalPath: canonical,
+      };
+    }
+    const currentDirectory = await statRequiredDirectory(canonical, classifyFsError);
+    if (!currentDirectory.ok) {
+      return currentDirectory;
+    }
     return {
       ok: false,
-      code: "IS_FILE",
-      message: "path is not a directory",
+      code: "READ_ERROR",
+      message: "list failed",
       canonicalPath: canonical,
     };
   }
-
-  let listedEntries: { name: string; isDirectory: boolean; size: number; mtimeMs: number }[];
-  try {
-    const dirRoot = await root(canonical);
-    listedEntries = await dirRoot.list(".", { withFileTypes: true });
-  } catch (err) {
-    const code = classifyFsError(err);
-    return {
-      ok: false,
-      code,
-      message: `list failed: ${String(err)}`,
-      canonicalPath: canonical,
-    };
-  }
-
-  listedEntries.sort((a, b) => a.name.localeCompare(b.name));
-
-  const total = listedEntries.length;
-  const page = listedEntries.slice(offset, offset + maxEntries);
+  const total = listing.total;
+  const page = listing.entries;
   const truncated = offset + maxEntries < total;
   const nextPageToken = truncated ? String(offset + maxEntries) : undefined;
 
@@ -189,5 +178,6 @@ export async function handleDirList(params: DirListParams): Promise<DirListResul
     entries,
     nextPageToken,
     truncated,
+    binding: { kind: "existing", ...identity },
   };
 }

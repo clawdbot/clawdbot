@@ -1,3 +1,4 @@
+/** Lazy runtime barrel for plugin installation helpers used by install flows. */
 import { resolveArchiveKind } from "../infra/archive.js";
 import { pathExists, root } from "../infra/fs-safe.js";
 import { resolveExistingInstallPath, withExtractedArchiveRoot } from "../infra/install-flow.js";
@@ -37,8 +38,10 @@ import {
 import { checkMinHostVersion } from "./min-host-version.js";
 import { isPathInside } from "./path-safety.js";
 
+/** npm install resolution metadata re-exported for lazy plugin install callers. */
 export type { NpmIntegrityDrift, NpmSpecResolution };
 
+/** Lazy runtime barrel for plugin install helpers used outside the main install module. */
 export {
   checkMinHostVersion,
   root,

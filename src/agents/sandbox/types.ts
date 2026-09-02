@@ -1,3 +1,9 @@
+import type { SkillEligibilityContext, SkillUsagePath } from "../../skills/types.js";
+/**
+ * Sandbox runtime configuration and context types.
+ *
+ * Shared by config resolution, backend creation, tool policy checks, and runtime prompt/tool wiring.
+ */
 import type { SandboxBackendHandle, SandboxBackendId } from "./backend-handle.types.js";
 import type { SandboxFsBridge } from "./fs-bridge.types.js";
 import type { SandboxDockerConfig } from "./types.docker.js";
@@ -13,7 +19,7 @@ export type SandboxToolPolicySource = {
   source: "agent" | "global" | "default";
   /**
    * Config key path hint for humans.
-   * (Arrays use `agents.list[].…` form.)
+   * (Keyed agent entries use `agents.entries.*.…` form.)
    */
   key: string;
 };
@@ -29,6 +35,11 @@ export type SandboxToolPolicyResolved = {
 
 export type SandboxWorkspaceAccess = "none" | "ro" | "rw";
 
+/** Prepared resource ownership; only proven profiles retain cross-session workspaces. */
+export type SandboxIsolationSubject =
+  | { kind: "profile"; profileId: string }
+  | { kind: "session"; sessionKey: string };
+
 export type SandboxBrowserConfig = {
   enabled: boolean;
   image: string;
@@ -39,7 +50,7 @@ export type SandboxBrowserConfig = {
   vncPort: number;
   noVncPort: number;
   headless: boolean;
-  enableNoVnc: boolean;
+  noVncEnabled: boolean;
   allowHostControl: boolean;
   autoStart: boolean;
   autoStartTimeoutMs: number;
@@ -73,6 +84,8 @@ export type SandboxConfig = {
   scope: SandboxScope;
   workspaceAccess: SandboxWorkspaceAccess;
   workspaceRoot: string;
+  // Podman must omit only the inherited bare /run tmpfs default; explicit /run is rejected.
+  dockerTmpfsSource: "default" | "configured";
   docker: SandboxDockerConfig;
   ssh: SandboxSshConfig;
   browser: SandboxBrowserConfig;
@@ -88,10 +101,16 @@ export type SandboxBrowserContext = {
 
 export type SandboxContext = {
   enabled: boolean;
+  /** Immutable creator policy: this session may never escape to a host execution target. */
+  required?: true;
   backendId: SandboxBackendId;
   sessionKey: string;
   workspaceDir: string;
   agentWorkspaceDir: string;
+  skillsWorkspaceDir?: string;
+  skillsEligibility?: SkillEligibilityContext;
+  skillUsagePaths?: SkillUsagePath[];
+  readOnlyResourceMounts?: Array<{ hostPath: string; containerPath: string }>;
   workspaceAccess: SandboxWorkspaceAccess;
   runtimeId: string;
   runtimeLabel: string;
@@ -107,5 +126,10 @@ export type SandboxContext = {
 
 export type SandboxWorkspaceInfo = {
   workspaceDir: string;
-  containerWorkdir: string;
+  containerWorkdir?: string;
+  skillsWorkspaceDir?: string;
+  skillsEligibility?: SkillEligibilityContext;
+  skillUsagePaths?: SkillUsagePath[];
+  readOnlyResourceMounts?: Array<{ hostPath: string; containerPath: string }>;
+  workspaceAccess?: SandboxWorkspaceAccess;
 };

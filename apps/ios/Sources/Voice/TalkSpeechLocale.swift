@@ -1,3 +1,4 @@
+import AVFoundation
 import Foundation
 import OpenClawKit
 import Speech
@@ -45,6 +46,23 @@ enum TalkSpeechLocale {
             supportedLocaleIDs: supportedLocaleIDs)
     }
 
+    static func resolvedSynthesisLocaleID(
+        directiveLanguage: String?,
+        localSelection: String?,
+        gatewaySelection: String?,
+        isVoiceAvailable: (String) -> Bool = TalkSpeechLocale.isSystemVoiceAvailable) -> String?
+    {
+        // A missing higher-priority voice must not mask a later configured voice.
+        // Return nil only after every candidate fails so synthesis uses the device default.
+        [directiveLanguage, localSelection, gatewaySelection]
+            .compactMap { TalkConfigParsing.normalizedExplicitSpeechLocaleID($0) }
+            .first(where: isVoiceAvailable)
+    }
+
+    static func isSystemVoiceAvailable(_ localeID: String) -> Bool {
+        AVSpeechSynthesisVoice(language: localeID) != nil
+    }
+
     static func makeRecognizer(
         localSelection: String?,
         gatewaySelection: String?,
@@ -68,14 +86,6 @@ enum TalkSpeechLocale {
 
         let recognizer = SFSpeechRecognizer()
         return (recognizer, recognizer?.locale.identifier)
-    }
-
-    static func normalizedExplicitLocaleID(_ raw: String?) -> String? {
-        TalkConfigParsing.normalizedExplicitSpeechLocaleID(raw, automaticID: self.automaticID)
-    }
-
-    private static func normalizedLocaleID(_ raw: String?) -> String? {
-        TalkConfigParsing.normalizedSpeechLocaleID(raw)
     }
 
     private static func canonicalID(_ raw: String) -> String {

@@ -1,3 +1,4 @@
+// Session level override helpers normalize per-session logging and behavior levels.
 import {
   normalizeTraceLevel,
   normalizeVerboseLevel,
@@ -8,6 +9,8 @@ import type { SessionEntry } from "../config/sessions.js";
 
 const INVALID_VERBOSE_LEVEL_ERROR = 'invalid verboseLevel (use "on"|"off"|"full")';
 
+// Session-level override parsers use tri-state results: undefined means no
+// change, null clears the saved override, and a level writes the override.
 export function parseVerboseOverride(
   raw: unknown,
 ): { ok: true; value: VerboseLevel | null | undefined } | { ok: false; error: string } {
@@ -27,6 +30,8 @@ export function parseVerboseOverride(
   return { ok: true, value: normalized };
 }
 
+// Mutates a persisted session entry after parsing. Callers keep parse/apply
+// separate so invalid user input can be reported before touching the store.
 export function applyVerboseOverride(entry: SessionEntry, level: VerboseLevel | null | undefined) {
   if (level === undefined) {
     return;
@@ -57,6 +62,7 @@ export function parseTraceOverride(
   return { ok: true, value: normalized };
 }
 
+// Mutates trace override with the same tri-state contract as verbose level.
 export function applyTraceOverride(entry: SessionEntry, level: TraceLevel | null | undefined) {
   if (level === undefined) {
     return;

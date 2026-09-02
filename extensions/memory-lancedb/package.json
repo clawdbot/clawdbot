@@ -1,20 +1,29 @@
 {
   "name": "@openclaw/memory-lancedb",
-  "version": "2026.5.6",
-  "description": "OpenClaw LanceDB-backed long-term memory plugin with auto-recall/capture",
+  "version": "2026.8.1",
+  "description": "OpenClaw LanceDB-backed long-term memory plugin with auto-recall, auto-capture, and vector search.",
   "repository": {
     "type": "git",
     "url": "https://github.com/openclaw/openclaw"
   },
   "type": "module",
   "dependencies": {
-    "@lancedb/lancedb": "^0.27.2",
     "apache-arrow": "18.1.0",
-    "openai": "^6.36.0",
-    "typebox": "1.1.37"
+    "openai": "7.5.0",
+    "typebox": "1.3.17"
   },
   "devDependencies": {
+    "@lancedb/lancedb": "0.37.1",
     "@openclaw/plugin-sdk": "workspace:*"
+  },
+  "optionalDependencies": {
+    "@lancedb/lancedb-darwin-arm64": "0.37.1",
+    "@lancedb/lancedb-linux-arm64-gnu": "0.37.1",
+    "@lancedb/lancedb-linux-arm64-musl": "0.37.1",
+    "@lancedb/lancedb-linux-x64-gnu": "0.37.1",
+    "@lancedb/lancedb-linux-x64-musl": "0.37.1",
+    "@lancedb/lancedb-win32-arm64-msvc": "0.37.1",
+    "@lancedb/lancedb-win32-x64-msvc": "0.37.1"
   },
   "openclaw": {
     "extensions": [
@@ -23,15 +32,16 @@
     "install": {
       "npmSpec": "@openclaw/memory-lancedb",
       "defaultChoice": "npm",
-      "minHostVersion": ">=2026.4.10"
+      "minHostVersion": ">=2026.5.31"
     },
     "compat": {
-      "pluginApi": ">=2026.5.6"
+      "pluginApi": ">=2026.8.1"
     },
     "build": {
-      "openclawVersion": "2026.5.6"
+      "openclawVersion": "2026.8.1"
     },
     "release": {
+      "bundleRuntimeDependencies": false,
       "publishToClawHub": true,
       "publishToNpm": true
     }

@@ -1,3 +1,6 @@
+/**
+ * Contract suite for bundled web fetch provider registration and runtime behavior.
+ */
 import { describe, expect, it } from "vitest";
 import {
   pluginRegistrationContractRegistry,
@@ -18,6 +21,7 @@ function resolveWebFetchCredentialValue(provider: WebFetchProviderPlugin): unkno
   return envVar.toLowerCase().includes("api_key") ? `${provider.id}-test` : "sk-test";
 }
 
+/** Installs web fetch provider contract tests for all providers owned by one plugin. */
 export function describeWebFetchProviderContracts(pluginId: string) {
   const providerIds =
     pluginRegistrationContractRegistry.find((entry) => entry.pluginId === pluginId)

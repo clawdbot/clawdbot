@@ -1,16 +1,28 @@
+// Xai provider module implements model/runtime integration.
 import type {
   ProviderResolveDynamicModelContext,
   ProviderRuntimeModel,
 } from "openclaw/plugin-sdk/plugin-entry";
 import { normalizeModelCompat } from "openclaw/plugin-sdk/provider-model-shared";
-import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/text-runtime";
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveXaiCatalogEntry, XAI_BASE_URL } from "./model-definitions.js";
+import { normalizeXaiModelId, resolveXaiOAuthAutoModelId } from "./model-id.js";
 import { applyXaiRuntimeModelCompat } from "./runtime-model-compat.js";
 
-const XAI_MODERN_MODEL_PREFIXES = ["grok-3", "grok-4", "grok-code-fast"] as const;
+const XAI_MODERN_MODEL_PREFIXES = [
+  "grok-4.6",
+  "grok-4.5",
+  "grok-build-0.1",
+  "grok-4.3",
+  "grok-4.20",
+] as const;
 
 export function isModernXaiModel(modelId: string): boolean {
-  const lower = normalizeOptionalLowercaseString(modelId) ?? "";
+  const normalized = normalizeXaiModelId(modelId.trim());
+  const lower = normalizeOptionalLowercaseString(normalized) ?? "";
   if (!lower || lower.includes("multi-agent")) {
     return false;
   }
@@ -32,7 +44,7 @@ export function resolveXaiForwardCompatModel(params: {
       name: definition.name,
       api: params.ctx.providerConfig?.api ?? "openai-responses",
       provider: params.providerId,
-      baseUrl: params.ctx.providerConfig?.baseUrl ?? XAI_BASE_URL,
+      baseUrl: normalizeOptionalString(params.ctx.providerConfig?.baseUrl) ?? XAI_BASE_URL,
       reasoning: definition.reasoning,
       input: definition.input,
       cost: definition.cost,
@@ -40,4 +52,10 @@ export function resolveXaiForwardCompatModel(params: {
       maxTokens: definition.maxTokens,
     } as ProviderRuntimeModel),
   );
+}
+
+export function normalizeXaiResolvedModel(model: ProviderRuntimeModel): ProviderRuntimeModel {
+  const resolvedModelId = resolveXaiOAuthAutoModelId(model.id, model.params);
+  const resolved = resolvedModelId === model.id ? model : { ...model, id: resolvedModelId };
+  return applyXaiRuntimeModelCompat(resolved);
 }

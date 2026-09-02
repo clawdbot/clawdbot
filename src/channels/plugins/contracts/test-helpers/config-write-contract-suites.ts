@@ -1,3 +1,8 @@
+/**
+ * Channel config-write contract suites.
+ *
+ * Proves origin and target channel/account policy before plugin writes mutate config.
+ */
 import { describe, expect, it } from "vitest";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../../../utils/message-channel.js";
 import {
@@ -85,6 +90,7 @@ function expectFormattedDeniedMessage(
   ).toContain(`channels.${demoTargetChannelId}.accounts.work.configWrites=true`);
 }
 
+/** Installs policy tests for allowed, denied, and bypassed config writes. */
 export function describeChannelConfigWritePolicyContract() {
   describe("authorizeConfigWrite policy contract", () => {
     it.each([
@@ -136,6 +142,7 @@ export function describeChannelConfigWritePolicyContract() {
   });
 }
 
+/** Installs target-resolution tests for path-derived and explicit writes. */
 export function describeChannelConfigWriteTargetContract() {
   describe("authorizeConfigWrite target contract", () => {
     it.each([

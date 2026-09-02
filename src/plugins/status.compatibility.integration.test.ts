@@ -1,10 +1,12 @@
+/** Integration coverage for plugin status compatibility output and installed-index state. */
 import fs from "node:fs";
 import path from "node:path";
 import { afterAll, afterEach, describe, expect, it } from "vitest";
 import { withEnv } from "../test-utils/env.js";
 import {
   cleanupPluginLoaderFixturesForTest,
-  makeTempDir,
+  loadOpenClawPlugins,
+  makePluginLoaderTempDir,
   resetPluginLoaderTestStateForTest,
   useNoBundledPlugins,
   writePlugin,
@@ -22,7 +24,7 @@ function addStartupActivation(pluginDir: string, onStartup: boolean): void {
 }
 
 function buildSnapshotCompatibilityNoticeCodes(plugin: { dir: string; file: string; id: string }) {
-  const stateDir = makeTempDir();
+  const stateDir = makePluginLoaderTempDir();
   return withEnv({ OPENCLAW_STATE_DIR: stateDir }, () => {
     useNoBundledPlugins();
     return buildPluginCompatibilitySnapshotNotices({
@@ -53,7 +55,7 @@ describe("plugin compatibility snapshot notices", () => {
       body: `module.exports = { id: "legacy-sidecar", register() {} };\n`,
     });
 
-    expect(buildSnapshotCompatibilityNoticeCodes(plugin)).toEqual([]);
+    expect(buildSnapshotCompatibilityNoticeCodes(plugin)).toStrictEqual([]);
   });
 
   it("does not report startup compatibility warnings for explicit startup-lazy manifests", () => {
@@ -63,6 +65,40 @@ describe("plugin compatibility snapshot notices", () => {
     });
     addStartupActivation(plugin.dir, false);
 
-    expect(buildSnapshotCompatibilityNoticeCodes(plugin)).toEqual([]);
+    expect(buildSnapshotCompatibilityNoticeCodes(plugin)).toStrictEqual([]);
+  });
+
+  it("reports actual hook-only registrations without activating cold plugin modules", () => {
+    const pluginDir = makePluginLoaderTempDir();
+    const runtimeMarker = path.join(pluginDir, "runtime-loaded");
+    const plugin = writePlugin({
+      id: "runtime-hook-only",
+      dir: pluginDir,
+      body: `module.exports = { id: "runtime-hook-only", register(api) { require("node:fs").writeFileSync(${JSON.stringify(runtimeMarker)}, "loaded"); api.on("message_received", () => {}); } };\n`,
+    });
+    const stateDir = makePluginLoaderTempDir();
+    const config = {
+      plugins: {
+        load: { paths: [plugin.file] },
+        allow: [plugin.id],
+      },
+    };
+
+    withEnv({ OPENCLAW_STATE_DIR: stateDir }, () => {
+      useNoBundledPlugins();
+      const params = { config, workspaceDir: plugin.dir, env: process.env };
+
+      expect(buildPluginCompatibilitySnapshotNotices(params)).toStrictEqual([]);
+      expect(fs.existsSync(runtimeMarker)).toBe(false);
+
+      const registry = loadOpenClawPlugins({ ...params, cache: false });
+      expect(fs.existsSync(runtimeMarker)).toBe(true);
+      expect(registry.typedHooks).toEqual([
+        expect.objectContaining({ pluginId: plugin.id, hookName: "message_received" }),
+      ]);
+      expect(buildPluginCompatibilitySnapshotNotices(params)).toEqual([
+        expect.objectContaining({ pluginId: plugin.id, code: "hook-only" }),
+      ]);
+    });
   });
 });

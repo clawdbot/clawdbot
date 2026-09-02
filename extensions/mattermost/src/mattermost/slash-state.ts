@@ -11,12 +11,12 @@
  */
 
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { Readable } from "node:stream";
 import type { MattermostConfig } from "../types.js";
 import type { ResolvedMattermostAccount } from "./accounts.js";
 import {
   isRequestBodyLimitError,
   readRequestBodyWithLimit,
+  sendHttpRequestRejection,
   type OpenClawPluginApi,
 } from "./runtime-api.js";
 import {
@@ -32,13 +32,14 @@ import {
 
 const MULTI_ACCOUNT_BODY_MAX_BYTES = 64 * 1024;
 const MULTI_ACCOUNT_BODY_TIMEOUT_MS = 5_000;
+type SlashHandler = ReturnType<typeof createSlashCommandHttpHandler>;
 type SlashHandlerMatchSource = "token" | "command";
 type SlashHandlerMatch =
   | { kind: "none" }
   | {
       kind: "single";
       source: SlashHandlerMatchSource;
-      handler: (req: IncomingMessage, res: ServerResponse) => Promise<void>;
+      handler: SlashHandler;
       accountIds: string[];
     }
   | {
@@ -55,20 +56,41 @@ type SlashCommandAccountState = {
   /** Registered command IDs for cleanup on shutdown. */
   registeredCommands: MattermostRegisteredCommand[];
   /** Current HTTP handler for this account. */
-  handler: ((req: IncomingMessage, res: ServerResponse) => Promise<void>) | null;
+  handler: SlashHandler | null;
   /** The account that activated slash commands. */
   account: ResolvedMattermostAccount;
   /** Map from trigger to original command name (for skill commands that start with oc_). */
   triggerMap: Map<string, string>;
 };
 
-/** Map from accountId → per-account slash command state. */
-const accountStates = new Map<string, SlashCommandAccountState>();
+/**
+ * Map from accountId → per-account slash command state.
+ *
+ * Anchored to globalThis so that jiti-loaded (route registration) and
+ * native-ESM-loaded (monitor/activation) module instances share the
+ * same Map. Without this, each module loader creates its own copy of
+ * the module-level variable and the HTTP handler never sees the tokens
+ * populated by the monitor.
+ */
+const ACCOUNT_STATES_KEY = Symbol.for("openclaw.mattermost.slash-account-states");
 
-export function resolveSlashHandlerForToken(token: string): SlashHandlerMatch {
+function getSlashAccountStates(): Map<string, SlashCommandAccountState> {
+  const globalStore = globalThis as Record<PropertyKey, unknown>;
+  const existing = globalStore[ACCOUNT_STATES_KEY];
+  if (existing instanceof Map) {
+    return existing as Map<string, SlashCommandAccountState>;
+  }
+  const accountStates = new Map<string, SlashCommandAccountState>();
+  globalStore[ACCOUNT_STATES_KEY] = accountStates;
+  return accountStates;
+}
+
+const accountStates = getSlashAccountStates();
+
+function resolveSlashHandlerForToken(token: string): SlashHandlerMatch {
   const matches: Array<{
     accountId: string;
-    handler: (req: IncomingMessage, res: ServerResponse) => Promise<void>;
+    handler: SlashHandler;
   }> = [];
 
   for (const [accountId, state] of accountStates) {
@@ -81,11 +103,15 @@ export function resolveSlashHandlerForToken(token: string): SlashHandlerMatch {
     return { kind: "none" };
   }
   if (matches.length === 1) {
+    const match = matches[0];
+    if (!match) {
+      return { kind: "none" };
+    }
     return {
       kind: "single",
       source: "token",
-      handler: matches[0].handler,
-      accountIds: [matches[0].accountId],
+      handler: match.handler,
+      accountIds: [match.accountId],
     };
   }
 
@@ -96,7 +122,7 @@ export function resolveSlashHandlerForToken(token: string): SlashHandlerMatch {
   };
 }
 
-export function resolveSlashHandlerForCommand(params: {
+function resolveSlashHandlerForCommand(params: {
   teamId: string;
   command: string;
 }): SlashHandlerMatch {
@@ -107,7 +133,7 @@ export function resolveSlashHandlerForCommand(params: {
 
   const matches: Array<{
     accountId: string;
-    handler: (req: IncomingMessage, res: ServerResponse) => Promise<void>;
+    handler: SlashHandler;
   }> = [];
 
   for (const [accountId, state] of accountStates) {
@@ -125,11 +151,15 @@ export function resolveSlashHandlerForCommand(params: {
     return { kind: "none" };
   }
   if (matches.length === 1) {
+    const match = matches[0];
+    if (!match) {
+      return { kind: "none" };
+    }
     return {
       kind: "single",
       source: "command",
-      handler: matches[0].handler,
-      accountIds: [matches[0].accountId],
+      handler: match.handler,
+      accountIds: [match.accountId],
     };
   }
 
@@ -280,8 +310,8 @@ export function registerSlashCommandRoute(api: OpenClawPluginApi) {
 
     // If there's only one active account (common case), route directly.
     if (accountStates.size === 1) {
-      const [, state] = [...accountStates.entries()][0];
-      if (!state.handler) {
+      const state = accountStates.values().next().value;
+      if (!state?.handler) {
         res.statusCode = 503;
         res.setHeader("Content-Type", "application/json; charset=utf-8");
         res.end(
@@ -296,8 +326,8 @@ export function registerSlashCommandRoute(api: OpenClawPluginApi) {
       return;
     }
 
-    // Multi-account: buffer the body, find the matching account by token or
-    // registered team/trigger, then replay the request to the correct handler.
+    // Multi-account: buffer the body, then find the matching account by token or
+    // registered team/trigger before account-specific validation.
     // Use the bounded helper so a slow/never-finishing client cannot tie up the
     // routing handler indefinitely (Slowloris).
     let bodyStr: string;
@@ -305,15 +335,15 @@ export function registerSlashCommandRoute(api: OpenClawPluginApi) {
       bodyStr = await readRequestBodyWithLimit(req, {
         maxBytes: MULTI_ACCOUNT_BODY_MAX_BYTES,
         timeoutMs: MULTI_ACCOUNT_BODY_TIMEOUT_MS,
+        // Defer destruction so the rejections below reach Mattermost before the close.
+        destroyOnLimit: false,
       });
     } catch (error) {
       if (isRequestBodyLimitError(error, "REQUEST_BODY_TIMEOUT")) {
-        res.statusCode = 408;
-        res.end("Request body timeout");
+        await sendHttpRequestRejection(req, res, 408, "Request body timeout");
         return;
       }
-      res.statusCode = 413;
-      res.end("Payload Too Large");
+      await sendHttpRequestRejection(req, res, 413, "Payload Too Large");
       return;
     }
 
@@ -374,22 +404,9 @@ export function registerSlashCommandRoute(api: OpenClawPluginApi) {
       return;
     }
 
-    const matchedHandler = match.handler;
-
-    // Replay: create a synthetic readable that re-emits the buffered body
-    const syntheticReq = new Readable({
-      read() {
-        this.push(Buffer.from(bodyStr, "utf8"));
-        this.push(null);
-      },
-    }) as IncomingMessage;
-
-    // Copy necessary IncomingMessage properties
-    syntheticReq.method = req.method;
-    syntheticReq.url = req.url;
-    syntheticReq.headers = req.headers;
-
-    await matchedHandler(syntheticReq, res);
+    // Routing already enforced the body limit. Retain the original transport
+    // and pass those bytes forward instead of replaying a socket-less request.
+    await match.handler(req, res, bodyStr);
   };
 
   for (const callbackPath of callbackPaths) {

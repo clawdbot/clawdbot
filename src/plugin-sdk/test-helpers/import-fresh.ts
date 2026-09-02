@@ -1,3 +1,4 @@
+/** Import a module by URL relative to another module, preserving query-string cache busting. */
 export async function importFreshModule<TModule>(
   from: string,
   specifier: string,

@@ -1,3 +1,4 @@
+// Normalizes music generation requests into provider-ready payloads.
 import {
   hasMediaNormalizationEntry,
   normalizeDurationToClosestMax,
@@ -11,6 +12,12 @@ import type {
   MusicGenerationSourceImage,
 } from "./types.js";
 
+/**
+ * Request normalization for music generation.
+ *
+ * Providers advertise per-mode and per-model support; this module removes
+ * unsupported caller overrides and records any duration coercion for metadata.
+ */
 type ResolvedMusicGenerationOverrides = {
   lyrics?: string;
   instrumental?: boolean;
@@ -20,6 +27,16 @@ type ResolvedMusicGenerationOverrides = {
   normalization?: MusicGenerationNormalization;
 };
 
+function resolveModelBooleanSupport(
+  model: string,
+  defaultSupport: boolean | undefined,
+  supportByModel: Readonly<Record<string, boolean>> | undefined,
+): boolean {
+  // Per-model declarations override provider defaults because music models vary within a provider.
+  return supportByModel?.[model] ?? defaultSupport === true;
+}
+
+/** Sanitize caller overrides against provider capabilities before invoking a provider. */
 export function resolveMusicGenerationOverrides(params: {
   provider: MusicGenerationProvider;
   model: string;
@@ -50,12 +67,22 @@ export function resolveMusicGenerationOverrides(params: {
     };
   }
 
-  if (lyrics?.trim() && !caps.supportsLyrics) {
+  if (
+    lyrics?.trim() &&
+    !resolveModelBooleanSupport(params.model, caps.supportsLyrics, caps.supportsLyricsByModel)
+  ) {
     ignoredOverrides.push({ key: "lyrics", value: lyrics });
     lyrics = undefined;
   }
 
-  if (typeof instrumental === "boolean" && !caps.supportsInstrumental) {
+  if (
+    typeof instrumental === "boolean" &&
+    !resolveModelBooleanSupport(
+      params.model,
+      caps.supportsInstrumental,
+      caps.supportsInstrumentalByModel,
+    )
+  ) {
     ignoredOverrides.push({ key: "instrumental", value: instrumental });
     instrumental = undefined;
   }
@@ -83,6 +110,7 @@ export function resolveMusicGenerationOverrides(params: {
   if (format) {
     const supportedFormats =
       caps.supportedFormatsByModel?.[params.model] ?? caps.supportedFormats ?? [];
+    // An empty supportedFormats list means the provider validates formats internally.
     if (
       !caps.supportsFormat ||
       (supportedFormats.length > 0 && !supportedFormats.includes(format))

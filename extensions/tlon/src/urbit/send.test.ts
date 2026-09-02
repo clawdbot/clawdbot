@@ -1,3 +1,4 @@
+// Tlon tests cover send plugin behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@urbit/aura", () => ({
@@ -55,21 +56,84 @@ describe("sendDm", () => {
     });
 
     expect(scot).toHaveBeenCalledWith("ud", 1_700_000_000_000n);
-    expect(poke).toHaveBeenCalledWith(
-      expect.objectContaining({
-        json: expect.objectContaining({
-          channel: expect.objectContaining({
-            action: {
-              post: {
-                reply: expect.objectContaining({
-                  id: "~2024.1.1",
-                }),
+    expect(poke).toHaveBeenCalledWith({
+      app: "channels",
+      mark: "channel-action-1",
+      json: {
+        channel: {
+          nest: "chat/~nec/general",
+          action: {
+            post: {
+              reply: {
+                id: "~2024.1.1",
+                action: {
+                  add: {
+                    content: [{ inline: ["threaded"] }],
+                    author: "~zod",
+                    sent: 1_700_000_000_000,
+                  },
+                },
               },
             },
-          }),
-        }),
-      }),
-    );
+          },
+        },
+      },
+    });
     expect(result.receipt.threadId).toBe("~nec/general");
+  });
+});
+
+describe("buildMediaStory", () => {
+  it("keeps image URLs with fragments as image blocks", async () => {
+    const { buildMediaStory } = await import("./send.js");
+
+    expect(buildMediaStory("caption", "https://cdn.example/image.png#preview")).toEqual([
+      { inline: ["caption"] },
+      {
+        block: {
+          image: {
+            src: "https://cdn.example/image.png#preview",
+            height: 0,
+            width: 0,
+            alt: "",
+          },
+        },
+      },
+    ]);
+  });
+
+  it("keeps image URLs with queries as image blocks", async () => {
+    const { buildMediaStory } = await import("./send.js");
+
+    expect(buildMediaStory(undefined, "https://cdn.example/image.png?token=1")).toEqual([
+      {
+        block: {
+          image: {
+            src: "https://cdn.example/image.png?token=1",
+            height: 0,
+            width: 0,
+            alt: "",
+          },
+        },
+      },
+    ]);
+  });
+
+  it("keeps non-image URL paths with image-looking fragments as links", async () => {
+    const { buildMediaStory } = await import("./send.js");
+
+    expect(buildMediaStory("caption", "https://cdn.example/page#preview.png")).toEqual([
+      { inline: ["caption"] },
+      {
+        inline: [
+          {
+            link: {
+              href: "https://cdn.example/page#preview.png",
+              content: "https://cdn.example/page#preview.png",
+            },
+          },
+        ],
+      },
+    ]);
   });
 });

@@ -1,6 +1,8 @@
+/** Covers provider registration validation for ids, duplicates, and required hooks. */
 import { describe, expect, it } from "vitest";
+import type { PluginDiagnostic } from "./manifest-types.js";
 import { normalizeRegisteredProvider } from "./provider-validation.js";
-import type { PluginDiagnostic, ProviderPlugin } from "./types.js";
+import type { ProviderPlugin } from "./types.js";
 
 function collectDiagnostics() {
   const diagnostics: PluginDiagnostic[] = [];
@@ -50,13 +52,13 @@ function normalizeProviderFixture(provider: ProviderPlugin) {
 
 function expectNormalizedProviderFixture(params: {
   provider: ProviderPlugin;
-  expectedProvider?: Record<string, unknown>;
+  expectedProvider?: unknown;
   expectedDiagnostics?: ReadonlyArray<{ level: PluginDiagnostic["level"]; message: string }>;
   expectedDiagnosticText?: readonly string[];
 }) {
   const result = normalizeProviderFixture(params.provider);
   if (params.expectedProvider) {
-    expect(result.provider).toMatchObject(params.expectedProvider);
+    expect(result.provider).toEqual(params.expectedProvider);
   }
   if (params.expectedDiagnostics) {
     expectDiagnosticMessages(result.diagnostics, params.expectedDiagnostics);
@@ -69,20 +71,23 @@ function expectNormalizedProviderFixture(params: {
 
 function expectProviderNormalizationResult(params: {
   provider: ProviderPlugin;
-  expectedProvider?: Record<string, unknown>;
+  expectedProvider?: unknown;
   expectedDiagnostics?: ReadonlyArray<{ level: PluginDiagnostic["level"]; message: string }>;
   expectedDiagnosticText?: readonly string[];
   assert?: (
     provider: ReturnType<typeof normalizeRegisteredProvider>,
     diagnostics: PluginDiagnostic[],
+    inputProvider: ProviderPlugin,
   ) => void;
 }) {
   const { diagnostics, provider } = expectNormalizedProviderFixture(params);
-  params.assert?.(provider, diagnostics);
+  params.assert?.(provider, diagnostics, params.provider);
 }
 
 describe("normalizeRegisteredProvider", () => {
-  it.each([
+  const primaryAuthRun = async () => ({ profiles: [] });
+
+  const cases = [
     {
       name: "drops invalid and duplicate auth methods, and clears bad wizard method bindings",
       provider: makeProvider({
@@ -98,6 +103,7 @@ describe("normalizeRegisteredProvider", () => {
             kind: "custom",
             wizard: {
               choiceId: " demo-primary ",
+              onboardingFeatured: true,
               modelAllowlist: {
                 allowedKeys: [" demo/model ", "demo/model"],
                 initialSelections: [" demo/model "],
@@ -105,7 +111,7 @@ describe("normalizeRegisteredProvider", () => {
                 message: " Demo models ",
               },
             },
-            run: async () => ({ profiles: [] }),
+            run: primaryAuthRun,
           },
           {
             id: "primary",
@@ -118,6 +124,7 @@ describe("normalizeRegisteredProvider", () => {
         wizard: {
           setup: {
             choiceId: " demo-choice ",
+            onboardingFeatured: true,
             methodId: " missing ",
           },
           modelPicker: {
@@ -126,7 +133,7 @@ describe("normalizeRegisteredProvider", () => {
           },
         },
       }),
-      expectedProvider: {
+      expectedProvider: makeProvider({
         id: "demo",
         label: "Demo Provider",
         aliases: ["alias-one"],
@@ -136,8 +143,10 @@ describe("normalizeRegisteredProvider", () => {
           {
             id: "primary",
             label: "Primary",
+            kind: "custom",
             wizard: {
               choiceId: "demo-primary",
+              onboardingFeatured: true,
               modelAllowlist: {
                 allowedKeys: ["demo/model"],
                 initialSelections: ["demo/model"],
@@ -145,17 +154,19 @@ describe("normalizeRegisteredProvider", () => {
                 message: "Demo models",
               },
             },
+            run: primaryAuthRun,
           },
         ],
         wizard: {
           setup: {
             choiceId: "demo-choice",
+            onboardingFeatured: true,
           },
           modelPicker: {
             label: "Demo models",
           },
         },
-      },
+      }),
       expectedDiagnostics: [
         {
           level: "error",
@@ -200,48 +211,11 @@ describe("normalizeRegisteredProvider", () => {
         ]);
       },
     },
-    {
-      name: "prefers catalog when a provider registers both catalog and discovery",
-      provider: makeProvider({
-        catalog: {
-          run: async () => null,
-        },
-        discovery: {
-          run: async () => ({
-            provider: {
-              baseUrl: "http://127.0.0.1:8000/v1",
-              models: [],
-            },
-          }),
-        },
-      }),
-      expectedDiagnosticText: [
-        'provider "demo" registered both catalog and discovery; using catalog',
-      ],
-      assert: (provider: ReturnType<typeof normalizeRegisteredProvider>) => {
-        if (!provider) {
-          throw new Error("expected provider");
-        }
-        expect(provider).toMatchObject({ catalog: { run: expect.any(Function) } });
-        expect(provider.discovery).toBeUndefined();
-      },
-    },
-  ] as const)(
-    "$name",
-    ({
-      provider: inputProvider,
-      expectedProvider,
-      expectedDiagnostics,
-      expectedDiagnosticText,
-      assert,
-    }) => {
-      expectProviderNormalizationResult({
-        provider: inputProvider,
-        ...(expectedProvider ? { expectedProvider } : {}),
-        ...(expectedDiagnostics ? { expectedDiagnostics } : {}),
-        ...(expectedDiagnosticText ? { expectedDiagnosticText } : {}),
-        ...(assert ? { assert } : {}),
-      });
-    },
-  );
+  ] satisfies readonly (Parameters<typeof expectProviderNormalizationResult>[0] & {
+    name: string;
+  })[];
+
+  it.each(cases)("$name", (testCase) => {
+    expectProviderNormalizationResult(testCase);
+  });
 });

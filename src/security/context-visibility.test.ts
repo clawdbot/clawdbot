@@ -1,3 +1,4 @@
+// Verifies security context visibility decisions.
 import { describe, expect, it } from "vitest";
 import {
   evaluateSupplementalContextVisibility,

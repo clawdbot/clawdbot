@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+// Check Import Cycles script supports OpenClaw repository automation.
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -103,7 +104,7 @@ function collectRuntimeStaticImports(
     file,
     readFileSync(path.join(repoRoot, file), "utf8"),
     ts.ScriptTarget.Latest,
-    true,
+    false,
   );
   const imports: string[] = [];
   const visit = (node: ts.Node) => {

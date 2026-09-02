@@ -1,3 +1,6 @@
+/** Resolves provider environment variable candidates and auth evidence from core/plugin metadata. */
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { resolveProviderAuthAliasMap } from "../agents/provider-auth-aliases.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizePluginsConfig } from "../plugins/config-state.js";
@@ -12,11 +15,13 @@ import {
   loadPluginMetadataSnapshot,
   type PluginMetadataSnapshot,
 } from "../plugins/plugin-metadata-snapshot.js";
+import { listSetupProviderIds } from "../plugins/setup-descriptors.js";
 import { hasKind } from "../plugins/slots.js";
+import { appendUniqueEnvVarCandidates } from "../shared/env-var-candidates.js";
 
 const CORE_PROVIDER_AUTH_ENV_VAR_CANDIDATES = {
   anthropic: ["ANTHROPIC_OAUTH_TOKEN", "ANTHROPIC_API_KEY"],
-  openai: ["OPENAI_API_KEY"],
+  openai: ["CODEX_API_KEY", "OPENAI_API_KEY"],
   voyage: ["VOYAGE_API_KEY"],
   cerebras: ["CEREBRAS_API_KEY"],
   "anthropic-openai": ["ANTHROPIC_API_KEY"],
@@ -33,8 +38,10 @@ export type ProviderEnvVarLookupParams = {
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
   includeUntrustedWorkspacePlugins?: boolean;
+  metadataSnapshot?: PluginMetadataSnapshot;
 };
 
+/** Manifest-provided evidence that a provider auth credential exists outside config. */
 export type ProviderAuthEvidence = {
   type: "local-file-with-env";
   fileEnvVar?: string;
@@ -43,6 +50,14 @@ export type ProviderAuthEvidence = {
   requiresAllEnv?: readonly string[];
   credentialMarker: string;
   source?: string;
+};
+
+/** Provider auth lookup maps resolved from plugin metadata and core fallback rules. */
+export type ProviderAuthLookupMaps = {
+  aliasMap: Readonly<Record<string, string>>;
+  envCandidateMap: Readonly<Record<string, readonly string[]>>;
+  authEvidenceMap: Readonly<Record<string, readonly ProviderAuthEvidence[]>>;
+  setupProviderFallbackRefs: readonly string[];
 };
 
 function isWorkspacePluginTrustedForProviderEnvVars(
@@ -65,6 +80,8 @@ function shouldUsePluginProviderEnvVars(
   if (plugin.origin !== "workspace" || params?.includeUntrustedWorkspacePlugins !== false) {
     return true;
   }
+  // Env-var candidates are hints for lookup/scrubbing, but callers can opt into the same
+  // workspace trust filter used for stronger auth evidence when probing scoped workspaces.
   return isWorkspacePluginTrustedForProviderEnvVars(plugin, params?.config);
 }
 
@@ -75,28 +92,9 @@ function shouldUsePluginProviderAuthEvidence(
   if (plugin.origin !== "workspace") {
     return true;
   }
+  // Auth evidence can point at local credential files, so workspace plugins must be explicitly
+  // trusted through config before their evidence participates in auth discovery.
   return isWorkspacePluginTrustedForProviderEnvVars(plugin, params?.config);
-}
-
-function appendUniqueEnvVarCandidates(
-  target: Record<string, string[]>,
-  providerId: string,
-  keys: readonly string[],
-) {
-  const normalizedProviderId = providerId.trim();
-  if (!normalizedProviderId || keys.length === 0) {
-    return;
-  }
-  const bucket = (target[normalizedProviderId] ??= []);
-  const seen = new Set(bucket);
-  for (const key of keys) {
-    const normalizedKey = key.trim();
-    if (!normalizedKey || seen.has(normalizedKey)) {
-      continue;
-    }
-    seen.add(normalizedKey);
-    bucket.push(normalizedKey);
-  }
 }
 
 function appendUniqueAuthEvidence(
@@ -120,21 +118,43 @@ function appendUniqueAuthEvidence(
   }
 }
 
+function appendUniqueProviderRef(target: Set<string>, providerId: string): void {
+  const normalized = normalizeProviderId(providerId);
+  if (normalized) {
+    target.add(normalized);
+  }
+}
+
 function resolveProviderMetadataSnapshot(
   params?: ProviderEnvVarLookupParams,
 ): PluginMetadataSnapshot {
-  const config = params?.config ?? {};
+  if (params?.metadataSnapshot) {
+    return params.metadataSnapshot;
+  }
+  const config = params?.config;
   const env = params?.env ?? process.env;
-  const current = getCurrentPluginMetadataSnapshot({
-    config,
-    env,
-    ...(params?.workspaceDir !== undefined ? { workspaceDir: params.workspaceDir } : {}),
-    allowWorkspaceScopedSnapshot: true,
-  });
+  let current: PluginMetadataSnapshot | undefined;
+  if (config) {
+    current = getCurrentPluginMetadataSnapshot({
+      config,
+      env,
+      ...(params?.workspaceDir !== undefined ? { workspaceDir: params.workspaceDir } : {}),
+      allowWorkspaceScopedSnapshot: true,
+    });
+  } else {
+    current = getCurrentPluginMetadataSnapshot({
+      env,
+      ...(params?.workspaceDir !== undefined ? { workspaceDir: params.workspaceDir } : {}),
+      allowWorkspaceScopedSnapshot: true,
+      requireDefaultDiscoveryContext: true,
+    });
+  }
   if (current) {
     return current;
   }
-  if (normalizePluginsConfig(config.plugins).loadPaths.length === 0) {
+  if (config && normalizePluginsConfig(config.plugins).loadPaths.length === 0) {
+    // Configs without explicit load paths can reuse the process-scoped snapshot; plugin-scoped
+    // configs need fresh metadata so workspace allow/deny decisions are not bypassed.
     const unscopedCurrent = getCurrentPluginMetadataSnapshot({
       env,
       ...(params?.workspaceDir !== undefined ? { workspaceDir: params.workspaceDir } : {}),
@@ -146,7 +166,7 @@ function resolveProviderMetadataSnapshot(
     }
   }
   return loadPluginMetadataSnapshot({
-    config,
+    config: config ?? {},
     workspaceDir: params?.workspaceDir,
     env,
     preferPersisted: false,
@@ -157,23 +177,38 @@ function resolveManifestProviderAuthEnvVarCandidates(
   params?: ProviderEnvVarLookupParams,
 ): Record<string, string[]> {
   const snapshot = resolveProviderMetadataSnapshot(params);
+  const aliases = resolveProviderAuthAliasMap({
+    ...params,
+    metadataSnapshot: snapshot,
+  });
+  return resolveManifestProviderAuthEnvVarCandidatesFromSnapshot(params, snapshot, aliases);
+}
+
+function resolveManifestProviderUsageAuthEnvVarNames(
+  params?: ProviderEnvVarLookupParams,
+): string[] {
+  const snapshot = resolveProviderMetadataSnapshot(params);
+  return uniqueStrings(
+    snapshot.plugins
+      .filter((plugin) => shouldUsePluginProviderEnvVars(plugin, params))
+      .flatMap((plugin) => Object.values(plugin.providerUsageAuthEnvVars ?? {}).flat()),
+  );
+}
+
+function resolveManifestProviderAuthEnvVarCandidatesFromSnapshot(
+  params: ProviderEnvVarLookupParams | undefined,
+  snapshot: PluginMetadataSnapshot,
+  aliases: Readonly<Record<string, string>>,
+): Record<string, string[]> {
   const candidates: Record<string, string[]> = {};
   for (const plugin of snapshot.plugins) {
     if (!shouldUsePluginProviderEnvVars(plugin, params)) {
       continue;
     }
-    if (plugin.providerAuthEnvVars) {
-      for (const [providerId, keys] of Object.entries(plugin.providerAuthEnvVars).toSorted(
-        ([left], [right]) => left.localeCompare(right),
-      )) {
-        appendUniqueEnvVarCandidates(candidates, providerId, keys);
-      }
-    }
     for (const provider of plugin.setup?.providers ?? []) {
       appendUniqueEnvVarCandidates(candidates, provider.id, provider.envVars ?? []);
     }
   }
-  const aliases = resolveProviderAuthAliasMap(params);
   for (const [alias, target] of Object.entries(aliases).toSorted(([left], [right]) =>
     left.localeCompare(right),
   )) {
@@ -185,26 +220,41 @@ function resolveManifestProviderAuthEnvVarCandidates(
   return candidates;
 }
 
-function resolveManifestProviderAuthEvidence(
-  params?: ProviderEnvVarLookupParams,
-): Record<string, ProviderAuthEvidence[]> {
-  const snapshot = resolveProviderMetadataSnapshot(params);
+function resolveManifestRuntimeAuthFacts(
+  params: ProviderEnvVarLookupParams | undefined,
+  snapshot: PluginMetadataSnapshot,
+  aliases: Readonly<Record<string, string>>,
+) {
   const evidenceByProvider: Record<string, ProviderAuthEvidence[]> = {};
+  const refs = new Set<string>();
   for (const plugin of snapshot.plugins) {
+    const evidenceProviders = (plugin.setup?.providers ?? []).filter(
+      (provider) => provider.authEvidence?.length,
+    );
+    const fallbackProviders =
+      plugin.setup?.requiresRuntime !== false && (plugin.setup?.providers || plugin.providers)
+        ? listSetupProviderIds(plugin)
+        : [];
+    if (evidenceProviders.length === 0 && fallbackProviders.length === 0) {
+      continue;
+    }
+    // Package contributions are fixed, but their eligibility follows current config.
+    // Evaluate each contributing owner once without narrowing credential-scrubbing hints.
     if (
       snapshot.index.plugins.length > 0 &&
       !isInstalledPluginEnabled(snapshot.index, plugin.id, params?.config)
     ) {
       continue;
     }
-    if (!shouldUsePluginProviderAuthEvidence(plugin, params)) {
-      continue;
+    if (shouldUsePluginProviderAuthEvidence(plugin, params)) {
+      for (const provider of evidenceProviders) {
+        appendUniqueAuthEvidence(evidenceByProvider, provider.id, provider.authEvidence ?? []);
+      }
     }
-    for (const provider of plugin.setup?.providers ?? []) {
-      appendUniqueAuthEvidence(evidenceByProvider, provider.id, provider.authEvidence ?? []);
+    for (const providerId of fallbackProviders) {
+      appendUniqueProviderRef(refs, providerId);
     }
   }
-  const aliases = resolveProviderAuthAliasMap(params);
   for (const [alias, target] of Object.entries(aliases).toSorted(([left], [right]) =>
     left.localeCompare(right),
   )) {
@@ -213,9 +263,18 @@ function resolveManifestProviderAuthEvidence(
       appendUniqueAuthEvidence(evidenceByProvider, alias, evidence);
     }
   }
-  return evidenceByProvider;
+  for (const [alias, target] of Object.entries(aliases)) {
+    if (refs.has(target)) {
+      appendUniqueProviderRef(refs, alias);
+    }
+  }
+  return {
+    authEvidenceMap: evidenceByProvider,
+    setupProviderFallbackRefs: [...refs].toSorted((a, b) => a.localeCompare(b)),
+  };
 }
 
+/** Resolves provider auth env-var candidates from core fallbacks and plugin metadata. */
 export function resolveProviderAuthEnvVarCandidates(
   params?: ProviderEnvVarLookupParams,
 ): Record<string, readonly string[]> {
@@ -225,30 +284,40 @@ export function resolveProviderAuthEnvVarCandidates(
   };
 }
 
-export function resolveProviderAuthEvidence(
+/** Resolves all provider auth lookup maps from a single metadata snapshot. */
+export function resolveProviderAuthLookupMaps(
   params?: ProviderEnvVarLookupParams,
-): Record<string, readonly ProviderAuthEvidence[]> {
-  return resolveManifestProviderAuthEvidence(params);
-}
-
-export function resolveProviderEnvVars(
-  params?: ProviderEnvVarLookupParams,
-): Record<string, readonly string[]> {
+): ProviderAuthLookupMaps {
+  const snapshot = resolveProviderMetadataSnapshot(params);
+  const lookupParams = {
+    ...params,
+    metadataSnapshot: snapshot,
+  };
+  const aliasMap = resolveProviderAuthAliasMap(lookupParams);
   return {
-    ...resolveProviderAuthEnvVarCandidates(params),
-    ...CORE_PROVIDER_SETUP_ENV_VAR_OVERRIDES,
+    aliasMap,
+    envCandidateMap: {
+      ...resolveManifestProviderAuthEnvVarCandidatesFromSnapshot(params, snapshot, aliasMap),
+      ...CORE_PROVIDER_AUTH_ENV_VAR_CANDIDATES,
+    },
+    ...resolveManifestRuntimeAuthFacts(params, snapshot, aliasMap),
   };
 }
 
-const lazyRecordCacheResetters = new Set<() => void>();
+/** Resolves env vars used by setup, default SecretRefs, and broad secret scrubbing. */
+function withSetupEnvOverrides(
+  authCandidates: Readonly<Record<string, readonly string[]>>,
+): Record<string, readonly string[]> {
+  return {
+    ...authCandidates,
+    ...CORE_PROVIDER_SETUP_ENV_VAR_OVERRIDES,
+  };
+}
 
 function createLazyReadonlyRecord(
   resolve: () => Record<string, readonly string[]>,
 ): Record<string, readonly string[]> {
   let cached: Record<string, readonly string[]> | undefined;
-  lazyRecordCacheResetters.add(() => {
-    cached = undefined;
-  });
   const getResolved = (): Record<string, readonly string[]> => {
     cached ??= resolve();
     return cached;
@@ -286,17 +355,6 @@ function createLazyReadonlyRecord(
 }
 
 /**
- * Provider auth env candidates used by generic auth resolution.
- *
- * Order matters: the first non-empty value wins for helpers such as
- * `resolveEnvApiKey()`. Bundled providers source this from plugin manifest
- * metadata so auth probes do not need to load plugin runtime.
- */
-export const PROVIDER_AUTH_ENV_VAR_CANDIDATES = createLazyReadonlyRecord(() =>
-  resolveProviderAuthEnvVarCandidates(),
-);
-
-/**
  * Provider env vars used for setup/default secret refs and broad secret
  * scrubbing. This can include non-model providers and may intentionally choose
  * a different preferred first env var than auth resolution.
@@ -305,21 +363,18 @@ export const PROVIDER_AUTH_ENV_VAR_CANDIDATES = createLazyReadonlyRecord(() =>
  * is only for true core/non-plugin providers and a few setup-specific ordering
  * overrides where generic onboarding wants a different preferred env var.
  */
-export const PROVIDER_ENV_VARS = createLazyReadonlyRecord(() => resolveProviderEnvVars());
+const PROVIDER_ENV_VARS = createLazyReadonlyRecord(() =>
+  withSetupEnvOverrides(resolveProviderAuthEnvVarCandidates()),
+);
 
-export const __testing = {
-  resetProviderEnvVarCachesForTests(): void {
-    for (const reset of lazyRecordCacheResetters) {
-      reset();
-    }
-  },
-};
-
+/** Returns known env var candidates for a provider id or alias. */
 export function getProviderEnvVars(
   providerId: string,
   params?: ProviderEnvVarLookupParams,
 ): string[] {
-  const providerEnvVars = params ? resolveProviderEnvVars(params) : PROVIDER_ENV_VARS;
+  const providerEnvVars = params
+    ? withSetupEnvOverrides(resolveProviderAuthEnvVarCandidates(params))
+    : PROVIDER_ENV_VARS;
   const envVars = Object.hasOwn(providerEnvVars, providerId)
     ? providerEnvVars[providerId]
     : undefined;
@@ -328,19 +383,26 @@ export function getProviderEnvVars(
 
 // OPENCLAW_API_KEY authenticates the local OpenClaw bridge itself and must
 // remain available to child bridge/runtime processes.
+/** Lists known provider auth env vars without bridge-only env vars. */
 export function listKnownProviderAuthEnvVarNames(params?: ProviderEnvVarLookupParams): string[] {
-  return [
-    ...new Set([
-      ...Object.values(resolveProviderAuthEnvVarCandidates(params)).flatMap((keys) => keys),
-      ...Object.values(resolveProviderEnvVars(params)).flatMap((keys) => keys),
-    ]),
-  ];
+  const authCandidates = resolveProviderAuthEnvVarCandidates(params);
+  // Keep auth-only candidates before setup overrides, then append usage-only hints.
+  return uniqueStrings([
+    ...Object.values(authCandidates).flat(),
+    ...Object.values(withSetupEnvOverrides(authCandidates)).flat(),
+    ...resolveManifestProviderUsageAuthEnvVarNames(params),
+  ]);
 }
 
+/** Lists env vars that may contain provider secrets for broad scrubbing. */
 export function listKnownSecretEnvVarNames(params?: ProviderEnvVarLookupParams): string[] {
-  return [...new Set(Object.values(resolveProviderEnvVars(params)).flatMap((keys) => keys))];
+  return uniqueStrings([
+    ...Object.values(withSetupEnvOverrides(resolveProviderAuthEnvVarCandidates(params))).flat(),
+    ...resolveManifestProviderUsageAuthEnvVarNames(params),
+  ]);
 }
 
+/** Returns a copy of an env object with denied keys removed case-insensitively. */
 export function omitEnvKeysCaseInsensitive(
   baseEnv: NodeJS.ProcessEnv,
   keys: Iterable<string>,

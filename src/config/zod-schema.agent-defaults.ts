@@ -1,18 +1,18 @@
+// Defines Zod schema fragments for agent default configuration.
 import { z } from "zod";
 import { isValidNonNegativeByteSizeString } from "./byte-size.js";
 import {
   HeartbeatSchema,
   AgentSandboxSchema,
   AgentContextLimitsSchema,
-  AgentEmbeddedHarnessSchema,
-  AgentRuntimePolicySchema,
+  AgentModelMapSchema,
+  AgentModelPolicySchema,
   AgentModelSchema,
-  MemorySearchSchema,
+  AgentToolModelSchema,
 } from "./zod-schema.agent-runtime.js";
 import {
   BlockStreamingChunkSchema,
   BlockStreamingCoalesceSchema,
-  CliBackendSchema,
   HumanDelaySchema,
   TypingModeSchema,
 } from "./zod-schema.core.js";
@@ -31,19 +31,31 @@ const OptionalBootstrapFileNameSchema = z.enum([
   "IDENTITY.md",
 ]);
 
-export const SilentReplyPolicyConfigSchema = z
+const AgentThinkingLevelSchema = z.enum([
+  "off",
+  "minimal",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+  "adaptive",
+  "max",
+  "ultra",
+]);
+
+const EmbeddedAgentConfigSchema = z
   .object({
-    direct: SilentReplyPolicySchema.optional(),
-    group: SilentReplyPolicySchema.optional(),
-    internal: SilentReplyPolicySchema.optional(),
+    projectSettingsPolicy: z
+      .union([z.literal("trusted"), z.literal("sanitize"), z.literal("ignore")])
+      .optional(),
+    executionContract: z.union([z.literal("default"), z.literal("strict-agentic")]).optional(),
   })
   .strict();
 
-export const SilentReplyRewriteConfigSchema = z
+export const SilentReplyPolicyConfigSchema = z
   .object({
-    direct: z.boolean().optional(),
-    group: z.boolean().optional(),
-    internal: z.boolean().optional(),
+    group: SilentReplyPolicySchema.optional(),
+    internal: SilentReplyPolicySchema.optional(),
   })
   .strict();
 
@@ -51,51 +63,29 @@ export const AgentDefaultsSchema = z
   .object({
     /** Global default provider params applied to all models before per-model and per-agent overrides. */
     params: z.record(z.string(), z.unknown()).optional(),
-    agentRuntime: AgentRuntimePolicySchema,
-    embeddedHarness: AgentEmbeddedHarnessSchema,
     model: AgentModelSchema.optional(),
-    imageModel: AgentModelSchema.optional(),
-    imageGenerationModel: AgentModelSchema.optional(),
-    videoGenerationModel: AgentModelSchema.optional(),
-    musicGenerationModel: AgentModelSchema.optional(),
-    mediaGenerationAutoProviderFallback: z.boolean().optional(),
-    pdfModel: AgentModelSchema.optional(),
-    pdfMaxBytesMb: z.number().positive().optional(),
-    pdfMaxPages: z.number().int().positive().optional(),
-    models: z
-      .record(
-        z.string(),
-        z
-          .object({
-            alias: z.string().optional(),
-            /** Provider-specific API parameters (e.g., GLM-4.7 thinking mode). */
-            params: z.record(z.string(), z.unknown()).optional(),
-            agentRuntime: AgentRuntimePolicySchema,
-            /** Enable streaming for this model (default: true, false for Ollama to avoid SDK issue #1205). */
-            streaming: z.boolean().optional(),
-          })
-          .strict(),
-      )
-      .optional(),
-    workspace: z.string().optional(),
-    skills: z.array(z.string()).optional(),
-    silentReply: SilentReplyPolicyConfigSchema.optional(),
-    silentReplyRewrite: SilentReplyRewriteConfigSchema.optional(),
-    repoRoot: z.string().optional(),
-    systemPromptOverride: z.string().optional(),
-    promptOverlays: z
+    modelSelectionScope: z.enum(["session", "agent", "global"]).optional(),
+    utilityModel: z.string().optional(),
+    imageModel: AgentToolModelSchema.optional(),
+    mediaModels: z
       .object({
-        gpt5: z
-          .object({
-            personality: z
-              .union([z.literal("friendly"), z.literal("on"), z.literal("off")])
-              .optional(),
-          })
-          .strict()
-          .optional(),
+        image: AgentToolModelSchema.optional(),
+        video: AgentToolModelSchema.optional(),
+        music: AgentToolModelSchema.optional(),
       })
       .strict()
       .optional(),
+    voiceModel: AgentToolModelSchema.optional(),
+    pdfModel: AgentToolModelSchema.optional(),
+    pdfMaxMb: z.number().positive().optional(),
+    pdfMaxPages: z.number().int().positive().optional(),
+    models: AgentModelMapSchema.optional(),
+    modelPolicy: AgentModelPolicySchema.optional(),
+    workspace: z.string().optional(),
+    cwd: z.string().optional(),
+    skills: z.array(z.string()).optional(),
+    silentReply: SilentReplyPolicyConfigSchema.optional(),
+    repoRoot: z.string().optional(),
     skipBootstrap: z.boolean().optional(),
     skipOptionalBootstrapFiles: z.array(OptionalBootstrapFileNameSchema).optional(),
     contextInjection: z
@@ -108,9 +98,6 @@ export const AgentDefaultsSchema = z
         localModelLean: z.boolean().optional(),
       })
       .strict()
-      .optional(),
-    bootstrapPromptTruncationWarning: z
-      .union([z.literal("off"), z.literal("once"), z.literal("always")])
       .optional(),
     userTimezone: z.string().optional(),
     startupContext: z
@@ -130,33 +117,14 @@ export const AgentDefaultsSchema = z
       .strict()
       .optional(),
     contextLimits: AgentContextLimitsSchema,
-    timeFormat: z.union([z.literal("auto"), z.literal("12"), z.literal("24")]).optional(),
-    envelopeTimezone: z.string().optional(),
-    envelopeTimestamp: z.union([z.literal("on"), z.literal("off")]).optional(),
-    envelopeElapsed: z.union([z.literal("on"), z.literal("off")]).optional(),
-    contextTokens: z.number().int().positive().optional(),
-    cliBackends: z.record(z.string(), CliBackendSchema).optional(),
-    memorySearch: MemorySearchSchema,
     contextPruning: z
       .object({
         mode: z.union([z.literal("off"), z.literal("cache-ttl")]).optional(),
         ttl: z.string().optional(),
-        keepLastAssistants: z.number().int().nonnegative().optional(),
-        softTrimRatio: z.number().min(0).max(1).optional(),
-        hardClearRatio: z.number().min(0).max(1).optional(),
-        minPrunableToolChars: z.number().int().nonnegative().optional(),
         tools: z
           .object({
             allow: z.array(z.string()).optional(),
             deny: z.array(z.string()).optional(),
-          })
-          .strict()
-          .optional(),
-        softTrim: z
-          .object({
-            maxChars: z.number().int().nonnegative().optional(),
-            headChars: z.number().int().nonnegative().optional(),
-            tailChars: z.number().int().nonnegative().optional(),
           })
           .strict()
           .optional(),
@@ -172,17 +140,12 @@ export const AgentDefaultsSchema = z
       .optional(),
     compaction: z
       .object({
+        enabled: z.boolean().optional(),
         mode: z.union([z.literal("default"), z.literal("safeguard")]).optional(),
         provider: z.string().optional(),
-        reserveTokens: z.number().int().nonnegative().optional(),
+        thinkingLevel: z.union([AgentThinkingLevelSchema, z.literal("inherit")]).optional(),
         keepRecentTokens: z.number().int().positive().optional(),
-        reserveTokensFloor: z.number().int().nonnegative().optional(),
-        maxHistoryShare: z.number().min(0.1).max(0.9).optional(),
-        customInstructions: z.string().optional(),
-        identifierPolicy: z
-          .union([z.literal("strict"), z.literal("off"), z.literal("custom")])
-          .optional(),
-        identifierInstructions: z.string().optional(),
+        identifierPolicy: z.union([z.literal("strict"), z.literal("off")]).optional(),
         recentTurnsPreserve: z.number().int().min(0).max(12).optional(),
         qualityGuard: z
           .object({
@@ -207,38 +170,17 @@ export const AgentDefaultsSchema = z
             model: z.string().optional(),
             softThresholdTokens: z.number().int().nonnegative().optional(),
             forceFlushTranscriptBytes: NonNegativeByteSizeSchema.optional(),
-            prompt: z.string().optional(),
-            systemPrompt: z.string().optional(),
           })
           .strict()
           .optional(),
-        truncateAfterCompaction: z.boolean().optional(),
         maxActiveTranscriptBytes: NonNegativeByteSizeSchema.optional(),
         notifyUser: z.boolean().optional(),
       })
       .strict()
       .optional(),
-    embeddedPi: z
-      .object({
-        projectSettingsPolicy: z
-          .union([z.literal("trusted"), z.literal("sanitize"), z.literal("ignore")])
-          .optional(),
-        executionContract: z.union([z.literal("default"), z.literal("strict-agentic")]).optional(),
-      })
-      .strict()
-      .optional(),
-    thinkingDefault: z
-      .union([
-        z.literal("off"),
-        z.literal("minimal"),
-        z.literal("low"),
-        z.literal("medium"),
-        z.literal("high"),
-        z.literal("xhigh"),
-        z.literal("adaptive"),
-        z.literal("max"),
-      ])
-      .optional(),
+    embeddedAgent: EmbeddedAgentConfigSchema.optional(),
+    thinkingDefault: AgentThinkingLevelSchema.optional(),
+    fastModeDefault: z.union([z.boolean(), z.literal("auto")]).optional(),
     verboseDefault: z.union([z.literal("off"), z.literal("on"), z.literal("full")]).optional(),
     toolProgressDetail: z.union([z.literal("explain"), z.literal("raw")]).optional(),
     reasoningDefault: z.union([z.literal("off"), z.literal("on"), z.literal("stream")]).optional(),
@@ -250,15 +192,38 @@ export const AgentDefaultsSchema = z
     blockStreamingChunk: BlockStreamingChunkSchema.optional(),
     blockStreamingCoalesce: BlockStreamingCoalesceSchema.optional(),
     humanDelay: HumanDelaySchema.optional(),
-    timeoutSeconds: z.number().int().positive().optional(),
+    // 0 = unlimited run budget; stream liveness watchdogs still apply.
+    timeoutSeconds: z.number().int().nonnegative().optional(),
     mediaMaxMb: z.number().positive().optional(),
     imageMaxDimensionPx: z.number().int().positive().optional(),
+    imageQuality: z.enum(["auto", "efficient", "balanced", "high"]).optional(),
     typingIntervalSeconds: z.number().int().positive().optional(),
     typingMode: TypingModeSchema.optional(),
-    heartbeat: HeartbeatSchema,
+    heartbeat: HeartbeatSchema.unwrap()
+      .safeExtend({ agentId: z.string().trim().min(1).optional() })
+      .optional(),
+    systemAgent: z
+      .object({
+        agentId: z.string().trim().min(1).optional(),
+      })
+      .strict()
+      .optional(),
+    authInheritance: z
+      .object({
+        agentId: z.string().trim().min(1).optional(),
+      })
+      .strict()
+      .optional(),
+    sessionStore: z
+      .object({
+        agentId: z.string().trim().min(1).optional(),
+      })
+      .strict()
+      .optional(),
     maxConcurrent: z.number().int().positive().optional(),
     subagents: z
       .object({
+        delegationMode: z.enum(["suggest", "prefer"]).optional(),
         allowAgents: z.array(z.string()).optional(),
         maxConcurrent: z.number().int().positive().optional(),
         maxSpawnDepth: z

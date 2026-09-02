@@ -1,3 +1,5 @@
+// Gateway server discovery helpers.
+// Provides Bonjour CLI metadata and optional Tailscale DNS hints.
 import fs from "node:fs";
 import path from "node:path";
 import { getTailnetHostname } from "../infra/tailscale.js";
@@ -11,6 +13,7 @@ type ResolveBonjourCliPathOptions = {
   statSync?: (path: string) => fs.Stats;
 };
 
+/** Formats the Bonjour instance name while preserving user-provided OpenClaw names. */
 export function formatBonjourInstanceName(displayName: string) {
   const trimmed = displayName.trim();
   if (!trimmed) {
@@ -22,6 +25,7 @@ export function formatBonjourInstanceName(displayName: string) {
   return `${trimmed} (OpenClaw)`;
 }
 
+/** Resolves the CLI path advertised to Bonjour clients, preferring explicit env config. */
 export function resolveBonjourCliPath(opts: ResolveBonjourCliPathOptions = {}): string | undefined {
   const env = opts.env ?? process.env;
   const envPath = env.OPENCLAW_CLI_PATH?.trim();
@@ -64,6 +68,7 @@ export function resolveBonjourCliPath(opts: ResolveBonjourCliPathOptions = {}): 
   return undefined;
 }
 
+/** Resolves a Tailnet DNS hint from env or the local tailscale CLI when enabled. */
 export async function resolveTailnetDnsHint(opts?: {
   env?: NodeJS.ProcessEnv;
   exec?: typeof runExec;

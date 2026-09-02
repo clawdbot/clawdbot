@@ -16,7 +16,7 @@ import type { PluginManifestRecord } from "../../plugins/manifest-registry.js";
 
 const listChannelPluginCatalogEntries = vi.hoisted(() => vi.fn((_opts?: unknown): unknown[] => []));
 const listChatChannels = vi.hoisted(() => vi.fn((): unknown[] => []));
-const loadPluginManifestRegistry = vi.hoisted(() => vi.fn());
+const loadPluginManifestRegistryCore = vi.hoisted(() => vi.fn());
 const loadPluginRegistrySnapshot = vi.hoisted(() => vi.fn());
 const loadPluginRegistrySnapshotWithMetadata = vi.hoisted(() => vi.fn());
 const listPluginContributionIds = vi.hoisted(() => vi.fn((_params?: unknown): string[] => []));
@@ -30,7 +30,7 @@ const applyPluginAutoEnable = vi.hoisted(() =>
 const getChannelPluginCatalogEntry = vi.hoisted(() => vi.fn());
 
 vi.mock("../../channels/plugins/catalog.js", () => ({
-  listChannelPluginCatalogEntries: (opts?: unknown) => listChannelPluginCatalogEntries(opts),
+  listRawChannelPluginCatalogEntries: (opts?: unknown) => listChannelPluginCatalogEntries(opts),
   getChannelPluginCatalogEntry: (...args: unknown[]) =>
     getChannelPluginCatalogEntry(...(args as [string, Record<string, unknown>])),
 }));
@@ -39,11 +39,11 @@ vi.mock("../../channels/registry.js", () => ({
   normalizeAnyChannelId: (channelId?: string) => channelId?.trim().toLowerCase() ?? null,
 }));
 vi.mock("../../plugins/manifest-registry.js", () => ({
-  loadPluginManifestRegistry: (...a: unknown[]) => loadPluginManifestRegistry(...a),
+  loadPluginManifestRegistryCore: (...a: unknown[]) => loadPluginManifestRegistryCore(...a),
 }));
 vi.mock("../../plugins/plugin-registry.js", () => ({
   loadPluginManifestRegistryForPluginRegistry: (...args: unknown[]) =>
-    loadPluginManifestRegistry(...args),
+    loadPluginManifestRegistryCore(...args),
   loadPluginRegistrySnapshot: (...args: unknown[]) => loadPluginRegistrySnapshot(...args),
   loadPluginRegistrySnapshotWithMetadata: (...args: unknown[]) =>
     loadPluginRegistrySnapshotWithMetadata(...args),
@@ -54,6 +54,7 @@ vi.mock("../../config/plugin-auto-enable.js", () => ({
 }));
 vi.mock("../../plugins/loader.js", () => ({
   loadOpenClawPlugins: vi.fn(),
+  loadPluginRegistryHandle: vi.fn(),
 }));
 
 import { resolveChannelSetupEntries } from "./discovery.js";
@@ -64,7 +65,7 @@ import { resolveChannelSetupEntries } from "./discovery.js";
 
 beforeEach(() => {
   vi.clearAllMocks();
-  loadPluginManifestRegistry.mockReturnValue({ plugins: [], diagnostics: [] });
+  loadPluginManifestRegistryCore.mockReturnValue({ plugins: [], diagnostics: [] });
   loadPluginRegistrySnapshot.mockReturnValue({
     version: 1,
     hostContractVersion: "test",
@@ -150,10 +151,12 @@ describe("resolveChannelSetupEntries workspace shadow exclusion (GHSA-2qrv-rc5x-
       meta: workspaceEntry.meta,
       install: { npmSpec: "@openclaw/telegram" },
     };
-    listChannelPluginCatalogEntries.mockImplementation((opts?: unknown) =>
-      (opts as { excludeWorkspace?: boolean } | undefined)?.excludeWorkspace
-        ? [bundledEntry]
-        : [workspaceEntry],
+    listChannelPluginCatalogEntries.mockReturnValue([workspaceEntry]);
+    getChannelPluginCatalogEntry.mockImplementation(
+      (_channel: string, opts?: { excludePluginRefs?: Array<{ pluginId: string }> }) =>
+        opts?.excludePluginRefs?.some((entry) => entry.pluginId === "evil-telegram-shadow")
+          ? bundledEntry
+          : undefined,
     );
 
     resolveChannelSetupEntries({
@@ -162,10 +165,15 @@ describe("resolveChannelSetupEntries workspace shadow exclusion (GHSA-2qrv-rc5x-
       installedPlugins: [],
     });
 
-    const fallbackCall = listChannelPluginCatalogEntries.mock.calls.find(
-      ([opts]) => (opts as { excludeWorkspace?: boolean } | undefined)?.excludeWorkspace === true,
+    const fallbackCall = getChannelPluginCatalogEntry.mock.calls.find(
+      ([, opts]) =>
+        (
+          opts as { excludePluginRefs?: Array<{ pluginId: string; origin?: string }> } | undefined
+        )?.excludePluginRefs?.some(
+          (entry) => entry.pluginId === "evil-telegram-shadow" && entry.origin === "workspace",
+        ) === true,
     );
-    expect(fallbackCall?.[0]).toMatchObject({ excludeWorkspace: true });
+    expect(fallbackCall).toBeTruthy();
   });
 
   it("still returns bundled-origin entries", () => {
@@ -214,7 +222,7 @@ describe("resolveChannelSetupEntries workspace shadow exclusion (GHSA-2qrv-rc5x-
       install: { npmSpec: "trusted-telegram-shadow" },
     };
     listChannelPluginCatalogEntries.mockReturnValue([workspaceEntry]);
-    loadPluginManifestRegistry.mockReturnValue({
+    loadPluginManifestRegistryCore.mockReturnValue({
       plugins: [createManifestChannelPlugin("trusted-telegram-shadow", ["telegram"])],
       diagnostics: [],
     });
@@ -265,7 +273,7 @@ describe("resolveChannelSetupEntries workspace shadow exclusion (GHSA-2qrv-rc5x-
         "trusted-telegram-shadow": ["channel configured"],
       },
     }));
-    loadPluginManifestRegistry.mockReturnValue({
+    loadPluginManifestRegistryCore.mockReturnValue({
       plugins: [createManifestChannelPlugin("trusted-telegram-shadow", ["telegram"])],
       diagnostics: [],
     });
@@ -310,7 +318,7 @@ describe("resolveChannelSetupEntries workspace shadow exclusion (GHSA-2qrv-rc5x-
       changes: [] as string[],
       autoEnabledReasons: {},
     }));
-    loadPluginManifestRegistry.mockReturnValue({
+    loadPluginManifestRegistryCore.mockReturnValue({
       plugins: [createManifestChannelPlugin("my-cool-plugin", ["my-cool-plugin"])],
       diagnostics: [],
     });
@@ -326,6 +334,6 @@ describe("resolveChannelSetupEntries workspace shadow exclusion (GHSA-2qrv-rc5x-
       installedPlugins: [],
     });
 
-    expect(result.installedCatalogEntries).toEqual([]);
+    expect(result.installedCatalogEntries).toStrictEqual([]);
   });
 });

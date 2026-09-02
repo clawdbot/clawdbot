@@ -1,9 +1,23 @@
-import type { Chat, Message, MessageOrigin, User } from "@grammyjs/types";
-import type { NormalizedLocation } from "openclaw/plugin-sdk/channel-inbound";
+// Telegram helper module supports body helpers behavior.
+import type {
+  Chat,
+  Message,
+  MessageOrigin,
+  RichBlock,
+  RichBlockCaption,
+  RichMessageButton,
+  RichText,
+  User,
+} from "grammy/types";
+import type {
+  ChannelInboundMediaInput,
+  NormalizedLocation,
+} from "openclaw/plugin-sdk/channel-inbound";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
-} from "openclaw/plugin-sdk/text-runtime";
+} from "openclaw/plugin-sdk/string-coerce-runtime";
+import { renderTelegramTextEntities } from "./inbound-text-entities.js";
 
 type TelegramMediaMessage = Pick<
   Message,
@@ -19,8 +33,10 @@ type TelegramMediaFileRef =
   | NonNullable<Message["document"]>
   | NonNullable<Message["sticker"]>;
 
+export type TelegramMediaKind = Exclude<NonNullable<ChannelInboundMediaInput["kind"]>, "unknown">;
+
 type TelegramPrimaryMedia = {
-  placeholder: string;
+  kind: TelegramMediaKind;
   fileRef: TelegramMediaFileRef;
 };
 
@@ -39,33 +55,27 @@ export function resolveTelegramPrimaryMedia(
   }
   const photo = msg.photo?.[msg.photo.length - 1];
   if (photo) {
-    return { placeholder: "<media:image>", fileRef: photo };
+    return { kind: "image", fileRef: photo };
   }
   if (msg.video) {
-    return { placeholder: "<media:video>", fileRef: msg.video };
+    return { kind: "video", fileRef: msg.video };
   }
   if (msg.video_note) {
-    return { placeholder: "<media:video>", fileRef: msg.video_note };
+    return { kind: "video", fileRef: msg.video_note };
   }
   if (msg.audio) {
-    return { placeholder: "<media:audio>", fileRef: msg.audio };
+    return { kind: "audio", fileRef: msg.audio };
   }
   if (msg.voice) {
-    return { placeholder: "<media:audio>", fileRef: msg.voice };
+    return { kind: "audio", fileRef: msg.voice };
   }
   if (msg.document) {
-    return { placeholder: "<media:document>", fileRef: msg.document };
+    return { kind: "document", fileRef: msg.document };
   }
   if (msg.sticker) {
-    return { placeholder: "<media:sticker>", fileRef: msg.sticker };
+    return { kind: "sticker", fileRef: msg.sticker };
   }
   return undefined;
-}
-
-export function resolveTelegramMediaPlaceholder(
-  msg: TelegramMediaMessage | undefined | null,
-): string | undefined {
-  return resolveTelegramPrimaryMedia(msg)?.placeholder;
 }
 
 export function buildSenderLabel(msg: Message, senderId?: number | string) {
@@ -92,6 +102,143 @@ export function buildSenderLabel(msg: Message, senderId?: number | string) {
 
 export type TelegramTextEntity = NonNullable<Message["entities"]>[number];
 
+const TELEGRAM_RICH_MESSAGE_PLACEHOLDER = "[unsupported Telegram rich_message received]";
+
+type TelegramTextMessage = Pick<
+  Message,
+  "text" | "caption" | "entities" | "caption_entities" | "poll"
+> & { rich_message?: Message.RichMessageMessage["rich_message"] };
+
+function compactRichText(value: string): string {
+  return value
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .join("\n");
+}
+
+function joinRichText(parts: string[], separator: string): string {
+  return parts.map(compactRichText).filter(Boolean).join(separator);
+}
+
+function renderRichMessageButton(button: RichMessageButton): string {
+  return renderRichInlineText(button.text);
+}
+
+function renderRichInlineText(value: RichText | undefined): string {
+  if (value === undefined) {
+    return "";
+  }
+  if (typeof value === "string") {
+    return value;
+  }
+  if (Array.isArray(value)) {
+    return value.map(renderRichInlineText).filter(Boolean).join("");
+  }
+  switch (value.type) {
+    case "anchor":
+      return "";
+    case "button":
+      return renderRichMessageButton(value.button);
+    case "custom_emoji":
+      return value.alternative_text;
+    case "mathematical_expression":
+      return value.expression;
+    default:
+      return renderRichInlineText(value.text);
+  }
+}
+
+function renderRichCaption(caption: RichBlockCaption | undefined): string {
+  return caption
+    ? joinRichText(
+        [renderRichInlineText(caption.text), renderRichInlineText(caption.credit ?? "")],
+        "\n",
+      )
+    : "";
+}
+
+function renderRichBlock(block: RichBlock): string {
+  switch (block.type) {
+    case "paragraph":
+    case "heading":
+    case "pre":
+    case "footer":
+    case "thinking":
+      return renderRichInlineText(block.text);
+    case "expandable_blockquote":
+    case "pullquote":
+      return joinRichText(
+        [renderRichInlineText(block.text), renderRichInlineText(block.credit ?? "")],
+        "\n",
+      );
+    case "mathematical_expression":
+      return block.expression;
+    case "blockquote":
+      return joinRichText(
+        [renderRichInlineText(block.credit ?? ""), renderRichBlocks(block.blocks)],
+        "\n",
+      );
+    case "collage":
+    case "slideshow":
+      return joinRichText([renderRichCaption(block.caption), renderRichBlocks(block.blocks)], "\n");
+    case "details":
+      return joinRichText(
+        [renderRichInlineText(block.summary), renderRichBlocks(block.blocks)],
+        "\n",
+      );
+    case "list":
+      return joinRichText(
+        block.items.map((item) => joinRichText([item.label, renderRichBlocks(item.blocks)], "\n")),
+        "\n",
+      );
+    case "table":
+      return joinRichText(
+        [
+          renderRichInlineText(block.caption ?? ""),
+          ...block.cells.flatMap((row) => row.map((cell) => renderRichInlineText(cell.text ?? ""))),
+        ],
+        "\n",
+      );
+    case "animation":
+    case "audio":
+    case "document":
+    case "map":
+    case "photo":
+    case "video":
+    case "voice_note":
+      return renderRichCaption(block.caption);
+    case "buttons":
+      return joinRichText(block.buttons.map(renderRichMessageButton), "\n");
+    case "anchor":
+    case "divider":
+      return "";
+  }
+  block satisfies never;
+  return "";
+}
+
+function renderRichBlocks(blocks: readonly RichBlock[]): string {
+  return joinRichText(blocks.map(renderRichBlock), "\n");
+}
+
+export function resolveTelegramRichMessagePlaceholder(
+  msg: TelegramTextMessage,
+): string | undefined {
+  return msg.rich_message ? TELEGRAM_RICH_MESSAGE_PLACEHOLDER : undefined;
+}
+
+export function resolveTelegramRichMessageText(msg: TelegramTextMessage): string | undefined {
+  if (!msg.rich_message) {
+    return undefined;
+  }
+  return compactRichText(renderRichBlocks(msg.rich_message.blocks)) || undefined;
+}
+
+export function resolveTelegramRichMessageBody(msg: TelegramTextMessage): string | undefined {
+  return resolveTelegramRichMessageText(msg) ?? resolveTelegramRichMessagePlaceholder(msg);
+}
+
 export function isBinaryContent(text: string): boolean {
   for (let i = 0; i < text.length; i++) {
     const code = text.charCodeAt(i);
@@ -107,15 +254,67 @@ export function resolveTelegramTextContent(text: unknown, caption?: unknown): st
   return isBinaryContent(raw) ? "" : raw;
 }
 
-export function getTelegramTextParts(
-  msg: Pick<Message, "text" | "caption" | "entities" | "caption_entities">,
-): {
+function formatTelegramPollText(poll: NonNullable<Message["poll"]>): string {
+  const correctOptionIds = new Set(poll.correct_option_ids ?? []);
+  const optionLines = poll.options.map((option, index) => {
+    const optionText = renderTelegramTextEntities(option.text, option.text_entities);
+    const voteLabel = option.voter_count === 1 ? "vote" : "votes";
+    const correctLabel = correctOptionIds.has(index) ? " (correct)" : "";
+    return `${index + 1}. ${optionText} — ${option.voter_count} ${voteLabel}${correctLabel}`;
+  });
+
+  return [
+    `[Poll] ${renderTelegramTextEntities(poll.question, poll.question_entities)}`,
+    ...(poll.description
+      ? [renderTelegramTextEntities(poll.description, poll.description_entities)]
+      : []),
+    ...optionLines,
+    `Total voters: ${poll.total_voter_count}`,
+    `Type: ${poll.type}`,
+    `Visibility: ${poll.is_anonymous ? "anonymous" : "public"}`,
+    `Selection: ${poll.allows_multiple_answers ? "multiple answers" : "single answer"}`,
+    `Status: ${poll.is_closed ? "closed" : "open"}`,
+    ...(poll.explanation
+      ? [`Explanation: ${renderTelegramTextEntities(poll.explanation, poll.explanation_entities)}`]
+      : []),
+  ].join("\n");
+}
+
+export function getTelegramTextParts(msg: TelegramTextMessage): {
   text: string;
   entities: TelegramTextEntity[];
 } {
   const text = resolveTelegramTextContent(msg.text, msg.caption);
-  const entities = text ? (msg.entities ?? msg.caption_entities ?? []) : [];
-  return { text, entities };
+  if (text) {
+    return { text, entities: msg.entities ?? msg.caption_entities ?? [] };
+  }
+  return { text: msg.poll ? formatTelegramPollText(msg.poll) : "", entities: [] };
+}
+
+export function joinTelegramTextParts(
+  messages: readonly Message[],
+  separator: string,
+): { text: string; entities: TelegramTextEntity[] } {
+  const textParts: string[] = [];
+  const entities: TelegramTextEntity[] = [];
+  let offset = 0;
+
+  for (const message of messages) {
+    const textPart = getTelegramTextParts(message);
+    if (!textPart.text) {
+      continue;
+    }
+    if (textParts.length > 0) {
+      offset += separator.length;
+    }
+    entities.push(
+      ...textPart.entities.map((entity) => ({ ...entity, offset: entity.offset + offset })),
+    );
+    textParts.push(textPart.text);
+    offset += textPart.text.length;
+  }
+
+  return { text: textParts.join(separator), entities };
 }
 
 function isTelegramMentionWordChar(char: string | undefined): boolean {
@@ -139,6 +338,15 @@ function hasStandaloneTelegramMention(text: string, mention: string): boolean {
   return false;
 }
 
+function isBotCommandAddressedToMention(command: string, mention: string): boolean {
+  const normalized = normalizeLowercaseStringOrEmpty(command);
+  if (!normalized.startsWith("/") || !normalized.endsWith(mention)) {
+    return false;
+  }
+  const atIndex = normalized.lastIndexOf(mention);
+  return atIndex > 1;
+}
+
 export function hasBotMention(msg: Message, botUsername: string) {
   const { text, entities } = getTelegramTextParts(msg);
   const mention = normalizeLowercaseStringOrEmpty(`@${botUsername}`);
@@ -146,48 +354,42 @@ export function hasBotMention(msg: Message, botUsername: string) {
     return true;
   }
   for (const ent of entities) {
-    if (ent.type !== "mention") {
-      continue;
-    }
     const slice = text.slice(ent.offset, ent.offset + ent.length);
-    if (normalizeLowercaseStringOrEmpty(slice) === mention) {
+    if (ent.type === "mention" && normalizeLowercaseStringOrEmpty(slice) === mention) {
+      return true;
+    }
+    if (ent.type === "bot_command" && isBotCommandAddressedToMention(slice, mention)) {
       return true;
     }
   }
   return false;
 }
 
-type TelegramTextLinkEntity = {
-  type: string;
-  offset: number;
-  length: number;
-  url?: string;
-};
-
-export function expandTextLinks(text: string, entities?: TelegramTextLinkEntity[] | null): string {
-  if (!text || !entities?.length) {
-    return text;
+export function hasLeadingBotCommandAddressedToOtherBot(
+  msg: Message,
+  botUsername: string,
+): boolean {
+  const { text, entities } = getTelegramTextParts(msg);
+  const normalizedBotUsername = normalizeLowercaseStringOrEmpty(botUsername).replace(/^@/u, "");
+  if (!normalizedBotUsername) {
+    return false;
   }
-
-  const textLinks = entities
-    .filter(
-      (entity): entity is TelegramTextLinkEntity & { url: string } =>
-        entity.type === "text_link" && Boolean(entity.url),
-    )
-    .toSorted((a, b) => b.offset - a.offset);
-
-  if (textLinks.length === 0) {
-    return text;
+  const leadingCommand = entities.find(
+    (entity) => entity.type === "bot_command" && entity.offset === 0,
+  );
+  if (!leadingCommand) {
+    return false;
   }
+  const command = text.slice(0, leadingCommand.length);
+  const target = command.match(/^\/[^@\s]+@([a-z0-9_]+)$/iu)?.[1];
+  return Boolean(target && target.toLowerCase() !== normalizedBotUsername);
+}
 
-  let result = text;
-  for (const entity of textLinks) {
-    const linkText = text.slice(entity.offset, entity.offset + entity.length);
-    const markdown = `[${linkText}](${entity.url})`;
-    result =
-      result.slice(0, entity.offset) + markdown + result.slice(entity.offset + entity.length);
-  }
-  return result;
+export function hasBotMentionInText(text: string, botUsername: string): boolean {
+  return hasStandaloneTelegramMention(
+    normalizeLowercaseStringOrEmpty(text),
+    normalizeLowercaseStringOrEmpty(`@${botUsername}`),
+  );
 }
 
 export type TelegramForwardedContext = {

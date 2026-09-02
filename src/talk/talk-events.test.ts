@@ -1,3 +1,4 @@
+// Talk event tests cover realtime voice event normalization.
 import { describe, expect, it } from "vitest";
 import { createTalkEventSequencer } from "./talk-events.js";
 
@@ -55,12 +56,15 @@ describe("talk event envelope", () => {
         timestamp: "2026-05-05T12:00:01.000Z",
         payload: { name: "openclaw_agent_consult" },
       }),
-    ).toMatchObject({
+    ).toEqual({
       id: "session-voice:1",
       sessionId: "session-voice",
+      seq: 1,
+      timestamp: "2026-05-05T12:00:01.000Z",
       mode: "stt-tts",
       transport: "managed-room",
       brain: "agent-consult",
+      provider: undefined,
       type: "tool.call",
       turnId: "turn-1",
       captureId: "capture-1",

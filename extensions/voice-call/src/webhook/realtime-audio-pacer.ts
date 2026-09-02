@@ -1,18 +1,15 @@
+// Realtime telephony audio pacing for mulaw streams.
+
 const TELEPHONY_SAMPLE_RATE = 8_000;
 const TELEPHONY_CHUNK_BYTES = 160;
-const TELEPHONY_CHUNK_MS = 20;
-const DEFAULT_SPEECH_RMS_THRESHOLD = 0.035;
-const DEFAULT_REQUIRED_LOUD_CHUNKS = 4;
-const DEFAULT_REQUIRED_QUIET_CHUNKS = 12;
+// The lead absorbs event-loop timer lateness and network jitter in the telephony edge buffer.
+// Barge-in clear flushes both queues, so this cushion does not add interruption latency.
+const LEAD_MS = 160;
 const DEFAULT_MAX_QUEUED_AUDIO_BYTES = TELEPHONY_SAMPLE_RATE * 120;
-const PCM16_MAX_AMPLITUDE = 32768;
-const MULAW_LINEAR_SAMPLES = new Int16Array(256);
+const QUEUE_COMPACT_HEAD_THRESHOLD = 256;
 
-for (let i = 0; i < MULAW_LINEAR_SAMPLES.length; i += 1) {
-  MULAW_LINEAR_SAMPLES[i] = decodeMulawSample(i);
-}
-
-type RealtimeTwilioAudioQueueItem =
+/** Queue item sent over the realtime provider media stream. */
+type RealtimeAudioQueueItem =
   | {
       chunk: Buffer;
       durationMs: number;
@@ -23,23 +20,35 @@ type RealtimeTwilioAudioQueueItem =
       type: "mark";
     };
 
-export type RealtimeTwilioAudioPacerSendJson = (message: unknown) => boolean;
+/** WebSocket send callback for realtime audio frames. */
+type RealtimeAudioSend = (message: string) => boolean;
 
-export class RealtimeTwilioAudioPacer {
-  private queue: RealtimeTwilioAudioQueueItem[] = [];
+/** Provider-specific serializer for media, clear, and mark frames. */
+interface RealtimeAudioSerializer {
+  media(payloadBase64: string): string;
+  clear(): string;
+  mark(name: string): string;
+}
+
+/** Paces outgoing mulaw audio frames at telephony cadence. */
+export class RealtimeAudioPacer {
+  private queue: RealtimeAudioQueueItem[] = [];
+  private queueHead = 0;
   private timer: ReturnType<typeof setTimeout> | null = null;
   private queuedAudioBytes = 0;
   private closed = false;
+  private streamClockMs: number | null = null;
 
   constructor(
     private readonly params: {
       maxQueuedAudioBytes?: number;
       onBackpressure?: () => void;
-      sendJson: RealtimeTwilioAudioPacerSendJson;
-      streamSid: string;
+      send: RealtimeAudioSend;
+      serializer: RealtimeAudioSerializer;
     },
   ) {}
 
+  /** Queue mulaw audio and split it into 20ms-ish telephony chunks. */
   sendAudio(muLaw: Buffer): void {
     if (this.closed || muLaw.length === 0) {
       return;
@@ -54,13 +63,14 @@ export class RealtimeTwilioAudioPacer {
       this.queue.push({
         type: "audio",
         chunk,
-        durationMs: Math.max(1, Math.round((chunk.length / TELEPHONY_SAMPLE_RATE) * 1000)),
+        durationMs: chunk.length / 8,
       });
       this.queuedAudioBytes += chunk.length;
     }
     this.ensurePump();
   }
 
+  /** Queue a provider mark frame after prior audio frames. */
   sendMark(name: string): void {
     if (this.closed || !name) {
       return;
@@ -69,25 +79,35 @@ export class RealtimeTwilioAudioPacer {
     this.ensurePump();
   }
 
+  /** Clear queued audio and notify the provider stream. */
   clearAudio(): number {
     if (this.closed) {
       return 0;
     }
     const clearedAudioBytes = this.queuedAudioBytes;
     this.clearTimer();
-    this.queue = [];
+    this.resetQueue();
     this.queuedAudioBytes = 0;
-    this.params.sendJson({ event: "clear", streamSid: this.params.streamSid });
+    this.streamClockMs = null;
+    this.params.send(this.params.serializer.clear());
     return clearedAudioBytes;
   }
 
+  /** True while queued audio or a paced send timer can still reach the telephony stream. */
+  hasPendingAudio(): boolean {
+    return !this.closed && (this.queuedAudioBytes > 0 || this.timer !== null);
+  }
+
+  /** Stop sending and discard queued frames. */
   close(): void {
     this.closed = true;
     this.clearTimer();
-    this.queue = [];
+    this.resetQueue();
     this.queuedAudioBytes = 0;
+    this.streamClockMs = null;
   }
 
+  /** Clear the scheduled pump timer. */
   private clearTimer(): void {
     if (!this.timer) {
       return;
@@ -96,111 +116,87 @@ export class RealtimeTwilioAudioPacer {
     this.timer = null;
   }
 
+  /** Start the pump when queued work exists and no timer is active. */
   private ensurePump(): void {
     if (!this.timer) {
       this.pump();
     }
   }
 
+  /** Close the pacer and notify the caller about queued-audio backpressure. */
   private failBackpressure(): void {
     this.close();
     this.params.onBackpressure?.();
   }
 
+  private get pendingQueueSize(): number {
+    return Math.max(0, this.queue.length - this.queueHead);
+  }
+
+  /** Take one queued item without shifting the remaining paced-audio backlog. */
+  private takeNextItem(): RealtimeAudioQueueItem | undefined {
+    if (this.queueHead >= this.queue.length) {
+      this.resetQueue();
+      return undefined;
+    }
+    const item = this.queue[this.queueHead];
+    this.queueHead += 1;
+    if (this.queueHead >= this.queue.length) {
+      this.resetQueue();
+    } else if (
+      this.queueHead > QUEUE_COMPACT_HEAD_THRESHOLD &&
+      this.queueHead * 2 > this.queue.length
+    ) {
+      this.queue.splice(0, this.queueHead);
+      this.queueHead = 0;
+    }
+    return item;
+  }
+
+  private resetQueue(): void {
+    this.queue.length = 0;
+    this.queueHead = 0;
+  }
+
+  /** Fill the provider playout cushion, then wake at the next timeline boundary. */
   private pump(): void {
     this.timer = null;
     if (this.closed) {
       return;
     }
-    const item = this.queue.shift();
-    if (!item) {
-      return;
-    }
+    const now = performance.now();
+    this.streamClockMs ??= now;
 
-    let delayMs = 0;
-    let sent = true;
-    if (item.type === "audio") {
-      this.queuedAudioBytes = Math.max(0, this.queuedAudioBytes - item.chunk.length);
-      sent = this.params.sendJson({
-        event: "media",
-        streamSid: this.params.streamSid,
-        media: { payload: item.chunk.toString("base64") },
-      });
-      delayMs = item.durationMs || TELEPHONY_CHUNK_MS;
-    } else {
-      sent = this.params.sendJson({
-        event: "mark",
-        streamSid: this.params.streamSid,
-        mark: { name: item.name },
-      });
-    }
-
-    if (!sent) {
-      this.queue = [];
-      this.queuedAudioBytes = 0;
-      return;
-    }
-    if (this.queue.length > 0) {
-      this.timer = setTimeout(() => this.pump(), delayMs);
-    }
-  }
-}
-
-export function calculateMulawRms(muLaw: Buffer): number {
-  if (muLaw.length === 0) {
-    return 0;
-  }
-  let sum = 0;
-  for (let i = 0; i < muLaw.length; i += 1) {
-    const normalized = (MULAW_LINEAR_SAMPLES[muLaw[i] ?? 0] ?? 0) / PCM16_MAX_AMPLITUDE;
-    sum += normalized * normalized;
-  }
-  return Math.sqrt(sum / muLaw.length);
-}
-
-export class RealtimeMulawSpeechStartDetector {
-  private loudChunks = 0;
-  private quietChunks = DEFAULT_REQUIRED_QUIET_CHUNKS;
-  private speaking = false;
-
-  constructor(
-    private readonly params: {
-      requiredLoudChunks?: number;
-      requiredQuietChunks?: number;
-      rmsThreshold?: number;
-    } = {},
-  ) {}
-
-  accept(muLaw: Buffer): boolean {
-    const rms = calculateMulawRms(muLaw);
-    const threshold = this.params.rmsThreshold ?? DEFAULT_SPEECH_RMS_THRESHOLD;
-    if (rms >= threshold) {
-      this.quietChunks = 0;
-      this.loudChunks += 1;
-      const requiredLoudChunks = this.params.requiredLoudChunks ?? DEFAULT_REQUIRED_LOUD_CHUNKS;
-      if (!this.speaking && this.loudChunks >= requiredLoudChunks) {
-        this.speaking = true;
-        return true;
+    while (this.pendingQueueSize > 0 && this.streamClockMs < now + LEAD_MS) {
+      const item = this.takeNextItem();
+      if (!item) {
+        break;
       }
-      return false;
+
+      const sent =
+        item.type === "audio"
+          ? this.sendAudioItem(item)
+          : this.params.send(this.params.serializer.mark(item.name));
+      if (!sent) {
+        this.resetQueue();
+        this.queuedAudioBytes = 0;
+        this.streamClockMs = null;
+        return;
+      }
     }
 
-    this.loudChunks = 0;
-    this.quietChunks += 1;
-    const requiredQuietChunks = this.params.requiredQuietChunks ?? DEFAULT_REQUIRED_QUIET_CHUNKS;
-    if (this.quietChunks >= requiredQuietChunks) {
-      this.speaking = false;
+    if (this.pendingQueueSize === 0) {
+      this.streamClockMs = null;
+      return;
     }
-    return false;
+    const delayMs = Math.max(1, this.streamClockMs - LEAD_MS - performance.now());
+    this.timer = setTimeout(() => this.pump(), delayMs);
   }
-}
 
-function decodeMulawSample(value: number): number {
-  const muLaw = ~value & 0xff;
-  const sign = muLaw & 0x80;
-  const exponent = (muLaw >> 4) & 0x07;
-  const mantissa = muLaw & 0x0f;
-  let sample = ((mantissa << 3) + 132) << exponent;
-  sample -= 132;
-  return sign ? -sample : sample;
+  private sendAudioItem(item: Extract<RealtimeAudioQueueItem, { type: "audio" }>): boolean {
+    this.queuedAudioBytes = Math.max(0, this.queuedAudioBytes - item.chunk.length);
+    const sent = this.params.send(this.params.serializer.media(item.chunk.toString("base64")));
+    this.streamClockMs = (this.streamClockMs ?? performance.now()) + item.durationMs;
+    return sent;
+  }
 }

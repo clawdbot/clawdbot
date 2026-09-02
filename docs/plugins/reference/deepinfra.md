@@ -12,11 +12,11 @@ Adds DeepInfra model provider support to OpenClaw.
 ## Distribution
 
 - Package: `@openclaw/deepinfra-provider`
-- Install route: included in OpenClaw
+- Install route: npm; ClawHub: `clawhub:@openclaw/deepinfra-provider`
 
 ## Surface
 
-providers: deepinfra; contracts: imageGenerationProviders, mediaUnderstandingProviders, memoryEmbeddingProviders, speechProviders, videoGenerationProviders
+providers: `deepinfra`; contracts: `embeddingProviders`, `imageGenerationProviders`, `mediaUnderstandingProviders`, `speechProviders`, `videoGenerationProviders`
 
 ## Related docs
 

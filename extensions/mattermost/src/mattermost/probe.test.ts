@@ -1,3 +1,5 @@
+// Mattermost tests cover probe plugin behavior.
+import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { probeMattermost } from "./probe.js";
 
@@ -13,6 +15,20 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", async () => {
   >;
   return { ...original, fetchWithSsrFGuard: mockFetchGuard };
 });
+
+function requireFirstFetchCall() {
+  const [call] = mockFetchGuard.mock.calls;
+  if (!call) {
+    throw new Error("expected Mattermost probe fetch call");
+  }
+  return call[0] as {
+    url?: string;
+    init?: { headers?: unknown; signal?: unknown };
+    auditContext?: string;
+    policy?: unknown;
+    timeoutMs?: number;
+  };
+}
 
 describe("probeMattermost", () => {
   beforeEach(() => {
@@ -43,22 +59,51 @@ describe("probeMattermost", () => {
 
     const result = await probeMattermost("https://mm.example.com/api/v4/", "bot-token");
 
-    expect(mockFetchGuard).toHaveBeenCalledWith({
-      url: "https://mm.example.com/api/v4/users/me",
-      init: expect.objectContaining({
-        headers: { Authorization: "Bearer bot-token" },
-      }),
-      auditContext: "mattermost-probe",
-      policy: undefined,
+    const fetchCall = requireFirstFetchCall();
+    expect(fetchCall?.url).toBe("https://mm.example.com/api/v4/users/me");
+    expect(fetchCall?.init?.headers).toStrictEqual({ Authorization: "Bearer bot-token" });
+    expect(fetchCall?.timeoutMs).toBe(2500);
+    expect(fetchCall?.init?.signal).toBeUndefined();
+    expect(fetchCall?.auditContext).toBe("mattermost-probe");
+    expect(fetchCall?.policy).toBeUndefined();
+    const { elapsedMs, ...stableResult } = result;
+    expect(stableResult).toStrictEqual({
+      ok: true,
+      status: 200,
+      bot: { id: "bot-1", username: "clawbot" },
     });
-    expect(result).toEqual(
-      expect.objectContaining({
-        ok: true,
+    expect(elapsedMs).toBeGreaterThanOrEqual(0);
+    expect(mockRelease).toHaveBeenCalledTimes(1);
+  });
+
+  it("bounds and cancels oversized probe success JSON bodies", async () => {
+    let canceled = false;
+    let pulled = 0;
+    const oversizeChunk = new Uint8Array(2 * 1024 * 1024).fill(0x7b); // 2 MiB of "{"
+    const stream = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        pulled += 1;
+        controller.enqueue(oversizeChunk);
+      },
+      cancel() {
+        canceled = true;
+      },
+    });
+    mockFetchGuard.mockResolvedValueOnce({
+      response: new Response(stream, {
         status: 200,
-        bot: { id: "bot-1", username: "clawbot" },
+        headers: { "content-type": "application/json" },
       }),
-    );
-    expect(result.elapsedMs).toBeGreaterThanOrEqual(0);
+      release: mockRelease,
+    });
+
+    const result = await probeMattermost("https://mm.example.com", "bot-token");
+
+    expect(result.ok).toBe(false);
+    expect(result.status).toBeNull();
+    expect(result.error).toContain("JSON response exceeds 16777216 bytes");
+    expect(canceled).toBe(true);
+    expect(pulled).toBeLessThanOrEqual(12);
     expect(mockRelease).toHaveBeenCalledTimes(1);
   });
 
@@ -73,11 +118,22 @@ describe("probeMattermost", () => {
 
     await probeMattermost("https://mm.example.com", "bot-token", 2500, true);
 
-    expect(mockFetchGuard).toHaveBeenCalledWith(
-      expect.objectContaining({
-        policy: { allowPrivateNetwork: true },
+    const fetchCall = requireFirstFetchCall();
+    expect(fetchCall?.policy).toStrictEqual({ allowPrivateNetwork: true });
+  });
+
+  it("clamps oversized probe timeouts before the guard-owned deadline", async () => {
+    mockFetchGuard.mockResolvedValueOnce({
+      response: new Response(JSON.stringify({ id: "bot-1" }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
       }),
-    );
+      release: mockRelease,
+    });
+
+    await probeMattermost("https://mm.example.com", "bot-token", Number.MAX_SAFE_INTEGER);
+
+    expect(requireFirstFetchCall().timeoutMs).toBe(MAX_TIMER_TIMEOUT_MS);
   });
 
   it("returns API error details from JSON response", async () => {
@@ -90,13 +146,14 @@ describe("probeMattermost", () => {
       release: mockRelease,
     });
 
-    await expect(probeMattermost("https://mm.example.com", "bad-token")).resolves.toEqual(
-      expect.objectContaining({
-        ok: false,
-        status: 401,
-        error: "invalid auth token",
-      }),
-    );
+    const result = await probeMattermost("https://mm.example.com", "bad-token");
+    const { elapsedMs, ...stableResult } = result;
+    expect(stableResult).toStrictEqual({
+      ok: false,
+      status: 401,
+      error: "invalid auth token",
+    });
+    expect(elapsedMs).toBeGreaterThanOrEqual(0);
     expect(mockRelease).toHaveBeenCalledTimes(1);
   });
 
@@ -110,25 +167,27 @@ describe("probeMattermost", () => {
       release: mockRelease,
     });
 
-    await expect(probeMattermost("https://mm.example.com", "token")).resolves.toEqual(
-      expect.objectContaining({
-        ok: false,
-        status: 403,
-        error: "Forbidden",
-      }),
-    );
+    const result = await probeMattermost("https://mm.example.com", "token");
+    const { elapsedMs, ...stableResult } = result;
+    expect(stableResult).toStrictEqual({
+      ok: false,
+      status: 403,
+      error: "Forbidden",
+    });
+    expect(elapsedMs).toBeGreaterThanOrEqual(0);
     expect(mockRelease).toHaveBeenCalledTimes(1);
   });
 
   it("returns fetch error when request throws", async () => {
     mockFetchGuard.mockRejectedValueOnce(new Error("network down"));
 
-    await expect(probeMattermost("https://mm.example.com", "token")).resolves.toEqual(
-      expect.objectContaining({
-        ok: false,
-        status: null,
-        error: "network down",
-      }),
-    );
+    const result = await probeMattermost("https://mm.example.com", "token");
+    const { elapsedMs, ...stableResult } = result;
+    expect(stableResult).toStrictEqual({
+      ok: false,
+      status: null,
+      error: "network down",
+    });
+    expect(elapsedMs).toBeGreaterThanOrEqual(0);
   });
 });

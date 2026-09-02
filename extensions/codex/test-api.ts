@@ -1,21 +1,43 @@
+/**
+ * Test-only helpers for producing Codex app-server prompt snapshots and dynamic
+ * tool specs without starting a live app-server.
+ */
 import type {
   AnyAgentTool,
-  EmbeddedRunAttemptParams,
+  EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import {
   type CodexAppServerRuntimeOptions,
   resolveCodexAppServerRuntimeOptions,
+  type CodexPluginConfig,
 } from "./src/app-server/config.js";
-import type { CodexPluginConfig } from "./src/app-server/config.js";
-import { applyCodexDynamicToolProfile } from "./src/app-server/dynamic-tool-profile.js";
+import { filterCodexDynamicTools } from "./src/app-server/dynamic-tool-profile.js";
 import { createCodexDynamicToolBridge } from "./src/app-server/dynamic-tools.js";
-import type { CodexDynamicToolSpec, JsonObject } from "./src/app-server/protocol.js";
+import {
+  flattenCodexDynamicToolFunctions,
+  type CodexDynamicToolSpec,
+  type JsonObject,
+} from "./src/app-server/protocol.js";
 import {
   buildDeveloperInstructions,
   buildThreadResumeParams,
   buildThreadStartParams,
   buildTurnStartParams,
 } from "./src/app-server/thread-lifecycle.js";
+
+export { CODEX_APP_SERVER_VERSION } from "./src/app-server/version.js";
+
+/** Keeps host integration tests on the plugin's test boundary without exposing runtime internals. */
+export async function createCodexSessionInitializationFixtureForTest(params: {
+  runtime: PluginRuntime;
+  workspaceDir: string;
+}) {
+  // Snapshot scripts also load this barrel outside Vitest; load its test fixture only on demand.
+  const { createCodexSessionInitializationFixture } =
+    await import("./src/app-server/session-initialization.test-support.js");
+  return await createCodexSessionInitializationFixture(params);
+}
 
 type CodexHarnessPromptSnapshot = {
   developerInstructions: string;
@@ -24,6 +46,7 @@ type CodexHarnessPromptSnapshot = {
   turnStartParams: ReturnType<typeof buildTurnStartParams>;
 };
 
+/** Resolves deterministic app-server options for prompt snapshot tests. */
 export function resolveCodexPromptSnapshotAppServerOptions(
   pluginConfig?: unknown,
 ): CodexAppServerRuntimeOptions {
@@ -34,6 +57,7 @@ export function resolveCodexPromptSnapshotAppServerOptions(
   });
 }
 
+/** Builds thread/resume/turn prompt payload snapshots for a Codex harness attempt. */
 export function buildCodexHarnessPromptSnapshot(params: {
   attempt: EmbeddedRunAttemptParams;
   cwd: string;
@@ -42,8 +66,15 @@ export function buildCodexHarnessPromptSnapshot(params: {
   appServer: CodexAppServerRuntimeOptions;
   config?: JsonObject;
   promptText?: string;
+  developerInstructionAdditions?: string;
+  turnScopedDeveloperInstructions?: string;
 }): CodexHarnessPromptSnapshot {
-  const developerInstructions = buildDeveloperInstructions(params.attempt);
+  const developerInstructions = joinPresentSections(
+    buildDeveloperInstructions(params.attempt, {
+      dynamicTools: params.dynamicTools,
+    }),
+    params.developerInstructionAdditions,
+  );
   return {
     developerInstructions,
     threadStartParams: buildThreadStartParams(params.attempt, {
@@ -64,23 +95,30 @@ export function buildCodexHarnessPromptSnapshot(params: {
       cwd: params.cwd,
       appServer: params.appServer,
       promptText: params.promptText,
+      turnScopedDeveloperInstructions: params.turnScopedDeveloperInstructions,
+      sessionStatusAvailable: flattenCodexDynamicToolFunctions(params.dynamicTools).some(
+        (tool) => tool.name === "session_status",
+      ),
     }),
   };
 }
 
+function joinPresentSections(...sections: Array<string | undefined>): string {
+  return sections.filter((section): section is string => Boolean(section?.trim())).join("\n\n");
+}
+
+/** Converts harness tools into Codex dynamic-tool specs for prompt snapshot tests. */
 export function createCodexDynamicToolSpecsForPromptSnapshot(params: {
   tools: AnyAgentTool[];
-  pluginConfig?: Pick<
-    CodexPluginConfig,
-    "codexDynamicToolsProfile" | "codexDynamicToolsLoading" | "codexDynamicToolsExclude"
-  >;
+  pluginConfig?: Pick<CodexPluginConfig, "codexDynamicToolsLoading" | "codexDynamicToolsExclude">;
   directToolNames?: Iterable<string>;
 }): CodexDynamicToolSpec[] {
-  const profiledTools = applyCodexDynamicToolProfile(params.tools, params.pluginConfig ?? {});
+  const filteredTools = filterCodexDynamicTools(params.tools, params.pluginConfig ?? {});
   return createCodexDynamicToolBridge({
-    tools: profiledTools,
+    tools: filteredTools,
     signal: new AbortController().signal,
     loading: params.pluginConfig?.codexDynamicToolsLoading ?? "searchable",
     directToolNames: params.directToolNames,
   }).specs;
 }
+export { createCanonicalForkFixture as createCanonicalForkFixtureForTest } from "./src/app-server/canonical-fork.test-support.js";

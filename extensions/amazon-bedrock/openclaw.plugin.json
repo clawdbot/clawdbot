@@ -1,12 +1,19 @@
 {
   "id": "amazon-bedrock",
+  "name": "Amazon Bedrock",
+  "description": "OpenClaw Amazon Bedrock provider plugin with model discovery, embeddings, and guardrail support.",
   "activation": {
     "onStartup": false
   },
   "enabledByDefault": true,
   "providers": ["amazon-bedrock"],
+  "modelCatalog": {
+    "discovery": {
+      "amazon-bedrock": "refreshable"
+    }
+  },
   "contracts": {
-    "memoryEmbeddingProviders": ["bedrock"]
+    "embeddingProviders": ["bedrock"]
   },
   "configSchema": {
     "type": "object",

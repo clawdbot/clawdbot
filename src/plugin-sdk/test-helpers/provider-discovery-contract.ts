@@ -1,12 +1,15 @@
+// Provider discovery contract helpers define reusable discovery tests for provider plugins.
+import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import type { AuthProfileStore, OpenClawConfig } from "../provider-auth.js";
+import { runProviderCatalog } from "../../plugins/provider-discovery.js";
 import {
   registerProviderPlugins as registerProviders,
   requireRegisteredProvider as requireProvider,
-  runProviderCatalog,
-} from "../testing.js";
+} from "../../test-utils/plugin-registration.js";
+import type { AuthProfileStore, OpenClawConfig } from "../provider-auth.js";
 
-const resolveCopilotApiTokenMock = vi.hoisted(() => vi.fn());
+const resolveCopilotRuntimeAuthMock = vi.hoisted(() => vi.fn());
 const buildVllmProviderMock = vi.hoisted(() => vi.fn());
 const buildSglangProviderMock = vi.hoisted(() => vi.fn());
 const ensureAuthProfileStoreMock = vi.hoisted(() => vi.fn());
@@ -83,7 +86,7 @@ function runCatalog(
     provider: ProviderHandle;
     config?: OpenClawConfig;
     env?: NodeJS.ProcessEnv;
-    resolveProviderApiKey?: () => { apiKey: string | undefined };
+    resolveProviderApiKey?: () => { apiKey: string | undefined; discoveryApiKey?: string };
     resolveProviderAuth?: (
       providerId?: string,
       options?: { oauthMarker?: string },
@@ -112,16 +115,32 @@ function runCatalog(
   });
 }
 
+function requireRecord(value: unknown, label: string): Record<string, unknown> {
+  expect(value, label).toBeTypeOf("object");
+  expect(value, label).not.toBeNull();
+  return value as Record<string, unknown>;
+}
+
+function expectProviderFields(result: unknown, fields: Record<string, unknown>) {
+  const provider = requireRecord(requireRecord(result, "catalog result").provider, "provider");
+  for (const [key, expected] of Object.entries(fields)) {
+    expect(provider[key]).toEqual(expected);
+  }
+  return provider;
+}
+
+function providerModelIds(provider: Record<string, unknown>): Array<unknown> {
+  const models = provider.models;
+  expect(Array.isArray(models), "provider models").toBe(true);
+  return (models as Array<{ id?: unknown }>).map((model) => model.id);
+}
+
 function installDiscoveryHooks(state: DiscoveryState, options: DiscoveryContractOptions) {
   beforeAll(async () => {
     vi.resetModules();
-    vi.doMock("openclaw/plugin-sdk/agent-runtime", () => {
-      return {
-        ensureAuthProfileStore: ensureAuthProfileStoreMock,
-        listProfilesForProvider: listProfilesForProviderMock,
-      };
-    });
-    vi.doMock("openclaw/plugin-sdk/provider-auth", () => {
+    vi.doMock("openclaw/plugin-sdk/provider-auth", async (importOriginal) => {
+      const { findNormalizedProviderValue, resolveAuthProfileOrder } =
+        await importOriginal<typeof import("../provider-auth.js")>();
       return {
         DEFAULT_COPILOT_API_BASE_URL: "https://api.individual.githubcopilot.com",
         MINIMAX_OAUTH_MARKER: "minimax-oauth",
@@ -137,20 +156,52 @@ function installDiscoveryHooks(state: DiscoveryState, options: DiscoveryContract
           ...(metadata ? { metadata } : {}),
         }),
         buildOauthProviderAuthResult: vi.fn(),
-        coerceSecretRef: (value: unknown) =>
-          value && typeof value === "object" && !Array.isArray(value)
-            ? (value as Record<string, unknown>)
-            : null,
+        buildCopilotIdeHeaders: vi.fn(() => ({
+          "Editor-Version": "vscode/1.96.2",
+          "User-Agent": "GitHubCopilotChat/0.26.7",
+        })),
+        coerceSecretRef: asNullableRecord,
         ensureApiKeyFromOptionEnvOrPrompt: vi.fn(),
         ensureAuthProfileStore: ensureAuthProfileStoreMock,
+        findNormalizedProviderValue,
         listProfilesForProvider: listProfilesForProviderMock,
         normalizeApiKeyInput: (value: unknown) => (typeof value === "string" ? value.trim() : ""),
-        normalizeOptionalSecretInput: (value: unknown) =>
-          typeof value === "string" && value.trim() ? value.trim() : undefined,
+        normalizeGithubCopilotDomain: (raw: unknown) => {
+          const trimmed = typeof raw === "string" ? raw.trim().toLowerCase() : "";
+          return trimmed === "github.com" || /^[a-z0-9-]+\.ghe\.com$/.test(trimmed)
+            ? trimmed
+            : "github.com";
+        },
+        normalizeOptionalSecretInput: normalizeOptionalString,
+        resolveAuthProfileOrder,
         resolveNonEnvSecretRefApiKeyMarker: (source: unknown) =>
           typeof source === "string" ? source : "",
         upsertAuthProfile: vi.fn(),
         validateApiKeyInput: () => undefined,
+      };
+    });
+    vi.doMock("openclaw/plugin-sdk/provider-setup", async () => {
+      const actual = await vi.importActual<typeof import("../provider-setup.js")>(
+        "openclaw/plugin-sdk/provider-setup",
+      );
+      return {
+        ...actual,
+        discoverOpenAICompatibleLocalModels: async (params: {
+          apiKey?: string;
+          baseUrl: string;
+          label: string;
+        }) => {
+          const isVllm = params.label === "vLLM";
+          const defaultBaseUrl = isVllm ? "http://127.0.0.1:8000/v1" : "http://127.0.0.1:30000/v1";
+          const provider = requireRecord(
+            await (isVllm ? buildVllmProviderMock : buildSglangProviderMock)({
+              apiKey: params.apiKey,
+              ...(params.baseUrl === defaultBaseUrl ? {} : { baseUrl: params.baseUrl }),
+            }),
+            `${params.label} provider`,
+          );
+          return Array.isArray(provider.models) ? provider.models : [];
+        },
       };
     });
     if (options.githubCopilotRegisterRuntimeModuleId) {
@@ -158,7 +209,7 @@ function installDiscoveryHooks(state: DiscoveryState, options: DiscoveryContract
         const actual = await vi.importActual<object>(options.githubCopilotRegisterRuntimeModuleId!);
         return {
           ...actual,
-          resolveCopilotApiToken: resolveCopilotApiTokenMock,
+          resolveCopilotRuntimeAuth: resolveCopilotRuntimeAuthMock,
         };
       });
     }
@@ -169,7 +220,6 @@ function installDiscoveryHooks(state: DiscoveryState, options: DiscoveryContract
           VLLM_DEFAULT_BASE_URL: "http://127.0.0.1:8000/v1",
           VLLM_MODEL_PLACEHOLDER: "meta-llama/Meta-Llama-3-8B-Instruct",
           VLLM_PROVIDER_LABEL: "vLLM",
-          buildVllmProvider: (...args: unknown[]) => buildVllmProviderMock(...args),
         };
       });
     }
@@ -180,7 +230,6 @@ function installDiscoveryHooks(state: DiscoveryState, options: DiscoveryContract
           SGLANG_DEFAULT_BASE_URL: "http://127.0.0.1:30000/v1",
           SGLANG_MODEL_PLACEHOLDER: "Qwen/Qwen3-8B",
           SGLANG_PROVIDER_LABEL: "SGLang",
-          buildSglangProvider: (...args: unknown[]) => buildSglangProviderMock(...args),
         };
       });
     }
@@ -231,7 +280,7 @@ function installDiscoveryHooks(state: DiscoveryState, options: DiscoveryContract
 
   afterEach(() => {
     vi.restoreAllMocks();
-    resolveCopilotApiTokenMock.mockReset();
+    resolveCopilotRuntimeAuthMock.mockReset();
     buildVllmProviderMock.mockReset();
     buildSglangProviderMock.mockReset();
     ensureAuthProfileStoreMock.mockReset();
@@ -275,10 +324,10 @@ export function describeGithubCopilotProviderDiscoveryContract(params: {
     });
 
     it("keeps env-token base URL resolution provider-owned", async () => {
-      resolveCopilotApiTokenMock.mockResolvedValueOnce({
-        token: "copilot-api-token",
+      resolveCopilotRuntimeAuthMock.mockResolvedValueOnce({
+        apiKey: "copilot-api-token",
+        source: "validated:https://api.github.com/copilot_internal/user",
         baseUrl: "https://copilot-proxy.example.com",
-        expiresAt: Date.now() + 60_000,
       });
 
       await expect(
@@ -295,12 +344,13 @@ export function describeGithubCopilotProviderDiscoveryContract(params: {
           models: [],
         },
       });
-      expect(resolveCopilotApiTokenMock).toHaveBeenCalledWith({
-        githubToken: "github-env-token",
-        env: expect.objectContaining({
-          GITHUB_TOKEN: "github-env-token",
-        }),
-      });
+      const copilotCall = requireRecord(
+        resolveCopilotRuntimeAuthMock.mock.calls.at(0)?.[0],
+        "copilot token params",
+      );
+      expect(copilotCall.githubToken).toBe("github-env-token");
+      const env = requireRecord(copilotCall.env, "copilot token env");
+      expect(env.GITHUB_TOKEN).toBe("github-env-token");
     });
   });
 }
@@ -355,6 +405,159 @@ export function describeVllmProviderDiscoveryContract(params: {
         apiKey: "env-vllm-key",
       });
     });
+
+    it("uses configured transport only for provider wildcard discovery", async () => {
+      buildVllmProviderMock.mockResolvedValueOnce({
+        baseUrl: "http://vllm-router.example/v1",
+        api: "openai-completions",
+        models: [{ id: "router-model", name: "Router Model" }],
+      });
+
+      await expect(
+        runCatalog(state, {
+          provider: state.vllmProvider!,
+          config: {
+            agents: {
+              defaults: {
+                models: {
+                  "vllm/*": {},
+                },
+              },
+            },
+            models: {
+              providers: {
+                vllm: {
+                  baseUrl: "http://vllm-router.example/v1",
+                  apiKey: "VLLM_API_KEY",
+                  api: "openai-completions",
+                  models: [],
+                },
+              },
+            },
+          } as unknown as OpenClawConfig,
+          env: {
+            VLLM_API_KEY: "env-vllm-key",
+          } as NodeJS.ProcessEnv,
+          resolveProviderApiKey: () => ({
+            apiKey: "VLLM_API_KEY",
+            discoveryApiKey: "env-vllm-key",
+          }),
+          resolveProviderAuth: () => ({
+            apiKey: "VLLM_API_KEY",
+            discoveryApiKey: "env-vllm-key",
+            mode: "api_key",
+            source: "env",
+          }),
+        }),
+      ).resolves.toEqual({
+        provider: {
+          baseUrl: "http://vllm-router.example/v1",
+          api: "openai-completions",
+          apiKey: "VLLM_API_KEY",
+          models: [{ id: "router-model", name: "Router Model" }],
+        },
+      });
+      expect(buildVllmProviderMock).toHaveBeenCalledWith({
+        apiKey: "env-vllm-key",
+        baseUrl: "http://vllm-router.example/v1",
+      });
+    });
+
+    it("uses the provider default transport when wildcard config omits baseUrl", async () => {
+      buildVllmProviderMock.mockResolvedValueOnce({
+        baseUrl: "http://127.0.0.1:8000/v1",
+        api: "openai-completions",
+        models: [{ id: "default-transport-model", name: "Default Transport Model" }],
+      });
+
+      await expect(
+        runCatalog(state, {
+          provider: state.vllmProvider!,
+          config: {
+            agents: {
+              defaults: {
+                models: {
+                  "vllm/*": {},
+                },
+              },
+            },
+            models: {
+              providers: {
+                vllm: {
+                  apiKey: "VLLM_API_KEY",
+                  api: "openai-completions",
+                  models: [],
+                },
+              },
+            },
+          } as unknown as OpenClawConfig,
+          env: {
+            VLLM_API_KEY: "env-vllm-key",
+          } as NodeJS.ProcessEnv,
+          resolveProviderApiKey: () => ({
+            apiKey: "VLLM_API_KEY",
+            discoveryApiKey: "env-vllm-key",
+          }),
+          resolveProviderAuth: () => ({
+            apiKey: "VLLM_API_KEY",
+            discoveryApiKey: "env-vllm-key",
+            mode: "api_key",
+            source: "env",
+          }),
+        }),
+      ).resolves.toEqual({
+        provider: {
+          baseUrl: "http://127.0.0.1:8000/v1",
+          api: "openai-completions",
+          apiKey: "VLLM_API_KEY",
+          models: [{ id: "default-transport-model", name: "Default Transport Model" }],
+        },
+      });
+      expect(buildVllmProviderMock).toHaveBeenCalledWith({
+        apiKey: "env-vllm-key",
+      });
+    });
+
+    it("keeps explicit self-hosted provider config manual without wildcard visibility", async () => {
+      await expect(
+        runCatalog(state, {
+          provider: state.vllmProvider!,
+          config: {
+            agents: {
+              defaults: {
+                models: {
+                  "vllm/manual-model": {},
+                },
+              },
+            },
+            models: {
+              providers: {
+                vllm: {
+                  baseUrl: "http://vllm-router.example/v1",
+                  apiKey: "VLLM_API_KEY",
+                  api: "openai-completions",
+                  models: [],
+                },
+              },
+            },
+          } as OpenClawConfig,
+          env: {
+            VLLM_API_KEY: "env-vllm-key",
+          } as NodeJS.ProcessEnv,
+          resolveProviderApiKey: () => ({
+            apiKey: "VLLM_API_KEY",
+            discoveryApiKey: "env-vllm-key",
+          }),
+          resolveProviderAuth: () => ({
+            apiKey: "VLLM_API_KEY",
+            discoveryApiKey: "env-vllm-key",
+            mode: "api_key",
+            source: "env",
+          }),
+        }),
+      ).resolves.toBeNull();
+      expect(buildVllmProviderMock).not.toHaveBeenCalled();
+    });
   });
 }
 
@@ -408,6 +611,104 @@ export function describeSglangProviderDiscoveryContract(params: {
         apiKey: "env-sglang-key",
       });
     });
+
+    it("uses configured transport only for provider wildcard discovery", async () => {
+      buildSglangProviderMock.mockResolvedValueOnce({
+        baseUrl: "http://sglang-router.example/v1",
+        api: "openai-completions",
+        models: [{ id: "Qwen/Qwen3-32B", name: "Qwen3-32B" }],
+      });
+
+      await expect(
+        runCatalog(state, {
+          provider: state.sglangProvider!,
+          config: {
+            agents: {
+              defaults: {
+                models: {
+                  "sglang/*": {},
+                },
+              },
+            },
+            models: {
+              providers: {
+                sglang: {
+                  baseUrl: "http://sglang-router.example/v1",
+                  apiKey: "SGLANG_API_KEY",
+                  api: "openai-completions",
+                  models: [],
+                },
+              },
+            },
+          } as OpenClawConfig,
+          env: {
+            SGLANG_API_KEY: "env-sglang-key",
+          } as NodeJS.ProcessEnv,
+          resolveProviderApiKey: () => ({
+            apiKey: "SGLANG_API_KEY",
+            discoveryApiKey: "env-sglang-key",
+          }),
+          resolveProviderAuth: () => ({
+            apiKey: "SGLANG_API_KEY",
+            discoveryApiKey: "env-sglang-key",
+            mode: "api_key",
+            source: "env",
+          }),
+        }),
+      ).resolves.toEqual({
+        provider: {
+          baseUrl: "http://sglang-router.example/v1",
+          api: "openai-completions",
+          apiKey: "SGLANG_API_KEY",
+          models: [{ id: "Qwen/Qwen3-32B", name: "Qwen3-32B" }],
+        },
+      });
+      expect(buildSglangProviderMock).toHaveBeenCalledWith({
+        apiKey: "env-sglang-key",
+        baseUrl: "http://sglang-router.example/v1",
+      });
+    });
+
+    it("keeps explicit self-hosted provider config manual without wildcard visibility", async () => {
+      await expect(
+        runCatalog(state, {
+          provider: state.sglangProvider!,
+          config: {
+            agents: {
+              defaults: {
+                models: {
+                  "sglang/Qwen/Qwen3-32B": {},
+                },
+              },
+            },
+            models: {
+              providers: {
+                sglang: {
+                  baseUrl: "http://sglang-router.example/v1",
+                  apiKey: "SGLANG_API_KEY",
+                  api: "openai-completions",
+                  models: [],
+                },
+              },
+            },
+          } as OpenClawConfig,
+          env: {
+            SGLANG_API_KEY: "env-sglang-key",
+          } as NodeJS.ProcessEnv,
+          resolveProviderApiKey: () => ({
+            apiKey: "SGLANG_API_KEY",
+            discoveryApiKey: "env-sglang-key",
+          }),
+          resolveProviderAuth: () => ({
+            apiKey: "SGLANG_API_KEY",
+            discoveryApiKey: "env-sglang-key",
+            mode: "api_key",
+            source: "env",
+          }),
+        }),
+      ).resolves.toBeNull();
+      expect(buildSglangProviderMock).not.toHaveBeenCalled();
+    });
   });
 }
 
@@ -420,33 +721,30 @@ export function describeMinimaxProviderDiscoveryContract(
     installDiscoveryHooks(state, { providerIds: ["minimax"], loadMinimax: load });
 
     it("keeps API catalog provider-owned", async () => {
-      await expect(
-        state.runProviderCatalog({
-          provider: state.minimaxProvider!,
-          config: {},
-          env: {
-            MINIMAX_API_KEY: "minimax-key",
-          } as NodeJS.ProcessEnv,
-          resolveProviderApiKey: () => ({ apiKey: "minimax-key" }),
-          resolveProviderAuth: () => ({
-            apiKey: "minimax-key",
-            discoveryApiKey: undefined,
-            mode: "api_key",
-            source: "env",
-          }),
-        }),
-      ).resolves.toMatchObject({
-        provider: {
-          baseUrl: "https://api.minimax.io/anthropic",
-          api: "anthropic-messages",
-          authHeader: true,
+      const result = await state.runProviderCatalog({
+        provider: state.minimaxProvider!,
+        config: {},
+        env: {
+          MINIMAX_API_KEY: "minimax-key",
+        } as NodeJS.ProcessEnv,
+        resolveProviderApiKey: () => ({ apiKey: "minimax-key" }),
+        resolveProviderAuth: () => ({
           apiKey: "minimax-key",
-          models: expect.arrayContaining([
-            expect.objectContaining({ id: "MiniMax-M2.7" }),
-            expect.objectContaining({ id: "MiniMax-M2.7-highspeed" }),
-          ]),
-        },
+          discoveryApiKey: undefined,
+          mode: "api_key",
+          source: "env",
+        }),
       });
+      const provider = expectProviderFields(result, {
+        baseUrl: "https://api.minimax.io/anthropic",
+        api: "anthropic-messages",
+        authHeader: true,
+        apiKey: "minimax-key",
+      });
+      const ids = providerModelIds(provider);
+      expect(ids).toContain("MiniMax-M3");
+      expect(ids).toContain("MiniMax-M2.7");
+      expect(ids).toContain("MiniMax-M2.7-highspeed");
     });
 
     it("keeps portal oauth marker fallback provider-owned", async () => {
@@ -463,60 +761,54 @@ export function describeMinimaxProviderDiscoveryContract(
         },
       });
 
-      await expect(
-        runCatalog(state, {
-          provider: state.minimaxPortalProvider!,
-          config: {},
-          env: {} as NodeJS.ProcessEnv,
-          resolveProviderApiKey: () => ({ apiKey: undefined }),
-          resolveProviderAuth: () => ({
-            apiKey: "minimax-oauth",
-            discoveryApiKey: "access-token",
-            mode: "oauth",
-            source: "profile",
-            profileId: "minimax-portal:default",
-          }),
-        }),
-      ).resolves.toMatchObject({
-        provider: {
-          baseUrl: "https://api.minimax.io/anthropic",
-          api: "anthropic-messages",
-          authHeader: true,
+      const result = await runCatalog(state, {
+        provider: state.minimaxPortalProvider!,
+        config: {},
+        env: {} as NodeJS.ProcessEnv,
+        resolveProviderApiKey: () => ({ apiKey: undefined }),
+        resolveProviderAuth: () => ({
           apiKey: "minimax-oauth",
-          models: expect.arrayContaining([expect.objectContaining({ id: "MiniMax-M2.7" })]),
-        },
+          discoveryApiKey: "access-token",
+          mode: "oauth",
+          source: "profile",
+          profileId: "minimax-portal:default",
+        }),
       });
+      const provider = expectProviderFields(result, {
+        baseUrl: "https://api.minimax.io/anthropic",
+        api: "anthropic-messages",
+        authHeader: true,
+        apiKey: "minimax-oauth",
+      });
+      expect(providerModelIds(provider)).toContain("MiniMax-M2.7");
     });
 
     it("keeps portal explicit base URL override provider-owned", async () => {
-      await expect(
-        state.runProviderCatalog({
-          provider: state.minimaxPortalProvider!,
-          config: {
-            models: {
-              providers: {
-                "minimax-portal": {
-                  baseUrl: "https://portal-proxy.example.com/anthropic",
-                  apiKey: "explicit-key",
-                  models: [],
-                },
+      const result = await state.runProviderCatalog({
+        provider: state.minimaxPortalProvider!,
+        config: {
+          models: {
+            providers: {
+              "minimax-portal": {
+                baseUrl: "https://portal-proxy.example.com/anthropic",
+                apiKey: "explicit-key",
+                models: [],
               },
             },
           },
-          env: {} as NodeJS.ProcessEnv,
-          resolveProviderApiKey: () => ({ apiKey: undefined }),
-          resolveProviderAuth: () => ({
-            apiKey: undefined,
-            discoveryApiKey: undefined,
-            mode: "none",
-            source: "none",
-          }),
-        }),
-      ).resolves.toMatchObject({
-        provider: {
-          baseUrl: "https://portal-proxy.example.com/anthropic",
-          apiKey: "explicit-key",
         },
+        env: {} as NodeJS.ProcessEnv,
+        resolveProviderApiKey: () => ({ apiKey: undefined }),
+        resolveProviderAuth: () => ({
+          apiKey: undefined,
+          discoveryApiKey: undefined,
+          mode: "none",
+          source: "none",
+        }),
+      });
+      expectProviderFields(result, {
+        baseUrl: "https://portal-proxy.example.com/anthropic",
+        apiKey: "explicit-key",
       });
     });
   });
@@ -531,42 +823,38 @@ export function describeModelStudioProviderDiscoveryContract(
     installDiscoveryHooks(state, { providerIds: ["modelstudio"], loadModelStudio: load });
 
     it("keeps catalog provider-owned", async () => {
-      await expect(
-        state.runProviderCatalog({
-          provider: state.modelStudioProvider!,
-          config: {
-            models: {
-              providers: {
-                modelstudio: {
-                  baseUrl: "https://coding.dashscope.aliyuncs.com/v1",
-                  models: [],
-                },
+      const result = await state.runProviderCatalog({
+        provider: state.modelStudioProvider!,
+        config: {
+          models: {
+            providers: {
+              modelstudio: {
+                baseUrl: "https://coding.dashscope.aliyuncs.com/v1",
+                models: [],
               },
             },
           },
-          env: {
-            MODELSTUDIO_API_KEY: "modelstudio-key",
-          } as NodeJS.ProcessEnv,
-          resolveProviderApiKey: () => ({ apiKey: "modelstudio-key" }),
-          resolveProviderAuth: () => ({
-            apiKey: "modelstudio-key",
-            discoveryApiKey: undefined,
-            mode: "api_key",
-            source: "env",
-          }),
-        }),
-      ).resolves.toMatchObject({
-        provider: {
-          baseUrl: "https://coding.dashscope.aliyuncs.com/v1",
-          api: "openai-completions",
-          apiKey: "modelstudio-key",
-          models: expect.arrayContaining([
-            expect.objectContaining({ id: "qwen3.5-plus" }),
-            expect.objectContaining({ id: "qwen3-max-2026-01-23" }),
-            expect.objectContaining({ id: "MiniMax-M2.5" }),
-          ]),
         },
+        env: {
+          MODELSTUDIO_API_KEY: "modelstudio-key",
+        } as NodeJS.ProcessEnv,
+        resolveProviderApiKey: () => ({ apiKey: "modelstudio-key" }),
+        resolveProviderAuth: () => ({
+          apiKey: "modelstudio-key",
+          discoveryApiKey: undefined,
+          mode: "api_key",
+          source: "env",
+        }),
       });
+      const provider = expectProviderFields(result, {
+        baseUrl: "https://coding.dashscope.aliyuncs.com/v1",
+        api: "openai-completions",
+        apiKey: "modelstudio-key",
+      });
+      const ids = providerModelIds(provider);
+      expect(ids).toContain("qwen3.5-plus");
+      expect(ids).toContain("qwen3-max-2026-01-23");
+      expect(ids).toContain("MiniMax-M2.5");
     });
   });
 }
@@ -619,29 +907,27 @@ export function describeCloudflareAiGatewayProviderDiscoveryContract(
         },
       });
 
-      await expect(
-        runCatalog(state, {
-          provider: state.cloudflareAiGatewayProvider!,
-          config: {},
-          env: {
-            CLOUDFLARE_AI_GATEWAY_API_KEY: "secret-value",
-          } as NodeJS.ProcessEnv,
-          resolveProviderApiKey: () => ({ apiKey: undefined }),
-          resolveProviderAuth: () => ({
-            apiKey: undefined,
-            discoveryApiKey: undefined,
-            mode: "none",
-            source: "none",
-          }),
+      const result = await runCatalog(state, {
+        provider: state.cloudflareAiGatewayProvider!,
+        config: {},
+        env: {
+          CLOUDFLARE_AI_GATEWAY_API_KEY: "secret-value",
+        } as NodeJS.ProcessEnv,
+        resolveProviderApiKey: () => ({ apiKey: undefined }),
+        resolveProviderAuth: () => ({
+          apiKey: undefined,
+          discoveryApiKey: undefined,
+          mode: "none",
+          source: "none",
         }),
-      ).resolves.toEqual({
-        provider: {
-          baseUrl: "https://gateway.ai.cloudflare.com/v1/acc-123/gw-456/anthropic",
-          api: "anthropic-messages",
-          apiKey: "CLOUDFLARE_AI_GATEWAY_API_KEY",
-          models: [expect.objectContaining({ id: "claude-sonnet-4-6" })],
-        },
       });
+      const provider = expectProviderFields(result, {
+        baseUrl: "https://gateway.ai.cloudflare.com/v1/acc-123/gw-456/anthropic",
+        api: "anthropic-messages",
+        apiKey: "CLOUDFLARE_AI_GATEWAY_API_KEY",
+      });
+      expect(providerModelIds(provider)).toEqual(["claude-sonnet-4-6"]);
     });
   });
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

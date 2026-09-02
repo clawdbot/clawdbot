@@ -1,31 +1,51 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { PluginStateSyncKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
+// Telegram tests cover sticker cache plugin behavior.
+import {
+  createPluginStateSyncKeyedStoreForTests,
+  resetPluginStateStoreForTests,
+} from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { setTelegramRuntime } from "./runtime.js";
+import { clearTelegramRuntimeForTest } from "./runtime.test-support.js";
+import type { TelegramRuntime } from "./runtime.types.js";
 import * as stickerCache from "./sticker-cache-store.js";
-
-const jsonStoreMocks = vi.hoisted(() => {
-  const store: { value: unknown } = { value: null };
-  return {
-    store,
-    loadJsonFile: vi.fn(() => store.value),
-    saveJsonFile: vi.fn((_file: string, value: unknown) => {
-      store.value = structuredClone(value);
-    }),
-  };
-});
-
-vi.mock("openclaw/plugin-sdk/json-store", () => ({
-  loadJsonFile: jsonStoreMocks.loadJsonFile,
-  saveJsonFile: jsonStoreMocks.saveJsonFile,
-}));
+import {
+  TELEGRAM_STICKER_CACHE_MAX_ENTRIES,
+  TELEGRAM_STICKER_CACHE_NAMESPACE,
+} from "./sticker-cache-store.legacy-state.js";
 
 vi.mock("openclaw/plugin-sdk/state-paths", () => ({
   resolveStateDir: () => "/tmp/openclaw-test-sticker-cache",
 }));
 
 describe("sticker-cache", () => {
+  type StickerEntry = NonNullable<ReturnType<typeof stickerCache.getCachedSticker>>;
+  let store: PluginStateSyncKeyedStore<StickerEntry>;
+
+  function installStore(nextStore: PluginStateSyncKeyedStore<StickerEntry>): void {
+    store = nextStore;
+    setTelegramRuntime({
+      state: {
+        openSyncKeyedStore: (() => store) as TelegramRuntime["state"]["openSyncKeyedStore"],
+      },
+      channel: {},
+    } as TelegramRuntime);
+  }
+
   beforeEach(() => {
-    jsonStoreMocks.store.value = null;
-    jsonStoreMocks.loadJsonFile.mockClear();
-    jsonStoreMocks.saveJsonFile.mockClear();
+    resetPluginStateStoreForTests({ closeDatabase: false });
+    installStore(
+      createPluginStateSyncKeyedStoreForTests("telegram", {
+        namespace: TELEGRAM_STICKER_CACHE_NAMESPACE,
+        maxEntries: TELEGRAM_STICKER_CACHE_MAX_ENTRIES,
+      }),
+    );
+    store.clear();
+  });
+
+  afterEach(() => {
+    clearTelegramRuntimeForTest();
+    resetPluginStateStoreForTests();
   });
 
   describe("getCachedSticker", () => {
@@ -59,9 +79,27 @@ describe("sticker-cache", () => {
       };
 
       stickerCache.cacheSticker(sticker);
-      expect(stickerCache.getCachedSticker("unique123")).not.toBeNull();
+      const cachedSticker = stickerCache.getCachedSticker("unique123");
+      if (!cachedSticker) {
+        throw new Error("expected cached Telegram sticker");
+      }
+      expect(cachedSticker.fileUniqueId).toBe("unique123");
 
-      jsonStoreMocks.store.value = null;
+      store.clear();
+
+      expect(stickerCache.getCachedSticker("unique123")).toBeNull();
+    });
+
+    it("treats plugin-state lookup failures as cache misses", () => {
+      installStore({
+        ...createPluginStateSyncKeyedStoreForTests("telegram", {
+          namespace: TELEGRAM_STICKER_CACHE_NAMESPACE,
+          maxEntries: TELEGRAM_STICKER_CACHE_MAX_ENTRIES,
+        }),
+        lookup() {
+          throw new Error("lookup failed");
+        },
+      });
 
       expect(stickerCache.getCachedSticker("unique123")).toBeNull();
     });
@@ -81,6 +119,25 @@ describe("sticker-cache", () => {
       const all = stickerCache.getAllCachedStickers();
       expect(all).toHaveLength(1);
       expect(all[0]).toEqual(sticker);
+    });
+
+    it("omits undefined optional fields before storing", () => {
+      stickerCache.cacheSticker({
+        fileId: "file-undefined",
+        fileUniqueId: "unique-undefined",
+        emoji: undefined,
+        setName: undefined,
+        description: "Sticker with omitted fields",
+        cachedAt: "2026-01-26T12:00:00.000Z",
+        receivedFrom: undefined,
+      });
+
+      expect(stickerCache.getCachedSticker("unique-undefined")).toStrictEqual({
+        fileId: "file-undefined",
+        fileUniqueId: "unique-undefined",
+        description: "Sticker with omitted fields",
+        cachedAt: "2026-01-26T12:00:00.000Z",
+      });
     });
 
     it("updates existing entry", () => {
@@ -103,6 +160,27 @@ describe("sticker-cache", () => {
       const result = stickerCache.getCachedSticker("unique789");
       expect(result?.description).toBe("Updated description");
       expect(result?.fileId).toBe("file789-new");
+    });
+
+    it("does not throw when plugin-state writes fail", () => {
+      installStore({
+        ...createPluginStateSyncKeyedStoreForTests("telegram", {
+          namespace: TELEGRAM_STICKER_CACHE_NAMESPACE,
+          maxEntries: TELEGRAM_STICKER_CACHE_MAX_ENTRIES,
+        }),
+        register() {
+          throw new Error("write failed");
+        },
+      });
+
+      expect(() =>
+        stickerCache.cacheSticker({
+          fileId: "file-failure",
+          fileUniqueId: "unique-failure",
+          description: "Write failure should not block sticker handling",
+          cachedAt: "2026-01-26T13:00:00.000Z",
+        }),
+      ).not.toThrow();
     });
   });
 
@@ -197,12 +275,40 @@ describe("sticker-cache", () => {
       expect(results).toHaveLength(1);
       expect(results[0]?.fileUniqueId).toBe("cat-unique-1");
     });
+
+    it("returns no matches when plugin-state search reads fail", () => {
+      installStore({
+        ...createPluginStateSyncKeyedStoreForTests("telegram", {
+          namespace: TELEGRAM_STICKER_CACHE_NAMESPACE,
+          maxEntries: TELEGRAM_STICKER_CACHE_MAX_ENTRIES,
+        }),
+        entries() {
+          throw new Error("entries failed");
+        },
+      });
+
+      expect(stickerCache.searchStickers("fox")).toStrictEqual([]);
+    });
   });
 
   describe("getAllCachedStickers", () => {
     it("returns empty array when cache is empty", () => {
       const result = stickerCache.getAllCachedStickers();
-      expect(result).toEqual([]);
+      expect(result).toStrictEqual([]);
+    });
+
+    it("returns empty array when plugin-state list reads fail", () => {
+      installStore({
+        ...createPluginStateSyncKeyedStoreForTests("telegram", {
+          namespace: TELEGRAM_STICKER_CACHE_NAMESPACE,
+          maxEntries: TELEGRAM_STICKER_CACHE_MAX_ENTRIES,
+        }),
+        entries() {
+          throw new Error("entries failed");
+        },
+      });
+
+      expect(stickerCache.getAllCachedStickers()).toStrictEqual([]);
     });
 
     it("returns all cached stickers", () => {

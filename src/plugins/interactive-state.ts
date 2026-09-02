@@ -1,15 +1,7 @@
+// Stores interactive plugin state and dedupe caches.
 import { createDedupeCache, resolveGlobalDedupeCache } from "../infra/dedupe.js";
 import type { DedupeCache } from "../infra/dedupe.js";
-import type { PluginInteractiveHandlerRegistration } from "./types.js";
-
-export type RegisteredInteractiveHandler = PluginInteractiveHandlerRegistration & {
-  pluginId: string;
-  pluginName?: string;
-  pluginRoot?: string;
-};
-
 type InteractiveState = {
-  interactiveHandlers: Map<string, RegisteredInteractiveHandler>;
   callbackDedupe: ReturnType<typeof createDedupeCache>;
   inflightCallbackDedupe: Set<string>;
 };
@@ -28,7 +20,6 @@ function createInteractiveCallbackDedupe(): DedupeCache {
 
 function createInteractiveState(): InteractiveState {
   return {
-    interactiveHandlers: new Map<string, RegisteredInteractiveHandler>(),
     callbackDedupe: createInteractiveCallbackDedupe(),
     inflightCallbackDedupe: new Set<string>(),
   };
@@ -41,10 +32,6 @@ function hydrateInteractiveState(value: unknown): InteractiveState {
       : ({} as Partial<InteractiveState>);
 
   return {
-    interactiveHandlers:
-      state.interactiveHandlers instanceof Map
-        ? state.interactiveHandlers
-        : new Map<string, RegisteredInteractiveHandler>(),
     callbackDedupe: createInteractiveCallbackDedupe(),
     inflightCallbackDedupe:
       state.inflightCallbackDedupe instanceof Set
@@ -67,14 +54,11 @@ function getState() {
   return created;
 }
 
-export function getPluginInteractiveHandlersState() {
-  return getState().interactiveHandlers;
-}
-
 function getPluginInteractiveCallbackDedupeState() {
   return getState().callbackDedupe;
 }
 
+/** Claims an interactive callback dedupe key while the callback is in flight. */
 export function claimPluginInteractiveCallbackDedupe(
   dedupeKey: string | undefined,
   now = Date.now(),
@@ -90,6 +74,7 @@ export function claimPluginInteractiveCallbackDedupe(
   return true;
 }
 
+/** Commits an interactive callback dedupe key after successful handling. */
 export function commitPluginInteractiveCallbackDedupe(
   dedupeKey: string | undefined,
   now = Date.now(),
@@ -102,6 +87,7 @@ export function commitPluginInteractiveCallbackDedupe(
   state.callbackDedupe.check(dedupeKey, now);
 }
 
+/** Releases an in-flight interactive callback dedupe claim without committing it. */
 export function releasePluginInteractiveCallbackDedupe(dedupeKey: string | undefined): void {
   if (!dedupeKey) {
     return;
@@ -109,12 +95,8 @@ export function releasePluginInteractiveCallbackDedupe(dedupeKey: string | undef
   getState().inflightCallbackDedupe.delete(dedupeKey);
 }
 
+/** Clears plugin interactive handlers and callback dedupe state. */
 export function clearPluginInteractiveHandlersState(): void {
-  clearPluginInteractiveHandlerRegistrationsState();
   getPluginInteractiveCallbackDedupeState().clear();
   getState().inflightCallbackDedupe.clear();
-}
-
-export function clearPluginInteractiveHandlerRegistrationsState(): void {
-  getPluginInteractiveHandlersState().clear();
 }

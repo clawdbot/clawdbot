@@ -1,9 +1,12 @@
+// Doctor repair for open DM policies that still need explicit allowFrom wildcards.
+import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
+import { sanitizeForLog } from "../../../../packages/terminal-core/src/ansi.js";
 import { ensureOpenDmPolicyAllowFromWildcard } from "../../../channels/plugins/dm-access.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
-import { sanitizeForLog } from "../../../terminal/ansi.js";
-import { resolveAllowFromMode, type AllowFromMode } from "./allow-from-mode.js";
-import { asObjectRecord } from "./object.js";
+import { getDoctorChannelCapabilities } from "../channel-capabilities.js";
+import type { AllowFromMode } from "./allow-from-mode.js";
 
+/** Format doctor warnings for open DM policies missing allowFrom wildcards. */
 export function collectOpenPolicyAllowFromWarnings(params: {
   changes: string[];
   doctorFixCommand: string;
@@ -17,6 +20,7 @@ export function collectOpenPolicyAllowFromWarnings(params: {
   ];
 }
 
+/** Add allowFrom wildcards for open DM policies where channel metadata requires them. */
 export function maybeRepairOpenPolicyAllowFrom(cfg: OpenClawConfig): {
   config: OpenClawConfig;
   changes: string[];
@@ -48,10 +52,14 @@ export function maybeRepairOpenPolicyAllowFrom(cfg: OpenClawConfig): {
       continue;
     }
 
-    const allowFromMode = resolveAllowFromMode(channelName);
+    const capabilities = getDoctorChannelCapabilities(channelName);
+    if (capabilities.openDmRequiresAllowFromWildcard === false) {
+      continue;
+    }
+    const allowFromMode = capabilities.dmAllowFromMode;
     ensureWildcard(channelConfig, `channels.${channelName}`, allowFromMode);
 
-    const accounts = asObjectRecord(channelConfig.accounts);
+    const accounts = asNullableRecord(channelConfig.accounts);
     if (!accounts) {
       continue;
     }

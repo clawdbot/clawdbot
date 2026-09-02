@@ -1,9 +1,13 @@
+// Discord tests cover channel access plugin behavior.
 import { describe, expect, it } from "vitest";
 import {
   resolveDiscordChannelInfoSafe,
-  resolveDiscordChannelOwnerIdSafe,
   resolveDiscordChannelParentIdSafe,
 } from "./channel-access.js";
+
+function resolveDiscordChannelOwnerIdSafe(channel: unknown) {
+  return resolveDiscordChannelInfoSafe(channel).ownerId;
+}
 
 describe("resolveDiscordChannelOwnerIdSafe", () => {
   it("reads camelCase ownerId directly", () => {
@@ -89,11 +93,25 @@ describe("resolveDiscordChannelInfoSafe", () => {
         owner_id: "owner-snake",
         parent_id: "parent-snake",
       }),
-    ).toMatchObject({ ownerId: "owner-snake", parentId: "parent-snake" });
+    ).toEqual({
+      name: undefined,
+      topic: undefined,
+      type: undefined,
+      parentId: "parent-snake",
+      ownerId: "owner-snake",
+      parentName: undefined,
+    });
     expect(
       resolveDiscordChannelInfoSafe({
         rawData: { owner_id: "owner-raw", parent_id: "parent-raw" },
       }),
-    ).toMatchObject({ ownerId: "owner-raw", parentId: "parent-raw" });
+    ).toEqual({
+      name: undefined,
+      topic: undefined,
+      type: undefined,
+      parentId: "parent-raw",
+      ownerId: "owner-raw",
+      parentName: undefined,
+    });
   });
 });

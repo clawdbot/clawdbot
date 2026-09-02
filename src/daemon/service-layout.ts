@@ -1,9 +1,11 @@
+/** Summarizes installed service command paths and OpenClaw package layout. */
 import fs from "node:fs/promises";
 import path from "node:path";
 import { pathExists } from "../infra/fs-safe.js";
 import { readPackageName, readPackageVersion } from "../infra/package-json.js";
 import type { GatewayServiceCommandConfig } from "./service-types.js";
 
+/** Summary of the installed gateway service command and package layout. */
 export type GatewayServiceLayoutSummary = {
   execStart: string;
   sourcePath?: string;
@@ -45,12 +47,45 @@ function resolveSystemdScopeFromServicePath(
   return "user";
 }
 
-function findGatewayEntrypoint(programArguments: readonly string[]): string | undefined {
-  const gatewayIndex = programArguments.indexOf("gateway");
-  if (gatewayIndex <= 0) {
+export function resolveServiceEntrypointIndex(
+  programArguments: readonly string[],
+): number | undefined {
+  // Managed commands put the entrypoint immediately before the subcommand.
+  // A subcommand name following a native option is its value, not this boundary.
+  const commandIndex = programArguments.findIndex(
+    (arg, index, args) =>
+      index > 0 &&
+      !args[index - 1]?.startsWith("-") &&
+      (arg === "gateway" || (arg === "node" && args[index + 1] === "run")),
+  );
+  return commandIndex > 0 ? commandIndex - 1 : undefined;
+}
+
+export function resolveServiceEntrypoint(command: GatewayServiceCommandConfig): string | undefined {
+  const entrypointIndex = resolveServiceEntrypointIndex(command.programArguments);
+  if (entrypointIndex === undefined) {
     return undefined;
   }
-  return programArguments[gatewayIndex - 1];
+  const entrypoint = command.programArguments[entrypointIndex];
+  if (!entrypoint) {
+    return undefined;
+  }
+  if (path.isAbsolute(entrypoint) || path.win32.isAbsolute(entrypoint)) {
+    return entrypoint;
+  }
+  // Service managers resolve relative commands against their configured
+  // working directory; without an absolute base, ownership is ambiguous.
+  const workingDirectory = command.workingDirectory?.trim();
+  if (!workingDirectory) {
+    return undefined;
+  }
+  if (path.isAbsolute(workingDirectory)) {
+    return path.resolve(workingDirectory, entrypoint);
+  }
+  if (path.win32.isAbsolute(workingDirectory)) {
+    return path.win32.resolve(workingDirectory, entrypoint);
+  }
+  return undefined;
 }
 
 async function tryRealpath(value: string | undefined): Promise<string | undefined> {
@@ -80,6 +115,8 @@ async function isSourceCheckoutRoot(candidate: string): Promise<boolean> {
 
 async function resolveOpenClawPackageRoot(entrypoint: string): Promise<string | undefined> {
   let current = path.dirname(path.resolve(entrypoint));
+  // Installed dist entrypoints can sit several levels below package root in
+  // pnpm layouts; bound the walk to avoid scanning arbitrary filesystem depth.
   for (let depth = 0; depth < 8; depth += 1) {
     const packageJson = path.join(current, "package.json");
     if (await pathExists(packageJson)) {
@@ -104,7 +141,7 @@ export async function summarizeGatewayServiceLayout(
     return undefined;
   }
   const sourcePath = command.sourcePath?.trim() || undefined;
-  const entrypoint = findGatewayEntrypoint(command.programArguments);
+  const entrypoint = resolveServiceEntrypoint(command);
   const [sourcePathReal, entrypointReal] = await Promise.all([
     tryRealpath(sourcePath),
     tryRealpath(entrypoint),

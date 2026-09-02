@@ -1,7 +1,10 @@
+// Mattermost plugin module implements monitor onchar behavior.
+import { normalizeStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
+
 const DEFAULT_ONCHAR_PREFIXES = [">", "!"];
 
 export function resolveOncharPrefixes(prefixes: string[] | undefined): string[] {
-  const cleaned = prefixes?.map((entry) => entry.trim()).filter(Boolean) ?? DEFAULT_ONCHAR_PREFIXES;
+  const cleaned = prefixes ? normalizeStringEntries(prefixes) : DEFAULT_ONCHAR_PREFIXES;
   return cleaned.length > 0 ? cleaned : DEFAULT_ONCHAR_PREFIXES;
 }
 

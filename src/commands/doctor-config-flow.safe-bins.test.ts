@@ -1,3 +1,4 @@
+// Doctor config-flow safe-bin tests cover executable allowlist validation and repair behavior.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -50,10 +51,10 @@ describe("doctor config flow safe bins", () => {
         }>;
       };
     };
-    expect(cfg.tools?.exec?.safeBinProfiles?.myfilter).toEqual({});
+    expect(cfg.tools?.exec?.safeBinProfiles?.myfilter).toStrictEqual({});
     expect(cfg.tools?.exec?.safeBinProfiles?.python3).toBeUndefined();
     const ops = cfg.agents?.list?.find((entry) => entry.id === "ops");
-    expect(ops?.tools?.exec?.safeBinProfiles?.mytool).toEqual({});
+    expect(ops?.tools?.exec?.safeBinProfiles?.mytool).toStrictEqual({});
     expect(ops?.tools?.exec?.safeBinProfiles?.node).toBeUndefined();
   });
 

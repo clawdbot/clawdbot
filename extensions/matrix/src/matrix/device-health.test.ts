@@ -1,3 +1,4 @@
+// Matrix tests cover device health plugin behavior.
 import { describe, expect, it } from "vitest";
 import { isOpenClawManagedMatrixDevice, summarizeMatrixDeviceHealth } from "./device-health.js";
 
@@ -33,13 +34,27 @@ describe("matrix device health", () => {
       },
     ]);
 
-    expect(summary.currentDeviceId).toBe("du314Zpw3A");
-    expect(summary.currentOpenClawDevices).toEqual([
-      expect.objectContaining({ deviceId: "du314Zpw3A" }),
-    ]);
-    expect(summary.staleOpenClawDevices).toEqual([
-      expect.objectContaining({ deviceId: "BritdXC6iL" }),
-      expect.objectContaining({ deviceId: "G6NJU9cTgs" }),
-    ]);
+    expect(summary).toEqual({
+      currentDeviceId: "du314Zpw3A",
+      currentOpenClawDevices: [
+        {
+          deviceId: "du314Zpw3A",
+          displayName: "OpenClaw Gateway",
+          current: true,
+        },
+      ],
+      staleOpenClawDevices: [
+        {
+          deviceId: "BritdXC6iL",
+          displayName: "OpenClaw Gateway",
+          current: false,
+        },
+        {
+          deviceId: "G6NJU9cTgs",
+          displayName: "OpenClaw Debug",
+          current: false,
+        },
+      ],
+    });
   });
 });

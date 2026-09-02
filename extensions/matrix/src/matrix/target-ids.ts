@@ -1,3 +1,4 @@
+// Matrix plugin module implements target ids behavior.
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 type MatrixTarget = { kind: "room"; id: string } | { kind: "user"; id: string };
@@ -46,6 +47,17 @@ export function resolveMatrixTargetIdentity(raw: string): MatrixTarget | null {
 export function isMatrixQualifiedUserId(raw: string): boolean {
   const trimmed = raw.trim();
   return trimmed.startsWith("@") && trimmed.includes(":");
+}
+
+/**
+ * Whether `raw` is already a literal room ID rather than a name/query to resolve.
+ * Room version 12 (MSC4291) dropped the trailing ":server" from room IDs — they're
+ * now a hash of the create event — so this must not require a colon the way user
+ * IDs and aliases still do.
+ */
+export function isMatrixRoomId(raw: string): boolean {
+  const trimmed = raw.trim();
+  return trimmed.startsWith("!") && trimmed.length > 1;
 }
 
 export function normalizeMatrixResolvableTarget(raw: string): string {

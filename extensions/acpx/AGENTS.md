@@ -18,14 +18,14 @@ Use this flow when OpenClaw needs unreleased ACPX changes before the ACPX versio
 
 1. Make the ACPX code change in the `openclaw/acpx` repo first.
 2. In OpenClaw, temporarily point `extensions/acpx/package.json` at the ACPX GitHub commit you need.
-3. If pnpm blocks ACPX lifecycle/build scripts for that temporary GitHub-sourced package, temporarily add `acpx` to `onlyBuiltDependencies` in both `package.json` and `pnpm-workspace.yaml`.
+3. If pnpm blocks ACPX lifecycle/build scripts for that temporary GitHub-sourced package, temporarily add `acpx: true` to `allowBuilds` in `pnpm-workspace.yaml`.
 4. Refresh the root workspace lock:
    - `pnpm install --lockfile-only --filter ./extensions/acpx`
 5. Refresh the extension-local npm lock for install metadata:
    - `cd extensions/acpx && npm install --package-lock-only --ignore-scripts`
 6. Rebuild OpenClaw and restart the gateway before doing live ACP validation.
 7. Once ACPX is released, switch `extensions/acpx/package.json` back to the published npm version and refresh the same lockfiles again.
-8. Remove any temporary `acpx` build-script allowlist entries that were only needed for the GitHub-sourced development pin.
+8. Remove any temporary `acpx` build-script allowlist entry that was only needed for the GitHub-sourced development pin.
 
 ## Lockfile Notes
 

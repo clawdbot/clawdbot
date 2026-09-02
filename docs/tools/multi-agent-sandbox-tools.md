@@ -21,7 +21,7 @@ Each agent in a multi-agent setup can override the global sandbox and tool polic
 </CardGroup>
 
 <Warning>
-Auth is scoped by agent: each agent has its own `agentDir` auth store at `~/.openclaw/agents/<agentId>/agent/auth-profiles.json`. Never reuse `agentDir` across agents. Agents can read through to the default/main agent's auth profiles when they do not have a local profile, but OAuth refresh tokens are not cloned into secondary agent stores. If you copy credentials manually, copy only portable static `api_key` or `token` profiles.
+Auth is scoped by agent: each agent has its own `<agentDir>/openclaw-agent.sqlite` auth store (by default, `~/.openclaw/agents/<agentId>/agent/openclaw-agent.sqlite`). Never reuse `agentDir` across agents. Agents can read through to the default/main agent's auth profiles when they do not have a local profile, but OAuth refresh tokens are not cloned into secondary agent stores. If you copy credentials manually, copy only portable static `api_key` or `token` profiles.
 </Warning>
 
 ---
@@ -33,16 +33,14 @@ Auth is scoped by agent: each agent has its own `agentDir` auth store at `~/.ope
     ```json
     {
       "agents": {
-        "list": [
-          {
-            "id": "main",
+        "entries": {
+          "main": {
             "default": true,
             "name": "Personal Assistant",
             "workspace": "~/.openclaw/workspace",
             "sandbox": { "mode": "off" }
           },
-          {
-            "id": "family",
+          "family": {
             "name": "Family Bot",
             "workspace": "~/.openclaw/workspace-family",
             "sandbox": {
@@ -50,17 +48,23 @@ Auth is scoped by agent: each agent has its own `agentDir` auth store at `~/.ope
               "scope": "agent"
             },
             "tools": {
-              "allow": ["read"],
-              "deny": ["exec", "write", "edit", "apply_patch", "process", "browser"]
+              "allow": ["read", "message"],
+              "deny": ["exec", "write", "edit", "apply_patch", "process", "browser"],
+              "message": {
+                "crossContext": {
+                  "allowWithinProvider": false,
+                  "allowAcrossProviders": false
+                }
+              }
             }
           }
-        ]
+        }
       },
       "bindings": [
         {
           "agentId": "family",
           "match": {
-            "provider": "whatsapp",
+            "channel": "whatsapp",
             "accountId": "*",
             "peer": {
               "kind": "group",
@@ -75,21 +79,20 @@ Auth is scoped by agent: each agent has its own `agentDir` auth store at `~/.ope
     **Result:**
 
     - `main` agent: runs on host, full tool access.
-    - `family` agent: runs in Docker (one container per agent), only `read` tool.
+    - `family` agent: runs in the configured container sandbox backend (one container per agent), only `read` and current-conversation message sends.
 
   </Accordion>
   <Accordion title="Example 2: Work agent with shared sandbox">
     ```json
     {
       "agents": {
-        "list": [
-          {
-            "id": "personal",
+        "entries": {
+          "personal": {
+            "default": true,
             "workspace": "~/.openclaw/workspace-personal",
             "sandbox": { "mode": "off" }
           },
-          {
-            "id": "work",
+          "work": {
             "workspace": "~/.openclaw/workspace-work",
             "sandbox": {
               "mode": "all",
@@ -101,7 +104,7 @@ Auth is scoped by agent: each agent has its own `agentDir` auth store at `~/.ope
               "deny": ["browser", "gateway", "discord"]
             }
           }
-        ]
+        }
       }
     }
     ```
@@ -111,12 +114,14 @@ Auth is scoped by agent: each agent has its own `agentDir` auth store at `~/.ope
     {
       "tools": { "profile": "coding" },
       "agents": {
-        "list": [
-          {
-            "id": "support",
+        "entries": {
+          "main": {
+            "default": true
+          },
+          "support": {
             "tools": { "profile": "messaging", "allow": ["slack"] }
           }
-        ]
+        }
       }
     }
     ```
@@ -137,16 +142,15 @@ Auth is scoped by agent: each agent has its own `agentDir` auth store at `~/.ope
             "scope": "session"
           }
         },
-        "list": [
-          {
-            "id": "main",
+        "entries": {
+          "main": {
+            "default": true,
             "workspace": "~/.openclaw/workspace",
             "sandbox": {
               "mode": "off"
             }
           },
-          {
-            "id": "public",
+          "public": {
             "workspace": "~/.openclaw/workspace-public",
             "sandbox": {
               "mode": "all",
@@ -157,7 +161,7 @@ Auth is scoped by agent: each agent has its own `agentDir` auth store at `~/.ope
               "deny": ["exec", "write", "edit", "apply_patch"]
             }
           }
-        ]
+        }
       }
     }
     ```
@@ -168,24 +172,24 @@ Auth is scoped by agent: each agent has its own `agentDir` auth store at `~/.ope
 
 ## Configuration precedence
 
-When both global (`agents.defaults.*`) and agent-specific (`agents.list[].*`) configs exist:
+When both global (`agents.defaults.*`) and agent-specific (`agents.entries.*.*`) configs exist:
 
 ### Sandbox config
 
 Agent-specific settings override global:
 
-```
-agents.list[].sandbox.mode > agents.defaults.sandbox.mode
-agents.list[].sandbox.scope > agents.defaults.sandbox.scope
-agents.list[].sandbox.workspaceRoot > agents.defaults.sandbox.workspaceRoot
-agents.list[].sandbox.workspaceAccess > agents.defaults.sandbox.workspaceAccess
-agents.list[].sandbox.docker.* > agents.defaults.sandbox.docker.*
-agents.list[].sandbox.browser.* > agents.defaults.sandbox.browser.*
-agents.list[].sandbox.prune.* > agents.defaults.sandbox.prune.*
+```text
+agents.entries.*.sandbox.mode > agents.defaults.sandbox.mode
+agents.entries.*.sandbox.scope > agents.defaults.sandbox.scope
+agents.entries.*.sandbox.workspaceRoot > agents.defaults.sandbox.workspaceRoot
+agents.entries.*.sandbox.workspaceAccess > agents.defaults.sandbox.workspaceAccess
+agents.entries.*.sandbox.docker.* > agents.defaults.sandbox.docker.*
+agents.entries.*.sandbox.browser.* > agents.defaults.sandbox.browser.*
+agents.entries.*.sandbox.prune.* > agents.defaults.sandbox.prune.*
 ```
 
 <Note>
-`agents.list[].sandbox.{docker,browser,prune}.*` overrides `agents.defaults.sandbox.{docker,browser,prune}.*` for that agent (ignored when sandbox scope resolves to `"shared"`).
+`agents.entries.*.sandbox.{docker,browser,prune}.*` overrides `agents.defaults.sandbox.{docker,browser,prune}.*` for that agent (ignored when sandbox scope resolves to `"shared"`). The `docker` block configures both built-in container backends.
 </Note>
 
 ### Tool restrictions
@@ -194,10 +198,10 @@ The filtering order is:
 
 <Steps>
   <Step title="Tool profile">
-    `tools.profile` or `agents.list[].tools.profile`.
+    `tools.profile` or `agents.entries.*.tools.profile`.
   </Step>
   <Step title="Provider tool profile">
-    `tools.byProvider[provider].profile` or `agents.list[].tools.byProvider[provider].profile`.
+    `tools.byProvider[provider].profile` or `agents.entries.*.tools.byProvider[provider].profile`.
   </Step>
   <Step title="Global tool policy">
     `tools.allow` / `tools.deny`.
@@ -206,13 +210,13 @@ The filtering order is:
     `tools.byProvider[provider].allow/deny`.
   </Step>
   <Step title="Agent-specific tool policy">
-    `agents.list[].tools.allow/deny`.
+    `agents.entries.*.tools.allow/deny`.
   </Step>
   <Step title="Agent provider policy">
-    `agents.list[].tools.byProvider[provider].allow/deny`.
+    `agents.entries.*.tools.byProvider[provider].allow/deny`.
   </Step>
   <Step title="Sandbox tool policy">
-    `tools.sandbox.tools` or `agents.list[].tools.sandbox.tools`.
+    `tools.sandbox.tools` or `agents.entries.*.tools.sandbox.tools`.
   </Step>
   <Step title="Subagent tool policy">
     `tools.subagents.tools`, if applicable.
@@ -222,19 +226,44 @@ The filtering order is:
 <AccordionGroup>
   <Accordion title="Precedence rules">
     - Each level can further restrict tools, but cannot grant back denied tools from earlier levels.
-    - If `agents.list[].tools.sandbox.tools` is set, it replaces `tools.sandbox.tools` for that agent.
-    - If `agents.list[].tools.profile` is set, it overrides `tools.profile` for that agent.
-    - Provider tool keys accept either `provider` (e.g. `google-antigravity`) or `provider/model` (e.g. `openai/gpt-5.4`).
+    - If `agents.entries.*.tools.sandbox.tools` is set, it replaces `tools.sandbox.tools` for that agent.
+    - If `agents.entries.*.tools.profile` is set, it overrides `tools.profile` for that agent.
+    - Provider tool keys accept either `provider` (e.g. `anthropic`) or `provider/model` (e.g. `openai/gpt-5.4`).
 
   </Accordion>
   <Accordion title="Empty allowlist behavior">
-    If any explicit allowlist in that chain leaves the run with no callable tools, OpenClaw stops before submitting the prompt to the model. This is intentional: an agent configured with a missing tool such as `agents.list[].tools.allow: ["query_db"]` should fail loudly until the plugin that registers `query_db` is enabled, not continue as a text-only agent.
+    If any explicit allowlist in that chain leaves the run with no callable tools, OpenClaw stops before submitting the prompt to the model. This is intentional: an agent configured with a missing tool such as `agents.entries.*.tools.allow: ["query_db"]` should fail loudly until the plugin that registers `query_db` is enabled, not continue as a text-only agent.
   </Accordion>
 </AccordionGroup>
 
 Tool policies support `group:*` shorthands that expand to multiple tools. See [Tool groups](/gateway/sandbox-vs-tool-policy-vs-elevated#tool-groups-shorthands) for the full list.
 
-Per-agent elevated overrides (`agents.list[].tools.elevated`) can further restrict elevated exec for specific agents. See [Elevated mode](/tools/elevated) for details.
+Configured MCP tools use the same policy surface. Their canonical names are
+`<safe-server>__<safe-tool>`; globs can target a server namespace. For example:
+
+```json5
+{
+  agents: {
+    entries: {
+      research: {
+        tools: {
+          allow: ["docs__read_docs"],
+          deny: ["docs__delete_*"],
+        },
+      },
+    },
+  },
+}
+```
+
+Every restrictive layer intersects with the earlier layers, and deny always
+wins. OpenClaw projects the resulting raw tool set into native Claude, Codex,
+and Gemini MCP filters before their first model turn. Backend-native names and
+settings are implementation details, not a second operator policy surface. An
+MCP server with no allowed tool is omitted. A restrictive catalog failure also
+omits that server and records a diagnostic instead of failing open.
+
+Per-agent elevated overrides (`agents.entries.*.tools.elevated`) can further restrict elevated exec for specific agents. See [Elevated mode](/tools/elevated) for details.
 
 ---
 
@@ -267,14 +296,13 @@ Per-agent elevated overrides (`agents.list[].tools.elevated`) can further restri
     ```json
     {
       "agents": {
-        "list": [
-          {
-            "id": "main",
+        "entries": {
+          "main": {
             "default": true,
             "workspace": "~/.openclaw/workspace",
             "sandbox": { "mode": "off" }
           }
-        ]
+        }
       }
     }
     ```
@@ -282,7 +310,7 @@ Per-agent elevated overrides (`agents.list[].tools.elevated`) can further restri
 </Tabs>
 
 <Note>
-Legacy `agent.*` configs are migrated by `openclaw doctor`; prefer `agents.defaults` + `agents.list` going forward.
+Legacy `agents.list` rosters and retired per-agent keys (such as `sandbox.perSession`, `agentRuntime`, and `embeddedPi`) are migrated by `openclaw doctor`; prefer `agents.defaults` + `agents.entries` going forward.
 </Note>
 
 ---
@@ -336,7 +364,7 @@ Legacy `agent.*` configs are migrated by `openclaw doctor`; prefer `agents.defau
 ## Common pitfall: "non-main"
 
 <Warning>
-`agents.defaults.sandbox.mode: "non-main"` is based on `session.mainKey` (default `"main"`), not the agent id. Group/channel sessions always get their own keys, so they are treated as non-main and will be sandboxed. If you want an agent to never sandbox, set `agents.list[].sandbox.mode: "off"`.
+`agents.defaults.sandbox.mode: "non-main"` checks the session key against the main session key (always `"main"`; `session.mainKey` is not user-configurable, and OpenClaw warns and ignores any other value), not the agent id. Group/channel sessions always get their own keys, so they are treated as non-main and will be sandboxed. If you want an agent to never sandbox, set `agents.entries.*.sandbox.mode: "off"`.
 </Warning>
 
 ---
@@ -363,7 +391,7 @@ After configuring multi-agent sandbox and tools:
   </Step>
   <Step title="Monitor logs">
     ```bash
-    tail -f "${OPENCLAW_STATE_DIR:-$HOME/.openclaw}/logs/gateway.log" | grep -E "routing|sandbox|tools"
+    openclaw logs --follow | grep -E "routing|sandbox|tools"
     ```
   </Step>
 </Steps>
@@ -375,18 +403,19 @@ After configuring multi-agent sandbox and tools:
 <AccordionGroup>
   <Accordion title="Agent not sandboxed despite `mode: 'all'`">
     - Check if there's a global `agents.defaults.sandbox.mode` that overrides it.
-    - Agent-specific config takes precedence, so set `agents.list[].sandbox.mode: "all"`.
+    - Agent-specific config takes precedence, so set `agents.entries.*.sandbox.mode: "all"`.
 
   </Accordion>
   <Accordion title="Tools still available despite deny list">
-    - Check tool filtering order: global → agent → sandbox → subagent.
+    - Check the [full filtering order](#tool-restrictions): profile → provider profile → global policy → provider policy → agent policy → agent provider policy → sandbox → subagent.
     - Each level can only further restrict, not grant back.
-    - Verify with logs: `[tools] filtering tools for agent:${agentId}`.
+    - See [Sandbox vs tool policy vs elevated](/gateway/sandbox-vs-tool-policy-vs-elevated) for step-by-step debugging.
+    - For MCP tools, use the provider-safe name shown by OpenClaw, such as `docs__read_docs` or `docs__*`; do not use a backend's raw config field name.
 
   </Accordion>
   <Accordion title="Container not isolated per agent">
-    - Set `scope: "agent"` in agent-specific sandbox config.
-    - Default is `"session"` which creates one container per session.
+    - Default `scope` is `"agent"` (one container per agent id).
+    - Set `scope: "session"` for one container per session, or `scope: "shared"` to reuse one container across agents.
 
   </Accordion>
 </AccordionGroup>

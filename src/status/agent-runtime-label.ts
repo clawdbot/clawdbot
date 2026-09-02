@@ -1,14 +1,18 @@
-import { isCliProvider } from "../agents/model-selection.js";
-import type { SessionEntry } from "../config/sessions/types.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { expectDefined } from "@openclaw/normalization-core";
+// Agent runtime label helpers format provider, model, and runtime labels.
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
-} from "../shared/string-coerce.js";
-import { sanitizeTerminalText } from "../terminal/safe-text.js";
+} from "@openclaw/normalization-core/string-coerce";
+import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
+import { isCliProvider, type CliProviderClassifier } from "../agents/model-selection.js";
+import type { SessionEntry } from "../config/sessions/types.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 
+// Status runtime labels turn harness/provider/session state into a short
+// operator-facing name, sanitizing any persisted ACP/backend text.
 const AGENT_RUNTIME_LABELS: Readonly<Record<string, string>> = {
-  pi: "OpenClaw Pi Default",
+  openclaw: "OpenClaw Default",
   codex: "OpenAI Codex",
   "codex-cli": "OpenAI Codex",
   "claude-cli": "Claude CLI",
@@ -23,9 +27,12 @@ export function resolveAgentRuntimeLabel(args: {
   >;
   resolvedHarness?: string;
   fallbackProvider?: string;
+  classifyCliProvider?: CliProviderClassifier;
 }): string {
   const acpAgentRaw = normalizeOptionalString(args.sessionEntry?.acp?.agent);
   const acpAgent = acpAgentRaw ? sanitizeTerminalText(acpAgentRaw) : undefined;
+  // ACP sessions own their displayed runtime because the backend can differ
+  // from the normal model/provider selection path.
   if (acpAgent) {
     const backendRaw = normalizeOptionalString(args.sessionEntry?.acp?.backend);
     const backend = backendRaw ? sanitizeTerminalText(backendRaw) : undefined;
@@ -43,12 +50,12 @@ export function resolveAgentRuntimeLabel(args: {
     normalizeOptionalString(args.sessionEntry?.providerOverride) ??
     normalizeOptionalString(args.fallbackProvider);
   const provider = providerRaw ? sanitizeTerminalText(providerRaw) : undefined;
-  if (provider && isCliProvider(provider, args.config)) {
+  if (provider && (args.classifyCliProvider?.(provider) ?? isCliProvider(provider, args.config))) {
     return (
       AGENT_RUNTIME_LABELS[normalizeOptionalLowercaseString(providerRaw) ?? ""] ??
       `${provider} (cli)`
     );
   }
 
-  return AGENT_RUNTIME_LABELS.pi;
+  return expectDefined(AGENT_RUNTIME_LABELS.openclaw, "OpenClaw runtime label");
 }

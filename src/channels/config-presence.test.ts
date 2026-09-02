@@ -1,26 +1,31 @@
+// Config presence tests cover channel config detection and missing-config diagnostics.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { isChannelConfigMetadataKey } from "./config-metadata.js";
 import {
   hasMeaningfulChannelConfig,
-  hasPotentialConfiguredChannels,
   listExplicitlyDisabledChannelIdsForConfig,
   listPotentialConfiguredChannelPresenceSignals,
   listPotentialConfiguredChannelIds,
 } from "./config-presence.js";
+import * as persistedAuthState from "./plugins/persisted-auth-state.js";
 
 const tempDirs: string[] = [];
 
-const matrixPresenceOptions = {
-  channelIds: ["matrix"],
-  persistedAuthStateProbe: {
-    listChannelIds: () => ["matrix"],
-    hasState: ({ channelId, env }: { channelId: string; env?: NodeJS.ProcessEnv }) =>
+const matrixPresenceOptions = { channelIds: ["matrix"] };
+
+beforeEach(() => {
+  vi.spyOn(persistedAuthState, "listBundledChannelIdsWithPersistedAuthState").mockReturnValue([
+    "matrix",
+  ]);
+  vi.spyOn(persistedAuthState, "hasBundledChannelPersistedAuthState").mockImplementation(
+    ({ channelId, env }) =>
       channelId === "matrix" && Boolean(env?.OPENCLAW_STATE_DIR?.includes("persisted-matrix")),
-  },
-};
+  );
+});
 
 function makeTempStateDir() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-channel-config-presence-"));
@@ -32,19 +37,16 @@ function expectPotentialConfiguredChannelCase(params: {
   cfg: OpenClawConfig;
   env: NodeJS.ProcessEnv;
   expectedIds: string[];
-  expectedConfigured: boolean;
   options?: Parameters<typeof listPotentialConfiguredChannelIds>[2];
 }) {
   const options = params.options ?? matrixPresenceOptions;
   expect(listPotentialConfiguredChannelIds(params.cfg, params.env, options)).toEqual(
     params.expectedIds,
   );
-  expect(hasPotentialConfiguredChannels(params.cfg, params.env, options)).toBe(
-    params.expectedConfigured,
-  );
 }
 
 afterEach(() => {
+  vi.restoreAllMocks();
   while (tempDirs.length > 0) {
     const dir = tempDirs.pop();
     if (dir) {
@@ -61,6 +63,25 @@ describe("config presence", () => {
     expect(hasMeaningfulChannelConfig({ homeserver: "https://matrix.example.org" })).toBe(true);
   });
 
+  it("excludes metadata and blank keys while trimming configured channel ids", () => {
+    const cfg = {
+      channels: {
+        defaults: { token: "test-token" },
+        modelByChannel: { discord: "openai/gpt-5.6-luna" },
+        "  ": { token: "dummy" },
+        " matrix ": { homeserver: "https://matrix.example.org" },
+      },
+    } as unknown as OpenClawConfig;
+
+    expect(isChannelConfigMetadataKey(" modelByChannel ")).toBe(true);
+    expectPotentialConfiguredChannelCase({
+      cfg,
+      env: {},
+      expectedIds: ["matrix"],
+      options: { includePersistedAuthState: false },
+    });
+  });
+
   it("ignores enabled-only matrix config when listing configured channels", () => {
     const env = {} as NodeJS.ProcessEnv;
     const cfg = { channels: { matrix: { enabled: false } } };
@@ -69,7 +90,6 @@ describe("config presence", () => {
       cfg,
       env,
       expectedIds: [],
-      expectedConfigured: false,
       options: { includePersistedAuthState: false },
     });
   });
@@ -81,6 +101,8 @@ describe("config presence", () => {
         telegram: { enabled: true },
         slack: { botToken: "token" },
         discord: false,
+        modelByChannel: { enabled: false },
+        " ": { enabled: false },
       },
     } as unknown as OpenClawConfig;
 
@@ -96,7 +118,6 @@ describe("config presence", () => {
       cfg: {},
       env,
       expectedIds: ["matrix"],
-      expectedConfigured: true,
       options: { includePersistedAuthState: false },
     });
     expect(
@@ -104,6 +125,25 @@ describe("config presence", () => {
         includePersistedAuthState: false,
       }),
     ).toEqual([{ channelId: "matrix", source: "env" }]);
+  });
+
+  it("detects official external channel env vars", () => {
+    const env = {
+      MATTERMOST_URL: "https://mattermost.example.test",
+      MATTERMOST_BOT_TOKEN: "token",
+    } as NodeJS.ProcessEnv;
+
+    expectPotentialConfiguredChannelCase({
+      cfg: {},
+      env,
+      expectedIds: ["mattermost"],
+      options: { includePersistedAuthState: false },
+    });
+    expect(
+      listPotentialConfiguredChannelPresenceSignals({}, env, {
+        includePersistedAuthState: false,
+      }),
+    ).toEqual([{ channelId: "mattermost", source: "env" }]);
   });
 
   it("detects persisted Matrix credentials without config or env", () => {
@@ -119,13 +159,7 @@ describe("config presence", () => {
       cfg: {},
       env,
       expectedIds: ["matrix"],
-      expectedConfigured: true,
-      options: {
-        persistedAuthStateProbe: {
-          listChannelIds: () => ["matrix"],
-          hasState: () => true,
-        },
-      },
+      options: {},
     });
   });
 });

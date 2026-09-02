@@ -1,8 +1,10 @@
+// Exercises agent avatar resolution, workspace containment, and public redaction.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { AVATAR_MAX_DATA_URL_CHARS } from "../shared/avatar-limits.js";
 import { AVATAR_MAX_BYTES } from "../shared/avatar-policy.js";
 import { resolveAgentAvatar, resolvePublicAgentAvatarSource } from "./identity-avatar.js";
 
@@ -15,10 +17,11 @@ async function expectLocalAvatarPath(
   cfg: OpenClawConfig,
   workspace: string,
   expectedRelativePath: string,
-  opts?: Parameters<typeof resolveAgentAvatar>[2],
 ) {
+  // Compare realpaths so symlinks or temp-dir normalization cannot hide an
+  // avatar escaping the configured workspace.
   const workspaceReal = await fs.realpath(workspace);
-  const resolved = resolveAgentAvatar(cfg, "main", opts);
+  const resolved = resolveAgentAvatar(cfg, "main");
   expect(resolved.kind).toBe("local");
   if (resolved.kind === "local") {
     const resolvedReal = await fs.realpath(resolved.filePath);
@@ -32,20 +35,6 @@ async function createTempAvatarRoot() {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-avatar-"));
   tempRoots.push(root);
   return root;
-}
-
-async function setupUiAndConfigAvatarWorkspace() {
-  const root = await createTempAvatarRoot();
-  const workspace = path.join(root, "work");
-  const uiAvatarPath = path.join(workspace, "ui-avatar.png");
-  const cfgAvatarPath = path.join(workspace, "cfg-avatar.png");
-  await writeFile(uiAvatarPath);
-  await writeFile(cfgAvatarPath);
-  const cfg: OpenClawConfig = {
-    ui: { assistant: { avatar: "ui-avatar.png" } },
-    agents: { list: [{ id: "main", workspace, identity: { avatar: "cfg-avatar.png" } }] },
-  };
-  return { cfg, workspace };
 }
 
 afterEach(async () => {
@@ -161,6 +150,8 @@ describe("resolveAgentAvatar", () => {
     expect(absolute.kind).toBe("none");
     expect(resolvePublicAgentAvatarSource(absolute)).toBeUndefined();
 
+    // Public status/UI surfaces may report remote/data origins, but local
+    // absolute paths and traversal attempts stay hidden.
     expect(
       resolvePublicAgentAvatarSource({
         kind: "remote",
@@ -230,102 +221,24 @@ describe("resolveAgentAvatar", () => {
     }
   });
 
-  it("resolves local avatar from ui.assistant.avatar when no agents.list identity is set", async () => {
-    const root = await createTempAvatarRoot();
-    const workspace = path.join(root, "work");
-    const avatarPath = path.join(workspace, "ui-avatar.png");
-    await writeFile(avatarPath);
-
+  it("preserves generic and oversized data URIs at the public resolution boundary", () => {
+    const oversized = `data:image/png;base64,${"A".repeat(AVATAR_MAX_DATA_URL_CHARS)}`;
     const cfg: OpenClawConfig = {
-      ui: { assistant: { avatar: "ui-avatar.png" } },
-      agents: { list: [{ id: "main", workspace }] },
-    };
-
-    await expectLocalAvatarPath(cfg, workspace, "ui-avatar.png", { includeUiOverride: true });
-  });
-
-  it("ui.assistant.avatar ignored without includeUiOverride (outbound callers)", async () => {
-    const { cfg, workspace } = await setupUiAndConfigAvatarWorkspace();
-
-    // Without the opt-in, outbound callers get the per-agent identity avatar, not the UI override.
-    await expectLocalAvatarPath(cfg, workspace, "cfg-avatar.png");
-  });
-
-  it("ui.assistant.avatar takes priority over agents.list identity.avatar with includeUiOverride", async () => {
-    const { cfg, workspace } = await setupUiAndConfigAvatarWorkspace();
-
-    await expectLocalAvatarPath(cfg, workspace, "ui-avatar.png", { includeUiOverride: true });
-  });
-
-  it("prefers non-default agent avatar over ui.assistant.avatar with includeUiOverride", async () => {
-    const root = await createTempAvatarRoot();
-    const mainWorkspace = path.join(root, "main");
-    const workerWorkspace = path.join(root, "worker");
-    await writeFile(path.join(mainWorkspace, "ui-avatar.png"));
-    await writeFile(path.join(workerWorkspace, "worker-avatar.png"));
-
-    const cfg: OpenClawConfig = {
-      ui: { assistant: { avatar: "ui-avatar.png" } },
       agents: {
         list: [
-          { id: "main", workspace: mainWorkspace },
-          { id: "worker", workspace: workerWorkspace, identity: { avatar: "worker-avatar.png" } },
+          { id: "generic", identity: { avatar: "data:text/plain,avatar" } },
+          { id: "oversized", identity: { avatar: oversized } },
         ],
       },
     };
 
-    const workspaceReal = await fs.realpath(workerWorkspace);
-    const resolved = resolveAgentAvatar(cfg, "worker", { includeUiOverride: true });
-    expect(resolved.kind).toBe("local");
-    if (resolved.kind === "local") {
-      const resolvedReal = await fs.realpath(resolved.filePath);
-      expect(path.relative(workspaceReal, resolvedReal)).toBe("worker-avatar.png");
-    }
-  });
-
-  it("falls back to ui.assistant.avatar for non-default agents without their own avatar", async () => {
-    const root = await createTempAvatarRoot();
-    const mainWorkspace = path.join(root, "main");
-    const workerWorkspace = path.join(root, "worker");
-    await writeFile(path.join(workerWorkspace, "ui-avatar.png"));
-
-    const cfg: OpenClawConfig = {
-      ui: { assistant: { avatar: "ui-avatar.png" } },
-      agents: {
-        list: [
-          { id: "main", workspace: mainWorkspace },
-          { id: "worker", workspace: workerWorkspace },
-        ],
-      },
-    };
-
-    const workspaceReal = await fs.realpath(workerWorkspace);
-    const resolved = resolveAgentAvatar(cfg, "worker", { includeUiOverride: true });
-    expect(resolved.kind).toBe("local");
-    if (resolved.kind === "local") {
-      const resolvedReal = await fs.realpath(resolved.filePath);
-      expect(path.relative(workspaceReal, resolvedReal)).toBe("ui-avatar.png");
-    }
-  });
-
-  it("ui.assistant.avatar takes priority over IDENTITY.md avatar with includeUiOverride", async () => {
-    const root = await createTempAvatarRoot();
-    const workspace = path.join(root, "work");
-    const uiAvatarPath = path.join(workspace, "ui-avatar.png");
-    const identityAvatarPath = path.join(workspace, "identity-avatar.png");
-    await writeFile(uiAvatarPath);
-    await writeFile(identityAvatarPath);
-    await fs.writeFile(
-      path.join(workspace, "IDENTITY.md"),
-      "- Avatar: identity-avatar.png\n",
-      "utf-8",
-    );
-
-    const cfg: OpenClawConfig = {
-      ui: { assistant: { avatar: "ui-avatar.png" } },
-      agents: { list: [{ id: "main", workspace }] },
-    };
-
-    await expectLocalAvatarPath(cfg, workspace, "ui-avatar.png", { includeUiOverride: true });
+    expect(resolveAgentAvatar(cfg, "generic")).toMatchObject({
+      kind: "data",
+      url: "data:text/plain,avatar",
+    });
+    expect(resolveAgentAvatar(cfg, "oversized")).toMatchObject({
+      kind: "data",
+      url: oversized,
+    });
   });
 });

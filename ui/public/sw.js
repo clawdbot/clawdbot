@@ -1,7 +1,72 @@
 // OpenClaw Control – Service Worker
 // Handles offline caching and push notifications.
 
-const CACHE_NAME = "openclaw-control-v1";
+const CACHE_PREFIX = "openclaw-control-";
+const EMBEDDED_CACHE_VERSION = "__OPENCLAW_CONTROL_UI_BUILD_ID__";
+const URL_CACHE_VERSION = new URL(self.location.href).searchParams
+  .get("v")
+  ?.replace(/[^a-zA-Z0-9._-]/g, "-");
+const CACHE_VERSION =
+  (EMBEDDED_CACHE_VERSION !== "__OPENCLAW_CONTROL_UI_BUILD_ID__"
+    ? EMBEDDED_CACHE_VERSION
+    : URL_CACHE_VERSION) || "dev";
+const CACHE_NAME = `${CACHE_PREFIX}${CACHE_VERSION}`;
+const CONTROL_CACHE_LIMIT = 3;
+const CLIENT_VERSION_TIMEOUT_MS = 1_000;
+
+function isControlUiChatClient(url) {
+  const clientUrl = new URL(url);
+  const scopeUrl = new URL(self.registration.scope);
+  const scopePath = scopeUrl.pathname.endsWith("/") ? scopeUrl.pathname : `${scopeUrl.pathname}/`;
+  const chatPath = `${scopePath}chat`;
+  return (
+    clientUrl.origin === scopeUrl.origin &&
+    (clientUrl.pathname === scopeUrl.pathname ||
+      clientUrl.pathname === chatPath ||
+      clientUrl.pathname.startsWith(`${chatPath}/`))
+  );
+}
+
+async function markClientReload(client) {
+  const cache = await caches.open(CACHE_NAME);
+  const guardUrl = new URL(".__openclaw__/service-worker-reload", self.registration.scope);
+  guardUrl.searchParams.set("client", client.id);
+  const guardRequest = new Request(guardUrl);
+  if (await cache.match(guardRequest)) {
+    return null;
+  }
+  // Persist before navigation so repeated activation of the same build cannot
+  // loop a document that keeps receiving stale HTML.
+  await cache.put(guardRequest, new Response(CACHE_VERSION));
+  return { cache, guardRequest };
+}
+
+async function navigateSuspendedClient(client) {
+  const reloadClaim = await markClientReload(client);
+  if (!reloadClaim) {
+    return;
+  }
+  // Navigation can stay pending for the lifetime of a suspended document, so
+  // it must not keep the replacement service worker's activation alive.
+  void client.navigate(client.url).catch(() => {
+    // A suspended WebKit document can reject navigation. Release ownership so
+    // the next activation can retry instead of stranding this build forever.
+    void reloadClaim.cache.delete(reloadClaim.guardRequest).catch(() => undefined);
+  });
+}
+
+function readClientVersion(client) {
+  return new Promise((resolve) => {
+    const channel = new MessageChannel();
+    const timeout = setTimeout(() => resolve(null), CLIENT_VERSION_TIMEOUT_MS);
+    channel.port1.addEventListener("message", (event) => {
+      clearTimeout(timeout);
+      resolve(typeof event.data?.version === "string" ? event.data.version : null);
+    });
+    channel.port1.start();
+    client.postMessage({ type: "sw-version-probe", version: CACHE_VERSION }, [channel.port2]);
+  });
+}
 
 // Minimal app-shell files to precache.
 const PRECACHE_URLS = ["./"];
@@ -13,13 +78,46 @@ self.addEventListener("install", (event) => {
 
 self.addEventListener("activate", (event) => {
   event.waitUntil(
-    caches
-      .keys()
-      .then((keys) =>
-        Promise.all(keys.filter((key) => key !== CACHE_NAME).map((key) => caches.delete(key))),
-      ),
+    (async () => {
+      const cacheKeys = await caches.keys();
+      const controlKeys = cacheKeys.filter((key) => key.startsWith(CACHE_PREFIX));
+      const priorCacheLimit = Math.max(0, CONTROL_CACHE_LIMIT - 1);
+      // Keep a small prior-build window so open tabs can still load old hashed chunks after updates.
+      const retained = new Set([
+        ...controlKeys.filter((key) => key !== CACHE_NAME).slice(-priorCacheLimit),
+        CACHE_NAME,
+      ]);
+
+      await Promise.all([
+        self.clients.claim(),
+        Promise.all(
+          controlKeys.filter((key) => !retained.has(key)).map((key) => caches.delete(key)),
+        ),
+      ]);
+      // A suspended mobile page can miss a one-shot update message. Current
+      // documents answer the probe; only stale or suspended chat documents reload.
+      const windowClients = await self.clients.matchAll({
+        type: "window",
+        includeUncontrolled: true,
+      });
+
+      await Promise.allSettled(
+        windowClients
+          .filter((client) => isControlUiChatClient(client.url))
+          .map(async (client) => {
+            const clientVersion = await readClientVersion(client);
+            if (clientVersion === CACHE_VERSION) {
+              return;
+            }
+            if (clientVersion !== null) {
+              client.postMessage({ type: "sw-updated", version: CACHE_VERSION }, []);
+              return;
+            }
+            await navigateSuspendedClient(client);
+          }),
+      );
+    })(),
   );
-  self.clients.claim();
 });
 
 self.addEventListener("fetch", (event) => {
@@ -27,6 +125,14 @@ self.addEventListener("fetch", (event) => {
 
   // Skip non-GET and cross-origin requests.
   if (event.request.method !== "GET" || url.origin !== self.location.origin) {
+    return;
+  }
+
+  // Skip top-level navigations so the browser can handle HTTP auth
+  // challenges natively — WWW-Authenticate dialogs are bypassed when the
+  // response comes from a service worker, breaking reverse-proxy setups
+  // with basic/digest auth in front of the gateway.
+  if (event.request.mode === "navigate") {
     return;
   }
 
@@ -89,7 +195,11 @@ self.addEventListener("push", (event) => {
     icon: "./apple-touch-icon.png",
     badge: "./favicon-32.png",
     tag: data.tag || "openclaw-notification",
-    data: { url: data.url || "./" },
+    renotify: data.renotify === true,
+    data: {
+      url: data.url || self.registration.scope,
+      explicitUrl: Boolean(data.url),
+    },
   };
 
   event.waitUntil(self.registration.showNotification(title, options));
@@ -98,17 +208,81 @@ self.addEventListener("push", (event) => {
 self.addEventListener("notificationclick", (event) => {
   event.notification.close();
 
-  const targetUrl = event.notification.data?.url || "./";
+  const scopeUrl = new URL(self.registration.scope);
+  const scopePath = scopeUrl.pathname.endsWith("/") ? scopeUrl.pathname : `${scopeUrl.pathname}/`;
+  // Relative targets belong beneath the registered scope even when its URL
+  // omits a trailing slash; keep the exact scope for default navigation.
+  const scopeNavigationBase = new URL(scopePath, scopeUrl);
+  const notificationUrl = event.notification.data?.url;
+  // Notifications shown before an update stored "./" for implicit targets.
+  // Preserve their existing in-scope tabs when the new worker handles the click.
+  const hasExplicitTarget =
+    event.notification.data?.explicitUrl ?? Boolean(notificationUrl && notificationUrl !== "./");
+  const isInScope = (url) =>
+    url.origin === scopeUrl.origin &&
+    (url.pathname === scopeUrl.pathname || url.pathname.startsWith(scopePath));
+
+  let targetUrl = scopeUrl;
+  try {
+    const requestedUrl = new URL(
+      (hasExplicitTarget ? notificationUrl : undefined) || scopeUrl.href,
+      scopeNavigationBase,
+    );
+    if (isInScope(requestedUrl)) {
+      targetUrl = requestedUrl;
+    }
+  } catch {
+    // Malformed notification targets can only fall back to the registered app scope.
+  }
 
   event.waitUntil(
     self.clients.matchAll({ type: "window", includeUncontrolled: true }).then((clients) => {
-      // Focus an existing window if one is open.
+      let targetClient;
+      let targetClientRank = -1;
       for (const client of clients) {
-        if (new URL(client.url).pathname === new URL(targetUrl, self.location.origin).pathname) {
+        let clientUrl;
+        try {
+          clientUrl = new URL(client.url);
+        } catch {
+          continue;
+        }
+
+        if (!isInScope(clientUrl)) {
+          continue;
+        }
+        if (!hasExplicitTarget) {
           return client.focus();
         }
+
+        // Prefer the existing target tab before repurposing another app tab.
+        // Client.url can lag SPA history, so its match only chooses a candidate.
+        const clientRank =
+          clientUrl.href === targetUrl.href
+            ? 3
+            : clientUrl.pathname === targetUrl.pathname
+              ? clientUrl.search === targetUrl.search
+                ? 2
+                : 1
+              : 0;
+        if (clientRank > targetClientRank) {
+          targetClient = client;
+          targetClientRank = clientRank;
+          if (clientRank === 3) {
+            break;
+          }
+        }
       }
-      return self.clients.openWindow(targetUrl);
+
+      if (!targetClient) {
+        return self.clients.openWindow(targetUrl.href);
+      }
+
+      // Always navigate explicit targets; old or uncontrolled workers can
+      // reject navigation, so preserve the validated open-window fallback.
+      return targetClient
+        .navigate(targetUrl.href)
+        .then((navigatedClient) => (navigatedClient ?? targetClient).focus())
+        .catch(() => self.clients.openWindow(targetUrl.href));
     }),
   );
 });

@@ -1,3 +1,5 @@
+// Discord plugin module implements component runtime behavior.
+import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import {
   parsePluginBindingApprovalCustomId,
   resolvePinnedMainDmOwnerFromAllowlist,
@@ -53,13 +55,42 @@ const resolvePluginConversationBindingApprovalMock: AsyncUnknownMock =
 const buildPluginBindingResolvedTextMock: UnknownMock =
   runtimeMocks.buildPluginBindingResolvedTextMock;
 
-async function readStoreAllowFromForDmPolicy(params: {
+vi.mock("openclaw/plugin-sdk/channel-inbound", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/channel-inbound")>(
+    "openclaw/plugin-sdk/channel-inbound",
+  );
+  type RunParams = Parameters<typeof actual.runChannelInboundEvent>[0];
+  return {
+    ...actual,
+    runChannelInboundEvent: (params: RunParams) => {
+      const runtime = createPluginRuntimeMock({
+        channel: {
+          session: {
+            resolveStorePath: (...args) => resolveStorePathMock(...args) as string,
+            recordInboundSession: async (...args) => {
+              await recordInboundSessionMock(...args);
+            },
+          },
+          reply: {
+            dispatchReplyWithBufferedBlockDispatcher: (...args) => dispatchReplyMock(...args),
+          },
+        },
+      });
+      return runtime.channel.inbound.run(params);
+    },
+  };
+});
+async function readChannelIngressStoreAllowFromForDmPolicy(params: {
   provider: string;
   accountId: string;
   dmPolicy?: string | null;
   shouldRead?: boolean | null;
 }) {
-  if (params.shouldRead === false || params.dmPolicy === "allowlist") {
+  if (
+    params.shouldRead === false ||
+    params.dmPolicy === "allowlist" ||
+    params.dmPolicy === "open"
+  ) {
     return [];
   }
   return await readAllowFromStoreMock(params.provider, params.accountId);
@@ -67,7 +98,7 @@ async function readStoreAllowFromForDmPolicy(params: {
 
 vi.mock("../monitor/agent-components-helpers.runtime.js", () => {
   return {
-    readStoreAllowFromForDmPolicy,
+    readChannelIngressStoreAllowFromForDmPolicy,
     resolvePinnedMainDmOwnerFromAllowlist,
     upsertChannelPairingRequest: (...args: unknown[]) => upsertPairingRequestMock(...args),
   };
@@ -130,7 +161,11 @@ vi.mock("../interactive-dispatch.js", () => {
 
 vi.mock("../monitor/agent-components.deps.runtime.js", () => {
   return {
-    enqueueSystemEvent: (...args: unknown[]) => enqueueSystemEventMock(...args),
+    enqueueRoutedSystemEvent: (
+      text: unknown,
+      route: { sessionKey: unknown },
+      options: Record<string, unknown>,
+    ) => enqueueSystemEventMock(text, { ...options, sessionKey: route.sessionKey }),
     readSessionUpdatedAt: (...args: unknown[]) => readSessionUpdatedAtMock(...args),
     resolveStorePath: (...args: unknown[]) => resolveStorePathMock(...args),
   };

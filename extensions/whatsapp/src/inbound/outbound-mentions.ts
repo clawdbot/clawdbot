@@ -1,4 +1,5 @@
-import type { AnyMessageContent } from "@whiskeysockets/baileys";
+// Whatsapp plugin module implements outbound mentions behavior.
+import type { AnyMessageContent } from "baileys";
 
 export type WhatsAppOutboundMentionParticipant =
   | string
@@ -15,7 +16,7 @@ export type WhatsAppOutboundMentionResolution = {
 };
 
 const CODE_FENCE_RE = /```[\s\S]*?```/g;
-const INLINE_CODE_RE = /`[^`\n]+`/g;
+const INLINE_CODE_RE = /(?<=(?:^|[^\\])(?:\\\\)*)(`+)[\s\S]*?(?:(?<!`)\1(?!`)|$)/g;
 const OUTBOUND_MENTION_RE = /@(\+?\d+)/g;
 const KNOWN_USER_JID_RE = /^(\d+)(?::\d+)?@(s\.whatsapp\.net|hosted|lid|hosted\.lid|c\.us)$/i;
 const PHONE_JID_DOMAIN_RE = /^(s\.whatsapp\.net|hosted|c\.us)$/i;
@@ -62,9 +63,13 @@ function normalizeKnownUserJid(value: string): string | null {
   const trimmed = value.replace(/^whatsapp:/i, "").trim();
   const jidMatch = trimmed.match(KNOWN_USER_JID_RE);
   if (jidMatch) {
-    const domain =
-      jidMatch[2].toLowerCase() === "c.us" ? "s.whatsapp.net" : jidMatch[2].toLowerCase();
-    return `${jidMatch[1]}@${domain}`;
+    const user = jidMatch[1];
+    const rawDomain = jidMatch[2];
+    if (!user || !rawDomain) {
+      return null;
+    }
+    const domain = rawDomain.toLowerCase() === "c.us" ? "s.whatsapp.net" : rawDomain.toLowerCase();
+    return `${user}@${domain}`;
   }
   const digits = trimmed.startsWith("+")
     ? trimmed.replace(/\D/g, "")
@@ -80,7 +85,9 @@ function extractKnownJidParts(value: string): { user: string; domain: string } |
     return null;
   }
   const match = normalized.match(/^(\d+)@(.+)$/);
-  return match ? { user: match[1], domain: match[2] } : null;
+  const user = match?.[1];
+  const domain = match?.[2];
+  return user && domain ? { user, domain } : null;
 }
 
 function extractPhoneDigits(value: string | null | undefined): string | null {
@@ -215,7 +222,11 @@ export function resolveWhatsAppOutboundMentions(params: {
     if (shouldSkipMentionAt(params.text, start, start + token.length, codeRanges)) {
       continue;
     }
-    const digits = match[1].replace(/\D/g, "");
+    const rawDigits = match[1];
+    if (!rawDigits) {
+      continue;
+    }
+    const digits = rawDigits.replace(/\D/g, "");
     const target = token.startsWith("@+")
       ? (byPhone.get(digits) ?? byLid.get(digits))
       : (byLid.get(digits) ?? byPhone.get(digits));

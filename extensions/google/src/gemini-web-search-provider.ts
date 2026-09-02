@@ -1,4 +1,6 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+// Google provider module implements model/runtime integration.
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import {
   createWebSearchProviderContractFields,
   mergeScopedSearchConfig,
@@ -6,30 +8,21 @@ import {
   type WebSearchProviderPlugin,
   type WebSearchProviderToolDefinition,
 } from "openclaw/plugin-sdk/provider-web-search-config-contract";
-import {
-  resolveGeminiApiKey,
-  resolveGeminiBaseUrl,
-  resolveGeminiModel,
-} from "./gemini-web-search-provider.shared.js";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 const GEMINI_CREDENTIAL_PATH = "plugins.entries.google.config.webSearch.apiKey";
 const GOOGLE_PROVIDER_CREDENTIAL_PATH = "models.providers.google.apiKey";
 
-type GeminiWebSearchRuntime = typeof import("./gemini-web-search-provider.runtime.js");
-
-let geminiWebSearchRuntimePromise: Promise<GeminiWebSearchRuntime> | undefined;
-
-function loadGeminiWebSearchRuntime(): Promise<GeminiWebSearchRuntime> {
-  geminiWebSearchRuntimePromise ??= import("./gemini-web-search-provider.runtime.js");
-  return geminiWebSearchRuntimePromise;
-}
+const loadGeminiWebSearchRuntime = createLazyRuntimeModule(
+  () => import("./gemini-web-search-provider.runtime.js"),
+);
 
 const GEMINI_TOOL_PARAMETERS = {
   type: "object",
   properties: {
     query: { type: "string", description: "Search query string." },
     count: {
-      type: "number",
+      type: "integer",
       description: "Number of results to return (1-10).",
       minimum: 1,
       maximum: 10,
@@ -38,7 +31,8 @@ const GEMINI_TOOL_PARAMETERS = {
     language: { type: "string", description: "Not supported by Gemini." },
     freshness: {
       type: "string",
-      description: "Limit Google Search grounding to recent results: day, week, month, or year.",
+      description:
+        "Filter Gemini search freshness: week, month, and year use hard Google Search time ranges; day prioritizes the last 24 hours as a recency hint.",
     },
     date_after: {
       type: "string",
@@ -66,10 +60,6 @@ function createGeminiToolDefinition(
   };
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
 function resolveGoogleModelProviderConfig(
   config?: OpenClawConfig,
 ): Record<string, unknown> | undefined {
@@ -95,17 +85,27 @@ function withGoogleModelProviderFallbacks(
     return searchConfig;
   }
   const gemini = isRecord(searchConfig?.gemini) ? { ...searchConfig.gemini } : {};
-  const mergedSearchConfig = searchConfig ? { ...searchConfig } : {};
+  const mergedSearchConfig: Record<string, unknown> = searchConfig
+    ? Object.defineProperties({}, Object.getOwnPropertyDescriptors(searchConfig))
+    : {};
+  const geminiDescriptor = searchConfig
+    ? Object.getOwnPropertyDescriptor(searchConfig, "gemini")
+    : undefined;
   if (provider.apiKey !== undefined) {
     gemini.providerApiKey = provider.apiKey;
   }
   if (provider.baseUrl !== undefined) {
     gemini.providerBaseUrl = provider.baseUrl;
   }
-  return {
-    ...mergedSearchConfig,
-    gemini,
-  };
+  // Provider headers stay scoped to the provider base URL. Web-search headers
+  // are configured explicitly under the Google plugin for its own endpoint.
+  Object.defineProperty(mergedSearchConfig, "gemini", {
+    value: gemini,
+    enumerable: geminiDescriptor?.enumerable ?? false,
+    configurable: true,
+    writable: true,
+  });
+  return mergedSearchConfig;
 }
 
 export function createGeminiWebSearchProvider(): WebSearchProviderPlugin {
@@ -142,9 +142,3 @@ export function createGeminiWebSearchProvider(): WebSearchProviderPlugin {
       ),
   };
 }
-
-export const __testing = {
-  resolveGeminiApiKey,
-  resolveGeminiBaseUrl,
-  resolveGeminiModel,
-} as const;

@@ -16,7 +16,7 @@ Adds media understanding provider support. Adds realtime transcription provider 
 
 ## Surface
 
-contracts: mediaUnderstandingProviders, realtimeTranscriptionProviders
+contracts: `mediaUnderstandingProviders`, `realtimeTranscriptionProviders`
 
 ## Related docs
 

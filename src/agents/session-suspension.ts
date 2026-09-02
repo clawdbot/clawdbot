@@ -1,36 +1,69 @@
-import path from "node:path";
-import { resolveAgentMaxConcurrent, resolveSubagentMaxConcurrent } from "../config/agent-limits.js";
-import { updateSessionStoreEntry } from "../config/sessions.js";
+/**
+ * Session suspension persistence and lifecycle helpers.
+ *
+ * Records quota/manual/circuit suspensions for diagnostics and recovery flows.
+ */
+import { AsyncLocalStorage } from "node:async_hooks";
+import {
+  resolveExpiresAtMsFromDurationMs,
+  resolveTimerTimeoutMs,
+} from "@openclaw/normalization-core/number-coercion";
+import { patchSessionEntryCore } from "../config/sessions/session-accessor.js";
+import type { QuotaSuspension } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { setCommandLaneConcurrency } from "../process/command-queue.js";
+import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { resolveRegisteredAgentIdForDir } from "./agent-dir-registry.js";
 import { resolveStoredSessionKeyForSessionId } from "./command/session.js";
-import type { FailoverReason } from "./pi-embedded-helpers/types.js";
+import type { FailoverReason } from "./failover/signal.js";
 
 const log = createSubsystemLogger("session-suspension");
 
-const DEFAULT_CUSTOM_LANE_RESUME_CONCURRENCY = 1;
-export const DEFAULT_QUOTA_SUSPENSION_RESUME_MS = 30 * 60 * 1000; // 30 min
+const DEFAULT_QUOTA_SUSPENSION_RESUME_MS = 30 * 60 * 1000; // 30 min
 
-const laneResumeTimers = new Map<string, ReturnType<typeof setTimeout>>();
+type SessionSuspensionRuntimeState = {
+  suspensionWriteChain: Promise<void>;
+  cleanupGeneration: number;
+  cleanupActive: boolean;
+};
 
-export type SessionSuspensionReason = "quota_exhausted" | "manual" | "circuit_open";
+/**
+ * Bundled gateway chunks share one write queue and shutdown fence so one
+ * module copy cannot persist a suspension after another copy cleaned up.
+ */
+const SESSION_SUSPENSION_STATE_KEY = Symbol.for("openclaw.sessionSuspensionRuntimeState");
 
-function resolveLaneResumeConcurrency(cfg: OpenClawConfig | undefined, laneId: string): number {
-  switch (laneId) {
-    case "main":
-      return resolveAgentMaxConcurrent(cfg);
-    case "subagent":
-      return resolveSubagentMaxConcurrent(cfg);
-    case "cron":
-    case "cron-nested": {
-      const raw = cfg?.cron?.maxConcurrentRuns;
-      return typeof raw === "number" && Number.isFinite(raw) ? Math.max(1, Math.floor(raw)) : 1;
-    }
-    default:
-      return DEFAULT_CUSTOM_LANE_RESUME_CONCURRENCY;
-  }
+function getSessionSuspensionState(): SessionSuspensionRuntimeState {
+  return resolveGlobalSingleton<SessionSuspensionRuntimeState>(
+    SESSION_SUSPENSION_STATE_KEY,
+    () => ({
+      suspensionWriteChain: Promise.resolve(),
+      cleanupGeneration: 0,
+      cleanupActive: false,
+    }),
+  );
 }
+
+const deferredSessionSuspension = new AsyncLocalStorage<{
+  claimed: boolean;
+  onDeferred?: (params: SessionSuspensionParams) => void;
+}>();
+
+type SessionSuspensionReason = "quota_exhausted" | "manual" | "circuit_open";
+type SessionSuspensionTarget =
+  | { mode: "defer"; defer: (params: SessionSuspensionParams) => void }
+  | { mode: "suspend" };
+export type SessionSuspensionParams = {
+  cfg: OpenClawConfig | undefined;
+  agentId?: string;
+  agentDir?: string;
+  sessionId: string;
+  reason: SessionSuspensionReason;
+  failedProvider: string;
+  failedModel: string;
+  summary?: string;
+  ttlMs?: number;
+};
 
 export function resolveSessionSuspensionReason(reason: FailoverReason): SessionSuspensionReason {
   if (reason === "billing") {
@@ -42,100 +75,161 @@ export function resolveSessionSuspensionReason(reason: FailoverReason): SessionS
   return "circuit_open";
 }
 
-function scheduleLaneAutoResume(laneId: string, delayMs: number, resumeConcurrency: number) {
-  const existing = laneResumeTimers.get(laneId);
-  if (existing) {
-    clearTimeout(existing);
-  }
-  const timer = setTimeout(() => {
-    laneResumeTimers.delete(laneId);
-    setCommandLaneConcurrency(laneId, resumeConcurrency);
-    log.info("auto-resumed lane after suspension TTL", {
-      laneId,
-      delayMs,
-      resumeConcurrency,
-    });
-  }, delayMs);
-  if (typeof timer.unref === "function") {
-    timer.unref();
-  }
-  laneResumeTimers.set(laneId, timer);
+export function runWithDeferredSessionSuspension<T>(
+  run: () => Promise<T>,
+  onDeferred?: (params: SessionSuspensionParams) => void,
+): Promise<T> {
+  return deferredSessionSuspension.run({ claimed: false, onDeferred }, run);
 }
 
-export function cancelLaneAutoResume(laneId: string) {
-  const existing = laneResumeTimers.get(laneId);
-  if (existing) {
-    clearTimeout(existing);
-    laneResumeTimers.delete(laneId);
+export function resolveSessionSuspensionTarget(): SessionSuspensionTarget {
+  const scope = deferredSessionSuspension.getStore();
+  if (!scope || scope.claimed) {
+    return { mode: "suspend" };
   }
+  // One candidate callback may launch nested direct embedded runs. Only its
+  // first embedded run inherits the outer fallback's remaining-candidate fact.
+  scope.claimed = true;
+  return { mode: "defer", defer: (params) => scope.onDeferred?.(params) };
 }
 
-export async function suspendSession(params: {
-  cfg: OpenClawConfig | undefined;
-  agentDir?: string;
-  sessionId: string;
-  laneId?: string;
-  reason: SessionSuspensionReason;
-  failedProvider: string;
-  failedModel: string;
-  summary?: string;
-  ttlMs?: number;
-}) {
+export function fenceSessionSuspensionWritesForGatewayShutdown(): void {
+  const state = getSessionSuspensionState();
+  state.cleanupGeneration += 1;
+  state.cleanupActive = true;
+}
+
+export function enableSessionSuspensionWritesForGatewayStart(): void {
+  const state = getSessionSuspensionState();
+  state.cleanupGeneration += 1;
+  state.cleanupActive = false;
+}
+
+export async function suspendSession(params: SessionSuspensionParams) {
+  const state = getSessionSuspensionState();
+  const queuedGeneration = state.cleanupGeneration;
+  const run = state.suspensionWriteChain
+    .catch(() => undefined)
+    .then(() => suspendSessionQueued(params, queuedGeneration));
+  // Suspension persistence is per-process and rare; serialize it so cleanup
+  // rollback has one winner and cannot erase another in-flight suspension.
+  state.suspensionWriteChain = run.then(
+    () => undefined,
+    () => undefined,
+  );
+  await run;
+}
+
+async function suspendSessionQueued(params: SessionSuspensionParams, queuedGeneration: number) {
   if (!params.cfg) {
     return;
   }
 
+  // agentDir is <state>/agents/<id>/agent, so basename(agentDir) is always the
+  // literal "agent" — only the registry lookup recovers the real owner id.
+  const agentIdFromDir = params.agentDir
+    ? resolveRegisteredAgentIdForDir(params.agentDir)
+    : undefined;
   const { sessionKey, storePath } = resolveStoredSessionKeyForSessionId({
     cfg: params.cfg,
     sessionId: params.sessionId,
-    agentId: params.agentDir ? path.basename(params.agentDir) : undefined,
+    agentId: params.agentId ?? agentIdFromDir,
   });
 
   if (!sessionKey) {
     return;
   }
 
-  const ttlMs = params.ttlMs ?? DEFAULT_QUOTA_SUSPENSION_RESUME_MS;
+  const ttlMs = resolveTimerTimeoutMs(params.ttlMs, DEFAULT_QUOTA_SUSPENSION_RESUME_MS, 0);
   const now = Date.now();
+  const expectedResumeBy = resolveExpiresAtMsFromDurationMs(ttlMs, { nowMs: now }) ?? now;
+  const state = getSessionSuspensionState();
+  if (state.cleanupActive || state.cleanupGeneration !== queuedGeneration) {
+    return;
+  }
+  const suspensionGeneration = state.cleanupGeneration;
+  let previousQuotaSuspension: QuotaSuspension | undefined;
+  // Assigned at the end of the try; the catch path returns, so every read
+  // below sees the real patch outcome.
+  let persistedSuspension: boolean;
 
   try {
-    await updateSessionStoreEntry({
-      storePath,
-      sessionKey,
-      update: async () => ({
-        quotaSuspension: {
-          schemaVersion: 1,
-          suspendedAt: now,
-          reason: params.reason,
-          failedProvider: params.failedProvider,
-          failedModel: params.failedModel,
-          summary: params.summary,
-          laneId: params.laneId,
-          expectedResumeBy: now + ttlMs,
-          state: "suspended",
-        },
-      }),
-    });
+    const patchedEntry = await patchSessionEntryCore(
+      { storePath, sessionKey },
+      (entry) => {
+        if (getSessionSuspensionState().cleanupGeneration !== suspensionGeneration) {
+          return null;
+        }
+        previousQuotaSuspension = entry.quotaSuspension;
+        return {
+          quotaSuspension: {
+            schemaVersion: 1,
+            suspendedAt: now,
+            reason: params.reason,
+            failedProvider: params.failedProvider,
+            failedModel: params.failedModel,
+            summary: params.summary,
+            expectedResumeBy,
+            state: "suspended",
+          },
+        };
+      },
+      { skipMaintenance: true, takeCacheOwnership: true },
+    );
+    persistedSuspension = patchedEntry !== null;
   } catch (err) {
-    log.warn("failed to persist quota suspension; not throttling lane", {
+    log.warn("failed to persist quota suspension", {
       sessionId: params.sessionId,
-      laneId: params.laneId,
       error: err instanceof Error ? err.message : String(err),
     });
     return;
   }
 
-  if (params.laneId) {
-    setCommandLaneConcurrency(params.laneId, 0);
-    scheduleLaneAutoResume(
-      params.laneId,
-      ttlMs,
-      resolveLaneResumeConcurrency(params.cfg, params.laneId),
-    );
+  const postPatchState = getSessionSuspensionState();
+  if (
+    persistedSuspension &&
+    (postPatchState.cleanupActive || suspensionGeneration !== postPatchState.cleanupGeneration)
+  ) {
+    try {
+      await patchSessionEntryCore(
+        { storePath, sessionKey },
+        (entry) =>
+          entry.quotaSuspension?.suspendedAt === now &&
+          entry.quotaSuspension.reason === params.reason &&
+          entry.quotaSuspension.failedProvider === params.failedProvider &&
+          entry.quotaSuspension.failedModel === params.failedModel
+            ? { quotaSuspension: previousQuotaSuspension }
+            : null,
+        {
+          skipMaintenance: true,
+          takeCacheOwnership: true,
+        },
+      );
+    } catch (err) {
+      log.warn("failed to clear quota suspension after shutdown cleanup", {
+        sessionId: params.sessionId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
   }
 }
 
-export const __testing = {
-  resolveLaneResumeConcurrency,
-  resolveSessionSuspensionReason,
-} as const;
+function resetSessionSuspensionStateForTest(): void {
+  const state = getSessionSuspensionState();
+  // Invalidate in-flight writes before clearing test state. Rewinding to a
+  // reused generation lets a fire-and-forget suspension regain ownership.
+  state.cleanupGeneration += 1;
+  state.suspensionWriteChain = Promise.resolve();
+  state.cleanupActive = false;
+}
+
+function isSessionSuspensionWriteCleanupActiveForTest(): boolean {
+  return getSessionSuspensionState().cleanupActive;
+}
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.sessionSuspensionTestApi")] = {
+    isSessionSuspensionWriteCleanupActiveForTest,
+    resetSessionSuspensionStateForTest,
+  };
+}

@@ -19,7 +19,7 @@ paths:
   - src/config/types.channel*.ts
   - src/gateway/server-channel*.ts
   - src/gateway/server-methods/channels.ts
-  - src/gateway/protocol/schema/channels.ts
+  - packages/gateway-protocol/src/schema/channels.ts
   - src/infra/channel-*.ts
   - src/infra/exec-approval-channel-runtime.ts
   - src/infra/outbound/channel-*.ts

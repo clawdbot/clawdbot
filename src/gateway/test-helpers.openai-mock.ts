@@ -1,3 +1,5 @@
+// OpenAI mock helpers provide deterministic fake Responses API streams for
+// gateway OpenAI-compatible HTTP tests.
 type OpenAIResponsesParams = {
   input?: unknown[];
 };
@@ -30,7 +32,7 @@ function extractLastUserText(input: unknown[]): string {
       const text = content
         .filter(
           (c): c is { type: "input_text"; text: string } =>
-            !!c &&
+            Boolean(c) &&
             typeof c === "object" &&
             (c as { type?: unknown }).type === "input_text" &&
             typeof (c as { text?: unknown }).text === "string",

@@ -1,3 +1,14 @@
+/**
+ * Auth profile health summarization.
+ * Classifies stored and runtime credentials into profile/provider rollups for
+ * status commands and doctor output without prompting keychain access.
+ */
+import {
+  findNormalizedProviderValue,
+  normalizeProviderId,
+} from "@openclaw/model-catalog-core/provider-id";
+import { asDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
+import { normalizeUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   DEFAULT_OAUTH_REFRESH_MARGIN_MS,
@@ -7,8 +18,12 @@ import {
 } from "./auth-profiles/credential-state.js";
 import { resolveAuthProfileDisplayLabel } from "./auth-profiles/display.js";
 import { resolveEffectiveOAuthCredential } from "./auth-profiles/effective-oauth.js";
+import { resolveAuthProfileOrder } from "./auth-profiles/order.js";
 import type { AuthProfileCredential, AuthProfileStore } from "./auth-profiles/types.js";
-import { normalizeProviderId } from "./provider-id.js";
+import {
+  type ProviderAuthAliasLookupParams,
+  resolveProviderIdForAuth,
+} from "./provider-auth-aliases.js";
 
 type AuthProfileSource = "store";
 
@@ -33,6 +48,11 @@ export type AuthProviderHealth = {
   status: AuthProviderHealthStatus;
   expiresAt?: number;
   remainingMs?: number;
+  /**
+   * Full credential inventory stays in `profiles`; provider rollups use this
+   * effective subset after auth order, aliases, and explicit exclusions apply.
+   */
+  effectiveProfiles?: AuthProfileHealth[];
   profiles: AuthProfileHealth[];
 };
 
@@ -45,10 +65,7 @@ export type AuthHealthSummary = {
 
 export const DEFAULT_OAUTH_WARN_MS = 24 * 60 * 60 * 1000;
 
-function resolveAuthProfileSource(_profileId: string): AuthProfileSource {
-  return "store";
-}
-
+/** Format a remaining-duration value for compact auth status displays. */
 export function formatRemainingShort(
   remainingMs?: number,
   opts?: {
@@ -81,24 +98,25 @@ function resolveOAuthStatus(
   expiresAt: number | undefined,
   now: number,
   expiringWithinMs: number,
-): { status: AuthProfileHealthStatus; remainingMs?: number } {
-  if (!expiresAt || !Number.isFinite(expiresAt) || expiresAt <= 0) {
+): { status: AuthProfileHealthStatus; expiresAt?: number; remainingMs?: number } {
+  const normalizedExpiresAt = asDateTimestampMs(expiresAt);
+  if (normalizedExpiresAt === undefined || normalizedExpiresAt <= 0) {
     return { status: "missing" };
   }
-  const remainingMs = expiresAt - now;
-  const expiryState = resolveTokenExpiryState(expiresAt, now, {
+  const remainingMs = normalizedExpiresAt - now;
+  const expiryState = resolveTokenExpiryState(normalizedExpiresAt, now, {
     expiringWithinMs,
   });
   if (expiryState === "invalid_expires" || expiryState === "missing") {
     return { status: "missing" };
   }
   if (expiryState === "expired") {
-    return { status: "expired", remainingMs };
+    return { status: "expired", expiresAt: normalizedExpiresAt, remainingMs };
   }
   if (expiryState === "expiring") {
-    return { status: "expiring", remainingMs };
+    return { status: "expiring", expiresAt: normalizedExpiresAt, remainingMs };
   }
-  return { status: "ok", remainingMs };
+  return { status: "ok", expiresAt: normalizedExpiresAt, remainingMs };
 }
 
 function buildProfileHealth(params: {
@@ -109,14 +127,39 @@ function buildProfileHealth(params: {
   cfg?: OpenClawConfig;
   now: number;
   warnAfterMs: number;
+  allowKeychainPrompt?: boolean;
 }): AuthProfileHealth {
-  const { profileId, credential, runtimeCredential, store, cfg, now, warnAfterMs } = params;
+  const {
+    profileId,
+    credential,
+    runtimeCredential,
+    store,
+    cfg,
+    now,
+    warnAfterMs,
+    allowKeychainPrompt,
+  } = params;
   const label = resolveAuthProfileDisplayLabel({ cfg, store, profileId });
-  const source = resolveAuthProfileSource(profileId);
+  const source: AuthProfileSource = "store";
   const healthCredential = runtimeCredential ?? credential;
   const provider = normalizeProviderId(healthCredential.provider);
 
   if (healthCredential.type === "api_key") {
+    const eligibility = evaluateStoredCredentialEligibility({
+      credential: healthCredential,
+      now,
+    });
+    if (!eligibility.eligible) {
+      return {
+        profileId,
+        provider,
+        type: "api_key",
+        status: "missing",
+        reasonCode: eligibility.reasonCode,
+        source,
+        label,
+      };
+    }
     return {
       profileId,
       provider,
@@ -157,57 +200,99 @@ function buildProfileHealth(params: {
         label,
       };
     }
-    const { status, remainingMs } = resolveOAuthStatus(expiresAt, now, warnAfterMs);
+    const {
+      status,
+      expiresAt: normalizedExpiresAt,
+      remainingMs,
+    } = resolveOAuthStatus(expiresAt, now, warnAfterMs);
     return {
       profileId,
       provider,
       type: "token",
       status,
       reasonCode: status === "expired" ? "expired" : undefined,
-      expiresAt,
+      expiresAt: normalizedExpiresAt,
       remainingMs,
       source,
       label,
     };
   }
 
+  const storedEligibility = evaluateStoredCredentialEligibility({
+    credential: healthCredential,
+    now,
+  });
+  if (!storedEligibility.eligible && storedEligibility.reasonCode === "unresolved_ref") {
+    return {
+      profileId,
+      provider,
+      type: "oauth",
+      status: "missing",
+      reasonCode: storedEligibility.reasonCode,
+      source,
+      label,
+    };
+  }
+
   const effectiveCredential = resolveEffectiveOAuthCredential({
+    store,
     profileId,
     credential: healthCredential,
+    allowKeychainPrompt,
   });
-  const oauthWarnAfterMs = Math.max(warnAfterMs, DEFAULT_OAUTH_REFRESH_MARGIN_MS);
-  const { status: rawStatus, remainingMs } = resolveOAuthStatus(
-    effectiveCredential.expires,
+  const eligibility = evaluateStoredCredentialEligibility({
+    credential: effectiveCredential,
     now,
-    oauthWarnAfterMs,
-  );
+  });
+  if (!eligibility.eligible) {
+    return {
+      profileId,
+      provider,
+      type: "oauth",
+      status: eligibility.reasonCode === "expired" ? "expired" : "missing",
+      reasonCode: eligibility.reasonCode,
+      source,
+      label,
+    };
+  }
+
+  const oauthWarnAfterMs = Math.max(warnAfterMs, DEFAULT_OAUTH_REFRESH_MARGIN_MS);
+  const {
+    status: rawStatus,
+    expiresAt,
+    remainingMs,
+  } = resolveOAuthStatus(effectiveCredential.expires, now, oauthWarnAfterMs);
   return {
     profileId,
     provider,
     type: "oauth",
     status: rawStatus,
-    expiresAt: effectiveCredential.expires,
+    expiresAt,
     remainingMs,
     source,
     label,
   };
 }
 
+/** Build profile and provider auth health rollups from an auth profile store. */
 export function buildAuthHealthSummary(params: {
   store: AuthProfileStore;
   cfg?: OpenClawConfig;
   warnAfterMs?: number;
   providers?: string[];
   runtimeCredentialsByProvider?: ReadonlyMap<string, AuthProfileCredential>;
+  allowKeychainPrompt?: boolean;
+  /** Exact prepared metadata for request paths that must not rediscover plugin aliases. */
+  authAliasLookupParams?: ProviderAuthAliasLookupParams;
 }): AuthHealthSummary {
   const now = Date.now();
   const warnAfterMs = params.warnAfterMs ?? DEFAULT_OAUTH_WARN_MS;
   const providerFilter = params.providers
-    ? new Set(params.providers.map((p) => normalizeProviderId(p)).filter(Boolean))
+    ? new Set(normalizeUniqueStringEntries(params.providers.map((p) => normalizeProviderId(p))))
     : null;
 
   const profiles = Object.entries(params.store.profiles)
-    .filter(([_, cred]) =>
+    .filter(([, cred]) =>
       providerFilter ? providerFilter.has(normalizeProviderId(cred.provider)) : true,
     )
     .map(([profileId, credential]) =>
@@ -221,6 +306,7 @@ export function buildAuthHealthSummary(params: {
         cfg: params.cfg,
         now,
         warnAfterMs,
+        allowKeychainPrompt: params.allowKeychainPrompt,
       }),
     )
     .toSorted((a, b) => {
@@ -256,20 +342,71 @@ export function buildAuthHealthSummary(params: {
     }
   }
 
+  const resolveExplicitAuthOrder = (provider: string): string[] | undefined => {
+    const authProvider = resolveProviderIdForAuth(provider, {
+      config: params.cfg,
+      ...params.authAliasLookupParams,
+    });
+    return (
+      findNormalizedProviderValue(params.store.order, authProvider) ??
+      findNormalizedProviderValue(params.store.order, provider) ??
+      findNormalizedProviderValue(params.cfg?.auth?.order, authProvider) ??
+      findNormalizedProviderValue(params.cfg?.auth?.order, provider)
+    );
+  };
+
+  const resolveProviderStatusProfiles = (provider: AuthProviderHealth): AuthProfileHealth[] => {
+    const explicitOrder = resolveExplicitAuthOrder(provider.provider);
+    if (explicitOrder && explicitOrder.length === 0) {
+      return [];
+    }
+
+    const ordered = resolveAuthProfileOrder({
+      cfg: params.cfg,
+      store: params.store,
+      provider: provider.provider,
+      authAliasLookupParams: params.authAliasLookupParams,
+    });
+    const orderedProfiles = ordered
+      .map((profileId) => provider.profiles.find((profile) => profile.profileId === profileId))
+      .filter((profile): profile is AuthProfileHealth => Boolean(profile));
+
+    if (orderedProfiles.length > 0) {
+      return orderedProfiles;
+    }
+
+    if (explicitOrder) {
+      return explicitOrder
+        .map((profileId) => provider.profiles.find((profile) => profile.profileId === profileId))
+        .filter((profile): profile is AuthProfileHealth => Boolean(profile));
+    }
+
+    return provider.profiles;
+  };
+
   for (const provider of providersMap.values()) {
-    if (provider.profiles.length === 0) {
+    const effectiveProfiles = resolveProviderStatusProfiles(provider);
+    provider.effectiveProfiles = effectiveProfiles;
+    if (effectiveProfiles.length === 0) {
       provider.status = "missing";
+      provider.expiresAt = undefined;
+      provider.remainingMs = undefined;
       continue;
     }
 
     let hasApiKeyProfile = false;
     let hasExpirableProfile = false;
-    let hasExpiredOrMissing = false;
+    let hasExpired = false;
+    let hasMissing = false;
     let hasExpiring = false;
     let earliestExpiry: number | undefined;
-    for (const profile of provider.profiles) {
+    for (const profile of effectiveProfiles) {
       if (profile.type === "api_key") {
-        hasApiKeyProfile = true;
+        if (profile.status === "static") {
+          hasApiKeyProfile = true;
+        } else if (profile.status === "missing") {
+          hasMissing = true;
+        }
         continue;
       }
       if (profile.type !== "oauth" && profile.type !== "token") {
@@ -282,15 +419,17 @@ export function buildAuthHealthSummary(params: {
             ? profile.expiresAt
             : Math.min(earliestExpiry, profile.expiresAt);
       }
-      if (profile.status === "expired" || profile.status === "missing") {
-        hasExpiredOrMissing = true;
+      if (profile.status === "expired") {
+        hasExpired = true;
+      } else if (profile.status === "missing") {
+        hasMissing = true;
       } else if (profile.status === "expiring") {
         hasExpiring = true;
       }
     }
 
     if (!hasExpirableProfile) {
-      provider.status = hasApiKeyProfile ? "static" : "missing";
+      provider.status = hasMissing ? "missing" : hasApiKeyProfile ? "static" : "missing";
       continue;
     }
 
@@ -299,8 +438,10 @@ export function buildAuthHealthSummary(params: {
       provider.remainingMs = provider.expiresAt - now;
     }
 
-    if (hasExpiredOrMissing) {
+    if (hasExpired) {
       provider.status = "expired";
+    } else if (hasMissing) {
+      provider.status = "missing";
     } else if (hasExpiring) {
       provider.status = "expiring";
     } else {

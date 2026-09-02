@@ -1,3 +1,4 @@
+// Model load-config tests cover loading config used by model commands.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
@@ -69,8 +70,9 @@ describe("models load-config", () => {
       targetIds,
     });
     expect(mocks.setRuntimeConfigSnapshot).toHaveBeenCalledWith(resolvedConfig, sourceConfig);
-    expect(runtime.log).toHaveBeenNthCalledWith(1, "[secrets] diag-one");
-    expect(runtime.log).toHaveBeenNthCalledWith(2, "[secrets] diag-two");
+    expect(runtime.error).toHaveBeenNthCalledWith(1, "[secrets] diag-one");
+    expect(runtime.error).toHaveBeenNthCalledWith(2, "[secrets] diag-two");
+    expect(runtime.log).not.toHaveBeenCalled();
     expect(result).toEqual({
       sourceConfig,
       resolvedConfig,
@@ -86,6 +88,15 @@ describe("models load-config", () => {
     expect(mocks.setRuntimeConfigSnapshot).toHaveBeenCalledWith(resolvedConfig, sourceConfig);
   });
 
+  it("can read core model config without loading plugin schemas", async () => {
+    const sourceConfig = { models: { providers: {} } };
+    mockResolvedConfigFlow({ sourceConfig, diagnostics: [] });
+
+    await loadModelsConfig({ commandName: "models status", skipPluginValidation: true });
+
+    expect(mocks.getRuntimeConfig).toHaveBeenCalledWith({ skipPluginValidation: true });
+  });
+
   it("does not reread config when no source snapshot is pinned", async () => {
     mocks.getRuntimeConfig.mockReturnValue(runtimeConfig);
     mocks.getRuntimeConfigSourceSnapshot.mockReturnValue(null);
@@ -98,6 +109,6 @@ describe("models load-config", () => {
     const result = await loadModelsConfigWithSource({ commandName: "models list" });
 
     expect(result.sourceConfig).toBe(runtimeConfig);
-    expect(mocks.setRuntimeConfigSnapshot).toHaveBeenCalledWith(resolvedConfig);
+    expect(mocks.setRuntimeConfigSnapshot).toHaveBeenCalledWith(resolvedConfig, runtimeConfig);
   });
 });

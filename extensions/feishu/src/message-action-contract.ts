@@ -1,13 +1,22 @@
-import type { ChannelMessageActionName } from "openclaw/plugin-sdk/channel-contract";
+// Feishu plugin module implements message action contract behavior.
+import type { ChannelMessageActionAdapter } from "openclaw/plugin-sdk/channel-contract";
 
-type MessageActionTargetAliasSpec = {
-  aliases: string[];
-};
+const FEISHU_NATIVE_CHAT_TARGET_ALIASES = ["chatId", "chat_id", "channel_id"];
+
+function createMessageMutationTargetAliases() {
+  // The shared cross-context guard only sees plugin-native destinations declared here.
+  // Keep every guarded mutation that consumes resolveFeishuChatId on this contract.
+  return {
+    aliases: ["messageId", ...FEISHU_NATIVE_CHAT_TARGET_ALIASES],
+    deliveryTargetAliases: [...FEISHU_NATIVE_CHAT_TARGET_ALIASES],
+  };
+}
 
 export const messageActionTargetAliases = {
   read: { aliases: ["messageId"] },
-  pin: { aliases: ["messageId"] },
-  unpin: { aliases: ["messageId"] },
+  edit: createMessageMutationTargetAliases(),
+  pin: createMessageMutationTargetAliases(),
+  unpin: createMessageMutationTargetAliases(),
   "list-pins": { aliases: ["chatId"] },
   "channel-info": { aliases: ["chatId"] },
-} satisfies Partial<Record<ChannelMessageActionName, MessageActionTargetAliasSpec>>;
+} satisfies NonNullable<ChannelMessageActionAdapter["messageActionTargetAliases"]>;

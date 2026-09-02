@@ -1,3 +1,8 @@
+/**
+ * Host path normalization for sandbox mount policy.
+ *
+ * Handles POSIX, Windows drive, and namespace-prefixed paths before policy-key comparison.
+ */
 import { posix } from "node:path";
 import { resolvePathViaExistingAncestorSync } from "../../infra/boundary-path.js";
 
@@ -19,7 +24,7 @@ function stripWindowsNamespacePrefix(input: string): string {
   return input;
 }
 
-export function isWindowsDriveAbsolutePath(raw: string): boolean {
+function isWindowsDriveAbsolutePath(raw: string): boolean {
   return /^[A-Za-z]:[\\/]/.test(stripWindowsNamespacePrefix(raw.trim()));
 }
 

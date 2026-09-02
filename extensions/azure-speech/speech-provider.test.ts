@@ -1,4 +1,5 @@
-import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
+// Azure Speech tests cover speech provider plugin behavior.
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const { azureSpeechTTSMock, listAzureSpeechVoicesMock } = vi.hoisted(() => ({
   azureSpeechTTSMock: vi.fn(async () => Buffer.from("audio-bytes")),
@@ -17,23 +18,23 @@ vi.mock("./tts.js", async (importOriginal) => {
 import { buildAzureSpeechProvider } from "./speech-provider.js";
 
 describe("buildAzureSpeechProvider", () => {
-  const originalEnv = {
-    AZURE_SPEECH_KEY: process.env.AZURE_SPEECH_KEY,
-    AZURE_SPEECH_API_KEY: process.env.AZURE_SPEECH_API_KEY,
-    AZURE_SPEECH_REGION: process.env.AZURE_SPEECH_REGION,
-    AZURE_SPEECH_ENDPOINT: process.env.AZURE_SPEECH_ENDPOINT,
-    SPEECH_KEY: process.env.SPEECH_KEY,
-    SPEECH_REGION: process.env.SPEECH_REGION,
-  };
+  const envKeys = [
+    "AZURE_SPEECH_KEY",
+    "AZURE_SPEECH_API_KEY",
+    "AZURE_SPEECH_REGION",
+    "AZURE_SPEECH_ENDPOINT",
+    "SPEECH_KEY",
+    "SPEECH_REGION",
+  ] as const;
+
+  beforeEach(() => {
+    for (const key of envKeys) {
+      vi.stubEnv(key, undefined);
+    }
+  });
 
   afterEach(() => {
-    for (const [key, value] of Object.entries(originalEnv)) {
-      if (value === undefined) {
-        delete process.env[key];
-      } else {
-        process.env[key] = value;
-      }
-    }
+    vi.unstubAllEnvs();
     azureSpeechTTSMock.mockClear();
     listAzureSpeechVoicesMock.mockClear();
     vi.restoreAllMocks();
@@ -46,12 +47,6 @@ describe("buildAzureSpeechProvider", () => {
 
   it("reports configured only when key plus region or endpoint is available", () => {
     const provider = buildAzureSpeechProvider();
-    delete process.env.AZURE_SPEECH_KEY;
-    delete process.env.AZURE_SPEECH_API_KEY;
-    delete process.env.SPEECH_KEY;
-    delete process.env.AZURE_SPEECH_REGION;
-    delete process.env.SPEECH_REGION;
-    delete process.env.AZURE_SPEECH_ENDPOINT;
 
     expect(provider.isConfigured({ providerConfig: {}, timeoutMs: 30_000 })).toBe(false);
     expect(provider.isConfigured({ providerConfig: { apiKey: "key" }, timeoutMs: 30_000 })).toBe(
@@ -64,8 +59,8 @@ describe("buildAzureSpeechProvider", () => {
       }),
     ).toBe(true);
 
-    process.env.AZURE_SPEECH_KEY = "env-key";
-    process.env.AZURE_SPEECH_REGION = "eastus";
+    vi.stubEnv("AZURE_SPEECH_KEY", "env-key");
+    vi.stubEnv("AZURE_SPEECH_REGION", "eastus");
     expect(provider.isConfigured({ providerConfig: {}, timeoutMs: 30_000 })).toBe(true);
   });
 
@@ -98,21 +93,28 @@ describe("buildAzureSpeechProvider", () => {
       },
     });
 
-    expect(canonical).toEqual(
-      expect.objectContaining({
-        apiKey: "key",
-        region: "eastus",
-        baseUrl: "https://eastus.tts.speech.microsoft.com",
-        voice: "en-US-AriaNeural",
-      }),
-    );
-    expect(alias).toEqual(
-      expect.objectContaining({
-        apiKey: "alias-key",
-        endpoint: "https://westus.tts.speech.microsoft.com/cognitiveservices/v1",
-        baseUrl: "https://westus.tts.speech.microsoft.com",
-      }),
-    );
+    expect(canonical).toEqual({
+      apiKey: "key",
+      region: "eastus",
+      endpoint: undefined,
+      baseUrl: "https://eastus.tts.speech.microsoft.com",
+      voice: "en-US-AriaNeural",
+      lang: "en-US",
+      outputFormat: "audio-24khz-48kbitrate-mono-mp3",
+      voiceNoteOutputFormat: "ogg-24khz-16bit-mono-opus",
+      timeoutMs: undefined,
+    });
+    expect(alias).toEqual({
+      apiKey: "alias-key",
+      region: undefined,
+      endpoint: "https://westus.tts.speech.microsoft.com/cognitiveservices/v1",
+      baseUrl: "https://westus.tts.speech.microsoft.com",
+      voice: "en-US-JennyNeural",
+      lang: "en-US",
+      outputFormat: "audio-24khz-48kbitrate-mono-mp3",
+      voiceNoteOutputFormat: "ogg-24khz-16bit-mono-opus",
+      timeoutMs: undefined,
+    });
   });
 
   it("parses provider-specific TTS directives", () => {
@@ -172,6 +174,7 @@ describe("buildAzureSpeechProvider", () => {
       lang: "en-US",
       outputFormat: "ogg-24khz-16bit-mono-opus",
       timeoutMs: 30_000,
+      maxBytes: 16 * 1024 * 1024,
     });
     expect(result).toEqual({
       audioBuffer: Buffer.from("audio-bytes"),
@@ -209,6 +212,7 @@ describe("buildAzureSpeechProvider", () => {
       lang: "es-US",
       outputFormat: "raw-8khz-8bit-mono-mulaw",
       timeoutMs: 30_000,
+      maxBytes: 16 * 1024 * 1024,
     });
     expect(result).toEqual({
       audioBuffer: Buffer.from("audio-bytes"),
@@ -217,10 +221,39 @@ describe("buildAzureSpeechProvider", () => {
     });
   });
 
+  it("applies the configured media byte cap to synthesis requests", async () => {
+    const provider = buildAzureSpeechProvider();
+
+    await provider.synthesize({
+      text: "hello",
+      cfg: {
+        agents: {
+          defaults: {
+            mediaMaxMb: 2,
+          },
+        },
+      } as never,
+      providerConfig: {
+        apiKey: "key",
+        region: "eastus",
+        voice: "en-US-JennyNeural",
+      },
+      target: "audio-file",
+      timeoutMs: 30_000,
+    });
+
+    expect(azureSpeechTTSMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        maxBytes: 2 * 1024 * 1024,
+      }),
+    );
+  });
+
   it("lists voices through config or explicit request auth", async () => {
     const provider = buildAzureSpeechProvider();
     const voices = await provider.listVoices?.({
-      providerConfig: { apiKey: "key", region: "eastus" },
+      providerConfig: { apiKey: "key", region: "eastus", timeoutMs: 45_000 },
+      timeoutMs: 30_000,
     });
 
     expect(voices).toEqual([{ id: "en-US-JennyNeural", name: "Jenny" }]);
@@ -229,7 +262,35 @@ describe("buildAzureSpeechProvider", () => {
       baseUrl: "https://eastus.tts.speech.microsoft.com",
       endpoint: undefined,
       region: "eastus",
-      timeoutMs: undefined,
+      timeoutMs: 45_000,
     });
+  });
+
+  it("rejects blank credentials across readiness, discovery, and synthesis", async () => {
+    vi.stubEnv("AZURE_SPEECH_KEY", "   ");
+    vi.stubEnv("AZURE_SPEECH_API_KEY", "   ");
+    vi.stubEnv("SPEECH_KEY", "   ");
+    const provider = buildAzureSpeechProvider();
+    const providerConfig = { apiKey: "   ", region: "eastus" };
+
+    expect(provider.isConfigured({ providerConfig, timeoutMs: 1_000 })).toBe(false);
+    await expect(
+      provider.listVoices?.({ apiKey: "   ", providerConfig, timeoutMs: 1_000 }),
+    ).rejects.toThrow("Azure Speech API key missing");
+
+    const request = {
+      text: "hello",
+      cfg: {} as never,
+      providerConfig,
+      target: "audio-file" as const,
+      timeoutMs: 1_000,
+    };
+    await expect(provider.synthesize(request)).rejects.toThrow("Azure Speech API key missing");
+    await expect(provider.synthesizeTelephony?.(request)).rejects.toThrow(
+      "Azure Speech API key missing",
+    );
+
+    expect(listAzureSpeechVoicesMock).not.toHaveBeenCalled();
+    expect(azureSpeechTTSMock).not.toHaveBeenCalled();
   });
 });

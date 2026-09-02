@@ -1,14 +1,26 @@
 import { generateKeyPairSync } from "node:crypto";
+import { EventEmitter } from "node:events";
 import { createServer, type Server as HttpServer } from "node:http";
 import http2 from "node:http2";
 import net from "node:net";
+import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
+// Tests APNS push signing and request construction.
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred, withTestTimeout } from "../../test/helpers/promise.js";
 import { startProxy, stopProxy, type ProxyHandle } from "./net/proxy/proxy-lifecycle.js";
+import {
+  appendApnsResponseBodyCapture,
+  createApnsResponseBodyCapture,
+  getApnsResponseBodyCaptureText,
+} from "./push-apns-http2.js";
 import {
   sendApnsAlert,
   sendApnsBackgroundWake,
   sendApnsExecApprovalAlert,
   sendApnsExecApprovalResolvedWake,
+  sendApnsPluginApprovalAlert,
+  sendApnsPluginApprovalResolvedWake,
 } from "./push-apns.js";
 
 const testAuthPrivateKey = generateKeyPairSync("ec", {
@@ -103,15 +115,17 @@ function createRelayApnsSendFixture(params: {
   nodeId: string;
   relayHandle?: string;
   tokenDebugSuffix?: string;
+  environment?: "sandbox" | "production";
   sendResult: {
     ok: boolean;
     status: number;
-    environment: "production";
+    environment: "sandbox" | "production";
     apnsId?: string;
     reason?: string;
     tokenSuffix?: string;
   };
 }) {
+  const environment = params.environment ?? "production";
   return {
     send: vi.fn().mockResolvedValue(params.sendResult),
     registration: {
@@ -121,7 +135,7 @@ function createRelayApnsSendFixture(params: {
       sendGrant: "send-grant-123",
       installationId: "install-123",
       topic: "ai.openclaw.ios",
-      environment: "production" as const,
+      environment,
       distribution: "official" as const,
       updatedAtMs: 1,
       tokenDebugSuffix: params.tokenDebugSuffix,
@@ -164,12 +178,41 @@ async function closeServer(server: HttpServer | http2.Http2SecureServer): Promis
   });
 }
 
-async function startFakeApnsServer(): Promise<{
+const requireRecord = createRequireRecord("object", "label-not-object");
+
+function expectRecordFields(record: Record<string, unknown>, fields: Record<string, unknown>) {
+  for (const [key, value] of Object.entries(fields)) {
+    expect(record[key]).toEqual(value);
+  }
+}
+
+function expectNoProperties(record: Record<string, unknown>, keys: string[]) {
+  for (const key of keys) {
+    expect(record).not.toHaveProperty(key);
+  }
+}
+
+function requireSendRequest(send: ReturnType<typeof vi.fn>, label = "APNs send request") {
+  const [call] = send.mock.calls;
+  if (!call) {
+    throw new Error(`expected ${label}`);
+  }
+  const [request] = call;
+  return requireRecord(request, label);
+}
+
+function requirePayload(sendRequest: Record<string, unknown>) {
+  return requireRecord(sendRequest.payload, "APNs payload");
+}
+
+async function startFakeApnsServer(params?: { responseBody?: string; status?: number }): Promise<{
   port: number;
   requests: CapturedApnsRequest[];
   stop: () => Promise<void>;
 }> {
   const requests: CapturedApnsRequest[] = [];
+  const responseBody = params?.responseBody ?? "";
+  const status = params?.status ?? 200;
   const server = http2.createSecureServer({
     key: testApnsServerKeyPem,
     cert: testApnsServerCert,
@@ -183,8 +226,8 @@ async function startFakeApnsServer(): Promise<{
     });
     stream.on("end", () => {
       requests.push({ headers, body });
-      stream.respond({ ":status": 200, "apns-id": "proxied-apns-id" });
-      stream.end();
+      stream.respond({ ":status": status, "apns-id": "proxied-apns-id" });
+      stream.end(responseBody);
     });
   });
   const port = await listen(server);
@@ -245,6 +288,40 @@ afterEach(async () => {
 });
 
 describe("push APNs send semantics", () => {
+  it("bounds APNs response body capture", () => {
+    const capture = createApnsResponseBodyCapture();
+
+    appendApnsResponseBodyCapture(capture, "abc", 5);
+    appendApnsResponseBodyCapture(capture, "def", 5);
+
+    expect(getApnsResponseBodyCaptureText(capture)).toBe("abcde");
+    expect(capture).toMatchObject({ capturedBytes: 5, bytes: 6, truncated: true });
+  });
+
+  it("preserves UTF-8 across HTTP/2 chunks and drops an incomplete capped suffix", () => {
+    const splitCapture = createApnsResponseBodyCapture();
+    const emoji = Buffer.from("🚀");
+    appendApnsResponseBodyCapture(splitCapture, Buffer.from("before "));
+    appendApnsResponseBodyCapture(splitCapture, emoji.subarray(0, 2));
+    appendApnsResponseBodyCapture(splitCapture, emoji.subarray(2));
+    appendApnsResponseBodyCapture(splitCapture, Buffer.from(" after"));
+    expect(getApnsResponseBodyCaptureText(splitCapture)).toBe("before 🚀 after");
+
+    const cappedCapture = createApnsResponseBodyCapture();
+    const cappedPrefix = "a".repeat(8191);
+    appendApnsResponseBodyCapture(cappedCapture, Buffer.from(`${cappedPrefix}🚀`));
+    expect(getApnsResponseBodyCaptureText(cappedCapture)).toBe(cappedPrefix);
+    expect(cappedCapture).toMatchObject({ capturedBytes: 8192, bytes: 8195, truncated: true });
+  });
+
+  it("preserves replacement decoding for a complete malformed APNs response", () => {
+    const capture = createApnsResponseBodyCapture();
+    appendApnsResponseBodyCapture(capture, Buffer.from([0x61, 0xf0, 0x9f]));
+
+    expect(getApnsResponseBodyCaptureText(capture)).toBe("a�");
+    expect(capture).toMatchObject({ capturedBytes: 3, bytes: 3, truncated: false });
+  });
+
   it("sends alert pushes with alert headers and payload", async () => {
     const { send, registration, auth } = createDirectApnsSendFixture({
       nodeId: "ios-node-alert",
@@ -266,19 +343,20 @@ describe("push APNs send semantics", () => {
     });
 
     expect(send).toHaveBeenCalledTimes(1);
-    const sent = send.mock.calls[0]?.[0];
-    expect(sent?.pushType).toBe("alert");
-    expect(sent?.priority).toBe("10");
-    expect(sent?.payload).toMatchObject({
-      aps: {
-        alert: { title: "Wake", body: "Ping" },
-        sound: "default",
-      },
-      openclaw: {
-        kind: "push.test",
-        nodeId: "ios-node-alert",
-      },
+    const sent = requireSendRequest(send);
+    expect(sent.pushType).toBe("alert");
+    expect(sent.priority).toBe("10");
+    const payload = requirePayload(sent);
+    expect(payload.aps).toEqual({
+      alert: { title: "Wake", body: "Ping" },
+      sound: "default",
     });
+    const openclawPayload = requireRecord(payload.openclaw, "openclaw payload");
+    expectRecordFields(openclawPayload, {
+      kind: "push.test",
+      nodeId: "ios-node-alert",
+    });
+    expect(typeof openclawPayload.ts).toBe("number");
     expect(result.ok).toBe(true);
     expect(result.status).toBe(200);
     expect(result.transport).toBe("direct");
@@ -287,12 +365,12 @@ describe("push APNs send semantics", () => {
   it("routes direct APNs HTTP/2 requests through the active managed proxy", async () => {
     const apnsServer = await startFakeApnsServer();
     const proxy = await startConnectProxy(apnsServer.port);
-    let proxyHandle: ProxyHandle | null = null;
+    let proxyHandle: ProxyHandle | null | undefined;
     const previousTlsRejectUnauthorized = process.env.NODE_TLS_REJECT_UNAUTHORIZED;
     process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0";
 
     try {
-      proxyHandle = await startProxy({ enabled: true, proxyUrl: proxy.proxyUrl });
+      proxyHandle = await startProxy({ proxyUrl: proxy.proxyUrl });
       const { registration, auth } = createDirectApnsSendFixture({
         nodeId: "ios-node-proxied-alert",
         environment: "sandbox",
@@ -312,7 +390,7 @@ describe("push APNs send semantics", () => {
         timeoutMs: 2_500,
       });
 
-      expect(result).toMatchObject({
+      expectRecordFields(requireRecord(result, "APNs result"), {
         ok: true,
         status: 200,
         apnsId: "proxied-apns-id",
@@ -332,7 +410,57 @@ describe("push APNs send semantics", () => {
       } else {
         process.env.NODE_TLS_REJECT_UNAUTHORIZED = previousTlsRejectUnauthorized;
       }
-      await stopProxy(proxyHandle);
+      await stopProxy(proxyHandle ?? null);
+      await proxy.stop();
+      await apnsServer.stop();
+    }
+  });
+
+  it("bounds oversized direct APNs error bodies while preserving parseable reasons", async () => {
+    const apnsServer = await startFakeApnsServer({
+      status: 400,
+      responseBody: '{"reason":"BadDeviceToken"}' + " ".repeat(20_000),
+    });
+    const proxy = await startConnectProxy(apnsServer.port);
+    let proxyHandle: ProxyHandle | null | undefined;
+    const previousTlsRejectUnauthorized = process.env.NODE_TLS_REJECT_UNAUTHORIZED;
+    process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0";
+
+    try {
+      proxyHandle = await startProxy({ proxyUrl: proxy.proxyUrl });
+      const { registration, auth } = createDirectApnsSendFixture({
+        nodeId: "ios-node-proxied-error-body",
+        environment: "sandbox",
+        sendResult: {
+          status: 200,
+          apnsId: "unused",
+          body: "",
+        },
+      });
+
+      const result = await sendApnsAlert({
+        registration,
+        nodeId: "ios-node-proxied-error-body",
+        title: "Wake",
+        body: "Ping",
+        auth,
+        timeoutMs: 2_500,
+      });
+
+      expectRecordFields(requireRecord(result, "APNs result"), {
+        ok: false,
+        status: 400,
+        apnsId: "proxied-apns-id",
+        reason: "BadDeviceToken",
+        transport: "direct",
+      });
+    } finally {
+      if (previousTlsRejectUnauthorized === undefined) {
+        delete process.env.NODE_TLS_REJECT_UNAUTHORIZED;
+      } else {
+        process.env.NODE_TLS_REJECT_UNAUTHORIZED = previousTlsRejectUnauthorized;
+      }
+      await stopProxy(proxyHandle ?? null);
       await proxy.stop();
       await apnsServer.stop();
     }
@@ -358,26 +486,121 @@ describe("push APNs send semantics", () => {
     });
 
     expect(send).toHaveBeenCalledTimes(1);
-    const sent = send.mock.calls[0]?.[0];
-    expect(sent?.pushType).toBe("background");
-    expect(sent?.priority).toBe("5");
-    expect(sent?.payload).toMatchObject({
-      aps: {
-        "content-available": 1,
-      },
-      openclaw: {
-        kind: "node.wake",
-        reason: "node.invoke",
-        nodeId: "ios-node-wake",
-      },
+    const sent = requireSendRequest(send);
+    expect(sent.pushType).toBe("background");
+    expect(sent.priority).toBe("5");
+    const payload = requirePayload(sent);
+    expect(payload.aps).toEqual({
+      "content-available": 1,
     });
-    const sentPayload = sent?.payload as { aps?: { alert?: unknown; sound?: unknown } } | undefined;
-    const aps = sentPayload?.aps;
-    expect(aps?.alert).toBeUndefined();
-    expect(aps?.sound).toBeUndefined();
+    const openclawPayload = requireRecord(payload.openclaw, "openclaw payload");
+    expectRecordFields(openclawPayload, {
+      kind: "node.wake",
+      reason: "node.invoke",
+      nodeId: "ios-node-wake",
+    });
+    expect(typeof openclawPayload.ts).toBe("number");
+    const aps = requireRecord(payload.aps, "APNs aps payload");
+    expect(aps.alert).toBeUndefined();
+    expect(aps.sound).toBeUndefined();
     expect(result.ok).toBe(true);
     expect(result.environment).toBe("production");
     expect(result.transport).toBe("direct");
+  });
+
+  it("guards direct wake transport with current ownership and lifecycle", async () => {
+    const { send, registration, auth } = createDirectApnsSendFixture({
+      nodeId: "ios-node-guarded-wake",
+      environment: "production",
+      sendResult: {
+        status: 200,
+        apnsId: "apns-guarded-wake-id",
+        body: "",
+      },
+    });
+    const controller = new AbortController();
+    const isCurrent = vi.fn().mockResolvedValue(true);
+
+    await sendApnsBackgroundWake({
+      registration,
+      nodeId: "ios-node-guarded-wake",
+      wakeReason: "node.invoke",
+      auth,
+      requestSender: send,
+      signal: controller.signal,
+      isCurrent,
+    });
+
+    expect(isCurrent).toHaveBeenCalledTimes(1);
+    const sent = requireSendRequest(send);
+    expect(sent.signal).toBe(controller.signal);
+    expect(sent.isCurrent).toBe(isCurrent);
+
+    await expect(
+      sendApnsBackgroundWake({
+        registration,
+        nodeId: "ios-node-guarded-wake",
+        wakeReason: "node.invoke",
+        auth,
+        requestSender: send,
+        isCurrent: vi.fn().mockResolvedValue(false),
+      }),
+    ).rejects.toThrow("APNs send invalidated");
+    expect(send).toHaveBeenCalledTimes(1);
+  });
+
+  it("owns direct session errors while persistent currentness is pending", async () => {
+    const session = Object.assign(new EventEmitter(), {
+      close: vi.fn(),
+      destroy: vi.fn(),
+      request: vi.fn(),
+    });
+    session.destroy.mockImplementation(() => session.emit("close"));
+    const connect = vi
+      .spyOn(http2, "connect")
+      .mockReturnValue(session as unknown as http2.ClientHttp2Session);
+    const currentness = createDeferred<boolean>();
+    const checkingCurrentness = createDeferred();
+    const isCurrent = vi
+      .fn<() => Promise<boolean>>()
+      .mockResolvedValueOnce(true)
+      .mockImplementationOnce(() => {
+        checkingCurrentness.resolve();
+        return currentness.promise;
+      });
+    const { registration, auth } = createDirectApnsSendFixture({
+      nodeId: "ios-node-session-error",
+      environment: "production",
+      sendResult: { status: 200, apnsId: "unused", body: "" },
+    });
+
+    try {
+      const sending = sendApnsBackgroundWake({
+        registration,
+        nodeId: "ios-node-session-error",
+        wakeReason: "node.invoke",
+        auth,
+        isCurrent,
+      });
+      await withTestTimeout(
+        checkingCurrentness.promise,
+        1_000,
+        "APNs persistent currentness check did not start",
+      );
+      expect(connect).toHaveBeenCalledTimes(1);
+      expect(isCurrent).toHaveBeenCalledTimes(2);
+
+      expect(session.listenerCount("error")).toBeGreaterThan(0);
+      session.emit("error", new Error("APNs connection failed"));
+      currentness.resolve(true);
+
+      await expect(sending).rejects.toThrow("APNs connection failed");
+      expect(session.destroy).toHaveBeenCalledTimes(1);
+      expect(session.request).not.toHaveBeenCalled();
+    } finally {
+      currentness.resolve(false);
+      connect.mockRestore();
+    }
   });
 
   it("sends exec approval alert pushes with generic modal-only metadata", async () => {
@@ -395,38 +618,39 @@ describe("push APNs send semantics", () => {
       registration,
       nodeId: "ios-node-approval-alert",
       approvalId: "approval-123",
+      gatewayDeviceId: "gateway-device-123",
       auth,
       requestSender: send,
     });
 
     expect(send).toHaveBeenCalledTimes(1);
-    const sent = send.mock.calls[0]?.[0];
-    expect(sent?.pushType).toBe("alert");
-    expect(sent?.payload).toMatchObject({
-      aps: {
-        alert: {
-          title: "Exec approval required",
-          body: "Open OpenClaw to review this request.",
-        },
-        sound: "default",
-        category: "openclaw.exec-approval",
-        "content-available": 1,
+    const sent = requireSendRequest(send);
+    expect(sent.pushType).toBe("alert");
+    const payload = requirePayload(sent);
+    expect(payload.aps).toEqual({
+      alert: {
+        title: "Exec approval required",
+        body: "Open OpenClaw to review this request.",
       },
-      openclaw: {
-        kind: "exec.approval.requested",
-        approvalId: "approval-123",
-      },
+      sound: "default",
+      category: "openclaw.exec-approval",
+      "content-available": 1,
     });
-    expect(sent?.payload).not.toMatchObject({
-      openclaw: {
-        host: expect.anything(),
-        nodeId: expect.anything(),
-        agentId: expect.anything(),
-        commandText: expect.anything(),
-        allowedDecisions: expect.anything(),
-        expiresAtMs: expect.anything(),
-      },
+    const openclawPayload = requireRecord(payload.openclaw, "openclaw payload");
+    expectRecordFields(openclawPayload, {
+      kind: "exec.approval.requested",
+      approvalId: "approval-123",
+      gatewayDeviceId: "gateway-device-123",
     });
+    expect(typeof openclawPayload.ts).toBe("number");
+    expectNoProperties(openclawPayload, [
+      "host",
+      "nodeId",
+      "agentId",
+      "commandText",
+      "allowedDecisions",
+      "expiresAtMs",
+    ]);
     expect(result.ok).toBe(true);
     expect(result.transport).toBe("direct");
   });
@@ -446,24 +670,125 @@ describe("push APNs send semantics", () => {
       registration,
       nodeId: "ios-node-approval-cleanup",
       approvalId: "approval-123",
+      gatewayDeviceId: "gateway-device-123",
       auth,
       requestSender: send,
     });
 
     expect(send).toHaveBeenCalledTimes(1);
-    const sent = send.mock.calls[0]?.[0];
-    expect(sent?.pushType).toBe("background");
-    expect(sent?.payload).toMatchObject({
-      aps: {
-        "content-available": 1,
-      },
-      openclaw: {
-        kind: "exec.approval.resolved",
-        approvalId: "approval-123",
-      },
+    const sent = requireSendRequest(send);
+    expect(sent.pushType).toBe("background");
+    const payload = requirePayload(sent);
+    expect(payload.aps).toEqual({
+      "content-available": 1,
     });
+    const openclawPayload = requireRecord(payload.openclaw, "openclaw payload");
+    expectRecordFields(openclawPayload, {
+      kind: "exec.approval.resolved",
+      approvalId: "approval-123",
+      gatewayDeviceId: "gateway-device-123",
+    });
+    expect(typeof openclawPayload.ts).toBe("number");
     expect(result.ok).toBe(true);
     expect(result.transport).toBe("direct");
+  });
+
+  it("builds plugin approval alerts with request copy and a bounded body", async () => {
+    const { send, registration, auth } = createDirectApnsSendFixture({
+      nodeId: "ios-node-plugin-approval-alert",
+      environment: "sandbox",
+      sendResult: {
+        status: 200,
+        apnsId: "apns-plugin-approval-alert-id",
+        body: "",
+      },
+    });
+    const description = `${"x".repeat(255)}😀${"y".repeat(300)}`;
+
+    await sendApnsPluginApprovalAlert({
+      registration,
+      nodeId: "ios-node-plugin-approval-alert",
+      approvalId: "plugin:approval-123",
+      gatewayDeviceId: "gateway-device-123",
+      title: "Install plugin update",
+      description,
+      auth,
+      requestSender: send,
+    });
+
+    const payload = requirePayload(requireSendRequest(send));
+    expect(payload.aps).toEqual({
+      alert: {
+        title: "Install plugin update",
+        body: `${"x".repeat(255)}…`,
+      },
+      sound: "default",
+      category: "openclaw.plugin-approval",
+      "content-available": 1,
+    });
+    const openclawPayload = requireRecord(payload.openclaw, "openclaw payload");
+    expectRecordFields(openclawPayload, {
+      kind: "plugin.approval.requested",
+      approvalId: "plugin:approval-123",
+      gatewayDeviceId: "gateway-device-123",
+    });
+    expect(typeof openclawPayload.ts).toBe("number");
+    expectNoProperties(openclawPayload, [
+      "title",
+      "description",
+      "toolName",
+      "agentId",
+      "sessionKey",
+    ]);
+  });
+
+  it("falls back to the generic plugin approval title", async () => {
+    const { send, registration, auth } = createDirectApnsSendFixture({
+      nodeId: "ios-node-plugin-approval-fallback",
+      environment: "sandbox",
+      sendResult: { status: 200, apnsId: "apns-plugin-approval-fallback-id", body: "" },
+    });
+
+    await sendApnsPluginApprovalAlert({
+      registration,
+      nodeId: "ios-node-plugin-approval-fallback",
+      approvalId: "plugin:fallback",
+      gatewayDeviceId: "gateway-device-123",
+      title: "   ",
+      description: "Review this request.",
+      auth,
+      requestSender: send,
+    });
+
+    const aps = requireRecord(requirePayload(requireSendRequest(send)).aps, "APNs aps payload");
+    expect(requireRecord(aps.alert, "APNs alert").title).toBe("Approval required");
+  });
+
+  it("builds plugin approval cleanup pushes as silent background notifications", async () => {
+    const { send, registration, auth } = createDirectApnsSendFixture({
+      nodeId: "ios-node-plugin-approval-cleanup",
+      environment: "sandbox",
+      sendResult: { status: 200, apnsId: "apns-plugin-approval-cleanup-id", body: "" },
+    });
+
+    await sendApnsPluginApprovalResolvedWake({
+      registration,
+      nodeId: "ios-node-plugin-approval-cleanup",
+      approvalId: "plugin:approval-123",
+      gatewayDeviceId: "gateway-device-123",
+      auth,
+      requestSender: send,
+    });
+
+    const payload = requirePayload(requireSendRequest(send));
+    expect(payload.aps).toEqual({ "content-available": 1 });
+    const openclawPayload = requireRecord(payload.openclaw, "openclaw payload");
+    expectRecordFields(openclawPayload, {
+      kind: "plugin.approval.resolved",
+      approvalId: "plugin:approval-123",
+      gatewayDeviceId: "gateway-device-123",
+    });
+    expect(typeof openclawPayload.ts).toBe("number");
   });
 
   it("parses direct send failures and clamps sub-second timeouts", async () => {
@@ -487,8 +812,8 @@ describe("push APNs send semantics", () => {
       timeoutMs: 50,
     });
 
-    expect(send.mock.calls[0]?.[0]?.timeoutMs).toBe(1000);
-    expect(result).toMatchObject({
+    expect(requireSendRequest(send).timeoutMs).toBe(1000);
+    expectRecordFields(requireRecord(result, "APNs result"), {
       ok: false,
       status: 400,
       apnsId: "apns-direct-fail-id",
@@ -496,6 +821,30 @@ describe("push APNs send semantics", () => {
       tokenSuffix: "abcd1234",
       transport: "direct",
     });
+  });
+
+  it("caps oversized direct send timeouts", async () => {
+    const { send, registration, auth } = createDirectApnsSendFixture({
+      nodeId: "ios-node-direct-timeout-cap",
+      environment: "sandbox",
+      sendResult: {
+        status: 200,
+        apnsId: "apns-timeout-cap-id",
+        body: "{}",
+      },
+    });
+
+    await sendApnsAlert({
+      registration,
+      nodeId: "ios-node-direct-timeout-cap",
+      title: "Wake",
+      body: "Ping",
+      auth,
+      requestSender: send,
+      timeoutMs: Number.MAX_SAFE_INTEGER,
+    });
+
+    expect(requireSendRequest(send).timeoutMs).toBe(MAX_TIMER_TIMEOUT_MS);
   });
 
   it("fails closed before sending when direct registrations carry invalid topics", async () => {
@@ -541,13 +890,11 @@ describe("push APNs send semantics", () => {
       requestSender: send,
     });
 
-    const sent = send.mock.calls[0]?.[0];
-    expect(sent?.payload).toMatchObject({
-      openclaw: {
-        kind: "node.wake",
-        reason: "node.invoke",
-        nodeId: "ios-node-wake-default-reason",
-      },
+    const payload = requirePayload(requireSendRequest(send));
+    expectRecordFields(requireRecord(payload.openclaw, "openclaw payload"), {
+      kind: "node.wake",
+      reason: "node.invoke",
+      nodeId: "ios-node-wake-default-reason",
     });
   });
 
@@ -574,23 +921,23 @@ describe("push APNs send semantics", () => {
     });
 
     expect(send).toHaveBeenCalledTimes(1);
-    const sent = send.mock.calls[0]?.[0];
-    expect(sent).toMatchObject({
+    const sent = requireSendRequest(send);
+    expectRecordFields(sent, {
       relayConfig,
       sendGrant: "send-grant-123",
       relayHandle: "relay-handle-12345678",
       gatewayDeviceId: "gateway-device-1",
       pushType: "alert",
       priority: "10",
-      payload: {
-        aps: {
-          alert: { title: "Wake", body: "Ping" },
-          sound: "default",
-        },
-      },
     });
-    expect(sent?.signature).toEqual(expect.any(String));
-    expect(result).toMatchObject({
+    const payload = requirePayload(sent);
+    expect(requireRecord(payload.aps, "APNs aps payload")).toEqual({
+      alert: { title: "Wake", body: "Ping" },
+      sound: "default",
+    });
+    expect(sent.signature).toBeTypeOf("string");
+    expect(sent.signature).not.toBe("");
+    expectRecordFields(requireRecord(result, "APNs result"), {
       ok: true,
       status: 202,
       apnsId: "relay-alert-id",
@@ -622,24 +969,25 @@ describe("push APNs send semantics", () => {
     });
 
     expect(send).toHaveBeenCalledTimes(1);
-    const sent = send.mock.calls[0]?.[0];
-    expect(sent).toMatchObject({
+    const sent = requireSendRequest(send);
+    expectRecordFields(sent, {
       relayConfig,
       sendGrant: "send-grant-123",
       relayHandle: "relay-handle-12345678",
       gatewayDeviceId: "gateway-device-1",
       pushType: "background",
       priority: "5",
-      payload: {
-        aps: { "content-available": 1 },
-        openclaw: {
-          kind: "node.wake",
-          reason: "queue.retry",
-          nodeId: "ios-node-relay-wake",
-        },
-      },
     });
-    expect(result).toMatchObject({
+    const payload = requirePayload(sent);
+    expect(payload.aps).toEqual({ "content-available": 1 });
+    const openclawPayload = requireRecord(payload.openclaw, "openclaw payload");
+    expectRecordFields(openclawPayload, {
+      kind: "node.wake",
+      reason: "queue.retry",
+      nodeId: "ios-node-relay-wake",
+    });
+    expect(typeof openclawPayload.ts).toBe("number");
+    expectRecordFields(requireRecord(result, "APNs result"), {
       ok: false,
       status: 429,
       reason: "TooManyRequests",
@@ -664,40 +1012,64 @@ describe("push APNs send semantics", () => {
       registration,
       nodeId: "ios-node-relay-approval-alert",
       approvalId: "approval-relay-1",
+      gatewayDeviceId: "gateway-device-relay",
       relayConfig,
       relayGatewayIdentity: gatewayIdentity,
       relayRequestSender: send,
     });
 
-    const sent = send.mock.calls[0]?.[0];
-    expect(sent?.payload).toMatchObject({
-      aps: {
-        alert: {
-          title: "Exec approval required",
-          body: "Open OpenClaw to review this request.",
-        },
-        category: "openclaw.exec-approval",
-        "content-available": 1,
+    const payload = requirePayload(requireSendRequest(send));
+    expect(payload.aps).toEqual({
+      alert: {
+        title: "Exec approval required",
+        body: "Open OpenClaw to review this request.",
       },
-      openclaw: {
-        kind: "exec.approval.requested",
-        approvalId: "approval-relay-1",
-      },
+      sound: "default",
+      category: "openclaw.exec-approval",
+      "content-available": 1,
     });
-    expect(sent?.payload).not.toMatchObject({
-      openclaw: {
-        commandText: expect.anything(),
-        host: expect.anything(),
-        nodeId: expect.anything(),
-        allowedDecisions: expect.anything(),
-        expiresAtMs: expect.anything(),
-      },
+    const openclawPayload = requireRecord(payload.openclaw, "openclaw payload");
+    expectRecordFields(openclawPayload, {
+      kind: "exec.approval.requested",
+      approvalId: "approval-relay-1",
+      gatewayDeviceId: "gateway-device-relay",
     });
-    expect(result).toMatchObject({
+    expect(typeof openclawPayload.ts).toBe("number");
+    expectNoProperties(openclawPayload, [
+      "commandText",
+      "host",
+      "nodeId",
+      "allowedDecisions",
+      "expiresAtMs",
+    ]);
+    expectRecordFields(requireRecord(result, "APNs result"), {
       ok: true,
       status: 202,
       environment: "production",
       transport: "relay",
     });
+  });
+
+  it("keeps bounded non-JSON error reasons UTF-16 well-formed", async () => {
+    const { send, registration, auth } = createDirectApnsSendFixture({
+      nodeId: "ios-node-utf16-reason",
+      environment: "sandbox",
+      sendResult: {
+        status: 400,
+        apnsId: "apns-utf16-reason-id",
+        body: `${"x".repeat(199)}🚀tail`,
+      },
+    });
+
+    const result = await sendApnsAlert({
+      registration,
+      nodeId: "ios-node-utf16-reason",
+      title: "Wake",
+      body: "Ping",
+      auth,
+      requestSender: send,
+    });
+
+    expect(requireRecord(result, "APNs result").reason).toBe("x".repeat(199));
   });
 });

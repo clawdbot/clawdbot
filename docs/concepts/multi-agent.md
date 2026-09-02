@@ -1,95 +1,114 @@
 ---
-summary: "Multi-agent routing: isolated agents, channel accounts, and bindings"
+summary: "Multi-agent routing: agent boundaries, channel accounts, and bindings"
 title: "Multi-agent routing"
 sidebarTitle: "Multi-agent routing"
-read_when: "You want multiple isolated agents (workspaces + auth) in one gateway process."
+read_when: "You want multiple agents with separate workspaces, auth, and sessions in one Gateway process."
 status: active
 ---
 
-Run multiple _isolated_ agents — each with its own workspace, state directory (`agentDir`), and session history — plus multiple channel accounts (e.g. two WhatsApps) in one running Gateway. Inbound messages are routed to the right agent through bindings.
+Run multiple _isolated_ agents in one Gateway process, each with its own workspace, state directory (`agentDir`), and SQLite-backed session history, plus multiple channel accounts (e.g. two WhatsApp numbers). Inbound messages route to the right agent through **bindings**.
 
-An **agent** here is the full per-persona scope: workspace files, auth profiles, model registry, and session store. `agentDir` is the on-disk state directory that holds this per-agent config at `~/.openclaw/agents/<agentId>/`. A **binding** maps a channel account (e.g. a Slack workspace or a WhatsApp number) to one of those agents.
+An **agent** is the full per-persona scope: workspace files, auth profiles, model registry, and session store. A **binding** maps a channel account (a Slack workspace, a WhatsApp number, etc.) to one of those agents.
 
-## What is "one agent"?
+For a focused setup guide with account and conversation examples, see [Agent bindings](/concepts/agent-bindings).
 
-An **agent** is a fully scoped brain with its own:
+## What is one agent
 
-- **Workspace** (files, AGENTS.md/SOUL.md/USER.md, local notes, persona rules).
-- **State directory** (`agentDir`) for auth profiles, model registry, and per-agent config.
-- **Session store** (chat history + routing state) under `~/.openclaw/agents/<agentId>/sessions`.
+Each agent has its own:
 
-Auth profiles are **per-agent**. Each agent reads from its own:
+- **Workspace**: files, `AGENTS.md`/`SOUL.md`/`USER.md`, local notes, persona rules.
+- **State directory** (`agentDir`): auth profiles, model registry, per-agent config.
+- **Session store**: chat history and routing state in `<agentDir>/openclaw-agent.sqlite`.
+
+Auth profiles are per-agent, read from `<agentDir>/openclaw-agent.sqlite`. With the default layout, that resolves to:
 
 ```text
-~/.openclaw/agents/<agentId>/agent/auth-profiles.json
+~/.openclaw/agents/<agentId>/agent/openclaw-agent.sqlite
 ```
 
 <Note>
-`sessions_history` is the safer cross-session recall path here too: it returns a bounded, sanitized view, not a raw transcript dump. Assistant recall strips thinking tags, `<relevant-memories>` scaffolding, plain-text tool-call XML payloads (including `<tool_call>...</tool_call>`, `<function_call>...</function_call>`, `<tool_calls>...</tool_calls>`, `<function_calls>...</function_calls>`, and truncated tool-call blocks), downgraded tool-call scaffolding, leaked ASCII/full-width model control tokens, and malformed MiniMax tool-call XML before redaction/truncation.
+`sessions_history` is the safer cross-session recall path: it returns a bounded, redacted view, not a raw transcript dump. It strips thinking-block signatures, tool-result payload details, `<relevant-memories>` scaffolding, tool-call XML tags (`<tool_call>`, `<function_call>`, and their plural/downgraded forms), and MiniMax tool-call XML, then truncates and caps output by byte size.
 </Note>
 
 <Warning>
-Never reuse `agentDir` across agents (it causes auth/session collisions). Agents
-can read through to the default/main agent's auth profiles when they do not have
-a local profile, but OpenClaw does not clone OAuth refresh tokens into the
-secondary agent store. If you want an independent OAuth account, sign in from
-that agent; if you copy credentials manually, copy only portable static
-`api_key` or `token` profiles.
+Never reuse `agentDir` across agents — it causes auth/session state collisions. When a secondary agent's local OAuth credential is expired or its refresh fails, OpenClaw reads through to the default/main agent's credential for the same profile id and adopts whichever token is freshest, without copying the refresh token into the secondary agent's store. If you want a fully independent OAuth account, sign in from that agent. If you copy credentials manually, copy only portable static `api_key` or `token` profiles — OAuth refresh material is not portable by default (`copyToAgents` can opt a profile in explicitly).
 </Warning>
 
-Skills are loaded from each agent workspace plus shared roots such as `~/.openclaw/skills`, then filtered by the effective agent skill allowlist when configured. Use `agents.defaults.skills` for a shared baseline and `agents.list[].skills` for per-agent replacement. See [Skills: per-agent vs shared](/tools/skills#per-agent-vs-shared-skills) and [Skills: agent skill allowlists](/tools/skills#agent-skill-allowlists).
+Skills load from each agent workspace plus shared roots such as `~/.openclaw/skills`, then filter by the effective agent skill allowlist. Use `agents.defaults.skills` for a shared baseline and `agents.entries.*.skills` for a per-agent replacement (explicit entries replace the default, they do not merge). See [Skills: per-agent vs shared](/tools/skills#per-agent-vs-shared-skills) and [Skills: agent allowlists](/tools/skills#agent-allowlists).
 
-The Gateway can host **one agent** (default) or **many agents** side-by-side.
+Plugin-owned storage follows that plugin's configuration; adding a second agent
+does not automatically split every global plugin store. For example, configure
+[Memory Wiki per-agent vaults](/concepts/multi-agent#per-agent-memory-wiki-vaults)
+when personas must not share compiled wiki knowledge.
 
 <Note>
 **Workspace note:** each agent's workspace is the **default cwd**, not a hard sandbox. Relative paths resolve inside the workspace, but absolute paths can reach other host locations unless sandboxing is enabled. See [Sandboxing](/gateway/sandboxing).
 </Note>
 
-## Paths (quick map)
+## Paths
 
-- Config: `~/.openclaw/openclaw.json` (or `OPENCLAW_CONFIG_PATH`)
-- State dir: `~/.openclaw` (or `OPENCLAW_STATE_DIR`)
-- Workspace: `~/.openclaw/workspace` (or `~/.openclaw/workspace-<agentId>`)
-- Agent dir: `~/.openclaw/agents/<agentId>/agent` (or `agents.list[].agentDir`)
-- Sessions: `~/.openclaw/agents/<agentId>/sessions`
+| What                             | Default                                                                                | Override                                                                                    |
+| -------------------------------- | -------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
+| Config                           | `~/.openclaw/openclaw.json`                                                            | `OPENCLAW_CONFIG_PATH`                                                                      |
+| State dir                        | `~/.openclaw`                                                                          | `OPENCLAW_STATE_DIR`                                                                        |
+| Default agent's workspace        | `<stateDir>/workspace` (`~/.openclaw-<profile>/workspace` for a named profile)         | `agents.entries.*.workspace`, then `agents.defaults.workspace`, or `OPENCLAW_WORKSPACE_DIR` |
+| Other agents' workspace          | `<stateDir>/workspace-<agentId>` (or `<agents.defaults.workspace>/<agentId>` when set) | `agents.entries.*.workspace`                                                                |
+| Agent dir                        | `~/.openclaw/agents/<agentId>/agent`                                                   | `agents.entries.*.agentDir`                                                                 |
+| Sessions and transcripts         | `<agentDir>/openclaw-agent.sqlite`                                                     | `agents.entries.*.agentDir`                                                                 |
+| Legacy/archive session artifacts | `~/.openclaw/agents/<agentId>/sessions`                                                | —                                                                                           |
 
 ### Single-agent mode (default)
 
-If you do nothing, OpenClaw runs a single agent:
+If you configure nothing, OpenClaw runs one agent:
 
-- `agentId` defaults to **`main`**.
-- Sessions are keyed as `agent:main:<mainKey>`.
-- Workspace defaults to `~/.openclaw/workspace` (or `~/.openclaw/workspace-<profile>` when `OPENCLAW_PROFILE` is set).
+- `agentId` defaults to `main`.
+- The main session key is `agent:main:main`.
+- Workspace defaults to `<stateDir>/workspace` (`~/.openclaw/workspace` for the default install and `~/.openclaw-<profile>/workspace` for a named profile).
 - State defaults to `~/.openclaw/agents/main/agent`.
 
 ## Agent helper
 
-Use the agent wizard to add a new isolated agent:
+Add a new isolated agent:
 
 ```bash
 openclaw agents add work
 ```
 
-Then add `bindings` (or let the wizard do it) to route inbound messages.
+Flags: `--workspace <dir>`, `--model <id>`, `--agent-dir <dir>`, `--bind <channel[:accountId]>` (repeatable), `--non-interactive` (requires `--workspace`).
 
-Verify with:
+Add `bindings` to route inbound messages (the wizard offers to do this for you), then verify:
 
 ```bash
 openclaw agents list --bindings
 ```
 
+### Agent provenance
+
+OpenClaw records how each configured agent was created: `operator` for CLI,
+onboarding, and Gateway requests; `agent` when the system agent requested it;
+and `claw` when a Claw install added it. Agent-created entries also retain the
+requesting agent id. A configured agent can ask OpenClaw to create another
+agent through its `openclaw` tool. The system agent files the typed operation,
+shows the requesting agent id to the operator, and creates the agent only after
+operator approval. Inspect the current creation hierarchy with:
+
+```bash
+openclaw agents list --tree
+```
+
+Deleted creators remain historical provenance. If the creator is no longer in
+the configured roster, its children appear at the root of the tree.
+
 ## Quick start
 
 <Steps>
   <Step title="Create each agent workspace">
-    Use the wizard or create workspaces manually:
-
     ```bash
     openclaw agents add coding
     openclaw agents add social
     ```
 
-    Each agent gets its own workspace with `SOUL.md`, `AGENTS.md`, and optional `USER.md`, plus a dedicated `agentDir` and session store under `~/.openclaw/agents/<agentId>`.
+    Each agent gets its own workspace with `SOUL.md`, `AGENTS.md`, and optional `USER.md`, plus a dedicated `agentDir` and session store. By default, those agent files live under `~/.openclaw/agents/<agentId>`.
 
   </Step>
   <Step title="Create channel accounts">
@@ -107,7 +126,7 @@ openclaw agents list --bindings
 
   </Step>
   <Step title="Add agents, accounts, and bindings">
-    Add agents under `agents.list`, channel accounts under `channels.<channel>.accounts`, and connect them with `bindings` (examples below).
+    Add agents under `agents.entries`, channel accounts under `channels.<channel>.accounts`, and connect them with `bindings` (examples below).
   </Step>
   <Step title="Restart and verify">
     ```bash
@@ -118,70 +137,71 @@ openclaw agents list --bindings
   </Step>
 </Steps>
 
-## Multiple agents = multiple people, multiple personalities
+## Multiple agents, multiple personas
 
-With **multiple agents**, each `agentId` becomes a **fully isolated persona**:
+Each configured `agentId` is a distinct persona boundary for core agent state:
 
-- **Different phone numbers/accounts** (per channel `accountId`).
-- **Different personalities** (per-agent workspace files like `AGENTS.md` and `SOUL.md`).
-- **Separate auth + sessions** (no cross-talk unless explicitly enabled).
+- Different accounts per channel (per `accountId`).
+- Different personalities (per-agent `AGENTS.md`/`SOUL.md`).
+- Separate auth and sessions, with cross-agent access enabled only through explicit features or plugin configuration.
 
-This lets **multiple people** share one Gateway server while keeping their AI "brains" and data isolated.
+This lets multiple people share one Gateway while keeping core agent state separate.
 
-## Cross-agent QMD memory search
+## Per-agent Memory Wiki vaults
 
-If one agent should search another agent's QMD session transcripts, add extra collections under `agents.list[].memorySearch.qmd.extraCollections`. Use `agents.defaults.memorySearch.qmd.extraCollections` only when every agent should inherit the same shared transcript collections.
+Memory Wiki uses one global vault by default. To keep a support agent's
+compiled knowledge separate from a marketing agent's, set
+`plugins.entries.memory-wiki.config.vault.scope` to `agent`:
 
 ```json5
 {
-  agents: {
-    defaults: {
-      workspace: "~/workspaces/main",
-      memorySearch: {
-        qmd: {
-          extraCollections: [{ path: "~/agents/family/sessions", name: "family-sessions" }],
-        },
-      },
-    },
-    list: [
-      {
-        id: "main",
-        workspace: "~/workspaces/main",
-        memorySearch: {
-          qmd: {
-            extraCollections: [{ path: "notes" }], // resolves inside workspace -> collection named "notes-main"
+  plugins: {
+    entries: {
+      "memory-wiki": {
+        enabled: true,
+        config: {
+          vault: {
+            scope: "agent",
+            path: "~/.openclaw/wiki",
           },
         },
       },
-      { id: "family", workspace: "~/workspaces/family" },
-    ],
-  },
-  memory: {
-    backend: "qmd",
-    qmd: { includeDefaultMemory: false },
+    },
   },
 }
 ```
 
-The extra collection path can be shared across agents, but the collection name stays explicit when the path is outside the agent workspace. Paths inside the workspace remain agent-scoped so each agent keeps its own transcript search set.
+The configured path is the parent directory. OpenClaw appends the normalized
+agent id, producing paths such as `~/.openclaw/wiki/support` and
+`~/.openclaw/wiki/marketing`. Agent-scoped CLI and Gateway operations require
+an explicit agent when multiple agents are configured. See
+[Memory Wiki per-agent vaults](/plugins/memory-wiki#per-agent-vaults) for bridge
+filtering, migration, and trust-boundary details.
+
+## Cross-agent memory search
+
+The QMD cross-agent search path was removed. Builtin memory does not search
+another agent's transcript corpus; each agent searches only its own configured
+memory and eligible same-agent session sources. Put intentionally shared
+Markdown in an explicit shared `memory.search.extraPaths` directory when the
+same reference material should be indexed by multiple agents. For the full
+upgrade path, see [Migrating from QMD](/concepts/memory-builtin#migrating-from-qmd).
 
 ## One WhatsApp number, multiple people (DM split)
 
-You can route **different WhatsApp DMs** to different agents while staying on **one WhatsApp account**. Match on sender E.164 (like `+15551234567`) with `peer.kind: "direct"`. Replies still come from the same WhatsApp number (no per-agent sender identity).
+Route different WhatsApp DMs to different agents on **one** WhatsApp account by matching sender E.164 (`+15551234567`) with `peer.kind: "direct"`. Replies still come from the same WhatsApp number — there is no per-agent sender identity.
 
 <Note>
-Direct chats collapse to the agent's **main session key**, so true isolation requires **one agent per person**.
+Direct chats collapse to the agent's main session key by default, so true isolation requires one agent per person.
 </Note>
-
-Example:
 
 ```json5
 {
   agents: {
-    list: [
-      { id: "alex", workspace: "~/.openclaw/workspace-alex" },
-      { id: "mia", workspace: "~/.openclaw/workspace-mia" },
-    ],
+    entries: {
+      alex: { default: true, workspace: "~/.openclaw/workspace-alex" },
+      mia: { workspace: "~/.openclaw/workspace-mia" },
+    },
   },
   bindings: [
     {
@@ -202,74 +222,45 @@ Example:
 }
 ```
 
-Notes:
+DM access control (pairing/allowlist) is global per WhatsApp account, not per agent. For shared groups, bind the group to one agent or use [Broadcast groups](/channels/broadcast-groups).
 
-- DM access control is **global per WhatsApp account** (pairing/allowlist), not per agent.
-- For shared groups, bind the group to one agent or use [Broadcast groups](/channels/broadcast-groups).
+## Routing rules
 
-## Routing rules (how messages pick an agent)
+Bindings are deterministic and most-specific wins. See [Channel routing](/channels/channel-routing#routing-rules-how-an-agent-is-chosen) for the full tier order (exact peer, parent peer, peer wildcard, guild+roles, guild, team, account, channel, default agent). A few rules worth calling out here:
 
-Bindings are **deterministic** and **most-specific wins**:
+- If multiple bindings match within the same tier, the first one in config order wins.
+- If a binding sets multiple match fields (for example `peer` + `guildId`), all specified fields must match (`AND` semantics).
+- A binding that omits `accountId` matches only the default account, not every account. Use `accountId: "*"` for a channel-wide fallback, or `accountId: "<name>"` for one account. Adding the same binding again with an explicit account id upgrades the existing channel-only binding instead of duplicating it.
 
-<Steps>
-  <Step title="peer match">
-    Exact DM/group/channel id.
-  </Step>
-  <Step title="parentPeer match">
-    Thread inheritance.
-  </Step>
-  <Step title="guildId + roles">
-    Discord role routing.
-  </Step>
-  <Step title="guildId">
-    Discord.
-  </Step>
-  <Step title="teamId">
-    Slack.
-  </Step>
-  <Step title="accountId match for a channel">
-    Per-account fallback.
-  </Step>
-  <Step title="Channel-level match">
-    `accountId: "*"`.
-  </Step>
-  <Step title="Default agent">
-    Fallback to `agents.list[].default`, else first list entry, default: `main`.
-  </Step>
-</Steps>
+For existing multi-agent configs, `openclaw doctor --fix` materializes legacy ambient default routing into channel-wide bindings plus explicit heartbeat, Custodian, and Talk targets. Single-agent configs are unchanged.
 
-<AccordionGroup>
-  <Accordion title="Tie-breaking and AND semantics">
-    - If multiple bindings match in the same tier, the first one in config order wins.
-    - If a binding sets multiple match fields (for example `peer` + `guildId`), all specified fields are required (`AND` semantics).
+For a multi-agent roster defined directly in the main config file without a
+legacy `default: true` marker, Doctor adds `agents.ownership: "explicit"` for
+both keyed `agents.entries` and older `agents.list` rosters, including with
+`--fix --non-interactive`. Existing bindings and per-surface owners remain
+unchanged; Doctor does not choose an agent for unowned surfaces.
 
-  </Accordion>
-  <Accordion title="Account-scope detail">
-    - A binding that omits `accountId` matches the default account only.
-    - Use `accountId: "*"` for a channel-wide fallback across all accounts.
-    - If you later add the same binding for the same agent with an explicit account id, OpenClaw upgrades the existing channel-only binding to account-scoped instead of duplicating it.
-
-  </Accordion>
-</AccordionGroup>
+When migrating a legacy `agents.list` roster without a default marker, Doctor
+also pins the first agent's inherited workspace to `agents.entries.<id>.workspace`. Its customized instructions
+and historical `memory/` notes remain in their original directory. Explicit
+workspaces stay authoritative. If an earlier upgrade already left two edited
+workspaces, select the intended per-agent workspace and reconcile their contents
+from your backups; Doctor does not merge directories.
 
 ## Multiple accounts / phone numbers
 
-Channels that support **multiple accounts** (e.g. WhatsApp) use `accountId` to identify each login. Each `accountId` can be routed to a different agent, so one server can host multiple phone numbers without mixing sessions.
+Channels that support multiple accounts (e.g. WhatsApp) use `accountId` to identify each login. Each `accountId` routes to its own agent, so one server can host multiple phone numbers without mixing sessions.
 
-If you want a channel-wide default account when `accountId` is omitted, set `channels.<channel>.defaultAccount` (optional). When unset, OpenClaw falls back to `default` if present, otherwise the first configured account id (sorted).
+Set `channels.<channel>.defaultAccount` to choose the account used when `accountId` is omitted. When unset, OpenClaw falls back to `default` if present, otherwise the first configured account id (sorted).
 
-Common channels supporting this pattern include:
-
-- `whatsapp`, `telegram`, `discord`, `slack`, `signal`, `imessage`
-- `irc`, `line`, `googlechat`, `mattermost`, `matrix`, `nextcloud-talk`
-- `zalo`, `zalouser`, `nostr`, `feishu`
+Channels supporting multiple accounts: `discord`, `feishu`, `googlechat`, `imessage`, `irc`, `line`, `mattermost`, `matrix`, `nextcloud-talk`, `nostr`, `signal`, `slack`, `telegram`, `whatsapp`, `zalo`, `zalouser`.
 
 ## Concepts
 
 - `agentId`: one "brain" (workspace, per-agent auth, per-agent session store).
-- `accountId`: one channel account instance (e.g. WhatsApp account `"personal"` vs `"biz"`).
-- `binding`: routes inbound messages to an `agentId` by `(channel, accountId, peer)` and optionally guild/team ids.
-- Direct chats collapse to `agent:<agentId>:<mainKey>` (per-agent "main"; `session.mainKey`).
+- `accountId`: one channel account instance (e.g. WhatsApp account `personal` vs `biz`).
+- `binding`: routes inbound messages to an `agentId` by `(channel, accountId, peer)`, and optionally guild/team ids.
+- Direct chats collapse to `agent:<agentId>:main` by default (the per-agent [main session](/concepts/main-session)).
 
 ## Platform examples
 
@@ -280,10 +271,10 @@ Common channels supporting this pattern include:
     ```json5
     {
       agents: {
-        list: [
-          { id: "main", workspace: "~/.openclaw/workspace-main" },
-          { id: "coding", workspace: "~/.openclaw/workspace-coding" },
-        ],
+        entries: {
+          main: { default: true, workspace: "~/.openclaw/workspace-main" },
+          coding: { workspace: "~/.openclaw/workspace-coding" },
+        },
       },
       bindings: [
         { agentId: "main", match: { channel: "discord", accountId: "default" } },
@@ -298,7 +289,7 @@ Common channels supporting this pattern include:
               guilds: {
                 "123456789012345678": {
                   channels: {
-                    "222222222222222222": { allow: true, requireMention: false },
+                    "222222222222222222": { enabled: true, requireMention: false },
                   },
                 },
               },
@@ -308,7 +299,7 @@ Common channels supporting this pattern include:
               guilds: {
                 "123456789012345678": {
                   channels: {
-                    "333333333333333333": { allow: true, requireMention: false },
+                    "333333333333333333": { enabled: true, requireMention: false },
                   },
                 },
               },
@@ -327,10 +318,10 @@ Common channels supporting this pattern include:
     ```json5
     {
       agents: {
-        list: [
-          { id: "main", workspace: "~/.openclaw/workspace-main" },
-          { id: "alerts", workspace: "~/.openclaw/workspace-alerts" },
-        ],
+        entries: {
+          main: { default: true, workspace: "~/.openclaw/workspace-main" },
+          alerts: { workspace: "~/.openclaw/workspace-alerts" },
+        },
       },
       bindings: [
         { agentId: "main", match: { channel: "telegram", accountId: "default" } },
@@ -356,6 +347,11 @@ Common channels supporting this pattern include:
 
     - Create one bot per agent with BotFather and copy each token.
     - Tokens live in `channels.telegram.accounts.<id>.botToken` (default account can use `TELEGRAM_BOT_TOKEN`).
+    - For multiple bots in the same Telegram group, invite each bot and mention the one that should answer.
+    - Disable BotFather Privacy Mode for each group bot (`/setprivacy` -> Disable), then remove and re-add the bot so Telegram applies the setting.
+    - Allow groups with `channels.telegram.groups`, or use `groupPolicy: "open"` only for trusted group deployments.
+    - Put sender user IDs in `groupAllowFrom`. Group and supergroup IDs belong in `channels.telegram.groups`, not `groupAllowFrom`.
+    - Bind by `accountId` so each bot routes to its own agent.
 
   </Accordion>
   <Accordion title="WhatsApp numbers per agent">
@@ -371,21 +367,19 @@ Common channels supporting this pattern include:
     ```js
     {
       agents: {
-        list: [
-          {
-            id: "home",
+        entries: {
+          home: {
             default: true,
             name: "Home",
             workspace: "~/.openclaw/workspace-home",
             agentDir: "~/.openclaw/agents/home/agent",
           },
-          {
-            id: "work",
+          work: {
             name: "Work",
             workspace: "~/.openclaw/workspace-work",
             agentDir: "~/.openclaw/agents/work/agent",
           },
-        ],
+        },
       },
 
       // Deterministic routing: first match wins (most-specific first).
@@ -441,32 +435,28 @@ Common channels supporting this pattern include:
     ```json5
     {
       agents: {
-        list: [
-          {
-            id: "chat",
+        entries: {
+          chat: {
+            default: true,
             name: "Everyday",
             workspace: "~/.openclaw/workspace-chat",
             model: "anthropic/claude-sonnet-4-6",
           },
-          {
-            id: "opus",
+          opus: {
             name: "Deep Work",
             workspace: "~/.openclaw/workspace-opus",
             model: "anthropic/claude-opus-4-6",
           },
-        ],
+        },
       },
       bindings: [
-        { agentId: "chat", match: { channel: "whatsapp" } },
-        { agentId: "opus", match: { channel: "telegram" } },
+        { agentId: "chat", match: { channel: "whatsapp", accountId: "*" } },
+        { agentId: "opus", match: { channel: "telegram", accountId: "*" } },
       ],
     }
     ```
 
-    Notes:
-
-    - If you have multiple accounts for a channel, add `accountId` to the binding (for example `{ channel: "whatsapp", accountId: "personal" }`).
-    - To route a single DM/group to Opus while keeping the rest on chat, add a `match.peer` binding for that peer; peer matches always win over channel-wide rules.
+    These examples use `accountId: "*"` so the bindings keep working if you add accounts later. To route a single DM/group to Opus while keeping the rest on chat, add a `match.peer` binding for that peer — peer matches always win over channel-wide rules.
 
   </Tab>
   <Tab title="Same channel, one peer to Opus">
@@ -475,27 +465,26 @@ Common channels supporting this pattern include:
     ```json5
     {
       agents: {
-        list: [
-          {
-            id: "chat",
+        entries: {
+          chat: {
+            default: true,
             name: "Everyday",
             workspace: "~/.openclaw/workspace-chat",
             model: "anthropic/claude-sonnet-4-6",
           },
-          {
-            id: "opus",
+          opus: {
             name: "Deep Work",
             workspace: "~/.openclaw/workspace-opus",
             model: "anthropic/claude-opus-4-6",
           },
-        ],
+        },
       },
       bindings: [
         {
           agentId: "opus",
-          match: { channel: "whatsapp", peer: { kind: "direct", id: "+15551234567" } },
+          match: { channel: "whatsapp", accountId: "*", peer: { kind: "direct", id: "+15551234567" } },
         },
-        { agentId: "chat", match: { channel: "whatsapp" } },
+        { agentId: "chat", match: { channel: "whatsapp", accountId: "*" } },
       ],
     }
     ```
@@ -509,9 +498,9 @@ Common channels supporting this pattern include:
     ```json5
     {
       agents: {
-        list: [
-          {
-            id: "family",
+        entries: {
+          family: {
+            default: true,
             name: "Family",
             workspace: "~/.openclaw/workspace-family",
             identity: { name: "Family Bot" },
@@ -535,7 +524,7 @@ Common channels supporting this pattern include:
               deny: ["write", "edit", "apply_patch", "browser", "canvas", "nodes", "cron"],
             },
           },
-        ],
+        },
       },
       bindings: [
         {
@@ -549,10 +538,7 @@ Common channels supporting this pattern include:
     }
     ```
 
-    Notes:
-
-    - Tool allow/deny lists are **tools**, not skills. If a skill needs to run a binary, ensure `exec` is allowed and the binary exists in the sandbox.
-    - For stricter gating, set `agents.list[].groupChat.mentionPatterns` and keep group allowlists enabled for the channel.
+    Tool allow/deny lists are **tools**, not skills. If a skill needs to run a binary, ensure `exec` is allowed and the binary exists in the sandbox. For stricter gating, set `agents.entries.*.groupChat.mentionPatterns` and keep group allowlists enabled for the channel.
 
   </Tab>
 </Tabs>
@@ -564,17 +550,16 @@ Each agent can have its own sandbox and tool restrictions:
 ```js
 {
   agents: {
-    list: [
-      {
-        id: "personal",
+    entries: {
+      personal: {
+        default: true,
         workspace: "~/.openclaw/workspace-personal",
         sandbox: {
           mode: "off",  // No sandbox for personal agent
         },
         // No tool restrictions - all tools available
       },
-      {
-        id: "family",
+      family: {
         workspace: "~/.openclaw/workspace-family",
         sandbox: {
           mode: "all",     // Always sandboxed
@@ -589,7 +574,7 @@ Each agent can have its own sandbox and tool restrictions:
           deny: ["exec", "write", "edit", "apply_patch"],    // Deny others
         },
       },
-    ],
+    },
   },
 }
 ```
@@ -598,14 +583,14 @@ Each agent can have its own sandbox and tool restrictions:
 `setupCommand` lives under `sandbox.docker` and runs once on container creation. Per-agent `sandbox.docker.*` overrides are ignored when the resolved scope is `"shared"`.
 </Note>
 
-**Benefits:**
+This gives you:
 
 - **Security isolation**: restrict tools for untrusted agents.
 - **Resource control**: sandbox specific agents while keeping others on host.
 - **Flexible policies**: different permissions per agent.
 
 <Note>
-`tools.elevated` is **global** and sender-based; it is not configurable per agent. If you need per-agent boundaries, use `agents.list[].tools` to deny `exec`. For group targeting, use `agents.list[].groupChat.mentionPatterns` so @mentions map cleanly to the intended agent.
+`tools.elevated` has both a global gate (`tools.elevated.enabled`/`allowFrom`) and a per-agent gate (`agents.entries.*.tools.elevated.enabled`/`allowFrom`). The per-agent gate can only further restrict the global one — both must allow a sender for elevated commands to run. For group targeting, use `agents.entries.*.groupChat.mentionPatterns` so @mentions map cleanly to the intended agent.
 </Note>
 
 See [Multi-agent sandbox and tools](/tools/multi-agent-sandbox-tools) for detailed examples.

@@ -1,3 +1,4 @@
+// Discord helper module supports native command helpers behavior.
 import { ChannelType } from "discord-api-types/v10";
 import { vi } from "vitest";
 
@@ -11,7 +12,9 @@ export type MockCommandInteraction = {
     getNumber: ReturnType<typeof vi.fn>;
     getBoolean: ReturnType<typeof vi.fn>;
   };
+  responseState: "unacknowledged" | "deferred" | "deferred-update" | "replied";
   defer: ReturnType<typeof vi.fn>;
+  deleteReply: ReturnType<typeof vi.fn>;
   reply: ReturnType<typeof vi.fn>;
   followUp: ReturnType<typeof vi.fn>;
   client: object;
@@ -35,7 +38,7 @@ export function createMockCommandInteraction(
   const guildId = params.guildId;
   const guild =
     guildId === null || guildId === undefined ? null : { id: guildId, name: params.guildName };
-  return {
+  const interaction: MockCommandInteraction = {
     user: {
       id: params.userId ?? "owner",
       username: params.username ?? "tester",
@@ -56,9 +59,16 @@ export function createMockCommandInteraction(
       getNumber: vi.fn().mockReturnValue(null),
       getBoolean: vi.fn().mockReturnValue(null),
     },
-    defer: vi.fn().mockResolvedValue(undefined),
+    responseState: "unacknowledged",
+    defer: vi.fn(async () => {
+      interaction.responseState = "deferred";
+    }),
+    deleteReply: vi.fn(async () => {
+      interaction.responseState = "replied";
+    }),
     reply: vi.fn().mockResolvedValue({ ok: true }),
     followUp: vi.fn().mockResolvedValue({ ok: true }),
     client: {},
   };
+  return interaction;
 }

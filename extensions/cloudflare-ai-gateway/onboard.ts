@@ -1,3 +1,7 @@
+/**
+ * Config patch helpers used by Cloudflare AI Gateway interactive and
+ * non-interactive onboarding flows.
+ */
 import {
   applyAgentDefaultModelPrimary,
   applyProviderConfigWithDefaultModel,
@@ -9,6 +13,9 @@ import {
   resolveCloudflareAiGatewayBaseUrl,
 } from "./models.js";
 
+/**
+ * Builds the minimal config patch for provider setup and default model aliasing.
+ */
 export function buildCloudflareAiGatewayConfigPatch(params: {
   accountId: string;
   gatewayId: string;
@@ -36,6 +43,9 @@ export function buildCloudflareAiGatewayConfigPatch(params: {
   };
 }
 
+/**
+ * Applies provider model config while preserving existing agent model aliases.
+ */
 export function applyCloudflareAiGatewayProviderConfig(
   cfg: OpenClawConfig,
   params?: { accountId?: string; gatewayId?: string },
@@ -80,6 +90,9 @@ export function applyCloudflareAiGatewayProviderConfig(
   });
 }
 
+/**
+ * Applies Cloudflare AI Gateway config and makes its default model primary.
+ */
 export function applyCloudflareAiGatewayConfig(
   cfg: OpenClawConfig,
   params?: { accountId?: string; gatewayId?: string },

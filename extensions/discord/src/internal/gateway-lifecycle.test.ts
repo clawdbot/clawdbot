@@ -1,3 +1,4 @@
+// Discord tests cover gateway lifecycle plugin behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { GatewayHeartbeatTimers } from "./gateway-lifecycle.js";
 

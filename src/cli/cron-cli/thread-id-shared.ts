@@ -1,14 +1,15 @@
+// Cron CLI parsing helpers for Telegram topic thread ids and session targets.
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
-} from "../../shared/string-coerce.js";
+} from "@openclaw/normalization-core/string-coerce";
 
 export function parseCronThreadIdOption(value: unknown): number | undefined {
-  const raw = normalizeOptionalString(value);
-  if (!raw) {
+  if (typeof value !== "string") {
     return undefined;
   }
-  if (!/^\d+$/.test(raw)) {
+  const raw = normalizeOptionalString(value);
+  if (!raw || !/^\d+$/.test(raw)) {
     throw new Error("--thread-id must be a positive integer Telegram topic thread id");
   }
   const parsed = Number.parseInt(raw, 10);
@@ -19,6 +20,7 @@ export function parseCronThreadIdOption(value: unknown): number | undefined {
 }
 
 export function normalizeCronSessionTargetOption(value: unknown): string | undefined {
+  // Preserve explicit session ids after `session:` while normalizing the mode prefix.
   const raw = normalizeOptionalString(value);
   if (!raw) {
     return undefined;

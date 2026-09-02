@@ -14,9 +14,9 @@ on:
         required: true
         type: string
       baselines:
-        description: Published baselines to migrate; use all-since-2026.4.23 for full coverage
-        default: all-since-2026.4.23
-        required: true
+        description: Optional historical baselines; blank uses latest stable, all-since-2026.4.23 replays history
+        default: ""
+        required: false
         type: string
       scenarios:
         description: Update survivor scenarios
@@ -27,7 +27,7 @@ on:
 permissions:
   actions: read
   contents: read
-  packages: write
+  packages: read
   pull-requests: read
 
 jobs:
@@ -42,5 +42,7 @@ jobs:
       docker_lanes: update-migration
       published_upgrade_survivor_baselines: ${{ inputs.baselines }}
       published_upgrade_survivor_scenarios: ${{ inputs.scenarios }}
+      shared_image_artifact_namespace: update-migration
+      shared_image_policy: no-push-artifact
       telegram_mode: none
-    secrets: inherit
+    secrets: inherit # zizmor: ignore[secrets-inherit] Maintainer-dispatched package acceptance lane intentionally forwards its declared live-test secret matrix.

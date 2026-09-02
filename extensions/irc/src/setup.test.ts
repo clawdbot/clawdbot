@@ -1,3 +1,4 @@
+// Irc tests cover setup plugin behavior.
 import {
   expectStopPendingUntilAbort,
   startAccountAndTrackLifecycle,
@@ -18,7 +19,7 @@ import {
   type ResolvedIrcAccount,
 } from "./accounts.js";
 import { startIrcGatewayAccount } from "./gateway.js";
-import { clearIrcRuntime, setIrcRuntime } from "./runtime.js";
+import { setIrcRuntime } from "./runtime.js";
 import {
   ircSetupAdapter,
   parsePort,
@@ -104,7 +105,6 @@ function installIrcRuntime() {
 describe("irc setup", () => {
   afterEach(() => {
     vi.clearAllMocks();
-    clearIrcRuntime();
   });
 
   it("parses valid ports and falls back for invalid values", () => {
@@ -118,15 +118,16 @@ describe("irc setup", () => {
   it("updates top-level dm policy and allowlist", () => {
     const cfg: CoreConfig = { channels: { irc: {} } };
 
-    expect(setIrcDmPolicy(cfg, "open")).toMatchObject({
+    expect(setIrcDmPolicy(cfg, "open")).toStrictEqual({
       channels: {
         irc: {
           dmPolicy: "open",
+          allowFrom: ["*"],
         },
       },
     });
 
-    expect(setIrcAllowFrom(cfg, ["alice", "bob"])).toMatchObject({
+    expect(setIrcAllowFrom(cfg, ["alice", "bob"])).toStrictEqual({
       channels: {
         irc: {
           allowFrom: ["alice", "bob"],
@@ -195,7 +196,7 @@ describe("irc setup", () => {
         enabled: true,
         service: "NickServ",
       }),
-    ).toMatchObject({
+    ).toStrictEqual({
       channels: {
         irc: {
           accounts: {
@@ -215,7 +216,7 @@ describe("irc setup", () => {
         host: "irc.libera.chat",
         nick: "openclaw-work",
       }),
-    ).toMatchObject({
+    ).toStrictEqual({
       channels: {
         irc: {
           accounts: {
@@ -249,7 +250,7 @@ describe("irc setup", () => {
           return trimmed.startsWith("#") ? trimmed : `#${trimmed}`;
         },
       ),
-    ).toMatchObject({
+    ).toStrictEqual({
       channels: {
         irc: {
           enabled: true,
@@ -263,7 +264,7 @@ describe("irc setup", () => {
       },
     });
 
-    expect(setIrcGroupAccess(cfg, "default", "disabled", [], () => null)).toMatchObject({
+    expect(setIrcGroupAccess(cfg, "default", "disabled", [], () => null)).toStrictEqual({
       channels: {
         irc: {
           enabled: true,
@@ -278,24 +279,45 @@ describe("irc setup", () => {
     const applyAccountConfig = ircSetupAdapter.applyAccountConfig;
     expect(validateInput).toBeTypeOf("function");
     expect(applyAccountConfig).toBeTypeOf("function");
+    if (!validateInput) {
+      throw new Error("Expected IRC setup validateInput");
+    }
 
     expect(
-      validateInput!({
+      validateInput({
         input: { host: "", nick: "openclaw" },
       } as never),
     ).toBe("IRC requires host.");
 
     expect(
-      validateInput!({
+      validateInput({
         input: { host: "irc.libera.chat", nick: "" },
       } as never),
     ).toBe("IRC requires nick.");
 
     expect(
-      validateInput!({
+      validateInput({
         input: { host: "irc.libera.chat", nick: "openclaw" },
       } as never),
     ).toBeNull();
+
+    expect(
+      validateInput({
+        input: { host: "irc.libera.chat", nick: "openclaw", port: "+07000" },
+      } as never),
+    ).toBeNull();
+
+    expect(
+      validateInput({
+        input: { host: "irc.libera.chat", nick: "openclaw", port: "7000x" },
+      } as never),
+    ).toBe("IRC port must be between 1 and 65535.");
+
+    expect(
+      validateInput({
+        input: { host: "irc.libera.chat", nick: "openclaw", port: "70000" },
+      } as never),
+    ).toBe("IRC port must be between 1 and 65535.");
 
     expect(
       applyAccountConfig({
@@ -383,6 +405,17 @@ describe("irc setup", () => {
     expect(result.cfg.channels?.irc?.channels).toEqual(["#openclaw", "#ops"]);
     expect(result.cfg.channels?.irc?.groupPolicy).toBe("allowlist");
     expect(Object.keys(result.cfg.channels?.irc?.groups ?? {})).toEqual(["#openclaw", "#ops"]);
+  });
+
+  it("rejects partial IRC setup wizard ports", async () => {
+    const portPrompt = ircSetupWizard.textInputs?.find((step) => step.inputKey === "httpPort");
+    if (!portPrompt?.validate) {
+      throw new Error("expected IRC port prompt validator");
+    }
+
+    expect(portPrompt.validate({ value: "7000x" } as never)).toBe("Use a port between 1 and 65535");
+    expect(portPrompt.validate({ value: "+07000" } as never)).toBeUndefined();
+    expect(portPrompt.validate({ value: "7000" } as never)).toBeUndefined();
   });
 
   it("writes DM allowFrom to top-level config for non-default account prompts", async () => {

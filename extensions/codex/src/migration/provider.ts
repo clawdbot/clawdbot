@@ -1,11 +1,18 @@
+// Codex provider module implements model/runtime integration.
 import type {
   MigrationPlan,
   MigrationProviderContext,
   MigrationProviderPlugin,
 } from "openclaw/plugin-sdk/plugin-entry";
-import { applyCodexMigrationPlan } from "./apply.js";
+import { applyCodexMigrationPlan, prepareTargetCodexAppServer } from "./apply.js";
 import { buildCodexMigrationPlan } from "./plan.js";
 import { discoverCodexSource, hasCodexSource } from "./source.js";
+
+function isMemoryOnlyMigration(ctx: MigrationProviderContext): boolean {
+  return Boolean(
+    ctx.itemKinds && ctx.itemKinds.length > 0 && ctx.itemKinds.every((kind) => kind === "memory"),
+  );
+}
 
 export function buildCodexMigrationProvider(
   params: {
@@ -16,10 +23,15 @@ export function buildCodexMigrationProvider(
     id: "codex",
     label: "Codex",
     description:
-      "Inventory and promote Codex CLI skills while keeping Codex native plugins and hooks explicit.",
+      "Import Codex memory and skills while keeping Codex native plugins and hooks explicit.",
+    supportedItemKinds: ["memory"],
     async detect(ctx) {
-      const source = await discoverCodexSource(ctx.source);
-      const found = hasCodexSource(source);
+      const source = await discoverCodexSource({
+        input: ctx.source,
+        memoryOnly: isMemoryOnlyMigration(ctx),
+      });
+      const memoryOnly = isMemoryOnlyMigration(ctx);
+      const found = memoryOnly ? source.memoryFiles.length > 0 : hasCodexSource(source);
       return {
         found,
         source: source.root,
@@ -29,6 +41,13 @@ export function buildCodexMigrationProvider(
       };
     },
     plan: buildCodexMigrationPlan,
+    deferredApply: { retrySafe: true },
+    prepareApply(ctx) {
+      if (isMemoryOnlyMigration(ctx)) {
+        return undefined;
+      }
+      return prepareTargetCodexAppServer(ctx);
+    },
     async apply(ctx, plan?: MigrationPlan) {
       return await applyCodexMigrationPlan({ ctx, plan, runtime: params.runtime });
     },

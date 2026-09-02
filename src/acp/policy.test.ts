@@ -1,13 +1,11 @@
+/** Tests ACP policy gates for enablement, dispatch, and allowed agents. */
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import {
-  isAcpAgentAllowedByPolicy,
-  isAcpDispatchEnabledByPolicy,
   isAcpEnabledByPolicy,
   resolveAcpAgentPolicyError,
   resolveAcpDispatchPolicyError,
   resolveAcpDispatchPolicyMessage,
-  resolveAcpDispatchPolicyState,
   resolveAcpExplicitTurnPolicyError,
 } from "./policy.js";
 
@@ -15,8 +13,8 @@ describe("acp policy", () => {
   it("treats ACP + ACP dispatch as enabled by default", () => {
     const cfg = {} satisfies OpenClawConfig;
     expect(isAcpEnabledByPolicy(cfg)).toBe(true);
-    expect(isAcpDispatchEnabledByPolicy(cfg)).toBe(true);
-    expect(resolveAcpDispatchPolicyState(cfg)).toBe("enabled");
+    expect(resolveAcpDispatchPolicyMessage(cfg)).toBeNull();
+    expect(resolveAcpDispatchPolicyError(cfg)).toBeNull();
   });
 
   it("reports ACP disabled state when acp.enabled is false", () => {
@@ -26,8 +24,9 @@ describe("acp policy", () => {
       },
     } satisfies OpenClawConfig;
     expect(isAcpEnabledByPolicy(cfg)).toBe(false);
-    expect(resolveAcpDispatchPolicyState(cfg)).toBe("acp_disabled");
-    expect(resolveAcpDispatchPolicyMessage(cfg)).toContain("acp.enabled=false");
+    expect(resolveAcpDispatchPolicyMessage(cfg)).toBe(
+      "ACP is disabled by policy (`acp.enabled=false`).",
+    );
     expect(resolveAcpDispatchPolicyError(cfg)?.code).toBe("ACP_DISPATCH_DISABLED");
   });
 
@@ -40,9 +39,9 @@ describe("acp policy", () => {
         },
       },
     } satisfies OpenClawConfig;
-    expect(isAcpDispatchEnabledByPolicy(cfg)).toBe(false);
-    expect(resolveAcpDispatchPolicyState(cfg)).toBe("dispatch_disabled");
-    expect(resolveAcpDispatchPolicyMessage(cfg)).toContain("acp.dispatch.enabled=false");
+    expect(resolveAcpDispatchPolicyMessage(cfg)).toBe(
+      "ACP dispatch is disabled by policy (`acp.dispatch.enabled=false`).",
+    );
   });
 
   it("allows explicit ACP turns when only dispatch is disabled", () => {
@@ -67,7 +66,9 @@ describe("acp policy", () => {
         },
       },
     } satisfies OpenClawConfig;
-    expect(resolveAcpExplicitTurnPolicyError(cfg)?.message).toContain("acp.enabled=false");
+    expect(resolveAcpExplicitTurnPolicyError(cfg)?.message).toBe(
+      "ACP is disabled by policy (`acp.enabled=false`).",
+    );
   });
 
   it("applies allowlist filtering for ACP agents", () => {
@@ -76,11 +77,9 @@ describe("acp policy", () => {
         allowedAgents: ["Codex", "claude-code", "kimi"],
       },
     } satisfies OpenClawConfig;
-    expect(isAcpAgentAllowedByPolicy(cfg, "codex")).toBe(true);
-    expect(isAcpAgentAllowedByPolicy(cfg, "claude-code")).toBe(true);
-    expect(isAcpAgentAllowedByPolicy(cfg, "KIMI")).toBe(true);
-    expect(isAcpAgentAllowedByPolicy(cfg, "gemini")).toBe(false);
-    expect(resolveAcpAgentPolicyError(cfg, "gemini")?.code).toBe("ACP_SESSION_INIT_FAILED");
     expect(resolveAcpAgentPolicyError(cfg, "codex")).toBeNull();
+    expect(resolveAcpAgentPolicyError(cfg, "claude-code")).toBeNull();
+    expect(resolveAcpAgentPolicyError(cfg, "KIMI")).toBeNull();
+    expect(resolveAcpAgentPolicyError(cfg, "gemini")?.code).toBe("ACP_SESSION_INIT_FAILED");
   });
 });

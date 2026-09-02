@@ -1,6 +1,7 @@
+// Msteams tests cover reaction handler plugin behavior.
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig, PluginRuntime } from "../../runtime-api.js";
-import type { MSTeamsMessageHandlerDeps } from "../monitor-handler.js";
+import type { MSTeamsMessageHandlerDeps } from "../monitor-handler.types.js";
 import { setMSTeamsRuntime } from "../runtime.js";
 import { createMSTeamsReactionHandler } from "./reaction-handler.js";
 
@@ -32,7 +33,7 @@ function buildDeps(cfg: OpenClawConfig, _runtime?: PluginRuntime): MSTeamsMessag
     cfg,
     runtime: { error: vi.fn() } as unknown as MSTeamsMessageHandlerDeps["runtime"],
     appId: "test-app",
-    adapter: {} as MSTeamsMessageHandlerDeps["adapter"],
+    app: {} as MSTeamsMessageHandlerDeps["app"],
     tokenProvider: { getAccessToken: vi.fn(async () => "token") },
     textLimit: 4000,
     mediaMaxBytes: 1024 * 1024,
@@ -56,7 +57,7 @@ function createReactionTestHarness() {
   setMSTeamsRuntime(mockRuntime);
 
   const cfg: OpenClawConfig = {
-    channels: { msteams: { allowFrom: ["allowed-aad"] } },
+    channels: { msteams: { allowFrom: ["allowed-aad"], groupPolicy: "open" } },
   } as OpenClawConfig;
 
   const deps = buildDeps(cfg, mockRuntime);
@@ -64,6 +65,22 @@ function createReactionTestHarness() {
   const enqueue = mockRuntime.system.enqueueSystemEvent as ReturnType<typeof vi.fn>;
 
   return { handler, enqueue };
+}
+
+function firstEnqueueCall(enqueue: ReturnType<typeof vi.fn>): unknown[] {
+  const [call] = enqueue.mock.calls;
+  if (!call) {
+    throw new Error("Expected enqueueSystemEvent call");
+  }
+  return call;
+}
+
+function firstEnqueueLabel(enqueue: ReturnType<typeof vi.fn>): string {
+  const [label] = firstEnqueueCall(enqueue);
+  if (typeof label !== "string") {
+    throw new Error("Expected enqueueSystemEvent label");
+  }
+  return label;
 }
 
 async function invokeReactionEvent(
@@ -117,7 +134,7 @@ describe("createMSTeamsReactionHandler", () => {
 
       const enqueue = mockRuntime.system.enqueueSystemEvent as ReturnType<typeof vi.fn>;
       expect(enqueue).toHaveBeenCalledOnce();
-      const label: string = enqueue.mock.calls[0][0];
+      const label = firstEnqueueLabel(enqueue);
       expect(label).toContain("👍");
       expect(label).toContain("Alice");
       expect(label).toContain("msg-123");
@@ -158,31 +175,41 @@ describe("createMSTeamsReactionHandler", () => {
         );
 
         const enqueue = mockRuntime.system.enqueueSystemEvent as ReturnType<typeof vi.fn>;
-        const label: string = enqueue.mock.calls[0][0];
+        const label = firstEnqueueLabel(enqueue);
         expect(label).toContain(expectedEmoji);
       }
     });
   });
 
   describe("inbound reaction events", () => {
-    it("enqueues system event for reactionsAdded", async () => {
-      const { handler, enqueue } = createReactionTestHarness();
-      await invokeReactionEvent(
-        handler,
-        {
-          reactionsAdded: [{ type: "like" }],
-          from: { id: "u1", aadObjectId: "allowed-aad", name: "User" },
-          replyToId: "msg-1",
-        },
-        "added",
-      );
+    it.each([
+      { conversationType: "personal", conversationId: "a:dm" },
+      { conversationType: "groupChat", conversationId: "19:g@thread.v2" },
+      { conversationType: "channel", conversationId: "19:c@thread.tacv2" },
+    ] as const)(
+      "enqueues the exact inbound reaction event label for $conversationType conversations",
+      async ({ conversationType, conversationId }) => {
+        const { handler, enqueue } = createReactionTestHarness();
+        await invokeReactionEvent(
+          handler,
+          {
+            reactionsAdded: [{ type: "like" }],
+            from: { id: "u1", aadObjectId: "allowed-aad", name: "User" },
+            conversation: { id: conversationId, conversationType },
+            replyToId: "msg-1",
+          },
+          "added",
+        );
 
-      expect(enqueue).toHaveBeenCalledOnce();
-      const [label, meta] = enqueue.mock.calls[0];
-      expect(label).toContain("added");
-      expect(meta.sessionKey).toBe("test-session");
-      expect(meta.contextKey).toContain("added");
-    });
+        expect(enqueue).toHaveBeenCalledExactlyOnceWith(
+          "Teams reaction 👍 added by User on message msg-1",
+          {
+            sessionKey: "test-session",
+            contextKey: `msteams:reaction:${conversationId}:msg-1:allowed-aad:like:added`,
+          },
+        );
+      },
+    );
 
     it("enqueues system event for reactionsRemoved", async () => {
       const { handler, enqueue } = createReactionTestHarness();
@@ -197,7 +224,7 @@ describe("createMSTeamsReactionHandler", () => {
       );
 
       expect(enqueue).toHaveBeenCalledOnce();
-      const [label] = enqueue.mock.calls[0];
+      const label = firstEnqueueLabel(enqueue);
       expect(label).toContain("removed");
       expect(label).toContain("❤️");
     });
@@ -257,6 +284,39 @@ describe("createMSTeamsReactionHandler", () => {
           reactionsAdded: [{ type: "like" }],
           from: { id: "good-user", aadObjectId: "allowed-aad", name: "Alice" },
           replyToId: "msg-6",
+        },
+        "added",
+      );
+
+      expect(enqueue).toHaveBeenCalledOnce();
+    });
+
+    it("allows reaction from static access group DM sender", async () => {
+      const mockRuntime = buildMockRuntime();
+      setMSTeamsRuntime(mockRuntime);
+      const cfg: OpenClawConfig = {
+        accessGroups: {
+          operators: {
+            type: "message.senders",
+            members: { msteams: ["allowed-aad"] },
+          },
+        },
+        channels: {
+          msteams: {
+            dmPolicy: "allowlist",
+            allowFrom: ["accessGroup:operators"],
+          },
+        },
+      } as OpenClawConfig;
+      const handler = createMSTeamsReactionHandler(buildDeps(cfg, mockRuntime));
+      const enqueue = mockRuntime.system.enqueueSystemEvent as ReturnType<typeof vi.fn>;
+
+      await invokeReactionEvent(
+        handler,
+        {
+          reactionsAdded: [{ type: "like" }],
+          from: { id: "good-user", aadObjectId: "allowed-aad", name: "Alice" },
+          replyToId: "msg-7",
         },
         "added",
       );

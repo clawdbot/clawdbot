@@ -1,19 +1,64 @@
-import { afterEach, describe, expect, it } from "vitest";
+// Covers managed task-flow audit summaries and stale-flow classification.
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { captureEnv } from "../test-utils/env.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { createRunningTaskRun } from "./task-executor.js";
-import { listTaskFlowAuditFindings } from "./task-flow-registry.audit.js";
+import { SUBAGENT_KILL_TASK_ERROR } from "./detached-task-runtime-contract.js";
 import {
-  createManagedTaskFlow,
-  resetTaskFlowRegistryForTests,
+  createRunningTaskRunCore as createRunningTaskRunOrNull,
+  finalizeTaskRunByRunIdCore as finalizeTaskRunByRunId,
+} from "./task-executor.js";
+import { listTaskFlowAuditFindings } from "./task-flow-registry.audit.js";
+import type { TaskFlowAuditCode, TaskFlowAuditFinding } from "./task-flow-registry.audit.types.js";
+import {
+  createManagedTaskFlow as createManagedTaskFlowOrNull,
+  requestFlowCancel,
   setFlowWaiting,
 } from "./task-flow-registry.js";
-import { configureTaskFlowRegistryRuntime } from "./task-flow-registry.store.js";
+import type { TaskFlowRecord } from "./task-flow-registry.types.js";
+import type { TaskRecord } from "./task-registry.types.js";
 import {
+  configureTaskFlowRegistryRuntime,
   resetTaskRegistryDeliveryRuntimeForTests,
   resetTaskRegistryForTests,
-} from "./task-registry.js";
+  resetTaskFlowRegistryForTests,
+} from "./task-runtime.test-helpers.js";
 
-const ORIGINAL_STATE_DIR = process.env.OPENCLAW_STATE_DIR;
+const ORIGINAL_ENV = captureEnv(["OPENCLAW_STATE_DIR"]);
+
+function createManagedTaskFlow(
+  params: Parameters<typeof createManagedTaskFlowOrNull>[0],
+): TaskFlowRecord {
+  const flow = createManagedTaskFlowOrNull(params);
+  if (!flow) {
+    throw new Error("expected managed TaskFlow creation to succeed");
+  }
+  return flow;
+}
+
+function createRunningTaskRun(
+  params: Parameters<typeof createRunningTaskRunOrNull>[0],
+): TaskRecord {
+  const task = createRunningTaskRunOrNull(params);
+  if (!task) {
+    throw new Error("expected running task creation to succeed");
+  }
+  return task;
+}
+
+function requireFinding(
+  findings: TaskFlowAuditFinding[],
+  code: TaskFlowAuditCode,
+  flowId?: string,
+): TaskFlowAuditFinding {
+  const finding = findings.find(
+    (candidate) =>
+      candidate.code === code && (flowId === undefined || candidate.flow?.flowId === flowId),
+  );
+  if (!finding) {
+    throw new Error(`Expected ${code} finding${flowId ? ` for ${flowId}` : ""}`);
+  }
+  return finding;
+}
 
 async function withTaskFlowAuditStateDir(run: (root: string) => Promise<void>): Promise<void> {
   await withOpenClawTestState(
@@ -23,14 +68,14 @@ async function withTaskFlowAuditStateDir(run: (root: string) => Promise<void>): 
     },
     async (state) => {
       resetTaskRegistryDeliveryRuntimeForTests();
-      resetTaskRegistryForTests();
-      resetTaskFlowRegistryForTests();
+      resetTaskRegistryForTests({ persist: false });
+      resetTaskFlowRegistryForTests({ persist: false });
       try {
         await run(state.stateDir);
       } finally {
         resetTaskRegistryDeliveryRuntimeForTests();
-        resetTaskRegistryForTests();
-        resetTaskFlowRegistryForTests();
+        resetTaskRegistryForTests({ persist: false });
+        resetTaskFlowRegistryForTests({ persist: false });
       }
     },
   );
@@ -38,33 +83,31 @@ async function withTaskFlowAuditStateDir(run: (root: string) => Promise<void>): 
 
 describe("task-flow-registry audit", () => {
   afterEach(() => {
-    if (ORIGINAL_STATE_DIR === undefined) {
-      delete process.env.OPENCLAW_STATE_DIR;
-    } else {
-      process.env.OPENCLAW_STATE_DIR = ORIGINAL_STATE_DIR;
-    }
+    ORIGINAL_ENV.restore();
     resetTaskRegistryDeliveryRuntimeForTests();
-    resetTaskRegistryForTests();
-    resetTaskFlowRegistryForTests();
+    resetTaskRegistryForTests({ persist: false });
+    resetTaskFlowRegistryForTests({ persist: false });
   });
 
   it("surfaces restore failures as task-flow audit findings", () => {
+    const loadSnapshot = vi.fn(() => {
+      throw new Error("boom");
+    });
     configureTaskFlowRegistryRuntime({
       store: {
-        loadSnapshot: () => {
-          throw new Error("boom");
-        },
+        loadSnapshot,
         saveSnapshot: () => {},
       },
     });
 
-    expect(listTaskFlowAuditFindings()).toEqual([
-      expect.objectContaining({
-        severity: "error",
-        code: "restore_failed",
-        detail: expect.stringContaining("boom"),
-      }),
-    ]);
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const findings = listTaskFlowAuditFindings();
+      expect(findings).toHaveLength(1);
+      expect(findings[0]?.severity).toBe("error");
+      expect(findings[0]?.code).toBe("restore_failed");
+      expect(findings[0]?.detail).toContain("boom");
+    }
+    expect(loadSnapshot).toHaveBeenCalledTimes(1);
   });
 
   it("clears restore-failed findings after a clean reset and restore", () => {
@@ -77,11 +120,9 @@ describe("task-flow-registry audit", () => {
       },
     });
 
-    expect(listTaskFlowAuditFindings()).toEqual([
-      expect.objectContaining({
-        code: "restore_failed",
-      }),
-    ]);
+    const findings = listTaskFlowAuditFindings();
+    expect(findings).toHaveLength(1);
+    expect(findings[0]?.code).toBe("restore_failed");
 
     resetTaskFlowRegistryForTests({ persist: false });
     configureTaskFlowRegistryRuntime({
@@ -93,7 +134,7 @@ describe("task-flow-registry audit", () => {
       },
     });
 
-    expect(listTaskFlowAuditFindings()).toEqual([]);
+    expect(listTaskFlowAuditFindings()).toStrictEqual([]);
   });
 
   it("detects stuck managed flows and missing blocked tasks", async () => {
@@ -124,17 +165,11 @@ describe("task-flow-registry audit", () => {
       });
 
       const findings = listTaskFlowAuditFindings({ now: 31 * 60_000 });
-      expect(findings).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({
-            code: "missing_linked_tasks",
-            flow: expect.objectContaining({ flowId: running.flowId }),
-          }),
-          expect.objectContaining({
-            code: "blocked_task_missing",
-            flow: expect.objectContaining({ flowId: blocked.flowId }),
-          }),
-        ]),
+      expect(requireFinding(findings, "missing_linked_tasks", running.flowId).flow?.flowId).toBe(
+        running.flowId,
+      );
+      expect(requireFinding(findings, "blocked_task_missing", blocked.flowId).flow?.flowId).toBe(
+        blocked.flowId,
       );
     });
   });
@@ -162,14 +197,13 @@ describe("task-flow-registry audit", () => {
         lastEventAt: 1,
       });
 
-      expect(listTaskFlowAuditFindings({ now: 31 * 60_000 })).not.toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({
-            code: "missing_linked_tasks",
-            flow: expect.objectContaining({ flowId: flow.flowId }),
-          }),
-        ]),
-      );
+      const findings = listTaskFlowAuditFindings({ now: 31 * 60_000 });
+      expect(
+        findings.some(
+          (finding) =>
+            finding.code === "missing_linked_tasks" && finding.flow?.flowId === flow.flowId,
+        ),
+      ).toBe(false);
     });
   });
 
@@ -191,15 +225,30 @@ describe("task-flow-registry audit", () => {
         ),
       ).toBeUndefined();
 
-      expect(listTaskFlowAuditFindings({ now: now + 26 * 60_000 })).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({
-            code: "missing_linked_tasks",
-            flow: expect.objectContaining({ flowId: flow.flowId }),
-          }),
-        ]),
+      const staleFindings = listTaskFlowAuditFindings({ now: now + 26 * 60_000 });
+      expect(requireFinding(staleFindings, "missing_linked_tasks", flow.flowId).flow?.flowId).toBe(
+        flow.flowId,
       );
     });
+  });
+
+  it("does not flag retained terminal blocked flows after their task is pruned", () => {
+    const now = 60 * 60_000;
+    const flow: TaskFlowRecord = {
+      flowId: "flow-terminal-blocked",
+      syncMode: "task_mirrored",
+      ownerKey: "agent:main:main",
+      revision: 0,
+      status: "blocked",
+      notifyPolicy: "done_only",
+      goal: "Historical blocked task",
+      blockedTaskId: "task-pruned",
+      createdAt: 1,
+      updatedAt: 100,
+      endedAt: 100,
+    };
+
+    expect(listTaskFlowAuditFindings({ flows: [flow], now })).toStrictEqual([]);
   });
 
   it("reports cancel-stuck before maintenance finalizes the flow", async () => {
@@ -214,14 +263,54 @@ describe("task-flow-registry audit", () => {
         updatedAt: 100,
       });
 
-      expect(listTaskFlowAuditFindings({ now: 6 * 60_000 })).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({
-            code: "cancel_stuck",
-            flow: expect.objectContaining({ flowId: flow.flowId }),
-          }),
-        ]),
-      );
+      const findings = listTaskFlowAuditFindings({ now: 6 * 60_000 });
+      expect(requireFinding(findings, "cancel_stuck", flow.flowId).flow?.flowId).toBe(flow.flowId);
+    });
+  });
+
+  it("counts provisional subagent cancellation as active during audit", async () => {
+    await withTaskFlowAuditStateDir(async () => {
+      const now = Date.now();
+      const flow = createManagedTaskFlow({
+        ownerKey: "agent:main:main",
+        controllerId: "tests/task-flow-audit",
+        goal: "Cancel subagent work",
+        status: "running",
+        createdAt: now - 6 * 60_000,
+        updatedAt: now - 6 * 60_000,
+      });
+      const runId = "run-provisional-cancel-audit";
+      const task = createRunningTaskRun({
+        runtime: "subagent",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        parentFlowId: flow.flowId,
+        childSessionKey: "agent:main:subagent:provisional-cancel",
+        runId,
+        task: "Wait for kill reconciliation",
+        startedAt: now - 6 * 60_000,
+        lastEventAt: now - 6 * 60_000,
+      });
+      expect(task.runId).toBe(runId);
+      requestFlowCancel({
+        flowId: flow.flowId,
+        expectedRevision: flow.revision,
+        cancelRequestedAt: now - 6 * 60_000,
+        updatedAt: now - 6 * 60_000,
+      });
+      finalizeTaskRunByRunId({
+        runId,
+        runtime: "subagent",
+        status: "cancelled",
+        endedAt: now - 6 * 60_000,
+        error: SUBAGENT_KILL_TASK_ERROR,
+      });
+
+      expect(
+        listTaskFlowAuditFindings({ now }).find(
+          (finding) => finding.code === "cancel_stuck" && finding.flow?.flowId === flow.flowId,
+        ),
+      ).toBeUndefined();
     });
   });
 });

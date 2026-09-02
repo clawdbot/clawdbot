@@ -1,25 +1,38 @@
+// File Transfer plugin module implements file write tool behavior.
 import crypto from "node:crypto";
-import {
-  callGatewayTool,
-  listNodes,
-  resolveNodeIdFromList,
-  type AnyAgentTool,
-  type NodeListNode,
-} from "openclaw/plugin-sdk/agent-harness-runtime";
+import type { AnyAgentTool } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { readMediaBuffer } from "openclaw/plugin-sdk/media-store";
+import { asBoolean, asNonArrayRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { appendFileTransferAudit } from "../shared/audit.js";
-import { throwFromNodePayload } from "../shared/errors.js";
-import {
-  humanSize,
-  readBoolean,
-  readGatewayCallOptions,
-  readTrimmedString,
-} from "../shared/params.js";
+import { inspectStrictBase64 } from "../shared/base64.js";
+import { humanSize } from "../shared/params.js";
 import {
   FILE_TRANSFER_SUBDIR,
   FILE_WRITE_HARD_MAX_BYTES,
   FILE_WRITE_TOOL_DESCRIPTOR,
 } from "./descriptors.js";
+import { invokeNodeToolPayload, readRequiredNodePath } from "./node-tool-invoke.js";
+
+function normalizeBase64ForCompare(value: string): string {
+  return value.replace(/=+$/u, "").replace(/-/gu, "+").replace(/_/gu, "/");
+}
+
+function decodeStrictBase64(value: string): Buffer {
+  const decodedBytes = inspectStrictBase64(value);
+  if (decodedBytes === undefined) {
+    throw new Error("contentBase64 is not valid base64");
+  }
+  if (decodedBytes > FILE_WRITE_HARD_MAX_BYTES) {
+    throw new Error(
+      `decoded content is ${decodedBytes} bytes; maximum is ${FILE_WRITE_HARD_MAX_BYTES} bytes (${humanSize(FILE_WRITE_HARD_MAX_BYTES)})`,
+    );
+  }
+  const buffer = Buffer.from(value, "base64");
+  if (normalizeBase64ForCompare(buffer.toString("base64")) !== normalizeBase64ForCompare(value)) {
+    throw new Error("contentBase64 is not valid base64");
+  }
+  return buffer;
+}
 
 async function readSourceBytes(input: {
   contentBase64?: string;
@@ -37,7 +50,7 @@ async function readSourceBytes(input: {
   if (input.contentBase64 === undefined) {
     throw new Error("contentBase64 or sourceMediaId required");
   }
-  const buffer = Buffer.from(input.contentBase64, "base64");
+  const buffer = decodeStrictBase64(input.contentBase64);
   return { buffer, contentBase64: input.contentBase64, source: "inline" };
 }
 
@@ -49,37 +62,18 @@ type FileWriteSuccess = {
   overwritten: boolean;
 };
 
-type FileWriteError = {
-  ok: false;
-  code: string;
-  message: string;
-  canonicalPath?: string;
-};
-
-type FileWritePayload = FileWriteSuccess | FileWriteError;
-
 export function createFileWriteTool(): AnyAgentTool {
   return {
     ...FILE_WRITE_TOOL_DESCRIPTOR,
     async execute(_toolCallId, params) {
-      const raw: Record<string, unknown> =
-        params && typeof params === "object" && !Array.isArray(params)
-          ? (params as Record<string, unknown>)
-          : {};
+      const raw = asNonArrayRecord(params);
 
-      const nodeQuery = readTrimmedString(raw, "node");
-      const filePath = readTrimmedString(raw, "path");
+      const { node: nodeQuery, requestedPath: filePath } = readRequiredNodePath(raw);
       const contentBase64 = typeof raw.contentBase64 === "string" ? raw.contentBase64 : undefined;
       const sourceMediaId = typeof raw.sourceMediaId === "string" ? raw.sourceMediaId : undefined;
-      const overwrite = readBoolean(raw, "overwrite", false);
-      const createParents = readBoolean(raw, "createParents", false);
+      const overwrite = asBoolean(raw.overwrite) ?? false;
+      const createParents = asBoolean(raw.createParents) ?? false;
 
-      if (!nodeQuery) {
-        throw new Error("node required");
-      }
-      if (!filePath) {
-        throw new Error("path required");
-      }
       // Compute the sha256 of the bytes we're sending so the node can do
       // an end-to-end integrity check after writing. This is always
       // sender-side computed; ignore any caller-supplied expectedSha256
@@ -89,57 +83,25 @@ export function createFileWriteTool(): AnyAgentTool {
       const buffer = sourceBytes.buffer;
       const expectedSha256 = crypto.createHash("sha256").update(buffer).digest("hex");
 
-      const gatewayOpts = readGatewayCallOptions(raw);
-      const nodes: NodeListNode[] = await listNodes(gatewayOpts);
-      const nodeId = resolveNodeIdFromList(nodes, nodeQuery, false);
-      const nodeMeta = nodes.find((n) => n.nodeId === nodeId);
-      const nodeDisplayName = nodeMeta?.displayName ?? nodeQuery;
-      const startedAt = Date.now();
-
-      const result = await callGatewayTool<{ payload: unknown }>("node.invoke", gatewayOpts, {
-        nodeId,
+      const { nodeId, nodeDisplayName, payload, startedAt } = await invokeNodeToolPayload({
+        node: nodeQuery,
+        params: raw,
         command: "file.write",
-        params: {
+        commandParams: {
           path: filePath,
           contentBase64: sourceBytes.contentBase64,
           overwrite,
           createParents,
           expectedSha256,
         },
-        idempotencyKey: crypto.randomUUID(),
+        invalidPayloadMessage: "unexpected response from node",
+        invalidPayloadError: "unexpected file.write response from node",
+        errorAuditExtra: { sizeBytes: buffer.byteLength },
+        requireOk: true,
+        requestedPath: filePath,
       });
 
-      const payload = (result as { payload?: unknown })?.payload;
-      if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
-        await appendFileTransferAudit({
-          op: "file.write",
-          nodeId,
-          nodeDisplayName,
-          requestedPath: filePath,
-          decision: "error",
-          errorMessage: "unexpected response from node",
-          sizeBytes: buffer.byteLength,
-          durationMs: Date.now() - startedAt,
-        });
-        throw new Error("unexpected file.write response from node");
-      }
-
-      const typed = payload as FileWritePayload;
-      if (!typed.ok) {
-        await appendFileTransferAudit({
-          op: "file.write",
-          nodeId,
-          nodeDisplayName,
-          requestedPath: filePath,
-          canonicalPath: typed.canonicalPath,
-          decision: "error",
-          errorCode: typed.code,
-          errorMessage: typed.message,
-          sizeBytes: buffer.byteLength,
-          durationMs: Date.now() - startedAt,
-        });
-        throwFromNodePayload("file.write", typed as unknown as Record<string, unknown>);
-      }
+      const typed = payload as FileWriteSuccess;
 
       await appendFileTransferAudit({
         op: "file.write",

@@ -1,3 +1,4 @@
+// Directory adapter tests cover channel directory adapter contracts and result normalization.
 import { describe, expect, it } from "vitest";
 import {
   createChannelDirectoryAdapter,
@@ -9,6 +10,12 @@ import {
 describe("directory adapters", () => {
   it("defaults self to null", async () => {
     const adapter = createChannelDirectoryAdapter();
+    await expect(adapter.self?.({ cfg: {}, runtime: {} as never })).resolves.toBeNull();
+  });
+
+  it("defaults an explicitly undefined self to the null resolver", async () => {
+    const adapter = createChannelDirectoryAdapter({ self: undefined });
+    expect(adapter.self).toBe(nullChannelDirectorySelf);
     await expect(adapter.self?.({ cfg: {}, runtime: {} as never })).resolves.toBeNull();
   });
 
@@ -24,12 +31,16 @@ describe("directory adapters", () => {
   it("builds empty directory adapters", async () => {
     const adapter = createEmptyChannelDirectoryAdapter();
     await expect(adapter.self?.({ cfg: {}, runtime: {} as never })).resolves.toBeNull();
-    await expect(adapter.listPeers?.({ cfg: {}, runtime: {} as never })).resolves.toEqual([]);
-    await expect(adapter.listGroups?.({ cfg: {}, runtime: {} as never })).resolves.toEqual([]);
+    await expect(adapter.listPeers?.({ cfg: {}, runtime: {} as never })).resolves.toStrictEqual([]);
+    await expect(adapter.listGroups?.({ cfg: {}, runtime: {} as never })).resolves.toStrictEqual(
+      [],
+    );
   });
 
   it("exports standalone null/empty helpers", async () => {
     await expect(nullChannelDirectorySelf({ cfg: {}, runtime: {} as never })).resolves.toBeNull();
-    await expect(emptyChannelDirectoryList({ cfg: {}, runtime: {} as never })).resolves.toEqual([]);
+    await expect(
+      emptyChannelDirectoryList({ cfg: {}, runtime: {} as never }),
+    ).resolves.toStrictEqual([]);
   });
 });

@@ -1,24 +1,24 @@
-import fs from "node:fs";
-import { saveJsonFile } from "../../infra/json-file.js";
-import { AUTH_STORE_VERSION } from "./constants.js";
-import { resolveAuthStatePath, resolveAuthStorePath } from "./path-resolve.js";
-import type { AuthProfileSecretsStore } from "./types.js";
-export {
-  resolveAuthStatePath,
-  resolveAuthStatePathForDisplay,
-  resolveAuthStorePath,
-  resolveAuthStorePathForDisplay,
-  resolveLegacyAuthStorePath,
-  resolveOAuthRefreshLockPath,
-} from "./path-resolve.js";
+/**
+ * Public path barrel for auth-profile stores.
+ * Import through this file for canonical SQLite display and lock paths.
+ */
+import path from "node:path";
+import { resolveUserPath } from "../../utils.js";
+import { resolveOAuthRefreshLockPath, resolveSharedAuthStorePath } from "./path-resolve.js";
+import { inspectPersistedAuthProfileStoreRaw } from "./sqlite.js";
 
-export function ensureAuthStoreFile(pathname: string) {
-  if (fs.existsSync(pathname)) {
-    return;
-  }
-  const payload: AuthProfileSecretsStore = {
-    version: AUTH_STORE_VERSION,
-    profiles: {},
-  };
-  saveJsonFile(pathname, payload);
+export { resolveOAuthRefreshLockPath };
+
+/** Resolve the user-facing path for the database selected by the auth store loader. */
+export function resolveAuthStorePathForDisplay(agentDir?: string): string {
+  const pathname =
+    agentDir && inspectPersistedAuthProfileStoreRaw(agentDir).status !== "missing"
+      ? path.join(resolveUserPath(agentDir), "openclaw-agent.sqlite")
+      : resolveSharedAuthStorePath();
+  return pathname.startsWith("~") ? pathname : resolveUserPath(pathname);
+}
+
+/** Retained name for callers that present auth runtime state from the same selected store. */
+export function resolveAuthStatePathForDisplay(agentDir?: string): string {
+  return resolveAuthStorePathForDisplay(agentDir);
 }

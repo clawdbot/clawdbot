@@ -1,0 +1,314 @@
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
+import type { GatewayHelloOk } from "../../api/gateway.ts";
+import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
+import { isCronSessionKey } from "../session-display.ts";
+import { parseCatalogSessionKey } from "./catalog-key.ts";
+import {
+  isUiGlobalSessionKey,
+  isSessionKeyTiedToAgent,
+  isSubagentSessionKey,
+  normalizeAgentId,
+  parseAgentSessionKey,
+  readSessionDefaults,
+  resolveUiDefaultAgentId,
+  resolveUiConversationIdentity,
+  resolveUiKnownSelectedGlobalAgentId,
+  resolveUiSelectedGlobalAgentId,
+  uiConversationMatches,
+  uiSessionRowMatchesSelectedChat,
+} from "./session-key.ts";
+export type SessionArchivedFilter = "active" | "archived" | "all";
+
+type SessionNavigationInput = {
+  result: SessionsListResult | null;
+  activeSession?: GatewaySessionRow | null;
+  resultAgentId?: string | null;
+  sessionKey: string;
+  assistantAgentId?: string | null;
+  hello?: GatewayHelloOk | null;
+  showCron?: boolean;
+  showSystem?: boolean;
+  archivedFilter?: SessionArchivedFilter;
+  compareSessions?: (a: GatewaySessionRow, b: GatewaySessionRow) => number;
+};
+
+type SessionNavigation = {
+  currentSessionKey: string;
+  selectedAgentId: string;
+  defaultAgentId: string;
+  selectedSession?: GatewaySessionRow;
+  visibleSessions: GatewaySessionRow[];
+  activeRowKey: string | null;
+};
+
+export type SessionScopeHost = {
+  assistantAgentId?: string | null;
+  agentsList?: {
+    defaultId?: string | null;
+    mainKey?: string | null;
+    scope?: string | null;
+    agents?: Array<{ id: string }>;
+  } | null;
+  hello: GatewayHelloOk | null;
+};
+
+export type SessionScopeHostWithKey = SessionScopeHost & {
+  sessionKey: string;
+};
+
+export type SessionRefreshTarget = { sessionKey: string; agentId?: string };
+
+export function resolveSessionKey(
+  sessionKey: string | undefined | null,
+  hello: GatewayHelloOk | null | undefined,
+): string {
+  const raw = normalizeOptionalString(sessionKey) ?? "";
+  const defaults = readSessionDefaults({ hello });
+  const mainSessionKey = normalizeOptionalString(defaults?.mainSessionKey);
+  if (!mainSessionKey) {
+    return raw;
+  }
+  if (!raw) {
+    return mainSessionKey;
+  }
+  const mainKey = normalizeOptionalLowercaseString(defaults?.mainKey) ?? "main";
+  const defaultAgentId = normalizeOptionalString(defaults?.defaultAgentId);
+  const isAlias =
+    raw === "main" ||
+    raw === mainKey ||
+    (defaultAgentId &&
+      (raw === `agent:${defaultAgentId}:main` || raw === `agent:${defaultAgentId}:${mainKey}`));
+  return isAlias ? mainSessionKey : raw;
+}
+
+export function scopedAgentIdForSession(
+  host: SessionScopeHost,
+  sessionKey: string | undefined | null,
+): string | undefined {
+  const identity = resolveUiConversationIdentity(host, normalizeOptionalString(sessionKey) ?? "");
+  return identity.sessionKey === "global" ? identity.agentId : undefined;
+}
+
+export function scopedAgentParamsForSession(
+  host: SessionScopeHost,
+  sessionKey: string,
+): { agentId?: string } {
+  const agentId = scopedAgentIdForSession(host, sessionKey);
+  return agentId ? { agentId } : {};
+}
+
+export function scopedAgentListParamsForSession(
+  host: SessionScopeHost,
+  sessionKey: string,
+): { agentId?: string } {
+  const parsed = parseAgentSessionKey(sessionKey);
+  const normalizedSessionKey = normalizeLowercaseStringOrEmpty(sessionKey);
+  const agentId =
+    parsed?.agentId ??
+    (normalizedSessionKey === "global"
+      ? resolveUiKnownSelectedGlobalAgentId(host)
+      : normalizedSessionKey === "unknown"
+        ? undefined
+        : resolveUiDefaultAgentId(host));
+  return agentId ? { agentId: normalizeAgentId(agentId) } : {};
+}
+
+export function scopedAgentListParamsForRefreshTarget(
+  host: SessionScopeHost,
+  target: SessionRefreshTarget,
+): { agentId?: string } {
+  const agentId =
+    normalizeOptionalString(target.agentId) ??
+    scopedAgentListParamsForSession(host, target.sessionKey).agentId;
+  return agentId ? { agentId } : {};
+}
+
+export function visibleSessionMatches(
+  host: SessionScopeHostWithKey,
+  sessionKey: string,
+  agentId: string | undefined,
+): boolean {
+  return uiConversationMatches(host, host.sessionKey, sessionKey, agentId);
+}
+
+export function filterSessionRows(
+  result: SessionsListResult,
+  options: { archivedFilter: SessionArchivedFilter },
+): SessionsListResult {
+  const sessions = result.sessions.filter(
+    (row) => row.key && sessionMatchesArchivedFilter(row, options.archivedFilter),
+  );
+  return {
+    ...result,
+    count: sessions.length,
+    sessions,
+  };
+}
+
+type VisibleSessionRowOptions = {
+  currentSessionKey?: string;
+  agentId: string;
+  defaultAgentId: string;
+  filterByAgent?: boolean;
+  showCron?: boolean;
+  showSystem?: boolean;
+  archivedFilter?: SessionArchivedFilter;
+};
+
+/**
+ * Machine-created probe/system rows (health-check turns, internal effect
+ * sessions), classified from recorded creation provenance only — never from
+ * message text, which rots and false-positives real chats. Rows without
+ * recorded provenance (legacy stores) stay visible.
+ *
+ * Accepted tradeoff: a profile-less client's unnamed `run` session is
+ * indistinguishable from a probe and hides by default too. Operator-named CLI
+ * sessions are stamped at creation and remain visible. Unnamed rows stay fully
+ * reachable: the selected session always renders in the sidebar, the Sessions
+ * page never applies this filter, and the sort-menu toggle reveals all rows.
+ */
+export function isSystemCreatedSessionRow(row: GatewaySessionRow): boolean {
+  // Cron rows are owned by the automation toggle; cron creation stamps a
+  // system actor, so classifying them here would demand both toggles at once.
+  if (isCronSessionKey(row.key)) {
+    return false;
+  }
+  if (row.createdActor?.type === "system") {
+    return true;
+  }
+  if (row.createdVia !== "run" && row.createdVia !== "internal") {
+    return false;
+  }
+  if (row.createdActor?.type === "human") {
+    return false;
+  }
+  return !(row.label?.trim() || row.displayName?.trim() || row.subject?.trim());
+}
+
+export function sessionMatchesArchivedFilter(
+  row: GatewaySessionRow,
+  archivedFilter: SessionArchivedFilter = "active",
+): boolean {
+  if (archivedFilter === "all") {
+    return true;
+  }
+  return (row.archived === true) === (archivedFilter === "archived");
+}
+
+export function sessionMatchesVisibleSessionScope(
+  row: GatewaySessionRow,
+  options: VisibleSessionRowOptions,
+): boolean {
+  return (
+    sessionMatchesArchivedFilter(row, options.archivedFilter) &&
+    row.kind !== "global" &&
+    row.kind !== "unknown" &&
+    (options.showCron === true || !isCronSessionKey(row.key)) &&
+    (options.showSystem === true || !isSystemCreatedSessionRow(row)) &&
+    (!options.filterByAgent ||
+      isSessionKeyTiedToAgent(row.key, options.agentId, options.defaultAgentId))
+  );
+}
+
+export function filterVisibleSessionRows(
+  rows: readonly GatewaySessionRow[],
+  options: VisibleSessionRowOptions,
+): GatewaySessionRow[] {
+  return rows.filter((row) => {
+    if (
+      row.key === options.currentSessionKey &&
+      ((options.archivedFilter ?? "active") === "active" ||
+        sessionMatchesArchivedFilter(row, options.archivedFilter))
+    ) {
+      return true;
+    }
+    return (
+      sessionMatchesVisibleSessionScope(row, options) &&
+      !isSubagentSessionKey(row.key) &&
+      !row.spawnedBy
+    );
+  });
+}
+
+export function getVisibleSessionRows(
+  result: SessionsListResult | null,
+  options: VisibleSessionRowOptions,
+): GatewaySessionRow[] {
+  return filterVisibleSessionRows(result?.sessions ?? [], options);
+}
+
+export function compareSessionRowsByUpdatedAt(a: GatewaySessionRow, b: GatewaySessionRow): number {
+  const pinnedStateDiff = Number(b.pinned === true) - Number(a.pinned === true);
+  if (pinnedStateDiff !== 0) {
+    return pinnedStateDiff;
+  }
+  const pinnedDiff = (b.pinnedAt ?? 0) - (a.pinnedAt ?? 0);
+  if (pinnedDiff !== 0) {
+    return pinnedDiff;
+  }
+  const updatedDiff = (b.updatedAt ?? 0) - (a.updatedAt ?? 0);
+  // Stable key tie-break mirrors the gateway comparator (session-list-order.ts)
+  // so tied rows don't swap when the canonical refresh replaces an event merge.
+  return updatedDiff !== 0 ? updatedDiff : a.key < b.key ? -1 : a.key > b.key ? 1 : 0;
+}
+
+export function resolveSessionNavigation(input: SessionNavigationInput): SessionNavigation {
+  const currentSessionKey = resolveSessionKey(input.sessionKey, input.hello);
+  const defaultAgentId = resolveUiSelectedGlobalAgentId({
+    assistantAgentId: input.assistantAgentId,
+    hello: input.hello,
+  });
+  const selectedAgentId = parseAgentSessionKey(currentSessionKey)?.agentId ?? defaultAgentId;
+  const shouldFilterByAgent = currentSessionKey.toLowerCase() !== "unknown";
+  const matchesCurrentSession = (row: GatewaySessionRow) =>
+    uiSessionRowMatchesSelectedChat(
+      input,
+      row.key,
+      currentSessionKey,
+      row.agentId ?? (isUiGlobalSessionKey(row.key) ? input.resultAgentId : undefined),
+    );
+  const selectedSession =
+    input.result?.sessions.find(matchesCurrentSession) ??
+    (input.activeSession && matchesCurrentSession(input.activeSession)
+      ? input.activeSession
+      : undefined);
+  // Catalog sessions select their own sidebar rows; synthesizing a session row
+  // here would surface the raw catalog key as a phantom chat entry.
+  const activeSession =
+    currentSessionKey &&
+    currentSessionKey.toLowerCase() !== "unknown" &&
+    !parseCatalogSessionKey(currentSessionKey)
+      ? { ...(selectedSession ?? { kind: "direct", updatedAt: null }), key: currentSessionKey }
+      : undefined;
+  const sortedSessions = getVisibleSessionRows(input.result, {
+    currentSessionKey: currentSessionKey || undefined,
+    agentId: selectedAgentId,
+    defaultAgentId,
+    filterByAgent: shouldFilterByAgent,
+    showCron: input.showCron,
+    showSystem: input.showSystem,
+    archivedFilter: input.archivedFilter,
+  }).toSorted(input.compareSessions ?? compareSessionRowsByUpdatedAt);
+  // The sidebar is the session list, not a recent-session preview. Keep every
+  // active row in its sorted slot so selecting a session never reshuffles or
+  // hides another one behind a separate route.
+  let visibleSessions = sortedSessions;
+  let activeRow = visibleSessions.find(matchesCurrentSession);
+  if (!activeRow && activeSession && input.archivedFilter !== "archived") {
+    // Deep-linked and archived sessions still need a visible selected row.
+    activeRow = activeSession;
+    visibleSessions = [activeRow, ...visibleSessions];
+  }
+  return {
+    currentSessionKey,
+    selectedAgentId,
+    defaultAgentId,
+    selectedSession: activeSession,
+    visibleSessions,
+    activeRowKey: activeRow?.key ?? null,
+  };
+}

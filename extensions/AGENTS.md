@@ -75,9 +75,9 @@ third-party plugins see.
 
 ## Expanding The Boundary
 
-- If an extension needs a new seam, add a typed Plugin SDK subpath or additive
-  export instead of reaching into core.
-- Keep new plugin-facing seams backwards-compatible and versioned. Third-party
-  plugins consume this surface.
+- If an extension needs a new seam, add or replace a typed Plugin SDK subpath
+  instead of reaching into core.
+- ALL bundled plugins must move to modern SDK seams in the same change. Do not
+  keep extension-local compat paths for internal callers.
 - When intentionally expanding the contract, update the docs, exported subpath
   list, package exports, and API/contract checks in the same change.

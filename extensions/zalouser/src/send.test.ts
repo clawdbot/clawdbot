@@ -1,3 +1,5 @@
+// Zalouser tests cover send plugin behavior.
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createZalouserSendReceipt } from "./send-receipt.js";
 import {
@@ -59,6 +61,37 @@ function sendFailure(error: string, threadId = "thread") {
   };
 }
 
+const requireRecord = createRequireRecord("object", "label-not-object");
+
+function expectRecordFields(record: Record<string, unknown>, fields: Record<string, unknown>) {
+  for (const [key, value] of Object.entries(fields)) {
+    expect(record[key]).toEqual(value);
+  }
+}
+
+function expectResultFields(result: unknown, fields: Record<string, unknown>) {
+  expectRecordFields(requireRecord(result, "send result"), fields);
+}
+
+function requireSendTextCall(callIndex: number): unknown[] {
+  const call = (mockSendText.mock.calls as unknown[][])[callIndex];
+  if (!call) {
+    throw new Error(`expected send text call ${callIndex + 1}`);
+  }
+  return call;
+}
+
+function requireSendTextOptions(callIndex: number): Record<string, unknown> {
+  return requireRecord(
+    requireSendTextCall(callIndex)[2],
+    `send text call ${callIndex + 1} options`,
+  );
+}
+
+function expectSendTextOptions(callIndex: number, fields: Record<string, unknown>) {
+  expectRecordFields(requireSendTextOptions(callIndex), fields);
+}
+
 describe("zalouser send helpers", () => {
   beforeEach(() => {
     mockSendText.mockReset();
@@ -77,15 +110,10 @@ describe("zalouser send helpers", () => {
       isGroup: true,
     });
 
-    expect(mockSendText).toHaveBeenCalledWith(
-      "thread-1",
-      "**hello**",
-      expect.objectContaining({
-        profile: "default",
-        isGroup: true,
-      }),
-    );
-    expect(result).toMatchObject({ ok: true, messageId: "mid-1" });
+    expect(requireSendTextCall(0)[0]).toBe("thread-1");
+    expect(requireSendTextCall(0)[1]).toBe("**hello**");
+    expectSendTextOptions(0, { profile: "default", isGroup: true });
+    expectResultFields(result, { ok: true, messageId: "mid-1" });
     expect(result.receipt.primaryPlatformMessageId).toBe("mid-1");
   });
 
@@ -98,16 +126,14 @@ describe("zalouser send helpers", () => {
       textMode: "markdown",
     });
 
-    expect(mockSendText).toHaveBeenCalledWith(
-      "thread-1",
-      "hello",
-      expect.objectContaining({
-        profile: "default",
-        isGroup: true,
-        textMode: "markdown",
-        textStyles: [{ start: 0, len: 5, st: TextStyle.Bold }],
-      }),
-    );
+    expect(requireSendTextCall(0)[0]).toBe("thread-1");
+    expect(requireSendTextCall(0)[1]).toBe("hello");
+    expectSendTextOptions(0, {
+      profile: "default",
+      isGroup: true,
+      textMode: "markdown",
+      textStyles: [{ start: 0, len: 5, st: TextStyle.Bold }],
+    });
   });
 
   it("formats image captions in markdown mode", async () => {
@@ -120,18 +146,16 @@ describe("zalouser send helpers", () => {
       textMode: "markdown",
     });
 
-    expect(mockSendText).toHaveBeenCalledWith(
-      "thread-2",
-      "cap",
-      expect.objectContaining({
-        profile: "p2",
-        caption: undefined,
-        isGroup: false,
-        mediaUrl: "https://example.com/a.png",
-        textMode: "markdown",
-        textStyles: [{ start: 0, len: 3, st: TextStyle.Italic }],
-      }),
-    );
+    expect(requireSendTextCall(0)[0]).toBe("thread-2");
+    expect(requireSendTextCall(0)[1]).toBe("cap");
+    expectSendTextOptions(0, {
+      profile: "p2",
+      caption: undefined,
+      isGroup: false,
+      mediaUrl: "https://example.com/a.png",
+      textMode: "markdown",
+      textStyles: [{ start: 0, len: 3, st: TextStyle.Italic }],
+    });
   });
 
   it("does not keep the raw markdown caption as a media fallback after formatting", async () => {
@@ -144,18 +168,16 @@ describe("zalouser send helpers", () => {
       textMode: "markdown",
     });
 
-    expect(mockSendText).toHaveBeenCalledWith(
-      "thread-2",
-      "",
-      expect.objectContaining({
-        profile: "p2",
-        caption: undefined,
-        isGroup: false,
-        mediaUrl: "https://example.com/a.png",
-        textMode: "markdown",
-        textStyles: undefined,
-      }),
-    );
+    expect(requireSendTextCall(0)[0]).toBe("thread-2");
+    expect(requireSendTextCall(0)[1]).toBe("");
+    expectSendTextOptions(0, {
+      profile: "p2",
+      caption: undefined,
+      isGroup: false,
+      mediaUrl: "https://example.com/a.png",
+      textMode: "markdown",
+      textStyles: undefined,
+    });
   });
 
   it("rechunks normalized markdown text before sending to avoid transport truncation", async () => {
@@ -178,8 +200,28 @@ describe("zalouser send helpers", () => {
       mockSendText.mock.calls
         .map((call, index) => ({ index, length: call[1].length }))
         .filter((call) => call.length > 2000),
-    ).toEqual([]);
-    expect(result).toMatchObject({ ok: true, messageId: "mid-2c-2" });
+    ).toStrictEqual([]);
+    expectResultFields(result, { ok: true, messageId: "mid-2c-2" });
+  });
+
+  it("reports each completed internal chunk before a later chunk fails", async () => {
+    const firstResult = sendResult("mid-progress-1", "thread-progress");
+    mockSendText
+      .mockResolvedValueOnce(firstResult)
+      .mockResolvedValueOnce(sendFailure("second chunk failed", "thread-progress"));
+    const onDeliveryResult = vi.fn();
+
+    await expect(
+      sendMessageZalouser("thread-progress", "a".repeat(2001), {
+        textChunkLimit: 2000,
+        onDeliveryResult,
+      }),
+    ).rejects.toThrow("second chunk failed");
+
+    expect(mockSendText).toHaveBeenCalledTimes(2);
+    expect(onDeliveryResult).toHaveBeenCalledOnce();
+    expect(onDeliveryResult).toHaveBeenCalledWith(firstResult);
+    expect(requireSendTextOptions(0)).not.toHaveProperty("onDeliveryResult");
   });
 
   it("preserves text styles when splitting long formatted markdown", async () => {
@@ -194,29 +236,23 @@ describe("zalouser send helpers", () => {
       textMode: "markdown",
     });
 
-    expect(mockSendText).toHaveBeenNthCalledWith(
-      1,
-      "thread-2d",
-      "a".repeat(2000),
-      expect.objectContaining({
-        profile: "p2d",
-        isGroup: false,
-        textMode: "markdown",
-        textStyles: [{ start: 0, len: 2000, st: TextStyle.Bold }],
-      }),
-    );
-    expect(mockSendText).toHaveBeenNthCalledWith(
-      2,
-      "thread-2d",
-      "a".repeat(501),
-      expect.objectContaining({
-        profile: "p2d",
-        isGroup: false,
-        textMode: "markdown",
-        textStyles: [{ start: 0, len: 501, st: TextStyle.Bold }],
-      }),
-    );
-    expect(result).toMatchObject({ ok: true, messageId: "mid-2d-2" });
+    expect(requireSendTextCall(0)[0]).toBe("thread-2d");
+    expect(requireSendTextCall(0)[1]).toBe("a".repeat(2000));
+    expectSendTextOptions(0, {
+      profile: "p2d",
+      isGroup: false,
+      textMode: "markdown",
+      textStyles: [{ start: 0, len: 2000, st: TextStyle.Bold }],
+    });
+    expect(requireSendTextCall(1)[0]).toBe("thread-2d");
+    expect(requireSendTextCall(1)[1]).toBe("a".repeat(501));
+    expectSendTextOptions(1, {
+      profile: "p2d",
+      isGroup: false,
+      textMode: "markdown",
+      textStyles: [{ start: 0, len: 501, st: TextStyle.Bold }],
+    });
+    expectResultFields(result, { ok: true, messageId: "mid-2d-2" });
   });
 
   it("preserves formatted text and styles when newline chunk mode splits after parsing", async () => {
@@ -235,31 +271,61 @@ describe("zalouser send helpers", () => {
 
     expect(mockSendText).toHaveBeenCalledTimes(2);
     expect(mockSendText.mock.calls.map((call) => call[1]).join("")).toBe(formatted.text);
-    expect(mockSendText).toHaveBeenNthCalledWith(
-      1,
-      "thread-2d-2",
-      `${"a".repeat(1995)}\n\n`,
-      expect.objectContaining({
-        profile: "p2d-2",
-        isGroup: false,
-        textMode: "markdown",
-        textChunkMode: "newline",
-        textStyles: [{ start: 0, len: 1995, st: TextStyle.Bold }],
-      }),
-    );
-    expect(mockSendText).toHaveBeenNthCalledWith(
-      2,
-      "thread-2d-2",
-      "second paragraph",
-      expect.objectContaining({
-        profile: "p2d-2",
-        isGroup: false,
-        textMode: "markdown",
-        textChunkMode: "newline",
-        textStyles: undefined,
-      }),
-    );
-    expect(result).toMatchObject({ ok: true, messageId: "mid-2d-4" });
+    expect(requireSendTextCall(0)[0]).toBe("thread-2d-2");
+    expect(requireSendTextCall(0)[1]).toBe(`${"a".repeat(1995)}\n\n`);
+    expectSendTextOptions(0, {
+      profile: "p2d-2",
+      isGroup: false,
+      textMode: "markdown",
+      textChunkMode: "newline",
+      textStyles: [{ start: 0, len: 1995, st: TextStyle.Bold }],
+    });
+    expect(requireSendTextCall(1)[0]).toBe("thread-2d-2");
+    expect(requireSendTextCall(1)[1]).toBe("second paragraph");
+    expectSendTextOptions(1, {
+      profile: "p2d-2",
+      isGroup: false,
+      textMode: "markdown",
+      textChunkMode: "newline",
+      textStyles: undefined,
+    });
+    expectResultFields(result, { ok: true, messageId: "mid-2d-4" });
+  });
+
+  it.each([
+    {
+      name: "fenced code with hard limits",
+      text: "```ts\nconst alpha = 1;\nconst beta = 2;\n```",
+      textChunkLimit: 16,
+      textChunkMode: "length" as const,
+      expected: ["const alpha = 1;", "\nconst beta = 2;"],
+    },
+    {
+      name: "tables with newline-preferred limits",
+      text: "| A | B |\n| --- | --- |\n| 1 | 2 |\n| 3 | 4 |",
+      textChunkLimit: 24,
+      textChunkMode: "newline" as const,
+      expected: ["| A | B |\n| --- | --- |\n", "| 1 | 2 |\n| 3 | 4 |"],
+    },
+    {
+      name: "repeated whitespace around paragraph boundaries",
+      text: "alpha  beta\n\ngamma delta",
+      textChunkLimit: 12,
+      textChunkMode: "newline" as const,
+      expected: ["alpha  beta\n", "\ngamma delta"],
+    },
+  ])("preserves exact rendered chunks for $name", async (fixture) => {
+    mockSendText.mockResolvedValue(sendResult("mid-parity", "thread-parity"));
+
+    await sendMessageZalouser("thread-parity", fixture.text, {
+      textMode: "markdown",
+      textChunkLimit: fixture.textChunkLimit,
+      textChunkMode: fixture.textChunkMode,
+    });
+
+    const renderedChunks = mockSendText.mock.calls.map((call) => call[1]);
+    expect(renderedChunks).toEqual(fixture.expected);
+    expect(renderedChunks.join("")).toBe(parseZalouserTextStyles(fixture.text).text);
   });
 
   it("respects an explicit text chunk limit when splitting formatted markdown", async () => {
@@ -276,31 +342,25 @@ describe("zalouser send helpers", () => {
     } as never);
 
     expect(mockSendText).toHaveBeenCalledTimes(2);
-    expect(mockSendText).toHaveBeenNthCalledWith(
-      1,
-      "thread-2d-3",
-      "a".repeat(1200),
-      expect.objectContaining({
-        profile: "p2d-3",
-        isGroup: false,
-        textMode: "markdown",
-        textChunkLimit: 1200,
-        textStyles: [{ start: 0, len: 1200, st: TextStyle.Bold }],
-      }),
-    );
-    expect(mockSendText).toHaveBeenNthCalledWith(
-      2,
-      "thread-2d-3",
-      "a".repeat(301),
-      expect.objectContaining({
-        profile: "p2d-3",
-        isGroup: false,
-        textMode: "markdown",
-        textChunkLimit: 1200,
-        textStyles: [{ start: 0, len: 301, st: TextStyle.Bold }],
-      }),
-    );
-    expect(result).toMatchObject({ ok: true, messageId: "mid-2d-6" });
+    expect(requireSendTextCall(0)[0]).toBe("thread-2d-3");
+    expect(requireSendTextCall(0)[1]).toBe("a".repeat(1200));
+    expectSendTextOptions(0, {
+      profile: "p2d-3",
+      isGroup: false,
+      textMode: "markdown",
+      textChunkLimit: 1200,
+      textStyles: [{ start: 0, len: 1200, st: TextStyle.Bold }],
+    });
+    expect(requireSendTextCall(1)[0]).toBe("thread-2d-3");
+    expect(requireSendTextCall(1)[1]).toBe("a".repeat(301));
+    expectSendTextOptions(1, {
+      profile: "p2d-3",
+      isGroup: false,
+      textMode: "markdown",
+      textChunkLimit: 1200,
+      textStyles: [{ start: 0, len: 301, st: TextStyle.Bold }],
+    });
+    expectResultFields(result, { ok: true, messageId: "mid-2d-6" });
   });
 
   it("sends overflow markdown captions as follow-up text after the media message", async () => {
@@ -319,27 +379,19 @@ describe("zalouser send helpers", () => {
 
     expect(mockSendText).toHaveBeenCalledTimes(2);
     expect(mockSendText.mock.calls.map((call) => call[1]).join("")).toBe(formatted.text);
-    expect(mockSendText).toHaveBeenNthCalledWith(
-      1,
-      "thread-2e",
-      expect.any(String),
-      expect.objectContaining({
-        profile: "p2e",
-        caption: undefined,
-        isGroup: false,
-        mediaUrl: "https://example.com/long.png",
-        textMode: "markdown",
-      }),
-    );
-    expect(mockSendText).toHaveBeenNthCalledWith(
-      2,
-      "thread-2e",
-      expect.any(String),
-      expect.not.objectContaining({
-        mediaUrl: "https://example.com/long.png",
-      }),
-    );
-    expect(result).toMatchObject({ ok: true, messageId: "mid-2e-2" });
+    expect(requireSendTextCall(0)[0]).toBe("thread-2e");
+    expect(typeof requireSendTextCall(0)[1]).toBe("string");
+    expectSendTextOptions(0, {
+      profile: "p2e",
+      caption: undefined,
+      isGroup: false,
+      mediaUrl: "https://example.com/long.png",
+      textMode: "markdown",
+    });
+    expect(requireSendTextCall(1)[0]).toBe("thread-2e");
+    expect(typeof requireSendTextCall(1)[1]).toBe("string");
+    expect(requireSendTextOptions(1).mediaUrl).toBeUndefined();
+    expectResultFields(result, { ok: true, messageId: "mid-2e-2" });
   });
 
   it("delegates link helper to JS transport", async () => {
@@ -354,7 +406,7 @@ describe("zalouser send helpers", () => {
       profile: "p3",
       isGroup: true,
     });
-    expect(result).toMatchObject({ ok: false, error: "boom" });
+    expectResultFields(result, { ok: false, error: "boom" });
   });
 
   it("delegates typing helper to JS transport", async () => {
@@ -387,8 +439,8 @@ describe("zalouser send helpers", () => {
       emoji: "👍",
       remove: undefined,
     });
-    expect(result).toMatchObject({ ok: true, error: undefined });
-    expect(result.receipt.platformMessageIds).toEqual([]);
+    expectResultFields(result, { ok: true, error: undefined });
+    expect(result.receipt.platformMessageIds).toStrictEqual([]);
   });
 
   it("delegates delivered+seen helpers to JS transport", async () => {

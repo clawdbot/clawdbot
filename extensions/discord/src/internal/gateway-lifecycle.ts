@@ -1,3 +1,4 @@
+// Discord plugin module implements gateway lifecycle behavior.
 type GatewayTimer = NodeJS.Timeout;
 
 export class GatewayHeartbeatTimers {

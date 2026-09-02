@@ -1,3 +1,4 @@
+// Verifies web-search credential presence checks for plugins.
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -29,7 +30,6 @@ describe("hasConfiguredWebSearchCredential", () => {
         config: {} as OpenClawConfig,
         env: {},
         origin: "bundled",
-        bundledAllowlistCompat: true,
       }),
     ).toBe(false);
   });
@@ -42,7 +42,6 @@ describe("hasConfiguredWebSearchCredential", () => {
         } as OpenClawConfig,
         env: {},
         origin: "bundled",
-        bundledAllowlistCompat: true,
       }),
     ).toBe(true);
   });

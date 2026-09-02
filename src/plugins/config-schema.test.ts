@@ -1,3 +1,4 @@
+// Covers plugin config schema validation and diagnostics.
 import { describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import {
@@ -20,7 +21,7 @@ function expectJsonSchema(
   result: ReturnType<typeof buildPluginConfigSchema>,
   expected: Record<string, unknown>,
 ) {
-  expect(result.jsonSchema).toMatchObject(expected);
+  expect(result.jsonSchema).toEqual(expected);
 }
 
 describe("buildPluginConfigSchema", () => {
@@ -116,6 +117,26 @@ describe("buildJsonPluginConfigSchema", () => {
     expect(result.safeParse?.({ enabled: "yes" })).toEqual({
       success: false,
       error: { issues: [{ path: ["enabled"], message: "must be boolean" }] },
+    });
+  });
+
+  it("keeps numeric-looking object keys outside array-index range as strings", () => {
+    const result = buildJsonPluginConfigSchema(
+      {
+        type: "object",
+        required: ["100001"],
+        properties: {
+          "100001": { type: "boolean" },
+        },
+      },
+      { cacheKey: "config-schema.test.large-numeric-key" },
+    );
+
+    expect(result.safeParse?.({})).toEqual({
+      success: false,
+      error: {
+        issues: [{ path: ["100001"], message: "must have required property '100001'" }],
+      },
     });
   });
 });

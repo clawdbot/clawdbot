@@ -1,11 +1,15 @@
+// Talk session log runtime persists voice session transcripts and metadata.
+import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import type { RealtimeVoiceBridgeEvent, RealtimeVoiceRole } from "./provider-types.js";
 
+/** Ring-buffer entry for transcript text used by Talk health and echo suppression. */
 export type RealtimeVoiceTranscriptEntry = {
   at: string;
   role: RealtimeVoiceRole;
   text: string;
 };
 
+/** Compact health snapshot exposed to diagnostics without dumping full transcript history. */
 export type RealtimeVoiceTranscriptHealth = {
   realtimeTranscriptLines: number;
   lastRealtimeTranscriptAt?: string;
@@ -14,10 +18,12 @@ export type RealtimeVoiceTranscriptHealth = {
   recentRealtimeTranscript: RealtimeVoiceTranscriptEntry[];
 };
 
+/** Bridge event plus capture time, kept separate from provider event payload shape. */
 export type RealtimeVoiceBridgeEventLogEntry = RealtimeVoiceBridgeEvent & {
   at: string;
 };
 
+/** Compact health snapshot of recent realtime bridge events. */
 export type RealtimeVoiceBridgeEventHealth = {
   lastRealtimeEventAt?: string;
   lastRealtimeEventType?: string;
@@ -25,6 +31,7 @@ export type RealtimeVoiceBridgeEventHealth = {
   recentRealtimeEvents: RealtimeVoiceBridgeEventLogEntry[];
 };
 
+/** Appends a transcript entry and trims old rows in-place to bound Talk diagnostics memory. */
 export function recordRealtimeVoiceTranscript(
   transcript: RealtimeVoiceTranscriptEntry[],
   role: RealtimeVoiceRole,
@@ -39,6 +46,7 @@ export function recordRealtimeVoiceTranscript(
   return entry;
 }
 
+/** Summarizes transcript history for health endpoints and UI diagnostics. */
 export function getRealtimeVoiceTranscriptHealth(
   transcript: RealtimeVoiceTranscriptEntry[],
 ): RealtimeVoiceTranscriptHealth {
@@ -52,6 +60,7 @@ export function getRealtimeVoiceTranscriptHealth(
   };
 }
 
+/** Records low-volume bridge events while dropping raw audio chunks from diagnostics. */
 export function recordRealtimeVoiceBridgeEvent(
   events: RealtimeVoiceBridgeEventLogEntry[],
   event: RealtimeVoiceBridgeEvent,
@@ -66,6 +75,7 @@ export function recordRealtimeVoiceBridgeEvent(
   }
 }
 
+/** Summarizes recent bridge events without exposing the full rolling event buffer. */
 export function getRealtimeVoiceBridgeEventHealth(
   events: RealtimeVoiceBridgeEventLogEntry[],
 ): RealtimeVoiceBridgeEventHealth {
@@ -92,7 +102,7 @@ function hasMeaningfulEchoOverlap(userTokens: string[], assistantTokens: string[
   if (userTokens.length < 4 || assistantTokens.length < 4) {
     return false;
   }
-  const uniqueUserTokens = [...new Set(userTokens)];
+  const uniqueUserTokens = uniqueStrings(userTokens);
   if (uniqueUserTokens.length < 4) {
     return false;
   }
@@ -101,6 +111,7 @@ function hasMeaningfulEchoOverlap(userTokens: string[], assistantTokens: string[
   return overlap / uniqueUserTokens.length >= 0.58;
 }
 
+/** Detects user transcript text that likely came from assistant speaker echo, not speech. */
 export function isLikelyRealtimeVoiceAssistantEchoTranscript(params: {
   transcript: RealtimeVoiceTranscriptEntry[];
   text: string;
@@ -136,6 +147,7 @@ export function isLikelyRealtimeVoiceAssistantEchoTranscript(params: {
   );
 }
 
+/** Extends input suppression through the estimated playback tail for assistant audio. */
 export function extendRealtimeVoiceOutputEchoSuppression(params: {
   audio: Buffer;
   bytesPerMs: number;

@@ -25,7 +25,6 @@ concurrency:
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
   NODE_VERSION: "24.x"
-  PNPM_VERSION: "10.33.0"
   OPENCLAW_BUILD_PRIVATE_QA: "1"
   OPENCLAW_ENABLE_PRIVATE_QA_CLI: "1"
 
@@ -33,9 +32,12 @@ jobs:
   authorize_actor:
     name: Authorize workflow actor
     runs-on: blacksmith-8vcpu-ubuntu-2404
+    outputs:
+      authorized: ${{ steps.permission.outputs.authorized }}
     steps:
       - name: Require maintainer-level repository access
-        uses: actions/github-script@v8
+        id: permission
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
         with:
           script: |
             const allowed = new Set(["admin", "maintain", "write"]);
@@ -48,21 +50,27 @@ jobs:
             const permission = data.permission;
             core.info(`Actor ${context.actor} permission: ${permission}`);
             if (!allowed.has(permission)) {
-              core.setFailed(
+              core.notice(
                 `Workflow requires write/maintain/admin access. Actor "${context.actor}" has "${permission}".`,
               );
+              core.setOutput("authorized", "false");
+              return;
             }
+            core.setOutput("authorized", "true");
 
   validate_selected_ref:
     name: Validate selected ref
     needs: authorize_actor
+    if: needs.authorize_actor.outputs.authorized == 'true'
     runs-on: blacksmith-8vcpu-ubuntu-2404
     outputs:
       selected_revision: ${{ steps.validate.outputs.selected_revision }}
       trusted_reason: ${{ steps.validate.outputs.trusted_reason }}
     steps:
+      - name: Prepare Git owner
+        uses: openclaw/openclaw/.github/actions/git-owner@dd4528b6393e7d00063067a080ca7241b48ce475
       - name: Checkout selected ref
-        uses: actions/checkout@v6
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           ref: ${{ inputs.ref }}
@@ -79,14 +87,14 @@ jobs:
           selected_revision="$(git rev-parse HEAD)"
           trusted_reason=""
 
-          git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+          python3 -I -S "$CI_GIT_OWNER" --checkout-git 120 fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
 
           if git merge-base --is-ancestor "$selected_revision" refs/remotes/origin/main; then
             trusted_reason="main-ancestor"
           elif git tag --points-at "$selected_revision" | grep -Eq '^v'; then
             trusted_reason="release-tag"
           elif [[ "$INPUT_REF" =~ ^release/[0-9]{4}\.[0-9]+\.[0-9]+$ ]]; then
-            git fetch --no-tags origin "+refs/heads/${INPUT_REF}:refs/remotes/origin/${INPUT_REF}"
+            python3 -I -S "$CI_GIT_OWNER" --checkout-git 120 fetch --no-tags origin "+refs/heads/${INPUT_REF}:refs/remotes/origin/${INPUT_REF}"
             release_branch_sha="$(git rev-parse "refs/remotes/origin/${INPUT_REF}")"
             if [[ "$selected_revision" == "$release_branch_sha" ]]; then
               trusted_reason="release-branch-head"
@@ -125,7 +133,7 @@ jobs:
     environment: qa-live-shared
     steps:
       - name: Checkout selected ref
-        uses: actions/checkout@v6
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           ref: ${{ needs.validate_selected_ref.outputs.selected_revision }}
@@ -134,8 +142,8 @@ jobs:
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
         with:
+          cache-mode: restore
           node-version: ${{ env.NODE_VERSION }}
-          pnpm-version: ${{ env.PNPM_VERSION }}
           install-bun: "true"
 
       - name: Build private QA runtime
@@ -161,9 +169,9 @@ jobs:
 
       - name: Upload Mantis artifacts
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: mantis-discord-smoke-${{ github.run_id }}-${{ github.run_attempt }}
           path: .artifacts/qa-e2e/mantis/
           retention-days: 14
-          if-no-files-found: warn
+          if-no-files-found: error

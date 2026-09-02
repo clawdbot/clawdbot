@@ -1,10 +1,32 @@
+/**
+ * CLI session persistence helpers.
+ * Keeps provider-keyed session bindings, reuse fingerprints, and legacy
+ * Claude CLI state in one normalized session-store contract.
+ */
 import crypto from "node:crypto";
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { CliSessionBinding, SessionEntry } from "../config/sessions.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
-import { normalizeProviderId } from "./model-selection.js";
+import { normalizeCliSessionReseedReceipt } from "../config/sessions/cli-session-binding.js";
+import { readErrorName } from "../infra/errors.js";
+import { isFailoverError } from "./failover-error.js";
+import type { FailoverReason } from "./failover/signal.js";
+export {
+  clearAllCliSessions,
+  getCliSessionBinding,
+  getCliSessionId,
+} from "../config/sessions/cli-session-binding.js";
 
 const CLAUDE_CLI_BACKEND_ID = "claude-cli";
 
+/** Whether a failover proves the provider-side conversation can no longer be resumed. */
+export function isCliSessionInvalidatingFailoverReason(reason: FailoverReason): boolean {
+  // Auth identity changes are handled by the reuse fingerprint's auth epoch.
+  // Other execution failures say nothing about the persisted transcript.
+  return reason === "session_expired";
+}
+
+/** Hash CLI session-sensitive text so reuse checks can compare stable fingerprints. */
 export function hashCliSessionText(value: string | undefined): string | undefined {
   const trimmed = normalizeOptionalString(value);
   if (!trimmed) {
@@ -13,53 +35,12 @@ export function hashCliSessionText(value: string | undefined): string | undefine
   return crypto.createHash("sha256").update(trimmed).digest("hex");
 }
 
-export function getCliSessionBinding(
-  entry: SessionEntry | undefined,
-  provider: string,
-): CliSessionBinding | undefined {
-  if (!entry) {
-    return undefined;
-  }
-  const normalized = normalizeProviderId(provider);
-  const fromBindings = entry.cliSessionBindings?.[normalized];
-  const bindingSessionId = normalizeOptionalString(fromBindings?.sessionId);
-  if (bindingSessionId) {
-    return {
-      sessionId: bindingSessionId,
-      ...(fromBindings?.forceReuse === true ? { forceReuse: true } : {}),
-      authProfileId: normalizeOptionalString(fromBindings?.authProfileId),
-      authEpoch: normalizeOptionalString(fromBindings?.authEpoch),
-      authEpochVersion: fromBindings?.authEpochVersion,
-      extraSystemPromptHash: normalizeOptionalString(fromBindings?.extraSystemPromptHash),
-      mcpConfigHash: normalizeOptionalString(fromBindings?.mcpConfigHash),
-      mcpResumeHash: normalizeOptionalString(fromBindings?.mcpResumeHash),
-    };
-  }
-  const fromMap = entry.cliSessionIds?.[normalized];
-  const normalizedFromMap = normalizeOptionalString(fromMap);
-  if (normalizedFromMap) {
-    return { sessionId: normalizedFromMap };
-  }
-  if (normalized === CLAUDE_CLI_BACKEND_ID) {
-    const legacy = normalizeOptionalString(entry.claudeCliSessionId);
-    if (legacy) {
-      return { sessionId: legacy };
-    }
-  }
-  return undefined;
-}
-
-export function getCliSessionId(
-  entry: SessionEntry | undefined,
-  provider: string,
-): string | undefined {
-  return getCliSessionBinding(entry, provider)?.sessionId;
-}
-
+/** Store a reusable CLI session ID without extra reuse guards. */
 export function setCliSessionId(entry: SessionEntry, provider: string, sessionId: string): void {
   setCliSessionBinding(entry, provider, { sessionId });
 }
 
+/** Store a CLI session binding and mirror it to legacy/simple session-id fields. */
 export function setCliSessionBinding(
   entry: SessionEntry,
   provider: string,
@@ -70,11 +51,21 @@ export function setCliSessionBinding(
   if (!trimmed) {
     return;
   }
+  const previousBinding = entry.cliSessionBindings?.[normalized];
+  const previousReceipt =
+    normalizeOptionalString(previousBinding?.sessionId) === trimmed
+      ? normalizeCliSessionReseedReceipt(previousBinding?.reseedReceipt)
+      : undefined;
+  const reseedReceipt = normalizeCliSessionReseedReceipt(binding.reseedReceipt) ?? previousReceipt;
   entry.cliSessionBindings = {
     ...entry.cliSessionBindings,
     [normalized]: {
       sessionId: trimmed,
+      ...(normalizeOptionalString(binding.resumeCheckpointId)
+        ? { resumeCheckpointId: normalizeOptionalString(binding.resumeCheckpointId) }
+        : {}),
       ...(binding.forceReuse === true ? { forceReuse: true } : {}),
+      ...(binding.forkNextResume === true ? { forkNextResume: true } : {}),
       ...(normalizeOptionalString(binding.authProfileId)
         ? { authProfileId: normalizeOptionalString(binding.authProfileId) }
         : {}),
@@ -87,12 +78,22 @@ export function setCliSessionBinding(
       ...(normalizeOptionalString(binding.extraSystemPromptHash)
         ? { extraSystemPromptHash: normalizeOptionalString(binding.extraSystemPromptHash) }
         : {}),
+      ...(normalizeOptionalString(binding.messageToolPolicyHash)
+        ? { messageToolPolicyHash: normalizeOptionalString(binding.messageToolPolicyHash) }
+        : {}),
+      ...(normalizeOptionalString(binding.promptToolNamesHash)
+        ? { promptToolNamesHash: normalizeOptionalString(binding.promptToolNamesHash) }
+        : {}),
+      ...(normalizeOptionalString(binding.cwdHash)
+        ? { cwdHash: normalizeOptionalString(binding.cwdHash) }
+        : {}),
       ...(normalizeOptionalString(binding.mcpConfigHash)
         ? { mcpConfigHash: normalizeOptionalString(binding.mcpConfigHash) }
         : {}),
       ...(normalizeOptionalString(binding.mcpResumeHash)
         ? { mcpResumeHash: normalizeOptionalString(binding.mcpResumeHash) }
         : {}),
+      ...(reseedReceipt ? { reseedReceipt } : {}),
     },
   };
   entry.cliSessionIds = { ...entry.cliSessionIds, [normalized]: trimmed };
@@ -101,6 +102,7 @@ export function setCliSessionBinding(
   }
 }
 
+/** Remove the stored CLI session binding for one provider. */
 export function clearCliSession(entry: SessionEntry, provider: string): void {
   const normalized = normalizeProviderId(provider);
   if (entry.cliSessionBindings?.[normalized] !== undefined) {
@@ -118,35 +120,72 @@ export function clearCliSession(entry: SessionEntry, provider: string): void {
   }
 }
 
-export function clearAllCliSessions(entry: SessionEntry): void {
-  entry.cliSessionBindings = undefined;
-  entry.cliSessionIds = undefined;
-  entry.claudeCliSessionId = undefined;
+/** Decide whether a failed CLI turn invalidates the binding it tried to resume. */
+export function shouldClearFailedCliSessionBinding(params: {
+  error: unknown;
+  binding?: CliSessionBinding;
+  hasNewGeneratedMediaTask?: boolean;
+}): boolean {
+  if (!normalizeOptionalString(params.binding?.sessionId)) {
+    return false;
+  }
+  // Detached media delivers back into this run later and still needs the binding.
+  if (params.hasNewGeneratedMediaTask === true) {
+    return false;
+  }
+  if (isFailoverError(params.error)) {
+    return isCliSessionInvalidatingFailoverReason(params.error.reason);
+  }
+  // A pre-successor fork abort keeps its one-shot marker for the next turn.
+  return params.binding?.forkNextResume !== true && readErrorName(params.error) === "AbortError";
 }
 
+/** Stable reason used when recording why a failed reused CLI session was cleared. */
+export function resolveCliSessionClearReason(error: unknown): string {
+  return isFailoverError(error) ? error.reason : (readErrorName(error) ?? "error");
+}
+
+type CliSessionInvalidatedReason = "auth-profile" | "auth-epoch" | "message-policy" | "cwd" | "mcp";
+
+type CliSessionContentDriftReason = "system-prompt" | "prompt-tools";
+
+export type CliSessionReuseResult =
+  | { mode: "none" }
+  | { mode: "reuse"; sessionId: string }
+  | {
+      mode: "reuse-with-drift";
+      sessionId: string;
+      drift: { reasons: CliSessionContentDriftReason[] };
+    }
+  | { mode: "invalidate"; invalidatedReason: CliSessionInvalidatedReason };
+
+/** Decide whether a stored CLI session can be reused for the current auth/prompt/cwd/MCP state. */
 export function resolveCliSessionReuse(params: {
   binding?: CliSessionBinding;
   authProfileId?: string;
   authEpoch?: string;
   authEpochVersion: number;
   extraSystemPromptHash?: string;
+  messageToolPolicyHash?: string;
+  promptToolNamesHash?: string;
+  cwdHash?: string;
   mcpConfigHash?: string;
   mcpResumeHash?: string;
-}): {
-  sessionId?: string;
-  invalidatedReason?: "auth-profile" | "auth-epoch" | "system-prompt" | "mcp";
-} {
+}): CliSessionReuseResult {
   const binding = params.binding;
   const sessionId = normalizeOptionalString(binding?.sessionId);
   if (!sessionId) {
-    return {};
+    return { mode: "none" };
   }
   if (binding?.forceReuse === true) {
-    return { sessionId };
+    return { mode: "reuse", sessionId };
   }
   const currentAuthProfileId = normalizeOptionalString(params.authProfileId);
   const currentAuthEpoch = normalizeOptionalString(params.authEpoch);
   const currentExtraSystemPromptHash = normalizeOptionalString(params.extraSystemPromptHash);
+  const currentMessageToolPolicyHash = normalizeOptionalString(params.messageToolPolicyHash);
+  const currentPromptToolNamesHash = normalizeOptionalString(params.promptToolNamesHash);
+  const currentCwdHash = normalizeOptionalString(params.cwdHash);
   const currentMcpConfigHash = normalizeOptionalString(params.mcpConfigHash);
   const currentMcpResumeHash = normalizeOptionalString(params.mcpResumeHash);
   const storedAuthProfileId = normalizeOptionalString(binding?.authProfileId);
@@ -158,29 +197,50 @@ export function resolveCliSessionReuse(params: {
     storedAuthEpoch === currentAuthEpoch;
   if (storedAuthProfileId !== currentAuthProfileId) {
     if (!hasMatchingVersionedAuthEpoch) {
-      return { invalidatedReason: "auth-profile" };
+      return { mode: "invalidate", invalidatedReason: "auth-profile" };
     }
   }
   if (
     binding?.authEpochVersion === params.authEpochVersion &&
     storedAuthEpoch !== currentAuthEpoch
   ) {
-    return { invalidatedReason: "auth-epoch" };
+    return { mode: "invalidate", invalidatedReason: "auth-epoch" };
   }
-  const storedExtraSystemPromptHash = normalizeOptionalString(binding?.extraSystemPromptHash);
-  if (storedExtraSystemPromptHash !== currentExtraSystemPromptHash) {
-    return { invalidatedReason: "system-prompt" };
+  const storedMessageToolPolicyHash = normalizeOptionalString(binding?.messageToolPolicyHash);
+  if (storedMessageToolPolicyHash !== currentMessageToolPolicyHash) {
+    return { mode: "invalidate", invalidatedReason: "message-policy" };
+  }
+  const storedCwdHash = normalizeOptionalString(binding?.cwdHash);
+  if (storedCwdHash !== undefined && storedCwdHash !== currentCwdHash) {
+    return { mode: "invalidate", invalidatedReason: "cwd" };
   }
   const storedMcpResumeHash = normalizeOptionalString(binding?.mcpResumeHash);
   if (storedMcpResumeHash && currentMcpResumeHash) {
+    // Resume hashes are stricter than raw MCP config hashes: a match proves the
+    // exact resumed CLI tool topology still belongs to this session.
     if (storedMcpResumeHash !== currentMcpResumeHash) {
-      return { invalidatedReason: "mcp" };
+      return { mode: "invalidate", invalidatedReason: "mcp" };
     }
-    return { sessionId };
+  } else {
+    const storedMcpConfigHash = normalizeOptionalString(binding?.mcpConfigHash);
+    if (storedMcpConfigHash !== currentMcpConfigHash) {
+      return { mode: "invalidate", invalidatedReason: "mcp" };
+    }
   }
-  const storedMcpConfigHash = normalizeOptionalString(binding?.mcpConfigHash);
-  if (storedMcpConfigHash !== currentMcpConfigHash) {
-    return { invalidatedReason: "mcp" };
+
+  const driftReasons: CliSessionContentDriftReason[] = [];
+  const storedExtraSystemPromptHash = normalizeOptionalString(binding?.extraSystemPromptHash);
+  if (storedExtraSystemPromptHash !== currentExtraSystemPromptHash) {
+    driftReasons.push("system-prompt");
   }
-  return { sessionId };
+  const storedPromptToolNamesHash = normalizeOptionalString(binding?.promptToolNamesHash);
+  if (storedPromptToolNamesHash !== currentPromptToolNamesHash) {
+    driftReasons.push("prompt-tools");
+  }
+  if (driftReasons.length > 0) {
+    // Content drift resumes by contract (#99729): the transcript remains usable.
+    // Deleting this binding here makes queued turns spawn without session history.
+    return { mode: "reuse-with-drift", sessionId, drift: { reasons: driftReasons } };
+  }
+  return { mode: "reuse", sessionId };
 }

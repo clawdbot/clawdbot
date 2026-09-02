@@ -1,19 +1,21 @@
-import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/agent-runtime";
-import type { ModelCatalogEntry } from "openclaw/plugin-sdk/agent-runtime";
+// Telegram plugin module implements sticker cache behavior.
 import {
   findModelInCatalog,
-  loadModelCatalog,
+  loadPreparedModelCatalog,
   modelSupportsVision,
+  resolveAgentDir,
+  resolveApiKeyForProvider,
+  resolveDefaultModelForAgent,
+  type ModelCatalogEntry,
 } from "openclaw/plugin-sdk/agent-runtime";
-import { resolveDefaultModelForAgent } from "openclaw/plugin-sdk/agent-runtime";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
-import { resolveAutoImageModel } from "openclaw/plugin-sdk/media-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
+  resolveAutoImageModel,
   resolveAutoMediaKeyProviders,
   resolveDefaultMediaModel,
 } from "openclaw/plugin-sdk/media-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { getTelegramRuntime } from "./runtime.js";
 export {
   cacheSticker,
@@ -26,6 +28,16 @@ export {
 
 const STICKER_DESCRIPTION_PROMPT =
   "Describe this sticker image in 1-2 sentences. Focus on what the sticker depicts (character, object, action, emotion). Be concise and objective.";
+
+function isMinimaxVlmProvider(provider: string): boolean {
+  const normalized = normalizeLowercaseStringOrEmpty(provider);
+  return (
+    normalized === "minimax" ||
+    normalized === "minimax-cn" ||
+    normalized === "minimax-portal" ||
+    normalized === "minimax-portal-cn"
+  );
+}
 
 export interface DescribeStickerParams {
   imagePath: string;
@@ -46,11 +58,32 @@ export async function describeStickerImage(params: DescribeStickerParams): Promi
   let activeModel = undefined as { provider: string; model: string } | undefined;
   let catalog: ModelCatalogEntry[] = [];
   try {
-    catalog = await loadModelCatalog({ config: cfg });
+    catalog = await loadPreparedModelCatalog({
+      config: cfg,
+      ...(agentId
+        ? {
+            agentId,
+            agentDir: agentDir ?? resolveAgentDir(cfg, agentId),
+          }
+        : agentDir
+          ? { agentDir }
+          : {}),
+      readOnly: true,
+    });
     const entry = findModelInCatalog(catalog, defaultModel.provider, defaultModel.model);
     const supportsVision = modelSupportsVision(entry);
     if (supportsVision) {
-      activeModel = { provider: defaultModel.provider, model: defaultModel.model };
+      const model = isMinimaxVlmProvider(defaultModel.provider)
+        ? resolveDefaultMediaModel({
+            cfg,
+            providerId: defaultModel.provider,
+            capability: "image",
+            includeConfiguredImageModels: false,
+          })
+        : defaultModel.model;
+      if (model) {
+        activeModel = { provider: defaultModel.provider, model };
+      }
     }
   } catch {
     // Ignore catalog failures; fall back to auto selection.
@@ -83,8 +116,12 @@ export async function describeStickerImage(params: DescribeStickerParams): Promi
       cfg,
       providerId: provider,
       capability: "image",
+      includeConfiguredImageModels: !isMinimaxVlmProvider(provider),
     });
     const preferred = entries.find((entry) => entry.id === defaultId);
+    if (isMinimaxVlmProvider(provider)) {
+      return preferred;
+    }
     return preferred ?? entries[0];
   };
 

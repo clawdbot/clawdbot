@@ -1,3 +1,4 @@
+// Whatsapp tests cover session contract plugin behavior.
 import { describe, expect, it } from "vitest";
 import {
   canonicalizeLegacySessionKey,

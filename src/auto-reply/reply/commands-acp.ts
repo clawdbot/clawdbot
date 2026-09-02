@@ -1,12 +1,17 @@
+// Implements ACP session commands and runtime status formatting.
 import { logVerbose } from "../../globals.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
-import { requireGatewayClientScopeForInternalChannel } from "./command-gates.js";
+import {
+  commandReply,
+  matchCommandPrefix,
+  rejectNonOwnerCommand,
+  requireGatewayClientScope,
+} from "./command-gates.js";
 import {
   COMMAND,
   type AcpAction,
   resolveAcpAction,
   resolveAcpHelpText,
-  stopWithText,
 } from "./commands-acp/shared.js";
 import type {
   CommandHandler,
@@ -70,7 +75,7 @@ async function loadAcpActionHandler(action: Exclude<AcpAction, "help">): Promise
   return diagnosticHandlers[action];
 }
 
-const ACP_MUTATING_ACTIONS = new Set<AcpAction>([
+const ACP_OWNER_REQUIRED_ACTIONS = new Set<AcpAction>([
   "spawn",
   "cancel",
   "steer",
@@ -86,8 +91,8 @@ const ACP_MUTATING_ACTIONS = new Set<AcpAction>([
 ]);
 
 export const handleAcpCommand: CommandHandler = async (params, _allowTextCommands) => {
-  const normalized = params.command.commandBodyNormalized;
-  if (!normalized.startsWith(COMMAND)) {
+  const rest = matchCommandPrefix(params.command.commandBodyNormalized, COMMAND);
+  if (rest === null) {
     return null;
   }
 
@@ -96,21 +101,26 @@ export const handleAcpCommand: CommandHandler = async (params, _allowTextCommand
     return { shouldContinue: false };
   }
 
-  const rest = normalized.slice(COMMAND.length).trim();
   const tokens = rest.split(/\s+/).filter(Boolean);
   const action = resolveAcpAction(tokens);
   if (action === "help") {
-    return stopWithText(resolveAcpHelpText());
+    return commandReply(resolveAcpHelpText());
   }
 
-  if (ACP_MUTATING_ACTIONS.has(action)) {
-    const scopeBlock = requireGatewayClientScopeForInternalChannel(params, {
+  if (ACP_OWNER_REQUIRED_ACTIONS.has(action)) {
+    const scopeBlock = requireGatewayClientScope(params, {
       label: "/acp",
       allowedScopes: ["operator.admin"],
       missingText: "This /acp action requires operator.admin on the internal channel.",
     });
     if (scopeBlock) {
       return scopeBlock;
+    }
+    // Command auth maps internal operator.admin scope to owner identity, so this
+    // second gate rejects external non-owners without blocking Gateway admins.
+    const nonOwner = rejectNonOwnerCommand(params, "/acp");
+    if (nonOwner) {
+      return nonOwner;
     }
   }
 

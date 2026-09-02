@@ -1,3 +1,4 @@
+/** Test helper for OpenAI file-backed secret fixtures. */
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expect } from "vitest";
@@ -22,8 +23,6 @@ export const OPENAI_FILE_KEY_REF = {
 
 export const EMPTY_LOADABLE_PLUGIN_ORIGINS: ReadonlyMap<string, PluginOrigin> = new Map();
 export type SecretsRuntimeEnvSnapshot = ReturnType<typeof captureEnv>;
-
-const allowInsecureTempSecretFile = process.platform === "win32";
 
 export function asConfig(value: unknown): OpenClawConfig {
   return value as OpenClawConfig;
@@ -85,7 +84,6 @@ export function createOpenAIFileRuntimeConfig(secretFile: string): OpenClawConfi
           source: "file",
           path: secretFile,
           mode: "json",
-          ...(allowInsecureTempSecretFile ? { allowInsecurePath: true } : {}),
         },
       },
     },
@@ -106,8 +104,9 @@ export function expectResolvedOpenAIRuntime(agentDir: string) {
   const activeAuthStore = getActiveSecretsRuntimeSnapshot()?.authStores.find(
     (entry) => entry.agentDir === agentDir,
   )?.store;
-  expect(activeAuthStore?.profiles["openai:default"]).toMatchObject({
-    type: "api_key",
-    key: "sk-file-runtime",
-  });
+  const openaiProfile = activeAuthStore?.profiles["openai:default"];
+  expect(openaiProfile?.type).toBe("api_key");
+  if (openaiProfile?.type === "api_key") {
+    expect(openaiProfile.key).toBe("sk-file-runtime");
+  }
 }

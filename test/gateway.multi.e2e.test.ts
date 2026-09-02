@@ -1,3 +1,4 @@
+// Gateway multi E2E tests validate multi-gateway runtime behavior.
 import { afterAll, describe, expect, it } from "vitest";
 import { GatewayClient } from "../src/gateway/client.js";
 import {

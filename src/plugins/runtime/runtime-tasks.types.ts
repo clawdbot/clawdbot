@@ -1,5 +1,5 @@
+// Runtime task types describe plugin task runtime config and invocation options.
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import type { DetachedTaskLifecycleRuntime } from "../../tasks/detached-task-runtime-contract.js";
 import type { TaskDeliveryState } from "../../tasks/task-registry.types.js";
 import type { OpenClawPluginToolContext } from "../tool-types.js";
 import type { PluginRuntimeTaskFlow } from "./runtime-taskflow.types.js";
@@ -11,15 +11,7 @@ import type {
   TaskRunDetail,
   TaskRunView,
 } from "./task-domain-types.js";
-export type {
-  TaskFlowDetail,
-  TaskFlowView,
-  TaskRunAggregateSummary,
-  TaskRunCancelResult,
-  TaskRunDetail,
-  TaskRunView,
-} from "./task-domain-types.js";
-export type { DetachedTaskLifecycleRuntime } from "../../tasks/detached-task-runtime-contract.js";
+export type { TaskFlowDetail, TaskRunCancelResult } from "./task-domain-types.js";
 
 export type BoundTaskRunsRuntime = {
   readonly sessionKey: string;
@@ -34,10 +26,11 @@ export type BoundTaskRunsRuntime = {
 export type PluginRuntimeTaskRuns = {
   bindSession: (params: {
     sessionKey: string;
+    agentId?: string;
     requesterOrigin?: TaskDeliveryState["requesterOrigin"];
   }) => BoundTaskRunsRuntime;
   fromToolContext: (
-    ctx: Pick<OpenClawPluginToolContext, "sessionKey" | "deliveryContext">,
+    ctx: Pick<OpenClawPluginToolContext, "sessionKey" | "agentId" | "deliveryContext">,
   ) => BoundTaskRunsRuntime;
 };
 
@@ -65,6 +58,4 @@ export type PluginRuntimeTasks = {
   runs: PluginRuntimeTaskRuns;
   flows: PluginRuntimeTaskFlows;
   managedFlows: PluginRuntimeTaskFlow;
-  /** @deprecated Use runtime.tasks.flows for DTO-based TaskFlow access. */
-  flow: PluginRuntimeTaskFlow;
 };

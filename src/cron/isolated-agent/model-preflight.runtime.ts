@@ -1,15 +1,22 @@
-import { normalizeProviderId } from "../../agents/provider-id.js";
+/** Preflights local model-provider endpoints before scheduled cron runner startup. */
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { isLocalProviderBaseUrl } from "../../agents/model-provider-local.js";
 import type { ModelProviderConfig } from "../../config/types.models.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { formatErrorMessageWithCode } from "../../infra/errors.js";
 import { fetchWithSsrFGuard } from "../../infra/net/fetch-guard.js";
 import type { SsrFPolicy } from "../../infra/net/ssrf.js";
-import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
 
 const PREFLIGHT_CACHE_TTL_MS = 5 * 60_000;
 const PREFLIGHT_TIMEOUT_MS = 2_500;
+const MAX_PREFLIGHT_ERROR_CAUSE_DEPTH = 8;
+const MAX_PREFLIGHT_ERROR_CHARS = 1_000;
 
 type PreflightApi = "ollama" | "openai-completions";
 
+/** Local provider reachability result used to skip cron runs before runner startup. */
 export type CronModelProviderPreflightResult =
   | { status: "available" }
   | {
@@ -64,39 +71,6 @@ function normalizeProbeApi(providerConfig: ModelProviderConfig): PreflightApi | 
   return api === "ollama" || api === "openai-completions" ? api : undefined;
 }
 
-function isPrivateIpv4Host(host: string): boolean {
-  if (!/^\d+\.\d+\.\d+\.\d+$/.test(host)) {
-    return false;
-  }
-  const octets = host.split(".").map((part) => Number.parseInt(part, 10));
-  if (octets.some((part) => !Number.isInteger(part) || part < 0 || part > 255)) {
-    return false;
-  }
-  const [a, b] = octets;
-  return a === 10 || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168);
-}
-
-function isLocalProviderBaseUrl(baseUrl: string): boolean {
-  try {
-    let host = normalizeLowercaseStringOrEmpty(new URL(baseUrl).hostname);
-    if (host.startsWith("[") && host.endsWith("]")) {
-      host = host.slice(1, -1);
-    }
-    return (
-      host === "localhost" ||
-      host === "127.0.0.1" ||
-      host === "0.0.0.0" ||
-      host === "::1" ||
-      host === "::ffff:7f00:1" ||
-      host === "::ffff:127.0.0.1" ||
-      host.endsWith(".local") ||
-      isPrivateIpv4Host(host)
-    );
-  } catch {
-    return false;
-  }
-}
-
 function buildProbeUrl(api: PreflightApi, baseUrl: string): string {
   if (api === "ollama") {
     return `${baseUrl}/api/tags`;
@@ -111,12 +85,56 @@ function buildLocalProviderSsrFPolicy(baseUrl: string): SsrFPolicy | undefined {
       return undefined;
     }
     return {
+      // Local-provider probes intentionally allow private hosts, but only the
+      // exact hostname from the configured provider base URL.
       hostnameAllowlist: [parsed.hostname],
       allowPrivateNetwork: true,
     };
   } catch {
     return undefined;
   }
+}
+
+function readErrorProperty(error: unknown, key: "cause" | "code" | "message" | "name"): unknown {
+  if ((typeof error !== "object" && typeof error !== "function") || error === null) {
+    return undefined;
+  }
+  try {
+    return (error as Record<string, unknown>)[key];
+  } catch {
+    return undefined;
+  }
+}
+
+function collectPreflightErrorCauseChain(error: unknown): unknown[] {
+  const chain: unknown[] = [];
+  const seen = new Set<unknown>();
+  let current: unknown = error;
+  while (
+    current !== undefined &&
+    current !== null &&
+    chain.length < MAX_PREFLIGHT_ERROR_CAUSE_DEPTH &&
+    !seen.has(current)
+  ) {
+    seen.add(current);
+    chain.push(current);
+    current = readErrorProperty(current, "cause");
+  }
+  return chain;
+}
+
+function formatPreflightError(error: unknown): string {
+  const causeChain = collectPreflightErrorCauseChain(error);
+  const causeDetails = formatErrorMessageWithCode(error);
+  // fetchWithSsrFGuard propagates only its owned deadline as TimeoutError.
+  const classified = causeChain.some(
+    (candidate) => readErrorProperty(candidate, "name") === "TimeoutError",
+  )
+    ? `Local provider preflight exceeded its configured ${PREFLIGHT_TIMEOUT_MS}ms deadline | ${causeDetails}`
+    : causeDetails;
+  return classified.length <= MAX_PREFLIGHT_ERROR_CHARS
+    ? classified
+    : `${truncateUtf16Safe(classified, MAX_PREFLIGHT_ERROR_CHARS - 1)}…`;
 }
 
 function formatUnavailableReason(params: {
@@ -126,9 +144,9 @@ function formatUnavailableReason(params: {
   error: unknown;
 }): string {
   return [
-    `Agent cron job uses ${params.provider}/${params.model} but the local provider endpoint is not reachable at ${params.baseUrl}.`,
-    `Skipping this cron run; OpenClaw will retry the provider preflight on a later scheduled run.`,
-    `Last error: ${String(params.error)}`,
+    `This automation uses ${params.provider}/${params.model} but the local provider preflight failed at ${params.baseUrl}.`,
+    `The candidate is unavailable for this run; OpenClaw will retry its provider preflight on a later scheduled run.`,
+    `Last error: ${formatPreflightError(params.error)}`,
   ].join(" ");
 }
 
@@ -170,10 +188,16 @@ async function probeLocalProviderEndpoint(params: {
     // have the full provider context.
     void response.status;
   } finally {
+    // Captured responses can tee their body, so awaiting branch cancellation
+    // would hang the cron probe; start cancellation before closing the agent.
+    if (!response.bodyUsed) {
+      void response.body?.cancel().catch(() => undefined);
+    }
     await release();
   }
 }
 
+/** Checks local model-provider reachability before a scheduled cron run starts. */
 export async function preflightCronModelProvider(params: {
   cfg: OpenClawConfig;
   provider: string;
@@ -187,6 +211,8 @@ export async function preflightCronModelProvider(params: {
   const baseUrl = normalizeBaseUrl(providerConfig.baseUrl);
   const api = normalizeProbeApi(providerConfig);
   if (!baseUrl || !api || !isLocalProviderBaseUrl(baseUrl)) {
+    // Remote/cloud providers should fail in the model runner, not in this cron
+    // reachability preflight.
     return { status: "available" };
   }
 
@@ -194,6 +220,8 @@ export async function preflightCronModelProvider(params: {
   const cacheKey = `${api}\0${baseUrl}`;
   const cached = preflightCache.get(cacheKey);
   if (cached && nowMs - cached.checkedAtMs < PREFLIGHT_CACHE_TTL_MS) {
+    // Cache by endpoint, not model: this probe only verifies local server
+    // reachability, while model availability is handled by the runner.
     if (cached.result.status === "available") {
       return { status: "available" };
     }
@@ -224,6 +252,7 @@ export async function preflightCronModelProvider(params: {
   });
 }
 
+/** Clears the local-provider preflight cache for deterministic tests. */
 export function resetCronModelProviderPreflightCacheForTest(): void {
   preflightCache.clear();
 }

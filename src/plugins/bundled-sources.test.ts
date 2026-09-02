@@ -1,10 +1,16 @@
+/** Covers bundled plugin source overlays and packaged load-path decisions. */
+import { expectDefined } from "@openclaw/normalization-core";
 import { bundledPluginRootAt } from "openclaw/plugin-sdk/test-fixtures";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   findBundledPluginSource,
   findBundledPluginSourceInMap,
+  getProcessBundledPluginSources,
   resolveBundledPluginSources,
 } from "./bundled-sources.js";
+import { setCurrentPluginMetadataSnapshotState } from "./current-plugin-metadata-state.js";
+import { resetPluginCache } from "./plugin-cache.js";
+import { createPluginMetadataSnapshotFixture } from "./plugin-metadata.test-support.js";
 
 const APP_ROOT = "/app";
 
@@ -59,10 +65,13 @@ function setBundledManifestIdsByRoot(
             typeof manifestIds[rootDir] === "string"
               ? { id: manifestIds[rootDir] }
               : {
-                  id: manifestIds[rootDir].id,
+                  id: expectDefined(manifestIds[rootDir], "manifestIds[rootDir] test invariant").id,
                   configSchema: {
                     type: "object",
-                    required: manifestIds[rootDir].required,
+                    required: expectDefined(
+                      manifestIds[rootDir],
+                      "manifestIds[rootDir] test invariant",
+                    ).required,
                   },
                 },
         }
@@ -140,8 +149,35 @@ function expectBundledSourceLookupCase(params: {
 
 describe("bundled plugin sources", () => {
   beforeEach(() => {
+    resetPluginCache();
     discoverOpenClawPluginsMock.mockReset();
     loadPluginManifestMock.mockReset();
+  });
+  afterEach(() => resetPluginCache());
+
+  it("projects bundled sources from the Gateway inventory without rediscovery", () => {
+    const snapshot = createPluginMetadataSnapshotFixture({
+      plugins: [{ id: "feishu", rootDir: appBundledPluginRoot("feishu") }],
+    });
+    snapshot.bundledManifestRegistry = snapshot.manifestRegistry;
+    setCurrentPluginMetadataSnapshotState(
+      snapshot,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      "gateway",
+    );
+
+    const first = getProcessBundledPluginSources();
+    const second = getProcessBundledPluginSources();
+
+    expect([...first.values()]).toEqual([
+      { pluginId: "feishu", localPath: appBundledPluginRoot("feishu"), requiresConfig: false },
+    ]);
+    expect(second).toEqual(first);
+    expect(discoverOpenClawPluginsMock).not.toHaveBeenCalled();
+    expect(loadPluginManifestMock).not.toHaveBeenCalled();
   });
 
   it("resolves bundled sources keyed by plugin id", () => {
@@ -194,6 +230,11 @@ describe("bundled plugin sources", () => {
     [
       "finds bundled source by plugin id",
       { kind: "pluginId", value: "diffs" } as const,
+      { pluginId: "diffs", localPath: appBundledPluginRoot("diffs") },
+    ],
+    [
+      "finds bundled source by local path",
+      { kind: "localPath", value: appBundledPluginRoot("diffs") } as const,
       { pluginId: "diffs", localPath: appBundledPluginRoot("diffs") },
     ],
     [

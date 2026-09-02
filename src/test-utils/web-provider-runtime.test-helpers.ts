@@ -1,3 +1,4 @@
+// Test helpers for mocked web provider runtime dependencies.
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type {
   PluginWebFetchProviderEntry,
@@ -10,17 +11,22 @@ type CommonWebProviderTestParams = {
   credentialPath: string;
   autoDetectOrder?: number;
   requiresCredential?: boolean;
+  authProviderId?: string;
   getCredentialValue?: (config?: Record<string, unknown>) => unknown;
   getConfiguredCredentialValue?: (config?: OpenClawConfig) => unknown;
-  getConfiguredCredentialFallback?: PluginWebSearchProviderEntry["getConfiguredCredentialFallback"];
+  getConfiguredCredentialFallback?:
+    | PluginWebSearchProviderEntry["getConfiguredCredentialFallback"]
+    | PluginWebFetchProviderEntry["getConfiguredCredentialFallback"];
 };
 
 export type WebSearchTestProviderParams = CommonWebProviderTestParams & {
   createTool?: PluginWebSearchProviderEntry["createTool"];
+  getConfiguredCredentialFallback?: PluginWebSearchProviderEntry["getConfiguredCredentialFallback"];
 };
 
 export type WebFetchTestProviderParams = CommonWebProviderTestParams & {
   createTool?: PluginWebFetchProviderEntry["createTool"];
+  getConfiguredCredentialFallback?: PluginWebFetchProviderEntry["getConfiguredCredentialFallback"];
 };
 
 function createCommonProviderFields(params: CommonWebProviderTestParams) {
@@ -35,6 +41,7 @@ function createCommonProviderFields(params: CommonWebProviderTestParams) {
     credentialPath: params.credentialPath,
     autoDetectOrder: params.autoDetectOrder,
     requiresCredential: params.requiresCredential,
+    authProviderId: params.authProviderId,
     getCredentialValue: params.getCredentialValue ?? (() => undefined),
     setCredentialValue: () => {},
     getConfiguredCredentialValue: params.getConfiguredCredentialValue,

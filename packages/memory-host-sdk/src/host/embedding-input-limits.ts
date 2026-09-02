@@ -1,3 +1,4 @@
+// Memory Host SDK module implements embedding input limits behavior.
 import type { EmbeddingInput } from "./embedding-inputs.js";
 
 // Helpers for enforcing embedding model input size limits.

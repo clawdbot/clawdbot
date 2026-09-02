@@ -1,3 +1,4 @@
+/** Live Gemini CLI smoke for generated MCP system settings. */
 import { execFile } from "node:child_process";
 import http from "node:http";
 import { promisify } from "node:util";
@@ -24,6 +25,8 @@ async function startLocalStreamableHttpMcpServer(): Promise<{
   url: string;
   close: () => Promise<void>;
 }> {
+  // Real local MCP endpoint verifies Gemini consumes the generated settings
+  // rather than just checking file shape.
   const mcpServer = new McpServer({ name: "openclaw-gemini-live-probe", version: "1.0.0" });
   mcpServer.tool("openclaw_live_probe", "OpenClaw Gemini MCP live probe", async () => ({
     content: [{ type: "text", text: "ok" }],
@@ -31,12 +34,14 @@ async function startLocalStreamableHttpMcpServer(): Promise<{
 
   const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
   await mcpServer.connect(transport);
-  const httpServer = http.createServer(async (req, res) => {
-    if (!req.url?.startsWith("/mcp")) {
-      res.writeHead(404).end();
-      return;
-    }
-    await transport.handleRequest(req, res);
+  const httpServer = http.createServer((req, res) => {
+    void (async () => {
+      if (!req.url?.startsWith("/mcp")) {
+        res.writeHead(404).end();
+        return;
+      }
+      await transport.handleRequest(req, res);
+    })();
   });
 
   await new Promise<void>((resolve) => {
@@ -49,9 +54,9 @@ async function startLocalStreamableHttpMcpServer(): Promise<{
     url: `http://127.0.0.1:${port}/mcp`,
     close: async () => {
       await transport.close().catch(() => undefined);
-      await new Promise<void>((resolve, reject) =>
-        httpServer.close((error) => (error ? reject(error) : resolve())),
-      );
+      await new Promise<void>((resolve, reject) => {
+        httpServer.close((error) => (error ? reject(error) : resolve()));
+      });
     },
   };
 }

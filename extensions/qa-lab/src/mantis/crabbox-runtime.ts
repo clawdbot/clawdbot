@@ -1,8 +1,10 @@
+// Qa Lab plugin module implements crabbox runtime behavior.
 import { spawn, type SpawnOptions } from "node:child_process";
 import path from "node:path";
 import { pathExists } from "openclaw/plugin-sdk/security-runtime";
+import { trimToValue } from "../mantis-options.runtime.js";
 
-export type CommandResult = {
+type CommandResult = {
   stderr: string;
   stdout: string;
 };
@@ -19,16 +21,13 @@ export type CrabboxInspect = {
   provider?: string;
   ready?: boolean;
   slug?: string;
+  sshFallbackPorts?: string[];
+  sshHost?: string;
   sshKey?: string;
   sshPort?: string;
   sshUser?: string;
   state?: string;
 };
-
-function trimToValue(value: string | undefined) {
-  const trimmed = value?.trim();
-  return trimmed && trimmed.length > 0 ? trimmed : undefined;
-}
 
 export async function defaultCommandRunner(
   command: string,
@@ -42,15 +41,15 @@ export async function defaultCommandRunner(
     });
     let stdout = "";
     let stderr = "";
-    child.stdout?.on("data", (chunk: Buffer) => {
-      const text = chunk.toString();
+    child.stdout?.setEncoding("utf8");
+    child.stderr?.setEncoding("utf8");
+    child.stdout?.on("data", (text: string) => {
       stdout += text;
       if (options.stdio === "inherit") {
         process.stdout.write(text);
       }
     });
-    child.stderr?.on("data", (chunk: Buffer) => {
-      const text = chunk.toString();
+    child.stderr?.on("data", (text: string) => {
       stderr += text;
       if (options.stdio === "inherit") {
         process.stderr.write(text);
@@ -63,7 +62,11 @@ export async function defaultCommandRunner(
         return;
       }
       const detail = signal ? `signal ${signal}` : `exit code ${code ?? "unknown"}`;
-      reject(new Error(`${command} ${args.join(" ")} failed with ${detail}`));
+      reject(
+        new Error(
+          `${command} ${args.join(" ")} failed with ${detail}${stderr ? `\n${stderr.trimEnd()}` : ""}`,
+        ),
+      );
     });
   });
 }
@@ -85,7 +88,7 @@ export async function resolveCrabboxBin(params: {
   return "crabbox";
 }
 
-export function extractLeaseId(output: string) {
+function extractLeaseId(output: string) {
   return output.match(/\b(?:cbx_[a-f0-9]+|tbx_[A-Za-z0-9_-]+)\b/u)?.[0];
 }
 
@@ -114,10 +117,12 @@ export async function warmupCrabbox(params: {
   env: NodeJS.ProcessEnv;
   idleTimeout: string;
   machineClass: string;
+  market?: string;
   provider: string;
   runner: CommandRunner;
   ttl: string;
 }) {
+  const marketArgs = params.market ? ["--market", params.market] : [];
   const result = await runCommand({
     command: params.crabboxBin,
     args: [
@@ -128,6 +133,7 @@ export async function warmupCrabbox(params: {
       "--browser",
       "--class",
       params.machineClass,
+      ...marketArgs,
       "--idle-timeout",
       params.idleTimeout,
       "--ttl",
@@ -181,28 +187,99 @@ export async function stopCrabbox(params: {
   });
 }
 
-export function sshCommand(params: { inspect: CrabboxInspect }) {
-  const { host, sshKey, sshPort, sshUser } = params.inspect;
+function crabboxSshPortCandidates(inspect: Pick<CrabboxInspect, "sshFallbackPorts" | "sshPort">) {
+  const ports = [inspect.sshPort?.trim() || "22", ...(inspect.sshFallbackPorts ?? [])];
+  return [...new Set(ports.map((port) => port.trim()).filter(Boolean))] as [string, ...string[]];
+}
+
+function isSshConnectionFailure(error: unknown) {
+  const message = error instanceof Error ? error.message : String(error);
+  return /Connection (?:closed|refused|reset|timed out)|Operation timed out|Network is unreachable|No route to host/u.test(
+    message,
+  );
+}
+
+function sshCommandForPort(inspect: CrabboxInspect, sshPort: string) {
+  const host = inspect.sshHost || inspect.host;
+  const { sshKey, sshUser } = inspect;
   if (!host || !sshKey || !sshUser) {
     throw new Error("Crabbox inspect output is missing SSH copy details.");
   }
+  const options = [
+    "-p",
+    sshPort,
+    "-o",
+    "BatchMode=yes",
+    "-o",
+    "ConnectTimeout=15",
+    "-o",
+    "StrictHostKeyChecking=no",
+    "-o",
+    "UserKnownHostsFile=/dev/null",
+  ];
   return {
-    host,
-    sshArgs: [
-      "ssh",
-      "-i",
-      shellQuote(sshKey),
-      "-p",
-      sshPort ?? "22",
-      "-o",
-      "BatchMode=yes",
-      "-o",
-      "ConnectTimeout=15",
-      "-o",
-      "StrictHostKeyChecking=no",
-      "-o",
-      "UserKnownHostsFile=/dev/null",
-    ].join(" "),
-    sshUser,
+    probeArgs: ["-i", sshKey, ...options, `${sshUser}@${host}`, "exit 0"],
+    value: { host, sshArgs: ["ssh", "-i", shellQuote(sshKey), ...options].join(" "), sshUser },
   };
+}
+
+async function sshCommand(params: {
+  cwd: string;
+  env: NodeJS.ProcessEnv;
+  inspect: CrabboxInspect;
+  runner: CommandRunner;
+}) {
+  const candidates = crabboxSshPortCandidates(params.inspect);
+  if (candidates.length === 1) {
+    return sshCommandForPort(params.inspect, candidates[0]).value;
+  }
+
+  let lastError: unknown;
+  // Select the transport before rsync so a copy failure never replays the operation on another port.
+  for (const port of candidates) {
+    const command = sshCommandForPort(params.inspect, port);
+    try {
+      await runCommand({
+        args: command.probeArgs,
+        command: "ssh",
+        cwd: params.cwd,
+        env: params.env,
+        runner: params.runner,
+      });
+      return command.value;
+    } catch (error) {
+      if (!isSshConnectionFailure(error)) {
+        throw error;
+      }
+      lastError = error;
+    }
+  }
+  throw lastError;
+}
+
+export async function copyCrabboxArtifacts(params: {
+  cwd: string;
+  env: NodeJS.ProcessEnv;
+  exclude?: readonly string[];
+  inspect: CrabboxInspect;
+  outputDir: string;
+  remoteOutputDir: string;
+  runner: CommandRunner;
+}) {
+  const { host, sshArgs, sshUser } = await sshCommand(params);
+  const excludeArgs = params.exclude?.flatMap((pattern) => ["--exclude", pattern]) ?? [];
+  await runCommand({
+    command: "rsync",
+    args: [
+      "-az",
+      "-e",
+      sshArgs,
+      ...excludeArgs,
+      `${sshUser}@${host}:${params.remoteOutputDir}/`,
+      `${params.outputDir}/`,
+    ],
+    cwd: params.cwd,
+    env: params.env,
+    runner: params.runner,
+  });
 }

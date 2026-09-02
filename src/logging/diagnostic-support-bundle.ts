@@ -1,13 +1,17 @@
+// Diagnostic support bundle helpers collect logs and metadata for support exports.
 import fsp from "node:fs/promises";
 import path from "node:path";
+import { writeExternalFileWithinRoot } from "../infra/fs-safe.js";
 import { isPathInside } from "../infra/path-guards.js";
 
+// File builders and writers for redacted diagnostic support bundles.
 export type DiagnosticSupportBundleFile = {
   path: string;
   mediaType: string;
   content: string;
 };
 
+/** Manifest entry for one written support bundle file. */
 export type DiagnosticSupportBundleContent = {
   path: string;
   mediaType: string;
@@ -18,6 +22,7 @@ function supportBundleByteLength(content: string): number {
   return Buffer.byteLength(content, "utf8");
 }
 
+/** Creates a JSON support-bundle file with a safe relative path. */
 export function jsonSupportBundleFile(
   pathName: string,
   value: unknown,
@@ -29,6 +34,7 @@ export function jsonSupportBundleFile(
   };
 }
 
+/** Creates an NDJSON support-bundle file with a safe relative path. */
 export function jsonlSupportBundleFile(
   pathName: string,
   lines: readonly string[],
@@ -40,6 +46,7 @@ export function jsonlSupportBundleFile(
   };
 }
 
+/** Creates a UTF-8 text support-bundle file with a safe relative path. */
 export function textSupportBundleFile(
   pathName: string,
   content: string,
@@ -51,6 +58,7 @@ export function textSupportBundleFile(
   };
 }
 
+/** Summarizes support-bundle files for the bundle manifest. */
 export function supportBundleContents(
   files: readonly DiagnosticSupportBundleFile[],
 ): DiagnosticSupportBundleContent[] {
@@ -82,6 +90,7 @@ function resolveSupportBundleFilePath(outputDir: string, pathName: string): stri
   const safePath = assertSafeBundleRelativePath(pathName);
   const resolvedBase = path.resolve(outputDir);
   const resolvedFile = path.resolve(resolvedBase, safePath);
+  // Re-check after path.resolve so crafted relative paths cannot escape the output directory.
   if (resolvedFile === resolvedBase || !isPathInside(resolvedBase, resolvedFile)) {
     throw new Error(`Bundle file path escaped output directory: ${pathName}`);
   }
@@ -101,6 +110,7 @@ async function writeSupportBundleFile(
   });
 }
 
+/** Writes support-bundle files to a new private directory. */
 export async function writeSupportBundleDirectory(params: {
   outputDir: string;
   files: readonly DiagnosticSupportBundleFile[];
@@ -112,11 +122,12 @@ export async function writeSupportBundleDirectory(params: {
   return supportBundleContents(params.files);
 }
 
+/** Writes support-bundle files to a private zip archive and returns the published path and byte size. */
 export async function writeSupportBundleZip(params: {
   outputPath: string;
   files: readonly DiagnosticSupportBundleFile[];
   compressionLevel?: number;
-}): Promise<number> {
+}): Promise<{ path: string; bytes: number }> {
   const { default: JSZip } = await import("jszip");
   const zip = new JSZip();
   for (const file of params.files) {
@@ -127,7 +138,18 @@ export async function writeSupportBundleZip(params: {
     compression: "DEFLATE",
     compressionOptions: { level: params.compressionLevel ?? 6 },
   });
-  await fsp.mkdir(path.dirname(params.outputPath), { recursive: true, mode: 0o700 });
-  await fsp.writeFile(params.outputPath, buffer, { mode: 0o600 });
-  return buffer.length;
+  const outputPath = path.resolve(params.outputPath);
+  await fsp.mkdir(path.dirname(outputPath), { recursive: true, mode: 0o700 });
+  // Publish through the staged sibling writer: a failed or interrupted write
+  // must never truncate a previously exported archive at the final path, and
+  // the atomic rename also replaces an overly permissive pre-existing mode.
+  const published = await writeExternalFileWithinRoot({
+    rootDir: path.dirname(outputPath),
+    path: path.basename(outputPath),
+    fallbackFileName: "openclaw-support.zip",
+    write: async (tempPath) => {
+      await fsp.writeFile(tempPath, buffer, { mode: 0o600 });
+    },
+  });
+  return { path: published.path, bytes: buffer.length };
 }

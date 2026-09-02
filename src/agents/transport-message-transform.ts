@@ -1,4 +1,11 @@
-import type { Api, Context, Model } from "@mariozechner/pi-ai";
+import { resolveModelBoundThinkingReplayMode } from "@openclaw/ai/internal/anthropic";
+/**
+ * Normalizes transcript messages before provider transport replay. It drops
+ * unsafe failed turns, maps tool-call ids across model boundaries, and fills
+ * strict provider tool-result gaps when supported.
+ */
+import type { Api, Context, Model } from "../llm/types.js";
+import { isReasoningOnlyLengthAssistantTurn } from "./replay-turn-classification.js";
 import { repairToolUseResultPairing } from "./session-transcript-repair.js";
 
 const SYNTHETIC_TOOL_RESULT_APIS = new Set<string>([
@@ -8,21 +15,23 @@ const SYNTHETIC_TOOL_RESULT_APIS = new Set<string>([
   "google-generative-ai",
   "openclaw-google-generative-ai-transport",
   "openai-responses",
-  "openai-codex-responses",
+  "openai-chatgpt-responses",
   "azure-openai-responses",
   "openclaw-openai-responses-transport",
+  "openclaw-openai-chatgpt-responses-transport",
   "openclaw-azure-openai-responses-transport",
 ]);
 
-// "aborted" is an OpenAI Responses-family convention from upstream Codex
-// history normalization. Gemini/Anthropic transports use their own text while
-// still needing synthetic results to satisfy provider turn-shape contracts;
-// tool-replay-repair.live.test.ts exercises both paths against real models.
-const CODEX_STYLE_ABORTED_OUTPUT_APIS = new Set<string>([
+// "aborted" is the OpenAI Responses-family synthetic result convention,
+// inherited from upstream Codex history normalization. It applies to public,
+// Codex, Azure, and their OpenClaw transport aliases; Gemini/Anthropic use their
+// own text. tool-replay-repair.live.test.ts exercises both paths against real models.
+const OPENAI_RESPONSES_ABORTED_OUTPUT_APIS = new Set<string>([
   "openai-responses",
-  "openai-codex-responses",
+  "openai-chatgpt-responses",
   "azure-openai-responses",
   "openclaw-openai-responses-transport",
+  "openclaw-openai-chatgpt-responses-transport",
   "openclaw-azure-openai-responses-transport",
 ]);
 
@@ -34,21 +43,39 @@ function isFailedAssistantTurn(message: Context["messages"][number]): boolean {
   if (message.role !== "assistant") {
     return false;
   }
-  return message.stopReason === "error" || message.stopReason === "aborted";
+  return (
+    message.stopReason === "error" ||
+    message.stopReason === "aborted" ||
+    isReasoningOnlyLengthAssistantTurn(message)
+  );
 }
 
+function failedAssistantHasToolCalls(message: Context["messages"][number]): boolean {
+  return (
+    message.role === "assistant" &&
+    (message.stopReason === "error" || message.stopReason === "aborted") &&
+    Array.isArray(message.content) &&
+    message.content.some((block) => block.type === "toolCall")
+  );
+}
+
+/** Transforms transcript messages into a provider-safe replay context. */
 export function transformTransportMessages(
   messages: Context["messages"],
-  model: Model<Api>,
+  model: Model,
   normalizeToolCallId?: (
     id: string,
-    targetModel: Model<Api>,
+    targetModel: Model,
     source: { provider: string; api: Api; model: string },
   ) => string,
-  options?: { preserveCrossModelToolCallThoughtSignature?: boolean },
+  options?: {
+    normalizeSameModelToolCallIds?: boolean;
+    preserveCrossModelToolCallThoughtSignature?: boolean;
+    preserveUnframedToolResults?: boolean;
+  },
 ): Context["messages"] {
   const allowSyntheticToolResults = defaultAllowSyntheticToolResults(model.api);
-  const syntheticToolResultText = CODEX_STYLE_ABORTED_OUTPUT_APIS.has(model.api)
+  const syntheticToolResultText = OPENAI_RESPONSES_ABORTED_OUTPUT_APIS.has(model.api)
     ? "aborted"
     : "No result provided";
   const toolCallIdMap = new Map<string, string>();
@@ -65,11 +92,34 @@ export function transformTransportMessages(
     if (msg.role !== "assistant") {
       return msg;
     }
+    const modelBoundThinkingReplayMode = resolveModelBoundThinkingReplayMode({
+      source: {
+        provider: msg.provider,
+        api: msg.api,
+        modelId: msg.model,
+        responseModelId: msg.responseModel,
+      },
+      target: {
+        provider: model.provider,
+        api: model.api,
+        modelId: model.id,
+        modelParams: model.params,
+      },
+    });
     const isSameModel =
-      msg.provider === model.provider && msg.api === model.api && msg.model === model.id;
+      modelBoundThinkingReplayMode === "preserve" ||
+      (msg.provider === model.provider && msg.api === model.api && msg.model === model.id);
+    const sourceContent = Array.isArray(msg.content)
+      ? msg.content
+      : msg.content != null && typeof msg.content === "object"
+        ? ([msg.content] as typeof msg.content)
+        : [];
     const content: typeof msg.content = [];
-    for (const block of msg.content) {
+    for (const block of sourceContent) {
       if (block.type === "thinking") {
+        if (modelBoundThinkingReplayMode === "drop") {
+          continue;
+        }
         if (block.redacted) {
           if (isSameModel) {
             content.push(block);
@@ -103,7 +153,10 @@ export function transformTransportMessages(
         normalizedToolCall = { ...normalizedToolCall };
         delete normalizedToolCall.thoughtSignature;
       }
-      if (!isSameModel && normalizeToolCallId) {
+      if (
+        (!isSameModel || options?.normalizeSameModelToolCallIds === true) &&
+        normalizeToolCallId
+      ) {
         const normalizedId = normalizeToolCallId(block.id, model, msg);
         if (normalizedId !== block.id) {
           toolCallIdMap.set(block.id, normalizedId);
@@ -114,21 +167,29 @@ export function transformTransportMessages(
     }
     return { ...msg, content };
   });
-  // Preserve the old transport replay filter: failed streamed turns can contain
-  // partial text, partial tool calls, or both, and strict providers can treat
-  // them as valid assistant context on retry unless we drop the whole turn.
-  const replayable = transformed.filter((msg) => !isFailedAssistantTurn(msg));
+  // Pairing-aware transports must let shared repair see errored tool-call frames and
+  // their adjacent results together; pre-filtering the call can misattribute its result
+  // to an older turn that reused the same provider id.
+  const replayable = transformed.filter((_, index) => {
+    const original = messages[index];
+    if (!original) {
+      return true;
+    }
+    return allowSyntheticToolResults
+      ? !isFailedAssistantTurn(original) || failedAssistantHasToolCalls(original)
+      : !isFailedAssistantTurn(original);
+  });
 
   if (!allowSyntheticToolResults) {
     return replayable;
   }
 
-  // PI's local transform can synthesize missing results, but it does not move
+  // The local transport transform can synthesize missing results, but it does not move
   // displaced real results back before an intervening user turn. Shared repair
-  // handles both, while preserving the previous transport behavior of dropping
-  // aborted/error assistant tool-call turns before replaying strict providers.
+  // handles both and drops aborted/error turns together with their owned results.
   return repairToolUseResultPairing(replayable, {
     erroredAssistantResultPolicy: "drop",
     missingToolResultText: syntheticToolResultText,
+    preserveUnframedToolResults: options?.preserveUnframedToolResults,
   }).messages as Context["messages"];
 }

@@ -1,3 +1,4 @@
+// Imessage tests cover config schema plugin behavior.
 import { describe, expect, it } from "vitest";
 import { IMessageConfigSchema } from "../config-api.js";
 
@@ -23,6 +24,14 @@ describe("imessage config schema", () => {
     }
   });
 
+  it("accepts account allowlist policy inherited from the channel", () => {
+    const result = IMessageConfigSchema.safeParse({
+      allowFrom: ["alice"],
+      accounts: { work: { dmPolicy: "allowlist" } },
+    });
+    expect(result.success).toBe(true);
+  });
+
   it("defaults dm/group policy", () => {
     const res = IMessageConfigSchema.safeParse({});
 
@@ -30,6 +39,28 @@ describe("imessage config schema", () => {
     if (res.success) {
       expect(res.data.dmPolicy).toBe("pairing");
       expect(res.data.groupPolicy).toBe("allowlist");
+    }
+  });
+
+  it.each([
+    { scope: "channel", config: { joinIntro: false }, path: [] },
+    {
+      scope: "account",
+      config: { accounts: { personal: { joinIntro: false } } },
+      path: ["accounts", "personal"],
+    },
+  ])("rejects unsupported $scope join introductions", ({ config, path }) => {
+    const res = IMessageConfigSchema.safeParse(config);
+
+    expect(res.success).toBe(false);
+    if (!res.success) {
+      expect(res.error.issues).toContainEqual(
+        expect.objectContaining({
+          code: "unrecognized_keys",
+          keys: ["joinIntro"],
+          path,
+        }),
+      );
     }
   });
 
@@ -68,6 +99,87 @@ describe("imessage config schema", () => {
     expect(res.success).toBe(true);
     if (res.success) {
       expect(res.data.textChunkLimit).toBe(1111);
+    }
+  });
+
+  it("accepts nested delivery streaming config", () => {
+    const res = IMessageConfigSchema.safeParse({
+      enabled: true,
+      streaming: {
+        chunkMode: "newline",
+        block: {
+          enabled: true,
+          coalesce: { minChars: 200, idleMs: 50 },
+        },
+      },
+      accounts: {
+        personal: {
+          streaming: { chunkMode: "length", block: { enabled: false } },
+        },
+      },
+    });
+
+    expect(res.success).toBe(true);
+    if (res.success) {
+      expect(res.data.streaming?.chunkMode).toBe("newline");
+      expect(res.data.streaming?.block?.enabled).toBe(true);
+      expect(res.data.accounts?.personal?.streaming?.block?.enabled).toBe(false);
+    }
+  });
+
+  it("accepts reaction notification mode overrides", () => {
+    const res = IMessageConfigSchema.safeParse({
+      reactionNotifications: "all",
+      accounts: {
+        quiet: {
+          reactionNotifications: "off",
+        },
+      },
+    });
+
+    expect(res.success).toBe(true);
+  });
+
+  it("accepts send transport overrides", () => {
+    const res = IMessageConfigSchema.safeParse({
+      sendTransport: "auto",
+      accounts: {
+        bridge: {
+          sendTransport: "bridge",
+        },
+        applescript: {
+          sendTransport: "applescript",
+        },
+      },
+    });
+
+    expect(res.success).toBe(true);
+    if (res.success) {
+      expect(res.data.sendTransport).toBe("auto");
+      expect(res.data.accounts?.bridge?.sendTransport).toBe("bridge");
+      expect(res.data.accounts?.applescript?.sendTransport).toBe("applescript");
+    }
+  });
+
+  it("rejects invalid send transport overrides", () => {
+    const res = IMessageConfigSchema.safeParse({
+      sendTransport: "private-api",
+    });
+
+    expect(res.success).toBe(false);
+    if (!res.success) {
+      expect(res.error.issues[0]?.path.join(".")).toBe("sendTransport");
+    }
+  });
+
+  it("rejects invalid reaction notification modes", () => {
+    const res = IMessageConfigSchema.safeParse({
+      reactionNotifications: "allowlist",
+    });
+
+    expect(res.success).toBe(false);
+    if (!res.success) {
+      expect(res.error.issues[0]?.path.join(".")).toBe("reactionNotifications");
     }
   });
 

@@ -17,6 +17,6 @@ export type {
 } from "openclaw/plugin-sdk/channel-contract";
 export type { ChannelPlugin } from "openclaw/plugin-sdk/channel-core";
 export type { OutboundDeliveryResult } from "openclaw/plugin-sdk/channel-send-result";
-export type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+export type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 export type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
 export type { WizardPrompter } from "openclaw/plugin-sdk/setup";

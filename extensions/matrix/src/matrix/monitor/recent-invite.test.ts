@@ -1,3 +1,4 @@
+// Matrix tests cover recent invite plugin behavior.
 import { describe, expect, it } from "vitest";
 import { shouldPromoteRecentInviteRoom } from "./recent-invite.js";
 

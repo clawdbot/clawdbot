@@ -1,3 +1,4 @@
+// Regresses rejection of legacy routing allowFrom config.
 import { describe, expect, it } from "vitest";
 import { validateConfigObject } from "./validation.js";
 
@@ -35,9 +36,8 @@ describe("legacy config detection", () => {
         },
       },
       agents: {
-        list: [
-          {
-            id: "work",
+        entries: {
+          work: {
             workspace: "~/openclaw-work",
             tools: {
               elevated: {
@@ -46,12 +46,12 @@ describe("legacy config detection", () => {
               },
             },
           },
-        ],
+        },
       },
     });
     expect(res.ok).toBe(true);
     if (res.ok) {
-      expect(res.config?.agents?.list?.[0]?.tools?.elevated).toEqual({
+      expect(res.config?.agents?.entries?.work?.tools?.elevated).toEqual({
         enabled: false,
         allowFrom: { whatsapp: ["+15555550123"] },
       });

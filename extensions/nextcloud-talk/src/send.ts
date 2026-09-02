@@ -1,4 +1,15 @@
-import { createMessageReceiptFromOutboundResults } from "openclaw/plugin-sdk/channel-message";
+// Nextcloud Talk plugin module implements send behavior.
+import { createMessageReceiptFromOutboundResults } from "openclaw/plugin-sdk/channel-outbound";
+import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
+import {
+  FormatCapabilityProfile,
+  renderMarkdownWithMarkers,
+} from "openclaw/plugin-sdk/text-chunking";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import {
+  readNextcloudTalkErrorBody,
+  releaseNextcloudTalkGuardedResponse,
+} from "./guarded-response.js";
 import { stripNextcloudTalkTargetPrefix } from "./normalize.js";
 import {
   convertMarkdownTables,
@@ -12,6 +23,31 @@ import {
 } from "./send.runtime.js";
 import type { CoreConfig, NextcloudTalkSendResult } from "./types.js";
 
+const NEXTCLOUD_TALK_ERROR_SNIPPET_MAX_CHARS = 200;
+const NEXTCLOUD_TALK_SEND_TIMEOUT_MS = 30_000;
+
+const NEXTCLOUD_TALK_FORMAT_PROFILE = FormatCapabilityProfile.define({
+  mechanism: "markdown",
+  chunk: { limit: 4000, unit: "chars", hardCap: 32_000 },
+});
+
+function renderNextcloudTalkMarkdown(markdown: string): string {
+  return renderMarkdownWithMarkers(
+    { text: markdown, styles: [], links: [] },
+    { styleMarkers: {}, escapeText: (text) => text },
+    NEXTCLOUD_TALK_FORMAT_PROFILE,
+  );
+}
+
+/** Collapses and caps an already-redacted error body for display. */
+function collapseErrorSnippet(text: string): string {
+  const collapsed = text.replace(/\s+/g, " ").trim();
+  if (collapsed.length > NEXTCLOUD_TALK_ERROR_SNIPPET_MAX_CHARS) {
+    return `${truncateUtf16Safe(collapsed, NEXTCLOUD_TALK_ERROR_SNIPPET_MAX_CHARS)}…`;
+  }
+  return collapsed;
+}
+
 type NextcloudTalkSendOpts = {
   cfg: CoreConfig;
   baseUrl?: string;
@@ -19,6 +55,7 @@ type NextcloudTalkSendOpts = {
   accountId?: string;
   replyTo?: string;
   verbose?: boolean;
+  timeoutMs?: number;
 };
 
 function resolveCredentials(
@@ -121,7 +158,7 @@ export async function sendMessageNextcloudTalk(
     channel: "nextcloud-talk",
     accountId: account.accountId,
   });
-  const message = convertMarkdownTables(text.trim(), tableMode);
+  const message = convertMarkdownTables(renderNextcloudTalkMarkdown(text.trim()), tableMode);
 
   const body: Record<string, unknown> = {
     message,
@@ -156,18 +193,20 @@ export async function sendMessageNextcloudTalk(
     },
     auditContext: "nextcloud-talk-send",
     policy: ssrfPolicyFromPrivateNetworkOptIn(account.config),
+    timeoutMs: opts.timeoutMs ?? NEXTCLOUD_TALK_SEND_TIMEOUT_MS,
   });
 
   try {
     if (!response.ok) {
-      const errorBody = await response.text().catch(() => "");
+      const errorBody = collapseErrorSnippet(await readNextcloudTalkErrorBody(response, signature));
       const status = response.status;
       let errorMsg = `Nextcloud Talk send failed (${status})`;
 
       if (status === 400) {
         errorMsg = `Nextcloud Talk: bad request - ${errorBody || "invalid message format"}`;
       } else if (status === 401) {
-        errorMsg = "Nextcloud Talk: authentication failed - check bot secret";
+        errorMsg =
+          "Nextcloud Talk: bot send was rejected - check the bot secret and ensure the bot was installed with --feature response";
       } else if (status === 403) {
         errorMsg = "Nextcloud Talk: forbidden - bot may not have permission in this room";
       } else if (status === 404) {
@@ -182,14 +221,14 @@ export async function sendMessageNextcloudTalk(
     let messageId = "unknown";
     let timestamp: number | undefined;
     try {
-      const data = (await response.json()) as {
+      const data = await readProviderJsonResponse<{
         ocs?: {
           data?: {
             id?: number | string;
             timestamp?: number;
           };
         };
-      };
+      }>(response, "Nextcloud Talk send");
       if (data.ocs?.data?.id != null) {
         messageId = String(data.ocs.data.id);
       }
@@ -197,7 +236,8 @@ export async function sendMessageNextcloudTalk(
         timestamp = data.ocs.data.timestamp;
       }
     } catch {
-      // Response parsing failed, but message was sent.
+      // Response parsing failed (including an over-limit body), but the message
+      // was already accepted by the server, so keep the "unknown" receipt.
     }
 
     if (opts.verbose) {
@@ -217,7 +257,7 @@ export async function sendMessageNextcloudTalk(
       timestamp,
     };
   } finally {
-    await release();
+    await releaseNextcloudTalkGuardedResponse({ response, release });
   }
 }
 
@@ -253,16 +293,17 @@ export async function sendReactionNextcloudTalk(
     },
     auditContext: "nextcloud-talk-reaction",
     policy: ssrfPolicyFromPrivateNetworkOptIn(account.config),
+    timeoutMs: opts.timeoutMs ?? NEXTCLOUD_TALK_SEND_TIMEOUT_MS,
   });
 
   try {
     if (!response.ok) {
-      const errorBody = await response.text().catch(() => "");
+      const errorBody = collapseErrorSnippet(await readNextcloudTalkErrorBody(response, signature));
       throw new Error(`Nextcloud Talk reaction failed: ${response.status} ${errorBody}`.trim());
     }
 
     return { ok: true };
   } finally {
-    await release();
+    await releaseNextcloudTalkGuardedResponse({ response, release });
   }
 }

@@ -1,3 +1,4 @@
+/** Runtime shape needed to expose an active plugin channel registration. */
 export type ActiveChannelPluginRuntimeShape = {
   id?: string | null;
   meta?: {
@@ -7,21 +8,28 @@ export type ActiveChannelPluginRuntimeShape = {
   } | null;
   messaging?: {
     targetPrefixes?: readonly string[];
+    resolveConversationRouteOwner?: (...args: never[]) => unknown;
   } | null;
   capabilities?: {
     nativeCommands?: boolean;
   } | null;
   conversationBindings?: {
     supportsCurrentConversationBinding?: boolean;
+    isCurrentConversationBindingSupported?: (params: { accountId: string }) => boolean;
+    bindingStore?: "adapter";
+    createManager?: unknown;
   } | null;
 };
 
+/** Active channel registration with owning plugin metadata. */
 export type ActivePluginChannelRegistration = {
   plugin: ActiveChannelPluginRuntimeShape;
   pluginId?: string | null;
-  origin?: string | null;
+  origin?: import("./plugin-origin.types.js").PluginOrigin | null;
+  resolveChannelRuntime?: () => import("./runtime/types-channel.js").PluginRuntimeChannel;
 };
 
+/** Active runtime channel registry snapshot. */
 export type ActivePluginChannelRegistry = {
   channels: ActivePluginChannelRegistration[];
 };

@@ -1,31 +1,16 @@
+// Isolated agent helper tests cover utility behavior used by cron agent runs.
 import { describe, expect, it } from "vitest";
-import { detectCronDenialToken, resolveCronPayloadOutcome } from "./isolated-agent/helpers.js";
+import { buildEmbeddedRunPayloads } from "../agents/embedded-agent-runner/run/payloads.js";
+import {
+  getReplyPayloadMetadata,
+  setReplyPayloadMetadata,
+  type ReplyPayload,
+} from "../auto-reply/reply-payload.js";
+import { resolveCronPayloadOutcome } from "./isolated-agent/helpers.js";
 
-describe("detectCronDenialToken", () => {
-  it("matches host denial markers case-sensitively", () => {
-    expect(detectCronDenialToken("SYSTEM_RUN_DENIED: approval blocked")).toBe("SYSTEM_RUN_DENIED");
-    expect(detectCronDenialToken("INVALID_REQUEST: denied")).toBe("INVALID_REQUEST");
-    expect(detectCronDenialToken("system_run_denied: approval blocked")).toBeUndefined();
-    expect(detectCronDenialToken("invalid_request: denied")).toBeUndefined();
-  });
-
-  it("matches model-narrated denial phrases case-insensitively", () => {
-    expect(detectCronDenialToken("Approval Cannot Safely Bind this runtime command")).toBe(
-      "approval cannot safely bind",
-    );
-    expect(detectCronDenialToken("The runtime denied the operation.")).toBe("runtime denied");
-    expect(detectCronDenialToken("I could not run the script.")).toBe("could not run");
-    expect(detectCronDenialToken("The command did not run to completion.")).toBe("did not run");
-    expect(detectCronDenialToken("The request was denied by policy.")).toBe("was denied");
-  });
-
-  it("ignores empty and non-token text", () => {
-    expect(detectCronDenialToken(undefined)).toBeUndefined();
-    expect(
-      detectCronDenialToken("The denied claim was reviewed, then the job succeeded."),
-    ).toBeUndefined();
-  });
-});
+function createToolWarning(text: string, toolName: string): ReplyPayload {
+  return setReplyPayloadMetadata({ text, isError: true }, { toolErrorWarning: { toolName } });
+}
 
 describe("resolveCronPayloadOutcome", () => {
   it("uses the last non-empty non-error payload as summary and output", () => {
@@ -41,16 +26,80 @@ describe("resolveCronPayloadOutcome", () => {
   it("returns a fatal error from the last error payload when no success follows", () => {
     const result = resolveCronPayloadOutcome({
       payloads: [
-        {
-          text: "⚠️ 🛠️ Exec failed: /bin/bash: line 1: python: command not found",
-          isError: true,
-        },
+        createToolWarning("⚠️ Exec failed: /bin/bash: line 1: python: command not found", "exec"),
       ],
     });
 
     expect(result.hasFatalErrorPayload).toBe(true);
     expect(result.embeddedRunError).toContain("command not found");
     expect(result.summary).toContain("Exec failed");
+  });
+
+  it.each([
+    ["token", "NO_REPLY"],
+    ["JSON string", '"NO_REPLY"'],
+    ["envelope", '{"action":"NO_REPLY"}'],
+    ["reasoning-prefixed", "<think>internal reasoning</think>\nNO_REPLY"],
+  ])("keeps tool warnings fatal when terminal output is a silent %s", (_label, text) => {
+    const result = resolveCronPayloadOutcome({
+      payloads: [createToolWarning("⚠️ Bash failed: mount unavailable", "bash")],
+      finalAssistantVisibleText: text,
+      preferFinalAssistantVisibleText: true,
+    });
+
+    expect(result.hasFatalErrorPayload).toBe(true);
+    expect(result.embeddedRunError).toContain("Bash failed");
+  });
+
+  it("keeps genuine visible terminal output as recovery proof", () => {
+    const result = resolveCronPayloadOutcome({
+      payloads: buildEmbeddedRunPayloads({
+        assistantTexts: [],
+        lastAssistant: undefined,
+        lastToolError: { toolName: "bash", error: "mount unavailable" },
+        sessionKey: "cron:test",
+      }),
+      finalAssistantVisibleText: "Mount restored; report written.",
+      preferFinalAssistantVisibleText: true,
+    });
+
+    expect(result.hasFatalErrorPayload).toBe(false);
+    expect(result.outputText).toBe("Mount restored; report written.");
+  });
+
+  it("lets preferred final assistant text recover a plain tool warning", () => {
+    const result = resolveCronPayloadOutcome({
+      payloads: [createToolWarning("⚠️ Exec failed: jq -s '{total:length}'", "exec")],
+      finalAssistantVisibleText: "**Clawsweeper 6h report**\nClosed: 34 total",
+      preferFinalAssistantVisibleText: true,
+    });
+
+    expect(result.hasFatalErrorPayload).toBe(false);
+    expect(result.embeddedRunError).toBeUndefined();
+    expect(result.summary).toBe("**Clawsweeper 6h report**\nClosed: 34 total");
+    expect(result.outputText).toBe("**Clawsweeper 6h report**\nClosed: 34 total");
+    expect(result.deliveryPayloads).toEqual([
+      { text: "**Clawsweeper 6h report**\nClosed: 34 total" },
+    ]);
+  });
+
+  it("lets final assistant text recover multiple plain tool warnings globally", () => {
+    const result = resolveCronPayloadOutcome({
+      payloads: [
+        createToolWarning("⚠️ Exec failed: zsh", "exec"),
+        createToolWarning("⚠️ Bash failed: node", "Bash"),
+      ],
+      finalAssistantVisibleText: "**Daily GTM analytics**\nPostHog and revenue summary complete.",
+    });
+
+    expect(result.hasFatalErrorPayload).toBe(false);
+    expect(result.embeddedRunError).toBeUndefined();
+    expect(result.outputText).toBe(
+      "**Daily GTM analytics**\nPostHog and revenue summary complete.",
+    );
+    expect(result.deliveryPayloads).toEqual([
+      { text: "**Daily GTM analytics**\nPostHog and revenue summary complete." },
+    ]);
   });
 
   it("treats transient error payloads as non-fatal when a later success exists", () => {
@@ -65,16 +114,61 @@ describe("resolveCronPayloadOutcome", () => {
     expect(result.summary).toBe("Write completed successfully.");
   });
 
+  it("keeps non-terminal tool warnings diagnostic when final assistant output succeeded", () => {
+    const toolWarning = setReplyPayloadMetadata(
+      {
+        text: "⚠️ Exec failed",
+        isError: true,
+      },
+      { nonTerminalToolErrorWarning: true },
+    );
+
+    const result = resolveCronPayloadOutcome({
+      payloads: [{ text: "Queued 3 topics." }, toolWarning],
+      finalAssistantVisibleText: "Queued 3 topics.",
+      preferFinalAssistantVisibleText: true,
+    });
+
+    expect(result.hasFatalErrorPayload).toBe(false);
+    expect(result.embeddedRunError).toBeUndefined();
+    expect(result.summary).toBe("Queued 3 topics.");
+    expect(result.outputText).toBe("Queued 3 topics.");
+    expect(result.deliveryPayloads).toEqual([{ text: "Queued 3 topics." }]);
+  });
+
+  it("keeps marked middleware warnings diagnostic after structured cron output", () => {
+    const mediaPayload = { mediaUrl: "file:///tmp/cron-report.png" };
+    const toolWarning = setReplyPayloadMetadata(
+      {
+        text: "⚠️ Exec failed",
+        isError: true,
+      },
+      { nonTerminalToolErrorWarning: true },
+    );
+
+    const result = resolveCronPayloadOutcome({
+      payloads: [mediaPayload, toolWarning],
+    });
+
+    expect(result.hasFatalErrorPayload).toBe(false);
+    expect(result.embeddedRunError).toBeUndefined();
+    expect(result.summary).toBeUndefined();
+    expect(result.outputText).toBeUndefined();
+    expect(result.synthesizedText).toBeUndefined();
+    expect(result.deliveryPayloads).toEqual([mediaPayload]);
+    expect(result.deliveryPayloadHasStructuredContent).toBe(true);
+  });
+
   it("treats trailing message delivery warnings as non-fatal when final assistant text exists", () => {
     const result = resolveCronPayloadOutcome({
-      payloads: [{ text: "Draft output" }, { text: "⚠️ ✉️ Message failed", isError: true }],
+      payloads: [{ text: "Draft output" }, createToolWarning("⚠️ Message failed", "message")],
       finalAssistantVisibleText: "Final cron report",
       preferFinalAssistantVisibleText: true,
     });
 
     expect(result.hasFatalErrorPayload).toBe(false);
     expect(result.embeddedRunError).toBeUndefined();
-    expect(result.pendingPresentationWarningError).toBe("⚠️ ✉️ Message failed");
+    expect(result.pendingPresentationWarningError).toBe("⚠️ Message failed");
     expect(result.summary).toBe("Final cron report");
     expect(result.outputText).toBe("Final cron report");
     expect(result.deliveryPayloads).toEqual([{ text: "Final cron report" }]);
@@ -82,39 +176,44 @@ describe("resolveCronPayloadOutcome", () => {
 
   it("keeps trailing canvas warnings fatal even when earlier assistant output exists", () => {
     const result = resolveCronPayloadOutcome({
-      payloads: [{ text: "Saved report to disk." }, { text: "⚠️ 🖼️ Canvas failed", isError: true }],
+      payloads: [
+        { text: "Saved report to disk." },
+        createToolWarning("⚠️ Canvas failed", "canvas"),
+      ],
+      finalAssistantVisibleText: "Saved report to disk.",
     });
 
     expect(result.hasFatalErrorPayload).toBe(true);
     expect(result.pendingPresentationWarningError).toBeUndefined();
-    expect(result.embeddedRunError).toBe("⚠️ 🖼️ Canvas failed");
-    expect(result.deliveryPayloads).toEqual([{ text: "⚠️ 🖼️ Canvas failed", isError: true }]);
+    expect(result.embeddedRunError).toBe("⚠️ Canvas failed");
+    expect(result.deliveryPayloads).toEqual([{ text: "⚠️ Canvas failed", isError: true }]);
   });
 
   it("keeps standalone presentation warnings fatal when there is no cron output", () => {
     const result = resolveCronPayloadOutcome({
-      payloads: [{ text: "⚠️ ✉️ Message failed", isError: true }],
+      payloads: [createToolWarning("⚠️ Message failed", "message")],
     });
 
     expect(result.hasFatalErrorPayload).toBe(true);
-    expect(result.embeddedRunError).toBe("⚠️ ✉️ Message failed");
-    expect(result.deliveryPayloads).toEqual([{ text: "⚠️ ✉️ Message failed", isError: true }]);
+    expect(result.embeddedRunError).toBe("⚠️ Message failed");
+    expect(result.deliveryPayloads).toEqual([{ text: "⚠️ Message failed", isError: true }]);
   });
 
-  it("keeps real trailing errors fatal even when earlier assistant output exists", () => {
-    const result = resolveCronPayloadOutcome({
-      payloads: [{ text: "Partial result" }, { text: "model provider unreachable", isError: true }],
-      finalAssistantVisibleText: "Partial result",
-      preferFinalAssistantVisibleText: true,
-    });
+  it.each(["model provider unreachable", "⚠️ 🛠️ Exec failed", "⚠️ ✉️ Message failed"])(
+    "keeps unmarked trailing error %s fatal despite earlier output",
+    (errorText) => {
+      const result = resolveCronPayloadOutcome({
+        payloads: [{ text: "Partial result" }, { text: errorText, isError: true }],
+        finalAssistantVisibleText: "Partial result",
+        preferFinalAssistantVisibleText: true,
+      });
 
-    expect(result.hasFatalErrorPayload).toBe(true);
-    expect(result.embeddedRunError).toBe("model provider unreachable");
-    expect(result.outputText).toBe("model provider unreachable");
-    expect(result.deliveryPayloads).toEqual([
-      { text: "model provider unreachable", isError: true },
-    ]);
-  });
+      expect(result.hasFatalErrorPayload).toBe(true);
+      expect(result.embeddedRunError).toBe(errorText);
+      expect(result.outputText).toBe(errorText);
+      expect(result.deliveryPayloads).toEqual([{ text: errorText, isError: true }]);
+    },
+  );
 
   it("keeps error payloads fatal when the run also reported a run-level error", () => {
     const result = resolveCronPayloadOutcome({
@@ -207,12 +306,16 @@ describe("resolveCronPayloadOutcome", () => {
     ]);
   });
 
-  it("truncates long summaries", () => {
+  it.each([
+    ["a".repeat(2001), `${"a".repeat(2000)}…`],
+    [`${"a".repeat(1999)}🦞`, `${"a".repeat(1999)}…`],
+  ])("bounds summaries without truncating the selected output", (text, summary) => {
     const result = resolveCronPayloadOutcome({
-      payloads: [{ text: "a".repeat(2001) }],
+      payloads: [{ text }],
     });
 
-    expect(result.summary ?? "").toMatch(/…$/);
+    expect(result.summary).toBe(summary);
+    expect(result.outputText).toBe(text);
   });
 
   it("preserves all successful deliverable payloads when no final assistant text is available", () => {
@@ -246,6 +349,67 @@ describe("resolveCronPayloadOutcome", () => {
     expect(result.deliveryPayload).toEqual({ text: "section 2" });
   });
 
+  it.each([
+    {
+      name: "matching final answer",
+      texts: ["Final report"],
+      finalText: "Final report",
+      speech: true,
+    },
+    { name: "replaced answer", texts: ["Draft report"], finalText: "Final report", speech: false },
+    {
+      name: "earlier matching answer",
+      texts: ["Final report", "Later answer"],
+      finalText: "Final report",
+      speech: false,
+    },
+    {
+      name: "merged partial answers",
+      texts: ["section 1", "section 2"],
+      finalText: "section 1\nsection 2",
+      speech: false,
+    },
+    {
+      name: "matching recovered tool warning",
+      texts: ["⚠️ Exec failed"],
+      finalText: "⚠️ Exec failed",
+      speech: false,
+      isError: true,
+    },
+  ])("keeps only speech facts owned by the $name", ({ texts, finalText, speech, isError }) => {
+    const tts = { tagged: true as const, text: "Authored spoken report" };
+    const payloads = texts.map((text) =>
+      setReplyPayloadMetadata<ReplyPayload>(
+        { text, ...(isError ? { isError } : {}) },
+        {
+          tts,
+          ...(isError ? { toolErrorWarning: { toolName: "exec" } } : {}),
+          sourceReplyTranscriptMirror: { sessionKey: "agent:main:source" },
+          pendingFinalDeliveryCompletion: {
+            deliveryId: "delivery-1",
+            intentId: "intent-1",
+            sessionId: "session-1",
+            sessionKey: "agent:main:source",
+            storePath: "/tmp/cron-speech-test.sqlite",
+          },
+          deliverDespiteSourceReplySuppression: true,
+        },
+      ),
+    );
+    const result = resolveCronPayloadOutcome({
+      payloads,
+      finalAssistantVisibleText: finalText,
+      preferFinalAssistantVisibleText: true,
+    });
+
+    expect(result.deliveryPayloads).toEqual([{ text: finalText }]);
+    const metadata = getReplyPayloadMetadata(result.deliveryPayloads[0]!);
+    expect(metadata?.tts).toEqual(speech ? tts : undefined);
+    expect(metadata?.sourceReplyTranscriptMirror).toBeUndefined();
+    expect(metadata?.pendingFinalDeliveryCompletion).toBeUndefined();
+    expect(metadata?.deliverDespiteSourceReplySuppression).toBeUndefined();
+  });
+
   it("keeps structured-content detection scoped to the last delivery payload", () => {
     const result = resolveCronPayloadOutcome({
       payloads: [{ mediaUrl: "https://example.com/report.png" }, { text: "final text" }],
@@ -260,6 +424,25 @@ describe("resolveCronPayloadOutcome", () => {
     expect(result.outputText).toBe("final text");
     expect(result.synthesizedText).toBe("final text");
     expect(result.deliveryPayloadHasStructuredContent).toBe(false);
+  });
+
+  it("keeps presentation-only delivery payloads instead of collapsing to final text", () => {
+    const presentationPayload = {
+      presentation: {
+        blocks: [{ type: "buttons" as const, buttons: [{ label: "Open", value: "open" }] }],
+      },
+    };
+    const result = resolveCronPayloadOutcome({
+      payloads: [presentationPayload],
+      finalAssistantVisibleText: "fallback text",
+      preferFinalAssistantVisibleText: true,
+    });
+
+    expect(result.deliveryPayloads).toEqual([presentationPayload]);
+    expect(result.deliveryPayload).toEqual(presentationPayload);
+    expect(result.outputText).toBeUndefined();
+    expect(result.synthesizedText).toBeUndefined();
+    expect(result.deliveryPayloadHasStructuredContent).toBe(true);
   });
 
   it("returns only the last error payload when all payloads are errors", () => {
@@ -290,7 +473,75 @@ describe("resolveCronPayloadOutcome", () => {
     ]);
   });
 
-  it("promotes narrated denial markers in summary text to fatal errors", () => {
+  it("removes an earlier heartbeat acknowledgement from a substantive final result", () => {
+    const result = resolveCronPayloadOutcome({
+      payloads: [{ text: "HEARTBEAT_OK" }, { text: "Critical deployment failure" }],
+      finalAssistantVisibleText: "Critical deployment failure",
+    });
+
+    expect(result.deliveryPayloads).toEqual([{ text: "Critical deployment failure" }]);
+    expect(result.deliveryDisposition).toEqual({ kind: "visible" });
+  });
+
+  it("uses producer-owned terminal text when trailing empty payloads follow a result", () => {
+    const result = resolveCronPayloadOutcome({
+      payloads: [{ text: "Critical deployment failure" }, { text: "  " }],
+      finalAssistantVisibleText: "Critical deployment failure",
+    });
+
+    expect(result.deliveryPayloads).toEqual([{ text: "Critical deployment failure" }]);
+    expect(result.deliveryDisposition).toEqual({ kind: "visible" });
+  });
+
+  it("keeps a terminal heartbeat acknowledgement intentionally quiet", () => {
+    const payloads = [{ text: "Checked inbox and calendar." }, { text: "HEARTBEAT_OK" }];
+    const result = resolveCronPayloadOutcome({
+      payloads,
+      finalAssistantVisibleText: "HEARTBEAT_OK",
+    });
+
+    expect(result.deliveryPayloads).toEqual(payloads);
+    expect(result.deliveryDisposition).toEqual({ kind: "heartbeat", controlOnly: false });
+  });
+
+  it("records a pure heartbeat acknowledgement as a control-only terminal", () => {
+    const result = resolveCronPayloadOutcome({
+      payloads: [{ text: "HEARTBEAT_OK" }],
+      finalAssistantVisibleText: "HEARTBEAT_OK",
+    });
+
+    expect(result.deliveryDisposition).toEqual({ kind: "heartbeat", controlOnly: true });
+  });
+
+  it("preserves structured output while removing a sibling heartbeat acknowledgement", () => {
+    const mediaPayload = {
+      text: "Here's the report",
+      mediaUrl: "https://example.com/report.png",
+    };
+    const result = resolveCronPayloadOutcome({
+      payloads: [{ text: "HEARTBEAT_OK" }, mediaPayload],
+      finalAssistantVisibleText: "HEARTBEAT_OK",
+    });
+
+    expect(result.deliveryPayloads).toEqual([mediaPayload]);
+    expect(result.deliveryDisposition).toEqual({ kind: "visible" });
+  });
+
+  it("keeps a heartbeat-labelled payload when the same payload carries media", () => {
+    const mediaPayload = {
+      text: "HEARTBEAT_OK",
+      mediaUrl: "https://example.com/report.png",
+    };
+    const result = resolveCronPayloadOutcome({
+      payloads: [mediaPayload],
+      finalAssistantVisibleText: "HEARTBEAT_OK",
+    });
+
+    expect(result.deliveryPayloads).toEqual([mediaPayload]);
+    expect(result.deliveryDisposition).toEqual({ kind: "visible" });
+  });
+
+  it("does not promote narrated denial markers in summary text to fatal errors", () => {
     const result = resolveCronPayloadOutcome({
       payloads: [
         {
@@ -299,24 +550,23 @@ describe("resolveCronPayloadOutcome", () => {
       ],
     });
 
-    expect(result.hasFatalErrorPayload).toBe(true);
-    expect(result.embeddedRunError).toBe(
-      'cron classifier: denial token "SYSTEM_RUN_DENIED" detected in summary',
+    expect(result.hasFatalErrorPayload).toBe(false);
+    expect(result.embeddedRunError).toBeUndefined();
+    expect(result.outputText).toBe(
+      "SYSTEM_RUN_DENIED: approval cannot safely bind this interpreter/runtime command",
     );
   });
 
-  it("promotes narrated denial markers from final assistant visible text", () => {
+  it("does not promote narrated denial markers from final assistant visible text", () => {
     const result = resolveCronPayloadOutcome({
       payloads: [{ text: "Working on it..." }],
       finalAssistantVisibleText: "I could not run the requested script.",
       preferFinalAssistantVisibleText: true,
     });
 
-    expect(result.hasFatalErrorPayload).toBe(true);
+    expect(result.hasFatalErrorPayload).toBe(false);
     expect(result.outputText).toBe("I could not run the requested script.");
-    expect(result.embeddedRunError).toBe(
-      'cron classifier: denial token "could not run" detected in summary',
-    );
+    expect(result.embeddedRunError).toBeUndefined();
   });
 
   it("prefers typed failure signals over denial-token fallback", () => {

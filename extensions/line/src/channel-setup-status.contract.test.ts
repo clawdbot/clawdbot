@@ -1,8 +1,9 @@
+// Line tests cover channel setup status.contract plugin behavior.
 import {
   installChannelSetupContractSuite,
   installChannelStatusContractSuite,
 } from "openclaw/plugin-sdk/channel-test-helpers";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { describe, expect } from "vitest";
 import { linePlugin, lineSetupPlugin } from "../api.js";
 

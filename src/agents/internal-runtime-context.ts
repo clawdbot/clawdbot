@@ -1,14 +1,27 @@
+/**
+ * Internal runtime-context delimiter and stripping helpers.
+ * Protects runtime-generated prompt blocks from user text and removes old
+ * context formats before replaying or comparing messages.
+ */
+import { escapeRegExp } from "../shared/regexp.js";
+
+/** Opening delimiter for protected OpenClaw runtime context blocks. */
 export const INTERNAL_RUNTIME_CONTEXT_BEGIN = "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>";
+/** Closing delimiter for protected OpenClaw runtime context blocks. */
 export const INTERNAL_RUNTIME_CONTEXT_END = "<<<END_OPENCLAW_INTERNAL_CONTEXT>>>";
 
 const ESCAPED_INTERNAL_RUNTIME_CONTEXT_BEGIN = "[[OPENCLAW_INTERNAL_CONTEXT_BEGIN]]";
 const ESCAPED_INTERNAL_RUNTIME_CONTEXT_END = "[[OPENCLAW_INTERNAL_CONTEXT_END]]";
 
+/** Notice inserted into runtime-generated context blocks. */
 export const OPENCLAW_RUNTIME_CONTEXT_NOTICE =
   "This context is runtime-generated, not user-authored. Keep internal details private.";
+/** Position-independent instructions for context belonging to the active user turn. */
 export const OPENCLAW_NEXT_TURN_RUNTIME_CONTEXT_HEADER =
-  "OpenClaw runtime context for the immediately preceding user message.";
+  "OpenClaw runtime context for the active user request in this turn. Do not reply to or describe this context. Use it to continue answering the active user request now. Do not wait for another message.";
+/** Header for runtime events passed as prompt context. */
 export const OPENCLAW_RUNTIME_EVENT_HEADER = "OpenClaw runtime event.";
+/** Custom message type used for structured runtime-context messages. */
 export const OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE = "openclaw.runtime-context";
 
 const LEGACY_INTERNAL_CONTEXT_HEADER =
@@ -19,33 +32,51 @@ const LEGACY_INTERNAL_EVENT_SEPARATOR = "\n\n---\n\n";
 const LEGACY_UNTRUSTED_RESULT_BEGIN = "<<<BEGIN_UNTRUSTED_CHILD_RESULT>>>";
 const LEGACY_UNTRUSTED_RESULT_END = "<<<END_UNTRUSTED_CHILD_RESULT>>>";
 
+/** Escape protected context delimiters before embedding untrusted text. */
 export function escapeInternalRuntimeContextDelimiters(value: string): string {
   return value
     .replaceAll(INTERNAL_RUNTIME_CONTEXT_BEGIN, ESCAPED_INTERNAL_RUNTIME_CONTEXT_BEGIN)
     .replaceAll(INTERNAL_RUNTIME_CONTEXT_END, ESCAPED_INTERNAL_RUNTIME_CONTEXT_END);
 }
 
-function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+function delimitedTokenLinePattern(token: string): string {
+  return `(?:^|\\r?\\n)[ \\t]*${escapeRegExp(token)}[ \\t]*(?=\\r?\\n|$)`;
 }
 
 function findDelimitedTokenIndex(text: string, token: string, from: number): number {
-  const tokenRe = new RegExp(`(?:^|\\r?\\n)${escapeRegExp(token)}(?=\\r?\\n|$)`, "g");
+  const tokenRe = new RegExp(delimitedTokenLinePattern(token), "g");
   tokenRe.lastIndex = Math.max(0, from);
   const match = tokenRe.exec(text);
   if (!match) {
     return -1;
   }
-  const prefixLength = match[0].length - token.length;
-  return match.index + prefixLength;
+  return match.index + match[0].indexOf(token);
 }
 
-function stripDelimitedBlock(text: string, begin: string, end: string): string {
+function stripStandaloneDelimitedTokenLines(text: string, token: string): string {
+  return text.replace(new RegExp(delimitedTokenLinePattern(token), "g"), "");
+}
+
+function findDelimitedTokenLinePrefixStart(text: string, tokenIndex: number): number {
+  const lineStart = text.lastIndexOf("\n", tokenIndex - 1) + 1;
+  if (lineStart === 0) {
+    return 0;
+  }
+  return text[lineStart - 2] === "\r" ? lineStart - 2 : lineStart - 1;
+}
+
+function extractDelimitedBlocks(
+  text: string,
+  begin: string,
+  end: string,
+  options: { preserveSurroundingWhitespace?: boolean; separator?: string } = {},
+): { text: string; blocks: string[] } {
   let next = text;
+  const blocks: string[] = [];
   for (;;) {
     const start = findDelimitedTokenIndex(next, begin, 0);
     if (start === -1) {
-      return next;
+      return { text: next, blocks };
     }
 
     let cursor = start + begin.length;
@@ -67,13 +98,37 @@ function stripDelimitedBlock(text: string, begin: string, end: string): string {
       cursor = nextEnd + end.length;
     }
 
-    const before = next.slice(0, start).trimEnd();
+    const blockStart = options.preserveSurroundingWhitespace
+      ? findDelimitedTokenLinePrefixStart(next, start)
+      : start;
+    const before = options.preserveSurroundingWhitespace
+      ? next.slice(0, blockStart)
+      : next.slice(0, start).trimEnd();
     if (finish === -1 || depth !== 0) {
-      return before;
+      return { text: before, blocks };
     }
-    const after = next.slice(finish + end.length).trimStart();
-    next = before && after ? `${before}\n\n${after}` : `${before}${after}`;
+    let blockEnd = finish + end.length;
+    while (next[blockEnd] === " " || next[blockEnd] === "\t") {
+      blockEnd += 1;
+    }
+    blocks.push(next.slice(start, blockEnd).trim());
+    const after = options.preserveSurroundingWhitespace
+      ? next.slice(blockEnd)
+      : next.slice(blockEnd).trimStart();
+    next =
+      !options.preserveSurroundingWhitespace && before && after
+        ? `${before}${options.separator ?? "\n\n"}${after}`
+        : `${before}${after}`;
   }
+}
+
+function stripDelimitedBlock(
+  text: string,
+  begin: string,
+  end: string,
+  options?: { preserveSurroundingWhitespace?: boolean; separator?: string },
+): string {
+  return extractDelimitedBlocks(text, begin, end, options).text;
 }
 
 function findLegacyInternalEventEnd(text: string, start: number): number | null {
@@ -157,11 +212,11 @@ function stripLegacyInternalRuntimeContext(text: string): string {
   }
 }
 
-function isRuntimeContextPromptHeader(line: string): boolean {
-  return (
-    line === OPENCLAW_NEXT_TURN_RUNTIME_CONTEXT_HEADER || line === OPENCLAW_RUNTIME_EVENT_HEADER
-  );
-}
+const RUNTIME_CONTEXT_PROMPT_HEADERS: readonly string[] = [
+  OPENCLAW_NEXT_TURN_RUNTIME_CONTEXT_HEADER,
+  "OpenClaw runtime context for the immediately preceding user message.",
+  OPENCLAW_RUNTIME_EVENT_HEADER,
+];
 
 function stripRuntimeContextPromptPreface(text: string): string {
   const lines = text.split(/\r?\n/);
@@ -172,7 +227,7 @@ function stripRuntimeContextPromptPreface(text: string): string {
     const line = lines[index] ?? "";
     const nextLine = lines[index + 1] ?? "";
     if (
-      isRuntimeContextPromptHeader(line.trim()) &&
+      RUNTIME_CONTEXT_PROMPT_HEADERS.includes(line.trim()) &&
       nextLine.trim() === OPENCLAW_RUNTIME_CONTEXT_NOTICE
     ) {
       changed = true;
@@ -193,13 +248,27 @@ function stripRuntimeContextPromptPreface(text: string): string {
     : text;
 }
 
-export function stripInternalRuntimeContext(text: string): string {
-  if (!text) {
+/** Remove protected and legacy runtime-context blocks from text. */
+export function stripInternalRuntimeContext(
+  text: string,
+  options: { preserveSurroundingWhitespace?: boolean; separator?: string } = {},
+): string {
+  // All removable formats contain a delimiter or the exact runtime notice.
+  // Skip regex construction and line parsing for ordinary display text.
+  if (
+    !text.includes(INTERNAL_RUNTIME_CONTEXT_BEGIN) &&
+    !text.includes(INTERNAL_RUNTIME_CONTEXT_END) &&
+    !text.includes(OPENCLAW_RUNTIME_CONTEXT_NOTICE)
+  ) {
     return text;
   }
-  const withoutDelimitedBlocks = stripDelimitedBlock(
-    text,
-    INTERNAL_RUNTIME_CONTEXT_BEGIN,
+  const withoutDelimitedBlocks = stripStandaloneDelimitedTokenLines(
+    stripDelimitedBlock(
+      text,
+      INTERNAL_RUNTIME_CONTEXT_BEGIN,
+      INTERNAL_RUNTIME_CONTEXT_END,
+      options,
+    ),
     INTERNAL_RUNTIME_CONTEXT_END,
   );
   return stripRuntimeContextPromptPreface(
@@ -207,6 +276,23 @@ export function stripInternalRuntimeContext(text: string): string {
   );
 }
 
+/** Extract protected runtime-context blocks while returning remaining visible text. */
+export function extractInternalRuntimeContext(text: string): {
+  text: string;
+  runtimeContext?: string;
+} {
+  const extracted = extractDelimitedBlocks(
+    text,
+    INTERNAL_RUNTIME_CONTEXT_BEGIN,
+    INTERNAL_RUNTIME_CONTEXT_END,
+  );
+  return {
+    text: extracted.text,
+    ...(extracted.blocks.length > 0 ? { runtimeContext: extracted.blocks.join("\n\n") } : {}),
+  };
+}
+
+/** Return true when text contains current or legacy runtime-context markers. */
 export function hasInternalRuntimeContext(text: string): boolean {
   if (!text) {
     return false;
@@ -214,10 +300,9 @@ export function hasInternalRuntimeContext(text: string): boolean {
   return (
     findDelimitedTokenIndex(text, INTERNAL_RUNTIME_CONTEXT_BEGIN, 0) !== -1 ||
     text.includes(LEGACY_INTERNAL_CONTEXT_HEADER) ||
-    text.includes(
-      `${OPENCLAW_NEXT_TURN_RUNTIME_CONTEXT_HEADER}\n${OPENCLAW_RUNTIME_CONTEXT_NOTICE}`,
-    ) ||
-    text.includes(`${OPENCLAW_RUNTIME_EVENT_HEADER}\n${OPENCLAW_RUNTIME_CONTEXT_NOTICE}`)
+    RUNTIME_CONTEXT_PROMPT_HEADERS.some((header) =>
+      text.includes(`${header}\n${OPENCLAW_RUNTIME_CONTEXT_NOTICE}`),
+    )
   );
 }
 
@@ -231,6 +316,7 @@ function isOpenClawRuntimeContextCustomMessage(message: unknown): boolean {
   );
 }
 
+/** Remove all structured runtime-context custom messages. */
 export function stripRuntimeContextCustomMessages<T>(messages: T[]): T[] {
   if (!messages.some(isOpenClawRuntimeContextCustomMessage)) {
     return messages;
@@ -244,7 +330,7 @@ function isUserMessage(message: unknown): boolean {
   );
 }
 
-/** Removes stale runtime-context custom messages while preserving current-turn context. */
+/** Keeps only current-turn runtime context positioned immediately before the active user. */
 export function stripHistoricalRuntimeContextCustomMessages<T>(messages: T[]): T[] {
   if (!messages.some(isOpenClawRuntimeContextCustomMessage)) {
     return messages;
@@ -253,7 +339,59 @@ export function stripHistoricalRuntimeContextCustomMessages<T>(messages: T[]): T
   if (lastUserIndex === -1) {
     return messages.filter((message) => !isOpenClawRuntimeContextCustomMessage(message));
   }
-  return messages.filter(
-    (message, index) => !isOpenClawRuntimeContextCustomMessage(message) || index > lastUserIndex,
-  );
+  const currentRuntimeContextIndexes = new Set<number>();
+  for (let index = lastUserIndex - 1; index >= 0; index -= 1) {
+    if (!isOpenClawRuntimeContextCustomMessage(messages[index])) {
+      break;
+    }
+    currentRuntimeContextIndexes.add(index);
+  }
+  return messages.filter((message, index) => {
+    if (!isOpenClawRuntimeContextCustomMessage(message)) {
+      return true;
+    }
+    return currentRuntimeContextIndexes.has(index);
+  });
+}
+
+/**
+ * Moves current-turn runtime-context carrier messages to the absolute tail of
+ * the request (after the active user turn and any tool-call scaffolding).
+ *
+ * Prompt-cache rationale: a per-turn carrier that is stripped on replay makes
+ * the next request diverge at the carrier's slot. Placed BEFORE the active user
+ * turn, that slot precedes everything that gets reused, so the whole tail
+ * (user turn + tool loop) re-bills every turn. Placed at the ABSOLUTE tail, the
+ * divergence lands exactly where the next turn's new bytes (the assistant reply)
+ * begin anyway, so the request is an append-only prefix-extension through the
+ * active user turn — only the trailing carrier is ever re-billed.
+ *
+ * Runs after {@link stripHistoricalRuntimeContextCustomMessages}, so only the
+ * current-turn carrier(s) remain. When there is no active user turn to anchor
+ * after, messages are returned unchanged.
+ */
+export function relocateCurrentRuntimeContextCarrierToTail<T>(messages: T[]): T[] {
+  const lastIndex = messages.length - 1;
+  if (lastIndex < 0 || !messages.some(isOpenClawRuntimeContextCustomMessage)) {
+    return messages;
+  }
+  // Already tail-placed (a contiguous carrier run ends the array): no-op so the
+  // serialized bytes stay stable across re-attempts of the same request.
+  let firstNonCarrierFromEnd = lastIndex;
+  while (
+    firstNonCarrierFromEnd >= 0 &&
+    isOpenClawRuntimeContextCustomMessage(messages[firstNonCarrierFromEnd])
+  ) {
+    firstNonCarrierFromEnd -= 1;
+  }
+  const rest = messages.filter((message) => !isOpenClawRuntimeContextCustomMessage(message));
+  // No active user turn to anchor after — leave placement to the strip pass.
+  if (!rest.some(isUserMessage)) {
+    return messages;
+  }
+  if (firstNonCarrierFromEnd === rest.length - 1) {
+    return messages;
+  }
+  const carriers = messages.filter(isOpenClawRuntimeContextCustomMessage);
+  return [...rest, ...carriers];
 }

@@ -1,55 +1,17 @@
-import { getRuntimeConfig } from "../../config/config.js";
-import {
-  mutateConfigFile as mutateConfigFileInternal,
-  replaceConfigFile as replaceConfigFileInternal,
-} from "../../config/mutate.js";
-import { logWarn } from "../../logger.js";
+// Runtime config helpers expose scoped OpenClaw config reads to plugin runtimes.
+import { getRuntimeConfig } from "../../config/io.runtime.js";
 import type { PluginRuntime } from "./types.js";
-
-const RUNTIME_CONFIG_LOAD_WRITE_COMPAT_CODE = "runtime-config-load-write";
-
-const warnedDeprecatedConfigApis = new Set<string>();
-
-function warnDeprecatedConfigApiOnce(
-  name: "loadConfig" | "writeConfigFile",
-  replacement: string,
-): void {
-  if (warnedDeprecatedConfigApis.has(name)) {
-    return;
-  }
-  warnedDeprecatedConfigApis.add(name);
-  logWarn(
-    `plugin runtime config.${name}() is deprecated (${RUNTIME_CONFIG_LOAD_WRITE_COMPAT_CODE}); use ${replacement}.`,
-  );
-}
 
 export function createRuntimeConfig(): PluginRuntime["config"] {
   return {
     current: getRuntimeConfig,
-    mutateConfigFile: async (params) =>
-      await mutateConfigFileInternal({
-        ...params,
-        writeOptions: params.writeOptions,
-      }),
-    replaceConfigFile: async (params) =>
-      await replaceConfigFileInternal({
-        ...params,
-        writeOptions: params.writeOptions,
-      }),
-    loadConfig: () => {
-      warnDeprecatedConfigApiOnce("loadConfig", "config.current()");
-      return getRuntimeConfig();
+    mutateConfigFile: async (params) => {
+      const { mutateConfigFile } = await import("../../config/mutate.js");
+      return await mutateConfigFile(params);
     },
-    writeConfigFile: async (cfg, options) => {
-      warnDeprecatedConfigApiOnce(
-        "writeConfigFile",
-        "config.mutateConfigFile(...) or config.replaceConfigFile(...)",
-      );
-      await replaceConfigFileInternal({
-        nextConfig: cfg,
-        afterWrite: options?.afterWrite ?? { mode: "auto" },
-        writeOptions: options,
-      });
+    replaceConfigFile: async (params) => {
+      const { replaceConfigFile } = await import("../../config/mutate.js");
+      return await replaceConfigFile(params);
     },
   };
 }

@@ -1,3 +1,4 @@
+// Tlon tests cover doctor plugin behavior.
 import { describe, expect, it } from "vitest";
 import { tlonDoctor } from "./doctor.js";
 

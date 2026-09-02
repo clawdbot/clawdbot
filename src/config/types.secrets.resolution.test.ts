@@ -1,20 +1,26 @@
+// Verifies secret resolution config types and defaults.
 import { describe, expect, it } from "vitest";
 import {
+  isUnresolvedSecretInputError,
   normalizeResolvedSecretInputString,
   parseLegacySecretRefEnvMarker,
   resolveSecretInputString,
+  UnresolvedSecretInputError,
 } from "./types.secrets.js";
 
 describe("resolveSecretInputString", () => {
-  it("returns available for non-empty string values", () => {
+  it.each([
+    { value: "  abc123  ", normalized: "abc123" },
+    { value: "${OPENAI_API_KEY}", normalized: "${OPENAI_API_KEY}" },
+  ])("returns available for non-empty string value $value", ({ value, normalized }) => {
     expect(
       resolveSecretInputString({
-        value: "  abc123  ",
+        value,
         path: "models.providers.openai.apiKey",
       }),
     ).toEqual({
       status: "available",
-      value: "abc123",
+      value: normalized,
       ref: null,
     });
   });
@@ -33,10 +39,10 @@ describe("resolveSecretInputString", () => {
     });
   });
 
-  it("uses explicit refValue in inspect mode", () => {
+  it("prioritizes explicit refValue over retained plaintext in inspect mode", () => {
     expect(
       resolveSecretInputString({
-        value: "",
+        value: "retained-plaintext",
         refValue: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
         path: "profiles.default.key",
         mode: "inspect",
@@ -62,24 +68,50 @@ describe("resolveSecretInputString", () => {
     });
   });
 
-  it("throws for unresolved refs in strict mode", () => {
-    expect(() =>
-      resolveSecretInputString({
-        value: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
+  it.each([
+    {
+      name: "inline ref",
+      value: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
+      refValue: undefined,
+    },
+    {
+      name: "explicit ref with retained plaintext",
+      value: "retained-plaintext",
+      refValue: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
+    },
+  ])(
+    "throws a typed unresolved SecretRef error in strict mode for $name",
+    ({ value, refValue }) => {
+      let thrown: unknown;
+      try {
+        resolveSecretInputString({
+          value,
+          refValue,
+          path: "models.providers.openai.apiKey",
+        });
+      } catch (error) {
+        thrown = error;
+      }
+
+      expect(thrown).toBeInstanceOf(UnresolvedSecretInputError);
+      expect(isUnresolvedSecretInputError(thrown)).toBe(true);
+      expect(thrown).toMatchObject({
         path: "models.providers.openai.apiKey",
-      }),
-    ).toThrow(/unresolved SecretRef/);
-  });
+        ref: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
+      });
+    },
+  );
 });
 
 describe("normalizeResolvedSecretInputString", () => {
-  it("keeps strict unresolved-ref behavior", () => {
+  it("keeps explicit references authoritative over retained plaintext", () => {
     expect(() =>
       normalizeResolvedSecretInputString({
-        value: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
+        value: "retained-plaintext",
+        refValue: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
         path: "models.providers.openai.apiKey",
       }),
-    ).toThrow(/unresolved SecretRef/);
+    ).toThrow(UnresolvedSecretInputError);
   });
 });
 

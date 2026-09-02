@@ -2,6 +2,7 @@
 
 included:
   - ../apps/macos/Sources
+  - ../apps/macos-mlx-tts/Sources
 
 excluded:
   - ../.build
@@ -19,7 +20,7 @@ excluded:
   - "*.playground"
   # Generated (protocol-gen-swift.ts)
   - ../apps/macos/Sources/OpenClawProtocol/GatewayModels.swift
-  # Generated (generate-host-env-security-policy-swift.mjs)
+  # Generated (generate-host-env-security-policy-swift.mts)
   - ../apps/macos/Sources/OpenClaw/HostEnvSecurityPolicy.generated.swift
 
 analyzer_rules:

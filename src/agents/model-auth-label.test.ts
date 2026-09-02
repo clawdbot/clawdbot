@@ -1,4 +1,6 @@
+// Verifies safe, user-facing auth labels without exposing credential values.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { resolveModelAuthLabel } from "./model-auth-label.js";
 
 const mocks = vi.hoisted(() => ({
   ensureAuthProfileStore: vi.fn(),
@@ -6,9 +8,11 @@ const mocks = vi.hoisted(() => ({
   loadAuthProfileStoreWithoutExternalProfiles: vi.fn(),
   resolveAuthProfileOrder: vi.fn(),
   resolveAuthProfileDisplayLabel: vi.fn(),
-  resolveUsableCustomProviderApiKey: vi.fn(() => null),
+  resolveProviderEntryApiKeyProfileReference: vi.fn<() => unknown>(() => ({ kind: "none" })),
+  resolveUsableCustomProviderApiKey: vi.fn<() => { apiKey: string; source: string } | null>(
+    () => null,
+  ),
   resolveEnvApiKey: vi.fn<() => { apiKey: string; source: string } | null>(() => null),
-  readClaudeCliCredentialsCached: vi.fn<(options?: unknown) => unknown>(() => null),
   readCodexCliCredentialsCached: vi.fn<(options?: unknown) => unknown>(() => null),
 }));
 
@@ -21,39 +25,36 @@ vi.mock("./auth-profiles.js", () => ({
 }));
 
 vi.mock("./model-auth.js", () => ({
+  resolveProviderEntryApiKeyProfileReference: mocks.resolveProviderEntryApiKeyProfileReference,
   resolveUsableCustomProviderApiKey: mocks.resolveUsableCustomProviderApiKey,
   resolveEnvApiKey: mocks.resolveEnvApiKey,
 }));
 
 vi.mock("./cli-credentials.js", () => ({
-  readClaudeCliCredentialsCached: mocks.readClaudeCliCredentialsCached,
   readCodexCliCredentialsCached: mocks.readCodexCliCredentialsCached,
 }));
 
-let resolveModelAuthLabel: typeof import("./model-auth-label.js").resolveModelAuthLabel;
-
 describe("resolveModelAuthLabel", () => {
-  beforeEach(async () => {
-    if (!resolveModelAuthLabel) {
-      ({ resolveModelAuthLabel } = await import("./model-auth-label.js"));
-    }
+  beforeEach(() => {
     mocks.ensureAuthProfileStore.mockReset();
     mocks.externalCliDiscoveryForProviderAuth.mockReset();
     mocks.externalCliDiscoveryForProviderAuth.mockReturnValue(undefined);
     mocks.loadAuthProfileStoreWithoutExternalProfiles.mockReset();
     mocks.resolveAuthProfileOrder.mockReset();
     mocks.resolveAuthProfileDisplayLabel.mockReset();
+    mocks.resolveProviderEntryApiKeyProfileReference.mockReset();
+    mocks.resolveProviderEntryApiKeyProfileReference.mockReturnValue({ kind: "none" });
     mocks.resolveUsableCustomProviderApiKey.mockReset();
     mocks.resolveUsableCustomProviderApiKey.mockReturnValue(null);
     mocks.resolveEnvApiKey.mockReset();
     mocks.resolveEnvApiKey.mockReturnValue(null);
-    mocks.readClaudeCliCredentialsCached.mockReset();
-    mocks.readClaudeCliCredentialsCached.mockReturnValue(null);
     mocks.readCodexCliCredentialsCached.mockReset();
     mocks.readCodexCliCredentialsCached.mockReturnValue(null);
   });
 
   it("does not include token value in label for token profiles", () => {
+    // Labels may be shown in status output, so token-backed profiles identify
+    // the auth mode/profile only and never echo token material or refs.
     mocks.ensureAuthProfileStore.mockReturnValue({
       version: 1,
       profiles: {
@@ -127,6 +128,40 @@ describe("resolveModelAuthLabel", () => {
     expect(label).toBe("oauth (anthropic:oauth)");
   });
 
+  it("uses accepted provider ids before falling back to provider env auth", () => {
+    // Accepted provider ids let aliases share a profile match before env
+    // fallback would report a less-specific API-key label.
+    mocks.ensureAuthProfileStore.mockReturnValue({
+      version: 1,
+      profiles: {
+        "openai:user@example.com": {
+          type: "oauth",
+          provider: "openai",
+          access: "access-token",
+          refresh: "refresh-token",
+          expires: Date.now() + 60_000,
+        },
+      },
+    } as never);
+    mocks.resolveAuthProfileOrder.mockImplementation(({ provider }: { provider?: string }) =>
+      provider === "openai" ? ["openai:user@example.com"] : [],
+    );
+    mocks.resolveAuthProfileDisplayLabel.mockReturnValue("openai:user@example.com");
+    mocks.resolveEnvApiKey.mockReturnValue({
+      apiKey: "env-key-placeholder",
+      source: "env: OPENAI_API_KEY",
+    });
+
+    const label = resolveModelAuthLabel({
+      provider: "openai",
+      acceptedProviderIds: ["openai"],
+      cfg: {},
+    });
+
+    expect(label).toBe("oauth (openai:user@example.com)");
+    expect(mocks.resolveEnvApiKey).not.toHaveBeenCalled();
+  });
+
   it("shows codex cli auth for codex provider without auth profiles", () => {
     mocks.ensureAuthProfileStore.mockReturnValue({
       version: 1,
@@ -135,7 +170,7 @@ describe("resolveModelAuthLabel", () => {
     mocks.resolveAuthProfileOrder.mockReturnValue([]);
     mocks.readCodexCliCredentialsCached.mockReturnValue({
       type: "oauth",
-      provider: "openai-codex",
+      provider: "openai",
       access: "token",
       refresh: "refresh",
       expires: Date.now() + 60_000,
@@ -153,30 +188,51 @@ describe("resolveModelAuthLabel", () => {
     });
   });
 
-  it("shows claude cli auth for claude-cli provider without auth profiles", () => {
+  it("uses Codex CLI auth for Codex-backed OpenAI before env fallback", () => {
     mocks.ensureAuthProfileStore.mockReturnValue({
       version: 1,
       profiles: {},
     } as never);
     mocks.resolveAuthProfileOrder.mockReturnValue([]);
-    mocks.readClaudeCliCredentialsCached.mockReturnValue({
+    mocks.readCodexCliCredentialsCached.mockReturnValue({
       type: "oauth",
-      provider: "claude-cli",
+      provider: "openai",
       access: "token",
       refresh: "refresh",
       expires: Date.now() + 60_000,
     });
+    mocks.resolveEnvApiKey.mockReturnValue({
+      apiKey: "env-key-placeholder",
+      source: "env: OPENAI_API_KEY",
+    });
 
+    const label = resolveModelAuthLabel({
+      provider: "openai",
+      cfg: {},
+      codexCliCredentialsHome: "/tmp/openclaw-agent/codex-home",
+    });
+
+    expect(label).toBe("oauth (codex-cli)");
+    expect(mocks.readCodexCliCredentialsCached).toHaveBeenCalledWith({
+      codexHome: "/tmp/openclaw-agent/codex-home",
+      ttlMs: 5_000,
+      allowKeychainPrompt: false,
+    });
+    expect(mocks.resolveEnvApiKey).not.toHaveBeenCalled();
+  });
+
+  it("shows native Claude CLI auth without reading credential storage", () => {
+    mocks.ensureAuthProfileStore.mockReturnValue({
+      version: 1,
+      profiles: {},
+    } as never);
+    mocks.resolveAuthProfileOrder.mockReturnValue([]);
     const label = resolveModelAuthLabel({
       provider: "claude-cli",
       cfg: {},
     });
 
-    expect(label).toBe("oauth (claude-cli)");
-    expect(mocks.readClaudeCliCredentialsCached).toHaveBeenCalledWith({
-      ttlMs: 5_000,
-      allowKeychainPrompt: false,
-    });
+    expect(label).toBe("native (claude-cli)");
   });
 
   it("can skip external auth profile overlays for status labels", () => {
@@ -226,5 +282,66 @@ describe("resolveModelAuthLabel", () => {
       config: cfg,
       workspaceDir: "/tmp/workspace",
     });
+  });
+
+  it("shows per-entry apiKey profile-reference labels before literal models.json fallback", () => {
+    const store = {
+      version: 1,
+      profiles: {
+        "openrouter:key-b": {
+          type: "api_key",
+          provider: "openrouter",
+          key: "sk-or-actual-key-b",
+        },
+      },
+    };
+    mocks.ensureAuthProfileStore.mockReturnValue(store as never);
+    mocks.resolveAuthProfileOrder.mockReturnValue([]);
+    mocks.resolveAuthProfileDisplayLabel.mockReturnValue("openrouter:key-b");
+    mocks.resolveProviderEntryApiKeyProfileReference.mockReturnValue({
+      kind: "profile",
+      profileId: "openrouter:key-b",
+      credential: store.profiles["openrouter:key-b"],
+      mode: "api-key",
+    });
+    mocks.resolveUsableCustomProviderApiKey.mockReturnValue({
+      apiKey: "openrouter:key-b",
+      source: "models.json",
+    });
+
+    const label = resolveModelAuthLabel({
+      provider: "openrouter-minimax",
+      cfg: {},
+    });
+
+    expect(label).toBe("api-key (openrouter:key-b)");
+    expect(mocks.resolveUsableCustomProviderApiKey).not.toHaveBeenCalled();
+  });
+
+  it("does not report incompatible per-entry profile references as literal models.json keys", () => {
+    mocks.ensureAuthProfileStore.mockReturnValue({
+      version: 1,
+      profiles: {},
+    } as never);
+    mocks.resolveAuthProfileOrder.mockReturnValue([]);
+    mocks.resolveProviderEntryApiKeyProfileReference.mockReturnValue({
+      kind: "profile-incompatible",
+      profileId: "google:oauth-a",
+      credentialProvider: "google",
+      credentialType: "oauth",
+      reason: "credential-class",
+    });
+    mocks.resolveUsableCustomProviderApiKey.mockReturnValue({
+      apiKey: "google:oauth-a",
+      source: "models.json",
+    });
+
+    const label = resolveModelAuthLabel({
+      provider: "openrouter-minimax",
+      cfg: {},
+    });
+
+    expect(label).toBe("unknown");
+    expect(mocks.resolveUsableCustomProviderApiKey).not.toHaveBeenCalled();
   });
 });

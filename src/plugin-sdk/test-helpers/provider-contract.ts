@@ -1,3 +1,4 @@
+// Provider contract helpers expose reusable provider plugin contract test setup.
 import { describe, expect, it } from "vitest";
 import {
   providerContractLoadError,
@@ -59,8 +60,8 @@ export function describeProviderContracts(pluginId: string) {
       // does not race provider contract collection against other file imports.
       installProviderPluginContractSuite({
         provider: () => {
-          const entry = resolveProviderEntries().find((entry) =>
-            providerMatchesManifestId(entry.provider, providerId),
+          const entry = resolveProviderEntries().find((entryLocal) =>
+            providerMatchesManifestId(entryLocal.provider, providerId),
           );
           if (!entry) {
             throw new Error(`provider contract entry missing for ${pluginId}:${providerId}`);

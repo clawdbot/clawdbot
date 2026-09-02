@@ -1,3 +1,4 @@
+// Hook install runtime helpers resolve archive install behavior behind runtime imports.
 import { resolveArchiveKind } from "../infra/archive.js";
 import { pathExists } from "../infra/fs-safe.js";
 import { resolveExistingInstallPath, withExtractedArchiveRoot } from "../infra/install-flow.js";
@@ -6,10 +7,7 @@ import {
   resolveInstallModeOptions,
   resolveTimedInstallModeOptions,
 } from "../infra/install-mode-options.js";
-import {
-  installPackageDir,
-  installPackageDirWithManifestDeps,
-} from "../infra/install-package-dir.js";
+import { installPackageDir } from "../infra/install-package-dir.js";
 import {
   type NpmIntegrityDrift,
   type NpmSpecResolution,
@@ -22,14 +20,15 @@ import {
 import { readJson } from "../infra/json-files.js";
 import { isPathInside, isPathInsideWithRealpath } from "../security/scan-paths.js";
 
+/** Runtime-only install dependencies for hook install/update paths. */
 export type { NpmIntegrityDrift, NpmSpecResolution };
 
+/** Lazy facade kept separate so hook metadata paths do not eagerly load install tooling. */
 export {
   ensureInstallTargetAvailable,
   pathExists as fileExists,
   installFromValidatedNpmSpecArchive,
   installPackageDir,
-  installPackageDirWithManifestDeps,
   isPathInside,
   isPathInsideWithRealpath,
   readJson as readJsonFile,

@@ -1,3 +1,4 @@
+// Feishu plugin module implements monitor.synthetic error behavior.
 export class FeishuRetryableSyntheticEventError extends Error {
   constructor(message: string, options?: ErrorOptions) {
     super(message, options);

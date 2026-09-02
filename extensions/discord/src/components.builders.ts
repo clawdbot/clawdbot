@@ -1,6 +1,7 @@
+// Discord plugin module implements components.builders behavior.
 import crypto from "node:crypto";
 import { ButtonStyle, MessageFlags } from "discord-api-types/v10";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { buildDiscordComponentCustomId as buildDiscordComponentCustomIdImpl } from "./component-custom-id.js";
 import { mapButtonStyle, normalizeModalFieldName } from "./components.parse.js";
 import type {
@@ -35,6 +36,51 @@ function createShortId(prefix: string) {
   return `${prefix}${crypto.randomBytes(6).toString("base64url")}`;
 }
 
+type DiscordSelectMenuByType = {
+  string: StringSelectMenu;
+  user: UserSelectMenu;
+  role: RoleSelectMenu;
+  mentionable: MentionableSelectMenu;
+  channel: ChannelSelectMenu;
+};
+type DiscordSelectMenu = DiscordSelectMenuByType[DiscordComponentSelectType];
+
+const selectMenuConstructors = {
+  string: class extends StringSelectMenu {
+    customId = "";
+    override options: NonNullable<DiscordComponentSelectSpec["options"]> = [];
+  },
+  user: class extends UserSelectMenu {
+    customId = "";
+  },
+  role: class extends RoleSelectMenu {
+    customId = "";
+  },
+  mentionable: class extends MentionableSelectMenu {
+    customId = "";
+  },
+  channel: class extends ChannelSelectMenu {
+    customId = "";
+  },
+} satisfies {
+  [Type in DiscordComponentSelectType]: new () => DiscordSelectMenuByType[Type];
+};
+
+export function createDiscordSelectMenu<Type extends DiscordComponentSelectType>(
+  type: Type,
+  customId: string,
+  options?: DiscordComponentSelectSpec["options"],
+): DiscordSelectMenuByType[Type] {
+  // SAFETY: the constructor map satisfies the same Type-to-select-class relationship.
+  const SelectMenu = selectMenuConstructors[type] as new () => DiscordSelectMenuByType[Type];
+  const select = new SelectMenu();
+  select.customId = customId;
+  if (select instanceof StringSelectMenu) {
+    select.options = options ?? [];
+  }
+  return select;
+}
+
 function buildTextDisplays(text?: string, texts?: string[]): TextDisplay[] {
   if (texts && texts.length > 0) {
     return texts.map((entry) => new TextDisplay(entry));
@@ -60,6 +106,7 @@ function createButtonComponent(params: {
     class DynamicLinkButton extends LinkButton {
       label = params.spec.label;
       url = linkUrl;
+      override disabled = params.spec.disabled ?? false;
     }
     return { component: new DynamicLinkButton() };
   }
@@ -77,9 +124,9 @@ function createButtonComponent(params: {
   class DynamicButton extends Button {
     label = params.spec.label;
     customId = customId;
-    style = style;
-    emoji = params.spec.emoji;
-    disabled = params.spec.disabled ?? false;
+    override style = style;
+    override emoji = params.spec.emoji;
+    override disabled = params.spec.disabled ?? false;
   }
   if (internalCustomId) {
     return {
@@ -92,9 +139,13 @@ function createButtonComponent(params: {
       id: componentId,
       kind: params.modalId ? "modal-trigger" : "button",
       label: params.spec.label,
-      callbackData: params.spec.callbackData,
-      modalId: params.modalId,
-      allowedUsers: params.spec.allowedUsers,
+      ...(params.spec.callbackData !== undefined ? { callbackData: params.spec.callbackData } : {}),
+      ...(params.spec.callbackDataKind !== undefined
+        ? { callbackDataKind: params.spec.callbackDataKind }
+        : {}),
+      ...(params.modalId !== undefined ? { modalId: params.modalId } : {}),
+      ...(params.spec.reusable !== undefined ? { reusable: params.spec.reusable } : {}),
+      ...(params.spec.allowedUsers !== undefined ? { allowedUsers: params.spec.allowedUsers } : {}),
     },
   };
 }
@@ -103,12 +154,7 @@ function createSelectComponent(params: {
   spec: DiscordComponentSelectSpec;
   componentId?: string;
 }): {
-  component:
-    | StringSelectMenu
-    | UserSelectMenu
-    | RoleSelectMenu
-    | MentionableSelectMenu
-    | ChannelSelectMenu;
+  component: DiscordSelectMenu;
   entry: DiscordComponentEntry;
 } {
   const type = normalizeLowercaseStringOrEmpty(
@@ -116,102 +162,42 @@ function createSelectComponent(params: {
   ) as DiscordComponentSelectType;
   const componentId = params.componentId ?? createShortId("sel_");
   const customId = buildDiscordComponentCustomIdImpl({ componentId });
-  const createEntry = (
-    selectType: DiscordComponentSelectType,
-    label: string,
-    options?: DiscordComponentEntry["options"],
-  ): DiscordComponentEntry => ({
-    id: componentId,
-    kind: "select",
-    label,
-    callbackData: params.spec.callbackData,
-    selectType,
-    ...(options ? { options } : {}),
-    allowedUsers: params.spec.allowedUsers,
-  });
-
-  if (type === "string") {
-    const options = params.spec.options ?? [];
-    if (options.length === 0) {
-      throw new Error("String select menus require options");
-    }
-    class DynamicStringSelect extends StringSelectMenu {
-      customId = customId;
-      options = options;
-      minValues = params.spec.minValues;
-      maxValues = params.spec.maxValues;
-      placeholder = params.spec.placeholder;
-      disabled = false;
-    }
-    return {
-      component: new DynamicStringSelect(),
-      entry: createEntry(
-        "string",
-        params.spec.placeholder ?? "select",
-        options.map((option) => ({ value: option.value, label: option.label })),
-      ),
-    };
+  const options = params.spec.options ?? [];
+  if (type === "string" && options.length === 0) {
+    throw new Error("String select menus require options");
   }
-  if (type === "user") {
-    class DynamicUserSelect extends UserSelectMenu {
-      customId = customId;
-      minValues = params.spec.minValues;
-      maxValues = params.spec.maxValues;
-      placeholder = params.spec.placeholder;
-      disabled = false;
-    }
-    return {
-      component: new DynamicUserSelect(),
-      entry: createEntry("user", params.spec.placeholder ?? "user select"),
-    };
-  }
-  if (type === "role") {
-    class DynamicRoleSelect extends RoleSelectMenu {
-      customId = customId;
-      minValues = params.spec.minValues;
-      maxValues = params.spec.maxValues;
-      placeholder = params.spec.placeholder;
-      disabled = false;
-    }
-    return {
-      component: new DynamicRoleSelect(),
-      entry: createEntry("role", params.spec.placeholder ?? "role select"),
-    };
-  }
-  if (type === "mentionable") {
-    class DynamicMentionableSelect extends MentionableSelectMenu {
-      customId = customId;
-      minValues = params.spec.minValues;
-      maxValues = params.spec.maxValues;
-      placeholder = params.spec.placeholder;
-      disabled = false;
-    }
-    return {
-      component: new DynamicMentionableSelect(),
-      entry: createEntry("mentionable", params.spec.placeholder ?? "mentionable select"),
-    };
-  }
-  class DynamicChannelSelect extends ChannelSelectMenu {
-    customId = customId;
-    minValues = params.spec.minValues;
-    maxValues = params.spec.maxValues;
-    placeholder = params.spec.placeholder;
-    disabled = false;
-  }
+  const select = createDiscordSelectMenu(type, customId, options);
+  select.minValues = params.spec.minValues;
+  select.maxValues = params.spec.maxValues;
+  select.placeholder = params.spec.placeholder;
+  select.disabled = false;
+  const labels: Record<DiscordComponentSelectType, string> = {
+    string: "select",
+    user: "user select",
+    role: "role select",
+    mentionable: "mentionable select",
+    channel: "channel select",
+  };
   return {
-    component: new DynamicChannelSelect(),
-    entry: createEntry("channel", params.spec.placeholder ?? "channel select"),
+    component: select,
+    entry: {
+      id: componentId,
+      kind: "select",
+      label: params.spec.placeholder ?? labels[type],
+      ...(params.spec.callbackData !== undefined ? { callbackData: params.spec.callbackData } : {}),
+      ...(params.spec.callbackDataKind !== undefined
+        ? { callbackDataKind: params.spec.callbackDataKind }
+        : {}),
+      selectType: type,
+      ...(type === "string"
+        ? { options: options.map((option) => ({ value: option.value, label: option.label })) }
+        : {}),
+      ...(params.spec.allowedUsers !== undefined ? { allowedUsers: params.spec.allowedUsers } : {}),
+    },
   };
 }
 
-function isSelectComponent(
-  component: unknown,
-): component is
-  | StringSelectMenu
-  | UserSelectMenu
-  | RoleSelectMenu
-  | MentionableSelectMenu
-  | ChannelSelectMenu {
+function isSelectComponent(component: unknown): component is DiscordSelectMenu {
   return (
     component instanceof StringSelectMenu ||
     component instanceof UserSelectMenu ||
@@ -250,12 +236,13 @@ export function buildDiscordComponentMessage(params: {
   > = [];
 
   const addEntry = (entry: DiscordComponentEntry) => {
+    const reusable = entry.reusable ?? params.spec.reusable;
     entries.push({
       ...entry,
-      sessionKey: params.sessionKey,
-      agentId: params.agentId,
-      accountId: params.accountId,
-      reusable: entry.reusable ?? params.spec.reusable,
+      ...(params.sessionKey !== undefined ? { sessionKey: params.sessionKey } : {}),
+      ...(params.agentId !== undefined ? { agentId: params.agentId } : {}),
+      ...(params.accountId !== undefined ? { accountId: params.accountId } : {}),
+      ...(reusable !== undefined ? { reusable } : {}),
       consumptionGroupId,
     });
   };
@@ -337,26 +324,30 @@ export function buildDiscordComponentMessage(params: {
       name: normalizeModalFieldName(field.name, index),
       label: field.label,
       type: field.type,
-      description: field.description,
-      placeholder: field.placeholder,
-      required: field.required,
-      options: field.options,
-      minValues: field.minValues,
-      maxValues: field.maxValues,
-      minLength: field.minLength,
-      maxLength: field.maxLength,
-      style: field.style,
+      ...(field.description !== undefined ? { description: field.description } : {}),
+      ...(field.placeholder !== undefined ? { placeholder: field.placeholder } : {}),
+      ...(field.required !== undefined ? { required: field.required } : {}),
+      ...(field.options !== undefined ? { options: field.options } : {}),
+      ...(field.minValues !== undefined ? { minValues: field.minValues } : {}),
+      ...(field.maxValues !== undefined ? { maxValues: field.maxValues } : {}),
+      ...(field.minLength !== undefined ? { minLength: field.minLength } : {}),
+      ...(field.maxLength !== undefined ? { maxLength: field.maxLength } : {}),
+      ...(field.style !== undefined ? { style: field.style } : {}),
     }));
     modals.push({
       id: modalId,
       title: params.spec.modal.title,
-      callbackData: params.spec.modal.callbackData,
       fields,
-      sessionKey: params.sessionKey,
-      agentId: params.agentId,
-      accountId: params.accountId,
-      reusable: params.spec.reusable,
-      allowedUsers: params.spec.modal.allowedUsers,
+      ...(params.spec.modal.callbackData !== undefined
+        ? { callbackData: params.spec.modal.callbackData }
+        : {}),
+      ...(params.sessionKey !== undefined ? { sessionKey: params.sessionKey } : {}),
+      ...(params.agentId !== undefined ? { agentId: params.agentId } : {}),
+      ...(params.accountId !== undefined ? { accountId: params.accountId } : {}),
+      ...(params.spec.reusable !== undefined ? { reusable: params.spec.reusable } : {}),
+      ...(params.spec.modal.allowedUsers !== undefined
+        ? { allowedUsers: params.spec.modal.allowedUsers }
+        : {}),
     });
 
     const triggerSpec: DiscordComponentButtonSpec = {
@@ -377,7 +368,7 @@ export function buildDiscordComponentMessage(params: {
     const lastChild = containerChildren.at(-1);
     if (lastChild instanceof Row) {
       const row = lastChild;
-      const hasSelect = row.components.some((entry) => isSelectComponent(entry));
+      const hasSelect = row.components.some((entryLocal) => isSelectComponent(entryLocal));
       if (row.components.length < 5 && !hasSelect) {
         row.addComponent(component as Button);
       } else {

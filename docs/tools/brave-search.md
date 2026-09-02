@@ -43,8 +43,7 @@ OpenClaw supports Brave Search API as a `web_search` provider.
 }
 ```
 
-Provider-specific Brave search settings now live under `plugins.entries.brave.config.webSearch.*`.
-Legacy `tools.web.search.apiKey` still loads through the compatibility shim, but it is no longer the canonical config path.
+Provider-specific Brave search settings live under `plugins.entries.brave.config.webSearch.*`; this is the canonical config path.
 
 `webSearch.mode` controls the Brave transport:
 
@@ -121,6 +120,12 @@ await web_search({
 
 ## Notes
 
+- Results expose `published` from Brave's ISO publication metadata: `page_age`
+  in web mode and the matching source's ISO timestamp or date in `llm-context`
+  mode. Relative age and fetch timestamps are not publication dates. Offsetless
+  timestamps remain offsetless; OpenClaw does not invent a timezone. Verify the
+  source date when freshness matters.
+
 - OpenClaw uses the Brave **Search** plan. If you have a legacy subscription (e.g. the original Free plan with 2,000 queries/month), it remains valid but does not include newer features like LLM Context or higher rate limits.
 - Each Brave plan includes **\$5/month in free credit** (renewing). The Search plan costs \$5 per 1,000 requests, so the credit covers 1,000 queries/month. Set your usage limit in the Brave dashboard to avoid unexpected charges. See the [Brave API portal](https://brave.com/search/api/) for current plans.
 - The Search plan includes the LLM Context endpoint and AI inference rights. Storing results to train or tune models requires a plan with explicit storage rights. See the Brave [Terms of Service](https://api-dashboard.search.brave.com/terms-of-service).
@@ -128,6 +133,7 @@ await web_search({
 - `llm-context` mode supports `freshness` and bounded `date_after` + `date_before` ranges. It does not support `ui_lang`; `date_before` without `date_after` is rejected because Brave requires custom freshness ranges to include both start and end dates.
 - `ui_lang` must include a region subtag like `en-US`.
 - Results are cached for 15 minutes by default (configurable via `cacheTtlMinutes`).
+- `tools.web.search.timeoutSeconds` covers endpoint validation, including DNS, the HTTP request, and response reading in both Brave modes.
 - Custom `webSearch.baseUrl` values are included in Brave cache identity, so
   proxy-specific responses do not collide.
 - Enable the `brave.http` diagnostics flag to log Brave request URLs/query params, response status/timing, and search-cache hit/miss/write events while troubleshooting. The flag never logs the API key or response bodies, but search queries can be sensitive.

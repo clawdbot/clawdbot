@@ -1,6 +1,6 @@
 ---
 name: gifgrep
-description: Search GIF providers with CLI/TUI, download results, and extract stills/sheets.
+description: "Search GIF providers with CLI/TUI, download results, and extract stills/sheets."
 homepage: https://gifgrep.com
 metadata:
   {
@@ -35,7 +35,7 @@ Use `gifgrep` to search GIF providers (Tenor/Giphy), browse in a TUI, download r
 
 GIF-Grab (gifgrep workflow)
 
-- Search → preview → download → extract (still/sheet) for fast review and sharing.
+- Search -> preview -> download -> extract (still/sheet) for fast review and sharing.
 
 Quick start
 

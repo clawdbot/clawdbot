@@ -1,3 +1,9 @@
+/**
+ * Browser output directory helper.
+ *
+ * Creates absolute output directories while handling macOS system symlink
+ * aliases such as /tmp and /var safely.
+ */
 import fs from "node:fs/promises";
 import path from "node:path";
 import { ensureAbsoluteDirectory } from "../sdk-security-runtime.js";
@@ -22,6 +28,7 @@ async function resolveSystemDirectoryAlias(dirPath: string): Promise<string> {
   return dirPath;
 }
 
+/** Ensure an absolute browser output directory exists and is safe to use. */
 export async function ensureOutputDirectory(dirPath: string): Promise<void> {
   const result = await ensureAbsoluteDirectory(
     await resolveSystemDirectoryAlias(path.resolve(dirPath)),

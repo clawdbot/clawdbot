@@ -1,3 +1,4 @@
+// Matrix tests cover limits plugin behavior.
 import { describe, expect, it } from "vitest";
 import { resolveMatrixActionLimit } from "./limits.js";
 

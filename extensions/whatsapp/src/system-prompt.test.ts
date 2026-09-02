@@ -1,3 +1,4 @@
+// Whatsapp tests cover system prompt plugin behavior.
 import { describe, expect, it } from "vitest";
 import {
   resolveWhatsAppDirectSystemPrompt,

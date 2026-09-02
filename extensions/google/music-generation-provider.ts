@@ -1,12 +1,19 @@
+// Google provider module implements model/runtime integration.
 import { extensionForMime } from "openclaw/plugin-sdk/media-mime";
+import { generatedMusicAssetFromBase64 } from "openclaw/plugin-sdk/music-generation";
 import type {
   GeneratedMusicAsset,
   MusicGenerationProvider,
   MusicGenerationRequest,
 } from "openclaw/plugin-sdk/music-generation";
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
+import {
+  createProviderOperationDeadline,
+  resolveProviderOperationTimeoutMs,
+} from "openclaw/plugin-sdk/provider-http";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveGoogleGenerativeAiApiOrigin } from "./api.js";
+import { toStandardGoogleProviderBase64 } from "./base64.js";
 import {
   createGoogleMusicGenerationProviderMetadata,
   DEFAULT_GOOGLE_MUSIC_MODEL,
@@ -25,6 +32,7 @@ type GoogleInlineDataPart = {
 
 type GoogleGenerateMusicResponse = {
   candidates?: Array<{
+    finishReason?: string;
     content?: {
       parts?: Array<{
         text?: string;
@@ -33,6 +41,9 @@ type GoogleGenerateMusicResponse = {
       }>;
     };
   }>;
+  promptFeedback?: {
+    blockReason?: string;
+  };
 };
 
 function resolveConfiguredGoogleMusicBaseUrl(req: MusicGenerationRequest): string | undefined {
@@ -85,18 +96,38 @@ function extractTracks(params: { payload: GoogleGenerateMusicResponse; model: st
         normalizeOptionalString(inline?.mimeType) ||
         normalizeOptionalString(inline?.mime_type) ||
         "audio/mpeg";
-      tracks.push({
-        buffer: Buffer.from(data, "base64"),
-        mimeType,
-        fileName: resolveTrackFileName({
-          index: tracks.length,
+      const standardAudio = toStandardGoogleProviderBase64(data);
+      if (!standardAudio) {
+        throw new Error("Generated music asset contains malformed base64 audio data");
+      }
+      tracks.push(
+        generatedMusicAssetFromBase64({
+          base64: standardAudio,
           mimeType,
-          model: params.model,
+          fileName: resolveTrackFileName({
+            index: tracks.length,
+            mimeType,
+            model: params.model,
+          }),
         }),
-      });
+      );
     }
   }
   return { tracks, lyrics };
+}
+
+function resolveTerminalNoAudioReason(payload: GoogleGenerateMusicResponse): string | undefined {
+  const blockReason = normalizeOptionalString(payload.promptFeedback?.blockReason);
+  if (blockReason && !blockReason.endsWith("_UNSPECIFIED")) {
+    return `prompt blocked (${blockReason})`;
+  }
+  for (const candidate of payload.candidates ?? []) {
+    const finishReason = normalizeOptionalString(candidate.finishReason);
+    if (finishReason && finishReason !== "STOP" && finishReason !== "FINISH_REASON_UNSPECIFIED") {
+      return `generation stopped (${finishReason})`;
+    }
+  }
+  return undefined;
 }
 
 export function buildGoogleMusicGenerationProvider(): MusicGenerationProvider {
@@ -128,38 +159,54 @@ export function buildGoogleMusicGenerationProvider(): MusicGenerationProvider {
         }
       }
 
-      const client = createGoogleGenAI({
-        apiKey: auth.apiKey,
-        httpOptions: {
-          ...(resolveConfiguredGoogleMusicBaseUrl(req)
-            ? { baseUrl: resolveConfiguredGoogleMusicBaseUrl(req) }
-            : {}),
-          timeout: req.timeoutMs ?? DEFAULT_TIMEOUT_MS,
-        },
+      const configuredBaseUrl = resolveConfiguredGoogleMusicBaseUrl(req);
+      const operationTimeoutMs = req.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+      const deadline = createProviderOperationDeadline({
+        timeoutMs: operationTimeoutMs,
+        label: "Google music generation",
       });
-      const response = (await client.models.generateContent({
-        model,
-        contents: [
-          { text: buildMusicPrompt(req) },
-          ...(req.inputImages ?? []).map((image) => ({
-            inlineData: {
-              mimeType: normalizeOptionalString(image.mimeType) || "image/png",
-              data: image.buffer?.toString("base64") ?? "",
-            },
-          })),
-        ],
-        config: {
-          responseModalities: ["AUDIO", "TEXT"],
-        },
-      })) as GoogleGenerateMusicResponse;
-
-      const { tracks, lyrics } = extractTracks({
-        payload: response,
-        model,
-      });
-      if (tracks.length === 0) {
+      let generated: ReturnType<typeof extractTracks> | undefined;
+      // Lyria promises audio for successful Clip responses, but has returned
+      // unblocked text-only payloads transiently. Never retry explicit stops.
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        const client = createGoogleGenAI({
+          apiKey: auth.apiKey,
+          httpOptions: {
+            ...(configuredBaseUrl ? { baseUrl: configuredBaseUrl } : {}),
+            timeout: resolveProviderOperationTimeoutMs({
+              deadline,
+              defaultTimeoutMs: operationTimeoutMs,
+            }),
+          },
+        });
+        const response = (await client.models.generateContent({
+          model,
+          contents: [
+            { text: buildMusicPrompt(req) },
+            ...(req.inputImages ?? []).map((image) => ({
+              inlineData: {
+                mimeType: normalizeOptionalString(image.mimeType) || "image/png",
+                data: image.buffer?.toString("base64") ?? "",
+              },
+            })),
+          ],
+          config: {
+            responseModalities: ["AUDIO", "TEXT"],
+          },
+        })) as GoogleGenerateMusicResponse;
+        generated = extractTracks({ payload: response, model });
+        if (generated.tracks.length > 0) {
+          break;
+        }
+        const terminalReason = resolveTerminalNoAudioReason(response);
+        if (terminalReason) {
+          throw new Error(`Google music generation returned no audio: ${terminalReason}`);
+        }
+      }
+      if (!generated || generated.tracks.length === 0) {
         throw new Error("Google music generation response missing audio data");
       }
+      const { tracks, lyrics } = generated;
       return {
         tracks,
         ...(lyrics.length > 0 ? { lyrics } : {}),

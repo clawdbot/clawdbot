@@ -1,5 +1,6 @@
-import type { DiscordAccountConfig } from "openclaw/plugin-sdk/config-types";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
+// Discord plugin module implements presence behavior.
+import type { DiscordAccountConfig } from "openclaw/plugin-sdk/config-contracts";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { Activity, UpdatePresenceData } from "../internal/gateway.js";
 
 const DEFAULT_CUSTOM_ACTIVITY_TYPE = 4;

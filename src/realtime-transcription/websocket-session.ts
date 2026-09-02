@@ -1,5 +1,9 @@
+// Realtime transcription websocket session streams audio to transcription providers.
 import { randomUUID } from "node:crypto";
-import WebSocket, { type RawData } from "ws";
+import { toErrorObject, toStringifiedError } from "@openclaw/normalization-core/error-coercion";
+import WebSocket from "ws";
+import { RetrySupervisor } from "../../packages/retry/src/index.js";
+import { sleepWithAbort } from "../infra/backoff.js";
 import { createDebugProxyWebSocketAgent, resolveDebugProxySettings } from "../proxy-capture/env.js";
 import { captureWsEvent } from "../proxy-capture/runtime.js";
 import type {
@@ -7,6 +11,8 @@ import type {
   RealtimeTranscriptionSessionCallbacks,
 } from "./provider-types.js";
 
+// Generic websocket-backed realtime transcription session. Providers supply URL,
+// protocol messages, and audio framing while core owns reconnection and queues.
 export type RealtimeTranscriptionWebSocketTransport = {
   readonly callbacks: RealtimeTranscriptionSessionCallbacks;
   closeNow(): void;
@@ -18,13 +24,16 @@ export type RealtimeTranscriptionWebSocketTransport = {
   sendJson(payload: unknown): boolean;
 };
 
+/** Provider-specific hooks for creating a websocket transcription session. */
 export type RealtimeTranscriptionWebSocketSessionOptions<Event = unknown> = {
   callbacks: RealtimeTranscriptionSessionCallbacks;
   connectClosedBeforeReadyMessage?: string;
   connectTimeoutMessage?: string;
   connectTimeoutMs?: number;
   closeTimeoutMs?: number;
-  headers?: Record<string, string>;
+  headers?:
+    | Record<string, string>
+    | (() => Record<string, string> | Promise<Record<string, string>>);
   maxQueuedBytes?: number;
   maxReconnectAttempts?: number;
   onClose?: (transport: RealtimeTranscriptionWebSocketTransport) => void;
@@ -36,108 +45,123 @@ export type RealtimeTranscriptionWebSocketSessionOptions<Event = unknown> = {
   reconnectDelayMs?: number;
   reconnectLimitMessage?: string;
   sendAudio: (audio: Buffer, transport: RealtimeTranscriptionWebSocketTransport) => void;
-  url: string | (() => string);
+  url: string | (() => string | Promise<string>);
 };
 
 const DEFAULT_CONNECT_TIMEOUT_MS = 10_000;
 const DEFAULT_CLOSE_TIMEOUT_MS = 5_000;
 const DEFAULT_MAX_RECONNECT_ATTEMPTS = 5;
-const DEFAULT_RECONNECT_DELAY_MS = 1000;
 const DEFAULT_MAX_QUEUED_BYTES = 2 * 1024 * 1024;
-
-function rawWsDataToBuffer(data: RawData): Buffer {
-  if (Buffer.isBuffer(data)) {
-    return data;
-  }
-  if (Array.isArray(data)) {
-    return Buffer.concat(data);
-  }
-  return Buffer.from(data);
-}
+// A raw WebSocket open is not recovery. Only a provider-ready connection
+// that survives this window earns a fresh retry budget.
+const RECONNECT_STABLE_RESET_MS = 30_000;
+// Bound inbound messages before ws buffers them for JSON parsing. The 16 MiB cap
+// matches realtime voice; ws rejects larger messages with close 1009 before
+// they reach onMessage, replacing its 100 MiB client default.
+const REALTIME_TRANSCRIPTION_WS_MAX_PAYLOAD_BYTES = 16 * 1024 * 1024;
+// ws retains outbound frames until the provider socket drains. Match the
+// voice-call egress ceiling so a stalled provider cannot grow heap indefinitely.
+const REALTIME_TRANSCRIPTION_WS_MAX_BUFFERED_BYTES = 1024 * 1024;
 
 function defaultParseMessage(payload: Buffer): unknown {
-  return JSON.parse(payload.toString());
+  try {
+    return JSON.parse(payload.toString()) as unknown;
+  } catch {
+    throw new Error("Realtime transcription websocket received malformed JSON.");
+  }
 }
 
 class WebSocketRealtimeTranscriptionSession<Event> implements RealtimeTranscriptionSession {
   private closeTimer: ReturnType<typeof setTimeout> | undefined;
   private closed = false;
-  private connected = false;
   private currentUrl = "";
-  private queuedAudio: Buffer[] = [];
+  private queuedAudio: Array<Buffer | undefined> = [];
+  private queuedAudioHead = 0;
   private queuedBytes = 0;
   private ready = false;
-  private reconnectAttempts = 0;
+  private readySinceMs: number | undefined;
+  private readonly reconnectSupervisor: RetrySupervisor;
   private reconnecting = false;
-  private suppressReconnect = false;
   private ws: WebSocket | null = null;
+  private connectionGeneration = 0;
   private readonly flowId = randomUUID();
   private readonly options: RealtimeTranscriptionWebSocketSessionOptions<Event>;
-  private readonly transport: RealtimeTranscriptionWebSocketTransport;
-  private failConnect: ((error: Error) => void) | undefined;
-  private markReady: (() => void) | undefined;
+  private transport: RealtimeTranscriptionWebSocketTransport | undefined;
+  private cancelConnecting: (() => void) | undefined;
 
   constructor(options: RealtimeTranscriptionWebSocketSessionOptions<Event>) {
     this.options = options;
-    this.transport = {
-      callbacks: options.callbacks,
-      closeNow: () => {
-        this.closed = true;
-        this.forceClose();
+    this.reconnectSupervisor = new RetrySupervisor(
+      {
+        initialMs: options.reconnectDelayMs ?? 1000,
+        maxMs: Number.MAX_SAFE_INTEGER,
+        factor: 2,
+        jitter: 0,
       },
-      failConnect: (error) => this.failConnect?.(error),
-      isOpen: () => this.ws?.readyState === WebSocket.OPEN,
-      isReady: () => this.ready,
-      markReady: () => this.markReady?.(),
-      sendBinary: (payload) => this.sendBinary(payload),
-      sendJson: (payload) => this.sendJson(payload),
-    };
+      options.maxReconnectAttempts ?? DEFAULT_MAX_RECONNECT_ATTEMPTS,
+    );
   }
 
   async connect(): Promise<void> {
+    const previousSocket = this.ws;
+    this.connectionGeneration += 1;
+    this.cancelConnecting?.();
+    this.forceClose(previousSocket);
     this.closed = false;
-    this.suppressReconnect = false;
-    this.reconnectAttempts = 0;
-    await this.doConnect();
+    this.readySinceMs = undefined;
+    this.reconnecting = false;
+    this.reconnectSupervisor.reset();
+    await this.doConnect(this.connectionGeneration);
   }
 
   sendAudio(audio: Buffer): void {
     if (this.closed || audio.byteLength === 0) {
       return;
     }
-    if (this.ws?.readyState === WebSocket.OPEN && this.ready) {
+    if (this.ws?.readyState === WebSocket.OPEN && this.ready && this.transport) {
       this.options.sendAudio(audio, this.transport);
       return;
     }
+    // Audio may arrive before provider-specific readiness. Queue bounded bytes
+    // instead of dropping early microphone frames during connect/reconnect.
     this.queueAudio(audio);
   }
 
   close(): void {
+    if (this.closed) {
+      return;
+    }
     this.closed = true;
-    this.connected = false;
+    this.cancelConnecting?.();
     this.ready = false;
-    this.queuedAudio = [];
-    this.queuedBytes = 0;
-    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
-      this.forceClose();
+    this.readySinceMs = undefined;
+    this.reconnectSupervisor.cancel();
+    this.clearQueuedAudio();
+    const socket = this.ws;
+    const transport = this.transport;
+    if (!socket || socket.readyState !== WebSocket.OPEN || !transport) {
+      this.forceClose(socket);
       return;
     }
     try {
-      this.options.onClose?.(this.transport);
+      this.options.onClose?.(transport);
     } catch (error) {
       this.emitError(error);
     }
-    this.closeTimer = setTimeout(() => this.forceClose(), this.closeTimeoutMs);
+    if (this.ws === socket) {
+      // Keep the owning socket alive for provider final transcripts, but never
+      // let its shutdown deadline terminate a later connection generation.
+      this.closeTimer = setTimeout(() => this.forceClose(socket), this.closeTimeoutMs);
+    }
   }
 
   isConnected(): boolean {
-    return this.connected && this.ready;
+    return this.ready;
   }
 
   private get closeTimeoutMs(): number {
     return this.options.closeTimeoutMs ?? DEFAULT_CLOSE_TIMEOUT_MS;
   }
-
   private get connectTimeoutMs(): number {
     return this.options.connectTimeoutMs ?? DEFAULT_CONNECT_TIMEOUT_MS;
   }
@@ -146,35 +170,60 @@ class WebSocketRealtimeTranscriptionSession<Event> implements RealtimeTranscript
     return this.options.maxQueuedBytes ?? DEFAULT_MAX_QUEUED_BYTES;
   }
 
-  private get maxReconnectAttempts(): number {
-    return this.options.maxReconnectAttempts ?? DEFAULT_MAX_RECONNECT_ATTEMPTS;
-  }
-
-  private get reconnectDelayMs(): number {
-    return this.options.reconnectDelayMs ?? DEFAULT_RECONNECT_DELAY_MS;
-  }
-
-  private async doConnect(): Promise<void> {
+  private async doConnect(generation: number): Promise<void> {
     await new Promise<void>((resolve, reject) => {
+      if (generation !== this.connectionGeneration || this.closed) {
+        resolve();
+        return;
+      }
       this.ready = false;
-      this.currentUrl =
-        typeof this.options.url === "function" ? this.options.url() : this.options.url;
       const debugProxy = resolveDebugProxySettings();
       const proxyAgent = createDebugProxyWebSocketAgent(debugProxy);
       let settled = false;
       let opened = false;
       let connectTimeout: ReturnType<typeof setTimeout> | undefined;
+      let socket: WebSocket | undefined;
+
+      const ownsGeneration = () => generation === this.connectionGeneration;
+      const ownsSocket = () => ownsGeneration() && this.ws === socket;
+
+      const clearConnectTimeout = () => {
+        if (connectTimeout) {
+          clearTimeout(connectTimeout);
+          connectTimeout = undefined;
+        }
+        if (this.cancelConnecting === finishClosedConnect) {
+          this.cancelConnecting = undefined;
+        }
+      };
+
+      const finishClosedConnect = () => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        clearConnectTimeout();
+        resolve();
+      };
 
       const finishConnect = () => {
         if (settled) {
           return;
         }
-        settled = true;
-        if (connectTimeout) {
-          clearTimeout(connectTimeout);
+        if (!ownsSocket()) {
+          finishClosedConnect();
+          return;
         }
         this.ready = true;
-        this.flushQueuedAudio();
+        this.readySinceMs = Date.now();
+        try {
+          this.flushQueuedAudio(transport);
+        } catch (error) {
+          failConnect(toErrorObject(error, "Realtime audio send failed"));
+          return;
+        }
+        settled = true;
+        clearConnectTimeout();
         resolve();
       };
 
@@ -182,22 +231,58 @@ class WebSocketRealtimeTranscriptionSession<Event> implements RealtimeTranscript
         if (settled) {
           return;
         }
-        settled = true;
-        if (connectTimeout) {
-          clearTimeout(connectTimeout);
+        if (!ownsGeneration() || (socket && !ownsSocket())) {
+          finishClosedConnect();
+          return;
         }
+        settled = true;
+        clearConnectTimeout();
         this.emitError(error);
-        this.suppressReconnect = true;
-        this.forceClose();
+        this.forceClose(socket ?? this.ws);
         reject(error);
       };
+      this.cancelConnecting = finishClosedConnect;
 
-      this.markReady = finishConnect;
-      this.failConnect = failConnect;
-      this.ws = new WebSocket(this.currentUrl, {
-        headers: this.options.headers,
-        ...(proxyAgent ? { agent: proxyAgent } : {}),
-      });
+      const handleBackpressure = () => {
+        const error = new Error(
+          `${this.options.providerId} realtime transcription send buffer exceeded ${REALTIME_TRANSCRIPTION_WS_MAX_BUFFERED_BYTES} bytes; closing stalled connection`,
+        );
+        if (!settled) {
+          failConnect(error);
+          return;
+        }
+        if (socket) {
+          this.closeForBackpressure(socket, error);
+        }
+      };
+
+      const transport: RealtimeTranscriptionWebSocketTransport = {
+        callbacks: this.options.callbacks,
+        closeNow: () => {
+          if (!ownsSocket()) {
+            return;
+          }
+          this.closed = true;
+          this.cancelConnecting?.();
+          this.reconnectSupervisor.cancel();
+          this.forceClose(socket);
+        },
+        failConnect: (error) => {
+          if (ownsSocket()) {
+            failConnect(error);
+          }
+        },
+        isOpen: () => ownsSocket() && socket?.readyState === WebSocket.OPEN,
+        isReady: () => ownsSocket() && this.ready,
+        markReady: () => {
+          if (ownsSocket()) {
+            finishConnect();
+          }
+        },
+        sendBinary: (payload) => this.send(payload, socket, generation, handleBackpressure),
+        sendJson: (payload) =>
+          this.send(JSON.stringify(payload), socket, generation, handleBackpressure),
+      };
 
       connectTimeout = setTimeout(() => {
         failConnect(
@@ -208,82 +293,136 @@ class WebSocketRealtimeTranscriptionSession<Event> implements RealtimeTranscript
         );
       }, this.connectTimeoutMs);
 
-      this.ws.on("open", () => {
-        opened = true;
-        this.connected = true;
-        this.reconnectAttempts = 0;
-        this.captureLocalOpen();
+      void (async () => {
+        let connection: { headers?: Record<string, string>; url: string };
         try {
-          this.options.onOpen?.(this.transport);
-          if (this.options.readyOnOpen) {
-            finishConnect();
-          }
+          connection = await this.resolveConnection();
         } catch (error) {
-          failConnect(error instanceof Error ? error : new Error(String(error)));
+          failConnect(toStringifiedError(error));
+          return;
         }
-      });
+        if (settled) {
+          return;
+        }
+        if (!ownsGeneration() || this.closed) {
+          finishClosedConnect();
+          return;
+        }
 
-      this.ws.on("message", (data) => {
-        const payload = rawWsDataToBuffer(data);
-        this.captureFrame("inbound", payload);
+        this.currentUrl = connection.url;
         try {
-          if (!this.options.onMessage) {
+          socket = new WebSocket(this.currentUrl, {
+            headers: connection.headers,
+            maxPayload: REALTIME_TRANSCRIPTION_WS_MAX_PAYLOAD_BYTES,
+            ...(proxyAgent ? { agent: proxyAgent } : {}),
+          });
+          socket.binaryType = "nodebuffer";
+          this.ws = socket;
+          this.transport = transport;
+        } catch (error) {
+          failConnect(toStringifiedError(error));
+          return;
+        }
+
+        socket.on("open", () => {
+          if (!ownsSocket()) {
             return;
           }
-          const parseMessage = this.options.parseMessage ?? defaultParseMessage;
-          this.options.onMessage(parseMessage(payload) as Event, this.transport);
-        } catch (error) {
-          this.emitError(error);
-        }
-      });
+          opened = true;
+          this.captureLocalOpen();
+          try {
+            this.options.onOpen?.(transport);
+            if (this.options.readyOnOpen) {
+              finishConnect();
+            }
+          } catch (error) {
+            failConnect(toStringifiedError(error));
+          }
+        });
 
-      this.ws.on("error", (error) => {
-        const normalized = error instanceof Error ? error : new Error(String(error));
-        this.captureError(normalized);
-        if (!opened || !settled) {
-          failConnect(normalized);
-          return;
-        }
-        this.emitError(normalized);
-      });
+        socket.on("message", (data) => {
+          if (!ownsSocket()) {
+            return;
+          }
+          const payload = data as Buffer;
+          this.captureFrame("inbound", payload);
+          try {
+            if (!this.options.onMessage) {
+              return;
+            }
+            const parseMessage = this.options.parseMessage ?? defaultParseMessage;
+            this.options.onMessage(parseMessage(payload) as Event, transport);
+          } catch (error) {
+            this.emitError(error);
+          }
+        });
 
-      this.ws.on("close", (code, reasonBuffer) => {
-        if (connectTimeout) {
-          clearTimeout(connectTimeout);
-        }
-        this.captureClose(code, reasonBuffer);
-        this.connected = false;
-        this.ready = false;
-        if (this.closeTimer) {
-          clearTimeout(this.closeTimer);
-          this.closeTimer = undefined;
-        }
-        if (this.closed) {
-          return;
-        }
-        if (this.suppressReconnect) {
-          this.suppressReconnect = false;
-          return;
-        }
-        if (!opened || !settled) {
-          failConnect(
-            new Error(
-              this.options.connectClosedBeforeReadyMessage ??
-                `${this.options.providerId} realtime transcription connection closed before ready`,
-            ),
-          );
-          return;
-        }
-        void this.attemptReconnect();
-      });
+        socket.on("error", (error) => {
+          if (!ownsSocket()) {
+            return;
+          }
+          const normalized = toStringifiedError(error);
+          this.captureError(normalized);
+          if (!opened || !settled) {
+            failConnect(normalized);
+            return;
+          }
+          this.emitError(normalized);
+        });
+
+        socket.on("close", (code, reasonBuffer) => {
+          if (!ownsSocket()) {
+            return;
+          }
+          clearConnectTimeout();
+          this.captureClose(code, reasonBuffer);
+          const readyForMs = this.readySinceMs === undefined ? 0 : Date.now() - this.readySinceMs;
+          this.ready = false;
+          this.readySinceMs = undefined;
+          if (readyForMs >= RECONNECT_STABLE_RESET_MS) {
+            this.reconnectSupervisor.reset();
+          }
+          if (this.closeTimer) {
+            clearTimeout(this.closeTimer);
+            this.closeTimer = undefined;
+          }
+          if (this.closed) {
+            return;
+          }
+          if (!opened || !settled) {
+            failConnect(
+              new Error(
+                this.options.connectClosedBeforeReadyMessage ??
+                  `${this.options.providerId} realtime transcription connection closed before ready`,
+              ),
+            );
+            return;
+          }
+          void this.attemptReconnect(generation);
+        });
+      })();
     });
   }
 
-  private async attemptReconnect(): Promise<void> {
-    if (this.closed || this.reconnecting) {
+  private async resolveConnection(): Promise<{
+    headers?: Record<string, string>;
+    url: string;
+  }> {
+    const url = await (typeof this.options.url === "function"
+      ? this.options.url()
+      : this.options.url);
+    const headers = await (typeof this.options.headers === "function"
+      ? this.options.headers()
+      : this.options.headers);
+    return { url, headers };
+  }
+
+  private async attemptReconnect(generation: number): Promise<void> {
+    if (generation !== this.connectionGeneration || this.closed || this.reconnecting) {
       return;
     }
-    if (this.reconnectAttempts >= this.maxReconnectAttempts) {
+    const retry = this.reconnectSupervisor.next();
+    if (!retry) {
       this.emitError(
         new Error(
           this.options.reconnectLimitMessage ??
@@ -292,76 +431,139 @@ class WebSocketRealtimeTranscriptionSession<Event> implements RealtimeTranscript
       );
       return;
     }
-    this.reconnectAttempts += 1;
-    const delay = this.reconnectDelayMs * 2 ** (this.reconnectAttempts - 1);
     this.reconnecting = true;
     try {
-      await new Promise((resolve) => setTimeout(resolve, delay));
-      if (!this.closed) {
-        await this.doConnect();
+      await sleepWithAbort(retry.delayMs, retry.signal);
+      if (generation === this.connectionGeneration && !this.closed) {
+        await this.doConnect(generation);
       }
     } catch {
-      if (!this.closed) {
+      if (generation === this.connectionGeneration && !this.closed) {
         this.reconnecting = false;
-        await this.attemptReconnect();
-        return;
+        await this.attemptReconnect(generation);
       }
     } finally {
-      this.reconnecting = false;
+      if (generation === this.connectionGeneration) {
+        this.reconnecting = false;
+      }
     }
   }
 
   private queueAudio(audio: Buffer): void {
-    this.queuedAudio.push(Buffer.from(audio));
-    this.queuedBytes += audio.byteLength;
-    while (this.queuedBytes > this.maxQueuedBytes && this.queuedAudio.length > 0) {
-      const dropped = this.queuedAudio.shift();
+    const queued = Buffer.from(audio);
+    this.queuedAudio.push(queued);
+    this.queuedBytes += queued.byteLength;
+    while (
+      this.queuedBytes > this.maxQueuedBytes &&
+      this.queuedAudioHead < this.queuedAudio.length
+    ) {
+      // Keep the most recent audio when reconnects stall; old buffered audio is
+      // less useful than avoiding unbounded memory growth. Advancing a head
+      // index keeps sustained overflow amortized O(1) instead of shifting the queue.
+      const dropped = this.queuedAudio[this.queuedAudioHead];
+      this.queuedAudio[this.queuedAudioHead] = undefined;
+      this.queuedAudioHead += 1;
       this.queuedBytes -= dropped?.byteLength ?? 0;
     }
+    this.compactQueuedAudio();
   }
 
-  private flushQueuedAudio(): void {
-    for (const audio of this.queuedAudio) {
-      this.options.sendAudio(audio, this.transport);
+  private flushQueuedAudio(transport: RealtimeTranscriptionWebSocketTransport): void {
+    while (this.queuedAudioHead < this.queuedAudio.length) {
+      const audio = this.queuedAudio[this.queuedAudioHead];
+      if (audio) {
+        this.options.sendAudio(audio, transport);
+        this.queuedBytes -= audio.byteLength;
+      }
+      this.queuedAudio[this.queuedAudioHead] = undefined;
+      this.queuedAudioHead += 1;
     }
+    this.clearQueuedAudio();
+  }
+
+  private compactQueuedAudio(): void {
+    if (this.queuedAudioHead === 0 || this.queuedAudioHead * 2 < this.queuedAudio.length) {
+      return;
+    }
+    this.queuedAudio = this.queuedAudio.slice(this.queuedAudioHead);
+    this.queuedAudioHead = 0;
+  }
+
+  private clearQueuedAudio(): void {
     this.queuedAudio = [];
+    this.queuedAudioHead = 0;
     this.queuedBytes = 0;
   }
 
-  private sendBinary(payload: Buffer): boolean {
-    if (this.ws?.readyState !== WebSocket.OPEN) {
+  private send(
+    payload: Buffer | string,
+    socket: WebSocket | undefined,
+    generation: number,
+    handleBackpressure: () => void,
+  ): boolean {
+    if (
+      !socket ||
+      generation !== this.connectionGeneration ||
+      this.ws !== socket ||
+      socket.readyState !== WebSocket.OPEN
+    ) {
+      return false;
+    }
+    const payloadBytes =
+      typeof payload === "string" ? Buffer.byteLength(payload) : payload.byteLength;
+    if (socket.bufferedAmount + payloadBytes > REALTIME_TRANSCRIPTION_WS_MAX_BUFFERED_BYTES) {
+      handleBackpressure();
       return false;
     }
     this.captureFrame("outbound", payload);
-    this.ws.send(payload);
+    socket.send(payload);
     return true;
   }
 
-  private sendJson(payload: unknown): boolean {
-    if (this.ws?.readyState !== WebSocket.OPEN) {
-      return false;
+  private closeForBackpressure(socket: WebSocket, error: Error): void {
+    if (socket !== this.ws) {
+      return;
     }
-    const serialized = JSON.stringify(payload);
-    this.captureFrame("outbound", serialized);
-    this.ws.send(serialized);
-    return true;
+    const shouldReport = !this.closed;
+    this.closed = true;
+    this.cancelConnecting?.();
+    this.reconnectSupervisor.cancel();
+    this.clearQueuedAudio();
+    this.forceClose(socket);
+    if (shouldReport) {
+      this.emitError(error);
+    }
   }
 
-  private forceClose(): void {
+  private forceClose(socket: WebSocket | null | undefined = this.ws): void {
+    if (socket !== this.ws) {
+      return;
+    }
     if (this.closeTimer) {
       clearTimeout(this.closeTimer);
       this.closeTimer = undefined;
     }
-    this.connected = false;
     this.ready = false;
-    if (this.ws) {
-      this.ws.close(1000, "Transcription session closed");
-      this.ws = null;
-    }
+    this.readySinceMs = undefined;
+    this.ws = null;
+    this.transport = undefined;
+    socket?.terminate();
   }
 
   private emitError(error: unknown): void {
-    this.options.callbacks.onError?.(error instanceof Error ? error : new Error(String(error)));
+    const normalized = error instanceof Error ? error : new Error(String(error));
+    try {
+      this.options.callbacks.onError?.(normalized);
+    } catch (callbackError) {
+      try {
+        this.captureError(
+          callbackError instanceof Error ? callbackError : new Error(String(callbackError)),
+        );
+      } catch {
+        // Error observers are diagnostic hooks; capture failures must not
+        // replace the original provider/session error.
+      }
+    }
   }
 
   private captureFrame(direction: "inbound" | "outbound", payload: Buffer | string): void {
@@ -412,6 +614,7 @@ class WebSocketRealtimeTranscriptionSession<Event> implements RealtimeTranscript
   }
 }
 
+/** Creates a reusable websocket session wrapper for a provider implementation. */
 export function createRealtimeTranscriptionWebSocketSession<Event = unknown>(
   options: RealtimeTranscriptionWebSocketSessionOptions<Event>,
 ): RealtimeTranscriptionSession {

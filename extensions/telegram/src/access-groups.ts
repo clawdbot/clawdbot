@@ -1,4 +1,5 @@
-import type { DmPolicy, OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+// Telegram plugin module implements access groups behavior.
+import type { DmPolicy, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   expandAllowFromWithAccessGroups,
   parseAccessGroupAllowFromEntry,

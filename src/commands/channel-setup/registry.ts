@@ -1,9 +1,8 @@
-import { listChannelSetupPlugins } from "../../channels/plugins/setup-registry.js";
+import type { ChannelSetupWizardAdapter } from "../../channels/plugins/setup-wizard-types.js";
+// Adapts declarative and imperative channel setup wizards to the command-facing interface.
 import { buildChannelSetupWizardAdapterFromSetupWizard } from "../../channels/plugins/setup-wizard.js";
 import type { ChannelSetupWizard } from "../../channels/plugins/setup-wizard.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
-import type { ChannelChoice } from "../onboard-types.js";
-import type { ChannelSetupWizardAdapter } from "./types.js";
 
 const setupWizardAdapters = new WeakMap<object, ChannelSetupWizardAdapter>();
 
@@ -31,6 +30,7 @@ function isDeclarativeChannelSetupWizard(
   );
 }
 
+/** Resolve the setup wizard adapter exposed by one channel plugin, caching declarative adapters. */
 export function resolveChannelSetupWizardAdapterForPlugin(
   plugin?: ChannelPlugin,
 ): ChannelSetupWizardAdapter | undefined {
@@ -54,22 +54,4 @@ export function resolveChannelSetupWizardAdapterForPlugin(
     return adapter;
   }
   return undefined;
-}
-
-const getChannelSetupWizardAdapterMap = () => {
-  const adapters = new Map<ChannelChoice, ChannelSetupWizardAdapter>();
-  for (const plugin of listChannelSetupPlugins()) {
-    const adapter = resolveChannelSetupWizardAdapterForPlugin(plugin);
-    if (!adapter) {
-      continue;
-    }
-    adapters.set(plugin.id, adapter);
-  }
-  return adapters;
-};
-
-export function getChannelSetupWizardAdapter(
-  channel: ChannelChoice,
-): ChannelSetupWizardAdapter | undefined {
-  return getChannelSetupWizardAdapterMap().get(channel);
 }

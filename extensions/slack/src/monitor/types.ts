@@ -1,13 +1,15 @@
+// Slack type declarations define plugin contracts.
 import type { ChannelRuntimeSurface } from "openclaw/plugin-sdk/channel-contract";
-import type { OpenClawConfig, SlackSlashCommandConfig } from "openclaw/plugin-sdk/config-types";
+import type { OpenClawConfig, SlackSlashCommandConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
+import type { SlackAppContext } from "../agent-context.js";
 import type { SlackMessageEvent } from "../types.js";
 
 export type MonitorSlackOpts = {
   botToken?: string;
   appToken?: string;
   accountId?: string;
-  mode?: "socket" | "http";
+  mode?: "socket" | "http" | "relay";
   config?: OpenClawConfig;
   runtime?: RuntimeEnv;
   channelRuntime?: ChannelRuntimeSurface;
@@ -65,6 +67,14 @@ export type SlackAppHomeOpenedEvent = {
   user?: string;
   channel?: string;
   tab?: "home" | "messages";
+  context?: SlackAppContext;
+  event_ts?: string;
+};
+
+export type SlackAppContextChangedEvent = {
+  type: "app_context_changed";
+  user?: string;
+  context?: SlackAppContext;
   event_ts?: string;
 };
 
@@ -76,12 +86,17 @@ export type SlackPinEvent = {
   event_ts?: string;
 };
 
+type SlackMessageSubtypeMessage = Pick<
+  SlackMessageEvent,
+  "ts" | "thread_ts" | "parent_user_id" | "user" | "bot_id"
+>;
+
 export type SlackMessageChangedEvent = {
   type: "message";
   subtype: "message_changed";
   channel?: string;
-  message?: { ts?: string; user?: string; bot_id?: string };
-  previous_message?: { ts?: string; user?: string; bot_id?: string };
+  message?: SlackMessageSubtypeMessage;
+  previous_message?: SlackMessageSubtypeMessage;
   event_ts?: string;
 };
 
@@ -90,6 +105,6 @@ export type SlackMessageDeletedEvent = {
   subtype: "message_deleted";
   channel?: string;
   deleted_ts?: string;
-  previous_message?: { ts?: string; user?: string; bot_id?: string };
+  previous_message?: SlackMessageSubtypeMessage;
   event_ts?: string;
 };

@@ -1,7 +1,24 @@
+// Tailscale status tests cover status parsing and validation.
 import { describe, expect, it, vi } from "vitest";
-import { resolveTailnetHostWithRunner } from "./tailscale-status.js";
+import {
+  extractTailscaleServeGatewayUrls,
+  inspectTailscaleServeGatewayUrlsWithRunner,
+  resolveTailnetHostWithRunner,
+  resolveTailscalePublishedHost,
+  resolveTailscaleServeGatewayUrlsWithRunner,
+} from "./tailscale-status.js";
 
 describe("shared/tailscale-status", () => {
+  it("keeps the deprecated named-Service formatter for shipped plugin SDK callers", () => {
+    expect(
+      resolveTailscalePublishedHost({
+        tailscaleMode: "serve",
+        tailnetHost: "node.tailnet.ts.net",
+        serviceName: "svc:openclaw",
+      }),
+    ).toBe("openclaw.tailnet.ts.net");
+  });
+
   it("returns null when no runner is provided", async () => {
     await expect(resolveTailnetHostWithRunner()).resolves.toBeNull();
   });
@@ -68,18 +85,149 @@ describe("shared/tailscale-status", () => {
   });
 
   it("returns null for non-zero exits, blank output, or invalid json", async () => {
-    const run = vi
-      .fn()
-      .mockResolvedValueOnce({ code: null, stdout: "boom" })
-      .mockResolvedValueOnce({ code: 1, stdout: "boom" })
-      .mockResolvedValueOnce({ code: 0, stdout: "   " });
+    for (const result of [
+      { code: null, stdout: "boom" },
+      { code: 1, stdout: "boom" },
+      { code: 0, stdout: "   " },
+      { code: 0, stdout: "not-json" },
+    ]) {
+      const run = vi.fn().mockResolvedValue(result);
+      await expect(resolveTailnetHostWithRunner(run)).resolves.toBeNull();
+    }
+  });
 
-    await expect(resolveTailnetHostWithRunner(run)).resolves.toBeNull();
-
-    const invalid = vi.fn().mockResolvedValue({
+  it.each([
+    "http://127.0.0.1:18789",
+    "https://localhost:18789",
+    "https+insecure://[::1]:18789/api",
+    "localhost:18789",
+    "18789",
+  ])("discovers the shipped SDK proxy form %s without granting ownership", async (proxy) => {
+    const run = vi.fn().mockResolvedValue({
       code: 0,
-      stdout: "not-json",
+      stdout: JSON.stringify({
+        TCP: { "443": { HTTPS: true }, "8443": { HTTPS: true } },
+        Web: {
+          "mac.tail.ts.net:443": {
+            Handlers: { "/": { Proxy: "http://127.0.0.1:8096" } },
+          },
+          "mac.tail.ts.net:8443": {
+            Handlers: { "/": { Proxy: proxy } },
+          },
+        },
+      }),
     });
-    await expect(resolveTailnetHostWithRunner(invalid)).resolves.toBeNull();
+
+    await expect(resolveTailscaleServeGatewayUrlsWithRunner(18789, run)).resolves.toEqual([
+      "wss://mac.tail.ts.net:8443",
+    ]);
+    expect(run).toHaveBeenCalledWith(["tailscale", "serve", "status", "--json"], {
+      timeoutMs: 5000,
+    });
+  });
+
+  it("ignores non-root, non-HTTPS, and non-loopback Serve handlers", async () => {
+    const run = vi.fn().mockResolvedValue({
+      code: 0,
+      stdout: JSON.stringify({
+        TCP: { "80": { HTTP: true }, "443": { HTTPS: true } },
+        Web: {
+          "mac.tail.ts.net:80": {
+            Handlers: { "/": { Proxy: "http://127.0.0.1:18789" } },
+          },
+          "mac.tail.ts.net:443": {
+            Handlers: { "/openclaw": { Proxy: "http://127.0.0.1:18789" } },
+          },
+          "other.tail.ts.net:443": {
+            Handlers: { "/": { Proxy: "http://192.168.1.20:18789" } },
+          },
+        },
+      }),
+    });
+
+    await expect(resolveTailscaleServeGatewayUrlsWithRunner(18789, run)).resolves.toEqual([]);
+  });
+
+  it("ignores load-balanced Tailscale Services and public Funnel routes", async () => {
+    const run = vi.fn().mockResolvedValue({
+      code: 0,
+      stdout: JSON.stringify({
+        TCP: { "443": { HTTPS: true } },
+        Web: {
+          "mac.tail.ts.net:443": {
+            Handlers: { "/": { Proxy: "127.0.0.1:18789" } },
+          },
+        },
+        AllowFunnel: { "mac.tail.ts.net:443": true },
+        Services: {
+          "svc:openclaw": {
+            TCP: { "443": { HTTPS: true } },
+            Web: {
+              "openclaw.tail.ts.net:443": {
+                Handlers: { "/": { Proxy: "127.0.0.1:18789" } },
+              },
+            },
+          },
+        },
+      }),
+    });
+
+    await expect(resolveTailscaleServeGatewayUrlsWithRunner(18789, run)).resolves.toEqual([]);
+  });
+
+  it.each([
+    [443, "http://127.0.0.1:18789", true],
+    [8443, "http://localhost:18789/", true],
+    [8443, "http://127.0.0.1:8096", false],
+    [443, "https://127.0.0.1:18789", false],
+    [443, "http://127.0.0.1:18789/api", false],
+    [443, "http://127.0.0.1:18789/?other", false],
+    [443, "http://192.0.2.1:18789", false],
+  ])("recognizes only an own root on HTTPS port %s targeting %s", (httpsPort, proxy, owned) => {
+    const host = `fixture.tail.ts.net:${httpsPort}`;
+    const raw = JSON.stringify({
+      TCP: { [httpsPort]: { HTTPS: true } },
+      Web: { [host]: { Handlers: { "/": { Proxy: proxy } } } },
+      AllowFunnel: { [host]: true },
+    });
+    expect(extractTailscaleServeGatewayUrls(raw, 18789, true)).toEqual(
+      owned ? [`wss://fixture.tail.ts.net${httpsPort === 443 ? "" : `:${httpsPort}`}`] : [],
+    );
+  });
+
+  it.each([
+    [443, 443, false],
+    [8443, 8443, false],
+    [443, 8443, true],
+  ])(
+    "requires HTTPS port %s to be exclusive across hostnames (sibling port %s)",
+    (port, siblingPort, owned) => {
+      const url = `wss://old.tail.ts.net${port === 443 ? "" : `:${port}`}`;
+      const raw = JSON.stringify({
+        TCP: { [port]: { HTTPS: true }, [siblingPort]: { HTTPS: true } },
+        Web: {
+          [`old.tail.ts.net:${port}`]: { Handlers: { "/": { Proxy: "http://127.0.0.1:18789" } } },
+          [`current.tail.ts.net:${siblingPort}`]: {
+            Handlers: { "/": { Proxy: "http://127.0.0.1:8096" } },
+          },
+        },
+      });
+      expect(extractTailscaleServeGatewayUrls(raw, 18789, true)).toEqual(owned ? [url] : []);
+      expect(extractTailscaleServeGatewayUrls(raw, 18789)).toEqual([url]);
+    },
+  );
+
+  it("distinguishes malformed Serve status from an empty valid configuration", async () => {
+    const malformed = vi.fn().mockResolvedValue({ code: 0, stdout: "not-json" });
+    const empty = vi.fn().mockResolvedValue({ code: 0, stdout: "{}" });
+
+    await expect(inspectTailscaleServeGatewayUrlsWithRunner(18789, malformed)).resolves.toEqual({
+      status: "invalid",
+    });
+    await expect(inspectTailscaleServeGatewayUrlsWithRunner(18789, empty)).resolves.toEqual({
+      status: "ok",
+      urls: [],
+    });
+    await expect(resolveTailscaleServeGatewayUrlsWithRunner(18789, malformed)).resolves.toEqual([]);
   });
 });

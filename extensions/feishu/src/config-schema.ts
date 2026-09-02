@@ -1,18 +1,60 @@
+// Feishu helper module supports config schema behavior.
 import { normalizeAccountId } from "openclaw/plugin-sdk/account-id";
-import { z } from "openclaw/plugin-sdk/zod";
-export { z };
+import {
+  ContextVisibilityModeSchema,
+  DmPolicySchema,
+  GroupPolicySchema,
+  ReplyToModeSchema,
+  buildChannelConfigSchema,
+  buildGroupEntrySchema,
+  buildMultiAccountChannelSchema,
+} from "openclaw/plugin-sdk/channel-config-schema";
+import { z } from "zod";
+import { FEISHU_EXTERNAL_KEY_PATTERN } from "./external-keys.js";
 import { buildSecretInputSchema, hasConfiguredSecretInput } from "./secret-input.js";
+import { DEFAULT_FEISHU_WEBHOOK_PATH, normalizeFeishuWebhookPath } from "./webhook-path.js";
+export { z };
 
 const ChannelActionsSchema = z
   .object({
     reactions: z.boolean().optional(),
+    sticker: z.boolean().optional(),
   })
   .strict()
   .optional();
 
-const DmPolicySchema = z.enum(["open", "pairing", "allowlist"]);
-const GroupPolicySchema = z.union([
-  z.enum(["open", "allowlist", "disabled"]),
+const MAX_STICKER_SETS = 32;
+const MAX_STICKERS_PER_SET = 256;
+
+function canonicalTextPattern(maxLength: number): RegExp {
+  // Quantifiers enforce the same scalar bound in Zod and exported JSON Schema;
+  // maxLength alone differs between their UTF-16 and grapheme counting rules.
+  return new RegExp(`^(?!\\s)(?![\\s\\S]*\\s$)[^\\p{Cs}]{1,${maxLength}}$`, "u");
+}
+
+const FeishuStickerSetSchema = z
+  .record(
+    z.string().regex(FEISHU_EXTERNAL_KEY_PATTERN),
+    z
+      .array(z.string().regex(canonicalTextPattern(64)))
+      .min(1)
+      .max(8),
+  )
+  .refine((set) => Object.keys(set).length <= MAX_STICKERS_PER_SET, {
+    message: `At most ${MAX_STICKERS_PER_SET} stickers per bot set are allowed`,
+  })
+  .meta({ maxProperties: MAX_STICKERS_PER_SET });
+
+const FeishuStickerSetsSchema = z
+  .record(z.string().regex(canonicalTextPattern(128)), FeishuStickerSetSchema)
+  .refine((sets) => Object.keys(sets).length <= MAX_STICKER_SETS, {
+    message: `At most ${MAX_STICKER_SETS} bot sticker sets are allowed`,
+  })
+  .meta({ maxProperties: MAX_STICKER_SETS });
+
+const FeishuGroupPolicySchema = z.union([
+  GroupPolicySchema,
+  // Preserve the shipped Feishu alias while the canonical value remains "open".
   z.literal("allowall").transform(() => "open" as const),
 ]);
 const FeishuDomainSchema = z.union([
@@ -20,6 +62,12 @@ const FeishuDomainSchema = z.union([
   z.string().url().startsWith("https://"),
 ]);
 const FeishuConnectionModeSchema = z.enum(["websocket", "webhook"]);
+const FeishuWebhookPathSchema = z
+  .string()
+  .refine((value) => normalizeFeishuWebhookPath(value) === value, {
+    message:
+      'webhookPath must be a canonical HTTP request path; run "openclaw doctor --fix" to repair it',
+  });
 const TtsOverrideSchema = z
   .object({
     auto: z.enum(["off", "always", "inbound", "tagged"]).optional(),
@@ -65,16 +113,34 @@ const MarkdownConfigSchema = z
 // Message render mode: auto (default) = detect markdown, raw = plain text, card = always card
 const RenderModeSchema = z.enum(["auto", "raw", "card"]).optional();
 
-// Streaming card mode: when enabled, card replies use Feishu's Card Kit streaming API
-// for incremental text display with a "Thinking..." placeholder
-const StreamingModeSchema = z.boolean().optional();
-const BlockStreamingSchema = z.boolean().optional();
-
+// Field names must match the core coalesce reader
+// (resolveChannelStreamingBlockCoalesce); the legacy feishu-local
+// enabled/minDelayMs/maxDelayMs spelling was never read by any runtime path.
 const BlockStreamingCoalesceSchema = z
   .object({
-    enabled: z.boolean().optional(),
-    minDelayMs: z.number().int().positive().optional(),
-    maxDelayMs: z.number().int().positive().optional(),
+    minChars: z.number().int().positive().optional(),
+    maxChars: z.number().int().positive().optional(),
+    idleMs: z.number().int().nonnegative().optional(),
+  })
+  .strict()
+  .optional();
+
+// Streaming config: `mode` gates Feishu Card Kit streaming-card replies
+// ("partial" = streaming cards, default; "off" = single final message);
+// `chunkMode`/`block` are the shared delivery controls. Legacy boolean
+// `streaming` and flat chunkMode/blockStreaming/blockStreamingCoalesce keys
+// migrate via `openclaw doctor --fix`.
+const FeishuStreamingSchema = z
+  .object({
+    mode: z.enum(["off", "partial"]).optional(),
+    chunkMode: z.enum(["length", "newline"]).optional(),
+    block: z
+      .object({
+        enabled: z.boolean().optional(),
+        coalesce: BlockStreamingCoalesceSchema,
+      })
+      .strict()
+      .optional(),
   })
   .strict()
   .optional();
@@ -117,6 +183,7 @@ const FeishuToolsConfigSchema = z
     drive: z.boolean().optional(), // Cloud storage operations (default: true)
     perm: z.boolean().optional(), // Permission management (default: false, sensitive)
     scopes: z.boolean().optional(), // App scopes diagnostic (default: true)
+    bitable: z.boolean().optional(), // Bitable/Base operations (default: true)
   })
   .strict()
   .optional();
@@ -157,19 +224,12 @@ const ReactionNotificationModeSchema = z.enum(["off", "own", "all"]).optional();
  */
 const ReplyInThreadSchema = z.enum(["disabled", "enabled"]).optional();
 
-export const FeishuGroupSchema = z
-  .object({
-    requireMention: z.boolean().optional(),
-    tools: ToolPolicySchema,
-    skills: z.array(z.string()).optional(),
-    enabled: z.boolean().optional(),
-    allowFrom: z.array(z.union([z.string(), z.number()])).optional(),
-    systemPrompt: z.string().optional(),
-    groupSessionScope: GroupSessionScopeSchema,
-    topicSessionMode: TopicSessionModeSchema,
-    replyInThread: ReplyInThreadSchema,
-  })
-  .strict();
+const FeishuGroupSchema = buildGroupEntrySchema({
+  tools: ToolPolicySchema,
+  groupSessionScope: GroupSessionScopeSchema,
+  topicSessionMode: TopicSessionModeSchema,
+  replyInThread: ReplyInThreadSchema,
+}).omit({ toolsBySender: true });
 
 const FeishuSharedConfigShape = {
   webhookHost: z.string().optional(),
@@ -177,9 +237,12 @@ const FeishuSharedConfigShape = {
   capabilities: z.array(z.string()).optional(),
   markdown: MarkdownConfigSchema,
   configWrites: z.boolean().optional(),
+  contextVisibility: ContextVisibilityModeSchema.optional(),
+  replyToMode: ReplyToModeSchema.optional(),
+  responsePrefix: z.string().optional(),
   dmPolicy: DmPolicySchema.optional(),
   allowFrom: z.array(z.union([z.string(), z.number()])).optional(),
-  groupPolicy: GroupPolicySchema.optional(),
+  groupPolicy: FeishuGroupPolicySchema.optional(),
   groupAllowFrom: z.array(z.union([z.string(), z.number()])).optional(),
   groupSenderAllowFrom: z.array(z.union([z.string(), z.number()])).optional(),
   requireMention: z.boolean().optional(),
@@ -188,20 +251,19 @@ const FeishuSharedConfigShape = {
   dmHistoryLimit: z.number().int().min(0).optional(),
   dms: z.record(z.string(), DmConfigSchema).optional(),
   textChunkLimit: z.number().int().positive().optional(),
-  chunkMode: z.enum(["length", "newline"]).optional(),
-  blockStreaming: BlockStreamingSchema,
-  blockStreamingCoalesce: BlockStreamingCoalesceSchema,
   mediaMaxMb: z.number().positive().optional(),
   httpTimeoutMs: z.number().int().positive().max(300_000).optional(),
-  heartbeat: ChannelHeartbeatVisibilitySchema,
+  heartbeatVisibility: ChannelHeartbeatVisibilitySchema,
   renderMode: RenderModeSchema,
-  streaming: StreamingModeSchema,
+  streaming: FeishuStreamingSchema,
   tools: FeishuToolsConfigSchema,
   actions: ChannelActionsSchema,
   replyInThread: ReplyInThreadSchema,
   reactionNotifications: ReactionNotificationModeSchema,
   typingIndicator: z.boolean().optional(),
   resolveSenderNames: z.boolean().optional(),
+  allowBots: z.boolean().optional(),
+  vcAutoJoin: z.boolean().optional(),
   tts: TtsOverrideSchema,
 };
 
@@ -219,17 +281,18 @@ export const FeishuAccountConfigSchema = z
     verificationToken: buildSecretInputSchema().optional(),
     domain: FeishuDomainSchema.optional(),
     connectionMode: FeishuConnectionModeSchema.optional(),
-    webhookPath: z.string().optional(),
+    webhookPath: FeishuWebhookPathSchema.optional(),
     ...FeishuSharedConfigShape,
     groupSessionScope: GroupSessionScopeSchema,
     topicSessionMode: TopicSessionModeSchema,
   })
   .strict();
 
-export const FeishuConfigSchema = z
+const FeishuConfigSchemaBase = z
   .object({
     enabled: z.boolean().optional(),
     defaultAccount: z.string().optional(),
+    stickerSets: FeishuStickerSetsSchema.optional(),
     // Top-level credentials (backward compatible for single-account mode)
     appId: z.string().optional(),
     appSecret: buildSecretInputSchema().optional(),
@@ -237,11 +300,11 @@ export const FeishuConfigSchema = z
     verificationToken: buildSecretInputSchema().optional(),
     domain: FeishuDomainSchema.optional().default("feishu"),
     connectionMode: FeishuConnectionModeSchema.optional().default("websocket"),
-    webhookPath: z.string().optional().default("/feishu/events"),
+    webhookPath: FeishuWebhookPathSchema.optional().default(DEFAULT_FEISHU_WEBHOOK_PATH),
     ...FeishuSharedConfigShape,
     dmPolicy: DmPolicySchema.optional().default("pairing"),
     reactionNotifications: ReactionNotificationModeSchema.optional().default("own"),
-    groupPolicy: GroupPolicySchema.optional().default("allowlist"),
+    groupPolicy: FeishuGroupPolicySchema.optional().default("allowlist"),
     requireMention: z.boolean().optional(),
     groupSessionScope: GroupSessionScopeSchema,
     topicSessionMode: TopicSessionModeSchema,
@@ -250,86 +313,92 @@ export const FeishuConfigSchema = z
     // Optimization flags
     typingIndicator: z.boolean().optional().default(true),
     resolveSenderNames: z.boolean().optional().default(true),
-    // Multi-account configuration
-    accounts: z.record(z.string(), FeishuAccountConfigSchema.optional()).optional(),
   })
-  .strict()
-  .superRefine((value, ctx) => {
-    const defaultAccount = value.defaultAccount?.trim();
-    if (defaultAccount && value.accounts && Object.keys(value.accounts).length > 0) {
-      const normalizedDefaultAccount = normalizeAccountId(defaultAccount);
-      if (!Object.prototype.hasOwnProperty.call(value.accounts, normalizedDefaultAccount)) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          path: ["defaultAccount"],
-          message: `channels.feishu.defaultAccount="${defaultAccount}" does not match a configured account key`,
-        });
-      }
-    }
+  .strict();
 
-    const defaultConnectionMode = value.connectionMode ?? "websocket";
-    const defaultVerificationTokenConfigured = hasConfiguredSecretInput(value.verificationToken);
-    const defaultEncryptKeyConfigured = hasConfiguredSecretInput(value.encryptKey);
-    if (defaultConnectionMode === "webhook") {
-      if (!defaultVerificationTokenConfigured) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          path: ["verificationToken"],
-          message:
-            'channels.feishu.connectionMode="webhook" requires channels.feishu.verificationToken',
-        });
-      }
-      if (!defaultEncryptKeyConfigured) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          path: ["encryptKey"],
-          message: 'channels.feishu.connectionMode="webhook" requires channels.feishu.encryptKey',
-        });
-      }
+export const FeishuConfigSchema = buildMultiAccountChannelSchema(FeishuConfigSchemaBase, {
+  accountSchema: FeishuAccountConfigSchema,
+  optionalAccount: true,
+}).superRefine((value, ctx) => {
+  const defaultAccount = value.defaultAccount?.trim();
+  if (defaultAccount && value.accounts && Object.keys(value.accounts).length > 0) {
+    const normalizedDefaultAccount = normalizeAccountId(defaultAccount);
+    if (!Object.hasOwn(value.accounts, normalizedDefaultAccount)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["defaultAccount"],
+        message: `channels.feishu.defaultAccount="${defaultAccount}" does not match a configured account key`,
+      });
     }
+  }
 
-    for (const [accountId, account] of Object.entries(value.accounts ?? {})) {
-      if (!account) {
-        continue;
-      }
-      const accountConnectionMode = account.connectionMode ?? defaultConnectionMode;
-      if (accountConnectionMode !== "webhook") {
-        continue;
-      }
-      const accountVerificationTokenConfigured =
-        hasConfiguredSecretInput(account.verificationToken) || defaultVerificationTokenConfigured;
-      const accountEncryptKeyConfigured =
-        hasConfiguredSecretInput(account.encryptKey) || defaultEncryptKeyConfigured;
-      if (!accountVerificationTokenConfigured) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          path: ["accounts", accountId, "verificationToken"],
-          message:
-            `channels.feishu.accounts.${accountId}.connectionMode="webhook" requires ` +
-            "a verificationToken (account-level or top-level)",
-        });
-      }
-      if (!accountEncryptKeyConfigured) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          path: ["accounts", accountId, "encryptKey"],
-          message:
-            `channels.feishu.accounts.${accountId}.connectionMode="webhook" requires ` +
-            "an encryptKey (account-level or top-level)",
-        });
-      }
+  const defaultConnectionMode = value.connectionMode ?? "websocket";
+  const defaultVerificationTokenConfigured = hasConfiguredSecretInput(value.verificationToken);
+  const defaultEncryptKeyConfigured = hasConfiguredSecretInput(value.encryptKey);
+  if (defaultConnectionMode === "webhook") {
+    if (!defaultVerificationTokenConfigured) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["verificationToken"],
+        message:
+          'channels.feishu.connectionMode="webhook" requires channels.feishu.verificationToken',
+      });
     }
+    if (!defaultEncryptKeyConfigured) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["encryptKey"],
+        message: 'channels.feishu.connectionMode="webhook" requires channels.feishu.encryptKey',
+      });
+    }
+  }
 
-    if (value.dmPolicy === "open") {
-      const allowFrom = value.allowFrom ?? [];
-      const hasWildcard = allowFrom.some((entry) => String(entry).trim() === "*");
-      if (!hasWildcard) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          path: ["allowFrom"],
-          message:
-            'channels.feishu.dmPolicy="open" requires channels.feishu.allowFrom to include "*"',
-        });
-      }
+  for (const [accountId, account] of Object.entries(value.accounts ?? {})) {
+    if (!account) {
+      continue;
     }
-  });
+    const accountConnectionMode = account.connectionMode ?? defaultConnectionMode;
+    if (accountConnectionMode !== "webhook") {
+      continue;
+    }
+    const accountVerificationTokenConfigured =
+      hasConfiguredSecretInput(account.verificationToken) || defaultVerificationTokenConfigured;
+    const accountEncryptKeyConfigured =
+      hasConfiguredSecretInput(account.encryptKey) || defaultEncryptKeyConfigured;
+    if (!accountVerificationTokenConfigured) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["accounts", accountId, "verificationToken"],
+        message:
+          `channels.feishu.accounts.${accountId}.connectionMode="webhook" requires ` +
+          "a verificationToken (account-level or top-level)",
+      });
+    }
+    if (!accountEncryptKeyConfigured) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["accounts", accountId, "encryptKey"],
+        message:
+          `channels.feishu.accounts.${accountId}.connectionMode="webhook" requires ` +
+          "an encryptKey (account-level or top-level)",
+      });
+    }
+  }
+
+  if (value.dmPolicy === "open") {
+    const allowFrom = value.allowFrom ?? [];
+    const hasWildcard = allowFrom.some((entry) => String(entry).trim() === "*");
+    if (!hasWildcard) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["allowFrom"],
+        message:
+          'channels.feishu.dmPolicy="open" requires channels.feishu.allowFrom to include "*"',
+      });
+    }
+  }
+});
+
+export const FeishuChannelConfigSchema = buildChannelConfigSchema(FeishuConfigSchema, {
+  jsonSchemaMode: "input",
+});

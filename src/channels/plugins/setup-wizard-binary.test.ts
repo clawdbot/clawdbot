@@ -1,3 +1,4 @@
+// Setup wizard binary tests cover channel setup wizard binary selection and invocation.
 import { describe, expect, it, vi } from "vitest";
 import {
   createCliPathTextInput,

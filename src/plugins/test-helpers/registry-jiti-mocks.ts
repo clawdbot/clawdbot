@@ -1,3 +1,4 @@
+// Registry Jiti mock helpers install Vitest mocks for plugin registry import tests.
 import { vi } from "vitest";
 
 const registryJitiMocks = vi.hoisted(() => ({
@@ -14,7 +15,7 @@ vi.mock("../discovery.js", () => ({
 }));
 
 vi.mock("../manifest-registry.js", () => ({
-  loadPluginManifestRegistry: (
+  loadPluginManifestRegistryCore: (
     ...args: Parameters<typeof registryJitiMocks.loadPluginManifestRegistry>
   ) => registryJitiMocks.loadPluginManifestRegistry(...args),
 }));

@@ -1,3 +1,8 @@
+/**
+ * Tracks pending tool-call ids while repairing sanitized transcript messages.
+ * The state object decides when dropped or reordered messages need synthetic
+ * tool results flushed.
+ */
 type PendingToolCall = { id: string; name?: string };
 
 type PendingToolCallState = {
@@ -13,6 +18,7 @@ type PendingToolCallState = {
   shouldFlushBeforeNewToolCalls: (toolCallCount: number) => boolean;
 };
 
+/** Tracks pending tool calls so sanitized transcript repair can flush in order. */
 export function createPendingToolCallState(): PendingToolCallState {
   const pending = new Map<string, string | undefined>();
 

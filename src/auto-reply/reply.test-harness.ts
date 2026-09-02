@@ -1,11 +1,13 @@
+/** Shared reply test harness with mocked agent/runtime dependencies and temp HOME isolation. */
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, vi, type Mock } from "vitest";
-import { withFastReplyConfig } from "./reply/get-reply-fast-path.js";
+import { withEnvAsync } from "../test-utils/env.js";
+import { withFastReplyConfig } from "./reply/get-reply-fast-path.test-support.js";
 
 type ReplyRuntimeMocks = {
-  runEmbeddedPiAgent: Mock;
+  runEmbeddedAgent: Mock;
   loadModelCatalog: Mock;
   webAuthExists: Mock;
   getWebAuthAgeMs: Mock;
@@ -14,7 +16,7 @@ type ReplyRuntimeMocks = {
 
 const replyRuntimeMockState = vi.hoisted(() => ({
   mocks: {
-    runEmbeddedPiAgent: vi.fn(),
+    runEmbeddedAgent: vi.fn(),
     loadModelCatalog: vi.fn(),
     webAuthExists: vi.fn().mockResolvedValue(true),
     getWebAuthAgeMs: vi.fn().mockReturnValue(120_000),
@@ -22,30 +24,30 @@ const replyRuntimeMockState = vi.hoisted(() => ({
   } as ReplyRuntimeMocks,
 }));
 
-vi.mock("../agents/pi-embedded.js", () => ({
-  abortEmbeddedPiRun: vi.fn().mockReturnValue(false),
-  runEmbeddedPiAgent: (...args: unknown[]) =>
-    replyRuntimeMockState.mocks.runEmbeddedPiAgent(...args),
-  queueEmbeddedPiMessage: vi.fn().mockReturnValue(false),
+vi.mock("../agents/embedded-agent.js", () => ({
+  abortEmbeddedAgentRun: vi.fn().mockReturnValue(false),
+  runEmbeddedAgent: (...args: unknown[]) => replyRuntimeMockState.mocks.runEmbeddedAgent(...args),
   resolveEmbeddedSessionLane: (key: string) => `session:${key.trim() || "main"}`,
-  isEmbeddedPiRunActive: vi.fn().mockReturnValue(false),
-  isEmbeddedPiRunStreaming: vi.fn().mockReturnValue(false),
+  isEmbeddedAgentRunActive: vi.fn().mockReturnValue(false),
+  isEmbeddedAgentRunStreaming: vi.fn().mockReturnValue(false),
 }));
 
 vi.mock("../agents/model-catalog.runtime.js", () => ({
-  loadModelCatalog: (...args: unknown[]) => replyRuntimeMockState.mocks.loadModelCatalog(...args),
+  loadProviderScopedThinkingCatalog: async () => [],
+  loadPreparedModelCatalog: (...args: unknown[]) =>
+    replyRuntimeMockState.mocks.loadModelCatalog(...args),
 }));
 
 vi.mock("../agents/auth-profiles/session-override.js", () => ({
   clearSessionAuthProfileOverride: vi.fn(),
-  resolveSessionAuthProfileOverride: vi.fn().mockResolvedValue(undefined),
+  resolveSessionAuthSelection: vi.fn().mockResolvedValue(undefined),
 }));
 
 vi.mock("../commands-registry.runtime.js", () => ({
   listChatCommands: () => [],
 }));
 
-vi.mock("../skill-commands.runtime.js", () => ({
+vi.mock("../skills/discovery/chat-commands.runtime.js", () => ({
   listSkillCommandsForWorkspace: () => [],
 }));
 
@@ -55,13 +57,13 @@ vi.mock("../plugins/runtime/runtime-web-channel-plugin.js", () => ({
   readWebSelfId: (...args: unknown[]) => replyRuntimeMockState.mocks.readWebSelfId(...args),
 }));
 
-vi.mock("../agents/pi-embedded.runtime.js", () => ({
-  abortEmbeddedPiRun: vi.fn().mockReturnValue(false),
-  isEmbeddedPiRunActive: vi.fn().mockReturnValue(false),
-  isEmbeddedPiRunStreaming: vi.fn().mockReturnValue(false),
+vi.mock("../agents/embedded-agent.runtime.js", () => ({
+  abortEmbeddedAgentRun: vi.fn().mockReturnValue(false),
+  isEmbeddedAgentRunActive: vi.fn().mockReturnValue(false),
+  isEmbeddedAgentRunStreaming: vi.fn().mockReturnValue(false),
   resolveActiveEmbeddedRunSessionId: vi.fn().mockReturnValue(undefined),
   resolveEmbeddedSessionLane: (key: string) => `session:${key.trim() || "main"}`,
-  waitForEmbeddedPiRunEnd: vi.fn(async () => undefined),
+  waitForEmbeddedAgentRunEnd: vi.fn(async () => undefined),
 }));
 
 vi.mock("./reply/agent-runner.runtime.js", () => ({
@@ -93,7 +95,7 @@ vi.mock("./reply/agent-runner.runtime.js", () => ({
       };
     };
   }) => {
-    const result = await replyRuntimeMockState.mocks.runEmbeddedPiAgent({
+    const result = await replyRuntimeMockState.mocks.runEmbeddedAgent({
       prompt: params.followupRun.prompt || params.commandBody,
       agentDir: params.followupRun.run.agentDir,
       agentId: params.followupRun.run.agentId,
@@ -120,38 +122,7 @@ vi.mock("./reply/agent-runner.runtime.js", () => ({
   },
 }));
 
-type HomeEnvSnapshot = {
-  HOME: string | undefined;
-  USERPROFILE: string | undefined;
-  HOMEDRIVE: string | undefined;
-  HOMEPATH: string | undefined;
-  OPENCLAW_STATE_DIR: string | undefined;
-  OPENCLAW_AGENT_DIR: string | undefined;
-  PI_CODING_AGENT_DIR: string | undefined;
-};
-
-function snapshotHomeEnv(): HomeEnvSnapshot {
-  return {
-    HOME: process.env.HOME,
-    USERPROFILE: process.env.USERPROFILE,
-    HOMEDRIVE: process.env.HOMEDRIVE,
-    HOMEPATH: process.env.HOMEPATH,
-    OPENCLAW_STATE_DIR: process.env.OPENCLAW_STATE_DIR,
-    OPENCLAW_AGENT_DIR: process.env.OPENCLAW_AGENT_DIR,
-    PI_CODING_AGENT_DIR: process.env.PI_CODING_AGENT_DIR,
-  };
-}
-
-function restoreHomeEnv(snapshot: HomeEnvSnapshot) {
-  for (const [key, value] of Object.entries(snapshot)) {
-    if (value === undefined) {
-      delete process.env[key];
-    } else {
-      process.env[key] = value;
-    }
-  }
-}
-
+/** Creates a per-test HOME fixture and restores environment variables after each case. */
 export function createTempHomeHarness(options: { prefix: string; beforeEachCase?: () => void }) {
   let fixtureRoot = "";
   let caseId = 0;
@@ -170,32 +141,30 @@ export function createTempHomeHarness(options: { prefix: string; beforeEachCase?
   async function withTempHome<T>(fn: (home: string) => Promise<T>): Promise<T> {
     const home = path.join(fixtureRoot, `case-${++caseId}`);
     await fs.mkdir(path.join(home, ".openclaw", "agents", "main", "sessions"), { recursive: true });
-    const envSnapshot = snapshotHomeEnv();
-    process.env.HOME = home;
-    process.env.USERPROFILE = home;
-    process.env.OPENCLAW_STATE_DIR = path.join(home, ".openclaw");
-    process.env.OPENCLAW_AGENT_DIR = path.join(home, ".openclaw", "agent");
-    process.env.PI_CODING_AGENT_DIR = path.join(home, ".openclaw", "agent");
-
+    const env: Record<string, string | undefined> = {
+      HOME: home,
+      USERPROFILE: home,
+      OPENCLAW_STATE_DIR: path.join(home, ".openclaw"),
+      OPENCLAW_AGENT_DIR: path.join(home, ".openclaw", "agent"),
+    };
     if (process.platform === "win32") {
       const match = home.match(/^([A-Za-z]:)(.*)$/);
       if (match) {
-        process.env.HOMEDRIVE = match[1];
-        process.env.HOMEPATH = match[2] || "\\";
+        env.HOMEDRIVE = match[1];
+        env.HOMEPATH = match[2] || "\\";
       }
     }
 
-    try {
+    return await withEnvAsync(env, async () => {
       options.beforeEachCase?.();
       return await fn(home);
-    } finally {
-      restoreHomeEnv(envSnapshot);
-    }
+    });
   }
 
   return { withTempHome };
 }
 
+/** Builds a minimal reply config rooted in a temp HOME fixture. */
 export function makeReplyConfig(home: string) {
   return withFastReplyConfig({
     agents: {
@@ -213,9 +182,10 @@ export function makeReplyConfig(home: string) {
   });
 }
 
+/** Creates fresh runtime mocks for reply tests. */
 export function createReplyRuntimeMocks(): ReplyRuntimeMocks {
   return {
-    runEmbeddedPiAgent: vi.fn(),
+    runEmbeddedAgent: vi.fn(),
     loadModelCatalog: vi.fn(),
     webAuthExists: vi.fn().mockResolvedValue(true),
     getWebAuthAgeMs: vi.fn().mockReturnValue(120_000),
@@ -223,18 +193,21 @@ export function createReplyRuntimeMocks(): ReplyRuntimeMocks {
   };
 }
 
+/** Installs runtime mocks into the hoisted Vitest module state. */
 export function installReplyRuntimeMocks(mocks: ReplyRuntimeMocks) {
   replyRuntimeMockState.mocks = mocks;
 }
 
+/** Resets mock call history and default model catalog responses. */
 export function resetReplyRuntimeMocks(mocks: ReplyRuntimeMocks) {
-  mocks.runEmbeddedPiAgent.mockClear();
+  mocks.runEmbeddedAgent.mockClear();
   mocks.loadModelCatalog.mockClear();
   mocks.loadModelCatalog.mockResolvedValue([
     { id: "claude-opus-4-6", name: "Opus 4.5", provider: "anthropic" },
   ]);
 }
 
+/** Builds the minimal embedded-agent text result consumed by reply tests. */
 export function makeEmbeddedTextResult(text: string) {
   return {
     payloads: [{ text }],

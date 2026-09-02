@@ -1,3 +1,4 @@
+// Tests install mode option parsing for setup commands.
 import { describe, expect, it } from "vitest";
 import {
   resolveInstallModeOptions,

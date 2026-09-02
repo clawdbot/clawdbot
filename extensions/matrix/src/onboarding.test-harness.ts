@@ -1,3 +1,5 @@
+// Matrix setup module handles plugin onboarding behavior.
+import { expectDefined } from "@openclaw/normalization-core";
 import type { OutputRuntimeEnv } from "openclaw/plugin-sdk/runtime";
 import type { ChannelSetupWizardAdapter } from "openclaw/plugin-sdk/setup";
 import { afterEach, vi } from "vitest";
@@ -36,7 +38,9 @@ function createNonExitingTypedRuntimeEnv<TRuntime>(): TRuntime {
 
 export function installMatrixOnboardingEnvRestoreHooks() {
   afterEach(() => {
-    for (const [key, value] of Object.entries(previousMatrixEnv)) {
+    // Restore only the fixed Matrix allowlist; never replay arbitrary keys into host env.
+    for (const key of MATRIX_ENV_KEYS) {
+      const value = previousMatrixEnv[key];
       if (value === undefined) {
         delete process.env[key];
       } else {
@@ -65,7 +69,7 @@ export function createMatrixWizardPrompter(params: {
     fallback: PromptHandler<T | Promise<T>> | undefined,
   ): Promise<T> => {
     if (values && message in values) {
-      return values[message];
+      return expectDefined(values[message], `${kind} prompt value for ${message}`);
     }
     if (fallback) {
       return await fallback(message);
@@ -263,6 +267,8 @@ export function createMatrixUpdateKeepCredentialsPrompter(params?: {
   updateAutoJoin?: boolean;
   homeserver?: string;
   deviceName?: string;
+  configureRoomsAccess?: boolean;
+  roomsAllowlist?: string;
   onText?: PromptHandler<string | Promise<string>>;
 }) {
   return createMatrixWizardPrompter({
@@ -270,15 +276,19 @@ export function createMatrixUpdateKeepCredentialsPrompter(params?: {
     select: {
       "Matrix already configured. What do you want to do?": "update",
       ...(params?.inviteAutoJoin ? { "Matrix invite auto-join": params.inviteAutoJoin } : {}),
+      ...(params?.configureRoomsAccess ? { "Matrix rooms access": "allowlist" } : {}),
     },
     text: {
       "Matrix homeserver URL": params?.homeserver ?? "https://matrix.example.org",
       "Matrix device name (optional)": params?.deviceName ?? "OpenClaw Gateway",
+      ...(params?.roomsAllowlist
+        ? { "Matrix rooms allowlist (comma-separated)": params.roomsAllowlist }
+        : {}),
     },
     confirm: {
       "Matrix credentials already configured. Keep them?": true,
       "Enable end-to-end encryption (E2EE)?": false,
-      "Configure Matrix rooms access?": false,
+      "Configure Matrix rooms access?": params?.configureRoomsAccess ?? false,
       "Configure Matrix invite auto-join?": params?.inviteAutoJoin !== undefined,
       ...(params?.inviteAutoJoin !== undefined
         ? { "Update Matrix invite auto-join?": params?.updateAutoJoin ?? true }

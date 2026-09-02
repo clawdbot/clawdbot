@@ -1,58 +1,43 @@
-import { describe, expect, it } from "vitest";
+// Session transcript hit tests cover builtin transcript paths and key resolution.
+import fs from "node:fs";
+import { describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../config/sessions/types.js";
 import {
   extractTranscriptIdentityFromSessionsMemoryHit,
   extractTranscriptStemFromSessionsMemoryHit,
+  formatSessionTranscriptMemoryHitKey,
+  loadCombinedSessionStoreForGateway,
+  parseSessionTranscriptMemoryHitKey,
+  resolveSessionTranscriptMemoryHitKeyToSessionKeys,
   resolveTranscriptStemToSessionKeys,
 } from "./session-transcript-hit.js";
 
-describe("extractTranscriptStemFromSessionsMemoryHit", () => {
-  it("strips sessions/ and .jsonl for builtin paths", () => {
-    expect(extractTranscriptStemFromSessionsMemoryHit("sessions/abc-uuid.jsonl")).toBe("abc-uuid");
+const loadGatewaySessionStore = vi.hoisted(() => vi.fn());
+vi.mock("../config/sessions/combined-store-gateway.js", () => ({
+  loadCombinedSessionStoreForGatewayCore: loadGatewaySessionStore,
+}));
+
+it("filters incognito rows from the plugin cross-session store view", () => {
+  loadGatewaySessionStore.mockReturnValue({
+    storePath: "(multiple)",
+    store: {
+      "agent:main:dashboard:visible": { sessionId: "visible", updatedAt: 1 },
+      "agent:main:dashboard:incognito-private": {
+        incognito: true,
+        sessionId: "private",
+        updatedAt: 2,
+      },
+    },
   });
 
-  it("handles plain basename jsonl", () => {
-    expect(extractTranscriptStemFromSessionsMemoryHit("def-topic-thread.jsonl")).toBe(
-      "def-topic-thread",
-    );
-  });
-
-  it("uses .md basename for QMD exports", () => {
-    expect(extractTranscriptStemFromSessionsMemoryHit("qmd/sessions/x/y/z.md")).toBe("z");
-  });
-
-  it("strips .jsonl.reset.<iso> archive suffix so rotated transcripts resolve to the live stem", () => {
-    expect(
-      extractTranscriptStemFromSessionsMemoryHit(
-        "sessions/abc-uuid.jsonl.reset.2026-02-16T22-26-33.000Z",
-      ),
-    ).toBe("abc-uuid");
-  });
-
-  it("strips .jsonl.deleted.<iso> archive suffix the same way", () => {
-    expect(
-      extractTranscriptStemFromSessionsMemoryHit(
-        "sessions/def-uuid.jsonl.deleted.2026-02-16T22-27-33.000Z",
-      ),
-    ).toBe("def-uuid");
-  });
-
-  it("handles archive suffix on bare basenames without the sessions/ prefix", () => {
-    expect(
-      extractTranscriptStemFromSessionsMemoryHit("ghi-thread.jsonl.reset.2026-02-16T22-28-33.000Z"),
-    ).toBe("ghi-thread");
-  });
-
-  it("does not mistake arbitrary suffixes containing .jsonl. for archives", () => {
-    // Not a real archive pattern: suffix after .jsonl. must be `reset` or `deleted`.
-    expect(
-      extractTranscriptStemFromSessionsMemoryHit("sessions/weird.jsonl.backup.2026-01-01.zst"),
-    ).toBeNull();
+  expect(loadCombinedSessionStoreForGateway({}).store).toEqual({
+    "agent:main:dashboard:visible": { sessionId: "visible", updatedAt: 1 },
   });
 });
 
 describe("extractTranscriptIdentityFromSessionsMemoryHit", () => {
-  it("extracts owner metadata from agent-scoped session archive paths", () => {
+  it("extracts builtin live and archived transcript identities", () => {
+    expect(extractTranscriptStemFromSessionsMemoryHit("sessions/abc-uuid.jsonl")).toBe("abc-uuid");
     expect(
       extractTranscriptIdentityFromSessionsMemoryHit(
         "sessions/main/deleted-uuid.jsonl.deleted.2026-02-16T22-27-33.000Z",
@@ -64,11 +49,11 @@ describe("extractTranscriptIdentityFromSessionsMemoryHit", () => {
     });
   });
 
-  it("does not invent owner metadata for legacy basename-only paths", () => {
-    expect(extractTranscriptIdentityFromSessionsMemoryHit("sessions/abc-uuid.jsonl")).toEqual({
-      stem: "abc-uuid",
-      archived: false,
-    });
+  it("rejects paths outside the builtin transcript format", () => {
+    expect(extractTranscriptStemFromSessionsMemoryHit("sessions/note.md")).toBeNull();
+    expect(
+      extractTranscriptStemFromSessionsMemoryHit("sessions/weird.jsonl.backup.2026-01-01.zst"),
+    ).toBeNull();
   });
 });
 
@@ -79,26 +64,56 @@ describe("resolveTranscriptStemToSessionKeys", () => {
     ...overrides,
   });
 
-  it("returns keys for every agent whose store entry matches the stem", () => {
+  it("returns every non-incognito key with an exact session identity", () => {
     const store: Record<string, SessionEntry> = {
-      "agent:main:s1": baseEntry({
-        sessionFile: "/data/sessions/stem-a.jsonl",
-      }),
-      "agent:peer:s2": baseEntry({
-        sessionFile: "/other/volume/stem-a.jsonl",
-      }),
+      "agent:main:s1": baseEntry(),
+      "agent:peer:s2": baseEntry(),
+      "agent:main:dashboard:incognito-private": baseEntry({ incognito: true }),
     };
-    const keys = resolveTranscriptStemToSessionKeys({ store, stem: "stem-a" }).toSorted();
-    expect(keys).toEqual(["agent:main:s1", "agent:peer:s2"]);
+
+    expect(resolveTranscriptStemToSessionKeys({ store, stem: "stem-a" }).toSorted()).toEqual([
+      "agent:main:s1",
+      "agent:peer:s2",
+    ]);
   });
 
-  it("falls back to archived owner metadata when deleted archives are gone from the live store", () => {
-    const keys = resolveTranscriptStemToSessionKeys({
-      store: {},
-      stem: "deleted-stem",
-      archivedOwnerAgentId: "main",
-    });
+  it("falls back to archived owner metadata after the live row is removed", () => {
+    expect(
+      resolveTranscriptStemToSessionKeys({
+        store: {},
+        stem: "deleted-stem",
+        archivedOwnerAgentId: "main",
+      }),
+    ).toEqual(["agent:main:deleted-stem"]);
+  });
+});
 
-    expect(keys).toEqual(["agent:main:deleted-stem"]);
+describe("session transcript memory hit key compatibility exports", () => {
+  it("keeps hit-subpath memory helpers off the runtime writer import path", () => {
+    const source = fs.readFileSync(new URL("./session-transcript-hit.ts", import.meta.url), "utf8");
+    expect(source).not.toContain("session-transcript-runtime.js");
+  });
+
+  it("exports storage-neutral memory hit key helpers from the legacy hit subpath", () => {
+    const key = formatSessionTranscriptMemoryHitKey({
+      agentId: "main",
+      sessionId: "session:legacy",
+    });
+    const store: Record<string, SessionEntry> = {
+      "agent:main:discord:direct:42": {
+        sessionFile: "/tmp/not-the-identity.jsonl",
+        sessionId: "session:legacy",
+        updatedAt: 10,
+      },
+    };
+
+    expect(key).toBe("transcript:main:session%3Alegacy");
+    expect(parseSessionTranscriptMemoryHitKey(key)).toMatchObject({
+      agentId: "main",
+      sessionId: "session:legacy",
+    });
+    expect(resolveSessionTranscriptMemoryHitKeyToSessionKeys({ key, store })).toEqual([
+      "agent:main:discord:direct:42",
+    ]);
   });
 });

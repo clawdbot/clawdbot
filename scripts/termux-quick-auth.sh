@@ -5,7 +5,7 @@
 # One-tap: shows status toast
 # If expired: directly opens auth URL
 
-SERVER="${OPENCLAW_SERVER:-l36}"
+SERVER="${OPENCLAW_SERVER:-openclaw-host}"
 
 STATUS=$(ssh -o ConnectTimeout=5 "$SERVER" '$HOME/openclaw/scripts/claude-auth-status.sh simple' 2>&1)
 

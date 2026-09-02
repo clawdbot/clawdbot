@@ -8,16 +8,20 @@ import android.media.MediaPlayer
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import java.io.File
 
 internal interface TalkAudioPlaying {
+  /** Plays one assistant reply, replacing any active playback. */
   suspend fun play(audio: TalkSpeakAudio)
 
+  /** Cancels any active assistant reply playback. */
   fun stop()
 }
 
+/** Android playback adapter for remote talk.speak audio payloads. */
 internal class TalkAudioPlayer(
   private val context: Context,
 ) : TalkAudioPlaying {
@@ -38,6 +42,7 @@ internal class TalkAudioPlayer(
     }
   }
 
+  /** Resolves playback mode from the metadata carried with a talk.speak response. */
   internal fun resolvePlaybackMode(audio: TalkSpeakAudio): TalkPlaybackMode =
     resolvePlaybackMode(
       outputFormat = audio.outputFormat,
@@ -46,6 +51,7 @@ internal class TalkAudioPlayer(
     )
 
   companion object {
+    /** Chooses PCM streaming or MediaPlayer-backed playback from provider metadata. */
     internal fun resolvePlaybackMode(
       outputFormat: String?,
       mimeType: String?,
@@ -173,58 +179,69 @@ internal class TalkAudioPlayer(
     bytes: ByteArray,
     fileExtension: String,
   ) {
-    val tempFile =
-      withContext(Dispatchers.IO) {
-        File.createTempFile("talk-audio-", fileExtension, context.cacheDir).apply {
-          writeBytes(bytes)
-        }
-      }
+    // MediaPlayer needs a seekable data source for several compressed formats,
+    // so cache the response bytes briefly instead of streaming from memory.
+    // Own resources immediately: cancellation can discard a dispatcher result after allocation.
+    var tempFile: File? = null
     try {
-      val finished = CompletableDeferred<Unit>()
-      val player =
-        withContext(Dispatchers.Main) {
-          MediaPlayer().apply {
-            setAudioAttributes(
-              AudioAttributes
-                .Builder()
-                .setUsage(AudioAttributes.USAGE_MEDIA)
-                .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
-                .build(),
-            )
-            setDataSource(tempFile.absolutePath)
-            setOnCompletionListener {
-              finished.complete(Unit)
-            }
-            setOnErrorListener { _, what, extra ->
-              finished.completeExceptionally(IllegalStateException("MediaPlayer error ($what/$extra)"))
-              true
-            }
-            prepare()
+      val audioFile =
+        withContext(Dispatchers.IO) {
+          File.createTempFile("talk-audio-", fileExtension, context.cacheDir).also { created ->
+            tempFile = created
+            created.writeBytes(bytes)
           }
         }
-      val playback =
-        ActivePlayback(
-          cancel = {
-            finished.completeExceptionally(CancellationException("assistant speech cancelled"))
-            runCatching { player.stop() }
-          },
-        )
-      register(playback)
+      val finished = CompletableDeferred<Unit>()
+      var mediaPlayer: MediaPlayer? = null
       try {
-        withContext(Dispatchers.Main) {
-          player.start()
+        val player =
+          withContext(Dispatchers.Main) {
+            MediaPlayer().also { mediaPlayer = it }.apply {
+              setAudioAttributes(
+                AudioAttributes
+                  .Builder()
+                  .setUsage(AudioAttributes.USAGE_MEDIA)
+                  .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+                  .build(),
+              )
+              setDataSource(audioFile.absolutePath)
+              setOnCompletionListener {
+                finished.complete(Unit)
+              }
+              setOnErrorListener { _, what, extra ->
+                finished.completeExceptionally(IllegalStateException("MediaPlayer error ($what/$extra)"))
+                true
+              }
+              prepare()
+            }
+          }
+        val playback =
+          ActivePlayback(
+            cancel = {
+              finished.completeExceptionally(CancellationException("assistant speech cancelled"))
+              runCatching { player.stop() }
+            },
+          )
+        register(playback)
+        try {
+          withContext(Dispatchers.Main) {
+            player.start()
+          }
+          finished.await()
+        } finally {
+          clear(playback)
         }
-        finished.await()
       } finally {
-        clear(playback)
-        withContext(Dispatchers.Main) {
-          runCatching { player.stop() }
-          player.release()
+        withContext(NonCancellable + Dispatchers.Main) {
+          mediaPlayer?.let { player ->
+            runCatching { player.stop() }
+            player.release()
+          }
         }
       }
     } finally {
-      withContext(Dispatchers.IO) {
-        tempFile.delete()
+      withContext(NonCancellable + Dispatchers.IO) {
+        tempFile?.delete()
       }
     }
   }
@@ -246,10 +263,12 @@ internal class TalkAudioPlayer(
 }
 
 internal sealed interface TalkPlaybackMode {
+  /** Raw signed 16-bit mono PCM returned by providers that support low-latency output. */
   data class Pcm(
     val sampleRate: Int,
   ) : TalkPlaybackMode
 
+  /** Compressed audio that Android decodes through MediaPlayer. */
   data class Compressed(
     val fileExtension: String,
   ) : TalkPlaybackMode

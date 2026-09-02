@@ -1,3 +1,4 @@
+// Covers heartbeat event prompt filtering.
 import { describe, expect, it } from "vitest";
 import {
   buildCronEventPrompt,
@@ -13,7 +14,7 @@ describe("heartbeat event prompts", () => {
       name: "builds user-relay cron prompt by default",
       events: ["Cron: rotate logs"],
       expected: ["Cron: rotate logs", "Please relay this reminder to the user"],
-      unexpected: ["Handle this reminder internally", "Reply HEARTBEAT_OK."],
+      unexpected: ["Handle this reminder internally", "Reply NO_REPLY."],
     },
     {
       name: "builds internal-only cron prompt when delivery is disabled",
@@ -25,14 +26,14 @@ describe("heartbeat event prompts", () => {
     {
       name: "falls back to bare heartbeat reply when cron content is empty",
       events: ["", "   "],
-      expected: ["Reply HEARTBEAT_OK."],
+      expected: ["Reply NO_REPLY."],
       unexpected: ["Handle this reminder internally"],
     },
     {
       name: "uses internal empty-content fallback when delivery is disabled",
       events: ["", "   "],
       opts: { deliverToUser: false },
-      expected: ["Handle this internally", "HEARTBEAT_OK when nothing needs user-facing follow-up"],
+      expected: ["Handle this internally", "NO_REPLY when nothing needs user-facing follow-up"],
       unexpected: ["Please relay this reminder to the user"],
     },
   ])("$name", ({ events, opts, expected, unexpected }) => {
@@ -62,7 +63,7 @@ describe("heartbeat event prompts", () => {
       name: "builds internal-only exec prompt when delivery is disabled",
       events: ["Exec failed (node=abc id=123, code 1)\nUpload failed"],
       opts: { deliverToUser: false },
-      expected: ["user delivery is disabled", "Handle the result internally", "HEARTBEAT_OK only"],
+      expected: ["user delivery is disabled", "Handle the result internally", "NO_REPLY only"],
       unexpected: [
         "Upload failed",
         "system messages above",
@@ -73,14 +74,14 @@ describe("heartbeat event prompts", () => {
       name: "suppresses empty exec completion prompts",
       events: ["", "   "],
       opts: undefined,
-      expected: ["no command output was found", "Reply HEARTBEAT_OK only"],
+      expected: ["no command output was found", "Reply NO_REPLY only"],
       unexpected: ["Please relay the command output to the user", "system messages above"],
     },
     {
       name: "suppresses metadata-only successful exec completions",
       events: ["Exec completed (abc12345, code 0)"],
       opts: undefined,
-      expected: ["no command output was found", "Reply HEARTBEAT_OK only"],
+      expected: ["no command output was found", "Reply NO_REPLY only"],
       unexpected: ["Please relay the command output to the user", "abc12345"],
     },
     {
@@ -150,6 +151,8 @@ describe("heartbeat event classification", () => {
     { value: "  Cron: rotate logs  ", expected: true },
     { value: "", expected: false },
     { value: "   ", expected: false },
+    { value: "NO_REPLY", expected: false },
+    { value: "no_reply: actual reminder", expected: true },
     { value: "HEARTBEAT_OK", expected: false },
     { value: "heartbeat_ok: already handled", expected: false },
     { value: "heartbeat poll: noop", expected: false },
@@ -174,5 +177,55 @@ describe("heartbeat event classification", () => {
     { value: "exec finished: ok", expected: true },
   ])("classifies relayable exec completion events for %j", ({ value, expected }) => {
     expect(isRelayableExecCompletionEvent(value)).toBe(expected);
+  });
+});
+
+describe("isExecCompletionEvent", () => {
+  it("matches maybeNotifyOnExit (backgrounded allowlisted commands) events", () => {
+    // Word-based session slugs (createSessionSlug)
+    expect(isExecCompletionEvent("Exec completed (amber-at, code 0) :: some output")).toBe(true);
+    expect(isExecCompletionEvent("Exec completed (calm-del, code 0)")).toBe(true);
+    expect(isExecCompletionEvent("Exec failed (brisk-no, code 1) :: error text")).toBe(true);
+    expect(isExecCompletionEvent("Exec failed (fresh-ke, signal SIGTERM)")).toBe(true);
+    // Hex-style IDs also accepted
+    expect(isExecCompletionEvent("Exec completed (abc12345, code 0)")).toBe(true);
+  });
+
+  it("is case-insensitive", () => {
+    expect(isExecCompletionEvent("EXEC COMPLETED (abc12345, code 0)")).toBe(true);
+    expect(isExecCompletionEvent("exec failed (abc12345, code 2)")).toBe(true);
+  });
+
+  it("does not match non-exec events", () => {
+    expect(isExecCompletionEvent("Exec running (gateway id=g1, session=s1, >5s): ls")).toBe(false);
+    expect(isExecCompletionEvent("Exec denied (gateway id=g1, reason): rm -rf /")).toBe(false);
+    expect(isExecCompletionEvent("Heartbeat wake")).toBe(false);
+    expect(isExecCompletionEvent("")).toBe(false);
+  });
+
+  it("does not false-positive on free-form cron text containing exec phrases", () => {
+    expect(isExecCompletionEvent("Nightly backup exec failed – see logs")).toBe(false);
+    expect(isExecCompletionEvent("Cron: check if exec completed successfully")).toBe(false);
+    expect(isExecCompletionEvent("exec killed the process manually")).toBe(false);
+    expect(isExecCompletionEvent("Exec finished weekly backup checks")).toBe(false);
+    // Parenthesized false positive from review feedback — must not match mid-string
+    expect(isExecCompletionEvent("Nightly backup exec failed (see logs)")).toBe(false);
+    expect(isExecCompletionEvent("Check: exec completed (last run was yesterday)")).toBe(false);
+  });
+});
+
+describe("buildExecEventPrompt truncation", () => {
+  it("does not split surrogate pairs in long event text", () => {
+    const safePrefix = "x".repeat(7_999);
+    const result = buildExecEventPrompt([`${safePrefix}🚀tail`]);
+
+    expect(result).toContain(`${safePrefix}\n\n[truncated]`);
+    expect(result).not.toContain("🚀tail");
+  });
+
+  it("passes through short event text unchanged", () => {
+    const result = buildExecEventPrompt(["hello"]);
+    expect(result).toContain("hello");
+    expect(result).not.toContain("[truncated]");
   });
 });

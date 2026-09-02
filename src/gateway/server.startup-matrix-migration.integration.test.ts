@@ -1,3 +1,5 @@
+// Startup matrix migration tests ensure channel maintenance uses repaired
+// startup runtime config unless explicit startup channel config already exists.
 import { describe, expect, it } from "vitest";
 import { resolveGatewayStartupMaintenanceConfig } from "./server-startup-plugins.js";
 

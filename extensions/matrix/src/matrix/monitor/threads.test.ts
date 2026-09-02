@@ -1,3 +1,4 @@
+// Matrix tests cover threads plugin behavior.
 import { describe, expect, it } from "vitest";
 import { resolveMatrixThreadRouting } from "./threads.js";
 

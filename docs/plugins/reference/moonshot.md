@@ -12,11 +12,11 @@ Adds Moonshot model provider support to OpenClaw.
 ## Distribution
 
 - Package: `@openclaw/moonshot-provider`
-- Install route: included in OpenClaw
+- Install route: npm; ClawHub: `clawhub:@openclaw/moonshot-provider`
 
 ## Surface
 
-providers: moonshot; contracts: mediaUnderstandingProviders, webSearchProviders
+providers: `moonshot`; contracts: `mediaUnderstandingProviders`, `webSearchProviders`
 
 ## Related docs
 

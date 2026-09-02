@@ -1,3 +1,4 @@
+// Google API module exposes the plugin public contract.
 export {
   createGoogleThinkingPayloadWrapper,
   createGoogleThinkingStreamWrapper,
@@ -11,4 +12,4 @@ export {
   stripInvalidGoogleThinkingBudget,
   type GoogleThinkingInputLevel,
   type GoogleThinkingLevel,
-} from "./thinking.js";
+} from "openclaw/plugin-sdk/provider-stream-shared";

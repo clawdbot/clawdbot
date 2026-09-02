@@ -1,15 +1,21 @@
+/**
+ * Shared OAuth test fixtures and temp-dir helpers.
+ * Provides deterministic credential/store builders, state-dir setup, and
+ * provider-runtime mock reset helpers for auth-profile tests.
+ */
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
+import { setTestEnvValue } from "../../test-utils/env.js";
 import type { resolveApiKeyForProfile } from "./oauth.js";
+import { loadPersistedAuthProfileStore } from "./persisted.js";
 import type { AuthProfileStore, OAuthCredential } from "./types.js";
 
-export const OAUTH_AGENT_ENV_KEYS = [
-  "OPENCLAW_STATE_DIR",
-  "OPENCLAW_AGENT_DIR",
-  "PI_CODING_AGENT_DIR",
-];
+/** Environment keys OAuth tests override while creating isolated state roots. */
+export const OAUTH_AGENT_ENV_KEYS = ["OPENCLAW_STATE_DIR", "OPENCLAW_AGENT_DIR"];
 
+/** Call resolveApiKeyForProfile with an empty config in tests. */
 export function resolveApiKeyForProfileInTest(
   resolver: typeof resolveApiKeyForProfile,
   params: Omit<Parameters<typeof resolveApiKeyForProfile>[0], "cfg">,
@@ -17,6 +23,7 @@ export function resolveApiKeyForProfileInTest(
   return resolver({ cfg: {}, ...params });
 }
 
+/** Build an OAuth credential fixture. */
 export function oauthCred(params: {
   provider: string;
   access: string;
@@ -28,10 +35,12 @@ export function oauthCred(params: {
   return { type: "oauth", ...params };
 }
 
+/** Build an auth profile store containing one credential. */
 export function storeWith(profileId: string, cred: OAuthCredential): AuthProfileStore {
   return { version: 1, profiles: { [profileId]: cred } };
 }
 
+/** Build an auth profile store containing one expired OAuth credential. */
 export function createExpiredOauthStore(params: {
   profileId: string;
   provider: string;
@@ -56,23 +65,31 @@ export function createExpiredOauthStore(params: {
   };
 }
 
+/** Create a temporary root directory for OAuth tests. */
 export async function createOAuthTestTempRoot(prefix: string): Promise<string> {
   return fs.mkdtemp(path.join(os.tmpdir(), prefix));
 }
 
+/** Create and export the main agent dir for OAuth tests. */
 export async function createOAuthMainAgentDir(stateDir: string): Promise<string> {
   const agentDir = path.join(stateDir, "agents", "main", "agent");
-  process.env.OPENCLAW_STATE_DIR = stateDir;
-  process.env.OPENCLAW_AGENT_DIR = agentDir;
-  process.env.PI_CODING_AGENT_DIR = agentDir;
+  setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
+  setTestEnvValue("OPENCLAW_AGENT_DIR", agentDir);
   await fs.mkdir(agentDir, { recursive: true });
   return agentDir;
 }
 
+/** Remove an OAuth temp root and close test databases first. */
 export async function removeOAuthTestTempRoot(tempRoot: string): Promise<void> {
   if (tempRoot) {
+    closeOpenClawAgentDatabasesForTest();
     await fs.rm(tempRoot, { recursive: true, force: true });
   }
+}
+
+/** Read a persisted auth profile store, falling back to an empty store. */
+export function readAuthProfileStoreForTest(agentDir: string): AuthProfileStore {
+  return loadPersistedAuthProfileStore(agentDir) ?? { version: 1, profiles: {} };
 }
 
 type ResettableMock = {
@@ -87,6 +104,7 @@ type ReturnValueMock = ResettableMock & {
   mockReturnValue(value: unknown): unknown;
 };
 
+/** Reset provider-runtime OAuth mocks to default no-op behavior. */
 export function resetOAuthProviderRuntimeMocks(mocks: {
   refreshProviderOAuthCredentialWithPluginMock: ResolvedValueMock;
   formatProviderAuthProfileApiKeyWithPluginMock: ReturnValueMock;
@@ -97,6 +115,7 @@ export function resetOAuthProviderRuntimeMocks(mocks: {
   mocks.formatProviderAuthProfileApiKeyWithPluginMock.mockReturnValue(undefined);
 }
 
+/** Create a deterministic pseudo-random generator for fuzz-style OAuth tests. */
 export function makeSeededRandom(seed: number): () => number {
   let state = seed >>> 0;
   return () => {
@@ -108,6 +127,7 @@ export function makeSeededRandom(seed: number): () => number {
   };
 }
 
+/** Generate a random ASCII string using a deterministic RNG. */
 export function randomAsciiString(rng: () => number, maxLen: number): string {
   const len = Math.floor(rng() * maxLen);
   const chars: string[] = [];
@@ -117,10 +137,12 @@ export function randomAsciiString(rng: () => number, maxLen: number): string {
   return chars.join("");
 }
 
+/** Return a value about half the time using a deterministic RNG. */
 export function maybe<T>(rng: () => number, value: T): T | undefined {
   return rng() < 0.5 ? value : undefined;
 }
 
+/** Randomize string casing using a deterministic RNG. */
 export function randomlyCased(value: string, rng: () => number): string {
   return value
     .split("")

@@ -1,7 +1,14 @@
+/**
+ * Auth profile id and display metadata helpers.
+ * Keeps profile id construction and human metadata lookup centralized for auth
+ * status, storage, and provider selection.
+ */
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import type { AuthProfileStore } from "./types.js";
 
+// Metadata can be configured separately from stored credentials. Config wins so
+// display labels can be edited without mutating secrets.
 function resolveStoredMetadata(store: AuthProfileStore | undefined, profileId: string) {
   const profile = store?.profiles[profileId];
   if (!profile) {
@@ -14,6 +21,7 @@ function resolveStoredMetadata(store: AuthProfileStore | undefined, profileId: s
   };
 }
 
+/** Builds a provider-prefixed auth profile id. */
 export function buildAuthProfileId(params: {
   providerId: string;
   profileName?: string | null;
@@ -24,6 +32,7 @@ export function buildAuthProfileId(params: {
   return `${profilePrefix}:${profileName}`;
 }
 
+/** Resolves display metadata for an auth profile from config/store. */
 export function resolveAuthProfileMetadata(params: {
   cfg?: OpenClawConfig;
   store?: AuthProfileStore;

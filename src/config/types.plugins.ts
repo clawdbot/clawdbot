@@ -1,7 +1,9 @@
+// Defines plugin entry and install configuration types.
+import type { InstallRecordBase } from "./types.installs.js";
 export type PluginEntryConfig = {
   enabled?: boolean;
   hooks?: {
-    /** Controls prompt mutation via before_prompt_build and prompt fields from legacy before_agent_start. */
+    /** Controls prompt mutation via before_prompt_build. */
     allowPromptInjection?: boolean;
     /**
      * Controls access to raw conversation content from conversation hooks including
@@ -28,10 +30,17 @@ export type PluginEntryConfig = {
     /** Explicitly allow this plugin to request a model override for api.runtime.llm.complete. */
     allowModelOverride?: boolean;
     /**
-     * Allowed completion model override targets as canonical provider/model refs.
+     * Allowed override targets as canonical provider/model refs.
      * Use "*" to explicitly allow any model for this plugin.
      */
     allowedModels?: string[];
+    /**
+     * Allowed models for every completion, including host-resolved defaults and overrides.
+     * Use "*" to explicitly allow any model for this plugin.
+     */
+    allowedCompletionModels?: string[];
+    /** Allow explicit auth-profile selection for isolated agent-runtime completions. */
+    allowAuthProfileOverride?: boolean;
     /** Explicitly allow this plugin to run completions against a non-default agent id. */
     allowAgentIdOverride?: boolean;
   };
@@ -50,11 +59,32 @@ export type PluginsLoadConfig = {
   paths?: string[];
 };
 
+export type PluginAcceptedDeclaredSurface = {
+  channels: string[];
+  providers: string[];
+  tools: string[];
+  contracts: string[];
+  hooks: string[];
+  mcpServers: string[];
+  cliCommands: string[];
+  cliBackends: string[];
+  skills: string[];
+  dangerousConfigFlags: string[];
+};
+
 export type PluginInstallRecord = Omit<InstallRecordBase, "source"> & {
   source: InstallRecordBase["source"] | "marketplace";
   marketplaceName?: string;
   marketplaceSource?: string;
   marketplacePlugin?: string;
+  /** Sorted, manifest-declared capability surface accepted by the operator. */
+  acceptedSurface?: PluginAcceptedDeclaredSurface;
+  /** SHA-256 hex digest of the canonical accepted capability surface. */
+  acceptedSurfaceHash?: string;
+  /** ISO timestamp when the operator accepted this capability surface. */
+  acceptedSurfaceAt?: string;
+  /** Installed artifact integrity or Git commit the acceptance is anchored to. */
+  acceptedSurfaceIntegrity?: string;
 };
 
 export type PluginsConfig = {
@@ -64,16 +94,6 @@ export type PluginsConfig = {
   allow?: string[];
   /** Optional plugin denylist (plugin ids). */
   deny?: string[];
-  /**
-   * Controls how bundled plugins participate in runtime provider discovery when
-   * `allow` is configured.
-   *
-   * - `"allowlist"` (default): bundled provider plugins are gated by `allow`
-   *   and `entries.<id>.enabled` like third-party plugins.
-   * - `"compat"`: legacy mode for migrated configs; bundled provider plugins
-   *   can be force-loaded regardless of the allowlist.
-   */
-  bundledDiscovery?: "compat" | "allowlist";
   load?: PluginsLoadConfig;
   slots?: PluginSlotsConfig;
   entries?: Record<string, PluginEntryConfig>;
@@ -84,4 +104,3 @@ export type PluginsConfig = {
    */
   installs?: Record<string, PluginInstallRecord>;
 };
-import type { InstallRecordBase } from "./types.installs.js";

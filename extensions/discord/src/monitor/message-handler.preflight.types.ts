@@ -1,17 +1,28 @@
-import type { OpenClawConfig, ReplyToMode } from "openclaw/plugin-sdk/config-types";
+// Discord type declarations define plugin contracts.
+import type { InboundEventKind } from "openclaw/plugin-sdk/channel-inbound";
+import type {
+  ChannelIngressContextBinding,
+  ResolvedChannelMessageIngress,
+} from "openclaw/plugin-sdk/channel-ingress-runtime";
+import type { OpenClawConfig, ReplyToMode } from "openclaw/plugin-sdk/config-contracts";
 import type { SessionBindingRecord } from "openclaw/plugin-sdk/conversation-runtime";
-import type { HistoryEntry } from "openclaw/plugin-sdk/reply-history";
 import type { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import type { ChannelType, Client, User } from "../internal/discord.js";
 import type { DiscordChannelConfigResolved, DiscordGuildEntryResolved } from "./allow-list.js";
-import type { DiscordChannelInfo } from "./message-utils.js";
+import type { DiscordIngressLifecycle } from "./ingress.js";
+import type { DiscordAvatarResolver } from "./message-avatar.js";
+import type { DiscordChannelInfo } from "./message-channel-info.js";
+import type { DiscordHistoryEntry } from "./message-handler.history.js";
+import type { DiscordMediaInfo } from "./message-media.js";
 import type { DiscordThreadBindingLookup } from "./reply-delivery.js";
 import type { DiscordSenderIdentity } from "./sender-identity.js";
-
-export type { DiscordSenderIdentity } from "./sender-identity.js";
 import type { DiscordThreadChannel } from "./threading.js";
 
+export type { DiscordSenderIdentity } from "./sender-identity.js";
+
 type LoadedConfig = OpenClawConfig;
+type BuildChannelInboundContext =
+  typeof import("openclaw/plugin-sdk/channel-inbound").buildChannelInboundEventContext;
 export type RuntimeEnv = import("openclaw/plugin-sdk/runtime-env").RuntimeEnv;
 
 export type DiscordMessageEvent = import("./listeners.js").DiscordMessageEvent;
@@ -19,20 +30,22 @@ export type DiscordMessageEvent = import("./listeners.js").DiscordMessageEvent;
 type DiscordMessagePreflightSharedFields = {
   cfg: LoadedConfig;
   discordConfig: NonNullable<
-    import("openclaw/plugin-sdk/config-types").OpenClawConfig["channels"]
+    import("openclaw/plugin-sdk/config-contracts").OpenClawConfig["channels"]
   >["discord"];
   accountId: string;
   token: string;
   runtime: RuntimeEnv;
+  buildContext?: BuildChannelInboundContext;
   botUserId?: string;
   abortSignal?: AbortSignal;
-  guildHistories: Map<string, HistoryEntry[]>;
+  guildHistories: Map<string, DiscordHistoryEntry[]>;
   historyLimit: number;
   mediaMaxBytes: number;
   textLimit: number;
   replyToMode: ReplyToMode;
   ackReactionScope: "all" | "direct" | "group-all" | "group-mentions" | "off" | "none";
   groupPolicy: "open" | "disabled" | "allowlist";
+  turnAdoptionLifecycle?: DiscordIngressLifecycle;
 };
 
 export type DiscordMessagePreflightContext = DiscordMessagePreflightSharedFields & {
@@ -53,10 +66,19 @@ export type DiscordMessagePreflightContext = DiscordMessagePreflightSharedFields
   isGroupDm: boolean;
 
   commandAuthorized: boolean;
+  channelIngress: ResolvedChannelMessageIngress;
+  resolveChannelIngress: (
+    contextBinding: ChannelIngressContextBinding,
+    conversation?: { parentId?: string; threadId?: string },
+  ) => Promise<ResolvedChannelMessageIngress>;
   baseText: string;
   messageText: string;
   preflightAudioTranscript?: string;
+  // Keep one required receipt-time snapshot: queued processing must never
+  // fall back to Discord's expiring attachment URLs.
+  preparedMedia: DiscordMediaInfo[];
   wasMentioned: boolean;
+  conversationAvatar?: string;
 
   route: ReturnType<typeof resolveAgentRoute>;
   threadBinding?: SessionBindingRecord;
@@ -83,13 +105,16 @@ export type DiscordMessagePreflightContext = DiscordMessagePreflightSharedFields
   channelAllowed: boolean;
 
   shouldRequireMention: boolean;
+  groupRequireMention: boolean;
   hasAnyMention: boolean;
+  hasControlCommand: boolean;
   allowTextCommands: boolean;
   shouldBypassMention: boolean;
   effectiveWasMentioned: boolean;
+  inboundEventKind: InboundEventKind;
   canDetectMention: boolean;
 
-  historyEntry?: HistoryEntry;
+  historyEntry?: DiscordHistoryEntry;
   threadBindings: DiscordThreadBindingLookup;
   discordRestFetch?: typeof fetch;
 };
@@ -105,6 +130,7 @@ export type DiscordMessagePreflightParams = DiscordMessagePreflightSharedFields 
   groupPolicy: DiscordMessagePreflightContext["groupPolicy"];
   threadBindings: DiscordThreadBindingLookup;
   discordRestFetch?: typeof fetch;
+  avatarResolver?: DiscordAvatarResolver;
   data: DiscordMessageEvent;
   client: Client;
 };

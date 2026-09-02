@@ -1,3 +1,4 @@
+// Discord tests cover message handler.batch gate plugin behavior.
 import { describe, expect, it } from "vitest";
 import { applyImplicitReplyBatchGate } from "./message-handler.batch-gate.js";
 

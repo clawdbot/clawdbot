@@ -1,9 +1,10 @@
+// Temporary directory helper tests cover temp directory cleanup behavior.
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { withTempDir, withTempDirSync } from "./temp-dir.js";
+import { withTempDirSync, withTestDir } from "./temp-dir.js";
 
 const parentRoots: string[] = [];
 
@@ -26,15 +27,15 @@ afterEach(async () => {
   );
 });
 
-describe("withTempDir", () => {
+describe("withTestDir", () => {
   it("removes the cached async prefix root when the case finishes", async () => {
     const parentDir = await makeParentRoot();
 
-    await withTempDir({ prefix: "openclaw-leak-check-", parentDir }, async (dir) => {
+    await withTestDir({ prefix: "openclaw-leak-check-", parentDir }, async (dir) => {
       await fs.writeFile(path.join(dir, "marker.txt"), "ok");
     });
 
-    await expect(fs.readdir(parentDir)).resolves.toEqual([]);
+    await expect(fs.readdir(parentDir)).resolves.toStrictEqual([]);
   });
 
   it("keeps the cached async prefix root while another case is active", async () => {
@@ -44,12 +45,12 @@ describe("withTempDir", () => {
       releaseFirst = resolve;
     });
 
-    const first = withTempDir({ prefix: "openclaw-shared-root-", parentDir }, async (dir) => {
+    const first = withTestDir({ prefix: "openclaw-shared-root-", parentDir }, async (dir) => {
       await fs.writeFile(path.join(dir, "first.txt"), "ok");
       await firstCanFinish;
     });
 
-    await withTempDir({ prefix: "openclaw-shared-root-", parentDir }, async (dir) => {
+    await withTestDir({ prefix: "openclaw-shared-root-", parentDir }, async (dir) => {
       await fs.writeFile(path.join(dir, "second.txt"), "ok");
       await expect(fs.readdir(parentDir)).resolves.toHaveLength(1);
     });
@@ -60,7 +61,7 @@ describe("withTempDir", () => {
     releaseFirst();
     await first;
 
-    await expect(fs.readdir(parentDir)).resolves.toEqual([]);
+    await expect(fs.readdir(parentDir)).resolves.toStrictEqual([]);
   });
 
   it("removes the cached sync prefix root when the case finishes", async () => {
@@ -70,6 +71,6 @@ describe("withTempDir", () => {
       fsSync.writeFileSync(path.join(dir, "marker.txt"), "ok");
     });
 
-    await expect(fs.readdir(parentDir)).resolves.toEqual([]);
+    await expect(fs.readdir(parentDir)).resolves.toStrictEqual([]);
   });
 });

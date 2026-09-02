@@ -1,3 +1,4 @@
+// Verifies synced-folder security audit findings.
 import { describe, expect, it } from "vitest";
 import { collectSyncedFolderFindings } from "./audit-extra.sync.js";
 

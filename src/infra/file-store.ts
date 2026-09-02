@@ -1,8 +1,6 @@
+// Exposes fs-safe file stores after applying OpenClaw filesystem defaults.
 import "./fs-safe-defaults.js";
-export {
-  fileStore,
-  type FileStore,
-  type FileStoreOptions,
-  type FileStorePruneOptions,
-  type FileStoreWriteOptions,
-} from "@openclaw/fs-safe/store";
+
+// Safe file-store facade. Callers get the repo default fs-safe configuration
+// before constructing root-scoped stores.
+export { fileStore } from "@openclaw/fs-safe/store";

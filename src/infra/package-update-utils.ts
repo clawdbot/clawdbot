@@ -1,7 +1,31 @@
-import fsSync from "node:fs";
-import path from "node:path";
+// Inspects installed package metadata for update/install verification.
 import { readRootJsonObjectSync } from "@openclaw/fs-safe/json";
+import { compareOpenClawReleaseVersions } from "./npm-registry-spec.js";
+import { compareValidSemver } from "./semver.js";
 
+/** Compare two package versions, preferring OpenClaw release ordering over plain semver. */
+export function comparePackageUpdateVersions(left: string, right: string): number {
+  const releaseCmp = compareOpenClawReleaseVersions(left, right);
+  if (releaseCmp !== null) {
+    return releaseCmp;
+  }
+  return compareValidSemver(left, right) ?? 0;
+}
+
+/** Return whether an update replaced the installed version with an older one. */
+export function isPackageVersionDowngrade(
+  currentVersion: string | undefined,
+  nextVersion: string | undefined,
+): boolean {
+  if (!currentVersion || !nextVersion) {
+    return false;
+  }
+  return comparePackageUpdateVersions(nextVersion, currentVersion) < 0;
+}
+
+// Package update utilities inspect installed package metadata without trusting
+// paths outside the provided package root.
+/** Return expected integrity only for concrete semver package specs. */
 export function expectedIntegrityForUpdate(
   spec: string | undefined,
   integrity: string | undefined,
@@ -24,11 +48,7 @@ export function expectedIntegrityForUpdate(
   return integrity;
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function readInstalledPackageManifest(dir: string): Record<string, unknown> | undefined {
+export function readInstalledPackageManifest(dir: string): Record<string, unknown> | undefined {
   const result = readRootJsonObjectSync({
     rootDir: dir,
     relativePath: "package.json",
@@ -37,33 +57,8 @@ function readInstalledPackageManifest(dir: string): Record<string, unknown> | un
   return result.ok ? result.value : undefined;
 }
 
+/** Read the installed package version from a package root. */
 export async function readInstalledPackageVersion(dir: string): Promise<string | undefined> {
   const manifest = readInstalledPackageManifest(dir);
   return typeof manifest?.version === "string" ? manifest.version : undefined;
-}
-
-export function readInstalledPackagePeerDependencies(dir: string): Record<string, string> {
-  const manifest = readInstalledPackageManifest(dir);
-  const peerDependencies = isRecord(manifest?.peerDependencies) ? manifest.peerDependencies : {};
-  return Object.fromEntries(
-    Object.entries(peerDependencies).filter((entry): entry is [string, string] => {
-      const [, value] = entry;
-      return typeof value === "string";
-    }),
-  );
-}
-
-export function installedPackageNeedsOpenClawPeerLinkRepair(dir: string): boolean {
-  const peerDependencies = readInstalledPackagePeerDependencies(dir);
-  if (!Object.hasOwn(peerDependencies, "openclaw")) {
-    return false;
-  }
-
-  try {
-    fsSync.statSync(path.join(dir, "node_modules", "openclaw"));
-    return false;
-  } catch (error) {
-    const code = (error as NodeJS.ErrnoException | undefined)?.code;
-    return code === "ENOENT" || code === "ENOTDIR";
-  }
 }

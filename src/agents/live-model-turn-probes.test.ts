@@ -1,18 +1,34 @@
+// Covers live model extra-probe builders, matchers, and route skip lists.
 import { describe, expect, it } from "vitest";
 import {
   buildLiveModelFileProbeContext,
   buildLiveModelFileProbeRetryContext,
   buildLiveModelImageProbeContext,
-  extractAssistantText,
   fileProbeTextMatches,
   imageProbeTextMatches,
   isLiveModelProbeEnabled,
   LIVE_MODEL_FILE_PROBE_TOKEN,
   modelSupportsImageInput,
+  runLiveModelImageProbeWithRetry,
   shouldSkipLiveModelExtraProbes,
   shouldSkipLiveModelFileProbe,
   shouldSkipLiveModelImageProbe,
-} from "./live-model-turn-probes.js";
+} from "./test-helpers/live-model-turn-probes.js";
+
+function createImageProbeRunner(responses: string[]) {
+  const attempts: Array<1 | 2> = [];
+  return {
+    attempts,
+    run: async (attempt: 1 | 2) => {
+      attempts.push(attempt);
+      const response = responses[attempt - 1];
+      if (response === undefined) {
+        throw new Error(`Unexpected image probe attempt ${attempt}`);
+      }
+      return response;
+    },
+  };
+}
 
 describe("live model turn probes", () => {
   it("defaults probes on and accepts common opt-out values", () => {
@@ -34,36 +50,30 @@ describe("live model turn probes", () => {
   it("builds a text file read probe", () => {
     const context = buildLiveModelFileProbeContext({ systemPrompt: "sys" });
     expect(context.systemPrompt).toBe("sys");
-    expect(context.messages[0]?.content).toEqual(
-      expect.stringContaining(`LIVE_LABEL=${LIVE_MODEL_FILE_PROBE_TOKEN}`),
+    expect(context.messages[0]?.content).toBe(
+      "Read this visible label and reply with only the value after LIVE_LABEL.\n\nLIVE_LABEL=opal",
     );
   });
 
   it("builds a stricter file read retry probe", () => {
     const context = buildLiveModelFileProbeRetryContext({});
-    expect(context.messages[0]?.content).toEqual(
-      expect.stringContaining(`Reply with exactly ${LIVE_MODEL_FILE_PROBE_TOKEN}`),
+    expect(context.messages[0]?.content).toBe(
+      "The visible label value is:\n\nopal\n\nReply with exactly opal.",
     );
   });
 
   it("builds an image probe with native image content", () => {
+    // The image probe must use native image blocks, not markdown or remote
+    // URLs, so provider validation tests exercise multimodal input paths.
     const context = buildLiveModelImageProbeContext({});
-    expect(context.messages[0]?.content).toEqual([
-      expect.objectContaining({ type: "text" }),
-      expect.objectContaining({ type: "image", mimeType: "image/png" }),
-    ]);
-  });
-
-  it("extracts assistant text blocks only", () => {
-    expect(
-      extractAssistantText({
-        content: [
-          { type: "thinking", thinking: "hidden" },
-          { type: "text", text: " ok " },
-          { type: "toolCall", id: "1", name: "noop", arguments: {} },
-        ],
-      }),
-    ).toBe("ok");
+    const content = context.messages[0]?.content;
+    expect(Array.isArray(content)).toBe(true);
+    if (!Array.isArray(content)) {
+      throw new Error("Expected image probe content blocks");
+    }
+    expect(content[0]?.type).toBe("text");
+    expect(content[1]?.type).toBe("image");
+    expect(content[1]).toHaveProperty("mimeType", "image/png");
   });
 
   it("detects image input support from model metadata", () => {
@@ -87,20 +97,15 @@ describe("live model turn probes", () => {
   });
 
   it("skips known stale file probe routes", () => {
+    // These routes are still useful for live text calls but have stale or
+    // unreliable file-tool behavior, so extra probes skip them explicitly.
     expect(shouldSkipLiveModelFileProbe({ provider: "opencode-go", id: "glm-5" })).toBe(true);
-    expect(shouldSkipLiveModelFileProbe({ provider: "google", id: "gemini-3-pro-preview" })).toBe(
+    expect(shouldSkipLiveModelFileProbe({ provider: "google", id: "gemini-3.1-pro-preview" })).toBe(
       true,
     );
-    expect(shouldSkipLiveModelFileProbe({ provider: "opencode-go", id: "mimo-v2-omni" })).toBe(
-      true,
-    );
-    expect(shouldSkipLiveModelFileProbe({ provider: "opencode-go", id: "mimo-v2-pro" })).toBe(true);
     expect(shouldSkipLiveModelFileProbe({ provider: "opencode-go", id: "minimax-m2.5" })).toBe(
       true,
     );
-    expect(
-      shouldSkipLiveModelFileProbe({ provider: "openrouter", id: "arcee-ai/trinity-mini" }),
-    ).toBe(true);
     expect(
       shouldSkipLiveModelFileProbe({
         provider: "openrouter",
@@ -153,9 +158,6 @@ describe("live model turn probes", () => {
         id: "accounts/fireworks/models/kimi-k2p6",
       }),
     ).toBe(true);
-    expect(shouldSkipLiveModelImageProbe({ provider: "opencode-go", id: "mimo-v2-omni" })).toBe(
-      true,
-    );
     expect(shouldSkipLiveModelImageProbe({ provider: "opencode-go", id: "kimi-k2.5" })).toBe(true);
     expect(
       shouldSkipLiveModelImageProbe({
@@ -178,5 +180,96 @@ describe("live model turn probes", () => {
     expect(fileProbeTextMatches("amber")).toBe(false);
     expect(imageProbeTextMatches("OK")).toBe(true);
     expect(imageProbeTextMatches("blue")).toBe(false);
+    expect(imageProbeTextMatches('" or "Reply with exactly')).toBe(false);
+  });
+
+  it("retries one mismatched image reply and accepts only a matching retry", async () => {
+    const { attempts, run } = createImageProbeRunner(["blue", "OK"]);
+    const retries: string[] = [];
+
+    await expect(
+      runLiveModelImageProbeWithRetry({
+        run,
+        onRetry: (firstText) => retries.push(firstText),
+      }),
+    ).resolves.toBe("OK");
+    expect(attempts).toEqual([1, 2]);
+    expect(retries).toEqual(["blue"]);
+  });
+
+  it("does not retry an image reply that already matches", async () => {
+    const { attempts, run } = createImageProbeRunner(["OK"]);
+    const retries: string[] = [];
+
+    await expect(
+      runLiveModelImageProbeWithRetry({
+        run,
+        onRetry: (firstText) => retries.push(firstText),
+      }),
+    ).resolves.toBe("OK");
+    expect(attempts).toEqual([1]);
+    expect(retries).toEqual([]);
+  });
+
+  it("does not retry provider errors", async () => {
+    const attempts: Array<1 | 2> = [];
+    const retries: string[] = [];
+    const run = async (attempt: 1 | 2): Promise<string> => {
+      attempts.push(attempt);
+      throw new Error("boom");
+    };
+
+    await expect(
+      runLiveModelImageProbeWithRetry({
+        run,
+        onRetry: (firstText) => retries.push(firstText),
+      }),
+    ).rejects.toThrow("boom");
+    expect(attempts).toEqual([1]);
+    expect(retries).toEqual([]);
+  });
+
+  it("fails when the image retry also does not match", async () => {
+    const { attempts, run } = createImageProbeRunner(["blue", '" or "Reply with exactly']);
+
+    await expect(runLiveModelImageProbeWithRetry({ run, onRetry: () => {} })).rejects.toThrow(
+      "image probe did not return ok after retry",
+    );
+    expect(attempts).toEqual([1, 2]);
+  });
+
+  it("does not turn a mismatched image reply into an empty-response skip", async () => {
+    const { run } = createImageProbeRunner(["blue", ""]);
+
+    await expect(runLiveModelImageProbeWithRetry({ run, onRetry: () => {} })).rejects.toThrow(
+      "attempt 2: <empty>",
+    );
+  });
+
+  it("fails after two empty image replies", async () => {
+    const { attempts, run } = createImageProbeRunner(["", ""]);
+
+    await expect(runLiveModelImageProbeWithRetry({ run, onRetry: () => {} })).rejects.toThrow(
+      "attempt 1: <empty>; attempt 2: <empty>",
+    );
+    expect(attempts).toEqual([1, 2]);
+  });
+
+  it("fails when an empty image reply is followed by a mismatch", async () => {
+    const { run } = createImageProbeRunner(["", "blue"]);
+
+    await expect(runLiveModelImageProbeWithRetry({ run, onRetry: () => {} })).rejects.toThrow(
+      "attempt 1: <empty>",
+    );
+  });
+
+  it("redacts nonmatching image replies from failure diagnostics", async () => {
+    const { run } = createImageProbeRunner(["first private reply", "second private reply"]);
+
+    const error = await runLiveModelImageProbeWithRetry({ run, onRetry: () => {} }).catch(
+      (cause: unknown) => String(cause),
+    );
+    expect(error).toContain("<non-matching response:");
+    expect(error).not.toContain("private reply");
   });
 });

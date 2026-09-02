@@ -1,9 +1,10 @@
+// Exercises recursive command-risk detection through interpreters, carriers,
+// shell wrappers, env split-string, eval, and source invocations.
 import { describe, expect, it } from "vitest";
 import {
   buildCommandPayloadCandidates,
   detectCarriedShellBuiltinArgv,
   detectCommandCarrierArgv,
-  detectEnvSplitStringFlag,
   detectInlineEvalArgv,
   detectInlineEvalInSegments,
   detectShellWrapperThroughCarrierArgv,
@@ -63,6 +64,38 @@ describe("command-analysis risks", () => {
     );
     expect(detectInlineEvalArgv(["command", "node", "--eval", "1"])?.flag).toBe("--eval");
     expect(detectInlineEvalArgv(["env", "-S", 'python3 -c "print(1)"'])?.flag).toBe("-c");
+    expect(
+      detectInlineEvalArgv(["sh", "-lc", '$0 "$@"', "find", ".", "-exec", "id", "{}", ";"])?.flag,
+    ).toBe("-exec");
+    expect(
+      detectInlineEvalArgv(["bash", "-c", 'exec -- "$0" "$@"', "xargs", "sh", "-c", "id"])?.flag,
+    ).toBe("<command>");
+    expect(
+      detectInlineEvalArgv(["env", "sh", "-lc", '$0 "$@"', "find", ".", "-okdir", "id", "{}", ";"])
+        ?.flag,
+    ).toBe("-okdir");
+    expect(
+      detectInlineEvalArgv(["sudo", "sh", "-lc", '$0 "$@"', "find", ".", "-exec", "id", "{}", ";"])
+        ?.flag,
+    ).toBe("-exec");
+    expect(
+      detectInlineEvalArgv([
+        "command",
+        "sh",
+        "-lc",
+        '$0 "$@"',
+        "find",
+        ".",
+        "-execdir",
+        "id",
+        "{}",
+        ";",
+      ])?.flag,
+    ).toBe("-execdir");
+    expect(
+      detectInlineEvalArgv(["sh", "-lc", '$0 "$1" "$2"', "find", ".", "-exec", "id", "{}", ";"])
+        ?.flag,
+    ).toBe("-exec");
     expect(detectInlineEvalArgv(["python3", "script.py"])).toBeNull();
   });
 
@@ -74,6 +107,14 @@ describe("command-analysis risks", () => {
     ).toBeNull();
     expect(detectInlineEvalArgv(["env", "-S", 'echo python3 -c "print(1)"'])).toBeNull();
     expect(detectInlineEvalArgv(["command", "-v", "python3", "-c", "print(1)"])).toBeNull();
+    expect(detectInlineEvalArgv(["sh", "-lc", '$0 "$@"', "find", ".", "-name", "*.ts"])).toBeNull();
+    expect(detectInlineEvalArgv(["sh", "-lc", 'echo "$0"; "$@"', "find", ".", "-exec"])).toBeNull();
+    expect(
+      detectInlineEvalArgv(["sh", "-lc", '$0 "$1"', "find", ".", "-exec", "id", "{}", ";"]),
+    ).toBeNull();
+    expect(
+      detectInlineEvalArgv(["sh", "-lc", '$0 "$*"', "find", ".", "-exec", "id", "{}", ";"]),
+    ).toBeNull();
   });
 
   it("detects command carriers", () => {
@@ -86,17 +127,20 @@ describe("command-analysis risks", () => {
     expect(detectCommandCarrierArgv(["env", "-S", "sh -c id"])).toEqual([
       { command: "env", flag: "-S" },
     ]);
+    expect(
+      detectCommandCarrierArgv(["runuser", "-u", "root", "python3", "-c", "print(1)"]),
+    ).toEqual([{ command: "runuser" }]);
   });
 
-  it("detects env split-string flag forms", () => {
-    expect(detectEnvSplitStringFlag(["env", "-S", "sh -c id"])).toBe("-S");
-    expect(detectEnvSplitStringFlag(["env", "-Ssh -c id"])).toBe("-S");
-    expect(detectEnvSplitStringFlag(["env", "-iS", "sh -c id"])).toBe("-S");
-    expect(detectEnvSplitStringFlag(["env", "-iSsh -c id"])).toBe("-S");
-    expect(detectEnvSplitStringFlag(["env", "-is", "sh -c id"])).toBe("-s");
-    expect(detectEnvSplitStringFlag(["env", "--split-string=sh -c id"])).toBe("--split-string");
-    expect(detectEnvSplitStringFlag(["env", "sh", "-c", "id"])).toBeNull();
-    expect(detectEnvSplitStringFlag(["env", "-XSsh -c id"])).toBeNull();
+  it.each([
+    { args: ["-S", "sh -c id"], flag: "-S" },
+    { args: ["-Ssh -c id"], flag: "-S" },
+    { args: ["-iS", "sh -c id"], flag: "-S" },
+    { args: ["-iSsh -c id"], flag: "-S" },
+    { args: ["-is", "sh -c id"], flag: "-s" },
+    { args: ["--split-string=sh -c id"], flag: "--split-string" },
+  ])("detects env split-string carrier form $args", ({ args, flag }) => {
+    expect(detectCommandCarrierArgv(["env", ...args])).toEqual([{ command: "env", flag }]);
   });
 
   it("detects shell wrappers carried through prefix commands", () => {
@@ -230,11 +274,14 @@ describe("command-analysis risks", () => {
         raw: "sudo python3 -c 'print(1)'",
         argv: ["sudo", "python3", "-c", "print(1)"],
         resolution: {
+          kind: "command",
           execution: {
+            kind: "executable",
             rawExecutable: "sudo",
             executableName: "sudo",
           },
           policy: {
+            kind: "executable",
             rawExecutable: "sudo",
             executableName: "sudo",
           },

@@ -1,3 +1,4 @@
+// Verifies prompt composition invariants across generated agent scenarios.
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
   createPromptCompositionScenarios,
@@ -7,6 +8,7 @@ import {
 type ScenarioFixture = Awaited<ReturnType<typeof createPromptCompositionScenarios>>;
 
 function getTurn(scenario: PromptScenario, id: string) {
+  // Scenario assertions use named turns so failures identify the prompt boundary.
   const turn = scenario.turns.find((entry) => entry.id === id);
   if (!turn) {
     throw new Error(`expected turn ${scenario.scenario}:${id}`);
@@ -20,6 +22,14 @@ function getScenario(fixture: ScenarioFixture, id: string): PromptScenario {
     throw new Error(`expected prompt scenario ${id}`);
   }
   return scenario;
+}
+
+function countOccurrences(text: string, needle: string): number {
+  // Avoid regex escaping when checking exact prompt-body duplication.
+  if (!needle) {
+    return 0;
+  }
+  return text.split(needle).length - 1;
 }
 
 describe("prompt composition invariants", () => {
@@ -50,23 +60,24 @@ describe("prompt composition invariants", () => {
     }
   });
 
-  it("keeps bootstrap warnings out of the system prompt and preserves the original user prompt prefix", () => {
+  it("keeps the bootstrap truncation notice in the system prompt and body prompts untouched", () => {
     const scenario = getScenario(fixture, "bootstrap-warning");
     const first = getTurn(scenario, "t1");
-    const deduped = getTurn(scenario, "t2");
-    const always = getTurn(scenario, "t3");
+    const second = getTurn(scenario, "t2");
+    const third = getTurn(scenario, "t3");
 
-    expect(first.systemPrompt).not.toContain("[Bootstrap truncation warning]");
+    expect(first.systemPrompt).toContain("## Bootstrap Context Notice");
+    expect(first.systemPrompt).toContain("[Bootstrap truncation warning]");
     expect(first.systemPrompt).toContain("[...truncated, read AGENTS.md for full content...]");
-    expect(first.bodyPrompt.startsWith("hello")).toBe(true);
-    expect(first.bodyPrompt).toContain("[Bootstrap truncation warning]");
-
-    expect(deduped.bodyPrompt).toBe("hello again");
-    expect(always.bodyPrompt.startsWith("one more turn")).toBe(true);
-    expect(always.bodyPrompt).toContain("[Bootstrap truncation warning]");
+    for (const turn of [first, second, third]) {
+      expect(turn.bodyPrompt).not.toContain("[Bootstrap truncation warning]");
+    }
+    expect(first.bodyPrompt).toBe("hello");
+    expect(second.bodyPrompt).toBe("hello again");
+    expect(third.bodyPrompt).toBe("one more turn");
   });
 
-  it("keeps the group auto-reply prompt dynamic only across the first-turn intro boundary", () => {
+  it("keeps the group auto-reply prompt stable across the first-turn intro boundary", () => {
     const groupScenario = getScenario(fixture, "auto-reply-group");
     const first = getTurn(groupScenario, "t1");
     const steady = getTurn(groupScenario, "t2");
@@ -79,20 +90,19 @@ describe("prompt composition invariants", () => {
     expect(first.systemPrompt).not.toContain("## Silent Replies");
     expect(steady.systemPrompt).toContain("You are in a Slack group chat.");
     expect(steady.systemPrompt).toContain("prefer delegating bounded side investigations early");
+    expect(steady.systemPrompt).toContain("Activation: trigger-only");
     expect(steady.systemPrompt).toContain('reply with exactly "NO_REPLY"');
     expect(steady.systemPrompt).not.toContain("## Silent Replies");
-    expect(steady.systemPrompt).not.toContain("Activation: trigger-only");
-    expect(first.systemPrompt).not.toBe(steady.systemPrompt);
+    expect(first.systemPrompt).toBe(steady.systemPrompt);
     expect(steady.systemPrompt).toBe(eventTurn.systemPrompt);
   });
 
-  it("includes direct-chat guidance that routes NO_REPLY through the default rewrite path", () => {
+  it("keeps direct-chat guidance free of NO_REPLY", () => {
     const directScenario = getScenario(fixture, "auto-reply-direct");
     const first = getTurn(directScenario, "t1");
 
     expect(first.systemPrompt).toContain("You are in a Slack direct conversation.");
-    expect(first.systemPrompt).toContain('reply with exactly "NO_REPLY"');
-    expect(first.systemPrompt).toContain("so OpenClaw can send a short fallback reply");
+    expect(first.systemPrompt).not.toContain("NO_REPLY");
     expect(first.systemPrompt).not.toContain("## Silent Replies");
   });
 
@@ -104,5 +114,17 @@ describe("prompt composition invariants", () => {
     expect(flush.systemPrompt).not.toBe(refresh.systemPrompt);
     expect(flush.bodyPrompt).toContain("Pre-compaction memory flush.");
     expect(refresh.bodyPrompt).toContain("[Post-compaction context refresh]");
+  });
+
+  it("keeps Discord supplemental context out of the inbound body text", () => {
+    const scenario = getScenario(fixture, "auto-reply-discord-boundary");
+    const turn = getTurn(scenario, "t1");
+    const inboundBody = "Please summarize the deploy log.";
+
+    expect(turn.bodyPrompt).toContain("Discord channel metadata: ⟦openclaw:ctx⟧");
+    expect(turn.bodyPrompt).toContain('"topic":"Deploy coordination"');
+    expect(turn.bodyPrompt).not.toContain("EXTERNAL_UNTRUSTED_CONTENT");
+    expect(countOccurrences(turn.bodyPrompt, inboundBody)).toBe(1);
+    expect(turn.systemPrompt).not.toContain(inboundBody);
   });
 });

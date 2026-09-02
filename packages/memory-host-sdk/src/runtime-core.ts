@@ -2,7 +2,7 @@
 
 export type { AnyAgentTool } from "./host/openclaw-runtime-agent.js";
 export { resolveCronStyleNow } from "./host/openclaw-runtime-agent.js";
-export { DEFAULT_PI_COMPACTION_RESERVE_TOKENS_FLOOR } from "./host/openclaw-runtime-agent.js";
+export { DEFAULT_AGENT_COMPACTION_RESERVE_TOKENS_FLOOR } from "./host/openclaw-runtime-agent.js";
 export { resolveDefaultAgentId, resolveSessionAgentId } from "./host/openclaw-runtime-agent.js";
 export { resolveMemorySearchConfig } from "./host/openclaw-runtime-agent.js";
 export {
@@ -17,7 +17,7 @@ export {
   getRuntimeConfig,
   /** @deprecated Use getRuntimeConfig(), or pass the already loaded config through the call path. */
   loadConfig,
-} from "./host/openclaw-runtime-config.js";
+} from "./host/openclaw-runtime-session.js";
 export { resolveStateDir } from "./host/openclaw-runtime-config.js";
 export { resolveSessionTranscriptsDirForAgent } from "./host/openclaw-runtime-config.js";
 export { emptyPluginConfigSchema } from "./host/openclaw-runtime-memory.js";

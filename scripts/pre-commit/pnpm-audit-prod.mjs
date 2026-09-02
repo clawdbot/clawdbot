@@ -1,13 +1,23 @@
 #!/usr/bin/env node
 
+// Production dependency audit helper using pnpm lock data and npm bulk advisories.
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";
 import { pathToFileURL } from "node:url";
+// This zero-install hook runs on Node 22.22.3+, where native TypeScript stripping is enabled.
+import { truncateUtf16Safe } from "../../packages/normalization-core/src/utf16-slice.ts";
+import { readBoundedResponseText as readBoundedResponseTextWithLimit } from "../lib/bounded-response.mjs";
+import { pnpmLockfileDocuments } from "../lib/pnpm-lockfile-documents.mjs";
 
 const DEFAULT_REGISTRY = "https://registry.npmjs.org";
 const BULK_ADVISORY_PATH = "/-/npm/v1/security/advisories/bulk";
 const MIN_SEVERITY = "high";
+/** Maximum advisory error body characters retained in messages. */
+const BULK_ADVISORY_ERROR_BODY_MAX_CHARS = 4096;
+const BULK_ADVISORY_RESPONSE_BODY_MAX_BYTES = 8 * 1024 * 1024;
+const BULK_ADVISORY_REQUEST_TIMEOUT_MS = 60_000;
+const MAX_TIMER_TIMEOUT_MS = 2_147_000_000;
 const SEVERITY_RANK = {
   info: 0,
   low: 1,
@@ -23,8 +33,28 @@ const NESTED_MAPPING_ENTRY_INDENT = 8;
 const SNAPSHOT_SECTIONS = ["dependencies", "optionalDependencies"];
 const IMPORTER_SECTIONS = ["dependencies", "optionalDependencies"];
 const LOCAL_REFERENCE_PREFIXES = ["file:", "link:", "portal:", "workspace:"];
+// GitHub's GHSA-3q49-cfcf-g5fm feed includes an overbroad ">=0" range alongside
+// the compromised @mistralai/mistralai versions. Keep the production audit
+// blocking for the compromised releases while allowing pinned safe locks.
+const AUDIT_ADVISORY_VERSION_OVERRIDES = [
+  {
+    packageName: "@mistralai/mistralai",
+    advisoryIds: new Set(["1118204", "GHSA-3q49-cfcf-g5fm"]),
+    unaffectedVersions: new Set(["2.2.1", "2.2.5"]),
+  },
+];
 
-export function normalizeAuditLevel(level) {
+/** @typedef {{ write: (chunk: string) => boolean }} AuditOutput */
+/**
+ * @typedef {object} PnpmAuditOptions
+ * @property {string} [rootDir]
+ * @property {typeof fetch} [fetchImpl]
+ * @property {AuditOutput} [stdout]
+ * @property {AuditOutput} [stderr]
+ * @property {string} [minSeverity]
+ */
+
+function normalizeAuditLevel(level) {
   const normalized = String(level ?? "").toLowerCase();
   if (normalized in SEVERITY_RANK) {
     return normalized;
@@ -345,7 +375,7 @@ function parsePnpmLockfileSections(lockfileText) {
   let hasImportersSection = false;
   let hasSnapshotsSection = false;
 
-  for (let index = 0; index < lines.length; ) {
+  for (let index = 0; index < lines.length;) {
     const line = lines[index];
     const trimmed = line.trim();
     const indentation = countIndentation(line);
@@ -483,7 +513,7 @@ function resolveSnapshot({ dependencyName, reference, snapshots }) {
 }
 
 export function collectProdResolvedPackagesFromLockfile(lockfileText) {
-  const lockfile = parsePnpmLockfileSections(lockfileText);
+  const lockfile = parsePnpmLockfileSections(pnpmLockfileDocuments(lockfileText).dependencies);
   if (!lockfile.hasImportersSection) {
     throw new Error("pnpm-lock.yaml is missing the importers section.");
   }
@@ -542,6 +572,35 @@ export function collectProdResolvedPackagesFromLockfile(lockfileText) {
   return versionsByPackage;
 }
 
+export function collectAllResolvedPackagesFromLockfile(lockfileText) {
+  const versionsByPackage = new Map();
+  for (const document of Object.values(pnpmLockfileDocuments(lockfileText))) {
+    if (document === null) {
+      continue;
+    }
+    const lockfile = parsePnpmLockfileSections(document);
+    if (!lockfile.hasSnapshotsSection) {
+      throw new Error("pnpm-lock.yaml is missing the snapshots section.");
+    }
+
+    for (const snapshotKey of Object.keys(lockfile.snapshots)) {
+      const resolved = parseSnapshotKey(snapshotKey);
+      let versions = versionsByPackage.get(resolved.packageName);
+      if (!versions) {
+        versions = new Set();
+        versionsByPackage.set(resolved.packageName, versions);
+      }
+      versions.add(resolved.version);
+    }
+  }
+
+  return versionsByPackage;
+}
+
+/**
+ * @param {Map<string, Set<string>>} versionsByPackage
+ * @returns {Record<string, string[]>}
+ */
 export function createBulkAdvisoryPayload(versionsByPackage) {
   return Object.fromEntries(
     [...versionsByPackage.entries()]
@@ -560,7 +619,34 @@ function normalizeSeverity(severity) {
   return severity.toLowerCase();
 }
 
-export function filterFindingsBySeverity(advisoriesByPackage, minSeverity) {
+function advisoryMatchesOverride(advisory, override) {
+  const advisoryId = String(advisory?.id ?? "");
+  const advisoryUrl = typeof advisory?.url === "string" ? advisory.url : "";
+  return (
+    override.advisoryIds.has(advisoryId) ||
+    [...override.advisoryIds].some((id) => advisoryUrl.includes(id))
+  );
+}
+
+function shouldSuppressAdvisoryFinding({ packageName, advisory, versionsByPackage }) {
+  if (!versionsByPackage) {
+    return false;
+  }
+  const override = AUDIT_ADVISORY_VERSION_OVERRIDES.find(
+    (candidate) =>
+      candidate.packageName === packageName && advisoryMatchesOverride(advisory, candidate),
+  );
+  if (!override) {
+    return false;
+  }
+  const resolvedVersions = versionsByPackage.get(packageName);
+  if (!resolvedVersions || resolvedVersions.size === 0) {
+    return false;
+  }
+  return [...resolvedVersions].every((version) => override.unaffectedVersions.has(version));
+}
+
+export function filterFindingsBySeverity(advisoriesByPackage, minSeverity, versionsByPackage) {
   const threshold = normalizeAuditLevel(minSeverity);
   const findings = [];
 
@@ -574,6 +660,9 @@ export function filterFindingsBySeverity(advisoriesByPackage, minSeverity) {
       }
       const severity = normalizeSeverity(advisory.severity);
       if ((SEVERITY_RANK[severity] ?? -1) < SEVERITY_RANK[threshold]) {
+        continue;
+      }
+      if (shouldSuppressAdvisoryFinding({ packageName, advisory, versionsByPackage })) {
         continue;
       }
       findings.push({
@@ -607,7 +696,7 @@ function chunkEntries(entries, size) {
   return chunks;
 }
 
-function resolveRegistryBaseUrl() {
+export function resolveRegistryBaseUrl() {
   const configured =
     process.env.npm_config_registry ??
     process.env.NPM_CONFIG_REGISTRY ??
@@ -616,31 +705,181 @@ function resolveRegistryBaseUrl() {
   return configured.replace(/\/+$/u, "");
 }
 
+function parsePositiveIntegerEnv(name, fallback) {
+  const raw = process.env[name]?.trim();
+  if (!raw) {
+    return fallback;
+  }
+  const parsed = Number.parseInt(raw, 10);
+  if (!Number.isSafeInteger(parsed) || parsed < 1 || String(parsed) !== raw) {
+    throw new Error(`${name} must be a positive integer`);
+  }
+  return parsed;
+}
+
+function resolveBulkAdvisoryRequestTimeoutMs() {
+  return clampBulkAdvisoryTimeoutMs(
+    parsePositiveIntegerEnv(
+      "OPENCLAW_PNPM_AUDIT_BULK_TIMEOUT_MS",
+      BULK_ADVISORY_REQUEST_TIMEOUT_MS,
+    ),
+  );
+}
+
+function resolveBulkAdvisoryResponseBodyMaxBytes() {
+  return parsePositiveIntegerEnv(
+    "OPENCLAW_PNPM_AUDIT_BULK_RESPONSE_MAX_BYTES",
+    BULK_ADVISORY_RESPONSE_BODY_MAX_BYTES,
+  );
+}
+
+function clampBulkAdvisoryTimeoutMs(valueMs) {
+  const value = Number.isFinite(valueMs) ? valueMs : BULK_ADVISORY_REQUEST_TIMEOUT_MS;
+  return Math.min(Math.max(Math.floor(value), 1), MAX_TIMER_TIMEOUT_MS);
+}
+
+/**
+ * @template T
+ * @param {{ label: string, timeoutMs: number, run: (options: { signal: AbortSignal, timeoutPromise: Promise<never> }) => Promise<T> }} options
+ * @returns {Promise<T>}
+ */
+export async function withAdvisoryRequestTimeout({ label, timeoutMs, run }) {
+  const resolvedTimeoutMs = clampBulkAdvisoryTimeoutMs(timeoutMs);
+  const controller = new AbortController();
+  let timeout;
+  /** @type {Promise<never>} */
+  const timeoutPromise = new Promise((_resolve, reject) => {
+    timeout = setTimeout(() => {
+      const error = new Error(`${label} exceeded timeout of ${resolvedTimeoutMs}ms`);
+      controller.abort(error);
+      reject(error);
+    }, resolvedTimeoutMs);
+  });
+  try {
+    return await Promise.race([run({ signal: controller.signal, timeoutPromise }), timeoutPromise]);
+  } finally {
+    if (timeout) {
+      clearTimeout(timeout);
+    }
+  }
+}
+
+async function readBoundedResponseText(response, maxBytes, label, options = {}) {
+  return await readBoundedResponseTextWithLimit(response, label, maxBytes, {
+    signal: options.signal,
+    timeoutPromise: options.timeoutPromise,
+    formatTooLargeMessage: (messageLabel, bytes) => `${messageLabel} exceeded ${bytes} bytes`,
+    createTooLargeError: (message) => Object.assign(new Error(message), { code: "ETOOBIG" }),
+  });
+}
+
+export async function readBoundedBulkAdvisoryErrorText(
+  response,
+  maxChars = BULK_ADVISORY_ERROR_BODY_MAX_CHARS,
+  options = {},
+) {
+  if (!response.body) {
+    return "";
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let text = "";
+  let truncated = false;
+  let canceled = false;
+
+  try {
+    while (text.length <= maxChars) {
+      const read = reader.read();
+      const readWithTimeout = options.timeoutPromise
+        ? Promise.race([
+            read,
+            options.timeoutPromise.catch((error) => {
+              canceled = true;
+              void Promise.resolve()
+                .then(() => reader.cancel())
+                .catch(() => undefined);
+              throw error;
+            }),
+          ])
+        : read;
+      const { done, value } = await readWithTimeout;
+      if (done) {
+        text += decoder.decode();
+        break;
+      }
+
+      text += decoder.decode(value, { stream: true });
+      if (text.length > maxChars) {
+        text = truncateUtf16Safe(text, maxChars);
+        truncated = true;
+        break;
+      }
+    }
+  } finally {
+    if (truncated) {
+      await reader.cancel().catch(() => undefined);
+    } else if (!canceled) {
+      reader.releaseLock();
+    }
+  }
+
+  return truncated ? `${text}\n[truncated]` : text;
+}
+
+async function readBulkAdvisoryJson(response, maxBytes, options = {}) {
+  const text = await readBoundedResponseText(
+    response,
+    maxBytes,
+    "Bulk advisory response body",
+    options,
+  );
+  if (!text.trim()) {
+    throw new Error("Bulk advisory response body was empty");
+  }
+  return JSON.parse(text);
+}
+
 export async function fetchBulkAdvisories({
   payload,
   fetchImpl = fetch,
   registryBaseUrl = resolveRegistryBaseUrl(),
+  responseBodyMaxBytes = resolveBulkAdvisoryResponseBodyMaxBytes(),
+  timeoutMs = resolveBulkAdvisoryRequestTimeoutMs(),
 }) {
   const url = `${registryBaseUrl}${BULK_ADVISORY_PATH}`;
-  const response = await fetchImpl(url, {
-    method: "POST",
-    headers: {
-      accept: "application/json",
-      "content-type": "application/json",
+  return await withAdvisoryRequestTimeout({
+    label: "Bulk advisory request",
+    timeoutMs,
+    run: async ({ signal, timeoutPromise }) => {
+      const response = await fetchImpl(url, {
+        method: "POST",
+        headers: {
+          accept: "application/json",
+          "content-type": "application/json",
+        },
+        body: JSON.stringify(payload),
+        signal,
+      });
+
+      if (!response.ok) {
+        const bodyText = await readBoundedBulkAdvisoryErrorText(response, undefined, {
+          timeoutPromise,
+        });
+        throw new Error(
+          `Bulk advisory request failed (${response.status} ${response.statusText}): ${bodyText}`,
+        );
+      }
+
+      return await readBulkAdvisoryJson(response, responseBodyMaxBytes, {
+        signal,
+        timeoutPromise,
+      });
     },
-    body: JSON.stringify(payload),
   });
-
-  if (!response.ok) {
-    const bodyText = await response.text();
-    throw new Error(
-      `Bulk advisory request failed (${response.status} ${response.statusText}): ${bodyText}`,
-    );
-  }
-
-  return response.json();
 }
 
+/** @param {PnpmAuditOptions} [options] */
 export async function runPnpmAuditProd({
   rootDir = process.cwd(),
   fetchImpl = fetch,
@@ -651,7 +890,8 @@ export async function runPnpmAuditProd({
   const normalizedMinSeverity = normalizeAuditLevel(minSeverity);
   const lockfilePath = path.join(rootDir, "pnpm-lock.yaml");
   const lockfileText = await readFile(lockfilePath, "utf8");
-  const payload = createBulkAdvisoryPayload(collectProdResolvedPackagesFromLockfile(lockfileText));
+  const versionsByPackage = collectProdResolvedPackagesFromLockfile(lockfileText);
+  const payload = createBulkAdvisoryPayload(versionsByPackage);
   const payloadEntries = Object.entries(payload);
 
   if (payloadEntries.length === 0) {
@@ -669,16 +909,22 @@ export async function runPnpmAuditProd({
     Object.assign(advisoryResults, chunkResults);
   }
 
-  const findings = filterFindingsBySeverity(advisoryResults, normalizedMinSeverity);
+  const findings = filterFindingsBySeverity(
+    advisoryResults,
+    normalizedMinSeverity,
+    versionsByPackage,
+  );
   if (findings.length === 0) {
     stdout.write(
-      `No ${normalizedMinSeverity} or higher advisories found for production dependencies.\n`,
+      `No matching ${normalizedMinSeverity} or higher advisories returned by npm bulk for production dependencies. ` +
+        "Upstream repository advisories were not checked; this is not comprehensive vulnerability clearance.\n",
     );
     return 0;
   }
 
   stderr.write(
-    `Found ${findings.length} ${normalizedMinSeverity} or higher advisories in production dependencies:\n`,
+    `Found ${findings.length} ${normalizedMinSeverity} or higher advisories from npm bulk in production dependencies ` +
+      "(upstream repository advisories not checked):\n",
   );
   for (const finding of findings.slice(0, 25)) {
     const details = [
@@ -700,22 +946,29 @@ export async function runPnpmAuditProd({
   return 1;
 }
 
-function parseArgs(argv) {
+function readSeverityValue(value, optionName) {
+  if (value === undefined || value === "" || value.startsWith("-")) {
+    throw new Error(`${optionName} requires a value`);
+  }
+  return value;
+}
+
+export function parseArgs(argv) {
   let minSeverity = MIN_SEVERITY;
 
   for (let index = 0; index < argv.length; index += 1) {
     const argument = argv[index];
     if (argument === "--audit-level" || argument === "--min-severity") {
-      minSeverity = argv[index + 1] ?? "";
+      minSeverity = readSeverityValue(argv[index + 1], argument);
       index += 1;
       continue;
     }
     if (argument.startsWith("--audit-level=")) {
-      minSeverity = argument.slice("--audit-level=".length);
+      minSeverity = readSeverityValue(argument.slice("--audit-level=".length), "--audit-level");
       continue;
     }
     if (argument.startsWith("--min-severity=")) {
-      minSeverity = argument.slice("--min-severity=".length);
+      minSeverity = readSeverityValue(argument.slice("--min-severity=".length), "--min-severity");
       continue;
     }
     throw new Error(`Unknown argument "${argument}".`);
@@ -737,4 +990,7 @@ async function main() {
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   await main();
+  if (process.exitCode) {
+    process.stderr.write(`[pnpm-audit-prod] FAILED (exit ${process.exitCode})\n`);
+  }
 }

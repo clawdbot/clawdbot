@@ -1,7 +1,8 @@
+// Verifies Discord channel source-config audit behavior.
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { stubAuditChannelPlugin } from "./audit-channel-test-helpers.js";
-import { collectChannelSecurityFindings } from "./audit-channel.js";
+import { collectChannelSecurityFindingsCore } from "./audit-channel.js";
 
 function stubDiscordPlugin(params: {
   resolveAccount: (cfg: OpenClawConfig, accountId: string | null | undefined) => unknown;
@@ -73,7 +74,7 @@ describe("security audit channel source-config fallback discord", () => {
       },
     };
 
-    const findings = await collectChannelSecurityFindings({
+    const findings = await collectChannelSecurityFindingsCore({
       cfg: resolvedConfig,
       sourceConfig,
       plugins: [
@@ -113,13 +114,12 @@ describe("security audit channel source-config fallback discord", () => {
       ],
     });
 
-    expect(findings).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          checkId: "channels.discord.commands.native.no_allowlists",
-          severity: "warn",
-        }),
-      ]),
+    const finding = findings.find(
+      (entry) => entry.checkId === "channels.discord.commands.native.no_allowlists",
     );
+    if (!finding) {
+      throw new Error("Expected Discord native command no-allowlists finding");
+    }
+    expect(finding.severity).toBe("warn");
   });
 });

@@ -1,6 +1,8 @@
-import { execFileSync } from "node:child_process";
+// Check Temp Path Guardrails script supports OpenClaw repository automation.
 import fs from "node:fs/promises";
 import path from "node:path";
+import pMap, { pMapSkip } from "p-map";
+import { listRepoFilesSync } from "./check-file-utils.js";
 
 type QuoteChar = "'" | '"' | "`";
 
@@ -73,7 +75,7 @@ function findMatchingParen(source: string, openIndex: number): number {
   let depth = 1;
   const quoteState: QuoteScanState = { quote: null, escaped: false };
   for (let i = openIndex + 1; i < source.length; i += 1) {
-    const ch = source[i];
+    const ch = source.charAt(i);
     if (consumeQuotedChar(quoteState, ch)) {
       continue;
     }
@@ -101,8 +103,7 @@ function splitTopLevelArguments(source: string): string[] {
   let bracketDepth = 0;
   let braceDepth = 0;
   const quoteState: QuoteScanState = { quote: null, escaped: false };
-  for (let i = 0; i < source.length; i += 1) {
-    const ch = source[i];
+  for (const ch of source) {
     if (quoteState.quote) {
       current += ch;
       consumeQuotedChar(quoteState, ch);
@@ -192,7 +193,8 @@ function hasDynamicTmpdirJoin(source: string): boolean {
       if (closeParenIndex !== -1) {
         const argsSource = scanSource.slice(openParenIndex + 1, closeParenIndex);
         const args = splitTopLevelArguments(argsSource);
-        if (args.length >= 2 && isOsTmpdirExpression(args[0])) {
+        const firstArg = args[0];
+        if (firstArg && isOsTmpdirExpression(firstArg)) {
           for (const arg of args.slice(1)) {
             const trimmed = arg.trim();
             if (trimmed.startsWith("`") && trimmed.includes("${")) {
@@ -208,58 +210,33 @@ function hasDynamicTmpdirJoin(source: string): boolean {
 }
 
 function listTrackedRuntimeSourceFiles(repoRoot: string): string[] {
-  const stdout = execFileSync("git", ["-C", repoRoot, "ls-files", "--", "src", "extensions"], {
-    encoding: "utf8",
-    stdio: ["ignore", "pipe", "inherit"],
-  });
-  return stdout
-    .split(/\r?\n/u)
-    .filter(Boolean)
-    .filter((relativePath) => relativePath.endsWith(".ts") || relativePath.endsWith(".tsx"))
-    .filter((relativePath) => !shouldSkipGuardrailRuntimeSource(relativePath))
-    .map((relativePath) => path.join(repoRoot, relativePath));
+  return listRepoFilesSync(repoRoot, {
+    roots: ["src", "extensions"],
+    includeFile: (relativePath) =>
+      (relativePath.endsWith(".ts") || relativePath.endsWith(".tsx")) &&
+      !shouldSkipGuardrailRuntimeSource(relativePath),
+  }).map((relativePath) => path.join(repoRoot, relativePath));
 }
 
 async function readRuntimeSourceFiles(
   repoRoot: string,
   absolutePaths: string[],
 ): Promise<RuntimeSourceGuardrailFile[]> {
-  const output: Array<RuntimeSourceGuardrailFile | undefined> = Array.from({
-    length: absolutePaths.length,
-  });
-  let nextIndex = 0;
-
-  const worker = async () => {
-    for (;;) {
-      const index = nextIndex;
-      nextIndex += 1;
-      if (index >= absolutePaths.length) {
-        return;
-      }
-      const absolutePath = absolutePaths[index];
-      if (!absolutePath) {
-        continue;
-      }
-      let source: string;
+  return await pMap(
+    absolutePaths,
+    async (absolutePath) => {
       try {
-        source = await fs.readFile(absolutePath, "utf8");
+        return {
+          relativePath: path.relative(repoRoot, absolutePath),
+          source: await fs.readFile(absolutePath, "utf8"),
+        };
       } catch {
         // File tracked by git but deleted on disk (e.g. pending deletion).
-        continue;
+        return pMapSkip;
       }
-      output[index] = {
-        relativePath: path.relative(repoRoot, absolutePath),
-        source,
-      };
-    }
-  };
-
-  const workers = Array.from(
-    { length: Math.min(FILE_READ_CONCURRENCY, Math.max(1, absolutePaths.length)) },
-    () => worker(),
+    },
+    { concurrency: FILE_READ_CONCURRENCY, stopOnError: false },
   );
-  await Promise.all(workers);
-  return output.filter((entry): entry is RuntimeSourceGuardrailFile => entry !== undefined);
 }
 
 async function main() {

@@ -16,4 +16,4 @@ Adds Copilot Proxy model provider support to OpenClaw.
 
 ## Surface
 
-providers: copilot-proxy
+providers: `copilot-proxy`

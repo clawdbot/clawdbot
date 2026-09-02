@@ -1,70 +1,48 @@
+/**
+ * Non-interactive onboarding command dispatcher.
+ *
+ * This module validates the existing config snapshot, routes local/remote
+ * setup, and handles explicit migration imports without interactive prompts.
+ */
+import { isDeepStrictEqual } from "node:util";
 import { formatCliCommand } from "../cli/command-format.js";
-import { replaceConfigFile } from "../config/config.js";
+import { ConfigMutationConflictError, replaceConfigFile } from "../config/config.js";
 import { readConfigFileSnapshot } from "../config/io.js";
 import { logConfigUpdated } from "../config/logging.js";
+import { resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { withPluginLifecycleLease } from "../plugins/plugin-lifecycle-lease.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
-import type { WizardPrompter } from "../wizard/prompts.js";
+import { withOpenClawStateLease } from "../state/openclaw-state-lease.js";
+import { withSetupMigrationTargetLock } from "../wizard/setup.migration-snapshot.js";
+import { createNonInteractiveLoggingPrompter } from "./non-interactive-prompter.js";
 import { runNonInteractiveLocalSetup } from "./onboard-non-interactive/local.js";
 import { runNonInteractiveRemoteSetup } from "./onboard-non-interactive/remote.js";
+import { rejectOnboardingOption } from "./onboard-options.js";
 import type { OnboardOptions } from "./onboard-types.js";
 
-function createNonInteractiveMigrationPrompter(runtime: RuntimeEnv): WizardPrompter {
-  const unavailable = <T>(message: string): Promise<T> =>
-    Promise.reject(
-      new Error(
-        `Non-interactive migration import needs explicit flags before prompting: ${message}`,
-      ),
-    );
-  return {
-    async intro(title) {
-      runtime.log(title);
-    },
-    async outro(message) {
-      runtime.log(message);
-    },
-    async note(message, title) {
-      runtime.log(title ? `${title}\n${message}` : message);
-    },
-    async select(params) {
-      return unavailable(params.message);
-    },
-    async multiselect(params) {
-      return unavailable(params.message);
-    },
-    async text(params) {
-      return unavailable(params.message);
-    },
-    async confirm(params) {
-      return unavailable(params.message);
-    },
-    progress(label) {
-      runtime.log(label);
-      return {
-        update(message) {
-          runtime.log(message);
-        },
-        stop(message) {
-          if (message) {
-            runtime.log(message);
-          }
-        },
-      };
-    },
-  };
+function isMigrationImport(opts: OnboardOptions): boolean {
+  return Boolean(
+    opts.importFrom || opts.importSource || opts.importSecrets || opts.flow === "import",
+  );
 }
 
+/** Runs a setup migration import with non-interactive prompt failures. */
 async function runNonInteractiveMigrationImport(params: {
   opts: OnboardOptions;
   runtime: RuntimeEnv;
   baseConfig: OpenClawConfig;
-  baseHash?: string;
 }) {
   const providerId = params.opts.importFrom?.trim();
   if (!providerId) {
-    params.runtime.error("--import-from is required for non-interactive migration import.");
-    params.runtime.exit(1);
+    // Migration import cannot safely prompt in non-interactive mode; require the
+    // provider id so the import path is deterministic.
+    rejectOnboardingOption(
+      params.opts,
+      params.runtime,
+      `--import-from is required for non-interactive migration import. Run ${formatCliCommand("openclaw migrate list")} to choose a provider.`,
+    );
     return;
   }
   const { detectSetupMigrationSources, runSetupMigrationImport } =
@@ -73,34 +51,58 @@ async function runNonInteractiveMigrationImport(params: {
     config: params.baseConfig,
     runtime: params.runtime,
   });
-  await runSetupMigrationImport({
+  const outcome = await runSetupMigrationImport({
     opts: { ...params.opts, importFrom: providerId, nonInteractive: true },
     baseConfig: params.baseConfig,
     detections,
-    prompter: createNonInteractiveMigrationPrompter(params.runtime),
+    prompter: createNonInteractiveLoggingPrompter(
+      params.runtime,
+      (message) =>
+        `Non-interactive migration import needs explicit flags before prompting: ${message}`,
+    ),
     runtime: params.runtime,
-    async commitConfigFile(config) {
-      await replaceConfigFile({
+    async readConfigFile() {
+      const snapshot = await readConfigFileSnapshot();
+      if (!snapshot.valid) {
+        throw new Error("Migration target config became invalid. Run `openclaw doctor`.");
+      }
+      return snapshot.exists ? (snapshot.sourceConfig ?? snapshot.config) : {};
+    },
+    async commitConfigFile(config, expectedConfig) {
+      const latest = await readConfigFileSnapshot();
+      if (!latest.valid) {
+        throw new Error("Migration target config became invalid. Run `openclaw doctor`.");
+      }
+      const latestConfig = latest.exists ? (latest.sourceConfig ?? latest.config) : {};
+      if (!isDeepStrictEqual(latestConfig, expectedConfig)) {
+        throw new ConfigMutationConflictError("config changed during migration promotion");
+      }
+      const committed = await replaceConfigFile({
         nextConfig: config,
-        ...(params.baseHash !== undefined ? { baseHash: params.baseHash } : {}),
+        snapshot: latest,
+        ...(latest.hash !== undefined ? { baseHash: latest.hash } : {}),
         writeOptions: { allowConfigSizeDrop: true },
       });
       logConfigUpdated(params.runtime);
-      return config;
+      return committed.nextConfig;
     },
   });
+  if (outcome.kind === "back") {
+    throw new Error("Non-interactive migration import cannot navigate back.");
+  }
+  await outcome.acknowledgePromotion?.();
 }
 
-export async function runNonInteractiveSetup(
-  opts: OnboardOptions,
-  runtime: RuntimeEnv = defaultRuntime,
-) {
+async function runNonInteractiveSetupExclusive(opts: OnboardOptions, runtime: RuntimeEnv) {
   const snapshot = await readConfigFileSnapshot();
   if (snapshot.exists && !snapshot.valid) {
-    runtime.error(
+    // Avoid rewriting an invalid config snapshot; doctor owns recovery so setup
+    // does not erase malformed user state.
+    rejectOnboardingOption(
+      opts,
+      runtime,
       `Config invalid. Run \`${formatCliCommand("openclaw doctor")}\` to repair it, then re-run setup.`,
     );
-    runtime.exit(1);
     return;
   }
 
@@ -111,13 +113,18 @@ export async function runNonInteractiveSetup(
     : {};
   const mode = opts.mode ?? "local";
   if (mode !== "local" && mode !== "remote") {
-    runtime.error(`Invalid --mode "${String(mode)}" (use local|remote).`);
-    runtime.exit(1);
+    rejectOnboardingOption(
+      opts,
+      runtime,
+      `Invalid --mode "${String(mode)}". Use "local" or "remote", or run ${formatCliCommand("openclaw onboard")} for interactive setup.`,
+    );
     return;
   }
 
-  if (opts.importFrom || opts.importSource || opts.importSecrets || opts.flow === "import") {
-    await runNonInteractiveMigrationImport({ opts, runtime, baseConfig, baseHash: snapshot.hash });
+  if (isMigrationImport(opts)) {
+    // Import flow owns its own commit path because migrations may intentionally
+    // shrink legacy config after extracting credentials.
+    await runNonInteractiveMigrationImport({ opts, runtime, baseConfig });
     return;
   }
 
@@ -126,5 +133,41 @@ export async function runNonInteractiveSetup(
     return;
   }
 
-  await runNonInteractiveLocalSetup({ opts, runtime, baseConfig, baseHash: snapshot.hash });
+  await runNonInteractiveLocalSetup({
+    opts,
+    runtime,
+    baseConfig,
+    sourceConfigBeforeMigrations: snapshot.sourceConfigBeforeMigrations ?? {},
+    baseHash: snapshot.hash,
+  });
+}
+
+/** Runs non-interactive onboarding in local, remote, or migration-import mode. */
+export async function runNonInteractiveSetup(
+  opts: OnboardOptions,
+  runtime: RuntimeEnv = defaultRuntime,
+) {
+  await withSetupMigrationTargetLock(resolveStateDir(), async () => {
+    if (isMigrationImport(opts)) {
+      // Migration must inspect freshness before opening the shared lease DB.
+      await runNonInteractiveSetupExclusive(opts, runtime);
+      return;
+    }
+    await withOpenClawStateLease(
+      {
+        scope: "core:onboarding",
+        key: "global",
+        database: { scope: "shared" },
+        // Bound one run to five minutes while allowing one predecessor to finish.
+        leaseMs: 5 * 60_000,
+        waitMs: 10 * 60_000,
+        leaseLabel: "non-interactive onboarding lease",
+        operationLabel: "onboarding.non-interactive.lease",
+      },
+      async () =>
+        await withPluginLifecycleLease({}, async () =>
+          runNonInteractiveSetupExclusive(opts, runtime),
+        ),
+    );
+  });
 }

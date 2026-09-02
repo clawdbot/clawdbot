@@ -1,8 +1,72 @@
+// Helpers for package install tests that inspect npm spec output.
 import fs from "node:fs";
 import path from "node:path";
 import { expect } from "vitest";
 import type { CommandOptions, SpawnResult } from "../process/exec.js";
 import { expectSingleNpmInstallIgnoreScriptsCall } from "./exec-assertions.js";
+
+const emptyNpmFailure: SpawnResult = {
+  stdout: "",
+  stderr: "",
+  code: 1,
+  signal: null,
+  killed: false,
+  termination: "exit",
+};
+
+export const npmCommandFailureCases: Array<{
+  label: string;
+  npmResult: SpawnResult;
+  expectedDetail: string;
+}> = [
+  {
+    label: "stderr before stdout",
+    npmResult: { ...emptyNpmFailure, stderr: " registry unavailable ", stdout: "ignored" },
+    expectedDetail: "registry unavailable",
+  },
+  {
+    label: "stdout when stderr is blank",
+    npmResult: { ...emptyNpmFailure, stderr: " ", stdout: " registry unavailable " },
+    expectedDetail: "registry unavailable",
+  },
+  {
+    label: "exit code without output",
+    npmResult: emptyNpmFailure,
+    expectedDetail: "exit code 1 (no output from npm)",
+  },
+  {
+    label: "signal without output",
+    npmResult: {
+      ...emptyNpmFailure,
+      code: null,
+      signal: "SIGKILL",
+      killed: true,
+      termination: "signal",
+    },
+    expectedDetail: "signal SIGKILL (no output from npm)",
+  },
+  {
+    label: "abort before spawn",
+    npmResult: { ...emptyNpmFailure, code: null, termination: "signal" },
+    expectedDetail: "termination signal (no output from npm)",
+  },
+  {
+    label: "cancellation followed by a nonzero exit",
+    npmResult: { ...emptyNpmFailure, termination: "signal", killed: true },
+    expectedDetail: "termination signal (no output from npm)",
+  },
+  ...(["timeout", "no-output-timeout"] as const).map((termination) => ({
+    label: `${termination} with normalized exit code`,
+    npmResult: {
+      ...emptyNpmFailure,
+      code: 124,
+      signal: "SIGTERM" as const,
+      killed: true,
+      termination,
+    },
+    expectedDetail: `termination ${termination} (no output from npm)`,
+  })),
+];
 
 type InstallResultLike = {
   ok: boolean;
@@ -25,6 +89,7 @@ type NpmViewMetadata = {
   shasum?: string;
 };
 
+// Keep spawn doubles shaped like the real process helper so install tests stay narrow.
 function createSuccessfulSpawnResult(stdout = ""): SpawnResult {
   return {
     code: 0,
@@ -36,6 +101,7 @@ function createSuccessfulSpawnResult(stdout = ""): SpawnResult {
   };
 }
 
+/** Mocks npm view JSON metadata for package install validation tests. */
 export function mockNpmViewMetadataResult(
   run: {
     mockImplementation: (

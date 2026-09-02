@@ -1,3 +1,6 @@
+// In-memory stdout/stderr capture helper for command tests.
+
+/** Create a minimal IO object plus readers for captured output. */
 export function createCapturedIo() {
   let stdout = "";
   let stderr = "";

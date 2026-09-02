@@ -1,112 +1,96 @@
+/** Human-readable formatter for `openclaw message` action results. */
+import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
+import { getTerminalTableWidth, renderTable } from "../../packages/terminal-core/src/table.js";
+import { isRich, theme } from "../../packages/terminal-core/src/theme.js";
 import { getLoadedChannelPlugin } from "../channels/plugins/index.js";
 import type { ChannelId } from "../channels/plugins/types.public.js";
 import type { OutboundDeliveryResult } from "../infra/outbound/deliver.js";
 import { formatGatewaySummary, formatOutboundDeliverySummary } from "../infra/outbound/format.js";
-import type { MessageActionRunResult } from "../infra/outbound/message-action-runner.js";
+import {
+  resolveMessageActionMessageId,
+  resolveMessageActionOutcome,
+  type MessageActionResult,
+} from "../infra/outbound/message-action-contracts.js";
 import { formatTargetDisplay } from "../infra/outbound/target-resolver.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
-import { normalizeStringEntries } from "../shared/string-normalization.js";
-import { getTerminalTableWidth, renderTable } from "../terminal/table.js";
-import { isRich, theme } from "../terminal/theme.js";
 import { shortenText } from "./text-format.js";
 
 const resolveChannelLabel = (channel: ChannelId) =>
   getLoadedChannelPlugin(channel)?.meta.label ?? channel;
 
-function extractMessageId(payload: unknown): string | null {
-  if (!payload || typeof payload !== "object") {
-    return null;
-  }
-  const direct = (payload as { messageId?: unknown }).messageId;
-  const directId = normalizeOptionalString(direct);
-  if (directId) {
-    return directId;
-  }
-  const result = (payload as { result?: unknown }).result;
-  if (result && typeof result === "object") {
-    const nested = (result as { messageId?: unknown }).messageId;
-    const nestedId = normalizeOptionalString(nested);
-    if (nestedId) {
-      return nestedId;
+function firstNonemptyString(
+  record: Record<string, unknown> | undefined,
+  ...keys: string[]
+): string {
+  for (const key of keys) {
+    const value = typeof record?.[key] === "string" && record?.[key];
+    if (value) {
+      return value as string; // SAFETY: Preserve the old second accessor read after its string check.
     }
   }
-  return null;
+  return "";
 }
 
 type FormatOpts = {
   width: number;
+  /** Max rows to render. Defaults to 25 when omitted. */
+  displayLimit?: number;
 };
 
-function renderObjectSummary(payload: unknown, opts: FormatOpts): string[] {
+function renderSummaryValue(value: unknown): string {
+  if (value == null) {
+    return "null";
+  }
+  if (Array.isArray(value)) {
+    return `${value.length} items`;
+  }
+  switch (typeof value) {
+    case "string":
+    case "number":
+    case "boolean":
+    case "bigint":
+    case "symbol":
+      return String(value);
+    default:
+      return typeof value;
+  }
+}
+
+function renderObjectSummary(payload: unknown, opts: FormatOpts): string {
   if (!payload || typeof payload !== "object") {
-    return [String(payload)];
+    return String(payload);
   }
   const obj = payload as Record<string, unknown>;
   const keys = Object.keys(obj);
   if (keys.length === 0) {
-    return [theme.muted("(empty)")];
+    return theme.muted("(empty)");
   }
 
   const rows = keys.slice(0, 20).map((k) => {
-    const v = obj[k];
-    const value =
-      v == null
-        ? "null"
-        : Array.isArray(v)
-          ? `${v.length} items`
-          : typeof v === "object"
-            ? "object"
-            : typeof v === "string"
-              ? v
-              : typeof v === "number"
-                ? String(v)
-                : typeof v === "boolean"
-                  ? v
-                    ? "true"
-                    : "false"
-                  : typeof v === "bigint"
-                    ? v.toString()
-                    : typeof v === "symbol"
-                      ? v.toString()
-                      : typeof v === "function"
-                        ? "function"
-                        : "unknown";
+    const value = renderSummaryValue(obj[k]);
     return { Key: k, Value: shortenText(value, 96) };
   });
-  return [
-    renderTable({
-      width: opts.width,
-      columns: [
-        { key: "Key", header: "Key", minWidth: 16 },
-        { key: "Value", header: "Value", flex: true, minWidth: 24 },
-      ],
-      rows,
-    }).trimEnd(),
-  ];
+  return renderTable({
+    width: opts.width,
+    columns: [
+      { key: "Key", header: "Key", minWidth: 16 },
+      { key: "Value", header: "Value", flex: true, minWidth: 24 },
+    ],
+    rows,
+  }).trimEnd();
 }
 
-function renderMessageList(messages: unknown[], opts: FormatOpts, emptyLabel: string): string[] {
-  const rows = messages.slice(0, 25).map((m) => {
+function renderMessageList(messages: unknown[], opts: FormatOpts, emptyLabel: string): string {
+  const cap = opts.displayLimit ?? 25;
+  const rows = messages.slice(0, cap).map((m) => {
     const msg = m as Record<string, unknown>;
-    const id =
-      (typeof msg.id === "string" && msg.id) ||
-      (typeof msg.ts === "string" && msg.ts) ||
-      (typeof msg.messageId === "string" && msg.messageId) ||
-      "";
+    const id = firstNonemptyString(msg, "id", "ts", "messageId");
     const authorObj = msg.author as Record<string, unknown> | undefined;
     const author =
-      (typeof msg.authorTag === "string" && msg.authorTag) ||
-      (typeof authorObj?.username === "string" && authorObj.username) ||
-      (typeof msg.user === "string" && msg.user) ||
-      "";
-    const time =
-      (typeof msg.timestamp === "string" && msg.timestamp) ||
-      (typeof msg.ts === "string" && msg.ts) ||
-      "";
-    const text =
-      (typeof msg.content === "string" && msg.content) ||
-      (typeof msg.text === "string" && msg.text) ||
-      "";
+      firstNonemptyString(msg, "authorTag") ||
+      firstNonemptyString(authorObj, "username") ||
+      firstNonemptyString(msg, "user");
+    const time = firstNonemptyString(msg, "timestamp", "ts");
+    const text = firstNonemptyString(msg, "content", "text");
     return {
       Time: shortenText(time, 28),
       Author: shortenText(author, 22),
@@ -116,43 +100,19 @@ function renderMessageList(messages: unknown[], opts: FormatOpts, emptyLabel: st
   });
 
   if (rows.length === 0) {
-    return [theme.muted(emptyLabel)];
+    return theme.muted(emptyLabel);
   }
 
-  return [
-    renderTable({
-      width: opts.width,
-      columns: [
-        { key: "Time", header: "Time", minWidth: 14 },
-        { key: "Author", header: "Author", minWidth: 10 },
-        { key: "Text", header: "Text", flex: true, minWidth: 24 },
-        { key: "Id", header: "Id", minWidth: 10 },
-      ],
-      rows,
-    }).trimEnd(),
-  ];
-}
-
-function renderMessagesFromPayload(payload: unknown, opts: FormatOpts): string[] | null {
-  if (!payload || typeof payload !== "object") {
-    return null;
-  }
-  const messages = (payload as { messages?: unknown }).messages;
-  if (!Array.isArray(messages)) {
-    return null;
-  }
-  return renderMessageList(messages, opts, "No messages.");
-}
-
-function renderPinsFromPayload(payload: unknown, opts: FormatOpts): string[] | null {
-  if (!payload || typeof payload !== "object") {
-    return null;
-  }
-  const pins = (payload as { pins?: unknown }).pins;
-  if (!Array.isArray(pins)) {
-    return null;
-  }
-  return renderMessageList(pins, opts, "No pins.");
+  return renderTable({
+    width: opts.width,
+    columns: [
+      { key: "Time", header: "Time", minWidth: 14 },
+      { key: "Author", header: "Author", minWidth: 10 },
+      { key: "Text", header: "Text", flex: true, minWidth: 24 },
+      { key: "Id", header: "Id", minWidth: 10 },
+    ],
+    rows,
+  }).trimEnd();
 }
 
 function extractDiscordSearchResultsMessages(results: unknown): unknown[] | null {
@@ -172,10 +132,10 @@ function extractDiscordSearchResultsMessages(results: unknown): unknown[] | null
       flattened.push(entry);
     }
   }
-  return flattened.length ? flattened : null;
+  return flattened;
 }
 
-function renderReactions(payload: unknown, opts: FormatOpts): string[] | null {
+function renderReactions(payload: unknown, opts: FormatOpts): string | null {
   if (!payload || typeof payload !== "object") {
     return null;
   }
@@ -184,14 +144,11 @@ function renderReactions(payload: unknown, opts: FormatOpts): string[] | null {
     return null;
   }
 
-  const rows = reactions.slice(0, 50).map((r) => {
+  const rows = reactions.slice(0, opts.displayLimit ?? 50).map((r) => {
     const entry = r as Record<string, unknown>;
     const emojiObj = entry.emoji as Record<string, unknown> | undefined;
     const emoji =
-      (typeof emojiObj?.raw === "string" && emojiObj.raw) ||
-      (typeof entry.name === "string" && entry.name) ||
-      (typeof entry.emoji === "string" && entry.emoji) ||
-      "";
+      firstNonemptyString(emojiObj, "raw") || firstNonemptyString(entry, "name", "emoji");
     const count = typeof entry.count === "number" ? String(entry.count) : "";
     const userList = Array.isArray(entry.users)
       ? (entry.users as unknown[])
@@ -204,12 +161,7 @@ function renderReactions(payload: unknown, opts: FormatOpts): string[] | null {
               return "";
             }
             const user = u as Record<string, unknown>;
-            return (
-              (typeof user.tag === "string" && user.tag) ||
-              (typeof user.username === "string" && user.username) ||
-              (typeof user.id === "string" && user.id) ||
-              ""
-            );
+            return firstNonemptyString(user, "tag", "username", "id");
           })
           .filter(Boolean)
       : [];
@@ -221,35 +173,60 @@ function renderReactions(payload: unknown, opts: FormatOpts): string[] | null {
   });
 
   if (rows.length === 0) {
-    return [theme.muted("No reactions.")];
+    return theme.muted("No reactions.");
   }
 
-  return [
-    renderTable({
-      width: opts.width,
-      columns: [
-        { key: "Emoji", header: "Emoji", minWidth: 8 },
-        { key: "Count", header: "Count", align: "right", minWidth: 6 },
-        { key: "Users", header: "Users", flex: true, minWidth: 20 },
-      ],
-      rows,
-    }).trimEnd(),
-  ];
+  return renderTable({
+    width: opts.width,
+    columns: [
+      { key: "Emoji", header: "Emoji", minWidth: 8 },
+      { key: "Count", header: "Count", align: "right", minWidth: 6 },
+      { key: "Users", header: "Users", flex: true, minWidth: 20 },
+    ],
+    rows,
+  }).trimEnd();
 }
 
-export function formatMessageCliText(result: MessageActionRunResult): string[] {
+/**
+ * Emit a muted hint when the provider payload signals more results are available
+ * beyond the current page (e.g. hasMore, nextBatch, @odata.nextLink).
+ */
+function renderPaginationHint(payload: unknown, muted: (text: string) => string): string | null {
+  if (!payload || typeof payload !== "object") {
+    return null;
+  }
+  const obj = payload as Record<string, unknown>;
+  if (
+    obj.hasMore === true ||
+    (typeof obj.nextBatch === "string" && obj.nextBatch) ||
+    (typeof obj["@odata.nextLink"] === "string" && obj["@odata.nextLink"])
+  ) {
+    return muted(
+      "More results available. Use --limit to fetch more, or --json for the raw cursor.",
+    );
+  }
+  return null;
+}
+
+export function formatMessageCliText(
+  result: MessageActionResult,
+  opts?: { displayLimit?: number },
+): string[] {
   const rich = isRich();
   const ok = (text: string) => (rich ? theme.success(text) : text);
+  const fail = (text: string) => (rich ? theme.error(text) : text);
   const muted = (text: string) => (rich ? theme.muted(text) : text);
   const heading = (text: string) => (rich ? theme.heading(text) : text);
 
   const width = getTerminalTableWidth();
-  const opts: FormatOpts = { width };
+  const displayLimit = opts?.displayLimit;
+  const formatOpts: FormatOpts = { width, displayLimit };
 
-  if (result.handledBy === "dry-run") {
+  if (result.dryRun) {
     return [muted(`[dry-run] would run ${result.action} via ${result.channel}`)];
   }
 
+  const outcome = resolveMessageActionOutcome(result);
   if (result.kind === "broadcast") {
     const results = result.payload.results ?? [];
     const rows = results.map((entry) => ({
@@ -260,22 +237,28 @@ export function formatMessageCliText(result: MessageActionRunResult): string[] {
     }));
     const okCount = results.filter((entry) => entry.ok).length;
     const total = results.length;
-    const headingLine = ok(
-      `✅ Broadcast complete (${okCount}/${total} succeeded, ${total - okCount} failed)`,
+    const successful = outcome.ok;
+    const headingLine = (successful ? ok : fail)(
+      `${successful ? "✅ Broadcast complete" : "❌ Broadcast failed"} (${okCount}/${total} succeeded, ${total - okCount} failed)`,
     );
     return [
       headingLine,
       renderTable({
-        width: opts.width,
+        width: formatOpts.width,
         columns: [
           { key: "Channel", header: "Channel", minWidth: 10 },
           { key: "Target", header: "Target", minWidth: 12, flex: true },
           { key: "Status", header: "Status", minWidth: 6 },
           { key: "Error", header: "Error", minWidth: 20, flex: true },
         ],
-        rows: rows.slice(0, 50),
+        rows,
       }).trimEnd(),
     ];
+  }
+
+  if (!outcome.ok) {
+    const messageId = result.kind === "send" ? result.sendResult?.result?.messageId : undefined;
+    return [fail(`❌ ${outcome.error}${messageId ? ` Message ID: ${messageId}` : ""}`)];
   }
 
   if (result.kind === "send") {
@@ -297,7 +280,7 @@ export function formatMessageCliText(result: MessageActionRunResult): string[] {
     }
 
     const label = resolveChannelLabel(result.channel);
-    const msgId = extractMessageId(result.payload);
+    const msgId = resolveMessageActionMessageId(result.payload);
     return [ok(`✅ Sent via ${label}.${msgId ? ` Message ID: ${msgId}` : ""}`)];
   }
 
@@ -306,6 +289,22 @@ export function formatMessageCliText(result: MessageActionRunResult): string[] {
       const poll = result.pollResult;
       const pollId = (poll.result as { pollId?: string } | undefined)?.pollId;
       const msgId = poll.result?.messageId ?? null;
+      if (poll.via === "direct") {
+        const directResult = poll.result
+          ? ({ ...poll.result, channel: poll.channel } satisfies OutboundDeliveryResult)
+          : undefined;
+        const lines = [
+          ok(
+            formatOutboundDeliverySummary(poll.channel, directResult, {
+              action: "Poll sent",
+            }),
+          ),
+        ];
+        if (pollId) {
+          lines.push(ok(`Poll id: ${pollId}`));
+        }
+        return lines;
+      }
       const lines = [
         ok(
           formatGatewaySummary({
@@ -322,11 +321,12 @@ export function formatMessageCliText(result: MessageActionRunResult): string[] {
     }
 
     const label = resolveChannelLabel(result.channel);
-    const msgId = extractMessageId(result.payload);
+    const msgId = resolveMessageActionMessageId(result.payload);
     return [ok(`✅ Poll sent via ${label}.${msgId ? ` Message ID: ${msgId}` : ""}`)];
   }
 
-  // channel actions (non-send/poll)
+  // Channel actions share the generic plugin-action payload shape, so format
+  // known read/reaction shapes first and fall back to a compact object table.
   const payload = result.payload;
   const lines: string[] = [];
 
@@ -350,27 +350,27 @@ export function formatMessageCliText(result: MessageActionRunResult): string[] {
     return lines;
   }
 
-  const reactionsTable = renderReactions(payload, opts);
-  if (reactionsTable && result.action === "reactions") {
+  const reactionsTable = renderReactions(payload, formatOpts);
+  if (reactionsTable !== null && result.action === "reactions") {
     lines.push(heading("Reactions"));
-    lines.push(reactionsTable[0] ?? "");
+    lines.push(reactionsTable);
     return lines;
   }
 
-  if (result.action === "read") {
-    const messagesTable = renderMessagesFromPayload(payload, opts);
-    if (messagesTable) {
-      lines.push(heading("Messages"));
-      lines.push(messagesTable[0] ?? "");
-      return lines;
-    }
-  }
-
-  if (result.action === "list-pins") {
-    const pinsTable = renderPinsFromPayload(payload, opts);
-    if (pinsTable) {
-      lines.push(heading("Pinned messages"));
-      lines.push(pinsTable[0] ?? "");
+  if (result.action === "read" || result.action === "list-pins") {
+    const read = result.action === "read";
+    const messages =
+      payload && typeof payload === "object"
+        ? (payload as { messages?: unknown; pins?: unknown })[read ? "messages" : "pins"]
+        : undefined;
+    if (Array.isArray(messages)) {
+      const table = renderMessageList(messages, formatOpts, read ? "No messages." : "No pins.");
+      lines.push(heading(read ? "Messages" : "Pinned messages"));
+      lines.push(table);
+      const hint = renderPaginationHint(payload, muted);
+      if (hint) {
+        lines.push(hint);
+      }
       return lines;
     }
   }
@@ -380,19 +380,22 @@ export function formatMessageCliText(result: MessageActionRunResult): string[] {
     const list = extractDiscordSearchResultsMessages(results);
     if (list) {
       lines.push(heading("Search results"));
-      lines.push(renderMessageList(list, opts, "No results.")[0] ?? "");
+      lines.push(renderMessageList(list, formatOpts, "No results."));
+      // Discord's approximate result count cannot prove another page exists.
+      const hint = renderPaginationHint(payload, muted) ?? renderPaginationHint(results, muted);
+      if (hint) {
+        lines.push(hint);
+      }
       return lines;
     }
   }
 
   // Generic success + compact details table.
   lines.push(ok(`✅ ${result.action} via ${resolveChannelLabel(result.channel)}.`));
-  const summary = renderObjectSummary(payload, opts);
-  if (summary.length) {
-    lines.push("");
-    lines.push(...summary);
-    lines.push("");
-    lines.push(muted("Tip: use --json for full output."));
-  }
+  const summary = renderObjectSummary(payload, formatOpts);
+  lines.push("");
+  lines.push(summary);
+  lines.push("");
+  lines.push(muted("Tip: use --json for full output."));
   return lines;
 }

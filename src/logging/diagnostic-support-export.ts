@@ -1,10 +1,18 @@
+// Diagnostic support export helpers write support bundles to disk.
 import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { isChannelConfigMetadataKey } from "../channels/config-metadata.js";
+import { INCLUDE_KEY } from "../config/includes.js";
 import { parseConfigJson5 } from "../config/io.js";
 import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
 import { redactConfigObject } from "../config/redact-snapshot.js";
+import { buildConfigSchemaCore } from "../config/schema.js";
+import { isMissingPathError } from "../infra/errors.js";
 import { resolveHomeRelativePath } from "../infra/home-dir.js";
+import { readRegularFileSync } from "../infra/regular-file.js";
+import { parseBooleanValue } from "../utils/boolean.js";
 import { VERSION } from "../version.js";
 import {
   readDiagnosticStabilityBundleFileSync,
@@ -31,16 +39,19 @@ import {
 } from "./diagnostic-support-redaction.js";
 import { readConfiguredLogTail, type LogTailPayload } from "./log-tail.js";
 
-export const DIAGNOSTIC_SUPPORT_EXPORT_VERSION = 1;
+const DIAGNOSTIC_SUPPORT_EXPORT_VERSION = 1;
 
 const DEFAULT_LOG_LIMIT = 5000;
 const DEFAULT_LOG_MAX_BYTES = 1_000_000;
+// Support export must remain usable when the config is corrupt or unexpectedly
+// large. This defensive ceiling is not the product's general config-file limit.
+const SUPPORT_EXPORT_CONFIG_MAX_BYTES = 8 * 1024 * 1024;
 const SUPPORT_EXPORT_PREFIX = "openclaw-diagnostics-";
 const SUPPORT_EXPORT_SUFFIX = ".zip";
 type Awaitable<T> = T | Promise<T>;
 type SupportSnapshotReader = () => Awaitable<unknown>;
 
-export type DiagnosticSupportExportOptions = {
+type DiagnosticSupportExportOptions = {
   outputPath?: string;
   cwd?: string;
   env?: NodeJS.ProcessEnv;
@@ -54,7 +65,7 @@ export type DiagnosticSupportExportOptions = {
   readHealthSnapshot?: SupportSnapshotReader;
 };
 
-export type DiagnosticSupportExportManifest = {
+type DiagnosticSupportExportManifest = {
   version: typeof DIAGNOSTIC_SUPPORT_EXPORT_VERSION;
   generatedAt: string;
   openclawVersion: string;
@@ -70,9 +81,9 @@ export type DiagnosticSupportExportManifest = {
   };
 };
 
-export type DiagnosticSupportExportFile = DiagnosticSupportBundleFile;
+type DiagnosticSupportExportFile = DiagnosticSupportBundleFile;
 
-export type DiagnosticSupportExportArtifact = {
+type DiagnosticSupportExportArtifact = {
   manifest: DiagnosticSupportExportManifest;
   files: DiagnosticSupportExportFile[];
 };
@@ -97,6 +108,10 @@ type ConfigShape = {
     port?: unknown;
     authMode?: unknown;
     tailscale?: unknown;
+  };
+  discovery?: {
+    mdnsMode?: unknown;
+    bonjourEnvOverride: "unset" | "force-enabled" | "force-disabled" | "unrecognized";
   };
   channels?: {
     count: number;
@@ -134,6 +149,21 @@ type FailedSanitizedLogTail = Omit<IncludedSanitizedLogTail, "status"> & {
 
 type SanitizedLogTail = IncludedSanitizedLogTail | FailedSanitizedLogTail;
 
+type BonjourLogSummary = {
+  count: number;
+  warnings: number;
+  last?: {
+    time?: string;
+    level?: string;
+    kind: "disabled" | "restarted" | "ciao_suppressed" | "conflict" | "watchdog" | "other";
+  };
+  flags: {
+    disabled: boolean;
+    restarted: boolean;
+    ciaoSuppressed: boolean;
+  };
+};
+
 type SupportSnapshotStatus =
   | {
       status: "included";
@@ -165,13 +195,6 @@ function normalizePositiveInteger(value: unknown, fallback: number): number {
   return Math.floor(parsed);
 }
 
-function asRecord(value: unknown): Record<string, unknown> | undefined {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return undefined;
-  }
-  return value as Record<string, unknown>;
-}
-
 function safeScalar(value: unknown): unknown {
   if (typeof value === "boolean") {
     return value;
@@ -186,17 +209,40 @@ function safeScalar(value: unknown): unknown {
   return undefined;
 }
 
-function sortedObjectKeys(value: unknown): string[] {
-  return Object.keys(asRecord(value) ?? {}).toSorted((a, b) => a.localeCompare(b));
+function resolveBonjourEnvOverride(
+  env: NodeJS.ProcessEnv,
+): NonNullable<ConfigShape["discovery"]>["bonjourEnvOverride"] {
+  const raw = env.OPENCLAW_DISABLE_BONJOUR?.trim();
+  if (!raw) {
+    return "unset";
+  }
+  const disabled = parseBooleanValue(raw);
+  if (disabled === true) {
+    return "force-disabled";
+  }
+  return disabled === false ? "force-enabled" : "unrecognized";
 }
 
-function sanitizeConfigShape(parsed: unknown, configPath: string, stat: fs.Stats): ConfigShape {
-  const root = asRecord(parsed) ?? {};
-  const gateway = asRecord(root.gateway);
-  const auth = asRecord(gateway?.auth);
-  const channels = asRecord(root.channels);
-  const plugins = asRecord(root.plugins);
-  const agents = Array.isArray(root.agents) ? root.agents : undefined;
+function sortedConfigEntryKeys(value: unknown): string[] {
+  return Object.keys(asOptionalRecord(value) ?? {})
+    .filter((key) => key !== INCLUDE_KEY)
+    .toSorted((a, b) => a.localeCompare(b));
+}
+
+function sanitizeConfigShape(
+  parsed: unknown,
+  configPath: string,
+  stat: fs.Stats,
+  env: NodeJS.ProcessEnv,
+): ConfigShape {
+  const root = asOptionalRecord(parsed) ?? {};
+  const gateway = asOptionalRecord(root.gateway);
+  const auth = asOptionalRecord(gateway?.auth);
+  const discovery = asOptionalRecord(root.discovery);
+  const mdns = asOptionalRecord(discovery?.mdns);
+  const channels = asOptionalRecord(root.channels);
+  const plugins = asOptionalRecord(root.plugins);
+  const agents = asOptionalRecord(asOptionalRecord(root.agents)?.entries);
 
   const shape: ConfigShape = {
     path: configPath,
@@ -204,7 +250,7 @@ function sanitizeConfigShape(parsed: unknown, configPath: string, stat: fs.Stats
     parseOk: true,
     bytes: stat.size,
     mtime: stat.mtime.toISOString(),
-    topLevelKeys: sortedObjectKeys(root),
+    topLevelKeys: Object.keys(root).toSorted((a, b) => a.localeCompare(b)),
   };
 
   if (gateway) {
@@ -213,33 +259,40 @@ function sanitizeConfigShape(parsed: unknown, configPath: string, stat: fs.Stats
       bind: safeScalar(gateway.bind),
       port: safeScalar(gateway.port),
       authMode: safeScalar(auth?.mode),
-      tailscale: safeScalar(gateway.tailscale),
+      tailscale: safeScalar(asOptionalRecord(gateway.tailscale)?.mode),
+    };
+  }
+
+  const bonjourEnvOverride = resolveBonjourEnvOverride(env);
+  if (mdns || bonjourEnvOverride !== "unset") {
+    shape.discovery = {
+      mdnsMode: safeScalar(mdns?.mode),
+      bonjourEnvOverride,
     };
   }
 
   if (channels) {
-    shape.channels = {
-      count: Object.keys(channels).length,
-      ids: sortedObjectKeys(channels),
-    };
+    const ids = sortedConfigEntryKeys(channels).filter((key) => !isChannelConfigMetadataKey(key));
+    shape.channels = { count: ids.length, ids };
   }
 
   if (plugins) {
-    shape.plugins = {
-      count: Object.keys(plugins).length,
-      ids: sortedObjectKeys(plugins),
-    };
+    const ids = sortedConfigEntryKeys(plugins.entries);
+    shape.plugins = { count: ids.length, ids };
   }
 
   if (agents) {
-    shape.agents = { count: agents.length };
+    shape.agents = { count: sortedConfigEntryKeys(agents).length };
   }
 
   return shape;
 }
 
 function sanitizeConfigDetails(parsed: unknown, redaction: SupportRedactionContext): unknown {
-  return sanitizeSupportConfigValue(redactConfigObject(parsed), redaction);
+  return sanitizeSupportConfigValue(
+    redactConfigObject(parsed, buildConfigSchemaCore().uiHints),
+    redaction,
+  );
 }
 
 function configShapeReadFailure(params: {
@@ -264,13 +317,6 @@ function configShapeReadFailure(params: {
   return shape;
 }
 
-function isMissingPathError(error: unknown): boolean {
-  if (!error || typeof error !== "object" || !("code" in error)) {
-    return false;
-  }
-  return error.code === "ENOENT" || error.code === "ENOTDIR";
-}
-
 function configReadErrorMessage(error: unknown, stat?: fs.Stats): string | undefined {
   if (!stat && isMissingPathError(error)) {
     return undefined;
@@ -287,7 +333,11 @@ function readConfigExport(options: {
   let stat: fs.Stats | undefined;
   try {
     stat = fs.statSync(options.configPath);
-    const parsed = parseConfigJson5(fs.readFileSync(options.configPath, "utf8"));
+    const { buffer } = readRegularFileSync({
+      filePath: options.configPath,
+      maxBytes: SUPPORT_EXPORT_CONFIG_MAX_BYTES,
+    });
+    const parsed = parseConfigJson5(buffer.toString("utf8"));
     if (!parsed.ok) {
       return {
         shape: configShapeReadFailure({
@@ -299,7 +349,7 @@ function readConfigExport(options: {
       };
     }
     return {
-      shape: sanitizeConfigShape(parsed.parsed, redactedConfigPath, stat),
+      shape: sanitizeConfigShape(parsed.parsed, redactedConfigPath, stat, options.env),
       sanitized: sanitizeConfigDetails(parsed.parsed, options),
     };
   } catch (error) {
@@ -403,6 +453,73 @@ function failedLogTail(error: unknown, redaction: SupportRedactionContext): Sani
   };
 }
 
+function logString(record: Record<string, unknown>, key: string): string | undefined {
+  const value = record[key];
+  return typeof value === "string" && value.trim() ? value : undefined;
+}
+
+function isBonjourLogRecord(record: Record<string, unknown>): boolean {
+  const sourceFields = ["subsystem", "logger", "module", "pluginId", "component"];
+  if (sourceFields.some((field) => logString(record, field)?.toLowerCase().includes("bonjour"))) {
+    return true;
+  }
+  return logString(record, "msg")?.toLowerCase().startsWith("bonjour:") === true;
+}
+
+function classifyBonjourLogKind(
+  normalizedMsg: string,
+): NonNullable<BonjourLogSummary["last"]>["kind"] {
+  if (normalizedMsg.includes("disabling")) {
+    return "disabled";
+  }
+  if (normalizedMsg.includes("restarting")) {
+    return "restarted";
+  }
+  if (normalizedMsg.includes("suppressing ciao")) {
+    return "ciao_suppressed";
+  }
+  if (normalizedMsg.includes("conflict")) {
+    return "conflict";
+  }
+  if (normalizedMsg.includes("watchdog")) {
+    return "watchdog";
+  }
+  return "other";
+}
+
+function summarizeBonjourLogs(logTail: SanitizedLogTail): BonjourLogSummary {
+  const summary: BonjourLogSummary = {
+    count: 0,
+    warnings: 0,
+    flags: {
+      disabled: false,
+      restarted: false,
+      ciaoSuppressed: false,
+    },
+  };
+  for (const record of logTail.lines) {
+    if (!isBonjourLogRecord(record)) {
+      continue;
+    }
+    summary.count += 1;
+    const level = logString(record, "level")?.toLowerCase();
+    if (level === "warn" || level === "error") {
+      summary.warnings += 1;
+    }
+    const msg = logString(record, "msg");
+    const normalizedMsg = msg?.toLowerCase() ?? "";
+    summary.flags.disabled ||= normalizedMsg.includes("disabling");
+    summary.flags.restarted ||= normalizedMsg.includes("restarting");
+    summary.flags.ciaoSuppressed ||= normalizedMsg.includes("suppressing ciao");
+    summary.last = {
+      ...(logString(record, "time") ? { time: logString(record, "time") } : {}),
+      ...(logString(record, "level") ? { level: logString(record, "level") } : {}),
+      kind: classifyBonjourLogKind(normalizedMsg),
+    };
+  }
+  return summary;
+}
+
 async function collectSupportLogTail(params: {
   readLogTail: typeof readConfiguredLogTail;
   limit: number;
@@ -498,7 +615,7 @@ function renderSummary(params: {
     "## Maintainer Quick Read",
     "",
     "- `manifest.json`: file inventory and privacy notes",
-    "- `diagnostics.json`: top-level summary of config, logs, stability, status, and health",
+    "- `diagnostics.json`: top-level summary of config, logs, Bonjour/mDNS, stability, status, and health",
     "- `config/sanitized.json`: config values with credentials, private identifiers, and prompt text redacted",
     "- `status/gateway-status.json`: sanitized service/connectivity snapshot",
     "- `health/gateway-health.json`: sanitized Gateway health snapshot",
@@ -551,7 +668,7 @@ function resolveOutputPath(options: {
   return resolved;
 }
 
-export async function buildDiagnosticSupportExport(
+async function buildDiagnosticSupportExport(
   options: DiagnosticSupportExportOptions = {},
 ): Promise<DiagnosticSupportExportArtifact> {
   const env = options.env ?? process.env;
@@ -602,6 +719,7 @@ export async function buildDiagnosticSupportExport(
       reset: logTail.reset,
     },
     stability: describeStabilityForDiagnostics(stability, redaction),
+    bonjour: summarizeBonjourLogs(logTail),
     status: statusSnapshot.summary,
     health: healthSnapshot.summary,
   };
@@ -679,14 +797,15 @@ export async function writeDiagnosticSupportExport(
     now,
   });
   const artifact = await buildDiagnosticSupportExport({ ...options, env, stateDir, now });
-  const bytes = await writeSupportBundleZip({
+  const published = await writeSupportBundleZip({
     outputPath,
     files: artifact.files,
     compressionLevel: 6,
   });
   return {
-    path: outputPath,
-    bytes,
+    path: published.path,
+    bytes: published.bytes,
     manifest: artifact.manifest,
   };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

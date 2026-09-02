@@ -3,12 +3,8 @@
 
 export type { AllowlistMatch } from "openclaw/plugin-sdk/allow-from";
 export type { ChannelGroupContext } from "openclaw/plugin-sdk/channel-contract";
-export { logInboundDrop } from "openclaw/plugin-sdk/channel-logging";
+export { logInboundDrop } from "openclaw/plugin-sdk/channel-inbound";
 export { createChannelPairingController } from "openclaw/plugin-sdk/channel-pairing";
-export {
-  readStoreAllowFromForDmPolicy,
-  resolveDmGroupAccessWithCommandGate,
-} from "openclaw/plugin-sdk/channel-policy";
 export type {
   BlockStreamingCoalesceConfig,
   DmConfig,
@@ -16,14 +12,14 @@ export type {
   GroupPolicy,
   GroupToolPolicyConfig,
   OpenClawConfig,
-} from "openclaw/plugin-sdk/config-types";
+} from "openclaw/plugin-sdk/config-contracts";
 export {
   GROUP_POLICY_BLOCKED_LABEL,
   resolveAllowlistProviderRuntimeGroupPolicy,
   resolveDefaultGroupPolicy,
   warnMissingProviderGroupPolicyFallbackOnce,
 } from "openclaw/plugin-sdk/runtime-group-policy";
-export { dispatchChannelMessageReplyWithBase } from "openclaw/plugin-sdk/channel-message";
+export { createChannelMessageReplyPipeline } from "openclaw/plugin-sdk/channel-outbound";
 export type { OutboundReplyPayload } from "openclaw/plugin-sdk/reply-payload";
 export { deliverFormattedTextWithAttachments } from "openclaw/plugin-sdk/reply-payload";
 export type { PluginRuntime } from "openclaw/plugin-sdk/runtime-store";

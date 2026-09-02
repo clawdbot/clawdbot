@@ -21,7 +21,8 @@ Context is _not the same thing_ as "memory": memory can be stored on disk and re
 
 - `/status` → quick "how full is my window?" view + session settings.
 - `/context list` → what's injected + rough sizes (per file + totals).
-- `/context detail` → deeper breakdown: per-file, per-tool schema sizes, per-skill entry sizes, and system prompt size.
+- `/context detail` → deeper breakdown: per-file, per-tool schema sizes, per-skill entry sizes, system prompt size, and compactable transcript message counts.
+- `/context map` → WinDirStat-style treemap image of the current session's tracked context contributors.
 - `/usage tokens` → append per-reply usage footer to normal replies.
 - `/compact` → summarize older history into a compact entry to free window space.
 
@@ -33,7 +34,7 @@ Values vary by model, provider, tool policy, and what's in your workspace.
 
 ### `/context list`
 
-```
+```text
 🧠 Context breakdown
 Workspace: <workspaceDir>
 Bootstrap max/file: 12,000 chars
@@ -43,10 +44,8 @@ System prompt (run): 38,412 chars (~9,603 tok) (Project Context 23,901 chars (~5
 Injected workspace files:
 - AGENTS.md: OK | raw 1,742 chars (~436 tok) | injected 1,742 chars (~436 tok)
 - SOUL.md: OK | raw 912 chars (~228 tok) | injected 912 chars (~228 tok)
-- TOOLS.md: TRUNCATED | raw 54,210 chars (~13,553 tok) | injected 20,962 chars (~5,241 tok)
 - IDENTITY.md: OK | raw 211 chars (~53 tok) | injected 211 chars (~53 tok)
 - USER.md: OK | raw 388 chars (~97 tok) | injected 388 chars (~97 tok)
-- HEARTBEAT.md: MISSING | raw 0 | injected 0
 - BOOTSTRAP.md: OK | raw 0 chars (~0 tok) | injected 0 chars (~0 tok)
 
 Skills list (system prompt text): 2,184 chars (~546 tok) (12 skills)
@@ -60,7 +59,7 @@ Session tokens (cached): 14,250 total / ctx=32,000
 
 ### `/context detail`
 
-```
+```text
 🧠 Context breakdown (detailed)
 …
 Top skills (prompt entry size):
@@ -73,6 +72,20 @@ Top tools (schema size):
 - exec: 6,240 chars (~1,560 tok)
 … (+N more tools)
 ```
+
+### `/context map`
+
+Sends an image generated from the latest cached run report plus the session transcript. Before a normal message has produced a run report in the session, `/context map` returns an unavailable message instead of rendering an estimate. Rectangle area is proportional to tracked prompt characters:
+
+- conversation transcript (user messages, assistant replies, tool results, compaction summaries), plus per-turn runtime context and hook prompt additions that reach only the model
+- injected workspace files
+- base system prompt text
+- skill prompt entries
+- tool JSON schemas
+
+The conversation group grows as the session does, so the map changes turn over turn; after compaction it collapses into a summaries tile.
+
+`/context list`, `/context detail`, and `/context json` can still inspect an on-demand estimate when no run report is cached.
 
 ## What counts toward the context window
 
@@ -104,15 +117,13 @@ By default, OpenClaw injects a fixed set of workspace files (if present):
 
 - `AGENTS.md`
 - `SOUL.md`
-- `TOOLS.md`
 - `IDENTITY.md`
 - `USER.md`
-- `HEARTBEAT.md`
 - `BOOTSTRAP.md` (first-run only)
 
-Large files are truncated per-file using `agents.defaults.bootstrapMaxChars` (default `12000` chars). OpenClaw also enforces a total bootstrap injection cap across files with `agents.defaults.bootstrapTotalMaxChars` (default `60000` chars). `/context` shows **raw vs injected** sizes and whether truncation happened.
+Large files are truncated per-file using `agents.defaults.bootstrapMaxChars` (default `20000` chars). OpenClaw also enforces a total bootstrap injection cap across files with `agents.defaults.bootstrapTotalMaxChars` (default `60000` chars). `/context` shows **raw vs injected** sizes and whether truncation happened.
 
-When truncation occurs, the runtime can inject an in-prompt warning block under Project Context. Configure this with `agents.defaults.bootstrapPromptTruncationWarning` (`off`, `once`, `always`; default `once`).
+When truncation occurs, the runtime injects a concise in-prompt notice under Project Context saying some bootstrap files were truncated; per-file names and sizes stay in `/context` and other diagnostics. This notice is built in and not configurable.
 
 ## Skills: injected vs loaded on-demand
 
@@ -134,7 +145,7 @@ Tools affect context in two ways:
 Slash commands are handled by the Gateway. There are a few different behaviors:
 
 - **Standalone commands**: a message that is only `/...` runs as a command.
-- **Directives**: `/think`, `/verbose`, `/trace`, `/reasoning`, `/elevated`, `/model`, `/queue` are stripped before the model sees the message.
+- **Directives**: `/think`, `/fast`, `/verbose`, `/trace`, `/reasoning`, `/elevated`, `/exec`, `/model`, `/queue` are stripped before the model sees the message.
   - Directive-only messages persist session settings.
   - Inline directives in a normal message act as per-message hints.
 - **Inline shortcuts** (allowlisted senders only): certain `/...` tokens inside a normal message can run immediately (example: "hey /status"), and are stripped before the model sees the remaining text.
@@ -148,6 +159,13 @@ What persists across messages depends on the mechanism:
 - **Normal history** persists in the session transcript until compacted/pruned by policy.
 - **Compaction** persists a summary into the transcript and keeps recent messages intact.
 - **Pruning** drops old tool results from the _in-memory_ prompt to free context-window space, but does not rewrite the session transcript - the full history is still inspectable on disk.
+
+For embedded Responses requests, current request metadata stays after the user
+message or compaction checkpoint and before its tool calls. This lets supported transports reuse the
+previous response across tool rounds without dropping live context. A later user
+turn that retires transient context requires the updated history to be resent.
+Other transports keep that metadata at the request tail to preserve their cached
+history prefix when the next user turn removes it.
 
 Docs: [Session](/concepts/session), [Compaction](/concepts/compaction), [Session pruning](/concepts/session-pruning).
 
@@ -167,7 +185,7 @@ pluggable interface, lifecycle hooks, and configuration.
 - `System prompt (run)` = captured from the last embedded (tool-capable) run and persisted in the session store.
 - `System prompt (estimate)` = computed on the fly when no run report exists (or when running via a CLI backend that doesn't generate the report).
 
-Either way, it reports sizes and top contributors; it does **not** dump the full system prompt or tool schemas.
+Either way, it reports sizes and top contributors; it does **not** dump the full system prompt or tool schemas. In detailed mode, it also compares the session transcript with the same real-conversation message predicate used by compaction, so high prompt/cache usage is easier to distinguish from compactable conversation history.
 
 ## Related
 

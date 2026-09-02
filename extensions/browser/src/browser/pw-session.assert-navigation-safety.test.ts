@@ -1,3 +1,4 @@
+// Browser tests cover pw session.assert navigation safety plugin behavior.
 import type { Page } from "playwright-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { SsrFBlockedError } from "../infra/net/ssrf.js";
@@ -36,6 +37,17 @@ function fakePage(url = "https://blocked.example/admin"): {
     close,
   } as unknown as Page;
   return { page, close };
+}
+
+function firstNavigationResultRequest(): Parameters<
+  typeof assertBrowserNavigationResultAllowed
+>[0] {
+  const [call] = mockedResultAllowed.mock.calls;
+  if (!call) {
+    throw new Error("Expected navigation result guard call");
+  }
+  const [request] = call;
+  return request;
 }
 
 describe("assertPageNavigationCompletedSafely", () => {
@@ -117,8 +129,7 @@ describe("assertPageNavigationCompletedSafely", () => {
     ).resolves.toBeUndefined();
 
     expect(close).not.toHaveBeenCalled();
-    expect(mockedResultAllowed).toHaveBeenCalledWith(
-      expect.objectContaining({ url: "https://allowed.example/" }),
-    );
+    expect(mockedResultAllowed).toHaveBeenCalledTimes(1);
+    expect(firstNavigationResultRequest().url).toBe("https://allowed.example/");
   });
 });

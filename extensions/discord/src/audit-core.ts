@@ -1,11 +1,12 @@
+// Discord plugin module implements audit core behavior.
 import { ChannelType } from "discord-api-types/v10";
 import type {
   DiscordGuildChannelConfig,
   DiscordGuildEntry,
   OpenClawConfig,
-} from "openclaw/plugin-sdk/config-types";
+} from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
+import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 type DiscordChannelPermissionsAuditEntry = {
   channelId: string;
@@ -82,7 +83,7 @@ function listConfiguredGuildChannelKeys(
   return [...ids].toSorted((a, b) => a.localeCompare(b));
 }
 
-export function collectDiscordAuditChannelIdsForGuilds(
+function collectDiscordAuditChannelIdsForGuilds(
   guilds: Record<string, DiscordGuildEntry> | undefined,
 ) {
   const keys = listConfiguredGuildChannelKeys(guilds);

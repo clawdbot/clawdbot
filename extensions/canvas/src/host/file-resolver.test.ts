@@ -1,8 +1,11 @@
+// Canvas tests cover file resolver plugin behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { resolvePreferredOpenClawTmpDir, withTempWorkspace } from "openclaw/plugin-sdk/temp-path";
 import { describe, expect, it } from "vitest";
-import { normalizeUrlPath, resolveFileWithinRoot } from "./file-resolver.js";
+import { resolveFileWithinRoot } from "./file-resolver.js";
+
+type ResolvedFile = NonNullable<Awaited<ReturnType<typeof resolveFileWithinRoot>>>;
 
 async function withCanvasTemp<T>(prefix: string, run: (dir: string) => Promise<T>): Promise<T> {
   return await withTempWorkspace(
@@ -11,30 +14,44 @@ async function withCanvasTemp<T>(prefix: string, run: (dir: string) => Promise<T
   );
 }
 
-describe("resolveFileWithinRoot", () => {
-  it("normalizes URL paths", () => {
-    expect(normalizeUrlPath("/nested/../file.txt")).toBe("/file.txt");
-    expect(normalizeUrlPath("plain.txt")).toBe("/plain.txt");
-  });
+function expectResolvedFile(
+  result: Awaited<ReturnType<typeof resolveFileWithinRoot>>,
+): ResolvedFile {
+  if (result === null) {
+    throw new Error("Expected resolved file within root");
+  }
+  expect(typeof result.handle.close).toBe("function");
+  expect(typeof result.handle.readFile).toBe("function");
+  return result;
+}
 
+describe("resolveFileWithinRoot", () => {
   it("opens directory index files through the fs-safe root", async () => {
     await withCanvasTemp("openclaw-canvas-resolver-", async (root) => {
       await fs.mkdir(path.join(root, "docs"), { recursive: true });
       await fs.writeFile(path.join(root, "docs", "index.html"), "<h1>docs</h1>");
 
       const result = await resolveFileWithinRoot(root, "/docs");
-      expect(result).not.toBeNull();
+      const resolved = expectResolvedFile(result);
       try {
-        await expect(result?.handle.readFile({ encoding: "utf8" })).resolves.toBe("<h1>docs</h1>");
+        await expect(resolved.handle.readFile({ encoding: "utf8" })).resolves.toBe("<h1>docs</h1>");
       } finally {
-        await result?.handle.close().catch(() => {});
+        await resolved.handle.close().catch(() => {});
       }
     });
   });
 
   it("rejects traversal paths", async () => {
     await withCanvasTemp("openclaw-canvas-resolver-", async (root) => {
+      await fs.writeFile(path.join(root, "outside.txt"), "inside-root", "utf8");
       await expect(resolveFileWithinRoot(root, "/../outside.txt")).resolves.toBeNull();
+      await expect(resolveFileWithinRoot(root, "/%2e%2e%2foutside.txt")).resolves.toBeNull();
+    });
+  });
+
+  it("rejects malformed URL encoding as a missing file", async () => {
+    await withCanvasTemp("openclaw-canvas-resolver-", async (root) => {
+      await expect(resolveFileWithinRoot(root, "/%E0%A4%A")).resolves.toBeNull();
     });
   });
 

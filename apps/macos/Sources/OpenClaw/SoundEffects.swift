@@ -3,12 +3,12 @@ import Foundation
 
 enum SoundEffectCatalog {
     /// All discoverable system sound names, with "Glass" pinned first.
-    static var systemOptions: [String] {
+    static let systemOptions: [String] = {
         var names = Set(Self.discoveredSoundMap.keys).union(Self.fallbackNames)
         names.remove("Glass")
         let sorted = names.sorted { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }
         return ["Glass"] + sorted
-    }
+    }()
 
     static func displayName(for raw: String) -> String {
         raw

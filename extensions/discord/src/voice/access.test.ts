@@ -1,5 +1,5 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
-import type { DiscordAccountConfig } from "openclaw/plugin-sdk/config-types";
+// Discord tests cover access plugin behavior.
+import type { DiscordAccountConfig, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { describe, expect, it } from "vitest";
 import { authorizeDiscordVoiceIngress } from "./access.js";
 
@@ -62,8 +62,25 @@ describe("authorizeDiscordVoiceIngress", () => {
       },
     });
 
-    expect(access).toMatchObject({ ok: true });
-    expect(access.ok && access.channelConfig?.users).toEqual(["discord:u-owner"]);
+    expect(access).toEqual({
+      ok: true,
+      channelConfig: {
+        allowed: true,
+        requireMention: undefined,
+        ignoreOtherMentions: undefined,
+        skills: undefined,
+        enabled: undefined,
+        users: ["discord:u-owner"],
+        roles: undefined,
+        systemPrompt: undefined,
+        includeThreadStarter: undefined,
+        autoThread: undefined,
+        autoThreadName: undefined,
+        autoArchiveDuration: undefined,
+        matchKey: "c1",
+        matchSource: "direct",
+      },
+    });
   });
 
   it("allows slug-keyed guild configs when manager context only has guild name", async () => {
@@ -92,7 +109,25 @@ describe("authorizeDiscordVoiceIngress", () => {
       },
     });
 
-    expect(access).toMatchObject({ ok: true });
+    expect(access).toEqual({
+      ok: true,
+      channelConfig: {
+        allowed: true,
+        requireMention: undefined,
+        ignoreOtherMentions: undefined,
+        skills: undefined,
+        enabled: undefined,
+        users: ["discord:u-owner"],
+        roles: undefined,
+        systemPrompt: undefined,
+        includeThreadStarter: undefined,
+        autoThread: undefined,
+        autoThreadName: undefined,
+        autoArchiveDuration: undefined,
+        matchKey: "*",
+        matchSource: "wildcard",
+      },
+    });
   });
 
   it("allows wildcard guild configs when only the guild id is available", async () => {
@@ -120,7 +155,25 @@ describe("authorizeDiscordVoiceIngress", () => {
       },
     });
 
-    expect(access).toMatchObject({ ok: true });
+    expect(access).toEqual({
+      ok: true,
+      channelConfig: {
+        allowed: true,
+        requireMention: undefined,
+        ignoreOtherMentions: undefined,
+        skills: undefined,
+        enabled: undefined,
+        users: ["discord:u-owner"],
+        roles: undefined,
+        systemPrompt: undefined,
+        includeThreadStarter: undefined,
+        autoThread: undefined,
+        autoThreadName: undefined,
+        autoArchiveDuration: undefined,
+        matchKey: "*",
+        matchSource: "wildcard",
+      },
+    });
   });
 
   it("blocks commands when channel id is unavailable for an allowlisted channel", async () => {
@@ -187,7 +240,7 @@ describe("authorizeDiscordVoiceIngress", () => {
     });
   });
 
-  it("uses resolved account owner allowFrom over merged Discord config", async () => {
+  it("uses resolved account command allowFrom over merged Discord config", async () => {
     const access = await authorizeDiscordVoiceIngress({
       cfg: baseCfg,
       discordConfig: {
@@ -205,13 +258,31 @@ describe("authorizeDiscordVoiceIngress", () => {
       channelId: "c1",
       channelSlug: "",
       memberRoleIds: [],
-      ownerAllowFrom: ["discord:u-account"],
+      admissionAllowFrom: ["discord:u-account"],
       sender: {
         id: "u-account",
         name: "owner",
       },
     });
 
-    expect(access).toMatchObject({ ok: true });
+    expect(access).toEqual({
+      ok: true,
+      channelConfig: {
+        allowed: true,
+        requireMention: undefined,
+        ignoreOtherMentions: undefined,
+        skills: undefined,
+        enabled: undefined,
+        users: undefined,
+        roles: undefined,
+        systemPrompt: undefined,
+        includeThreadStarter: undefined,
+        autoThread: undefined,
+        autoThreadName: undefined,
+        autoArchiveDuration: undefined,
+        matchKey: "c1",
+        matchSource: "direct",
+      },
+    });
   });
 });

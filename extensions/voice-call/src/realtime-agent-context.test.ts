@@ -1,9 +1,11 @@
+// Voice Call tests cover realtime agent context plugin behavior.
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawPluginApi } from "../api.js";
 import type { VoiceCallConfig } from "./config.js";
-import type { CoreAgentDeps, CoreConfig } from "./core-bridge.js";
 import { buildRealtimeVoiceInstructions } from "./realtime-agent-context.js";
 import { createVoiceCallBaseConfig } from "./test-fixtures.js";
 
@@ -43,7 +45,7 @@ function createConfig(overrides?: Partial<VoiceCallConfig["realtime"]>): VoiceCa
   return config;
 }
 
-function createAgentRuntime(workspaceDir: string): CoreAgentDeps {
+function createAgentRuntime(workspaceDir: string): OpenClawPluginApi["runtime"]["agent"] {
   return {
     resolveAgentIdentity: vi.fn(() => ({
       name: "Claw Voice",
@@ -53,21 +55,17 @@ function createAgentRuntime(workspaceDir: string): CoreAgentDeps {
       creature: "operator",
     })),
     resolveAgentWorkspaceDir: vi.fn(() => workspaceDir),
-  } as unknown as CoreAgentDeps;
+  } as unknown as OpenClawPluginApi["runtime"]["agent"];
 }
 
 describe("buildRealtimeVoiceInstructions", () => {
-  it("injects bounded identity, system prompt, and workspace context", async () => {
+  it("injects bounded identity and workspace context", async () => {
     const workspaceDir = await createWorkspace();
     await writeFile(path.join(workspaceDir, "SOUL.md"), "Stay quick, direct, and warm.\n");
     await writeFile(path.join(workspaceDir, "IDENTITY.md"), "Name: Claw Voice\nVibe: snappy\n");
     await writeFile(path.join(workspaceDir, "SECRET.md"), "do not include\n");
 
-    const coreConfig = {
-      agents: {
-        list: [{ id: "voice", systemPromptOverride: "Keep spoken answers short." }],
-      },
-    } as CoreConfig;
+    const coreConfig = { agents: { list: [{ id: "voice" }] } } as OpenClawConfig;
 
     const instructions = await buildRealtimeVoiceInstructions({
       baseInstructions: "Base voice instructions.",
@@ -77,13 +75,13 @@ describe("buildRealtimeVoiceInstructions", () => {
           enabled: true,
           maxChars: 2000,
           includeIdentity: true,
-          includeSystemPrompt: true,
           includeWorkspaceFiles: true,
           files: ["SOUL.md", "IDENTITY.md", "../SECRET.md"],
         },
       }),
       coreConfig,
       agentRuntime: createAgentRuntime(workspaceDir),
+      agentId: "voice",
     });
 
     expect(instructions).toContain("OpenClaw agent voice context:");
@@ -92,10 +90,34 @@ describe("buildRealtimeVoiceInstructions", () => {
     expect(instructions).toContain("- Agent id: voice");
     expect(instructions).toContain("- Name: Claw Voice");
     expect(instructions).toContain("- Vibe: snappy");
-    expect(instructions).toContain("Keep spoken answers short.");
     expect(instructions).toContain("### SOUL.md");
     expect(instructions).toContain("Stay quick, direct, and warm.");
     expect(instructions).toContain("### IDENTITY.md");
     expect(instructions).not.toContain("do not include");
+  });
+
+  it("truncates injected context without splitting UTF-16 surrogate pairs", async () => {
+    const agentId = "abc🚀tail";
+    const expectedContext = "OpenClaw agent voice context:\n\n- Agent id: abc";
+    const config = createConfig({
+      agentContext: {
+        enabled: true,
+        maxChars: expectedContext.length + 33,
+        includeIdentity: false,
+        includeWorkspaceFiles: false,
+        files: [],
+      },
+    });
+    config.agentId = agentId;
+
+    const instructions = await buildRealtimeVoiceInstructions({
+      baseInstructions: "Base voice instructions.",
+      config,
+      coreConfig: { agents: { list: [{ id: agentId }] } } as OpenClawConfig,
+      agentRuntime: createAgentRuntime("/unused"),
+      agentId,
+    });
+
+    expect(instructions).toBe(`Base voice instructions.\n\n${expectedContext}\n[truncated]`);
   });
 });

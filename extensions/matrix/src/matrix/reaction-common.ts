@@ -1,3 +1,4 @@
+// Matrix plugin module implements reaction common behavior.
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 export const MATRIX_ANNOTATION_RELATION_TYPE = "m.annotation";

@@ -33,6 +33,7 @@ on:
       - "packages/plugin-package-contract/**"
       - "packages/plugin-sdk/**"
       - "packages/memory-host-sdk/**"
+      - "packages/net-policy/**"
       - "src/*.ts"
       - "src/**/*.ts"
       - "src/config/**"
@@ -48,7 +49,6 @@ on:
       - "extensions/nextcloud-talk/src/**"
       - "extensions/nostr/src/**"
       - "extensions/qa-channel/src/**"
-      - "extensions/qqbot/src/**"
       - "extensions/signal/src/**"
       - "extensions/slack/src/**"
       - "extensions/synology-chat/src/**"
@@ -71,7 +71,9 @@ on:
       - "src/acp/control-plane/**"
       - "src/agents/cli-runner/**"
       - "src/agents/command/**"
-      - "src/agents/pi-embedded-runner/**"
+      - "src/agents/embedded-agent-runner/**"
+      - "src/agents/sessions/**"
+      - "src/agents/sessions/tools/**"
       - "src/agents/tools/**"
       - "src/agents/*completion*.ts"
       - "src/agents/*transport*.ts"
@@ -93,7 +95,7 @@ on:
       - "src/auto-reply/reply/post-compaction-context.ts"
       - "src/auto-reply/reply/queue/**"
       - "src/auto-reply/reply/startup-context.ts"
-      - "src/commands/doctor-cron-dreaming-payload-migration.ts"
+      - "src/commands/doctor/cron/dreaming-payload-migration.ts"
       - "src/commands/doctor-memory-search.ts"
       - "src/commands/doctor-session-*.ts"
       - "src/commands/session-store-targets.ts"
@@ -104,13 +106,12 @@ on:
       - "src/gateway/**/*auth*.ts"
       - "src/gateway/*secret*.ts"
       - "src/gateway/**/*secret*.ts"
-      - "src/gateway/protocol/**/*secret*.ts"
+      - "packages/gateway-protocol/src/**/*secret*.ts"
       - "src/gateway/resolve-configured-secret-input-string*.ts"
       - "src/gateway/security-path*.ts"
       - "src/gateway/server-methods/secrets*.ts"
-      - "src/gateway/server-startup-memory.ts"
       - "src/gateway/method-scopes.ts"
-      - "src/gateway/protocol/**"
+      - "packages/gateway-protocol/src/**"
       - "src/gateway/server-methods/**"
       - "src/gateway/server-methods.ts"
       - "src/gateway/server-methods-list.ts"
@@ -133,7 +134,7 @@ on:
     - cron: "30 6 * * *"
 
 concurrency:
-  group: codeql-critical-quality-${{ github.workflow }}-${{ github.event_name == 'workflow_dispatch' && github.run_id || github.event_name == 'pull_request' && github.event.pull_request.number || github.sha }}
+  group: codeql-critical-quality-${{ github.workflow }}-${{ github.event_name == 'workflow_dispatch' && format('manual-{0}', github.run_id) || github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || format('ref-{0}', github.ref) }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
@@ -149,7 +150,7 @@ jobs:
   quality-shards:
     name: Select Critical Quality shards
     if: ${{ github.event_name != 'pull_request' || !github.event.pull_request.draft }}
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     outputs:
       agent: ${{ steps.detect.outputs.agent }}
@@ -205,8 +206,13 @@ jobs:
             network_runtime=true
             session_diagnostics=true
           else
+            # Complete the fetch before the loop so API failures cannot select zero shards.
+            changed_files="$(gh api --paginate "repos/${REPOSITORY}/pulls/${PR_NUMBER}/files" --jq '.[].filename')"
             while IFS= read -r file; do
               case "${file}" in
+                .github/codeql/codeql-network-runtime-boundary-critical-quality.yml|.github/codeql/openclaw-boundary/queries/raw-socket-callsite-classification.ql|.github/codeql/openclaw-boundary/queries/managed-proxy-runtime-mutation.ql|.github/codeql/openclaw-boundary/tests/network-runtime/*)
+                  network_runtime=true
+                  ;;
                 .github/codeql/*|.github/workflows/codeql-critical-quality.yml)
                   agent=true
                   channel=true
@@ -219,32 +225,39 @@ jobs:
                   plugin_sdk_package=true
                   plugin_sdk_reply=true
                   provider=true
-                  network_runtime=true
                   session_diagnostics=true
                   ;;
-                src/acp/control-plane/*|src/agents/cli-runner/*|src/agents/command/*|src/agents/pi-embedded-runner/*|src/agents/tools/*|src/agents/*completion*.ts|src/agents/*transport*.ts|src/agents/model-*.ts|src/agents/openclaw-tools*.ts|src/agents/provider-*.ts|src/agents/session*.ts|src/agents/tool-call*.ts|src/auto-reply/reply/agent-runner*.ts|src/auto-reply/reply/commands*.ts|src/auto-reply/reply/directive-handling*.ts|src/auto-reply/reply/dispatch-*.ts|src/auto-reply/reply/get-reply-run*.ts|src/auto-reply/reply/provider-dispatcher*.ts|src/auto-reply/reply/queue*.ts|src/auto-reply/reply/reply-run-registry*.ts|src/auto-reply/reply/session*.ts)
+                src/agents/sessions/tools/*)
+                  agent=true
+                  mcp_process=true
+                  ;;
+                src/agents/sessions/*auth*.ts|src/agents/sessions/**/*auth*.ts)
+                  agent=true
+                  core_auth_secrets=true
+                  ;;
+                src/acp/control-plane/*|src/agents/cli-runner/*|src/agents/command/*|src/agents/embedded-agent-runner/*|src/agents/sessions/*|src/agents/tools/*|src/agents/*completion*.ts|src/agents/*transport*.ts|src/agents/model-*.ts|src/agents/openclaw-tools*.ts|src/agents/provider-*.ts|src/agents/session*.ts|src/agents/tool-call*.ts|src/auto-reply/reply/agent-runner*.ts|src/auto-reply/reply/commands*.ts|src/auto-reply/reply/directive-handling*.ts|src/auto-reply/reply/dispatch-*.ts|src/auto-reply/reply/get-reply-run*.ts|src/auto-reply/reply/provider-dispatcher*.ts|src/auto-reply/reply/queue*.ts|src/auto-reply/reply/reply-run-registry*.ts|src/auto-reply/reply/session*.ts)
                   agent=true
                   ;;
                 src/auto-reply/reply/post-compaction-context.ts|src/auto-reply/reply/queue/*|src/auto-reply/reply/startup-context.ts|src/commands/doctor-session-*.ts|src/commands/session-store-targets.ts|src/commands/sessions*.ts|src/infra/diagnostic-*.ts|src/infra/diagnostics-timeline.ts|src/infra/session-delivery-queue*.ts|src/logging/diagnostic*.ts)
                   session_diagnostics=true
                   ;;
-                extensions/discord/src/*|extensions/feishu/src/*|extensions/googlechat/src/*|extensions/imessage/src/*|extensions/irc/src/*|extensions/line/src/*|extensions/matrix/src/*|extensions/mattermost/src/*|extensions/msteams/src/*|extensions/nextcloud-talk/src/*|extensions/nostr/src/*|extensions/qa-channel/src/*|extensions/qqbot/src/*|extensions/signal/src/*|extensions/slack/src/*|extensions/synology-chat/src/*|extensions/telegram/src/*|extensions/tlon/src/*|extensions/twitch/src/*|extensions/whatsapp/src/*|extensions/zalo/src/*|extensions/zalouser/src/*|src/channels/*)
+                extensions/discord/src/*|extensions/feishu/src/*|extensions/googlechat/src/*|extensions/imessage/src/*|extensions/irc/src/*|extensions/line/src/*|extensions/matrix/src/*|extensions/mattermost/src/*|extensions/msteams/src/*|extensions/nextcloud-talk/src/*|extensions/nostr/src/*|extensions/qa-channel/src/*|extensions/signal/src/*|extensions/slack/src/*|extensions/synology-chat/src/*|extensions/telegram/src/*|extensions/tlon/src/*|extensions/twitch/src/*|extensions/whatsapp/src/*|extensions/zalo/src/*|extensions/zalouser/src/*|src/channels/*)
                   channel=true
                   ;;
                 src/config/*)
                   config=true
                   ;;
-                src/gateway/protocol/*secret*.ts|src/gateway/server-methods/secrets*.ts)
+                packages/gateway-protocol/src/*secret*.ts|packages/gateway-protocol/src/**/*secret*.ts|src/gateway/server-methods/secrets*.ts)
                   core_auth_secrets=true
                   gateway=true
                   ;;
                 src/agents/*auth*.ts|src/agents/auth-health*.ts|src/agents/auth-profiles|src/agents/auth-profiles/*|src/agents/bash-tools.exec-host-shared.ts|src/agents/sandbox|src/agents/sandbox.ts|src/agents/sandbox-*.ts|src/agents/sandbox/*|src/cron/service/jobs.ts|src/cron/stagger.ts|src/gateway/*auth*.ts|src/gateway/*secret*.ts|src/gateway/resolve-configured-secret-input-string*.ts|src/gateway/security-path*.ts|src/infra/secret-file*.ts|src/secrets/*|src/security/*)
                   core_auth_secrets=true
                   ;;
-                src/gateway/method-scopes.ts|src/gateway/protocol/*|src/gateway/server-methods/*|src/gateway/server-methods.ts|src/gateway/server-methods-list.ts)
+                packages/gateway-protocol/src/*|packages/gateway-protocol/src/**/*|src/gateway/method-scopes.ts|src/gateway/server-methods/*|src/gateway/server-methods.ts|src/gateway/server-methods-list.ts)
                   gateway=true
                   ;;
-                packages/memory-host-sdk/*|src/commands/doctor-cron-dreaming-payload-migration.ts|src/commands/doctor-memory-search.ts|src/gateway/server-startup-memory.ts|src/memory/*|src/memory-host-sdk/*)
+                packages/memory-host-sdk/*|src/commands/doctor/cron/dreaming-payload-migration.ts|src/commands/doctor-memory-search.ts|src/memory/*|src/memory-host-sdk/*)
                   memory=true
                   ;;
                 src/infra/outbound/base-session-key.ts|src/infra/outbound/delivery-queue*.ts|src/infra/outbound/outbound-session.ts|src/infra/outbound/session-binding*.ts|src/infra/outbound/session-context.ts|src/infra/outbound/targets-session.ts)
@@ -282,7 +295,7 @@ jobs:
                 src/model-catalog/*|src/plugins/*provider*.ts|src/plugins/capability-provider-runtime.ts|src/plugins/compaction-provider.ts|src/plugins/memory-embedding-provider*.ts|src/plugins/memory-embedding-providers*.ts|src/plugins/migration-provider-runtime.ts|src/plugins/synthetic-auth.runtime.ts|src/plugins/web-fetch-providers*.ts|src/plugins/web-search-providers*.ts)
                   provider=true
                   ;;
-                src/plugins/activation-planner.ts|src/plugins/api-builder.ts|src/plugins/bundled-*.ts|src/plugins/captured-registration.ts|src/plugins/config-*.ts|src/plugins/discovery.ts|src/plugins/effective-plugin-ids.ts|src/plugins/externalized-bundled-plugins.ts|src/plugins/installed-plugin-index*.ts|src/plugins/loader*.ts|src/plugins/manifest*.ts|src/plugins/module-export.ts|src/plugins/package-entrypoints.ts|src/plugins/plugin-registry*.ts|src/plugins/public-surface*.ts|src/plugins/registry.ts|src/plugins/registry-types.ts|src/plugins/runtime|src/plugins/runtime/*|src/plugins/runtime-state.ts|src/plugins/runtime.ts|src/plugins/sdk-alias.ts|src/plugins/source-loader.ts|src/plugins/types.ts|src/plugins/validation-diagnostics.ts)
+                src/plugins/activation-planner.ts|src/plugins/api-builder.ts|src/plugins/bundled-*.ts|src/plugins/captured-registration.ts|src/plugins/config-*.ts|src/plugins/discovery.ts|src/plugins/effective-plugin-ids.ts|src/plugins/externalized-bundled-plugins.ts|src/plugins/installed-plugin-index*.ts|src/plugins/loader*.ts|src/plugins/manifest*.ts|src/plugins/module-export.ts|src/plugins/package-entrypoints.ts|src/plugins/plugin-registry*.ts|src/plugins/public-surface*.ts|src/plugins/registry.ts|src/plugins/registry-types.ts|src/plugins/runtime|src/plugins/runtime/*|src/plugins/runtime-state.ts|src/plugins/runtime.ts|src/plugins/sdk-alias.ts|src/plugins/types.ts|src/plugins/validation-diagnostics.ts)
                   plugin=true
                   ;;
                 packages/plugin-package-contract/*|packages/plugin-sdk/*)
@@ -291,11 +304,13 @@ jobs:
               esac
 
               case "${file}" in
-                src/*.ts|src/**/*.ts|extensions/*.ts|extensions/**/*.ts)
+                src/**/*.test.ts|src/**/*.test.tsx|extensions/**/*.test.ts|extensions/**/*.test.tsx)
+                  ;;
+                packages/net-policy/src/*|packages/net-policy/src/**/*|src/cli/gateway-cli/run-loop.ts|src/infra/net/*|src/infra/net/**/*|src/infra/ssh-tunnel.ts|src/infra/gateway-lock.ts|src/infra/jsonl-socket.ts|src/infra/push-apns-http2.ts|src/proxy-capture/*|src/proxy-capture/**/*|extensions/codex/src/app-server/transport-websocket.ts|extensions/irc/src/*|extensions/qa-lab/src/*)
                   network_runtime=true
                   ;;
               esac
-            done < <(gh api --paginate "repos/${REPOSITORY}/pulls/${PR_NUMBER}/files" --jq '.[].filename')
+            done <<< "$changed_files"
           fi
 
           {
@@ -318,22 +333,22 @@ jobs:
     name: Critical Quality (core-auth-secrets)
     needs: quality-shards
     if: ${{ needs.quality-shards.outputs.core_auth_secrets == 'true' && (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (github.event_name == 'pull_request' || github.event_name != 'workflow_dispatch' || inputs.profile == 'all' || inputs.profile == 'core-auth-secrets') }}
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     timeout-minutes: 25
     steps:
       - name: Checkout
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           submodules: false
 
       - name: Initialize CodeQL
-        uses: github/codeql-action/init@95e58e9a2cdfd71adc6e0353d5c52f41a045d225 # v4
+        uses: github/codeql-action/init@ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd # v4.37.7
         with:
           languages: javascript-typescript
           config-file: ./.github/codeql/codeql-core-auth-secrets-critical-quality.yml
 
       - name: Analyze
-        uses: github/codeql-action/analyze@95e58e9a2cdfd71adc6e0353d5c52f41a045d225 # v4
+        uses: github/codeql-action/analyze@ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd # v4.37.7
         with:
           category: "/codeql-critical-quality/core-auth-secrets"
 
@@ -341,22 +356,22 @@ jobs:
     name: Critical Quality (config-boundary)
     needs: quality-shards
     if: ${{ needs.quality-shards.outputs.config == 'true' && (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (github.event_name == 'pull_request' || github.event_name != 'workflow_dispatch' || inputs.profile == 'all' || inputs.profile == 'config-boundary') }}
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     timeout-minutes: 25
     steps:
       - name: Checkout
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           submodules: false
 
       - name: Initialize CodeQL
-        uses: github/codeql-action/init@95e58e9a2cdfd71adc6e0353d5c52f41a045d225 # v4
+        uses: github/codeql-action/init@ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd # v4.37.7
         with:
           languages: javascript-typescript
           config-file: ./.github/codeql/codeql-config-boundary-critical-quality.yml
 
       - name: Analyze
-        uses: github/codeql-action/analyze@95e58e9a2cdfd71adc6e0353d5c52f41a045d225 # v4
+        uses: github/codeql-action/analyze@ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd # v4.37.7
         with:
           category: "/codeql-critical-quality/config-boundary"
 
@@ -364,22 +379,22 @@ jobs:
     name: Critical Quality (gateway-runtime-boundary)
     needs: quality-shards
     if: ${{ needs.quality-shards.outputs.gateway == 'true' && (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (github.event_name == 'pull_request' || github.event_name != 'workflow_dispatch' || inputs.profile == 'all' || inputs.profile == 'gateway-runtime-boundary') }}
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     timeout-minutes: 25
     steps:
       - name: Checkout
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           submodules: false
 
       - name: Initialize CodeQL
-        uses: github/codeql-action/init@95e58e9a2cdfd71adc6e0353d5c52f41a045d225 # v4
+        uses: github/codeql-action/init@ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd # v4.37.7
         with:
           languages: javascript-typescript
           config-file: ./.github/codeql/codeql-gateway-runtime-boundary-critical-quality.yml
 
       - name: Analyze
-        uses: github/codeql-action/analyze@95e58e9a2cdfd71adc6e0353d5c52f41a045d225 # v4
+        uses: github/codeql-action/analyze@ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd # v4.37.7
         with:
           category: "/codeql-critical-quality/gateway-runtime-boundary"
 
@@ -387,22 +402,22 @@ jobs:
     name: Critical Quality (channel-runtime-boundary)
     needs: quality-shards
     if: ${{ needs.quality-shards.outputs.channel == 'true' && (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (github.event_name == 'pull_request' || github.event_name != 'workflow_dispatch' || inputs.profile == 'all' || inputs.profile == 'channel-runtime-boundary') }}
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     timeout-minutes: 25
     steps:
       - name: Checkout
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           submodules: false
 
       - name: Initialize CodeQL
-        uses: github/codeql-action/init@95e58e9a2cdfd71adc6e0353d5c52f41a045d225 # v4
+        uses: github/codeql-action/init@ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd # v4.37.7
         with:
           languages: javascript-typescript
           config-file: ./.github/codeql/codeql-channel-runtime-boundary-critical-quality.yml
 
       - name: Analyze
-        uses: github/codeql-action/analyze@95e58e9a2cdfd71adc6e0353d5c52f41a045d225 # v4
+        uses: github/codeql-action/analyze@ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd # v4.37.7
         with:
           category: "/codeql-critical-quality/channel-runtime-boundary"
 
@@ -410,28 +425,91 @@ jobs:
     name: Critical Quality (network-runtime-boundary)
     needs: quality-shards
     if: ${{ needs.quality-shards.outputs.network_runtime == 'true' && (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (github.event_name == 'pull_request' || github.event_name != 'workflow_dispatch' || inputs.profile == 'all' || inputs.profile == 'network-runtime-boundary') }}
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     timeout-minutes: 25
     steps:
       - name: Checkout
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           submodules: false
 
+      - name: Fast PR network boundary diff scan
+        id: network-diff-scan
+        if: ${{ github.event_name == 'pull_request' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+
+          file_metadata="$(mktemp)"
+          changed_files="$(mktemp)"
+          monitored_sources="$(mktemp)"
+          added_lines="$(mktemp)"
+          trap 'rm -f "$file_metadata" "$changed_files" "$monitored_sources" "$added_lines"' EXIT
+          codex_transport="extensions/codex/src/app-server/transport-websocket.ts"
+          network_codeql_contract_pattern='^\.github/codeql/(codeql-network-runtime-boundary-critical-quality\.yml|openclaw-boundary/queries/(raw-socket-callsite-classification|managed-proxy-runtime-mutation)\.ql)$'
+
+          gh api --paginate "repos/${REPOSITORY}/pulls/${PR_NUMBER}/files" > "$file_metadata"
+          jq -r '.[].filename' "$file_metadata" > "$changed_files"
+          jq -c '
+            .[]
+            | select(.filename | test("^(src/cli/gateway-cli/run-loop\\.ts|src/infra/(gateway-lock|jsonl-socket|push-apns-http2|ssh-tunnel)\\.ts|src/infra/net/|src/proxy-capture/|extensions/codex/src/app-server/transport-websocket\\.ts|extensions/irc/src/|extensions/qa-lab/src/|packages/net-policy/src/)"))
+            | select(.filename | test("(^|/)[^/]+\\.(?:e2e\\.)?test\\.tsx?$") | not)
+          ' "$file_metadata" > "$monitored_sources"
+          # GitHub patch data is optional; an unknown source diff cannot prove a safe skip.
+          missing_patch="$(jq -s 'any(.[]; .patch == null)' "$monitored_sources")"
+          jq -r '
+            select(.patch != null)
+            | .filename as $file
+            | .patch
+            | split("\n")[]
+            | select(startswith("+") and (startswith("+++") | not))
+            | "\($file): \(.)"
+          ' "$monitored_sources" > "$added_lines"
+
+          # Query/config/fixture edits need semantic analysis; the diff scan cannot validate QL.
+          # The Codex transport also has an exact owner/function allowlist in the query.
+          # Sensitive added lines select the same gate; failing here would skip it.
+          if grep -Eq "$network_codeql_contract_pattern" "$changed_files" || \
+             grep -Eq '^\.github/codeql/openclaw-boundary/tests/network-runtime/' "$changed_files" || \
+             grep -Fxq "$codex_transport" "$changed_files" || \
+             [ "$missing_patch" = true ] || \
+             grep -En 'HTTP_PROXY|HTTPS_PROXY|NO_PROXY|GLOBAL_AGENT_|OPENCLAW_PROXY_' "$added_lines" || \
+             grep -En '(from|require\().*["'\''](node:)?(net|tls|http2)["'\'']|\b(net|tls|http2)\.(connect|createConnection)\b|new Socket\(' "$added_lines"; then
+            echo "Network runtime boundary-sensitive added lines, unavailable source patches or contract edits require full CodeQL review." >&2
+            echo "full_codeql=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "full_codeql=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Initialize CodeQL
-        uses: github/codeql-action/init@95e58e9a2cdfd71adc6e0353d5c52f41a045d225 # v4
+        id: init-network-codeql
+        if: ${{ github.event_name != 'pull_request' || steps.network-diff-scan.outputs.full_codeql == 'true' }}
+        uses: github/codeql-action/init@ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd # v4.37.7
         with:
           languages: javascript-typescript
           config-file: ./.github/codeql/codeql-network-runtime-boundary-critical-quality.yml
 
+      - name: Test network boundary queries
+        if: ${{ github.event_name != 'pull_request' || steps.network-diff-scan.outputs.full_codeql == 'true' }}
+        env:
+          CODEQL_PATH: ${{ steps.init-network-codeql.outputs.codeql-path }}
+        run: |
+          set -euo pipefail
+          "$CODEQL_PATH" test run --show-extractor-output .github/codeql/openclaw-boundary/tests/network-runtime
+
       - name: Analyze
         id: analyze
-        uses: github/codeql-action/analyze@95e58e9a2cdfd71adc6e0353d5c52f41a045d225 # v4
+        if: ${{ github.event_name != 'pull_request' || steps.network-diff-scan.outputs.full_codeql == 'true' }}
+        uses: github/codeql-action/analyze@ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd # v4.37.7
         with:
           output: sarif-results
           category: "/codeql-critical-quality/network-runtime-boundary"
 
       - name: Fail on network runtime boundary findings
+        if: ${{ github.event_name != 'pull_request' || steps.network-diff-scan.outputs.full_codeql == 'true' }}
         env:
           SARIF_OUTPUT: sarif-results
         run: |
@@ -466,22 +544,22 @@ jobs:
     name: Critical Quality (agent-runtime-boundary)
     needs: quality-shards
     if: ${{ needs.quality-shards.outputs.agent == 'true' && (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (github.event_name == 'pull_request' || github.event_name != 'workflow_dispatch' || inputs.profile == 'all' || inputs.profile == 'agent-runtime-boundary') }}
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     timeout-minutes: 25
     steps:
       - name: Checkout
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           submodules: false
 
       - name: Initialize CodeQL
-        uses: github/codeql-action/init@95e58e9a2cdfd71adc6e0353d5c52f41a045d225 # v4
+        uses: github/codeql-action/init@ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd # v4.37.7
         with:
           languages: javascript-typescript
           config-file: ./.github/codeql/codeql-agent-runtime-boundary-critical-quality.yml
 
       - name: Analyze
-        uses: github/codeql-action/analyze@95e58e9a2cdfd71adc6e0353d5c52f41a045d225 # v4
+        uses: github/codeql-action/analyze@ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd # v4.37.7
         with:
           category: "/codeql-critical-quality/agent-runtime-boundary"
 
@@ -489,22 +567,22 @@ jobs:
     name: Critical Quality (mcp-process-runtime-boundary)
     needs: quality-shards
     if: ${{ needs.quality-shards.outputs.mcp_process == 'true' && (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (github.event_name == 'pull_request' || github.event_name != 'workflow_dispatch' || inputs.profile == 'all' || inputs.profile == 'mcp-process-runtime-boundary') }}
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     timeout-minutes: 25
     steps:
       - name: Checkout
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           submodules: false
 
       - name: Initialize CodeQL
-        uses: github/codeql-action/init@95e58e9a2cdfd71adc6e0353d5c52f41a045d225 # v4
+        uses: github/codeql-action/init@ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd # v4.37.7
         with:
           languages: javascript-typescript
           config-file: ./.github/codeql/codeql-mcp-process-runtime-boundary-critical-quality.yml
 
       - name: Analyze
-        uses: github/codeql-action/analyze@95e58e9a2cdfd71adc6e0353d5c52f41a045d225 # v4
+        uses: github/codeql-action/analyze@ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd # v4.37.7
         with:
           category: "/codeql-critical-quality/mcp-process-runtime-boundary"
 
@@ -512,22 +590,22 @@ jobs:
     name: Critical Quality (memory-runtime-boundary)
     needs: quality-shards
     if: ${{ needs.quality-shards.outputs.memory == 'true' && (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (github.event_name == 'pull_request' || github.event_name != 'workflow_dispatch' || inputs.profile == 'all' || inputs.profile == 'memory-runtime-boundary') }}
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     timeout-minutes: 25
     steps:
       - name: Checkout
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           submodules: false
 
       - name: Initialize CodeQL
-        uses: github/codeql-action/init@95e58e9a2cdfd71adc6e0353d5c52f41a045d225 # v4
+        uses: github/codeql-action/init@ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd # v4.37.7
         with:
           languages: javascript-typescript
           config-file: ./.github/codeql/codeql-memory-runtime-boundary-critical-quality.yml
 
       - name: Analyze
-        uses: github/codeql-action/analyze@95e58e9a2cdfd71adc6e0353d5c52f41a045d225 # v4
+        uses: github/codeql-action/analyze@ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd # v4.37.7
         with:
           category: "/codeql-critical-quality/memory-runtime-boundary"
 
@@ -535,22 +613,22 @@ jobs:
     name: Critical Quality (session-diagnostics-boundary)
     needs: quality-shards
     if: ${{ needs.quality-shards.outputs.session_diagnostics == 'true' && (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (github.event_name == 'pull_request' || github.event_name != 'workflow_dispatch' || inputs.profile == 'all' || inputs.profile == 'session-diagnostics-boundary') }}
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     timeout-minutes: 25
     steps:
       - name: Checkout
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           submodules: false
 
       - name: Initialize CodeQL
-        uses: github/codeql-action/init@95e58e9a2cdfd71adc6e0353d5c52f41a045d225 # v4
+        uses: github/codeql-action/init@ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd # v4.37.7
         with:
           languages: javascript-typescript
           config-file: ./.github/codeql/codeql-session-diagnostics-boundary-critical-quality.yml
 
       - name: Analyze
-        uses: github/codeql-action/analyze@95e58e9a2cdfd71adc6e0353d5c52f41a045d225 # v4
+        uses: github/codeql-action/analyze@ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd # v4.37.7
         with:
           category: "/codeql-critical-quality/session-diagnostics-boundary"
 
@@ -558,22 +636,22 @@ jobs:
     name: Critical Quality (plugin-sdk-reply-runtime)
     needs: quality-shards
     if: ${{ needs.quality-shards.outputs.plugin_sdk_reply == 'true' && (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (github.event_name == 'pull_request' || github.event_name != 'workflow_dispatch' || inputs.profile == 'all' || inputs.profile == 'plugin-sdk-reply-runtime') }}
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     timeout-minutes: 25
     steps:
       - name: Checkout
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           submodules: false
 
       - name: Initialize CodeQL
-        uses: github/codeql-action/init@95e58e9a2cdfd71adc6e0353d5c52f41a045d225 # v4
+        uses: github/codeql-action/init@ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd # v4.37.7
         with:
           languages: javascript-typescript
           config-file: ./.github/codeql/codeql-plugin-sdk-reply-runtime-critical-quality.yml
 
       - name: Analyze
-        uses: github/codeql-action/analyze@95e58e9a2cdfd71adc6e0353d5c52f41a045d225 # v4
+        uses: github/codeql-action/analyze@ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd # v4.37.7
         with:
           category: "/codeql-critical-quality/plugin-sdk-reply-runtime"
 
@@ -581,66 +659,66 @@ jobs:
     name: Critical Quality (provider-runtime-boundary)
     needs: quality-shards
     if: ${{ needs.quality-shards.outputs.provider == 'true' && (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (github.event_name == 'pull_request' || github.event_name != 'workflow_dispatch' || inputs.profile == 'all' || inputs.profile == 'provider-runtime-boundary') }}
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     timeout-minutes: 25
     steps:
       - name: Checkout
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           submodules: false
 
       - name: Initialize CodeQL
-        uses: github/codeql-action/init@95e58e9a2cdfd71adc6e0353d5c52f41a045d225 # v4
+        uses: github/codeql-action/init@ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd # v4.37.7
         with:
           languages: javascript-typescript
           config-file: ./.github/codeql/codeql-provider-runtime-boundary-critical-quality.yml
 
       - name: Analyze
-        uses: github/codeql-action/analyze@95e58e9a2cdfd71adc6e0353d5c52f41a045d225 # v4
+        uses: github/codeql-action/analyze@ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd # v4.37.7
         with:
           category: "/codeql-critical-quality/provider-runtime-boundary"
 
   ui-control-plane:
     name: Critical Quality (ui-control-plane)
     if: ${{ github.event_name != 'pull_request' && (github.event_name != 'workflow_dispatch' || inputs.profile == 'all') }}
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     timeout-minutes: 25
     steps:
       - name: Checkout
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           submodules: false
 
       - name: Initialize CodeQL
-        uses: github/codeql-action/init@95e58e9a2cdfd71adc6e0353d5c52f41a045d225 # v4
+        uses: github/codeql-action/init@ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd # v4.37.7
         with:
           languages: javascript-typescript
           config-file: ./.github/codeql/codeql-ui-control-plane-critical-quality.yml
 
       - name: Analyze
-        uses: github/codeql-action/analyze@95e58e9a2cdfd71adc6e0353d5c52f41a045d225 # v4
+        uses: github/codeql-action/analyze@ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd # v4.37.7
         with:
           category: "/codeql-critical-quality/ui-control-plane"
 
   web-media-runtime-boundary:
     name: Critical Quality (web-media-runtime-boundary)
     if: ${{ github.event_name != 'pull_request' && (github.event_name != 'workflow_dispatch' || inputs.profile == 'all') }}
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     timeout-minutes: 25
     steps:
       - name: Checkout
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           submodules: false
 
       - name: Initialize CodeQL
-        uses: github/codeql-action/init@95e58e9a2cdfd71adc6e0353d5c52f41a045d225 # v4
+        uses: github/codeql-action/init@ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd # v4.37.7
         with:
           languages: javascript-typescript
           config-file: ./.github/codeql/codeql-web-media-runtime-boundary-critical-quality.yml
 
       - name: Analyze
-        uses: github/codeql-action/analyze@95e58e9a2cdfd71adc6e0353d5c52f41a045d225 # v4
+        uses: github/codeql-action/analyze@ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd # v4.37.7
         with:
           category: "/codeql-critical-quality/web-media-runtime-boundary"
 
@@ -648,22 +726,22 @@ jobs:
     name: Critical Quality (plugin-boundary)
     needs: quality-shards
     if: ${{ needs.quality-shards.outputs.plugin == 'true' && (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (github.event_name == 'pull_request' || github.event_name != 'workflow_dispatch' || inputs.profile == 'all' || inputs.profile == 'plugin-boundary') }}
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     timeout-minutes: 25
     steps:
       - name: Checkout
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           submodules: false
 
       - name: Initialize CodeQL
-        uses: github/codeql-action/init@95e58e9a2cdfd71adc6e0353d5c52f41a045d225 # v4
+        uses: github/codeql-action/init@ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd # v4.37.7
         with:
           languages: javascript-typescript
           config-file: ./.github/codeql/codeql-plugin-boundary-critical-quality.yml
 
       - name: Analyze
-        uses: github/codeql-action/analyze@95e58e9a2cdfd71adc6e0353d5c52f41a045d225 # v4
+        uses: github/codeql-action/analyze@ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd # v4.37.7
         with:
           category: "/codeql-critical-quality/plugin-boundary"
 
@@ -671,21 +749,21 @@ jobs:
     name: Critical Quality (plugin-sdk-package-contract)
     needs: quality-shards
     if: ${{ needs.quality-shards.outputs.plugin_sdk_package == 'true' && (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (github.event_name == 'pull_request' || github.event_name != 'workflow_dispatch' || inputs.profile == 'all' || inputs.profile == 'plugin-sdk-package-contract') }}
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     timeout-minutes: 25
     steps:
       - name: Checkout
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           submodules: false
 
       - name: Initialize CodeQL
-        uses: github/codeql-action/init@95e58e9a2cdfd71adc6e0353d5c52f41a045d225 # v4
+        uses: github/codeql-action/init@ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd # v4.37.7
         with:
           languages: javascript-typescript
           config-file: ./.github/codeql/codeql-plugin-sdk-package-contract-critical-quality.yml
 
       - name: Analyze
-        uses: github/codeql-action/analyze@95e58e9a2cdfd71adc6e0353d5c52f41a045d225 # v4
+        uses: github/codeql-action/analyze@ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd # v4.37.7
         with:
           category: "/codeql-critical-quality/plugin-sdk-package-contract"

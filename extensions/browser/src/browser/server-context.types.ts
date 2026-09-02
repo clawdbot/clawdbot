@@ -1,17 +1,26 @@
+/**
+ * Shared Browser server context types used by route handlers and profile
+ * operation factories.
+ */
 import type { Server } from "node:http";
+import type { ChromeMcpPageProbe } from "./chrome-mcp-contracts.js";
 import type { RunningChrome } from "./chrome.js";
-import type { BrowserTab, BrowserTransport } from "./client.types.js";
+import type { BrowserOpenResult, BrowserTab, BrowserTransport } from "./client.types.js";
 import type { ResolvedBrowserConfig, ResolvedBrowserProfile } from "./config.js";
+import type { BrowserErrorResponse } from "./errors.js";
+import type { ExtensionRelayResource } from "./extension-relay/relay-access.js";
 
 export type { BrowserTab };
 
-/**
- * Runtime state for a single profile's Chrome instance.
- */
+export type BrowserTabTargetOptions = BrowserOperationOptions & {
+  /** Resolve only the raw target-id namespace for an id already selected internally. */
+  exactTargetId?: true;
+};
+
+/** Runtime state for a single profile's Chrome instance. */
 export type ProfileRuntimeState = {
   profile: ResolvedBrowserProfile;
   running: RunningChrome | null;
-  ensureBrowserAvailable?: { key: string; promise: Promise<void> } | null;
   managedLaunchFailure?: {
     consecutiveFailures: number;
     lastFailureAt: number;
@@ -25,48 +34,73 @@ export type ProfileRuntimeState = {
     nextTabNumber: number;
     byTargetId: Record<string, { tabId: string; label?: string; url?: string }>;
   };
-  reconcile?: {
-    previousProfile: ResolvedBrowserProfile;
-    reason: string;
-  } | null;
 };
 
+/** Runtime state for the Browser control server. */
 export type BrowserServerState = {
   server?: Server | null;
   port: number;
   resolved: ResolvedBrowserConfig;
   profiles: Map<string, ProfileRuntimeState>;
+  /** Running extension relay servers keyed by profile name (extension driver). */
+  extensionRelays?: Map<string, ExtensionRelayResource>;
   stopTrackedTabCleanup?: () => void;
   stopUnhandledRejectionHandler?: () => void;
 };
 
+export type BrowserOperationOptions = {
+  signal?: AbortSignal;
+  timeoutMs?: number;
+};
+
+export type EnsureTabAvailableOptions = BrowserOperationOptions & {
+  /** Allow a target-id-only tab when the caller can continue through Playwright. */
+  allowPlaywrightFallback?: boolean;
+};
+
 type BrowserProfileActions = {
-  ensureBrowserAvailable: (opts?: { headless?: boolean }) => Promise<void>;
-  ensureTabAvailable: (targetId?: string) => Promise<BrowserTab>;
-  isHttpReachable: (timeoutMs?: number) => Promise<boolean>;
-  isTransportAvailable: (timeoutMs?: number) => Promise<boolean>;
-  isReachable: (timeoutMs?: number) => Promise<boolean>;
-  listTabs: () => Promise<BrowserTab[]>;
-  openTab: (url: string, opts?: { label?: string }) => Promise<BrowserTab>;
+  ensureBrowserAvailable: (opts?: { headless?: boolean; signal?: AbortSignal }) => Promise<void>;
+  ensureTabAvailable: (
+    targetId?: string,
+    options?: EnsureTabAvailableOptions,
+  ) => Promise<BrowserTab>;
+  isHttpReachable: (timeoutMs?: number, signal?: AbortSignal) => Promise<boolean>;
+  isTransportAvailable: (
+    timeoutMs?: number,
+    signal?: AbortSignal,
+    pageProbe?: ChromeMcpPageProbe,
+  ) => Promise<boolean>;
+  isReachable: (
+    timeoutMs?: number,
+    options?: { ephemeral?: boolean; signal?: AbortSignal },
+  ) => Promise<boolean>;
+  listTabs: (options?: BrowserOperationOptions) => Promise<BrowserTab[]>;
+  openTab: (
+    url: string,
+    opts?: { label?: string; signal?: AbortSignal; timeoutMs?: number },
+  ) => Promise<BrowserOpenResult>;
   labelTab: (targetId: string, label: string) => Promise<BrowserTab>;
-  focusTab: (targetId: string) => Promise<void>;
-  closeTab: (targetId: string) => Promise<void>;
+  focusTab: (targetId: string, options?: BrowserTabTargetOptions) => Promise<void>;
+  closeTab: (targetId: string, options?: BrowserTabTargetOptions) => Promise<string>;
   stopRunningBrowser: () => Promise<{ stopped: boolean }>;
   resetProfile: () => Promise<{ moved: boolean; from: string; to?: string }>;
 };
 
+/** Profile-aware operations exposed to Browser route handlers. */
 export type BrowserRouteContext = {
   state: () => BrowserServerState;
   forProfile: (profileName?: string) => ProfileContext;
   listProfiles: () => Promise<ProfileStatus[]>;
   // Legacy methods delegate to default profile for backward compatibility
-  mapTabError: (err: unknown) => { status: number; message: string } | null;
+  mapTabError: (err: unknown) => BrowserErrorResponse | null;
 } & BrowserProfileActions;
 
+/** Operations scoped to a single resolved Browser profile. */
 export type ProfileContext = {
   profile: ResolvedBrowserProfile;
 } & BrowserProfileActions;
 
+/** Status payload returned by Browser profile listing. */
 export type ProfileStatus = {
   name: string;
   transport: BrowserTransport;
@@ -82,6 +116,7 @@ export type ProfileStatus = {
   reconcileReason?: string | null;
 };
 
+/** Inputs for creating a Browser route context. */
 export type ContextOptions = {
   getState: () => BrowserServerState | null;
   onEnsureAttachTarget?: (profile: ResolvedBrowserProfile) => Promise<void>;

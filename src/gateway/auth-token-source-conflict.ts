@@ -1,24 +1,36 @@
+// Gateway auth-token source conflict detector.
+// Warns when local env auth can diverge from managed gateway config auth.
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeSecretInputString, resolveSecretInputRef } from "../config/types.secrets.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
 
 const GATEWAY_ENV_TOKEN = "OPENCLAW_GATEWAY_TOKEN";
+const GATEWAY_SERVICE_KIND = "gateway";
 
-export type GatewayAuthTokenSourceConflict = {
+// Doctor/startup warning shape for shells where OPENCLAW_GATEWAY_TOKEN would
+// make direct clients use a different token than the managed gateway service.
+type GatewayAuthTokenSourceConflict = {
   checkId: "gateway.env_token_overrides_config";
+  severity: "warn";
   title: string;
   detail: string;
   remediation: string;
-  warningLines: string[];
   diagnostic: string;
 };
 
+/** Returns a warning when env token precedence can diverge from configured gateway auth. */
 export function resolveGatewayAuthTokenSourceConflict(params: {
   cfg: OpenClawConfig;
   env: NodeJS.ProcessEnv;
 }): GatewayAuthTokenSourceConflict | null {
   const envToken = normalizeOptionalString(params.env.OPENCLAW_GATEWAY_TOKEN);
   if (!envToken) {
+    return null;
+  }
+
+  if (params.env.OPENCLAW_SERVICE_KIND?.trim() === GATEWAY_SERVICE_KIND) {
+    // The managed gateway process intentionally uses its service env. The
+    // warning is for client shells where env precedence can surprise users.
     return null;
   }
 
@@ -48,21 +60,22 @@ export function resolveGatewayAuthTokenSourceConflict(params: {
     return null;
   }
 
-  const title = `${GATEWAY_ENV_TOKEN} overrides gateway.auth.token for CLI commands`;
+  const title = `${GATEWAY_ENV_TOKEN} conflicts with gateway.auth.token`;
   const detail =
     `${GATEWAY_ENV_TOKEN} is set while gateway.auth.token uses a different configured source. ` +
-    "CLI commands use env-first precedence, but the gateway server uses config-first precedence. " +
-    "If the values differ, CLI commands can fail to authenticate with the running gateway.";
+    "Configured local Gateway clients and the managed gateway service prefer gateway.auth.token. " +
+    "Environment credentials remain active for explicit environment URL and node-host targets, " +
+    "so a stale value can still authenticate against the wrong target.";
   const remediation =
-    `Remove ${GATEWAY_ENV_TOKEN} from the shell if gateway.auth.token is intended, ` +
-    "or point gateway.auth.token at the same env source if the env var should be canonical.";
+    `Remove ${GATEWAY_ENV_TOKEN} from the shell, ~/.openclaw/.env, or launchctl env if gateway.auth.token is intended, ` +
+    `or point gateway.auth.token at \${${GATEWAY_ENV_TOKEN}} if the env var should be canonical.`;
 
   return {
     checkId: "gateway.env_token_overrides_config",
+    severity: "warn",
     title,
     detail,
     remediation,
-    warningLines: [`- WARNING: ${title}.`, `  ${detail}`, `  Fix: ${remediation}`],
     diagnostic: `${title}: ${remediation}`,
   };
 }

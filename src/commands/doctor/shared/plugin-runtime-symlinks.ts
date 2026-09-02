@@ -1,6 +1,11 @@
+// Doctor detection and cleanup for stale global plugin-runtime symlinks.
 import fs from "node:fs/promises";
 import path from "node:path";
-import { note } from "../../../terminal/note.js";
+import { sortUniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import { note } from "../../../../packages/terminal-core/src/note.js";
+import type { HealthFinding } from "../../../flows/health-checks.js";
+import { resolveOpenClawPackageRootSync } from "../../../infra/openclaw-root.js";
+import { isPathInside } from "../../../infra/path-safety.js";
 import { shortenHomePath } from "../../../utils.js";
 
 const PLUGIN_RUNTIME_DEPS_MARKER = "plugin-runtime-deps";
@@ -25,14 +30,19 @@ interface StatsLike {
   isSymbolicLink(): boolean;
 }
 
-export interface StalePluginRuntimeSymlink {
+interface StalePluginRuntimeSymlink {
+  /** Package or scoped package name for the stale symlink. */
   readonly name: string;
+  /** Symlink path under the containing node_modules directory. */
   readonly path: string;
+  /** Resolved target that is missing or belongs to stale cleanup roots. */
   readonly target: string;
 }
 
-export interface PluginRuntimeSymlinkOptions {
+interface PluginRuntimeSymlinkOptions {
+  /** Filesystem adapter for tests and doctor cleanup callers. */
   readonly fs?: FsLike;
+  /** Roots already classified as stale by plugin dependency cleanup. */
   readonly staleRoots?: readonly string[];
 }
 
@@ -45,7 +55,8 @@ const DEFAULT_FS: FsLike = {
   unlink: (file) => fs.unlink(file),
 };
 
-export async function collectStalePluginRuntimeSymlinks(
+/** Find global node_modules symlinks that still point at stale plugin-runtime deps. */
+async function collectStalePluginRuntimeSymlinks(
   packageRoot: string | null | undefined,
   options: PluginRuntimeSymlinkOptions = {},
 ): Promise<StalePluginRuntimeSymlink[]> {
@@ -91,6 +102,34 @@ export async function collectStalePluginRuntimeSymlinks(
   return stale.toSorted((left, right) => left.name.localeCompare(right.name));
 }
 
+function stalePluginRuntimeSymlinkToHealthFinding(item: StalePluginRuntimeSymlink): HealthFinding {
+  return {
+    checkId: "core/doctor/stale-plugin-runtime-symlinks",
+    severity: "warning",
+    message: `Stale plugin-runtime symlink ${item.name} points at ${item.target}.`,
+    path: item.path,
+    target: item.path,
+    requirement: "stale-plugin-runtime-symlink-removed",
+    fixHint: "Run `openclaw doctor --fix` to remove stale plugin-runtime symlinks.",
+  };
+}
+
+export async function collectStalePluginRuntimeSymlinkHealthFindings(
+  params: { packageRoot?: string | null } & PluginRuntimeSymlinkOptions = {},
+): Promise<HealthFinding[]> {
+  const packageRoot =
+    params.packageRoot ??
+    resolveOpenClawPackageRootSync({
+      argv1: process.argv[1],
+      moduleUrl: import.meta.url,
+      cwd: process.cwd(),
+    });
+  return (await collectStalePluginRuntimeSymlinks(packageRoot, params)).map(
+    stalePluginRuntimeSymlinkToHealthFinding,
+  );
+}
+
+/** Emit a doctor note describing stale plugin-runtime symlinks, if any exist. */
 export async function noteStalePluginRuntimeSymlinks(
   packageRoot: string | null | undefined,
   options: PluginRuntimeSymlinkOptions & {
@@ -119,6 +158,7 @@ export async function noteStalePluginRuntimeSymlinks(
   (options.noteFn ?? note)(lines.join("\n"), "Plugin-runtime symlinks");
 }
 
+/** Remove stale plugin-runtime symlinks and report changes/warnings. */
 export async function removeStalePluginRuntimeSymlinks(
   packageRoot: string | null | undefined,
   options: PluginRuntimeSymlinkOptions = {},
@@ -142,14 +182,7 @@ export async function removeStalePluginRuntimeSymlinks(
 }
 
 function uniqueResolvedRoots(values: readonly string[]): string[] {
-  return [...new Set(values.map((value) => path.resolve(value)))].toSorted((left, right) =>
-    left.localeCompare(right),
-  );
-}
-
-function isPathInsideRoot(candidate: string, root: string): boolean {
-  const relativePath = path.relative(root, candidate);
-  return relativePath === "" || (!relativePath.startsWith("..") && !path.isAbsolute(relativePath));
+  return sortUniqueStrings(values.map((value) => path.resolve(value)));
 }
 
 async function inspectCandidate(
@@ -168,7 +201,7 @@ async function inspectCandidate(
   const resolvedTarget = path.isAbsolute(target)
     ? target
     : path.resolve(path.dirname(fullPath), target);
-  if (staleRoots.some((root) => isPathInsideRoot(resolvedTarget, root))) {
+  if (staleRoots.some((root) => isPathInside(root, resolvedTarget))) {
     return resolvedTarget;
   }
   try {

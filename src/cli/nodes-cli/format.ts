@@ -1,7 +1,9 @@
-import { normalizeStringifiedOptionalString } from "../../shared/string-coerce.js";
+// Formatting and parse re-exports for node list/pairing CLI output.
+import { normalizeStringifiedOptionalString } from "@openclaw/normalization-core/string-coerce";
 
 export { parseNodeList, parsePairingList } from "../../shared/node-list-parse.js";
 
+/** Format node permission maps as a stable `[permission=yes|no]` label. */
 export function formatPermissions(raw: unknown) {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
     return null;

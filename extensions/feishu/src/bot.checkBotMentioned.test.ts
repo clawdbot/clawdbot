@@ -1,3 +1,4 @@
+// Feishu tests cover bot.checkBotMentioned plugin behavior.
 import { describe, it, expect } from "vitest";
 import { parseFeishuMessageEvent, type FeishuMessageEvent } from "./bot.js";
 
@@ -139,6 +140,17 @@ describe("parseFeishuMessageEvent – mentionedBot", () => {
     expect(ctx.mentionedBot).toBe(false);
   });
 
+  it.each([undefined, "", "  "])(
+    "does not create mention-forward targets when botOpenId is %j",
+    (botOpenId) => {
+      const event = makeEvent("p2p", [
+        { key: "@_user_1", name: "Alice", id: { open_id: "ou_alice" } },
+      ]);
+      const ctx = parseFeishuMessageEvent(event, botOpenId);
+      expect(ctx.mentionTargets).toBeUndefined();
+    },
+  );
+
   it("returns mentionedBot=false when botOpenId is empty string (probe failed)", () => {
     const event = makeEvent("group", [
       { key: "@_user_1", name: "Alice", id: { open_id: "ou_alice" } },
@@ -168,14 +180,14 @@ describe("parseFeishuMessageEvent – mentionedBot", () => {
   });
 
   it("returns mentionedBot=true for post message with at (no top-level mentions)", () => {
-    const BOT_OPEN_ID = "ou_bot_123";
+    const BOT_OPEN_IDLocal = "ou_bot_123";
     const event = makePostEvent({
       content: [
-        [{ tag: "at", user_id: BOT_OPEN_ID, user_name: "claw" }],
+        [{ tag: "at", user_id: BOT_OPEN_IDLocal, user_name: "claw" }],
         [{ tag: "text", text: "What does this document say" }],
       ],
     });
-    const ctx = parseFeishuMessageEvent(event, BOT_OPEN_ID);
+    const ctx = parseFeishuMessageEvent(event, BOT_OPEN_IDLocal);
     expect(ctx.mentionedBot).toBe(true);
   });
 

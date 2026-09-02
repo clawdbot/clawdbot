@@ -1,12 +1,15 @@
+/**
+ * Tests server-level tool catalog assembly and filtering.
+ */
 import { describe, expect, it } from "vitest";
 import { connectOk, installGatewayTestHooks, rpcReq } from "./test-helpers.js";
-import { withServer } from "./test-with-server.js";
+import { withGatewayClient } from "./test-with-server.js";
 
 installGatewayTestHooks({ scope: "suite" });
 
 describe("gateway tools.catalog", () => {
   it("returns core catalog data and includes tts", async () => {
-    await withServer(async (ws) => {
+    await withGatewayClient(async (ws) => {
       await connectOk(ws, { token: "secret", scopes: ["operator.read"] });
       const res = await rpcReq<{
         agentId?: string;
@@ -18,7 +21,7 @@ describe("gateway tools.catalog", () => {
       }>(ws, "tools.catalog", {});
 
       expect(res.ok).toBe(true);
-      expect(res.payload?.agentId).toEqual(expect.any(String));
+      expect(res.payload?.agentId).toBeTypeOf("string");
       expect(res.payload?.agentId).not.toBe("");
       const mediaGroup = res.payload?.groups?.find((group) => group.id === "media");
       expect(mediaGroup?.tools?.map((tool) => `${tool.source}:${tool.id}`) ?? []).toContain(
@@ -28,7 +31,7 @@ describe("gateway tools.catalog", () => {
   });
 
   it("supports includePlugins=false and rejects unknown agent ids", async () => {
-    await withServer(async (ws) => {
+    await withGatewayClient(async (ws) => {
       await connectOk(ws, { token: "secret", scopes: ["operator.read"] });
 
       const noPlugins = await rpcReq<{
@@ -37,7 +40,7 @@ describe("gateway tools.catalog", () => {
       expect(noPlugins.ok).toBe(true);
       expect(
         (noPlugins.payload?.groups ?? []).filter((group) => group.source === "plugin"),
-      ).toEqual([]);
+      ).toStrictEqual([]);
 
       const unknownAgent = await rpcReq(ws, "tools.catalog", { agentId: "does-not-exist" });
       expect(unknownAgent.ok).toBe(false);

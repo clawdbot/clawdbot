@@ -1,13 +1,19 @@
+// Mattermost plugin module implements model picker behavior.
 import { createHash } from "node:crypto";
-import type { ModelsProviderData } from "openclaw/plugin-sdk/command-auth";
-import { resolveStoredModelOverride } from "openclaw/plugin-sdk/command-auth";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/core";
-import { normalizeProviderId } from "openclaw/plugin-sdk/provider-model-shared";
-import { loadSessionStore, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import {
+  resolveStoredModelOverride,
+  type ModelsProviderData,
+} from "openclaw/plugin-sdk/command-auth-native";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/core";
+import { parseStrictInteger } from "openclaw/plugin-sdk/number-runtime";
+import { normalizeProviderId } from "openclaw/plugin-sdk/provider-model-shared";
+import { getSessionEntry, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
+import {
+  asFiniteNumber,
   normalizeOptionalString,
   normalizeStringifiedOptionalString,
-} from "openclaw/plugin-sdk/text-runtime";
+  readStringField,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { MattermostInteractiveButtonInput } from "./interactions.js";
 
 const MATTERMOST_MODEL_PICKER_CONTEXT_KEY = "oc_model_picker";
@@ -41,7 +47,11 @@ function splitModelRef(modelRef?: string | null): { provider: string; model: str
   if (!match) {
     return null;
   }
-  const provider = normalizeProviderId(match[1]);
+  const rawProvider = match[1];
+  if (!rawProvider) {
+    return null;
+  }
+  const provider = normalizeProviderId(rawProvider);
   // Mattermost copy should normalize accidental whitespace around the model.
   const model = normalizeOptionalString(match[2]);
   if (!provider || !model) {
@@ -51,22 +61,12 @@ function splitModelRef(modelRef?: string | null): { provider: string; model: str
 }
 
 function readContextString(context: Record<string, unknown>, key: string, fallback = ""): string {
-  const value = context[key];
-  return typeof value === "string" ? value : fallback;
+  return readStringField(context, key) ?? fallback;
 }
 
 function readContextNumber(context: Record<string, unknown>, key: string): number | undefined {
   const value = context[key];
-  if (typeof value === "number" && Number.isFinite(value)) {
-    return value;
-  }
-  if (typeof value === "string") {
-    const parsed = Number.parseInt(value.trim(), 10);
-    if (Number.isFinite(parsed)) {
-      return parsed;
-    }
-  }
-  return undefined;
+  return asFiniteNumber(value) ?? parseStrictInteger(value);
 }
 
 function normalizePage(value: number | undefined): number {
@@ -236,21 +236,28 @@ export function resolveMattermostModelPickerCurrentModel(params: {
   cfg: OpenClawConfig;
   route: { agentId: string; sessionKey: string };
   data: ModelsProviderData;
-  skipCache?: boolean;
+  readConsistency?: "latest";
 }): string {
   const fallback = `${params.data.resolvedDefault.provider}/${params.data.resolvedDefault.model}`;
   try {
     const storePath = resolveStorePath(params.cfg.session?.store, {
       agentId: params.route.agentId,
     });
-    const sessionStore = params.skipCache
-      ? loadSessionStore(storePath, { skipCache: true })
-      : loadSessionStore(storePath);
-    const sessionEntry = sessionStore[params.route.sessionKey];
+    const sessionEntry = getSessionEntry({
+      storePath,
+      sessionKey: params.route.sessionKey,
+      ...(params.readConsistency === "latest" ? { readConsistency: "latest" as const } : {}),
+    });
     const override = resolveStoredModelOverride({
       sessionEntry,
-      sessionStore,
+      loadSessionEntry: (sessionKey) =>
+        getSessionEntry({
+          storePath,
+          sessionKey,
+          ...(params.readConsistency === "latest" ? { readConsistency: "latest" as const } : {}),
+        }),
       sessionKey: params.route.sessionKey,
+      parentSessionKey: sessionEntry?.parentSessionKey,
       defaultProvider: params.data.resolvedDefault.provider,
     });
     if (!override?.model) {
@@ -342,7 +349,7 @@ export function renderMattermostModelsPickerView(params: {
 
   const page = paginateItems(models, params.page);
   const rows: MattermostInteractiveButtonInput[][] = page.items.map((model) => {
-    const isCurrent = current?.provider === provider && current.model === model;
+    const isCurrent = current?.provider === provider && current?.model === model;
     return [
       buildButton({
         action: "select",

@@ -1,6 +1,18 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+// Onboard custom tests cover custom provider prompts and API-key credential handling.
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ensureApiKeyFromEnvOrPrompt } from "../plugins/provider-auth-input.js";
 import { promptCustomApiConfig } from "./onboard-custom.js";
+
+const loadManifestMetadataSnapshot = vi.hoisted(() => vi.fn(() => ({ plugins: [] })));
+vi.mock("../plugins/manifest-contract-eligibility.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../plugins/manifest-contract-eligibility.js")>()),
+  loadManifestMetadataSnapshot,
+}));
+
+vi.mock("../plugins/current-plugin-metadata-snapshot.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../plugins/current-plugin-metadata-snapshot.js")>()),
+  getCurrentPluginMetadataSnapshot: () => ({ plugins: [] }),
+}));
 
 vi.mock("../plugins/provider-auth-input.js", () => ({
   ensureApiKeyFromEnvOrPrompt: vi.fn(
@@ -56,6 +68,7 @@ function stubFetchSequence(
     fetchMock.mockResolvedValueOnce({
       ok: response.ok,
       status: response.status,
+      headers: new Headers({ "content-type": "application/json; charset=utf-8" }),
       json: async () => ({}),
     });
   }
@@ -66,11 +79,13 @@ function stubFetchSequence(
 async function runPromptCustomApi(
   prompter: ReturnType<typeof createTestPrompter>,
   config: object = {},
+  target?: Parameters<typeof promptCustomApiConfig>[0]["target"],
 ) {
   return promptCustomApiConfig({
     prompter: prompter as unknown as Parameters<typeof promptCustomApiConfig>[0]["prompter"],
     runtime: { log: vi.fn() } as unknown as Parameters<typeof promptCustomApiConfig>[0]["runtime"],
     config,
+    ...(target ? { target } : {}),
   });
 }
 
@@ -86,6 +101,11 @@ function expectOpenAiCompatResult(params: {
 }
 
 describe("promptCustomApiConfig", () => {
+  beforeEach(() => {
+    loadManifestMetadataSnapshot.mockReset();
+    loadManifestMetadataSnapshot.mockReturnValue({ plugins: [] });
+  });
+
   afterEach(() => {
     vi.unstubAllGlobals();
     vi.unstubAllEnvs();
@@ -104,6 +124,120 @@ describe("promptCustomApiConfig", () => {
     expect(result.config.agents?.defaults?.models?.["custom/llama3"]?.alias).toBe("local");
     expect(result.config.models?.providers?.custom?.models?.[0]?.input).toEqual(["text"]);
     expect(prompter.confirm).not.toHaveBeenCalled();
+  });
+
+  it("rejects aliases already used only by the selected agent", async () => {
+    const prompter = createTestPrompter({
+      text: ["http://localhost:11434/v1", "", "llama3", "custom", ""],
+      select: ["plaintext", "openai"],
+    });
+    stubFetchSequence([{ ok: true }]);
+
+    await runPromptCustomApi(
+      prompter,
+      {
+        agents: {
+          ownership: "explicit",
+          defaults: { systemAgent: { agentId: "ops" } },
+          entries: { ops: { models: { "openai/ops": { alias: "Operations" } } } },
+        },
+      },
+      { agentId: "ops", agentDir: "/tmp/ops-agent", workspaceDir: "/tmp/ops-workspace" },
+    );
+
+    const aliasPrompt = prompter.text.mock.calls.find(
+      ([options]) => options.message === "Model alias (optional)",
+    );
+    expect(aliasPrompt?.[0].validate("Operations")).toBe(
+      "Alias Operations already points to openai/ops.",
+    );
+  });
+
+  it("threads one workspace-scoped manifest snapshot through alias validation", async () => {
+    const preparedPlugins = [
+      {
+        modelIdNormalization: {
+          providers: {
+            custom: {
+              aliases: {
+                latest: "modern-model",
+              },
+            },
+          },
+        },
+      },
+    ];
+    loadManifestMetadataSnapshot.mockReturnValueOnce({ plugins: preparedPlugins } as never);
+    const prompter = createTestPrompter({
+      text: ["http://localhost:11434/v1", "", "modern-model", "custom", "Legacy"],
+      select: ["plaintext", "openai"],
+    });
+    stubFetchSequence([{ ok: true }]);
+    const config = {
+      agents: {
+        defaults: {
+          models: {
+            "custom/latest": { alias: "Legacy" },
+          },
+        },
+      },
+    };
+    const target = {
+      agentId: "ops",
+      agentDir: "/tmp/ops-agent",
+      workspaceDir: "/tmp/ops-workspace",
+    };
+
+    const result = await runPromptCustomApi(prompter, config, target);
+
+    expect(loadManifestMetadataSnapshot).toHaveBeenCalledExactlyOnceWith({
+      config,
+      workspaceDir: target.workspaceDir,
+      env: process.env,
+    });
+    expect(loadManifestMetadataSnapshot.mock.invocationCallOrder[0]).toBeLessThan(
+      prompter.text.mock.invocationCallOrder[0]!,
+    );
+    expect(result.config.agents?.defaults?.models?.["custom/modern-model"]?.alias).toBe("Legacy");
+  });
+
+  it("cancels custom provider verification response bodies", async () => {
+    const prompter = createTestPrompter({
+      text: ["http://localhost:11434/v1", "", "llama3", "custom", ""],
+      select: ["plaintext", "openai"],
+    });
+    const cancel = vi.fn(async () => undefined);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({
+        ok: true,
+        status: 200,
+        headers: new Headers({ "content-type": "application/json; charset=utf-8" }),
+        body: { cancel },
+      })),
+    );
+
+    await runPromptCustomApi(prompter);
+
+    expect(cancel).toHaveBeenCalledTimes(1);
+  });
+
+  it("handles explicit OpenAI Responses flow", async () => {
+    const prompter = createTestPrompter({
+      text: ["https://proxy.example.com/v1", "test-key", "gpt-5.4", "custom", ""],
+      select: ["plaintext", "openai-responses"],
+    });
+    const fetchMock = stubFetchSequence([{ ok: true }]);
+
+    const result = await runPromptCustomApi(prompter);
+
+    expect(result.config.models?.providers?.custom?.api).toBe("openai-responses");
+    expect(fetchMock.mock.calls[0]?.[0]).toBe("https://proxy.example.com/v1/responses");
+    expect(JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body))).toMatchObject({
+      model: "gpt-5.4",
+      input: "Hi",
+      max_output_tokens: 16,
+    });
   });
 
   it("skips the image-input prompt for known custom vision models", async () => {
@@ -145,12 +279,10 @@ describe("promptCustomApiConfig", () => {
 
     await runPromptCustomApi(prompter);
 
-    expect(prompter.text).toHaveBeenCalledWith(
-      expect.objectContaining({
-        message: "API Base URL",
-        initialValue: undefined,
-      }),
+    const apiBaseUrlCall = prompter.text.mock.calls.find(
+      ([options]) => options.message === "API Base URL",
     );
+    expect(apiBaseUrlCall?.[0].initialValue).toBeUndefined();
   });
 
   it("retries when verification fails", async () => {
@@ -165,6 +297,44 @@ describe("promptCustomApiConfig", () => {
     expect(prompter.select).toHaveBeenCalledTimes(3);
   });
 
+  it("rejects successful-looking HTML verification responses with a base URL hint", async () => {
+    const prompter = createTestPrompter({
+      text: [
+        "https://proxy.example.com",
+        "test-key",
+        "bad-model",
+        "https://proxy.example.com/v1",
+        "test-key",
+        "custom",
+        "",
+      ],
+      select: ["plaintext", "openai", "baseUrl", "plaintext"],
+    });
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        headers: new Headers({ "content-type": "text/html; charset=utf-8" }),
+        text: async () => "<html>not the API</html>",
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        headers: new Headers({ "content-type": "application/json" }),
+        json: async () => ({}),
+      });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await runPromptCustomApi(prompter);
+
+    expect(prompter.progress.mock.results[0]?.value.stop).toHaveBeenCalledWith(
+      expect.stringContaining("usually need a /v1 path prefix"),
+    );
+    expect(fetchMock.mock.calls[0]?.[0]).toBe("https://proxy.example.com/chat/completions");
+    expect(fetchMock.mock.calls[1]?.[0]).toBe("https://proxy.example.com/v1/chat/completions");
+  });
+
   it("detects openai compatibility when unknown", async () => {
     const prompter = createTestPrompter({
       text: ["https://example.com/v1", "test-key", "detected-model", "custom", "alias"],
@@ -174,6 +344,22 @@ describe("promptCustomApiConfig", () => {
     const result = await runPromptCustomApi(prompter);
 
     expectOpenAiCompatResult({ prompter, textCalls: 5, selectCalls: 2, result });
+  });
+
+  it("detects OpenAI Responses compatibility when chat completions fail", async () => {
+    const prompter = createTestPrompter({
+      text: ["https://example.com/v1", "test-key", "detected-model", "custom", "alias"],
+      select: ["plaintext", "unknown"],
+    });
+    const fetchMock = stubFetchSequence([{ ok: false, status: 503 }, { ok: true }]);
+
+    const result = await runPromptCustomApi(prompter);
+
+    expect(result.config.models?.providers?.custom?.api).toBe("openai-responses");
+    expect(fetchMock.mock.calls[0]?.[0]).toBe("https://example.com/v1/chat/completions");
+    expect(fetchMock.mock.calls[1]?.[0]).toBe("https://example.com/v1/responses");
+    expect(prompter.text).toHaveBeenCalledTimes(5);
+    expect(prompter.select).toHaveBeenCalledTimes(2);
   });
 
   it("re-prompts base url when unknown detection fails", async () => {
@@ -189,11 +375,16 @@ describe("promptCustomApiConfig", () => {
       ],
       select: ["plaintext", "unknown", "baseUrl", "plaintext"],
     });
-    stubFetchSequence([{ ok: false, status: 404 }, { ok: false, status: 404 }, { ok: true }]);
+    stubFetchSequence([
+      { ok: false, status: 404 },
+      { ok: false, status: 404 },
+      { ok: false, status: 404 },
+      { ok: true },
+    ]);
     await runPromptCustomApi(prompter);
 
     expect(prompter.note).toHaveBeenCalledWith(
-      expect.stringContaining("did not respond"),
+      "This endpoint did not respond to OpenAI Chat, OpenAI Responses, or Anthropic style requests.",
       "Endpoint detection",
     );
   });

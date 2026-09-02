@@ -1,3 +1,4 @@
+// Feishu helper module supports drive schema behavior.
 import { Type, type Static } from "typebox";
 
 const FileType = Type.Union([
@@ -24,6 +25,18 @@ export const FeishuDriveSchema = Type.Union([
     action: Type.Literal("list"),
     folder_token: Type.Optional(
       Type.String({ description: "Folder token (optional, omit for root directory)" }),
+    ),
+    page_size: Type.Optional(
+      Type.Integer({
+        minimum: 1,
+        maximum: 200,
+        description: "Items per folder page (1-200; requires folder_token)",
+      }),
+    ),
+    page_token: Type.Optional(
+      Type.String({
+        description: "Continuation token from a prior list result (requires the same folder_token)",
+      }),
     ),
   }),
   Type.Object({

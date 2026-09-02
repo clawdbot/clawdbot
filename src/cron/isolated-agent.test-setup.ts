@@ -1,16 +1,20 @@
+import { expectDefined } from "@openclaw/normalization-core";
+// Isolated agent test setup centralizes common mocks for cron agent tests.
 import { vi } from "vitest";
-import { loadModelCatalog } from "../agents/model-catalog.js";
-import { runEmbeddedPiAgent } from "../agents/pi-embedded.js";
-import { runSubagentAnnounceFlow } from "../agents/subagent-announce.js";
+import { runEmbeddedAgent } from "../agents/embedded-agent.js";
+import { loadPreparedModelCatalog } from "../agents/prepared-model-catalog.js";
+import { runSubagentAnnounceFlow } from "../agents/subagents/announce/subagent-announce.js";
 import type {
   ChannelOutboundAdapter,
   ChannelOutboundContext,
 } from "../channels/plugins/types.adapters.js";
 import { callGateway } from "../gateway/call.js";
 import { resolveOutboundSendDep } from "../infra/outbound/send-deps.js";
+import { buildChannelOutboundSessionRoute } from "../plugin-sdk/core.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../test-utils/channel-plugins.js";
 
+// Test-only outbound registry for isolated cron turns.
 type TestSendFn = (
   to: string,
   text: string,
@@ -43,24 +47,35 @@ function parseTelegramTargetForTest(raw: string): {
   const match = /^group:([^:]+):topic:(\d+)$/i.exec(trimmed);
   if (match) {
     return {
-      chatId: match[1],
-      messageThreadId: Number.parseInt(match[2], 10),
+      chatId: expectDefined(match[1], "isolated agent.test setup regex capture 1"),
+      messageThreadId: Number.parseInt(
+        expectDefined(match[2], "isolated agent.test setup regex capture 2"),
+        10,
+      ),
       chatType: "group",
     };
   }
   const topicMatch = /^([^:]+):topic:(\d+)$/i.exec(trimmed);
   if (topicMatch) {
     return {
-      chatId: topicMatch[1],
-      messageThreadId: Number.parseInt(topicMatch[2], 10),
-      chatType: topicMatch[1].startsWith("-") ? "group" : "direct",
+      chatId: expectDefined(topicMatch[1], "topic match capture group 1"),
+      messageThreadId: Number.parseInt(
+        expectDefined(topicMatch[2], "topic match capture group 2"),
+        10,
+      ),
+      chatType: expectDefined(topicMatch[1], "topic match capture group 1").startsWith("-")
+        ? "group"
+        : "direct",
     };
   }
   const colonPair = /^([^:]+):(\d+)$/i.exec(trimmed);
-  if (colonPair && colonPair[1].startsWith("-")) {
+  if (colonPair && expectDefined(colonPair[1], "colon pair capture group 1").startsWith("-")) {
     return {
-      chatId: colonPair[1],
-      messageThreadId: Number.parseInt(colonPair[2], 10),
+      chatId: expectDefined(colonPair[1], "colon pair capture group 1"),
+      messageThreadId: Number.parseInt(
+        expectDefined(colonPair[2], "colon pair capture group 2"),
+        10,
+      ),
       chatType: "group",
     };
   }
@@ -152,9 +167,9 @@ export function setupIsolatedAgentTurnMocks(params?: { fast?: boolean }): void {
   if (params?.fast) {
     vi.stubEnv("OPENCLAW_TEST_FAST", "1");
   }
-  vi.mocked(runEmbeddedPiAgent).mockReset();
-  vi.mocked(loadModelCatalog).mockResolvedValue([]);
-  vi.mocked(runSubagentAnnounceFlow).mockReset().mockResolvedValue(true);
+  vi.mocked(runEmbeddedAgent).mockReset();
+  vi.mocked(loadPreparedModelCatalog).mockResolvedValue([]);
+  vi.mocked(runSubagentAnnounceFlow).mockReset().mockResolvedValue("delivered");
   vi.mocked(callGateway).mockReset().mockResolvedValue({ ok: true, deleted: true });
   setActivePluginRegistry(
     createTestRegistry([
@@ -164,13 +179,47 @@ export function setupIsolatedAgentTurnMocks(params?: { fast?: boolean }): void {
           id: "telegram",
           outbound: telegramOutboundForTest,
           messaging: {
-            parseExplicitTarget: ({ raw }) => {
-              const target = parseTelegramTargetForTest(raw);
-              return {
-                to: target.chatId,
-                threadId: target.messageThreadId,
-                chatType: target.chatType === "unknown" ? undefined : target.chatType,
-              };
+            inferTargetChatType: ({ to }) => {
+              const target = parseTelegramTargetForTest(to);
+              return target.chatType === "unknown" ? undefined : target.chatType;
+            },
+            targetResolver: {
+              resolveTarget: async ({ input }) => {
+                const parsed = parseTelegramTargetForTest(input);
+                if (!parsed.chatId) {
+                  return null;
+                }
+                return {
+                  to:
+                    parsed.messageThreadId == null
+                      ? parsed.chatId
+                      : `${parsed.chatId}:topic:${parsed.messageThreadId}`,
+                  kind: parsed.chatType === "direct" ? "user" : "group",
+                  source: "normalized",
+                };
+              },
+            },
+            resolveOutboundSessionRoute: ({ cfg, agentId, accountId, target, threadId }) => {
+              const parsed = parseTelegramTargetForTest(target);
+              const resolvedThreadId = parsed.messageThreadId ?? threadId ?? undefined;
+              const chatType = parsed.chatType === "direct" ? "direct" : "group";
+              return buildChannelOutboundSessionRoute({
+                cfg,
+                agentId,
+                channel: "telegram",
+                accountId,
+                peer: {
+                  kind: chatType,
+                  id:
+                    chatType === "group" && resolvedThreadId !== undefined
+                      ? `${parsed.chatId}:topic:${resolvedThreadId}`
+                      : parsed.chatId,
+                },
+                chatType,
+                from: `telegram:${parsed.chatId}`,
+                to: parsed.chatId,
+                ...(resolvedThreadId !== undefined ? { threadId: resolvedThreadId } : {}),
+              });
             },
           },
         }),

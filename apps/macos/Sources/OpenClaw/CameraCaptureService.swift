@@ -39,7 +39,7 @@ actor CameraCaptureService {
     private let logger = Logger(subsystem: "ai.openclaw", category: "camera")
 
     func listDevices() -> [CameraDeviceInfo] {
-        Self.availableCameras().map { device in
+        CameraDeviceResolver.availableCameras().map { device in
             CameraDeviceInfo(
                 id: device.uniqueID,
                 name: device.localizedName,
@@ -68,9 +68,8 @@ actor CameraCaptureService {
             preferFrontCamera: facing == .front,
             deviceId: deviceId,
             pickCamera: { preferFrontCamera, deviceId in
-                Self.pickCamera(facing: preferFrontCamera ? .front : .back, deviceId: deviceId)
+                try Self.pickCamera(facing: preferFrontCamera ? .front : .back, deviceId: deviceId)
             },
-            cameraUnavailableError: CameraError.cameraUnavailable,
             mapSetupError: { setupError in
                 CameraError.captureFailed(setupError.localizedDescription)
             })
@@ -80,7 +79,24 @@ actor CameraCaptureService {
 
         session.startRunning()
         defer { session.stopRunning() }
-        await CameraCapturePipelineSupport.warmUpCaptureSession()
+        // The photo preset can choose a portrait format at startup on external webcams.
+        // Select its landscape counterpart only after negotiation and before capturing.
+        let formats = device.formats
+        if let index = CameraDeviceResolver.landscapePhotoFormatIndex(
+            deviceType: device.deviceType,
+            activeFormat: device.activeFormat.formatDescription,
+            formats: formats.map(\.formatDescription))
+        {
+            do {
+                try device.lockForConfiguration()
+                defer { device.unlockForConfiguration() }
+                device.activeFormat = formats[index]
+            } catch {
+                self.logger.warning(
+                    "camera landscape format selection failed: \(error.localizedDescription, privacy: .public)")
+            }
+        }
+        try await CameraCapturePipelineSupport.warmUpCaptureSession()
         await self.waitForExposureAndWhiteBalance(device: device)
         await self.sleepDelayMs(delayMs)
 
@@ -124,14 +140,14 @@ actor CameraCaptureService {
         }
 
         let prepared = try await CameraCapturePipelineSupport.prepareWarmMovieSession(
-            preferFrontCamera: facing == .front,
-            deviceId: deviceId,
-            includeAudio: includeAudio,
-            durationMs: durationMs,
+            options: CameraMovieSessionOptions(
+                preferFrontCamera: facing == .front,
+                deviceId: deviceId,
+                includeAudio: includeAudio,
+                durationMs: durationMs),
             pickCamera: { preferFrontCamera, deviceId in
-                Self.pickCamera(facing: preferFrontCamera ? .front : .back, deviceId: deviceId)
+                try Self.pickCamera(facing: preferFrontCamera ? .front : .back, deviceId: deviceId)
             },
-            cameraUnavailableError: CameraError.cameraUnavailable,
             mapSetupError: Self.mapMovieSetupError)
         let session = prepared.session
         let output = prepared.output
@@ -169,46 +185,21 @@ actor CameraCaptureService {
         }
     }
 
-    private nonisolated static func availableCameras() -> [AVCaptureDevice] {
-        var types: [AVCaptureDevice.DeviceType] = [
-            .builtInWideAngleCamera,
-            .continuityCamera,
-        ]
-        if let external = externalDeviceType() {
-            types.append(external)
-        }
-        let session = AVCaptureDevice.DiscoverySession(
-            deviceTypes: types,
-            mediaType: .video,
-            position: .unspecified)
-        return session.devices
-    }
-
-    private nonisolated static func externalDeviceType() -> AVCaptureDevice.DeviceType? {
-        if #available(macOS 14.0, *) {
-            return .external
-        }
-        // Use raw value to avoid deprecated symbol in the SDK.
-        return AVCaptureDevice.DeviceType(rawValue: "AVCaptureDeviceTypeExternalUnknown")
-    }
-
     private nonisolated static func pickCamera(
         facing: CameraFacing,
-        deviceId: String?) -> AVCaptureDevice?
+        deviceId: String?) throws -> AVCaptureDevice
     {
-        if let deviceId, !deviceId.isEmpty {
-            if let match = availableCameras().first(where: { $0.uniqueID == deviceId }) {
-                return match
-            }
-        }
-        let position: AVCaptureDevice.Position = (facing == .front) ? .front : .back
-
-        if let device = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: position) {
-            return device
-        }
-
-        // Many macOS cameras report `unspecified` position; fall back to any default.
-        return AVCaptureDevice.default(for: .video)
+        try CameraCapturePipelineSupport.selectCamera(
+            deviceId: deviceId,
+            matching: CameraDeviceResolver.camera,
+            fallback: {
+                let position: AVCaptureDevice.Position = facing == .front ? .front : .back
+                // Many macOS cameras report `unspecified` position; fall back only without an explicit device.
+                return AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: position) ??
+                    AVCaptureDevice.default(for: .video)
+            },
+            unavailableError: CameraError.cameraUnavailable,
+            deviceNotFoundError: { CameraPTZError.deviceNotFound($0) })
     }
 
     private nonisolated static func clampQuality(_ quality: Double?) -> Double {

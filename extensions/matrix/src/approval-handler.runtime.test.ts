@@ -1,3 +1,4 @@
+// Matrix tests cover approval handler plugin behavior.
 import type {
   ExecApprovalRequest,
   PluginApprovalRequest,
@@ -5,9 +6,23 @@ import type {
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { matrixApprovalNativeRuntime } from "./approval-handler.runtime.js";
 import {
-  clearMatrixApprovalReactionTargetsForTest,
-  resolveMatrixApprovalReactionTarget,
+  resolveMatrixApprovalReactionTargetWithPersistence as resolveMatrixApprovalReactionTargetWithPersistenceRaw,
+  unregisterMatrixApprovalReactionTargetsForApproval,
 } from "./approval-reactions.js";
+
+type ResolveTargetParams = Parameters<
+  typeof resolveMatrixApprovalReactionTargetWithPersistenceRaw
+>[0];
+
+function resolveMatrixApprovalReactionTargetWithPersistence(
+  params: Omit<ResolveTargetParams, "accountId"> & { accountId?: string },
+) {
+  const { accountId = "default", ...target } = params;
+  return resolveMatrixApprovalReactionTargetWithPersistenceRaw({
+    ...target,
+    accountId,
+  });
+}
 
 type MatrixDeliverPendingParams = Parameters<
   typeof matrixApprovalNativeRuntime.transport.deliverPending
@@ -20,6 +35,21 @@ type MatrixPendingPluginApprovalView = Extract<
 >;
 
 const MATRIX_APPROVAL_METADATA_KEY = "com.openclaw.approval";
+
+function expectRecordFields(value: unknown, expected: Record<string, unknown>) {
+  if (!value || typeof value !== "object") {
+    throw new Error("Expected record");
+  }
+  const actual = value as Record<string, unknown>;
+  for (const [key, expectedValue] of Object.entries(expected)) {
+    expect(actual[key]).toEqual(expectedValue);
+  }
+  return actual;
+}
+
+function mockCall<T extends readonly unknown[]>(mock: { mock: { calls: T[] } }, index = 0) {
+  return mock.mock.calls.at(index);
+}
 
 function buildMatrixReceipt(messageIds: readonly string[], roomId = "!room:example.org") {
   return {
@@ -56,6 +86,11 @@ function buildMatrixApprovalRoomTarget(
   };
 }
 
+// Pending approvals expire in the future; the reaction target store TTLs its
+// memory layer from `view.expiresAtMs - now`, so epoch-past fixtures would
+// evict the mapping before assertions run.
+const TEST_APPROVAL_EXPIRES_AT_MS = Date.now() + 5 * 60_000;
+
 function buildExecApprovalView(
   overrides: Partial<MatrixPendingExecApprovalView> = {},
 ): MatrixPendingExecApprovalView {
@@ -86,7 +121,7 @@ function buildExecApprovalView(
         command: "/approve req-1 deny",
       },
     ],
-    expiresAtMs: 1_000,
+    expiresAtMs: TEST_APPROVAL_EXPIRES_AT_MS,
     ...overrides,
   };
 }
@@ -113,7 +148,7 @@ function buildPluginApprovalView(
         command: "/approve plugin:req-1 allow-once",
       },
     ],
-    expiresAtMs: 1_000,
+    expiresAtMs: TEST_APPROVAL_EXPIRES_AT_MS,
     ...overrides,
   };
 }
@@ -157,8 +192,17 @@ async function buildPendingPayload(view: MatrixPendingApprovalView) {
 }
 
 describe("matrixApprovalNativeRuntime", () => {
-  beforeEach(() => {
-    clearMatrixApprovalReactionTargetsForTest();
+  beforeEach(async () => {
+    await unregisterMatrixApprovalReactionTargetsForApproval({
+      accountId: "default",
+      approvalId: "req-1",
+      approvalKind: "exec",
+    });
+    await unregisterMatrixApprovalReactionTargetsForApproval({
+      accountId: "default",
+      approvalId: "plugin:req-1",
+      approvalKind: "plugin",
+    });
   });
 
   it("sends versioned Matrix approval content with pending exec approvals", async () => {
@@ -193,25 +237,22 @@ describe("matrixApprovalNativeRuntime", () => {
       pendingPayload,
     });
 
-    expect(sendSingleTextMessage).toHaveBeenCalledWith(
-      "room:!room:example.org",
-      expect.stringContaining("echo hi"),
-      expect.objectContaining({
-        extraContent: {
-          [MATRIX_APPROVAL_METADATA_KEY]: expect.objectContaining({
-            version: 1,
-            type: "approval.request",
-            state: "pending",
-            id: "req-1",
-            kind: "exec",
-            commandText: "echo hi",
-            cwd: "/repo",
-            agentId: "agent-1",
-            allowedDecisions: ["allow-once", "deny"],
-          }),
-        },
-      }),
-    );
+    const [target, text, options] = mockCall(sendSingleTextMessage) ?? [];
+    expect(target).toBe("room:!room:example.org");
+    expect(String(text)).toContain("echo hi");
+    const extraContent = (options as { extraContent?: Record<string, unknown> } | undefined)
+      ?.extraContent;
+    expectRecordFields(extraContent?.[MATRIX_APPROVAL_METADATA_KEY], {
+      version: 1,
+      type: "approval.request",
+      state: "pending",
+      id: "req-1",
+      kind: "exec",
+      commandText: "echo hi",
+      cwd: "/repo",
+      agentId: "agent-1",
+      allowedDecisions: ["allow-once", "deny"],
+    });
   });
 
   it("delivers Matrix approval content with plugin approval fields", async () => {
@@ -246,47 +287,40 @@ describe("matrixApprovalNativeRuntime", () => {
       pendingPayload,
     });
 
-    expect(sendSingleTextMessage).toHaveBeenCalledWith(
-      "room:!room:example.org",
-      expect.stringContaining("deploy"),
-      expect.objectContaining({
-        extraContent: {
-          [MATRIX_APPROVAL_METADATA_KEY]: {
-            version: 1,
-            type: "approval.request",
-            state: "pending",
-            phase: "pending",
-            id: "plugin:req-1",
-            kind: "plugin",
-            title: "Plugin Approval Required",
-            description: "Approve the tool call.",
-            expiresAtMs: 1_000,
-            metadata: [],
-            allowedDecisions: ["allow-once"],
-            actions: [
-              {
-                decision: "allow-once",
-                label: "Allow Once",
-                style: "success",
-                command: "/approve plugin:req-1 allow-once",
-              },
-            ],
-            pluginId: "ops",
-            toolName: "deploy",
-            agentId: "agent-1",
-            severity: "critical",
-          },
+    const [target, text, options] = mockCall(sendSingleTextMessage) ?? [];
+    expect(target).toBe("room:!room:example.org");
+    expect(String(text)).toContain("deploy");
+    const extraContent = (options as { extraContent?: Record<string, unknown> } | undefined)
+      ?.extraContent;
+    expect(extraContent?.[MATRIX_APPROVAL_METADATA_KEY]).toEqual({
+      version: 1,
+      type: "approval.request",
+      state: "pending",
+      phase: "pending",
+      id: "plugin:req-1",
+      kind: "plugin",
+      title: "Plugin Approval Required",
+      description: "Approve the tool call.",
+      expiresAtMs: TEST_APPROVAL_EXPIRES_AT_MS,
+      metadata: [],
+      allowedDecisions: ["allow-once"],
+      actions: [
+        {
+          decision: "allow-once",
+          label: "Allow Once",
+          style: "success",
+          command: "/approve plugin:req-1 allow-once",
         },
-      }),
-    );
-    expect(reactMessage).toHaveBeenCalledWith(
-      "!room:example.org",
-      "$plugin-approval",
-      "✅",
-      expect.objectContaining({
-        accountId: "default",
-      }),
-    );
+      ],
+      pluginId: "ops",
+      toolName: "deploy",
+      agentId: "agent-1",
+      severity: "critical",
+    });
+    expect(mockCall(reactMessage)?.[0]).toBe("!room:example.org");
+    expect(mockCall(reactMessage)?.[1]).toBe("$plugin-approval");
+    expect(mockCall(reactMessage)?.[2]).toBe("✅");
+    expectRecordFields(mockCall(reactMessage)?.[3], { accountId: "default" });
   });
 
   it("binds Matrix approval reactions before publishing option reactions", async () => {
@@ -298,13 +332,14 @@ describe("matrixApprovalNativeRuntime", () => {
     });
     const reactMessage = vi.fn().mockImplementation(async () => {
       expect(
-        resolveMatrixApprovalReactionTarget({
+        await resolveMatrixApprovalReactionTargetWithPersistence({
           roomId: "!room:example.org",
           eventId: "$approval",
           reactionKey: "✅",
         }),
       ).toEqual({
         approvalId: "req-1",
+        approvalKind: "exec",
         decision: "allow-once",
       });
     });
@@ -371,7 +406,7 @@ describe("matrixApprovalNativeRuntime", () => {
     });
 
     expect(sendSingleTextMessage).toHaveBeenCalledTimes(2);
-    expect(entry).toMatchObject({
+    expectRecordFields(entry, {
       roomId: "!room:example.org",
       platformMessageIds: ["$approval"],
     });
@@ -414,12 +449,11 @@ describe("matrixApprovalNativeRuntime", () => {
     });
 
     expect(repairDirectRooms).toHaveBeenCalledTimes(2);
-    expect(prepared).toMatchObject({
-      target: {
-        to: "room:!dm:example.org",
-        roomId: "!dm:example.org",
-        threadId: undefined,
-      },
+    const preparedTarget = expectRecordFields(prepared, {});
+    expect(preparedTarget.target).toEqual({
+      to: "room:!dm:example.org",
+      roomId: "!dm:example.org",
+      threadId: undefined,
     });
   });
 
@@ -468,23 +502,17 @@ describe("matrixApprovalNativeRuntime", () => {
       pendingPayload,
     });
 
-    expect(sendMessage).toHaveBeenCalledWith(
-      "room:!room:example.org",
-      pendingPayload.text,
-      expect.objectContaining({
-        accountId: "default",
-        extraContent: pendingPayload.extraContent,
-      }),
-    );
-    expect(reactMessage).toHaveBeenCalledWith(
-      "!room:example.org",
-      "$primary",
-      expect.any(String),
-      expect.objectContaining({
-        accountId: "default",
-      }),
-    );
-    expect(entry).toMatchObject({
+    expect(mockCall(sendMessage)?.[0]).toBe("room:!room:example.org");
+    expect(mockCall(sendMessage)?.[1]).toBe(pendingPayload.text);
+    expectRecordFields(mockCall(sendMessage)?.[2], {
+      accountId: "default",
+      extraContent: pendingPayload.extraContent,
+    });
+    expect(mockCall(reactMessage)?.[0]).toBe("!room:example.org");
+    expect(mockCall(reactMessage)?.[1]).toBe("$primary");
+    expect(typeof mockCall(reactMessage)?.[2]).toBe("string");
+    expectRecordFields(mockCall(reactMessage)?.[3], { accountId: "default" });
+    expectRecordFields(entry, {
       roomId: "!room:example.org",
       platformMessageIds: ["$primary", "$last"],
       reactionEventId: "$primary",
@@ -507,21 +535,23 @@ describe("matrixApprovalNativeRuntime", () => {
     });
 
     expect(binding).toEqual({
+      accountId: "default",
       roomId: "!room:example.org",
       eventId: "$primary",
     });
     expect(
-      resolveMatrixApprovalReactionTarget({
+      await resolveMatrixApprovalReactionTargetWithPersistence({
         roomId: "!room:example.org",
         eventId: "$primary",
         reactionKey: "✅",
       }),
     ).toEqual({
       approvalId: "req-1",
+      approvalKind: "exec",
       decision: "allow-once",
     });
     expect(
-      resolveMatrixApprovalReactionTarget({
+      await resolveMatrixApprovalReactionTargetWithPersistence({
         roomId: "!room:example.org",
         eventId: "$last",
         reactionKey: "✅",

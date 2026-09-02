@@ -1,253 +1,119 @@
-import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
-import {
-  asFiniteNumber,
-  trimToUndefined,
-  type SpeechDirectiveTokenParseContext,
-  type SpeechProviderConfig,
-  type SpeechProviderOverrides,
-  type SpeechProviderPlugin,
-  type SpeechSynthesisTarget,
+// Xai provider module implements model/runtime integration.
+import { resolveGeneratedMediaMaxBytes } from "openclaw/plugin-sdk/media-generation-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/provider-auth";
+import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
+import type {
+  SpeechProviderPlugin,
+  SpeechSynthesisRequest,
+  SpeechSynthesisTarget,
 } from "openclaw/plugin-sdk/speech";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
-  isValidXaiTtsVoice,
-  normalizeXaiLanguageCode,
+  createXaiSpeechProviderMetadata,
+  readXaiSpeechOverrides,
+  readXaiSpeechProviderConfig,
+  resolveDirectXaiAudioApiKey,
+  resolveXaiSpeechResponseFormat,
+  xaiSpeechResponseFormatToFileExtension,
+  XAI_TTS_FALLBACK_VOICES,
   normalizeXaiTtsBaseUrl,
-  XAI_BASE_URL,
-  XAI_TTS_VOICES,
-  xaiTTS,
-} from "./tts.js";
+  type XaiSpeechResponseFormat,
+} from "./speech-provider-metadata.js";
+import { listXaiTtsVoices, xaiTTS, xaiTTSStream } from "./tts.js";
 
-const XAI_SPEECH_RESPONSE_FORMATS = ["mp3", "wav", "pcm", "mulaw", "alaw"] as const;
-
-type XaiSpeechResponseFormat = (typeof XAI_SPEECH_RESPONSE_FORMATS)[number];
-
-type XaiTtsProviderConfig = {
-  apiKey?: string;
-  baseUrl: string;
-  voiceId: string;
-  language?: string;
-  speed?: number;
-  responseFormat?: XaiSpeechResponseFormat;
-};
-
-type XaiTtsProviderOverrides = {
-  voiceId?: string;
-  language?: string;
-  speed?: number;
-};
-
-function normalizeXaiSpeechResponseFormat(value: unknown): XaiSpeechResponseFormat | undefined {
-  const next = normalizeLowercaseStringOrEmpty(value);
-  if (!next) {
-    return undefined;
-  }
-  if (XAI_SPEECH_RESPONSE_FORMATS.some((format) => format === next)) {
-    return next as XaiSpeechResponseFormat;
-  }
-  throw new Error(`Invalid xAI speech responseFormat: ${next}`);
-}
-
-function resolveSpeechResponseFormat(
-  target: SpeechSynthesisTarget,
-  configuredFormat?: XaiSpeechResponseFormat,
-): XaiSpeechResponseFormat {
-  if (configuredFormat) {
-    return configuredFormat;
-  }
-  return "mp3";
-}
-
-function responseFormatToFileExtension(
-  format: XaiSpeechResponseFormat,
-): ".mp3" | ".pcm" | ".wav" | ".mulaw" | ".alaw" {
-  switch (format) {
-    case "wav":
-      return ".wav";
-    case "pcm":
-      return ".pcm";
-    case "mulaw":
-      return ".mulaw";
-    case "alaw":
-      return ".alaw";
-    default:
-      return ".mp3";
-  }
-}
-
-function normalizeXaiProviderConfig(rawConfig: Record<string, unknown>): XaiTtsProviderConfig {
-  const providers = rawConfig?.providers as Record<string, unknown> | undefined;
-  const xai = (providers?.xai ?? rawConfig?.xai ?? rawConfig) as Record<string, unknown>;
+async function resolveXaiSpeechSynthesisRequest(
+  req: Pick<
+    SpeechSynthesisRequest,
+    "cfg" | "providerConfig" | "providerOverrides" | "text" | "timeoutMs"
+  > & { target?: SpeechSynthesisTarget },
+  forcedResponseFormat?: XaiSpeechResponseFormat,
+) {
+  const config = readXaiSpeechProviderConfig(req.providerConfig);
+  const overrides = readXaiSpeechOverrides(req.providerOverrides);
   return {
-    apiKey: normalizeResolvedSecretInputString({
-      value: xai?.apiKey,
-      path: "messages.tts.providers.xai.apiKey",
-    }),
-    baseUrl: normalizeXaiTtsBaseUrl(
-      trimToUndefined(xai?.baseUrl) ?? trimToUndefined(process.env.XAI_BASE_URL) ?? XAI_BASE_URL,
-    ),
-    voiceId: trimToUndefined(xai?.voiceId ?? xai?.voice) ?? "eve",
-    language: normalizeXaiLanguageCode(trimToUndefined(xai?.language ?? xai?.languageCode)),
-    speed: asFiniteNumber(xai?.speed),
-    responseFormat: normalizeXaiSpeechResponseFormat(xai?.responseFormat),
-  };
-}
-
-function readXaiProviderConfig(config: SpeechProviderConfig): XaiTtsProviderConfig {
-  const normalized = normalizeXaiProviderConfig({});
-  return {
-    apiKey: trimToUndefined(config.apiKey) ?? normalized.apiKey,
-    baseUrl: trimToUndefined(config.baseUrl) ?? normalized.baseUrl,
-    voiceId: trimToUndefined(config.voiceId ?? config.voice) ?? normalized.voiceId,
-    language:
-      normalizeXaiLanguageCode(trimToUndefined(config.language ?? config.languageCode)) ??
-      normalized.language,
-    speed: asFiniteNumber(config.speed) ?? normalized.speed,
+    text: req.text,
+    apiKey: await resolveXaiAudioApiKey(config.apiKey, req.cfg),
+    baseUrl: config.baseUrl,
+    voiceId: overrides.voiceId ?? config.voiceId,
+    language: overrides.language ?? config.language,
+    speed: overrides.speed ?? config.speed,
     responseFormat:
-      normalizeXaiSpeechResponseFormat(config.responseFormat) ?? normalized.responseFormat,
+      forcedResponseFormat ?? resolveXaiSpeechResponseFormat(req.target, config.responseFormat),
+    timeoutMs: req.timeoutMs,
+    maxBytes: resolveGeneratedMediaMaxBytes(req.cfg, "audio"),
   };
-}
-
-function readXaiOverrides(overrides: SpeechProviderOverrides | undefined): XaiTtsProviderOverrides {
-  if (!overrides) {
-    return {};
-  }
-  return {
-    voiceId: trimToUndefined(overrides.voiceId ?? overrides.voice),
-    language: normalizeXaiLanguageCode(trimToUndefined(overrides.language)),
-    speed: asFiniteNumber(overrides.speed),
-  };
-}
-
-function parseDirectiveToken(ctx: SpeechDirectiveTokenParseContext): {
-  handled: boolean;
-  overrides?: SpeechProviderOverrides;
-  warnings?: string[];
-} {
-  const providerConfig = ctx.providerConfig as Record<string, unknown> | undefined;
-  const baseUrl = trimToUndefined(providerConfig?.baseUrl);
-  switch (ctx.key) {
-    case "voice":
-    case "voice_id":
-    case "voiceid":
-    case "xai_voice":
-    case "xaivoice":
-      if (!ctx.policy.allowVoice) {
-        return { handled: true };
-      }
-      if (!isValidXaiTtsVoice(ctx.value, baseUrl)) {
-        return { handled: true, warnings: [`invalid xAI voice "${ctx.value}"`] };
-      }
-      return { handled: true, overrides: { voiceId: ctx.value } };
-    default:
-      return { handled: false };
-  }
 }
 
 export function buildXaiSpeechProvider(): SpeechProviderPlugin {
   return {
-    id: "xai",
-    label: "xAI",
-    autoSelectOrder: 25,
-    models: [],
-    voices: XAI_TTS_VOICES,
-    resolveConfig: ({ rawConfig }) => normalizeXaiProviderConfig(rawConfig),
-    parseDirectiveToken,
-    resolveTalkConfig: ({ baseTtsConfig, talkProviderConfig }) => {
-      const base = normalizeXaiProviderConfig(baseTtsConfig);
-      const responseFormat = normalizeXaiSpeechResponseFormat(talkProviderConfig.responseFormat);
-      return {
-        ...base,
-        ...(talkProviderConfig.apiKey === undefined
-          ? {}
-          : {
-              apiKey: normalizeResolvedSecretInputString({
-                value: talkProviderConfig.apiKey,
-                path: "talk.providers.xai.apiKey",
-              }),
-            }),
-        ...(trimToUndefined(talkProviderConfig.baseUrl) == null
-          ? {}
-          : { baseUrl: normalizeXaiTtsBaseUrl(trimToUndefined(talkProviderConfig.baseUrl)) }),
-        ...(trimToUndefined(talkProviderConfig.voiceId) == null
-          ? {}
-          : { voiceId: trimToUndefined(talkProviderConfig.voiceId) }),
-        ...(normalizeXaiLanguageCode(
-          trimToUndefined(talkProviderConfig.language ?? talkProviderConfig.languageCode),
-        ) == null
-          ? {}
-          : {
-              language: normalizeXaiLanguageCode(
-                trimToUndefined(talkProviderConfig.language ?? talkProviderConfig.languageCode),
-              ),
-            }),
-        ...(asFiniteNumber(talkProviderConfig.speed) == null
-          ? {}
-          : { speed: asFiniteNumber(talkProviderConfig.speed) }),
-        ...(responseFormat == null ? {} : { responseFormat }),
-      };
-    },
-    resolveTalkOverrides: ({ params }) => ({
-      ...(trimToUndefined(params.voiceId ?? params.voice) == null
-        ? {}
-        : { voiceId: trimToUndefined(params.voiceId ?? params.voice) }),
-      ...(normalizeXaiLanguageCode(trimToUndefined(params.language ?? params.languageCode)) == null
-        ? {}
-        : {
-            language: normalizeXaiLanguageCode(
-              trimToUndefined(params.language ?? params.languageCode),
-            ),
-          }),
-      ...(asFiniteNumber(params.speed) == null ? {} : { speed: asFiniteNumber(params.speed) }),
-    }),
-    listVoices: async () => XAI_TTS_VOICES.map((voice) => ({ id: voice, name: voice })),
-    isConfigured: ({ providerConfig }) =>
-      Boolean(readXaiProviderConfig(providerConfig).apiKey || process.env.XAI_API_KEY),
-    synthesize: async (req) => {
-      const config = readXaiProviderConfig(req.providerConfig);
-      const overrides = readXaiOverrides(req.providerOverrides);
-      const apiKey = config.apiKey || process.env.XAI_API_KEY;
+    ...createXaiSpeechProviderMetadata(),
+    listVoices: async (req) => {
+      const config = readXaiSpeechProviderConfig(req.providerConfig ?? {});
+      const directApiKey = normalizeOptionalString(req.apiKey) ?? config.apiKey;
+      const apiKey = await resolveOptionalXaiAudioApiKey(directApiKey, req.cfg);
       if (!apiKey) {
-        throw new Error("xAI API key missing");
+        return XAI_TTS_FALLBACK_VOICES.map((voice) => ({ id: voice, name: voice }));
       }
-      const responseFormat = resolveSpeechResponseFormat(req.target, config.responseFormat);
-      const audioBuffer = await xaiTTS({
-        text: req.text,
+      return await listXaiTtsVoices({
         apiKey,
-        baseUrl: config.baseUrl,
-        voiceId: overrides.voiceId ?? config.voiceId,
-        language: overrides.language ?? config.language,
-        speed: overrides.speed ?? config.speed,
-        responseFormat,
-        timeoutMs: req.timeoutMs,
+        baseUrl: normalizeXaiTtsBaseUrl(normalizeOptionalString(req.baseUrl) ?? config.baseUrl),
       });
+    },
+    synthesize: async (req) => {
+      const params = await resolveXaiSpeechSynthesisRequest(req);
       return {
-        audioBuffer,
-        outputFormat: responseFormat,
-        fileExtension: responseFormatToFileExtension(responseFormat),
+        audioBuffer: await xaiTTS(params),
+        outputFormat: params.responseFormat,
+        fileExtension: xaiSpeechResponseFormatToFileExtension(params.responseFormat),
         voiceCompatible: false,
       };
     },
+    streamSynthesize: async (req) => {
+      const params = await resolveXaiSpeechSynthesisRequest(req);
+      const stream = await xaiTTSStream(params);
+      return {
+        audioStream: stream.audioStream,
+        outputFormat: params.responseFormat,
+        fileExtension: xaiSpeechResponseFormatToFileExtension(params.responseFormat),
+        voiceCompatible: false,
+        release: stream.release,
+      };
+    },
     synthesizeTelephony: async (req) => {
-      const config = readXaiProviderConfig(req.providerConfig);
-      const overrides = readXaiOverrides(req.providerOverrides);
-      const apiKey = config.apiKey || process.env.XAI_API_KEY;
-      if (!apiKey) {
-        throw new Error("xAI API key missing");
-      }
-      const outputFormat = "pcm" as const;
-      const sampleRate = 24000;
-      const audioBuffer = await xaiTTS({
-        text: req.text,
-        apiKey,
-        baseUrl: config.baseUrl,
-        voiceId: overrides.voiceId ?? config.voiceId,
-        language: overrides.language ?? config.language,
-        speed: overrides.speed ?? config.speed,
-        responseFormat: outputFormat,
-        timeoutMs: req.timeoutMs,
-      });
-      return { audioBuffer, outputFormat, sampleRate };
+      const params = await resolveXaiSpeechSynthesisRequest(req, "pcm");
+      return { audioBuffer: await xaiTTS(params), outputFormat: "pcm", sampleRate: 24000 };
     },
   };
+}
+
+// Resolve an xAI bearer for `/v1/tts`:
+// 1. Configured `tts.providers.xai.apiKey` (or talk equivalent)
+// 2. `XAI_API_KEY` env var
+// 3. xAI OAuth auth profile (cfg-scoped)
+async function resolveOptionalXaiAudioApiKey(
+  configApiKey: string | undefined,
+  cfg?: OpenClawConfig,
+): Promise<string | undefined> {
+  const direct = resolveDirectXaiAudioApiKey(configApiKey);
+  if (direct) {
+    return direct;
+  }
+  if (!cfg) {
+    return undefined;
+  }
+  const auth = await resolveApiKeyForProvider({ provider: "xai", cfg });
+  return normalizeOptionalString(auth?.apiKey);
+}
+
+async function resolveXaiAudioApiKey(
+  configApiKey: string | undefined,
+  cfg: OpenClawConfig,
+): Promise<string> {
+  const apiKey = await resolveOptionalXaiAudioApiKey(configApiKey, cfg);
+  if (apiKey) {
+    return apiKey;
+  }
+  throw new Error(
+    "xAI credentials missing for TTS. Sign in with `openclaw onboard --auth-choice xai-oauth`, or run `openclaw onboard --auth-choice xai-api-key`, or set XAI_API_KEY.",
+  );
 }

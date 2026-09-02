@@ -1,3 +1,4 @@
+// Tests Docker build cache configuration and dependency cache keys.
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -45,15 +46,19 @@ describe("docker build cache layout", () => {
     await Promise.all(dockerfilePaths.map((path) => readRepoFile(path)));
   });
 
-  it("keeps the root dependency layer independent from scripts changes", async () => {
+  it("keeps both dependency installs independent from the full source copy", async () => {
     const dockerfile = await readRepoFile("Dockerfile");
-    const installIndex = dockerfile.indexOf("pnpm install --frozen-lockfile");
+    const installIndex = dockerfile.lastIndexOf("pnpm install --frozen-lockfile");
     const copyAllIndex = dockerfile.indexOf("COPY . .");
     const scriptsCopyIndex = dockerfile.indexOf("COPY scripts ./scripts");
 
     expect(installIndex).toBeGreaterThan(-1);
     expect(copyAllIndex).toBeGreaterThan(installIndex);
-    expect(scriptsCopyIndex === -1 || scriptsCopyIndex > installIndex).toBe(true);
+    if (scriptsCopyIndex === -1) {
+      expect(scriptsCopyIndex).toBe(-1);
+    } else {
+      expect(scriptsCopyIndex).toBeGreaterThan(installIndex);
+    }
   });
 
   it("uses pnpm cache mounts in Dockerfiles that install repo dependencies", async () => {
@@ -87,8 +92,23 @@ describe("docker build cache layout", () => {
   it("does not leave empty shell continuation lines in sandbox-common", async () => {
     const dockerfile = await readRepoFile("scripts/docker/sandbox/Dockerfile.common");
     expect(dockerfile).not.toContain("apt-get install -y --no-install-recommends ${PACKAGES} \\");
+    expect(dockerfile).toContain("ARG INSTALL_NODE=1");
+    expect(dockerfile).toContain("ARG NODE_MAJOR=24");
+    expect(
+      dockerfile.match(/curl -fsSL --connect-timeout 10 --max-time 120 -o "\$installer"/gu),
+    ).toHaveLength(3);
+    expect(dockerfile.match(/installer="\$\(mktemp\)"/gu)).toHaveLength(3);
+    expect(dockerfile.match(/bash "\$installer" \|\| exit 1/gu)).toHaveLength(2);
+    expect(dockerfile.match(/rm -f "\$installer"/gu)).toHaveLength(3);
+    expect(dockerfile).toContain("apt-get install -y --no-install-recommends nodejs");
+    expect(dockerfile).toContain('ln -sf "${BUN_INSTALL_DIR}/bin/bun"');
+    expect(dockerfile).toMatch(
+      /chmod 0644 "\$installer"; \\\n\s+su - linuxbrew -c "NONINTERACTIVE=1 CI=1 \/bin\/bash '\$installer'" \|\| exit 1/u,
+    );
+    expect(dockerfile).not.toMatch(/curl[^\n]+\|\s*(?:bash|sh)/u);
+    expect(dockerfile).toContain("source=package.json,target=/tmp/openclaw-package.json");
     expect(dockerfile).toContain(
-      'RUN if [ "${INSTALL_PNPM}" = "1" ]; then npm install -g pnpm; fi',
+      'npm install -g "$pnpm_spec" "--allow-scripts=$pnpm_spec" && pnpm --version;',
     );
   });
 
@@ -110,15 +130,22 @@ describe("docker build cache layout", () => {
     expect(dockerfile).toMatch(
       /^COPY --from=openclaw_package --chown=appuser:appuser openclaw-current\.tgz \/tmp\/openclaw-current\.tgz$/m,
     );
+    // The dependency reify layer must key on the extracted manifest, not the
+    // per-PR tarball bytes, so warm builders skip the full npm install.
     expect(dockerfile).toContain(
-      "npm install -g --prefix /tmp/openclaw-prefix /tmp/openclaw-current.tgz --no-fund --no-audit",
+      "COPY --from=functional-manifest --chown=appuser:appuser /tmp/openclaw-deps /tmp/openclaw-deps",
     );
-    expect(dockerfile).not.toContain(
-      "cp -a /tmp/openclaw-prefix/lib/node_modules/. /app/node_modules/",
+    expect(dockerfile).toContain("npm install --omit=dev --no-fund --no-audit");
+    expect(dockerfile).not.toContain("npm install -g --prefix");
+    expect(dockerfile).toContain(
+      "COPY --from=functional-deps --chown=appuser:appuser /tmp/openclaw-deps/node_modules /app/node_modules",
     );
-    expect(dockerfile).toContain("cp -a /tmp/openclaw-prefix/lib/node_modules/openclaw/. /app/");
-    expect(dockerfile).toContain("rm -rf /app/node_modules/openclaw");
-    expect(dockerfile).toContain("ln -sf /app /app/node_modules/openclaw");
+    // Packaged prune/hotfix logic must run before the self-link exists so its
+    // walks cannot cycle through /app/node_modules/openclaw -> /app.
+    const postinstallIndex = dockerfile.indexOf("runBundledPluginPostinstall");
+    const selfLinkIndex = dockerfile.indexOf("ln -sfn /app /app/node_modules/openclaw");
+    expect(postinstallIndex).toBeGreaterThan(-1);
+    expect(selfLinkIndex).toBeGreaterThan(postinstallIndex);
   });
 
   it("copies manifests before install in the qr-import image", async () => {

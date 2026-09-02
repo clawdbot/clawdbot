@@ -1,3 +1,6 @@
+/**
+ * Tests gateway stability helpers for cleanup and repeated startup cycles.
+ */
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   emitDiagnosticEvent,
@@ -124,10 +127,8 @@ describe("gateway stability lane", () => {
     expect(lastSeq).toBeGreaterThan(firstSeq);
     expect(snapshot.summary.byType["diagnostic.memory.sample"]).toBeGreaterThan(0);
     expect(snapshot.summary.byType["message.queued"]).toBeGreaterThan(0);
-    expect(snapshot.summary.memory).toMatchObject({
-      maxRssBytes: maxSyntheticRssBytes,
-      pressureCount: 0,
-    });
+    expect(snapshot.summary.memory?.maxRssBytes).toBe(maxSyntheticRssBytes);
+    expect(snapshot.summary.memory?.pressureCount).toBe(0);
     expect(snapshot.summary.memory?.maxHeapUsedBytes).toBeLessThan(96 * MB);
     expect(snapshot.summary.payloadLarge?.chunked).toBeGreaterThan(0);
     expect(snapshot.summary.payloadLarge?.bySurface["gateway.stability.probe"]).toBeGreaterThan(0);
@@ -145,7 +146,7 @@ describe("gateway stability lane", () => {
     const unexpectedReasons = sessionEvents
       .map((event) => event.reason)
       .filter((reason) => reason !== STABILITY_REASON);
-    expect(unexpectedReasons).toEqual([]);
+    expect(unexpectedReasons).toStrictEqual([]);
 
     stopDiagnosticStabilityRecorder();
     emitDiagnosticEvent({

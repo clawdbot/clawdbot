@@ -1,12 +1,11 @@
+// Tests music generation runtime dispatch and provider fallback behavior.
 import { beforeEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/types.js";
-import {
-  generateMusic,
-  listRuntimeMusicGenerationProviders,
-  type GenerateMusicParams,
-  type MusicGenerationRuntimeDeps,
-} from "./runtime.js";
+import type { GenerateMusicParams } from "./runtime-types.js";
+import { generateMusic, listRuntimeMusicGenerationProviders } from "./runtime.js";
 import type { MusicGenerationProvider } from "./types.js";
+
+type MusicGenerationRuntimeDeps = NonNullable<Parameters<typeof generateMusic>[1]>;
 
 let providers: MusicGenerationProvider[] = [];
 let listedConfigs: Array<OpenClawConfig | undefined> = [];
@@ -23,7 +22,35 @@ const runtimeDeps: MusicGenerationRuntimeDeps = {
 };
 
 function runGenerateMusic(params: GenerateMusicParams) {
-  return generateMusic(params, runtimeDeps);
+  const defaults = params.cfg.agents?.defaults as
+    | (NonNullable<OpenClawConfig["agents"]>["defaults"] & {
+        musicGenerationModel?: unknown;
+      })
+    | undefined;
+  const cfg =
+    defaults?.musicGenerationModel !== undefined && defaults.mediaModels?.music === undefined
+      ? {
+          ...params.cfg,
+          agents: {
+            ...params.cfg.agents,
+            defaults: {
+              ...defaults,
+              mediaModels: { ...defaults.mediaModels, music: defaults.musicGenerationModel },
+            },
+          },
+        }
+      : params.cfg;
+  return generateMusic({ ...params, cfg }, runtimeDeps);
+}
+
+function createBufferedMusicProvider(id: string, buffers: Buffer[]): MusicGenerationProvider {
+  return {
+    id,
+    capabilities: {},
+    generateMusic: async () => ({
+      tracks: buffers.map((buffer) => ({ buffer, mimeType: "audio/mpeg" })),
+    }),
+  };
 }
 
 describe("music-generation runtime", () => {
@@ -72,8 +99,8 @@ describe("music-generation runtime", () => {
 
     expect(result.provider).toBe("music-plugin");
     expect(result.model).toBe("track-v1");
-    expect(result.attempts).toEqual([]);
-    expect(result.ignoredOverrides).toEqual([]);
+    expect(result.attempts).toStrictEqual([]);
+    expect(result.ignoredOverrides).toStrictEqual([]);
     expect(seenAuthStore).toEqual(authStore);
     expect(seenTimeoutMs).toBe(12_345);
     expect(result.tracks).toEqual([
@@ -83,6 +110,36 @@ describe("music-generation runtime", () => {
         fileName: "sample.mp3",
       },
     ]);
+  });
+
+  it("uses configured music-generation timeout when call omits timeoutMs", async () => {
+    let seenTimeoutMs: number | undefined;
+    providers = [
+      {
+        id: "music-plugin",
+        capabilities: {},
+        async generateMusic(req: { timeoutMs?: number }) {
+          seenTimeoutMs = req.timeoutMs;
+          return {
+            tracks: [{ buffer: Buffer.from("mp3-bytes"), mimeType: "audio/mpeg" }],
+            model: "track-v1",
+          };
+        },
+      },
+    ];
+
+    await runGenerateMusic({
+      cfg: {
+        agents: {
+          defaults: {
+            musicGenerationModel: { primary: "music-plugin/track-v1", timeoutMs: 300_000 },
+          },
+        },
+      } as OpenClawConfig,
+      prompt: "play a synth line",
+    });
+
+    expect(seenTimeoutMs).toBe(300_000);
   });
 
   it("does not list providers when explicit config disables auto provider fallback", async () => {
@@ -119,7 +176,7 @@ describe("music-generation runtime", () => {
     const result = await runGenerateMusic(params);
 
     expect(result.provider).toBe("music-plugin");
-    expect(listedConfigs).toEqual([]);
+    expect(listedConfigs).toStrictEqual([]);
   });
 
   it("auto-detects and falls through to another configured music-generation provider by default", async () => {
@@ -161,6 +218,63 @@ describe("music-generation runtime", () => {
         error: "Google music generation response missing audio data",
       },
     ]);
+  });
+
+  it("falls through when a music provider returns an empty buffer", async () => {
+    providers = [
+      createBufferedMusicProvider("empty", [Buffer.from("partial"), Buffer.alloc(0)]),
+      createBufferedMusicProvider("valid", [Buffer.from("mp3-bytes")]),
+    ];
+
+    const result = await runGenerateMusic({
+      cfg: {
+        agents: {
+          defaults: {
+            mediaModels: {
+              music: { primary: "empty/track-v1", fallbacks: ["valid/track-v2"] },
+            },
+          },
+        },
+      } as OpenClawConfig,
+      prompt: "play a synth line",
+    });
+
+    expect(result.provider).toBe("valid");
+    expect(result.tracks[0]?.buffer).toEqual(Buffer.from("mp3-bytes"));
+    expect(result.attempts).toEqual([
+      {
+        provider: "empty",
+        model: "track-v1",
+        error: "Music generation provider returned an empty track buffer at index 1.",
+      },
+    ]);
+  });
+
+  it("fails visibly when every music provider returns an empty buffer", async () => {
+    providers = [
+      createBufferedMusicProvider("empty-primary", [Buffer.alloc(0)]),
+      createBufferedMusicProvider("empty-fallback", [Buffer.alloc(0)]),
+    ];
+
+    await expect(
+      runGenerateMusic({
+        cfg: {
+          agents: {
+            defaults: {
+              mediaModels: {
+                music: {
+                  primary: "empty-primary/track-v1",
+                  fallbacks: ["empty-fallback/track-v2"],
+                },
+              },
+            },
+          },
+        } as OpenClawConfig,
+        prompt: "play a synth line",
+      }),
+    ).rejects.toThrow(
+      "All music generation models failed (2): empty-primary/track-v1: Music generation provider returned an empty track buffer at index 0. | empty-fallback/track-v2: Music generation provider returned an empty track buffer at index 0.",
+    );
   });
 
   it("lists runtime music-generation providers through the provider registry", () => {
@@ -248,6 +362,64 @@ describe("music-generation runtime", () => {
     expect(result.ignoredOverrides).toEqual([
       { key: "durationSeconds", value: 30 },
       { key: "format", value: "wav" },
+    ]);
+  });
+
+  it("ignores model-specific unsupported lyrics and instrumental overrides", async () => {
+    let seenRequest:
+      | {
+          lyrics?: string;
+          instrumental?: boolean;
+        }
+      | undefined;
+    providers = [
+      {
+        id: "fal",
+        capabilities: {
+          generate: {
+            supportsLyrics: true,
+            supportsLyricsByModel: {
+              "fal-ai/stable-audio-25/text-to-audio": false,
+            },
+            supportsInstrumental: true,
+            supportsInstrumentalByModel: {
+              "fal-ai/stable-audio-25/text-to-audio": false,
+            },
+          },
+        },
+        generateMusic: async (req) => {
+          seenRequest = {
+            lyrics: req.lyrics,
+            instrumental: req.instrumental,
+          };
+          return {
+            tracks: [{ buffer: Buffer.from("wav-bytes"), mimeType: "audio/wav" }],
+            model: "fal-ai/stable-audio-25/text-to-audio",
+          };
+        },
+      },
+    ];
+
+    const result = await runGenerateMusic({
+      cfg: {
+        agents: {
+          defaults: {
+            musicGenerationModel: { primary: "fal/fal-ai/stable-audio-25/text-to-audio" },
+          },
+        },
+      } as OpenClawConfig,
+      prompt: "orchestral hit",
+      lyrics: "rise up",
+      instrumental: true,
+    });
+
+    expect(seenRequest).toEqual({
+      lyrics: undefined,
+      instrumental: undefined,
+    });
+    expect(result.ignoredOverrides).toEqual([
+      { key: "lyrics", value: "rise up" },
+      { key: "instrumental", value: true },
     ]);
   });
 
@@ -364,16 +536,60 @@ describe("music-generation runtime", () => {
     expect(seenRequest).toEqual({
       durationSeconds: 30,
     });
-    expect(result.ignoredOverrides).toEqual([]);
-    expect(result.normalization).toMatchObject({
-      durationSeconds: {
-        requested: 45,
-        applied: 30,
+    expect(result.ignoredOverrides).toStrictEqual([]);
+    if (!result.normalization || !result.metadata) {
+      throw new Error("Expected normalization and metadata");
+    }
+    expect(result.normalization.durationSeconds?.requested).toBe(45);
+    expect(result.normalization.durationSeconds?.applied).toBe(30);
+    expect(result.metadata.requestedDurationSeconds).toBe(45);
+    expect(result.metadata.normalizedDurationSeconds).toBe(30);
+  });
+
+  it.each([
+    { edit: { enabled: false }, count: 1 },
+    { edit: { enabled: true, maxInputImages: 1 }, count: 2 },
+    { edit: { enabled: true }, count: 11 },
+  ])("skips incompatible reference-image fallback candidates", async ({ edit, count }) => {
+    let incompatibleProviderCalled = false;
+    const inputImages = Array.from({ length: count }, () => ({
+      buffer: Buffer.from("reference"),
+      mimeType: "image/png",
+    }));
+    providers = [
+      {
+        id: "fal",
+        defaultModel: "prompt-only",
+        capabilities: { edit },
+        async generateMusic() {
+          incompatibleProviderCalled = true;
+          return { tracks: [{ buffer: Buffer.from("incorrect"), mimeType: "audio/mpeg" }] };
+        },
       },
+      {
+        id: "google",
+        defaultModel: "lyria",
+        capabilities: { edit: { enabled: true, maxInputImages: 14 } },
+        async generateMusic() {
+          return { tracks: [{ buffer: Buffer.from("correct"), mimeType: "audio/mpeg" }] };
+        },
+      },
+    ];
+
+    const result = await runGenerateMusic({
+      cfg: {
+        agents: {
+          defaults: {
+            musicGenerationModel: { primary: "fal/prompt-only", fallbacks: ["google/lyria"] },
+          },
+        },
+      } as OpenClawConfig,
+      prompt: "score the cover art",
+      inputImages,
     });
-    expect(result.metadata).toMatchObject({
-      requestedDurationSeconds: 45,
-      normalizedDurationSeconds: 30,
-    });
+
+    expect(incompatibleProviderCalled).toBe(false);
+    expect(result.provider).toBe("google");
+    expect(result.attempts).toHaveLength(1);
   });
 });

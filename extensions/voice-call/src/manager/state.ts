@@ -1,3 +1,4 @@
+// Voice Call plugin module implements state behavior.
 import { TerminalStates, type CallRecord, type CallState, type TranscriptEntry } from "../types.js";
 
 const ConversationStates = new Set<CallState>(["speaking", "listening"]);

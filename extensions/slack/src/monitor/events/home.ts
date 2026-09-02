@@ -1,11 +1,13 @@
+// Slack plugin module implements home behavior.
 import type { SlackEventMiddlewareArgs } from "@slack/bolt";
 import type { HomeView } from "@slack/types";
-import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import { danger } from "openclaw/plugin-sdk/runtime-env";
-import type { SlackMonitorContext } from "../context.js";
+import { DEFAULT_SLACK_SUGGESTED_PROMPTS, type SlackMonitorContext } from "../context.js";
 import type { SlackAppHomeOpenedEvent } from "../types.js";
 
-export function buildSlackHomeView(): HomeView {
+function buildSlackHomeView(slashCommandName?: string): HomeView {
+  const startSessionText = slashCommandName
+    ? `Send a DM, mention OpenClaw in a channel, or use \`/${slashCommandName}\` to start a session.`
+    : "Send a DM or mention OpenClaw in a channel to start a session.";
   return {
     type: "home",
     callback_id: "openclaw:home",
@@ -21,7 +23,7 @@ export function buildSlackHomeView(): HomeView {
         type: "section",
         text: {
           type: "mrkdwn",
-          text: "Send a DM, mention OpenClaw in a channel, or use `/openclaw` to start a session.",
+          text: startSessionText,
         },
       },
       {
@@ -39,32 +41,46 @@ export function buildSlackHomeView(): HomeView {
 
 export function registerSlackHomeEvents(params: {
   ctx: SlackMonitorContext;
+  slashCommandName?: string;
   trackEvent?: () => void;
 }) {
-  const { ctx, trackEvent } = params;
+  const { ctx, slashCommandName, trackEvent } = params;
 
   ctx.app.event(
     "app_home_opened",
     async ({ event, body }: SlackEventMiddlewareArgs<"app_home_opened">) => {
-      try {
-        if (ctx.shouldDropMismatchedSlackEvent(body)) {
-          return;
-        }
-        trackEvent?.();
-
-        const payload = event as SlackAppHomeOpenedEvent;
-        if (!payload.user || payload.tab === "messages") {
-          return;
-        }
-
-        await ctx.app.client.views.publish({
-          token: ctx.botToken,
-          user_id: payload.user,
-          view: buildSlackHomeView(),
-        });
-      } catch (err) {
-        ctx.runtime.error?.(danger(`slack app home handler failed: ${formatErrorMessage(err)}`));
+      if (ctx.shouldDropMismatchedSlackEvent(body)) {
+        return;
       }
+      trackEvent?.();
+
+      const payload = event as SlackAppHomeOpenedEvent;
+      if (!payload.user) {
+        return;
+      }
+      if (payload.tab === "messages") {
+        if (!payload.channel) {
+          return;
+        }
+        const promptsSet = await ctx.setSlackSuggestedPrompts({
+          channelId: payload.channel,
+          title: "Try asking",
+          prompts: DEFAULT_SLACK_SUGGESTED_PROMPTS,
+        });
+        // Both experiences can subscribe to App Home events. Assistant View
+        // requires thread_ts here, so only Slack accepting this threadless
+        // call proves Agent View and makes the durable mode write safe.
+        if (promptsSet) {
+          await ctx.recordSlackAgentView();
+        }
+        return;
+      }
+
+      await ctx.app.client.views.publish({
+        token: ctx.botToken,
+        user_id: payload.user,
+        view: buildSlackHomeView(slashCommandName),
+      });
     },
   );
 }

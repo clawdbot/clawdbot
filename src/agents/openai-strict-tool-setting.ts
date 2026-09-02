@@ -1,6 +1,15 @@
-import { readStringValue } from "../shared/string-coerce.js";
+/**
+ * Strict tool-schema default resolution for native OpenAI-compatible routes.
+ *
+ * Compatible providers can support strict schemas without inheriting OpenAI's required default.
+ */
+import { readStringValue } from "@openclaw/normalization-core/string-coerce";
 import { resolveProviderRequestCapabilities } from "./provider-attribution.js";
+import { getModelProviderRequestRouteFacts } from "./provider-request-config.js";
 
+// Resolves OpenAI strict-tool schema defaults. Native OpenAI routes require
+// strict=true, while compatible providers that merely support strict mode get
+// false so callers can opt in without forcing provider-specific behavior.
 type OpenAITransportKind = "stream" | "websocket";
 
 type OpenAIStrictToolModel = {
@@ -11,32 +20,32 @@ type OpenAIStrictToolModel = {
   compat?: unknown;
 };
 
-const optionalString = readStringValue;
-
 function resolvesToNativeOpenAIStrictTools(
   model: OpenAIStrictToolModel,
   transport: OpenAITransportKind,
 ): boolean {
-  const capabilities = resolveProviderRequestCapabilities({
-    provider: optionalString(model.provider),
-    api: optionalString(model.api),
-    baseUrl: optionalString(model.baseUrl),
-    capability: "llm",
-    transport,
-    modelId: optionalString(model.id),
-    compat: model.compat,
-  });
+  const capabilities =
+    getModelProviderRequestRouteFacts(model)?.capabilities ??
+    resolveProviderRequestCapabilities({
+      provider: readStringValue(model.provider),
+      api: readStringValue(model.api),
+      baseUrl: readStringValue(model.baseUrl),
+      capability: "llm",
+      transport,
+      modelId: readStringValue(model.id),
+      compat: model.compat,
+    });
   if (!capabilities.usesKnownNativeOpenAIRoute) {
     return false;
   }
   return (
     capabilities.provider === "openai" ||
-    capabilities.provider === "openai-codex" ||
     capabilities.provider === "azure-openai" ||
     capabilities.provider === "azure-openai-responses"
   );
 }
 
+/** Resolve the strict-tool setting for one OpenAI-compatible model/transport. */
 export function resolveOpenAIStrictToolSetting(
   model: OpenAIStrictToolModel,
   options?: { transport?: OpenAITransportKind; supportsStrictMode?: boolean },

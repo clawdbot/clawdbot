@@ -1,24 +1,19 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+// Whatsapp plugin module implements message line behavior.
+import { resolveAgentConfig } from "openclaw/plugin-sdk/agent-scope-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 
 export {
   formatInboundEnvelope,
   type EnvelopeFormatOptions,
-} from "openclaw/plugin-sdk/channel-envelope";
+} from "openclaw/plugin-sdk/channel-inbound";
 
 type WhatsAppMessagePrefixConfig = OpenClawConfig;
-
-function normalizeAgentId(agentId: string): string {
-  return agentId.trim().toLowerCase() || "main";
-}
 
 function resolveIdentityNamePrefix(
   cfg: WhatsAppMessagePrefixConfig,
   agentId: string,
 ): string | undefined {
-  const normalizedAgentId = normalizeAgentId(agentId);
-  const identityName = cfg.agents?.list
-    ?.find((agent) => normalizeAgentId(agent.id ?? "") === normalizedAgentId)
-    ?.identity?.name?.trim();
+  const identityName = resolveAgentConfig(cfg, agentId)?.identity?.name?.trim();
   return identityName ? `[${identityName}]` : undefined;
 }
 
@@ -27,7 +22,7 @@ export function resolveMessagePrefix(
   agentId: string,
   opts?: { configured?: string; hasAllowFrom?: boolean; fallback?: string },
 ): string {
-  const configured = opts?.configured ?? cfg.messages?.messagePrefix;
+  const configured = opts?.configured;
   if (configured !== undefined) {
     return configured;
   }

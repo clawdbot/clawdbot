@@ -1,3 +1,5 @@
+// Device auth test helpers create paired operator/node identities and tracked
+// WebSocket clients for gateway authorization suites.
 import os from "node:os";
 import path from "node:path";
 import { expect } from "vitest";
@@ -7,17 +9,14 @@ import {
   publicKeyRawBase64UrlFromPem,
   type DeviceIdentity,
 } from "../infra/device-identity.js";
-import {
-  approveDevicePairing,
-  getPairedDevice,
-  requestDevicePairing,
-  rotateDeviceToken,
-} from "../infra/device-pairing.js";
+import { approveDevicePairing } from "../infra/device-pairing-approval.js";
+import { rotateDeviceToken } from "../infra/device-pairing-tokens.js";
+import { getPairedDevice, requestDevicePairing } from "../infra/device-pairing.js";
 import { trackConnectChallengeNonce } from "./test-helpers.js";
 
 export function resolveDeviceIdentityPath(name: string): string {
   const root = process.env.OPENCLAW_STATE_DIR ?? process.env.HOME ?? os.tmpdir();
-  return path.join(root, "test-device-identities", `${name}.json`);
+  return path.join(root, "test-device-identities", `${name}.sqlite`);
 }
 
 export function loadDeviceIdentity(name: string): {
@@ -26,7 +25,7 @@ export function loadDeviceIdentity(name: string): {
   publicKey: string;
 } {
   const identityPath = resolveDeviceIdentityPath(name);
-  const identity = loadOrCreateDeviceIdentity(identityPath);
+  const identity = loadOrCreateDeviceIdentity({ path: identityPath });
   return {
     identityPath,
     identity,
@@ -40,6 +39,8 @@ export async function pairDeviceIdentity(params: {
   scopes: string[];
   clientId?: string;
   clientMode?: string;
+  platform?: string;
+  deviceFamily?: string;
 }): Promise<{
   identityPath: string;
   identity: DeviceIdentity;
@@ -53,6 +54,8 @@ export async function pairDeviceIdentity(params: {
     scopes: params.scopes,
     clientId: params.clientId,
     clientMode: params.clientMode,
+    platform: params.platform,
+    deviceFamily: params.deviceFamily,
   });
   await approveDevicePairing(request.request.requestId, {
     callerScopes: params.scopes,
@@ -109,8 +112,11 @@ export async function issueOperatorToken(params: {
   };
 }
 
-export async function openTrackedWs(port: number): Promise<WebSocket> {
-  const ws = new WebSocket(`ws://127.0.0.1:${port}`);
+export async function openTrackedWs(
+  port: number,
+  headers?: Record<string, string>,
+): Promise<WebSocket> {
+  const ws = new WebSocket(`ws://127.0.0.1:${port}`, headers ? { headers } : undefined);
   trackConnectChallengeNonce(ws);
   await new Promise<void>((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error("timeout waiting for ws open")), 5_000);

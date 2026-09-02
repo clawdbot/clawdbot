@@ -1,15 +1,19 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+// Qa Lab helper module supports qa gateway config behavior.
+import { OPENCLAW_VERSION } from "openclaw/plugin-sdk/agent-harness-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
+import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
-  defaultQaModelForMode,
   normalizeQaProviderMode,
   splitQaModelRef,
   type QaProviderMode,
 } from "./model-selection.js";
-import { getQaProvider } from "./providers/index.js";
-import { DEFAULT_QA_PROVIDER_MODE } from "./providers/index.js";
-import { normalizeQaThinkingLevel, type QaThinkingLevel } from "./qa-thinking.js";
+import { resolveQaRuntimeModelPair } from "./model-selection.runtime.js";
+import { getQaProvider, DEFAULT_QA_PROVIDER_MODE } from "./providers/index.js";
+import { QA_FRONTIER_PROVIDER_IDS } from "./providers/live-frontier/catalog.js";
+import type { QaThinkingLevel } from "./qa-thinking.js";
 import type { QaTransportGatewayConfig } from "./qa-transport.js";
+import type { RuntimeId } from "./runtime-parity.js";
 
 export { normalizeQaThinkingLevel, type QaThinkingLevel } from "./qa-thinking.js";
 
@@ -20,18 +24,27 @@ export const DEFAULT_QA_CONTROL_UI_ALLOWED_ORIGINS = Object.freeze([
   "http://localhost:43124",
 ]);
 
-export const QA_BASE_RUNTIME_PLUGIN_IDS = Object.freeze(["acpx", "memory-core"]);
+// External runtimes such as ACPX must be selected by the fixture that needs them.
+export const QA_BASE_RUNTIME_PLUGIN_IDS = Object.freeze(["memory-core"]);
+export const QA_CODEX_OPENAI_CATALOG_BASE_URL = "https://api.openai.com/v1";
+const QA_LAB_PLUGIN_ID = "qa-lab";
+const QA_DIRECT_FRONTIER_PLUGIN_IDS = new Set<string>(QA_FRONTIER_PROVIDER_IDS);
 
 export function mergeQaControlUiAllowedOrigins(extraOrigins?: string[]) {
   const normalizedExtra = (extraOrigins ?? [])
     .map((origin) => origin.trim())
     .filter((origin) => origin.length > 0);
-  return [...new Set([...DEFAULT_QA_CONTROL_UI_ALLOWED_ORIGINS, ...normalizedExtra])];
+  return uniqueStrings([...DEFAULT_QA_CONTROL_UI_ALLOWED_ORIGINS, ...normalizedExtra]);
 }
 
-function normalizeQaGatewayModelRef(input: string | undefined, fallback: string) {
-  const model = input?.trim();
-  return model && model.length > 0 ? model : fallback;
+function remapQaMockModelRefForCodex(modelRef: string) {
+  const split = splitQaModelRef(modelRef);
+  return split?.provider === "mock-openai" ? `openai/${split.model}` : modelRef;
+}
+
+function buildQaModelSelection(primaryModel: string, alternateModel: string) {
+  const fallbacks = alternateModel !== primaryModel ? [alternateModel] : undefined;
+  return fallbacks ? { primary: primaryModel, fallbacks } : { primary: primaryModel };
 }
 
 export function buildQaGatewayConfig(params: {
@@ -54,87 +67,173 @@ export function buildQaGatewayConfig(params: {
   liveProviderConfigs?: Record<string, ModelProviderConfig>;
   fastMode?: boolean;
   thinkingDefault?: QaThinkingLevel;
+  forcedRuntime?: RuntimeId;
 }): OpenClawConfig {
   const providerBaseUrl = params.providerBaseUrl ?? "http://127.0.0.1:44080/v1";
   const providerMode = normalizeQaProviderMode(params.providerMode ?? DEFAULT_QA_PROVIDER_MODE);
   const provider = getQaProvider(providerMode);
-  const primaryModel = normalizeQaGatewayModelRef(
-    params.primaryModel,
-    defaultQaModelForMode(providerMode),
-  );
-  const alternateModel = normalizeQaGatewayModelRef(
-    params.alternateModel,
-    defaultQaModelForMode(providerMode, { alternate: true }),
-  );
+  const usesCodexMockAppServer = params.forcedRuntime === "codex" && providerMode === "mock-openai";
+  const { primaryModel: normalizedPrimaryModel, alternateModel: normalizedAlternateModel } =
+    resolveQaRuntimeModelPair({
+      providerMode,
+      primaryModel: params.primaryModel,
+      alternateModel: params.alternateModel,
+    });
+  const primaryModel = usesCodexMockAppServer
+    ? remapQaMockModelRefForCodex(normalizedPrimaryModel)
+    : normalizedPrimaryModel;
+  const alternateModel = usesCodexMockAppServer
+    ? remapQaMockModelRefForCodex(normalizedAlternateModel)
+    : normalizedAlternateModel;
   const modelProviderIds = [primaryModel, alternateModel]
     .map((ref) => splitQaModelRef(ref)?.provider)
-    .filter((provider): provider is string => Boolean(provider));
+    .filter((providerValue): providerValue is string => Boolean(providerValue));
   const imageGenerationModelRef =
     params.imageGenerationModel !== undefined
       ? params.imageGenerationModel
       : provider.defaultImageGenerationModel({ modelProviderIds });
-  const selectedProviderIds = provider.usesModelProviderPlugins
-    ? [
-        ...new Set(
-          [...(params.enabledProviderIds ?? []), ...modelProviderIds, imageGenerationModelRef]
-            .map((value) =>
-              typeof value === "string" ? (splitQaModelRef(value)?.provider ?? value) : null,
-            )
-            .filter((provider): provider is string => Boolean(provider)),
-        ),
-      ]
-    : [];
-  const selectedPluginIds = provider.usesModelProviderPlugins
-    ? [
-        ...new Set(
-          (params.enabledPluginIds?.length ?? 0) > 0
-            ? params.enabledPluginIds
-            : selectedProviderIds,
-        ),
-      ]
-    : [
-        ...new Set(
-          (params.enabledPluginIds ?? [])
-            .map((pluginId) => pluginId.trim())
-            .filter((pluginId) => pluginId.length > 0),
-        ),
-      ];
-  const transportPluginIds = [...new Set(params.transportPluginIds ?? [])]
+  const selectedProviderIds =
+    provider.usesModelProviderPlugins || usesCodexMockAppServer
+      ? [
+          ...new Set(
+            [...(params.enabledProviderIds ?? []), ...modelProviderIds, imageGenerationModelRef]
+              .map((value) =>
+                typeof value === "string" ? (splitQaModelRef(value)?.provider ?? value) : null,
+              )
+              .filter((providerLocal): providerLocal is string => Boolean(providerLocal)),
+          ),
+        ]
+      : [];
+  const configuredPluginIds = uniqueStrings(
+    (params.enabledPluginIds ?? [])
+      .map((pluginId) => pluginId.trim())
+      .filter((pluginId) => pluginId.length > 0),
+  );
+  // Only canonical frontier provider ids are also plugin ids. Provider aliases
+  // and custom providers rely on the explicit owner mapping supplied above.
+  const inferredProviderPluginIds = selectedProviderIds.filter((providerId) =>
+    QA_DIRECT_FRONTIER_PLUGIN_IDS.has(providerId),
+  );
+  const providerSelectedPluginIds = usesCodexMockAppServer
+    ? uniqueStrings([...configuredPluginIds, ...selectedProviderIds])
+    : provider.usesModelProviderPlugins
+      ? uniqueStrings([...configuredPluginIds, ...inferredProviderPluginIds])
+      : configuredPluginIds;
+  // A forced Codex cell must stage its harness even when the provider owner is
+  // selected independently; otherwise its QA-only sandbox never takes effect.
+  const selectedPluginIds =
+    params.forcedRuntime === "codex"
+      ? uniqueStrings([...providerSelectedPluginIds, "codex"])
+      : providerSelectedPluginIds;
+  const transportPluginIds = uniqueStrings(params.transportPluginIds ?? [])
     .map((pluginId) => pluginId.trim())
     .filter((pluginId) => pluginId.length > 0);
   const pluginEntries = Object.fromEntries(
-    selectedPluginIds.map((pluginId) => [pluginId, { enabled: true }]),
+    selectedPluginIds.map((pluginId) => [
+      pluginId,
+      pluginId === "acpx"
+        ? {
+            enabled: true,
+            config: { pluginToolsMcpBridge: true, openClawToolsMcpBridge: true },
+          }
+        : params.forcedRuntime === "codex" && pluginId === "codex"
+          ? {
+              enabled: true,
+              config: {
+                appServer: {
+                  sandbox: "workspace-write",
+                  ...(params.fastMode === true ? { serviceTier: "priority" } : {}),
+                },
+              },
+            }
+          : { enabled: true },
+    ]),
   );
   const transportPluginEntries = Object.fromEntries(
     transportPluginIds.map((pluginId) => [pluginId, { enabled: true }]),
   );
   const allowedPlugins = [
-    ...new Set([...QA_BASE_RUNTIME_PLUGIN_IDS, ...selectedPluginIds, ...transportPluginIds]),
+    ...new Set([
+      ...QA_BASE_RUNTIME_PLUGIN_IDS,
+      QA_LAB_PLUGIN_ID,
+      ...selectedPluginIds,
+      ...transportPluginIds,
+    ]),
   ];
-  const resolveModelParams = (modelRef: string) =>
-    provider.resolveModelParams({
-      modelRef,
-      fastMode: params.fastMode,
-      thinkingDefault: params.thinkingDefault,
-    });
+  const resolveModelEntry = (modelRef: string) => {
+    // Codex owns its app-server transport. OpenClaw provider params would make
+    // the forced parity cell an authored route that Codex correctly rejects.
+    if (params.forcedRuntime === "codex") {
+      return {};
+    }
+    return {
+      params: provider.resolveModelParams({
+        modelRef,
+        fastMode: params.fastMode,
+        thinkingDefault: params.thinkingDefault,
+      }),
+    };
+  };
   const allowedOrigins = mergeQaControlUiAllowedOrigins(params.controlUiAllowedOrigins);
-  const gatewayModels = provider.buildGatewayModels({
+  const providerGatewayModels = provider.buildGatewayModels({
     providerBaseUrl,
+    primaryModel,
+    alternateModel,
     liveProviderConfigs: params.liveProviderConfigs,
   });
+  const codexMockOpenAiCatalog = providerGatewayModels?.providers.openai;
+  const gatewayModels =
+    usesCodexMockAppServer && codexMockOpenAiCatalog
+      ? {
+          mode: "merge" as const,
+          providers: {
+            openai: {
+              ...codexMockOpenAiCatalog,
+              // Keep synthetic QA model ids registered without authoring the
+              // private mock route that the Codex harness cannot reproduce.
+              baseUrl: QA_CODEX_OPENAI_CATALOG_BASE_URL,
+              request: undefined,
+            },
+          },
+        }
+      : providerGatewayModels;
+  const mockMemorySearch =
+    provider.kind === "mock"
+      ? {
+          provider: "openai-compatible",
+          model: "text-embedding-3-small",
+          remote: {
+            // Memory embeddings bypass the model runtime, so bind them to the
+            // mock explicitly or a forced runtime can fall through to a live API.
+            baseUrl: providerBaseUrl,
+            apiKey: "test",
+          },
+        }
+      : {};
 
   return {
+    meta: {
+      lastTouchedVersion: OPENCLAW_VERSION,
+    },
+    // Keep daily rollover and pruning inside the owned QA workspace.
+    logging: {
+      file: `${params.workspaceDir}/logs/openclaw-YYYY-MM-DD.log`,
+    },
+    memory: {
+      search: {
+        ...mockMemorySearch,
+      },
+    },
     plugins: {
       allow: allowedPlugins,
+      slots: {
+        memory: "memory-core",
+      },
       entries: {
-        acpx: {
-          enabled: true,
-          config: {
-            pluginToolsMcpBridge: true,
-            openClawToolsMcpBridge: true,
-          },
-        },
         "memory-core": {
+          enabled: true,
+        },
+        [QA_LAB_PLUGIN_ID]: {
           enabled: true,
         },
         ...pluginEntries,
@@ -144,45 +243,31 @@ export function buildQaGatewayConfig(params: {
     agents: {
       defaults: {
         workspace: params.workspaceDir,
-        model: {
-          primary: primaryModel,
-        },
+        model: buildQaModelSelection(primaryModel, alternateModel),
         ...(imageGenerationModelRef
           ? {
-              imageGenerationModel: {
-                primary: imageGenerationModelRef,
+              mediaModels: {
+                image: { primary: imageGenerationModelRef },
               },
             }
           : {}),
         ...(params.thinkingDefault ? { thinkingDefault: params.thinkingDefault } : {}),
-        memorySearch: {
-          sync: {
-            watch: true,
-            watchDebounceMs: 25,
-            onSessionStart: true,
-            onSearch: true,
-          },
-        },
         models: {
-          [primaryModel]: {
-            params: resolveModelParams(primaryModel),
-          },
-          [alternateModel]: {
-            params: resolveModelParams(alternateModel),
-          },
+          [primaryModel]: resolveModelEntry(primaryModel),
+          [alternateModel]: resolveModelEntry(alternateModel),
         },
+        modelPolicy: { allow: uniqueStrings([primaryModel, alternateModel]) },
         subagents: {
           allowAgents: ["*"],
           maxConcurrent: 2,
         },
       },
-      list: [
-        {
-          id: "qa",
-          default: true,
-          model: {
-            primary: primaryModel,
-          },
+      entries: {
+        qa: {
+          model: buildQaModelSelection(primaryModel, alternateModel),
+          ...(params.forcedRuntime === "codex" && params.fastMode !== undefined
+            ? { fastModeDefault: params.fastMode }
+            : {}),
           identity: {
             name: "C-3PO QA",
             theme: "Flustered Protocol Droid",
@@ -196,10 +281,7 @@ export function buildQaGatewayConfig(params: {
             profile: "coding",
           },
         },
-      ],
-    },
-    memory: {
-      backend: "builtin",
+      },
     },
     tools: {
       // The parity scenarios are code-agent contracts: they must always expose
@@ -223,11 +305,6 @@ export function buildQaGatewayConfig(params: {
         mode: "token",
         token: params.gatewayToken,
       },
-      reload: {
-        // QA restart scenarios need deterministic reload timing instead of the
-        // much longer production deferral window.
-        deferralTimeoutMs: 1_000,
-      },
       controlUi: {
         enabled: params.controlUiEnabled ?? true,
         ...((params.controlUiEnabled ?? true) && params.controlUiRoot
@@ -235,7 +312,6 @@ export function buildQaGatewayConfig(params: {
           : {}),
         ...((params.controlUiEnabled ?? true)
           ? {
-              allowInsecureAuth: true,
               allowedOrigins,
             }
           : {}),

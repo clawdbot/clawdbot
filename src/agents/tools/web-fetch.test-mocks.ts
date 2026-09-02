@@ -1,3 +1,5 @@
+// Shared web_fetch mocks replace the readability runtime in tests that only
+// need deterministic extracted content.
 import { vi } from "vitest";
 
 // Avoid loading the bundled readability plugin in unit test suites.

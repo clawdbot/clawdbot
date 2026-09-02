@@ -1,0 +1,13 @@
+{"seq":1,"at":0,"dir":"in","kind":"reply-start"}
+{"seq":2,"at":0,"dir":"out","kind":"assistant.threads.setStatus","data":{"payload":{"channel_id":"C0TRACE","status":"is typing...","thread_ts":"ts#1"},"result":{"ok":true},"target":"C0TRACE/ts#1"}}
+{"seq":3,"at":0,"dir":"in","kind":"partial","data":{"text":"I’m checking the native Slack stream before applying the focused patch."}}
+{"seq":4,"at":0,"dir":"in","kind":"tool-progress","data":{"name":"write","phase":"start"}}
+{"seq":5,"at":1500,"dir":"out","kind":"users.info","data":{"payload":{"user":"U0TRACE"},"result":{"team_id":"T0TRACE"},"target":"U0TRACE"}}
+{"seq":6,"at":1500,"dir":"out","kind":"chat.startStream","data":{"payload":{"channel":"C0TRACE","chunks":[{"title":"I’m checking the native Slack stream before applying the focused patch.","type":"plan_update"},{"id":"openclaw_summary","status":"in_progress","title":"I’m checking the native Slack stream before applying the focused patch.","type":"task_update"}],"recipient_team_id":"T0TRACE","recipient_user_id":"U0TRACE","task_display_mode":"plan","thread_ts":"ts#1"},"result":{"ts":"ts#2"},"target":"C0TRACE"}}
+{"seq":7,"at":2000,"dir":"in","kind":"partial","data":{"text":"I’m checking the native Slack stream before applying the focused patch. I’m applying it now."}}
+{"seq":8,"at":2000,"dir":"in","kind":"tool-progress","data":{"name":"write","phase":"result"}}
+{"seq":9,"at":2000,"dir":"in","kind":"final","data":{"text":"The unified native Slack turn is complete."}}
+{"seq":10,"at":2000,"dir":"out","kind":"chat.appendStream","data":{"payload":{"channel":"C0TRACE","chunks":[{"title":"I’m checking the native Slack stream before applying the focused patch. I’m applying it now.","type":"plan_update"},{"id":"openclaw_summary","sources":[{"text":"Open in OpenClaw","type":"url_source","url":"https://team.openclaw.ai/openclaw/chat/trace-agent/slack/channel/c0trace"}],"status":"complete","title":"I’m checking the native Slack stream before applying the focused patch. I’m applying it now.","type":"task_update"}],"ts":"ts#2"},"result":{"ok":true},"target":"ts#2"}}
+{"seq":11,"at":2000,"dir":"in","kind":"idle"}
+{"seq":12,"at":2000,"dir":"out","kind":"assistant.threads.setStatus","data":{"payload":{"channel_id":"C0TRACE","status":"","thread_ts":"ts#1"},"result":{"ok":true},"target":"C0TRACE/ts#1"}}
+{"seq":13,"at":2000,"dir":"out","kind":"chat.stopStream","data":{"payload":{"channel":"C0TRACE","chunks":[{"text":"\nThe unified native Slack turn is complete.","type":"markdown_text"}],"ts":"ts#2"},"result":{"ok":true},"target":"ts#2"}}

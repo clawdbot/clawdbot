@@ -1,11 +1,27 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Build and bundle OpenClaw into a minimal .app we can open.
+# Build and bundle OpenClaw with its matching private worker runtime.
 # Outputs to dist/OpenClaw.app
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-APP_ROOT="$ROOT_DIR/dist/OpenClaw.app"
+source "$ROOT_DIR/scripts/lib/plistbuddy.sh"
+source "$ROOT_DIR/scripts/lib/swift-toolchain.sh"
+source "$ROOT_DIR/scripts/lib/build-metadata.sh"
+source "$ROOT_DIR/scripts/lib/mac-app-bundle.sh"
+DEFAULT_APP_ROOT="$ROOT_DIR/dist/OpenClaw.app"
+APP_ROOT="${OPENCLAW_PACKAGE_APP_ROOT:-$DEFAULT_APP_ROOT}"
+case "$APP_ROOT" in
+  "$ROOT_DIR/dist/"*) ;;
+  *)
+    echo "ERROR: OPENCLAW_PACKAGE_APP_ROOT must stay under $ROOT_DIR/dist" >&2
+    exit 1
+    ;;
+esac
+APP_DESTINATION="$APP_ROOT"
+APP_STAGE_DIR=""
+SWIFT_BUILD_PID=""
+SWIFT_BUILD_RESULTS=""
 BUILD_ROOT="$ROOT_DIR/apps/macos/.build"
 PRODUCT="OpenClaw"
 MLX_TTS_HELPER_PRODUCT="openclaw-mlx-tts"
@@ -13,12 +29,45 @@ MLX_TTS_HELPER_ROOT="$ROOT_DIR/apps/macos-mlx-tts"
 MLX_TTS_HELPER_BUILD_ROOT="$MLX_TTS_HELPER_ROOT/.build"
 BUNDLE_ID="${BUNDLE_ID:-ai.openclaw.mac.debug}"
 PKG_VERSION="$(cd "$ROOT_DIR" && node -p "require('./package.json').version" 2>/dev/null || echo "0.0.0")"
-BUILD_TS=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
-GIT_COMMIT=$(cd "$ROOT_DIR" && git rev-parse --short HEAD 2>/dev/null || echo "unknown")
+BUILD_CONFIG="${BUILD_CONFIG:-debug}"
+SIGNING_VARIANT="${OPENCLAW_MAC_SIGNING_VARIANT:-standard}"
+case "$SIGNING_VARIANT" in
+  standard | elevation-host) ;;
+  *)
+    echo "ERROR: Unknown OPENCLAW_MAC_SIGNING_VARIANT value: $SIGNING_VARIANT (use standard|elevation-host)" >&2
+    exit 1
+    ;;
+esac
+# OPENCLAW_SKIP_MLX_TTS=1 packages the app without the local MLX voice helper.
+# The helper pulls in the full mlx-swift Metal shader stack, which some beta
+# Xcode toolchains cannot compile (flaky `metal` diagnostics), needlessly
+# blocking unrelated dev/proof builds. Release builds must always ship the
+# helper (notarization verifies it), so refuse the skip there instead of
+# producing a silently incomplete release bundle.
+SKIP_MLX_TTS="${OPENCLAW_SKIP_MLX_TTS:-0}"
+if [[ "$SKIP_MLX_TTS" == "1" && "$BUILD_CONFIG" == "release" ]]; then
+  echo "ERROR: OPENCLAW_SKIP_MLX_TTS is not allowed for release builds; the MLX voice helper must ship in release." >&2
+  exit 1
+fi
+BUILD_TS="$(openclaw_resolve_build_timestamp)"
+if [[ "$BUILD_CONFIG" == "release" ]]; then
+  OPENCLAW_REQUIRE_BUILD_METADATA=1
+fi
+BUILD_GIT_COMMIT="$(openclaw_resolve_git_commit "$ROOT_DIR")"
+if [[ "$BUILD_CONFIG" == "release" ]]; then
+  bash "$ROOT_DIR/scripts/apple-release-source-check.sh" \
+    --root "$ROOT_DIR" \
+    --expected-commit "$BUILD_GIT_COMMIT"
+fi
+export OPENCLAW_BUILD_TIMESTAMP="$BUILD_TS"
+if openclaw_is_full_git_commit "$BUILD_GIT_COMMIT"; then
+  export GIT_COMMIT="$BUILD_GIT_COMMIT"
+else
+  unset GIT_COMMIT
+fi
 GIT_BUILD_NUMBER=$(cd "$ROOT_DIR" && git rev-list --count HEAD 2>/dev/null || echo "0")
 APP_VERSION="${APP_VERSION:-$PKG_VERSION}"
 APP_BUILD="${APP_BUILD:-}"
-BUILD_CONFIG="${BUILD_CONFIG:-debug}"
 if [[ -n "${BUILD_ARCHS:-}" ]]; then
   BUILD_ARCHS_VALUE="${BUILD_ARCHS}"
 elif [[ "$BUILD_CONFIG" == "release" ]]; then
@@ -40,28 +89,102 @@ if [[ "$BUNDLE_ID" == *.debug ]]; then
   AUTO_CHECKS=false
 fi
 
+resolve_peekaboo_source_commit() {
+  local resolved_file="$ROOT_DIR/apps/macos/Package.resolved"
+  local revision
+  revision="$(/usr/bin/python3 - "$resolved_file" <<'PY'
+import json
+from pathlib import Path
+import re
+import sys
+
+resolved_file = Path(sys.argv[1])
+try:
+    resolved = json.loads(resolved_file.read_text())
+except (OSError, json.JSONDecodeError) as error:
+    raise SystemExit(f"ERROR: Could not parse Peekaboo source revision from {resolved_file}: {error}")
+
+pins = resolved.get("pins") if isinstance(resolved, dict) else None
+if not isinstance(pins, list):
+    raise SystemExit(f"ERROR: Expected a pins array in {resolved_file}")
+
+peekaboo_pins = [pin for pin in pins if isinstance(pin, dict) and pin.get("identity") == "peekaboo"]
+if len(peekaboo_pins) != 1:
+    raise SystemExit(f"ERROR: Expected exactly one 'peekaboo' pin in {resolved_file}; found {len(peekaboo_pins)}")
+
+state = peekaboo_pins[0].get("state")
+revision = state.get("revision") if isinstance(state, dict) else None
+if not isinstance(revision, str) or re.fullmatch(r"[0-9a-f]{40}", revision) is None:
+    raise SystemExit(
+        f"ERROR: Peekaboo pin in {resolved_file} must have an exact 40-character lowercase hexadecimal revision"
+    )
+
+print(revision, end="")
+PY
+  )"
+  local expected="${OPENCLAW_EXPECTED_PEEKABOO_SOURCE_COMMIT:-}"
+  if [[ -n "$expected" && ! "$expected" =~ ^[0-9a-f]{40}$ ]]; then
+    echo "ERROR: OPENCLAW_EXPECTED_PEEKABOO_SOURCE_COMMIT must be a full lowercase 40-character SHA" >&2
+    return 1
+  fi
+  if [[ -n "$expected" && "$revision" != "$expected" ]]; then
+    echo "ERROR: Peekaboo pin '$revision' does not match requested release source '$expected'" >&2
+    return 1
+  fi
+  printf '%s' "$revision"
+}
+
 sparkle_canonical_build_from_version() {
-  node --import tsx "$ROOT_DIR/scripts/sparkle-build.ts" canonical-build "$1"
+  (cd "$ROOT_DIR" && node --import tsx "$ROOT_DIR/scripts/sparkle-build.ts" canonical-build "$1")
 }
 
-build_path_for_arch() {
-  echo "$BUILD_ROOT/$1"
+source "$ROOT_DIR/scripts/lib/mac-swift-build.sh"
+
+cleanup_package_build() {
+  if [[ -n "$SWIFT_BUILD_RESULTS" && ! -f "$SWIFT_BUILD_RESULTS/cleanup-complete" ]]; then
+    echo "ERROR: Swift cleanup was not verified; retaining $APP_STAGE_DIR for inspection" >&2
+    return
+  fi
+  [[ -z "$APP_STAGE_DIR" ]] || rm -rf "$APP_STAGE_DIR"
 }
 
-bin_for_arch() {
-  echo "$(build_path_for_arch "$1")/$BUILD_CONFIG/$PRODUCT"
+interrupt_package_build() {
+  local signal="$1" code="$2"
+  if [[ -n "$SWIFT_BUILD_PID" ]]; then
+    kill -"$signal" "$SWIFT_BUILD_PID" 2>/dev/null || true
+    wait "$SWIFT_BUILD_PID" || true
+    SWIFT_BUILD_PID=""
+  fi
+  exit "$code"
 }
 
-helper_build_path_for_arch() {
-  echo "$MLX_TTS_HELPER_BUILD_ROOT/$1"
+trap cleanup_package_build EXIT
+trap 'interrupt_package_build INT 130' INT
+trap 'interrupt_package_build TERM 143' TERM
+trap 'interrupt_package_build HUP 129' HUP
+
+PNPM_CMD=()
+
+resolve_pnpm_cmd() {
+  if command -v corepack >/dev/null 2>&1 && (cd "$ROOT_DIR" && corepack pnpm --version >/dev/null 2>&1); then
+    PNPM_CMD=(corepack pnpm)
+    return 0
+  fi
+
+  if command -v pnpm >/dev/null 2>&1; then
+    PNPM_CMD=(pnpm)
+    return 0
+  fi
+
+  echo "ERROR: pnpm is not on PATH and corepack pnpm is unavailable. Install pnpm or run with Node/Corepack on PATH." >&2
+  exit 1
 }
 
-helper_bin_for_arch() {
-  echo "$(helper_build_path_for_arch "$1")/$BUILD_CONFIG/$MLX_TTS_HELPER_PRODUCT"
-}
-
-sparkle_framework_for_arch() {
-  echo "$(build_path_for_arch "$1")/$BUILD_CONFIG/Sparkle.framework"
+run_pnpm() {
+  if [[ "${#PNPM_CMD[@]}" -eq 0 ]]; then
+    resolve_pnpm_cmd
+  fi
+  (cd "$ROOT_DIR" && "${PNPM_CMD[@]}" "$@")
 }
 
 merge_framework_machos() {
@@ -87,7 +210,7 @@ merge_framework_machos() {
 
   while IFS= read -r -d '' file; do
     if /usr/bin/file "$file" | /usr/bin/grep -q "Mach-O"; then
-      local rel="${file#$primary/}"
+      local rel="${file#"$primary"/}"
       local primary_archs
       primary_archs=$(archs_for "$file")
       IFS=' ' read -r -a primary_arch_array <<< "$primary_archs"
@@ -108,7 +231,7 @@ merge_framework_machos() {
           IFS=' ' read -r -a other_arch_array <<< "$other_archs"
           for arch in "${other_arch_array[@]}"; do
             if ! arch_in_list "$arch" "${primary_arch_array[@]}"; then
-              local thin_file="$tmp_dir/$(echo "$rel" | tr '/' '_')-$arch"
+              local thin_file="$tmp_dir/${rel//\//_}-$arch"
               /usr/bin/lipo -thin "$arch" "$other_file" -output "$thin_file"
               missing_files+=("$thin_file")
               primary_arch_array+=("$arch")
@@ -125,9 +248,14 @@ merge_framework_machos() {
   done < <(find "$primary" -type f -print0)
 }
 
+PEEKABOO_SOURCE_COMMIT="$(resolve_peekaboo_source_commit)"
+PEEKABOO_LOCKED_SOURCE_COMMIT="$PEEKABOO_SOURCE_COMMIT"
+
+require_swift_toolchain
+
 if [[ "${SKIP_PNPM_INSTALL:-0}" != "1" ]]; then
-  echo "📦 Ensuring deps (pnpm install)"
-  (cd "$ROOT_DIR" && pnpm install --no-frozen-lockfile --config.node-linker=hoisted)
+  echo "📦 Ensuring deps (pnpm install --frozen-lockfile)"
+  run_pnpm install --frozen-lockfile --config.node-linker=hoisted
 else
   echo "📦 Skipping pnpm install (SKIP_PNPM_INSTALL=1)"
 fi
@@ -150,33 +278,46 @@ if [[ "$AUTO_CHECKS" == "true" && ! "$APP_BUILD" =~ ^[0-9]+$ ]]; then
   exit 1
 fi
 
-if [[ "${SKIP_TSC:-0}" != "1" ]]; then
-  echo "📦 Building JS (pnpm build)"
-  (cd "$ROOT_DIR" && pnpm build)
-else
-  echo "📦 Skipping JS build (SKIP_TSC=1)"
+if [[ "${SKIP_TSC:-0}" == "1" ]]; then
+  echo "📦 SKIP_TSC no longer skips the app's private runtime; using the content-checked build cache"
 fi
+echo "📦 Building JS (pnpm build)"
+run_pnpm build
 
-if [[ "${SKIP_UI_BUILD:-0}" != "1" ]]; then
-  echo "🖥  Building Control UI (ui:build)"
-  (cd "$ROOT_DIR" && node scripts/ui.js build)
-else
-  echo "🖥  Skipping Control UI build (SKIP_UI_BUILD=1)"
-fi
+node - "$ROOT_DIR/dist/build-info.json" "$APP_VERSION" "$BUILD_GIT_COMMIT" "$BUILD_TS" <<'NODE'
+const fs = require("node:fs");
+const [file, version, commit, builtAt] = process.argv.slice(2);
+const actual = JSON.parse(fs.readFileSync(file, "utf8"));
+if (actual.version !== version || actual.commit !== commit || actual.builtAt !== builtAt || !actual.buildId) {
+  throw new Error("JavaScript build provenance does not match this app. Rebuild from matching package inputs.");
+}
+NODE
 
-cd "$ROOT_DIR/apps/macos"
+node "$ROOT_DIR/scripts/prepare-apple-mermaid.mjs"
+
+# pnpm build owns the Control UI and content-checked build stamps as well.
+# Private Swift and worker staging must stay outside the published dist tree.
+mkdir -p "$(dirname "$APP_DESTINATION")" "$ROOT_DIR/.artifacts"
+APP_STAGE_DIR="$(mktemp -d "$ROOT_DIR/.artifacts/.openclaw-package.XXXXXX")"
+APP_ROOT="$APP_STAGE_DIR/OpenClaw.app"
 
 echo "🔨 Building $PRODUCT ($BUILD_CONFIG) [${BUILD_ARCHS[*]}]"
-for arch in "${BUILD_ARCHS[@]}"; do
-  BUILD_PATH="$(build_path_for_arch "$arch")"
-  swift build -c "$BUILD_CONFIG" --product "$PRODUCT" --build-path "$BUILD_PATH" --arch "$arch" -Xlinker -rpath -Xlinker @executable_path/../Frameworks
-  swift build --package-path "$MLX_TTS_HELPER_ROOT" -c "$BUILD_CONFIG" --product "$MLX_TTS_HELPER_PRODUCT" --build-path "$(helper_build_path_for_arch "$arch")" --arch "$arch"
-done
+SWIFT_BUILD_RESULTS="$APP_STAGE_DIR/swift-builds"
+node "$ROOT_DIR/scripts/build-mac-swift.mts" "$ROOT_DIR" "$BUILD_CONFIG" \
+  "$PEEKABOO_LOCKED_SOURCE_COMMIT" "$SKIP_MLX_TTS" "$SWIFT_BUILD_RESULTS" "${BUILD_ARCHS[@]}" &
+SWIFT_BUILD_PID=$!
+if wait "$SWIFT_BUILD_PID"; then
+  SWIFT_BUILD_PID=""
+  PEEKABOO_SOURCE_COMMIT="$PEEKABOO_LOCKED_SOURCE_COMMIT"
+else
+  build_status=$?
+  SWIFT_BUILD_PID=""
+  exit "$build_status"
+fi
 
 BIN_PRIMARY="$(bin_for_arch "$PRIMARY_ARCH")"
 echo "pkg: binary $BIN_PRIMARY" >&2
-echo "🧹 Cleaning old app bundle"
-rm -rf "$APP_ROOT"
+echo "📦 Assembling replacement app bundle"
 mkdir -p "$APP_ROOT/Contents/MacOS"
 mkdir -p "$APP_ROOT/Contents/Resources"
 mkdir -p "$APP_ROOT/Contents/Frameworks"
@@ -188,20 +329,34 @@ if [ ! -f "$INFO_PLIST_SRC" ]; then
   exit 1
 fi
 cp "$INFO_PLIST_SRC" "$APP_ROOT/Contents/Info.plist"
-/usr/libexec/PlistBuddy -c "Set :CFBundleIdentifier ${BUNDLE_ID}" "$APP_ROOT/Contents/Info.plist" || true
-/usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString ${APP_VERSION}" "$APP_ROOT/Contents/Info.plist" || true
-/usr/libexec/PlistBuddy -c "Set :CFBundleVersion ${APP_BUILD}" "$APP_ROOT/Contents/Info.plist" || true
-/usr/libexec/PlistBuddy -c "Set :OpenClawBuildTimestamp ${BUILD_TS}" "$APP_ROOT/Contents/Info.plist" || true
-/usr/libexec/PlistBuddy -c "Set :OpenClawGitCommit ${GIT_COMMIT}" "$APP_ROOT/Contents/Info.plist" || true
-/usr/libexec/PlistBuddy -c "Set :SUFeedURL ${SPARKLE_FEED_URL}" "$APP_ROOT/Contents/Info.plist" \
-  || /usr/libexec/PlistBuddy -c "Add :SUFeedURL string ${SPARKLE_FEED_URL}" "$APP_ROOT/Contents/Info.plist" || true
-/usr/libexec/PlistBuddy -c "Set :SUPublicEDKey ${SPARKLE_PUBLIC_ED_KEY}" "$APP_ROOT/Contents/Info.plist" \
-  || /usr/libexec/PlistBuddy -c "Add :SUPublicEDKey string ${SPARKLE_PUBLIC_ED_KEY}" "$APP_ROOT/Contents/Info.plist" || true
-if /usr/libexec/PlistBuddy -c "Set :SUEnableAutomaticChecks ${AUTO_CHECKS}" "$APP_ROOT/Contents/Info.plist"; then
-  true
-else
-  /usr/libexec/PlistBuddy -c "Add :SUEnableAutomaticChecks bool ${AUTO_CHECKS}" "$APP_ROOT/Contents/Info.plist" || true
+PORT_GUARDIAN_STORAGE_VERSION="$(plist_print_required "$APP_ROOT/Contents/Info.plist" OpenClawPortGuardianStorageVersion)"
+if [[ ! "$PORT_GUARDIAN_STORAGE_VERSION" =~ ^[1-9][0-9]*$ ]]; then
+  echo "ERROR: OpenClawPortGuardianStorageVersion must be a positive integer." >&2
+  exit 1
 fi
+plist_set_string_required "$APP_ROOT/Contents/Info.plist" CFBundleIdentifier "$BUNDLE_ID"
+plist_set_string_required "$APP_ROOT/Contents/Info.plist" CFBundleShortVersionString "$APP_VERSION"
+plist_set_string_required "$APP_ROOT/Contents/Info.plist" CFBundleVersion "$APP_BUILD"
+plist_set_string_required "$APP_ROOT/Contents/Info.plist" OpenClawBuildTimestamp "$BUILD_TS"
+plist_set_string_required "$APP_ROOT/Contents/Info.plist" OpenClawGitCommit "$BUILD_GIT_COMMIT"
+WORKER_BUILD_ID="$(node -e 'console.log(require(process.argv[1]).buildId)' "$ROOT_DIR/dist/build-info.json")"
+plist_set_or_add_string "$APP_ROOT/Contents/Info.plist" OpenClawWorkerBuildID "$WORKER_BUILD_ID"
+plist_set_string_required "$APP_ROOT/Contents/Info.plist" PeekabooSourceCommit "$PEEKABOO_SOURCE_COMMIT"
+if [[ "$BUILD_CONFIG" == "release" ]]; then
+  EMBEDDED_GIT_COMMIT="$(plist_print_required "$APP_ROOT/Contents/Info.plist" OpenClawGitCommit)"
+  BRIDGE_SOURCE_COMMIT="$(plist_print_required "$APP_ROOT/Contents/Info.plist" PeekabooSourceCommit)"
+  if [[ "$EMBEDDED_GIT_COMMIT" != "$BUILD_GIT_COMMIT" ]]; then
+    echo "ERROR: Release app OpenClaw source mismatch: OpenClawGitCommit='$EMBEDDED_GIT_COMMIT', expected='$BUILD_GIT_COMMIT'." >&2
+    exit 1
+  fi
+  if [[ "$BRIDGE_SOURCE_COMMIT" != "$PEEKABOO_SOURCE_COMMIT" ]]; then
+    echo "ERROR: Release app Peekaboo source mismatch: PeekabooSourceCommit='$BRIDGE_SOURCE_COMMIT', expected='$PEEKABOO_SOURCE_COMMIT'." >&2
+    exit 1
+  fi
+fi
+plist_set_or_add_string "$APP_ROOT/Contents/Info.plist" SUFeedURL "$SPARKLE_FEED_URL"
+plist_set_or_add_string "$APP_ROOT/Contents/Info.plist" SUPublicEDKey "$SPARKLE_PUBLIC_ED_KEY"
+plist_set_or_add_bool "$APP_ROOT/Contents/Info.plist" SUEnableAutomaticChecks "$AUTO_CHECKS"
 
 echo "🚚 Copying binary"
 cp "$BIN_PRIMARY" "$APP_ROOT/Contents/MacOS/OpenClaw"
@@ -216,17 +371,21 @@ chmod +x "$APP_ROOT/Contents/MacOS/OpenClaw"
 # SwiftPM outputs ad-hoc signed binaries; strip the signature before install_name_tool to avoid warnings.
 /usr/bin/codesign --remove-signature "$APP_ROOT/Contents/MacOS/OpenClaw" 2>/dev/null || true
 
-echo "🚚 Copying MLX TTS helper"
-cp "$(helper_bin_for_arch "$PRIMARY_ARCH")" "$APP_ROOT/Contents/MacOS/$MLX_TTS_HELPER_PRODUCT"
-if [[ "${#BUILD_ARCHS[@]}" -gt 1 ]]; then
-  HELPER_BIN_INPUTS=()
-  for arch in "${BUILD_ARCHS[@]}"; do
-    HELPER_BIN_INPUTS+=("$(helper_bin_for_arch "$arch")")
-  done
-  /usr/bin/lipo -create "${HELPER_BIN_INPUTS[@]}" -output "$APP_ROOT/Contents/MacOS/$MLX_TTS_HELPER_PRODUCT"
+if [[ "$SKIP_MLX_TTS" == "1" ]]; then
+  echo "🔇 Skipping MLX TTS helper copy (OPENCLAW_SKIP_MLX_TTS=1) — bundle omits Contents/MacOS/$MLX_TTS_HELPER_PRODUCT"
+else
+  echo "🚚 Copying MLX TTS helper"
+  cp "$(helper_bin_for_arch "$PRIMARY_ARCH")" "$APP_ROOT/Contents/MacOS/$MLX_TTS_HELPER_PRODUCT"
+  if [[ "${#BUILD_ARCHS[@]}" -gt 1 ]]; then
+    HELPER_BIN_INPUTS=()
+    for arch in "${BUILD_ARCHS[@]}"; do
+      HELPER_BIN_INPUTS+=("$(helper_bin_for_arch "$arch")")
+    done
+    /usr/bin/lipo -create "${HELPER_BIN_INPUTS[@]}" -output "$APP_ROOT/Contents/MacOS/$MLX_TTS_HELPER_PRODUCT"
+  fi
+  chmod +x "$APP_ROOT/Contents/MacOS/$MLX_TTS_HELPER_PRODUCT"
+  /usr/bin/codesign --remove-signature "$APP_ROOT/Contents/MacOS/$MLX_TTS_HELPER_PRODUCT" 2>/dev/null || true
 fi
-chmod +x "$APP_ROOT/Contents/MacOS/$MLX_TTS_HELPER_PRODUCT"
-/usr/bin/codesign --remove-signature "$APP_ROOT/Contents/MacOS/$MLX_TTS_HELPER_PRODUCT" 2>/dev/null || true
 
 SPARKLE_FRAMEWORK_PRIMARY="$(sparkle_framework_for_arch "$PRIMARY_ARCH")"
 if [ -d "$SPARKLE_FRAMEWORK_PRIMARY" ]; then
@@ -250,6 +409,9 @@ SWIFT_COMPAT_LIB="$(xcode-select -p)/Toolchains/XcodeDefault.xctoolchain/usr/lib
 if [ -f "$SWIFT_COMPAT_LIB" ]; then
   cp "$SWIFT_COMPAT_LIB" "$APP_ROOT/Contents/Frameworks/"
   chmod +x "$APP_ROOT/Contents/Frameworks/libswiftCompatibilitySpan.dylib"
+elif [[ "$BUILD_CONFIG" == "release" ]]; then
+  echo "ERROR: Swift compatibility library not found at $SWIFT_COMPAT_LIB" >&2
+  exit 1
 else
   echo "WARN: Swift compatibility library not found at $SWIFT_COMPAT_LIB (continuing)" >&2
 fi
@@ -261,14 +423,37 @@ echo "📦 Copying device model resources"
 rm -rf "$APP_ROOT/Contents/Resources/DeviceModels"
 cp -R "$ROOT_DIR/apps/macos/Sources/OpenClaw/Resources/DeviceModels" "$APP_ROOT/Contents/Resources/DeviceModels"
 
-echo "📦 Copying model catalog"
-MODEL_CATALOG_SRC="$ROOT_DIR/node_modules/@mariozechner/pi-ai/dist/models.generated.js"
-MODEL_CATALOG_DEST="$APP_ROOT/Contents/Resources/models.generated.js"
-if [ -f "$MODEL_CATALOG_SRC" ]; then
-  cp "$MODEL_CATALOG_SRC" "$MODEL_CATALOG_DEST"
-else
-  echo "WARN: model catalog missing at $MODEL_CATALOG_SRC (continuing)" >&2
+echo "📦 Copying provider icon resources"
+PROVIDER_ICONS_SRC="$ROOT_DIR/apps/macos/Sources/OpenClaw/Resources/ProviderIcons"
+if [ ! -d "$PROVIDER_ICONS_SRC" ]; then
+  echo "ERROR: Provider icon resources missing at $PROVIDER_ICONS_SRC" >&2
+  exit 1
 fi
+rm -rf "$APP_ROOT/Contents/Resources/ProviderIcons"
+cp -R "$PROVIDER_ICONS_SRC" "$APP_ROOT/Contents/Resources/ProviderIcons"
+
+if [[ "$SIGNING_VARIANT" == "elevation-host" ]]; then
+  echo "🖥  Omitting embedded CUA driver from elevation-host package"
+else
+  echo "🖥  Staging embedded CUA driver"
+  "$ROOT_DIR/scripts/stage-cua-driver-macos.sh" "$APP_ROOT/Contents/Resources/cua-driver"
+fi
+
+echo "📦 Copying CLI installer"
+INSTALL_CLI_SRC="$ROOT_DIR/scripts/install-cli.sh"
+if [ ! -f "$INSTALL_CLI_SRC" ]; then
+  echo "ERROR: CLI installer missing at $INSTALL_CLI_SRC" >&2
+  exit 1
+fi
+cp "$INSTALL_CLI_SRC" "$APP_ROOT/Contents/Resources/install-cli.sh"
+chmod 0644 "$APP_ROOT/Contents/Resources/install-cli.sh"
+
+echo "📦 Provisioning the matching private node worker [${BUILD_ARCHS[*]}]"
+bash "$ROOT_DIR/scripts/stage-mac-node-worker.sh" "$APP_ROOT/Contents/Resources/node-worker" "${BUILD_ARCHS[@]}"
+
+echo "🌐 Copying app localizations"
+node --import tsx "$ROOT_DIR/scripts/apple-app-i18n.ts" compile-macos \
+  --output "$APP_ROOT/Contents/Resources"
 
 echo "📦 Copying Control UI assets"
 CONTROL_UI_SRC="$ROOT_DIR/dist/control-ui"
@@ -281,46 +466,113 @@ else
   exit 1
 fi
 
-echo "📦 Copying OpenClawKit resources"
-OPENCLAWKIT_BUNDLE="$(build_path_for_arch "$PRIMARY_ARCH")/$BUILD_CONFIG/OpenClawKit_OpenClawKit.bundle"
-if [ -d "$OPENCLAWKIT_BUNDLE" ]; then
-  rm -rf "$APP_ROOT/Contents/Resources/OpenClawKit_OpenClawKit.bundle"
-  cp -R "$OPENCLAWKIT_BUNDLE" "$APP_ROOT/Contents/Resources/OpenClawKit_OpenClawKit.bundle"
-else
-  echo "WARN: OpenClawKit resource bundle not found at $OPENCLAWKIT_BUNDLE (continuing)" >&2
+echo "📦 Copying SwiftPM resource bundles"
+SWIFTPM_BUILD_PRODUCTS=("$(build_path_for_arch "$PRIMARY_ARCH")/$BUILD_CONFIG")
+if [[ "$SKIP_MLX_TTS" != "1" ]]; then
+  SWIFTPM_BUILD_PRODUCTS+=("$(helper_products_for_arch "$PRIMARY_ARCH")")
 fi
-
-echo "📦 Copying Textual resources"
-TEXTUAL_BUNDLE_DIR="$(build_path_for_arch "$PRIMARY_ARCH")/$BUILD_CONFIG"
-TEXTUAL_BUNDLE=""
-for candidate in \
-  "$TEXTUAL_BUNDLE_DIR/textual_Textual.bundle" \
-  "$TEXTUAL_BUNDLE_DIR/Textual_Textual.bundle"
-do
-  if [ -d "$candidate" ]; then
-    TEXTUAL_BUNDLE="$candidate"
-    break
-  fi
+# Main app and helper dependencies share the signed Resources directory.
+# MLX loads its compiled Metal library from its resource bundle there.
+for build_products in "${SWIFTPM_BUILD_PRODUCTS[@]}"; do
+  for resource_bundle_src in "$build_products"/*.bundle; do
+    [[ -d "$resource_bundle_src" ]] || continue
+    resource_bundle="${resource_bundle_src##*/}"
+    rm -rf "$APP_ROOT/Contents/Resources/$resource_bundle"
+    cp -R "$resource_bundle_src" "$APP_ROOT/Contents/Resources/$resource_bundle"
+  done
 done
-if [ -z "$TEXTUAL_BUNDLE" ]; then
-  TEXTUAL_BUNDLE="$(find "$BUILD_ROOT" -type d \( -name "textual_Textual.bundle" -o -name "Textual_Textual.bundle" \) -print -quit)"
-fi
-if [ -n "$TEXTUAL_BUNDLE" ] && [ -d "$TEXTUAL_BUNDLE" ]; then
-  rm -rf "$APP_ROOT/Contents/Resources/$(basename "$TEXTUAL_BUNDLE")"
-  cp -R "$TEXTUAL_BUNDLE" "$APP_ROOT/Contents/Resources/"
-else
-  if [[ "${ALLOW_MISSING_TEXTUAL_BUNDLE:-0}" == "1" ]]; then
-    echo "WARN: Textual resource bundle not found (continuing due to ALLOW_MISSING_TEXTUAL_BUNDLE=1)" >&2
-  else
-    echo "ERROR: Textual resource bundle not found. Set ALLOW_MISSING_TEXTUAL_BUNDLE=1 to bypass." >&2
+REQUIRED_SWIFTPM_RESOURCE_BUNDLES=(
+  "GRDB_GRDB.bundle"
+  "KeyboardShortcuts_KeyboardShortcuts.bundle"
+  "OpenClaw_OpenClaw.bundle"
+  "OpenClawKit_OpenClawKit.bundle"
+  "OpenClawKit_OpenClawChatUI.bundle"
+  "SwiftMath_SwiftMath.bundle"
+)
+for resource_bundle in "${REQUIRED_SWIFTPM_RESOURCE_BUNDLES[@]}"; do
+  if [[ ! -d "$APP_ROOT/Contents/Resources/$resource_bundle" ]]; then
+    echo "ERROR: Required SwiftPM resource bundle not found at $APP_ROOT/Contents/Resources/$resource_bundle" >&2
     exit 1
   fi
+done
+if [[ "$SKIP_MLX_TTS" != "1" && ! -f "$APP_ROOT/Contents/Resources/mlx-swift_Cmlx.bundle/Contents/Resources/default.metallib" ]]; then
+  echo "ERROR: Required MLX shaders not found at $APP_ROOT/Contents/Resources/mlx-swift_Cmlx.bundle/Contents/Resources/default.metallib" >&2
+  exit 1
 fi
 
-echo "⏹  Stopping any running OpenClaw"
-killall -q OpenClaw 2>/dev/null || true
+running_packaged_app_pids() {
+  command -v pgrep >/dev/null 2>&1 || return 0
+  local app_binary="$APP_DESTINATION/Contents/MacOS/OpenClaw"
+  local pid
+  pgrep -x "$PRODUCT" 2>/dev/null | while IFS= read -r pid; do
+    [[ "$pid" =~ ^[0-9]+$ ]] || continue
+    if command -v lsof >/dev/null 2>&1 &&
+      lsof -a -p "$pid" -d txt -Fn 2>/dev/null | sed 's/^n//' | grep -Fx "$app_binary" >/dev/null; then
+      printf '%s\n' "$pid"
+      continue
+    fi
+    local command_line
+    command_line="$(ps -p "$pid" -o command= 2>/dev/null || true)"
+    if [[ "$command_line" == "$app_binary" || "$command_line" == "$app_binary "* ]]; then
+      printf '%s\n' "$pid"
+    fi
+  done
+}
 
-echo "🔏 Signing bundle (auto-selects signing identity if SIGN_IDENTITY is unset)"
+stop_packaged_app_if_running() {
+  local pids=()
+  local pid
+  while IFS= read -r pid; do
+    [[ -n "$pid" ]] && pids+=("$pid")
+  done < <(running_packaged_app_pids)
+  if [[ "${#pids[@]}" -eq 0 ]]; then
+    return 0
+  fi
+
+  echo "⏹  Stopping packaged OpenClaw bundle (${pids[*]})"
+  kill "${pids[@]}" 2>/dev/null || true
+  for _ in $(seq 1 40); do
+    local alive=0
+    for pid in "${pids[@]}"; do
+      if kill -0 "$pid" 2>/dev/null; then
+        alive=1
+      fi
+    done
+    [[ "$alive" == "0" ]] && return 0
+    sleep 0.25
+  done
+  kill -KILL "${pids[@]}" 2>/dev/null || true
+  for _ in $(seq 1 20); do
+    local alive=0
+    for pid in "${pids[@]}"; do
+      if kill -0 "$pid" 2>/dev/null; then
+        alive=1
+      fi
+    done
+    [[ "$alive" == "0" ]] && return 0
+    sleep 0.1
+  done
+  echo "ERROR: Packaged OpenClaw bundle did not exit: ${pids[*]}" >&2
+  return 1
+}
+
+if [[ -n "${SIGN_IDENTITY:-}" ]]; then
+  echo "🔏 Signing bundle with explicit SIGN_IDENTITY"
+else
+  echo "🔏 Signing bundle (auto-selecting signing identity)"
+fi
 "$ROOT_DIR/scripts/codesign-mac-app.sh" "$APP_ROOT"
+codesign --verify --deep --strict "$APP_ROOT"
+for arch in "${BUILD_ARCHS[@]}"; do
+  env -i HOME="$APP_STAGE_DIR" PATH="/usr/bin:/bin:/usr/sbin:/sbin" TMPDIR="${TMPDIR:-/tmp}" \
+    "$APP_ROOT/Contents/Resources/node-worker/$arch/bin/node" \
+    "$ROOT_DIR/scripts/verify-mac-node-worker.mjs" \
+    "$APP_ROOT/Contents/Resources/node-worker/$arch" "$ROOT_DIR/dist/build-info.json"
+done
+codesign --verify --deep --strict "$APP_ROOT"
 
-echo "✅ Bundle ready at $APP_ROOT"
+# Nothing touches the previous app until build, provisioning and signing pass.
+stop_packaged_app_if_running
+replace_mac_app_bundle "$APP_ROOT" "$APP_DESTINATION"
+
+echo "✅ Bundle ready at $APP_DESTINATION"

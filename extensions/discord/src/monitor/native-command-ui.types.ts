@@ -1,4 +1,6 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+// Discord type declarations define plugin contracts.
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import type { DiscordDispatchReplyFromConfig } from "./native-command.types.js";
 import type { ThreadBindingManager } from "./thread-bindings.js";
 
 type DiscordConfig = NonNullable<OpenClawConfig["channels"]>["discord"];
@@ -9,6 +11,7 @@ export type DiscordCommandArgContext = {
   accountId: string;
   sessionPrefix: string;
   threadBindings: ThreadBindingManager;
+  dispatchReplyFromConfig?: DiscordDispatchReplyFromConfig;
   postApplySettleMs?: number;
 };
 

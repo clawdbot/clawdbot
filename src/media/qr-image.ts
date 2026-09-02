@@ -1,6 +1,7 @@
+// QR image helpers generate QR code image files for media delivery.
 import path from "node:path";
 import { tempWorkspace } from "../infra/private-temp-workspace.js";
-import { loadQrCodeRuntime, normalizeQrText } from "./qr-runtime.ts";
+import { loadQrCodeRuntime } from "./qr-runtime.ts";
 
 const DEFAULT_QR_PNG_SCALE = 6;
 const DEFAULT_QR_PNG_MARGIN_MODULES = 4;
@@ -15,6 +16,7 @@ type QrPngRenderOptions = {
   marginModules?: number;
 };
 
+/** Temp-file write options kept to filename segments so callers cannot choose parent paths. */
 type QrPngTempFileOptions = QrPngRenderOptions & {
   tmpRoot: string;
   dirPrefix: string;
@@ -54,6 +56,7 @@ function resolveQrTempPathSegment(name: string, value: string): string {
   return value;
 }
 
+/** Renders QR text as raw PNG base64 after validating bounded renderer options. */
 export async function renderQrPngBase64(
   input: string,
   opts: QrPngRenderOptions = {},
@@ -73,21 +76,19 @@ export async function renderQrPngBase64(
     max: MAX_QR_PNG_MARGIN_MODULES,
   });
   const qrCode = await loadQrCodeRuntime();
-  const dataUrl = await qrCode.toDataURL(normalizeQrText(input), {
+  const png = await qrCode.toBuffer(input, {
     margin: marginModules,
     scale,
-    type: "image/png",
   });
-  if (!dataUrl.startsWith(QR_PNG_DATA_URL_PREFIX)) {
-    throw new Error("Expected qrcode to return a PNG data URL.");
-  }
-  return dataUrl.slice(QR_PNG_DATA_URL_PREFIX.length);
+  return png.toString("base64");
 }
 
-export function formatQrPngDataUrl(base64: string): string {
+/** Wraps PNG base64 in the exact data URL prefix expected by chat/media callers. */
+function formatQrPngDataUrl(base64: string): string {
   return `${QR_PNG_DATA_URL_PREFIX}${base64}`;
 }
 
+/** Renders QR text as a PNG data URL. */
 export async function renderQrPngDataUrl(
   input: string,
   opts: QrPngRenderOptions = {},
@@ -95,6 +96,7 @@ export async function renderQrPngDataUrl(
   return formatQrPngDataUrl(await renderQrPngBase64(input, opts));
 }
 
+/** Writes QR PNG output into a scoped temp directory and returns that directory as a media root. */
 export async function writeQrPngTempFile(
   input: string,
   opts: QrPngTempFileOptions,

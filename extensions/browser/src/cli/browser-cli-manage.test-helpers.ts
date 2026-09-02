@@ -1,6 +1,8 @@
+/**
+ * Test helpers for Browser CLI manage command suites.
+ */
 import type { Command } from "commander";
 import { vi } from "vitest";
-import * as parentCoreApiModule from "../core-api.js";
 import * as browserCliSharedModule from "./browser-cli-shared.js";
 import * as cliCoreApiModule from "./core-api.js";
 
@@ -10,7 +12,11 @@ type BrowserRequest = {
 };
 type BrowserRuntimeOptions = { timeoutMs?: number };
 
-type BrowserManageCall = [unknown, BrowserRequest, BrowserRuntimeOptions | undefined];
+type BrowserManageCall = [
+  { timeout?: string } | undefined,
+  BrowserRequest,
+  BrowserRuntimeOptions | undefined,
+];
 
 const browserManageMocks = vi.hoisted(() => ({
   callBrowserRequest: vi.fn<
@@ -39,7 +45,7 @@ const browserManageMocks = vi.hoisted(() => ({
 vi.spyOn(browserCliSharedModule, "callBrowserRequest").mockImplementation(
   browserManageMocks.callBrowserRequest,
 );
-vi.spyOn(parentCoreApiModule, "runCommandWithRuntime").mockImplementation(
+vi.spyOn(cliCoreApiModule, "runCommandWithRuntime").mockImplementation(
   async (_runtime, action, onError) => {
     try {
       await action();
@@ -60,6 +66,7 @@ vi.spyOn(cliCoreApiModule.defaultRuntime, "exit").mockImplementation(browserCliR
 
 const { registerBrowserManageCommands } = await import("./browser-cli-manage.js");
 
+/** Creates a Browser CLI program with manage commands registered. */
 export function createBrowserManageProgram(params?: { withParentTimeout?: boolean }): Command {
   const { program, browser, parentOpts } = createBrowserProgram();
   if (params?.withParentTimeout) {
@@ -69,10 +76,12 @@ export function createBrowserManageProgram(params?: { withParentTimeout?: boolea
   return program;
 }
 
+/** Returns the mocked callBrowserRequest used by manage command tests. */
 export function getBrowserManageCallBrowserRequestMock() {
   return browserManageMocks.callBrowserRequest;
 }
 
+/** Finds the first mocked Browser manage request for a route path. */
 export function findBrowserManageCall(path: string): BrowserManageCall | undefined {
   return browserManageMocks.callBrowserRequest.mock.calls.find(
     (call) => (call[1] ?? {}).path === path,

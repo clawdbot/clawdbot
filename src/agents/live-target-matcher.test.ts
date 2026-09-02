@@ -1,5 +1,6 @@
+// Verifies live test target matching across provider aliases and retired model ids.
 import { describe, expect, it, vi } from "vitest";
-import { createLiveTargetMatcher } from "./live-target-matcher.js";
+import { createLiveTargetMatcher } from "./test-helpers/live-target-matcher.js";
 
 vi.mock("./live-provider-owner.js", () => {
   const anthropicOwned = new Set(["anthropic", "claude-cli"]);
@@ -14,6 +15,8 @@ describe("createLiveTargetMatcher", () => {
   const env = {} as NodeJS.ProcessEnv;
 
   it("matches Anthropic-owned models for the claude-cli provider filter", () => {
+    // Provider filters can target a CLI owner while the resolved live model
+    // still reports the canonical provider.
     const matcher = createLiveTargetMatcher({
       providerFilter: new Set(["claude-cli"]),
       modelFilter: null,

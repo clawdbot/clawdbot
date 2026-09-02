@@ -1,7 +1,14 @@
+/**
+ * Model ids, default model metadata, and URL construction for the Cloudflare AI
+ * Gateway provider.
+ */
 import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-model-shared";
 
+/** Provider id used in model refs and auth profiles. */
 export const CLOUDFLARE_AI_GATEWAY_PROVIDER_ID = "cloudflare-ai-gateway";
+/** Default Cloudflare AI Gateway model id exposed by the bundled provider. */
 export const CLOUDFLARE_AI_GATEWAY_DEFAULT_MODEL_ID = "claude-sonnet-4-6";
+/** Fully-qualified default model ref used by onboarding. */
 export const CLOUDFLARE_AI_GATEWAY_DEFAULT_MODEL_REF = `${CLOUDFLARE_AI_GATEWAY_PROVIDER_ID}/${CLOUDFLARE_AI_GATEWAY_DEFAULT_MODEL_ID}`;
 
 const CLOUDFLARE_AI_GATEWAY_DEFAULT_CONTEXT_WINDOW = 200_000;
@@ -13,6 +20,10 @@ const CLOUDFLARE_AI_GATEWAY_DEFAULT_COST = {
   cacheWrite: 3.75,
 };
 
+/**
+ * Builds a provider model definition, allowing tests/catalog code to override
+ * the model id while preserving Cloudflare defaults.
+ */
 export function buildCloudflareAiGatewayModelDefinition(params?: {
   id?: string;
   name?: string;
@@ -31,6 +42,10 @@ export function buildCloudflareAiGatewayModelDefinition(params?: {
   };
 }
 
+/**
+ * Constructs the Anthropic Messages base URL for a Cloudflare account/gateway
+ * pair, returning an empty string for incomplete metadata.
+ */
 export function resolveCloudflareAiGatewayBaseUrl(params: {
   accountId: string;
   gatewayId: string;

@@ -15,7 +15,7 @@ query-filters:
 
 paths:
   - src/gateway/method-scopes.ts
-  - src/gateway/protocol
+  - packages/gateway-protocol/src
   - src/gateway/server-methods
   - src/gateway/server-methods.ts
   - src/gateway/server-methods-list.ts

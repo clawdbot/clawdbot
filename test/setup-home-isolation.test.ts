@@ -1,3 +1,4 @@
+// Home isolation tests validate HOME and state directory isolation.
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { createConfigIO } from "../src/config/config.js";

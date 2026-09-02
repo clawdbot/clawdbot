@@ -1,8 +1,19 @@
+// Qa Lab tests cover run plugin behavior.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { QA_EVIDENCE_FILENAME, buildQaSuiteEvidenceSummary } from "../evidence-summary.js";
 import { runMantisBeforeAfter } from "./run.runtime.js";
+
+function requireArgAfter(args: readonly string[], flag: string): string {
+  const index = args.indexOf(flag);
+  if (index < 0) {
+    throw new Error(`expected ${flag} argument`);
+  }
+  return expectDefined(args[index + 1], `${flag} argument value`);
+}
 
 describe("mantis before/after runtime", () => {
   let repoRoot: string;
@@ -22,8 +33,8 @@ describe("mantis before/after runtime", () => {
       if (command !== "pnpm" || !args.includes("openclaw")) {
         return;
       }
-      const repoRootArg = args[args.indexOf("--repo-root") + 1];
-      const outputDirArg = args[args.indexOf("--output-dir") + 1];
+      const repoRootArg = requireArgAfter(args, "--repo-root");
+      const outputDirArg = requireArgAfter(args, "--output-dir");
       const lane = outputDirArg.endsWith("baseline") ? "baseline" : "candidate";
       const outputDir = path.join(repoRootArg, outputDirArg);
       await fs.mkdir(outputDir, { recursive: true });
@@ -31,31 +42,45 @@ describe("mantis before/after runtime", () => {
       const videoPath = path.join(outputDir, `${lane}-timeline.mp4`);
       await fs.writeFile(screenshotPath, `${lane} screenshot`);
       await fs.writeFile(videoPath, `${lane} video`);
-      await fs.writeFile(
-        path.join(outputDir, "discord-qa-summary.json"),
-        `${JSON.stringify(
+      const title = "Discord explicit status reactions run in tool-only reply mode";
+      const summary = buildQaSuiteEvidenceSummary({
+        artifactPaths: [
+          { kind: "summary", path: QA_EVIDENCE_FILENAME },
+          { kind: "report", path: "discord-qa-report.md" },
+          { kind: "screenshot", path: screenshotPath },
+          { kind: "video", path: videoPath },
+        ],
+        channelDriver: "live",
+        channelId: "discord",
+        scenarioDefinitions: [
           {
-            scenarios: [
-              {
-                artifactPaths: { screenshot: screenshotPath, video: videoPath },
-                details:
-                  lane === "baseline"
-                    ? "reaction timeline missing thinking/done"
-                    : "reaction timeline matched queued -> thinking -> done",
-                id: "discord-status-reactions-tool-only",
-                status: lane === "baseline" ? "fail" : "pass",
-              },
-            ],
+            id: "discord-status-reactions-tool-only",
+            title,
           },
-          null,
-          2,
-        )}\n`,
+        ],
+        generatedAt: "2026-05-03T12:00:00.000Z",
+        primaryModel: "openai/gpt-5.4",
+        providerMode: "live-frontier",
+        scenarioResults: [
+          {
+            details:
+              lane === "baseline"
+                ? "reaction timeline missing thinking/done"
+                : "reaction timeline matched queued -> thinking -> done",
+            name: title,
+            status: lane === "baseline" ? "fail" : "pass",
+          },
+        ],
+      });
+      await fs.writeFile(
+        path.join(outputDir, QA_EVIDENCE_FILENAME),
+        `${JSON.stringify(summary, null, 2)}\n`,
       );
     });
 
     const result = await runMantisBeforeAfter({
-      baseline: "bug-sha",
-      candidate: "fix-sha",
+      baseline: "--lock",
+      candidate: "--force",
       commandRunner: runner,
       now: () => new Date("2026-05-03T12:00:00.000Z"),
       outputDir: ".artifacts/qa-e2e/mantis/test-run",
@@ -73,23 +98,44 @@ describe("mantis before/after runtime", () => {
         entry.args[2],
         entry.args[3],
       ]),
-    ).toEqual([
-      ["git", "worktree", "add", "--detach", expect.stringContaining("baseline")],
-      ["pnpm", "--dir", expect.stringContaining("baseline"), "openclaw", "qa"],
-      ["git", "worktree", "add", "--detach", expect.stringContaining("candidate")],
-      ["pnpm", "--dir", expect.stringContaining("candidate"), "openclaw", "qa"],
+    ).toHaveLength(4);
+    expect(commands[0]?.command).toBe("git");
+    expect(commands[0]?.args).toEqual([
+      "worktree",
+      "add",
+      "--detach",
+      "--",
+      path.join(result.outputDir, "worktrees", "baseline"),
+      "--lock",
     ]);
+    expect(commands[1]?.command).toBe("pnpm");
+    expect(commands[1]?.args[0]).toBe("--dir");
+    expect(commands[1]?.args[1]).toContain("baseline");
+    expect(commands[1]?.args.slice(2, 4)).toEqual(["openclaw", "qa"]);
+    expect(commands[2]?.command).toBe("git");
+    expect(commands[2]?.args).toEqual([
+      "worktree",
+      "add",
+      "--detach",
+      "--",
+      path.join(result.outputDir, "worktrees", "candidate"),
+      "--force",
+    ]);
+    expect(commands[3]?.command).toBe("pnpm");
+    expect(commands[3]?.args[0]).toBe("--dir");
+    expect(commands[3]?.args[1]).toContain("candidate");
+    expect(commands[3]?.args.slice(2, 4)).toEqual(["openclaw", "qa"]);
 
     const comparison = JSON.parse(await fs.readFile(result.comparisonPath, "utf8")) as {
       baseline: { reproduced: boolean; status: string };
       candidate: { fixed: boolean; status: string };
       pass: boolean;
     };
-    expect(comparison).toMatchObject({
-      baseline: { reproduced: true, status: "fail" },
-      candidate: { fixed: true, status: "pass" },
-      pass: true,
-    });
+    expect(comparison.baseline.reproduced).toBe(true);
+    expect(comparison.baseline.status).toBe("fail");
+    expect(comparison.candidate.fixed).toBe(true);
+    expect(comparison.candidate.status).toBe("pass");
+    expect(comparison.pass).toBe(true);
     await expect(
       fs.readFile(path.join(result.outputDir, "baseline", "baseline.png"), "utf8"),
     ).resolves.toBe("baseline screenshot");
@@ -109,8 +155,8 @@ describe("mantis before/after runtime", () => {
       if (command !== "pnpm" || !args.includes("openclaw")) {
         return;
       }
-      const repoRootArg = args[args.indexOf("--repo-root") + 1];
-      const outputDirArg = args[args.indexOf("--output-dir") + 1];
+      const repoRootArg = requireArgAfter(args, "--repo-root");
+      const outputDirArg = requireArgAfter(args, "--output-dir");
       const lane = outputDirArg.endsWith("baseline") ? "baseline" : "candidate";
       const outputDir = path.join(repoRootArg, outputDirArg);
       await fs.mkdir(outputDir, { recursive: true });
@@ -156,33 +202,23 @@ describe("mantis before/after runtime", () => {
       candidate: { expected: string; fixed: boolean };
       pass: boolean;
     };
-    expect(comparison).toMatchObject({
-      baseline: {
-        expected: "thread reply omits filePath attachment",
-        reproduced: true,
-      },
-      candidate: {
-        expected: "thread reply includes filePath attachment",
-        fixed: true,
-      },
-      pass: true,
-    });
+    expect(comparison.baseline.expected).toBe("thread reply omits filePath attachment");
+    expect(comparison.baseline.reproduced).toBe(true);
+    expect(comparison.candidate.expected).toBe("thread reply includes filePath attachment");
+    expect(comparison.candidate.fixed).toBe(true);
+    expect(comparison.pass).toBe(true);
     const manifest = JSON.parse(await fs.readFile(result.manifestPath, "utf8")) as {
       artifacts: { alt?: string; label: string }[];
       title: string;
     };
     expect(manifest.title).toBe("Mantis Discord Thread Attachment QA");
-    expect(manifest.artifacts).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          alt: "Baseline Discord thread reply without filePath attachment",
-          label: "Baseline missing filePath attachment",
-        }),
-        expect.objectContaining({
-          alt: "Candidate Discord thread reply with filePath attachment",
-          label: "Candidate includes filePath attachment",
-        }),
-      ]),
+    const baselineArtifact = manifest.artifacts.find(
+      (artifact) => artifact.label === "Baseline missing filePath attachment",
     );
+    expect(baselineArtifact?.alt).toBe("Baseline Discord thread reply without filePath attachment");
+    const candidateArtifact = manifest.artifacts.find(
+      (artifact) => artifact.label === "Candidate includes filePath attachment",
+    );
+    expect(candidateArtifact?.alt).toBe("Candidate Discord thread reply with filePath attachment");
   });
 });

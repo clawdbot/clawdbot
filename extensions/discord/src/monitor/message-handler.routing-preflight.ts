@@ -1,22 +1,18 @@
-import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
-import { resolveDiscordConversationIdentity } from "../conversation-identity.js";
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
+// Discord plugin module implements message handler.routing preflight behavior.
+import { resolveDiscordRuntimeBindingConversationId } from "../conversation-identity.js";
 import type { User } from "../internal/discord.js";
+import { resolveDiscordConversationBindingRoute } from "./conversation-binding-route.js";
 import type { DiscordMessagePreflightParams } from "./message-handler.preflight.types.js";
 import {
   buildDiscordRoutePeer,
   resolveDiscordConversationRoute,
   resolveDiscordEffectiveRoute,
-  shouldIgnoreStaleDiscordRouteBinding,
 } from "./route-resolution.js";
 
-let conversationRuntimePromise:
-  | Promise<typeof import("openclaw/plugin-sdk/conversation-binding-runtime")>
-  | undefined;
-
-async function loadConversationRuntime() {
-  conversationRuntimePromise ??= import("openclaw/plugin-sdk/conversation-binding-runtime");
-  return await conversationRuntimePromise;
-}
+const loadConversationRuntime = createLazyRuntimeModule(
+  () => import("openclaw/plugin-sdk/conversation-binding-runtime"),
+);
 
 export async function resolveDiscordPreflightRoute(params: {
   preflight: DiscordMessagePreflightParams;
@@ -41,49 +37,21 @@ export async function resolveDiscordPreflightRoute(params: {
     }),
     parentConversationId: params.earlyThreadParentId,
   });
-  const bindingConversationId = params.isDirectMessage
-    ? (resolveDiscordConversationIdentity({
-        isDirectMessage: true,
-        userId: params.author.id,
-      }) ?? `user:${params.author.id}`)
-    : params.messageChannelId;
-  let runtimeRoute = conversationRuntime.resolveRuntimeConversationBindingRoute({
-    route,
-    conversation: {
-      channel: "discord",
-      accountId: params.preflight.accountId,
-      conversationId: bindingConversationId,
-      parentConversationId: params.earlyThreadParentId,
-    },
+  const bindingConversationId = resolveDiscordRuntimeBindingConversationId({
+    isDirectMessage: params.isDirectMessage,
+    isGroupDm: params.isGroupDm,
+    userId: params.author.id,
+    channelId: params.messageChannelId,
   });
-  if (
-    shouldIgnoreStaleDiscordRouteBinding({
-      bindingRecord: runtimeRoute.bindingRecord,
-      route,
-    })
-  ) {
-    logVerbose(
-      `discord: ignoring stale route binding for conversation ${bindingConversationId} (${runtimeRoute.bindingRecord?.targetSessionKey} -> ${route.sessionKey})`,
-    );
-    runtimeRoute = {
-      bindingRecord: null,
-      route,
-    };
-  }
+  const { runtimeRoute, configuredRoute } = resolveDiscordConversationBindingRoute({
+    cfg: params.preflight.cfg,
+    route,
+    accountId: params.preflight.accountId,
+    runtimeConversationId: bindingConversationId,
+    configuredConversationId: params.messageChannelId,
+    parentConversationId: params.earlyThreadParentId,
+  });
   let threadBinding = runtimeRoute.bindingRecord ?? undefined;
-  const configuredRoute =
-    threadBinding == null
-      ? conversationRuntime.resolveConfiguredBindingRoute({
-          cfg: params.preflight.cfg,
-          route,
-          conversation: {
-            channel: "discord",
-            accountId: params.preflight.accountId,
-            conversationId: params.messageChannelId,
-            parentConversationId: params.earlyThreadParentId,
-          },
-        })
-      : null;
   const configuredBinding = configuredRoute?.bindingResolution ?? null;
   if (!threadBinding && configuredBinding) {
     threadBinding = configuredBinding.record;

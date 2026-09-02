@@ -1,0 +1,48 @@
+{
+  "name": "@openclaw/cua-computer",
+  "version": "2026.8.1",
+  "description": "Experimental CUA Driver computer control for macOS, Windows, and Linux node hosts",
+  "type": "module",
+  "dependencies": {
+    "@trycua/cua-driver": "0.22.0",
+    "rastermill": "0.3.2",
+    "zod": "4.4.3"
+  },
+  "devDependencies": {
+    "@openclaw/plugin-sdk": "workspace:*"
+  },
+  "cuaDriverArtifacts": {
+    "darwin-universal-binary": {
+      "archiveSha256": "202eb9dd2185d64fc0599079671f50efe2bf71b300a85644cf26d627bb7355e6"
+    },
+    "linux-arm64-gnu": {
+      "files": {
+        "cua_driver_node_runtime.node": "7809af56923f667576f4477c67ca8a6e98852243e6994678d50af7981e707c22",
+        "libcua_driver_sdk.so": "b27193e7a81ef0751b57b678ee7c1f52ba9d7f086dbbf4750ebf046d2cfeafe9"
+      }
+    },
+    "linux-x64-gnu": {
+      "files": {
+        "cua_driver_node_runtime.node": "2da7ed7c3b7737be3b24e2cfc38dda93ad33328a87e7914e11329858be6783a3",
+        "libcua_driver_sdk.so": "ac18e8f55b77aac69c245057e850716cde52d18e87aa05114357f2e6c54d5e6c"
+      }
+    },
+    "win32-arm64-msvc": {
+      "files": {
+        "cua_driver_node_runtime.node": "86a8c108c07bd5d0e94e736debf2534d38566499551b1ea4fb5a465bd8c888b9",
+        "cua_driver_sdk.dll": "f1bc6618d0b8d4f953d4d006535e5b778f4e2c5dd2f0cf8f22504eee2eded139"
+      }
+    },
+    "win32-x64-msvc": {
+      "files": {
+        "cua_driver_node_runtime.node": "d11a9b78cb3e35c8c037eae38d635bf2ddbdf744e90c37f8acaf66856b214524",
+        "cua_driver_sdk.dll": "9d7db571cef8f8e375b88ce036c70618129e10b84e5a73cb8ef3852a3492ff35"
+      }
+    }
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}

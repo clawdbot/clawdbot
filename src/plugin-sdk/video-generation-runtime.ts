@@ -1,3 +1,6 @@
+/**
+ * Runtime SDK subpath for video generation provider access.
+ */
 export {
   generateVideo,
   listRuntimeVideoGenerationProviders,

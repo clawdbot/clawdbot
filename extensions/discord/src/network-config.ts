@@ -1,3 +1,4 @@
+// Discord helper module supports network config behavior.
 import * as dns from "node:dns";
 import type { LookupFunction } from "node:net";
 

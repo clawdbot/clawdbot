@@ -6,7 +6,7 @@
 # It's designed for quick one-tap checking from phone home screen.
 
 # Server hostname (via Tailscale or SSH config)
-SERVER="${OPENCLAW_SERVER:-l36}"
+SERVER="${OPENCLAW_SERVER:-openclaw-host}"
 
 # Check auth status
 termux-toast "Checking OpenClaw auth..."

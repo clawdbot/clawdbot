@@ -1,18 +1,17 @@
-import { describe, expect, it } from "vitest";
+// Feishu tests cover sequential queue plugin behavior.
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createSequentialQueue } from "./sequential-queue.js";
 
-function createDeferred() {
-  let resolve!: () => void;
-  const promise = new Promise<void>((res) => {
-    resolve = res;
-  });
-  return { promise, resolve };
-}
-
 describe("createSequentialQueue", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it("serializes tasks for the same key", async () => {
     const enqueue = createSequentialQueue();
-    const gate = createDeferred();
+    const gate = createDeferred<void>();
     const order: string[] = [];
 
     const first = enqueue("feishu:default:chat-1", async () => {
@@ -36,8 +35,8 @@ describe("createSequentialQueue", () => {
 
   it("allows different keys to run concurrently", async () => {
     const enqueue = createSequentialQueue();
-    const gateA = createDeferred();
-    const gateB = createDeferred();
+    const gateA = createDeferred<void>();
+    const gateB = createDeferred<void>();
     const order: string[] = [];
 
     const first = enqueue("feishu:default:chat-1", async () => {
@@ -77,20 +76,19 @@ describe("createSequentialQueue", () => {
         }),
       ).rejects.toThrow("boom");
 
-      await new Promise((resolve) => setTimeout(resolve, 0));
-      expect(unhandled).toEqual([]);
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+      expect(unhandled).toStrictEqual([]);
 
-      await expect(
-        enqueue("feishu:default:chat-1", async () => {
-          return;
-        }),
-      ).resolves.toBeUndefined();
+      await expect(enqueue("feishu:default:chat-1", async () => {})).resolves.toBeUndefined();
     } finally {
       process.off("unhandledRejection", onUnhandledRejection);
     }
   });
 
   it("evicts a stuck task after taskTimeoutMs so newer same-key work proceeds", async () => {
+    vi.useFakeTimers();
     const timeouts: Array<{ key: string; timeoutMs: number }> = [];
     const enqueue = createSequentialQueue({
       taskTimeoutMs: 25,
@@ -101,7 +99,7 @@ describe("createSequentialQueue", () => {
     const order: string[] = [];
 
     // Stuck task — never resolves until the test cleans up.
-    const stuckGate = createDeferred();
+    const stuckGate = createDeferred<void>();
     const stuck = enqueue("feishu:default:chat-stuck", async () => {
       order.push("stuck:start");
       await stuckGate.promise;
@@ -113,6 +111,7 @@ describe("createSequentialQueue", () => {
       order.push("follow-up:ran");
     });
 
+    await vi.advanceTimersByTimeAsync(25);
     await followUp;
 
     expect(order).toEqual(["stuck:start", "follow-up:ran"]);
@@ -123,7 +122,27 @@ describe("createSequentialQueue", () => {
     await stuck;
   });
 
+  it("clamps oversized task timeouts before scheduling", async () => {
+    vi.useFakeTimers();
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    const enqueue = createSequentialQueue({
+      taskTimeoutMs: Number.MAX_SAFE_INTEGER,
+    });
+    const gate = createDeferred<void>();
+
+    const first = enqueue("feishu:default:chat-large-timeout", async () => {
+      await gate.promise;
+    });
+
+    await Promise.resolve();
+    expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
+
+    gate.resolve();
+    await first;
+  });
+
   it("disables the timeout cap when taskTimeoutMs is 0 (legacy behavior)", async () => {
+    vi.useFakeTimers();
     const timeouts: Array<{ key: string; timeoutMs: number }> = [];
     const enqueue = createSequentialQueue({
       taskTimeoutMs: 0,
@@ -131,7 +150,7 @@ describe("createSequentialQueue", () => {
         timeouts.push({ key, timeoutMs });
       },
     });
-    const gate = createDeferred();
+    const gate = createDeferred<void>();
     const order: string[] = [];
 
     const first = enqueue("feishu:default:chat-1", async () => {
@@ -144,9 +163,9 @@ describe("createSequentialQueue", () => {
     });
 
     // Wait long enough that a timeout would have fired if it were active.
-    await new Promise((resolve) => setTimeout(resolve, 30));
+    await vi.advanceTimersByTimeAsync(30);
     expect(order).toEqual(["first:start"]);
-    expect(timeouts).toEqual([]);
+    expect(timeouts).toStrictEqual([]);
 
     gate.resolve();
     await Promise.all([first, second]);

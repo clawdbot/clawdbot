@@ -1,3 +1,4 @@
+// Qa Lab type declarations define plugin contracts.
 import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import type { QaThinkingLevel } from "../../qa-thinking.js";
 
@@ -17,6 +18,8 @@ type QaProviderModelParamsInput = {
 
 type QaProviderGatewayModelsInput = {
   providerBaseUrl: string;
+  primaryModel?: string;
+  alternateModel?: string;
   liveProviderConfigs?: Record<string, ModelProviderConfig>;
 };
 

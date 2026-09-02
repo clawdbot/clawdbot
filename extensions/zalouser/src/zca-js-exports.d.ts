@@ -1,3 +1,4 @@
+// Zalouser type declarations define plugin contracts.
 declare module "zca-js" {
   export const ThreadType: {
     User: number;

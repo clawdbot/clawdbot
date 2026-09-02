@@ -22,12 +22,17 @@ function defaultCreateOptions() {
   };
 }
 
-function stubCreate(client: { region: string; model: string; dimensions?: number }) {
+function stubCreate(client: {
+  region: string;
+  model: string;
+  dimensions?: number;
+  endpoint?: string;
+}) {
   createBedrockEmbeddingProviderMock.mockResolvedValue({
     provider: {
       id: "bedrock",
       model: client.model,
-      embedQuery: async () => [],
+      embed: async () => [],
       embedBatch: async () => [],
     },
     client,
@@ -42,6 +47,7 @@ describe("bedrockMemoryEmbeddingProviderAdapter", () => {
 
   afterEach(() => {
     vi.restoreAllMocks();
+    vi.unstubAllEnvs();
   });
 
   afterAll(() => {
@@ -57,17 +63,25 @@ describe("bedrockMemoryEmbeddingProviderAdapter", () => {
     expect(bedrockMemoryEmbeddingProviderAdapter.allowExplicitWhenConfiguredAuto).toBe(true);
   });
 
-  it("throws a missing-api-key sentinel error when AWS credentials are unavailable", async () => {
+  it("reports missing credentials to automatic provider selection", async () => {
     hasAwsCredentialsMock.mockResolvedValue(false);
 
-    await expect(
-      bedrockMemoryEmbeddingProviderAdapter.create(defaultCreateOptions()),
-    ).rejects.toThrow(/No API key found for provider "bedrock"/);
-    await expect(
-      bedrockMemoryEmbeddingProviderAdapter.create(defaultCreateOptions()),
-    ).rejects.toThrow(/AWS credentials are not available/);
+    const error = await bedrockMemoryEmbeddingProviderAdapter.create(defaultCreateOptions()).then(
+      () => undefined,
+      (cause: unknown) => cause,
+    );
 
+    expect(error).toBeInstanceOf(Error);
+    expect(error).toHaveProperty(
+      "message",
+      expect.stringContaining('No API key found for provider "bedrock"'),
+    );
+    expect(error).toHaveProperty(
+      "message",
+      expect.stringContaining("AWS credentials are not available"),
+    );
     expect(createBedrockEmbeddingProviderMock).not.toHaveBeenCalled();
+    expect(bedrockMemoryEmbeddingProviderAdapter.shouldContinueAutoSelection?.(error)).toBe(true);
   });
 
   it("creates the provider when AWS credentials are available", async () => {
@@ -89,17 +103,61 @@ describe("bedrockMemoryEmbeddingProviderAdapter", () => {
     expect(createBedrockEmbeddingProviderMock).toHaveBeenCalledOnce();
   });
 
-  it("lets the auto-select loop skip bedrock when credentials are unavailable", async () => {
-    hasAwsCredentialsMock.mockResolvedValue(false);
+  it("invalidates cached embeddings when the configured PrivateLink endpoint changes", async () => {
+    hasAwsCredentialsMock.mockResolvedValue(true);
+    const firstEndpoint = "https://vpce-first.bedrock-runtime.us-east-1.vpce.amazonaws.com";
+    const secondEndpoint = "https://vpce-second.bedrock-runtime.us-east-1.vpce.amazonaws.com";
 
-    let thrown: unknown;
-    try {
-      await bedrockMemoryEmbeddingProviderAdapter.create(defaultCreateOptions());
-    } catch (err) {
-      thrown = err;
-    }
+    stubCreate({
+      region: "us-east-1",
+      model: "amazon.titan-embed-text-v2:0",
+      dimensions: 1024,
+      endpoint: firstEndpoint,
+    });
+    const first = await bedrockMemoryEmbeddingProviderAdapter.create(defaultCreateOptions());
 
-    expect(thrown).toBeInstanceOf(Error);
-    expect(bedrockMemoryEmbeddingProviderAdapter.shouldContinueAutoSelection?.(thrown)).toBe(true);
+    stubCreate({
+      region: "us-east-1",
+      model: "amazon.titan-embed-text-v2:0",
+      dimensions: 1024,
+      endpoint: secondEndpoint,
+    });
+    const second = await bedrockMemoryEmbeddingProviderAdapter.create(defaultCreateOptions());
+
+    expect(first.runtime?.cacheKeyData).toMatchObject({ endpoint: firstEndpoint });
+    expect(second.runtime?.cacheKeyData).toMatchObject({ endpoint: secondEndpoint });
+    expect(first.runtime?.cacheKeyData).not.toEqual(second.runtime?.cacheKeyData);
+  });
+
+  it("preserves existing cache identity for canonical AWS regional provider URLs", async () => {
+    hasAwsCredentialsMock.mockResolvedValue(true);
+    const actual =
+      await vi.importActual<typeof import("./embedding-provider.js")>("./embedding-provider.js");
+    createBedrockEmbeddingProviderMock.mockImplementation(actual.createBedrockEmbeddingProvider);
+    vi.stubEnv("AWS_REGION", "us-east-1");
+    vi.stubEnv("AWS_DEFAULT_REGION", undefined);
+    vi.stubEnv("AWS_ENDPOINT_URL", undefined);
+    vi.stubEnv("AWS_ENDPOINT_URL_BEDROCK_RUNTIME", undefined);
+
+    const result = await bedrockMemoryEmbeddingProviderAdapter.create({
+      ...defaultCreateOptions(),
+      config: {
+        models: {
+          providers: {
+            "amazon-bedrock": {
+              baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
+              models: [],
+            },
+          },
+        },
+      },
+    });
+
+    expect(result.runtime?.cacheKeyData).toEqual({
+      provider: "bedrock",
+      region: "us-east-1",
+      model: "amazon.titan-embed-text-v2:0",
+      dimensions: 1024,
+    });
   });
 });

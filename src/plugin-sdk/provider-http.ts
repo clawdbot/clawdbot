@@ -2,19 +2,37 @@
 // capability SDKs do not depend on each other.
 
 export {
+  inspectTlsCertificateError,
+  type TlsCertificateErrorDetails,
+  type TlsCertificateErrorKind,
+} from "@openclaw/ai/internal/shared";
+export {
   assertOkOrThrowHttpError,
   assertOkOrThrowProviderError,
+  assertProviderBinaryResponseContent,
   createProviderHttpError,
   extractProviderErrorDetail,
   extractProviderRequestId,
   formatProviderErrorPayload,
   formatProviderHttpErrorMessage,
+  readProviderBinaryResponse,
+  readProviderJsonArrayFieldResponse,
+  readProviderJsonObjectResponse,
+  readProviderJsonResponse,
+  readProviderTextResponse,
   readResponseTextLimited,
   truncateErrorDetail,
 } from "../agents/provider-http-errors.js";
 export {
+  readProviderResponseErrorText,
+  redactProviderResponseErrorText,
+} from "../agents/provider-request-header-redaction.js";
+export {
   buildAudioTranscriptionFormData,
   createProviderOperationDeadline,
+  createProviderOperationTimeoutResolver,
+  fetchProviderDownloadResponse,
+  fetchProviderOperationResponse,
   fetchWithTimeout,
   fetchWithTimeoutGuarded,
   normalizeBaseUrl,
@@ -29,7 +47,20 @@ export {
   sanitizeConfiguredModelProviderRequest,
   waitProviderOperationPollInterval,
 } from "../media-understanding/shared.js";
-export type { ProviderOperationDeadline } from "../media-understanding/shared.js";
+export type {
+  ProviderOperationDeadline,
+  ProviderOperationTimeoutMs,
+} from "../media-understanding/shared.js";
+export {
+  executeProviderOperationWithRetry,
+  providerOperationRetryConfig,
+} from "../provider-runtime/operation-retry.js";
+export type {
+  ProviderOperationRetryStage,
+  TransientProviderRetryConfig,
+  TransientProviderRetryOptions,
+  TransientProviderRetryParams,
+} from "../provider-runtime/operation-retry.js";
 export type {
   ProviderAttributionPolicy,
   ProviderRequestCapabilities,

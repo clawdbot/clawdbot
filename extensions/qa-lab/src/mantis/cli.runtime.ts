@@ -1,3 +1,4 @@
+// Qa Lab plugin module implements cli behavior.
 import {
   runMantisDesktopBrowserSmoke,
   type MantisDesktopBrowserSmokeOptions,
@@ -57,6 +58,11 @@ export async function runMantisSlackDesktopSmokeCommand(opts: MantisSlackDesktop
   }
   if (result.videoPath) {
     process.stdout.write(`Mantis Slack desktop video: ${result.videoPath}\n`);
+  }
+  for (const screenshotPath of result.approvalCheckpointScreenshotPaths ?? []) {
+    process.stdout.write(
+      `Mantis Slack desktop approval checkpoint screenshot: ${screenshotPath}\n`,
+    );
   }
   if (result.status === "fail") {
     process.exitCode = 1;

@@ -1,3 +1,4 @@
+// Discord plugin module implements agent components guild auth behavior.
 import { resolveCommandAuthorizedFromAuthorizers } from "openclaw/plugin-sdk/command-auth-native";
 import { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/dangerous-name-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
@@ -253,7 +254,7 @@ export async function resolveAuthorizedComponentInteraction(params: {
     return null;
   }
 
-  const commandAuthorized = resolveComponentCommandAuthorized({
+  const commandAuthorized = await resolveComponentCommandAuthorized({
     ctx: params.ctx,
     interactionCtx,
     channelConfig,
@@ -273,7 +274,7 @@ export async function resolveAuthorizedComponentInteraction(params: {
   };
 }
 
-export function resolveComponentCommandAuthorized(params: {
+export async function resolveComponentCommandAuthorized(params: {
   ctx: AgentComponentContext;
   interactionCtx: ComponentInteractionContext;
   channelConfig: ReturnType<typeof resolveDiscordChannelConfigWithFallback>;
@@ -306,7 +307,7 @@ export function resolveComponentCommandAuthorized(params: {
     },
     allowNameMatching: params.allowNameMatching,
   });
-  const useAccessGroups = ctx.cfg.commands?.useAccessGroups !== false;
+  const useAccessGroups = true;
   const authorizers = useAccessGroups
     ? [
         { configured: ownerAllowList != null, allowed: ownerOk },

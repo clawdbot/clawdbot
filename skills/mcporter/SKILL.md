@@ -1,6 +1,6 @@
 ---
 name: mcporter
-description: List, configure, authenticate, call, and inspect MCP servers/tools with mcporter over HTTP or stdio.
+description: "List, configure, authenticate, call, and inspect MCP servers/tools with mcporter over HTTP or stdio."
 homepage: http://mcporter.dev
 metadata:
   {

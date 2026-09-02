@@ -1,42 +1,27 @@
-import fs from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
+// Provider runtime contract helpers define reusable runtime tests for provider plugins.
+import { normalizeModelCatalog } from "@openclaw/model-catalog-core/model-catalog-normalize";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createPluginMetadataSnapshot } from "../../config/plugin-auto-enable.test-helpers.js";
 import type { ProviderRuntimeModel } from "../plugin-entry.js";
 import { registerProviderPlugin, requireRegisteredProvider } from "../plugin-test-runtime.js";
+import { buildManifestModelProviderConfig } from "../provider-catalog-shared.js";
 import type { ProviderPlugin } from "../provider-model-shared.js";
 import { createProviderUsageFetch, makeResponse } from "../test-env.js";
 
 const CONTRACT_SETUP_TIMEOUT_MS = 300_000;
 
-const OAUTH_MODULE_ID = "@mariozechner/pi-ai/oauth";
 const OPENAI_CODEX_PROVIDER_RUNTIME_MODULE_ID =
-  "../../../extensions/openai/openai-codex-provider.runtime.js";
+  "../../../extensions/openai/openai-chatgpt-provider.runtime.js";
 const refreshOpenAICodexTokenMock = vi.fn();
-const getOAuthProvidersMock = vi.fn(() => [
-  { id: "anthropic", envApiKey: "ANTHROPIC_API_KEY", oauthTokenEnv: "ANTHROPIC_OAUTH_TOKEN" },
-  { id: "google", envApiKey: "GOOGLE_API_KEY", oauthTokenEnv: "GOOGLE_OAUTH_TOKEN" },
-  { id: "openai-codex", envApiKey: "OPENAI_API_KEY", oauthTokenEnv: "OPENAI_OAUTH_TOKEN" },
-]);
 
 function installProviderRuntimeContractMocks() {
-  vi.doMock(OAUTH_MODULE_ID, async () => {
-    const actual =
-      await vi.importActual<typeof import("@mariozechner/pi-ai/oauth")>(OAUTH_MODULE_ID);
-    return {
-      ...actual,
-      refreshOpenAICodexToken: refreshOpenAICodexTokenMock,
-      getOAuthProviders: getOAuthProvidersMock,
-    };
-  });
-
   vi.doMock(OPENAI_CODEX_PROVIDER_RUNTIME_MODULE_ID, () => ({
     refreshOpenAICodexToken: refreshOpenAICodexTokenMock,
   }));
 }
 
 function removeProviderRuntimeContractMocks() {
-  vi.doUnmock(OAUTH_MODULE_ID);
   vi.doUnmock(OPENAI_CODEX_PROVIDER_RUNTIME_MODULE_ID);
 }
 
@@ -53,6 +38,44 @@ function createModel(overrides: Partial<ProviderRuntimeModel> & Pick<ProviderRun
     contextWindow: overrides.contextWindow ?? 200_000,
     maxTokens: overrides.maxTokens ?? 8_192,
   } satisfies ProviderRuntimeModel;
+}
+
+function createManifestModelFactory(providerId: string, catalog: unknown) {
+  const provider = buildManifestModelProviderConfig({ providerId, catalog });
+  return (modelId: string, overrides: Partial<ProviderRuntimeModel> = {}): ProviderRuntimeModel => {
+    const model = provider.models.find((candidate) => candidate.id === modelId);
+    if (!model) {
+      throw new Error(`Missing ${providerId} manifest model ${modelId}`);
+    }
+    const input = model.input.filter(
+      (item): item is "text" | "image" => item === "text" || item === "image",
+    );
+    if (input.length !== model.input.length) {
+      throw new Error(`Unsupported ${providerId} manifest model input for ${modelId}`);
+    }
+    return createModel({
+      ...model,
+      id: model.id,
+      provider: providerId,
+      baseUrl: model.baseUrl ?? provider.baseUrl,
+      api: model.api ?? provider.api,
+      input,
+      ...overrides,
+    });
+  };
+}
+
+function requireRecord(value: unknown, label: string): Record<string, unknown> {
+  expect(value, label).toBeTypeOf("object");
+  expect(value, label).not.toBeNull();
+  return value as Record<string, unknown>;
+}
+
+function expectFields(value: unknown, fields: Record<string, unknown>) {
+  const record = requireRecord(value, "record");
+  for (const [key, expected] of Object.entries(fields)) {
+    expect(record[key]).toEqual(expected);
+  }
 }
 
 type ProviderRuntimeContractFixture = {
@@ -122,7 +145,6 @@ function installRuntimeHooks(fixtures: readonly ProviderRuntimeContractFixture[]
 
   beforeEach(() => {
     refreshOpenAICodexTokenMock.mockReset();
-    getOAuthProvidersMock.mockClear();
   }, CONTRACT_SETUP_TIMEOUT_MS);
 
   return requireProviderContractProvider;
@@ -138,12 +160,13 @@ export function describeAnthropicProviderRuntimeContract(
 
     it("owns anthropic 4.6 forward-compat resolution", () => {
       const provider = requireProviderContractProvider("anthropic");
+      // The dated 4.6 template has no owning manifest row; keep its remap fixture literal.
       const model = provider.resolveDynamicModel?.({
         provider: "anthropic",
         modelId: "claude-sonnet-4.6-20260219",
         modelRegistry: {
           find: (_provider: string, id: string) =>
-            id === "claude-sonnet-4.5-20260219"
+            id === "claude-sonnet-4-6-20260219"
               ? createModel({
                   id,
                   api: "anthropic-messages",
@@ -154,7 +177,7 @@ export function describeAnthropicProviderRuntimeContract(
         } as never,
       });
 
-      expect(model).toMatchObject({
+      expectFields(model, {
         id: "claude-sonnet-4.6-20260219",
         provider: "anthropic",
         api: "anthropic-messages",
@@ -179,9 +202,9 @@ export function describeAnthropicProviderRuntimeContract(
       });
     });
 
-    it("owns auth doctor hint generation", () => {
+    it("owns auth doctor hint generation", async () => {
       const provider = requireProviderContractProvider("anthropic");
-      const hint = provider.buildAuthDoctorHint?.({
+      const hint = await provider.buildAuthDoctorHint?.({
         provider: "anthropic",
         profileId: "anthropic:default",
         config: {
@@ -247,6 +270,7 @@ export function describeAnthropicProviderRuntimeContract(
 
 export function describeGithubCopilotProviderRuntimeContract(
   load: ProviderRuntimeContractPluginLoader,
+  manifestCatalog: unknown,
 ) {
   describe(
     "github-copilot provider runtime contract",
@@ -260,30 +284,180 @@ export function describeGithubCopilotProviderRuntimeContract(
           load,
         },
       ]);
+      const createManifestModel = createManifestModelFactory("github-copilot", manifestCatalog);
+
+      async function resolveStaticModel(modelId: string, discoveryEnabled = false) {
+        const { createBundledStaticCatalogModelResolver } =
+          await import("../../agents/embedded-agent-runner/model.static-catalog.js");
+        const config = {
+          models: { catalogRefresh: { enabled: false } },
+          plugins: {
+            entries: {
+              "github-copilot": { config: { discovery: { enabled: discoveryEnabled } } },
+            },
+          },
+        };
+        const metadataSnapshot = createPluginMetadataSnapshot({
+          config,
+          manifestRegistry: {
+            diagnostics: [],
+            plugins: [
+              {
+                id: "github-copilot",
+                origin: "bundled",
+                providers: ["github-copilot"],
+                channels: [],
+                cliBackends: [],
+                skills: [],
+                hooks: [],
+                rootDir: "/fixtures/github-copilot",
+                source: "/fixtures/github-copilot/index.js",
+                manifestPath: "/fixtures/github-copilot/openclaw.plugin.json",
+                modelCatalog: normalizeModelCatalog(
+                  {
+                    providers: { "github-copilot": manifestCatalog },
+                    discovery: { "github-copilot": "runtime" },
+                  },
+                  { ownedProviders: new Set(["github-copilot"]) },
+                ),
+              },
+            ],
+          },
+        });
+        const resolveModel = createBundledStaticCatalogModelResolver({
+          cfg: config,
+          env: {},
+          metadataSnapshot,
+          includeRuntimeDiscovery: true,
+        });
+        return {
+          config,
+          model: expectDefined(resolveModel({ provider: "github-copilot", modelId }), modelId),
+        };
+      }
+
+      it.each([
+        ["gemini-3.6-flash", "openai-completions", false],
+        ["gemini-3.1-pro-preview", "openai-completions", false],
+        ["gemini-3.5-flash", "openai-completions", false],
+        ["gemini-2.5-pro", "openai-completions", false],
+        ["gpt-5.6-sol", "openai-responses", false],
+        ["claude-sonnet-5", "anthropic-messages", false],
+        ["gemini-3.6-flash", "openai-completions", true],
+      ] as const)(
+        "routes static %s through %s with discovery enabled=%s",
+        async (modelId, api, discoveryEnabled) => {
+          const { config, model } = await resolveStaticModel(modelId, discoveryEnabled);
+          expect(model.api).toBe(api);
+          if (api === "openai-completions") {
+            expect(model.compat).toMatchObject({
+              supportsStore: false,
+              supportsDeveloperRole: false,
+              supportsUsageInStreaming: false,
+              maxTokensField: "max_tokens",
+            });
+          }
+          const provider = requireProviderContractProvider("github-copilot");
+          expect(
+            provider.preferRuntimeResolvedModel?.({
+              config,
+              provider: "github-copilot",
+              modelId,
+            }),
+          ).toBe(discoveryEnabled);
+          // A missing prepared live row also occurs when enabled discovery is unavailable.
+          expect(
+            provider.resolveDynamicModel?.({
+              config,
+              provider: "github-copilot",
+              modelId,
+              modelRegistry: {
+                find: () => model,
+                getAll: () => [model],
+                getAvailable: () => [],
+                hasConfiguredAuth: () => false,
+              },
+            }),
+          ).toBeUndefined();
+        },
+      );
+
+      it.each([
+        ["minimal", "low"],
+        ["xhigh", "xhigh"],
+      ] as const)("sends static GPT-5.4 mini %s thinking as %s", async (level, effort) => {
+        const { createApiRegistry, createLlmRuntime } = await import("@openclaw/ai");
+        const { streamOpenAIResponses, streamSimpleOpenAIResponses } =
+          await import("@openclaw/ai/internal/openai");
+        const { config, model } = await resolveStaticModel("gpt-5.4-mini");
+        const provider = requireProviderContractProvider("github-copilot");
+        const profile = provider.resolveThinkingProfile?.({
+          provider: model.provider,
+          modelId: model.id,
+          api: model.api,
+          compat: model.compat,
+        });
+        const registry = createApiRegistry();
+        registry.registerApiProvider({
+          api: "openai-responses",
+          stream: streamOpenAIResponses,
+          streamSimple: streamSimpleOpenAIResponses,
+        });
+        const stream = expectDefined(
+          provider.wrapStreamFn?.({
+            config,
+            provider: model.provider,
+            modelId: model.id,
+            model,
+            streamFn: createLlmRuntime(registry).streamSimple,
+          }),
+          "Copilot stream wrapper",
+        );
+        const network = vi
+          .spyOn(globalThis, "fetch")
+          .mockRejectedValue(new Error("Unexpected network"));
+        const payloads: unknown[] = [];
+        try {
+          const response = await stream(
+            model,
+            {
+              messages: [{ role: "user", content: "Say hello", timestamp: 0 }],
+            },
+            {
+              apiKey: "test-token",
+              reasoning: level,
+              maxTokens: 1024,
+              onPayload: (payload) => {
+                payloads.push(payload);
+                throw new Error("Captured payload before network");
+              },
+            },
+          );
+          await response.result();
+          expect(network).not.toHaveBeenCalled();
+          expect.soft(profile?.levels.map(({ id }) => id)).toContain(level);
+          expect(profile?.levels.map(({ id }) => id)).not.toContain("max");
+          expect(payloads).toEqual([
+            expect.objectContaining({ reasoning: expect.objectContaining({ effort }) }),
+          ]);
+        } finally {
+          network.mockRestore();
+        }
+      });
 
       it("owns Copilot-specific forward-compat fallbacks", () => {
         const provider = requireProviderContractProvider("github-copilot");
+        const expected = createManifestModel("gpt-5.4");
         const model = provider.resolveDynamicModel?.({
           provider: "github-copilot",
           modelId: "gpt-5.4",
           modelRegistry: {
-            find: (_provider: string, id: string) =>
-              id === "gpt-5.2-codex"
-                ? createModel({
-                    id,
-                    api: "openai-codex-responses",
-                    provider: "github-copilot",
-                    baseUrl: "https://api.copilot.example",
-                  })
-                : null,
+            find: () => null,
           } as never,
         });
 
-        expect(model).toMatchObject({
-          id: "gpt-5.4",
-          provider: "github-copilot",
-          api: "openai-codex-responses",
-        });
+        const { baseUrl: _providerDefault, ...manifestFields } = expected;
+        expectFields(model, manifestFields);
       });
     },
   );
@@ -297,6 +471,7 @@ export function describeGoogleProviderRuntimeContract(load: ProviderRuntimeContr
 
     it("owns google direct gemini 3.1 forward-compat resolution", () => {
       const provider = requireProviderContractProvider("google");
+      // Google catalog rows are runtime-discovered, so the retired 3.0 template stays literal.
       const model = provider.resolveDynamicModel?.({
         provider: "google",
         modelId: "gemini-3.1-pro-preview",
@@ -316,7 +491,7 @@ export function describeGoogleProviderRuntimeContract(load: ProviderRuntimeContr
         } as never,
       });
 
-      expect(model).toMatchObject({
+      expectFields(model, {
         id: "gemini-3.1-pro-preview",
         provider: "google",
         api: "google-generative-ai",
@@ -346,30 +521,18 @@ export function describeGoogleProviderRuntimeContract(load: ProviderRuntimeContr
         } as never,
       });
 
-      expect(model).toMatchObject({
+      expectFields(model, {
         id: "gemini-3.1-pro-preview",
         provider: "google-gemini-cli",
         reasoning: true,
       });
     });
 
-    it("owns usage-token parsing", async () => {
+    it("keeps retired usage telemetry hooks absent", () => {
       const provider = requireProviderContractProvider("google-gemini-cli");
-      await expect(
-        provider.resolveUsageAuth?.({
-          config: {} as never,
-          env: {} as NodeJS.ProcessEnv,
-          provider: "google-gemini-cli",
-          resolveApiKeyFromConfigAndStore: () => undefined,
-          resolveOAuthToken: async () => ({
-            token: '{"token":"google-oauth-token"}',
-            accountId: "google-account",
-          }),
-        }),
-      ).resolves.toEqual({
-        token: "google-oauth-token",
-        accountId: "google-account",
-      });
+
+      expect(provider.resolveUsageAuth).toBeUndefined();
+      expect(provider.fetchUsageSnapshot).toBeUndefined();
     });
 
     it("owns OAuth auth-profile formatting", () => {
@@ -386,49 +549,26 @@ export function describeGoogleProviderRuntimeContract(load: ProviderRuntimeContr
         }),
       ).toBe('{"token":"google-oauth-token","projectId":"proj-123"}');
     });
-
-    it("owns usage snapshot fetching", async () => {
-      const provider = requireProviderContractProvider("google-gemini-cli");
-      const mockFetch = createProviderUsageFetch(async (url) => {
-        if (url.includes("cloudcode-pa.googleapis.com/v1internal:retrieveUserQuota")) {
-          return makeResponse(200, {
-            buckets: [
-              { modelId: "gemini-3.1-pro-preview", remainingFraction: 0.4 },
-              { modelId: "gemini-3.1-flash-preview", remainingFraction: 0.8 },
-            ],
-          });
-        }
-        return makeResponse(404, "not found");
-      });
-
-      const snapshot = await provider.fetchUsageSnapshot?.({
-        config: {} as never,
-        env: {} as NodeJS.ProcessEnv,
-        provider: "google-gemini-cli",
-        token: "google-oauth-token",
-        timeoutMs: 5_000,
-        fetchFn: mockFetch as unknown as typeof fetch,
-      });
-
-      expect(snapshot).toMatchObject({
-        provider: "google-gemini-cli",
-        displayName: "Gemini",
-      });
-      expect(snapshot?.windows[0]).toEqual({ label: "Pro", usedPercent: 60 });
-      expect(snapshot?.windows[1]?.label).toBe("Flash");
-      expect(snapshot?.windows[1]?.usedPercent).toBeCloseTo(20);
-    });
   });
 }
 
-export function describeOpenAIProviderRuntimeContract(load: ProviderRuntimeContractPluginLoader) {
+export function describeOpenAIProviderRuntimeContract(
+  load: ProviderRuntimeContractPluginLoader,
+  manifestCatalog: unknown,
+) {
   describe("openai provider runtime contract", { timeout: CONTRACT_SETUP_TIMEOUT_MS }, () => {
+    const createManifestModel = createManifestModelFactory("openai", manifestCatalog);
+    const codexProviderConfig = {
+      api: "openai-chatgpt-responses",
+      baseUrl: "https://chatgpt.com/backend-api/codex",
+    } as const;
     const requireProviderContractProvider = installRuntimeHooks([
-      { providerIds: ["openai", "openai-codex"], pluginId: "openai", name: "OpenAI", load },
+      { providerIds: ["openai", "openai"], pluginId: "openai", name: "OpenAI", load },
     ]);
 
     it("owns openai gpt-5.4 forward-compat resolution", () => {
       const provider = requireProviderContractProvider("openai");
+      // Neither gpt-5.4-pro nor its 5.2 template has an owning manifest row.
       const model = provider.resolveDynamicModel?.({
         provider: "openai",
         modelId: "gpt-5.4-pro",
@@ -445,7 +585,7 @@ export function describeOpenAIProviderRuntimeContract(load: ProviderRuntimeContr
         } as never,
       });
 
-      expect(model).toMatchObject({
+      expectFields(model, {
         id: "gpt-5.4-pro",
         provider: "openai",
         api: "openai-responses",
@@ -455,29 +595,30 @@ export function describeOpenAIProviderRuntimeContract(load: ProviderRuntimeContr
       });
     });
 
-    it("leaves openai gpt-5.5 forward-compat resolution to Pi", () => {
+    it("owns openai gpt-5.5 forward-compat resolution", () => {
       const provider = requireProviderContractProvider("openai");
+      const expected = createManifestModel("gpt-5.5", { name: "gpt-5.5" });
+      // OpenAI has no gpt-5.4 manifest row; distinct literal metadata keeps the upgrade asserted.
+      const olderTemplate = createModel({
+        id: "gpt-5.4",
+        provider: "openai",
+        baseUrl: "https://api.openai.com/v1",
+        input: ["text", "image"],
+      });
       const model = provider.resolveDynamicModel?.({
         provider: "openai",
         modelId: "gpt-5.5",
         modelRegistry: {
-          find: (_provider: string, id: string) =>
-            id === "gpt-5.4"
-              ? createModel({
-                  id,
-                  provider: "openai",
-                  baseUrl: "https://api.openai.com/v1",
-                  input: ["text", "image"],
-                })
-              : null,
+          find: (_provider: string, id: string) => (id === olderTemplate.id ? olderTemplate : null),
         } as never,
       });
 
-      expect(model).toBeUndefined();
+      expectFields(model, expected);
     });
 
     it("owns openai gpt-5.4 mini forward-compat resolution", () => {
       const provider = requireProviderContractProvider("openai");
+      // The OpenAI manifest has no gpt-5.4-mini row, so its family patch stays literal.
       const model = provider.resolveDynamicModel?.({
         provider: "openai",
         modelId: "gpt-5.4-mini",
@@ -498,7 +639,7 @@ export function describeOpenAIProviderRuntimeContract(load: ProviderRuntimeContr
         } as never,
       });
 
-      expect(model).toMatchObject({
+      expectFields(model, {
         id: "gpt-5.4-mini",
         provider: "openai",
         api: "openai-responses",
@@ -510,7 +651,8 @@ export function describeOpenAIProviderRuntimeContract(load: ProviderRuntimeContr
 
     it("owns direct openai transport normalization", () => {
       const provider = requireProviderContractProvider("openai");
-      expect(
+      // The normalized gpt-5.4 input is intentionally outside the current OpenAI manifest.
+      expectFields(
         provider.normalizeResolvedModel?.({
           provider: "openai",
           modelId: "gpt-5.4",
@@ -524,16 +666,17 @@ export function describeOpenAIProviderRuntimeContract(load: ProviderRuntimeContr
             maxTokens: 128_000,
           }),
         }),
-      ).toMatchObject({
-        api: "openai-responses",
-      });
+        {
+          api: "openai-responses",
+        },
+      );
     });
 
     it("owns refresh fallback for accountId extraction failures", async () => {
-      const provider = requireProviderContractProvider("openai-codex");
+      const provider = requireProviderContractProvider("openai");
       const credential = {
         type: "oauth" as const,
-        provider: "openai-codex",
+        provider: "openai",
         access: "cached-access-token",
         refresh: "refresh-token",
         expires: Date.now() - 60_000,
@@ -547,89 +690,83 @@ export function describeOpenAIProviderRuntimeContract(load: ProviderRuntimeContr
     });
 
     it("owns forward-compat codex models", () => {
-      const provider = requireProviderContractProvider("openai-codex");
+      const provider = requireProviderContractProvider("openai");
+      // Codex gpt-5.4 has no OpenAI manifest row; this keeps its transport mapping independent.
       const model = provider.resolveDynamicModel?.({
-        provider: "openai-codex",
+        provider: "openai",
         modelId: "gpt-5.4",
+        authProfileMode: "oauth",
+        providerConfig: codexProviderConfig,
         modelRegistry: {
           find: (_provider: string, id: string) =>
             id === "gpt-5.2-codex"
               ? createModel({
                   id,
-                  api: "openai-codex-responses",
-                  provider: "openai-codex",
+                  api: "openai-chatgpt-responses",
+                  provider: "openai",
                   baseUrl: "https://chatgpt.com/backend-api",
                 })
               : null,
         } as never,
       });
 
-      expect(model).toMatchObject({
+      expectFields(model, {
         id: "gpt-5.4",
-        provider: "openai-codex",
-        api: "openai-codex-responses",
+        provider: "openai",
+        api: "openai-chatgpt-responses",
         contextWindow: 1_050_000,
         maxTokens: 128_000,
       });
     });
 
-    it("keeps Pi cost metadata but applies Codex context metadata for gpt-5.5 models", () => {
-      const provider = requireProviderContractProvider("openai-codex");
+    it("keeps OpenClaw cost metadata but applies Codex context metadata for gpt-5.5 models", () => {
+      const provider = requireProviderContractProvider("openai");
+      const manifestModel = createManifestModel("gpt-5.5", {
+        api: "openai-chatgpt-responses",
+        baseUrl: "https://chatgpt.com/backend-api",
+        contextWindow: 272_000,
+      });
       const model = provider.resolveDynamicModel?.({
-        provider: "openai-codex",
+        provider: "openai",
         modelId: "gpt-5.5",
+        authProfileMode: "oauth",
+        providerConfig: codexProviderConfig,
         modelRegistry: {
-          find: (_provider: string, id: string) =>
-            id === "gpt-5.5"
-              ? createModel({
-                  id,
-                  api: "openai-codex-responses",
-                  provider: "openai-codex",
-                  baseUrl: "https://chatgpt.com/backend-api",
-                  input: ["text", "image"],
-                  cost: { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 0 },
-                  contextWindow: 272_000,
-                  maxTokens: 128_000,
-                })
-              : null,
+          find: (_provider: string, id: string) => (id === "gpt-5.5" ? manifestModel : null),
         } as never,
       });
 
-      expect(model).toMatchObject({
-        id: "gpt-5.5",
-        provider: "openai-codex",
-        api: "openai-codex-responses",
+      expectFields(model, {
+        ...manifestModel,
+        api: "openai-chatgpt-responses",
+        baseUrl: codexProviderConfig.baseUrl,
         contextWindow: 400_000,
-        contextTokens: 272_000,
-        maxTokens: 128_000,
       });
     });
 
     it("claims codex mini models through the Codex OAuth route", () => {
-      const provider = requireProviderContractProvider("openai-codex");
+      const provider = requireProviderContractProvider("openai");
+      const manifestTemplate = createManifestModel("gpt-5.5", {
+        id: "gpt-5.4",
+        name: "gpt-5.4",
+        api: "openai-chatgpt-responses",
+        baseUrl: "https://chatgpt.com/backend-api",
+        contextWindow: 272_000,
+      });
       const model = provider.resolveDynamicModel?.({
-        provider: "openai-codex",
+        provider: "openai",
         modelId: "gpt-5.4-mini",
+        authProfileMode: "oauth",
+        providerConfig: codexProviderConfig,
         modelRegistry: {
-          find: (_provider: string, id: string) =>
-            id === "gpt-5.4"
-              ? createModel({
-                  id,
-                  api: "openai-codex-responses",
-                  provider: "openai-codex",
-                  baseUrl: "https://chatgpt.com/backend-api",
-                  cost: { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 0 },
-                  contextWindow: 272_000,
-                  maxTokens: 128_000,
-                })
-              : null,
+          find: (_provider: string, id: string) => (id === "gpt-5.4" ? manifestTemplate : null),
         } as never,
       });
 
-      expect(model).toMatchObject({
+      expectFields(model, {
         id: "gpt-5.4-mini",
-        provider: "openai-codex",
-        api: "openai-codex-responses",
+        provider: "openai",
+        api: "openai-chatgpt-responses",
         contextWindow: 400_000,
         contextTokens: 272_000,
         maxTokens: 128_000,
@@ -638,11 +775,17 @@ export function describeOpenAIProviderRuntimeContract(load: ProviderRuntimeContr
     });
 
     it("owns codex transport defaults", () => {
-      const provider = requireProviderContractProvider("openai-codex");
+      const provider = requireProviderContractProvider("openai");
       expect(
         provider.prepareExtraParams?.({
-          provider: "openai-codex",
+          provider: "openai",
           modelId: "gpt-5.4",
+          model: createModel({
+            id: "gpt-5.4",
+            provider: "openai",
+            api: "openai-chatgpt-responses",
+            baseUrl: "https://chatgpt.com/backend-api/codex",
+          }),
           extraParams: { temperature: 0.2 },
         }),
       ).toEqual({
@@ -652,7 +795,7 @@ export function describeOpenAIProviderRuntimeContract(load: ProviderRuntimeContr
     });
 
     it("owns usage snapshot fetching", async () => {
-      const provider = requireProviderContractProvider("openai-codex");
+      const provider = requireProviderContractProvider("openai");
       const mockFetch = createProviderUsageFetch(async (url) => {
         if (url.includes("chatgpt.com/backend-api/wham/usage")) {
           return makeResponse(200, {
@@ -673,15 +816,15 @@ export function describeOpenAIProviderRuntimeContract(load: ProviderRuntimeContr
         provider.fetchUsageSnapshot?.({
           config: {} as never,
           env: {} as NodeJS.ProcessEnv,
-          provider: "openai-codex",
+          provider: "openai",
           token: "codex-token",
           accountId: "acc-1",
           timeoutMs: 5_000,
           fetchFn: mockFetch as unknown as typeof fetch,
         }),
       ).resolves.toEqual({
-        provider: "openai-codex",
-        displayName: "Codex",
+        provider: "openai",
+        displayName: "OpenAI",
         windows: [{ label: "3h", usedPercent: 12, resetAt: 1_705_000_000 }],
         plan: "Plus",
       });
@@ -699,6 +842,7 @@ export function describeOpenRouterProviderRuntimeContract(
 
     it("owns dynamic OpenRouter model defaults", () => {
       const provider = requireProviderContractProvider("openrouter");
+      // OpenRouter owns a runtime-discovered catalog, so these synthetic defaults stay literal.
       const model = provider.resolveDynamicModel?.({
         provider: "openrouter",
         modelId: "x-ai/grok-4-1-fast",
@@ -707,7 +851,7 @@ export function describeOpenRouterProviderRuntimeContract(
         } as never,
       });
 
-      expect(model).toMatchObject({
+      expectFields(model, {
         id: "x-ai/grok-4-1-fast",
         provider: "openrouter",
         api: "openai-completions",
@@ -718,31 +862,29 @@ export function describeOpenRouterProviderRuntimeContract(
   });
 }
 
-export function describeVeniceProviderRuntimeContract(load: ProviderRuntimeContractPluginLoader) {
+export function describeVeniceProviderRuntimeContract(
+  load: ProviderRuntimeContractPluginLoader,
+  manifestCatalog: unknown,
+) {
   describe("venice provider runtime contract", { timeout: CONTRACT_SETUP_TIMEOUT_MS }, () => {
+    const createManifestModel = createManifestModelFactory("venice", manifestCatalog);
     const requireProviderContractProvider = installRuntimeHooks([
       { providerIds: ["venice"], pluginId: "venice", name: "Venice", load },
     ]);
 
     it("owns xai downstream compat flags for grok-backed Venice models", () => {
       const provider = requireProviderContractProvider("venice");
-      expect(
-        provider.normalizeResolvedModel?.({
-          provider: "venice",
-          modelId: "grok-41-fast",
-          model: createModel({
-            id: "grok-41-fast",
-            provider: "venice",
-            api: "openai-completions",
-            baseUrl: "https://api.venice.ai/api/v1",
-          }),
-        }),
-      ).toMatchObject({
-        compat: {
-          toolSchemaProfile: "xai",
-          nativeWebSearchTool: true,
-          toolCallArgumentsEncoding: "html-entities",
-        },
+      const manifestModel = createManifestModel("grok-4-5");
+      const model = provider.normalizeResolvedModel?.({
+        provider: "venice",
+        modelId: manifestModel.id,
+        model: manifestModel,
+      });
+      const { compat: _manifestCompat, ...manifestFields } = manifestModel;
+      expectFields(model, manifestFields);
+      expect(requireRecord(model?.compat, "compat")).toMatchObject({
+        toolSchemaProfile: "xai",
+        toolCallArgumentsEncoding: "html-entities",
       });
     });
   });
@@ -756,6 +898,7 @@ export function describeZAIProviderRuntimeContract(load: ProviderRuntimeContract
 
     it("owns glm-5 forward-compat resolution", () => {
       const provider = requireProviderContractProvider("zai");
+      // Neither the synthetic glm-5 id nor its glm-4.7 template has a current manifest row.
       const model = provider.resolveDynamicModel?.({
         provider: "zai",
         modelId: "glm-5",
@@ -775,12 +918,32 @@ export function describeZAIProviderRuntimeContract(load: ProviderRuntimeContract
         } as never,
       });
 
-      expect(model).toMatchObject({
+      expectFields(model, {
         id: "glm-5",
         provider: "zai",
         api: "openai-completions",
         reasoning: true,
       });
+    });
+
+    it("owns Z.AI token-limit overflow classification", () => {
+      const provider = requireProviderContractProvider("zai");
+
+      expect(
+        provider.matchesContextOverflowError?.({
+          errorMessage: "code 1210: tokens in request more than max tokens allowed",
+        }),
+      ).toBe(true);
+      expect(
+        provider.matchesContextOverflowError?.({
+          errorMessage: "code 1261: Prompt exceeds max length",
+        }),
+      ).toBe(true);
+      expect(
+        provider.matchesContextOverflowError?.({
+          errorMessage: "code 1210: invalid request parameters",
+        }),
+      ).toBe(false);
     });
 
     it("owns usage auth resolution", async () => {
@@ -798,33 +961,6 @@ export function describeZAIProviderRuntimeContract(load: ProviderRuntimeContract
       ).resolves.toEqual({
         token: "env-zai-token",
       });
-    });
-
-    it("falls back to legacy pi auth tokens for usage auth", async () => {
-      const provider = requireProviderContractProvider("zai");
-      const home = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-zai-contract-"));
-      await fs.mkdir(path.join(home, ".pi", "agent"), { recursive: true });
-      await fs.writeFile(
-        path.join(home, ".pi", "agent", "auth.json"),
-        `${JSON.stringify({ "z-ai": { access: "legacy-zai-token" } }, null, 2)}\n`,
-        "utf8",
-      );
-
-      try {
-        await expect(
-          provider.resolveUsageAuth?.({
-            config: {} as never,
-            env: { HOME: home } as NodeJS.ProcessEnv,
-            provider: "zai",
-            resolveApiKeyFromConfigAndStore: () => undefined,
-            resolveOAuthToken: async () => null,
-          }),
-        ).resolves.toEqual({
-          token: "legacy-zai-token",
-        });
-      } finally {
-        await fs.rm(home, { recursive: true, force: true });
-      }
     });
 
     it("owns usage snapshot fetching", async () => {
@@ -869,3 +1005,4 @@ export function describeZAIProviderRuntimeContract(load: ProviderRuntimeContract
     });
   });
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

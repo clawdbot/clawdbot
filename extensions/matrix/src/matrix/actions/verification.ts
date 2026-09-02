@@ -1,3 +1,4 @@
+// Matrix plugin module implements verification behavior.
 import { setTimeout as sleep } from "node:timers/promises";
 import { requireRuntimeConfig } from "openclaw/plugin-sdk/plugin-config-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -17,7 +18,7 @@ type MatrixVerificationDmLookupOpts = {
   verificationDmUserId?: string;
 };
 
-export type MatrixSelfVerificationResult = MatrixVerificationSummary & {
+type MatrixSelfVerificationResult = MatrixVerificationSummary & {
   deviceOwnerVerified: boolean;
   ownerVerification: MatrixOwnDeviceVerificationStatus;
 };

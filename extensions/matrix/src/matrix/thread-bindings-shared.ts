@@ -1,3 +1,4 @@
+// Matrix plugin module implements thread bindings shared behavior.
 import type {
   BindingTargetKind,
   SessionBindingRecord,
@@ -41,11 +42,11 @@ export type MatrixThreadBindingManager = {
     maxAgeMs: number;
   }) => MatrixThreadBindingRecord[];
   persist: () => Promise<void>;
-  stop: () => void;
+  stop: () => Promise<void>;
 };
 
 type MatrixThreadBindingManagerCacheEntry = {
-  filePath: string;
+  storageKey: string;
   manager: MatrixThreadBindingManager;
 };
 
@@ -195,12 +196,4 @@ export function setMatrixThreadBindingMaxAgeBySessionKey(params: {
       maxAgeMs: manager.getMaxAgeMs(),
     }),
   );
-}
-
-export function resetMatrixThreadBindingsForTests(): void {
-  for (const { manager } of MANAGERS_BY_ACCOUNT_ID.values()) {
-    manager.stop();
-  }
-  MANAGERS_BY_ACCOUNT_ID.clear();
-  BINDINGS_BY_ACCOUNT_CONVERSATION.clear();
 }

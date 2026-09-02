@@ -8,7 +8,7 @@ final class NodeCapabilityRouter {
         case handlerUnavailable
     }
 
-    typealias Handler = (BridgeInvokeRequest) async throws -> BridgeInvokeResponse
+    typealias Handler = @MainActor @Sendable (BridgeInvokeRequest) async throws -> BridgeInvokeResponse
 
     private let handlers: [String: Handler]
 

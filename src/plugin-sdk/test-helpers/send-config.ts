@@ -1,3 +1,6 @@
+/**
+ * Shared assertions for channel send config derivation.
+ */
 import { expect } from "vitest";
 
 type MockFn = (...args: never[]) => unknown;

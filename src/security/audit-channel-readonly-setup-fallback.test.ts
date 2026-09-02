@@ -1,13 +1,24 @@
+// Covers channel readonly setup fallback audit behavior.
 import { describe, expect, it, vi } from "vitest";
 import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 import type { OpenClawConfig } from "../config/config.js";
 
 const {
+  collectChannelSecurityFindingsMock,
   collectEnabledInsecureOrDangerousFlagsMock,
   listReadOnlyChannelPluginsForConfigMock,
   hasConfiguredChannelsForReadOnlyScopeMock,
 } = vi.hoisted(() => ({
-  collectEnabledInsecureOrDangerousFlagsMock: vi.fn((_config: OpenClawConfig): string[] => []),
+  collectChannelSecurityFindingsMock: vi.fn(async (..._args: unknown[]) => [
+    {
+      checkId: "channels.telegram.setup_fallback_audited",
+      severity: "warn",
+      title: "Telegram setup fallback audited",
+    },
+  ]),
+  collectEnabledInsecureOrDangerousFlagsMock: vi.fn(
+    (_configForTest: OpenClawConfig): string[] => [],
+  ),
   listReadOnlyChannelPluginsForConfigMock: vi.fn(),
   hasConfiguredChannelsForReadOnlyScopeMock: vi.fn(),
 }));
@@ -19,19 +30,44 @@ vi.mock("./dangerous-config-flags.js", () => ({
 
 vi.mock("../channels/plugins/read-only.js", () => ({
   listReadOnlyChannelPluginsForConfig: (...args: unknown[]) =>
-    listReadOnlyChannelPluginsForConfigMock(...args),
+    (listReadOnlyChannelPluginsForConfigMock as (...params: unknown[]) => unknown)(...args),
 }));
 
 vi.mock("../plugins/channel-plugin-ids.js", () => ({
   hasConfiguredChannelsForReadOnlyScope: (...args: unknown[]) =>
-    hasConfiguredChannelsForReadOnlyScopeMock(...args),
+    (hasConfiguredChannelsForReadOnlyScopeMock as (...params: unknown[]) => unknown)(...args),
   resolveConfiguredChannelPluginIds: () => [],
 }));
 
-const { runSecurityAudit } = await import("./audit.js");
+vi.mock("./audit-channel.collect.runtime.js", () => ({
+  collectChannelSecurityFindings: (...args: unknown[]) =>
+    (collectChannelSecurityFindingsMock as (...params: unknown[]) => unknown)(...args),
+}));
+
+const collectNoFindings = vi.hoisted(() => vi.fn(() => []));
+vi.mock("./audit.nondeep.runtime.js", () => ({
+  collectAttackSurfaceSummaryFindings: collectNoFindings,
+  collectExposureMatrixFindings: collectNoFindings,
+  collectGatewayHttpNoAuthFindings: collectNoFindings,
+  collectGatewayHttpSessionKeyOverrideFindings: collectNoFindings,
+  collectHooksHardeningFindings: collectNoFindings,
+  collectLikelyMultiUserSetupFindings: collectNoFindings,
+  collectMinimalProfileOverrideFindings: collectNoFindings,
+  collectModelHygieneFindings: collectNoFindings,
+  collectNodeDangerousAllowCommandFindings: collectNoFindings,
+  collectNodeDenyCommandPatternFindings: collectNoFindings,
+  collectSandboxDangerousConfigFindings: collectNoFindings,
+  collectSandboxDockerNoopFindings: collectNoFindings,
+  collectSecretsInConfigFindings: collectNoFindings,
+  collectSmallModelRiskFindings: collectNoFindings,
+  collectSyncedFolderFindings: collectNoFindings,
+  readConfigSnapshotForAudit: vi.fn(async () => null),
+}));
+
+const { runSecurityAuditCore } = await import("./audit.js");
 
 describe("security audit channel read-only setup fallback", () => {
-  it("uses setup fallback plugins so bundled channel security adapters are audited", async () => {
+  it("passes setup fallback plugins to channel security collection", async () => {
     const plugin = {
       id: "telegram",
       meta: {
@@ -60,6 +96,7 @@ describe("security audit channel read-only setup fallback", () => {
       },
     } satisfies ChannelPlugin;
     const cfg = {
+      agents: { list: [{ id: "main", default: true }] },
       session: { dmScope: "main" },
       channels: { telegram: { enabled: true } },
     } satisfies OpenClawConfig;
@@ -67,7 +104,7 @@ describe("security audit channel read-only setup fallback", () => {
     hasConfiguredChannelsForReadOnlyScopeMock.mockReturnValue(true);
     listReadOnlyChannelPluginsForConfigMock.mockReturnValue([plugin]);
 
-    const report = await runSecurityAudit({
+    const report = await runSecurityAuditCore({
       config: cfg,
       sourceConfig: cfg,
       includeFilesystem: false,
@@ -75,18 +112,36 @@ describe("security audit channel read-only setup fallback", () => {
       loadPluginSecurityCollectors: false,
     });
 
-    expect(listReadOnlyChannelPluginsForConfigMock).toHaveBeenCalledWith(
-      cfg,
-      expect.objectContaining({
-        includePersistedAuthState: true,
-        includeSetupFallbackPlugins: true,
-      }),
-    );
-    expect(report.findings).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ checkId: "channels.telegram.dm.open" }),
-        expect.objectContaining({ checkId: "channels.telegram.dm.scope_main_multiuser" }),
-      ]),
+    const readOnlyPluginCalls = listReadOnlyChannelPluginsForConfigMock.mock
+      .calls as unknown as Array<
+      [
+        OpenClawConfig,
+        {
+          includePersistedAuthState?: boolean;
+          includeSetupFallbackPlugins?: boolean;
+        },
+      ]
+    >;
+    const readOnlyPluginCall = readOnlyPluginCalls[0];
+    expect(readOnlyPluginCall?.[0]).toBe(cfg);
+    expect(readOnlyPluginCall?.[1].includePersistedAuthState).toBe(true);
+    expect(readOnlyPluginCall?.[1].includeSetupFallbackPlugins).toBe(true);
+
+    const collectCalls = collectChannelSecurityFindingsMock.mock.calls as unknown as Array<
+      [
+        {
+          cfg?: OpenClawConfig;
+          sourceConfig?: OpenClawConfig;
+          plugins?: ChannelPlugin[];
+        },
+      ]
+    >;
+    const collectParams = collectCalls[0]?.[0];
+    expect(collectParams?.cfg).toBe(cfg);
+    expect(collectParams?.sourceConfig).toBe(cfg);
+    expect(collectParams?.plugins).toStrictEqual([plugin]);
+    expect(report.findings.map((finding) => finding.checkId)).toContain(
+      "channels.telegram.setup_fallback_audited",
     );
   });
 });

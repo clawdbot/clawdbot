@@ -1,58 +1,18 @@
-import {
-  searchClawHubPackages,
-  type ClawHubPackageFamily,
-  type ClawHubPackageSearchResult,
-} from "../infra/clawhub.js";
+// ClawHub-backed plugin search command; queries installable plugin families and merges scores.
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { theme } from "../../packages/terminal-core/src/theme.js";
+import type { ClawHubPackageSearchResult } from "../infra/clawhub-packages.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { searchInstallablePluginPackages } from "../plugins/catalog-search.js";
 import { defaultRuntime, writeRuntimeJson, type RuntimeEnv } from "../runtime.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
-import { theme } from "../terminal/theme.js";
+import { formatCliCommand } from "./command-format.js";
+import { ExpectedCliError } from "./failure-output.js";
 
-export type PluginsSearchOptions = {
+/** Options accepted by `openclaw plugins search`. */
+type PluginsSearchOptions = {
   json?: boolean;
   limit?: number;
 };
-
-const INSTALLABLE_PLUGIN_FAMILIES: ClawHubPackageFamily[] = ["code-plugin", "bundle-plugin"];
-
-function clampSearchLimit(limit: number | undefined): number {
-  if (!Number.isFinite(limit) || !limit || limit <= 0) {
-    return 20;
-  }
-  return Math.min(Math.max(Math.trunc(limit), 1), 100);
-}
-
-function mergePackageSearchResults(
-  groups: readonly ClawHubPackageSearchResult[][],
-  limit: number,
-): ClawHubPackageSearchResult[] {
-  const byName = new Map<string, ClawHubPackageSearchResult>();
-  for (const entry of groups.flat()) {
-    const existing = byName.get(entry.package.name);
-    if (!existing || entry.score > existing.score) {
-      byName.set(entry.package.name, entry);
-    }
-  }
-  const selected: ClawHubPackageSearchResult[] = [];
-  for (const entry of byName.values()) {
-    let insertAt = selected.length;
-    for (let index = 0; index < selected.length; index += 1) {
-      if (entry.score > selected[index].score) {
-        insertAt = index;
-        break;
-      }
-    }
-    if (insertAt < limit) {
-      selected.splice(insertAt, 0, entry);
-      if (selected.length > limit) {
-        selected.pop();
-      }
-    } else if (selected.length < limit) {
-      selected.push(entry);
-    }
-  }
-  return selected;
-}
 
 function formatPackageSearchLine(entry: ClawHubPackageSearchResult): string {
   const pkg = entry.package;
@@ -63,9 +23,10 @@ function formatPackageSearchLine(entry: ClawHubPackageSearchResult): string {
     pkg.latestVersion ? `v${pkg.latestVersion}` : undefined,
   ].filter(Boolean);
   const summary = pkg.summary ? theme.muted(` — ${pkg.summary}`) : "";
-  return `${pkg.name}  ${theme.muted(flags.join(" | "))}${summary}\n  ${theme.muted(`Install: openclaw plugins install clawhub:${pkg.name}`)}`;
+  return `${pkg.name}  ${theme.muted(flags.join(" | "))}${summary}\n  ${theme.muted(`Install: ${formatCliCommand(`openclaw plugins install clawhub:${pkg.name}`)}`)}`;
 }
 
+/** Search ClawHub for installable plugins and write JSON or terminal output. */
 export async function runPluginsSearchCommand(
   queryParts: string[] | string,
   opts: PluginsSearchOptions = {},
@@ -75,22 +36,12 @@ export async function runPluginsSearchCommand(
     Array.isArray(queryParts) ? queryParts.join(" ") : queryParts,
   );
   if (!query) {
-    runtime.error("Usage: openclaw plugins search <query>");
-    return runtime.exit(1);
+    const message = "Usage: openclaw plugins search <query>";
+    throw new ExpectedCliError({ message, humanOutput: message, machineOutput: message });
   }
 
-  const limit = clampSearchLimit(opts.limit);
   try {
-    const groups = await Promise.all(
-      INSTALLABLE_PLUGIN_FAMILIES.map((family) =>
-        searchClawHubPackages({
-          query,
-          family,
-          limit,
-        }),
-      ),
-    );
-    const results = mergePackageSearchResults(groups, limit);
+    const results = await searchInstallablePluginPackages({ query, limit: opts.limit });
 
     if (opts.json) {
       writeRuntimeJson(runtime, { results });
@@ -103,6 +54,9 @@ export async function runPluginsSearchCommand(
     runtime.log(`${theme.heading("ClawHub plugins")} ${theme.muted(`(${results.length})`)}`);
     runtime.log(results.map(formatPackageSearchLine).join("\n"));
   } catch (error) {
+    if (opts.json) {
+      throw error;
+    }
     runtime.error(formatErrorMessage(error));
     runtime.exit(1);
   }

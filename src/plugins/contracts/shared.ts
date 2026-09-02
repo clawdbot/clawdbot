@@ -1,4 +1,5 @@
-export function uniqueStrings(
+/** Returns unique normalized string values while preserving first-seen order. */
+export function normalizeContractStringValues(
   values: readonly string[] | undefined,
   normalize: (value: string) => string = (value) => value,
 ): string[] {

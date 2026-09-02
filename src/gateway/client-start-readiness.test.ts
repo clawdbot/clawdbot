@@ -1,3 +1,6 @@
+/**
+ * Gateway client startup readiness tests.
+ */
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { startGatewayClientWhenEventLoopReady } from "./client-start-readiness.js";
 import type { GatewayClient } from "./client.js";
@@ -14,11 +17,13 @@ describe("startGatewayClientWhenEventLoopReady", () => {
     const promise = startGatewayClientWhenEventLoopReady(client, { timeoutMs: 100 });
 
     await vi.advanceTimersByTimeAsync(1);
-    expect(client.start).not.toHaveBeenCalled();
+    expect(client["start"]).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(1);
-    await expect(promise).resolves.toMatchObject({ ready: true });
+    const readiness = await promise;
+    expect(readiness.ready).toBe(true);
+    expect(readiness.aborted).toBe(false);
 
-    expect(client.start).toHaveBeenCalledTimes(1);
+    expect(client["start"]).toHaveBeenCalledTimes(1);
   });
 
   it("does not start the client after an aborted readiness wait", async () => {
@@ -32,7 +37,9 @@ describe("startGatewayClientWhenEventLoopReady", () => {
     });
     controller.abort();
 
-    await expect(promise).resolves.toMatchObject({ ready: false, aborted: true });
-    expect(client.start).not.toHaveBeenCalled();
+    const readiness = await promise;
+    expect(readiness.ready).toBe(false);
+    expect(readiness.aborted).toBe(true);
+    expect(client["start"]).not.toHaveBeenCalled();
   });
 });

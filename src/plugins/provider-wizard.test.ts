@@ -1,17 +1,18 @@
+// Covers provider setup wizard prompts supplied by plugins.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   buildProviderPluginMethodChoice,
   resolveProviderModelPickerEntries,
-  resolveProviderPluginChoice,
+  resolveProviderPluginChoiceCore,
   resolveProviderWizardOptions,
-  runProviderModelSelectedHook,
+  runProviderModelSelectedHookCore,
 } from "./provider-wizard.js";
 import type { ProviderPlugin } from "./types.js";
 
-const resolvePluginProviders = vi.hoisted(() => vi.fn<() => ProviderPlugin[]>(() => []));
+const resolvePluginProvidersCore = vi.hoisted(() => vi.fn<() => ProviderPlugin[]>(() => []));
 vi.mock("./providers.runtime.js", () => ({
   isPluginProvidersLoadInFlight: () => false,
-  resolvePluginProviders,
+  resolvePluginProvidersCore,
 }));
 
 const DEFAULT_WORKSPACE_DIR = "/tmp/workspace";
@@ -84,17 +85,19 @@ function expectProviderResolutionCall(params?: {
   config?: object;
   env?: NodeJS.ProcessEnv;
   workspaceDir?: string;
+  providerRefs?: readonly string[];
   count?: number;
 }) {
-  expect(resolvePluginProviders).toHaveBeenCalledTimes(params?.count ?? 1);
-  expect(resolvePluginProviders).toHaveBeenCalledWith({
+  expect(resolvePluginProvidersCore).toHaveBeenCalledTimes(params?.count ?? 1);
+  expect(resolvePluginProvidersCore).toHaveBeenCalledWith({
     ...createWizardRuntimeParams(params),
     mode: "setup",
+    ...(params?.providerRefs ? { providerRefs: params.providerRefs } : {}),
   });
 }
 
 function setResolvedProviders(...providers: ProviderPlugin[]) {
-  resolvePluginProviders.mockReturnValue(providers);
+  resolvePluginProvidersCore.mockReturnValue(providers);
 }
 
 function expectSingleWizardChoice(params: {
@@ -106,7 +109,7 @@ function expectSingleWizardChoice(params: {
   setResolvedProviders(params.provider);
   expect(resolveProviderWizardOptions({})).toEqual([params.expectedOption]);
   expect(
-    resolveProviderPluginChoice({
+    resolveProviderPluginChoiceCore({
       providers: [params.provider],
       choice: params.choice,
     }),
@@ -323,7 +326,7 @@ describe("provider wizard boundaries", () => {
     );
 
     const env = createHomeEnv();
-    await runProviderModelSelectedHook({
+    await runProviderModelSelectedHookCore({
       config: {},
       model: "vllm/qwen3-coder",
       prompter: {} as never,
@@ -335,6 +338,7 @@ describe("provider wizard boundaries", () => {
     expectProviderResolutionCall({
       config: {},
       env,
+      providerRefs: ["vllm"],
     });
     expect(matchingHook).toHaveBeenCalledWith({
       config: {},

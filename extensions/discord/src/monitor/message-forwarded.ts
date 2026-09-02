@@ -1,8 +1,9 @@
+// Discord plugin module implements message forwarded behavior.
 import type { APIAttachment, APIStickerItem } from "discord-api-types/v10";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { Message } from "../internal/discord.js";
 
-export type DiscordSnapshotAuthor = {
+type DiscordSnapshotAuthor = {
   id?: string | null;
   username?: string | null;
   discriminator?: string | null;
@@ -20,13 +21,13 @@ export type DiscordSnapshotMessage = {
   author?: DiscordSnapshotAuthor | null;
 };
 
-export type DiscordMessageSnapshot = {
+type DiscordMessageSnapshot = {
   message?: DiscordSnapshotMessage | null;
 };
 
 const FORWARD_MESSAGE_REFERENCE_TYPE = 1;
 
-export function normalizeDiscordStickerItems(value: unknown): APIStickerItem[] {
+function normalizeDiscordStickerItems(value: unknown): APIStickerItem[] {
   if (!Array.isArray(value)) {
     return [];
   }
@@ -81,6 +82,25 @@ export function resolveDiscordReferencedForwardMessage(message: Message): Messag
   return Number(referenceType) === FORWARD_MESSAGE_REFERENCE_TYPE
     ? message.referencedMessage
     : null;
+}
+
+export function resolveDiscordReferencedReplyMessage(message: Message): Message | null {
+  const referenceType = message.messageReference?.type;
+  return Number(referenceType) === FORWARD_MESSAGE_REFERENCE_TYPE
+    ? null
+    : (message.referencedMessage ?? null);
+}
+
+export function resolveDiscordReferencedReplyMessageId(message: Message): string | null {
+  const referenceType = message.messageReference?.type;
+  if (Number(referenceType) === FORWARD_MESSAGE_REFERENCE_TYPE) {
+    return null;
+  }
+  return (
+    normalizeOptionalString(message.messageReference?.message_id) ??
+    normalizeOptionalString(message.referencedMessage?.id) ??
+    null
+  );
 }
 
 export function formatDiscordSnapshotAuthor(

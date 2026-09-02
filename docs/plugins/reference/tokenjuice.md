@@ -12,12 +12,12 @@ Compacts exec and bash tool results with tokenjuice reducers.
 ## Distribution
 
 - Package: `@openclaw/tokenjuice`
-- Install route: included in OpenClaw
+- Install route: npm; ClawHub: `clawhub:@openclaw/tokenjuice`
 
 ## Surface
 
-contracts: agentToolResultMiddleware
+contracts: `agentToolResultMiddleware`
 
 ## Related docs
 
-- [tokenjuice](/tools/tokenjuice)
+- [Tokenjuice](/tools/tokenjuice)

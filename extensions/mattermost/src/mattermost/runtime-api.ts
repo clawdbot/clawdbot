@@ -1,3 +1,4 @@
+// Mattermost API module exposes the plugin public contract.
 export type {
   BaseProbeResult,
   ChannelAccountSnapshot,
@@ -9,44 +10,31 @@ export type {
   ReplyPayload,
 } from "openclaw/plugin-sdk/core";
 export type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
-export { buildAgentMediaPayload } from "openclaw/plugin-sdk/agent-media-payload";
 export { resolveAllowlistMatchSimple } from "openclaw/plugin-sdk/allow-from";
 export { logInboundDrop } from "openclaw/plugin-sdk/channel-inbound";
 export { createChannelPairingController } from "openclaw/plugin-sdk/channel-pairing";
-export {
-  DM_GROUP_ACCESS_REASON,
-  readStoreAllowFromForDmPolicy,
-  resolveDmGroupAccessWithLists,
-  resolveEffectiveAllowFromLists,
-} from "openclaw/plugin-sdk/channel-policy";
-export { createChannelMessageReplyPipeline } from "openclaw/plugin-sdk/channel-message";
+export { createChannelMessageReplyPipeline } from "openclaw/plugin-sdk/channel-outbound";
 export { logTypingFailure } from "openclaw/plugin-sdk/channel-feedback";
-export {
-  buildModelsProviderData,
-  listSkillCommandsForAgents,
-  resolveControlCommandGate,
-} from "openclaw/plugin-sdk/command-auth";
+export { listSkillCommandsForAgents } from "openclaw/plugin-sdk/command-auth-native";
+export { buildPreparedModelsProviderData } from "openclaw/plugin-sdk/models-provider-runtime";
 export { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/dangerous-name-runtime";
 export {
   resolveAllowlistProviderRuntimeGroupPolicy,
   resolveDefaultGroupPolicy,
   warnMissingProviderGroupPolicyFallbackOnce,
 } from "openclaw/plugin-sdk/runtime-group-policy";
-export { evaluateSenderGroupAccessForPolicy } from "openclaw/plugin-sdk/group-access";
-export { resolveChannelMediaMaxBytes } from "openclaw/plugin-sdk/media-runtime";
+export { resolveChannelMediaMaxBytes } from "openclaw/plugin-sdk/account-helpers";
 export { loadOutboundMediaFromUrl } from "openclaw/plugin-sdk/outbound-media";
+// Legacy map-helper exports stay for older plugin consumers. New message-turn
+// code should use createChannelHistoryWindow.
 export {
   DEFAULT_GROUP_HISTORY_LIMIT,
-  buildPendingHistoryContextFromMap,
-  recordPendingHistoryEntryIfEnabled,
+  createChannelHistoryWindow,
 } from "openclaw/plugin-sdk/reply-history";
 export { registerPluginHttpRoute } from "openclaw/plugin-sdk/webhook-targets";
+export { isRequestBodyLimitError } from "openclaw/plugin-sdk/webhook-ingress";
 export {
-  isRequestBodyLimitError,
   readRequestBodyWithLimit,
-} from "openclaw/plugin-sdk/webhook-ingress";
-export {
-  isTrustedProxyAddress,
-  parseStrictPositiveInteger,
-  resolveClientIp,
-} from "openclaw/plugin-sdk/core";
+  sendHttpRequestRejection,
+} from "openclaw/plugin-sdk/webhook-request-guards";
+export { isTrustedProxyAddress, resolveClientIp } from "openclaw/plugin-sdk/core";

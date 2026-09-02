@@ -1,7 +1,14 @@
-import type { AnyMessageContent, MiscMessageGenerationOptions } from "@whiskeysockets/baileys";
-import type { NormalizedLocation } from "openclaw/plugin-sdk/channel-inbound";
+// Whatsapp type declarations define plugin contracts.
+import type { AnyMessageContent, MiscMessageGenerationOptions } from "baileys";
+import type {
+  ChannelInboundMediaInput,
+  MediaPlaceholderTextFact,
+  NormalizedLocation,
+} from "openclaw/plugin-sdk/channel-inbound";
 import type { PollInput } from "openclaw/plugin-sdk/poll-runtime";
 import type { WhatsAppIdentity, WhatsAppReplyContext, WhatsAppSelfIdentity } from "../identity.js";
+import type { WhatsAppQuotedMessageKey } from "../quoted-message.js";
+import type { WhatsAppInboundAdmission } from "./admission.js";
 import type { WhatsAppSendResult } from "./send-result.js";
 
 export type WebListenerCloseReason = {
@@ -11,19 +18,15 @@ export type WebListenerCloseReason = {
 };
 
 export type ActiveWebSendOptions = {
-  quotedMessageKey?: {
-    id: string;
-    remoteJid: string;
-    fromMe: boolean;
-    participant?: string;
-    messageText?: string;
-  };
+  quotedMessageKey?: WhatsAppQuotedMessageKey;
   gifPlayback?: boolean;
   accountId?: string;
   fileName?: string;
+  asDocument?: boolean;
 };
 
 export type ActiveWebListener = {
+  assertSendReady?: (to: string) => Promise<void>;
   sendMessage: (
     to: string,
     text: string,
@@ -52,55 +55,89 @@ export type WhatsAppStructuredContactContext = {
   }>;
 };
 
-export type WebInboundMessage = {
+type WhatsAppInboundEvent = {
   id?: string;
-  from: string; // conversation id: E.164 for direct chats, group JID for groups
-  conversationId: string; // alias for clarity (same as from)
-  to: string;
-  accountId: string;
-  /** Set by the real inbound monitor after access-control / pairing checks pass. */
-  accessControlPassed?: boolean;
-  body: string;
-  pushName?: string;
   timestamp?: number;
-  chatType: "direct" | "group";
-  chatId: string;
+  isBatched?: boolean;
+};
+
+type WhatsAppInboundQuote = {
+  context?: WhatsAppReplyContext;
+  id?: string;
+  body?: string;
+  media?: MediaPlaceholderTextFact;
+  sender?: {
+    displayName?: string;
+    jid?: string;
+    e164?: string;
+  };
+};
+
+type WhatsAppInboundGroupContext = {
+  subject?: string;
+  participants?: string[];
+  mentions?: {
+    text?: string[];
+    jids?: string[];
+  };
+};
+
+type WhatsAppInboundStructuredContextEntry = {
+  label: string;
+  source?: string;
+  type?: string;
+  payload: unknown;
+};
+
+type WhatsAppInboundPayload = {
+  body: string;
+  commandBody?: string;
+  media?: {
+    path?: string;
+    type?: string;
+    fileName?: string;
+    url?: string;
+    kind?: ChannelInboundMediaInput["kind"];
+  };
+  location?: NormalizedLocation;
+  channelStructuredContext?: WhatsAppInboundStructuredContextEntry[];
+};
+
+type WhatsAppInboundPlatform = {
+  chatJid: string;
+  recipientJid: string;
   sender?: WhatsAppIdentity;
   senderJid?: string;
   senderE164?: string;
   senderName?: string;
-  replyTo?: WhatsAppReplyContext;
-  replyToId?: string;
-  replyToBody?: string;
-  replyToSender?: string;
-  replyToSenderJid?: string;
-  replyToSenderE164?: string;
-  groupSubject?: string;
-  groupParticipants?: string[];
-  mentions?: string[];
-  mentionedJids?: string[];
+  pushName?: string;
   self?: WhatsAppSelfIdentity;
   selfJid?: string | null;
   selfLid?: string | null;
   selfE164?: string | null;
   fromMe?: boolean;
-  location?: NormalizedLocation;
   sendComposing: () => Promise<void>;
   reply: (text: string, options?: MiscMessageGenerationOptions) => Promise<WhatsAppSendResult>;
   sendMedia: (
     payload: AnyMessageContent,
     options?: MiscMessageGenerationOptions,
   ) => Promise<WhatsAppSendResult>;
-  mediaPath?: string;
-  mediaType?: string;
-  mediaFileName?: string;
-  mediaUrl?: string;
-  untrustedStructuredContext?: Array<{
-    label: string;
-    source?: string;
-    type?: string;
-    payload: unknown;
-  }>;
-  wasMentioned?: boolean;
-  isBatched?: boolean;
 };
+
+export type WebInboundCallbackMessage = {
+  admission: WhatsAppInboundAdmission;
+  event: WhatsAppInboundEvent;
+  payload: WhatsAppInboundPayload;
+  platform: WhatsAppInboundPlatform;
+  quote?: WhatsAppInboundQuote;
+  group?: WhatsAppInboundGroupContext;
+  wasMentioned?: boolean;
+  groupMention?: {
+    wasMentioned: boolean;
+    requireMention: boolean;
+  };
+};
+
+export type WebInboundMessage = WebInboundCallbackMessage;
+export type AdmittedWebInboundMessage = WebInboundCallbackMessage;
+export type AdmittedWebInboundCallbackMessage = WebInboundCallbackMessage;

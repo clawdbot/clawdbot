@@ -1,15 +1,12 @@
-export const MAX_SAFE_TIMEOUT_DELAY_MS = 2_147_483_647;
+// Timer delay helpers clamp delays to runtime-safe timeout values.
+import { resolveSafeTimeoutDelayMs } from "../../packages/gateway-client/src/timeouts.js";
 
-export function resolveSafeTimeoutDelayMs(delayMs: number, opts?: { minMs?: number }): number {
-  const rawMinMs = opts?.minMs ?? 1;
-  const minMs = Math.min(
-    MAX_SAFE_TIMEOUT_DELAY_MS,
-    Math.max(0, Number.isFinite(rawMinMs) ? Math.floor(rawMinMs) : 1),
-  );
-  const candidateMs = Number.isFinite(delayMs) ? Math.floor(delayMs) : minMs;
-  return Math.min(MAX_SAFE_TIMEOUT_DELAY_MS, Math.max(minMs, candidateMs));
-}
+export {
+  addSafeTimeoutDelayGraceMs,
+  resolveSafeTimeoutDelayMs,
+} from "../../packages/gateway-client/src/timeouts.js";
 
+/** Wrapper around setTimeout that clamps unsafe or invalid delays before arming the timer. */
 export function setSafeTimeout(
   callback: () => void,
   delayMs: number,

@@ -1,135 +1,100 @@
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+// Control Ui I18N script supports OpenClaw repository automation.
+import { spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
-import { mkdir, readFile, readdir, stat, writeFile } from "node:fs/promises";
-import { homedir } from "node:os";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { createInterface } from "node:readline";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import * as ts from "typescript";
+import { completeSimple, type AssistantMessage, type Model } from "openclaw/plugin-sdk/llm";
+import { expectDefined } from "../packages/normalization-core/src/expect.js";
+import { sliceUtf16Safe } from "../packages/normalization-core/src/utf16-slice.ts";
 import { formatErrorMessage } from "../src/infra/errors.ts";
+import { formatDurationCompact } from "../src/infra/format-time/format-duration.ts";
+import {
+  syncControlUiCatalogFallbackBaseline,
+  verifyControlUiGeneratedCatalogs,
+  verifyRuntimeLocaleConfig,
+} from "./control-ui-i18n-verify.ts";
+import { isStrictAffirmativeValue } from "./lib/arg-utils.mts";
+import {
+  hashControlUiTranslationText,
+  loadControlUiSourceCatalog,
+  loadControlUiTranslationMemory,
+  materializeControlUiLocaleCatalog,
+  readControlUiSourceCatalog,
+} from "./lib/control-ui-i18n-catalog.ts";
+import { CONTROL_UI_LOCALE_ENTRIES } from "./lib/control-ui-i18n-config.ts";
+import { syncControlUiRawCopyBaseline } from "./lib/control-ui-i18n-raw-copy.ts";
+import {
+  compareStringArrays,
+  createControlUiLocaleSyncPlan,
+  flattenTranslations,
+  resolveLocaleMetaProvenance,
+  type GlossaryEntry,
+  type LocaleEntry,
+  type LocaleMeta,
+  type TranslationBatchItem,
+} from "./lib/control-ui-i18n-sync-plan.ts";
+import { toErrorObject as toLintErrorObject } from "./lib/error-format.mts";
+import { sleep } from "./lib/sleep.mjs";
+import { resolveWindowsTaskkillPath } from "./lib/windows-taskkill.mjs";
 
-interface TranslationMap {
-  [key: string]: string | TranslationMap;
-}
-
-type TranslationValue = string | { [key: string]: TranslationValue };
-
-type LocaleEntry = {
-  exportName: string;
-  fileName: string;
-  languageKey: string;
-  locale: string;
-};
-
-type GlossaryEntry = {
-  source: string;
-  target: string;
-};
-
-type TranslationMemoryEntry = {
-  cache_key: string;
-  model: string;
-  provider: string;
-  segment_id: string;
-  source_path: string;
-  src_lang: string;
-  text: string;
-  text_hash: string;
-  tgt_lang: string;
-  translated: string;
-  updated_at: string;
-};
-
-type LocaleMeta = {
-  fallbackKeys: string[];
-  generatedAt: string;
-  locale: string;
-  model: string;
-  provider: string;
-  sourceHash: string;
-  totalKeys: number;
-  translatedKeys: number;
-  workflow: number;
-};
-
-type TranslationBatchItem = {
-  cacheKey: string;
-  key: string;
-  text: string;
-  textHash: string;
-};
-
-type RawCopyFinding = {
-  kind: "html-attribute" | "html-text" | "object-property";
-  line: number;
-  name: string;
-  path: string;
-  text: string;
-};
-
-type RawCopyBaselineEntry = {
-  count: number;
-  kind: RawCopyFinding["kind"];
-  name: string;
-  path: string;
-  text: string;
-};
-
-type RawCopyBaseline = {
-  version: number;
-  entries: RawCopyBaselineEntry[];
+type RunProcessParentSignalState = {
+  done: boolean;
+  signal: NodeJS.Signals | null;
 };
 
 const CONTROL_UI_I18N_WORKFLOW = 1;
-const DEFAULT_OPENAI_MODEL = "gpt-5.5";
+const DEFAULT_OPENAI_MODEL = "gpt-5.6-sol";
 const DEFAULT_ANTHROPIC_MODEL = "claude-opus-4-6";
 const DEFAULT_PROVIDER = "openai";
-const DEFAULT_PI_PACKAGE_VERSION = "0.58.3";
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(HERE, "..");
-const LOCALES_DIR = path.join(ROOT, "ui", "src", "i18n", "locales");
 const I18N_ASSETS_DIR = path.join(ROOT, "ui", "src", "i18n", ".i18n");
-const SOURCE_LOCALE_PATH = path.join(LOCALES_DIR, "en.ts");
 const SOURCE_LOCALE = "en";
-const CONTROL_UI_SOURCE_DIR = path.join(ROOT, "ui", "src", "ui");
-const RAW_COPY_BASELINE_PATH = path.join(I18N_ASSETS_DIR, "raw-copy-baseline.json");
-const RAW_COPY_BASELINE_VERSION = 1;
 const MAX_BATCH_ITEMS = 20;
 const DEFAULT_BATCH_CHAR_BUDGET = 2_000;
 const TRANSLATE_MAX_ATTEMPTS = 2;
 const TRANSLATE_BASE_DELAY_MS = 15_000;
 const DEFAULT_PROMPT_TIMEOUT_MS = 120_000;
+const RUN_PROCESS_OUTPUT_MAX_CHARS = 1024 * 1024;
+const RUN_PROCESS_TIMEOUT_MS = 120_000;
+const RUN_PROCESS_KILL_GRACE_MS = 5_000;
+const activeRunProcessParentSignals = new Set<RunProcessParentSignalState>();
 const PROGRESS_HEARTBEAT_MS = 30_000;
 const ENV_PROVIDER = "OPENCLAW_CONTROL_UI_I18N_PROVIDER";
 const ENV_MODEL = "OPENCLAW_CONTROL_UI_I18N_MODEL";
 const ENV_THINKING = "OPENCLAW_CONTROL_UI_I18N_THINKING";
-const ENV_PI_EXECUTABLE = "OPENCLAW_CONTROL_UI_I18N_PI_EXECUTABLE";
-const ENV_PI_ARGS = "OPENCLAW_CONTROL_UI_I18N_PI_ARGS";
-const ENV_PI_PACKAGE_VERSION = "OPENCLAW_CONTROL_UI_I18N_PI_PACKAGE_VERSION";
 const ENV_BATCH_CHAR_BUDGET = "OPENCLAW_CONTROL_UI_I18N_BATCH_CHAR_BUDGET";
 const ENV_PROMPT_TIMEOUT = "OPENCLAW_CONTROL_UI_I18N_PROMPT_TIMEOUT";
+const ENV_AUTH_OPTIONAL = "OPENCLAW_CONTROL_UI_I18N_AUTH_OPTIONAL";
 
-const LOCALE_ENTRIES: readonly LocaleEntry[] = [
-  { locale: "zh-CN", fileName: "zh-CN.ts", exportName: "zh_CN", languageKey: "zhCN" },
-  { locale: "zh-TW", fileName: "zh-TW.ts", exportName: "zh_TW", languageKey: "zhTW" },
-  { locale: "pt-BR", fileName: "pt-BR.ts", exportName: "pt_BR", languageKey: "ptBR" },
-  { locale: "de", fileName: "de.ts", exportName: "de", languageKey: "de" },
-  { locale: "es", fileName: "es.ts", exportName: "es", languageKey: "es" },
-  { locale: "ja-JP", fileName: "ja-JP.ts", exportName: "ja_JP", languageKey: "jaJP" },
-  { locale: "ko", fileName: "ko.ts", exportName: "ko", languageKey: "ko" },
-  { locale: "fr", fileName: "fr.ts", exportName: "fr", languageKey: "fr" },
-  { locale: "ar", fileName: "ar.ts", exportName: "ar", languageKey: "ar" },
-  { locale: "it", fileName: "it.ts", exportName: "it", languageKey: "it" },
-  { locale: "tr", fileName: "tr.ts", exportName: "tr", languageKey: "tr" },
-  { locale: "uk", fileName: "uk.ts", exportName: "uk", languageKey: "uk" },
-  { locale: "id", fileName: "id.ts", exportName: "id", languageKey: "id" },
-  { locale: "pl", fileName: "pl.ts", exportName: "pl", languageKey: "pl" },
-  { locale: "th", fileName: "th.ts", exportName: "th", languageKey: "th" },
-  { locale: "vi", fileName: "vi.ts", exportName: "vi", languageKey: "vi" },
-  { locale: "nl", fileName: "nl.ts", exportName: "nl", languageKey: "nl" },
-  { locale: "fa", fileName: "fa.ts", exportName: "fa", languageKey: "fa" },
-];
+type TranslationProvider = "openai" | "anthropic";
+
+const TRANSLATION_PROVIDER_DEFAULTS: Record<TranslationProvider, Omit<Model, "id" | "name">> = {
+  openai: {
+    api: "openai-responses",
+    provider: "openai",
+    baseUrl: "https://api.openai.com/v1",
+    reasoning: true,
+    input: ["text"],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 400_000,
+    maxTokens: 32_000,
+  },
+  anthropic: {
+    api: "anthropic-messages",
+    provider: "anthropic",
+    baseUrl: "https://api.anthropic.com",
+    reasoning: true,
+    input: ["text"],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 200_000,
+    maxTokens: 32_000,
+  },
+};
+
+const LOCALE_ENTRIES: readonly LocaleEntry[] = CONTROL_UI_LOCALE_ENTRIES;
 
 const DEFAULT_GLOSSARY: readonly GlossaryEntry[] = [
   { source: "OpenClaw", target: "OpenClaw" },
@@ -211,6 +176,8 @@ function prettyLanguageLabel(locale: string): string {
       return "Korean";
     case "fr":
       return "French";
+    case "hi":
+      return "Hindi";
     case "ar":
       return "Arabic";
     case "it":
@@ -231,6 +198,10 @@ function prettyLanguageLabel(locale: string): string {
       return "Dutch";
     case "fa":
       return "Persian";
+    case "ru":
+      return "Russian";
+    case "sv":
+      return "Swedish";
     case "de":
       return "German";
     case "es":
@@ -268,22 +239,22 @@ function hasTranslationProvider(): boolean {
   return Boolean(process.env.OPENAI_API_KEY?.trim() || process.env.ANTHROPIC_API_KEY?.trim());
 }
 
-function normalizeText(text: string): string {
-  return text.trim().split(/\s+/).join(" ");
+function resolveKnownTranslationProvider(): TranslationProvider {
+  const provider = resolveConfiguredProvider();
+  if (provider === "openai" || provider === "anthropic") {
+    return provider;
+  }
+  throw new Error(`Unsupported translation provider: ${provider}`);
 }
 
 function sha256(input: string | Uint8Array): string {
   return createHash("sha256").update(input).digest("hex");
 }
 
-function hashText(text: string): string {
-  return sha256(normalizeText(text));
-}
-
 function cacheNamespace(): string {
   return [
     `wf=${CONTROL_UI_I18N_WORKFLOW}`,
-    "engine=pi",
+    "engine=openclaw-llm",
     `provider=${resolveConfiguredProvider()}`,
     `model=${resolveConfiguredModel()}`,
   ].join("|");
@@ -291,10 +262,6 @@ function cacheNamespace(): string {
 
 function cacheKey(segmentId: string, textHash: string, targetLocale: string): string {
   return sha256([cacheNamespace(), SOURCE_LOCALE, targetLocale, segmentId, textHash].join("|"));
-}
-
-function localeFilePath(entry: LocaleEntry): string {
-  return path.join(LOCALES_DIR, entry.fileName);
 }
 
 function glossaryPath(entry: LocaleEntry): string {
@@ -309,57 +276,7 @@ function tmPath(entry: LocaleEntry): string {
   return path.join(I18N_ASSETS_DIR, `${entry.locale}.tm.jsonl`);
 }
 
-async function importLocaleModule<T>(filePath: string): Promise<T> {
-  const stats = await stat(filePath);
-  const href = `${pathToFileURL(filePath).href}?ts=${stats.mtimeMs}`;
-  return (await import(href)) as T;
-}
-
-async function loadLocaleMap(filePath: string, exportName: string): Promise<TranslationMap | null> {
-  if (!existsSync(filePath)) {
-    return null;
-  }
-  const mod = await importLocaleModule<Record<string, TranslationMap>>(filePath);
-  return mod[exportName] ?? null;
-}
-
-function flattenTranslations(value: TranslationMap, prefix = "", out = new Map<string, string>()) {
-  for (const [key, nested] of Object.entries(value)) {
-    const fullKey = prefix ? `${prefix}.${key}` : key;
-    if (typeof nested === "string") {
-      out.set(fullKey, nested);
-      continue;
-    }
-    flattenTranslations(nested, fullKey, out);
-  }
-  return out;
-}
-
-function setNestedValue(root: TranslationMap, dottedKey: string, value: string) {
-  const parts = dottedKey.split(".");
-  let cursor: TranslationMap = root;
-  for (let index = 0; index < parts.length - 1; index += 1) {
-    const key = parts[index];
-    const next = cursor[key];
-    if (!next || typeof next === "string") {
-      const replacement: TranslationMap = {};
-      cursor[key] = replacement;
-      cursor = replacement;
-      continue;
-    }
-    cursor = next;
-  }
-  cursor[parts.at(-1)!] = value;
-}
-
-function compareStringArrays(left: string[], right: string[]) {
-  if (left.length !== right.length) {
-    return false;
-  }
-  return left.every((value, index) => value === right[index]);
-}
-
-export type PlaceholderMismatch = {
+type PlaceholderMismatch = {
   key: string;
   locale: string;
   sourcePlaceholders: string[];
@@ -393,6 +310,24 @@ export function findPlaceholderMismatches(
   return mismatches;
 }
 
+export function filterPlaceholderCompatibleTranslations(
+  sourceFlat: ReadonlyMap<string, string>,
+  translatedFlat: ReadonlyMap<string, string>,
+): Map<string, string> {
+  return new Map(
+    [...translatedFlat].filter(([key, translated]) => {
+      const source = sourceFlat.get(key);
+      return (
+        source !== undefined &&
+        compareStringArrays(
+          extractTranslationPlaceholders(source),
+          extractTranslationPlaceholders(translated),
+        )
+      );
+    }),
+  );
+}
+
 function assertPlaceholderParity(
   sourceFlat: ReadonlyMap<string, string>,
   translatedFlat: ReadonlyMap<string, string>,
@@ -421,40 +356,6 @@ function assertPlaceholderParity(
   );
 }
 
-function isIdentifier(value: string): boolean {
-  return /^[A-Za-z_$][A-Za-z0-9_$]*$/.test(value);
-}
-
-function renderTranslationValue(value: TranslationValue, indent = 0): string {
-  if (typeof value === "string") {
-    return JSON.stringify(value);
-  }
-
-  const entries = Object.entries(value);
-  if (entries.length === 0) {
-    return "{}";
-  }
-
-  const pad = "  ".repeat(indent);
-  const innerPad = "  ".repeat(indent + 1);
-  return `{\n${entries
-    .map(([key, nested]) => {
-      const renderedKey = isIdentifier(key) ? key : JSON.stringify(key);
-      return `${innerPad}${renderedKey}: ${renderTranslationValue(nested, indent + 1)},`;
-    })
-    .join("\n")}\n${pad}}`;
-}
-
-function renderLocaleModule(entry: LocaleEntry, value: TranslationMap): string {
-  return [
-    'import type { TranslationMap } from "../lib/types.ts";',
-    "",
-    "// Generated by scripts/control-ui-i18n.ts.",
-    `export const ${entry.exportName}: TranslationMap = ${renderTranslationValue(value)};`,
-    "",
-  ].join("\n");
-}
-
 async function loadGlossary(filePath: string): Promise<GlossaryEntry[]> {
   if (!existsSync(filePath)) {
     return [];
@@ -464,65 +365,12 @@ async function loadGlossary(filePath: string): Promise<GlossaryEntry[]> {
   return Array.isArray(parsed) ? parsed : [];
 }
 
-function renderGlossary(entries: readonly GlossaryEntry[]): string {
-  return `${JSON.stringify(entries, null, 2)}\n`;
-}
-
 async function loadMeta(filePath: string): Promise<LocaleMeta | null> {
   if (!existsSync(filePath)) {
     return null;
   }
   const raw = await readFile(filePath, "utf8");
   return JSON.parse(raw) as LocaleMeta;
-}
-
-function renderMeta(meta: LocaleMeta): string {
-  return `${JSON.stringify(meta, null, 2)}\n`;
-}
-
-async function loadTranslationMemory(
-  filePath: string,
-): Promise<Map<string, TranslationMemoryEntry>> {
-  const entries = new Map<string, TranslationMemoryEntry>();
-  if (!existsSync(filePath)) {
-    return entries;
-  }
-  const raw = await readFile(filePath, "utf8");
-  for (const line of raw.split("\n")) {
-    const trimmed = line.trim();
-    if (!trimmed) {
-      continue;
-    }
-    const parsed = JSON.parse(trimmed) as TranslationMemoryEntry;
-    if (parsed.cache_key && parsed.translated.trim()) {
-      entries.set(parsed.cache_key, parsed);
-    }
-  }
-  return entries;
-}
-
-function renderTranslationMemory(entries: Map<string, TranslationMemoryEntry>): string {
-  const ordered = [...entries.values()].toSorted((left, right) =>
-    left.cache_key.localeCompare(right.cache_key),
-  );
-  if (ordered.length === 0) {
-    return "";
-  }
-  return `${ordered.map((entry) => JSON.stringify(entry)).join("\n")}\n`;
-}
-
-function buildTranslationMemoryByTextHash(
-  entries: Map<string, TranslationMemoryEntry>,
-  locale: string,
-): Map<string, TranslationMemoryEntry> {
-  const byTextHash = new Map<string, TranslationMemoryEntry>();
-  for (const entry of entries.values()) {
-    if (entry.tgt_lang !== locale || !entry.text_hash || !entry.translated.trim()) {
-      continue;
-    }
-    byTextHash.set(entry.text_hash, entry);
-  }
-  return byTextHash;
 }
 
 function buildGlossaryPrompt(glossary: readonly GlossaryEntry[]): string {
@@ -548,6 +396,8 @@ function buildSystemPrompt(targetLocale: string, glossary: readonly GlossaryEntr
     "- The JSON must be an object whose keys exactly match the provided ids.",
     "- Translate all English prose; keep code, URLs, product names, CLI commands, config keys, and env vars in English.",
     "- Preserve placeholders exactly, including {count}, {time}, {shown}, {total}, and similar tokens.",
+    "- Preserve Swift interpolation expressions such as \\(name) exactly, including the backslash and parentheses.",
+    "- Preserve Kotlin interpolation expressions such as $name and ${value} exactly.",
     "- Preserve punctuation, ellipses, arrows, and casing when they are part of literal UI text.",
     "- Preserve Markdown, inline code, HTML tags, and slash commands when present.",
     "- Use fluent, neutral product UI language.",
@@ -560,316 +410,47 @@ function buildSystemPrompt(targetLocale: string, glossary: readonly GlossaryEntr
   return lines.join("\n");
 }
 
-function buildBatchPrompt(items: readonly TranslationBatchItem[]): string {
+export function buildBatchPrompt(
+  items: readonly TranslationBatchItem[],
+  validationError?: string,
+): string {
   const payload = Object.fromEntries(items.map((item) => [item.key, item.text]));
-  return [
-    "Translate this JSON object.",
-    "Return ONLY a JSON object with the same keys.",
-    "",
-    JSON.stringify(payload, null, 2),
-  ].join("\n");
-}
-
-function sleep(ms: number) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+  const lines = ["Translate this JSON object.", "Return ONLY a JSON object with the same keys."];
+  if (validationError) {
+    lines.push(
+      "",
+      "Your previous response failed validation. Correct that exact failure in the new response:",
+      validationError,
+    );
+  }
+  lines.push("", JSON.stringify(payload, null, 2));
+  return lines.join("\n");
 }
 
 function formatDuration(ms: number): string {
-  if (ms < 1_000) {
-    return `${Math.round(ms)}ms`;
-  }
-  if (ms < 60_000) {
-    return `${(ms / 1_000).toFixed(ms < 10_000 ? 1 : 0)}s`;
-  }
-  const totalSeconds = Math.round(ms / 1_000);
-  const minutes = Math.floor(totalSeconds / 60);
-  const seconds = totalSeconds % 60;
-  return `${minutes}m ${seconds}s`;
+  return formatDurationCompact(ms, { spaced: true }) ?? "0ms";
 }
 
 function logProgress(message: string) {
   process.stdout.write(`control-ui-i18n: ${message}\n`);
 }
 
-function toRepoPath(filePath: string): string {
-  return path.relative(ROOT, filePath).split(path.sep).join("/");
+function isPromptTimeoutError(error: Error): boolean {
+  return error.message.toLowerCase().includes("timed out");
 }
 
-function normalizeRawCopyText(raw: string): string {
-  return raw
-    .replace(/\\n/g, " ")
-    .replace(/\s+/g, " ")
-    .replace(/&middot;/giu, "·")
-    .trim();
-}
-
-function hasHumanLetters(text: string): boolean {
-  return /\p{L}/u.test(text);
-}
-
-function lineNumberForOffset(source: string, offset: number): number {
-  let line = 1;
-  for (let index = 0; index < offset && index < source.length; index += 1) {
-    if (source.charCodeAt(index) === 10) {
-      line += 1;
-    }
-  }
-  return line;
-}
-
-function parseDoubleQuotedString(raw: string): string {
-  try {
-    return JSON.parse(`"${raw}"`) as string;
-  } catch {
-    return raw;
-  }
-}
-
-function pushRawCopyFinding(
-  findings: RawCopyFinding[],
-  params: Omit<RawCopyFinding, "text"> & { text: string },
-) {
-  const text = normalizeRawCopyText(params.text);
-  if (!text || !hasHumanLetters(text)) {
-    return;
-  }
-  findings.push({
-    ...params,
-    text,
-  });
-}
-
-async function walkControlUiSourceFiles(dir: string): Promise<string[]> {
-  const entries = await readdir(dir, { withFileTypes: true });
-  const files: string[] = [];
-  for (const entry of entries) {
-    if (entry.name === "test-helpers") {
-      continue;
-    }
-    const fullPath = path.join(dir, entry.name);
-    if (entry.isDirectory()) {
-      files.push(...(await walkControlUiSourceFiles(fullPath)));
-      continue;
-    }
-    if (!entry.isFile() || !/\.tsx?$/u.test(entry.name)) {
-      continue;
-    }
-    if (/\.(?:test|browser\.test|node\.test)\.tsx?$/u.test(entry.name)) {
-      continue;
-    }
-    files.push(fullPath);
-  }
-  return files;
-}
-
-function collectRawCopyFromSource(params: {
-  filePath: string;
-  source: string;
-  sourceFile: ts.SourceFile;
-}): RawCopyFinding[] {
-  const { filePath, source, sourceFile } = params;
-  const repoPath = toRepoPath(filePath);
-  const findings: RawCopyFinding[] = [];
-  const attrPattern =
-    /\b(aria-label|placeholder|title)\s*=\s*"((?:(?!\$\{)[^"\\]|\\.)*?\p{L}(?:(?!\$\{)[^"\\]|\\.)*?)"/gu;
-  for (const match of source.matchAll(attrPattern)) {
-    const rawText = match[2];
-    if (!rawText) {
-      continue;
-    }
-    pushRawCopyFinding(findings, {
-      kind: "html-attribute",
-      line: lineNumberForOffset(source, match.index ?? 0),
-      name: match[1] ?? "attribute",
-      path: repoPath,
-      text: parseDoubleQuotedString(rawText),
-    });
-  }
-
-  const propertyPattern =
-    /\b(label|title|subtitle|description|help|placeholder)\s*:\s*"((?:[^"\\]|\\.)*?\p{L}(?:[^"\\]|\\.)*?)"/gu;
-  for (const match of source.matchAll(propertyPattern)) {
-    const rawText = match[2];
-    if (!rawText) {
-      continue;
-    }
-    pushRawCopyFinding(findings, {
-      kind: "object-property",
-      line: lineNumberForOffset(source, match.index ?? 0),
-      name: match[1] ?? "property",
-      path: repoPath,
-      text: parseDoubleQuotedString(rawText),
-    });
-  }
-
-  const textPattern = />\s*([^<>{}]*?\p{L}[^<>{}]*?)\s*</gu;
-  const visit = (node: ts.Node) => {
-    if (ts.isTaggedTemplateExpression(node) && node.tag.getText(sourceFile) === "html") {
-      const template = node.template;
-      const chunks: Array<{ offset: number; text: string }> = [];
-      if (ts.isNoSubstitutionTemplateLiteral(template)) {
-        chunks.push({
-          offset: template.getStart(sourceFile) + 1,
-          text: template.text,
-        });
-      } else {
-        chunks.push({
-          offset: template.head.getStart(sourceFile) + 1,
-          text: template.head.text,
-        });
-        for (const span of template.templateSpans) {
-          chunks.push({
-            offset: span.literal.getStart(sourceFile) + 1,
-            text: span.literal.text,
-          });
-        }
-      }
-      for (const chunk of chunks) {
-        for (const match of chunk.text.matchAll(textPattern)) {
-          const rawText = match[1];
-          if (!rawText) {
-            continue;
-          }
-          pushRawCopyFinding(findings, {
-            kind: "html-text",
-            line: lineNumberForOffset(source, chunk.offset + (match.index ?? 0)),
-            name: "text",
-            path: repoPath,
-            text: rawText,
-          });
-        }
-      }
-    }
-    ts.forEachChild(node, visit);
-  };
-  visit(sourceFile);
-
-  return findings;
-}
-
-async function collectControlUiRawCopyFindings(): Promise<RawCopyFinding[]> {
-  const files = await walkControlUiSourceFiles(CONTROL_UI_SOURCE_DIR);
-  const findings: RawCopyFinding[] = [];
-  for (const filePath of files.toSorted((left, right) => left.localeCompare(right))) {
-    const source = await readFile(filePath, "utf8");
-    const sourceFile = ts.createSourceFile(
-      filePath,
-      source,
-      ts.ScriptTarget.Latest,
-      true,
-      filePath.endsWith(".tsx") ? ts.ScriptKind.TSX : ts.ScriptKind.TS,
-    );
-    findings.push(...collectRawCopyFromSource({ filePath, source, sourceFile }));
-  }
-  return findings;
-}
-
-function summarizeRawCopyFindings(findings: RawCopyFinding[]): RawCopyBaselineEntry[] {
-  const counts = new Map<string, RawCopyBaselineEntry>();
-  for (const finding of findings) {
-    const key = [finding.path, finding.kind, finding.name, finding.text].join("\u0000");
-    const existing = counts.get(key);
-    if (existing) {
-      existing.count += 1;
-      continue;
-    }
-    counts.set(key, {
-      count: 1,
-      kind: finding.kind,
-      name: finding.name,
-      path: finding.path,
-      text: finding.text,
-    });
-  }
-  return [...counts.values()].toSorted(
-    (left, right) =>
-      left.path.localeCompare(right.path) ||
-      left.kind.localeCompare(right.kind) ||
-      left.name.localeCompare(right.name) ||
-      left.text.localeCompare(right.text),
+export function isProviderAuthError(error: Error): boolean {
+  const message = error.message.toLowerCase();
+  return (
+    message.includes("401") ||
+    message.includes("authentication_error") ||
+    message.includes("incorrect api key") ||
+    message.includes("invalid x-api-key")
   );
 }
 
-function formatRawCopyBaseline(entries: RawCopyBaselineEntry[]): string {
-  return `${JSON.stringify(
-    {
-      version: RAW_COPY_BASELINE_VERSION,
-      entries,
-    } satisfies RawCopyBaseline,
-    null,
-    2,
-  )}\n`;
-}
-
-function formatRawCopyBaselineDiff(
-  current: RawCopyBaselineEntry[],
-  expected: RawCopyBaselineEntry[],
-) {
-  const keyFor = (entry: RawCopyBaselineEntry) =>
-    [entry.path, entry.kind, entry.name, entry.text].join("\u0000");
-  const currentByKey = new Map(current.map((entry) => [keyFor(entry), entry]));
-  const expectedByKey = new Map(expected.map((entry) => [keyFor(entry), entry]));
-  const added = current.filter((entry) => {
-    const expectedEntry = expectedByKey.get(keyFor(entry));
-    return !expectedEntry || expectedEntry.count !== entry.count;
-  });
-  const removed = expected.filter((entry) => {
-    const currentEntry = currentByKey.get(keyFor(entry));
-    return !currentEntry || currentEntry.count !== entry.count;
-  });
-  const lines: string[] = [];
-  for (const entry of added.slice(0, 20)) {
-    lines.push(
-      `+ ${entry.path} ${entry.kind}:${entry.name} x${entry.count} ${JSON.stringify(entry.text)}`,
-    );
-  }
-  for (const entry of removed.slice(0, 20)) {
-    lines.push(
-      `- ${entry.path} ${entry.kind}:${entry.name} x${entry.count} ${JSON.stringify(entry.text)}`,
-    );
-  }
-  const extra = added.length + removed.length - lines.length;
-  if (extra > 0) {
-    lines.push(`... ${extra} more baseline delta(s)`);
-  }
-  return lines.join("\n");
-}
-
-async function syncControlUiRawCopyBaseline(options: { checkOnly: boolean; write: boolean }) {
-  const findings = await collectControlUiRawCopyFindings();
-  const entries = summarizeRawCopyFindings(findings);
-  const expected = formatRawCopyBaseline(entries);
-  const current = existsSync(RAW_COPY_BASELINE_PATH)
-    ? await readFile(RAW_COPY_BASELINE_PATH, "utf8")
-    : "";
-  if (!options.checkOnly && options.write && current !== expected) {
-    await mkdir(I18N_ASSETS_DIR, { recursive: true });
-    await writeFile(RAW_COPY_BASELINE_PATH, expected, "utf8");
-  }
-  if (options.checkOnly && current !== expected) {
-    let currentEntries: RawCopyBaselineEntry[] = [];
-    try {
-      const parsed = JSON.parse(current) as Partial<RawCopyBaseline>;
-      currentEntries = Array.isArray(parsed.entries) ? parsed.entries : [];
-    } catch {
-      currentEntries = [];
-    }
-    const diff = formatRawCopyBaselineDiff(entries, currentEntries);
-    throw new Error(
-      [
-        "control-ui raw-copy baseline drift detected.",
-        diff,
-        "Move user-facing strings into ui/src/i18n/locales/en.ts, or update the baseline with `node --import tsx scripts/control-ui-i18n.ts sync --write` when the raw string is intentional.",
-      ]
-        .filter(Boolean)
-        .join("\n"),
-    );
-  }
-  logProgress(`raw-copy: baseline entries=${entries.length}`);
-}
-
-function isPromptTimeoutError(error: Error): boolean {
-  return error.message.toLowerCase().includes("timed out");
+function isProviderAuthOptional(): boolean {
+  return isStrictAffirmativeValue(process.env[ENV_AUTH_OPTIONAL]);
 }
 
 function resolvePromptTimeoutMs(): number {
@@ -898,162 +479,271 @@ function estimateBatchChars(items: readonly TranslationBatchItem[]): number {
   return items.reduce((total, item) => total + item.key.length + item.text.length + 8, 2);
 }
 
-type PiCommand = {
-  args: string[];
-  executable: string;
-};
-
-function resolvePiPackageVersion(): string {
-  return process.env[ENV_PI_PACKAGE_VERSION]?.trim() || DEFAULT_PI_PACKAGE_VERSION;
-}
-
-function getPiRuntimeDir() {
-  return path.join(
-    homedir(),
-    ".cache",
-    "openclaw",
-    "control-ui-i18n",
-    "pi-runtime",
-    resolvePiPackageVersion(),
-  );
-}
-
-async function resolvePiCommand(): Promise<PiCommand> {
-  const explicitExecutable = process.env[ENV_PI_EXECUTABLE]?.trim();
-  if (explicitExecutable) {
-    return {
-      executable: explicitExecutable,
-      args: process.env[ENV_PI_ARGS]?.trim().split(/\s+/).filter(Boolean) ?? [],
-    };
-  }
-
-  const pathEntries = (process.env.PATH ?? "").split(path.delimiter).filter(Boolean);
-  for (const entry of pathEntries) {
-    const candidate = path.join(entry, process.platform === "win32" ? "pi.cmd" : "pi");
-    if (existsSync(candidate)) {
-      return { executable: candidate, args: [] };
-    }
-  }
-
-  const runtimeDir = getPiRuntimeDir();
-  const cliPath = path.join(
-    runtimeDir,
-    "node_modules",
-    "@mariozechner",
-    "pi-coding-agent",
-    "dist",
-    "cli.js",
-  );
-  if (!existsSync(cliPath)) {
-    await mkdir(runtimeDir, { recursive: true });
-    await runProcess(
-      "npm",
-      [
-        "install",
-        "--silent",
-        "--no-audit",
-        "--no-fund",
-        `@mariozechner/pi-coding-agent@${resolvePiPackageVersion()}`,
-      ],
-      {
-        cwd: runtimeDir,
-        rejectOnFailure: true,
-      },
-    );
-  }
-  return { executable: "node", args: [cliPath] };
-}
-
 type RunProcessOptions = {
   cwd?: string;
   input?: string;
+  killGraceMs?: number;
+  maxOutputChars?: number;
   rejectOnFailure?: boolean;
+  timeoutMs?: number;
 };
 
-async function runProcess(
+type ProcessOutputCapture = {
+  text: string;
+  truncatedChars: number;
+};
+
+function resolveRunProcessOutputLimit(options: RunProcessOptions): number {
+  const value = options.maxOutputChars;
+  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
+    return RUN_PROCESS_OUTPUT_MAX_CHARS;
+  }
+  return Math.max(1, Math.floor(value));
+}
+
+export function appendBoundedProcessOutput(
+  capture: ProcessOutputCapture,
+  chunk: unknown,
+  maxChars: number,
+): ProcessOutputCapture {
+  const nextText = capture.text + String(chunk);
+  if (nextText.length <= maxChars) {
+    return { text: nextText, truncatedChars: capture.truncatedChars };
+  }
+  const text = sliceUtf16Safe(nextText, -maxChars);
+  const truncatedChars = capture.truncatedChars + nextText.length - text.length;
+  return { text, truncatedChars };
+}
+
+function formatProcessOutput(capture: ProcessOutputCapture): string {
+  if (capture.truncatedChars === 0) {
+    return capture.text;
+  }
+  return `[output truncated ${capture.truncatedChars} chars; showing tail]\n${capture.text}`;
+}
+
+function maybeReraiseRunProcessParentSignal(signal: NodeJS.Signals): void {
+  for (const state of activeRunProcessParentSignals) {
+    if (state.signal === null || !state.done) {
+      return;
+    }
+  }
+  process.kill(process.pid, signal);
+}
+
+export async function runProcess(
   executable: string,
   args: string[],
   options: RunProcessOptions = {},
 ): Promise<{ code: number; stderr: string; stdout: string }> {
   return await new Promise((resolve, reject) => {
+    const useProcessGroup = process.platform !== "win32";
     const child = spawn(executable, args, {
       cwd: options.cwd ?? ROOT,
+      detached: useProcessGroup,
       env: process.env,
       stdio: ["pipe", "pipe", "pipe"],
     });
 
-    let stdout = "";
-    let stderr = "";
+    const maxOutputChars = resolveRunProcessOutputLimit(options);
+    const timeoutMs = options.timeoutMs ?? RUN_PROCESS_TIMEOUT_MS;
+    const killGraceMs = options.killGraceMs ?? RUN_PROCESS_KILL_GRACE_MS;
+    let stdout: ProcessOutputCapture = { text: "", truncatedChars: 0 };
+    let stderr: ProcessOutputCapture = { text: "", truncatedChars: 0 };
+    let timedOut = false;
+    let settled = false;
+    let waitingForKillGrace = false;
+    let childClosedResult: { code: number | null; signal: NodeJS.Signals | null } | null = null;
+    let killTimer: ReturnType<typeof setTimeout> | undefined;
+    let parentSignalPending: NodeJS.Signals | null = null;
+    const parentSignalState: RunProcessParentSignalState = { done: false, signal: null };
+    activeRunProcessParentSignals.add(parentSignalState);
+    const parentSignalHandlers: { handler: () => void; signal: NodeJS.Signals }[] = [];
+    const cleanupParentSignalHandlers = () => {
+      for (const { signal, handler } of parentSignalHandlers) {
+        process.off(signal, handler);
+      }
+      parentSignalHandlers.length = 0;
+    };
+    const signalWindowsProcessTree = (force: boolean): boolean => {
+      if (process.platform !== "win32" || typeof child.pid !== "number") {
+        return false;
+      }
+      const taskkillArgs = ["/PID", String(child.pid), "/T"];
+      if (force) {
+        taskkillArgs.push("/F");
+      }
+      const result = spawnSync(resolveWindowsTaskkillPath(), taskkillArgs, { stdio: "ignore" });
+      return result.status === 0;
+    };
+    const signalChild = (signal: NodeJS.Signals) => {
+      if (useProcessGroup && typeof child.pid === "number") {
+        try {
+          process.kill(-child.pid, signal);
+          return;
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== "ESRCH") {
+            stderr = appendBoundedProcessOutput(
+              stderr,
+              `failed to send ${signal} to process group: ${error instanceof Error ? error.message : String(error)}\n`,
+              maxOutputChars,
+            );
+          }
+        }
+      }
+      if (process.platform === "win32") {
+        const force = signal === "SIGKILL";
+        if (signalWindowsProcessTree(force) || (!force && signalWindowsProcessTree(true))) {
+          return;
+        }
+      }
+      child.kill(signal);
+    };
+    const relayParentSignal = (signal: NodeJS.Signals) => {
+      const handler = () => {
+        parentSignalPending = signal;
+        parentSignalState.signal = signal;
+        signalChild(signal);
+        cleanupParentSignalHandlers();
+        if (!processGroupIsAlive()) {
+          parentSignalState.done = true;
+          maybeReraiseRunProcessParentSignal(signal);
+          return;
+        }
+        if (killTimer) {
+          clearTimeout(killTimer);
+        }
+        waitingForKillGrace = true;
+        // Keep this timer ref'ed so parent signal relay can force-kill stubborn
+        // process groups before re-raising the original signal.
+        killTimer = setTimeout(() => {
+          waitingForKillGrace = false;
+          killTimer = undefined;
+          signalChild("SIGKILL");
+          parentSignalState.done = true;
+          maybeReraiseRunProcessParentSignal(signal);
+        }, killGraceMs);
+      };
+      parentSignalHandlers.push({ handler, signal });
+      process.once(signal, handler);
+    };
+    const relayedSignals: NodeJS.Signals[] =
+      process.platform === "win32" ? ["SIGINT", "SIGTERM"] : ["SIGINT", "SIGTERM", "SIGHUP"];
+    for (const signal of relayedSignals) {
+      relayParentSignal(signal);
+    }
+    const processGroupIsAlive = () => {
+      if (!useProcessGroup || typeof child.pid !== "number") {
+        return false;
+      }
+      try {
+        process.kill(-child.pid, 0);
+        return true;
+      } catch (error) {
+        return (error as NodeJS.ErrnoException).code === "EPERM";
+      }
+    };
+    const settle = (callback: () => void) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(timeout);
+      if (!parentSignalPending && killTimer) {
+        clearTimeout(killTimer);
+      }
+      if (!parentSignalPending) {
+        activeRunProcessParentSignals.delete(parentSignalState);
+      }
+      cleanupParentSignalHandlers();
+      callback();
+    };
+    const finishClose = (code: number | null, signal: NodeJS.Signals | null) => {
+      settle(() => {
+        const stdoutText = formatProcessOutput(stdout);
+        const stderrText = formatProcessOutput(stderr);
+        if (timedOut) {
+          reject(new Error(`${executable} ${args.join(" ")} timed out after ${timeoutMs}ms`));
+          return;
+        }
+        if ((code ?? 1) !== 0 && options.rejectOnFailure) {
+          reject(
+            new Error(
+              `${executable} ${args.join(" ")} failed: ${
+                stderrText.trim() || stdoutText.trim() || (signal ? `terminated by ${signal}` : "")
+              }`,
+            ),
+          );
+          return;
+        }
+        if ((code ?? 1) === 0 && stdout.truncatedChars > 0) {
+          reject(
+            new Error(
+              `${executable} ${args.join(" ")} produced more than ${maxOutputChars} stdout chars`,
+            ),
+          );
+          return;
+        }
+        resolve({ code: code ?? 1, stderr: stderrText, stdout: stdout.text });
+      });
+    };
+    const scheduleKill = () => {
+      if (waitingForKillGrace) {
+        return;
+      }
+      waitingForKillGrace = true;
+      killTimer = setTimeout(() => {
+        waitingForKillGrace = false;
+        killTimer = undefined;
+        signalChild("SIGKILL");
+        if (childClosedResult) {
+          finishClose(childClosedResult.code, childClosedResult.signal);
+        }
+      }, killGraceMs);
+    };
+    const timeout = setTimeout(() => {
+      timedOut = true;
+      signalChild("SIGTERM");
+      scheduleKill();
+    }, timeoutMs);
     child.stdout.on("data", (chunk) => {
-      stdout += String(chunk);
+      stdout = appendBoundedProcessOutput(stdout, chunk, maxOutputChars);
     });
     child.stderr.on("data", (chunk) => {
-      stderr += String(chunk);
+      stderr = appendBoundedProcessOutput(stderr, chunk, maxOutputChars);
     });
-    child.once("error", reject);
+    child.once("error", (error) => {
+      settle(() => {
+        reject(error);
+      });
+    });
     if (options.input !== undefined) {
       child.stdin.end(options.input);
     } else {
       child.stdin.end();
     }
-    child.once("close", (code) => {
-      if ((code ?? 1) !== 0 && options.rejectOnFailure) {
-        reject(
-          new Error(`${executable} ${args.join(" ")} failed: ${stderr.trim() || stdout.trim()}`),
-        );
+    child.once("close", (code, signal) => {
+      if (parentSignalPending) {
+        if (processGroupIsAlive()) {
+          childClosedResult = { code, signal };
+          return;
+        }
+        if (killTimer) {
+          clearTimeout(killTimer);
+          killTimer = undefined;
+        }
+        parentSignalState.done = true;
+        maybeReraiseRunProcessParentSignal(parentSignalPending);
         return;
       }
-      resolve({ code: code ?? 1, stderr, stdout });
+      if (waitingForKillGrace && processGroupIsAlive()) {
+        childClosedResult = { code, signal };
+        return;
+      }
+      finishClose(code, signal);
     });
   });
 }
-
-async function formatGeneratedTypeScript(filePath: string, source: string): Promise<string> {
-  const result = await runProcess(
-    "pnpm",
-    ["exec", "oxfmt", "--stdin-filepath", path.relative(ROOT, filePath)],
-    {
-      input: source,
-      rejectOnFailure: true,
-    },
-  );
-  return restoreReplacementCorruptedStringLiterals(source, result.stdout);
-}
-
-function restoreReplacementCorruptedStringLiterals(source: string, formatted: string): string {
-  if (!formatted.includes("\uFFFD") || source.includes("\uFFFD")) {
-    return formatted;
-  }
-
-  const stringLiteralPattern = /"(?:\\.|[^"\\])*"/gu;
-  const sourceLiterals = [...source.matchAll(stringLiteralPattern)];
-  const formattedLiterals = [...formatted.matchAll(stringLiteralPattern)];
-  if (sourceLiterals.length !== formattedLiterals.length) {
-    return formatted;
-  }
-
-  let output = "";
-  let cursor = 0;
-  for (const [index, formattedLiteral] of formattedLiterals.entries()) {
-    const replacement = sourceLiterals[index]?.[0];
-    const literal = formattedLiteral[0];
-    const start = formattedLiteral.index;
-    if (replacement === undefined || start === undefined) {
-      return formatted;
-    }
-    output += formatted.slice(cursor, start);
-    output += literal.includes("\uFFFD") && !replacement.includes("\uFFFD") ? replacement : literal;
-    cursor = start + literal.length;
-  }
-  return `${output}${formatted.slice(cursor)}`;
-}
-
-type PendingPrompt = {
-  id: string;
-  reject: (reason?: unknown) => void;
-  resolve: (value: string) => void;
-  responseReceived: boolean;
-};
 
 type LocaleRunContext = {
   localeCount: number;
@@ -1066,12 +756,32 @@ type TranslationBatchContext = LocaleRunContext & {
   locale: string;
   splitDepth?: number;
   segmentLabel?: string;
+  validateTranslation?: TranslationValidator;
 };
 
+type TranslationValidator = (source: string, target: string, key: string, locale: string) => void;
+
 type ClientAccess = {
-  getClient: () => Promise<PiRpcClient>;
+  getClient: () => Promise<TranslationClient>;
   resetClient: () => Promise<void>;
 };
+
+function createTranslationClientAccess(
+  targetLocale: string,
+  glossary: readonly GlossaryEntry[],
+): ClientAccess {
+  let client: TranslationClient | null = null;
+  return {
+    async getClient() {
+      client ??= await TranslationClient.create(buildSystemPrompt(targetLocale, glossary));
+      return client;
+    },
+    async resetClient() {
+      await client?.close();
+      client = null;
+    },
+  };
+}
 
 function formatLocaleLabel(locale: string, context: LocaleRunContext): string {
   return `[${context.localeIndex}/${context.localeCount}] ${locale}`;
@@ -1108,195 +818,76 @@ function buildTranslationBatches(items: readonly TranslationBatchItem[]): Transl
   return batches;
 }
 
-class PiRpcClient {
-  private readonly stderrChunks: string[] = [];
+export function resolveTranslationModel(): Model {
+  const provider = resolveKnownTranslationProvider();
+  const modelId = resolveConfiguredModel();
+  return {
+    ...TRANSLATION_PROVIDER_DEFAULTS[provider],
+    id: modelId,
+    name: modelId,
+  };
+}
+
+class TranslationClient {
   private closed = false;
-  private pending: PendingPrompt | null = null;
-  private readonly process: ChildProcessWithoutNullStreams;
-  private readonly stdin: ChildProcessWithoutNullStreams["stdin"];
-  private requestCount = 0;
   private sequence: Promise<unknown> = Promise.resolve();
+  private readonly model: Model;
+  private readonly systemPrompt: string;
 
-  private constructor(processHandle: ChildProcessWithoutNullStreams) {
-    this.process = processHandle;
-    this.stdin = processHandle.stdin;
+  private constructor(systemPrompt: string) {
+    this.systemPrompt = systemPrompt;
+    this.model = resolveTranslationModel();
   }
 
-  static async create(systemPrompt: string): Promise<PiRpcClient> {
-    const command = await resolvePiCommand();
-    const args = [
-      ...command.args,
-      "--mode",
-      "rpc",
-      "--provider",
-      resolveConfiguredProvider(),
-      "--model",
-      resolveConfiguredModel(),
-      "--thinking",
-      resolveThinkingLevel(),
-      "--no-session",
-      "--system-prompt",
-      systemPrompt,
-    ];
-    const child = spawn(command.executable, args, {
-      cwd: ROOT,
-      env: process.env,
-      stdio: ["pipe", "pipe", "pipe"],
-    });
-
-    const client = new PiRpcClient(child);
-    client.bindProcess();
-    await client.waitForBoot();
-    return client;
-  }
-
-  private bindProcess() {
-    const stderr = createInterface({ input: this.process.stderr });
-    stderr.on("line", (line) => {
-      this.stderrChunks.push(line);
-    });
-
-    const stdout = createInterface({ input: this.process.stdout });
-    stdout.on("line", (line) => {
-      void this.handleStdoutLine(line);
-    });
-
-    this.process.once("error", (error) => {
-      this.rejectPending(error);
-    });
-
-    this.process.once("close", () => {
-      this.closed = true;
-      this.rejectPending(
-        new Error(`pi process closed${this.stderr() ? ` (${this.stderr()})` : ""}`),
-      );
-    });
-  }
-
-  private async waitForBoot() {
-    await sleep(150);
-  }
-
-  private stderr() {
-    return this.stderrChunks.join("\n").trim();
-  }
-
-  private rejectPending(error: Error) {
-    const pending = this.pending;
-    this.pending = null;
-    if (pending) {
-      pending.reject(error);
-    }
-  }
-
-  private async handleStdoutLine(line: string) {
-    const trimmed = line.trim();
-    if (!trimmed) {
-      return;
-    }
-    let parsed: Record<string, unknown>;
-    try {
-      parsed = JSON.parse(trimmed) as Record<string, unknown>;
-    } catch {
-      return;
-    }
-
-    const pending = this.pending;
-    if (!pending) {
-      return;
-    }
-
-    switch (parsed.type) {
-      case "response": {
-        if (parsed.id !== pending.id) {
-          return;
-        }
-        const success = parsed.success === true;
-        if (!success) {
-          const errorText =
-            typeof parsed.error === "string" && parsed.error.trim()
-              ? parsed.error.trim()
-              : "pi prompt failed";
-          this.pending = null;
-          pending.reject(new Error(errorText));
-          return;
-        }
-        pending.responseReceived = true;
-        return;
-      }
-      case "agent_end": {
-        try {
-          const result = extractTranslationResult(parsed);
-          this.pending = null;
-          pending.resolve(result);
-        } catch (error) {
-          this.pending = null;
-          pending.reject(error);
-        }
-      }
-    }
+  static async create(systemPrompt: string): Promise<TranslationClient> {
+    return new TranslationClient(systemPrompt);
   }
 
   async prompt(message: string, label: string): Promise<string> {
     const result = this.sequence.then(async () => {
       if (this.closed) {
-        throw new Error(`pi process unavailable${this.stderr() ? ` (${this.stderr()})` : ""}`);
+        throw new Error("translation runtime unavailable");
       }
 
-      const id = `req-${++this.requestCount}`;
-      const payload = JSON.stringify({ type: "prompt", id, message });
       const timeoutMs = resolvePromptTimeoutMs();
       const startedAt = Date.now();
+      const controller = new AbortController();
 
       return await new Promise<string>((resolve, reject) => {
         const heartbeat = setInterval(() => {
-          const responseState = this.pending?.responseReceived
-            ? "response=received"
-            : "response=pending";
           logProgress(
-            `${label}: still waiting (${formatDuration(Date.now() - startedAt)} / ${formatDuration(timeoutMs)}, ${responseState})`,
+            `${label}: still waiting (${formatDuration(Date.now() - startedAt)} / ${formatDuration(timeoutMs)})`,
           );
         }, PROGRESS_HEARTBEAT_MS);
         const timer = setTimeout(() => {
-          if (this.pending?.id === id) {
-            this.pending = null;
-            clearInterval(heartbeat);
-            void this.close();
-            const stderr = this.stderr();
-            reject(
-              new Error(
-                `${label}: translation prompt timed out after ${timeoutMs}ms${stderr ? ` (pi stderr: ${stderr})` : ""}`,
-              ),
-            );
-          }
+          clearInterval(heartbeat);
+          controller.abort();
+          reject(new Error(`${label}: translation prompt timed out after ${timeoutMs}ms`));
         }, timeoutMs);
 
-        this.pending = {
-          id,
-          reject: (reason) => {
+        completeSimple(
+          this.model,
+          {
+            systemPrompt: this.systemPrompt,
+            messages: [{ role: "user", content: message, timestamp: Date.now() }],
+          },
+          {
+            maxTokens: 4096,
+            reasoning: resolveThinkingLevel(),
+            signal: controller.signal,
+            timeoutMs,
+          },
+        )
+          .then((assistantMessage) => {
             clearTimeout(timer);
             clearInterval(heartbeat);
-            reject(reason);
-          },
-          resolve: (value) => {
+            resolve(extractTranslationResult(assistantMessage));
+          })
+          .catch((error: unknown) => {
             clearTimeout(timer);
             clearInterval(heartbeat);
-            resolve(value);
-          },
-          responseReceived: false,
-        };
-
-        this.stdin.write(`${payload}\n`, (error) => {
-          if (!error) {
-            return;
-          }
-          clearTimeout(timer);
-          clearInterval(heartbeat);
-          if (this.pending?.id === id) {
-            this.pending = null;
-          }
-          reject(error);
-        });
+            reject(toLintErrorObject(error, "Non-Error rejection"));
+          });
       });
     });
 
@@ -1309,44 +900,50 @@ class PiRpcClient {
       return;
     }
     this.closed = true;
-    this.stdin.end();
-    this.process.kill("SIGTERM");
-    await sleep(150);
-    if (!this.process.killed) {
-      this.process.kill("SIGKILL");
-    }
   }
 }
 
-function extractTranslationResult(payload: Record<string, unknown>): string {
-  const messages = Array.isArray(payload.messages) ? payload.messages : [];
-  for (let index = messages.length - 1; index >= 0; index -= 1) {
-    const message = messages[index];
-    if (!message || typeof message !== "object") {
-      continue;
-    }
-    if ((message as { role?: string }).role !== "assistant") {
-      continue;
-    }
-    const errorMessage = (message as { errorMessage?: string }).errorMessage;
-    const stopReason = (message as { stopReason?: string }).stopReason;
-    if (errorMessage || stopReason === "error") {
-      throw new Error(errorMessage?.trim() || "pi error");
-    }
-    const content = (message as { content?: unknown }).content;
-    if (typeof content === "string") {
-      return content;
-    }
-    if (Array.isArray(content)) {
-      return content
-        .filter((block): block is { type?: string; text?: string } =>
-          Boolean(block && typeof block === "object"),
-        )
-        .map((block) => (block.type === "text" && typeof block.text === "string" ? block.text : ""))
-        .join("");
-    }
+function extractTranslationResult(message: AssistantMessage): string {
+  if (message.errorMessage || message.stopReason === "error") {
+    throw new Error(message.errorMessage?.trim() || "translation provider error");
   }
-  throw new Error("assistant translation not found");
+  const text = message.content
+    .map((block) => (block.type === "text" ? block.text : ""))
+    .join("")
+    .trim();
+  if (!text) {
+    throw new Error("assistant translation not found");
+  }
+  return text;
+}
+
+// Models intermittently wrap the JSON reply in a Markdown code fence even
+// when told not to; strip it instead of burning a retry on a parse error.
+function parseTranslationReply(raw: string): Record<string, unknown> {
+  const trimmed = raw.trim();
+  const fenced = /^```(?:json)?\s*\n([\s\S]*?)\n```\s*$/.exec(trimmed);
+  const json = fenced ? expectDefined(fenced[1], "fenced translation JSON body") : trimmed;
+  return JSON.parse(json);
+}
+
+export function parseTranslationBatchReply(
+  raw: string,
+  items: readonly TranslationBatchItem[],
+  locale: string,
+  validateTranslation?: TranslationValidator,
+): Map<string, string> {
+  const parsed = parseTranslationReply(raw);
+  const translated = new Map<string, string>();
+  for (const item of items) {
+    const value = parsed[item.key];
+    if (typeof value !== "string" || !value.trim()) {
+      throw new Error(`missing translation for ${item.key}`);
+    }
+    validateTranslation?.(item.text, value, item.key, locale);
+    translated.set(item.key, value);
+  }
+  assertPlaceholderParity(new Map(items.map((item) => [item.key, item.text])), translated, locale);
+  return translated;
 }
 
 async function translateBatch(
@@ -1357,28 +954,31 @@ async function translateBatch(
   const batchLabel = formatBatchLabel(context);
   const splitDepth = context.splitDepth ?? 0;
   let lastError: Error | null = null;
+  let validationError: string | undefined;
   for (let attempt = 0; attempt < TRANSLATE_MAX_ATTEMPTS; attempt += 1) {
     const attemptNumber = attempt + 1;
     const attemptLabel = `${batchLabel} attempt ${attemptNumber}/${TRANSLATE_MAX_ATTEMPTS}`;
     const startedAt = Date.now();
     logProgress(`${attemptLabel}: start keys=${items.length}`);
+    let promptCompleted = false;
     try {
       const raw = await (
         await clientAccess.getClient()
-      ).prompt(buildBatchPrompt(items), attemptLabel);
-      const parsed = JSON.parse(raw) as Record<string, unknown>;
-      const translated = new Map<string, string>();
-      for (const item of items) {
-        const value = parsed[item.key];
-        if (typeof value !== "string" || !value.trim()) {
-          throw new Error(`missing translation for ${item.key}`);
-        }
-        translated.set(item.key, value);
-      }
+      ).prompt(buildBatchPrompt(items, validationError), attemptLabel);
+      promptCompleted = true;
+      const translated = parseTranslationBatchReply(
+        raw,
+        items,
+        context.locale,
+        context.validateTranslation,
+      );
       logProgress(`${attemptLabel}: done (${formatDuration(Date.now() - startedAt)})`);
       return translated;
     } catch (error) {
       lastError = error instanceof Error ? error : new Error(String(error));
+      if (promptCompleted) {
+        validationError = lastError.message;
+      }
       await clientAccess.resetClient();
       logProgress(
         `${attemptLabel}: failed after ${formatDuration(Date.now() - startedAt)}: ${lastError.message}`,
@@ -1413,6 +1013,50 @@ async function translateBatch(
   throw lastError ?? new Error("translation failed");
 }
 
+type NativeTranslationEntry = {
+  id: string;
+  source: string;
+  sourcePath: string;
+};
+
+export async function translateNativeEntries(
+  entries: readonly NativeTranslationEntry[],
+  targetLocale: string,
+  glossary: readonly GlossaryEntry[] = [],
+  validateTranslation?: TranslationValidator,
+): Promise<Map<string, string>> {
+  if (!hasTranslationProvider()) {
+    throw new Error("native app translation requires OPENAI_API_KEY or ANTHROPIC_API_KEY");
+  }
+  const pending = entries.map((entry) => ({
+    cacheKey: cacheKey(entry.id, hashControlUiTranslationText(entry.source), targetLocale),
+    key: entry.id,
+    text: entry.source,
+    textHash: hashControlUiTranslationText(entry.source),
+  }));
+  const batches = buildTranslationBatches(pending);
+  const clientAccess = createTranslationClientAccess(targetLocale, glossary);
+  try {
+    const translated = new Map<string, string>();
+    for (const [batchIndex, batch] of batches.entries()) {
+      const result = await translateBatch(clientAccess, batch, {
+        locale: targetLocale,
+        localeCount: 1,
+        localeIndex: 1,
+        batchCount: batches.length,
+        batchIndex: batchIndex + 1,
+        validateTranslation,
+      });
+      for (const [id, value] of result) {
+        translated.set(id, value);
+      }
+    }
+    return translated;
+  } finally {
+    await clientAccess.resetClient();
+  }
+}
+
 type SyncOutcome = {
   changed: boolean;
   fallbackCount: number;
@@ -1420,97 +1064,80 @@ type SyncOutcome = {
   wrote: boolean;
 };
 
+export function assertNoControlUiFallbacks(
+  outcomes: ReadonlyArray<Pick<SyncOutcome, "fallbackCount" | "locale">>,
+) {
+  const fallbackLocales = outcomes.filter((outcome) => outcome.fallbackCount > 0);
+  if (fallbackLocales.length === 0) {
+    return;
+  }
+  throw new Error(
+    [
+      "control-ui-i18n generated locales still contain English fallbacks.",
+      ...fallbackLocales.map(
+        (outcome) => `${outcome.locale}: ${outcome.fallbackCount} fallback keys`,
+      ),
+    ].join("\n"),
+  );
+}
+
 async function syncLocale(
   entry: LocaleEntry,
-  options: { checkOnly: boolean; force: boolean; write: boolean },
+  options: { allowTranslate: boolean; checkOnly: boolean; force: boolean; write: boolean },
   context: LocaleRunContext,
 ) {
   const localeLabel = formatLocaleLabel(entry.locale, context);
   const localeStartedAt = Date.now();
-  const sourceRaw = await readFile(SOURCE_LOCALE_PATH, "utf8");
+  const sourceRaw = await readControlUiSourceCatalog();
   const sourceHash = sha256(sourceRaw);
-  const sourceMap = (await loadLocaleMap(SOURCE_LOCALE_PATH, "en")) ?? {};
+  const sourceMap = loadControlUiSourceCatalog();
   const sourceFlat = flattenTranslations(sourceMap);
-  const existingPath = localeFilePath(entry);
-  const existingMap = (await loadLocaleMap(existingPath, entry.exportName)) ?? {};
+  const tm = loadControlUiTranslationMemory(tmPath(entry));
+  const existingMap = materializeControlUiLocaleCatalog(sourceFlat, tm);
   const existingFlat = flattenTranslations(existingMap);
+  // Placeholder changes invalidate the old translation even when the key stays
+  // stable. Treat it as pending so the locale bot can repair source-only PRs.
+  const reusableExistingFlat = filterPlaceholderCompatibleTranslations(sourceFlat, existingFlat);
   const previousMeta = await loadMeta(metaPath(entry));
-  const previousFallbackKeys = new Set(previousMeta?.fallbackKeys ?? []);
   const glossaryFilePath = glossaryPath(entry);
   const glossary = await loadGlossary(glossaryFilePath);
-  const tm = await loadTranslationMemory(tmPath(entry));
-  const tmByTextHash = buildTranslationMemoryByTextHash(tm, entry.locale);
-  const allowTranslate = hasTranslationProvider();
+  const allowTranslate = options.allowTranslate;
+  const plan = createControlUiLocaleSyncPlan({
+    allowTranslate,
+    cacheKeyFor: (key, textHash) => cacheKey(key, textHash, entry.locale),
+    entry,
+    existingFlat: reusableExistingFlat,
+    force: options.force,
+    hashText: hashControlUiTranslationText,
+    previousMeta,
+    sourceFlat,
+    sourceHash,
+    translationMemory: tm,
+  });
 
-  const nextFlat = new Map<string, string>();
-  const pending: TranslationBatchItem[] = [];
-  const fallbackKeys: string[] = [];
-
-  for (const [key, text] of sourceFlat.entries()) {
-    const textHash = hashText(text);
-    const segmentCacheKey = cacheKey(key, textHash, entry.locale);
-    const cached = tm.get(segmentCacheKey);
-    const cachedByText = tmByTextHash.get(textHash);
-    const existing = existingFlat.get(key);
-    const shouldRefreshFallback = previousFallbackKeys.has(key);
-
-    if (cached && !(allowTranslate && shouldRefreshFallback)) {
-      nextFlat.set(key, cached.translated);
-      if (shouldRefreshFallback) {
-        fallbackKeys.push(key);
-      }
-      continue;
+  // Writing NEW English fallbacks trips the shipped-fallback CI gate
+  // (test/scripts/control-ui-i18n.test.ts), and post-merge translation is owned
+  // by the control-ui-locale-refresh workflow. An unauthenticated local sync
+  // must fail here instead of silently recording fallback bundles; refreshing
+  // already-recorded fallback copy (force mode) stays allowed.
+  if (!allowTranslate && options.write && !options.checkOnly && !isProviderAuthOptional()) {
+    if (plan.newFallbackCount > 0) {
+      throw new Error(
+        `${localeLabel}: ${plan.newFallbackCount} new key(s) need translation but no provider is configured. ` +
+          `Commit only locales/en.ts and let the control-ui-locale-refresh workflow translate after merge, ` +
+          `or export ANTHROPIC_API_KEY/OPENAI_API_KEY and rerun. ` +
+          `Set ${ENV_AUTH_OPTIONAL}=1 to record English fallbacks anyway.`,
+      );
     }
-
-    if (cachedByText && (shouldRefreshFallback || existing === undefined)) {
-      nextFlat.set(key, cachedByText.translated);
-      tm.set(segmentCacheKey, {
-        ...cachedByText,
-        cache_key: segmentCacheKey,
-        segment_id: key,
-        source_path: `ui/src/i18n/locales/${entry.fileName}`,
-      });
-      continue;
-    }
-
-    if (existing !== undefined && !(allowTranslate && shouldRefreshFallback)) {
-      nextFlat.set(key, existing);
-      if (shouldRefreshFallback) {
-        fallbackKeys.push(key);
-      }
-      continue;
-    }
-
-    pending.push({
-      cacheKey: segmentCacheKey,
-      key,
-      text,
-      textHash,
-    });
   }
 
-  if (allowTranslate && pending.length > 0) {
-    const batches = buildTranslationBatches(pending);
+  if (allowTranslate && plan.pending.length > 0) {
+    const batches = buildTranslationBatches(plan.pending);
     const batchCount = batches.length;
     logProgress(
-      `${localeLabel}: start keys=${sourceFlat.size} pending=${pending.length} batches=${batchCount} provider=${resolveConfiguredProvider()} model=${resolveConfiguredModel()} thinking=${resolveThinkingLevel()} timeout=${formatDuration(resolvePromptTimeoutMs())} batch_chars=${resolveBatchCharBudget()}`,
+      `${localeLabel}: start keys=${sourceFlat.size} pending=${plan.pending.length} batches=${batchCount} provider=${resolveConfiguredProvider()} model=${resolveConfiguredModel()} thinking=${resolveThinkingLevel()} timeout=${formatDuration(resolvePromptTimeoutMs())} batch_chars=${resolveBatchCharBudget()}`,
     );
-    let client: PiRpcClient | null = null;
-    const clientAccess: ClientAccess = {
-      async getClient() {
-        if (!client) {
-          client = await PiRpcClient.create(buildSystemPrompt(entry.locale, glossary));
-        }
-        return client;
-      },
-      async resetClient() {
-        if (!client) {
-          return;
-        }
-        await client.close();
-        client = null;
-      },
-    };
+    const clientAccess = createTranslationClientAccess(entry.locale, glossary);
     try {
       for (const [batchIndex, batch] of batches.entries()) {
         const translated = await translateBatch(clientAccess, batch, {
@@ -1519,27 +1146,25 @@ async function syncLocale(
           batchIndex: batchIndex + 1,
           locale: entry.locale,
         });
-        for (const item of batch) {
-          const value = translated.get(item.key);
-          if (!value) {
-            continue;
-          }
-          nextFlat.set(item.key, value);
-          tm.set(item.cacheKey, {
-            cache_key: item.cacheKey,
-            model: resolveConfiguredModel(),
-            provider: resolveConfiguredProvider(),
-            segment_id: item.key,
-            source_path: `ui/src/i18n/locales/${entry.fileName}`,
-            src_lang: SOURCE_LOCALE,
-            text: item.text,
-            text_hash: item.textHash,
-            tgt_lang: entry.locale,
-            translated: value,
-            updated_at: new Date().toISOString(),
-          });
-        }
+        plan.recordTranslations(batch, translated, {
+          model: resolveConfiguredModel(),
+          provider: resolveConfiguredProvider(),
+          sourceLocale: SOURCE_LOCALE,
+          updatedAt: () => new Date().toISOString(),
+        });
       }
+    } catch (error) {
+      const failure = error instanceof Error ? error : new Error(String(error));
+      if (isProviderAuthOptional() && isProviderAuthError(failure)) {
+        logProgress(`${localeLabel}: translation provider auth failed; skipping refresh`);
+        return {
+          changed: false,
+          fallbackCount: previousMeta?.fallbackKeys.length ?? 0,
+          locale: entry.locale,
+          wrote: false,
+        } satisfies SyncOutcome;
+      }
+      throw failure;
     } finally {
       await clientAccess.resetClient();
     }
@@ -1551,74 +1176,31 @@ async function syncLocale(
     logProgress(`${localeLabel}: no provider configured, using English fallback for pending keys`);
   }
 
-  for (const item of pending) {
-    if (nextFlat.has(item.key)) {
-      continue;
-    }
-    const existing = existingFlat.get(item.key);
-    if (existing !== undefined && !options.force) {
-      nextFlat.set(item.key, existing);
-      if (previousFallbackKeys.has(item.key)) {
-        fallbackKeys.push(item.key);
-      }
-      continue;
-    }
-    nextFlat.set(item.key, item.text);
-    fallbackKeys.push(item.key);
-  }
-
   // Do not infer fallback state from source-text equality alone.
   // Product names, config keys, and other intentional carry-through strings may
   // legitimately stay identical to English. Track fallback keys from actual
   // fallback decisions and previous fallback metadata instead.
 
-  assertPlaceholderParity(sourceFlat, nextFlat, entry.locale);
-
-  const nextMap: TranslationMap = {};
-  for (const [key, value] of sourceFlat.entries()) {
-    setNestedValue(nextMap, key, nextFlat.get(key) ?? value);
-  }
-
-  const nextProvider = allowTranslate
-    ? resolveConfiguredProvider()
-    : (previousMeta?.provider ?? "");
-  const nextModel = allowTranslate ? resolveConfiguredModel() : (previousMeta?.model ?? "");
-  const sortedFallbackKeys = [...new Set(fallbackKeys)].toSorted((left, right) =>
-    left.localeCompare(right),
-  );
-  const translatedKeys = sourceFlat.size - sortedFallbackKeys.length;
-  const semanticMetaChanged =
-    !previousMeta ||
-    previousMeta.locale !== entry.locale ||
-    previousMeta.sourceHash !== sourceHash ||
-    previousMeta.provider !== nextProvider ||
-    previousMeta.model !== nextModel ||
-    previousMeta.totalKeys !== sourceFlat.size ||
-    previousMeta.translatedKeys !== translatedKeys ||
-    previousMeta.workflow !== CONTROL_UI_I18N_WORKFLOW ||
-    !compareStringArrays(previousMeta.fallbackKeys, sortedFallbackKeys);
-
-  const nextMeta: LocaleMeta = {
-    fallbackKeys: sortedFallbackKeys,
-    generatedAt: semanticMetaChanged ? new Date().toISOString() : previousMeta.generatedAt,
-    locale: entry.locale,
-    model: nextModel,
-    provider: nextProvider,
-    sourceHash,
-    totalKeys: sourceFlat.size,
-    translatedKeys,
+  const provenance = resolveLocaleMetaProvenance({
+    didTranslate: allowTranslate && plan.pending.length > 0,
+    model: allowTranslate ? resolveConfiguredModel() : "",
+    previousMeta,
+    provider: allowTranslate ? resolveConfiguredProvider() : "",
+  });
+  const artifacts = plan.render({
+    defaultGlossary: DEFAULT_GLOSSARY,
+    generatedAt: new Date().toISOString(),
+    glossary,
+    model: provenance.model,
+    provider: provenance.provider,
     workflow: CONTROL_UI_I18N_WORKFLOW,
-  };
+  });
+  assertPlaceholderParity(sourceFlat, artifacts.nextFlat, entry.locale);
 
-  const expectedLocale = await formatGeneratedTypeScript(
-    existingPath,
-    renderLocaleModule(entry, nextMap),
-  );
-  const expectedMeta = renderMeta(nextMeta);
-  const expectedGlossary = renderGlossary(glossary.length === 0 ? DEFAULT_GLOSSARY : glossary);
-  const expectedTm = renderTranslationMemory(tm);
+  const expectedMeta = artifacts.meta;
+  const expectedGlossary = artifacts.glossary;
+  const expectedTm = artifacts.translationMemory;
 
-  const currentLocale = existsSync(existingPath) ? await readFile(existingPath, "utf8") : "";
   const currentMeta = existsSync(metaPath(entry)) ? await readFile(metaPath(entry), "utf8") : "";
   const currentGlossary = existsSync(glossaryFilePath)
     ? await readFile(glossaryFilePath, "utf8")
@@ -1626,7 +1208,6 @@ async function syncLocale(
   const currentTm = existsSync(tmPath(entry)) ? await readFile(tmPath(entry), "utf8") : "";
 
   const changed =
-    currentLocale !== expectedLocale ||
     currentMeta !== expectedMeta ||
     currentGlossary !== expectedGlossary ||
     currentTm !== expectedTm;
@@ -1639,20 +1220,18 @@ async function syncLocale(
       !options.write)
   ) {
     logProgress(
-      `${localeLabel}: done changed=${changed} fallbacks=${nextMeta.fallbackKeys.length} elapsed=${formatDuration(Date.now() - localeStartedAt)}`,
+      `${localeLabel}: done changed=${changed} fallbacks=${artifacts.fallbackCount} elapsed=${formatDuration(Date.now() - localeStartedAt)}`,
     );
     return {
       changed,
-      fallbackCount: nextMeta.fallbackKeys.length,
+      fallbackCount: artifacts.fallbackCount,
       locale: entry.locale,
       wrote: false,
     } satisfies SyncOutcome;
   }
 
   if (!options.checkOnly && options.write) {
-    await mkdir(LOCALES_DIR, { recursive: true });
     await mkdir(I18N_ASSETS_DIR, { recursive: true });
-    await writeFile(existingPath, expectedLocale, "utf8");
     await writeFile(metaPath(entry), expectedMeta, "utf8");
     await writeFile(glossaryFilePath, expectedGlossary, "utf8");
     if (expectedTm) {
@@ -1663,51 +1242,29 @@ async function syncLocale(
   }
 
   logProgress(
-    `${localeLabel}: done changed=${changed} fallbacks=${nextMeta.fallbackKeys.length} elapsed=${formatDuration(Date.now() - localeStartedAt)}${!options.checkOnly && options.write && changed ? " wrote" : ""}`,
+    `${localeLabel}: done changed=${changed} fallbacks=${artifacts.fallbackCount} elapsed=${formatDuration(Date.now() - localeStartedAt)}${!options.checkOnly && options.write && changed ? " wrote" : ""}`,
   );
   return {
     changed,
-    fallbackCount: nextMeta.fallbackKeys.length,
+    fallbackCount: artifacts.fallbackCount,
     locale: entry.locale,
     wrote: !options.checkOnly && options.write && changed,
   } satisfies SyncOutcome;
 }
 
-async function verifyRuntimeLocaleConfig() {
-  const registryRaw = await readFile(
-    path.join(ROOT, "ui", "src", "i18n", "lib", "registry.ts"),
-    "utf8",
-  );
-  const typesRaw = await readFile(path.join(ROOT, "ui", "src", "i18n", "lib", "types.ts"), "utf8");
-  const expectedLocaleSnippets = LOCALE_ENTRIES.map((entry) => entry.locale);
-  for (const locale of expectedLocaleSnippets) {
-    if (!registryRaw.includes(`"${locale}"`) || !typesRaw.includes(`| "${locale}"`)) {
-      throw new Error(`runtime locale config is missing ${locale}`);
-    }
-  }
-
-  const enMap = (await loadLocaleMap(SOURCE_LOCALE_PATH, "en")) ?? {};
-  const languageMap = enMap.languages;
-  const languageKeys =
-    languageMap && typeof languageMap === "object"
-      ? Object.keys(languageMap).toSorted((left, right) => left.localeCompare(right))
-      : [];
-  const expectedLanguageKeys = ["en", ...LOCALE_ENTRIES.map((entry) => entry.languageKey)].toSorted(
-    (left, right) => left.localeCompare(right),
-  );
-  if (!compareStringArrays(languageKeys, expectedLanguageKeys)) {
-    throw new Error(
-      `ui/src/i18n/locales/en.ts languages block is out of sync: expected ${expectedLanguageKeys.join(", ")}, got ${languageKeys.join(", ")}`,
-    );
-  }
-}
-
 async function main() {
   const args = parseArgs(process.argv.slice(2));
-  await verifyRuntimeLocaleConfig();
-  if (args.command === "check" || (args.command === "sync" && args.write && !args.localeFilter)) {
+  if (args.command === "check") {
+    await verifyControlUiGeneratedCatalogs({
+      checkOnly: true,
+      write: false,
+    });
+  } else {
+    await verifyRuntimeLocaleConfig();
+  }
+  if (args.command === "sync" && args.write && !args.localeFilter) {
     await syncControlUiRawCopyBaseline({
-      checkOnly: args.command === "check",
+      checkOnly: false,
       write: args.write,
     });
   }
@@ -1720,14 +1277,16 @@ async function main() {
     throw new Error(`unknown locale: ${args.localeFilter}`);
   }
 
+  const allowTranslate = args.command === "sync" && hasTranslationProvider();
   logProgress(
-    `command=${args.command} locales=${entries.length} provider=${hasTranslationProvider() ? resolveConfiguredProvider() : "fallback-only"} model=${hasTranslationProvider() ? resolveConfiguredModel() : "n/a"} thinking=${hasTranslationProvider() ? resolveThinkingLevel() : "n/a"} timeout=${formatDuration(resolvePromptTimeoutMs())} batch_chars=${resolveBatchCharBudget()}`,
+    `command=${args.command} locales=${entries.length} provider=${allowTranslate ? resolveConfiguredProvider() : "disabled"} model=${allowTranslate ? resolveConfiguredModel() : "n/a"} thinking=${allowTranslate ? resolveThinkingLevel() : "n/a"} timeout=${formatDuration(resolvePromptTimeoutMs())} batch_chars=${resolveBatchCharBudget()}`,
   );
   const outcomes: SyncOutcome[] = [];
   for (const [index, entry] of entries.entries()) {
     const outcome = await syncLocale(
       entry,
       {
+        allowTranslate,
         checkOnly: args.command === "check",
         force: args.force,
         write: args.write,
@@ -1749,13 +1308,26 @@ async function main() {
     .join("\n");
   process.stdout.write(`${summary}\n`);
 
-  if (args.command === "check" && changed.length > 0) {
-    throw new Error(
-      [
-        "control-ui-i18n drift detected.",
-        "Run `node --import tsx scripts/control-ui-i18n.ts sync --write` and commit the results.",
-      ].join("\n"),
-    );
+  if (args.command === "sync" && args.write) {
+    await syncControlUiCatalogFallbackBaseline({
+      // A scoped matrix worker can observe unsynced sibling locales. The final
+      // aggregate sync still rebuilds and validates the complete catalog.
+      allowCatalogDrift: Boolean(args.localeFilter),
+      checkOnly: false,
+      write: true,
+    });
+  }
+
+  if (args.command === "check") {
+    assertNoControlUiFallbacks(outcomes);
+    if (changed.length > 0) {
+      throw new Error(
+        [
+          "control-ui-i18n drift detected.",
+          "Run `node --import tsx scripts/control-ui-i18n.ts sync --write` and commit the results.",
+        ].join("\n"),
+      );
+    }
   }
 
   if (args.command === "sync" && !args.write && changed.length > 0) {
@@ -1771,7 +1343,7 @@ function isCliEntrypoint() {
 }
 
 if (isCliEntrypoint()) {
-  await main().catch((error) => {
+  await main().catch((error: unknown) => {
     console.error(formatErrorMessage(error));
     process.exit(1);
   });

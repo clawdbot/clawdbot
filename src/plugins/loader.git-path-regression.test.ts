@@ -1,7 +1,8 @@
-import { execFileSync } from "node:child_process";
+// Regresses plugin loader behavior for git-path install records.
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { execNodeEvalSync } from "../test-utils/node-process.js";
 import {
   cleanupTrackedTempDirs,
   makeTrackedTempDir,
@@ -31,7 +32,7 @@ describe("plugin loader git path regression", () => {
     fs.writeFileSync(sourceLoaderBaseFile, "export {};\n", "utf-8");
     fs.writeFileSync(
       path.join(copiedSourceDir, "channel.runtime.ts"),
-      `import { resolveOutboundSendDep } from "openclaw/plugin-sdk/outbound-send-deps";
+      `import { resolveOutboundSendDep } from "openclaw/plugin-sdk/channel-outbound";
 import { PAIRING_APPROVED_MESSAGE } from "../runtime-api.js";
 
 export const copiedRuntimeMarker = {
@@ -47,7 +48,7 @@ export const copiedRuntimeMarker = {
 `,
       "utf-8",
     );
-    const copiedChannelRuntimeShim = path.join(copiedPluginSdkDir, "outbound-send-deps.ts");
+    const copiedChannelRuntimeShim = path.join(copiedPluginSdkDir, "channel-outbound.ts");
     fs.writeFileSync(
       copiedChannelRuntimeShim,
       `export function resolveOutboundSendDep() {
@@ -75,7 +76,7 @@ export const copiedRuntimeMarker = {
         tryNative: false,
         extensions: [".ts", ".tsx", ".mts", ".cts", ".mtsx", ".ctsx", ".js", ".mjs", ".cjs", ".json"],
         alias: {
-          "openclaw/plugin-sdk/outbound-send-deps": ${JSON.stringify(copiedChannelRuntimeShim)},
+          "openclaw/plugin-sdk/channel-outbound": ${JSON.stringify(copiedChannelRuntimeShim)},
         },
       });
       const mod = withAlias(${JSON.stringify(copiedChannelRuntime)});
@@ -85,9 +86,8 @@ export const copiedRuntimeMarker = {
         dep: mod.copiedRuntimeMarker?.resolveOutboundSendDep?.(),
       }));
     `;
-    const raw = execFileSync(process.execPath, ["--input-type=module", "--eval", script], {
+    const raw = execNodeEvalSync(script, {
       cwd: process.cwd(),
-      encoding: "utf-8",
     });
     const result = JSON.parse(raw) as {
       withoutAliasThrew: boolean;

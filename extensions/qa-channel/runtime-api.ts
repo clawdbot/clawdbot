@@ -1,3 +1,4 @@
+// Qa Channel API module exposes the plugin public contract.
 export {
   buildChannelConfigSchema,
   buildChannelOutboundSessionRoute,
@@ -10,7 +11,6 @@ export {
   createDefaultChannelRuntimeState,
   createPluginRuntimeStore,
   defineChannelPluginEntry,
-  dispatchChannelMessageReplyWithBase,
   getChatChannelMeta,
   jsonResult,
   type OpenClawConfig,

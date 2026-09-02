@@ -1,31 +1,44 @@
+// Runs music generation requests through provider runtimes and fallbacks.
 import type { FallbackAttempt } from "../agents/model-fallback.types.js";
+import { resolveAgentModelTimeoutMsValue } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { parseMusicGenerationModelRef } from "../media-generation/model-ref.js";
+import {
+  getMusicGenerationProvider,
+  listMusicGenerationProviders,
+} from "../media-generation/registry.js";
 import {
   buildMediaGenerationNormalizationMetadata,
   buildNoCapabilityModelConfiguredMessage,
   recordCapabilityCandidateFailure,
   resolveCapabilityModelCandidates,
+  resolveReferenceImageCapabilityError,
   throwCapabilityGenerationFailure,
 } from "../media-generation/runtime-shared.js";
 import { getProviderEnvVars } from "../secrets/provider-env-vars.js";
-import { parseMusicGenerationModelRef } from "./model-ref.js";
 import { resolveMusicGenerationOverrides } from "./normalization.js";
-import { getMusicGenerationProvider, listMusicGenerationProviders } from "./provider-registry.js";
 import type { GenerateMusicParams, GenerateMusicRuntimeResult } from "./runtime-types.js";
 import type { MusicGenerationResult } from "./types.js";
 
+/**
+ * Music generation runtime orchestration.
+ *
+ * The runtime resolves provider/model candidates, applies capability-based
+ * normalization, invokes providers, and records fallback attempts consistently
+ * with other media generation capabilities.
+ */
 const log = createSubsystemLogger("music-generation");
 
-export type MusicGenerationRuntimeDeps = {
+/** Injectable dependencies used by tests and alternate runtime hosts. */
+type MusicGenerationRuntimeDeps = {
   getProvider?: typeof getMusicGenerationProvider;
   listProviders?: typeof listMusicGenerationProviders;
   getProviderEnvVars?: typeof getProviderEnvVars;
   log?: Pick<typeof log, "debug">;
 };
 
-export type { GenerateMusicParams, GenerateMusicRuntimeResult } from "./runtime-types.js";
-
+/** List runtime-visible music generation providers for a config snapshot. */
 export function listRuntimeMusicGenerationProviders(
   params?: { config?: OpenClawConfig },
   deps: MusicGenerationRuntimeDeps = {},
@@ -33,6 +46,7 @@ export function listRuntimeMusicGenerationProviders(
   return (deps.listProviders ?? listMusicGenerationProviders)(params?.config);
 }
 
+/** Generate music with provider fallback and capability-aware request normalization. */
 export async function generateMusic(
   params: GenerateMusicParams,
   deps: MusicGenerationRuntimeDeps = {},
@@ -40,9 +54,12 @@ export async function generateMusic(
   const getProvider = deps.getProvider ?? getMusicGenerationProvider;
   const listProviders = deps.listProviders ?? listMusicGenerationProviders;
   const logger = deps.log ?? log;
+  const timeoutMs =
+    params.timeoutMs ??
+    resolveAgentModelTimeoutMsValue(params.cfg.agents?.defaults?.mediaModels?.music);
   const candidates = resolveCapabilityModelCandidates({
     cfg: params.cfg,
-    modelConfig: params.cfg.agents?.defaults?.musicGenerationModel,
+    modelConfig: params.cfg.agents?.defaults?.mediaModels?.music,
     modelOverride: params.modelOverride,
     parseModelRef: parseMusicGenerationModelRef,
     agentDir: params.agentDir,
@@ -53,7 +70,7 @@ export async function generateMusic(
     throw new Error(
       buildNoCapabilityModelConfiguredMessage({
         capabilityLabel: "music-generation",
-        modelConfigKey: "musicGenerationModel",
+        modelConfigKey: "mediaModels.music",
         providers: listProviders(params.cfg),
         fallbackSampleRef: "google/lyria-3-clip-preview",
         getProviderEnvVars: deps.getProviderEnvVars,
@@ -67,6 +84,7 @@ export async function generateMusic(
   for (const candidate of candidates) {
     const provider = getProvider(candidate.provider, params.cfg);
     if (!provider) {
+      // Candidate resolution can include stale config refs; keep them in attempts for diagnostics.
       const error = `No music-generation provider registered for ${candidate.provider}`;
       attempts.push({
         provider: candidate.provider,
@@ -74,6 +92,23 @@ export async function generateMusic(
         error,
       });
       lastError = new Error(error);
+      continue;
+    }
+
+    const referenceImageError = resolveReferenceImageCapabilityError({
+      candidateRef: `${candidate.provider}/${candidate.model}`,
+      inputImageCount: params.inputImages?.length ?? 0,
+      edit: provider.capabilities.edit,
+    });
+    if (referenceImageError) {
+      recordCapabilityCandidateFailure({
+        attempts,
+        provider: candidate.provider,
+        model: candidate.model,
+        error: referenceImageError,
+      });
+      lastError = new Error(referenceImageError);
+      logger.debug(`music-generation candidate skipped: ${referenceImageError}`);
       continue;
     }
 
@@ -99,10 +134,16 @@ export async function generateMusic(
         durationSeconds: sanitized.durationSeconds,
         format: sanitized.format,
         inputImages: params.inputImages,
-        ...(params.timeoutMs !== undefined ? { timeoutMs: params.timeoutMs } : {}),
+        ...(timeoutMs !== undefined ? { timeoutMs } : {}),
       });
       if (!Array.isArray(result.tracks) || result.tracks.length === 0) {
         throw new Error("Music generation provider returned no tracks.");
+      }
+      const emptyTrackIndex = result.tracks.findIndex((track) => track.buffer.byteLength === 0);
+      if (emptyTrackIndex >= 0) {
+        throw new Error(
+          `Music generation provider returned an empty track buffer at index ${emptyTrackIndex}.`,
+        );
       }
       return {
         tracks: result.tracks,
@@ -121,6 +162,7 @@ export async function generateMusic(
       };
     } catch (err) {
       lastError = err;
+      // Preserve failed candidates so callers can see which provider/model refs were tried.
       recordCapabilityCandidateFailure({
         attempts,
         provider: candidate.provider,

@@ -1,4 +1,5 @@
-import { installPinnedHostnameTestHooks } from "openclaw/plugin-sdk/test-env";
+// Gradium tests cover speech provider plugin behavior.
+import { installPinnedHostnameTestHooks } from "openclaw/plugin-sdk/test-media-understanding";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildGradiumSpeechProvider } from "./speech-provider.js";
 
@@ -7,35 +8,44 @@ describe("gradium speech provider", () => {
 
   const provider = buildGradiumSpeechProvider();
 
+  const firstFetchCall = (fetchMock: ReturnType<typeof vi.fn>): [string, RequestInit] => {
+    const call = fetchMock.mock.calls[0] as [string, RequestInit] | undefined;
+    if (!call) {
+      throw new Error("expected Gradium fetch call");
+    }
+    return call;
+  };
+
   afterEach(() => {
     vi.unstubAllGlobals();
+    vi.unstubAllEnvs();
     vi.restoreAllMocks();
   });
 
   it("reports configured when GRADIUM_API_KEY is set", () => {
-    const original = process.env.GRADIUM_API_KEY;
-    try {
-      process.env.GRADIUM_API_KEY = "gsk_test";
-      expect(provider.isConfigured({ providerConfig: {}, timeoutMs: 5_000 })).toBe(true);
-    } finally {
-      if (original === undefined) {
-        delete process.env.GRADIUM_API_KEY;
-      } else {
-        process.env.GRADIUM_API_KEY = original;
-      }
-    }
+    vi.stubEnv("GRADIUM_API_KEY", "gsk_test");
+    expect(provider.isConfigured({ providerConfig: {}, timeoutMs: 5_000 })).toBe(true);
   });
 
   it("reports not configured when no key is available", () => {
-    const original = process.env.GRADIUM_API_KEY;
-    try {
-      delete process.env.GRADIUM_API_KEY;
-      expect(provider.isConfigured({ providerConfig: {}, timeoutMs: 5_000 })).toBe(false);
-    } finally {
-      if (original !== undefined) {
-        process.env.GRADIUM_API_KEY = original;
-      }
-    }
+    vi.stubEnv("GRADIUM_API_KEY", undefined);
+    expect(provider.isConfigured({ providerConfig: {}, timeoutMs: 5_000 })).toBe(false);
+  });
+
+  it("reports not configured for an invalid baseUrl instead of throwing", () => {
+    vi.stubEnv("GRADIUM_API_KEY", undefined);
+    expect(
+      provider.isConfigured({
+        providerConfig: { apiKey: String(true), baseUrl: "https://example.com" },
+        timeoutMs: 5_000,
+      }),
+    ).toBe(false);
+    expect(
+      provider.isConfigured({
+        providerConfig: { apiKey: String(true), baseUrl: "not-a-url" },
+        timeoutMs: 5_000,
+      }),
+    ).toBe(false);
   });
 
   it("synthesizes audio via the Gradium TTS endpoint", async () => {
@@ -52,7 +62,7 @@ describe("gradium speech provider", () => {
     });
 
     expect(fetchMock).toHaveBeenCalledOnce();
-    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    const [url, init] = firstFetchCall(fetchMock);
     expect(url).toBe("https://api.gradium.ai/api/post/speech/tts");
     const headers = new Headers(init.headers);
     expect(headers.get("x-api-key")).toBe("gsk_test123");
@@ -69,6 +79,25 @@ describe("gradium speech provider", () => {
     expect(result.audioBuffer).toEqual(audioData);
   });
 
+  it("rejects untrusted Gradium baseUrl config before dispatching the API key", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(new Response(Buffer.from("audio"), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      provider.synthesize({
+        text: "OpenClaw test",
+        cfg: {} as never,
+        providerConfig: { apiKey: "gsk_test123", baseUrl: "https://example.com" },
+        target: "audio-file",
+        timeoutMs: 30_000,
+      }),
+    ).rejects.toThrow("Gradium baseUrl must target api.gradium.ai");
+
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it("uses opus and voiceCompatible for voice-note target", async () => {
     const audioData = Buffer.from("opus-audio-data");
     const fetchMock = vi.fn().mockResolvedValue(new Response(audioData, { status: 200 }));
@@ -82,7 +111,7 @@ describe("gradium speech provider", () => {
       timeoutMs: 30_000,
     });
 
-    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    const [, init] = firstFetchCall(fetchMock);
     expect(JSON.parse(init.body as string).output_format).toBe("opus");
     expect(result.outputFormat).toBe("opus");
     expect(result.fileExtension).toBe(".opus");
@@ -90,12 +119,39 @@ describe("gradium speech provider", () => {
     expect(result.audioBuffer).toEqual(audioData);
   });
 
+  it("applies the configured media byte cap to synthesized audio", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(new Response(new Uint8Array(2048), { status: 200 })),
+    );
+
+    await expect(
+      provider.synthesize({
+        text: "OpenClaw test",
+        cfg: {
+          agents: {
+            defaults: {
+              mediaMaxMb: 0.001,
+            },
+          },
+        } as never,
+        providerConfig: { apiKey: "gsk_test123" },
+        target: "audio-file",
+        timeoutMs: 30_000,
+      }),
+    ).rejects.toThrow("Gradium TTS audio response exceeds");
+  });
+
   it("uses ulaw_8000 for telephony synthesis", async () => {
     const audioData = Buffer.from("ulaw-audio-data");
     const fetchMock = vi.fn().mockResolvedValue(new Response(audioData, { status: 200 }));
     vi.stubGlobal("fetch", fetchMock);
+    const synthesizeTelephony = provider.synthesizeTelephony;
+    if (!synthesizeTelephony) {
+      throw new Error("Expected Gradium provider synthesizeTelephony");
+    }
 
-    const result = await provider.synthesizeTelephony!({
+    const result = await synthesizeTelephony({
       text: "Telephony test",
       cfg: {} as never,
       providerConfig: { apiKey: "gsk_test123", voiceId: "default-voice" },
@@ -103,10 +159,13 @@ describe("gradium speech provider", () => {
       timeoutMs: 30_000,
     });
 
-    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
-    expect(JSON.parse(init.body as string)).toMatchObject({
+    const [, init] = firstFetchCall(fetchMock);
+    expect(JSON.parse(init.body as string)).toEqual({
+      text: "Telephony test",
       voice_id: "override-voice",
+      only_audio: true,
       output_format: "ulaw_8000",
+      json_config: '{"padding_bonus":0}',
     });
     expect(result.outputFormat).toBe("ulaw_8000");
     expect(result.sampleRate).toBe(8_000);
@@ -114,22 +173,47 @@ describe("gradium speech provider", () => {
   });
 
   it("throws when no API key is available", async () => {
-    const original = process.env.GRADIUM_API_KEY;
-    try {
-      delete process.env.GRADIUM_API_KEY;
-      await expect(
-        provider.synthesize({
-          text: "test",
-          cfg: {} as never,
-          providerConfig: {},
-          target: "audio-file",
-          timeoutMs: 5_000,
-        }),
-      ).rejects.toThrow("Gradium API key missing");
-    } finally {
-      if (original !== undefined) {
-        process.env.GRADIUM_API_KEY = original;
-      }
+    vi.stubEnv("GRADIUM_API_KEY", undefined);
+    await expect(
+      provider.synthesize({
+        text: "test",
+        cfg: {} as never,
+        providerConfig: {},
+        target: "audio-file",
+        timeoutMs: 5_000,
+      }),
+    ).rejects.toThrow("Gradium API key missing");
+  });
+
+  it("rejects a blank environment key before normal or telephony requests", async () => {
+    vi.stubEnv("GRADIUM_API_KEY", "   ");
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+
+    expect(provider.isConfigured({ providerConfig: {}, timeoutMs: 5_000 })).toBe(false);
+    await expect(
+      provider.synthesize({
+        text: "test",
+        cfg: {} as never,
+        providerConfig: {},
+        target: "audio-file",
+        timeoutMs: 5_000,
+      }),
+    ).rejects.toThrow("Gradium API key missing");
+
+    const synthesizeTelephony = provider.synthesizeTelephony;
+    if (!synthesizeTelephony) {
+      throw new Error("Expected Gradium provider synthesizeTelephony");
     }
+    await expect(
+      synthesizeTelephony({
+        text: "test",
+        cfg: {} as never,
+        providerConfig: {},
+        timeoutMs: 5_000,
+      }),
+    ).rejects.toThrow("Gradium API key missing");
+
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 });

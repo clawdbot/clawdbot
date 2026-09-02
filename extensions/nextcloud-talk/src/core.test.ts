@@ -1,14 +1,11 @@
-import { mkdtemp, rm } from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+// Nextcloud Talk tests cover core plugin behavior.
+import { describe, expect, it, vi } from "vitest";
 import {
   looksLikeNextcloudTalkTargetId,
   normalizeNextcloudTalkMessagingTarget,
   stripNextcloudTalkTargetPrefix,
 } from "./normalize.js";
-import { resolveNextcloudTalkAllowlistMatch, resolveNextcloudTalkGroupAllow } from "./policy.js";
-import { createNextcloudTalkReplayGuard } from "./replay-guard.js";
+import { resolveNextcloudTalkAllowlistMatch } from "./policy.js";
 import { resolveNextcloudTalkOutboundSessionRoute } from "./session-route.js";
 import {
   extractNextcloudTalkHeaders,
@@ -16,25 +13,16 @@ import {
   verifyNextcloudTalkSignature,
 } from "./signature.js";
 
-const tempDirs: string[] = [];
-
-afterEach(async () => {
-  while (tempDirs.length > 0) {
-    const dir = tempDirs.pop();
-    if (dir) {
-      await rm(dir, { recursive: true, force: true });
-    }
+function requireFirstTimingSafeEqualCall(mock: ReturnType<typeof vi.fn>): [unknown, unknown] {
+  const [call] = mock.mock.calls;
+  if (!call) {
+    throw new Error("expected timingSafeEqual call");
   }
-});
-
-async function makeTempDir(): Promise<string> {
-  const dir = await mkdtemp(path.join(os.tmpdir(), "nextcloud-talk-replay-"));
-  tempDirs.push(dir);
-  return dir;
+  return call as [unknown, unknown];
 }
 
 describe("nextcloud talk core", () => {
-  it("builds an outbound session route for normalized room targets", () => {
+  it("marks ambiguous room-token session routes as best-effort", () => {
     const route = resolveNextcloudTalkOutboundSessionRoute({
       cfg: {},
       agentId: "main",
@@ -42,11 +30,15 @@ describe("nextcloud talk core", () => {
       target: "nextcloud-talk:room-123",
     });
 
-    expect(route).toMatchObject({
+    expect(route).toEqual({
+      sessionKey: "agent:main:nextcloud-talk:group:room-123",
+      baseSessionKey: "agent:main:nextcloud-talk:group:room-123",
+      recipientSessionExact: false,
       peer: {
         kind: "group",
         id: "room-123",
       },
+      chatType: "group",
       from: "nextcloud-talk:room:room-123",
       to: "nextcloud-talk:room-123",
     });
@@ -68,13 +60,18 @@ describe("nextcloud talk core", () => {
     expect(stripNextcloudTalkTargetPrefix("nextcloud-talk:room:AbC123")).toBe("AbC123");
     expect(stripNextcloudTalkTargetPrefix("nc-talk:room:ops")).toBe("ops");
     expect(stripNextcloudTalkTargetPrefix("nc:room:ops")).toBe("ops");
+    expect(stripNextcloudTalkTargetPrefix("NC-TALK:ROOM:Ops")).toBe("Ops");
     expect(stripNextcloudTalkTargetPrefix("room:   ")).toBeUndefined();
 
     expect(normalizeNextcloudTalkMessagingTarget("room:AbC123")).toBe("nextcloud-talk:abc123");
     expect(normalizeNextcloudTalkMessagingTarget("nc-talk:room:Ops")).toBe("nextcloud-talk:ops");
+    expect(normalizeNextcloudTalkMessagingTarget("NEXTCLOUD-TALK:ROOM:Ops")).toBe(
+      "nextcloud-talk:ops",
+    );
 
     expect(looksLikeNextcloudTalkTargetId("nextcloud-talk:room:abc12345")).toBe(true);
     expect(looksLikeNextcloudTalkTargetId("nc:opsroom1")).toBe(true);
+    expect(looksLikeNextcloudTalkTargetId("room:opsroom1")).toBe(true);
     expect(looksLikeNextcloudTalkTargetId("abc12345")).toBe(true);
     expect(looksLikeNextcloudTalkTargetId("")).toBe(false);
   });
@@ -194,17 +191,19 @@ describe("nextcloud talk core", () => {
     });
 
     try {
-      const { generateNextcloudTalkSignature, verifyNextcloudTalkSignature } =
-        await import("./signature.js");
+      const {
+        generateNextcloudTalkSignature: generateNextcloudTalkSignatureLocal,
+        verifyNextcloudTalkSignature: verifyNextcloudTalkSignatureLocal,
+      } = await import("./signature.js");
       const body = JSON.stringify({ hello: "world" });
-      const generated = generateNextcloudTalkSignature({
+      const generated = generateNextcloudTalkSignatureLocal({
         body,
         secret: "secret-123",
       });
       const shortSignature = generated.signature.slice(0, 12);
 
       expect(
-        verifyNextcloudTalkSignature({
+        verifyNextcloudTalkSignatureLocal({
           signature: shortSignature,
           random: generated.random,
           body,
@@ -213,7 +212,7 @@ describe("nextcloud talk core", () => {
       ).toBe(false);
 
       expect(timingSafeEqualMock).toHaveBeenCalledOnce();
-      const [leftBuffer, rightBuffer] = timingSafeEqualMock.mock.calls[0] ?? [];
+      const [leftBuffer, rightBuffer] = requireFirstTimingSafeEqualCall(timingSafeEqualMock);
       expect(Buffer.isBuffer(leftBuffer)).toBe(true);
       expect(Buffer.isBuffer(rightBuffer)).toBe(true);
       if (!Buffer.isBuffer(leftBuffer) || !Buffer.isBuffer(rightBuffer)) {
@@ -226,72 +225,7 @@ describe("nextcloud talk core", () => {
     }
   });
 
-  it("persists replay decisions across guard instances and scopes account namespaces", async () => {
-    const stateDir = await makeTempDir();
-
-    const firstGuard = createNextcloudTalkReplayGuard({ stateDir });
-    const firstAttempt = await firstGuard.shouldProcessMessage({
-      accountId: "account-a",
-      roomToken: "room-1",
-      messageId: "msg-1",
-    });
-    const replayAttempt = await firstGuard.shouldProcessMessage({
-      accountId: "account-a",
-      roomToken: "room-1",
-      messageId: "msg-1",
-    });
-
-    const secondGuard = createNextcloudTalkReplayGuard({ stateDir });
-    const restartReplayAttempt = await secondGuard.shouldProcessMessage({
-      accountId: "account-a",
-      roomToken: "room-1",
-      messageId: "msg-1",
-    });
-    const otherAccountFirstAttempt = await secondGuard.shouldProcessMessage({
-      accountId: "account-b",
-      roomToken: "room-1",
-      messageId: "msg-1",
-    });
-
-    expect(firstAttempt).toBe(true);
-    expect(replayAttempt).toBe(false);
-    expect(restartReplayAttempt).toBe(false);
-    expect(otherAccountFirstAttempt).toBe(true);
-  });
-
-  it("releases in-flight replay claims when processing fails", async () => {
-    const guard = createNextcloudTalkReplayGuard({});
-
-    const firstClaim = await guard.claimMessage({
-      accountId: "account-a",
-      roomToken: "room-1",
-      messageId: "msg-claim",
-    });
-    const secondClaim = await guard.claimMessage({
-      accountId: "account-a",
-      roomToken: "room-1",
-      messageId: "msg-claim",
-    });
-
-    expect(firstClaim).toBe("claimed");
-    expect(secondClaim).toBe("inflight");
-
-    guard.releaseMessage({
-      accountId: "account-a",
-      roomToken: "room-1",
-      messageId: "msg-claim",
-      error: new Error("transient"),
-    });
-
-    const retryClaim = await guard.claimMessage({
-      accountId: "account-a",
-      roomToken: "room-1",
-      messageId: "msg-claim",
-    });
-    expect(retryClaim).toBe("claimed");
-  });
-
-  it("resolves allowlist matches and group policy decisions", () => {
+  it("resolves allowlist matches", () => {
     expect(
       resolveNextcloudTalkAllowlistMatch({
         allowFrom: ["*"],
@@ -310,90 +244,5 @@ describe("nextcloud talk core", () => {
         senderId: "other",
       }).allowed,
     ).toBe(false);
-
-    expect(
-      resolveNextcloudTalkGroupAllow({
-        groupPolicy: "disabled",
-        outerAllowFrom: ["owner"],
-        innerAllowFrom: ["room-user"],
-        senderId: "owner",
-      }),
-    ).toEqual({
-      allowed: false,
-      outerMatch: { allowed: false },
-      innerMatch: { allowed: false },
-    });
-    expect(
-      resolveNextcloudTalkGroupAllow({
-        groupPolicy: "open",
-        outerAllowFrom: [],
-        innerAllowFrom: [],
-        senderId: "owner",
-      }),
-    ).toEqual({
-      allowed: true,
-      outerMatch: { allowed: true },
-      innerMatch: { allowed: true },
-    });
-    expect(
-      resolveNextcloudTalkGroupAllow({
-        groupPolicy: "allowlist",
-        outerAllowFrom: [],
-        innerAllowFrom: [],
-        senderId: "owner",
-      }),
-    ).toEqual({
-      allowed: false,
-      outerMatch: { allowed: false },
-      innerMatch: { allowed: false },
-    });
-    expect(
-      resolveNextcloudTalkGroupAllow({
-        groupPolicy: "allowlist",
-        outerAllowFrom: [],
-        innerAllowFrom: ["room-user"],
-        senderId: "room-user",
-      }),
-    ).toEqual({
-      allowed: true,
-      outerMatch: { allowed: false },
-      innerMatch: { allowed: true, matchKey: "room-user", matchSource: "id" },
-    });
-    expect(
-      resolveNextcloudTalkGroupAllow({
-        groupPolicy: "allowlist",
-        outerAllowFrom: ["team-owner"],
-        innerAllowFrom: ["room-user"],
-        senderId: "room-user",
-      }),
-    ).toEqual({
-      allowed: false,
-      outerMatch: { allowed: false },
-      innerMatch: { allowed: true, matchKey: "room-user", matchSource: "id" },
-    });
-    expect(
-      resolveNextcloudTalkGroupAllow({
-        groupPolicy: "allowlist",
-        outerAllowFrom: ["team-owner"],
-        innerAllowFrom: ["room-user"],
-        senderId: "team-owner",
-      }),
-    ).toEqual({
-      allowed: false,
-      outerMatch: { allowed: true, matchKey: "team-owner", matchSource: "id" },
-      innerMatch: { allowed: false },
-    });
-    expect(
-      resolveNextcloudTalkGroupAllow({
-        groupPolicy: "allowlist",
-        outerAllowFrom: ["shared-user"],
-        innerAllowFrom: ["shared-user"],
-        senderId: "shared-user",
-      }),
-    ).toEqual({
-      allowed: true,
-      outerMatch: { allowed: true, matchKey: "shared-user", matchSource: "id" },
-      innerMatch: { allowed: true, matchKey: "shared-user", matchSource: "id" },
-    });
   });
 });

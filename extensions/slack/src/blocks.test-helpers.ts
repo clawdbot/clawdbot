@@ -1,3 +1,4 @@
+// Slack helper module supports blocks helpers behavior.
 import type { WebClient } from "@slack/web-api";
 import { vi } from "vitest";
 
@@ -33,11 +34,6 @@ vi.mock("./accounts.js", async () => {
     resolveSlackAccount: () => slackBlockTestState.account,
   };
 });
-
-// Kept for compatibility with existing tests; mocks install at module evaluation.
-export function installSlackBlockTestMocks() {
-  return;
-}
 
 export function createSlackEditTestClient(): SlackEditTestClient {
   return {

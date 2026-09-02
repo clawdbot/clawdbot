@@ -1,7 +1,8 @@
+// Verifies config symlink security audit findings.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { collectFilesystemFindings } from "./audit.js";
+import { collectSecurityAuditFindings } from "./audit.test-support.js";
 import { AsyncTempCaseFactory } from "./test-temp-cases.js";
 
 const isWindows = process.platform === "win32";
@@ -33,20 +34,20 @@ describe("security audit config symlink findings", () => {
     const configPath = path.join(stateDir, "openclaw.json");
     await fs.symlink(targetConfigPath, configPath);
 
-    const findings = await collectFilesystemFindings({
-      stateDir,
-      configPath,
-    });
+    const findings = await collectSecurityAuditFindings(
+      { agents: { list: [{ id: "main", default: true }] } },
+      {
+        stateDir,
+        configPath,
+        includeFilesystem: true,
+        configSnapshot: null,
+      },
+    );
 
-    expect(findings).toEqual(
-      expect.arrayContaining([expect.objectContaining({ checkId: "fs.config.symlink" })]),
-    );
-    expect(findings.map((finding) => finding.checkId)).not.toEqual(
-      expect.arrayContaining([
-        "fs.config.perms_writable",
-        "fs.config.perms_world_readable",
-        "fs.config.perms_group_readable",
-      ]),
-    );
+    const checkIds = findings.map((finding) => finding.checkId);
+    expect(checkIds).toContain("fs.config.symlink");
+    expect(checkIds).not.toContain("fs.config.perms_writable");
+    expect(checkIds).not.toContain("fs.config.perms_world_readable");
+    expect(checkIds).not.toContain("fs.config.perms_group_readable");
   });
 });

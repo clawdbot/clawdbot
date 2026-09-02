@@ -1,4 +1,6 @@
-import { formatAllowlistMatchMeta } from "openclaw/plugin-sdk/allow-from";
+import type { ChannelIngressContextBinding } from "openclaw/plugin-sdk/channel-ingress-runtime";
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
+// Discord plugin module implements message handlerm preflight behavior.
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { resolveDiscordConversationIdentity } from "../conversation-identity.js";
 import type { User } from "../internal/discord.js";
@@ -10,19 +12,14 @@ import type {
   DiscordSenderIdentity,
 } from "./message-handler.preflight.types.js";
 
-let conversationRuntimePromise:
-  | Promise<typeof import("openclaw/plugin-sdk/conversation-binding-runtime")>
-  | undefined;
-let discordSendRuntimePromise: Promise<typeof import("../send.js")> | undefined;
+const loadConversationRuntime = createLazyRuntimeModule(
+  () => import("openclaw/plugin-sdk/conversation-binding-runtime"),
+);
 
-async function loadConversationRuntime() {
-  conversationRuntimePromise ??= import("openclaw/plugin-sdk/conversation-binding-runtime");
-  return await conversationRuntimePromise;
-}
+const loadDiscordSendRuntime = createLazyRuntimeModule(() => import("../send.js"));
 
-async function loadDiscordSendRuntime() {
-  discordSendRuntimePromise ??= import("../send.js");
-  return await discordSendRuntimePromise;
+function resolveDiscordDmPairingSenderId(sender: DiscordSenderIdentity): string {
+  return sender.isPluralKit ? `pk:${sender.id}` : sender.id;
 }
 
 export async function resolveDiscordDmPreflightAccess(params: {
@@ -32,8 +29,15 @@ export async function resolveDiscordDmPreflightAccess(params: {
   dmPolicy: DiscordDmPolicy;
   resolvedAccountId: string;
   allowNameMatching: boolean;
-  useAccessGroups: boolean;
-}): Promise<{ commandAuthorized: boolean } | null> {
+  conversationId: string;
+}): Promise<{
+  commandAuthorized: boolean;
+  channelIngress: Awaited<ReturnType<typeof resolveDiscordDmCommandAccess>>;
+  resolveChannelIngress: (
+    contextBinding: ChannelIngressContextBinding,
+    conversation?: { parentId?: string; threadId?: string },
+  ) => ReturnType<typeof resolveDiscordDmCommandAccess>;
+} | null> {
   if (params.dmPolicy === "disabled") {
     logVerbose("discord: drop dm (dmPolicy: disabled)");
     return null;
@@ -51,46 +55,60 @@ export async function resolveDiscordDmPreflightAccess(params: {
       accountId: params.preflight.accountId,
       conversationId: directBindingConversationId,
     });
-  const dmAccess = await resolveDiscordDmCommandAccess({
-    accountId: params.resolvedAccountId,
-    dmPolicy: params.dmPolicy,
-    configuredAllowFrom: params.preflight.allowFrom ?? [],
-    sender: {
-      id: params.sender.id,
-      name: params.sender.name,
-      tag: params.sender.tag,
-    },
-    allowNameMatching: params.allowNameMatching,
-    useAccessGroups: params.useAccessGroups,
-    cfg: params.preflight.cfg,
-    token: params.preflight.token,
-    rest: params.preflight.client.rest,
-  });
-  const commandAuthorized = dmAccess.commandAuthorized || directBindingRecord != null;
-  if (dmAccess.decision === "allow") {
-    return { commandAuthorized };
+  const resolveChannelIngress = async (
+    contextBinding?: ChannelIngressContextBinding,
+    conversation?: { parentId?: string; threadId?: string },
+  ) =>
+    await resolveDiscordDmCommandAccess({
+      accountId: params.resolvedAccountId,
+      dmPolicy: params.dmPolicy,
+      configuredAllowFrom: params.preflight.allowFrom ?? [],
+      sender: {
+        id: params.sender.id,
+        name: params.sender.name,
+        tag: params.sender.tag,
+        isPluralKit: params.sender.isPluralKit,
+        authorKind: params.author.bot ? "bot" : "user",
+      },
+      allowNameMatching: params.allowNameMatching,
+      cfg: params.preflight.cfg,
+      token: params.preflight.token,
+      rest: params.preflight.client.rest,
+      conversationId: params.conversationId,
+      conversationParentId: conversation?.parentId,
+      conversationThreadId: conversation?.threadId,
+      ...(contextBinding ? { contextBinding } : {}),
+    });
+  const dmAccess = await resolveChannelIngress();
+  const commandAuthorized =
+    (dmAccess.senderAccess.allowed && dmAccess.commandAccess.authorized) ||
+    directBindingRecord != null;
+  if (dmAccess.senderAccess.decision === "allow") {
+    return { commandAuthorized, channelIngress: dmAccess, resolveChannelIngress };
   }
   if (directBindingRecord) {
     logVerbose(
       `discord: allow bound DM conversation ${directBindingConversationId} despite dmPolicy=${params.dmPolicy}`,
     );
-    return { commandAuthorized };
+    return { commandAuthorized, channelIngress: dmAccess, resolveChannelIngress };
   }
 
-  const allowMatchMeta = formatAllowlistMatchMeta(
-    dmAccess.allowMatch.allowed ? dmAccess.allowMatch : undefined,
-  );
   await handleDiscordDmCommandDecision({
-    dmAccess,
+    senderAccess: dmAccess.senderAccess,
     accountId: params.resolvedAccountId,
+    // Use the resolved sender identity (e.g. PluralKit member UUID) here so
+    // the pairing record is keyed under the same stableId that
+    // resolveDiscordDmCommandAccess / createDiscordDmIngressSubject use on
+    // subsequent inbound messages. Previously this used the raw gateway
+    // author id, which only matched non-PK users.
     sender: {
-      id: params.author.id,
-      tag: formatDiscordUserTag(params.author),
-      name: params.author.username ?? undefined,
+      id: resolveDiscordDmPairingSenderId(params.sender),
+      tag: params.sender.tag ?? formatDiscordUserTag(params.author),
+      name: params.sender.name ?? params.author.username ?? undefined,
     },
     onPairingCreated: async (code) => {
       logVerbose(
-        `discord pairing request sender=${params.author.id} tag=${formatDiscordUserTag(params.author)} (${allowMatchMeta})`,
+        `discord pairing request sender=${params.author.id} tag=${formatDiscordUserTag(params.author)} reason=${dmAccess.senderAccess.reasonCode}`,
       );
       try {
         const conversationRuntime = await loadConversationRuntime();
@@ -115,7 +133,7 @@ export async function resolveDiscordDmPreflightAccess(params: {
     },
     onUnauthorized: async () => {
       logVerbose(
-        `Blocked unauthorized discord sender ${params.sender.id} (dmPolicy=${params.dmPolicy}, ${allowMatchMeta})`,
+        `Blocked unauthorized discord sender ${params.sender.id} (dmPolicy=${params.dmPolicy}, reason=${dmAccess.senderAccess.reasonCode})`,
       );
     },
   });

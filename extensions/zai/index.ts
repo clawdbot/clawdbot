@@ -1,11 +1,13 @@
-import {
-  definePluginEntry,
-  type ProviderAuthContext,
-  type ProviderAuthMethod,
-  type ProviderAuthMethodNonInteractiveContext,
-  type ProviderResolveDynamicModelContext,
-  type ProviderRuntimeModel,
-  type ProviderWrapStreamFnContext,
+// Zai plugin entrypoint registers its OpenClaw integration.
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import type {
+  ProviderAuthContext,
+  ProviderAuthMethod,
+  ProviderAuthMethodNonInteractiveContext,
+  ProviderResolveDynamicModelContext,
+  ProviderWrapStreamFnContext,
 } from "openclaw/plugin-sdk/plugin-entry";
 import {
   applyAuthProfileConfig,
@@ -14,66 +16,87 @@ import {
   normalizeApiKeyInput,
   normalizeOptionalSecretInput,
   type SecretInput,
-  upsertAuthProfile,
+  upsertAuthProfileWithLockOrThrow,
   validateApiKeyInput,
 } from "openclaw/plugin-sdk/provider-auth-api-key";
+import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-entry";
 import {
-  normalizeModelCompat,
-  OPENAI_COMPATIBLE_REPLAY_HOOKS,
+  buildProviderReplayFamilyHooks,
+  resolveFamilyForwardCompatModel,
 } from "openclaw/plugin-sdk/provider-model-shared";
 import {
   createPayloadPatchStreamWrapper,
   createToolStreamWrapper,
   defaultToolStreamExtraParams,
 } from "openclaw/plugin-sdk/provider-stream-shared";
-import { fetchZaiUsage, resolveLegacyPiAgentAccessToken } from "openclaw/plugin-sdk/provider-usage";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
+import { fetchZaiUsage } from "openclaw/plugin-sdk/provider-usage";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { detectZaiEndpoint, type ZaiEndpointId } from "./detect.js";
 import { zaiMediaUnderstandingProvider } from "./media-understanding-provider.js";
-import { buildZaiModelDefinition } from "./model-definitions.js";
-import { applyZaiConfig, applyZaiProviderConfig, ZAI_DEFAULT_MODEL_REF } from "./onboard.js";
+import { buildZaiModelDefinition, resolveZaiBaseUrl } from "./model-definitions.js";
+import { applyZaiConfig, applyZaiProviderConfig, resolveZaiModelId } from "./onboard.js";
+import manifest from "./openclaw.plugin.json" with { type: "json" };
+import { resolveThinkingProfile, resolveZaiReasoningEffort } from "./provider-policy-api.js";
 
 const PROVIDER_ID = "zai";
 const GLM5_TEMPLATE_MODEL_ID = "glm-4.7";
 const PROFILE_ID = "zai:default";
-
-function resolveGlm5ForwardCompatModel(
-  ctx: ProviderResolveDynamicModelContext,
-): ProviderRuntimeModel | undefined {
-  const trimmedModelId = ctx.modelId.trim();
-  if (!normalizeLowercaseStringOrEmpty(trimmedModelId).startsWith("glm-5")) {
-    return undefined;
-  }
-
-  const existing = ctx.modelRegistry.find(
-    PROVIDER_ID,
-    trimmedModelId,
-  ) as ProviderRuntimeModel | null;
-  if (existing) {
-    return existing;
-  }
-
-  const def = buildZaiModelDefinition({ id: trimmedModelId });
-  const template = ctx.modelRegistry.find(
-    PROVIDER_ID,
-    GLM5_TEMPLATE_MODEL_ID,
-  ) as ProviderRuntimeModel | null;
-  return normalizeModelCompat({
-    ...template,
-    id: def.id,
-    name: def.name,
-    api: "openai-completions",
-    provider: PROVIDER_ID,
-    reasoning: def.reasoning,
-    input: def.input,
-    cost: def.cost,
-    contextWindow: def.contextWindow,
-    maxTokens: def.maxTokens,
-  } as ProviderRuntimeModel);
+function resolveDeprecatedPiAgentAuthPath(env: NodeJS.ProcessEnv): string {
+  const home = env.HOME?.trim() || env.USERPROFILE?.trim() || os.homedir();
+  return path.join(home, ".pi", "agent", "auth.json");
 }
 
-function resolveZaiDefaultModel(modelIdOverride?: string): string {
-  return modelIdOverride ? `zai/${modelIdOverride}` : ZAI_DEFAULT_MODEL_REF;
+function resolveDeprecatedPiAgentAccessToken(
+  env: NodeJS.ProcessEnv,
+  providerIds: readonly string[],
+): string | undefined {
+  try {
+    const authPath = resolveDeprecatedPiAgentAuthPath(env);
+    if (!fs.existsSync(authPath)) {
+      return undefined;
+    }
+    const parsed = JSON.parse(fs.readFileSync(authPath, "utf-8")) as Record<
+      string,
+      { access?: unknown }
+    >;
+    for (const providerId of providerIds) {
+      const token = parsed[providerId]?.access;
+      if (typeof token === "string" && token.trim()) {
+        return token;
+      }
+    }
+  } catch {}
+  return undefined;
+}
+
+function resolveGlm5ForwardCompatModel(ctx: ProviderResolveDynamicModelContext) {
+  return resolveFamilyForwardCompatModel({
+    providerId: PROVIDER_ID,
+    ctx,
+    cases: [
+      {
+        match: (id) => id.startsWith("glm-5"),
+        templateIds: [GLM5_TEMPLATE_MODEL_ID],
+        patch: ({ modelId, template }) => {
+          const def = buildZaiModelDefinition({ id: modelId });
+          return {
+            name: def.name,
+            // Native models must never fall through to the OpenAI SDK's default host.
+            baseUrl: ctx.providerConfig?.baseUrl ?? template?.baseUrl ?? resolveZaiBaseUrl(),
+            api: "openai-completions",
+            provider: PROVIDER_ID,
+            reasoning: def.reasoning,
+            input: def.input as ("text" | "image")[],
+            cost: def.cost,
+            contextWindow: def.contextWindow,
+            maxTokens: def.maxTokens,
+          };
+        },
+      },
+    ],
+    preserveExisting: true,
+    synthesize: true,
+  });
 }
 
 function isTrueParam(value: unknown): boolean {
@@ -91,8 +114,10 @@ function isDisabledThinkingLevel(thinkingLevel: ProviderWrapStreamFnContext["thi
 function wrapZaiStreamFn(ctx: ProviderWrapStreamFnContext) {
   let streamFn = createToolStreamWrapper(ctx.streamFn, ctx.extraParams?.tool_stream !== false);
   const preserveThinking = shouldPreserveZaiThinking(ctx.extraParams);
+  const reasoningEffort = resolveZaiReasoningEffort(ctx.modelId, ctx.thinkingLevel);
+  const disableThinking = isDisabledThinkingLevel(ctx.thinkingLevel) && !reasoningEffort;
 
-  if (!isDisabledThinkingLevel(ctx.thinkingLevel) && !preserveThinking) {
+  if (!disableThinking && !preserveThinking && !reasoningEffort) {
     return streamFn;
   }
 
@@ -101,9 +126,13 @@ function wrapZaiStreamFn(ctx: ProviderWrapStreamFnContext) {
       return;
     }
 
-    if (isDisabledThinkingLevel(ctx.thinkingLevel)) {
+    if (disableThinking) {
       payload.thinking = { type: "disabled" };
       return;
+    }
+
+    if (reasoningEffort) {
+      payload.reasoning_effort = reasoningEffort;
     }
 
     if (preserveThinking) {
@@ -159,6 +188,7 @@ async function runZaiApiKeyAuth(
         ? (ctx.secretInputMode ?? "plaintext")
         : ctx.secretInputMode,
     config: ctx.config,
+    workspaceDir: ctx.workspaceDir,
     expectedProviders: [PROVIDER_ID, "z-ai"],
     provider: PROVIDER_ID,
     envLabel: "ZAI_API_KEY",
@@ -180,6 +210,10 @@ async function runZaiApiKeyAuth(
   const detected = await detectZaiEndpoint({ apiKey, ...(endpoint ? { endpoint } : {}) });
   const modelIdOverride = detected?.modelId;
   const nextEndpoint = detected?.endpoint ?? endpoint ?? (await promptForZaiEndpoint(ctx));
+  const preset = {
+    ...(nextEndpoint ? { endpoint: nextEndpoint } : {}),
+    ...(modelIdOverride ? { modelId: modelIdOverride } : {}),
+  };
   return {
     profiles: [
       {
@@ -192,11 +226,8 @@ async function runZaiApiKeyAuth(
         ),
       },
     ],
-    configPatch: applyZaiProviderConfig(ctx.config, {
-      ...(nextEndpoint ? { endpoint: nextEndpoint } : {}),
-      ...(modelIdOverride ? { modelId: modelIdOverride } : {}),
-    }),
-    defaultModel: resolveZaiDefaultModel(modelIdOverride),
+    configPatch: applyZaiProviderConfig(ctx.config, preset),
+    defaultModel: `zai/${resolveZaiModelId(preset)}`,
     ...(detected?.note ? { notes: [detected.note] } : {}),
   };
 }
@@ -229,7 +260,7 @@ async function runZaiApiKeyAuthNonInteractive(
     if (!credential) {
       return null;
     }
-    upsertAuthProfile({
+    await upsertAuthProfileWithLockOrThrow({
       profileId: PROFILE_ID,
       credential,
       agentDir: ctx.agentDir,
@@ -272,86 +303,89 @@ function buildZaiApiKeyMethod(params: {
   };
 }
 
-export default definePluginEntry({
+export default defineSingleProviderPluginEntry({
   id: PROVIDER_ID,
   name: "Z.AI Provider",
   description: "Bundled Z.AI provider plugin",
-  register(api) {
-    api.registerProvider({
-      id: PROVIDER_ID,
-      label: "Z.AI",
-      aliases: ["z-ai", "z.ai"],
-      docsPath: "/providers/models",
-      envVars: ["ZAI_API_KEY", "Z_AI_API_KEY"],
-      auth: [
-        buildZaiApiKeyMethod({
-          id: "api-key",
-          choiceId: "zai-api-key",
-          choiceLabel: "Z.AI API key",
-        }),
-        buildZaiApiKeyMethod({
-          id: "coding-global",
-          choiceId: "zai-coding-global",
-          choiceLabel: "Coding-Plan-Global",
-          choiceHint: "GLM Coding Plan Global (api.z.ai)",
-          endpoint: "coding-global",
-        }),
-        buildZaiApiKeyMethod({
-          id: "coding-cn",
-          choiceId: "zai-coding-cn",
-          choiceLabel: "Coding-Plan-CN",
-          choiceHint: "GLM Coding Plan CN (open.bigmodel.cn)",
-          endpoint: "coding-cn",
-        }),
-        buildZaiApiKeyMethod({
-          id: "global",
-          choiceId: "zai-global",
-          choiceLabel: "Global",
-          choiceHint: "Z.AI Global (api.z.ai)",
-          endpoint: "global",
-        }),
-        buildZaiApiKeyMethod({
-          id: "cn",
-          choiceId: "zai-cn",
-          choiceLabel: "CN",
-          choiceHint: "Z.AI CN (open.bigmodel.cn)",
-          endpoint: "cn",
-        }),
-      ],
-      resolveDynamicModel: (ctx) => resolveGlm5ForwardCompatModel(ctx),
-      ...OPENAI_COMPATIBLE_REPLAY_HOOKS,
-      prepareExtraParams: (ctx) => defaultToolStreamExtraParams(ctx.extraParams),
-      wrapStreamFn: (ctx) => wrapZaiStreamFn(ctx),
-      resolveThinkingProfile: () => ({
-        levels: [
-          { id: "off", label: "off" },
-          { id: "low", label: "on" },
-        ],
-        defaultLevel: "off",
+  manifest,
+  provider: {
+    label: "Z.AI",
+    aliases: ["z-ai", "z.ai"],
+    docsPath: "/providers/models",
+    envVars: ["ZAI_API_KEY", "Z_AI_API_KEY"],
+    auth: [],
+    extraAuth: [
+      buildZaiApiKeyMethod({
+        id: "api-key",
+        choiceId: "zai-api-key",
+        choiceLabel: "Z.AI API key",
       }),
-      isModernModelRef: ({ modelId }) => {
-        const lower = normalizeLowercaseStringOrEmpty(modelId);
-        return (
-          lower.startsWith("glm-5") ||
-          lower.startsWith("glm-4.7") ||
-          lower.startsWith("glm-4.7-flash") ||
-          lower.startsWith("glm-4.7-flashx")
-        );
-      },
-      resolveUsageAuth: async (ctx) => {
-        const apiKey = ctx.resolveApiKeyFromConfigAndStore({
-          providerIds: [PROVIDER_ID, "z-ai"],
-          envDirect: [ctx.env.ZAI_API_KEY, ctx.env.Z_AI_API_KEY],
-        });
-        if (apiKey) {
-          return { token: apiKey };
-        }
-        const legacyToken = resolveLegacyPiAgentAccessToken(ctx.env, ["z-ai", "zai"]);
-        return legacyToken ? { token: legacyToken } : null;
-      },
-      fetchUsageSnapshot: async (ctx) => await fetchZaiUsage(ctx.token, ctx.timeoutMs, ctx.fetchFn),
-      isCacheTtlEligible: () => true,
-    });
+      buildZaiApiKeyMethod({
+        id: "coding-global",
+        choiceId: "zai-coding-global",
+        choiceLabel: "Coding-Plan-Global",
+        choiceHint: "GLM Coding Plan Global (api.z.ai)",
+        endpoint: "coding-global",
+      }),
+      buildZaiApiKeyMethod({
+        id: "coding-cn",
+        choiceId: "zai-coding-cn",
+        choiceLabel: "Coding-Plan-CN",
+        choiceHint: "GLM Coding Plan CN (open.bigmodel.cn)",
+        endpoint: "coding-cn",
+      }),
+      buildZaiApiKeyMethod({
+        id: "global",
+        choiceId: "zai-global",
+        choiceLabel: "Global",
+        choiceHint: "Z.AI Global (api.z.ai)",
+        endpoint: "global",
+      }),
+      buildZaiApiKeyMethod({
+        id: "cn",
+        choiceId: "zai-cn",
+        choiceLabel: "CN",
+        choiceHint: "Z.AI CN (open.bigmodel.cn)",
+        endpoint: "cn",
+      }),
+    ],
+    catalog: { allowExplicitBaseUrl: true, liveModelDiscovery: true },
+    resolveDynamicModel: (ctx) => resolveGlm5ForwardCompatModel(ctx),
+    matchesContextOverflowError: ({ errorMessage }) =>
+      /\b(?:tokens? in request more than max tokens? allowed|prompt exceeds max(?:imum)? length)\b/i.test(
+        errorMessage,
+      ),
+    ...buildProviderReplayFamilyHooks({
+      family: "openai-compatible",
+      dropReasoningFromHistory: false,
+    }),
+    prepareExtraParams: (ctx) => defaultToolStreamExtraParams(ctx.extraParams),
+    wrapStreamFn: (ctx) => wrapZaiStreamFn(ctx),
+    resolveThinkingProfile,
+    isModernModelRef: ({ modelId }) => {
+      const lower = normalizeLowercaseStringOrEmpty(modelId);
+      return (
+        lower.startsWith("glm-5") ||
+        lower.startsWith("glm-4.7") ||
+        lower.startsWith("glm-4.7-flash") ||
+        lower.startsWith("glm-4.7-flashx")
+      );
+    },
+    resolveUsageAuth: async (ctx) => {
+      const apiKey = ctx.resolveApiKeyFromConfigAndStore({
+        providerIds: [PROVIDER_ID, "z-ai"],
+        envDirect: [ctx.env.ZAI_API_KEY, ctx.env.Z_AI_API_KEY],
+      });
+      if (apiKey) {
+        return { token: apiKey };
+      }
+      const legacyToken = resolveDeprecatedPiAgentAccessToken(ctx.env, ["z-ai", PROVIDER_ID]);
+      return legacyToken ? { token: legacyToken } : null;
+    },
+    fetchUsageSnapshot: async (ctx) => await fetchZaiUsage(ctx.token, ctx.timeoutMs, ctx.fetchFn),
+    isCacheTtlEligible: () => true,
+  },
+  register(api) {
     api.registerMediaUnderstandingProvider(zaiMediaUnderstandingProvider);
   },
 });

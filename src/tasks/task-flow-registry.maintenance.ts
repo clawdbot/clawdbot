@@ -1,4 +1,6 @@
+// Reconciles stale task-flow records with their child task state.
 import { listTasksForFlowId } from "./runtime-internal.js";
+import { isTaskFlowCancellationPending } from "./task-cancellation-state.js";
 import {
   listTaskFlowAuditFindings,
   summarizeTaskFlowAuditFindings,
@@ -7,32 +9,31 @@ import {
 import {
   deleteTaskFlowRecordById,
   getTaskFlowById,
+  getTaskFlowRegistryRestoreFailure,
   listTaskFlowRecords,
   updateFlowRecordByIdExpectedRevision,
 } from "./task-flow-registry.js";
-import type { TaskFlowRecord } from "./task-flow-registry.types.js";
+import { isTerminalTaskFlow, type TaskFlowRecord } from "./task-flow-registry.types.js";
 
 const TASK_FLOW_RETENTION_MS = 7 * 24 * 60 * 60_000;
 
-export type TaskFlowRegistryMaintenanceSummary = {
+/** Counts task-flow registry maintenance actions without exposing individual records. */
+type TaskFlowRegistryMaintenanceSummary = {
   reconciled: number;
   pruned: number;
 };
 
-function isTerminalFlow(flow: TaskFlowRecord): boolean {
-  return (
-    flow.status === "succeeded" ||
-    flow.status === "blocked" ||
-    flow.status === "failed" ||
-    flow.status === "cancelled" ||
-    flow.status === "lost"
-  );
+export function assertTaskFlowRegistryMaintenanceReady(): void {
+  const restoreFailure = getTaskFlowRegistryRestoreFailure();
+  if (restoreFailure) {
+    throw new Error(
+      `Task-flow registry restore failed: ${restoreFailure}. Refusing task maintenance.`,
+    );
+  }
 }
 
 function hasActiveLinkedTasks(flowId: string): boolean {
-  return listTasksForFlowId(flowId).some(
-    (task) => task.status === "queued" || task.status === "running",
-  );
+  return listTasksForFlowId(flowId).some(isTaskFlowCancellationPending);
 }
 
 function resolveTerminalAt(flow: TaskFlowRecord): number {
@@ -40,7 +41,7 @@ function resolveTerminalAt(flow: TaskFlowRecord): number {
 }
 
 function shouldPruneFlow(flow: TaskFlowRecord, now: number): boolean {
-  if (!isTerminalFlow(flow)) {
+  if (!isTerminalTaskFlow(flow)) {
     return false;
   }
   if (hasActiveLinkedTasks(flow.flowId)) {
@@ -53,7 +54,7 @@ function shouldFinalizeCancelledFlow(flow: TaskFlowRecord): boolean {
   if (flow.syncMode !== "managed") {
     return false;
   }
-  if (flow.cancelRequestedAt == null || isTerminalFlow(flow)) {
+  if (flow.cancelRequestedAt == null || isTerminalTaskFlow(flow)) {
     return false;
   }
   return !hasActiveLinkedTasks(flow.flowId);
@@ -90,7 +91,7 @@ function finalizeCancelledFlow(flow: TaskFlowRecord, now: number): boolean {
 }
 
 function shouldRepairTerminalMirroredFlowTimestamp(flow: TaskFlowRecord): boolean {
-  if (flow.syncMode !== "task_mirrored" || !isTerminalFlow(flow)) {
+  if (flow.syncMode !== "task_mirrored" || !isTerminalTaskFlow(flow)) {
     return false;
   }
   if (flow.endedAt == null || flow.endedAt < flow.createdAt) {

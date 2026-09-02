@@ -1,3 +1,4 @@
+// Browser tests cover pw tools core.clamps timeoutms scrollintoview plugin behavior.
 import { describe, expect, it, vi } from "vitest";
 import {
   installPwToolsCoreTestHooks,
@@ -6,7 +7,7 @@ import {
 } from "./pw-tools-core.test-harness.js";
 
 installPwToolsCoreTestHooks();
-const mod = await import("./pw-tools-core.js");
+const mod = await import("./pw-tools-core.interactions.js");
 
 describe("pw-tools-core", () => {
   it("clamps timeoutMs for scrollIntoView", async () => {

@@ -1,7 +1,14 @@
+/**
+ * Browser output file writer.
+ *
+ * Validates caller-provided output paths against a root before writing
+ * screenshots, PDFs, downloads, or traces to disk.
+ */
 import path from "node:path";
 import { writeExternalFileWithinRoot } from "../sdk-security-runtime.js";
 import { ensureOutputDirectory } from "./output-directories.js";
 
+/** Write a browser output file within a caller-selected output root. */
 export async function writeExternalFileWithinOutputRoot(params: {
   rootDir?: string;
   path: string;
@@ -21,6 +28,11 @@ export async function writeExternalFileWithinOutputRoot(params: {
     rootDir,
     path: outputPath,
     write: params.write,
+  }).catch((err: unknown) => {
+    if (err instanceof Error && (err as NodeJS.ErrnoException).code === "ENOENT") {
+      throw new Error("output directory changed while writing file", { cause: err });
+    }
+    throw err;
   });
   return result.path;
 }

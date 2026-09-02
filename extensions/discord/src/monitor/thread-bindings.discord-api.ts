@@ -1,9 +1,12 @@
-import { ChannelType } from "discord-api-types/v10";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
-import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
+// Discord API module exposes the plugin public contract.
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { parseStrictNonNegativeInteger } from "openclaw/plugin-sdk/number-runtime";
+import { createSubsystemLogger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { isDiscordThreadChannelType } from "../channel-type.js";
 import { createDiscordRestClient } from "../client.js";
 import { createChannelWebhook, getChannel } from "../internal/discord.js";
+import { canFallbackDiscordWebhookSend } from "../retry.js";
 import { sendMessageDiscord, sendWebhookMessageDiscord } from "../send.js";
 import { createThreadDiscord } from "../send.messages.js";
 import { resolveDiscordChannelId } from "../target-parsing.js";
@@ -19,6 +22,8 @@ import {
   DISCORD_UNKNOWN_CHANNEL_ERROR_CODE,
   type ThreadBindingRecord,
 } from "./thread-bindings.types.js";
+
+const log = createSubsystemLogger("discord/thread-bindings");
 
 function buildThreadTarget(threadId: string): string {
   return /^(channel:|user:)/i.test(threadId) ? threadId : `channel:${threadId}`;
@@ -43,14 +48,6 @@ export function isThreadArchived(raw: unknown): boolean {
     return true;
   }
   return false;
-}
-
-function isThreadChannelType(type: unknown): boolean {
-  return (
-    type === ChannelType.PublicThread ||
-    type === ChannelType.PrivateThread ||
-    type === ChannelType.AnnouncementThread
-  );
 }
 
 function normalizeDiscordBindingChannelId(raw?: string | null): string | null {
@@ -84,13 +81,7 @@ export function summarizeDiscordError(err: unknown): string {
 }
 
 function extractNumericDiscordErrorValue(value: unknown): number | undefined {
-  if (typeof value === "number" && Number.isFinite(value)) {
-    return Math.trunc(value);
-  }
-  if (typeof value === "string" && /^\d+$/.test(value.trim())) {
-    return Number(value);
-  }
-  return undefined;
+  return parseStrictNonNegativeInteger(value);
 }
 
 function extractDiscordErrorStatus(err: unknown): number | undefined {
@@ -161,7 +152,14 @@ export async function maybeSendBindingMessage(params: {
       });
       return;
     } catch (err) {
-      logVerbose(`discord thread binding webhook send failed: ${summarizeDiscordError(err)}`);
+      const fallbackToBot = canFallbackDiscordWebhookSend(err);
+      log.warn("discord thread binding webhook send failed", {
+        error: summarizeDiscordError(err),
+        fallbackToBot,
+      });
+      if (!fallbackToBot) {
+        return;
+      }
     }
   }
   try {
@@ -267,7 +265,7 @@ export async function resolveChannelIdForBinding(params: {
     const parentId = normalizeOptionalString(channelInfo.parentId) ?? "";
     // Only thread channels should resolve to their parent channel.
     // Non-thread channels (text/forum/media) must keep their own ID.
-    if (parentId && isThreadChannelType(type)) {
+    if (parentId && isDiscordThreadChannelType(type)) {
       return parentId;
     }
     return channelId || null;
@@ -291,7 +289,6 @@ export async function createThreadForBinding(params: {
       params.channelId,
       {
         name: params.threadName,
-        autoArchiveMinutes: 60,
       },
       {
         cfg: params.cfg,

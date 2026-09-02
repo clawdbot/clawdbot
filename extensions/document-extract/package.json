@@ -1,22 +1,14 @@
 {
   "name": "@openclaw/document-extract-plugin",
-  "version": "2026.5.6",
+  "version": "2026.8.1",
   "private": true,
   "description": "OpenClaw local document extraction plugin",
   "type": "module",
   "dependencies": {
-    "pdfjs-dist": "^5.7.284"
+    "clawpdf": "0.3.1"
   },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*"
-  },
-  "peerDependencies": {
-    "@napi-rs/canvas": "^0.1.89"
-  },
-  "peerDependenciesMeta": {
-    "@napi-rs/canvas": {
-      "optional": true
-    }
   },
   "openclaw": {
     "extensions": [

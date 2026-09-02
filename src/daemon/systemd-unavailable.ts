@@ -1,10 +1,12 @@
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
+/** Classifies systemd/systemctl unavailable errors into user-facing categories. */
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 
 export type SystemdUnavailableKind =
   | "missing_systemctl"
   | "user_bus_unavailable"
   | "generic_unavailable";
 
+// Normalizes platform command output before matching known systemd failure families.
 function normalizeDetail(detail?: string): string {
   return normalizeLowercaseStringOrEmpty(detail);
 }
@@ -37,6 +39,8 @@ export function classifySystemdUnavailableDetail(detail?: string): SystemdUnavai
   if (!normalized) {
     return null;
   }
+  // Order matters: missing systemctl has different remediation from a live
+  // systemd install whose user bus is unavailable.
   if (isSystemctlMissingDetail(normalized)) {
     return "missing_systemctl";
   }

@@ -1,14 +1,16 @@
+// Msteams plugin module implements oauth behavior.
+import { generateHexPkceVerifierChallenge } from "openclaw/plugin-sdk/provider-auth";
 import {
-  buildMSTeamsAuthUrl,
   generateOAuthState,
-  generatePkce,
-  parseCallbackInput,
-  shouldUseManualOAuthFlow,
-  waitForLocalCallback,
-} from "./oauth.flow.js";
+  parseOAuthCallbackInput,
+  waitForLocalOAuthCallback,
+} from "openclaw/plugin-sdk/provider-auth-runtime";
+import { buildMSTeamsAuthUrl, shouldUseManualOAuthFlow } from "./oauth.flow.js";
 import {
   MSTEAMS_DEFAULT_DELEGATED_SCOPES,
+  MSTEAMS_OAUTH_CALLBACK_PATH,
   MSTEAMS_OAUTH_CALLBACK_PORT,
+  MSTEAMS_OAUTH_REDIRECT_URI,
   type MSTeamsDelegatedOAuthContext,
   type MSTeamsDelegatedTokens,
 } from "./oauth.shared.js";
@@ -43,7 +45,7 @@ export async function loginMSTeamsDelegated(
     "MSTeams Delegated OAuth",
   );
 
-  const { verifier, challenge } = generatePkce();
+  const { verifier, challenge } = generateHexPkceVerifierChallenge();
   const state = generateOAuthState();
   const authUrl = buildMSTeamsAuthUrl({
     tenantId: params.tenantId,
@@ -65,9 +67,14 @@ export async function loginMSTeamsDelegated(
   }
 
   try {
-    const { code } = await waitForLocalCallback({
+    const { code } = await waitForLocalOAuthCallback({
       expectedState: state,
       timeoutMs: 5 * 60 * 1000,
+      port: MSTEAMS_OAUTH_CALLBACK_PORT,
+      callbackPath: MSTEAMS_OAUTH_CALLBACK_PATH,
+      redirectUri: MSTEAMS_OAUTH_REDIRECT_URI,
+      successTitle: "MSTeams Delegated OAuth complete",
+      progressMessage: `Waiting for OAuth callback on ${MSTEAMS_OAUTH_REDIRECT_URI}...`,
       onProgress: (msg) => ctx.progress.update(msg),
     });
     ctx.progress.update("Exchanging authorization code for tokens...");
@@ -111,7 +118,11 @@ async function manualFlow(
   ctx.log(`\nOpen this URL in your LOCAL browser:\n\n${authUrl}\n`);
   ctx.progress.update("Waiting for you to paste the callback URL...");
   const callbackInput = await ctx.prompt("Paste the redirect URL here: ");
-  const parsed = parseCallbackInput(callbackInput, state);
+  const parsed = parseOAuthCallbackInput(callbackInput, {
+    missingState: "Missing 'state' parameter in URL. Paste the full redirect URL.",
+    invalidInput:
+      "Paste the full redirect URL (including code and state parameters), not just the authorization code.",
+  });
   if ("error" in parsed) {
     throw new Error(parsed.error, cause ? { cause } : undefined);
   }

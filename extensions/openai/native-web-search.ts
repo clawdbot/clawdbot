@@ -1,8 +1,9 @@
-import type { StreamFn } from "@mariozechner/pi-agent-core";
-import { streamSimple } from "@mariozechner/pi-ai";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+// Openai plugin module implements native web search behavior.
+import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { normalizeProviderId } from "openclaw/plugin-sdk/provider-model-shared";
-import { streamWithPayloadPatch } from "openclaw/plugin-sdk/provider-stream-shared";
+import { createPayloadPatchStreamWrapper } from "openclaw/plugin-sdk/provider-stream-shared";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { isOpenAIApiBaseUrl } from "./base-url.js";
 
 const OPENAI_WEB_SEARCH_TOOL = { type: "web_search" } as const;
@@ -11,10 +12,6 @@ type OpenAINativeWebSearchPatchResult =
   | "payload_not_object"
   | "native_tool_already_present"
   | "injected";
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return !!value && typeof value === "object" && !Array.isArray(value);
-}
 
 function isOpenAINativeWebSearchEligibleModel(model: {
   api?: unknown;
@@ -65,9 +62,7 @@ function raiseMinimalReasoningForOpenAINativeWebSearch(payload: Record<string, u
   reasoning.effort = "low";
 }
 
-export function patchOpenAINativeWebSearchPayload(
-  payload: unknown,
-): OpenAINativeWebSearchPatchResult {
+function patchOpenAINativeWebSearchPayload(payload: unknown): OpenAINativeWebSearchPatchResult {
   if (!isRecord(payload)) {
     return "payload_not_object";
   }
@@ -89,15 +84,24 @@ export function patchOpenAINativeWebSearchPayload(
 
 export function createOpenAINativeWebSearchWrapper(
   baseStreamFn: StreamFn | undefined,
-  params: { config?: OpenClawConfig },
+  params: {
+    config?: OpenClawConfig;
+    agentId?: string;
+    nativeWebSearchAllowedByToolPolicy?: boolean;
+  },
 ): StreamFn {
-  const underlying = baseStreamFn ?? streamSimple;
-  return (model, context, options) => {
-    if (!shouldEnableOpenAINativeWebSearch({ config: params.config, model })) {
-      return underlying(model, context, options);
-    }
-    return streamWithPayloadPatch(underlying, model, context, options, (payload) => {
+  return createPayloadPatchStreamWrapper(
+    baseStreamFn,
+    ({ payload, options }) => {
+      (
+        options as { openclawCodeModeAllowedHostedToolTypes?: Set<string> } | undefined
+      )?.openclawCodeModeAllowedHostedToolTypes?.add(OPENAI_WEB_SEARCH_TOOL.type);
       patchOpenAINativeWebSearchPayload(payload);
-    });
-  };
+    },
+    {
+      shouldPatch: ({ model }) =>
+        params.nativeWebSearchAllowedByToolPolicy !== false &&
+        shouldEnableOpenAINativeWebSearch({ config: params.config, model }),
+    },
+  );
 }

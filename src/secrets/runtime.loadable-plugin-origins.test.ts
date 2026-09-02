@@ -1,5 +1,11 @@
+/** Tests secrets runtime loadable plugin origin detection. */
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
 import { asConfig, setupSecretsRuntimeSnapshotTestHooks } from "./runtime.test-support.ts";
+import { withSecureTestNodeExecPath } from "./test-node-command.test-support.js";
 
 const manifestMocks = vi.hoisted(() => ({
   listPluginOriginsFromMetadataSnapshot: vi.fn(
@@ -15,7 +21,7 @@ const manifestMocks = vi.hoisted(() => ({
 
 vi.mock("./runtime-manifest.runtime.js", () => ({
   listPluginOriginsFromMetadataSnapshot: manifestMocks.listPluginOriginsFromMetadataSnapshot,
-  loadPluginMetadataSnapshot: manifestMocks.loadPluginMetadataSnapshot,
+  resolveConfigWidePluginManifestRegistry: manifestMocks.loadPluginMetadataSnapshot,
 }));
 
 const { prepareSecretsRuntimeSnapshot } = setupSecretsRuntimeSnapshotTestHooks();
@@ -69,16 +75,134 @@ describe("prepareSecretsRuntimeSnapshot loadable plugin origins", () => {
       includeAuthStoreRefs: false,
     });
 
-    expect(manifestMocks.loadPluginMetadataSnapshot).toHaveBeenCalledWith({
-      config: expect.objectContaining({
-        plugins: expect.any(Object),
-      }),
-      workspaceDir: expect.any(String),
-      env: expect.objectContaining({
-        HOME: "/home/demo",
-        DEMO_API_KEY: "sk-demo",
-      }),
+    const snapshotCalls = manifestMocks.loadPluginMetadataSnapshot.mock.calls as unknown as Array<
+      [
+        {
+          config: {
+            plugins?: unknown;
+          };
+          env: Record<string, unknown>;
+        },
+      ]
+    >;
+    const snapshotParams = snapshotCalls[0]?.[0];
+    expect(snapshotParams?.config.plugins).toStrictEqual({
+      entries: {
+        demo: {
+          config: {
+            apiKey: { source: "env", provider: "default", id: "DEMO_API_KEY" },
+          },
+        },
+      },
     });
+    expect(snapshotParams?.env.HOME).toBe("/home/demo");
+    expect(snapshotParams?.env.DEMO_API_KEY).toBe("sk-demo");
     expect(manifestMocks.listPluginOriginsFromMetadataSnapshot).toHaveBeenCalledWith(snapshot);
+  });
+
+  it("keeps full plugin policy while projecting provider-auth assignments", async () => {
+    const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "oc-runtime-secret-provider-"));
+    fs.chmodSync(rootDir, 0o700);
+    fs.writeFileSync(path.join(rootDir, "index.ts"), "export default {};\n", "utf8");
+    const resolverPath = path.join(rootDir, "resolve.mjs");
+    fs.writeFileSync(
+      resolverPath,
+      [
+        "import process from 'node:process';",
+        "let input = '';",
+        "process.stdin.setEncoding('utf8');",
+        "process.stdin.on('data', (chunk) => input += chunk);",
+        "process.stdin.on('end', () => {",
+        "  const request = JSON.parse(input);",
+        "  process.stdout.write(JSON.stringify({ protocolVersion: 1, values: Object.fromEntries(request.ids.map((id) => [id, `value:${id}`])) }));",
+        "});",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    fs.chmodSync(resolverPath, 0o600);
+    const plugin: PluginManifestRecord = {
+      id: "vault-secrets",
+      rootDir,
+      source: path.join(rootDir, "index.ts"),
+      manifestPath: path.join(rootDir, "openclaw.plugin.json"),
+      origin: "global",
+      channels: [],
+      providers: [],
+      cliBackends: [],
+      skills: [],
+      hooks: [],
+      secretProviderIntegrations: {
+        vault: {
+          providerAlias: "vault",
+          source: "exec",
+          command: "${node}",
+          args: ["./resolve.mjs"],
+        },
+      },
+    };
+    const pluginMetadataSnapshot = {
+      plugins: [plugin],
+      manifestRegistry: {
+        plugins: [plugin],
+        diagnostics: [],
+      },
+    };
+
+    try {
+      const config = asConfig({
+        plugins: {
+          entries: {
+            "vault-secrets": { enabled: true },
+          },
+        },
+        gateway: {
+          auth: {
+            mode: "token",
+            token: { source: "exec", provider: "vault", id: "gateway/token" },
+          },
+        },
+        models: {
+          providers: {
+            openai: {
+              apiKey: { source: "exec", provider: "vault", id: "models/openai" },
+              models: [],
+            },
+          },
+        },
+        secrets: {
+          providers: {
+            vault: {
+              source: "exec",
+              pluginIntegration: {
+                pluginId: "vault-secrets",
+                integrationId: "vault",
+              },
+            },
+          },
+        },
+      });
+      const snapshot = await withSecureTestNodeExecPath(async () =>
+        prepareSecretsRuntimeSnapshot({
+          config,
+          assignmentConfig: asConfig({
+            models: config.models,
+            secrets: config.secrets,
+          }),
+          env: { HOME: rootDir },
+          includeAuthStoreRefs: false,
+          pluginMetadataSnapshot,
+        }),
+      );
+
+      expect(snapshot.config.gateway).toBeUndefined();
+      expect(snapshot.config.models?.providers?.openai?.apiKey).toBe("value:models/openai");
+      expect(manifestMocks.loadPluginMetadataSnapshot).not.toHaveBeenCalled();
+      expect(manifestMocks.listPluginOriginsFromMetadataSnapshot).toHaveBeenCalledWith(
+        pluginMetadataSnapshot.manifestRegistry,
+      );
+    } finally {
+      fs.rmSync(rootDir, { recursive: true, force: true });
+    }
   });
 });

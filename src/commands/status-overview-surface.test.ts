@@ -1,3 +1,4 @@
+// Status overview surface tests cover JSON and terminal rows derived from shared overview surfaces.
 import { describe, expect, it } from "vitest";
 import {
   buildStatusGatewayJsonPayloadFromSurface,

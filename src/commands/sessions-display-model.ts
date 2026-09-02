@@ -1,7 +1,18 @@
+import { resolveAgentConfig } from "../agents/agent-scope-config.js";
+/**
+ * Model display resolution for session listings.
+ *
+ * Session rows may carry persisted model/provider overrides or CLI-runtime
+ * model strings; this module normalizes them into display-ready model refs.
+ */
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import {
   inferUniqueProviderFromConfiguredModels,
   isCliProvider,
+  normalizeStoredOverrideModel,
+  parseModelRef,
+  resolvePersistedSelectedModelRef,
+  type CliProviderClassifier,
 } from "../agents/model-selection.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -20,21 +31,6 @@ type SessionDisplayDefaults = {
 
 type SessionDisplayModelRef = { provider: string; model: string };
 
-function parseModelRef(raw: string, defaultProvider: string): SessionDisplayModelRef {
-  const trimmed = raw.trim();
-  if (!trimmed) {
-    return { provider: defaultProvider, model: DEFAULT_MODEL };
-  }
-  const slashIndex = trimmed.indexOf("/");
-  if (slashIndex <= 0 || slashIndex === trimmed.length - 1) {
-    return { provider: defaultProvider, model: trimmed };
-  }
-  return {
-    provider: trimmed.slice(0, slashIndex).trim() || defaultProvider,
-    model: trimmed.slice(slashIndex + 1).trim() || DEFAULT_MODEL,
-  };
-}
-
 function resolveAgentPrimaryModel(
   cfg: OpenClawConfig,
   agentId: string | undefined,
@@ -42,27 +38,7 @@ function resolveAgentPrimaryModel(
   if (!agentId) {
     return undefined;
   }
-  const agentConfig = cfg.agents?.list?.find((agent) => agent.id === agentId);
-  return resolveAgentModelPrimaryValue(agentConfig?.model);
-}
-
-function normalizeStoredOverrideModel(params: {
-  providerOverride?: string;
-  modelOverride?: string;
-}): { providerOverride?: string; modelOverride?: string } {
-  const providerOverride = params.providerOverride?.trim();
-  const modelOverride = params.modelOverride?.trim();
-  if (!providerOverride || !modelOverride) {
-    return { providerOverride, modelOverride };
-  }
-
-  const providerPrefix = `${providerOverride.toLowerCase()}/`;
-  return {
-    providerOverride,
-    modelOverride: modelOverride.toLowerCase().startsWith(providerPrefix)
-      ? modelOverride.slice(providerOverride.length + 1).trim() || modelOverride
-      : modelOverride,
-  };
+  return resolveAgentModelPrimaryValue(resolveAgentConfig(cfg, agentId)?.model);
 }
 
 function resolveDefaultModelRef(cfg: OpenClawConfig, agentId?: string): SessionDisplayModelRef {
@@ -70,9 +46,15 @@ function resolveDefaultModelRef(cfg: OpenClawConfig, agentId?: string): SessionD
     resolveAgentPrimaryModel(cfg, agentId) ??
     resolveAgentModelPrimaryValue(cfg.agents?.defaults?.model) ??
     DEFAULT_MODEL;
-  return parseModelRef(primary, DEFAULT_PROVIDER);
+  return (
+    parseModelRef(primary, DEFAULT_PROVIDER, {
+      allowManifestNormalization: false,
+      allowPluginNormalization: false,
+    }) ?? { provider: DEFAULT_PROVIDER, model: DEFAULT_MODEL }
+  );
 }
 
+/** Resolves default display values for a session table scoped to an agent. */
 export function resolveSessionDisplayDefaults(
   cfg: OpenClawConfig,
   agentId?: string,
@@ -84,65 +66,80 @@ export function resolveSessionDisplayDefaults(
 
 function normalizeCliRuntimeDisplayRef(
   cfg: OpenClawConfig,
+  agentId: string | undefined,
   ref: SessionDisplayModelRef,
   defaultRef: SessionDisplayModelRef,
+  classifyCliProvider: CliProviderClassifier,
 ): SessionDisplayModelRef {
-  if (!isCliProvider(ref.provider, cfg)) {
+  if (!classifyCliProvider(ref.provider)) {
     return ref;
   }
-  if (ref.model.includes("/")) {
-    const parsed = parseModelRef(ref.model, defaultRef.provider);
-    if (!isCliProvider(parsed.provider, cfg)) {
+  const parsed = parseModelRef(ref.model, defaultRef.provider, {
+    allowManifestNormalization: false,
+    allowPluginNormalization: false,
+  });
+  if (ref.model.includes("/") && parsed) {
+    // CLI runtimes can store the real provider/model inside the model field;
+    // prefer that embedded provider when it is not another CLI runtime alias.
+    if (!classifyCliProvider(parsed.provider)) {
       return parsed;
     }
   }
   const inferredProvider = inferUniqueProviderFromConfiguredModels({
     cfg,
     model: ref.model,
+    agentId,
   });
-  if (inferredProvider && !isCliProvider(inferredProvider, cfg)) {
+  if (inferredProvider && !classifyCliProvider(inferredProvider)) {
     return { provider: inferredProvider, model: ref.model };
   }
-  const parsed = parseModelRef(ref.model, defaultRef.provider);
-  if (!isCliProvider(parsed.provider, cfg)) {
+  // If the CLI runtime model cannot be mapped to a concrete provider, fall
+  // back to the configured default provider so rows stay comparable.
+  if (parsed && !classifyCliProvider(parsed.provider)) {
     return parsed;
   }
   return {
     provider: defaultRef.provider || ref.provider,
-    model: parsed.model || ref.model,
+    model: parsed?.model || ref.model,
   };
 }
 
+/** Resolves only the model id to show for a session row. */
 export function resolveSessionDisplayModel(
   cfg: OpenClawConfig,
   row: SessionDisplayModelRow,
+  classifyCliProvider?: CliProviderClassifier,
 ): string {
-  return resolveSessionDisplayModelRef(cfg, row).model;
+  return resolveSessionDisplayModelRef(cfg, row, classifyCliProvider).model;
 }
 
+/** Resolves provider/model display metadata for a session row. */
 export function resolveSessionDisplayModelRef(
   cfg: OpenClawConfig,
   row: SessionDisplayModelRow,
+  classifyCliProvider: CliProviderClassifier = (provider) => isCliProvider(provider, cfg),
+  ownerAgentId?: string,
 ): SessionDisplayModelRef {
-  const agentId = row.key.startsWith("agent:") ? row.key.split(":")[1] : undefined;
+  const agentId =
+    ownerAgentId ?? (row.key.startsWith("agent:") ? row.key.split(":")[1] : undefined);
   const defaultRef = resolveDefaultModelRef(cfg, agentId);
   const normalizedOverride = normalizeStoredOverrideModel({
     providerOverride: row.providerOverride,
     modelOverride: row.modelOverride,
   });
-
-  if (normalizedOverride.modelOverride) {
-    return parseModelRef(
-      normalizedOverride.modelOverride,
-      normalizedOverride.providerOverride ?? defaultRef.provider,
-    );
+  const persistedRef = resolvePersistedSelectedModelRef({
+    defaultProvider: defaultRef.provider,
+    runtimeProvider: row.modelProvider,
+    runtimeModel: row.model,
+    overrideProvider: normalizedOverride.providerOverride,
+    overrideModel: normalizedOverride.modelOverride,
+    allowManifestNormalization: false,
+    allowPluginNormalization: false,
+  });
+  if (!persistedRef) {
+    return defaultRef;
   }
-  if (row.model) {
-    return normalizeCliRuntimeDisplayRef(
-      cfg,
-      parseModelRef(row.model, row.modelProvider ?? defaultRef.provider),
-      defaultRef,
-    );
-  }
-  return defaultRef;
+  return normalizedOverride.modelOverride
+    ? persistedRef
+    : normalizeCliRuntimeDisplayRef(cfg, agentId, persistedRef, defaultRef, classifyCliProvider);
 }

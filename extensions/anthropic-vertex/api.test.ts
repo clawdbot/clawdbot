@@ -1,4 +1,5 @@
-import { createAssistantMessageEventStream, type Model } from "@mariozechner/pi-ai";
+// Anthropic Vertex tests cover api plugin behavior.
+import { createAssistantMessageEventStream, type Model } from "openclaw/plugin-sdk/llm";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import type { AnthropicVertexStreamDeps } from "./stream-runtime.js";
 
@@ -15,10 +16,13 @@ function createStreamDeps(): {
   const MockAnthropicVertex = function MockAnthropicVertex(options: unknown) {
     anthropicVertexCtorMock(options);
   } as unknown as AnthropicVertexStreamDeps["AnthropicVertex"];
+  const MockGoogleAuth =
+    function MockGoogleAuth() {} as unknown as AnthropicVertexStreamDeps["GoogleAuth"];
 
   return {
     deps: {
       AnthropicVertex: MockAnthropicVertex,
+      GoogleAuth: MockGoogleAuth,
       streamAnthropic: streamAnthropicMock,
     },
     streamAnthropicMock,

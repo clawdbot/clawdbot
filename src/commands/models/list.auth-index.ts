@@ -1,187 +1,87 @@
+/** Auth availability index for `openclaw models list` rows. */
+import type { PreparedAgentCredentialModes } from "../../agents/agent-auth-credential-modes.js";
 import type { AuthProfileStore } from "../../agents/auth-profiles/types.js";
 import {
-  listProviderEnvAuthLookupKeys,
-  resolveProviderEnvAuthEvidence,
-  resolveProviderEnvApiKeyCandidates,
-} from "../../agents/model-auth-env-vars.js";
-import { resolveEnvApiKey } from "../../agents/model-auth-env.js";
-import { resolveAwsSdkEnvVarName } from "../../agents/model-auth-runtime-shared.js";
-import {
-  hasSyntheticLocalProviderAuthConfig,
-  hasUsableCustomProviderApiKey,
-} from "../../agents/model-auth.js";
-import {
-  OPENAI_CODEX_PROVIDER_ID,
-  openAIProviderUsesCodexRuntimeByDefault,
-} from "../../agents/openai-codex-routing.js";
-import { resolveProviderAuthAliasMap } from "../../agents/provider-auth-aliases.js";
-import { normalizeProviderIdForAuth } from "../../agents/provider-id.js";
-import { resolveAgentModelPrimaryValue } from "../../config/model-input.js";
+  createModelAuthAvailabilityResolver,
+  applyCliRuntimeModelAuthAvailability,
+  type ModelAuthAvailabilityEvaluation,
+  type ModelAuthAvailabilityRef,
+} from "../../agents/model-auth-availability.js";
+import type { createOpenAIModelRoutesResolver } from "../../agents/openai-model-routes.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { loadPluginRegistrySnapshotWithMetadata } from "../../plugins/plugin-registry.js";
+import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
+
+export type ModelListAuthRef = ModelAuthAvailabilityRef;
+export type ModelListAuthEvaluation = ModelAuthAvailabilityEvaluation;
 
 export type ModelListAuthIndex = {
-  hasProviderAuth(provider: string): boolean;
-  allowsProviderAuthAvailabilityFallback(provider: string): boolean;
+  providerDiscoveryProviderIds?: readonly string[];
+  evaluateModelAuth(provider: string, ref?: ModelListAuthRef): ModelListAuthEvaluation;
 };
 
-export type CreateModelListAuthIndexParams = {
+type CreateModelListAuthIndexParams = {
   cfg: OpenClawConfig;
   authStore: AuthProfileStore;
+  agentId?: string;
+  agentDir?: string;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
   syntheticAuthProviderRefs?: readonly string[];
+  metadataSnapshot: PluginMetadataSnapshot;
+  externalCliProviderIds?: readonly string[];
+  routeResolverFactory?: typeof createOpenAIModelRoutesResolver;
+  preparedRuntimeAuthModes?: PreparedAgentCredentialModes;
 };
 
-function normalizeAuthProvider(
-  provider: string,
-  aliasMap: Readonly<Record<string, string>>,
-): string {
-  const normalized = normalizeProviderIdForAuth(provider);
-  return aliasMap[normalized] ?? normalized;
-}
-
 function listValidatedSyntheticAuthProviderRefs(params: {
-  cfg: OpenClawConfig;
-  workspaceDir?: string;
-  env: NodeJS.ProcessEnv;
+  metadataSnapshot: PluginMetadataSnapshot;
 }): readonly string[] {
-  const result = loadPluginRegistrySnapshotWithMetadata({
-    config: params.cfg,
-    workspaceDir: params.workspaceDir,
-    env: params.env,
-  });
-  if (result.source !== "persisted" && result.source !== "provided") {
+  if (
+    params.metadataSnapshot.registryDiagnostics.length > 0 ||
+    (params.metadataSnapshot.registrySource !== "persisted" &&
+      params.metadataSnapshot.registrySource !== "provided")
+  ) {
     return [];
   }
-  return result.snapshot.plugins
+  return params.metadataSnapshot.index.plugins
     .filter((plugin) => plugin.enabled)
     .flatMap((plugin) => plugin.syntheticAuthRefs ?? []);
 }
 
+/** Builds one snapshot-scoped command adapter around the shared evaluator. */
 export function createModelListAuthIndex(
   params: CreateModelListAuthIndexParams,
 ): ModelListAuthIndex {
   const env = params.env ?? process.env;
-  const lookupParams = {
-    config: params.cfg,
+  const resolver = createModelAuthAvailabilityResolver({
+    cfg: params.cfg,
+    authStore: params.authStore,
+    agentDir: params.agentDir,
     workspaceDir: params.workspaceDir,
     env,
-  };
-  const aliasMap = resolveProviderAuthAliasMap(lookupParams);
-  const envCandidateMap = resolveProviderEnvApiKeyCandidates(lookupParams);
-  const authEvidenceMap = resolveProviderEnvAuthEvidence(lookupParams);
-  const authenticatedProviders = new Set<string>();
-  const syntheticAuthProviders = new Set<string>();
-  const envProviderAuthCache = new Map<string, boolean>();
-  const addProvider = (provider: string | undefined) => {
-    if (!provider?.trim()) {
-      return;
-    }
-    authenticatedProviders.add(normalizeAuthProvider(provider, aliasMap));
-  };
-  const addSyntheticProvider = (provider: string | undefined) => {
-    const normalized = provider?.trim() ? normalizeProviderIdForAuth(provider) : "";
-    if (!normalized) {
-      return;
-    }
-    syntheticAuthProviders.add(normalized);
-  };
-
-  for (const credential of Object.values(params.authStore.profiles ?? {})) {
-    addProvider(credential.provider);
-  }
-
-  for (const provider of listProviderEnvAuthLookupKeys({ envCandidateMap, authEvidenceMap })) {
-    if (
-      resolveEnvApiKey(provider, env, {
-        aliasMap,
-        candidateMap: envCandidateMap,
-        authEvidenceMap,
-        config: params.cfg,
-        workspaceDir: params.workspaceDir,
-      })
-    ) {
-      addProvider(provider);
-    }
-  }
-
-  if (resolveAwsSdkEnvVarName(env)) {
-    addProvider("amazon-bedrock");
-  }
-
-  for (const provider of Object.keys(params.cfg.models?.providers ?? {})) {
-    if (
-      hasUsableCustomProviderApiKey(params.cfg, provider, env) ||
-      hasSyntheticLocalProviderAuthConfig({ cfg: params.cfg, provider })
-    ) {
-      addProvider(provider);
-    }
-  }
-  const primaryModelProvider = resolveAgentModelPrimaryValue(
-    params.cfg.agents?.defaults?.model,
-  )?.split("/", 1)[0];
-  if (primaryModelProvider === "openai-codex" || primaryModelProvider === "codex") {
-    addSyntheticProvider("codex");
-  }
-
-  for (const provider of params.syntheticAuthProviderRefs ??
-    listValidatedSyntheticAuthProviderRefs({
-      cfg: params.cfg,
-      workspaceDir: params.workspaceDir,
-      env,
-    })) {
-    addSyntheticProvider(provider);
-  }
-
-  const hasEnvProviderAuth = (provider: string): boolean => {
-    const normalized = normalizeAuthProvider(provider, aliasMap);
-    const cached = envProviderAuthCache.get(normalized);
-    if (cached !== undefined) {
-      return cached;
-    }
-    const hasPrecomputedCandidates = Object.hasOwn(envCandidateMap, normalized);
-    const hasPrecomputedEvidence = Object.hasOwn(authEvidenceMap, normalized);
-    const hasAuth = Boolean(
-      resolveEnvApiKey(provider, env, {
-        aliasMap,
-        candidateMap: hasPrecomputedCandidates ? envCandidateMap : undefined,
-        authEvidenceMap: hasPrecomputedEvidence ? authEvidenceMap : undefined,
-        config: params.cfg,
-        workspaceDir: params.workspaceDir,
+    metadataSnapshot: params.metadataSnapshot,
+    externalCliProviderIds: params.externalCliProviderIds,
+    routeResolverFactory: params.routeResolverFactory,
+    preparedRuntimeAuthModes: params.preparedRuntimeAuthModes,
+    syntheticAuthProviderRefs:
+      params.syntheticAuthProviderRefs ??
+      listValidatedSyntheticAuthProviderRefs({
+        metadataSnapshot: params.metadataSnapshot,
       }),
-    );
-    envProviderAuthCache.set(normalized, hasAuth);
-    if (hasAuth) {
-      authenticatedProviders.add(normalized);
-    }
-    return hasAuth;
-  };
-
-  const hasOpenAICodexRuntimeAuth = (provider: string): boolean => {
-    const normalizedProvider = normalizeAuthProvider(provider, aliasMap);
-    return (
-      openAIProviderUsesCodexRuntimeByDefault({
-        provider: normalizedProvider,
-        config: params.cfg,
-      }) && authenticatedProviders.has(OPENAI_CODEX_PROVIDER_ID)
-    );
-  };
-
+  });
   return {
-    hasProviderAuth(provider: string): boolean {
-      const normalizedProvider = normalizeAuthProvider(provider, aliasMap);
-      const hasDirectAuth =
-        authenticatedProviders.has(normalizedProvider) ||
-        syntheticAuthProviders.has(normalizeProviderIdForAuth(provider)) ||
-        hasEnvProviderAuth(provider);
-      if (hasDirectAuth) {
-        return true;
-      }
-      return hasOpenAICodexRuntimeAuth(normalizedProvider);
-    },
-    allowsProviderAuthAvailabilityFallback(provider: string): boolean {
-      return hasOpenAICodexRuntimeAuth(provider);
+    providerDiscoveryProviderIds: resolver.providerDiscoveryProviderIds,
+    evaluateModelAuth: (provider, ref) => {
+      const evaluation = resolver.evaluateModelAuth(provider, ref);
+      return applyCliRuntimeModelAuthAvailability({
+        authResolver: resolver,
+        evaluation,
+        cfg: params.cfg,
+        agentId: params.agentId,
+        metadataSnapshot: params.metadataSnapshot,
+        provider,
+        modelId: ref?.modelId,
+      });
     },
   };
 }

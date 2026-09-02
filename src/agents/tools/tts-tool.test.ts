@@ -1,8 +1,22 @@
+// TTS tool tests cover guidance, speech runtime arguments, delivery metadata,
+// timeout validation, and reply-directive defusing.
+
+import { expectDefined } from "@openclaw/normalization-core";
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import * as ttsRuntime from "../../tts/tts.js";
+import { getCoreTtsToolResultMediaUrls } from "./tts-tool-result-provenance.js";
 import { createTtsTool } from "./tts-tool.js";
 
 let textToSpeechSpy: ReturnType<typeof vi.spyOn>;
+
+const requireRecord = createRequireRecord("object", "expected-label");
+
+function latestTextToSpeechArgs(): Record<string, unknown> {
+  // Speech runtime args are the public handoff between the model-facing tool
+  // and provider-specific synthesis backends.
+  return requireRecord(textToSpeechSpy.mock.calls.at(-1)?.[0], "text-to-speech args");
+}
 
 describe("createTtsTool", () => {
   beforeEach(() => {
@@ -19,9 +33,9 @@ describe("createTtsTool", () => {
   it("requires explicit user or config audio intent in guidance text", () => {
     const tool = createTtsTool();
 
-    expect(tool.description).toContain("Use only for explicit audio intent");
+    expect(tool.description).toContain("Only explicit voice/speech/TTS intent");
     expect(tool.description).toContain("active TTS config");
-    expect(tool.description).toContain("Never use for ordinary text replies");
+    expect(tool.description).toContain("never ordinary text reply");
   });
 
   it("stores audio delivery in details.media and preserves the spoken text in content", async () => {
@@ -35,19 +49,17 @@ describe("createTtsTool", () => {
     const tool = createTtsTool();
     const result = await tool.execute("call-1", { text: "hello" });
 
-    expect(result).toMatchObject({
-      content: [{ type: "text", text: "(spoken) hello" }],
-      details: {
-        audioPath: "/tmp/reply.opus",
-        provider: "test",
-        media: {
-          mediaUrl: "/tmp/reply.opus",
-          trustedLocalMedia: true,
-          audioAsVoice: true,
-        },
-      },
+    expect(result.content).toEqual([{ type: "text", text: "(spoken) hello" }]);
+    const details = requireRecord(result.details, "TTS result details");
+    expect(details.audioPath).toBe("/tmp/reply.opus");
+    expect(details.provider).toBe("test");
+    expect(requireRecord(details.media, "TTS media details")).toEqual({
+      mediaUrl: "/tmp/reply.opus",
+      trustedLocalMedia: true,
+      audioAsVoice: true,
     });
     expect(JSON.stringify(result.content)).not.toContain("MEDIA:");
+    expect(getCoreTtsToolResultMediaUrls(result)).toEqual(["/tmp/reply.opus"]);
   });
 
   it("uses audioAsVoice from the TTS runtime even when the provider output is not native", async () => {
@@ -62,14 +74,9 @@ describe("createTtsTool", () => {
     const tool = createTtsTool();
     const result = await tool.execute("call-1", { text: "hello", channel: "feishu" });
 
-    expect(result).toMatchObject({
-      details: {
-        media: {
-          mediaUrl: "/tmp/reply.mp3",
-          audioAsVoice: true,
-        },
-      },
-    });
+    const media = requireRecord(requireRecord(result.details, "TTS result details").media, "media");
+    expect(media.mediaUrl).toBe("/tmp/reply.mp3");
+    expect(media.audioAsVoice).toBe(true);
   });
 
   it("passes an optional timeout to speech generation", async () => {
@@ -83,13 +90,26 @@ describe("createTtsTool", () => {
     const tool = createTtsTool();
     const result = await tool.execute("call-1", { text: "hello", timeoutMs: 12_345 });
 
-    expect(textToSpeechSpy).toHaveBeenCalledWith(
-      expect.objectContaining({
-        text: "hello",
-        timeoutMs: 12_345,
-      }),
+    const args = latestTextToSpeechArgs();
+    expect(args.text).toBe("hello");
+    expect(args.timeoutMs).toBe(12_345);
+    expect(requireRecord(result.details, "TTS result details").timeoutMs).toBe(12_345);
+  });
+
+  it("rejects fractional timeout before calling speech generation", async () => {
+    textToSpeechSpy.mockResolvedValue({
+      success: true,
+      audioPath: "/tmp/reply.opus",
+      provider: "test",
+      voiceCompatible: true,
+    });
+
+    const tool = createTtsTool();
+
+    await expect(tool.execute("call-1", { text: "hello", timeoutMs: 12_345.5 })).rejects.toThrow(
+      "timeoutMs must be a positive integer in milliseconds.",
     );
-    expect(result.details).toMatchObject({ timeoutMs: 12_345 });
+    expect(textToSpeechSpy).not.toHaveBeenCalled();
   });
 
   it("passes the active agent id to speech generation", async () => {
@@ -103,12 +123,9 @@ describe("createTtsTool", () => {
     const tool = createTtsTool({ agentId: "voice-agent" });
     await tool.execute("call-1", { text: "hello" });
 
-    expect(textToSpeechSpy).toHaveBeenCalledWith(
-      expect.objectContaining({
-        text: "hello",
-        agentId: "voice-agent",
-      }),
-    );
+    const args = latestTextToSpeechArgs();
+    expect(args.text).toBe("hello");
+    expect(args.agentId).toBe("voice-agent");
   });
 
   it("passes the active account id to speech generation", async () => {
@@ -122,12 +139,9 @@ describe("createTtsTool", () => {
     const tool = createTtsTool({ agentAccountId: "feishu-main" });
     await tool.execute("call-1", { text: "hello" });
 
-    expect(textToSpeechSpy).toHaveBeenCalledWith(
-      expect.objectContaining({
-        text: "hello",
-        accountId: "feishu-main",
-      }),
-    );
+    const args = latestTextToSpeechArgs();
+    expect(args.text).toBe("hello");
+    expect(args.accountId).toBe("feishu-main");
   });
 
   it("echoes longer utterances verbatim into the tool-result content", async () => {
@@ -157,7 +171,10 @@ describe("createTtsTool", () => {
     const tool = createTtsTool();
     const result = await tool.execute("call-1", { text: spoken });
 
-    const rendered = (result.content as Array<{ type: string; text: string }>)[0].text;
+    const rendered = expectDefined(
+      (result.content as Array<{ type: string; text: string }>)[0],
+      "(result.content as Array<{ type: string; text: string }>)[0] test invariant",
+    ).text;
     // The literal directive tokens must not appear verbatim, so
     // parseReplyDirectives can no longer surface them as media/audio flags.
     expect(rendered).not.toMatch(/^MEDIA:/m);
@@ -180,7 +197,10 @@ describe("createTtsTool", () => {
     const tool = createTtsTool();
     const result = await tool.execute("call-1", { text: spoken });
 
-    const rendered = (result.content as Array<{ type: string; text: string }>)[0].text;
+    const rendered = expectDefined(
+      (result.content as Array<{ type: string; text: string }>)[0],
+      "(result.content as Array<{ type: string; text: string }>)[0] test invariant",
+    ).text;
     expect(rendered).toContain("\u00A0\u2060MEDIA:/tmp/secret.png");
     expect(rendered).not.toMatch(/^\u00A0MEDIA:/m);
   });
@@ -197,7 +217,10 @@ describe("createTtsTool", () => {
     const tool = createTtsTool();
     const result = await tool.execute("call-1", { text: spoken });
 
-    const rendered = (result.content as Array<{ type: string; text: string }>)[0].text;
+    const rendered = expectDefined(
+      (result.content as Array<{ type: string; text: string }>)[0],
+      "(result.content as Array<{ type: string; text: string }>)[0] test invariant",
+    ).text;
     expect(rendered).not.toMatch(/^[ \t]*```/m);
     expect(rendered).toContain("`\u2060``");
     expect(rendered).toContain("\u2060MEDIA:");

@@ -1,71 +1,86 @@
-import { describe, expect, it } from "vitest";
+// Legacy config migration validation tests cover schema validation after doctor migrations.
+import { beforeAll, describe, expect, it } from "vitest";
 import { migrateLegacyConfig } from "./legacy-config-migrate.js";
 
 describe("legacy config migrate validation", () => {
-  it("returns valid migrated config for legacy group chat routing drift", () => {
-    const res = migrateLegacyConfig({
-      routing: {
-        allowFrom: ["+15550001111"],
-        groupChat: {
-          requireMention: false,
-          historyLimit: 8,
-          mentionPatterns: ["@openclaw"],
-        },
+  let profileConfiguredToolAllowResult: ReturnType<typeof migrateLegacyConfig>;
+
+  beforeAll(() => {
+    profileConfiguredToolAllowResult = migrateLegacyConfig({
+      tools: {
+        profile: "messaging",
+        allow: ["message", "exec", "process"],
+        exec: { security: "allowlist" },
       },
-      channels: {
-        whatsapp: {},
-        telegram: {},
+    });
+  });
+
+  it("returns valid config when migrating profiled tool sections with an existing allowlist", () => {
+    const res = profileConfiguredToolAllowResult;
+
+    expect(res.partiallyValid).toBeUndefined();
+    expect(res.config?.tools?.allow).toEqual(["message", "exec", "process"]);
+    expect(res.config?.tools?.profile).toBe("full");
+    expect(res.config?.tools?.alsoAllow).toBeUndefined();
+    expect(res.changes).toStrictEqual([
+      'Replaced tools.allow entries with profile "messaging" grants plus explicit configured-section grants.',
+      'Set tools.profile to "full" so tools.allow controls explicit configured-section grants directly.',
+    ]);
+  });
+
+  it("returns schema-valid config after removing unsupported OTel grpc", () => {
+    const res = migrateLegacyConfig({
+      diagnostics: {
+        otel: {
+          enabled: true,
+          endpoint: "http://otel-collector:4317",
+          protocol: "grpc",
+        },
       },
     });
 
     expect(res.partiallyValid).toBeUndefined();
-    const migratedConfig = res.config as Record<string, unknown> | null;
-    expect(migratedConfig?.routing).toBeUndefined();
-    expect(res.config?.channels?.whatsapp?.allowFrom).toEqual(["+15550001111"]);
-    expect(res.config?.channels?.whatsapp?.groups).toEqual({
-      "*": { requireMention: false },
+    expect(res.config?.diagnostics?.otel).toEqual({
+      enabled: false,
+      endpoint: "http://otel-collector:4317",
     });
-    expect(res.config?.channels?.telegram?.groups).toEqual({
-      "*": { requireMention: false },
-    });
-    expect(res.config?.messages?.groupChat).toEqual({
-      historyLimit: 8,
-      mentionPatterns: ["@openclaw"],
-    });
-    expect(res.changes).toContain(
-      'Moved routing.groupChat.requireMention → channels.telegram.groups."*".requireMention.',
-    );
   });
 
-  it("returns migrated config when unrelated plugin validation issues remain (#76798)", () => {
-    const res = migrateLegacyConfig({
-      agents: {
-        defaults: {
-          model: { primary: "openai/gpt-5.5" },
-          llm: { idleTimeoutSeconds: 120 },
+  it("validates resolved OTel values while retaining authored interpolation", () => {
+    const authored = {
+      diagnostics: {
+        otel: {
+          enabled: true,
+          traces: false,
+          metrics: false,
+          logs: true,
+          logsExporter: "${OTEL_LOGS_EXPORTER}",
+          protocol: "grpc",
         },
       },
-      plugins: {
-        entries: {
-          brave: {
-            enabled: true,
-            config: { webSearch: { mode: "definitely-invalid" } },
-          },
+    };
+    const resolved = {
+      diagnostics: {
+        otel: {
+          enabled: true,
+          traces: false,
+          metrics: false,
+          logs: true,
+          logsExporter: "stdout",
+          protocol: "grpc",
         },
       },
-      tools: { web: { search: { provider: "brave" } } },
+    };
+
+    const res = migrateLegacyConfig(authored, {
+      authoredRaw: authored,
+      resolvedRaw: resolved,
     });
 
-    expect(res.partiallyValid).toBe(true);
-    expect(res.changes).toContain(
-      "Removed agents.defaults.llm; model idle timeout now follows models.providers.<id>.timeoutSeconds.",
-    );
-    expect(res.changes).toContain(
-      "Migration applied; other validation issues remain — run doctor to review.",
-    );
-    expect(res.config?.agents?.defaults).toEqual({
-      model: { primary: "openai/gpt-5.5" },
-    });
-    expect(res.config?.tools?.web?.search?.provider).toBe("brave");
+    expect(res.partiallyValid).toBeUndefined();
+    expect(res.config?.diagnostics?.otel?.logsExporter).toBe("stdout");
+    expect(res.sourceConfig?.diagnostics?.otel?.logsExporter).toBe("${OTEL_LOGS_EXPORTER}");
+    expect(res.config?.diagnostics?.otel?.protocol).toBeUndefined();
+    expect(res.sourceConfig?.diagnostics?.otel?.protocol).toBeUndefined();
   });
 });

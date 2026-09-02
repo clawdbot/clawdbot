@@ -1,11 +1,20 @@
+// Trajectory metadata tests cover metadata capture and normalization.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { REDACTED_SENTINEL } from "../config/redact-snapshot.js";
+import {
+  redactPathForSupport,
+  type SupportRedactionContext,
+} from "../logging/diagnostic-support-redaction.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
+import type { SkillSnapshot } from "../skills/types.js";
+
+type ResolvedSkillEntry = NonNullable<SkillSnapshot["resolvedSkills"]>[number];
 
 const loadPluginManifestRegistry = vi.hoisted(() => vi.fn(() => ({ plugins: [] })));
 
-vi.mock("../infra/git-commit.js", () => ({
+vi.mock("../infra/git-commit.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/git-commit.js")>()),
   resolveCommitHash: () => "abcdef0",
 }));
 
@@ -36,9 +45,37 @@ import { buildTrajectoryArtifacts, buildTrajectoryRunMetadata } from "./metadata
 
 afterEach(() => {
   resetPluginRuntimeStateForTest();
+  loadPluginManifestRegistry.mockClear();
 });
 
 describe("trajectory metadata", () => {
+  it("uses prepared plugin metadata without rescanning manifests", () => {
+    const metadata = buildTrajectoryRunMetadata({
+      pluginMetadataSnapshot: {
+        plugins: [
+          {
+            id: "prepared-plugin",
+            name: "Prepared Plugin",
+            origin: "bundled",
+            channels: [],
+            providers: [],
+            cliBackends: [],
+            hooks: [],
+            skills: [],
+          },
+        ],
+      } as never,
+      workspaceDir: "/tmp/workspace",
+      timeoutMs: 30_000,
+    });
+
+    expect(metadata.plugins).toMatchObject({
+      source: "manifest-registry",
+      entries: [{ id: "prepared-plugin" }],
+    });
+    expect(loadPluginManifestRegistry).not.toHaveBeenCalled();
+  });
+
   it("redacts harness argv and local paths with the support redaction rules", () => {
     const originalArgv = process.argv;
     process.argv = [
@@ -97,19 +134,19 @@ describe("trajectory metadata", () => {
       channelIds: ["demo-channel"],
       cliBackendIds: [],
       providerIds: ["demo-provider"],
+      embeddingProviderIds: [],
       speechProviderIds: [],
       realtimeTranscriptionProviderIds: [],
       realtimeVoiceProviderIds: [],
       mediaUnderstandingProviderIds: [],
+      transcriptSourceProviderIds: [],
       imageGenerationProviderIds: [],
       videoGenerationProviderIds: [],
       musicGenerationProviderIds: [],
       webFetchProviderIds: [],
       webSearchProviderIds: [],
       migrationProviderIds: [],
-      memoryEmbeddingProviderIds: [],
-      agentHarnessIds: ["pi"],
-      gatewayMethods: [],
+      agentHarnessIds: ["openclaw"],
       cliCommands: [],
       services: [],
       gatewayDiscoveryServiceIds: [],
@@ -171,10 +208,83 @@ describe("trajectory metadata", () => {
     expect(config.redacted?.providers?.openai?.apiKey).toBe(REDACTED_SENTINEL);
     expect(plugins.source).toBe("active-registry");
     expect(plugins.entries?.map((entry) => entry.id)).toEqual(["demo-plugin"]);
-    expect(skills.entries?.[0]).toMatchObject({
-      id: "weather",
-      filePath: "/tmp/workspace/skills/weather/SKILL.md",
+    expect(skills.entries?.[0]?.id).toBe("weather");
+    expect(skills.entries?.[0]?.filePath).toBe("/tmp/workspace/skills/weather/SKILL.md");
+  });
+
+  it("tolerates skill snapshot entries with missing name/paths (symlink-escape rejects)", () => {
+    const metadata = buildTrajectoryRunMetadata({
+      workspaceDir: "/tmp/workspace",
+      sessionFile: "/tmp/workspace/session.jsonl",
+      timeoutMs: 30_000,
+      skillsSnapshot: {
+        prompt: "skill prompt",
+        version: 1,
+        skills: [],
+        resolvedSkills: [
+          {
+            name: "alpha",
+            description: "valid entry",
+            filePath: "/tmp/workspace/skills/alpha/SKILL.md",
+            baseDir: "/tmp/workspace/skills/alpha",
+            source: "workspace",
+            sourceInfo: {
+              path: "/tmp/workspace/skills/alpha/SKILL.md",
+              source: "workspace",
+              scope: "project",
+              origin: "top-level",
+              baseDir: "/tmp/workspace/skills/alpha",
+            },
+            disableModelInvocation: false,
+          },
+          {
+            name: undefined,
+            description: undefined,
+            filePath: undefined,
+            baseDir: undefined,
+            source: "workspace",
+            sourceInfo: undefined,
+            disableModelInvocation: false,
+          } as unknown as ResolvedSkillEntry,
+        ],
+      },
     });
+
+    const skills = metadata.skills as { entries?: Array<{ name?: string }> };
+    expect(skills.entries?.map((e) => e.name)).toEqual(["alpha"]);
+  });
+
+  it("falls back to skills list when every resolvedSkills entry is partial", () => {
+    const metadata = buildTrajectoryRunMetadata({
+      workspaceDir: "/tmp/workspace",
+      sessionFile: "/tmp/workspace/session.jsonl",
+      timeoutMs: 30_000,
+      skillsSnapshot: {
+        prompt: "skill prompt",
+        version: 1,
+        skills: [{ name: "fallback-skill" }],
+        resolvedSkills: [
+          {
+            name: undefined,
+            description: undefined,
+            filePath: undefined,
+            baseDir: undefined,
+            source: "workspace",
+            sourceInfo: undefined,
+            disableModelInvocation: false,
+          } as unknown as ResolvedSkillEntry,
+        ],
+      },
+    });
+
+    const skills = metadata.skills as { entries?: Array<{ name?: string }> };
+    expect(skills.entries?.map((e) => e.name)).toEqual(["fallback-skill"]);
+  });
+
+  it("redactPathForSupport returns empty string for null/undefined input", () => {
+    const ctx: SupportRedactionContext = { env: {}, stateDir: "/tmp/.openclaw" };
+    expect(redactPathForSupport(undefined, ctx)).toBe("");
+    expect(redactPathForSupport(null, ctx)).toBe("");
   });
 
   it("captures final artifact summaries for export sidecars", () => {
@@ -186,6 +296,7 @@ describe("trajectory metadata", () => {
       idleTimedOut: false,
       timedOutDuringCompaction: false,
       timedOutDuringToolExecution: false,
+      timedOutByRunBudget: false,
       compactionCount: 1,
       assistantTexts: ["done"],
       finalPromptText: "run tests",
@@ -202,14 +313,13 @@ describe("trajectory metadata", () => {
       messagingToolSentTargets: [],
     });
 
-    expect(artifacts).toMatchObject({
-      finalStatus: "success",
-      assistantTexts: ["done"],
-      itemLifecycle: {
-        startedCount: 2,
-        completedCount: 2,
-        activeCount: 0,
-      },
-    });
+    expect(artifacts.finalStatus).toBe("success");
+    expect(artifacts.assistantTexts).toEqual(["done"]);
+    const lifecycle = artifacts.itemLifecycle as
+      | { startedCount?: number; completedCount?: number; activeCount?: number }
+      | undefined;
+    expect(lifecycle?.startedCount).toBe(2);
+    expect(lifecycle?.completedCount).toBe(2);
+    expect(lifecycle?.activeCount).toBe(0);
   });
 });

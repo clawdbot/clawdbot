@@ -1,14 +1,12 @@
+// Configure command registration: lazy-loads the interactive configuration wizard.
 import type { Command } from "commander";
-import {
-  CONFIGURE_WIZARD_SECTIONS,
-  configureCommandFromSectionsArg,
-} from "../../commands/configure.js";
-import { defaultRuntime } from "../../runtime.js";
-import { formatDocsLink } from "../../terminal/links.js";
-import { theme } from "../../terminal/theme.js";
+import { formatDocsLink } from "../../../packages/terminal-core/src/links.js";
+import { theme } from "../../../packages/terminal-core/src/theme.js";
+import { CONFIGURE_WIZARD_SECTIONS } from "../../commands/configure.shared.js";
 import { runCommandWithRuntime } from "../cli-utils.js";
 
-export function registerConfigureCommand(program: Command) {
+/** Register the interactive `configure` command and section filter flag. */
+export function registerConfigureCommand(program: Command): void {
   program
     .command("configure")
     .description("Interactive configuration for credentials, channels, gateway, and agent defaults")
@@ -24,7 +22,10 @@ export function registerConfigureCommand(program: Command) {
       [] as string[],
     )
     .action(async (opts) => {
+      const { defaultRuntime } = await import("../../runtime.js");
       await runCommandWithRuntime(defaultRuntime, async () => {
+        const { configureCommandFromSectionsArg } =
+          await import("../../commands/configure.commands.js");
         await configureCommandFromSectionsArg(opts.section, defaultRuntime);
       });
     });

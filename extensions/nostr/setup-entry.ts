@@ -1,3 +1,4 @@
+// Nostr plugin module implements setup entry behavior.
 import { defineBundledChannelSetupEntry } from "openclaw/plugin-sdk/channel-entry-contract";
 
 export default defineBundledChannelSetupEntry({
@@ -5,5 +6,9 @@ export default defineBundledChannelSetupEntry({
   plugin: {
     specifier: "./setup-plugin-api.js",
     exportName: "nostrSetupPlugin",
+  },
+  secrets: {
+    specifier: "./secret-contract-api.js",
+    exportName: "channelSecrets",
   },
 });

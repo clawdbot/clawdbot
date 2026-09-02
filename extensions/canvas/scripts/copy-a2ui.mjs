@@ -1,4 +1,7 @@
 #!/usr/bin/env node
+/**
+ * Copies bundled Canvas A2UI assets into the dist host asset directory.
+ */
 
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -17,11 +20,31 @@ function shouldSkipMissingA2uiAssets(env = process.env) {
   return env.OPENCLAW_A2UI_SKIP_MISSING === "1" || Boolean(env.OPENCLAW_SPARSE_PROFILE);
 }
 
+function isRelativeWithin(relPath) {
+  return (
+    relPath === "" ||
+    (relPath !== ".." && !relPath.startsWith(`..${path.sep}`) && !path.isAbsolute(relPath))
+  );
+}
+
+function pathsOverlap(leftDir, rightDir) {
+  const left = path.resolve(leftDir);
+  const right = path.resolve(rightDir);
+  return (
+    isRelativeWithin(path.relative(left, right)) || isRelativeWithin(path.relative(right, left))
+  );
+}
+
+/** Copies A2UI assets, optionally tolerating missing bundles in sparse builds. */
 export async function copyA2uiAssets({ srcDir, outDir }) {
+  if (pathsOverlap(srcDir, outDir)) {
+    throw new Error("A2UI source and output directories must not overlap.");
+  }
+
   const skipMissing = shouldSkipMissingA2uiAssets(process.env);
   try {
-    await fs.stat(path.join(srcDir, "index.html"));
     await fs.stat(path.join(srcDir, "a2ui.bundle.js"));
+    await fs.stat(path.join(srcDir, "a2ui-v0.9.bundle.js"));
   } catch (err) {
     const message = 'Missing A2UI bundle assets. Run "pnpm canvas:a2ui:bundle" and retry.';
     if (skipMissing) {
@@ -33,6 +56,7 @@ export async function copyA2uiAssets({ srcDir, outDir }) {
     throw new Error(message, { cause: err });
   }
   await fs.mkdir(path.dirname(outDir), { recursive: true });
+  await fs.rm(outDir, { recursive: true, force: true });
   await fs.cp(srcDir, outDir, { recursive: true });
 }
 
@@ -42,8 +66,10 @@ async function main() {
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
-  main().catch((err) => {
-    console.error(String(err));
-    process.exit(1);
-  });
+  main().catch(
+    /** @param {unknown} err */ (err) => {
+      console.error(String(err));
+      process.exit(1);
+    },
+  );
 }

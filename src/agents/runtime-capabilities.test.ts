@@ -1,24 +1,30 @@
+// Verifies runtime channel capabilities derived from channel account config.
 import { describe, expect, it } from "vitest";
 import { collectRuntimeChannelCapabilities } from "./runtime-capabilities.js";
 
 describe("collectRuntimeChannelCapabilities", () => {
+  it("advertises markdown details for internal webchat", () => {
+    expect(collectRuntimeChannelCapabilities({ channel: "webchat" })).toEqual(["markdownDetails"]);
+  });
+
+  it("does not advertise markdown details for a plugin-less non-webchat channel", () => {
+    expect(collectRuntimeChannelCapabilities({ channel: "heartbeat" })).toBeUndefined();
+  });
+
   it("adds thread-bound spawn capabilities when the channel account allows unified spawns", () => {
     const capabilities = collectRuntimeChannelCapabilities({
       channel: "discord",
       accountId: "default",
       cfg: {
-        channels: {
-          discord: {
-            threadBindings: {
-              spawnSessions: true,
-            },
+        session: {
+          threadBindings: {
+            spawnSessions: true,
           },
         },
       },
     });
 
-    expect(capabilities).toContain("threadbound-subagent-spawn");
-    expect(capabilities).toContain("threadbound-acp-spawn");
+    expect(capabilities).toEqual(["threadbound-subagent-spawn", "threadbound-acp-spawn"]);
   });
 
   it("omits thread-bound spawn capabilities when unified spawns are disabled", () => {
@@ -26,17 +32,14 @@ describe("collectRuntimeChannelCapabilities", () => {
       channel: "discord",
       accountId: "default",
       cfg: {
-        channels: {
-          discord: {
-            threadBindings: {
-              spawnSessions: false,
-            },
+        session: {
+          threadBindings: {
+            spawnSessions: false,
           },
         },
       },
     });
 
-    expect(capabilities ?? []).not.toContain("threadbound-subagent-spawn");
-    expect(capabilities ?? []).not.toContain("threadbound-acp-spawn");
+    expect(capabilities).toBeUndefined();
   });
 });

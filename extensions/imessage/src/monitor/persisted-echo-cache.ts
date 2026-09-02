@@ -1,44 +1,28 @@
-import fs from "node:fs";
-import path from "node:path";
+import type { MediaPlaceholderTextFact } from "openclaw/plugin-sdk/channel-inbound";
+import type { PluginStateSyncKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
-import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
+import { getIMessageRuntime } from "../runtime.js";
+import {
+  IMESSAGE_SENT_ECHOES_TTL_MS,
+  IMESSAGE_SENT_ECHOES_NAMESPACE,
+  IMESSAGE_SENT_ECHOES_MAX_ENTRIES,
+  resolveIMessageSentEchoEntryKey,
+  resolveIMessageEchoMediaKey,
+  type PersistedEchoEntry,
+} from "../state-contract.js";
+import { stripLeadingEchoTextCorruptionMarkers } from "./echo-text-corruption.js";
 
-type PersistedEchoEntry = {
-  scope: string;
-  text?: string;
-  messageId?: string;
-  timestamp: number;
-};
-
-const PERSISTED_ECHO_TTL_MS = 2 * 60 * 1000;
-const MAX_PERSISTED_ECHO_ENTRIES = 256;
-
-// sent-echoes.jsonl carries scope keys + outbound message text + messageIds.
-// A hostile same-UID process could otherwise (a) read the file to enumerate
-// active conversations and outbound content, or (b) inject lines so a future
-// inbound dedupe call wrongly suppresses a legitimate inbound message. Owner-
-// only mode on both the directory and file closes that vector — defaults are
-// 0755/0644 which are world-readable on a multi-user Mac.
-const PERSISTED_ECHO_DIR_MODE = 0o700;
-const PERSISTED_ECHO_FILE_MODE = 0o600;
-
-function resolvePersistedEchoPath(): string {
-  return path.join(resolveStateDir(), "imessage", "sent-echoes.jsonl");
-}
-
-function clampPersistedEchoModes(filePath: string): void {
-  // mkdirSync's mode is masked by umask and only applies on creation. If the
-  // dir or file already exists from an older gateway version, clamp now.
-  try {
-    fs.chmodSync(path.dirname(filePath), PERSISTED_ECHO_DIR_MODE);
-    fs.chmodSync(filePath, PERSISTED_ECHO_FILE_MODE);
-  } catch {
-    // best-effort — fs may not support chmod on every platform
-  }
-}
+type PersistedEchoStore = PluginStateSyncKeyedStore<PersistedEchoEntry>;
 
 function normalizeText(text: string | undefined): string | undefined {
-  const normalized = text?.replace(/\r\n?/g, "\n").trim();
+  if (!text) {
+    return undefined;
+  }
+  // Match the in-memory echo-cache key so a reflected echo with a leading attributedBody
+  // corruption marker still matches the clean stored send (the persisted sibling of #93511).
+  const normalized = stripLeadingEchoTextCorruptionMarkers(
+    text.replace(/\r\n?/g, "\n").trim(),
+  ).trim();
   return normalized || undefined;
 }
 
@@ -50,29 +34,7 @@ function normalizeMessageId(messageId: string | undefined): string | undefined {
   return normalized;
 }
 
-function parseEntry(line: string): PersistedEchoEntry | null {
-  try {
-    const parsed = JSON.parse(line) as Partial<PersistedEchoEntry>;
-    if (typeof parsed.scope !== "string" || typeof parsed.timestamp !== "number") {
-      return null;
-    }
-    return {
-      scope: parsed.scope,
-      text: typeof parsed.text === "string" ? parsed.text : undefined,
-      messageId: typeof parsed.messageId === "string" ? parsed.messageId : undefined,
-      timestamp: parsed.timestamp,
-    };
-  } catch {
-    return null;
-  }
-}
-
-// In-memory mirror of the persisted file. The echo cache is consulted on
-// every inbound message; without a cache, group-chat bursts trigger a
-// readFileSync + JSON.parse for every member's reply. The mirror is
-// invalidated by file mtime so concurrent gateway processes (rare) and
-// post-restart hydrate still see fresh data.
-let mirror: { entries: PersistedEchoEntry[]; mtimeMs: number } | null = null;
+let mirror: PersistedEchoEntry[] | null = null;
 let persistenceFailureLogged = false;
 function reportFailure(scope: string, err: unknown): void {
   if (persistenceFailureLogged) {
@@ -82,143 +44,135 @@ function reportFailure(scope: string, err: unknown): void {
   logVerbose(`imessage echo-cache: ${scope} disabled after first failure: ${String(err)}`);
 }
 
-function loadMirrorIfStale(): void {
-  const filePath = resolvePersistedEchoPath();
-  let mtimeMs: number;
-  try {
-    mtimeMs = fs.statSync(filePath).mtimeMs;
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException)?.code !== "ENOENT") {
-      reportFailure("stat", err);
-    }
-    mirror = { entries: [], mtimeMs: 0 };
-    return;
+function normalizeMedia(
+  media: MediaPlaceholderTextFact | null | undefined,
+): MediaPlaceholderTextFact | undefined {
+  const key = resolveIMessageEchoMediaKey(media);
+  if (!key) {
+    return undefined;
   }
-  if (mirror && mirror.mtimeMs === mtimeMs) {
-    return;
+  const contentType = media?.contentType?.trim().toLowerCase() || undefined;
+  const kind = media?.kind ?? undefined;
+  return { ...(kind ? { kind } : {}), ...(contentType ? { contentType } : {}) };
+}
+
+function openPersistedEchoStore(): PersistedEchoStore {
+  return getIMessageRuntime().state.openSyncKeyedStore<PersistedEchoEntry>({
+    namespace: IMESSAGE_SENT_ECHOES_NAMESPACE,
+    maxEntries: IMESSAGE_SENT_ECHOES_MAX_ENTRIES,
+  });
+}
+
+function remainingTtlMs(timestamp: number): number | undefined {
+  const remaining = IMESSAGE_SENT_ECHOES_TTL_MS - Math.max(0, Date.now() - timestamp);
+  return remaining > 0 ? remaining : undefined;
+}
+
+function resolveEntryTtlMs(entry: PersistedEchoEntry, ttlMs?: number): number | undefined {
+  if (typeof ttlMs === "number" && Number.isFinite(ttlMs) && ttlMs > 0) {
+    return ttlMs;
   }
-  let raw: string;
+  return remainingTtlMs(entry.timestamp);
+}
+
+function isLiveEntry(entry: PersistedEchoEntry, now = Date.now()): boolean {
+  const cutoff = now - IMESSAGE_SENT_ECHOES_TTL_MS;
+  return entry.timestamp >= cutoff && (entry.expiresAt == null || entry.expiresAt > now);
+}
+
+function loadMirrorFromStore(): void {
   try {
-    raw = fs.readFileSync(filePath, "utf8");
+    mirror = openPersistedEchoStore()
+      .entries()
+      .map(({ value }) => value)
+      .filter((entry) => isLiveEntry(entry))
+      .toSorted((a, b) => a.timestamp - b.timestamp)
+      .slice(-IMESSAGE_SENT_ECHOES_MAX_ENTRIES);
   } catch (err) {
     reportFailure("read", err);
-    mirror = { entries: [], mtimeMs };
-    return;
+    mirror = [];
   }
-  const cutoff = Date.now() - PERSISTED_ECHO_TTL_MS;
-  const entries = raw
-    .split(/\n+/)
-    .map(parseEntry)
-    .filter((entry): entry is PersistedEchoEntry => Boolean(entry && entry.timestamp >= cutoff))
-    .slice(-MAX_PERSISTED_ECHO_ENTRIES);
-  mirror = { entries, mtimeMs };
 }
 
 function readRecentEntries(): PersistedEchoEntry[] {
-  loadMirrorIfStale();
-  return mirror?.entries ?? [];
+  loadMirrorFromStore();
+  return mirror ?? [];
 }
 
-// Trigger compaction once the on-disk file grows past 2x the cap or holds
-// stale entries beyond the TTL window. Until then, every remember is an
-// O(1) append rather than a full rewrite — group-chat bursts that send 5+
-// outbound messages back-to-back used to write the entire file 5+ times.
-const COMPACT_AT_ENTRY_COUNT = MAX_PERSISTED_ECHO_ENTRIES * 2;
-
-function compactRecentEntries(entries: PersistedEchoEntry[]): void {
-  const filePath = resolvePersistedEchoPath();
-  try {
-    fs.mkdirSync(path.dirname(filePath), { recursive: true, mode: PERSISTED_ECHO_DIR_MODE });
-    fs.writeFileSync(
-      filePath,
-      entries.map((entry) => JSON.stringify(entry)).join("\n") + (entries.length ? "\n" : ""),
-      { encoding: "utf8", mode: PERSISTED_ECHO_FILE_MODE },
-    );
-    clampPersistedEchoModes(filePath);
-  } catch (err) {
-    reportFailure("compact", err);
-    // Persistence failed; don't update the in-memory mirror so the next
-    // read still reflects what's actually on disk.
-    return;
+function persistEntry(entry: PersistedEchoEntry, ttlMs?: number): string | undefined {
+  const effectiveTtlMs = resolveEntryTtlMs(entry, ttlMs);
+  if (!effectiveTtlMs) {
+    return undefined;
   }
-  // Update mirror to reflect what we just wrote, so the next has() call
-  // doesn't re-read the file we just authored.
-  let mtimeMs = 0;
+  const key = resolveIMessageSentEchoEntryKey(entry);
   try {
-    mtimeMs = fs.statSync(filePath).mtimeMs;
-  } catch {
-    // ignore — stale mirror will refresh on next access
-  }
-  mirror = { entries: [...entries], mtimeMs };
-}
-
-function appendEntry(entry: PersistedEchoEntry): void {
-  const filePath = resolvePersistedEchoPath();
-  try {
-    fs.mkdirSync(path.dirname(filePath), { recursive: true, mode: PERSISTED_ECHO_DIR_MODE });
-    fs.appendFileSync(filePath, `${JSON.stringify(entry)}\n`, {
-      encoding: "utf8",
-      mode: PERSISTED_ECHO_FILE_MODE,
+    openPersistedEchoStore().register(key, entry, {
+      ttlMs: effectiveTtlMs,
     });
-    // Always clamp — appendFileSync's `mode` only applies on creation, and
-    // an older gateway version may have left an existing 0644 file behind.
-    // chmod is microseconds; doing it every append keeps the security
-    // guarantee monotonic instead of conditional on creation order.
-    clampPersistedEchoModes(filePath);
   } catch (err) {
-    reportFailure("append", err);
-    return;
+    reportFailure("write", err);
+    return undefined;
   }
-  // Mirror stays in sync without re-reading the file: append our entry to
-  // the in-memory copy and bump the mtime to whatever the FS reports now.
-  let mtimeMs = 0;
-  try {
-    mtimeMs = fs.statSync(filePath).mtimeMs;
-  } catch {
-    // ignore
-  }
-  if (mirror) {
-    mirror = { entries: [...mirror.entries, entry], mtimeMs };
-  } else {
-    mirror = { entries: [entry], mtimeMs };
-  }
+  return key;
 }
 
 export function rememberPersistedIMessageEcho(params: {
   scope: string;
   text?: string;
+  media?: MediaPlaceholderTextFact;
   messageId?: string;
-}): void {
+  ttlMs?: number;
+  pending?: boolean;
+}): string | undefined {
+  const text = normalizeText(params.text);
+  const media = normalizeMedia(params.media);
+  const messageId = normalizeMessageId(params.messageId);
   const entry: PersistedEchoEntry = {
     scope: params.scope,
-    text: normalizeText(params.text),
-    messageId: normalizeMessageId(params.messageId),
     timestamp: Date.now(),
+    ...(text ? { text } : {}),
+    ...(media ? { media } : {}),
+    ...(messageId ? { messageId } : {}),
+    ...(params.pending ? { pending: true } : {}),
   };
-  if (!entry.text && !entry.messageId) {
+  if (typeof params.ttlMs === "number" && Number.isFinite(params.ttlMs) && params.ttlMs > 0) {
+    entry.expiresAt = entry.timestamp + params.ttlMs;
+  }
+  if (!entry.text && !entry.media && !entry.messageId) {
+    return undefined;
+  }
+  loadMirrorFromStore();
+  const key = persistEntry(entry, params.ttlMs);
+  mirror = [...(mirror ?? []), entry]
+    .filter((candidate) => isLiveEntry(candidate))
+    .slice(-IMESSAGE_SENT_ECHOES_MAX_ENTRIES);
+  return key;
+}
+
+export function forgetPersistedIMessageEchoKey(key: string | undefined): void {
+  if (!key) {
     return;
   }
-  // Make sure the mirror reflects whatever's on disk before we decide
-  // whether a compaction is due.
-  loadMirrorIfStale();
-  appendEntry(entry);
-  const total = mirror?.entries.length ?? 0;
-  const cutoff = Date.now() - PERSISTED_ECHO_TTL_MS;
-  const oldestStale = mirror?.entries[0] && mirror.entries[0].timestamp < cutoff;
-  if (total > COMPACT_AT_ENTRY_COUNT || oldestStale) {
-    const fresh = (mirror?.entries ?? []).filter((e) => e.timestamp >= cutoff);
-    compactRecentEntries(fresh.slice(-MAX_PERSISTED_ECHO_ENTRIES));
+  try {
+    openPersistedEchoStore().delete(key);
+  } catch (err) {
+    reportFailure("delete", err);
   }
+  mirror = (mirror ?? []).filter((entry) => resolveIMessageSentEchoEntryKey(entry) !== key);
 }
 
 export function hasPersistedIMessageEcho(params: {
   scope: string;
   text?: string;
+  media?: MediaPlaceholderTextFact;
   messageId?: string;
+  skipIdShortCircuit?: boolean;
+  includePendingText?: boolean;
 }): boolean {
   const text = normalizeText(params.text);
+  const mediaKey = resolveIMessageEchoMediaKey(params.media);
   const messageId = normalizeMessageId(params.messageId);
-  if (!text && !messageId) {
+  if (!text && !mediaKey && !messageId) {
     return false;
   }
   for (const entry of readRecentEntries()) {
@@ -228,7 +182,26 @@ export function hasPersistedIMessageEcho(params: {
     if (messageId && entry.messageId === messageId) {
       return true;
     }
-    if (text && entry.text === text) {
+    const hasConflictingMessageIds = Boolean(
+      messageId && entry.messageId && messageId !== entry.messageId,
+    );
+    // Same-id echoes match on the messageId branch above. Known conflicting
+    // GUIDs identify new messages, while no-GUID self-chat rows opt into text
+    // fallback because their numeric SQLite IDs cannot equal outbound GUIDs.
+    if (
+      text &&
+      (!hasConflictingMessageIds || params.skipIdShortCircuit) &&
+      entry.text === text &&
+      (!entry.pending || params.includePendingText)
+    ) {
+      return true;
+    }
+    if (
+      mediaKey &&
+      !hasConflictingMessageIds &&
+      resolveIMessageEchoMediaKey(entry.media) === mediaKey &&
+      (!entry.pending || params.includePendingText)
+    ) {
       return true;
     }
   }

@@ -1,14 +1,17 @@
+// Records structured diagnostics timeline events and spans.
 import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { performance } from "node:perf_hooks";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { isDiagnosticFlagEnabled } from "./diagnostic-flags.js";
 import { isTruthyEnvValue } from "./env.js";
 import { appendRegularFileSync } from "./regular-file.js";
 
 const OPENCLAW_DIAGNOSTICS_TIMELINE_SCHEMA_VERSION = "openclaw.diagnostics.v1";
+const MAX_PENDING_TIMELINE_BYTES = 64 * 1024;
 
 type DiagnosticsTimelineEventType =
   | "span.start"
@@ -43,6 +46,7 @@ type DiagnosticsTimelineEvent = {
   provider?: string;
   operation?: string;
   ok?: boolean;
+  status?: number;
   command?: string;
   exitCode?: number | null;
   signal?: string | null;
@@ -54,6 +58,7 @@ type DiagnosticsTimelineSpanOptions = {
   attributes?: DiagnosticsTimelineAttributes;
   config?: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
+  omitErrorMessage?: boolean;
 };
 
 type DiagnosticsTimelineOptions = {
@@ -61,7 +66,8 @@ type DiagnosticsTimelineOptions = {
   env?: NodeJS.ProcessEnv;
 };
 
-export type ActiveDiagnosticsTimelineSpan = {
+/** Active timeline span carried through async-local scope for nested diagnostics. */
+type ActiveDiagnosticsTimelineSpan = {
   name: string;
   phase?: string;
   spanId: string;
@@ -69,21 +75,93 @@ export type ActiveDiagnosticsTimelineSpan = {
   attributes?: DiagnosticsTimelineAttributes;
 };
 
-let warnedAboutTimelineWrite = false;
-const createdTimelineDirs = new Set<string>();
-const activeDiagnosticsTimelineSpan = new AsyncLocalStorage<ActiveDiagnosticsTimelineSpan>();
+type StartedDiagnosticsTimelineSpan = ActiveDiagnosticsTimelineSpan & {
+  config?: OpenClawConfig;
+  env: NodeJS.ProcessEnv;
+  startedAt: number;
+  omitErrorMessage?: boolean;
+};
 
-function resolveDiagnosticsTimelineOptions(
-  options: DiagnosticsTimelineOptions = {},
-): Required<Pick<DiagnosticsTimelineOptions, "env">> & Pick<DiagnosticsTimelineOptions, "config"> {
-  return {
-    env: options.env ?? process.env,
-    ...(options.config ? { config: options.config } : {}),
-  };
+const activeDiagnosticsTimelineSpan = new AsyncLocalStorage<ActiveDiagnosticsTimelineSpan>();
+const timelineWriter = resolveGlobalSingleton(
+  Symbol.for("openclaw.diagnosticsTimelineWriter"),
+  () => {
+    let pending: { path: string; content: string; bytes: number } | undefined;
+    let scheduledFlush: NodeJS.Immediate | undefined;
+    let exiting = false;
+    let warnedAboutWrite = false;
+    const createdDirs = new Set<string>();
+
+    function append(path: string, content: string): void {
+      try {
+        const dir = dirname(path);
+        if (!createdDirs.has(dir)) {
+          mkdirSync(dir, { recursive: true });
+          createdDirs.add(dir);
+        }
+        appendRegularFileSync({ filePath: path, content });
+      } catch (error) {
+        if (!warnedAboutWrite) {
+          warnedAboutWrite = true;
+          // Diagnostics stay best-effort; do not replay a possibly partially written batch.
+          console.warn(`[diagnostics] failed to write timeline event: ${String(error)}`);
+        }
+      }
+    }
+
+    function flush(): void {
+      if (scheduledFlush) {
+        clearImmediate(scheduledFlush);
+        scheduledFlush = undefined;
+      }
+      const batch = pending;
+      pending = undefined;
+      if (batch) {
+        append(batch.path, batch.content);
+      }
+    }
+
+    // Install before the first event, including events first emitted by later exit listeners.
+    process.once("exit", () => {
+      exiting = true;
+      flush();
+    });
+
+    return {
+      flush,
+      write(path: string, content: string): void {
+        const bytes = Buffer.byteLength(content, "utf8");
+        if (
+          pending &&
+          (pending.path !== path || pending.bytes + bytes > MAX_PENDING_TIMELINE_BYTES)
+        ) {
+          flush();
+        }
+        // Capacity applies to retained work; preserve an oversized event without queuing or dropping it.
+        if (exiting || bytes > MAX_PENDING_TIMELINE_BYTES) {
+          append(path, content);
+          return;
+        }
+        if (pending) {
+          pending.content += content;
+          pending.bytes += bytes;
+        } else {
+          pending = { path, content, bytes };
+        }
+        scheduledFlush ??= setImmediate(flush).unref();
+      },
+    };
+  },
+);
+
+/** Makes all previously emitted timeline events visible before reading or closing their files. */
+export function flushDiagnosticsTimeline(): void {
+  timelineWriter.flush();
 }
 
+/** Returns true when diagnostics flags and a JSONL output path both allow timeline writes. */
 export function isDiagnosticsTimelineEnabled(options: DiagnosticsTimelineOptions = {}): boolean {
-  const { config, env } = resolveDiagnosticsTimelineOptions(options);
+  const { config, env = process.env } = options;
   return (
     (isDiagnosticFlagEnabled("timeline", config, env) ||
       isDiagnosticFlagEnabled("diagnostics.timeline", config, env) ||
@@ -122,6 +200,7 @@ function normalizeAttributes(
 }
 
 function serializeTimelineEvent(event: DiagnosticsTimelineEvent, env: NodeJS.ProcessEnv): string {
+  const attributes = normalizeAttributes(event.attributes);
   const normalized = {
     schemaVersion: OPENCLAW_DIAGNOSTICS_TIMELINE_SCHEMA_VERSION,
     type: event.type,
@@ -149,21 +228,21 @@ function serializeTimelineEvent(event: DiagnosticsTimelineEvent, env: NodeJS.Pro
     ...(event.provider ? { provider: event.provider } : {}),
     ...(event.operation ? { operation: event.operation } : {}),
     ...(typeof event.ok === "boolean" ? { ok: event.ok } : {}),
+    ...(typeof event.status === "number" ? { status: normalizeNumber(event.status) } : {}),
     ...(event.command ? { command: event.command } : {}),
     ...(event.exitCode !== undefined ? { exitCode: event.exitCode } : {}),
     ...(event.signal !== undefined ? { signal: event.signal } : {}),
-    ...(normalizeAttributes(event.attributes)
-      ? { attributes: normalizeAttributes(event.attributes) }
-      : {}),
+    ...(attributes ? { attributes } : {}),
   };
   return `${JSON.stringify(normalized)}\n`;
 }
 
+/** Queues one normalized event; bounded batches append on the next event-loop turn. */
 export function emitDiagnosticsTimelineEvent(
   event: DiagnosticsTimelineEvent,
   options: DiagnosticsTimelineOptions = {},
 ): void {
-  const { env } = resolveDiagnosticsTimelineOptions(options);
+  const env = options.env ?? process.env;
   if (!isDiagnosticsTimelineEnabled(options)) {
     return;
   }
@@ -171,162 +250,171 @@ export function emitDiagnosticsTimelineEvent(
   if (!path) {
     return;
   }
-  const line = serializeTimelineEvent(event, env);
-  try {
-    const dir = dirname(path);
-    if (!createdTimelineDirs.has(dir)) {
-      mkdirSync(dir, { recursive: true });
-      createdTimelineDirs.add(dir);
-    }
-    appendRegularFileSync({ filePath: path, content: line });
-  } catch (error) {
-    if (!warnedAboutTimelineWrite) {
-      warnedAboutTimelineWrite = true;
-      process.stderr.write(`[diagnostics] failed to write timeline event: ${String(error)}\n`);
-    }
-  }
+  timelineWriter.write(path, serializeTimelineEvent(event, env));
 }
 
+/** Replays a completed span after its activation config becomes available. */
+export function emitCompletedDiagnosticsTimelineSpan(
+  name: string,
+  durationMs: number,
+  options: DiagnosticsTimelineSpanOptions = {},
+): void {
+  if (!isDiagnosticsTimelineEnabled(options)) {
+    return;
+  }
+  const spanId = randomUUID();
+  emitDiagnosticsTimelineEvent(
+    {
+      type: "span.start",
+      name,
+      phase: options.phase,
+      spanId,
+      parentSpanId: options.parentSpanId,
+      attributes: options.attributes,
+    },
+    options,
+  );
+  emitDiagnosticsTimelineEvent(
+    {
+      type: "span.end",
+      name,
+      phase: options.phase,
+      spanId,
+      parentSpanId: options.parentSpanId,
+      durationMs,
+      attributes: options.attributes,
+    },
+    options,
+  );
+}
+
+/** Returns the currently active span so callers can preserve parentage across memoized work. */
 export function getActiveDiagnosticsTimelineSpan(): ActiveDiagnosticsTimelineSpan | undefined {
   return activeDiagnosticsTimelineSpan.getStore();
 }
 
+function startDiagnosticsTimelineSpan(
+  name: string,
+  options: DiagnosticsTimelineSpanOptions,
+): StartedDiagnosticsTimelineSpan | undefined {
+  const env = options.env ?? process.env;
+  if (!isDiagnosticsTimelineEnabled({ config: options.config, env })) {
+    return undefined;
+  }
+  const activeSpan = getActiveDiagnosticsTimelineSpan();
+  const phase = options.phase ?? activeSpan?.phase;
+  const parentSpanId = options.parentSpanId ?? activeSpan?.spanId;
+  const span: StartedDiagnosticsTimelineSpan = {
+    name,
+    env,
+    ...(options.config ? { config: options.config } : {}),
+    spanId: randomUUID(),
+    startedAt: performance.now(),
+    ...(phase ? { phase } : {}),
+    ...(parentSpanId ? { parentSpanId } : {}),
+    ...(options.attributes ? { attributes: options.attributes } : {}),
+    ...(options.omitErrorMessage ? { omitErrorMessage: true } : {}),
+  };
+  emitDiagnosticsTimelineEvent(
+    {
+      type: "span.start",
+      name: span.name,
+      phase: span.phase,
+      spanId: span.spanId,
+      parentSpanId: span.parentSpanId,
+      attributes: span.attributes,
+    },
+    { config: span.config, env: span.env },
+  );
+  return span;
+}
+
+function runInDiagnosticsTimelineSpan<T>(span: StartedDiagnosticsTimelineSpan, run: () => T): T {
+  return activeDiagnosticsTimelineSpan.run(
+    {
+      name: span.name,
+      ...(span.phase ? { phase: span.phase } : {}),
+      spanId: span.spanId,
+      ...(span.parentSpanId ? { parentSpanId: span.parentSpanId } : {}),
+      ...(span.attributes ? { attributes: span.attributes } : {}),
+    },
+    run,
+  );
+}
+
+function emitFinishedDiagnosticsTimelineSpan(span: StartedDiagnosticsTimelineSpan): void {
+  emitDiagnosticsTimelineEvent(
+    {
+      type: "span.end",
+      name: span.name,
+      phase: span.phase,
+      spanId: span.spanId,
+      parentSpanId: span.parentSpanId,
+      durationMs: performance.now() - span.startedAt,
+      attributes: span.attributes,
+    },
+    { config: span.config, env: span.env },
+  );
+}
+
+function emitFailedDiagnosticsTimelineSpan(
+  span: StartedDiagnosticsTimelineSpan,
+  error: unknown,
+): void {
+  emitDiagnosticsTimelineEvent(
+    {
+      type: "span.error",
+      name: span.name,
+      phase: span.phase,
+      spanId: span.spanId,
+      parentSpanId: span.parentSpanId,
+      durationMs: performance.now() - span.startedAt,
+      attributes: span.attributes,
+      errorName: error instanceof Error ? error.name : typeof error,
+      ...(span.omitErrorMessage
+        ? {}
+        : { errorMessage: error instanceof Error ? error.message : String(error) }),
+    },
+    { config: span.config, env: span.env },
+  );
+}
+
+/** Measures async work as a start/end timeline span, emitting an error span before rethrowing. */
 export async function measureDiagnosticsTimelineSpan<T>(
   name: string,
   run: () => Promise<T> | T,
   options: DiagnosticsTimelineSpanOptions = {},
 ): Promise<T> {
-  const env = options.env ?? process.env;
-  if (!isDiagnosticsTimelineEnabled({ config: options.config, env })) {
+  const span = startDiagnosticsTimelineSpan(name, options);
+  if (!span) {
     return await run();
   }
-  const activeSpan = getActiveDiagnosticsTimelineSpan();
-  const spanId = randomUUID();
-  const phase = options.phase ?? activeSpan?.phase;
-  const parentSpanId = options.parentSpanId ?? activeSpan?.spanId;
-  const startedAt = performance.now();
-  emitDiagnosticsTimelineEvent(
-    {
-      type: "span.start",
-      name,
-      phase,
-      spanId,
-      parentSpanId,
-      attributes: options.attributes,
-    },
-    { config: options.config, env },
-  );
   try {
-    const result = await activeDiagnosticsTimelineSpan.run(
-      {
-        name,
-        ...(phase ? { phase } : {}),
-        spanId,
-        ...(parentSpanId ? { parentSpanId } : {}),
-        ...(options.attributes ? { attributes: options.attributes } : {}),
-      },
-      () => run(),
-    );
-    emitDiagnosticsTimelineEvent(
-      {
-        type: "span.end",
-        name,
-        phase,
-        spanId,
-        parentSpanId,
-        durationMs: performance.now() - startedAt,
-        attributes: options.attributes,
-      },
-      { config: options.config, env },
-    );
+    const result = await runInDiagnosticsTimelineSpan(span, () => run());
+    emitFinishedDiagnosticsTimelineSpan(span);
     return result;
   } catch (error) {
-    emitDiagnosticsTimelineEvent(
-      {
-        type: "span.error",
-        name,
-        phase,
-        spanId,
-        parentSpanId,
-        durationMs: performance.now() - startedAt,
-        attributes: options.attributes,
-        errorName: error instanceof Error ? error.name : typeof error,
-        errorMessage: error instanceof Error ? error.message : String(error),
-      },
-      { config: options.config, env },
-    );
+    emitFailedDiagnosticsTimelineSpan(span, error);
     throw error;
   }
 }
 
+/** Measures sync work as a start/end timeline span, emitting an error span before rethrowing. */
 export function measureDiagnosticsTimelineSpanSync<T>(
   name: string,
   run: () => T,
   options: DiagnosticsTimelineSpanOptions = {},
 ): T {
-  const env = options.env ?? process.env;
-  if (!isDiagnosticsTimelineEnabled({ config: options.config, env })) {
+  const span = startDiagnosticsTimelineSpan(name, options);
+  if (!span) {
     return run();
   }
-  const activeSpan = getActiveDiagnosticsTimelineSpan();
-  const spanId = randomUUID();
-  const phase = options.phase ?? activeSpan?.phase;
-  const parentSpanId = options.parentSpanId ?? activeSpan?.spanId;
-  const startedAt = performance.now();
-  emitDiagnosticsTimelineEvent(
-    {
-      type: "span.start",
-      name,
-      phase,
-      spanId,
-      parentSpanId,
-      attributes: options.attributes,
-    },
-    { config: options.config, env },
-  );
   try {
-    const result = activeDiagnosticsTimelineSpan.run(
-      {
-        name,
-        ...(phase ? { phase } : {}),
-        spanId,
-        ...(parentSpanId ? { parentSpanId } : {}),
-        ...(options.attributes ? { attributes: options.attributes } : {}),
-      },
-      run,
-    );
-    emitDiagnosticsTimelineEvent(
-      {
-        type: "span.end",
-        name,
-        phase,
-        spanId,
-        parentSpanId,
-        durationMs: performance.now() - startedAt,
-        attributes: options.attributes,
-      },
-      { config: options.config, env },
-    );
+    const result = runInDiagnosticsTimelineSpan(span, run);
+    emitFinishedDiagnosticsTimelineSpan(span);
     return result;
   } catch (error) {
-    emitDiagnosticsTimelineEvent(
-      {
-        type: "span.error",
-        name,
-        phase,
-        spanId,
-        parentSpanId,
-        durationMs: performance.now() - startedAt,
-        attributes: options.attributes,
-        errorName: error instanceof Error ? error.name : typeof error,
-        errorMessage: error instanceof Error ? error.message : String(error),
-      },
-      { config: options.config, env },
-    );
+    emitFailedDiagnosticsTimelineSpan(span, error);
     throw error;
   }
-}
-
-export async function flushDiagnosticsTimelineForTest(): Promise<void> {
-  await Promise.resolve();
 }

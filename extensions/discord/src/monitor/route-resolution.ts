@@ -1,4 +1,5 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+// Discord plugin module implements route resolution behavior.
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { SessionBindingRecord } from "openclaw/plugin-sdk/conversation-runtime";
 import {
   deriveLastRoutePolicy,
@@ -8,8 +9,8 @@ import {
   resolveAgentRoute,
   type ResolvedAgentRoute,
   type RoutePeer,
+  resolveAgentIdFromSessionKey,
 } from "openclaw/plugin-sdk/routing";
-import { resolveAgentIdFromSessionKey } from "openclaw/plugin-sdk/routing";
 
 export function buildDiscordRoutePeer(params: {
   isDirectMessage: boolean;
@@ -18,10 +19,29 @@ export function buildDiscordRoutePeer(params: {
   conversationId: string;
 }): RoutePeer {
   return {
-    kind: params.isDirectMessage ? "direct" : params.isGroupDm ? "group" : "channel",
-    id: params.isDirectMessage
-      ? params.directUserId?.trim() || params.conversationId
-      : params.conversationId,
+    kind: params.isGroupDm ? "group" : params.isDirectMessage ? "direct" : "channel",
+    id:
+      params.isDirectMessage && !params.isGroupDm
+        ? params.directUserId?.trim() || params.conversationId
+        : params.conversationId,
+  };
+}
+
+export function buildDiscordConversationRouteContext(params: {
+  isDirectMessage: boolean;
+  isGroupDm: boolean;
+  directUserId?: string | null;
+  conversationId: string;
+  isThread: boolean;
+  parentConversationId?: string;
+}) {
+  return {
+    ConversationRouteContextObserved: true as const,
+    ConversationRoutePeerId: buildDiscordRoutePeer(params).id,
+    NativeChannelId: params.conversationId,
+    InboundAccessAuthorized: true as const,
+    MessageThreadId: params.isThread ? params.conversationId : undefined,
+    ThreadParentId: params.isThread ? params.parentConversationId : undefined,
   };
 }
 

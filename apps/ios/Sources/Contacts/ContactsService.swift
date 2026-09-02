@@ -3,6 +3,16 @@ import Foundation
 import OpenClawKit
 
 final class ContactsService: ContactsServicing {
+    private let authorizationStatus: @Sendable () -> CNAuthorizationStatus
+
+    init(
+        authorizationStatus: @escaping @Sendable () -> CNAuthorizationStatus = {
+            CNContactStore.authorizationStatus(for: .contacts)
+        })
+    {
+        self.authorizationStatus = authorizationStatus
+    }
+
     private static var payloadKeys: [CNKeyDescriptor] {
         [
             CNContactIdentifierKey as CNKeyDescriptor,
@@ -11,11 +21,15 @@ final class ContactsService: ContactsServicing {
             CNContactOrganizationNameKey as CNKeyDescriptor,
             CNContactPhoneNumbersKey as CNKeyDescriptor,
             CNContactEmailAddressesKey as CNKeyDescriptor,
+            // CNContactFormatter requires more keys than payload(from:) accesses directly.
+            // Fetch its declared key set; formatting a partial contact otherwise raises an
+            // Objective-C CNContactPropertyNotFetchedException and crashes the app.
+            CNContactFormatter.descriptorForRequiredKeys(for: .fullName),
         ]
     }
 
     func search(params: OpenClawContactsSearchParams) async throws -> OpenClawContactsSearchPayload {
-        let store = try await Self.authorizedStore()
+        let store = try self.authorizedStore()
 
         let limit = max(1, min(params.limit ?? 25, 200))
 
@@ -40,7 +54,7 @@ final class ContactsService: ContactsServicing {
     }
 
     func add(params: OpenClawContactsAddParams) async throws -> OpenClawContactsAddPayload {
-        let store = try await Self.authorizedStore()
+        let store = try self.authorizedStore()
 
         let givenName = params.givenName?.trimmingCharacters(in: .whitespacesAndNewlines)
         let familyName = params.familyName?.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -97,13 +111,11 @@ final class ContactsService: ContactsServicing {
         return OpenClawContactsAddPayload(contact: Self.payload(from: persisted))
     }
 
-    private static func ensureAuthorization(store: CNContactStore, status: CNAuthorizationStatus) async -> Bool {
+    private static func ensureAuthorization(status: CNAuthorizationStatus) -> Bool {
         switch status {
         case .authorized, .limited:
             return true
         case .notDetermined:
-            // Don’t prompt during node.invoke; the caller should instruct the user to grant permission.
-            // Prompts block the invoke and lead to timeouts in headless flows.
             return false
         case .restricted, .denied:
             return false
@@ -112,16 +124,15 @@ final class ContactsService: ContactsServicing {
         }
     }
 
-    private static func authorizedStore() async throws -> CNContactStore {
-        let store = CNContactStore()
-        let status = CNContactStore.authorizationStatus(for: .contacts)
-        let authorized = await Self.ensureAuthorization(store: store, status: status)
+    private func authorizedStore() throws -> CNContactStore {
+        let status = self.authorizationStatus()
+        let authorized = Self.ensureAuthorization(status: status)
         guard authorized else {
             throw NSError(domain: "Contacts", code: 1, userInfo: [
                 NSLocalizedDescriptionKey: "CONTACTS_PERMISSION_REQUIRED: grant Contacts permission",
             ])
         }
-        return store
+        return CNContactStore()
     }
 
     private static func normalizeStrings(_ values: [String]?, lowercased: Bool = false) -> [String] {
@@ -200,10 +211,4 @@ final class ContactsService: ContactsServicing {
             phoneNumbers: contact.phoneNumbers.map(\.value.stringValue),
             emails: contact.emailAddresses.map { String($0.value) })
     }
-
-    #if DEBUG
-    static func _test_matches(contact: CNContact, phoneNumbers: [String], emails: [String]) -> Bool {
-        self.matchContacts(contacts: [contact], phoneNumbers: phoneNumbers, emails: emails) != nil
-    }
-    #endif
 }

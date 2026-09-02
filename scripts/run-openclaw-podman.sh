@@ -14,51 +14,15 @@
 
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=scripts/lib/host-timeout.sh
+source "$SCRIPT_DIR/lib/host-timeout.sh"
+# shellcheck source=scripts/podman/common.sh
+source "$SCRIPT_DIR/podman/common.sh"
 PLATFORM_NAME="$(uname -s 2>/dev/null || echo unknown)"
 
-resolve_user_home() {
-  local user="$1"
-  local home=""
-  if command -v getent >/dev/null 2>&1; then
-    home="$(getent passwd "$user" 2>/dev/null | cut -d: -f6 || true)"
-  fi
-  if [[ -z "$home" && -f /etc/passwd ]]; then
-    home="$(awk -F: -v u="$user" '$1==u {print $6}' /etc/passwd 2>/dev/null || true)"
-  fi
-  if [[ -z "$home" ]]; then
-    home="/home/$user"
-  fi
-  printf '%s' "$home"
-}
-
-fail() {
-  echo "$*" >&2
-  exit 1
-}
-
-validate_single_line_value() {
-  local label="$1"
-  local value="$2"
-  if [[ "$value" == *$'\n'* || "$value" == *$'\r'* ]]; then
-    fail "Invalid $label: control characters are not allowed."
-  fi
-}
-
-validate_absolute_path() {
-  local label="$1"
-  local value="$2"
-  validate_single_line_value "$label" "$value"
-  [[ "$value" == /* ]] || fail "Invalid $label: expected an absolute path."
-  [[ "$value" != *"//"* ]] || fail "Invalid $label: repeated slashes are not allowed."
-  [[ "$value" != *"/./"* && "$value" != */. && "$value" != *"/../"* && "$value" != */.. ]] ||
-    fail "Invalid $label: dot path segments are not allowed."
-}
-
-validate_mount_source_path() {
-  local label="$1"
-  local value="$2"
-  validate_absolute_path "$label" "$value"
-  [[ "$value" != *:* ]] || fail "Invalid $label: ':' is not allowed in Podman bind-mount source paths."
+run_podman_detached() {
+  openclaw_host_timeout_cmd "$PODMAN_RUN_TIMEOUT" podman run "$@"
 }
 
 ensure_safe_existing_regular_file() {
@@ -68,44 +32,6 @@ ensure_safe_existing_regular_file() {
   [[ -e "$file" ]] || fail "Missing $label: $file"
   [[ ! -L "$file" ]] || fail "Unsafe $label: symlinks are not allowed ($file)"
   [[ -f "$file" ]] || fail "Unsafe $label: expected a regular file ($file)"
-}
-
-ensure_safe_existing_dir() {
-  local label="$1"
-  local dir="$2"
-  validate_absolute_path "$label" "$dir"
-  [[ -d "$dir" ]] || fail "Missing $label: $dir"
-  [[ ! -L "$dir" ]] || fail "Unsafe $label: symlinks are not allowed ($dir)"
-}
-
-stat_uid() {
-  local path="$1"
-  if stat -f '%u' "$path" >/dev/null 2>&1; then
-    stat -f '%u' "$path"
-  else
-    stat -Lc '%u' "$path"
-  fi
-}
-
-stat_mode() {
-  local path="$1"
-  if stat -f '%Lp' "$path" >/dev/null 2>&1; then
-    stat -f '%Lp' "$path"
-  else
-    stat -Lc '%a' "$path"
-  fi
-}
-
-ensure_private_existing_dir_owned_by_user() {
-  local label="$1"
-  local dir="$2"
-  local uid=""
-  local mode=""
-  ensure_safe_existing_dir "$label" "$dir"
-  uid="$(stat_uid "$dir")"
-  [[ "$uid" == "$(id -u)" ]] || fail "Unsafe $label: not owned by current user ($dir)"
-  mode="$(stat_mode "$dir")"
-  (( (8#$mode & 0022) == 0 )) || fail "Unsafe $label: group/other writable ($dir)"
 }
 
 ensure_private_existing_regular_file_owned_by_user() {
@@ -118,32 +44,6 @@ ensure_private_existing_regular_file_owned_by_user() {
   [[ "$uid" == "$(id -u)" ]] || fail "Unsafe $label: not owned by current user ($file)"
   mode="$(stat_mode "$file")"
   (( (8#$mode & 0077) == 0 )) || fail "Unsafe $label: expected owner-only permissions ($file)"
-}
-
-ensure_safe_write_file_path() {
-  local label="$1"
-  local file="$2"
-  local dir
-  validate_absolute_path "$label" "$file"
-  if [[ -e "$file" ]]; then
-    [[ ! -L "$file" ]] || fail "Unsafe $label: symlinks are not allowed ($file)"
-    [[ -f "$file" ]] || fail "Unsafe $label: expected a regular file ($file)"
-  fi
-  dir="$(dirname "$file")"
-  ensure_safe_existing_dir "${label} parent directory" "$dir"
-}
-
-write_file_atomically() {
-  local file="$1"
-  local mode="$2"
-  local dir=""
-  local tmp=""
-  ensure_safe_write_file_path "output file" "$file"
-  dir="$(dirname "$file")"
-  tmp="$(mktemp "$dir/.tmp.XXXXXX")"
-  cat >"$tmp"
-  chmod "$mode" "$tmp"
-  mv -f "$tmp" "$file"
 }
 
 load_podman_env_file() {
@@ -167,7 +67,7 @@ load_podman_env_file() {
     key="${key%"${key##*[![:space:]]}"}"
     [[ "$key" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || continue
     case "$key" in
-      OPENCLAW_GATEWAY_TOKEN|OPENCLAW_PODMAN_CONTAINER|OPENCLAW_PODMAN_IMAGE|OPENCLAW_IMAGE|OPENCLAW_PODMAN_PULL|OPENCLAW_PODMAN_GATEWAY_HOST_PORT|OPENCLAW_GATEWAY_PORT|OPENCLAW_PODMAN_BRIDGE_HOST_PORT|OPENCLAW_BRIDGE_PORT|OPENCLAW_GATEWAY_BIND|OPENCLAW_PODMAN_USERNS|OPENCLAW_BIND_MOUNT_OPTIONS|OPENCLAW_PODMAN_PUBLISH_HOST)
+      OPENCLAW_GATEWAY_TOKEN|OPENCLAW_PODMAN_CONTAINER|OPENCLAW_PODMAN_IMAGE|OPENCLAW_IMAGE|OPENCLAW_PODMAN_PULL|OPENCLAW_PODMAN_RUN_TIMEOUT|OPENCLAW_PODMAN_GATEWAY_HOST_PORT|OPENCLAW_GATEWAY_PORT|OPENCLAW_PODMAN_BRIDGE_HOST_PORT|OPENCLAW_BRIDGE_PORT|OPENCLAW_GATEWAY_BIND|OPENCLAW_PODMAN_USERNS|OPENCLAW_BIND_MOUNT_OPTIONS|OPENCLAW_PODMAN_PUBLISH_HOST)
         ;;
       *)
         continue
@@ -180,15 +80,6 @@ load_podman_env_file() {
     export "$key"
   done
   exec 9<&-
-}
-
-validate_port() {
-  local label="$1"
-  local value="$2"
-  local numeric=""
-  [[ "$value" =~ ^[0-9]{1,5}$ ]] || fail "Invalid $label: must be numeric."
-  numeric=$((10#$value))
-  (( numeric >= 1 && numeric <= 65535 )) || fail "Invalid $label: out of range."
 }
 
 EFFECTIVE_USER="$(id -un)"
@@ -236,6 +127,7 @@ WORKSPACE_DIR="${OPENCLAW_WORKSPACE_DIR:-$CONFIG_DIR/workspace}"
 CONTAINER_NAME="${OPENCLAW_PODMAN_CONTAINER:-openclaw}"
 OPENCLAW_IMAGE="${OPENCLAW_PODMAN_IMAGE:-${OPENCLAW_IMAGE:-openclaw:local}}"
 PODMAN_PULL="${OPENCLAW_PODMAN_PULL:-never}"
+PODMAN_RUN_TIMEOUT="${OPENCLAW_PODMAN_RUN_TIMEOUT:-600s}"
 HOST_GATEWAY_PORT="${OPENCLAW_PODMAN_GATEWAY_HOST_PORT:-${OPENCLAW_GATEWAY_PORT:-18789}}"
 HOST_BRIDGE_PORT="${OPENCLAW_PODMAN_BRIDGE_HOST_PORT:-${OPENCLAW_BRIDGE_PORT:-18790}}"
 PUBLISH_HOST="${OPENCLAW_PODMAN_PUBLISH_HOST:-127.0.0.1}"
@@ -276,49 +168,6 @@ resolve_config_gateway_bind() {
 # OPENCLAW_GATEWAY_BIND first, then gateway.bind in local config.
 CONFIG_GATEWAY_BIND="$(resolve_config_gateway_bind "$CONFIG_DIR")"
 GATEWAY_BIND="${OPENCLAW_GATEWAY_BIND:-${CONFIG_GATEWAY_BIND:-lan}}"
-
-upsert_env_var() {
-  local file="$1"
-  local key="$2"
-  local value="$3"
-  local tmp
-  local dir
-  ensure_safe_write_file_path "env file" "$file"
-  dir="$(dirname "$file")"
-  tmp="$(mktemp "$dir/.env.tmp.XXXXXX")"
-  if [[ -f "$file" ]]; then
-    awk -v k="$key" -v v="$value" '
-      BEGIN { found = 0 }
-      $0 ~ ("^" k "=") { print k "=" v; found = 1; next }
-      { print }
-      END { if (!found) print k "=" v }
-    ' "$file" >"$tmp"
-  else
-    printf '%s=%s\n' "$key" "$value" >"$tmp"
-  fi
-  mv "$tmp" "$file"
-  chmod 600 "$file" 2>/dev/null || true
-}
-
-generate_token_hex_32() {
-  if command -v openssl >/dev/null 2>&1; then
-    openssl rand -hex 32
-    return 0
-  fi
-  if command -v python3 >/dev/null 2>&1; then
-    python3 - <<'PY'
-import secrets
-print(secrets.token_hex(32))
-PY
-    return 0
-  fi
-  if command -v od >/dev/null 2>&1; then
-    od -An -N32 -tx1 /dev/urandom | tr -d " \n"
-    return 0
-  fi
-  echo "Missing dependency: need openssl or python3 (or od) to generate OPENCLAW_GATEWAY_TOKEN." >&2
-  exit 1
-}
 
 create_token_env_file() {
   local file="$1"
@@ -546,7 +395,7 @@ if [[ "$RUN_SETUP" == true ]]; then
 fi
 
 TOKEN_ENV_FILE="$(create_token_env_file "$ENV_FILE" "$OPENCLAW_GATEWAY_TOKEN")"
-podman run --pull="$PODMAN_PULL" -d --replace \
+run_podman_detached --pull="$PODMAN_PULL" -d --replace \
   --name "$CONTAINER_NAME" \
   --init \
   "${USERNS_ARGS[@]}" "${RUN_USER_ARGS[@]}" \

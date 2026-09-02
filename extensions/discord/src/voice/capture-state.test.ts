@@ -1,3 +1,4 @@
+// Discord tests cover capture state plugin behavior.
 import { describe, expect, it, vi } from "vitest";
 import {
   beginVoiceCapture,
@@ -5,17 +6,27 @@ import {
   createVoiceCaptureState,
   finishVoiceCapture,
   scheduleVoiceCaptureFinalize,
+  stopVoiceCaptureState,
 } from "./capture-state.js";
 
 describe("voice capture state", () => {
-  it("increments generations per speaker", () => {
-    const state = createVoiceCaptureState();
-    const first = beginVoiceCapture(state, "u1", { destroy: vi.fn() } as never);
-    finishVoiceCapture(state, "u1", first);
-    const second = beginVoiceCapture(state, "u1", { destroy: vi.fn() } as never);
+  it("keeps a replacement's finalize timer when an old decode finishes", async () => {
+    vi.useFakeTimers();
+    try {
+      const state = createVoiceCaptureState();
+      const first = beginVoiceCapture(state, "u1", { destroy: vi.fn() } as never);
+      finishVoiceCapture(state, "u1", first);
+      const destroy = vi.fn();
+      beginVoiceCapture(state, "u1", { destroy } as never);
+      scheduleVoiceCaptureFinalize({ state, userId: "u1", delayMs: 1_200 });
 
-    expect(first).toBe(1);
-    expect(second).toBe(2);
+      expect(finishVoiceCapture(state, "u1", first)).toBe(false);
+      await vi.advanceTimersByTimeAsync(1_200);
+      expect(destroy).toHaveBeenCalledOnce();
+      expect(state.size).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("clears active speaker state before destroying a finalized capture", async () => {
@@ -23,8 +34,7 @@ describe("voice capture state", () => {
     try {
       const state = createVoiceCaptureState();
       const destroy = vi.fn(() => {
-        expect(state.activeSpeakers.has("u1")).toBe(false);
-        expect(state.activeCaptureStreams.has("u1")).toBe(false);
+        expect(state.has("u1")).toBe(false);
       });
       beginVoiceCapture(state, "u1", { destroy } as never);
 
@@ -37,12 +47,32 @@ describe("voice capture state", () => {
     }
   });
 
-  it("lets a pending finalize be canceled for the same generation", () => {
+  it("lets a pending finalize be canceled for the same capture", () => {
     const state = createVoiceCaptureState();
-    const generation = beginVoiceCapture(state, "u1", { destroy: vi.fn() } as never);
+    const capture = beginVoiceCapture(state, "u1", { destroy: vi.fn() } as never);
 
     expect(scheduleVoiceCaptureFinalize({ state, userId: "u1", delayMs: 1_200 })).toBe(true);
-    expect(clearVoiceCaptureFinalizeTimer(state, "u1", generation)).toBe(true);
-    expect(state.captureFinalizeTimers.has("u1")).toBe(false);
+    expect(clearVoiceCaptureFinalizeTimer(capture)).toBe(true);
+    expect(clearVoiceCaptureFinalizeTimer(capture)).toBe(false);
+  });
+
+  it("retires every capture and cancels timers before terminal stream teardown", async () => {
+    vi.useFakeTimers();
+    try {
+      const state = createVoiceCaptureState();
+      const destroy = vi.fn(() => expect(state.size).toBe(0));
+      const onFinalize = vi.fn();
+      for (const userId of ["u1", "u2"]) {
+        beginVoiceCapture(state, userId, { destroy } as never);
+        scheduleVoiceCaptureFinalize({ state, userId, delayMs: 1_200, onFinalize });
+      }
+
+      stopVoiceCaptureState(state);
+      await vi.advanceTimersByTimeAsync(1_200);
+      expect(destroy).toHaveBeenCalledTimes(2);
+      expect(onFinalize).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

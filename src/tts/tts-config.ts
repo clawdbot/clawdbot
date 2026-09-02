@@ -1,54 +1,39 @@
+// TTS config helpers read and normalize text-to-speech provider settings.
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
-import type { OpenClawConfig } from "../config/types.js";
-import type { TtsAutoMode, TtsConfig, TtsMode } from "../config/types.tts.js";
-import { normalizeAccountId, normalizeAgentId } from "../routing/session-key.js";
+import {
+  asOptionalRecord as asObjectRecord,
+  isRecord as isPlainObject,
+} from "@openclaw/normalization-core/record-coerce";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
-} from "../shared/string-coerce.js";
+} from "@openclaw/normalization-core/string-coerce";
+import { resolveAgentConfig } from "../agents/agent-scope-config.js";
+import type { OpenClawConfig } from "../config/types.js";
+import type { TtsAutoMode, TtsConfig, TtsMode } from "../config/types.tts.js";
+import { mergeDeep } from "../infra/deep-merge.js";
+import { normalizeAccountId } from "../routing/session-key.js";
+import { readConfigMachineState } from "../state/config-machine-state.js";
 import { resolveConfigDir, resolveUserPath } from "../utils.js";
 import { normalizeTtsAutoMode } from "./tts-auto-mode.js";
 export { normalizeTtsAutoMode } from "./tts-auto-mode.js";
 
-const BLOCKED_MERGE_KEYS = new Set(["__proto__", "prototype", "constructor"]);
-
+/** Routing context used to layer global, agent, channel, and account TTS config. */
 export type TtsConfigResolutionContext = {
   agentId?: string;
   channelId?: string;
   accountId?: string;
 };
 
-function isPlainObject(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
-}
-
-function deepMergeDefined(base: unknown, override: unknown): unknown {
-  if (!isPlainObject(base) || !isPlainObject(override)) {
-    return override === undefined ? base : override;
-  }
-
-  const result: Record<string, unknown> = { ...base };
-  for (const [key, value] of Object.entries(override)) {
-    if (BLOCKED_MERGE_KEYS.has(key) || value === undefined) {
-      continue;
-    }
-    const existing = result[key];
-    result[key] = key in result ? deepMergeDefined(existing, value) : value;
-  }
-  return result;
-}
-
 function resolveAgentTtsOverride(
   cfg: OpenClawConfig,
   agentId: string | undefined,
 ): TtsConfig | undefined {
-  if (!agentId || !Array.isArray(cfg.agents?.list)) {
+  if (!agentId) {
     return undefined;
   }
-  const normalized = normalizeAgentId(agentId);
-  const agent = cfg.agents.list.find((entry) => normalizeAgentId(entry.id) === normalized);
-  return agent?.tts;
+  return resolveAgentConfig(cfg, agentId)?.tts;
 }
 
 function resolveTtsConfigContext(
@@ -78,10 +63,6 @@ function resolveRecordEntry<T>(
 
 function asTtsConfig(value: unknown): TtsConfig | undefined {
   return isPlainObject(value) ? (value as TtsConfig) : undefined;
-}
-
-function asObjectRecord(value: unknown): Record<string, unknown> | undefined {
-  return isPlainObject(value) ? value : undefined;
 }
 
 function resolveChannelConfig(
@@ -121,22 +102,24 @@ function resolveAccountTtsOverride(
   return asTtsConfig(asObjectRecord(accountConfig)?.tts);
 }
 
+/** Resolve effective TTS config after applying global, agent, channel, and account layers. */
 export function resolveEffectiveTtsConfig(
   cfg: OpenClawConfig,
   contextOrAgentId?: string | TtsConfigResolutionContext,
 ): TtsConfig {
   const context = resolveTtsConfigContext(contextOrAgentId);
-  const base = cfg.messages?.tts ?? {};
+  const base = cfg.tts ?? {};
   const agentOverride = resolveAgentTtsOverride(cfg, context.agentId);
   const channelOverride = resolveChannelTtsOverride(cfg, context);
   const accountOverride = resolveAccountTtsOverride(cfg, context);
   let merged: unknown = base;
   for (const override of [agentOverride, channelOverride, accountOverride]) {
-    merged = deepMergeDefined(merged, override ?? {});
+    merged = mergeDeep(merged, override ?? {});
   }
   return merged as TtsConfig;
 }
 
+/** Resolve the configured TTS mode, defaulting to final-answer synthesis. */
 export function resolveConfiguredTtsMode(
   cfg: OpenClawConfig,
   contextOrAgentId?: string | TtsConfigResolutionContext,
@@ -144,13 +127,19 @@ export function resolveConfiguredTtsMode(
   return resolveEffectiveTtsConfig(cfg, contextOrAgentId).mode ?? "final";
 }
 
-function resolveTtsPrefsPathValue(prefsPath: string | undefined): string {
+function resolveTtsPrefsPathValue(
+  prefsPath: string | undefined,
+  machinePrefsPath?: string,
+): string {
   if (prefsPath?.trim()) {
     return resolveUserPath(prefsPath.trim());
   }
   const envPath = process.env.OPENCLAW_TTS_PREFS?.trim();
   if (envPath) {
     return resolveUserPath(envPath);
+  }
+  if (machinePrefsPath?.trim()) {
+    return resolveUserPath(machinePrefsPath.trim());
   }
   return path.join(resolveConfigDir(process.env), "settings", "tts.json");
 }
@@ -176,6 +165,7 @@ function readTtsPrefsAutoMode(prefsPath: string): TtsAutoMode | undefined {
   return undefined;
 }
 
+/** Return whether this payload should attempt TTS based on session, prefs, and config. */
 export function shouldAttemptTtsPayload(params: {
   cfg: OpenClawConfig;
   ttsAuto?: string;
@@ -189,7 +179,10 @@ export function shouldAttemptTtsPayload(params: {
   }
 
   const raw = resolveEffectiveTtsConfig(params.cfg, params);
-  const prefsAuto = readTtsPrefsAutoMode(resolveTtsPrefsPathValue(raw?.prefsPath));
+  const scopedPrefsPath = (raw as TtsConfig & { prefsPath?: string }).prefsPath;
+  const prefsAuto = readTtsPrefsAutoMode(
+    resolveTtsPrefsPathValue(scopedPrefsPath, readConfigMachineState<string>("tts.prefsPath")),
+  );
   if (prefsAuto) {
     return prefsAuto !== "off";
   }
@@ -201,6 +194,7 @@ export function shouldAttemptTtsPayload(params: {
   return raw?.enabled === true;
 }
 
+/** Return whether TTS directive markup should be stripped from user-visible text. */
 export function shouldCleanTtsDirectiveText(params: {
   cfg: OpenClawConfig;
   ttsAuto?: string;

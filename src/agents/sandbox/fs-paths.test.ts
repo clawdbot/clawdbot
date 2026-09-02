@@ -1,50 +1,81 @@
+// Sandbox filesystem path tests cover bind parsing, host/container path mapping,
+// and writable-root detection.
+import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import {
   buildSandboxFsMounts,
-  parseSandboxBindMount,
+  hasSandboxBindContainerPathAliases,
+  hasSandboxBindReadonlyHostShadows,
   resolveSandboxFsPathWithMounts,
+  resolveWritableSandboxBindHostRoots,
 } from "./fs-paths.js";
 import { createSandboxTestContext } from "./test-fixtures.js";
 import type { SandboxContext } from "./types.js";
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function createSandbox(overrides?: Partial<SandboxContext>): SandboxContext {
   return createSandboxTestContext({ overrides });
 }
 
-describe("parseSandboxBindMount", () => {
-  it("parses bind mode and writeability", () => {
-    expect(parseSandboxBindMount("/tmp/a:/workspace-a:ro")).toEqual({
-      hostRoot: path.resolve("/tmp/a"),
-      containerRoot: "/workspace-a",
-      writable: false,
-    });
-    expect(parseSandboxBindMount("/tmp/b:/workspace-b:rw")).toEqual({
-      hostRoot: path.resolve("/tmp/b"),
-      containerRoot: "/workspace-b",
-      writable: true,
-    });
+describe("sandbox bind mounts", () => {
+  it("returns only unique writable bind host roots", () => {
+    expect(
+      resolveWritableSandboxBindHostRoots([
+        "/tmp/data:/data:rw",
+        "/tmp/read-only:/read-only:ro",
+        "/tmp/default-write:/default-write",
+        "/tmp/data:/data-two:rw",
+        "C:\\Users\\kai\\workspace:/windows-read-only:ro",
+        "D:/data:/windows-data:rw",
+        "//server/share:/unc-share:rw",
+        "invalid-bind",
+      ]),
+    ).toEqual([
+      path.resolve("/tmp/data"),
+      path.resolve("/tmp/default-write"),
+      path.resolve("D:/data"),
+      path.resolve("//server/share"),
+    ]);
   });
 
-  it("parses Windows drive-letter host paths", () => {
-    expect(parseSandboxBindMount("C:\\Users\\kai\\workspace:/workspace:ro")).toEqual({
-      hostRoot: path.resolve("C:\\Users\\kai\\workspace"),
-      containerRoot: "/workspace",
-      writable: false,
-    });
-    expect(parseSandboxBindMount("D:/data:/workspace-data:rw")).toEqual({
-      hostRoot: path.resolve("D:/data"),
-      containerRoot: "/workspace-data",
-      writable: true,
-    });
+  it("omits writable bind roots that contain read-only host shadows", () => {
+    // A writable parent with a read-only child is unsafe for generic host writes;
+    // callers must route through mount-aware path resolution instead.
+    expect(
+      resolveWritableSandboxBindHostRoots([
+        "/tmp/data:/tmp/data:rw",
+        "/tmp/data/secrets:/tmp/data/secrets:ro",
+        "/tmp/readonly-parent:/tmp/readonly-parent:ro",
+        "/tmp/readonly-parent/work:/tmp/readonly-parent/work:rw",
+      ]),
+    ).toEqual([path.resolve("/tmp/readonly-parent/work")]);
   });
 
-  it("parses UNC-style host paths", () => {
-    expect(parseSandboxBindMount("//server/share:/workspace:ro")).toEqual({
-      hostRoot: path.resolve("//server/share"),
-      containerRoot: "/workspace",
-      writable: false,
-    });
+  it("detects bind mounts whose container path differs from the host path", () => {
+    expect(hasSandboxBindContainerPathAliases(["/tmp/data:/tmp/data:rw"])).toBe(
+      process.platform === "win32",
+    );
+    expect(hasSandboxBindContainerPathAliases(["/tmp/data:/data:rw"])).toBe(true);
+    expect(hasSandboxBindContainerPathAliases(["invalid-bind"])).toBe(false);
+  });
+
+  it("detects read-only bind shadows inside writable host roots", () => {
+    expect(
+      hasSandboxBindReadonlyHostShadows([
+        "/tmp/data:/tmp/data:rw",
+        "/tmp/data/secrets:/tmp/data/secrets:ro",
+      ]),
+    ).toBe(true);
+    expect(
+      hasSandboxBindReadonlyHostShadows([
+        "/tmp/data:/tmp/data:ro",
+        "/tmp/data/work:/tmp/data/work:rw",
+      ]),
+    ).toBe(false);
   });
 });
 
@@ -89,7 +120,7 @@ describe("resolveSandboxFsPathWithMounts", () => {
     expect(resolved.writable).toBe(true);
   });
 
-  it("preserves legacy sandbox-root error for outside paths", () => {
+  it("includes the container workspace root in outside-path errors", () => {
     const sandbox = createSandbox();
     const mounts = buildSandboxFsMounts(sandbox);
     expect(() =>
@@ -100,7 +131,104 @@ describe("resolveSandboxFsPathWithMounts", () => {
         defaultContainerRoot: sandbox.containerWorkdir,
         mounts,
       }),
-    ).toThrow(/Path escapes sandbox root/);
+    ).toThrow(
+      /Path escapes sandbox root \(.*container root \/workspace\): \/etc\/passwd\. Use a path under \/workspace\/ instead\./,
+    );
+  });
+
+  it("uses the configured custom container root in outside-path errors", () => {
+    const sandbox = createSandbox({
+      containerWorkdir: "/sandbox-root",
+      docker: {
+        ...createSandbox().docker,
+        workdir: "/sandbox-root",
+      },
+    });
+    const mounts = buildSandboxFsMounts(sandbox);
+    expect(() =>
+      resolveSandboxFsPathWithMounts({
+        filePath: "/tmp/healthcheck-alert/config.json",
+        cwd: sandbox.workspaceDir,
+        defaultWorkspaceRoot: sandbox.workspaceDir,
+        defaultContainerRoot: sandbox.containerWorkdir,
+        mounts,
+      }),
+    ).toThrow(
+      /Path escapes sandbox root \(.*container root \/sandbox-root\): \/tmp\/healthcheck-alert\/config\.json\. Use a path under \/sandbox-root\/ instead\./,
+    );
+  });
+
+  it("includes container workspace hint without exposing a full home workspace root", () => {
+    // Error messages should guide users toward container paths without printing
+    // the host home directory.
+    const workspaceDir = path.join(os.homedir(), "workspace-coder");
+    const sandbox = createSandbox({
+      workspaceDir,
+      agentWorkspaceDir: workspaceDir,
+    });
+    const mounts = buildSandboxFsMounts(sandbox);
+    let thrown: unknown;
+    try {
+      resolveSandboxFsPathWithMounts({
+        filePath: "/tmp/outside",
+        cwd: sandbox.workspaceDir,
+        defaultWorkspaceRoot: sandbox.workspaceDir,
+        defaultContainerRoot: sandbox.containerWorkdir,
+        mounts,
+      });
+    } catch (error) {
+      thrown = error;
+    }
+
+    expect(thrown).toBeInstanceOf(Error);
+    const message = (thrown as Error).message;
+    expect(message).toContain(
+      "Path escapes sandbox root (~/workspace-coder; container root /workspace): /tmp/outside",
+    );
+    expect(message).toContain("Use a path under /workspace/ instead.");
+    expect(message).not.toContain(os.homedir());
+  });
+
+  it.skipIf(process.platform !== "win32")(
+    "does not expose real Windows home casing aliases in escape errors",
+    () => {
+      const homeAlias = os.homedir().toUpperCase();
+      expect(fs.statSync(homeAlias).isDirectory()).toBe(true);
+      const workspaceDir = path.join(homeAlias, "workspace-coder");
+      const sandbox = createSandbox({
+        workspaceDir,
+        agentWorkspaceDir: workspaceDir,
+      });
+
+      expect(() =>
+        resolveSandboxFsPathWithMounts({
+          filePath: "C:\\outside\\secret.txt",
+          cwd: sandbox.workspaceDir,
+          defaultWorkspaceRoot: sandbox.workspaceDir,
+          defaultContainerRoot: sandbox.containerWorkdir,
+          mounts: buildSandboxFsMounts(sandbox),
+        }),
+      ).toThrow("Path escapes sandbox root (~/workspace-coder; container root /workspace)");
+    },
+  );
+
+  it("keeps non-home workspace roots in the native host format", () => {
+    const root = path.parse(os.homedir()).root;
+    const workspaceDir = path.join(root, "openclaw-non-home-workspace");
+    const sandbox = createSandbox({
+      workspaceDir,
+      agentWorkspaceDir: workspaceDir,
+    });
+
+    expect(() =>
+      resolveSandboxFsPathWithMounts({
+        filePath: path.join(root, "openclaw-outside", "secret.txt"),
+        cwd: sandbox.workspaceDir,
+        defaultWorkspaceRoot: sandbox.workspaceDir,
+        defaultContainerRoot: sandbox.containerWorkdir,
+        mounts: buildSandboxFsMounts(sandbox),
+      }),
+    ).toThrow(`Path escapes sandbox root (${workspaceDir}; container root /workspace)`);
   });
 
   it("prefers custom bind mounts over default workspace mount at /workspace", () => {
@@ -121,5 +249,37 @@ describe("resolveSandboxFsPathWithMounts", () => {
 
     expect(resolved.hostPath).toBe(path.join(path.resolve("/tmp/override"), "docs", "AGENTS.md"));
     expect(resolved.writable).toBe(false);
+  });
+
+  it("omits binds that collide with protected skill mounts", () => {
+    const workspaceDir = tempDirs.make("openclaw-fs-mounts-");
+    const customRoot = tempDirs.make("openclaw-fs-mounts-");
+    fs.mkdirSync(path.join(workspaceDir, "skills", "demo"), { recursive: true });
+    const sandbox = createSandbox({
+      workspaceDir,
+      agentWorkspaceDir: workspaceDir,
+      containerWorkdir: "/workspace/.",
+      docker: {
+        ...createSandbox().docker,
+        workdir: "/workspace/.",
+        binds: [`${customRoot}:/workspace/skills:rw`],
+      },
+    });
+
+    const mounts = buildSandboxFsMounts(sandbox);
+
+    expect(mounts).toContainEqual({
+      hostRoot: path.join(workspaceDir, "skills"),
+      containerRoot: "/workspace/skills",
+      writable: false,
+      source: "protectedSkill",
+    });
+    expect(mounts).not.toContainEqual(
+      expect.objectContaining({
+        hostRoot: customRoot,
+        containerRoot: "/workspace/skills",
+        source: "bind",
+      }),
+    );
   });
 });

@@ -1,4 +1,5 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+// Whatsapp plugin module implements outbound test support behavior.
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 
 export function createWhatsAppPollFixture() {
   const cfg = { marker: "resolved-cfg" } as OpenClawConfig;

@@ -1,18 +1,20 @@
+// Whatsapp tests cover auto reply.broadcast groups.combined plugin behavior.
 import "./test-helpers.js";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { describe, expect, it, vi } from "vitest";
 import {
   monitorWebChannelWithCapture,
   sendWebDirectInboundAndCollectSessionKeys,
 } from "./auto-reply.broadcast-groups.test-harness.js";
 import {
-  createAcceptedWhatsAppSendResult,
+  createWebInboundDeliverySpies,
   installWebAutoReplyTestHomeHooks,
   installWebAutoReplyUnitTestHooks,
   resetLoadConfigMock,
   sendWebGroupInboundMessage,
   setLoadConfigMock,
 } from "./auto-reply.test-harness.js";
+import { createTestWebInboundMessage } from "./inbound/test-message.test-helper.js";
 
 installWebAutoReplyTestHomeHooks();
 
@@ -45,6 +47,7 @@ describe("broadcast groups", () => {
         defaults: { maxConcurrent: 10 },
         list: [{ id: "alfred" }, { id: "baerbel" }],
       },
+      bindings: [{ agentId: "alfred", match: { channel: "whatsapp", accountId: "default" } }],
       broadcast: {
         strategy: "sequential",
         "+1000": ["alfred", "baerbel"],
@@ -66,6 +69,7 @@ describe("broadcast groups", () => {
         defaults: { maxConcurrent: 10 },
         list: [{ id: "alfred" }, { id: "baerbel" }],
       },
+      bindings: [{ agentId: "alfred", match: { channel: "whatsapp", accountId: "default" } }],
       broadcast: {
         strategy: "sequential",
         "123@g.us": ["alfred", "baerbel"],
@@ -155,6 +159,7 @@ describe("broadcast groups", () => {
         defaults: { maxConcurrent: 10 },
         list: [{ id: "alfred" }, { id: "baerbel" }],
       },
+      bindings: [{ agentId: "alfred", match: { channel: "whatsapp", accountId: "work" } }],
       broadcast: {
         strategy: "sequential",
         "123@g.us": ["alfred", "baerbel"],
@@ -197,15 +202,14 @@ describe("broadcast groups", () => {
         defaults: { maxConcurrent: 10 },
         list: [{ id: "alfred" }, { id: "baerbel" }],
       },
+      bindings: [{ agentId: "alfred", match: { channel: "whatsapp", accountId: "default" } }],
       broadcast: {
         strategy: "parallel",
         "+1000": ["alfred", "baerbel"],
       },
     } satisfies OpenClawConfig);
 
-    const sendMedia = vi.fn().mockResolvedValue(createAcceptedWhatsAppSendResult("media", "m1"));
-    const reply = vi.fn().mockResolvedValue(createAcceptedWhatsAppSendResult("text", "r1"));
-    const sendComposing = vi.fn();
+    const { sendMedia, reply, sendComposing } = createWebInboundDeliverySpies();
 
     let started = 0;
     let release: (() => void) | undefined;
@@ -225,20 +229,31 @@ describe("broadcast groups", () => {
 
     const { onMessage: capturedOnMessage } = await monitorWebChannelWithCapture(resolver);
 
-    await capturedOnMessage({
-      id: "m1",
-      from: "+1000",
-      conversationId: "+1000",
-      to: "+2000",
-      accountId: "default",
-      body: "hello",
-      timestamp: Date.now(),
-      chatType: "direct",
-      chatId: "direct:+1000",
-      sendComposing,
-      reply,
-      sendMedia,
-    });
+    await capturedOnMessage(
+      createTestWebInboundMessage({
+        event: {
+          id: "m1",
+          timestamp: Date.now(),
+        },
+        payload: {
+          body: "hello",
+        },
+        platform: {
+          chatJid: "direct:+1000",
+          recipientJid: "+2000",
+          sendComposing,
+          reply,
+          sendMedia,
+        },
+        admission: {
+          accountId: "default",
+          conversation: {
+            kind: "direct",
+            id: "+1000",
+          },
+        },
+      }),
+    );
 
     expect(resolver).toHaveBeenCalledTimes(2);
     resetLoadConfigMock();

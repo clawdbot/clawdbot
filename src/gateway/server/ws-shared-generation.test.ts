@@ -1,3 +1,6 @@
+/**
+ * Shared gateway-auth generation tests for WebSocket sessions.
+ */
 import { describe, expect, it } from "vitest";
 import { resolveSharedGatewaySessionGeneration } from "./ws-shared-generation.js";
 

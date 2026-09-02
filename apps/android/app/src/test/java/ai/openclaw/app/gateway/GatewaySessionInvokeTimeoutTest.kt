@@ -22,6 +22,37 @@ class GatewaySessionInvokeTimeoutTest {
   }
 
   @Test
+  fun buildGatewayWebSocketUrl_preservesAndEncodesContextPath() {
+    assertEquals(
+      "wss://gateway.example:443/openclaw%20gateway",
+      buildGatewayWebSocketUrl(
+        host = "gateway.example",
+        port = 443,
+        useTls = true,
+        contextPath = "/openclaw%20gateway",
+      ),
+    )
+    assertEquals(
+      "wss://gateway.example:443/openclaw%2Fgateway",
+      buildGatewayWebSocketUrl(
+        host = "gateway.example",
+        port = 443,
+        useTls = true,
+        contextPath = "/openclaw%2Fgateway",
+      ),
+    )
+    assertEquals(
+      "wss://gateway.example:443//openclaw",
+      buildGatewayWebSocketUrl(
+        host = "gateway.example",
+        port = 443,
+        useTls = true,
+        contextPath = "//openclaw",
+      ),
+    )
+  }
+
+  @Test
   fun resolveInvokeResultAckTimeoutMs_usesFloorWhenMissingOrTooSmall() {
     assertEquals(15_000L, resolveInvokeResultAckTimeoutMs(null))
     assertEquals(15_000L, resolveInvokeResultAckTimeoutMs(0L))
@@ -38,5 +69,17 @@ class GatewaySessionInvokeTimeoutTest {
   fun resolveInvokeResultAckTimeoutMs_capsAtUpperBound() {
     assertEquals(120_000L, resolveInvokeResultAckTimeoutMs(121_000L))
     assertEquals(120_000L, resolveInvokeResultAckTimeoutMs(Long.MAX_VALUE))
+  }
+
+  @Test
+  fun resolveInvokeExecutionTimeoutMs_defaultsAndAllowsExplicitDisable() {
+    assertEquals(30_000L, resolveInvokeExecutionTimeoutMs(null))
+    assertEquals(null, resolveInvokeExecutionTimeoutMs(0L))
+    assertEquals(null, resolveInvokeExecutionTimeoutMs(-1L))
+  }
+
+  @Test
+  fun resolveInvokeExecutionTimeoutMs_capsAtCoroutineTimerBound() {
+    assertEquals(Int.MAX_VALUE.toLong(), resolveInvokeExecutionTimeoutMs(Long.MAX_VALUE))
   }
 }

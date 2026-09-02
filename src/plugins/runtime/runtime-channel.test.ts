@@ -1,5 +1,37 @@
+// Runtime channel tests cover channel plugin runtime send, reply, and capability behavior.
+import { getEventListeners } from "node:events";
 import { describe, expect, it, vi } from "vitest";
 import { createRuntimeChannel } from "./runtime-channel.js";
+
+const dispatchRoutedChannelTurn = vi.hoisted(() => vi.fn(async () => ({ status: "handled" })));
+
+vi.mock("../../channels/turn/lifecycle.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../channels/turn/lifecycle.js")>()),
+  dispatchRoutedChannelTurn,
+}));
+
+function requireWatcherEvent(mock: ReturnType<typeof vi.fn>, index: number) {
+  const event = mock.mock.calls[index]?.[0] as { type?: string } | undefined;
+  if (!event) {
+    throw new Error(`Expected watcher event ${index}`);
+  }
+  return event;
+}
+
+describe("inbound dispatch", () => {
+  it("carries the owning runtime reply dispatcher into routed channel turns", async () => {
+    const boundReplyDispatch = vi.fn();
+    const channel = createRuntimeChannel({ dispatchReplyFromConfig: boundReplyDispatch });
+    const turn = { channel: "qa-channel" } as Parameters<typeof channel.inbound.dispatch>[0];
+
+    await channel.inbound.dispatch(turn);
+
+    expect(dispatchRoutedChannelTurn).toHaveBeenCalledWith({
+      ...turn,
+      dispatchReplyFromConfig: boundReplyDispatch,
+    });
+  });
+});
 
 describe("runtimeContexts", () => {
   it("registers, resolves, watches, and unregisters contexts", () => {
@@ -80,6 +112,60 @@ describe("runtimeContexts", () => {
     lease.dispose();
   });
 
+  it("removes its abort listener when the lease is disposed", () => {
+    const channel = createRuntimeChannel();
+    const controller = new AbortController();
+    const initialListenerCount = getEventListeners(controller.signal, "abort").length;
+    const lease = channel.runtimeContexts.register({
+      channelId: "telegram",
+      accountId: "default",
+      capability: "approval.native",
+      context: { token: "abc" },
+      abortSignal: controller.signal,
+    });
+
+    expect(getEventListeners(controller.signal, "abort")).toHaveLength(initialListenerCount + 1);
+
+    lease.dispose();
+
+    expect(getEventListeners(controller.signal, "abort")).toHaveLength(initialListenerCount);
+  });
+
+  it("removes the stale lease abort listener after a replacement registration", () => {
+    const channel = createRuntimeChannel();
+    const controller = new AbortController();
+    const initialListenerCount = getEventListeners(controller.signal, "abort").length;
+    const staleLease = channel.runtimeContexts.register({
+      channelId: "whatsapp",
+      accountId: "default",
+      capability: "connection.controller",
+      context: { token: "stale" },
+      abortSignal: controller.signal,
+    });
+    channel.runtimeContexts.register({
+      channelId: "whatsapp",
+      accountId: "default",
+      capability: "connection.controller",
+      context: { token: "replacement" },
+      abortSignal: controller.signal,
+    });
+
+    expect(getEventListeners(controller.signal, "abort")).toHaveLength(initialListenerCount + 2);
+
+    // Channel plugins dispose the previous lease after registering its replacement,
+    // so the stale token check must not skip listener cleanup.
+    staleLease.dispose();
+
+    expect(getEventListeners(controller.signal, "abort")).toHaveLength(initialListenerCount + 1);
+    expect(
+      channel.runtimeContexts.get({
+        channelId: "whatsapp",
+        accountId: "default",
+        capability: "connection.controller",
+      }),
+    ).toEqual({ token: "replacement" });
+  });
+
   it("does not register contexts when the abort signal is already aborted", () => {
     const channel = createRuntimeChannel();
     const onEvent = vi.fn();
@@ -145,16 +231,8 @@ describe("runtimeContexts", () => {
         capability: "approval.native",
       }),
     ).toEqual({ client: "ok" });
-    expect(badWatcher).toHaveBeenCalledWith(
-      expect.objectContaining({
-        type: "registered",
-      }),
-    );
-    expect(goodWatcher).toHaveBeenCalledWith(
-      expect.objectContaining({
-        type: "registered",
-      }),
-    );
+    expect(requireWatcherEvent(badWatcher, 0).type).toBe("registered");
+    expect(requireWatcherEvent(goodWatcher, 0).type).toBe("registered");
 
     lease.dispose();
 
@@ -165,16 +243,8 @@ describe("runtimeContexts", () => {
         capability: "approval.native",
       }),
     ).toBeUndefined();
-    expect(badWatcher).toHaveBeenCalledWith(
-      expect.objectContaining({
-        type: "unregistered",
-      }),
-    );
-    expect(goodWatcher).toHaveBeenCalledWith(
-      expect.objectContaining({
-        type: "unregistered",
-      }),
-    );
+    expect(requireWatcherEvent(badWatcher, 1).type).toBe("unregistered");
+    expect(requireWatcherEvent(goodWatcher, 1).type).toBe("unregistered");
   });
 
   it("auto-disposes when a watcher aborts during the registered event", () => {
@@ -208,18 +278,8 @@ describe("runtimeContexts", () => {
         capability: "approval.native",
       }),
     ).toBeUndefined();
-    expect(onEvent).toHaveBeenNthCalledWith(
-      1,
-      expect.objectContaining({
-        type: "registered",
-      }),
-    );
-    expect(onEvent).toHaveBeenNthCalledWith(
-      2,
-      expect.objectContaining({
-        type: "unregistered",
-      }),
-    );
+    expect(requireWatcherEvent(onEvent, 0).type).toBe("registered");
+    expect(requireWatcherEvent(onEvent, 1).type).toBe("unregistered");
 
     lease.dispose();
   });

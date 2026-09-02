@@ -3,24 +3,34 @@
  *
  * These functions perform I/O (filesystem, config reads) to detect security issues.
  */
-import fs from "node:fs/promises";
 import path from "node:path";
+import { clearTimeout as clearNodeTimeout, setTimeout as setNodeTimeout } from "node:timers";
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
+import {
+  normalizeStringEntries,
+  normalizeTrimmedStringList,
+  uniqueStrings,
+} from "@openclaw/normalization-core/string-normalization";
+import { resolveAuthProfileDatabaseFilePaths } from "../agents/auth-profiles/sqlite.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { MANIFEST_KEY } from "../compat/legacy-names.js";
 import type { OpenClawConfig, ConfigFileSnapshot } from "../config/config.js";
 import { collectIncludePathsRecursive } from "../config/includes-scan.js";
 import { resolveOAuthDir } from "../config/paths.js";
-import { normalizeAgentId } from "../routing/session-key.js";
-import {
-  normalizeOptionalLowercaseString,
-  normalizeOptionalString,
-} from "../shared/string-coerce.js";
-import { shouldIgnoreInstalledPluginDirName } from "./installed-plugin-dirs.js";
+import { readRegularFile, statRegularFile } from "../infra/fs-safe.js";
+import { LEGACY_IMPLICIT_AGENT_ID, normalizeAgentId } from "../routing/session-key.js";
+import { getOrCreatePromise } from "../shared/lazy-promise.js";
+import { createLazyRuntimeModule, createLazyRuntimeNamedExport } from "../shared/lazy-runtime.js";
+import { loadWorkspaceSkills } from "../skills/loading/workspace-skill-loader.js";
+import type { SkillScanFinding } from "../skills/security/scanner.js";
+import { listInstalledPluginDirs } from "./installed-plugin-dirs.js";
 import { extensionUsesSkippedScannerPath, isPathInside } from "./scan-paths.js";
-import type { SkillScanFinding } from "./skill-scanner.js";
 import type { ExecFn } from "./windows-acl.js";
 
-export type SecurityAuditFinding = {
+type SecurityAuditFinding = {
   checkId: string;
   severity: "info" | "warn" | "critical";
   title: string;
@@ -28,123 +38,47 @@ export type SecurityAuditFinding = {
   remediation?: string;
 };
 
-type CollectPluginsTrustFindingsParams = Parameters<
-  typeof import("./audit-plugins-trust.js").collectPluginsTrustFindings
->[0];
 type SkillScanSummary = Awaited<
-  ReturnType<typeof import("./skill-scanner.js").scanDirectoryWithSummary>
+  ReturnType<typeof import("../skills/security/scanner.js").scanDirectoryWithSummary>
 >;
 type ExecDockerRawFn = (
   args: string[],
   opts?: { allowFailure?: boolean; input?: Buffer | string; signal?: AbortSignal },
 ) => Promise<import("../agents/sandbox/docker.js").ExecDockerRawResult>;
 
+const DEFAULT_SANDBOX_BROWSER_DOCKER_PROBE_TIMEOUT_MS = 5000;
+
 type CodeSafetySummaryCache = Map<string, Promise<unknown>>;
-let skillsModulePromise: Promise<typeof import("../agents/skills.js")> | undefined;
-let configModulePromise: Promise<typeof import("../config/config.js")> | undefined;
-let agentScopeModulePromise: Promise<typeof import("../agents/agent-scope.js")> | undefined;
-let agentWorkspaceDirsModulePromise:
-  | Promise<typeof import("../agents/workspace-dirs.js")>
-  | undefined;
-let skillSourceModulePromise: Promise<typeof import("../agents/skills/source.js")> | undefined;
-let sandboxDockerModulePromise: Promise<typeof import("../agents/sandbox/docker.js")> | undefined;
-let sandboxConstantsModulePromise:
-  | Promise<typeof import("../agents/sandbox/constants.js")>
-  | undefined;
-let auditPluginsTrustModulePromise: Promise<typeof import("./audit-plugins-trust.js")> | undefined;
-let auditFsModulePromise: Promise<typeof import("./audit-fs.js")> | undefined;
-let skillScannerModulePromise: Promise<typeof import("./skill-scanner.js")> | undefined;
 
-function loadSkillsModule() {
-  skillsModulePromise ??= import("../agents/skills.js");
-  return skillsModulePromise;
-}
+const loadConfigModule = createLazyRuntimeModule(() => import("../config/config.js"));
 
-function loadConfigModule() {
-  configModulePromise ??= import("../config/config.js");
-  return configModulePromise;
-}
+const loadAuditFsModule = createLazyRuntimeModule(() => import("./audit-fs.js"));
 
-function loadAuditFsModule() {
-  auditFsModulePromise ??= import("./audit-fs.js");
-  return auditFsModulePromise;
-}
+const loadAgentScopeModule = createLazyRuntimeModule(() => import("../agents/agent-scope.js"));
 
-function loadAgentScopeModule() {
-  agentScopeModulePromise ??= import("../agents/agent-scope.js");
-  return agentScopeModulePromise;
-}
+const loadAgentWorkspaceDirsModule = createLazyRuntimeModule(
+  () => import("../agents/workspace-dirs.js"),
+);
 
-function loadAgentWorkspaceDirsModule() {
-  agentWorkspaceDirsModulePromise ??= import("../agents/workspace-dirs.js");
-  return agentWorkspaceDirsModulePromise;
-}
+const loadSkillSourceModule = createLazyRuntimeModule(() => import("../skills/loading/source.js"));
 
-function loadSkillSourceModule() {
-  skillSourceModulePromise ??= import("../agents/skills/source.js");
-  return skillSourceModulePromise;
-}
+const loadSkillScannerModule = createLazyRuntimeModule(
+  () => import("../skills/security/scanner.js"),
+);
 
-function loadSkillScannerModule() {
-  skillScannerModulePromise ??= import("./skill-scanner.js");
-  return skillScannerModulePromise;
-}
+const loadExecDockerRaw = createLazyRuntimeNamedExport(
+  () => import("../agents/sandbox/docker.js"),
+  "execDockerRaw",
+) satisfies () => Promise<ExecDockerRawFn>;
 
-async function loadExecDockerRaw(): Promise<ExecDockerRawFn> {
-  sandboxDockerModulePromise ??= import("../agents/sandbox/docker.js");
-  const { execDockerRaw } = await sandboxDockerModulePromise;
-  return execDockerRaw;
-}
-
-async function loadSandboxBrowserSecurityHashEpoch(): Promise<string> {
-  sandboxConstantsModulePromise ??= import("../agents/sandbox/constants.js");
-  const { SANDBOX_BROWSER_SECURITY_HASH_EPOCH } = await sandboxConstantsModulePromise;
-  return SANDBOX_BROWSER_SECURITY_HASH_EPOCH;
-}
-
-export async function collectPluginsTrustFindings(
-  params: CollectPluginsTrustFindingsParams,
-): Promise<SecurityAuditFinding[]> {
-  auditPluginsTrustModulePromise ??= import("./audit-plugins-trust.js");
-  const { collectPluginsTrustFindings: collect } = await auditPluginsTrustModulePromise;
-  return await collect(params);
-}
+const loadSandboxBrowserSecurityHashEpoch = createLazyRuntimeNamedExport(
+  () => import("../agents/sandbox/constants.js"),
+  "SANDBOX_BROWSER_SECURITY_HASH_EPOCH",
+);
 
 // --------------------------------------------------------------------------
 // Helpers
 // --------------------------------------------------------------------------
-
-async function safeStat(targetPath: string): Promise<{
-  ok: boolean;
-  isSymlink: boolean;
-  isDir: boolean;
-  mode: number | null;
-  uid: number | null;
-  gid: number | null;
-  error?: string;
-}> {
-  try {
-    const lst = await fs.lstat(targetPath);
-    return {
-      ok: true,
-      isSymlink: lst.isSymbolicLink(),
-      isDir: lst.isDirectory(),
-      mode: typeof lst.mode === "number" ? lst.mode : null,
-      uid: typeof lst.uid === "number" ? lst.uid : null,
-      gid: typeof lst.gid === "number" ? lst.gid : null,
-    };
-  } catch (err) {
-    return {
-      ok: false,
-      isSymlink: false,
-      isDir: false,
-      mode: null,
-      uid: null,
-      gid: null,
-      error: String(err),
-    };
-  }
-}
 
 function expandTilde(p: string, env: NodeJS.ProcessEnv): string | null {
   if (!p.startsWith("~")) {
@@ -163,9 +97,29 @@ function expandTilde(p: string, env: NodeJS.ProcessEnv): string | null {
   return null;
 }
 
+const MAX_PLUGIN_MANIFEST_BYTES = 1024 * 1024;
+// Skill file audit reads are bounded like other audit reads; matches the
+// workspace loader's DEFAULT_MAX_SKILL_FILE_BYTES so oversized SKILL.md files
+// cannot force an unbounded read during the code-safety scan.
+const MAX_SKILL_AUDIT_FILE_BYTES = 256_000;
+
 async function readPluginManifestExtensions(pluginPath: string): Promise<string[]> {
   const manifestPath = path.join(pluginPath, "package.json");
-  const raw = await fs.readFile(manifestPath, "utf-8").catch(() => "");
+  const statResult = await statRegularFile(manifestPath);
+  if (statResult.missing) {
+    return [];
+  }
+  if (statResult.stat.size > MAX_PLUGIN_MANIFEST_BYTES) {
+    throw new Error(
+      `Plugin manifest at ${manifestPath} is too large (${statResult.stat.size} bytes, max ${MAX_PLUGIN_MANIFEST_BYTES})`,
+    );
+  }
+
+  const { buffer } = await readRegularFile({
+    filePath: manifestPath,
+    maxBytes: MAX_PLUGIN_MANIFEST_BYTES,
+  });
+  const raw = buffer.toString("utf-8");
   if (!raw.trim()) {
     return [];
   }
@@ -187,7 +141,7 @@ async function readPluginManifestExtensions(pluginPath: string): Promise<string[
   if (!Array.isArray(extensions)) {
     return [];
   }
-  return extensions.map((entry) => normalizeOptionalString(entry) ?? "").filter(Boolean);
+  return normalizeTrimmedStringList(extensions);
 }
 
 function formatCodeSafetyDetails(findings: SkillScanFinding[], rootDir: string): string {
@@ -204,32 +158,11 @@ function formatCodeSafetyDetails(findings: SkillScanFinding[], rootDir: string):
     .join("\n");
 }
 
-async function listInstalledPluginDirs(params: {
-  stateDir: string;
-  onReadError?: (error: unknown) => void;
-}): Promise<{ extensionsDir: string; pluginDirs: string[] }> {
-  const extensionsDir = path.join(params.stateDir, "extensions");
-  const st = await safeStat(extensionsDir);
-  if (!st.ok || !st.isDir) {
-    return { extensionsDir, pluginDirs: [] };
-  }
-  const entries = await fs.readdir(extensionsDir, { withFileTypes: true }).catch((err) => {
-    params.onReadError?.(err);
-    return [];
-  });
-  const pluginDirs = entries
-    .filter((entry) => entry.isDirectory())
-    .map((entry) => entry.name)
-    .filter((name) => !shouldIgnoreInstalledPluginDirName(name))
-    .filter(Boolean);
-  return { extensionsDir, pluginDirs };
-}
-
 function buildCodeSafetySummaryCacheKey(params: {
   dirPath: string;
   includeFiles?: string[];
 }): string {
-  const includeFiles = (params.includeFiles ?? []).map((entry) => entry.trim()).filter(Boolean);
+  const includeFiles = normalizeStringEntries(params.includeFiles);
   const includeKey = includeFiles.length > 0 ? includeFiles.toSorted().join("\u0000") : "";
   return `${params.dirPath}\u0000${includeKey}`;
 }
@@ -243,23 +176,47 @@ async function getCodeSafetySummary(params: {
     dirPath: params.dirPath,
     includeFiles: params.includeFiles,
   });
-  const cache = params.summaryCache;
-  if (cache) {
-    const hit = cache.get(cacheKey);
-    if (hit) {
-      return (await hit) as SkillScanSummary;
-    }
+  const scan = async () => {
     const skillScanner = await loadSkillScannerModule();
-    const pending = skillScanner.scanDirectoryWithSummary(params.dirPath, {
+    return await skillScanner.scanDirectoryWithSummary(params.dirPath, {
       includeFiles: params.includeFiles,
     });
-    cache.set(cacheKey, pending);
-    return await pending;
-  }
-  const skillScanner = await loadSkillScannerModule();
-  return await skillScanner.scanDirectoryWithSummary(params.dirPath, {
-    includeFiles: params.includeFiles,
-  });
+  };
+  return params.summaryCache
+    ? ((await getOrCreatePromise(params.summaryCache, cacheKey, scan)) as SkillScanSummary)
+    : await scan();
+}
+
+async function getSkillCodeSafetySummary(params: {
+  dirPath: string;
+  skillFilePath: string;
+  summaryCache?: CodeSafetySummaryCache;
+}): Promise<SkillScanSummary> {
+  const [summary, skillContent, skillScanner] = await Promise.all([
+    getCodeSafetySummary({
+      dirPath: params.dirPath,
+      summaryCache: params.summaryCache,
+    }),
+    readRegularFile({
+      filePath: params.skillFilePath,
+      maxBytes: MAX_SKILL_AUDIT_FILE_BYTES,
+    }).then(({ buffer }) => buffer.toString("utf-8")),
+    loadSkillScannerModule(),
+  ]);
+  const skillFindings = [
+    ...skillScanner.scanSkillContent(skillContent, params.skillFilePath),
+    ...skillScanner.scanSource(skillContent, params.skillFilePath),
+  ];
+
+  return {
+    ...summary,
+    scannedFiles: summary.scannedFiles + 1,
+    critical:
+      summary.critical + skillFindings.filter((finding) => finding.severity === "critical").length,
+    warn: summary.warn + skillFindings.filter((finding) => finding.severity === "warn").length,
+    info: summary.info + skillFindings.filter((finding) => finding.severity === "info").length,
+    findings: [...summary.findings, ...skillFindings],
+  };
 }
 
 // --------------------------------------------------------------------------
@@ -274,23 +231,72 @@ function normalizeDockerLabelValue(raw: string | undefined): string | null {
   return trimmed;
 }
 
-async function listSandboxBrowserContainers(
-  execDockerRawFn: ExecDockerRawFn,
-): Promise<string[] | null> {
+class DockerProbeTimeoutError extends Error {
+  constructor(timeoutMs: number) {
+    super(`Docker probe timed out after ${timeoutMs}ms`);
+    this.name = "DockerProbeTimeoutError";
+  }
+}
+
+function normalizeDockerProbeTimeoutMs(timeoutMs: number | undefined): number {
+  if (Number.isFinite(timeoutMs) && timeoutMs !== undefined) {
+    return Math.max(250, Math.floor(timeoutMs));
+  }
+  return DEFAULT_SANDBOX_BROWSER_DOCKER_PROBE_TIMEOUT_MS;
+}
+
+async function withDockerProbeTimeout<T>(
+  timeoutMs: number,
+  run: (signal: AbortSignal) => Promise<T>,
+): Promise<T> {
+  const controller = new AbortController();
+  let timeout: ReturnType<typeof setNodeTimeout> | undefined;
+  let timedOut = false;
+  const timeoutPromise = new Promise<never>((_, reject) => {
+    timeout = setNodeTimeout(() => {
+      timedOut = true;
+      controller.abort();
+      reject(new DockerProbeTimeoutError(timeoutMs));
+    }, timeoutMs);
+  });
   try {
-    const result = await execDockerRawFn(
-      ["ps", "-a", "--filter", "label=openclaw.sandboxBrowser=1", "--format", "{{.Names}}"],
-      { allowFailure: true },
+    return await Promise.race([run(controller.signal), timeoutPromise]);
+  } catch (err) {
+    if (timedOut || controller.signal.aborted) {
+      throw new DockerProbeTimeoutError(timeoutMs);
+    }
+    throw err;
+  } finally {
+    if (timeout) {
+      clearNodeTimeout(timeout);
+    }
+  }
+}
+
+function isDockerProbeTimeoutError(error: unknown): boolean {
+  return error instanceof DockerProbeTimeoutError;
+}
+
+async function listSandboxBrowserContainers(params: {
+  execDockerRawFn: ExecDockerRawFn;
+  timeoutMs: number;
+  onTimeout?: () => void;
+}): Promise<string[] | null> {
+  try {
+    const result = await withDockerProbeTimeout(params.timeoutMs, (signal) =>
+      params.execDockerRawFn(
+        ["ps", "-a", "--filter", "label=openclaw.sandboxBrowser=1", "--format", "{{.Names}}"],
+        { allowFailure: true, signal },
+      ),
     );
     if (result.code !== 0) {
       return null;
     }
-    return result.stdout
-      .toString("utf8")
-      .split(/\r?\n/)
-      .map((entry) => entry.trim())
-      .filter(Boolean);
-  } catch {
+    return normalizeStringEntries(result.stdout.toString("utf8").split(/\r?\n/));
+  } catch (err) {
+    if (isDockerProbeTimeoutError(err)) {
+      params.onTimeout?.();
+    }
     return null;
   }
 }
@@ -298,16 +304,20 @@ async function listSandboxBrowserContainers(
 async function readSandboxBrowserHashLabels(params: {
   containerName: string;
   execDockerRawFn: ExecDockerRawFn;
+  timeoutMs: number;
+  onTimeout?: () => void;
 }): Promise<{ configHash: string | null; epoch: string | null } | null> {
   try {
-    const result = await params.execDockerRawFn(
-      [
-        "inspect",
-        "-f",
-        '{{ index .Config.Labels "openclaw.configHash" }}\t{{ index .Config.Labels "openclaw.browserConfigEpoch" }}',
-        params.containerName,
-      ],
-      { allowFailure: true },
+    const result = await withDockerProbeTimeout(params.timeoutMs, (signal) =>
+      params.execDockerRawFn(
+        [
+          "inspect",
+          "-f",
+          '{{ index .Config.Labels "openclaw.configHash" }}\t{{ index .Config.Labels "openclaw.browserConfigEpoch" }}',
+          params.containerName,
+        ],
+        { allowFailure: true, signal },
+      ),
     );
     if (result.code !== 0) {
       return null;
@@ -317,7 +327,10 @@ async function readSandboxBrowserHashLabels(params: {
       configHash: normalizeDockerLabelValue(hashRaw),
       epoch: normalizeDockerLabelValue(epochRaw),
     };
-  } catch {
+  } catch (err) {
+    if (isDockerProbeTimeoutError(err)) {
+      params.onTimeout?.();
+    }
     return null;
   }
 }
@@ -349,34 +362,51 @@ function isLoopbackPublishHost(host: string): boolean {
 async function readSandboxBrowserPortMappings(params: {
   containerName: string;
   execDockerRawFn: ExecDockerRawFn;
+  timeoutMs: number;
+  onTimeout?: () => void;
 }): Promise<string[] | null> {
   try {
-    const result = await params.execDockerRawFn(["port", params.containerName], {
-      allowFailure: true,
-    });
+    const result = await withDockerProbeTimeout(params.timeoutMs, (signal) =>
+      params.execDockerRawFn(["port", params.containerName], {
+        allowFailure: true,
+        signal,
+      }),
+    );
     if (result.code !== 0) {
       return null;
     }
-    return result.stdout
-      .toString("utf8")
-      .split(/\r?\n/)
-      .map((entry) => entry.trim())
-      .filter(Boolean);
-  } catch {
+    return normalizeStringEntries(result.stdout.toString("utf8").split(/\r?\n/));
+  } catch (err) {
+    if (isDockerProbeTimeoutError(err)) {
+      params.onTimeout?.();
+    }
     return null;
   }
 }
 
 export async function collectSandboxBrowserHashLabelFindings(params?: {
   execDockerRawFn?: ExecDockerRawFn;
+  timeoutMs?: number;
 }): Promise<SecurityAuditFinding[]> {
   const findings: SecurityAuditFinding[] = [];
+  const timeoutMs = normalizeDockerProbeTimeoutMs(params?.timeoutMs);
+  let timedOut = false;
+  const markTimedOut = () => {
+    timedOut = true;
+  };
   const [execFn, browserHashEpoch] = await Promise.all([
     params?.execDockerRawFn ? Promise.resolve(params.execDockerRawFn) : loadExecDockerRaw(),
     loadSandboxBrowserSecurityHashEpoch(),
   ]);
-  const containers = await listSandboxBrowserContainers(execFn);
+  const containers = await listSandboxBrowserContainers({
+    execDockerRawFn: execFn,
+    timeoutMs,
+    onTimeout: markTimedOut,
+  });
   if (!containers || containers.length === 0) {
+    if (timedOut) {
+      findings.push(buildSandboxBrowserDockerProbeTimeoutFinding(timeoutMs));
+    }
     return findings;
   }
 
@@ -385,7 +415,15 @@ export async function collectSandboxBrowserHashLabelFindings(params?: {
   const nonLoopbackPublished: string[] = [];
 
   for (const containerName of containers) {
-    const labels = await readSandboxBrowserHashLabels({ containerName, execDockerRawFn: execFn });
+    const labels = await readSandboxBrowserHashLabels({
+      containerName,
+      execDockerRawFn: execFn,
+      timeoutMs,
+      onTimeout: markTimedOut,
+    });
+    if (timedOut) {
+      break;
+    }
     if (!labels) {
       continue;
     }
@@ -398,7 +436,12 @@ export async function collectSandboxBrowserHashLabelFindings(params?: {
     const portMappings = await readSandboxBrowserPortMappings({
       containerName,
       execDockerRawFn: execFn,
+      timeoutMs,
+      onTimeout: markTimedOut,
     });
+    if (timedOut) {
+      break;
+    }
     if (!portMappings?.length) {
       continue;
     }
@@ -449,7 +492,24 @@ export async function collectSandboxBrowserHashLabelFindings(params?: {
     });
   }
 
+  if (timedOut) {
+    findings.push(buildSandboxBrowserDockerProbeTimeoutFinding(timeoutMs));
+  }
+
   return findings;
+}
+
+function buildSandboxBrowserDockerProbeTimeoutFinding(timeoutMs: number): SecurityAuditFinding {
+  return {
+    checkId: "sandbox.browser_container.docker_probe_timeout",
+    severity: "warn",
+    title: "Sandbox browser Docker audit probe timed out",
+    detail:
+      `Docker did not answer within ${timeoutMs}ms while checking sandbox browser containers. ` +
+      "OpenClaw skipped any remaining sandbox browser container drift checks for this status run.",
+    remediation:
+      "Retry after Docker is responsive, or recreate sandbox browser containers if drift is suspected.",
+  };
 }
 
 export async function collectIncludeFilePermFindings(params: {
@@ -467,6 +527,7 @@ export async function collectIncludeFilePermFindings(params: {
   const includePaths = await collectIncludePathsRecursive({
     configPath,
     parsed: params.configSnapshot.parsed,
+    env: params.env,
   });
   if (includePaths.length === 0) {
     return findings;
@@ -581,57 +642,68 @@ export async function collectStateDeepFilesystemFindings(params: {
     }
   }
 
-  const agentIds = Array.isArray(params.cfg.agents?.list)
-    ? params.cfg.agents?.list
-        .map(
-          (a) =>
-            normalizeOptionalString(
-              a && typeof a === "object" ? (a as { id?: unknown }).id : undefined,
-            ) ?? "",
-        )
-        .filter(Boolean)
-    : [];
-  const { resolveDefaultAgentId } = await loadAgentScopeModule();
-  const defaultAgentId = resolveDefaultAgentId(params.cfg);
-  const ids = Array.from(new Set([defaultAgentId, ...agentIds])).map((id) => normalizeAgentId(id));
+  const agentScope = await loadAgentScopeModule();
+  const agentIds = agentScope.listAgentEntries(params.cfg).map((agent) => agent.id);
+  let defaultAgentId: string | undefined;
+  if (agentIds.length > 0) {
+    try {
+      defaultAgentId = agentScope.resolveDefaultAgentId(params.cfg);
+    } catch {
+      // Security audits must still inspect known agent stores when a malformed
+      // roster prevents normal default selection; config findings report that defect.
+    }
+  }
+  const ids = uniqueStrings([
+    LEGACY_IMPLICIT_AGENT_ID,
+    ...(defaultAgentId ? [defaultAgentId] : []),
+    ...agentIds,
+  ]).map((id) => normalizeAgentId(id));
 
   for (const agentId of ids) {
     const agentDir = path.join(params.stateDir, "agents", agentId, "agent");
-    const authPath = path.join(agentDir, "auth-profiles.json");
-    const authPerms = await inspectPathPermissions(authPath, {
-      env: params.env,
-      platform: params.platform,
-      exec: params.execIcacls,
-    });
-    if (authPerms.ok) {
-      if (authPerms.worldWritable || authPerms.groupWritable) {
-        findings.push({
-          checkId: "fs.auth_profiles.perms_writable",
-          severity: "critical",
-          title: "auth-profiles.json is writable by others",
-          detail: `${formatPermissionDetail(authPath, authPerms)}; another user could inject credentials.`,
-          remediation: formatPermissionRemediation({
-            targetPath: authPath,
-            perms: authPerms,
-            isDir: false,
-            posixMode: 0o600,
-            env: params.env,
-          }),
-        });
-      } else if (authPerms.worldReadable || authPerms.groupReadable) {
-        findings.push({
-          checkId: "fs.auth_profiles.perms_readable",
-          severity: "warn",
-          title: "auth-profiles.json is readable by others",
-          detail: `${formatPermissionDetail(authPath, authPerms)}; auth-profiles.json contains API keys and OAuth tokens.`,
-          remediation: formatPermissionRemediation({
-            targetPath: authPath,
-            perms: authPerms,
-            isDir: false,
-            posixMode: 0o600,
-            env: params.env,
-          }),
-        });
+    const authTargets = [
+      { path: path.join(agentDir, "auth-profiles.json"), label: "legacy auth-profiles.json" },
+      ...resolveAuthProfileDatabaseFilePaths(agentDir).map((targetPath) => ({
+        path: targetPath,
+        label: "auth profile SQLite store",
+      })),
+    ];
+    for (const authTarget of authTargets) {
+      const authPerms = await inspectPathPermissions(authTarget.path, {
+        env: params.env,
+        platform: params.platform,
+        exec: params.execIcacls,
+      });
+      if (authPerms.ok) {
+        if (authPerms.worldWritable || authPerms.groupWritable) {
+          findings.push({
+            checkId: "fs.auth_profiles.perms_writable",
+            severity: "critical",
+            title: `${authTarget.label} is writable by others`,
+            detail: `${formatPermissionDetail(authTarget.path, authPerms)}; another user could inject credentials.`,
+            remediation: formatPermissionRemediation({
+              targetPath: authTarget.path,
+              perms: authPerms,
+              isDir: false,
+              posixMode: 0o600,
+              env: params.env,
+            }),
+          });
+        } else if (authPerms.worldReadable || authPerms.groupReadable) {
+          findings.push({
+            checkId: "fs.auth_profiles.perms_readable",
+            severity: "warn",
+            title: `${authTarget.label} is readable by others`,
+            detail: `${formatPermissionDetail(authTarget.path, authPerms)}; auth profile storage contains API keys and OAuth tokens.`,
+            remediation: formatPermissionRemediation({
+              targetPath: authTarget.path,
+              perms: authPerms,
+              isDir: false,
+              posixMode: 0o600,
+              env: params.env,
+            }),
+          });
+        }
       }
     }
 
@@ -780,7 +852,7 @@ export async function collectPluginsCodeSafetyFindings(params: {
       dirPath: pluginPath,
       includeFiles: forcedScanEntries,
       summaryCache: params.summaryCache,
-    }).catch((err) => {
+    }).catch((err: unknown) => {
       findings.push({
         checkId: "plugins.code_safety.scan_failed",
         severity: "warn",
@@ -827,20 +899,30 @@ export async function collectPluginsCodeSafetyFindings(params: {
 export async function collectInstalledSkillsCodeSafetyFindings(params: {
   cfg: OpenClawConfig;
   stateDir: string;
+  workspaceDir?: string;
   summaryCache?: CodeSafetySummaryCache;
 }): Promise<SecurityAuditFinding[]> {
   const findings: SecurityAuditFinding[] = [];
   const pluginExtensionsDir = path.join(params.stateDir, "extensions");
   const scannedSkillDirs = new Set<string>();
-  const [{ listAgentWorkspaceDirs }, { resolveSkillSource }] = await Promise.all([
-    loadAgentWorkspaceDirsModule(),
-    loadSkillSourceModule(),
-  ]);
-  const workspaceDirs = listAgentWorkspaceDirs(params.cfg);
-  const { loadWorkspaceSkillEntries } = await loadSkillsModule();
-
+  const [{ listAgentWorkspaceDirs, listExplicitAgentWorkspaceDirs }, { resolveSkillSource }] =
+    await Promise.all([loadAgentWorkspaceDirsModule(), loadSkillSourceModule()]);
+  const workspaceDirs = new Set(params.workspaceDir ? [params.workspaceDir] : []);
+  try {
+    for (const workspaceDir of listAgentWorkspaceDirs(params.cfg)) {
+      workspaceDirs.add(workspaceDir);
+    }
+  } catch {
+    // Deep audit accepts raw pre-migration and malformed configs. Continue
+    // scanning every entry-authored workspace instead of turning a finding into a crash.
+    for (const workspaceDir of listExplicitAgentWorkspaceDirs(params.cfg)) {
+      workspaceDirs.add(workspaceDir);
+    }
+  }
   for (const workspaceDir of workspaceDirs) {
-    const entries = loadWorkspaceSkillEntries(workspaceDir, { config: params.cfg });
+    const entries = loadWorkspaceSkills(workspaceDir, {
+      config: params.cfg,
+    });
     for (const entry of entries) {
       if (resolveSkillSource(entry.skill) === "openclaw-bundled") {
         continue;
@@ -857,10 +939,11 @@ export async function collectInstalledSkillsCodeSafetyFindings(params: {
       scannedSkillDirs.add(skillDir);
 
       const skillName = entry.skill.name;
-      const summary = await getCodeSafetySummary({
+      const summary = await getSkillCodeSafetySummary({
         dirPath: skillDir,
+        skillFilePath: entry.skill.filePath,
         summaryCache: params.summaryCache,
-      }).catch((err) => {
+      }).catch((err: unknown) => {
         findings.push({
           checkId: "skills.code_safety.scan_failed",
           severity: "warn",
@@ -903,3 +986,4 @@ export async function collectInstalledSkillsCodeSafetyFindings(params: {
 
   return findings;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

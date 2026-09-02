@@ -1,3 +1,4 @@
+// Web fetch provider contract tests cover plugin web-fetch provider behavior.
 import { describeWebFetchProviderContracts } from "../../plugin-sdk/test-helpers/web-fetch-provider-contract.js";
 import { pluginRegistrationContractRegistry } from "./registry.js";
 

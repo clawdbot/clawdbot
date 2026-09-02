@@ -1,3 +1,4 @@
+/** Tests secret ref id validation, labels, and provider alias contracts. */
 import { describe, expect, it } from "vitest";
 import {
   INVALID_FILE_SECRET_REF_IDS,
@@ -8,6 +9,8 @@ import {
 import {
   isValidExecSecretRefId,
   isValidFileSecretRefId,
+  isValidSecretRef,
+  resolveDefaultSecretProviderAlias,
   validateExecSecretRefId,
 } from "./ref-contract.js";
 
@@ -49,5 +52,31 @@ describe("exec secret ref id validation", () => {
       ok: false,
       reason: "traversal-segment",
     });
+  });
+});
+
+describe("secret ref validation", () => {
+  it("rejects non-canonical refs with extra properties", () => {
+    expect(isValidSecretRef({ source: "env", provider: "default", id: "OPENAI_API_KEY" })).toBe(
+      true,
+    );
+    expect(
+      isValidSecretRef({
+        source: "env",
+        provider: "default",
+        id: "OPENAI_API_KEY",
+        extra: "x",
+      } as never),
+    ).toBe(false);
+  });
+
+  it("uses env-name grammar and source-specific defaults for store refs", () => {
+    expect(isValidSecretRef({ source: "store", provider: "default", id: "STORED_API_KEY" })).toBe(
+      true,
+    );
+    expect(isValidSecretRef({ source: "store", provider: "default", id: "lowercase" })).toBe(false);
+    expect(
+      resolveDefaultSecretProviderAlias({ secrets: { defaults: { store: "teamstore" } } }, "store"),
+    ).toBe("teamstore");
   });
 });

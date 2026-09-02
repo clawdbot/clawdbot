@@ -1,18 +1,12 @@
+// Feishu plugin module implements bitable behavior.
 import type * as Lark from "@larksuiteoapi/node-sdk";
+import { optionalPositiveIntegerSchema } from "openclaw/plugin-sdk/channel-actions";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { readPositiveIntegerParam } from "openclaw/plugin-sdk/param-readers";
 import { Type, type TSchema } from "typebox";
 import type { OpenClawPluginApi } from "../runtime-api.js";
-import { listEnabledFeishuAccounts } from "./accounts.js";
-import { createFeishuToolClient } from "./tool-account.js";
-
-// ============ Helpers ============
-
-function json(data: unknown) {
-  return {
-    content: [{ type: "text" as const, text: JSON.stringify(data, null, 2) }],
-    details: data,
-  };
-}
+import { createFeishuToolClient, resolveAnyEnabledFeishuToolsConfig } from "./tool-account.js";
+import { feishuExternalToolResult as json } from "./tool-result.js";
 
 type LarkResponse<T = unknown> = { code?: number; msg?: string; data?: T };
 type BitableRecordCreatePayload = NonNullable<
@@ -26,7 +20,7 @@ type BitableRecordUpdateFields = NonNullable<
   NonNullable<BitableRecordUpdatePayload["data"]>["fields"]
 >;
 
-export class LarkApiError extends Error {
+class LarkApiError extends Error {
   readonly code: number;
   readonly api: string;
   readonly context?: Record<string, unknown>;
@@ -85,13 +79,19 @@ function parseBitableUrl(url: string): { token: string; tableId?: string; isWiki
     // Wiki format: /wiki/XXXXX?table=YYY
     const wikiMatch = u.pathname.match(/\/wiki\/([A-Za-z0-9]+)/);
     if (wikiMatch) {
-      return { token: wikiMatch[1], tableId, isWiki: true };
+      const wikiPathSegment = wikiMatch[1];
+      return wikiPathSegment === undefined
+        ? null
+        : { token: wikiPathSegment, tableId, isWiki: true };
     }
 
     // Base format: /base/XXXXX?table=YYY
     const baseMatch = u.pathname.match(/\/base\/([A-Za-z0-9]+)/);
     if (baseMatch) {
-      return { token: baseMatch[1], tableId, isWiki: false };
+      const basePathSegment = baseMatch[1];
+      return basePathSegment === undefined
+        ? null
+        : { token: basePathSegment, tableId, isWiki: false };
     }
 
     return null;
@@ -206,6 +206,13 @@ async function listRecords(
     page_token: res.data?.page_token,
     total: res.data?.total,
   };
+}
+
+function readBitableListRecordsPageSize(params: Record<string, unknown>): number | undefined {
+  return readPositiveIntegerParam(params, "page_size", {
+    max: 500,
+    message: "page_size must be a positive integer between 1 and 500",
+  });
 }
 
 async function getRecord(client: Lark.Client, appToken: string, tableId: string, recordId: string) {
@@ -403,7 +410,7 @@ async function createApp(
       path: { app_token: appToken },
     });
     if (tablesRes.code === 0 && tablesRes.data?.items && tablesRes.data.items.length > 0) {
-      tableId = tablesRes.data.items[0].table_id ?? undefined;
+      tableId = tablesRes.data.items.at(0)?.table_id;
       if (tableId) {
         const cleanup = await cleanupNewBitable(client, appToken, tableId, name, log);
         cleanedRows = cleanup.cleanedRows;
@@ -496,13 +503,10 @@ const ListRecordsSchema = Type.Object({
     description: "Bitable app token (use feishu_bitable_get_meta to get from URL)",
   }),
   table_id: Type.String({ description: "Table ID (from URL: ?table=YYY)" }),
-  page_size: Type.Optional(
-    Type.Number({
-      description: "Number of records per page (1-500, default 100)",
-      minimum: 1,
-      maximum: 500,
-    }),
-  ),
+  page_size: optionalPositiveIntegerSchema({
+    description: "Number of records per page (1-500, default 100)",
+    maximum: 500,
+  }),
   page_token: Type.Optional(
     Type.String({ description: "Pagination token from previous response" }),
   ),
@@ -516,12 +520,18 @@ const GetRecordSchema = Type.Object({
   record_id: Type.String({ description: "Record ID to retrieve" }),
 });
 
+// TypeBox emits an empty schema for Any/Unknown, which Bedrock-backed validators
+// can reject inside patternProperties. Keep the existing any-JSON-value contract explicit.
+const BitableFieldValueSchema = Type.Unsafe<unknown>({
+  type: ["string", "number", "boolean", "object", "array", "null"],
+});
+
 const CreateRecordSchema = Type.Object({
   app_token: Type.String({
     description: "Bitable app token (use feishu_bitable_get_meta to get from URL)",
   }),
   table_id: Type.String({ description: "Table ID (from URL: ?table=YYY)" }),
-  fields: Type.Record(Type.String(), Type.Any(), {
+  fields: Type.Record(Type.String(), BitableFieldValueSchema, {
     description:
       "Field values keyed by field name. Format by type: Text='string', Number=123, SingleSelect='Option', MultiSelect=['A','B'], DateTime=timestamp_ms, User=[{id:'ou_xxx'}], URL={text:'Display',link:'https://...'}",
   }),
@@ -551,7 +561,7 @@ const CreateFieldSchema = Type.Object({
     minimum: 1,
   }),
   property: Type.Optional(
-    Type.Record(Type.String(), Type.Any(), {
+    Type.Record(Type.String(), BitableFieldValueSchema, {
       description: "Field-specific properties (e.g., options for SingleSelect, format for Number)",
     }),
   ),
@@ -563,7 +573,7 @@ const UpdateRecordSchema = Type.Object({
   }),
   table_id: Type.String({ description: "Table ID (from URL: ?table=YYY)" }),
   record_id: Type.String({ description: "Record ID to update" }),
-  fields: Type.Record(Type.String(), Type.Any(), {
+  fields: Type.Record(Type.String(), BitableFieldValueSchema, {
     description: "Field values to update (same format as create_record)",
   }),
 });
@@ -575,15 +585,20 @@ export function registerFeishuBitableTools(api: OpenClawPluginApi) {
     return;
   }
 
-  const accounts = listEnabledFeishuAccounts(api.config);
-  if (accounts.length === 0) {
+  const toolsCfg = resolveAnyEnabledFeishuToolsConfig(api.config);
+  if (!toolsCfg.bitable) {
     return;
   }
 
   type AccountAwareParams = { accountId?: string };
 
   const getClient = (params: AccountAwareParams | undefined, defaultAccountId?: string) =>
-    createFeishuToolClient({ api, executeParams: params, defaultAccountId });
+    createFeishuToolClient({
+      api,
+      executeParams: params,
+      defaultAccountId,
+      requiredTool: { family: "bitable", label: "Bitable" },
+    });
 
   const registerBitableTool = <
     // oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Tool params bind each schema-specific executor to its registered tool.
@@ -598,6 +613,7 @@ export function registerFeishuBitableTools(api: OpenClawPluginApi) {
     api.registerTool(
       (ctx) => ({
         name: params.name,
+        resultContentSource: "network",
         label: params.label,
         description: params.description,
         parameters: params.parameters,
@@ -655,7 +671,7 @@ export function registerFeishuBitableTools(api: OpenClawPluginApi) {
         getClient(params, defaultAccountId),
         params.app_token,
         params.table_id,
-        params.page_size,
+        readBitableListRecordsPageSize(params as Record<string, unknown>),
         params.page_token,
       );
     },

@@ -1,13 +1,12 @@
+// Binding target tests cover channel binding target extraction and validation.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   ensureConfiguredBindingTargetReady,
-  ensureConfiguredBindingTargetSession,
   resetConfiguredBindingTargetInPlace,
 } from "./binding-targets.js";
 import type { ConfiguredBindingResolution } from "./binding-types.js";
 import {
   registerStatefulBindingTargetDriver,
-  unregisterStatefulBindingTargetDriver,
   type StatefulBindingTargetDriver,
 } from "./stateful-target-drivers.js";
 
@@ -95,12 +94,15 @@ function createBindingResolution(driverId: string): ConfiguredBindingResolution 
   };
 }
 
+let unregisterDriver: (() => void) | undefined;
+
 afterEach(() => {
-  unregisterStatefulBindingTargetDriver("test-driver");
+  unregisterDriver?.();
+  unregisterDriver = undefined;
 });
 
 describe("binding target drivers", () => {
-  it("delegates ensureReady and ensureSession to the resolved driver", async () => {
+  it("delegates ensureReady to the resolved driver", async () => {
     const ensureReady = vi.fn(async () => ({ ok: true as const }));
     const ensureSession = vi.fn(async () => ({
       ok: true as const,
@@ -111,7 +113,7 @@ describe("binding target drivers", () => {
       ensureReady,
       ensureSession,
     };
-    registerStatefulBindingTargetDriver(driver);
+    unregisterDriver = registerStatefulBindingTargetDriver(driver);
 
     const bindingResolution = createBindingResolution("test-driver");
     await expect(
@@ -120,23 +122,8 @@ describe("binding target drivers", () => {
         bindingResolution,
       }),
     ).resolves.toEqual({ ok: true });
-    await expect(
-      ensureConfiguredBindingTargetSession({
-        cfg: {} as never,
-        bindingResolution,
-      }),
-    ).resolves.toEqual({
-      ok: true,
-      sessionKey: "agent:codex:test-driver",
-    });
-
     expect(ensureReady).toHaveBeenCalledTimes(1);
     expect(ensureReady).toHaveBeenCalledWith({
-      cfg: {} as never,
-      bindingResolution,
-    });
-    expect(ensureSession).toHaveBeenCalledTimes(1);
-    expect(ensureSession).toHaveBeenCalledWith({
       cfg: {} as never,
       bindingResolution,
     });
@@ -159,7 +146,7 @@ describe("binding target drivers", () => {
       }),
       resetInPlace,
     };
-    registerStatefulBindingTargetDriver(driver);
+    unregisterDriver = registerStatefulBindingTargetDriver(driver);
 
     await expect(
       resetConfiguredBindingTargetInPlace({
@@ -195,16 +182,6 @@ describe("binding target drivers", () => {
       }),
     ).resolves.toEqual({
       ok: false,
-      error: "Configured binding target driver unavailable: missing-driver",
-    });
-    await expect(
-      ensureConfiguredBindingTargetSession({
-        cfg: {} as never,
-        bindingResolution,
-      }),
-    ).resolves.toEqual({
-      ok: false,
-      sessionKey: "agent:codex:missing-driver",
       error: "Configured binding target driver unavailable: missing-driver",
     });
   });

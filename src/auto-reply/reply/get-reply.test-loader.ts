@@ -1,4 +1,5 @@
-import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
+// Loads isolated get-reply modules for tests that need fresh mocked state.
+import { importFreshModule } from "../../plugin-sdk/test-fixtures.js";
 
 type GetReplyModule = typeof import("./get-reply.js");
 

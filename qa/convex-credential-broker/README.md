@@ -6,6 +6,7 @@ Keep private operator notes in `~/Projects/manager/docs/`, not in public docs.
 This broker exposes:
 
 - `POST /qa-credentials/v1/acquire`
+- `POST /qa-credentials/v1/payload-chunk`
 - `POST /qa-credentials/v1/heartbeat`
 - `POST /qa-credentials/v1/release`
 - `POST /qa-credentials/v1/admin/add`
@@ -58,12 +59,16 @@ Maintainers can manage rows without using the Convex dashboard:
 
 ```bash
 pnpm openclaw qa credentials add \
-  --kind telegram \
-  --payload-file qa/telegram-credential.json
+  --kind buzz \
+  --payload-file qa/buzz-credential.json
 
 pnpm openclaw qa credentials add \
   --kind discord \
   --payload-file qa/discord-credential.json
+
+pnpm openclaw qa credentials add \
+  --kind telegram \
+  --payload-file qa/telegram-credential.json
 
 pnpm openclaw qa credentials list --kind telegram
 
@@ -144,6 +149,22 @@ For `kind: "telegram"`, broker `admin/add` validates that payload includes:
 - `groupId` as a numeric chat id string
 - non-empty `driverToken`
 - non-empty `sutToken`
+
+For `kind: "telegram-test-userbot"`, broker `admin/add` accepts only Test
+Server schema version 1 with numeric chat, bot, and tester ids; a bot token and
+username; a base64 TDLib archive and SHA-256 hash; and a TDLib version.
+
+For `kind: "buzz"`, broker `admin/add` validates that payload includes:
+
+- `relayUrl` as a `wss://` URL, or `ws://` only for a loopback relay
+- `roomId` as a channel UUID
+- valid, distinct `driverPrivateKey` and `sutPrivateKey` values in nsec or
+  64-character hex form
+- optional `driverAuthTag` and `sutAuthTag` values matching the four-string
+  Buzz authorization tag JSON shape
+
+Use dedicated QA identities only. Never add a human owner or admin private key
+to the shared pool.
 
 For `kind: "discord"`, broker `admin/add` validates that payload includes:
 

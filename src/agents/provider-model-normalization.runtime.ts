@@ -1,4 +1,10 @@
+/**
+ * Runtime bridge for provider-owned model id normalization hooks. Source and
+ * built artifacts can resolve different extensions, so this module probes both
+ * once and caches the result.
+ */
 import { createRequire } from "node:module";
+import type { ManifestModelIdNormalizationSource } from "../plugins/manifest-model-id-normalization.js";
 
 type ProviderRuntimeModule = Pick<
   typeof import("../plugins/provider-runtime.js"),
@@ -6,6 +12,8 @@ type ProviderRuntimeModule = Pick<
 >;
 
 const require = createRequire(import.meta.url);
+// Built code loads .js while source/test paths may still resolve .ts. Try both
+// once, then cache the absence to avoid repeated require work on hot paths.
 const PROVIDER_RUNTIME_CANDIDATES = [
   "../plugins/provider-runtime.js",
   "../plugins/provider-runtime.ts",
@@ -33,8 +41,10 @@ function loadProviderRuntime(): ProviderRuntimeModule | null {
   return null;
 }
 
+/** Normalizes provider model ids through plugin runtime hooks when available. */
 export function normalizeProviderModelIdWithRuntime(params: {
   provider: string;
+  plugins?: ManifestModelIdNormalizationSource;
   context: {
     provider: string;
     modelId: string;

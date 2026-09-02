@@ -1,13 +1,22 @@
-import { Buffer } from "node:buffer";
+// Msteams plugin module implements bot framework behavior.
+import { coerceErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { parseMediaContentLength } from "openclaw/plugin-sdk/media-runtime";
+import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
+import {
+  resolveMSTeamsRequestTimeoutMs,
+  type MSTeamsRequestDeadline,
+  withMSTeamsRequestDeadline,
+} from "../request-timeout.js";
 import { getMSTeamsRuntime } from "../runtime.js";
 import { ensureUserAgentHeader } from "../user-agent.js";
 import {
-  inferPlaceholder,
+  applyAuthorizationHeaderForUrl,
   isUrlAllowed,
   type MSTeamsAttachmentDownloadLogger,
   type MSTeamsAttachmentFetchPolicy,
   type MSTeamsAttachmentResolveFn,
   resolveAttachmentFetchPolicy,
+  resolveMSTeamsMediaKind,
   safeFetchWithPolicy,
 } from "./shared.js";
 import type {
@@ -54,109 +63,153 @@ function normalizeServiceUrl(serviceUrl: string): string {
   return serviceUrl.replace(/\/+$/, "");
 }
 
+function buildBotFrameworkAttachmentHeaders(params: {
+  url: string;
+  accessToken: string;
+  policy: MSTeamsAttachmentFetchPolicy;
+}): Headers {
+  const headers = ensureUserAgentHeader();
+  applyAuthorizationHeaderForUrl({
+    headers,
+    url: params.url,
+    authAllowHosts: params.policy.authAllowHosts,
+    bearerToken: params.accessToken,
+  });
+  return headers;
+}
+
 async function fetchBotFrameworkAttachmentInfo(params: {
   serviceUrl: string;
   attachmentId: string;
   accessToken: string;
   policy: MSTeamsAttachmentFetchPolicy;
   fetchFn?: typeof fetch;
+  fetchFnSupportsDispatcher?: boolean;
   resolveFn?: MSTeamsAttachmentResolveFn;
   logger?: MSTeamsAttachmentDownloadLogger;
+  deadline?: MSTeamsRequestDeadline;
 }): Promise<BotFrameworkAttachmentInfo | undefined> {
   const url = `${normalizeServiceUrl(params.serviceUrl)}/v3/attachments/${encodeURIComponent(params.attachmentId)}`;
-  // Use `safeFetchWithPolicy` instead of `fetchWithSsrFGuard`. The strict
-  // pinned undici dispatcher used by `fetchWithSsrFGuard` is incompatible
-  // with Node 24+'s built-in undici v7 and silently breaks Bot Framework
-  // attachment downloads (same root cause as the SharePoint fix in #63396).
-  // `safeFetchWithPolicy` already enforces hostname allowlist validation
-  // across every redirect hop, which is sufficient for these attachment
-  // service URLs.
   let response: Response;
   try {
     response = await safeFetchWithPolicy({
       url,
       policy: params.policy,
       fetchFn: params.fetchFn,
+      fetchFnSupportsDispatcher: params.fetchFnSupportsDispatcher,
       resolveFn: params.resolveFn,
       requestInit: {
-        headers: ensureUserAgentHeader({ Authorization: `Bearer ${params.accessToken}` }),
+        headers: buildBotFrameworkAttachmentHeaders({
+          url,
+          accessToken: params.accessToken,
+          policy: params.policy,
+        }),
       },
+      timeoutMs: resolveMSTeamsRequestTimeoutMs(params.deadline),
     });
   } catch (err) {
     params.logger?.warn?.("msteams botFramework attachmentInfo fetch failed", {
-      error: err instanceof Error ? err.message : String(err),
+      error: coerceErrorMessage(err),
     });
     return undefined;
   }
   if (!response.ok) {
+    await response.body?.cancel().catch(() => undefined);
     params.logger?.warn?.("msteams botFramework attachmentInfo non-ok", {
       status: response.status,
     });
     return undefined;
   }
   try {
-    return (await response.json()) as BotFrameworkAttachmentInfo;
+    return await readProviderJsonResponse<BotFrameworkAttachmentInfo>(
+      response,
+      "msteams botFramework attachmentInfo",
+    );
   } catch (err) {
     params.logger?.warn?.("msteams botFramework attachmentInfo parse failed", {
-      error: err instanceof Error ? err.message : String(err),
+      error: coerceErrorMessage(err),
     });
     return undefined;
   }
 }
 
-async function fetchBotFrameworkAttachmentView(params: {
+async function saveBotFrameworkAttachmentView(params: {
   serviceUrl: string;
   attachmentId: string;
   viewId: string;
   accessToken: string;
   maxBytes: number;
+  fileNameHint?: string;
+  contentTypeHint?: string;
+  preserveFilenames?: boolean;
   policy: MSTeamsAttachmentFetchPolicy;
   fetchFn?: typeof fetch;
+  fetchFnSupportsDispatcher?: boolean;
   resolveFn?: MSTeamsAttachmentResolveFn;
   logger?: MSTeamsAttachmentDownloadLogger;
-}): Promise<Buffer | undefined> {
+  deadline?: MSTeamsRequestDeadline;
+}): Promise<{ path: string; contentType?: string } | undefined> {
   const url = `${normalizeServiceUrl(params.serviceUrl)}/v3/attachments/${encodeURIComponent(params.attachmentId)}/views/${encodeURIComponent(params.viewId)}`;
-  // See `fetchBotFrameworkAttachmentInfo` for why this uses
-  // `safeFetchWithPolicy` instead of `fetchWithSsrFGuard` on Node 24+ (#63396).
   let response: Response;
   try {
     response = await safeFetchWithPolicy({
       url,
       policy: params.policy,
       fetchFn: params.fetchFn,
+      fetchFnSupportsDispatcher: params.fetchFnSupportsDispatcher,
       resolveFn: params.resolveFn,
       requestInit: {
-        headers: ensureUserAgentHeader({ Authorization: `Bearer ${params.accessToken}` }),
+        headers: buildBotFrameworkAttachmentHeaders({
+          url,
+          accessToken: params.accessToken,
+          policy: params.policy,
+        }),
       },
+      timeoutMs: resolveMSTeamsRequestTimeoutMs(params.deadline),
     });
   } catch (err) {
     params.logger?.warn?.("msteams botFramework attachmentView fetch failed", {
-      error: err instanceof Error ? err.message : String(err),
+      error: coerceErrorMessage(err),
     });
     return undefined;
   }
   if (!response.ok) {
+    await response.body?.cancel().catch(() => undefined);
     params.logger?.warn?.("msteams botFramework attachmentView non-ok", {
       status: response.status,
     });
     return undefined;
   }
-  const contentLength = response.headers.get("content-length");
-  if (contentLength && Number(contentLength) > params.maxBytes) {
+  let contentLength: number | null;
+  try {
+    contentLength = parseMediaContentLength(response.headers.get("content-length"));
+  } catch (err) {
+    await response.body?.cancel().catch(() => undefined);
+    params.logger?.warn?.("msteams botFramework attachmentView invalid content-length", {
+      error: coerceErrorMessage(err),
+    });
+    return undefined;
+  }
+  if (contentLength !== null && contentLength > params.maxBytes) {
+    await response.body?.cancel().catch(() => undefined);
     return undefined;
   }
   try {
-    const arrayBuffer = await response.arrayBuffer();
-    const buffer = Buffer.from(arrayBuffer);
-    if (buffer.byteLength > params.maxBytes) {
-      return undefined;
-    }
-    return buffer;
+    return await getMSTeamsRuntime().channel.media.saveResponseMedia(response, {
+      sourceUrl: url,
+      filePathHint: params.fileNameHint,
+      maxBytes: params.maxBytes,
+      fallbackContentType: params.contentTypeHint,
+      subdir: "inbound",
+      originalFilename: params.preserveFilenames ? params.fileNameHint : undefined,
+    });
   } catch (err) {
-    params.logger?.warn?.("msteams botFramework attachmentView body read failed", {
-      error: err instanceof Error ? err.message : String(err),
+    params.logger?.warn?.("msteams botFramework attachmentView save failed", {
+      error: coerceErrorMessage(err),
     });
     return undefined;
+  } finally {
+    await response.body?.cancel().catch(() => undefined);
   }
 }
 
@@ -166,7 +219,7 @@ async function fetchBotFrameworkAttachmentView(params: {
  * path is not usable because the Bot Framework conversation ID (`a:...`) is
  * not a valid Graph chat identifier.
  */
-export async function downloadMSTeamsBotFrameworkAttachment(params: {
+async function downloadMSTeamsBotFrameworkAttachment(params: {
   serviceUrl: string;
   attachmentId: string;
   tokenProvider?: MSTeamsAccessTokenProvider;
@@ -174,7 +227,9 @@ export async function downloadMSTeamsBotFrameworkAttachment(params: {
   allowHosts?: string[];
   authAllowHosts?: string[];
   fetchFn?: typeof fetch;
+  fetchFnSupportsDispatcher?: boolean;
   resolveFn?: MSTeamsAttachmentResolveFn;
+  deadline?: MSTeamsRequestDeadline;
   fileNameHint?: string | null;
   contentTypeHint?: string | null;
   preserveFilenames?: boolean;
@@ -183,6 +238,7 @@ export async function downloadMSTeamsBotFrameworkAttachment(params: {
   if (!params.serviceUrl || !params.attachmentId || !params.tokenProvider) {
     return undefined;
   }
+  const tokenProvider = params.tokenProvider;
   const policy: MSTeamsAttachmentFetchPolicy = resolveAttachmentFetchPolicy({
     allowHosts: params.allowHosts,
     authAllowHosts: params.authAllowHosts,
@@ -194,10 +250,14 @@ export async function downloadMSTeamsBotFrameworkAttachment(params: {
 
   let accessToken: string;
   try {
-    accessToken = await params.tokenProvider.getAccessToken(BOT_FRAMEWORK_SCOPE);
+    accessToken = await withMSTeamsRequestDeadline({
+      deadline: params.deadline,
+      label: "MS Teams Bot Framework token",
+      work: () => tokenProvider.getAccessToken(BOT_FRAMEWORK_SCOPE),
+    });
   } catch (err) {
     params.logger?.warn?.("msteams botFramework token acquisition failed", {
-      error: err instanceof Error ? err.message : String(err),
+      error: coerceErrorMessage(err),
     });
     return undefined;
   }
@@ -211,8 +271,10 @@ export async function downloadMSTeamsBotFrameworkAttachment(params: {
     accessToken,
     policy,
     fetchFn: params.fetchFn,
+    fetchFnSupportsDispatcher: params.fetchFnSupportsDispatcher,
     resolveFn: params.resolveFn,
     logger: params.logger,
+    deadline: params.deadline,
   });
   if (!info) {
     return undefined;
@@ -238,21 +300,6 @@ export async function downloadMSTeamsBotFrameworkAttachment(params: {
     return undefined;
   }
 
-  const buffer = await fetchBotFrameworkAttachmentView({
-    serviceUrl: params.serviceUrl,
-    attachmentId: params.attachmentId,
-    viewId,
-    accessToken,
-    maxBytes: params.maxBytes,
-    policy,
-    fetchFn: params.fetchFn,
-    resolveFn: params.resolveFn,
-    logger: params.logger,
-  });
-  if (!buffer) {
-    return undefined;
-  }
-
   const fileNameHint =
     (typeof params.fileNameHint === "string" && params.fileNameHint) ||
     (typeof info.name === "string" && info.name) ||
@@ -262,32 +309,31 @@ export async function downloadMSTeamsBotFrameworkAttachment(params: {
     (typeof info.type === "string" && info.type) ||
     undefined;
 
-  const mime = await getMSTeamsRuntime().media.detectMime({
-    buffer,
-    headerMime: contentTypeHint,
-    filePath: fileNameHint,
+  const saved = await saveBotFrameworkAttachmentView({
+    serviceUrl: params.serviceUrl,
+    attachmentId: params.attachmentId,
+    viewId,
+    accessToken,
+    maxBytes: params.maxBytes,
+    fileNameHint,
+    contentTypeHint,
+    preserveFilenames: params.preserveFilenames,
+    policy,
+    fetchFn: params.fetchFn,
+    fetchFnSupportsDispatcher: params.fetchFnSupportsDispatcher,
+    resolveFn: params.resolveFn,
+    logger: params.logger,
+    deadline: params.deadline,
   });
-
-  try {
-    const originalFilename = params.preserveFilenames ? fileNameHint : undefined;
-    const saved = await getMSTeamsRuntime().channel.media.saveMediaBuffer(
-      buffer,
-      mime ?? contentTypeHint,
-      "inbound",
-      params.maxBytes,
-      originalFilename,
-    );
-    return {
-      path: saved.path,
-      contentType: saved.contentType,
-      placeholder: inferPlaceholder({ contentType: saved.contentType, fileName: fileNameHint }),
-    };
-  } catch (err) {
-    params.logger?.warn?.("msteams botFramework save failed", {
-      error: err instanceof Error ? err.message : String(err),
-    });
+  if (!saved) {
     return undefined;
   }
+
+  return {
+    path: saved.path,
+    contentType: saved.contentType,
+    kind: resolveMSTeamsMediaKind({ contentType: saved.contentType, fileName: fileNameHint }),
+  };
 }
 
 /**
@@ -304,7 +350,9 @@ export async function downloadMSTeamsBotFrameworkAttachments(params: {
   allowHosts?: string[];
   authAllowHosts?: string[];
   fetchFn?: typeof fetch;
+  fetchFnSupportsDispatcher?: boolean;
   resolveFn?: MSTeamsAttachmentResolveFn;
+  deadline?: MSTeamsRequestDeadline;
   fileNameHint?: string | null;
   contentTypeHint?: string | null;
   preserveFilenames?: boolean;
@@ -338,18 +386,23 @@ export async function downloadMSTeamsBotFrameworkAttachments(params: {
         allowHosts: params.allowHosts,
         authAllowHosts: params.authAllowHosts,
         fetchFn: params.fetchFn,
+        fetchFnSupportsDispatcher: params.fetchFnSupportsDispatcher,
         resolveFn: params.resolveFn,
+        deadline: params.deadline,
         fileNameHint: params.fileNameHint,
         contentTypeHint: params.contentTypeHint,
         preserveFilenames: params.preserveFilenames,
         logger: params.logger,
       });
       if (item) {
-        media.push(item);
+        media.push({ ...item, sourceId: attachmentId });
+      } else {
+        media.push({ kind: "document", sourceId: attachmentId });
       }
     } catch (err) {
+      media.push({ kind: "document", sourceId: attachmentId });
       params.logger?.warn?.("msteams botFramework attachment download failed", {
-        error: err instanceof Error ? err.message : String(err),
+        error: coerceErrorMessage(err),
         attachmentId,
       });
     }

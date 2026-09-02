@@ -1,4 +1,5 @@
-import { type APIRole, type APIUser } from "discord-api-types/v10";
+// Discord plugin module implements modal fields behavior.
+import type { APIRole, APIUser } from "discord-api-types/v10";
 import { Role, User, type StructureClient } from "./structures.js";
 
 type ModalResolvedData = {

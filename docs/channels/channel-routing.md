@@ -9,15 +9,16 @@ title: "Channel routing"
 
 OpenClaw routes replies **back to the channel where a message came from**. The
 model does not choose a channel; routing is deterministic and controlled by the
-host configuration.
+host configuration. Under the default DM scope, direct messages from every
+channel converge on the agent's [main session](/concepts/main-session).
 
 ## Key terms
 
-- **Channel**: `telegram`, `whatsapp`, `discord`, `irc`, `googlechat`, `slack`, `signal`, `imessage`, `line`, plus plugin channels. `webchat` is the internal WebChat UI channel and is not a configurable outbound channel.
+- **Channel**: a channel plugin such as `discord`, `googlechat`, `imessage`, `irc`, `line`, `signal`, `slack`, `telegram`, or `whatsapp`. `webchat` is the internal WebChat UI channel and is not a configurable outbound channel.
 - **AccountId**: per-channel account instance (when supported).
 - Optional channel default account: `channels.<channel>.defaultAccount` chooses
   which account is used when an outbound path does not specify `accountId`.
-  - In multi-account setups, set an explicit default (`defaultAccount` or `accounts.default`) when two or more accounts are configured. Without it, fallback routing may pick the first normalized account ID.
+  - In multi-account setups, set an explicit default (`defaultAccount` or an account named `default`) when two or more accounts are configured. Without it, fallback routing may pick the first normalized account ID.
 - **AgentId**: an isolated workspace + session store ("brain").
 - **SessionKey**: the bucket key used to store context and control concurrency.
 
@@ -31,16 +32,27 @@ Target-kind and service prefixes such as `channel:<id>`, `user:<id>`, `room:<id>
 
 Direct messages collapse to the agent's **main** session by default:
 
-- `agent:<agentId>:<mainKey>` (default: `agent:main:main`)
+- `agent:<agentId>:main` (for example: `agent:main:main`)
+
+`session.dmScope` controls DM collapsing: `main` (default) shares one main
+session, while `per-peer`, `per-channel-peer`, and `per-account-channel-peer`
+keep DMs in separate sessions. A route binding can override the scope for its
+matched peers via `bindings[].session.dmScope`.
 
 Even when direct-message conversation history is shared with main, sandbox and
 tool policy use a derived per-account direct-chat runtime key for external DMs
 so channel-originated messages are not treated like local main-session runs.
 
-Groups and channels remain isolated per channel:
+With the default `session.groupScope: "per-group"`, groups and channels remain
+isolated per channel:
 
 - Groups: `agent:<agentId>:<channel>:group:<id>`
 - Channels/rooms: `agent:<agentId>:<channel>:channel:<id>`
+
+Set `session.groupScope: "main"` to route all non-direct peers into the agent's
+main session, or use `bindings[].session.groupScope` for selected rooms. The
+binding override wins over the global value. This changes shared context only;
+mention gating and replies still use the originating group or channel.
 
 Threads:
 
@@ -78,12 +90,13 @@ Routing picks **one agent** for each inbound message:
 
 1. **Exact peer match** (`bindings` with `peer.kind` + `peer.id`).
 2. **Parent peer match** (thread inheritance).
-3. **Guild + roles match** (Discord) via `guildId` + `roles`.
-4. **Guild match** (Discord) via `guildId`.
-5. **Team match** (Slack) via `teamId`.
-6. **Account match** (`accountId` on the channel).
-7. **Channel match** (any account on that channel, `accountId: "*"`).
-8. **Default agent** (`agents.list[].default`, else first list entry, fallback to `main`).
+3. **Peer wildcard match** (`peer.id: "*"` for a peer kind).
+4. **Guild + roles match** (Discord) via `guildId` + `roles`.
+5. **Guild match** (Discord) via `guildId`.
+6. **Team match** (Slack) via `teamId`.
+7. **Account match** (`accountId` on the channel).
+8. **Channel match** (any account on that channel, `accountId: "*"`).
+9. **Default agent** (`agents.entries.*.default`, else first list entry, fallback to `main`).
 
 When a binding includes multiple match fields (`peer`, `guildId`, `teamId`, `roles`), **all provided fields must match** for that binding to apply.
 
@@ -109,7 +122,7 @@ See: [Broadcast Groups](/channels/broadcast-groups).
 
 ## Config overview
 
-- `agents.list`: named agent definitions (workspace, model, etc.).
+- `agents.entries`: named agent definitions (workspace, model, etc.).
 - `bindings`: map inbound channels/accounts/peers to agents.
 
 Example:
@@ -117,28 +130,55 @@ Example:
 ```json5
 {
   agents: {
-    list: [{ id: "support", name: "Support", workspace: "~/.openclaw/workspace-support" }],
+    entries: {
+      support: {
+        default: true,
+        name: "Support",
+        workspace: "~/.openclaw/workspace-support",
+      },
+    },
   },
   bindings: [
     { match: { channel: "slack", teamId: "T123" }, agentId: "support" },
-    { match: { channel: "telegram", peer: { kind: "group", id: "-100123" } }, agentId: "support" },
+    {
+      match: { channel: "slack", peer: { kind: "channel", id: "C0123TEAM" } },
+      agentId: "support",
+      session: { groupScope: "main" },
+    },
   ],
 }
 ```
 
 ## Session storage
 
-Session stores live under the state directory (default `~/.openclaw`):
+Runtime session rows and transcripts live in each agent's SQLite database under
+the state directory (default `~/.openclaw`):
 
-- `~/.openclaw/agents/<agentId>/sessions/sessions.json`
-- JSONL transcripts live alongside the store
+- `~/.openclaw/agents/<agentId>/agent/openclaw-agent.sqlite`
 
-You can override the store path via `session.store` and `{agentId}` templating.
+Older installs may have legacy transcript JSONL files and a `sessions.json` row
+store under `~/.openclaw/agents/<agentId>/sessions/`. To import that history into
+SQLite, stop the Gateway, back up its state, and run `openclaw doctor --fix`
+before restarting it. Gateway startup does not import legacy session files: if
+it finds a legacy store, it refuses readiness and prints the Doctor command for
+the active profile. Use `openclaw doctor --session-sqlite inspect
+--session-sqlite-all-agents` and the
+[Doctor](/cli/doctor#session-sqlite-migration) migration sequence for inspection
+and validation.
 
-Gateway and ACP session discovery also scans disk-backed agent stores under the
-default `agents/` root and under templated `session.store` roots. Discovered
-stores must stay inside that resolved agent root and use a regular
-`sessions.json` file. Symlinks and out-of-root paths are ignored.
+`session.store` supports `{agentId}` templating. At runtime, a legacy store path
+selects its corresponding SQLite database; the JSON file itself is only a
+migration input or an explicit offline-maintenance target.
+
+Gateway session discovery can include on-disk stores under the default `agents/`
+root and templated `session.store` roots that use the
+`agents/<agentId>/sessions/sessions.json` layout. It recognizes the corresponding
+`agent/openclaw-agent.sqlite` database without requiring a legacy `sessions.json`
+file. Discovered store files must be regular files within the resolved agent
+root; symlinked store files and out-of-root paths are ignored.
+
+ACP session discovery reads SQLite ACP metadata and joins it to the corresponding
+session entries.
 
 ## WebChat behavior
 

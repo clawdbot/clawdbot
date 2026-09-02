@@ -1,3 +1,4 @@
+// Discord tests cover send.typing plugin behavior.
 import { Routes } from "discord-api-types/v10";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { RequestClient } from "./internal/discord.js";

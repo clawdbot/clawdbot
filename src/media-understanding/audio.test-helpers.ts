@@ -1,8 +1,11 @@
+// Shared audio provider test helpers install deterministic DNS pinning and
+// fetch request-capture mocks.
 import type { MockInstance } from "vitest";
 import { afterEach, beforeEach, vi } from "vitest";
 import * as ssrf from "../infra/net/ssrf.js";
 import { withFetchPreconnect } from "../test-utils/fetch-mock.js";
 
+// Test helpers for media audio providers that need SSRF-safe DNS and request capture.
 function resolveRequestUrl(input: RequestInfo | URL): string {
   if (typeof input === "string") {
     return input;
@@ -13,6 +16,7 @@ function resolveRequestUrl(input: RequestInfo | URL): string {
   return input.url;
 }
 
+/** Installs deterministic DNS pinning hooks for audio provider tests. */
 export function installPinnedHostnameTestHooks(): void {
   const resolvePinnedHostname = ssrf.resolvePinnedHostname;
   const resolvePinnedHostnameWithPolicy = ssrf.resolvePinnedHostnameWithPolicy;
@@ -21,6 +25,7 @@ export function installPinnedHostnameTestHooks(): void {
   let resolvePinnedHostnameSpy: MockInstance | null = null;
   let resolvePinnedHostnameWithPolicySpy: MockInstance | null = null;
 
+  // Keep the real policy code under test, but make DNS resolution stable and non-networked.
   beforeEach(() => {
     lookupMock.mockResolvedValue([{ address: "93.184.216.34", family: 4 }]);
     resolvePinnedHostnameSpy = vi
@@ -42,6 +47,7 @@ export function installPinnedHostnameTestHooks(): void {
   });
 }
 
+/** Creates a fetch mock that records the outbound Authorization header. */
 export function createAuthCaptureJsonFetch(responseBody: unknown) {
   let seenAuth: string | null = null;
   const fetchFn = withFetchPreconnect(async (_input: RequestInfo | URL, init?: RequestInit) => {
@@ -58,6 +64,7 @@ export function createAuthCaptureJsonFetch(responseBody: unknown) {
   };
 }
 
+/** Creates a fetch mock that records the outbound URL and init payload. */
 export function createRequestCaptureJsonFetch(responseBody: unknown) {
   let seenUrl: string | null = null;
   let seenInit: RequestInit | undefined;

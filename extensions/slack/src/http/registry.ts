@@ -1,3 +1,4 @@
+// Slack plugin module implements registry behavior.
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { normalizeSlackWebhookPath } from "./paths.js";
 

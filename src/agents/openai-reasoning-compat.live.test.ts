@@ -1,62 +1,38 @@
-import type { AgentMessage } from "@mariozechner/pi-agent-core";
-import { completeSimple, type Api, type Model } from "@mariozechner/pi-ai";
-import { SessionManager } from "@mariozechner/pi-coding-agent";
+// Live checks for OpenAI reasoning compatibility and repaired tool replay payloads.
+import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
+import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
+import type { Model } from "openclaw/plugin-sdk/llm";
 import { Type } from "typebox";
 import { describe, expect, it } from "vitest";
-import { getRuntimeConfig } from "../config/config.js";
+import { discoverAuthStorage, discoverModels } from "./agent-model-discovery.js";
 import { resolveDefaultAgentDir } from "./agent-scope.js";
-import { isLiveProfileKeyModeEnabled, isLiveTestEnabled } from "./live-test-helpers.js";
-import { getApiKeyForModel, requireApiKey } from "./model-auth.js";
+import { sanitizeSessionHistory } from "./embedded-agent-runner/replay-history.js";
+import {
+  completeSimpleWithTimeout,
+  isLiveProfileKeyModeEnabled,
+  isLiveTestEnabled,
+  logLiveProgress,
+  readLiveTestConfig,
+  resolveLiveCredentialPrecedence,
+} from "./live-test-helpers.js";
+import { getApiKeyForModelCore, requireApiKey } from "./model-auth.js";
 import { ensureOpenClawModelsJson } from "./models-config.js";
-import { sanitizeSessionHistory } from "./pi-embedded-runner/replay-history.js";
-import { discoverAuthStorage, discoverModels } from "./pi-model-discovery.js";
 
 const LIVE = isLiveTestEnabled();
 const REQUIRE_PROFILE_KEYS = isLiveProfileKeyModeEnabled();
-const LIVE_CREDENTIAL_PRECEDENCE = REQUIRE_PROFILE_KEYS ? "profile-first" : "env-first";
-const DEFAULT_TARGET_MODEL_REF = "openai-codex/gpt-5.1-codex-mini";
+const DEFAULT_TARGET_MODEL_REF = "openai/gpt-5.4-mini";
 const TARGET_MODEL_REF =
   process.env.OPENCLAW_LIVE_OPENAI_REASONING_COMPAT_MODEL?.trim() || DEFAULT_TARGET_MODEL_REF;
 const describeLive = LIVE ? describe : describe.skip;
 
-function logProgress(message: string): void {
-  process.stderr.write(`[live] ${message}\n`);
-}
-
-async function completeSimpleWithTimeout<TApi extends Api>(
-  model: Model<TApi>,
-  context: Parameters<typeof completeSimple<TApi>>[1],
-  options: Parameters<typeof completeSimple<TApi>>[2],
-  timeoutMs: number,
-): Promise<Awaited<ReturnType<typeof completeSimple<TApi>>>> {
-  const controller = new AbortController();
-  const abortTimer = setTimeout(() => {
-    controller.abort();
-  }, timeoutMs);
-  abortTimer.unref?.();
-  try {
-    return await Promise.race([
-      completeSimple(model, context, {
-        ...options,
-        signal: controller.signal,
-      }),
-      new Promise<never>((_, reject) => {
-        const hardTimer = setTimeout(() => {
-          reject(new Error(`model call timed out after ${timeoutMs}ms`));
-        }, timeoutMs);
-        hardTimer.unref?.();
-      }),
-    ]);
-  } finally {
-    clearTimeout(abortTimer);
-  }
-}
+const logProgress = logLiveProgress;
 
 async function completeReplyWithRetry(params: {
-  model: Model<Api>;
+  model: Model;
   apiKey: string;
   message: string;
 }): Promise<{ text: string; errorMessage?: string }> {
+  // Some reasoning targets spend the first tiny budget without visible text.
   const runOnce = async (maxTokens: number) => {
     const response = await completeSimpleWithTimeout(
       params.model,
@@ -99,6 +75,7 @@ async function completeReplyWithRetry(params: {
 }
 
 function isKnownLiveBlocker(errorMessage: string): boolean {
+  // Live lane should skip account/usage blockers rather than fail unrelated compat checks.
   return (
     /not supported when using codex with a chatgpt account/i.test(errorMessage) ||
     /hit your chatgpt usage limit/i.test(errorMessage)
@@ -106,6 +83,7 @@ function isKnownLiveBlocker(errorMessage: string): boolean {
 }
 
 function resolveTargetModelRef(): { provider: string; modelId: string } {
+  // Keep env override parsing strict so live runs never silently target the wrong model.
   const [provider, ...rest] = TARGET_MODEL_REF.split("/");
   const modelId = rest.join("/").trim();
   if (!provider?.trim() || !modelId) {
@@ -124,13 +102,13 @@ describeLive("openai reasoning compat live", () => {
     "remaps low reasoning for the configured OpenAI mini target",
     async () => {
       const { provider, modelId } = resolveTargetModelRef();
-      const cfg = getRuntimeConfig();
+      const cfg = await readLiveTestConfig();
       await ensureOpenClawModelsJson(cfg);
 
       const agentDir = resolveDefaultAgentDir(cfg);
       const authStorage = discoverAuthStorage(agentDir);
       const modelRegistry = discoverModels(authStorage, agentDir);
-      const model = modelRegistry.find(provider, modelId) as Model<Api> | null;
+      const model = modelRegistry.find(provider, modelId) as Model | null;
 
       if (!model) {
         logProgress(`[openai-reasoning-compat] model missing from registry: ${TARGET_MODEL_REF}`);
@@ -139,10 +117,13 @@ describeLive("openai reasoning compat live", () => {
 
       let apiKeyInfo;
       try {
-        apiKeyInfo = await getApiKeyForModel({
+        apiKeyInfo = await getApiKeyForModelCore({
           model,
           cfg,
-          credentialPrecedence: LIVE_CREDENTIAL_PRECEDENCE,
+          credentialPrecedence: resolveLiveCredentialPrecedence(
+            model.provider,
+            REQUIRE_PROFILE_KEYS,
+          ),
         });
       } catch (error) {
         logProgress(`[openai-reasoning-compat] skip (${String(error)})`);
@@ -178,13 +159,13 @@ describeLive("openai reasoning compat live", () => {
     "accepts repaired OpenAI Codex parallel tool replay with aborted missing results",
     async () => {
       const { provider, modelId } = resolveTargetModelRef();
-      const cfg = getRuntimeConfig();
+      const cfg = await readLiveTestConfig();
       await ensureOpenClawModelsJson(cfg);
 
       const agentDir = resolveDefaultAgentDir(cfg);
       const authStorage = discoverAuthStorage(agentDir);
       const modelRegistry = discoverModels(authStorage, agentDir);
-      const model = modelRegistry.find(provider, modelId) as Model<Api> | null;
+      const model = modelRegistry.find(provider, modelId) as Model | null;
 
       if (!model) {
         logProgress(`[openai-reasoning-compat] model missing from registry: ${TARGET_MODEL_REF}`);
@@ -193,10 +174,13 @@ describeLive("openai reasoning compat live", () => {
 
       let apiKeyInfo;
       try {
-        apiKeyInfo = await getApiKeyForModel({
+        apiKeyInfo = await getApiKeyForModelCore({
           model,
           cfg,
-          credentialPrecedence: LIVE_CREDENTIAL_PRECEDENCE,
+          credentialPrecedence: resolveLiveCredentialPrecedence(
+            model.provider,
+            REQUIRE_PROFILE_KEYS,
+          ),
         });
       } catch (error) {
         logProgress(`[openai-reasoning-compat] skip (${String(error)})`);
@@ -250,7 +234,7 @@ describeLive("openai reasoning compat live", () => {
         provider: model.provider,
         modelId: model.id,
         sessionManager: SessionManager.inMemory(),
-        sessionId: "openai-codex-tool-replay-live",
+        sessionId: "openai-chatgpt-tool-replay-live",
       });
 
       expect(sanitized.map((message) => message.role)).toEqual([

@@ -1,3 +1,4 @@
+// Feishu plugin module implements comment target behavior.
 export const FEISHU_COMMENT_FILE_TYPES = ["doc", "docx", "file", "sheet", "slides"] as const;
 
 export type CommentFileType = (typeof FEISHU_COMMENT_FILE_TYPES)[number];

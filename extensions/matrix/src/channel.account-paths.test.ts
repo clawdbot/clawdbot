@@ -1,3 +1,5 @@
+// Matrix tests cover channel.account paths plugin behavior.
+import { PAIRING_APPROVED_MESSAGE } from "openclaw/plugin-sdk/channel-status";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createMatrixPairingText, createMatrixProbeAccount } from "./channel-account-paths.js";
 
@@ -68,7 +70,7 @@ describe("matrix account path propagation", () => {
 
     expect(sendMessageMatrixMock).toHaveBeenCalledWith(
       "user:@user:example.org",
-      expect.any(String),
+      PAIRING_APPROVED_MESSAGE,
       { cfg: {}, accountId: "poe" },
     );
   });

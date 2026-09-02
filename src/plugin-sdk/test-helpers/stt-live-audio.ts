@@ -1,3 +1,4 @@
+// STT live audio test helpers provide audio fixtures and expectations for speech plugins.
 import { expect } from "vitest";
 import type {
   RealtimeTranscriptionProviderConfig,
@@ -29,7 +30,9 @@ export async function waitForLiveExpectation(expectation: () => void, timeoutMs 
       return;
     } catch (error) {
       lastError = error;
-      await new Promise((resolve) => setTimeout(resolve, 100));
+      await new Promise((resolve) => {
+        setTimeout(resolve, 100);
+      });
     }
   }
   throw lastError;
@@ -68,6 +71,9 @@ export async function synthesizeElevenLabsLiveSpeech(params: {
       signal: controller.signal,
     });
     if (!response.ok) {
+      // Error payloads are not used by the live fixture. Cancel instead of buffering an
+      // untrusted or unbounded body so Undici can release the connection promptly.
+      await response.body?.cancel().catch(() => undefined);
       throw new Error(`ElevenLabs live TTS failed (${response.status})`);
     }
     return Buffer.from(await response.arrayBuffer());
@@ -86,7 +92,9 @@ export async function streamAudioForLiveTest(params: {
   const delayMs = params.delayMs ?? 5;
   for (let offset = 0; offset < params.audio.byteLength; offset += chunkSize) {
     params.sendAudio(params.audio.subarray(offset, offset + chunkSize));
-    await new Promise((resolve) => setTimeout(resolve, delayMs));
+    await new Promise((resolve) => {
+      setTimeout(resolve, delayMs);
+    });
   }
 }
 

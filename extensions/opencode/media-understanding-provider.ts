@@ -1,15 +1,13 @@
-import type { ProviderStreamOptions } from "@mariozechner/pi-ai";
+// Opencode provider module implements model/runtime integration.
+import type { ProviderStreamOptions } from "openclaw/plugin-sdk/llm";
 import {
   describeImageWithModelPayloadTransform,
   describeImagesWithModelPayloadTransform,
   type MediaUnderstandingProvider,
 } from "openclaw/plugin-sdk/media-understanding";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
-}
-
-export function stripOpencodeDisabledResponsesReasoningPayload(payload: unknown): void {
+function stripOpencodeDisabledResponsesReasoningPayload(payload: unknown): void {
   if (!isRecord(payload)) {
     return;
   }

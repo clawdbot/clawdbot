@@ -1,3 +1,4 @@
+// Browser tests cover agent.act.existing session navigation guard plugin behavior.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createExistingSessionAgentSharedModule,
@@ -6,13 +7,24 @@ import {
 import { createBrowserRouteApp, createBrowserRouteResponse } from "./test-helpers.js";
 
 const chromeMcpMocks = vi.hoisted(() => ({
+  ChromeMcpDocumentUnavailableError: class ChromeMcpDocumentUnavailableError extends Error {},
+  clickChromeMcpCoords: vi.fn(async () => {}),
   clickChromeMcpElement: vi.fn(async () => {}),
   dragChromeMcpElement: vi.fn(async () => {}),
-  evaluateChromeMcpScript: vi.fn(async () => "https://example.com"),
+  evaluateChromeMcpScript: vi.fn(async (_params: unknown) => "https://example.com"),
   fillChromeMcpElement: vi.fn(async () => {}),
   fillChromeMcpForm: vi.fn(async () => {}),
   hoverChromeMcpElement: vi.fn(async () => {}),
   pressChromeMcpKey: vi.fn(async () => {}),
+  withChromeMcpDocument: vi.fn(
+    async (_params: unknown, task: (document: { evaluate: (fn: string) => unknown }) => unknown) =>
+      await task({
+        evaluate: async (fn) =>
+          fn.includes("globalThis.location.href")
+            ? "https://example.com"
+            : { kind: "result", ready: true },
+      }),
+  ),
 }));
 
 const navigationGuardMocks = vi.hoisted(() => ({
@@ -24,6 +36,8 @@ const navigationGuardMocks = vi.hoisted(() => ({
 }));
 
 vi.mock("../chrome-mcp.js", () => ({
+  ChromeMcpDocumentUnavailableError: chromeMcpMocks.ChromeMcpDocumentUnavailableError,
+  clickChromeMcpCoords: chromeMcpMocks.clickChromeMcpCoords,
   clickChromeMcpElement: chromeMcpMocks.clickChromeMcpElement,
   closeChromeMcpTab: vi.fn(async () => {}),
   dragChromeMcpElement: chromeMcpMocks.dragChromeMcpElement,
@@ -33,6 +47,7 @@ vi.mock("../chrome-mcp.js", () => ({
   hoverChromeMcpElement: chromeMcpMocks.hoverChromeMcpElement,
   pressChromeMcpKey: chromeMcpMocks.pressChromeMcpKey,
   resizeChromeMcpPage: vi.fn(async () => {}),
+  withChromeMcpDocument: chromeMcpMocks.withChromeMcpDocument,
 }));
 
 vi.mock("../navigation-guard.js", () => navigationGuardMocks);
@@ -40,6 +55,14 @@ vi.mock("../navigation-guard.js", () => navigationGuardMocks);
 vi.mock("./agent.shared.js", () => createExistingSessionAgentSharedModule());
 
 const DEFAULT_SSRF_POLICY = { allowPrivateNetwork: false } as const;
+const GUARDED_TARGET_REFRESH_ACTIONS = [
+  { kind: "hover", ref: "btn-1" },
+  { kind: "scrollIntoView", ref: "btn-1" },
+  { kind: "drag", startRef: "item-1", endRef: "slot-1" },
+  { kind: "select", ref: "menu-1", values: ["alpha"] },
+  { kind: "fill", fields: [{ ref: "input-1", value: "Ada" }] },
+  { kind: "evaluate", fn: "() => document.title" },
+] as const;
 
 const { registerBrowserAgentActRoutes } = await import("./agent.act.js");
 const routeState = existingSessionRouteState;
@@ -51,6 +74,7 @@ function getActPostHandler(
   registerBrowserAgentActRoutes(app, {
     state: () => ({
       resolved: {
+        actionTimeoutMs: 60_000,
         evaluateEnabled: true,
         ssrfPolicy: ssrfPolicy ?? undefined,
       },
@@ -65,12 +89,32 @@ describe("existing-session interaction navigation guard", () => {
   beforeEach(() => {
     vi.useFakeTimers();
     for (const fn of Object.values(chromeMcpMocks)) {
-      fn.mockClear();
+      if ("mockClear" in fn) {
+        fn.mockClear();
+      }
     }
     for (const fn of Object.values(navigationGuardMocks)) {
       fn.mockClear();
     }
+    navigationGuardMocks.assertBrowserNavigationResultAllowed.mockImplementation(
+      async (_opts?: { url: string; ssrfPolicy?: unknown }) => {},
+    );
     chromeMcpMocks.evaluateChromeMcpScript.mockResolvedValue("https://example.com");
+    chromeMcpMocks.withChromeMcpDocument.mockImplementation(
+      async (
+        _params: unknown,
+        task: (document: { evaluate: (fn: string) => unknown }) => unknown,
+      ) =>
+        await task({
+          evaluate: async (fn) =>
+            fn.includes("globalThis.location.href")
+              ? "https://example.com"
+              : { kind: "result", ready: true },
+        }),
+    );
+    routeState.tab.url = "https://example.com";
+    routeState.profileCtx.closeTab.mockReset();
+    routeState.profileCtx.closeTab.mockResolvedValue(undefined);
     routeState.profileCtx.listTabs.mockReset();
     routeState.profileCtx.listTabs.mockResolvedValue([
       {
@@ -118,10 +162,9 @@ describe("existing-session interaction navigation guard", () => {
       urls.length,
     );
     for (const [index, url] of urls.entries()) {
-      expect(navigationGuardMocks.assertBrowserNavigationResultAllowed).toHaveBeenNthCalledWith(
-        index + 1,
-        expect.objectContaining({ url }),
-      );
+      expect(
+        navigationGuardMocks.assertBrowserNavigationResultAllowed.mock.calls[index]?.[0]?.url,
+      ).toBe(url);
     }
   }
 
@@ -140,7 +183,151 @@ describe("existing-session interaction navigation guard", () => {
     expect(chromeMcpMocks.pressChromeMcpKey).toHaveBeenCalledWith(
       expect.objectContaining({ key: "Enter" }),
     );
-    expectNavigationProbeUrls(Array.from({ length: 6 }, () => "https://example.com"));
+    expectNavigationProbeUrls(Array.from({ length: 8 }, () => "https://example.com"));
+  });
+
+  it("checks the bound document URL before evaluating a wait predicate", async () => {
+    const evaluate = vi
+      .fn()
+      .mockResolvedValueOnce("https://example.com")
+      .mockResolvedValueOnce({ kind: "result", ready: true });
+    chromeMcpMocks.withChromeMcpDocument.mockImplementationOnce(
+      async (_params, task) => await task({ evaluate }),
+    );
+
+    const response = await runAction({ kind: "wait", fn: "() => document.title === 'ready'" });
+
+    expect(response.statusCode).toBe(200);
+    expect(evaluate).toHaveBeenCalledTimes(2);
+    expect(navigationGuardMocks.assertBrowserNavigationResultAllowed.mock.calls[0]?.[0]?.url).toBe(
+      "https://example.com",
+    );
+    expect(String(evaluate.mock.calls[1]?.[0])).toContain("document.title === 'ready'");
+  });
+
+  it("preserves promise-returning predicates inside the bound document", async () => {
+    const evaluate = vi
+      .fn()
+      .mockResolvedValueOnce("https://example.com")
+      .mockResolvedValueOnce({ kind: "result", ready: true });
+    chromeMcpMocks.withChromeMcpDocument.mockImplementationOnce(
+      async (_params, task) => await task({ evaluate }),
+    );
+
+    const response = await runAction({ kind: "wait", fn: "() => Promise.resolve(true)" });
+
+    expect(response.statusCode).toBe(200);
+    const script = String(evaluate.mock.calls[1]?.[0]);
+    expect(script).toContain("Boolean(await");
+    expect(routeState.profileCtx.closeTab).not.toHaveBeenCalled();
+  });
+
+  it("does not run a wait predicate in a document rejected by navigation policy", async () => {
+    const evaluate = vi.fn().mockResolvedValue("http://169.254.169.254/latest/meta-data");
+    chromeMcpMocks.withChromeMcpDocument.mockImplementationOnce(
+      async (_params, task) => await task({ evaluate }),
+    );
+    navigationGuardMocks.assertBrowserNavigationResultAllowed
+      .mockResolvedValueOnce(undefined)
+      .mockRejectedValueOnce(new Error("blocked document"));
+
+    await expectActionToThrow({ kind: "wait", fn: "() => document.cookie" }, "blocked document");
+
+    expect(evaluate).toHaveBeenCalledOnce();
+    expect(String(evaluate.mock.calls[0]?.[0])).not.toContain("document.cookie");
+  });
+
+  it("rechecks a requested URL after a ready predicate mutates same-document history", async () => {
+    chromeMcpMocks.withChromeMcpDocument.mockImplementation(async (_params, task) => {
+      let urlReads = 0;
+      return await task({
+        evaluate: async (fn) => {
+          if (!fn.includes("globalThis.location.href")) {
+            return { kind: "result", ready: true };
+          }
+          urlReads += 1;
+          if (urlReads === 2) {
+            throw new Error("final URL rechecked");
+          }
+          return "https://example.com/ready";
+        },
+      });
+    });
+
+    await expectActionToThrow(
+      {
+        kind: "wait",
+        url: "https://example.com/ready",
+        fn: "() => { history.pushState({}, '', '/changed'); return true; }",
+      },
+      "final URL rechecked",
+    );
+  });
+
+  it.each(GUARDED_TARGET_REFRESH_ACTIONS)(
+    "does not adopt an unrelated target after guarded $kind interaction",
+    async (body) => {
+      routeState.profileCtx.listTabs
+        .mockResolvedValueOnce([routeState.tab])
+        .mockResolvedValue([{ targetId: "new-target", url: routeState.tab.url }]);
+
+      const response = await runAction(body);
+
+      expect(response.statusCode).toBe(200);
+      expect(response.body).toMatchObject({
+        ok: true,
+        targetId: routeState.tab.targetId,
+        url: routeState.tab.url,
+      });
+    },
+  );
+
+  it("threads one request budget through coordinate actions and navigation probes", async () => {
+    const handler = getActPostHandler();
+    const response = createBrowserRouteResponse();
+    const ctrl = new AbortController();
+    const pending = handler?.(
+      {
+        params: {},
+        query: {},
+        body: { kind: "clickCoords", x: 20, y: 30 },
+        signal: ctrl.signal,
+      },
+      response.res,
+    );
+
+    await vi.runAllTimersAsync();
+    await pending;
+
+    const expectedOptions = { signal: ctrl.signal, timeoutMs: 60_000 };
+    expect(chromeMcpMocks.clickChromeMcpCoords).toHaveBeenCalledWith(
+      expect.objectContaining(expectedOptions),
+    );
+    for (const [params] of chromeMcpMocks.evaluateChromeMcpScript.mock.calls) {
+      expect(params).toEqual(expect.objectContaining(expectedOptions));
+    }
+    expect(routeState.profileCtx.listTabs).toHaveBeenCalledWith(expectedOptions);
+  });
+
+  it("cancels a pending existing-session wait when its request aborts", async () => {
+    const handler = getActPostHandler(null);
+    const response = createBrowserRouteResponse();
+    const ctrl = new AbortController();
+    const pending = handler?.(
+      {
+        params: {},
+        query: {},
+        body: { kind: "wait", timeMs: 30_000 },
+        signal: ctrl.signal,
+      },
+      response.res,
+    );
+    void pending?.catch(() => {});
+
+    ctrl.abort(new Error("request cancelled after browser crash"));
+
+    await expect(pending).rejects.toThrow(/aborted|cancelled/i);
+    expect(chromeMcpMocks.evaluateChromeMcpScript).not.toHaveBeenCalled();
   });
 
   it("rechecks the page url after delayed navigation-triggering interactions", async () => {
@@ -156,9 +343,82 @@ describe("existing-session interaction navigation guard", () => {
     expect(chromeMcpMocks.evaluateChromeMcpScript).toHaveBeenCalledTimes(4);
     expectNavigationProbeUrls([
       "https://example.com",
+      "https://example.com",
       "http://169.254.169.254/latest/meta-data/",
       "http://169.254.169.254/latest/meta-data/",
     ]);
+  });
+
+  it("normalizes statement-body evaluate sources before Chrome MCP execution", async () => {
+    chromeMcpMocks.evaluateChromeMcpScript.mockResolvedValueOnce(42 as never);
+
+    const response = await runAction(
+      { kind: "evaluate", fn: "const value = 41; return value + 1;" },
+      null,
+    );
+
+    expect(response.statusCode).toBe(200);
+    expect(chromeMcpMocks.evaluateChromeMcpScript).toHaveBeenCalledOnce();
+    expect(chromeMcpMocks.evaluateChromeMcpScript).toHaveBeenCalledWith(
+      expect.objectContaining({
+        fn: "async () => {\nconst value = 41; return value + 1;\n}",
+      }),
+    );
+  });
+
+  it("forwards evaluate timeoutMs to Chrome MCP existing-session execution", async () => {
+    chromeMcpMocks.evaluateChromeMcpScript.mockResolvedValueOnce(42 as never);
+
+    const response = await runAction(
+      { kind: "evaluate", fn: "() => 1 + 1", timeoutMs: 60_000 },
+      null,
+    );
+
+    expect(response.statusCode).toBe(200);
+    expect(chromeMcpMocks.evaluateChromeMcpScript).toHaveBeenCalledOnce();
+    expect(chromeMcpMocks.evaluateChromeMcpScript).toHaveBeenCalledWith(
+      expect.objectContaining({
+        fn: "() => 1 + 1",
+        timeoutMs: 60_000,
+      }),
+    );
+  });
+
+  it("normalizes ref-scoped statement-body evaluate sources before Chrome MCP execution", async () => {
+    chromeMcpMocks.evaluateChromeMcpScript.mockResolvedValueOnce("Ada" as never);
+
+    const response = await runAction(
+      { kind: "evaluate", ref: "7", fn: "const text = el.textContent; return text;" },
+      null,
+    );
+
+    expect(response.statusCode).toBe(200);
+    expect(chromeMcpMocks.evaluateChromeMcpScript).toHaveBeenCalledOnce();
+    expect(chromeMcpMocks.evaluateChromeMcpScript).toHaveBeenCalledWith(
+      expect.objectContaining({
+        args: ["7"],
+        fn: "async (el) => {\nconst text = el.textContent; return text;\n}",
+      }),
+    );
+  });
+
+  it("blocks evaluate before execution when the current tab URL is disallowed", async () => {
+    routeState.tab.url = "http://169.254.169.254/latest/meta-data/";
+    navigationGuardMocks.assertBrowserNavigationResultAllowed.mockImplementation(
+      async (opts?: { url: string }) => {
+        const url = opts?.url ?? "";
+        if (url.includes("169.254.169.254")) {
+          throw new Error("blocked current tab");
+        }
+      },
+    );
+
+    await expectActionToThrow(
+      { kind: "evaluate", fn: "() => document.body.innerText" },
+      "blocked current tab",
+    );
+    expect(chromeMcpMocks.evaluateChromeMcpScript).not.toHaveBeenCalled();
+    expectNavigationProbeUrls(["http://169.254.169.254/latest/meta-data/"]);
   });
 
   it("checks URLs for tabs opened during the interaction window", async () => {
@@ -185,6 +445,7 @@ describe("existing-session interaction navigation guard", () => {
     expect(response.statusCode).toBe(200);
     expect(chromeMcpMocks.clickChromeMcpElement).toHaveBeenCalledOnce();
     expectNavigationProbeUrls([
+      "https://example.com",
       "https://example.com",
       "https://example.com",
       "https://example.com",
@@ -231,7 +492,7 @@ describe("existing-session interaction navigation guard", () => {
       .mockResolvedValueOnce("   " as never);
 
     await expectActionToReject({ kind: "evaluate", fn: "() => 1" });
-    expect(navigationGuardMocks.assertBrowserNavigationResultAllowed).not.toHaveBeenCalled();
+    expectNavigationProbeUrls(["https://example.com"]);
   });
 
   it("fails closed when a later post-action probe becomes unreadable", async () => {
@@ -243,7 +504,7 @@ describe("existing-session interaction navigation guard", () => {
       .mockResolvedValueOnce(undefined as never); // follow-up probe - still unreadable
 
     await expectActionToReject({ kind: "evaluate", fn: "() => 1" });
-    expectNavigationProbeUrls(["https://example.com"]);
+    expectNavigationProbeUrls(["https://example.com", "https://example.com"]);
   });
 
   it("confirms stability via follow-up probe when URL changes on the last loop iteration", async () => {
@@ -266,6 +527,7 @@ describe("existing-session interaction navigation guard", () => {
     expect(chromeMcpMocks.evaluateChromeMcpScript).toHaveBeenCalledTimes(5);
     expectNavigationProbeUrls([
       "https://example.com",
+      "https://example.com",
       "https://safe-redirect.com",
       "https://safe-redirect.com",
     ]);
@@ -284,6 +546,7 @@ describe("existing-session interaction navigation guard", () => {
     expect(response.statusCode).toBe(200);
     expect(chromeMcpMocks.evaluateChromeMcpScript).toHaveBeenCalledTimes(5);
     expectNavigationProbeUrls([
+      "https://example.com",
       "https://example.com",
       "https://example.com",
       "https://safe-redirect.com",
@@ -313,7 +576,11 @@ describe("existing-session interaction navigation guard", () => {
       .mockRejectedValueOnce(new Error("context destroyed") as never); // follow-up → still errored
 
     await expectActionToReject({ kind: "evaluate", fn: "() => 1" });
-    expectNavigationProbeUrls(["https://example.com", "https://example.com"]);
+    expectNavigationProbeUrls([
+      "https://example.com",
+      "https://example.com",
+      "https://example.com",
+    ]);
   });
 
   it("skips the guard when no SSRF policy is configured", async () => {
@@ -324,6 +591,15 @@ describe("existing-session interaction navigation guard", () => {
     expect(chromeMcpMocks.evaluateChromeMcpScript).not.toHaveBeenCalled();
     expect(routeState.profileCtx.listTabs).not.toHaveBeenCalled();
     expect(navigationGuardMocks.assertBrowserNavigationResultAllowed).not.toHaveBeenCalled();
+  });
+
+  it("normalizes keyboard aliases before existing-session Chrome MCP dispatch", async () => {
+    const response = await runAction({ kind: "press", key: "Ctrl+Shift+Esc" }, null);
+
+    expect(response.statusCode).toBe(200);
+    expect(chromeMcpMocks.pressChromeMcpKey).toHaveBeenCalledWith(
+      expect.objectContaining({ key: "Control+Shift+Escape" }),
+    );
   });
 
   it("still probes navigation when the interaction command throws", async () => {

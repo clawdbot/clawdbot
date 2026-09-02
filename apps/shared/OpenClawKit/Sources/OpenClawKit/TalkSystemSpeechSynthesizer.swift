@@ -16,10 +16,6 @@ public final class TalkSystemSpeechSynthesizer: NSObject {
     private var currentToken = UUID()
     private var watchdog: Task<Void, Never>?
 
-    public var isSpeaking: Bool {
-        self.synth.isSpeaking
-    }
-
     override private init() {
         super.init()
         self.synth.delegate = self
@@ -78,6 +74,9 @@ public final class TalkSystemSpeechSynthesizer: NSObject {
             }
         }, onCancel: {
             Task { @MainActor in
+                // A replacement may start before this actor hop runs. Cancellation
+                // must stop only the utterance owned by the canceled call.
+                guard self.currentToken == token else { return }
                 self.stop()
             }
         })

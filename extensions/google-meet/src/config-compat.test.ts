@@ -1,10 +1,7 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+// Google Meet tests cover config compat plugin behavior.
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { describe, expect, it } from "vitest";
-import {
-  legacyConfigRules,
-  migrateGoogleMeetLegacyRealtimeProvider,
-  normalizeCompatibilityConfig,
-} from "./config-compat.js";
+import { legacyConfigRules, normalizeCompatibilityConfig } from "./config-compat.js";
 
 describe("google-meet config compatibility", () => {
   it("detects legacy Google realtime provider config", () => {
@@ -39,14 +36,14 @@ describe("google-meet config compatibility", () => {
       },
     } as OpenClawConfig;
 
-    const migration = migrateGoogleMeetLegacyRealtimeProvider(config);
+    const migration = normalizeCompatibilityConfig({ cfg: config });
 
-    expect(migration?.changes).toEqual([
+    expect(migration.changes).toEqual([
       'Moved Google Meet legacy realtime.provider="google" intent to realtime.voiceProvider="google" and realtime.transcriptionProvider="openai".',
     ]);
     expect(
       (
-        migration?.config.plugins?.entries?.["google-meet"] as {
+        migration.config.plugins!.entries!["google-meet"] as {
           config?: { realtime?: Record<string, unknown> };
         }
       ).config?.realtime,
@@ -82,10 +79,10 @@ describe("google-meet config compatibility", () => {
 
     const migration = normalizeCompatibilityConfig({ cfg: config });
 
-    expect(migration.changes).toEqual([]);
+    expect(migration.changes).toStrictEqual([]);
     expect(
       (
-        migration.config.plugins?.entries?.["google-meet"] as {
+        migration.config.plugins!.entries!["google-meet"] as {
           config?: { realtime?: Record<string, unknown> };
         }
       ).config?.realtime,

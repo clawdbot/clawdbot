@@ -1,3 +1,4 @@
+// TTS capability tests cover channel plugin text-to-speech capability detection.
 import { afterEach, describe, expect, it } from "vitest";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
@@ -38,6 +39,7 @@ describe("resolveChannelTtsVoiceDelivery", () => {
               voice: {
                 synthesisTarget: "audio-file",
                 audioFileFormats: ["mp3", "caf", "audio/mpeg", "audio/x-caf"],
+                preferAudioFileFormat: "caf",
               },
             },
           }),
@@ -71,7 +73,7 @@ describe("resolveChannelTtsVoiceDelivery", () => {
           pluginId: "telegram",
           plugin: createChannelPlugin("telegram", {
             chatTypes: ["direct"],
-            tts: { voice: { synthesisTarget: "voice-note" } },
+            tts: { voice: { synthesisTarget: "voice-note", captionedFinalText: true } },
           }),
           source: "test",
         },
@@ -88,6 +90,7 @@ describe("resolveChannelTtsVoiceDelivery", () => {
     expect(resolveChannelTtsVoiceDelivery("imessage")).toEqual({
       synthesisTarget: "audio-file",
       audioFileFormats: ["mp3", "caf", "audio/mpeg", "audio/x-caf"],
+      preferAudioFileFormat: "caf",
     });
     expect(resolveChannelTtsVoiceDelivery("discord")).toEqual({
       synthesisTarget: "voice-note",
@@ -101,6 +104,7 @@ describe("resolveChannelTtsVoiceDelivery", () => {
     });
     expect(resolveChannelTtsVoiceDelivery("telegram")).toEqual({
       synthesisTarget: "voice-note",
+      captionedFinalText: true,
     });
     expect(resolveChannelTtsVoiceDelivery("whatsapp")).toEqual({
       synthesisTarget: "voice-note",

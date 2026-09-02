@@ -1,8 +1,9 @@
+// Zalouser plugin module implements send receipt behavior.
 import {
   createMessageReceiptFromOutboundResults,
   type MessageReceipt,
   type MessageReceiptPartKind,
-} from "openclaw/plugin-sdk/channel-message";
+} from "openclaw/plugin-sdk/channel-outbound";
 
 export function createZalouserSendReceipt(params: {
   messageId?: string;

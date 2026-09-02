@@ -1,3 +1,7 @@
+/**
+ * Bundled provider plugin entry for Cloudflare AI Gateway setup, catalog
+ * discovery, failover classification, and stream wrapping.
+ */
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import {
   applyAuthProfileConfig,
@@ -7,10 +11,10 @@ import {
   listProfilesForProvider,
   normalizeApiKeyInput,
   normalizeOptionalSecretInput,
-  upsertAuthProfile,
   validateApiKeyInput,
 } from "openclaw/plugin-sdk/provider-auth";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
+import { upsertAuthProfileWithLockOrThrow } from "openclaw/plugin-sdk/provider-auth-api-key";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { buildCloudflareAiGatewayCatalogProvider } from "./catalog-provider.js";
 import { CLOUDFLARE_AI_GATEWAY_DEFAULT_MODEL_REF } from "./models.js";
 import { applyCloudflareAiGatewayConfig, buildCloudflareAiGatewayConfigPatch } from "./onboard.js";
@@ -19,9 +23,8 @@ import { wrapCloudflareAiGatewayProviderStream } from "./stream-wrappers.js";
 const PROVIDER_ID = "cloudflare-ai-gateway";
 const PROVIDER_ENV_VAR = "CLOUDFLARE_AI_GATEWAY_API_KEY";
 const PROFILE_ID = "cloudflare-ai-gateway:default";
-
 function readRequiredTextInput(value: unknown): string {
-  return typeof value === "string" ? value.trim() : "";
+  return normalizeOptionalString(value) ?? "";
 }
 
 async function resolveCloudflareGatewayMetadataInteractive(ctx: {
@@ -86,6 +89,8 @@ export default definePluginEntry({
             let capturedSecretInput: Parameters<typeof buildApiKeyCredential>[1] = "";
             let capturedCredential = false;
             let capturedMode: "plaintext" | "ref" | undefined;
+            // Capture through the shared provider auth helper so plaintext,
+            // env refs, and secret refs keep the same validation path.
             await ensureApiKeyFromOptionEnvOrPrompt({
               token: normalizeOptionalSecretInput(ctx.opts?.cloudflareAiGatewayApiKey),
               tokenProvider: "cloudflare-ai-gateway",
@@ -94,6 +99,7 @@ export default definePluginEntry({
                   ? (ctx.secretInputMode ?? "plaintext")
                   : ctx.secretInputMode,
               config: ctx.config,
+              workspaceDir: ctx.workspaceDir,
               expectedProviders: [PROVIDER_ID],
               provider: PROVIDER_ID,
               envLabel: PROVIDER_ENV_VAR,
@@ -168,6 +174,8 @@ export default definePluginEntry({
               return null;
             }
             if (resolved.source !== "profile") {
+              // Persist newly supplied credentials with Gateway metadata; a
+              // profile-sourced key already owns its existing auth-store record.
               const credential = ctx.toApiKeyCredential({
                 provider: PROVIDER_ID,
                 resolved,
@@ -176,7 +184,7 @@ export default definePluginEntry({
               if (!credential) {
                 return null;
               }
-              upsertAuthProfile({
+              await upsertAuthProfileWithLockOrThrow({
                 profileId: PROFILE_ID,
                 credential,
                 agentDir: ctx.agentDir,

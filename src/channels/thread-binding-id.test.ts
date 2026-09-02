@@ -1,3 +1,4 @@
+// Thread binding id tests cover stable identifiers for channel thread bindings.
 import { describe, expect, it } from "vitest";
 import { resolveThreadBindingConversationIdFromBindingId } from "./thread-binding-id.js";
 

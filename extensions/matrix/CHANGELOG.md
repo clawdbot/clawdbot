@@ -1,5 +1,152 @@
 # Changelog
 
+## 2026.8.1
+
+### Changes
+- Version alignment with core OpenClaw release numbers.
+
+## 2026.7.2
+
+### Changes
+
+- Version alignment with core OpenClaw release numbers.
+
+## 2026.6.11
+
+### Changes
+
+- Version alignment with core OpenClaw release numbers.
+
+## 2026.6.10
+
+### Changes
+
+- Version alignment with core OpenClaw release numbers.
+
+## 2026.6.9
+
+### Changes
+
+- Version alignment with core OpenClaw release numbers.
+
+## 2026.6.8
+
+### Changes
+
+- Version alignment with core OpenClaw release numbers.
+
+## 2026.6.3
+
+### Changes
+
+- Version alignment with core OpenClaw release numbers.
+
+## 2026.6.2
+
+### Changes
+
+- Version alignment with core OpenClaw release numbers.
+
+## 2026.6.1
+
+### Changes
+
+- Version alignment with core OpenClaw release numbers.
+
+## 2026.5.31
+
+### Changes
+
+- Version alignment with core OpenClaw release numbers.
+
+## 2026.5.28
+
+### Changes
+
+- Version alignment with core OpenClaw release numbers.
+
+## 2026.5.27
+
+### Changes
+
+- Version alignment with core OpenClaw release numbers.
+
+## 2026.5.26
+
+### Changes
+
+- Version alignment with core OpenClaw release numbers.
+
+## 2026.5.24
+
+### Changes
+
+- Version alignment with core OpenClaw release numbers.
+
+## 2026.5.22
+
+### Changes
+
+- Version alignment with core OpenClaw release numbers.
+
+## 2026.5.21
+
+### Changes
+
+- Version alignment with core OpenClaw release numbers.
+
+## 2026.5.20
+
+### Changes
+
+- Version alignment with core OpenClaw release numbers.
+
+## 2026.5.19
+
+### Changes
+
+- Version alignment with core OpenClaw release numbers.
+
+## 2026.5.17
+
+### Changes
+
+- Version alignment with core OpenClaw release numbers.
+
+### Fixes
+
+- Matrix/E2EE: stop requesting MSC4222 `state_after` sync responses so homeservers with incomplete state-after data do not leave fresh encrypted rooms without outbound room encryptors. Fixes #82515. Thanks @nickdecooman.
+
+## 2026.5.16
+
+### Changes
+
+- Version alignment with core OpenClaw release numbers.
+
+## 2026.5.14
+
+### Changes
+
+- Version alignment with core OpenClaw release numbers.
+
+## 2026.5.12
+
+### Changes
+
+- Version alignment with core OpenClaw release numbers.
+
+## 2026.5.10
+
+### Changes
+
+- Version alignment with core OpenClaw release numbers.
+
+## 2026.5.8
+
+### Changes
+
+- Version alignment with core OpenClaw release numbers.
+
 ## 2026.5.6
 
 ### Changes
@@ -117,7 +264,7 @@ collapsed here.
 
 ### Fixes
 
-- Bundled channels/setup: load shared secret contracts through packaged top-level sidecars across BlueBubbles, Feishu, Google Chat, IRC, Matrix, Mattermost, Microsoft Teams, Nextcloud Talk, Slack, and Zalo so installed npm builds no longer rely on missing `dist/extensions/*/src/*` files during gateway startup.
+- Bundled channels/setup: load shared secret contracts through packaged top-level sidecars across Feishu, Google Chat, IRC, Matrix, Mattermost, Microsoft Teams, Nextcloud Talk, Slack, and Zalo so installed npm builds no longer rely on missing `dist/extensions/*/src/*` files during gateway startup.
 
 ## 2026.4.7
 

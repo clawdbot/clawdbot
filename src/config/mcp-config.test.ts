@@ -1,23 +1,23 @@
+// Covers MCP config normalization, validation, and serialization.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { withTempHome } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it, vi } from "vitest";
-import {
-  listConfiguredMcpServers,
-  setConfiguredMcpServer,
-  unsetConfiguredMcpServer,
-} from "./mcp-config.js";
+import { listConfiguredMcpServers, mcpConfigInternal } from "./mcp-config.js";
+import { REDACTED_SENTINEL } from "./redact-snapshot.js";
+
+const { set: setConfiguredMcpServer, unset: unsetConfiguredMcpServer } = mcpConfigInternal;
 
 function validationOk(raw: unknown) {
   return { ok: true as const, config: raw, warnings: [] };
 }
 
 const mockReadSourceConfigSnapshot = vi.hoisted(() => async () => {
-  const fs = await import("node:fs/promises");
-  const path = await import("node:path");
-  const configPath = path.join(process.env.OPENCLAW_STATE_DIR ?? "", "openclaw.json");
+  const fsValue = await import("node:fs/promises");
+  const pathValue = await import("node:path");
+  const configPath = pathValue.join(process.env.OPENCLAW_STATE_DIR ?? "", "openclaw.json");
   try {
-    const raw = await fs.readFile(configPath, "utf-8");
+    const raw = await fsValue.readFile(configPath, "utf-8");
     const parsed = JSON.parse(raw);
     return {
       valid: true,
@@ -35,10 +35,10 @@ const mockReadSourceConfigSnapshot = vi.hoisted(() => async () => {
 });
 
 const mockReplaceConfigFile = vi.hoisted(() => async ({ nextConfig }: { nextConfig: unknown }) => {
-  const fs = await import("node:fs/promises");
-  const path = await import("node:path");
-  const configPath = path.join(process.env.OPENCLAW_STATE_DIR ?? "", "openclaw.json");
-  await fs.writeFile(configPath, JSON.stringify(nextConfig, null, 2), "utf-8");
+  const fsLocal = await import("node:fs/promises");
+  const pathLocal = await import("node:path");
+  const configPath = pathLocal.join(process.env.OPENCLAW_STATE_DIR ?? "", "openclaw.json");
+  await fsLocal.writeFile(configPath, JSON.stringify(nextConfig, null, 2), "utf-8");
 });
 
 vi.mock("./io.js", () => ({
@@ -107,8 +107,77 @@ describe("config mcp config", () => {
       if (!reloaded.ok) {
         throw new Error("expected MCP config to reload");
       }
-      expect(reloaded.mcpServers).toEqual({});
+      expect(reloaded.mcpServers).toStrictEqual({});
     });
+  });
+
+  it("does not overwrite an existing server in create-only mode", async () => {
+    await withMcpConfigHome(
+      { mcp: { servers: { docs: { command: "node", args: ["existing.mjs"] } } } },
+      async () => {
+        const result = await setConfiguredMcpServer({
+          name: "docs",
+          server: { command: "uvx", args: ["docs-mcp"] },
+          createOnly: true,
+        });
+
+        expect(result).toMatchObject({
+          ok: false,
+          error: expect.stringContaining("already exists"),
+        });
+        const loaded = await listConfiguredMcpServers();
+        expect(loaded.ok && loaded.mcpServers.docs).toEqual({
+          command: "node",
+          args: ["existing.mjs"],
+        });
+      },
+    );
+  });
+
+  it("only replaces a server that still matches the expected config", async () => {
+    await withMcpConfigHome(
+      { mcp: { servers: { docs: { command: "node", args: ["current.mjs"] } } } },
+      async () => {
+        const stale = await setConfiguredMcpServer({
+          name: "docs",
+          server: { command: "uvx", args: ["docs@2"] },
+          expectedServer: { command: "node", args: ["stale.mjs"] },
+        });
+        expect(stale).toMatchObject({ ok: false, error: expect.stringContaining("changed") });
+
+        const replaced = await setConfiguredMcpServer({
+          name: "docs",
+          server: { command: "uvx", args: ["docs@2"] },
+          expectedServer: { command: "node", args: ["current.mjs"] },
+        });
+        expect(replaced.ok).toBe(true);
+
+        const loaded = await listConfiguredMcpServers();
+        expect(loaded.ok && loaded.mcpServers.docs).toEqual({
+          command: "uvx",
+          args: ["docs@2"],
+        });
+      },
+    );
+  });
+
+  it("does not remove a server that changed after ownership inspection", async () => {
+    await withMcpConfigHome(
+      { mcp: { servers: { docs: { command: "node", args: ["changed.mjs"] } } } },
+      async () => {
+        const result = await unsetConfiguredMcpServer({
+          name: "docs",
+          expectedServer: { command: "uvx", args: ["docs-mcp"] },
+        });
+
+        expect(result).toMatchObject({ ok: false, error: expect.stringContaining("changed") });
+        const loaded = await listConfiguredMcpServers();
+        expect(loaded.ok && loaded.mcpServers.docs).toEqual({
+          command: "node",
+          args: ["changed.mjs"],
+        });
+      },
+    );
   });
 
   it("fails closed when the config file is invalid", async () => {
@@ -155,6 +224,159 @@ describe("config mcp config", () => {
     });
   });
 
+  it("restores redacted MCP secrets on set instead of writing the sentinel", async () => {
+    await withMcpConfigHome(
+      {
+        mcp: {
+          servers: {
+            billing: {
+              command: "uvx",
+              args: [
+                "billing-mcp",
+                "--api-key",
+                "real-argv-key",
+                "--token=real-inline-token",
+                "ghp_realgithubtoken1234567890ABCD",
+                "--region",
+                "us-east-1",
+              ],
+              headers: {
+                Authorization: "Bearer real-token",
+              },
+              env: {
+                BILLING_TOKEN: "real-env-secret",
+              },
+            },
+          },
+        },
+      },
+      async () => {
+        const setResult = await setConfiguredMcpServer({
+          name: "billing",
+          server: {
+            command: "uvx",
+            args: [
+              "billing-mcp",
+              "--api-key",
+              REDACTED_SENTINEL,
+              `--token=${REDACTED_SENTINEL}`,
+              REDACTED_SENTINEL,
+              "--region",
+              "us-east-1",
+            ],
+            headers: {
+              Authorization: REDACTED_SENTINEL,
+            },
+            env: {
+              BILLING_TOKEN: REDACTED_SENTINEL,
+            },
+          },
+        });
+
+        expect(setResult.ok).toBe(true);
+        const loaded = await listConfiguredMcpServers();
+        expect(loaded.ok).toBe(true);
+        if (!loaded.ok) {
+          throw new Error("expected MCP config to load");
+        }
+        expect(loaded.mcpServers.billing).toEqual({
+          command: "uvx",
+          args: [
+            "billing-mcp",
+            "--api-key",
+            "real-argv-key",
+            "--token=real-inline-token",
+            "ghp_realgithubtoken1234567890ABCD",
+            "--region",
+            "us-east-1",
+          ],
+          headers: {
+            Authorization: "Bearer real-token",
+          },
+          env: {
+            BILLING_TOKEN: "real-env-secret",
+          },
+        });
+      },
+    );
+  });
+
+  it("rejects redacted MCP argv when its flag binding or shape changed", async () => {
+    await withMcpConfigHome(
+      {
+        mcp: {
+          servers: {
+            billing: {
+              command: "uvx",
+              args: ["billing-mcp", "--api-key", "real-argv-key"],
+            },
+          },
+        },
+      },
+      async () => {
+        const changedFlag = await setConfiguredMcpServer({
+          name: "billing",
+          server: {
+            command: "uvx",
+            args: ["billing-mcp", "--output", REDACTED_SENTINEL],
+          },
+        });
+        expect(changedFlag.ok).toBe(false);
+        if (changedFlag.ok) {
+          throw new Error("expected changed argv binding to fail");
+        }
+        expect(changedFlag.error).toContain(REDACTED_SENTINEL);
+
+        const changedNonSecretArg = await setConfiguredMcpServer({
+          name: "billing",
+          server: {
+            command: "uvx",
+            args: ["other-mcp", "--api-key", REDACTED_SENTINEL],
+          },
+        });
+        expect(changedNonSecretArg.ok).toBe(false);
+        if (changedNonSecretArg.ok) {
+          throw new Error("expected argv edit with a redacted value to fail");
+        }
+        expect(changedNonSecretArg.error).toContain("Replace every redacted value explicitly");
+
+        const changedShape = await setConfiguredMcpServer({
+          name: "billing",
+          server: {
+            command: "uvx",
+            args: ["--api-key", REDACTED_SENTINEL],
+          },
+        });
+        expect(changedShape.ok).toBe(false);
+        if (changedShape.ok) {
+          throw new Error("expected changed argv shape to fail");
+        }
+        expect(changedShape.error).toContain(REDACTED_SENTINEL);
+      },
+    );
+  });
+
+  it("rejects unrestorable redacted MCP secrets on set for a new server", async () => {
+    await withMcpConfigHome({}, async () => {
+      const setResult = await setConfiguredMcpServer({
+        name: "new-server",
+        server: {
+          command: "uvx",
+          args: ["new-mcp", "--api-key", REDACTED_SENTINEL],
+          headers: {
+            Authorization: REDACTED_SENTINEL,
+          },
+        },
+      });
+
+      expect(setResult.ok).toBe(false);
+      if (setResult.ok) {
+        throw new Error("expected redacted set to fail");
+      }
+      expect(setResult.error).toContain(REDACTED_SENTINEL);
+    });
+  });
+
   it("canonicalizes CLI-native HTTP type aliases when saving MCP config", async () => {
     await withMcpConfigHome({}, async () => {
       const setResult = await setConfiguredMcpServer({
@@ -174,6 +396,37 @@ describe("config mcp config", () => {
       expect(loaded.mcpServers.remote).toEqual({
         url: "https://example.com/mcp",
         transport: "streamable-http",
+      });
+    });
+  });
+
+  it("keeps canonical MCP operator settings when saving config", async () => {
+    await withMcpConfigHome({}, async () => {
+      const setResult = await setConfiguredMcpServer({
+        name: "remote",
+        server: {
+          url: "https://example.com/mcp",
+          connectionTimeoutMs: 5,
+          supportsParallelToolCalls: true,
+          sslVerify: false,
+          clientCert: "/tmp/client.crt",
+          clientKey: "/tmp/client.key",
+        },
+      });
+
+      expect(setResult.ok).toBe(true);
+      const loaded = await listConfiguredMcpServers();
+      expect(loaded.ok).toBe(true);
+      if (!loaded.ok) {
+        throw new Error("expected MCP config to load");
+      }
+      expect(loaded.mcpServers.remote).toEqual({
+        url: "https://example.com/mcp",
+        connectionTimeoutMs: 5,
+        supportsParallelToolCalls: true,
+        sslVerify: false,
+        clientCert: "/tmp/client.crt",
+        clientKey: "/tmp/client.key",
       });
     });
   });

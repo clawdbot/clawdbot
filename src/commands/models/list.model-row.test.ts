@@ -1,3 +1,4 @@
+// Model row tests cover per-model row normalization and capability labels.
 import { describe, expect, it } from "vitest";
 import { toModelRow } from "./list.model-row.js";
 
@@ -23,12 +24,11 @@ describe("toModelRow", () => {
       } as never,
       key: "openrouter/openai/gpt-5.4",
       tags: [],
+      authAvailability: false,
     });
 
-    expect(row).toMatchObject({
-      contextWindow: 400_000,
-      contextTokens: 272_000,
-    });
+    expect(row.contextWindow).toBe(400_000);
+    expect(row.contextTokens).toBe(272_000);
   });
 
   it("marks models available from auth profiles without loading model discovery", () => {
@@ -36,9 +36,58 @@ describe("toModelRow", () => {
       model: OPENROUTER_MODEL as never,
       key: "openrouter/openai/gpt-5.4",
       tags: [],
-      hasAuthForProvider: (provider) => provider === "openrouter",
+      authAvailability: true,
     });
 
+    expect(row.available).toBe(true);
+  });
+
+  it("keeps authoritative route auth unknown despite provider-level registry auth", () => {
+    const row = toModelRow({
+      model: OPENROUTER_MODEL as never,
+      key: "openai/gpt-5.5",
+      tags: [],
+      availableKeys: new Set(["openai/gpt-5.5"]),
+      authAvailability: undefined,
+      authAvailabilityAuthoritative: true,
+    });
+
+    expect(row.available).toBeNull();
+  });
+
+  it("marks bracketed IPv6 loopback base URLs as local", () => {
+    for (const baseUrl of ["http://[::1]:11434/v1", "http://[::]:11434/v1"]) {
+      const row = toModelRow({
+        model: {
+          ...OPENROUTER_MODEL,
+          provider: "ollama",
+          baseUrl,
+        } as never,
+        key: "ollama/llama3.2",
+        tags: [],
+        authAvailability: undefined,
+      });
+
+      expect(row.local).toBe(true);
+    }
+  });
+
+  it("keeps local provider rows available when registry availability omits the model key", () => {
+    const row = toModelRow({
+      model: {
+        ...OPENROUTER_MODEL,
+        provider: "ollama",
+        id: "qwen3.6:35b-a3b",
+        name: "qwen3.6:35b-a3b",
+        baseUrl: "http://127.0.0.1:11434",
+      } as never,
+      key: "ollama/qwen3.6:35b-a3b",
+      tags: [],
+      availableKeys: new Set(["ollama/llama3.2"]),
+      authAvailability: undefined,
+    });
+
+    expect(row.local).toBe(true);
     expect(row.available).toBe(true);
   });
 });

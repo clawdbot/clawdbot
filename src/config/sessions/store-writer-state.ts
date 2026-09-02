@@ -1,49 +1,34 @@
-import { clearSessionStoreCaches } from "./store-cache.js";
+// Shared session-store writer queue state and test-only drains.
+import {
+  clearStoreWriterQueuesForTest,
+  drainStoreWriterQueuesForTest,
+  type StoreWriterQueue,
+} from "../../shared/store-writer-queue.js";
+import { clearSessionSkillPromptRefCache } from "./skill-prompt-blobs.js";
 
-export type SessionStoreWriterTask = {
-  fn: () => Promise<unknown>;
-  resolve: (value: unknown) => void;
-  reject: (reason: unknown) => void;
-};
-
-export type SessionStoreWriterQueue = {
-  running: boolean;
-  pending: SessionStoreWriterTask[];
-  drainPromise: Promise<void> | null;
-};
+type SessionStoreWriterQueue = StoreWriterQueue;
 
 export const WRITER_QUEUES = new Map<string, SessionStoreWriterQueue>();
+// State-dir teardown drains this owner before closing SQLite handles. Keeping
+// the queue here prevents late session writes from recreating removed fixtures.
+export const SQLITE_SESSION_WRITER_QUEUES = new Map<string, SessionStoreWriterQueue>();
 
+/** Clears session writer queues and prompt-blob caches for tests. */
 export function clearSessionStoreCacheForTest(): void {
-  clearSessionStoreCaches();
-  for (const queue of WRITER_QUEUES.values()) {
-    for (const task of queue.pending) {
-      task.reject(new Error("session store queue cleared for test"));
-    }
-  }
-  WRITER_QUEUES.clear();
+  clearSessionSkillPromptRefCache();
+  clearStoreWriterQueuesForTest(WRITER_QUEUES, "session store queue cleared for test");
+  clearStoreWriterQueuesForTest(
+    SQLITE_SESSION_WRITER_QUEUES,
+    "SQLite session store queue cleared for test",
+  );
 }
 
 export async function drainSessionStoreWriterQueuesForTest(): Promise<void> {
-  while (WRITER_QUEUES.size > 0) {
-    const queues = [...WRITER_QUEUES.values()];
-    for (const queue of queues) {
-      for (const task of queue.pending) {
-        task.reject(new Error("session store queue cleared for test"));
-      }
-      queue.pending.length = 0;
-    }
-    const activeDrains = queues.flatMap((queue) =>
-      queue.drainPromise ? [queue.drainPromise] : [],
-    );
-    if (activeDrains.length === 0) {
-      WRITER_QUEUES.clear();
-      return;
-    }
-    await Promise.allSettled(activeDrains);
-  }
-}
-
-export function getSessionStoreWriterQueueSizeForTest(): number {
-  return WRITER_QUEUES.size;
+  await Promise.all([
+    drainStoreWriterQueuesForTest(WRITER_QUEUES, "session store queue cleared for test"),
+    drainStoreWriterQueuesForTest(
+      SQLITE_SESSION_WRITER_QUEUES,
+      "SQLite session store queue cleared for test",
+    ),
+  ]);
 }

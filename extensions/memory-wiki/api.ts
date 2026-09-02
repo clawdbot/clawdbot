@@ -1,3 +1,4 @@
+// Memory Wiki API module exposes the plugin public contract.
 export {
   buildPluginConfigSchema,
   definePluginEntry,
@@ -6,4 +7,4 @@ export {
   type OpenClawPluginApi,
   type OpenClawPluginConfigSchema,
 } from "openclaw/plugin-sdk/plugin-entry";
-export { z } from "openclaw/plugin-sdk/zod";
+export { z } from "zod";

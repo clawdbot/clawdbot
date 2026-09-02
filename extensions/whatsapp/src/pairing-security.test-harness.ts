@@ -1,3 +1,4 @@
+// Whatsapp plugin module implements pairing security harness behavior.
 import { vi, type Mock } from "vitest";
 
 export type AsyncMock<TArgs extends unknown[] = unknown[], TResult = unknown> = {

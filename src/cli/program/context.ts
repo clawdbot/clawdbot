@@ -1,6 +1,8 @@
+// Root program context: version plus lazily computed channel option strings for help text.
 import { VERSION } from "../../version.js";
 import { resolveCliChannelOptions } from "../channel-options.js";
 
+/** Root CLI program context consumed by command registration and help rendering. */
 export type ProgramContext = {
   programVersion: string;
   channelOptions: string[];
@@ -8,6 +10,7 @@ export type ProgramContext = {
   agentChannelOptions: string;
 };
 
+/** Create a program context that resolves channel options once on first use. */
 export function createProgramContext(): ProgramContext {
   let cachedChannelOptions: string[] | undefined;
   const getChannelOptions = (): string[] => {

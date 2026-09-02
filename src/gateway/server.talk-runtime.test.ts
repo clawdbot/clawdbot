@@ -1,4 +1,8 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+/**
+ * Tests gateway talk runtime wiring for speech provider execution.
+ */
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { CODE_HEAVY_SPOKEN_FALLBACK } from "../tts/speech-text.js";
 import {
   invokeTalkSpeakDirect,
   type TalkSpeakTestPayload,
@@ -19,6 +23,8 @@ const synthesizeSpeechMock = vi.hoisted(() =>
 vi.mock("../tts/tts.js", () => ({
   synthesizeSpeech: synthesizeSpeechMock,
 }));
+
+vi.mock("../tts/tts-synthesis.js", () => ({ synthesizeTalkSpeech: synthesizeSpeechMock }));
 
 type SpeechProvider = Parameters<typeof withSpeechProviders>[0][number]["provider"];
 
@@ -85,7 +91,21 @@ async function withAcmeSpeechProvider(
   );
 }
 
+function expectSingleSynthesizeSpeechCall() {
+  expect(synthesizeSpeechMock).toHaveBeenCalledTimes(1);
+  const params = synthesizeSpeechMock.mock.calls.at(0)?.[0];
+  if (params === undefined) {
+    throw new Error("expected synthesizeSpeech call params");
+  }
+  return params;
+}
+
 describe("gateway talk runtime", () => {
+  beforeAll(async () => {
+    await import("./server-methods/talk.js");
+    await import("../config/config.js");
+  });
+
   beforeEach(() => {
     synthesizeSpeechMock.mockReset();
     synthesizeSpeechMock.mockResolvedValue({
@@ -125,26 +145,21 @@ describe("gateway talk runtime", () => {
           text: "Hello from talk mode.",
         });
         expect(res?.ok, JSON.stringify(res?.error)).toBe(true);
-        expect(synthesizeSpeechMock).toHaveBeenCalledWith(
-          expect.objectContaining({
-            text: "Hello from talk mode.",
-            overrides: { provider: "acme" },
-            disableFallback: true,
-            cfg: expect.objectContaining({
-              messages: expect.objectContaining({
-                tts: expect.objectContaining({
-                  provider: "acme",
-                  providers: expect.objectContaining({
-                    acme: expect.objectContaining({
-                      resolvedBy: "acme-test-provider",
-                      voiceId: "plugin-voice",
-                    }),
-                  }),
-                }),
-              }),
-            }),
-          }),
-        );
+        const synthesizeParams = expectSingleSynthesizeSpeechCall();
+        expect(synthesizeParams.text).toBe("Hello from talk mode.");
+        expect(synthesizeParams.overrides).toEqual({ provider: "acme" });
+        expect(synthesizeParams.disableFallback).toBe(true);
+        const ttsConfig = (
+          synthesizeParams.cfg as {
+            tts?: {
+              provider?: string;
+              providers?: Record<string, { resolvedBy?: string; voiceId?: string }>;
+            };
+          }
+        ).tts;
+        expect(ttsConfig?.provider).toBe("acme");
+        expect(ttsConfig?.providers?.acme?.resolvedBy).toBe("acme-test-provider");
+        expect(ttsConfig?.providers?.acme?.voiceId).toBe("plugin-voice");
       },
     );
   });
@@ -168,6 +183,27 @@ describe("gateway talk runtime", () => {
         expect((res?.payload as TalkSpeakTestPayload | undefined)?.audioBase64).toBe(
           Buffer.from([7, 8, 9]).toString("base64"),
         );
+      },
+    );
+  });
+
+  it("uses the spoken fallback for code-heavy talk.speak replies", async () => {
+    await setAcmeTalkConfig();
+
+    await withAcmeSpeechProvider(
+      async () => ({
+        audioBuffer: Buffer.from([7, 8, 9]),
+        outputFormat: "mp3",
+        fileExtension: ".mp3",
+        voiceCompatible: false,
+      }),
+      async () => {
+        const res = await invokeTalkSpeakDirect({
+          text: "```ts\nexport function answer() {\n  return 42;\n}\n```",
+        });
+
+        expect(res?.ok, JSON.stringify(res?.error)).toBe(true);
+        expect(expectSingleSynthesizeSpeechCall().text).toBe(CODE_HEAVY_SPOKEN_FALLBACK);
       },
     );
   });
@@ -224,22 +260,19 @@ describe("gateway talk runtime", () => {
         expect((res?.payload as TalkSpeakTestPayload | undefined)?.audioBase64).toBe(
           Buffer.from([4, 5, 6]).toString("base64"),
         );
-        expect(synthesizeSpeechMock).toHaveBeenCalledWith(
-          expect.objectContaining({
-            text: "Hello from talk mode.",
-            overrides: {
-              provider: "elevenlabs",
-              providerOverrides: {
-                elevenlabs: {
-                  voiceId: ALIAS_STUB_VOICE_ID,
-                  outputFormat: "pcm_44100",
-                  latencyTier: 3,
-                },
-              },
+        const synthesizeParams = expectSingleSynthesizeSpeechCall();
+        expect(synthesizeParams.text).toBe("Hello from talk mode.");
+        expect(synthesizeParams.overrides).toEqual({
+          provider: "elevenlabs",
+          providerOverrides: {
+            elevenlabs: {
+              voiceId: ALIAS_STUB_VOICE_ID,
+              outputFormat: "pcm_44100",
+              latencyTier: 3,
             },
-            disableFallback: true,
-          }),
-        );
+          },
+        });
+        expect(synthesizeParams.disableFallback).toBe(true);
       },
     );
   });

@@ -1,9 +1,27 @@
+// Trajectory export helpers package recorded trajectories for diagnostics.
 import fsp from "node:fs/promises";
 import path from "node:path";
-import type { AgentMessage } from "@mariozechner/pi-agent-core";
-import type { FileEntry, SessionEntry, SessionHeader } from "@mariozechner/pi-coding-agent";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { sanitizeDiagnosticPayload } from "../agents/payload-redaction.js";
+import type { AgentMessage } from "../agents/runtime/index.js";
+import {
+  isSessionFileEntry,
+  parseSessionFileEntriesWithWarnings,
+} from "../agents/sessions/session-file-parser.js";
+import type { FileEntry, SessionEntry, SessionHeader } from "../agents/sessions/session-manager.js";
 import { resolveStateDir } from "../config/paths.js";
+import { parseSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
+import {
+  listSessionEntriesCore,
+  loadSessionEntry,
+  loadTranscriptEvents,
+  type SessionTranscriptRuntimeTarget,
+} from "../config/sessions/session-accessor.js";
+import {
+  isCanonicalSessionTranscriptEntry,
+  scanSessionTranscriptTree,
+} from "../config/sessions/transcript-tree.js";
 import {
   jsonSupportBundleFile,
   jsonlSupportBundleFile,
@@ -17,22 +35,31 @@ import {
   redactSupportString,
   type SupportRedactionContext,
 } from "../logging/diagnostic-support-redaction.js";
-import { safeJsonStringify } from "../utils/safe-json.js";
+import { redactSecrets, redactToolPayloadText } from "../logging/redact.js";
 import {
-  TRAJECTORY_RUNTIME_FILE_MAX_BYTES,
-  resolveTrajectoryFilePath,
-  resolveTrajectoryPointerFilePath,
-  safeTrajectorySessionFileName,
-} from "./paths.js";
+  hasMeaningfulRetiredMediaCarrier,
+  PERSISTED_LEGACY_MEDIA_KEYS,
+} from "../media/media-facts.js";
+import { parseAgentSessionKey } from "../routing/session-key.js";
+import { resolvePreferredSessionKeyForSessionIdMatches } from "../sessions/session-id-resolution.js";
+import { safeJsonStringify } from "../utils/safe-json.js";
+import { TRAJECTORY_RUNTIME_FILE_MAX_BYTES, safeTrajectorySessionFileName } from "./paths.js";
+import { isRegularNonSymlinkFile, resolveTrajectoryRuntimeFile } from "./runtime-file.js";
+import { loadSqliteTrajectoryRuntimeEvents } from "./runtime-store.sqlite.js";
 import type {
   TrajectoryBundleManifest,
+  TrajectoryBundleWarning,
   TrajectoryEvent,
   TrajectoryToolDefinition,
 } from "./types.js";
 
+// Trajectory bundle exporter: joins persisted session JSONL with runtime
+// trace JSONL, redacts local/support-sensitive data, and writes a portable
+// support bundle for debugging agent behavior.
 type BuildTrajectoryBundleParams = {
   outputDir: string;
-  sessionFile: string;
+  sessionFile?: string;
+  sessionTarget?: SessionTranscriptRuntimeTarget;
   sessionId: string;
   sessionKey?: string;
   workspaceDir: string;
@@ -52,28 +79,85 @@ type TrajectoryExportRedaction = SupportRedactionContext & {
   workspaceDir: string;
 };
 
+type JsonlParseWarning = Omit<TrajectoryBundleWarning, "count" | "rows"> & {
+  row: number;
+};
+
+type SessionEntryCandidateRow = {
+  row: number;
+  value: unknown;
+};
+
 const MAX_TRAJECTORY_RUNTIME_EVENTS = 200_000;
 const MAX_TRAJECTORY_TOTAL_EVENTS = 250_000;
 const MAX_TRAJECTORY_SESSION_FILE_BYTES = 50 * 1024 * 1024;
+const MAX_TRAJECTORY_WARNING_ROWS = 20;
 
-function parseSessionEntries(content: string): FileEntry[] {
-  return content
-    .split(/\r?\n/u)
-    .map((line) => line.trim())
-    .filter(Boolean)
-    .flatMap((line) => {
-      try {
-        return [JSON.parse(line) as FileEntry];
-      } catch {
-        return [];
-      }
-    });
+function normalizeCompleteSessionTarget(
+  target: SessionTranscriptRuntimeTarget | undefined,
+): SessionTranscriptRuntimeTarget | undefined {
+  if (!target) {
+    return undefined;
+  }
+  const agentId = normalizeOptionalString(target.agentId);
+  const sessionId = normalizeOptionalString(target.sessionId);
+  const sessionKey = normalizeOptionalString(target.sessionKey);
+  const storePath = normalizeOptionalString(target.storePath);
+  return agentId && sessionId && sessionKey && storePath
+    ? { agentId, sessionId, sessionKey, storePath }
+    : undefined;
+}
+
+function isFiniteNumber(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value);
+}
+
+function formatSessionParseWarnings(
+  warnings: ReturnType<typeof parseSessionFileEntriesWithWarnings>["warnings"],
+): JsonlParseWarning[] {
+  return warnings.map((warning) => ({
+    source: "session",
+    code: warning.code,
+    row: warning.row,
+    message:
+      warning.code === "invalid-session-json"
+        ? "Skipped a session JSONL row that is not valid JSON."
+        : "Skipped a session JSONL row that is not a session entry object.",
+  }));
+}
+
+function collectSessionEntries(
+  rows: readonly SessionEntryCandidateRow[],
+  warnings: JsonlParseWarning[] = [],
+): {
+  entries: FileEntry[];
+  warnings: JsonlParseWarning[];
+  rowByEntry: Map<FileEntry, number>;
+} {
+  const entries: FileEntry[] = [];
+  const rowByEntry = new Map<FileEntry, number>();
+  for (const row of rows) {
+    if (!isSessionFileEntry(row.value)) {
+      warnings.push({
+        source: "session",
+        code: "invalid-session-row",
+        row: row.row,
+        message: "Skipped a session JSONL row that is not a session entry object.",
+      });
+      continue;
+    }
+    entries.push(row.value);
+    rowByEntry.set(row.value, row.row);
+  }
+  return { entries, warnings, rowByEntry };
 }
 
 function migrateLegacySessionEntries(entries: FileEntry[]): void {
   const header = entries.find((entry): entry is SessionHeader => entry.type === "session");
   const version = header?.version ?? 1;
   if (version < 2) {
+    // Older session logs predate entry ids. Synthetic ids preserve branch order
+    // long enough to export the reachable suffix without mutating source files.
     let previousId: string | null = null;
     let index = 0;
     for (const entry of entries) {
@@ -113,31 +197,203 @@ function migrateLegacySessionEntries(entries: FileEntry[]): void {
   }
 }
 
-async function readSessionBranch(filePath: string): Promise<{
+async function readSessionEntries(params: {
+  sessionFile?: string;
+  sessionTarget?: SessionTranscriptRuntimeTarget;
+  sessionId: string;
+  sessionKey?: string;
+}): Promise<{
+  entries: FileEntry[];
+  warnings: JsonlParseWarning[];
+  rowByEntry: Map<FileEntry, number>;
+}> {
+  const completeTarget = normalizeCompleteSessionTarget(params.sessionTarget);
+  if (completeTarget) {
+    const targetKeyAgentId = parseAgentSessionKey(completeTarget.sessionKey)?.agentId;
+    const targetKeyEntry = loadSessionEntry({
+      agentId: completeTarget.agentId,
+      sessionKey: completeTarget.sessionKey,
+      storePath: completeTarget.storePath,
+    });
+    // Export remains available after the session index row is pruned. A row
+    // that still exists must agree with the artifact's complete target.
+    if (
+      completeTarget.sessionId !== params.sessionId ||
+      (params.sessionKey !== undefined && completeTarget.sessionKey !== params.sessionKey) ||
+      (targetKeyAgentId && targetKeyAgentId !== completeTarget.agentId) ||
+      (targetKeyEntry && targetKeyEntry.sessionId !== completeTarget.sessionId)
+    ) {
+      throw new Error("Trajectory export transcript target does not match the requested session");
+    }
+    const events = await loadTranscriptEvents({
+      agentId: completeTarget.agentId,
+      sessionId: completeTarget.sessionId,
+      sessionKey: completeTarget.sessionKey,
+      storePath: completeTarget.storePath,
+    });
+    return collectSessionEntries(events.map((value, index) => ({ row: index + 1, value })));
+  }
+  const incompleteTarget = params.sessionTarget
+    ? {
+        agentId: normalizeOptionalString(params.sessionTarget.agentId),
+        sessionId: normalizeOptionalString(params.sessionTarget.sessionId),
+        sessionKey: normalizeOptionalString(params.sessionTarget.sessionKey),
+        storePath: normalizeOptionalString(params.sessionTarget.storePath),
+      }
+    : undefined;
+  if (!params.sessionFile) {
+    throw new Error("Trajectory export requires a transcript identity or artifact file");
+  }
+  const marker = parseSqliteSessionFileMarker(params.sessionFile);
+  if (!marker) {
+    const { entries, warnings, rowByEntry } = parseSessionFileEntriesWithWarnings(
+      await fsp.readFile(params.sessionFile, "utf8"),
+    );
+    return {
+      entries,
+      warnings: formatSessionParseWarnings(warnings),
+      rowByEntry,
+    };
+  }
+  if (marker.sessionId !== params.sessionId) {
+    throw new Error("Trajectory export legacy marker does not match the requested session");
+  }
+  const targetKeyAgentId = parseAgentSessionKey(incompleteTarget?.sessionKey)?.agentId;
+  const targetKeyEntry =
+    incompleteTarget?.sessionKey && marker
+      ? loadSessionEntry({
+          agentId: marker.agentId,
+          sessionKey: incompleteTarget.sessionKey,
+          storePath: marker.storePath,
+        })
+      : undefined;
+  if (
+    incompleteTarget &&
+    ((incompleteTarget.agentId && incompleteTarget.agentId !== marker.agentId) ||
+      (incompleteTarget.sessionId && incompleteTarget.sessionId !== marker.sessionId) ||
+      (targetKeyAgentId && targetKeyAgentId !== marker.agentId) ||
+      (incompleteTarget.sessionKey && targetKeyEntry?.sessionId !== marker.sessionId) ||
+      (incompleteTarget.storePath &&
+        path.resolve(incompleteTarget.storePath) !== path.resolve(marker.storePath)))
+  ) {
+    throw new Error("Trajectory export transcript target conflicts with the legacy marker");
+  }
+  const suppliedKeyEntry = params.sessionKey
+    ? loadSessionEntry({
+        agentId: marker.agentId,
+        sessionKey: params.sessionKey,
+        storePath: marker.storePath,
+      })
+    : undefined;
+  const markerMatches = listSessionEntriesCore({
+    agentId: marker.agentId,
+    storePath: marker.storePath,
+  }).filter(({ entry }) => entry.sessionId === marker.sessionId);
+  if (suppliedKeyEntry && suppliedKeyEntry.sessionId !== marker.sessionId) {
+    throw new Error("Trajectory export session key conflicts with the legacy marker");
+  }
+  if (params.sessionKey && !suppliedKeyEntry && markerMatches.length > 0) {
+    throw new Error("Trajectory export session key is not mapped to the legacy marker");
+  }
+  const markerSessionKey = suppliedKeyEntry
+    ? params.sessionKey
+    : (resolvePreferredSessionKeyForSessionIdMatches(
+        markerMatches.map(({ sessionKey, entry }) => [sessionKey, entry]),
+        marker.sessionId,
+      ) ?? (markerMatches.length === 0 ? params.sessionKey : undefined));
+  if (!markerSessionKey && markerMatches.length > 0) {
+    throw new Error("Trajectory export legacy marker session key is ambiguous");
+  }
+  return collectSessionEntries(
+    (
+      await loadTranscriptEvents({
+        agentId: marker.agentId,
+        sessionId: marker.sessionId,
+        ...(markerSessionKey ? { sessionKey: markerSessionKey } : {}),
+        storePath: marker.storePath,
+      })
+    ).map((value, index) => ({ row: index + 1, value })),
+  );
+}
+
+async function readSessionBranch(params: {
+  sessionFile?: string;
+  sessionTarget?: SessionTranscriptRuntimeTarget;
+  sessionId: string;
+  sessionKey?: string;
+}): Promise<{
   header: SessionHeader | null;
   leafId: string | null;
   branchEntries: SessionEntry[];
+  warnings: JsonlParseWarning[];
 }> {
-  const fileEntries = parseSessionEntries(await fsp.readFile(filePath, "utf8"));
+  const { entries: fileEntries, warnings, rowByEntry } = await readSessionEntries(params);
   migrateLegacySessionEntries(fileEntries);
   const header =
     fileEntries.find((entry): entry is SessionHeader => entry.type === "session") ?? null;
   const entries = fileEntries.filter(
     (entry): entry is SessionEntry =>
       entry.type !== "session" &&
-      typeof (entry as { id?: unknown }).id === "string" &&
-      (typeof (entry as { timestamp?: unknown }).timestamp === "string" ||
-        typeof (entry as { timestamp?: unknown }).timestamp === "number"),
+      isCanonicalSessionTranscriptEntry(entry) &&
+      typeof (entry as { id?: unknown }).id === "string",
   );
-  const byId = new Map(entries.map((entry) => [entry.id, entry]));
-  const leafId = entries.at(-1)?.id ?? null;
-  const branchEntries: SessionEntry[] = [];
-  let current = leafId ? byId.get(leafId) : undefined;
-  while (current) {
-    branchEntries.unshift(current);
-    current = current.parentId ? byId.get(current.parentId) : undefined;
+  const tree = scanSessionTranscriptTree(fileEntries);
+  if (!tree.hasLeafUpdate) {
+    return {
+      header,
+      leafId: entries.at(-1)?.id ?? null,
+      branchEntries: entries,
+      warnings,
+    };
   }
-  return { header, leafId, branchEntries };
+  const entriesById = new Map(entries.map((entry) => [entry.id, entry]));
+  const branchEntries: SessionEntry[] = [];
+  const seen = new Set<string>();
+  let descendantEntry: SessionEntry | undefined;
+  let currentId = tree.leafId;
+  while (currentId) {
+    if (seen.has(currentId)) {
+      const cycleEntry = tree.byId.get(currentId)?.entry;
+      warnings.push({
+        source: "session",
+        code: "cyclic-session-branch",
+        row: cycleEntry ? (rowByEntry.get(cycleEntry) ?? 0) : 0,
+        message: "Stopped trajectory session branch export at a cyclic parent link.",
+      });
+      break;
+    }
+    seen.add(currentId);
+    const current = tree.byId.get(currentId);
+    if (!current) {
+      warnings.push({
+        source: "session",
+        code: "incomplete-session-branch",
+        row: 0,
+        message: "Exported the reachable session branch suffix after a missing parent link.",
+      });
+      break;
+    }
+    const visibleEntry = entriesById.get(currentId);
+    if (visibleEntry) {
+      const normalizedEntry = { ...visibleEntry, parentId: current.parentId };
+      if (descendantEntry) {
+        descendantEntry.parentId = normalizedEntry.id;
+      }
+      branchEntries.unshift(normalizedEntry);
+      descendantEntry = normalizedEntry;
+    }
+    if (current.parentId && !tree.byId.has(current.parentId)) {
+      warnings.push({
+        source: "session",
+        code: "incomplete-session-branch",
+        row: rowByEntry.get(current.entry) ?? 0,
+        message: "Exported the reachable session branch suffix after a missing parent link.",
+      });
+      break;
+    }
+    currentId = current.parentId;
+  }
+  return { header, leafId: tree.leafId, branchEntries, warnings };
 }
 
 async function parseJsonlFile<T>(
@@ -145,33 +401,35 @@ async function parseJsonlFile<T>(
   params: {
     maxBytes: number;
     maxEvents: number;
+    include?: (value: T) => boolean;
     validate?: (value: unknown) => value is T;
   },
-): Promise<T[]> {
+): Promise<{ events: T[]; warnings: JsonlParseWarning[] }> {
   let stat;
   try {
     stat = await fsp.stat(filePath);
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      return [];
+      return { events: [], warnings: [] };
     }
     throw error;
   }
   if (!stat.isFile()) {
-    return [];
+    return { events: [], warnings: [] };
   }
   if (stat.size > params.maxBytes) {
     throw new Error(
       `Trajectory runtime file is too large to export (${stat.size} bytes; limit ${params.maxBytes})`,
     );
   }
-  const content = await fsp.readFile(filePath, "utf8");
-  const rows = content
-    .split(/\r?\n/u)
-    .map((line) => line.trim())
-    .filter(Boolean);
+  const rows = (await fsp.readFile(filePath, "utf8")).split(/\r?\n/u);
   const parsed: T[] = [];
-  for (const row of rows) {
+  const warnings: JsonlParseWarning[] = [];
+  for (const [index, rawLine] of rows.entries()) {
+    const row = rawLine.trim();
+    if (!row) {
+      continue;
+    }
     if (parsed.length >= params.maxEvents) {
       throw new Error(
         `Trajectory runtime file has too many events to export (limit ${params.maxEvents})`,
@@ -180,27 +438,81 @@ async function parseJsonlFile<T>(
     try {
       const value = JSON.parse(row) as unknown;
       if (!params.validate || params.validate(value)) {
-        parsed.push(value as T);
+        const typedValue = value as T;
+        if (!params.include || params.include(typedValue)) {
+          parsed.push(typedValue);
+        }
+      } else {
+        warnings.push({
+          source: "runtime",
+          code: "invalid-runtime-event",
+          row: index + 1,
+          message: "Skipped a runtime trajectory JSONL row that does not match the session schema.",
+        });
       }
     } catch {
-      // Keep exports resilient even if a single debug line is malformed.
+      warnings.push({
+        source: "runtime",
+        code: "invalid-runtime-json",
+        row: index + 1,
+        message: "Skipped a runtime trajectory JSONL row that is not valid JSON.",
+      });
     }
   }
-  return parsed;
+  return { events: parsed, warnings };
 }
 
-function isFiniteNumber(value: unknown): value is number {
-  return typeof value === "number" && Number.isFinite(value);
+async function readRuntimeTrajectoryEvents(params: {
+  runtimeFile?: string;
+  sessionFile?: string;
+  sessionTarget?: SessionTranscriptRuntimeTarget;
+  sessionId: string;
+}): Promise<{
+  events: TrajectoryEvent[];
+  runtimeFile?: string;
+  warnings: JsonlParseWarning[];
+}> {
+  const marker =
+    normalizeCompleteSessionTarget(params.sessionTarget) ??
+    parseSqliteSessionFileMarker(params.sessionFile);
+  if (marker && marker.sessionId !== params.sessionId) {
+    throw new Error("Trajectory runtime target does not match the requested session");
+  }
+  if (marker) {
+    const events = await loadSqliteTrajectoryRuntimeEvents({
+      agentId: marker.agentId,
+      sessionId: marker.sessionId,
+      storePath: marker.storePath,
+    });
+    if (events.length > MAX_TRAJECTORY_RUNTIME_EVENTS) {
+      throw new Error(
+        `Trajectory runtime store has too many events to export (limit ${MAX_TRAJECTORY_RUNTIME_EVENTS})`,
+      );
+    }
+    return { events, warnings: [] };
+  }
+
+  if (!params.sessionFile) {
+    return { events: [], warnings: [] };
+  }
+  const runtimeFile = await resolveTrajectoryRuntimeFile({
+    runtimeFile: params.runtimeFile,
+    sessionFile: params.sessionFile,
+    sessionId: params.sessionId,
+  });
+  if (!runtimeFile) {
+    return { events: [], warnings: [] };
+  }
+  const parsed = await parseJsonlFile<TrajectoryEvent>(runtimeFile, {
+    maxBytes: TRAJECTORY_RUNTIME_FILE_MAX_BYTES,
+    maxEvents: MAX_TRAJECTORY_RUNTIME_EVENTS,
+    include: (value) => value.sessionId === params.sessionId,
+    validate: isRuntimeTrajectoryEvent,
+  });
+  return { ...parsed, runtimeFile };
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
-}
-
-function isRuntimeTrajectoryEventForSession(
-  value: unknown,
-  sessionId: string,
-): value is TrajectoryEvent {
+function isRuntimeTrajectoryEvent(value: unknown): value is TrajectoryEvent {
   if (!isRecord(value)) {
     return false;
   }
@@ -210,86 +522,34 @@ function isRuntimeTrajectoryEventForSession(
     value.source === "runtime" &&
     typeof value.type === "string" &&
     typeof value.ts === "string" &&
-    !Number.isNaN(Date.parse(value.ts)) &&
+    Number.isFinite(Date.parse(value.ts)) &&
     isFiniteNumber(value.seq) &&
-    value.sessionId === sessionId &&
+    typeof value.sessionId === "string" &&
     (!("data" in value) || value.data === undefined || isRecord(value.data))
   );
 }
 
-async function isRegularNonSymlinkFile(filePath: string): Promise<boolean> {
-  try {
-    const linkStat = await fsp.lstat(filePath);
-    if (linkStat.isSymbolicLink() || !linkStat.isFile()) {
-      return false;
+function summarizeJsonlWarnings(warnings: JsonlParseWarning[]): TrajectoryBundleWarning[] {
+  const byKey = new Map<string, TrajectoryBundleWarning>();
+  for (const warning of warnings) {
+    const key = `${warning.source}:${warning.code}`;
+    const existing = byKey.get(key);
+    if (existing) {
+      existing.count += 1;
+      if (existing.rows.length < MAX_TRAJECTORY_WARNING_ROWS) {
+        existing.rows.push(warning.row);
+      }
+      continue;
     }
-    const stat = await fsp.stat(filePath);
-    return stat.isFile() && stat.dev === linkStat.dev && stat.ino === linkStat.ino;
-  } catch {
-    return false;
+    byKey.set(key, {
+      source: warning.source,
+      code: warning.code,
+      count: 1,
+      rows: [warning.row],
+      message: warning.message,
+    });
   }
-}
-
-async function readRuntimePointerFile(
-  sessionFile: string,
-  sessionId: string,
-): Promise<string | undefined> {
-  const pointerPath = resolveTrajectoryPointerFilePath(sessionFile);
-  if (!(await isRegularNonSymlinkFile(pointerPath))) {
-    return undefined;
-  }
-  try {
-    const parsed = JSON.parse(await fsp.readFile(pointerPath, "utf8")) as unknown;
-    if (!isRecord(parsed)) {
-      return undefined;
-    }
-    if (parsed.sessionId !== sessionId || typeof parsed.runtimeFile !== "string") {
-      return undefined;
-    }
-    const runtimeFile = path.resolve(parsed.runtimeFile);
-    const safeRuntimeFileName = `${safeTrajectorySessionFileName(sessionId)}.jsonl`;
-    const defaultRuntimeFile = path.resolve(
-      resolveTrajectoryFilePath({
-        env: {},
-        sessionFile,
-        sessionId,
-      }),
-    );
-    if (runtimeFile !== defaultRuntimeFile && path.basename(runtimeFile) !== safeRuntimeFileName) {
-      return undefined;
-    }
-    return runtimeFile;
-  } catch {
-    return undefined;
-  }
-}
-
-async function resolveTrajectoryRuntimeFile(params: {
-  runtimeFile?: string;
-  sessionFile: string;
-  sessionId: string;
-}): Promise<string | undefined> {
-  if (params.runtimeFile) {
-    return params.runtimeFile;
-  }
-  const candidates = [
-    await readRuntimePointerFile(params.sessionFile, params.sessionId),
-    resolveTrajectoryFilePath({
-      env: {},
-      sessionFile: params.sessionFile,
-      sessionId: params.sessionId,
-    }),
-    resolveTrajectoryFilePath({
-      sessionFile: params.sessionFile,
-      sessionId: params.sessionId,
-    }),
-  ].filter((candidate): candidate is string => Boolean(candidate));
-  for (const candidate of candidates) {
-    if (await isRegularNonSymlinkFile(candidate)) {
-      return candidate;
-    }
-  }
-  return undefined;
+  return [...byKey.values()];
 }
 
 function normalizeTimestamp(value: unknown): string {
@@ -355,6 +615,10 @@ function extractAssistantToolCalls(
   });
 }
 
+function sanitizeTrajectoryExportValue<T>(value: T): T {
+  return redactSecrets(sanitizeDiagnosticPayload(value)) as T;
+}
+
 function buildTranscriptEvents(params: {
   entries: SessionEntry[];
   sessionId: string;
@@ -409,6 +673,12 @@ function buildTranscriptEvents(params: {
           fromHook: entry.fromHook ?? false,
         });
         break;
+      case "reset":
+        push("session.reset", {
+          reason: entry.reason,
+          firstKeptEntryId: entry.firstKeptEntryId,
+        });
+        break;
       case "branch_summary":
         push("session.branch_summary", {
           fromId: entry.fromId,
@@ -458,6 +728,31 @@ function buildTranscriptEvents(params: {
   return events;
 }
 
+function assertCanonicalTrajectoryInputs(
+  entries: readonly SessionEntry[],
+  runtimeEvents: readonly TrajectoryEvent[],
+): void {
+  const branchHasLegacy = entries.some(
+    (entry) =>
+      entry.type === "message" &&
+      isRecord(entry.message) &&
+      (Object.hasOwn(entry.message, "media") ||
+        PERSISTED_LEGACY_MEDIA_KEYS.some((key) => Object.hasOwn(entry.message, key))),
+  );
+  const runtimeHasLegacy = runtimeEvents.some(
+    (event) =>
+      Array.isArray(event.data?.messagesSnapshot) &&
+      event.data.messagesSnapshot.some(
+        (message) => isRecord(message) && hasMeaningfulRetiredMediaCarrier(message),
+      ),
+  );
+  if (branchHasLegacy || runtimeHasLegacy) {
+    throw new Error(
+      "Trajectory export input contains retired top-level media fields; migrate the source transcript before exporting.",
+    );
+  }
+}
+
 function sortTrajectoryEvents(events: TrajectoryEvent[]): TrajectoryEvent[] {
   const sourceOrder: Record<TrajectoryEvent["source"], number> = {
     runtime: 0,
@@ -491,6 +786,15 @@ function trajectoryJsonlFile(
   return jsonlSupportBundleFile(pathName, lines);
 }
 
+function redactTrajectoryBundleFileContent(
+  file: DiagnosticSupportBundleFile,
+): DiagnosticSupportBundleFile {
+  return {
+    ...file,
+    content: redactToolPayloadText(file.content),
+  };
+}
+
 function buildTrajectoryExportRedaction(params: {
   workspaceDir: string;
 }): TrajectoryExportRedaction {
@@ -521,6 +825,8 @@ function redactWorkspacePathString(value: string, redaction: TrajectoryExportRed
 
 function maybeRedactPathString(value: string, redaction: TrajectoryExportRedaction): string {
   const workspaceRedacted = redactWorkspacePathString(value, redaction);
+  // Redact only strings that look path-like after workspace substitution. This
+  // keeps ordinary model text readable while still removing local host details.
   if (
     workspaceRedacted !== value ||
     path.isAbsolute(workspaceRedacted) ||
@@ -551,26 +857,61 @@ function redactLocalPathValues(value: unknown, redaction: TrajectoryExportRedact
   return next;
 }
 
+function uniqueRedactedObjectKey(key: string, usedKeys: Set<string>): string {
+  if (!usedKeys.has(key)) {
+    usedKeys.add(key);
+    return key;
+  }
+  let index = 2;
+  while (usedKeys.has(`${key}#${index}`)) {
+    index += 1;
+  }
+  const unique = `${key}#${index}`;
+  usedKeys.add(unique);
+  return unique;
+}
+
+function redactTrajectoryExportObjectKeys(
+  value: unknown,
+  redaction: TrajectoryExportRedaction,
+): unknown {
+  if (Array.isArray(value)) {
+    return value.map((entry) => redactTrajectoryExportObjectKeys(entry, redaction));
+  }
+  if (!value || typeof value !== "object") {
+    return value;
+  }
+  const usedKeys = new Set<string>();
+  const next: Record<string, unknown> = {};
+  for (const [key, entry] of Object.entries(value)) {
+    const redactedKey = redactToolPayloadText(maybeRedactPathString(key, redaction));
+    // Object keys can contain file paths or tool payload snippets too. Preserve
+    // all entries even when redaction collapses two original keys together.
+    next[uniqueRedactedObjectKey(redactedKey, usedKeys)] = redactTrajectoryExportObjectKeys(
+      entry,
+      redaction,
+    );
+  }
+  return next;
+}
+
+function redactTrajectoryExportValue(
+  value: unknown,
+  redaction: TrajectoryExportRedaction,
+): unknown {
+  const redactedValue = sanitizeTrajectoryExportValue(redactLocalPathValues(value, redaction));
+  return redactTrajectoryExportObjectKeys(redactedValue, redaction);
+}
+
 function redactEventForExport(
   event: TrajectoryEvent,
   redaction: TrajectoryExportRedaction,
 ): TrajectoryEvent {
-  return {
-    ...event,
-    workspaceDir: event.workspaceDir
-      ? maybeRedactPathString(event.workspaceDir, redaction)
-      : undefined,
-    data: event.data
-      ? (redactLocalPathValues(event.data, redaction) as Record<string, unknown>)
-      : undefined,
-  };
+  return redactTrajectoryExportValue(event, redaction) as TrajectoryEvent;
 }
 
 function resolveRuntimeContext(runtimeEvents: TrajectoryEvent[]): RuntimeTrajectoryContext {
-  const latestContext = runtimeEvents
-    .slice()
-    .toReversed()
-    .find((event) => event.type === "context.compiled");
+  const latestContext = runtimeEvents.findLast((event) => event.type === "context.compiled");
   const runtimeData = latestContext?.data;
   const toolsValue = Array.isArray(runtimeData?.tools)
     ? (runtimeData.tools as TrajectoryToolDefinition[])
@@ -586,10 +927,7 @@ function resolveLatestRuntimeEventData(
   runtimeEvents: TrajectoryEvent[],
   type: string,
 ): JsonRecord | undefined {
-  const event = runtimeEvents
-    .slice()
-    .toReversed()
-    .find((candidate) => candidate.type === type);
+  const event = runtimeEvents.findLast((candidate) => candidate.type === type);
   return event?.data;
 }
 
@@ -644,6 +982,8 @@ function markInvokedSkills(params: { skills: unknown; events: TrajectoryEvent[] 
       return collectPotentialPathStrings(event.data?.arguments);
     }),
   );
+  // Skill invocation is inferred from tool-call file paths in captured prompts;
+  // this keeps the export self-contained without re-reading skill state later.
   const normalizedInvokedPaths = new Set(
     [...invokedPaths].map((value) => normalizePathForMatch(value)),
   );
@@ -687,10 +1027,9 @@ function buildMetadataCapture(params: {
     return undefined;
   }
   const modelFallback = (() => {
-    const latest = params.runtimeEvents
-      .slice()
-      .toReversed()
-      .find((event) => event.provider || event.modelId || event.modelApi);
+    const latest = params.runtimeEvents.findLast(
+      (event) => event.provider || event.modelId || event.modelApi,
+    );
     if (!latest?.provider && !latest?.modelId && !latest?.modelApi) {
       return undefined;
     }
@@ -725,9 +1064,43 @@ function buildArtifactsCapture(params: {
   manifest: TrajectoryBundleManifest;
   runtimeEvents: TrajectoryEvent[];
 }): JsonRecord | undefined {
-  const runtimeArtifacts = resolveLatestRuntimeEventData(params.runtimeEvents, "trace.artifacts");
-  const runtimeCompletion = resolveLatestRuntimeEventData(params.runtimeEvents, "model.completed");
-  const runtimeEnd = resolveLatestRuntimeEventData(params.runtimeEvents, "session.ended");
+  const cohortStart = params.runtimeEvents.findLastIndex(
+    (event) => event.type === "session.started",
+  );
+  const latestTimedEnd =
+    cohortStart < 0
+      ? params.runtimeEvents
+          .filter(
+            (event) => event.type === "session.ended" && isFiniteNumber(event.data?.startedAt),
+          )
+          .toSorted((left, right) => Number(left.data?.startedAt) - Number(right.data?.startedAt))
+          .at(-1)
+      : undefined;
+  const selectedEnd =
+    latestTimedEnd ??
+    (cohortStart < 0
+      ? params.runtimeEvents.findLast((event) => event.type === "session.ended")
+      : undefined);
+  const cohortRunId =
+    params.runtimeEvents[cohortStart]?.runId ??
+    selectedEnd?.runId ??
+    params.runtimeEvents.at(-1)?.runId;
+  const cohortEnd = selectedEnd
+    ? params.runtimeEvents.lastIndexOf(selectedEnd) + 1
+    : params.runtimeEvents.length;
+  const partialStart = selectedEnd
+    ? params.runtimeEvents.findLastIndex(
+        (event, index) =>
+          index < cohortEnd - 1 && event.type === "session.ended" && event.runId === cohortRunId,
+      ) + 1
+    : cohortStart;
+  // The newest start, or latest authoritative terminal in a partial tail, owns the cohort.
+  const cohort = params.runtimeEvents
+    .slice(Math.max(0, partialStart), cohortEnd)
+    .filter((event) => cohortRunId === undefined || event.runId === cohortRunId);
+  const runtimeArtifacts = resolveLatestRuntimeEventData(cohort, "trace.artifacts");
+  const runtimeCompletion = resolveLatestRuntimeEventData(cohort, "model.completed");
+  const runtimeEnd = resolveLatestRuntimeEventData(cohort, "session.ended");
   if (!runtimeArtifacts && !runtimeCompletion && !runtimeEnd) {
     return undefined;
   }
@@ -747,14 +1120,24 @@ function buildArtifactsCapture(params: {
       runtimeArtifacts?.timedOutDuringCompaction ?? runtimeEnd?.timedOutDuringCompaction,
     timedOutDuringToolExecution:
       runtimeArtifacts?.timedOutDuringToolExecution ?? runtimeEnd?.timedOutDuringToolExecution,
+    timedOutByRunBudget: runtimeArtifacts?.timedOutByRunBudget ?? runtimeEnd?.timedOutByRunBudget,
     promptError:
       runtimeArtifacts?.promptError ?? runtimeEnd?.promptError ?? runtimeCompletion?.promptError,
     promptErrorSource: runtimeArtifacts?.promptErrorSource ?? runtimeCompletion?.promptErrorSource,
+    terminalError:
+      runtimeArtifacts?.terminalError ??
+      runtimeEnd?.terminalError ??
+      runtimeCompletion?.terminalError,
     usage: runtimeArtifacts?.usage ?? runtimeCompletion?.usage,
     promptCache: runtimeArtifacts?.promptCache ?? runtimeCompletion?.promptCache,
     compactionCount: runtimeArtifacts?.compactionCount ?? runtimeCompletion?.compactionCount,
     assistantTexts: runtimeArtifacts?.assistantTexts ?? runtimeCompletion?.assistantTexts,
+    stopReason:
+      runtimeArtifacts?.stopReason ?? runtimeCompletion?.stopReason ?? runtimeEnd?.stopReason,
     finalPromptText: runtimeArtifacts?.finalPromptText ?? runtimeCompletion?.finalPromptText,
+    finalPromptTextOriginalLength:
+      runtimeArtifacts?.finalPromptTextOriginalLength ??
+      runtimeCompletion?.finalPromptTextOriginalLength,
     itemLifecycle: runtimeArtifacts?.itemLifecycle,
     toolMetas: runtimeArtifacts?.toolMetas,
     didSendViaMessagingTool: runtimeArtifacts?.didSendViaMessagingTool,
@@ -832,6 +1215,8 @@ export function resolveDefaultTrajectoryExportDir(params: {
   );
 }
 
+// Public export API used by CLI/tests. The bundle is intentionally sanitized
+// before writing so sharing it should not expose credentials or local paths.
 export async function exportTrajectoryBundle(params: BuildTrajectoryBundleParams): Promise<{
   manifest: TrajectoryBundleManifest;
   outputDir: string;
@@ -843,28 +1228,38 @@ export async function exportTrajectoryBundle(params: BuildTrajectoryBundleParams
   const redaction = buildTrajectoryExportRedaction({
     workspaceDir: params.workspaceDir,
   });
-  const sessionStat = await fsp.stat(params.sessionFile);
-  if (sessionStat.size > MAX_TRAJECTORY_SESSION_FILE_BYTES) {
-    throw new Error(
-      `Trajectory session file is too large to export (${sessionStat.size} bytes; limit ${MAX_TRAJECTORY_SESSION_FILE_BYTES})`,
-    );
+  const sessionTarget = normalizeCompleteSessionTarget(params.sessionTarget);
+  if (params.sessionFile && !sessionTarget && !parseSqliteSessionFileMarker(params.sessionFile)) {
+    const sessionStat = await fsp.stat(params.sessionFile);
+    if (sessionStat.size > MAX_TRAJECTORY_SESSION_FILE_BYTES) {
+      throw new Error(
+        `Trajectory session file is too large to export (${sessionStat.size} bytes; limit ${MAX_TRAJECTORY_SESSION_FILE_BYTES})`,
+      );
+    }
   }
-  const { header, leafId, branchEntries } = await readSessionBranch(params.sessionFile);
-  const runtimeFile = await resolveTrajectoryRuntimeFile({
+  const {
+    header,
+    leafId,
+    branchEntries,
+    warnings: sessionWarnings,
+  } = await readSessionBranch({
+    sessionFile: params.sessionFile,
+    sessionTarget: params.sessionTarget,
+    sessionId: params.sessionId,
+    ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
+  });
+  const runtimeParse = await readRuntimeTrajectoryEvents({
     runtimeFile: params.runtimeFile,
     sessionFile: params.sessionFile,
+    sessionTarget,
     sessionId: params.sessionId,
   });
-  const runtimeEvents = runtimeFile
-    ? await parseJsonlFile<TrajectoryEvent>(runtimeFile, {
-        maxBytes: TRAJECTORY_RUNTIME_FILE_MAX_BYTES,
-        maxEvents: MAX_TRAJECTORY_RUNTIME_EVENTS,
-        validate: (value): value is TrajectoryEvent =>
-          isRuntimeTrajectoryEventForSession(value, params.sessionId),
-      })
-    : [];
+  const runtimeFile = runtimeParse.runtimeFile;
+  const runtimeEvents = runtimeParse.events;
+  assertCanonicalTrajectoryInputs(branchEntries, runtimeEvents);
+  const projectedBranchEntries = branchEntries;
   const transcriptEvents = buildTranscriptEvents({
-    entries: branchEntries,
+    entries: projectedBranchEntries,
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
     workspaceDir: params.workspaceDir,
@@ -892,13 +1287,20 @@ export async function exportTrajectoryBundle(params: BuildTrajectoryBundleParams
     runtimeEventCount: runtimeEvents.length,
     transcriptEventCount: transcriptEvents.length,
     sourceFiles: {
-      session: maybeRedactPathString(params.sessionFile, redaction),
+      session: maybeRedactPathString(
+        sessionTarget?.sessionKey ?? params.sessionFile ?? params.sessionId,
+        redaction,
+      ),
       runtime:
         runtimeFile && (await isRegularNonSymlinkFile(runtimeFile))
           ? maybeRedactPathString(runtimeFile, redaction)
           : undefined,
     },
   };
+  const warnings = summarizeJsonlWarnings([...sessionWarnings, ...runtimeParse.warnings]);
+  if (warnings.length > 0) {
+    manifest.warnings = warnings;
+  }
 
   const bundleRuntimeContext = resolveRuntimeContext(runtimeEvents);
   const files: DiagnosticSupportBundleFile[] = [];
@@ -919,19 +1321,25 @@ export async function exportTrajectoryBundle(params: BuildTrajectoryBundleParams
   });
   if (metadataCapture) {
     files.push(
-      jsonSupportBundleFile("metadata.json", redactLocalPathValues(metadataCapture, redaction)),
+      jsonSupportBundleFile(
+        "metadata.json",
+        redactTrajectoryExportValue(metadataCapture, redaction),
+      ),
     );
     supplementalFiles.push("metadata.json");
   }
   if (artifactsCapture) {
     files.push(
-      jsonSupportBundleFile("artifacts.json", redactLocalPathValues(artifactsCapture, redaction)),
+      jsonSupportBundleFile(
+        "artifacts.json",
+        redactTrajectoryExportValue(artifactsCapture, redaction),
+      ),
     );
     supplementalFiles.push("artifacts.json");
   }
   if (promptsCapture) {
     files.push(
-      jsonSupportBundleFile("prompts.json", redactLocalPathValues(promptsCapture, redaction)),
+      jsonSupportBundleFile("prompts.json", redactTrajectoryExportValue(promptsCapture, redaction)),
     );
     supplementalFiles.push("prompts.json");
   }
@@ -943,12 +1351,12 @@ export async function exportTrajectoryBundle(params: BuildTrajectoryBundleParams
   files.push(
     jsonSupportBundleFile(
       "session-branch.json",
-      redactLocalPathValues(
-        sanitizeDiagnosticPayload({
+      redactTrajectoryExportValue(
+        {
           header,
           leafId,
-          entries: branchEntries,
-        }),
+          entries: projectedBranchEntries,
+        },
         redaction,
       ),
     ),
@@ -957,7 +1365,7 @@ export async function exportTrajectoryBundle(params: BuildTrajectoryBundleParams
     files.push(
       textSupportBundleFile(
         "system-prompt.txt",
-        redactLocalPathValues(bundleRuntimeContext.systemPrompt, redaction) as string,
+        redactTrajectoryExportValue(bundleRuntimeContext.systemPrompt, redaction) as string,
       ),
     );
   }
@@ -965,21 +1373,29 @@ export async function exportTrajectoryBundle(params: BuildTrajectoryBundleParams
     files.push(
       jsonSupportBundleFile(
         "tools.json",
-        redactLocalPathValues(bundleRuntimeContext.tools, redaction),
+        redactTrajectoryExportValue(bundleRuntimeContext.tools, redaction),
       ),
     );
   }
 
-  const contents: DiagnosticSupportBundleContent[] = [...supportBundleContents(files)];
+  const redactedFiles = files.map(redactTrajectoryBundleFileContent);
+  const contents: DiagnosticSupportBundleContent[] = [...supportBundleContents(redactedFiles)];
   manifest.contents = contents;
+  const redactedManifest = redactTrajectoryExportValue(
+    manifest,
+    redaction,
+  ) as TrajectoryBundleManifest;
+  const manifestFile = redactTrajectoryBundleFileContent(
+    jsonSupportBundleFile("manifest.json", redactedManifest),
+  );
 
   await writeSupportBundleDirectory({
     outputDir: params.outputDir,
-    files: [jsonSupportBundleFile("manifest.json", manifest), ...files],
+    files: [manifestFile, ...redactedFiles],
   });
 
   return {
-    manifest,
+    manifest: redactedManifest,
     outputDir: params.outputDir,
     events,
     header,
@@ -988,3 +1404,4 @@ export async function exportTrajectoryBundle(params: BuildTrajectoryBundleParams
     supplementalFiles,
   };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

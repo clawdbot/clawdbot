@@ -1,3 +1,4 @@
+// Doctor legacy-state e2e tests cover yes-mode state migrations without interactive prompts.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ProviderPlugin } from "../plugins/types.js";
 import {
@@ -12,7 +13,8 @@ import {
 } from "./doctor.e2e-harness.js";
 
 const providerRuntimeMocks = vi.hoisted(() => ({
-  resolvePluginProviders: vi.fn((_params?: unknown): ProviderPlugin[] => []),
+  useMockProviders: false,
+  resolvePluginProvidersCore: vi.fn((_params?: unknown): ProviderPlugin[] => []),
 }));
 
 vi.mock("../plugins/providers.runtime.js", async () => {
@@ -21,7 +23,12 @@ vi.mock("../plugins/providers.runtime.js", async () => {
   );
   return {
     ...actual,
-    resolvePluginProviders: providerRuntimeMocks.resolvePluginProviders,
+    resolvePluginProvidersCore: (
+      params: Parameters<typeof actual.resolvePluginProvidersCore>[0],
+    ): ProviderPlugin[] =>
+      providerRuntimeMocks.useMockProviders
+        ? providerRuntimeMocks.resolvePluginProvidersCore(params)
+        : actual.resolvePluginProvidersCore(params),
   };
 });
 
@@ -35,30 +42,35 @@ describe("doctor command", () => {
     ({ doctorCommand } = await import("./doctor.js"));
     ({ healthCommand } = await import("./health.js"));
     vi.clearAllMocks();
-    providerRuntimeMocks.resolvePluginProviders.mockReturnValue([]);
+    providerRuntimeMocks.useMockProviders = false;
+    providerRuntimeMocks.resolvePluginProvidersCore.mockReturnValue([]);
   });
 
   it("runs legacy state migrations in yes mode without prompting", async () => {
-    const { doctorCommand, runtime, runLegacyStateMigrations } =
-      await arrangeLegacyStateMigrationTest();
-
-    await (doctorCommand as (runtime: unknown, opts: Record<string, unknown>) => Promise<void>)(
+    const {
+      doctorCommand: doctorCommandValue,
       runtime,
-      { yes: true },
-    );
+      runLegacyStateMigrations,
+    } = await arrangeLegacyStateMigrationTest();
+
+    await (
+      doctorCommandValue as (runtime: unknown, opts: Record<string, unknown>) => Promise<void>
+    )(runtime, { yes: true });
 
     expect(runLegacyStateMigrations).toHaveBeenCalledTimes(1);
     expect(confirm).not.toHaveBeenCalled();
   }, 30_000);
 
   it("runs legacy state migrations in non-interactive mode without prompting", async () => {
-    const { doctorCommand, runtime, runLegacyStateMigrations } =
-      await arrangeLegacyStateMigrationTest();
-
-    await (doctorCommand as (runtime: unknown, opts: Record<string, unknown>) => Promise<void>)(
+    const {
+      doctorCommand: doctorCommandLocal,
       runtime,
-      { nonInteractive: true },
-    );
+      runLegacyStateMigrations,
+    } = await arrangeLegacyStateMigrationTest();
+
+    await (
+      doctorCommandLocal as (runtime: unknown, opts: Record<string, unknown>) => Promise<void>
+    )(runtime, { nonInteractive: true });
 
     expect(runLegacyStateMigrations).toHaveBeenCalledTimes(1);
     expect(confirm).not.toHaveBeenCalled();
@@ -128,7 +140,7 @@ describe("doctor command", () => {
       },
     });
 
-    ensureAuthProfileStore.mockReturnValueOnce({
+    ensureAuthProfileStore.mockReturnValue({
       version: 1,
       profiles: {
         "anthropic:me@example.com": {
@@ -141,7 +153,8 @@ describe("doctor command", () => {
         },
       },
     });
-    providerRuntimeMocks.resolvePluginProviders.mockReturnValue([
+    providerRuntimeMocks.useMockProviders = true;
+    providerRuntimeMocks.resolvePluginProvidersCore.mockReturnValue([
       {
         id: "anthropic",
         label: "Anthropic",
@@ -164,17 +177,22 @@ describe("doctor command", () => {
       }
     }
 
-    const written = writeConfigFile.mock.calls
-      .map((call) => call[0] as Record<string, unknown>)
-      .find((candidate) => {
-        const auth = candidate.auth as { profiles?: unknown } | undefined;
-        return Boolean(auth?.profiles);
-      });
+    const writtenCall = writeConfigFile.mock.calls.findLast((call) => {
+      const candidate = call[0] as Record<string, unknown>;
+      const auth = candidate.auth as { profiles?: unknown } | undefined;
+      return Boolean(auth?.profiles);
+    });
+    const written = writtenCall?.[0] as Record<string, unknown> | undefined;
     if (!written) {
       throw new Error("Expected doctor to write migrated auth profiles");
     }
     const profiles = (written.auth as { profiles: Record<string, unknown> }).profiles;
-    expect(profiles["anthropic:me@example.com"]).toEqual(expect.any(Object));
+    expect(profiles).toHaveProperty("anthropic:me@example.com");
+    const migratedProfile = profiles["anthropic:me@example.com"] as
+      | { provider?: unknown; mode?: unknown }
+      | undefined;
+    expect(migratedProfile?.provider).toBe("anthropic");
+    expect(migratedProfile?.mode).toBe("oauth");
     expect(profiles["anthropic:default"]).toBeUndefined();
   }, 30_000);
 });

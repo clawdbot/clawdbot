@@ -6,8 +6,8 @@ export const ZAI_CODING_GLOBAL_BASE_URL = "https://api.z.ai/api/coding/paas/v4";
 export const ZAI_CODING_CN_BASE_URL = "https://open.bigmodel.cn/api/coding/paas/v4";
 export const ZAI_GLOBAL_BASE_URL = "https://api.z.ai/api/paas/v4";
 export const ZAI_CN_BASE_URL = "https://open.bigmodel.cn/api/paas/v4";
-export const ZAI_DEFAULT_MODEL_ID = "glm-5.1";
-export const ZAI_DEFAULT_MODEL_REF = `zai/${ZAI_DEFAULT_MODEL_ID}`;
+export const ZAI_DEFAULT_MODEL_ID = manifest.modelCatalog.providers.zai.defaultModel;
+export const ZAI_CODING_DEFAULT_MODEL_ID = "glm-5.3";
 
 const ZAI_MANIFEST_CATALOG = manifest.modelCatalog.providers.zai;
 const ZAI_MANIFEST_PROVIDER = buildManifestModelProviderConfig({

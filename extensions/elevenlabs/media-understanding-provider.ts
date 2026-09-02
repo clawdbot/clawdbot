@@ -1,3 +1,4 @@
+// Elevenlabs provider module implements model/runtime integration.
 import type {
   AudioTranscriptionRequest,
   AudioTranscriptionResult,
@@ -7,6 +8,7 @@ import {
   assertOkOrThrowHttpError,
   buildAudioTranscriptionFormData,
   postTranscriptionRequest,
+  readProviderJsonObjectResponse,
   resolveProviderHttpRequestConfig,
   requireTranscriptionText,
 } from "openclaw/plugin-sdk/provider-http";
@@ -14,7 +16,7 @@ import { DEFAULT_ELEVENLABS_BASE_URL, normalizeElevenLabsBaseUrl } from "./share
 
 const DEFAULT_ELEVENLABS_STT_MODEL = "scribe_v2";
 
-export async function transcribeElevenLabsAudio(
+async function transcribeElevenLabsAudio(
   req: AudioTranscriptionRequest,
 ): Promise<AudioTranscriptionResult> {
   const fetchFn = req.fetchFn ?? fetch;
@@ -53,6 +55,7 @@ export async function transcribeElevenLabsAudio(
     headers,
     body: form,
     timeoutMs: req.timeoutMs,
+    ...(req.signal ? { signal: req.signal } : {}),
     fetchFn,
     allowPrivateNetwork,
     dispatcherPolicy,
@@ -61,9 +64,12 @@ export async function transcribeElevenLabsAudio(
 
   try {
     await assertOkOrThrowHttpError(response, "ElevenLabs audio transcription failed");
-    const payload = (await response.json()) as { text?: string };
+    const payload = await readProviderJsonObjectResponse(
+      response,
+      "ElevenLabs audio transcription failed",
+    );
     const text = requireTranscriptionText(
-      payload.text,
+      typeof payload.text === "string" ? payload.text : undefined,
       "ElevenLabs audio transcription response missing text",
     );
     return { text, model };

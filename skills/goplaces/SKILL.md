@@ -1,6 +1,6 @@
 ---
 name: goplaces
-description: Query Google Places for text search, place details, resolve, reviews, or scriptable JSON via goplaces.
+description: "Query Google Places for text search, place details, resolve, reviews, or scriptable JSON via goplaces."
 homepage: https://github.com/steipete/goplaces
 metadata:
   {
@@ -48,5 +48,5 @@ Common commands
 Notes
 
 - `--no-color` or `NO_COLOR` disables ANSI color.
-- Price levels: 0..4 (free → very expensive).
+- Price levels: 0..4 (free -> very expensive).
 - Type filter sends only the first `--type` value (API accepts one).

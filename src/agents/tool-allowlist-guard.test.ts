@@ -1,3 +1,5 @@
+// Tool allowlist guard tests cover fail-closed behavior when explicit
+// allowlists leave no callable tools for the selected runtime/model.
 import { describe, expect, it } from "vitest";
 import {
   buildEmptyExplicitToolAllowlistError,
@@ -32,6 +34,8 @@ describe("tool allowlist guard", () => {
   });
 
   it("allows inherited config allowlists when a run intentionally disables tools", () => {
+    // Explicit runtime allowlists are command-time intent, while inherited
+    // config allowlists should not block a deliberately text-only run.
     expect(
       buildEmptyExplicitToolAllowlistError({
         sources: [{ label: "tools.allow", entries: ["lobster", "llm-task"] }],
@@ -40,6 +44,32 @@ describe("tool allowlist guard", () => {
         disableTools: true,
       }),
     ).toBeNull();
+  });
+
+  it("allows inherited config allowlists when runtime toolsAllow is explicitly empty", () => {
+    expect(
+      buildEmptyExplicitToolAllowlistError({
+        sources: [{ label: "tools.allow", entries: ["*", "read", "cron"] }],
+        callableToolNames: [],
+        toolsEnabled: true,
+        toolsAllowExplicitlyEmpty: true,
+      }),
+    ).toBeNull();
+  });
+
+  it("still enforces command-time allowlists for explicitly tool-less runs", () => {
+    const error = buildEmptyExplicitToolAllowlistError({
+      sources: [
+        { label: "tools.allow", entries: ["read"] },
+        { label: "runtime toolsAllow", entries: ["query_db"], enforceWhenToolsDisabled: true },
+      ],
+      callableToolNames: [],
+      toolsEnabled: true,
+      toolsAllowExplicitlyEmpty: true,
+    });
+
+    expect(error?.message).toContain("runtime toolsAllow: query_db");
+    expect(error?.message).not.toContain("tools.allow: read");
   });
 
   it("fails closed when the selected model cannot use requested tools", () => {

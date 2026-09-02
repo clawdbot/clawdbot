@@ -1,3 +1,4 @@
+// Channels misc tests cover small channel helper contracts that do not need dedicated files.
 import { describe, expect, it } from "vitest";
 import { normalizeChatType } from "./chat-type.js";
 

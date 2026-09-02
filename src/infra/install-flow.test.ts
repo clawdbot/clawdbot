@@ -1,13 +1,15 @@
+// Covers install archive extraction and existing install path resolution.
 import fs from "node:fs/promises";
 import path from "node:path";
+import JSZip from "jszip";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { withTempDir } from "../test-helpers/temp-dir.js";
+import { withTestDir } from "../test-helpers/temp-dir.js";
 import * as archive from "./archive.js";
 import { resolveExistingInstallPath, withExtractedArchiveRoot } from "./install-flow.js";
 import * as installSource from "./install-source-utils.js";
 
 async function runExtractedArchiveFailureCase(configureArchive: () => void) {
-  vi.spyOn(installSource, "withTempDir").mockImplementation(
+  vi.spyOn(installSource, "withInstallWorkspace").mockImplementation(
     async (_prefix, fn) => await fn("/tmp/openclaw-install-flow"),
   );
   configureArchive();
@@ -19,9 +21,13 @@ async function runExtractedArchiveFailureCase(configureArchive: () => void) {
   });
 }
 
+function firstMockCall<T extends unknown[]>(mock: { mock: { calls: T[] } }): T | undefined {
+  return mock.mock.calls[0];
+}
+
 describe("resolveExistingInstallPath", () => {
   it("returns resolved path and stat for existing files", async () => {
-    await withTempDir({ prefix: "openclaw-install-flow-" }, async (fixtureRoot) => {
+    await withTestDir({ prefix: "openclaw-install-flow-" }, async (fixtureRoot) => {
       const filePath = path.join(fixtureRoot, "plugin.tgz");
       await fs.writeFile(filePath, "archive");
 
@@ -37,7 +43,7 @@ describe("resolveExistingInstallPath", () => {
   });
 
   it("returns a path-not-found error for missing paths", async () => {
-    await withTempDir({ prefix: "openclaw-install-flow-" }, async (fixtureRoot) => {
+    await withTestDir({ prefix: "openclaw-install-flow-" }, async (fixtureRoot) => {
       const missing = path.join(fixtureRoot, "missing.tgz");
 
       const result = await resolveExistingInstallPath(missing);
@@ -55,13 +61,43 @@ describe("withExtractedArchiveRoot", () => {
     vi.restoreAllMocks();
   });
 
+  it("applies optional extraction limits before the callback and leaves installer defaults unchanged", async () => {
+    await withTestDir({ prefix: "openclaw-install-flow-" }, async (fixtureRoot) => {
+      const archivePath = path.join(fixtureRoot, "plugin.zip");
+      const zip = new JSZip();
+      const bytes = Buffer.alloc(32, 97);
+      zip.file("package/data.bin", bytes);
+      await fs.writeFile(archivePath, await zip.generateAsync({ type: "nodebuffer" }));
+      const onExtracted = vi.fn(async (rootDir: string) => ({
+        ok: true as const,
+        bytes: await fs.readFile(path.join(rootDir, "data.bin")),
+      }));
+      const params = {
+        archivePath,
+        tempDirPrefix: "openclaw-install-flow-",
+        timeoutMs: 1000,
+        onExtracted,
+      };
+      await expect(
+        withExtractedArchiveRoot({ ...params, limits: { maxEntryBytes: bytes.length - 1 } }),
+      ).resolves.toEqual({
+        ok: false,
+        error:
+          "failed to extract archive: ArchiveLimitError: archive entry extracted size exceeds limit",
+      });
+      expect(onExtracted).not.toHaveBeenCalled();
+      await expect(withExtractedArchiveRoot(params)).resolves.toEqual({ ok: true, bytes });
+      expect(onExtracted).toHaveBeenCalledOnce();
+    });
+  });
+
   it("extracts archive and passes root directory to callback", async () => {
     const tmpRoot = path.join(path.sep, "tmp", "openclaw-install-flow");
     const archivePath = path.join(path.sep, "tmp", "plugin.tgz");
     const extractDir = path.join(tmpRoot, "extract");
     const packageRoot = path.join(extractDir, "package");
     const withTempDirSpy = vi
-      .spyOn(installSource, "withTempDir")
+      .spyOn(installSource, "withInstallWorkspace")
       .mockImplementation(async (_prefix, fn) => await fn(tmpRoot));
     const extractSpy = vi.spyOn(archive, "extractArchive").mockResolvedValue(undefined);
     const resolveRootSpy = vi.spyOn(archive, "resolvePackedRootDir").mockResolvedValue(packageRoot);
@@ -75,12 +111,12 @@ describe("withExtractedArchiveRoot", () => {
       onExtracted,
     });
 
-    expect(withTempDirSpy).toHaveBeenCalledWith("openclaw-plugin-", expect.any(Function));
-    expect(extractSpy).toHaveBeenCalledWith(
-      expect.objectContaining({
-        archivePath,
-      }),
-    );
+    expect(withTempDirSpy).toHaveBeenCalledTimes(1);
+    const withTempDirCall = firstMockCall(withTempDirSpy);
+    expect(withTempDirCall?.[0]).toBe("openclaw-plugin-");
+    expect(typeof withTempDirCall?.[1]).toBe("function");
+    expect(extractSpy).toHaveBeenCalledOnce();
+    expect(firstMockCall(extractSpy)?.[0]?.archivePath).toBe(archivePath);
     expect(resolveRootSpy).toHaveBeenCalledWith(extractDir, {
       rootMarkers: ["package.json"],
     });

@@ -1,3 +1,4 @@
+/** Tests Zalo token activity secret discovery in runtime config. */
 import { describe, expect, it } from "vitest";
 import "./runtime-zalo.test-support.ts";
 import {
@@ -7,6 +8,14 @@ import {
 } from "./runtime.test-support.ts";
 
 const { prepareSecretsRuntimeSnapshot } = setupSecretsRuntimeSnapshotTestHooks();
+
+function requireZaloConfig(snapshot: Awaited<ReturnType<typeof prepareSecretsRuntimeSnapshot>>) {
+  const config = snapshot.config.channels?.zalo;
+  if (!config) {
+    throw new Error("expected Zalo runtime config");
+  }
+  return config;
+}
 
 describe("secrets runtime snapshot zalo token activity", () => {
   it("treats top-level Zalo botToken refs as active even when tokenFile is configured", async () => {
@@ -26,7 +35,7 @@ describe("secrets runtime snapshot zalo token activity", () => {
       loadAuthStore: () => loadAuthStoreWithProfiles({}),
     });
 
-    expect(snapshot.config.channels?.zalo?.botToken).toBe("resolved-zalo-token");
+    expect(requireZaloConfig(snapshot).botToken).toBe("resolved-zalo-token");
     expect(snapshot.warnings.map((warning) => warning.path)).not.toContain(
       "channels.zalo.botToken",
     );
@@ -83,7 +92,7 @@ describe("secrets runtime snapshot zalo token activity", () => {
       loadAuthStore: () => loadAuthStoreWithProfiles({}),
     });
 
-    expect(snapshot.config.channels?.zalo?.botToken).toBe("resolved-zalo-top-level-token");
+    expect(requireZaloConfig(snapshot).botToken).toBe("resolved-zalo-top-level-token");
     expect(snapshot.warnings.map((warning) => warning.path)).not.toContain(
       "channels.zalo.botToken",
     );

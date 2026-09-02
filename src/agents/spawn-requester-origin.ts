@@ -1,3 +1,8 @@
+/**
+ * Spawn requester origin resolver.
+ *
+ * Normalizes delivery targets and route bindings so spawned runs can attribute the requesting account/channel.
+ */
 import type { ChatType } from "../channels/chat-type.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveFirstBoundAccountId } from "../routing/bound-account-read.js";

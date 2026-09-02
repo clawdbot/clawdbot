@@ -1,3 +1,4 @@
+// Voice Call plugin module implements base behavior.
 import type {
   AnswerCallInput,
   GetCallStatusInput,
@@ -30,6 +31,8 @@ import type {
 export interface VoiceCallProvider {
   /** Provider identifier */
   readonly name: ProviderName;
+
+  setPublicUrl?(url: string): void;
 
   /**
    * Verify webhook signature/HMAC before processing.

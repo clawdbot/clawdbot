@@ -1,5 +1,8 @@
+// Resolve target error helpers share common route-target validation cases.
 import { expect, it } from "vitest";
 
+// Shared resolve-target negative cases used by messaging/channel tests. The
+// target resolver shape is intentionally tiny so each channel can adapt it.
 export type ResolveTargetMode = "explicit" | "implicit" | "heartbeat";
 
 export type ResolveTargetResult = {

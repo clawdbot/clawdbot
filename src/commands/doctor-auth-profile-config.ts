@@ -1,11 +1,12 @@
-import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
-import { collectConfiguredModelRefs } from "../config/model-refs.js";
-import type { AuthProfileConfig } from "../config/types.auth.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
+/** Protects active auth profile metadata while doctor repairs broader config state. */
+import { collectConfiguredModelRefs } from "@openclaw/model-catalog-core/configured-model-refs";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
-} from "../shared/string-coerce.js";
+} from "@openclaw/normalization-core/string-coerce";
+import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
+import type { AuthProfileConfig } from "../config/types.auth.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isRecord } from "../utils.js";
 
 const AUTH_PROFILE_MODES = new Set<AuthProfileConfig["mode"]>([
@@ -15,7 +16,7 @@ const AUTH_PROFILE_MODES = new Set<AuthProfileConfig["mode"]>([
   "token",
 ]);
 
-export type AuthProfileConfigProtectionResult = {
+type AuthProfileConfigProtectionResult = {
   config: OpenClawConfig;
   repairs: string[];
   warnings: string[];
@@ -76,9 +77,9 @@ function collectActiveAuthHints(config: OpenClawConfig): {
     if (profile) {
       explicitProfileIds.add(profile);
       if (provider) {
-        const providers = explicitProfileProviders.get(profile) ?? new Set<string>();
-        providers.add(provider);
-        explicitProfileProviders.set(profile, providers);
+        const providersLocal = explicitProfileProviders.get(profile) ?? new Set<string>();
+        providersLocal.add(provider);
+        explicitProfileProviders.set(profile, providersLocal);
       }
     }
     if (provider) {
@@ -153,6 +154,12 @@ function ensureAuthProfiles(config: OpenClawConfig): Record<string, AuthProfileC
   return auth.profiles as Record<string, AuthProfileConfig>;
 }
 
+/**
+ * Restores valid metadata for auth profiles still referenced by active model config.
+ *
+ * Doctor can rebuild or prune auth config; this guard keeps active profiles usable when their
+ * provider/mode metadata can be inferred from the before/after config or profile id.
+ */
 export function protectActiveAuthProfileConfig(params: {
   before: OpenClawConfig;
   after: OpenClawConfig;
@@ -183,7 +190,7 @@ export function protectActiveAuthProfileConfig(params: {
       normalizeProviderId(afterProfileRecord?.provider) ||
       normalizeProviderId(beforeProfileRecord?.provider) ||
       extractProviderFromProfileId(profileId);
-    const protectsActiveProvider = !!provider && activeProviders.has(provider);
+    const protectsActiveProvider = provider !== null && activeProviders.has(provider);
     const protectsExplicitProfile = explicitProfileIds.has(profileId);
     if (!protectsActiveProvider && !protectsExplicitProfile) {
       continue;

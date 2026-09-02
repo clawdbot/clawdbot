@@ -1,6 +1,6 @@
 ---
 name: taskflow-inbox-triage
-description: Example TaskFlow pattern for inbox triage, intent routing, waiting on replies, and later summaries.
+description: "Example TaskFlow pattern for inbox triage, intent routing, waiting on replies, and later summaries."
 metadata: { "openclaw": { "emoji": "📥" } }
 ---
 
@@ -12,9 +12,9 @@ This is a concrete example of how to think about TaskFlow without turning the co
 
 Triage inbox items with one owner flow:
 
-- business → post to Slack and wait for reply
-- personal → notify the owner now
-- everything else → keep for end-of-day summary
+- business -> post to Slack and wait for reply
+- personal -> notify the owner now
+- everything else -> keep for end-of-day summary
 
 ## Pattern
 
@@ -48,7 +48,7 @@ Suggested `waitJson` when blocked on Slack:
 ## Minimal runtime calls
 
 ```ts
-const taskFlow = api.runtime.tasks.flow.fromToolContext(ctx);
+const taskFlow = api.runtime.tasks.managedFlows.fromToolContext(ctx);
 
 const created = taskFlow.createManaged({
   controllerId: "my-plugin/inbox-triage",

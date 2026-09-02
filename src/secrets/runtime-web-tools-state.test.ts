@@ -1,7 +1,8 @@
+/** Tests clone isolation for active web-tool metadata state. */
 import { afterEach, describe, expect, it } from "vitest";
 import {
   clearActiveRuntimeWebToolsMetadata,
-  getActiveRuntimeWebToolsMetadata,
+  getActiveRuntimeWebToolsMetadataFromState,
   setActiveRuntimeWebToolsMetadata,
 } from "./runtime-web-tools-state.js";
 
@@ -26,18 +27,21 @@ describe("runtime web tools state", () => {
       diagnostics: [],
     });
 
-    const first = getActiveRuntimeWebToolsMetadata();
-    expect(first?.search.providerConfigured).toBe("gemini");
-    expect(first?.search.selectedProvider).toBe("gemini");
-    expect(first?.search.selectedProviderKeySource).toBe("secretRef");
+    const first = getActiveRuntimeWebToolsMetadataFromState();
     if (!first) {
       throw new Error("missing runtime web tools metadata");
     }
+    expect(first.search.providerConfigured).toBe("gemini");
+    expect(first.search.selectedProvider).toBe("gemini");
+    expect(first.search.selectedProviderKeySource).toBe("secretRef");
     first.search.providerConfigured = "brave";
     first.search.selectedProvider = "brave";
 
-    const second = getActiveRuntimeWebToolsMetadata();
-    expect(second?.search.providerConfigured).toBe("gemini");
-    expect(second?.search.selectedProvider).toBe("gemini");
+    const second = getActiveRuntimeWebToolsMetadataFromState();
+    if (!second) {
+      throw new Error("missing cloned runtime web tools metadata");
+    }
+    expect(second.search.providerConfigured).toBe("gemini");
+    expect(second.search.selectedProvider).toBe("gemini");
   });
 });

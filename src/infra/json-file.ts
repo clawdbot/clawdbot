@@ -1,10 +1,8 @@
+// Loads and saves JSON files with symlink backup handling.
 import "./fs-safe-defaults.js";
 import fs from "node:fs";
 import path from "node:path";
-import { tryReadJsonSync, tryReadJson, writeJsonSync } from "@openclaw/fs-safe/json";
-
-export { tryReadJson, tryReadJsonSync, writeJsonSync };
-export const readJsonFile = tryReadJson;
+import { tryReadJsonSync, writeJsonSync } from "@openclaw/fs-safe/json";
 
 function resolveJsonSymlinkTarget(pathname: string): string | undefined {
   let stat: fs.Stats;
@@ -32,12 +30,12 @@ function resolveJsonSaveTarget(pathname: string): string {
   return target;
 }
 
-export function saveJsonFile(pathname: string, data: unknown): void {
+export function writeJsonTarget(pathname: string, data: unknown): void {
   writeJsonSync(resolveJsonSaveTarget(pathname), data);
 }
 
 // oxlint-disable-next-line typescript-eslint/no-unnecessary-type-parameters -- legacy typed JSON loader alias.
-export function loadJsonFile<T = unknown>(pathname: string): T | undefined {
+export function loadJsonFileThroughSymlink<T = unknown>(pathname: string): T | undefined {
   const direct = tryReadJsonSync<T>(pathname);
   if (direct !== null) {
     return direct;

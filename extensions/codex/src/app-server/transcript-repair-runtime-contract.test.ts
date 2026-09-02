@@ -1,3 +1,4 @@
+// Codex tests cover transcript repair runtime contract plugin behavior.
 import {
   assistantHistoryMessage,
   currentPromptHistoryMessage,

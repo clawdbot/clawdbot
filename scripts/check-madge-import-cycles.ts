@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+// Check Madge Import Cycles script supports OpenClaw repository automation.
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -64,7 +65,7 @@ function createImportGraph(files: readonly string[]): Map<string, string[]> {
       file,
       readFileSync(absoluteFile, "utf8"),
       ts.ScriptTarget.Latest,
-      true,
+      false,
     );
     const imports = collectStaticModuleSpecifiers(sourceFile).flatMap((specifier) => {
       const resolved = ts.resolveModuleName(

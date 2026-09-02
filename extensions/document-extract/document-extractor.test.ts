@@ -1,106 +1,234 @@
-import { existsSync } from "node:fs";
-import { createRequire } from "node:module";
-import path from "node:path";
+// Document Extract tests cover document extractor plugin behavior.
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 
-const { canvasSizes, getDocumentMock, pdfDocument } = vi.hoisted(() => ({
-  canvasSizes: [] as Array<{ width: number; height: number }>,
-  getDocumentMock: vi.fn(),
+const { createEngineMock, openPdfMock, pdfDocument } = vi.hoisted(() => ({
+  createEngineMock: vi.fn(),
+  openPdfMock: vi.fn(),
   pdfDocument: {
-    numPages: 2,
-    getPage: vi.fn(async () => ({
-      getTextContent: vi.fn(async () => ({ items: [] })),
-      getViewport: vi.fn(({ scale }: { scale: number }) => ({
-        width: 1000 * scale,
-        height: 1000 * scale,
-      })),
-      render: vi.fn(() => ({ promise: Promise.resolve() })),
-    })),
+    pageCount: 2,
+    extract: vi.fn(),
+    destroy: vi.fn(),
   },
 }));
 
-vi.mock("pdfjs-dist/legacy/build/pdf.mjs", () => ({
-  getDocument: getDocumentMock,
-}));
-
-vi.mock("@napi-rs/canvas", () => ({
-  createCanvas: vi.fn((width: number, height: number) => {
-    canvasSizes.push({ width, height });
-    return {
-      toBuffer: vi.fn(() => Buffer.from("png")),
-    };
-  }),
+vi.mock("clawpdf", () => ({
+  createEngine: createEngineMock,
 }));
 
 import { createPdfDocumentExtractor } from "./document-extractor.js";
 
-const require = createRequire(import.meta.url);
+function request(overrides = {}) {
+  return {
+    buffer: Buffer.from("%PDF-1.4"),
+    mimeType: "application/pdf",
+    maxPages: 2,
+    maxPixels: 100,
+    minTextChars: 10,
+    ...overrides,
+  };
+}
 
 describe("PDF document extractor", () => {
   afterAll(() => {
-    vi.doUnmock("pdfjs-dist/legacy/build/pdf.mjs");
-    vi.doUnmock("@napi-rs/canvas");
+    vi.doUnmock("clawpdf");
     vi.resetModules();
   });
 
   beforeEach(() => {
-    canvasSizes.length = 0;
-    getDocumentMock.mockReset();
-    getDocumentMock.mockReturnValue({ promise: Promise.resolve(pdfDocument) });
-    pdfDocument.getPage.mockClear();
+    createEngineMock.mockResolvedValue({ open: openPdfMock });
+    openPdfMock.mockReset();
+    openPdfMock.mockResolvedValue(pdfDocument);
+    pdfDocument.pageCount = 2;
+    pdfDocument.extract.mockReset();
+    pdfDocument.destroy.mockReset();
   });
 
   it("declares PDF support", () => {
     const extractor = createPdfDocumentExtractor();
-    expect(extractor).toMatchObject({
+    const { extract, ...descriptor } = extractor;
+    expect(extract).toBeInstanceOf(Function);
+    expect(descriptor).toEqual({
       id: "pdf",
       label: "PDF",
       mimeTypes: ["application/pdf"],
+      autoDetectOrder: 10,
     });
   });
 
-  it("treats maxPixels as a hard total image rendering budget", async () => {
+  it("extracts text first and renders each fallback page with its own pixel budget", async () => {
+    pdfDocument.extract
+      .mockResolvedValueOnce({ text: "", images: [] })
+      .mockResolvedValueOnce({
+        text: "",
+        images: [
+          {
+            type: "image",
+            bytes: Uint8Array.from(Buffer.from("!png1?")).subarray(1, 5),
+            mimeType: "image/png",
+            page: 1,
+            width: 5,
+            height: 10,
+          },
+        ],
+      })
+      .mockResolvedValueOnce({
+        text: "",
+        images: [
+          {
+            type: "image",
+            bytes: Uint8Array.from(Buffer.from("png2")),
+            mimeType: "image/png",
+            page: 2,
+            width: 5,
+            height: 10,
+          },
+        ],
+      });
     const extractor = createPdfDocumentExtractor();
 
-    const result = await extractor.extract({
-      buffer: Buffer.from("%PDF-1.4"),
-      mimeType: "application/pdf",
+    const input = request({ buffer: Buffer.from("!%PDF-1.4?").subarray(1, -1) });
+    const result = await extractor.extract(input);
+
+    if (!result) {
+      throw new Error("Expected PDF extraction result");
+    }
+    expect(openPdfMock).toHaveBeenCalledWith(expect.any(Uint8Array));
+    expect(Buffer.from(openPdfMock.mock.calls[0]?.[0] ?? [])).toEqual(input.buffer);
+    expect(pdfDocument.extract).toHaveBeenNthCalledWith(1, {
+      mode: "text",
       maxPages: 2,
-      maxPixels: 100,
-      minTextChars: 10,
+      maxTextChars: 200_000,
     });
-
-    expect(result?.images).toHaveLength(1);
-    expect(canvasSizes).toEqual([{ width: 10, height: 10 }]);
+    // Each page renders in its own extract() call, with the aggregate pixel cap
+    // allocated across selected pages so later pages are not starved.
+    expect(pdfDocument.extract).toHaveBeenNthCalledWith(2, {
+      mode: "images",
+      pages: [1],
+      image: { maxDimension: 10_000, maxPixels: 50, forms: true },
+    });
+    expect(pdfDocument.extract).toHaveBeenNthCalledWith(3, {
+      mode: "images",
+      pages: [2],
+      image: { maxDimension: 10_000, maxPixels: 50, forms: true },
+    });
+    expect(result).toEqual({
+      text: "",
+      images: [
+        { type: "image", data: "cG5nMQ==", mimeType: "image/png" },
+        { type: "image", data: "cG5nMg==", mimeType: "image/png" },
+      ],
+    });
+    expect(pdfDocument.destroy).toHaveBeenCalledTimes(1);
   });
 
-  it("passes standardFontDataUrl to pdfjs getDocument as a package-root filesystem path", async () => {
+  it("skips image fallback when enough text is extracted", async () => {
+    pdfDocument.extract.mockResolvedValueOnce({ text: "enough text", images: [] });
     const extractor = createPdfDocumentExtractor();
 
-    await extractor.extract({
-      buffer: Buffer.from("%PDF-1.4"),
-      mimeType: "application/pdf",
-      maxPages: 1,
-      maxPixels: 4_000_000,
-      minTextChars: 200,
-    });
+    const result = await extractor.extract(request({ minTextChars: 5 }));
 
-    expect(getDocumentMock).toHaveBeenCalledTimes(1);
-    const [params] = getDocumentMock.mock.calls[0] ?? [];
-    expect(params).toMatchObject({
-      disableWorker: true,
-    });
-    expect(typeof params.standardFontDataUrl).toBe("string");
+    expect(result).toEqual({ text: "enough text", images: [] });
+    expect(pdfDocument.extract).toHaveBeenCalledTimes(1);
+    expect(pdfDocument.destroy).toHaveBeenCalledTimes(1);
+  });
 
-    const expectedStandardFontDataUrl =
-      path.join(path.dirname(require.resolve("pdfjs-dist/package.json")), "standard_fonts") + "/";
-    expect(params.standardFontDataUrl).toBe(expectedStandardFontDataUrl);
-    expect(path.isAbsolute(params.standardFontDataUrl)).toBe(true);
-    expect(params.standardFontDataUrl.endsWith("/")).toBe(true);
-    expect(params.standardFontDataUrl.startsWith("file://")).toBe(false);
-    expect(existsSync(params.standardFontDataUrl)).toBe(true);
-    expect(existsSync(path.join(params.standardFontDataUrl, "LiberationSans-Regular.ttf"))).toBe(
-      true,
+  it("opens encrypted PDFs with the request password", async () => {
+    pdfDocument.extract.mockResolvedValueOnce({ text: "enough text", images: [] });
+    const extractor = createPdfDocumentExtractor();
+
+    await extractor.extract(request({ password: "secret" }));
+
+    expect(openPdfMock).toHaveBeenCalledWith(expect.any(Uint8Array), { password: "secret" });
+    expect(pdfDocument.destroy).toHaveBeenCalledTimes(1);
+  });
+
+  it("normalizes clawpdf password errors", async () => {
+    openPdfMock.mockRejectedValueOnce(
+      Object.assign(new Error("bad password"), { code: "password" }),
     );
+    const extractor = createPdfDocumentExtractor();
+
+    await expect(extractor.extract(request({ password: "wrong" }))).rejects.toThrow(
+      "PDF requires a password or password is incorrect.",
+    );
+    expect(pdfDocument.destroy).not.toHaveBeenCalled();
+  });
+
+  it("filters selected pages and renders them one page per image call", async () => {
+    pdfDocument.extract
+      .mockResolvedValueOnce({ text: "", images: [] })
+      .mockResolvedValueOnce({ text: "", images: [] })
+      .mockResolvedValueOnce({ text: "", images: [] });
+    const extractor = createPdfDocumentExtractor();
+
+    const result = await extractor.extract(request({ pageNumbers: [3, 2, 0, 1], maxPages: 2 }));
+
+    expect(result).toEqual({ text: "", images: [] });
+    expect(pdfDocument.extract).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ mode: "text", pages: [2, 1] }),
+    );
+    expect(pdfDocument.extract).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ mode: "images", pages: [2] }),
+    );
+    expect(pdfDocument.extract).toHaveBeenNthCalledWith(
+      3,
+      expect.objectContaining({ mode: "images", pages: [1] }),
+    );
+  });
+
+  it("rejects selected pages outside the PDF page count before extraction", async () => {
+    pdfDocument.pageCount = 1;
+    pdfDocument.extract.mockResolvedValueOnce({ text: "", images: [] });
+    const extractor = createPdfDocumentExtractor();
+
+    await expect(extractor.extract(request({ pageNumbers: [2] }))).rejects.toThrow(
+      "No requested PDF pages exist in this 1-page document.",
+    );
+    expect(pdfDocument.extract).not.toHaveBeenCalled();
+    expect(pdfDocument.destroy).toHaveBeenCalledTimes(1);
+
+    await expect(extractor.extract(request({ pageNumbers: [] }))).resolves.toEqual({
+      text: "",
+      images: [],
+    });
+    expect(pdfDocument.destroy).toHaveBeenCalledTimes(2);
+  });
+
+  it("reports image fallback failures and returns extracted text", async () => {
+    const onImageExtractionError = vi.fn();
+    const failure = new Error("render failed");
+    pdfDocument.extract
+      .mockResolvedValueOnce({ text: "short", images: [] })
+      .mockRejectedValueOnce(failure);
+    const extractor = createPdfDocumentExtractor();
+
+    const result = await extractor.extract(request({ onImageExtractionError }));
+
+    expect(result).toEqual({ text: "short", images: [] });
+    expect(onImageExtractionError).toHaveBeenCalledWith(failure);
+    expect(pdfDocument.destroy).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    { label: "empty", text: "", reportError: true },
+    { label: "whitespace-only", text: " \t\n", reportError: false },
+  ])("surfaces image fallback failures for $label PDF text", async ({ text, reportError }) => {
+    const { PdfBudgetError } = await vi.importActual<typeof import("clawpdf")>("clawpdf");
+    const onImageExtractionError = vi.fn();
+    const failure = new PdfBudgetError("renderPixels", 100);
+    pdfDocument.extract.mockResolvedValueOnce({ text, images: [] }).mockRejectedValueOnce(failure);
+    const overrides = reportError ? { onImageExtractionError } : {};
+
+    await expect(createPdfDocumentExtractor().extract(request(overrides))).rejects.toMatchObject({
+      message: "PDF image extraction failed with no extractable text.",
+      cause: failure,
+    });
+    expect(onImageExtractionError).toHaveBeenCalledTimes(reportError ? 1 : 0);
+    if (reportError) {
+      expect(onImageExtractionError).toHaveBeenCalledWith(failure);
+    }
+    expect(pdfDocument.destroy).toHaveBeenCalledTimes(1);
   });
 });

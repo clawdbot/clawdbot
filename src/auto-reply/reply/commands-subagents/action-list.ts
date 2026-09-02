@@ -1,6 +1,8 @@
-import { buildSubagentList } from "../../../agents/subagent-list.js";
+// Lists subagent runs with lifecycle status.
+import { buildSubagentList } from "../../../agents/subagents/registry/subagent-list.js";
+import { commandReply } from "../command-gates.js";
 import type { CommandHandlerResult } from "../commands-types.js";
-import { type SubagentsCommandContext, RECENT_WINDOW_MINUTES, stopWithText } from "./shared.js";
+import { type SubagentsCommandContext, RECENT_WINDOW_MINUTES } from "./shared.js";
 
 export function handleSubagentsListAction(ctx: SubagentsCommandContext): CommandHandlerResult {
   const { params, runs } = ctx;
@@ -23,5 +25,5 @@ export function handleSubagentsListAction(ctx: SubagentsCommandContext): Command
     lines.push(list.recent.map((entry) => entry.line).join("\n"));
   }
 
-  return stopWithText(lines.join("\n"));
+  return commandReply(lines.join("\n"));
 }

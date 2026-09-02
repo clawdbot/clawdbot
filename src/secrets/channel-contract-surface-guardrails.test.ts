@@ -1,3 +1,4 @@
+/** Guardrail tests for channel contract secret surfaces. */
 import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";

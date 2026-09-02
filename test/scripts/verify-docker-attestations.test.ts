@@ -1,7 +1,10 @@
+// Verify Docker Attestations tests cover verify docker attestations script behavior.
 import { describe, expect, it } from "vitest";
 import {
   collectDockerAttestationErrors,
   imageRefForDigest,
+  inspectRaw,
+  parseArgs,
   parsePlatform,
 } from "../../scripts/verify-docker-attestations.mjs";
 
@@ -52,6 +55,52 @@ function createAttestation(
 }
 
 describe("verify-docker-attestations", () => {
+  it("bounds docker manifest inspection calls", () => {
+    const calls: unknown[] = [];
+    const imageRef = "ghcr.io/openclaw/openclaw:test";
+    const output = inspectRaw(imageRef, {
+      execFileSyncImpl(command: string, args: string[], options: unknown) {
+        calls.push({ args, command, options });
+        return "{}";
+      },
+    });
+
+    expect(output).toBe("{}");
+    expect(calls).toStrictEqual([
+      {
+        args: ["buildx", "imagetools", "inspect", "--raw", imageRef],
+        command: "docker",
+        options: {
+          encoding: "utf8",
+          killSignal: "SIGKILL",
+          maxBuffer: 20 * 1024 * 1024,
+          stdio: ["ignore", "pipe", "pipe"],
+          timeout: 120_000,
+        },
+      },
+    ]);
+  });
+
+  it("parses required platforms and image refs", () => {
+    expect(
+      parseArgs(["--platform", "linux/amd64", "--platform", "linux/arm64", "ghcr.io/openclaw/app"]),
+    ).toEqual({
+      help: false,
+      imageRefs: ["ghcr.io/openclaw/app"],
+      requiredPlatforms: [
+        { architecture: "amd64", os: "linux", variant: undefined },
+        { architecture: "arm64", os: "linux", variant: undefined },
+      ],
+    });
+  });
+
+  it("rejects missing platform option values", () => {
+    expect(() => parseArgs(["--platform"])).toThrow("--platform requires a value");
+    expect(() => parseArgs(["--platform", "-h"])).toThrow("--platform requires a value");
+    expect(() => parseArgs(["--platform", "--help"])).toThrow("--platform requires a value");
+    expect(() => parseArgs(["--platform", ""])).toThrow("--platform requires a value");
+  });
+
   it("resolves digest refs from tagged image refs", () => {
     expect(imageRefForDigest("ghcr.io/openclaw/openclaw:2026.4.26", imageDigest)).toBe(
       `ghcr.io/openclaw/openclaw@${imageDigest}`,
@@ -69,7 +118,7 @@ describe("verify-docker-attestations", () => {
       inspectAttestation: () => createAttestation(),
     });
 
-    expect(errors).toEqual([]);
+    expect(errors).toStrictEqual([]);
   });
 
   it("accepts attestation manifests with omitted artifactType", () => {
@@ -84,7 +133,7 @@ describe("verify-docker-attestations", () => {
       },
     });
 
-    expect(errors).toEqual([]);
+    expect(errors).toStrictEqual([]);
   });
 
   it("reports unexpected attestation artifact types", () => {

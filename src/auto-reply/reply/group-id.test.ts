@@ -1,5 +1,16 @@
-import { describe, expect, it } from "vitest";
+// Tests group id derivation for channel sessions and persisted routes.
+import { afterEach, describe, expect, it } from "vitest";
+import { setActivePluginRegistry } from "../../plugins/runtime.js";
+import {
+  createChannelTestPluginBase,
+  createTestRegistry,
+} from "../../test-utils/channel-plugins.js";
 import { extractSimpleExplicitGroupId } from "./group-id-simple.js";
+import { extractExplicitGroupId } from "./group-id.js";
+
+afterEach(() => {
+  setActivePluginRegistry(createTestRegistry());
+});
 
 describe("extractSimpleExplicitGroupId", () => {
   it("returns undefined for empty/null input", () => {
@@ -41,4 +52,46 @@ describe("extractSimpleExplicitGroupId", () => {
     expect(extractSimpleExplicitGroupId("user:12345")).toBeUndefined();
     expect(extractSimpleExplicitGroupId("just-a-string")).toBeUndefined();
   });
+});
+
+describe("extractExplicitGroupId", () => {
+  it.each([
+    {
+      name: "declared inferred shorthand",
+      channel: "telegram",
+      declaresNumericShorthand: true,
+      expected: "-100200300",
+    },
+    {
+      name: "undeclared inferred shorthand",
+      channel: "plainchat",
+      declaresNumericShorthand: false,
+      expected: "-100200300:77",
+    },
+  ])(
+    "uses $name metadata after target normalization",
+    ({ channel, declaresNumericShorthand, expected }) => {
+      setActivePluginRegistry(
+        createTestRegistry([
+          {
+            pluginId: channel,
+            source: "test",
+            plugin: {
+              ...createChannelTestPluginBase({
+                id: channel,
+                capabilities: { chatTypes: ["group"] },
+              }),
+              messaging: {
+                ...(declaresNumericShorthand ? { numericTopicShorthand: true as const } : {}),
+                normalizeTarget: () => `${channel}:-100200300:77`,
+                inferTargetChatType: () => "group" as const,
+              },
+            },
+          },
+        ]),
+      );
+
+      expect(extractExplicitGroupId(`${channel}:-100200300:77`)).toBe(expected);
+    },
+  );
 });

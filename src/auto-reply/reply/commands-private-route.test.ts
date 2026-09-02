@@ -1,3 +1,5 @@
+// Tests private-route command persistence and timestamp bounds.
+import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/config.js";
@@ -8,7 +10,10 @@ import {
   createTestRegistry,
 } from "../../test-utils/channel-plugins.js";
 import type { MsgContext } from "../templating.js";
-import { resolvePrivateCommandRouteTargets } from "./commands-private-route.js";
+import {
+  resolvePrivateCommandApprovalRouteExpiresAtMs,
+  resolvePrivateCommandRouteTargets,
+} from "./commands-private-route.js";
 import type { HandleCommandsParams } from "./commands-types.js";
 
 function createApprovalChannelPlugin(params: {
@@ -60,6 +65,7 @@ function createOwnerDerivedApprovalChannelPlugin(params: {
       id: params.id,
       label: params.id,
     }),
+    messaging: { targetPrefixes: params.ownerPrefixes },
     approvalCapability: {
       native: {
         describeDeliveryCapabilities: vi.fn(({ cfg }) => {
@@ -144,6 +150,22 @@ afterEach(() => {
   resetPluginRuntimeStateForTest();
 });
 
+describe("resolvePrivateCommandApprovalRouteExpiresAtMs", () => {
+  it("returns a bounded five-minute route expiry for valid clocks", () => {
+    expect(resolvePrivateCommandApprovalRouteExpiresAtMs(1_800_000_000_000)).toBe(
+      1_800_000_300_000,
+    );
+  });
+
+  it("expires private command routes immediately for invalid clocks", () => {
+    expect(resolvePrivateCommandApprovalRouteExpiresAtMs(Number.NaN)).toBe(0);
+  });
+
+  it("expires private command routes immediately when expiry would exceed Date bounds", () => {
+    expect(resolvePrivateCommandApprovalRouteExpiresAtMs(MAX_DATE_TIMESTAMP_MS)).toBe(0);
+  });
+});
+
 describe("resolvePrivateCommandRouteTargets", () => {
   it("prefers a same-surface private owner route even when another owner route is listed first", async () => {
     registerApprovalChannelPlugins([
@@ -209,14 +231,10 @@ describe("resolvePrivateCommandRouteTargets", () => {
       request: buildApprovalRequest(),
     });
 
-    expect(targets[0]).toMatchObject({
-      channel: "telegram",
-      to: "849985193",
-    });
-    expect(targets[1]).toMatchObject({
-      channel: "whatsapp",
-      to: "+15555550100",
-    });
+    expect(targets[0]?.channel).toBe("telegram");
+    expect(targets[0]?.to).toBe("849985193");
+    expect(targets[1]?.channel).toBe("whatsapp");
+    expect(targets[1]?.to).toBe("+15555550100");
   });
 
   it("does not select a same-surface exec approver unless it is also an owner route", async () => {
@@ -250,7 +268,7 @@ describe("resolvePrivateCommandRouteTargets", () => {
     ]);
   });
 
-  it("routes a Discord group command to the Telegram owner without Telegram exec approvers", async () => {
+  it("routes a Discord group command through Telegram's declared tg owner prefix", async () => {
     registerApprovalChannelPlugins([
       createApprovalChannelPlugin({
         id: "discord",
@@ -265,7 +283,7 @@ describe("resolvePrivateCommandRouteTargets", () => {
     const targets = await resolvePrivateCommandRouteTargets({
       commandParams: buildCommandParams({
         commands: {
-          ownerAllowFrom: ["telegram:849985193"],
+          ownerAllowFrom: ["tg:849985193"],
         },
         channels: {
           telegram: {

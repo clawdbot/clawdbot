@@ -1,38 +1,123 @@
-import { normalizeProviderId } from "../provider-id.js";
-import type { AuthProfileStore, ProfileUsageStats } from "./types.js";
+/**
+ * Pure cooldown and unusable-window helpers for auth profile usage state.
+ * Mutation and persistence live in usage.ts; this module owns reusable state
+ * predicates used by rotation and failure handling.
+ */
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import { asDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
+import type { AuthProfileFailureReason, AuthProfileStore, ProfileUsageStats } from "./types.js";
 
+/** Clears failure windows while preserving unrelated usage history. */
+export function resetAuthProfileFailureState(
+  existing: ProfileUsageStats,
+  overrides?: Partial<ProfileUsageStats>,
+): ProfileUsageStats {
+  return {
+    ...existing,
+    errorCount: 0,
+    blockedUntil: undefined,
+    blockedReason: undefined,
+    blockedSource: undefined,
+    blockedModel: undefined,
+    blockedScope: undefined,
+    cooldownUntil: undefined,
+    cooldownReason: undefined,
+    cooldownClassification: undefined,
+    cooldownModel: undefined,
+    disabledUntil: undefined,
+    disabledReason: undefined,
+    failureCounts: undefined,
+    ...overrides,
+  };
+}
+
+/** Returns true for providers whose auth-profile cooldowns are provider-managed. */
 export function isAuthCooldownBypassedForProvider(provider: string | undefined): boolean {
   const normalized = normalizeProviderId(provider ?? "");
   return normalized === "openrouter" || normalized === "kilocode";
 }
 
+// Per-attempt transient failures (#87462, #116464): block only the failing
+// model so fallback models on the same auth profile can still try. A model that
+// the provider does not serve (model_not_found) says nothing about sibling
+// models, so it stays model-scoped too. Other reasons (auth, billing, format,
+// server_error) remain profile-wide.
+/** Returns true when a failure should only cool down the failing model. */
+export function isModelScopedCooldownReason(reason: AuthProfileFailureReason | undefined): boolean {
+  return reason === "rate_limit" || reason === "timeout" || reason === "model_not_found";
+}
+
+/** Resolves the latest active blocked/cooldown/disabled timestamp for a profile. */
 export function resolveProfileUnusableUntil(
-  stats: Pick<ProfileUsageStats, "cooldownUntil" | "disabledUntil">,
+  stats: Pick<
+    ProfileUsageStats,
+    "blockedUntil" | "blockedModel" | "blockedScope" | "cooldownUntil" | "disabledUntil"
+  >,
+  forModel?: string,
 ): number | null {
-  const values = [stats.cooldownUntil, stats.disabledUntil]
-    .filter((value): value is number => typeof value === "number")
-    .filter((value) => Number.isFinite(value) && value > 0);
+  const blockedUntil = isBlockScopedToDifferentModel(stats, forModel)
+    ? undefined
+    : stats.blockedUntil;
+  const values = [blockedUntil, stats.cooldownUntil, stats.disabledUntil]
+    .map((value) => asDateTimestampMs(value))
+    .filter((value): value is number => value !== undefined && value > 0);
   if (values.length === 0) {
     return null;
   }
   return Math.max(...values);
 }
 
+/** Returns true when an unusable timestamp is active at the supplied clock time. */
 export function isActiveUnusableWindow(until: number | undefined, now: number): boolean {
-  return typeof until === "number" && Number.isFinite(until) && until > 0 && now < until;
+  const timestamp = asDateTimestampMs(until);
+  return timestamp !== undefined && timestamp > 0 && now < timestamp;
 }
 
-function shouldBypassModelScopedCooldown(
-  stats: Pick<ProfileUsageStats, "cooldownReason" | "cooldownModel" | "disabledUntil">,
+function isBlockedWindowActiveForModel(
+  stats: Pick<ProfileUsageStats, "blockedUntil" | "blockedModel" | "blockedScope">,
   now: number,
   forModel?: string,
 ): boolean {
-  return !!(
+  return (
+    !isBlockScopedToDifferentModel(stats, forModel) &&
+    isActiveUnusableWindow(stats.blockedUntil, now)
+  );
+}
+
+function isBlockScopedToDifferentModel(
+  stats: Pick<ProfileUsageStats, "blockedModel" | "blockedScope">,
+  forModel?: string,
+): boolean {
+  // Legacy rows carried blockedModel for profile-wide blocks without a scope marker.
+  // Only explicit model scope narrows them; unmarked rows stay wide until expiry.
+  return Boolean(
     forModel &&
-    stats.cooldownReason === "rate_limit" &&
+    stats.blockedScope === "model" &&
+    stats.blockedModel &&
+    stats.blockedModel !== forModel,
+  );
+}
+
+function shouldBypassModelScopedCooldown(
+  stats: Pick<
+    ProfileUsageStats,
+    | "blockedUntil"
+    | "blockedModel"
+    | "blockedScope"
+    | "cooldownReason"
+    | "cooldownModel"
+    | "disabledUntil"
+  >,
+  now: number,
+  forModel?: string,
+): boolean {
+  return Boolean(
+    forModel &&
+    isModelScopedCooldownReason(stats.cooldownReason) &&
     stats.cooldownModel &&
     stats.cooldownModel !== forModel &&
-    !isActiveUnusableWindow(stats.disabledUntil, now)
+    !isBlockedWindowActiveForModel(stats, now, forModel) &&
+    !isActiveUnusableWindow(stats.disabledUntil, now),
   );
 }
 
@@ -53,14 +138,14 @@ export function isProfileInCooldown(
     return false;
   }
   const ts = now ?? Date.now();
-  // Model-aware bypass: if the cooldown was caused by a rate_limit on a
+  // Model-aware bypass: if the cooldown was caused by a model-scoped reason on a
   // specific model and the caller is requesting a *different* model, allow it.
-  // We still honour any active billing/auth disable (`disabledUntil`) — those
-  // are profile-wide and must not be short-circuited by model scoping.
+  // We still honour profile-wide blocked/disabled windows; they must not be
+  // short-circuited by model scoping.
   if (shouldBypassModelScopedCooldown(stats, ts, forModel)) {
     return false;
   }
-  const unusableUntil = resolveProfileUnusableUntil(stats);
+  const unusableUntil = resolveProfileUnusableUntil(stats, forModel);
   return unusableUntil ? ts < unusableUntil : false;
 }
 
@@ -85,7 +170,7 @@ export function getSoonestCooldownExpiry(
     if (shouldBypassModelScopedCooldown(stats, ts, options?.forModel)) {
       continue;
     }
-    const until = resolveProfileUnusableUntil(stats);
+    const until = resolveProfileUnusableUntil(stats, options?.forModel);
     if (typeof until !== "number" || !Number.isFinite(until) || until <= 0) {
       continue;
     }
@@ -93,6 +178,7 @@ export function getSoonestCooldownExpiry(
       options?.forModel &&
       stats.cooldownReason === "rate_limit" &&
       stats.cooldownModel === options.forModel &&
+      !isBlockedWindowActiveForModel(stats, ts, options.forModel) &&
       !isActiveUnusableWindow(stats.disabledUntil, ts);
     if (matchingModelScopedCooldown) {
       latestMatchingModelCooldown =
@@ -125,7 +211,7 @@ export function getSoonestCooldownExpiry(
  * has both and only one has expired, only that field is cleared.
  *
  * Mutates the in-memory store; disk persistence happens lazily on the next
- * store write (e.g. `markAuthProfileUsed` / `markAuthProfileFailure`), which
+ * store write (e.g. `markAuthProfileSuccess` / `markAuthProfileFailure`), which
  * matches the existing save pattern throughout the auth-profiles module.
  *
  * @returns `true` if any profile was modified.
@@ -150,6 +236,11 @@ export function clearExpiredCooldowns(store: AuthProfileStore, now?: number): bo
       Number.isFinite(stats.cooldownUntil) &&
       stats.cooldownUntil > 0 &&
       ts >= stats.cooldownUntil;
+    const blockedExpired =
+      typeof stats.blockedUntil === "number" &&
+      Number.isFinite(stats.blockedUntil) &&
+      stats.blockedUntil > 0 &&
+      ts >= stats.blockedUntil;
     const disabledExpired =
       typeof stats.disabledUntil === "number" &&
       Number.isFinite(stats.disabledUntil) &&
@@ -159,7 +250,16 @@ export function clearExpiredCooldowns(store: AuthProfileStore, now?: number): bo
     if (cooldownExpired) {
       stats.cooldownUntil = undefined;
       stats.cooldownReason = undefined;
+      stats.cooldownClassification = undefined;
       stats.cooldownModel = undefined;
+      profileMutated = true;
+    }
+    if (blockedExpired) {
+      stats.blockedUntil = undefined;
+      stats.blockedReason = undefined;
+      stats.blockedSource = undefined;
+      stats.blockedModel = undefined;
+      stats.blockedScope = undefined;
       profileMutated = true;
     }
     if (disabledExpired) {

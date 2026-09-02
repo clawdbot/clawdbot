@@ -1,3 +1,4 @@
+// Status overview value tests cover compact display values for agents, events, tasks, and services.
 import { describe, expect, it } from "vitest";
 import {
   buildStatusAllAgentsValue,

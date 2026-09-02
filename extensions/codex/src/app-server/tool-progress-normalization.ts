@@ -1,9 +1,13 @@
+/**
+ * Normalizes and sanitizes Codex dynamic-tool progress payloads before they are
+ * emitted into OpenClaw events or logs.
+ */
 import {
   inferToolMetaFromArgs,
-  type EmbeddedRunAttemptParams,
+  type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
   type ToolProgressDetailMode,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { redactSensitiveFieldValue, redactToolPayloadText } from "openclaw/plugin-sdk/text-runtime";
+import { redactSensitiveFieldValue, redactToolPayloadText } from "openclaw/plugin-sdk/logging-core";
 import {
   isJsonObject,
   type CodexDynamicToolCallParams,
@@ -11,16 +15,28 @@ import {
   type JsonValue,
 } from "./protocol.js";
 
+/** Maps OpenClaw tool-progress config to the mode used by Codex progress metadata. */
 export function resolveCodexToolProgressDetailMode(
   value: EmbeddedRunAttemptParams["toolProgressDetail"],
 ): ToolProgressDetailMode {
   return value === "raw" ? "raw" : "explain";
 }
 
-export function sanitizeCodexAgentEventValue(
-  value: unknown,
-  seen = new WeakSet<object>(),
-): unknown {
+export function isCodexCommandBearingToolCall(
+  name: string | undefined,
+  args: Record<string, unknown> | undefined,
+): boolean {
+  const normalizedName = name?.trim().toLowerCase();
+  return (
+    normalizedName === "exec" ||
+    normalizedName === "bash" ||
+    normalizedName === "shell" ||
+    (typeof args?.command === "string" && args.command.trim().length > 0)
+  );
+}
+
+/** Recursively redacts sensitive strings and handles circular values in event payloads. */
+function sanitizeCodexAgentEventValue(value: unknown, seen = new WeakSet<object>()): unknown {
   if (typeof value === "string") {
     return redactToolPayloadText(value);
   }
@@ -37,7 +53,7 @@ export function sanitizeCodexAgentEventValue(
     }
     seen.add(value);
     const out: Record<string, unknown> = {};
-    for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
+    for (const [key, child] of Object.entries(value)) {
       out[key] =
         typeof child === "string"
           ? redactSensitiveFieldValue(key, child)
@@ -48,12 +64,14 @@ export function sanitizeCodexAgentEventValue(
   return value;
 }
 
+/** Sanitizes a record-shaped Codex agent event payload. */
 export function sanitizeCodexAgentEventRecord(
   value: Record<string, unknown>,
 ): Record<string, unknown> {
   return sanitizeCodexAgentEventValue(value) as Record<string, unknown>;
 }
 
+/** Sanitizes dynamic-tool arguments before diagnostic/event emission. */
 export function sanitizeCodexToolArguments(
   value: JsonValue | undefined,
 ): Record<string, unknown> | undefined {
@@ -63,12 +81,14 @@ export function sanitizeCodexToolArguments(
   return sanitizeCodexAgentEventRecord(value);
 }
 
+/** Sanitizes a Codex dynamic-tool response before diagnostic/event emission. */
 export function sanitizeCodexToolResponse(
   response: CodexDynamicToolCallResponse,
 ): Record<string, unknown> {
-  return sanitizeCodexAgentEventRecord(response as unknown as Record<string, unknown>);
+  return sanitizeCodexAgentEventRecord({ ...response });
 }
 
+/** Infers compact human-readable tool metadata from Codex dynamic-tool arguments. */
 export function inferCodexDynamicToolMeta(
   call: Pick<CodexDynamicToolCallParams, "tool" | "arguments">,
   detailMode: ToolProgressDetailMode,

@@ -1,3 +1,8 @@
+/**
+ * Deprecated draft preview finalizer facade.
+ *
+ * Forwards legacy draft-preview callers to live preview finalization helpers.
+ */
 import {
   deliverFinalizableLivePreview,
   type LivePreviewFinalizerDraft,
@@ -5,12 +10,12 @@ import {
 } from "./message/live.js";
 
 /**
- * @deprecated Use `LivePreviewFinalizerDraft` from `openclaw/plugin-sdk/channel-message`.
+ * @deprecated Use `LivePreviewFinalizerDraft` from `openclaw/plugin-sdk/channel-outbound`.
  */
 export type DraftPreviewFinalizerDraft<TId> = LivePreviewFinalizerDraft<TId>;
 
 /**
- * @deprecated Use `LivePreviewFinalizerResult` from `openclaw/plugin-sdk/channel-message`.
+ * @deprecated Use `LivePreviewFinalizerResult` from `openclaw/plugin-sdk/channel-outbound`.
  */
 export type DraftPreviewFinalizerResult = Exclude<
   LivePreviewFinalizerResultKind,
@@ -18,7 +23,7 @@ export type DraftPreviewFinalizerResult = Exclude<
 >;
 
 /**
- * @deprecated Use `deliverFinalizableLivePreview` from `openclaw/plugin-sdk/channel-message`.
+ * @deprecated Use `deliverFinalizableLivePreview` from `openclaw/plugin-sdk/channel-outbound`.
  */
 export async function deliverFinalizableDraftPreview<TPayload, TId, TEdit>(params: {
   kind: "tool" | "block" | "final";

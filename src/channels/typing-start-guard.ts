@@ -1,9 +1,13 @@
+// Circuit breaker for channel typing-start calls.
 type TypingStartGuard = {
   run: (start: () => Promise<void> | void) => Promise<"started" | "skipped" | "failed" | "tripped">;
   reset: () => void;
   isTripped: () => boolean;
 };
 
+/**
+ * Creates a small circuit breaker for channel typing-start calls.
+ */
 export function createTypingStartGuard(params: {
   isSealed: () => boolean;
   shouldBlock?: () => boolean;
@@ -43,6 +47,8 @@ export function createTypingStartGuard(params: {
       if (params.rethrowOnError) {
         throw err;
       }
+      // Keep failed typing indicators from repeatedly delaying reply delivery
+      // after a channel-specific backend starts rejecting start calls.
       if (maxConsecutiveFailures && consecutiveFailures >= maxConsecutiveFailures) {
         tripped = true;
         params.onTrip?.();

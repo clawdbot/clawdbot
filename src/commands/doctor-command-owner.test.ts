@@ -1,3 +1,4 @@
+// Doctor command-owner tests cover channel sender formatting and configured owner detection.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   formatCommandOwnerFromChannelSender,
@@ -7,7 +8,7 @@ import {
 
 const note = vi.hoisted(() => vi.fn());
 
-vi.mock("../terminal/note.js", () => ({
+vi.mock("../../packages/terminal-core/src/note.js", () => ({
   note,
 }));
 
@@ -21,6 +22,10 @@ describe("command owner health", () => {
     expect(hasConfiguredCommandOwners({ commands: { ownerAllowFrom: [] } })).toBe(false);
     expect(hasConfiguredCommandOwners({ commands: { ownerAllowFrom: ["telegram:123"] } })).toBe(
       true,
+    );
+    expect(hasConfiguredCommandOwners({ commands: { ownerAllowFrom: ["*"] } })).toBe(false);
+    expect(hasConfiguredCommandOwners({ commands: { ownerAllowFrom: ["telegram:*"] } })).toBe(
+      false,
     );
   });
 
@@ -37,13 +42,15 @@ describe("command owner health", () => {
     noteCommandOwnerHealth({});
 
     expect(note).toHaveBeenCalledWith(
-      expect.stringContaining("No command owner is configured."),
+      [
+        "No command owner is configured.",
+        "A command owner is the human operator account allowed to run owner-only commands and approve dangerous actions, including /diagnostics, /export-session, /export-trajectory, /config, and exec approvals.",
+        "DM pairing only lets someone talk to the bot; it does not make that sender the owner for privileged commands.",
+        "Fix: set commands.ownerAllowFrom to your channel user id, for example openclaw config set commands.ownerAllowFrom '[\"telegram:123456789\"]'",
+        "Restart the gateway after changing this if it is already running.",
+      ].join("\n"),
       "Command owner",
     );
-    const message = String(note.mock.calls[0]?.[0] ?? "");
-    expect(message).toContain("human operator account");
-    expect(message).toContain("DM pairing only lets someone talk to the bot");
-    expect(message).toContain("commands.ownerAllowFrom");
   });
 
   it("does not warn when command owners are configured", () => {

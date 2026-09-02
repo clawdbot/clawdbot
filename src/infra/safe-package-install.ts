@@ -1,3 +1,4 @@
+// Builds script-disabled npm install commands and env.
 import type { NpmProjectInstallEnvOptions } from "./npm-install-env.js";
 import { createNpmProjectInstallEnv } from "./npm-install-env.js";
 
@@ -18,6 +19,11 @@ type SafeNpmInstallArgsOptions = {
   omitPeer?: boolean;
 };
 
+/**
+ * Creates a project-local npm install environment for untrusted package dirs.
+ * It disables lifecycle scripts, global/workspace leakage, prompts, and noisy
+ * npm features while preserving caller-supplied process env values.
+ */
 export function createSafeNpmInstallEnv(
   env: NodeJS.ProcessEnv,
   options: SafeNpmInstallEnvOptions = {},
@@ -45,6 +51,10 @@ export function createSafeNpmInstallEnv(
   return nextEnv;
 }
 
+/**
+ * Builds npm install argv that mirrors the safe environment defaults.
+ * Callers opt into dependency omission, legacy peer resolution, and quiet flags.
+ */
 export function createSafeNpmInstallArgs(options: SafeNpmInstallArgsOptions = {}): string[] {
   return [
     "install",

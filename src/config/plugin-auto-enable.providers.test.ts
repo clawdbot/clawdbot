@@ -1,3 +1,4 @@
+// Covers provider-driven plugin auto-enable decisions.
 import { afterAll, describe, expect, it } from "vitest";
 import {
   applyPluginAutoEnable,
@@ -8,6 +9,7 @@ import {
   makeRegistry,
   resetPluginAutoEnableTestState,
 } from "./plugin-auto-enable.test-helpers.js";
+import type { OpenClawConfig } from "./types.openclaw.js";
 
 const env = makeIsolatedEnv();
 
@@ -40,6 +42,65 @@ describe("applyPluginAutoEnable providers", () => {
 
     expect(result.config.plugins?.entries?.google?.enabled).toBe(true);
   });
+
+  const googleProviderCases: Array<{ name: string; config: OpenClawConfig }> = [
+    {
+      name: "Google auth profile",
+      config: {
+        auth: {
+          profiles: {
+            "google:default": {
+              provider: "google",
+              mode: "api_key",
+            },
+          },
+        },
+      },
+    },
+    {
+      name: "Google provider config",
+      config: {
+        models: {
+          providers: {
+            google: {
+              apiKey: "configured-google-key",
+              baseUrl: "https://generativelanguage.googleapis.com/v1beta",
+              models: [],
+            },
+          },
+        },
+      },
+    },
+    {
+      name: "Google Vertex auth profile",
+      config: {
+        auth: {
+          profiles: {
+            "google-vertex:default": {
+              provider: "google-vertex",
+              mode: "oauth",
+            },
+          },
+        },
+      },
+    },
+  ];
+
+  it.each(googleProviderCases)(
+    "auto-enables the Google plugin from $name under a restrictive allowlist",
+    ({ config }) => {
+      const result = applyPluginAutoEnable({
+        config: {
+          ...config,
+          plugins: { allow: ["telegram"] },
+        },
+        env,
+      });
+
+      expect(result.config.plugins?.entries?.google?.enabled).toBe(true);
+      expect(result.config.plugins?.allow).toEqual(["telegram", "google"]);
+    },
+  );
 
   it("auto-enables provider plugins when plugin-owned web search config exists", () => {
     const result = applyPluginAutoEnable({
@@ -102,6 +163,59 @@ describe("applyPluginAutoEnable providers", () => {
     expect(result.config.plugins?.entries?.brave?.enabled).toBe(true);
     expect(result.config.plugins?.allow).toEqual(["telegram", "brave"]);
     expect(result.changes).toContain("brave web search provider selected, enabled automatically.");
+  });
+
+  it("auto-enables a bundled worker provider selected by a cloud worker profile", () => {
+    const result = applyPluginAutoEnable({
+      config: {
+        cloudWorkers: {
+          profiles: {
+            development: {
+              provider: " STATIC-SSH ",
+              settings: { host: "worker.example.test" },
+            },
+          },
+        },
+        plugins: { allow: ["telegram"] },
+      },
+      env,
+      manifestRegistry: makeRegistry([
+        {
+          id: "qa-lab",
+          channels: [],
+          contracts: { workerProviders: ["static-ssh"] },
+          origin: "bundled",
+        },
+      ]),
+    });
+
+    expect(result.config.plugins?.entries?.["qa-lab"]?.enabled).toBe(true);
+    expect(result.config.plugins?.allow).toEqual(["telegram", "qa-lab"]);
+    expect(result.autoEnabledReasons).toEqual({
+      "qa-lab": ["static-ssh worker provider selected"],
+    });
+  });
+
+  it("requires explicit enablement for external worker providers", () => {
+    const result = applyPluginAutoEnable({
+      config: {
+        cloudWorkers: {
+          profiles: { production: { provider: "cloud-vendor" } },
+        },
+      },
+      env,
+      manifestRegistry: makeRegistry([
+        {
+          id: "cloud-vendor-plugin",
+          channels: [],
+          contracts: { workerProviders: ["cloud-vendor"] },
+          origin: "global",
+        },
+      ]),
+    });
+
+    expect(result.config.plugins?.entries?.["cloud-vendor-plugin"]).toBeUndefined();
+    expect(result.changes).toEqual([]);
   });
 
   it("does not auto-enable selected web search provider plugins when web search is disabled", () => {
@@ -279,7 +393,7 @@ describe("applyPluginAutoEnable providers", () => {
     });
 
     expect(result.config.plugins?.entries?.openai).toBeUndefined();
-    expect(result.changes).toEqual([]);
+    expect(result.changes).toStrictEqual([]);
   });
 
   it("uses manifest-owned provider auto-enable metadata for third-party plugins", () => {
@@ -415,6 +529,6 @@ describe("applyPluginAutoEnable providers", () => {
     });
 
     expect(result.config.plugins?.entries?.acpx?.enabled).toBeUndefined();
-    expect(result.changes).toEqual([]);
+    expect(result.changes).toStrictEqual([]);
   });
 });

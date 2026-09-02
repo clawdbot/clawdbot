@@ -1,3 +1,5 @@
+// Shared manifest contract constants for bundled channel plugin surface tests.
+// Keep these lists narrow so each suite checks only the surfaces it owns.
 export const channelPluginSurfaceKeys = [
   "actions",
   "setup",
@@ -17,4 +19,5 @@ export const sessionBindingContractChannelIds = [
   "telegram",
 ] as const;
 
+/** Channel id union for bundled session-binding contract fixtures. */
 export type SessionBindingContractChannelId = (typeof sessionBindingContractChannelIds)[number];

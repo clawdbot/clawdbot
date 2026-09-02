@@ -1,0 +1,709 @@
+name: OpenClaw Stable Main Closeout
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Stable OpenClaw tag to replay or repair, for example v2026.6.8 or v2026.6.8-2
+        required: false
+        type: string
+      rollback_drill_id:
+        description: Opaque identifier for the current private rollback drill record
+        required: false
+        type: string
+      rollback_drill_date:
+        description: UTC date of the private rollback drill in YYYY-MM-DD form; must be within 90 days
+        required: false
+        type: string
+      allow_failed_publish_recovery:
+        description: Accept a failed Release Publish parent only after every stable platform asset was repaired and published
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  actions: read
+  contents: write
+
+concurrency:
+  group: openclaw-stable-main-closeout-${{ github.event_name == 'workflow_dispatch' && (inputs.tag || github.run_id) || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+
+jobs:
+  resolve:
+    name: Resolve stable release closeout inputs
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    outputs:
+      full_release_validation_run_id: ${{ steps.inputs.outputs.full_release_validation_run_id }}
+      full_release_validation_run_attempt: ${{ steps.inputs.outputs.full_release_validation_run_attempt }}
+      release_publish_run_id: ${{ steps.inputs.outputs.release_publish_run_id }}
+      rollback_drill_date: ${{ steps.inputs.outputs.rollback_drill_date }}
+      rollback_drill_id: ${{ steps.inputs.outputs.rollback_drill_id }}
+      evidence_tag: ${{ steps.inputs.outputs.evidence_tag }}
+      fallback_correction: ${{ steps.inputs.outputs.fallback_correction }}
+      main_ref: ${{ steps.inputs.outputs.main_ref }}
+      repair_partial_closeout: ${{ steps.inputs.outputs.repair_partial_closeout }}
+      should_closeout: ${{ steps.inputs.outputs.should_closeout }}
+      tag: ${{ steps.inputs.outputs.tag }}
+    steps:
+      - name: Install GitHub API backoff helper
+        run: |
+          cat > "$RUNNER_TEMP/github-api-backoff.sh" <<'BASH'
+          gh_with_retry() {
+            local attempt output status lower_output
+            for attempt in 1 2 3 4 5; do
+              if output="$(gh "$@" 2>&1)"; then
+                printf '%s\n' "$output"
+                return 0
+              fi
+              status=$?
+              lower_output="${output,,}"
+              if [[ "$lower_output" != *"rate limit"* && "$output" != *"HTTP 429"* ]]; then
+                printf '%s\n' "$output" >&2
+                return "$status"
+              fi
+              echo "::warning::GitHub API throttled stable closeout on attempt ${attempt}; retrying after backoff." >&2
+              sleep $((attempt * attempt * 5))
+            done
+            printf '%s\n' "$output" >&2
+            return "$status"
+          }
+          BASH
+
+      - name: Checkout pushed main
+        if: ${{ github.event_name == 'push' }}
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Resolve published stable release evidence
+        id: inputs
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          GH_TOKEN: ${{ github.token }}
+          MANUAL_TAG: ${{ inputs.tag }}
+          ROLLBACK_DRILL_DATE: ${{ inputs.rollback_drill_date || vars.RELEASE_ROLLBACK_DRILL_DATE }}
+          ROLLBACK_DRILL_ID: ${{ inputs.rollback_drill_id || vars.RELEASE_ROLLBACK_DRILL_ID }}
+          TRIGGER_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          if [[ "$EVENT_NAME" == "push" ]]; then
+            sleep 45
+          fi
+          . "$RUNNER_TEMP/github-api-backoff.sh"
+          if [[ "$EVENT_NAME" == "push" ]]; then
+            main_ref="$TRIGGER_SHA"
+            tag="$(gh_with_retry release list --repo "$GITHUB_REPOSITORY" --exclude-drafts --limit 100 \
+              --json tagName,isPrerelease,publishedAt \
+              --jq '[.[] | select(.isPrerelease | not) | select(.tagName | test("^v[0-9]{4}\\.[0-9]+\\.[0-9]+(-[0-9]+)?$"))] | sort_by(.publishedAt) | last | .tagName // empty')"
+            if [[ -z "$tag" ]]; then
+              echo "should_closeout=false" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+          else
+            tag="$MANUAL_TAG"
+          fi
+          if [[ ! "$tag" =~ ^v[0-9]{4}\.[0-9]+\.[0-9]+(-[0-9]+)?$ ]]; then
+            if [[ "$EVENT_NAME" == "push" ]]; then
+              echo "should_closeout=false" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            echo "Stable main closeout accepts only a stable vYYYY.M.PATCH or vYYYY.M.PATCH-N tag, got $tag." >&2
+            exit 1
+          fi
+          release_asset_version="${tag#v}"
+          release_package_version="$release_asset_version"
+          fallback_package_version="$release_asset_version"
+          if [[ "$release_package_version" =~ ^(.+)-[0-9]+$ ]]; then
+            fallback_package_version="${BASH_REMATCH[1]}"
+          fi
+          tag_package_content="$RUNNER_TEMP/tag-package-content.b64"
+          tag_package_read=false
+          for attempt in 1 2 3; do
+            if gh_with_retry api "repos/$GITHUB_REPOSITORY/contents/package.json?ref=$tag" \
+              --jq '.content' > "$tag_package_content"; then
+              tag_package_read=true
+              break
+            fi
+            if [[ "$attempt" != "3" ]]; then
+              sleep $((attempt * 5))
+            fi
+          done
+          if [[ "$tag_package_read" != "true" ]]; then
+            echo "Stable closeout could not read package.json for $tag from GitHub API." >&2
+            exit 1
+          fi
+          if ! tag_package_json="$(tr -d '\n' < "$tag_package_content" | base64 --decode)"; then
+            echo "Stable closeout package.json content for $tag was not valid base64." >&2
+            exit 1
+          fi
+          tag_package_version="$(jq -r '.version // empty' <<<"$tag_package_json")"
+          fallback_correction=false
+          evidence_source_tag="$tag"
+          if [[ "$release_package_version" != "$fallback_package_version" &&
+            "$tag_package_version" == "$fallback_package_version" ]]; then
+            fallback_correction=true
+            evidence_source_tag="v$fallback_package_version"
+          elif [[ "$tag_package_version" != "$release_package_version" ]]; then
+            echo "Stable closeout requires $tag package.json to match $release_package_version, or the legacy fallback package version $fallback_package_version." >&2
+            exit 1
+          fi
+          evidence_version="${evidence_source_tag#v}"
+          evidence_asset="openclaw-${evidence_version}-postpublish-evidence.json"
+          evidence_checksum_asset="${evidence_asset}.sha256"
+          release_manifest_asset="openclaw-${evidence_version}-release-manifest.json"
+          release_manifest_checksum_asset="${release_manifest_asset}.sha256"
+          closeout_asset="openclaw-${release_asset_version}-stable-main-closeout.json"
+          closeout_checksum_asset="${closeout_asset}.sha256"
+          closeout_dir="$RUNNER_TEMP/release-closeout-evidence"
+          mkdir -p "$closeout_dir"
+          gh_with_retry release download "$tag" --repo "$GITHUB_REPOSITORY" \
+            --pattern "$closeout_asset" --pattern "$closeout_checksum_asset" --dir "$closeout_dir" || true
+          closeout_json_path="$closeout_dir/$closeout_asset"
+          closeout_checksum_path="$closeout_dir/$closeout_checksum_asset"
+          repair_partial_closeout=false
+          existing_closeout_full_release_validation_run_id=""
+          existing_closeout_full_release_validation_run_attempt=""
+          existing_closeout_release_publish_run_id=""
+          if [[ -f "$closeout_json_path" && -f "$closeout_checksum_path" ]]; then
+            expected_closeout_digest="$(awk 'NF { print $1; exit }' "$closeout_checksum_path")"
+            actual_closeout_digest="$(sha256sum "$closeout_json_path" | awk '{print $1}')"
+            if [[ ! "$expected_closeout_digest" =~ ^[0-9a-f]{64}$ ||
+              "$expected_closeout_digest" != "$actual_closeout_digest" ]]; then
+              echo "Stable closeout evidence for $tag has an invalid checksum; refusing to repair it." >&2
+              exit 1
+            fi
+          fi
+          if [[ -f "$closeout_checksum_path" && ! -f "$closeout_json_path" ]]; then
+            echo "Stable closeout evidence for $tag has a checksum without its manifest; refusing to repair it." >&2
+            exit 1
+          fi
+          if [[ -f "$closeout_json_path" ]]; then
+            existing_closeout_tag="$(jq -r '.releaseTag // empty' "$closeout_json_path")"
+            existing_closeout_version="$(jq -r '.releaseVersion // empty' "$closeout_json_path")"
+            existing_closeout_schema_version="$(jq -r '.version // empty' "$closeout_json_path")"
+            existing_closeout_release_tag_sha="$(jq -r '.releaseTagSha // empty' "$closeout_json_path")"
+            existing_closeout_main_ref="$(jq -r '.mainSha // empty' "$closeout_json_path")"
+            existing_closeout_full_release_validation_run_id="$(jq -r '.fullReleaseValidationRunId // empty' "$closeout_json_path")"
+            existing_closeout_full_release_validation_run_attempt="$(jq -r '.fullReleaseValidationRunAttempt // empty' "$closeout_json_path")"
+            existing_closeout_release_publish_run_id="$(jq -r '.releasePublishRunId // empty' "$closeout_json_path")"
+            existing_closeout_rollback_drill_id="$(jq -r '.rollbackDrill.id // empty' "$closeout_json_path")"
+            existing_closeout_rollback_drill_date="$(jq -r '.rollbackDrill.date // empty' "$closeout_json_path")"
+            # Schema v1 never shipped as a release asset and cannot bind an immutable run attempt.
+            if [[ "$existing_closeout_schema_version" != "2" ||
+              "$existing_closeout_tag" != "$tag" ||
+              "$existing_closeout_version" != "$tag_package_version" ||
+              ! "$existing_closeout_release_tag_sha" =~ ^[0-9a-f]{40}$ ||
+              ! "$existing_closeout_main_ref" =~ ^[0-9a-f]{40}$ ||
+              -z "$existing_closeout_full_release_validation_run_id" ||
+              ! "$existing_closeout_full_release_validation_run_attempt" =~ ^[1-9][0-9]*$ ||
+              -z "$existing_closeout_release_publish_run_id" ||
+              -z "$existing_closeout_rollback_drill_id" ||
+              ! "$existing_closeout_rollback_drill_date" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]]; then
+              echo "Stable closeout manifest for $tag is incomplete; refusing to repair it." >&2
+              exit 1
+            fi
+            main_ref="$existing_closeout_main_ref"
+            ROLLBACK_DRILL_ID="$existing_closeout_rollback_drill_id"
+            ROLLBACK_DRILL_DATE="$existing_closeout_rollback_drill_date"
+            repair_partial_closeout=true
+          elif [[ "$EVENT_NAME" == "push" ]]; then
+            main_version="$(jq -r '.version // empty' package.json)"
+            if [[ "$main_version" != "$release_package_version" &&
+              "$main_version" != "$fallback_package_version" ]]; then
+              echo "should_closeout=false" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+          else
+            main_ref="main"
+          fi
+          evidence_dir="$RUNNER_TEMP/release-postpublish-evidence"
+          mkdir -p "$evidence_dir"
+          gh_with_retry release download "$evidence_source_tag" --repo "$GITHUB_REPOSITORY" \
+            --pattern "$evidence_asset" \
+            --pattern "$evidence_checksum_asset" \
+            --pattern "$release_manifest_asset" \
+            --pattern "$release_manifest_checksum_asset" \
+            --dir "$evidence_dir" || true
+          evidence_path="$evidence_dir/$evidence_asset"
+          evidence_checksum_path="$evidence_dir/$evidence_checksum_asset"
+          release_manifest_path="$evidence_dir/$release_manifest_asset"
+          release_manifest_checksum_path="$evidence_dir/$release_manifest_checksum_asset"
+          if [[ ! -f "$evidence_path" || ! -f "$evidence_checksum_path" ]]; then
+            if [[ "$EVENT_NAME" == "push" ]]; then
+              echo "Stable closeout skipped: $evidence_source_tag predates immutable postpublish evidence." >&2
+              echo "should_closeout=false" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            echo "Stable closeout is required for $tag, but immutable postpublish evidence from $evidence_source_tag is missing." >&2
+            exit 1
+          fi
+          if [[ ! -f "$release_manifest_path" || ! -f "$release_manifest_checksum_path" ]]; then
+            echo "Stable closeout is required for $tag, but immutable Full Release Validation evidence from $evidence_source_tag is missing." >&2
+            exit 1
+          fi
+          if ! (
+            cd "$evidence_dir"
+            sha256sum --strict --status -c "$evidence_checksum_asset"
+            sha256sum --strict --status -c "$release_manifest_checksum_asset"
+          ); then
+            echo "Release evidence checksum failed for $tag." >&2
+            exit 1
+          fi
+          evidence_release_tag="$(jq -r '.releaseTag // empty' "$evidence_path")"
+          if ! full_release_validation_run_json="$(jq -ce '
+            [.workflowRuns[]? | select(.label == "Full Release Validation")] |
+            if length == 1 and
+              (.[0].id | type == "string" and test("^[1-9][0-9]*$")) and
+              ((.[0].runAttempt == null) or
+                (.[0].runAttempt | type == "string" and test("^[1-9][0-9]*$")))
+            then {id: .[0].id, runAttempt: (.[0].runAttempt // "")}
+            else empty
+            end
+          ' "$evidence_path")"; then
+            echo "Stable closeout is required for $tag, but postpublish evidence does not bind exactly one Full Release Validation run." >&2
+            exit 1
+          fi
+          if ! release_manifest_run_json="$(jq -ce '
+            if .workflowName == "Full Release Validation" and
+              (.runId | type == "string" and test("^[1-9][0-9]*$")) and
+              (.runAttempt | type == "string" and test("^[1-9][0-9]*$"))
+            then {id: .runId, runAttempt: .runAttempt}
+            else empty
+            end
+          ' "$release_manifest_path")"; then
+            echo "Stable closeout release manifest does not bind a Full Release Validation run attempt." >&2
+            exit 1
+          fi
+          evidence_full_release_validation_run_id="$(jq -r '.id' <<<"$full_release_validation_run_json")"
+          evidence_full_release_validation_run_attempt="$(jq -r '.runAttempt' <<<"$full_release_validation_run_json")"
+          full_release_validation_run_id="$(jq -r '.id' <<<"$release_manifest_run_json")"
+          full_release_validation_run_attempt="$(jq -r '.runAttempt' <<<"$release_manifest_run_json")"
+          release_publish_run_id="$(jq -r '.releasePublishRunId // empty' "$evidence_path")"
+          if [[ "$evidence_release_tag" != "$evidence_source_tag" ||
+            "$evidence_full_release_validation_run_id" != "$full_release_validation_run_id" ||
+            ( -n "$evidence_full_release_validation_run_attempt" &&
+              "$evidence_full_release_validation_run_attempt" != "$full_release_validation_run_attempt" ) ||
+            -z "$release_publish_run_id" ]]; then
+            echo "Stable closeout is required for $tag, but postpublish evidence does not bind $evidence_source_tag to exactly one Full Release Validation run and its Publish run." >&2
+            exit 1
+          fi
+          if [[ -n "$existing_closeout_full_release_validation_run_id" &&
+            ( "$existing_closeout_full_release_validation_run_id" != "$full_release_validation_run_id" ||
+              "$existing_closeout_full_release_validation_run_attempt" != "$full_release_validation_run_attempt" ||
+              "$existing_closeout_release_publish_run_id" != "$release_publish_run_id" ) ]]; then
+            echo "Stable closeout manifest for $tag does not match immutable postpublish evidence; refusing to accept it." >&2
+            exit 1
+          fi
+          if [[ "$EVENT_NAME" == "push" && -f "$closeout_checksum_path" ]]; then
+            echo "Stable closeout already complete for $tag."
+            echo "should_closeout=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [[ -z "$ROLLBACK_DRILL_ID" || -z "$ROLLBACK_DRILL_DATE" ]]; then
+            if [[ "$EVENT_NAME" == "push" ]]; then
+              echo "::warning::Stable closeout skipped: rollback drill repository variables are missing; manual dispatch remains required to complete closeout."
+              echo "should_closeout=false" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            echo "Stable closeout requires repository variables RELEASE_ROLLBACK_DRILL_ID and RELEASE_ROLLBACK_DRILL_DATE, or explicit manual overrides." >&2
+            exit 1
+          fi
+          {
+            echo "full_release_validation_run_id=$full_release_validation_run_id"
+            echo "full_release_validation_run_attempt=$full_release_validation_run_attempt"
+            echo "release_publish_run_id=$release_publish_run_id"
+            echo "rollback_drill_date=$ROLLBACK_DRILL_DATE"
+            echo "rollback_drill_id=$ROLLBACK_DRILL_ID"
+            echo "evidence_tag=$evidence_source_tag"
+            echo "fallback_correction=$fallback_correction"
+            echo "main_ref=$main_ref"
+            echo "repair_partial_closeout=$repair_partial_closeout"
+            echo "should_closeout=true"
+            echo "tag=$tag"
+          } >> "$GITHUB_OUTPUT"
+
+  verify:
+    name: Verify stable main closeout
+    needs: resolve
+    if: ${{ needs.resolve.outputs.should_closeout == 'true' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Checkout resolved main state
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.resolve.outputs.main_ref }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Checkout shipped release tag
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: refs/tags/${{ needs.resolve.outputs.tag }}
+          path: release-tag
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Checkout fallback evidence tag
+        if: ${{ needs.resolve.outputs.fallback_correction == 'true' }}
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: refs/tags/${{ needs.resolve.outputs.evidence_tag }}
+          path: evidence-tag
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Bind fallback correction to the published package source
+        if: ${{ needs.resolve.outputs.fallback_correction == 'true' }}
+        run: |
+          set -euo pipefail
+          correction_sha="$(git -C "$GITHUB_WORKSPACE/release-tag" rev-parse HEAD)"
+          evidence_sha="$(git -C "$GITHUB_WORKSPACE/evidence-tag" rev-parse HEAD)"
+          if [[ "$correction_sha" != "$evidence_sha" ]]; then
+            echo "Fallback correction ${{ needs.resolve.outputs.tag }} must point to the same source commit as ${{ needs.resolve.outputs.evidence_tag }} to reuse immutable package evidence." >&2
+            exit 1
+          fi
+
+      - name: Install GitHub API backoff helper
+        run: |
+          cat > "$RUNNER_TEMP/github-api-backoff.sh" <<'BASH'
+          gh_with_retry() {
+            local attempt output status lower_output
+            for attempt in 1 2 3 4 5; do
+              if output="$(gh "$@" 2>&1)"; then
+                printf '%s\n' "$output"
+                return 0
+              fi
+              status=$?
+              lower_output="${output,,}"
+              if [[ "$lower_output" != *"rate limit"* && "$output" != *"HTTP 429"* ]]; then
+                printf '%s\n' "$output" >&2
+                return "$status"
+              fi
+              echo "::warning::GitHub API throttled stable closeout on attempt ${attempt}; retrying after backoff." >&2
+              sleep $((attempt * attempt * 5))
+            done
+            printf '%s\n' "$output" >&2
+            return "$status"
+          }
+          BASH
+
+      - name: Verify release workflow evidence
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVIDENCE_TAG: ${{ needs.resolve.outputs.evidence_tag }}
+          FULL_RELEASE_VALIDATION_RUN_ID: ${{ needs.resolve.outputs.full_release_validation_run_id }}
+          FULL_RELEASE_VALIDATION_RUN_ATTEMPT: ${{ needs.resolve.outputs.full_release_validation_run_attempt }}
+          RELEASE_PUBLISH_RUN_ID: ${{ needs.resolve.outputs.release_publish_run_id }}
+          ALLOW_FAILED_PUBLISH_RECOVERY: ${{ github.event_name == 'workflow_dispatch' && inputs.allow_failed_publish_recovery && 'true' || 'false' }}
+        run: |
+          set -euo pipefail
+          . "$RUNNER_TEMP/github-api-backoff.sh"
+          gh_with_retry api "repos/${GITHUB_REPOSITORY}/actions/runs/${FULL_RELEASE_VALIDATION_RUN_ID}/attempts/${FULL_RELEASE_VALIDATION_RUN_ATTEMPT}" \
+            > "$RUNNER_TEMP/full-release-validation-run.json"
+          node --input-type=module - "$RUNNER_TEMP/full-release-validation-run.json" <<'NODE'
+          import { readFileSync } from "node:fs";
+          const run = JSON.parse(readFileSync(process.argv[2], "utf8"));
+          for (const [key, expected] of [
+            ["name", "Full Release Validation"],
+            ["event", "workflow_dispatch"],
+            ["status", "completed"],
+            ["conclusion", "success"],
+          ]) {
+            if (run[key] !== expected) {
+              throw new Error(`Full Release Validation must have ${key}=${expected}, got ${run[key] ?? "<missing>"}.`);
+            }
+          }
+          if (String(run.run_attempt ?? "") !== process.env.FULL_RELEASE_VALIDATION_RUN_ATTEMPT) {
+            throw new Error(`Full Release Validation run attempt mismatch: expected ${process.env.FULL_RELEASE_VALIDATION_RUN_ATTEMPT}, got ${run.run_attempt ?? "<missing>"}.`);
+          }
+          NODE
+          gh_with_retry run view "$RELEASE_PUBLISH_RUN_ID" --repo "$GITHUB_REPOSITORY" \
+            --json workflowName,event,status,conclusion,headSha \
+            > "$RUNNER_TEMP/release-publish-run.json"
+          node --input-type=module - "$RUNNER_TEMP/release-publish-run.json" <<'NODE'
+          import { readFileSync } from "node:fs";
+          const run = JSON.parse(readFileSync(process.argv[2], "utf8"));
+          for (const [key, expected] of [
+            ["workflowName", "OpenClaw Release Publish"],
+            ["event", "workflow_dispatch"],
+            ["status", "completed"],
+          ]) {
+            if (run[key] !== expected) {
+              throw new Error(`OpenClaw Release Publish must have ${key}=${expected}, got ${run[key] ?? "<missing>"}.`);
+            }
+          }
+          const recoveryRequested = process.env.ALLOW_FAILED_PUBLISH_RECOVERY === "true";
+          if (recoveryRequested && run.conclusion !== "failure") {
+            throw new Error(
+              `Failed-publish recovery requires conclusion=failure, got ${run.conclusion ?? "<missing>"}.`,
+            );
+          }
+          const failedRecovery = recoveryRequested && run.conclusion === "failure";
+          if (run.conclusion !== "success" && !failedRecovery) {
+            throw new Error(
+              `OpenClaw Release Publish must have conclusion=success, got ${run.conclusion ?? "<missing>"}.`,
+            );
+          }
+          if (failedRecovery) {
+            console.log("Accepting failed Release Publish parent under explicit complete-platform recovery.");
+          }
+          NODE
+
+          if [[ "$ALLOW_FAILED_PUBLISH_RECOVERY" == "true" ]]; then
+            parent_log="$RUNNER_TEMP/release-publish-run.log"
+            gh_with_retry run view "$RELEASE_PUBLISH_RUN_ID" --repo "$GITHUB_REPOSITORY" --log \
+              > "$parent_log"
+            mapfile -t windows_node_run_ids < <(
+              sed -nE '/Dispatched windows-node-release\.yml/ { s#.*https://github\.com/openclaw/openclaw/actions/runs/([1-9][0-9]*).*#\1#p; }' "$parent_log" |
+                LC_ALL=C sort -u
+            )
+            if [[ "${#windows_node_run_ids[@]}" != "1" ]]; then
+              echo "Failed-publish recovery requires exactly one Windows Node Release run dispatched by the parent; found ${#windows_node_run_ids[@]}." >&2
+              exit 1
+            fi
+            windows_node_run_id="${windows_node_run_ids[0]}"
+            windows_node_run_json="$RUNNER_TEMP/windows-node-release-run.json"
+            gh_with_retry run view "$windows_node_run_id" --repo "$GITHUB_REPOSITORY" \
+              --json workflowName,event,status,conclusion,headSha,url,jobs \
+              > "$windows_node_run_json"
+            parent_head_sha="$(jq -r '.headSha // empty' "$RUNNER_TEMP/release-publish-run.json")"
+            PARENT_HEAD_SHA="$parent_head_sha" \
+              node --input-type=module -e '
+              import { readFileSync } from "node:fs";
+              const run = JSON.parse(readFileSync(process.argv[1], "utf8"));
+              for (const [key, expected] of [
+                ["workflowName", "Windows Node Release"],
+                ["event", "workflow_dispatch"],
+                ["status", "completed"],
+                ["conclusion", "success"],
+                ["headSha", process.env.PARENT_HEAD_SHA],
+              ]) {
+                if (run[key] !== expected) {
+                  throw new Error(`Windows Node Release must have ${key}=${expected}, got ${run[key] ?? "<missing>"}.`);
+                }
+              }
+              const jobs = (run.jobs ?? []).filter(
+                (job) => job.name === "Promote signed Windows installers" && job.conclusion === "success",
+              );
+              if (jobs.length !== 1) {
+                throw new Error("Windows Node Release must contain one successful signed-installer promotion job.");
+              }
+              for (const name of [
+                "Validate inputs",
+                "Verify Authenticode signatures",
+                "Upload to OpenClaw release",
+                "Verify promoted release asset contract",
+              ]) {
+                const steps = (jobs[0].steps ?? []).filter(
+                  (step) => step.name === name && step.conclusion === "success",
+                );
+                if (steps.length !== 1) {
+                  throw new Error(`Windows Node Release is missing successful step: ${name}.`);
+                }
+              }
+              ' "$windows_node_run_json"
+            windows_node_log="$RUNNER_TEMP/windows-node-release-run.log"
+            gh_with_retry run view "$windows_node_run_id" --repo "$GITHUB_REPOSITORY" --log \
+              > "$windows_node_log"
+            windows_node_installer_digests="$(
+              node --input-type=module -e '
+              import { readFileSync } from "node:fs";
+              const log = readFileSync(process.argv[1], "utf8");
+              const marker = "EXPECTED_INSTALLER_DIGESTS:";
+              const names = [
+                "OpenClawCompanion-Setup-arm64.exe",
+                "OpenClawCompanion-Setup-x64.exe",
+              ];
+              const contracts = new Set();
+              for (const line of log.split(/\r?\n/u)) {
+                const markerIndex = line.indexOf(marker);
+                if (markerIndex === -1) continue;
+                const candidate = line.slice(markerIndex + marker.length).trim();
+                let parsed;
+                try {
+                  parsed = JSON.parse(candidate);
+                } catch {
+                  continue;
+                }
+                const keys = Object.keys(parsed).toSorted((left, right) => left.localeCompare(right));
+                if (
+                  JSON.stringify(keys) !== JSON.stringify(names) ||
+                  !names.every((name) => /^sha256:[0-9a-f]{64}$/u.test(parsed[name] ?? ""))
+                ) {
+                  continue;
+                }
+                contracts.add(JSON.stringify(Object.fromEntries(names.map((name) => [name, parsed[name]]))));
+              }
+              if (contracts.size !== 1) {
+                throw new Error(`Windows Node Release logs must contain exactly one candidate-approved digest contract, got ${contracts.size}.`);
+              }
+              process.stdout.write([...contracts][0]);
+              ' "$windows_node_log"
+            )"
+            {
+              echo "WINDOWS_NODE_RELEASE_RUN_ID=$windows_node_run_id"
+              echo "WINDOWS_NODE_INSTALLER_DIGESTS=$windows_node_installer_digests"
+            } >> "$GITHUB_ENV"
+          fi
+
+          manifest_dir="$RUNNER_TEMP/full-release-validation-manifest"
+          rm -rf "$manifest_dir"
+          mkdir -p "$manifest_dir"
+          evidence_version="${EVIDENCE_TAG#v}"
+          manifest_asset="openclaw-${evidence_version}-release-manifest.json"
+          manifest_checksum_asset="${manifest_asset}.sha256"
+          gh_with_retry release download "$EVIDENCE_TAG" --repo "$GITHUB_REPOSITORY" \
+            --pattern "$manifest_asset" \
+            --pattern "$manifest_checksum_asset" \
+            --dir "$manifest_dir"
+          (
+            cd "$manifest_dir"
+            sha256sum --strict --status -c "$manifest_checksum_asset"
+          ) || {
+            echo "Full Release Validation manifest checksum failed for $EVIDENCE_TAG." >&2
+            exit 1
+          }
+          tag_sha="$(git -C "$GITHUB_WORKSPACE/release-tag" rev-parse HEAD)"
+          jq -e \
+            --arg tag_sha "$tag_sha" \
+            --arg run_id "$FULL_RELEASE_VALIDATION_RUN_ID" \
+            --arg run_attempt "$FULL_RELEASE_VALIDATION_RUN_ATTEMPT" '
+            .workflowName == "Full Release Validation" and
+            .runId == $run_id and
+            .runAttempt == $run_attempt and
+            .targetSha == $tag_sha and
+            .rerunGroup == "all" and
+            .runReleaseSoak == "true" and
+            .controls.performanceBlocking == true and
+            .childRuns.productPerformance.conclusion == "success"
+          ' "$manifest_dir/$manifest_asset" >/dev/null || {
+            echo "Full Release Validation manifest does not contain the required stable release controls." >&2
+            exit 1
+          }
+
+      - name: Verify stable state and write closeout manifest
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.resolve.outputs.tag }}
+          FULL_RELEASE_VALIDATION_RUN_ID: ${{ needs.resolve.outputs.full_release_validation_run_id }}
+          FULL_RELEASE_VALIDATION_RUN_ATTEMPT: ${{ needs.resolve.outputs.full_release_validation_run_attempt }}
+          RELEASE_PUBLISH_RUN_ID: ${{ needs.resolve.outputs.release_publish_run_id }}
+          ROLLBACK_DRILL_ID: ${{ needs.resolve.outputs.rollback_drill_id }}
+          ROLLBACK_DRILL_DATE: ${{ needs.resolve.outputs.rollback_drill_date }}
+          REPAIR_PARTIAL_CLOSEOUT: ${{ needs.resolve.outputs.repair_partial_closeout }}
+          ALLOW_FAILED_PUBLISH_RECOVERY: ${{ github.event_name == 'workflow_dispatch' && inputs.allow_failed_publish_recovery && 'true' || 'false' }}
+          CLOSEOUT_DIR: ${{ runner.temp }}/openclaw-stable-main-closeout
+        run: |
+          set -euo pipefail
+          mkdir -p "$CLOSEOUT_DIR"
+          . "$RUNNER_TEMP/github-api-backoff.sh"
+          gh_with_retry release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
+            --json tagName,isDraft,isPrerelease,assets \
+            > "$CLOSEOUT_DIR/github-release.json"
+          if [[ "$ALLOW_FAILED_PUBLISH_RECOVERY" == "true" ]]; then
+            recovery_dir="$CLOSEOUT_DIR/platform-recovery"
+            mkdir -p "$recovery_dir"
+            gh_with_retry release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
+              --pattern OpenClaw-Android.apk \
+              --pattern OpenClaw-Android-SHA256SUMS.txt \
+              --pattern OpenClawCompanion-Setup-arm64.exe \
+              --pattern OpenClawCompanion-Setup-x64.exe \
+              --pattern OpenClawCompanion-SHA256SUMS.txt \
+              --dir "$recovery_dir"
+            (
+              cd "$recovery_dir"
+              verify_checksum_manifest() {
+                local manifest="$1" actual expected normalized
+                shift
+                normalized="${manifest}.normalized"
+                sed 's/\r$//' "$manifest" > "$normalized"
+                expected="$(printf '%s\n' "$@" | LC_ALL=C sort)"
+                actual="$(awk 'NF { name=$2; sub(/^\*/, "", name); print name }' "$normalized" | LC_ALL=C sort)"
+                if [[ "$actual" != "$expected" ]]; then
+                  echo "$manifest must list exactly: $*" >&2
+                  exit 1
+                fi
+                sha256sum --strict --check "$normalized"
+                rm -f "$normalized"
+              }
+              verify_checksum_manifest OpenClaw-Android-SHA256SUMS.txt \
+                OpenClaw-Android.apk
+              verify_checksum_manifest OpenClawCompanion-SHA256SUMS.txt \
+                OpenClawCompanion-Setup-arm64.exe \
+                OpenClawCompanion-Setup-x64.exe
+            )
+            gh_with_retry attestation verify "$recovery_dir/OpenClaw-Android.apk" \
+              --repo "$GITHUB_REPOSITORY" \
+              --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/android-release.yml" \
+              --source-ref "refs/tags/$RELEASE_TAG" \
+              --deny-self-hosted-runners
+          fi
+          node scripts/verify-stable-main-closeout.mjs \
+            --tag "$RELEASE_TAG" \
+            --main-dir "$GITHUB_WORKSPACE" \
+            --tag-dir "$GITHUB_WORKSPACE/release-tag" \
+            --release-json "$CLOSEOUT_DIR/github-release.json" \
+            --full-release-validation-run-id "$FULL_RELEASE_VALIDATION_RUN_ID" \
+            --full-release-validation-run-attempt "$FULL_RELEASE_VALIDATION_RUN_ATTEMPT" \
+            --release-publish-run-id "$RELEASE_PUBLISH_RUN_ID" \
+            --rollback-drill-id "$ROLLBACK_DRILL_ID" \
+            --rollback-drill-date "$ROLLBACK_DRILL_DATE" \
+            --allow-stale-rollback-drill "$REPAIR_PARTIAL_CLOSEOUT" \
+            --require-complete-platform-assets "$ALLOW_FAILED_PUBLISH_RECOVERY" \
+            --windows-node-release-run-id "${WINDOWS_NODE_RELEASE_RUN_ID:-}" \
+            --windows-node-installer-digests "${WINDOWS_NODE_INSTALLER_DIGESTS:-}" \
+            --output "$CLOSEOUT_DIR/stable-main-closeout.json"
+          release_version="${RELEASE_TAG#v}"
+          sha256sum "$CLOSEOUT_DIR/stable-main-closeout.json" | awk -v asset="openclaw-${release_version}-stable-main-closeout.json" \
+            '{print $1 "  " asset}' \
+            > "$CLOSEOUT_DIR/stable-main-closeout.json.sha256"
+
+      - name: Attach immutable closeout evidence
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.resolve.outputs.tag }}
+          CLOSEOUT_DIR: ${{ runner.temp }}/openclaw-stable-main-closeout
+        run: |
+          set -euo pipefail
+          . "$RUNNER_TEMP/github-api-backoff.sh"
+          release_version="${RELEASE_TAG#v}"
+          attach_or_verify() {
+            local source_path="$1"
+            local asset_name="$2"
+            local existing_dir="$CLOSEOUT_DIR/existing-${asset_name}"
+            mkdir -p "$existing_dir"
+            gh_with_retry release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
+              --pattern "$asset_name" --dir "$existing_dir" || true
+            if [[ -f "$existing_dir/$asset_name" ]]; then
+              cmp --silent "$source_path" "$existing_dir/$asset_name" || {
+                echo "Existing release asset $asset_name differs from closeout evidence." >&2
+                exit 1
+              }
+              return
+            fi
+            # The #suffix is only a display label. Stage the desired basename so
+            # GitHub stores the versioned asset name used by repair lookups.
+            cp -- "$source_path" "$existing_dir/$asset_name"
+            gh_with_retry release upload "$RELEASE_TAG" \
+              "$existing_dir/$asset_name#$asset_name" --repo "$GITHUB_REPOSITORY"
+          }
+          attach_or_verify \
+            "$CLOSEOUT_DIR/stable-main-closeout.json" \
+            "openclaw-${release_version}-stable-main-closeout.json"
+          attach_or_verify \
+            "$CLOSEOUT_DIR/stable-main-closeout.json.sha256" \
+            "openclaw-${release_version}-stable-main-closeout.json.sha256"
+
+      - name: Upload closeout workflow evidence
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: openclaw-stable-main-closeout-${{ needs.resolve.outputs.tag }}
+          path: ${{ runner.temp }}/openclaw-stable-main-closeout
+          if-no-files-found: error

@@ -1,12 +1,19 @@
+/**
+ * Channel plugin surface contract assertions.
+ *
+ * Checks the minimum callable shape for optional channel plugin adapter surfaces.
+ */
 import { expect } from "vitest";
 import type { ChannelPlugin } from "../../types.js";
 
+/** Asserts the minimum callable shape for one declared channel plugin surface. */
 export function expectChannelSurfaceContract(params: {
   plugin: Pick<
     ChannelPlugin,
     | "id"
     | "actions"
     | "setup"
+    | "setupContract"
     | "status"
     | "outbound"
     | "messaging"
@@ -33,8 +40,7 @@ export function expectChannelSurfaceContract(params: {
   }
 
   if (surface === "setup") {
-    expect(plugin.setup).toBeDefined();
-    expect(typeof plugin.setup?.applyAccountConfig).toBe("function");
+    expect(typeof (plugin.setupContract ?? plugin.setup)?.applyAccountConfig).toBe("function");
     return;
   }
 
@@ -67,22 +73,30 @@ export function expectChannelSurfaceContract(params: {
     expect(
       [
         messaging?.normalizeTarget,
-        messaging?.parseExplicitTarget,
         messaging?.inferTargetChatType,
         messaging?.buildCrossContextPresentation,
-        messaging?.enableInteractiveReplies,
         messaging?.hasStructuredReplyPayload,
         messaging?.formatTargetDisplay,
         messaging?.resolveOutboundSessionRoute,
       ].some((value) => typeof value === "function"),
     ).toBe(true);
     if (messaging?.targetResolver) {
+      // Target resolvers are optional but, when present, must expose either a
+      // callable resolver or stable hint metadata for tool UX.
       if (messaging.targetResolver.looksLikeId) {
         expect(typeof messaging.targetResolver.looksLikeId).toBe("function");
       }
       if (messaging.targetResolver.hint !== undefined) {
         expect(typeof messaging.targetResolver.hint).toBe("string");
         expect(messaging.targetResolver.hint.trim()).not.toBe("");
+      }
+      if (messaging.targetResolver.reservedLiterals !== undefined) {
+        expect(Array.isArray(messaging.targetResolver.reservedLiterals)).toBe(true);
+        expect(
+          messaging.targetResolver.reservedLiterals.every(
+            (value) => typeof value === "string" && value.trim(),
+          ),
+        ).toBe(true);
       }
       if (messaging.targetResolver.resolveTarget) {
         expect(typeof messaging.targetResolver.resolveTarget).toBe("function");
@@ -101,6 +115,9 @@ export function expectChannelSurfaceContract(params: {
         threading?.resolveAutoThreadId,
         threading?.resolveReplyTransport,
         threading?.resolveFocusedBinding,
+        // Core reads this hook directly (source-reply-mirror.ts), so a channel may
+        // declare threading for target matching alone without any reply-shaping hook.
+        threading?.matchesToolContextTarget,
       ].some((value) => typeof value === "function"),
     ).toBe(true);
     return;

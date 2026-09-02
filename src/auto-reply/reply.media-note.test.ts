@@ -1,6 +1,7 @@
+/** Tests media-note behavior as it appears through reply prompt assembly. */
 import { describe, expect, it } from "vitest";
 import { finalizeInboundContext } from "./reply/inbound-context.js";
-import { buildReplyPromptBodies } from "./reply/prompt-prelude.js";
+import { buildReplyPromptEnvelope } from "./reply/prompt-prelude.js";
 
 describe("getReplyFromConfig media note plumbing", () => {
   it("includes all MediaPaths in the agent prompt", () => {
@@ -12,14 +13,30 @@ describe("getReplyFromConfig media note plumbing", () => {
       MediaPaths: ["/tmp/a.png", "/tmp/b.png"],
       MediaUrls: ["/tmp/a.png", "/tmp/b.png"],
     });
-    const prompt = buildReplyPromptBodies({
+    const envelope = buildReplyPromptEnvelope({
       ctx: sessionCtx,
       sessionCtx,
-      effectiveBaseBody: sessionCtx.BodyForAgent,
+      baseBody: sessionCtx.BodyForAgent,
+      hasUserBody: true,
+      inboundUserContext: "",
+      isBareSessionReset: false,
+      startupAction: "new",
       prefixedBody: sessionCtx.BodyForAgent,
-    }).prefixedCommandBody;
+      sourceReplyDeliveryMode: "automatic",
+    });
+    const prompt = envelope.prefixedCommandBody;
 
-    expect(prompt).toContain("[media attached: 2 files]");
+    const mediaNote = [
+      "[media attached: 2 files]",
+      "[media attached 1/2: /tmp/a.png (application/octet-stream)]",
+      "[media attached 2/2: /tmp/b.png (application/octet-stream)]",
+    ].join("\n");
+    expect(prompt).toBe(`${mediaNote}\nhello`);
+    expect(envelope.queuedBody).toBe(`${mediaNote}\nhello`);
+    expect(envelope.transcriptCommandBody).toBe(`${mediaNote}\nhello`);
+    expect(prompt).not.toContain("message tool");
+    expect(envelope.queuedBody).not.toContain("message tool");
+    expect(envelope.media?.map(({ path }) => path)).toEqual(["/tmp/a.png", "/tmp/b.png"]);
     const idxA = prompt.indexOf("[media attached 1/2: /tmp/a.png");
     const idxB = prompt.indexOf("[media attached 2/2: /tmp/b.png");
     expect(idxA).toBeGreaterThanOrEqual(0);
@@ -53,10 +70,14 @@ describe("getReplyFromConfig media note plumbing", () => {
         },
       ],
     });
-    const prompt = buildReplyPromptBodies({
+    const prompt = buildReplyPromptEnvelope({
       ctx: sessionCtx,
       sessionCtx,
-      effectiveBaseBody: sessionCtx.BodyForAgent,
+      baseBody: sessionCtx.BodyForAgent,
+      hasUserBody: true,
+      inboundUserContext: "",
+      isBareSessionReset: false,
+      startupAction: "new",
       prefixedBody: sessionCtx.BodyForAgent,
     }).prefixedCommandBody;
 

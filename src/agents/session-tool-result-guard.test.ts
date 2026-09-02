@@ -1,8 +1,15 @@
-import type { AgentMessage } from "@mariozechner/pi-agent-core";
-import { SessionManager } from "@mariozechner/pi-coding-agent";
+// Verifies session tool-result guard inserts, truncates, and repairs tool results.
+
+import { expectDefined } from "@openclaw/normalization-core";
+import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
+import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
+import { Type } from "typebox";
 import { describe, expect, it } from "vitest";
+import { createOpenClawReadTool } from "./agent-tools.read.js";
+import { buildExecForegroundResult } from "./bash-tools.exec-support.js";
 import { installSessionToolResultGuard } from "./session-tool-result-guard.js";
 import { castAgentMessage } from "./test-helpers/agent-message-fixtures.js";
+import { redactTranscriptMessage } from "./transcript-redact.js";
 
 type AppendMessage = Parameters<SessionManager["appendMessage"]>[0];
 
@@ -31,6 +38,7 @@ function appendAssistantToolCall(
   sm: SessionManager,
   params: { id: string; name: string; withArguments?: boolean },
 ) {
+  // Builds pending tool calls with optional missing arguments for repair cases.
   const toolCall: {
     type: "toolCall";
     id: string;
@@ -60,6 +68,7 @@ function getPersistedMessages(sm: SessionManager): AgentMessage[] {
 }
 
 function expectPersistedRoles(sm: SessionManager, expectedRoles: AgentMessage["role"][]) {
+  // Role-order assertions prove where synthetic toolResult messages were inserted.
   const messages = getPersistedMessages(sm);
   expect(messages.map((message) => message.role)).toEqual(expectedRoles);
   return messages;
@@ -133,7 +142,7 @@ describe("installSessionToolResultGuard", () => {
     guard.clearPendingToolResults();
 
     expectPersistedRoles(sm, ["assistant"]);
-    expect(guard.getPendingIds()).toEqual([]);
+    expect(guard.getPendingIds()).toStrictEqual([]);
   });
 
   it("clears pending on user interruption when synthetic tool results are disabled", () => {
@@ -152,7 +161,7 @@ describe("installSessionToolResultGuard", () => {
     );
 
     expectPersistedRoles(sm, ["assistant", "user"]);
-    expect(guard.getPendingIds()).toEqual([]);
+    expect(guard.getPendingIds()).toStrictEqual([]);
   });
 
   it("does not add synthetic toolResult when a matching one exists", () => {
@@ -172,7 +181,7 @@ describe("installSessionToolResultGuard", () => {
     expectPersistedRoles(sm, ["assistant", "toolResult"]);
   });
 
-  it("applies pi-style count-based truncation wording when persisting oversized tool results", () => {
+  it("applies count-based truncation wording when persisting oversized tool results", () => {
     const sm = SessionManager.inMemory();
     installSessionToolResultGuard(sm);
 
@@ -180,7 +189,37 @@ describe("installSessionToolResultGuard", () => {
 
     const text = getToolResultText(getPersistedMessages(sm));
     expect(text).toContain("more characters truncated");
-    expect(text).toMatch(/\[\.\.\. \d+ more characters truncated\]$/);
+    expect(text).toMatch(
+      /\[\.\.\. \d+ more characters truncated; rerun with narrower args if needed\]$/,
+    );
+  });
+
+  it("keeps the exec retention-loss disclosure through the session result cap", () => {
+    const sm = SessionManager.inMemory();
+    installSessionToolResultGuard(sm, { maxToolResultChars: 4_000 });
+    const result = buildExecForegroundResult({
+      outcome: {
+        status: "completed",
+        exitCode: 0,
+        exitSignal: null,
+        durationMs: 1,
+        aggregated: "x".repeat(80_000),
+        timedOut: false,
+      },
+      aggregateOutputDropped: true,
+    });
+    const content = result.content[0];
+    if (!content || content.type !== "text") {
+      throw new Error("expected text result");
+    }
+
+    appendToolResultText(sm, content.text);
+
+    const text = getToolResultText(getPersistedMessages(sm));
+    expect(text).toMatch(
+      /^\[earlier output was discarded at the retention cap and cannot be recovered\]/,
+    );
+    expect(text).toMatch(/\[\.\.\. \d+ more characters truncated/);
   });
 
   it("honors tiny configured tool-result caps truthfully", () => {
@@ -193,6 +232,19 @@ describe("installSessionToolResultGuard", () => {
 
     const text = getToolResultText(getPersistedMessages(sm));
     expect(text.length).toBeLessThanOrEqual(120);
+    expect(text).toContain("truncated");
+  });
+
+  it("falls back to the default tool-result cap for non-finite configured caps", () => {
+    const sm = SessionManager.inMemory();
+    installSessionToolResultGuard(sm, {
+      maxToolResultChars: Number.NaN,
+    });
+
+    appendToolResultText(sm, "x".repeat(80_000));
+
+    const text = getToolResultText(getPersistedMessages(sm));
+    expect(text.length).toBeLessThanOrEqual(16_000);
     expect(text).toContain("truncated");
   });
 
@@ -253,7 +305,7 @@ describe("installSessionToolResultGuard", () => {
       "assistant", // text
     ]);
     expect((messages[2] as { toolCallId?: string }).toolCallId).toBe("call_b");
-    expect(guard.getPendingIds()).toEqual([]);
+    expect(guard.getPendingIds()).toStrictEqual([]);
   });
 
   it("flushes pending on guard when no toolResult arrived", () => {
@@ -268,7 +320,7 @@ describe("installSessionToolResultGuard", () => {
         stopReason: "error",
       }),
     );
-    expect(guard.getPendingIds()).toEqual([]);
+    expect(guard.getPendingIds()).toStrictEqual([]);
   });
 
   it("handles toolUseId on toolResult", () => {
@@ -290,6 +342,29 @@ describe("installSessionToolResultGuard", () => {
     );
 
     expectPersistedRoles(sm, ["assistant", "toolResult"]);
+  });
+
+  it("preserves opaque canonical tool-call ids while repairing result metadata", () => {
+    const sm = SessionManager.inMemory();
+    installSessionToolResultGuard(sm);
+
+    sm.appendMessage(
+      asAppendMessage({
+        role: "assistant",
+        content: [{ type: "toolCall", id: " opaque-call ", name: "read", arguments: {} }],
+      }),
+    );
+    sm.appendMessage(
+      asAppendMessage({
+        role: "toolResult",
+        toolCallId: " opaque-call ",
+        content: [{ type: "text", text: "ok" }],
+        isError: false,
+      }),
+    );
+
+    const messages = expectPersistedRoles(sm, ["assistant", "toolResult"]);
+    expect((messages[1] as { toolCallId?: string }).toolCallId).toBe(" opaque-call ");
   });
 
   it("drops malformed tool calls missing input before persistence", () => {
@@ -354,6 +429,29 @@ describe("installSessionToolResultGuard", () => {
     expectPersistedRoles(sm, ["assistant", "toolResult"]);
   });
 
+  it("does not synthesize older pending results before a new assistant tool-call turn", () => {
+    const sm = SessionManager.inMemory();
+    const guard = installSessionToolResultGuard(sm);
+
+    appendAssistantToolCall(sm, { id: "call_1", name: "read" });
+    appendAssistantToolCall(sm, { id: "call_2", name: "exec" });
+    sm.appendMessage(
+      asAppendMessage({
+        role: "toolResult",
+        toolCallId: "call_1",
+        toolName: "read",
+        content: [{ type: "text", text: "real output" }],
+        isError: false,
+      }),
+    );
+
+    const messages = expectPersistedRoles(sm, ["assistant", "assistant", "toolResult"]);
+    expect((messages[2] as { toolCallId?: string; isError?: boolean }).toolCallId).toBe("call_1");
+    expect((messages[2] as { isError?: boolean }).isError).toBe(false);
+    expect(JSON.stringify(messages)).not.toContain("missing tool result");
+    expect(guard.getPendingIds()).toStrictEqual(["call_2"]);
+  });
+
   it("clears pending when a sanitized assistant message is dropped and synthetic results are disabled", () => {
     const sm = SessionManager.inMemory();
     const guard = installSessionToolResultGuard(sm, {
@@ -365,7 +463,7 @@ describe("installSessionToolResultGuard", () => {
     appendAssistantToolCall(sm, { id: "call_2", name: "write" });
 
     expectPersistedRoles(sm, ["assistant"]);
-    expect(guard.getPendingIds()).toEqual([]);
+    expect(guard.getPendingIds()).toStrictEqual([]);
   });
 
   it("drops older pending ids before new tool calls when synthetic results are disabled", () => {
@@ -415,8 +513,12 @@ describe("installSessionToolResultGuard", () => {
 
   it("blocks persistence when before_message_write returns block=true", () => {
     const sm = SessionManager.inMemory();
+    const blockedUserMessages: AgentMessage[] = [];
     installSessionToolResultGuard(sm, {
       beforeMessageWriteHook: () => ({ block: true }),
+      onUserMessageBlocked: (message) => {
+        blockedUserMessages.push(message);
+      },
     });
 
     sm.appendMessage(
@@ -428,6 +530,46 @@ describe("installSessionToolResultGuard", () => {
     );
 
     expect(getPersistedMessages(sm)).toHaveLength(0);
+    expect(blockedUserMessages).toHaveLength(1);
+    expect(blockedUserMessages[0]).toMatchObject({ role: "user", content: "hidden" });
+  });
+
+  it("repairs a blocked real tool result before the next user message", () => {
+    const sm = SessionManager.inMemory();
+    const guard = installSessionToolResultGuard(sm, {
+      beforeMessageWriteHook: ({ message }) =>
+        message.role === "toolResult" && !message.isError ? { block: true } : undefined,
+    });
+
+    sm.appendMessage(toolCallMessage);
+    expect(
+      sm.appendMessage(
+        asAppendMessage({
+          role: "toolResult",
+          toolCallId: "call_1",
+          toolName: "read",
+          content: [{ type: "text", text: "blocked real result" }],
+          isError: false,
+        }),
+      ),
+    ).toBeUndefined();
+    expect(guard.getPendingIds()).toStrictEqual(["call_1"]);
+
+    sm.appendMessage(
+      asAppendMessage({
+        role: "user",
+        content: "next user message",
+        timestamp: Date.now(),
+      }),
+    );
+
+    const messages = expectPersistedRoles(sm, ["assistant", "toolResult", "user"]);
+    expect(messages[1]).toMatchObject({
+      toolCallId: "call_1",
+      toolName: "read",
+      isError: true,
+    });
+    expect(guard.getPendingIds()).toStrictEqual([]);
   });
 
   it("applies before_message_write message mutations before persistence", () => {
@@ -450,6 +592,232 @@ describe("installSessionToolResultGuard", () => {
 
     const text = getToolResultText(getPersistedMessages(sm));
     expect(text).toBe("rewritten by hook");
+  });
+
+  it.each(["added", "renamed", "removed", "error", "aborted"] as const)(
+    "repairs only canonical calls after a hook leaves them %s",
+    (change) => {
+      const sm = SessionManager.inMemory();
+      const guard = installSessionToolResultGuard(sm, {
+        beforeMessageWriteHook: ({ message }) =>
+          message.role === "assistant"
+            ? {
+                message: castAgentMessage({
+                  ...message,
+                  content:
+                    change === "removed"
+                      ? [{ type: "text", text: "no tool needed" }]
+                      : [{ type: "toolCall", id: "canonical", name: "read", arguments: {} }],
+                  stopReason: change === "error" || change === "aborted" ? change : "toolUse",
+                }),
+              }
+            : undefined,
+      });
+
+      sm.appendMessage(
+        change === "added"
+          ? asAppendMessage({ role: "assistant", content: [{ type: "text", text: "checking" }] })
+          : toolCallMessage,
+      );
+      guard.flushPendingToolResults();
+
+      const results = getPersistedMessages(sm).filter((message) => message.role === "toolResult");
+      expect(results).toEqual(
+        change === "added" || change === "renamed"
+          ? [expect.objectContaining({ toolCallId: "canonical", toolName: "read", isError: true })]
+          : [],
+      );
+      expect(guard.getPendingIds()).toEqual([]);
+    },
+  );
+
+  it("applies before_message_write redaction to tool-result details before persistence", () => {
+    const sm = SessionManager.inMemory();
+    installSessionToolResultGuard(sm, {
+      beforeMessageWriteHook: ({ message }) => ({
+        message: redactTranscriptMessage(message, {}),
+      }),
+    });
+
+    sm.appendMessage(toolCallMessage);
+    sm.appendMessage(
+      asAppendMessage({
+        role: "toolResult",
+        toolCallId: "call_1",
+        toolName: "read",
+        content: [{ type: "text", text: "result sk-abcdef1234567890xyz" }],
+        details: {
+          apiKey: "plainsecretvalue123",
+          password: "hunter2",
+          nested: { accessToken: ["nestedplainsecret123"] },
+          safe: "visible",
+        },
+        isError: false,
+        timestamp: Date.now(),
+      }),
+    );
+
+    const messages = getPersistedMessages(sm);
+    const toolResult = messages.find((m) => m.role === "toolResult") as unknown as {
+      content: Array<{ text: string }>;
+      details: {
+        apiKey: string;
+        password: string;
+        nested: { accessToken: string[] };
+        safe: string;
+      };
+    };
+    const serializedToolResult = JSON.stringify(toolResult);
+    expect(
+      expectDefined(toolResult.content[0], "toolResult.content[0] test invariant").text,
+    ).not.toContain("sk-abcdef1234567890xyz");
+    expect(serializedToolResult).not.toContain("plainsecretvalue123");
+    expect(serializedToolResult).not.toContain("hunter2");
+    expect(serializedToolResult).not.toContain("nestedplainsecret123");
+    expect(toolResult.details.apiKey).toBe("***");
+    expect(toolResult.details.password).toBe("***");
+    expect(toolResult.details.nested.accessToken[0]).toBe("***");
+    expect(serializedToolResult).toContain("visible");
+  });
+
+  it("preserves correlation IDs while backfilling names through redaction", () => {
+    const sm = SessionManager.inMemory();
+    const guard = installSessionToolResultGuard(sm, {
+      beforeMessageWriteHook: ({ message }) => ({ message: redactTranscriptMessage(message, {}) }),
+    });
+    const id = `call_fixture|fc-${"a".repeat(24)}`;
+    appendAssistantToolCall(sm, { id, name: "read" });
+    sm.appendMessage(
+      asAppendMessage({
+        role: "toolResult",
+        toolCallId: id,
+        toolName: "   ",
+        content: [{ type: "text", text: "observed" }],
+        isError: false,
+      }),
+    );
+    guard.flushPendingToolResults();
+    const messages = expectPersistedRoles(sm, ["assistant", "toolResult"]);
+    expect(messages[1]).toMatchObject({ toolName: "read", isError: false });
+    expect(messages[1]).toMatchObject({ toolCallId: id });
+    expect(guard.getPendingIds()).toEqual([]);
+  });
+
+  it.each([false, true])(
+    "keeps canonical synthetic IDs after transforms (blocked=%s)",
+    (blocked) => {
+      const sm = SessionManager.inMemory();
+      const guard = installSessionToolResultGuard(sm, {
+        transformMessageForPersistence: (message) => {
+          if (message.role === "assistant") {
+            return castAgentMessage({
+              ...message,
+              content: [{ type: "toolCall", id: "p:call_1", name: "read", arguments: {} }],
+            });
+          }
+          return message.role === "toolResult"
+            ? { ...message, toolCallId: `p:${message.toolCallId}` }
+            : message;
+        },
+        beforeMessageWriteHook: ({ message }) =>
+          message.role === "toolResult"
+            ? blocked && !message.isError
+              ? { block: true }
+              : { message: { ...message, content: [{ type: "text", text: "safe failure" }] } }
+            : undefined,
+      });
+      sm.appendMessage(toolCallMessage);
+      if (blocked) {
+        sm.appendMessage(
+          asAppendMessage({
+            role: "toolResult",
+            toolCallId: "call_1",
+            toolName: "read",
+            content: [{ type: "text", text: "blocked" }],
+            isError: false,
+          }),
+        );
+      }
+      guard.flushPendingToolResults();
+      const messages = expectPersistedRoles(sm, ["assistant", "toolResult"]);
+      expect(messages[1]).toMatchObject({
+        toolCallId: "p:call_1",
+        toolName: "read",
+        isError: true,
+        content: [{ type: "text", text: "safe failure" }],
+      });
+    },
+  );
+
+  it("backfills known names before both persistence hooks", () => {
+    const sm = SessionManager.inMemory();
+    const observed: string[] = [];
+    installSessionToolResultGuard(sm, {
+      transformToolResultForPersistence: (message) => {
+        if (message.role === "toolResult") {
+          observed.push(message.toolName);
+        }
+        return message;
+      },
+      beforeMessageWriteHook: ({ message }) => {
+        if (message.role !== "toolResult") {
+          return undefined;
+        }
+        observed.push(message.toolName);
+        return message.toolName === "read"
+          ? { message: { ...message, content: [{ type: "text", text: "hook applied" }] } }
+          : undefined;
+      },
+    });
+    sm.appendMessage(toolCallMessage);
+    sm.appendMessage(
+      asAppendMessage({
+        role: "toolResult",
+        toolCallId: "call_1",
+        toolName: "   ",
+        content: [{ type: "text", text: "original" }],
+        isError: false,
+      }),
+    );
+    expect(observed).toEqual(["read", "read"]);
+    expect(getToolResultText(getPersistedMessages(sm))).toBe("hook applied");
+  });
+
+  it("persists env reads only after owner-context redaction", async () => {
+    const credential = "persisted-env-credential-1234567890";
+    const text = `api_key: ${credential}`;
+    const readTool = createOpenClawReadTool({
+      name: "read",
+      label: "read",
+      description: "test read",
+      parameters: Type.Object({ path: Type.String() }),
+      execute: async () => ({
+        content: [{ type: "text" as const, text }],
+        details: { kind: "text", content: text },
+      }),
+    });
+    const result = await readTool.execute("call_1", { path: ".env.production" });
+    const sm = SessionManager.inMemory();
+    installSessionToolResultGuard(sm, {
+      beforeMessageWriteHook: ({ message }) => ({
+        message: redactTranscriptMessage(message, {}),
+      }),
+    });
+
+    sm.appendMessage(toolCallMessage);
+    sm.appendMessage(
+      asAppendMessage({
+        role: "toolResult",
+        toolCallId: "call_1",
+        toolName: "read",
+        content: result.content,
+        details: result.details,
+        isError: false,
+        timestamp: Date.now(),
+      }),
+    );
+
+    expect(JSON.stringify(getPersistedMessages(sm))).not.toContain(credential);
   });
 
   it("applies before_message_write to synthetic tool-result flushes", () => {
@@ -523,7 +891,187 @@ describe("installSessionToolResultGuard", () => {
 
     const persisted = getPersistedMessages(sm);
     expect(persisted.map((message) => message.role)).toEqual(["user"]);
-    expect(persisted[0]).toMatchObject({ content: "second" });
+    expect((persisted[0] as { content?: unknown } | undefined)?.content).toBe("second");
+  });
+
+  it("re-enables the next user write after the canonical entry is removed", () => {
+    const sm = SessionManager.inMemory();
+    const guard = installSessionToolResultGuard(sm, {
+      suppressNextUserMessagePersistence: true,
+    });
+
+    guard.clearNextUserMessagePersistenceSuppression();
+    sm.appendMessage(
+      asAppendMessage({
+        role: "user",
+        content: "replacement",
+        timestamp: Date.now(),
+      }),
+    );
+
+    const persisted = getPersistedMessages(sm);
+    expect(persisted).toHaveLength(1);
+    expect((persisted[0] as { content?: unknown } | undefined)?.content).toBe("replacement");
+  });
+
+  it("suppresses assistant error stubs when requested", () => {
+    const sm = SessionManager.inMemory();
+    installSessionToolResultGuard(sm, {
+      suppressAssistantErrorPersistence: true,
+    });
+
+    sm.appendMessage(
+      asAppendMessage({
+        role: "assistant",
+        content: [{ type: "text", text: "[assistant turn failed before producing content]" }],
+        stopReason: "error",
+        timestamp: Date.now(),
+      }),
+    );
+    sm.appendMessage(
+      asAppendMessage({
+        role: "user",
+        content: "next user message",
+        timestamp: Date.now() + 1,
+      }),
+    );
+
+    const persisted = getPersistedMessages(sm);
+    expect(persisted.map((message) => message.role)).toEqual(["user"]);
+  });
+
+  it("notifies after assistant error stubs persist", () => {
+    const sm = SessionManager.inMemory();
+    const persistedErrors: Array<Extract<AgentMessage, { role: "assistant" }>> = [];
+    installSessionToolResultGuard(sm, {
+      onAssistantErrorMessagePersisted: (message) => {
+        persistedErrors.push(message);
+      },
+    });
+
+    sm.appendMessage(
+      asAppendMessage({
+        role: "assistant",
+        content: [{ type: "text", text: "[assistant turn failed before producing content]" }],
+        stopReason: "error",
+        timestamp: Date.now(),
+      }),
+    );
+
+    expect(persistedErrors).toHaveLength(1);
+    expect(persistedErrors[0]?.stopReason).toBe("error");
+  });
+
+  it("reports the exact persisted user entry id", () => {
+    const sm = SessionManager.inMemory();
+    const persisted: Array<{ entryId: string; message: AgentMessage }> = [];
+    installSessionToolResultGuard(sm, {
+      onUserMessagePersisted: (message, context) => {
+        persisted.push({ entryId: context.entryId, message });
+      },
+    });
+
+    const entryId = sm.appendMessage(
+      asAppendMessage({ role: "user", content: "exact admission", timestamp: 1 }),
+    );
+
+    expect(persisted).toEqual([
+      {
+        entryId,
+        message: expect.objectContaining({ role: "user", content: "exact admission" }),
+      },
+    ]);
+  });
+
+  it("models a four-candidate followup fallback cascade producing exactly one user and one assistant-error entry", () => {
+    const sm = SessionManager.inMemory();
+    const FALLBACK_CANDIDATES = 4;
+    let userPersisted = false;
+    let assistantErrorPersisted = false;
+
+    for (let attempt = 0; attempt < FALLBACK_CANDIDATES; attempt += 1) {
+      installSessionToolResultGuard(sm, {
+        suppressNextUserMessagePersistence: userPersisted,
+        suppressAssistantErrorPersistence: assistantErrorPersisted,
+        onUserMessagePersisted: () => {
+          userPersisted = true;
+        },
+        onAssistantErrorMessagePersisted: () => {
+          assistantErrorPersisted = true;
+        },
+      });
+      sm.appendMessage(
+        asAppendMessage({
+          role: "user",
+          content: "queued user message",
+          timestamp: Date.now() + attempt,
+        }),
+      );
+      sm.appendMessage(
+        asAppendMessage({
+          role: "assistant",
+          content: [{ type: "text", text: "[assistant turn failed before producing content]" }],
+          stopReason: "error",
+          timestamp: Date.now() + attempt,
+        }),
+      );
+    }
+
+    const persisted = getPersistedMessages(sm);
+    const roles = persisted.map((m) => m.role);
+    expect(roles).toEqual(["user", "assistant"]);
+    const consecutiveSameRole = roles.reduce(
+      (acc, role, idx) => acc + (idx > 0 && role === roles[idx - 1] ? 1 : 0),
+      0,
+    );
+    expect(consecutiveSameRole).toBe(0);
+  });
+
+  it("still persists successful assistant messages when error suppression is on", () => {
+    const sm = SessionManager.inMemory();
+    installSessionToolResultGuard(sm, {
+      suppressAssistantErrorPersistence: true,
+    });
+
+    sm.appendMessage(
+      asAppendMessage({
+        role: "assistant",
+        content: "ok response",
+        stopReason: "stop",
+        timestamp: Date.now(),
+      }),
+    );
+
+    const persisted = getPersistedMessages(sm);
+    expect(persisted).toHaveLength(1);
+    expect(persisted[0]?.role).toBe("assistant");
+  });
+
+  it("suppresses transcript-only assistant messages when requested", () => {
+    const sm = SessionManager.inMemory();
+    installSessionToolResultGuard(sm, {
+      suppressTranscriptOnlyAssistantPersistence: true,
+    });
+
+    sm.appendMessage(
+      asAppendMessage({
+        role: "assistant",
+        content: "private room-event note",
+        timestamp: Date.now(),
+      }),
+    );
+    sm.appendMessage(
+      asAppendMessage({
+        role: "assistant",
+        content: [{ type: "toolCall", id: "call_1", name: "message", arguments: {} }],
+        timestamp: Date.now() + 1,
+      }),
+    );
+
+    const persisted = getPersistedMessages(sm);
+    expect(persisted).toHaveLength(1);
+    expect(persisted[0]?.role).toBe("assistant");
+    expect(JSON.stringify(persisted[0])).toContain("call_1");
   });
 
   // When an assistant message with toolCalls is aborted, no synthetic toolResult

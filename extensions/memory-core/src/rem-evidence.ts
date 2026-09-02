@@ -1,5 +1,7 @@
+// Memory Core plugin module implements rem evidence behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
+import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 const REM_BLOCKED_SECTION_RE =
   /\b(morning reminders|tasks? for today|to-?do|pickups?|action items?|next steps?|open questions?|stats|setup tasks?|priority contacts|visitors?|top priority candidates|timeline coverage|action items for morning review|test .* skill|heartbeat checks?|date semantics guardrail|still broken|last message (?:&|and) status|plugin \/ service warning|email triage cron)\b/i;
@@ -378,7 +380,7 @@ function summarizeSection(
 
 function compactCandidateTitle(title: string): string {
   let compact = sanitizeSectionTitle(title)
-    .replace(/\s*\((?:via:|from qmd \+ memory|this session)[^)]+\)\s*/gi, " ")
+    .replace(/\s*\((?:via:|this session)[^)]+\)\s*/gi, " ")
     .replace(
       /\s*[—-]\s*(?:research results.*|in progress.*|working.*|installed.*|booked.*|proposed.*|clarified.*|candidate.*|fixes.*|updates?.*)$/i,
       "",
@@ -612,8 +614,13 @@ function splitSubjectLeadClaim(text: string): string[] {
   if (!match?.groups) {
     return [text];
   }
-  const subject = normalizeWhitespace(match.groups.subject);
-  const rest = normalizeWhitespace(match.groups.rest);
+  const rawSubject = match.groups.subject;
+  const rawRest = match.groups.rest;
+  if (rawSubject === undefined || rawRest === undefined) {
+    return [text];
+  }
+  const subject = normalizeWhitespace(rawSubject);
+  const rest = normalizeWhitespace(rawRest);
   if (!subject || !rest) {
     return [text];
   }
@@ -638,7 +645,7 @@ function atomizeClaimText(text: string): string[] {
     .flatMap((part) => splitSubjectLeadClaim(part))
     .map((part) => normalizeWhitespace(part))
     .filter(Boolean);
-  return Array.from(new Set(atomic)).slice(0, 3);
+  return uniqueStrings(atomic).slice(0, 3);
 }
 
 function classifyCandidateLeanFromText(text: string, title: string): GroundedRemCandidate["lean"] {
@@ -667,6 +674,23 @@ function addReflection(
   reflections.push({ text: normalized, refs });
 }
 
+function coalesceGroundedRemItems<T extends GroundedRemPreviewItem>(
+  items: T[],
+  keyFor = (text: string) => text,
+): T[] {
+  const byText = new Map<string, T>();
+  for (const item of items) {
+    const key = keyFor(item.text);
+    const existing = byText.get(key);
+    // Equal claims share text, not identity; preserve sources before output caps and rendering.
+    byText.set(
+      key,
+      existing ? { ...existing, refs: uniqueStrings([...existing.refs, ...item.refs]) } : item,
+    );
+  }
+  return [...byText.values()];
+}
+
 function isOperatorRuleSummary(summary: SectionSummary): boolean {
   return (
     /process improvements?/i.test(summary.title) || REM_OPERATOR_RULE_SIGNAL_RE.test(summary.text)
@@ -693,9 +717,10 @@ function findStrongestSummary(
   return strongest;
 }
 
-function previewGroundedRemForFile(params: {
+export function previewGroundedRemForFile(params: {
   relPath: string;
   content: string;
+  formatItem?: (line: string, refs: readonly string[]) => string;
 }): GroundedRemFilePreview {
   const sections = parseMarkdownSections(params.content);
   const sectionScores = sections.map((section) => ({
@@ -727,14 +752,14 @@ function previewGroundedRemForFile(params: {
     }));
   });
 
-  const memoryImplications = summaries
-    .filter((summary) => summary.scores.preference > 0 || isOperatorRuleSummary(summary))
-    .map((summary) => ({
-      text: summary.text.replace(/^[^:]+:\s*/, ""),
-      refs: summary.refs,
-    }))
-    .filter((item, index, items) => items.findIndex((entry) => entry.text === item.text) === index)
-    .slice(0, REM_SUMMARY_MEMORY_LIMIT);
+  const memoryImplications = coalesceGroundedRemItems(
+    summaries
+      .filter((summary) => summary.scores.preference > 0 || isOperatorRuleSummary(summary))
+      .map((summary) => ({
+        text: summary.text.replace(/^[^:]+:\s*/, ""),
+        refs: summary.refs,
+      })),
+  ).slice(0, REM_SUMMARY_MEMORY_LIMIT);
 
   const candidateSnippets: CandidateSnippetSummary[] = sections.flatMap((section) => {
     if (REM_BLOCKED_SECTION_RE.test(section.title)) {
@@ -760,37 +785,31 @@ function previewGroundedRemForFile(params: {
     );
   });
 
-  const candidates = candidateSnippets
-    .toSorted((left, right) => {
+  const candidates = coalesceGroundedRemItems(
+    candidateSnippets.toSorted((left, right) => {
       const leanRank = { likely_durable: 0, unclear: 1, likely_situational: 2 };
       const leanDelta = leanRank[left.lean] - leanRank[right.lean];
       if (leanDelta !== 0) {
         return leanDelta;
       }
       return right.score - left.score;
-    })
-    .filter(
-      (candidate, index, items) =>
-        items.findIndex((entry) => entry.text === candidate.text) === index,
-    )
-    .slice(0, 4);
+    }),
+  ).slice(0, 4);
 
-  const durableImplications = candidateSnippets
-    .filter((candidate) => candidate.lean === "likely_durable" || candidate.score >= 4)
-    .filter(
-      (candidate, index, items) =>
-        items.findIndex((entry) => entry.text === candidate.text) === index,
-    )
+  const durableImplications = coalesceGroundedRemItems(
+    candidateSnippets.filter(
+      (candidate) => candidate.lean === "likely_durable" || candidate.score >= 4,
+    ),
+  )
     .toSorted((left, right) => right.score - left.score)
     .slice(0, REM_SUMMARY_MEMORY_LIMIT)
     .map((candidate) => ({ text: candidate.text, refs: candidate.refs }));
 
-  const candidateDrivenImplications = candidateSnippets
-    .filter((candidate) => candidate.lean !== "likely_situational" && candidate.score >= 2.2)
-    .filter(
-      (candidate, index, items) =>
-        items.findIndex((entry) => entry.text === candidate.text) === index,
-    )
+  const candidateDrivenImplications = coalesceGroundedRemItems(
+    candidateSnippets.filter(
+      (candidate) => candidate.lean !== "likely_situational" && candidate.score >= 2.2,
+    ),
+  )
     .toSorted((left, right) => right.score - left.score)
     .slice(0, REM_SUMMARY_MEMORY_LIMIT)
     .map((candidate) => ({ text: candidate.text, refs: candidate.refs }));
@@ -802,19 +821,12 @@ function previewGroundedRemForFile(params: {
         ? candidateDrivenImplications
         : memoryImplications;
 
-  const facts: GroundedRemPreviewItem[] = [];
-  const usedFactTexts = new Set<string>();
-  for (const summary of factSummaries.toSorted((left, right) => right.score - left.score)) {
-    const key = summary.text.toLowerCase();
-    if (usedFactTexts.has(key)) {
-      continue;
-    }
-    usedFactTexts.add(key);
-    facts.push({ text: summary.text, refs: summary.refs });
-    if (facts.length >= REM_SUMMARY_FACT_LIMIT) {
-      break;
-    }
-  }
+  const facts: GroundedRemPreviewItem[] = coalesceGroundedRemItems(
+    factSummaries.toSorted((left, right) => right.score - left.score),
+    (text) => text.toLowerCase(),
+  )
+    .slice(0, REM_SUMMARY_FACT_LIMIT)
+    .map(({ text, refs }) => ({ text, refs }));
   if (facts.length === 0 && monitoringSignal < 3) {
     const bestFor = (metric: keyof SectionSummary["scores"]) =>
       summaries
@@ -825,25 +837,19 @@ function previewGroundedRemForFile(params: {
           }
           return right.scores.overall - left.scores.overall;
         })[0];
-    for (const summary of [
-      bestFor("preference"),
-      bestFor("routing"),
-      bestFor("externalization"),
-      ...summaries.toSorted((left, right) => right.scores.overall - left.scores.overall),
-    ]) {
-      if (!summary) {
-        continue;
-      }
-      const key = summary.text.toLowerCase();
-      if (usedFactTexts.has(key)) {
-        continue;
-      }
-      usedFactTexts.add(key);
-      facts.push({ text: summary.text, refs: summary.refs });
-      if (facts.length >= REM_SUMMARY_FACT_LIMIT) {
-        break;
-      }
-    }
+    facts.push(
+      ...coalesceGroundedRemItems(
+        [
+          bestFor("preference"),
+          bestFor("routing"),
+          bestFor("externalization"),
+          ...summaries.toSorted((left, right) => right.scores.overall - left.scores.overall),
+        ].filter((summary): summary is SectionSummary => summary !== undefined),
+        (text) => text.toLowerCase(),
+      )
+        .slice(0, REM_SUMMARY_FACT_LIMIT)
+        .map(({ text, refs }) => ({ text, refs })),
+    );
   }
 
   const reflections: GroundedRemPreviewItem[] = [];
@@ -892,7 +898,7 @@ function previewGroundedRemForFile(params: {
       reflections,
       seenReflections,
       "A stable rule or preference was stated explicitly, which suggests operating choices are being made legible instead of left implicit.",
-      effectiveMemoryImplications.flatMap((item) => item.refs).slice(0, 3),
+      effectiveMemoryImplications.flatMap((item) => item.refs),
     );
   }
   if (multiRelationshipContext) {
@@ -900,7 +906,7 @@ function previewGroundedRemForFile(params: {
       reflections,
       seenReflections,
       "More than one active relationship thread appears in the same day, which means person-memory matters operationally: who each person is should be kept separate from the transient date or venue details attached to them.",
-      relationshipFacts.flatMap((item) => item.refs).slice(0, 3),
+      relationshipFacts.flatMap((item) => item.refs),
     );
   }
   if (
@@ -933,8 +939,7 @@ function previewGroundedRemForFile(params: {
   if (!multiRelationshipContext && facts.length > 0 && buildSignal >= 2) {
     const buildRefs = facts
       .filter((item) => REM_BUILD_SIGNAL_RE.test(item.text))
-      .flatMap((item) => item.refs)
-      .slice(0, 3);
+      .flatMap((item) => item.refs);
     if (buildRefs.length > 0) {
       addReflection(
         reflections,
@@ -957,8 +962,7 @@ function previewGroundedRemForFile(params: {
   if (!multiRelationshipContext && facts.length > 0 && logisticsSignal >= 2) {
     const logisticsRefs = facts
       .filter((item) => REM_LOGISTICS_SIGNAL_RE.test(item.text))
-      .flatMap((item) => item.refs)
-      .slice(0, 3);
+      .flatMap((item) => item.refs);
     if (logisticsRefs.length > 0) {
       addReflection(
         reflections,
@@ -991,38 +995,37 @@ function previewGroundedRemForFile(params: {
         : Math.min(REM_SUMMARY_REFLECTION_LIMIT, facts.length + 1);
   const visibleReflections = reflections.slice(0, reflectionLimit);
 
-  const renderedLines: string[] = [];
-  renderedLines.push("## What Happened");
-  if (facts.length === 0) {
-    renderedLines.push("1. No grounded facts were extracted.");
-  } else {
-    for (const [index, fact] of facts.entries()) {
-      renderedLines.push(`${index + 1}. ${fact.text} [${fact.refs.join(", ")}]`);
-    }
-  }
-  renderedLines.push("");
-  renderedLines.push("## Reflections");
-  if (visibleReflections.length === 0) {
-    renderedLines.push("1. No grounded reflections emerged from this note yet.");
-  } else {
-    for (const [index, reflection] of visibleReflections.entries()) {
-      renderedLines.push(`${index + 1}. ${reflection.text} [${reflection.refs.join(", ")}]`);
-    }
-  }
-  if (candidates.length > 0) {
-    renderedLines.push("");
-    renderedLines.push("## Candidates");
-    for (const candidate of candidates) {
-      renderedLines.push(`- [${candidate.lean}] ${candidate.text} [${candidate.refs.join(", ")}]`);
-    }
-  }
-  if (effectiveMemoryImplications.length > 0) {
-    renderedLines.push("");
-    renderedLines.push("## Possible Lasting Updates");
-    for (const implication of effectiveMemoryImplications) {
-      renderedLines.push(`- ${implication.text} [${implication.refs.join(", ")}]`);
-    }
-  }
+  const renderItem = (item: GroundedRemPreviewItem, prefix: string) => {
+    // Citation display stays bounded; deletion lineage keeps every contributing ref.
+    const refs = item.refs.slice(0, 3);
+    const line = `${prefix} ${item.text} [${refs.join(", ")}]`;
+    return params.formatItem?.(line, item.refs) ?? line;
+  };
+  const renderedLines = [
+    "## What Happened",
+    ...(facts.length
+      ? facts.map((fact, index) => renderItem(fact, `${index + 1}.`))
+      : ["1. No grounded facts were extracted."]),
+    "",
+    "## Reflections",
+    ...(visibleReflections.length
+      ? visibleReflections.map((reflection, index) => renderItem(reflection, `${index + 1}.`))
+      : ["1. No grounded reflections emerged from this note yet."]),
+    ...(candidates.length
+      ? [
+          "",
+          "## Candidates",
+          ...candidates.map((candidate) => renderItem(candidate, `- [${candidate.lean}]`)),
+        ]
+      : []),
+    ...(effectiveMemoryImplications.length
+      ? [
+          "",
+          "## Possible Lasting Updates",
+          ...effectiveMemoryImplications.map((implication) => renderItem(implication, "-")),
+        ]
+      : []),
+  ];
 
   return {
     path: params.relPath,
@@ -1091,3 +1094,4 @@ export async function previewGroundedRemMarkdown(params: {
     files: previews,
   };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

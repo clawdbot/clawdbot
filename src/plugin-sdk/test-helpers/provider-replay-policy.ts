@@ -1,3 +1,6 @@
+/**
+ * Shared assertions for provider replay policy passthrough behavior.
+ */
 import { expect } from "vitest";
 import { registerSingleProviderPlugin } from "../plugin-test-runtime.js";
 

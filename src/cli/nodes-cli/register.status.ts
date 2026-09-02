@@ -1,23 +1,34 @@
-import type { Command } from "commander";
-import { formatErrorMessage } from "../../infra/errors.js";
-import { formatTimeAgo } from "../../infra/format-time/format-relative.ts";
-import { defaultRuntime } from "../../runtime.js";
+// Node status/list/describe commands and paired-node display formatting.
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
-} from "../../shared/string-coerce.js";
-import { sanitizeTerminalText } from "../../terminal/safe-text.js";
-import { getTerminalTableWidth, renderTable } from "../../terminal/table.js";
+} from "@openclaw/normalization-core/string-coerce";
+import type { Command } from "commander";
+import { sanitizeTerminalText } from "../../../packages/terminal-core/src/safe-text.js";
+import { getTerminalTableWidth, renderTable } from "../../../packages/terminal-core/src/table.js";
+import { formatErrorMessage } from "../../infra/errors.js";
+import { formatTimeAgo } from "../../infra/format-time/format-relative.ts";
+import { defaultRuntime } from "../../runtime.js";
 import { shortenHomeInString } from "../../utils.js";
+import { formatCliCommand } from "../command-format.js";
 import { parseDurationMs } from "../parse-duration.js";
-import { getNodesTheme, runNodesCommand } from "./cli-utils.js";
+import { quoteCliArg } from "../quote-cli-arg.js";
+import { formatConnectionFlagReminder, getNodesTheme, runNodesCommand } from "./cli-utils.js";
 import { formatPermissions, parseNodeList, parsePairingList } from "./format.js";
 import { renderPendingPairingRequestsTable } from "./pairing-render.js";
-import { callGatewayCli, nodesCallOpts, resolveNodeId } from "./rpc.js";
+import {
+  callNodesGatewayCli,
+  callNodeDiagnosticsGatewayCli,
+  nodesCallOpts,
+  resolveNodeDiagnosticsId,
+} from "./rpc.js";
 import type { NodeListNode, NodesRpcOpts, PairedNode } from "./types.js";
 
 type PairedNodeListRow = PairedNode & Partial<NodeListNode>;
+type NodeApprovalState = NonNullable<NodeListNode["approvalState"]>;
+
+const DEFAULT_NODES_RPC_TIMEOUT_MS = 10_000;
 
 function formatVersionLabel(raw: string) {
   const trimmed = raw.trim();
@@ -46,6 +57,7 @@ function resolveNodeVersions(node: {
     return { core: undefined, ui: undefined };
   }
   const platform = normalizeOptionalLowercaseString(node.platform) ?? "";
+  // Legacy nodes reported one version field; headless hosts use it as core, mobile nodes as UI.
   const headless =
     platform === "darwin" || platform === "linux" || platform === "win32" || platform === "windows";
   return headless ? { core: legacy, ui: undefined } : { core: undefined, ui: legacy };
@@ -68,7 +80,12 @@ function formatNodeVersions(node: {
   return parts.length > 0 ? parts.join(" · ") : null;
 }
 
-function formatPathEnv(raw?: string): string | null {
+function isWindowsNodePlatform(platform?: string): boolean {
+  const normalized = normalizeOptionalLowercaseString(platform) ?? "";
+  return normalized === "win32" || normalized === "windows";
+}
+
+function formatPathEnv(raw?: string, platform?: string): string | null {
   if (typeof raw !== "string") {
     return null;
   }
@@ -76,9 +93,12 @@ function formatPathEnv(raw?: string): string | null {
   if (!trimmed) {
     return null;
   }
-  const parts = trimmed.split(":").filter(Boolean);
+  const delimiter = isWindowsNodePlatform(platform) ? ";" : ":";
+  const parts = trimmed.split(delimiter).filter(Boolean);
   const display =
-    parts.length <= 3 ? trimmed : `${parts.slice(0, 2).join(":")}:…:${parts.slice(-1)[0]}`;
+    parts.length <= 3
+      ? trimmed
+      : `${parts.slice(0, 2).join(delimiter)}${delimiter}…${delimiter}${parts.slice(-1)[0]}`;
   return shortenHomeInString(display);
 }
 
@@ -96,27 +116,76 @@ function formatNodeTerminalLabel(node: { nodeId: string; displayName?: string })
   return sanitizeTerminalText(label);
 }
 
-function parseSinceMs(raw: unknown, label: string): number | undefined {
-  if (raw === undefined || raw === null) {
-    return undefined;
+function formatNodeTimeAgo(now: number, timestamp: unknown): string | null {
+  return typeof timestamp === "number" && Number.isFinite(timestamp)
+    ? formatTimeAgo(Math.max(0, now - timestamp))
+    : null;
+}
+
+function formatNodeApprovalState(raw: unknown): NodeApprovalState | null {
+  return raw === "approved" ||
+    raw === "pending-approval" ||
+    raw === "pending-reapproval" ||
+    raw === "unapproved"
+    ? raw
+    : null;
+}
+
+function formatApprovalStateLabel(state: NodeApprovalState): string {
+  if (state === "pending-approval") {
+    return "approval pending";
   }
-  const value = normalizeOptionalString(raw) ?? (typeof raw === "number" ? String(raw) : null);
-  if (value === null) {
-    defaultRuntime.error(`${label}: invalid duration value`);
-    defaultRuntime.exit(1);
-    return undefined;
+  if (state === "pending-reapproval") {
+    return "reapproval pending";
   }
-  if (!value) {
+  return state;
+}
+
+function isPendingApprovalState(
+  state: NodeApprovalState | null,
+): state is "pending-approval" | "pending-reapproval" {
+  return state === "pending-approval" || state === "pending-reapproval";
+}
+
+function formatPendingApprovalCommand(raw: unknown, opts: NodesRpcOpts): string | null {
+  const requestId = normalizeOptionalString(raw);
+  if (!requestId) {
+    return null;
+  }
+  const args = ["openclaw", "nodes", "approve", requestId];
+  const timeout = normalizeOptionalString(opts.timeout);
+  if (timeout && timeout !== String(DEFAULT_NODES_RPC_TIMEOUT_MS)) {
+    args.push("--timeout", timeout);
+  }
+  return formatCliCommand(args.map(quoteCliArg).join(" "));
+}
+
+function parseSinceMs(raw: string | undefined, label: string): number | undefined {
+  if (raw === undefined) {
     return undefined;
   }
   try {
-    return parseDurationMs(value);
+    return parseDurationMs(raw);
   } catch (err) {
-    const message = formatErrorMessage(err);
-    defaultRuntime.error(`${label}: ${message}`);
-    defaultRuntime.exit(1);
-    return undefined;
+    throw new Error(`${label}: ${formatErrorMessage(err)}`, { cause: err });
   }
+}
+
+function matchesNodeConnectionFilter(
+  node: NodeListNode,
+  connectedOnly: boolean,
+  sinceMs: number | undefined,
+  now: number,
+): boolean {
+  if (connectedOnly && !node.connected) {
+    return false;
+  }
+  // Older gateways lack the recorded lastConnectedAtMs field.
+  const lastConnectedAtMs = node.lastConnectedAtMs ?? node.connectedAtMs;
+  return (
+    sinceMs === undefined ||
+    (typeof lastConnectedAtMs === "number" && now - lastConnectedAtMs <= sinceMs)
+  );
 }
 
 function mergePairedNodeWithEffectiveNode(
@@ -126,9 +195,10 @@ function mergePairedNodeWithEffectiveNode(
   return {
     ...paired,
     ...effective,
-    token: paired?.token,
     createdAtMs: paired?.createdAtMs,
-    lastConnectedAtMs: paired?.lastConnectedAtMs ?? effective.connectedAtMs,
+    // node.list can record a connection newer than the separate pairing snapshot.
+    lastConnectedAtMs:
+      effective.lastConnectedAtMs ?? paired?.lastConnectedAtMs ?? effective.connectedAtMs,
     displayName: effective.displayName ?? paired?.displayName,
     platform: effective.platform ?? paired?.platform,
     version: effective.version ?? paired?.version,
@@ -168,18 +238,21 @@ function mergePairedNodesWithEffectiveNodes(
 
 async function tryReadNodeList(opts: NodesRpcOpts): Promise<NodeListNode[] | null> {
   try {
-    return parseNodeList(await callGatewayCli("node.list", opts, {}));
-  } catch {
+    return parseNodeList(await callNodeDiagnosticsGatewayCli("node.list", opts, {}));
+  } catch (error) {
+    // Best-effort enrichment may degrade to pairing-only rows, but never
+    // silently: without this notice the table looks authoritative while
+    // omitting connected/commands state. Stderr keeps --json output clean.
+    defaultRuntime.error(
+      getNodesTheme().muted(
+        `live node view unavailable (${formatErrorMessage(error)}); showing paired-only data`,
+      ),
+    );
     return null;
   }
 }
 
-function sanitizePairedNodeForListJson(node: PairedNodeListRow): Omit<PairedNodeListRow, "token"> {
-  const copy: Record<string, unknown> = { ...node };
-  delete copy.token;
-  return copy as Omit<PairedNodeListRow, "token">;
-}
-
+/** Register node status, describe, and paired-node list commands. */
 export function registerNodesStatusCommands(nodes: Command) {
   nodesCallOpts(
     nodes
@@ -191,42 +264,16 @@ export function registerNodesStatusCommands(nodes: Command) {
         await runNodesCommand("status", async () => {
           const connectedOnly = Boolean(opts.connected);
           const sinceMs = parseSinceMs(opts.lastConnected, "Invalid --last-connected");
-          const result = await callGatewayCli("node.list", opts, {});
+          const result = await callNodeDiagnosticsGatewayCli("node.list", opts, {});
           const obj: Record<string, unknown> =
             typeof result === "object" && result !== null ? result : {};
           const { ok, warn, muted } = getNodesTheme();
           const tableWidth = getTerminalTableWidth();
           const now = Date.now();
-          const nodes = parseNodeList(result);
-          const lastConnectedById =
-            sinceMs !== undefined
-              ? new Map(
-                  parsePairingList(await callGatewayCli("node.pair.list", opts, {})).paired.map(
-                    (entry) => [entry.nodeId, entry],
-                  ),
-                )
-              : null;
-          const filtered = nodes.filter((n) => {
-            if (connectedOnly && !n.connected) {
-              return false;
-            }
-            if (sinceMs !== undefined) {
-              const paired = lastConnectedById?.get(n.nodeId);
-              const lastConnectedAtMs =
-                typeof paired?.lastConnectedAtMs === "number"
-                  ? paired.lastConnectedAtMs
-                  : typeof n.connectedAtMs === "number"
-                    ? n.connectedAtMs
-                    : undefined;
-              if (typeof lastConnectedAtMs !== "number") {
-                return false;
-              }
-              if (now - lastConnectedAtMs > sinceMs) {
-                return false;
-              }
-            }
-            return true;
-          });
+          const nodesLocal = parseNodeList(result);
+          const filtered = nodesLocal.filter((node) =>
+            matchesNodeConnectionFilter(node, connectedOnly, sinceMs, now),
+          );
 
           if (opts.json) {
             const ts = typeof obj.ts === "number" ? obj.ts : Date.now();
@@ -236,7 +283,8 @@ export function registerNodesStatusCommands(nodes: Command) {
 
           const pairedCount = filtered.filter((n) => Boolean(n.paired)).length;
           const connectedCount = filtered.filter((n) => Boolean(n.connected)).length;
-          const filteredLabel = filtered.length !== nodes.length ? ` (of ${nodes.length})` : "";
+          const filteredLabel =
+            filtered.length !== nodesLocal.length ? ` (of ${nodesLocal.length})` : "";
           defaultRuntime.log(
             `Known: ${filtered.length}${filteredLabel} · Paired: ${pairedCount} · Connected: ${connectedCount}`,
           );
@@ -247,8 +295,9 @@ export function registerNodesStatusCommands(nodes: Command) {
           const rows = filtered.map((n) => {
             const perms = formatPermissions(n.permissions);
             const versions = formatNodeVersions(n);
-            const pathEnv = formatPathEnv(n.pathEnv);
+            const pathEnv = formatPathEnv(n.pathEnv, n.platform);
             const client = formatClientLabel(n);
+            const lastActive = formatNodeTimeAgo(now, n.lastActiveAtMs);
             const detailParts = [
               client ? `client: ${client}` : null,
               n.deviceFamily ? `device: ${n.deviceFamily}` : null,
@@ -256,6 +305,7 @@ export function registerNodesStatusCommands(nodes: Command) {
               perms ? `perms: ${perms}` : null,
               versions,
               pathEnv ? `path: ${pathEnv}` : null,
+              lastActive ? `input: ${lastActive}${n.active ? " (active)" : ""}` : null,
             ]
               .filter(Boolean)
               .map((part) => sanitizeTerminalText(String(part)));
@@ -264,6 +314,15 @@ export function registerNodesStatusCommands(nodes: Command) {
               : "?";
             const paired = n.paired ? ok("paired") : warn("unpaired");
             const connected = n.connected ? ok("connected") : muted("disconnected");
+            const approvalState = formatNodeApprovalState(n.approvalState);
+            const approval =
+              approvalState === "approved"
+                ? ok("approved")
+                : isPendingApprovalState(approvalState)
+                  ? warn(formatApprovalStateLabel(approvalState))
+                  : approvalState === "unapproved"
+                    ? warn("unapproved")
+                    : null;
             const since =
               typeof n.connectedAtMs === "number"
                 ? ` (${formatTimeAgo(Math.max(0, now - n.connectedAtMs))})`
@@ -274,7 +333,7 @@ export function registerNodesStatusCommands(nodes: Command) {
               ID: sanitizeTerminalText(n.nodeId),
               IP: sanitizeTerminalText(n.remoteIp ?? ""),
               Detail: detailParts.join(" · "),
-              Status: `${paired} · ${connected}${since}`,
+              Status: `${paired} · ${connected}${since}${approval ? ` · ${approval}` : ""}`,
               Caps: caps,
             };
           });
@@ -293,6 +352,22 @@ export function registerNodesStatusCommands(nodes: Command) {
               rows,
             }).trimEnd(),
           );
+          for (const node of filtered) {
+            const approvalState = formatNodeApprovalState(node.approvalState);
+            const approveCommand = formatPendingApprovalCommand(node.pendingRequestId, opts);
+            if (isPendingApprovalState(approvalState) && approveCommand) {
+              const action = approvalState === "pending-reapproval" ? "Reapproval" : "Approval";
+              defaultRuntime.log(
+                warn(
+                  `${action} pending for ${formatNodeTerminalLabel(node)}. Run ${sanitizeTerminalText(approveCommand)}`,
+                ),
+              );
+              const connectionReminder = formatConnectionFlagReminder(opts);
+              if (connectionReminder) {
+                defaultRuntime.log(warn(connectionReminder));
+              }
+            }
+          }
         });
       }),
   );
@@ -304,8 +379,8 @@ export function registerNodesStatusCommands(nodes: Command) {
       .requiredOption("--node <idOrNameOrIp>", "Node id, name, or IP")
       .action(async (opts: NodesRpcOpts) => {
         await runNodesCommand("describe", async () => {
-          const nodeId = await resolveNodeId(opts, opts.node ?? "");
-          const result = await callGatewayCli("node.describe", opts, {
+          const nodeId = await resolveNodeDiagnosticsId(opts, opts.node ?? "");
+          const result = await callNodeDiagnosticsGatewayCli("node.describe", opts, {
             nodeId,
           });
           if (opts.json) {
@@ -325,6 +400,19 @@ export function registerNodesStatusCommands(nodes: Command) {
             ? obj.commands.map(String).filter(Boolean).toSorted()
             : [];
           const perms = formatPermissions(obj.permissions);
+          const approvalState = formatNodeApprovalState(obj.approvalState);
+          const pendingRequestId = normalizeOptionalString(obj.pendingRequestId);
+          const pendingCaps = Array.isArray(obj.pendingDeclaredCaps)
+            ? obj.pendingDeclaredCaps.map(String).filter(Boolean).toSorted()
+            : null;
+          const pendingCommands = Array.isArray(obj.pendingDeclaredCommands)
+            ? obj.pendingDeclaredCommands.map(String).filter(Boolean).toSorted()
+            : [];
+          const pendingPerms = formatPermissions(obj.pendingDeclaredPermissions);
+          const approveCommand = isPendingApprovalState(approvalState)
+            ? formatPendingApprovalCommand(pendingRequestId, opts)
+            : null;
+          const connectionReminder = approveCommand ? formatConnectionFlagReminder(opts) : null;
           const family = typeof obj.deviceFamily === "string" ? obj.deviceFamily : null;
           const model = typeof obj.modelIdentifier === "string" ? obj.modelIdentifier : null;
           const client = formatClientLabel(obj as { clientId?: string; clientMode?: string });
@@ -338,6 +426,7 @@ export function registerNodesStatusCommands(nodes: Command) {
               uiVersion?: string;
             },
           );
+          const lastActive = formatNodeTimeAgo(Date.now(), obj.lastActiveAtMs);
 
           const { heading, ok, warn, muted } = getNodesTheme();
           const status = `${paired ? ok("paired") : warn("unpaired")} · ${
@@ -354,7 +443,34 @@ export function registerNodesStatusCommands(nodes: Command) {
             perms ? { Field: "Perms", Value: sanitizeTerminalText(perms) } : null,
             versions ? { Field: "Version", Value: sanitizeTerminalText(versions) } : null,
             pathEnv ? { Field: "PATH", Value: sanitizeTerminalText(pathEnv) } : null,
+            lastActive
+              ? {
+                  Field: "Last input",
+                  Value: `${lastActive}${obj.active === true ? " (active node)" : ""}`,
+                }
+              : null,
             { Field: "Status", Value: status },
+            approvalState
+              ? { Field: "Approval", Value: formatApprovalStateLabel(approvalState) }
+              : null,
+            pendingRequestId
+              ? { Field: "Pending request", Value: sanitizeTerminalText(pendingRequestId) }
+              : null,
+            pendingCaps
+              ? { Field: "Pending caps", Value: sanitizeTerminalText(pendingCaps.join(", ")) }
+              : null,
+            pendingPerms
+              ? { Field: "Pending perms", Value: sanitizeTerminalText(pendingPerms) }
+              : null,
+            approveCommand
+              ? {
+                  Field: approvalState === "pending-reapproval" ? "Reapprove" : "Approve",
+                  Value: sanitizeTerminalText(approveCommand),
+                }
+              : null,
+            approveCommand && connectionReminder
+              ? { Field: "Connection reminder", Value: connectionReminder }
+              : null,
             { Field: "Caps", Value: caps ? sanitizeTerminalText(caps.join(", ")) : "?" },
           ].filter(Boolean) as Array<{ Field: string; Value: string }>;
 
@@ -372,11 +488,18 @@ export function registerNodesStatusCommands(nodes: Command) {
           defaultRuntime.log("");
           defaultRuntime.log(heading("Commands"));
           if (commands.length === 0) {
-            defaultRuntime.log(muted("- (none reported)"));
-            return;
+            defaultRuntime.log(muted("- (none effective)"));
+          } else {
+            for (const c of commands) {
+              defaultRuntime.log(`- ${sanitizeTerminalText(c)}`);
+            }
           }
-          for (const c of commands) {
-            defaultRuntime.log(`- ${c}`);
+          if (pendingCommands.length > 0) {
+            defaultRuntime.log("");
+            defaultRuntime.log(heading("Pending commands"));
+            for (const command of pendingCommands) {
+              defaultRuntime.log(`- ${sanitizeTerminalText(command)}`);
+            }
           }
         });
       }),
@@ -392,52 +515,43 @@ export function registerNodesStatusCommands(nodes: Command) {
         await runNodesCommand("list", async () => {
           const connectedOnly = Boolean(opts.connected);
           const sinceMs = parseSinceMs(opts.lastConnected, "Invalid --last-connected");
-          const result = await callGatewayCli("node.pair.list", opts, {});
+          const result = await callNodesGatewayCli("node.pair.list", opts, {});
           const { pending, paired } = parsePairingList(result);
           const { heading, muted, warn } = getNodesTheme();
           const tableWidth = getTerminalTableWidth();
           const now = Date.now();
           const hasFilters = connectedOnly || sinceMs !== undefined;
-          const pendingRows = hasFilters ? [] : pending;
+          // Pending requests carry no connection state to filter on; hiding
+          // them under --connected printed "Pending: 0" while requests waited.
+          const pendingRows = pending;
           const effectiveNodes = hasFilters
-            ? parseNodeList(await callGatewayCli("node.list", opts, {}))
+            ? parseNodeList(await callNodeDiagnosticsGatewayCli("node.list", opts, {}))
             : await tryReadNodeList(opts);
           const effectivePairedRows = mergePairedNodesWithEffectiveNodes(paired, effectiveNodes);
-          const filteredPaired = effectivePairedRows.filter((node) => {
-            if (connectedOnly) {
-              if (!node.connected) {
-                return false;
-              }
-            }
-            if (sinceMs !== undefined) {
-              const lastConnectedAtMs =
-                typeof node.lastConnectedAtMs === "number"
-                  ? node.lastConnectedAtMs
-                  : typeof node.connectedAtMs === "number"
-                    ? node.connectedAtMs
-                    : undefined;
-              if (typeof lastConnectedAtMs !== "number") {
-                return false;
-              }
-              if (now - lastConnectedAtMs > sinceMs) {
-                return false;
-              }
-            }
-            return true;
-          });
-          const filteredLabel =
-            hasFilters && filteredPaired.length !== paired.length ? ` (of ${paired.length})` : "";
-          defaultRuntime.log(
-            `Pending: ${pendingRows.length} · Paired: ${filteredPaired.length}${filteredLabel}`,
+          const filteredPaired = effectivePairedRows.filter((node) =>
+            matchesNodeConnectionFilter(node, connectedOnly, sinceMs, now),
           );
-
+          const filteredLabel =
+            hasFilters && filteredPaired.length !== effectivePairedRows.length
+              ? ` (of ${effectivePairedRows.length})`
+              : "";
           if (opts.json) {
             defaultRuntime.writeJson({
               pending: pendingRows,
-              paired: filteredPaired.map(sanitizePairedNodeForListJson),
+              // Current gateways emit no token, but the permissive parser keeps
+              // unknown fields; strip so an older gateway's legacy node token
+              // never reaches JSON output.
+              paired: filteredPaired.map((row) => {
+                const { token: _token, ...rest } = row as { token?: unknown };
+                return rest;
+              }),
             });
             return;
           }
+
+          defaultRuntime.log(
+            `Pending: ${pendingRows.length} · Paired: ${filteredPaired.length}${filteredLabel}`,
+          );
 
           if (pendingRows.length > 0) {
             const rendered = renderPendingPairingRequestsTable({
@@ -452,23 +566,13 @@ export function registerNodesStatusCommands(nodes: Command) {
           }
 
           if (filteredPaired.length > 0) {
-            const pairedTableRows = filteredPaired.map((n) => {
-              const lastConnectedAtMs =
-                typeof n.lastConnectedAtMs === "number"
-                  ? n.lastConnectedAtMs
-                  : typeof n.connectedAtMs === "number"
-                    ? n.connectedAtMs
-                    : undefined;
-              return {
-                Node: formatNodeTerminalLabel(n),
-                Id: sanitizeTerminalText(n.nodeId),
-                IP: sanitizeTerminalText(n.remoteIp ?? ""),
-                LastConnect:
-                  typeof lastConnectedAtMs === "number"
-                    ? formatTimeAgo(Math.max(0, now - lastConnectedAtMs))
-                    : muted("unknown"),
-              };
-            });
+            const pairedTableRows = filteredPaired.map((n) => ({
+              Node: formatNodeTerminalLabel(n),
+              Id: sanitizeTerminalText(n.nodeId),
+              IP: sanitizeTerminalText(n.remoteIp ?? ""),
+              LastConnect:
+                formatNodeTimeAgo(now, n.lastConnectedAtMs ?? n.connectedAtMs) ?? muted("unknown"),
+            }));
             defaultRuntime.log("");
             defaultRuntime.log(heading("Paired"));
             defaultRuntime.log(

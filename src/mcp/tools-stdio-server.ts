@@ -1,7 +1,9 @@
+// MCP stdio server exposes OpenClaw tools over the MCP stdio transport.
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { routeLogsToStderr } from "../logging/console.js";
 import { VERSION } from "../version.js";
 import { createPluginToolsMcpHandlers } from "./plugin-tools-handlers.js";
@@ -14,19 +16,26 @@ export function createToolsMcpServer(params: { name: string; tools: AnyAgentTool
   );
 
   server.setRequestHandler(ListToolsRequestSchema, handlers.listTools);
-  server.setRequestHandler(CallToolRequestSchema, async (request) => {
-    return await handlers.callTool(request.params);
+  server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
+    return await handlers.callTool(request.params, extra.signal);
   });
 
   return server;
 }
 
-export async function connectToolsMcpServerToStdio(server: Server): Promise<void> {
+export async function connectToolsMcpServerToStdio(
+  server: Server,
+  options: { onShutdown?: () => Promise<void> | void } = {},
+): Promise<void> {
   // MCP stdio requires stdout to stay protocol-only.
   routeLogsToStderr();
 
   const transport = new StdioServerTransport();
   let shuttingDown = false;
+  let resolveShutdown: (() => void) | undefined;
+  const shutdownComplete = new Promise<void>((resolve) => {
+    resolveShutdown = resolve;
+  });
   const shutdown = () => {
     if (shuttingDown) {
       return;
@@ -36,7 +45,24 @@ export async function connectToolsMcpServerToStdio(server: Server): Promise<void
     process.stdin.off("close", shutdown);
     process.off("SIGINT", shutdown);
     process.off("SIGTERM", shutdown);
-    void server.close();
+    void (async () => {
+      let shutdownError: unknown;
+      try {
+        await server.close();
+      } catch (error) {
+        shutdownError = error;
+      }
+      try {
+        await options.onShutdown?.();
+      } catch (error) {
+        shutdownError ??= error;
+      } finally {
+        resolveShutdown?.();
+      }
+      if (shutdownError) {
+        process.stderr.write(`MCP stdio shutdown failed: ${formatErrorMessage(shutdownError)}\n`);
+      }
+    })();
   };
 
   process.stdin.once("end", shutdown);
@@ -45,4 +71,7 @@ export async function connectToolsMcpServerToStdio(server: Server): Promise<void
   process.once("SIGTERM", shutdown);
 
   await server.connect(transport);
+  if (options.onShutdown) {
+    await shutdownComplete;
+  }
 }

@@ -1,3 +1,4 @@
+// Live image generation CLI tests validate inferred CLI image generation.
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";

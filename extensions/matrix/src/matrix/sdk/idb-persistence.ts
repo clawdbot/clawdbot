@@ -1,7 +1,14 @@
+// Matrix plugin module implements idb persistence behavior.
 import fs from "node:fs";
 import path from "node:path";
 import { indexedDB as fakeIndexedDB } from "fake-indexeddb";
+import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import { withFileLock } from "openclaw/plugin-sdk/file-lock";
+import {
+  MATRIX_IDB_SNAPSHOT_FILENAME,
+  readMatrixIdbSnapshotJson,
+  writeMatrixIdbSnapshotJson,
+} from "../crypto-state-store.js";
 import { MATRIX_IDB_SNAPSHOT_LOCK_OPTIONS } from "./idb-persistence-lock.js";
 import { LogService } from "./logger.js";
 
@@ -24,6 +31,28 @@ type IdbDatabaseSnapshot = {
   version: number;
   stores: IdbStoreSnapshot[];
 };
+
+type IdbPersistenceDiagnostic = {
+  code: "matrix-idb-snapshot-requires-doctor";
+  message: string;
+  remediation: "openclaw doctor --fix";
+};
+
+const LEGACY_SNAPSHOT_DIAGNOSTIC: IdbPersistenceDiagnostic = {
+  code: "matrix-idb-snapshot-requires-doctor",
+  message: "Matrix IndexedDB snapshot exists outside canonical SQLite state",
+  remediation: "openclaw doctor --fix",
+};
+
+class MatrixIdbSnapshotMigrationRequiredError extends Error {
+  readonly code = LEGACY_SNAPSHOT_DIAGNOSTIC.code;
+  readonly remediation = LEGACY_SNAPSHOT_DIAGNOSTIC.remediation;
+
+  constructor() {
+    super(`${LEGACY_SNAPSHOT_DIAGNOSTIC.message}; run ${LEGACY_SNAPSHOT_DIAGNOSTIC.remediation}`);
+    this.name = "MatrixIdbSnapshotMigrationRequiredError";
+  }
+}
 
 function isValidIdbIndexSnapshot(value: unknown): value is IdbStoreSnapshot["indexes"][number] {
   if (!value || typeof value !== "object") {
@@ -94,10 +123,20 @@ function parseSnapshotPayload(data: string): IdbDatabaseSnapshot[] | null {
   return parsed;
 }
 
+export function isValidMatrixIdbSnapshotJson(data: string): boolean {
+  try {
+    return parseSnapshotPayload(data) !== null;
+  } catch {
+    return false;
+  }
+}
+
 function idbReq<T>(req: IDBRequest<T>): Promise<T> {
   return new Promise((resolve, reject) => {
     req.addEventListener("success", () => resolve(req.result), { once: true });
-    req.addEventListener("error", () => reject(req.error), { once: true });
+    req.addEventListener("error", () => reject(toErrorObject(req.error, "Non-Error rejection")), {
+      once: true,
+    });
   });
 }
 
@@ -117,7 +156,9 @@ async function dumpIndexedDatabases(databasePrefix?: string): Promise<IdbDatabas
     const db: IDBDatabase = await new Promise((resolve, reject) => {
       const r = idb.open(name, version);
       r.addEventListener("success", () => resolve(r.result), { once: true });
-      r.addEventListener("error", () => reject(r.error), { once: true });
+      r.addEventListener("error", () => reject(toErrorObject(r.error, "Non-Error rejection")), {
+        once: true,
+      });
     });
 
     const stores: IdbStoreSnapshot[] = [];
@@ -203,7 +244,9 @@ async function restoreIndexedDatabases(snapshot: IdbDatabaseSnapshot[]): Promise
         },
         { once: true },
       );
-      r.addEventListener("error", () => reject(r.error), { once: true });
+      r.addEventListener("error", () => reject(toErrorObject(r.error, "Non-Error rejection")), {
+        once: true,
+      });
     });
   }
 }
@@ -214,62 +257,88 @@ function resolveDefaultIdbSnapshotPath(): string {
   return path.join(stateDir, "matrix", "crypto-idb-snapshot.json");
 }
 
+// Production callers pass MatrixStoragePaths.idbSnapshotPath; explicit paths only isolate tests.
 export async function restoreIdbFromDisk(snapshotPath?: string): Promise<boolean> {
-  const candidatePaths = snapshotPath ? [snapshotPath] : [resolveDefaultIdbSnapshotPath()];
-  for (const resolvedPath of candidatePaths) {
-    if (!fs.existsSync(resolvedPath)) {
-      continue;
-    }
-    try {
-      const restored = await withFileLock(
-        resolvedPath,
-        MATRIX_IDB_SNAPSHOT_LOCK_OPTIONS,
-        async () => {
-          const data = fs.readFileSync(resolvedPath, "utf8");
-          const snapshot = parseSnapshotPayload(data);
-          if (!snapshot) {
-            return false;
-          }
-          await restoreIndexedDatabases(snapshot);
-          LogService.info(
-            "IdbPersistence",
-            `Restored ${snapshot.length} IndexedDB database(s) from ${resolvedPath}`,
-          );
-          return true;
-        },
-      );
-      if (restored) {
-        return true;
+  const resolvedPath = snapshotPath ?? resolveDefaultIdbSnapshotPath();
+  const storageRootDir = path.dirname(resolvedPath);
+  let callbackStarted = false;
+  try {
+    // withFileLock is acquire-or-throw; it never skips the callback on contention.
+    return await withFileLock(resolvedPath, MATRIX_IDB_SNAPSHOT_LOCK_OPTIONS, async () => {
+      callbackStarted = true;
+      let storedSnapshotJson: string | null;
+      try {
+        storedSnapshotJson = readMatrixIdbSnapshotJson(storageRootDir);
+      } catch (err) {
+        if (fs.existsSync(resolvedPath)) {
+          throwLegacySnapshotMigrationRequired();
+        }
+        throw err;
       }
-    } catch (err) {
-      LogService.warn(
+      throwIfLegacySnapshotNeedsDoctor(resolvedPath, storedSnapshotJson);
+      if (!storedSnapshotJson) {
+        return false;
+      }
+      const snapshot = parseSnapshotPayload(storedSnapshotJson);
+      if (!snapshot) {
+        return false;
+      }
+      await restoreIndexedDatabases(snapshot);
+      LogService.info(
         "IdbPersistence",
-        `Failed to restore IndexedDB snapshot from ${resolvedPath}:`,
-        err,
+        `Restored ${snapshot.length} IndexedDB database(s) from Matrix SQLite state`,
       );
-      continue;
+      return true;
+    });
+  } catch (err) {
+    if (err instanceof MatrixIdbSnapshotMigrationRequiredError) {
+      throw err;
     }
+    if (!callbackStarted && fs.existsSync(resolvedPath)) {
+      throwLegacySnapshotMigrationRequired();
+    }
+    LogService.warn("IdbPersistence", "Failed to restore IndexedDB snapshot from SQLite:", err);
+    return false;
   }
-  return false;
 }
 
 export async function persistIdbToDisk(params?: {
+  // Production callers pass MatrixStoragePaths.idbSnapshotPath; explicit paths only isolate tests.
   snapshotPath?: string;
   databasePrefix?: string;
+  strict?: boolean;
+  abortSignal?: AbortSignal;
 }): Promise<void> {
   const snapshotPath = params?.snapshotPath ?? resolveDefaultIdbSnapshotPath();
+  let callbackStarted = false;
   try {
     fs.mkdirSync(path.dirname(snapshotPath), { recursive: true });
+    // withFileLock is acquire-or-throw; it never skips the callback on contention.
     const persistedCount = await withFileLock(
       snapshotPath,
       MATRIX_IDB_SNAPSHOT_LOCK_OPTIONS,
       async () => {
+        callbackStarted = true;
+        const storageRootDir = path.dirname(snapshotPath);
+        let storedSnapshotJson: string | null;
+        try {
+          storedSnapshotJson = readMatrixIdbSnapshotJson(storageRootDir);
+        } catch (err) {
+          if (fs.existsSync(snapshotPath)) {
+            throwLegacySnapshotMigrationRequired();
+          }
+          throw err;
+        }
+        throwIfLegacySnapshotNeedsDoctor(snapshotPath, storedSnapshotJson);
         const snapshot = await dumpIndexedDatabases(params?.databasePrefix);
-        if (snapshot.length === 0) {
+        if (params?.abortSignal?.aborted || snapshot.length === 0) {
           return 0;
         }
-        fs.writeFileSync(snapshotPath, JSON.stringify(snapshot));
-        fs.chmodSync(snapshotPath, 0o600);
+        writeMatrixIdbSnapshotJson({
+          storageRootDir,
+          snapshotJson: JSON.stringify(snapshot),
+          databaseCount: snapshot.length,
+        });
         return snapshot.length;
       },
     );
@@ -278,9 +347,50 @@ export async function persistIdbToDisk(params?: {
     }
     LogService.debug(
       "IdbPersistence",
-      `Persisted ${persistedCount} IndexedDB database(s) to ${snapshotPath}`,
+      `Persisted ${persistedCount} IndexedDB database(s) to Matrix SQLite state`,
     );
   } catch (err) {
+    if (err instanceof MatrixIdbSnapshotMigrationRequiredError) {
+      throw err;
+    }
+    if (!callbackStarted && fs.existsSync(snapshotPath)) {
+      throwLegacySnapshotMigrationRequired();
+    }
     LogService.warn("IdbPersistence", "Failed to persist IndexedDB snapshot:", err);
+    if (params?.strict) {
+      throw err;
+    }
   }
+}
+
+export function readLegacyMatrixIdbSnapshotStateUnlocked(
+  storageRootDir: string,
+): IdbDatabaseSnapshot[] | null {
+  const snapshotPath = path.join(storageRootDir, MATRIX_IDB_SNAPSHOT_FILENAME);
+  if (!fs.existsSync(snapshotPath)) {
+    return null;
+  }
+  const data = fs.readFileSync(snapshotPath, "utf8");
+  try {
+    return parseSnapshotPayload(data);
+  } catch {
+    return null;
+  }
+}
+
+function throwIfLegacySnapshotNeedsDoctor(
+  snapshotPath: string,
+  storedSnapshotJson: string | null,
+): void {
+  if (
+    fs.existsSync(snapshotPath) &&
+    (!storedSnapshotJson || !isValidMatrixIdbSnapshotJson(storedSnapshotJson))
+  ) {
+    throwLegacySnapshotMigrationRequired();
+  }
+}
+
+function throwLegacySnapshotMigrationRequired(): never {
+  LogService.warn("IdbPersistence", LEGACY_SNAPSHOT_DIAGNOSTIC);
+  throw new MatrixIdbSnapshotMigrationRequiredError();
 }

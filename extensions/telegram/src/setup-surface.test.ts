@@ -1,6 +1,12 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+// Telegram tests cover setup surface plugin behavior.
+import { installChannelDmPolicyContractSuite } from "openclaw/plugin-sdk/channel-test-helpers";
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/setup";
 import { describe, expect, it, vi } from "vitest";
+import {
+  promptTelegramAllowFromForAccount,
+  telegramSetupAdapter,
+  telegramSetupContract,
+} from "./setup-core.js";
 import {
   buildTelegramDmAccessWarningLines,
   ensureTelegramDefaultGroupMentionGate,
@@ -8,6 +14,26 @@ import {
   telegramSetupDmPolicy,
 } from "./setup-surface.helpers.js";
 import { telegramSetupWizard } from "./setup-surface.js";
+
+describe("Telegram setup promotion contract", () => {
+  it("covers named-account promotion and environment setup", () => {
+    const input = {
+      cfg: {},
+      accountId: DEFAULT_ACCOUNT_ID,
+      input: { useEnv: true },
+    };
+    expect(telegramSetupAdapter.singleAccountKeysToMove).toEqual(["streaming", "webhookSecret"]);
+    expect(telegramSetupAdapter.namedAccountPromotionKeys).toEqual(["botToken", "tokenFile"]);
+    expect(
+      telegramSetupContract.metadata.fields.find((field) => field.key === "useEnv"),
+    ).toMatchObject({ kind: "boolean", envVars: ["TELEGRAM_BOT_TOKEN"] });
+    expect(telegramSetupContract.validateInput?.(input)).toBeNull();
+    const cfg = telegramSetupContract.applyAccountConfig(input);
+    expect(cfg.channels?.telegram).toEqual({ enabled: true });
+    expect(cfg.channels?.telegram?.botToken).toBeUndefined();
+    expect(cfg.channels?.telegram?.tokenFile).toBeUndefined();
+  });
+});
 
 describe("ensureTelegramDefaultGroupMentionGate", () => {
   it('adds groups["*"].requireMention=true for fresh setups', () => {
@@ -89,81 +115,18 @@ describe("telegram DM access warning helpers", () => {
 });
 
 describe("telegramSetupDmPolicy", () => {
-  it("reads the named-account DM policy instead of the channel root", () => {
-    expect(
-      telegramSetupDmPolicy.getCurrent?.(
-        {
-          channels: {
-            telegram: {
-              dmPolicy: "disabled",
-              accounts: {
-                alerts: {
-                  dmPolicy: "allowlist",
-                  botToken: "tok",
-                },
-              },
-            },
-          },
-        },
-        "alerts",
-      ),
-    ).toBe("allowlist");
-  });
-
-  it("reports account-scoped config keys for named accounts", () => {
-    expect(telegramSetupDmPolicy.resolveConfigKeys?.({}, "alerts")).toEqual({
-      policyKey: "channels.telegram.accounts.alerts.dmPolicy",
-      allowFromKey: "channels.telegram.accounts.alerts.allowFrom",
-    });
-  });
-
-  it("uses configured defaultAccount for omitted DM policy account context", () => {
-    const cfg: OpenClawConfig = {
-      channels: {
-        telegram: {
-          defaultAccount: "alerts",
-          dmPolicy: "disabled",
-          allowFrom: ["123"],
-          accounts: {
-            alerts: {
-              dmPolicy: "allowlist",
-              botToken: "tok",
-            },
-          },
-        },
+  installChannelDmPolicyContractSuite({
+    dmPolicy: telegramSetupDmPolicy,
+    cases: [
+      {
+        name: "Telegram named accounts",
+        channel: "telegram",
+        accountId: "alerts",
+        accountConfig: { botToken: "tok" },
+        inheritedAllowFrom: ["123"],
+        defaultAccount: { rootAllowFrom: ["123"] },
       },
-    };
-
-    expect(telegramSetupDmPolicy.getCurrent?.(cfg)).toBe("allowlist");
-    expect(telegramSetupDmPolicy.resolveConfigKeys?.(cfg)).toEqual({
-      policyKey: "channels.telegram.accounts.alerts.dmPolicy",
-      allowFromKey: "channels.telegram.accounts.alerts.allowFrom",
-    });
-
-    const next = telegramSetupDmPolicy.setPolicy?.(cfg, "open");
-    expect(next?.channels?.telegram?.dmPolicy).toBe("disabled");
-    expect(next?.channels?.telegram?.accounts?.alerts?.dmPolicy).toBe("open");
-  });
-
-  it('writes open policy state to the named account and preserves inherited allowFrom with "*"', () => {
-    const cfg: OpenClawConfig = {
-      channels: {
-        telegram: {
-          allowFrom: ["123"],
-          accounts: {
-            alerts: {
-              botToken: "tok",
-            },
-          },
-        },
-      },
-    };
-
-    const next = telegramSetupDmPolicy.setPolicy?.(cfg, "open", "alerts");
-
-    expect(next?.channels?.telegram?.dmPolicy).toBeUndefined();
-    expect(next?.channels?.telegram?.accounts?.alerts?.dmPolicy).toBe("open");
-    expect(next?.channels?.telegram?.accounts?.alerts?.allowFrom).toEqual(["123", "*"]);
+    ],
   });
 });
 
@@ -188,6 +151,59 @@ describe("telegramSetupWizard allowFrom", () => {
       expect(globalFetch).not.toHaveBeenCalled();
     } finally {
       vi.unstubAllGlobals();
+    }
+  });
+
+  it("localizes setup wizard allowFrom copy when loaded under zh-CN", async () => {
+    const previousLocale = process.env.OPENCLAW_LOCALE;
+    process.env.OPENCLAW_LOCALE = "zh-CN";
+
+    try {
+      vi.resetModules();
+      const { telegramSetupWizard: localizedWizard } = await import("./setup-surface.js");
+
+      expect(localizedWizard.allowFrom?.helpTitle).toBe("Telegram 用户 ID");
+      expect(localizedWizard.allowFrom?.message).toBe("Telegram allowFrom（数字发送者 ID）");
+      expect(localizedWizard.allowFrom?.invalidWithoutCredentialNote).toBe(
+        "Telegram allowFrom 需要数字发送者 ID。先给 bot 发一条 DM，然后从日志或 getUpdates 中复制 from.id。",
+      );
+    } finally {
+      if (previousLocale === undefined) {
+        delete process.env.OPENCLAW_LOCALE;
+      } else {
+        process.env.OPENCLAW_LOCALE = previousLocale;
+      }
+    }
+  });
+
+  it("localizes legacy allowFrom prompt copy", async () => {
+    const previousLocale = process.env.OPENCLAW_LOCALE;
+    process.env.OPENCLAW_LOCALE = "zh-CN";
+    const note = vi.fn(async () => {});
+    const text = vi.fn(async () => "123456789");
+
+    try {
+      await promptTelegramAllowFromForAccount({
+        cfg: {},
+        prompter: { note, text } as never,
+      });
+
+      expect(note).toHaveBeenCalledWith(
+        expect.stringContaining("先给你的 bot 发送 DM"),
+        "Telegram 用户 ID",
+      );
+      expect(text).toHaveBeenCalledWith(
+        expect.objectContaining({
+          message: "Telegram allowFrom（数字发送者 ID）",
+          placeholder: "123456789",
+        }),
+      );
+    } finally {
+      if (previousLocale === undefined) {
+        delete process.env.OPENCLAW_LOCALE;
+      } else {
+        process.env.OPENCLAW_LOCALE = previousLocale;
+      }
     }
   });
 });

@@ -1,13 +1,16 @@
+/** Host callback used to read an already-authorized outbound media file. */
 export type OutboundMediaReadFile = (filePath: string) => Promise<Buffer>;
 
+/** Host-provided file access used when a runtime can read outbound media from local disk. */
 export type OutboundMediaAccess = {
   localRoots?: readonly string[];
   readFile?: OutboundMediaReadFile;
-  /** Agent workspace directory for resolving relative MEDIA: paths. */
+  /** Agent workspace directory for resolving relative media paths. */
   workspaceDir?: string;
 };
 
-export type OutboundMediaLoadParams = {
+/** Legacy and current knobs accepted by outbound media loaders before normalization. */
+type OutboundMediaLoadParams = {
   maxBytes?: number;
   mediaAccess?: OutboundMediaAccess;
   mediaLocalRoots?: readonly string[] | "any";
@@ -17,11 +20,12 @@ export type OutboundMediaLoadParams = {
   requestInit?: RequestInit;
   trustExplicitProxyDns?: boolean;
   optimizeImages?: boolean;
-  /** Agent workspace directory for resolving relative MEDIA: paths. */
+  /** Agent workspace directory for resolving relative media paths. */
   workspaceDir?: string;
 };
 
-export type OutboundMediaLoadOptions = {
+/** Normalized outbound media loader options consumed by fetch/local media helpers. */
+type OutboundMediaLoadOptions = {
   maxBytes?: number;
   localRoots?: readonly string[] | "any";
   readFile?: (filePath: string) => Promise<Buffer>;
@@ -31,10 +35,11 @@ export type OutboundMediaLoadOptions = {
   trustExplicitProxyDns?: boolean;
   hostReadCapability?: boolean;
   optimizeImages?: boolean;
-  /** Agent workspace directory for resolving relative MEDIA: paths. */
+  /** Agent workspace directory for resolving relative media paths. */
   workspaceDir?: string;
 };
 
+/** Normalizes empty root lists while preserving the explicit all-roots opt-in sentinel. */
 export function resolveOutboundMediaLocalRoots(
   mediaLocalRoots?: readonly string[] | "any",
 ): readonly string[] | "any" | undefined {
@@ -44,6 +49,7 @@ export function resolveOutboundMediaLocalRoots(
   return mediaLocalRoots && mediaLocalRoots.length > 0 ? mediaLocalRoots : undefined;
 }
 
+/** Collapses legacy read/root parameters into the current host media access shape. */
 export function resolveOutboundMediaAccess(
   params: {
     mediaAccess?: OutboundMediaAccess;
@@ -67,6 +73,7 @@ export function resolveOutboundMediaAccess(
   };
 }
 
+/** Builds the canonical media load options shared by outbound attachment paths. */
 export function buildOutboundMediaLoadOptions(
   params: OutboundMediaLoadParams = {},
 ): OutboundMediaLoadOptions {
@@ -80,6 +87,7 @@ export function buildOutboundMediaLoadOptions(
   const readFile = mediaAccess?.readFile ?? params.mediaReadFile;
   const localRoots = mediaAccess?.localRoots ?? explicitLocalRoots;
   if (readFile) {
+    // Host reads must declare a root boundary so local file access cannot silently widen.
     if (!localRoots) {
       throw new Error(
         'Host media read requires explicit localRoots. Pass mediaAccess.localRoots or opt in with localRoots: "any".',

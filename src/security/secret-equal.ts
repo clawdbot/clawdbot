@@ -1,3 +1,4 @@
+// Compares secret strings with timing-safe equality.
 import { timingSafeEqual } from "node:crypto";
 
 function padSecretBytes(bytes: Buffer, length: number): Buffer {
@@ -9,6 +10,7 @@ function padSecretBytes(bytes: Buffer, length: number): Buffer {
   return padded;
 }
 
+/** Compare two optional UTF-8 secrets without leaking length through timingSafeEqual errors. */
 export function safeEqualSecret(
   provided: string | undefined | null,
   expected: string | undefined | null,

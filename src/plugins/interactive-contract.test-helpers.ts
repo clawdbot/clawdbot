@@ -1,16 +1,8 @@
+/** Shared helpers for interactive plugin contract tests. */
 type ConversationBindingHelpers = {
   requestConversationBinding: (...args: unknown[]) => unknown;
   detachConversationBinding: (...args: unknown[]) => unknown;
   getCurrentConversationBinding: (...args: unknown[]) => unknown;
-};
-
-type InteractiveHandlerRegistration<
-  TChannel extends string,
-  TContext,
-> = ConversationBindingHelpers & {
-  channel: TChannel;
-  namespace: string;
-  handler: (ctx: TContext) => unknown;
 };
 
 type BaseInteractiveContext<TChannel extends string> = ConversationBindingHelpers & {
@@ -20,7 +12,7 @@ type BaseInteractiveContext<TChannel extends string> = ConversationBindingHelper
   parentConversationId?: string;
   senderId: string;
   senderUsername?: string;
-  auth?: unknown;
+  auth: { isAuthorizedSender: boolean };
 };
 
 export type TelegramInteractiveHandlerContext = BaseInteractiveContext<"telegram"> & {
@@ -63,16 +55,3 @@ export type SlackInteractiveHandlerContext = BaseInteractiveContext<"slack"> & {
   };
   respond: Record<string, (...args: unknown[]) => unknown>;
 };
-
-export type TelegramInteractiveHandlerRegistration = InteractiveHandlerRegistration<
-  "telegram",
-  TelegramInteractiveHandlerContext
->;
-export type DiscordInteractiveHandlerRegistration = InteractiveHandlerRegistration<
-  "discord",
-  DiscordInteractiveHandlerContext
->;
-export type SlackInteractiveHandlerRegistration = InteractiveHandlerRegistration<
-  "slack",
-  SlackInteractiveHandlerContext
->;

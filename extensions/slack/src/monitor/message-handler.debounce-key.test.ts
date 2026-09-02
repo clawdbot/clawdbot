@@ -1,3 +1,4 @@
+// Slack tests cover message handlerebounce key plugin behavior.
 import { describe, expect, it } from "vitest";
 import type { SlackMessageEvent } from "../types.js";
 import { buildSlackDebounceKey } from "./message-handler/debounce-key.js";

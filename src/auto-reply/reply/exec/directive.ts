@@ -1,12 +1,18 @@
+// Parses execution directives for approval, sandbox, and target settings.
+import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import {
   type ExecAsk,
   type ExecSecurity,
   type ExecTarget,
   normalizeExecTarget,
 } from "../../../infra/exec-approvals.js";
-import { normalizeOptionalLowercaseString } from "../../../shared/string-coerce.js";
-import { skipDirectiveArgPrefix, takeDirectiveToken } from "../directive-parsing.js";
+import {
+  removeDirectiveSpan,
+  skipDirectiveArgPrefix,
+  takeDirectiveToken,
+} from "../directive-parsing.js";
 
+/** Parsed `/exec` directive state used to override execution policy for one turn. */
 type ExecDirectiveParse = {
   cleaned: string;
   hasDirective: boolean;
@@ -161,6 +167,7 @@ function parseExecDirectiveArgs(raw: string): Omit<
   };
 }
 
+/** Extracts and removes `/exec` options from message text. */
 export function extractExecDirective(body?: string): ExecDirectiveParse {
   if (!body) {
     return {
@@ -173,11 +180,11 @@ export function extractExecDirective(body?: string): ExecDirectiveParse {
       invalidNode: false,
     };
   }
-  const re = /(?:^|\s)\/exec(?=$|\s|:)/i;
+  const re = /(?<!\S)\/exec(?=$|\s|:)/i;
   const match = re.exec(body);
   if (!match) {
     return {
-      cleaned: body.trim(),
+      cleaned: body,
       hasDirective: false,
       hasExecOptions: false,
       invalidHost: false,
@@ -186,11 +193,11 @@ export function extractExecDirective(body?: string): ExecDirectiveParse {
       invalidNode: false,
     };
   }
-  const start = match.index + match[0].indexOf("/exec");
+  const start = match.index;
   const argsStart = start + "/exec".length;
   const parsed = parseExecDirectiveArgs(body.slice(argsStart));
-  const cleanedRaw = `${body.slice(0, start)} ${body.slice(argsStart + parsed.consumed)}`;
-  const cleaned = cleanedRaw.replace(/\s+/g, " ").trim();
+  // Remove only consumed key/value options so remaining text still reaches the agent.
+  const cleaned = removeDirectiveSpan(body, start, argsStart + parsed.consumed);
   return {
     cleaned,
     hasDirective: true,

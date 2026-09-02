@@ -1,12 +1,10 @@
-import type { AgentToolResult as PiAgentToolResult } from "@mariozechner/pi-agent-core";
+// Defines plugin middleware contracts for agent tool results.
+import type { AgentToolResult } from "../agents/runtime/index.js";
+import type { PluginToolMatcher } from "./hook-types.js";
 
-export type OpenClawAgentToolResult<TResult = unknown> = PiAgentToolResult<TResult>;
+export type OpenClawAgentToolResult<TResult = unknown> = AgentToolResult<TResult>;
 
-export type AgentToolResultMiddlewareRuntime = "pi" | "codex";
-/** @deprecated Use AgentToolResultMiddlewareRuntime. */
-export type AgentToolResultMiddlewareHarness =
-  | AgentToolResultMiddlewareRuntime
-  | "codex-app-server";
+export type AgentToolResultMiddlewareRuntime = "openclaw" | "codex";
 
 export type AgentToolResultMiddlewareEvent = {
   threadId?: string;
@@ -21,8 +19,6 @@ export type AgentToolResultMiddlewareEvent = {
 
 export type AgentToolResultMiddlewareContext = {
   runtime: AgentToolResultMiddlewareRuntime;
-  /** @deprecated Use runtime. */
-  harness?: AgentToolResultMiddlewareRuntime;
   agentId?: string;
   sessionId?: string;
   sessionKey?: string;
@@ -39,7 +35,11 @@ export type AgentToolResultMiddleware = (
 ) => Promise<AgentToolResultMiddlewareResult | void> | AgentToolResultMiddlewareResult | void;
 
 export type AgentToolResultMiddlewareOptions = {
+  matcher?: PluginToolMatcher;
   runtimes?: AgentToolResultMiddlewareRuntime[];
-  /** @deprecated Use runtimes. */
-  harnesses?: AgentToolResultMiddlewareHarness[];
+};
+
+export type AgentToolResultMiddlewareScope = {
+  matcher?: PluginToolMatcher;
+  runtimes: AgentToolResultMiddlewareRuntime[];
 };

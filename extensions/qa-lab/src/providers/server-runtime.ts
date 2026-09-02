@@ -1,35 +1,20 @@
+// Qa Lab plugin module implements server runtime behavior.
 import { getQaProvider, type QaMockProviderServer, type QaProviderModeInput } from "./index.js";
-
-type QaProviderServerParams = {
-  host: string;
-  port: number;
-};
-
-async function startMockOpenAiProviderServer(params: QaProviderServerParams) {
-  const { startQaMockOpenAiServer } = await import("./mock-openai/server.js");
-  return await startQaMockOpenAiServer(params);
-}
-
-async function startAimockProviderServer(params: QaProviderServerParams) {
-  const { startQaAimockServer } = await import("./aimock/server.js");
-  return await startQaAimockServer(params);
-}
 
 export async function startQaProviderServer(
   input: QaProviderModeInput,
-  params?: { host?: string; port?: number },
+  params?: { host?: string; port?: number; modelRefs?: readonly string[] },
 ): Promise<QaMockProviderServer | null> {
   const provider = getQaProvider(input);
-  const serverParams = {
-    host: params?.host ?? "127.0.0.1",
-    port: params?.port ?? 0,
-  };
   switch (provider.mode) {
-    case "mock-openai":
-      return await startMockOpenAiProviderServer(serverParams);
-    case "aimock":
-      return await startAimockProviderServer(serverParams);
-    case "live-frontier":
+    case "mock-openai": {
+      const { startQaMockOpenAiServer } = await import("./mock-openai/server.js");
+      return await startQaMockOpenAiServer(params);
+    }
+    case "aimock": {
+      const { startQaAimockServer } = await import("./aimock/server.js");
+      return await startQaAimockServer(params);
+    }
     default:
       return null;
   }

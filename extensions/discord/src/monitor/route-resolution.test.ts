@@ -1,7 +1,9 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+// Discord tests cover route resolution plugin behavior.
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { ResolvedAgentRoute } from "openclaw/plugin-sdk/routing";
 import { describe, expect, it } from "vitest";
 import {
+  buildDiscordConversationRouteContext,
   buildDiscordRoutePeer,
   resolveDiscordBoundConversationRoute,
   resolveDiscordConversationRoute,
@@ -42,6 +44,53 @@ describe("discord route resolution helpers", () => {
     ).toEqual({
       kind: "direct",
       id: "user-1",
+    });
+  });
+
+  it("keeps a group DM keyed by its conversation instead of one sender", () => {
+    expect(
+      buildDiscordRoutePeer({
+        isDirectMessage: true,
+        isGroupDm: true,
+        directUserId: "user-1",
+        conversationId: "group-dm-1",
+      }),
+    ).toEqual({ kind: "group", id: "group-dm-1" });
+  });
+
+  it("records the direct routing peer separately from the native DM channel", () => {
+    expect(
+      buildDiscordConversationRouteContext({
+        isDirectMessage: true,
+        isGroupDm: false,
+        directUserId: "user-1",
+        conversationId: "dm-1",
+        isThread: false,
+      }),
+    ).toEqual({
+      ConversationRouteContextObserved: true,
+      ConversationRoutePeerId: "user-1",
+      NativeChannelId: "dm-1",
+      InboundAccessAuthorized: true,
+      MessageThreadId: undefined,
+      ThreadParentId: undefined,
+    });
+  });
+
+  it("records a thread and its routing parent", () => {
+    expect(
+      buildDiscordConversationRouteContext({
+        isDirectMessage: false,
+        isGroupDm: false,
+        conversationId: "thread-1",
+        isThread: true,
+        parentConversationId: "parent-1",
+      }),
+    ).toMatchObject({
+      ConversationRoutePeerId: "thread-1",
+      NativeChannelId: "thread-1",
+      MessageThreadId: "thread-1",
+      ThreadParentId: "parent-1",
     });
   });
 
@@ -110,9 +159,15 @@ describe("discord route resolution helpers", () => {
         memberRoleIds: [],
         peer: { kind: "channel", id: "c1" },
       }),
-    ).toMatchObject({
+    ).toEqual({
       agentId: "worker",
+      channel: "discord",
+      accountId: "default",
+      dmScope: "main",
+      groupScope: "per-group",
       sessionKey: "agent:worker:discord:channel:c1",
+      mainSessionKey: "agent:worker:main",
+      lastRoutePolicy: "session",
       matchedBy: "binding.peer",
     });
   });
@@ -131,9 +186,15 @@ describe("discord route resolution helpers", () => {
         boundSessionKey: "agent:worker:discord:direct:user-1",
         matchedBy: "binding.channel",
       }),
-    ).toMatchObject({
+    ).toEqual({
       agentId: "worker",
+      channel: "discord",
+      accountId: "default",
+      dmScope: "main",
+      groupScope: "per-group",
       sessionKey: "agent:worker:discord:direct:user-1",
+      mainSessionKey: "agent:worker:main",
+      lastRoutePolicy: "session",
       matchedBy: "binding.channel",
     });
   });

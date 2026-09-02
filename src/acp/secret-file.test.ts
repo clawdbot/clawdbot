@@ -1,3 +1,4 @@
+/** Tests ACP secret-file reader trimming and filesystem policy wiring. */
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";

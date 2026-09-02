@@ -1,29 +1,42 @@
+/** Tests runtime secret auditing for externalized channel plugin surfaces. */
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
+import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import type { PluginOrigin } from "../plugins/plugin-origin.types.js";
 import { getPath } from "./path-utils.js";
+import {
+  assertSecretOwnerAvailable,
+  isTrustedSecretSurfaceUnavailableError,
+} from "./runtime-degraded-state.js";
+import { activateSecretsRuntimeSnapshot } from "./runtime.js";
 
 const {
   getBootstrapChannelSecretsMock,
-  loadBundledPluginPublicArtifactModuleSyncMock,
+  loadBundledPublicArtifactMock,
   loadPluginMetadataSnapshotMock,
 } = vi.hoisted(() => ({
   getBootstrapChannelSecretsMock: vi.fn(),
-  loadBundledPluginPublicArtifactModuleSyncMock: vi.fn(),
+  loadBundledPublicArtifactMock: vi.fn(),
   loadPluginMetadataSnapshotMock: vi.fn(),
 }));
 
-vi.mock("../plugins/plugin-metadata-snapshot.js", () => ({
-  loadPluginMetadataSnapshot: loadPluginMetadataSnapshotMock,
+vi.mock("../plugins/plugin-metadata-snapshot.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../plugins/plugin-metadata-snapshot.js")>()),
+  loadPluginMetadataSnapshot: (params: unknown) =>
+    createPluginMetadataSnapshotFixture(loadPluginMetadataSnapshotMock(params)),
+  resolvePluginMetadataSnapshot: (params: unknown) => {
+    const snapshot = loadPluginMetadataSnapshotMock(params) as { plugins: PluginManifestRecord[] };
+    return createPluginMetadataSnapshotFixture({ plugins: snapshot.plugins });
+  },
   listPluginOriginsFromMetadataSnapshot: (snapshot: {
     plugins: Array<{ id: string; origin: PluginOrigin }>;
   }) => new Map(snapshot.plugins.map((record) => [record.id, record.origin])),
 }));
 
 vi.mock("../plugins/public-surface-loader.js", () => ({
-  loadBundledPluginPublicArtifactModuleSync: loadBundledPluginPublicArtifactModuleSyncMock,
+  loadBundledPluginPublicArtifactModuleFromCandidatesSync: loadBundledPublicArtifactMock,
 }));
 
 vi.mock("../channels/plugins/bootstrap-registry.js", () => ({
@@ -73,8 +86,10 @@ function createExternalChannelRecord(id: ExternalizedChannelId): PluginManifestR
   };
 }
 
-function configureExternalChannelRecords(): PluginManifestRecord[] {
-  const records = EXTERNALIZED_CHANNEL_IDS.map((id) => createExternalChannelRecord(id));
+function configureExternalChannelRecords(
+  channelIds: readonly ExternalizedChannelId[] = EXTERNALIZED_CHANNEL_IDS,
+): PluginManifestRecord[] {
+  const records = channelIds.map((id) => createExternalChannelRecord(id));
   loadPluginMetadataSnapshotMock.mockReturnValue({ plugins: records });
   return records;
 }
@@ -84,26 +99,117 @@ function externalChannelOrigins(records: readonly PluginManifestRecord[]) {
 }
 
 function mockBundledPublicArtifactMiss() {
-  loadBundledPluginPublicArtifactModuleSyncMock.mockImplementation(
-    (params: { dirName: string; artifactBasename: string }) => {
-      throw new Error(
-        `Unable to resolve bundled plugin public surface ${params.dirName}/${params.artifactBasename}`,
-      );
+  loadBundledPublicArtifactMock.mockImplementation(
+    (params: { dirName: string; artifactCandidates: string[] }) => {
+      if (
+        params.dirName === "googlechat" &&
+        params.artifactCandidates[0] === "secret-contract-api.js"
+      ) {
+        return createGoogleChatSecretContractApi();
+      }
+      return null;
     },
   );
 }
 
-function expectMetadataBackedContractsWereUsed() {
+function createGoogleChatSecretContractApi() {
+  const secretTargetRegistryEntries = [
+    {
+      id: "channels.googlechat.accounts.*.serviceAccount",
+      targetType: "channels.googlechat.serviceAccount",
+      targetTypeAliases: ["channels.googlechat.accounts.*.serviceAccount"],
+      configFile: "openclaw.json",
+      pathPattern: "channels.googlechat.accounts.*.serviceAccount",
+      secretShape: "secret_input",
+      expectedResolvedValue: "string-or-object",
+      includeInPlan: true,
+      includeInConfigure: true,
+      includeInAudit: true,
+      accountIdPathSegmentIndex: 3,
+    },
+    {
+      id: "channels.googlechat.serviceAccount",
+      targetType: "channels.googlechat.serviceAccount",
+      configFile: "openclaw.json",
+      pathPattern: "channels.googlechat.serviceAccount",
+      secretShape: "secret_input",
+      expectedResolvedValue: "string-or-object",
+      includeInPlan: true,
+      includeInConfigure: true,
+      includeInAudit: true,
+    },
+  ];
+  const collectRuntimeConfigAssignments = (params: {
+    config: { channels?: { googlechat?: Record<string, unknown> } };
+    context: {
+      assignments: Array<{
+        ref: unknown;
+        path: string;
+        expected: "string-or-object";
+        apply: (value: unknown) => void;
+      }>;
+      warnings: Array<{ code: string; path: string; message: string }>;
+    };
+  }) => {
+    const googlechat = params.config.channels?.googlechat;
+    if (!googlechat) {
+      return;
+    }
+    const collect = (target: Record<string, unknown>, pathKey: string, active: boolean) => {
+      const refValue = target.serviceAccount;
+      if (!refValue) {
+        return;
+      }
+      const pathLocal = `${pathKey}.serviceAccount`;
+      if (!active) {
+        params.context.warnings.push({
+          code: "SECRETS_REF_IGNORED_INACTIVE_SURFACE",
+          path: pathLocal,
+          message: `${pathLocal}: Google Chat account is disabled.`,
+        });
+        return;
+      }
+      params.context.assignments.push({
+        ref: refValue,
+        path: pathLocal,
+        expected: "string-or-object",
+        apply: (value) => {
+          target.serviceAccount = value;
+        },
+      });
+    };
+
+    collect(googlechat, "channels.googlechat", googlechat.enabled !== false);
+    const accounts = googlechat.accounts as Record<string, Record<string, unknown>> | undefined;
+    for (const [accountId, account] of Object.entries(accounts ?? {})) {
+      collect(account, `channels.googlechat.accounts.${accountId}`, account.enabled !== false);
+    }
+  };
+  return {
+    channelSecrets: {
+      secretTargetRegistryEntries,
+      collectRuntimeConfigAssignments,
+    },
+    secretTargetRegistryEntries,
+    collectRuntimeConfigAssignments,
+  };
+}
+
+function expectMetadataBackedContractsWereUsed(
+  channelIds: readonly ExternalizedChannelId[] = EXTERNALIZED_CHANNEL_IDS,
+) {
   expect(getBootstrapChannelSecretsMock).not.toHaveBeenCalled();
-  expect(loadPluginMetadataSnapshotMock).toHaveBeenCalled();
-  for (const channelId of EXTERNALIZED_CHANNEL_IDS) {
-    expect(loadBundledPluginPublicArtifactModuleSyncMock).toHaveBeenCalledWith({
+  if (channelIds.some((channelId) => channelId !== "googlechat")) {
+    expect(loadPluginMetadataSnapshotMock).toHaveBeenCalled();
+  }
+  for (const channelId of channelIds) {
+    expect(loadBundledPublicArtifactMock).toHaveBeenCalledWith({
       dirName: channelId,
-      artifactBasename: "secret-contract-api.js",
+      artifactCandidates: ["secret-contract-api.js"],
     });
-    expect(loadBundledPluginPublicArtifactModuleSyncMock).toHaveBeenCalledWith({
+    expect(loadBundledPublicArtifactMock).not.toHaveBeenCalledWith({
       dirName: channelId,
-      artifactBasename: "contract-api.js",
+      artifactCandidates: ["contract-api.js"],
     });
   }
 }
@@ -118,178 +224,208 @@ describe("secrets runtime externalized channel SecretRef audit", () => {
   beforeEach(() => {
     getBootstrapChannelSecretsMock.mockReset();
     getBootstrapChannelSecretsMock.mockReturnValue(undefined);
-    loadBundledPluginPublicArtifactModuleSyncMock.mockReset();
+    loadBundledPublicArtifactMock.mockReset();
     mockBundledPublicArtifactMiss();
     loadPluginMetadataSnapshotMock.mockReset();
   });
 
-  it("resolves active SecretRef targets for every externalized channel contract", async () => {
-    const records = configureExternalChannelRecords();
-    const config = asConfig({
-      channels: {
-        discord: {
-          token: ref("DISCORD_TOKEN"),
-          pluralkit: {
-            enabled: true,
-            token: ref("DISCORD_PLURALKIT_TOKEN"),
-          },
-          voice: {
-            enabled: true,
-            tts: {
-              providers: {
-                openai: { apiKey: ref("DISCORD_VOICE_TTS_API_KEY") },
+  it.each(EXTERNALIZED_CHANNEL_IDS)(
+    "resolves active SecretRef targets for %s contract",
+    async (channelId) => {
+      const records = configureExternalChannelRecords([channelId]);
+      const config = asConfig({
+        channels: {
+          discord: {
+            token: ref("DISCORD_TOKEN"),
+            pluralkit: {
+              enabled: true,
+              token: ref("DISCORD_PLURALKIT_TOKEN"),
+            },
+            voice: {
+              enabled: true,
+              realtime: {
+                providers: {
+                  openai: { apiKey: ref("DISCORD_VOICE_REALTIME_API_KEY") },
+                },
+              },
+              tts: {
+                providers: {
+                  openai: { apiKey: ref("DISCORD_VOICE_TTS_API_KEY") },
+                },
               },
             },
-          },
-          accounts: {
-            inherited: {
-              enabled: true,
-            },
-            work: {
-              enabled: true,
-              token: ref("DISCORD_WORK_TOKEN"),
-              pluralkit: {
+            accounts: {
+              inherited: {
                 enabled: true,
-                token: ref("DISCORD_WORK_PLURALKIT_TOKEN"),
               },
-              voice: {
+              work: {
                 enabled: true,
-                tts: {
-                  providers: {
-                    openai: { apiKey: ref("DISCORD_WORK_VOICE_TTS_API_KEY") },
+                token: ref("DISCORD_WORK_TOKEN"),
+                pluralkit: {
+                  enabled: true,
+                  token: ref("DISCORD_WORK_PLURALKIT_TOKEN"),
+                },
+                voice: {
+                  enabled: true,
+                  realtime: {
+                    providers: {
+                      openai: { apiKey: ref("DISCORD_WORK_VOICE_REALTIME_API_KEY") },
+                    },
+                  },
+                  tts: {
+                    providers: {
+                      openai: { apiKey: ref("DISCORD_WORK_VOICE_TTS_API_KEY") },
+                    },
                   },
                 },
               },
             },
           },
-        },
-        feishu: {
-          connectionMode: "webhook",
-          appSecret: ref("FEISHU_APP_SECRET"),
-          encryptKey: ref("FEISHU_ENCRYPT_KEY"),
-          verificationToken: ref("FEISHU_VERIFICATION_TOKEN"),
-          accounts: {
-            inherited: {
-              enabled: true,
-              connectionMode: "webhook",
+          feishu: {
+            connectionMode: "webhook",
+            appSecret: ref("FEISHU_APP_SECRET"),
+            encryptKey: ref("FEISHU_ENCRYPT_KEY"),
+            verificationToken: ref("FEISHU_VERIFICATION_TOKEN"),
+            accounts: {
+              inherited: {
+                enabled: true,
+                connectionMode: "webhook",
+              },
+              work: {
+                enabled: true,
+                connectionMode: "webhook",
+                appSecret: ref("FEISHU_WORK_APP_SECRET"),
+                encryptKey: ref("FEISHU_WORK_ENCRYPT_KEY"),
+                verificationToken: ref("FEISHU_WORK_VERIFICATION_TOKEN"),
+              },
             },
-            work: {
-              enabled: true,
-              connectionMode: "webhook",
-              appSecret: ref("FEISHU_WORK_APP_SECRET"),
-              encryptKey: ref("FEISHU_WORK_ENCRYPT_KEY"),
-              verificationToken: ref("FEISHU_WORK_VERIFICATION_TOKEN"),
+          },
+          googlechat: {
+            serviceAccount: ref("GOOGLECHAT_SERVICE_ACCOUNT"),
+            accounts: {
+              inherited: {
+                enabled: true,
+              },
+              work: {
+                enabled: true,
+                serviceAccount: ref("GOOGLECHAT_WORK_SERVICE_ACCOUNT"),
+              },
+            },
+          },
+          msteams: {
+            appPassword: ref("MSTEAMS_APP_PASSWORD"),
+          },
+          "nextcloud-talk": {
+            botSecret: ref("NEXTCLOUD_TALK_BOT_SECRET"),
+            apiPassword: ref("NEXTCLOUD_TALK_API_PASSWORD"),
+            accounts: {
+              inherited: {
+                enabled: true,
+              },
+              work: {
+                enabled: true,
+                botSecret: ref("NEXTCLOUD_TALK_WORK_BOT_SECRET"),
+                apiPassword: ref("NEXTCLOUD_TALK_WORK_API_PASSWORD"),
+              },
+            },
+          },
+          zalo: {
+            webhookUrl: "https://example.test/zalo",
+            botToken: ref("ZALO_BOT_TOKEN"),
+            webhookSecret: ref("ZALO_WEBHOOK_SECRET"),
+            accounts: {
+              inherited: {
+                enabled: true,
+              },
+              work: {
+                enabled: true,
+                webhookUrl: "https://example.test/zalo-work",
+                botToken: ref("ZALO_WORK_BOT_TOKEN"),
+                webhookSecret: ref("ZALO_WORK_WEBHOOK_SECRET"),
+              },
             },
           },
         },
-        googlechat: {
-          serviceAccountRef: ref("GOOGLECHAT_SERVICE_ACCOUNT"),
-          accounts: {
-            inherited: {
-              enabled: true,
-            },
-            work: {
-              enabled: true,
-              serviceAccountRef: ref("GOOGLECHAT_WORK_SERVICE_ACCOUNT"),
-            },
-          },
-        },
-        msteams: {
-          appPassword: ref("MSTEAMS_APP_PASSWORD"),
-        },
-        "nextcloud-talk": {
-          botSecret: ref("NEXTCLOUD_TALK_BOT_SECRET"),
-          apiPassword: ref("NEXTCLOUD_TALK_API_PASSWORD"),
-          accounts: {
-            inherited: {
-              enabled: true,
-            },
-            work: {
-              enabled: true,
-              botSecret: ref("NEXTCLOUD_TALK_WORK_BOT_SECRET"),
-              apiPassword: ref("NEXTCLOUD_TALK_WORK_API_PASSWORD"),
-            },
-          },
-        },
-        zalo: {
-          webhookUrl: "https://example.test/zalo",
-          botToken: ref("ZALO_BOT_TOKEN"),
-          webhookSecret: ref("ZALO_WEBHOOK_SECRET"),
-          accounts: {
-            inherited: {
-              enabled: true,
-            },
-            work: {
-              enabled: true,
-              webhookUrl: "https://example.test/zalo-work",
-              botToken: ref("ZALO_WORK_BOT_TOKEN"),
-              webhookSecret: ref("ZALO_WORK_WEBHOOK_SECRET"),
-            },
-          },
-        },
-      },
-    });
+      });
+      const channels = (config as { channels: Record<string, unknown> }).channels;
+      (config as { channels: Record<string, unknown> }).channels = {
+        [channelId]: channels[channelId],
+      };
 
-    const snapshot = await prepareSecretsRuntimeSnapshot({
-      config,
-      env: {
-        DISCORD_TOKEN: "discord-token",
-        DISCORD_PLURALKIT_TOKEN: "discord-pluralkit-token",
-        DISCORD_VOICE_TTS_API_KEY: "discord-voice-tts-api-key",
-        DISCORD_WORK_TOKEN: "discord-work-token",
-        DISCORD_WORK_PLURALKIT_TOKEN: "discord-work-pluralkit-token",
-        DISCORD_WORK_VOICE_TTS_API_KEY: "discord-work-voice-tts-api-key",
-        FEISHU_APP_SECRET: "feishu-app-secret",
-        FEISHU_ENCRYPT_KEY: "feishu-encrypt-key",
-        FEISHU_VERIFICATION_TOKEN: "feishu-verification-token",
-        FEISHU_WORK_APP_SECRET: "feishu-work-app-secret",
-        FEISHU_WORK_ENCRYPT_KEY: "feishu-work-encrypt-key",
-        FEISHU_WORK_VERIFICATION_TOKEN: "feishu-work-verification-token",
-        GOOGLECHAT_SERVICE_ACCOUNT: "googlechat-service-account",
-        GOOGLECHAT_WORK_SERVICE_ACCOUNT: "googlechat-work-service-account",
-        MSTEAMS_APP_PASSWORD: "msteams-app-password",
-        NEXTCLOUD_TALK_BOT_SECRET: "nextcloud-talk-bot-secret",
-        NEXTCLOUD_TALK_API_PASSWORD: "nextcloud-talk-api-password",
-        NEXTCLOUD_TALK_WORK_BOT_SECRET: "nextcloud-talk-work-bot-secret",
-        NEXTCLOUD_TALK_WORK_API_PASSWORD: "nextcloud-talk-work-api-password",
-        ZALO_BOT_TOKEN: "zalo-bot-token",
-        ZALO_WEBHOOK_SECRET: "zalo-webhook-secret",
-        ZALO_WORK_BOT_TOKEN: "zalo-work-bot-token",
-        ZALO_WORK_WEBHOOK_SECRET: "zalo-work-webhook-secret",
-      },
-      includeAuthStoreRefs: false,
-      loadablePluginOrigins: externalChannelOrigins(records),
-    });
+      const snapshot = await prepareSecretsRuntimeSnapshot({
+        config,
+        env: {
+          DISCORD_TOKEN: "discord-token",
+          DISCORD_PLURALKIT_TOKEN: "discord-pluralkit-token",
+          DISCORD_VOICE_REALTIME_API_KEY: "discord-voice-realtime-api-key",
+          DISCORD_VOICE_TTS_API_KEY: "discord-voice-tts-api-key",
+          DISCORD_WORK_TOKEN: "discord-work-token",
+          DISCORD_WORK_PLURALKIT_TOKEN: "discord-work-pluralkit-token",
+          DISCORD_WORK_VOICE_REALTIME_API_KEY: "discord-work-voice-realtime-api-key",
+          DISCORD_WORK_VOICE_TTS_API_KEY: "discord-work-voice-tts-api-key",
+          FEISHU_APP_SECRET: "feishu-app-secret",
+          FEISHU_ENCRYPT_KEY: "feishu-encrypt-key",
+          FEISHU_VERIFICATION_TOKEN: "feishu-verification-token",
+          FEISHU_WORK_APP_SECRET: "feishu-work-app-secret",
+          FEISHU_WORK_ENCRYPT_KEY: "feishu-work-encrypt-key",
+          FEISHU_WORK_VERIFICATION_TOKEN: "feishu-work-verification-token",
+          GOOGLECHAT_SERVICE_ACCOUNT: "googlechat-service-account",
+          GOOGLECHAT_WORK_SERVICE_ACCOUNT: "googlechat-work-service-account",
+          MSTEAMS_APP_PASSWORD: "msteams-app-password",
+          NEXTCLOUD_TALK_BOT_SECRET: "nextcloud-talk-bot-secret",
+          NEXTCLOUD_TALK_API_PASSWORD: "nextcloud-talk-api-password",
+          NEXTCLOUD_TALK_WORK_BOT_SECRET: "nextcloud-talk-work-bot-secret",
+          NEXTCLOUD_TALK_WORK_API_PASSWORD: "nextcloud-talk-work-api-password",
+          ZALO_BOT_TOKEN: "zalo-bot-token",
+          ZALO_WEBHOOK_SECRET: "zalo-webhook-secret",
+          ZALO_WORK_BOT_TOKEN: "zalo-work-bot-token",
+          ZALO_WORK_WEBHOOK_SECRET: "zalo-work-webhook-secret",
+        },
+        includeAuthStoreRefs: false,
+        loadablePluginOrigins: externalChannelOrigins(records),
+      });
 
-    expectResolvedPaths(snapshot.config, {
-      "channels.discord.token": "discord-token",
-      "channels.discord.pluralkit.token": "discord-pluralkit-token",
-      "channels.discord.voice.tts.providers.openai.apiKey": "discord-voice-tts-api-key",
-      "channels.discord.accounts.work.token": "discord-work-token",
-      "channels.discord.accounts.work.pluralkit.token": "discord-work-pluralkit-token",
-      "channels.discord.accounts.work.voice.tts.providers.openai.apiKey":
-        "discord-work-voice-tts-api-key",
-      "channels.feishu.appSecret": "feishu-app-secret",
-      "channels.feishu.encryptKey": "feishu-encrypt-key",
-      "channels.feishu.verificationToken": "feishu-verification-token",
-      "channels.feishu.accounts.work.appSecret": "feishu-work-app-secret",
-      "channels.feishu.accounts.work.encryptKey": "feishu-work-encrypt-key",
-      "channels.feishu.accounts.work.verificationToken": "feishu-work-verification-token",
-      "channels.googlechat.serviceAccount": "googlechat-service-account",
-      "channels.googlechat.accounts.work.serviceAccount": "googlechat-work-service-account",
-      "channels.msteams.appPassword": "msteams-app-password",
-      "channels.nextcloud-talk.botSecret": "nextcloud-talk-bot-secret",
-      "channels.nextcloud-talk.apiPassword": "nextcloud-talk-api-password",
-      "channels.nextcloud-talk.accounts.work.botSecret": "nextcloud-talk-work-bot-secret",
-      "channels.nextcloud-talk.accounts.work.apiPassword": "nextcloud-talk-work-api-password",
-      "channels.zalo.botToken": "zalo-bot-token",
-      "channels.zalo.webhookSecret": "zalo-webhook-secret",
-      "channels.zalo.accounts.work.botToken": "zalo-work-bot-token",
-      "channels.zalo.accounts.work.webhookSecret": "zalo-work-webhook-secret",
-    });
-    expect(snapshot.warnings).toEqual([]);
-    expectMetadataBackedContractsWereUsed();
-  });
+      const expectedPaths = {
+        "channels.discord.token": "discord-token",
+        "channels.discord.pluralkit.token": "discord-pluralkit-token",
+        "channels.discord.voice.realtime.providers.openai.apiKey": "discord-voice-realtime-api-key",
+        "channels.discord.voice.tts.providers.openai.apiKey": "discord-voice-tts-api-key",
+        "channels.discord.accounts.work.token": "discord-work-token",
+        "channels.discord.accounts.work.pluralkit.token": "discord-work-pluralkit-token",
+        "channels.discord.accounts.work.voice.realtime.providers.openai.apiKey":
+          "discord-work-voice-realtime-api-key",
+        "channels.discord.accounts.work.voice.tts.providers.openai.apiKey":
+          "discord-work-voice-tts-api-key",
+        "channels.feishu.appSecret": "feishu-app-secret",
+        "channels.feishu.encryptKey": "feishu-encrypt-key",
+        "channels.feishu.verificationToken": "feishu-verification-token",
+        "channels.feishu.accounts.work.appSecret": "feishu-work-app-secret",
+        "channels.feishu.accounts.work.encryptKey": "feishu-work-encrypt-key",
+        "channels.feishu.accounts.work.verificationToken": "feishu-work-verification-token",
+        "channels.googlechat.serviceAccount": "googlechat-service-account",
+        "channels.googlechat.accounts.work.serviceAccount": "googlechat-work-service-account",
+        "channels.msteams.appPassword": "msteams-app-password",
+        "channels.nextcloud-talk.botSecret": "nextcloud-talk-bot-secret",
+        "channels.nextcloud-talk.apiPassword": "nextcloud-talk-api-password",
+        "channels.nextcloud-talk.accounts.work.botSecret": "nextcloud-talk-work-bot-secret",
+        "channels.nextcloud-talk.accounts.work.apiPassword": "nextcloud-talk-work-api-password",
+        "channels.zalo.botToken": "zalo-bot-token",
+        "channels.zalo.webhookSecret": "zalo-webhook-secret",
+        "channels.zalo.accounts.work.botToken": "zalo-work-bot-token",
+        "channels.zalo.accounts.work.webhookSecret": "zalo-work-webhook-secret",
+      };
+      expectResolvedPaths(
+        snapshot.config,
+        Object.fromEntries(
+          Object.entries(expectedPaths).filter(([pathKey]) =>
+            pathKey.startsWith(`channels.${channelId}.`),
+          ),
+        ),
+      );
+      expect(snapshot.warnings).toStrictEqual([]);
+      expectMetadataBackedContractsWereUsed([channelId]);
+    },
+  );
 
   it("skips inactive exec-backed SecretRefs for every externalized channel contract", async () => {
     const records = configureExternalChannelRecords();
@@ -306,7 +442,9 @@ describe("secrets runtime externalized channel SecretRef audit", () => {
             enabled: true,
             tts: {
               providers: {
-                openai: { apiKey: inactiveExecRef("DISCORD_DISABLED_VOICE_TTS_API_KEY") },
+                openai: {
+                  apiKey: inactiveExecRef("DISCORD_DISABLED_VOICE_TTS_API_KEY"),
+                },
               },
             },
           },
@@ -349,11 +487,11 @@ describe("secrets runtime externalized channel SecretRef audit", () => {
         },
         googlechat: {
           enabled: false,
-          serviceAccountRef: inactiveExecRef("GOOGLECHAT_DISABLED_SERVICE_ACCOUNT"),
+          serviceAccount: inactiveExecRef("GOOGLECHAT_DISABLED_SERVICE_ACCOUNT"),
           accounts: {
             disabled: {
               enabled: false,
-              serviceAccountRef: inactiveExecRef("GOOGLECHAT_DISABLED_ACCOUNT_SERVICE_ACCOUNT"),
+              serviceAccount: inactiveExecRef("GOOGLECHAT_DISABLED_ACCOUNT_SERVICE_ACCOUNT"),
             },
           },
         },
@@ -404,33 +542,119 @@ describe("secrets runtime externalized channel SecretRef audit", () => {
     expect(
       getPath(snapshot.config, ["channels", "zalo", "accounts", "disabled", "botToken"]),
     ).toEqual(inactiveExecRef("ZALO_DISABLED_ACCOUNT_BOT_TOKEN"));
-    expect(snapshot.warnings.map((warning) => warning.path)).toEqual(
-      expect.arrayContaining([
-        "channels.discord.token",
-        "channels.discord.pluralkit.token",
-        "channels.discord.voice.tts.providers.openai.apiKey",
-        "channels.discord.accounts.disabled.token",
-        "channels.discord.accounts.disabled.pluralkit.token",
-        "channels.discord.accounts.disabled.voice.tts.providers.openai.apiKey",
-        "channels.feishu.appSecret",
-        "channels.feishu.encryptKey",
-        "channels.feishu.verificationToken",
-        "channels.feishu.accounts.disabled.appSecret",
-        "channels.feishu.accounts.disabled.encryptKey",
-        "channels.feishu.accounts.disabled.verificationToken",
-        "channels.googlechat.serviceAccount",
-        "channels.googlechat.accounts.disabled.serviceAccount",
-        "channels.msteams.appPassword",
-        "channels.nextcloud-talk.botSecret",
-        "channels.nextcloud-talk.apiPassword",
-        "channels.nextcloud-talk.accounts.disabled.botSecret",
-        "channels.nextcloud-talk.accounts.disabled.apiPassword",
-        "channels.zalo.botToken",
-        "channels.zalo.webhookSecret",
-        "channels.zalo.accounts.disabled.botToken",
-        "channels.zalo.accounts.disabled.webhookSecret",
-      ]),
-    );
+    expect(snapshot.warnings.map((warning) => warning.path)).toStrictEqual([
+      "channels.discord.token",
+      "channels.discord.accounts.disabled.token",
+      "channels.discord.pluralkit.token",
+      "channels.discord.accounts.disabled.pluralkit.token",
+      "channels.discord.voice.tts.providers.openai.apiKey",
+      "channels.discord.accounts.disabled.voice.tts.providers.openai.apiKey",
+      "channels.feishu.appSecret",
+      "channels.feishu.accounts.disabled.appSecret",
+      "channels.feishu.encryptKey",
+      "channels.feishu.accounts.disabled.encryptKey",
+      "channels.feishu.verificationToken",
+      "channels.feishu.accounts.disabled.verificationToken",
+      "channels.googlechat.serviceAccount",
+      "channels.googlechat.accounts.disabled.serviceAccount",
+      "channels.msteams.appPassword",
+      "channels.nextcloud-talk.botSecret",
+      "channels.nextcloud-talk.accounts.disabled.botSecret",
+      "channels.nextcloud-talk.apiPassword",
+      "channels.nextcloud-talk.accounts.disabled.apiPassword",
+      "channels.zalo.botToken",
+      "channels.zalo.accounts.disabled.botToken",
+      "channels.zalo.webhookSecret",
+      "channels.zalo.accounts.disabled.webhookSecret",
+    ]);
     expectMetadataBackedContractsWereUsed();
+  });
+
+  it("resolves Feishu top-level appSecret SecretRef for the implicit default account", async () => {
+    const records = configureExternalChannelRecords(["feishu"]);
+    const snapshot = await prepareSecretsRuntimeSnapshot({
+      config: asConfig({
+        channels: {
+          feishu: {
+            enabled: true,
+            appId: "cli_default",
+            appSecret: ref("FEISHU_APP_SECRET"),
+            accounts: {
+              "resource-shrimp": {
+                enabled: true,
+                appId: "cli_resource",
+                appSecret: "inline-secret-here", // pragma: allowlist secret
+              },
+            },
+          },
+        },
+      }),
+      env: { FEISHU_APP_SECRET: "default-secret" },
+      includeAuthStoreRefs: false,
+      loadablePluginOrigins: externalChannelOrigins(records),
+    });
+
+    expectResolvedPaths(snapshot.config, {
+      "channels.feishu.appSecret": "default-secret",
+      "channels.feishu.accounts.resource-shrimp.appSecret": "inline-secret-here",
+    });
+    expect(snapshot.warnings).toStrictEqual([]);
+    expectMetadataBackedContractsWereUsed(["feishu"]);
+  });
+
+  it("publishes an unavailable Discord realtime provider owner as a typed redacted error", async () => {
+    const records = configureExternalChannelRecords(["discord"]);
+    const snapshot = await prepareSecretsRuntimeSnapshot({
+      config: asConfig({
+        channels: {
+          discord: {
+            accounts: {
+              work: {
+                enabled: true,
+                voice: {
+                  enabled: true,
+                  mode: "agent-proxy",
+                  realtime: {
+                    provider: "grok-voice",
+                    providers: {
+                      xai: { apiKey: ref("MISSING_XAI_REALTIME_API_KEY") },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      }),
+      env: {},
+      includeAuthStoreRefs: false,
+      allowUnavailableSecretOwners: true,
+      loadablePluginOrigins: externalChannelOrigins(records),
+    });
+
+    expect(snapshot.degradedOwners).toMatchObject([
+      {
+        ownerKind: "capability",
+        ownerId: "discord:voice:realtime:work:xai",
+        reason: "secret reference was not found",
+      },
+    ]);
+    activateSecretsRuntimeSnapshot(snapshot);
+
+    let failure: unknown;
+    try {
+      assertSecretOwnerAvailable("capability", "discord:voice:realtime:work:xai");
+    } catch (error) {
+      failure = error;
+    }
+    expect(isTrustedSecretSurfaceUnavailableError(failure)).toBe(true);
+    expect(failure).toMatchObject({
+      code: "SECRET_SURFACE_UNAVAILABLE",
+      ownerKind: "capability",
+      ownerId: "discord:voice:realtime:work:xai",
+      paths: ["channels.discord.accounts.work.voice.realtime.providers.xai.apiKey"],
+    });
+    expect(String(failure)).not.toContain("MISSING_XAI_REALTIME_API_KEY");
+    expectMetadataBackedContractsWereUsed(["discord"]);
   });
 });

@@ -1,8 +1,5 @@
+// Resolves archive paths through safe filesystem defaults.
 import "./fs-safe-defaults.js";
-export {
-  isWindowsDrivePath,
-  normalizeArchiveEntryPath,
-  resolveArchiveOutputPath,
-  stripArchivePath,
-  validateArchiveEntryPath,
-} from "@openclaw/fs-safe/archive";
+
+// Archive path facade kept in infra so callers share one traversal policy.
+export { isWindowsDrivePath } from "@openclaw/fs-safe/archive";

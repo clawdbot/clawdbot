@@ -1,3 +1,4 @@
+// Public attachment facade for normalization, selection, and local media caching helpers.
 export {
   isAudioAttachment,
   normalizeAttachments,

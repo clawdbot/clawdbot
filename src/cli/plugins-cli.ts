@@ -1,22 +1,16 @@
+// Commander registration for plugin list/search/inspect/install/update/authoring commands.
 import type { Command } from "commander";
-import {
-  assertConfigWriteAllowedInCurrentMode,
-  getRuntimeConfig,
-  readConfigFileSnapshot,
-  replaceConfigFile,
-} from "../config/config.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { tracePluginLifecyclePhaseAsync } from "../plugins/plugin-lifecycle-trace.js";
-import { defaultRuntime } from "../runtime.js";
-import { formatDocsLink } from "../terminal/links.js";
-import { theme } from "../terminal/theme.js";
-import { shortenHomeInString } from "../utils.js";
+import { formatDocsLink } from "../../packages/terminal-core/src/links.js";
+import { theme } from "../../packages/terminal-core/src/theme.js";
 import type { PluginInspectOptions } from "./plugins-inspect-command.js";
 import type { PluginsListOptions } from "./plugins-list-command.js";
+import { parseStrictPositiveIntOption } from "./program/helpers.js";
 import { applyParentDefaultHelpAction } from "./program/parent-default-help.js";
 
-export type PluginUpdateOptions = {
+type PluginUpdateOptions = {
   all?: boolean;
+  acceptCapabilities?: boolean;
+  acknowledgeInstallPolicyWarning?: boolean;
   dryRun?: boolean;
   dangerouslyForceUnsafeInstall?: boolean;
 };
@@ -25,12 +19,26 @@ export type PluginMarketplaceListOptions = {
   json?: boolean;
 };
 
-export type PluginSearchOptions = {
+export type PluginMarketplaceEntriesOptions = {
+  feedProfile?: string;
+  feedUrl?: string;
+  json?: boolean;
+  offline?: boolean;
+};
+
+export type PluginMarketplaceRefreshOptions = {
+  expectedSha256?: string;
+  feedProfile?: string;
+  feedUrl?: string;
+  json?: boolean;
+};
+
+type PluginSearchOptions = {
   json?: boolean;
   limit?: number;
 };
 
-export type PluginUninstallOptions = {
+type PluginUninstallOptions = {
   keepFiles?: boolean;
   /** @deprecated Use keepFiles. */
   keepConfig?: boolean;
@@ -43,53 +51,38 @@ export type PluginRegistryOptions = {
   refresh?: boolean;
 };
 
-function countEnabledPlugins(plugins: readonly { enabled: boolean }[]): number {
-  return plugins.filter((plugin) => plugin.enabled).length;
+type PluginAuthoringBuildOptions = {
+  root?: string;
+  entry?: string;
+  check?: boolean;
+};
+
+type PluginAuthoringValidateOptions = {
+  root?: string;
+  entry?: string;
+  json?: boolean;
+};
+
+export type PluginDoctorOptions = {
+  json?: boolean;
+};
+
+type PluginAuthoringInitOptions = {
+  directory?: string;
+  force?: boolean;
+  type?: string;
+};
+
+function createModuleLoader<T>(load: () => Promise<T>): () => Promise<T> {
+  // Plugin runtime modules are heavy; load each command surface once on first use.
+  let promise: Promise<T> | undefined;
+  return () => (promise ??= load());
 }
 
-function formatRegistryState(state: "missing" | "fresh" | "stale"): string {
-  if (state === "fresh") {
-    return theme.success(state);
-  }
-  if (state === "stale") {
-    return theme.warn(state);
-  }
-  return theme.warn(state);
-}
-
-function reportMissingPlugin(id: string) {
-  defaultRuntime.error(
-    `Plugin not found: ${id}. Run \`openclaw plugins list\` to see installed plugins.`,
-  );
-  return defaultRuntime.exit(1);
-}
-
-function matchesPluginId(plugin: { id: string }, id: string) {
-  return plugin.id === id;
-}
-
-function isConfigSelectedShadowDiagnostic(entry: { level?: string; message?: string }): boolean {
-  return (
-    entry.level === "warn" &&
-    typeof entry.message === "string" &&
-    entry.message.includes("duplicate plugin id resolved by explicit config-selected plugin")
-  );
-}
-
-function isErroredConfigSelectedShadowDiagnostic(params: {
-  entry: { level?: string; message?: string; pluginId?: string };
-  plugins: readonly { id: string; origin: string; status: string }[];
-}): boolean {
-  if (!params.entry.pluginId || !isConfigSelectedShadowDiagnostic(params.entry)) {
-    return false;
-  }
-  return params.plugins.some(
-    (plugin) =>
-      plugin.id === params.entry.pluginId &&
-      plugin.origin === "config" &&
-      plugin.status === "error",
-  );
-}
+const loadPluginsRuntime = createModuleLoader(() => import("./plugins-cli.runtime.js"));
+const loadPluginsAuthoringCommands = createModuleLoader(
+  () => import("./plugins-authoring-command.js"),
+);
 
 export function registerPluginsCli(program: Command) {
   const plugins = program
@@ -116,7 +109,7 @@ export function registerPluginsCli(program: Command) {
     .command("search")
     .description("Search ClawHub plugin packages")
     .argument("[query...]", "Search query")
-    .option("--limit <n>", "Max results", (value) => Number.parseInt(value, 10))
+    .option("--limit <n>", "Max results", (value) => parseStrictPositiveIntOption(value, "--limit"))
     .option("--json", "Print JSON", false)
     .action(async (queryParts: string[], opts: PluginSearchOptions) => {
       const { runPluginsSearchCommand } = await import("./plugins-search-command.js");
@@ -140,51 +133,10 @@ export function registerPluginsCli(program: Command) {
     .command("enable")
     .description("Enable a plugin in config")
     .argument("<id>", "Plugin id")
-    .action(async (id: string) => {
-      assertConfigWriteAllowedInCurrentMode();
-
-      const { enablePluginInConfig } = await import("../plugins/enable.js");
-      const { normalizePluginId } = await import("../plugins/config-state.js");
-      const { buildPluginRegistrySnapshotReport } = await import("../plugins/status.js");
-      const { applySlotSelectionForPlugin, logSlotWarnings } =
-        await import("./plugins-command-helpers.js");
-      const { refreshPluginRegistryAfterConfigMutation } =
-        await import("./plugins-registry-refresh.js");
-      const snapshot = await readConfigFileSnapshot();
-      const cfg = (snapshot.sourceConfig ?? snapshot.config) as OpenClawConfig;
-      const report = buildPluginRegistrySnapshotReport({ config: cfg });
-      id = normalizePluginId(id);
-      if (!report.plugins.some((plugin) => matchesPluginId(plugin, id))) {
-        return reportMissingPlugin(id);
-      }
-      const enableResult = enablePluginInConfig(cfg, id, {
-        updateChannelConfig: false,
-      });
-      let next: OpenClawConfig = enableResult.config;
-      const slotResult = applySlotSelectionForPlugin(next, id);
-      next = slotResult.config;
-      await replaceConfigFile({
-        nextConfig: next,
-        ...(snapshot.hash !== undefined ? { baseHash: snapshot.hash } : {}),
-      });
-      await refreshPluginRegistryAfterConfigMutation({
-        config: next,
-        reason: "policy-changed",
-        policyPluginIds: [enableResult.pluginId],
-        logger: {
-          warn: (message) => defaultRuntime.log(theme.warn(message)),
-        },
-      });
-      logSlotWarnings(slotResult.warnings);
-      if (enableResult.enabled) {
-        defaultRuntime.log(`Enabled plugin "${id}". Restart the gateway to apply.`);
-        return;
-      }
-      defaultRuntime.log(
-        theme.warn(
-          `Plugin "${id}" could not be enabled (${enableResult.reason ?? "unknown reason"}).`,
-        ),
-      );
+    .option("--accept-capabilities", "Accept the plugin's declared capabilities", false)
+    .action(async (id: string, opts: { acceptCapabilities?: boolean }) => {
+      const { runPluginsEnableCommand } = await loadPluginsRuntime();
+      await runPluginsEnableCommand(id, opts);
     });
 
   plugins
@@ -192,36 +144,8 @@ export function registerPluginsCli(program: Command) {
     .description("Disable a plugin in config")
     .argument("<id>", "Plugin id")
     .action(async (id: string) => {
-      assertConfigWriteAllowedInCurrentMode();
-
-      const { normalizePluginId } = await import("../plugins/config-state.js");
-      const { buildPluginRegistrySnapshotReport } = await import("../plugins/status.js");
-      const { setPluginEnabledInConfig } = await import("./plugins-config.js");
-      const { refreshPluginRegistryAfterConfigMutation } =
-        await import("./plugins-registry-refresh.js");
-      const snapshot = await readConfigFileSnapshot();
-      const cfg = (snapshot.sourceConfig ?? snapshot.config) as OpenClawConfig;
-      const report = buildPluginRegistrySnapshotReport({ config: cfg });
-      id = normalizePluginId(id);
-      if (!report.plugins.some((plugin) => matchesPluginId(plugin, id))) {
-        return reportMissingPlugin(id);
-      }
-      const next = setPluginEnabledInConfig(cfg, id, false, {
-        updateChannelConfig: false,
-      });
-      await replaceConfigFile({
-        nextConfig: next,
-        ...(snapshot.hash !== undefined ? { baseHash: snapshot.hash } : {}),
-      });
-      await refreshPluginRegistryAfterConfigMutation({
-        config: next,
-        reason: "policy-changed",
-        policyPluginIds: [id],
-        logger: {
-          warn: (message) => defaultRuntime.log(theme.warn(message)),
-        },
-      });
-      defaultRuntime.log(`Disabled plugin "${id}". Restart the gateway to apply.`);
+      const { runPluginsDisableCommand } = await loadPluginsRuntime();
+      await runPluginsDisableCommand(id);
     });
 
   plugins
@@ -234,7 +158,7 @@ export function registerPluginsCli(program: Command) {
     .option("--dry-run", "Show what would be removed without making changes", false)
     .action(async (id: string, opts: PluginUninstallOptions) => {
       const { runPluginUninstallCommand } = await import("./plugins-uninstall-command.js");
-      await runPluginUninstallCommand(id, opts);
+      await runPluginUninstallCommand(id, { ...opts, invalidateRuntimeCache: false });
     });
 
   plugins
@@ -247,11 +171,21 @@ export function registerPluginsCli(program: Command) {
       "Path (.ts/.js/.zip/.tgz/.tar.gz), npm package spec, or marketplace plugin name",
     )
     .option("-l, --link", "Link a local path instead of copying", false)
-    .option("--force", "Overwrite an existing installed plugin or hook pack", false)
+    .option(
+      "--force",
+      "Confirm non-ClawHub sources and overwrite an existing plugin or hook pack",
+      false,
+    )
     .option("--pin", "Record npm installs as exact resolved <name>@<version>", false)
+    .option("--accept-capabilities", "Accept the plugin's declared capabilities", false)
     .option(
       "--dangerously-force-unsafe-install",
-      "Bypass built-in dangerous-code install blocking (plugin hooks may still block)",
+      "Deprecated no-op; security.installPolicy may still block",
+      false,
+    )
+    .option(
+      "--acknowledge-install-policy-warning",
+      "Acknowledge security.installPolicy warnings without prompting; blocks and failures remain terminal",
       false,
     )
     .option(
@@ -262,6 +196,8 @@ export function registerPluginsCli(program: Command) {
       async (
         raw: string,
         opts: {
+          acceptCapabilities?: boolean;
+          acknowledgeInstallPolicyWarning?: boolean;
           dangerouslyForceUnsafeInstall?: boolean;
           force?: boolean;
           link?: boolean;
@@ -269,14 +205,8 @@ export function registerPluginsCli(program: Command) {
           marketplace?: string;
         },
       ) => {
-        await tracePluginLifecyclePhaseAsync(
-          "install command",
-          async () => {
-            const { runPluginInstallCommand } = await import("./plugins-install-command.js");
-            await runPluginInstallCommand({ raw, opts });
-          },
-          { command: "install" },
-        );
+        const { runPluginsInstallAction } = await loadPluginsRuntime();
+        await runPluginsInstallAction(raw, opts);
       },
     );
 
@@ -286,9 +216,15 @@ export function registerPluginsCli(program: Command) {
     .argument("[id]", "Plugin or hook-pack id (omit with --all)")
     .option("--all", "Update all tracked plugins and hook packs", false)
     .option("--dry-run", "Show what would change without writing", false)
+    .option("--accept-capabilities", "Accept widened plugin capabilities", false)
     .option(
       "--dangerously-force-unsafe-install",
-      "Bypass built-in dangerous-code update blocking for plugins (plugin hooks may still block)",
+      "Deprecated no-op; security.installPolicy may still block",
+      false,
+    )
+    .option(
+      "--acknowledge-install-policy-warning",
+      "Acknowledge security.installPolicy warnings without prompting; blocks and failures remain terminal",
       false,
     )
     .action(async (id: string | undefined, opts: PluginUpdateOptions) => {
@@ -302,145 +238,52 @@ export function registerPluginsCli(program: Command) {
     .option("--json", "Print JSON")
     .option("--refresh", "Rebuild the persisted registry from current plugin manifests", false)
     .action(async (opts: PluginRegistryOptions) => {
-      const { inspectPluginRegistry, refreshPluginRegistry } =
-        await import("../plugins/plugin-registry.js");
-      const cfg = getRuntimeConfig();
-
-      if (opts.refresh) {
-        const index = await refreshPluginRegistry({
-          config: cfg,
-          reason: "manual",
-        });
-        if (opts.json) {
-          defaultRuntime.writeJson({
-            refreshed: true,
-            registry: index,
-          });
-          return;
-        }
-        const total = index.plugins.length;
-        const enabled = countEnabledPlugins(index.plugins);
-        defaultRuntime.log(
-          `Plugin registry refreshed: ${enabled}/${total} enabled plugins indexed.`,
-        );
-        return;
-      }
-
-      const inspection = await inspectPluginRegistry({ config: cfg });
-      if (opts.json) {
-        defaultRuntime.writeJson({
-          state: inspection.state,
-          refreshReasons: inspection.refreshReasons,
-          persisted: inspection.persisted,
-          current: inspection.current,
-        });
-        return;
-      }
-
-      const currentTotal = inspection.current.plugins.length;
-      const currentEnabled = countEnabledPlugins(inspection.current.plugins);
-      const persistedTotal = inspection.persisted?.plugins.length ?? 0;
-      const persistedEnabled = inspection.persisted
-        ? countEnabledPlugins(inspection.persisted.plugins)
-        : 0;
-      const lines = [
-        `${theme.muted("State:")} ${formatRegistryState(inspection.state)}`,
-        `${theme.muted("Current:")} ${currentEnabled}/${currentTotal} enabled plugins`,
-        `${theme.muted("Persisted:")} ${persistedEnabled}/${persistedTotal} enabled plugins`,
-      ];
-      if (inspection.refreshReasons.length > 0) {
-        lines.push(`${theme.muted("Refresh reasons:")} ${inspection.refreshReasons.join(", ")}`);
-        lines.push(
-          `${theme.muted("Repair:")} ${theme.command("openclaw plugins registry --refresh")}`,
-        );
-      }
-      defaultRuntime.log(lines.join("\n"));
+      const { runPluginsRegistryCommand } = await loadPluginsRuntime();
+      await runPluginsRegistryCommand(opts);
     });
 
   plugins
     .command("doctor")
     .description("Report plugin load issues")
-    .action(async () => {
-      const {
-        buildPluginCompatibilityNotices,
-        buildPluginDiagnosticsReport,
-        formatPluginCompatibilityNotice,
-      } = await import("../plugins/status.js");
-      const report = buildPluginDiagnosticsReport({ effectiveOnly: true });
-      const errors = report.plugins.filter((p) => p.status === "error");
-      const diags = report.diagnostics.filter((d) => d.level === "error");
-      const shadowed = report.diagnostics.filter((entry) =>
-        isErroredConfigSelectedShadowDiagnostic({ entry, plugins: report.plugins }),
-      );
-      const compatibility = buildPluginCompatibilityNotices({ report });
+    .option("--json", "Print JSON")
+    .action(async (opts: PluginDoctorOptions) => {
+      const { runPluginsDoctorCommand } = await loadPluginsRuntime();
+      await runPluginsDoctorCommand(opts);
+    });
 
-      if (
-        errors.length === 0 &&
-        diags.length === 0 &&
-        shadowed.length === 0 &&
-        compatibility.length === 0
-      ) {
-        defaultRuntime.log("No plugin issues detected.");
-        return;
-      }
+  plugins
+    .command("build")
+    .description("Generate simple tool plugin metadata")
+    .option("--root <path>", "Plugin package root")
+    .option("--entry <path>", "Plugin entry module relative to --root")
+    .option("--check", "Fail if generated metadata is out of date", false)
+    .action(async (opts: PluginAuthoringBuildOptions) => {
+      const { runPluginsBuildCommand } = await loadPluginsAuthoringCommands();
+      await runPluginsBuildCommand(opts);
+    });
 
-      const lines: string[] = [];
-      if (errors.length > 0) {
-        lines.push(theme.error("Plugin errors:"));
-        for (const entry of errors) {
-          const phase = entry.failurePhase ? ` [${entry.failurePhase}]` : "";
-          lines.push(`- ${entry.id}${phase}: ${entry.error ?? "failed to load"} (${entry.source})`);
-        }
-      }
-      if (diags.length > 0) {
-        if (lines.length > 0) {
-          lines.push("");
-        }
-        lines.push(theme.warn("Diagnostics:"));
-        for (const diag of diags) {
-          const target = diag.pluginId ? `${diag.pluginId}: ` : "";
-          lines.push(`- ${target}${diag.message}`);
-        }
-      }
-      if (shadowed.length > 0) {
-        if (lines.length > 0) {
-          lines.push("");
-        }
-        lines.push(theme.warn("Plugin source shadowing:"));
-        for (const diag of shadowed) {
-          const active = report.plugins.find((plugin) => plugin.id === diag.pluginId);
-          const target = diag.pluginId ? `${diag.pluginId}: ` : "";
-          lines.push(`- ${target}${diag.message}`);
-          if (active) {
-            lines.push(`  active: ${shortenHomeInString(active.source)} (${active.origin})`);
-            if (active.status === "error") {
-              lines.push(`  active status: error${active.error ? `: ${active.error}` : ""}`);
-            }
-          }
-          if (diag.source) {
-            lines.push(`  shadowed: ${shortenHomeInString(diag.source)}`);
-          }
-          lines.push("  repair:");
-          lines.push("    openclaw plugins inspect " + (diag.pluginId ?? "<plugin-id>"));
-          lines.push("    edit or remove the config-selected plugin source");
-          lines.push("    openclaw plugins registry --refresh");
-          lines.push("    openclaw gateway restart --force");
-        }
-      }
-      if (compatibility.length > 0) {
-        if (lines.length > 0) {
-          lines.push("");
-        }
-        lines.push(theme.warn("Compatibility:"));
-        for (const notice of compatibility) {
-          const marker = notice.severity === "warn" ? theme.warn("warn") : theme.muted("info");
-          lines.push(`- ${formatPluginCompatibilityNotice(notice)} [${marker}]`);
-        }
-      }
-      const docs = formatDocsLink("/plugin", "docs.openclaw.ai/plugin");
-      lines.push("");
-      lines.push(`${theme.muted("Docs:")} ${docs}`);
-      defaultRuntime.log(lines.join("\n"));
+  plugins
+    .command("validate")
+    .description("Validate simple tool plugin metadata")
+    .option("--root <path>", "Plugin package root")
+    .option("--entry <path>", "Plugin entry module relative to --root")
+    .option("--json", "Print JSON")
+    .action(async (opts: PluginAuthoringValidateOptions) => {
+      const { runPluginsValidateCommand } = await loadPluginsAuthoringCommands();
+      await runPluginsValidateCommand(opts);
+    });
+
+  plugins
+    .command("init")
+    .description("Create a plugin project")
+    .argument("<id>", "Plugin id")
+    .option("--directory <path>", "Output directory")
+    .option("--name <name>", "Display name")
+    .option("--type <type>", "Scaffold type (tool or provider)", "tool")
+    .option("--force", "Overwrite an existing output directory", false)
+    .action(async (id: string, opts: PluginAuthoringInitOptions) => {
+      const { runPluginsInitCommand } = await loadPluginsAuthoringCommands();
+      await runPluginsInitCommand(id, opts);
     });
 
   const marketplace = plugins
@@ -448,46 +291,39 @@ export function registerPluginsCli(program: Command) {
     .description("Inspect Claude-compatible plugin marketplaces");
 
   marketplace
+    .command("entries")
+    .description("List entries from the configured OpenClaw marketplace feed")
+    .option("--feed-profile <name>", "Configured marketplace feed profile to list")
+    .option("--feed-url <url>", "Explicit hosted marketplace feed URL")
+    .option("--offline", "Read the latest accepted snapshot without fetching the feed", false)
+    .option("--json", "Print JSON")
+    .action(async (opts: PluginMarketplaceEntriesOptions) => {
+      const { runPluginMarketplaceEntriesCommand } = await loadPluginsRuntime();
+      await runPluginMarketplaceEntriesCommand(opts);
+    });
+
+  marketplace
+    .command("refresh")
+    .description("Refresh the configured OpenClaw marketplace feed snapshot")
+    .option("--feed-profile <name>", "Configured marketplace feed profile to refresh")
+    .option("--feed-url <url>", "Explicit hosted marketplace feed URL")
+    .option("--expected-sha256 <hash>", "Expected hosted feed SHA-256 payload checksum")
+    .option("--json", "Print JSON")
+    .action(async (opts: PluginMarketplaceRefreshOptions) => {
+      const { runPluginMarketplaceRefreshCommand } = await loadPluginsRuntime();
+      await runPluginMarketplaceRefreshCommand(opts);
+    });
+
+  marketplace
     .command("list")
     .description("List plugins published by a marketplace source")
     .argument("<source>", "Local marketplace path/repo or git/GitHub source")
     .option("--json", "Print JSON")
     .action(async (source: string, opts: PluginMarketplaceListOptions) => {
-      const { listMarketplacePlugins } = await import("../plugins/marketplace.js");
-      const { createPluginInstallLogger } = await import("./plugins-command-helpers.js");
-      const result = await listMarketplacePlugins({
-        marketplace: source,
-        logger: createPluginInstallLogger(),
-      });
-      if (!result.ok) {
-        defaultRuntime.error(result.error);
-        return defaultRuntime.exit(1);
-      }
-
-      if (opts.json) {
-        defaultRuntime.writeJson({
-          source: result.sourceLabel,
-          name: result.manifest.name,
-          version: result.manifest.version,
-          plugins: result.manifest.plugins,
-        });
-        return;
-      }
-
-      if (result.manifest.plugins.length === 0) {
-        defaultRuntime.log(`No plugins found in marketplace ${result.sourceLabel}.`);
-        return;
-      }
-
-      defaultRuntime.log(
-        `${theme.heading("Marketplace")} ${theme.muted(result.manifest.name ?? result.sourceLabel)}`,
-      );
-      for (const plugin of result.manifest.plugins) {
-        const suffix = plugin.version ? theme.muted(` v${plugin.version}`) : "";
-        const desc = plugin.description ? ` - ${theme.muted(plugin.description)}` : "";
-        defaultRuntime.log(`${theme.command(plugin.name)}${suffix}${desc}`);
-      }
+      const { runPluginMarketplaceListCommand } = await loadPluginsRuntime();
+      await runPluginMarketplaceListCommand(source, opts);
     });
 
+  applyParentDefaultHelpAction(marketplace);
   applyParentDefaultHelpAction(plugins);
 }

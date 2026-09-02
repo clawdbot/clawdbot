@@ -1,5 +1,10 @@
 {
   "id": "feishu",
+  "doctorContract": {
+    "configRepair": true
+  },
+  "name": "Feishu/Lark",
+  "description": "OpenClaw Feishu/Lark channel plugin for chats and workplace tools (community maintained by @m1heng).",
   "activation": {
     "onStartup": false
   },
@@ -24,157 +29,90 @@
   },
   "toolMetadata": {
     "feishu_app_scopes": {
-      "configSignals": [{ "rootPath": "channels.feishu", "required": ["appId", "appSecret"] }]
+      "configSignals": [
+        { "rootPath": "channels.feishu", "required": ["appId", "appSecret"] },
+        { "rootPath": "channels.feishu", "overlayMapPath": "accounts", "required": ["appId", "appSecret"] }
+      ]
     },
     "feishu_bitable_create_app": {
-      "configSignals": [{ "rootPath": "channels.feishu", "required": ["appId", "appSecret"] }]
+      "configSignals": [
+        { "rootPath": "channels.feishu", "required": ["appId", "appSecret"] },
+        { "rootPath": "channels.feishu", "overlayMapPath": "accounts", "required": ["appId", "appSecret"] }
+      ]
     },
     "feishu_bitable_create_field": {
-      "configSignals": [{ "rootPath": "channels.feishu", "required": ["appId", "appSecret"] }]
+      "configSignals": [
+        { "rootPath": "channels.feishu", "required": ["appId", "appSecret"] },
+        { "rootPath": "channels.feishu", "overlayMapPath": "accounts", "required": ["appId", "appSecret"] }
+      ]
     },
     "feishu_bitable_create_record": {
-      "configSignals": [{ "rootPath": "channels.feishu", "required": ["appId", "appSecret"] }]
+      "configSignals": [
+        { "rootPath": "channels.feishu", "required": ["appId", "appSecret"] },
+        { "rootPath": "channels.feishu", "overlayMapPath": "accounts", "required": ["appId", "appSecret"] }
+      ]
     },
     "feishu_bitable_get_meta": {
-      "configSignals": [{ "rootPath": "channels.feishu", "required": ["appId", "appSecret"] }]
+      "configSignals": [
+        { "rootPath": "channels.feishu", "required": ["appId", "appSecret"] },
+        { "rootPath": "channels.feishu", "overlayMapPath": "accounts", "required": ["appId", "appSecret"] }
+      ]
     },
     "feishu_bitable_get_record": {
-      "configSignals": [{ "rootPath": "channels.feishu", "required": ["appId", "appSecret"] }]
+      "configSignals": [
+        { "rootPath": "channels.feishu", "required": ["appId", "appSecret"] },
+        { "rootPath": "channels.feishu", "overlayMapPath": "accounts", "required": ["appId", "appSecret"] }
+      ]
     },
     "feishu_bitable_list_fields": {
-      "configSignals": [{ "rootPath": "channels.feishu", "required": ["appId", "appSecret"] }]
+      "configSignals": [
+        { "rootPath": "channels.feishu", "required": ["appId", "appSecret"] },
+        { "rootPath": "channels.feishu", "overlayMapPath": "accounts", "required": ["appId", "appSecret"] }
+      ]
     },
     "feishu_bitable_list_records": {
-      "configSignals": [{ "rootPath": "channels.feishu", "required": ["appId", "appSecret"] }]
+      "configSignals": [
+        { "rootPath": "channels.feishu", "required": ["appId", "appSecret"] },
+        { "rootPath": "channels.feishu", "overlayMapPath": "accounts", "required": ["appId", "appSecret"] }
+      ]
     },
     "feishu_bitable_update_record": {
-      "configSignals": [{ "rootPath": "channels.feishu", "required": ["appId", "appSecret"] }]
+      "configSignals": [
+        { "rootPath": "channels.feishu", "required": ["appId", "appSecret"] },
+        { "rootPath": "channels.feishu", "overlayMapPath": "accounts", "required": ["appId", "appSecret"] }
+      ]
     },
     "feishu_chat": {
-      "configSignals": [{ "rootPath": "channels.feishu", "required": ["appId", "appSecret"] }]
+      "configSignals": [
+        { "rootPath": "channels.feishu", "required": ["appId", "appSecret"] },
+        { "rootPath": "channels.feishu", "overlayMapPath": "accounts", "required": ["appId", "appSecret"] }
+      ]
     },
     "feishu_doc": {
-      "configSignals": [{ "rootPath": "channels.feishu", "required": ["appId", "appSecret"] }]
+      "configSignals": [
+        { "rootPath": "channels.feishu", "required": ["appId", "appSecret"] },
+        { "rootPath": "channels.feishu", "overlayMapPath": "accounts", "required": ["appId", "appSecret"] }
+      ]
     },
     "feishu_drive": {
-      "configSignals": [{ "rootPath": "channels.feishu", "required": ["appId", "appSecret"] }]
+      "configSignals": [
+        { "rootPath": "channels.feishu", "required": ["appId", "appSecret"] },
+        { "rootPath": "channels.feishu", "overlayMapPath": "accounts", "required": ["appId", "appSecret"] }
+      ]
     },
     "feishu_perm": {
-      "configSignals": [{ "rootPath": "channels.feishu", "required": ["appId", "appSecret"] }]
+      "configSignals": [
+        { "rootPath": "channels.feishu", "required": ["appId", "appSecret"] },
+        { "rootPath": "channels.feishu", "overlayMapPath": "accounts", "required": ["appId", "appSecret"] }
+      ]
     },
     "feishu_wiki": {
-      "configSignals": [{ "rootPath": "channels.feishu", "required": ["appId", "appSecret"] }]
+      "configSignals": [
+        { "rootPath": "channels.feishu", "required": ["appId", "appSecret"] },
+        { "rootPath": "channels.feishu", "overlayMapPath": "accounts", "required": ["appId", "appSecret"] }
+      ]
     }
-  },
-  "channelEnvVars": {
-    "feishu": [
-      "FEISHU_APP_ID",
-      "FEISHU_APP_SECRET",
-      "FEISHU_VERIFICATION_TOKEN",
-      "FEISHU_ENCRYPT_KEY"
-    ]
   },
   "skills": ["./skills"],
-  "configSchema": {
-    "type": "object",
-    "additionalProperties": true,
-    "$defs": {
-      "secretRef": {
-        "type": "object",
-        "additionalProperties": false,
-        "properties": {
-          "source": {
-            "type": "string",
-            "enum": ["env", "file", "exec"]
-          },
-          "provider": { "type": "string" },
-          "id": { "type": "string" }
-        },
-        "required": ["source", "provider", "id"]
-      },
-      "secretInput": {
-        "anyOf": [{ "type": "string", "minLength": 1 }, { "$ref": "#/$defs/secretRef" }]
-      },
-      "account": {
-        "type": "object",
-        "additionalProperties": true,
-        "properties": {
-          "enabled": { "type": "boolean" },
-          "name": { "type": "string" },
-          "appId": { "type": "string" },
-          "appSecret": { "$ref": "#/$defs/secretInput" },
-          "encryptKey": { "$ref": "#/$defs/secretInput" },
-          "verificationToken": { "$ref": "#/$defs/secretInput" },
-          "domain": {
-            "anyOf": [
-              {
-                "type": "string",
-                "enum": ["feishu", "lark"]
-              },
-              {
-                "type": "string",
-                "format": "uri"
-              }
-            ]
-          },
-          "connectionMode": {
-            "type": "string",
-            "enum": ["websocket", "webhook"]
-          },
-          "renderMode": {
-            "type": "string",
-            "enum": ["auto", "raw", "card"]
-          },
-          "streaming": { "type": "boolean" },
-          "blockStreaming": { "type": "boolean" },
-          "replyInThread": {
-            "type": "string",
-            "enum": ["disabled", "enabled"]
-          },
-          "typingIndicator": { "type": "boolean" }
-        }
-      }
-    },
-    "properties": {
-      "enabled": { "type": "boolean" },
-      "defaultAccount": { "type": "string" },
-      "appId": { "type": "string" },
-      "appSecret": { "$ref": "#/$defs/secretInput" },
-      "encryptKey": { "$ref": "#/$defs/secretInput" },
-      "verificationToken": { "$ref": "#/$defs/secretInput" },
-      "domain": {
-        "anyOf": [
-          {
-            "type": "string",
-            "enum": ["feishu", "lark"]
-          },
-          {
-            "type": "string",
-            "format": "uri"
-          }
-        ]
-      },
-      "connectionMode": {
-        "type": "string",
-        "enum": ["websocket", "webhook"]
-      },
-      "renderMode": {
-        "type": "string",
-        "enum": ["auto", "raw", "card"]
-      },
-      "streaming": { "type": "boolean" },
-      "blockStreaming": { "type": "boolean" },
-      "replyInThread": {
-        "type": "string",
-        "enum": ["disabled", "enabled"]
-      },
-      "typingIndicator": { "type": "boolean" },
-      "accounts": {
-        "type": "object",
-        "additionalProperties": {
-          "$ref": "#/$defs/account"
-        }
-      }
-    }
-  }
+  "configSchema": { "type": "object", "additionalProperties": false, "properties": {} }
 }

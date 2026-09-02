@@ -1,3 +1,4 @@
+// Deepseek provider module implements model/runtime integration.
 import type { ProviderPlugin } from "openclaw/plugin-sdk/provider-model-shared";
 import { buildDeepSeekProvider } from "./provider-catalog.js";
 

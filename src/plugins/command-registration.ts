@@ -1,17 +1,23 @@
-import { isOperatorScope } from "../gateway/operator-scopes.js";
-import { logVerbose } from "../globals.js";
+/** Validates and registers plugin command definitions into the global command registry. */
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
-} from "../shared/string-coerce.js";
+} from "@openclaw/normalization-core/string-coerce";
+import { isOperatorScope } from "../gateway/operator-scopes.js";
+import { logVerbose } from "../globals.js";
+import { isRecord } from "../utils.js";
+import { normalizeAgentPromptSurfaceKind } from "./agent-prompt-surface-kind.js";
+import { getPluginCommandExecutionCount } from "./command-execution-lock.js";
+import { clearPluginCommands } from "./command-registry-state.js";
+import type { PluginRegistry } from "./registry-types.js";
+import { getPluginRegistrationContext, requireActivePluginRegistry } from "./runtime.js";
 import {
-  clearPluginCommands,
-  clearPluginCommandsForPlugin,
-  isPluginCommandRegistryLocked,
-  pluginCommands,
-  type RegisteredPluginCommand,
-} from "./command-registry-state.js";
-import type { OpenClawPluginCommandDefinition } from "./types.js";
+  AGENT_PROMPT_SURFACE_KINDS,
+  type AgentPromptGuidance,
+  type AgentPromptGuidanceEntry,
+  type AgentPromptSurfaceKind,
+  type OpenClawPluginCommandDefinition,
+} from "./types.js";
 
 /**
  * Reserved command names that plugins cannot override (built-in commands).
@@ -22,6 +28,12 @@ import type { OpenClawPluginCommandDefinition } from "./types.js";
  * first accessed during plugin registration.
  */
 let reservedCommands: Set<string> | undefined;
+let agentPromptSurfaces: Set<string> | undefined;
+
+function hasExactKeys(value: Record<string, unknown>, keys: readonly string[]): boolean {
+  const actual = Object.keys(value);
+  return actual.length === keys.length && actual.every((key) => keys.includes(key));
+}
 
 function getReservedCommands(): Set<string> {
   reservedCommands ??= new Set([
@@ -43,6 +55,8 @@ function getReservedCommands(): Set<string> {
     "allowlist",
     "activation",
     "skill",
+    "learn",
+    "loop",
     "subagents",
     "kill",
     "steer",
@@ -62,17 +76,25 @@ function getReservedCommands(): Set<string> {
   return reservedCommands;
 }
 
-export type CommandRegistrationResult = {
+function getAgentPromptSurfaces(): Set<string> {
+  agentPromptSurfaces ??= new Set(AGENT_PROMPT_SURFACE_KINDS);
+  return agentPromptSurfaces;
+}
+
+/** Result returned when a plugin command registration succeeds or fails validation. */
+type CommandRegistrationResult = {
   ok: boolean;
   error?: string;
 };
 
+/** Returns true when a command name is owned by built-in OpenClaw command handling. */
 export function isReservedCommandName(name: string): boolean {
   const trimmed = normalizeOptionalLowercaseString(name) ?? "";
   return Boolean(trimmed && getReservedCommands().has(trimmed));
 }
 
-export function validateCommandName(
+/** Validates user-visible command names before plugin registration accepts them. */
+function validateCommandName(
   name: string,
   opts?: { allowReservedCommandNames?: boolean },
 ): string | null {
@@ -100,7 +122,7 @@ export function validateCommandName(
  * Returns an error message if invalid, or null if valid.
  * Shared by both the global registration path and snapshot (non-activating) loads.
  */
-export function validatePluginCommandDefinition(
+function validatePluginCommandDefinition(
   command: OpenClawPluginCommandDefinition,
   opts?: { allowReservedCommandNames?: boolean },
 ): string | null {
@@ -125,14 +147,12 @@ export function validatePluginCommandDefinition(
     }
   }
   if (command.agentPromptGuidance !== undefined && !Array.isArray(command.agentPromptGuidance)) {
-    return "Agent prompt guidance must be an array of strings";
+    return "Agent prompt guidance must be an array of strings or objects";
   }
   for (const [index, guidance] of (command.agentPromptGuidance ?? []).entries()) {
-    if (typeof guidance !== "string") {
-      return `Agent prompt guidance ${index + 1} must be a string`;
-    }
-    if (!guidance.trim()) {
-      return `Agent prompt guidance ${index + 1} cannot be empty`;
+    const guidanceError = validateAgentPromptGuidance(index, guidance);
+    if (guidanceError) {
+      return guidanceError;
     }
   }
   if (command.requiredScopes !== undefined) {
@@ -147,6 +167,32 @@ export function validatePluginCommandDefinition(
         ? `Command requiredScopes contains unknown operator scope: ${unknownScope}`
         : "Command requiredScopes contains unknown operator scope";
     }
+  }
+  if (command.clientPresentation !== undefined) {
+    if (!isRecord(command.clientPresentation)) {
+      return "Command clientPresentation must be an object";
+    }
+    if (!hasExactKeys(command.clientPresentation, ["when", "action"])) {
+      return "Command clientPresentation must contain only when and action";
+    }
+    if (command.clientPresentation.when !== "no-arguments") {
+      return 'Command clientPresentation when must be "no-arguments"';
+    }
+    if (!isRecord(command.clientPresentation.action)) {
+      return "Command clientPresentation action must be an object";
+    }
+    if (!hasExactKeys(command.clientPresentation.action, ["kind"])) {
+      return "Command clientPresentation action must contain only kind";
+    }
+    if (command.clientPresentation.action.kind !== "device-pairing") {
+      return "Command clientPresentation action kind is not supported";
+    }
+  }
+  if (
+    command.exposeSenderIsOwner !== undefined &&
+    typeof command.exposeSenderIsOwner !== "boolean"
+  ) {
+    return "Command exposeSenderIsOwner must be a boolean";
   }
   if (command.channels !== undefined) {
     if (!Array.isArray(command.channels)) {
@@ -165,6 +211,9 @@ export function validatePluginCommandDefinition(
   if (nameError) {
     return nameError;
   }
+  if (command.nativeNames !== undefined && !isRecord(command.nativeNames)) {
+    return "Command nativeNames must be an object";
+  }
   for (const [label, alias] of Object.entries(command.nativeNames ?? {})) {
     if (typeof alias !== "string") {
       continue;
@@ -174,6 +223,9 @@ export function validatePluginCommandDefinition(
       return `Native command alias "${label}" invalid: ${aliasError}`;
     }
   }
+  if (command.nativeProgressMessages !== undefined && !isRecord(command.nativeProgressMessages)) {
+    return "Command nativeProgressMessages must be an object";
+  }
   for (const [label, message] of Object.entries(command.nativeProgressMessages ?? {})) {
     if (typeof message !== "string") {
       return `Native progress message "${label}" must be a string`;
@@ -181,6 +233,12 @@ export function validatePluginCommandDefinition(
     if (!message.trim()) {
       return `Native progress message "${label}" cannot be empty`;
     }
+  }
+  if (
+    command.descriptionLocalizations !== undefined &&
+    !isRecord(command.descriptionLocalizations)
+  ) {
+    return "Command descriptionLocalizations must be an object";
   }
   for (const [locale, description] of Object.entries(command.descriptionLocalizations ?? {})) {
     if (typeof description !== "string") {
@@ -193,7 +251,62 @@ export function validatePluginCommandDefinition(
   return null;
 }
 
-export function listPluginInvocationKeys(command: OpenClawPluginCommandDefinition): string[] {
+function validateAgentPromptGuidance(index: number, guidance: AgentPromptGuidance): string | null {
+  const label = `Agent prompt guidance ${index + 1}`;
+  if (typeof guidance === "string") {
+    return guidance.trim() ? null : `${label} cannot be empty`;
+  }
+  if (!isRecord(guidance)) {
+    return `${label} must be a string or object`;
+  }
+  if (typeof guidance.text !== "string") {
+    return `${label} text must be a string`;
+  }
+  if (!guidance.text.trim()) {
+    return `${label} text cannot be empty`;
+  }
+  if (guidance.surfaces === undefined) {
+    return null;
+  }
+  if (!Array.isArray(guidance.surfaces)) {
+    return `${label} surfaces must be an array of prompt surface ids`;
+  }
+  if (guidance.surfaces.length === 0) {
+    return `${label} surfaces cannot be empty`;
+  }
+  for (const [surfaceIndex, surface] of guidance.surfaces.entries()) {
+    const normalizedSurface = typeof surface === "string" ? surface.trim() : "";
+    if (!getAgentPromptSurfaces().has(normalizedSurface)) {
+      const surfaces = AGENT_PROMPT_SURFACE_KINDS.join(", ");
+      return `${label} surface ${surfaceIndex + 1} must be one of: ${surfaces}`;
+    }
+  }
+  return null;
+}
+
+function normalizeAgentPromptGuidance(
+  guidance: readonly AgentPromptGuidance[] | undefined,
+): AgentPromptGuidance[] | undefined {
+  if (!guidance) {
+    return undefined;
+  }
+  return guidance.map((entry) => {
+    if (typeof entry === "string") {
+      return entry.trim();
+    }
+    const normalized: AgentPromptGuidanceEntry = {
+      text: entry.text.trim(),
+    };
+    if (entry.surfaces) {
+      normalized.surfaces = entry.surfaces.map((surface) =>
+        normalizeAgentPromptSurfaceKind(surface.trim() as AgentPromptSurfaceKind),
+      );
+    }
+    return normalized;
+  });
+}
+
+function listPluginInvocationKeys(command: OpenClawPluginCommandDefinition): string[] {
   const keys = new Set<string>();
   const push = (value: string | undefined) => {
     const normalized = normalizeOptionalLowercaseString(value);
@@ -213,26 +326,33 @@ export function listPluginInvocationKeys(command: OpenClawPluginCommandDefinitio
   return [...keys];
 }
 
-export function pluginCommandSupportsChannel(
-  command: OpenClawPluginCommandDefinition,
-  channel?: string,
-): boolean {
-  if (!command.channels || command.channels.length === 0 || !channel) {
-    return true;
-  }
-  const normalizedChannel = normalizeLowercaseStringOrEmpty(channel);
-  return command.channels.some(
-    (entry) => normalizeLowercaseStringOrEmpty(entry) === normalizedChannel,
-  );
-}
-
 export function registerPluginCommand(
   pluginId: string,
   command: OpenClawPluginCommandDefinition,
-  opts?: { pluginName?: string; pluginRoot?: string; allowReservedCommandNames?: boolean },
+  opts?: {
+    pluginName?: string;
+    pluginRoot?: string;
+    allowReservedCommandNames?: boolean;
+    allowOwnerStatusExposure?: boolean;
+  },
+): CommandRegistrationResult {
+  const context = getPluginRegistrationContext();
+  return registerPluginCommandInRegistry(
+    context?.registry ?? requireActivePluginRegistry(),
+    context?.pluginId ?? pluginId,
+    command,
+    opts,
+  );
+}
+
+export function registerPluginCommandInRegistry(
+  registry: PluginRegistry,
+  pluginId: string,
+  command: OpenClawPluginCommandDefinition,
+  opts?: Parameters<typeof registerPluginCommand>[2],
 ): CommandRegistrationResult {
   // Prevent registration while commands are being processed
-  if (isPluginCommandRegistryLocked()) {
+  if (getPluginCommandExecutionCount(registry) > 0) {
     return { ok: false, error: "Cannot register commands while processing is in progress" };
   }
   if (command.ownership === "reserved") {
@@ -258,7 +378,15 @@ export function registerPluginCommand(
       ? { channels: command.channels.map((channel) => normalizeLowercaseStringOrEmpty(channel)) }
       : {}),
     ...(command.agentPromptGuidance
-      ? { agentPromptGuidance: command.agentPromptGuidance.map((line) => line.trim()) }
+      ? { agentPromptGuidance: normalizeAgentPromptGuidance(command.agentPromptGuidance) }
+      : {}),
+    ...(command.clientPresentation
+      ? {
+          clientPresentation: {
+            when: "no-arguments" as const,
+            action: { kind: "device-pairing" as const },
+          },
+        }
       : {}),
   };
   const invocationKeys = listPluginInvocationKeys(normalizedCommand);
@@ -266,11 +394,9 @@ export function registerPluginCommand(
 
   // Check for duplicate registration
   for (const invocationKey of invocationKeys) {
-    const existing =
-      pluginCommands.get(invocationKey) ??
-      Array.from(pluginCommands.values()).find((candidate) =>
-        listPluginInvocationKeys(candidate).includes(invocationKey),
-      );
+    const existing = registry.commands.find((entry) =>
+      listPluginInvocationKeys(entry.command).includes(invocationKey),
+    );
     if (existing) {
       return {
         ok: false,
@@ -279,15 +405,18 @@ export function registerPluginCommand(
     }
   }
 
-  pluginCommands.set(key, {
-    ...normalizedCommand,
+  registry.commands.push({
     pluginId,
     pluginName: opts?.pluginName,
-    pluginRoot: opts?.pluginRoot,
+    rootDir: opts?.pluginRoot,
+    source: opts?.pluginRoot ?? "runtime",
+    command: normalizedCommand,
+    ...(opts?.allowOwnerStatusExposure === true && normalizedCommand.exposeSenderIsOwner === true
+      ? { trustedOwnerStatusExposure: true as const }
+      : {}),
   });
   logVerbose(`Registered plugin command: ${key} (plugin: ${pluginId})`);
   return { ok: true };
 }
 
-export { clearPluginCommands, clearPluginCommandsForPlugin };
-export type { RegisteredPluginCommand };
+export { clearPluginCommands };

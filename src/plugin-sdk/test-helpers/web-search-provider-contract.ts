@@ -1,4 +1,7 @@
-import { describe, expect, it } from "vitest";
+/**
+ * Contract suite for bundled web search provider registration and runtime behavior.
+ */
+import { beforeAll, describe, expect, it } from "vitest";
 import {
   pluginRegistrationContractRegistry,
   resolveWebSearchProviderContractEntriesForPluginId,
@@ -54,6 +57,12 @@ export function describeWebSearchProviderContracts(pluginId: string) {
   };
 
   describe(`${pluginId} web search provider contract registry load`, () => {
+    beforeAll(() => {
+      // Public-artifact loading is suite setup shared by every provider
+      // assertion; keep its cold module cost out of an arbitrary first test.
+      resolveProviders();
+    });
+
     it("loads bundled web search providers", () => {
       expect(resolveProviders().length).toBeGreaterThan(0);
     });
@@ -63,7 +72,9 @@ export function describeWebSearchProviderContracts(pluginId: string) {
     describe(`${pluginId}:${providerId} web search contract`, () => {
       installWebSearchProviderContractSuite({
         provider: () => {
-          const entry = resolveProviders().find((entry) => entry.provider.id === providerId);
+          const entry = resolveProviders().find(
+            (entryValue) => entryValue.provider.id === providerId,
+          );
           if (!entry) {
             throw new Error(
               `web search provider contract entry missing for ${pluginId}:${providerId}`,
@@ -72,7 +83,9 @@ export function describeWebSearchProviderContracts(pluginId: string) {
           return entry.provider;
         },
         credentialValue: () => {
-          const entry = resolveProviders().find((entry) => entry.provider.id === providerId);
+          const entry = resolveProviders().find(
+            (entryLocal) => entryLocal.provider.id === providerId,
+          );
           if (!entry) {
             throw new Error(
               `web search provider contract entry missing for ${pluginId}:${providerId}`,

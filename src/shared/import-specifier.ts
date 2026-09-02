@@ -1,3 +1,4 @@
+// Import specifier helpers convert paths to stable ESM import specifiers.
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 

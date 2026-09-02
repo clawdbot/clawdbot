@@ -1,11 +1,15 @@
 {
   "id": "deepseek",
+  "icon": "https://cdn.simpleicons.org/deepseek",
   "activation": {
     "onStartup": false
   },
   "enabledByDefault": true,
-  "providerDiscoveryEntry": "./provider-discovery.ts",
+  "providerCatalogEntry": "./provider-discovery.ts",
   "providers": ["deepseek"],
+  "contracts": {
+    "usageProviders": ["deepseek"]
+  },
   "providerEndpoints": [
     {
       "endpointClass": "deepseek-native",
@@ -24,6 +28,7 @@
       "deepseek": {
         "baseUrl": "https://api.deepseek.com",
         "api": "openai-completions",
+        "defaultModel": "deepseek-v4-pro",
         "models": [
           {
             "id": "deepseek-v4-flash",
@@ -35,13 +40,14 @@
             "cost": {
               "input": 0.14,
               "output": 0.28,
-              "cacheRead": 0.028,
+              "cacheRead": 0.0028,
               "cacheWrite": 0
             },
             "compat": {
               "supportsUsageInStreaming": true,
               "supportsReasoningEffort": true,
-              "maxTokensField": "max_tokens"
+              "maxTokensField": "max_tokens",
+              "codeMode": "preferred"
             }
           },
           {
@@ -52,68 +58,59 @@
             "contextWindow": 1000000,
             "maxTokens": 384000,
             "cost": {
-              "input": 1.74,
-              "output": 3.48,
-              "cacheRead": 0.145,
+              "input": 0.435,
+              "output": 0.87,
+              "cacheRead": 0.003625,
               "cacheWrite": 0
             },
             "compat": {
               "supportsUsageInStreaming": true,
               "supportsReasoningEffort": true,
-              "maxTokensField": "max_tokens"
+              "maxTokensField": "max_tokens",
+              "codeMode": "preferred"
             }
           },
           {
-            "id": "deepseek-chat",
-            "name": "DeepSeek Chat",
-            "input": ["text"],
-            "contextWindow": 131072,
-            "maxTokens": 8192,
-            "cost": {
-              "input": 0.28,
-              "output": 0.42,
-              "cacheRead": 0.028,
-              "cacheWrite": 0
-            },
-            "compat": {
-              "supportsUsageInStreaming": true,
-              "maxTokensField": "max_tokens"
-            }
-          },
-          {
-            "id": "deepseek-reasoner",
-            "name": "DeepSeek Reasoner",
+            "id": "deepseek-v4-flash-vision-exp",
+            "name": "DeepSeek V4 Flash Vision (Experimental)",
             "reasoning": true,
-            "input": ["text"],
-            "contextWindow": 131072,
-            "maxTokens": 65536,
+            "input": ["text", "image"],
+            "contextWindow": 1000000,
+            "maxTokens": 384000,
             "cost": {
-              "input": 0.28,
-              "output": 0.42,
-              "cacheRead": 0.028,
+              "input": 0.44,
+              "output": 1.32,
+              "cacheRead": 0.014,
               "cacheWrite": 0
             },
             "compat": {
               "supportsUsageInStreaming": true,
-              "supportsReasoningEffort": false,
-              "maxTokensField": "max_tokens"
+              "supportsReasoningEffort": true,
+              "maxTokensField": "max_tokens",
+              "codeMode": "preferred"
             }
           }
         ]
       }
     },
     "discovery": {
-      "deepseek": "static"
+      "deepseek": "refreshable"
     }
   },
-  "providerAuthEnvVars": {
-    "deepseek": ["DEEPSEEK_API_KEY"]
+  "setup": {
+    "providers": [
+      {
+        "id": "deepseek",
+        "envVars": ["DEEPSEEK_API_KEY"]
+      }
+    ]
   },
   "providerAuthChoices": [
     {
       "provider": "deepseek",
       "method": "api-key",
       "choiceId": "deepseek-api-key",
+      "appGuidedSecret": true,
       "choiceLabel": "DeepSeek API key",
       "groupId": "deepseek",
       "groupLabel": "DeepSeek",

@@ -1,3 +1,4 @@
+// Discord plugin module implements api.users behavior.
 import { Routes, type APIChannel, type APIUser } from "discord-api-types/v10";
 import type { RequestClient } from "./rest.js";
 

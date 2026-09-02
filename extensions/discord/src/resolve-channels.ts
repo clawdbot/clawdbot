@@ -1,4 +1,6 @@
-import { DiscordApiError, fetchDiscord } from "./api.js";
+// Discord plugin module implements resolve channels behavior.
+import { DISCORD_DIRECTORY_LOOKUP_TIMEOUT_MS, DiscordApiError, fetchDiscord } from "./api.js";
+import { isDiscordThreadChannelType } from "./channel-type.js";
 import { listGuilds } from "./guilds.js";
 import { normalizeDiscordSlug } from "./monitor/allow-list.js";
 import {
@@ -84,6 +86,7 @@ async function listGuildChannels(
     `/guilds/${guildId}/channels`,
     token,
     fetcher,
+    { timeoutMs: DISCORD_DIRECTORY_LOOKUP_TIMEOUT_MS },
   );
   return raw
     .map((channel) => {
@@ -112,7 +115,9 @@ async function fetchChannel(
 ): Promise<FetchChannelResult> {
   let raw: DiscordChannelPayload;
   try {
-    raw = await fetchDiscord<DiscordChannelPayload>(`/channels/${channelId}`, token, fetcher);
+    raw = await fetchDiscord<DiscordChannelPayload>(`/channels/${channelId}`, token, fetcher, {
+      timeoutMs: DISCORD_DIRECTORY_LOOKUP_TIMEOUT_MS,
+    });
   } catch (err) {
     if (err instanceof DiscordApiError && err.status === 403) {
       return { status: "forbidden" };
@@ -141,7 +146,7 @@ function preferActiveMatch(candidates: DiscordChannelSummary[]): DiscordChannelS
     return undefined;
   }
   const scored = candidates.map((channel) => {
-    const isThread = channel.type === 11 || channel.type === 12;
+    const isThread = isDiscordThreadChannelType(channel.type);
     const archived = Boolean(channel.archived);
     const score = (archived ? 0 : 2) + (isThread ? 0 : 1);
     return { channel, score };
@@ -163,7 +168,9 @@ export async function resolveDiscordChannelAllowlist(params: {
     }));
   }
   const fetcher = params.fetcher ?? fetch;
-  const guilds = await listGuilds(token, fetcher);
+  const guilds = await listGuilds(token, fetcher, {
+    timeoutMs: DISCORD_DIRECTORY_LOOKUP_TIMEOUT_MS,
+  });
   const channelsByGuild = new Map<string, Promise<DiscordChannelSummary[]>>();
   const getChannels = (guildId: string) => {
     const existing = channelsByGuild.get(guildId);
@@ -326,7 +333,7 @@ export async function resolveDiscordChannelAllowlist(params: {
       results.push({
         input,
         resolved: false,
-        channelName: channelName,
+        channelName,
       });
       continue;
     }
@@ -361,7 +368,7 @@ export async function resolveDiscordChannelAllowlist(params: {
     results.push({
       input,
       resolved: false,
-      channelName: channelName,
+      channelName,
     });
   }
 

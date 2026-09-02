@@ -1,3 +1,5 @@
+// Attachment selection guard tests cover malformed attachment containers and
+// invalid entry shapes.
 import { describe, expect, it } from "vitest";
 import { selectAttachments } from "./attachments.js";
 import type { MediaAttachment } from "./types.js";
@@ -10,7 +12,7 @@ describe("media-understanding selectAttachments guards", () => {
         attachments: undefined as unknown as MediaAttachment[],
         policy: { prefer: "path" },
       }),
-    ).toEqual([]);
+    ).toStrictEqual({ selected: [], droppedAttachmentIndexes: [] });
   });
 
   it("returns no selections when attachments is not an array", () => {
@@ -20,7 +22,7 @@ describe("media-understanding selectAttachments guards", () => {
         attachments: { malformed: true } as unknown as MediaAttachment[],
         policy: { prefer: "url" },
       }),
-    ).toEqual([]);
+    ).toStrictEqual({ selected: [], droppedAttachmentIndexes: [] });
   });
 
   it("returns no selections for malformed attachment entries", () => {
@@ -35,6 +37,23 @@ describe("media-understanding selectAttachments guards", () => {
         ] as unknown as MediaAttachment[],
         policy: { prefer: "path" },
       }),
-    ).toEqual([]);
+    ).toStrictEqual({ selected: [], droppedAttachmentIndexes: [] });
+  });
+
+  it("reports only same-capability attachments dropped by truncation", () => {
+    expect(
+      selectAttachments({
+        capability: "image",
+        attachments: [
+          { index: 0, path: "/tmp/first.jpg", mime: "image/jpeg" },
+          { index: 1, path: "/tmp/note.ogg", mime: "audio/ogg" },
+          { index: 2, path: "/tmp/second.jpg", mime: "image/jpeg" },
+          { index: 3, path: "/tmp/third.jpg", mime: "image/jpeg" },
+        ],
+      }),
+    ).toStrictEqual({
+      selected: [{ index: 0, path: "/tmp/first.jpg", mime: "image/jpeg" }],
+      droppedAttachmentIndexes: [2, 3],
+    });
   });
 });

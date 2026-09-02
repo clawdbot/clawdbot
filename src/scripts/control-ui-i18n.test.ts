@@ -1,5 +1,10 @@
+// Control UI i18n script tests cover locale extraction and validation.
 import { describe, expect, it } from "vitest";
-import { findPlaceholderMismatches } from "../../scripts/control-ui-i18n.ts";
+import {
+  findPlaceholderMismatches,
+  isProviderAuthError,
+  resolveTranslationModel,
+} from "../../scripts/control-ui-i18n.ts";
 
 describe("control-ui-i18n placeholder validation", () => {
   it("reports missing and extra placeholders by key", () => {
@@ -31,5 +36,28 @@ describe("control-ui-i18n placeholder validation", () => {
         translatedPlaceholders: ["extra"],
       },
     ]);
+  });
+});
+
+describe("control-ui-i18n translation runtime resolution", () => {
+  it("uses the in-tree OpenClaw LLM model catalog", () => {
+    expect(resolveTranslationModel()).toMatchObject({
+      id: "gpt-5.6-sol",
+      provider: "openai",
+    });
+  });
+});
+
+describe("control-ui-i18n provider auth errors", () => {
+  it("recognizes OpenAI and Anthropic authentication failures", () => {
+    expect(isProviderAuthError(new Error("401 Incorrect API key provided"))).toBe(true);
+    expect(
+      isProviderAuthError(
+        new Error(
+          '401 {"type":"error","error":{"type":"authentication_error","message":"invalid x-api-key"}}',
+        ),
+      ),
+    ).toBe(true);
+    expect(isProviderAuthError(new Error("model timed out"))).toBe(false);
   });
 });

@@ -1,33 +1,39 @@
-import { z } from "zod";
+// Migrates plugin install config entries into canonical config shape.
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import {
+  inspectPluginInstallRecordMap,
+  type PluginInstallRecordMapState,
+} from "./plugin-install-record-map.js";
 import type { PluginInstallRecord } from "./types.plugins.js";
-import { PluginInstallRecordShape } from "./zod-schema.installs.js";
-
-const PluginInstallRecordsSchema = z.record(
-  z.string(),
-  z.object(PluginInstallRecordShape).passthrough(),
-);
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 
 function pruneEmptyPluginsObject(plugins: Record<string, unknown>): unknown {
   const { installs: _installs, ...rest } = plugins;
   return Object.keys(rest).length === 0 ? undefined : rest;
 }
 
+/**
+ * Reads legacy shipped `plugins.installs` records for migration into the plugin index.
+ *
+ * Invalid install maps are ignored so config loading can keep using the stripped
+ * runtime config while doctor/write paths decide how to report or recover.
+ */
 export function extractShippedPluginInstallConfigRecords(
   config: unknown,
 ): Record<string, PluginInstallRecord> {
-  if (!isRecord(config) || !isRecord(config.plugins)) {
-    return {};
-  }
-  const parsed = PluginInstallRecordsSchema.safeParse(config.plugins.installs);
-  return parsed.success
-    ? (structuredClone(parsed.data) as Record<string, PluginInstallRecord>)
-    : {};
+  const state = inspectShippedPluginInstallConfigRecords(config);
+  return state.status === "valid" ? state.records : {};
 }
 
+export function inspectShippedPluginInstallConfigRecords(
+  config: unknown,
+): PluginInstallRecordMapState {
+  if (!isRecord(config) || !isRecord(config.plugins)) {
+    return { status: "missing" };
+  }
+  return inspectPluginInstallRecordMap(config.plugins.installs);
+}
+
+/** Removes legacy shipped `plugins.installs` without mutating the original config object. */
 export function stripShippedPluginInstallConfigRecords(config: unknown): unknown {
   if (!isRecord(config) || !isRecord(config.plugins) || !("installs" in config.plugins)) {
     return config;

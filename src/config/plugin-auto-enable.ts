@@ -1,3 +1,4 @@
+// Public facade for plugin auto-enable detection, application, and reason types.
 export {
   applyPluginAutoEnable,
   materializePluginAutoEnableCandidates,

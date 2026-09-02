@@ -1,4 +1,9 @@
-import { normalizeOptionalString } from "../shared/string-coerce.js";
+/** Validates user-supplied one-shot cron timestamps before scheduling. */
+import {
+  asDateTimestampMs,
+  resolveTimestampMsToIsoString,
+} from "@openclaw/normalization-core/number-coercion";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { parseAbsoluteTimeMs } from "./parse.js";
 import type { CronSchedule } from "./types.js";
 
@@ -17,10 +22,7 @@ type TimestampValidationSuccess = {
 type TimestampValidationResult = TimestampValidationSuccess | TimestampValidationError;
 
 /**
- * Validates at timestamps in cron schedules.
- * Rejects timestamps that are:
- * - More than 1 minute in the past
- * - More than 10 years in the future
+ * Validates one-shot cron timestamps with a small past grace window and far-future cap.
  */
 export function validateScheduleTimestamp(
   schedule: CronSchedule,
@@ -40,12 +42,14 @@ export function validateScheduleTimestamp(
     };
   }
 
-  const diffMs = atMs - nowMs;
+  const referenceNowMs = asDateTimestampMs(nowMs) ?? asDateTimestampMs(Date.now()) ?? 0;
+  const diffMs = atMs - referenceNowMs;
 
-  // Check if timestamp is in the past (allow 1 minute grace period)
+  // Allow a one-minute grace window so creation and validation races do not
+  // reject freshly submitted one-shot jobs.
   if (diffMs < -ONE_MINUTE_MS) {
-    const nowDate = new Date(nowMs).toISOString();
-    const atDate = new Date(atMs).toISOString();
+    const nowDate = resolveTimestampMsToIsoString(referenceNowMs);
+    const atDate = resolveTimestampMsToIsoString(atMs);
     const minutesAgo = Math.floor(-diffMs / ONE_MINUTE_MS);
     return {
       ok: false,
@@ -53,9 +57,9 @@ export function validateScheduleTimestamp(
     };
   }
 
-  // Check if timestamp is too far in the future
+  // Bound far-future one-shot jobs so mistyped years do not persist forever.
   if (diffMs > TEN_YEARS_MS) {
-    const atDate = new Date(atMs).toISOString();
+    const atDate = resolveTimestampMsToIsoString(atMs);
     const yearsAhead = Math.floor(diffMs / (365.25 * 24 * 60 * 60 * 1000));
     return {
       ok: false,

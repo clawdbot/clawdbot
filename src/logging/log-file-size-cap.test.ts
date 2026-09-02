@@ -1,3 +1,4 @@
+// Log file size cap tests cover truncation and rotation guards for log files.
 import fs from "node:fs";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -8,6 +9,7 @@ import {
   setLoggerOverride,
 } from "../logging.js";
 import { createSuiteLogPathTracker } from "./log-test-helpers.js";
+import { testApi } from "./logger.test-support.js";
 
 const DEFAULT_MAX_FILE_BYTES = 100 * 1024 * 1024;
 const logPathTracker = createSuiteLogPathTracker("openclaw-log-cap-");
@@ -57,7 +59,7 @@ describe("log file size cap", () => {
     expect(getResolvedLoggerSettings().maxFileBytes).toBe(2048);
   });
 
-  it("rotates file writes after cap is reached and keeps logging", () => {
+  it("rotates file writes after cap is reached and keeps logging", async () => {
     const stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation(
       () => true as unknown as ReturnType<typeof process.stderr.write>, // preserve stream contract in test spy
     );
@@ -66,6 +68,7 @@ describe("log file size cap", () => {
 
     logger.error(`network-failure-${"x".repeat(400)}`);
     logger.error("post-rotation-diagnostic");
+    await testApi.flushFileLogQueueForTests();
 
     const currentContent = fs.readFileSync(logPath, "utf8");
     const archiveContent = fs.readFileSync(rotatedLogPath(logPath, 1), "utf8");
@@ -78,21 +81,62 @@ describe("log file size cap", () => {
     expect(rotationWarnings).toHaveLength(0);
   });
 
-  it("keeps cached default rolling loggers on the current-day file", () => {
-    const logDir = path.dirname(logPath);
-    const firstDay = path.join(logDir, "openclaw-2026-01-01.log");
-    const secondDay = path.join(logDir, "openclaw-2026-01-02.log");
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-01-01T08:00:00Z"));
-    setLoggerOverride({ level: "info", file: firstDay });
-    const logger = getLogger();
+  it("structures rotation failure diagnostics for JSON console output", async () => {
+    fs.writeFileSync(logPath, "seed");
+    vi.spyOn(fs, "renameSync").mockImplementation(() => {
+      throw new Error("rotation denied");
+    });
+    const stderrSpy = vi
+      .spyOn(process.stderr, "write")
+      .mockImplementation(() => true as unknown as ReturnType<typeof process.stderr.write>);
+    setLoggerOverride({
+      level: "info",
+      file: logPath,
+      maxFileBytes: 1,
+      consoleLevel: "info",
+      consoleStyle: "json",
+    });
 
-    logger.info({ message: "first day" });
-    vi.setSystemTime(new Date("2026-01-02T08:00:00Z"));
-    logger.info({ message: "second day" });
+    getLogger().error("rotation diagnostic");
+    await testApi.flushFileLogQueueForTests();
 
-    expect(fs.readFileSync(firstDay, "utf8")).toContain("first day");
-    expect(fs.readFileSync(secondDay, "utf8")).toContain("second day");
-    expect(fs.readFileSync(firstDay, "utf8")).not.toContain("second day");
+    const warning = stderrSpy.mock.calls
+      .map(([firstArg]) => String(firstArg))
+      .find((line) => line.includes("log file rotation failed"));
+    expect(JSON.parse(warning ?? "")).toMatchObject({
+      level: "warn",
+      message: expect.stringContaining("log file rotation failed"),
+    });
   });
+
+  it.each([
+    { name: "default rolling", prefix: "openclaw", rolls: true },
+    { name: "explicit profile-shaped", prefix: "openclaw-dev", rolls: false },
+  ])(
+    "keeps cached $name loggers on the expected files across date changes",
+    async ({ prefix, rolls }) => {
+      const logDir = path.dirname(logPath);
+      const firstDay = path.join(logDir, `${prefix}-2026-01-01.log`);
+      const secondDay = path.join(logDir, `${prefix}-2026-01-02.log`);
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date("2026-01-01T08:00:00Z"));
+      setLoggerOverride({ level: "info", file: firstDay });
+      const logger = getLogger();
+
+      logger.info({ message: "first day" });
+      vi.setSystemTime(new Date("2026-01-02T08:00:00Z"));
+      logger.info({ message: "second day" });
+      await testApi.flushFileLogQueueForTests();
+
+      const firstContent = fs.readFileSync(firstDay, "utf8");
+      expect(firstContent).toContain("first day");
+      if (rolls) {
+        expect(fs.readFileSync(secondDay, "utf8")).toContain("second day");
+        expect(firstContent).not.toContain("second day");
+      } else {
+        expect(firstContent).toContain("second day");
+        expect(fs.existsSync(secondDay)).toBe(false);
+      }
+    },
+  );
 });

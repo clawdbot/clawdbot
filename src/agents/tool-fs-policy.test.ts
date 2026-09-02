@@ -1,3 +1,5 @@
+// Tool filesystem policy tests cover how global and agent-specific tool
+// profiles decide workspace-only access and root expansion.
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import {
@@ -65,6 +67,8 @@ describe("resolveEffectiveToolFsRootExpansionAllowed", () => {
   });
 
   it("does not re-enable root expansion from tools.fs alone under messaging profile (#47487)", () => {
+    // A messaging profile needs an explicit read opt-in; merely configuring
+    // tools.fs should not widen filesystem reach.
     const cfg: OpenClawConfig = {
       tools: {
         profile: "messaging",

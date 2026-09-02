@@ -1,3 +1,7 @@
+/**
+ * Browser config API barrel. It re-exports default profile, upload, auth, and
+ * CDP config helpers for setup/runtime consumers.
+ */
 export {
   DEFAULT_AI_SNAPSHOT_MAX_CHARS,
   DEFAULT_BROWSER_DEFAULT_PROFILE_NAME,

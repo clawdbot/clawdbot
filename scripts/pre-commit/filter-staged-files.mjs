@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+// Filters staged file paths for pre-commit lint/format hooks.
 import path from "node:path";
 
 /**
@@ -20,8 +21,19 @@ if (mode !== "lint" && mode !== "format") {
   process.exit(2);
 }
 
-const lintExts = new Set([".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs"]);
-const formatExts = new Set([".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".md", ".mdx"]);
+const lintExts = new Set([".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs"]);
+const formatExts = new Set([
+  ".ts",
+  ".tsx",
+  ".mts",
+  ".cts",
+  ".js",
+  ".jsx",
+  ".mjs",
+  ".cjs",
+  ".md",
+  ".mdx",
+]);
 const formatIgnoredPathPatterns = [/^extensions\/[^/]+\/src\/host\/.+\/[^/]+\.bundle\.js$/u];
 
 const shouldSelect = (filePath) => {

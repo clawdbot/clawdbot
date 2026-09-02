@@ -1,26 +1,15 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
-import type { OpenClawPluginToolContext } from "openclaw/plugin-sdk/plugin-entry";
+// Tavily plugin module implements tavily search tool behavior.
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-runtime";
 import {
   jsonResult,
-  readNumberParam,
+  readPositiveIntegerParam,
+  readStringArrayParam,
   readStringParam,
 } from "openclaw/plugin-sdk/provider-web-search";
 import { Type } from "typebox";
 import { runTavilySearch } from "./tavily-client.js";
+import { resolveTavilyToolConfig, type TavilyToolConfigContext } from "./tavily-tool-config.js";
 import { optionalStringEnum } from "./tavily-tool-schema.js";
-
-type TavilyToolConfigContext = Pick<
-  OpenClawPluginToolContext,
-  "config" | "runtimeConfig" | "getRuntimeConfig"
->;
-
-function resolveTavilyToolConfig(
-  api: OpenClawPluginApi,
-  ctx?: TavilyToolConfigContext,
-): OpenClawConfig {
-  return ctx?.getRuntimeConfig?.() ?? ctx?.runtimeConfig ?? ctx?.config ?? api.config;
-}
 
 const TavilySearchToolSchema = Type.Object(
   {
@@ -32,7 +21,7 @@ const TavilySearchToolSchema = Type.Object(
       description: 'Search topic: "general" (default), "news", or "finance".',
     }),
     max_results: Type.Optional(
-      Type.Number({
+      Type.Integer({
         description: "Number of results to return (1-20).",
         minimum: 1,
         maximum: 20,
@@ -64,22 +53,27 @@ export function createTavilySearchTool(api: OpenClawPluginApi, ctx?: TavilyToolC
   return {
     name: "tavily_search",
     label: "Tavily Search",
+    resultContentSource: "network" as const,
     description:
       "Search the web using Tavily Search API. Supports search depth, topic filtering, domain filters, time ranges, and AI answer summaries.",
     parameters: TavilySearchToolSchema,
-    execute: async (_toolCallId: string, rawParams: Record<string, unknown>) => {
+    execute: async (
+      _toolCallId: string,
+      rawParams: Record<string, unknown>,
+      signal?: AbortSignal,
+    ) => {
+      signal?.throwIfAborted();
       const query = readStringParam(rawParams, "query", { required: true });
       const searchDepth = readStringParam(rawParams, "search_depth") || undefined;
       const topic = readStringParam(rawParams, "topic") || undefined;
-      const maxResults = readNumberParam(rawParams, "max_results", { integer: true });
+      const maxResults = readPositiveIntegerParam(rawParams, "max_results", {
+        max: 20,
+        message: "max_results must be an integer from 1 to 20.",
+      });
       const includeAnswer = rawParams.include_answer === true;
       const timeRange = readStringParam(rawParams, "time_range") || undefined;
-      const includeDomains = Array.isArray(rawParams.include_domains)
-        ? (rawParams.include_domains as string[]).filter(Boolean)
-        : undefined;
-      const excludeDomains = Array.isArray(rawParams.exclude_domains)
-        ? (rawParams.exclude_domains as string[]).filter(Boolean)
-        : undefined;
+      const includeDomains = readStringArrayParam(rawParams, "include_domains");
+      const excludeDomains = readStringArrayParam(rawParams, "exclude_domains");
 
       return jsonResult(
         await runTavilySearch({
@@ -90,8 +84,9 @@ export function createTavilySearchTool(api: OpenClawPluginApi, ctx?: TavilyToolC
           maxResults,
           includeAnswer,
           timeRange,
-          includeDomains: includeDomains?.length ? includeDomains : undefined,
-          excludeDomains: excludeDomains?.length ? excludeDomains : undefined,
+          includeDomains,
+          excludeDomains,
+          ...(signal ? { signal } : {}),
         }),
       );
     },

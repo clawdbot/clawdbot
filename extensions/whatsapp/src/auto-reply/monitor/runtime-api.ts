@@ -1,12 +1,12 @@
+// Whatsapp API module exposes the plugin public contract.
 export { resolveIdentityNamePrefix } from "openclaw/plugin-sdk/agent-runtime";
-export { formatInboundEnvelope } from "openclaw/plugin-sdk/channel-envelope";
+export { formatInboundEnvelope } from "openclaw/plugin-sdk/channel-inbound";
 export { resolveInboundSessionEnvelopeContext } from "openclaw/plugin-sdk/channel-inbound";
-export { toLocationContext } from "openclaw/plugin-sdk/channel-location";
+export { createChannelMessageReplyPipeline } from "openclaw/plugin-sdk/channel-outbound";
 export {
-  createChannelMessageReplyPipeline,
-  resolveChannelMessageSourceReplyDeliveryMode,
-} from "openclaw/plugin-sdk/channel-message";
-export { shouldComputeCommandAuthorized } from "openclaw/plugin-sdk/command-detection";
+  isControlCommandMessage,
+  shouldComputeCommandAuthorized,
+} from "openclaw/plugin-sdk/command-detection";
 export { resolveChannelContextVisibilityMode } from "../config.runtime.js";
 export { getAgentScopedMediaLocalRoots } from "openclaw/plugin-sdk/media-runtime";
 export type LoadConfigFn = typeof import("../config.runtime.js").getRuntimeConfig;
@@ -16,8 +16,6 @@ export {
 } from "openclaw/plugin-sdk/reply-history";
 export { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 export {
-  dispatchReplyWithBufferedBlockDispatcher,
-  finalizeInboundContext,
   resolveChunkMode,
   resolveTextChunkLimit,
   type getReplyFromConfig,

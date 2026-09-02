@@ -1,8 +1,16 @@
+// QA watchdog for shutting down orphaned gateway children and cleaning staged temp roots.
+import fs from "node:fs/promises";
+import path from "node:path";
+import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import { isPathInside } from "../../infra/path-guards.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 
-export const QA_PARENT_PID_ENV = "OPENCLAW_QA_PARENT_PID";
+const QA_PARENT_PID_ENV = "OPENCLAW_QA_PARENT_PID";
+const QA_TEMP_ROOT_ENV = "OPENCLAW_QA_TEMP_ROOT";
+const QA_STAGED_RUNTIME_ROOT_ENV = "OPENCLAW_QA_STAGED_RUNTIME_ROOT";
 
 const DEFAULT_QA_PARENT_WATCHDOG_INTERVAL_MS = 1000;
+const QA_TEMP_ROOT_PREFIX = "openclaw-qa-suite-";
 
 type QaParentWatchdogTimer =
   | number
@@ -11,17 +19,20 @@ type QaParentWatchdogTimer =
     };
 
 type QaParentWatchdogDeps = {
+  chdir?: (directory: string) => void;
   clearInterval?: (timer: QaParentWatchdogTimer) => void;
+  cwd?: () => string;
   env?: NodeJS.ProcessEnv;
   exit?: (code?: number) => never | void;
   intervalMs?: number;
   kill?: (pid: number, signal?: NodeJS.Signals | 0) => boolean;
   logger?: Pick<ReturnType<typeof createSubsystemLogger>, "warn">;
   ownPid?: number;
+  rm?: (target: string) => Promise<void>;
   setInterval?: (callback: () => void, ms: number) => QaParentWatchdogTimer;
 };
 
-export type QaParentWatchdogHandle = {
+type QaParentWatchdogHandle = {
   parentPid: number;
   stop: () => void;
 };
@@ -31,11 +42,33 @@ function resolveQaParentPid(env: NodeJS.ProcessEnv, ownPid: number): number | nu
   if (!raw) {
     return null;
   }
-  const parentPid = Number(raw);
+  const parentPid = /^\d+$/.test(raw) ? Number(raw) : Number.NaN;
   if (!Number.isSafeInteger(parentPid) || parentPid <= 0 || parentPid === ownPid) {
     return null;
   }
   return parentPid;
+}
+
+function resolveQaCleanupRoot(rawValue: string | undefined): string | null {
+  // Only cleanup roots with the QA prefix; env values are external to the child process.
+  const raw = rawValue?.trim();
+  if (!raw) {
+    return null;
+  }
+  const cleanupRoot = path.resolve(raw);
+  if (!path.basename(cleanupRoot).startsWith(QA_TEMP_ROOT_PREFIX)) {
+    return null;
+  }
+  return cleanupRoot;
+}
+
+function resolveQaCleanupRoots(env: NodeJS.ProcessEnv): string[] {
+  return uniqueStrings(
+    [
+      resolveQaCleanupRoot(env[QA_TEMP_ROOT_ENV]),
+      resolveQaCleanupRoot(env[QA_STAGED_RUNTIME_ROOT_ENV]),
+    ].filter((target): target is string => target !== null),
+  );
 }
 
 export function installQaParentWatchdog(
@@ -57,11 +90,19 @@ export function installQaParentWatchdog(
   const kill =
     deps.kill ?? ((pid: number, signal?: NodeJS.Signals | 0) => process.kill(pid, signal));
   const logger = deps.logger ?? createSubsystemLogger("gateway");
+  const qaCleanupRoots = resolveQaCleanupRoots(env);
+  const chdir = deps.chdir ?? ((directory: string) => process.chdir(directory));
+  const cwd = deps.cwd ?? (() => process.cwd());
+  const rm =
+    deps.rm ??
+    (async (target: string) => {
+      await fs.rm(target, { recursive: true, force: true });
+    });
   const setIntervalFn =
     deps.setInterval ??
     ((callback: () => void, ms: number) => setInterval(callback, ms) as QaParentWatchdogTimer);
   let stopped = false;
-  let timer: QaParentWatchdogTimer;
+  let exiting = false;
 
   const stop = () => {
     if (stopped) {
@@ -71,8 +112,8 @@ export function installQaParentWatchdog(
     clearIntervalFn(timer);
   };
 
-  timer = setIntervalFn(() => {
-    if (stopped) {
+  const timer: QaParentWatchdogTimer = setIntervalFn(() => {
+    if (stopped || exiting) {
       return;
     }
     try {
@@ -80,8 +121,36 @@ export function installQaParentWatchdog(
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === "ESRCH") {
         logger.warn(`QA gateway parent pid ${parentPid} exited; shutting down orphaned QA gateway`);
+        exiting = true;
         stop();
-        exit(0);
+        void (async () => {
+          const currentCwd = path.resolve(cwd());
+          const activeCwdRoot = qaCleanupRoots.find((cleanupRoot) =>
+            isPathInside(cleanupRoot, currentCwd),
+          );
+          if (activeCwdRoot) {
+            const safeCwd = path.dirname(activeCwdRoot);
+            try {
+              chdir(safeCwd);
+            } catch (chdirError) {
+              logger.warn(
+                `QA gateway parent pid ${parentPid} exited; failed to leave runtime root ${activeCwdRoot}: ${
+                  chdirError instanceof Error ? chdirError.message : String(chdirError)
+                }`,
+              );
+            }
+          }
+          for (const cleanupRoot of qaCleanupRoots) {
+            await rm(cleanupRoot).catch((cleanupError: unknown) => {
+              logger.warn(
+                `QA gateway parent pid ${parentPid} exited; failed to clean runtime root ${cleanupRoot}: ${
+                  cleanupError instanceof Error ? cleanupError.message : String(cleanupError)
+                }`,
+              );
+            });
+          }
+          exit(0);
+        })();
       }
     }
   }, deps.intervalMs ?? DEFAULT_QA_PARENT_WATCHDOG_INTERVAL_MS);

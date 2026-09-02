@@ -1,3 +1,4 @@
+// Telegram tests cover format.wrap md plugin behavior.
 import { describe, expect, it } from "vitest";
 import {
   markdownToTelegramChunks,
@@ -9,27 +10,22 @@ import {
 type TelegramChunk = ReturnType<typeof markdownToTelegramChunks>[number];
 
 function expectHtmlChunkLengthsAtMost(chunks: TelegramChunk[], limit: number) {
-  expect(
-    chunks
-      .map((chunk, index) => ({ index, htmlLength: chunk.html.length, text: chunk.text }))
-      .filter((chunk) => chunk.htmlLength > limit),
-  ).toEqual([]);
+  for (const chunk of chunks) {
+    expect(chunk.html.length).toBeLessThanOrEqual(limit);
+  }
 }
 
 function expectNonBlankTextChunks(chunks: TelegramChunk[]) {
-  expect(
-    chunks
-      .map((chunk, index) => ({ index, text: chunk.text }))
-      .filter((chunk) => chunk.text.trim().length === 0),
-  ).toEqual([]);
+  for (const chunk of chunks) {
+    expect(chunk.text.trim().length).toBeGreaterThan(0);
+  }
 }
 
 function expectHtmlChunksWrappedWith(chunks: TelegramChunk[], prefix: string, suffix: string) {
-  expect(
-    chunks
-      .map((chunk, index) => ({ index, html: chunk.html }))
-      .filter((chunk) => !chunk.html.startsWith(prefix) || !chunk.html.endsWith(suffix)),
-  ).toEqual([]);
+  for (const chunk of chunks) {
+    expect(chunk.html.startsWith(prefix)).toBe(true);
+    expect(chunk.html.endsWith(suffix)).toBe(true);
+  }
 }
 
 describe("wrapFileReferencesInHtml", () => {
@@ -89,24 +85,10 @@ describe("wrapFileReferencesInHtml", () => {
     }
   });
 
-  it("de-linkifies auto-linkified anchors for plain files and paths", () => {
+  it("preserves explicit links, including file-style labels", () => {
     const cases = [
-      {
-        input: '<a href="http://README.md">README.md</a>',
-        expected: "<code>README.md</code>",
-      },
-      {
-        input: '<a href="http://squad/friday/HEARTBEAT.md">squad/friday/HEARTBEAT.md</a>',
-        expected: "<code>squad/friday/HEARTBEAT.md</code>",
-      },
-    ] as const;
-    for (const testCase of cases) {
-      expect(wrapFileReferencesInHtml(testCase.input)).toBe(testCase.expected);
-    }
-  });
-
-  it("preserves explicit links where label differs from href", () => {
-    const cases = [
+      '<a href="http://README.md">README.md</a>',
+      '<a href="http://squad/friday/HEARTBEAT.md">squad/friday/HEARTBEAT.md</a>',
       '<a href="http://README.md">click here</a>',
       '<a href="http://other.md">README.md</a>',
     ] as const;
@@ -166,8 +148,18 @@ describe("markdownToTelegramHtml - file reference wrapping", () => {
   });
 
   it("preserves explicit markdown links even when href looks like a file ref", () => {
-    const result = markdownToTelegramHtml("[docs](http://README.md)");
-    expect(result).toContain('<a href="http://README.md">docs</a>');
+    expect(markdownToTelegramHtml("[docs](http://README.md)")).toContain(
+      '<a href="http://README.md">docs</a>',
+    );
+    expect(markdownToTelegramHtml("[README.md](https://README.md)")).toContain(
+      '<a href="https://README.md">README.md</a>',
+    );
+  });
+
+  it("keeps plain and authored file-style links distinct in the same message", () => {
+    expect(markdownToTelegramHtml("README.md [README.md](https://README.md)")).toBe(
+      '<code>README.md</code> <a href="https://README.md">README.md</a>',
+    );
   });
 
   it("wraps file ref after real URL in same message", () => {
@@ -180,9 +172,21 @@ describe("markdownToTelegramHtml - file reference wrapping", () => {
 describe("markdownToTelegramChunks - file reference wrapping", () => {
   it("wraps file references in chunked output", () => {
     const chunks = markdownToTelegramChunks("Check README.md and backup.sh", 4096);
-    expect(chunks.length).toBeGreaterThan(0);
-    expect(chunks[0].html).toContain("<code>README.md</code>");
-    expect(chunks[0].html).toContain("<code>backup.sh</code>");
+    expect(chunks).toStrictEqual([
+      {
+        html: "Check <code>README.md</code> and <code>backup.sh</code>",
+        text: "Check README.md and backup.sh",
+      },
+    ]);
+  });
+
+  it("preserves authored file-style links in chunked output", () => {
+    expect(markdownToTelegramChunks("README.md [README.md](https://README.md)", 4096)).toEqual([
+      {
+        html: '<code>README.md</code> <a href="https://README.md">README.md</a>',
+        text: "README.md README.md",
+      },
+    ]);
   });
 
   it("keeps rendered html chunks within the provided limit", () => {
@@ -236,7 +240,6 @@ describe("markdownToTelegramChunks - file reference wrapping", () => {
 
   it("gracefully returns the original chunk when tag overhead exceeds the limit", () => {
     const input = "**ab**";
-    expect(() => markdownToTelegramChunks(input, 6)).not.toThrow();
     const chunks = markdownToTelegramChunks(input, 6);
     expect(chunks).toHaveLength(1);
     expect(chunks[0]?.text).toBe("ab");
@@ -246,7 +249,8 @@ describe("markdownToTelegramChunks - file reference wrapping", () => {
   it("falls back to in-paren word boundaries when the parenthesis is unbalanced", () => {
     const input = "**foo (bar baz qux quux**";
     const chunks = markdownToTelegramChunks(input, 20);
-    expect(chunks.map((chunk) => chunk.text)).toEqual(["foo", "(bar baz qux ", "quux"]);
+    expect(chunks.map((chunk) => chunk.text)).toEqual(["foo ", "(bar baz qux ", "quux"]);
+    expect(chunks.map((chunk) => chunk.text).join("")).toBe("foo (bar baz qux quux");
     expectHtmlChunkLengthsAtMost(chunks, 20);
   });
 

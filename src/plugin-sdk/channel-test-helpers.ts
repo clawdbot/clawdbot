@@ -1,8 +1,11 @@
+// Channel test helper exports provide shared fixtures for plugin channel contract tests.
+export { validateTestChannelConfig } from "./test-helpers/channel-config.js";
 export { createDirectoryTestRuntime, expectDirectorySurface } from "./test-helpers/directory.js";
 export { expectDirectoryIds, type DirectoryListFn } from "./test-helpers/directory-ids.js";
 export {
   expectChannelPluginContract,
   installChannelActionsContractSuite,
+  installChannelDmPolicyContractSuite,
   installChannelPluginContractSuite,
   installChannelSetupContractSuite,
   installChannelStatusContractSuite,
@@ -12,14 +15,19 @@ export {
   createEmptyPluginRegistry,
   createOutboundTestPlugin,
   createTestRegistry,
-  deliverOutboundPayloads,
   initializeGlobalHookRunner,
-  releasePinnedPluginChannelRegistry,
+  resetPluginRuntimeStateForTest,
   resetGlobalHookRunner,
   setActivePluginRegistry,
+  withPluginRuntimeRegistryScope,
   type PluginHookRegistration,
 } from "./test-helpers/outbound-delivery.js";
-export { createPluginRuntimeMock } from "./test-helpers/plugin-runtime-mock.js";
+export {
+  createTestInboundDebounceFlush,
+  createPluginRuntimeMediaMock,
+  createPluginRuntimeMock,
+  type PluginRuntimeMediaMock,
+} from "./test-helpers/plugin-runtime-mock.js";
 export {
   createSendCfgThreadingRuntime,
   expectProvidedCfgSkipsRuntimeLoad,
@@ -39,10 +47,10 @@ export {
   getRequiredHookHandler,
   registerHookHandlersForTest,
 } from "./test-helpers/subagent-hooks.js";
-export { assertBundledChannelEntries } from "./test-helpers/bundled-channel-entry.js";
 export {
   escapeRegExp,
   formatEnvelopeTimestamp,
   formatLocalEnvelopeTimestamp,
 } from "./test-helpers/envelope-timestamp.js";
 export { expectPairingReplyText, extractPairingCode } from "./test-helpers/pairing-reply.js";
+export { stripAnsi } from "../../packages/terminal-core/src/ansi.js";

@@ -1,3 +1,4 @@
+// Runtime dependency contracts for music generation provider execution.
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import type { FallbackAttempt } from "../agents/model-fallback.types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -6,10 +7,16 @@ import type {
   MusicGenerationIgnoredOverride,
   MusicGenerationNormalization,
   MusicGenerationOutputFormat,
-  MusicGenerationProvider,
   MusicGenerationSourceImage,
 } from "./types.js";
 
+/**
+ * Runtime input/output contracts for music generation.
+ *
+ * These are separate from provider contracts because runtime results include
+ * fallback attempts, normalized metadata, and selected provider/model identity.
+ */
+/** Parameters accepted by the core music generation runtime. */
 export type GenerateMusicParams = {
   cfg: OpenClawConfig;
   prompt: string;
@@ -26,6 +33,7 @@ export type GenerateMusicParams = {
   timeoutMs?: number;
 };
 
+/** Result returned after a successful runtime provider attempt. */
 export type GenerateMusicRuntimeResult = {
   tracks: GeneratedMusicAsset[];
   provider: string;
@@ -36,9 +44,3 @@ export type GenerateMusicRuntimeResult = {
   metadata?: Record<string, unknown>;
   ignoredOverrides: MusicGenerationIgnoredOverride[];
 };
-
-export type ListRuntimeMusicGenerationProvidersParams = {
-  config?: OpenClawConfig;
-};
-
-export type RuntimeMusicGenerationProvider = MusicGenerationProvider;

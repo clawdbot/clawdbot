@@ -1,3 +1,7 @@
+/**
+ * Agent-contract test harness for starting the Browser control server and
+ * posting JSON through a real fetch implementation.
+ */
 import {
   getBrowserControlServerBaseUrl,
   installBrowserControlServerHooks,
@@ -5,6 +9,7 @@ import {
 } from "./server.control-server.test-harness.js";
 import { getBrowserTestFetch } from "./test-support/fetch.js";
 
+/** Installs Browser control-server hooks for agent-contract tests. */
 export function installAgentContractHooks() {
   installBrowserControlServerHooks();
 }
@@ -21,7 +26,9 @@ function isTransientStartupFetchError(error: unknown): boolean {
 }
 
 async function sleep(ms: number): Promise<void> {
-  await new Promise((resolve) => setTimeout(resolve, ms));
+  await new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
 }
 
 async function postStartWithRetry(params: {
@@ -48,6 +55,7 @@ async function postStartWithRetry(params: {
   throw lastError;
 }
 
+/** Starts the Browser control server and returns its base URL. */
 export async function startServerAndBase(): Promise<string> {
   await startBrowserControlServerFromConfig();
   const base = getBrowserControlServerBaseUrl();
@@ -56,6 +64,7 @@ export async function startServerAndBase(): Promise<string> {
   return base;
 }
 
+/** Posts JSON to a Browser control-server route and parses the JSON response. */
 export async function postJson<T>(url: string, body?: unknown): Promise<T> {
   const realFetch = getBrowserTestFetch();
   const res = await realFetch(url, {

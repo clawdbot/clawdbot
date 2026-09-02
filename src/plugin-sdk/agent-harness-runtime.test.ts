@@ -1,8 +1,31 @@
-import { describe, expect, it } from "vitest";
+/**
+ * Tests agent harness runtime helpers and task dispatch behavior.
+ */
+import { describe, expect, expectTypeOf, it, vi } from "vitest";
+import { getReplyPayloadMetadata } from "../auto-reply/reply-payload.js";
 import {
+  agentHarnessStructuredInput,
+  attachModelProviderRequestTransport,
+  buildAgentHarnessUserInputAnswers,
   classifyAgentHarnessTerminalOutcome,
+  deliverAgentHarnessUserInputPrompt,
+  formatAgentHarnessUserInputPrompt,
+  getModelProviderRequestTransport,
+  type AgentHarness,
+  type AgentHarnessAttemptParams,
+  type AgentHarnessAttemptParamsV2,
+  type AgentHarnessSideQuestionParams,
+  type AgentHarnessSideQuestionParamsV2,
+  type AgentHarnessSupportContext,
   type AgentHarnessTerminalOutcomeClassification,
+  type AgentHarnessV2,
+  type EmbeddedRunAttemptParams,
+  type EmbeddedRunAttemptParamsV2,
 } from "./agent-harness-runtime.js";
+import type {
+  ProviderModelRouteRuntimePolicy,
+  ProviderRouteOverridePresence,
+} from "./provider-model-types.js";
 
 describe("classifyAgentHarnessTerminalOutcome", () => {
   it("does not classify an in-flight turn", () => {
@@ -124,5 +147,239 @@ describe("classifyAgentHarnessTerminalOutcome", () => {
       }) ?? "empty";
 
     expect(classification).toBe("empty");
+  });
+});
+
+describe("agent harness runtime SDK facade", () => {
+  it("exposes structured input through one frozen named runtime surface", () => {
+    expect(Object.isFrozen(agentHarnessStructuredInput)).toBe(true);
+    expect(Object.keys(agentHarnessStructuredInput).toSorted()).toEqual([
+      "compileForm",
+      "compileQuestions",
+      "compileUrl",
+      "isRecord",
+      "run",
+      "snapshot",
+    ]);
+  });
+
+  it("keeps legacy harness implementations source-compatible while requiring capabilities in V2", () => {
+    const legacyHarness = {
+      id: "legacy-test",
+      label: "Legacy test harness",
+      supports: () => ({ supported: true as const, priority: 1 }),
+      runAttempt: async (_params: AgentHarnessAttemptParams) => {
+        throw new Error("type-only legacy harness");
+      },
+      runSideQuestion: async (_params: AgentHarnessSideQuestionParams) => ({ text: "legacy" }),
+    } satisfies AgentHarness;
+
+    expectTypeOf(legacyHarness).toMatchTypeOf<AgentHarness>();
+    expectTypeOf<AgentHarnessV2>().toMatchTypeOf<AgentHarness>();
+    expectTypeOf<
+      Omit<AgentHarnessSideQuestionParams, "hostCapabilities">
+    >().toMatchTypeOf<AgentHarnessSideQuestionParams>();
+    expectTypeOf<
+      Omit<AgentHarnessAttemptParams, "hostCapabilities">
+    >().toMatchTypeOf<AgentHarnessAttemptParams>();
+    expectTypeOf<
+      Omit<EmbeddedRunAttemptParams, "hostCapabilities">
+    >().toMatchTypeOf<EmbeddedRunAttemptParams>();
+    expectTypeOf<
+      Omit<AgentHarnessAttemptParamsV2, "hostCapabilities"> extends AgentHarnessAttemptParamsV2
+        ? true
+        : false
+    >().toEqualTypeOf<false>();
+    expectTypeOf<
+      Omit<EmbeddedRunAttemptParamsV2, "hostCapabilities"> extends EmbeddedRunAttemptParamsV2
+        ? true
+        : false
+    >().toEqualTypeOf<false>();
+    expectTypeOf<
+      "codeModeRecovery" extends keyof AgentHarnessAttemptParamsV2 ? true : false
+    >().toEqualTypeOf<false>();
+    expectTypeOf<
+      "codeModeRecovery" extends keyof EmbeddedRunAttemptParamsV2 ? true : false
+    >().toEqualTypeOf<false>();
+    expectTypeOf<
+      Omit<
+        AgentHarnessSideQuestionParamsV2,
+        "hostCapabilities"
+      > extends AgentHarnessSideQuestionParamsV2
+        ? true
+        : false
+    >().toEqualTypeOf<false>();
+  });
+
+  it("exposes attached model request transport metadata helpers", () => {
+    const model = attachModelProviderRequestTransport(
+      { id: "gpt-test", provider: "custom-openai" },
+      { auth: { mode: "header", headerName: "x-api-key", value: "secret" } },
+    );
+
+    expect(getModelProviderRequestTransport(model)).toEqual({
+      auth: { mode: "header", headerName: "x-api-key", value: "secret" },
+    });
+  });
+
+  it("locks the request-transport support contract", () => {
+    expectTypeOf<
+      NonNullable<AgentHarnessSupportContext["modelProvider"]>["requestTransportOverrides"]
+    >().toEqualTypeOf<ProviderRouteOverridePresence | undefined>();
+    expectTypeOf<
+      NonNullable<AgentHarnessSupportContext["modelProvider"]>["runtimePolicy"]
+    >().toEqualTypeOf<ProviderModelRouteRuntimePolicy | undefined>();
+  });
+
+  it("exports the V2 isolated-completion authorization contract through the harness", () => {
+    type IsolatedCompletionV2 = NonNullable<AgentHarnessV2["runIsolatedCompletionV2"]>;
+
+    expectTypeOf<Parameters<IsolatedCompletionV2>[0]["authorization"]["owner"]>().toEqualTypeOf<
+      "host" | "harness"
+    >();
+    expectTypeOf<Awaited<ReturnType<IsolatedCompletionV2>>["assistant"]>().not.toBeNever();
+  });
+});
+
+describe("agent harness user input helpers", () => {
+  it("authorizes host-owned text-only harness updates without altering their visible payload", async () => {
+    const onBlockReply = vi.fn();
+
+    await deliverAgentHarnessUserInputPrompt({ onBlockReply }, [], {
+      intro: "Which environment should I use?",
+    });
+
+    const payload = onBlockReply.mock.calls[0]?.[0];
+    expect(payload).toEqual({ text: "Which environment should I use?", presentation: undefined });
+    expect(getReplyPayloadMetadata(payload)).toMatchObject({
+      deliverDespiteSourceReplySuppression: true,
+    });
+  });
+
+  it("formats prompts and delivers through blocking replies first", async () => {
+    const onBlockReply = vi.fn();
+
+    await deliverAgentHarnessUserInputPrompt(
+      { onBlockReply },
+      [
+        {
+          id: "mode",
+          header: "Mode",
+          question: "Pick a mode",
+          isOther: true,
+          options: [{ label: "Deep", description: "Use more context" }],
+        },
+      ],
+      { intro: "Runtime needs input:" },
+    );
+
+    expect(onBlockReply).toHaveBeenCalledWith({
+      text: [
+        "Runtime needs input:",
+        "",
+        "Mode",
+        "Pick a mode",
+        "1. Deep - Use more context",
+        "Other: reply with your own answer.",
+      ].join("\n"),
+    });
+  });
+
+  it("normalizes keyed multi-question answers with option indexes", () => {
+    expect(
+      buildAgentHarnessUserInputAnswers(
+        [
+          {
+            id: "repo",
+            header: "Repository",
+            question: "Which repo?",
+            isOther: true,
+          },
+          {
+            id: "mode",
+            header: "Mode",
+            question: "Which mode?",
+            isOther: false,
+            options: [{ label: "Fast" }, { label: "Deep" }],
+          },
+        ],
+        "repo: openclaw\nmode: 2",
+      ),
+    ).toEqual({
+      answers: {
+        mode: { answers: ["Deep"] },
+        repo: { answers: ["openclaw"] },
+      },
+    });
+  });
+
+  it("normalizes every selected option in a multi-select answer", () => {
+    expect(
+      buildAgentHarnessUserInputAnswers(
+        [
+          {
+            id: "checks",
+            header: "Checks",
+            question: "Which checks should run?",
+            multiSelect: true,
+            isOther: true,
+            options: [{ label: "Unit" }, { label: "Lint" }, { label: "Deploy preview" }],
+          },
+        ],
+        "1, Deploy preview",
+      ),
+    ).toEqual({ answers: { checks: { answers: ["Unit", "Deploy preview"] } } });
+  });
+
+  it("keeps a comma-containing option label as one multi-select answer", () => {
+    expect(
+      buildAgentHarnessUserInputAnswers(
+        [
+          {
+            id: "region",
+            header: "Region",
+            question: "Which region should deploy?",
+            multiSelect: true,
+            isOther: true,
+            options: [{ label: "Frankfurt, Germany" }, { label: "Dublin, Ireland" }],
+          },
+        ],
+        "Frankfurt, Germany",
+      ),
+    ).toEqual({ answers: { region: { answers: ["Frankfurt, Germany"] } } });
+  });
+
+  it("supports runtime-specific text formatting", () => {
+    expect(
+      formatAgentHarnessUserInputPrompt(
+        [
+          {
+            id: "answer",
+            header: "Header",
+            question: "a < b",
+          },
+        ],
+        { formatText: (text) => text.replaceAll("<", "&lt;") },
+      ),
+    ).toContain("a &lt; b");
+  });
+
+  it("preserves blank fallback lines so skipped answers stay aligned", () => {
+    expect(
+      buildAgentHarnessUserInputAnswers(
+        [
+          { id: "q1", header: "Q1", question: "First?" },
+          { id: "q2", header: "Q2", question: "Second?" },
+          { id: "q3", header: "Q3", question: "Third?" },
+        ],
+        "\nyes\nno",
+      ),
+    ).toEqual({
+      answers: {
+        q1: { answers: [] },
+        q2: { answers: ["yes"] },
+        q3: { answers: ["no"] },
+      },
+    });
   });
 });

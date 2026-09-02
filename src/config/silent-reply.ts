@@ -1,13 +1,12 @@
+// Normalizes silent-reply config for channel response suppression.
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import {
   classifySilentReplyConversationType,
   resolveSilentReplyPolicyFromPolicies,
-  resolveSilentReplyRewriteFromPolicies,
   type SilentReplyConversationType,
   type SilentReplyPolicy,
   type SilentReplyPolicyShape,
-  type SilentReplyRewriteShape,
 } from "../shared/silent-reply-policy.js";
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import type { OpenClawConfig } from "./types.openclaw.js";
 
 type ResolveSilentReplyParams = {
@@ -20,9 +19,7 @@ type ResolveSilentReplyParams = {
 function resolveSilentReplyConversationContext(params: ResolveSilentReplyParams): {
   conversationType: SilentReplyConversationType;
   defaultPolicy?: SilentReplyPolicyShape;
-  defaultRewrite?: SilentReplyRewriteShape;
   surfacePolicy?: SilentReplyPolicyShape;
-  surfaceRewrite?: SilentReplyRewriteShape;
 } {
   const conversationType = classifySilentReplyConversationType({
     sessionKey: params.sessionKey,
@@ -30,31 +27,26 @@ function resolveSilentReplyConversationContext(params: ResolveSilentReplyParams)
     conversationType: params.conversationType,
   });
   const normalizedSurface = normalizeLowercaseStringOrEmpty(params.surface);
+  // Surfaces are stored under normalized ids; keep explicit conversationType untouched.
   const surface = normalizedSurface ? params.cfg?.surfaces?.[normalizedSurface] : undefined;
   return {
     conversationType,
     defaultPolicy: params.cfg?.agents?.defaults?.silentReply,
-    defaultRewrite: params.cfg?.agents?.defaults?.silentReplyRewrite,
     surfacePolicy: surface?.silentReply,
-    surfaceRewrite: surface?.silentReplyRewrite,
   };
 }
 
+/** Resolves the effective silent-reply settings for a routed conversation. */
 export function resolveSilentReplySettings(params: ResolveSilentReplyParams): {
   policy: SilentReplyPolicy;
-  rewrite: boolean;
 } {
   const context = resolveSilentReplyConversationContext(params);
   return {
     policy: resolveSilentReplyPolicyFromPolicies(context),
-    rewrite: resolveSilentReplyRewriteFromPolicies(context),
   };
 }
 
+/** Returns just the effective silent-reply policy for callers that do not need metadata. */
 export function resolveSilentReplyPolicy(params: ResolveSilentReplyParams): SilentReplyPolicy {
   return resolveSilentReplySettings(params).policy;
-}
-
-export function resolveSilentReplyRewriteEnabled(params: ResolveSilentReplyParams): boolean {
-  return resolveSilentReplySettings(params).rewrite;
 }

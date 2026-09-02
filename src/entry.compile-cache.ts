@@ -1,12 +1,22 @@
+// Manages compile-cache respawn behavior for the CLI entrypoint.
 import { spawn, type ChildProcess } from "node:child_process";
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { enableCompileCache, getCompileCacheDir } from "node:module";
 import os from "node:os";
 import path from "node:path";
+import process from "node:process";
+import {
+  isForegroundGmailRunArgv,
+  isTerminalInteractiveRespawnArgv,
+  shouldKeepNativeHookRelayInProcess,
+} from "./cli/respawn-policy.js";
 import { attachChildProcessBridge } from "./process/child-process-bridge.js";
+import {
+  runRespawnChildWithSignalBridge,
+  type RespawnChildRuntime,
+} from "./process/respawn-child-runner.js";
 
-const COMPILE_CACHE_RESPAWN_SIGNAL_EXIT_GRACE_MS = 1_000;
-const COMPILE_CACHE_RESPAWN_SIGNAL_FORCE_KILL_GRACE_MS = 1_000;
+const COMPILE_CACHE_DISABLED_RESPAWNED_ENV = "OPENCLAW_COMPILE_CACHE_DISABLED_RESPAWNED";
 
 export function resolveEntryInstallRoot(entryFile: string): string {
   const entryDir = path.dirname(entryFile);
@@ -14,7 +24,7 @@ export function resolveEntryInstallRoot(entryFile: string): string {
   return entryParent === "dist" || entryParent === "src" ? path.dirname(entryDir) : entryDir;
 }
 
-export function isSourceCheckoutInstallRoot(installRoot: string): boolean {
+function isSourceCheckoutInstallRoot(installRoot: string): boolean {
   return (
     existsSync(path.join(installRoot, ".git")) ||
     existsSync(path.join(installRoot, "src", "entry.ts"))
@@ -29,14 +39,13 @@ function isNodeCompileCacheRequested(env: NodeJS.ProcessEnv | undefined): boolea
   return env?.NODE_COMPILE_CACHE !== undefined && !isNodeCompileCacheDisabled(env);
 }
 
-export function shouldEnableOpenClawCompileCache(params: {
+function shouldEnableOpenClawCompileCache(params: {
   env?: NodeJS.ProcessEnv;
   installRoot: string;
 }): boolean {
-  if (isNodeCompileCacheDisabled(params.env)) {
-    return false;
-  }
-  return !isSourceCheckoutInstallRoot(params.installRoot);
+  return (
+    !isNodeCompileCacheDisabled(params.env) && !isSourceCheckoutInstallRoot(params.installRoot)
+  );
 }
 
 function sanitizeCompileCachePathSegment(value: string): string {
@@ -62,7 +71,7 @@ function readPackageVersion(packageJsonPath: string): string {
   return "unknown";
 }
 
-export function resolveOpenClawCompileCacheDirectory(params: {
+function resolveOpenClawCompileCacheDirectory(params: {
   env?: NodeJS.ProcessEnv;
   installRoot: string;
 }): string {
@@ -88,20 +97,18 @@ export function resolveOpenClawCompileCacheDirectory(params: {
   );
 }
 
-export type OpenClawCompileCacheRespawnPlan = {
+type OpenClawCompileCacheRespawnPlan = {
   command: string;
   args: string[];
   env: NodeJS.ProcessEnv;
+  detachForProcessTree: boolean;
 };
 
-type OpenClawCompileCacheRespawnRuntime = {
-  spawn: typeof spawn;
-  attachChildProcessBridge: typeof attachChildProcessBridge;
-  exit: (code?: number) => never;
+type OpenClawCompileCacheRespawnRuntime = RespawnChildRuntime & {
   writeError: (message: string) => void;
 };
 
-export function buildOpenClawCompileCacheRespawnPlan(params: {
+function buildOpenClawCompileCacheRespawnPlan(params: {
   currentFile: string;
   env?: NodeJS.ProcessEnv;
   execArgv?: string[];
@@ -109,12 +116,18 @@ export function buildOpenClawCompileCacheRespawnPlan(params: {
   installRoot: string;
   argv?: string[];
   compileCacheDir?: string;
+  platform?: NodeJS.Platform;
 }): OpenClawCompileCacheRespawnPlan | undefined {
   const env = params.env ?? process.env;
+  const argv = params.argv ?? process.argv;
+  const platform = params.platform ?? process.platform;
+  if (isForegroundGmailRunArgv(argv) || shouldKeepNativeHookRelayInProcess(argv, platform)) {
+    return undefined;
+  }
   if (!isSourceCheckoutInstallRoot(params.installRoot)) {
     return undefined;
   }
-  if (env.OPENCLAW_SOURCE_COMPILE_CACHE_RESPAWNED === "1") {
+  if (env[COMPILE_CACHE_DISABLED_RESPAWNED_ENV] === "1") {
     return undefined;
   }
   if (!params.compileCacheDir && !isNodeCompileCacheRequested(env)) {
@@ -123,24 +136,22 @@ export function buildOpenClawCompileCacheRespawnPlan(params: {
   const nextEnv: NodeJS.ProcessEnv = {
     ...env,
     NODE_DISABLE_COMPILE_CACHE: "1",
-    OPENCLAW_SOURCE_COMPILE_CACHE_RESPAWNED: "1",
+    [COMPILE_CACHE_DISABLED_RESPAWNED_ENV]: "1",
   };
   delete nextEnv.NODE_COMPILE_CACHE;
   return {
     command: params.execPath ?? process.execPath,
-    args: [
-      ...(params.execArgv ?? process.execArgv),
-      params.currentFile,
-      ...(params.argv ?? process.argv).slice(2),
-    ],
+    args: [...(params.execArgv ?? process.execArgv), params.currentFile, ...argv.slice(2)],
     env: nextEnv,
+    detachForProcessTree: platform !== "win32" && !isTerminalInteractiveRespawnArgv(argv),
   };
 }
 
-export function respawnWithoutOpenClawCompileCacheIfNeeded(params: {
+export async function respawnWithoutOpenClawCompileCacheIfNeeded(params: {
   currentFile: string;
   installRoot: string;
-}): boolean {
+  prepareWriteError?: () => Promise<(message: string) => void>;
+}): Promise<boolean> {
   const plan = buildOpenClawCompileCacheRespawnPlan({
     currentFile: params.currentFile,
     installRoot: params.installRoot,
@@ -149,11 +160,22 @@ export function respawnWithoutOpenClawCompileCacheIfNeeded(params: {
   if (!plan) {
     return false;
   }
-  runOpenClawCompileCacheRespawnPlan(plan);
+  const writeError = await params.prepareWriteError?.();
+  runOpenClawCompileCacheRespawnPlan(
+    plan,
+    writeError
+      ? {
+          spawn,
+          attachChildProcessBridge,
+          exit: process.exit.bind(process) as (code?: number) => never,
+          writeError,
+        }
+      : undefined,
+  );
   return true;
 }
 
-export function runOpenClawCompileCacheRespawnPlan(
+function runOpenClawCompileCacheRespawnPlan(
   plan: OpenClawCompileCacheRespawnPlan,
   runtime: OpenClawCompileCacheRespawnRuntime = {
     spawn,
@@ -162,76 +184,20 @@ export function runOpenClawCompileCacheRespawnPlan(
     writeError: (message: string) => process.stderr.write(message),
   },
 ): ChildProcess {
-  const child = runtime.spawn(plan.command, plan.args, {
-    stdio: "inherit",
+  return runRespawnChildWithSignalBridge({
+    command: plan.command,
+    args: plan.args,
     env: plan.env,
+    detachForProcessTree: plan.detachForProcessTree,
+    runtime,
+    onError: (error) => {
+      runtime.writeError(
+        `[openclaw] Failed to respawn CLI without compile cache: ${
+          error instanceof Error ? (error.stack ?? error.message) : String(error)
+        }\n`,
+      );
+    },
   });
-  // Give the child a moment to honor forwarded signals, then exit the parent so
-  // a child that ignores SIGTERM cannot keep the compile-cache wrapper alive indefinitely.
-  let signalExitTimer: NodeJS.Timeout | undefined;
-  let signalForceKillTimer: NodeJS.Timeout | undefined;
-  const clearSignalExitTimer = (): void => {
-    if (signalExitTimer) {
-      clearTimeout(signalExitTimer);
-      signalExitTimer = undefined;
-    }
-    if (signalForceKillTimer) {
-      clearTimeout(signalForceKillTimer);
-      signalForceKillTimer = undefined;
-    }
-  };
-  const forceKillChild = (): void => {
-    try {
-      child.kill(process.platform === "win32" ? "SIGTERM" : "SIGKILL");
-    } catch {
-      // Best-effort shutdown fallback.
-    }
-  };
-  const requestChildTermination = (): void => {
-    try {
-      child.kill("SIGTERM");
-    } catch {
-      // Best-effort shutdown fallback.
-    }
-    signalForceKillTimer = setTimeout(() => {
-      forceKillChild();
-      runtime.exit(1);
-    }, COMPILE_CACHE_RESPAWN_SIGNAL_FORCE_KILL_GRACE_MS);
-    signalForceKillTimer.unref?.();
-  };
-  const scheduleParentExit = (): void => {
-    if (signalExitTimer) {
-      return;
-    }
-    signalExitTimer = setTimeout(() => {
-      requestChildTermination();
-    }, COMPILE_CACHE_RESPAWN_SIGNAL_EXIT_GRACE_MS);
-    signalExitTimer.unref?.();
-  };
-
-  runtime.attachChildProcessBridge(child, {
-    onSignal: scheduleParentExit,
-  });
-
-  child.once("exit", (code, signal) => {
-    clearSignalExitTimer();
-    if (signal) {
-      runtime.exit(1);
-    }
-    runtime.exit(code ?? 1);
-  });
-
-  child.once("error", (error) => {
-    clearSignalExitTimer();
-    runtime.writeError(
-      `[openclaw] Failed to respawn CLI without compile cache: ${
-        error instanceof Error ? (error.stack ?? error.message) : String(error)
-      }\n`,
-    );
-    runtime.exit(1);
-  });
-
-  return child;
 }
 
 export function enableOpenClawCompileCache(params: {
@@ -246,4 +212,14 @@ export function enableOpenClawCompileCache(params: {
   } catch {
     // Best-effort only; never block startup.
   }
+}
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.entryCompileCacheTestApi")] = {
+    buildOpenClawCompileCacheRespawnPlan,
+    isSourceCheckoutInstallRoot,
+    resolveOpenClawCompileCacheDirectory,
+    runOpenClawCompileCacheRespawnPlan,
+    shouldEnableOpenClawCompileCache,
+  };
 }

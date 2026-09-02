@@ -1,13 +1,17 @@
+// Video duration support helpers normalize supported generation durations.
+import { uniqueValues } from "@openclaw/normalization-core/string-normalization";
 import { resolveVideoGenerationModeCapabilities } from "./capabilities.js";
 import type { VideoGenerationProvider } from "./types.js";
 
+// Duration support is provider/mode/model scoped. Values are normalized to
+// positive rounded seconds before runtime snaps requests to the nearest option.
 function normalizeSupportedDurationValues(
   values: readonly number[] | undefined,
 ): number[] | undefined {
   if (!Array.isArray(values) || values.length === 0) {
     return undefined;
   }
-  const normalized = [...new Set(values)]
+  const normalized = uniqueValues(values)
     .filter((value) => Number.isFinite(value) && value > 0)
     .map((value) => Math.round(value))
     .filter((value) => value > 0)
@@ -35,6 +39,8 @@ export function resolveVideoGenerationSupportedDurations(params: {
   return normalizeSupportedDurationValues(modelSpecific ?? caps?.supportedDurationSeconds);
 }
 
+// Normalize requested duration for providers with explicit allowed values. Ties
+// choose the longer duration to avoid shortening user intent unexpectedly.
 export function normalizeVideoGenerationDuration(params: {
   provider?: VideoGenerationProvider;
   model?: string;

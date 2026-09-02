@@ -1,3 +1,6 @@
+/**
+ * Public SDK subpath for channel reply pipeline construction and typing callbacks.
+ */
 export {
   createChannelReplyPipeline,
   createReplyPrefixContext,

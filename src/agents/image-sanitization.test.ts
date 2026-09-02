@@ -1,13 +1,14 @@
+// Covers agent image-sanitization limit config normalization.
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveImageSanitizationLimits } from "./image-sanitization.js";
 
 describe("image sanitization config", () => {
   it("defaults when no config value exists", () => {
-    expect(resolveImageSanitizationLimits(undefined)).toEqual({});
+    expect(resolveImageSanitizationLimits(undefined)).toStrictEqual({});
     expect(
       resolveImageSanitizationLimits({ agents: { defaults: {} } } as unknown as OpenClawConfig),
-    ).toEqual({});
+    ).toStrictEqual({});
   });
 
   it("reads and normalizes agents.defaults.imageMaxDimensionPx", () => {

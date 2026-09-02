@@ -1,3 +1,6 @@
+/**
+ * SSRF policy helpers re-exported for Browser network/navigation guards.
+ */
 export {
   SsrFBlockedError,
   isPrivateNetworkAllowedByPolicy,

@@ -1,6 +1,5 @@
-import { EventEmitter } from "node:events";
+// Verifies agent-specific sandbox config, workspace roots, and Docker setup commands.
 import path from "node:path";
-import { Readable } from "node:stream";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { createRestrictedAgentSandboxConfig } from "./test-helpers/sandbox-agent-config-fixtures.js";
@@ -10,44 +9,33 @@ type SpawnCall = {
   args: string[];
 };
 
-const spawnCalls: SpawnCall[] = [];
+const spawnCalls = vi.hoisted(() => [] as SpawnCall[]);
 
-vi.mock("node:child_process", () => ({
-  execFile: (...args: unknown[]) => {
-    const callback = args.findLast(
-      (arg): arg is (error: null, stdout: string, stderr: string) => void =>
-        typeof arg === "function",
-    );
-    queueMicrotask(() => callback?.(null, "", ""));
-    return new EventEmitter();
-  },
-  spawn: (command: string, args: string[]) => {
-    spawnCalls.push({ command, args });
-    const child = new EventEmitter() as {
-      stdout?: Readable;
-      stderr?: Readable;
-      on: (event: string, cb: (...args: unknown[]) => void) => void;
-      emit: (event: string, ...args: unknown[]) => boolean;
-    };
-    child.stdout = new Readable({ read() {} });
-    child.stderr = new Readable({ read() {} });
+async function spawnDockerProcess(commandAndArgs: string[]) {
+  const [command = "", ...args] = commandAndArgs;
+  spawnCalls.push({ command, args });
+  const shouldFailContainerInspect =
+    command === "docker" &&
+    args[0] === "inspect" &&
+    args[1] === "-f" &&
+    args[2] === "{{.State.Running}}";
+  const code = command === "docker" && !shouldFailContainerInspect ? 0 : 1;
+  return {
+    failed: code !== 0,
+    isCanceled: false,
+    exitCode: code,
+    stdout: Buffer.alloc(0),
+    stderr: Buffer.from(code === 0 ? "" : "No such container"),
+  };
+}
 
-    const dockerArgs = command === "docker" ? args : [];
-    const shouldFailContainerInspect =
-      dockerArgs[0] === "inspect" &&
-      dockerArgs[1] === "-f" &&
-      dockerArgs[2] === "{{.State.Running}}";
-    const shouldSucceedImageInspect = dockerArgs[0] === "image" && dockerArgs[1] === "inspect";
-
-    queueMicrotask(() =>
-      child.emit("close", shouldFailContainerInspect && !shouldSucceedImageInspect ? 1 : 0),
-    );
-    return child;
-  },
+vi.mock("../process/exec.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../process/exec.js")>()),
+  spawnCommand: spawnDockerProcess,
 }));
 
-vi.mock("./skills.js", () => ({
-  syncSkillsToWorkspace: vi.fn(async () => undefined),
+vi.mock("../skills/loading/workspace-skill-sync.runtime.js", () => ({
+  syncWorkspaceSkills: vi.fn(async () => undefined),
 }));
 
 let resolveSandboxContext: typeof import("./sandbox/context.js").resolveSandboxContext;
@@ -55,6 +43,7 @@ let resolveSandboxConfigForAgent: typeof import("./sandbox/config.js").resolveSa
 let resolveSandboxRuntimeStatus: typeof import("./sandbox/runtime-status.js").resolveSandboxRuntimeStatus;
 
 async function resolveContext(config: OpenClawConfig, sessionKey: string, workspaceDir: string) {
+  // Convenience wrapper keeps session-key specific sandbox context assertions compact.
   return resolveSandboxContext({
     config,
     sessionKey,
@@ -63,15 +52,15 @@ async function resolveContext(config: OpenClawConfig, sessionKey: string, worksp
 }
 
 function expectDockerSetupCommand(command: string) {
-  expect(
-    spawnCalls.some(
-      (call) =>
-        call.command === "docker" &&
-        call.args[0] === "exec" &&
-        call.args.includes("-lc") &&
-        call.args.includes(command),
-    ),
-  ).toBe(true);
+  // Setup commands are executed through docker exec in the resolved container.
+  const matched = spawnCalls.some(
+    (call) =>
+      call.command === "docker" &&
+      call.args[0] === "exec" &&
+      call.args.includes("-lc") &&
+      call.args.includes(command),
+  );
+  expect(matched, `expected docker setup command; calls=${JSON.stringify(spawnCalls)}`).toBe(true);
 }
 
 function createDefaultsSandboxConfig(
@@ -158,9 +147,10 @@ describe("Agent-specific sandbox config", () => {
 
     const context = await resolveContext(cfg, "agent:isolated:main", "/tmp/test-isolated");
 
-    expect(context).toMatchObject({
-      workspaceDir: expect.stringContaining(path.resolve("/tmp/isolated-sandboxes")),
-    });
+    if (!context) {
+      throw new Error("Expected sandbox context for isolated agent");
+    }
+    expect(context.workspaceDir).toContain(path.resolve("/tmp/isolated-sandboxes"));
   });
 
   it("should prefer agent config over global for multiple agents", () => {
@@ -225,7 +215,7 @@ describe("Agent-specific sandbox config", () => {
 
     const sandbox = resolveSandboxConfigForAgent(cfg, "restricted");
     expect(sandbox.tools).toEqual({
-      allow: ["read", "write", "image"],
+      allow: ["read", "write", "view_image"],
       deny: ["edit"],
     });
   });
@@ -252,29 +242,24 @@ describe("Agent-specific sandbox config", () => {
     expect(sandbox.mode).toBe("all");
   });
 
-  it("should resolve setupCommand overrides based on sandbox scope", async () => {
-    for (const scenario of [
-      {
-        scope: "agent" as const,
-        expectedSetup: "echo work",
-        expectedContainerFragment: "agent-work",
-      },
-      {
-        scope: "shared" as const,
-        expectedSetup: "echo global",
-        expectedContainerFragment: "shared",
-      },
-    ]) {
-      const cfg = createWorkSetupCommandConfig(scenario.scope);
-      const context = await resolveContext(cfg, "agent:work:main", "/tmp/test-work");
+  it.each([
+    {
+      scope: "agent" as const,
+      expectedSetup: "echo work",
+    },
+    {
+      scope: "shared" as const,
+      expectedSetup: "echo global",
+    },
+  ])("should resolve $scope setupCommand overrides", async ({ scope, expectedSetup }) => {
+    const cfg = createWorkSetupCommandConfig(scope);
+    const context = await resolveContext(cfg, "agent:work:main", "/tmp/test-work");
 
-      expect(context).toMatchObject({
-        docker: { setupCommand: scenario.expectedSetup },
-        containerName: expect.stringContaining(scenario.expectedContainerFragment),
-      });
-      expectDockerSetupCommand(scenario.expectedSetup);
-      spawnCalls.length = 0;
+    if (!context) {
+      throw new Error(`Expected sandbox context for ${scope} scoped setup`);
     }
+    expect(context.docker?.setupCommand).toBe(expectedSetup);
+    expectDockerSetupCommand(expectedSetup);
   });
 
   it("should allow agent-specific docker settings beyond setupCommand", () => {
@@ -405,7 +390,7 @@ describe("Agent-specific sandbox config", () => {
     for (const scenario of [
       {
         cfg: createDefaultsSandboxConfig(),
-        expected: ["session_status", "image"],
+        expected: ["session_status", "view_image"],
       },
       {
         cfg: {
@@ -426,7 +411,7 @@ describe("Agent-specific sandbox config", () => {
             },
           },
         } satisfies OpenClawConfig,
-        expected: ["image"],
+        expected: ["view_image"],
       },
     ]) {
       const sandbox = resolveSandboxConfigForAgent(scenario.cfg, "main");

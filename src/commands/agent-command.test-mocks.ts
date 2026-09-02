@@ -1,4 +1,18 @@
+// Agent command test mocks replace logging and runtime-heavy modules shared by agent command suites.
 import { vi } from "vitest";
+import { getAgentHarnessPluginMocks } from "./agent-command-state.test-mocks.js";
+
+// Harness/plugin selection has focused owner coverage in runtime-plugin.test.ts.
+// Command suites only need to prove their handoff without loading plugin manifests.
+const agentHarnessPluginMocks = getAgentHarnessPluginMocks();
+
+vi.mock("../agents/harness/runtime-plugin.js", () => ({
+  ensureSelectedAgentHarnessPlugin: agentHarnessPluginMocks.ensureSelectedAgentHarnessPlugin,
+}));
+
+vi.mock("../agents/runtime-plugins.js", () => ({
+  withAgentPluginRegistry: ({ run }: { run: () => unknown }) => run(),
+}));
 
 vi.mock("../logging/subsystem.js", () => {
   const createMockLogger = () => ({
@@ -29,7 +43,7 @@ const acpManagerMock = vi.hoisted(() => ({
 }));
 
 vi.mock("../acp/control-plane/manager.js", () => ({
-  __testing: {
+  testing: {
     resetAcpSessionManagerForTests: vi.fn(() => {
       acpManagerMock.current = {
         resolveSession: vi.fn(() => null),
@@ -42,22 +56,32 @@ vi.mock("../acp/control-plane/manager.js", () => ({
   getAcpSessionManager: vi.fn(() => acpManagerMock.current),
 }));
 
-vi.mock("../agents/pi-embedded.js", () => ({
-  abortEmbeddedPiRun: vi.fn().mockReturnValue(false),
-  runEmbeddedPiAgent: vi.fn(),
+vi.mock("../agents/embedded-agent.js", () => ({
+  abortEmbeddedAgentRun: vi.fn().mockReturnValue(false),
+  runEmbeddedAgent: vi.fn(),
   resolveEmbeddedSessionLane: (key: string) => `session:${key.trim() || "main"}`,
 }));
 
 vi.mock("../agents/model-catalog.js", () => ({
   loadManifestModelCatalog: vi.fn(() => []),
-  loadModelCatalog: vi.fn(),
+}));
+
+vi.mock("../agents/prepared-model-catalog.js", () => ({
+  loadProviderScopedThinkingCatalog: vi.fn(async () => []),
+  loadPreparedModelCatalog: vi.fn(),
+  loadPreparedModelCatalogSnapshot: vi.fn(async () => ({
+    entries: [],
+    routeVariants: [],
+  })),
 }));
 
 vi.mock("../agents/model-selection.js", () => {
   type ConfigWithModels = {
+    meta?: { migrations?: { modelPolicyAllowlist?: boolean } };
     agents?: {
       defaults?: {
         model?: string | { primary?: string; fallbacks?: string[] };
+        modelPolicy?: { allow?: string[] };
         models?: Record<string, { params?: { thinking?: string } } | undefined>;
         thinkingDefault?: string;
       };
@@ -81,12 +105,26 @@ vi.mock("../agents/model-selection.js", () => {
     return { provider: defaultProvider, model: value };
   };
   const parseModelRef = vi.fn(parseModelRefImpl);
+  const normalizeProviderId = (provider: string) => provider.trim().toLowerCase();
   const normalizeModelRef = (provider: string, model: string): ModelRef => ({
-    provider: provider.trim().toLowerCase(),
+    provider: normalizeProviderId(provider),
     model: model.trim(),
   });
   const modelKey = (provider: string, model: string) =>
-    `${provider.trim().toLowerCase()}/${model.trim().toLowerCase()}`;
+    `${normalizeProviderId(provider)}/${model.trim().toLowerCase()}`;
+  const isModelKeyAllowedBySet = (allowedKeys: ReadonlySet<string>, key: string) => {
+    if (allowedKeys.has(key)) {
+      return true;
+    }
+    let separator = key.indexOf("/");
+    while (separator > 0) {
+      if (allowedKeys.has(`${key.slice(0, separator + 1)}*`)) {
+        return true;
+      }
+      separator = key.indexOf("/", separator + 1);
+    }
+    return false;
+  };
   const resolvePrimary = (cfg?: ConfigWithModels): string | undefined => {
     const primary = cfg?.agents?.defaults?.model;
     if (typeof primary === "string") {
@@ -102,12 +140,31 @@ vi.mock("../agents/model-selection.js", () => {
     const models = cfg?.agents?.defaults?.models ?? {};
     return models[`${ref.provider}/${ref.model}`] ?? models[modelKey(ref.provider, ref.model)];
   };
+  const resolvePolicyRefs = (cfg?: ConfigWithModels) => {
+    const defaults = cfg?.agents?.defaults;
+    const hasExplicitPolicy = Boolean(
+      defaults?.modelPolicy && Object.hasOwn(defaults.modelPolicy, "allow"),
+    );
+    if (hasExplicitPolicy) {
+      return {
+        refs: defaults?.modelPolicy?.allow ?? [],
+        configPath: "agents.defaults.modelPolicy.allow",
+      };
+    }
+    if (cfg?.meta?.migrations?.modelPolicyAllowlist !== true) {
+      const refs = Object.keys(defaults?.models ?? {});
+      if (refs.length > 0) {
+        return { refs, configPath: "agents.defaults.models" };
+      }
+    }
+    return { refs: [], configPath: null };
+  };
 
   return {
     buildAllowedModelSet: vi.fn(({ cfg }: { cfg?: ConfigWithModels; catalog?: CatalogEntry[] }) => {
       const refs = new Set<string>();
-      const modelConfig = cfg?.agents?.defaults?.models ?? {};
-      for (const raw of Object.keys(modelConfig)) {
+      const policyRefs = resolvePolicyRefs(cfg).refs;
+      for (const raw of policyRefs) {
         const parsed = parseModelRefImpl(raw, "openai");
         if (parsed) {
           refs.add(modelKey(parsed.provider, parsed.model));
@@ -115,26 +172,68 @@ vi.mock("../agents/model-selection.js", () => {
       }
       const primary = resolveDefaultRef(cfg);
       refs.add(modelKey(primary.provider, primary.model));
-      const fallbackRefs =
-        typeof cfg?.agents?.defaults?.model === "object"
-          ? (cfg.agents.defaults.model.fallbacks ?? [])
-          : [];
-      for (const fallback of fallbackRefs) {
-        const parsed = parseModelRefImpl(fallback, primary.provider);
-        if (parsed) {
-          refs.add(modelKey(parsed.provider, parsed.model));
-        }
-      }
       return {
         allowedKeys: refs,
         allowedCatalog: [],
-        allowAny: Object.keys(modelConfig).length === 0,
+        allowAny: policyRefs.length === 0,
       };
     }),
+    createModelVisibilityPolicy: vi.fn(
+      ({ cfg, catalog = [] }: { cfg?: ConfigWithModels; catalog?: CatalogEntry[] }) => {
+        const refs = new Set<string>();
+        const policy = resolvePolicyRefs(cfg);
+        const policyRefs = policy.refs;
+        for (const raw of policyRefs) {
+          const parsed = parseModelRefImpl(raw, "openai");
+          if (parsed) {
+            refs.add(modelKey(parsed.provider, parsed.model));
+          }
+        }
+        const primary = resolveDefaultRef(cfg);
+        refs.add(modelKey(primary.provider, primary.model));
+        const allowAny = policyRefs.length === 0;
+        const wildcardModelKeys = new Set(
+          policyRefs.filter((key) => key.endsWith("/*")).map((key) => key.trim().toLowerCase()),
+        );
+        const wildcardProviders = new Set(
+          [...wildcardModelKeys].map((key) => key.slice(0, key.indexOf("/"))),
+        );
+        const allowsKey = (key: string) => allowAny || isModelKeyAllowedBySet(refs, key);
+        return {
+          allowAny,
+          allowedKeys: refs,
+          allowedCatalog: catalog,
+          exactModelRefs: policyRefs.filter((key) => !key.endsWith("/*")),
+          providerWildcards: wildcardProviders,
+          hasConfiguredEntries: policyRefs.length > 0,
+          hasProviderWildcards: wildcardModelKeys.size > 0,
+          allowConfigPath: policy.configPath,
+          allowRepairConfigPath: "agents.defaults.modelPolicy.allow",
+          allowsKey,
+          allows: ({ provider, model }: ModelRef) => allowsKey(modelKey(provider, model)),
+          allowsByWildcard: ({ provider, model }: ModelRef) =>
+            isModelKeyAllowedBySet(wildcardModelKeys, modelKey(provider, model)),
+          resolveSelection: ({ provider, model }: ModelRef) => {
+            const key = modelKey(provider, model);
+            if (allowsKey(key)) {
+              return { provider, model };
+            }
+            const fallback = catalog[0];
+            return fallback?.id ? { provider: "openai", model: fallback.id } : null;
+          },
+          visibleCatalog: ({ catalog: visibleCatalog }: { catalog: CatalogEntry[] }) =>
+            visibleCatalog,
+        };
+      },
+    ),
     buildConfiguredModelCatalog: vi.fn(() => []),
+    buildModelAliasIndex: vi.fn(() => new Map()),
+    isModelKeyAllowedBySet,
     isCliProvider: vi.fn(() => false),
     modelKey,
     normalizeModelRef,
+    normalizeProviderId,
+    normalizeProviderIdForAuth: normalizeProviderId,
     parseModelRef,
     resolveConfiguredModelRef: vi.fn(
       ({ cfg }: { cfg?: ConfigWithModels; defaultProvider?: string; defaultModel?: string }) =>
@@ -142,6 +241,12 @@ vi.mock("../agents/model-selection.js", () => {
     ),
     resolveDefaultModelForAgent: vi.fn(({ cfg }: { cfg?: ConfigWithModels }) =>
       resolveDefaultRef(cfg),
+    ),
+    resolveModelRefFromString: vi.fn(
+      ({ raw, defaultProvider }: { raw: string; defaultProvider?: string }) => {
+        const ref = parseModelRef(raw, defaultProvider ?? "openai");
+        return ref ? { ref, source: "parsed" } : null;
+      },
     ),
     resolveThinkingDefault: vi.fn(
       ({
@@ -174,7 +279,7 @@ vi.mock("../agents/model-selection.js", () => {
   };
 });
 
-vi.mock("../agents/subagent-announce.js", () => ({
+vi.mock("../agents/subagents/announce/subagent-announce.js", () => ({
   runSubagentAnnounceFlow: vi.fn(),
 }));
 
@@ -190,37 +295,51 @@ vi.mock("../agents/workspace.js", () => ({
   ensureAgentWorkspace: vi.fn(async ({ dir }: { dir: string }) => ({ dir })),
 }));
 
-vi.mock("../agents/skills.js", () => ({
-  buildWorkspaceSkillSnapshot: vi.fn(() => undefined),
-  loadWorkspaceSkillEntries: vi.fn(() => []),
+vi.mock("../skills/loading/workspace-skill-prompt.js", () => ({
+  buildSkillSnapshot: vi.fn(() => undefined),
 }));
 
-vi.mock("../agents/skills/refresh.js", () => ({
-  getSkillsSnapshotVersion: vi.fn(() => 0),
+vi.mock("../skills/loading/workspace-skill-loader.js", async () => {
+  const actual = await vi.importActual<
+    typeof import("../skills/loading/workspace-skill-loader.js")
+  >("../skills/loading/workspace-skill-loader.js");
+  return {
+    filterWorkspaceSkills: (entries: unknown[]) => entries,
+    loadMergedWorkspaceSkills: vi.fn(() => []),
+    loadVisibleSkills: vi.fn(() => []),
+    loadWorkspaceSkills: vi.fn(() => []),
+    normalizeWorkspaceSkillRoots: actual.normalizeWorkspaceSkillRoots,
+  };
+});
+
+vi.mock("../skills/runtime/remote.js", () => ({
+  getRemoteSkillEligibility: vi.fn(() => undefined),
 }));
 
-vi.mock("../agents/skills/refresh-state.js", () => ({
-  getSkillsSnapshotVersion: vi.fn(() => 0),
-  shouldRefreshSnapshotForVersion: vi.fn(() => false),
+vi.mock("../plugins/bundle-commands.js", () => ({
+  loadEnabledClaudeBundleCommands: vi.fn(() => []),
 }));
 
-vi.mock("../agents/skills/filter.js", () => ({
-  normalizeSkillFilter: vi.fn((skillFilter?: ReadonlyArray<unknown>) =>
-    skillFilter?.map((entry) => String(entry).trim()).filter(Boolean),
+vi.mock("../skills/discovery/agent-filter.js", () => ({
+  resolveEffectiveAgentSkillFilter: vi.fn(() => undefined),
+}));
+
+vi.mock("../skills/runtime/session-snapshot.js", () => ({
+  resolveReusableWorkspaceSkillSnapshot: vi.fn(
+    (params?: { existingSnapshot?: unknown; skillFilter?: string[] }) => ({
+      snapshot: params?.existingSnapshot ?? {
+        prompt: "",
+        skills: [],
+        resolvedSkills: [],
+        ...(params?.skillFilter === undefined ? {} : { skillFilter: params.skillFilter }),
+        version: 0,
+      },
+      shouldRefresh: !params?.existingSnapshot,
+      snapshotVersion: 0,
+    }),
   ),
-  normalizeSkillFilterForComparison: vi.fn((skillFilter?: ReadonlyArray<unknown>) =>
-    skillFilter
-      ?.map((entry) => String(entry).trim())
-      .filter(Boolean)
-      .toSorted(),
-  ),
-  matchesSkillFilter: vi.fn(() => true),
 }));
 
 vi.mock("../agents/exec-defaults.js", () => ({
-  canExecRequestNode: vi.fn(() => false),
-}));
-
-vi.mock("../infra/skills-remote.js", () => ({
-  getRemoteSkillEligibility: vi.fn(() => undefined),
+  resolveNodeExecEligibility: vi.fn(() => ({ canExec: false })),
 }));

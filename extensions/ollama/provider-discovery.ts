@@ -1,3 +1,4 @@
+// Ollama provider module implements model/runtime integration.
 import type { ProviderCatalogContext } from "openclaw/plugin-sdk/provider-catalog-shared";
 import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import {
@@ -7,7 +8,7 @@ import {
   shouldUseSyntheticOllamaAuth,
   type OllamaPluginConfig,
 } from "./src/discovery-shared.js";
-import { buildOllamaProvider } from "./src/provider-models.js";
+import { buildOllamaProvider, capLocalOllamaProviderContext } from "./src/provider-models.js";
 
 type OllamaProviderPlugin = {
   id: string;
@@ -22,7 +23,7 @@ type OllamaProviderPlugin = {
         mode: "api-key";
       }
     | undefined;
-  discovery: {
+  catalog: {
     order: "late";
     run: (ctx: ProviderCatalogContext) => ReturnType<typeof runOllamaDiscovery>;
   };
@@ -37,10 +38,14 @@ function resolveOllamaPluginConfig(ctx: ProviderCatalogContext): OllamaPluginCon
 }
 
 async function runOllamaDiscovery(ctx: ProviderCatalogContext) {
+  if (ctx.providerIds && !ctx.providerIds.includes(OLLAMA_PROVIDER_ID)) {
+    return null;
+  }
   return await resolveOllamaDiscoveryResult({
     ctx,
     pluginConfig: resolveOllamaPluginConfig(ctx),
-    buildProvider: buildOllamaProvider,
+    buildProvider: async (...args) =>
+      capLocalOllamaProviderContext(await buildOllamaProvider(...args)),
   });
 }
 
@@ -60,7 +65,7 @@ export const ollamaProviderDiscovery: OllamaProviderPlugin = {
       mode: "api-key",
     };
   },
-  discovery: {
+  catalog: {
     order: "late",
     run: runOllamaDiscovery,
   },

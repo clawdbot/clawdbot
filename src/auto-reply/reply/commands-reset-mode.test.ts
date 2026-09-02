@@ -1,3 +1,4 @@
+// Tests reset mode parsing for session reset commands.
 import { describe, expect, it } from "vitest";
 import { parseSoftResetCommand } from "./commands-reset-mode.js";
 
@@ -13,6 +14,10 @@ describe("parseSoftResetCommand", () => {
       tail: "re-read persona files",
     });
     expect(parseSoftResetCommand("/reset soft\nre-read persona files")).toEqual({
+      matched: true,
+      tail: "re-read persona files",
+    });
+    expect(parseSoftResetCommand("/RESET soft re-read persona files")).toEqual({
       matched: true,
       tail: "re-read persona files",
     });

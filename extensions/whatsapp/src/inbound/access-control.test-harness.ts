@@ -1,3 +1,4 @@
+// Whatsapp plugin module implements access control harness behavior.
 import { beforeEach, vi } from "vitest";
 import {
   type AsyncMock,

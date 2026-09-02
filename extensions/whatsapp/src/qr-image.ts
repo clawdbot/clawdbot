@@ -1,1 +1,2 @@
-export { renderQrPngBase64, renderQrPngDataUrl } from "openclaw/plugin-sdk/media-runtime";
+// Whatsapp plugin module implements qr image behavior.
+export { renderQrPngDataUrl } from "openclaw/plugin-sdk/media-runtime";

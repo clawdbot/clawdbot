@@ -1,13 +1,19 @@
+// Verifies last-session persistence and lookup for TUI launch.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  readConfigMachineStateWithMetadata,
+  writeConfigMachineState,
+} from "../state/config-machine-state.js";
+import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import {
   buildTuiLastSessionScopeKey,
-  isHeartbeatLikeTuiSession,
+  clearTuiLastSessionPointers,
+  createRememberSessionKeyWriter,
   readTuiLastSessionKey,
   resolveRememberedTuiSessionKey,
-  resolveTuiLastSessionStatePath,
   writeTuiLastSessionKey,
 } from "./tui-last-session.js";
 
@@ -20,10 +26,20 @@ async function makeTempStateDir() {
 }
 
 afterEach(async () => {
+  closeOpenClawStateDatabaseForTest();
   await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
 });
 
 describe("tui last session state", () => {
+  it("returns no remembered session without creating state on a fresh install", async () => {
+    const stateDir = await makeTempStateDir();
+
+    await expect(readTuiLastSessionKey({ scopeKey: "missing", stateDir })).resolves.toBeNull();
+    await expect(fs.stat(path.join(stateDir, "state", "openclaw.sqlite"))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+  });
+
   it("persists the last session under a scoped hashed key", async () => {
     const stateDir = await makeTempStateDir();
     const scopeKey = buildTuiLastSessionScopeKey({
@@ -39,8 +55,37 @@ describe("tui last session state", () => {
     });
 
     await expect(readTuiLastSessionKey({ scopeKey, stateDir })).resolves.toBe("agent:main:tui-123");
-    const raw = await fs.readFile(resolveTuiLastSessionStatePath(stateDir), "utf8");
-    expect(raw).not.toContain("127.0.0.1");
+    expect(
+      readConfigMachineStateWithMetadata<string>(`tui.lastSession.${scopeKey}`, {
+        env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
+      }),
+    ).toEqual({ value: "agent:main:tui-123", updatedAtMs: expect.any(Number) });
+    await expect(fs.stat(path.join(stateDir, "tui", "last-session.json"))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+
+    closeOpenClawStateDatabaseForTest();
+    await expect(readTuiLastSessionKey({ scopeKey, stateDir })).resolves.toBe("agent:main:tui-123");
+  });
+
+  it("atomically preserves concurrent updates to independent scopes", async () => {
+    const stateDir = await makeTempStateDir();
+    await Promise.all(
+      Array.from({ length: 40 }, (_, index) =>
+        writeTuiLastSessionKey({
+          scopeKey: index % 2 === 0 ? "terminal" : "remote",
+          sessionKey: `agent:main:tui-${index}`,
+          stateDir,
+        }),
+      ),
+    );
+
+    await expect(readTuiLastSessionKey({ scopeKey: "terminal", stateDir })).resolves.toBe(
+      "agent:main:tui-38",
+    );
+    await expect(readTuiLastSessionKey({ scopeKey: "remote", stateDir })).resolves.toBe(
+      "agent:main:tui-39",
+    );
   });
 
   it("restores only a remembered session that still belongs to the current agent", () => {
@@ -106,7 +151,6 @@ describe("tui last session state", () => {
       { key: "agent:main:tui-123" },
     ];
 
-    expect(isHeartbeatLikeTuiSession(sessions[0])).toBe(true);
     expect(
       resolveRememberedTuiSessionKey({
         rememberedKey: "agent:main:main",
@@ -114,5 +158,116 @@ describe("tui last session state", () => {
         sessions,
       }),
     ).toBeNull();
+  });
+
+  it("clears only pointers owned by a retired session", async () => {
+    const stateDir = await makeTempStateDir();
+    await writeTuiLastSessionKey({
+      scopeKey: "terminal",
+      sessionKey: "agent:main:main",
+      stateDir,
+    });
+    await writeTuiLastSessionKey({
+      scopeKey: "remote",
+      sessionKey: "agent:main:telegram:thread",
+      stateDir,
+    });
+    await writeTuiLastSessionKey({
+      scopeKey: "other-terminal",
+      sessionKey: "agent:main:main",
+      stateDir,
+    });
+    writeConfigMachineState("unrelated.sessionReference", "agent:main:main", {
+      env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
+    });
+
+    expect(
+      clearTuiLastSessionPointers({
+        stateDir,
+        sessionKeys: new Set(["agent:main:main"]),
+      }),
+    ).toBe(2);
+    await expect(readTuiLastSessionKey({ scopeKey: "terminal", stateDir })).resolves.toBeNull();
+    await expect(
+      readTuiLastSessionKey({ scopeKey: "other-terminal", stateDir }),
+    ).resolves.toBeNull();
+    await expect(readTuiLastSessionKey({ scopeKey: "remote", stateDir })).resolves.toBe(
+      "agent:main:telegram:thread",
+    );
+    expect(
+      readConfigMachineStateWithMetadata<string>("unrelated.sessionReference", {
+        env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
+      })?.value,
+    ).toBe("agent:main:main");
+  });
+
+  it("keeps a live replacement pointer written after the retired-pointer scan", async () => {
+    const stateDir = await makeTempStateDir();
+    await writeTuiLastSessionKey({
+      scopeKey: "terminal",
+      sessionKey: "agent:main:retired",
+      stateDir,
+    });
+    // A replacement lands before the delete phase; the in-transaction
+    // compare-and-delete must preserve it instead of erasing the live pointer.
+    await writeTuiLastSessionKey({
+      scopeKey: "terminal",
+      sessionKey: "agent:main:live",
+      stateDir,
+    });
+
+    expect(
+      clearTuiLastSessionPointers({
+        stateDir,
+        sessionKeys: new Set(["agent:main:retired"]),
+      }),
+    ).toBe(0);
+    await expect(readTuiLastSessionKey({ scopeKey: "terminal", stateDir })).resolves.toBe(
+      "agent:main:live",
+    );
+  });
+});
+
+describe("createRememberSessionKeyWriter", () => {
+  it("reports the first write failure once and keeps later writes silent", async () => {
+    const failures: string[] = [];
+    const write = async () => {
+      throw new Error("SQLITE_CORRUPT: database disk image is malformed");
+    };
+    const remember = createRememberSessionKeyWriter({
+      buildScopeKey: (sessionKey) => `scope:${sessionKey}`,
+      reportFailure: (message) => failures.push(message),
+      write,
+    });
+
+    remember("agent:main:one");
+    remember("agent:main:two");
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+
+    expect(failures).toEqual(["SQLITE_CORRUPT: database disk image is malformed"]);
+  });
+
+  it("skips empty and unknown session keys without touching the writer", async () => {
+    let writes = 0;
+    const remember = createRememberSessionKeyWriter({
+      buildScopeKey: (sessionKey) => sessionKey,
+      reportFailure: () => {
+        throw new Error("must not report");
+      },
+      write: async () => {
+        writes += 1;
+      },
+    });
+
+    remember("  ");
+    remember("unknown");
+    remember("agent:main:kept");
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+
+    expect(writes).toBe(1);
   });
 });

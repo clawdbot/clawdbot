@@ -1,10 +1,11 @@
+// Check Channel Agnostic Boundaries tests cover check channel agnostic boundaries script behavior.
 import { describe, expect, it } from "vitest";
 import {
   findChannelAgnosticBoundaryViolations,
   findAcpUserFacingChannelNameViolations,
   findChannelCoreReverseDependencyViolations,
   findSystemMarkLiteralViolations,
-} from "../../scripts/check-channel-agnostic-boundaries.mjs";
+} from "../../scripts/check-channel-agnostic-boundaries.mts";
 
 describe("check-channel-agnostic-boundaries", () => {
   it("flags direct channel module imports", () => {
@@ -64,7 +65,7 @@ describe("check-channel-agnostic-boundaries", () => {
       const payload = { mode: "persistent" };
       const x = cfg.session.threadBindings?.enabled;
     `;
-    expect(findChannelAgnosticBoundaryViolations(source)).toEqual([]);
+    expect(findChannelAgnosticBoundaryViolations(source)).toStrictEqual([]);
   });
 
   it("reverse-deps mode flags channel module re-exports", () => {
@@ -84,7 +85,7 @@ describe("check-channel-agnostic-boundaries", () => {
       const channel = "discord";
       const x = cfg.channels.discord?.threadBindings?.enabled;
     `;
-    expect(findChannelCoreReverseDependencyViolations(source)).toEqual([]);
+    expect(findChannelCoreReverseDependencyViolations(source)).toStrictEqual([]);
   });
 
   it("user-facing text mode flags channel names in string literals", () => {
@@ -103,7 +104,7 @@ describe("check-channel-agnostic-boundaries", () => {
     const source = `
       import { x } from "../discord/monitor/thread-bindings.js";
     `;
-    expect(findAcpUserFacingChannelNameViolations(source)).toEqual([]);
+    expect(findAcpUserFacingChannelNameViolations(source)).toStrictEqual([]);
   });
 
   it("system-mark guard flags hardcoded gear literals", () => {
@@ -122,6 +123,42 @@ describe("check-channel-agnostic-boundaries", () => {
     const source = `
       import { x } from "../infra/system-message.js";
     `;
-    expect(findSystemMarkLiteralViolations(source)).toEqual([]);
+    expect(findSystemMarkLiteralViolations(source)).toStrictEqual([]);
+  });
+
+  it.each([
+    {
+      name: "commented dynamic import with attributes",
+      source: 'await import /* gap */ ("../discord/private.js", { with: { type: "json" } });',
+      reason: 'dynamically imports channel module "../discord/private.js"',
+    },
+    {
+      name: "CommonJS require",
+      source: 'require("../telegram/private.js");',
+      reason: 'imports channel module "../telegram/private.js"',
+    },
+    {
+      name: "import.meta URL",
+      source: 'new URL("../slack/private.js", import.meta.url);',
+      reason: 'imports channel module "../slack/private.js"',
+    },
+    {
+      name: "TypeScript import type",
+      source: 'type PrivateModule = typeof import("../signal/private.js");',
+      reason: 'dynamically imports channel module "../signal/private.js"',
+    },
+  ])("flags $name in protected channel-independent sources", ({ source, reason }) => {
+    expect(findChannelAgnosticBoundaryViolations(source)).toEqual([{ line: 1, reason }]);
+  });
+
+  it("preserves source order when imports and config paths share a line", () => {
+    expect(
+      findChannelAgnosticBoundaryViolations(
+        'import "../telegram/private.js"; const enabled = cfg.channels.discord;',
+      ),
+    ).toEqual([
+      { line: 1, reason: 'imports channel module "../telegram/private.js"' },
+      { line: 1, reason: 'references config path "channels.discord"' },
+    ]);
   });
 });

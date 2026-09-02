@@ -1,8 +1,11 @@
+// Qa Lab plugin module implements visual task behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { pathExists, writeExternalFileWithinRoot } from "openclaw/plugin-sdk/security-runtime";
 import { ensureRepoBoundDirectory, resolveRepoRelativeOutputDir } from "../cli-paths.js";
+import { toQaError } from "../errors.js";
+import { isTruthyOptIn, trimToValue } from "../mantis-options.runtime.js";
 import {
   type CommandRunner,
   type CrabboxInspect,
@@ -13,6 +16,7 @@ import {
   stopCrabbox,
   warmupCrabbox,
 } from "./crabbox-runtime.js";
+import { renderMantisCrabboxReport, type MantisCrabboxReportSummary } from "./report.js";
 
 export type MantisVisualTaskVisionMode = "image-describe" | "metadata";
 
@@ -56,7 +60,7 @@ export type MantisVisualDriverOptions = {
   visionTimeoutMs?: number;
 };
 
-export type MantisVisualTaskResult = {
+type MantisVisualTaskResult = {
   outputDir: string;
   reportPath: string;
   screenshotPath?: string;
@@ -93,34 +97,16 @@ type VisionAssertion = {
   visible?: boolean;
 };
 
-type MantisVisualTaskSummary = {
-  artifacts: {
+type MantisVisualTaskSummary = MantisCrabboxReportSummary & {
+  artifacts: MantisCrabboxReportSummary["artifacts"] & {
     driverResultPath: string;
-    reportPath: string;
-    screenshotPath?: string;
-    summaryPath: string;
-    videoPath?: string;
   };
   browserUrl: string;
-  crabbox: {
-    bin: string;
-    createdLease: boolean;
-    id: string;
-    provider: string;
-    slug?: string;
-    state?: string;
-    vncCommand: string;
-  };
   driver?: MantisVisualDriverResult;
-  error?: string;
-  finishedAt: string;
-  outputDir: string;
   recording: {
     error?: string;
     required: boolean;
   };
-  startedAt: string;
-  status: "pass" | "fail";
   visionMode: MantisVisualTaskVisionMode;
 };
 
@@ -139,16 +125,6 @@ const CRABBOX_LEASE_ID_ENV = "OPENCLAW_MANTIS_CRABBOX_LEASE_ID";
 const CRABBOX_KEEP_ENV = "OPENCLAW_MANTIS_KEEP_VM";
 const CRABBOX_IDLE_TIMEOUT_ENV = "OPENCLAW_MANTIS_CRABBOX_IDLE_TIMEOUT";
 const CRABBOX_TTL_ENV = "OPENCLAW_MANTIS_CRABBOX_TTL";
-
-function trimToValue(value: string | undefined) {
-  const trimmed = value?.trim();
-  return trimmed && trimmed.length > 0 ? trimmed : undefined;
-}
-
-function isTruthyOptIn(value: string | undefined) {
-  const normalized = value?.trim().toLowerCase();
-  return normalized === "1" || normalized === "true" || normalized === "yes";
-}
 
 function defaultOutputDir(repoRoot: string, startedAt: Date) {
   const stamp = startedAt.toISOString().replace(/[:.]/gu, "-");
@@ -237,7 +213,7 @@ async function runCommandWithExternalOutput(params: {
     },
   });
   if (deferredError) {
-    throw deferredError;
+    throw toQaError(deferredError);
   }
 }
 
@@ -403,53 +379,31 @@ function browserLaunchScript() {
 }
 
 function renderReport(summary: MantisVisualTaskSummary) {
-  const lines = [
-    "# Mantis Visual Task",
-    "",
-    `Status: ${summary.status}`,
-    `Browser URL: ${summary.browserUrl}`,
-    `Vision mode: ${summary.visionMode}`,
-    `Output: ${summary.outputDir}`,
-    `Started: ${summary.startedAt}`,
-    `Finished: ${summary.finishedAt}`,
-    "",
-    "## Crabbox",
-    "",
-    `- Provider: ${summary.crabbox.provider}`,
-    `- Lease: ${summary.crabbox.id}${summary.crabbox.slug ? ` (${summary.crabbox.slug})` : ""}`,
-    `- Created by run: ${summary.crabbox.createdLease}`,
-    `- State: ${summary.crabbox.state ?? "unknown"}`,
-    `- VNC: \`${summary.crabbox.vncCommand}\``,
-    "",
-    "## Artifacts",
-    "",
-    summary.artifacts.screenshotPath
-      ? `- Screenshot: \`${path.basename(summary.artifacts.screenshotPath)}\``
-      : "- Screenshot: missing",
-    summary.artifacts.videoPath
-      ? `- Video: \`${path.basename(summary.artifacts.videoPath)}\``
-      : "- Video: missing",
-    `- Driver result: \`${path.basename(summary.artifacts.driverResultPath)}\``,
-    "",
-    "## Vision",
-    "",
-    summary.driver?.vision.text ? summary.driver.vision.text : "No vision text recorded.",
-    summary.driver?.expectText ? `Expected text: ${summary.driver.expectText}` : undefined,
-    summary.driver?.vision.assertion?.visible !== undefined
-      ? `Visible: ${summary.driver.vision.assertion.visible}`
-      : undefined,
-    summary.driver?.vision.assertion?.evidence
-      ? `Evidence: ${summary.driver.vision.assertion.evidence}`
-      : undefined,
-    summary.driver?.vision.assertion?.reason
-      ? `Reason: ${summary.driver.vision.assertion.reason}`
-      : undefined,
-    summary.driver?.matched !== undefined ? `Matched: ${summary.driver.matched}` : undefined,
-    summary.recording.error ? `Recording error: ${summary.recording.error}` : undefined,
-    summary.error ? `Error: ${summary.error}` : undefined,
-    "",
-  ].filter((line) => line !== undefined);
-  return `${lines.join("\n")}\n`;
+  return renderMantisCrabboxReport({
+    afterArtifacts: [
+      "## Vision",
+      "",
+      summary.driver?.vision.text ? summary.driver.vision.text : "No vision text recorded.",
+      summary.driver?.expectText ? `Expected text: ${summary.driver.expectText}` : undefined,
+      summary.driver?.vision.assertion?.visible !== undefined
+        ? `Visible: ${summary.driver.vision.assertion.visible}`
+        : undefined,
+      summary.driver?.vision.assertion?.evidence
+        ? `Evidence: ${summary.driver.vision.assertion.evidence}`
+        : undefined,
+      summary.driver?.vision.assertion?.reason
+        ? `Reason: ${summary.driver.vision.assertion.reason}`
+        : undefined,
+      summary.driver?.matched !== undefined ? `Matched: ${summary.driver.matched}` : undefined,
+      summary.recording.error ? `Recording error: ${summary.recording.error}` : undefined,
+      summary.error ? `Error: ${summary.error}` : undefined,
+      "",
+    ],
+    artifactRows: [`- Driver result: \`${path.basename(summary.artifacts.driverResultPath)}\``],
+    headerRows: [`Browser URL: ${summary.browserUrl}`, `Vision mode: ${summary.visionMode}`],
+    summary,
+    title: "Mantis Visual Task",
+  });
 }
 
 export async function runMantisVisualDriver(
@@ -516,7 +470,12 @@ export async function runMantisVisualDriver(
       runner,
       stdio: "inherit",
     });
-    await new Promise((resolve) => setTimeout(resolve, opts.settleMs ?? DEFAULT_SETTLE_MS));
+    const settleMs = opts.settleMs ?? DEFAULT_SETTLE_MS;
+    if (settleMs > 0) {
+      await new Promise((resolve) => {
+        setTimeout(resolve, settleMs);
+      });
+    }
     await runCommandWithExternalOutput({
       command: crabboxBin,
       outputPath: screenshotPath,
@@ -817,3 +776,4 @@ export async function runMantisVisualTask(
     }
   }
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

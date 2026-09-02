@@ -1,46 +1,19 @@
-import type { GatewayClient, GatewayClientOptions } from "./client.js";
+// Server-side gateway client readiness adapter.
+// Defers client start until the shared event-loop readiness probe succeeds.
+import type {
+  GatewayClientStartable,
+  GatewayClientStartReadinessOptions,
+} from "../../packages/gateway-client/src/readiness.js";
+import { startGatewayClientWithReadinessWait } from "../../packages/gateway-client/src/readiness.js";
 import { waitForEventLoopReady, type EventLoopReadyResult } from "./event-loop-ready.js";
-import { resolveConnectChallengeTimeoutMs } from "./handshake-timeouts.js";
 
-export type GatewayClientStartReadinessOptions = {
-  timeoutMs?: number;
-  clientOptions?: Pick<
-    GatewayClientOptions,
-    "connectChallengeTimeoutMs" | "connectDelayMs" | "preauthHandshakeTimeoutMs"
-  >;
-  signal?: AbortSignal;
-};
+// Server-side gateway clients wait for the event loop readiness probe before
+// starting so connect attempts do not race immediately after process startup.
 
-function resolveGatewayClientStartReadinessTimeoutMs(
-  options: GatewayClientStartReadinessOptions = {},
-): number {
-  if (typeof options.timeoutMs === "number" && Number.isFinite(options.timeoutMs)) {
-    return options.timeoutMs;
-  }
-  const clientOptions = options.clientOptions ?? {};
-  const timeoutOverride =
-    typeof clientOptions.connectChallengeTimeoutMs === "number" &&
-    Number.isFinite(clientOptions.connectChallengeTimeoutMs)
-      ? clientOptions.connectChallengeTimeoutMs
-      : typeof clientOptions.connectDelayMs === "number" &&
-          Number.isFinite(clientOptions.connectDelayMs)
-        ? clientOptions.connectDelayMs
-        : undefined;
-  return resolveConnectChallengeTimeoutMs(timeoutOverride, {
-    configuredTimeoutMs: clientOptions.preauthHandshakeTimeoutMs,
-  });
-}
-
-export async function startGatewayClientWhenEventLoopReady(
-  client: GatewayClient,
+/** Starts a gateway client once the shared event-loop readiness check passes. */
+export function startGatewayClientWhenEventLoopReady(
+  client: GatewayClientStartable,
   options: GatewayClientStartReadinessOptions = {},
 ): Promise<EventLoopReadyResult> {
-  const readiness = await waitForEventLoopReady({
-    maxWaitMs: resolveGatewayClientStartReadinessTimeoutMs(options),
-    signal: options.signal,
-  });
-  if (readiness.ready && !readiness.aborted && options.signal?.aborted !== true) {
-    client.start();
-  }
-  return readiness;
+  return startGatewayClientWithReadinessWait(waitForEventLoopReady, client, options);
 }

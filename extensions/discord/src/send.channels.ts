@@ -1,3 +1,4 @@
+// Discord plugin module implements send.channels behavior.
 import type { APIChannel } from "discord-api-types/v10";
 import {
   createGuildChannel,

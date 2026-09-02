@@ -1,3 +1,4 @@
+// Qa Channel plugin module implements channel behavior.
 import {
   buildChannelOutboundSessionRoute,
   buildThreadAwareOutboundSessionRoute,
@@ -6,38 +7,106 @@ import {
 import {
   createMessageReceiptFromOutboundResults,
   defineChannelMessageAdapter,
-} from "openclaw/plugin-sdk/channel-message";
-import { getChatChannelMeta } from "openclaw/plugin-sdk/channel-plugin-common";
+  type ChannelMessageSendPayloadContext,
+} from "openclaw/plugin-sdk/channel-outbound";
+import { DEFAULT_ACCOUNT_ID } from "./accounts.js";
 import {
-  DEFAULT_ACCOUNT_ID,
-  listQaChannelAccountIds,
-  resolveDefaultQaChannelAccountId,
-  resolveQaChannelAccount,
-} from "./accounts.js";
-import { buildQaTarget, normalizeQaTarget, parseQaTarget } from "./bus-client.js";
+  buildQaTarget,
+  normalizeQaTarget,
+  parseQaTarget,
+  resolveQaTargetThread,
+} from "./bus-client.js";
 import { qaChannelMessageActions } from "./channel-actions.js";
-import { qaChannelPluginConfigSchema } from "./config-schema.js";
+import { createQaChannelPluginBase, QA_CHANNEL_ID, qaChannelRuntimeMeta } from "./channel-base.js";
 import { startQaGatewayAccount } from "./gateway.js";
-import { sendQaChannelText } from "./outbound.js";
+import { sendQaChannelMedia, sendQaChannelMediaBatch, sendQaChannelText } from "./outbound.js";
 import type { ChannelPlugin } from "./runtime-api.js";
-import { applyQaSetup } from "./setup.js";
 import { qaChannelStatus } from "./status.js";
 import type { CoreConfig, ResolvedQaChannelAccount } from "./types.js";
 
-const CHANNEL_ID = "qa-channel" as const;
-const meta = { ...getChatChannelMeta(CHANNEL_ID) };
+type QaChannelPayloadSendContext = Pick<
+  ChannelMessageSendPayloadContext,
+  | "cfg"
+  | "to"
+  | "text"
+  | "payload"
+  | "accountId"
+  | "threadId"
+  | "replyToId"
+  | "mediaUrl"
+  | "mediaAccess"
+  | "mediaLocalRoots"
+  | "mediaReadFile"
+>;
+
+function createQaChannelMessageReceipt(
+  ctx: Pick<QaChannelPayloadSendContext, "replyToId" | "threadId" | "to">,
+  messageId: string,
+  kind: "media" | "text",
+) {
+  const { threadId } = resolveQaTargetThread({ target: ctx.to, threadId: ctx.threadId });
+  return createMessageReceiptFromOutboundResults({
+    results: [{ channel: QA_CHANNEL_ID, messageId }],
+    threadId,
+    replyToId: ctx.replyToId ?? undefined,
+    kind,
+  });
+}
+
+async function sendQaChannelMessagePayload(ctx: QaChannelPayloadSendContext) {
+  const text = ctx.payload.text ?? ctx.text;
+  const mediaUrls = Array.from(
+    new Set(
+      [ctx.mediaUrl, ctx.payload.mediaUrl, ...(ctx.payload.mediaUrls ?? [])].filter(
+        (mediaUrl): mediaUrl is string =>
+          typeof mediaUrl === "string" && mediaUrl.trim().length > 0,
+      ),
+    ),
+  );
+  const params = {
+    cfg: ctx.cfg as CoreConfig,
+    accountId: ctx.accountId,
+    to: ctx.to,
+    text,
+    isError: ctx.payload.isError,
+    threadId: ctx.threadId,
+    replyToId: ctx.replyToId,
+  };
+  const result =
+    mediaUrls.length === 0
+      ? await sendQaChannelText(params)
+      : await sendQaChannelMediaBatch({
+          ...params,
+          mediaUrls,
+          mediaAccess: ctx.mediaAccess,
+          mediaLocalRoots: ctx.mediaLocalRoots,
+          mediaReadFile: ctx.mediaReadFile,
+        });
+  return {
+    messageId: result.messageId,
+    receipt: createQaChannelMessageReceipt(
+      ctx,
+      result.messageId,
+      mediaUrls.length > 0 ? "media" : "text",
+    ),
+  };
+}
 
 const qaChannelMessageAdapter = defineChannelMessageAdapter({
-  id: CHANNEL_ID,
+  id: QA_CHANNEL_ID,
   durableFinal: {
     capabilities: {
       text: true,
+      media: true,
+      payload: true,
       replyTo: true,
       thread: true,
       messageSendingHooks: true,
     },
   },
   send: {
+    // Detached completions must deliver the visible caption and media atomically.
+    payload: sendQaChannelMessagePayload,
     text: async (ctx) => {
       const result = await sendQaChannelText({
         cfg: ctx.cfg as CoreConfig,
@@ -47,59 +116,40 @@ const qaChannelMessageAdapter = defineChannelMessageAdapter({
         threadId: ctx.threadId,
         replyToId: ctx.replyToId,
       });
-      const threadId = ctx.threadId == null ? undefined : String(ctx.threadId);
-      const replyToId = ctx.replyToId ?? undefined;
       return {
         messageId: result.messageId,
-        receipt: createMessageReceiptFromOutboundResults({
-          results: [{ channel: CHANNEL_ID, messageId: result.messageId }],
-          threadId,
-          replyToId,
-          kind: "text",
-        }),
+        receipt: createQaChannelMessageReceipt(ctx, result.messageId, "text"),
+      };
+    },
+    media: async (ctx) => {
+      const result = await sendQaChannelMedia({
+        cfg: ctx.cfg as CoreConfig,
+        accountId: ctx.accountId,
+        to: ctx.to,
+        text: ctx.text,
+        mediaUrl: ctx.mediaUrl,
+        mediaAccess: ctx.mediaAccess,
+        mediaLocalRoots: ctx.mediaLocalRoots,
+        mediaReadFile: ctx.mediaReadFile,
+        threadId: ctx.threadId,
+        replyToId: ctx.replyToId,
+      });
+      return {
+        messageId: result.messageId,
+        receipt: createQaChannelMessageReceipt(ctx, result.messageId, "media"),
       };
     },
   },
 });
 
+const qaChannelPluginBase = createQaChannelPluginBase(qaChannelRuntimeMeta);
+
 export const qaChannelPlugin: ChannelPlugin<ResolvedQaChannelAccount> = createChatChannelPlugin({
   base: {
-    id: CHANNEL_ID,
-    meta,
-    capabilities: {
-      chatTypes: ["direct", "group"],
-    },
-    reload: { configPrefixes: ["channels.qa-channel"] },
-    configSchema: qaChannelPluginConfigSchema,
-    setup: {
-      applyAccountConfig: ({ cfg, accountId, input }) =>
-        applyQaSetup({
-          cfg,
-          accountId,
-          input: input as Record<string, unknown>,
-        }),
-    },
-    config: {
-      listAccountIds: (cfg) => listQaChannelAccountIds(cfg as CoreConfig),
-      resolveAccount: (cfg, accountId) =>
-        resolveQaChannelAccount({ cfg: cfg as CoreConfig, accountId }),
-      defaultAccountId: (cfg) => resolveDefaultQaChannelAccountId(cfg as CoreConfig),
-      isConfigured: (account) => account.configured,
-      resolveAllowFrom: ({ cfg, accountId }) =>
-        resolveQaChannelAccount({ cfg: cfg as CoreConfig, accountId }).config.allowFrom,
-      resolveDefaultTo: ({ cfg, accountId }) =>
-        resolveQaChannelAccount({ cfg: cfg as CoreConfig, accountId }).config.defaultTo,
-    },
+    ...qaChannelPluginBase,
+    capabilities: { ...qaChannelPluginBase.capabilities, media: true },
     messaging: {
       normalizeTarget: normalizeQaTarget,
-      parseExplicitTarget: ({ raw }) => {
-        const parsed = parseQaTarget(raw);
-        return {
-          to: buildQaTarget(parsed),
-          threadId: parsed.threadId,
-          chatType: parsed.chatType,
-        };
-      },
       inferTargetChatType: ({ to }) => parseQaTarget(to).chatType,
       targetResolver: {
         looksLikeId: (raw) =>
@@ -115,12 +165,14 @@ export const qaChannelPlugin: ChannelPlugin<ResolvedQaChannelAccount> = createCh
         threadId,
         currentSessionKey,
       }) => {
-        const parsed = parseQaTarget(target);
+        const resolved = resolveQaTargetThread({ target, threadId });
+        const parsed = resolved.target;
         const baseRoute = buildChannelOutboundSessionRoute({
           cfg,
           agentId,
-          channel: CHANNEL_ID,
+          channel: QA_CHANNEL_ID,
           accountId,
+          recipientSessionExact: true,
           peer: {
             kind:
               parsed.chatType === "direct"
@@ -131,13 +183,18 @@ export const qaChannelPlugin: ChannelPlugin<ResolvedQaChannelAccount> = createCh
             id: buildQaTarget(parsed),
           },
           chatType: parsed.chatType,
-          from: `qa-channel:${accountId ?? DEFAULT_ACCOUNT_ID}`,
+          from: `${QA_CHANNEL_ID}:${accountId ?? DEFAULT_ACCOUNT_ID}`,
           to: buildQaTarget(parsed),
         });
+        // An explicit thread target already owns the complete session identity;
+        // applying reply or current-thread metadata would append a second thread.
+        if (parsed.threadId !== undefined) {
+          return baseRoute;
+        }
         return buildThreadAwareOutboundSessionRoute({
           route: baseRoute,
           replyToId,
-          threadId: threadId ?? (target.trim().startsWith("thread:") ? undefined : parsed.threadId),
+          threadId: resolved.threadId,
           currentSessionKey,
           canRecoverCurrentThread: ({ route }) =>
             route.chatType !== "direct" || (cfg.session?.dmScope ?? "main") !== "main",
@@ -159,7 +216,64 @@ export const qaChannelPlugin: ChannelPlugin<ResolvedQaChannelAccount> = createCh
     status: qaChannelStatus,
     gateway: {
       startAccount: async (ctx) => {
-        await startQaGatewayAccount(CHANNEL_ID, meta.label, ctx);
+        await startQaGatewayAccount(QA_CHANNEL_ID, qaChannelRuntimeMeta.label, ctx);
+      },
+    },
+    threading: {
+      matchesToolContextTarget: ({ target, toolContext }) => {
+        const requested = parseQaTarget(target, {
+          defaultChatType: toolContext.currentChatType ?? "channel",
+        });
+        return [toolContext.currentChannelId, toolContext.currentMessagingTarget].some(
+          (currentTarget) => {
+            if (!currentTarget) {
+              return false;
+            }
+            const current = parseQaTarget(currentTarget, {
+              defaultChatType: toolContext.currentChatType ?? requested.chatType,
+            });
+            return (
+              current.chatType === requested.chatType &&
+              current.conversationId === requested.conversationId &&
+              (!requested.threadId ||
+                requested.threadId === current.threadId ||
+                requested.threadId === toolContext.currentThreadTs)
+            );
+          },
+        );
+      },
+      buildToolContext: ({ context, hasRepliedRef }) => {
+        const currentMessagingTarget = context.To?.trim() || undefined;
+        const parsedTarget = currentMessagingTarget
+          ? parseQaTarget(currentMessagingTarget, {
+              defaultChatType:
+                context.ChatType === "direct" ||
+                context.ChatType === "group" ||
+                context.ChatType === "channel"
+                  ? context.ChatType
+                  : "channel",
+            })
+          : undefined;
+        const currentThreadTs =
+          context.MessageThreadId != null
+            ? String(context.MessageThreadId)
+            : parsedTarget?.threadId;
+        return {
+          currentChannelId:
+            context.NativeChannelId?.trim() ||
+            parsedTarget?.conversationId ||
+            currentMessagingTarget,
+          currentChatType:
+            context.ChatType === "direct" ||
+            context.ChatType === "group" ||
+            context.ChatType === "channel"
+              ? context.ChatType
+              : parsedTarget?.chatType,
+          currentMessagingTarget,
+          currentThreadTs,
+          ...(currentThreadTs ? { replyToMode: "all" as const } : {}),
+          hasRepliedRef,
+        };
       },
     },
     actions: qaChannelMessageActions,
@@ -168,9 +282,14 @@ export const qaChannelPlugin: ChannelPlugin<ResolvedQaChannelAccount> = createCh
   outbound: {
     base: {
       deliveryMode: "direct",
+      sendTextOnlyErrorPayloads: true,
+      sendPayload: async (ctx) => {
+        const result = await sendQaChannelMessagePayload(ctx);
+        return { channel: QA_CHANNEL_ID, messageId: result.messageId };
+      },
     },
     attachedResults: {
-      channel: CHANNEL_ID,
+      channel: QA_CHANNEL_ID,
       sendText: async ({ cfg, to, text, accountId, threadId, replyToId }) =>
         await sendQaChannelText({
           cfg: cfg as CoreConfig,
@@ -180,6 +299,34 @@ export const qaChannelPlugin: ChannelPlugin<ResolvedQaChannelAccount> = createCh
           threadId,
           replyToId,
         }),
+      sendMedia: async ({
+        cfg,
+        to,
+        text,
+        mediaUrl,
+        accountId,
+        threadId,
+        replyToId,
+        mediaAccess,
+        mediaLocalRoots,
+        mediaReadFile,
+      }) => {
+        if (!mediaUrl) {
+          throw new Error("QA channel media send requires mediaUrl");
+        }
+        return await sendQaChannelMedia({
+          cfg: cfg as CoreConfig,
+          accountId,
+          to,
+          text,
+          mediaUrl,
+          threadId,
+          replyToId,
+          mediaAccess,
+          mediaLocalRoots,
+          mediaReadFile,
+        });
+      },
     },
   },
 });

@@ -1,6 +1,7 @@
+// Exercises harness lifecycle hook adapters and finalize-retry budget semantics.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
-  clearAgentHarnessFinalizeRetryBudget,
+  awaitAgentHarnessAgentEndHook,
   runAgentHarnessAgentEndHook,
   runAgentHarnessBeforeAgentFinalizeHook,
   runAgentHarnessLlmInputHook,
@@ -22,11 +23,13 @@ const EVENT = {
   transcriptPath: "/tmp/session.jsonl",
   stopHookActive: false,
   lastAssistantMessage: "done",
+  messages: [],
+  success: true,
 };
 
 describe("agent harness lifecycle hook helpers", () => {
   afterEach(() => {
-    clearAgentHarnessFinalizeRetryBudget();
+    Reflect.deleteProperty(globalThis, Symbol.for("openclaw.pluginFinalizeRetryBudget"));
   });
 
   it("ignores legacy hook runners that advertise llm_input without a runner method", () => {
@@ -59,6 +62,59 @@ describe("agent harness lifecycle hook helpers", () => {
     expect(hookRunner.hasHooks).toHaveBeenCalledWith("agent_end");
   });
 
+  it("resolves after agent_end hooks settle", async () => {
+    let releaseHook: () => void = () => undefined;
+    const agentEndSettled = new Promise<void>((resolve) => {
+      releaseHook = resolve;
+    });
+    const hookRunner = {
+      hasHooks: vi.fn((hookName: string) => hookName === "agent_end"),
+      runAgentEnd: vi.fn(() => agentEndSettled),
+    };
+
+    const run = awaitAgentHarnessAgentEndHook({
+      ctx: { runId: "run-1", sessionKey: "agent:main:session-1" },
+      event: EVENT,
+      hookRunner: hookRunner as never,
+    });
+    let resolved = false;
+    void run.then(() => {
+      resolved = true;
+    });
+
+    await Promise.resolve();
+    expect(hookRunner.runAgentEnd).toHaveBeenCalledTimes(1);
+    expect(hookRunner.runAgentEnd).toHaveBeenCalledWith(
+      EVENT,
+      expect.objectContaining({ runId: "run-1", sessionKey: "agent:main:session-1" }),
+      { unrefTimeout: false },
+    );
+    expect(resolved).toBe(false);
+    releaseHook();
+    await expect(run).resolves.toBeUndefined();
+    expect(resolved).toBe(true);
+  });
+
+  it("can leave agent_end timeouts unref'd for fire-and-forget callers", async () => {
+    const hookRunner = {
+      hasHooks: vi.fn((hookName: string) => hookName === "agent_end"),
+      runAgentEnd: vi.fn(async () => undefined),
+    };
+
+    runAgentHarnessAgentEndHook({
+      ctx: { runId: "run-1", sessionKey: "agent:main:session-1" },
+      event: EVENT,
+      hookRunner: hookRunner as never,
+    });
+    await Promise.resolve();
+
+    expect(hookRunner.runAgentEnd).toHaveBeenCalledWith(
+      EVENT,
+      expect.objectContaining({ runId: "run-1", sessionKey: "agent:main:session-1" }),
+      { unrefTimeout: true },
+    );
+  });
+
   it("continues when legacy hook runners advertise before_agent_finalize without a runner method", async () => {
     await expect(
       runAgentHarnessBeforeAgentFinalizeHook({
@@ -66,81 +122,6 @@ describe("agent harness lifecycle hook helpers", () => {
         event: {},
         hookRunner: createLegacyHookRunner(),
       } as never),
-    ).resolves.toEqual({ action: "continue" });
-  });
-
-  it("clears finalize retry budgets by run id", async () => {
-    const hookRunner = {
-      hasHooks: () => true,
-      runBeforeAgentFinalize: vi.fn().mockResolvedValue({
-        action: "revise",
-        retry: {
-          instruction: "revise once",
-          idempotencyKey: "stable",
-          maxAttempts: 1,
-        },
-      }),
-    };
-
-    await expect(
-      runAgentHarnessBeforeAgentFinalizeHook({
-        event: EVENT,
-        ctx: { runId: "run-1", sessionKey: "agent:main:session-1" },
-        hookRunner: hookRunner as never,
-      }),
-    ).resolves.toEqual({ action: "revise", reason: "revise once" });
-    await expect(
-      runAgentHarnessBeforeAgentFinalizeHook({
-        event: EVENT,
-        ctx: { runId: "run-1", sessionKey: "agent:main:session-1" },
-        hookRunner: hookRunner as never,
-      }),
-    ).resolves.toEqual({ action: "continue" });
-
-    clearAgentHarnessFinalizeRetryBudget({ runId: "run-1" });
-
-    await expect(
-      runAgentHarnessBeforeAgentFinalizeHook({
-        event: EVENT,
-        ctx: { runId: "run-1", sessionKey: "agent:main:session-1" },
-        hookRunner: hookRunner as never,
-      }),
-    ).resolves.toEqual({ action: "revise", reason: "revise once" });
-  });
-
-  it("does not clear finalize retry budgets for runs that only share a prefix", async () => {
-    const hookRunner = {
-      hasHooks: () => true,
-      runBeforeAgentFinalize: vi.fn().mockResolvedValue({
-        action: "revise",
-        retry: {
-          instruction: "revise child once",
-          idempotencyKey: "stable",
-          maxAttempts: 1,
-        },
-      }),
-    };
-    const childEvent = {
-      ...EVENT,
-      runId: "run:child",
-    };
-
-    await expect(
-      runAgentHarnessBeforeAgentFinalizeHook({
-        event: childEvent,
-        ctx: { runId: "run:child", sessionKey: "agent:main:session-1" },
-        hookRunner: hookRunner as never,
-      }),
-    ).resolves.toEqual({ action: "revise", reason: "revise child once" });
-
-    clearAgentHarnessFinalizeRetryBudget({ runId: "run" });
-
-    await expect(
-      runAgentHarnessBeforeAgentFinalizeHook({
-        event: childEvent,
-        ctx: { runId: "run:child", sessionKey: "agent:main:session-1" },
-        hookRunner: hookRunner as never,
-      }),
     ).resolves.toEqual({ action: "continue" });
   });
 
@@ -176,16 +157,6 @@ describe("agent harness lifecycle hook helpers", () => {
         hookRunner: hookRunner as never,
       }),
     ).resolves.toEqual({ action: "continue" });
-
-    clearAgentHarnessFinalizeRetryBudget({ runId: "run-from-context" });
-
-    await expect(
-      runAgentHarnessBeforeAgentFinalizeHook({
-        event: eventWithoutRunId,
-        ctx: { runId: "run-from-context", sessionKey: "agent:main:shared-session" },
-        hookRunner: hookRunner as never,
-      }),
-    ).resolves.toEqual({ action: "revise", reason: "revise from context run" });
   });
 
   it("preserves merged revise reasons when retry metadata is present", async () => {
@@ -230,6 +201,8 @@ describe("agent harness lifecycle hook helpers", () => {
       reason: "retry generated artifacts\n\nretry focused tests",
       retry: firstRetry,
     };
+    // retryCandidates is intentionally non-enumerable in production hook
+    // results, so callers do not serialize internal retry bookkeeping.
     Object.defineProperty(result, "retryCandidates", {
       enumerable: false,
       value: [firstRetry, secondRetry],
@@ -294,6 +267,8 @@ describe("agent harness lifecycle hook helpers", () => {
   });
 
   it("does not collide fallback retry keys for long instructions with shared prefixes", async () => {
+    // Fallback keys include a digest of the full instruction. Prefix-only
+    // truncation would spend unrelated long retry requests together.
     const sharedPrefix = "x".repeat(180);
     const firstInstruction = `${sharedPrefix} first`;
     const secondInstruction = `${sharedPrefix} second`;

@@ -1,3 +1,4 @@
+// Normalizes path-like config values to canonical user paths.
 import { isPlainObject, resolveUserPath } from "../utils.js";
 import type { OpenClawConfig } from "./types.js";
 

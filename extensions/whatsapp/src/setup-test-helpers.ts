@@ -1,3 +1,4 @@
+// Whatsapp helper module supports setup test helpers behavior.
 import { expect } from "vitest";
 
 type WhatsAppSetupConfig = {

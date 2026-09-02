@@ -12,11 +12,11 @@ Adds Qianfan model provider support to OpenClaw.
 ## Distribution
 
 - Package: `@openclaw/qianfan-provider`
-- Install route: included in OpenClaw
+- Install route: npm; ClawHub: `clawhub:@openclaw/qianfan-provider`
 
 ## Surface
 
-providers: qianfan
+providers: `qianfan`
 
 ## Related docs
 

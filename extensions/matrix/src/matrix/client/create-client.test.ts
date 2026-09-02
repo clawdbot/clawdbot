@@ -1,3 +1,4 @@
+// Matrix tests cover create client plugin behavior.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const ensureMatrixSdkLoggingConfiguredMock = vi.hoisted(() => vi.fn());
@@ -33,7 +34,6 @@ describe("createMatrixClient", () => {
     storagePath: "/tmp/openclaw-matrix-create-client-test/storage.json",
     recoveryKeyPath: "/tmp/openclaw-matrix-create-client-test/recovery.key",
     idbSnapshotPath: "/tmp/openclaw-matrix-create-client-test/idb.snapshot",
-    metaPath: "/tmp/openclaw-matrix-create-client-test/storage-meta.json",
     accountKey: "default",
     tokenHash: "token-hash",
   };
@@ -76,7 +76,7 @@ describe("createMatrixClient", () => {
       encryption: undefined,
       localTimeoutMs: undefined,
       initialSyncLimit: undefined,
-      storagePath: storagePaths.storagePath,
+      storageRootDir: storagePaths.rootDir,
       recoveryKeyPath: storagePaths.recoveryKeyPath,
       idbSnapshotPath: storagePaths.idbSnapshotPath,
       cryptoDatabasePrefix: "openclaw-matrix-default-token-hash",
@@ -95,13 +95,21 @@ describe("createMatrixClient", () => {
       allowPrivateNetwork: true,
     });
 
-    expect(MatrixClientMock).toHaveBeenCalledWith(
-      "https://matrix.example.org",
-      "tok",
-      expect.objectContaining({
-        ssrfPolicy: { allowPrivateNetwork: true },
-      }),
-    );
+    expect(MatrixClientMock).toHaveBeenCalledWith("https://matrix.example.org", "tok", {
+      userId: "@bot:example.org",
+      password: undefined,
+      deviceId: undefined,
+      encryption: undefined,
+      localTimeoutMs: undefined,
+      initialSyncLimit: undefined,
+      storageRootDir: undefined,
+      recoveryKeyPath: undefined,
+      idbSnapshotPath: undefined,
+      cryptoDatabasePrefix: undefined,
+      autoBootstrapCrypto: undefined,
+      ssrfPolicy: { allowPrivateNetwork: true },
+      dispatcherPolicy: undefined,
+    });
   });
 
   it("prefers explicit ssrfPolicy over allowPrivateNetwork", async () => {
@@ -115,13 +123,21 @@ describe("createMatrixClient", () => {
       ssrfPolicy: explicitPolicy as never,
     });
 
-    expect(MatrixClientMock).toHaveBeenCalledWith(
-      "https://matrix.example.org",
-      "tok",
-      expect.objectContaining({
-        ssrfPolicy: explicitPolicy,
-      }),
-    );
+    expect(MatrixClientMock).toHaveBeenCalledWith("https://matrix.example.org", "tok", {
+      userId: "@bot:example.org",
+      password: undefined,
+      deviceId: undefined,
+      encryption: undefined,
+      localTimeoutMs: undefined,
+      initialSyncLimit: undefined,
+      storageRootDir: undefined,
+      recoveryKeyPath: undefined,
+      idbSnapshotPath: undefined,
+      cryptoDatabasePrefix: undefined,
+      autoBootstrapCrypto: undefined,
+      ssrfPolicy: explicitPolicy,
+      dispatcherPolicy: undefined,
+    });
   });
 
   it("leaves ssrfPolicy undefined when allowPrivateNetwork is falsy and no explicit policy", async () => {
@@ -132,13 +148,21 @@ describe("createMatrixClient", () => {
       persistStorage: false,
     });
 
-    expect(MatrixClientMock).toHaveBeenCalledWith(
-      "https://matrix.example.org",
-      "tok",
-      expect.objectContaining({
-        ssrfPolicy: undefined,
-      }),
-    );
+    expect(MatrixClientMock).toHaveBeenCalledWith("https://matrix.example.org", "tok", {
+      userId: "@bot:example.org",
+      password: undefined,
+      deviceId: undefined,
+      encryption: undefined,
+      localTimeoutMs: undefined,
+      initialSyncLimit: undefined,
+      storageRootDir: undefined,
+      recoveryKeyPath: undefined,
+      idbSnapshotPath: undefined,
+      cryptoDatabasePrefix: undefined,
+      autoBootstrapCrypto: undefined,
+      ssrfPolicy: undefined,
+      dispatcherPolicy: undefined,
+    });
   });
 
   it("skips persistent storage wiring when persistence is disabled", async () => {
@@ -158,7 +182,7 @@ describe("createMatrixClient", () => {
       encryption: undefined,
       localTimeoutMs: undefined,
       initialSyncLimit: undefined,
-      storagePath: undefined,
+      storageRootDir: undefined,
       recoveryKeyPath: undefined,
       idbSnapshotPath: undefined,
       cryptoDatabasePrefix: undefined,

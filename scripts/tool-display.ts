@@ -1,17 +1,20 @@
+// Tool Display script supports OpenClaw repository automation.
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { TOOL_DISPLAY_CONFIG, type ToolDisplayConfig } from "../src/agents/tool-display-config.js";
+import { TOOL_DISPLAY_CONFIG } from "../src/agents/tool-display-config.js";
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const repoRoot = path.resolve(__dirname, "..");
+type ToolDisplayConfig = typeof TOOL_DISPLAY_CONFIG;
+
+const scriptDir = path.dirname(fileURLToPath(import.meta.url));
+const repoRoot = path.resolve(scriptDir, "..");
 const outputPath = path.join(
   repoRoot,
   "apps/shared/OpenClawKit/Sources/OpenClawKit/Resources/tool-display.json",
 );
 const toolSources = [
   path.join(repoRoot, "src/agents/apply-patch.ts"),
-  path.join(repoRoot, "src/agents/bash-tools.exec.ts"),
+  path.join(repoRoot, "src/agents/bash-tools.exec-run.ts"),
   path.join(repoRoot, "src/agents/bash-tools.process.ts"),
   path.join(repoRoot, "src/auto-reply/reply/acp-projector.ts"),
 ];
@@ -90,5 +93,18 @@ function collectToolNamesFromFile(sourcePath: string, names: Set<string>) {
 }
 
 function serializeToolDisplayConfig(config: ToolDisplayConfig = TOOL_DISPLAY_CONFIG): string {
-  return `${JSON.stringify(config, null, 2)}\n`;
+  const tools = Object.entries(config.tools);
+  return [
+    "{",
+    `  "version": ${JSON.stringify(config.version)},`,
+    `  "fallback": ${JSON.stringify(config.fallback)},`,
+    '  "tools": {',
+    ...tools.map(
+      ([name, spec], index) =>
+        `    ${JSON.stringify(name)}: ${JSON.stringify(spec)}${index === tools.length - 1 ? "" : ","}`,
+    ),
+    "  }",
+    "}",
+    "",
+  ].join("\n");
 }

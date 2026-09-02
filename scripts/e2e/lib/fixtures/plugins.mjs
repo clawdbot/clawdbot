@@ -1,3 +1,4 @@
+// Plugin fixture writer commands for E2E scenarios.
 import path from "node:path";
 import { requireArg, write, writeJson } from "./common.mjs";
 
@@ -43,6 +44,38 @@ function writePlugin([dir, id, version, method, name]) {
     path.join(dir, "index.js"),
     `module.exports = { id: ${JSON.stringify(id)}, name: ${JSON.stringify(name)}, register(api) { api.registerGatewayMethod(${JSON.stringify(method)}, async () => ({ ok: true })); }, };\n`,
   );
+  writePluginManifest(path.join(dir, "openclaw.plugin.json"), id);
+}
+
+function writePluginPack([dir, id, version, entryList]) {
+  for (const [value, label] of [
+    [dir, "dir"],
+    [id, "id"],
+    [version, "version"],
+  ]) {
+    requireArg(value, label);
+  }
+  const entries = entryList
+    ? entryList
+        .split(",")
+        .map((entry) => entry.trim())
+        .filter(Boolean)
+    : ["one", "two"];
+  if (entries.length === 0) {
+    throw new Error("plugin-pack entries must not be empty");
+  }
+  writeJson(path.join(dir, "package.json"), {
+    name: `@openclaw/${id}`,
+    version,
+    openclaw: { extensions: entries.map((entry) => `./${entry}.js`) },
+  });
+  for (const entry of entries) {
+    const childId = `${id}/${entry}`;
+    write(
+      path.join(dir, `${entry}.js`),
+      `module.exports = { id: ${JSON.stringify(childId)}, name: ${JSON.stringify(childId)}, register(api) { api.registerGatewayMethod(${JSON.stringify(`${id}.${entry}`)}, async () => ({ version: ${JSON.stringify(version)} })); }, };\n`,
+    );
+  }
   writePluginManifest(path.join(dir, "openclaw.plugin.json"), id);
 }
 
@@ -121,8 +154,8 @@ function writePluginWithCliRegistryDependency([
   writePluginManifest(path.join(dir, "openclaw.plugin.json"), id);
 }
 
-function writeClaudeBundle([root]) {
-  root = requireArg(root, "root");
+function writeClaudeBundle(args) {
+  const root = requireArg(args[0], "root");
   writeJson(path.join(root, ".claude-plugin", "plugin.json"), { name: "claude-bundle-e2e" });
   write(
     path.join(root, "commands", "office-hours.md"),
@@ -130,8 +163,8 @@ function writeClaudeBundle([root]) {
   );
 }
 
-function writePluginMarketplace([root]) {
-  root = requireArg(root, "root");
+function writePluginMarketplace(args) {
+  const root = requireArg(args[0], "root");
   writeJson(path.join(root, ".claude-plugin", "marketplace.json"), {
     name: "Fixture Marketplace",
     version: "1.0.0",
@@ -161,6 +194,7 @@ function writePluginMarketplace([root]) {
 export const pluginCommands = {
   "plugin-demo": writePluginDemo,
   plugin: writePlugin,
+  "plugin-pack": writePluginPack,
   "plugin-vendored-dep": writePluginWithVendoredDependency,
   "plugin-cli": writePluginWithCli,
   "plugin-cli-registry-dep": writePluginWithCliRegistryDependency,

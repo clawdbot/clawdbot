@@ -1,8 +1,17 @@
+// Setup plugin config helpers build plugin config from onboarding answers.
+import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
 import type { PluginConfigUiHint } from "../plugins/types.js";
 import { getPath, setPathCreateStrict } from "../secrets/path-utils.js";
+import {
+  parseConcreteConfigPathTokens,
+  type ConcreteConfigPathSegment,
+} from "../shared/dot-path.js";
 import type { JsonSchemaObject } from "../shared/json-schema.types.js";
+import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
+import { parseConfigPathArrayIndex } from "../shared/path-array-index.js";
+import { t } from "./i18n/index.js";
 import type { WizardPrompter } from "./prompts.js";
 
 /**
@@ -17,14 +26,9 @@ export type ConfigurablePlugin = {
   jsonSchema?: JsonSchemaObject;
 };
 
-type PluginMetadataSnapshotModule = typeof import("../plugins/plugin-metadata-snapshot.js");
-
-let pluginMetadataSnapshotModulePromise: Promise<PluginMetadataSnapshotModule> | undefined;
-
-function loadPluginMetadataSnapshotModule(): Promise<PluginMetadataSnapshotModule> {
-  pluginMetadataSnapshotModulePromise ??= import("../plugins/plugin-metadata-snapshot.js");
-  return pluginMetadataSnapshotModulePromise;
-}
+const loadPluginMetadataSnapshotModule = createLazyRuntimeModule(
+  () => import("../plugins/plugin-metadata-snapshot.js"),
+);
 
 type JsonSchemaProperty = {
   type?: string;
@@ -34,21 +38,24 @@ type JsonSchemaProperty = {
 
 function resolveJsonSchemaProperty(
   jsonSchema: JsonSchemaObject | undefined,
-  fieldKey: string,
+  pathSegments: readonly ConcreteConfigPathSegment[],
 ): JsonSchemaProperty | undefined {
   if (!jsonSchema) {
     return undefined;
   }
   let cursor: unknown = jsonSchema;
-  for (const segment of fieldKey.split(".")) {
+  for (const segment of pathSegments) {
     if (!cursor || typeof cursor !== "object") {
       return undefined;
     }
-    const properties = (cursor as Record<string, unknown>).properties;
-    if (!properties || typeof properties !== "object") {
-      return undefined;
-    }
-    cursor = (properties as Record<string, unknown>)[segment];
+    const schema = cursor as Record<string, unknown>;
+    const properties = schema.properties;
+    cursor =
+      schema.type === "array"
+        ? schema.items
+        : properties && typeof properties === "object"
+          ? (properties as Record<string, unknown>)[String(segment)]
+          : undefined;
   }
   return cursor && typeof cursor === "object" ? (cursor as JsonSchemaProperty) : undefined;
 }
@@ -60,8 +67,29 @@ function getExistingPluginConfig(
   return (config.plugins?.entries?.[pluginId]?.config as Record<string, unknown>) ?? {};
 }
 
-function toPathSegments(fieldKey: string): string[] {
-  return fieldKey.split(".").filter(Boolean);
+function toPathSegments(
+  fieldKey: string,
+  existing: Record<string, unknown>,
+  jsonSchema?: JsonSchemaObject,
+): ConcreteConfigPathSegment[] {
+  const segments = parseConcreteConfigPathTokens(fieldKey);
+  let value: unknown = existing;
+
+  return segments.map((segment, index) => {
+    const schema = resolveJsonSchemaProperty(jsonSchema, segments.slice(0, index));
+    // Existing containers own their shape; the schema recovers arrays not created yet.
+    const arrayContainer = Array.isArray(value) || (value == null && schema?.type === "array");
+    const arrayIndex =
+      typeof segment === "string" && arrayContainer
+        ? parseConfigPathArrayIndex(segment)
+        : undefined;
+    const resolved = arrayIndex ?? segment;
+    value =
+      value !== null && typeof value === "object"
+        ? Reflect.get(value, String(resolved))
+        : undefined;
+    return resolved;
+  });
 }
 
 function formatCurrentValue(value: unknown): string {
@@ -78,6 +106,15 @@ function formatCurrentValue(value: unknown): string {
     return value.join(", ");
   }
   return JSON.stringify(value);
+}
+
+function parseJsonNumberInput(value: string): number | undefined {
+  try {
+    const parsed: unknown = JSON.parse(value);
+    return typeof parsed === "number" && Number.isFinite(parsed) ? parsed : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 /**
@@ -136,7 +173,7 @@ export function discoverUnconfiguredPlugins(params: {
   return all.filter((plugin) => {
     const existing = getExistingPluginConfig(params.config, plugin.id);
     return Object.keys(plugin.uiHints).some((key) => {
-      const val = getPath(existing, toPathSegments(key));
+      const val = getPath(existing, toPathSegments(key, existing, plugin.jsonSchema).map(String));
       return val === undefined || val === null || val === "";
     });
   });
@@ -175,8 +212,8 @@ async function promptPluginFields(params: {
   let changed = false;
 
   for (const [key, hint] of Object.entries(plugin.uiHints)) {
-    const pathSegments = toPathSegments(key);
-    const currentValue = getPath(existing, pathSegments);
+    const pathSegments = toPathSegments(key, existing, plugin.jsonSchema);
+    const currentValue = getPath(existing, pathSegments.map(String));
     const hasValue = currentValue !== undefined && currentValue !== null && currentValue !== "";
 
     // In onboard mode, skip already-configured fields
@@ -184,7 +221,7 @@ async function promptPluginFields(params: {
       continue;
     }
 
-    const schemaProp = resolveJsonSchemaProperty(plugin.jsonSchema, key);
+    const schemaProp = resolveJsonSchemaProperty(plugin.jsonSchema, pathSegments);
     const label = hint.label ?? key;
     const helpSuffix = hint.help ? ` — ${hint.help}` : "";
 
@@ -192,8 +229,12 @@ async function promptPluginFields(params: {
     // direct users to openclaw config set or the Web UI instead.
     if (hint.sensitive) {
       await prompter.note(
-        `"${label}" is sensitive. Set it via:\n  openclaw config set plugins.entries.${plugin.id}.config.${key} <value>\nor use the Web UI Settings page.`,
-        "Sensitive field",
+        t("wizard.plugins.sensitiveField", {
+          label,
+          plugin: plugin.id,
+          field: key,
+        }),
+        t("wizard.plugins.sensitiveTitle"),
       );
       continue;
     }
@@ -207,7 +248,7 @@ async function promptPluginFields(params: {
       if (hasValue) {
         options.unshift({
           value: "__keep__",
-          label: `Keep current (${formatCurrentValue(currentValue)})`,
+          label: t("wizard.plugins.currentValue", { value: formatCurrentValue(currentValue) }),
         });
       }
       const selected = await prompter.select({
@@ -239,17 +280,14 @@ async function promptPluginFields(params: {
     if (schemaProp?.type === "array") {
       const currentStr = Array.isArray(currentValue) ? (currentValue as unknown[]).join(", ") : "";
       const input = await prompter.text({
-        message: `${label} (comma-separated, empty to clear)${helpSuffix}`,
+        message: `${label}${t("wizard.plugins.arrayPromptSuffix")}${helpSuffix}`,
         initialValue: currentStr,
-        placeholder: hint.placeholder ?? "value1, value2",
+        placeholder: hint.placeholder ?? t("wizard.plugins.arrayPlaceholder"),
       });
       const trimmed = input.trim();
       if (trimmed !== currentStr) {
         if (trimmed) {
-          const values = trimmed
-            .split(",")
-            .map((v) => v.trim())
-            .filter(Boolean);
+          const values = normalizeStringEntries(trimmed.split(","));
           setPathCreateStrict(updatedConfig, pathSegments, values);
         } else {
           setPathCreateStrict(updatedConfig, pathSegments, undefined);
@@ -274,8 +312,8 @@ async function promptPluginFields(params: {
           setPathCreateStrict(updatedConfig, pathSegments, undefined);
           changed = true;
         } else {
-          const parsed = Number(trimmed);
-          if (Number.isFinite(parsed)) {
+          const parsed = parseJsonNumberInput(trimmed);
+          if (parsed !== undefined && (schemaProp.type === "number" || Number.isInteger(parsed))) {
             setPathCreateStrict(updatedConfig, pathSegments, parsed);
             changed = true;
           }
@@ -331,17 +369,20 @@ export async function setupPluginConfig(params: {
   }
 
   const selected = await params.prompter.multiselect({
-    message: "Configure plugins (select to set up now, or skip)",
+    message: t("wizard.plugins.configureSelectOnboard"),
     options: [
       {
         value: "__skip__",
-        label: "Skip for now",
-        hint: "Continue without configuring plugins",
+        label: t("common.skipForNow"),
+        hint: t("wizard.plugins.skipConfigHint"),
       },
       ...unconfigured.map((p) => ({
         value: p.id,
         label: p.name,
-        hint: `${Object.keys(p.uiHints).length} field${Object.keys(p.uiHints).length === 1 ? "" : "s"}`,
+        hint: t("wizard.plugins.fieldsCount", {
+          count: Object.keys(p.uiHints).length,
+          plural: Object.keys(p.uiHints).length === 1 ? "" : "s",
+        }),
       })),
     ],
   });
@@ -352,7 +393,10 @@ export async function setupPluginConfig(params: {
     if (!plugin) {
       continue;
     }
-    await params.prompter.note(`Configure ${plugin.name}`, "Plugin setup");
+    await params.prompter.note(
+      t("wizard.plugins.configurePlugin", { plugin: plugin.name }),
+      t("wizard.plugins.configureFieldsTitle"),
+    );
     config = await promptPluginFields({
       plugin,
       config,
@@ -382,27 +426,33 @@ export async function configurePluginConfig(params: {
   });
 
   if (configurable.length === 0) {
-    await params.prompter.note("No plugins with configurable fields found.", "Plugins");
+    await params.prompter.note(
+      t("wizard.plugins.configureEmpty"),
+      t("wizard.plugins.configureEmptyTitle"),
+    );
     return params.config;
   }
 
   const selected = await params.prompter.select({
-    message: "Select plugin to configure",
+    message: t("wizard.plugins.configureSelect"),
     options: [
       ...configurable.map((p) => {
         const existing = getExistingPluginConfig(params.config, p.id);
         const configuredCount = Object.keys(p.uiHints).filter((k) => {
-          const val = getPath(existing, toPathSegments(k));
+          const val = getPath(existing, toPathSegments(k, existing, p.jsonSchema).map(String));
           return val !== undefined && val !== null && val !== "";
         }).length;
         const totalCount = Object.keys(p.uiHints).length;
         return {
           value: p.id,
           label: p.name,
-          hint: `${configuredCount}/${totalCount} configured`,
+          hint: t("wizard.plugins.configuredCount", {
+            configured: configuredCount,
+            total: totalCount,
+          }),
         };
       }),
-      { value: "__skip__", label: "Back", hint: "Return to section menu" },
+      { value: "__skip__", label: t("common.back"), hint: t("wizard.plugins.configureBackHint") },
     ],
     searchable: true,
   });

@@ -1,4 +1,7 @@
-import type { StreamFn } from "@mariozechner/pi-agent-core";
+/**
+ * Stream hook test helpers for capturing provider thinking config.
+ */
+import type { StreamFn } from "../../agents/runtime/index.js";
 
 export function createCapturedThinkingConfigStream() {
   let capturedPayload: Record<string, unknown> | undefined;

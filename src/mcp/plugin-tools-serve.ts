@@ -21,6 +21,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { routeLogsToStderr } from "../logging/console.js";
 import { ensureStandalonePluginToolRegistryLoaded, resolvePluginTools } from "../plugins/tools.js";
+import { resolveToolsMcpAgentId, resolveToolsMcpSessionContext } from "./agent-session-env.js";
 import { connectToolsMcpServerToStdio, createToolsMcpServer } from "./tools-stdio-server.js";
 
 function resolvePluginToolPolicy(config: OpenClawConfig): {
@@ -40,16 +41,22 @@ function resolvePluginToolPolicy(config: OpenClawConfig): {
   };
 }
 
-function resolveTools(config: OpenClawConfig): AnyAgentTool[] {
-  const pluginToolPolicy = resolvePluginToolPolicy(config);
-  ensureStandalonePluginToolRegistryLoaded({
-    context: { config },
+export function resolvePluginToolsForMcp(params: {
+  config: OpenClawConfig;
+  agentSessionKey?: string;
+  agentId?: string;
+}): AnyAgentTool[] {
+  const context = { config: params.config, ...resolveToolsMcpSessionContext(params) };
+  const pluginToolPolicy = resolvePluginToolPolicy(params.config);
+  const runtimeRegistry = ensureStandalonePluginToolRegistryLoaded({
+    context,
     ...pluginToolPolicy,
   });
   return resolvePluginTools({
-    context: { config },
+    context,
     ...pluginToolPolicy,
     suppressNameConflicts: true,
+    runtimeRegistry,
   });
 }
 
@@ -57,10 +64,18 @@ export function createPluginToolsMcpServer(
   params: {
     config?: OpenClawConfig;
     tools?: AnyAgentTool[];
+    agentSessionKey?: string;
+    agentId?: string;
   } = {},
 ): Server {
   const cfg = params.config ?? getRuntimeConfig();
-  const tools = params.tools ?? resolveTools(cfg);
+  const tools =
+    params.tools ??
+    resolvePluginToolsForMcp({
+      config: cfg,
+      agentSessionKey: params.agentSessionKey,
+      agentId: params.agentId,
+    });
   return createToolsMcpServer({ name: "openclaw-plugin-tools", tools });
 }
 
@@ -70,7 +85,7 @@ export async function servePluginToolsMcp(): Promise<void> {
   routeLogsToStderr();
 
   const config = getRuntimeConfig();
-  const tools = resolveTools(config);
+  const tools = resolvePluginToolsForMcp({ config, agentId: resolveToolsMcpAgentId() });
   const server = createPluginToolsMcpServer({ config, tools });
   if (tools.length === 0) {
     process.stderr.write("plugin-tools-serve: no plugin tools found\n");
@@ -80,7 +95,7 @@ export async function servePluginToolsMcp(): Promise<void> {
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
-  servePluginToolsMcp().catch((err) => {
+  servePluginToolsMcp().catch((err: unknown) => {
     process.stderr.write(`plugin-tools-serve: ${formatErrorMessage(err)}\n`);
     process.exit(1);
   });

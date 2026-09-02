@@ -1,24 +1,31 @@
+// Wraps fs-safe JSON reads and atomic writes with OpenClaw defaults.
 import "./fs-safe-defaults.js";
 import { replaceFileAtomic } from "./replace-file.js";
+
+type WriteTextAtomicBeforeRename = (params: {
+  filePath: string;
+  tempPath: string;
+}) => Promise<void>;
 
 export {
   JsonFileReadError,
   readJson,
-  readJson as readJsonFileStrict,
+  readJson as readJsonFileStrict, // Sanctioned domain alias.
   readJsonIfExists,
-  readJsonIfExists as readDurableJsonFile,
+  readJsonIfExists as readDurableJsonFile, // Sanctioned domain alias.
   readJsonSync,
   readRootJsonObjectSync,
   readRootJsonSync,
   readRootStructuredFileSync,
   tryReadJson,
-  tryReadJson as readJsonFile,
+  tryReadJson as readJsonFile, // Sanctioned domain alias.
   tryReadJsonSync,
-  tryReadJsonSync as readJsonFileSync,
+  tryReadJsonSync as readJsonFileSync, // Sanctioned domain alias.
   writeJson,
-  writeJson as writeJsonAtomic,
+  writeJson as writeJsonAtomic, // Sanctioned domain alias.
   writeJsonSync,
 } from "@openclaw/fs-safe/json";
+
 export { createAsyncLock } from "@openclaw/fs-safe/advanced";
 
 export type WriteTextAtomicOptions = {
@@ -26,8 +33,16 @@ export type WriteTextAtomicOptions = {
   dirMode?: number;
   trailingNewline?: boolean;
   durable?: boolean;
+  beforeRename?: WriteTextAtomicBeforeRename;
+  /**
+   * Prefix for the staged `<prefix>.<pid>.<uuid>.tmp` file. Defaults to the
+   * generic `.fs-safe-replace`; pass a target-specific prefix so an orphaned
+   * temp (from a crash between write and rename) is identifiable and reclaimable.
+   */
+  tempPrefix?: string;
 };
 
+/** Writes text through the repo atomic replace helper with durable fsync by default. */
 export async function writeTextAtomic(
   filePath: string,
   content: string,
@@ -42,5 +57,7 @@ export async function writeTextAtomic(
     copyFallbackOnPermissionError: true,
     syncTempFile: options?.durable !== false,
     syncParentDir: options?.durable !== false,
+    ...(options?.beforeRename ? { beforeRename: options.beforeRename } : {}),
+    ...(options?.tempPrefix ? { tempPrefix: options.tempPrefix } : {}),
   });
 }

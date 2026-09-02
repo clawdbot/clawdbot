@@ -1,3 +1,6 @@
+/**
+ * Public SDK subpath for web content extractor plugin types and HTML cleanup helpers.
+ */
 export type {
   WebContentExtractionRequest,
   WebContentExtractionResult,
@@ -10,4 +13,5 @@ export {
   markdownToText,
   normalizeWhitespace,
 } from "../agents/tools/web-fetch-utils.js";
-export { sanitizeHtml, stripInvisibleUnicode } from "../agents/tools/web-fetch-visibility.js";
+export { sanitizeHtml } from "../agents/tools/web-fetch-visibility.js";
+export { stripInvisibleUnicode } from "../infra/unicode-visibility.js";

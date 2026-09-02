@@ -1,13 +1,22 @@
+/**
+ * Privacy-preserving Talk diagnostic event projection.
+ *
+ * The diagnostic stream needs timing and size counters for reliability work,
+ * but must not export raw provider payloads, transcripts, or audio content.
+ */
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   emitTrustedDiagnosticEvent,
   type DiagnosticEventInput,
 } from "../infra/diagnostic-events.js";
+import { firstFiniteTalkEventNumber } from "./event-metrics.js";
 import type { TalkEvent } from "./talk-events.js";
 
 type TalkDiagnosticEventInput = Extract<DiagnosticEventInput, { type: "talk.event" }>;
 
+/** Convert a Talk event into the bounded diagnostic payload shape. */
 export function createTalkDiagnosticEvent(event: TalkEvent): TalkDiagnosticEventInput {
-  const payload = asRecord(event.payload);
+  const payload = asOptionalRecord(event.payload);
   return {
     type: "talk.event",
     sessionId: event.sessionId,
@@ -19,33 +28,14 @@ export function createTalkDiagnosticEvent(event: TalkEvent): TalkDiagnosticEvent
     brain: event.brain,
     provider: event.provider,
     final: event.final,
-    durationMs: firstFiniteNumber(payload, ["durationMs", "latencyMs", "elapsedMs"]),
-    byteLength: firstFiniteNumber(payload, ["byteLength", "audioBytes"]),
+    // Read only known numeric aliases from provider payloads; raw payload text
+    // and audio bytes stay out of diagnostics.
+    durationMs: firstFiniteTalkEventNumber(payload, ["durationMs", "latencyMs", "elapsedMs"]),
+    byteLength: firstFiniteTalkEventNumber(payload, ["byteLength", "audioBytes"]),
   };
 }
 
+/** Emit a trusted internal diagnostic event for one Talk event. */
 export function recordTalkDiagnosticEvent(event: TalkEvent): void {
   emitTrustedDiagnosticEvent(createTalkDiagnosticEvent(event));
-}
-
-function asRecord(value: unknown): Record<string, unknown> | undefined {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
-}
-
-function firstFiniteNumber(
-  record: Record<string, unknown> | undefined,
-  keys: readonly string[],
-): number | undefined {
-  if (!record) {
-    return undefined;
-  }
-  for (const key of keys) {
-    const value = record[key];
-    if (typeof value === "number" && Number.isFinite(value) && value >= 0) {
-      return value;
-    }
-  }
-  return undefined;
 }

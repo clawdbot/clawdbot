@@ -1,8 +1,6 @@
 name: Mantis Discord Status Reactions
 
 on:
-  issue_comment:
-    types: [created]
   workflow_dispatch:
     inputs:
       baseline_ref:
@@ -21,9 +19,8 @@ on:
         type: string
 
 permissions:
-  contents: write
-  issues: write
-  pull-requests: write
+  contents: read
+  pull-requests: read
 
 concurrency:
   group: mantis-discord-status-reactions-${{ github.event.issue.number || inputs.pr_number || inputs.candidate_ref || github.run_id }}-${{ github.run_attempt }}
@@ -32,7 +29,6 @@ concurrency:
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
   NODE_VERSION: "24.x"
-  PNPM_VERSION: "10.33.0"
   OPENCLAW_BUILD_PRIVATE_QA: "1"
   OPENCLAW_ENABLE_PRIVATE_QA_CLI: "1"
 
@@ -46,16 +42,18 @@ jobs:
           github.event_name == 'issue_comment' &&
           github.event.issue.pull_request &&
           (
-            contains(github.event.comment.body, '@Mantis') ||
-            contains(github.event.comment.body, '@mantis') ||
-            contains(github.event.comment.body, '/mantis')
+            contains(github.event.comment.body, '@openclaw-mantis') ||
+            contains(github.event.comment.body, '/openclaw-mantis')
           )
         )
       }}
     runs-on: blacksmith-8vcpu-ubuntu-2404
+    outputs:
+      authorized: ${{ steps.permission.outputs.authorized }}
     steps:
       - name: Require maintainer-level repository access
-        uses: actions/github-script@v8
+        id: permission
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
         with:
           script: |
             const allowed = new Set(["admin", "maintain", "write"]);
@@ -68,101 +66,27 @@ jobs:
             const permission = data.permission;
             core.info(`Actor ${context.actor} permission: ${permission}`);
             if (!allowed.has(permission)) {
-              core.setFailed(
+              core.notice(
                 `Workflow requires write/maintain/admin access. Actor "${context.actor}" has "${permission}".`,
               );
+              core.setOutput("authorized", "false");
+              return;
             }
+            core.setOutput("authorized", "true");
 
   resolve_request:
     name: Resolve Mantis request
     needs: authorize_actor
-    runs-on: blacksmith-8vcpu-ubuntu-2404
-    outputs:
-      baseline_ref: ${{ steps.resolve.outputs.baseline_ref }}
-      candidate_ref: ${{ steps.resolve.outputs.candidate_ref }}
-      pr_number: ${{ steps.resolve.outputs.pr_number }}
-      request_source: ${{ steps.resolve.outputs.request_source }}
-      should_run: ${{ steps.resolve.outputs.should_run }}
-    steps:
-      - name: Resolve refs and target PR
-        id: resolve
-        uses: actions/github-script@v8
-        with:
-          script: |
-            const defaultBaseline = "0bf06e953fdda290799fc9fb9244a8f67fdae593";
-            const eventName = context.eventName;
-
-            function setOutput(name, value) {
-              core.setOutput(name, value ?? "");
-              core.info(`${name}=${value ?? ""}`);
-            }
-
-            if (eventName === "workflow_dispatch") {
-              const inputs = context.payload.inputs ?? {};
-              setOutput("should_run", "true");
-              setOutput("baseline_ref", inputs.baseline_ref || defaultBaseline);
-              setOutput("candidate_ref", inputs.candidate_ref || "main");
-              setOutput("pr_number", inputs.pr_number || "");
-              setOutput("request_source", "workflow_dispatch");
-              return;
-            }
-
-            if (eventName !== "issue_comment") {
-              core.setFailed(`Unsupported event: ${eventName}`);
-              return;
-            }
-
-            const issue = context.payload.issue;
-            const body = context.payload.comment?.body ?? "";
-            if (!issue?.pull_request) {
-              core.setFailed("Mantis issue_comment trigger requires a pull request comment.");
-              return;
-            }
-
-            const normalized = body.toLowerCase();
-            const requested =
-              (normalized.includes("@mantis") || normalized.includes("/mantis")) &&
-              normalized.includes("discord") &&
-              normalized.includes("status") &&
-              normalized.includes("reaction");
-            if (!requested) {
-              core.notice("Comment mentioned Mantis but did not request the Discord status-reactions scenario.");
-              setOutput("should_run", "false");
-              setOutput("baseline_ref", "");
-              setOutput("candidate_ref", "");
-              setOutput("pr_number", "");
-              setOutput("request_source", "unsupported_issue_comment");
-              return;
-            }
-
-            const { owner, repo } = context.repo;
-            const { data: pr } = await github.rest.pulls.get({
-              owner,
-              repo,
-              pull_number: issue.number,
-            });
-
-            const baselineMatch = body.match(/(?:baseline|base)[\s:=]+([^\s`]+)/i);
-            const candidateMatch = body.match(/(?:candidate|head)[\s:=]+([^\s`]+)/i);
-            const baseline = baselineMatch?.[1] ?? defaultBaseline;
-            const rawCandidate = candidateMatch?.[1];
-            const candidate =
-              rawCandidate && !["head", "pr", "pr-head"].includes(rawCandidate.toLowerCase())
-                ? rawCandidate
-                : pr.head.sha;
-
-            setOutput("should_run", "true");
-            setOutput("baseline_ref", baseline);
-            setOutput("candidate_ref", candidate);
-            setOutput("pr_number", String(issue.number));
-            setOutput("request_source", "issue_comment");
-
-            await github.rest.reactions.createForIssueComment({
-              owner,
-              repo,
-              comment_id: context.payload.comment.id,
-              content: "eyes",
-            }).catch((error) => core.warning(`Could not add eyes reaction: ${error.message}`));
+    if: needs.authorize_actor.outputs.authorized == 'true'
+    uses: ./.github/workflows/mantis-resolve-request.yml
+    with:
+      request-pattern: '(?=[\s\S]*discord)(?=[\s\S]*status)(?=[\s\S]*reaction)'
+      skip-notice: Comment mentioned Mantis but did not request the Discord status-reactions scenario.
+      dispatch-params: ${{ github.event_name == 'workflow_dispatch' && toJSON(inputs) || '{"baseline_ref":"0bf06e953fdda290799fc9fb9244a8f67fdae593"}' }}
+      runner: blacksmith-8vcpu-ubuntu-2404
+    secrets:
+      MANTIS_GITHUB_APP_ID: ${{ secrets.MANTIS_GITHUB_APP_ID }}
+      MANTIS_GITHUB_APP_PRIVATE_KEY: ${{ secrets.MANTIS_GITHUB_APP_PRIVATE_KEY }}
 
   validate_refs:
     name: Validate selected refs
@@ -170,11 +94,11 @@ jobs:
     if: ${{ needs.resolve_request.outputs.should_run == 'true' }}
     runs-on: blacksmith-8vcpu-ubuntu-2404
     outputs:
-      baseline_revision: ${{ steps.validate.outputs.baseline_revision }}
-      candidate_revision: ${{ steps.validate.outputs.candidate_revision }}
+      baseline_revision: ${{ steps.validate.outputs['baseline-revision'] }}
+      candidate_revision: ${{ steps.validate.outputs['candidate-revision'] }}
     steps:
       - name: Checkout harness ref
-        uses: actions/checkout@v6
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           fetch-depth: 0
@@ -183,53 +107,10 @@ jobs:
         id: validate
         env:
           GH_TOKEN: ${{ github.token }}
-          BASELINE_REF: ${{ needs.resolve_request.outputs.baseline_ref }}
-          CANDIDATE_REF: ${{ needs.resolve_request.outputs.candidate_ref }}
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
-
-          validate_ref() {
-            local label="$1"
-            local input_ref="$2"
-            local revision=""
-            local reason=""
-
-            revision="$(git rev-parse "${input_ref}^{commit}")"
-            if git merge-base --is-ancestor "$revision" refs/remotes/origin/main; then
-              reason="main-ancestor"
-            elif git tag --points-at "$revision" | grep -Eq '^v'; then
-              reason="release-tag"
-            else
-              local pr_head_count
-              pr_head_count="$(
-                gh api \
-                  -H "Accept: application/vnd.github+json" \
-                  "repos/${GITHUB_REPOSITORY}/commits/${revision}/pulls" \
-                  --jq '[.[] | select(.state == "open" and .head.repo.full_name == "'"${GITHUB_REPOSITORY}"'" and .head.sha == "'"${revision}"'")] | length'
-              )"
-              if [[ "$pr_head_count" != "0" ]]; then
-                reason="open-pr-head"
-              fi
-            fi
-
-            if [[ -z "$reason" ]]; then
-              echo "${label} ref '${input_ref}' resolved to ${revision}, which is not trusted for this secret-bearing Mantis run." >&2
-              exit 1
-            fi
-
-            echo "${label}_revision=${revision}" >> "$GITHUB_OUTPUT"
-            {
-              echo "${label}: \`${input_ref}\`"
-              echo "${label} SHA: \`${revision}\`"
-              echo "${label} trust reason: \`${reason}\`"
-            } >> "$GITHUB_STEP_SUMMARY"
-          }
-
-          validate_ref baseline "$BASELINE_REF"
-          validate_ref candidate "$CANDIDATE_REF"
+        uses: ./.github/actions/mantis-validate-trusted-ref
+        with:
+          baseline-ref: ${{ fromJSON(needs.resolve_request.outputs.params).baseline_ref }}
+          candidate-ref: ${{ fromJSON(needs.resolve_request.outputs.params).candidate_ref }}
 
   run_status_reactions:
     name: Run Discord status reaction before/after
@@ -240,23 +121,26 @@ jobs:
     environment: qa-live-shared
     steps:
       - name: Checkout harness ref
-        uses: actions/checkout@v6
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           fetch-depth: 0
 
+      - name: Prepare Git owner
+        uses: openclaw/openclaw/.github/actions/git-owner@dd4528b6393e7d00063067a080ca7241b48ce475
+
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
         with:
+          cache-mode: restore
           node-version: ${{ env.NODE_VERSION }}
-          pnpm-version: ${{ env.PNPM_VERSION }}
           install-bun: "true"
 
       - name: Build Mantis harness
         run: pnpm build
 
       - name: Setup Go for Crabbox CLI
-        uses: actions/setup-go@v6
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: "1.26.x"
           cache: false
@@ -267,7 +151,7 @@ jobs:
           set -euo pipefail
           install_dir="${RUNNER_TEMP}/crabbox"
           mkdir -p "$install_dir" "$HOME/.local/bin"
-          git clone --depth 1 https://github.com/openclaw/crabbox.git "$install_dir/src"
+          python3 -I -S "$CI_GIT_OWNER" --git 120 clone --depth 1 https://github.com/openclaw/crabbox.git "$install_dir/src"
           go build -C "$install_dir/src" -o "$HOME/.local/bin/crabbox" ./cmd/crabbox
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
           "$HOME/.local/bin/crabbox" --version
@@ -283,8 +167,8 @@ jobs:
 
           worktree_root=".artifacts/qa-e2e/mantis/discord-status-reactions-worktrees"
           mkdir -p "$worktree_root"
-          git worktree add --detach "$worktree_root/baseline" "$BASELINE_SHA"
-          git worktree add --detach "$worktree_root/candidate" "$CANDIDATE_SHA"
+          python3 -I -S "$CI_GIT_OWNER" --checkout-git 0 worktree add --detach "$worktree_root/baseline" "$BASELINE_SHA"
+          python3 -I -S "$CI_GIT_OWNER" --checkout-git 0 worktree add --detach "$worktree_root/candidate" "$CANDIDATE_SHA"
 
           for lane in baseline candidate; do
             lane_dir="$worktree_root/${lane}"
@@ -302,7 +186,6 @@ jobs:
           OPENCLAW_QA_CONVEX_SITE_URL: ${{ secrets.OPENCLAW_QA_CONVEX_SITE_URL }}
           OPENCLAW_QA_CONVEX_SECRET_CI: ${{ secrets.OPENCLAW_QA_CONVEX_SECRET_CI }}
           OPENCLAW_QA_REDACT_PUBLIC_METADATA: "1"
-          OPENCLAW_QA_DISCORD_CAPTURE_CONTENT: "1"
           CRABBOX_COORDINATOR: ${{ secrets.CRABBOX_COORDINATOR }}
           CRABBOX_COORDINATOR_TOKEN: ${{ secrets.CRABBOX_COORDINATOR_TOKEN }}
           OPENCLAW_QA_MANTIS_CRABBOX_COORDINATOR: ${{ secrets.OPENCLAW_QA_MANTIS_CRABBOX_COORDINATOR }}
@@ -342,8 +225,8 @@ jobs:
               --repo-root "$repo_root" \
               --output-dir "$output_dir" \
               --provider-mode live-frontier \
-              --model openai/gpt-5.4 \
-              --alt-model openai/gpt-5.4 \
+              --model openai/gpt-5.6-luna \
+              --alt-model openai/gpt-5.6-luna \
               --fast \
               --credential-source convex \
               --credential-role ci \
@@ -433,8 +316,17 @@ jobs:
             echo "::warning::Could not generate motion-trimmed desktop previews; continuing with screenshots and full MP4 links."
           fi
 
-          baseline_status="$(jq -r '.scenarios[0].status' "$root/baseline/discord-qa-summary.json")"
-          candidate_status="$(jq -r '.scenarios[0].status' "$root/candidate/discord-qa-summary.json")"
+          read_discord_status_reaction_status() {
+            local lane="$1"
+            if [[ -f "$root/$lane/qa-evidence.json" ]]; then
+              jq -r '.entries[0].result.status' "$root/$lane/qa-evidence.json"
+              return
+            fi
+            jq -r '.scenarios[0].status' "$root/$lane/discord-qa-summary.json"
+          }
+
+          baseline_status="$(read_discord_status_reaction_status baseline)"
+          candidate_status="$(read_discord_status_reaction_status candidate)"
 
           jq -n \
             --arg baseline_status "$baseline_status" \
@@ -480,14 +372,15 @@ jobs:
             --arg baseline_sha "${{ needs.validate_refs.outputs.baseline_revision }}" \
             --arg candidate_sha "${{ needs.validate_refs.outputs.candidate_revision }}" \
             '{
-              schemaVersion: 1,
+              schemaVersion: 2,
               id: "discord-status-reactions",
               title: "Mantis Discord Status Reactions QA",
               summary: "Mantis reran Discord status reactions against the known queued-only baseline and the candidate ref. The baseline reproduced the bug, while the candidate showed the expected queued -> thinking -> done reaction sequence.",
               scenario: "discord-status-reactions-tool-only",
               comparison: {
-                baseline: { sha: $baseline_sha, expected: "queued-only", status: $baseline_status, reproduced: ($baseline_status == "fail") },
-                candidate: { sha: $candidate_sha, expected: "queued -> thinking -> done", status: $candidate_status, fixed: ($candidate_status == "pass") },
+                baseline: { sha: $baseline_sha, expected: "queued-only", expectationMet: ($baseline_status == "fail"), status: $baseline_status, reproduced: ($baseline_status == "fail") },
+                candidate: { sha: $candidate_sha, expected: "queued -> thinking -> done", expectationMet: ($candidate_status == "pass"), status: $candidate_status, fixed: ($candidate_status == "pass") },
+                outcome: (if (($baseline_status == "fail") and ($candidate_status == "pass")) then "pass" else "fail" end),
                 pass: (($baseline_status == "fail") and ($candidate_status == "pass"))
               },
               artifacts: [
@@ -522,23 +415,22 @@ jobs:
       - name: Upload Mantis status reaction artifacts
         id: upload_artifact
         if: ${{ always() && steps.run_mantis.outputs.output_dir != '' }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: mantis-discord-status-reactions-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ steps.run_mantis.outputs.output_dir }}
           retention-days: 14
-          if-no-files-found: warn
+          if-no-files-found: error
 
       - name: Create Mantis GitHub App token
         id: mantis_app_token
         if: ${{ always() && needs.resolve_request.outputs.pr_number != '' }}
-        uses: actions/create-github-app-token@v3
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
         with:
           app-id: ${{ secrets.MANTIS_GITHUB_APP_ID }}
           private-key: ${{ secrets.MANTIS_GITHUB_APP_PRIVATE_KEY }}
           owner: ${{ github.repository_owner }}
           repositories: ${{ github.event.repository.name }}
-          permission-contents: write
           permission-issues: write
           permission-pull-requests: write
 
@@ -546,9 +438,15 @@ jobs:
         if: ${{ always() && needs.resolve_request.outputs.pr_number != '' && steps.run_mantis.outputs.output_dir != '' }}
         env:
           GH_TOKEN: ${{ steps.mantis_app_token.outputs.token }}
-          TARGET_PR: ${{ needs.resolve_request.outputs.pr_number }}
           ARTIFACT_URL: ${{ steps.upload_artifact.outputs.artifact-url }}
+          MANTIS_ARTIFACT_R2_ACCESS_KEY_ID: ${{ secrets.MANTIS_ARTIFACT_R2_ACCESS_KEY_ID }}
+          MANTIS_ARTIFACT_R2_BUCKET: openclaw-crabbox-artifacts
+          MANTIS_ARTIFACT_R2_ENDPOINT: ${{ vars.MANTIS_ARTIFACT_R2_ENDPOINT }}
+          MANTIS_ARTIFACT_R2_PUBLIC_BASE_URL: https://artifacts.openclaw.ai
+          MANTIS_ARTIFACT_R2_REGION: auto
+          MANTIS_ARTIFACT_R2_SECRET_ACCESS_KEY: ${{ secrets.MANTIS_ARTIFACT_R2_SECRET_ACCESS_KEY }}
           REQUEST_SOURCE: ${{ needs.resolve_request.outputs.request_source }}
+          TARGET_PR: ${{ needs.resolve_request.outputs.pr_number }}
         shell: bash
         run: |
           set -euo pipefail
@@ -562,3 +460,16 @@ jobs:
             --artifact-url "$ARTIFACT_URL" \
             --run-url "https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
             --request-source "$REQUEST_SOURCE"
+
+  clear_issue_comment_reaction:
+    name: Clear Mantis command reaction
+    needs: [resolve_request, validate_refs, run_status_reactions]
+    if: ${{ always() && github.event_name == 'issue_comment' && needs.resolve_request.outputs.request_source == 'issue_comment' && needs.resolve_request.outputs.reaction_id != '' }}
+    permissions: {}
+    uses: ./.github/workflows/mantis-clear-reaction.yml
+    with:
+      comment-id: ${{ format('{0}', github.event.comment.id) }}
+      reaction-id: ${{ needs.resolve_request.outputs.reaction_id }}
+    secrets:
+      MANTIS_GITHUB_APP_ID: ${{ secrets.MANTIS_GITHUB_APP_ID }}
+      MANTIS_GITHUB_APP_PRIVATE_KEY: ${{ secrets.MANTIS_GITHUB_APP_PRIVATE_KEY }}

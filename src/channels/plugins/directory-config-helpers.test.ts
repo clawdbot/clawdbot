@@ -1,3 +1,4 @@
+// Directory config helper tests cover config helpers for channel directory integrations.
 import { describe, expect, it } from "vitest";
 import {
   createInspectedDirectoryEntriesLister,
@@ -113,7 +114,7 @@ describe("listInspectedDirectoryEntriesFromSources", () => {
       normalizeId: (entry) => entry.replace(/^user:/i, ""),
     });
 
-    expect(entries).toEqual([]);
+    expect(entries).toStrictEqual([]);
   });
 
   it("lists entries from inspected account sources", () => {

@@ -1,7 +1,9 @@
+// Tests Homebrew discovery and metadata parsing helpers.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { withTempDir } from "../test-helpers/temp-dir.js";
+import { withTestDir } from "../test-helpers/temp-dir.js";
+import { withEnvAsync } from "../test-utils/env.js";
 import { resolveBrewExecutable, resolveBrewPathDirs } from "./brew.js";
 
 const HOMEBREW_ENV_KEYS = ["HOMEBREW_BREW_FILE", "HOMEBREW_PREFIX"] as const;
@@ -17,51 +19,19 @@ describe("brew helpers", () => {
     values: Partial<Record<(typeof HOMEBREW_ENV_KEYS)[number], string>>,
     run: () => Promise<void>,
   ) {
-    const previous = Object.fromEntries(
-      HOMEBREW_ENV_KEYS.map((key) => [key, process.env[key]]),
-    ) as Record<(typeof HOMEBREW_ENV_KEYS)[number], string | undefined>;
-    try {
-      for (const key of HOMEBREW_ENV_KEYS) {
-        const value = values[key];
-        if (value === undefined) {
-          delete process.env[key];
-        } else {
-          process.env[key] = value;
-        }
-      }
-      await run();
-    } finally {
-      for (const key of HOMEBREW_ENV_KEYS) {
-        const value = previous[key];
-        if (value === undefined) {
-          delete process.env[key];
-        } else {
-          process.env[key] = value;
-        }
-      }
-    }
+    const env = Object.fromEntries(HOMEBREW_ENV_KEYS.map((key) => [key, values[key]])) as Record<
+      (typeof HOMEBREW_ENV_KEYS)[number],
+      string | undefined
+    >;
+    await withEnvAsync(env, run);
   }
 
   async function withPathEnv(value: string | undefined, run: () => Promise<void>) {
-    const previous = process.env.PATH;
-    try {
-      if (value === undefined) {
-        delete process.env.PATH;
-      } else {
-        process.env.PATH = value;
-      }
-      await run();
-    } finally {
-      if (previous === undefined) {
-        delete process.env.PATH;
-      } else {
-        process.env.PATH = previous;
-      }
-    }
+    await withEnvAsync({ PATH: value }, run);
   }
 
   it("resolves brew from ~/.linuxbrew/bin when executable exists", async () => {
-    await withTempDir({ prefix: "openclaw-brew-" }, async (tmp) => {
+    await withTestDir({ prefix: "openclaw-brew-" }, async (tmp) => {
       const homebrewBin = path.join(tmp, ".linuxbrew", "bin");
       const brewPath = path.join(homebrewBin, "brew");
       await writeExecutable(brewPath);
@@ -73,7 +43,7 @@ describe("brew helpers", () => {
   });
 
   it("resolves brew from absolute PATH entries for non-standard installs", async () => {
-    await withTempDir({ prefix: "openclaw-brew-" }, async (tmp) => {
+    await withTestDir({ prefix: "openclaw-brew-" }, async (tmp) => {
       const customBin = path.join(tmp, "custom-homebrew", "bin");
       const customBrew = path.join(customBin, "brew");
       await writeExecutable(customBrew);
@@ -85,7 +55,7 @@ describe("brew helpers", () => {
   });
 
   it("ignores HOMEBREW_BREW_FILE and HOMEBREW_PREFIX by default", async () => {
-    await withTempDir({ prefix: "openclaw-brew-" }, async (tmp) => {
+    await withTestDir({ prefix: "openclaw-brew-" }, async (tmp) => {
       const explicit = path.join(tmp, "custom", "brew");
       const prefix = path.join(tmp, "prefix");
       const prefixBin = path.join(prefix, "bin");
@@ -116,7 +86,7 @@ describe("brew helpers", () => {
   });
 
   it("ignores blank HOMEBREW_BREW_FILE and HOMEBREW_PREFIX values", async () => {
-    await withTempDir({ prefix: "openclaw-brew-" }, async (tmp) => {
+    await withTestDir({ prefix: "openclaw-brew-" }, async (tmp) => {
       const homebrewBin = path.join(tmp, ".linuxbrew", "bin");
       const brewPath = path.join(homebrewBin, "brew");
       await writeExecutable(brewPath);
@@ -140,7 +110,7 @@ describe("brew helpers", () => {
   });
 
   it("does not resolve brew from PATH entries", async () => {
-    await withTempDir({ prefix: "openclaw-brew-" }, async (tmp) => {
+    await withTestDir({ prefix: "openclaw-brew-" }, async (tmp) => {
       const pathBin = path.join(tmp, "path-bin");
       const pathBrew = path.join(pathBin, "brew");
       await writeExecutable(pathBrew);

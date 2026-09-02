@@ -1,9 +1,9 @@
-import { spawn } from "node:child_process";
+// Matrix plugin module implements deps behavior.
 import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { runCommandWithTimeout } from "openclaw/plugin-sdk/process-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
 
 const REQUIRED_MATRIX_PACKAGES = [
@@ -12,43 +12,35 @@ const REQUIRED_MATRIX_PACKAGES = [
   "@matrix-org/matrix-sdk-crypto-wasm",
 ];
 const MIN_MATRIX_CRYPTO_NATIVE_BINDING_BYTES = 1_000_000;
+const MATRIX_COMMAND_OUTPUT_TAIL_BYTES = 64 * 1024;
 
 type MatrixCryptoRuntimeDeps = {
   requireFn?: (id: string) => unknown;
-  runCommand?: (params: {
-    argv: string[];
-    cwd: string;
-    timeoutMs: number;
-    env?: NodeJS.ProcessEnv;
-  }) => Promise<CommandResult>;
   resolveFn?: (id: string) => string;
-  nodeExecutable?: string;
   log?: (message: string) => void;
 };
 
-function resolveMissingMatrixPackages(): string[] {
-  try {
-    const req = createRequire(import.meta.url);
-    return REQUIRED_MATRIX_PACKAGES.filter((pkg) => {
-      try {
-        req.resolve(pkg);
-        return false;
-      } catch {
-        return true;
-      }
-    });
-  } catch {
-    return [...REQUIRED_MATRIX_PACKAGES];
-  }
+function resolveMissingMatrixPackages(resolveFn?: (id: string) => string): string[] {
+  const resolve = resolveFn ?? defaultResolveFn;
+  return REQUIRED_MATRIX_PACKAGES.filter((pkg) => {
+    try {
+      resolve(pkg);
+      return false;
+    } catch {
+      return true;
+    }
+  });
 }
 
 export function isMatrixSdkAvailable(): boolean {
   return resolveMissingMatrixPackages().length === 0;
 }
 
-function resolvePluginRoot(): string {
-  const currentDir = path.dirname(fileURLToPath(import.meta.url));
-  return path.resolve(currentDir, "..", "..");
+function buildMatrixDepsMissingMessage(missing: string[]): string {
+  return [
+    `Matrix plugin dependencies are missing: ${missing.join(", ")}.`,
+    "Repair this plugin with `openclaw plugins update matrix` or run `openclaw doctor --fix`.",
+  ].join(" ");
 }
 
 type CommandResult = {
@@ -65,78 +57,32 @@ async function runFixedCommandWithTimeout(params: {
   timeoutMs: number;
   env?: NodeJS.ProcessEnv;
 }): Promise<CommandResult> {
-  return await new Promise((resolve) => {
-    const [command, ...args] = params.argv;
-    if (!command) {
-      resolve({
-        code: 1,
-        stdout: "",
-        stderr: "command is required",
-      });
-      return;
-    }
-
-    const proc = spawn(command, args, {
+  if (!params.argv[0]) {
+    return { code: 1, stdout: "", stderr: "command is required" };
+  }
+  try {
+    const result = await runCommandWithTimeout(params.argv, {
       cwd: params.cwd,
-      env: { ...process.env, ...params.env },
-      stdio: ["ignore", "pipe", "pipe"],
+      env: params.env,
+      killProcessTree: true,
+      maxOutputBytes: MATRIX_COMMAND_OUTPUT_TAIL_BYTES,
+      outputCapture: "tail",
+      timeoutMs: params.timeoutMs,
     });
-
-    let stdout = "";
-    let stderr = "";
-    let settled = false;
-    let timer: NodeJS.Timeout | null = null;
-    const killChildOnExit = () => {
-      if (!settled && proc.exitCode === null) {
-        proc.kill("SIGTERM");
-      }
+    return {
+      code: result.termination === "timeout" ? 124 : (result.code ?? 1),
+      stdout: result.stdout,
+      stderr:
+        result.stderr ||
+        (result.termination === "timeout" ? `command timed out after ${params.timeoutMs}ms` : ""),
     };
-
-    const finalize = (result: CommandResult) => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      if (timer) {
-        clearTimeout(timer);
-      }
-      process.off("exit", killChildOnExit);
-      resolve(result);
+  } catch (error) {
+    return {
+      code: 1,
+      stdout: "",
+      stderr: error instanceof Error ? error.message : String(error),
     };
-    process.once("exit", killChildOnExit);
-
-    proc.stdout?.on("data", (chunk: Buffer | string) => {
-      stdout += chunk.toString();
-    });
-    proc.stderr?.on("data", (chunk: Buffer | string) => {
-      stderr += chunk.toString();
-    });
-
-    timer = setTimeout(() => {
-      proc.kill("SIGKILL");
-      finalize({
-        code: 124,
-        stdout,
-        stderr: stderr || `command timed out after ${params.timeoutMs}ms`,
-      });
-    }, params.timeoutMs);
-
-    proc.on("error", (err) => {
-      finalize({
-        code: 1,
-        stdout,
-        stderr: err.message,
-      });
-    });
-
-    proc.on("close", (code) => {
-      finalize({
-        code: code ?? 1,
-        stdout,
-        stderr,
-      });
-    });
-  });
+  }
 }
 
 function defaultRequireFn(id: string): unknown {
@@ -246,8 +192,7 @@ function removeIncompleteMatrixCryptoNativeBinding(params: {
 export async function ensureMatrixCryptoRuntime(
   params: MatrixCryptoRuntimeDeps = {},
 ): Promise<void> {
-  const usesDefaultRuntime =
-    !params.requireFn && !params.runCommand && !params.resolveFn && !params.nodeExecutable;
+  const usesDefaultRuntime = !params.requireFn && !params.resolveFn;
   if (usesDefaultRuntime && defaultMatrixCryptoRuntimeEnsurePromise) {
     await defaultMatrixCryptoRuntimeEnsurePromise;
     return;
@@ -280,10 +225,8 @@ async function ensureMatrixCryptoRuntimeOnce(params: MatrixCryptoRuntimeDeps): P
 
   const scriptPath = resolveFn("@matrix-org/matrix-sdk-crypto-nodejs/download-lib.js");
   params.log?.("matrix: bootstrapping native crypto runtime");
-  const runCommand = params.runCommand ?? runFixedCommandWithTimeout;
-  const nodeExecutable = params.nodeExecutable ?? process.execPath;
-  const result = await runCommand({
-    argv: [nodeExecutable, scriptPath],
+  const result = await runFixedCommandWithTimeout({
+    argv: [process.execPath, scriptPath],
     cwd: path.dirname(scriptPath),
     timeoutMs: 300_000,
     env: { COREPACK_ENABLE_DOWNLOAD_PROMPT: "0" },
@@ -299,47 +242,14 @@ async function ensureMatrixCryptoRuntimeOnce(params: MatrixCryptoRuntimeDeps): P
   requireFn("@matrix-org/matrix-sdk-crypto-nodejs");
 }
 
-export async function ensureMatrixSdkInstalled(params: {
-  runtime: RuntimeEnv;
+export async function ensureMatrixSdkInstalled(params?: {
+  runtime?: RuntimeEnv;
   confirm?: (message: string) => Promise<boolean>;
+  resolveFn?: (id: string) => string;
 }): Promise<void> {
-  if (isMatrixSdkAvailable()) {
+  const missing = resolveMissingMatrixPackages(params?.resolveFn);
+  if (missing.length === 0) {
     return;
   }
-  const confirm = params.confirm;
-  if (confirm) {
-    const ok = await confirm(
-      "Matrix requires matrix-js-sdk, @matrix-org/matrix-sdk-crypto-nodejs, and @matrix-org/matrix-sdk-crypto-wasm. Install now?",
-    );
-    if (!ok) {
-      throw new Error(
-        "Matrix requires matrix-js-sdk, @matrix-org/matrix-sdk-crypto-nodejs, and @matrix-org/matrix-sdk-crypto-wasm (install dependencies first).",
-      );
-    }
-  }
-
-  const root = resolvePluginRoot();
-  const command = fs.existsSync(path.join(root, "pnpm-lock.yaml"))
-    ? ["pnpm", "install"]
-    : ["npm", "install", "--omit=dev", "--silent"];
-  params.runtime.log?.(`matrix: installing dependencies via ${command[0]} (${root})…`);
-  const result = await runFixedCommandWithTimeout({
-    argv: command,
-    cwd: root,
-    timeoutMs: 300_000,
-    env: { COREPACK_ENABLE_DOWNLOAD_PROMPT: "0" },
-  });
-  if (result.code !== 0) {
-    throw new Error(
-      result.stderr.trim() || result.stdout.trim() || "Matrix dependency install failed.",
-    );
-  }
-  if (!isMatrixSdkAvailable()) {
-    const missing = resolveMissingMatrixPackages();
-    throw new Error(
-      missing.length > 0
-        ? `Matrix dependency install completed but required packages are still missing: ${missing.join(", ")}`
-        : "Matrix dependency install completed but Matrix dependencies are still missing.",
-    );
-  }
+  throw new Error(buildMatrixDepsMissingMessage(missing));
 }

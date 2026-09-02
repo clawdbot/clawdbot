@@ -1,15 +1,20 @@
-import { loadCronStore, resolveCronStorePath } from "../../cron/store.js";
-import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
+/** Detects reminder commitments that were not backed by scheduled cron jobs. */
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { loadCronJobsStore, resolveCronJobsStorePath } from "../../cron/store.js";
+import { copyReplyPayloadMetadata } from "../reply-payload.js";
 import type { ReplyPayload } from "../types.js";
 
 const UNSCHEDULED_REMINDER_NOTE =
   "Note: I did not schedule a reminder in this turn, so this will not trigger automatically.";
 
 const REMINDER_COMMITMENT_PATTERNS: RegExp[] = [
-  /\b(?:i\s*['’]?ll|i will)\s+(?:make sure to\s+)?(?:remember|remind|ping|follow up|follow-up|check back|circle back)\b/i,
+  /\b(?:i\s*['’]?ll|i will)\s+(?:make sure to\s+)?(?:remind|ping|follow up|follow-up|check (?:back|on)|circle back)\b/i,
+  /\b(?:i\s*['’]?ll|i will)\s+(?:make sure to\s+)?remember\s+to\s+(?:(?:remind|ping|follow up|follow-up|check (?:back|on)|circle back)\b|(?:set|create|schedule)\s+(?:a\s+)?reminder\b)/i,
+  /\b(?:i\s*['’]?ll|i will)\s+(?:make sure to\s+)?remember\b[^.!?]{0,160}?(?:\s+and(?:\s+then)?|,\s*(?:(?:and\s+)?then)?)\s+(?:(?:i\s*['’]?ll|i will|will)\s+)?(?:make sure to\s+)?(?:remind|ping|follow up|follow-up|check (?:back|on)|circle back|(?:set|create|schedule)\s+(?:a\s+)?reminder)\b/i,
   /\b(?:i\s*['’]?ll|i will)\s+(?:set|create|schedule)\s+(?:a\s+)?reminder\b/i,
 ];
 
+/** Returns true when text promises a reminder/follow-up without the guard note. */
 export function hasUnbackedReminderCommitment(text: string): boolean {
   const normalized = normalizeLowercaseStringOrEmpty(text);
   if (!normalized.trim()) {
@@ -31,8 +36,8 @@ export async function hasSessionRelatedCronJobs(params: {
   sessionKey?: string;
 }): Promise<boolean> {
   try {
-    const storePath = resolveCronStorePath(params.cronStorePath);
-    const store = await loadCronStore(storePath);
+    const storePath = resolveCronJobsStorePath(params.cronStorePath);
+    const store = await loadCronJobsStore(storePath);
     if (store.jobs.length === 0) {
       return false;
     }
@@ -46,6 +51,7 @@ export async function hasSessionRelatedCronJobs(params: {
   }
 }
 
+/** Appends the unscheduled-reminder note to the first payload that needs it. */
 export function appendUnscheduledReminderNote(payloads: ReplyPayload[]): ReplyPayload[] {
   let appended = false;
   return payloads.map((payload) => {
@@ -57,9 +63,9 @@ export function appendUnscheduledReminderNote(payloads: ReplyPayload[]): ReplyPa
     }
     appended = true;
     const trimmed = payload.text.trimEnd();
-    return {
+    return copyReplyPayloadMetadata(payload, {
       ...payload,
       text: `${trimmed}\n\n${UNSCHEDULED_REMINDER_NOTE}`,
-    };
+    });
   });
 }

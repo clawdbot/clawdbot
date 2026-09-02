@@ -1,13 +1,14 @@
+/** Public runtime parameter and result types for image generation calls. */
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import type { FallbackAttempt } from "../agents/model-fallback.types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { SsrFPolicy } from "../infra/net/ssrf.js";
 import type {
   GeneratedImageAsset,
   ImageGenerationBackground,
   ImageGenerationIgnoredOverride,
   ImageGenerationNormalization,
   ImageGenerationOutputFormat,
-  ImageGenerationProvider,
   ImageGenerationProviderOptions,
   ImageGenerationQuality,
   ImageGenerationResolution,
@@ -24,6 +25,8 @@ export type GenerateImageParams = {
   size?: string;
   aspectRatio?: string;
   resolution?: ImageGenerationResolution;
+  /** Resolution inferred from reference images; omitted for incompatible fallback models. */
+  inferredResolution?: ImageGenerationResolution;
   quality?: ImageGenerationQuality;
   outputFormat?: ImageGenerationOutputFormat;
   background?: ImageGenerationBackground;
@@ -32,6 +35,8 @@ export type GenerateImageParams = {
   /** Optional per-request provider timeout in milliseconds. */
   timeoutMs?: number;
   providerOptions?: ImageGenerationProviderOptions;
+  /** SSRF policy to propagate into image-generation provider HTTP calls. */
+  ssrfPolicy?: SsrFPolicy;
 };
 
 export type GenerateImageRuntimeResult = {
@@ -39,13 +44,8 @@ export type GenerateImageRuntimeResult = {
   provider: string;
   model: string;
   attempts: FallbackAttempt[];
+  appliedResolution?: ImageGenerationResolution;
   normalization?: ImageGenerationNormalization;
   metadata?: Record<string, unknown>;
   ignoredOverrides: ImageGenerationIgnoredOverride[];
 };
-
-export type ListRuntimeImageGenerationProvidersParams = {
-  config?: OpenClawConfig;
-};
-
-export type RuntimeImageGenerationProvider = ImageGenerationProvider;

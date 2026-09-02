@@ -1,22 +1,36 @@
+// Capability-token helpers for plugin-hosted node surfaces.
 import { randomBytes } from "node:crypto";
+import {
+  asDateTimestampMs,
+  asPositiveSafeInteger,
+  isFutureDateTimestampMs,
+  resolveExpiresAtMsFromDurationMs,
+} from "@openclaw/normalization-core/number-coercion";
 import { safeEqualSecret } from "../security/secret-equal.js";
 
+/** Path marker used to scope plugin-hosted node URLs with one-time capabilities. */
 export const PLUGIN_NODE_CAPABILITY_PATH_PREFIX = "/__openclaw__/cap";
 const PLUGIN_NODE_CAPABILITY_QUERY_PARAM = "oc_cap";
+/** Default lifetime for plugin-node capability tokens. */
 export const DEFAULT_PLUGIN_NODE_CAPABILITY_TTL_MS = 10 * 60_000;
 
+/** Declared plugin surface that may receive scoped node capabilities. */
 export type PluginNodeCapabilitySurface = {
   surface: string;
   ttlMs?: number;
   scopeKey?: string;
 };
 
+/** Client state used to authorize plugin-node surface capabilities. */
 export type PluginNodeCapabilityClient = {
+  /** Retired clients cannot back HTTP capability auth or its renewal while close is pending. */
+  invalidated?: boolean;
   pluginSurfaceUrls?: Record<string, string>;
   pluginNodeCapabilitySurfaces?: Record<string, PluginNodeCapabilitySurface>;
   pluginNodeCapabilities?: Record<string, { capability: string; expiresAtMs: number }>;
 };
 
+/** Index surfaces by normalized surface id, keeping the strictest TTL per surface. */
 export function indexPluginNodeCapabilitySurfaces(
   surfaces: readonly PluginNodeCapabilitySurface[],
 ): Record<string, PluginNodeCapabilitySurface> {
@@ -38,6 +52,7 @@ export function indexPluginNodeCapabilitySurfaces(
   return indexed;
 }
 
+/** Parsed URL details after extracting path/query capability tokens. */
 export type NormalizedPluginNodeCapabilityUrl = {
   pathname: string;
   capability?: string;
@@ -65,14 +80,25 @@ function resolvePluginNodeCapabilityStorageKey(surface: PluginNodeCapabilitySurf
   return scopeKey ? `${normalizedSurface}\0${scopeKey}` : normalizedSurface;
 }
 
+/** Resolve a positive TTL for a plugin-node capability surface. */
 export function resolvePluginNodeCapabilityTtlMs(surface: PluginNodeCapabilitySurface) {
-  return surface.ttlMs && surface.ttlMs > 0 ? surface.ttlMs : DEFAULT_PLUGIN_NODE_CAPABILITY_TTL_MS;
+  return asPositiveSafeInteger(surface.ttlMs) ?? DEFAULT_PLUGIN_NODE_CAPABILITY_TTL_MS;
 }
 
+/** Resolve the expiration timestamp for a capability minted against a surface. */
+export function resolvePluginNodeCapabilityExpiresAtMs(
+  surface: PluginNodeCapabilitySurface,
+  nowMs: number = Date.now(),
+): number | undefined {
+  return resolveExpiresAtMsFromDurationMs(resolvePluginNodeCapabilityTtlMs(surface), { nowMs });
+}
+
+/** Mint an opaque capability token for plugin-node surface access. */
 export function mintPluginNodeCapabilityToken(): string {
   return randomBytes(18).toString("base64url");
 }
 
+/** Append a capability path segment to a plugin host URL. */
 export function buildPluginNodeCapabilityScopedHostUrl(
   baseUrl: string,
   capability: string,
@@ -94,7 +120,8 @@ export function buildPluginNodeCapabilityScopedHostUrl(
   }
 }
 
-export function replacePluginNodeCapabilityInScopedHostUrl(
+/** Replace the capability segment in an already scoped host URL. */
+function replacePluginNodeCapabilityInScopedHostUrl(
   scopedUrl: string,
   capability: string,
 ): string | undefined {
@@ -127,10 +154,70 @@ export function replacePluginNodeCapabilityInScopedHostUrl(
   }
 }
 
+function pluginNodeCapabilityFromScopedHostUrl(rawUrl: string): string | undefined {
+  try {
+    const pathname = new URL(rawUrl).pathname;
+    const prefix = `${PLUGIN_NODE_CAPABILITY_PATH_PREFIX}/`;
+    const markerStart = pathname.indexOf(prefix);
+    if (markerStart < 0) {
+      return undefined;
+    }
+    const capabilityStart = markerStart + prefix.length;
+    const nextSlashIndex = pathname.indexOf("/", capabilityStart);
+    const capabilityEnd = nextSlashIndex >= 0 ? nextSlashIndex : pathname.length;
+    if (capabilityEnd <= capabilityStart) {
+      return undefined;
+    }
+    return normalizeCapability(decodeURIComponent(pathname.slice(capabilityStart, capabilityEnd)));
+  } catch {
+    return undefined;
+  }
+}
+
+/** Detect conflicting scoped capabilities while allowing transport host rewriting. */
+export function pluginNodeCapabilityScopedHostUrlsConflict(first: string, second: string): boolean {
+  const firstCapability = pluginNodeCapabilityFromScopedHostUrl(first);
+  const secondCapability = pluginNodeCapabilityFromScopedHostUrl(second);
+  return Boolean(
+    firstCapability && secondCapability && !safeEqualSecret(firstCapability, secondCapability),
+  );
+}
+
+/** Check whether a client's current scoped surface URL still has live authorization. */
+export function hasAuthorizedClientPluginNodeCapabilityUrl(params: {
+  client: PluginNodeCapabilityClient;
+  surface: PluginNodeCapabilitySurface;
+  url: string;
+  nowMs?: number;
+}): boolean {
+  const storageKey = resolvePluginNodeCapabilityStorageKey(params.surface);
+  const capability = pluginNodeCapabilityFromScopedHostUrl(params.url);
+  if (!storageKey || !capability) {
+    return false;
+  }
+  const entry = params.client.pluginNodeCapabilities?.[storageKey];
+  const nowMs = params.nowMs ?? Date.now();
+  return Boolean(
+    entry &&
+    isFutureDateTimestampMs(entry.expiresAtMs, { nowMs }) &&
+    safeEqualSecret(entry.capability, capability),
+  );
+}
+
+/** Parse and rewrite scoped capability URLs into canonical paths plus query tokens. */
 export function normalizePluginNodeCapabilityScopedUrl(
   rawUrl: string,
 ): NormalizedPluginNodeCapabilityUrl {
-  const url = new URL(rawUrl, "http://localhost");
+  let url: URL;
+  try {
+    url = new URL(rawUrl, "http://localhost");
+  } catch {
+    return {
+      pathname: "/",
+      scopedPath: false,
+      malformedScopedPath: true,
+    };
+  }
   const prefix = `${PLUGIN_NODE_CAPABILITY_PATH_PREFIX}/`;
   let scopedPath = false;
   let malformedScopedPath = false;
@@ -157,9 +244,9 @@ export function normalizePluginNodeCapabilityScopedUrl(
         malformedScopedPath = true;
       } else {
         url.pathname = canonicalPath;
-        if (!url.searchParams.has(PLUGIN_NODE_CAPABILITY_QUERY_PARAM)) {
-          url.searchParams.set(PLUGIN_NODE_CAPABILITY_QUERY_PARAM, capabilityFromPath);
-        }
+        // The path is the minted node URL. A copied stale query must never
+        // override the capability the current scoped path authorizes.
+        url.searchParams.set(PLUGIN_NODE_CAPABILITY_QUERY_PARAM, capabilityFromPath);
         rewrittenUrl = `${url.pathname}${url.search}`;
       }
     }
@@ -177,6 +264,7 @@ export function normalizePluginNodeCapabilityScopedUrl(
   };
 }
 
+/** Store a minted capability on a client under the surface/scope storage key. */
 export function setClientPluginNodeCapability(params: {
   client: PluginNodeCapabilityClient;
   surface: PluginNodeCapabilitySurface;
@@ -185,13 +273,14 @@ export function setClientPluginNodeCapability(params: {
 }) {
   const surface = normalizeSurface(params.surface.surface);
   const storageKey = resolvePluginNodeCapabilityStorageKey(params.surface);
-  if (!surface || !storageKey) {
+  const expiresAtMs = asDateTimestampMs(params.expiresAtMs);
+  if (!surface || !storageKey || expiresAtMs === undefined) {
     return;
   }
   params.client.pluginNodeCapabilities ??= {};
   params.client.pluginNodeCapabilities[storageKey] = {
     capability: params.capability,
-    expiresAtMs: params.expiresAtMs,
+    expiresAtMs,
   };
 }
 
@@ -218,7 +307,10 @@ export function refreshClientPluginNodeCapability(params: {
   const capabilitySurface = params.client.pluginNodeCapabilitySurfaces?.[surface] ?? params.surface;
   const capability = mintPluginNodeCapabilityToken();
   const nowMs = params.nowMs ?? Date.now();
-  const expiresAtMs = nowMs + resolvePluginNodeCapabilityTtlMs(capabilitySurface);
+  const expiresAtMs = resolvePluginNodeCapabilityExpiresAtMs(capabilitySurface, nowMs);
+  if (expiresAtMs === undefined) {
+    return undefined;
+  }
   const scopedUrl = replacePluginNodeCapabilityInScopedHostUrl(existingUrl, capability);
   if (!scopedUrl) {
     return undefined;
@@ -251,14 +343,20 @@ export function hasAuthorizedPluginNodeCapability(params: {
     return false;
   }
   const nowMs = params.nowMs ?? Date.now();
-  const ttlMs = resolvePluginNodeCapabilityTtlMs(params.surface);
+  const nextExpiresAtMs = resolvePluginNodeCapabilityExpiresAtMs(params.surface, nowMs);
+  if (nextExpiresAtMs === undefined) {
+    return false;
+  }
   for (const client of params.clients) {
+    if (client.invalidated) {
+      continue;
+    }
     const entry = client.pluginNodeCapabilities?.[storageKey];
-    if (!entry || entry.expiresAtMs <= nowMs) {
+    if (!entry || !isFutureDateTimestampMs(entry.expiresAtMs, { nowMs })) {
       continue;
     }
     if (safeEqualSecret(entry.capability, params.capability)) {
-      entry.expiresAtMs = nowMs + ttlMs;
+      entry.expiresAtMs = nextExpiresAtMs;
       return true;
     }
   }

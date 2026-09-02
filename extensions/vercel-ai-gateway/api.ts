@@ -1,3 +1,4 @@
+// Vercel Ai Gateway API module exposes the plugin public contract.
 export {
   discoverVercelAiGatewayModels,
   getStaticVercelAiGatewayModelCatalog,

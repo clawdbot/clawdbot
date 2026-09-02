@@ -1,21 +1,15 @@
-import type { AssistantMessage, StopReason, Usage } from "@mariozechner/pi-ai";
+/**
+ * Assistant stream message builders.
+ *
+ * Centralizes zero-cost usage records and assistant message construction for simple stream transports.
+ */
+import type { AssistantMessage, StopReason, Usage } from "../llm/types.js";
 
 type StreamModelDescriptor = {
   api: string;
   provider: string;
   id: string;
 };
-
-export function buildZeroUsage(): Usage {
-  return {
-    input: 0,
-    output: 0,
-    cacheRead: 0,
-    cacheWrite: 0,
-    totalTokens: 0,
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-  };
-}
 
 export function buildUsageWithNoCost(params: {
   input?: number;
@@ -33,7 +27,8 @@ export function buildUsageWithNoCost(params: {
     output,
     cacheRead,
     cacheWrite,
-    totalTokens: params.totalTokens ?? input + output,
+    // Provider adapters normalize input to uncached tokens before this shared builder.
+    totalTokens: params.totalTokens ?? input + output + cacheRead + cacheWrite,
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
   };
 }
@@ -57,7 +52,7 @@ export function buildAssistantMessage(params: {
   };
 }
 
-export function buildAssistantMessageWithZeroUsage(params: {
+function buildAssistantMessageWithZeroUsage(params: {
   model: StreamModelDescriptor;
   content: AssistantMessage["content"];
   stopReason: StopReason;
@@ -67,7 +62,7 @@ export function buildAssistantMessageWithZeroUsage(params: {
     model: params.model,
     content: params.content,
     stopReason: params.stopReason,
-    usage: buildZeroUsage(),
+    usage: buildUsageWithNoCost({}),
     timestamp: params.timestamp,
   });
 }

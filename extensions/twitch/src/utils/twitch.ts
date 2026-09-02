@@ -1,5 +1,5 @@
-import { randomUUID } from "node:crypto";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
+// Twitch plugin module implements twitch behavior.
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 /**
  * Twitch-specific utility functions
@@ -32,18 +32,6 @@ export function normalizeTwitchChannel(channel: string): string {
  */
 export function missingTargetError(provider: string, hint?: string): Error {
   return new Error(`Delivering to ${provider} requires target${hint ? ` ${hint}` : ""}`);
-}
-
-/**
- * Generate a unique message ID for Twitch messages.
- *
- * Twurple's say() doesn't return the message ID, so we generate one
- * for tracking purposes.
- *
- * @returns A unique message ID
- */
-export function generateMessageId(): string {
-  return `${Date.now()}-${randomUUID()}`;
 }
 
 /**

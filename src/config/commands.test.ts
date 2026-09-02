@@ -1,10 +1,10 @@
+// Covers command config normalization and path validation.
 import path from "node:path";
 import { beforeEach, describe, expect, it } from "vitest";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
+import { isCommandFlagEnabled, isRestartEnabled } from "./commands.flags.js";
 import {
-  isCommandFlagEnabled,
-  isRestartEnabled,
   isNativeCommandsExplicitlyDisabled,
   resolveNativeCommandsEnabled,
   resolveNativeSkillsEnabled,
@@ -106,7 +106,6 @@ describe("resolveNativeSkillsEnabled", () => {
     const env = {
       ...process.env,
       OPENCLAW_BUNDLED_PLUGINS_DIR: path.resolve("extensions"),
-      OPENCLAW_DISABLE_PERSISTED_PLUGIN_REGISTRY: "1",
     };
 
     expect(
@@ -278,16 +277,12 @@ describe("isCommandFlagEnabled", () => {
   });
 });
 
-describe("deprecated commands compatibility", () => {
-  it("ignores legacy modelsWrite during validation", () => {
+describe("retired commands config", () => {
+  it("rejects legacy modelsWrite during validation", () => {
     const result = validateConfigObjectWithPlugins({
       commands: { text: true, modelsWrite: false },
     });
 
-    expect(result.ok).toBe(true);
-    if (result.ok) {
-      expect(result.config.commands).toMatchObject({ text: true });
-      expect(Object.hasOwn(result.config.commands ?? {}, "modelsWrite")).toBe(false);
-    }
+    expect(result.ok).toBe(false);
   });
 });

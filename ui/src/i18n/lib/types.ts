@@ -1,3 +1,4 @@
+// Control UI type declarations define types contracts.
 export type TranslationMap = { [key: string]: string | TranslationMap };
 
 export type Locale =
@@ -10,6 +11,7 @@ export type Locale =
   | "ja-JP"
   | "ko"
   | "fr"
+  | "hi"
   | "ar"
   | "it"
   | "tr"
@@ -19,10 +21,5 @@ export type Locale =
   | "th"
   | "vi"
   | "nl"
-  | "fa";
-
-export interface I18nConfig {
-  locale: Locale;
-  fallbackLocale: Locale;
-  translations: Record<Locale, TranslationMap>;
-}
+  | "fa"
+  | "ru";

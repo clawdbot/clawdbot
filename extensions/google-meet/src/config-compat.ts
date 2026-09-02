@@ -1,4 +1,9 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+// Google Meet helper module supports config compat behavior.
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import {
+  asNullableRecord,
+  normalizeOptionalLowercaseString as normalizeProviderId,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 
 type LegacyConfigRule = {
   path: Array<string | number>;
@@ -6,22 +11,12 @@ type LegacyConfigRule = {
   match: (value: unknown) => boolean;
 };
 
-function asRecord(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
-}
-
-function normalizeProviderId(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value.trim().toLowerCase() : undefined;
-}
-
 function hasOwn(record: Record<string, unknown>, key: string): boolean {
-  return Object.prototype.hasOwnProperty.call(record, key);
+  return Object.hasOwn(record, key);
 }
 
 function hasLegacyGoogleRealtimeProvider(value: unknown): boolean {
-  const realtime = asRecord(value);
+  const realtime = asNullableRecord(value);
   if (!realtime || normalizeProviderId(realtime.provider) !== "google") {
     return false;
   }
@@ -37,27 +32,27 @@ export const legacyConfigRules: LegacyConfigRule[] = [
   },
 ];
 
-export function migrateGoogleMeetLegacyRealtimeProvider(config: OpenClawConfig): {
+function migrateGoogleMeetLegacyRealtimeProvider(config: OpenClawConfig): {
   config: OpenClawConfig;
   changes: string[];
 } | null {
-  const rawEntry = asRecord(config.plugins?.entries?.["google-meet"]);
-  const rawPluginConfig = asRecord(rawEntry?.config);
-  const rawRealtime = asRecord(rawPluginConfig?.realtime);
+  const rawEntry = asNullableRecord(config.plugins?.entries?.["google-meet"]);
+  const rawPluginConfig = asNullableRecord(rawEntry?.config);
+  const rawRealtime = asNullableRecord(rawPluginConfig?.realtime);
   if (!rawRealtime || !hasLegacyGoogleRealtimeProvider(rawRealtime)) {
     return null;
   }
 
   const nextConfig = structuredClone(config);
-  const nextPlugins = asRecord(nextConfig.plugins) ?? {};
+  const nextPlugins = asNullableRecord(nextConfig.plugins) ?? {};
   nextConfig.plugins = nextPlugins;
-  const nextEntries = asRecord(nextPlugins.entries) ?? {};
+  const nextEntries = asNullableRecord(nextPlugins.entries) ?? {};
   nextPlugins.entries = nextEntries;
-  const nextEntry = asRecord(nextEntries["google-meet"]) ?? {};
+  const nextEntry = asNullableRecord(nextEntries["google-meet"]) ?? {};
   nextEntries["google-meet"] = nextEntry;
-  const nextPluginConfig = asRecord(nextEntry.config) ?? {};
+  const nextPluginConfig = asNullableRecord(nextEntry.config) ?? {};
   nextEntry.config = nextPluginConfig;
-  const nextRealtime = asRecord(nextPluginConfig.realtime) ?? {};
+  const nextRealtime = asNullableRecord(nextPluginConfig.realtime) ?? {};
   nextPluginConfig.realtime = nextRealtime;
 
   nextRealtime.provider = "openai";

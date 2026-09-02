@@ -1,9 +1,12 @@
+// Channel run-state tracker used to publish busy/activity status.
 type RunStateStatusPatch = {
   busy?: boolean;
   activeRuns?: number;
   lastRunActivityAt?: number | null;
+  activeRunStartedAt?: number | null;
 };
 
+/** Status sink used by channel run-state updates. */
 export type RunStateStatusSink = (patch: RunStateStatusPatch) => void;
 
 type RunStateMachineParams = {
@@ -15,6 +18,7 @@ type RunStateMachineParams = {
 
 const DEFAULT_RUN_ACTIVITY_HEARTBEAT_MS = 60_000;
 
+/** Creates a channel run-state tracker with heartbeat updates while runs are active. */
 export function createRunStateMachine(params: RunStateMachineParams) {
   const heartbeatMs = params.heartbeatMs ?? DEFAULT_RUN_ACTIVITY_HEARTBEAT_MS;
   const now = params.now ?? Date.now;
@@ -58,6 +62,7 @@ export function createRunStateMachine(params: RunStateMachineParams) {
   const deactivate = () => {
     lifecycleActive = false;
     clearHeartbeat();
+    params.abortSignal?.removeEventListener("abort", onAbort);
   };
 
   const onAbort = () => {

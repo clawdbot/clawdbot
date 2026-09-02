@@ -1,3 +1,4 @@
+// Voyage plugin module implements memory embedding adapter behavior.
 import {
   isMissingEmbeddingApiKeyError,
   mapBatchEmbeddingsByIndex,

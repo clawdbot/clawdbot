@@ -1,4 +1,20 @@
+import type { lookup as dnsLookupCb } from "node:dns";
+/**
+ * Chrome DevTools Protocol browser operations.
+ *
+ * Provides screenshots, target creation, JavaScript evaluation, ARIA/role
+ * snapshots, DOM text, and selector lookup on top of the CDP socket helpers.
+ */
+import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
+import { resolveIntegerOption } from "openclaw/plugin-sdk/number-runtime";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { SsrFPolicy } from "../infra/net/ssrf.js";
+import {
+  prepareCdpPageSession,
+  prepareCdpTargetSession,
+  readCdpMainFrameDocumentIdentity,
+  type CdpActionTimeouts,
+} from "./cdp-page-session.js";
 import {
   appendCdpPath,
   assertCdpEndpointAllowed,
@@ -8,19 +24,38 @@ import {
   isLoopbackHost,
   isWebSocketUrl,
   normalizeCdpHttpBaseForJsonEndpoints,
+  scopeCdpPolicyToConfiguredEndpoint,
   withCdpSocket,
 } from "./cdp.helpers.js";
 import { assertBrowserNavigationAllowed, withBrowserNavigationPolicy } from "./navigation-guard.js";
+import {
+  finalizeRoleSnapshot,
+  findRoleSnapshotLineRef,
+  type RoleSnapshotIdentityMode,
+} from "./pw-role-snapshot.js";
+import {
+  appendRoleSnapshotDepthTruncationMarker,
+  ROLE_SNAPSHOT_MAX_DEPTH,
+} from "./snapshot-depth-limit.js";
 import { CONTENT_ROLES, INTERACTIVE_ROLES, STRUCTURAL_ROLES } from "./snapshot-roles.js";
 
-export {
-  appendCdpPath,
-  fetchJson,
-  fetchOk,
-  getHeadersWithAuth,
-  isWebSocketUrl,
-} from "./cdp.helpers.js";
+export { appendCdpPath } from "./cdp.helpers.js";
+export { type CdpActionTimeouts, waitForCdpCommittedNavigationUrl } from "./cdp-page-session.js";
 
+/** Read the current main-frame loader identity from a page-level CDP target. */
+export async function getMainFrameDocumentIdentityViaCdp(opts: {
+  wsUrl: string;
+  lookup?: typeof dnsLookupCb;
+  timeoutMs?: number;
+}): Promise<string | undefined> {
+  return await withCdpSocket(
+    opts.wsUrl,
+    async (send) => await readCdpMainFrameDocumentIdentity(send),
+    { commandTimeoutMs: opts.timeoutMs ?? 5000, ...(opts.lookup ? { lookup: opts.lookup } : {}) },
+  );
+}
+
+/** Normalize a reported CDP WebSocket URL against the configured CDP base URL. */
 export function normalizeCdpWsUrl(wsUrl: string, cdpUrl: string): string {
   const ws = new URL(wsUrl);
   const cdp = new URL(cdpUrl);
@@ -41,6 +76,9 @@ export function normalizeCdpWsUrl(wsUrl: string, cdpUrl: string): string {
     ws.protocol = cdp.protocol === "https:" ? "wss:" : "ws:";
   } else if (isLoopbackHost(ws.hostname) && isLoopbackHost(cdp.hostname)) {
     ws.hostname = cdp.hostname;
+    if (!ws.port && cdp.port) {
+      ws.port = cdp.port;
+    }
   }
   if (cdp.protocol === "https:" && ws.protocol === "ws:") {
     ws.protocol = "wss:";
@@ -57,151 +95,71 @@ export function normalizeCdpWsUrl(wsUrl: string, cdpUrl: string): string {
   return ws.toString();
 }
 
-export async function captureScreenshotPng(opts: {
-  wsUrl: string;
-  fullPage?: boolean;
-  timeoutMs?: number;
-}): Promise<Buffer> {
-  return await captureScreenshot({
-    wsUrl: opts.wsUrl,
-    fullPage: opts.fullPage,
-    format: "png",
-    timeoutMs: opts.timeoutMs,
-  });
-}
-
+/** Capture a PNG or JPEG screenshot through CDP, optionally full-page. */
 export async function captureScreenshot(opts: {
   wsUrl: string;
+  lookup?: typeof dnsLookupCb;
   fullPage?: boolean;
   format?: "png" | "jpeg";
   quality?: number; // jpeg only (0..100)
   timeoutMs?: number;
+  /** Effective launch mode recorded on the owned Chrome process, when known. */
+  headless?: boolean;
 }): Promise<Buffer> {
   return await withCdpSocket(
     opts.wsUrl,
     async (send) => {
       await send("Page.enable");
 
-      // For full-page captures, temporarily expand the viewport to the content
-      // size so the entire page is within the viewport bounds.  We save the
-      // current viewport state and restore it after capture so pre-existing
-      // device emulation (mobile width, DPR, touch) is not lost.
-      let savedVp: { w: number; h: number; dpr: number; sw: number; sh: number } | undefined;
-      if (opts.fullPage) {
-        const metrics = (await send("Page.getLayoutMetrics")) as {
-          cssContentSize?: { width?: number; height?: number };
-          contentSize?: { width?: number; height?: number };
-        };
-        const size = metrics?.cssContentSize ?? metrics?.contentSize;
-        const contentWidth = size?.width ?? 0;
-        const contentHeight = size?.height ?? 0;
-        if (contentWidth > 0 && contentHeight > 0) {
-          const vpResult = (await send("Runtime.evaluate", {
-            expression:
-              "({ w: window.innerWidth, h: window.innerHeight, dpr: window.devicePixelRatio, sw: screen.width, sh: screen.height })",
-            returnByValue: true,
-          })) as {
-            result?: {
-              value?: { w?: number; h?: number; dpr?: number; sw?: number; sh?: number };
-            };
-          };
-          const v = vpResult?.result?.value;
-          const currentW = v?.w ?? 0;
-          const currentH = v?.h ?? 0;
-          savedVp = {
-            w: currentW,
-            h: currentH,
-            dpr: v?.dpr ?? 1,
-            sw: v?.sw ?? currentW,
-            sh: v?.sh ?? currentH,
-          };
-          // mobile: false is the safe default — CDP provides no way to query
-          // the active mobile flag, and inferring from navigator.maxTouchPoints
-          // would false-positive on touch-enabled desktops.
-          await send("Emulation.setDeviceMetricsOverride", {
-            width: Math.ceil(Math.max(currentW, contentWidth)),
-            height: Math.ceil(Math.max(currentH, contentHeight)),
-            deviceScaleFactor: savedVp.dpr,
-            mobile: false,
-            screenWidth: savedVp.sw,
-            screenHeight: savedVp.sh,
-          });
-        }
+      // Headless background tabs need activation to produce a frame. Preserve
+      // focus only when the launched process is authoritatively known headed.
+      if (opts.headless !== false) {
+        await send("Page.bringToFront").catch(() => {});
       }
 
       const format = opts.format ?? "png";
       const quality =
         format === "jpeg" ? Math.max(0, Math.min(100, Math.round(opts.quality ?? 85))) : undefined;
 
-      try {
-        // Chrome 146+ managed/headful browsers reject fromSurface: false.
-        // For ordinary viewport captures, keep CDP's captureBeyondViewport
-        // default (false), matching Playwright's Chromium path.
-        const result = (await send("Page.captureScreenshot", {
-          format,
-          ...(quality !== undefined ? { quality } : {}),
-          ...(opts.fullPage ? { captureBeyondViewport: true } : {}),
-        })) as { data?: string };
+      // This path has no Playwright viewport owner. Chromium captures the whole
+      // document without changing its layout; emulated pages use their owner session.
+      const result = (await send("Page.captureScreenshot", {
+        format,
+        ...(quality !== undefined ? { quality } : {}),
+        ...(opts.fullPage ? { captureBeyondViewport: true } : {}),
+      })) as { data?: string };
 
-        const base64 = result?.data;
-        if (!base64) {
-          throw new Error("Screenshot failed: missing data");
-        }
-        return Buffer.from(base64, "base64");
-      } finally {
-        if (savedVp) {
-          // Clear the temporary viewport expansion first.  If the tab had
-          // prior device emulation the clear will change the viewport back to
-          // the browser's natural dimensions — detect that and re-apply the
-          // saved emulation so the tab's original state is preserved.
-          await send("Emulation.clearDeviceMetricsOverride").catch(() => {});
-          try {
-            const postResult = (await send("Runtime.evaluate", {
-              expression:
-                "({ w: window.innerWidth, h: window.innerHeight, dpr: window.devicePixelRatio })",
-              returnByValue: true,
-            })) as { result?: { value?: { w?: number; h?: number; dpr?: number } } };
-            const p = postResult?.result?.value;
-            if (p?.w !== savedVp.w || p?.h !== savedVp.h || p?.dpr !== savedVp.dpr) {
-              await send("Emulation.setDeviceMetricsOverride", {
-                width: savedVp.w,
-                height: savedVp.h,
-                deviceScaleFactor: savedVp.dpr,
-                mobile: false,
-                screenWidth: savedVp.sw,
-                screenHeight: savedVp.sh,
-              });
-            }
-          } catch {
-            // Best-effort restoration; ignore failures in the cleanup path.
-          }
-        }
+      const base64 = result?.data;
+      if (!base64) {
+        throw new Error("Screenshot failed: missing data");
       }
+      return Buffer.from(base64, "base64");
     },
-    { commandTimeoutMs: opts.timeoutMs },
+    { commandTimeoutMs: opts.timeoutMs, lookup: opts.lookup },
   );
 }
 
-export type CdpActionTimeouts = {
-  httpTimeoutMs?: number;
-  handshakeTimeoutMs?: number;
-};
-
+/** Create a new browser target after applying navigation and CDP SSRF policy. */
 export async function createTargetViaCdp(opts: {
   cdpUrl: string;
   url: string;
   ssrfPolicy?: SsrFPolicy;
   timeouts?: CdpActionTimeouts;
-}): Promise<{ targetId: string }> {
+  signal?: AbortSignal;
+  /** Wait for the created document to finish navigation and return its authoritative URL. */
+  waitForNavigationResult?: boolean;
+}): Promise<{ targetId: string; finalUrl?: string }> {
+  opts.signal?.throwIfAborted();
   await assertBrowserNavigationAllowed({
     url: opts.url,
     ...withBrowserNavigationPolicy(opts.ssrfPolicy),
   });
+  const configuredCdpPin = await assertCdpEndpointAllowed(opts.cdpUrl, opts.ssrfPolicy);
+  const cdpControlPolicy = scopeCdpPolicyToConfiguredEndpoint(opts.cdpUrl, opts.ssrfPolicy);
 
   let wsUrl: string;
   if (isDirectCdpWebSocketEndpoint(opts.cdpUrl)) {
     // Handshake-ready direct WebSocket URL — skip /json/version discovery.
-    await assertCdpEndpointAllowed(opts.cdpUrl, opts.ssrfPolicy);
     wsUrl = opts.cdpUrl;
   } else {
     // Either an HTTP(S) CDP endpoint or a bare ws/wss root. Try
@@ -217,8 +175,8 @@ export async function createTargetViaCdp(opts: {
       version = await fetchJson<{ webSocketDebuggerUrl?: string }>(
         appendCdpPath(discoveryUrl, "/json/version"),
         opts.timeouts?.httpTimeoutMs,
-        undefined,
-        opts.ssrfPolicy,
+        { signal: opts.signal },
+        cdpControlPolicy,
       );
     } catch (err) {
       // Discovery failed for an HTTP/HTTPS URL — propagate immediately.
@@ -245,26 +203,50 @@ export async function createTargetViaCdp(opts: {
   let lastError: unknown;
   for (const candidateWsUrl of candidateWsUrls) {
     try {
-      await assertCdpEndpointAllowed(candidateWsUrl, opts.ssrfPolicy);
+      const endpointSource =
+        candidateWsUrl === opts.cdpUrl
+          ? ({ source: "configured" } as const)
+          : ({ source: "discovered", configuredUrl: opts.cdpUrl } as const);
+      const candidateCdpPin =
+        candidateWsUrl === opts.cdpUrl
+          ? configuredCdpPin
+          : await assertCdpEndpointAllowed(candidateWsUrl, cdpControlPolicy, endpointSource);
+      opts.signal?.throwIfAborted();
       return await withCdpSocket(
         candidateWsUrl,
         async (send) => {
-          const created = (await send("Target.createTarget", { url: opts.url })) as {
-            targetId?: string;
-          };
+          opts.signal?.throwIfAborted();
+          const params = { url: opts.url, background: true }; // Target-id selection must not activate browser UI.
+          const created = (await send("Target.createTarget", params)) as { targetId?: string };
           const targetId = created?.targetId?.trim() ?? "";
           if (!targetId) {
             throw new Error("CDP Target.createTarget returned no targetId");
           }
-          await prepareCdpTargetSession(send, targetId);
-          return { targetId };
+          try {
+            opts.signal?.throwIfAborted();
+            const finalUrl = await prepareCdpTargetSession(
+              send,
+              targetId,
+              opts.waitForNavigationResult ? opts.url : undefined,
+              opts.signal,
+            );
+            opts.signal?.throwIfAborted();
+            return finalUrl ? { targetId, finalUrl } : { targetId };
+          } catch (error) {
+            // The caller cannot compensate until it receives this id. Keep cleanup
+            // on the creating socket, independent of cancellation, before releasing it.
+            await send("Target.closeTarget", { targetId }).catch(() => {});
+            throw error;
+          }
         },
         {
           commandTimeoutMs: opts.timeouts?.httpTimeoutMs ?? 5000,
           handshakeTimeoutMs: opts.timeouts?.handshakeTimeoutMs,
+          lookup: candidateCdpPin?.lookup,
         },
       );
     } catch (err) {
+      opts.signal?.throwIfAborted();
       lastError = err;
     }
   }
@@ -274,80 +256,7 @@ export async function createTargetViaCdp(opts: {
   throw new Error("CDP Target.createTarget failed");
 }
 
-async function prepareCdpTargetSession(send: CdpSendFn, targetId: string): Promise<void> {
-  const attached = (await send("Target.attachToTarget", {
-    targetId,
-    flatten: true,
-  }).catch(() => null)) as { sessionId?: unknown } | null;
-  const sessionId = typeof attached?.sessionId === "string" ? attached.sessionId : undefined;
-  if (!sessionId) {
-    return;
-  }
-  try {
-    await prepareCdpPageSession(send, sessionId);
-  } finally {
-    await send("Target.detachFromTarget", { sessionId }).catch(() => {});
-  }
-}
-
-async function prepareCdpPageSession(send: CdpSendFn, sessionId?: string): Promise<void> {
-  await Promise.all([
-    send("Page.enable", undefined, sessionId).catch(() => {}),
-    send("Runtime.enable", undefined, sessionId).catch(() => {}),
-    send("Network.enable", undefined, sessionId).catch(() => {}),
-    send("DOM.enable", undefined, sessionId).catch(() => {}),
-    send("Accessibility.enable", undefined, sessionId).catch(() => {}),
-  ]);
-  await send("Runtime.runIfWaitingForDebugger", undefined, sessionId).catch(() => {});
-}
-
-export type CdpRemoteObject = {
-  type: string;
-  subtype?: string;
-  value?: unknown;
-  description?: string;
-  unserializableValue?: string;
-  preview?: unknown;
-};
-
-export type CdpExceptionDetails = {
-  text?: string;
-  lineNumber?: number;
-  columnNumber?: number;
-  exception?: CdpRemoteObject;
-  stackTrace?: unknown;
-};
-
-export async function evaluateJavaScript(opts: {
-  wsUrl: string;
-  expression: string;
-  awaitPromise?: boolean;
-  returnByValue?: boolean;
-}): Promise<{
-  result: CdpRemoteObject;
-  exceptionDetails?: CdpExceptionDetails;
-}> {
-  return await withCdpSocket(opts.wsUrl, async (send) => {
-    await send("Runtime.enable").catch(() => {});
-    const evaluated = (await send("Runtime.evaluate", {
-      expression: opts.expression,
-      awaitPromise: Boolean(opts.awaitPromise),
-      returnByValue: opts.returnByValue ?? true,
-      userGesture: true,
-      includeCommandLineAPI: true,
-    })) as {
-      result?: CdpRemoteObject;
-      exceptionDetails?: CdpExceptionDetails;
-    };
-
-    const result = evaluated?.result;
-    if (!result) {
-      throw new Error("CDP Runtime.evaluate returned no result");
-    }
-    return { result, exceptionDetails: evaluated.exceptionDetails };
-  });
-}
-
+/** Normalized accessibility tree node returned by ARIA snapshots. */
 export type AriaSnapshotNode = {
   ref: string;
   role: string;
@@ -358,9 +267,11 @@ export type AriaSnapshotNode = {
   depth: number;
 };
 
-export const AX_REF_PREFIX = "ax";
+/** Prefix assigned to generated accessibility-node refs. */
+const AX_REF_PREFIX = "ax";
 export const AX_REF_PATTERN = new RegExp(`^${AX_REF_PREFIX}\\d+$`);
 
+/** Raw accessibility node subset read from CDP Accessibility.getFullAXTree. */
 export type RawAXNode = {
   nodeId?: string;
   role?: { value?: string };
@@ -385,6 +296,7 @@ function axValue(v: unknown): string {
   return "";
 }
 
+/** Format raw AX nodes into bounded ARIA snapshot nodes. */
 export function formatAriaSnapshot(nodes: RawAXNode[], limit: number): AriaSnapshotNode[] {
   const byId = new Map<string, RawAXNode>();
   for (const n of nodes) {
@@ -417,8 +329,7 @@ export function formatAriaSnapshot(nodes: RawAXNode[], limit: number): AriaSnaps
     }
     const { id, depth } = popped;
     const n = byId.get(id);
-    // Every id pushed onto the stack came from `children.filter(c => byId.has(c))`,
-    // so byId.get(id) is always defined here. Dead defensive guard.
+    // Child admission below only pushes ids present in this map.
     /* c8 ignore next 3 */
     if (!n) {
       continue;
@@ -438,13 +349,10 @@ export function formatAriaSnapshot(nodes: RawAXNode[], limit: number): AriaSnaps
       depth,
     });
 
-    const children = (n.childIds ?? []).filter((c) => byId.has(c));
+    const children = n.childIds ?? [];
     for (let i = children.length - 1; i >= 0; i--) {
       const child = children[i];
-      // `children` is a string[] from an array filter over RawAXNode.childIds,
-      // so `child` is always a defined string here. Dead defensive guard.
-      /* c8 ignore next 3 */
-      if (child) {
+      if (child && byId.has(child)) {
         stack.push({ id: child, depth: depth + 1 });
       }
     }
@@ -453,12 +361,14 @@ export function formatAriaSnapshot(nodes: RawAXNode[], limit: number): AriaSnaps
   return out;
 }
 
+/** Capture an accessibility-tree snapshot through CDP. */
 export async function snapshotAria(opts: {
   wsUrl: string;
+  lookup?: typeof dnsLookupCb;
   limit?: number;
   timeoutMs?: number;
 }): Promise<{ nodes: AriaSnapshotNode[] }> {
-  const limit = Math.max(1, Math.min(2000, Math.floor(opts.limit ?? 500)));
+  const limit = resolveIntegerOption(opts.limit, 500, { min: 1, max: 2000 });
   return await withCdpSocket(
     opts.wsUrl,
     async (send) => {
@@ -469,11 +379,12 @@ export async function snapshotAria(opts: {
       const nodes = Array.isArray(res?.nodes) ? res.nodes : [];
       return { nodes: formatAriaSnapshot(nodes, limit) };
     },
-    { commandTimeoutMs: opts.timeoutMs ?? 5000 },
+    { commandTimeoutMs: opts.timeoutMs ?? 5000, lookup: opts.lookup },
   );
 }
 
-export type CdpRoleRef = {
+/** Role snapshot ref metadata used by agent-facing snapshots. */
+type CdpRoleRef = {
   role: string;
   name?: string;
   nth?: number;
@@ -481,7 +392,8 @@ export type CdpRoleRef = {
   frameId?: string;
 };
 
-export type CdpRoleSnapshotOptions = {
+/** Options for CDP role snapshot extraction and compaction. */
+type CdpRoleSnapshotOptions = {
   interactive?: boolean;
   compact?: boolean;
   maxDepth?: number;
@@ -544,7 +456,7 @@ function buildRoleTree(nodes: RawAXNode[]): { tree: RoleTreeNode[]; roots: numbe
         continue;
       }
       tree[index]?.children.push(childIndex);
-      tree[childIndex].parent = index;
+      expectDefined(tree[childIndex], "CDP child node index").parent = index;
       childIndexes.add(childIndex);
     }
   }
@@ -556,8 +468,10 @@ function buildRoleTree(nodes: RawAXNode[]): { tree: RoleTreeNode[]; roots: numbe
     if (!current) {
       break;
     }
-    tree[current.index].depth = current.depth;
-    for (const child of (tree[current.index]?.children ?? []).toReversed()) {
+    const node = expectDefined(tree[current.index], "CDP traversal node index");
+    node.depth = current.depth;
+    for (let i = node.children.length - 1; i >= 0; i--) {
+      const child = expectDefined(node.children[i], "CDP traversal child index");
       stack.push({ index: child, depth: current.depth + 1 });
     }
   }
@@ -566,9 +480,6 @@ function buildRoleTree(nodes: RawAXNode[]): { tree: RoleTreeNode[]; roots: numbe
 
 function shouldIncludeRoleNode(node: RoleTreeNode, options: CdpRoleSnapshotOptions): boolean {
   const role = node.role.toLowerCase();
-  if (options.maxDepth !== undefined && node.depth > options.maxDepth) {
-    return false;
-  }
   if (options.interactive) {
     return INTERACTIVE_ROLES.has(role) || role === "iframe" || Boolean(node.cursorInfo);
   }
@@ -597,25 +508,34 @@ function renderRoleTree(
   index: number,
   output: string[],
   options: CdpRoleSnapshotOptions,
+  state: { truncated: boolean },
   indentOffset = 0,
 ): void {
   const node = tree[index];
   if (!node) {
     return;
   }
+  if (options.maxDepth !== undefined && node.depth > options.maxDepth) {
+    return;
+  }
+  const effectiveDepth = Math.max(0, node.depth + indentOffset);
+  if (effectiveDepth > ROLE_SNAPSHOT_MAX_DEPTH) {
+    state.truncated = true;
+    return;
+  }
   if (shouldIncludeRoleNode(node, options)) {
-    const indent = "  ".repeat(Math.max(0, node.depth + indentOffset));
-    const name = node.name ? ` "${node.name.replaceAll('"', '\\"')}"` : "";
+    const indent = "  ".repeat(effectiveDepth);
+    const name = node.name ? ` ${JSON.stringify(node.name)}` : "";
     const ref = node.ref ? ` [ref=${node.ref}]` : "";
     const nth = node.nth !== undefined && node.nth > 0 ? ` [nth=${node.nth}]` : "";
-    const value = node.value ? ` value="${node.value.replaceAll('"', '\\"')}"` : "";
+    const value = node.value ? ` value=${JSON.stringify(node.value)}` : "";
     const url = node.url ? ` [url=${node.url}]` : "";
     output.push(
       `${indent}- ${node.role}${name}${ref}${nth}${value}${url}${cursorSuffix(node.cursorInfo)}`,
     );
   }
   for (const child of node.children) {
-    renderRoleTree(tree, child, output, options, indentOffset);
+    renderRoleTree(tree, child, output, options, state, indentOffset);
   }
 }
 
@@ -662,7 +582,7 @@ async function findCursorInteractiveElements(
           }
           el.setAttribute("${attr}", String(out.length));
           out.push({
-            text: String(el.textContent || "").replace(/\\s+/g, " ").trim().slice(0, 100),
+            text: String(el.textContent || "").replace(/\\s+/g, " ").trim().slice(0, 101),
             tagName,
             hasCursorPointer,
             hasOnClick,
@@ -679,7 +599,10 @@ async function findCursorInteractiveElements(
     sessionId,
   ).catch(() => null)) as { result?: { value?: unknown } } | null;
   const entries = Array.isArray(evaluated?.result?.value)
-    ? (evaluated.result.value as CursorInteractiveInfo[])
+    ? (evaluated.result.value as CursorInteractiveInfo[]).map((entry) => {
+        entry.text = truncateUtf16Safe(entry.text, 100);
+        return entry;
+      })
     : [];
   if (!entries.length) {
     return new Map();
@@ -730,11 +653,12 @@ async function resolveLinkUrls(
   sessionId?: string,
 ): Promise<Map<number, string>> {
   const out = new Map<number, string>();
+  const linkRefs = Object.values(refs).filter(
+    (ref): ref is CdpRoleRef & { backendDOMNodeId: number } =>
+      ref.role === "link" && Boolean(ref.backendDOMNodeId),
+  );
   await Promise.all(
-    Object.values(refs).map(async (ref) => {
-      if (ref.role !== "link" || !ref.backendDOMNodeId) {
-        return;
-      }
+    linkRefs.map(async (ref) => {
       const resolved = (await send(
         "DOM.resolveNode",
         { backendNodeId: ref.backendDOMNodeId },
@@ -768,11 +692,12 @@ async function resolveIframeFrameIds(
   sessionId?: string,
 ): Promise<Map<number, string>> {
   const out = new Map<number, string>();
+  const iframeNodes = tree.filter(
+    (node): node is RoleTreeNode & { backendDOMNodeId: number } =>
+      node.role.toLowerCase() === "iframe" && Boolean(node.backendDOMNodeId),
+  );
   await Promise.all(
-    tree.map(async (node) => {
-      if (node.role.toLowerCase() !== "iframe" || !node.backendDOMNodeId) {
-        return;
-      }
+    iframeNodes.map(async (node) => {
       const described = (await send(
         "DOM.describeNode",
         { backendNodeId: node.backendDOMNodeId, depth: 1 },
@@ -800,7 +725,7 @@ async function buildCdpRoleSnapshot(params: {
 }): Promise<{
   lines: string[];
   refs: Record<string, CdpRoleRef>;
-  stats: { refs: number; interactive: number };
+  truncated: boolean;
 }> {
   const res = (await params.send(
     "Accessibility.getFullAXTree",
@@ -820,7 +745,6 @@ async function buildCdpRoleSnapshot(params: {
   }
 
   const counts = new Map<string, number>();
-  const refsByKey = new Map<string, string[]>();
   const refs: Record<string, CdpRoleRef> = {};
   for (const node of tree) {
     const role = node.role.toLowerCase();
@@ -839,26 +763,17 @@ async function buildCdpRoleSnapshot(params: {
     params.nextRef.value += 1;
     node.ref = ref;
     node.nth = nth;
-    refsByKey.set(key, [...(refsByKey.get(key) ?? []), ref]);
     refs[ref] = {
       role,
       ...(node.name ? { name: node.name } : {}),
-      ...(nth > 0 ? { nth } : {}),
+      nth,
       ...(node.backendDOMNodeId ? { backendDOMNodeId: node.backendDOMNodeId } : {}),
       ...(params.frameId ? { frameId: params.frameId } : {}),
     };
   }
-  for (const refList of refsByKey.values()) {
-    if (refList.length > 1) {
-      continue;
-    }
-    const ref = refList[0];
-    if (ref) {
-      delete refs[ref]?.nth;
-      const node = tree.find((entry) => entry.ref === ref);
-      if (node) {
-        delete node.nth;
-      }
+  for (const node of tree) {
+    if (node.ref && counts.get(`${node.role.toLowerCase()}:${node.name}`) === 1) {
+      delete refs[node.ref]?.nth;
     }
   }
 
@@ -867,7 +782,7 @@ async function buildCdpRoleSnapshot(params: {
     if (node.backendDOMNodeId && iframeFrameIds.has(node.backendDOMNodeId)) {
       node.frameId = iframeFrameIds.get(node.backendDOMNodeId);
       if (node.ref && refs[node.ref]) {
-        refs[node.ref].frameId = node.frameId;
+        expectDefined(refs[node.ref], "owned CDP role reference").frameId = node.frameId;
       }
     }
   }
@@ -882,15 +797,15 @@ async function buildCdpRoleSnapshot(params: {
   }
 
   const lines: string[] = [];
+  const renderState = { truncated: false };
   for (const root of roots) {
-    renderRoleTree(tree, root, lines, params.options);
+    renderRoleTree(tree, root, lines, params.options, renderState);
   }
 
   if (params.recurseIframes) {
     const iframeNodes = tree.filter((node) => node.ref && node.frameId);
     for (const iframe of iframeNodes) {
-      const marker = `[ref=${iframe.ref}]`;
-      const lineIndex = lines.findIndex((line) => line.includes(marker));
+      const lineIndex = lines.findIndex((line) => findRoleSnapshotLineRef(line) === iframe.ref);
       if (lineIndex < 0 || !iframe.frameId) {
         continue;
       }
@@ -899,7 +814,11 @@ async function buildCdpRoleSnapshot(params: {
         frameId: iframe.frameId,
         recurseIframes: false,
       }).catch(() => null);
-      if (!child?.lines.length) {
+      if (!child) {
+        continue;
+      }
+      renderState.truncated ||= child.truncated;
+      if (!child.lines.length) {
         continue;
       }
       Object.assign(refs, child.refs);
@@ -907,26 +826,29 @@ async function buildCdpRoleSnapshot(params: {
     }
   }
 
-  const refValues = Object.values(refs);
   return {
     lines,
     refs,
-    stats: {
-      refs: refValues.length,
-      interactive: refValues.filter((ref) => INTERACTIVE_ROLES.has(ref.role)).length,
-    },
+    truncated: renderState.truncated,
   };
 }
 
+/** Build a role/name text snapshot with stable refs from CDP DOM and AX data. */
 export async function snapshotRoleViaCdp(opts: {
   wsUrl: string;
+  lookup?: typeof dnsLookupCb;
   options?: CdpRoleSnapshotOptions;
   urls?: boolean;
+  recurseIframes?: boolean;
   timeoutMs?: number;
+  maxChars?: number;
+  delta?: { mode: RoleSnapshotIdentityMode; previousKeys?: ReadonlySet<string> };
 }): Promise<{
   snapshot: string;
+  truncated?: boolean;
   refs: Record<string, CdpRoleRef>;
   stats: { lines: number; chars: number; refs: number; interactive: number };
+  newElements?: number;
 }> {
   return await withCdpSocket(
     opts.wsUrl,
@@ -936,215 +858,25 @@ export async function snapshotRoleViaCdp(opts: {
         send,
         options: opts.options ?? {},
         urls: opts.urls,
-        recurseIframes: true,
+        recurseIframes: opts.recurseIframes ?? true,
         nextRef: { value: 1 },
       });
-      const snapshot =
+      const renderedSnapshot =
         built.lines.join("\n").trim() ||
         (opts.options?.interactive ? "(no interactive elements)" : "(empty page)");
-      return {
-        snapshot,
+      const finalized = finalizeRoleSnapshot({
+        snapshot: built.truncated
+          ? appendRoleSnapshotDepthTruncationMarker(renderedSnapshot)
+          : renderedSnapshot,
         refs: built.refs,
-        stats: {
-          lines: snapshot.split("\n").length,
-          chars: snapshot.length,
-          refs: built.stats.refs,
-          interactive: built.stats.interactive,
-        },
-      };
+        maxChars: opts.maxChars,
+        delta: opts.delta,
+      });
+      return built.truncated && !finalized.truncated
+        ? { ...finalized, truncated: true }
+        : finalized;
     },
-    { commandTimeoutMs: opts.timeoutMs ?? 5000 },
+    { commandTimeoutMs: opts.timeoutMs ?? 5000, lookup: opts.lookup },
   );
 }
-
-export async function snapshotDom(opts: {
-  wsUrl: string;
-  limit?: number;
-  maxTextChars?: number;
-}): Promise<{
-  nodes: DomSnapshotNode[];
-}> {
-  const limit = Math.max(1, Math.min(5000, Math.floor(opts.limit ?? 800)));
-  const maxTextChars = Math.max(0, Math.min(5000, Math.floor(opts.maxTextChars ?? 220)));
-
-  const expression = `(() => {
-    const maxNodes = ${JSON.stringify(limit)};
-    const maxText = ${JSON.stringify(maxTextChars)};
-    const lower = (value) => String(value || "").toLocaleLowerCase();
-    const nodes = [];
-    const root = document.documentElement;
-    if (!root) return { nodes };
-    const stack = [{ el: root, depth: 0, parentRef: null }];
-    while (stack.length && nodes.length < maxNodes) {
-      const cur = stack.pop();
-      const el = cur.el;
-      if (!el || el.nodeType !== 1) continue;
-      const ref = "n" + String(nodes.length + 1);
-      const tag = lower(el.tagName);
-      const id = el.id ? String(el.id) : undefined;
-      const className = el.className ? String(el.className).slice(0, 300) : undefined;
-      const role = el.getAttribute && el.getAttribute("role") ? String(el.getAttribute("role")) : undefined;
-      const name = el.getAttribute && el.getAttribute("aria-label") ? String(el.getAttribute("aria-label")) : undefined;
-      let text = "";
-      try { text = String(el.innerText || "").trim(); } catch {}
-      if (maxText && text.length > maxText) text = text.slice(0, maxText) + "…";
-      const href = (el.href !== undefined && el.href !== null) ? String(el.href) : undefined;
-      const type = (el.type !== undefined && el.type !== null) ? String(el.type) : undefined;
-      const value = (el.value !== undefined && el.value !== null) ? String(el.value).slice(0, 500) : undefined;
-      nodes.push({
-        ref,
-        parentRef: cur.parentRef,
-        depth: cur.depth,
-        tag,
-        ...(id ? { id } : {}),
-        ...(className ? { className } : {}),
-        ...(role ? { role } : {}),
-        ...(name ? { name } : {}),
-        ...(text ? { text } : {}),
-        ...(href ? { href } : {}),
-        ...(type ? { type } : {}),
-        ...(value ? { value } : {}),
-      });
-      const children = el.children ? Array.from(el.children) : [];
-      for (let i = children.length - 1; i >= 0; i--) {
-        stack.push({ el: children[i], depth: cur.depth + 1, parentRef: ref });
-      }
-    }
-    return { nodes };
-  })()`;
-
-  const evaluated = await evaluateJavaScript({
-    wsUrl: opts.wsUrl,
-    expression,
-    awaitPromise: true,
-    returnByValue: true,
-  });
-  const value = evaluated.result?.value;
-  if (!value || typeof value !== "object") {
-    return { nodes: [] };
-  }
-  const nodes = (value as { nodes?: unknown }).nodes;
-  return { nodes: Array.isArray(nodes) ? (nodes as DomSnapshotNode[]) : [] };
-}
-
-export type DomSnapshotNode = {
-  ref: string;
-  parentRef: string | null;
-  depth: number;
-  tag: string;
-  id?: string;
-  className?: string;
-  role?: string;
-  name?: string;
-  text?: string;
-  href?: string;
-  type?: string;
-  value?: string;
-};
-
-export async function getDomText(opts: {
-  wsUrl: string;
-  format: "html" | "text";
-  maxChars?: number;
-  selector?: string;
-}): Promise<{ text: string }> {
-  const maxChars = Math.max(0, Math.min(5_000_000, Math.floor(opts.maxChars ?? 200_000)));
-  const selectorExpr = opts.selector ? JSON.stringify(opts.selector) : "null";
-  const expression = `(() => {
-    const fmt = ${JSON.stringify(opts.format)};
-    const max = ${JSON.stringify(maxChars)};
-    const sel = ${selectorExpr};
-    const pick = sel ? document.querySelector(sel) : null;
-    let out = "";
-    if (fmt === "text") {
-      const el = pick || document.body || document.documentElement;
-      try { out = String(el && el.innerText ? el.innerText : ""); } catch { out = ""; }
-    } else {
-      const el = pick || document.documentElement;
-      try { out = String(el && el.outerHTML ? el.outerHTML : ""); } catch { out = ""; }
-    }
-    if (max && out.length > max) out = out.slice(0, max) + "\\n<!-- …truncated… -->";
-    return out;
-  })()`;
-
-  const evaluated = await evaluateJavaScript({
-    wsUrl: opts.wsUrl,
-    expression,
-    awaitPromise: true,
-    returnByValue: true,
-  });
-  const textValue = (evaluated.result?.value ?? "") as unknown;
-  const text =
-    typeof textValue === "string"
-      ? textValue
-      : typeof textValue === "number" || typeof textValue === "boolean"
-        ? String(textValue)
-        : "";
-  return { text };
-}
-
-export async function querySelector(opts: {
-  wsUrl: string;
-  selector: string;
-  limit?: number;
-  maxTextChars?: number;
-  maxHtmlChars?: number;
-}): Promise<{
-  matches: QueryMatch[];
-}> {
-  const limit = Math.max(1, Math.min(200, Math.floor(opts.limit ?? 20)));
-  const maxText = Math.max(0, Math.min(5000, Math.floor(opts.maxTextChars ?? 500)));
-  const maxHtml = Math.max(0, Math.min(20000, Math.floor(opts.maxHtmlChars ?? 1500)));
-
-  const expression = `(() => {
-    const sel = ${JSON.stringify(opts.selector)};
-    const lim = ${JSON.stringify(limit)};
-    const maxText = ${JSON.stringify(maxText)};
-    const maxHtml = ${JSON.stringify(maxHtml)};
-    const lower = (value) => String(value || "").toLocaleLowerCase();
-    const els = Array.from(document.querySelectorAll(sel)).slice(0, lim);
-    return els.map((el, i) => {
-      const tag = lower(el.tagName);
-      const id = el.id ? String(el.id) : undefined;
-      const className = el.className ? String(el.className).slice(0, 300) : undefined;
-      let text = "";
-      try { text = String(el.innerText || "").trim(); } catch {}
-      if (maxText && text.length > maxText) text = text.slice(0, maxText) + "…";
-      const value = (el.value !== undefined && el.value !== null) ? String(el.value).slice(0, 500) : undefined;
-      const href = (el.href !== undefined && el.href !== null) ? String(el.href) : undefined;
-      let outerHTML = "";
-      try { outerHTML = String(el.outerHTML || ""); } catch {}
-      if (maxHtml && outerHTML.length > maxHtml) outerHTML = outerHTML.slice(0, maxHtml) + "…";
-      return {
-        index: i + 1,
-        tag,
-        ...(id ? { id } : {}),
-        ...(className ? { className } : {}),
-        ...(text ? { text } : {}),
-        ...(value ? { value } : {}),
-        ...(href ? { href } : {}),
-        ...(outerHTML ? { outerHTML } : {}),
-      };
-    });
-  })()`;
-
-  const evaluated = await evaluateJavaScript({
-    wsUrl: opts.wsUrl,
-    expression,
-    awaitPromise: true,
-    returnByValue: true,
-  });
-  const matches = evaluated.result?.value;
-  return { matches: Array.isArray(matches) ? (matches as QueryMatch[]) : [] };
-}
-
-export type QueryMatch = {
-  index: number;
-  tag: string;
-  id?: string;
-  className?: string;
-  text?: string;
-  value?: string;
-  href?: string;
-  outerHTML?: string;
-};
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

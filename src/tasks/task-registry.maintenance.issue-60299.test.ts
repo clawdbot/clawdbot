@@ -1,26 +1,28 @@
+// Regresses task registry maintenance behavior for issue 60299.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AcpSessionStoreEntry } from "../acp/runtime/session-meta.js";
 import type { SessionEntry } from "../config/sessions.js";
-import type { CronRunLogEntry } from "../cron/run-log.js";
-import type { CronStoreFile } from "../cron/types.js";
 import type { ParsedAgentSessionKey } from "../routing/session-key.js";
+import { getDetachedTaskLifecycleRuntime } from "./detached-task-runtime.js";
 import {
-  resetDetachedTaskLifecycleRuntimeForTests,
-  setDetachedTaskLifecycleRuntime,
-  getDetachedTaskLifecycleRuntime,
-} from "./detached-task-runtime.js";
-import {
+  CRON_HISTORY_KEEP_PER_JOB,
   getInspectableActiveTaskRestartBlockers,
+  getTaskRegistryMaintenanceDiagnostics,
   previewTaskRegistryMaintenance,
   reconcileInspectableTasks,
   resetTaskRegistryMaintenanceRuntimeForTests,
   runTaskRegistryMaintenance,
   setTaskRegistryMaintenanceRuntimeForTests,
-  stopTaskRegistryMaintenanceForTests,
+  stopTaskRegistryMaintenance,
 } from "./task-registry.maintenance.js";
 import type { TaskRecord } from "./task-registry.types.js";
+import {
+  resetDetachedTaskLifecycleRuntimeForTests,
+  setDetachedTaskLifecycleRuntime,
+} from "./task-runtime.test-helpers.js";
 
 const GRACE_EXPIRED_MS = 10 * 60_000;
+const DEFAULT_TASK_RETENTION_MS = 7 * 24 * 60 * 60_000;
 
 function makeStaleTask(overrides: Partial<TaskRecord>): TaskRecord {
   const now = Date.now();
@@ -46,7 +48,7 @@ type TaskRegistryMaintenanceRuntime = Parameters<
 >[0];
 
 afterEach(() => {
-  stopTaskRegistryMaintenanceForTests();
+  stopTaskRegistryMaintenance();
   resetTaskRegistryMaintenanceRuntimeForTests();
   resetDetachedTaskLifecycleRuntimeForTests();
 });
@@ -54,21 +56,22 @@ afterEach(() => {
 function createTaskRegistryMaintenanceHarness(params: {
   tasks: TaskRecord[];
   sessionStore?: Record<string, SessionEntry>;
-  loadSessionStore?: TaskRegistryMaintenanceRuntime["loadSessionStore"];
+  listSessionEntries?: TaskRegistryMaintenanceRuntime["listSessionEntries"];
   resolveStorePath?: TaskRegistryMaintenanceRuntime["resolveStorePath"];
   deriveSessionChatTypeFromKey?: TaskRegistryMaintenanceRuntime["deriveSessionChatTypeFromKey"];
   acpEntry?: AcpSessionStoreEntry["entry"];
   activeCronJobIds?: string[];
   activeRunIds?: string[];
-  cronStore?: CronStoreFile;
-  cronRunLogEntries?: Record<string, CronRunLogEntry[]>;
-  cronRuntimeAuthoritative?: boolean;
+  activeAcpSessionKeys?: string[];
+  durableCronTaskRows?: Record<string, TaskRecord[]>;
+  runtimeAuthoritative?: boolean;
 }) {
   const sessionStore = params.sessionStore ?? {};
   const acpEntry = params.acpEntry;
   const activeCronJobIds = new Set(params.activeCronJobIds ?? []);
   const activeRunIds = new Set(params.activeRunIds ?? []);
-  const cronRunLogEntries = params.cronRunLogEntries ?? {};
+  const activeAcpSessionKeys = new Set(params.activeAcpSessionKeys ?? []);
+  const durableCronTaskRows = params.durableCronTaskRows ?? {};
   const currentTasks = new Map(params.tasks.map((task) => [task.taskId, { ...task }]));
 
   const runtime: TaskRegistryMaintenanceRuntime = {
@@ -91,7 +94,13 @@ function createTaskRegistryMaintenanceHarness(params: {
             entry: undefined,
             storeReadFailed: false,
           } satisfies AcpSessionStoreEntry),
-    loadSessionStore: params.loadSessionStore ?? (() => sessionStore),
+    listSessionEntries:
+      params.listSessionEntries ??
+      (() =>
+        Object.entries(sessionStore).map(([sessionKey, entry]) => ({
+          sessionKey,
+          entry,
+        }))),
     resolveStorePath: params.resolveStorePath ?? (() => ""),
     ...(params.deriveSessionChatTypeFromKey
       ? { deriveSessionChatTypeFromKey: params.deriveSessionChatTypeFromKey }
@@ -99,6 +108,7 @@ function createTaskRegistryMaintenanceHarness(params: {
     isCronJobActive: (jobId: string) => activeCronJobIds.has(jobId),
     getAgentRunContext: (runId: string) =>
       activeRunIds.has(runId) ? { sessionKey: "main" } : undefined,
+    hasActiveAcpTurn: (sessionKey: string) => activeAcpSessionKeys.has(sessionKey),
     parseAgentSessionKey: (sessionKey: string | null | undefined): ParsedAgentSessionKey | null => {
       if (!sessionKey) {
         return null;
@@ -147,11 +157,22 @@ function createTaskRegistryMaintenanceHarness(params: {
         status: patch.status,
         endedAt: patch.endedAt,
         lastEventAt: patch.lastEventAt ?? patch.endedAt,
-        ...(patch.error !== undefined ? { error: patch.error } : {}),
         ...(patch.terminalSummary !== undefined
-          ? { terminalSummary: patch.terminalSummary ?? undefined }
+          ? {
+              terminalSummary: patch.preserveTerminalSummary
+                ? (patch.terminalSummary ?? undefined)
+                : patch.terminalSummary?.replace(/\s+/g, " ").trim() || undefined,
+            }
           : {}),
+        ...(patch.detail !== undefined ? { detail: patch.detail } : {}),
       } satisfies TaskRecord;
+      if (Object.hasOwn(patch, "error")) {
+        if (patch.error === undefined) {
+          delete next.error;
+        } else {
+          next.error = patch.error;
+        }
+      }
       currentTasks.set(patch.taskId, next);
       return next;
     },
@@ -166,19 +187,43 @@ function createTaskRegistryMaintenanceHarness(params: {
       currentTasks.set(patch.taskId, next);
       return next;
     },
-    isCronRuntimeAuthoritative: () => params.cronRuntimeAuthoritative ?? true,
-    resolveCronStorePath: () => "/tmp/openclaw-test-cron/jobs.json",
-    loadCronStoreSync: () => params.cronStore ?? { version: 1, jobs: [] },
-    resolveCronRunLogPath: ({ jobId }) => jobId,
-    readCronRunLogEntriesSync: (jobId) => cronRunLogEntries[jobId] ?? [],
+    isRuntimeAuthoritative: () => params.runtimeAuthoritative ?? true,
+    listTaskRegistryRecordsByRuntimeSourceIdFromSqlite: ({ sourceId }) =>
+      sourceId ? (durableCronTaskRows[sourceId] ?? []) : Object.values(durableCronTaskRows).flat(),
   };
 
   setTaskRegistryMaintenanceRuntimeForTests(runtime);
   return { currentTasks };
 }
 
+function expectMaintenanceCounts(
+  result: Awaited<ReturnType<typeof runTaskRegistryMaintenance>>,
+  expected: { reconciled: number; recovered?: number },
+): void {
+  expect(result.reconciled).toBe(expected.reconciled);
+  if (expected.recovered !== undefined) {
+    expect(result.recovered).toBe(expected.recovered);
+  }
+}
+
+function requireTaskRecord(tasks: Map<string, TaskRecord>, taskId: string): TaskRecord {
+  const task = tasks.get(taskId);
+  if (!task) {
+    throw new Error(`Expected task ${taskId}`);
+  }
+  return task;
+}
+
+function expectTaskStatus(
+  tasks: Map<string, TaskRecord>,
+  taskId: string,
+  status: TaskRecord["status"],
+): void {
+  expect(requireTaskRecord(tasks, taskId).status).toBe(status);
+}
+
 describe("task-registry maintenance issue #60299", () => {
-  it("reuses session store reads across stale subagent task checks in one pass", async () => {
+  it("reuses session entry lists across stale subagent task checks in one pass", async () => {
     const tasks = Array.from({ length: 10 }, (_, index) =>
       makeStaleTask({
         runtime: "subagent",
@@ -186,16 +231,16 @@ describe("task-registry maintenance issue #60299", () => {
         childSessionKey: `agent:main:subagent:stale-${index}`,
       }),
     );
-    const loadSessionStoreMock = vi.fn(() => ({}));
+    const listSessionEntriesMock = vi.fn(() => []);
 
     createTaskRegistryMaintenanceHarness({
       tasks,
-      loadSessionStore: loadSessionStoreMock,
+      listSessionEntries: listSessionEntriesMock,
       resolveStorePath: () => "/tmp/openclaw-test-sessions-main.json",
     });
 
-    expect(await runTaskRegistryMaintenance()).toMatchObject({ reconciled: tasks.length });
-    expect(loadSessionStoreMock).toHaveBeenCalledTimes(1);
+    expectMaintenanceCounts(await runTaskRegistryMaintenance(), { reconciled: tasks.length });
+    expect(listSessionEntriesMock).toHaveBeenCalledTimes(1);
   });
 
   it("reuses CLI channel session type derivation across duplicate stale task checks", async () => {
@@ -214,7 +259,7 @@ describe("task-registry maintenance issue #60299", () => {
       deriveSessionChatTypeFromKey: deriveSessionChatTypeMock,
     });
 
-    expect(await runTaskRegistryMaintenance()).toMatchObject({ reconciled: tasks.length });
+    expectMaintenanceCounts(await runTaskRegistryMaintenance(), { reconciled: tasks.length });
     expect(deriveSessionChatTypeMock).toHaveBeenCalledTimes(1);
   });
 
@@ -231,8 +276,8 @@ describe("task-registry maintenance issue #60299", () => {
       sessionStore: { [childSessionKey]: { sessionId: childSessionKey, updatedAt: Date.now() } },
     });
 
-    expect(await runTaskRegistryMaintenance()).toMatchObject({ reconciled: 1 });
-    expect(currentTasks.get(task.taskId)).toMatchObject({ status: "lost" });
+    expectMaintenanceCounts(await runTaskRegistryMaintenance(), { reconciled: 1 });
+    expectTaskStatus(currentTasks, task.taskId, "lost");
   });
 
   it("keeps active cron tasks live while the cron runtime still owns the job", async () => {
@@ -245,10 +290,91 @@ describe("task-registry maintenance issue #60299", () => {
     const { currentTasks } = createTaskRegistryMaintenanceHarness({
       tasks: [task],
       activeCronJobIds: ["cron-job-2"],
+      durableCronTaskRows: {
+        "cron-job-2": [
+          {
+            ...task,
+            status: "succeeded",
+            endedAt: Date.now(),
+            detail: { kind: "cron-run", status: "ok" },
+          },
+        ],
+      },
     });
 
-    expect(await runTaskRegistryMaintenance()).toMatchObject({ reconciled: 0 });
-    expect(currentTasks.get(task.taskId)).toMatchObject({ status: "running" });
+    expectMaintenanceCounts(await runTaskRegistryMaintenance(), { reconciled: 0 });
+    expectTaskStatus(currentTasks, task.taskId, "running");
+  });
+
+  it("reclaims a stale running ACP task with no live turn even though its session-store entry survives", async () => {
+    const childSessionKey = "agent:claude:acp:crashed-zombie";
+    const task = makeStaleTask({
+      runtime: "acp",
+      runId: "run-acp-crashed-zombie",
+      childSessionKey,
+    });
+
+    const { currentTasks } = createTaskRegistryMaintenanceHarness({
+      tasks: [task],
+      acpEntry: { sessionId: childSessionKey, updatedAt: Date.now() },
+    });
+
+    expect(getInspectableActiveTaskRestartBlockers()).toEqual([]);
+    expectTaskStatus(currentTasks, task.taskId, "running");
+    expectMaintenanceCounts(await runTaskRegistryMaintenance(), { reconciled: 1 });
+    expectTaskStatus(currentTasks, task.taskId, "lost");
+    expect(getInspectableActiveTaskRestartBlockers()).toHaveLength(0);
+  });
+
+  it("keeps a running ACP task live while a prompt turn is still in flight", async () => {
+    const childSessionKey = "agent:claude:acp:in-flight-turn";
+    const task = makeStaleTask({
+      runtime: "acp",
+      runId: "run-acp-in-flight",
+      childSessionKey,
+    });
+
+    const { currentTasks } = createTaskRegistryMaintenanceHarness({
+      tasks: [task],
+      acpEntry: { sessionId: childSessionKey, updatedAt: Date.now() },
+      activeAcpSessionKeys: [childSessionKey],
+    });
+
+    expectMaintenanceCounts(await runTaskRegistryMaintenance(), { reconciled: 0 });
+    expectTaskStatus(currentTasks, task.taskId, "running");
+    expect(getInspectableActiveTaskRestartBlockers()).toHaveLength(1);
+  });
+
+  it("does not reclaim a running ACP task from a non-authoritative process even with an empty live-turn map", async () => {
+    const childSessionKey = "agent:claude:acp:gateway-owned-live-turn";
+    const staleAt = Date.now() - 40 * 60_000;
+    const task = makeStaleTask({
+      runtime: "acp",
+      runId: "run-acp-gateway-owned",
+      childSessionKey,
+      createdAt: staleAt,
+      startedAt: staleAt,
+      lastEventAt: staleAt,
+    });
+
+    const { currentTasks } = createTaskRegistryMaintenanceHarness({
+      tasks: [task],
+      acpEntry: { sessionId: childSessionKey, updatedAt: Date.now() },
+      activeAcpSessionKeys: [],
+      runtimeAuthoritative: false,
+    });
+
+    expectMaintenanceCounts(previewTaskRegistryMaintenance(), { reconciled: 0 });
+    expect(getTaskRegistryMaintenanceDiagnostics().staleRunningTasks).toContainEqual(
+      expect.objectContaining({
+        taskId: task.taskId,
+        decision: "retained",
+        reason: "acp_runtime_not_authoritative",
+      }),
+    );
+    expectMaintenanceCounts(await runTaskRegistryMaintenance(), { reconciled: 0 });
+    expectTaskStatus(currentTasks, task.taskId, "running");
+    expect(getInspectableActiveTaskRestartBlockers()).toHaveLength(1);
   });
 
   it("only treats started non-ended running tasks as restart blockers", () => {
@@ -279,22 +405,24 @@ describe("task-registry maintenance issue #60299", () => {
 
     createTaskRegistryMaintenanceHarness({ tasks: [activeRunning, queued, staleInconsistent] });
 
-    expect(getInspectableActiveTaskRestartBlockers()).toEqual([
-      expect.objectContaining({
-        taskId: "task-running-live",
-        status: "running",
-        runtime: "cli",
-        runId: "run-running-live",
-      }),
-    ]);
+    const blockers = getInspectableActiveTaskRestartBlockers();
+    expect(blockers).toHaveLength(1);
+    expect(blockers[0]?.taskId).toBe("task-running-live");
+    expect(blockers[0]?.status).toBe("running");
+    expect(blockers[0]?.runtime).toBe("cli");
+    expect(blockers[0]?.runId).toBe("run-running-live");
   });
 
   it("marks subagent tasks lost when their child session recovery is tombstoned", async () => {
     const childSessionKey = "agent:main:subagent:wedged-child";
+    const staleAt = Date.now() - 45 * 60_000;
     const task = makeStaleTask({
       runtime: "subagent",
       runId: "run-wedged-child",
       childSessionKey,
+      createdAt: staleAt,
+      startedAt: staleAt,
+      lastEventAt: staleAt,
     });
 
     const { currentTasks } = createTaskRegistryMaintenanceHarness({
@@ -315,33 +443,53 @@ describe("task-registry maintenance issue #60299", () => {
       },
     });
 
-    expect(previewTaskRegistryMaintenance()).toMatchObject({ reconciled: 1 });
-    expect(await runTaskRegistryMaintenance()).toMatchObject({ reconciled: 1 });
-    expect(currentTasks.get(task.taskId)).toMatchObject({
-      status: "lost",
-      error: "subagent orphan recovery blocked after 2 rapid accepted resume attempts",
-    });
+    expectMaintenanceCounts(previewTaskRegistryMaintenance(), { reconciled: 1 });
+    expect(getTaskRegistryMaintenanceDiagnostics().staleRunningTasks).toContainEqual(
+      expect.objectContaining({
+        taskId: task.taskId,
+        decision: "would_reconcile",
+        reason: "subagent_recovery_wedged",
+        detail: "subagent orphan recovery blocked after 2 rapid accepted resume attempts",
+      }),
+    );
+    expectMaintenanceCounts(await runTaskRegistryMaintenance(), { reconciled: 1 });
+    const storedTask = requireTaskRecord(currentTasks, task.taskId);
+    expect(storedTask.status).toBe("lost");
+    expect(storedTask.error).toBe(
+      "subagent orphan recovery blocked after 2 rapid accepted resume attempts",
+    );
   });
 
   it("does not mark cron tasks lost when the current process is not the cron runtime authority", async () => {
+    const staleAt = Date.now() - 40 * 60_000;
     const task = makeStaleTask({
       runtime: "cron",
       sourceId: "cron-job-offline-audit",
       childSessionKey: undefined,
+      createdAt: staleAt,
+      startedAt: staleAt,
+      lastEventAt: staleAt,
     });
 
     const { currentTasks } = createTaskRegistryMaintenanceHarness({
       tasks: [task],
-      cronRuntimeAuthoritative: false,
+      runtimeAuthoritative: false,
     });
 
-    expect(previewTaskRegistryMaintenance()).toMatchObject({ reconciled: 0 });
-    expect(await runTaskRegistryMaintenance()).toMatchObject({ reconciled: 0 });
-    expect(currentTasks.get(task.taskId)).toMatchObject({ status: "running" });
+    expectMaintenanceCounts(previewTaskRegistryMaintenance(), { reconciled: 0 });
+    expect(getTaskRegistryMaintenanceDiagnostics().staleRunningTasks).toContainEqual(
+      expect.objectContaining({
+        taskId: task.taskId,
+        decision: "retained",
+        reason: "cron_runtime_not_authoritative",
+      }),
+    );
+    expectMaintenanceCounts(await runTaskRegistryMaintenance(), { reconciled: 0 });
+    expectTaskStatus(currentTasks, task.taskId, "running");
   });
 
-  it("recovers finished cron tasks from durable run logs before marking them lost", async () => {
-    const startedAt = Date.now() - GRACE_EXPIRED_MS;
+  it("recovers finished cron tasks from durable ledger detail before marking them lost", async () => {
+    const startedAt = Date.now() - 60 * 60_000;
     const task = makeStaleTask({
       runtime: "cron",
       sourceId: "cron-job-run-log-ok",
@@ -352,22 +500,138 @@ describe("task-registry maintenance issue #60299", () => {
 
     const { currentTasks } = createTaskRegistryMaintenanceHarness({
       tasks: [task],
-      cronRunLogEntries: {
+      durableCronTaskRows: {
         "cron-job-run-log-ok": [
           {
-            ts: startedAt + 1250,
-            jobId: "cron-job-run-log-ok",
-            action: "finished",
-            status: "ok",
-            summary: "done",
-            runAtMs: startedAt,
-            durationMs: 1250,
+            ...task,
+            status: "succeeded",
+            endedAt: startedAt + 1250,
+            lastEventAt: startedAt + 1250,
+            terminalSummary: "done",
+            detail: { kind: "cron-run", status: "ok", durationMs: 1250 },
           },
         ],
       },
     });
 
-    expect(reconcileInspectableTasks()).toEqual([
+    expect(getInspectableActiveTaskRestartBlockers()).toEqual([]);
+    expectTaskStatus(currentTasks, task.taskId, "running");
+    const reconciledTasks = reconcileInspectableTasks();
+    expect(reconciledTasks).toHaveLength(1);
+    expect(reconciledTasks[0]?.taskId).toBe(task.taskId);
+    expect(reconciledTasks[0]?.status).toBe("succeeded");
+    expect(reconciledTasks[0]?.endedAt).toBe(startedAt + 1250);
+    expect(reconciledTasks[0]?.terminalSummary).toBe("done");
+    expectMaintenanceCounts(previewTaskRegistryMaintenance(), { reconciled: 0, recovered: 1 });
+    expect(getTaskRegistryMaintenanceDiagnostics().staleRunningTasks).toHaveLength(0);
+    expectMaintenanceCounts(await runTaskRegistryMaintenance(), { reconciled: 0, recovered: 1 });
+    const storedTask = requireTaskRecord(currentTasks, task.taskId);
+    expect(storedTask.status).toBe("succeeded");
+    expect(storedTask.endedAt).toBe(startedAt + 1250);
+    expect(storedTask.terminalSummary).toBe("done");
+    expect(storedTask.detail).toEqual({ kind: "cron-run", status: "ok", durationMs: 1250 });
+  });
+
+  it("recovers cancelled cron tasks with exact durable summaries", async () => {
+    const startedAt = Date.now() - 60 * 60_000;
+    const task = makeStaleTask({
+      runtime: "cron",
+      sourceId: "cron-job-cancelled",
+      runId: `cron:cron-job-cancelled:${startedAt}`,
+      startedAt,
+      lastEventAt: startedAt,
+    });
+    const terminalSummary = "cancelled\n  summary";
+
+    const { currentTasks } = createTaskRegistryMaintenanceHarness({
+      tasks: [task],
+      durableCronTaskRows: {
+        "cron-job-cancelled": [
+          {
+            ...task,
+            status: "cancelled",
+            error: "cancelled by operator",
+            endedAt: startedAt + 500,
+            lastEventAt: startedAt + 500,
+            terminalSummary,
+            detail: { kind: "cron-run", status: "error", durationMs: 500 },
+          },
+        ],
+      },
+    });
+
+    expectMaintenanceCounts(await runTaskRegistryMaintenance(), { reconciled: 0, recovered: 1 });
+    expect(currentTasks.get(task.taskId)).toMatchObject({
+      status: "cancelled",
+      endedAt: startedAt + 500,
+      terminalSummary,
+      detail: { kind: "cron-run", status: "error", durationMs: 500 },
+    });
+  });
+
+  it("does not recover cron tasks from an unrelated ledger row", async () => {
+    const task = makeStaleTask({
+      runtime: "cron",
+      sourceId: "cron-job-run-log-ok",
+      runId: "cron:cron-job-run-log-ok:1e3",
+    });
+
+    const { currentTasks } = createTaskRegistryMaintenanceHarness({
+      tasks: [task],
+      durableCronTaskRows: {
+        "cron-job-run-log-ok": [
+          {
+            ...task,
+            taskId: "different-task",
+            runId: "cron:cron-job-run-log-ok:1000",
+            status: "succeeded",
+            endedAt: 1250,
+            lastEventAt: 1250,
+            terminalSummary: "done",
+            detail: { kind: "cron-run", status: "ok" },
+          },
+        ],
+      },
+    });
+
+    expectMaintenanceCounts(previewTaskRegistryMaintenance(), { reconciled: 1, recovered: 0 });
+    expectMaintenanceCounts(await runTaskRegistryMaintenance(), { reconciled: 1, recovered: 0 });
+    expectTaskStatus(currentTasks, task.taskId, "lost");
+  });
+
+  it("recovers terminal lost cron tasks from the durable ledger", async () => {
+    const startedAt = Date.now() - GRACE_EXPIRED_MS;
+    const task = makeStaleTask({
+      runtime: "cron",
+      sourceId: "cron-job-terminal-lost-ok",
+      runId: `cron:cron-job-terminal-lost-ok:${startedAt}`,
+      status: "lost",
+      error: "backing session missing",
+      startedAt,
+      endedAt: startedAt + 60_000,
+      lastEventAt: startedAt + 60_000,
+      cleanupAfter: Date.now() + 60_000,
+    });
+
+    const { currentTasks } = createTaskRegistryMaintenanceHarness({
+      tasks: [task],
+      durableCronTaskRows: {
+        "cron-job-terminal-lost-ok": [
+          {
+            ...task,
+            status: "succeeded",
+            error: undefined,
+            endedAt: startedAt + 1250,
+            lastEventAt: startedAt + 1250,
+            terminalSummary: "done",
+            detail: { kind: "cron-run", status: "ok" },
+          },
+        ],
+      },
+    });
+
+    const reconciled = reconcileInspectableTasks();
+    expect(reconciled).toEqual([
       expect.objectContaining({
         taskId: task.taskId,
         status: "succeeded",
@@ -375,16 +639,94 @@ describe("task-registry maintenance issue #60299", () => {
         terminalSummary: "done",
       }),
     ]);
+    expect(reconciled[0]).not.toHaveProperty("error");
     expect(previewTaskRegistryMaintenance()).toMatchObject({ reconciled: 0, recovered: 1 });
     expect(await runTaskRegistryMaintenance()).toMatchObject({ reconciled: 0, recovered: 1 });
-    expect(currentTasks.get(task.taskId)).toMatchObject({
+    const recoveredTask = currentTasks.get(task.taskId);
+    expect(recoveredTask).toMatchObject({
       status: "succeeded",
       endedAt: startedAt + 1250,
       terminalSummary: "done",
     });
+    expect(recoveredTask).not.toHaveProperty("error");
   });
 
-  it("recovers interrupted cron tasks from durable cron job state when run logs are absent", async () => {
+  it("does not recover terminal lost cron tasks without a backing-session error", async () => {
+    const startedAt = Date.now() - GRACE_EXPIRED_MS;
+    const task = makeStaleTask({
+      runtime: "cron",
+      sourceId: "cron-job-terminal-lost-no-error",
+      runId: `cron:cron-job-terminal-lost-no-error:${startedAt}`,
+      status: "lost",
+      startedAt,
+      endedAt: startedAt + 60_000,
+      lastEventAt: startedAt + 60_000,
+      cleanupAfter: Date.now() + 60_000,
+    });
+
+    const { currentTasks } = createTaskRegistryMaintenanceHarness({
+      tasks: [task],
+      durableCronTaskRows: {
+        "cron-job-terminal-lost-no-error": [
+          {
+            ...task,
+            status: "succeeded",
+            endedAt: startedAt + 1250,
+            lastEventAt: startedAt + 1250,
+            terminalSummary: "done",
+            detail: { kind: "cron-run", status: "ok" },
+          },
+        ],
+      },
+    });
+
+    expect(previewTaskRegistryMaintenance()).toMatchObject({ recovered: 0 });
+    expect(await runTaskRegistryMaintenance()).toMatchObject({ recovered: 0 });
+    expect(currentTasks.get(task.taskId)).toMatchObject({
+      status: "lost",
+    });
+  });
+
+  it("does not recover terminal lost cron tasks with non-backing-session errors", async () => {
+    const startedAt = Date.now() - GRACE_EXPIRED_MS;
+    const task = makeStaleTask({
+      runtime: "cron",
+      sourceId: "cron-job-terminal-lost-other-error",
+      runId: `cron:cron-job-terminal-lost-other-error:${startedAt}`,
+      status: "lost",
+      error: "operator marked lost",
+      startedAt,
+      endedAt: startedAt + 60_000,
+      lastEventAt: startedAt + 60_000,
+      cleanupAfter: Date.now() + 60_000,
+    });
+
+    const { currentTasks } = createTaskRegistryMaintenanceHarness({
+      tasks: [task],
+      durableCronTaskRows: {
+        "cron-job-terminal-lost-other-error": [
+          {
+            ...task,
+            status: "succeeded",
+            error: undefined,
+            endedAt: startedAt + 1250,
+            lastEventAt: startedAt + 1250,
+            terminalSummary: "done",
+            detail: { kind: "cron-run", status: "ok" },
+          },
+        ],
+      },
+    });
+
+    expect(previewTaskRegistryMaintenance()).toMatchObject({ recovered: 0 });
+    expect(await runTaskRegistryMaintenance()).toMatchObject({ recovered: 0 });
+    expect(currentTasks.get(task.taskId)).toMatchObject({
+      status: "lost",
+      error: "operator marked lost",
+    });
+  });
+
+  it("does not recover cron tasks from cron job state without a terminal ledger row", async () => {
     const startedAt = Date.now() - GRACE_EXPIRED_MS;
     const task = makeStaleTask({
       runtime: "cron",
@@ -394,39 +736,11 @@ describe("task-registry maintenance issue #60299", () => {
       lastEventAt: startedAt,
     });
 
-    const { currentTasks } = createTaskRegistryMaintenanceHarness({
-      tasks: [task],
-      cronStore: {
-        version: 1,
-        jobs: [
-          {
-            id: "cron-job-state-error",
-            name: "state error",
-            enabled: true,
-            createdAtMs: startedAt - 60_000,
-            updatedAtMs: startedAt,
-            schedule: { kind: "every", everyMs: 60_000, anchorMs: startedAt - 60_000 },
-            sessionTarget: "isolated",
-            wakeMode: "next-heartbeat",
-            payload: { kind: "agentTurn", message: "work" },
-            state: {
-              lastRunAtMs: startedAt,
-              lastRunStatus: "error",
-              lastError: "cron: job interrupted by gateway restart",
-              lastDurationMs: 5000,
-            },
-          },
-        ],
-      },
-    });
+    const { currentTasks } = createTaskRegistryMaintenanceHarness({ tasks: [task] });
 
-    expect(previewTaskRegistryMaintenance()).toMatchObject({ reconciled: 0, recovered: 1 });
-    expect(await runTaskRegistryMaintenance()).toMatchObject({ reconciled: 0, recovered: 1 });
-    expect(currentTasks.get(task.taskId)).toMatchObject({
-      status: "failed",
-      endedAt: startedAt + 5000,
-      error: "cron: job interrupted by gateway restart",
-    });
+    expectMaintenanceCounts(previewTaskRegistryMaintenance(), { reconciled: 1, recovered: 0 });
+    expectMaintenanceCounts(await runTaskRegistryMaintenance(), { reconciled: 1, recovered: 0 });
+    expectTaskStatus(currentTasks, task.taskId, "lost");
   });
 
   it("marks chat-backed cli tasks lost after the owning run context disappears", async () => {
@@ -445,8 +759,8 @@ describe("task-registry maintenance issue #60299", () => {
       sessionStore: { [channelKey]: { sessionId: channelKey, updatedAt: Date.now() } },
     });
 
-    expect(await runTaskRegistryMaintenance()).toMatchObject({ reconciled: 1 });
-    expect(currentTasks.get(task.taskId)).toMatchObject({ status: "lost" });
+    expectMaintenanceCounts(await runTaskRegistryMaintenance(), { reconciled: 1 });
+    expectTaskStatus(currentTasks, task.taskId, "lost");
   });
 
   it("does not keep stale CLI run-context tasks alive through stale subagent session rows", async () => {
@@ -464,16 +778,14 @@ describe("task-registry maintenance issue #60299", () => {
       sessionStore: { [childSessionKey]: { sessionId: childSessionKey, updatedAt: Date.now() } },
     });
 
-    expect(reconcileInspectableTasks()).toEqual([
-      expect.objectContaining({
-        taskId: task.taskId,
-        status: "lost",
-        error: "backing session missing",
-      }),
-    ]);
-    expect(getInspectableActiveTaskRestartBlockers()).toEqual([]);
-    expect(await runTaskRegistryMaintenance()).toMatchObject({ reconciled: 1 });
-    expect(currentTasks.get(task.taskId)).toMatchObject({ status: "lost" });
+    const reconciledTasks = reconcileInspectableTasks();
+    expect(reconciledTasks).toHaveLength(1);
+    expect(reconciledTasks[0]?.taskId).toBe(task.taskId);
+    expect(reconciledTasks[0]?.status).toBe("lost");
+    expect(reconciledTasks[0]?.error).toBe("backing session missing");
+    expect(getInspectableActiveTaskRestartBlockers()).toStrictEqual([]);
+    expectMaintenanceCounts(await runTaskRegistryMaintenance(), { reconciled: 1 });
+    expectTaskStatus(currentTasks, task.taskId, "lost");
   });
 
   it("keeps chat-backed cli tasks live while the owning run context is still active", async () => {
@@ -493,8 +805,8 @@ describe("task-registry maintenance issue #60299", () => {
       activeRunIds: ["run-chat-cli-live"],
     });
 
-    expect(await runTaskRegistryMaintenance()).toMatchObject({ reconciled: 0 });
-    expect(currentTasks.get(task.taskId)).toMatchObject({ status: "running" });
+    expectMaintenanceCounts(await runTaskRegistryMaintenance(), { reconciled: 0 });
+    expectTaskStatus(currentTasks, task.taskId, "running");
   });
 
   it("keeps detached media cli tasks live while their tool run context is active", async () => {
@@ -517,8 +829,8 @@ describe("task-registry maintenance issue #60299", () => {
       activeRunIds: [runId],
     });
 
-    expect(await runTaskRegistryMaintenance()).toMatchObject({ reconciled: 0 });
-    expect(currentTasks.get(task.taskId)).toMatchObject({ status: "running" });
+    expectMaintenanceCounts(await runTaskRegistryMaintenance(), { reconciled: 0 });
+    expectTaskStatus(currentTasks, task.taskId, "running");
   });
 
   it("keeps recently refreshed media cli tasks live without a chat run context", async () => {
@@ -540,8 +852,8 @@ describe("task-registry maintenance issue #60299", () => {
       sessionStore: { [channelKey]: { sessionId: channelKey, updatedAt: Date.now() } },
     });
 
-    expect(await runTaskRegistryMaintenance()).toMatchObject({ reconciled: 0 });
-    expect(currentTasks.get(task.taskId)).toMatchObject({ status: "running" });
+    expectMaintenanceCounts(await runTaskRegistryMaintenance(), { reconciled: 0 });
+    expectTaskStatus(currentTasks, task.taskId, "running");
   });
 
   it("skips markTaskLost and counts recovered when recovery hook recovers a stale task", async () => {
@@ -561,17 +873,213 @@ describe("task-registry maintenance issue #60299", () => {
       tryRecoverTaskBeforeMarkLost: recoveryHook,
     });
 
-    expect(previewTaskRegistryMaintenance()).toMatchObject({ reconciled: 1, recovered: 0 });
+    const beforeMaintenance = Date.now();
+    expectMaintenanceCounts(previewTaskRegistryMaintenance(), { reconciled: 1, recovered: 0 });
     const result = await runTaskRegistryMaintenance();
-    expect(result).toMatchObject({ reconciled: 0, recovered: 1 });
-    expect(currentTasks.get(task.taskId)).toMatchObject({ status: "running" });
-    expect(recoveryHook).toHaveBeenCalledWith(
-      expect.objectContaining({
-        taskId: task.taskId,
+    expectMaintenanceCounts(result, { reconciled: 0, recovered: 1 });
+    expectTaskStatus(currentTasks, task.taskId, "running");
+    const hookCalls = recoveryHook.mock.calls as unknown as Array<
+      [params: { now?: unknown; runtime?: unknown; task?: { taskId?: string }; taskId?: string }]
+    >;
+    expect(hookCalls).toHaveLength(1);
+    const hookParams = hookCalls[0]?.[0];
+    expect(hookParams?.taskId).toBe(task.taskId);
+    expect(hookParams?.runtime).toBe("cron");
+    expect(hookParams?.task?.taskId).toBe(task.taskId);
+    const hookNow = hookParams?.now;
+    expect(typeof hookNow).toBe("number");
+    if (typeof hookNow !== "number") {
+      throw new Error("Expected task recovery hook now timestamp");
+    }
+    expect(hookNow).toBeGreaterThanOrEqual(beforeMaintenance);
+  });
+
+  it("keeps the newest 2000 terminal cron rows per store and source", async () => {
+    const now = Date.now();
+    const tasks = Array.from({ length: CRON_HISTORY_KEEP_PER_JOB + 1 }, (_, index) =>
+      makeStaleTask({
+        taskId: `cron-history-${index}`,
         runtime: "cron",
-        task: expect.objectContaining({ taskId: task.taskId }),
-        now: expect.any(Number),
+        sourceId: "cron-history-job",
+        status: "succeeded",
+        endedAt: now + index + 1,
+        lastEventAt: now + index + 1,
+        cleanupAfter: now + DEFAULT_TASK_RETENTION_MS,
+        detail: { kind: "cron-run", status: "ok", storeKey: "store:history" },
       }),
     );
+    const lostTask = makeStaleTask({
+      taskId: "cron-history-lost",
+      runtime: "cron",
+      sourceId: "cron-history-job",
+      status: "lost",
+      endedAt: now - 60 * 60_000,
+      lastEventAt: now - 60 * 60_000,
+      cleanupAfter: undefined,
+    });
+    tasks.push(lostTask);
+    const { currentTasks } = createTaskRegistryMaintenanceHarness({ tasks });
+
+    const result = await runTaskRegistryMaintenance();
+
+    expect(result.pruned).toBe(1);
+    expect(currentTasks.size).toBe(CRON_HISTORY_KEEP_PER_JOB + 1);
+    expect(currentTasks.has("cron-history-0")).toBe(false);
+    expect(currentTasks.has("cron-history-1")).toBe(true);
+    expect(currentTasks.has(lostTask.taskId)).toBe(true);
+  });
+
+  it("keeps real cron run history while bounding newer quiet watcher evaluations", async () => {
+    const now = Date.now();
+    const sourceId = "cron-watcher-history-job";
+    const storeKey = "store:watcher-history";
+    const historicalRun = makeStaleTask({
+      taskId: "cron-watcher-fired-run",
+      runtime: "cron",
+      sourceId,
+      status: "succeeded",
+      endedAt: now,
+      lastEventAt: now,
+      cleanupAfter: now + DEFAULT_TASK_RETENTION_MS,
+      detail: { kind: "cron-run", status: "ok", storeKey },
+    });
+    const quietRuns = Array.from({ length: CRON_HISTORY_KEEP_PER_JOB + 1 }, (_, index) =>
+      makeStaleTask({
+        taskId: `cron-watcher-quiet-${index}`,
+        runtime: "cron",
+        sourceId,
+        status: "succeeded",
+        endedAt: now + index + 1,
+        lastEventAt: now + index + 1,
+        cleanupAfter: now + DEFAULT_TASK_RETENTION_MS,
+        detail: { storeKey },
+      }),
+    );
+    const { currentTasks } = createTaskRegistryMaintenanceHarness({
+      tasks: [historicalRun, ...quietRuns],
+    });
+
+    const result = await runTaskRegistryMaintenance();
+
+    expect(result.pruned).toBe(1);
+    expect(currentTasks.size).toBe(CRON_HISTORY_KEEP_PER_JOB + 1);
+    expect(currentTasks.has(historicalRun.taskId)).toBe(true);
+    expect(currentTasks.has("cron-watcher-quiet-0")).toBe(false);
+    expect(currentTasks.has("cron-watcher-quiet-1")).toBe(true);
+    expect(currentTasks.has(`cron-watcher-quiet-${CRON_HISTORY_KEEP_PER_JOB}`)).toBe(true);
+  });
+
+  it("retains the newest-created cron runs when terminal timestamps are identical", async () => {
+    const now = Date.now();
+    const tasks = Array.from({ length: CRON_HISTORY_KEEP_PER_JOB + 1 }, (_, index) =>
+      makeStaleTask({
+        taskId: `cron-same-ms-${String(CRON_HISTORY_KEEP_PER_JOB - index).padStart(4, "0")}`,
+        runtime: "cron",
+        sourceId: "cron-same-ms-job",
+        status: "succeeded",
+        createdAt: now + index,
+        startedAt: now + index,
+        endedAt: now + CRON_HISTORY_KEEP_PER_JOB + 1,
+        lastEventAt: now + CRON_HISTORY_KEEP_PER_JOB + 1,
+        cleanupAfter: now + DEFAULT_TASK_RETENTION_MS,
+        detail: { kind: "cron-run", status: "ok", storeKey: "store:same-ms" },
+      }),
+    );
+    const { currentTasks } = createTaskRegistryMaintenanceHarness({ tasks });
+
+    const result = await runTaskRegistryMaintenance();
+
+    expect(result.pruned).toBe(1);
+    expect(currentTasks.size).toBe(CRON_HISTORY_KEEP_PER_JOB);
+    expect(currentTasks.has("cron-same-ms-2000")).toBe(false);
+    expect(currentTasks.has("cron-same-ms-0000")).toBe(true);
+  });
+
+  it("scopes same-id cron history retention to each store", async () => {
+    const now = Date.now();
+    const storeATasks = Array.from({ length: CRON_HISTORY_KEEP_PER_JOB }, (_, index) =>
+      makeStaleTask({
+        taskId: `cron-store-a-${index}`,
+        runtime: "cron",
+        sourceId: "shared-job-id",
+        status: "succeeded",
+        endedAt: now + index + 2,
+        lastEventAt: now + index + 2,
+        cleanupAfter: now + DEFAULT_TASK_RETENTION_MS,
+        detail: { kind: "cron-run", status: "ok", storeKey: "store:a" },
+      }),
+    );
+    const storeBTask = makeStaleTask({
+      taskId: "cron-store-b-only-row",
+      runtime: "cron",
+      sourceId: "shared-job-id",
+      status: "succeeded",
+      endedAt: now + 1,
+      lastEventAt: now + 1,
+      cleanupAfter: now + DEFAULT_TASK_RETENTION_MS,
+      detail: { kind: "cron-run", status: "ok", storeKey: "store:b" },
+    });
+    const { currentTasks } = createTaskRegistryMaintenanceHarness({
+      tasks: [...storeATasks, storeBTask],
+    });
+
+    const result = await runTaskRegistryMaintenance();
+
+    expect(result.pruned).toBe(0);
+    expect(currentTasks.size).toBe(CRON_HISTORY_KEEP_PER_JOB + 1);
+    expect(currentTasks.has(storeBTask.taskId)).toBe(true);
+  });
+
+  it("stamps recent terminal cron rows with default retention", async () => {
+    const endedAt = Date.now();
+    const task = makeStaleTask({
+      status: "succeeded",
+      endedAt,
+      lastEventAt: endedAt,
+      cleanupAfter: undefined,
+    });
+    const { currentTasks } = createTaskRegistryMaintenanceHarness({ tasks: [task] });
+
+    expect(previewTaskRegistryMaintenance().cleanupStamped).toBe(1);
+    const result = await runTaskRegistryMaintenance();
+
+    expect(result.cleanupStamped).toBe(1);
+    expect(requireTaskRecord(currentTasks, task.taskId).cleanupAfter).toBe(
+      endedAt + DEFAULT_TASK_RETENTION_MS,
+    );
+  });
+
+  it("prunes terminal cron rows after default retention", async () => {
+    const endedAt = Date.now() - DEFAULT_TASK_RETENTION_MS - 1;
+    const task = makeStaleTask({
+      status: "succeeded",
+      endedAt,
+      lastEventAt: endedAt,
+      cleanupAfter: undefined,
+    });
+    const { currentTasks } = createTaskRegistryMaintenanceHarness({ tasks: [task] });
+
+    expect(previewTaskRegistryMaintenance().pruned).toBe(1);
+    const result = await runTaskRegistryMaintenance();
+
+    expect(result.pruned).toBe(1);
+    expect(currentTasks.has(task.taskId)).toBe(false);
+  });
+
+  it("still prunes lost cron rows after 24 hours", async () => {
+    const endedAt = Date.now() - 25 * 60 * 60_000;
+    const task = makeStaleTask({
+      sourceId: "lost-cron-job",
+      status: "lost",
+      endedAt,
+      lastEventAt: endedAt,
+      cleanupAfter: undefined,
+    });
+    const { currentTasks } = createTaskRegistryMaintenanceHarness({ tasks: [task] });
+
+    const result = await runTaskRegistryMaintenance();
+
+    expect(result.pruned).toBe(1);
+    expect(currentTasks.has(task.taskId)).toBe(false);
   });
 });

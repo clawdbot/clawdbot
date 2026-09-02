@@ -1,15 +1,18 @@
+// Provides fixtures for plugin auto-enable config tests.
 import path from "node:path";
-import { clearCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
-import { type PluginManifestRegistry } from "../plugins/manifest-registry.js";
-import { type PluginOrigin } from "../plugins/plugin-origin.types.js";
-import { clearPluginSetupRegistryCache } from "../plugins/setup-registry.js";
+import { resolveInstalledPluginIndexPolicyHash } from "../plugins/installed-plugin-index-policy.js";
+import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
+import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
+import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
+import type { PluginOrigin } from "../plugins/plugin-origin.types.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "../plugins/test-helpers/fs-fixtures.js";
+import type { OpenClawConfig } from "./types.openclaw.js";
 
 const tempDirs: string[] = [];
 
+/** Clears auto-enable plugin caches and temp dirs between tests. */
 export function resetPluginAutoEnableTestState(): void {
-  clearCurrentPluginMetadataSnapshot();
-  clearPluginSetupRegistryCache();
+  clearPluginMetadataLifecycleCaches();
   cleanupTrackedTempDirs(tempDirs);
 }
 
@@ -35,7 +38,13 @@ export function makeRegistry(
     activation?: { onAgentHarnesses?: string[] };
     autoEnableWhenConfiguredProviders?: string[];
     modelSupport?: { modelPrefixes?: string[]; modelPatterns?: string[] };
-    contracts?: { webSearchProviders?: string[]; webFetchProviders?: string[]; tools?: string[] };
+    contracts?: {
+      speechProviders?: string[];
+      workerProviders?: string[];
+      webSearchProviders?: string[];
+      webFetchProviders?: string[];
+      tools?: string[];
+    };
     providers?: string[];
     cliBackends?: string[];
     origin?: PluginOrigin;
@@ -66,6 +75,56 @@ export function makeRegistry(
       manifestPath: `/fake/${plugin.id}/openclaw.plugin.json`,
     })),
     diagnostics: [],
+  };
+}
+
+export function createPluginMetadataSnapshot(params: {
+  config?: OpenClawConfig;
+  manifestRegistry: PluginManifestRegistry;
+  workspaceDir?: string;
+}): PluginMetadataSnapshot {
+  const policyHash = resolveInstalledPluginIndexPolicyHash(params.config);
+  const index: PluginMetadataSnapshot["index"] = {
+    version: 1,
+    hostContractVersion: "test",
+    compatRegistryVersion: "test",
+    migrationVersion: 1,
+    policyHash,
+    generatedAtMs: 1,
+    installRecords: {},
+    plugins: [],
+    diagnostics: [],
+  };
+  return {
+    policyHash,
+    ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
+    index,
+    registryIndex: index,
+    registryDiagnostics: [],
+    manifestRegistry: params.manifestRegistry,
+    plugins: params.manifestRegistry.plugins,
+    diagnostics: params.manifestRegistry.diagnostics,
+    byPluginId: new Map(params.manifestRegistry.plugins.map((plugin) => [plugin.id, plugin])),
+    normalizePluginId: (pluginId) => pluginId,
+    owners: {
+      channels: new Map(),
+      channelConfigs: new Map(),
+      providers: new Map(),
+      modelCatalogProviders: new Map(),
+      cliBackends: new Map(),
+      setupProviders: new Map(),
+      commandAliases: new Map(),
+      contracts: new Map(),
+      modelIdNormalizationPolicies: new Map(),
+    },
+    metrics: {
+      registrySnapshotMs: 0,
+      manifestRegistryMs: 0,
+      ownerMapsMs: 0,
+      totalMs: 0,
+      indexPluginCount: 0,
+      manifestPluginCount: params.manifestRegistry.plugins.length,
+    },
   };
 }
 

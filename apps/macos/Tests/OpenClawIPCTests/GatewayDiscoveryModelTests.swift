@@ -3,6 +3,16 @@ import Testing
 
 @MainActor
 struct GatewayDiscoveryModelTests {
+    @Test func `inactive discovery does not retain its model for host resolution`() {
+        weak var released: GatewayDiscoveryModel?
+        do {
+            let model = GatewayDiscoveryModel(localDisplayName: "Test Mac")
+            released = model
+            #expect(model.gateways.isEmpty)
+        }
+        #expect(released == nil)
+    }
+
     @Test func `local gateway matches lan host`() {
         let local = GatewayDiscoveryModel.LocalIdentity(
             hostTokens: ["studio"],
@@ -87,26 +97,57 @@ struct GatewayDiscoveryModelTests {
             "tailnetDns": "  peters-mac-studio-1.ts.net  ",
             "sshPort": " 2222 ",
             "gatewayPort": " 18799 ",
+            "gatewayTls": " yes ",
+            "gatewayDirectReachable": " true ",
             "cliPath": " /opt/openclaw ",
         ])
         #expect(parsed.lanHost == "studio.local")
         #expect(parsed.tailnetDns == "peters-mac-studio-1.ts.net")
         #expect(parsed.sshPort == 2222)
         #expect(parsed.gatewayPort == 18799)
+        #expect(parsed.gatewayTls)
+        #expect(parsed.gatewayDirectReachable)
         #expect(parsed.cliPath == "/opt/openclaw")
+
+        let portCases: [(String, Int?)] = [
+            ("", nil), (" \t\n", nil), ("0", nil), ("-1", nil), ("nope", nil), ("1.5", nil),
+            ("1", 1), (" 2222 ", 2222), ("18799", 18799), ("65535", 65535),
+            ("\t65536\n", 65536), ("+70000", 70000),
+        ]
+        for (value, expected) in portCases {
+            let ports = GatewayDiscoveryModel.parseGatewayTXT(["sshPort": value, "gatewayPort": value])
+            #expect(ports.sshPort == (expected ?? 22))
+            #expect(ports.gatewayPort == expected)
+        }
+        let booleanCases = [
+            ("1", true), (" true ", true), (" yes ", true), ("\tTrUe\n", true), (" YES ", true),
+            ("", false), (" \t\n", false), ("0", false), ("false", false), ("no", false),
+            ("on", false), ("2", false), ("trueish", false),
+        ]
+        for (value, expected) in booleanCases {
+            let flags = GatewayDiscoveryModel.parseGatewayTXT([
+                "gatewayTls": value,
+                "gatewayDirectReachable": value,
+            ])
+            #expect(flags.gatewayTls == expected)
+            #expect(flags.gatewayDirectReachable == expected)
+        }
     }
 
-    @Test func `parses gateway TXT defaults`() {
-        let parsed = GatewayDiscoveryModel.parseGatewayTXT([
-            "lanHost": "  ",
-            "tailnetDns": "\n",
-            "gatewayPort": "nope",
-            "sshPort": "nope",
-        ])
+    @Test(arguments: [nil, "", " \t\r\n"] as [String?])
+    func `parses gateway TXT defaults`(_ value: String?) {
+        let fields = [
+            "lanHost", "tailnetDns", "sshPort", "gatewayPort",
+            "gatewayTls", "gatewayDirectReachable", "cliPath",
+        ]
+        let parsed = GatewayDiscoveryModel.parseGatewayTXT(
+            Dictionary(uniqueKeysWithValues: fields.map { ($0, value) }).compactMapValues { $0 })
         #expect(parsed.lanHost == nil)
         #expect(parsed.tailnetDns == nil)
         #expect(parsed.sshPort == 22)
         #expect(parsed.gatewayPort == nil)
+        #expect(!parsed.gatewayTls)
+        #expect(!parsed.gatewayDirectReachable)
         #expect(parsed.cliPath == nil)
     }
 

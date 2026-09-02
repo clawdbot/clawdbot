@@ -1,3 +1,4 @@
+// Discovers Homebrew paths and package metadata for diagnostics.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -34,6 +35,7 @@ function resolveBrewFromPath(pathEnv = process.env.PATH): string | undefined {
   return undefined;
 }
 
+/** Returns standard Homebrew bin directories suitable for PATH augmentation. */
 export function resolveBrewPathDirs(opts?: BrewResolutionOptions): string[] {
   const homeDir = opts?.homeDir ?? os.homedir();
 
@@ -50,9 +52,12 @@ export function resolveBrewPathDirs(opts?: BrewResolutionOptions): string[] {
   return dirs;
 }
 
+/** Resolves an executable `brew` path from trusted PATH entries or standard install roots. */
 export function resolveBrewExecutable(opts?: BrewResolutionOptions): string | undefined {
   const homeDir = opts?.homeDir ?? os.homedir();
 
+  // Use the real process PATH, not opts.env, because callers may pass workspace
+  // env loaded from untrusted project state.
   const pathBrew = resolveBrewFromPath();
   if (pathBrew) {
     return pathBrew;

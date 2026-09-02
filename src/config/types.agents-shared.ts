@@ -1,3 +1,4 @@
+// Defines shared agent configuration types across runtime schemas.
 import type {
   SandboxBrowserSettings,
   SandboxDockerSettings,
@@ -5,6 +6,7 @@ import type {
   SandboxSshSettings,
 } from "./types.sandbox.js";
 
+/** Agent model selector: a single provider/model ref or primary+fallback chain. */
 export type AgentModelConfig =
   | string
   | {
@@ -12,21 +14,29 @@ export type AgentModelConfig =
       primary?: string;
       /** Per-agent model fallbacks (provider/model). */
       fallbacks?: string[];
+    };
+
+/** Tool-specific model selector with an optional capability timeout override. */
+export type AgentToolModelConfig =
+  | string
+  | {
+      /** Primary model (provider/model). */
+      primary?: string;
+      /** Per-tool model fallbacks (provider/model). */
+      fallbacks?: string[];
       /** Optional provider request timeout in milliseconds for capabilities that support it. */
       timeoutMs?: number;
     };
 
-export type AgentEmbeddedHarnessConfig = {
-  /** Agent runtime id. Omitted uses "pi"; "auto" opts into plugin harness auto-selection. */
-  runtime?: string;
-};
-
+/** Runtime selection policy attached to providers, models, and agent defaults. */
 export type AgentRuntimePolicyConfig = {
-  /** Agent runtime id. Omitted uses "pi"; "auto" opts into plugin harness auto-selection. */
+  /** Agent runtime id. Omitted uses "openclaw"; "auto" opts into plugin harness auto-selection. */
   id?: string;
 };
 
+/** Per-agent sandbox policy shared by embedded agents and sandbox backends. */
 export type AgentSandboxConfig = {
+  /** Sandbox activation mode for this agent. */
   mode?: "off" | "non-main" | "all";
   /** Sandbox runtime backend id. Default: "docker". */
   backend?: string;
@@ -40,6 +50,7 @@ export type AgentSandboxConfig = {
   sessionToolsVisibility?: "spawned" | "all";
   /** Container/workspace scope for sandbox isolation. */
   scope?: "session" | "agent" | "shared";
+  /** Host workspace root mounted or copied into the sandbox. */
   workspaceRoot?: string;
   /** Docker-specific sandbox settings. */
   docker?: SandboxDockerSettings;

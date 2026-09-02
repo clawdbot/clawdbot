@@ -23,7 +23,7 @@ import {
   createMatrixRoomMessageEvent,
   createMatrixTextMessageEvent,
 } from "./handler.test-helpers.js";
-import { type MatrixRawEvent } from "./types.js";
+import type { MatrixRawEvent } from "./types.js";
 
 const deliverMatrixRepliesMock = vi.hoisted(() => vi.fn(async () => true));
 
@@ -90,11 +90,38 @@ beforeEach(() => {
 });
 
 function deferred<T>() {
-  let resolve!: (value: T | PromiseLike<T>) => void;
+  let resolve: ((value: T | PromiseLike<T>) => void) | undefined;
   const promise = new Promise<T>((res) => {
     resolve = res;
   });
+  if (!resolve) {
+    throw new Error("Expected deferred resolver to be initialized");
+  }
   return { promise, resolve };
+}
+
+type HistoryHarnessOptions = NonNullable<Parameters<typeof createMatrixHandlerTestHarness>[0]>;
+type FinalizeInboundContext = NonNullable<HistoryHarnessOptions["finalizeInboundContext"]>;
+
+const dispatchFinalReply: NonNullable<
+  HistoryHarnessOptions["dispatchInboundMessage"]
+> = async () => ({
+  queuedFinal: true,
+  counts: { final: 1, block: 0, tool: 0 },
+});
+
+function createGroupHistoryHandler(
+  finalizeInboundContext?: FinalizeInboundContext,
+  options: HistoryHarnessOptions = {},
+) {
+  return createMatrixHandlerTestHarness({
+    historyLimit: 20,
+    groupPolicy: "open",
+    isDirectMessage: false,
+    dispatchInboundMessage: dispatchFinalReply,
+    ...options,
+    ...(finalizeInboundContext ? { finalizeInboundContext } : {}),
+  });
 }
 
 function createFinalDeliveryFailureHandler(finalizeInboundContext: (ctx: unknown) => unknown) {
@@ -107,7 +134,7 @@ function createFinalDeliveryFailureHandler(finalizeInboundContext: (ctx: unknown
     groupPolicy: "open",
     isDirectMessage: false,
     finalizeInboundContext,
-    dispatchReplyFromConfig: async () => ({
+    dispatchInboundMessage: async () => ({
       queuedFinal: true,
       counts: { final: 1, block: 0, tool: 0 },
     }),
@@ -116,40 +143,49 @@ function createFinalDeliveryFailureHandler(finalizeInboundContext: (ctx: unknown
     }) => {
       capturedOnError = params?.onError;
       return {
-        dispatcher: {},
+        dispatcher: {
+          markComplete: () => {},
+          waitForIdle: async () => {
+            capturedOnError?.(new Error("simulated delivery failure"), { kind: "final" });
+          },
+        },
         replyOptions: {},
         markDispatchIdle: () => {},
         markRunComplete: () => {},
       };
     },
-    withReplyDispatcher: async <T>(params: {
-      dispatcher: { markComplete?: () => void; waitForIdle?: () => Promise<void> };
-      run: () => Promise<T>;
-      onSettled?: () => void | Promise<void>;
-    }) => {
-      const result = await params.run();
-      capturedOnError?.(new Error("simulated delivery failure"), { kind: "final" });
-      params.dispatcher.markComplete?.();
-      await params.dispatcher.waitForIdle?.();
-      await params.onSettled?.();
-      return result;
-    },
   });
+}
+
+function inboundHistoryBodies(finalizeInboundContext: ReturnType<typeof vi.fn>, callIndex: number) {
+  const ctx = finalizeInboundContextCall(finalizeInboundContext, callIndex);
+  const history = ctx["InboundHistory"] as Array<{ body: string }> | undefined;
+  return history?.map((entry) => entry.body) ?? [];
+}
+
+function finalizeInboundContextCall(
+  finalizeInboundContext: ReturnType<typeof vi.fn>,
+  callIndex: number,
+) {
+  const ctx = finalizeInboundContext.mock.calls.at(callIndex)?.[0];
+  if (!ctx || typeof ctx !== "object") {
+    throw new Error(`Expected finalizeInboundContext call ${callIndex + 1}`);
+  }
+  return ctx as Record<string, unknown>;
+}
+
+function expectSomeBodyContaining(bodies: readonly string[], fragment: string) {
+  expect(bodies.join("\n")).toContain(fragment);
+}
+
+function expectNoBodyContaining(bodies: readonly string[], fragment: string) {
+  expect(bodies.join("\n")).not.toContain(fragment);
 }
 
 describe("matrix group chat history — scenario 1: basic accumulation", () => {
   it("pending messages appear in InboundHistory; trigger itself does not", async () => {
     const finalizeInboundContext = vi.fn((ctx: unknown) => ctx);
-    const { handler } = createMatrixHandlerTestHarness({
-      historyLimit: 20,
-      groupPolicy: "open",
-      isDirectMessage: false,
-      finalizeInboundContext,
-      dispatchReplyFromConfig: async () => ({
-        queuedFinal: true,
-        counts: { final: 1, block: 0, tool: 0 },
-      }),
-    });
+    const { handler } = createGroupHistoryHandler(finalizeInboundContext);
 
     // Non-trigger message A — should not dispatch
     await handler(DEFAULT_ROOM, makeRoomPlainEvent({ eventId: "$a", body: "msg A", ts: 1000 }));
@@ -158,25 +194,67 @@ describe("matrix group chat history — scenario 1: basic accumulation", () => {
     // Trigger B — history must contain [msg A] only, not the trigger itself
     await handler(DEFAULT_ROOM, makeRoomTriggerEvent({ eventId: "$b", body: "msg B", ts: 2000 }));
     expect(finalizeInboundContext).toHaveBeenCalledOnce();
-    const ctx = finalizeInboundContext.mock.calls[0]?.[0] as Record<string, unknown>;
+    const ctx = finalizeInboundContextCall(finalizeInboundContext, 0);
     const history = ctx["InboundHistory"] as Array<{ body: string; sender: string }>;
     expect(history).toHaveLength(1);
     expect(history[0]?.body).toContain("msg A");
   });
 
+  it('keeps threaded messages in parent history when threadReplies is "off"', async () => {
+    const finalizeInboundContext = vi.fn((ctx: unknown) => ctx);
+    const { handler } = createGroupHistoryHandler(finalizeInboundContext, {
+      threadReplies: "off",
+    });
+
+    await handler(
+      DEFAULT_ROOM,
+      createMatrixRoomMessageEvent({
+        eventId: "$thread-plain",
+        content: {
+          msgtype: "m.text",
+          body: "thread plain",
+          "m.relates_to": { rel_type: "m.thread", event_id: "$thread-root" },
+        },
+      }),
+    );
+    await handler(
+      DEFAULT_ROOM,
+      makeRoomTriggerEvent({ eventId: "$main-trigger", body: "main trigger", ts: 2000 }),
+    );
+
+    expectSomeBodyContaining(inboundHistoryBodies(finalizeInboundContext, 0), "thread plain");
+  });
+
+  it('keeps top-level room history flat when threadReplies is "always"', async () => {
+    const finalizeInboundContext = vi.fn((ctx: unknown) => ctx);
+    const { handler } = createGroupHistoryHandler(finalizeInboundContext, {
+      threadReplies: "always",
+    });
+
+    await handler(
+      DEFAULT_ROOM,
+      makeRoomPlainEvent({ eventId: "$top-level-plain", body: "top-level plain", ts: 1000 }),
+    );
+    await handler(
+      DEFAULT_ROOM,
+      makeRoomTriggerEvent({ eventId: "$top-level-trigger", body: "main trigger", ts: 2000 }),
+    );
+
+    expectSomeBodyContaining(inboundHistoryBodies(finalizeInboundContext, 0), "top-level plain");
+
+    await handler(
+      DEFAULT_ROOM,
+      makeRoomTriggerEvent({ eventId: "$top-level-trigger-2", body: "main trigger 2", ts: 3000 }),
+    );
+
+    expectNoBodyContaining(inboundHistoryBodies(finalizeInboundContext, 1), "top-level plain");
+  });
+
   it("multi-agent: each agent has an independent watermark", async () => {
     let currentAgentId = "agent_a";
     const finalizeInboundContext = vi.fn((ctx: unknown) => ctx);
-    const { handler } = createMatrixHandlerTestHarness({
-      historyLimit: 20,
-      groupPolicy: "open",
-      isDirectMessage: false,
-      finalizeInboundContext,
+    const { handler } = createGroupHistoryHandler(finalizeInboundContext, {
       resolveAgentRoute: vi.fn(() => makeDevRoute(currentAgentId)),
-      dispatchReplyFromConfig: async () => ({
-        queuedFinal: true,
-        counts: { final: 1, block: 0, tool: 0 },
-      }),
     });
 
     // msg A accumulates for all agents
@@ -186,7 +264,7 @@ describe("matrix group chat history — scenario 1: basic accumulation", () => {
     currentAgentId = "agent_a";
     await handler(DEFAULT_ROOM, makeRoomTriggerEvent({ eventId: "$b", body: "msg B", ts: 2000 }));
     {
-      const ctx = finalizeInboundContext.mock.calls[0]?.[0] as Record<string, unknown>;
+      const ctx = finalizeInboundContextCall(finalizeInboundContext, 0);
       const history = ctx["InboundHistory"] as Array<{ body: string }>;
       expect(history).toHaveLength(1);
       expect(history[0]?.body).toContain("msg A");
@@ -196,22 +274,17 @@ describe("matrix group chat history — scenario 1: basic accumulation", () => {
     currentAgentId = "agent_b";
     await handler(DEFAULT_ROOM, makeRoomTriggerEvent({ eventId: "$c", body: "msg C", ts: 3000 }));
     {
-      const ctx = finalizeInboundContext.mock.calls[1]?.[0] as Record<string, unknown>;
-      const history = ctx["InboundHistory"] as Array<{ body: string }>;
-      expect(history).toHaveLength(2);
-      expect(history.map((h) => h.body)).toEqual(
-        expect.arrayContaining([expect.stringContaining("msg A")]),
-      );
-      expect(history.map((h) => h.body)).toEqual(
-        expect.arrayContaining([expect.stringContaining("msg B")]),
-      );
+      const bodies = inboundHistoryBodies(finalizeInboundContext, 1);
+      expect(bodies).toHaveLength(2);
+      expectSomeBodyContaining(bodies, "msg A");
+      expectSomeBodyContaining(bodies, "msg B");
     }
 
     // @agent_b trigger D — A/B/C consumed; history is empty
     currentAgentId = "agent_b";
     await handler(DEFAULT_ROOM, makeRoomTriggerEvent({ eventId: "$d", body: "msg D", ts: 4000 }));
     {
-      const ctx = finalizeInboundContext.mock.calls[2]?.[0] as Record<string, unknown>;
+      const ctx = finalizeInboundContextCall(finalizeInboundContext, 2);
       const history = ctx["InboundHistory"] as Array<unknown> | undefined;
       expect(history ?? []).toHaveLength(0);
     }
@@ -219,15 +292,8 @@ describe("matrix group chat history — scenario 1: basic accumulation", () => {
 
   it("respects historyLimit: caps to the most recent N entries", async () => {
     const finalizeInboundContext = vi.fn((ctx: unknown) => ctx);
-    const { handler } = createMatrixHandlerTestHarness({
+    const { handler } = createGroupHistoryHandler(finalizeInboundContext, {
       historyLimit: 2,
-      groupPolicy: "open",
-      isDirectMessage: false,
-      finalizeInboundContext,
-      dispatchReplyFromConfig: async () => ({
-        queuedFinal: true,
-        counts: { final: 1, block: 0, tool: 0 },
-      }),
     });
 
     for (let i = 1; i <= 4; i++) {
@@ -238,7 +304,7 @@ describe("matrix group chat history — scenario 1: basic accumulation", () => {
     }
 
     await handler(DEFAULT_ROOM, makeRoomTriggerEvent({ eventId: "$t", body: "trigger", ts: 5000 }));
-    const ctx = finalizeInboundContext.mock.calls[0]?.[0] as Record<string, unknown>;
+    const ctx = finalizeInboundContextCall(finalizeInboundContext, 0);
     const history = ctx["InboundHistory"] as Array<{ body: string }>;
     expect(history).toHaveLength(2);
     expect(history[0]?.body).toContain("pending 3");
@@ -247,21 +313,14 @@ describe("matrix group chat history — scenario 1: basic accumulation", () => {
 
   it("historyLimit=0 disables history accumulation entirely", async () => {
     const finalizeInboundContext = vi.fn((ctx: unknown) => ctx);
-    const { handler } = createMatrixHandlerTestHarness({
+    const { handler } = createGroupHistoryHandler(finalizeInboundContext, {
       historyLimit: 0,
-      groupPolicy: "open",
-      isDirectMessage: false,
-      finalizeInboundContext,
-      dispatchReplyFromConfig: async () => ({
-        queuedFinal: true,
-        counts: { final: 1, block: 0, tool: 0 },
-      }),
     });
 
     await handler(DEFAULT_ROOM, makeRoomPlainEvent({ eventId: "$p", body: "pending" }));
     await handler(DEFAULT_ROOM, makeRoomTriggerEvent({ eventId: "$t", body: "trigger" }));
 
-    const ctx = finalizeInboundContext.mock.calls[0]?.[0] as Record<string, unknown>;
+    const ctx = finalizeInboundContextCall(finalizeInboundContext, 0);
     const history = ctx["InboundHistory"] as Array<unknown> | undefined;
     expect(history ?? []).toHaveLength(0);
   });
@@ -269,10 +328,8 @@ describe("matrix group chat history — scenario 1: basic accumulation", () => {
   it("historyLimit=0 does not serialize same-room ingress", async () => {
     const firstUserId = deferred<string>();
     let getUserIdCalls = 0;
-    const { handler } = createMatrixHandlerTestHarness({
+    const { handler } = createGroupHistoryHandler(undefined, {
       historyLimit: 0,
-      groupPolicy: "open",
-      isDirectMessage: false,
       client: {
         getUserId: async () => {
           getUserIdCalls += 1;
@@ -282,10 +339,6 @@ describe("matrix group chat history — scenario 1: basic accumulation", () => {
           return "@bot:example.org";
         },
       },
-      dispatchReplyFromConfig: async () => ({
-        queuedFinal: true,
-        counts: { final: 1, block: 0, tool: 0 },
-      }),
     });
 
     const first = handler(DEFAULT_ROOM, makeRoomTriggerEvent({ eventId: "$a", body: "first" }));
@@ -301,14 +354,8 @@ describe("matrix group chat history — scenario 1: basic accumulation", () => {
 
   it("DMs do not accumulate history (group chat only)", async () => {
     const finalizeInboundContext = vi.fn((ctx: unknown) => ctx);
-    const { handler } = createMatrixHandlerTestHarness({
-      historyLimit: 20,
+    const { handler } = createGroupHistoryHandler(finalizeInboundContext, {
       isDirectMessage: true,
-      finalizeInboundContext,
-      dispatchReplyFromConfig: async () => ({
-        queuedFinal: true,
-        counts: { final: 1, block: 0, tool: 0 },
-      }),
     });
 
     await handler(DEFAULT_ROOM, makeRoomPlainEvent({ eventId: "$dm1", body: "dm message 1" }));
@@ -335,14 +382,9 @@ describe("matrix group chat history — scenario 1: basic accumulation", () => {
       return "sender";
     });
 
-    const { handler } = createMatrixHandlerTestHarness({
-      historyLimit: 20,
+    const { handler } = createGroupHistoryHandler(undefined, {
       isDirectMessage: true,
       getMemberDisplayName,
-      dispatchReplyFromConfig: async () => ({
-        queuedFinal: true,
-        counts: { final: 1, block: 0, tool: 0 },
-      }),
     });
 
     const first = handler(DEFAULT_ROOM, makeRoomPlainEvent({ eventId: "$dm-a", body: "first dm" }));
@@ -364,16 +406,7 @@ describe("matrix group chat history — scenario 1: basic accumulation", () => {
 
   it("includes skipped media-only room messages in next trigger history", async () => {
     const finalizeInboundContext = vi.fn((ctx: unknown) => ctx);
-    const { handler } = createMatrixHandlerTestHarness({
-      historyLimit: 20,
-      groupPolicy: "open",
-      isDirectMessage: false,
-      finalizeInboundContext,
-      dispatchReplyFromConfig: async () => ({
-        queuedFinal: true,
-        counts: { final: 1, block: 0, tool: 0 },
-      }),
-    });
+    const { handler } = createGroupHistoryHandler(finalizeInboundContext);
 
     // Unmentioned media-only message should be buffered as pending history context.
     await handler(
@@ -395,10 +428,98 @@ describe("matrix group chat history — scenario 1: basic accumulation", () => {
       makeRoomTriggerEvent({ eventId: "$trigger-media", body: "trigger", ts: 2000 }),
     );
     expect(finalizeInboundContext).toHaveBeenCalledOnce();
-    const ctx = finalizeInboundContext.mock.calls[0]?.[0] as Record<string, unknown>;
-    const history = ctx["InboundHistory"] as Array<{ body: string }> | undefined;
-    expect(history?.map((entry) => entry.body)).toEqual(
-      expect.arrayContaining([expect.stringContaining("[matrix image attachment]")]),
+    expectSomeBodyContaining(
+      inboundHistoryBodies(finalizeInboundContext, 0),
+      "[matrix image attachment]",
+    );
+  });
+
+  it.each([
+    {
+      description: "filename-only image",
+      msgtype: "m.image",
+      body: "photo.jpg",
+      expected: "[matrix image attachment]",
+    },
+    {
+      description: "captioned image",
+      msgtype: "m.image",
+      body: "look at this",
+      filename: "photo.jpg",
+      expected: "look at this\n\n[matrix image attachment]",
+    },
+    {
+      description: "filename-only video",
+      msgtype: "m.video",
+      body: "clip.mp4",
+      expected: "[matrix video attachment]",
+    },
+  ])("preserves $description markers in pending room history", async (attachment) => {
+    const finalizeInboundContext = vi.fn((ctx: unknown) => ctx);
+    const downloadContent = vi.fn();
+    const { handler } = createGroupHistoryHandler(finalizeInboundContext, {
+      client: { downloadContent },
+    });
+
+    await handler(
+      DEFAULT_ROOM,
+      createMatrixRoomMessageEvent({
+        eventId: "$history-attachment",
+        originServerTs: 1000,
+        content: {
+          msgtype: attachment.msgtype,
+          body: attachment.body,
+          ...(attachment.filename ? { filename: attachment.filename } : {}),
+          url: "mxc://example.org/history-attachment",
+        },
+      }),
+    );
+
+    expect(finalizeInboundContext).not.toHaveBeenCalled();
+    expect(downloadContent).not.toHaveBeenCalled();
+
+    await handler(
+      DEFAULT_ROOM,
+      makeRoomTriggerEvent({ eventId: "$history-trigger", body: "trigger", ts: 2000 }),
+    );
+
+    expect(inboundHistoryBodies(finalizeInboundContext, 0)).toEqual([attachment.expected]);
+    expect(downloadContent).not.toHaveBeenCalled();
+  });
+
+  it("preserves encrypted media-only history when a blank top-level URL masks its file URL", async () => {
+    const finalizeInboundContext = vi.fn((ctx: unknown) => ctx);
+    const { handler } = createGroupHistoryHandler(finalizeInboundContext);
+
+    await handler(
+      DEFAULT_ROOM,
+      createMatrixRoomMessageEvent({
+        eventId: "$encrypted-media-a",
+        originServerTs: 1000,
+        content: {
+          msgtype: "m.image",
+          body: " \t ",
+          url: "",
+          file: {
+            url: "mxc://example.org/encrypted-media-a",
+            key: { kty: "oct", key_ops: ["encrypt"], alg: "A256CTR", k: "secret", ext: true },
+            iv: "iv",
+            hashes: { sha256: "hash" },
+            v: "v2",
+          },
+        },
+      }),
+    );
+    expect(finalizeInboundContext).not.toHaveBeenCalled();
+
+    await handler(
+      DEFAULT_ROOM,
+      makeRoomTriggerEvent({ eventId: "$trigger-encrypted-media", body: "trigger", ts: 2000 }),
+    );
+
+    expectSomeBodyContaining(
+      inboundHistoryBodies(finalizeInboundContext, 0),
+      "[matrix image attachment]",
     );
   });
 
@@ -423,19 +544,11 @@ describe("matrix group chat history — scenario 1: basic accumulation", () => {
       prevBatch: null,
     }));
     const finalizeInboundContext = vi.fn((ctx: unknown) => ctx);
-    const { handler } = createMatrixHandlerTestHarness({
-      historyLimit: 20,
-      groupPolicy: "open",
-      isDirectMessage: false,
+    const { handler } = createGroupHistoryHandler(finalizeInboundContext, {
       client: {
         getEvent,
         getRelations,
       },
-      finalizeInboundContext,
-      dispatchReplyFromConfig: async () => ({
-        queuedFinal: true,
-        counts: { final: 1, block: 0, tool: 0 },
-      }),
     });
 
     await handler(DEFAULT_ROOM, {
@@ -462,11 +575,7 @@ describe("matrix group chat history — scenario 1: basic accumulation", () => {
 
     expect(getEvent).toHaveBeenCalledOnce();
     expect(getRelations).toHaveBeenCalledOnce();
-    const ctx = finalizeInboundContext.mock.calls[0]?.[0] as Record<string, unknown>;
-    const history = ctx["InboundHistory"] as Array<{ body: string }> | undefined;
-    expect(history?.map((entry) => entry.body)).toEqual(
-      expect.arrayContaining([expect.stringContaining("Lunch?")]),
-    );
+    expectSomeBodyContaining(inboundHistoryBodies(finalizeInboundContext, 0), "Lunch?");
   });
 });
 
@@ -476,7 +585,7 @@ describe("matrix group chat history — scenario 2: race condition safety", () =
     let firstDispatchStarted = false;
 
     const finalizeInboundContext = vi.fn((ctx: unknown) => ctx);
-    const dispatchReplyFromConfig = vi.fn(async () => {
+    const dispatchInboundMessage = vi.fn(async () => {
       if (!firstDispatchStarted) {
         firstDispatchStarted = true;
         await new Promise<void>((resolve) => {
@@ -486,12 +595,8 @@ describe("matrix group chat history — scenario 2: race condition safety", () =
       return { queuedFinal: true, counts: { final: 1, block: 0, tool: 0 } };
     });
 
-    const { handler } = createMatrixHandlerTestHarness({
-      historyLimit: 20,
-      groupPolicy: "open",
-      isDirectMessage: false,
-      finalizeInboundContext,
-      dispatchReplyFromConfig,
+    const { handler } = createGroupHistoryHandler(finalizeInboundContext, {
+      dispatchInboundMessage,
     });
 
     // Step 1: trigger msg A — don't await, let it block in dispatch
@@ -517,14 +622,9 @@ describe("matrix group chat history — scenario 2: race condition safety", () =
     await handler(DEFAULT_ROOM, makeRoomTriggerEvent({ eventId: "$c", body: "msg C", ts: 3000 }));
 
     expect(finalizeInboundContext).toHaveBeenCalledTimes(2);
-    const ctxForC = finalizeInboundContext.mock.calls[1]?.[0] as Record<string, unknown>;
-    const history = ctxForC["InboundHistory"] as Array<{ body: string }>;
-    expect(history.map((h) => h.body)).toEqual(
-      expect.arrayContaining([expect.stringContaining("msg B")]),
-    );
-    expect(history.map((h) => h.body)).not.toEqual(
-      expect.arrayContaining([expect.stringContaining("msg A")]),
-    );
+    const bodies = inboundHistoryBodies(finalizeInboundContext, 1);
+    expectSomeBodyContaining(bodies, "msg B");
+    expectNoBodyContaining(bodies, "msg A");
   });
 
   it("watermark does not advance when final reply delivery fails (retry sees same history)", async () => {
@@ -543,7 +643,7 @@ describe("matrix group chat history — scenario 2: race condition safety", () =
     );
     expect(finalizeInboundContext).toHaveBeenCalledOnce();
     {
-      const ctx = finalizeInboundContext.mock.calls[0]?.[0] as Record<string, unknown>;
+      const ctx = finalizeInboundContextCall(finalizeInboundContext, 0);
       const history = ctx["InboundHistory"] as Array<{ body: string }>;
       expect(history).toHaveLength(1);
       expect(history[0]?.body).toContain("pending msg");
@@ -556,11 +656,7 @@ describe("matrix group chat history — scenario 2: race condition safety", () =
     );
     expect(finalizeInboundContext).toHaveBeenCalledTimes(2);
     {
-      const ctx = finalizeInboundContext.mock.calls[1]?.[0] as Record<string, unknown>;
-      const history = ctx["InboundHistory"] as Array<{ body: string }> | undefined;
-      expect(history?.map((h) => h.body)).toEqual(
-        expect.arrayContaining([expect.stringContaining("pending msg")]),
-      );
+      expectSomeBodyContaining(inboundHistoryBodies(finalizeInboundContext, 1), "pending msg");
     }
   });
 
@@ -583,10 +679,10 @@ describe("matrix group chat history — scenario 2: race condition safety", () =
     );
 
     expect(finalizeInboundContext).toHaveBeenCalledTimes(2);
-    const firstHistory = (finalizeInboundContext.mock.calls[0]?.[0] as Record<string, unknown>)[
+    const firstHistory = finalizeInboundContextCall(finalizeInboundContext, 0)[
       "InboundHistory"
     ] as Array<{ body: string }>;
-    const retryHistory = (finalizeInboundContext.mock.calls[1]?.[0] as Record<string, unknown>)[
+    const retryHistory = finalizeInboundContextCall(finalizeInboundContext, 1)[
       "InboundHistory"
     ] as Array<{ body: string }>;
 
@@ -606,16 +702,8 @@ describe("matrix group chat history — scenario 2: race condition safety", () =
     });
 
     const finalizeInboundContext = vi.fn((ctx: unknown) => ctx);
-    const { handler } = createMatrixHandlerTestHarness({
-      historyLimit: 20,
-      groupPolicy: "open",
-      isDirectMessage: false,
+    const { handler } = createGroupHistoryHandler(finalizeInboundContext, {
       getMemberDisplayName,
-      finalizeInboundContext,
-      dispatchReplyFromConfig: async () => ({
-        queuedFinal: true,
-        counts: { final: 1, block: 0, tool: 0 },
-      }),
     });
 
     // Unmentioned message should be buffered without waiting for async sender-name lookup.
@@ -636,10 +724,9 @@ describe("matrix group chat history — scenario 2: race condition safety", () =
     resolveFirstName?.();
     await triggerDone;
 
-    const ctx = finalizeInboundContext.mock.calls[0]?.[0] as Record<string, unknown>;
-    const history = ctx["InboundHistory"] as Array<{ body: string }> | undefined;
-    expect(history?.map((entry) => entry.body)).toEqual(
-      expect.arrayContaining([expect.stringContaining("plain before trigger")]),
+    expectSomeBodyContaining(
+      inboundHistoryBodies(finalizeInboundContext, 0),
+      "plain before trigger",
     );
   });
 
@@ -648,10 +735,7 @@ describe("matrix group chat history — scenario 2: race condition safety", () =
     let getUserIdCalls = 0;
 
     const finalizeInboundContext = vi.fn((ctx: unknown) => ctx);
-    const { handler } = createMatrixHandlerTestHarness({
-      historyLimit: 20,
-      groupPolicy: "open",
-      isDirectMessage: false,
+    const { handler } = createGroupHistoryHandler(finalizeInboundContext, {
       client: {
         async getUserId() {
           getUserIdCalls += 1;
@@ -664,11 +748,6 @@ describe("matrix group chat history — scenario 2: race condition safety", () =
         },
         getEvent: async () => ({ sender: "@bot:example.org" }),
       },
-      finalizeInboundContext,
-      dispatchReplyFromConfig: async () => ({
-        queuedFinal: true,
-        counts: { final: 1, block: 0, tool: 0 },
-      }),
     });
 
     const plainPromise = handler(
@@ -686,7 +765,7 @@ describe("matrix group chat history — scenario 2: race condition safety", () =
     releaseFirstGetUserId?.();
     await Promise.all([plainPromise, triggerPromise]);
 
-    const ctx = finalizeInboundContext.mock.calls[0]?.[0] as Record<string, unknown>;
+    const ctx = finalizeInboundContextCall(finalizeInboundContext, 0);
     const history = ctx["InboundHistory"] as Array<{ body: string }>;
     expect(history.map((entry) => entry.body)).toEqual(["msg A"]);
   });

@@ -1,47 +1,62 @@
+// Telegram plugin module implements network errors behavior.
 import {
   collectErrorGraphCandidates,
   extractErrorCode,
   formatErrorMessage,
+  PlatformMessageNotDispatchedError,
   readErrorName,
 } from "openclaw/plugin-sdk/error-runtime";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
+import { parseStrictNonNegativeInteger } from "openclaw/plugin-sdk/number-runtime";
+import { classifyTransientNetworkErrorCode } from "openclaw/plugin-sdk/retry-runtime";
+import {
+  isRecord,
+  normalizeLowercaseStringOrEmpty,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 
 const TELEGRAM_NETWORK_ORIGIN = Symbol("openclaw.telegram.network-origin");
+const TELEGRAM_SUPERGROUP_MIGRATION_DESCRIPTION =
+  "Bad Request: group chat was upgraded to a supergroup chat";
 
-const RECOVERABLE_ERROR_CODES = new Set([
-  "ECONNRESET",
-  "ECONNREFUSED",
-  "EPIPE",
-  "ETIMEDOUT",
+export class TelegramRequestNotStartedError extends Error {
+  constructor(message = "Telegram request did not start") {
+    super(message);
+    this.name = "TelegramRequestNotStartedError";
+  }
+}
+
+function isTelegramRequestNotStartedError(err: unknown): boolean {
+  return (
+    err instanceof TelegramRequestNotStartedError ||
+    (readErrorName(err) === "HttpError" &&
+      (err as { error?: unknown }).error instanceof TelegramRequestNotStartedError)
+  );
+}
+
+export function rethrowTelegramSendError(err: unknown): never {
+  if (isTelegramRequestNotStartedError(err)) {
+    throw new PlatformMessageNotDispatchedError("Telegram request not started", { cause: err });
+  }
+  const migrationRejection = describeTelegramSupergroupMigration(err);
+  if (migrationRejection === undefined) {
+    throw err;
+  }
+  throw new PlatformMessageNotDispatchedError(migrationRejection, { cause: err, retryable: false });
+}
+
+const TELEGRAM_ADDITIONAL_TRANSIENT_ERROR_CODES = new Set([
+  "ENETDOWN",
   "ESOCKETTIMEDOUT",
-  "ENETUNREACH",
   "EHOSTUNREACH",
-  "ENOTFOUND",
-  "EAI_AGAIN",
-  "UND_ERR_CONNECT_TIMEOUT",
-  "UND_ERR_HEADERS_TIMEOUT",
-  "UND_ERR_BODY_TIMEOUT",
-  "UND_ERR_SOCKET",
   "UND_ERR_ABORTED",
   "ECONNABORTED",
   "ERR_NETWORK",
 ]);
 
-/**
- * Error codes that are safe to retry for non-idempotent send operations (e.g. sendMessage).
- *
- * These represent failures that occur *before* the request reaches Telegram's servers,
- * meaning the message was definitely not delivered and it is safe to retry.
- *
- * Contrast with RECOVERABLE_ERROR_CODES which includes codes like ECONNRESET and ETIMEDOUT
- * that can fire *after* Telegram has already received and delivered a message — retrying
- * those would cause duplicate messages.
- */
-const PRE_CONNECT_ERROR_CODES = new Set([
-  "ECONNREFUSED", // Server actively refused the connection (never reached Telegram)
-  "ENOTFOUND", // DNS resolution failed (never sent)
-  "EAI_AGAIN", // Transient DNS failure (never sent)
-  "ENETUNREACH", // No route to host (never sent)
+// These exact local codes fail before request publication and are safe for
+// non-idempotent sends. Resets and timeouts can occur after delivery, so
+// retrying them could duplicate a visible message.
+const TELEGRAM_ADDITIONAL_PRE_CONNECT_ERROR_CODES = new Set([
+  "ENETDOWN", // Local network interface is down before connect completes (never sent)
   "EHOSTUNREACH", // Host unreachable (never sent)
 ]);
 
@@ -103,8 +118,84 @@ function getErrorCode(err: unknown): string | undefined {
   return undefined;
 }
 
-export type TelegramNetworkErrorContext = "polling" | "send" | "webhook" | "unknown";
-export type TelegramNetworkErrorOrigin = {
+function classifyTelegramTransientNetworkError(err: unknown) {
+  const code = normalizeCode(getErrorCode(err));
+  return (
+    classifyTransientNetworkErrorCode(code) ??
+    (TELEGRAM_ADDITIONAL_PRE_CONNECT_ERROR_CODES.has(code)
+      ? "pre-connect"
+      : TELEGRAM_ADDITIONAL_TRANSIENT_ERROR_CODES.has(code)
+        ? "ambiguous"
+        : undefined)
+  );
+}
+
+function getNumericHttpStatus(err: unknown): number | undefined {
+  if (!err || typeof err !== "object") {
+    return undefined;
+  }
+  const candidate = err as { error_code?: unknown; status?: unknown; statusCode?: unknown };
+  for (const value of [candidate.error_code, candidate.status, candidate.statusCode]) {
+    if (typeof value === "number" && Number.isFinite(value)) {
+      return value;
+    }
+    if (typeof value === "string") {
+      const trimmed = value.trim();
+      if (/^\d+$/.test(trimmed)) {
+        return parseStrictNonNegativeInteger(trimmed);
+      }
+    }
+  }
+  return undefined;
+}
+
+// Once a basic group is upgraded, its old id answers every send with this exact Bot API
+// 400 (https://core.telegram.org/bots/api#making-requests). Matching the description
+// literally keeps every other 400 retryable; `migrate_to_chat_id` is bounded at 52
+// significant bits, so a non-safe integer is not the documented id and stays unreported.
+function describeTelegramSupergroupMigration(err: unknown): string | undefined {
+  for (const candidate of collectTelegramErrorCandidates(err)) {
+    if (!isRecord(candidate) || candidate.error_code !== 400) {
+      continue;
+    }
+    if (candidate.description !== TELEGRAM_SUPERGROUP_MIGRATION_DESCRIPTION) {
+      continue;
+    }
+    const migratedChatId = isRecord(candidate.parameters)
+      ? candidate.parameters.migrate_to_chat_id
+      : undefined;
+    return typeof migratedChatId === "number" && Number.isSafeInteger(migratedChatId)
+      ? `Telegram rejected send: group migrated to supergroup ${migratedChatId}`
+      : "Telegram rejected send: group migrated to a supergroup";
+  }
+  return undefined;
+}
+
+export function isTelegramMisdirectedRequestError(err: unknown): boolean {
+  for (const candidate of collectTelegramErrorCandidates(err)) {
+    const code = normalizeCode(getErrorCode(candidate));
+    if (code === "421" || getNumericHttpStatus(candidate) === 421) {
+      return true;
+    }
+
+    const message = normalizeLowercaseStringOrEmpty(formatErrorMessage(candidate));
+    if (/\b421\b/.test(message) && message.includes("misdirected request")) {
+      return true;
+    }
+  }
+  return false;
+}
+
+type TelegramNetworkErrorContext =
+  | "polling"
+  | "send"
+  | "webhook"
+  | "delete"
+  | "react"
+  | "edit"
+  | "action"
+  | "unknown";
+type TelegramNetworkErrorOrigin = {
   method?: string | null;
   url?: string | null;
 };
@@ -130,7 +221,7 @@ export function tagTelegramNetworkError(err: unknown, origin: TelegramNetworkErr
   });
 }
 
-export function getTelegramNetworkErrorOrigin(err: unknown): TelegramNetworkErrorOrigin | null {
+function getTelegramNetworkErrorOrigin(err: unknown): TelegramNetworkErrorOrigin | null {
   for (const candidate of collectTelegramErrorCandidates(err)) {
     if (!candidate || typeof candidate !== "object") {
       continue;
@@ -150,25 +241,27 @@ export function isTelegramPollingNetworkError(err: unknown): boolean {
   return getTelegramNetworkErrorOrigin(err)?.method === "getupdates";
 }
 
-/**
- * Returns true if the error is safe to retry for a non-idempotent Telegram send operation
- * (e.g. sendMessage). Only matches errors that are guaranteed to have occurred *before*
- * the request reached Telegram's servers, preventing duplicate message delivery.
- *
- * Use this instead of isRecoverableTelegramNetworkError for sendMessage/sendPhoto/etc.
- * calls where a retry would create a duplicate visible message.
- */
+/** True only for channel-owned no-send proof or proven pre-connect failures. */
 export function isSafeToRetrySendError(err: unknown): boolean {
   if (!err) {
     return false;
   }
+  if (err instanceof PlatformMessageNotDispatchedError) {
+    return err.retryable;
+  }
+  if (isTelegramRequestNotStartedError(err)) {
+    return true;
+  }
   for (const candidate of collectTelegramErrorCandidates(err)) {
-    const code = normalizeCode(getErrorCode(candidate));
-    if (code && PRE_CONNECT_ERROR_CODES.has(code)) {
+    if (classifyTelegramTransientNetworkError(candidate) === "pre-connect") {
       return true;
     }
   }
   return false;
+}
+
+export function shouldRetryTelegramSendError(err: unknown): boolean {
+  return isSafeToRetrySendError(err) || isTelegramRateLimitError(err);
 }
 
 function hasTelegramErrorCode(err: unknown, matches: (code: number) => boolean): boolean {
@@ -184,7 +277,12 @@ function hasTelegramErrorCode(err: unknown, matches: (code: number) => boolean):
   return false;
 }
 
-function hasTelegramRetryAfter(err: unknown): boolean {
+export function isTelegramAuthenticationError(err: unknown): boolean {
+  return hasTelegramErrorCode(err, (code) => code === 401 || code === 404);
+}
+
+/** Reads Telegram's flood-control retry_after hint (in ms) from any error nesting shape. */
+export function readTelegramRetryAfterMs(err: unknown): number | undefined {
   for (const candidate of collectTelegramErrorCandidates(err)) {
     if (!candidate || typeof candidate !== "object") {
       continue;
@@ -209,10 +307,10 @@ function hasTelegramRetryAfter(err: unknown): boolean {
                 ?.retry_after
             : undefined;
     if (typeof retryAfter === "number" && Number.isFinite(retryAfter)) {
-      return true;
+      return retryAfter * 1000;
     }
   }
-  return false;
+  return undefined;
 }
 
 /** Returns true for HTTP 5xx server errors (error may have been processed). */
@@ -223,13 +321,39 @@ export function isTelegramServerError(err: unknown): boolean {
 export function isTelegramRateLimitError(err: unknown): boolean {
   return (
     hasTelegramErrorCode(err, (code) => code === 429) ||
-    (hasTelegramRetryAfter(err) && /(?:^|\b)429\b|too many requests/i.test(formatErrorMessage(err)))
+    (readTelegramRetryAfterMs(err) !== undefined &&
+      /(?:^|\b)429\b|too many requests/i.test(formatErrorMessage(err)))
   );
+}
+
+const MESSAGE_NOT_MODIFIED_RE =
+  /400:\s*Bad Request:\s*message is not modified|MESSAGE_NOT_MODIFIED/i;
+const MESSAGE_HAS_NO_TEXT_RE = /400:\s*Bad Request:\s*there is no text in the message to edit/i;
+const EDIT_TARGET_MISSING_RE =
+  /400:\s*Bad Request:\s*message to edit not found|400:\s*Bad Request:\s*message can't be edited|MESSAGE_ID_INVALID/i;
+
+/** True when Telegram rejected an edit because the content is unchanged; the message already shows the requested text. */
+export function isTelegramMessageNotModifiedError(err: unknown): boolean {
+  return MESSAGE_NOT_MODIFIED_RE.test(formatErrorMessage(err));
+}
+
+/** True when the edit target has no text body (e.g. media message needing a caption edit). */
+export function isTelegramMessageHasNoTextError(err: unknown): boolean {
+  return MESSAGE_HAS_NO_TEXT_RE.test(formatErrorMessage(err));
+}
+
+/** True when the edit target is gone or locked (deleted message, invalid id); retrying the same edit cannot succeed. */
+export function isTelegramEditTargetMissingError(err: unknown): boolean {
+  return EDIT_TARGET_MISSING_RE.test(formatErrorMessage(err));
 }
 
 /** Returns true for HTTP 4xx client errors (Telegram explicitly rejected, not applied). */
 export function isTelegramClientRejection(err: unknown): boolean {
   return hasTelegramErrorCode(err, (code) => code >= 400 && code < 500);
+}
+
+export function isTelegramBadRequestError(err: unknown): boolean {
+  return hasTelegramErrorCode(err, (code) => code === 400);
 }
 
 export function isRecoverableTelegramNetworkError(
@@ -239,14 +363,16 @@ export function isRecoverableTelegramNetworkError(
   if (!err) {
     return false;
   }
+  if (isTelegramRequestNotStartedError(err)) {
+    return true;
+  }
   const allowMessageMatch =
     typeof options.allowMessageMatch === "boolean"
       ? options.allowMessageMatch
       : options.context !== "send";
 
   for (const candidate of collectTelegramErrorCandidates(err)) {
-    const code = normalizeCode(getErrorCode(candidate));
-    if (code && RECOVERABLE_ERROR_CODES.has(code)) {
+    if (classifyTelegramTransientNetworkError(candidate)) {
       return true;
     }
 
@@ -270,4 +396,15 @@ export function isRecoverableTelegramNetworkError(
   }
 
   return false;
+}
+
+export function isRetryableTelegramApiError(
+  err: unknown,
+  options: { context?: TelegramNetworkErrorContext; allowMessageMatch?: boolean } = {},
+): boolean {
+  return (
+    isRecoverableTelegramNetworkError(err, options) ||
+    isTelegramServerError(err) ||
+    isTelegramRateLimitError(err)
+  );
 }

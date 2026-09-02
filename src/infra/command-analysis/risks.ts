@@ -1,3 +1,7 @@
+import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
+// Command risk detection follows nested carriers, shell wrappers, and inline
+// interpreter eval paths used by approval policy and command explanations.
+import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { splitShellArgs } from "../../utils/shell-argv.js";
 import {
   COMMAND_CARRIER_EXECUTABLES,
@@ -9,21 +13,26 @@ import {
 import { unwrapKnownDispatchWrapperInvocation } from "../dispatch-wrapper-resolution.js";
 import type { ExecCommandSegment } from "../exec-approvals-analysis.js";
 import { normalizeExecutableToken } from "../exec-wrapper-resolution.js";
+import { POSIX_INLINE_COMMAND_FLAGS, resolveInlineCommandMatch } from "../shell-inline-command.js";
 import {
   extractShellWrapperInlineCommand,
   isShellWrapperExecutable,
+  POSIX_PARSEABLE_SHELL_WRAPPERS,
 } from "../shell-wrapper-resolution.js";
 import { detectInterpreterInlineEvalArgv, type InterpreterInlineEvalHit } from "./inline-eval.js";
 
-export { COMMAND_CARRIER_EXECUTABLES, resolveCarrierCommandArgv, SOURCE_EXECUTABLES };
+/** Shared command carrier constants used by approval policy and command explanation. */
+export { SOURCE_EXECUTABLES };
 
-export type CommandCarrierHit = {
+/** Command and flag pair that can carry nested command text. */
+type CommandCarrierHit = {
   command: string;
   flag?: string;
 };
 
-export type CarriedShellBuiltinHit = { kind: "eval" } | { kind: "source"; command: string };
+type CarriedShellBuiltinHit = { kind: "eval" } | { kind: "source"; command: string };
 
+// Recurse through env, carriers, and shell wrappers while guarding argv cycles.
 function commandArgvKey(argv: readonly string[]): string {
   return argv.join("\0");
 }
@@ -35,13 +44,14 @@ function isCommandCarrierExecutable(executable: string, options?: { includeExec?
   );
 }
 
-export function buildCommandPayloadCandidates(
+/** Builds candidate command argv arrays from nested carriers and shell wrappers. */
+export function buildCommandPayloadArgvCandidates(
   argv: string[],
   seenArgv = new Set<string>(),
-): string[] {
+): string[][] {
   const key = commandArgvKey(argv);
   if (seenArgv.has(key)) {
-    return argv.length > 0 ? [argv.join(" ")] : [];
+    return argv.length > 0 ? [argv] : [];
   }
   seenArgv.add(key);
   const assignmentStrippedArgv = stripLeadingEnvAssignments(argv);
@@ -49,21 +59,33 @@ export function buildCommandPayloadCandidates(
     includeExec: true,
   });
   const executableArgv = carriedArgv ?? assignmentStrippedArgv;
-  const carriedCandidates = carriedArgv ? buildCommandPayloadCandidates(carriedArgv, seenArgv) : [];
+  const carriedCandidates = carriedArgv
+    ? buildCommandPayloadArgvCandidates(carriedArgv, seenArgv)
+    : [];
   const shellWrapperPayload = extractShellWrapperInlineCommand(executableArgv);
   const shellWrapperCandidates = shellWrapperPayload
     ? (() => {
         const innerArgv = splitShellArgs(shellWrapperPayload);
         return innerArgv
-          ? buildCommandPayloadCandidates(innerArgv, seenArgv)
-          : [shellWrapperPayload];
+          ? buildCommandPayloadArgvCandidates(innerArgv, seenArgv)
+          : [[shellWrapperPayload]];
       })()
     : [];
-  return uniqueCommandPayloadCandidates([
-    ...(executableArgv.length > 0 ? [executableArgv.join(" ")] : []),
+  return uniqueCommandPayloadArgvCandidates([
+    ...(executableArgv.length > 0 ? [executableArgv] : []),
     ...carriedCandidates,
     ...shellWrapperCandidates,
   ]);
+}
+
+/** Builds candidate command payload strings from nested carriers and shell wrappers. */
+export function buildCommandPayloadCandidates(
+  argv: string[],
+  seenArgv = new Set<string>(),
+): string[] {
+  return uniqueStrings(
+    buildCommandPayloadArgvCandidates(argv, seenArgv).map((candidate) => candidate.join(" ")),
+  );
 }
 
 function stripLeadingEnvAssignments(argv: string[]): string[] {
@@ -74,8 +96,146 @@ function stripLeadingEnvAssignments(argv: string[]): string[] {
   return index > 0 ? argv.slice(index) : argv;
 }
 
-function uniqueCommandPayloadCandidates(candidates: string[]): string[] {
-  return [...new Set(candidates.filter((candidate) => candidate.trim().length > 0))];
+function uniqueCommandPayloadArgvCandidates(candidates: string[][]): string[][] {
+  const seen = new Set<string>();
+  return candidates.filter((candidate) => {
+    if (candidate.length === 0) {
+      return false;
+    }
+    const key = commandArgvKey(candidate);
+    if (seen.has(key)) {
+      return false;
+    }
+    seen.add(key);
+    return true;
+  });
+}
+
+type ShellPositionalCarrierPlan = { kind: "all" } | { kind: "indexes"; indexes: number[] };
+
+function normalizeShellPositionalToken(
+  token: string,
+): { kind: "all" | "star" | "zero" } | { kind: "index"; index: number } | null {
+  const unquoted =
+    token.length >= 2 && token.startsWith('"') && token.endsWith('"') ? token.slice(1, -1) : token;
+  const match = unquoted.match(/^\$(?:([0-9@*])|\{([0-9@*])\})$/u);
+  const value = match?.[1] ?? match?.[2];
+  if (value === undefined) {
+    return null;
+  }
+  if (value === "@") {
+    return { kind: "all" };
+  }
+  if (value === "*") {
+    return { kind: "star" };
+  }
+  if (value === "0") {
+    return { kind: "zero" };
+  }
+  const index = parseStrictPositiveInteger(value);
+  return index === undefined ? null : { kind: "index", index };
+}
+
+function resolveShellPositionalCarrierPlan(command: string): ShellPositionalCarrierPlan | null {
+  const trimmed = command.trim();
+  if (trimmed.length === 0) {
+    return null;
+  }
+
+  const shellWhitespace = String.raw`[^\S\r\n]+`;
+  const positionalZero = String.raw`(?:\$(?:0|\{0\})|"\$(?:0|\{0\})")`;
+  const positionalArg = String.raw`(?:\$(?:[@*]|[1-9]|\{[@*1-9]\})|"\$(?:[@*]|[1-9]|\{[@*1-9]\})")`;
+  if (
+    !new RegExp(
+      `^(?:exec${shellWhitespace}(?:--${shellWhitespace})?)?${positionalZero}(?:${shellWhitespace}${positionalArg})*$`,
+      "u",
+    ).test(trimmed)
+  ) {
+    return null;
+  }
+
+  const tokens = trimmed.match(/"[^"]*"|\S+/gu) ?? [];
+  let index = 0;
+  if (tokens[index] === "exec") {
+    index += 1;
+    if (tokens[index] === "--") {
+      index += 1;
+    }
+  }
+  const zero = normalizeShellPositionalToken(tokens[index] ?? "");
+  if (zero?.kind !== "zero") {
+    return null;
+  }
+  index += 1;
+
+  const indexes = [0];
+  for (; index < tokens.length; index += 1) {
+    const positional = normalizeShellPositionalToken(tokens[index] ?? "");
+    if (positional === null || positional.kind === "zero" || positional.kind === "star") {
+      return null;
+    }
+    if (positional.kind === "all") {
+      return { kind: "all" };
+    }
+    if (positional.kind === "index") {
+      indexes.push(positional.index);
+    }
+  }
+  return { kind: "indexes", indexes };
+}
+
+function resolveShellPositionalCarrierArgv(params: {
+  executableArgv: string[];
+  valueTokenIndex: number;
+  plan: ShellPositionalCarrierPlan;
+}): string[] {
+  const positionalArgv = params.executableArgv.slice(params.valueTokenIndex + 1);
+  const carriedArgv =
+    params.plan.kind === "all"
+      ? positionalArgv
+      : params.plan.indexes.map((index) => positionalArgv[index] ?? "");
+  return carriedArgv.map((token) => token.trim()).filter((token) => token.length > 0);
+}
+
+function detectShellPositionalCarrierInlineEvalArgvInternal(
+  argv: string[],
+  seenArgv: Set<string>,
+): InterpreterInlineEvalHit | null {
+  const executableArgv = stripLeadingEnvAssignments(argv);
+  const executable = normalizeExecutableToken(executableArgv[0] ?? "");
+  if (!isShellWrapperExecutable(executable)) {
+    return null;
+  }
+  if (!POSIX_PARSEABLE_SHELL_WRAPPERS.has(executable)) {
+    return null;
+  }
+  const key = commandArgvKey(executableArgv);
+  if (seenArgv.has(key)) {
+    return null;
+  }
+  seenArgv.add(key);
+
+  const inlineMatch = resolveInlineCommandMatch(executableArgv, POSIX_INLINE_COMMAND_FLAGS, {
+    allowCombinedC: true,
+  });
+  if (inlineMatch.valueTokenIndex === null || !inlineMatch.command) {
+    return null;
+  }
+  const carrierPlan = resolveShellPositionalCarrierPlan(inlineMatch.command);
+  if (!carrierPlan) {
+    return null;
+  }
+
+  const carriedArgv = resolveShellPositionalCarrierArgv({
+    executableArgv,
+    valueTokenIndex: inlineMatch.valueTokenIndex,
+    plan: carrierPlan,
+  });
+  if (carriedArgv.length === 0) {
+    return null;
+  }
+
+  return detectInlineEvalArgvInternal(carriedArgv, seenArgv);
 }
 
 function detectCarrierInlineEvalArgvInternal(
@@ -102,10 +262,7 @@ function detectCarrierInlineEvalArgvInternal(
   if (!carriedArgv) {
     return null;
   }
-  return (
-    detectInterpreterInlineEvalArgv(carriedArgv) ??
-    detectCarrierInlineEvalArgvInternal(carriedArgv, seenArgv)
-  );
+  return detectInlineEvalArgvInternal(carriedArgv, seenArgv);
 }
 
 export function detectCarrierInlineEvalArgv(argv: string[]): InterpreterInlineEvalHit | null {
@@ -119,8 +276,12 @@ function detectInlineEvalArgvInternal(
   if (!Array.isArray(argv)) {
     return null;
   }
+  // Try direct interpreters first, then shell positional trampoline patterns,
+  // then transparent carriers such as sudo/env/exec.
   return (
-    detectInterpreterInlineEvalArgv(argv) ?? detectCarrierInlineEvalArgvInternal(argv, seenArgv)
+    detectInterpreterInlineEvalArgv(argv) ??
+    detectShellPositionalCarrierInlineEvalArgvInternal(argv, seenArgv) ??
+    detectCarrierInlineEvalArgvInternal(argv, seenArgv)
   );
 }
 
@@ -159,6 +320,10 @@ export function detectCommandCarrierArgv(argv: string[]): CommandCarrierHit[] {
   if (normalizedExecutable === "xargs") {
     hits.push({ command: normalizedExecutable });
   }
+  const dispatchWrapper = unwrapKnownDispatchWrapperInvocation(argv);
+  if (dispatchWrapper.kind === "blocked") {
+    hits.push({ command: normalizedExecutable });
+  }
   const splitStringFlag = detectEnvSplitStringFlag(argv);
   if (splitStringFlag) {
     hits.push({ command: normalizedExecutable, flag: splitStringFlag });
@@ -166,7 +331,7 @@ export function detectCommandCarrierArgv(argv: string[]): CommandCarrierHit[] {
   return hits;
 }
 
-export function detectEnvSplitStringFlag(argv: string[]): string | null {
+function detectEnvSplitStringFlag(argv: string[]): string | null {
   if (normalizeExecutableToken(argv[0] ?? "") !== "env") {
     return null;
   }

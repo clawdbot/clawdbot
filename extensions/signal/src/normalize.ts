@@ -1,4 +1,16 @@
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
+// Signal helper module supports normalize behavior.
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeStringEntries,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
+
+export function normalizeSignalReactionRecipient(raw: string): string {
+  const withoutSignal = raw
+    .trim()
+    .replace(/^signal:/i, "")
+    .trim();
+  return /^uuid:/i.test(withoutSignal) ? withoutSignal.slice("uuid:".length).trim() : withoutSignal;
+}
 
 export function normalizeSignalMessagingTarget(raw: string): string | undefined {
   const trimmed = raw.trim();
@@ -36,7 +48,7 @@ const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{
 const UUID_COMPACT_PATTERN = /^[0-9a-f]{32}$/i;
 
 export function looksLikeSignalTargetId(raw: string, normalized?: string): boolean {
-  const candidates = [raw, normalized ?? ""].map((value) => value.trim()).filter(Boolean);
+  const candidates = normalizeStringEntries([raw, normalized ?? ""]);
 
   for (const candidate of candidates) {
     if (/^(signal:)?(group:|username:|u:)/i.test(candidate)) {

@@ -1,3 +1,5 @@
+// Public voice-call API barrel exposed to plugin-local modules and tests.
+
 export {
   definePluginEntry,
   fetchWithSsrFGuard,
@@ -7,6 +9,7 @@ export {
   type OpenClawPluginApi,
   readRequestBodyWithLimit,
   requestBodyErrorToText,
+  sendHttpRequestRejection,
   type SessionEntry,
   sleep,
   TtsAutoSchema,

@@ -1,9 +1,7 @@
+/** Resolves /model directive selections and auth profile overrides. */
 import { ensureAuthProfileStore } from "../../agents/auth-profiles.js";
-import {
-  type ModelAliasIndex,
-  modelKey,
-  resolveModelRefFromString,
-} from "../../agents/model-selection.js";
+import type { ModelAliasIndex } from "../../agents/model-selection.js";
+import type { ModelVisibilityPolicy } from "../../agents/model-visibility-policy.js";
 import { resolveProviderIdForAuth } from "../../agents/provider-auth-aliases.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveProfileOverride } from "./directive-handling.auth-profile.js";
@@ -43,6 +41,7 @@ function resolveStoredNumericProfileModelDirective(params: { raw: string; agentD
   return { modelRaw, profileId, profileProvider: profile.provider };
 }
 
+/** Resolves the requested model/profile override from parsed inline directives. */
 export function resolveModelSelectionFromDirective(params: {
   directives: InlineDirectives;
   cfg: OpenClawConfig;
@@ -51,8 +50,10 @@ export function resolveModelSelectionFromDirective(params: {
   defaultModel: string;
   aliasIndex: ModelAliasIndex;
   allowedModelKeys: Set<string>;
+  modelPolicy?: ModelVisibilityPolicy;
   allowedModelCatalog: Array<{ provider: string; id?: string; name?: string }>;
   provider: string;
+  agentId?: string;
 }): {
   modelSelection?: ModelDirectiveSelection;
   profileOverride?: string;
@@ -89,6 +90,9 @@ export function resolveModelSelectionFromDirective(params: {
         defaultModel: params.defaultModel,
         aliasIndex: params.aliasIndex,
         allowedModelKeys: params.allowedModelKeys,
+        modelPolicy: params.modelPolicy,
+        cfg: params.cfg,
+        agentId: params.agentId,
         rawRuntime: params.directives.rawModelRuntime,
       })
     : null;
@@ -102,7 +106,6 @@ export function resolveModelSelectionFromDirective(params: {
       });
   const modelRaw =
     useStoredNumericProfile && storedNumericProfile ? storedNumericProfile.modelRaw : raw;
-  let modelSelection: ModelDirectiveSelection | undefined;
 
   if (/^[0-9]+$/.test(raw)) {
     return {
@@ -115,43 +118,21 @@ export function resolveModelSelectionFromDirective(params: {
     };
   }
 
-  const explicit = resolveModelRefFromString({
+  const resolved = resolveModelDirectiveSelection({
     raw: modelRaw,
     defaultProvider: params.defaultProvider,
+    defaultModel: params.defaultModel,
     aliasIndex: params.aliasIndex,
+    allowedModelKeys: params.allowedModelKeys,
+    modelPolicy: params.modelPolicy,
+    cfg: params.cfg,
+    agentId: params.agentId,
+    rawRuntime: params.directives.rawModelRuntime,
   });
-  if (explicit) {
-    const explicitKey = modelKey(explicit.ref.provider, explicit.ref.model);
-    if (params.allowedModelKeys.size === 0 || params.allowedModelKeys.has(explicitKey)) {
-      modelSelection = {
-        provider: explicit.ref.provider,
-        model: explicit.ref.model,
-        isDefault:
-          explicit.ref.provider === params.defaultProvider &&
-          explicit.ref.model === params.defaultModel,
-        ...(explicit.alias ? { alias: explicit.alias } : {}),
-      };
-    }
+  if (resolved.error) {
+    return { errorText: resolved.error };
   }
-
-  if (!modelSelection) {
-    const resolved = resolveModelDirectiveSelection({
-      raw: modelRaw,
-      defaultProvider: params.defaultProvider,
-      defaultModel: params.defaultModel,
-      aliasIndex: params.aliasIndex,
-      allowedModelKeys: params.allowedModelKeys,
-      rawRuntime: params.directives.rawModelRuntime,
-    });
-
-    if (resolved.error) {
-      return { errorText: resolved.error };
-    }
-
-    if (resolved.selection) {
-      modelSelection = resolved.selection;
-    }
-  }
+  const modelSelection = resolved.selection;
 
   let profileOverride: string | undefined;
   const rawProfile =

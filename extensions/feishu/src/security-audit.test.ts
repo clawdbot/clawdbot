@@ -1,3 +1,4 @@
+// Feishu tests cover security audit plugin behavior.
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../runtime-api.js";
 import { collectFeishuSecurityAuditFindings } from "./security-audit.js";

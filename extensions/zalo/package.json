@@ -1,7 +1,7 @@
 {
   "name": "@openclaw/zalo",
-  "version": "2026.5.6",
-  "description": "OpenClaw Zalo channel plugin",
+  "version": "2026.8.1",
+  "description": "OpenClaw Zalo channel plugin for bot and webhook chats.",
   "repository": {
     "type": "git",
     "url": "https://github.com/openclaw/openclaw"
@@ -12,7 +12,7 @@
     "openclaw": "workspace:*"
   },
   "peerDependencies": {
-    "openclaw": ">=2026.5.6"
+    "openclaw": ">=2026.8.1"
   },
   "peerDependenciesMeta": {
     "openclaw": {
@@ -24,8 +24,18 @@
       "./index.ts"
     ],
     "setupEntry": "./setup-entry.ts",
+    "setupFeatures": {
+      "configPromotion": true
+    },
     "channel": {
       "id": "zalo",
+      "configuredState": {
+        "env": {
+          "anyOf": [
+            "ZALO_BOT_TOKEN"
+          ]
+        }
+      },
       "label": "Zalo",
       "selectionLabel": "Zalo (Bot API)",
       "docsPath": "/channels/zalo",
@@ -35,7 +45,38 @@
         "zl"
       ],
       "order": 80,
-      "quickstartAllowFrom": true
+      "quickstartAllowFrom": true,
+      "setup": {
+        "fields": [
+          {
+            "key": "token",
+            "kind": "string",
+            "sensitive": true,
+            "cli": {
+              "flags": "--token <token>",
+              "description": "Zalo bot token"
+            }
+          },
+          {
+            "key": "tokenFile",
+            "kind": "string",
+            "sensitive": true,
+            "cli": {
+              "flags": "--token-file <path>",
+              "description": "Zalo bot token file"
+            }
+          },
+          {
+            "key": "useEnv",
+            "kind": "boolean",
+            "cli": {
+              "flags": "--use-env",
+              "description": "Use ZALO_BOT_TOKEN"
+            },
+            "envVars": ["ZALO_BOT_TOKEN"]
+          }
+        ]
+      }
     },
     "install": {
       "npmSpec": "@openclaw/zalo",
@@ -43,14 +84,17 @@
       "minHostVersion": ">=2026.4.10"
     },
     "compat": {
-      "pluginApi": ">=2026.5.6"
+      "pluginApi": ">=2026.8.1"
     },
     "build": {
-      "openclawVersion": "2026.5.6"
+      "openclawVersion": "2026.8.1"
     },
     "release": {
       "publishToClawHub": true,
       "publishToNpm": true
     }
+  },
+  "dependencies": {
+    "zod": "4.4.3"
   }
 }

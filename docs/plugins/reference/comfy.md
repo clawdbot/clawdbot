@@ -12,11 +12,11 @@ Adds ComfyUI model provider support to OpenClaw.
 ## Distribution
 
 - Package: `@openclaw/comfy-provider`
-- Install route: included in OpenClaw
+- Install route: npm; ClawHub: `clawhub:@openclaw/comfy-provider`
 
 ## Surface
 
-providers: comfy; contracts: imageGenerationProviders, musicGenerationProviders, videoGenerationProviders
+providers: `comfy`; contracts: `imageGenerationProviders`, `musicGenerationProviders`, `videoGenerationProviders`
 
 ## Related docs
 

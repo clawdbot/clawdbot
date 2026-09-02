@@ -1,4 +1,6 @@
-import type { DiscordAccountConfig, OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+// Discord type declarations define plugin contracts.
+import type { PluginRuntime } from "openclaw/plugin-sdk/channel-core";
+import type { DiscordAccountConfig, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type {
   ButtonInteraction,
   ChannelSelectMenuInteraction,
@@ -39,6 +41,7 @@ export type AgentComponentContext = {
   accountId: string;
   discordConfig?: DiscordAccountConfig;
   runtime?: import("openclaw/plugin-sdk/runtime-env").RuntimeEnv;
+  channelRuntime?: PluginRuntime["channel"];
   token?: string;
   guildEntries?: Record<string, DiscordGuildEntryResolved>;
   allowFrom?: string[];

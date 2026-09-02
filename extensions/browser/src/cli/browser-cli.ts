@@ -1,11 +1,14 @@
+/**
+ * Browser CLI root command registration with lazy subcommand loading.
+ */
 import type { Command } from "commander";
 import {
   registerCommandGroups,
-  resolveCliArgvInvocation,
   shouldEagerRegisterSubcommands,
   type CommandGroupEntry,
   type CommandGroupPlaceholder,
 } from "openclaw/plugin-sdk/cli-runtime";
+import { resolveBrowserLazySubcommand } from "../../cli-output-mode.js";
 import { browserActionExamples, browserCoreExamples } from "./browser-cli-examples.js";
 import type { BrowserParentOpts } from "./browser-cli-shared.js";
 import {
@@ -21,6 +24,7 @@ import {
 type BrowserCommandRegistrar = (args: {
   browser: Command;
   parentOpts: (cmd: Command) => BrowserParentOpts;
+  pluginRoot?: string;
 }) => Promise<void> | void;
 
 type BrowserCommandGroupDefinition = {
@@ -48,9 +52,11 @@ const browserCommandGroupDefinitions: readonly BrowserCommandGroupDefinition[] =
       command("tabs", "List open tabs"),
       command("tab", "Tab shortcuts (index-based)"),
       command("open", "Open a URL in a new tab"),
-      command("focus", "Focus a tab by target id, tab id, label, or unique target id prefix"),
-      command("close", "Close a tab (target id optional)"),
+      command("focus", "Focus a tab by tab reference"),
+      command("close", "Close a tab (tab reference optional)"),
       command("profiles", "List all browser profiles"),
+      command("system-profiles", "List Chrome-family profiles available for cookie import"),
+      command("import-profile", "Import cookies from a macOS Chrome-family profile"),
       command("create-profile", "Create a new browser profile"),
       command("delete-profile", "Delete a browser profile"),
       command("doctor", "Check browser plugin readiness", [
@@ -64,7 +70,16 @@ const browserCommandGroupDefinitions: readonly BrowserCommandGroupDefinition[] =
   },
   {
     placeholders: [
-      command("screenshot", "Capture a screenshot (MEDIA:<path>)"),
+      command("cookie-sync", "Sync allowlisted macOS browser cookies to a managed profile"),
+    ],
+    register: async (args) => {
+      const module = await import("./browser-cli-cookie-sync.js");
+      module.registerBrowserCookieSyncCommand(args.browser, args.parentOpts);
+    },
+  },
+  {
+    placeholders: [
+      command("screenshot", "Capture a screenshot (prints the saved path)"),
       command("snapshot", "Capture a snapshot (default: ai; aria is the accessibility tree)"),
     ],
     register: async (args) => {
@@ -91,6 +106,7 @@ const browserCommandGroupDefinitions: readonly BrowserCommandGroupDefinition[] =
       command("fill", "Fill a form with JSON field descriptors"),
       command("wait", "Wait for time, selector, URL, load state, or JS conditions"),
       command("evaluate", "Evaluate a function against the page or a ref"),
+      command("batch", "Run a batch of browser actions in one call"),
     ],
     register: async (args) => {
       const module = await import("./browser-cli-actions-input.js");
@@ -131,11 +147,19 @@ const browserCommandGroupDefinitions: readonly BrowserCommandGroupDefinition[] =
       module.registerBrowserStateCommands(args.browser, args.parentOpts);
     },
   },
+  {
+    placeholders: [command("extension", "Chrome extension install, status, and pairing")],
+    register: async (args) => {
+      const module = await import("./browser-cli-extension.js");
+      module.registerBrowserExtensionCommands(args.browser, args.parentOpts, args.pluginRoot);
+    },
+  },
 ];
 
 function buildBrowserCommandGroups(params: {
   browser: Command;
   parentOpts: (cmd: Command) => BrowserParentOpts;
+  pluginRoot?: string;
 }): CommandGroupEntry[] {
   return browserCommandGroupDefinitions.map((entry) => ({
     placeholders: entry.placeholders,
@@ -147,17 +171,22 @@ function registerLazyBrowserCommands(
   browser: Command,
   parentOpts: (cmd: Command) => BrowserParentOpts,
   argv: string[],
+  pluginRoot?: string,
 ) {
-  const { primary, commandPath } = resolveCliArgvInvocation(argv);
-  const subcommand = primary === "browser" ? (commandPath[1] ?? null) : null;
-  registerCommandGroups(browser, buildBrowserCommandGroups({ browser, parentOpts }), {
+  const subcommand = resolveBrowserLazySubcommand(argv);
+  registerCommandGroups(browser, buildBrowserCommandGroups({ browser, parentOpts, pluginRoot }), {
     eager: shouldEagerRegisterSubcommands(),
     primary: subcommand,
     registerPrimaryOnly: subcommand !== null,
   });
 }
 
-export function registerBrowserCli(program: Command, argv: string[] = process.argv) {
+/** Registers the Browser CLI command and its lazy-loaded subcommand groups. */
+export function registerBrowserCli(
+  program: Command,
+  argv: string[] = process.argv,
+  pluginRoot?: string,
+) {
   const browser = program
     .command("browser")
     .description("Manage OpenClaw's dedicated browser (Chrome/Chromium)")
@@ -184,7 +213,7 @@ export function registerBrowserCli(program: Command, argv: string[] = process.ar
 
   addGatewayClientOptions(browser);
 
-  const parentOpts = (cmd: Command) => cmd.parent?.opts?.() as BrowserParentOpts;
+  const parentOpts = () => browser.opts<BrowserParentOpts>();
 
-  registerLazyBrowserCommands(browser, parentOpts, argv);
+  registerLazyBrowserCommands(browser, parentOpts, argv, pluginRoot);
 }

@@ -1,18 +1,36 @@
+import { totalmem } from "node:os";
+// Diagnostic memory helpers capture process memory facts for support diagnostics.
+import { getHeapStatistics } from "node:v8";
 import {
-  emitDiagnosticEvent,
+  emitInternalDiagnosticEvent as emitDiagnosticEvent,
   type DiagnosticMemoryPressureEvent,
   type DiagnosticMemoryUsage,
 } from "../infra/diagnostic-events.js";
+import { createSubsystemLogger } from "./subsystem.js";
 
+// Diagnostic memory sampler with threshold/growth pressure detection and repeat suppression.
 const MB = 1024 * 1024;
+const GB = 1024 * MB;
 const DEFAULT_RSS_WARNING_BYTES = 1536 * MB;
 const DEFAULT_RSS_CRITICAL_BYTES = 3072 * MB;
 const DEFAULT_HEAP_WARNING_BYTES = 1024 * MB;
 const DEFAULT_HEAP_CRITICAL_BYTES = 2048 * MB;
+const DEFAULT_HEAP_WARNING_RATIO = 0.5;
+const DEFAULT_HEAP_CRITICAL_RATIO = 0.75;
+const BUN_HEAP_WARNING_MAX_BYTES = 4 * GB;
+const BUN_HEAP_CRITICAL_MAX_BYTES = 6 * GB;
 const DEFAULT_RSS_GROWTH_WARNING_BYTES = 512 * MB;
 const DEFAULT_RSS_GROWTH_CRITICAL_BYTES = 1024 * MB;
 const DEFAULT_GROWTH_WINDOW_MS = 10 * 60 * 1000;
 const DEFAULT_PRESSURE_REPEAT_MS = 5 * 60 * 1000;
+const BYTE_UNITS = ["B", "KiB", "MiB", "GiB", "TiB"] as const;
+
+const DEFAULT_HEAP_SIZE_LIMIT_BYTES = getHeapStatistics().heap_size_limit;
+const DEFAULT_PROCESS_MEMORY_LIMIT_BYTES = process.constrainedMemory();
+const DEFAULT_PHYSICAL_MEMORY_BYTES = totalmem();
+const DEFAULT_IS_BUN_RUNTIME = typeof process.versions.bun === "string";
+
+const log = createSubsystemLogger("gateway").child("diagnostics/memory");
 
 type DiagnosticMemoryThresholds = {
   rssWarningBytes?: number;
@@ -35,11 +53,33 @@ type DiagnosticMemoryState = {
   lastPressureAtByKey: Map<string, number>;
 };
 
+function isPositiveMemoryLimit(value: number | undefined): value is number {
+  return typeof value === "number" && Number.isFinite(value) && value > 0;
+}
+
+function resolveProcessMemoryLimitBytes(
+  processMemoryLimitBytes: number | undefined,
+  physicalMemoryBytes: number | undefined,
+  isBunRuntime: boolean,
+): number | undefined {
+  if (!isPositiveMemoryLimit(processMemoryLimitBytes)) {
+    // Node can report no constraint even when an explicit heap exceeds physical RAM.
+    // Keep Bun's existing no-constraint RSS policy independent of its compatibility heap.
+    return !isBunRuntime && isPositiveMemoryLimit(physicalMemoryBytes)
+      ? physicalMemoryBytes
+      : undefined;
+  }
+  return isPositiveMemoryLimit(physicalMemoryBytes)
+    ? Math.min(processMemoryLimitBytes, physicalMemoryBytes)
+    : processMemoryLimitBytes;
+}
+
 const state: DiagnosticMemoryState = {
   lastSample: null,
   lastPressureAtByKey: new Map(),
 };
 
+// Convert Node's runtime shape into the diagnostic event contract.
 function normalizeMemoryUsage(memory: NodeJS.MemoryUsage): DiagnosticMemoryUsage {
   return {
     rssBytes: memory.rss,
@@ -52,12 +92,57 @@ function normalizeMemoryUsage(memory: NodeJS.MemoryUsage): DiagnosticMemoryUsage
 
 function resolveThresholds(
   thresholds?: DiagnosticMemoryThresholds,
+  heapSizeLimitBytes?: number,
+  processMemoryLimitBytes?: number,
+  physicalMemoryBytes?: number,
+  isBunRuntime = false,
 ): Required<DiagnosticMemoryThresholds> {
+  const hasHeapLimit = isPositiveMemoryLimit(heapSizeLimitBytes);
+  // Node pressure follows the measured V8 limit, including explicit larger heaps.
+  // Bun's node:v8 compatibility metadata retains its existing caps.
+  const heapWarningBytes = hasHeapLimit
+    ? Math.min(
+        Math.floor(heapSizeLimitBytes * DEFAULT_HEAP_WARNING_RATIO),
+        isBunRuntime ? BUN_HEAP_WARNING_MAX_BYTES : Infinity,
+      )
+    : DEFAULT_HEAP_WARNING_BYTES;
+  const heapCriticalBytes = hasHeapLimit
+    ? Math.min(
+        Math.floor(heapSizeLimitBytes * DEFAULT_HEAP_CRITICAL_RATIO),
+        isBunRuntime ? BUN_HEAP_CRITICAL_MAX_BYTES : Infinity,
+      )
+    : DEFAULT_HEAP_CRITICAL_BYTES;
+  const usableProcessMemoryLimitBytes = resolveProcessMemoryLimitBytes(
+    processMemoryLimitBytes,
+    physicalMemoryBytes,
+    isBunRuntime,
+  );
+  const hasProcessMemoryLimit = usableProcessMemoryLimitBytes !== undefined;
+  // Bun's node:v8 heap limit is compatibility metadata, not an RSS process budget.
+  const useBunRssCaps = isBunRuntime && hasProcessMemoryLimit;
+  const useHeapForRss = !isBunRuntime && hasHeapLimit;
+  const rssWarningBase = useBunRssCaps
+    ? BUN_HEAP_WARNING_MAX_BYTES
+    : useHeapForRss
+      ? heapWarningBytes
+      : DEFAULT_RSS_WARNING_BYTES;
+  const rssCriticalBase = useBunRssCaps
+    ? BUN_HEAP_CRITICAL_MAX_BYTES
+    : useHeapForRss
+      ? heapCriticalBytes
+      : DEFAULT_RSS_CRITICAL_BYTES;
+  const processWarningBytes = hasProcessMemoryLimit
+    ? Math.floor(usableProcessMemoryLimitBytes * DEFAULT_HEAP_WARNING_RATIO)
+    : rssWarningBase;
+  const processCriticalBytes = hasProcessMemoryLimit
+    ? Math.floor(usableProcessMemoryLimitBytes * DEFAULT_HEAP_CRITICAL_RATIO)
+    : rssCriticalBase;
   return {
-    rssWarningBytes: thresholds?.rssWarningBytes ?? DEFAULT_RSS_WARNING_BYTES,
-    rssCriticalBytes: thresholds?.rssCriticalBytes ?? DEFAULT_RSS_CRITICAL_BYTES,
-    heapUsedWarningBytes: thresholds?.heapUsedWarningBytes ?? DEFAULT_HEAP_WARNING_BYTES,
-    heapUsedCriticalBytes: thresholds?.heapUsedCriticalBytes ?? DEFAULT_HEAP_CRITICAL_BYTES,
+    rssWarningBytes: thresholds?.rssWarningBytes ?? Math.min(rssWarningBase, processWarningBytes),
+    rssCriticalBytes:
+      thresholds?.rssCriticalBytes ?? Math.min(rssCriticalBase, processCriticalBytes),
+    heapUsedWarningBytes: thresholds?.heapUsedWarningBytes ?? heapWarningBytes,
+    heapUsedCriticalBytes: thresholds?.heapUsedCriticalBytes ?? heapCriticalBytes,
     rssGrowthWarningBytes: thresholds?.rssGrowthWarningBytes ?? DEFAULT_RSS_GROWTH_WARNING_BYTES,
     rssGrowthCriticalBytes: thresholds?.rssGrowthCriticalBytes ?? DEFAULT_RSS_GROWTH_CRITICAL_BYTES,
     growthWindowMs: thresholds?.growthWindowMs ?? DEFAULT_GROWTH_WINDOW_MS,
@@ -149,6 +234,7 @@ function shouldEmitPressure(
 ): boolean {
   const key = `${pressure.level}:${pressure.reason}`;
   const lastAt = state.lastPressureAtByKey.get(key);
+  // Pressure events can repeat during sustained memory spikes; throttle per level/reason pair.
   if (lastAt !== undefined && now - lastAt < repeatMs) {
     return false;
   }
@@ -156,9 +242,104 @@ function shouldEmitPressure(
   return true;
 }
 
+function formatOptionalPressureMetric(label: string, value: number | undefined): string {
+  return typeof value === "number" && Number.isFinite(value) ? ` ${label}=${value}` : "";
+}
+
+function formatScaledNumber(value: number): string {
+  const fixed = value >= 10 ? value.toFixed(1) : value.toFixed(2);
+  return fixed.replace(/\.0+$/u, "").replace(/(\.\d*[1-9])0$/u, "$1");
+}
+
+function formatReadableBytes(value: number | undefined): string | undefined {
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0) {
+    return undefined;
+  }
+  let scaled = value;
+  let unitIndex = 0;
+  while (scaled >= 1024 && unitIndex < BYTE_UNITS.length - 1) {
+    scaled /= 1024;
+    unitIndex++;
+  }
+  return unitIndex === 0
+    ? `${Math.round(scaled)} ${BYTE_UNITS[unitIndex]}`
+    : `${formatScaledNumber(scaled)} ${BYTE_UNITS[unitIndex]}`;
+}
+
+function formatPressureRatio(params: {
+  pressure: Omit<DiagnosticMemoryPressureEvent, "seq" | "ts" | "type">;
+  thresholdBytes: number;
+}): string | undefined {
+  const { pressure, thresholdBytes } = params;
+  if (!Number.isFinite(thresholdBytes) || thresholdBytes <= 0) {
+    return undefined;
+  }
+  const value =
+    pressure.reason === "heap_threshold"
+      ? pressure.memory.heapUsedBytes
+      : pressure.reason === "rss_growth"
+        ? pressure.rssGrowthBytes
+        : pressure.memory.rssBytes;
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return undefined;
+  }
+  const ratio = (value / thresholdBytes) * 100;
+  return `${formatScaledNumber(ratio)}%`;
+}
+
+function formatPressureSummary(
+  pressure: Omit<DiagnosticMemoryPressureEvent, "seq" | "ts" | "type">,
+): string {
+  const parts = [
+    `rss=${formatReadableBytes(pressure.memory.rssBytes)}`,
+    `heap=${formatReadableBytes(pressure.memory.heapUsedBytes)}`,
+    pressure.thresholdBytes !== undefined
+      ? `threshold=${formatReadableBytes(pressure.thresholdBytes)}`
+      : "",
+    pressure.thresholdBytes !== undefined
+      ? `thresholdRatio=${formatPressureRatio({
+          pressure,
+          thresholdBytes: pressure.thresholdBytes,
+        })}`
+      : "",
+    pressure.rssGrowthBytes !== undefined
+      ? `rssGrowth=${formatReadableBytes(pressure.rssGrowthBytes)}`
+      : "",
+  ];
+  return parts.filter((part): part is string => Boolean(part)).join(" ");
+}
+
+function formatPressureNextStep(
+  pressure: Omit<DiagnosticMemoryPressureEvent, "seq" | "ts" | "type">,
+): string {
+  return pressure.level === "critical"
+    ? "nextStep=inspect latest stability bundle or run openclaw gateway diagnostics export; restart gateway if process is unstable"
+    : "nextStep=run openclaw gateway status --deep and openclaw gateway diagnostics export; restart gateway if pressure persists";
+}
+
+function logMemoryPressure(
+  pressure: Omit<DiagnosticMemoryPressureEvent, "seq" | "ts" | "type">,
+): void {
+  const message =
+    `memory pressure: level=${pressure.level} reason=${pressure.reason}` +
+    ` ${formatPressureSummary(pressure)}` +
+    ` rssBytes=${pressure.memory.rssBytes}` +
+    ` heapUsedBytes=${pressure.memory.heapUsedBytes}` +
+    formatOptionalPressureMetric("thresholdBytes", pressure.thresholdBytes) +
+    formatOptionalPressureMetric("rssGrowthBytes", pressure.rssGrowthBytes) +
+    formatOptionalPressureMetric("windowMs", pressure.windowMs) +
+    (pressure.level === "critical" ? " memoryPressureSnapshot=disabled" : "") +
+    ` ${formatPressureNextStep(pressure)}`;
+  log.warn(message);
+}
+
 export function emitDiagnosticMemorySample(options?: {
   now?: number;
   memoryUsage?: NodeJS.MemoryUsage;
+  heapSizeLimitBytes?: number;
+  processMemoryLimitBytes?: number;
+  physicalMemoryBytes?: number;
+  isBunRuntime?: boolean;
   uptimeMs?: number;
   thresholds?: DiagnosticMemoryThresholds;
   emitSample?: boolean;
@@ -166,7 +347,13 @@ export function emitDiagnosticMemorySample(options?: {
   const now = options?.now ?? Date.now();
   const memory = normalizeMemoryUsage(options?.memoryUsage ?? process.memoryUsage());
   const current = { ts: now, memory };
-  const thresholds = resolveThresholds(options?.thresholds);
+  const thresholds = resolveThresholds(
+    options?.thresholds,
+    options?.heapSizeLimitBytes ?? DEFAULT_HEAP_SIZE_LIMIT_BYTES,
+    options?.processMemoryLimitBytes ?? DEFAULT_PROCESS_MEMORY_LIMIT_BYTES,
+    options?.physicalMemoryBytes ?? DEFAULT_PHYSICAL_MEMORY_BYTES,
+    options?.isBunRuntime ?? DEFAULT_IS_BUN_RUNTIME,
+  );
   const shouldEmitSample = options?.emitSample !== false;
 
   if (shouldEmitSample) {
@@ -186,10 +373,15 @@ export function emitDiagnosticMemorySample(options?: {
       type: "diagnostic.memory.pressure",
       ...pressure,
     });
+    logMemoryPressure(pressure);
+    if (pressure.level === "critical") {
+      log.warn("critical memory pressure snapshot disabled");
+    }
   }
   return memory;
 }
 
+/** Clears process-local memory diagnostic state for isolated tests. */
 export function resetDiagnosticMemoryForTest(): void {
   state.lastSample = null;
   state.lastPressureAtByKey.clear();

@@ -16,7 +16,7 @@ Adds media understanding provider support.
 
 ## Surface
 
-contracts: mediaUnderstandingProviders
+contracts: `mediaUnderstandingProviders`
 
 ## Related docs
 

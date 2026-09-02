@@ -1,3 +1,4 @@
+// Mistral provider module implements model/runtime integration.
 import {
   createRealtimeTranscriptionWebSocketSession,
   type RealtimeTranscriptionProviderConfig,
@@ -6,8 +7,15 @@ import {
   type RealtimeTranscriptionSessionCreateRequest,
   type RealtimeTranscriptionWebSocketTransport,
 } from "openclaw/plugin-sdk/realtime-transcription";
-import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
+import {
+  normalizeResolvedSecretInputString,
+  normalizeSecretInput,
+} from "openclaw/plugin-sdk/secret-input";
+import {
+  asOptionalRecord as readRecord,
+  normalizeOptionalString,
+  parseFiniteNumber as readFiniteNumber,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 
 type MistralRealtimeTranscriptionEncoding =
   | "pcm_s16le"
@@ -54,27 +62,15 @@ const MISTRAL_REALTIME_CLOSE_TIMEOUT_MS = 5_000;
 const MISTRAL_REALTIME_MAX_RECONNECT_ATTEMPTS = 5;
 const MISTRAL_REALTIME_RECONNECT_DELAY_MS = 1000;
 const MISTRAL_REALTIME_MAX_QUEUED_BYTES = 2 * 1024 * 1024;
-
-function readRecord(value: unknown): Record<string, unknown> | undefined {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
-}
+const MISTRAL_REALTIME_SPEECH_CONTENT = /[\p{L}\p{N}]/u;
+const MISTRAL_REALTIME_MAX_PARTIAL_TRANSCRIPT_BYTES = 256 * 1024;
+const MISTRAL_REALTIME_PARTIAL_TRANSCRIPT_OVERFLOW_MESSAGE =
+  "Mistral realtime transcription exceeded the 256 KiB in-progress transcript limit";
 
 function readNestedMistralConfig(rawConfig: RealtimeTranscriptionProviderConfig) {
   const raw = readRecord(rawConfig);
   const providers = readRecord(raw?.providers);
   return readRecord(providers?.mistral ?? raw?.mistral ?? raw) ?? {};
-}
-
-function readFiniteNumber(value: unknown): number | undefined {
-  const next =
-    typeof value === "number"
-      ? value
-      : typeof value === "string"
-        ? Number.parseFloat(value)
-        : undefined;
-  return Number.isFinite(next) ? next : undefined;
 }
 
 function normalizeMistralEncoding(
@@ -136,10 +132,7 @@ function normalizeProviderConfig(
 ): MistralRealtimeTranscriptionProviderConfig {
   const raw = readNestedMistralConfig(config);
   return {
-    apiKey: normalizeResolvedSecretInputString({
-      value: raw.apiKey,
-      path: "plugins.entries.voice-call.config.streaming.providers.mistral.apiKey",
-    }),
+    apiKey: normalizeMistralApiKey(raw.apiKey),
     baseUrl: normalizeOptionalString(raw.baseUrl),
     model: normalizeOptionalString(raw.model ?? raw.sttModel),
     sampleRate: readFiniteNumber(raw.sampleRate ?? raw.sample_rate),
@@ -148,6 +141,14 @@ function normalizeProviderConfig(
       raw.targetStreamingDelayMs ?? raw.target_streaming_delay_ms ?? raw.delayMs,
     ),
   };
+}
+
+function normalizeMistralApiKey(value: unknown): string | undefined {
+  const resolved = normalizeResolvedSecretInputString({
+    value,
+    path: "plugins.entries.voice-call.config.streaming.providers.mistral.apiKey",
+  });
+  return normalizeSecretInput(resolved) || undefined;
 }
 
 function readErrorDetail(event: MistralRealtimeTranscriptionEvent): string {
@@ -164,16 +165,65 @@ function readErrorDetail(event: MistralRealtimeTranscriptionEvent): string {
   return "Mistral realtime transcription error";
 }
 
+function measureTranscriptDeltaBytes(partialText: string, delta: string): number {
+  const previousCodeUnit = partialText.charCodeAt(partialText.length - 1);
+  const nextCodeUnit = delta.charCodeAt(0);
+  const completesSplitSurrogatePair =
+    previousCodeUnit >= 0xd800 &&
+    previousCodeUnit <= 0xdbff &&
+    nextCodeUnit >= 0xdc00 &&
+    nextCodeUnit <= 0xdfff;
+  // Separate UTF-8 measurements encode split surrogates as two replacement
+  // characters (six bytes); the combined transcript encodes one four-byte code point.
+  return Buffer.byteLength(delta, "utf8") - (completesSplitSurrogatePair ? 2 : 0);
+}
+
 function createMistralRealtimeTranscriptionSession(
   config: MistralRealtimeTranscriptionSessionConfig,
 ): RealtimeTranscriptionSession {
   let partialText = "";
+  let partialBytes = 0;
+  let hasFinalSegment = false;
+  let terminal = false;
+
+  const clearPartial = () => {
+    partialText = "";
+    partialBytes = 0;
+  };
+
+  const emitFinalTranscript = (text: string, source: "segment" | "terminal" | "pending") => {
+    if (!text.trim() || (source === "pending" && !MISTRAL_REALTIME_SPEECH_CONTENT.test(text))) {
+      return;
+    }
+    hasFinalSegment ||= source === "segment";
+    config.onTranscript?.(text);
+  };
+
+  const failTerminal = (error: Error, transport: RealtimeTranscriptionWebSocketTransport) => {
+    if (terminal) {
+      return;
+    }
+    terminal = true;
+    clearPartial();
+    transport.closeNow();
+    try {
+      config.onError?.(error);
+    } catch {
+      // The terminal provider error already owns the outcome. Do not let an
+      // observer exception re-enter shared error dispatch and emit it twice.
+    }
+  };
 
   const handleEvent = (
     event: MistralRealtimeTranscriptionEvent,
     transport: RealtimeTranscriptionWebSocketTransport,
   ) => {
+    if (terminal) {
+      return;
+    }
     if (event.type === "session.created") {
+      clearPartial();
+      hasFinalSegment = false;
       transport.sendJson({
         type: "session.update",
         session: {
@@ -193,28 +243,43 @@ function createMistralRealtimeTranscriptionSession(
     switch (event.type) {
       case "transcription.text.delta":
         if (event.text) {
+          const deltaBytes = measureTranscriptDeltaBytes(partialText, event.text);
+          if (deltaBytes > MISTRAL_REALTIME_MAX_PARTIAL_TRANSCRIPT_BYTES - partialBytes) {
+            failTerminal(
+              new Error(MISTRAL_REALTIME_PARTIAL_TRANSCRIPT_OVERFLOW_MESSAGE),
+              transport,
+            );
+            return;
+          }
           partialText += event.text;
+          partialBytes += deltaBytes;
           config.onPartial?.(partialText);
         }
         return;
       case "transcription.segment":
-        if (event.text) {
-          config.onTranscript?.(event.text);
-          partialText = "";
+        if (event.text?.trim()) {
+          emitFinalTranscript(event.text, "segment");
+          clearPartial();
         }
         return;
-      case "transcription.done":
-        if (partialText.trim()) {
-          config.onTranscript?.(partialText);
-          partialText = "";
+      case "transcription.done": {
+        terminal = true;
+        // Final segments already own completed speech; only later buffered
+        // speech deltas are new. Punctuation only completes an earlier final.
+        const source = hasFinalSegment ? "pending" : "terminal";
+        const terminalText =
+          source === "pending" ? partialText : event.text?.trim() ? event.text : partialText;
+        clearPartial();
+        try {
+          emitFinalTranscript(terminalText, source);
+        } finally {
+          transport.closeNow();
         }
-        transport.closeNow();
         return;
+      }
       case "error":
-        config.onError?.(new Error(readErrorDetail(event)));
-        return;
+        failTerminal(new Error(readErrorDetail(event)), transport);
       default:
-        return;
     }
   };
 
@@ -253,10 +318,13 @@ export function buildMistralRealtimeTranscriptionProvider(): RealtimeTranscripti
     autoSelectOrder: 45,
     resolveConfig: ({ rawConfig }) => normalizeProviderConfig(rawConfig),
     isConfigured: ({ providerConfig }) =>
-      Boolean(normalizeProviderConfig(providerConfig).apiKey || process.env.MISTRAL_API_KEY),
+      Boolean(
+        normalizeProviderConfig(providerConfig).apiKey ||
+        normalizeMistralApiKey(process.env.MISTRAL_API_KEY),
+      ),
     createSession: (req) => {
       const config = normalizeProviderConfig(req.providerConfig);
-      const apiKey = config.apiKey || process.env.MISTRAL_API_KEY;
+      const apiKey = config.apiKey || normalizeMistralApiKey(process.env.MISTRAL_API_KEY);
       if (!apiKey) {
         throw new Error("Mistral API key missing");
       }
@@ -272,8 +340,3 @@ export function buildMistralRealtimeTranscriptionProvider(): RealtimeTranscripti
     },
   };
 }
-
-export const __testing = {
-  normalizeProviderConfig,
-  toMistralRealtimeWsUrl,
-};

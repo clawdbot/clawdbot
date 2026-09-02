@@ -4,7 +4,13 @@ import {
   VerifierEvent,
 } from "matrix-js-sdk/lib/crypto-api/verification.js";
 import { VerificationMethod } from "matrix-js-sdk/lib/types.js";
-import { formatMatrixErrorMessage } from "../errors.js";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+// Matrix plugin module implements verification manager behavior.
+import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
+import {
+  resolveDateTimestampMs,
+  resolveTimestampMsToIsoString,
+} from "openclaw/plugin-sdk/number-runtime";
 
 export type MatrixVerificationMethod = "sas" | "show-qr" | "scan-qr";
 type MatrixVerificationPhase = VerificationPhase | -1;
@@ -54,7 +60,7 @@ export type MatrixVerificationSummary = {
 type MatrixVerificationSummaryListener = (summary: MatrixVerificationSummary) => void;
 type MatrixVerificationOwnerTrustCallback = (deviceId: string) => Promise<void>;
 
-export type MatrixShowSasCallbacks = {
+type MatrixShowSasCallbacks = {
   sas: {
     decimal?: [number, number, number];
     emoji?: Array<[string, string]>;
@@ -64,12 +70,12 @@ export type MatrixShowSasCallbacks = {
   cancel: () => void;
 };
 
-export type MatrixShowQrCodeCallbacks = {
+type MatrixShowQrCodeCallbacks = {
   confirm: () => void;
   cancel: () => void;
 };
 
-export type MatrixVerifierLike = {
+type MatrixVerifierLike = {
   verify: () => Promise<void>;
   cancel: (e: Error) => void;
   getShowSasCallbacks: () => MatrixShowSasCallbacks | null;
@@ -161,7 +167,7 @@ export class MatrixVerificationManager {
   ) {}
 
   private readRequestValue<T>(
-    request: MatrixVerificationRequestLike,
+    _request: MatrixVerificationRequestLike,
     reader: () => T,
     fallback: T,
   ): T {
@@ -266,7 +272,7 @@ export class MatrixVerificationManager {
   }
 
   private touchVerificationSession(session: MatrixVerificationSession): void {
-    session.updatedAtMs = Date.now();
+    session.updatedAtMs = resolveDateTimestampMs(Date.now());
     this.emitVerificationSummary(session);
   }
 
@@ -317,8 +323,8 @@ export class MatrixVerificationManager {
       hasReciprocateQr: Boolean(session.reciprocateQrCallbacks),
       completed: phase === VerificationPhase.Done,
       error: session.error,
-      createdAt: new Date(session.createdAtMs).toISOString(),
-      updatedAt: new Date(session.updatedAtMs).toISOString(),
+      createdAt: resolveTimestampMsToIsoString(session.createdAtMs),
+      updatedAt: resolveTimestampMsToIsoString(session.updatedAtMs),
     };
   }
 
@@ -336,7 +342,7 @@ export class MatrixVerificationManager {
       return txId === id;
     });
     if (transactionMatches.length === 1) {
-      return transactionMatches[0];
+      return expectDefined(transactionMatches[0], "single Matrix verification session");
     }
     if (transactionMatches.length > 1) {
       throw new Error(
@@ -347,7 +353,7 @@ export class MatrixVerificationManager {
   }
 
   private ensureVerificationRequestTracked(session: MatrixVerificationSession): void {
-    const requestObj = session.request as unknown as object;
+    const requestObj = session.request;
     if (this.trackedVerificationRequests.has(requestObj)) {
       return;
     }
@@ -390,9 +396,9 @@ export class MatrixVerificationManager {
       .then(() => {
         this.touchVerificationSession(session);
       })
-      .catch((err) => {
+      .catch((err: unknown) => {
         session.acceptRequested = false;
-        session.error = formatMatrixErrorMessage(err);
+        session.error = formatErrorMessage(err);
         this.touchVerificationSession(session);
       });
   }
@@ -459,7 +465,7 @@ export class MatrixVerificationManager {
       session.reciprocateQrCallbacks = maybeReciprocateQr;
     }
 
-    const verifierObj = verifier as unknown as object;
+    const verifierObj = verifier;
     if (this.trackedVerificationVerifiers.has(verifierObj)) {
       this.ensureVerificationStarted(session);
       return;
@@ -477,7 +483,7 @@ export class MatrixVerificationManager {
     });
     verifier.on(VerifierEvent.Cancel, (err) => {
       this.clearSasAutoConfirmTimer(session);
-      session.error = formatMatrixErrorMessage(err);
+      session.error = formatErrorMessage(err);
       this.touchVerificationSession(session);
     });
     this.ensureVerificationStarted(session);
@@ -512,8 +518,8 @@ export class MatrixVerificationManager {
         .then(() => {
           this.touchVerificationSession(session);
         })
-        .catch((err) => {
-          session.error = formatMatrixErrorMessage(err);
+        .catch((err: unknown) => {
+          session.error = formatErrorMessage(err);
           this.touchVerificationSession(session);
         });
     }, SAS_AUTO_CONFIRM_DELAY_MS);
@@ -541,8 +547,8 @@ export class MatrixVerificationManager {
       .then(() => {
         this.touchVerificationSession(session);
       })
-      .catch((err) => {
-        session.error = formatMatrixErrorMessage(err);
+      .catch((err: unknown) => {
+        session.error = formatErrorMessage(err);
         this.touchVerificationSession(session);
       });
   }
@@ -571,9 +577,9 @@ export class MatrixVerificationManager {
 
   trackVerificationRequest(request: MatrixVerificationRequestLike): MatrixVerificationSummary {
     this.pruneVerificationSessions(Date.now());
-    const requestObj = request as unknown as object;
+    const requestObj = request;
     for (const existing of this.verificationSessions.values()) {
-      if ((existing.request as unknown as object) === requestObj) {
+      if (existing.request === requestObj) {
         this.touchVerificationSession(existing);
         return this.buildVerificationSummary(existing);
       }
@@ -594,7 +600,7 @@ export class MatrixVerificationManager {
       }
     }
 
-    const now = Date.now();
+    const now = resolveDateTimestampMs(Date.now());
     const id = `verification-${++this.verificationSessionCounter}`;
     const session: MatrixVerificationSession = {
       id,
@@ -651,7 +657,7 @@ export class MatrixVerificationManager {
     if (!crypto) {
       throw new Error("Matrix crypto is not available");
     }
-    let request: MatrixVerificationRequestLike | null = null;
+    let request: MatrixVerificationRequestLike | null;
     if (params.ownUser) {
       request = await crypto.requestOwnUserVerification();
     } else if (params.userId && params.deviceId && crypto.requestDeviceVerification) {
@@ -793,3 +799,4 @@ export class MatrixVerificationManager {
     };
   }
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

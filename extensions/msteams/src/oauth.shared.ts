@@ -1,3 +1,4 @@
+// Msteams plugin module implements oauth.shared behavior.
 export const MSTEAMS_OAUTH_REDIRECT_URI = "http://localhost:8086/oauth2callback";
 export const MSTEAMS_OAUTH_CALLBACK_PORT = 8086;
 export const MSTEAMS_OAUTH_CALLBACK_PATH = "/oauth2callback";

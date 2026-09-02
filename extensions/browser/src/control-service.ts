@@ -1,12 +1,17 @@
+/**
+ * Browser control service lifecycle for plugin-managed, in-process operation.
+ */
 import {
   createBrowserControlContext,
   ensureBrowserControlRuntime,
   getBrowserControlState,
   stopBrowserControlRuntime,
+  withBrowserControlStart,
 } from "./browser-control-state.js";
 import { loadBrowserConfigForRuntimeRefresh } from "./browser/config-refresh-source.js";
-import { resolveBrowserConfig } from "./browser/config.js";
+import { resolveBrowserConfig, resolveProfile } from "./browser/config.js";
 import { ensureBrowserControlAuth } from "./browser/control-auth.js";
+import { getExtensionRelayModule } from "./browser/extension-relay.runtime.js";
 import type { BrowserServerState } from "./browser/server-context.js";
 import { getRuntimeConfig } from "./config/config.js";
 import { createSubsystemLogger } from "./logging/subsystem.js";
@@ -15,7 +20,7 @@ import { isDefaultBrowserPluginEnabled } from "./plugin-enabled.js";
 const log = createSubsystemLogger("browser");
 const logService = log.child("service");
 
-export async function startBrowserControlServiceFromConfig(): Promise<BrowserServerState | null> {
+async function startBrowserControlServiceUnlocked(): Promise<BrowserServerState | null> {
   const current = getBrowserControlState();
   if (current) {
     return current;
@@ -39,6 +44,16 @@ export async function startBrowserControlServiceFromConfig(): Promise<BrowserSer
     logService.warn(`failed to auto-configure browser auth: ${String(err)}`);
   }
 
+  // Ensure the host-local HMAC key exists before relay startup. Gateway hosts
+  // and browser node hosts each own an independent key.
+  const hasExtensionProfiles = Object.values(resolved.profiles).some(
+    (profile) => profile.driver === "extension",
+  );
+  if (hasExtensionProfiles) {
+    const { ensureExtensionRelayToken } = await import("./browser/extension-relay/relay-auth.js");
+    await ensureExtensionRelayToken();
+  }
+
   const state = await ensureBrowserControlRuntime({
     server: null,
     port: resolved.controlPort,
@@ -47,17 +62,43 @@ export async function startBrowserControlServiceFromConfig(): Promise<BrowserSer
     onWarn: (message) => logService.warn(message),
   });
 
+  // Extension relays listen from service start so the Chrome extension can
+  // (re)connect before the first agent browser request arrives.
+  if (hasExtensionProfiles) {
+    const { startConfiguredExtensionRelays } = await getExtensionRelayModule();
+    await startConfiguredExtensionRelays(
+      state,
+      (name) => resolveProfile(resolved, name),
+      (message) => logService.warn(message),
+    );
+  }
+
   logService.info(
     `Browser control service ready (profiles=${Object.keys(resolved.profiles).length})`,
   );
   return state;
 }
 
-export async function stopBrowserControlService(): Promise<void> {
-  await stopBrowserControlRuntime({
-    requestedBy: "service",
-    onWarn: (message) => logService.warn(message),
-  });
+/** Starts Browser control without binding the HTTP server when config enables it. */
+export async function startBrowserControlServiceFromConfig(): Promise<BrowserServerState | null> {
+  return await withBrowserControlStart(startBrowserControlServiceUnlocked);
 }
 
+/** Stops the in-process Browser control service runtime. */
+export async function stopBrowserControlService(): Promise<void> {
+  try {
+    await stopBrowserControlRuntime({
+      requestedBy: "service",
+      onWarn: (message) => logService.warn(message),
+    });
+  } finally {
+    // Direct Gateway auth sockets can exist before Browser control lazy-starts,
+    // so plugin shutdown must close them even when there is no runtime state.
+    const { disposeGatewayExtensionRelay } =
+      await import("./browser/extension-relay/gateway-relay-route.js");
+    disposeGatewayExtensionRelay();
+  }
+}
+
+/** Re-export Browser control context accessors for gateway-local dispatch. */
 export { createBrowserControlContext, getBrowserControlState };

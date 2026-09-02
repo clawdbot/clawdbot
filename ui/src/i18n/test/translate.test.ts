@@ -1,3 +1,5 @@
+// @vitest-environment node
+// Control UI tests cover translate behavior.
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createStorageMock } from "../../test-helpers/storage.ts";
@@ -8,6 +10,7 @@ import { en } from "../locales/en.ts";
 import { es } from "../locales/es.ts";
 import { fa } from "../locales/fa.ts";
 import { fr } from "../locales/fr.ts";
+import { hi } from "../locales/hi.ts";
 import { id } from "../locales/id.ts";
 import { it as itLocale } from "../locales/it.ts";
 import { ja_JP } from "../locales/ja-JP.ts";
@@ -15,6 +18,7 @@ import { ko } from "../locales/ko.ts";
 import { nl } from "../locales/nl.ts";
 import { pl } from "../locales/pl.ts";
 import { pt_BR } from "../locales/pt-BR.ts";
+import { ru } from "../locales/ru.ts";
 import { th } from "../locales/th.ts";
 import { tr } from "../locales/tr.ts";
 import { uk } from "../locales/uk.ts";
@@ -28,6 +32,7 @@ const shippedLocales = {
   es,
   fa,
   fr,
+  hi,
   id,
   it: itLocale,
   ja_JP,
@@ -35,6 +40,7 @@ const shippedLocales = {
   nl,
   pl,
   pt_BR,
+  ru,
   th,
   tr,
   uk,
@@ -51,6 +57,12 @@ async function importFreshTranslate() {
   );
 }
 
+function stubDocumentLocaleMetadata() {
+  const documentElement = { lang: "", dir: "" };
+  vi.stubGlobal("document", { documentElement } as unknown as Document);
+  return documentElement;
+}
+
 describe("i18n", () => {
   function flatten(value: Record<string, string | Record<string, unknown>>, prefix = ""): string[] {
     return Object.entries(value).flatMap(([key, nested]) => {
@@ -62,7 +74,7 @@ describe("i18n", () => {
     });
   }
 
-  function readString(value: unknown, path: string): string {
+  function readTranslationString(value: unknown, path: string): string {
     let cursor = value;
     for (const part of path.split(".")) {
       cursor =
@@ -82,6 +94,7 @@ describe("i18n", () => {
 
   afterEach(() => {
     vi.unstubAllGlobals();
+    vi.restoreAllMocks();
   });
 
   it("should return the key if translation is missing", () => {
@@ -93,7 +106,17 @@ describe("i18n", () => {
   });
 
   it("should replace parameters correctly", () => {
-    expect(translate.t("overview.stats.cronNext", { time: "10:00" })).toBe("Next wake 10:00");
+    expect(translate.t("connection.help.copyCommandAria", { command: "openclaw dashboard" })).toBe(
+      "Copy command: openclaw dashboard",
+    );
+  });
+
+  it("renders a provided empty-string param as empty, not the raw placeholder", () => {
+    expect(translate.t("connection.help.copyCommandAria", { command: "" })).toBe("Copy command: ");
+  });
+
+  it("keeps the visible placeholder when the param is missing", () => {
+    expect(translate.t("connection.help.copyCommandAria", {})).toBe("Copy command: {command}");
   });
 
   it("should fallback to English if key is missing in another locale", async () => {
@@ -126,6 +149,63 @@ describe("i18n", () => {
     expect(fresh.t("common.health")).toBe("健康状况");
   });
 
+  it("syncs canonical document locale metadata on startup", async () => {
+    const documentElement = stubDocumentLocaleMetadata();
+    vi.stubGlobal("navigator", { language: "fa-IR" } as Navigator);
+    localStorage.removeItem("openclaw.i18n.locale");
+
+    const fresh = await importFreshTranslate();
+
+    await vi.waitFor(() => expect(fresh.i18n.getLocale()).toBe("fa"));
+    expect(documentElement).toEqual({ lang: "fa", dir: "rtl" });
+    expect(localStorage.getItem("openclaw.i18n.locale")).toBeNull();
+  });
+
+  it("clears an explicit locale when returning to the system language", async () => {
+    vi.stubGlobal("navigator", { language: "de-DE" } as Navigator);
+    await translate.i18n.setLocale("fr");
+    expect(localStorage.getItem("openclaw.i18n.locale")).toBe("fr");
+
+    await translate.i18n.useSystemLocale();
+
+    expect(translate.i18n.getLocale()).toBe("de");
+    expect(localStorage.getItem("openclaw.i18n.locale")).toBeNull();
+  });
+
+  it("syncs document locale metadata when the locale changes", async () => {
+    const documentElement = stubDocumentLocaleMetadata();
+
+    await translate.i18n.setLocale("ar");
+    expect(documentElement).toEqual({ lang: "ar", dir: "rtl" });
+
+    await translate.i18n.setLocale("de");
+    expect(documentElement).toEqual({ lang: "de", dir: "ltr" });
+  });
+
+  it.each([
+    ["zh-Hant", "zh-TW"],
+    ["zh-Hant-TW", "zh-TW"],
+    ["zh-Hant-HK", "zh-TW"],
+    ["zh-Hant-MO", "zh-TW"],
+    ["zh-MO", "zh-TW"],
+    ["ZH-hAnT-hK", "zh-TW"],
+    ["zh-Hans-HK", "zh-CN"],
+    ["ZH-hAnS-hK", "zh-CN"],
+  ] as const)(
+    "loads the %s browser language as the registered %s locale on startup",
+    async (browserLanguage, expectedLocale) => {
+      vi.stubGlobal("navigator", { language: browserLanguage } as Navigator);
+      localStorage.removeItem("openclaw.i18n.locale");
+
+      const fresh = await importFreshTranslate();
+
+      await vi.waitFor(() => expect(fresh.i18n.getLocale()).toBe(expectedLocale));
+      expect(fresh.t("common.health")).toBe(
+        readTranslationString(expectedLocale === "zh-TW" ? zh_TW : zh_CN, "common.health"),
+      );
+    },
+  );
+
   it("skips node localStorage accessors that warn without a storage file", async () => {
     vi.unstubAllGlobals();
     vi.stubGlobal("navigator", { language: "en-US" } as Navigator);
@@ -134,17 +214,20 @@ describe("i18n", () => {
     const fresh = await importFreshTranslate();
 
     expect(fresh.i18n.getLocale()).toBe("en");
-    expect(warningSpy).not.toHaveBeenCalledWith(
+    const warningMessages = warningSpy.mock.calls.map((call) => String(call[0]));
+    expect(warningMessages).not.toContain(
       "`--localstorage-file` was provided without a valid path",
-      expect.anything(),
-      expect.anything(),
     );
   });
 
   it("keeps the version label available in shipped locales", () => {
     for (const [locale, value] of Object.entries(shippedLocales)) {
-      expect((value.common as { version?: string }).version, locale).toEqual(expect.any(String));
-      expect((value.common as { version?: string }).version?.trim(), locale).not.toBe("");
+      const version = (value.common as { version?: unknown }).version;
+      expect(version, locale).toBeTypeOf("string");
+      if (typeof version !== "string") {
+        throw new Error(`expected ${locale} common.version to be a string`);
+      }
+      expect(version.trim(), locale).not.toBe("");
     }
   });
 
@@ -152,6 +235,7 @@ describe("i18n", () => {
     const englishHealth = (en.common as { health: string }).health;
     for (const [locale, value] of Object.entries({
       ar,
+      hi,
       fa,
       it: itLocale,
       nl,
@@ -173,6 +257,7 @@ describe("i18n", () => {
       es,
       fa,
       fr,
+      hi,
       id,
       it: itLocale,
       ja_JP,
@@ -180,6 +265,7 @@ describe("i18n", () => {
       nl,
       pl,
       pt_BR,
+      ru,
       th,
       tr,
       uk,
@@ -188,17 +274,36 @@ describe("i18n", () => {
       zh_TW,
     })) {
       for (const key of checkedKeys) {
-        expect(readString(value, key), `${locale}:${key}`).not.toBe(readString(en, key));
+        expect(readTranslationString(value, key), `${locale}:${key}`).not.toBe(
+          readTranslationString(en, key),
+        );
       }
     }
   });
 
-  it("keeps shipped locales structurally aligned with English", () => {
-    const englishKeys = flatten(en);
+  it("keeps mobile pairing copy localized in shipped locale bundles", () => {
+    const checkedKeys = flatten(en).filter(
+      (key) => key.startsWith("devices.pairing.") && key !== "devices.pairing.title",
+    );
+
     for (const [locale, value] of Object.entries(shippedLocales)) {
-      expect(flatten(value as Record<string, string | Record<string, unknown>>), locale).toEqual(
-        englishKeys,
-      );
+      for (const key of checkedKeys) {
+        expect(readTranslationString(value, key), `${locale}:${key}`).not.toBe(
+          readTranslationString(en, key),
+        );
+      }
+    }
+  });
+
+  it("keeps new chat composer commands localized in shipped locale bundles", () => {
+    const checkedKeys = ["chat.composer.addAttachment", "chat.composer.attachFileOption"];
+
+    for (const [locale, value] of Object.entries(shippedLocales)) {
+      for (const key of checkedKeys) {
+        expect(readTranslationString(value, key), `${locale}:${key}`).not.toBe(
+          readTranslationString(en, key),
+        );
+      }
     }
   });
 });

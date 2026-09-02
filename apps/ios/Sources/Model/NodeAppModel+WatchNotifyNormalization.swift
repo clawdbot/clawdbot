@@ -8,6 +8,7 @@ extension NodeAppModel {
         normalized.body = params.body.trimmingCharacters(in: .whitespacesAndNewlines)
         normalized.promptId = self.trimmedOrNil(params.promptId)
         normalized.sessionKey = self.trimmedOrNil(params.sessionKey)
+        normalized.gatewayStableID = self.trimmedOrNil(params.gatewayStableID)
         normalized.kind = self.trimmedOrNil(params.kind)
         normalized.details = self.trimmedOrNil(params.details)
         normalized.priority = self.normalizedWatchPriority(params.priority, risk: params.risk)

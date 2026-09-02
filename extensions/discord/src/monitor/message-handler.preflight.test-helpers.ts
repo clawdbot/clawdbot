@@ -1,4 +1,5 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+// Discord helper module supports message handler.preflight helpers behavior.
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { ChannelType } from "../internal/discord.js";
 import type { preflightDiscordMessage } from "./message-handler.preflight.js";
 import { createNoopThreadBindingManager } from "./thread-bindings.js";
@@ -63,21 +64,26 @@ export function createDiscordMessage(params: {
   };
   mentionedUsers?: Array<{ id: string }>;
   mentionedEveryone?: boolean;
+  messageReference?: import("../internal/discord.js").Message["messageReference"];
+  referencedMessage?: import("../internal/discord.js").Message;
   attachments?: Array<Record<string, unknown>>;
   webhookId?: string;
   type?: import("../internal/discord.js").MessageType;
+  timestamp?: string;
 }): import("../internal/discord.js").Message {
   return {
     id: params.id,
     type: params.type,
     content: params.content,
-    timestamp: new Date().toISOString(),
+    timestamp: params.timestamp ?? new Date().toISOString(),
     channelId: params.channelId,
     webhookId: params.webhookId,
     attachments: params.attachments ?? [],
     mentionedUsers: params.mentionedUsers ?? [],
     mentionedRoles: [],
     mentionedEveryone: params.mentionedEveryone ?? false,
+    messageReference: params.messageReference,
+    referencedMessage: params.referencedMessage,
     author: params.author,
   } as unknown as import("../internal/discord.js").Message;
 }
@@ -103,7 +109,7 @@ export function createDiscordPreflightArgs(params: {
     replyToMode: "all",
     dmEnabled: true,
     groupDmEnabled: true,
-    dmPolicy: params.discordConfig?.dmPolicy ?? params.discordConfig?.dm?.policy ?? "pairing",
+    dmPolicy: params.discordConfig?.dmPolicy ?? "pairing",
     ackReactionScope: "direct",
     groupPolicy: "open",
     threadBindings: createNoopThreadBindingManager("default"),

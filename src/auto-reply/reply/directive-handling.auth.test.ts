@@ -1,3 +1,5 @@
+import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coercion";
+// Tests auth profile directive handling and provider override selection.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AuthProfileStore } from "../../agents/auth-profiles.js";
 import type { OpenClawConfig } from "../../config/config.js";
@@ -141,6 +143,23 @@ describe("resolveAuthLabel ref-aware labels", () => {
 
     expect(result.label).toContain("github-copilot:default=token:ref");
     expect(result.label).not.toContain("token:missing");
+  });
+
+  it("omits out-of-range token expiry labels", async () => {
+    const result = await resolveRefOnlyAuthLabel({
+      provider: "github-copilot",
+      profileId: "github-copilot:default",
+      profile: {
+        type: "token",
+        provider: "github-copilot",
+        token: "gho-test",
+        expires: MAX_DATE_TIMESTAMP_MS + 1,
+      },
+      mode: "compact",
+    });
+
+    expect(result.label).toBe("github-copilot:default token gh...st");
+    expect(result.label).not.toContain(" exp ");
   });
 
   it("labels config-only aws-sdk profiles as valid in compact mode", async () => {

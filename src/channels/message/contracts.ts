@@ -1,3 +1,8 @@
+/**
+ * Channel message adapter contract verification helpers.
+ *
+ * Runs proof callbacks for declared durable, live-preview, live-message, and receive capabilities.
+ */
 import type {
   ChannelMessageAdapterShape,
   ChannelMessageLiveCapability,
@@ -14,73 +19,90 @@ import {
   livePreviewFinalizerCapabilities,
 } from "./types.js";
 
-export type DurableFinalCapabilityProof = () => Promise<void> | void;
+/**
+ * Proof callback used to verify one declared durable-final delivery capability.
+ */
+type DurableFinalCapabilityProof = () => Promise<void> | void;
 
-export type DurableFinalCapabilityProofMap = Partial<
+/**
+ * Proof callbacks keyed by durable-final delivery capability.
+ */
+type DurableFinalCapabilityProofMap = Partial<
   Record<DurableFinalDeliveryCapability, DurableFinalCapabilityProof>
 >;
 
-export type DurableFinalCapabilityProofResult = {
+/**
+ * Verification result for one durable-final delivery capability.
+ */
+type DurableFinalCapabilityProofResult = {
   capability: DurableFinalDeliveryCapability;
   status: "verified" | "not_declared";
 };
 
-export type LivePreviewFinalizerCapabilityProof = () => Promise<void> | void;
+/**
+ * Proof callback used to verify one live-preview finalizer capability.
+ */
+type LivePreviewFinalizerCapabilityProof = () => Promise<void> | void;
 
-export type ChannelMessageLiveCapabilityProof = () => Promise<void> | void;
+/**
+ * Proof callback used to verify one live message capability.
+ */
+type ChannelMessageLiveCapabilityProof = () => Promise<void> | void;
 
-export type ChannelMessageReceiveAckPolicyProof = () => Promise<void> | void;
+/**
+ * Proof callback used to verify one receive acknowledgement policy.
+ */
+type ChannelMessageReceiveAckPolicyProof = () => Promise<void> | void;
 
-export type LivePreviewFinalizerCapabilityProofMap = Partial<
+/**
+ * Proof callbacks keyed by live-preview finalizer capability.
+ */
+type LivePreviewFinalizerCapabilityProofMap = Partial<
   Record<LivePreviewFinalizerCapability, LivePreviewFinalizerCapabilityProof>
 >;
 
-export type ChannelMessageLiveCapabilityProofMap = Partial<
+/**
+ * Proof callbacks keyed by live message capability.
+ */
+type ChannelMessageLiveCapabilityProofMap = Partial<
   Record<ChannelMessageLiveCapability, ChannelMessageLiveCapabilityProof>
 >;
 
-export type ChannelMessageReceiveAckPolicyProofMap = Partial<
+/**
+ * Proof callbacks keyed by receive acknowledgement policy.
+ */
+type ChannelMessageReceiveAckPolicyProofMap = Partial<
   Record<ChannelMessageReceiveAckPolicy, ChannelMessageReceiveAckPolicyProof>
 >;
 
-export type LivePreviewFinalizerCapabilityProofResult = {
+/**
+ * Verification result for one live-preview finalizer capability.
+ */
+type LivePreviewFinalizerCapabilityProofResult = {
   capability: LivePreviewFinalizerCapability;
   status: "verified" | "not_declared";
 };
 
-export type ChannelMessageLiveCapabilityProofResult = {
+/**
+ * Verification result for one live message capability.
+ */
+type ChannelMessageLiveCapabilityProofResult = {
   capability: ChannelMessageLiveCapability;
   status: "verified" | "not_declared";
 };
 
-export type ChannelMessageReceiveAckPolicyProofResult = {
+/**
+ * Verification result for one receive acknowledgement policy.
+ */
+type ChannelMessageReceiveAckPolicyProofResult = {
   policy: ChannelMessageReceiveAckPolicy;
   status: "verified" | "not_declared";
 };
 
-export function listDeclaredDurableFinalCapabilities(
-  capabilities: DurableFinalDeliveryRequirementMap | undefined,
-): DurableFinalDeliveryCapability[] {
-  return durableFinalDeliveryCapabilities.filter(
-    (capability) => capabilities?.[capability] === true,
-  );
-}
-
-export function listDeclaredLivePreviewFinalizerCapabilities(
-  capabilities: LivePreviewFinalizerCapabilityMap | undefined,
-): LivePreviewFinalizerCapability[] {
-  return livePreviewFinalizerCapabilities.filter(
-    (capability) => capabilities?.[capability] === true,
-  );
-}
-
-export function listDeclaredChannelMessageLiveCapabilities(
-  capabilities: Partial<Record<ChannelMessageLiveCapability, boolean>> | undefined,
-): ChannelMessageLiveCapability[] {
-  return channelMessageLiveCapabilities.filter((capability) => capabilities?.[capability] === true);
-}
-
-export function listDeclaredReceiveAckPolicies(
+/**
+ * Lists declared receive acknowledgement policies, including the default policy fallback.
+ */
+function listDeclaredReceiveAckPolicies(
   receive: ChannelMessageAdapterShape["receive"] | undefined,
 ): ChannelMessageReceiveAckPolicy[] {
   const declared = receive?.supportedAckPolicies?.length
@@ -91,6 +113,9 @@ export function listDeclaredReceiveAckPolicies(
   return channelMessageReceiveAckPolicies.filter((policy) => declared.includes(policy));
 }
 
+/**
+ * Verifies proof callbacks for every declared durable-final delivery capability.
+ */
 export async function verifyDurableFinalCapabilityProofs(params: {
   adapterName: string;
   capabilities?: DurableFinalDeliveryRequirementMap;
@@ -98,6 +123,8 @@ export async function verifyDurableFinalCapabilityProofs(params: {
 }): Promise<DurableFinalCapabilityProofResult[]> {
   const results: DurableFinalCapabilityProofResult[] = [];
   for (const capability of durableFinalDeliveryCapabilities) {
+    // Iterate over the canonical capability list so missing declarations still produce
+    // not_declared records and result ordering stays stable for tests and reports.
     if (params.capabilities?.[capability] !== true) {
       results.push({ capability, status: "not_declared" });
       continue;
@@ -114,7 +141,10 @@ export async function verifyDurableFinalCapabilityProofs(params: {
   return results;
 }
 
-export async function verifyLivePreviewFinalizerCapabilityProofs(params: {
+/**
+ * Verifies proof callbacks for every declared live-preview finalizer capability.
+ */
+async function verifyLivePreviewFinalizerCapabilityProofs(params: {
   adapterName: string;
   capabilities?: LivePreviewFinalizerCapabilityMap;
   proofs: LivePreviewFinalizerCapabilityProofMap;
@@ -137,7 +167,10 @@ export async function verifyLivePreviewFinalizerCapabilityProofs(params: {
   return results;
 }
 
-export async function verifyChannelMessageLiveCapabilityProofs(params: {
+/**
+ * Verifies proof callbacks for every declared live message capability.
+ */
+async function verifyChannelMessageLiveCapabilityProofs(params: {
   adapterName: string;
   capabilities?: Partial<Record<ChannelMessageLiveCapability, boolean>>;
   proofs: ChannelMessageLiveCapabilityProofMap;
@@ -160,7 +193,10 @@ export async function verifyChannelMessageLiveCapabilityProofs(params: {
   return results;
 }
 
-export async function verifyChannelMessageReceiveAckPolicyProofs(params: {
+/**
+ * Verifies proof callbacks for every declared receive acknowledgement policy.
+ */
+async function verifyChannelMessageReceiveAckPolicyProofs(params: {
   adapterName: string;
   receive?: ChannelMessageAdapterShape["receive"];
   proofs: ChannelMessageReceiveAckPolicyProofMap;
@@ -184,6 +220,9 @@ export async function verifyChannelMessageReceiveAckPolicyProofs(params: {
   return results;
 }
 
+/**
+ * Verifies durable-final proofs from a channel message adapter declaration.
+ */
 export async function verifyChannelMessageAdapterCapabilityProofs(params: {
   adapterName: string;
   adapter: Pick<ChannelMessageAdapterShape, "durableFinal">;
@@ -196,6 +235,9 @@ export async function verifyChannelMessageAdapterCapabilityProofs(params: {
   });
 }
 
+/**
+ * Verifies receive acknowledgement proofs from a channel message adapter declaration.
+ */
 export async function verifyChannelMessageReceiveAckPolicyAdapterProofs(params: {
   adapterName: string;
   adapter: Pick<ChannelMessageAdapterShape, "receive">;
@@ -208,6 +250,9 @@ export async function verifyChannelMessageReceiveAckPolicyAdapterProofs(params: 
   });
 }
 
+/**
+ * Verifies live-preview finalizer proofs from a channel message adapter declaration.
+ */
 export async function verifyChannelMessageLiveFinalizerProofs(params: {
   adapterName: string;
   adapter: Pick<ChannelMessageAdapterShape, "live">;
@@ -220,6 +265,9 @@ export async function verifyChannelMessageLiveFinalizerProofs(params: {
   });
 }
 
+/**
+ * Verifies live message capability proofs from a channel message adapter declaration.
+ */
 export async function verifyChannelMessageLiveCapabilityAdapterProofs(params: {
   adapterName: string;
   adapter: Pick<ChannelMessageAdapterShape, "live">;

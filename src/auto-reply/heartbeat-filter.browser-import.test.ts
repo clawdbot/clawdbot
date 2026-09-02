@@ -1,3 +1,4 @@
+/** Browser-import smoke test for heartbeat filter isolation. */
 import { build } from "esbuild";
 import { describe, expect, it } from "vitest";
 

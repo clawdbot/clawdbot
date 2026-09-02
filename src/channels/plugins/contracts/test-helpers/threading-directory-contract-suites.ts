@@ -1,13 +1,24 @@
+/**
+ * Threading and directory channel contract assertions.
+ *
+ * Verifies optional directory/threading hooks return normalized public shapes.
+ */
 import { expect } from "vitest";
 import type { OpenClawConfig } from "../../../../config/config.js";
 import type { RuntimeEnv } from "../../../../runtime.js";
 import type {
   ChannelDirectoryEntry,
-  ChannelFocusedBindingContext,
-  ChannelReplyTransport,
+  ChannelThreadingAdapter,
   ChannelThreadingToolContext,
 } from "../../types.core.js";
 import type { ChannelPlugin } from "../../types.js";
+
+type ChannelReplyTransport = NonNullable<
+  ReturnType<NonNullable<ChannelThreadingAdapter["resolveReplyTransport"]>>
+>;
+type ChannelFocusedBindingContext = NonNullable<
+  ReturnType<NonNullable<ChannelThreadingAdapter["resolveFocusedBinding"]>>
+>;
 
 const contractRuntime = new Proxy(Object.create(null), {
   get(_target, property) {
@@ -77,12 +88,14 @@ function expectFocusedBindingShape(binding: ChannelFocusedBindingContext) {
   expect(binding.labelNoun.trim()).not.toBe("");
 }
 
+/** Asserts that a plugin declares the threading adapter under test. */
 export function expectChannelThreadingBaseContract(
   plugin: Pick<ChannelPlugin, "id" | "threading">,
 ) {
   expect(plugin.threading).toBeDefined();
 }
 
+/** Exercises optional threading hooks and checks normalized return shapes. */
 export function expectChannelThreadingReturnValuesNormalized(
   plugin: Pick<ChannelPlugin, "id" | "threading">,
 ) {
@@ -168,6 +181,7 @@ export function expectChannelThreadingReturnValuesNormalized(
   }
 }
 
+/** Exercises directory lookups and checks normalized entry shapes when possible. */
 export async function expectChannelDirectoryBaseContract(params: {
   plugin: Pick<ChannelPlugin, "id" | "directory">;
   coverage?: "lookups" | "presence";
@@ -186,6 +200,8 @@ export async function expectChannelDirectoryBaseContract(params: {
   const accountId = params.accountId ?? "default";
 
   if (params.coverage === "presence") {
+    // Presence-only channels advertise a directory surface but cannot perform
+    // deterministic offline lookup calls in shared contract fixtures.
     return;
   }
   const self = await directory?.self?.({

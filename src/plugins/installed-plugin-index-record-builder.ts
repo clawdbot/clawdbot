@@ -1,58 +1,84 @@
-import fs from "node:fs";
+/** Builds installed-index records from normalized plugin manifest registry entries. */
 import path from "node:path";
+import { normalizeOptionalString as normalizeStringField } from "@openclaw/normalization-core/string-coerce";
+import { normalizeSortedUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
+import { getPluginInstallRecordMapEntry } from "../config/plugin-install-record-map.js";
 import type { OpenClawConfig } from "../config/types.js";
+import {
+  isPluginCandidateInstallOwnerAmbiguous,
+  resolvePluginCandidateInstallOwner,
+} from "./candidate-install-owner.js";
 import type { PluginCompatCode } from "./compat/registry.js";
 import { normalizePluginsConfig, resolveEffectiveEnableState } from "./config-state.js";
 import { isPluginEnabledByDefaultForPlatform } from "./default-enablement.js";
 import type { PluginCandidate } from "./discovery.js";
+import { resolvePluginDoctorContractArtifactPath } from "./doctor-contract-artifact.js";
+import { shouldRejectHardlinkedPluginFiles } from "./hardlink-policy.js";
 import type { PluginInstallSourceInfo } from "./install-source-info.js";
 import { describePluginInstallSource } from "./install-source-info.js";
-import { hashJson, safeFileSignature, safeHashFile } from "./installed-plugin-index-hash.js";
+import { hashJson } from "./installed-plugin-index-hash.js";
+import { recordInstalledPluginIndexInstallOwner } from "./installed-plugin-index-install-owner.js";
 import { hasOptionalMissingPluginManifestFile } from "./installed-plugin-index-manifest.js";
 import type {
+  InstalledPluginContributionInfo,
   InstalledPluginIndexRecord,
   InstalledPluginInstallRecordInfo,
   InstalledPluginPackageChannelInfo,
   InstalledPluginStartupInfo,
 } from "./installed-plugin-index-types.js";
+import { resolvePluginManifestInstallOwner } from "./manifest-install-owner.js";
 import type { PluginManifestRecord, PluginManifestRegistry } from "./manifest-registry.js";
 import type { PluginDiagnostic } from "./manifest-types.js";
 import type { PluginPackageChannel } from "./manifest.js";
-import { safeRealpathSync } from "./path-safety.js";
+import { isPathInside } from "./path-safety.js";
+import { pluginCacheRealpathSync, readPluginCacheFile } from "./plugin-cache-files.js";
 import { hasKind } from "./slots.js";
-
-function sortUnique(values: readonly string[] | undefined): readonly string[] {
-  if (!values || values.length === 0) {
-    return [];
-  }
-  return Array.from(new Set(values.map((value) => value.trim()).filter(Boolean))).toSorted(
-    (left, right) => left.localeCompare(right),
-  );
-}
 
 function buildStartupInfo(record: PluginManifestRecord): InstalledPluginStartupInfo {
   return {
     sidecar: record.activation?.onStartup === true,
     memory: hasKind(record.kind, "memory"),
-    deferConfiguredChannelFullLoadUntilAfterListen:
-      record.startupDeferConfiguredChannelFullLoadUntilAfterListen === true,
-    agentHarnesses: sortUnique([
+    agentHarnesses: normalizeSortedUniqueStringEntries([
       ...(record.activation?.onAgentHarnesses ?? []),
       ...(record.cliBackends ?? []),
     ]),
+    configPaths: normalizeSortedUniqueStringEntries(record.activation?.onConfigPaths),
   };
 }
 
+function buildContributionInfo(record: PluginManifestRecord): InstalledPluginContributionInfo {
+  const contracts = Object.fromEntries(
+    Object.entries(record.contracts ?? {}).map(([key, values]) => [
+      key,
+      normalizeSortedUniqueStringEntries(values),
+    ]),
+  );
+  return {
+    channels: normalizeSortedUniqueStringEntries(record.channels),
+    channelConfigs: normalizeSortedUniqueStringEntries(Object.keys(record.channelConfigs ?? {})),
+    providers: normalizeSortedUniqueStringEntries(record.providers),
+    modelCatalogProviders: normalizeSortedUniqueStringEntries([
+      ...Object.keys(record.modelCatalog?.providers ?? {}),
+      ...Object.keys(record.modelCatalog?.aliases ?? {}),
+      ...(record.modelCatalog?.suppressions ?? []).map((entry) => entry.provider),
+    ]),
+    modelSupportPrefixes: normalizeSortedUniqueStringEntries(record.modelSupport?.modelPrefixes),
+    modelSupportPatterns: normalizeSortedUniqueStringEntries(record.modelSupport?.modelPatterns),
+    autoEnableProviderIds: normalizeSortedUniqueStringEntries(
+      record.autoEnableWhenConfiguredProviders,
+    ),
+    commandAliases: normalizeSortedUniqueStringEntries(
+      record.commandAliases?.map((alias) => alias.name),
+    ),
+    contracts,
+  };
+}
+
+/** Collects compatibility codes implied by a manifest's legacy or activation surfaces. */
 export function collectPluginManifestCompatCodes(
   record: PluginManifestRecord,
 ): readonly PluginCompatCode[] {
   const codes: PluginCompatCode[] = [];
-  if (record.providerAuthEnvVars && Object.keys(record.providerAuthEnvVars).length > 0) {
-    codes.push("provider-auth-env-vars");
-  }
-  if (record.channelEnvVars && Object.keys(record.channelEnvVars).length > 0) {
-    codes.push("channel-env-vars");
-  }
   if (record.activation?.onProviders?.length) {
     codes.push("activation-provider-hint");
   }
@@ -74,20 +100,31 @@ export function collectPluginManifestCompatCodes(
   if (record.activation?.onCapabilities?.length) {
     codes.push("activation-capability-hint");
   }
-  return sortUnique(codes) as readonly PluginCompatCode[];
+  return normalizeSortedUniqueStringEntries(codes) as readonly PluginCompatCode[];
 }
 
 function resolvePackageJsonPath(candidate: PluginCandidate | undefined): string | undefined {
   if (!candidate?.packageDir) {
     return undefined;
   }
-  const packageDir = safeRealpathSync(candidate.packageDir) ?? path.resolve(candidate.packageDir);
+  const packageDir =
+    pluginCacheRealpathSync(candidate.packageDir) ?? path.resolve(candidate.packageDir);
   const packageJsonPath = path.join(packageDir, "package.json");
-  return fs.existsSync(packageJsonPath) ? packageJsonPath : undefined;
+  const rootDir =
+    candidate.rootDir === candidate.packageDir
+      ? packageDir
+      : (pluginCacheRealpathSync(candidate.rootDir) ?? path.resolve(candidate.rootDir));
+  const packageJsonRealPath = pluginCacheRealpathSync(packageJsonPath);
+  return packageJsonRealPath && isPathInside(rootDir, packageJsonRealPath)
+    ? packageJsonPath
+    : undefined;
 }
 
 function resolvePackageJsonRelativePath(rootDir: string, packageJsonPath: string): string {
-  const resolvedRootDir = safeRealpathSync(rootDir) ?? path.resolve(rootDir);
+  const resolvedRootDir =
+    rootDir === path.dirname(packageJsonPath)
+      ? path.dirname(packageJsonPath)
+      : (pluginCacheRealpathSync(rootDir) ?? path.resolve(rootDir));
   const relativePath = path.relative(resolvedRootDir, packageJsonPath) || "package.json";
   return relativePath.split(path.sep).join("/");
 }
@@ -95,26 +132,23 @@ function resolvePackageJsonRelativePath(rootDir: string, packageJsonPath: string
 function resolvePackageJsonRecord(params: {
   candidate: PluginCandidate | undefined;
   packageJsonPath: string | undefined;
-  diagnostics: PluginDiagnostic[];
-  pluginId: string;
+  rejectHardlinks: boolean;
 }): InstalledPluginIndexRecord["packageJson"] | undefined {
   if (!params.candidate?.packageDir || !params.packageJsonPath) {
     return undefined;
   }
-  const hash = safeHashFile({
-    filePath: params.packageJsonPath,
-    pluginId: params.pluginId,
-    diagnostics: params.diagnostics,
-    required: false,
+  const file = readPluginCacheFile({
+    rootDir: params.candidate.packageDir,
+    relativePath: "package.json",
+    rejectHardlinks: params.rejectHardlinks,
   });
-  if (!hash) {
+  if (!file.ok) {
     return undefined;
   }
-  const fileSignature = safeFileSignature(params.packageJsonPath);
   return {
     path: resolvePackageJsonRelativePath(params.candidate.rootDir, params.packageJsonPath),
-    hash,
-    ...(fileSignature ? { fileSignature } : {}),
+    hash: file.hash,
+    fileSignature: file.signature,
   };
 }
 
@@ -128,14 +162,6 @@ function describePackageInstallSource(
   return describePluginInstallSource(install, {
     expectedPackageName: candidate?.packageName,
   });
-}
-
-function normalizeStringField(value: unknown): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const normalized = value.trim();
-  return normalized ? normalized : undefined;
 }
 
 function normalizePackageChannel(
@@ -166,33 +192,43 @@ function hashManifestlessBundleRecord(record: PluginManifestRecord): string {
   });
 }
 
-function resolveManifestHash(params: {
+function readRecordFile(params: {
   record: PluginManifestRecord;
+  filePath: string;
+  rejectHardlinks: boolean;
+  required: boolean;
   diagnostics: PluginDiagnostic[];
-}): string {
-  if (hasOptionalMissingPluginManifestFile(params.record)) {
-    return hashManifestlessBundleRecord(params.record);
-  }
-  const hash = safeHashFile({
-    filePath: params.record.manifestPath,
-    pluginId: params.record.id,
-    diagnostics: params.diagnostics,
-    required: true,
+}) {
+  const file = readPluginCacheFile({
+    rootDir: params.record.rootDir,
+    relativePath: path.relative(params.record.rootDir, params.filePath),
+    rejectHardlinks: params.rejectHardlinks,
+    ...(params.required && path.extname(params.filePath) === ".json"
+      ? { maxBytes: 256 * 1024 }
+      : {}),
   });
-  if (hash) {
-    return hash;
+  if (file.ok) {
+    return file;
   }
-  return "";
+  if (params.required) {
+    params.diagnostics.push({
+      level: "warn",
+      pluginId: params.record.id,
+      source: params.filePath,
+      message: `installed plugin index could not hash ${params.filePath}: ${file.failure.reason}`,
+    });
+  }
+  return undefined;
 }
 
 function buildCandidateLookup(
   candidates: readonly PluginCandidate[],
 ): Map<string, PluginCandidate> {
-  const byRootDir = new Map<string, PluginCandidate>();
+  const bySource = new Map<string, PluginCandidate>();
   for (const candidate of candidates) {
-    byRootDir.set(candidate.rootDir, candidate);
+    bySource.set(candidate.source, candidate);
   }
-  return byRootDir;
+  return bySource;
 }
 
 export function buildInstalledPluginIndexRecords(params: {
@@ -201,30 +237,63 @@ export function buildInstalledPluginIndexRecords(params: {
   config?: OpenClawConfig;
   diagnostics: PluginDiagnostic[];
   installRecords: Record<string, InstalledPluginInstallRecordInfo>;
+  /** Index builds scoped to an explicit env stamp that env's compat decisions. */
+  env?: NodeJS.ProcessEnv;
 }): InstalledPluginIndexRecord[] {
-  const candidateByRootDir = buildCandidateLookup(params.candidates);
+  const candidateBySource = buildCandidateLookup(params.candidates);
   const normalizedConfig = normalizePluginsConfig(params.config?.plugins);
   return params.registry.plugins.map((record): InstalledPluginIndexRecord => {
-    const candidate = candidateByRootDir.get(record.rootDir);
+    const candidate = candidateBySource.get(record.source);
     const packageJsonPath = resolvePackageJsonPath(candidate);
-    const installRecord = params.installRecords[record.id];
+    const rejectHardlinks = shouldRejectHardlinkedPluginFiles({
+      origin: record.origin,
+      rootDir: record.rootDir,
+      env: params.env,
+    });
+    const installOwner =
+      candidate && isPluginCandidateInstallOwnerAmbiguous(candidate)
+        ? undefined
+        : (resolvePluginManifestInstallOwner(record) ??
+          (candidate ? resolvePluginCandidateInstallOwner(candidate) : undefined));
+    const installRecord = installOwner
+      ? getPluginInstallRecordMapEntry(params.installRecords, installOwner)
+      : undefined;
     const packageInstall = describePackageInstallSource(candidate);
     const packageChannel = normalizePackageChannel(
       record.packageChannel ?? candidate?.packageManifest?.channel,
     );
-    const manifestHash = resolveManifestHash({ record, diagnostics: params.diagnostics });
-    const manifestFile = hasOptionalMissingPluginManifestFile(record)
+    const manifestless = hasOptionalMissingPluginManifestFile(record);
+    const manifestFile = manifestless
       ? undefined
-      : safeFileSignature(record.manifestPath);
+      : readRecordFile({
+          record,
+          filePath: record.manifestPath,
+          rejectHardlinks,
+          required: true,
+          diagnostics: params.diagnostics,
+        });
+    const manifestHash = manifestless
+      ? hashManifestlessBundleRecord(record)
+      : (manifestFile?.hash ?? "");
+    const doctorContractPath = resolvePluginDoctorContractArtifactPath(record.rootDir);
+    const doctorContractFile = doctorContractPath
+      ? readRecordFile({
+          record,
+          filePath: doctorContractPath,
+          rejectHardlinks,
+          diagnostics: params.diagnostics,
+          required: false,
+        })
+      : undefined;
     const packageJson = resolvePackageJsonRecord({
       candidate,
       packageJsonPath,
-      diagnostics: params.diagnostics,
-      pluginId: record.id,
+      rejectHardlinks,
     });
     const enabled = resolveEffectiveEnableState({
       id: record.id,
       origin: record.origin,
+      channelIds: record.channels,
       config: normalizedConfig,
       rootConfig: params.config,
       enabledByDefault: isPluginEnabledByDefaultForPlatform(record),
@@ -233,12 +302,19 @@ export function buildInstalledPluginIndexRecords(params: {
       pluginId: record.id,
       manifestPath: record.manifestPath,
       manifestHash,
-      ...(manifestFile ? { manifestFile } : {}),
+      ...(doctorContractFile
+        ? {
+            doctorContractHash: doctorContractFile.hash,
+            doctorContractFile: doctorContractFile.signature,
+          }
+        : {}),
+      ...(manifestFile ? { manifestFile: manifestFile.signature } : {}),
       source: record.source,
       rootDir: record.rootDir,
       origin: record.origin,
       enabled,
       startup: buildStartupInfo(record),
+      contributions: buildContributionInfo(record),
       compat: collectPluginManifestCompatCodes(record),
     };
     if (record.format && record.format !== "openclaw") {
@@ -274,9 +350,16 @@ export function buildInstalledPluginIndexRecords(params: {
     if (packageChannel) {
       indexRecord.packageChannel = packageChannel;
     }
+    if (candidate?.packageManifest?.build) {
+      indexRecord.packageBuild = structuredClone(candidate.packageManifest.build);
+    }
     if (packageJson) {
       indexRecord.packageJson = packageJson;
     }
-    return indexRecord;
+    return recordInstalledPluginIndexInstallOwner(
+      indexRecord,
+      installOwner,
+      candidate ? isPluginCandidateInstallOwnerAmbiguous(candidate) : false,
+    );
   });
 }

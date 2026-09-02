@@ -1,29 +1,58 @@
+// Implements TUI slash command handlers and backend action dispatch.
 import { randomUUID } from "node:crypto";
-import type { Component, SelectItem, TUI } from "@mariozechner/pi-tui";
+import type { Component, OverlayHandle, SelectItem, TUI } from "@earendil-works/pi-tui";
+import type { Result } from "@openclaw/normalization-core/result";
+import type { SessionsPatchResult } from "../../packages/gateway-protocol/src/index.js";
 import { modelKey } from "../agents/model-ref-shared.js";
+import { shouldForwardModelCommandToServer } from "../auto-reply/commands-registry.shared.js";
 import { normalizeGroupActivation } from "../auto-reply/group-activation.js";
 import {
-  formatThinkingLevels,
+  isSessionDefaultDirectiveValue,
+  listThinkingLevelOptions,
   normalizeUsageDisplay,
   resolveResponseUsageMode,
 } from "../auto-reply/thinking.js";
-import type { SessionsPatchResult } from "../gateway/protocol/index.js";
-import { formatRelativeTimestamp } from "../infra/format-time/format-relative.ts";
-import { normalizeAgentId } from "../routing/session-key.js";
-import { helpText, parseCommand } from "./commands.js";
+import { isChatStopCommandText } from "../gateway/chat-abort.js";
+import {
+  agentSessionKeysMatchByRequestKey,
+  normalizeAgentId,
+  parseAgentSessionKey,
+} from "../routing/session-key.js";
+import { normalizeTerminalChatSendAckStatus } from "../shared/chat-send-ack-status.js";
+import {
+  formatTuiLevelCommandUsage,
+  helpText,
+  isSharedTextCommand,
+  parseCommand,
+  resolveTuiCommandDescriptor,
+  type TuiCommandHandlerName,
+} from "./commands.js";
 import type { ChatLog } from "./components/chat-log.js";
 import {
   createFilterableSelectList,
   createSearchableSelectList,
   createSettingsList,
 } from "./components/selectors.js";
-import type { TuiBackend } from "./tui-backend.js";
-import { sanitizeRenderableText } from "./tui-formatters.js";
+import type { TuiBackend, TuiSessionMutationResult } from "./tui-backend.js";
+import { addBlockedChatSubmitNotice } from "./tui-busy-notice.js";
+import { formatTuiErrorMessage } from "./tui-formatters.js";
+import { buildSessionChoices, loadRecentSessions } from "./tui-session-picker.js";
 import {
-  TUI_RECENT_SESSIONS_ACTIVE_MINUTES,
-  TUI_SESSION_PICKER_LIMIT,
-} from "./tui-session-list-policy.js";
+  readTuiSessionProjectionScope,
+  reduceTuiSessionProjection,
+} from "./tui-session-projection.js";
 import { formatStatusSummary } from "./tui-status-summary.js";
+import {
+  acceptPendingSubmit,
+  beginPendingSubmit,
+  clearPendingSubmit,
+  disconnectedTuiChatSubmitMessage,
+  hasPendingSubmit,
+  resolveTuiChatSubmitAdmission,
+  type TuiChatSubmitAdmission,
+  type TuiChatSubmitBlock,
+  type TuiChatSubmitSnapshot,
+} from "./tui-submit-state.js";
 import type {
   AgentSummary,
   GatewayStatusSummary,
@@ -32,6 +61,10 @@ import type {
   TuiStateAccess,
 } from "./tui-types.js";
 
+function formatTuiFastMode(mode: unknown): "auto" | "on" | "off" {
+  return mode === "auto" ? "auto" : mode === true ? "on" : "off";
+}
+
 type CommandHandlerContext = {
   client: TuiBackend;
   chatLog: ChatLog;
@@ -39,29 +72,45 @@ type CommandHandlerContext = {
   opts: TuiOptions;
   state: TuiStateAccess;
   deliverDefault: boolean;
-  openOverlay: (component: Component) => void;
-  closeOverlay: () => void;
+  openOverlay: (component: Component) => OverlayHandle;
+  closeOverlay: (handle?: OverlayHandle) => void;
   refreshSessionInfo: () => Promise<void>;
-  loadHistory: () => Promise<void>;
-  setSession: (key: string) => Promise<void>;
-  refreshAgents: () => Promise<void>;
-  abortActive: () => Promise<void>;
+  loadHistory: () => Promise<unknown>;
+  setSession: (key: string, agentId?: string) => Promise<void>;
+  refreshAgents: (ownsRefresh?: () => boolean) => Promise<Result<void, string>>;
+  abortActive: (params?: { preferActive?: boolean }) => Promise<void>;
   setActivityStatus: (text: string) => void;
   formatSessionKey: (key: string) => string;
   applySessionInfoFromPatch: (result: SessionsPatchResult) => void;
+  applySessionMutationResult: (
+    result?: TuiSessionMutationResult | null,
+    requestSelection?: { sessionKey: string; agentId: string },
+  ) => boolean;
   noteLocalRunId?: (runId: string) => void;
   noteLocalBtwRunId?: (runId: string) => void;
   forgetLocalRunId?: (runId: string) => void;
   forgetLocalBtwRunId?: (runId: string) => void;
-  runAuthFlow?: (params: {
-    provider?: string;
-  }) => Promise<{ exitCode: number | null; signal: NodeJS.Signals | null }>;
+  consumeCompletedRunForPendingSend?: (runId: string) => boolean;
+  isRunObserved?: (runId: string) => boolean;
+  flushPendingHistoryRefreshIfIdle?: () => void;
+  runAuthFlow?: (params: { provider?: string }) => Promise<{
+    exitCode: number | null;
+    signal: NodeJS.Signals | null;
+    commandArgv: string;
+  }>;
   requestExit: (result?: Partial<TuiResult>) => void;
 };
 
 function isBtwCommand(text: string): boolean {
   return /^\/(?:btw|side)(?::|\s|$)/i.test(text.trim());
 }
+
+function isSlashStopCommand(text: string): boolean {
+  const trimmed = text.trim();
+  return trimmed.startsWith("/") && isChatStopCommandText(trimmed);
+}
+
+const TERMINAL_CHAT_SEND_FAILURE_MESSAGE = "Chat failed before the run started; try again.";
 
 export function createCommandHandlers(context: CommandHandlerContext) {
   const {
@@ -79,50 +128,221 @@ export function createCommandHandlers(context: CommandHandlerContext) {
     refreshAgents,
     abortActive,
     setActivityStatus,
-    formatSessionKey,
     applySessionInfoFromPatch,
+    applySessionMutationResult,
+    noteLocalRunId,
     noteLocalBtwRunId,
     forgetLocalRunId,
     forgetLocalBtwRunId,
+    consumeCompletedRunForPendingSend,
+    isRunObserved,
+    flushPendingHistoryRefreshIfIdle,
     runAuthFlow,
     requestExit,
   } = context;
+  let sessionTransition = {
+    active: null as "new" | "reset" | null,
+    boundary: null as "new" | "reset" | null,
+    epoch: 0,
+  };
+  let pickerRequest: { overlay?: OverlayHandle; noticeId: string } | null = null;
 
-  const setAgent = async (id: string) => {
-    state.currentAgentId = normalizeAgentId(id);
-    await setSession("");
-    chatLog.addSystem(`agent set to ${state.currentAgentId}; use /crestodian to return`);
+  // Hold one owner through the full identity transition so later input cannot
+  // target the session being retired while create/reset awaits the backend.
+  const beginSessionTransition = (command: "new" | "reset") => {
+    const epoch = sessionTransition.epoch + 1;
+    sessionTransition = { active: command, boundary: command, epoch };
+    return () => {
+      if (sessionTransition.active === command && sessionTransition.epoch === epoch) {
+        sessionTransition = { active: null, boundary: command, epoch: epoch + 1 };
+      }
+    };
   };
 
-  const closeOverlayAndRender = () => {
-    closeOverlay();
+  const captureMessageAdmission = (): TuiChatSubmitSnapshot => ({
+    sessionTransition: sessionTransition.active,
+    sessionTransitionEpoch: sessionTransition.epoch,
+  });
+
+  const resolveMessageAdmission = (
+    message: string,
+    snapshot?: TuiChatSubmitSnapshot,
+  ): TuiChatSubmitAdmission => {
+    const admission = resolveTuiChatSubmitAdmission({
+      isConnected: state.isConnected,
+      activeChatRunId: state.activeChatRunId,
+      pendingSubmit: state.pendingSubmit,
+      message,
+    });
+    if (admission.status === "blocked" && admission.reason === "disconnected") {
+      return admission;
+    }
+    const transitionCommand = snapshot
+      ? (snapshot.sessionTransition ??
+        (snapshot.sessionTransitionEpoch !== sessionTransition.epoch
+          ? (sessionTransition.active ?? sessionTransition.boundary)
+          : null))
+      : sessionTransition.active;
+    if (transitionCommand) {
+      return {
+        status: "blocked",
+        reason: "session-transition",
+        command: transitionCommand,
+      };
+    }
+    return admission.status === "blocked" && isBtwCommand(message)
+      ? { status: "allowed" }
+      : admission;
+  };
+
+  const reportBlockedMessageSubmit = (_message: string, admission: TuiChatSubmitBlock) => {
+    if (admission.reason === "pending") {
+      addBlockedChatSubmitNotice(chatLog);
+    } else if (admission.reason === "disconnected") {
+      chatLog.addSystem(disconnectedTuiChatSubmitMessage(opts.local === true));
+      setActivityStatus("disconnected");
+    } else {
+      chatLog.addSystem(`session change in progress; wait for /${admission.command} to finish`);
+    }
     tui.requestRender();
   };
 
-  const openSelector = (
-    selector: {
-      onSelect?: (item: SelectItem) => void;
-      onCancel?: () => void;
-    },
-    onSelect: (value: string) => Promise<void>,
+  const addUnsupportedLocalCommand = (name: string) => {
+    chatLog.addSystem(`/${name} is not available in local embedded mode; message not sent`);
+  };
+
+  const setAgent = async (id: string) => {
+    await setSession("", normalizeAgentId(id));
+    chatLog.addSystem(`agent set to ${state.currentAgentId}; use /openclaw to return`);
+  };
+
+  const beginPickerRequest = (): { overlay?: OverlayHandle; noticeId: string } => {
+    if (pickerRequest && chatLog.dismissPendingSystem(pickerRequest.noticeId)) {
+      tui.requestRender();
+    }
+    if (pickerRequest?.overlay) {
+      closeOverlayAndRender(pickerRequest.overlay);
+    }
+    return (pickerRequest = { noticeId: randomUUID() });
+  };
+
+  const closeOverlayAndRender = (handle: OverlayHandle) => {
+    if (pickerRequest?.overlay !== handle) {
+      return;
+    }
+    pickerRequest = null;
+    closeOverlay(handle);
+    tui.requestRender();
+  };
+
+  const hasTrackedAbortTarget = () => Boolean(state.activeChatRunId || hasPendingSubmit(state));
+
+  const hasUnsafeSessionRollover = () =>
+    hasTrackedAbortTarget() || state.activityStatus === "finishing context";
+
+  const rejectUnsafeSessionRollover = (command: "new" | "reset") => {
+    if (!hasUnsafeSessionRollover()) {
+      return false;
+    }
+    // Reset interrupts admitted Gateway work, so both rollover commands must
+    // reject active, queued, and finishing runs before mutating the session.
+    chatLog.addSystem(`abort the current run before /${command}`);
+    tui.requestRender();
+    return true;
+  };
+
+  const captureSessionSelection = () => ({
+    sessionKey: state.currentSessionKey,
+    agentId: state.currentAgentId,
+  });
+
+  const isCurrentSessionSelection = (selection: { sessionKey: string; agentId: string }) =>
+    state.currentAgentId === selection.agentId &&
+    agentSessionKeysMatchByRequestKey(state.currentSessionKey, selection.sessionKey);
+
+  const captureSessionIncarnation = () => {
+    const selection = captureSessionSelection();
+    const sessionId = state.currentSessionId;
+    const generation = state.sessionGeneration ?? 0;
+    return {
+      selection,
+      sessionId,
+      isCurrent: () =>
+        isCurrentSessionSelection(selection) &&
+        (state.sessionGeneration ?? 0) === generation &&
+        (sessionId === null || state.currentSessionId === sessionId),
+    };
+  };
+
+  const applySessionSetting = async (
+    patch: Omit<Parameters<TuiBackend["patchSession"]>[0], "key" | "agentId">,
+    success: string | ((result: SessionsPatchResult) => string),
+    failure: string,
+    after?: (result: SessionsPatchResult) => void | Promise<void>,
   ) => {
+    const { selection, isCurrent } = captureSessionIncarnation();
+    try {
+      const result = await client.patchSession({
+        key: selection.sessionKey,
+        ...(!parseAgentSessionKey(selection.sessionKey) ? { agentId: selection.agentId } : {}),
+        ...patch,
+      });
+      if (!isCurrent()) {
+        return;
+      }
+      chatLog.addSystem(typeof success === "function" ? success(result) : success);
+      applySessionInfoFromPatch(result);
+      if (after) {
+        await after(result);
+      } else {
+        await refreshSessionInfo();
+      }
+    } catch (err) {
+      if (isCurrent()) {
+        chatLog.addSystem(`${failure}: ${formatTuiErrorMessage(err)}`);
+      }
+    }
+  };
+
+  const openSelector = (
+    selector: { onSelect?: (item: SelectItem) => void; onCancel?: () => void },
+    onSelect: (value: string) => Promise<void>,
+    request: { overlay?: OverlayHandle },
+  ) => {
+    const { isCurrent } = captureSessionIncarnation();
     selector.onSelect = (item) => {
       void (async () => {
-        await onSelect(item.value);
-        closeOverlayAndRender();
+        try {
+          if (isCurrent()) {
+            await onSelect(item.value);
+          }
+        } catch (err) {
+          // A rejected selection must not strand the overlay open with an
+          // unhandled rejection; close it and surface the cause in chat.
+          if (isCurrent()) {
+            chatLog.addSystem(`selection failed: ${formatTuiErrorMessage(err)}`);
+          }
+        }
+        closeOverlayAndRender(overlayHandle);
       })();
     };
-    selector.onCancel = closeOverlayAndRender;
-    openOverlay(selector as Component);
+    selector.onCancel = () => closeOverlayAndRender(overlayHandle);
+    const overlayHandle = (request.overlay = openOverlay(selector as Component));
     tui.requestRender();
   };
 
   const openModelSelector = async () => {
+    const request = beginPickerRequest();
+    const { selection, isCurrent } = captureSessionIncarnation();
     try {
-      const models = await client.listModels();
+      chatLog.addPendingSystem(request.noticeId, "loading models...");
+      tui.requestRender();
+      const models = await client.listModels({ agentId: selection.agentId });
+      if (request !== pickerRequest || !isCurrent()) {
+        return;
+      }
       if (models.length === 0) {
         chatLog.addSystem("no models available");
-        tui.requestRender();
         return;
       }
       const items = models.map((model) => {
@@ -133,118 +353,80 @@ export function createCommandHandlers(context: CommandHandlerContext) {
           description: model.name && model.name !== model.id ? model.name : "",
         };
       });
-      const selector = createSearchableSelectList(items, 9);
-      openSelector(selector, async (value) => {
-        try {
-          const result = await client.patchSession({
-            key: state.currentSessionKey,
-            model: value,
-          });
-          chatLog.addSystem(`model set to ${value}`);
-          applySessionInfoFromPatch(result);
-          await refreshSessionInfo();
-        } catch (err) {
-          chatLog.addSystem(`model set failed: ${String(err)}`);
-        }
-      });
+      openSelector(
+        createSearchableSelectList(items, 9),
+        (value) =>
+          applySessionSetting({ model: value }, `model set to ${value}`, "model set failed"),
+        request,
+      );
     } catch (err) {
-      chatLog.addSystem(`model list failed: ${String(err)}`);
-      tui.requestRender();
+      if (request !== pickerRequest || !isCurrent()) {
+        return;
+      }
+      chatLog.addSystem(`model list failed: ${formatTuiErrorMessage(err)}`);
+    } finally {
+      if (request === pickerRequest && chatLog.dismissPendingSystem(request.noticeId)) {
+        tui.requestRender();
+      }
     }
   };
 
   const openAgentSelector = async () => {
-    await refreshAgents();
-    if (state.agents.length === 0) {
+    const request = beginPickerRequest();
+    const refreshResult = await refreshAgents(() => request === pickerRequest);
+    if (request !== pickerRequest) {
+      return;
+    }
+    if (!refreshResult.ok) {
+      tui.requestRender();
+      return;
+    }
+    const selectableAgents = state.agents.filter((agent) => agent.kind !== "system");
+    if (selectableAgents.length === 0) {
       chatLog.addSystem("no agents found");
       tui.requestRender();
       return;
     }
-    const items = state.agents.map((agent: AgentSummary) => ({
+    const items = selectableAgents.map((agent: AgentSummary) => ({
       value: agent.id,
       label: agent.name ? `${agent.id} (${agent.name})` : agent.id,
       description: agent.id === state.agentDefaultId ? "default" : "",
     }));
-    const selector = createSearchableSelectList(items, 9);
-    openSelector(selector, async (value) => {
-      await setAgent(value);
-    });
+    openSelector(createSearchableSelectList(items, 9), setAgent, request);
   };
 
   const openContextModeSelector = () => {
+    const request = beginPickerRequest();
     const items = [
-      {
-        value: "list",
-        label: "list",
-        description: "Short context breakdown",
-      },
-      {
-        value: "detail",
-        label: "detail",
-        description: "Per-file, per-tool, per-skill, and system prompt size",
-      },
-      {
-        value: "json",
-        label: "json",
-        description: "Machine-readable context report",
-      },
-    ];
+      ["list", "Short context breakdown"] as const,
+      ["detail", "Per-file, per-tool, per-skill, and system prompt size"] as const,
+      ["json", "Machine-readable context report"] as const,
+    ].map(([value, description]) => ({ value, label: value, description }));
     const selector = createSearchableSelectList(items, 9);
-    openSelector(selector, async (value) => {
-      await sendMessage(`/context ${value}`);
-    });
+    openSelector(selector, (value) => sendMessage(`/context ${value}`), request);
   };
 
   const openSessionSelector = async () => {
+    const request = beginPickerRequest();
+    const { selection, isCurrent } = captureSessionIncarnation();
     try {
-      const result = await client.listSessions({
-        limit: TUI_SESSION_PICKER_LIMIT,
-        activeMinutes: TUI_RECENT_SESSIONS_ACTIVE_MINUTES,
-        includeGlobal: false,
-        includeUnknown: false,
-        includeDerivedTitles: true,
-        includeLastMessage: true,
-        agentId: state.currentAgentId,
-      });
-      const items = result.sessions.map((session) => {
-        const title = session.derivedTitle ?? session.displayName;
-        const formattedKey = formatSessionKey(session.key);
-        // Avoid redundant "title (key)" when title matches key
-        const label = title && title !== formattedKey ? `${title} (${formattedKey})` : formattedKey;
-        // Build description: time + message preview
-        const timePart = session.updatedAt
-          ? formatRelativeTimestamp(session.updatedAt, { dateFallback: true, fallback: "" })
-          : "";
-        const preview = session.lastMessagePreview?.replace(/\s+/g, " ").trim();
-        const description =
-          timePart && preview ? `${timePart} · ${preview}` : (preview ?? timePart);
-        return {
-          value: session.key,
-          label,
-          description,
-          searchText: [
-            session.displayName,
-            session.label,
-            session.subject,
-            session.sessionId,
-            session.key,
-            session.lastMessagePreview,
-          ]
-            .filter(Boolean)
-            .join(" "),
-        };
-      });
-      const selector = createFilterableSelectList(items, 9);
-      openSelector(selector, async (value) => {
-        await setSession(value);
-      });
+      const sessions = await loadRecentSessions(client, { agentId: selection.agentId });
+      if (request !== pickerRequest || !isCurrent()) {
+        return;
+      }
+      const selector = createFilterableSelectList(buildSessionChoices(sessions), 9);
+      openSelector(selector, setSession, request);
     } catch (err) {
-      chatLog.addSystem(`sessions list failed: ${String(err)}`);
+      if (request !== pickerRequest || !isCurrent()) {
+        return;
+      }
+      chatLog.addSystem(`sessions list failed: ${formatTuiErrorMessage(err)}`);
       tui.requestRender();
     }
   };
 
   const openSettings = () => {
+    const request = beginPickerRequest();
     const items = [
       {
         id: "tools",
@@ -272,403 +454,622 @@ export function createCommandHandlers(context: CommandHandlerContext) {
         }
         tui.requestRender();
       },
-      () => {
-        closeOverlay();
-        tui.requestRender();
-      },
+      () => closeOverlayAndRender(overlayHandle),
     );
-    openOverlay(settings);
+    const overlayHandle = (request.overlay = openOverlay(settings));
     tui.requestRender();
   };
+
+  type CommandHandler = (args: string, raw: string) => void | Promise<void>;
+  const commandHandlers = {
+    help: () => {
+      chatLog.addSystem(
+        helpText({
+          local: opts.local,
+          provider: state.sessionInfo.modelProvider,
+          model: state.sessionInfo.model,
+          agentRuntime: state.sessionInfo.agentRuntime?.id,
+          thinkingLevels: state.sessionInfo.thinkingLevels,
+        }),
+      );
+    },
+    auth: async (args) => {
+      if (!runAuthFlow) {
+        chatLog.addSystem("auth login is only available in local embedded mode");
+        return;
+      }
+      if (state.activeChatRunId || hasPendingSubmit(state)) {
+        chatLog.addSystem("abort the current run before /auth");
+        return;
+      }
+      const provider = args.trim() || state.sessionInfo.modelProvider || undefined;
+      chatLog.addSystem(
+        provider
+          ? `opening auth flow for ${provider}; TUI will resume when it exits`
+          : "opening auth flow; TUI will resume when it exits",
+      );
+      tui.requestRender();
+      setActivityStatus("auth");
+      try {
+        const result = await runAuthFlow({ provider });
+        await refreshSessionInfo();
+        if (result.exitCode === 0 && !result.signal) {
+          chatLog.addSystem(provider ? `auth flow finished for ${provider}` : "auth flow finished");
+          setActivityStatus("idle");
+        } else {
+          const failureSuffix = result.signal
+            ? ` (signal ${result.signal})`
+            : typeof result.exitCode === "number"
+              ? ` (exit ${String(result.exitCode)})`
+              : "";
+          chatLog.addSystem(
+            `auth flow failed${failureSuffix} — command argv: ${result.commandArgv}; retry provider login in a regular terminal to see its output`,
+          );
+          setActivityStatus("error");
+        }
+      } catch (err) {
+        chatLog.addSystem(`auth flow failed: ${formatTuiErrorMessage(err)}`);
+        setActivityStatus("error");
+      }
+    },
+    "gateway-status": async () => {
+      try {
+        const status = await client.getGatewayStatus();
+        if (typeof status === "string") {
+          chatLog.addSystem(status);
+          return;
+        }
+        if (status && typeof status === "object") {
+          const lines = formatStatusSummary(status as GatewayStatusSummary);
+          for (const line of lines) {
+            chatLog.addSystem(line);
+          }
+          return;
+        }
+        chatLog.addSystem("status: unknown response");
+      } catch (err) {
+        chatLog.addSystem(`status failed: ${formatTuiErrorMessage(err)}`);
+      }
+    },
+    agent: async (args) => {
+      if (!args) {
+        await openAgentSelector();
+      } else {
+        await setAgent(args);
+      }
+    },
+    agents: async () => await openAgentSelector(),
+    context: async (args, raw) => {
+      if (opts.local) {
+        addUnsupportedLocalCommand("context");
+      } else if (!args) {
+        openContextModeSelector();
+      } else {
+        await sendMessage(raw);
+      }
+    },
+    goal: async (_args, raw) => {
+      if (opts.local === true && client.runGoalCommand) {
+        const { selection, isCurrent } = captureSessionIncarnation();
+        try {
+          const result = await client.runGoalCommand({
+            ...selection,
+            command: raw,
+          });
+          if (!isCurrent()) {
+            return;
+          }
+          chatLog.addSystem(result.text);
+          await refreshSessionInfo();
+          if (result.continuationPrompt && isCurrent()) {
+            await sendMessage(result.continuationPrompt);
+          }
+        } catch (err) {
+          if (isCurrent()) {
+            chatLog.addSystem(`goal failed: ${formatTuiErrorMessage(err)}`);
+          }
+        }
+      } else {
+        await sendMessage(raw);
+      }
+    },
+    btw: async (args, raw) => {
+      if (args) {
+        await sendMessage(raw);
+      } else {
+        chatLog.addSystem("Usage: /btw <side question>");
+      }
+    },
+    queue: async (_args, raw) => await sendMessage(raw),
+    openclaw: (args) => {
+      chatLog.addSystem(
+        args ? `returning to OpenClaw with request: ${args}` : "returning to OpenClaw",
+      );
+      requestExit({
+        exitReason: "return-to-system-agent",
+        ...(args ? { systemAgentMessage: args } : {}),
+      });
+    },
+    session: async (args) => {
+      if (!args) {
+        await openSessionSelector();
+      } else {
+        await setSession(args);
+      }
+    },
+    sessions: async () => await openSessionSelector(),
+    model: async (args, raw) => {
+      if (shouldForwardModelCommandToServer(args)) {
+        await sendMessage(raw);
+      } else if (!args) {
+        await openModelSelector();
+      } else {
+        await applySessionSetting(
+          { model: /^default$/i.test(args) ? null : args },
+          (result) => {
+            const resolvedModel = result.resolved?.model;
+            const resolvedProvider = result.resolved?.modelProvider;
+            const resolvedModelRef = resolvedModel
+              ? resolvedProvider
+                ? modelKey(resolvedProvider, resolvedModel)
+                : resolvedModel
+              : args;
+            return `model set to ${resolvedModelRef}`;
+          },
+          "model set failed",
+        );
+      }
+    },
+    models: async () => await openModelSelector(),
+    think: async (args) => {
+      const { thinkingLevels, modelProvider, model, agentRuntime } = state.sessionInfo;
+      const levels = thinkingLevels?.length
+        ? thinkingLevels
+        : listThinkingLevelOptions(modelProvider, model, undefined, agentRuntime?.id);
+      if (!args) {
+        chatLog.addSystem(`usage: /think <${levels.map(({ label }) => label).join("|")}|default>`);
+        return;
+      }
+      const normalized = args.toLowerCase();
+      const thinkingLevel = isSessionDefaultDirectiveValue(args)
+        ? null
+        : (levels.find(({ id }) => id.toLowerCase() === normalized)?.id ??
+          levels.find(({ label }) => label.toLowerCase() === normalized)?.id ??
+          args);
+      await applySessionSetting({ thinkingLevel }, `thinking set to ${args}`, "think failed");
+    },
+    verbose: async (args) => {
+      if (!args) {
+        chatLog.addSystem(`usage: ${formatTuiLevelCommandUsage("verbose")}`);
+        return;
+      }
+      await applySessionSetting(
+        { verboseLevel: args },
+        `verbose set to ${args}`,
+        "verbose failed",
+        async () => {
+          if (args === "off") {
+            chatLog.clearTools();
+            await refreshSessionInfo();
+          } else {
+            await loadHistory();
+          }
+        },
+      );
+    },
+    trace: async (args) => {
+      if (!args) {
+        chatLog.addSystem("usage: /trace <on|off>");
+        return;
+      }
+      await applySessionSetting({ traceLevel: args }, `trace set to ${args}`, "trace failed");
+    },
+    fast: async (args) => {
+      if (!args || args === "status") {
+        chatLog.addSystem(`fast mode: ${formatTuiFastMode(state.sessionInfo.fastMode)}`);
+        return;
+      }
+      const reset = isSessionDefaultDirectiveValue(args);
+      if (!reset && !["auto", "on", "off"].includes(args)) {
+        chatLog.addSystem("usage: /fast <status|auto|on|off|default>");
+        return;
+      }
+      const fastMode = reset ? null : args === "auto" ? args : args === "on";
+      await applySessionSetting({ fastMode }, `fast mode set to ${args}`, "fast failed");
+    },
+    reasoning: async (args) => {
+      if (!args) {
+        chatLog.addSystem(`usage: ${formatTuiLevelCommandUsage("reasoning")}`);
+        return;
+      }
+      await applySessionSetting(
+        { reasoningLevel: args },
+        `reasoning set to ${args}`,
+        "reasoning failed",
+      );
+    },
+    usage: async (args, raw) => {
+      if (args.toLowerCase() === "cost") {
+        if (!opts.local) {
+          await sendMessage(raw);
+          return;
+        }
+        if (!client.runUsageCostCommand) {
+          addUnsupportedLocalCommand("usage cost");
+          return;
+        }
+        const { selection, isCurrent } = captureSessionIncarnation();
+        try {
+          const result = await client.runUsageCostCommand(selection);
+          if (isCurrent()) {
+            chatLog.addSystem(result.text);
+          }
+        } catch (err) {
+          if (isCurrent()) {
+            chatLog.addSystem(`usage cost failed: ${formatTuiErrorMessage(err)}`);
+          }
+        }
+        return;
+      }
+      const isReset = args ? isSessionDefaultDirectiveValue(args) : false;
+      const normalized = args && !isReset ? normalizeUsageDisplay(args) : undefined;
+      if (args && !normalized && !isReset) {
+        chatLog.addSystem("usage: /usage <off|tokens|full|cost|reset>");
+        return;
+      }
+      if (isReset) {
+        await applySessionSetting(
+          { responseUsage: null },
+          "usage footer: reset to default",
+          "usage failed",
+          async () => {
+            delete state.sessionInfo.responseUsage;
+            delete state.sessionInfo.effectiveResponseUsage;
+            await refreshSessionInfo();
+          },
+        );
+        return;
+      }
+      const current =
+        state.sessionInfo.effectiveResponseUsage ??
+        resolveResponseUsageMode(state.sessionInfo.responseUsage);
+      const next =
+        normalized ?? (current === "off" ? "tokens" : current === "tokens" ? "full" : "off");
+      await applySessionSetting({ responseUsage: next }, `usage footer: ${next}`, "usage failed");
+    },
+    elevated: async (args) => {
+      if (!["on", "off", "ask", "full"].includes(args)) {
+        chatLog.addSystem("usage: /elevated <on|off|ask|full>");
+        return;
+      }
+      await applySessionSetting(
+        { elevatedLevel: args },
+        `elevated set to ${args}`,
+        "elevated failed",
+      );
+    },
+    activation: async (args) => {
+      if (!args) {
+        chatLog.addSystem("usage: /activation <mention|always>");
+        return;
+      }
+      const activation = normalizeGroupActivation(args);
+      if (!activation) {
+        chatLog.addSystem("usage: /activation <mention|always>");
+        return;
+      }
+      await applySessionSetting(
+        { groupActivation: activation },
+        `activation set to ${activation}`,
+        "activation failed",
+      );
+    },
+    new: async () => {
+      if (rejectUnsafeSessionRollover("new")) {
+        return;
+      }
+      let creationIncarnation = captureSessionIncarnation();
+      const { selection, sessionId } = creationIncarnation;
+      const finishSessionTransition = beginSessionTransition("new");
+      try {
+        const result = await client.createSession({
+          key: `tui-${randomUUID()}`,
+          agentId: selection.agentId,
+          ...(sessionId ? { parentSessionKey: selection.sessionKey, succeedsParent: true } : {}),
+        });
+        if (!creationIncarnation.isCurrent()) {
+          return;
+        }
+        if (!result.key) {
+          throw new Error("sessions.create returned no session key");
+        }
+        const adoption = setSession(result.key);
+        creationIncarnation = captureSessionIncarnation();
+        await adoption;
+        if (creationIncarnation.isCurrent()) {
+          chatLog.addSystem(`new session: ${result.key}`);
+        }
+      } catch (err) {
+        if (creationIncarnation.isCurrent()) {
+          chatLog.addSystem(`new session failed: ${formatTuiErrorMessage(err)}`);
+        }
+      } finally {
+        finishSessionTransition();
+      }
+    },
+    reset: async () => {
+      if (rejectUnsafeSessionRollover("reset")) {
+        return;
+      }
+      let resetIncarnation = captureSessionIncarnation();
+      const resetSelection = resetIncarnation.selection;
+      const finishSessionTransition = beginSessionTransition("reset");
+      try {
+        const result = await client.resetSession(
+          resetSelection.sessionKey,
+          "reset",
+          !parseAgentSessionKey(resetSelection.sessionKey)
+            ? { agentId: resetSelection.agentId }
+            : undefined,
+        );
+        if (!resetIncarnation.isCurrent()) {
+          return;
+        }
+        state.sessionInfo.inputTokens = null;
+        state.sessionInfo.outputTokens = null;
+        state.sessionInfo.totalTokens = null;
+        tui.requestRender();
+        if (applySessionMutationResult(result, resetSelection)) {
+          resetIncarnation = captureSessionIncarnation();
+          await refreshSessionInfo();
+        } else {
+          await loadHistory();
+        }
+        if (!resetIncarnation.isCurrent()) {
+          return;
+        }
+        chatLog.addSystem(`session ${state.currentSessionKey} reset`);
+      } catch (err) {
+        if (!resetIncarnation.isCurrent()) {
+          return;
+        }
+        chatLog.addSystem(`reset failed: ${formatTuiErrorMessage(err)}`);
+      } finally {
+        finishSessionTransition();
+      }
+    },
+    abort: async () => await abortActive(),
+    stop: async () => {
+      // Queued client runs can terminalize before the followup executes, so
+      // local run ids are not a complete stop target inventory.
+      await abortActive({ preferActive: true });
+    },
+    settings: () => openSettings(),
+    exit: () => requestExit(),
+  } satisfies Record<TuiCommandHandlerName, CommandHandler>;
 
   const handleCommand = async (raw: string) => {
     const { name, args } = parseCommand(raw);
     if (!name) {
       return;
     }
-    switch (name) {
-      case "help":
-        chatLog.addSystem(
-          helpText({
-            local: opts.local,
-            provider: state.sessionInfo.modelProvider,
-            model: state.sessionInfo.model,
-          }),
-        );
-        break;
-      case "auth": {
-        if (!runAuthFlow) {
-          chatLog.addSystem("auth login is only available in local embedded mode");
-          break;
-        }
-        if (state.activeChatRunId || state.pendingOptimisticUserMessage) {
-          chatLog.addSystem("abort the current run before /auth");
-          break;
-        }
-        const provider = args.trim() || state.sessionInfo.modelProvider || undefined;
-        chatLog.addSystem(
-          provider
-            ? `opening auth flow for ${provider}; TUI will resume when it exits`
-            : "opening auth flow; TUI will resume when it exits",
-        );
-        tui.requestRender();
-        setActivityStatus("auth");
-        try {
-          const result = await runAuthFlow({ provider });
-          await refreshSessionInfo();
-          if (result.exitCode === 0 && !result.signal) {
-            chatLog.addSystem(
-              provider ? `auth flow finished for ${provider}` : "auth flow finished",
-            );
-            setActivityStatus("idle");
-          } else {
-            const failureSuffix = result.signal
-              ? ` (signal ${result.signal})`
-              : typeof result.exitCode === "number"
-                ? ` (exit ${String(result.exitCode)})`
-                : "";
-            chatLog.addSystem(`auth flow failed${failureSuffix}`);
-            setActivityStatus("error");
-          }
-        } catch (err) {
-          chatLog.addSystem(`auth flow failed: ${sanitizeRenderableText(String(err))}`);
-          setActivityStatus("error");
-        }
-        break;
-      }
-      case "gateway-status":
-        try {
-          const status = await client.getGatewayStatus();
-          if (typeof status === "string") {
-            chatLog.addSystem(status);
-            break;
-          }
-          if (status && typeof status === "object") {
-            const lines = formatStatusSummary(status as GatewayStatusSummary);
-            for (const line of lines) {
-              chatLog.addSystem(line);
-            }
-            break;
-          }
-          chatLog.addSystem("status: unknown response");
-        } catch (err) {
-          chatLog.addSystem(`status failed: ${String(err)}`);
-        }
-        break;
-      case "agent":
-        if (!args) {
-          await openAgentSelector();
-        } else {
-          await setAgent(args);
-        }
-        break;
-      case "agents":
-        await openAgentSelector();
-        break;
-      case "context":
-        if (!args) {
-          openContextModeSelector();
-        } else {
-          await sendMessage(raw);
-        }
-        break;
-      case "crestodian":
-        chatLog.addSystem(
-          args ? `returning to Crestodian with request: ${args}` : "returning to Crestodian",
-        );
-        requestExit({
-          exitReason: "return-to-crestodian",
-          ...(args ? { crestodianMessage: args } : {}),
-        });
-        break;
-      case "session":
-        if (!args) {
-          await openSessionSelector();
-        } else {
-          await setSession(args);
-        }
-        break;
-      case "sessions":
-        await openSessionSelector();
-        break;
-      case "model":
-        if (!args) {
-          await openModelSelector();
-        } else {
-          try {
-            const result = await client.patchSession({
-              key: state.currentSessionKey,
-              model: args,
-            });
-            chatLog.addSystem(`model set to ${args}`);
-            applySessionInfoFromPatch(result);
-            await refreshSessionInfo();
-          } catch (err) {
-            chatLog.addSystem(`model set failed: ${String(err)}`);
-          }
-        }
-        break;
-      case "models":
-        await openModelSelector();
-        break;
-      case "think":
-        if (!args) {
-          const levels =
-            state.sessionInfo.thinkingLevels?.map((level) => level.label).join("|") ||
-            formatThinkingLevels(state.sessionInfo.modelProvider, state.sessionInfo.model, "|");
-          chatLog.addSystem(`usage: /think <${levels}>`);
-          break;
-        }
-        try {
-          const result = await client.patchSession({
-            key: state.currentSessionKey,
-            thinkingLevel: args,
-          });
-          chatLog.addSystem(`thinking set to ${args}`);
-          applySessionInfoFromPatch(result);
-          await refreshSessionInfo();
-        } catch (err) {
-          chatLog.addSystem(`think failed: ${String(err)}`);
-        }
-        break;
-      case "verbose":
-        if (!args) {
-          chatLog.addSystem("usage: /verbose <on|off>");
-          break;
-        }
-        try {
-          const result = await client.patchSession({
-            key: state.currentSessionKey,
-            verboseLevel: args,
-          });
-          chatLog.addSystem(`verbose set to ${args}`);
-          applySessionInfoFromPatch(result);
-          await loadHistory();
-        } catch (err) {
-          chatLog.addSystem(`verbose failed: ${String(err)}`);
-        }
-        break;
-      case "trace":
-        if (!args) {
-          chatLog.addSystem("usage: /trace <on|off>");
-          break;
-        }
-        try {
-          const result = await client.patchSession({
-            key: state.currentSessionKey,
-            traceLevel: args,
-          });
-          chatLog.addSystem(`trace set to ${args}`);
-          applySessionInfoFromPatch(result);
-          await loadHistory();
-        } catch (err) {
-          chatLog.addSystem(`trace failed: ${String(err)}`);
-        }
-        break;
-      case "fast":
-        if (!args || args === "status") {
-          chatLog.addSystem(`fast mode: ${state.sessionInfo.fastMode ? "on" : "off"}`);
-          break;
-        }
-        if (args !== "on" && args !== "off") {
-          chatLog.addSystem("usage: /fast <status|on|off>");
-          break;
-        }
-        try {
-          const result = await client.patchSession({
-            key: state.currentSessionKey,
-            fastMode: args === "on",
-          });
-          chatLog.addSystem(`fast mode ${args === "on" ? "enabled" : "disabled"}`);
-          applySessionInfoFromPatch(result);
-          await refreshSessionInfo();
-        } catch (err) {
-          chatLog.addSystem(`fast failed: ${String(err)}`);
-        }
-        break;
-      case "reasoning":
-        if (!args) {
-          chatLog.addSystem("usage: /reasoning <on|off>");
-          break;
-        }
-        try {
-          const result = await client.patchSession({
-            key: state.currentSessionKey,
-            reasoningLevel: args,
-          });
-          chatLog.addSystem(`reasoning set to ${args}`);
-          applySessionInfoFromPatch(result);
-          await refreshSessionInfo();
-        } catch (err) {
-          chatLog.addSystem(`reasoning failed: ${String(err)}`);
-        }
-        break;
-      case "usage": {
-        const normalized = args ? normalizeUsageDisplay(args) : undefined;
-        if (args && !normalized) {
-          chatLog.addSystem("usage: /usage <off|tokens|full>");
-          break;
-        }
-        const currentRaw = state.sessionInfo.responseUsage;
-        const current = resolveResponseUsageMode(currentRaw);
-        const next =
-          normalized ?? (current === "off" ? "tokens" : current === "tokens" ? "full" : "off");
-        try {
-          const result = await client.patchSession({
-            key: state.currentSessionKey,
-            responseUsage: next === "off" ? null : next,
-          });
-          chatLog.addSystem(`usage footer: ${next}`);
-          applySessionInfoFromPatch(result);
-          await refreshSessionInfo();
-        } catch (err) {
-          chatLog.addSystem(`usage failed: ${String(err)}`);
-        }
-        break;
-      }
-      case "elevated":
-        if (!args) {
-          chatLog.addSystem("usage: /elevated <on|off|ask|full>");
-          break;
-        }
-        if (!["on", "off", "ask", "full"].includes(args)) {
-          chatLog.addSystem("usage: /elevated <on|off|ask|full>");
-          break;
-        }
-        try {
-          const result = await client.patchSession({
-            key: state.currentSessionKey,
-            elevatedLevel: args,
-          });
-          chatLog.addSystem(`elevated set to ${args}`);
-          applySessionInfoFromPatch(result);
-          await refreshSessionInfo();
-        } catch (err) {
-          chatLog.addSystem(`elevated failed: ${String(err)}`);
-        }
-        break;
-      case "activation": {
-        if (!args) {
-          chatLog.addSystem("usage: /activation <mention|always>");
-          break;
-        }
-        const activation = normalizeGroupActivation(args);
-        if (!activation) {
-          chatLog.addSystem("usage: /activation <mention|always>");
-          break;
-        }
-        try {
-          const result = await client.patchSession({
-            key: state.currentSessionKey,
-            groupActivation: activation,
-          });
-          chatLog.addSystem(`activation set to ${activation}`);
-          applySessionInfoFromPatch(result);
-          await refreshSessionInfo();
-        } catch (err) {
-          chatLog.addSystem(`activation failed: ${String(err)}`);
-        }
-        break;
-      }
-      case "new":
-        try {
-          // Clear token counts immediately to avoid stale display (#1523)
-          state.sessionInfo.inputTokens = null;
-          state.sessionInfo.outputTokens = null;
-          state.sessionInfo.totalTokens = null;
-          tui.requestRender();
-
-          // Generate unique session key to isolate this TUI client (#39217)
-          // This ensures /new creates a fresh session that doesn't broadcast
-          // to other connected TUI clients sharing the original session key.
-          const uniqueKey = `tui-${randomUUID()}`;
-          await setSession(uniqueKey);
-          chatLog.addSystem(`new session: ${uniqueKey}`);
-        } catch (err) {
-          chatLog.addSystem(`new session failed: ${sanitizeRenderableText(String(err))}`);
-        }
-        break;
-      case "reset":
-        try {
-          // Clear token counts immediately to avoid stale display (#1523)
-          state.sessionInfo.inputTokens = null;
-          state.sessionInfo.outputTokens = null;
-          state.sessionInfo.totalTokens = null;
-          tui.requestRender();
-
-          await client.resetSession(state.currentSessionKey, name);
-          chatLog.addSystem(`session ${state.currentSessionKey} reset`);
-          await loadHistory();
-        } catch (err) {
-          chatLog.addSystem(`reset failed: ${sanitizeRenderableText(String(err))}`);
-        }
-        break;
-      case "abort":
-        await abortActive();
-        break;
-      case "settings":
-        openSettings();
-        break;
-      case "exit":
-      case "quit":
-        requestExit();
-        break;
-      default:
-        await sendMessage(raw);
-        break;
+    const descriptor = resolveTuiCommandDescriptor(name);
+    if (sessionTransition.active && descriptor?.name !== "exit") {
+      chatLog.addSystem(
+        `session change in progress; wait for /${sessionTransition.active} to finish`,
+      );
+      tui.requestRender();
+      return;
+    }
+    if (descriptor?.handler) {
+      await commandHandlers[descriptor.name as TuiCommandHandlerName](args, raw);
+    } else if (opts.local && isSharedTextCommand(raw)) {
+      addUnsupportedLocalCommand(name);
+    } else {
+      await sendMessage(raw);
     }
     tui.requestRender();
   };
 
-  const sendMessage = async (text: string) => {
-    if (!state.isConnected) {
-      chatLog.addSystem(
-        opts.local
-          ? "local runtime not ready — message not sent"
-          : "not connected to gateway — message not sent",
-      );
-      setActivityStatus("disconnected");
-      tui.requestRender();
+  const sendMessage = async (text: string, timeoutMs = opts.timeoutMs) => {
+    const admission = resolveMessageAdmission(text);
+    if (admission.status === "blocked") {
+      reportBlockedMessageSubmit(text, admission);
       return;
     }
     const isBtw = isBtwCommand(text);
+    const busy = Boolean(state.activeChatRunId || hasPendingSubmit(state));
+    if (
+      isSlashStopCommand(text) ||
+      (hasTrackedAbortTarget() && busy && isChatStopCommandText(text))
+    ) {
+      await abortActive({ preferActive: true });
+      return;
+    }
+    // The Gateway owns queue policy. TUI only serializes pending RPC admission;
+    // an already-active run must not suppress steer/followup/collect/interrupt.
     const runId = randomUUID();
+    const {
+      selection: sendSelection,
+      sessionId: sendSessionId,
+      isCurrent: isCurrentSendViewport,
+    } = captureSessionIncarnation();
+    const sendScope = readTuiSessionProjectionScope(state);
     try {
       if (!isBtw) {
-        chatLog.addUser(text);
-        state.pendingOptimisticUserMessage = true;
+        if (opts.local === true && state.activeChatRunId && !hasPendingSubmit(state)) {
+          chatLog.reserveAssistantSlot(state.activeChatRunId);
+        }
+        chatLog.addPendingUser(runId, text);
+        reduceTuiSessionProjection(state, {
+          type: "sendPending",
+          message: {
+            role: "user",
+            content: [{ type: "text", text }],
+            __openclaw: { idempotencyKey: `${runId}:user` },
+          },
+          runId,
+          scope: sendScope,
+        });
+        beginPendingSubmit(state, runId, text);
+        noteLocalRunId?.(runId);
         setActivityStatus("sending");
       } else {
         noteLocalBtwRunId?.(runId);
       }
       tui.requestRender();
-      await client.sendChat({
-        sessionKey: state.currentSessionKey,
-        sessionId: state.currentSessionId,
+      const sendResult = await client.sendChat({
+        sessionKey: sendSelection.sessionKey,
+        ...(!parseAgentSessionKey(sendSelection.sessionKey)
+          ? { agentId: sendSelection.agentId }
+          : {}),
+        sessionId: sendSessionId,
         message: text,
         thinking: opts.thinking,
         deliver: deliverDefault,
-        timeoutMs: opts.timeoutMs,
+        timeoutMs,
         runId,
       });
-      if (!isBtw) {
-        state.pendingChatRunId = runId;
-        setActivityStatus("waiting");
+      const acceptedRunId = sendResult.runId || runId;
+      const terminalAckStatus = normalizeTerminalChatSendAckStatus(sendResult.status);
+      const terminalAckFailure = terminalAckStatus === "timeout" || terminalAckStatus === "error";
+      const terminalAck = terminalAckStatus !== undefined;
+      if (!isCurrentSendViewport()) {
+        if (isBtw) {
+          forgetLocalBtwRunId?.(runId);
+          if (acceptedRunId !== runId) {
+            forgetLocalBtwRunId?.(acceptedRunId);
+          }
+        } else {
+          forgetLocalRunId?.(runId);
+          if (acceptedRunId !== runId) {
+            forgetLocalRunId?.(acceptedRunId);
+          }
+          clearPendingSubmit(state, runId);
+          clearPendingSubmit(state, acceptedRunId);
+          consumeCompletedRunForPendingSend?.(acceptedRunId);
+        }
+        return;
+      }
+      if (isBtw && terminalAck) {
+        forgetLocalBtwRunId?.(runId);
+        if (acceptedRunId !== runId) {
+          forgetLocalBtwRunId?.(acceptedRunId);
+        }
+        if (terminalAckFailure) {
+          chatLog.addSystem(`btw failed: ${TERMINAL_CHAT_SEND_FAILURE_MESSAGE}`);
+        }
         tui.requestRender();
+        return;
+      }
+      if (isBtw) {
+        if (acceptedRunId !== runId) {
+          forgetLocalBtwRunId?.(runId);
+          noteLocalBtwRunId?.(acceptedRunId);
+        }
+        return;
+      }
+      if (!isBtw) {
+        // Adopt a durable turn that beat its ACK; otherwise preserve and re-key
+        // the optimistic viewport until the authoritative message arrives.
+        const acknowledgedProjection = reduceTuiSessionProjection(state, {
+          type: "sendAcknowledged",
+          runId: acceptedRunId,
+          previousRunId: runId,
+          scope: sendScope,
+        });
+        const acceptedRunAlreadyCompleted =
+          acceptedRunId !== runId &&
+          !terminalAck &&
+          (consumeCompletedRunForPendingSend?.(acceptedRunId) ?? false);
+        acceptPendingSubmit({
+          state,
+          provisionalRunId: runId,
+          acceptedRunId,
+          // A run observed before its ACK owns its rendered row already.
+          preserveDraft: !(isRunObserved?.(acceptedRunId) || terminalAck),
+        });
+        if (acceptedRunId !== runId) {
+          forgetLocalRunId?.(runId);
+          if (!acceptedRunAlreadyCompleted && !terminalAck) {
+            noteLocalRunId?.(acceptedRunId);
+          }
+          if (
+            acknowledgedProjection.entries.some(
+              (entry) => entry.pending && entry.pendingRunId === acceptedRunId,
+            )
+          ) {
+            chatLog.rekeyPendingUser(runId, acceptedRunId);
+          } else {
+            chatLog.dropPendingUser(runId);
+          }
+        }
+        if (terminalAck) {
+          clearPendingSubmit(state, acceptedRunId);
+          forgetLocalRunId?.(acceptedRunId);
+          if (terminalAckFailure) {
+            reduceTuiSessionProjection(state, {
+              type: "sendFailed",
+              runId: acceptedRunId,
+              scope: sendScope,
+            });
+            chatLog.dropPendingUser(acceptedRunId);
+          }
+          if (state.activeChatRunId === acceptedRunId) {
+            state.activeChatRunId = null;
+          }
+          await loadHistory();
+          if (!isCurrentSendViewport()) {
+            return;
+          }
+          if (terminalAckFailure) {
+            chatLog.addSystem(`send failed: ${TERMINAL_CHAT_SEND_FAILURE_MESSAGE}`);
+            setActivityStatus("error");
+          } else {
+            setActivityStatus("idle");
+          }
+          tui.requestRender();
+          return;
+        }
+        if (hasPendingSubmit(state)) {
+          if (acceptedRunAlreadyCompleted) {
+            clearPendingSubmit(state, acceptedRunId);
+            setActivityStatus("idle");
+            flushPendingHistoryRefreshIfIdle?.();
+          } else {
+            setActivityStatus("waiting");
+          }
+          tui.requestRender();
+        }
       }
     } catch (err) {
       if (isBtw) {
         forgetLocalBtwRunId?.(runId);
+      } else {
+        forgetLocalRunId?.(runId);
       }
-      if (!isBtw && state.activeChatRunId) {
+      if (!isCurrentSendViewport()) {
+        clearPendingSubmit(state, runId);
+        return;
+      }
+      if (!isBtw && state.activeChatRunId === runId) {
         forgetLocalRunId?.(state.activeChatRunId);
       }
       if (!isBtw) {
-        state.pendingOptimisticUserMessage = false;
-        state.pendingChatRunId = null;
-        state.activeChatRunId = null;
+        // Only clear the failed send's ownership. A queued run may have
+        // terminalized or handed ownership off while the RPC was pending.
+        if (state.activeChatRunId === runId) {
+          state.activeChatRunId = null;
+        }
+        clearPendingSubmit(state, runId);
+        reduceTuiSessionProjection(state, {
+          type: "sendFailed",
+          runId,
+          scope: sendScope,
+        });
+        chatLog.dropPendingUser(runId);
       }
-      chatLog.addSystem(`${isBtw ? "btw failed" : "send failed"}: ${String(err)}`);
+      chatLog.addSystem(`${isBtw ? "btw failed" : "send failed"}: ${formatTuiErrorMessage(err)}`);
       if (!isBtw) {
         setActivityStatus("error");
       }
@@ -679,6 +1080,9 @@ export function createCommandHandlers(context: CommandHandlerContext) {
   return {
     handleCommand,
     sendMessage,
+    captureMessageAdmission,
+    resolveMessageAdmission,
+    reportBlockedMessageSubmit,
     openModelSelector,
     openAgentSelector,
     openSessionSelector,
@@ -686,3 +1090,4 @@ export function createCommandHandlers(context: CommandHandlerContext) {
     setAgent,
   };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

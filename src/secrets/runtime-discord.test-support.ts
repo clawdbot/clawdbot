@@ -1,12 +1,15 @@
+/** Test bootstrap shim for Discord runtime-secret surface coverage. */
 import { vi } from "vitest";
-import { loadBundledChannelSecretContractApi } from "./channel-contract-api.js";
+import { loadChannelSecretContractApi } from "./channel-contract-api.js";
 
-const discordSecrets = loadBundledChannelSecretContractApi("discord");
+/** Test-only bootstrap registry mock for Discord secret surface tests. */
+const discordSecrets = loadChannelSecretContractApi({ channelId: "discord", config: {} });
 if (!discordSecrets?.collectRuntimeConfigAssignments) {
   throw new Error("Missing Discord secret contract api");
 }
 const discordAssignments = discordSecrets.collectRuntimeConfigAssignments;
 
+// Use the real bundled Discord secret contract while avoiding plugin bootstrap.
 vi.mock("../channels/plugins/bootstrap-registry.js", () => ({
   getBootstrapChannelPlugin: (id: string) =>
     id === "discord"

@@ -1,3 +1,4 @@
+// Tests subagent inspection command routing and authorization.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import {
@@ -8,32 +9,27 @@ import {
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { resolveCommandAuthorization } from "../command-auth.js";
 import type { MsgContext } from "../templating.js";
-import {
-  COMMAND,
-  COMMAND_KILL,
-  resolveHandledPrefix,
-  resolveRequesterSessionKey,
-  resolveSubagentsAction,
-  stopWithText,
-} from "./commands-subagents-dispatch.js";
+import { handleAcpCommand } from "./commands-acp.js";
 import { handleSubagentsCommand } from "./commands-subagents.js";
+import { resolveRequesterSessionKey } from "./commands-subagents/shared.js";
 import type { HandleCommandsParams } from "./commands-types.js";
 
-const handleSubagentsSpawnActionMock = vi.hoisted(() =>
-  vi.fn(async () => ({ shouldContinue: false, reply: { text: "spawned" } })),
-);
 const listControlledSubagentRunsMock = vi.hoisted(() => vi.fn(() => []));
 
-vi.mock("./commands-subagents/action-spawn.js", () => ({
-  handleSubagentsSpawnAction: handleSubagentsSpawnActionMock,
-}));
-
-vi.mock("./commands-subagents-control.runtime.js", () => ({
+vi.mock("../../agents/subagents/registry/subagent-control-scope.js", () => ({
   listControlledSubagentRuns: listControlledSubagentRunsMock,
 }));
 
-const formatAllowFrom = ({ allowFrom }: { allowFrom: Array<string | number> }) =>
-  allowFrom.map((entry) => String(entry).trim()).filter(Boolean);
+const formatAllowFrom = ({ allowFrom }: { allowFrom: Array<string | number> }) => {
+  const values: string[] = [];
+  for (const entry of allowFrom) {
+    const value = String(entry).trim();
+    if (value) {
+      values.push(value);
+    }
+  }
+  return values;
+};
 
 let previousPluginRegistry: ReturnType<typeof getActivePluginRegistry>;
 
@@ -140,45 +136,38 @@ describe("subagents command dispatch", () => {
     expect(resolveRequesterSessionKey(params)).toBe("agent:main:whatsapp:direct:u1");
   });
 
-  it("maps slash aliases to the right handled prefix", () => {
-    expect(resolveHandledPrefix("/subagents list")).toBe(COMMAND);
-    expect(resolveHandledPrefix("/kill 1")).toBe(COMMAND_KILL);
-    expect(resolveHandledPrefix("/steer 1 continue")).toBeNull();
-    expect(resolveHandledPrefix("/unknown")).toBeNull();
+  it.each([
+    "/focus target",
+    "/unfocus",
+    "/subagentsXYZ",
+    "/agentsXYZ",
+    "/kill 1",
+    "/steer hi",
+    "/unknown",
+  ])("does not dispatch unrelated command %s", async (command) => {
+    expect(await handleSubagentsCommand(buildParams(command), true)).toBeNull();
+    expect(listControlledSubagentRunsMock).not.toHaveBeenCalled();
   });
 
-  it("maps prefixes and args to subagent actions", () => {
-    const listTokens = ["list"];
-    expect(resolveSubagentsAction({ handledPrefix: COMMAND, restTokens: listTokens })).toBe("list");
-    expect(listTokens).toEqual([]);
+  it.each(["help", "foo", "steer 1 continue", "agents"])(
+    "shows %s help without reading session state",
+    async (action) => {
+      const params = buildParams(`/subagents ${action}`, { SessionKey: "" });
+      const result = await handleSubagentsCommand(params, true);
+      expect(result?.reply?.text).toContain("/subagents list");
+      expect(result?.reply?.text).toContain("/session unbind");
+      expect(listControlledSubagentRunsMock).not.toHaveBeenCalled();
+    },
+  );
 
-    const killTokens = ["1"];
-    expect(resolveSubagentsAction({ handledPrefix: COMMAND_KILL, restTokens: killTokens })).toBe(
-      "kill",
-    );
-    expect(killTokens).toEqual(["1"]);
+  it.each(["/acpXYZ", "/acp@otherbot help"])(
+    "does not dispatch ACP lookalike %s",
+    async (command) => {
+      expect(await handleAcpCommand(buildParams(command), true)).toBeNull();
+    },
+  );
 
-    const steerTokens = ["steer", "1", "continue"];
-    expect(resolveSubagentsAction({ handledPrefix: COMMAND, restTokens: steerTokens })).toBe(
-      "steer",
-    );
-    expect(steerTokens).toEqual(["1", "continue"]);
-  });
-
-  it("returns null for invalid /subagents actions", () => {
-    const restTokens = ["foo"];
-    expect(resolveSubagentsAction({ handledPrefix: COMMAND, restTokens })).toBeNull();
-    expect(restTokens).toEqual(["foo"]);
-  });
-
-  it("builds stop replies", () => {
-    expect(stopWithText("hello")).toEqual({
-      shouldContinue: false,
-      reply: { text: "hello" },
-    });
-  });
-
-  it("rejects native spawn commands from non-owner senders when the plugin enforces owner-only commands", async () => {
+  it("rejects native subagents commands from non-owner senders when the plugin enforces owner-only commands", async () => {
     registerOwnerEnforcingTelegramPlugin();
     const cfg = {
       commands: { allowFrom: { "*": ["*"] } },
@@ -199,10 +188,7 @@ describe("subagents command dispatch", () => {
       cfg,
       commandAuthorized: true,
     });
-    const params = buildParams(
-      "/subagents spawn beta do the thing",
-      ctx as unknown as Record<string, unknown>,
-    );
+    const params = buildParams("/subagents list", ctx as unknown as Record<string, unknown>);
     params.cfg = cfg;
     params.command.senderId = auth.senderId;
     params.command.senderIsOwner = auth.senderIsOwner;
@@ -217,6 +203,5 @@ describe("subagents command dispatch", () => {
     expect(auth.isAuthorizedSender).toBe(false);
     expect(result).toEqual({ shouldContinue: false });
     expect(listControlledSubagentRunsMock).not.toHaveBeenCalled();
-    expect(handleSubagentsSpawnActionMock).not.toHaveBeenCalled();
   });
 });

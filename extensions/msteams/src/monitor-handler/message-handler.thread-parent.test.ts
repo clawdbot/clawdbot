@@ -1,7 +1,8 @@
+// Msteams tests cover message handler.thread parent plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../runtime-api.js";
-import { _resetThreadParentContextCachesForTest } from "../thread-parent-context.js";
-import "./message-handler-mock-support.test-support.js";
+// Preserve module setup before modules that consume it.
+// oxfmt-ignore
 import { getRuntimeApiMockState } from "./message-handler-mock-support.test-support.js";
 import { createMSTeamsMessageHandler } from "./message-handler.js";
 import {
@@ -13,7 +14,12 @@ import {
 const runtimeApiMockState = getRuntimeApiMockState();
 const fetchChannelMessageMock = vi.hoisted(() => vi.fn());
 const fetchThreadRepliesMock = vi.hoisted(() => vi.fn(async () => []));
-const resolveTeamGroupIdMock = vi.hoisted(() => vi.fn(async () => "group-1"));
+const fetchChatMessageTextMock = vi.hoisted(() => vi.fn(async () => undefined));
+const resolveTeamGroupIdMock = vi.hoisted(() =>
+  vi.fn<() => Promise<string | undefined>>(async () => "group-1"),
+);
+let threadRootSequence = 0;
+let threadRootId = "";
 
 vi.mock("../graph-thread.js", () => {
   const stripHtmlFromTeamsMessage = (html: string) =>
@@ -30,25 +36,36 @@ vi.mock("../graph-thread.js", () => {
       .trim();
   return {
     stripHtmlFromTeamsMessage,
-    resolveTeamGroupId: resolveTeamGroupIdMock,
     fetchChannelMessage: fetchChannelMessageMock,
     fetchThreadReplies: fetchThreadRepliesMock,
+    fetchChatMessageText: fetchChatMessageTextMock,
   };
 });
 
+vi.mock("../team-identity.js", () => ({
+  resolveTeamGroupId: resolveTeamGroupIdMock,
+}));
+
 describe("msteams thread parent context injection", () => {
   type MessageHandler = ReturnType<typeof createMSTeamsMessageHandler>;
+  type ParentSystemEventCall = [
+    string,
+    {
+      sessionKey: string;
+      contextKey?: string;
+    },
+  ];
 
   function findParentSystemEventCall(
     mock: ReturnType<typeof vi.fn>,
-  ): [string, { sessionKey: string; contextKey?: string }] | undefined {
-    const calls = mock.mock.calls as Array<[string, { sessionKey: string; contextKey?: string }]>;
+  ): ParentSystemEventCall | undefined {
+    const calls = mock.mock.calls as ParentSystemEventCall[];
     return calls.find(([text]) => text.startsWith("Replying to @"));
   }
 
   async function dispatchThreadReply(handler: MessageHandler, id: string) {
     await handler({
-      activity: buildChannelActivity({ id, replyToId: "thread-root-123" }),
+      activity: buildChannelActivity({ id, replyToId: threadRootId }),
       sendActivity: vi.fn(async () => undefined),
     } as unknown as Parameters<MessageHandler>[0]);
   }
@@ -59,45 +76,75 @@ describe("msteams thread parent context injection", () => {
   }
 
   beforeEach(() => {
-    _resetThreadParentContextCachesForTest();
+    threadRootId = `thread-root-${++threadRootSequence}`;
     fetchChannelMessageMock.mockReset();
     fetchThreadRepliesMock.mockReset();
     fetchThreadRepliesMock.mockImplementation(async () => []);
     resolveTeamGroupIdMock.mockReset();
     resolveTeamGroupIdMock.mockImplementation(async () => "group-1");
-    runtimeApiMockState.dispatchReplyFromConfigWithSettledDispatcher.mockClear();
+    runtimeApiMockState.dispatchReplyWithBufferedBlockDispatcher.mockClear();
   });
 
   const cfg: OpenClawConfig = {
     channels: { msteams: { groupPolicy: "open" } },
   } as OpenClawConfig;
 
-  it("enqueues a Replying to @sender system event on the first thread reply", async () => {
-    fetchChannelMessageMock.mockResolvedValueOnce({
-      id: "thread-root-123",
-      from: { user: { displayName: "Alice", id: "alice-id" } },
-      body: { content: "Can someone investigate the latency spike?", contentType: "text" },
-    });
-    const { deps, enqueueSystemEvent } = createMessageHandlerDeps(cfg);
-    const handler = createMSTeamsMessageHandler(deps);
+  it.each(["explicit", "conversation", "nested"] as const)(
+    "hydrates the canonical root and replies for %s thread addressing",
+    async (addressing) => {
+      fetchChannelMessageMock.mockResolvedValueOnce({
+        id: threadRootId,
+        from: { user: { displayName: "Alice", id: "alice-id" } },
+        body: { content: "Can someone investigate the latency spike?", contentType: "text" },
+      });
+      const { deps, enqueueSystemEvent } = createMessageHandlerDeps(cfg);
+      const handler = createMSTeamsMessageHandler(deps);
 
-    await handler({
-      activity: buildChannelActivity({ id: "msg-reply-1", replyToId: "thread-root-123" }),
-      sendActivity: vi.fn(async () => undefined),
-    } as unknown as Parameters<typeof handler>[0]);
+      await handler({
+        activity: buildChannelActivity({
+          id: "msg-reply-1",
+          ...(addressing === "explicit"
+            ? { replyToId: threadRootId }
+            : {
+                conversation: {
+                  id: `${channelConversationId};messageid=${threadRootId}`,
+                  conversationType: "channel",
+                },
+                ...(addressing === "nested" ? { replyToId: "nested-reply" } : {}),
+              }),
+        }),
+        sendActivity: vi.fn(async () => undefined),
+      } as unknown as Parameters<typeof handler>[0]);
 
-    const parentCall = findParentSystemEventCall(enqueueSystemEvent);
-    if (!parentCall) {
-      throw new Error("expected parent thread system event");
-    }
-    expect(parentCall[0]).toBe("Replying to @Alice: Can someone investigate the latency spike?");
-    expect(parentCall[1]?.contextKey).toContain("msteams:thread-parent:");
-    expect(parentCall[1]?.contextKey).toContain("thread-root-123");
-  });
+      const parentCall = findParentSystemEventCall(enqueueSystemEvent);
+      if (!parentCall) {
+        throw new Error("expected parent thread system event");
+      }
+      expect(parentCall[0]).toBe("Replying to @Alice: Can someone investigate the latency spike?");
+      expect(parentCall[1]?.contextKey).toContain("msteams:thread-parent:");
+      expect(parentCall[1]?.contextKey).toContain(threadRootId);
+      expect(parentCall[1]).toMatchObject({});
+      expect(fetchChannelMessageMock).toHaveBeenCalledWith(
+        "token",
+        "group-1",
+        channelConversationId,
+        threadRootId,
+        expect.objectContaining({ label: "MS Teams inbound preprocessing" }),
+      );
+      expect(fetchThreadRepliesMock).toHaveBeenCalledWith(
+        "token",
+        "group-1",
+        channelConversationId,
+        threadRootId,
+        50,
+        expect.objectContaining({ label: "MS Teams inbound preprocessing" }),
+      );
+    },
+  );
 
   it("caches parent fetches across thread replies in the same session", async () => {
     fetchChannelMessageMock.mockResolvedValue({
-      id: "thread-root-123",
+      id: threadRootId,
       from: { user: { displayName: "Alice" } },
       body: { content: "Original question", contentType: "text" },
     });
@@ -112,7 +159,7 @@ describe("msteams thread parent context injection", () => {
 
   it("does not re-enqueue the same parent context within the same session", async () => {
     fetchChannelMessageMock.mockResolvedValue({
-      id: "thread-root-123",
+      id: threadRootId,
       from: { user: { displayName: "Alice" } },
       body: { content: "Original question", contentType: "text" },
     });
@@ -129,7 +176,7 @@ describe("msteams thread parent context injection", () => {
 
   it("does not enqueue parent context when allowlist visibility blocks the parent sender", async () => {
     fetchChannelMessageMock.mockResolvedValue({
-      id: "thread-root-123",
+      id: threadRootId,
       from: { user: { displayName: "Mallory", id: "mallory-aad" } },
       body: { content: "Blocked context", contentType: "text" },
     });
@@ -154,7 +201,7 @@ describe("msteams thread parent context injection", () => {
     await handler({
       activity: buildChannelActivity({
         id: "msg-reply-1",
-        replyToId: "thread-root-123",
+        replyToId: threadRootId,
         from: { id: "alice-id", aadObjectId: "alice-aad", name: "Alice" },
       }),
       sendActivity: vi.fn(async () => undefined),
@@ -169,7 +216,7 @@ describe("msteams thread parent context injection", () => {
     const handler = createMSTeamsMessageHandler(deps);
 
     await handler({
-      activity: buildChannelActivity({ id: "msg-reply-1", replyToId: "thread-root-123" }),
+      activity: buildChannelActivity({ id: "msg-reply-1", replyToId: threadRootId }),
       sendActivity: vi.fn(async () => undefined),
     } as unknown as Parameters<typeof handler>[0]);
 
@@ -179,14 +226,26 @@ describe("msteams thread parent context injection", () => {
     expect(enqueueSystemEvent).toHaveBeenCalled();
   });
 
-  it("does not fetch parent for DM replyToId", async () => {
+  it("does not send the raw Bot Framework team ID to thread Graph paths", async () => {
+    resolveTeamGroupIdMock.mockResolvedValueOnce(undefined);
+    const { deps } = createMessageHandlerDeps(cfg);
+    const handler = createMSTeamsMessageHandler(deps);
+
+    await dispatchThreadReply(handler, "msg-reply-no-aad-group");
+
+    expect(fetchChannelMessageMock).not.toHaveBeenCalled();
+    expect(fetchThreadRepliesMock).not.toHaveBeenCalled();
+    expect(runtimeApiMockState.dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps inbound DM reply targets flat under threaded reply configuration", async () => {
     fetchChannelMessageMock.mockResolvedValue({
       id: "x",
       from: { user: { displayName: "Alice" } },
       body: { content: "should-not-happen", contentType: "text" },
     });
-    const { deps, enqueueSystemEvent } = createMessageHandlerDeps({
-      channels: { msteams: { allowFrom: ["*"] } },
+    const { conversationStore, deps, enqueueSystemEvent } = createMessageHandlerDeps({
+      channels: { msteams: { allowFrom: ["*"], replyStyle: "thread" } },
     } as OpenClawConfig);
     const handler = createMSTeamsMessageHandler(deps);
 
@@ -203,23 +262,56 @@ describe("msteams thread parent context injection", () => {
 
     expect(fetchChannelMessageMock).not.toHaveBeenCalled();
     expect(findParentSystemEventCall(enqueueSystemEvent)).toBeUndefined();
-  });
-
-  it("does not fetch parent for top-level channel messages without replyToId", async () => {
-    fetchChannelMessageMock.mockResolvedValue({
-      id: "x",
-      from: { user: { displayName: "Alice" } },
-      body: { content: "should-not-happen", contentType: "text" },
+    expect(conversationStore.upsert).toHaveBeenCalledWith(
+      "a:dm-conversation",
+      expect.objectContaining({
+        conversation: expect.objectContaining({
+          id: "a:dm-conversation",
+          conversationType: "personal",
+        }),
+      }),
+    );
+    expect(conversationStore.upsert).not.toHaveBeenCalledWith(
+      "a:dm-conversation",
+      expect.objectContaining({ threadId: expect.any(String) }),
+    );
+    const dispatchContext =
+      runtimeApiMockState.dispatchReplyWithBufferedBlockDispatcher.mock.calls[0]?.[0].ctx;
+    expect(dispatchContext).toMatchObject({
+      To: "user:user-aad",
+      OriginatingTo: "conversation:a:dm-conversation",
     });
-    const { deps, enqueueSystemEvent } = createMessageHandlerDeps(cfg);
-    const handler = createMSTeamsMessageHandler(deps);
-
-    await handler({
-      activity: buildChannelActivity({ id: "msg-root-1", replyToId: undefined }),
-      sendActivity: vi.fn(async () => undefined),
-    } as unknown as Parameters<typeof handler>[0]);
-
-    expect(fetchChannelMessageMock).not.toHaveBeenCalled();
-    expect(findParentSystemEventCall(enqueueSystemEvent)).toBeUndefined();
+    expect(dispatchContext?.MessageThreadId).toBeUndefined();
   });
+
+  it.each([false, true])(
+    "does not fetch a top-level post as its own parent (suffix=%s)",
+    async (withSuffix) => {
+      fetchChannelMessageMock.mockResolvedValue({
+        id: "x",
+        from: { user: { displayName: "Alice" } },
+        body: { content: "should-not-happen", contentType: "text" },
+      });
+      const { deps, enqueueSystemEvent } = createMessageHandlerDeps(cfg);
+      const handler = createMSTeamsMessageHandler(deps);
+
+      await handler({
+        activity: buildChannelActivity({
+          id: "msg-root-1",
+          ...(withSuffix
+            ? {
+                conversation: {
+                  id: `${channelConversationId};messageid=msg-root-1`,
+                  conversationType: "channel",
+                },
+              }
+            : {}),
+        }),
+        sendActivity: vi.fn(async () => undefined),
+      } as unknown as Parameters<typeof handler>[0]);
+
+      expect(fetchChannelMessageMock).not.toHaveBeenCalled();
+      expect(findParentSystemEventCall(enqueueSystemEvent)).toBeUndefined();
+    },
+  );
 });

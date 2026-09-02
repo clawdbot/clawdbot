@@ -1,1 +1,0 @@
-export const DEFAULT_LLM_IDLE_TIMEOUT_SECONDS = 120;

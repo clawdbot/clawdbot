@@ -1,6 +1,34 @@
+// Covers document extractor runtime hooks supplied by plugins.
 import { describe, expect, it, vi } from "vitest";
 import { resolvePluginDocumentExtractors } from "./document-extractors.runtime.js";
 import { loadPluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
+
+const mocks = vi.hoisted(() => ({
+  loadPluginMetadataSnapshot: vi.fn((_params?: unknown) => ({
+    plugins: [
+      {
+        id: "document-extract",
+        origin: "bundled",
+        enabledByDefault: true,
+        channels: [],
+        cliBackends: [],
+        providers: [],
+        legacyPluginIds: [],
+        contracts: { documentExtractors: ["pdf"] },
+      },
+      {
+        id: "openai",
+        origin: "bundled",
+        enabledByDefault: true,
+        channels: [],
+        cliBackends: [],
+        providers: ["openai", "openai"],
+        legacyPluginIds: [],
+        contracts: {},
+      },
+    ],
+  })),
+}));
 
 vi.mock("./document-extractor-public-artifacts.js", () => ({
   loadBundledDocumentExtractorEntriesFromDir: vi.fn(
@@ -20,30 +48,11 @@ vi.mock("./document-extractor-public-artifacts.js", () => ({
 }));
 
 vi.mock("./plugin-metadata-snapshot.js", () => ({
-  loadPluginMetadataSnapshot: vi.fn(() => ({
-    plugins: [
-      {
-        id: "document-extract",
-        origin: "bundled",
-        enabledByDefault: true,
-        channels: [],
-        cliBackends: [],
-        providers: [],
-        legacyPluginIds: [],
-        contracts: { documentExtractors: ["pdf"] },
-      },
-      {
-        id: "openai",
-        origin: "bundled",
-        enabledByDefault: true,
-        channels: [],
-        cliBackends: [],
-        providers: ["openai", "openai-codex"],
-        legacyPluginIds: [],
-        contracts: {},
-      },
-    ],
-  })),
+  loadPluginMetadataSnapshot: mocks.loadPluginMetadataSnapshot,
+  resolvePluginMetadataSnapshot: vi.fn(
+    (params?: { pluginMetadataSnapshot?: unknown }) =>
+      params?.pluginMetadataSnapshot ?? mocks.loadPluginMetadataSnapshot(params),
+  ),
 }));
 
 vi.mock("./manifest-registry.js", () => ({
@@ -67,7 +76,7 @@ describe("resolvePluginDocumentExtractors", () => {
           },
         },
       }),
-    ).toEqual([]);
+    ).toStrictEqual([]);
   });
 
   it("does not expand an operator plugin allowlist", () => {
@@ -79,6 +88,23 @@ describe("resolvePluginDocumentExtractors", () => {
           },
         },
       }),
-    ).toEqual([]);
+    ).toStrictEqual([]);
+  });
+
+  it("respects an explicit empty plugin scope with an operator plugin allowlist", () => {
+    expect(
+      resolvePluginDocumentExtractors({
+        config: {
+          plugins: {
+            allow: ["document-extract"],
+          },
+        },
+        onlyPluginIds: [],
+      }),
+    ).toStrictEqual([]);
+  });
+
+  it("respects an explicit empty plugin scope without an operator plugin allowlist", () => {
+    expect(resolvePluginDocumentExtractors({ onlyPluginIds: [] })).toStrictEqual([]);
   });
 });

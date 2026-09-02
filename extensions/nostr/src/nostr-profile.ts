@@ -9,13 +9,7 @@ import { finalizeEvent, SimplePool, type Event } from "nostr-tools";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { NostrProfile } from "./config-schema.js";
 import { profileToContent } from "./nostr-profile-core.js";
-export {
-  contentToProfile,
-  profileToContent,
-  sanitizeProfileForDisplay,
-  validateProfile,
-  type ProfileContent,
-} from "./nostr-profile-core.js";
+import { publishNostrEventToRelay } from "./relay-publish.js";
 
 // ============================================================================
 // Types
@@ -45,7 +39,7 @@ export interface ProfilePublishResult {
  * @param lastPublishedAt - Previous profile timestamp (for monotonic guarantee)
  * @returns Signed Nostr event
  */
-export function createProfileEvent(
+function createProfileEvent(
   sk: Uint8Array,
   profile: NostrProfile,
   lastPublishedAt?: number,
@@ -98,17 +92,22 @@ async function publishProfileEvent(
 
   // Publish to each relay in parallel with timeout
   const publishPromises = relays.map(async (relay) => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
     try {
       const timeoutPromise = new Promise<never>((_, reject) => {
-        setTimeout(() => reject(new Error("timeout")), RELAY_PUBLISH_TIMEOUT_MS);
+        timer = setTimeout(() => reject(new Error("timeout")), RELAY_PUBLISH_TIMEOUT_MS);
       });
 
-      await Promise.race([...pool.publish([relay], event), timeoutPromise]);
+      await Promise.race([publishNostrEventToRelay(pool, relay, event), timeoutPromise]);
 
       successes.push(relay);
     } catch (err) {
       const errorMessage = formatErrorMessage(err);
       failures.push({ relay, error: errorMessage });
+    } finally {
+      if (timer) {
+        clearTimeout(timer);
+      }
     }
   });
 

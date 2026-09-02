@@ -1,26 +1,151 @@
+// Assertions for plugin install/runtime E2E scenarios.
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
+import {
+  createBoundedResponseTooLargeError,
+  readBoundedResponseText,
+} from "../../../lib/bounded-response.mjs";
+import { readPositiveIntEnv } from "../env-limits.mjs";
+import {
+  readPluginInstallIndex,
+  readPluginInstallRecords,
+  writePluginInstallIndexForE2E,
+} from "../plugin-index-sqlite.mjs";
+import { isExplicitPluginDisableMarker } from "../plugin-uninstall-assertions.mjs";
+import { readTextFileTail } from "../text-file-utils.mjs";
 
 const command = process.argv[2];
+const scratchRoot = process.env.OPENCLAW_PLUGINS_TMP_DIR || os.tmpdir();
 const readJson = (file) => JSON.parse(fs.readFileSync(file, "utf8"));
+const scratchFile = (name) => path.join(scratchRoot, name);
+const ERROR_DETAIL_TAIL_BYTES = 16 * 1024;
+const LOG_SCAN_CHUNK_BYTES = 64 * 1024;
+
+function readClawHubPreflightLimits() {
+  return {
+    bodyMaxBytes: readPositiveIntEnv(
+      "OPENCLAW_PLUGINS_E2E_CLAWHUB_PREFLIGHT_BODY_MAX_BYTES",
+      1024 * 1024,
+    ),
+    timeoutMs: readPositiveIntEnv("OPENCLAW_PLUGINS_E2E_CLAWHUB_PREFLIGHT_TIMEOUT_MS", 30_000),
+  };
+}
+
+function createTimeoutError(label, timeoutMs) {
+  const error = new Error(`${label} timed out after ${timeoutMs}ms`);
+  error.code = "ETIMEDOUT";
+  return error;
+}
+
+async function withTimeout(label, timeoutMs, run) {
+  const controller = new AbortController();
+  const timeoutError = createTimeoutError(label, timeoutMs);
+  let timeout;
+  const timeoutPromise = new Promise((_, reject) => {
+    timeout = setTimeout(() => {
+      controller.abort(timeoutError);
+      reject(timeoutError);
+    }, timeoutMs);
+    timeout.unref?.();
+  });
+  try {
+    return await Promise.race([run(controller.signal, timeoutPromise), timeoutPromise]);
+  } finally {
+    if (timeout) {
+      clearTimeout(timeout);
+    }
+  }
+}
+
+function resolveHomePath(value) {
+  if (value === "~") {
+    return process.env.HOME;
+  }
+  if (value?.startsWith("~/") || value?.startsWith("~\\")) {
+    return path.join(process.env.HOME, value.slice(2));
+  }
+  return value;
+}
+
+function comparablePath(value) {
+  const resolved = path.resolve(resolveHomePath(value));
+  try {
+    return fs.realpathSync.native(resolved);
+  } catch {
+    return resolved;
+  }
+}
+
+function pathsEqual(left, right) {
+  return comparablePath(left) === comparablePath(right);
+}
+
+function fileContainsText(file, needle) {
+  let stat;
+  try {
+    stat = fs.statSync(file);
+  } catch {
+    return false;
+  }
+  if (!stat.isFile() || stat.size <= 0) {
+    return false;
+  }
+  const fd = fs.openSync(file, "r");
+  try {
+    const buffer = Buffer.alloc(Math.min(LOG_SCAN_CHUNK_BYTES, stat.size));
+    let carry = "";
+    let offset = 0;
+    while (offset < stat.size) {
+      const bytesToRead = Math.min(buffer.length, stat.size - offset);
+      const bytesRead = fs.readSync(fd, buffer, 0, bytesToRead, offset);
+      if (bytesRead <= 0) {
+        break;
+      }
+      offset += bytesRead;
+      const text = carry + buffer.subarray(0, bytesRead).toString("utf8");
+      if (text.includes(needle)) {
+        return true;
+      }
+      carry = text.slice(-Math.max(0, needle.length - 1));
+    }
+    return false;
+  } finally {
+    fs.closeSync(fd);
+  }
+}
 
 function getInstallRecords() {
-  const indexPath = path.join(process.env.HOME, ".openclaw", "plugins", "installs.json");
-  const index = fs.existsSync(indexPath) ? readJson(indexPath) : {};
-  const configPath = path.join(process.env.HOME, ".openclaw", "openclaw.json");
-  const config = fs.existsSync(configPath) ? readJson(configPath) : {};
+  const configPath = openClawConfigPath();
+  const config = readOpenClawConfig();
   const allowLegacyCompat = process.env.OPENCLAW_PACKAGE_ACCEPTANCE_LEGACY_COMPAT === "1";
+  const index = readPluginInstallIndex({
+    configPath,
+    fallbackRecords: allowLegacyCompat ? (config.plugins?.installs ?? {}) : {},
+  });
   if (!allowLegacyCompat && !index.installRecords) {
     throw new Error("expected modern installRecords in installed plugin index");
   }
-  return allowLegacyCompat
-    ? (index.installRecords ?? index.records ?? config.plugins?.installs ?? {})
-    : (index.installRecords ?? {});
+  return index.installRecords ?? {};
+}
+
+function openClawConfigPath() {
+  return path.join(process.env.HOME, ".openclaw", "openclaw.json");
 }
 
 function readOpenClawConfig() {
-  const configPath = path.join(process.env.HOME, ".openclaw", "openclaw.json");
-  return fs.existsSync(configPath) ? readJson(configPath) : {};
+  const configPath = openClawConfigPath();
+  return fs.existsSync(configPath) ? readRequiredOpenClawConfig() : {};
+}
+
+function readRequiredOpenClawConfig() {
+  const configPath = openClawConfigPath();
+  try {
+    return readJson(configPath);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(`failed to read OpenClaw config ${configPath}: ${message}`, { cause: error });
+  }
 }
 
 function assertPluginRemoved(params) {
@@ -35,8 +160,8 @@ function assertPluginRemoved(params) {
   }
 
   const config = readOpenClawConfig();
-  if (config.plugins?.entries?.[params.pluginId]) {
-    throw new Error(`${params.pluginId} config entry still present after uninstall`);
+  if (!isExplicitPluginDisableMarker(config, params.pluginId)) {
+    throw new Error(`${params.pluginId} exact disabled uninstall marker missing`);
   }
   if ((config.plugins?.allow || []).includes(params.pluginId)) {
     throw new Error(`${params.pluginId} allowlist entry still present after uninstall`);
@@ -54,12 +179,12 @@ function rememberPluginInstallPath(params) {
   if (params.source && record.source !== params.source) {
     throw new Error(`unexpected source for ${params.pluginId}: ${record.source}`);
   }
-  if (params.sourcePath && record.sourcePath !== params.sourcePath) {
+  if (params.sourcePath && !pathsEqual(record.sourcePath, params.sourcePath)) {
     throw new Error(
       `unexpected source path for ${params.pluginId}: ${record.sourcePath}, expected ${params.sourcePath}`,
     );
   }
-  const installPath = record.installPath?.replace(/^~(?=$|\/)/u, process.env.HOME);
+  const installPath = resolveHomePath(record.installPath);
   if (!installPath || !fs.existsSync(installPath)) {
     throw new Error(`${params.pluginId} install path missing on disk: ${installPath}`);
   }
@@ -83,7 +208,8 @@ function assertManagedInstallRemoved(params) {
   if (sourcePath && !fs.existsSync(sourcePath)) {
     throw new Error(`${params.pluginId} source path was deleted during uninstall: ${sourcePath}`);
   }
-  if (installPath !== sourcePath && fs.existsSync(installPath)) {
+  const installPathIsSourcePath = sourcePath ? pathsEqual(installPath, sourcePath) : false;
+  if (!installPathIsSourcePath && fs.existsSync(installPath)) {
     throw new Error(
       `${params.pluginId} managed install path still exists after uninstall: ${installPath}`,
     );
@@ -106,30 +232,19 @@ function recordFixturePluginTrust() {
   fs.mkdirSync(path.dirname(configPath), { recursive: true });
   fs.writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`, "utf8");
 
-  const ledgerPath = path.join(process.env.HOME, ".openclaw", "plugins", "installs.json");
-  const ledger = fs.existsSync(ledgerPath)
-    ? readJson(ledgerPath)
-    : {
-        version: 1,
-        warning:
-          "DO NOT EDIT. This file is generated by OpenClaw plugin install/update/uninstall commands. Use `openclaw plugins install/update/uninstall` instead.",
-        records: {},
-      };
-  ledger.updatedAtMs = Date.now();
-  ledger.records ??= {};
-  ledger.records[pluginId] = {
-    ...ledger.records[pluginId],
+  const installRecords = readPluginInstallRecords();
+  installRecords[pluginId] = {
+    ...installRecords[pluginId],
     source: "path",
     installPath: pluginRoot,
     sourcePath: pluginRoot,
   };
-  fs.mkdirSync(path.dirname(ledgerPath), { recursive: true });
-  fs.writeFileSync(ledgerPath, `${JSON.stringify(ledger, null, 2)}\n`, "utf8");
+  writePluginInstallIndexForE2E({ installRecords });
 }
 
 function assertDemoPlugin() {
-  const data = readJson("/tmp/plugins.json");
-  const inspect = readJson("/tmp/plugins-inspect.json");
+  const data = readJson(scratchFile("plugins.json"));
+  const inspect = readJson(scratchFile("plugins-inspect.json"));
   const plugin = (data.plugins || []).find((entry) => entry.id === "demo-plugin");
   if (!plugin) {
     throw new Error("plugin not found");
@@ -173,17 +288,22 @@ function assertSimplePlugin(jsonFile, inspectFile, pluginId, method) {
   }
 }
 
-function assertUpdateOutput(logFile, expectedSnippet) {
-  const output = fs.readFileSync(logFile, "utf8");
-  if (!output.includes(expectedSnippet)) {
-    throw new Error(
-      `expected update output to include ${JSON.stringify(expectedSnippet)}:\n${output}`,
-    );
+function assertTextFileIncludes(file, expectedSnippet, label) {
+  if (fileContainsText(file, expectedSnippet)) {
+    return;
   }
+  const outputTail = readTextFileTail(file, ERROR_DETAIL_TAIL_BYTES);
+  throw new Error(
+    `expected ${label} to include ${JSON.stringify(expectedSnippet)}. Output tail:\n${outputTail}`,
+  );
+}
+
+function assertUpdateOutput(logFile, expectedSnippet) {
+  assertTextFileIncludes(logFile, expectedSnippet, "update output");
 }
 
 function assertClaudeBundleDisabled() {
-  const data = readJson("/tmp/plugins-bundle-disabled.json");
+  const data = readJson(scratchFile("plugins-bundle-disabled.json"));
   const plugin = (data.plugins || []).find((entry) => entry.id === "claude-bundle-e2e");
   if (!plugin) {
     throw new Error("Claude bundle plugin not found");
@@ -194,7 +314,7 @@ function assertClaudeBundleDisabled() {
 }
 
 function assertClaudeBundleInspect() {
-  const inspect = readJson("/tmp/plugins-bundle-inspect.json");
+  const inspect = readJson(scratchFile("plugins-bundle-inspect.json"));
   if (inspect.plugin?.bundleFormat !== "claude") {
     throw new Error(`expected Claude bundle format, got ${inspect.plugin?.bundleFormat}`);
   }
@@ -206,7 +326,7 @@ function assertClaudeBundleInspect() {
 }
 
 function assertSlashInstall() {
-  const inspect = readJson("/tmp/plugin-command-install-show.json");
+  const inspect = readJson(scratchFile("plugin-command-install-show.json"));
   if (inspect.plugin?.status !== "loaded") {
     throw new Error(`expected loaded status after install, got ${inspect.plugin?.status}`);
   }
@@ -226,7 +346,7 @@ function parseClawHubPackageName(rawSpec) {
 }
 
 function assertMarketplaceList() {
-  const data = readJson("/tmp/marketplace-list.json");
+  const data = readJson(scratchFile("marketplace-list.json"));
   const names = (data.plugins || []).map((entry) => entry.name).toSorted();
   if (data.name !== "Fixture Marketplace") {
     throw new Error(`unexpected marketplace name: ${data.name}`);
@@ -237,9 +357,9 @@ function assertMarketplaceList() {
 }
 
 function assertMarketplaceInstalled() {
-  const data = readJson("/tmp/plugins-marketplace.json");
-  const shortcutInspect = readJson("/tmp/plugins-marketplace-shortcut-inspect.json");
-  const directInspect = readJson("/tmp/plugins-marketplace-direct-inspect.json");
+  const data = readJson(scratchFile("plugins-marketplace.json"));
+  const shortcutInspect = readJson(scratchFile("plugins-marketplace-shortcut-inspect.json"));
+  const directInspect = readJson(scratchFile("plugins-marketplace-direct-inspect.json"));
   const getPlugin = (id) => {
     const plugin = (data.plugins || []).find((entry) => entry.id === id);
     if (!plugin) {
@@ -292,14 +412,14 @@ function assertMarketplaceRecords() {
 
 function assertPluginTgz() {
   assertSimplePlugin(
-    "/tmp/plugins2.json",
-    "/tmp/plugins2-inspect.json",
+    scratchFile("plugins2.json"),
+    scratchFile("plugins2-inspect.json"),
     "demo-plugin-tgz",
     "demo.tgz",
   );
   rememberPluginInstallPath({
     pluginId: "demo-plugin-tgz",
-    installPathFile: "/tmp/plugins2-install-path.txt",
+    installPathFile: scratchFile("plugins2-install-path.txt"),
     source: "archive",
   });
 }
@@ -307,23 +427,23 @@ function assertPluginTgz() {
 function assertPluginTgzRemoved() {
   assertManagedInstallRemoved({
     pluginId: "demo-plugin-tgz",
-    listFile: "/tmp/plugins2-uninstalled.json",
-    installPathFile: "/tmp/plugins2-install-path.txt",
+    listFile: scratchFile("plugins2-uninstalled.json"),
+    installPathFile: scratchFile("plugins2-install-path.txt"),
   });
 }
 
 function assertPluginDir() {
   const sourceDir = process.argv[3];
   assertSimplePlugin(
-    "/tmp/plugins3.json",
-    "/tmp/plugins3-inspect.json",
+    scratchFile("plugins3.json"),
+    scratchFile("plugins3-inspect.json"),
     "demo-plugin-dir",
     "demo.dir",
   );
   rememberPluginInstallPath({
     pluginId: "demo-plugin-dir",
-    installPathFile: "/tmp/plugins3-install-path.txt",
-    sourcePathFile: "/tmp/plugins3-source-path.txt",
+    installPathFile: scratchFile("plugins3-install-path.txt"),
+    sourcePathFile: scratchFile("plugins3-source-path.txt"),
     source: "path",
     sourcePath: sourceDir,
   });
@@ -332,9 +452,9 @@ function assertPluginDir() {
 function assertPluginDirRemoved() {
   assertManagedInstallRemoved({
     pluginId: "demo-plugin-dir",
-    listFile: "/tmp/plugins3-uninstalled.json",
-    installPathFile: "/tmp/plugins3-install-path.txt",
-    sourcePathFile: "/tmp/plugins3-source-path.txt",
+    listFile: scratchFile("plugins3-uninstalled.json"),
+    installPathFile: scratchFile("plugins3-install-path.txt"),
+    sourcePathFile: scratchFile("plugins3-source-path.txt"),
   });
 }
 
@@ -342,21 +462,22 @@ function assertGitPlugin() {
   const repoUrl = process.argv[3];
   const gitRef = process.argv[4];
   assertSimplePlugin(
-    "/tmp/plugins-git.json",
-    "/tmp/plugins-git-inspect.json",
+    scratchFile("plugins-git.json"),
+    scratchFile("plugins-git-inspect.json"),
     "demo-plugin-git",
     "demo.git",
   );
 
-  const inspect = readJson("/tmp/plugins-git-inspect.json");
+  const inspect = readJson(scratchFile("plugins-git-inspect.json"));
   if (!Array.isArray(inspect.cliCommands) || !inspect.cliCommands.includes("demo-git")) {
     throw new Error(`expected demo-git cli command, got ${inspect.cliCommands?.join(", ")}`);
   }
 
-  const cliOutput = fs.readFileSync("/tmp/plugins-git-cli.txt", "utf8");
-  if (!cliOutput.includes("demo-plugin-git:pong")) {
-    throw new Error(`unexpected git plugin cli output: ${cliOutput.trim()}`);
-  }
+  assertTextFileIncludes(
+    scratchFile("plugins-git-cli.txt"),
+    "demo-plugin-git:pong",
+    "git plugin CLI output",
+  );
 
   const record = getInstallRecords()["demo-plugin-git"];
   if (!record) {
@@ -378,7 +499,7 @@ function assertGitPlugin() {
     throw new Error(`unexpected git spec: ${record.spec}`);
   }
 
-  const installPath = record.installPath?.replace(/^~(?=$|\/)/u, process.env.HOME);
+  const installPath = resolveHomePath(record.installPath);
   if (!installPath || !fs.existsSync(installPath)) {
     throw new Error(`git install path missing on disk: ${installPath}`);
   }
@@ -392,16 +513,22 @@ function assertGitPlugin() {
     throw new Error(`missing git plugin installed dependency: ${dependencyPackagePath}`);
   }
   assertRealPathInside(installPath, dependencyPackagePath, "git plugin installed dependency");
-  fs.writeFileSync("/tmp/plugins-git-install-path.txt", installPath, "utf8");
-  fs.writeFileSync("/tmp/plugins-git-install-parent.txt", path.dirname(installPath), "utf8");
+  fs.writeFileSync(scratchFile("plugins-git-install-path.txt"), installPath, "utf8");
+  fs.writeFileSync(
+    scratchFile("plugins-git-install-parent.txt"),
+    path.dirname(installPath),
+    "utf8",
+  );
 }
 
 function assertGitPluginRemoved() {
-  const installPath = fs.readFileSync("/tmp/plugins-git-install-path.txt", "utf8").trim();
-  const installParent = fs.readFileSync("/tmp/plugins-git-install-parent.txt", "utf8").trim();
+  const installPath = fs.readFileSync(scratchFile("plugins-git-install-path.txt"), "utf8").trim();
+  const installParent = fs
+    .readFileSync(scratchFile("plugins-git-install-parent.txt"), "utf8")
+    .trim();
   assertPluginRemoved({
     pluginId: "demo-plugin-git",
-    listFile: "/tmp/plugins-git-uninstalled.json",
+    listFile: scratchFile("plugins-git-uninstalled.json"),
   });
   if (fs.existsSync(installPath)) {
     throw new Error(`git managed repo still exists after uninstall: ${installPath}`);
@@ -470,8 +597,8 @@ function assertClawHubArtifactMetadata(record, pluginId) {
 function assertPluginDirDeps() {
   const sourceDir = process.argv[3];
   assertSimplePlugin(
-    "/tmp/plugins-dir-deps.json",
-    "/tmp/plugins-dir-deps-inspect.json",
+    scratchFile("plugins-dir-deps.json"),
+    scratchFile("plugins-dir-deps-inspect.json"),
     "demo-plugin-dir-deps",
     "demo.dir.deps",
   );
@@ -483,10 +610,10 @@ function assertPluginDirDeps() {
   if (record.source !== "path") {
     throw new Error(`unexpected local dependency plugin source: ${record.source}`);
   }
-  if (record.sourcePath !== sourceDir) {
+  if (!pathsEqual(record.sourcePath, sourceDir)) {
     throw new Error(`unexpected local dependency plugin source path: ${record.sourcePath}`);
   }
-  const installPath = record.installPath?.replace(/^~(?=$|\/)/u, process.env.HOME);
+  const installPath = resolveHomePath(record.installPath);
   if (!installPath || !fs.existsSync(installPath)) {
     throw new Error(`local dependency plugin install path missing on disk: ${installPath}`);
   }
@@ -497,8 +624,8 @@ function assertPluginDirDeps() {
   assertRealPathInside(installPath, dependencyPackagePath, "local plugin copied dependency");
   rememberPluginInstallPath({
     pluginId: "demo-plugin-dir-deps",
-    installPathFile: "/tmp/plugins-dir-deps-install-path.txt",
-    sourcePathFile: "/tmp/plugins-dir-deps-source-path.txt",
+    installPathFile: scratchFile("plugins-dir-deps-install-path.txt"),
+    sourcePathFile: scratchFile("plugins-dir-deps-source-path.txt"),
     source: "path",
     sourcePath: sourceDir,
   });
@@ -507,33 +634,37 @@ function assertPluginDirDeps() {
 function assertPluginDirDepsRemoved() {
   assertManagedInstallRemoved({
     pluginId: "demo-plugin-dir-deps",
-    listFile: "/tmp/plugins-dir-deps-uninstalled.json",
-    installPathFile: "/tmp/plugins-dir-deps-install-path.txt",
-    sourcePathFile: "/tmp/plugins-dir-deps-source-path.txt",
+    listFile: scratchFile("plugins-dir-deps-uninstalled.json"),
+    installPathFile: scratchFile("plugins-dir-deps-install-path.txt"),
+    sourcePathFile: scratchFile("plugins-dir-deps-source-path.txt"),
   });
 }
 
 function assertLocalPathUpdateSkipped() {
-  assertUpdateOutput("/tmp/plugins-dir-update.log", 'Skipping "demo-plugin-dir" (source: path).');
+  assertUpdateOutput(
+    scratchFile("plugins-dir-update.log"),
+    'Skipping "demo-plugin-dir" (source: path).',
+  );
 }
 
 function assertNpmPlugin() {
   assertSimplePlugin(
-    "/tmp/plugins-npm.json",
-    "/tmp/plugins-npm-inspect.json",
+    scratchFile("plugins-npm.json"),
+    scratchFile("plugins-npm-inspect.json"),
     "demo-plugin-npm",
     "demo.npm",
   );
 
-  const inspect = readJson("/tmp/plugins-npm-inspect.json");
+  const inspect = readJson(scratchFile("plugins-npm-inspect.json"));
   if (!Array.isArray(inspect.cliCommands) || !inspect.cliCommands.includes("demo-npm")) {
     throw new Error(`expected demo-npm cli command, got ${inspect.cliCommands?.join(", ")}`);
   }
 
-  const cliOutput = fs.readFileSync("/tmp/plugins-npm-cli.txt", "utf8");
-  if (!cliOutput.includes("demo-plugin-npm:pong")) {
-    throw new Error(`unexpected npm plugin cli output: ${cliOutput.trim()}`);
-  }
+  assertTextFileIncludes(
+    scratchFile("plugins-npm-cli.txt"),
+    "demo-plugin-npm:pong",
+    "npm plugin CLI output",
+  );
 
   const record = getInstallRecords()["demo-plugin-npm"];
   if (!record) {
@@ -551,7 +682,7 @@ function assertNpmPlugin() {
   if (record.resolvedVersion !== "0.0.1") {
     throw new Error(`unexpected npm resolved version: ${record.resolvedVersion}`);
   }
-  const installPath = record.installPath?.replace(/^~(?=$|\/)/u, process.env.HOME);
+  const installPath = resolveHomePath(record.installPath);
   if (!installPath || !fs.existsSync(installPath)) {
     throw new Error(`npm install path missing on disk: ${installPath}`);
   }
@@ -562,27 +693,30 @@ function assertNpmPlugin() {
     throw new Error(`missing npm plugin installed dependency: ${dependencyPackagePath}`);
   }
   assertRealPathInside(npmRoot, dependencyPackagePath, "npm plugin installed dependency");
-  fs.writeFileSync("/tmp/plugins-npm-install-path.txt", installPath, "utf8");
-  fs.writeFileSync("/tmp/plugins-npm-dependency-path.txt", dependencyPackagePath, "utf8");
+  fs.writeFileSync(scratchFile("plugins-npm-install-path.txt"), installPath, "utf8");
+  fs.writeFileSync(scratchFile("plugins-npm-dependency-path.txt"), dependencyPackagePath, "utf8");
 }
 
 function assertNpmPluginUpdateUnchanged() {
-  assertUpdateOutput("/tmp/plugins-npm-update.log", "demo-plugin-npm is up to date (0.0.1).");
+  assertUpdateOutput(
+    scratchFile("plugins-npm-update.log"),
+    "demo-plugin-npm is up to date (0.0.1).",
+  );
   assertNpmPlugin();
 }
 
 function assertPluginFile() {
   const sourceDir = process.argv[3];
   assertSimplePlugin(
-    "/tmp/plugins4.json",
-    "/tmp/plugins4-inspect.json",
+    scratchFile("plugins4.json"),
+    scratchFile("plugins4-inspect.json"),
     "demo-plugin-file",
     "demo.file",
   );
   rememberPluginInstallPath({
     pluginId: "demo-plugin-file",
-    installPathFile: "/tmp/plugins4-install-path.txt",
-    sourcePathFile: "/tmp/plugins4-source-path.txt",
+    installPathFile: scratchFile("plugins4-install-path.txt"),
+    sourcePathFile: scratchFile("plugins4-source-path.txt"),
     source: "path",
     sourcePath: sourceDir,
   });
@@ -591,20 +725,25 @@ function assertPluginFile() {
 function assertPluginFileRemoved() {
   assertManagedInstallRemoved({
     pluginId: "demo-plugin-file",
-    listFile: "/tmp/plugins4-uninstalled.json",
-    installPathFile: "/tmp/plugins4-install-path.txt",
-    sourcePathFile: "/tmp/plugins4-source-path.txt",
+    listFile: scratchFile("plugins4-uninstalled.json"),
+    installPathFile: scratchFile("plugins4-install-path.txt"),
+    sourcePathFile: scratchFile("plugins4-source-path.txt"),
   });
 }
 
 function assertNpmPluginRemoved() {
-  const installPath = fs.readFileSync("/tmp/plugins-npm-install-path.txt", "utf8").trim();
+  const installPath = fs.readFileSync(scratchFile("plugins-npm-install-path.txt"), "utf8").trim();
+  const packageParent = path.dirname(installPath);
+  const nodeModulesPath = path.basename(packageParent).startsWith("@")
+    ? path.dirname(packageParent)
+    : packageParent;
+  const projectRoot = path.dirname(nodeModulesPath);
   const dependencyPackagePath = fs
-    .readFileSync("/tmp/plugins-npm-dependency-path.txt", "utf8")
+    .readFileSync(scratchFile("plugins-npm-dependency-path.txt"), "utf8")
     .trim();
   assertPluginRemoved({
     pluginId: "demo-plugin-npm",
-    listFile: "/tmp/plugins-npm-uninstalled.json",
+    listFile: scratchFile("plugins-npm-uninstalled.json"),
   });
   if (fs.existsSync(installPath)) {
     throw new Error(`npm managed package still exists after uninstall: ${installPath}`);
@@ -614,11 +753,57 @@ function assertNpmPluginRemoved() {
       `npm managed dependency still exists after uninstall: ${dependencyPackagePath}`,
     );
   }
+  if (fs.existsSync(projectRoot)) {
+    throw new Error(`npm managed project still exists after uninstall: ${projectRoot}`);
+  }
+}
+
+function assertNpmPluginRetained() {
+  const installPath = fs.readFileSync(scratchFile("plugins-npm-install-path.txt"), "utf8").trim();
+  const dependencyPackagePath = fs
+    .readFileSync(scratchFile("plugins-npm-dependency-path.txt"), "utf8")
+    .trim();
+  assertPluginRemoved({
+    pluginId: "demo-plugin-npm",
+    listFile: scratchFile("plugins-npm-retained.json"),
+  });
+  if (!fs.existsSync(installPath)) {
+    throw new Error(`npm managed package was deleted by --keep-files: ${installPath}`);
+  }
+  if (!fs.existsSync(dependencyPackagePath)) {
+    throw new Error(`npm managed dependency was deleted by --keep-files: ${dependencyPackagePath}`);
+  }
+}
+
+function assertInvalidOpenClawExtensionsRejected() {
+  const pluginId = "demo-plugin-invalid-metadata";
+  for (const expected of ["openclaw.extensions[1]", "non-empty string"]) {
+    assertTextFileIncludes(
+      scratchFile("plugins-invalid-openclaw-extensions.log"),
+      expected,
+      "malformed metadata install output",
+    );
+  }
+
+  const list = readJson(scratchFile("plugins-invalid-openclaw-extensions-list.json"));
+  if ((list.plugins || []).some((entry) => entry.id === pluginId)) {
+    throw new Error(`${pluginId} listed after rejected install`);
+  }
+
+  const installRecords = getInstallRecords();
+  if (installRecords[pluginId]) {
+    throw new Error(`${pluginId} install record persisted after rejected install`);
+  }
+
+  const managedInstallPath = path.join(process.env.HOME, ".openclaw", "extensions", pluginId);
+  if (fs.existsSync(managedInstallPath)) {
+    throw new Error(`${pluginId} managed install directory exists after rejected install`);
+  }
 }
 
 function assertMarketplaceUpdated() {
-  const data = readJson("/tmp/plugins-marketplace-updated.json");
-  const inspect = readJson("/tmp/plugins-marketplace-updated-inspect.json");
+  const data = readJson(scratchFile("plugins-marketplace-updated.json"));
+  const inspect = readJson(scratchFile("plugins-marketplace-updated-inspect.json"));
   const plugin = (data.plugins || []).find((entry) => entry.id === "marketplace-shortcut");
   if (!plugin) {
     throw new Error("updated marketplace plugin not found");
@@ -634,21 +819,22 @@ function assertMarketplaceUpdated() {
 function assertGitPluginUpdated() {
   const beforeCommit = process.argv[3];
   assertSimplePlugin(
-    "/tmp/plugins-git-update.json",
-    "/tmp/plugins-git-update-inspect.json",
+    scratchFile("plugins-git-update.json"),
+    scratchFile("plugins-git-update-inspect.json"),
     "demo-plugin-git-update",
     "demo.git.update.v2",
   );
 
-  const inspect = readJson("/tmp/plugins-git-update-inspect.json");
+  const inspect = readJson(scratchFile("plugins-git-update-inspect.json"));
   if (!Array.isArray(inspect.cliCommands) || !inspect.cliCommands.includes("demo-git-update")) {
     throw new Error(`expected demo-git-update cli command, got ${inspect.cliCommands?.join(", ")}`);
   }
 
-  const cliOutput = fs.readFileSync("/tmp/plugins-git-update-cli.txt", "utf8");
-  if (!cliOutput.includes("demo-plugin-git-update:pong-v2")) {
-    throw new Error(`unexpected updated git plugin cli output: ${cliOutput.trim()}`);
-  }
+  assertTextFileIncludes(
+    scratchFile("plugins-git-update-cli.txt"),
+    "demo-plugin-git-update:pong-v2",
+    "updated git plugin CLI output",
+  );
 
   const record = getInstallRecords()["demo-plugin-git-update"];
   if (!record) {
@@ -669,7 +855,7 @@ function assertGitPluginUpdated() {
     throw new Error(`unexpected git update version: ${record.version}`);
   }
   assertUpdateOutput(
-    "/tmp/plugins-git-update.log",
+    scratchFile("plugins-git-update.log"),
     "Updated demo-plugin-git-update: 0.0.1 -> 0.0.2.",
   );
 }
@@ -680,27 +866,56 @@ async function assertClawHubPreflight() {
     throw new Error(`expected clawhub: spec, got ${spec}`);
   }
 
+  const limits = readClawHubPreflightLimits();
   const packageName = parseClawHubPackageName(spec);
   const baseUrl = (
     process.env.OPENCLAW_CLAWHUB_URL ||
     process.env.CLAWHUB_URL ||
     "https://clawhub.ai"
   ).replace(/\/+$/, "");
-  const token =
-    process.env.OPENCLAW_CLAWHUB_TOKEN ||
-    process.env.CLAWHUB_TOKEN ||
-    process.env.CLAWHUB_AUTH_TOKEN ||
-    "";
-  const response = await fetch(`${baseUrl}/api/v1/packages/${encodeURIComponent(packageName)}`, {
-    headers: token ? { Authorization: `Bearer ${token}` } : undefined,
-  });
+  const token = process.env.CLAWHUB_TOKEN || process.env.CLAWHUB_AUTH_TOKEN || "";
+  const preflightUrl = `${baseUrl}/api/v1/packages/${encodeURIComponent(packageName)}`;
+  const response = await withTimeout(
+    `ClawHub package preflight for ${packageName}`,
+    limits.timeoutMs,
+    (signal) =>
+      fetch(preflightUrl, {
+        headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+        signal,
+      }),
+  );
   if (!response.ok) {
-    const body = await response.text().catch(() => "");
+    const body = await withTimeout(
+      `ClawHub package preflight response for ${packageName}`,
+      limits.timeoutMs,
+      (_signal, timeoutPromise) =>
+        readBoundedResponseText(
+          response,
+          `ClawHub package preflight response for ${packageName}`,
+          limits.bodyMaxBytes,
+          { createTooLargeError: createBoundedResponseTooLargeError, timeoutPromise },
+        ),
+    );
     throw new Error(
       `ClawHub package preflight failed for ${packageName}: ${response.status} ${body}`,
     );
   }
-  const detail = await response.json();
+  const rawDetail = await withTimeout(
+    `ClawHub package preflight response for ${packageName}`,
+    limits.timeoutMs,
+    (_signal, timeoutPromise) =>
+      readBoundedResponseText(
+        response,
+        `ClawHub package preflight response for ${packageName}`,
+        limits.bodyMaxBytes,
+        { createTooLargeError: createBoundedResponseTooLargeError, timeoutPromise },
+      ),
+  );
+  const detail = await withTimeout(
+    `ClawHub package preflight JSON for ${packageName}`,
+    limits.timeoutMs,
+    () => JSON.parse(rawDetail),
+  );
   const family = detail.package?.family;
   if (family !== "code-plugin" && family !== "bundle-plugin") {
     throw new Error(`ClawHub package ${packageName} is not installable as a plugin: ${family}`);
@@ -717,8 +932,8 @@ function assertClawHubInstalled() {
   const pluginId = process.env.CLAWHUB_PLUGIN_ID;
   const spec = process.env.CLAWHUB_PLUGIN_SPEC;
   const packageName = parseClawHubPackageName(spec);
-  const list = readJson("/tmp/plugins-clawhub-installed.json");
-  const inspect = readJson("/tmp/plugins-clawhub-inspect.json");
+  const list = readJson(scratchFile("plugins-clawhub-installed.json"));
+  const inspect = readJson(scratchFile("plugins-clawhub-inspect.json"));
   const plugin = (list.plugins || []).find((entry) => entry.id === pluginId);
   if (!plugin) {
     throw new Error(`ClawHub plugin not found after install: ${pluginId}`);
@@ -730,17 +945,17 @@ function assertClawHubInstalled() {
     throw new Error(`unexpected ClawHub inspect plugin id: ${inspect.plugin?.id}`);
   }
 
-  const indexPath = path.join(process.env.HOME, ".openclaw", "plugins", "installs.json");
-  const index = readJson(indexPath);
   const configPath = path.join(process.env.HOME, ".openclaw", "openclaw.json");
   const config = fs.existsSync(configPath) ? readJson(configPath) : {};
   const allowLegacyCompat = process.env.OPENCLAW_PACKAGE_ACCEPTANCE_LEGACY_COMPAT === "1";
+  const index = readPluginInstallIndex({
+    configPath,
+    fallbackRecords: allowLegacyCompat ? (config.plugins?.installs ?? {}) : {},
+  });
   if (!allowLegacyCompat && !index.installRecords) {
     throw new Error("expected modern installRecords in installed plugin index");
   }
-  const installRecords = allowLegacyCompat
-    ? (index.installRecords ?? index.records ?? config.plugins?.installs ?? {})
-    : (index.installRecords ?? {});
+  const installRecords = index.installRecords ?? {};
   const record = installRecords[pluginId];
   if (!record) {
     throw new Error(`missing ClawHub install record for ${pluginId}`);
@@ -761,33 +976,34 @@ function assertClawHubInstalled() {
   }
   assertClawHubArtifactMetadata(record, pluginId);
 
-  const installPath = record.installPath.replace(/^~(?=$|\/)/u, process.env.HOME);
-  const extensionsRoot = path.join(process.env.HOME, ".openclaw", "extensions");
-  if (!installPath.startsWith(`${extensionsRoot}${path.sep}`)) {
-    throw new Error(`ClawHub install path is outside managed extensions root: ${installPath}`);
-  }
+  const installPath = resolveHomePath(record.installPath);
   if (!fs.existsSync(installPath)) {
     throw new Error(`ClawHub install path missing on disk: ${installPath}`);
   }
+  const extensionsRoot = path.join(process.env.HOME, ".openclaw", "extensions");
+  assertRealPathInside(extensionsRoot, installPath, "ClawHub install path");
   if (record.artifactKind === "npm-pack") {
     assertClawHubExternalInstallContract(installPath);
   }
-  fs.writeFileSync("/tmp/plugins-clawhub-install-path.txt", installPath, "utf8");
+  fs.writeFileSync(scratchFile("plugins-clawhub-install-path.txt"), installPath, "utf8");
 }
 
 function assertClawHubRemoved() {
   const pluginId = process.env.CLAWHUB_PLUGIN_ID;
-  const installPath = fs.readFileSync("/tmp/plugins-clawhub-install-path.txt", "utf8").trim();
-  const list = readJson("/tmp/plugins-clawhub-uninstalled.json");
+  const installPath = fs
+    .readFileSync(scratchFile("plugins-clawhub-install-path.txt"), "utf8")
+    .trim();
+  const list = readJson(scratchFile("plugins-clawhub-uninstalled.json"));
   if ((list.plugins || []).some((entry) => entry.id === pluginId)) {
     throw new Error(`ClawHub plugin still listed after uninstall: ${pluginId}`);
   }
 
-  const indexPath = path.join(process.env.HOME, ".openclaw", "plugins", "installs.json");
-  const index = fs.existsSync(indexPath) ? readJson(indexPath) : {};
   const configPath = path.join(process.env.HOME, ".openclaw", "openclaw.json");
   const config = fs.existsSync(configPath) ? readJson(configPath) : {};
-  const installRecords = index.installRecords ?? index.records ?? config.plugins?.installs ?? {};
+  const installRecords = readPluginInstallRecords({
+    configPath,
+    fallbackRecords: config.plugins?.installs ?? {},
+  });
   if (installRecords[pluginId]) {
     throw new Error(`ClawHub install record still present after uninstall: ${pluginId}`);
   }
@@ -796,8 +1012,8 @@ function assertClawHubRemoved() {
   const configAfterUninstall = fs.existsSync(configAfterUninstallPath)
     ? readJson(configAfterUninstallPath)
     : {};
-  if (configAfterUninstall.plugins?.entries?.[pluginId]) {
-    throw new Error(`ClawHub config entry still present after uninstall: ${pluginId}`);
+  if (!isExplicitPluginDisableMarker(configAfterUninstall, pluginId)) {
+    throw new Error(`ClawHub exact disabled uninstall marker missing: ${pluginId}`);
   }
   if ((configAfterUninstall.plugins?.allow || []).includes(pluginId)) {
     throw new Error(`ClawHub allowlist entry still present after uninstall: ${pluginId}`);
@@ -813,10 +1029,11 @@ function assertClawHubRemoved() {
 }
 
 function assertClawHubUpdated() {
-  const output = fs.readFileSync("/tmp/plugins-clawhub-update.log", "utf8");
-  if (!output.includes(`${process.env.CLAWHUB_PLUGIN_ID} already at `)) {
-    throw new Error(`expected ClawHub update to report already-at version:\n${output}`);
-  }
+  assertTextFileIncludes(
+    scratchFile("plugins-clawhub-update.log"),
+    `${process.env.CLAWHUB_PLUGIN_ID} already at `,
+    "ClawHub update output",
+  );
   assertClawHubInstalled();
 }
 
@@ -834,7 +1051,9 @@ const commands = {
   "plugin-file-removed": assertPluginFileRemoved,
   "plugin-npm": assertNpmPlugin,
   "plugin-npm-update": assertNpmPluginUpdateUnchanged,
+  "plugin-npm-retained": assertNpmPluginRetained,
   "plugin-npm-removed": assertNpmPluginRemoved,
+  "invalid-openclaw-extensions": assertInvalidOpenClawExtensionsRejected,
   "bundle-disabled": assertClaudeBundleDisabled,
   "bundle-inspect": assertClaudeBundleInspect,
   "slash-install": assertSlashInstall,

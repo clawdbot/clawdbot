@@ -1,3 +1,4 @@
+// Root Dependency Ownership Audit tests cover root dependency ownership audit script behavior.
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -7,7 +8,7 @@ import {
   collectRootDependencyOwnershipAudit,
   collectRootDependencyOwnershipCheckErrors,
   collectModuleSpecifiers,
-} from "../../scripts/root-dependency-ownership-audit.mjs";
+} from "../../scripts/root-dependency-ownership-audit.mts";
 
 const tempDirs: string[] = [];
 
@@ -45,20 +46,15 @@ describe("collectModuleSpecifiers", () => {
     expect([
       ...collectModuleSpecifiers(`
         const READABILITY_MODULE = "@mozilla/readability";
-        const PDFJS_MODULE = "pdfjs-dist/legacy/build/pdf.mjs";
+        const CLAWPDF_MODULE = "clawpdf";
         const CIAO_MODULE_ID = "@homebridge/ciao";
         let SQLITE_VEC_MODULE_ID = "sqlite-vec";
         import(READABILITY_MODULE);
-        import(PDFJS_MODULE);
+        import(CLAWPDF_MODULE);
         require(CIAO_MODULE_ID);
         require.resolve(SQLITE_VEC_MODULE_ID);
       `),
-    ]).toEqual([
-      "@mozilla/readability",
-      "pdfjs-dist/legacy/build/pdf.mjs",
-      "@homebridge/ciao",
-      "sqlite-vec",
-    ]);
+    ]).toEqual(["@mozilla/readability", "clawpdf", "@homebridge/ciao", "sqlite-vec"]);
   });
 });
 
@@ -133,19 +129,19 @@ describe("collectRootDependencyOwnershipCheckErrors", () => {
     );
     writeRepoFile(
       repoRoot,
-      "extensions/qqbot/package.json",
+      "extensions/demo-channel/package.json",
       JSON.stringify({ dependencies: { "vendor-sdk": "^1.0.0" } }),
     );
     writeRepoFile(
       repoRoot,
-      "extensions/qqbot/src/setup.ts",
+      "extensions/demo-channel/src/setup.ts",
       'const sdk = await import("vendor-sdk");\n',
     );
 
     const records = collectRootDependencyOwnershipAudit({ repoRoot, scanRoots: ["extensions"] });
 
     expect(collectRootDependencyOwnershipCheckErrors(records)).toEqual([
-      "root dependency 'vendor-sdk' is extension-owned (remove from root package.json and rely on owning extension manifests plus doctor --fix); extension declarations: qqbot:dependencies; sample imports: extensions/qqbot/src/setup.ts",
+      "root dependency 'vendor-sdk' is extension-owned (remove from root package.json and rely on owning extension manifests plus doctor --fix); extension declarations: demo-channel:dependencies; sample imports: extensions/demo-channel/src/setup.ts",
     ]);
   });
 
@@ -154,15 +150,15 @@ describe("collectRootDependencyOwnershipCheckErrors", () => {
     writeRepoFile(
       repoRoot,
       "package.json",
-      JSON.stringify({ dependencies: { "pdfjs-dist": "^5.0.0", "sqlite-vec": "0.1.9" } }),
+      JSON.stringify({ dependencies: { clawpdf: "^0.2.0", "sqlite-vec": "0.1.9" } }),
     );
     writeRepoFile(
       repoRoot,
       "src/media/pdf-extract.ts",
       `
-        const PDFJS_MODULE = "pdfjs-dist/legacy/build/pdf.mjs";
+        const CLAWPDF_MODULE = "clawpdf";
         export async function loadPdf() {
-          return import(PDFJS_MODULE);
+          return import(CLAWPDF_MODULE);
         }
       `,
     );
@@ -182,18 +178,28 @@ describe("collectRootDependencyOwnershipCheckErrors", () => {
       scanRoots: ["src", "packages"],
     });
 
-    expect(records).toMatchObject([
+    expect(records).toEqual([
       {
         category: "core_runtime",
-        depName: "pdfjs-dist",
+        declaredInExtensions: [],
+        depName: "clawpdf",
+        fileCount: 1,
+        internalizedBundledRuntimeOwners: [],
+        recommendation: "keep at root",
         sampleFiles: ["src/media/pdf-extract.ts"],
         sections: ["src"],
+        spec: "^0.2.0",
       },
       {
         category: "core_runtime",
+        declaredInExtensions: [],
         depName: "sqlite-vec",
+        fileCount: 1,
+        internalizedBundledRuntimeOwners: [],
+        recommendation: "keep at root",
         sampleFiles: ["packages/memory-host-sdk/src/host/sqlite-vec.ts"],
         sections: ["packages"],
+        spec: "0.1.9",
       },
     ]);
   });
@@ -203,11 +209,11 @@ describe("collectRootDependencyOwnershipCheckErrors", () => {
       collectRootDependencyOwnershipCheckErrors([
         {
           category: "extension_only_localizable",
-          declaredInExtensions: ["qqbot:dependencies"],
-          depName: "@tencent-connect/qqbot-connector",
+          declaredInExtensions: ["demo-channel:dependencies"],
+          depName: "vendor-sdk",
           recommendation:
             "remove from root package.json and rely on owning extension manifests plus doctor --fix",
-          sampleFiles: ["extensions/qqbot/src/bridge/setup/finalize.ts"],
+          sampleFiles: ["extensions/demo-channel/src/setup.ts"],
         },
         {
           category: "unreferenced",
@@ -218,7 +224,7 @@ describe("collectRootDependencyOwnershipCheckErrors", () => {
         },
       ]),
     ).toEqual([
-      "root dependency '@tencent-connect/qqbot-connector' is extension-owned (remove from root package.json and rely on owning extension manifests plus doctor --fix); extension declarations: qqbot:dependencies; sample imports: extensions/qqbot/src/bridge/setup/finalize.ts",
+      "root dependency 'vendor-sdk' is extension-owned (remove from root package.json and rely on owning extension manifests plus doctor --fix); extension declarations: demo-channel:dependencies; sample imports: extensions/demo-channel/src/setup.ts",
     ]);
   });
 
@@ -254,19 +260,33 @@ describe("collectRootDependencyOwnershipCheckErrors", () => {
 
     const records = collectRootDependencyOwnershipAudit({ repoRoot, scanRoots: ["extensions"] });
 
-    expect(records).toMatchObject([
+    expect(records).toEqual([
       {
         category: "root_owned_extension_runtime",
+        declaredInExtensions: ["bonjour:dependencies"],
         depName: "@homebridge/ciao",
+        fileCount: 1,
+        internalizedBundledRuntimeOwners: [],
+        recommendation:
+          "keep at root; the Bonjour runtime is shipped with packaged startup surfaces even though the bundled plugin also declares it",
+        sampleFiles: ["extensions/bonjour/src/advertiser.ts"],
         sections: ["extensions"],
+        spec: "^1.3.7",
       },
       {
         category: "root_owned_extension_runtime",
+        declaredInExtensions: ["browser:dependencies"],
         depName: "playwright-core",
+        fileCount: 1,
+        internalizedBundledRuntimeOwners: [],
+        recommendation:
+          "keep at root; the internal browser runtime is shipped with core even though downloadable browser-adjacent plugins also declare it",
+        sampleFiles: ["extensions/browser/src/browser/playwright-core.runtime.ts"],
         sections: ["extensions"],
+        spec: "1.59.1",
       },
     ]);
-    expect(collectRootDependencyOwnershipCheckErrors(records)).toEqual([]);
+    expect(collectRootDependencyOwnershipCheckErrors(records)).toStrictEqual([]);
   });
 
   it("allows runtime deps for bundled plugins that are still packaged in core", () => {
@@ -293,15 +313,21 @@ describe("collectRootDependencyOwnershipCheckErrors", () => {
 
     const records = collectRootDependencyOwnershipAudit({ repoRoot, scanRoots: ["extensions"] });
 
-    expect(records).toMatchObject([
+    expect(records).toEqual([
       {
         category: "root_owned_extension_runtime",
+        declaredInExtensions: ["internal:dependencies"],
         depName: "vendor-sdk",
+        fileCount: 1,
         internalizedBundledRuntimeOwners: ["internal:dependencies"],
+        recommendation:
+          "keep at root while bundled plugin runtime dependencies are internalized; owners: internal:dependencies",
+        sampleFiles: ["extensions/internal/src/setup.ts"],
         sections: ["extensions"],
+        spec: "^1.0.0",
       },
     ]);
-    expect(collectRootDependencyOwnershipCheckErrors(records)).toEqual([]);
+    expect(collectRootDependencyOwnershipCheckErrors(records)).toStrictEqual([]);
   });
 
   it("keeps excluded bundled plugin deps localizable", () => {
@@ -328,12 +354,18 @@ describe("collectRootDependencyOwnershipCheckErrors", () => {
 
     const records = collectRootDependencyOwnershipAudit({ repoRoot, scanRoots: ["extensions"] });
 
-    expect(records).toMatchObject([
+    expect(records).toEqual([
       {
         category: "extension_only_localizable",
+        declaredInExtensions: ["externalized:dependencies"],
         depName: "vendor-sdk",
+        fileCount: 1,
         internalizedBundledRuntimeOwners: [],
+        recommendation:
+          "remove from root package.json and rely on owning extension manifests plus doctor --fix",
+        sampleFiles: ["extensions/externalized/src/setup.ts"],
         sections: ["extensions"],
+        spec: "^1.0.0",
       },
     ]);
   });

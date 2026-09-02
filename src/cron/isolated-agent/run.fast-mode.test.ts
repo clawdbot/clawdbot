@@ -1,16 +1,21 @@
-import { describe, expect, it } from "vitest";
+// Fast mode tests cover isolated cron run behavior in fast execution mode.
+import { describe, expect, it, vi } from "vitest";
 import {
-  makeIsolatedAgentTurnJob,
-  makeIsolatedAgentTurnParams,
-  setupRunCronIsolatedAgentTurnSuite,
-} from "./run.suite-helpers.js";
+  runInitialModelFallbackAttempt,
+  type TestModelFallbackRunnerParams,
+} from "../../agents/test-helpers/model-fallback-runner.test-support.js";
+import { makeIsolatedAgentJobFixture, makeIsolatedAgentParamsFixture } from "./job-fixtures.js";
+import { setupRunCronIsolatedAgentTurnSuite } from "./run.suite-helpers.js";
 import {
   loadRunCronIsolatedAgentTurn,
   makeCronSession,
+  callGatewayMock,
+  dispatchCronDeliveryMock,
   retireSessionMcpRuntimeMock,
+  resolveCronDeliveryPlanMock,
   resolveFastModeStateMock,
   resolveCronSessionMock,
-  runEmbeddedPiAgentMock,
+  runEmbeddedAgentMock,
   runWithModelFallbackMock,
 } from "./run.test-harness.js";
 
@@ -20,29 +25,39 @@ const OPENAI_GPT4_MODEL = "openai/gpt-4";
 const EXPECTED_OPENAI_MODEL = "gpt-5.4";
 
 function mockSuccessfulModelFallback() {
-  runWithModelFallbackMock.mockImplementation(async ({ provider, model, run }) => {
-    await run(provider, model);
+  runWithModelFallbackMock.mockImplementation(async (params: TestModelFallbackRunnerParams) => {
+    await runInitialModelFallbackAttempt(params);
     return {
       result: {
         payloads: [{ text: "ok" }],
-        meta: { agentMeta: { usage: { input: 10, output: 20 } } },
+        meta: { agentMeta: {} },
       },
-      provider,
-      model,
+      provider: params.provider,
+      model: params.model,
       attempts: [],
     };
   });
 }
 
+function requireFirstMockCall<T>(mock: { mock: { calls: T[][] } }, label: string): T[] {
+  const call = mock.mock.calls[0];
+  if (!call) {
+    throw new Error(`expected ${label} call`);
+  }
+  return call;
+}
+
 async function runFastModeCase(params: {
-  configFastMode: boolean;
-  expectedFastMode: boolean;
+  configFastMode: boolean | "auto";
+  configFastAutoOnSeconds?: number;
+  expectedFastMode: boolean | "auto";
+  expectedFastModeAutoOnSeconds?: number;
   expectedCleanupBundleMcpOnRunEnd?: boolean;
   expectedRetiredSessionId?: string;
   message: string;
   previousSessionId?: string;
   sessionId?: string;
-  sessionFastMode?: boolean;
+  sessionFastMode?: boolean | "auto";
   sessionTarget?: string;
 }) {
   const baseSession = makeCronSession();
@@ -60,16 +75,25 @@ async function runFastModeCase(params: {
   mockSuccessfulModelFallback();
   resolveFastModeStateMock.mockImplementation(({ cfg, sessionEntry }) => {
     const sessionFastMode = sessionEntry?.fastMode;
-    if (typeof sessionFastMode === "boolean") {
-      return { enabled: sessionFastMode };
+    if (typeof sessionFastMode === "boolean" || sessionFastMode === "auto") {
+      return {
+        mode: sessionFastMode,
+        enabled: sessionFastMode === "auto" ? true : sessionFastMode,
+        source: "session",
+        fastAutoOnSeconds: params.configFastAutoOnSeconds ?? 60,
+      };
     }
+    const mode = cfg.agents?.defaults?.models?.[OPENAI_GPT4_MODEL]?.params?.fastMode;
     return {
-      enabled: Boolean(cfg.agents?.defaults?.models?.[OPENAI_GPT4_MODEL]?.params?.fastMode),
+      mode,
+      enabled: mode === "auto" ? true : Boolean(mode),
+      source: "config",
+      fastAutoOnSeconds: params.configFastAutoOnSeconds ?? 60,
     };
   });
 
   const result = await runCronIsolatedAgentTurn(
-    makeIsolatedAgentTurnParams({
+    makeIsolatedAgentParamsFixture({
       cfg: {
         agents: {
           defaults: {
@@ -77,13 +101,16 @@ async function runFastModeCase(params: {
               [OPENAI_GPT4_MODEL]: {
                 params: {
                   fastMode: params.configFastMode,
+                  ...(params.configFastAutoOnSeconds === undefined
+                    ? {}
+                    : { fastAutoOnSeconds: params.configFastAutoOnSeconds }),
                 },
               },
             },
           },
         },
       },
-      job: makeIsolatedAgentTurnJob({
+      job: makeIsolatedAgentJobFixture({
         sessionTarget: params.sessionTarget ?? "isolated",
         payload: {
           kind: "agentTurn",
@@ -95,34 +122,137 @@ async function runFastModeCase(params: {
   );
 
   expect(result.status).toBe("ok");
-  expect(runEmbeddedPiAgentMock).toHaveBeenCalledOnce();
-  expect(runEmbeddedPiAgentMock.mock.calls[0][0]).toMatchObject({
-    provider: "openai",
-    model: EXPECTED_OPENAI_MODEL,
-    fastMode: params.expectedFastMode,
-    cleanupBundleMcpOnRunEnd: params.expectedCleanupBundleMcpOnRunEnd ?? true,
-    allowGatewaySubagentBinding: true,
-  });
+  expect(runEmbeddedAgentMock).toHaveBeenCalledOnce();
+  const [embeddedRunParams] = requireFirstMockCall(runEmbeddedAgentMock, "embedded run");
+  expect(embeddedRunParams.provider).toBe("openai");
+  expect(embeddedRunParams.model).toBe(EXPECTED_OPENAI_MODEL);
+  expect(embeddedRunParams.fastMode).toBe(params.expectedFastMode);
+  expect(embeddedRunParams.fastModeAutoOnSeconds).toBe(params.expectedFastModeAutoOnSeconds ?? 60);
+  expect(embeddedRunParams.cleanupBundleMcpOnRunEnd).toBe(
+    params.expectedCleanupBundleMcpOnRunEnd ?? true,
+  );
+  expect(embeddedRunParams.allowGatewaySubagentBinding).toBe(true);
+  const isIsolated = (params.sessionTarget ?? "isolated") === "isolated";
   if (params.expectedRetiredSessionId) {
-    expect(retireSessionMcpRuntimeMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        sessionId: params.expectedRetiredSessionId,
-        reason: "cron-session-rollover",
-      }),
+    expect(retireSessionMcpRuntimeMock).toHaveBeenCalledOnce();
+    const [retireParams] = requireFirstMockCall(
+      retireSessionMcpRuntimeMock,
+      "retire session mcp runtime",
     );
+    expect(retireParams.sessionId).toBe(params.expectedRetiredSessionId);
+    expect(retireParams.reason).toBe("cron-session-rollover");
     return;
   }
-  expect(retireSessionMcpRuntimeMock).not.toHaveBeenCalled();
+  if (isIsolated) {
+    // disposeCronRunContext now retires MCP for isolated sessions
+    expect(retireSessionMcpRuntimeMock).toHaveBeenCalledOnce();
+    const [disposeRetireParams] = requireFirstMockCall(
+      retireSessionMcpRuntimeMock,
+      "dispose retire session mcp runtime",
+    );
+    expect(disposeRetireParams.reason).toBe("isolated-cron-dispose");
+  } else {
+    expect(retireSessionMcpRuntimeMock).not.toHaveBeenCalled();
+  }
 }
 
 describe("runCronIsolatedAgentTurn — fast mode", () => {
-  setupRunCronIsolatedAgentTurnSuite();
+  setupRunCronIsolatedAgentTurnSuite({ fast: true });
+
+  it("deletes the run-scoped cron session after delivery-none deleteAfterRun jobs", async () => {
+    dispatchCronDeliveryMock.mockImplementationOnce(
+      (await vi.importActual<typeof import("./delivery-dispatch.js")>("./delivery-dispatch.js"))
+        .dispatchCronDelivery,
+    );
+    const result = await runCronIsolatedAgentTurn(
+      makeIsolatedAgentParamsFixture({
+        job: makeIsolatedAgentJobFixture({
+          deleteAfterRun: true,
+          delivery: { mode: "none" },
+          payload: { kind: "agentTurn", message: "cleanup me", model: OPENAI_GPT4_MODEL },
+        }),
+      }),
+    );
+
+    expect(result.status).toBe("ok");
+    expect(callGatewayMock).toHaveBeenCalledWith({
+      method: "sessions.delete",
+      params: {
+        key: "agent:default:cron:test",
+        deleteTranscript: true,
+        emitLifecycleHooks: false,
+        expectedSessionId: "test-session-id",
+        expectedLifecycleRevision: "test-lifecycle-revision",
+        expectedSessionUpdatedAt: 0,
+      },
+      timeoutMs: 10_000,
+    });
+  });
+
+  it.each([false, true])(
+    "leaves transcript cleanup with dispatch when it rejects=%s",
+    async (rejects) => {
+      resolveCronDeliveryPlanMock.mockReturnValue({
+        requested: true,
+        mode: "announce",
+        channel: "messagechat",
+        to: "test-target",
+      });
+      dispatchCronDeliveryMock.mockImplementationOnce(
+        ({ deliveryPayloads, summary, outputText, synthesizedText }) => {
+          if (rejects) {
+            throw new Error("delivery receipt store unavailable");
+          }
+          return {
+            delivered: true,
+            deliveryAttempted: true,
+            summary,
+            outputText,
+            synthesizedText,
+            deliveryPayloads,
+          };
+        },
+      );
+
+      const result = await runCronIsolatedAgentTurn(
+        makeIsolatedAgentParamsFixture({
+          job: makeIsolatedAgentJobFixture({
+            deleteAfterRun: true,
+            delivery: { mode: "announce", channel: "messagechat", to: "test-target" },
+            payload: { kind: "agentTurn", message: "cleanup once", model: OPENAI_GPT4_MODEL },
+          }),
+        }),
+      );
+
+      expect(result.status).toBe(rejects ? "error" : "ok");
+      if (rejects) {
+        expect(result.error).toBe("delivery receipt store unavailable");
+      }
+      expect(dispatchCronDeliveryMock).toHaveBeenCalledOnce();
+      expect(callGatewayMock).not.toHaveBeenCalled();
+      expect(retireSessionMcpRuntimeMock).toHaveBeenCalledWith({
+        sessionId: "test-session-id",
+        reason: "isolated-cron-dispose",
+        onError: expect.any(Function),
+      });
+    },
+  );
 
   it("passes config-driven fast mode into embedded cron runs", async () => {
     await runFastModeCase({
       configFastMode: true,
       expectedFastMode: true,
       message: "test fast mode",
+    });
+  });
+
+  it("passes config-driven fast auto cutoff into embedded cron runs", async () => {
+    await runFastModeCase({
+      configFastMode: "auto",
+      configFastAutoOnSeconds: 30,
+      expectedFastMode: "auto",
+      expectedFastModeAutoOnSeconds: 30,
+      message: "test fast auto mode",
     });
   });
 

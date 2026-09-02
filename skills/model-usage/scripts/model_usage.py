@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -107,6 +108,30 @@ def filter_by_days(entries: List[Dict[str, Any]], days: Optional[int]) -> List[D
     return filtered
 
 
+def coerce_finite_cost(value: Any) -> Optional[float]:
+    """Coerce a cost field to a finite float, or None if it is not usable.
+
+    Accepts native numbers and numeric strings (for example "1.75"), since cost
+    payloads sometimes serialize numbers as strings. Rejects booleans (they are
+    ints in Python but never a valid cost) and non-finite values (NaN/Infinity),
+    which would otherwise silently corrupt aggregated totals.
+    """
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        number = float(value)
+    elif isinstance(value, str):
+        try:
+            number = float(value.strip())
+        except ValueError:
+            return None
+    else:
+        return None
+    if not math.isfinite(number):
+        return None
+    return number
+
+
 def aggregate_costs(entries: Iterable[Dict[str, Any]]) -> Dict[str, float]:
     totals: Dict[str, float] = {}
     for entry in entries:
@@ -119,12 +144,12 @@ def aggregate_costs(entries: Iterable[Dict[str, Any]]) -> Dict[str, float]:
             if not isinstance(item, dict):
                 continue
             model = item.get("modelName")
-            cost = item.get("cost")
             if not isinstance(model, str):
                 continue
-            if not isinstance(cost, (int, float)):
+            cost = coerce_finite_cost(item.get("cost"))
+            if cost is None:
                 continue
-            totals[model] = totals.get(model, 0.0) + float(cost)
+            totals[model] = totals.get(model, 0.0) + cost
     return totals
 
 
@@ -143,9 +168,9 @@ def pick_current_model(entries: List[Dict[str, Any]]) -> Tuple[Optional[str], Op
                 if not isinstance(item, dict):
                     continue
                 model = item.get("modelName")
-                cost = item.get("cost")
-                if isinstance(model, str) and isinstance(cost, (int, float)):
-                    scored.append(ModelCost(model=model, cost=float(cost)))
+                cost = coerce_finite_cost(item.get("cost"))
+                if isinstance(model, str) and cost is not None:
+                    scored.append(ModelCost(model=model, cost=cost))
             if scored:
                 scored.sort(key=lambda item: item.cost, reverse=True)
                 return scored[0].model, entry.get("date") if isinstance(entry.get("date"), str) else None
@@ -178,9 +203,9 @@ def latest_day_cost(entries: List[Dict[str, Any]], model: str) -> Tuple[Optional
             if not isinstance(item, dict):
                 continue
             if item.get("modelName") == model:
-                cost = item.get("cost") if isinstance(item.get("cost"), (int, float)) else None
+                cost = coerce_finite_cost(item.get("cost"))
                 day = entry.get("date") if isinstance(entry.get("date"), str) else None
-                return day, float(cost) if cost is not None else None
+                return day, cost
     return None, None
 
 

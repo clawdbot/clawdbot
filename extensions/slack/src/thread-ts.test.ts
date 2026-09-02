@@ -1,3 +1,4 @@
+// Slack tests cover thread ts plugin behavior.
 import { describe, expect, it } from "vitest";
 import { normalizeSlackThreadTsCandidate, resolveSlackThreadTsValue } from "./thread-ts.js";
 

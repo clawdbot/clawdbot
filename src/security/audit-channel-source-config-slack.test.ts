@@ -1,7 +1,8 @@
+// Verifies Slack channel source-config audit behavior.
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { stubAuditChannelPlugin } from "./audit-channel-test-helpers.js";
-import { collectChannelSecurityFindings } from "./audit-channel.js";
+import { collectChannelSecurityFindingsCore } from "./audit-channel.js";
 
 function stubSlackPlugin(params: {
   resolveAccount: (cfg: OpenClawConfig, accountId: string | null | undefined) => unknown;
@@ -122,20 +123,19 @@ describe("security audit channel source-config fallback slack", () => {
     ] as const;
 
     for (const testCase of cases) {
-      const findings = await collectChannelSecurityFindings({
+      const findings = await collectChannelSecurityFindingsCore({
         cfg: testCase.resolvedConfig,
         sourceConfig: testCase.sourceConfig,
         plugins: [testCase.plugin(testCase.sourceConfig)],
       });
 
-      expect(findings, testCase.name).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({
-            checkId: "channels.slack.commands.slash.no_allowlists",
-            severity: "warn",
-          }),
-        ]),
+      const finding = findings.find(
+        (entry) => entry.checkId === "channels.slack.commands.slash.no_allowlists",
       );
+      if (!finding) {
+        throw new Error(`Expected Slack no-allowlists finding for ${testCase.name}`);
+      }
+      expect(finding.severity, testCase.name).toBe("warn");
     }
   });
 });

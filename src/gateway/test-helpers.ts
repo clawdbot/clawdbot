@@ -1,13 +1,15 @@
+/**
+ * Public barrel for gateway integration test helpers.
+ */
 export {
-  agentCommand,
+  agentCommandMock,
   cronIsolatedRun,
   dispatchInboundMessageMock,
   embeddedRunMock,
-  getReplyFromConfig,
+  gatewayReplyMock,
   mockGetReplyFromConfigOnce,
-  piSdkMock,
+  agentDiscoveryMock,
   testState,
-  testTailnetIPv4,
   testTailscaleWhois,
 } from "./test-helpers.runtime-state.js";
 export { resetTestPluginRegistry, setTestPluginRegistry } from "./test-helpers.plugin-registry.js";
@@ -16,14 +18,15 @@ export {
   connectReq,
   connectWebchatClient,
   createGatewaySuiteHarness,
-  getFreePort,
+  getGatewayTestPort,
   getTrackedConnectChallengeNonce,
   installGatewayTestHooks,
   onceMessage,
+  prepareGatewayReplyRuntimeForTest,
   readConnectChallengeNonce,
   rpcReq,
   startConnectedServerWithClient,
-  startGatewayServer,
+  startTestGatewayServer,
   startGatewayServerWithRetries,
   startServer,
   startServerWithClient,

@@ -1,10 +1,20 @@
+// Runtime boundary for provider discovery through plugin entrypoints.
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import { sortUniqueStrings } from "../../packages/normalization-core/src/string-normalization.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { planEffectiveModelCatalogRows } from "../model-catalog/index.js";
+import { shouldRejectHardlinkedPluginFiles } from "./hardlink-policy.js";
 import { loadManifestMetadataSnapshot } from "./manifest-contract-eligibility.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
+import { withProfile } from "./plugin-load-profile.js";
 import type { PluginMetadataRegistryView } from "./plugin-metadata-snapshot.types.js";
+import { getCachedPluginModuleLoader, preparePluginModule } from "./plugin-module-loader-cache.js";
+import { resolvePluginRuntimeArtifact } from "./plugin-runtime-artifact-resolution.js";
+import { buildEffectiveManifestProviderConfig } from "./provider-catalog.js";
 import { resolveDiscoveredProviderPluginIds } from "./providers.js";
-import { resolvePluginProviders } from "./providers.runtime.js";
-import { createPluginSourceLoader } from "./source-loader.js";
+import { resolvePluginProvidersCore } from "./providers.runtime.js";
+import { getPluginRuntimeGenerationRegistry } from "./runtime/generation-scope.js";
+import { getPluginRuntimeLoadContext } from "./runtime/load-context.js";
 import type { ProviderPlugin } from "./types.js";
 
 type ProviderDiscoveryModule =
@@ -21,6 +31,7 @@ type ProviderDiscoveryEntryResult = {
   complete: boolean;
   pluginRecords: PluginManifestRecord[];
   entryPluginIds: Set<string>;
+  runtimeManifestCatalogPluginIds: Set<string>;
 };
 
 function normalizeDiscoveryModule(value: ProviderDiscoveryModule): ProviderPlugin[] {
@@ -46,9 +57,57 @@ function normalizeDiscoveryModule(value: ProviderDiscoveryModule): ProviderPlugi
   return [];
 }
 
+function loadProviderDiscoveryModule(manifest: PluginManifestRecord): ProviderDiscoveryModule {
+  const registry = getPluginRuntimeGenerationRegistry();
+  const loadContext = getPluginRuntimeLoadContext(registry);
+  // Lightweight entries share the prepared registry's artifact policy, but must
+  // not alias its runtime entry or turn standalone source discovery into a build load.
+  const { source, rootDir } = registry
+    ? resolvePluginRuntimeArtifact({
+        pluginId: manifest.id,
+        entryKind: "provider-discovery",
+        source: manifest.providerDiscoverySource!,
+        rootDir: manifest.rootDir,
+        origin: manifest.origin,
+        packageManifest: manifest.packageManifest,
+        preferBuiltPluginArtifacts: loadContext?.preferBuiltPluginArtifacts === true,
+        registry,
+      })
+    : { source: manifest.providerDiscoverySource!, rootDir: manifest.rootDir };
+  const modulePath = registry
+    ? preparePluginModule({
+        modulePath: source,
+        boundaryRoot: rootDir,
+        boundaryLabel: "plugin root",
+        surfaceLabel: `plugin provider discovery ${manifest.id}`,
+        rejectHardlinks: shouldRejectHardlinkedPluginFiles({
+          origin: manifest.origin,
+          rootDir: manifest.rootDir,
+          env: loadContext?.env,
+        }),
+      }).modulePath
+    : source;
+  const moduleLoader = getCachedPluginModuleLoader({
+    modulePath,
+    rootDir,
+    importerUrl: import.meta.url,
+    loaderFilename: import.meta.url,
+    preferBuiltDist: true,
+  });
+  return withProfile(
+    { pluginId: manifest.id, source: modulePath },
+    "provider-discovery-entry",
+    () => moduleLoader(modulePath) as ProviderDiscoveryModule,
+  );
+}
+
 function hasLiveProviderDiscoveryHook(provider: ProviderPlugin): boolean {
+  return typeof provider.catalog?.run === "function";
+}
+
+function hasProviderCatalogHook(provider: ProviderPlugin): boolean {
   return (
-    typeof provider.catalog?.run === "function" || typeof provider.discovery?.run === "function"
+    hasLiveProviderDiscoveryHook(provider) || typeof provider.staticCatalog?.run === "function"
   );
 }
 
@@ -56,16 +115,66 @@ function hasProviderAuthEnvCredential(
   plugin: PluginManifestRecord,
   env: NodeJS.ProcessEnv,
 ): boolean {
-  return Object.values(plugin.providerAuthEnvVars ?? {}).some((envVars) =>
-    envVars.some((name) => {
-      const value = env[name]?.trim();
-      return value !== undefined && value !== "";
-    }),
-  );
+  const envVars = (plugin.setup?.providers ?? []).flatMap((provider) => provider.envVars ?? []);
+  return envVars.some((name) => {
+    const value = env[name]?.trim();
+    return value !== undefined && value !== "";
+  });
 }
 
-function dedupeSorted(values: Iterable<string>): string[] {
-  return [...new Set(values)].toSorted((left, right) => left.localeCompare(right));
+function prepareManifestCatalogDiscovery(
+  pluginRecords: readonly PluginManifestRecord[],
+  config: OpenClawConfig,
+  includeProviders: boolean,
+): Pick<ProviderDiscoveryEntryResult, "providers" | "runtimeManifestCatalogPluginIds"> {
+  const providers: ProviderPlugin[] = [];
+  const runtimeManifestCatalogPluginIds = new Set<string>();
+  for (const plugin of pluginRecords) {
+    if (!plugin.modelCatalog) {
+      continue;
+    }
+    const ownedProviders = new Set(
+      plugin.providers.map((provider) => normalizeProviderId(provider)),
+    );
+    if (
+      Object.entries(plugin.modelCatalog.discovery ?? {}).some(
+        ([provider, discovery]) =>
+          (discovery === "runtime" || discovery === "refreshable") &&
+          ownedProviders.has(normalizeProviderId(provider)),
+      )
+    ) {
+      runtimeManifestCatalogPluginIds.add(plugin.id);
+    }
+    if (!plugin.modelCatalog.providers) {
+      continue;
+    }
+    // Static rows and runtime coverage must come from the same effective catalog.
+    const plan = planEffectiveModelCatalogRows({ registry: { plugins: [plugin] }, config });
+    for (const entry of plan.entries) {
+      if (entry.discovery === "runtime" || entry.discovery === "refreshable") {
+        runtimeManifestCatalogPluginIds.add(plugin.id);
+        continue;
+      }
+      if (!includeProviders || entry.rows.length === 0) {
+        continue;
+      }
+      const providerConfig = buildEffectiveManifestProviderConfig(entry.rows);
+      if (!providerConfig) {
+        continue;
+      }
+      providers.push({
+        id: entry.provider,
+        pluginId: plugin.id,
+        label: entry.provider,
+        auth: [],
+        staticCatalog: {
+          order: "simple",
+          run: async () => ({ providers: { [entry.provider]: providerConfig } }),
+        },
+      });
+    }
+  }
+  return { providers, runtimeManifestCatalogPluginIds };
 }
 
 function resolveProviderDiscoveryEntryPlugins(params: {
@@ -76,6 +185,7 @@ function resolveProviderDiscoveryEntryPlugins(params: {
   includeUntrustedWorkspacePlugins?: boolean;
   requireCompleteDiscoveryEntryCoverage?: boolean;
   discoveryEntriesOnly?: boolean;
+  includeManifestModelCatalogProviders?: boolean;
   pluginMetadataSnapshot?: PluginMetadataRegistryView;
 }): ProviderDiscoveryEntryResult {
   const metadataSnapshot =
@@ -94,48 +204,73 @@ function resolveProviderDiscoveryEntryPlugins(params: {
   });
   const pluginIdSet = new Set(pluginIds);
   const pluginRecords = manifestRegistry.plugins.filter((plugin) => pluginIdSet.has(plugin.id));
+  const { providers: manifestProviders, runtimeManifestCatalogPluginIds } =
+    prepareManifestCatalogDiscovery(
+      pluginRecords,
+      params.config ?? {},
+      params.includeManifestModelCatalogProviders !== false,
+    );
   const entryRecords = pluginRecords.filter((plugin) => plugin.providerDiscoverySource);
   const entryPluginIds = new Set(entryRecords.map((plugin) => plugin.id));
+  const manifestEntryPluginIds = new Set<string>();
+  for (const pluginId of manifestProviders.map((provider) => provider.pluginId)) {
+    if (pluginId) {
+      manifestEntryPluginIds.add(pluginId);
+      // Mixed static/runtime catalogs are useful for entries-only discovery, but
+      // they are not complete coverage; the runtime plugin must fill the rest.
+      if (!runtimeManifestCatalogPluginIds.has(pluginId)) {
+        entryPluginIds.add(pluginId);
+      }
+    }
+  }
+  const complete = entryPluginIds.size === pluginIdSet.size;
+  const result = {
+    providers: manifestProviders,
+    complete,
+    pluginRecords,
+    entryPluginIds,
+    runtimeManifestCatalogPluginIds,
+  };
+  const entriesOnlyComplete =
+    new Set([...entryPluginIds, ...manifestEntryPluginIds]).size === pluginIdSet.size;
   if (entryRecords.length === 0) {
-    return { providers: [], complete: false, pluginRecords, entryPluginIds };
+    return result;
   }
-  const complete = entryRecords.length === pluginIdSet.size;
-  if (params.requireCompleteDiscoveryEntryCoverage && !complete) {
-    return { providers: [], complete: false, pluginRecords, entryPluginIds };
+  if (
+    params.requireCompleteDiscoveryEntryCoverage &&
+    !(params.discoveryEntriesOnly === true ? entriesOnlyComplete : complete)
+  ) {
+    return { ...result, providers: [], complete: false };
   }
-  const loadSource = createPluginSourceLoader();
   const providers: ProviderPlugin[] = [];
   for (const manifest of entryRecords) {
     try {
-      const moduleExport = loadSource(manifest.providerDiscoverySource!) as ProviderDiscoveryModule;
+      const moduleExport = loadProviderDiscoveryModule(manifest);
       providers.push(
         ...normalizeDiscoveryModule(moduleExport).map((provider) =>
           Object.assign({}, provider, { pluginId: manifest.id }),
         ),
       );
     } catch {
-      // Discovery fast path is optional. Fall back to the full plugin loader
-      // below so existing plugin diagnostics/load behavior remains canonical.
-      return { providers: [], complete: false, pluginRecords, entryPluginIds };
+      // Entry loading is all-or-nothing: discarded results no longer cover their owners.
+      // Keep static manifest coverage for the scope-aware full-loader fallback.
+      return { ...result, complete: false, entryPluginIds: manifestEntryPluginIds };
     }
   }
-  return { providers, complete, pluginRecords, entryPluginIds };
+  return { ...result, providers: [...manifestProviders, ...providers] };
 }
 
-function resolveSelectiveFullPluginIds(params: {
-  entryResult: ProviderDiscoveryEntryResult;
-  entryProviders: ProviderPlugin[];
-  env: NodeJS.ProcessEnv;
-}): string[] {
-  const staticOnlyEntryPluginIds = params.entryProviders
-    .filter((provider) => !hasLiveProviderDiscoveryHook(provider))
-    .map((provider) => provider.pluginId)
-    .filter((pluginId): pluginId is string => typeof pluginId === "string" && pluginId !== "");
-  const missingEntryCredentialPluginIds = params.entryResult.pluginRecords
-    .filter((plugin) => !params.entryResult.entryPluginIds.has(plugin.id))
-    .filter((plugin) => hasProviderAuthEnvCredential(plugin, params.env))
-    .map((plugin) => plugin.id);
-  return dedupeSorted([...staticOnlyEntryPluginIds, ...missingEntryCredentialPluginIds]);
+function resolveRuntimeEntryProviders(entryResult: ProviderDiscoveryEntryResult): ProviderPlugin[] {
+  return entryResult.providers.filter((provider) => {
+    if (hasLiveProviderDiscoveryHook(provider)) {
+      return true;
+    }
+    return Boolean(
+      provider.pluginId &&
+      entryResult.entryPluginIds.has(provider.pluginId) &&
+      typeof provider.staticCatalog?.run === "function",
+    );
+  });
 }
 
 export function resolvePluginDiscoveryProvidersRuntime(params: {
@@ -146,37 +281,66 @@ export function resolvePluginDiscoveryProvidersRuntime(params: {
   includeUntrustedWorkspacePlugins?: boolean;
   requireCompleteDiscoveryEntryCoverage?: boolean;
   discoveryEntriesOnly?: boolean;
+  includeManifestModelCatalogProviders?: boolean;
+  includeSyntheticAuthProviders?: boolean;
   pluginMetadataSnapshot?: PluginMetadataRegistryView;
 }): ProviderPlugin[] {
   const env = params.env ?? process.env;
   const entryResult = resolveProviderDiscoveryEntryPlugins({ ...params, env });
+  const entryProviders = entryResult.providers.filter(
+    (provider) =>
+      hasProviderCatalogHook(provider) ||
+      (params.includeSyntheticAuthProviders === true &&
+        typeof provider.resolveSyntheticAuth === "function"),
+  );
+  const runtimeEntryProviders = resolveRuntimeEntryProviders(entryResult);
   if (params.discoveryEntriesOnly === true) {
-    return entryResult.providers;
+    return entryProviders;
   }
-  const liveEntryProviders = entryResult.providers.filter(hasLiveProviderDiscoveryHook);
-  if (entryResult.complete && liveEntryProviders.length === entryResult.providers.length) {
-    return liveEntryProviders;
+  if (
+    entryResult.providers.length > 0 &&
+    entryResult.complete &&
+    runtimeEntryProviders.length === entryResult.providers.length &&
+    entryResult.runtimeManifestCatalogPluginIds.size === 0
+  ) {
+    return runtimeEntryProviders;
   }
-  if (params.onlyPluginIds === undefined && entryResult.providers.length > 0) {
-    const fullPluginIds = resolveSelectiveFullPluginIds({
-      entryResult,
-      entryProviders: entryResult.providers,
-      env,
-    });
-    const fullProviders =
-      fullPluginIds.length > 0
-        ? resolvePluginProviders({
-            ...params,
-            env,
-            onlyPluginIds: fullPluginIds,
-            bundledProviderAllowlistCompat: true,
-          })
-        : [];
-    return [...liveEntryProviders, ...fullProviders];
+  let fullPluginIds = params.onlyPluginIds;
+  let retainedProviders: ProviderPlugin[] | undefined;
+  if (runtimeEntryProviders.length > 0 || entryResult.runtimeManifestCatalogPluginIds.size > 0) {
+    // Runtime manifest owners do not cover siblings without discovery entries.
+    // Preserve the selected scope; unscoped discovery stays credential-bounded.
+    fullPluginIds = sortUniqueStrings([
+      ...entryResult.pluginRecords
+        .filter(
+          (plugin) =>
+            !entryResult.entryPluginIds.has(plugin.id) &&
+            (params.onlyPluginIds !== undefined || hasProviderAuthEnvCredential(plugin, env)),
+        )
+        .map((plugin) => plugin.id),
+      ...entryResult.runtimeManifestCatalogPluginIds,
+    ]);
+    if (fullPluginIds.length === 0) {
+      return [...runtimeEntryProviders];
+    }
+    const fullPluginIdSet = new Set(fullPluginIds);
+    retainedProviders = runtimeEntryProviders.filter(
+      (provider) => !provider.pluginId || !fullPluginIdSet.has(provider.pluginId),
+    );
+  } else if (entryProviders.length > 0) {
+    const entryPluginIds = sortUniqueStrings(
+      entryProviders
+        .map((provider) => provider.pluginId)
+        .filter((pluginId): pluginId is string => typeof pluginId === "string" && pluginId !== ""),
+    );
+    if (entryPluginIds.length > 0) {
+      fullPluginIds = entryPluginIds;
+    }
   }
-  return resolvePluginProviders({
+  const fullProviders = resolvePluginProvidersCore({
     ...params,
     env,
-    bundledProviderAllowlistCompat: true,
+    ...(fullPluginIds ? { onlyPluginIds: fullPluginIds } : {}),
   });
+  return retainedProviders ? [...retainedProviders, ...fullProviders] : fullProviders;
 }

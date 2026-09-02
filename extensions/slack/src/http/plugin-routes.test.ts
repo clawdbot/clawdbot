@@ -1,7 +1,9 @@
+// Slack tests cover plugin routes plugin behavior.
 import type { IncomingMessage, ServerResponse } from "node:http";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import type { OpenClawPluginApi } from "openclaw/plugin-sdk/core";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig, OpenClawPluginApi } from "../runtime-api.js";
 import { registerSlackPluginHttpRoutes } from "./plugin-routes.js";
 import { registerSlackHttpHandler } from "./registry.js";
 
@@ -11,6 +13,16 @@ function createApi(config: OpenClawConfig, registerHttpRoute = vi.fn()): OpenCla
     config,
     registerHttpRoute,
   });
+}
+
+function registeredRouteAt(registerHttpRoute: ReturnType<typeof vi.fn>, index: number) {
+  const call = registerHttpRoute.mock.calls[index];
+  if (!call) {
+    throw new Error(`expected registered HTTP route ${index}`);
+  }
+  return call[0] as {
+    handler: (req: IncomingMessage, res: ServerResponse) => Promise<boolean>;
+  };
 }
 
 describe("registerSlackPluginHttpRoutes", () => {
@@ -62,6 +74,31 @@ describe("registerSlackPluginHttpRoutes", () => {
     expect(paths).toEqual(["/slack/events"]);
   });
 
+  it("registers a shared account webhook path only once", () => {
+    const registerHttpRoute = vi.fn();
+    const api = createApi(
+      {
+        channels: {
+          slack: {
+            webhookPath: "/slack/events",
+            accounts: {
+              default: { webhookPath: "/slack/events" },
+              ops: { webhookPath: "/slack/events" },
+            },
+          },
+        },
+      },
+      registerHttpRoute,
+    );
+
+    registerSlackPluginHttpRoutes(api);
+
+    expect(registerHttpRoute).toHaveBeenCalledOnce();
+    expect(registerHttpRoute).toHaveBeenCalledWith(
+      expect.objectContaining({ path: "/slack/events" }),
+    );
+  });
+
   it("dispatches through the shared Slack HTTP handler registry", async () => {
     const routeHandler = vi.fn();
     const unregister = registerSlackHttpHandler({
@@ -72,15 +109,11 @@ describe("registerSlackPluginHttpRoutes", () => {
 
     try {
       registerSlackPluginHttpRoutes(createApi({}, registerHttpRoute));
-      const route = registerHttpRoute.mock.calls[0]?.[0] as
-        | {
-            handler: (req: IncomingMessage, res: ServerResponse) => Promise<boolean>;
-          }
-        | undefined;
+      const route = registeredRouteAt(registerHttpRoute, 0);
       const req = { url: "/slack/events" } as IncomingMessage;
       const res = {} as ServerResponse;
 
-      await expect(route?.handler(req, res)).resolves.toBe(true);
+      await expect(route.handler(req, res)).resolves.toBe(true);
 
       expect(routeHandler).toHaveBeenCalledWith(req, res);
     } finally {

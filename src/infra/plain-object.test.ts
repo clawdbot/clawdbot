@@ -1,3 +1,4 @@
+// Covers plain object detection.
 import { describe, expect, it } from "vitest";
 import { isPlainObject } from "./plain-object.js";
 

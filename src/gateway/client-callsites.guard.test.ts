@@ -1,17 +1,22 @@
+/**
+ * Gateway client callsite guard tests.
+ */
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { toRepoRelativePath } from "../test-utils/repo-files.js";
 
 const GATEWAY_CLIENT_CONSTRUCTOR_PATTERN = /new\s+GatewayClient\s*\(/;
 
 const ALLOWED_GATEWAY_CLIENT_CALLSITES = new Set([
   "extensions/google-meet/src/voice-call-gateway.ts",
+  "extensions/qa-lab/src/gateway-rpc-client.ts",
   "src/acp/server.ts",
   "src/gateway/call.ts",
   "src/gateway/gateway-cli-backend.live-helpers.ts",
   "src/gateway/operator-approvals-client.ts",
   "src/gateway/probe.ts",
-  "src/node-host/runner.ts",
+  "src/node-host/gateway-candidate-connection.ts",
   "src/tui/gateway-chat.ts",
 ]);
 
@@ -52,7 +57,7 @@ describe("GatewayClient production callsites", () => {
     ];
     const callsites: string[] = [];
     for (const fullPath of sourceFiles) {
-      const relativePath = path.relative(root, fullPath).replaceAll(path.sep, "/");
+      const relativePath = toRepoRelativePath(root, fullPath);
       const content = await fs.readFile(fullPath, "utf8");
       if (GATEWAY_CLIENT_CONSTRUCTOR_PATTERN.test(content)) {
         callsites.push(relativePath);

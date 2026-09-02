@@ -1,9 +1,14 @@
-import { normalizeLowercaseStringOrEmpty } from "./string-utils.js";
+// Memory Host SDK helper module supports embedding provider adapter utils behavior.
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 
+// Adapter helpers shared by remote embedding provider implementations.
+
+/** Detect missing API key errors from provider auth resolution. */
 export function isMissingEmbeddingApiKeyError(err: unknown): boolean {
   return err instanceof Error && err.message.includes("No API key found for provider");
 }
 
+/** Return stable cache headers after removing adapter-declared secret headers. */
 export function sanitizeEmbeddingCacheHeaders(
   headers: Record<string, string>,
   excludedHeaderNames: string[],
@@ -17,6 +22,7 @@ export function sanitizeEmbeddingCacheHeaders(
     .map(([key, value]) => [key, value]);
 }
 
+/** Convert custom-id keyed batch embeddings back to request-index order. */
 export function mapBatchEmbeddingsByIndex(
   byCustomId: Map<string, number[]>,
   count: number,

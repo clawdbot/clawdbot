@@ -1,17 +1,16 @@
+// Vision skip tests cover auto image-model selection and text-only model
+// rejection across bundled provider metadata.
+import path from "node:path";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { MsgContext } from "../auto-reply/templating.js";
 import type { OpenClawConfig } from "../config/types.js";
-import {
-  withBundledPluginAllowlistCompat,
-  withBundledPluginEnablementCompat,
-  withBundledPluginVitestCompat,
-} from "../plugins/bundled-compat.js";
-import { __testing as loaderTesting } from "../plugins/loader.js";
-import { loadPluginManifestRegistry } from "../plugins/manifest-registry.js";
+import { resolvePluginRegistryLoadCacheKey } from "../plugins/loader.js";
+import { loadPluginManifestRegistryCore } from "../plugins/manifest-registry.js";
 import { createEmptyPluginRegistry } from "../plugins/registry.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createMediaAttachmentCache, normalizeMediaAttachments } from "./runner.attachments.js";
 import { withMediaFixture } from "./runner.test-utils.js";
+import type { MediaUnderstandingProvider } from "./types.js";
 
 type TestCatalogEntry = {
   id: string;
@@ -29,8 +28,9 @@ const baseCatalog: TestCatalogEntry[] = [
   },
 ];
 let catalog: TestCatalogEntry[] = [...baseCatalog];
+const plantedVisionSentinel = "PLANTED_VISION_DESC_zq7x";
 
-const loadModelCatalog = vi.hoisted(() => vi.fn(async () => catalog));
+const loadModelCatalog = vi.hoisted(() => vi.fn(async (_params: unknown) => catalog));
 
 vi.mock("../agents/model-auth.js", async () => {
   const { createAvailableModelAuthMockModule } = await import("./runner.test-mocks.js");
@@ -56,11 +56,16 @@ vi.mock("../agents/model-catalog.js", async () => {
   );
   return {
     ...actual,
-    loadModelCatalog,
   };
 });
 
+vi.mock("../agents/prepared-model-catalog.js", () => ({
+  loadProviderScopedThinkingCatalog: vi.fn(async () => []),
+  loadPreparedModelCatalog: loadModelCatalog,
+}));
+
 let buildProviderRegistry: typeof import("./runner.js").buildProviderRegistry;
+let applyMediaUnderstanding: typeof import("./apply.js").applyMediaUnderstanding;
 let resolveAutoImageModel: typeof import("./runner.js").resolveAutoImageModel;
 let runCapability: typeof import("./runner.js").runCapability;
 
@@ -68,7 +73,7 @@ function setCompatibleActiveMediaUnderstandingRegistry(
   pluginRegistry: ReturnType<typeof createEmptyPluginRegistry>,
   cfg: OpenClawConfig,
 ) {
-  const pluginIds = loadPluginManifestRegistry({
+  const pluginIds = loadPluginManifestRegistryCore({
     config: cfg,
     env: process.env,
   })
@@ -79,36 +84,48 @@ function setCompatibleActiveMediaUnderstandingRegistry(
     )
     .map((plugin) => plugin.id)
     .toSorted((left, right) => left.localeCompare(right));
-  const compatibleConfig = withBundledPluginVitestCompat({
-    config: withBundledPluginEnablementCompat({
-      config: withBundledPluginAllowlistCompat({
-        config: cfg,
-        pluginIds,
-      }),
-      pluginIds,
-    }),
-    pluginIds,
-    env: process.env,
-  });
-  const { cacheKey } = loaderTesting.resolvePluginLoadCacheContext({
-    config: compatibleConfig,
+  cfg.plugins = {
+    ...cfg.plugins,
+    enabled: true,
+    allow: [...new Set([...(cfg.plugins?.allow ?? []), ...pluginIds])],
+    entries: {
+      ...Object.fromEntries(pluginIds.map((pluginId) => [pluginId, { enabled: true }])),
+      ...cfg.plugins?.entries,
+    },
+    slots: { ...cfg.plugins?.slots, memory: "none" },
+  };
+  const cacheKey = resolvePluginRegistryLoadCacheKey({
+    config: cfg,
     env: process.env,
   });
   setActivePluginRegistry(pluginRegistry, cacheKey);
 }
 
+type CapabilityResult = Awaited<ReturnType<typeof runCapability>>;
+
+function requireDecisionAttachment(result: CapabilityResult, index: number) {
+  const attachment = result.decision.attachments[index];
+  if (!attachment) {
+    throw new Error(`expected media-understanding decision attachment ${index}`);
+  }
+  return attachment;
+}
+
+function requireCapabilityOutput(result: CapabilityResult, index: number) {
+  const output = result.outputs[index];
+  if (!output) {
+    throw new Error(`expected media-understanding output ${index}`);
+  }
+  return output;
+}
+
 describe("runCapability image skip", () => {
   beforeAll(async () => {
-    vi.doMock("../agents/model-catalog.js", async () => {
-      const actual = await vi.importActual<typeof import("../agents/model-catalog.js")>(
-        "../agents/model-catalog.js",
-      );
-      return {
-        ...actual,
-        loadModelCatalog,
-      };
+    vi.doMock("../agents/prepared-model-catalog.js", () => {
+      return { loadPreparedModelCatalog: loadModelCatalog };
     });
     ({ buildProviderRegistry, resolveAutoImageModel, runCapability } = await import("./runner.js"));
+    ({ applyMediaUnderstanding } = await import("./apply.js"));
   });
 
   beforeEach(() => {
@@ -118,16 +135,19 @@ describe("runCapability image skip", () => {
     vi.unstubAllEnvs();
   });
 
-  it("skips image understanding when the active model supports vision", async () => {
-    const ctx: MsgContext = { MediaPath: "/tmp/image.png", MediaType: "image/png" };
+  it("skips image understanding for a vision model when preferredModel is dangling", async () => {
+    const ctx: MsgContext = { media: [{ path: "/tmp/image.png", contentType: "image/png" }] };
     const media = normalizeMediaAttachments(ctx);
     const cache = createMediaAttachmentCache(media);
-    const cfg = {} as OpenClawConfig;
+    const cfg = {
+      tools: { media: { image: { preferredModel: "missing/model" } } },
+    } as OpenClawConfig;
 
     try {
       const result = await runCapability({
         capability: "image",
         cfg,
+        agentId: "vision-agent",
         ctx,
         attachments: cache,
         media,
@@ -138,14 +158,391 @@ describe("runCapability image skip", () => {
       expect(result.outputs).toHaveLength(0);
       expect(result.decision.outcome).toBe("skipped");
       expect(result.decision.attachments).toHaveLength(1);
-      expect(result.decision.attachments[0]?.attachmentIndex).toBe(0);
-      expect(result.decision.attachments[0]?.attempts[0]?.outcome).toBe("skipped");
-      expect(result.decision.attachments[0]?.attempts[0]?.reason).toBe(
-        "primary model supports vision natively",
+      const attachment = requireDecisionAttachment(result, 0);
+      expect(attachment.attachmentIndex).toBe(0);
+      const attempt = attachment.attempts[0];
+      if (!attempt) {
+        throw new Error("expected media-understanding skipped attempt");
+      }
+      expect(attempt.outcome).toBe("skipped");
+      expect(attempt.reason).toBe("primary model supports vision natively");
+      expect(loadModelCatalog).toHaveBeenCalledWith(
+        expect.objectContaining({ agentId: "vision-agent" }),
       );
+      expect(loadModelCatalog.mock.calls[0]?.[0]).not.toHaveProperty("readOnly");
     } finally {
       await cache.cleanup();
     }
+  });
+
+  it("skips agents.defaults.imageModel fallback when the active model supports vision", async () => {
+    await withMediaFixture(
+      {
+        filePrefix: "openclaw-image-default-model-native-skip",
+        extension: "png",
+        mediaType: "image/png",
+        fileContents: Buffer.from("image"),
+      },
+      async ({ ctx, mediaPath }) => {
+        let describeCalls = 0;
+        const msgCtx = ctx as MsgContext;
+        msgCtx.Body = "please inspect this image";
+        msgCtx.media = Array.from({ length: 4 }, () => ({
+          path: mediaPath,
+          contentType: "image/png",
+        }));
+        const cfg = {
+          agents: {
+            defaults: {
+              imageModel: { primary: "minimax/MiniMax-M3" },
+            },
+          },
+        } as unknown as OpenClawConfig;
+
+        const result = await applyMediaUnderstanding({
+          ctx: msgCtx,
+          cfg,
+          agentDir: "/tmp",
+          workspaceDir: path.dirname(mediaPath),
+          providers: {
+            minimax: {
+              id: "minimax",
+              capabilities: ["image"],
+              describeImage: async (req) => {
+                describeCalls += 1;
+                return { text: plantedVisionSentinel, model: req.model };
+              },
+            },
+          },
+          activeModel: { provider: "openai", model: "gpt-4.1" },
+        });
+
+        const imageDecision = result.decisions.find((decision) => decision.capability === "image");
+        const attempt = imageDecision?.attachments[0]?.attempts[0];
+        expect(result.appliedImage).toBe(false);
+        expect(imageDecision?.outcome).toBe("skipped");
+        expect(imageDecision).toMatchObject({ nativeVisionActive: true });
+        expect(attempt?.outcome).toBe("skipped");
+        expect(attempt?.reason).toBe("primary model supports vision natively");
+        expect(describeCalls).toBe(0);
+        expect(msgCtx.Body).not.toContain(plantedVisionSentinel);
+        expect(msgCtx.Body).not.toContain("Image attachment not");
+      },
+    );
+  });
+
+  it.each([
+    {
+      label: "selected",
+      policy: { mode: "all", maxAttachments: 4 },
+      selectedIndexes: [0, 1, 2, 3],
+    },
+    { label: "dropped by default", policy: undefined, selectedIndexes: [0] },
+    {
+      label: "dropped when preferring the last image",
+      policy: { mode: "all", maxAttachments: 1, prefer: "last" },
+      selectedIndexes: [3],
+    },
+  ] as const)(
+    "markers $label remote-url-only images instead of claiming native handoff",
+    async ({ policy, selectedIndexes }) => {
+      await withMediaFixture(
+        {
+          filePrefix: "openclaw-image-url-only-no-handoff",
+          extension: "png",
+          mediaType: "image/png",
+          fileContents: Buffer.from("image"),
+        },
+        async ({ ctx, mediaPath }) => {
+          const msgCtx = ctx as MsgContext;
+          msgCtx.Body = "please inspect these images";
+          msgCtx.media = [
+            { path: mediaPath, contentType: "image/png" },
+            { url: "https://cdn.example.test/photos/second.png", contentType: "image/png" },
+            { path: mediaPath, contentType: "image/png" },
+            { url: "media://inbound/fourth.png", contentType: "image/png" },
+          ];
+
+          const result = await applyMediaUnderstanding({
+            ctx: msgCtx,
+            cfg: {
+              tools: { media: { image: { attachments: policy } } },
+            },
+            agentDir: "/tmp",
+            workspaceDir: path.dirname(mediaPath),
+            activeModel: { provider: "openai", model: "gpt-4.1" },
+          });
+
+          const imageDecision = result.decisions.find(
+            (decision) => decision.capability === "image",
+          );
+          expect(msgCtx.Body).toContain("[Image attachment could not be analyzed]");
+          expect(msgCtx.BodyForAgent).toContain("[Image attachment could not be analyzed]");
+          expect(imageDecision?.outcome).toBe("skipped");
+          expect(imageDecision?.attachments.map(({ attachmentIndex }) => attachmentIndex)).toEqual(
+            selectedIndexes,
+          );
+          expect(imageDecision?.attachmentDispositions).toEqual(
+            Object.fromEntries(
+              [0, 1, 2, 3].map((index) => [
+                index,
+                index === 1
+                  ? { kind: "failed", reason: "remote-url image is not natively deliverable" }
+                  : {
+                      kind: (selectedIndexes as readonly number[]).includes(index)
+                        ? "handed-to-native-vision"
+                        : "not-selected",
+                    },
+              ]),
+            ),
+          );
+          // Native hydration owns local paths and media-store refs, even when
+          // understanding drops them. Only the remote URL needs a failure marker.
+          expect(msgCtx.Body).not.toContain("not processed");
+        },
+      );
+    },
+  );
+
+  it("runs explicit image models untouched by native-vision probe failure", async () => {
+    await withMediaFixture(
+      {
+        filePrefix: "openclaw-image-explicit-model-probe-immune",
+        extension: "png",
+        mediaType: "image/png",
+        fileContents: Buffer.from("image"),
+      },
+      async ({ ctx, mediaPath }) => {
+        const msgCtx = ctx as MsgContext;
+        msgCtx.Body = "inspect this image";
+        msgCtx.media = [{ path: mediaPath, contentType: "image/png" }];
+        const cfg = {
+          tools: {
+            media: {
+              models: [
+                {
+                  provider: "openrouter",
+                  model: "google/gemini-2.5-flash",
+                  capabilities: ["image"],
+                },
+              ],
+            },
+          },
+        } as unknown as OpenClawConfig;
+
+        await loadModelCatalog.withImplementation(
+          async () => {
+            throw new Error("catalog unavailable");
+          },
+          async () => {
+            const result = await applyMediaUnderstanding({
+              ctx: msgCtx,
+              cfg,
+              agentDir: "/tmp",
+              workspaceDir: path.dirname(mediaPath),
+              providers: {
+                openrouter: {
+                  id: "openrouter",
+                  capabilities: ["image"],
+                  describeImage: async (req) => ({
+                    text: plantedVisionSentinel,
+                    model: req.model,
+                  }),
+                },
+              },
+              activeModel: { provider: "openai", model: "gpt-4.1" },
+            });
+
+            const imageDecision = result.decisions.find(
+              (decision) => decision.capability === "image",
+            );
+            // The lone selected attachment leaves nothing to marker, so the
+            // probe never fires and catalog failure cannot reach this path.
+            expect(result.appliedImage).toBe(true);
+            expect(imageDecision?.outcome).toBe("success");
+            expect(imageDecision?.attachmentDispositions).toEqual({ 0: { kind: "handled" } });
+            expect(imageDecision).not.toHaveProperty("nativeVisionActive");
+          },
+        );
+      },
+    );
+  });
+
+  it("keeps disabled outcomes precise and suppresses markers when the vision probe fails", async () => {
+    const ctx: MsgContext = {
+      Body: "inspect this image",
+      media: [{ path: "/tmp/image.png", contentType: "image/png" }],
+    };
+
+    await loadModelCatalog.withImplementation(
+      async () => {
+        throw new Error("catalog unavailable");
+      },
+      async () => {
+        const result = await applyMediaUnderstanding({
+          ctx,
+          cfg: { tools: { media: { image: { enabled: false } } } },
+          activeModel: { provider: "openai", model: "gpt-4.1" },
+        });
+
+        const imageDecision = result.decisions.find((d) => d.capability === "image");
+        expect(imageDecision).toMatchObject({
+          outcome: "disabled",
+          attachmentDispositions: { 0: { kind: "capability-disabled" } },
+        });
+        // Probe failure leaves the flag unknown: no false delivery claim, no marker.
+        expect(imageDecision).not.toHaveProperty("nativeVisionActive");
+        expect(ctx.Body).not.toContain("not analyzed");
+      },
+    );
+  });
+
+  it("renders disabled markers when the active model has no native vision", async () => {
+    const ctx: MsgContext = {
+      Body: "inspect this image",
+      media: [{ path: "/tmp/image.png", contentType: "image/png" }],
+    };
+
+    const result = await applyMediaUnderstanding({
+      ctx,
+      cfg: { tools: { media: { image: { enabled: false } } } },
+    });
+
+    expect(result.decisions).toContainEqual(
+      expect.objectContaining({
+        capability: "image",
+        outcome: "disabled",
+        nativeVisionActive: false,
+        attachmentDispositions: { 0: { kind: "capability-disabled" } },
+      }),
+    );
+    expect(ctx.Body).toContain("[Image attachment not analyzed: image understanding is disabled]");
+  });
+
+  it("skips agents.defaults.imageModel fallback when MiniMax M3 supports vision", async () => {
+    catalog = [
+      ...baseCatalog,
+      {
+        id: "MiniMax-M3",
+        name: "MiniMax M3",
+        provider: "minimax",
+        input: ["text", "image"] as const,
+      },
+    ];
+
+    await withMediaFixture(
+      {
+        filePrefix: "openclaw-image-default-model-minimax-m3-native-skip",
+        extension: "png",
+        mediaType: "image/png",
+        fileContents: Buffer.from("image"),
+      },
+      async ({ ctx, mediaPath }) => {
+        let describeCalls = 0;
+        const msgCtx = ctx as MsgContext;
+        msgCtx.Body = "please inspect this minimax image";
+        const cfg = {
+          agents: {
+            defaults: {
+              imageModel: { primary: "minimax/MiniMax-M3" },
+            },
+          },
+        } as unknown as OpenClawConfig;
+
+        const result = await applyMediaUnderstanding({
+          ctx: msgCtx,
+          cfg,
+          agentDir: "/tmp",
+          workspaceDir: path.dirname(mediaPath),
+          providers: {
+            minimax: {
+              id: "minimax",
+              capabilities: ["image"],
+              describeImage: async (req) => {
+                describeCalls += 1;
+                return { text: plantedVisionSentinel, model: req.model };
+              },
+            },
+          },
+          activeModel: { provider: "minimax", model: "MiniMax-M3" },
+        });
+
+        const imageDecision = result.decisions.find((decision) => decision.capability === "image");
+        const attempt = imageDecision?.attachments[0]?.attempts[0];
+        expect(result.appliedImage).toBe(false);
+        expect(imageDecision?.outcome).toBe("skipped");
+        expect(attempt?.outcome).toBe("skipped");
+        expect(attempt?.reason).toBe("primary model supports vision natively");
+        expect(describeCalls).toBe(0);
+        expect(msgCtx.Body).not.toContain(plantedVisionSentinel);
+      },
+    );
+  });
+
+  it("uses explicit media image models even when the active model supports vision", async () => {
+    await withMediaFixture(
+      {
+        filePrefix: "openclaw-image-explicit-model-no-native-skip",
+        extension: "png",
+        mediaType: "image/png",
+        fileContents: Buffer.from("image"),
+      },
+      async ({ ctx, mediaPath }) => {
+        let describeCalls = 0;
+        const msgCtx = ctx as MsgContext;
+        msgCtx.Body = "please inspect this explicit image";
+        msgCtx.media = Array.from({ length: 4 }, () => ({
+          path: mediaPath,
+          contentType: "image/png",
+        }));
+        const cfg = {
+          tools: {
+            media: {
+              models: [
+                {
+                  provider: "openrouter",
+                  model: "google/gemini-2.5-flash",
+                  capabilities: ["image"],
+                },
+              ],
+            },
+          },
+        } as unknown as OpenClawConfig;
+
+        const result = await applyMediaUnderstanding({
+          ctx: msgCtx,
+          cfg,
+          agentDir: "/tmp",
+          workspaceDir: path.dirname(mediaPath),
+          providers: {
+            openrouter: {
+              id: "openrouter",
+              capabilities: ["image"],
+              describeImage: async (req) => {
+                describeCalls += 1;
+                return { text: plantedVisionSentinel, model: req.model };
+              },
+            },
+          },
+          activeModel: { provider: "openai", model: "gpt-4.1" },
+        });
+
+        const imageDecision = result.decisions.find((decision) => decision.capability === "image");
+        expect(result.appliedImage).toBe(true);
+        expect(imageDecision?.outcome).toBe("success");
+        expect(imageDecision).toMatchObject({
+          nativeVisionActive: true,
+          attachmentDispositions: {
+            1: { kind: "not-selected" },
+            2: { kind: "not-selected" },
+            3: { kind: "not-selected" },
+          },
+        });
+        expect(describeCalls).toBe(1);
+        expect(msgCtx.Body).toContain(plantedVisionSentinel);
+        expect(msgCtx.Body).not.toContain("attachment limit reached");
+      },
+    );
   });
 
   it("uses explicit media image models instead of native vision skip", async () => {
@@ -157,7 +554,19 @@ describe("runCapability image skip", () => {
         fileContents: Buffer.from("image"),
       },
       async ({ ctx, media, cache }) => {
-        const cfg = {} as OpenClawConfig;
+        const cfg = {
+          tools: {
+            media: {
+              models: [
+                {
+                  provider: "openrouter",
+                  model: "google/gemini-2.5-flash",
+                  capabilities: ["image"],
+                },
+              ],
+            },
+          },
+        } as OpenClawConfig;
 
         const result = await runCapability({
           capability: "image",
@@ -176,14 +585,13 @@ describe("runCapability image skip", () => {
               },
             ],
           ]),
-          config: {
-            models: [{ provider: "openrouter", model: "google/gemini-2.5-flash" }],
-          },
           activeModel: { provider: "openai", model: "gpt-4.1" },
         });
 
         expect(result.decision.outcome).toBe("success");
-        expect(result.outputs[0]).toMatchObject({
+        expect(requireCapabilityOutput(result, 0)).toEqual({
+          kind: "image.description",
+          attachmentIndex: 0,
           provider: "openrouter",
           model: "google/gemini-2.5-flash",
           text: "explicit ok",
@@ -202,7 +610,20 @@ describe("runCapability image skip", () => {
       },
       async ({ ctx, media, cache }) => {
         let seenPrompt: string | undefined;
-        const cfg = {} as OpenClawConfig;
+        const cfg = {
+          tools: {
+            media: {
+              models: [
+                {
+                  provider: "openrouter",
+                  model: "google/gemini-2.5-flash",
+                  prompt: "entry prompt",
+                  capabilities: ["image"],
+                },
+              ],
+            },
+          },
+        } as OpenClawConfig;
 
         const result = await runCapability({
           capability: "image",
@@ -226,13 +647,6 @@ describe("runCapability image skip", () => {
           ]),
           config: {
             _requestPromptOverride: "Use this request prompt",
-            models: [
-              {
-                provider: "openrouter",
-                model: "google/gemini-2.5-flash",
-                prompt: "entry prompt",
-              },
-            ],
           },
           activeModel: { provider: "openai", model: "gpt-4.1" },
         });
@@ -243,14 +657,14 @@ describe("runCapability image skip", () => {
     );
   });
 
-  it("prefers agents.defaults.imageModel over the active model for auto image resolution", async () => {
+  it("keeps agents.defaults.imageModel available to exported auto image resolution", async () => {
     const cfg = {
       agents: {
         defaults: {
           imageModel: { primary: "openrouter/google/gemini-2.5-flash" },
         },
       },
-    } as OpenClawConfig;
+    } as unknown as OpenClawConfig;
 
     await expect(
       resolveAutoImageModel({
@@ -263,13 +677,140 @@ describe("runCapability image skip", () => {
     });
   });
 
-  it("falls back from an active text model to the provider image default", async () => {
+  it("uses a valid imageModel fallback after a malformed primary", async () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          imageModel: {
+            primary: "openrouter/",
+            fallbacks: ["openrouter/google/gemini-2.5-flash"],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    await expect(resolveAutoImageModel({ cfg })).resolves.toEqual({
+      provider: "openrouter",
+      model: "google/gemini-2.5-flash",
+    });
+  });
+
+  it("resolves a providerless imageModel on its unique configured provider", async () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          imageModel: { primary: "moondream" },
+        },
+      },
+      models: {
+        providers: {
+          ollama: {
+            models: [{ id: "moondream", input: ["text", "image"] }],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    await expect(resolveAutoImageModel({ cfg })).resolves.toEqual({
+      provider: "ollama",
+      model: "moondream",
+    });
+  });
+
+  it("runs providerless configured imageModel fallbacks on the unique configured provider", async () => {
+    await withMediaFixture(
+      {
+        filePrefix: "openclaw-image-providerless-fallbacks",
+        extension: "png",
+        mediaType: "image/png",
+        fileContents: Buffer.from("image"),
+      },
+      async ({ ctx, media, cache }) => {
+        const cfg = {
+          agents: {
+            defaults: {
+              imageModel: {
+                primary: "moondream",
+                fallbacks: ["qwen2.5vl:7b"],
+              },
+            },
+          },
+          models: {
+            providers: {
+              ollama: {
+                models: [
+                  {
+                    id: "moondream",
+                    input: ["text", "image"],
+                  },
+                  {
+                    id: "qwen2.5vl:7b",
+                    input: ["text", "image"],
+                  },
+                ],
+              },
+            },
+          },
+        } as unknown as OpenClawConfig;
+
+        const result = await runCapability({
+          capability: "image",
+          cfg,
+          ctx,
+          attachments: cache,
+          media,
+          agentDir: "/tmp",
+          providerRegistry: new Map([
+            [
+              "ollama",
+              {
+                id: "ollama",
+                capabilities: ["image"],
+                describeImage: async (req) => {
+                  if (req.model === "moondream") {
+                    throw new Error("primary blocked");
+                  }
+                  return { text: `ok ${req.model}`, model: req.model };
+                },
+              } satisfies MediaUnderstandingProvider,
+            ],
+          ]),
+        });
+
+        expect(result.decision.outcome).toBe("success");
+        expect(requireCapabilityOutput(result, 0)).toEqual({
+          kind: "image.description",
+          attachmentIndex: 0,
+          provider: "ollama",
+          model: "qwen2.5vl:7b",
+          text: "ok qwen2.5vl:7b",
+        });
+        const attachment = requireDecisionAttachment(result, 0);
+        expect(attachment.attempts).toEqual([
+          expect.objectContaining({
+            type: "provider",
+            provider: "ollama",
+            model: "moondream",
+            outcome: "failed",
+          }),
+          expect.objectContaining({
+            type: "provider",
+            provider: "ollama",
+            model: "qwen2.5vl:7b",
+            outcome: "success",
+          }),
+        ]);
+      },
+    );
+  });
+
+  it("falls back from a MiniMax chat model to the provider image default", async () => {
     catalog = [
       {
         id: "MiniMax-M2.7",
         name: "MiniMax M2.7",
         provider: "minimax-portal",
-        input: ["text"] as const,
+        input: ["text", "image"] as const,
       },
       {
         id: "MiniMax-VL-01",
@@ -279,7 +820,20 @@ describe("runCapability image skip", () => {
       },
     ];
     vi.stubEnv("MINIMAX_API_KEY", "test-minimax-key");
-    const cfg = {} as OpenClawConfig;
+    const cfg = {
+      models: {
+        providers: {
+          "minimax-portal": {
+            models: [
+              {
+                id: "MiniMax-M2.7",
+                input: ["text", "image"],
+              },
+            ],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
     const pluginRegistry = createEmptyPluginRegistry();
     pluginRegistry.mediaUnderstandingProviders.push({
       pluginId: "minimax",
@@ -310,6 +864,304 @@ describe("runCapability image skip", () => {
     }
   });
 
+  it("routes legacy MiniMax chat models through the VLM fallback even when cataloged with image input", async () => {
+    catalog = [
+      {
+        id: "MiniMax-M2.7",
+        name: "MiniMax M2.7",
+        provider: "minimax-portal",
+        input: ["text", "image"] as const,
+      },
+    ];
+    vi.stubEnv("MINIMAX_API_KEY", "test-minimax-key");
+    const cfg = {
+      models: {
+        providers: {
+          "minimax-portal": {
+            models: [
+              {
+                id: "MiniMax-M2.7",
+                input: ["text", "image"],
+              },
+            ],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+    const pluginRegistry = createEmptyPluginRegistry();
+    pluginRegistry.mediaUnderstandingProviders.push({
+      pluginId: "minimax",
+      pluginName: "MiniMax Provider",
+      source: "test",
+      provider: {
+        id: "minimax-portal",
+        capabilities: ["image"],
+        defaultModels: { image: "MiniMax-VL-01" },
+        describeImage: async (req) => ({ text: "vlm ok", model: req.model }),
+      },
+    });
+    setCompatibleActiveMediaUnderstandingRegistry(pluginRegistry, cfg);
+
+    try {
+      await withMediaFixture(
+        {
+          filePrefix: "openclaw-minimax-vlm-no-native-skip",
+          extension: "png",
+          mediaType: "image/png",
+          fileContents: Buffer.from("image"),
+        },
+        async ({ ctx, media, cache }) => {
+          const result = await runCapability({
+            capability: "image",
+            cfg,
+            ctx,
+            attachments: cache,
+            media,
+            agentDir: "/tmp",
+            providerRegistry: buildProviderRegistry(undefined, cfg),
+            activeModel: { provider: "minimax-portal", model: "MiniMax-M2.7" },
+          });
+
+          expect(result.decision.outcome).toBe("success");
+          expect(requireCapabilityOutput(result, 0)).toEqual({
+            kind: "image.description",
+            attachmentIndex: 0,
+            provider: "minimax-portal",
+            model: "MiniMax-VL-01",
+            text: "vlm ok",
+          });
+        },
+      );
+    } finally {
+      setActivePluginRegistry(createEmptyPluginRegistry());
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it("preserves MiniMax CN aliases from configured provider routing", async () => {
+    const seenProviders: string[] = [];
+    const cfg = {
+      models: {
+        providers: {
+          "minimax-cn": {
+            apiKey: "test-minimax-key",
+            baseUrl: "https://api.minimaxi.com/anthropic",
+            models: [],
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const pluginRegistry = createEmptyPluginRegistry();
+    pluginRegistry.mediaUnderstandingProviders.push({
+      pluginId: "minimax",
+      pluginName: "MiniMax Provider",
+      source: "test",
+      provider: {
+        id: "minimax",
+        capabilities: ["image"],
+        defaultModels: { image: "MiniMax-VL-01" },
+        describeImage: async (req) => {
+          seenProviders.push(req.provider);
+          return { text: "cn vlm ok", model: req.model };
+        },
+      },
+    });
+    setCompatibleActiveMediaUnderstandingRegistry(pluginRegistry, cfg);
+
+    try {
+      await withMediaFixture(
+        {
+          filePrefix: "openclaw-minimax-cn-provider",
+          extension: "png",
+          mediaType: "image/png",
+          fileContents: Buffer.from("image"),
+        },
+        async ({ ctx, media, cache }) => {
+          const result = await runCapability({
+            capability: "image",
+            cfg,
+            ctx,
+            attachments: cache,
+            media,
+            agentDir: "/tmp",
+            providerRegistry: buildProviderRegistry(undefined, cfg),
+          });
+
+          expect(result.decision.outcome).toBe("success");
+          expect(seenProviders).toEqual(["minimax-cn"]);
+          expect(requireCapabilityOutput(result, 0)).toEqual({
+            kind: "image.description",
+            attachmentIndex: 0,
+            provider: "minimax-cn",
+            model: "MiniMax-VL-01",
+            text: "cn vlm ok",
+          });
+        },
+      );
+    } finally {
+      setActivePluginRegistry(createEmptyPluginRegistry());
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it("keeps MiniMax auto routing on VLM when registry lacks a default model", async () => {
+    let seenModel: string | undefined;
+    await withMediaFixture(
+      {
+        filePrefix: "openclaw-minimax-vlm-default",
+        extension: "png",
+        mediaType: "image/png",
+        fileContents: Buffer.from("image"),
+      },
+      async ({ ctx, media, cache }) => {
+        const cfg = {
+          models: {
+            providers: {
+              minimax: {
+                apiKey: "test-minimax-key",
+                baseUrl: "https://api.minimax.io/anthropic",
+                models: [
+                  {
+                    id: "MiniMax-M2.5",
+                    name: "MiniMax M2.5",
+                    reasoning: false,
+                    input: ["text", "image"],
+                    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                    contextWindow: 128_000,
+                    maxTokens: 8_192,
+                  },
+                ],
+              },
+            },
+          },
+        } as OpenClawConfig;
+
+        const result = await runCapability({
+          capability: "image",
+          cfg,
+          ctx,
+          attachments: cache,
+          media,
+          agentDir: "/tmp",
+          providerRegistry: new Map([
+            [
+              "minimax",
+              {
+                id: "minimax",
+                capabilities: ["image"],
+                describeImage: async (req) => {
+                  seenModel = req.model;
+                  return { text: "vlm ok", model: req.model };
+                },
+              },
+            ],
+          ]),
+        });
+
+        expect(result.decision.outcome).toBe("success");
+        expect(seenModel).toBe("MiniMax-VL-01");
+        expect(requireCapabilityOutput(result, 0)).toMatchObject({
+          provider: "minimax",
+          model: "MiniMax-VL-01",
+          text: "vlm ok",
+        });
+      },
+    );
+  });
+
+  it("keeps non-MiniMax media aliases canonical for image execution", async () => {
+    const seenProviders: string[] = [];
+    const cfg = {
+      tools: {
+        media: {
+          models: [
+            {
+              provider: "gemini",
+              model: "gemini-3-flash-preview",
+              capabilities: ["image"],
+            },
+          ],
+        },
+      },
+    } as OpenClawConfig;
+    const providerRegistry = new Map<string, MediaUnderstandingProvider>([
+      [
+        "google",
+        {
+          id: "google",
+          capabilities: ["image" as const],
+          describeImage: async (req) => {
+            seenProviders.push(req.provider);
+            return { text: "google ok", model: req.model };
+          },
+        },
+      ],
+    ]);
+
+    await withMediaFixture(
+      {
+        filePrefix: "openclaw-gemini-media-alias",
+        extension: "png",
+        mediaType: "image/png",
+        fileContents: Buffer.from("image"),
+      },
+      async ({ ctx, media, cache }) => {
+        const result = await runCapability({
+          capability: "image",
+          cfg,
+          ctx,
+          attachments: cache,
+          media,
+          agentDir: "/tmp",
+          providerRegistry,
+        });
+
+        expect(result.decision.outcome).toBe("success");
+        expect(seenProviders).toEqual(["google"]);
+        expect(requireCapabilityOutput(result, 0)).toEqual({
+          kind: "image.description",
+          attachmentIndex: 0,
+          provider: "google",
+          model: "gemini-3-flash-preview",
+          text: "google ok",
+        });
+      },
+    );
+  });
+
+  it("canonicalizes non-MiniMax active media aliases for auto image resolution", async () => {
+    vi.stubEnv("GEMINI_API_KEY", "test-gemini-key");
+    const cfg = {} as OpenClawConfig;
+    const pluginRegistry = createEmptyPluginRegistry();
+    pluginRegistry.mediaUnderstandingProviders.push({
+      pluginId: "google",
+      pluginName: "Google Provider",
+      source: "test",
+      provider: {
+        id: "google",
+        capabilities: ["image"],
+        defaultModels: { image: "gemini-3-flash-preview" },
+        describeImage: async () => ({ text: "ok" }),
+      },
+    });
+    setCompatibleActiveMediaUnderstandingRegistry(pluginRegistry, cfg);
+
+    try {
+      await expect(
+        resolveAutoImageModel({
+          cfg,
+          activeModel: { provider: "gemini", model: "gemini-3-flash-preview" },
+        }),
+      ).resolves.toEqual({
+        provider: "google",
+        model: "gemini-3-flash-preview",
+      });
+    } finally {
+      setActivePluginRegistry(createEmptyPluginRegistry());
+      vi.unstubAllEnvs();
+    }
+  });
+
   it("uses active OpenRouter image models for auto image resolution", async () => {
     vi.stubEnv("OPENROUTER_API_KEY", "test-openrouter-key");
     const cfg = {} as OpenClawConfig;
@@ -329,15 +1181,85 @@ describe("runCapability image skip", () => {
       await expect(
         resolveAutoImageModel({
           cfg,
+          agentId: "image-agent",
+          agentDir: "/tmp/openclaw-agent",
+          workspaceDir: "/tmp/openclaw-workspace",
           activeModel: { provider: "openrouter", model: "google/gemini-2.5-flash" },
         }),
       ).resolves.toEqual({
         provider: "openrouter",
         model: "google/gemini-2.5-flash",
       });
+      expect(loadModelCatalog).toHaveBeenCalledWith({
+        config: cfg,
+        agentId: "image-agent",
+        agentDir: "/tmp/openclaw-agent",
+        workspaceDir: "/tmp/openclaw-workspace",
+      });
     } finally {
       setActivePluginRegistry(createEmptyPluginRegistry());
       vi.unstubAllEnvs();
+    }
+  });
+
+  it("passes workspaceDir to auto image provider auth checks", async () => {
+    const modelAuth = await import("../agents/model-auth.js");
+    const hasAvailableAuthForProvider = vi.mocked(modelAuth.hasAvailableAuthForProvider);
+    hasAvailableAuthForProvider.mockClear();
+    hasAvailableAuthForProvider.mockImplementation(
+      async (params) => params.workspaceDir === "/tmp/openclaw-workspace",
+    );
+
+    try {
+      await withMediaFixture(
+        {
+          filePrefix: "openclaw-image-workspace-auth",
+          extension: "png",
+          mediaType: "image/png",
+          fileContents: Buffer.from("image"),
+        },
+        async ({ ctx, media, cache }) => {
+          const result = await runCapability({
+            capability: "image",
+            cfg: {} as OpenClawConfig,
+            ctx,
+            attachments: cache,
+            media,
+            agentDir: "/tmp/openclaw-agent",
+            workspaceDir: "/tmp/openclaw-workspace",
+            providerRegistry: new Map([
+              [
+                "workspace-vision",
+                {
+                  id: "workspace-vision",
+                  capabilities: ["image"],
+                  describeImage: async (req) => ({
+                    text: "workspace auth ok",
+                    model: req.model,
+                  }),
+                },
+              ],
+            ]),
+            activeModel: { provider: "workspace-vision", model: "vision-v1" },
+          });
+
+          expect(result.decision.outcome).toBe("success");
+          expect(requireCapabilityOutput(result, 0)).toMatchObject({
+            provider: "workspace-vision",
+            model: "vision-v1",
+            text: "workspace auth ok",
+          });
+          expect(hasAvailableAuthForProvider).toHaveBeenCalledWith(
+            expect.objectContaining({
+              provider: "workspace-vision",
+              agentDir: "/tmp/openclaw-agent",
+              workspaceDir: "/tmp/openclaw-workspace",
+            }),
+          );
+        },
+      );
+    } finally {
+      hasAvailableAuthForProvider.mockImplementation(async () => true);
     }
   });
 
@@ -385,9 +1307,10 @@ describe("runCapability image skip", () => {
         });
 
         expect(result.decision.outcome).toBe("success");
-        expect(result.outputs[0]?.provider).toBe("openrouter");
-        expect(result.outputs[0]?.model).toBe("auto");
-        expect(result.outputs[0]?.text).toBe("openrouter ok");
+        const output = requireCapabilityOutput(result, 0);
+        expect(output.provider).toBe("openrouter");
+        expect(output.model).toBe("auto");
+        expect(output.text).toBe("openrouter ok");
         expect(seenModel).toBe("auto");
       },
     );
@@ -439,3 +1362,4 @@ describe("runCapability image skip", () => {
     );
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

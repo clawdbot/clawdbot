@@ -1,3 +1,4 @@
+// Discord plugin module implements inbound job behavior.
 import {
   resolveDiscordChannelIdSafe,
   resolveDiscordChannelInfoSafe,
@@ -11,6 +12,7 @@ type DiscordInboundJobRuntimeField =
   | "abortSignal"
   | "guildHistories"
   | "client"
+  | "turnAdoptionLifecycle"
   | "threadBindings"
   | "discordRestFetch";
 
@@ -19,33 +21,25 @@ type DiscordInboundJobRuntime = Pick<DiscordMessagePreflightContext, DiscordInbo
 type DiscordInboundJobPayload = Omit<DiscordMessagePreflightContext, DiscordInboundJobRuntimeField>;
 
 export type DiscordInboundJob = {
-  queueKey: string;
   payload: DiscordInboundJobPayload;
   runtime: DiscordInboundJobRuntime;
-  replayKeys?: string[];
+  ingressSettlement?: {
+    settle: () => Promise<void>;
+    abandon: (error?: unknown) => Promise<void>;
+    cancel: () => Promise<void>;
+  };
 };
-
-export function resolveDiscordInboundJobQueueKey(ctx: DiscordMessagePreflightContext): string {
-  const sessionKey = ctx.route.sessionKey?.trim();
-  if (sessionKey) {
-    return sessionKey;
-  }
-  const baseSessionKey = ctx.baseSessionKey?.trim();
-  if (baseSessionKey) {
-    return baseSessionKey;
-  }
-  return ctx.messageChannelId;
-}
 
 export function buildDiscordInboundJob(
   ctx: DiscordMessagePreflightContext,
-  options?: { replayKeys?: readonly string[] },
+  options?: { ingressSettlement?: DiscordInboundJob["ingressSettlement"] },
 ): DiscordInboundJob {
   const {
     runtime,
     abortSignal,
     guildHistories,
     client,
+    turnAdoptionLifecycle,
     threadBindings,
     discordRestFetch,
     message,
@@ -56,7 +50,6 @@ export function buildDiscordInboundJob(
 
   const sanitizedMessage = sanitizeDiscordInboundMessage(message);
   return {
-    queueKey: resolveDiscordInboundJobQueueKey(ctx),
     payload: {
       ...payload,
       message: sanitizedMessage,
@@ -71,10 +64,11 @@ export function buildDiscordInboundJob(
       abortSignal,
       guildHistories,
       client,
+      turnAdoptionLifecycle,
       threadBindings,
       discordRestFetch,
     },
-    replayKeys: options?.replayKeys ? [...options.replayKeys] : undefined,
+    ingressSettlement: options?.ingressSettlement,
   };
 }
 

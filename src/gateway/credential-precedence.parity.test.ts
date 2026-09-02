@@ -1,6 +1,9 @@
+// Credential precedence parity tests keep call, probe, status, and auth surfaces
+// aligned on local/remote gateway token and password resolution.
 import { describe, expect, it } from "vitest";
-import { resolveGatewayProbeAuth as resolveStatusGatewayProbeAuth } from "../commands/status.gateway-probe.js";
+import { resolveGatewayProbeAuthResolution } from "../commands/status.gateway-probe.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { withEnv } from "../test-utils/env.js";
 import { resolveGatewayAuth } from "./auth.js";
 import { resolveGatewayCredentialsFromConfig } from "./credentials.js";
 import { resolveGatewayProbeAuth } from "./probe-auth.js";
@@ -38,39 +41,20 @@ function makeRemoteGatewayConfig(remote: { token?: string; password?: string }):
 }
 
 function withGatewayAuthEnv<T>(env: NodeJS.ProcessEnv, fn: () => T): T {
-  const keys = [
-    "OPENCLAW_GATEWAY_TOKEN",
-    "OPENCLAW_GATEWAY_PASSWORD",
-    "OPENCLAW_SERVICE_KIND",
-  ] as const;
-  const previous = new Map<string, string | undefined>();
-  for (const key of keys) {
-    previous.set(key, process.env[key]);
-    const nextValue = env[key];
-    if (typeof nextValue === "string") {
-      process.env[key] = nextValue;
-    } else {
-      delete process.env[key];
-    }
-  }
-  try {
-    return fn();
-  } finally {
-    for (const key of keys) {
-      const value = previous.get(key);
-      if (typeof value === "string") {
-        process.env[key] = value;
-      } else {
-        delete process.env[key];
-      }
-    }
-  }
+  return withEnv(
+    {
+      OPENCLAW_GATEWAY_TOKEN: env.OPENCLAW_GATEWAY_TOKEN,
+      OPENCLAW_GATEWAY_PASSWORD: env.OPENCLAW_GATEWAY_PASSWORD,
+      OPENCLAW_SERVICE_KIND: env.OPENCLAW_SERVICE_KIND,
+    },
+    fn,
+  );
 }
 
 describe("gateway credential precedence coverage", () => {
   const cases: TestCase[] = [
     {
-      name: "local mode: env overrides config for call/probe/status, auth remains config-first",
+      name: "local mode keeps configured auth aligned across client and server surfaces",
       cfg: {
         gateway: {
           mode: "local",
@@ -85,8 +69,8 @@ describe("gateway credential precedence coverage", () => {
         OPENCLAW_GATEWAY_PASSWORD: "env-password", // pragma: allowlist secret
       } as NodeJS.ProcessEnv,
       expected: {
-        call: { token: "env-token", password: "env-password" }, // pragma: allowlist secret
-        probe: { token: "env-token", password: "env-password" }, // pragma: allowlist secret
+        call: { token: "config-token", password: "config-password" }, // pragma: allowlist secret
+        probe: { token: "config-token", password: "config-password" }, // pragma: allowlist secret
         status: { token: "config-token", password: "config-password" }, // pragma: allowlist secret
         auth: { token: "config-token", password: "config-password" }, // pragma: allowlist secret
       },
@@ -119,7 +103,7 @@ describe("gateway credential precedence coverage", () => {
       },
     },
     {
-      name: "local mode in gateway service runtime uses config-first token precedence",
+      name: "gateway service runtime uses the same local credential policy",
       cfg: {
         gateway: {
           mode: "local",
@@ -135,8 +119,8 @@ describe("gateway credential precedence coverage", () => {
         OPENCLAW_SERVICE_KIND: "gateway",
       } as NodeJS.ProcessEnv,
       expected: {
-        call: { token: "config-token", password: "env-password" }, // pragma: allowlist secret
-        probe: { token: "config-token", password: "env-password" }, // pragma: allowlist secret
+        call: { token: "config-token", password: "config-password" }, // pragma: allowlist secret
+        probe: { token: "config-token", password: "config-password" }, // pragma: allowlist secret
         status: { token: "config-token", password: "config-password" }, // pragma: allowlist secret
         auth: { token: "config-token", password: "config-password" }, // pragma: allowlist secret
       },
@@ -154,7 +138,8 @@ describe("gateway credential precedence coverage", () => {
       mode,
       env,
     });
-    const status = await withGatewayAuthEnv(env, () => resolveStatusGatewayProbeAuth(cfg));
+    const status = (await withGatewayAuthEnv(env, () => resolveGatewayProbeAuthResolution(cfg)))
+      .auth;
     const auth = resolveGatewayAuth({
       authConfig: cfg.gateway?.auth,
       env,

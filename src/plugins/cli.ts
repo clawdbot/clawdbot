@@ -1,53 +1,41 @@
+// Registers plugin-related CLI commands.
 import type { Command } from "commander";
-import { getRuntimeConfig, readConfigFileSnapshot } from "../config/config.js";
+import { getRuntimeConfigSnapshot, readConfigFileSnapshot } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   createPluginCliLogger,
-  loadPluginCliDescriptors,
+  createPluginCliLoadSession,
+  type PluginCliLoadSession,
   loadPluginCliRegistrationEntriesWithDefaults,
   type PluginCliLoaderOptions,
 } from "./cli-registry-loader.js";
+import { getPluginCache } from "./plugin-cache.js";
 import { registerPluginCliCommandGroups } from "./register-plugin-cli-command-groups.js";
-import type { OpenClawPluginCliCommandDescriptor } from "./types.js";
+export { getPluginCliCommandDescriptors } from "./cli-root-descriptors.js";
 
 type PluginCliRegistrationMode = "eager" | "lazy";
 
 type RegisterPluginCliOptions = {
   mode?: PluginCliRegistrationMode;
   primary?: string | null;
+  skipPluginValidation?: boolean;
+  session?: PluginCliLoadSession;
 };
-
-type PluginCliRegistrationEntries = Awaited<
-  ReturnType<typeof loadPluginCliRegistrationEntriesWithDefaults>
->;
-
-const PLUGIN_CLI_ENTRIES_CACHE_KEY = Symbol.for("openclaw.plugin-cli-registration-entries-cache");
-
-interface ProgramWithEntriesCache {
-  [PLUGIN_CLI_ENTRIES_CACHE_KEY]?: {
-    primary: string | undefined;
-    entries: PluginCliRegistrationEntries;
-  };
-}
 
 const logger = createPluginCliLogger();
 
-export const loadValidatedConfigForPluginRegistration =
-  async (): Promise<OpenClawConfig | null> => {
-    const snapshot = await readConfigFileSnapshot();
-    if (!snapshot.valid) {
-      return null;
-    }
-    return getRuntimeConfig();
-  };
-
-export async function getPluginCliCommandDescriptors(
-  cfg?: OpenClawConfig,
-  env?: NodeJS.ProcessEnv,
-  loaderOptions?: PluginCliLoaderOptions,
-): Promise<OpenClawPluginCliCommandDescriptor[]> {
-  return loadPluginCliDescriptors({ cfg, env, loaderOptions });
-}
+export const loadValidatedConfigForPluginRegistration = async (options?: {
+  skipPluginValidation?: boolean;
+  session?: PluginCliLoadSession;
+}): Promise<OpenClawConfig | null> => {
+  const read = () =>
+    readConfigFileSnapshot({ skipPluginValidation: options?.skipPluginValidation });
+  const snapshot = await (options?.session ? options.session.readConfig(read) : read());
+  if (!snapshot.valid) {
+    return null;
+  }
+  return getRuntimeConfigSnapshot() ?? snapshot.runtimeConfig;
+};
 
 export async function registerPluginCliCommands(
   program: Command,
@@ -58,28 +46,70 @@ export async function registerPluginCliCommands(
 ) {
   const mode = options?.mode ?? "eager";
   const primary = options?.primary ?? undefined;
-
-  const programWithCache = program as Command & ProgramWithEntriesCache;
-  const cached = programWithCache[PLUGIN_CLI_ENTRIES_CACHE_KEY];
-  let entries: PluginCliRegistrationEntries;
-  if (cached && cached.primary === primary) {
-    entries = cached.entries;
-  } else {
-    entries = await loadPluginCliRegistrationEntriesWithDefaults({
+  // Standalone registration shares its caller's generation with later Commander actions.
+  const session = options?.session ?? createPluginCliLoadSession(getPluginCache());
+  try {
+    const entries = await loadPluginCliRegistrationEntriesWithDefaults({
       cfg,
       env,
       loaderOptions,
       primaryCommand: primary,
+      session,
     });
-    programWithCache[PLUGIN_CLI_ENTRIES_CACHE_KEY] = { primary, entries };
-  }
 
-  await registerPluginCliCommandGroups(program, entries, {
-    mode,
-    primary,
-    existingCommands: new Set(program.commands.map((cmd) => cmd.name())),
-    logger,
-  });
+    const groups = entries.map((entry) => {
+      if (
+        mode !== "lazy" ||
+        (primary &&
+          (entry.parentPath[0] === primary ||
+            entry.names.includes(primary) ||
+            entry.placeholders.some((descriptor) => descriptor.name === primary)))
+      ) {
+        return entry;
+      }
+      // Deferred expansion gets fresh preparation in the parsing generation. Never retain
+      // startup registrars past close, including help/completion on a prepared program.
+      return Object.assign({}, entry, {
+        register: async (target: Command) => {
+          const deferred = createPluginCliLoadSession(getPluginCache());
+          try {
+            const fresh = await loadPluginCliRegistrationEntriesWithDefaults({
+              cfg,
+              env,
+              loaderOptions,
+              session: deferred,
+            });
+            const match = fresh.find(
+              (candidate) =>
+                candidate.pluginId === entry.pluginId &&
+                candidate.parentPath.join("\0") === entry.parentPath.join("\0") &&
+                candidate.names.join("\0") === entry.names.join("\0"),
+            );
+            if (!match) {
+              throw new Error(
+                `Plugin CLI registration is no longer available (${entry.pluginId}).`,
+              );
+            }
+            await match.register(target);
+          } finally {
+            deferred.close();
+          }
+        },
+      });
+    });
+    await registerPluginCliCommandGroups(program, groups, {
+      mode,
+      primary,
+      // Include aliases: alias-only root names (cron|automations, tui|terminal)
+      // are owned commands too; a plugin claiming one would crash registration.
+      existingCommands: new Set(program.commands.flatMap((cmd) => [cmd.name(), ...cmd.aliases()])),
+      logger,
+    });
+  } finally {
+    if (!options?.session) {
+      session.close();
+    }
+  }
 }
 
 export async function registerPluginCliCommandsFromValidatedConfig(
@@ -88,10 +118,20 @@ export async function registerPluginCliCommandsFromValidatedConfig(
   loaderOptions?: PluginCliLoaderOptions,
   options?: RegisterPluginCliOptions,
 ): Promise<OpenClawConfig | null> {
-  const config = await loadValidatedConfigForPluginRegistration();
-  if (!config) {
-    return null;
+  const session = options?.session ?? createPluginCliLoadSession(getPluginCache());
+  try {
+    const config = await loadValidatedConfigForPluginRegistration({
+      session,
+      skipPluginValidation: options?.skipPluginValidation,
+    });
+    if (!config) {
+      return null;
+    }
+    await registerPluginCliCommands(program, config, env, loaderOptions, { ...options, session });
+    return config;
+  } finally {
+    if (!options?.session) {
+      session.close();
+    }
   }
-  await registerPluginCliCommands(program, config, env, loaderOptions, options);
-  return config;
 }

@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+// Checks built package dist files for imports outside package boundaries.
 import fs from "node:fs";
 import path from "node:path";
 import { collectPackageDistImportErrors } from "./lib/package-dist-imports.mjs";
@@ -12,11 +13,37 @@ function fail(message) {
   process.exit(1);
 }
 
-const packageRoot = path.resolve(process.argv[2] ?? process.cwd());
-if (process.argv.length > 3) {
-  fail(usage());
+function parseArgs(argv) {
+  const args = argv[0] === "--" ? argv.slice(1) : argv;
+  const packageRootArg = args[0]?.trim() ?? "";
+  if (packageRootArg === "--help" || packageRootArg === "-h") {
+    return { help: true, packageRoot: "" };
+  }
+  if (packageRootArg.startsWith("-")) {
+    throw new Error(`Unknown package dist import check option: ${packageRootArg}`);
+  }
+  const extraArg = args[1]?.trim();
+  if (extraArg) {
+    throw new Error(`Unexpected package dist import check argument: ${extraArg}`);
+  }
+  return {
+    help: false,
+    packageRoot: path.resolve(packageRootArg || process.cwd()),
+  };
 }
 
+let cliArgs;
+try {
+  cliArgs = parseArgs(process.argv.slice(2));
+} catch (error) {
+  fail(error instanceof Error ? error.message : String(error));
+}
+if (cliArgs.help) {
+  console.log(usage());
+  process.exit(0);
+}
+
+const { packageRoot } = cliArgs;
 const distRoot = path.join(packageRoot, "dist");
 if (!fs.existsSync(distRoot)) {
   fail(`missing dist directory: ${distRoot}`);

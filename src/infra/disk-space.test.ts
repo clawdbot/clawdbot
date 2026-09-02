@@ -1,3 +1,4 @@
+// Covers disk-space formatting and warning generation.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -16,6 +17,7 @@ function statfsFixture(params: {
     bfree: params.bavail,
     bavail: params.bavail,
     files: 0,
+    frsize: params.bsize ?? 1024,
     ffree: 0,
   };
 }
@@ -75,5 +77,14 @@ describe("disk-space helpers", () => {
   it("keeps byte formatting compact", () => {
     expect(formatDiskSpaceBytes(420 * 1024 * 1024)).toBe("420 MiB");
     expect(formatDiskSpaceBytes(1536 * 1024 * 1024)).toBe("1.5 GiB");
+  });
+
+  it("promotes MiB values that round up to 1024 into GiB", () => {
+    // mib in [1023.5, 1024) rounds to 1024; must render as GiB, not "1024 MiB".
+    expect(formatDiskSpaceBytes(Math.round(1023.6 * 1024 * 1024))).toBe("1.0 GiB");
+    expect(formatDiskSpaceBytes(Math.round(1023.9 * 1024 * 1024))).toBe("1.0 GiB");
+    expect(formatDiskSpaceBytes(1024 * 1024 * 1024)).toBe("1.0 GiB");
+    // Just below the rounding boundary still reads as MiB.
+    expect(formatDiskSpaceBytes(Math.round(1023.4 * 1024 * 1024))).toBe("1023 MiB");
   });
 });

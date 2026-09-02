@@ -1,29 +1,31 @@
+// Plugin HTTP auth tests cover protected route canonicalization, operator scope
+// checks, hook/plugin route precedence, and unauthorized variant handling.
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { describe, expect, test, vi } from "vitest";
+import { beforeAll, describe, expect, test, vi } from "vitest";
 import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import { authorizeOperatorScopesForMethod } from "./method-scopes.js";
-import { canonicalizePathVariant, isProtectedPluginRoutePath } from "./security-path.js";
+import { canonicalizePathVariant } from "./security-path.js";
 import {
   AUTH_NONE,
   AUTH_TOKEN,
   buildChannelPathFuzzCorpus,
-  CANONICAL_AUTH_VARIANTS,
-  CANONICAL_UNAUTH_VARIANTS,
-  createCanonicalizedChannelPluginHandler,
   createHooksHandler,
   createRequest,
   createResponse,
   createTestGatewayServer,
   dispatchRequest,
-  expectAuthorizedVariants,
   expectUnauthorizedResponse,
   expectUnauthorizedVariants,
   sendRequest,
   withGatewayServer,
   withGatewayTempConfig,
 } from "./server-http.test-harness.js";
-import { createTestRegistry } from "./server/__tests__/test-utils.js";
-import { createGatewayPluginRequestHandler } from "./server/plugins-http.js";
+import { createGatewayTestRegistry } from "./server/__tests__/test-utils.js";
+import {
+  createGatewayPluginRequestHandler,
+  isPluginAuthenticatedRoutePath,
+  shouldEnforceGatewayAuthForPluginPath,
+} from "./server/plugins-http.js";
 import { withTempConfig } from "./test-temp-config.js";
 
 type PluginRequestHandler = (req: IncomingMessage, res: ServerResponse) => Promise<boolean>;
@@ -99,24 +101,26 @@ const PROBE_CASES = [
   { path: "/healthz", status: "live" },
   { path: "/ready", status: "ready" },
   { path: "/readyz", status: "ready" },
+  { path: "/startup", status: "started" },
+  { path: "/startupz", status: "started" },
 ] as const;
 
 async function expectProbeRoutesHealthy(server: Parameters<typeof sendRequest>[0]) {
   for (const probeCase of PROBE_CASES) {
     const response = await sendRequest(server, { path: probeCase.path });
     expect(response.res.statusCode, probeCase.path).toBe(200);
-    expect(response.getBody(), probeCase.path).toBe(
-      JSON.stringify({ ok: true, status: probeCase.status }),
-    );
+    const body = JSON.parse(response.getBody());
+    if (probeCase.status === "started") {
+      expect(body, probeCase.path).toMatchObject({
+        ok: true,
+        status: "started",
+        version: expect.any(String),
+        uptimeMs: expect.any(Number),
+      });
+    } else {
+      expect(body, probeCase.path).toEqual({ ok: true, status: probeCase.status });
+    }
   }
-}
-
-function createProtectedPluginAuthOverrides(handlePluginRequest: PluginRequestHandler) {
-  return {
-    handlePluginRequest,
-    shouldEnforcePluginGatewayAuth: (pathContext: { pathname: string }) =>
-      isProtectedPluginRoutePath(pathContext.pathname),
-  };
 }
 
 function createRuntimeScopeRecorderHandler(params: {
@@ -126,9 +130,10 @@ function createRuntimeScopeRecorderHandler(params: {
   observedRuntimeScopes: string[][];
   allowedResults: boolean[];
   gatewayRuntimeScopeSurface?: "trusted-operator";
+  match?: "exact" | "prefix";
 }) {
   return createGatewayPluginRequestHandler({
-    registry: createTestRegistry({
+    registry: createGatewayTestRegistry({
       httpRoutes: [
         {
           pluginId: params.pluginId,
@@ -138,7 +143,7 @@ function createRuntimeScopeRecorderHandler(params: {
           ...(params.gatewayRuntimeScopeSurface
             ? { gatewayRuntimeScopeSurface: params.gatewayRuntimeScopeSurface }
             : {}),
-          match: "exact",
+          match: params.match ?? "exact",
           handler: async (_req: IncomingMessage, res: ServerResponse) => {
             const runtimeScopes =
               getPluginRuntimeGatewayRequestScope()?.client?.connect?.scopes?.slice() ?? [];
@@ -158,7 +163,59 @@ function createRuntimeScopeRecorderHandler(params: {
   });
 }
 
+function createPublicPluginRouteHandler(params: {
+  path: string;
+  match: "exact" | "prefix";
+  method: string;
+  responseBody: string;
+}) {
+  const routeHandler = vi.fn(async (req: IncomingMessage, res: ServerResponse) => {
+    if (req.method !== params.method) {
+      return false;
+    }
+    res.statusCode = 200;
+    res.end(params.responseBody);
+    return true;
+  });
+  return {
+    routeHandler,
+    handlePluginRequest: createGatewayPluginRequestHandler({
+      registry: createGatewayTestRegistry({
+        httpRoutes: [
+          {
+            pluginId: "focus-owner",
+            source: "focus-owner",
+            path: params.path,
+            auth: "plugin",
+            match: params.match,
+            handler: routeHandler,
+          },
+        ],
+      }),
+      log: { warn: vi.fn() } as unknown as Parameters<
+        typeof createGatewayPluginRequestHandler
+      >[0]["log"],
+    }),
+  };
+}
+
+async function expectPluginRequestOk(
+  server: Parameters<typeof dispatchRequest>[0],
+  request: Parameters<typeof createRequest>[0],
+): Promise<void> {
+  const response = createResponse();
+  await dispatchRequest(server, createRequest(request), response.res);
+  expect(response.res.statusCode).toBe(200);
+  expect(response.getBody()).toBe("ok");
+}
+
 describe("gateway plugin HTTP auth boundary", () => {
+  beforeAll(async () => {
+    // Compile the real Control UI owner before the request deadline starts;
+    // this suite verifies route/auth ownership, not source-loader startup latency.
+    await import("./control-ui.js");
+  });
+
   test("applies default security headers and optional strict transport security", async () => {
     await withGatewayTempConfig("openclaw-plugin-http-security-headers-test-", async () => {
       const withoutHsts = createTestGatewayServer({ resolvedAuth: AUTH_NONE });
@@ -168,10 +225,11 @@ describe("gateway plugin HTTP auth boundary", () => {
         "nosniff",
       );
       expect(withoutHstsResponse.setHeader).toHaveBeenCalledWith("Referrer-Policy", "no-referrer");
-      expect(withoutHstsResponse.setHeader).not.toHaveBeenCalledWith(
-        "Strict-Transport-Security",
-        expect.any(String),
-      );
+      expect(
+        withoutHstsResponse.setHeader.mock.calls.some(
+          ([headerName]) => headerName === "Strict-Transport-Security",
+        ),
+      ).toBe(false);
 
       const withHsts = createTestGatewayServer({
         resolvedAuth: AUTH_NONE,
@@ -227,65 +285,6 @@ describe("gateway plugin HTTP auth boundary", () => {
     });
   });
 
-  test("requires gateway auth for protected plugin route space and allows authenticated pass-through", async () => {
-    const handlePluginRequest = vi.fn(async (req: IncomingMessage, res: ServerResponse) => {
-      const pathname = new URL(req.url ?? "/", "http://localhost").pathname;
-      if (pathname === "/api/channels") {
-        res.statusCode = 200;
-        res.setHeader("Content-Type", "application/json; charset=utf-8");
-        res.end(JSON.stringify({ ok: true, route: "channel-root" }));
-        return true;
-      }
-      if (pathname === "/api/channels/nostr/default/profile") {
-        res.statusCode = 200;
-        res.setHeader("Content-Type", "application/json; charset=utf-8");
-        res.end(JSON.stringify({ ok: true, route: "channel" }));
-        return true;
-      }
-      if (pathname === "/plugin/public") {
-        res.statusCode = 200;
-        res.setHeader("Content-Type", "application/json; charset=utf-8");
-        res.end(JSON.stringify({ ok: true, route: "public" }));
-        return true;
-      }
-      return false;
-    });
-
-    await withGatewayServer({
-      prefix: "openclaw-plugin-http-auth-test-",
-      resolvedAuth: AUTH_TOKEN,
-      overrides: {
-        handlePluginRequest,
-        shouldEnforcePluginGatewayAuth: (pathContext) =>
-          isProtectedPluginRoutePath(pathContext.pathname) ||
-          pathContext.pathname === "/plugin/public",
-      },
-      run: async (server) => {
-        const unauthenticated = await sendRequest(server, {
-          path: "/api/channels/nostr/default/profile",
-        });
-        expectUnauthorizedResponse(unauthenticated);
-        expect(handlePluginRequest).not.toHaveBeenCalled();
-
-        const unauthenticatedRoot = await sendRequest(server, { path: "/api/channels" });
-        expectUnauthorizedResponse(unauthenticatedRoot);
-        expect(handlePluginRequest).not.toHaveBeenCalled();
-
-        const authenticated = await sendRequest(server, {
-          path: "/api/channels/nostr/default/profile",
-          authorization: "Bearer test-token",
-        });
-        expect(authenticated.res.statusCode).toBe(200);
-        expect(authenticated.getBody()).toContain('"route":"channel"');
-
-        const unauthenticatedPublic = await sendRequest(server, { path: "/plugin/public" });
-        expectUnauthorizedResponse(unauthenticatedPublic);
-
-        expect(handlePluginRequest).toHaveBeenCalledTimes(1);
-      },
-    });
-  });
-
   test("preserves trusted-proxy read scopes for gateway-auth plugin runtime routes", async () => {
     const observedRuntimeScopes: string[][] = [];
     const writeAllowedResults: boolean[] = [];
@@ -318,23 +317,15 @@ describe("gateway plugin HTTP auth boundary", () => {
           },
         });
 
-        const response = createResponse();
-        await dispatchRequest(
-          server,
-          createRequest({
-            path: "/secure-hook",
-            remoteAddress: "203.0.113.10",
-            headers: {
-              "x-forwarded-user": "operator",
-              "x-forwarded-for": "198.51.100.20",
-              "x-openclaw-scopes": "operator.read",
-            },
-          }),
-          response.res,
-        );
-
-        expect(response.res.statusCode).toBe(200);
-        expect(response.getBody()).toBe("ok");
+        await expectPluginRequestOk(server, {
+          path: "/secure-hook",
+          remoteAddress: "203.0.113.10",
+          headers: {
+            "x-forwarded-user": "operator",
+            "x-forwarded-for": "198.51.100.20",
+            "x-openclaw-scopes": "operator.read",
+          },
+        });
       },
     });
 
@@ -361,21 +352,13 @@ describe("gateway plugin HTTP auth boundary", () => {
         shouldEnforcePluginGatewayAuth: (pathContext) => pathContext.pathname === "/secure-hook",
       },
       run: async (server) => {
-        const response = createResponse();
-        await dispatchRequest(
-          server,
-          createRequest({
-            path: "/secure-hook",
-            authorization: "Bearer test-token",
-            headers: {
-              "x-openclaw-scopes": "operator.read",
-            },
-          }),
-          response.res,
-        );
-
-        expect(response.res.statusCode).toBe(200);
-        expect(response.getBody()).toBe("ok");
+        await expectPluginRequestOk(server, {
+          path: "/secure-hook",
+          authorization: "Bearer test-token",
+          headers: {
+            "x-openclaw-scopes": "operator.read",
+          },
+        });
       },
     });
 
@@ -404,25 +387,17 @@ describe("gateway plugin HTTP auth boundary", () => {
           pathContext.pathname === "/secure-admin-hook",
       },
       run: async (server) => {
-        const response = createResponse();
-        await dispatchRequest(
-          server,
-          createRequest({
-            path: "/secure-admin-hook",
-            authorization: "Bearer test-token",
-          }),
-          response.res,
-        );
-
-        expect(response.res.statusCode).toBe(200);
-        expect(response.getBody()).toBe("ok");
+        await expectPluginRequestOk(server, {
+          path: "/secure-admin-hook",
+          authorization: "Bearer test-token",
+        });
       },
     });
 
     expect(observedRuntimeScopes).toHaveLength(1);
-    expect(observedRuntimeScopes[0]).toEqual(
-      expect.arrayContaining(["operator.admin", "operator.read", "operator.write"]),
-    );
+    expect(observedRuntimeScopes[0]).toContain("operator.admin");
+    expect(observedRuntimeScopes[0]).toContain("operator.read");
+    expect(observedRuntimeScopes[0]).toContain("operator.write");
     expect(adminAllowedResults).toEqual([true]);
   });
 
@@ -538,6 +513,90 @@ describe("gateway plugin HTTP auth boundary", () => {
     });
   });
 
+  test("routes unattributable proxy traffic only to plugin-authenticated webhooks", async () => {
+    const observedClientIps: Array<string | undefined> = [];
+    const registry = createGatewayTestRegistry({
+      httpRoutes: [
+        {
+          pluginId: "googlechat",
+          source: "googlechat-webhook",
+          path: "/googlechat",
+          auth: "plugin",
+          match: "exact",
+          handler: async (_req: IncomingMessage, res: ServerResponse) => {
+            observedClientIps.push(getPluginRuntimeGatewayRequestScope()?.client?.clientIp);
+            res.statusCode = 200;
+            res.end("ok");
+            return true;
+          },
+        },
+        {
+          pluginId: "diffs",
+          source: "diffs-viewer",
+          path: "/plugins/diffs",
+          auth: "plugin",
+          match: "prefix",
+          handler: async (_req: IncomingMessage, res: ServerResponse) =>
+            respondJsonRoute(res, "plugin-prefix"),
+        },
+      ],
+    });
+    const handlePluginRequest = createGatewayPluginRequestHandler({
+      registry,
+      log: { warn: vi.fn() } as unknown as Parameters<
+        typeof createGatewayPluginRequestHandler
+      >[0]["log"],
+    });
+    const handleHooksRequest = vi.fn(async (req: IncomingMessage, res: ServerResponse) => {
+      if (!req.url?.startsWith("/plugins/diffs")) {
+        return false;
+      }
+      return respondJsonRoute(res, "hooks");
+    });
+
+    await withGatewayServer({
+      prefix: "openclaw-plugin-http-unattributable-webhook-test-",
+      resolvedAuth: AUTH_TOKEN,
+      overrides: {
+        handlePluginRequest,
+        handleHooksRequest,
+        shouldEnforcePluginGatewayAuth: (pathContext) =>
+          shouldEnforceGatewayAuthForPluginPath(registry, pathContext),
+        isPluginAuthenticatedRoute: (pathContext) =>
+          isPluginAuthenticatedRoutePath(registry, pathContext),
+      },
+      run: async (server) => {
+        const dispatchProxyRequest = async (path: string, method = "GET") => {
+          const response = createResponse();
+          await dispatchRequest(
+            server,
+            createRequest({
+              path,
+              method,
+              remoteAddress: "127.0.0.1",
+              headers: { "x-forwarded-for": "198.51.100.20" },
+            }),
+            response.res,
+          );
+          return response;
+        };
+
+        const webhook = await dispatchProxyRequest("/googlechat", "POST");
+        expect(webhook.res.statusCode).toBe(200);
+        expect(observedClientIps).toEqual(["127.0.0.1"]);
+
+        const overlappingPrefix = await dispatchProxyRequest("/plugins/diffs/view");
+        expect(overlappingPrefix.res.statusCode).toBe(200);
+        expect(overlappingPrefix.getBody()).toContain('"route":"plugin-prefix"');
+        expect(handleHooksRequest).not.toHaveBeenCalled();
+
+        const gatewayRoute = await dispatchProxyRequest("/ready");
+        expect(gatewayRoute.res.statusCode).toBe(403);
+        expect(gatewayRoute.getBody()).toContain("proxy_attribution_required");
+      },
+    });
+  });
+
   test("uses /api/channels auth by default while keeping wildcard handlers ungated with no predicate", async () => {
     const handlePluginRequest = vi.fn(async (req: IncomingMessage, res: ServerResponse) => {
       const pathname = new URL(req.url ?? "/", "http://localhost").pathname;
@@ -619,6 +678,270 @@ describe("gateway plugin HTTP auth boundary", () => {
       },
     });
   });
+
+  test.each([
+    { label: "root-mounted", basePath: "", path: "/settings/plugins" },
+    {
+      label: "base-path-mounted",
+      basePath: "/openclaw",
+      path: "/openclaw/settings/plugins",
+    },
+  ])(
+    "reserves the $label plugin manager GET while preserving writes",
+    async ({ basePath, path }) => {
+      const handlePluginRequest = vi.fn(async (req: IncomingMessage, res: ServerResponse) => {
+        const pathname = new URL(req.url ?? "/", "http://localhost").pathname;
+        if (pathname !== path) {
+          return false;
+        }
+        res.statusCode = 200;
+        res.setHeader("Content-Type", "text/plain; charset=utf-8");
+        res.end("plugin-handled");
+        return true;
+      });
+
+      await withGatewayServer({
+        prefix: "openclaw-plugin-http-plugin-manager-reserved-test-",
+        resolvedAuth: AUTH_NONE,
+        overrides: {
+          controlUiEnabled: true,
+          controlUiBasePath: basePath,
+          controlUiRoot: { kind: "missing" },
+          handlePluginRequest,
+        },
+        run: async (server) => {
+          const read = await sendRequest(server, { path });
+          expect(read.res.statusCode).toBe(503);
+          expect(read.getBody()).toContain("Control UI assets not found");
+          expect(handlePluginRequest).not.toHaveBeenCalled();
+
+          const write = await sendRequest(server, { path, method: "POST" });
+          expect(write.res.statusCode).toBe(200);
+          expect(write.getBody()).toBe("plugin-handled");
+          expect(handlePluginRequest).toHaveBeenCalledTimes(1);
+        },
+      });
+    },
+  );
+
+  test("reserves standalone approval documents ahead of plugin routes", async () => {
+    const handlePluginRequest = vi.fn(async (_req: IncomingMessage, res: ServerResponse) => {
+      res.statusCode = 200;
+      res.end("plugin-shadowed-approval");
+      return true;
+    });
+
+    await withRootMountedControlUiServer({
+      prefix: "openclaw-plugin-http-approval-reservation-test-",
+      handlePluginRequest,
+      run: async (server) => {
+        const response = await sendRequest(server, { path: "/approve/plugin%3Arequest.json" });
+
+        expect(response.res.statusCode).toBe(503);
+        expect(response.getBody()).toContain("Control UI assets not found");
+        expect(handlePluginRequest).not.toHaveBeenCalled();
+      },
+    });
+  });
+
+  test("terminates approval-document writes at the reservation stage", async () => {
+    const handlePluginRequest = vi.fn(async (_req: IncomingMessage, res: ServerResponse) => {
+      res.statusCode = 200;
+      res.end("plugin-shadowed-approval-write");
+      return true;
+    });
+
+    await withRootMountedControlUiServer({
+      prefix: "openclaw-plugin-http-approval-write-reservation-test-",
+      handlePluginRequest,
+      run: async (server) => {
+        for (const method of ["POST", "PUT"] as const) {
+          const response = await sendRequest(server, {
+            path: "/approve/plugin%3Arequest.json",
+            method,
+          });
+
+          // The server approval-document stage owns the terminal 404 for all
+          // methods; writes never fall through to plugin HTTP handlers.
+          expect(response.res.statusCode, method).toBe(404);
+          expect(response.getBody(), method).toBe("Not Found");
+        }
+        expect(handlePluginRequest).not.toHaveBeenCalled();
+      },
+    });
+  });
+
+  test("keeps approval documents reserved when control ui serving is disabled", async () => {
+    const handlePluginRequest = vi.fn(async (_req: IncomingMessage, res: ServerResponse) => {
+      res.statusCode = 200;
+      res.end("plugin-shadowed-disabled-approval");
+      return true;
+    });
+
+    await withPluginGatewayServer({
+      prefix: "openclaw-plugin-http-disabled-approval-reservation-test-",
+      resolvedAuth: AUTH_NONE,
+      overrides: {
+        controlUiEnabled: false,
+        controlUiBasePath: "",
+        handlePluginRequest,
+      },
+      run: async (server) => {
+        const response = await sendRequest(server, { path: "/approve/exec%3Arequest" });
+
+        expect(response.res.statusCode).toBe(404);
+        expect(response.getBody()).toBe("Not Found");
+        expect(handlePluginRequest).not.toHaveBeenCalled();
+      },
+    });
+  });
+
+  test.each([
+    {
+      label: "root-mounted exact GET",
+      basePath: "",
+      routePath: "/focus/terminal",
+      match: "exact" as const,
+      requestPath: "/focus/terminal",
+      method: "GET",
+    },
+    {
+      label: "root-mounted prefix POST",
+      basePath: "",
+      routePath: "/focus",
+      match: "prefix" as const,
+      requestPath: "/focus/desktop/control",
+      method: "POST",
+    },
+    {
+      label: "base-path-mounted prefix PUT",
+      basePath: "/openclaw",
+      routePath: "/openclaw/focus",
+      match: "prefix" as const,
+      requestPath: "/openclaw/focus/dashboard/roboclaw/session-ref",
+      method: "PUT",
+    },
+  ])(
+    "lets a registered $label route own focus requests",
+    async ({ basePath, routePath, match, requestPath, method }) => {
+      const { handlePluginRequest, routeHandler } = createPublicPluginRouteHandler({
+        path: routePath,
+        match,
+        method,
+        responseBody: "plugin-owned-focus",
+      });
+
+      await withGatewayServer({
+        prefix: "openclaw-plugin-http-focus-ownership-test-",
+        resolvedAuth: AUTH_NONE,
+        overrides: {
+          controlUiEnabled: true,
+          controlUiBasePath: basePath,
+          controlUiRoot: { kind: "missing" },
+          handlePluginRequest,
+        },
+        run: async (server) => {
+          const response = await sendRequest(server, { path: requestPath, method });
+          expect(response.res.statusCode).toBe(200);
+          expect(response.getBody()).toBe("plugin-owned-focus");
+          expect(routeHandler).toHaveBeenCalledOnce();
+        },
+      });
+    },
+  );
+
+  test.each([
+    {
+      label: "root-mounted",
+      basePath: "",
+      rootPath: "/focus",
+      descendantPath: "/focus/desktop/control",
+      lookalikePath: "/focused",
+    },
+    {
+      label: "base-path-mounted",
+      basePath: "/openclaw",
+      rootPath: "/openclaw/focus",
+      descendantPath: "/openclaw/focus/dashboard/roboclaw/session-ref",
+      lookalikePath: "/openclaw/focused",
+    },
+  ])(
+    "uses focus as the $label unclaimed fallback without reserving lookalikes",
+    async ({ basePath, rootPath, descendantPath, lookalikePath }) => {
+      const { handlePluginRequest, routeHandler } = createPublicPluginRouteHandler({
+        path: lookalikePath,
+        match: "exact",
+        method: "GET",
+        responseBody: "plugin-lookalike",
+      });
+
+      await withGatewayServer({
+        prefix: "openclaw-plugin-http-focus-fallback-test-",
+        resolvedAuth: AUTH_NONE,
+        overrides: {
+          controlUiEnabled: true,
+          controlUiBasePath: basePath,
+          controlUiRoot: { kind: "missing" },
+          handlePluginRequest,
+        },
+        run: async (server) => {
+          const get = await sendRequest(server, { path: rootPath });
+          expect(get.res.statusCode).toBe(503);
+          expect(get.getBody()).toContain("Control UI assets not found");
+
+          const head = await sendRequest(server, { path: descendantPath, method: "HEAD" });
+          expect(head.res.statusCode).toBe(503);
+
+          for (const method of ["POST", "PUT"] as const) {
+            const write = await sendRequest(server, { path: descendantPath, method });
+            expect(write.res.statusCode, method).toBe(404);
+            expect(write.getBody(), method).toBe("Not Found");
+          }
+
+          const lookalike = await sendRequest(server, { path: lookalikePath });
+          expect(lookalike.res.statusCode).toBe(200);
+          expect(lookalike.getBody()).toBe("plugin-lookalike");
+          expect(routeHandler).toHaveBeenCalledOnce();
+        },
+      });
+    },
+  );
+
+  test.each([
+    { label: "root-mounted", basePath: "", path: "/focus/terminal" },
+    {
+      label: "base-path-mounted",
+      basePath: "/openclaw",
+      path: "/openclaw/focus/desktop",
+    },
+  ])(
+    "returns 404 for an unclaimed $label focus request when control ui serving is disabled",
+    async ({ basePath, path }) => {
+      const { handlePluginRequest, routeHandler } = createPublicPluginRouteHandler({
+        path: `${basePath}/unrelated`,
+        match: "exact",
+        method: "GET",
+        responseBody: "unrelated",
+      });
+
+      await withPluginGatewayServer({
+        prefix: "openclaw-plugin-http-disabled-focus-fallback-test-",
+        resolvedAuth: AUTH_NONE,
+        overrides: {
+          controlUiEnabled: false,
+          controlUiBasePath: basePath,
+          handlePluginRequest,
+        },
+        run: async (server) => {
+          const response = await sendRequest(server, { path });
+
+          expect(response.res.statusCode).toBe(404);
+          expect(response.getBody()).toBe("Not Found");
+          expect(routeHandler).not.toHaveBeenCalled();
+        },
+      });
+    },
+  );
 
   test("passes POST webhook routes through root-mounted control ui to plugins", async () => {
     const handlePluginRequest = vi.fn(async (req: IncomingMessage, res: ServerResponse) => {
@@ -710,44 +1033,6 @@ describe("gateway plugin HTTP auth boundary", () => {
       handlePluginRequest,
       run: async (server) => {
         await expectHealthzProbeReserved({ server, handlePluginRequest });
-      },
-    });
-  });
-
-  test("requires gateway auth for canonicalized /api/channels variants", async () => {
-    const handlePluginRequest = createCanonicalizedChannelPluginHandler();
-
-    await withPluginGatewayServer({
-      prefix: "openclaw-plugin-http-auth-canonicalized-test-",
-      resolvedAuth: AUTH_TOKEN,
-      overrides: createProtectedPluginAuthOverrides(handlePluginRequest),
-      run: async (server) => {
-        await expectUnauthorizedVariants({ server, variants: CANONICAL_UNAUTH_VARIANTS });
-        expect(handlePluginRequest).not.toHaveBeenCalled();
-
-        await expectAuthorizedVariants({
-          server,
-          variants: CANONICAL_AUTH_VARIANTS,
-          authorization: "Bearer test-token",
-        });
-        expect(handlePluginRequest).toHaveBeenCalledTimes(CANONICAL_AUTH_VARIANTS.length);
-      },
-    });
-  });
-
-  test("rejects unauthenticated plugin-channel fuzz corpus variants", async () => {
-    const handlePluginRequest = createCanonicalizedChannelPluginHandler();
-
-    await withPluginGatewayServer({
-      prefix: "openclaw-plugin-http-auth-fuzz-corpus-test-",
-      resolvedAuth: AUTH_TOKEN,
-      overrides: createProtectedPluginAuthOverrides(handlePluginRequest),
-      run: async (server) => {
-        await expectUnauthorizedVariants({
-          server,
-          variants: buildChannelPathFuzzCorpus(),
-        });
-        expect(handlePluginRequest).not.toHaveBeenCalled();
       },
     });
   });

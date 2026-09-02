@@ -1,3 +1,4 @@
+// Linux OOM score helpers adjust child process OOM priority when supported.
 import fs from "node:fs";
 
 /**
@@ -54,12 +55,14 @@ function defaultShellAvailable(): boolean {
 export type OomWrapOptions = {
   platform?: NodeJS.Platform;
   env?: NodeJS.ProcessEnv;
+  argv0?: string;
   shellAvailable?: () => boolean;
 };
 
 export type OomScoreAdjustedSpawn = {
   command: string;
   args: string[];
+  argv0?: string;
   env: NodeJS.ProcessEnv | undefined;
   wrapped: boolean;
 };
@@ -101,8 +104,21 @@ export function prepareOomScoreAdjustedSpawn(
   options?: OomWrapOptions,
 ): OomScoreAdjustedSpawn {
   const copy = [...args];
-  if (!command || !canUseShellExecCommand(command) || !shouldWrapChildForOomScore(options)) {
-    return { command, args: copy, env: options?.env, wrapped: false };
+  const directSpawn: OomScoreAdjustedSpawn = {
+    command,
+    args: copy,
+    ...(options?.argv0 === undefined ? {} : { argv0: options.argv0 }),
+    env: options?.env,
+    wrapped: false,
+  };
+  if (
+    !command ||
+    !canUseShellExecCommand(command) ||
+    !shouldWrapChildForOomScore(options) ||
+    (options?.argv0 !== undefined && options.argv0 !== command)
+  ) {
+    // POSIX sh cannot preserve an argv0 that differs from the exec pathname.
+    return directSpawn;
   }
   if (isWrapped(command, copy)) {
     return { command, args: copy, env: hardenShellEnv(options?.env), wrapped: true };
@@ -113,31 +129,4 @@ export function prepareOomScoreAdjustedSpawn(
     env: hardenShellEnv(options?.env),
     wrapped: true,
   };
-}
-
-export function wrapArgvForChildOomScoreRaise(
-  argv: readonly string[],
-  options?: OomWrapOptions,
-): string[] {
-  const copy = [...argv];
-  if (copy.length === 0) {
-    return copy;
-  }
-  const spawn = prepareOomScoreAdjustedSpawn(copy[0] ?? "", copy.slice(1), options);
-  return [spawn.command, ...spawn.args];
-}
-
-/**
- * Returns `baseEnv` with shell-init keys stripped when argv will be wrapped.
- * Unchanged (including `undefined`) when no wrap applies, so non-Linux and
- * opted-out paths keep exact inherited-env semantics.
- */
-export function hardenedEnvForChildOomWrap(
-  baseEnv: NodeJS.ProcessEnv | undefined,
-  options?: OomWrapOptions,
-): NodeJS.ProcessEnv | undefined {
-  if (!shouldWrapChildForOomScore(options)) {
-    return baseEnv;
-  }
-  return hardenShellEnv(baseEnv);
 }

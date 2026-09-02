@@ -1,7 +1,34 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, expectTypeOf, it, vi } from "vitest";
+import type { MessageReceipt } from "./channel-outbound.js";
+/**
+ * Tests Discord SDK helpers and Discord-facing compatibility behavior.
+ */
+import type {
+  DiscordComponentSendOpts,
+  DiscordComponentSendResult,
+  OpenClawConfig,
+} from "./discord.js";
 
 const mocks = vi.hoisted(() => {
   const runtimeConfig = { channels: { discord: { token: "token" } } };
+  const componentEditResult = {
+    channelId: "channel",
+    messageId: "message",
+    receipt: {
+      parts: [
+        {
+          index: 0,
+          kind: "card",
+          platformMessageId: "message",
+          raw: { channel: "discord", channelId: "channel", messageId: "message" },
+        },
+      ],
+      platformMessageIds: ["message"],
+      primaryPlatformMessageId: "message",
+      raw: [{ channel: "discord", channelId: "channel", messageId: "message" }],
+      sentAt: 0,
+    },
+  };
   const apiModule = {
     buildDiscordComponentMessage: vi.fn((params: { spec: { text?: string } }) => ({
       components: [],
@@ -37,7 +64,7 @@ const mocks = vi.hoisted(() => {
       cfg: params.cfg,
     })),
     collectDiscordAuditChannelIds: vi.fn(() => ({ channelIds: [], unresolvedChannels: [] })),
-    editDiscordComponentMessage: vi.fn(async () => ({ id: "message" })),
+    editDiscordComponentMessage: vi.fn(async () => componentEditResult),
     listThreadBindingsBySessionKey: vi.fn(() => []),
     registerBuiltDiscordComponentMessage: vi.fn(),
     unbindThreadBindingsBySessionKey: vi.fn(() => []),
@@ -45,9 +72,10 @@ const mocks = vi.hoisted(() => {
 
   return {
     apiModule,
+    componentEditResult,
     runtimeModule,
     runtimeConfig,
-    loadBundledPluginPublicSurfaceModuleSync: vi.fn((params: { artifactBasename: string }) => {
+    loadBundledPluginPublicSurfaceModuleSyncCore: vi.fn((params: { artifactBasename: string }) => {
       if (params.artifactBasename === "runtime-api.js") {
         return runtimeModule;
       }
@@ -66,7 +94,7 @@ vi.mock("./facade-loader.js", () => ({
         },
       },
     ),
-  loadBundledPluginPublicSurfaceModuleSync: mocks.loadBundledPluginPublicSurfaceModuleSync,
+  loadBundledPluginPublicSurfaceModuleSyncCore: mocks.loadBundledPluginPublicSurfaceModuleSyncCore,
 }));
 
 vi.mock("./runtime-config-snapshot.js", () => ({
@@ -80,7 +108,6 @@ describe("discord plugin-sdk facade", () => {
 
     for (const exportName of [
       "DEFAULT_ACCOUNT_ID",
-      "DiscordConfigSchema",
       "PAIRING_APPROVED_MESSAGE",
       "applyAccountNameToChannelSection",
       "autoBindSpawnedDiscordSubagent",
@@ -125,7 +152,7 @@ describe("discord plugin-sdk facade", () => {
     } = await import("./discord.js");
 
     const built = buildDiscordComponentMessage({ spec: { text: "hello" } });
-    await editDiscordComponentMessage(
+    const editResult = await editDiscordComponentMessage(
       "channel",
       "message",
       { text: "edited" },
@@ -145,10 +172,26 @@ describe("discord plugin-sdk facade", () => {
       { text: "edited" },
       { cfg: mocks.runtimeConfig },
     );
+    expect(editResult).toEqual(mocks.componentEditResult);
     expect(mocks.runtimeModule.registerBuiltDiscordComponentMessage).toHaveBeenCalledWith({
       buildResult: built,
       messageId: "message",
     });
+  });
+
+  it("types Discord component edit options and normalized result", () => {
+    type IsCfgOptional = object extends Pick<DiscordComponentSendOpts, "cfg"> ? true : false;
+
+    expectTypeOf<IsCfgOptional>().toEqualTypeOf<false>();
+    expectTypeOf<DiscordComponentSendOpts["cfg"]>().toEqualTypeOf<OpenClawConfig>();
+    expectTypeOf<DiscordComponentSendResult>().toEqualTypeOf<{
+      messageId: string;
+      channelId: string;
+      receipt: MessageReceipt;
+    }>();
+    expectTypeOf<keyof DiscordComponentSendResult>().toEqualTypeOf<
+      "messageId" | "channelId" | "receipt"
+    >();
   });
 
   it("fills runtime config for Discord subagent auto-bind calls without cfg", async () => {
@@ -160,19 +203,16 @@ describe("discord plugin-sdk facade", () => {
       childSessionKey: "child",
     });
 
-    expect(mocks.runtimeModule.autoBindSpawnedDiscordSubagent).toHaveBeenCalledWith(
-      expect.objectContaining({
-        agentId: "agent",
-        cfg: mocks.runtimeConfig,
-        childSessionKey: "child",
-      }),
-    );
-    expect(binding).toEqual(
-      expect.objectContaining({
-        cfg: mocks.runtimeConfig,
-        targetKind: "subagent",
-        targetSessionKey: "child",
-      }),
-    );
+    expect(mocks.runtimeModule.autoBindSpawnedDiscordSubagent).toHaveBeenCalledTimes(1);
+    const callParams = mocks.runtimeModule.autoBindSpawnedDiscordSubagent.mock.calls[0]?.[0];
+    expect(callParams.agentId).toBe("agent");
+    expect(callParams.cfg).toBe(mocks.runtimeConfig);
+    expect(callParams.childSessionKey).toBe("child");
+    if (!binding) {
+      throw new Error("expected Discord subagent binding");
+    }
+    expect(binding.cfg).toBe(mocks.runtimeConfig);
+    expect(binding.targetKind).toBe("subagent");
+    expect(binding.targetSessionKey).toBe("child");
   });
 });

@@ -1,13 +1,15 @@
-import type { OpenClawConfig } from "../config/types.js";
+/** Type contract for the generated installed plugin index persisted on disk. */
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import type { PluginCompatCode } from "./compat/registry.js";
-import type { PluginCandidate } from "./discovery.js";
-import type { PluginInstallSourceInfo } from "./install-source-info.js";
+import type { PluginCandidate, PluginDiscoveryResult } from "./discovery.types.js";
+import type { PluginInstallSourceInfo } from "./install-source-info.types.js";
 import type { InstalledPluginFileSignature } from "./installed-plugin-index-hash.js";
-import type { PluginManifestRecord } from "./manifest-registry.js";
+import type { PluginManifestRecord } from "./manifest-registry.types.js";
 import type { PluginDiagnostic } from "./manifest-types.js";
-import type { PluginPackageChannel } from "./manifest.js";
+import type { OpenClawPackageBuild, PluginPackageChannel } from "./package-manifest.types.js";
 
+/** Schema version for installed plugin index files. */
 export const INSTALLED_PLUGIN_INDEX_VERSION = 1;
 export const INSTALLED_PLUGIN_INDEX_MIGRATION_VERSION = 1;
 export const INSTALLED_PLUGIN_INDEX_WARNING =
@@ -27,8 +29,24 @@ export type InstalledPluginIndexRefreshReason =
 export type InstalledPluginStartupInfo = {
   sidecar: boolean;
   memory: boolean;
-  deferConfiguredChannelFullLoadUntilAfterListen: boolean;
   agentHarnesses: readonly string[];
+  /**
+   * Manifest activation.onConfigPaths copied into the installed index for
+   * pre-manifest startup scoping. Missing on older persisted index files.
+   */
+  configPaths?: readonly string[];
+};
+
+export type InstalledPluginContributionInfo = {
+  channels: readonly string[];
+  channelConfigs: readonly string[];
+  providers: readonly string[];
+  modelCatalogProviders: readonly string[];
+  modelSupportPrefixes: readonly string[];
+  modelSupportPatterns: readonly string[];
+  autoEnableProviderIds: readonly string[];
+  commandAliases: readonly string[];
+  contracts: Readonly<Record<string, readonly string[]>>;
 };
 
 export type InstalledPluginInstallRecordInfo = Pick<
@@ -49,6 +67,14 @@ export type InstalledPluginInstallRecordInfo = Pick<
   | "clawhubPackage"
   | "clawhubFamily"
   | "clawhubChannel"
+  | "clawhubTrustDisposition"
+  | "clawhubTrustScanStatus"
+  | "clawhubTrustModerationState"
+  | "clawhubTrustReasons"
+  | "clawhubTrustPending"
+  | "clawhubTrustStale"
+  | "clawhubTrustCheckedAt"
+  | "clawhubTrustAcknowledgedAt"
   | "artifactKind"
   | "artifactFormat"
   | "npmIntegrity"
@@ -64,10 +90,15 @@ export type InstalledPluginInstallRecordInfo = Pick<
   | "marketplaceName"
   | "marketplaceSource"
   | "marketplacePlugin"
+  | "acceptedSurface"
+  | "acceptedSurfaceHash"
+  | "acceptedSurfaceAt"
+  | "acceptedSurfaceIntegrity"
 >;
 
 export type InstalledPluginPackageChannelInfo = PluginPackageChannel;
 
+/** One manifest-backed plugin entry in the generated installed plugin index. */
 export type InstalledPluginIndexRecord = {
   pluginId: string;
   packageName?: string;
@@ -85,8 +116,12 @@ export type InstalledPluginIndexRecord = {
    */
   packageInstall?: PluginInstallSourceInfo;
   packageChannel?: InstalledPluginPackageChannelInfo;
+  packageBuild?: OpenClawPackageBuild;
   manifestPath: string;
   manifestHash: string;
+  /** Hash of the doctor-contract artifact selected by the runtime resolver. */
+  doctorContractHash?: string;
+  doctorContractFile?: InstalledPluginFileSignature;
   manifestFile?: InstalledPluginFileSignature;
   format?: PluginManifestRecord["format"];
   bundleFormat?: PluginManifestRecord["bundleFormat"];
@@ -104,9 +139,11 @@ export type InstalledPluginIndexRecord = {
   enabledByDefaultOnPlatforms?: readonly string[];
   syntheticAuthRefs?: readonly string[];
   startup: InstalledPluginStartupInfo;
+  contributions?: InstalledPluginContributionInfo;
   compat: readonly PluginCompatCode[];
 };
 
+/** Full installed-index payload used by control-plane plugin registry loading. */
 export type InstalledPluginIndex = {
   version: typeof INSTALLED_PLUGIN_INDEX_VERSION;
   warning?: string;
@@ -115,6 +152,8 @@ export type InstalledPluginIndex = {
   migrationVersion: typeof INSTALLED_PLUGIN_INDEX_MIGRATION_VERSION;
   policyHash: string;
   generatedAtMs: number;
+  /** Selected workspace used to build this index. Missing for omitted and legacy scopes. */
+  workspaceDir?: string;
   refreshReason?: InstalledPluginIndexRefreshReason;
   installRecords: Readonly<Record<string, InstalledPluginInstallRecordInfo>>;
   plugins: readonly InstalledPluginIndexRecord[];
@@ -130,6 +169,7 @@ export type LoadInstalledPluginIndexParams = {
   installRecords?: Record<string, PluginInstallRecord>;
   candidates?: PluginCandidate[];
   diagnostics?: PluginDiagnostic[];
+  discovery?: PluginDiscoveryResult;
   now?: () => Date;
 };
 

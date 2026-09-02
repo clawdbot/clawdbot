@@ -1,28 +1,46 @@
-import { getActiveEmbeddedRunCount } from "../agents/pi-embedded-runner/run-state.js";
-import { getTotalPendingReplies } from "../auto-reply/reply/dispatcher-registry.js";
-import { getTotalQueueSize } from "../process/command-queue.js";
 import {
-  getInspectableActiveTaskRestartBlockers,
-  type ActiveTaskRestartBlocker,
-} from "../tasks/task-registry.maintenance.js";
+  createGatewayActiveWorkSnapshot,
+  type GatewayActiveWorkBlocker,
+  type GatewayActiveWorkInspectors,
+} from "./gateway-active-work.js";
 import { scheduleGatewaySigusr1Restart, type ScheduledRestart } from "./restart.js";
 
-export type SafeGatewayRestartCounts = {
+// Safe restart coordination checks active local work before scheduling SIGUSR1
+// restarts, while still allowing explicit deferral bypasses for operators.
+type SafeGatewayRestartCounts = {
   queueSize: number;
   pendingReplies: number;
   embeddedRuns: number;
+  cronRuns: number;
+  backgroundExecSessions: number;
+  rootRequests: number;
   activeTasks: number;
   totalActive: number;
 };
-
-export type SafeGatewayRestartBlocker = {
-  kind: "queue" | "reply" | "embedded-run" | "task";
-  count: number;
-  message: string;
-  task?: ActiveTaskRestartBlocker;
+type SafeGatewayRestartBlocker = Omit<GatewayActiveWorkBlocker, "kind"> & {
+  kind:
+    | "queue"
+    | "reply"
+    | "embedded-run"
+    | "cron-run"
+    | "background-exec"
+    | "root-request"
+    | "task";
 };
 
-export type SafeGatewayRestartPreflight = {
+type SafeRestartInspectors = Pick<
+  GatewayActiveWorkInspectors,
+  | "getQueueSize"
+  | "getPendingReplies"
+  | "getEmbeddedRuns"
+  | "getCronRuns"
+  | "getBackgroundExecSessions"
+  | "getRootRequests"
+  | "getActiveTasks"
+  | "getTaskBlockers"
+>;
+
+type SafeGatewayRestartPreflight = {
   safe: boolean;
   counts: SafeGatewayRestartCounts;
   blockers: SafeGatewayRestartBlocker[];
@@ -36,102 +54,36 @@ export type SafeGatewayRestartRequestResult = {
   restart: ScheduledRestart;
 };
 
-type SafeRestartInspectors = {
-  getQueueSize: () => number;
-  getPendingReplies: () => number;
-  getEmbeddedRuns: () => number;
-  getActiveTasks: () => number;
-  getTaskBlockers: () => ActiveTaskRestartBlocker[];
-};
-
-const defaultInspectors: SafeRestartInspectors = {
-  getQueueSize: getTotalQueueSize,
-  getPendingReplies: getTotalPendingReplies,
-  getEmbeddedRuns: getActiveEmbeddedRunCount,
-  getActiveTasks: () => getInspectableActiveTaskRestartBlockers().length,
-  getTaskBlockers: getInspectableActiveTaskRestartBlockers,
-};
-
-function normalizeCount(value: number): number {
-  return Number.isFinite(value) && value > 0 ? Math.floor(value) : 0;
-}
-
-function formatTaskBlocker(task: ActiveTaskRestartBlocker): string {
-  return [
-    `taskId=${task.taskId}`,
-    task.runId ? `runId=${task.runId}` : null,
-    `status=${task.status}`,
-    `runtime=${task.runtime}`,
-    task.label ? `label=${task.label}` : null,
-    task.title ? `title=${task.title.slice(0, 80)}` : null,
-  ]
-    .filter((value): value is string => Boolean(value))
-    .join(" ");
-}
-
-function createFallbackTaskBlocker(count: number): SafeGatewayRestartBlocker {
-  return {
-    kind: "task",
-    count,
-    message: `${count} active background task run(s)`,
-  };
-}
-
 export function createSafeGatewayRestartPreflight(
   inspectors: Partial<SafeRestartInspectors> = {},
 ): SafeGatewayRestartPreflight {
-  const resolved = { ...defaultInspectors, ...inspectors };
+  const snapshot = createGatewayActiveWorkSnapshot({
+    ...inspectors,
+    getSessionAdmissions: () => 0,
+    getSessionMutations: () => 0,
+    getChatRuns: () => 0,
+    getQueuedTurns: () => 0,
+    getTerminalPersistence: () => 0,
+    getTerminalSessions: () => 0,
+  });
   const counts: SafeGatewayRestartCounts = {
-    queueSize: normalizeCount(resolved.getQueueSize()),
-    pendingReplies: normalizeCount(resolved.getPendingReplies()),
-    embeddedRuns: normalizeCount(resolved.getEmbeddedRuns()),
-    activeTasks: normalizeCount(resolved.getActiveTasks()),
-    totalActive: 0,
+    queueSize: snapshot.counts.queueSize,
+    pendingReplies: snapshot.counts.pendingReplies,
+    embeddedRuns: snapshot.counts.embeddedRuns,
+    cronRuns: snapshot.counts.cronRuns,
+    backgroundExecSessions: snapshot.counts.backgroundExecSessions,
+    rootRequests: snapshot.counts.rootRequests,
+    activeTasks: snapshot.counts.activeTasks,
+    totalActive:
+      snapshot.counts.queueSize +
+      snapshot.counts.pendingReplies +
+      snapshot.counts.embeddedRuns +
+      snapshot.counts.cronRuns +
+      snapshot.counts.backgroundExecSessions +
+      snapshot.counts.rootRequests +
+      snapshot.counts.activeTasks,
   };
-  counts.totalActive =
-    counts.queueSize + counts.pendingReplies + counts.embeddedRuns + counts.activeTasks;
-
-  const blockers: SafeGatewayRestartBlocker[] = [];
-  if (counts.queueSize > 0) {
-    blockers.push({
-      kind: "queue",
-      count: counts.queueSize,
-      message: `${counts.queueSize} queued or active operation(s)`,
-    });
-  }
-  if (counts.pendingReplies > 0) {
-    blockers.push({
-      kind: "reply",
-      count: counts.pendingReplies,
-      message: `${counts.pendingReplies} pending reply delivery operation(s)`,
-    });
-  }
-  if (counts.embeddedRuns > 0) {
-    blockers.push({
-      kind: "embedded-run",
-      count: counts.embeddedRuns,
-      message: `${counts.embeddedRuns} active embedded run(s)`,
-    });
-  }
-  if (counts.activeTasks > 0) {
-    const taskBlockers = resolved.getTaskBlockers();
-    if (taskBlockers.length === 0) {
-      blockers.push(createFallbackTaskBlocker(counts.activeTasks));
-    } else {
-      for (const task of taskBlockers.slice(0, 8)) {
-        blockers.push({
-          kind: "task",
-          count: 1,
-          message: formatTaskBlocker(task),
-          task,
-        });
-      }
-      const omitted = counts.activeTasks - taskBlockers.length;
-      if (omitted > 0) {
-        blockers.push(createFallbackTaskBlocker(omitted));
-      }
-    }
-  }
+  const blockers = snapshot.blockers as SafeGatewayRestartBlocker[];
 
   const summary =
     blockers.length === 0
@@ -145,21 +97,34 @@ export function createSafeGatewayRestartPreflight(
   };
 }
 
-export function requestSafeGatewayRestart(
+/** Schedule a gateway restart after collecting tracked active-work blockers. */
+export function scheduleSafeGatewayRestart(
   opts: {
     reason?: string;
     delayMs?: number;
+    skipDeferral?: boolean;
+    preservePendingEmitHooks?: boolean;
     inspect?: Partial<SafeRestartInspectors>;
   } = {},
 ): SafeGatewayRestartRequestResult {
   const preflight = createSafeGatewayRestartPreflight(opts.inspect);
+  const skipDeferral = opts.skipDeferral === true;
   const restart = scheduleGatewaySigusr1Restart({
     delayMs: opts.delayMs ?? 0,
     reason: opts.reason ?? "gateway.restart.safe",
+    ...(opts.preservePendingEmitHooks === true || skipDeferral
+      ? { preservePendingEmitHooksOnDeferralBypass: true }
+      : {}),
+    ...(skipDeferral ? { skipDeferral: true } : {}),
   });
+  const status = restart.coalesced
+    ? "coalesced"
+    : skipDeferral || preflight.safe
+      ? "scheduled"
+      : "deferred";
   return {
     ok: true,
-    status: restart.coalesced ? "coalesced" : preflight.safe ? "scheduled" : "deferred",
+    status,
     preflight,
     restart,
   };

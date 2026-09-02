@@ -1,3 +1,4 @@
+// STT live audio tests validate live speech-to-text audio fixtures.
 import {
   expectOpenClawLiveTranscriptMarker,
   normalizeTranscriptForMatch,

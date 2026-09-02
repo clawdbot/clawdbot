@@ -1,15 +1,13 @@
-/**
- * Detects inbound messages that are reflections of assistant-originated content.
- * These patterns indicate internal metadata leaked into a channel and then
- * bounced back as a new inbound message — creating an echo loop.
- */
-
-import { findCodeRegions, isInsideCode } from "openclaw/plugin-sdk/text-runtime";
+// Imessage plugin module implements reflection guard behavior.
+import { findCodeRegions, isInsideCode } from "openclaw/plugin-sdk/text-chunking";
 
 const INTERNAL_SEPARATOR_RE = /(?:#\+){2,}#?/;
 const ASSISTANT_ROLE_MARKER_RE = /\bassistant\s+to\s*=\s*\w+/i;
 // Require closing `>` to avoid false-positives on phrases like "<thought experiment>".
-const THINKING_TAG_RE = /<\s*\/?\s*(?:think(?:ing)?|thought|antthinking)\b[^<>]*>/i;
+// Keep known provider namespaces aligned with the public reasoning-tag contract
+// so reflected hidden reasoning cannot re-enter the agent loop.
+const THINKING_TAG_RE =
+  /<\s*\/?\s*(?:(?:antml:|mm:)?(?:think(?:ing)?|thought)|antthinking)\b[^<>]*>/i;
 const RELEVANT_MEMORIES_TAG_RE = /<\s*\/?\s*relevant[-_]memories\b[^<>]*>/i;
 // Require closing `>` to avoid false-positives on phrases like "<final answer>".
 const FINAL_TAG_RE = /<\s*\/?\s*final\b[^<>]*>/i;

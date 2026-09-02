@@ -30,6 +30,32 @@ class ChatEventTextTest {
   }
 
   @Test
+  fun preservesResponsesTextAndIgnoresTypedNonTextBlocks() {
+    val payload =
+      payload(
+        """
+        {
+          "message": {
+            "role": "assistant",
+            "content": [
+              { "type": "thinking", "text": "private reasoning" },
+              { "type": "output_text", "text": "visible output" },
+              { "type": "input_text", "text": "visible input" },
+              { "type": "tool_result", "text": "tool payload" },
+              { "text": "legacy visible" }
+            ]
+          }
+        }
+        """,
+      )
+
+    assertEquals(
+      "visible output\nvisible input\nlegacy visible",
+      ChatEventText.assistantTextFromPayload(payload),
+    )
+  }
+
+  @Test
   fun extractsPlainStringContent() {
     val payload =
       payload(
@@ -63,6 +89,43 @@ class ChatEventTextTest {
       )
 
     assertNull(ChatEventText.assistantTextFromPayload(payload))
+  }
+
+  @Test
+  fun ignoresMessagesWithMissingRole() {
+    val payload =
+      payload(
+        """
+        {
+          "message": {
+            "content": [
+              { "type": "text", "text": "do not speak" }
+            ]
+          }
+        }
+        """,
+      )
+
+    assertNull(ChatEventText.assistantTextFromPayload(payload))
+  }
+
+  @Test
+  fun ignoresNonCanonicalAssistantRoles() {
+    for (role in listOf("ASSISTANT", " assistant ")) {
+      val payload =
+        payload(
+          """
+          {
+            "message": {
+              "role": "$role",
+              "content": "do not speak"
+            }
+          }
+          """,
+        )
+
+      assertNull(ChatEventText.assistantTextFromPayload(payload))
+    }
   }
 
   private fun payload(source: String): JsonObject = json.parseToJsonElement(source.trimIndent()) as JsonObject

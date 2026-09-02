@@ -1,3 +1,4 @@
+// Whatsapp plugin module implements lifecycle behavior.
 type Listener = (...args: unknown[]) => void;
 
 type OffCapableEmitter = {

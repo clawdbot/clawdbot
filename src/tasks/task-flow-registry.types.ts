@@ -1,25 +1,48 @@
+// Defines managed task-flow registry records and parser helpers.
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
-import type { TaskNotifyPolicy } from "./task-registry.types.js";
+import type { JsonValue, TaskNotifyPolicy } from "./task-registry.types.js";
 
-export type JsonValue =
-  | null
-  | boolean
-  | number
-  | string
-  | JsonValue[]
-  | { [key: string]: JsonValue };
+export type { JsonValue } from "./task-registry.types.js";
 
 export type TaskFlowSyncMode = "task_mirrored" | "managed";
 
-export type TaskFlowStatus =
-  | "queued"
-  | "running"
-  | "waiting"
-  | "blocked"
-  | "succeeded"
-  | "failed"
-  | "cancelled"
-  | "lost";
+/** Lifecycle statuses for multi-step task flows. */
+export const TASK_FLOW_STATUSES = [
+  "queued",
+  "running",
+  "waiting",
+  "blocked",
+  "succeeded",
+  "failed",
+  "cancelled",
+  "lost",
+] as const;
+export type TaskFlowStatus = (typeof TASK_FLOW_STATUSES)[number];
+
+const TASK_FLOW_SYNC_MODES = new Set<TaskFlowSyncMode>(["task_mirrored", "managed"]);
+const TASK_FLOW_STATUS_SET = new Set<TaskFlowStatus>(TASK_FLOW_STATUSES);
+
+function parsePersistedFlowValue<T extends string>(
+  value: unknown,
+  values: ReadonlySet<T>,
+  label: string,
+): T {
+  if (typeof value === "string" && values.has(value as T)) {
+    return value as T;
+  }
+  throw new Error(`Invalid persisted task flow ${label}: ${JSON.stringify(value)}`);
+}
+
+export function parseOptionalTaskFlowSyncMode(value: unknown): TaskFlowSyncMode | undefined {
+  if (value == null || value === "") {
+    return undefined;
+  }
+  return parsePersistedFlowValue(value, TASK_FLOW_SYNC_MODES, "sync mode");
+}
+
+export function parseTaskFlowStatus(value: unknown): TaskFlowStatus {
+  return parsePersistedFlowValue(value, TASK_FLOW_STATUS_SET, "status");
+}
 
 export type TaskFlowRecord = {
   flowId: string;
@@ -41,3 +64,15 @@ export type TaskFlowRecord = {
   updatedAt: number;
   endedAt?: number;
 };
+
+// Managed `blocked` flows remain resumable until endedAt is set; mirrored
+// `blocked` flows carry endedAt because they project a terminal task outcome.
+export function isTerminalTaskFlow(flow: Pick<TaskFlowRecord, "status" | "endedAt">): boolean {
+  return (
+    flow.status === "succeeded" ||
+    (flow.status === "blocked" && flow.endedAt != null) ||
+    flow.status === "failed" ||
+    flow.status === "cancelled" ||
+    flow.status === "lost"
+  );
+}

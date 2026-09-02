@@ -1,9 +1,8 @@
+// Fixture HTTP server for browser CDP snapshot E2E scenarios.
 import http from "node:http";
+import { readTcpPortEnv } from "../env-limits.mjs";
 
-const port = Number(process.env.FIXTURE_PORT);
-if (!Number.isFinite(port) || port <= 0) {
-  throw new Error(`invalid FIXTURE_PORT: ${process.env.FIXTURE_PORT ?? "unset"}`);
-}
+const port = readTcpPortEnv("FIXTURE_PORT");
 
 const html = `<!doctype html>
 <html>

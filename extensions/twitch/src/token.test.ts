@@ -10,7 +10,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../api.js";
-import { resolveTwitchToken, type TwitchTokenSource } from "./token.js";
+import { resolveTwitchToken } from "./token.js";
 
 describe("token", () => {
   const originalAccessToken = process.env.OPENCLAW_TWITCH_ACCESS_TOKEN;
@@ -183,16 +183,6 @@ describe("token", () => {
 
       expect(result.token).toBe("");
       expect(result.source).toBe("none");
-    });
-  });
-
-  describe("TwitchTokenSource type", () => {
-    it("should have correct values", () => {
-      const sources: TwitchTokenSource[] = ["env", "config", "none"];
-
-      expect(sources).toContain("env");
-      expect(sources).toContain("config");
-      expect(sources).toContain("none");
     });
   });
 });

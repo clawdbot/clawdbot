@@ -1,19 +1,27 @@
+// Discord plugin module implements send.guild behavior.
 import type {
+  APIGuild,
   APIGuildMember,
   APIGuildScheduledEvent,
   APIRole,
   APIVoiceState,
   RESTPostAPIGuildScheduledEventJSONBody,
 } from "discord-api-types/v10";
-import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/text-runtime";
+import {
+  resolveExpiresAtMsFromDurationMs,
+  timestampMsToIsoString,
+} from "openclaw/plugin-sdk/number-runtime";
+import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { loadWebMediaRaw } from "openclaw/plugin-sdk/web-media";
 import {
   addGuildMemberRole,
   createGuildBan,
   createGuildScheduledEvent,
   getChannel,
+  getGuild,
   getGuildMember,
   getGuildVoiceState,
+  isUnknownDiscordVoiceStateError,
   listGuildChannels,
   listGuildRoles,
   listGuildScheduledEvents,
@@ -30,6 +38,14 @@ import type {
   DiscordTimeoutTarget,
 } from "./send.types.js";
 import { DISCORD_MAX_EVENT_COVER_BYTES } from "./send.types.js";
+
+type DiscordAbsentVoiceState = Pick<APIVoiceState, "guild_id" | "user_id" | "channel_id"> & {
+  connected: false;
+  absent: true;
+  reason: "unknown_voice_state";
+};
+
+type DiscordVoiceStatus = APIVoiceState | DiscordAbsentVoiceState;
 
 export async function fetchMemberInfoDiscord(
   guildId: string,
@@ -68,6 +84,14 @@ export async function fetchChannelInfoDiscord(
   return await getChannel(rest, channelId);
 }
 
+export async function fetchGuildInfoDiscord(
+  guildId: string,
+  opts: DiscordReactOpts,
+): Promise<APIGuild> {
+  const rest = resolveDiscordRest(opts);
+  return await getGuild(rest, guildId);
+}
+
 export async function listGuildChannelsDiscord(
   guildId: string,
   opts: DiscordReactOpts,
@@ -80,9 +104,23 @@ export async function fetchVoiceStatusDiscord(
   guildId: string,
   userId: string,
   opts: DiscordReactOpts,
-): Promise<APIVoiceState> {
+): Promise<DiscordVoiceStatus> {
   const rest = resolveDiscordRest(opts);
-  return await getGuildVoiceState(rest, guildId, userId);
+  try {
+    return await getGuildVoiceState(rest, guildId, userId);
+  } catch (err) {
+    if (!isUnknownDiscordVoiceStateError(err)) {
+      throw err;
+    }
+    return {
+      guild_id: guildId,
+      user_id: userId,
+      channel_id: null,
+      connected: false,
+      absent: true,
+      reason: "unknown_voice_state",
+    };
+  }
 }
 
 export async function listScheduledEventsDiscord(
@@ -129,7 +167,10 @@ export async function timeoutMemberDiscord(
   let until = payload.until;
   if (!until && payload.durationMinutes) {
     const ms = payload.durationMinutes * 60 * 1000;
-    until = new Date(Date.now() + ms).toISOString();
+    until = timestampMsToIsoString(resolveExpiresAtMsFromDurationMs(ms));
+    if (!until) {
+      throw new Error("Discord timeout duration is outside the supported Date range");
+    }
   }
   return await timeoutGuildMember(rest, payload.guildId, payload.userId, {
     body: { communication_disabled_until: until ?? null },

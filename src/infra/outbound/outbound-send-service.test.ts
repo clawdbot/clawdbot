@@ -1,4 +1,8 @@
+// Covers outbound send service plugin/core routing, media access scoping,
+// transcript mirroring, and poll fallback.
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import {
@@ -32,24 +36,38 @@ const resolveAgentScopedOutboundMediaAccessMock = vi.hoisted(() =>
       requesterSenderName?: string;
       requesterSenderUsername?: string;
       requesterSenderE164?: string;
+      mediaAccess?: {
+        localRoots?: readonly string[];
+        readFile?: (filePath: string) => Promise<Buffer>;
+        workspaceDir?: string;
+      };
+      mediaReadFile?: (filePath: string) => Promise<Buffer>;
     }) => {
-      localRoots: string[];
+      localRoots: readonly string[];
       readFile: (filePath: string) => Promise<Buffer>;
     }
   >((params) => ({
-    localRoots: getAgentScopedMediaLocalRootsForSourcesMock({
-      cfg: params.cfg,
-      agentId: params.agentId,
-      mediaSources: params.mediaSources ?? [],
-    }),
-    readFile: createAgentScopedHostMediaReadFileMock({
-      cfg: params.cfg,
-      agentId: params.agentId,
-    }),
+    localRoots:
+      params.mediaAccess?.localRoots ??
+      getAgentScopedMediaLocalRootsForSourcesMock({
+        cfg: params.cfg,
+        agentId: params.agentId,
+        mediaSources: params.mediaSources ?? [],
+      }),
+    readFile:
+      params.mediaAccess?.readFile ??
+      params.mediaReadFile ??
+      createAgentScopedHostMediaReadFileMock({
+        cfg: params.cfg,
+        agentId: params.agentId,
+      }),
   })),
 );
 const appendAssistantMessageToSessionTranscriptMock = vi.hoisted(() =>
-  vi.fn(async () => ({ ok: true, sessionFile: "x" })),
+  vi.fn(async () => ({
+    ok: true,
+    target: { sessionId: "x", sessionKey: "x", storePath: "/tmp/sessions.json" },
+  })),
 );
 
 const mocks = {
@@ -99,6 +117,43 @@ type ExecuteSendContext = ExecuteSendInput["ctx"];
 let executePollAction: OutboundSendServiceModule["executePollAction"];
 let executeSendAction: OutboundSendServiceModule["executeSendAction"];
 
+type MockCalls = {
+  mock: { calls: unknown[][] };
+};
+
+const requireRecord = createRequireRecord("object", "expected-label");
+const defaultPlugin = createChannelTestPluginBase({ id: "demo-outbound" });
+
+function requireArray(value: unknown, label: string): unknown[] {
+  expect(Array.isArray(value), label).toBe(true);
+  return value as unknown[];
+}
+
+function expectFields(record: Record<string, unknown>, expected: Record<string, unknown>) {
+  for (const [key, value] of Object.entries(expected)) {
+    expect(record[key], key).toEqual(value);
+  }
+}
+
+function expectSingleCallFirstArg(
+  mock: MockCalls,
+  label = "mock first argument",
+): Record<string, unknown> {
+  expect(mock.mock.calls).toHaveLength(1);
+  const [firstArg] = mock.mock.calls[0] ?? [];
+  return requireRecord(firstArg, label);
+}
+
+function expectSingleCallFields(
+  mock: MockCalls,
+  expected: Record<string, unknown>,
+  label?: string,
+): Record<string, unknown> {
+  const firstArg = expectSingleCallFirstArg(mock, label);
+  expectFields(firstArg, expected);
+  return firstArg;
+}
+
 describe("executeSendAction", () => {
   function pluginActionResult(messageId: string) {
     return {
@@ -121,9 +176,10 @@ describe("executeSendAction", () => {
       mediaUrls: string[];
     }>,
   ) {
-    expect(mocks.appendAssistantMessageToSessionTranscript).toHaveBeenCalledWith(
-      expect.objectContaining({ ...expected, config: {} }),
-    );
+    expectSingleCallFields(mocks.appendAssistantMessageToSessionTranscript, {
+      ...expected,
+      config: {},
+    });
   }
 
   async function executePluginMirroredSend(params: {
@@ -138,6 +194,7 @@ describe("executeSendAction", () => {
 
     await executeSendAction({
       ctx: {
+        plugin: defaultPlugin,
         cfg: {},
         channel: "demo-outbound",
         params: { to: "channel:123", message: "hello" },
@@ -157,6 +214,7 @@ describe("executeSendAction", () => {
     overrides: Partial<ExecuteSendContext>,
   ): ExecuteSendContext {
     return {
+      plugin: defaultPlugin,
       cfg: {},
       channel: "demo-outbound",
       params: { media: "/tmp/host.png" },
@@ -203,6 +261,7 @@ describe("executeSendAction", () => {
 
     await executeSendAction({
       ctx: {
+        plugin: defaultPlugin,
         cfg: {},
         channel: "demo-outbound",
         params: {},
@@ -213,14 +272,82 @@ describe("executeSendAction", () => {
       message: "hello",
     });
 
-    expect(mocks.sendMessage).toHaveBeenCalledWith(
-      expect.objectContaining({
-        agentId: "work",
+    expectSingleCallFields(mocks.sendMessage, {
+      agentId: "work",
+      channel: "demo-outbound",
+      to: "channel:123",
+      content: "hello",
+    });
+  });
+
+  it("reports delivery-layer effective text instead of the pre-adapter message", async () => {
+    mocks.dispatchChannelMessageAction.mockResolvedValue(null);
+    mocks.sendMessage.mockImplementationOnce(async (params: unknown) => {
+      const sendParams = requireRecord(params, "send message params");
+      const onDeliveredPayload = sendParams.onDeliveredPayload;
+      expect(onDeliveredPayload).toBeTypeOf("function");
+      (onDeliveredPayload as (payload: { text: string; mediaUrls: string[] }) => void)({
+        text: "[Peer] hello",
+        mediaUrls: [],
+      });
+      return {
         channel: "demo-outbound",
         to: "channel:123",
-        content: "hello",
-      }),
-    );
+        via: "direct" as const,
+        mediaUrl: null,
+        deliveryStatus: "sent" as const,
+      };
+    });
+
+    const result = await executeSendAction({
+      ctx: {
+        plugin: defaultPlugin,
+        cfg: {},
+        channel: "demo-outbound",
+        params: { to: "channel:123", message: "hello" },
+        dryRun: false,
+      },
+      to: "channel:123",
+      message: "hello",
+    });
+
+    expect(result.deliveredText).toBe("[Peer] hello");
+  });
+
+  it("makes required queue persistence force core delivery and lifecycle callbacks", async () => {
+    const onDeliveryIntent = vi.fn();
+    const onDeliveryResult = vi.fn();
+    mocks.dispatchChannelMessageAction.mockResolvedValue(pluginActionResult("msg-plugin"));
+    mocks.sendMessage.mockResolvedValue({
+      channel: "demo-outbound",
+      to: "channel:123",
+      via: "direct",
+      mediaUrl: null,
+      deliveryStatus: "sent",
+    });
+
+    await executeSendAction({
+      ctx: {
+        plugin: defaultPlugin,
+        cfg: {},
+        channel: "demo-outbound",
+        params: { to: "channel:123", message: "hello" },
+        dryRun: false,
+        requireQueuePersistence: true,
+        onDeliveryIntent,
+        onDeliveryResult,
+      },
+      to: "channel:123",
+      message: "hello",
+    });
+
+    expect(mocks.dispatchChannelMessageAction).not.toHaveBeenCalled();
+    expectSingleCallFields(mocks.sendMessage, {
+      queuePolicy: "required",
+      requireUnknownSendReconciliation: false,
+      onDeliveryIntent,
+      onDeliveryResult,
+    });
   });
 
   it("forwards requesterSenderId to sendMessage on core outbound path", async () => {
@@ -234,6 +361,7 @@ describe("executeSendAction", () => {
 
     await executeSendAction({
       ctx: {
+        plugin: defaultPlugin,
         cfg: {},
         channel: "demo-outbound",
         params: {},
@@ -245,11 +373,9 @@ describe("executeSendAction", () => {
       message: "hello",
     });
 
-    expect(mocks.sendMessage).toHaveBeenCalledWith(
-      expect.objectContaining({
-        requesterSenderId: "attacker",
-      }),
-    );
+    expectSingleCallFields(mocks.sendMessage, {
+      requesterSenderId: "attacker",
+    });
   });
 
   it("forwards non-id requester sender fields to sendMessage on core outbound path", async () => {
@@ -263,6 +389,7 @@ describe("executeSendAction", () => {
 
     await executeSendAction({
       ctx: {
+        plugin: defaultPlugin,
         cfg: {},
         channel: "demo-outbound",
         params: {},
@@ -276,13 +403,11 @@ describe("executeSendAction", () => {
       message: "hello",
     });
 
-    expect(mocks.sendMessage).toHaveBeenCalledWith(
-      expect.objectContaining({
-        requesterSenderName: "Alice",
-        requesterSenderUsername: "alice_u",
-        requesterSenderE164: "+15551234567",
-      }),
-    );
+    expectSingleCallFields(mocks.sendMessage, {
+      requesterSenderName: "Alice",
+      requesterSenderUsername: "alice_u",
+      requesterSenderE164: "+15551234567",
+    });
   });
 
   it("forwards requester session context to sendMessage on core outbound path", async () => {
@@ -296,10 +421,12 @@ describe("executeSendAction", () => {
 
     await executeSendAction({
       ctx: {
+        plugin: defaultPlugin,
         cfg: {},
         channel: "demo-outbound",
         params: {},
         sessionKey: "agent:main:directchat:group:ops",
+        conversationType: "channel",
         requesterAccountId: "source-account",
         requesterSenderId: "attacker",
         accountId: "destination-account",
@@ -309,14 +436,13 @@ describe("executeSendAction", () => {
       message: "hello",
     });
 
-    expect(mocks.sendMessage).toHaveBeenCalledWith(
-      expect.objectContaining({
-        requesterSessionKey: "agent:main:directchat:group:ops",
-        requesterAccountId: "source-account",
-        requesterSenderId: "attacker",
-        accountId: "destination-account",
-      }),
-    );
+    expectSingleCallFields(mocks.sendMessage, {
+      requesterSessionKey: "agent:main:directchat:group:ops",
+      conversationType: "channel",
+      requesterAccountId: "source-account",
+      requesterSenderId: "attacker",
+      accountId: "destination-account",
+    });
   });
 
   it("forwards requesterSenderId into outbound media access resolution", async () => {
@@ -324,11 +450,9 @@ describe("executeSendAction", () => {
       requesterSenderId: "attacker",
     });
 
-    expect(mocks.resolveAgentScopedOutboundMediaAccess).toHaveBeenCalledWith(
-      expect.objectContaining({
-        requesterSenderId: "attacker",
-      }),
-    );
+    expectSingleCallFields(mocks.resolveAgentScopedOutboundMediaAccess, {
+      requesterSenderId: "attacker",
+    });
   });
 
   it("forwards non-id requester sender fields into outbound media access resolution", async () => {
@@ -338,13 +462,11 @@ describe("executeSendAction", () => {
       requesterSenderE164: "+15551234567",
     });
 
-    expect(mocks.resolveAgentScopedOutboundMediaAccess).toHaveBeenCalledWith(
-      expect.objectContaining({
-        requesterSenderName: "Alice",
-        requesterSenderUsername: "alice_u",
-        requesterSenderE164: "+15551234567",
-      }),
-    );
+    expectSingleCallFields(mocks.resolveAgentScopedOutboundMediaAccess, {
+      requesterSenderName: "Alice",
+      requesterSenderUsername: "alice_u",
+      requesterSenderE164: "+15551234567",
+    });
   });
 
   it("keeps requester session channel authoritative for media policy", async () => {
@@ -352,12 +474,10 @@ describe("executeSendAction", () => {
       requesterSenderId: "attacker",
     });
 
-    expect(mocks.resolveAgentScopedOutboundMediaAccess).toHaveBeenCalledWith(
-      expect.objectContaining({
-        sessionKey: "agent:main:directchat:group:ops",
-        messageProvider: undefined,
-      }),
-    );
+    expectSingleCallFields(mocks.resolveAgentScopedOutboundMediaAccess, {
+      sessionKey: "agent:main:directchat:group:ops",
+      messageProvider: undefined,
+    });
   });
 
   it("uses requester account for media policy when session context is present", async () => {
@@ -367,12 +487,10 @@ describe("executeSendAction", () => {
       accountId: "destination-account",
     });
 
-    expect(mocks.resolveAgentScopedOutboundMediaAccess).toHaveBeenCalledWith(
-      expect.objectContaining({
-        sessionKey: "agent:main:directchat:group:ops",
-        accountId: "source-account",
-      }),
-    );
+    expectSingleCallFields(mocks.resolveAgentScopedOutboundMediaAccess, {
+      sessionKey: "agent:main:directchat:group:ops",
+      accountId: "source-account",
+    });
   });
 
   it("falls back to destination account for media policy when requester account is missing", async () => {
@@ -381,12 +499,10 @@ describe("executeSendAction", () => {
       accountId: "destination-account",
     });
 
-    expect(mocks.resolveAgentScopedOutboundMediaAccess).toHaveBeenCalledWith(
-      expect.objectContaining({
-        sessionKey: "agent:main:directchat:group:ops",
-        accountId: "destination-account",
-      }),
-    );
+    expectSingleCallFields(mocks.resolveAgentScopedOutboundMediaAccess, {
+      sessionKey: "agent:main:directchat:group:ops",
+      accountId: "destination-account",
+    });
   });
 
   it("falls back to destination account when forwarding requester context to sendMessage", async () => {
@@ -400,6 +516,7 @@ describe("executeSendAction", () => {
 
     await executeSendAction({
       ctx: {
+        plugin: defaultPlugin,
         cfg: {},
         channel: "demo-outbound",
         params: {},
@@ -412,10 +529,335 @@ describe("executeSendAction", () => {
       message: "hello",
     });
 
-    expect(mocks.sendMessage).toHaveBeenCalledWith(
+    expectSingleCallFields(mocks.sendMessage, {
+      requesterSessionKey: "agent:main:directchat:group:ops",
+      requesterAccountId: "destination-account",
+    });
+  });
+
+  it("routes presentation-only sends through the core presentation path", async () => {
+    const presentation: NonNullable<ReplyPayload["presentation"]> = {
+      blocks: [{ type: "text", text: "Presentation-only payload" }],
+    };
+    const plugin: ChannelPlugin = {
+      ...createChannelTestPluginBase({ id: "discord" }),
+      outbound: {
+        deliveryMode: "direct",
+        sendText: async () => ({ channel: "discord", messageId: "msg-test" }),
+      },
+    };
+    mocks.dispatchChannelMessageAction.mockResolvedValue(pluginActionResult("msg-plugin"));
+    mocks.sendMessage.mockResolvedValue({
+      channel: "discord",
+      to: "channel:123",
+      via: "direct",
+      mediaUrl: null,
+    });
+
+    const result = await executeSendAction({
+      ctx: {
+        plugin,
+        cfg: {},
+        channel: "discord",
+        params: { to: "channel:123", presentation },
+        runId: "run-presentation-delivery",
+        dryRun: false,
+        mirror: {
+          sessionKey: "agent:main:discord:channel:123",
+          agentId: "main",
+        },
+      },
+      to: "channel:123",
+      message: "",
+      payload: { text: "", presentation },
+    });
+
+    expect(result.handledBy).toBe("core");
+    expect(mocks.dispatchChannelMessageAction).not.toHaveBeenCalled();
+    const sendArgs = expectSingleCallFields(mocks.sendMessage, {
+      content: "",
+      runId: "run-presentation-delivery",
+      mirror: {
+        sessionKey: "agent:main:discord:channel:123",
+        agentId: "main",
+      },
+    });
+    expect(sendArgs.payloads).toEqual([{ text: "", presentation }]);
+  });
+
+  it("routes text plus charts through the core presentation path", async () => {
+    const presentation: NonNullable<ReplyPayload["presentation"]> = {
+      blocks: [
+        {
+          type: "chart",
+          chartType: "bar",
+          title: "Deployments",
+          categories: ["Mon", "Tue"],
+          series: [{ name: "Production", values: [2, 3] }],
+        },
+      ],
+    };
+    const plugin: ChannelPlugin = {
+      ...createChannelTestPluginBase({ id: "discord" }),
+      outbound: {
+        deliveryMode: "direct",
+        sendText: async () => ({ channel: "discord", messageId: "msg-test" }),
+      },
+    };
+    mocks.dispatchChannelMessageAction.mockResolvedValue(pluginActionResult("msg-plugin"));
+    mocks.sendMessage.mockResolvedValue({
+      channel: "discord",
+      to: "channel:123",
+      via: "direct",
+      mediaUrl: null,
+    });
+
+    await executeSendAction({
+      ctx: {
+        plugin,
+        cfg: {},
+        channel: "discord",
+        params: { to: "channel:123", message: "Deployment trend", presentation },
+        dryRun: false,
+      },
+      to: "channel:123",
+      message: "Deployment trend",
+      payload: { text: "Deployment trend", presentation },
+    });
+
+    expect(mocks.dispatchChannelMessageAction).not.toHaveBeenCalled();
+    const sendArgs = expectSingleCallFields(mocks.sendMessage, {
+      content: "Deployment trend",
+    });
+    expect(sendArgs.payloads).toEqual([{ text: "Deployment trend", presentation }]);
+  });
+
+  it("keeps presentations on the plugin action path when payload preparation declines", async () => {
+    const presentation: NonNullable<ReplyPayload["presentation"]> = {
+      blocks: [{ type: "text", text: "Portable fallback" }],
+    };
+    const nativeComponents = () => [];
+    const prepareSendPayload = vi.fn(() => null);
+    const plugin: ChannelPlugin = {
+      ...createChannelTestPluginBase({ id: "discord" }),
+      actions: {
+        describeMessageTool: () => ({ actions: ["send"] }),
+        prepareSendPayload,
+        handleAction: async () => ({ content: [], details: { ok: true } }),
+      },
+      outbound: {
+        deliveryMode: "direct",
+        sendText: async () => ({ channel: "discord", messageId: "msg-test" }),
+      },
+    };
+    mocks.dispatchChannelMessageAction.mockResolvedValue(pluginActionResult("msg-plugin"));
+
+    const result = await executeSendAction({
+      ctx: {
+        plugin,
+        cfg: {},
+        channel: "discord",
+        params: { to: "channel:123", components: nativeComponents, presentation },
+        dryRun: false,
+        mirror: {
+          sessionKey: "agent:main:discord:channel:123",
+          agentId: "main",
+          text: "Summary",
+        },
+      },
+      to: "channel:123",
+      message: "Summary",
+      payload: { text: "Summary", presentation },
+    });
+
+    expect(result.handledBy).toBe("plugin");
+    expect(prepareSendPayload).toHaveBeenCalledOnce();
+    expect(mocks.sendMessage).not.toHaveBeenCalled();
+    const actionCtx = expectSingleCallFirstArg(mocks.dispatchChannelMessageAction);
+    const actionParams = requireRecord(actionCtx.params, "plugin action params");
+    expect(actionParams.components).toBe(nativeComponents);
+    expectFields(actionParams, {
+      message: "Summary\n\nPortable fallback",
+      presentation,
+    });
+    expectMirrorWrite({
+      sessionKey: "agent:main:discord:channel:123",
+      agentId: "main",
+      text: "Summary\n\nPortable fallback",
+    });
+  });
+
+  it("materializes chart data for legacy gateway delivery", async () => {
+    const presentation: NonNullable<ReplyPayload["presentation"]> = {
+      blocks: [
+        {
+          type: "chart",
+          chartType: "bar",
+          title: "Deployments",
+          categories: ["Mon", "Tue"],
+          series: [{ name: "Production", values: [2, 3] }],
+        },
+      ],
+    };
+    const plugin: ChannelPlugin = {
+      ...createChannelTestPluginBase({ id: "whatsapp" }),
+      actions: {
+        describeMessageTool: () => ({ actions: ["send"] }),
+        handleAction: async () => ({ content: [], details: { ok: true } }),
+      },
+      outbound: {
+        deliveryMode: "gateway",
+        sendText: async () => ({ channel: "whatsapp", messageId: "msg-test" }),
+      },
+    };
+    mocks.sendMessage.mockResolvedValue({
+      channel: "whatsapp",
+      to: "+15551234567",
+      via: "gateway",
+      mediaUrl: null,
+    });
+
+    await executeSendAction({
+      ctx: {
+        plugin,
+        cfg: {},
+        channel: "whatsapp",
+        params: { to: "+15551234567", message: "Deployment trend", presentation },
+        dryRun: false,
+      },
+      to: "+15551234567",
+      message: "Deployment trend",
+      payload: { text: "Deployment trend", presentation },
+    });
+
+    expect(mocks.dispatchChannelMessageAction).not.toHaveBeenCalled();
+    expectSingleCallFields(mocks.sendMessage, {
+      content: "Deployment trend\n\nDeployments (bar chart)\n- Production: Mon: 2; Tue: 3",
+      payloads: [{ text: "Deployment trend", presentation }],
+    });
+  });
+
+  it("materializes chart data for action-only plugins", async () => {
+    const presentation: NonNullable<ReplyPayload["presentation"]> = {
+      blocks: [
+        {
+          type: "chart",
+          chartType: "pie",
+          title: "Revenue mix",
+          segments: [
+            { label: "Product", value: 60 },
+            { label: "Services", value: 40 },
+          ],
+        },
+      ],
+    };
+    const plugin: ChannelPlugin = {
+      ...createChannelTestPluginBase({ id: "discord" }),
+      actions: {
+        describeMessageTool: () => ({ actions: ["send"], capabilities: ["presentation"] }),
+        handleAction: async () => ({ content: [], details: { ok: true } }),
+      },
+    };
+    mocks.dispatchChannelMessageAction.mockResolvedValue(pluginActionResult("msg-plugin"));
+
+    const result = await executeSendAction({
+      ctx: {
+        plugin,
+        cfg: {},
+        channel: "discord",
+        params: { to: "channel:123", presentation },
+        dryRun: false,
+      },
+      to: "channel:123",
+      message: "",
+      payload: { text: "", presentation },
+    });
+
+    expect(result.handledBy).toBe("plugin");
+    expect(mocks.sendMessage).not.toHaveBeenCalled();
+    const actionCtx = expectSingleCallFirstArg(mocks.dispatchChannelMessageAction);
+    expectFields(requireRecord(actionCtx.params, "plugin action params"), {
+      message: "Revenue mix (pie chart)\n- Product: 60\n- Services: 40",
+      presentation,
+    });
+  });
+
+  it("keeps non-presentation sends on the plugin action path", async () => {
+    mocks.dispatchChannelMessageAction.mockResolvedValue(pluginActionResult("msg-plugin"));
+
+    const result = await executeSendAction({
+      ctx: {
+        plugin: defaultPlugin,
+        cfg: {},
+        channel: "demo-outbound",
+        params: { to: "channel:123", message: "hello" },
+        dryRun: false,
+      },
+      to: "channel:123",
+      message: "hello",
+      payload: { text: "hello" },
+    });
+
+    expect(result.handledBy).toBe("plugin");
+    expect(result.deliveredText).toBeUndefined();
+    expect(mocks.dispatchChannelMessageAction).toHaveBeenCalledTimes(1);
+    expect(mocks.sendMessage).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    {
+      label: "implicit first reply",
+      reply: { source: "implicit", replyToId: "source-1", mode: "first" } as const,
+    },
+    {
+      label: "explicit reply while configured replies are off",
+      reply: { source: "explicit", replyToId: "explicit-1" } as const,
+    },
+  ])("passes the host-owned $label through direct plugin fallback", async ({ reply }) => {
+    const prepareSendPayload = vi.fn(({ ctx }) => {
+      expect(ctx.reply).toEqual(reply);
+      return null;
+    });
+    const handleAction = vi.fn(async (ctx) => {
+      expect(ctx.params.components).toBeTypeOf("function");
+      return { content: [], details: { ok: true } };
+    });
+    const plugin: ChannelPlugin = {
+      ...createChannelTestPluginBase({ id: "discord" }),
+      outbound: {
+        deliveryMode: "direct",
+        sendText: async () => ({ channel: "discord", messageId: "unused-core-send" }),
+      },
+      actions: {
+        describeMessageTool: () => ({ actions: ["send"], capabilities: [] }),
+        prepareSendPayload,
+        handleAction,
+      },
+    };
+    mocks.dispatchChannelMessageAction.mockImplementation(async (ctx) => {
+      return await plugin.actions?.handleAction?.(ctx);
+    });
+
+    const components = () => [];
+    const result = await executeSendAction({
+      ctx: {
+        plugin,
+        cfg: {},
+        channel: "discord",
+        params: { to: "channel:123", message: "hello", components, replyTo: reply.replyToId },
+        dryRun: false,
+      },
+      to: "channel:123",
+      message: "hello",
+      reply,
+    });
+
+    expect(result.handledBy).toBe("plugin");
+    expect(prepareSendPayload).toHaveBeenCalledOnce();
+    expect(handleAction).toHaveBeenCalledWith(
       expect.objectContaining({
-        requesterSessionKey: "agent:main:directchat:group:ops",
-        requesterAccountId: "destination-account",
+        params: expect.objectContaining({ components, replyTo: reply.replyToId }),
+        reply,
       }),
     );
   });
@@ -425,6 +867,7 @@ describe("executeSendAction", () => {
 
     const result = await executePollAction({
       ctx: {
+        plugin: defaultPlugin,
         cfg: {},
         channel: "demo-outbound",
         params: {},
@@ -450,6 +893,7 @@ describe("executeSendAction", () => {
 
     const result = await executePollAction({
       ctx: {
+        plugin: defaultPlugin,
         cfg: {},
         channel: "demo-outbound",
         params: {
@@ -473,6 +917,7 @@ describe("executeSendAction", () => {
 
     await executeSendAction({
       ctx: {
+        plugin: defaultPlugin,
         cfg: {},
         channel: "demo-outbound",
         params: { to: "channel:123", message: "hello" },
@@ -488,12 +933,10 @@ describe("executeSendAction", () => {
       agentId: "agent-1",
       mediaSources: [],
     });
-    expect(mocks.dispatchChannelMessageAction).toHaveBeenCalledWith(
-      expect.objectContaining({
-        mediaLocalRoots: ["/tmp/agent-roots"],
-        mediaReadFile: mocks.createAgentScopedHostMediaReadFile.mock.results[0]?.value,
-      }),
-    );
+    expectSingleCallFields(mocks.dispatchChannelMessageAction, {
+      mediaLocalRoots: ["/tmp/agent-roots"],
+      mediaReadFile: mocks.createAgentScopedHostMediaReadFile.mock.results[0]?.value,
+    });
   });
 
   it("passes concrete media sources when widening plugin dispatch roots", async () => {
@@ -501,6 +944,7 @@ describe("executeSendAction", () => {
 
     await executeSendAction({
       ctx: {
+        plugin: defaultPlugin,
         cfg: {},
         channel: "demo-outbound",
         params: {
@@ -520,6 +964,76 @@ describe("executeSendAction", () => {
       cfg: {},
       agentId: "agent-1",
       mediaSources: ["/Users/peter/Pictures/photo.png"],
+    });
+  });
+
+  it("passes mediaUrls and structured attachment sources when widening send roots", async () => {
+    mocks.dispatchChannelMessageAction.mockResolvedValue(pluginActionResult("msg-plugin"));
+
+    await executeSendAction({
+      ctx: {
+        plugin: defaultPlugin,
+        cfg: {},
+        channel: "demo-outbound",
+        params: {
+          to: "channel:123",
+          message: "hello",
+          mediaUrls: ["/workspace/Pictures/chart.png", ""],
+          attachments: [{ filePath: "/workspace/Documents/report.md" }],
+        },
+        agentId: "agent-1",
+        dryRun: false,
+      },
+      to: "channel:123",
+      message: "hello",
+      mediaUrls: ["/workspace/Pictures/chart.png"],
+    });
+
+    expect(mocks.getAgentScopedMediaLocalRootsForSources).toHaveBeenCalledWith({
+      cfg: {},
+      agentId: "agent-1",
+      mediaSources: ["/workspace/Pictures/chart.png", "/workspace/Documents/report.md"],
+    });
+  });
+
+  it("preserves explicit plugin send media access roots", async () => {
+    const explicitReadFile = vi.fn(async () => Buffer.from("explicit capability"));
+    mocks.dispatchChannelMessageAction.mockResolvedValue(pluginActionResult("msg-plugin"));
+
+    await executeSendAction({
+      ctx: {
+        plugin: defaultPlugin,
+        cfg: {},
+        channel: "demo-outbound",
+        params: {
+          to: "channel:123",
+          message: "hello",
+          mediaUrls: ["/workspace/Pictures/chart.png"],
+        },
+        mediaAccess: {
+          localRoots: ["/explicit-root"],
+          readFile: explicitReadFile,
+        },
+        agentId: "agent-1",
+        dryRun: false,
+      },
+      to: "channel:123",
+      message: "hello",
+      mediaUrls: ["/workspace/Pictures/chart.png"],
+    });
+
+    const resolveArg = expectSingleCallFirstArg(
+      mocks.resolveAgentScopedOutboundMediaAccess,
+      "media access resolution",
+    );
+    const passedMediaAccess = requireRecord(resolveArg.mediaAccess, "source-scoped media access");
+    expect(resolveArg.mediaSources).toEqual(["/workspace/Pictures/chart.png"]);
+    expect(passedMediaAccess.localRoots).toEqual(["/explicit-root"]);
+    expect(passedMediaAccess.readFile).toBe(explicitReadFile);
+    expect(mocks.getAgentScopedMediaLocalRootsForSources).not.toHaveBeenCalled();
+    expectSingleCallFields(mocks.dispatchChannelMessageAction, {
+      mediaLocalRoots: ["/explicit-root"],
+      mediaReadFile: explicitReadFile,
     });
   });
 
@@ -563,9 +1077,11 @@ describe("executeSendAction", () => {
 
     await executeSendAction({
       ctx: {
+        plugin: defaultPlugin,
         cfg: {},
         channel: "demo-outbound",
         params: { to: "channel:123", message: "hello" },
+        idempotencyKey: "stable-send-key",
         dryRun: true,
         silent: true,
         gateway: {
@@ -581,22 +1097,24 @@ describe("executeSendAction", () => {
     });
 
     expect(mocks.dispatchChannelMessageAction).not.toHaveBeenCalled();
-    expect(mocks.sendMessage).toHaveBeenCalledWith(
-      expect.objectContaining({
-        to: "channel:123",
-        content: "hello",
-        dryRun: true,
-        silent: true,
-        gateway: expect.objectContaining({
-          url: "http://127.0.0.1:18789",
-          token: "tok",
-          timeoutMs: 5000,
-        }),
-      }),
-    );
+    const sendArgs = expectSingleCallFields(mocks.sendMessage, {
+      to: "channel:123",
+      content: "hello",
+      dryRun: true,
+      silent: true,
+      idempotencyKey: "stable-send-key",
+    });
+    expectFields(requireRecord(sendArgs.gateway, "send gateway"), {
+      url: "http://127.0.0.1:18789",
+      token: "tok",
+      timeoutMs: 5000,
+    });
   });
 
   it("routes prepared plugin send payloads through core best-effort delivery by default", async () => {
+    const presentation: NonNullable<ReplyPayload["presentation"]> = {
+      blocks: [{ type: "text", text: "Prepared presentation" }],
+    };
     const prepareSendPayload = vi.fn(({ payload }) => ({
       ...payload,
       channelData: { prepared: true },
@@ -610,7 +1128,6 @@ describe("executeSendAction", () => {
       },
       outbound: { deliveryMode: "direct" },
     };
-    setActivePluginRegistry(createTestRegistry([{ pluginId: "discord", plugin, source: "test" }]));
     mocks.sendMessage.mockResolvedValue({
       channel: "discord",
       to: "channel:123",
@@ -620,24 +1137,45 @@ describe("executeSendAction", () => {
 
     await executeSendAction({
       ctx: {
+        plugin,
         cfg: {},
         channel: "discord",
         params: { to: "channel:123", message: "hello" },
         dryRun: false,
+        sessionKey: "discord-session",
+        inboundEventKind: "room_event",
+        conversationReadOrigin: "delegated",
       },
       to: "channel:123",
       message: "hello",
+      payload: { text: "hello", presentation },
+      reply: { replyToId: "reply-1", source: "explicit" },
+      threadId: "thread-1",
     });
 
-    expect(prepareSendPayload).toHaveBeenCalled();
-    expect(mocks.dispatchChannelMessageAction).not.toHaveBeenCalled();
-    expect(mocks.sendMessage).toHaveBeenCalledWith(
+    expect(prepareSendPayload).toHaveBeenCalledWith(
       expect.objectContaining({
-        channel: "discord",
-        queuePolicy: "best_effort",
-        payloads: [expect.objectContaining({ channelData: { prepared: true } })],
+        ctx: expect.objectContaining({
+          sessionKey: "discord-session",
+          inboundEventKind: "room_event",
+        }),
+        replyToIdSource: "explicit",
       }),
     );
+    expect(mocks.dispatchChannelMessageAction).not.toHaveBeenCalled();
+    const sendArgs = expectSingleCallFields(mocks.sendMessage, {
+      channel: "discord",
+      queuePolicy: "best_effort",
+      reply: { replyToId: "reply-1", source: "explicit" },
+      threadId: "thread-1",
+      conversationReadOrigin: "delegated",
+    });
+    expect(sendArgs.preparedPlugin).toBe(plugin);
+    const [payload] = requireArray(sendArgs.payloads, "send payloads");
+    expectFields(requireRecord(payload, "prepared payload"), {
+      channelData: { prepared: true },
+      presentation,
+    });
   });
 
   it("uses required core delivery only when the send action opts out of best-effort", async () => {
@@ -654,7 +1192,6 @@ describe("executeSendAction", () => {
       },
       outbound: { deliveryMode: "direct" },
     };
-    setActivePluginRegistry(createTestRegistry([{ pluginId: "discord", plugin, source: "test" }]));
     mocks.sendMessage.mockResolvedValue({
       channel: "discord",
       to: "channel:123",
@@ -664,6 +1201,7 @@ describe("executeSendAction", () => {
 
     await executeSendAction({
       ctx: {
+        plugin,
         cfg: {},
         channel: "discord",
         params: { to: "channel:123", message: "hello" },
@@ -674,12 +1212,10 @@ describe("executeSendAction", () => {
       bestEffort: false,
     });
 
-    expect(mocks.sendMessage).toHaveBeenCalledWith(
-      expect.objectContaining({
-        channel: "discord",
-        queuePolicy: "required",
-      }),
-    );
+    expectSingleCallFields(mocks.sendMessage, {
+      channel: "discord",
+      queuePolicy: "required",
+    });
   });
 
   it("forwards poll args to sendPoll on core outbound path", async () => {
@@ -697,15 +1233,19 @@ describe("executeSendAction", () => {
 
     await executePollAction({
       ctx: {
+        plugin: defaultPlugin,
         cfg: {},
         channel: "demo-outbound",
         params: {},
         accountId: "acc-1",
+        sessionKey: "agent:main:demo-outbound:channel:123",
+        inboundEventKind: "room_event",
         dryRun: false,
       },
       resolveCorePoll: () => ({
         to: "channel:123",
         question: "Lunch?",
+        content: "Vote now",
         options: ["Pizza", "Sushi"],
         maxSelections: 1,
         durationSeconds: 300,
@@ -714,19 +1254,20 @@ describe("executeSendAction", () => {
       }),
     });
 
-    expect(mocks.sendPoll).toHaveBeenCalledWith(
-      expect.objectContaining({
-        channel: "demo-outbound",
-        accountId: "acc-1",
-        to: "channel:123",
-        question: "Lunch?",
-        options: ["Pizza", "Sushi"],
-        maxSelections: 1,
-        durationSeconds: 300,
-        threadId: "thread-1",
-        isAnonymous: true,
-      }),
-    );
+    expectSingleCallFields(mocks.sendPoll, {
+      channel: "demo-outbound",
+      accountId: "acc-1",
+      to: "channel:123",
+      question: "Lunch?",
+      content: "Vote now",
+      options: ["Pizza", "Sushi"],
+      maxSelections: 1,
+      durationSeconds: 300,
+      threadId: "thread-1",
+      isAnonymous: true,
+      sessionKey: "agent:main:demo-outbound:channel:123",
+      inboundEventKind: "room_event",
+    });
   });
 
   it("skips plugin dispatch during dry-run polls and forwards durationHours + silent", async () => {
@@ -743,9 +1284,11 @@ describe("executeSendAction", () => {
 
     await executePollAction({
       ctx: {
+        plugin: defaultPlugin,
         cfg: {},
         channel: "demo-outbound",
         params: {},
+        idempotencyKey: "stable-poll-key",
         dryRun: true,
         silent: true,
         gateway: {
@@ -766,19 +1309,19 @@ describe("executeSendAction", () => {
     });
 
     expect(mocks.dispatchChannelMessageAction).not.toHaveBeenCalled();
-    expect(mocks.sendPoll).toHaveBeenCalledWith(
-      expect.objectContaining({
-        to: "channel:123",
-        question: "Lunch?",
-        durationHours: 6,
-        dryRun: true,
-        silent: true,
-        gateway: expect.objectContaining({
-          url: "http://127.0.0.1:18789",
-          token: "tok",
-          timeoutMs: 5000,
-        }),
-      }),
-    );
+    const pollArgs = expectSingleCallFields(mocks.sendPoll, {
+      to: "channel:123",
+      question: "Lunch?",
+      durationHours: 6,
+      dryRun: true,
+      silent: true,
+      idempotencyKey: "stable-poll-key",
+    });
+    expectFields(requireRecord(pollArgs.gateway, "poll gateway"), {
+      url: "http://127.0.0.1:18789",
+      token: "tok",
+      timeoutMs: 5000,
+    });
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

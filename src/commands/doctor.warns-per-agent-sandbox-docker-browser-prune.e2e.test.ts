@@ -1,3 +1,4 @@
+// Doctor sandbox browser prune e2e tests cover per-agent stale browser artifacts and warning output.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -50,7 +51,7 @@ describe("doctor command", () => {
       }
       const normalized = message.replace(/\s+/g, " ").trim();
       return (
-        normalized.includes('agents.list (id "work") sandbox docker') &&
+        normalized.includes("agents.entries.work sandbox docker") &&
         normalized.includes('scope resolves to "shared"')
       );
     });
@@ -81,7 +82,7 @@ describe("doctor command", () => {
 
     await doctorCommand(createDoctorRuntime(), { nonInteractive: true });
 
-    const noteTitles = terminalNoteMock.mock.calls.map(([_, title]) => title);
+    const noteTitles = terminalNoteMock.mock.calls.map(([, title]) => title);
     expect(noteTitles).not.toContain("Extra workspace");
 
     homedirSpy.mockRestore();

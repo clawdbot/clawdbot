@@ -1,8 +1,12 @@
+// Guards config writes that are disallowed in Nix-managed installs.
 import { resolveIsNixMode } from "./paths.js";
 
-export const NIX_OPENCLAW_AGENT_FIRST_URL = "https://github.com/openclaw/nix-openclaw#quick-start";
-export const OPENCLAW_NIX_OVERVIEW_URL = "https://docs.openclaw.ai/install/nix";
+/** Agent-first Nix install docs shown when runtime config writes are blocked. */
+const NIX_OPENCLAW_AGENT_FIRST_URL = "https://github.com/openclaw/nix-openclaw#quick-start";
+/** Public OpenClaw Nix overview shown with immutable-config errors. */
+const OPENCLAW_NIX_OVERVIEW_URL = "https://docs.openclaw.ai/install/nix";
 
+/** Error thrown when a mutating config path is attempted while Nix owns config state. */
 export class NixModeConfigMutationError extends Error {
   readonly code = "OPENCLAW_NIX_MODE_CONFIG_IMMUTABLE";
 
@@ -12,7 +16,8 @@ export class NixModeConfigMutationError extends Error {
   }
 }
 
-export function formatNixModeConfigMutationMessage(params: { configPath?: string } = {}): string {
+/** Build the operator-facing immutable-config message for Nix-managed installs. */
+function formatNixModeConfigMutationMessage(params: { configPath?: string } = {}): string {
   return [
     "Config is managed by Nix (`OPENCLAW_NIX_MODE=1`), so OpenClaw treats openclaw.json as immutable.",
     "This usually means nix-openclaw, the first-party Nix distribution, or another Nix-managed package set this mode.",
@@ -24,6 +29,7 @@ export function formatNixModeConfigMutationMessage(params: { configPath?: string
   ].join("\n");
 }
 
+/** Throw when the current environment marks OpenClaw config as Nix-managed and immutable. */
 export function assertConfigWriteAllowedInCurrentMode(
   params: {
     configPath?: string;
@@ -33,5 +39,6 @@ export function assertConfigWriteAllowedInCurrentMode(
   if (!resolveIsNixMode(params.env)) {
     return;
   }
+  // In Nix mode, all writes must happen in the declarative source and then rebuild.
   throw new NixModeConfigMutationError({ configPath: params.configPath });
 }

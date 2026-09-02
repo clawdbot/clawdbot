@@ -1,15 +1,15 @@
+// Webhooks plugin module implements http behavior.
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
-import { z } from "openclaw/plugin-sdk/zod";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { z } from "zod";
 import type { PluginRuntime } from "../api.js";
 import {
   createFixedWindowRateLimiter,
   createWebhookInFlightLimiter,
   readJsonWebhookBodyOrReject,
   resolveRequestClientIp,
-  resolveConfiguredSecretInputString,
-  resolveWebhookTargetWithAuthOrReject,
+  resolveWebhookTargetWithAuthOrRejectSync,
   withResolvedWebhookRequestPipeline,
   WEBHOOK_IN_FLIGHT_DEFAULTS,
   WEBHOOK_RATE_LIMIT_DEFAULTS,
@@ -20,107 +20,86 @@ import type { WebhookSecretInput } from "./config.js";
 
 type BoundTaskFlowRuntime = ReturnType<PluginRuntime["tasks"]["managedFlows"]["bindSession"]>;
 
-type JsonValue = null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue };
-
-const jsonValueSchema: z.ZodType<JsonValue> = z.lazy(() =>
-  z.union([
-    z.null(),
-    z.boolean(),
-    z.number().finite(),
-    z.string(),
-    z.array(jsonValueSchema),
-    z.record(z.string(), jsonValueSchema),
-  ]),
-);
+const jsonValueSchema = z.json();
+type JsonValue = z.infer<typeof jsonValueSchema>;
 
 const nullableStringSchema = z.string().trim().min(1).nullable().optional();
 
-const createFlowRequestSchema = z
-  .object({
-    action: z.literal("create_flow"),
-    controllerId: z.string().trim().min(1).optional(),
-    goal: z.string().trim().min(1),
-    status: z.enum(["queued", "running", "waiting", "blocked"]).optional(),
-    notifyPolicy: z.enum(["done_only", "state_changes", "silent"]).optional(),
-    currentStep: nullableStringSchema,
-    stateJson: jsonValueSchema.nullable().optional(),
-    waitJson: jsonValueSchema.nullable().optional(),
-  })
-  .strict();
+const createFlowRequestSchema = z.strictObject({
+  action: z.literal("create_flow"),
+  controllerId: z.string().trim().min(1).optional(),
+  goal: z.string().trim().min(1),
+  status: z.enum(["queued", "running", "waiting", "blocked"]).optional(),
+  notifyPolicy: z.enum(["done_only", "state_changes", "silent"]).optional(),
+  currentStep: nullableStringSchema,
+  stateJson: jsonValueSchema.nullable().optional(),
+  waitJson: jsonValueSchema.nullable().optional(),
+});
 
-const getFlowRequestSchema = z
-  .object({ action: z.literal("get_flow"), flowId: z.string().trim().min(1) })
-  .strict();
-const listFlowsRequestSchema = z.object({ action: z.literal("list_flows") }).strict();
-const findLatestFlowRequestSchema = z.object({ action: z.literal("find_latest_flow") }).strict();
-const resolveFlowRequestSchema = z
-  .object({ action: z.literal("resolve_flow"), token: z.string().trim().min(1) })
-  .strict();
-const getTaskSummaryRequestSchema = z
-  .object({ action: z.literal("get_task_summary"), flowId: z.string().trim().min(1) })
-  .strict();
+const getFlowRequestSchema = z.strictObject({
+  action: z.literal("get_flow"),
+  flowId: z.string().trim().min(1),
+});
+const listFlowsRequestSchema = z.strictObject({ action: z.literal("list_flows") });
+const findLatestFlowRequestSchema = z.strictObject({ action: z.literal("find_latest_flow") });
+const resolveFlowRequestSchema = z.strictObject({
+  action: z.literal("resolve_flow"),
+  token: z.string().trim().min(1),
+});
+const getTaskSummaryRequestSchema = z.strictObject({
+  action: z.literal("get_task_summary"),
+  flowId: z.string().trim().min(1),
+});
 
-const setWaitingRequestSchema = z
-  .object({
-    action: z.literal("set_waiting"),
-    flowId: z.string().trim().min(1),
-    expectedRevision: z.number().int().nonnegative(),
-    currentStep: nullableStringSchema,
-    stateJson: jsonValueSchema.nullable().optional(),
-    waitJson: jsonValueSchema.nullable().optional(),
-    blockedTaskId: nullableStringSchema,
-    blockedSummary: nullableStringSchema,
-  })
-  .strict();
+const setWaitingRequestSchema = z.strictObject({
+  action: z.literal("set_waiting"),
+  flowId: z.string().trim().min(1),
+  expectedRevision: z.number().int().nonnegative(),
+  currentStep: nullableStringSchema,
+  stateJson: jsonValueSchema.nullable().optional(),
+  waitJson: jsonValueSchema.nullable().optional(),
+  blockedTaskId: nullableStringSchema,
+  blockedSummary: nullableStringSchema,
+});
 
-const resumeFlowRequestSchema = z
-  .object({
-    action: z.literal("resume_flow"),
-    flowId: z.string().trim().min(1),
-    expectedRevision: z.number().int().nonnegative(),
-    status: z.enum(["queued", "running"]).optional(),
-    currentStep: nullableStringSchema,
-    stateJson: jsonValueSchema.nullable().optional(),
-  })
-  .strict();
+const resumeFlowRequestSchema = z.strictObject({
+  action: z.literal("resume_flow"),
+  flowId: z.string().trim().min(1),
+  expectedRevision: z.number().int().nonnegative(),
+  status: z.enum(["queued", "running"]).optional(),
+  currentStep: nullableStringSchema,
+  stateJson: jsonValueSchema.nullable().optional(),
+});
 
-const finishFlowRequestSchema = z
-  .object({
-    action: z.literal("finish_flow"),
-    flowId: z.string().trim().min(1),
-    expectedRevision: z.number().int().nonnegative(),
-    stateJson: jsonValueSchema.nullable().optional(),
-  })
-  .strict();
+const finishFlowRequestSchema = z.strictObject({
+  action: z.literal("finish_flow"),
+  flowId: z.string().trim().min(1),
+  expectedRevision: z.number().int().nonnegative(),
+  stateJson: jsonValueSchema.nullable().optional(),
+});
 
-const failFlowRequestSchema = z
-  .object({
-    action: z.literal("fail_flow"),
-    flowId: z.string().trim().min(1),
-    expectedRevision: z.number().int().nonnegative(),
-    stateJson: jsonValueSchema.nullable().optional(),
-    blockedTaskId: nullableStringSchema,
-    blockedSummary: nullableStringSchema,
-  })
-  .strict();
+const failFlowRequestSchema = z.strictObject({
+  action: z.literal("fail_flow"),
+  flowId: z.string().trim().min(1),
+  expectedRevision: z.number().int().nonnegative(),
+  stateJson: jsonValueSchema.nullable().optional(),
+  blockedTaskId: nullableStringSchema,
+  blockedSummary: nullableStringSchema,
+});
 
-const requestCancelRequestSchema = z
-  .object({
-    action: z.literal("request_cancel"),
-    flowId: z.string().trim().min(1),
-    expectedRevision: z.number().int().nonnegative(),
-  })
-  .strict();
+const requestCancelRequestSchema = z.strictObject({
+  action: z.literal("request_cancel"),
+  flowId: z.string().trim().min(1),
+  expectedRevision: z.number().int().nonnegative(),
+});
 
-const cancelFlowRequestSchema = z
-  .object({
-    action: z.literal("cancel_flow"),
-    flowId: z.string().trim().min(1),
-  })
-  .strict();
+const cancelFlowRequestSchema = z.strictObject({
+  action: z.literal("cancel_flow"),
+  flowId: z.string().trim().min(1),
+});
 
 const runTaskRequestSchema = z
-  .object({
+  .strictObject({
     action: z.literal("run_task"),
     flowId: z.string().trim().min(1),
     runtime: z.enum(["subagent", "acp"]),
@@ -138,7 +117,6 @@ const runTaskRequestSchema = z
     lastEventAt: z.number().int().nonnegative().optional(),
     progressSummary: nullableStringSchema,
   })
-  .strict()
   .superRefine((value, ctx) => {
     if (
       value.status !== "running" &&
@@ -177,7 +155,6 @@ export type TaskFlowWebhookTarget = {
   routeId: string;
   path: string;
   secretInput: WebhookSecretInput;
-  secretConfigPath: string;
   defaultControllerId: string;
   taskFlow: BoundTaskFlowRuntime;
 };
@@ -320,11 +297,6 @@ function extractSharedSecret(req: IncomingMessage): string {
   return Array.isArray(sharedHeader) ? (sharedHeader[0] ?? "").trim() : (sharedHeader ?? "").trim();
 }
 
-function timingSafeEquals(left: string, right: string): boolean {
-  // Reuse the shared helper so webhook auth semantics stay aligned across plugins.
-  return safeEqualSecret(left, right);
-}
-
 function formatZodError(error: z.ZodError): string {
   const firstIssue = error.issues[0];
   if (!firstIssue) {
@@ -374,7 +346,7 @@ function mapFlowMutationResult(
 
 function mapMutationStatus(result: {
   applied: boolean;
-  code?: "not_found" | "not_managed" | "revision_conflict";
+  code?: "not_found" | "not_managed" | "revision_conflict" | "persist_failed";
 }): { statusCode: number; code?: string; error?: string } {
   if (result.applied) {
     return { statusCode: 200 };
@@ -398,6 +370,12 @@ function mapMutationStatus(result: {
         code: "revision_conflict",
         error: "TaskFlow changed since the caller's expected revision.",
       };
+    case "persist_failed":
+      return {
+        statusCode: 503,
+        code: "persist_failed",
+        error: "TaskFlow persistence failed.",
+      };
     default:
       return {
         statusCode: 409,
@@ -405,6 +383,28 @@ function mapMutationStatus(result: {
         error: "TaskFlow mutation was rejected.",
       };
   }
+}
+
+function mapCreateFlowStatus(result: { created: boolean; code?: "persist_failed" }): {
+  statusCode: number;
+  code?: string;
+  error?: string;
+} {
+  if (result.created) {
+    return { statusCode: 200 };
+  }
+  if (result.code === "persist_failed") {
+    return {
+      statusCode: 503,
+      code: "persist_failed",
+      error: "TaskFlow persistence failed.",
+    };
+  }
+  return {
+    statusCode: 409,
+    code: "create_rejected",
+    error: "TaskFlow creation was rejected.",
+  };
 }
 
 function mapRunTaskStatus(result: { created: boolean; found: boolean; reason?: string }): {
@@ -440,6 +440,13 @@ function mapRunTaskStatus(result: { created: boolean; found: boolean; reason?: s
     return {
       statusCode: 409,
       code: "terminal",
+      error: result.reason,
+    };
+  }
+  if (result.reason === "Task persistence failed.") {
+    return {
+      statusCode: 503,
+      code: "persist_failed",
       error: result.reason,
     };
   }
@@ -486,6 +493,13 @@ function mapCancelStatus(result: { found: boolean; cancelled: boolean; reason?: 
       error: result.reason,
     };
   }
+  if (result.reason === "Flow persistence failed.") {
+    return {
+      statusCode: 503,
+      code: "persist_failed",
+      error: result.reason,
+    };
+  }
   return {
     statusCode: 409,
     code: "cancel_rejected",
@@ -499,6 +513,13 @@ function describeWebhookOutcome(params: { action: WebhookAction; result: unknown
   error?: string;
 } {
   switch (params.action.action) {
+    case "create_flow":
+      return mapCreateFlowStatus(
+        params.result as {
+          created: boolean;
+          code?: "persist_failed";
+        },
+      );
     case "set_waiting":
     case "resume_flow":
     case "finish_flow":
@@ -507,7 +528,7 @@ function describeWebhookOutcome(params: { action: WebhookAction; result: unknown
       return mapMutationStatus(
         params.result as {
           applied: boolean;
-          code?: "not_found" | "not_managed" | "revision_conflict";
+          code?: "not_found" | "not_managed" | "revision_conflict" | "persist_failed";
         },
       );
     case "cancel_flow":
@@ -539,7 +560,7 @@ async function executeWebhookAction(params: {
   const { action, target } = params;
   switch (action.action) {
     case "create_flow": {
-      const flow = target.taskFlow.createManaged({
+      const flow = target.taskFlow.tryCreateManaged({
         controllerId: action.controllerId ?? target.defaultControllerId,
         goal: action.goal,
         status: action.status,
@@ -548,7 +569,9 @@ async function executeWebhookAction(params: {
         stateJson: action.stateJson,
         waitJson: action.waitJson,
       });
-      return { flow: toFlowView(flow) };
+      return flow
+        ? { created: true, flow: toFlowView(flow) }
+        : { created: false, code: "persist_failed" };
     }
     case "get_flow": {
       const flow = target.taskFlow.get(action.flowId);
@@ -678,21 +701,6 @@ export function createTaskFlowWebhookRequestHandler(params: {
       maxInFlightPerKey: WEBHOOK_IN_FLIGHT_DEFAULTS.maxInFlightPerKey,
       maxTrackedKeys: WEBHOOK_IN_FLIGHT_DEFAULTS.maxTrackedKeys,
     });
-  const resolveTargetSecret = async (
-    target: TaskFlowWebhookTarget,
-  ): Promise<string | undefined> => {
-    if (typeof target.secretInput === "string") {
-      return target.secretInput;
-    }
-    const resolved = await resolveConfiguredSecretInputString({
-      config: params.cfg,
-      env: process.env,
-      value: target.secretInput,
-      path: target.secretConfigPath,
-    });
-    return resolved.value;
-  };
-
   return async (req: IncomingMessage, res: ServerResponse): Promise<boolean> => {
     return await withResolvedWebhookRequestPipeline({
       req,
@@ -715,15 +723,17 @@ export function createTaskFlowWebhookRequestHandler(params: {
       inFlightLimiter,
       handle: async ({ targets }) => {
         const presentedSecret = extractSharedSecret(req);
-        const target = await resolveWebhookTargetWithAuthOrReject({
+        const target = resolveWebhookTargetWithAuthOrRejectSync({
           targets,
           res,
-          isMatch: async (candidate) => {
+          isMatch: (candidate) => {
             if (presentedSecret.length === 0) {
               return false;
             }
-            const resolvedSecret = await resolveTargetSecret(candidate);
-            return Boolean(resolvedSecret && timingSafeEquals(resolvedSecret, presentedSecret));
+            return (
+              typeof candidate.secretInput === "string" &&
+              safeEqualSecret(candidate.secretInput, presentedSecret)
+            );
           },
         });
         if (!target) {
@@ -784,3 +794,4 @@ export function createTaskFlowWebhookRequestHandler(params: {
     });
   };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

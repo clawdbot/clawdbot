@@ -1,20 +1,18 @@
 {
   "name": "@openclaw/diffs",
-  "version": "2026.5.6",
-  "description": "OpenClaw diff viewer plugin",
+  "version": "2026.8.1",
+  "description": "OpenClaw read-only diff viewer plugin and file renderer for agents.",
   "repository": {
     "type": "git",
     "url": "https://github.com/openclaw/openclaw"
   },
   "type": "module",
-  "scripts": {
-    "build:viewer": "bun build src/viewer-client.ts --target browser --format esm --minify --outfile assets/viewer-runtime.js"
-  },
   "dependencies": {
-    "@pierre/diffs": "1.1.20",
-    "@pierre/theme": "0.0.29",
-    "playwright-core": "1.59.1",
-    "typebox": "1.1.37"
+    "@pierre/diffs": "1.3.5",
+    "@shikijs/langs": "4.4.3",
+    "playwright-core": "1.62.1",
+    "typebox": "1.3.17",
+    "zod": "4.4.3"
   },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*"
@@ -25,15 +23,19 @@
     ],
     "install": {
       "npmSpec": "@openclaw/diffs",
-      "localPath": "extensions/diffs",
+      "clawhubSpec": "clawhub:@openclaw/diffs",
       "defaultChoice": "npm",
       "minHostVersion": ">=2026.4.30"
     },
     "compat": {
-      "pluginApi": ">=2026.5.6"
+      "pluginApi": ">=2026.8.1"
+    },
+    "assetScripts": {
+      "build": "node --import tsx ../../scripts/build-diffs-viewer-runtime.mts curated"
     },
     "build": {
-      "openclawVersion": "2026.5.6",
+      "bundledDist": false,
+      "openclawVersion": "2026.8.1",
       "staticAssets": [
         {
           "source": "./assets/viewer-runtime.js",

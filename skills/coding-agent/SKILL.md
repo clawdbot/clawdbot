@@ -1,6 +1,6 @@
 ---
 name: coding-agent
-description: 'Delegate coding tasks to Codex, Claude Code, OpenCode, or Pi agents via immediate background processes. Use when: (1) building or creating features/apps, (2) reviewing PRs in a temp clone/worktree, (3) refactoring large codebases, (4) iterative coding that needs file exploration. NOT for: simple one-line fixes (just edit), reading code (use read tool), thread-bound ACP harness requests in chat (use sessions_spawn with runtime:"acp"), or any work in ~/clawd workspace (never spawn agents here). All coding-agent runs start with background:true immediately. Claude Code: use --print --permission-mode bypassPermissions (no PTY). Codex/Pi/OpenCode: pty:true required. Completion notification must use openclaw message send, not system event/heartbeat.'
+description: "Delegate coding work to Codex, Claude Code, or OpenCode as background workers; not simple edits or read-only code lookup."
 metadata:
   {
     "openclaw":
@@ -8,7 +8,7 @@ metadata:
         "emoji": "🧩",
         "requires":
           {
-            "anyBins": ["claude", "codex", "opencode", "pi"],
+            "anyBins": ["claude", "codex", "opencode"],
             "config": ["skills.entries.coding-agent.enabled"],
           },
         "install":
@@ -32,334 +32,172 @@ metadata:
   }
 ---
 
-# Coding Agent (always backgrounded)
+# Coding Agent
 
-Use **bash** with **background:true** for all coding-agent work.
-Do not use a foreground one-shot path here.
-Start the agent, get the `sessionId`, monitor with `process`, and require the worker to notify the user directly when it finishes.
+Use for background feature builds, PR reviews, large refactors, and issue-to-PR loops. Do not use for simple edits, read-only lookup, ACP thread-bound work, or any run inside `~/.openclaw`, `$OPENCLAW_STATE_DIR`, or active OpenClaw state dirs.
 
-## ⚠️ PTY Mode: Codex/Pi/OpenCode yes, Claude Code no
+## Hard rules
 
-For **Codex, Pi, and OpenCode**, PTY is required:
+- Always launch with `background:true`.
+- Codex and OpenCode: use `pty:true`.
+- Codex: never inherit ambient `CODEX_HOME` or the default `~/.codex`. Use a
+  separately authenticated coding-agent home and scope it to each Codex command.
+- Claude Code: no PTY; use `claude --permission-mode bypassPermissions --print`.
+- Capture a real notification route before spawning.
+- Worker must send completion/failure via `openclaw message send`.
+- Do not rely on heartbeat, system events, or notify-on-exit.
+- Monitor with `process`; do not kill slow workers without cause.
+- If user asked for a specific agent, use that agent.
+- If worker fails/hangs, respawn or ask; do not silently hand-code instead.
+- Never checkout branches or run background coding agents in `~/Projects/openclaw`; use an isolated checkout.
+- Classify the source ref as trusted or untrusted before any checkout or worktree creation. Never materialize a contributor-controlled ref outside the repository's approved untrusted-PR sandbox/review workflow, and never launch a permission-bypassed worker in it.
+- For tasks that modify a Git-backed project, prepare and verify the Git worktree before launch, then include the exact Git preparation block below in the worker prompt.
 
-```bash
-# Correct for Codex/Pi/OpenCode
-bash pty:true background:true command:"codex exec 'Your prompt'"
-```
+## Mandatory Git preparation
 
-For **Claude Code** (`claude` CLI), use `--print --permission-mode bypassPermissions` instead.
-Do not use PTY for Claude Code here.
+Before launching Codex, Claude Code, or OpenCode for work that modifies a Git-backed project:
 
-```bash
-# Correct for Claude Code
-bash background:true command:"claude --permission-mode bypassPermissions --print 'Your task'"
+1. Establish the intended target repository, then select its canonical remote. Prefer `upstream` when it exists and matches that target; otherwise verify `origin`. Resolve the selected remote's default branch dynamically. Determine the target base from an explicit task branch or authoritative existing-PR metadata; for other shared branches, prove the configured/tracked base or ask. Use the canonical default only for new work with no other specified base. Stop if the repository, remote, or target base cannot be proven.
+2. Classify the source ref as trusted or untrusted before any checkout or worktree creation. For contributor-controlled refs, use the repository's approved untrusted-PR sandbox/review workflow, which must own ref materialization inside the sandbox, or stop. The remaining steps and launch forms are for trusted refs only.
+3. For trusted new work, run `git fetch --prune <canonical>` immediately before creating a new isolated worktree and branch from `<canonical>/<targetBaseBranch>`.
+4. For trusted new work, verify the worktree's initial `HEAD` equals the fetched target-base SHA. Record the canonical remote, canonical default branch, target base branch, base SHA, worktree path, and branch.
+5. For a trusted existing PR or shared branch, fetch the canonical target base and source branch immediately before creating an isolated worktree from the fetched source branch. Record that source ref and starting SHA, report its divergence from the refreshed target base, and do not automatically rebase, merge, reset, force-push, or otherwise rewrite shared history.
+6. Launch the worker in the isolated worktree, never the primary checkout. For OpenClaw, the primary checkout under `~/Projects/openclaw` remains forbidden.
 
-# Wrong for Claude Code (PTY, wrong flags, no background)
-bash pty:true command:"claude --dangerously-skip-permissions 'task'"
-```
-
-### Bash Tool Parameters
-
-| Parameter    | Type    | Description                                 |
-| ------------ | ------- | ------------------------------------------- |
-| `command`    | string  | The shell command to run                    |
-| `pty`        | boolean | Use for Codex/Pi/OpenCode                   |
-| `workdir`    | string  | Working directory                           |
-| `background` | boolean | **Always true for this skill**              |
-| `timeout`    | number  | Timeout in seconds                          |
-| `elevated`   | boolean | Run on host instead of sandbox (if allowed) |
-
-### Process Tool Actions
-
-| Action      | Description                                          |
-| ----------- | ---------------------------------------------------- |
-| `list`      | List all running/recent sessions                     |
-| `poll`      | Check if session is still running                    |
-| `log`       | Get session output (with optional offset/limit)      |
-| `write`     | Send raw data to stdin                               |
-| `submit`    | Send data + newline (like typing and pressing Enter) |
-| `send-keys` | Send key tokens or hex bytes                         |
-| `paste`     | Paste text (with optional bracketed mode)            |
-| `kill`      | Terminate the session                                |
-
----
-
-## Mandatory Pattern
-
-Every coding-agent run follows this pattern:
-
-1. Capture the notification route from the current conversation before spawning:
-   - `notifyChannel`
-   - `notifyTarget`
-   - `notifyAccount` (if applicable)
-   - `notifyReplyTo` (if replying to a specific message is desired)
-   - `notifyThreadId` (Telegram topic / Slack thread when applicable)
-2. Start the coding CLI with `background:true` immediately.
-3. Include the notification route in the worker prompt and require the worker to call `openclaw message send` on completion.
-4. Monitor with `process action:log` / `poll`.
-5. If the worker needs input or fails before notifying, handle that explicitly yourself. Do not rely on heartbeat.
-
-If you do not have a trustworthy notification route, say so and do not claim that completion will notify the user automatically.
-
----
-
-## Notification Route
-
-Do not rely on:
-
-- `openclaw system event`
-- `tools.exec.notifyOnExit`
-- heartbeat delivery
-- `HEARTBEAT.md`
-
-Use a direct outbound completion message instead:
-
-```bash
-openclaw message send --channel <channel> --target '<target>' --message '<text>'
-```
-
-Add optional routing flags only when they are real and applicable:
-
-- `--account <id>`
-- `--reply-to <messageId>`
-- `--thread-id <threadId>`
-
-`openclaw message send` is a direct outbound send. It does not depend on heartbeat being enabled.
-
-### Completion Prompt Snippet
-
-Append something like this to every worker prompt:
+For tasks that modify a Git-backed project, append this block to the worker prompt with real values:
 
 ```text
-Notification route for completion:
+Git preparation (mandatory before edits):
+- canonical remote: <canonicalRemote>
+- canonical default branch: <canonicalDefaultBranch>
+- target base branch: <targetBaseBranch>
+- fetched target base SHA: <targetBaseSha>
+- preparation mode: <new work | existing PR/shared branch>
+- checkout trust: trusted
+- prepared source ref: <canonicalRemote/targetBaseBranch | fetched trusted source ref>
+- prepared start SHA: <preparedStartSha>
+- isolated worktree: <worktreePath>
+- working branch: <branch>
+- preparation receipt: <new work: `git fetch --prune <canonicalRemote>` ran immediately before creation from `<canonicalRemote>/<targetBaseBranch>` | existing branch: the canonical target base and trusted source ref were fetched immediately before the worktree was created from `<preparedSourceRef>` at `<preparedStartSha>`>
+
+Before editing, verify the current directory is the isolated worktree and its initial HEAD equals <preparedStartSha>. For new work, that SHA must equal <targetBaseSha>. Never edit the primary checkout. For existing PR/shared-branch work, report divergence and do not rebase, merge, reset, force-push, or otherwise rewrite shared history unless explicitly asked.
+Immediately before the final push or PR for newly authored work, run `git fetch --prune <canonicalRemote>` and `git merge-base --is-ancestor <canonicalRemote>/<targetBaseBranch> HEAD`. If the ancestry check fails, update the new branch onto the latest target base, rerun the relevant proof, and only then push without force. For existing PR/shared-branch work, report a failed ancestry check and follow the repository workflow without rewriting the branch.
+```
+
+For trusted refs, the launcher must create and verify the worktree before starting the editing worker; do not delegate worktree creation to that worker. The approved untrusted-PR workflow must instead own checkout and worktree materialization inside its sandbox. Never start a worker in `~/Projects/openclaw`. Read-only tasks and non-project scratch work do not require the Git preparation block.
+
+## Notification block
+
+Append this shape to every worker prompt with real values:
+
+```text
+Notification route:
 - channel: <notifyChannel>
 - target: <notifyTarget>
 - account: <notifyAccount or omit>
 - reply_to: <notifyReplyTo or omit>
 - thread_id: <notifyThreadId or omit>
 
-When the task is completely finished, send exactly one completion message back to the user with openclaw message send using that route.
-If the task fails fatally, send exactly one failure message back to the user with openclaw message send using that route.
-Do not use openclaw system event. Do not rely on heartbeat. Do not skip the completion/failure message.
+When finished, send exactly one completion or failure message using:
+openclaw message send --channel <channel> --target '<target>' --message '<brief result>'
+Add --account, --reply-to, or --thread-id only when present above.
+Do not use openclaw system event or heartbeat.
 ```
 
-### Completion Command Template
+If no trustworthy route exists, say completion auto-notify is unavailable.
+
+## Launch forms
+
+Write the worker prompt to a temp file first. This avoids shell quoting bugs when the required notification block contains quotes or newlines.
 
 ```bash
-openclaw message send \
-  --channel <notifyChannel> \
-  --target '<notifyTarget>' \
-  --message 'Done: <brief summary>'
+PROMPT=$(mktemp -t openclaw-worker-prompt.XXXXXX)
+cat >"$PROMPT" <<'EOF'
+Task.
+<mandatory Git preparation block>
+<notification block>
+EOF
+printf 'prompt file: %s\n' "$PROMPT"
 ```
 
-Optional additions:
+Use `$PROMPT` when launching from the same shell/session. If using a separate tool call, substitute the printed path. The launch forms below are for trusted checkouts only; untrusted contributor refs require the repository's approved sandbox/review workflow.
+
+Before the first Codex worker on a host, prepare a dedicated auth home in the
+foreground. Do not copy `auth.json` or other credentials from ambient
+`~/.codex`; authorize this home separately. Codex scopes both file and keyring
+credentials by `CODEX_HOME`.
 
 ```bash
-  --account <notifyAccount> \
-  --reply-to <notifyReplyTo> \
-  --thread-id <notifyThreadId>
+CODEX_WORKER_HOME="$HOME/.codex-coding-agent"
+mkdir -p "$CODEX_WORKER_HOME"
+if ! env -u CODEX_API_KEY -u CODEX_ACCESS_TOKEN -u OPENAI_API_KEY \
+  CODEX_HOME="$CODEX_WORKER_HOME" codex login status >/dev/null 2>&1; then
+  printf 'Codex coding-agent login required for %s\n' "$CODEX_WORKER_HOME"
+  env -u CODEX_API_KEY -u CODEX_ACCESS_TOKEN -u OPENAI_API_KEY \
+    CODEX_HOME="$CODEX_WORKER_HOME" codex login --device-auth
+fi
+printf 'Codex worker home: %s\n' "$CODEX_WORKER_HOME"
 ```
 
----
+The login is an interactive foreground setup step, not a background worker.
+The launch command repeats the fixed, quoted home and removes ambient Codex and
+OpenAI auth overrides. Never export the worker home into the OpenClaw Gateway
+environment.
 
-## Quick Start
+Codex:
 
-For scratch Codex work, create a temp git repo first, then start the worker in the background with the completion route injected into the prompt:
+```bash
+bash pty:true background:true workdir:/path/isolated-worktree command:"env -u CODEX_API_KEY -u CODEX_ACCESS_TOKEN -u OPENAI_API_KEY CODEX_HOME=\"$HOME/.codex-coding-agent\" codex exec - < \"$PROMPT\""
+```
+
+Claude Code:
+
+```bash
+bash background:true workdir:/path/isolated-worktree command:"claude --permission-mode bypassPermissions --print < \"$PROMPT\""
+```
+
+OpenCode:
+
+```bash
+bash pty:true background:true workdir:/path/isolated-worktree command:"opencode run < \"$PROMPT\""
+```
+
+## Long issue-to-PR work
+
+1. Create/reuse a GitHub issue as durable spec.
+2. Include issue URL, repo, canonical remote/default branch, target base branch/SHA, isolated worktree, working branch, expected PR, proof, and notification route.
+3. Include the mandatory Git preparation block, then tell the worker to implement, test, run review until no accepted actionable findings, and open the PR.
+4. Return issue URL and `sessionId` immediately.
+5. Monitor with `process`; cancel through Task Registry if mirrored there.
+
+## Scratch Codex
+
+Codex needs a trusted git repo. This throwaway scaffold is not project work and has no canonical remote, so the Git preparation block does not apply:
 
 ```bash
 SCRATCH=$(mktemp -d)
-cd "$SCRATCH" && git init
-
-bash pty:true workdir:$SCRATCH background:true command:"codex exec 'Your prompt here.
-
-Notification route for completion:
-- channel: <notifyChannel>
-- target: <notifyTarget>
-- account: <notifyAccount or omit>
-- reply_to: <notifyReplyTo or omit>
-- thread_id: <notifyThreadId or omit>
-
-When the task is completely finished, send exactly one completion message back to the user with openclaw message send using that route.
-If the task fails fatally, send exactly one failure message back to the user with openclaw message send using that route.
-Do not use openclaw system event. Do not rely on heartbeat. Do not skip the completion/failure message.'"
+git -C "$SCRATCH" init
+PROMPT=$(mktemp -t openclaw-worker-prompt.XXXXXX)
+cat >"$PROMPT" <<'EOF'
+Build X.
+<notification block>
+EOF
+printf 'prompt file: %s\n' "$PROMPT"
+bash pty:true background:true workdir:$SCRATCH command:"env -u CODEX_API_KEY -u CODEX_ACCESS_TOKEN -u OPENAI_API_KEY CODEX_HOME=\"$HOME/.codex-coding-agent\" codex exec - < \"$PROMPT\""
 ```
 
-Codex refuses to run outside a trusted git directory.
-Reuse this same notify-route injection block in every example below; only the task-specific prompt body should change.
+## Process actions
 
----
+- `list`: running/recent sessions.
+- `poll`: status.
+- `log`: output.
+- `submit`: send input + Enter.
+- `write`: raw stdin.
+- `paste`: paste text.
+- `kill`: terminate.
 
-## Codex CLI
+## Status to user
 
-**Model:** `gpt-5.2-codex` is the default (set in ~/.codex/config.toml)
-
-### Flags
-
-| Flag            | Effect                                   |
-| --------------- | ---------------------------------------- |
-| `exec "prompt"` | One-shot execution inside the worker CLI |
-| `--full-auto`   | Sandboxed but auto-approves in workspace |
-| `--yolo`        | No sandbox, no approvals                 |
-
-### Building/Creating
-
-```bash
-# Always background immediately
-bash pty:true workdir:~/project background:true command:"codex exec --full-auto 'Build a dark mode toggle'"
-
-# More autonomy
-bash pty:true workdir:~/project background:true command:"codex --yolo 'Refactor the auth module'"
-```
-
-### Reviewing PRs
-
-**Never review PRs in OpenClaw's own project folder.**
-Clone to a temp folder or use a worktree.
-
-```bash
-REVIEW_DIR=$(mktemp -d)
-git clone https://github.com/user/repo.git $REVIEW_DIR
-cd $REVIEW_DIR && gh pr checkout 130
-
-bash pty:true workdir:$REVIEW_DIR background:true command:"codex review --base origin/main"
-```
-
-Or:
-
-```bash
-git worktree add /tmp/pr-130-review pr-130-branch
-bash pty:true workdir:/tmp/pr-130-review background:true command:"codex review --base main"
-```
-
-### Batch PR Reviews
-
-```bash
-git fetch origin '+refs/pull/*/head:refs/remotes/origin/pr/*'
-
-bash pty:true workdir:~/project background:true command:"codex exec 'Review PR #86. git diff origin/main...origin/pr/86'"
-bash pty:true workdir:~/project background:true command:"codex exec 'Review PR #87. git diff origin/main...origin/pr/87'"
-
-process action:list
-process action:log sessionId:XXX
-```
-
----
-
-## Claude Code
-
-```bash
-bash workdir:~/project background:true command:"claude --permission-mode bypassPermissions --print 'Your task'"
-```
-
----
-
-## OpenCode
-
-```bash
-bash pty:true workdir:~/project background:true command:"opencode run 'Your task'"
-```
-
----
-
-## Pi Coding Agent
-
-```bash
-# Install: npm install -g @mariozechner/pi-coding-agent
-bash pty:true workdir:~/project background:true command:"pi 'Your task'"
-
-# Non-interactive mode
-bash pty:true workdir:~/project background:true command:"pi -p 'Summarize src/'"
-
-# Different provider/model
-bash pty:true workdir:~/project background:true command:"pi --provider openai --model gpt-4o-mini -p 'Your task'"
-```
-
----
-
-## Parallel Issue Fixing with git worktrees
-
-```bash
-git worktree add -b fix/issue-78 /tmp/issue-78 main
-git worktree add -b fix/issue-99 /tmp/issue-99 main
-
-bash pty:true workdir:/tmp/issue-78 background:true command:"pnpm install && codex --yolo 'Fix issue #78: <description>. Commit and push after review. Send the completion message with openclaw message send using the provided notify route.'"
-bash pty:true workdir:/tmp/issue-99 background:true command:"pnpm install && codex --yolo 'Fix issue #99 from the approved ticket summary. Implement only the in-scope edits. Send the completion message with openclaw message send using the provided notify route.'"
-
-process action:list
-process action:log sessionId:XXX
-```
-
----
-
-## ⚠️ Rules
-
-1. **Use the right execution mode per agent**:
-   - Codex/Pi/OpenCode: `pty:true`
-   - Claude Code: `--print --permission-mode bypassPermissions` (no PTY required)
-2. **Respect tool choice** - if user asks for Codex, use Codex.
-   - Orchestrator mode: do NOT hand-code patches yourself.
-   - If an agent fails/hangs, respawn it or ask the user for direction, but don't silently take over.
-3. **Be patient** - don't kill sessions because they're "slow"
-4. **Monitor with process:log** - check progress without interfering
-5. **--full-auto for building** - auto-approves changes
-6. **vanilla for reviewing** - no special flags needed
-7. **Parallel is OK** - run many Codex processes at once for batch work
-8. **NEVER start Codex inside your OpenClaw state directory** (`$OPENCLAW_STATE_DIR`, default `~/.openclaw`) - it'll read your soul docs and get weird ideas about the org chart!
-9. **NEVER checkout branches in ~/Projects/openclaw/** - that's the LIVE OpenClaw instance!
-10. **Always inject the Completion Prompt Snippet** into the worker prompt before spawning. The simplified examples below omit it for brevity — never spawn a worker without it.
-
----
-
-## Progress Updates (Critical)
-
-When you spawn a coding agent in the background, keep the user in the loop.
-
-- Send 1 short message when you start: what is running and where.
-- Update only when something changes:
-  - a milestone completes
-  - the worker asks a question
-  - you hit an error or need user action
-  - the worker finishes
-- If you kill a session, immediately say you killed it and why.
-- If you are expecting the worker to self-notify with `openclaw message send`, say that clearly in your start update.
-
-This prevents the user from seeing only a missing reply and having no idea what happened.
-
----
-
-## Rules
-
-1. **Always background immediately.**
-   - Use `background:true` for every coding-agent launch.
-   - Do not use the foreground one-shot path in this skill.
-2. **Use the right execution mode per agent.**
-   - Codex/Pi/OpenCode: `pty:true`
-   - Claude Code: `--print --permission-mode bypassPermissions`
-3. **Respect tool choice.**
-   - If the user asked for Codex, use Codex.
-   - Orchestrator mode: do not hand-code the patch yourself instead of using the requested coding agent.
-4. **Capture notify routing before spawn.**
-   - Completion messaging must have a real route.
-5. **Use direct completion messaging.**
-   - Require `openclaw message send`.
-   - Do not rely on `openclaw system event` or heartbeat.
-6. **Do not silently take over.**
-   - If a worker fails or hangs, respawn it or ask for direction. Do not quietly switch to hand-editing.
-7. **Monitor with `process`.**
-   - `process action:log` is the default low-friction check.
-8. **Be patient.**
-   - Do not kill sessions just because they are slow.
-9. **Parallel is OK.**
-   - Many background Codex sessions can run at once.
-10. **Never start Codex in `~/.openclaw/`.**
-11. **Never checkout branches in `~/Projects/openclaw/`.**
-
----
-
-## Learnings
-
-- **PTY is essential** for Codex/Pi/OpenCode.
-- **Git repo required**: Codex needs a trusted git directory.
-- **Use `exec` under background orchestration**: short and long tasks follow the same path now.
-- **`submit` vs `write`**: use `submit` to send input plus Enter.
-- **Direct message send beats heartbeat for completion notification** when the user must be told immediately and heartbeat may be disabled.
+- Say what started, where, and `sessionId`.
+- Update only on milestone, worker question, error, user action needed, or finish.
+- If killed, say why.

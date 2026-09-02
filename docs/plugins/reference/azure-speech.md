@@ -16,7 +16,7 @@ Azure AI Speech text-to-speech (MP3, native Ogg/Opus voice notes, PCM telephony)
 
 ## Surface
 
-contracts: speechProviders
+contracts: `speechProviders`
 
 ## Related docs
 

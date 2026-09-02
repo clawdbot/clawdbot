@@ -1,12 +1,14 @@
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+// Check Cli Bootstrap Imports tests cover check cli bootstrap imports script behavior.
+import { mkdtempSync, mkdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   collectCliBootstrapExternalImportErrors,
   collectGatewayRunChunkBudgetErrors,
+  collectWorkerDeployArtifactErrors,
   listStaticImportSpecifiers,
-} from "../../scripts/check-cli-bootstrap-imports.mjs";
+} from "../../scripts/check-cli-bootstrap-imports.mts";
 
 const tempRoots: string[] = [];
 
@@ -30,7 +32,7 @@ function writeGatewayRunChunk(root: string, source = ""): void {
     "dist/run-gateway.js",
     [
       'import "./string-coerce.js";',
-      "const GATEWAY_RUN_VALUE_KEYS = [];",
+      "const GATEWAY_AUTH_MODES = [];",
       "function addGatewayRunCommand(cmd) { return cmd; }",
       source,
     ].join("\n"),
@@ -70,8 +72,8 @@ describe("check-cli-bootstrap-imports", () => {
     writeFixture(root, "dist/light.js", `import path from "node:path";\nvoid path;\n`);
     writeGatewayRunChunk(root);
 
-    expect(collectCliBootstrapExternalImportErrors({ rootDir: root })).toEqual([]);
-    expect(collectGatewayRunChunkBudgetErrors({ rootDir: root })).toEqual([]);
+    expect(collectCliBootstrapExternalImportErrors({ rootDir: root })).toStrictEqual([]);
+    expect(collectGatewayRunChunkBudgetErrors({ rootDir: root })).toStrictEqual([]);
   });
 
   it("reports external packages in the static bootstrap graph", () => {
@@ -118,13 +120,60 @@ describe("check-cli-bootstrap-imports", () => {
   it("reports oversized gateway run chunks", () => {
     const root = makeTempRoot();
     writeGatewayRunChunk(root, "x".repeat(10));
+    const gatewayRunChunkBytes = statSync(join(root, "dist", "run-gateway.js")).size;
 
     expect(
       collectGatewayRunChunkBudgetErrors({ rootDir: root, gatewayRunChunkMaxBytes: 50 }),
     ).toEqual([
-      expect.stringMatching(
-        /^Gateway run chunk dist\/run-gateway\.js is \d+ bytes, above budget 50 bytes\.$/,
-      ),
+      `Gateway run chunk dist/run-gateway.js is ${gatewayRunChunkBytes} bytes, above budget 50 bytes.`,
+    ]);
+  });
+
+  it("accepts the self-contained worker deploy artifacts with builtin imports", () => {
+    const root = makeTempRoot();
+    writeFixture(
+      root,
+      "dist/worker/worker.mjs",
+      'import fs from "node:fs";\nexport const worker = Boolean(fs);\n',
+    );
+    writeFixture(
+      root,
+      "dist/worker/workspace-rsync-receiver.mjs",
+      'import path from "node:path";\nexport const receiver = Boolean(path);\n',
+    );
+
+    expect(collectWorkerDeployArtifactErrors({ rootDir: root })).toEqual([]);
+  });
+
+  it("rejects worker package imports and dependency manifests", () => {
+    const root = makeTempRoot();
+    writeFixture(
+      root,
+      "dist/worker/worker.mjs",
+      [
+        'import "left-pad";',
+        'await import("./lazy.mjs");',
+        '__require("json5");',
+        'createRequire(import.meta.url)("../../package.json");',
+        'moduleNamespace.createRequire(import.meta.url)("@openclaw/fs-safe/temp");',
+      ].join("\n"),
+    );
+    writeFixture(root, "dist/worker/workspace-rsync-receiver.mjs", "export {};\n");
+    writeFixture(root, "dist/worker/lazy.mjs", "export {};\n");
+    writeFixture(
+      root,
+      "dist/worker/package.json",
+      `${JSON.stringify({ scripts: { postinstall: "node prepare.js" } })}\n`,
+    );
+
+    expect(collectWorkerDeployArtifactErrors({ rootDir: root })).toEqual([
+      'Worker deploy artifact dist/worker/worker.mjs retains runtime import "../../package.json" instead of bundling it.',
+      'Worker deploy artifact dist/worker/worker.mjs retains runtime import "./lazy.mjs" instead of bundling it.',
+      'Worker deploy artifact dist/worker/worker.mjs retains runtime import "@openclaw/fs-safe/temp" instead of bundling it.',
+      'Worker deploy artifact dist/worker/worker.mjs retains runtime import "json5" instead of bundling it.',
+      'Worker deploy artifact dist/worker/worker.mjs retains runtime import "left-pad" instead of bundling it.',
+      "Worker deploy artifact emits unstaged runtime asset dist/worker/lazy.mjs.",
+      "Worker deploy artifact must not contain a dependency manifest or lifecycle scripts.",
     ]);
   });
 });

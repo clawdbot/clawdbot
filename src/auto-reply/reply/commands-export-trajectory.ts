@@ -1,29 +1,17 @@
-import { resolveSessionAgentId } from "../../agents/agent-scope.js";
+// Implements trajectory export command packaging for the active session agent.
 import { createExecTool } from "../../agents/bash-tools.js";
 import type { ExecToolDetails } from "../../agents/bash-tools.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import type { ExecApprovalRequest } from "../../infra/exec-approvals.js";
-import { pathExists } from "../../infra/fs-safe.js";
-import {
-  exportTrajectoryForCommand,
-  formatTrajectoryCommandExportSummary,
-  resolveTrajectoryCommandOutputDir,
-  type TrajectoryCommandExportSummary,
-} from "../../trajectory/command-export.js";
 import type { ReplyPayload } from "../types.js";
-import {
-  isReplyPayload,
-  parseExportCommandOutputPath,
-  resolveExportCommandSessionTarget,
-} from "./commands-export-common.js";
-import {
-  buildCurrentOpenClawCliArgv,
-  buildCurrentOpenClawCliCommand,
-} from "./commands-openclaw-cli.js";
+import { parseExportCommandOutputPath } from "./commands-export-common.js";
+import { buildCurrentOpenClawCliExecRequest } from "./commands-openclaw-cli.js";
 import {
   deliverPrivateCommandReply,
   readCommandDeliveryTarget,
   readCommandMessageThreadId,
+  resolveCommandExecApprovalRoute,
+  resolvePrivateCommandApprovalRouteExpiresAtMs,
   resolvePrivateCommandRouteTargets,
   type PrivateCommandRouteTarget,
 } from "./commands-private-route.js";
@@ -53,7 +41,7 @@ type ExportTrajectoryCommandDeps = {
 const defaultExportTrajectoryCommandDeps: ExportTrajectoryCommandDeps = {
   createExecTool,
   resolvePrivateTrajectoryTargets: resolvePrivateTrajectoryTargetsForCommand,
-  deliverPrivateTrajectoryReply: deliverPrivateTrajectoryReply,
+  deliverPrivateTrajectoryReply,
 };
 
 export async function buildExportTrajectoryCommandReply(
@@ -121,59 +109,6 @@ async function buildExportTrajectoryApprovalReply(
   };
 }
 
-export async function buildExportTrajectoryReply(
-  params: HandleCommandsParams,
-): Promise<ReplyPayload> {
-  const args = parseExportCommandOutputPath(params.command.commandBodyNormalized, [
-    "export-trajectory",
-    "trajectory",
-  ]);
-  if (args.error) {
-    return { text: args.error };
-  }
-  const sessionTarget = resolveExportCommandSessionTarget(params);
-  if (isReplyPayload(sessionTarget)) {
-    return sessionTarget;
-  }
-  const { entry, sessionFile } = sessionTarget;
-
-  if (!(await pathExists(sessionFile))) {
-    return { text: "❌ Session file not found." };
-  }
-
-  let outputDir: string;
-  try {
-    outputDir = await resolveTrajectoryCommandOutputDir({
-      outputPath: args.outputPath,
-      workspaceDir: params.workspaceDir,
-      sessionId: entry.sessionId,
-    });
-  } catch (err) {
-    return {
-      text: `❌ Failed to resolve output path: ${formatErrorMessage(err)}`,
-    };
-  }
-
-  let summary: TrajectoryCommandExportSummary;
-  try {
-    summary = await exportTrajectoryForCommand({
-      outputDir,
-      sessionFile,
-      sessionId: entry.sessionId,
-      sessionKey: params.sessionKey,
-      workspaceDir: params.workspaceDir,
-    });
-  } catch (err) {
-    return {
-      text: `❌ Failed to export trajectory: ${formatErrorMessage(err)}`,
-    };
-  }
-
-  return {
-    text: formatTrajectoryCommandExportSummary(summary),
-  };
-}
-
 async function resolvePrivateTrajectoryTargetsForCommand(
   params: HandleCommandsParams,
   request: TrajectoryExportExecRequest,
@@ -197,18 +132,13 @@ function buildTrajectoryExportApprovalRequest(
   request: TrajectoryExportExecRequest,
 ): ExecApprovalRequest {
   const now = Date.now();
-  const agentId =
-    params.agentId ??
-    resolveSessionAgentId({
-      sessionKey: params.sessionKey,
-      config: params.cfg,
-    });
   return {
+    approvalKind: "exec",
     id: "trajectory-export-private-route",
     request: {
       command: request.command,
       commandArgv: request.argv,
-      agentId,
+      agentId: params.agentId,
       ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
       turnSourceChannel: params.command.channel,
       turnSourceTo: readCommandDeliveryTarget(params) ?? null,
@@ -216,7 +146,7 @@ function buildTrajectoryExportApprovalRequest(
       turnSourceThreadId: readCommandMessageThreadId(params) ?? null,
     },
     createdAtMs: now,
-    expiresAtMs: now + 5 * 60_000,
+    expiresAtMs: resolvePrivateCommandApprovalRouteExpiresAtMs(now),
   };
 }
 
@@ -226,14 +156,7 @@ async function requestTrajectoryExportApproval(
   request: TrajectoryExportExecRequest,
   options: { privateApprovalTarget?: PrivateCommandRouteTarget } = {},
 ): Promise<string> {
-  const timeoutSec = params.cfg.tools?.exec?.timeoutSec;
-  const agentId =
-    params.agentId ??
-    resolveSessionAgentId({
-      sessionKey: params.sessionKey,
-      config: params.cfg,
-    });
-  const messageThreadId = readCommandMessageThreadId(params);
+  const timeoutSec = params.cfg.tools?.exec?.timeoutSeconds;
   try {
     const execTool = deps.createExecTool({
       host: "gateway",
@@ -242,29 +165,28 @@ async function requestTrajectoryExportApproval(
       trigger: "export-trajectory",
       scopeKey: EXPORT_TRAJECTORY_EXEC_SCOPE_KEY,
       allowBackground: true,
+      approvalFollowupMode: "agent",
       timeoutSec,
       cwd: params.workspaceDir,
-      agentId,
+      agentId: params.agentId,
       sessionKey: params.sessionKey,
-      messageProvider: options.privateApprovalTarget?.channel ?? params.command.channel,
-      currentChannelId: options.privateApprovalTarget?.to ?? readCommandDeliveryTarget(params),
-      currentThreadTs: options.privateApprovalTarget
-        ? options.privateApprovalTarget.threadId == null
-          ? undefined
-          : String(options.privateApprovalTarget.threadId)
-        : messageThreadId,
-      accountId: options.privateApprovalTarget
-        ? (options.privateApprovalTarget.accountId ?? undefined)
-        : (params.ctx.AccountId ?? undefined),
+      sessionId: params.sessionEntry?.sessionId,
+      sessionStore: params.cfg.session?.store,
+      mainKey: params.cfg.session?.mainKey,
+      sessionScope: params.cfg.session?.scope,
+      ...resolveCommandExecApprovalRoute({
+        commandParams: params,
+        privateApprovalTarget: options.privateApprovalTarget,
+      }),
       notifyOnExit: params.cfg.tools?.exec?.notifyOnExit,
       notifyOnExitEmptySuccess: params.cfg.tools?.exec?.notifyOnExitEmptySuccess,
     });
     const result = await execTool.execute("chat-export-trajectory", {
       command: request.command,
-      security: "allowlist",
+      env: request.env,
       ask: "always",
       background: true,
-      timeout: timeoutSec,
+      timeoutSeconds: timeoutSec,
     });
     return [
       `Trajectory bundle: requested \`${request.displayCommand}\` through exec approval. Approve once to create the bundle; do not use allow-all for trajectory exports.`,
@@ -321,12 +243,13 @@ type TrajectoryExportCliRequest = {
   workspace: string;
   output?: string;
   store?: string;
-  agent?: string;
+  agent: string;
 };
 
 type TrajectoryExportExecRequest = {
   argv: string[];
   command: string;
+  env: Record<string, string> | undefined;
   displayCommand: string;
   encodedRequest: string;
   request: TrajectoryExportCliRequest;
@@ -339,6 +262,7 @@ function buildTrajectoryExportExecRequest(
   const request: TrajectoryExportCliRequest = {
     sessionKey: params.sessionKey,
     workspace: params.workspaceDir,
+    agent: params.agentId,
   };
   if (outputPath) {
     request.output = outputPath;
@@ -346,17 +270,13 @@ function buildTrajectoryExportExecRequest(
   if (params.storePath && params.storePath !== "(multiple)") {
     request.store = params.storePath;
   }
-  if (params.agentId) {
-    request.agent = params.agentId;
-  }
   const encodedRequest = Buffer.from(JSON.stringify(request), "utf8").toString("base64url");
   if (encodedRequest.length > MAX_TRAJECTORY_EXPORT_ENCODED_REQUEST_CHARS) {
     throw new Error("Encoded trajectory export request is too large");
   }
   const args = ["sessions", "export-trajectory", "--request-json-base64", encodedRequest, "--json"];
   return {
-    argv: buildCurrentOpenClawCliArgv(args),
-    command: buildCurrentOpenClawCliCommand(args),
+    ...buildCurrentOpenClawCliExecRequest(args),
     displayCommand: ["openclaw", ...args].join(" "),
     encodedRequest,
     request,
@@ -372,8 +292,6 @@ function formatTrajectoryExportRequestDetails(request: TrajectoryExportCliReques
   if (request.store) {
     lines.push(`Store: ${request.store}`);
   }
-  if (request.agent) {
-    lines.push(`Agent: ${request.agent}`);
-  }
+  lines.push(`Agent: ${request.agent}`);
   return lines.join("\n");
 }

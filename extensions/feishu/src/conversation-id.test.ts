@@ -1,3 +1,4 @@
+// Feishu tests cover conversation id plugin behavior.
 import { describe, expect, it } from "vitest";
 import { buildFeishuModelOverrideParentCandidates } from "./conversation-id.js";
 

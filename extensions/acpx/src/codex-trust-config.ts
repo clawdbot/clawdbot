@@ -1,3 +1,7 @@
+/**
+ * Builds isolated Codex config for ACPX sessions. It preserves safe inherited
+ * runtime options while rendering only trusted project entries for the session.
+ */
 import path from "node:path";
 
 function stripTomlComment(line: string): string {
@@ -114,6 +118,7 @@ function parseTrustedInlineProjectEntries(value: string): string[] {
   return trusted;
 }
 
+/** Extract trusted project paths from Codex TOML config. */
 export function extractTrustedCodexProjectPaths(configToml: string): string[] {
   const trusted = new Set<string>();
   let currentProjectPath: string | undefined;
@@ -137,12 +142,14 @@ export function extractTrustedCodexProjectPaths(configToml: string): string[] {
 
     const assignment =
       /^(?<key>"(?:\\.|[^"\\])*"|'[^']*'|[A-Za-z0-9_\-/.~:]+)\s*=\s*(?<value>.+)$/.exec(line);
-    if (!assignment?.groups) {
+    const rawKey = assignment?.groups?.key;
+    const rawValue = assignment?.groups?.value;
+    if (!rawKey || rawValue === undefined) {
       continue;
     }
 
-    const key = parseTomlString(assignment.groups.key) ?? assignment.groups.key;
-    const value = assignment.groups.value.trim();
+    const key = parseTomlString(rawKey) ?? rawKey;
+    const value = rawValue.trim();
     if (inProjectsTable && /^\{.*\}$/.test(value)) {
       if (/\btrust_level\s*=\s*["']trusted["']/.test(value) && key) {
         trusted.add(key);
@@ -159,23 +166,136 @@ export function extractTrustedCodexProjectPaths(configToml: string): string[] {
   return Array.from(trusted);
 }
 
-export function renderIsolatedCodexProjectTrustConfig(projectPaths: string[]): string {
+const INHERITED_TOP_LEVEL_CODEX_CONFIG_KEYS = new Set([
+  "model",
+  "model_provider",
+  "model_reasoning_effort",
+  "sandbox_mode",
+]);
+
+const INHERITED_MODEL_PROVIDER_CONFIG_KEYS = new Set([
+  "name",
+  "base_url",
+  "wire_api",
+  "env_key",
+  "env_key_instructions",
+  "requires_openai_auth",
+  "request_max_retries",
+  "stream_max_retries",
+  "stream_idle_timeout_ms",
+]);
+
+function parseTableHeader(line: string): string[] | undefined {
+  const trimmed = line.trim();
+  if (!trimmed.startsWith("[") || !trimmed.endsWith("]") || trimmed.startsWith("[[")) {
+    return undefined;
+  }
+  return parseTomlDottedKey(trimmed.slice(1, -1));
+}
+
+function isInheritedModelProviderTable(parts: string[] | undefined): boolean {
+  return parts?.[0] === "model_providers" && parts.length === 2;
+}
+
+function parseTopLevelAssignmentKey(line: string): string | undefined {
+  const assignment = /^(?<key>[A-Za-z0-9_-]+)\s*=\s*(?<value>.+)$/.exec(line);
+  return assignment?.groups?.key;
+}
+
+function extractInheritedCodexRuntimeConfig(configToml: string): string {
+  const inheritedLines: string[] = [];
+  let inAnyTable = false;
+  let inInheritedTable = false;
+  let pendingInheritedTableHeader = "";
+
+  function flushInheritedTableHeader(): void {
+    if (!pendingInheritedTableHeader) {
+      return;
+    }
+    if (inheritedLines.length > 0 && inheritedLines[inheritedLines.length - 1] !== "") {
+      inheritedLines.push("");
+    }
+    inheritedLines.push(pendingInheritedTableHeader);
+    pendingInheritedTableHeader = "";
+  }
+
+  for (const rawLine of configToml.split(/\r?\n/)) {
+    const trimmedLine = rawLine.trim();
+    const semanticLine = stripTomlComment(rawLine).trim();
+
+    if (trimmedLine.startsWith("[")) {
+      const tableParts = parseTableHeader(trimmedLine);
+      inAnyTable = true;
+      inInheritedTable = isInheritedModelProviderTable(tableParts);
+      if (inInheritedTable) {
+        pendingInheritedTableHeader = rawLine.trimEnd();
+      } else {
+        pendingInheritedTableHeader = "";
+      }
+      continue;
+    }
+
+    if (inInheritedTable) {
+      if (!semanticLine) {
+        continue;
+      }
+      const key = parseTopLevelAssignmentKey(semanticLine);
+      if (!key || !INHERITED_MODEL_PROVIDER_CONFIG_KEYS.has(key)) {
+        continue;
+      }
+      flushInheritedTableHeader();
+      inheritedLines.push(rawLine.trimEnd());
+      continue;
+    }
+
+    if (inAnyTable) {
+      continue;
+    }
+
+    const key = parseTopLevelAssignmentKey(semanticLine);
+    if (!key) {
+      continue;
+    }
+    if (!INHERITED_TOP_LEVEL_CODEX_CONFIG_KEYS.has(key)) {
+      continue;
+    }
+    inheritedLines.push(rawLine.trimEnd());
+  }
+
+  while (inheritedLines.length > 0 && inheritedLines[inheritedLines.length - 1] === "") {
+    inheritedLines.pop();
+  }
+  return inheritedLines.join("\n");
+}
+
+/** Render a session-local Codex config with inherited runtime settings and trust entries. */
+export function renderIsolatedCodexConfig(params: {
+  sourceConfigToml?: string;
+  projectPaths: string[];
+}): string {
   const normalized = Array.from(
     new Set(
-      projectPaths
+      params.projectPaths
         .map((projectPath) => projectPath.trim())
         .filter(Boolean)
         .map((projectPath) => path.resolve(projectPath)),
     ),
   ).toSorted((left, right) => left.localeCompare(right));
 
+  const inheritedConfig = params.sourceConfigToml
+    ? extractInheritedCodexRuntimeConfig(params.sourceConfigToml)
+    : "";
+
   return [
     "# Generated by OpenClaw for Codex ACP sessions.",
+    inheritedConfig,
     ...normalized.flatMap((projectPath) => [
       "",
       `[projects.${JSON.stringify(projectPath)}]`,
       'trust_level = "trusted"',
     ]),
     "",
-  ].join("\n");
+  ]
+    .filter((line, index, lines) => !(line === "" && lines[index - 1] === ""))
+    .join("\n");
 }

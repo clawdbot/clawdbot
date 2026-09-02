@@ -1,7 +1,16 @@
+/**
+ * Browser doctor report builder.
+ *
+ * Turns BrowserStatus into profile-aware diagnostic checks and fix hints for
+ * CLI, tool, and HTTP doctor responses.
+ */
+import chromeExtensionManifest from "../../chrome-extension/manifest.json" with { type: "json" };
+import { formatBrowserGraphicsSummary } from "./chrome.graphics.js";
 import type { BrowserStatus, BrowserTransport } from "./client.types.js";
 
 type BrowserDoctorCheckStatus = "pass" | "warn" | "fail" | "info";
 
+/** One browser doctor check result. */
 export type BrowserDoctorCheck = {
   id: string;
   label: string;
@@ -10,6 +19,7 @@ export type BrowserDoctorCheck = {
   fixHint?: string;
 };
 
+/** Browser doctor report returned by browser-control clients. */
 export type BrowserDoctorReport = {
   ok: boolean;
   profile: string;
@@ -18,15 +28,36 @@ export type BrowserDoctorReport = {
   status: BrowserStatus;
 };
 
+function isChromeExtensionVersion(value: unknown): value is string {
+  if (typeof value !== "string") {
+    return false;
+  }
+  const components = value.split(".");
+  return (
+    components.length <= 4 &&
+    components.every(
+      (component) => /^(?:0|[1-9]\d{0,4})$/.test(component) && Number(component) <= 65_535,
+    ) &&
+    components.some((component) => component !== "0")
+  );
+}
+
+/** Build a browser doctor report from a status response and environment facts. */
 export function buildBrowserDoctorReport(params: {
   status: BrowserStatus;
+  extensionVersion?: string;
   platform?: NodeJS.Platform;
   env?: NodeJS.ProcessEnv;
   uid?: number;
 }): BrowserDoctorReport {
   const status = params.status;
   const checks: BrowserDoctorCheck[] = [];
-  const transport: BrowserTransport = status.transport === "chrome-mcp" ? "chrome-mcp" : "cdp";
+  const transport: BrowserTransport =
+    status.transport === "chrome-mcp"
+      ? "chrome-mcp"
+      : status.transport === "extension"
+        ? "extension"
+        : "cdp";
 
   checks.push({
     id: "plugin-enabled",
@@ -57,6 +88,49 @@ export function buildBrowserDoctorReport(params: {
             fixHint:
               "Keep the matching Chromium browser running, enable remote debugging in chrome://inspect, and accept the attach prompt.",
           }),
+    });
+  } else if (transport === "extension") {
+    checks.push({
+      id: "extension-relay",
+      label: "Chrome extension relay",
+      status: status.running ? "pass" : "fail",
+      summary: status.running
+        ? "OpenClaw Chrome extension is connected"
+        : "OpenClaw Chrome extension is not connected",
+      ...(status.running
+        ? {}
+        : {
+            fixHint:
+              "Install the OpenClaw Chrome extension (openclaw browser extension path), run openclaw browser extension pair, and paste the pairing string into the extension popup.",
+          }),
+    });
+
+    const runningVersion = isChromeExtensionVersion(params.extensionVersion)
+      ? params.extensionVersion
+      : undefined;
+    const bundledVersion = isChromeExtensionVersion(chromeExtensionManifest.version)
+      ? chromeExtensionManifest.version
+      : undefined;
+    // Chrome treats absent version components as zero, so trailing zeroes do not indicate drift.
+    const mismatch = Boolean(
+      runningVersion &&
+      bundledVersion &&
+      runningVersion.replace(/(?:\.0)+$/, "") !== bundledVersion.replace(/(?:\.0)+$/, ""),
+    );
+    checks.push({
+      id: "extension-version",
+      label: "Chrome extension version",
+      status: !runningVersion || !bundledVersion ? "info" : mismatch ? "warn" : "pass",
+      summary:
+        runningVersion && bundledVersion
+          ? `running ${runningVersion}; bundled ${bundledVersion} (${mismatch ? "mismatch" : "match"})`
+          : "version data unavailable",
+      ...(mismatch
+        ? {
+            fixHint:
+              "Reload the OpenClaw extension from chrome://extensions. If the versions still differ, fully quit and reopen Chrome.",
+          }
+        : {}),
     });
   } else {
     checks.push({
@@ -135,6 +209,21 @@ export function buildBrowserDoctorReport(params: {
         ? {}
         : { fixHint: "Check Chrome launch logs, stale locks, proxy env, and port conflicts." }),
     });
+
+    if (status.graphics) {
+      const graphicsStatus =
+        status.graphics.status === "unavailable"
+          ? "warn"
+          : status.graphics.acceleration === "hardware"
+            ? "pass"
+            : "info";
+      checks.push({
+        id: "graphics",
+        label: "Graphics",
+        status: graphicsStatus,
+        summary: formatBrowserGraphicsSummary(status.graphics),
+      });
+    }
   }
 
   return {

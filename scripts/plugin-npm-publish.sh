@@ -2,24 +2,66 @@
 
 set -euo pipefail
 
-mode="${1:-}"
-package_dir="${2:-}"
+usage() {
+  echo "usage: bash scripts/plugin-npm-publish.sh [--repo-root <dir>] [--dry-run|--pack|--pack-dry-run|--publish] <package-dir>"
+}
 
-if [[ "${mode}" != "--dry-run" && "${mode}" != "--pack-dry-run" && "${mode}" != "--publish" ]]; then
-  echo "usage: bash scripts/plugin-npm-publish.sh [--dry-run|--pack-dry-run|--publish] <package-dir>" >&2
-  exit 2
+if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
+  usage
+  exit 0
 fi
 
+tooling_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+repo_root="${tooling_root}"
+if [[ "${1:-}" == "--repo-root" ]]; then
+  if [[ -z "${2:-}" || "${2:-}" == -* ]]; then
+    echo "--repo-root requires a directory" >&2
+    exit 2
+  fi
+  repo_root="$(cd "$2" && pwd)" || {
+    echo "repository root is not a directory: $2" >&2
+    exit 2
+  }
+  shift 2
+fi
+
+mode="${1:-}"
+if [[ "${mode}" != "--dry-run" && "${mode}" != "--pack" && "${mode}" != "--pack-dry-run" && "${mode}" != "--publish" ]]; then
+  usage >&2
+  exit 2
+fi
+shift
+
+if [[ "${1:-}" == "--" ]]; then
+  shift
+fi
+package_dir=""
+if [[ "$#" -gt 0 ]]; then
+  case "$1" in
+    -*) echo "unexpected plugin npm package-dir option: $1" >&2; exit 2 ;;
+    /*) package_dir="$1"; shift ;;
+    *) package_dir="${repo_root}/$1"; shift ;;
+  esac
+fi
 if [[ -z "${package_dir}" ]]; then
   echo "missing package dir" >&2
   exit 2
 fi
+if [[ "$#" -gt 0 ]]; then
+  echo "unexpected plugin npm publish argument: $1" >&2
+  exit 2
+fi
+if [[ "${mode}" == "--pack" && -z "${OPENCLAW_PLUGIN_NPM_PACK_OUTPUT_DIR:-}" ]]; then
+  echo "--pack requires OPENCLAW_PLUGIN_NPM_PACK_OUTPUT_DIR" >&2
+  exit 2
+fi
 
+cd "${tooling_root}"
 package_name="$(node -e 'const pkg = require(require("node:path").resolve(process.argv[1], "package.json")); console.log(pkg.name)' "${package_dir}")"
 package_version="$(node -e 'const pkg = require(require("node:path").resolve(process.argv[1], "package.json")); console.log(pkg.version)' "${package_dir}")"
 current_beta_version="$(npm view "${package_name}" dist-tags.beta 2>/dev/null || true)"
 log() {
-  if [[ "${mode}" == "--pack-dry-run" ]]; then
+  if [[ "${mode}" == "--pack" || "${mode}" == "--pack-dry-run" ]]; then
     printf '%s\n' "$*" >&2
   else
     printf '%s\n' "$*"
@@ -36,6 +78,7 @@ import {
 const plan = resolveNpmPublishPlan(
   process.env.PACKAGE_VERSION ?? "",
   process.env.CURRENT_BETA_VERSION,
+  process.env.OPENCLAW_PLUGIN_NPM_PUBLISH_TAG,
 );
 const auth = resolveNpmDistTagMirrorAuth({
   nodeAuthToken: process.env.NODE_AUTH_TOKEN,
@@ -66,6 +109,7 @@ if [[ "${OPENCLAW_NPM_PUBLISH_PROVENANCE:-1}" != "0" && "${OPENCLAW_NPM_PUBLISH_
 fi
 
 log "Resolved package dir: ${package_dir}"
+log "Resolved repository root: ${repo_root}"
 log "Resolved package name: ${package_name}"
 log "Resolved package version: ${package_version}"
 log "Current beta dist-tag: ${current_beta_version:-<missing>}"
@@ -81,7 +125,20 @@ build_package_runtime() {
     return
   fi
   log "Package-local runtime build: ${package_dir}"
-  node scripts/lib/plugin-npm-runtime-build.mjs "${package_dir}" >&2
+  (
+    cd "${repo_root}"
+    node "${tooling_root}/scripts/lib/plugin-npm-runtime-build.mjs" "${package_dir}" >&2
+  )
+}
+
+check_package_npm_lock() {
+  log "Package-local npm package-lock check: ${package_dir}"
+  (
+    cd "${repo_root}"
+    OPENCLAW_NPM_PACKAGE_LOCK_REPO_ROOT="${repo_root}" \
+      node "${tooling_root}/scripts/generate-npm-package-lock.mjs" \
+        --package-dir "${package_dir}" >&2
+  )
 }
 
 mirror_auth_token=""
@@ -115,7 +172,29 @@ if [[ "${mirror_auth_requirement}" == "required" && -z "${mirror_auth_token}" ]]
   exit 1
 fi
 
-if [[ "${mode}" == "--pack-dry-run" ]]; then
+verify_release_tooling_identity() {
+  if [[ "${OPENCLAW_RELEASE_TOOLING_IDENTITY_REQUIRED:-}" != "true" ]]; then
+    return 0
+  fi
+  identity_args=(
+    verify
+    --repository "${OPENCLAW_RELEASE_TOOLING_REPOSITORY:-}"
+    --workflow-ref "${OPENCLAW_RELEASE_TOOLING_REF:-}"
+    --workflow-full-ref "${OPENCLAW_RELEASE_TOOLING_FULL_REF:-}"
+    --workflow-sha "${OPENCLAW_RELEASE_TOOLING_SHA:-}"
+    --release-publish-run-id "${OPENCLAW_RELEASE_PUBLISH_RUN_ID:-}"
+    --release-publish-run-attempt "${OPENCLAW_RELEASE_PUBLISH_RUN_ATTEMPT:-}"
+    --release-publish-ref "${OPENCLAW_RELEASE_PUBLISH_REF:-}"
+    --release-publish-full-ref "${OPENCLAW_RELEASE_PUBLISH_FULL_REF:-}"
+    --release-publish-parent-state-policy "${OPENCLAW_RELEASE_PUBLISH_PARENT_STATE_POLICY:-}"
+  )
+  if [[ "${OPENCLAW_RELEASE_TOOLING_ALLOW_PREVALIDATED_REF:-}" == "true" ]]; then
+    identity_args+=(--allow-prevalidated-ref)
+  fi
+  node "${tooling_root}/scripts/release-tooling-identity.mjs" "${identity_args[@]}"
+}
+
+if [[ "${mode}" == "--pack" || "${mode}" == "--pack-dry-run" ]]; then
   {
     printf 'Publish command:'
     printf ' %q' "${publish_cmd[@]}"
@@ -132,10 +211,24 @@ if [[ "${mode}" == "--dry-run" ]]; then
 fi
 
 build_package_runtime
+check_package_npm_lock
 
-if [[ "${mode}" == "--pack-dry-run" ]]; then
-  node scripts/lib/plugin-npm-package-manifest.mjs --run "${package_dir}" -- \
-    npm pack --dry-run --json --ignore-scripts
+if [[ "${mode}" == "--pack" || "${mode}" == "--pack-dry-run" ]]; then
+  pack_args=(npm pack --json --ignore-scripts)
+  if [[ "${mode}" == "--pack-dry-run" ]]; then
+    pack_args+=(--dry-run)
+  else
+    mkdir -p "${OPENCLAW_PLUGIN_NPM_PACK_OUTPUT_DIR}"
+    pack_output_dir="$(cd "${OPENCLAW_PLUGIN_NPM_PACK_OUTPUT_DIR}" && pwd)"
+    pack_args+=(--pack-destination "${pack_output_dir}")
+  fi
+  (
+    cd "${repo_root}"
+    OPENCLAW_NPM_PACKAGE_LOCK_REPO_ROOT="${repo_root}" \
+      OPENCLAW_PLUGIN_NPM_BUNDLE_DEPENDENCIES=1 \
+      node "${tooling_root}/scripts/lib/plugin-npm-package-manifest.mjs" \
+        --run "${package_dir}" -- "${pack_args[@]}"
+  )
   exit 0
 fi
 
@@ -143,7 +236,13 @@ fi
   cleanup_files=()
   trap 'rm -f "${cleanup_files[@]}"' EXIT
   run_with_manifest_overlay() {
-    node scripts/lib/plugin-npm-package-manifest.mjs --run "${package_dir}" -- "$@"
+    (
+      cd "${repo_root}"
+      OPENCLAW_NPM_PACKAGE_LOCK_REPO_ROOT="${repo_root}" \
+        OPENCLAW_PLUGIN_NPM_BUNDLE_DEPENDENCIES=1 \
+        node "${tooling_root}/scripts/lib/plugin-npm-package-manifest.mjs" \
+          --run "${package_dir}" -- "$@"
+    )
   }
   publish_userconfig=""
   if [[ -n "${publish_auth_token}" ]]; then
@@ -151,6 +250,9 @@ fi
     cleanup_files+=("${publish_userconfig}")
     chmod 0600 "${publish_userconfig}"
     printf '%s\n' "//registry.npmjs.org/:_authToken=${publish_auth_token}" > "${publish_userconfig}"
+  fi
+  verify_release_tooling_identity
+  if [[ -n "${publish_auth_token}" ]]; then
     NPM_CONFIG_USERCONFIG="${publish_userconfig}" run_with_manifest_overlay "${publish_cmd[@]}"
   else
     run_with_manifest_overlay "${publish_cmd[@]}"
@@ -166,6 +268,7 @@ fi
     for dist_tag in "${mirror_dist_tags[@]}"; do
       [[ -n "${dist_tag}" ]] || continue
       echo "Mirroring ${package_name}@${package_version} onto dist-tag ${dist_tag}"
+      verify_release_tooling_identity
       if ! NPM_CONFIG_USERCONFIG="${mirror_userconfig}" \
         npm dist-tag add "${package_name}@${package_version}" "${dist_tag}"; then
         if [[ "${mirror_auth_requirement}" == "required" ]]; then

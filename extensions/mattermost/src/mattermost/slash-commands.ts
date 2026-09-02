@@ -1,23 +1,15 @@
-/**
- * Mattermost native slash command support.
- *
- * Registers custom slash commands via the Mattermost REST API and handles
- * incoming command callbacks via an HTTP endpoint on the gateway.
- *
- * Architecture:
- * - On startup, registers commands with MM via POST /api/v4/commands
- * - MM sends HTTP POST to callbackUrl when a user invokes a command
- * - The callback handler reconstructs the text as `/<command> <args>` and
- *   routes it through the standard inbound reply pipeline
- * - On shutdown, cleans up registered commands via DELETE /api/v4/commands/{id}
- */
-
-import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
+// Mattermost plugin module implements slash commands behavior.
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { truncateUtf8Prefix } from "openclaw/plugin-sdk/text-utility-runtime";
+import { isWildcardBindHost } from "./callback-host.js";
 import type { MattermostClient } from "./client.js";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
+// Mattermost rejects command descriptions above 128 UTF-8 bytes. Keep portable
+// descriptions intact until this API boundary so other channels retain their text.
 export const MATTERMOST_SLASH_POST_METHOD = "P";
+const MATTERMOST_COMMAND_DESCRIPTION_MAX_BYTES = 128;
 
 export type MattermostSlashCommandConfig = {
   /** Enable native slash commands. "auto" resolves to false for now (opt-in). */
@@ -185,6 +177,14 @@ export const DEFAULT_COMMAND_SPECS: MattermostCommandSpec[] = [
     autoComplete: true,
     autoCompleteHint: "[on|off]",
   },
+  {
+    trigger: "oc_queue",
+    originalName: "queue",
+    description: "Adjust active-run queue behavior",
+    autoComplete: true,
+    autoCompleteHint:
+      "[steer|followup|collect|interrupt] [debounce:2s] [cap:N] [drop:old|new|summarize]",
+  },
 ];
 
 // ─── Command registration ────────────────────────────────────────────────────
@@ -275,7 +275,7 @@ export async function registerSlashCommands(params: {
   }
 
   // Fetch existing commands to avoid duplicates
-  let existing: MattermostCommandResponse[] = [];
+  let existing: MattermostCommandResponse[];
   try {
     existing = await listMattermostCommands(client, teamId);
   } catch (err) {
@@ -296,6 +296,10 @@ export async function registerSlashCommands(params: {
   const registered: MattermostRegisteredCommand[] = [];
 
   for (const spec of commands) {
+    const description = truncateUtf8Prefix(
+      spec.description,
+      MATTERMOST_COMMAND_DESCRIPTION_MAX_BYTES,
+    );
     const existingForTrigger = existingByTrigger.get(spec.trigger) ?? [];
     const ownedCommands = existingForTrigger.filter(
       (cmd) => cmd.creator_id?.trim() === normalizedCreatorUserId,
@@ -350,9 +354,9 @@ export async function registerSlashCommands(params: {
           trigger: spec.trigger,
           method: MATTERMOST_SLASH_POST_METHOD,
           url: callbackUrl,
-          description: spec.description,
+          description,
           auto_complete: spec.autoComplete,
-          auto_complete_desc: spec.description,
+          auto_complete_desc: description,
           auto_complete_hint: spec.autoCompleteHint,
         });
         registered.push({
@@ -389,9 +393,9 @@ export async function registerSlashCommands(params: {
         trigger: spec.trigger,
         method: MATTERMOST_SLASH_POST_METHOD,
         url: callbackUrl,
-        description: spec.description,
+        description,
         auto_complete: spec.autoComplete,
-        auto_complete_desc: spec.description,
+        auto_complete_desc: description,
         auto_complete_hint: spec.autoCompleteHint,
       });
       log?.(`mattermost: registered command /${spec.trigger} (id=${created.id})`);
@@ -575,19 +579,6 @@ export function resolveCallbackUrl(params: {
   if (params.config.callbackUrl) {
     return params.config.callbackUrl;
   }
-
-  const isWildcardBindHost = (rawHost: string): boolean => {
-    const trimmed = rawHost.trim();
-    if (!trimmed) {
-      return false;
-    }
-    const host = trimmed.startsWith("[") && trimmed.endsWith("]") ? trimmed.slice(1, -1) : trimmed;
-
-    // NOTE: Wildcard listen hosts are valid bind addresses but are not routable callback
-    // destinations. Don't emit callback URLs like http://0.0.0.0:3015/... or http://[::]:3015/...
-    // when an operator sets gateway.customBindHost.
-    return host === "0.0.0.0" || host === "::" || host === "0:0:0:0:0:0:0:0" || host === "::0";
-  };
 
   let host =
     params.gatewayHost && !isWildcardBindHost(params.gatewayHost)

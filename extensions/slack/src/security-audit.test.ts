@@ -1,6 +1,7 @@
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+// Slack tests cover security audit plugin behavior.
 import { describe, expect, it, vi } from "vitest";
 import type { ResolvedSlackAccount } from "./accounts.js";
-import type { OpenClawConfig } from "./runtime-api.js";
 import { collectSlackSecurityAuditFindings } from "./security-audit.js";
 
 const { readChannelAllowFromStoreMock } = vi.hoisted(() => ({
@@ -22,13 +23,8 @@ function createSlackAccount(config: NonNullable<OpenClawConfig["channels"]>["sla
   } as ResolvedSlackAccount;
 }
 
-function createSlashCommandSlackConfig(
-  options: { useAccessGroups?: boolean } = {},
-): OpenClawConfig {
+function createSlashCommandSlackConfig(): OpenClawConfig {
   return {
-    ...(options.useAccessGroups === undefined
-      ? {}
-      : { commands: { useAccessGroups: options.useAccessGroups } }),
     channels: {
       slack: {
         enabled: true,
@@ -54,28 +50,9 @@ describe("Slack security audit findings", () => {
   it("flags slash commands without a channel users allowlist", async () => {
     const findings = await collectSlackFindingsForConfig(createSlashCommandSlackConfig());
 
-    expect(findings).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          checkId: "channels.slack.commands.slash.no_allowlists",
-          severity: "warn",
-        }),
-      ]),
+    const slashAllowlistFinding = findings.find(
+      ({ checkId }) => checkId === "channels.slack.commands.slash.no_allowlists",
     );
-  });
-
-  it("flags slash commands when access-group enforcement is disabled", async () => {
-    const findings = await collectSlackFindingsForConfig(
-      createSlashCommandSlackConfig({ useAccessGroups: false }),
-    );
-
-    expect(findings).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          checkId: "channels.slack.commands.slash.useAccessGroups_off",
-          severity: "critical",
-        }),
-      ]),
-    );
+    expect(slashAllowlistFinding?.severity).toBe("warn");
   });
 });

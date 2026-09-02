@@ -1,5 +1,5 @@
 /**
- * File-backed store for Bot Framework OAuth SSO tokens.
+ * SQLite-backed store for Bot Framework OAuth SSO tokens.
  *
  * Tokens are keyed by (connectionName, userId). `userId` should be the
  * stable AAD object ID (`activity.from.aadObjectId`) when available,
@@ -11,10 +11,16 @@
  * valid token without reaching back into Bot Framework every turn.
  */
 
-import { resolveMSTeamsStorePath } from "./storage.js";
-import { readJsonFile, withFileLock, writeJsonFile } from "./store-fs.js";
+import { createHash } from "node:crypto";
+import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
+import { getMSTeamsRuntime } from "./runtime.js";
+import {
+  resolveMSTeamsSqliteStateEnv,
+  toPluginJsonValue,
+  withMSTeamsSqliteMutationLock,
+} from "./sqlite-state.js";
 
-type MSTeamsSsoStoredToken = {
+export type MSTeamsSsoStoredToken = {
   /** Connection name from the Bot Framework OAuth connection setting. */
   connectionName: string;
   /** Stable user identifier (AAD object ID preferred). */
@@ -27,9 +33,9 @@ type MSTeamsSsoStoredToken = {
   updatedAt: string;
 };
 
-export type MSTeamsSsoTokenStore = {
+type MSTeamsSsoTokenStore = {
   get(params: { connectionName: string; userId: string }): Promise<MSTeamsSsoStoredToken | null>;
-  save(token: MSTeamsSsoStoredToken): Promise<void>;
+  save(value: MSTeamsSsoStoredToken): Promise<void>;
   remove(params: { connectionName: string; userId: string }): Promise<boolean>;
 };
 
@@ -39,17 +45,34 @@ type SsoStoreData = {
   tokens: Record<string, MSTeamsSsoStoredToken>;
 };
 
-const STORE_FILENAME = "msteams-sso-tokens.json";
+type MSTeamsSsoStoreData = SsoStoreData;
+
+export const MSTEAMS_SSO_TOKENS_LEGACY_FILENAME = "msteams-sso-tokens.json";
+export const MSTEAMS_SSO_TOKENS_NAMESPACE = "sso-tokens";
+const SSO_TOKEN_MUTATION_KEY = "sso-tokens";
+export const MSTEAMS_MAX_SSO_TOKENS = 5000;
 const STORE_KEY_VERSION_PREFIX = "v2:";
 
-function makeKey(connectionName: string, userId: string): string {
-  return `${STORE_KEY_VERSION_PREFIX}${Buffer.from(
-    JSON.stringify([connectionName, userId]),
-    "utf8",
-  ).toString("base64url")}`;
+export function makeMSTeamsSsoTokenStoreKey(connectionName: string, userId: string): string {
+  return `${STORE_KEY_VERSION_PREFIX}${createHash("sha256")
+    .update(JSON.stringify([connectionName, userId]))
+    .digest("hex")}`;
 }
 
-function normalizeStoredToken(value: unknown): MSTeamsSsoStoredToken | null {
+function createTokenStore(params?: {
+  env?: NodeJS.ProcessEnv;
+  homedir?: () => string;
+  stateDir?: string;
+  storePath?: string;
+}): PluginStateKeyedStore<MSTeamsSsoStoredToken> {
+  return getMSTeamsRuntime().state.openKeyedStore<MSTeamsSsoStoredToken>({
+    namespace: MSTEAMS_SSO_TOKENS_NAMESPACE,
+    maxEntries: MSTEAMS_MAX_SSO_TOKENS,
+    env: resolveMSTeamsSqliteStateEnv(params),
+  });
+}
+
+export function normalizeMSTeamsSsoStoredToken(value: unknown): MSTeamsSsoStoredToken | null {
   if (!value || typeof value !== "object") {
     return null;
   }
@@ -75,7 +98,7 @@ function normalizeStoredToken(value: unknown): MSTeamsSsoStoredToken | null {
   };
 }
 
-function isSsoStoreData(value: unknown): value is SsoStoreData {
+export function isMSTeamsSsoStoreData(value: unknown): value is MSTeamsSsoStoreData {
   if (!value || typeof value !== "object") {
     return false;
   }
@@ -89,78 +112,28 @@ export function createMSTeamsSsoTokenStoreFs(params?: {
   stateDir?: string;
   storePath?: string;
 }): MSTeamsSsoTokenStore {
-  const filePath = resolveMSTeamsStorePath({
-    filename: STORE_FILENAME,
-    env: params?.env,
-    homedir: params?.homedir,
-    stateDir: params?.stateDir,
-    storePath: params?.storePath,
-  });
-
-  const empty: SsoStoreData = { version: 1, tokens: {} };
-
-  const readStore = async (): Promise<SsoStoreData> => {
-    const { value } = await readJsonFile(filePath, empty);
-    if (!isSsoStoreData(value)) {
-      return { version: 1, tokens: {} };
-    }
-    const tokens: Record<string, MSTeamsSsoStoredToken> = {};
-    for (const stored of Object.values(value.tokens)) {
-      const normalized = normalizeStoredToken(stored);
-      if (!normalized) {
-        continue;
-      }
-      tokens[makeKey(normalized.connectionName, normalized.userId)] = normalized;
-    }
-    return {
-      version: 1,
-      tokens,
-    };
-  };
+  const tokenStore = createTokenStore(params);
 
   return {
     async get({ connectionName, userId }) {
-      const store = await readStore();
-      return store.tokens[makeKey(connectionName, userId)] ?? null;
+      return (await tokenStore.lookup(makeMSTeamsSsoTokenStoreKey(connectionName, userId))) ?? null;
     },
 
     async save(token) {
-      await withFileLock(filePath, empty, async () => {
-        const store = await readStore();
-        const key = makeKey(token.connectionName, token.userId);
-        store.tokens[key] = { ...token };
-        await writeJsonFile(filePath, store);
+      await withMSTeamsSqliteMutationLock(params, SSO_TOKEN_MUTATION_KEY, async () => {
+        await tokenStore.register(
+          makeMSTeamsSsoTokenStoreKey(token.connectionName, token.userId),
+          toPluginJsonValue({ ...token }),
+        );
       });
     },
 
     async remove({ connectionName, userId }) {
       let removed = false;
-      await withFileLock(filePath, empty, async () => {
-        const store = await readStore();
-        const key = makeKey(connectionName, userId);
-        if (store.tokens[key]) {
-          delete store.tokens[key];
-          removed = true;
-          await writeJsonFile(filePath, store);
-        }
+      await withMSTeamsSqliteMutationLock(params, SSO_TOKEN_MUTATION_KEY, async () => {
+        removed = await tokenStore.delete(makeMSTeamsSsoTokenStoreKey(connectionName, userId));
       });
       return removed;
-    },
-  };
-}
-
-/** In-memory store, primarily useful for tests. */
-export function createMSTeamsSsoTokenStoreMemory(): MSTeamsSsoTokenStore {
-  const tokens = new Map<string, MSTeamsSsoStoredToken>();
-  return {
-    async get({ connectionName, userId }) {
-      return tokens.get(makeKey(connectionName, userId)) ?? null;
-    },
-    async save(token) {
-      tokens.set(makeKey(token.connectionName, token.userId), { ...token });
-    },
-    async remove({ connectionName, userId }) {
-      return tokens.delete(makeKey(connectionName, userId));
     },
   };
 }

@@ -1,6 +1,9 @@
+// Slack plugin module implements reconnect policy behavior.
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { formatSlackError } from "../errors.js";
+
 const SLACK_AUTH_ERROR_RE =
-  /account_inactive|invalid_auth|token_revoked|token_expired|not_authed|org_login_required|team_access_not_granted|missing_scope|cannot_find_service|invalid_token/i;
-const SLACK_TOKEN_RE = /\bx(?:app|ox[baprs]?)-[A-Za-z0-9-]+\b/g;
+  /account_inactive|invalid_auth|token_revoked|token_expired|not_authed|org_login_required|team_access_not_granted|user_removed_from_team|team_disabled|missing_scope|cannot_find_service|invalid_token/i;
 const NO_ERROR_DETAIL = "no error detail";
 
 export const SLACK_SOCKET_RECONNECT_POLICY = {
@@ -8,17 +11,20 @@ export const SLACK_SOCKET_RECONNECT_POLICY = {
   maxMs: 30_000,
   factor: 1.8,
   jitter: 0.25,
-  maxAttempts: 12,
 } as const;
 
-type SlackSocketDisconnectEvent = "disconnect" | "unable_to_socket_mode_start" | "error";
+type SlackSocketDisconnectEvent = "disconnect" | "unable_to_socket_mode_start";
 
 type EmitterLike = {
   on: (event: string, listener: (...args: unknown[]) => void) => unknown;
   off: (event: string, listener: (...args: unknown[]) => void) => unknown;
 };
 
-export function getSocketEmitter(app: unknown): EmitterLike | null {
+const SLACK_SOCKET_SHARED_CONNECTION_DOCS_URL =
+  "https://docs.slack.dev/apis/events-api/using-socket-mode#using-multiple-connections";
+const SLACK_SOCKET_HELLO_MARKER = Buffer.from('"hello"');
+
+function getSocketEmitter(app: unknown): EmitterLike | null {
   const receiver = (app as { receiver?: unknown }).receiver;
   const client =
     receiver && typeof receiver === "object"
@@ -44,6 +50,69 @@ export function getSocketEmitter(app: unknown): EmitterLike | null {
   };
 }
 
+function isBufferArray(value: unknown): value is Buffer[] {
+  return Array.isArray(value) && value.every((entry) => Buffer.isBuffer(entry));
+}
+
+function resolveSlackSocketModeConnectionCount(message: unknown): number | undefined {
+  const buffer =
+    typeof message === "string"
+      ? Buffer.from(message)
+      : Buffer.isBuffer(message)
+        ? message
+        : message instanceof ArrayBuffer
+          ? Buffer.from(message)
+          : isBufferArray(message)
+            ? Buffer.concat(message)
+            : undefined;
+  if (!buffer?.includes(SLACK_SOCKET_HELLO_MARKER)) {
+    return undefined;
+  }
+  let payload: unknown;
+  try {
+    payload = JSON.parse(buffer.toString("utf8"));
+  } catch {
+    return undefined;
+  }
+  const count = isRecord(payload) && payload.type === "hello" ? payload.num_connections : undefined;
+  return typeof count === "number" && Number.isSafeInteger(count) && count >= 0 ? count : undefined;
+}
+
+export function formatSlackSocketModeSharedConnectionWarning(activeConnections: number): string {
+  return [
+    `slack socket mode reports ${activeConnections} active connections for this Slack app`,
+    "Slack may deliver each event to any one connection",
+    "ensure every OpenClaw gateway sharing this app has equivalent routing and authorization, or use a separate Slack app per gateway, one relay ingress, or HTTP Request URLs behind a load balancer",
+    `See ${SLACK_SOCKET_SHARED_CONNECTION_DOCS_URL}`,
+  ].join("; ");
+}
+
+export function registerSlackSocketModeConnectionDiagnostics(params: {
+  app: unknown;
+  onSharedConnection: (activeConnections: number) => void;
+}): () => void {
+  const emitter = getSocketEmitter(params.app);
+  if (!emitter) {
+    return () => {};
+  }
+  let hasWarned = false;
+  const listener = (message: unknown, isBinary?: unknown) => {
+    if (isBinary === true || hasWarned) {
+      return;
+    }
+    const activeConnections = resolveSlackSocketModeConnectionCount(message);
+    if (activeConnections === undefined || activeConnections <= 1) {
+      return;
+    }
+    hasWarned = true;
+    params.onSharedConnection(activeConnections);
+  };
+  emitter.on("ws_message", listener);
+  return () => {
+    emitter.off("ws_message", listener);
+  };
+}
+
 export function waitForSlackSocketDisconnect(
   app: unknown,
   abortSignal?: AbortSignal,
@@ -63,13 +132,11 @@ export function waitForSlackSocketDisconnect(
     const disconnectListener = () => resolveOnce({ event: "disconnect" });
     const startFailListener = (error?: unknown) =>
       resolveOnce({ event: "unable_to_socket_mode_start", error });
-    const errorListener = (error: unknown) => resolveOnce({ event: "error", error });
     const abortListener = () => resolveOnce({ event: "disconnect" });
 
     const cleanup = () => {
       emitter.off("disconnected", disconnectListener);
       emitter.off("unable_to_socket_mode_start", startFailListener);
-      emitter.off("error", errorListener);
       abortSignal?.removeEventListener("abort", abortListener);
     };
 
@@ -80,151 +147,18 @@ export function waitForSlackSocketDisconnect(
 
     emitter.on("disconnected", disconnectListener);
     emitter.on("unable_to_socket_mode_start", startFailListener);
-    emitter.on("error", errorListener);
     abortSignal?.addEventListener("abort", abortListener, { once: true });
   });
 }
 
 /**
- * Detect non-recoverable Slack API / auth errors that should NOT be retried.
- * These indicate permanent credential problems (revoked bot, deactivated account, etc.)
- * and retrying will never succeed — continuing to retry blocks the entire gateway.
+ * Detect permanent Slack account and credential failures.
+ * Transient request and HTTP failures stay in OpenClaw's reconnect loop.
  */
 export function isNonRecoverableSlackAuthError(error: unknown): boolean {
   return SLACK_AUTH_ERROR_RE.test(formatUnknownError(error, ""));
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
-}
-
-function redactSlackSecrets(value: string) {
-  return value.replaceAll(SLACK_TOKEN_RE, "[redacted-slack-token]");
-}
-
-function addStringDetail(details: string[], label: string, value: unknown) {
-  if (typeof value !== "string") {
-    return;
-  }
-  const trimmed = redactSlackSecrets(value.trim());
-  if (trimmed) {
-    details.push(label ? `${label}: ${trimmed}` : trimmed);
-  }
-}
-
-function addScalarDetail(details: string[], label: string, value: unknown) {
-  if (typeof value === "string") {
-    addStringDetail(details, label, value);
-    return;
-  }
-  if (typeof value === "number" || typeof value === "boolean") {
-    details.push(`${label}: ${String(value)}`);
-  }
-}
-
-function safeStringify(value: unknown): string | undefined {
-  const seen = new WeakSet<object>();
-  try {
-    const result = JSON.stringify(value, (_key, nested) => {
-      if (typeof nested !== "object" || nested === null) {
-        return nested;
-      }
-      if (seen.has(nested)) {
-        return "[Circular]";
-      }
-      seen.add(nested);
-      return nested;
-    });
-    return result ? redactSlackSecrets(result) : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-function addSlackResponseMetadata(details: string[], value: unknown) {
-  if (!isRecord(value)) {
-    return;
-  }
-  const messages = value.messages;
-  if (Array.isArray(messages)) {
-    for (const message of messages) {
-      addStringDetail(details, "slack message", message);
-    }
-  }
-  const warnings = value.warnings;
-  if (Array.isArray(warnings)) {
-    for (const warning of warnings) {
-      addStringDetail(details, "slack warning", warning);
-    }
-  }
-}
-
-function addSlackDataDetails(details: string[], value: unknown) {
-  if (!isRecord(value)) {
-    return;
-  }
-  addScalarDetail(details, "slack error", value.error);
-  addScalarDetail(details, "needed", value.needed);
-  addScalarDetail(details, "provided", value.provided);
-  addSlackResponseMetadata(details, value.response_metadata);
-}
-
-function addRecordDetails(details: string[], value: Record<string, unknown>) {
-  addScalarDetail(details, "code", value.code);
-  addScalarDetail(details, "status", value.status);
-  addScalarDetail(details, "statusCode", value.statusCode);
-  addScalarDetail(details, "errno", value.errno);
-  addScalarDetail(details, "syscall", value.syscall);
-  addScalarDetail(details, "hostname", value.hostname);
-  addScalarDetail(details, "type", value.type);
-  addStringDetail(details, "statusText", value.statusText);
-  addStringDetail(details, "body", value.body);
-  addSlackDataDetails(details, value.data);
-  if (isRecord(value.response)) {
-    addScalarDetail(details, "response status", value.response.status);
-    addStringDetail(details, "response statusText", value.response.statusText);
-    addSlackDataDetails(details, value.response.data);
-  }
-}
-
-function collectErrorDetails(error: unknown): string[] {
-  const details: string[] = [];
-  if (error === undefined || error === null) {
-    return details;
-  }
-  if (typeof error === "string") {
-    addStringDetail(details, "", error);
-    return details;
-  }
-  if (error instanceof Error) {
-    addStringDetail(details, "", error.message || error.name);
-    if (error.cause !== undefined) {
-      const cause = formatUnknownError(error.cause, "");
-      if (cause) {
-        details.push(`cause: ${cause}`);
-      }
-    }
-  }
-  if (isRecord(error)) {
-    addRecordDetails(details, error);
-    const fallback = safeStringify(error);
-    if (details.length === 0 && fallback && fallback !== "{}") {
-      details.push(fallback);
-    }
-  }
-  return details;
-}
-
 export function formatUnknownError(error: unknown, fallback = NO_ERROR_DETAIL): string {
-  const details = collectErrorDetails(error);
-  if (details.length > 0) {
-    return details.join("; ");
-  }
-  if (error === undefined || error === null) {
-    return fallback;
-  }
-  if (typeof error === "string" && !error.trim()) {
-    return fallback;
-  }
-  return safeStringify(error) ?? fallback;
+  return formatSlackError(error, fallback);
 }

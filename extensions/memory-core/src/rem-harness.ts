@@ -1,6 +1,7 @@
+// Memory Core plugin module implements rem harness behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   resolveMemoryDeepDreamingConfig,
   resolveMemoryRemDreamingConfig,
@@ -12,12 +13,13 @@ import {
 } from "./dreaming-phases.js";
 import { previewGroundedRemMarkdown, type GroundedRemPreviewResult } from "./rem-evidence.js";
 import {
+  filterLiveShortTermRecallEntries,
   rankShortTermPromotionCandidates,
   readShortTermRecallEntries,
   type PromotionCandidate,
 } from "./short-term-promotion.js";
 
-const DAILY_MEMORY_FILE_NAME_RE = /^\d{4}-\d{2}-\d{2}\.md$/i;
+const DAILY_MEMORY_FILE_NAME_RE = /^\d{4}-\d{2}-\d{2}(?:-[^/]+)?\.md$/i;
 
 type MemoryRemHarnessRemConfig = ReturnType<typeof resolveMemoryRemDreamingConfig>;
 type MemoryRemHarnessDeepConfig = ReturnType<typeof resolveMemoryDeepDreamingConfig>;
@@ -82,7 +84,7 @@ function createSkippedRemPreview(): RemDreamingPreview {
 
 async function listWorkspaceDailyFiles(workspaceDir: string, limit?: number): Promise<string[]> {
   const memoryDir = path.join(workspaceDir, "memory");
-  let entries: string[] = [];
+  let entries: string[];
   try {
     const dirEntries = await fs.readdir(memoryDir, { withFileTypes: true });
     entries = dirEntries
@@ -130,10 +132,13 @@ export async function previewRemHarness(
     workspaceDir: params.workspaceDir,
     nowMs,
   });
-  const recallEntries = filterRecallEntriesWithinLookback({
-    entries: allRecallEntries,
-    nowMs,
-    lookbackDays: remConfig.lookbackDays,
+  const recallEntries = await filterLiveShortTermRecallEntries({
+    workspaceDir: params.workspaceDir,
+    entries: filterRecallEntriesWithinLookback({
+      entries: allRecallEntries,
+      nowMs,
+      lookbackDays: remConfig.lookbackDays,
+    }),
   });
   const remPreviewLimit = resolveRemPreviewLimit(remConfig.limit, params.remPreviewLimit);
   const remSkipped = remConfig.limit <= 0 || remPreviewLimit <= 0;

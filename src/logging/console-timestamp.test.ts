@@ -1,3 +1,4 @@
+// Console timestamp tests cover timestamp prefixes for console logging.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { formatConsoleTimestamp } from "./console.js";
 
@@ -41,38 +42,16 @@ describe("formatConsoleTimestamp", () => {
     expect(result).toBe(`${h}:${m}:${s}`);
   });
 
-  it("compact style returns local ISO-like timestamp with timezone offset", () => {
-    const result = formatConsoleTimestamp("compact");
-    expect(result).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}[+-]\d{2}:\d{2}$/);
+  it.each(["compact", "json"] as const)(
+    "%s style returns local ISO-like timestamp with timezone offset",
+    (style) => {
+      const result = formatConsoleTimestamp(style);
+      expect(result).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}[+-]\d{2}:\d{2}$/);
 
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-01-17T18:01:02.345Z"));
-    const now = new Date();
-    expect(formatConsoleTimestamp("compact")).toBe(formatExpectedLocalIsoWithOffset(now));
-  });
-
-  it("json style returns local ISO-like timestamp with timezone offset", () => {
-    const result = formatConsoleTimestamp("json");
-    expect(result).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}[+-]\d{2}:\d{2}$/);
-
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-01-17T18:01:02.345Z"));
-    const now = new Date();
-    expect(formatConsoleTimestamp("json")).toBe(formatExpectedLocalIsoWithOffset(now));
-  });
-
-  it("timestamp contains the correct local date components", () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-01-17T18:01:02.345Z"));
-
-    const before = new Date();
-    const result = formatConsoleTimestamp("compact");
-    const after = new Date();
-    // The date portion should match the local date
-    const datePart = result.slice(0, 10);
-    const beforeDate = `${before.getFullYear()}-${String(before.getMonth() + 1).padStart(2, "0")}-${String(before.getDate()).padStart(2, "0")}`;
-    const afterDate = `${after.getFullYear()}-${String(after.getMonth() + 1).padStart(2, "0")}-${String(after.getDate()).padStart(2, "0")}`;
-    // Allow for date boundary crossing during test
-    expect([beforeDate, afterDate]).toContain(datePart);
-  });
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date("2026-01-17T18:01:02.345Z"));
+      const now = new Date();
+      expect(formatConsoleTimestamp(style)).toBe(formatExpectedLocalIsoWithOffset(now));
+    },
+  );
 });

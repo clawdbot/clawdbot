@@ -1,32 +1,35 @@
+// Shared PR context and evidence policy for GitHub checks and label decisions.
+import { readBoundedResponseText } from "../lib/bounded-response.mjs";
+import { escapeRegExp } from "../lib/regexp.mjs";
+
+/** @typedef {Record<string, unknown>} PullRequest */
+/** @typedef {Record<string, unknown>} Comment */
+/**
+ * @typedef {object} Evaluation
+ * @property {string} status
+ * @property {string} reason
+ * @property {boolean} applies
+ * @property {boolean} passed
+ * @property {string[]} missingSections
+ */
+
+/** ClawSweeper-owned labels that OpenClaw preserves but does not mutate. */
 export const PROOF_OVERRIDE_LABEL = "proof: override";
-export const PROOF_SUPPLIED_LABEL = "proof: supplied";
 export const PROOF_SUFFICIENT_LABEL = "proof: sufficient";
-export const NEEDS_REAL_BEHAVIOR_PROOF_LABEL = "triage: needs-real-behavior-proof";
-export const MOCK_ONLY_PROOF_LABEL = "triage: mock-only-proof";
+export const NEEDS_PR_CONTEXT_LABEL = "triage: needs-pr-context";
+const MAINTAINER_TEAM_SLUG = "maintainer";
+const DEFAULT_GITHUB_API_TIMEOUT_MS = 30_000;
+const GITHUB_API_RESPONSE_BODY_MAX_BYTES = 1024 * 1024;
+
+const CLAWSWEEPER_PROOF_VERDICT_STATUS = "clawsweeper_exact_head_pass";
+const CLAWSWEEPER_BOT_LOGINS = new Set(["clawsweeper[bot]", "openclaw-clawsweeper[bot]"]);
 
 const privilegedAuthorAssociations = new Set(["OWNER", "MEMBER", "COLLABORATOR"]);
 
-const requiredProofFields = [
-  {
-    key: "behavior",
-    names: ["Behavior or issue addressed", "Issue addressed", "Behavior addressed"],
-  },
-  {
-    key: "environment",
-    names: ["Real environment tested", "Environment tested", "Real setup tested"],
-  },
-  {
-    key: "steps",
-    names: [
-      "Exact steps or command run after this patch",
-      "Exact steps or command run after the patch",
-      "Exact steps or command run after fix",
-      "Steps run after the patch",
-      "Command run after the patch",
-    ],
-  },
-  {
-    key: "evidence",
+// Existing open PRs still use the previous structured section. Remove these
+// fallbacks once those PRs no longer need body revalidation.
+const legacyProofFields = {
+  evidence: {
     names: [
       "Evidence after fix",
       "After-fix evidence",
@@ -34,59 +37,148 @@ const requiredProofFields = [
       "Evidence",
     ],
   },
-  {
-    key: "observedResult",
-    names: ["Observed result after fix", "Observed result after the fix", "Observed result"],
+  problem: {
+    names: ["Behavior or issue addressed", "Issue addressed", "Behavior addressed"],
   },
-  {
-    key: "notTested",
-    names: ["What was not tested", "Not tested"],
-    allowNone: true,
-  },
+};
+
+const legacyProofFieldNames = [
+  ...legacyProofFields.problem.names,
+  "Real environment tested",
+  "Environment tested",
+  "Real setup tested",
+  "Exact steps or command run after this patch",
+  "Exact steps or command run after the patch",
+  "Exact steps or command run after fix",
+  "Steps run after the patch",
+  "Command run after the patch",
+  ...legacyProofFields.evidence.names,
+  "Observed result after fix",
+  "Observed result after the fix",
+  "Observed result",
+  "What was not tested",
+  "Not tested",
+  "Before evidence",
+  "Before evidence optional",
 ];
 
-const allProofFieldNames = requiredProofFields
-  .flatMap((field) => field.names)
-  .concat(["Before evidence", "Before evidence optional"]);
-
 const missingValueRegex =
-  /^(?:n\/?a|not applicable|tbd|todo|unknown|unsure|none provided|no evidence|not tested|untested|-|\[[^\]]*\])$/i;
+  /^(?:n\/?a|none|not applicable|tbd|todo|unknown|unsure|none provided|no evidence|not tested|untested|did not test|didn't test|could not test|couldn't test|-|(?:-{3,}|\*{3,}|_{3,})|\[[^\]]*\])\.?$/i;
 
-const standaloneMissingProofRegex =
-  /^\s*(?:[-*]\s*)?(?:n\/?a|not applicable|not tested|untested|no evidence|did not test|didn't test|could not test|couldn't test)\s*\.?\s*$/im;
+function createTimeoutError(label, timeoutMs) {
+  const error = new Error(`${label} timed out after ${timeoutMs}ms`);
+  error.code = "ETIMEDOUT";
+  return error;
+}
 
-const mockOnlyEvidenceRegex =
-  /\b(?:pnpm|npm|yarn|bun)\s+(?:run\s+)?(?:test|vitest|lint|typecheck|tsgo|build|check)\b|\b(?:vitest|unit tests?|mock(?:ed|s)?|snapshots?|lint|typechecks?|tsgo|ci(?:\s+passes?)?)\b/i;
+function createTooLargeGitHubApiBodyError(label, maxBytes) {
+  const error = new Error(`${label} response body exceeded ${maxBytes} bytes`);
+  error.code = "ETOOBIG";
+  return error;
+}
 
-const artifactEvidenceRegex =
-  /!\[[^\]]*\]\([^)]+\)|github\.com\/user-attachments\/assets\/|github\.com\/[^/\s]+\/[^/\s]+\/actions\/runs\/\d+\/artifacts\/\d+|https?:\/\/\S+\.(?:png|jpe?g|gif|webp|mp4|mov|webm)\b/i;
+async function withGitHubApiTimeout(label, timeoutMs, run) {
+  const boundedTimeoutMs = Math.max(1, timeoutMs);
+  const controller = new AbortController();
+  const timeoutError = createTimeoutError(label, boundedTimeoutMs);
+  let timeout;
+  const timeoutPromise = new Promise((_, reject) => {
+    timeout = setTimeout(() => {
+      controller.abort(timeoutError);
+      reject(timeoutError);
+    }, boundedTimeoutMs);
+    timeout.unref?.();
+  });
 
-const evidenceDescriptorRegex =
-  /\b(?:screenshot|screen\s*recording|recording|terminal\s+(?:capture|screenshot|transcript|output)|console\s+(?:output|log)|runtime\s+logs?|redacted\s+logs?|live\s+output|actual\s+output|observed\s+output|stdout|stderr|stack trace|trace excerpt|log excerpt|linked\s+artifacts?|artifact\s+links?)\b|```[\s\S]*\n[\s\S]*\n```/i;
+  try {
+    return await Promise.race([run(controller.signal), timeoutPromise]);
+  } finally {
+    if (timeout) {
+      clearTimeout(timeout);
+    }
+  }
+}
 
-const liveCommandRegex =
-  /\b(?:openclaw|node|docker|curl|gh|ssh|adb|xcrun|xcodebuild|open|npm\s+run|pnpm\s+openclaw)\b/i;
+/**
+ * @param {Response} response
+ * @param {string} label
+ * @param {number} [maxBytes]
+ * @param {{ timeoutMs?: number }} [options]
+ * @returns {Promise<unknown>}
+ */
+export async function readBoundedGitHubApiJson(
+  response,
+  label,
+  maxBytes = GITHUB_API_RESPONSE_BODY_MAX_BYTES,
+  options = {},
+) {
+  const text = await readBoundedResponseText(response, label, maxBytes, {
+    ...options,
+    createTooLargeError: () => createTooLargeGitHubApiBodyError(label, maxBytes),
+  });
+  return JSON.parse(text);
+}
 
-const mockOnlyEvidenceStripRegex =
-  /\b(?:pnpm|npm|yarn|bun)\s+(?:run\s+)?(?:test|vitest|lint|typecheck|tsgo|build|check)\b|\b(?:vitest|unit tests?|mock(?:ed|s)?|snapshots?|lint|typechecks?|tsgo|ci(?:\s+passes?)?|tests?|passed|passes|green|success|succeeded|with|and|the|branch|only|output|transcript|capture|fenced)\b/gi;
-
-const evidenceDescriptorStripRegex =
-  /\b(?:screenshot|screen\s*recording|recording|terminal\s+(?:capture|screenshot|transcript|output)|console\s+(?:output|log)|runtime\s+logs?|redacted\s+logs?|live\s+output|actual\s+output|observed\s+output|stdout|stderr|stack trace|trace excerpt|log excerpt|linked\s+artifacts?|artifact\s+links?)\b/gi;
-
-function escapeRegex(text) {
-  return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+async function cancelGitHubApiResponseBody(response) {
+  await response.body?.cancel?.().catch(() => undefined);
 }
 
 function normalizeLineEndings(text = "") {
   return text.replace(/\r\n?/g, "\n");
 }
 
-function labelNames(labels) {
-  return new Set(
-    (labels ?? [])
-      .map((label) => (typeof label === "string" ? label : label?.name))
-      .filter((label) => typeof label === "string"),
-  );
+function maskHtmlComments(text) {
+  let commentOpen = false;
+  let fenceMarker = "";
+  return text
+    .split("\n")
+    .map((line) => {
+      if (fenceMarker) {
+        fenceMarker = nextFenceMarker(line, fenceMarker);
+        return line;
+      }
+
+      let maskedLine = line;
+      if (commentOpen) {
+        const end = maskedLine.indexOf("-->");
+        if (end < 0) {
+          return maskedLine.replace(/[^\n]/g, " ");
+        }
+        maskedLine = `${maskedLine.slice(0, end + 3).replace(/[^\n]/g, " ")}${maskedLine.slice(end + 3)}`;
+        commentOpen = false;
+      }
+
+      if (nextFenceMarker(maskedLine, "")) {
+        fenceMarker = nextFenceMarker(maskedLine, "");
+        return maskedLine;
+      }
+
+      let offset = 0;
+      while (offset < maskedLine.length) {
+        const start = maskedLine.indexOf("<!--", offset);
+        if (start < 0) {
+          break;
+        }
+        const end = maskedLine.indexOf("-->", start + 4);
+        if (end < 0) {
+          maskedLine = `${maskedLine.slice(0, start)}${maskedLine
+            .slice(start)
+            .replace(/[^\n]/g, " ")}`;
+          commentOpen = true;
+          break;
+        }
+        maskedLine = `${maskedLine.slice(0, start)}${maskedLine
+          .slice(start, end + 3)
+          .replace(/[^\n]/g, " ")}${maskedLine.slice(end + 3)}`;
+        offset = end + 3;
+      }
+      return maskedLine;
+    })
+    .join("\n");
+}
+
+function stripHtmlComments(text) {
+  return maskHtmlComments(text);
 }
 
 function isAutomationUser(user = {}, fallbackLogin = "") {
@@ -94,7 +186,7 @@ function isAutomationUser(user = {}, fallbackLogin = "") {
   return user?.type === "Bot" || /\[bot\]$/i.test(login) || login.startsWith("app/");
 }
 
-export function isExternalPullRequest(pullRequest) {
+function isExternalPullRequest(pullRequest) {
   if (!pullRequest) {
     return false;
   }
@@ -107,188 +199,325 @@ export function isExternalPullRequest(pullRequest) {
   return !privilegedAuthorAssociations.has(authorAssociation);
 }
 
-export function hasProofOverride(labels) {
-  return labelNames(labels).has(PROOF_OVERRIDE_LABEL);
+/**
+ * @param {{
+ *   token?: string,
+ *   org?: string,
+ *   login?: string,
+ *   teamSlug?: string,
+ *   fetch?: typeof globalThis.fetch,
+ *   timeoutMs?: number,
+ * }} [params]
+ * @returns {Promise<boolean>}
+ */
+export async function isMaintainerTeamMember({
+  token,
+  org,
+  login,
+  teamSlug = MAINTAINER_TEAM_SLUG,
+  fetch = globalThis.fetch,
+  timeoutMs = DEFAULT_GITHUB_API_TIMEOUT_MS,
+} = {}) {
+  if (!token || !org || !login) {
+    return false;
+  }
+  const url = `https://api.github.com/orgs/${encodeURIComponent(org)}/teams/${encodeURIComponent(teamSlug)}/memberships/${encodeURIComponent(login)}`;
+  const response = await withGitHubApiTimeout(
+    `maintainer membership lookup for ${login}`,
+    timeoutMs,
+    (signal) =>
+      fetch(url, {
+        headers: {
+          Authorization: `Bearer ${token}`,
+          Accept: "application/vnd.github+json",
+          "X-GitHub-Api-Version": "2022-11-28",
+        },
+        signal,
+      }),
+  );
+  try {
+    if (response.status === 404) {
+      return false;
+    }
+    if (!response.ok) {
+      throw new Error(`Team membership lookup failed: ${response.status}`);
+    }
+    const body = await withGitHubApiTimeout(
+      `maintainer membership response for ${login}`,
+      timeoutMs,
+      (signal) =>
+        readBoundedGitHubApiJson(
+          response,
+          `maintainer membership response for ${login}`,
+          undefined,
+          {
+            signal,
+          },
+        ),
+    );
+    return body?.state === "active";
+  } finally {
+    await cancelGitHubApiResponseBody(response);
+  }
 }
 
-export function extractRealBehaviorProofSection(body = "") {
-  const normalizedBody = normalizeLineEndings(body);
-  const headingRegex = /^#{2,6}\s+real behavior proof\b[^\n]*$/gim;
-  const match = headingRegex.exec(normalizedBody);
-  if (!match) {
+function nextFenceMarker(line, fenceMarker) {
+  const fence = line.match(/^ {0,3}(`{3,}|~{3,})(.*)$/);
+  const marker = fence?.[1] ?? "";
+  const suffix = fence?.[2] ?? "";
+  if (!fenceMarker && marker) {
+    return marker;
+  }
+  if (
+    fenceMarker &&
+    marker[0] === fenceMarker[0] &&
+    marker.length >= fenceMarker.length &&
+    suffix.trim() === ""
+  ) {
     return "";
   }
-  const sectionStart = match.index + match[0].length;
-  const rest = normalizedBody.slice(sectionStart);
-  const nextHeading = rest.match(/\n#{1,6}\s+\S/);
-  return (nextHeading ? rest.slice(0, nextHeading.index) : rest).trim();
+  return fenceMarker;
+}
+
+function markdownHeadingLevel(line) {
+  return line.match(/^(#{1,6})\s+\S/)?.[1].length ?? 0;
+}
+
+function extractMarkdownSections(headingRegex, body = "") {
+  // Normalize CRLF → LF so regexes and section slicing see GitHub web-editor PR
+  // bodies the same way as locally-authored Markdown.
+  const normalizedBody = normalizeLineEndings(body);
+  const headingBody = maskHtmlComments(normalizedBody);
+  const sections = [];
+  const matcher = new RegExp(headingRegex.source, headingRegex.flags.replaceAll("g", ""));
+  let fenceMarker = "";
+  let sectionHeadingLevel = 0;
+  let sectionStart = -1;
+  let lineStart = 0;
+  for (const line of headingBody.split("\n")) {
+    const match = !fenceMarker ? line.match(matcher) : null;
+    const headingLevel = !fenceMarker ? markdownHeadingLevel(line) : 0;
+    if (sectionStart >= 0 && headingLevel > 0 && headingLevel <= sectionHeadingLevel) {
+      sections.push(normalizedBody.slice(sectionStart, lineStart === 0 ? 0 : lineStart - 1).trim());
+      sectionStart = -1;
+      sectionHeadingLevel = 0;
+    }
+    if (match) {
+      sectionStart = lineStart + (match.index ?? 0) + match[0].length;
+      sectionHeadingLevel = headingLevel;
+    }
+    fenceMarker = nextFenceMarker(line, fenceMarker);
+    lineStart += line.length + 1;
+  }
+  if (sectionStart >= 0) {
+    sections.push(normalizedBody.slice(sectionStart).trim());
+  }
+  return sections;
+}
+
+/**
+ * @param {string} heading
+ * @param {string} [body]
+ */
+export function hasAuthoredPullRequestSection(heading, body = "") {
+  const headingPattern = new RegExp(`^#{2,6}\\s+${escapeRegExp(heading)}\\b[^\\n]*$`, "im");
+  return !isMissingValue(extractMarkdownSections(headingPattern, body).at(-1) ?? "");
+}
+
+function extractLegacyProofSections(body = "") {
+  return extractMarkdownSections(/^#{2,6}\s+real behavior proof\b[^\n]*$/im, body);
 }
 
 function fieldLineRegex(name) {
   return new RegExp(
-    `^\\s*(?:[-*]\\s*)?(?:\\*\\*)?${escapeRegex(name)}(?:\\s*\\([^)]*\\))?(?:\\*\\*)?\\s*:\\s*(.*)$`,
+    `^\\s*(?:[-*]\\s*)?(?:\\*\\*)?${escapeRegExp(name)}(?:\\s*\\([^)]*\\))?(?:\\*\\*)?\\s*:\\s*(.*)$`,
     "i",
   );
 }
 
-function isAnyProofFieldLine(line) {
-  return allProofFieldNames.some((name) => fieldLineRegex(name).test(line));
+function legacyProofFieldLineValue(line) {
+  const matchingName = legacyProofFieldNames.find((name) => fieldLineRegex(name).test(line));
+  const match = matchingName ? line.match(fieldLineRegex(matchingName)) : null;
+  return match?.[1] ?? null;
+}
+
+function isAnyLegacyProofFieldLine(line) {
+  return legacyProofFieldLineValue(line) !== null;
 }
 
 function extractFieldValue(section, field) {
-  const lines = normalizeLineEndings(section).split("\n");
+  const lines = maskHtmlComments(normalizeLineEndings(section)).split("\n");
+  let fenceMarker = "";
   for (let index = 0; index < lines.length; index += 1) {
-    const matchingName = field.names.find((name) => fieldLineRegex(name).test(lines[index]));
+    const line = lines[index];
+    const matchingName = !fenceMarker
+      ? field.names.find((name) => fieldLineRegex(name).test(line))
+      : null;
     if (!matchingName) {
+      const fenceLine = !fenceMarker ? (legacyProofFieldLineValue(line) ?? line) : line;
+      fenceMarker = nextFenceMarker(fenceLine, fenceMarker);
       continue;
     }
 
-    const match = lines[index].match(fieldLineRegex(matchingName));
+    const match = line.match(fieldLineRegex(matchingName));
     const valueLines = [match?.[1] ?? ""];
+    fenceMarker = nextFenceMarker(valueLines[0], "");
     for (let next = index + 1; next < lines.length; next += 1) {
-      const line = lines[next];
-      if (/^#{1,6}\s+\S/.test(line) || isAnyProofFieldLine(line)) {
+      const lineLocal = lines[next];
+      if (
+        !fenceMarker &&
+        (markdownHeadingLevel(lineLocal) > 0 || isAnyLegacyProofFieldLine(lineLocal))
+      ) {
         break;
       }
-      valueLines.push(line);
+      valueLines.push(lineLocal);
+      fenceMarker = nextFenceMarker(lineLocal, fenceMarker);
     }
     return valueLines.join("\n").trim();
   }
   return "";
 }
 
-function stripProofFieldLabels(section) {
-  return normalizeLineEndings(section)
+function stripMarkdownFenceMarkers(value) {
+  return stripHtmlComments(normalizeLineEndings(value))
     .split("\n")
-    .map((line) => {
-      if (!isAnyProofFieldLine(line)) {
-        return line;
-      }
-      const matchingName = allProofFieldNames.find((name) => fieldLineRegex(name).test(line));
-      const match = matchingName ? line.match(fieldLineRegex(matchingName)) : null;
-      return match?.[1] ?? "";
-    })
-    .join("\n");
+    .filter((line) => !/^ {0,3}(?:`{3,}|~{3,})(?:.*)?$/.test(line))
+    .join("\n")
+    .trim();
 }
 
-function isMissingValue(value, field) {
-  const trimmed = value.trim();
+function isMissingValue(value) {
+  const trimmed = stripMarkdownFenceMarkers(value).replace(/^\s*[-*]\s+/, "");
   if (!trimmed) {
     return true;
-  }
-  if (
-    field.allowNone &&
-    /^(?:none|nothing else|no known gaps|no additional gaps)$/i.test(trimmed)
-  ) {
-    return false;
   }
   return missingValueRegex.test(trimmed);
 }
 
-function hasNonMockEvidencePayload(value) {
-  const payload = value
-    .replace(evidenceDescriptorStripRegex, "")
-    .replace(mockOnlyEvidenceStripRegex, "")
-    .replace(/```(?:\w+)?|```/g, "")
-    .replace(/[`$>:\-_.()[\]\s]+/g, "");
-  return Boolean(payload);
-}
-
+/**
+ * @param {string} status
+ * @param {string} reason
+ * @param {Partial<Evaluation>} [details]
+ * @returns {Evaluation}
+ */
 function result(status, reason, details = {}) {
   return {
     status,
     reason,
-    applies: ["passed", "missing", "mock_only", "insufficient", "override"].includes(status),
-    passed: ["passed", "skipped", "override"].includes(status),
+    applies: ["passed", "missing", "insufficient"].includes(status),
+    passed: ["passed", "skipped", CLAWSWEEPER_PROOF_VERDICT_STATUS].includes(status),
     ...details,
   };
 }
 
-export function evaluateRealBehaviorProof({ pullRequest, labels } = {}) {
-  const currentLabels = labels ?? pullRequest?.labels ?? [];
-  if (hasProofOverride(currentLabels)) {
-    return result("override", `Maintainer override label ${PROOF_OVERRIDE_LABEL} is present.`);
+function extractMarkerField(marker, name) {
+  const match = marker.match(new RegExp(`\\b${escapeRegExp(name)}=([^\\s>]+)`, "i"));
+  return match?.[1] ?? "";
+}
+
+function isTrustedClawSweeperComment(comment) {
+  const appSlug = String(
+    comment?.performed_via_github_app?.slug ?? comment?.performedViaGithubApp?.slug ?? "",
+  ).toLowerCase();
+  if (appSlug === "clawsweeper") {
+    return true;
   }
+  // GitHub can omit performed_via_github_app on issue comments while still
+  // returning a reserved ClawSweeper App bot identity.
+  const login = String(comment?.user?.login ?? "").toLowerCase();
+  const userType = String(comment?.user?.type ?? "");
+  return CLAWSWEEPER_BOT_LOGINS.has(login) && userType === "Bot";
+}
+
+/**
+ * @param {{ pullRequest?: PullRequest, comments?: Comment[] }} [params]
+ * @returns {boolean}
+ */
+export function hasClawSweeperExactHeadProof({ pullRequest, comments = [] } = {}) {
+  const rawPullNumber = pullRequest?.number;
+  const pullNumber =
+    typeof rawPullNumber === "string" || typeof rawPullNumber === "number"
+      ? String(rawPullNumber)
+      : "";
+  const headSha = String(pullRequest?.head?.sha ?? pullRequest?.head_sha ?? "").toLowerCase();
+  if (!pullNumber || !/^[0-9a-f]{40}$/i.test(headSha)) {
+    return false;
+  }
+
+  for (const comment of comments) {
+    if (!isTrustedClawSweeperComment(comment)) {
+      continue;
+    }
+    const body = typeof comment?.body === "string" ? comment.body : "";
+    const markers = body.match(/<!--\s*clawsweeper-verdict:pass\b[\s\S]*?-->/gi) ?? [];
+    for (const marker of markers) {
+      const item = extractMarkerField(marker, "item");
+      const sha = extractMarkerField(marker, "sha").toLowerCase();
+      if (item === pullNumber && sha === headSha) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+/**
+ * @param {{ pullRequest?: PullRequest, comments?: Comment[] }} [params]
+ * @returns {Evaluation}
+ */
+export function evaluateClawSweeperExactHeadProof({ pullRequest, comments = [] } = {}) {
+  if (hasClawSweeperExactHeadProof({ pullRequest, comments })) {
+    return result(
+      CLAWSWEEPER_PROOF_VERDICT_STATUS,
+      "ClawSweeper accepted the PR evidence for the exact PR head.",
+    );
+  }
+  return result("insufficient", "No exact-head ClawSweeper proof verdict was found.");
+}
+
+/**
+ * @param {{ pullRequest?: PullRequest }} [params]
+ * @returns {Evaluation}
+ */
+export function evaluatePullRequestContext({ pullRequest } = {}) {
   if (!isExternalPullRequest(pullRequest)) {
     return result("skipped", "Maintainer, collaborator, or bot PRs do not require this gate.");
   }
 
-  const section = extractRealBehaviorProofSection(pullRequest?.body ?? "");
-  if (!section) {
+  const body = pullRequest?.body ?? "";
+  const latestLegacyProof = extractLegacyProofSections(body).at(-1) ?? "";
+  const hasAuthoredProblem = hasAuthoredPullRequestSection("What Problem This Solves", body);
+  const hasLegacyProblem = !isMissingValue(
+    extractFieldValue(latestLegacyProof, legacyProofFields.problem),
+  );
+  const hasAuthoredEvidence = hasAuthoredPullRequestSection("Evidence", body);
+  const hasLegacyEvidence = !isMissingValue(
+    extractFieldValue(latestLegacyProof, legacyProofFields.evidence),
+  );
+  const missingSections = [];
+  if (!hasAuthoredProblem && !hasLegacyProblem) {
+    missingSections.push("What Problem This Solves");
+  }
+  if (!hasAuthoredEvidence && !hasLegacyEvidence) {
+    missingSections.push("Evidence");
+  }
+  if (missingSections.length > 0) {
     return result(
       "missing",
-      "External PRs must include a Real behavior proof section with after-fix evidence from a real setup.",
+      `External PRs must include authored ${missingSections.join(" and ")} sections.`,
+      { missingSections },
     );
   }
-
-  const fields = Object.fromEntries(
-    requiredProofFields.map((field) => [field.key, extractFieldValue(section, field)]),
-  );
-  const missingFields = requiredProofFields
-    .filter((field) => isMissingValue(fields[field.key] ?? "", field))
-    .map((field) => field.key);
-  if (missingFields.length > 0) {
-    return result(
-      "missing",
-      `Real behavior proof is missing required field content: ${missingFields.join(", ")}.`,
-      { fields, missingFields },
-    );
-  }
-
-  const proofContent = stripProofFieldLabels(section);
-  if (standaloneMissingProofRegex.test(proofContent)) {
-    return result("insufficient", "Real behavior proof says the changed behavior was not tested.", {
-      fields,
-    });
-  }
-
-  const evidenceContent = [fields.evidence, fields.observedResult].join("\n");
-  const proofContentForMockDetection = [fields.evidence, fields.observedResult, fields.steps].join(
-    "\n",
-  );
-  const hasArtifactEvidence = artifactEvidenceRegex.test(evidenceContent);
-  const hasNonMockPayload = hasNonMockEvidencePayload(evidenceContent);
-  const hasMockEvidenceSignal = mockOnlyEvidenceRegex.test(proofContentForMockDetection);
-  if (hasMockEvidenceSignal && !hasArtifactEvidence && !hasNonMockPayload) {
-    return result(
-      "mock_only",
-      "Unit tests, mocks, snapshots, lint, typechecks, and CI are supplemental and do not count as real behavior proof.",
-      { fields },
-    );
-  }
-
-  const hasRealEvidence =
-    hasArtifactEvidence ||
-    (evidenceDescriptorRegex.test(evidenceContent) && hasNonMockPayload) ||
-    liveCommandRegex.test(evidenceContent);
-  if (hasMockEvidenceSignal && !hasRealEvidence) {
-    return result(
-      "mock_only",
-      "Unit tests, mocks, snapshots, lint, typechecks, and CI are supplemental and do not count as real behavior proof.",
-      { fields },
-    );
-  }
-
-  if (!hasRealEvidence) {
-    return result(
-      "insufficient",
-      "Real behavior proof must include an after-fix screenshot, recording, terminal capture, console output, redacted runtime log, linked artifact, or copied live output.",
-      { fields },
-    );
-  }
-
-  return result("passed", "External PR includes after-fix real behavior proof.", { fields });
+  return result("passed", "External PR includes problem context and evidence.");
 }
 
-export function labelsForRealBehaviorProof(evaluation) {
-  if (evaluation.status === "passed") {
-    return [PROOF_SUPPLIED_LABEL];
-  }
-  if (evaluation.status === "mock_only") {
-    return [MOCK_ONLY_PROOF_LABEL];
-  }
+/**
+ * @param {Evaluation} evaluation
+ * @returns {string[]}
+ */
+export function labelsForPullRequestContext(evaluation) {
   if (evaluation.status === "missing" || evaluation.status === "insufficient") {
-    return [NEEDS_REAL_BEHAVIOR_PROOF_LABEL];
+    return [NEEDS_PR_CONTEXT_LABEL];
   }
   return [];
 }

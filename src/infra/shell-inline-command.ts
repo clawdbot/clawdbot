@@ -1,15 +1,92 @@
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
+// Resolves shell inline-command flags across shell families.
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 
-export const POSIX_INLINE_COMMAND_FLAGS = new Set(["-lc", "-c", "--command"]);
-export const POWERSHELL_INLINE_COMMAND_FLAGS = new Set([
+// Shell inline-command parsing recognizes POSIX, cmd, and PowerShell command
+// flags so approval surfaces can distinguish wrapper argv from executed text.
+export const POSIX_INLINE_COMMAND_FLAGS = new Set([
+  "-lc",
   "-c",
-  "-command",
   "--command",
-  "-f",
-  "-file",
-  "-encodedcommand",
-  "-enc",
+  "--commands",
+  "--cmdline",
+]);
+export const NUSHELL_INLINE_COMMAND_FLAGS = new Set([
+  ...POSIX_INLINE_COMMAND_FLAGS,
   "-e",
+  "--execute",
+]);
+
+function expandPowerShellSwitchPrefixForms(match: string, smallestMatch: string): string[] {
+  const forms: string[] = [];
+  for (let length = smallestMatch.length; length <= match.length; length += 1) {
+    const prefix = match.slice(0, length);
+    forms.push(`-${prefix}`, `--${prefix}`, `/${prefix}`);
+  }
+  return forms;
+}
+
+function expandPowerShellSwitchForms(names: readonly string[]): string[] {
+  return names.flatMap((name) => {
+    const normalized = normalizeLowercaseStringOrEmpty(name);
+    return [`-${normalized}`, `--${normalized}`, `/${normalized}`];
+  });
+}
+
+const POWERSHELL_COMMAND_FLAGS = [
+  ...expandPowerShellSwitchPrefixForms("command", "c"),
+  ...expandPowerShellSwitchPrefixForms("commandwithargs", "cwa"),
+  ...expandPowerShellSwitchForms(["cwa"]),
+];
+const POWERSHELL_FILE_FLAGS = expandPowerShellSwitchPrefixForms("file", "f");
+const POWERSHELL_INLINE_FILE_FLAGS = new Set(POWERSHELL_FILE_FLAGS);
+const POWERSHELL_NO_PROFILE_FLAGS = new Set(expandPowerShellSwitchPrefixForms("noprofile", "nop"));
+const POWERSHELL_UNREVIEWED_STARTUP_FLAGS = new Set([
+  ...expandPowerShellSwitchPrefixForms("configurationfile", "conf"),
+  ...expandPowerShellSwitchPrefixForms("configurationname", "config"),
+  ...expandPowerShellSwitchPrefixForms("custompipename", "cus"),
+  ...expandPowerShellSwitchPrefixForms("encodedarguments", "encodeda"),
+  ...expandPowerShellSwitchForms(["ea"]),
+  ...expandPowerShellSwitchPrefixForms("interactive", "i"),
+  ...expandPowerShellSwitchPrefixForms("login", "l"),
+  ...expandPowerShellSwitchPrefixForms("namedpipeservermode", "nam"),
+  ...expandPowerShellSwitchPrefixForms("noexit", "noe"),
+  ...expandPowerShellSwitchPrefixForms("psconsolefile", "pscf"),
+  ...expandPowerShellSwitchForms(["pscf"]),
+  ...expandPowerShellSwitchPrefixForms("servermode", "s"),
+  ...expandPowerShellSwitchPrefixForms("settingsfile", "settings"),
+  ...expandPowerShellSwitchPrefixForms("socketservermode", "so"),
+  ...expandPowerShellSwitchPrefixForms("sshservermode", "ssh"),
+  ...expandPowerShellSwitchPrefixForms("v2socketservermode", "v2so"),
+]);
+const POWERSHELL_INLINE_ENCODED_COMMAND_FLAGS = new Set([
+  ...expandPowerShellSwitchPrefixForms("encodedcommand", "e"),
+  ...expandPowerShellSwitchPrefixForms("ec", "e"),
+]);
+
+const POWERSHELL_INLINE_COMMAND_FLAGS = new Set([
+  ...POWERSHELL_COMMAND_FLAGS,
+  ...POWERSHELL_FILE_FLAGS,
+  ...POWERSHELL_INLINE_ENCODED_COMMAND_FLAGS,
+]);
+
+const POWERSHELL_INLINE_REST_COMMAND_FLAGS = new Set(POWERSHELL_COMMAND_FLAGS);
+
+const POWERSHELL_OPTIONS_WITH_SEPARATE_VALUES = new Set([
+  ...expandPowerShellSwitchPrefixForms("configurationfile", "conf"),
+  ...expandPowerShellSwitchPrefixForms("configurationname", "config"),
+  ...expandPowerShellSwitchPrefixForms("custompipename", "cus"),
+  ...expandPowerShellSwitchPrefixForms("encodedarguments", "encodeda"),
+  ...expandPowerShellSwitchPrefixForms("executionpolicy", "ex"),
+  ...expandPowerShellSwitchPrefixForms("inputformat", "inp"),
+  ...expandPowerShellSwitchPrefixForms("outputformat", "o"),
+  ...expandPowerShellSwitchPrefixForms("psconsolefile", "pscf"),
+  ...expandPowerShellSwitchPrefixForms("settingsfile", "settings"),
+  ...expandPowerShellSwitchPrefixForms("token", "to"),
+  ...expandPowerShellSwitchPrefixForms("utctimestamp", "utc"),
+  ...expandPowerShellSwitchPrefixForms("version", "v"),
+  ...expandPowerShellSwitchPrefixForms("windowstyle", "w"),
+  ...expandPowerShellSwitchPrefixForms("workingdirectory", "w"),
+  ...expandPowerShellSwitchForms(["ea", "ep", "if", "of", "pscf", "wd"]),
 ]);
 
 const POSIX_SHELL_OPTIONS_WITH_SEPARATE_VALUES = new Set([
@@ -94,7 +171,8 @@ function isPosixShortOption(token: string, option: string): boolean {
   return hasOption;
 }
 
-function advancePosixInlineOptionScan(token: string): number {
+/** Return how many argv tokens a POSIX shell option consumes while scanning. */
+export function advancePosixInlineOptionScan(token: string): number {
   const combinedValueCount = combinedSeparateValueOptionCount(token);
   if (combinedValueCount > 0) {
     return 1 + combinedValueCount;
@@ -105,12 +183,23 @@ function advancePosixInlineOptionScan(token: string): number {
   return 1;
 }
 
+function isPowerShellOptionToken(token: string): boolean {
+  return token.startsWith("-") || /^\/[A-Za-z][A-Za-z0-9]*$/.test(token);
+}
+
+/** Find the inline command payload for a shell wrapper argv. */
 export function resolveInlineCommandMatch(
   argv: string[],
   flags: ReadonlySet<string>,
-  options: { allowCombinedC?: boolean } = {},
+  options: {
+    allowCombinedC?: boolean;
+    isOptionToken?: (token: string) => boolean;
+    restValueFlags?: ReadonlySet<string>;
+    stopAtFirstNonOption?: boolean;
+    valueOptions?: ReadonlySet<string>;
+  } = {},
 ): { command: string | null; valueTokenIndex: number | null } {
-  for (let i = 1; i < argv.length; ) {
+  for (let i = 1; i < argv.length;) {
     const token = argv[i]?.trim();
     if (!token) {
       i += 1;
@@ -123,6 +212,14 @@ export function resolveInlineCommandMatch(
     const comparableToken = options.allowCombinedC ? token : lower;
     if (flags.has(comparableToken)) {
       const valueTokenIndex = i + 1 < argv.length ? i + 1 : null;
+      if (options.restValueFlags?.has(comparableToken)) {
+        const command = argv
+          .slice(i + 1)
+          .map((arg) => arg.trim())
+          .join(" ")
+          .trim();
+        return { command: command ? command : null, valueTokenIndex };
+      }
       const command = argv[i + 1]?.trim();
       return { command: command ? command : null, valueTokenIndex };
     }
@@ -135,6 +232,15 @@ export function resolveInlineCommandMatch(
       const command = argv[valueTokenIndex]?.trim();
       return { command: command ? command : null, valueTokenIndex };
     }
+    if (options.valueOptions?.has(lower)) {
+      i += 2;
+      continue;
+    }
+    const isOptionToken =
+      options.isOptionToken?.(token) ?? (token.startsWith("-") || token.startsWith("+"));
+    if (options.stopAtFirstNonOption && !isOptionToken) {
+      break;
+    }
     if (options.allowCombinedC && !token.startsWith("-") && !token.startsWith("+")) {
       break;
     }
@@ -143,12 +249,91 @@ export function resolveInlineCommandMatch(
   return { command: null, valueTokenIndex: null };
 }
 
-export function hasPosixInteractiveStartupBeforeInlineCommand(
+/** Return true when an inline shell payload directly dispatches positional args. */
+export function isDirectShellPositionalCarrierCommand(command: string): boolean {
+  const trimmed = command.trim();
+  if (trimmed.length === 0) {
+    return false;
+  }
+
+  const shellWhitespace = String.raw`[^\S\r\n]+`;
+  const positionalZero = String.raw`(?:\$(?:0|\{0\})|"\$(?:0|\{0\})")`;
+  const positionalArg = String.raw`(?:\$(?:[@*]|[1-9]|\{[@*1-9]\})|"\$(?:[@*]|[1-9]|\{[@*1-9]\})")`;
+  return new RegExp(
+    `^(?:exec${shellWhitespace}(?:--${shellWhitespace})?)?${positionalZero}(?:${shellWhitespace}${positionalArg})*$`,
+    "u",
+  ).test(trimmed);
+}
+
+/** Find the PowerShell inline command payload and value token index. */
+export function resolvePowerShellInlineCommandMatch(argv: string[]): {
+  command: string | null;
+  valueTokenIndex: number | null;
+} {
+  return resolveInlineCommandMatch(argv, POWERSHELL_INLINE_COMMAND_FLAGS, {
+    isOptionToken: isPowerShellOptionToken,
+    restValueFlags: POWERSHELL_INLINE_REST_COMMAND_FLAGS,
+    stopAtFirstNonOption: true,
+    valueOptions: POWERSHELL_OPTIONS_WITH_SEPARATE_VALUES,
+  });
+}
+
+/** Detect default PowerShell profiles or OS login startup before a command. */
+export function hasPowerShellProfileStartupBeforeInlineCommand(
   argv: string[],
+  valueTokenIndex: number | null = resolvePowerShellInlineCommandMatch(argv).valueTokenIndex,
+): boolean {
+  let profilesDisabled = false;
+  // Positional scripts and bare sessions have no reviewable inline payload;
+  // never bind mutable script contents or future stdin to a command approval.
+  const commandFlagIndex = valueTokenIndex === null ? argv.length : valueTokenIndex - 1;
+  for (let index = 1; index < commandFlagIndex;) {
+    const rawToken = argv[index] ?? "";
+    if (rawToken === "--") {
+      return true;
+    }
+    if (rawToken === "-") {
+      return true;
+    }
+    if (!isPowerShellOptionToken(rawToken)) {
+      return true;
+    }
+    const token = normalizeLowercaseStringOrEmpty(rawToken);
+    if (POWERSHELL_UNREVIEWED_STARTUP_FLAGS.has(token)) {
+      return true;
+    }
+    if (POWERSHELL_NO_PROFILE_FLAGS.has(token)) {
+      profilesDisabled = true;
+    }
+    index += POWERSHELL_OPTIONS_WITH_SEPARATE_VALUES.has(token) ? 2 : 1;
+  }
+
+  // A switch-only PowerShell invocation remains an interactive stdin reader.
+  return valueTokenIndex === null || !profilesDisabled;
+}
+
+/** Return true when a PowerShell flag consumes the rest of argv as command text. */
+export function isPowerShellInlineRestCommandFlag(token: string): boolean {
+  return POWERSHELL_INLINE_REST_COMMAND_FLAGS.has(normalizeLowercaseStringOrEmpty(token));
+}
+
+/** Return true when a PowerShell flag treats the next token as script file text. */
+export function isPowerShellInlineFileCommandFlag(token: string): boolean {
+  return POWERSHELL_INLINE_FILE_FLAGS.has(normalizeLowercaseStringOrEmpty(token));
+}
+
+/** Return true when a PowerShell flag executes an opaque encoded command. */
+export function isPowerShellInlineEncodedCommandFlag(token: string): boolean {
+  return POWERSHELL_INLINE_ENCODED_COMMAND_FLAGS.has(normalizeLowercaseStringOrEmpty(token));
+}
+
+/** Detect POSIX interactive startup before an inline command flag. */
+export function hasPosixInteractiveStartupBeforeInlineCommand(
+  argv: readonly string[],
   flags: ReadonlySet<string>,
 ): boolean {
   let sawInteractiveMode = false;
-  for (let i = 1; i < argv.length; ) {
+  for (let i = 1; i < argv.length;) {
     const token = argv[i]?.trim();
     if (!token) {
       i += 1;
@@ -171,12 +356,13 @@ export function hasPosixInteractiveStartupBeforeInlineCommand(
   return false;
 }
 
+/** Detect POSIX login startup before an inline command flag. */
 export function hasPosixLoginStartupBeforeInlineCommand(
-  argv: string[],
+  argv: readonly string[],
   flags: ReadonlySet<string>,
 ): boolean {
   let sawLoginMode = false;
-  for (let i = 1; i < argv.length; ) {
+  for (let i = 1; i < argv.length;) {
     const token = argv[i]?.trim();
     if (!token) {
       i += 1;
@@ -199,6 +385,7 @@ export function hasPosixLoginStartupBeforeInlineCommand(
   return false;
 }
 
+/** Detect fish init-command options that run before the inline command. */
 export function hasFishInitCommandOption(argv: string[]): boolean {
   for (let i = 1; i < argv.length; i += 1) {
     const token = argv[i]?.trim();
@@ -223,6 +410,7 @@ export function hasFishInitCommandOption(argv: string[]): boolean {
   return false;
 }
 
+/** Detect fish attached `-cCOMMAND` forms that should not be rebound. */
 export function hasFishAttachedCommandOption(argv: string[]): boolean {
   for (let i = 1; i < argv.length; i += 1) {
     const token = argv[i]?.trim();

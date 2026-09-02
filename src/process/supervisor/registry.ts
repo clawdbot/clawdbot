@@ -1,8 +1,5 @@
-import type { RunRecord, RunState, TerminationReason } from "./types.js";
-
-function nowMs() {
-  return Date.now();
-}
+// Supervisor registry tracks active and historical supervised process runs.
+import type { RunExit, RunRecord, RunState } from "./types.js";
 
 const DEFAULT_MAX_EXITED_RECORDS = 2_000;
 
@@ -13,142 +10,103 @@ function resolveMaxExitedRecords(value?: number): number {
   return Math.max(1, Math.floor(value));
 }
 
-export type RunRegistry = {
-  add: (record: RunRecord) => void;
-  get: (runId: string) => RunRecord | undefined;
-  list: () => RunRecord[];
-  listByScope: (scopeKey: string) => RunRecord[];
-  updateState: (
-    runId: string,
-    state: RunState,
-    patch?: Partial<Pick<RunRecord, "pid" | "terminationReason" | "exitCode" | "exitSignal">>,
-  ) => RunRecord | undefined;
-  touchOutput: (runId: string) => void;
-  finalize: (
-    runId: string,
-    exit: {
-      reason: TerminationReason;
-      exitCode: number | null;
-      exitSignal: NodeJS.Signals | number | null;
-    },
-  ) => { record: RunRecord; firstFinalize: boolean } | null;
-  delete: (runId: string) => void;
+type RunUpdate = Partial<
+  Pick<
+    RunRecord,
+    "state" | "pid" | "terminationReason" | "exitCode" | "exitSignal" | "lastOutputAtMs"
+  >
+>;
+
+type RunRegistration = {
+  updateState: (state: RunState, patch?: Omit<RunUpdate, "state" | "lastOutputAtMs">) => void;
+  touchOutput: () => void;
+  finalize: (exit: Pick<RunExit, "reason" | "exitCode" | "exitSignal">) => void;
 };
 
-export function createRunRegistry(options?: { maxExitedRecords?: number }): RunRegistry {
+/**
+ * Create the supervisor's mutable run registry. Exited records are retained
+ * only for diagnostics, so the cap bounds memory without touching live runs.
+ */
+export function createRunRegistry(options?: { maxExitedRecords?: number }) {
   const records = new Map<string, RunRecord>();
   const maxExitedRecords = resolveMaxExitedRecords(options?.maxExitedRecords);
+  // Keep this exact across every write path so ordinary finalization never scans all records.
+  let exitedRecords = 0;
 
   const pruneExitedRecords = () => {
-    if (!records.size) {
+    if (exitedRecords <= maxExitedRecords) {
       return;
     }
-    let exited = 0;
-    for (const record of records.values()) {
-      if (record.state === "exited") {
-        exited += 1;
-      }
-    }
-    if (exited <= maxExitedRecords) {
-      return;
-    }
-    let remove = exited - maxExitedRecords;
+    // Map insertion order is the retention policy: oldest exited records leave first.
     for (const [runId, record] of records.entries()) {
-      if (remove <= 0) {
+      if (exitedRecords <= maxExitedRecords) {
         break;
       }
       if (record.state !== "exited") {
         continue;
       }
       records.delete(runId);
-      remove -= 1;
+      exitedRecords -= 1;
     }
   };
 
-  const add: RunRegistry["add"] = (record) => {
-    records.set(record.runId, { ...record });
+  const add = (record: RunRecord): RunRegistration => {
+    if (records.get(record.runId)?.state === "exited") {
+      exitedRecords -= 1;
+    }
+    const current = { ...record };
+    records.set(current.runId, current);
+    if (current.state === "exited") {
+      exitedRecords += 1;
+    }
+    const update = (patch: RunUpdate) => {
+      // A run ID is shared by retries. Late output, startup, or completion
+      // belongs to this registration, never the replacement's diagnostics.
+      if (records.get(current.runId) !== current) {
+        return false;
+      }
+      const state = patch.state ?? current.state;
+      if (current.state !== "exited" && state === "exited") {
+        exitedRecords += 1;
+      } else if (current.state === "exited" && state !== "exited") {
+        exitedRecords -= 1;
+      }
+      Object.assign(current, patch, { updatedAtMs: patch.lastOutputAtMs ?? Date.now() });
+      return true;
+    };
+    return {
+      updateState: (state, patch) => {
+        update({ ...patch, state });
+      },
+      touchOutput: () => {
+        update({ lastOutputAtMs: Date.now() });
+      },
+      finalize: (exit) => {
+        // First terminal observation wins; a fallback timer cannot rewrite it.
+        if (current.state === "exited") {
+          return;
+        }
+        if (
+          update({
+            state: "exited",
+            terminationReason: current.terminationReason ?? exit.reason,
+            exitCode: exit.exitCode,
+            exitSignal: exit.exitSignal,
+          })
+        ) {
+          pruneExitedRecords();
+        }
+      },
+    };
   };
 
-  const get: RunRegistry["get"] = (runId) => {
+  const get = (runId: string): RunRecord | undefined => {
     const record = records.get(runId);
     return record ? { ...record } : undefined;
-  };
-
-  const list: RunRegistry["list"] = () => {
-    return Array.from(records.values()).map((record) => Object.assign({}, record));
-  };
-
-  const listByScope: RunRegistry["listByScope"] = (scopeKey) => {
-    if (!scopeKey.trim()) {
-      return [];
-    }
-    return Array.from(records.values())
-      .filter((record) => record.scopeKey === scopeKey)
-      .map((record) => Object.assign({}, record));
-  };
-
-  const updateState: RunRegistry["updateState"] = (runId, state, patch) => {
-    const current = records.get(runId);
-    if (!current) {
-      return undefined;
-    }
-    const updatedAtMs = nowMs();
-    const next: RunRecord = {
-      ...current,
-      ...patch,
-      state,
-      updatedAtMs,
-      lastOutputAtMs: current.lastOutputAtMs,
-    };
-    records.set(runId, next);
-    return { ...next };
-  };
-
-  const touchOutput: RunRegistry["touchOutput"] = (runId) => {
-    const current = records.get(runId);
-    if (!current) {
-      return;
-    }
-    const ts = nowMs();
-    records.set(runId, {
-      ...current,
-      lastOutputAtMs: ts,
-      updatedAtMs: ts,
-    });
-  };
-
-  const finalize: RunRegistry["finalize"] = (runId, exit) => {
-    const current = records.get(runId);
-    if (!current) {
-      return null;
-    }
-    const firstFinalize = current.state !== "exited";
-    const ts = nowMs();
-    const next: RunRecord = {
-      ...current,
-      state: "exited",
-      terminationReason: current.terminationReason ?? exit.reason,
-      exitCode: current.exitCode !== undefined ? current.exitCode : exit.exitCode,
-      exitSignal: current.exitSignal !== undefined ? current.exitSignal : exit.exitSignal,
-      updatedAtMs: ts,
-    };
-    records.set(runId, next);
-    pruneExitedRecords();
-    return { record: { ...next }, firstFinalize };
-  };
-
-  const del: RunRegistry["delete"] = (runId) => {
-    records.delete(runId);
   };
 
   return {
     add,
     get,
-    list,
-    listByScope,
-    updateState,
-    touchOutput,
-    finalize,
-    delete: del,
   };
 }

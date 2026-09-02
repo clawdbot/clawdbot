@@ -1,21 +1,32 @@
+/** Handles diagnostics commands and private owner routing for sensitive diagnostics output. */
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { createExecTool } from "../../agents/bash-tools.js";
 import type { ExecToolDetails } from "../../agents/bash-tools.js";
 import type { SessionEntry } from "../../config/sessions.js";
+import { listSessionEntriesReadOnly } from "../../config/sessions/session-accessor.js";
 import { logVerbose } from "../../globals.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import type { ExecApprovalRequest } from "../../infra/exec-approvals.js";
-import type { InteractiveReply } from "../../interactive/payload.js";
+import type {
+  LegacyInteractiveReply,
+  MessagePresentationAction,
+} from "../../interactive/payload.js";
 import { executePluginCommand, matchPluginCommand } from "../../plugins/commands.js";
 import type { PluginCommandDiagnosticsSession, PluginCommandResult } from "../../plugins/types.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
+import {
+  deliveryContextFromSession,
+  sessionDeliveryOrigin,
+} from "../../utils/delivery-context.shared.js";
 import type { ReplyPayload } from "../types.js";
 import { rejectNonOwnerCommand } from "./command-gates.js";
-import { buildCurrentOpenClawCliCommand } from "./commands-openclaw-cli.js";
+import { buildCurrentOpenClawCliExecRequest } from "./commands-openclaw-cli.js";
 import {
   deliverPrivateCommandReply,
   readCommandDeliveryTarget,
   readCommandMessageThreadId,
+  resolveCommandExecApprovalRoute,
+  resolvePrivateCommandApprovalRouteExpiresAtMs,
   resolvePrivateCommandRouteTargets,
   type PrivateCommandRouteTarget,
 } from "./commands-private-route.js";
@@ -55,10 +66,11 @@ type CodexDiagnosticsApprovalIntegration = {
 const defaultDiagnosticsCommandDeps: DiagnosticsCommandDeps = {
   createExecTool,
   resolvePrivateDiagnosticsTargets: resolvePrivateDiagnosticsTargetsForCommand,
-  deliverPrivateDiagnosticsReply: deliverPrivateDiagnosticsReply,
+  deliverPrivateDiagnosticsReply,
 };
 
-export function createDiagnosticsCommandHandler(
+/** Creates a diagnostics command handler with injectable private-route dependencies. */
+function createDiagnosticsCommandHandler(
   deps: Partial<DiagnosticsCommandDeps> = {},
 ): CommandHandler {
   const resolvedDeps: DiagnosticsCommandDeps = {
@@ -69,6 +81,7 @@ export function createDiagnosticsCommandHandler(
     await handleDiagnosticsCommandWithDeps(resolvedDeps, params, allowTextCommands);
 }
 
+/** Default diagnostics command handler. */
 export const handleDiagnosticsCommand: CommandHandler = createDiagnosticsCommandHandler();
 
 async function handleDiagnosticsCommandWithDeps(
@@ -89,18 +102,34 @@ async function handleDiagnosticsCommandWithDeps(
     );
     return { shouldContinue: false };
   }
-  const ownerGate = rejectNonOwnerCommand(params, DIAGNOSTICS_COMMAND);
-  if (ownerGate) {
-    return ownerGate;
+  const nonOwner = rejectNonOwnerCommand(params, DIAGNOSTICS_COMMAND);
+  if (nonOwner) {
+    return nonOwner;
   }
-
+  // Inventory belongs to this authorized command, not every reply's retained
+  // session view. Metadata preserves Codex target discovery without prompt snapshots.
+  const commandParams = params.storePath
+    ? {
+        ...params,
+        sessionStore: {
+          ...Object.fromEntries(
+            listSessionEntriesReadOnly({
+              agentId: params.agentId,
+              storePath: params.storePath,
+              projection: "list",
+            }).map(({ sessionKey, entry }) => [sessionKey, entry]),
+          ),
+          ...params.sessionStore,
+        },
+      }
+    : params;
   if (isCodexDiagnosticsConfirmationAction(args)) {
-    const codexResult = await executeCodexDiagnosticsAddon(params, args);
+    const codexResult = await executeCodexDiagnosticsAddon(commandParams, args);
     const reply = codexResult
       ? rewriteCodexDiagnosticsResult(codexResult)
       : { text: "No Codex diagnostics confirmation handler is available for this session." };
-    if (params.isGroup) {
-      return await deliverGroupDiagnosticsReplyPrivately(deps, params, reply);
+    if (commandParams.isGroup) {
+      return await deliverGroupDiagnosticsReplyPrivately(deps, commandParams, reply);
     }
     return {
       shouldContinue: false,
@@ -108,22 +137,15 @@ async function handleDiagnosticsCommandWithDeps(
     };
   }
 
-  if (params.isGroup) {
-    const targets = await deps.resolvePrivateDiagnosticsTargets(params);
-    if (targets.length === 0) {
-      return {
-        shouldContinue: false,
-        reply: { text: DIAGNOSTICS_PRIVATE_ROUTE_UNAVAILABLE },
-      };
-    }
-    const privateTarget = targets[0];
+  if (commandParams.isGroup) {
+    const privateTarget = (await deps.resolvePrivateDiagnosticsTargets(commandParams))[0];
     if (!privateTarget) {
       return {
         shouldContinue: false,
         reply: { text: DIAGNOSTICS_PRIVATE_ROUTE_UNAVAILABLE },
       };
     }
-    const privateReply = await buildDiagnosticsReply(deps, params, args, {
+    const privateReply = await buildDiagnosticsReply(deps, commandParams, args, {
       diagnosticsPrivateRouted: true,
       privateApprovalTarget: privateTarget,
     });
@@ -133,20 +155,15 @@ async function handleDiagnosticsCommandWithDeps(
         reply: { text: DIAGNOSTICS_PRIVATE_ROUTE_ACK },
       };
     }
-    const delivered = await deps.deliverPrivateDiagnosticsReply({
-      commandParams: params,
-      targets: [privateTarget],
-      reply: privateReply,
-    });
-    return {
-      shouldContinue: false,
-      reply: {
-        text: delivered ? DIAGNOSTICS_PRIVATE_ROUTE_ACK : DIAGNOSTICS_PRIVATE_ROUTE_UNAVAILABLE,
-      },
-    };
+    return await deliverGroupDiagnosticsReplyPrivately(
+      deps,
+      commandParams,
+      privateReply,
+      privateTarget,
+    );
   }
 
-  const reply = await buildDiagnosticsReply(deps, params, args);
+  const reply = await buildDiagnosticsReply(deps, commandParams, args);
   return reply ? { shouldContinue: false, reply } : { shouldContinue: false };
 }
 
@@ -176,16 +193,10 @@ async function deliverGroupDiagnosticsReplyPrivately(
   deps: DiagnosticsCommandDeps,
   params: HandleCommandsParams,
   reply: ReplyPayload,
+  privateTarget?: PrivateCommandRouteTarget,
 ) {
-  const targets = await deps.resolvePrivateDiagnosticsTargets(params);
-  if (targets.length === 0) {
-    return {
-      shouldContinue: false,
-      reply: { text: DIAGNOSTICS_PRIVATE_ROUTE_UNAVAILABLE },
-    };
-  }
-  const privateTarget = targets[0];
-  if (!privateTarget) {
+  const target = privateTarget ?? (await deps.resolvePrivateDiagnosticsTargets(params))[0];
+  if (!target) {
     return {
       shouldContinue: false,
       reply: { text: DIAGNOSTICS_PRIVATE_ROUTE_UNAVAILABLE },
@@ -193,7 +204,7 @@ async function deliverGroupDiagnosticsReplyPrivately(
   }
   const delivered = await deps.deliverPrivateDiagnosticsReply({
     commandParams: params,
-    targets: [privateTarget],
+    targets: [target],
     reply,
   });
   return {
@@ -251,9 +262,10 @@ function buildDiagnosticsApprovalRequest(params: HandleCommandsParams): ExecAppr
       config: params.cfg,
     });
   return {
+    approvalKind: "exec",
     id: "diagnostics-private-route",
     request: {
-      command: buildGatewayDiagnosticsExportJsonCommand(),
+      command: buildGatewayDiagnosticsExportJsonRequest().command,
       agentId,
       ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
       turnSourceChannel: params.command.channel,
@@ -262,12 +274,12 @@ function buildDiagnosticsApprovalRequest(params: HandleCommandsParams): ExecAppr
       turnSourceThreadId: readCommandMessageThreadId(params) ?? null,
     },
     createdAtMs: now,
-    expiresAtMs: now + 5 * 60_000,
+    expiresAtMs: resolvePrivateCommandApprovalRouteExpiresAtMs(now),
   };
 }
 
-function buildGatewayDiagnosticsExportJsonCommand(): string {
-  return buildCurrentOpenClawCliCommand(["gateway", "diagnostics", "export", "--json"]);
+function buildGatewayDiagnosticsExportJsonRequest() {
+  return buildCurrentOpenClawCliExecRequest(["gateway", "diagnostics", "export", "--json"]);
 }
 
 async function deliverPrivateDiagnosticsReply(params: {
@@ -284,15 +296,14 @@ async function requestGatewayDiagnosticsExportApproval(
   options: { privateApprovalTarget?: PrivateCommandRouteTarget } = {},
   codexDiagnostics: CodexDiagnosticsApprovalIntegration = {},
 ): Promise<GatewayDiagnosticsApprovalResult> {
-  const timeoutSec = params.cfg.tools?.exec?.timeoutSec;
+  const timeoutSec = params.cfg.tools?.exec?.timeoutSeconds;
   const agentId =
     params.agentId ??
     resolveSessionAgentId({
       sessionKey: params.sessionKey,
       config: params.cfg,
     });
-  const messageThreadId = readCommandMessageThreadId(params);
-  const command = buildGatewayDiagnosticsExportJsonCommand();
+  const { command, env } = buildGatewayDiagnosticsExportJsonRequest();
   try {
     const execTool = deps.createExecTool({
       host: "gateway",
@@ -308,25 +319,21 @@ async function requestGatewayDiagnosticsExportApproval(
       cwd: params.workspaceDir,
       agentId,
       sessionKey: params.sessionKey,
-      messageProvider: options.privateApprovalTarget?.channel ?? params.command.channel,
-      currentChannelId: options.privateApprovalTarget?.to ?? readCommandDeliveryTarget(params),
-      currentThreadTs: options.privateApprovalTarget
-        ? options.privateApprovalTarget.threadId == null
-          ? undefined
-          : String(options.privateApprovalTarget.threadId)
-        : messageThreadId,
-      accountId: options.privateApprovalTarget
-        ? (options.privateApprovalTarget.accountId ?? undefined)
-        : (params.ctx.AccountId ?? undefined),
+      mainKey: params.cfg.session?.mainKey,
+      sessionScope: params.cfg.session?.scope,
+      ...resolveCommandExecApprovalRoute({
+        commandParams: params,
+        privateApprovalTarget: options.privateApprovalTarget,
+      }),
       notifyOnExit: params.cfg.tools?.exec?.notifyOnExit,
       notifyOnExitEmptySuccess: params.cfg.tools?.exec?.notifyOnExitEmptySuccess,
     });
     const result = await execTool.execute("chat-diagnostics-gateway-export", {
       command,
-      security: "allowlist",
+      env,
       ask: "always",
       background: true,
-      timeout: timeoutSec,
+      timeoutSeconds: timeoutSec,
     });
     if (result.details?.status === "approval-pending") {
       return { status: "pending" };
@@ -454,13 +461,16 @@ async function executeCodexDiagnosticsAddon(
     isAuthorizedSender: params.command.isAuthorizedSender,
     senderIsOwner: params.command.senderIsOwner,
     gatewayClientScopes: params.ctx.GatewayClientScopes,
+    agentId: params.agentId,
     sessionKey: params.sessionKey,
     sessionId: targetSessionEntry?.sessionId,
-    sessionFile: targetSessionEntry?.sessionFile,
+    sessionFile: targetSessionEntry ? params.sessionKey : undefined,
+    authProfileId: targetSessionEntry?.authProfileOverride,
     commandBody,
     config: params.cfg,
     from: params.command.from,
     to: params.command.to,
+    originatingTo: normalizeOptionalString(params.ctx.OriginatingTo),
     accountId: params.ctx.AccountId ?? undefined,
     messageThreadId:
       typeof params.ctx.MessageThreadId === "string" ||
@@ -495,23 +505,21 @@ function buildCodexDiagnosticsSessions(
     }
   }
   return Array.from(sessions.entries())
-    .filter(([, entry]) => Boolean(entry.sessionFile))
+    .filter(([, entry]) => Boolean(entry.sessionId?.trim()))
     .map(([sessionKey, entry]) => ({
       sessionKey,
       sessionId: entry.sessionId,
-      sessionFile: entry.sessionFile,
+      sessionFile: sessionKey,
       agentHarnessId: entry.agentHarnessId,
       channel: resolveDiagnosticsSessionChannel(entry, params, sessionKey),
       channelId: resolveDiagnosticsSessionChannelId(entry, params, sessionKey),
       accountId:
-        normalizeOptionalString(entry.deliveryContext?.accountId) ??
-        normalizeOptionalString(entry.origin?.accountId) ??
-        normalizeOptionalString(entry.lastAccountId) ??
+        normalizeOptionalString(deliveryContextFromSession(entry)?.accountId) ??
+        normalizeOptionalString(sessionDeliveryOrigin(entry)?.accountId) ??
         (sessionKey === params.sessionKey ? (params.ctx.AccountId ?? undefined) : undefined),
       messageThreadId:
-        entry.deliveryContext?.threadId ??
-        entry.origin?.threadId ??
-        entry.lastThreadId ??
+        deliveryContextFromSession(entry)?.threadId ??
+        sessionDeliveryOrigin(entry)?.threadId ??
         (sessionKey === params.sessionKey &&
         (typeof params.ctx.MessageThreadId === "string" ||
           typeof params.ctx.MessageThreadId === "number")
@@ -530,10 +538,8 @@ function resolveDiagnosticsSessionChannel(
   sessionKey: string,
 ): string | undefined {
   return (
-    normalizeOptionalString(entry.deliveryContext?.channel) ??
-    normalizeOptionalString(entry.origin?.provider) ??
-    normalizeOptionalString(entry.channel) ??
-    normalizeOptionalString(entry.lastChannel) ??
+    normalizeOptionalString(deliveryContextFromSession(entry)?.channel) ??
+    normalizeOptionalString(sessionDeliveryOrigin(entry)?.provider) ??
     (sessionKey === params.sessionKey ? params.command.channel : undefined)
   );
 }
@@ -544,7 +550,7 @@ function resolveDiagnosticsSessionChannelId(
   sessionKey: string,
 ) {
   return (
-    normalizeOptionalString(entry.origin?.nativeChannelId) ??
+    normalizeOptionalString(sessionDeliveryOrigin(entry)?.nativeChannelId) ??
     (sessionKey === params.sessionKey ? params.command.channelId : undefined)
   );
 }
@@ -597,7 +603,7 @@ function rewriteCodexDiagnosticsResult(result: PluginCommandResult): PluginComma
   };
 }
 
-function rewriteInteractive(interactive: InteractiveReply): InteractiveReply {
+function rewriteInteractive(interactive: LegacyInteractiveReply): LegacyInteractiveReply {
   return {
     blocks: interactive.blocks.map((block) => {
       if (block.type === "buttons") {
@@ -605,6 +611,7 @@ function rewriteInteractive(interactive: InteractiveReply): InteractiveReply {
           ...block,
           buttons: block.buttons.map((button) => ({
             ...button,
+            ...(button.action ? { action: rewritePresentationAction(button.action) } : {}),
             ...(button.value ? { value: rewriteCodexDiagnosticsCommandPrefix(button.value) } : {}),
           })),
         };
@@ -614,13 +621,42 @@ function rewriteInteractive(interactive: InteractiveReply): InteractiveReply {
           ...block,
           options: block.options.map((option) => ({
             ...option,
-            value: rewriteCodexDiagnosticsCommandPrefix(option.value),
+            ...(option.action ? { action: rewriteSelectPresentationAction(option.action) } : {}),
+            ...(option.value ? { value: rewriteCodexDiagnosticsCommandPrefix(option.value) } : {}),
           })),
         };
       }
       return block;
     }),
   };
+}
+
+function rewritePresentationAction(action: MessagePresentationAction): MessagePresentationAction {
+  if (action.type === "command") {
+    return {
+      type: "command",
+      command: rewriteCodexDiagnosticsCommandPrefix(action.command),
+    };
+  }
+  if (action.type === "callback") {
+    return {
+      type: "callback",
+      value: rewriteCodexDiagnosticsCommandPrefix(action.value),
+    };
+  }
+  return action;
+}
+
+function rewriteSelectPresentationAction(
+  action: Extract<MessagePresentationAction, { type: "command" | "callback" | "model-picker" }>,
+): Extract<MessagePresentationAction, { type: "command" | "callback" | "model-picker" }> {
+  if (action.type === "command") {
+    return { type: "command", command: rewriteCodexDiagnosticsCommandPrefix(action.command) };
+  }
+  if (action.type === "callback") {
+    return { type: "callback", value: rewriteCodexDiagnosticsCommandPrefix(action.value) };
+  }
+  return action;
 }
 
 function rewriteCodexDiagnosticsCommandPrefix(value: string): string {
