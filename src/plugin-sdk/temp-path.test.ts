@@ -71,6 +71,12 @@ describe("withTempDownloadPath", () => {
       expectCleanup: false,
       expectedBasename: "evil.bin",
     },
+    {
+      name: "falls back to the default name when a fileName sanitizes to a dot segment",
+      input: { prefix: "media", fileName: "../.." },
+      expectCleanup: false,
+      expectedBasename: "download.bin",
+    },
   ])("$name", async ({ input, expectCleanup, expectedBasename }) => {
     let capturedPath = "";
     await withTempDownloadPath(input, async (tmpPath) => {

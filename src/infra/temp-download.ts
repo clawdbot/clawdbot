@@ -42,7 +42,9 @@ function sanitizeTempExtension(extension?: string): string {
 export function sanitizeTempFileName(fileName: string): string {
   const base = path.basename(fileName).replace(/[^a-zA-Z0-9._-]+/g, "-");
   const normalized = base.replace(/^-+|-+$/g, "");
-  return normalized || "download.bin";
+  // "." and ".." pass the character class above but are rejected as workspace
+  // leaf names, so returning them hands callers a throw instead of a safe name.
+  return !normalized || normalized === "." || normalized === ".." ? "download.bin" : normalized;
 }
 
 /** Build a stable temp path shape while keeping caller-controlled text filename-safe. */
