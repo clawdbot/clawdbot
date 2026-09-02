@@ -2627,6 +2627,28 @@ describe("handleFeishuMessage command authorization", () => {
     );
   });
 
+  it("bounds merged-forward prompt content and marks truncation", () => {
+    const content = JSON.stringify([
+      {
+        message_id: "container",
+        msg_type: "merge_forward",
+        body: { content: JSON.stringify({ text: "Merged and Forwarded Message" }) },
+      },
+      {
+        message_id: "oversized",
+        upper_message_id: "container",
+        msg_type: "text",
+        body: { content: JSON.stringify({ text: "😀".repeat(20_000) }) },
+      },
+    ]);
+
+    const parsed = parseMergeForwardContent({ content });
+
+    expect(parsed.length).toBeLessThanOrEqual(20_000);
+    expect(parsed.endsWith("\n... [Merged-forward content truncated]")).toBe(true);
+    expect(parsed).not.toMatch(/[\uD800-\uDFFF]/u);
+  });
+
   it("falls back when merge_forward API returns no sub-messages", async () => {
     mockShouldComputeCommandAuthorized.mockReturnValue(false);
     mockCreateFeishuClient.mockReturnValue({

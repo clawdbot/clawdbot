@@ -1,5 +1,5 @@
 import { parseStrictNonNegativeInteger } from "openclaw/plugin-sdk/number-runtime";
-import { escapeHtml } from "openclaw/plugin-sdk/text-utility-runtime";
+import { escapeHtml, truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { normalizeFeishuExternalKey } from "./external-keys.js";
 import { parseInteractiveCardContent } from "./interactive-message-content.js";
 import { parsePostContent } from "./post.js";
@@ -92,5 +92,10 @@ export function parseMergeForwardContent(params: { content: string }): string {
   if (subMessages.length > maxMessages) {
     lines.push(`... and ${subMessages.length - maxMessages} more messages`);
   }
-  return lines.join("\n");
+  const rendered = lines.join("\n");
+  const maxContentChars = 20_000;
+  const marker = "\n... [Merged-forward content truncated]";
+  return rendered.length <= maxContentChars
+    ? rendered
+    : `${truncateUtf16Safe(rendered, maxContentChars - marker.length).trimEnd()}${marker}`;
 }
