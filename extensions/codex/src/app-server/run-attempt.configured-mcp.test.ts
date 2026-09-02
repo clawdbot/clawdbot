@@ -49,7 +49,10 @@ vi.mock("openclaw/plugin-sdk/agent-harness-runtime", async (importOriginal) => {
     ) => {
       const params = args[0] as Record<string, unknown>;
       mcpMocks.threadConfigCalls.push(params);
-      mcpMocks.threadConfigFacade(params);
+      const override = mcpMocks.threadConfigFacade(params);
+      if (override) {
+        return override;
+      }
       const cfg = params.cfg as
         | { mcp?: { servers?: Record<string, Record<string, unknown>> } }
         | undefined;
@@ -396,43 +399,152 @@ describe("runCodexAppServerAttempt configured MCP ownership", () => {
     });
   });
 
-  it("keeps ordinary configured MCP native without probing or stamping its inventory", async () => {
-    const sessionFile = path.join(tempDir, "session-native-mcp-auth-failure.jsonl");
-    const params = createParams(
-      sessionFile,
-      path.join(tempDir, "workspace-native-mcp-auth-failure"),
-    );
-    configureFakeMcp(params);
-
-    const harness = createStartedThreadHarness(async (method) => {
-      if (method === "mcpServerStatus/list") {
-        return {
-          data: [
-            {
-              name: "fake",
-              serverInfo: null,
-              authStatus: "notLoggedIn",
-              tools: {},
+  it.each([
+    { mode: undefined, source: "operator", delegate: false },
+    { mode: "approve", source: "operator", delegate: false },
+    { mode: "auto", source: "operator", delegate: true },
+    { mode: "prompt", source: "operator", delegate: true },
+    { mode: "prompt", source: "bundle", delegate: true },
+    { mode: "approve", source: "operator-over-bundle", delegate: false },
+  ] as const)(
+    "honors $source MCP approval mode $mode at thread and turn startup",
+    async (testCase) => {
+      const sessionFile = path.join(tempDir, "session-native-mcp-auth-failure.jsonl");
+      const params = createParams(
+        sessionFile,
+        path.join(tempDir, "workspace-native-mcp-auth-failure"),
+      );
+      configureFakeMcp(params);
+      params.config!.mcp!.servers!.fake!.codex = { defaultToolsApprovalMode: testCase.mode };
+      if (testCase.source === "bundle") {
+        params.config!.mcp = {};
+        mcpMocks.threadConfigFacade.mockReturnValueOnce({
+          configPatch: {
+            mcp_servers: {
+              bundled: {
+                url: "https://mcp.example.test",
+                default_tools_approval_mode: testCase.mode,
+              },
             },
-          ],
-          nextCursor: null,
-        };
+          },
+          diagnostics: [],
+          evaluated: true,
+          staticServerNames: ["bundled", "unannotated"],
+          userStaticServerNames: ["unannotated"],
+        });
+      } else if (testCase.source === "operator-over-bundle") {
+        mcpMocks.threadConfigFacade.mockReturnValueOnce({
+          configPatch: {
+            mcp_servers: {
+              fake: { url: "https://mcp.example.test", default_tools_approval_mode: "prompt" },
+            },
+          },
+          diagnostics: [],
+          evaluated: true,
+          staticServerNames: ["fake", "unannotated"],
+          userStaticServerNames: ["fake", "unannotated"],
+        });
       }
-      return undefined;
-    });
-    const run = runCodexAppServerAttempt(params);
-    await harness.waitForMethod("turn/start");
-    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
-    await expect(run).resolves.toBeDefined();
+      params.config!.mcp!.servers = {
+        ...params.config!.mcp!.servers,
+        unannotated: { url: "https://unannotated.example.test/mcp" },
+      };
+      const requestApproval = vi.fn(async (_request: { description?: string }) => ({
+        id: "plugin:mcp-fixture",
+      }));
+      const waitForApproval = vi.fn(async () => ({
+        decision: "deny" as const,
+        terminalReason: "user" as const,
+      }));
+      params.hostCapabilities = Object.freeze({
+        ...params.hostCapabilities,
+        requestApproval,
+        waitForApproval,
+      });
 
-    expect(harness.requests.map((request) => request.method)).not.toContain("mcpServerStatus/list");
-    expect(mcpMocks.staticCalls).toHaveLength(0);
-    expect(mcpMocks.requesterParams[0]?.manifestRegistry).toBe(
-      params.preparedModelRuntime?.metadataSnapshot.manifestRegistry,
-    );
-    expect(mcpMocks.captureCalls).toHaveLength(1);
-    expect(mcpMocks.captureCalls[0]!.storedNames).not.toContain("fake__show");
-  });
+      const harness = createStartedThreadHarness(async (method) => {
+        if (method === "mcpServerStatus/list") {
+          return {
+            data: [
+              {
+                name: "fake",
+                serverInfo: null,
+                authStatus: "notLoggedIn",
+                tools: {},
+              },
+            ],
+            nextCursor: null,
+          };
+        }
+        return undefined;
+      });
+      const run = runCodexAppServerAttempt(params, {
+        pluginConfig: {
+          appServer: { approvalPolicy: "never", sandbox: "danger-full-access" },
+        },
+      });
+      await harness.waitForMethod("turn/start");
+      const responses = [];
+      for (const serverName of ["unannotated", testCase.source === "bundle" ? "bundled" : "fake"]) {
+        responses.push(
+          await harness.handleServerRequest({
+            id: `approval-${serverName}`,
+            method: "mcpServer/elicitation/request",
+            params: {
+              threadId: "thread-1",
+              turnId: "turn-1",
+              serverName,
+              mode: "form",
+              _meta: { codex_approval_kind: "mcp_tool_call" },
+              requestedSchema: { type: "object", properties: {} },
+            },
+          }),
+        );
+      }
+      await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+      await expect(run).resolves.toBeDefined();
+
+      expect(responses).toEqual([
+        { action: "accept", content: null, _meta: null },
+        { action: testCase.delegate ? "decline" : "accept", content: null, _meta: null },
+      ]);
+      expect(requestApproval).toHaveBeenCalledTimes(testCase.delegate ? 1 : 0);
+      expect(waitForApproval).toHaveBeenCalledTimes(testCase.delegate ? 1 : 0);
+      // Codex drops decline meta, so the remedy must reach the operator via the card.
+      if (testCase.delegate) {
+        expect(requestApproval.mock.calls[0]?.[0]?.description).toContain(
+          `openclaw mcp configure ${testCase.source === "bundle" ? "bundled" : "fake"} --approval approve`,
+        );
+      }
+      const expectedApprovalPolicy = testCase.delegate
+        ? {
+            granular: {
+              mcp_elicitations: true,
+              rules: false,
+              sandbox_approval: false,
+              request_permissions: false,
+              skill_approval: false,
+            },
+          }
+        : "never";
+      for (const method of ["thread/start", "turn/start"]) {
+        expect(harness.requests.find((request) => request.method === method)?.params).toMatchObject(
+          {
+            approvalPolicy: expectedApprovalPolicy,
+          },
+        );
+      }
+      expect(harness.requests.map((request) => request.method)).not.toContain(
+        "mcpServerStatus/list",
+      );
+      expect(mcpMocks.staticCalls).toHaveLength(0);
+      expect(mcpMocks.requesterParams[0]?.manifestRegistry).toBe(
+        params.preparedModelRuntime?.metadataSnapshot.manifestRegistry,
+      );
+      expect(mcpMocks.captureCalls).toHaveLength(1);
+      expect(mcpMocks.captureCalls[0]!.storedNames).not.toContain("fake__show");
+    },
+  );
 
   it("captures a restricted ordinary turn without inventing intentionally disabled native MCP", async () => {
     const sessionFile = path.join(tempDir, "session-native-mcp-restricted.jsonl");

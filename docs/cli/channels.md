@@ -75,6 +75,8 @@ openclaw channels dead-letters list --channel telegram --account default --json
 
 The text view shows event ids, failure reasons, attempt counts, and failure ages. JSON output also includes the retained payload, metadata, lane, and attempt timestamps for diagnostics.
 
+Omitting `--account` inspects the `default` account. Both dead-letter commands reject a blank value instead of falling back to `default`, so an unset shell variable cannot silently select an account you did not name. You can place `--account` before or after `list` or `resubmit`; a value after the leaf command takes precedence.
+
 After correcting the underlying problem, re-enqueue one event with its original event id:
 
 ```bash

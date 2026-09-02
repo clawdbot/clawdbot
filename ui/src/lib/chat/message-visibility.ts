@@ -15,8 +15,8 @@ const SILENT_REPLY_PATTERN = /^\s*NO_REPLY\s*$/;
 const SYNTHETIC_TRANSCRIPT_REPAIR_RESULT =
   "[openclaw] missing tool result in session history; inserted synthetic error result for transcript repair.";
 
-// Media and unknown non-tool blocks are visible outcomes even without text;
-// classifying prepared content keeps them out of collapsed work rollups.
+// Media and unknown blocks are visible outcomes; tool and thinking blocks are
+// activity. Classifying prepared content keeps replies out of work rollups.
 export function resolveMessageVisibleContent(
   message: unknown,
   normalized: NormalizedMessage,
@@ -25,7 +25,11 @@ export function resolveMessageVisibleContent(
   for (const block of normalized.content) {
     if (block.type === "text") {
       hasText ||= Boolean(block.text?.trim());
-    } else if (!isToolCallContentType(block.type) && !isToolResultContentType(block.type)) {
+    } else if (
+      block.type !== "thinking" &&
+      !isToolCallContentType(block.type) &&
+      !isToolResultContentType(block.type)
+    ) {
       return "non-text";
     }
   }

@@ -462,6 +462,10 @@ export function normalizeMessage(message: unknown): NormalizedMessage {
       }
       const type = item.type;
       const text = readStringField(item, "text");
+      if (type === "thinking") {
+        const thinking = readStringField(item, "thinking");
+        return thinking === undefined ? [] : [{ type, thinking }];
+      }
       if (isAssistantMessage) {
         const managedMediaAttachment = coerceManagedMediaContentBlock(item);
         if (managedMediaAttachment) {

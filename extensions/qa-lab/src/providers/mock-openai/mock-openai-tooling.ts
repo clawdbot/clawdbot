@@ -2,7 +2,7 @@
 import { createHash } from "node:crypto";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { QA_LAB_WEB_SEARCH_DENIED_INPUT_QUERY } from "../../qa-web-search-provider.js";
-import type { StreamEvent } from "./mock-openai-contracts.js";
+import { buildCompletedResponseEvent, type StreamEvent } from "./mock-openai-contracts.js";
 
 let mockFunctionCallSequence = 0;
 
@@ -124,15 +124,7 @@ export function buildToolCallEventsWithArgs(
       type: "response.output_item.done",
       item: call.item,
     },
-    {
-      type: "response.completed",
-      response: {
-        id: call.responseId,
-        status: "completed",
-        output: [call.item],
-        usage: { input_tokens: 64, output_tokens: 16, total_tokens: 80 },
-      },
-    },
+    buildCompletedResponseEvent(call.responseId, [call.item], 16),
   ];
 }
 
@@ -168,15 +160,7 @@ export function buildCustomToolCallEventsWithInput(
       delta: input,
     },
     { type: "response.output_item.done", item },
-    {
-      type: "response.completed",
-      response: {
-        id: call.responseId,
-        status: "completed",
-        output: [item],
-        usage: { input_tokens: 64, output_tokens: 16, total_tokens: 80 },
-      },
-    },
+    buildCompletedResponseEvent(call.responseId, [item], 16),
   ];
 }
 

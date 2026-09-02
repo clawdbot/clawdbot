@@ -2,12 +2,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import {
-  collectBundledPluginBuildEntries,
-  NON_PACKAGED_BUNDLED_PLUGIN_DIRS,
-} from "./lib/bundled-plugin-build-entries.mjs";
-import { ensureRepoNodeModulesLink } from "./lib/local-check-runtime.mts";
-import { shouldBuildBundledCluster } from "./lib/optional-bundled-clusters.mjs";
+import { collectSourceCheckoutPluginBuildEntries } from "./lib/bundled-plugin-build-entries.mjs";
 import { assertRealOutputRoot } from "./lib/output-root-guard.mjs";
 import {
   mergeGeneratedChannelConfigs,
@@ -32,21 +27,7 @@ type SkillPathParams = {
   repoRoot: string;
 };
 
-function shouldCopyBundledPluginMetadata(
-  id: string,
-  env: NodeJS.ProcessEnv,
-  buildablePluginDirs: Set<string>,
-): boolean {
-  if (!buildablePluginDirs.has(id)) {
-    return false;
-  }
-  if (!NON_PACKAGED_BUNDLED_PLUGIN_DIRS.has(id)) {
-    return true;
-  }
-  return env.OPENCLAW_BUILD_PRIVATE_QA === "1";
-}
-
-function rewritePackageExtensions(entries: unknown): string[] | undefined {
+function rewritePackageExtensions(entries: unknown, extension: string): string[] | undefined {
   if (!Array.isArray(entries)) {
     return undefined;
   }
@@ -55,64 +36,17 @@ function rewritePackageExtensions(entries: unknown): string[] | undefined {
     .filter((entry) => typeof entry === "string" && entry.trim().length > 0)
     .map((entry) => {
       const normalized = entry.replace(/^\.\//, "");
-      const rewritten = normalized.replace(/\.[^.]+$/u, ".js");
+      const rewritten = normalized.replace(/\.[^.]+$/u, extension);
       return `./${rewritten}`;
     });
 }
 
-function collectTopLevelPublicSurfaceEntries(pluginDir: string): string[] {
-  if (!fs.existsSync(pluginDir)) {
-    return [];
-  }
-
-  return fs
-    .readdirSync(pluginDir, { withFileTypes: true })
-    .flatMap((dirent) => {
-      if (!dirent.isFile()) {
-        return [];
-      }
-
-      if (!/\.(?:[cm]?[jt]s)$/u.test(dirent.name) || dirent.name.endsWith(".d.ts")) {
-        return [];
-      }
-
-      const normalizedName = dirent.name.toLowerCase();
-      if (
-        /^config-api\.(?:[cm]?[jt]s)$/u.test(normalizedName) ||
-        normalizedName.includes(".test.") ||
-        normalizedName.includes(".spec.") ||
-        normalizedName.includes(".fixture.") ||
-        normalizedName.includes(".snap")
-      ) {
-        return [];
-      }
-
-      return [dirent.name];
-    })
-    .toSorted((left, right) => left.localeCompare(right));
-}
-
-function isManifestlessBundledRuntimeSupportPackage(params: {
-  dirName: string;
-  packageJson: unknown;
-  topLevelPublicSurfaceEntries: string[];
-}): boolean {
-  const packageName =
-    isRecord(params.packageJson) && typeof params.packageJson.name === "string"
-      ? params.packageJson.name
-      : "";
-  if (packageName !== `@openclaw/${params.dirName}`) {
-    return false;
-  }
-  return params.topLevelPublicSurfaceEntries.length > 0;
-}
-
-function rewritePackageEntry(entry: unknown): string | undefined {
+function rewritePackageEntry(entry: unknown, extension: string): string | undefined {
   if (typeof entry !== "string" || entry.trim().length === 0) {
     return undefined;
   }
   const normalized = entry.replace(/^\.\//, "");
-  const rewritten = normalized.replace(/\.[^.]+$/u, ".js");
+  const rewritten = normalized.replace(/\.[^.]+$/u, extension);
   return `./${rewritten}`;
 }
 
@@ -257,6 +191,35 @@ function copyDeclaredPluginSkillPaths(params: SkillPathParams): string[] {
   return copiedSkills;
 }
 
+function linkSourcePluginDependencies(pluginDir: string, distNodeModules: string) {
+  const sourceModules = path.join(pluginDir, "node_modules");
+  if (!fs.existsSync(sourceModules)) {
+    return;
+  }
+  const packages = fs.readdirSync(sourceModules).flatMap((name) => {
+    if (name.startsWith(".") && name !== ".bin") {
+      return [];
+    }
+    return name.startsWith("@")
+      ? fs.readdirSync(path.join(sourceModules, name)).map((child) => path.join(name, child))
+      : [name];
+  });
+  // An outer node_modules junction misresolves pnpm's relative links on Windows.
+  // Link canonical package roots individually; keep scopes real and payloads source-owned.
+  // Preserve .bin for managed launchers that resolve the plugin's private CLI shim.
+  for (const name of packages) {
+    const target = path.join(distNodeModules, name);
+    fs.mkdirSync(path.dirname(target), { recursive: true });
+    const canonical = fs.realpathSync(path.join(sourceModules, name));
+    // POSIX release checkouts relocate as a unit; Windows junctions require absolute targets.
+    fs.symlinkSync(
+      process.platform === "win32" ? canonical : path.relative(path.dirname(target), canonical),
+      target,
+      "junction",
+    );
+  }
+}
+
 /**
  * Copies bundled plugin metadata and package extension files.
  */
@@ -272,8 +235,11 @@ export function copyBundledPluginMetadata(params: CopyMetadataParams = {}): void
   // would redirect recursive deletes into the link target.
   assertRealOutputRoot(path.join(repoRoot, "dist"));
 
-  const buildablePluginDirs = new Set(
-    collectBundledPluginBuildEntries({ cwd: repoRoot, env }).map((entry) => entry.id),
+  const buildEntries = new Map(
+    collectSourceCheckoutPluginBuildEntries({ cwd: repoRoot, env }).map((entry) => [
+      entry.id,
+      entry,
+    ]),
   );
   const generatedChannelConfigsByPlugin = readGeneratedBundledChannelConfigs(repoRoot);
   const sourcePluginDirs = new Set<string>();
@@ -290,49 +256,20 @@ export function copyBundledPluginMetadata(params: CopyMetadataParams = {}): void
       ? JSON.parse(fs.readFileSync(packageJsonPath, "utf8"))
       : undefined;
     const packageJson = isRecord(parsedPackageJson) ? parsedPackageJson : undefined;
-    const topLevelPublicSurfaceEntries = collectTopLevelPublicSurfaceEntries(pluginDir);
-    const hasExternalLocalDist =
-      isRecord(packageJson?.openclaw) &&
-      isRecord(packageJson.openclaw.build) &&
-      packageJson.openclaw.build.bundledDist === false &&
-      fs.existsSync(distPluginDir);
-    if (
-      !hasExternalLocalDist &&
-      !shouldCopyBundledPluginMetadata(dirent.name, env, buildablePluginDirs)
-    ) {
+    const buildEntry = buildEntries.get(dirent.name);
+    if (!buildEntry) {
       removePathIfExists(distPluginDir);
       continue;
     }
-    if (!shouldBuildBundledCluster(dirent.name, env, { packageJson })) {
-      removePathIfExists(distPluginDir);
-      continue;
-    }
-
     const distNodeModules = path.join(distPluginDir, "node_modules");
-    // Metadata cleanup must never traverse a previous source-dependency link.
-    if (
-      hasExternalLocalDist &&
-      fs.lstatSync(distNodeModules, { throwIfNoEntry: false })?.isSymbolicLink()
-    ) {
-      fs.unlinkSync(distNodeModules);
-    }
-
-    const isManifestlessSupportPackage =
-      !fs.existsSync(manifestPath) &&
-      isManifestlessBundledRuntimeSupportPackage({
-        dirName: dirent.name,
-        packageJson,
-        topLevelPublicSurfaceEntries,
-      });
+    // Remove only dist-owned entries, including an old directory link itself,
+    // before skill cleanup or an isolated/unified profile transition.
+    fs.rmSync(distNodeModules, { recursive: true, force: true });
 
     sourcePluginDirs.add(dirent.name);
 
     const distManifestPath = path.join(distPluginDir, "openclaw.plugin.json");
     const distPackageJsonPath = path.join(distPluginDir, "package.json");
-    if (!fs.existsSync(manifestPath) && !isManifestlessSupportPackage) {
-      removePathIfExists(distPluginDir);
-      continue;
-    }
 
     if (fs.existsSync(manifestPath)) {
       const manifest: unknown = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
@@ -365,18 +302,19 @@ export function copyBundledPluginMetadata(params: CopyMetadataParams = {}): void
       continue;
     }
     if (packageJson && isRecord(packageJson.openclaw) && "extensions" in packageJson.openclaw) {
+      const extension = buildEntry.runtimeExtension;
       packageJson.openclaw = {
         ...packageJson.openclaw,
-        extensions: rewritePackageExtensions(packageJson.openclaw.extensions),
+        extensions: rewritePackageExtensions(packageJson.openclaw.extensions, extension),
         ...(typeof packageJson.openclaw.setupEntry === "string"
-          ? { setupEntry: rewritePackageEntry(packageJson.openclaw.setupEntry) }
+          ? { setupEntry: rewritePackageEntry(packageJson.openclaw.setupEntry, extension) }
           : {}),
       };
     }
 
     writeTextFileIfChanged(distPackageJsonPath, `${JSON.stringify(packageJson, null, 2)}\n`);
-    if (hasExternalLocalDist) {
-      ensureRepoNodeModulesLink(path.join(pluginDir, "node_modules"), { cwd: distPluginDir });
+    if (buildEntry.isolated) {
+      linkSourcePluginDependencies(pluginDir, distNodeModules);
     }
   }
 

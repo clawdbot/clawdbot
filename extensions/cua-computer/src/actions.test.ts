@@ -66,6 +66,7 @@ describe("cua-computer key normalization", () => {
       scalePoint(
         {
           id: "frame",
+          referenceWidth: 1920,
           nativeWidth: 3840,
           nativeHeight: 2160,
           deliveredWidth: 1920,

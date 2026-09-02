@@ -1,6 +1,10 @@
 // Keep catalog-backed policy evaluation behind the Agents page's lazy boundary;
 // importing it from shared agent display helpers loads tool descriptions at startup.
 import {
+  compileGlobPatterns,
+  matchesAnyGlobPattern as matchesAny,
+} from "../../../../src/agents/glob-pattern.js";
+import {
   expandToolGroups,
   normalizeToolPolicyName,
 } from "../../../../src/agents/tool-policy-shared.js";
@@ -10,50 +14,14 @@ type ToolPolicy = {
   deny?: string[];
 };
 
-type CompiledPattern =
-  | { kind: "all" }
-  | { kind: "exact"; value: string }
-  | { kind: "regex"; value: RegExp };
-
-function compilePattern(pattern: string): CompiledPattern {
-  const normalized = normalizeToolPolicyName(pattern);
-  if (!normalized) {
-    return { kind: "exact", value: "" };
-  }
-  if (normalized === "*") {
-    return { kind: "all" };
-  }
-  if (!normalized.includes("*")) {
-    return { kind: "exact", value: normalized };
-  }
-  const escaped = normalized.replace(/[.*+?^${}()|[\\]\\]/g, "\\$&");
-  return { kind: "regex", value: new RegExp(`^${escaped.replaceAll("\\*", ".*")}$`) };
-}
-
-function compilePatterns(patterns?: string[]): CompiledPattern[] {
+function compilePatterns(patterns?: string[]) {
   if (!Array.isArray(patterns)) {
     return [];
   }
-  return expandToolGroups(patterns)
-    .map(compilePattern)
-    .filter((pattern) => {
-      return pattern.kind !== "exact" || pattern.value.length > 0;
-    });
-}
-
-function matchesAny(name: string, patterns: CompiledPattern[]) {
-  for (const pattern of patterns) {
-    if (pattern.kind === "all") {
-      return true;
-    }
-    if (pattern.kind === "exact" && name === pattern.value) {
-      return true;
-    }
-    if (pattern.kind === "regex" && pattern.value.test(name)) {
-      return true;
-    }
-  }
-  return false;
+  return compileGlobPatterns({
+    raw: expandToolGroups(patterns),
+    normalize: normalizeToolPolicyName,
+  });
 }
 
 export function isAllowedByPolicy(name: string, policy?: ToolPolicy) {

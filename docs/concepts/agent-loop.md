@@ -126,6 +126,8 @@ or raw errors out of the transcript/runtime path.
 
 Assistant deltas buffer into chat `delta` messages. A chat `final` is emitted on **lifecycle end/error**.
 
+Live snapshots are scoped to their assistant message. A correction can shorten or clear the current preview without erasing earlier messages. Pending text is flushed before the terminal event; pacing live updates does not delay tool execution or transcript writes.
+
 Run-duration metadata belongs to the current run, including when preparation fails before the model starts. In Control UI completed-work rollups, independent sends have separate elapsed-time boundaries: a failed turn and the idle time before the next send are not part of that next turn's work. Steering remains associated with its target run rather than being treated as an independent retry.
 
 ## Timeouts
@@ -166,6 +168,12 @@ After separately bounded abort cleanup, queued projection gets a five-second
 drain grace. Neither window resets on progress. These cleanup limits still
 apply when the execution budget is unlimited. See
 [Codex timeouts](/plugins/codex-harness-reference#timeouts).
+
+When a runtime reports a definitive timeout, the Gateway records its terminal
+status and error for the session sidebar immediately, without waiting for
+provider retry grace. Opening the failed session dismisses its sidebar attention
+as usual. A later successful turn clears the previous error and is not replaced
+by an older delayed failure.
 
 ### Stuck session diagnostics
 

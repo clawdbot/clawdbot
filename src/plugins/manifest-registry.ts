@@ -626,16 +626,21 @@ function pushManifestCompatibilityDiagnostics(params: {
   pushNonBundledChannelConfigDescriptorDiagnostic(params);
 }
 
-function dedupePluginDiagnostics(diagnostics: PluginDiagnostic[]): PluginDiagnostic[] {
+function dedupePluginDiagnostics(
+  diagnostics: PluginDiagnostic[],
+  discoveryDiagnostics: ReadonlySet<PluginDiagnostic>,
+): PluginDiagnostic[] {
   const seen = new Set<string>();
   const deduped: PluginDiagnostic[] = [];
   for (const diagnostic of diagnostics) {
-    // Errors belong to their failed source; equivalent compatibility warnings remain owner-deduped.
+    // Discovery diagnostics belong to package roots; generated compatibility warnings belong to ids.
     const key = JSON.stringify([
       diagnostic.level,
       diagnostic.pluginId ?? "",
       diagnostic.message,
-      diagnostic.level === "error" ? (diagnostic.source ?? "") : "",
+      diagnostic.level === "error" || discoveryDiagnostics.has(diagnostic)
+        ? (diagnostic.source ?? "")
+        : "",
     ]);
     if (seen.has(key)) {
       continue;
@@ -880,7 +885,8 @@ export function loadPluginManifestRegistryCore(
         env,
         installRecords: getInstallRecords(),
       }));
-  const diagnostics: PluginDiagnostic[] = [...discovery.diagnostics];
+  const discovered = new Set(discovery.diagnostics);
+  const diagnostics: PluginDiagnostic[] = [...discovered];
   const candidates: PluginCandidate[] = discovery.candidates;
   const records: PluginManifestRecord[] = [];
   const seenIds = new Map<string, SeenIdEntry>();
@@ -1133,7 +1139,7 @@ export function loadPluginManifestRegistryCore(
   }
 
   const plugins = rejectCaseFoldedIdCollisions(records, diagnostics);
-  const registry = { plugins, diagnostics: dedupePluginDiagnostics(diagnostics) };
+  const registry = { plugins, diagnostics: dedupePluginDiagnostics(diagnostics, discovered) };
   return registry;
 }
 

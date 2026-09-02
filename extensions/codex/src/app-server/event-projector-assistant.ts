@@ -6,7 +6,6 @@ import {
   createAssistantAsyncMessage as buildAssistantAsyncMessage,
   createAssistantCommentaryMessage as buildAssistantCommentaryMessage,
   createAssistantMessage as buildAssistantMessage,
-  createAssistantMirrorMessage as buildAssistantMirrorMessage,
   type AssistantMessageOptions,
 } from "./event-projector-assistant-message.js";
 import { shouldClearTerminalPresentationForNativeItem } from "./event-projector-items.js";
@@ -470,10 +469,6 @@ export class CodexAssistantProjection {
   createAssistantMessage(text: string, options: AssistantMessageOptions): AssistantMessage {
     const message = buildAssistantMessage(this.params, text, options);
     return this.responseModel ? { ...message, responseModel: this.responseModel } : message;
-  }
-
-  createAssistantMirrorMessage(title: string, text: string): AssistantMessage {
-    return buildAssistantMirrorMessage(this.params, title, text);
   }
 
   private rememberAssistantPhase(item: CodexThreadItem | undefined): void {

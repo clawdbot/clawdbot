@@ -35,6 +35,7 @@ function createCancellationTestAdapter(): CancellationTestAdapter {
 
   return {
     pid: 4321,
+    supportsRawOutput: false,
     onStdout: () => undefined,
     onStderr: () => undefined,
     wait: async () => completion.promise,

@@ -202,16 +202,7 @@ jobs:
         with:
           ref: ${{ github.sha }}
           path: workflow
-          sparse-checkout: |
-            scripts/release-tooling-identity.mjs
-            scripts/github/resolve-openclaw-ref.sh
-            scripts/github/validate-release-suite-filters.sh
-            scripts/full-release-candidate-contract.mjs
-            scripts/full-release-validation-policy.mjs
-            scripts/lib/release-version.mjs
-            scripts/lib/record-shared.mjs
-            scripts/lib/canonical-json.mjs
-            scripts/lib/upgrade-survivor-policy.mjs
+          sparse-checkout: scripts
           sparse-checkout-cone-mode: false
           fetch-depth: 1
           persist-credentials: false
@@ -598,26 +589,8 @@ jobs:
           ref: ${{ github.sha }}
           path: workflow
           sparse-checkout: |
-            scripts/github/find-reusable-release-validation.sh
-            scripts/release-ci-summary.mjs
-            scripts/full-release-validation-policy.mjs
-            scripts/full-release-candidate-contract.mjs
-            scripts/release-preflight.mjs
-            scripts/release-preflight.mts
-            scripts/windows-cmd-helpers.mjs
-            scripts/lib/canonical-json.mjs
-            scripts/lib/record-shared.mjs
-            scripts/lib/upgrade-survivor-policy.mjs
-            scripts/lib/plain-gh.mjs
-            scripts/lib/tsx-cli-shim.mjs
-            scripts/lib/local-check-runtime.mts
-            scripts/lib/failed-trailer.mts
-            scripts/lib/error-format.mts
-            scripts/lib/managed-child-process.mts
-            scripts/lib/vitest-resource-ownership.mts
-            scripts/lib/windows-taskkill.mjs
-            scripts/lib/release-version.mjs
-            .github/actions/setup-pnpm-store-cache/ensure-node.sh
+            scripts
+            .github/actions/setup-pnpm-store-cache
           sparse-checkout-cone-mode: false
           fetch-depth: 1
           persist-credentials: false
@@ -750,7 +723,9 @@ jobs:
   docker_runtime_assets_preflight:
     name: Verify Docker runtime image assets
     needs: [resolve_target, evidence_reuse]
-    if: ${{ always() && github.run_attempt == 1 && needs.resolve_target.result == 'success' && inputs.rerun_group == 'all' && needs.evidence_reuse.outputs.reuse != 'true' }}
+    # Release image preparation checks runtime-assets on both native architectures.
+    # Alpha has no release image producer, so it retains this standalone proof.
+    if: ${{ always() && github.run_attempt == 1 && needs.resolve_target.result == 'success' && inputs.rerun_group == 'all' && contains(needs.resolve_target.outputs.target_version, '-alpha.') && needs.evidence_reuse.outputs.reuse != 'true' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     permissions:
@@ -1426,15 +1401,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.sha }}
-          sparse-checkout: |
-            scripts/full-release-validation-state.mjs
-            scripts/full-release-validation-policy.mjs
-            scripts/full-release-candidate-contract.mjs
-            scripts/release-ci-summary.mjs
-            scripts/lib/canonical-json.mjs
-            scripts/lib/plain-gh.mjs
-            scripts/lib/record-shared.mjs
-            scripts/lib/upgrade-survivor-policy.mjs
+          sparse-checkout: scripts
           sparse-checkout-cone-mode: false
           persist-credentials: false
 
@@ -1666,15 +1633,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.sha }}
-          sparse-checkout: |
-            scripts/full-release-validation-state.mjs
-            scripts/full-release-validation-policy.mjs
-            scripts/full-release-candidate-contract.mjs
-            scripts/release-ci-summary.mjs
-            scripts/lib/canonical-json.mjs
-            scripts/lib/plain-gh.mjs
-            scripts/lib/record-shared.mjs
-            scripts/lib/upgrade-survivor-policy.mjs
+          sparse-checkout: scripts
           sparse-checkout-cone-mode: false
           persist-credentials: false
 
@@ -1740,15 +1699,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.sha }}
-          sparse-checkout: |
-            scripts/full-release-validation-state.mjs
-            scripts/full-release-validation-policy.mjs
-            scripts/full-release-candidate-contract.mjs
-            scripts/release-ci-summary.mjs
-            scripts/lib/canonical-json.mjs
-            scripts/lib/plain-gh.mjs
-            scripts/lib/record-shared.mjs
-            scripts/lib/upgrade-survivor-policy.mjs
+          sparse-checkout: scripts
           sparse-checkout-cone-mode: false
           persist-credentials: false
 
@@ -1850,18 +1801,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.sha }}
-          sparse-checkout: |
-            scripts/full-release-validation-state.mjs
-            scripts/full-release-validation-policy.mjs
-            scripts/full-release-candidate-contract.mjs
-            scripts/full-release-candidate-reuse.mjs
-            scripts/release-ci-summary.mjs
-            scripts/lib/actions-artifact-archive.mjs
-            scripts/lib/canonical-json.mjs
-            scripts/lib/full-release-candidate-reuse.mjs
-            scripts/lib/plain-gh.mjs
-            scripts/lib/record-shared.mjs
-            scripts/lib/upgrade-survivor-policy.mjs
+          sparse-checkout: scripts
           sparse-checkout-cone-mode: false
           persist-credentials: false
 

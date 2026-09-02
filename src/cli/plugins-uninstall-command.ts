@@ -87,7 +87,7 @@ async function runPluginUninstallCommandUnlocked(
     resolveUninstallChannelConfigKeys,
     UNINSTALL_ACTION_LABELS,
   } = await import("../plugins/uninstall.js");
-  const { prepareConfigForPendingPluginDirectoryRemovalSet, recordPluginPackageUninstallPlan } =
+  const { prepareConfigForDisabledPluginSet, recordPluginPackageUninstallPlan } =
     await import("../plugins/uninstall-package-plan.js");
   const { commitPluginInstallRecordsWithConfig } =
     await import("../plugins/install-record-commit.js");
@@ -298,10 +298,7 @@ async function runPluginUninstallCommandUnlocked(
     let finalWriteOptions = mutationWriteOptions;
     let directoryResult = { directoryRemoved: false, warnings: [] as string[] };
     if (plan.directoryRemoval) {
-      const disabledConfig = prepareConfigForPendingPluginDirectoryRemovalSet(
-        sourceConfig,
-        policyPluginIds,
-      );
+      const disabledConfig = prepareConfigForDisabledPluginSet(sourceConfig, policyPluginIds);
       const disabledCommit = await tracePluginLifecyclePhaseAsync(
         "config disable",
         () =>

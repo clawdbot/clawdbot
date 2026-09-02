@@ -581,18 +581,15 @@ function waitForChildCompletionEvent(child: ChildProcess, event: "exit" | "close
  * Resolves only after the child completion contract and any owned POSIX group are joined.
  */
 export function createVitestProcessCompletion(params: CompletionParams) {
-  const exitCompletion = waitForChildCompletionEvent(params.child, "exit");
-  const platform = params.platform ?? process.platform;
-  if (!params.detached || !shouldUseDetachedVitestProcessGroup(platform)) {
-    const closeCompletion = waitForChildCompletionEvent(params.child, "close");
-    return Promise.all([exitCompletion, closeCompletion]).then(([result]) => result);
-  }
-
-  const closeCompletion = waitForChildCompletionEvent(params.child, "close");
+  const { child, detached, platform = process.platform } = params;
+  const exitCompletion = waitForChildCompletionEvent(child, "exit");
+  const closeCompletion = waitForChildCompletionEvent(child, "close");
   // `close` drains inherited pipes, while the group join proves pipe-independent
   // descendants are gone before a sequential caller advances.
   const groupCompletion = exitCompletion.then(async (result) => {
-    await joinVitestProcessGroup(params.child, platform, params.kill ?? process.kill.bind(process));
+    if (detached && shouldUseDetachedVitestProcessGroup(platform)) {
+      await joinVitestProcessGroup(child, platform, params.kill ?? process.kill.bind(process));
+    }
     return result;
   });
   return Promise.all([groupCompletion, closeCompletion]).then(([result]) => result);

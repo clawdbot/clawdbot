@@ -2069,7 +2069,6 @@
   },
   "dependencies": {
     "@agentclientprotocol/sdk": "1.4.0",
-    "@anthropic-ai/claude-agent-sdk": "0.3.241",
     "@anthropic-ai/sdk": "0.120.0",
     "@clack/core": "1.4.3",
     "@clack/prompts": "1.7.0",
@@ -2138,6 +2137,7 @@
   "devDependencies": {
     "@a2ui/lit": "0.10.3",
     "@a2ui/web_core": "0.10.6",
+    "@anthropic-ai/claude-agent-sdk": "0.3.241",
     "@copilotkit/aimock": "1.39.0",
     "@lit-labs/signals": "0.3.0",
     "@lit/context": "1.1.6",

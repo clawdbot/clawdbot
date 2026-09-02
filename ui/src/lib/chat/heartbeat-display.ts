@@ -59,5 +59,6 @@ export function isAssistantHeartbeatAckForDisplay(message: unknown): boolean {
   if (hasVisibleNonTextContent) {
     return false;
   }
-  return stripHeartbeatTokenForDisplay(text).shouldSkip;
+  // Reasoning-only rows have no answer text, but that is not a heartbeat acknowledgement.
+  return text.trim().length > 0 && stripHeartbeatTokenForDisplay(text).shouldSkip;
 }

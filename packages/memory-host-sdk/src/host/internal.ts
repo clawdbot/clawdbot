@@ -194,6 +194,39 @@ function shouldDescendMemoryEntry(
   return entry.kind === "directory" && entry.name !== ".openclaw-repair";
 }
 
+class MemorySourceScanError extends Error {
+  readonly path: string;
+  readonly code?: string;
+
+  constructor(sourcePath: string, cause: unknown) {
+    const code =
+      cause !== null &&
+      typeof cause === "object" &&
+      "code" in cause &&
+      typeof cause.code === "string"
+        ? cause.code
+        : undefined;
+    const detail = cause instanceof Error ? cause.message : String(cause);
+    super(`memory source scan failed at ${sourcePath}${code ? ` (${code})` : ""}: ${detail}`, {
+      cause,
+    });
+    this.name = "MemorySourceScanError";
+    this.path = sourcePath;
+    this.code = code;
+  }
+}
+
+async function scanMemorySource<T>(sourcePath: string, run: () => Promise<T>): Promise<T> {
+  try {
+    return await run();
+  } catch (error) {
+    if (isFileMissingError(error) || error instanceof MemorySourceScanError) {
+      throw error;
+    }
+    throw new MemorySourceScanError(sourcePath, error);
+  }
+}
+
 async function collectMemoryFilesFromDir(
   dir: string,
   files: string[],
@@ -201,18 +234,20 @@ async function collectMemoryFilesFromDir(
   shouldSkipPath?: (absPath: string) => boolean,
   extraPathEntry?: NormalizedExtraMemoryPath,
 ): Promise<void> {
-  const scan = await walkDirectory(dir, {
-    symlinks: "skip",
-    descend: (entry) => shouldDescendMemoryEntry(entry, shouldSkipPath),
-    include: (entry) =>
-      !shouldSkipPath?.(entry.path) &&
-      entry.kind === "file" &&
-      isAllowedMemoryFilePath(entry.path, multimodal) &&
-      (!extraPathEntry || matchesExtraMemoryPathEntry(extraPathEntry, entry.path)),
-  });
+  const scan = await scanMemorySource(dir, () =>
+    walkDirectory(dir, {
+      symlinks: "skip",
+      descend: (entry) => shouldDescendMemoryEntry(entry, shouldSkipPath),
+      include: (entry) =>
+        !shouldSkipPath?.(entry.path) &&
+        entry.kind === "file" &&
+        isAllowedMemoryFilePath(entry.path, multimodal) &&
+        (!extraPathEntry || matchesExtraMemoryPathEntry(extraPathEntry, entry.path)),
+    }),
+  );
   const operationalFailure = scan.failedDirs.find((failure) => !isFileMissingError(failure.error));
   if (operationalFailure) {
-    throw operationalFailure.error;
+    throw new MemorySourceScanError(operationalFailure.path, operationalFailure.error);
   }
   files.push(...scan.entries.map((entry) => entry.path));
 }
@@ -229,20 +264,22 @@ export async function listMemoryFiles(
     shouldSkipRootMemoryAuxiliaryPath({ workspaceDir, absPath });
 
   const addMarkdownFile = async (absPath: string) => {
-    const stat = await statEnumerableMemoryFile(absPath);
+    const stat = await scanMemorySource(absPath, () => statEnumerableMemoryFile(absPath));
     if (!stat || !absPath.endsWith(".md")) {
       return;
     }
     result.push(absPath);
   };
 
-  const memoryFile = await resolveCanonicalRootMemoryFile(workspaceDir);
+  const memoryFile = await scanMemorySource(workspaceDir, () =>
+    resolveCanonicalRootMemoryFile(workspaceDir),
+  );
   if (memoryFile) {
     await addMarkdownFile(memoryFile);
   }
   await addMarkdownFile(path.join(workspaceDir, "USER.md"));
   try {
-    const dirStat = await fs.lstat(memoryDir);
+    const dirStat = await scanMemorySource(memoryDir, () => fs.lstat(memoryDir));
     if (!dirStat.isSymbolicLink() && dirStat.isDirectory()) {
       // Default memory roots stay Markdown-only; multimodal discovery is an extraPaths opt-in.
       await collectMemoryFilesFromDir(memoryDir, result, undefined, shouldSkipWorkspaceMemoryPath);
@@ -261,7 +298,7 @@ export async function listMemoryFiles(
         continue;
       }
       try {
-        const stat = await fs.lstat(inputPath);
+        const stat = await scanMemorySource(inputPath, () => fs.lstat(inputPath));
         if (stat.isSymbolicLink()) {
           continue;
         }

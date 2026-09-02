@@ -19,7 +19,6 @@ import type { UpdateRecovery } from "../infra/update-recovery.js";
 import { UPDATE_RUNNER_TIMEOUT_MS } from "../infra/update-runner-command.js";
 import { runGatewayUpdate } from "../infra/update-runner.js";
 import type { UpdateRunResult } from "../infra/update-runner.js";
-import { prepareUpdateFailureTriage } from "../infra/update-triage.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { classifyUpdateOutcome } from "../shared/update-outcome.js";
@@ -85,6 +84,7 @@ export async function maybeOfferUpdateBeforeDoctor(params: {
     const updateRoot = params.root;
     const invocationCwd = tryResolveInvocationCwd();
     const operatorEnv = resolveServiceRefreshEnv(process.env, invocationCwd);
+    const { prepareUpdateFailureTriage } = await import("../infra/update-triage.js");
     const runTriage = await prepareUpdateFailureTriage({
       runtime: params.runtime,
       mode: isTerminalInteractive() ? "interactive" : "non-interactive",

@@ -3622,6 +3622,32 @@ describe("installPluginFromNpmSpec", () => {
     }
   });
 
+  it("accepts a trusted catalog lookup id replacement during update", async () => {
+    const npmRoot = path.join(suiteTempRootTracker.makeTempDir(), "npm");
+    mockNpmViewAndInstall({
+      spec: "@tencent-connect/openclaw-qqbot@2.0.3",
+      packageName: "@tencent-connect/openclaw-qqbot",
+      version: "2.0.3",
+      pluginId: "openclaw-qqbot",
+      npmRoot,
+    });
+
+    const result = await installPluginFromNpmSpec({
+      spec: "@tencent-connect/openclaw-qqbot@2.0.3",
+      npmDir: npmRoot,
+      mode: "update",
+      expectedPluginId: "qqbot",
+      expectedReplacementPluginId: "openclaw-qqbot",
+      trustedSourceLinkedOfficialInstall: true,
+      logger: { info: () => {}, warn: () => {} },
+    });
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.pluginId).toBe("openclaw-qqbot");
+    }
+  });
+
   it.each([
     {
       name: "untrusted source",
@@ -3826,6 +3852,9 @@ describe("installPluginFromNpmSpec", () => {
       expectedIntegrity: "sha512-old",
       actualIntegrity: "sha512-new",
     });
+    expect(
+      runCommandWithTimeoutMock.mock.calls.some(([argv]) => isManagedNpmInstallCommand(argv)),
+    ).toBe(false);
   });
 
   it("classifies npm package-not-found errors with a stable error code", async () => {

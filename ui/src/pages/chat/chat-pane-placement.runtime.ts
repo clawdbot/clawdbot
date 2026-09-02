@@ -259,12 +259,12 @@ export async function reclaimChatPanePlacement(params: {
   }
   const { showConfirmDialog } = await import("../../components/confirm-dialog.js");
   const worker = resolveChatPaneWorkerPresentation(
-    placement,
+    params.row,
     params.placementStartup.get(params.row.key),
   );
   const confirmed = await showConfirmDialog({
-    message: t(`${worker.stopKey}Confirm`, { session: params.row.label || params.row.key }),
-    confirmLabel: t(`${worker.stopKey}ConfirmAction`),
+    message: worker.confirmMessage,
+    confirmLabel: worker.confirmLabel,
     danger: true,
   });
   if (!confirmed) {

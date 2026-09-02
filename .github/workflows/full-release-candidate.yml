@@ -74,15 +74,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.sha }}
-          sparse-checkout: |
-            scripts/full-release-candidate-contract.mjs
-            scripts/full-release-candidate-reuse.mjs
-            scripts/full-release-validation-policy.mjs
-            scripts/lib/actions-artifact-archive.mjs
-            scripts/lib/canonical-json.mjs
-            scripts/lib/full-release-candidate-reuse.mjs
-            scripts/lib/record-shared.mjs
-            scripts/lib/upgrade-survivor-policy.mjs
+          sparse-checkout: scripts
           sparse-checkout-cone-mode: false
           persist-credentials: false
 
@@ -161,15 +153,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.sha }}
-          sparse-checkout: |
-            scripts/full-release-candidate-contract.mjs
-            scripts/full-release-candidate-reuse.mjs
-            scripts/full-release-validation-policy.mjs
-            scripts/lib/actions-artifact-archive.mjs
-            scripts/lib/canonical-json.mjs
-            scripts/lib/full-release-candidate-reuse.mjs
-            scripts/lib/record-shared.mjs
-            scripts/lib/upgrade-survivor-policy.mjs
+          sparse-checkout: scripts
           sparse-checkout-cone-mode: false
           persist-credentials: false
 

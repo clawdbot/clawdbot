@@ -173,8 +173,9 @@ Gateway or chat on iPhone retires the pending spoken reply and clears the old
 Watch preview. Leaving Watch Chat or backgrounding the app stops playback;
 a reply received while away can be read on return if its wait has not expired.
 
-The spoken-reply wait expires after 90 seconds. Cancelling that wait or stopping
-speech does **not** cancel the Gateway chat run or remove a queued message.
+The spoken-reply wait expires after 90 seconds and shows **Spoken reply timed
+out. Check Chat on iPhone.**, including after reopening the Watch app. Cancelling
+that wait or stopping speech does **not** cancel the Gateway chat run or remove a queued message.
 If no reply is spoken, refresh Chat or check the conversation on iPhone before
 resending. Long runs and interrupted return delivery can still require this
 manual readback. Keep the Gateway updated for reliable reply attribution when
