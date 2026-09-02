@@ -617,7 +617,7 @@ public struct OpenClawChatView: View {
                 maxWidth: .infinity,
                 alignment: msg.role.lowercased() == "user" ? .trailing : .leading)
         let isUser = msg.role.lowercased() == "user"
-        VStack(alignment: isUser ? .trailing : .leading, spacing: 4) {
+        let row = VStack(alignment: isUser ? .trailing : .leading, spacing: 4) {
             bubble
             if let outboxState = self.viewModel.outboxState(for: msg.id) {
                 ChatOutboxStatusLabel(state: outboxState)
@@ -629,6 +629,21 @@ public struct OpenClawChatView: View {
                 ChatSpeechStatusChip(isPreparing: isPreparing) { speech.stop() }
                     .padding(.leading, 8)
             }
+            #if os(iOS)
+            if !isUser {
+                self.messageActionsMenu(for: msg)
+                    .labelStyle(.iconOnly)
+                    .buttonStyle(.borderless)
+                    .font(OpenClawChatTypography.caption)
+                    .foregroundStyle(.secondary)
+                    .frame(
+                        width: CleanChatComposerMetrics.controlTouchSize,
+                        height: CleanChatComposerMetrics.controlTouchSize)
+                    .contentShape(Rectangle())
+                    .padding(.leading, 8)
+                    .padding(.bottom, 8)
+            }
+            #endif
             #if os(macOS)
             if self.isDesktopLayout, isUser || self.isListenable(msg) {
                 HStack(spacing: 12) {
@@ -637,13 +652,8 @@ public struct OpenClawChatView: View {
                     self.replyMessageButton(for: msg)
                         .help("Reply")
                     self.listenMessageButton(for: msg)
-                    Menu {
-                        self.messageMenuActions(for: msg)
-                    } label: {
-                        Label("Message Actions", systemImage: "ellipsis")
-                    }
-                    .menuIndicator(.hidden)
-                    .help("Message actions")
+                    self.messageActionsMenu(for: msg)
+                        .help("Message actions")
                 }
                 .labelStyle(.iconOnly)
                 .buttonStyle(.borderless)
@@ -656,7 +666,25 @@ public struct OpenClawChatView: View {
             #endif
         }
         .frame(maxWidth: .infinity, alignment: isUser ? .trailing : .leading)
-        .contextMenu { self.messageMenuActions(for: msg) }
+        #if os(iOS)
+        if isUser {
+            row.contextMenu { self.messageMenuActions(for: msg) }
+        } else {
+            row
+        }
+        #else
+        row.contextMenu { self.messageMenuActions(for: msg) }
+        #endif
+    }
+
+    private func messageActionsMenu(for message: OpenClawChatMessage) -> some View {
+        Menu {
+            self.messageMenuActions(for: message)
+        } label: {
+            Label("Message Actions", systemImage: "ellipsis")
+        }
+        .menuIndicator(.hidden)
+        .accessibilityIdentifier("chat-message-actions")
     }
 
     @ViewBuilder

@@ -1000,6 +1000,8 @@ When gateway auth is configured, assistant local-media previews use a two-step r
 
 This keeps media rendering compatible with browser-native media elements without putting reusable gateway credentials in visible media URLs.
 
+Uploaded and local chat image previews rendered with native image elements keep an already-loaded image visible during temporary connection or metadata-renewal failures. Retention applies only to that mounted image; it does not extend its media ticket or authorize fresh reads. An explicit missing or access-denied response, or a change to the source, credentials, or access scope, clears the retained image.
+
 Generated images under `/api/chat/media/outgoing/...` use the same capability
 principle through `artifacts.download`. The authenticated WebSocket request
 authorizes the transcript artifact and returns a short-lived URL. The HTTP media
@@ -1025,6 +1027,8 @@ pnpm ui:build
 For bundled builds, the Gateway retains manifest-verified assets so already-open tabs can fetch older asset URLs after an update. The cache keeps at most three generations and 96 MiB total, preferring the current generation; older generations can be pruned sooner to meet the byte budget. Background startup preparation reuses verified inventories through publication and pruning instead of rereading unchanged retained assets at each step. Newly published assets are verified before reuse, including a concurrent publisher's winning copy. Configured `gateway.controlUi.root` builds do not use this cache.
 
 Non-index static assets use `Last-Modified` for conditional `GET` and `HEAD` requests. `If-None-Match` takes precedence over `If-Modified-Since`: `*` matches an existing asset, while other values receive the normal `200` response because static assets do not emit ETags. Date-only revalidation still returns `304` for unchanged assets. If no available content encoding is acceptable, the Gateway returns `406` before evaluating either condition.
+
+Static asset URLs support percent-encoded filenames. Contained symlinks retain the requested asset's MIME type, and a symlinked `index.html` receives the same base-path and document preparation as other entry routes.
 
 Optional absolute base (fixed asset URLs):
 

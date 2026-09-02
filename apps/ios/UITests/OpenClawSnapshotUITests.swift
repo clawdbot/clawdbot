@@ -816,6 +816,30 @@ final class OpenClawSnapshotUITests: XCTestCase {
         self.attachScreenshot(named: "chat-dark-soft-bottom-edge")
     }
 
+    func testAssistantLongPressKeepsTranscriptVisibleAndActionsReachable() throws {
+        try XCTSkipIf(UIDevice.current.userInterfaceIdiom != .phone, "Phone message interaction proof only")
+        self.launchApp(for: ScreenshotTarget(
+            initialTab: "chat",
+            initialDestination: "chat",
+            name: "assistant-message-actions"))
+        let app = try XCTUnwrap(self.app)
+
+        let assistant = app.staticTexts[
+            "Ready when you are. I can check a project, coordinate an agent, or prepare the next step."
+        ]
+        XCTAssertTrue(assistant.waitForExistence(timeout: 8))
+        assistant.press(forDuration: 0.8)
+        XCTAssertTrue(assistant.exists)
+        XCTAssertTrue(app.otherElements["chat-composer-surface"].exists)
+        self.attachScreenshot(named: "assistant-message-selection")
+
+        let actions = app.buttons["chat-message-actions"]
+        XCTAssertTrue(actions.waitForExistence(timeout: 3))
+        actions.tap()
+        XCTAssertTrue(app.buttons["Copy Message"].waitForExistence(timeout: 3))
+        self.attachScreenshot(named: "assistant-message-actions")
+    }
+
     func testEmptyChatStarterPromptSendsMessage() throws {
         self.launchApp(
             for: ScreenshotTarget(
