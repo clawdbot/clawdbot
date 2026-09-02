@@ -2,7 +2,6 @@ import { existsSync } from "node:fs";
 import path from "node:path";
 import { GatewayClient } from "openclaw/plugin-sdk/gateway-runtime";
 import { afterEach, expect, it, vi } from "vitest";
-import { createQaGatewayChild } from "../../../extensions/qa-lab/api.ts";
 import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
@@ -17,7 +16,8 @@ import {
   NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
 } from "../../../src/infra/node-runner-inventory.ts";
 import { stopQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.ts";
-import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { createControlUiE2eSuite } from "../../../ui/src/e2e/control-ui-e2e-suite.test-support.ts";
+import { createQaGatewayChild } from "../api.ts";
 
 const COMMAND = "codex.exec-server.stdio.v1";
 const MODEL = "openai/gpt-5.6-luna";

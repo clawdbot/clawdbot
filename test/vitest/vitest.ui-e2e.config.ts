@@ -10,13 +10,19 @@ import { UiE2eSequencer } from "./vitest.ui-e2e.sequencer.ts";
 
 const mediaTranscriptRealGatewayTest =
   "extensions/qa-lab/src/control-ui-media-transcript.real-gateway.e2e.test.ts";
-const uiE2eIncludePatterns = ["ui/src/**/*.e2e.test.ts", mediaTranscriptRealGatewayTest];
+const sessionHostCommandStateRealGatewayTest =
+  "extensions/qa-lab/src/session-host-command-state.real-gateway.e2e.test.ts";
+const uiE2eIncludePatterns = [
+  "ui/src/**/*.e2e.test.ts",
+  mediaTranscriptRealGatewayTest,
+  sessionHostCommandStateRealGatewayTest,
+];
 export const uiE2eRealGatewayTestFiles = [
   "ui/src/e2e/agent-file-lifecycle.real-gateway.e2e.test.ts",
   "ui/src/e2e/control-ui-auth-transports.e2e.test.ts",
   "ui/src/e2e/logs-lifecycle.e2e.test.ts",
   "ui/src/e2e/mcp-app-conformance.e2e.test.ts",
-  "ui/src/e2e/session-host-command-state.real-gateway.e2e.test.ts",
+  sessionHostCommandStateRealGatewayTest,
   "ui/src/e2e/session-progress-hovercard.real-gateway.e2e.test.ts",
   "ui/src/e2e/usage-sessions-owner-attribution.e2e.test.ts",
   mediaTranscriptRealGatewayTest,
@@ -42,7 +48,7 @@ export const uiE2ePrivateServerTestFiles = [
   "ui/src/e2e/mobile-sidebar-session-menu.e2e.test.ts",
   "ui/src/e2e/mount-recovery.e2e.test.ts",
   "ui/src/e2e/session-management.delete.e2e.test.ts",
-  "ui/src/e2e/session-host-command-state.real-gateway.e2e.test.ts",
+  sessionHostCommandStateRealGatewayTest,
   "ui/src/e2e/settings-loading-skeletons.e2e.test.ts",
   "ui/src/e2e/sidebar-account-footer.e2e.test.ts",
   "ui/src/e2e/terminal-runtime.e2e.test.ts",
