@@ -72,7 +72,7 @@ private final class QuickChatRecentMenuTarget: NSObject {
 
 @MainActor
 @Observable
-final class QuickChatController: NSObject, NSWindowDelegate {
+final class QuickChatController: NSObject {
     typealias GlobalMonitorInstaller = (NSEvent.EventTypeMask, @escaping (NSEvent) -> Void) -> Any?
     typealias LocalMonitorInstaller = (NSEvent.EventTypeMask, @escaping (NSEvent) -> NSEvent?) -> Any?
     typealias MonitorClearer = (inout Any?) -> Void
@@ -284,26 +284,6 @@ final class QuickChatController: NSObject, NSWindowDelegate {
 
     func dismiss() {
         self.dismiss(immediate: false)
-    }
-
-    func windowDidResignKey(_: Notification) {
-        guard self.canDismissForOutsideInteraction else { return }
-        let transitionID = self.transitionID
-        // Let AppKit finish handing key status to the destination before checking its owner.
-        // A queued check must not close a later presentation.
-        DispatchQueue.main.async { [weak self] in
-            guard let self, self.transitionID == transitionID else { return }
-            self.dismissIfFocusWasLost()
-        }
-    }
-
-    @objc
-    private func childWindowDidResignKey(_ notification: Notification) {
-        guard let window = notification.object as? NSWindow,
-              window !== self.panel,
-              self.ownsWindow(window)
-        else { return }
-        self.windowDidResignKey(notification)
     }
 
     private func dismiss(immediate: Bool) {
@@ -968,4 +948,26 @@ final class QuickChatController: NSObject, NSWindowDelegate {
         self.handleSendAccepted(openChat: openChat)
     }
     #endif
+}
+
+extension QuickChatController: NSWindowDelegate {
+    func windowDidResignKey(_: Notification) {
+        guard self.canDismissForOutsideInteraction else { return }
+        let transitionID = self.transitionID
+        // Let AppKit finish handing key status to the destination before checking its owner.
+        // A queued check must not close a later presentation.
+        DispatchQueue.main.async { [weak self] in
+            guard let self, self.transitionID == transitionID else { return }
+            self.dismissIfFocusWasLost()
+        }
+    }
+
+    @objc
+    private func childWindowDidResignKey(_ notification: Notification) {
+        guard let window = notification.object as? NSWindow,
+              window !== self.panel,
+              self.ownsWindow(window)
+        else { return }
+        self.windowDidResignKey(notification)
+    }
 }
