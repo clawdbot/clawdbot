@@ -17,7 +17,6 @@ import {
   renderMessageJson,
   renderMessageMarkdown,
   resolveMessageDisplayMarkdown,
-  resolveMessageMarkdownRenderOptions,
 } from "../chat/components/chat-message-text.ts";
 import { renderChatWorkingIndicator } from "../chat/components/chat-working-indicator.ts";
 import type { buildLocalUserMessage } from "../chat/user-message-content.ts";
@@ -70,8 +69,8 @@ function renderNewSessionSubmission(
   const markdown = resolveMessageDisplayMarkdown(message, normalized);
   const json = detectJson(markdown);
   const imageOptions = { onOpenImage };
-  // A pending draft needs the shared content renderers, not the transcript's
-  // tool, reply, and rewind controls; keep that graph out of New Session startup.
+  // Keep Markdown passive until Chat mounts its interaction owners. Uploaded
+  // images have their own lightbox handler and remain interactive while pending.
   return html`<div class="new-session-page__starting chat-thread-inner">
     <div
       class="chat-group user ${senderHue === null ? "" : "chat-group--sender-tint"}"
@@ -93,7 +92,7 @@ function renderNewSessionSubmission(
                   markdown,
                   key,
                   { role: "user", isStreaming: false },
-                  resolveMessageMarkdownRenderOptions({ role: "user", interactiveImages: true }),
+                  { codeBlockChrome: "none" },
                 )
               : nothing}
         </div>

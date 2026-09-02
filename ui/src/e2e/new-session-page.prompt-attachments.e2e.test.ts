@@ -672,7 +672,22 @@ suite.define(() => {
   it("shows the submitted prompt before creation responds and restores it after failure", async () => {
     await withNewSessionPage(async (page) => {
       const sessionKey = "agent:main:locked-new-session-draft";
-      const submittedMessage = "keep this submitted draft atomic";
+      const submittedSummary = "keep this submitted draft atomic";
+      const fileReference = "src/example.ts";
+      const referencedSessionKey = "agent:main:referenced-preview";
+      const submittedMessage = [
+        `**${submittedSummary}**`,
+        "",
+        "| Item | State |",
+        "| --- | --- |",
+        "| Lobster | Ready |",
+        "",
+        `References: ${fileReference} and ${referencedSessionKey}.`,
+        "",
+        "[Documentation](https://example.com/guide)",
+        "",
+        `![Inline marker](data:image/png;base64,${ONE_PIXEL_PNG_B64})`,
+      ].join("\n");
       const runId = "submitted-image-run";
       const imageFileName = "apple-touch-icon.png";
       const imageFile = path.join(process.cwd(), "ui/public", imageFileName);
@@ -749,7 +764,20 @@ suite.define(() => {
       };
       expect(create.params).toMatchObject(submittedPayload);
       await expect.poll(() => submittedPrompt.isVisible()).toBe(true);
-      await pollLocatorText(submittedPrompt).toContain(submittedMessage);
+      const pendingMarkdown = submittedPrompt.locator(".chat-text");
+      await pollLocatorText(pendingMarkdown.locator("strong")).toBe(submittedSummary);
+      await pendingMarkdown.getByRole("cell", { name: "Ready", exact: true }).waitFor();
+      await pollLocatorText(pendingMarkdown).toContain(fileReference);
+      await pollLocatorText(pendingMarkdown).toContain(referencedSessionKey);
+      expect(
+        await pendingMarkdown.getByRole("link", { name: "Documentation" }).getAttribute("href"),
+      ).toBe("https://example.com/guide");
+      await pendingMarkdown.locator("img.markdown-inline-image").waitFor({ state: "visible" });
+      expect(
+        await pendingMarkdown
+          .locator("button, [role=button], [data-file-path], [data-session-key]")
+          .count(),
+      ).toBe(0);
       await expectDecodedThumbnail(submittedPrompt.locator("img.chat-message-image"));
       await pollLocatorText(startup.locator('.chat-working-indicator[role="status"]')).toContain(
         "Starting…",
@@ -762,6 +790,14 @@ suite.define(() => {
       await page.keyboard.press("Enter");
       await page.keyboard.press("Control+Enter");
       expect(await gateway.getRequests("sessions.create")).toHaveLength(1);
+      await submittedPrompt.locator(".chat-message-image-button").click();
+      const attachmentViewer = page.locator("openclaw-image-lightbox");
+      await expectDecodedThumbnail(attachmentViewer.locator("img.image"));
+      expect(await attachmentViewer.locator("img.image").getAttribute("src")).toBe(
+        `data:image/png;base64,${imageContent}`,
+      );
+      await page.keyboard.press("Escape");
+      await attachmentViewer.waitFor({ state: "detached" });
 
       await gateway.rejectDeferred("sessions.create", {
         code: "UNAVAILABLE",
@@ -788,7 +824,24 @@ suite.define(() => {
       await waitForCommittedChatRoute(page);
       const acceptedPrompt = page.locator(".chat-group.user");
       await expect.poll(() => acceptedPrompt.count()).toBe(1);
-      await pollLocatorText(acceptedPrompt).toContain(submittedMessage);
+      await pollLocatorText(acceptedPrompt).toContain(submittedSummary);
+      const acceptedMarkdown = acceptedPrompt.locator(".chat-text");
+      await acceptedMarkdown
+        .locator(`a[data-file-path="${fileReference}"]`)
+        .waitFor({ state: "visible" });
+      await acceptedMarkdown
+        .locator(`a[data-session-key="${referencedSessionKey}"]`)
+        .waitFor({ state: "visible" });
+      await acceptedMarkdown
+        .getByRole("button", { name: "Open image Inline marker", exact: true })
+        .waitFor({ state: "visible" });
+      await acceptedMarkdown.getByRole("button", { name: "Expand table", exact: true }).click();
+      const expandedTable = page.getByRole("dialog", { name: "Expanded table", exact: true });
+      await expandedTable.getByRole("cell", { name: "Ready", exact: true }).waitFor();
+      await expandedTable
+        .getByRole("button", { name: "Close expanded table", exact: true })
+        .click();
+      await expandedTable.waitFor({ state: "detached" });
       await expectDecodedThumbnail(acceptedPrompt.locator("img.chat-message-image"));
       await captureUiProof(suite, page, "new-session-create-retry-accepted.png");
       await gateway.resolveDeferred("chat.startup");
