@@ -10,6 +10,7 @@ import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import { npmCommandFailureCases } from "../test-utils/npm-spec-install-test-helpers.js";
 import {
+  copyPackageDirInstallTransactionRequest,
   installPackageDir,
   requestDeferredPackageDirInstall,
   resolvePackageDirInstallTransaction,
@@ -960,7 +961,8 @@ describe("installPackageDir", () => {
       const original = await withPluginLifecycleLease(leaseOptions, async (lease) => {
         const assertOwned = lease.assertOwned.bind(lease);
         const result = await installPackageDir(
-          requestDeferredPackageDirInstall(
+          copyPackageDirInstallTransactionRequest(
+            requestDeferredPackageDirInstall({}, assertOwned),
             {
               ...installOptions,
               afterBackup: async (backupDir: string) => {
@@ -968,7 +970,6 @@ describe("installPackageDir", () => {
                 return { ok: true as const };
               },
             },
-            assertOwned,
           ),
         );
         expect(result.ok).toBe(true);
@@ -982,6 +983,9 @@ describe("installPackageDir", () => {
       await fs.writeFile(path.join(sourceDir, "marker.txt"), "successor");
 
       await withPluginLifecycleLease(leaseOptions, async (lease) => {
+        // A's inode still matches, so only its copied lease can reject this rollback.
+        await expect.soft(original.transaction.rollback()).rejects.toThrow();
+        await expect(fs.readFile(path.join(targetDir, "marker.txt"), "utf8")).resolves.toBe("new");
         expect((await installPackageDir(installOptions)).ok).toBe(true);
         lease.assertOwned();
         // The active async context is B's, but A's retained handle still owns A's lease.

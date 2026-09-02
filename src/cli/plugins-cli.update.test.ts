@@ -479,7 +479,7 @@ describe("plugins cli update", () => {
     primePluginUpdate(cfg);
     const transaction = { commit: vi.fn(async () => {}), rollback: vi.fn(async () => {}) };
     updateNpmInstalledHookPacksMock.mockImplementation(async (params) => {
-      resolvePluginInstallTransactionSink(params)?.push(transaction);
+      resolvePluginInstallTransactionRequest(params)?.transactionSink?.push(transaction);
       return {
         config: nextConfig,
         changed: true,
@@ -524,7 +524,7 @@ describe("plugins cli update", () => {
     });
     const events: string[] = [];
     updateNpmInstalledHookPacksMock.mockImplementation(async (params) => {
-      resolvePluginInstallTransactionSink(params)?.push({
+      resolvePluginInstallTransactionRequest(params)?.transactionSink?.push({
         commit: async () => {
           events.push("commit");
           if (failure === "backup cleanup") {

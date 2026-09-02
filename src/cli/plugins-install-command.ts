@@ -72,6 +72,7 @@ export async function runPluginInstallCommand(params: RunPluginInstallCommandPar
           },
         },
         preflight,
+        lease.assertOwned.bind(lease),
       ),
   );
 }
@@ -79,6 +80,7 @@ export async function runPluginInstallCommand(params: RunPluginInstallCommandPar
 async function runPluginInstallCommandUnlocked(
   params: RunPluginInstallCommandParams,
   preflight: Extract<PluginInstallPreflight, { ok: true }>,
+  assertOwned: () => void,
 ) {
   assertConfigWriteAllowedInCurrentMode();
 
@@ -99,6 +101,7 @@ async function runPluginInstallCommandUnlocked(
     runtime,
     invalidateRuntimeCache: params.invalidateRuntimeCache ?? true,
     beforePersistentApply: params.beforePersistentApply,
+    assertOwned,
   };
   const safetyOverrides = resolveInstallSafetyOverrides({
     ...opts,

@@ -93,6 +93,10 @@ function pluginModule(revision: string) {
       const registerComposer = () => host.ui.registerReplacement(composer);
       let unregisterComposer = registerComposer();
       const firstUnregisterComposer = unregisterComposer;
+      host.ui.registerReplacement({id:"delegated-composer", label:"Delegated composer", surface:"composer", mount(container, context) {
+        return {dispose: context.mountDefault(container)};
+      }});
+      host.ui.registerReplacement({id:"failing-composer", label:"Failing composer", surface:"composer", mount() { throw new Error("Fixture composer failed"); }});
       host.ui.registerReplacement({id:"workspace", label:"Fixture workspace", surface:"workspace", mount(container, context) {
         const title = document.createElement("h1"); title.textContent = "Custom workspace";
         const recover = document.createElement("button"); recover.textContent = "Show built-in workspace";
@@ -584,6 +588,51 @@ suite.define(() => {
         await page.locator(".board-session-surface[hidden]").waitFor({ state: "attached" });
         await expectOneAccessory();
         await page.screenshot({ path: path.join(suite.artifactDir, "before.png"), fullPage: true });
+        for (const replacement of [
+          "",
+          "ui-fixture/delegated-composer",
+          "ui-fixture/failing-composer",
+        ]) {
+          await selectView(page, "Composer", replacement);
+          const composer = page.locator(".agent-chat__composer-shell");
+          await composer.waitFor();
+          expect(
+            await composer.evaluate((element) =>
+              Boolean(element.closest("openclaw-plugin-view[data-plugin-composer]")),
+            ),
+          ).toBe(replacement !== "");
+          if (replacement === "ui-fixture/failing-composer") {
+            await page.getByRole("alert").filter({ hasText: "Fixture composer failed" }).waitFor();
+          }
+          for (const width of [1280, 640]) {
+            await page.setViewportSize({ width, height: 900 });
+            const fade = await composer.evaluate((element) => {
+              const thread = element
+                .closest(".chat-main__conversation")
+                ?.querySelector(".chat-thread");
+              if (!thread)
+                throw new Error("Expected the built-in conversation beside its composer.");
+              const shellBounds = element.getBoundingClientRect();
+              const threadBounds = thread.getBoundingClientRect();
+              const style = getComputedStyle(element, "::before");
+              return {
+                content: style.content,
+                background: style.backgroundImage,
+                left: shellBounds.left + Number.parseFloat(style.left) - threadBounds.left,
+                right: threadBounds.right - (shellBounds.right - Number.parseFloat(style.right)),
+                scrollbar: Number.parseFloat(
+                  getComputedStyle(document.documentElement).getPropertyValue("--scrollbar-size"),
+                ),
+              };
+            });
+            const description = `${replacement || "Built-in"} at ${width}px`;
+            expect.soft(fade.content, description).toBe('""');
+            expect.soft(fade.background, description).toContain("linear-gradient");
+            expect.soft(fade.left, description).toBeGreaterThanOrEqual(fade.scrollbar);
+            expect.soft(fade.right, description).toBeGreaterThanOrEqual(fade.scrollbar);
+          }
+          await page.setViewportSize({ width: 1280, height: 900 });
+        }
         await selectView(page, "Composer", "ui-fixture/composer");
         await page
           .getByLabel("Fixture draft", { exact: true })

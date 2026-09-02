@@ -84,6 +84,7 @@ export async function tryInstallHookPackFromLocalPath(params: {
   expectedPackageKind?: "hook-only";
   runtime?: RuntimeEnv;
   beforePersistentApply?: () => void;
+  assertOwned: () => void;
 }): Promise<{ ok: true } | Extract<InstallHooksResult, { ok: false }>> {
   if (params.snapshot.hookMutation.mode === "blocked") {
     return { ok: false, error: params.snapshot.hookMutation.reason };
@@ -140,14 +141,17 @@ export async function tryInstallHookPackFromLocalPath(params: {
   }
 
   const result = await installHooksFromPath(
-    requestDeferredPackageDirInstall({
-      ...resolveInstallSafetyOverrides(params.safetyOverrides ?? {}),
-      path: params.resolvedPath,
-      mode: params.installMode,
-      ...(params.expectedPackageKind ? { expectedPackageKind: params.expectedPackageKind } : {}),
-      logger: createHookPackInstallLogger(params.runtime),
-      beforePersistentApply: params.beforePersistentApply,
-    }),
+    requestDeferredPackageDirInstall(
+      {
+        ...resolveInstallSafetyOverrides(params.safetyOverrides ?? {}),
+        path: params.resolvedPath,
+        mode: params.installMode,
+        ...(params.expectedPackageKind ? { expectedPackageKind: params.expectedPackageKind } : {}),
+        logger: createHookPackInstallLogger(params.runtime),
+        beforePersistentApply: params.beforePersistentApply,
+      },
+      params.assertOwned,
+    ),
   );
   if (!result.ok) {
     return result;
@@ -181,21 +185,25 @@ async function tryInstallHookPackFromNpmSpec(params: {
   expectedPackageKind?: "hook-only";
   runtime?: RuntimeEnv;
   beforePersistentApply?: () => void;
+  assertOwned: () => void;
 }): Promise<{ ok: true } | Extract<InstallHooksResult, { ok: false }>> {
   if (params.snapshot.hookMutation.mode === "blocked") {
     return { ok: false, error: params.snapshot.hookMutation.reason };
   }
   const result = await installHooksFromNpmSpec(
-    requestDeferredPackageDirInstall({
-      ...resolveInstallSafetyOverrides(params.safetyOverrides ?? {}),
-      config: params.snapshot.config,
-      spec: params.spec,
-      mode: params.installMode,
-      ...(params.expectedIntegrity ? { expectedIntegrity: params.expectedIntegrity } : {}),
-      ...(params.expectedPackageKind ? { expectedPackageKind: params.expectedPackageKind } : {}),
-      logger: createHookPackInstallLogger(params.runtime),
-      beforePersistentApply: params.beforePersistentApply,
-    }),
+    requestDeferredPackageDirInstall(
+      {
+        ...resolveInstallSafetyOverrides(params.safetyOverrides ?? {}),
+        config: params.snapshot.config,
+        spec: params.spec,
+        mode: params.installMode,
+        ...(params.expectedIntegrity ? { expectedIntegrity: params.expectedIntegrity } : {}),
+        ...(params.expectedPackageKind ? { expectedPackageKind: params.expectedPackageKind } : {}),
+        logger: createHookPackInstallLogger(params.runtime),
+        beforePersistentApply: params.beforePersistentApply,
+      },
+      params.assertOwned,
+    ),
   );
   if (!result.ok) {
     return result;
@@ -243,6 +251,7 @@ export async function tryInstallPluginOrHookPackFromNpmSpec(params: {
   invalidateRuntimeCache?: boolean;
   runtime?: RuntimeEnv;
   beforePersistentApply?: () => void;
+  assertOwned: () => void;
 }): Promise<{ ok: true } | { ok: false }> {
   const runtime = params.runtime ?? defaultRuntime;
   const installContext = {
@@ -250,6 +259,7 @@ export async function tryInstallPluginOrHookPackFromNpmSpec(params: {
     runtime,
     invalidateRuntimeCache: params.invalidateRuntimeCache,
     beforePersistentApply: params.beforePersistentApply,
+    assertOwned: params.assertOwned,
   };
   const fullyBlockedReason = resolveFullyBlockedConfigMutationReason(params.snapshot);
   if (fullyBlockedReason) {

@@ -197,9 +197,7 @@ export function copyPackageDirInstallTransactionRequest<T extends object>(
   target: T,
 ): T {
   const request = resolvePackageDirInstallTransactionRequest(source);
-  return request
-    ? requestDeferredPackageDirInstall(target, request.assertOwned)
-    : target;
+  return request ? requestDeferredPackageDirInstall(target, request.assertOwned) : target;
 }
 
 function resolvePackageDirInstallTransactionRequest(
