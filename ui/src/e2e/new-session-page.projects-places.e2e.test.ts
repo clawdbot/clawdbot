@@ -10,6 +10,7 @@ import {
   installMockGateway,
   pollLocatorText,
   replaceGatewayClient,
+  waitForGatewayRecoveryScope,
 } from "./new-session-page.test-support.ts";
 
 const suite = createNewSessionPageE2eSuite();
@@ -203,7 +204,8 @@ suite.define(() => {
           await expect.poll(() => tooltipTitleText(local)).toBe("Gateway · QA-Gateway");
           const catalogRequests = (await gateway.getRequests("environments.list")).length;
           await page.evaluate(() => window.dispatchEvent(new Event("test-release-recovery-scope")));
-          await gateway.waitForRequest("environments.list", { after: catalogRequests });
+          await waitForGatewayRecoveryScope(page);
+          expect(await gateway.getRequests("environments.list")).toHaveLength(catalogRequests);
           await page.keyboard.press("Escape");
         }
         await page.locator("#new-session-project-trigger").click();

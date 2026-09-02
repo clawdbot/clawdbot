@@ -125,6 +125,7 @@ jobs:
     outputs:
       sha: ${{ steps.manifest.outputs.sha || steps.ref.outputs.sha }}
       preflight_artifact_name: ${{ steps.preflight_artifact.outputs.name }}
+      preflight_artifact_run_id: ${{ steps.preflight_artifact.outputs.run_id }}
       preflight_tarball_sha256: ${{ steps.manifest.outputs.tarball_sha256 }}
       full_release_validation_run_attempt: ${{ steps.full_run.outputs.attempt }}
       focused_release_evidence_run_attempt: ${{ steps.focused_run.outputs.attempt }}
@@ -1175,6 +1176,9 @@ jobs:
     name: Publish plugins, then OpenClaw
     needs: [resolve_release_target]
     if: ${{ !inputs.publish_docker_only }}
+    env:
+      # Artifact bytes may belong to an FRV child; the input run still authorizes npm dispatch.
+      PREFLIGHT_ARTIFACT_RUN_ID: ${{ needs.resolve_release_target.outputs.preflight_artifact_run_id }}
     permissions:
       actions: write
       attestations: write

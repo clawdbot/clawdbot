@@ -350,9 +350,9 @@ export function resolveProviderRuntimePlugin(
     : !registryState?.key
       ? load()
       : (() => {
-          const cached = defaultProviderRuntimePluginCache.getResult(cacheKey);
-          if (cached.hit) {
-            return cached.value;
+          const cached = defaultProviderRuntimePluginCache.get(cacheKey);
+          if (cached !== undefined) {
+            return cached;
           }
           const loaded = load();
           defaultProviderRuntimePluginCache.set(cacheKey, loaded);

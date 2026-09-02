@@ -5,6 +5,7 @@ import path from "node:path";
 import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { StaleOpenClawUpdateLaunchdJob } from "../../daemon/launchd.js";
+import type { ServiceConfigAudit } from "../../daemon/service-audit.js";
 import { createMockGatewayService } from "../../daemon/service.test-helpers.js";
 import type { PortListener, PortUsageStatus } from "../../infra/ports-types.js";
 import type { GatewayRestartHandoff } from "../../infra/restart-handoff.js";
@@ -119,7 +120,9 @@ const inspectWindowsGatewayFirewall = vi.fn<(opts?: unknown) => Promise<unknown>
   message: "Windows LAN firewall diagnostics do not apply.",
   details: [],
 }));
-const auditGatewayServiceConfig = vi.fn(async (_opts?: unknown) => undefined);
+const auditGatewayServiceConfig = vi.fn<(_opts?: unknown) => Promise<ServiceConfigAudit>>(
+  async () => ({ ok: true, issues: [] }),
+);
 const serviceIsLoaded = vi.fn<
   (opts?: { env?: NodeJS.ProcessEnv; timeoutMs?: number }) => Promise<boolean>
 >(async (_opts?: { env?: NodeJS.ProcessEnv; timeoutMs?: number }) => true);
@@ -898,6 +901,28 @@ describe("gatherDaemonStatus", () => {
     expect(status.service.loaded).toBe(true);
     expect(status.service.runtime?.status).toBe("running");
     expect((status.service.runtime as { detail?: string }).detail).toBe("19001");
+  });
+
+  it("retains service audit findings when the active command is absent", async () => {
+    serviceReadCommand.mockResolvedValueOnce(null);
+    auditGatewayServiceConfig.mockResolvedValueOnce({
+      ok: false,
+      issues: [
+        {
+          code: "systemd-unit-backup-unsafe",
+          message: "Systemd service backup exposes gateway credentials.",
+        },
+      ],
+    });
+
+    const status = await gatherStatus({ probe: false });
+
+    expect(auditGatewayServiceConfig).toHaveBeenCalledWith(
+      expect.objectContaining({ command: null }),
+    );
+    expect(status.service.configAudit?.issues).toEqual([
+      expect.objectContaining({ code: "systemd-unit-backup-unsafe" }),
+    ]);
   });
 
   it("renders Gateway-specific recovery in text and JSON after service reads time out", async () => {

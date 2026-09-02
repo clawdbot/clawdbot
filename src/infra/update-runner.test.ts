@@ -3070,7 +3070,7 @@ describe("runGatewayUpdate", () => {
         argv[0] === "npm" &&
         argv[1] === "i" &&
         argv[2] === "-g" &&
-        argv[3] === "--allow-scripts=./openclaw-2.0.0.tgz" &&
+        argv[3] === `--allow-scripts=${argv[4]}` &&
         path.basename(argv[4] ?? "") === "openclaw-2.0.0.tgz" &&
         argv.slice(5).join(" ") === "--no-fund --no-audit --loglevel=error --min-release-age=0",
       tag: "main",
@@ -3078,6 +3078,7 @@ describe("runGatewayUpdate", () => {
 
     expect(result.status).toBe("ok");
     expect(result.mode).toBe("npm");
+    expect(result.after?.version).toBe("2.0.0");
     expect(result.steps.map((step) => step.name)).toContain("global update pack");
     expect(
       calls.some((call) => call.startsWith(`npm pack ${sourceSpec} --pack-destination `)),

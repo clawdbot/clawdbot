@@ -356,7 +356,6 @@ export type AgentEventHandlerOptions = {
     clientRunId: string;
     sessionKey: string;
     sessionId?: string;
-    observedAt: number;
     persistence: Promise<void>;
   }) => void;
   resolveActiveLifecycleGenerationForRun?: (runId: string) => string | undefined;
@@ -713,6 +712,7 @@ export function createAgentEventHandler({
     if (isSupersededRestartRecoveryEvent) {
       return;
     }
+    clearPendingTerminalLifecycleError(evt.runId, evt.lifecycleGeneration);
     let terminalPersistence: Promise<void> | undefined;
 
     if (
@@ -817,7 +817,6 @@ export function createAgentEventHandler({
           clientRunId,
           sessionKey,
           sessionId: evt.sessionId,
-          observedAt: evt.ts,
           persistence,
         });
         const broadcastSessionChange = (snapshotEvent?: AgentEventPayload) => {
@@ -1715,10 +1714,9 @@ export function createAgentEventHandler({
         phase: lifecyclePhase,
         data: evt.data,
       });
-      // Only retryable errors get grace. Definitive timeouts must persist their
-      // reason before dispatch closes the run and the sidebar reads its status.
+      // Only retryable failures get grace. Definitive cancellation and timeout
+      // must persist before dispatch closes the run and the sidebar reads its status.
       if (isAborted || definitiveTerminal || lifecycleErrorRetryGraceMs <= 0) {
-        clearPendingTerminalLifecycleError(evt.runId);
         // finalizeLifecycleEvent clears the buffer itself, after emitChatTerminal
         // has flushed the throttled tail and resolved the terminal message.
         finalizeLifecycleEvent(evt, { skipChatErrorFinal, restartRecoveryState });

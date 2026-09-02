@@ -11,9 +11,12 @@ type DraftSessionStartupIntent = {
   interrupted: boolean;
 };
 
+/** A creation attempt the submission flow resumes after reconnecting. */
+export type DraftStartupResumption = { params: SessionCreateParams; startedAt: number };
+
 type DraftSessionStartupResume =
   | { kind: "wait" | "expired" | "owner-changed" }
-  | { kind: "resume"; params: SessionCreateParams; startedAt: number };
+  | ({ kind: "resume" } & DraftStartupResumption);
 
 export class DraftSessionStartup {
   private pending: DraftSessionStartupIntent | null = null;

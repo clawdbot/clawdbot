@@ -2,15 +2,18 @@ import { describe, expect, it } from "vitest";
 import { normalizeModifiers, parseKeyChord, scalePoint } from "./actions.js";
 
 // normalizeKey is internal; exercise it through parseKeyChord's final segment.
-const normalizeKey = (input: string) => parseKeyChord(input).key;
+const normalizeKey = (input: string) => parseKeyChord(input, "linux").key;
 
 describe("cua-computer key normalization", () => {
   it.each([
-    ["cmd+shift", ["meta", "shift"]],
-    ["Super+Control+Option", ["meta", "ctrl", "alt"]],
-    ["win+mod1", ["meta", "alt"]],
-  ])("normalizes modifier aliases in %s", (input, expected) => {
-    expect(normalizeModifiers(input)).toEqual(expected);
+    ["cmd+shift", "linux", ["meta", "shift"]],
+    ["Super+Control+Option", "linux", ["meta", "ctrl", "alt"]],
+    ["win+mod1", "linux", ["meta", "alt"]],
+    ["cmd+shift", "darwin", ["cmd", "shift"]],
+    ["Super+Control+Option", "darwin", ["cmd", "ctrl", "alt"]],
+    ["win+mod1", "darwin", ["cmd", "alt"]],
+  ] as const)("normalizes modifier aliases in %s on %s", (input, platform, expected) => {
+    expect(normalizeModifiers(input, platform)).toEqual(expected);
   });
 
   it.each([
@@ -34,7 +37,7 @@ describe("cua-computer key normalization", () => {
   );
 
   it("keeps letter keys usable in shortcut chords", () => {
-    expect(parseKeyChord("cmd+c")).toEqual({ key: "c", modifiers: ["meta"] });
+    expect(parseKeyChord("cmd+c", "linux")).toEqual({ key: "c", modifiers: ["meta"] });
   });
 
   // Digits and punctuation are shifted on some keyboard layouts, and cua-driver
@@ -48,7 +51,7 @@ describe("cua-computer key normalization", () => {
   );
 
   it("splits the last chord segment into the key", () => {
-    expect(parseKeyChord("cmd+ctrl+Return")).toEqual({
+    expect(parseKeyChord("cmd+ctrl+Return", "linux")).toEqual({
       key: "enter",
       modifiers: ["meta", "ctrl"],
     });
@@ -56,8 +59,8 @@ describe("cua-computer key normalization", () => {
 
   it.each(["hyper", "ctrl+hyper"])("rejects unknown vocabulary in %s", (input) => {
     const operation = input.includes("+")
-      ? () => parseKeyChord(input)
-      : () => normalizeModifiers(input);
+      ? () => parseKeyChord(input, "linux")
+      : () => normalizeModifiers(input, "linux");
     expect(operation).toThrow("COMPUTER_UNSUPPORTED_KEY");
   });
 

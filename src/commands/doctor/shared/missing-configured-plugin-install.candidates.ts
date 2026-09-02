@@ -29,6 +29,7 @@ import {
   resolveOfficialExternalPluginLabel,
 } from "../../../plugins/official-external-plugin-catalog.js";
 import { safeRealpathSync } from "../../../plugins/path-safety.js";
+import { isPayloadMissing } from "../../../plugins/payload-verification.js";
 import type { PluginMetadataSnapshot } from "../../../plugins/plugin-metadata-snapshot.types.js";
 import { resolveProviderInstallCatalogEntries } from "../../../plugins/provider-install-catalog.js";
 import { resolveUserPath } from "../../../utils.js";
@@ -42,7 +43,6 @@ import {
   collectConfiguredPluginIds,
   collectEffectiveConfiguredChannelOwnerPluginIds,
 } from "./missing-configured-plugin-install.ids.js";
-import { isInstalledRecordMissingOnDisk } from "./missing-configured-plugin-install.records.js";
 
 export type DownloadableInstallCandidate = {
   pluginId: string;
@@ -166,7 +166,7 @@ export async function resolveConfiguredPluginInstallContext(params: {
     }
     const configRootIdentity = resolvePathIdentity(configPluginRoot);
     if (
-      isInstalledRecordMissingOnDisk(record, params.env) &&
+      isPayloadMissing(params.env, record.installPath) &&
       recordedPaths.every((value) => resolvePathIdentity(value) !== configRootIdentity)
     ) {
       stalePathInstallPluginIds.add(pluginId);

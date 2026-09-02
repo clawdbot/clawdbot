@@ -922,7 +922,7 @@ describe("update-cli", () => {
       expect(packagePackCommandCall()).toBeUndefined();
     }
     const allowScriptsIdentity = isNpmGitPackageSpec(spec)
-      ? `./${path.basename(installSpec)}`
+      ? installSpec
       : spec.toLowerCase().startsWith("openclaw@")
         ? "openclaw"
         : spec;

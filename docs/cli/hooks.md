@@ -208,9 +208,10 @@ including packs with only optional dependencies. Packages listed only in
 | `--acknowledge-install-policy-warning` | Acknowledge an operator `security.installPolicy` warning without its prompt. Blocks and policy failures still stop the install.             |
 
 Interactive non-ClawHub installs ask you to confirm trust. Noninteractive
-installs require `--force`; global `--yes` is not a substitute for that gate.
-`--force` is also not a substitute for acknowledging an install-policy warning.
-Review the source before supplying either acknowledgement.
+installs require `--force`; neither `plugins install` nor the `hooks install`
+alias accepts a `--yes` flag. `--force` is also not a substitute for
+acknowledging an install-policy warning. Review the source before supplying
+either acknowledgement.
 
 <Warning>
 A linked hook runs directly from the supplied path; linking does not copy it
@@ -237,9 +238,10 @@ archive records are not refreshed by the npm hook updater.
 when reached through the deprecated alias; it is not a hooks-only bulk command.
 
 When an applicable stored integrity hash differs from the downloaded artifact,
-the updater warns and asks for confirmation. Global `--yes` can accept that
-yes/no prompt, so use it only when you intend to accept the drift. It does not
-bypass operator policy blocks or replace the dedicated policy-warning flag.
+the updater warns and asks for confirmation in the terminal. No CLI flag answers
+that prompt: neither `plugins update` nor the `hooks update` alias accepts
+`--yes`, and `--acknowledge-install-policy-warning` covers only install-policy
+warnings. `--dry-run` reports the drift without prompting.
 
 ### Deprecated aliases
 

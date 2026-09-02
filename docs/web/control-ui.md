@@ -44,6 +44,23 @@ When you run several Gateways, set `gateway.controlUi.environment` to distinguis
 
 The environment adds a 2 px top stripe, an agent-avatar ring, label pills in the sidebar and narrow topbar, a browser-title suffix, and a matching favicon. The label is trimmed and must contain 1–24 characters. Available colors are `teal`, `amber`, `purple`, `coral`, `pink`, `blue`, `green`, `red`, and `gray`. The label and color are intentionally visible before sign-in; leave `environment` unset to keep the standard appearance unchanged.
 
+## New session names
+
+In **New session**, pausing typing for one second prepares a suggested name using
+only the selected agent's utility model. The composer discloses that unsent draft
+text is sent to the title provider. Preparation starts after at least 12 characters
+and sends at most the first 1,000 characters; it does not send attachments.
+
+Preparation is disabled in incognito and for slash commands. Edits replace stale
+suggestions, and only one request runs at a time. A missing or failed utility model
+does not fall back to the primary model or prevent you from starting the session.
+
+**Start session** uses a matching suggestion if it is ready. Otherwise, normal
+initial naming runs after submission; Start never waits for the speculative call.
+This is creation-only: later messages do not regenerate an existing session's
+name. Explicit worktree names are preserved, and typing never creates a worktree
+or runs setup.
+
 ## Quick open (local)
 
 If the Gateway is running on the same computer, open [http://127.0.0.1:18789/](http://127.0.0.1:18789/) (or [http://localhost:18789/](http://localhost:18789/)).

@@ -86,6 +86,12 @@ android {
   }
 }
 
+androidComponents {
+  onVariants(selector().withBuildType("release")) { variant ->
+    variant.lifecycleTasks.registerPreBuild(":app:validateOpenClawReleaseSigning")
+  }
+}
+
 kotlin {
   compilerOptions {
     jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)
