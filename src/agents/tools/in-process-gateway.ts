@@ -15,6 +15,7 @@ import {
   getInProcessGatewayRequestContext,
   hasInProcessGatewayContext,
 } from "../../gateway/server-plugins.js";
+import { getPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { getGatewayToolCallerIdentity } from "./gateway-caller-context.js";
 import { runWithGatewaySessionSpawnContext } from "./gateway-session-spawn-context.js";
 import { callGatewayTool } from "./gateway.js";
@@ -116,9 +117,12 @@ export function hasInProcessGatewayToolContext(): boolean {
 
 /** Whether Gateway routing belongs to this caller or the hosting process. */
 export function hasGatewayToolRoutingContext(): boolean {
+  const resolver =
+    callerGatewayContextResolver() ?? getPluginRuntimeGatewayRequestScope()?.resolveGatewayContext;
+  const context = getInProcessGatewayRequestContext(resolver);
   // A retired binding still owns routing: dispatch must reject it instead of
   // letting optional Gateway-backed tools switch to standalone host execution.
-  return Boolean(callerGatewayContextResolver()) || hasInProcessGatewayContext();
+  return context?.localEmbedded !== true && Boolean(resolver || context);
 }
 
 export function getInProcessGatewayToolContext(

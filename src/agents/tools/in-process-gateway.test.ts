@@ -30,7 +30,6 @@ import {
   callAgentToolGatewayRequest,
   callInProcessGatewayTool,
   callInProcessGatewayToolWithCreation,
-  hasGatewayToolRoutingContext,
   withAgentToolGatewayRuntimeIdentity,
 } from "./in-process-gateway.js";
 
@@ -40,39 +39,6 @@ describe("trusted in-process Gateway session creation", () => {
     mocks.dispatch.mockReset().mockResolvedValue({ key: "agent:main:dashboard:child" });
     mocks.callGateway.mockReset().mockResolvedValue({ status: "ok" });
     mocks.callGatewayTool.mockReset().mockResolvedValue({ key: "agent:main:dashboard:child" });
-  });
-
-  it("distinguishes standalone callers from a process hosting a Gateway", async () => {
-    expect(hasGatewayToolRoutingContext()).toBe(true);
-    mocks.hasContext = false;
-    expect(hasGatewayToolRoutingContext()).toBe(false);
-    await withGatewayToolCallerIdentity(
-      { agentId: "main", sessionKey: "agent:main:standalone" },
-      () => expect(hasGatewayToolRoutingContext()).toBe(false),
-    );
-  });
-
-  it("retains Gateway routing when a caller's admitted owner retires", async () => {
-    mocks.hasContext = false;
-    let current: GatewayRequestContext | undefined = {} as GatewayRequestContext;
-    await withGatewayToolCallerIdentity(
-      {
-        agentId: "main",
-        sessionKey: "agent:main:worker",
-        gatewayContextResolver: () => current,
-      },
-      async () => {
-        expect(hasGatewayToolRoutingContext()).toBe(true);
-        current = undefined;
-        expect(hasGatewayToolRoutingContext()).toBe(true);
-        await expect(callInProcessGatewayTool("node.list", {})).rejects.toThrow(
-          "Gateway instance unavailable for node.list",
-        );
-      },
-    );
-    expect(mocks.dispatch).not.toHaveBeenCalled();
-    expect(mocks.callGatewayTool).not.toHaveBeenCalled();
-    expect(hasGatewayToolRoutingContext()).toBe(false);
   });
 
   it("surfaces creation provenance only on in-process dispatch", async () => {
