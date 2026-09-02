@@ -2,7 +2,8 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
 import { isPathInside } from "../../../infra/path-guards.js";
 import { getGatewayContextResolver } from "../../../plugins/runtime/gateway-request-scope.js";
 import { listOpenClawAgentDatabasesForTest as listSeedAgentDatabases } from "../../../state/openclaw-agent-db.js";
@@ -24,6 +25,7 @@ import type { SubagentRunRecord } from "./subagent-registry.types.js";
 const { announceSpy } = vi.hoisted(() => ({
   announceSpy: vi.fn(async () => "delivered" as const),
 }));
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 vi.mock("../announce/subagent-announce.js", () => ({
   runSubagentAnnounceFlow: announceSpy,
 }));
@@ -387,7 +389,7 @@ describe("subagent registry persistence resume", () => {
   });
 
   it("settles a restored delivered wake rejected before attempt admission", async () => {
-    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-subagent-"));
+    const stateDir = tempDirs.make("openclaw-subagent-");
     await withRegistryState(stateDir, async () => {
       const endedAt = Date.now();
       const run: SubagentRunRecord = {
