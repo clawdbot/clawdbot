@@ -143,8 +143,11 @@ function resolveSetupApiPathUncached(
     ? SETUP_API_EXTENSIONS
     : ([...SETUP_API_EXTENSIONS.slice(3), ...SETUP_API_EXTENSIONS.slice(0, 3)] as const);
 
-  const artifactBasenames = orderedExtensions.map((extension) => `setup-api${extension}`);
-  const direct = resolvePluginRootArtifactPath(rootDir, artifactBasenames);
+  // Shipped implicit setup entries in the root outrank every package-local dist format.
+  const artifactPaths = ["", "dist"].flatMap((directory) =>
+    orderedExtensions.map((extension) => path.join(directory, `setup-api${extension}`)),
+  );
+  const direct = resolvePluginRootArtifactPath(rootDir, artifactPaths);
   if (direct || options?.includeBundledSourceFallback === false) {
     return direct;
   }
@@ -157,7 +160,7 @@ function resolveSetupApiPathUncached(
   );
   return sourceExtensionRoot === rootDir
     ? null
-    : resolvePluginRootArtifactPath(sourceExtensionRoot, artifactBasenames);
+    : resolvePluginRootArtifactPath(sourceExtensionRoot, artifactPaths);
 }
 
 function collectConfiguredPluginEntryIds(config: OpenClawConfig): string[] {

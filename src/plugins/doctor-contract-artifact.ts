@@ -25,7 +25,10 @@ export function resolvePluginDoctorContractArtifactPath(rootDir: string): string
   const modulePath = resolvePluginRootArtifactPath(
     rootDir,
     ["doctor-contract-api", "contract-api"].flatMap((basename) =>
-      orderedExtensions.map((extension) => `${basename}${extension}`),
+      orderedExtensions.flatMap((extension) => {
+        const filename = `${basename}${extension}`;
+        return [filename, path.join("dist", filename)];
+      }),
     ),
   );
   artifacts.set(key, modulePath ? { modulePath, boundaryRoot: rootDir } : null);

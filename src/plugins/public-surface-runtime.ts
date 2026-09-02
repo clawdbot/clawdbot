@@ -83,7 +83,10 @@ export function resolvePluginRootPublicSurfacePath(params: {
 }): string | null {
   const artifactBasename = normalizeBundledPluginArtifactSubpath(params.artifactBasename);
   const pluginRoot = path.resolve(params.pluginRoot);
-  const builtCandidate = resolvePluginRootArtifactPath(pluginRoot, [artifactBasename]);
+  const builtCandidate = resolvePluginRootArtifactPath(pluginRoot, [
+    artifactBasename,
+    path.join("dist", artifactBasename),
+  ]);
   if (builtCandidate) {
     return builtCandidate;
   }
