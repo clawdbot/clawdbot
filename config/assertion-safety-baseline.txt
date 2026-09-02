@@ -1631,7 +1631,7 @@ src/agents/agent-run-terminal-delivery.ts	1
 src/agents/agent-run-terminal-error.ts	1
 src/agents/agent-run-terminal-outcome.ts	2
 src/agents/agent-run-terminal-receipt.ts	1
-src/agents/agent-run-terminal-reply.ts	4
+src/agents/agent-run-terminal-reply.ts	3
 src/agents/agent-runtime-config.ts	1
 src/agents/agent-scope-config.ts	7
 src/agents/agent-tool-definition-adapter.ts	4

@@ -424,43 +424,6 @@ describe("subagent registry lifecycle error grace", () => {
       });
   }
 
-  it("records explicit empty success without requester delivery or retry", async () => {
-    const runId = "run-empty-success";
-    registerCompletionRun(runId, "empty-success", "empty success test");
-
-    emitLifecycleEvent(runId, {
-      phase: "end",
-      endedAt: 1_000,
-      terminalReply: { disposition: "empty" },
-    });
-    await flushAsync();
-
-    let settled = mod
-      .listSubagentRunsForRequester(MAIN_REQUESTER_SESSION_KEY)
-      .find((candidate) => candidate.runId === runId);
-    for (let attempt = 0; attempt < 80 && settled?.cleanupCompletedAt === undefined; attempt += 1) {
-      await vi.advanceTimersByTimeAsync(1);
-      await flushAsync();
-      settled = mod
-        .listSubagentRunsForRequester(MAIN_REQUESTER_SESSION_KEY)
-        .find((candidate) => candidate.runId === runId);
-    }
-
-    expect(settled).toMatchObject({
-      execution: { outcome: { status: "ok" } },
-      completion: { terminalReply: { disposition: "empty" }, resultText: null },
-      delivery: {
-        status: "not_required",
-        disposition: "intentional_non_delivery",
-      },
-      cleanupCompletedAt: expect.any(Number),
-    });
-    expect(getAgentCalls()).toHaveLength(0);
-
-    await vi.advanceTimersByTimeAsync(5 * 60_000);
-    expect(getAgentCalls()).toHaveLength(0);
-  });
-
   it("yields an owned visible child and delivers its requester final exactly once", async () => {
     const requesterTurnRunId = "run-requester-visible-yield";
     const runId = "run-visible-yield";

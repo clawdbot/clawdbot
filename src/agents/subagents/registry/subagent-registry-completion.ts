@@ -59,7 +59,7 @@ export function resolveFinalizedSubagentTaskState(
       entry.expectsCompletionMessage !== true
         ? {}
         : entry.delivery?.disposition === "intentional_non_delivery"
-          ? { terminalOutcome: "succeeded" as const }
+          ? { terminalOutcome: "succeeded" as const, terminalSummary: null }
           : resolveRequiredCompletionTerminalResult(progressSummary);
     return {
       status: "succeeded",
