@@ -5,6 +5,7 @@ import { beforeEach, afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
   canRunPlaywrightChromium,
+  captureControlUiE2eFailureDiagnostics,
   controlUiSessionUrl,
   installMockGateway,
   resolvePlaywrightChromiumExecutablePath,
@@ -62,6 +63,9 @@ describeControlUiE2e("Control UI Markdown table interactions", () => {
       await installMockGateway(page, {
         ...(surface === "assistant panel"
           ? {
+              sessions: [
+                { key: "agent:main:main", label: "Main", kind: "direct", updatedAt: Date.now() },
+              ],
               featureMethods: [
                 "chat.metadata",
                 "chat.startup",
@@ -71,6 +75,15 @@ describeControlUiE2e("Control UI Markdown table interactions", () => {
                 "openclaw.chat.history",
               ],
               methodResponses: {
+                "sessions.list": {
+                  cases: [
+                    // Main is the only session and does not match this palette query.
+                    {
+                      match: { search: "Ask OpenClaw" },
+                      response: { count: 0, sessions: [] },
+                    },
+                  ],
+                },
                 "openclaw.chat": {
                   sessionId: "table-proof",
                   reply: "Ready to help.",
@@ -200,6 +213,12 @@ describeControlUiE2e("Control UI Markdown table interactions", () => {
         await expect
           .poll(() => expand.evaluate((element) => element === document.activeElement))
           .toBe(true);
+      } catch (error) {
+        await captureControlUiE2eFailureDiagnostics(page, {
+          error: error instanceof Error ? error : new Error(String(error)),
+          label: `Markdown table in ${surface}`,
+        });
+        throw error;
       } finally {
         if (captureProof) {
           await page.screenshot({ path: path.join(artifactDir, "final-state.png") });
