@@ -22,12 +22,12 @@ ARTIFACT_DIR="${OPENCLAW_UPDATE_FIRST_HOP_ARTIFACT_DIR:-$ROOT_DIR/.artifacts/upd
 SOURCE_PACKAGE="${OPENCLAW_UPDATE_FIRST_HOP_SOURCE_PACKAGE_TGZ:-}"
 EXPECTED_MISSING_CHUNK="${OPENCLAW_UPDATE_FIRST_HOP_EXPECTED_MISSING_CHUNK:-shared-Y6bNiw2w.js}"
 FIXTURE_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/openclaw-update-first-hop.XXXXXX")"
-CANDIDATE_PACKAGE=""
+PACKAGE_TGZ=""
 
 cleanup() {
   local exit_status="$?"
   trap - EXIT
-  docker_e2e_cleanup_package_tgz "$CANDIDATE_PACKAGE"
+  docker_e2e_cleanup_package_tgz "${PACKAGE_TGZ:-}"
   rm -rf "$FIXTURE_ROOT"
   exit "$exit_status"
 }
@@ -57,15 +57,15 @@ if [ ! -f "$SOURCE_PACKAGE" ]; then
   exit 2
 fi
 
-CANDIDATE_PACKAGE="$(
+PACKAGE_TGZ="$(
   docker_e2e_prepare_package_tgz \
     update-first-hop-compat \
     "${OPENCLAW_UPDATE_FIRST_HOP_CANDIDATE_PACKAGE_TGZ:-}"
 )"
 
 mkdir -p "$FIXTURE_ROOT/packages/negative" "$FIXTURE_ROOT/packages/future"
-tar -xzf "$CANDIDATE_PACKAGE" -C "$FIXTURE_ROOT/packages/negative"
-tar -xzf "$CANDIDATE_PACKAGE" -C "$FIXTURE_ROOT/packages/future"
+tar -xzf "$PACKAGE_TGZ" -C "$FIXTURE_ROOT/packages/negative"
+tar -xzf "$PACKAGE_TGZ" -C "$FIXTURE_ROOT/packages/future"
 node "$ROOT_DIR/scripts/e2e/lib/update-first-hop-package-fixtures.mjs" \
   negative "$FIXTURE_ROOT/packages/negative/package"
 node "$ROOT_DIR/scripts/e2e/lib/update-first-hop-package-fixtures.mjs" \
@@ -77,15 +77,15 @@ COPYFILE_DISABLE=1 tar --no-xattrs -czf "$FIXTURE_ROOT/future.tgz" \
 
 {
   printf 'source=%s\n' "$SOURCE_PACKAGE"
-  printf 'candidate=%s\n' "$CANDIDATE_PACKAGE"
+  printf 'candidate=%s\n' "$PACKAGE_TGZ"
   printf 'expected_missing_chunk=%s\n' "$EXPECTED_MISSING_CHUNK"
   shasum -a 256 \
     "$SOURCE_PACKAGE" \
-    "$CANDIDATE_PACKAGE" \
+    "$PACKAGE_TGZ" \
     "$FIXTURE_ROOT/negative.tgz" \
     "$FIXTURE_ROOT/future.tgz"
   printf '\nsource_build_info=' && tar -xOf "$SOURCE_PACKAGE" package/dist/build-info.json
-  printf '\ncandidate_build_info=' && tar -xOf "$CANDIDATE_PACKAGE" package/dist/build-info.json
+  printf '\ncandidate_build_info=' && tar -xOf "$PACKAGE_TGZ" package/dist/build-info.json
   printf '\nfuture_build_info=' && tar -xOf "$FIXTURE_ROOT/future.tgz" package/dist/build-info.json
 } >"$ARTIFACT_DIR/inputs.txt"
 
@@ -104,7 +104,7 @@ docker_e2e_run_with_harness \
   -e OPENCLAW_UPDATE_FIRST_HOP_EXPECTED_MISSING_CHUNK="$EXPECTED_MISSING_CHUNK" \
   -v "$ARTIFACT_DIR:/tmp/openclaw-update-first-hop-artifacts" \
   -v "$(docker_e2e_abs_path "$SOURCE_PACKAGE"):/tmp/openclaw-update-first-hop-source.tgz:ro" \
-  -v "$CANDIDATE_PACKAGE:/tmp/openclaw-update-first-hop-candidate.tgz:ro" \
+  -v "$PACKAGE_TGZ:/tmp/openclaw-update-first-hop-candidate.tgz:ro" \
   -v "$FIXTURE_ROOT/negative.tgz:/tmp/openclaw-update-first-hop-negative.tgz:ro" \
   -v "$FIXTURE_ROOT/future.tgz:/tmp/openclaw-update-first-hop-future.tgz:ro" \
   "$IMAGE_NAME" \
