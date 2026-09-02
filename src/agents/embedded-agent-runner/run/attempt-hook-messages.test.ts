@@ -10,6 +10,22 @@ function msg(text: string): AgentMessage {
   } as unknown as AgentMessage;
 }
 
+/**
+ * A `custom` history entry carrying binary application metadata. `CustomMessage`
+ * types `details` as `T = unknown` (packages/agent-core/src/types.ts), so this is
+ * a valid `AgentMessage`, not a contrived one.
+ */
+function customMsgWithBinaryDetails(customType: string, bytes: Uint8Array): AgentMessage {
+  return {
+    role: "custom",
+    customType,
+    content: [{ type: "text", text: customType }],
+    display: false,
+    details: { payload: bytes, nested: { alsoBinary: new Uint8Array([9, 9]) } },
+    timestamp: 1,
+  } as unknown as AgentMessage;
+}
+
 describe("cloneLlmInputHookMessages", () => {
   it("returns isolated clones that cannot mutate the session messages", () => {
     const source = [msg("a"), msg("b"), msg("c")];
@@ -48,6 +64,66 @@ describe("cloneLlmInputHookMessages", () => {
     expect(pass3[1]).toBe(pass2[1]);
     expect(pass3[3]).not.toBe(pass2[3]);
     expect(pass3).toEqual(grown);
+  });
+
+  // Regression: deep-freezing a settled entry used to call `Object.freeze` on
+  // every nested object, including typed arrays. `Object.freeze` throws
+  // `TypeError: Cannot freeze array buffer views with elements` for a non-empty
+  // view, and because the clone happens while evaluating `runLlmInput`'s
+  // arguments the throw preceded the promise the call site attaches `.catch()`
+  // to — so it escaped synchronously and killed the prompt phase before the
+  // model call, whenever an `llm_input` hook was enabled.
+  it("clones settled custom messages whose details carry non-empty typed arrays", () => {
+    const binary = customMsgWithBinaryDetails("app.audio", new Uint8Array([1, 2, 3]));
+    // Index 0 of 3 is settled history, so it takes the deep-freeze/cache path
+    // rather than the always-fresh trailing pair.
+    const source = [binary, msg("tail1"), msg("tail2")];
+
+    const cloned = cloneLlmInputHookMessages(source);
+
+    const details = (
+      cloned[0] as { details: { payload: Uint8Array; nested: { alsoBinary: Uint8Array } } }
+    ).details;
+    // The payload survives as real bytes rather than being dropped or mangled.
+    expect(details.payload).toBeInstanceOf(Uint8Array);
+    expect(Array.from(details.payload)).toEqual([1, 2, 3]);
+    expect(Array.from(details.nested.alsoBinary)).toEqual([9, 9]);
+    // Still an isolated snapshot: mutating the clone cannot reach the source.
+    expect(details.payload).not.toBe(
+      (source[0] as { details: { payload: Uint8Array } }).details.payload,
+    );
+    // The surrounding structure is frozen; only the view itself is exempt,
+    // because freezing it is what threw and it was never protective anyway.
+    expect(Object.isFrozen(cloned[0])).toBe(true);
+    expect(Object.isFrozen(details)).toBe(true);
+    expect(Object.isFrozen(details.payload)).toBe(false);
+    // And the cache still serves the same clone on a second pass.
+    expect(cloneLlmInputHookMessages(source)[0]).toBe(cloned[0]);
+  });
+
+  it("still freezes settled messages whose only views are freeze-safe", () => {
+    // An empty typed array and a DataView do NOT throw on `Object.freeze`, so
+    // this pins that the guard exempts them from freezing without changing
+    // anything else about how the entry is snapshotted.
+    const safe = {
+      role: "custom",
+      customType: "app.empty",
+      content: [{ type: "text", text: "app.empty" }],
+      display: false,
+      details: { payload: new Uint8Array([]), view: new DataView(new ArrayBuffer(4)) },
+      timestamp: 1,
+    } as unknown as AgentMessage;
+    const source = [safe, msg("tail1"), msg("tail2")];
+
+    const cloned = cloneLlmInputHookMessages(source);
+
+    const details = (cloned[0] as { details: { payload: Uint8Array; view: DataView } }).details;
+    expect(details.payload).toBeInstanceOf(Uint8Array);
+    expect(details.payload).toHaveLength(0);
+    expect(details.view).toBeInstanceOf(DataView);
+    expect(details.view.byteLength).toBe(4);
+    expect(Object.isFrozen(cloned[0])).toBe(true);
+    expect(Object.isFrozen(details)).toBe(true);
   });
 
   it("handles short arrays where everything is tail", () => {
