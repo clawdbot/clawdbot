@@ -228,42 +228,56 @@ function collapseConsecutiveDuplicateBlocks(text: string): string {
   if (!trimmed) {
     return text;
   }
-  // Keep the blank-line separators so code blocks rejoin with their original bytes;
-  // a plain split would also cut inside fences on every internal blank line.
-  const parts = trimmed.split(/(\n{2,})/);
-  if (parts.length < 3) {
-    return text;
-  }
-  const codeRegions = findCodeRegions(trimmed);
-  const overlapsCode = (start: number, end: number): boolean =>
-    codeRegions.some((region) => start < region.end && end > region.start);
-  let offset = 0;
-  let lastNormalized: string | null = null;
-  let lastSeparator: string | null = null;
-  const segments: string[] = [];
+  // Regions and protected bytes come from the untrimmed input: trimming first
+  // would hide an initial indented code block's leading indentation from the parser.
+  let collapsed = "";
+  let cursor = 0;
   let removed = false;
-  for (let index = 0; index < parts.length; index += 2) {
-    const block = parts[index] ?? "";
-    const start = offset;
-    const end = start + block.length;
-    offset = end + (parts[index + 1]?.length ?? 0);
-    const inCode = overlapsCode(start, end);
-    const normalized = block.trim().replace(/\s+/g, " ");
-    if (lastNormalized && !inCode && normalized === lastNormalized) {
-      removed = true;
-      // The removed block's separators vanish; surviving neighbours rejoin with "\n\n".
-      lastSeparator = null;
-      continue;
+  const emitRun = (run: string) => {
+    const lead = run.slice(0, run.length - run.trimStart().length);
+    const inner = run.trim();
+    const trail = run.slice(lead.length + inner.length);
+    // Keep the blank-line separators so prose blocks rejoin with their original
+    // bytes; a plain split would lose them on every internal blank line.
+    const parts = inner.split(/(\n{2,})/);
+    if (parts.length < 3) {
+      collapsed += run;
+      return;
     }
-    if (segments.length > 0) {
-      segments.push(lastSeparator ?? "\n\n");
+    let lastNormalized: string | null = null;
+    let lastSeparator: string | null = null;
+    const segments: string[] = [];
+    let runRemoved = false;
+    for (let index = 0; index < parts.length; index += 2) {
+      const block = parts[index] ?? "";
+      const normalized = block.trim().replace(/\s+/g, " ");
+      if (lastNormalized && normalized === lastNormalized) {
+        runRemoved = true;
+        // The removed block's separators vanish; surviving neighbours rejoin with "\n\n".
+        lastSeparator = null;
+        continue;
+      }
+      if (segments.length > 0) {
+        segments.push(lastSeparator ?? "\n\n");
+      }
+      segments.push(block.trim());
+      lastNormalized = normalized;
+      lastSeparator = parts[index + 1] || null;
     }
-    // Code is whitespace-sensitive: protected blocks survive byte-for-byte, never re-trimmed.
-    segments.push(inCode ? block : block.trim());
-    lastNormalized = normalized;
-    lastSeparator = parts[index + 1] || null;
+    // Run edges stay byte-exact: they can carry prose cut mid-block by an
+    // inline code region, so re-trimming them would glue neighbouring words.
+    collapsed += runRemoved ? lead + segments.join("") + trail : run;
+    removed ||= runRemoved;
+  };
+  for (const region of findCodeRegions(text)) {
+    emitRun(text.slice(cursor, region.start));
+    // Protected code survives byte-for-byte and ends the duplicate sequence:
+    // prose on either side of a region never compares across it.
+    collapsed += text.slice(region.start, region.end);
+    cursor = region.end;
   }
-  return removed ? segments.join("") : text;
+  emitRun(text.slice(cursor));
+  return removed ? collapsed : text;
 }
 
 export function sanitizeUserFacingText(

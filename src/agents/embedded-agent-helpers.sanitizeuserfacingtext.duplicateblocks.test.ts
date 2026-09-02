@@ -48,4 +48,20 @@ describe("sanitizeUserFacingText duplicate-block collapse", () => {
       sanitizeUserFacingText("note\n\n```python\n    keep_indent()\n```\n\nmore\n\nmore"),
     ).toBe("note\n\n```python\n    keep_indent()\n```\n\nmore");
   });
+
+  it("keeps an initial indented code block byte-for-byte", () => {
+    const reply = "    first\n\n    second\n\ntail\n\ntail";
+    // Leading indentation makes the first two chunks one indented code block;
+    // discovering regions after trimming would hide it from the parser and
+    // re-emit `first` as de-indented prose.
+    expect(sanitizeUserFacingText(reply)).toBe("    first\n\n    second\n\ntail");
+  });
+
+  it("ends the duplicate sequence at a protected code block", () => {
+    // Prose after an intervening protected block never compares across it, so
+    // the final `repeat` survives even though its text matches the first block.
+    expect(sanitizeUserFacingText("repeat\n\n    repeat\n\nrepeat")).toBe(
+      "repeat\n\n    repeat\n\nrepeat",
+    );
+  });
 });
