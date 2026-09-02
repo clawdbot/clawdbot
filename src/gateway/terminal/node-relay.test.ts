@@ -72,7 +72,11 @@ describe("createNodeRelayBackend", () => {
     registry.unregister("conn-validated");
   });
 
-  it("relays progress, input, resize, cancellation, and the node exit result", async () => {
+  it.each([
+    "codex.terminal.resume.v1",
+    "codex.terminal.start.v1",
+    "anthropic.claude.terminal.start.v1",
+  ])("%s relays progress, input, resize, cancellation, and exit", async (command) => {
     const invokeResult = deferred<NodeInvokeResult>();
     let onProgress: ((chunk: string) => void) | undefined;
     let signal: AbortSignal | undefined;
@@ -96,8 +100,10 @@ describe("createNodeRelayBackend", () => {
       registry,
       nodeId: "node-1",
       expectedConnId: "conn-1",
-      command: "codex.terminal.resume.v1",
-      params: { threadId: "thread" },
+      command,
+      params: command.includes(".start.")
+        ? { cwd: "/node/work", cols: 80, rows: 24 }
+        : { threadId: "thread" },
     });
     const data = vi.fn();
     const exit = vi.fn();

@@ -2926,7 +2926,7 @@ src/gateway/server-methods/talk-shared.ts	6
 src/gateway/server-methods/talk.ts	7
 src/gateway/server-methods/task-suggestions.ts	7
 src/gateway/server-methods/terminal-upload.ts	1
-src/gateway/server-methods/terminal.ts	7
+src/gateway/server-methods/terminal.ts	6
 src/gateway/server-methods/tools-catalog.ts	2
 src/gateway/server-methods/ui-command.ts	1
 src/gateway/server-methods/update.ts	2
@@ -3324,7 +3324,7 @@ src/node-host/node-worker-transfer-http.ts	2
 src/node-host/node-worker-tree-control.ts	2
 src/node-host/node-worker-workspace.ts	6
 src/node-host/plugin-node-host.ts	1
-src/node-host/pty-command.ts	11
+src/node-host/pty-command.ts	6
 src/node-host/runtime.ts	2
 src/node-host/skills.ts	1
 src/node-host/worker-support.ts	4

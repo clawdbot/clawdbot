@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDraftFixture } from "./draft-submission-flow.test-support.ts";
 import { NewSessionTitleController } from "./draft-title.ts";
+import type { NewSessionRouteData } from "./location.ts";
 import { TestReactiveControllerHost } from "./reactive-controller-host.test-support.ts";
 
 beforeEach(() => vi.useFakeTimers());
@@ -12,8 +13,10 @@ afterEach(() => {
 
 function titleFixture(
   request = async (_method: string): Promise<unknown> => ({ title: "Repair naming" }),
+  data?: NewSessionRouteData,
 ) {
   const fixture = createDraftFixture({
+    data,
     methods: ["sessions.create", "sessions.title.prepare", "worktrees.branches"],
     scopes: ["operator.read", "operator.write", "operator.admin"],
     agents: [
@@ -34,7 +37,7 @@ function titleFixture(
   });
   const titles = new NewSessionTitleController(new TestReactiveControllerHost(), () => ({
     context: fixture.context,
-    data: undefined,
+    data,
     place: fixture.place,
     submission: fixture.flow,
     dictating: false,
@@ -44,6 +47,29 @@ function titleFixture(
 }
 
 describe("prepared title creation handoff", () => {
+  it.each(["codex", "claude"])(
+    "does not send a native %s draft to title inference",
+    async (catalogId) => {
+      const { flow, request, titles } = titleFixture(undefined, {
+        agentId: "main",
+        requestedAgentId: "main",
+        catalogId,
+        catalogLabel: catalogId,
+        model: "",
+        startTerminal: true,
+      });
+      flow.setMessage("inspect this native-only workspace");
+      titles.hostUpdated();
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(
+        request.mock.calls.filter(([method]) => method === "sessions.title.prepare"),
+      ).toHaveLength(0);
+      expect(titles.available()).toBe(false);
+      titles.hostDisconnected();
+      flow.disconnect();
+    },
+  );
+
   it("uses a ready title at creation without changing an explicit worktree name", async () => {
     const { flow, context, place, titles } = titleFixture();
     place.toggleWorktree();

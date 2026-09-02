@@ -1,4 +1,5 @@
 import { safeParseJson } from "@openclaw/normalization-core";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   GATEWAY_CLIENT_CAPS,
   hasGatewayClientCap,
@@ -173,6 +174,7 @@ type TerminalSessionOpenRequest = {
   cols: number;
   rows: number;
   requiredCwd?: string;
+  requireCliAgents?: boolean;
   resolveCatalogPlan?: (agentId: string) => Promise<SessionCatalogTerminalPlan>;
   catalogFailureMessage?: string;
   failureHint?: string;
@@ -214,6 +216,8 @@ export async function openTerminalSession(
     | {
         plan: Extract<SessionCatalogTerminalPlan, { kind: "node" }>;
         params: Record<string, unknown>;
+        connId: string;
+        pairingGeneration?: string;
       }
     | undefined;
   let stageUpload: ((file: TerminalUploadFile) => Promise<TerminalUploadResult>) | undefined;
@@ -270,11 +274,11 @@ export async function openTerminalSession(
       let nodeParams: Record<string, unknown>;
       try {
         const parsed = JSON.parse(catalogPlan.paramsJSON) as unknown;
-        if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+        if (!isRecord(parsed)) {
           throw new Error("invalid params");
         }
         nodeParams = {
-          ...(parsed as Record<string, unknown>),
+          ...parsed,
           cols: request.cols,
           rows: request.rows,
         };
@@ -285,6 +289,13 @@ export async function openTerminalSession(
         );
         return;
       }
+      // Pairing promotion mutates NodeSession in place; freeze its identity before policy awaits.
+      nodeRelay = {
+        plan: nodeCatalogPlan,
+        params: nodeParams,
+        connId: access.node.connId,
+        pairingGeneration: access.node.pairingGeneration,
+      };
       let policyResult: Awaited<ReturnType<typeof applyPluginNodeInvokePolicy>>;
       try {
         policyResult = await waitForTerminalOpenDeadline(
@@ -316,7 +327,6 @@ export async function openTerminalSession(
         );
         return;
       }
-      nodeRelay = { plan: nodeCatalogPlan, params: nodeParams };
       stageUpload = async (file) =>
         await stageNodeTerminalUpload(context, nodeCatalogPlan.nodeId, file);
     }
@@ -330,6 +340,13 @@ export async function openTerminalSession(
         ErrorCodes.UNAVAILABLE,
         terminalFailureMessage("terminal connection closed", request.failureHint),
       ),
+    );
+    return;
+  }
+  if (request.requireCliAgents && context.getRuntimeConfig().gateway?.cliAgents?.enabled !== true) {
+    invalid(
+      respond,
+      "CLI agent terminal start is disabled; enable gateway.cliAgents.enabled and retry",
     );
     return;
   }
@@ -411,6 +428,14 @@ export async function openTerminalSession(
       );
       return;
     }
+    // Policy awaits cannot authorize a replacement connection or pairing.
+    if (
+      access.node.connId !== relay.connId ||
+      access.node.pairingGeneration !== relay.pairingGeneration
+    ) {
+      invalid(respond, "terminal node connection changed; refresh the host and retry");
+      return;
+    }
     createBackend = async () =>
       await createNodeRelayBackend({
         registry: context.nodeRegistry,
@@ -454,6 +479,7 @@ export async function openTerminalSession(
         agentId: spawnPlan.agentId,
         cwd: spawnPlan.cwd,
         shell: spawnPlan.shell,
+        ...(title ? { title } : {}),
         args: spawnPlan.args,
         cols: request.cols,
         rows: request.rows,
@@ -654,10 +680,18 @@ export const terminalHandlers: GatewayRequestHandlers = {
       opts.client?.connect?.caps,
       GATEWAY_CLIENT_CAPS.TERMINAL_OFFSET_SEQ,
     );
+    // Older protocol-4 clients validate closed reply shapes from before this metadata existed.
+    const supportsMetadata = hasGatewayClientCap(
+      opts.client?.connect?.caps,
+      GATEWAY_CLIENT_CAPS.TERMINAL_SESSION_METADATA,
+    );
     respond(true, {
       sessionId: attached.sessionId,
       agentId: attached.agentId,
       shell: attached.shell,
+      ...(supportsMetadata
+        ? { owner: attached.owner, ...(attached.title ? { title: attached.title } : {}) }
+        : {}),
       cwd: attached.cwd,
       confined: false,
       buffer: attached.buffer,
@@ -673,12 +707,17 @@ export const terminalHandlers: GatewayRequestHandlers = {
     }
     // An empty list (not an error) when the surface is off/unwired keeps the
     // reconnect flow simple: clients just fall back to opening fresh sessions.
+    const supportsMetadata = hasGatewayClientCap(
+      opts.client?.connect?.caps,
+      GATEWAY_CLIENT_CAPS.TERMINAL_SESSION_METADATA,
+    );
     const sessions =
       context.terminalSessions && terminalEnabled(context)
         ? context.terminalSessions.list().map((session) => ({
             sessionId: session.sessionId,
             agentId: session.agentId,
             shell: session.shell,
+            title: supportsMetadata ? session.title : undefined,
             cwd: session.cwd,
             // Mirrors terminal.open: only unconfined host shells exist today.
             confined: false,
