@@ -8,10 +8,8 @@ import {
   resetGatewayWorkAdmission,
 } from "../../process/gateway-work-admission.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
-import {
-  createChannelIngressMonitor,
-  type ChannelIngressMonitorLifecycle,
-} from "./ingress-monitor.js";
+import { createChannelIngressMonitor } from "./ingress-monitor.js";
+import type { ChannelIngressMonitorLifecycle } from "./ingress-monitor.types.js";
 import { createChannelIngressQueue, type ChannelIngressQueue } from "./ingress-queue.js";
 
 type RestartDrainProof = {

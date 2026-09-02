@@ -6,14 +6,14 @@
  * group config, then returns sender/route/command/activation projections plus
  * the ordered ingress graph.
  */
-import {
-  createChannelIngressMonitor,
-  type ChannelIngressMonitorDrainOptions,
-  type ChannelIngressMonitorFacts,
-  type ChannelIngressMonitorLifecycle,
-  type ChannelIngressMonitorPayloadCodec,
-  type CreateChannelIngressMonitorOptions,
-} from "../channels/message/ingress-monitor.js";
+import { createChannelIngressMonitor } from "../channels/message/ingress-monitor.js";
+import type {
+  ChannelIngressMonitorDrainOptions,
+  ChannelIngressMonitorFacts,
+  ChannelIngressMonitorLifecycle,
+  ChannelIngressMonitorPayloadCodec,
+  CreateChannelIngressMonitorOptions,
+} from "../channels/message/ingress-monitor.types.js";
 export {
   channelIngressRoutes,
   createChannelIngressResolver,

@@ -32,10 +32,8 @@ export {
   // private-local plugin-state-test-runtime subpath.
   DEFAULT_INGRESS_ADOPTION_STALL_MS,
 } from "../channels/message/ingress-drain.js";
-export {
-  CHANNEL_INGRESS_RETENTION_DEFAULTS,
-  createChannelIngressMonitor,
-} from "../channels/message/ingress-monitor.js";
+export { createChannelIngressMonitor } from "../channels/message/ingress-monitor.js";
+export { CHANNEL_INGRESS_RETENTION_DEFAULTS } from "../channels/message/ingress-monitor.types.js";
 export { createChannelIngressError } from "../channels/message/ingress-errors.js";
 export {
   DEFAULT_INGRESS_RETRY_DEAD_LETTER_MIN_AGE_MS,
@@ -185,7 +183,7 @@ export type { ChannelIngressDrain } from "../channels/message/ingress-drain.js";
 export type {
   ChannelIngressMonitorDeliveryResult,
   ChannelIngressMonitorLifecycle,
-} from "../channels/message/ingress-monitor.js";
+} from "../channels/message/ingress-monitor.types.js";
 export type {
   ChannelIngressQueue,
   ChannelIngressQueueClaim,
