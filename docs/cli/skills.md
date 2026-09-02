@@ -93,6 +93,9 @@ commands resolve the target workspace from `--agent <id>`, then the current
 working directory when it is inside a configured agent workspace, then the
 default agent.
 
+The skills table renders horizontal tabs as single spaces so descriptions
+stay aligned with the neighboring columns.
+
 `check` reports missing prerequisites independently of agent exclusion: a skill
 excluded by the agent allowlist can also appear under **Missing requirements**.
 Disabled skills and skills blocked by the bundled allowlist keep their separate

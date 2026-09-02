@@ -189,6 +189,10 @@ export type CronServiceDeps = {
     /** Optional heartbeat config override (e.g. target: "last" for cron-triggered heartbeats). */
     heartbeat?: HeartbeatWakeRequest["heartbeat"];
   }) => Promise<HeartbeatRunResult>;
+  /** Resolves the outer watchdog for an awaited heartbeat handoff. */
+  resolveHeartbeatTimeoutMs?: (
+    opts: HeartbeatWakeRequest & { agentId: string },
+  ) => number | undefined;
   runSkillCollectionReview?: (params: {
     agentId: string;
     abortSignal?: AbortSignal;

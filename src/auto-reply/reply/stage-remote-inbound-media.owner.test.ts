@@ -13,7 +13,7 @@ it.each([
   { agentId: "work", remoteMediaMode: "sandbox-or-cache" },
   { agentId: undefined, remoteMediaMode: "cache" },
 ] as const)(
-  "stages remote global media for $agentId in $remoteMediaMode mode",
+  "stages remote global media after a transient SCP failure for $agentId in $remoteMediaMode mode",
   async ({ agentId, remoteMediaMode }) => {
     await withOpenClawTestState({ label: "remote-media-owner" }, async (state) => {
       const cfg = {
@@ -35,17 +35,31 @@ it.each([
       vi.spyOn(mediaRoots, "resolveChannelRemoteInboundAttachmentRoots").mockReturnValue([
         "/synthetic/attachments",
       ]);
-      vi.spyOn(processExec, "runCommandWithTimeout").mockImplementation(async (argv) => {
-        await fs.writeFile(argv.at(-1)!, "remote attachment");
-        return {
-          code: 0,
-          stdout: "",
-          stderr: "",
-          signal: null,
-          killed: false,
-          termination: "exit",
-        };
-      });
+      let scpAttempts = 0;
+      const runScp = vi
+        .spyOn(processExec, "runCommandWithTimeout")
+        .mockImplementation(async (argv) => {
+          scpAttempts += 1;
+          if (scpAttempts === 1) {
+            return {
+              code: 1,
+              stdout: "",
+              stderr: "remote attachment is still materializing",
+              signal: null,
+              killed: false,
+              termination: "exit",
+            };
+          }
+          await fs.writeFile(argv.at(-1)!, "remote attachment");
+          return {
+            code: 0,
+            stdout: "",
+            stderr: "",
+            signal: null,
+            killed: false,
+            termination: "exit",
+          };
+        });
       const ctx = {
         MediaRemoteHost: "user@gateway-host",
         media: [{ path: "/synthetic/attachments/report.txt" }],
@@ -60,6 +74,7 @@ it.each([
           remoteMediaMode,
         }),
       ).toBe(true);
+      expect(runScp).toHaveBeenCalledTimes(2);
       const fact = ctx.media[0] as { path: string; workspaceDir?: string; staged?: boolean };
       expect(fact.staged).toBe(true);
       const staged = path.isAbsolute(fact.path)

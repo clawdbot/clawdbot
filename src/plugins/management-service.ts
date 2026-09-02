@@ -121,6 +121,7 @@ import {
   type HostedOfficialExternalPluginCatalogLoadResult,
   type OfficialExternalPluginCatalogEntry,
 } from "./official-external-plugin-catalog.js";
+import { tracksPluginDependencyStatus } from "./official-external-plugin-repair-hints.js";
 import {
   createPluginCache,
   getPluginCache,
@@ -341,7 +342,13 @@ function resolveManagedPluginDiagnostics(
     plugins: snapshot.index.plugins.map((record) => {
       const manifest = snapshot.byPluginId.get(record.pluginId);
       const enabled = isInstalledPluginEnabled(snapshot.index, record.pluginId, config);
-      if (manifest && record.origin !== "bundled" && !dependencies.has(manifest)) {
+      const tracksDependencies = tracksPluginDependencyStatus({
+        origin: record.origin,
+        pluginId: record.pluginId,
+        packageName: record.packageName,
+        packageBuild: record.packageBuild,
+      });
+      if (manifest && tracksDependencies && !dependencies.has(manifest)) {
         dependencies.set(
           manifest,
           buildPluginDependencyStatus({

@@ -7,6 +7,7 @@ import type {
   SessionEntrySummary,
 } from "./session-accessor.sqlite-contract.js";
 import {
+  hasSqliteSessionOwnerColumns,
   projectSqliteSessionOwner,
   type SqliteSessionOwnerRow,
 } from "./session-accessor.sqlite-owner-projection.js";
@@ -20,11 +21,33 @@ import type { SessionEntry } from "./types.js";
 type SessionStatusDatabase = Pick<OpenClawAgentKyselyDatabase, "session_nodes">;
 
 // Metadata readers do not own prompt snapshots. Strip those bytes before JS allocation;
-// malformed or SQLite-overdepth JSON still reaches the existing parser unchanged.
+// Malformed/overdepth JSON reaches the parser unchanged. Requiring an identity keeps
+// corrupt prompt-only objects distinct from the retained-window "{}" sentinel.
 export const sessionEntryMetadataJson =
   /* kysely-allow-raw: preserve raw-row parsing while omitting unused prompt payloads. */ sql<string>`CASE WHEN json_valid(entry_json)
-  THEN json_remove(entry_json, '$.skillsSnapshot', '$.systemPromptReport')
+  THEN CASE WHEN json_type(entry_json, '$.sessionId') = 'text'
+    THEN json_remove(entry_json, '$.skillsSnapshot', '$.systemPromptReport')
+    ELSE entry_json END
   ELSE entry_json END`.as("entry_json");
+
+export function selectSessionEntryRows(
+  database: Pick<OpenClawAgentDatabase, "db">,
+  projection: "full" | "list",
+) {
+  return getNodeSqliteKysely<SessionStatusDatabase>(database.db)
+    .selectFrom("session_nodes")
+    .select("session_key")
+    .select(projection === "full" ? "entry_json" : sessionEntryMetadataJson)
+    .$if(hasSqliteSessionOwnerColumns(database.db), (query) =>
+      query.select([
+        "owner_actor_type",
+        "owner_actor_id",
+        "owner_assigned_by_type",
+        "owner_assigned_by_id",
+        "owner_assigned_at",
+      ]),
+    );
+}
 
 // Canonical writers settle entry_valid; raw writes clear it. Inventory readers need
 // no payload for settled rows, but must retain parser semantics for pending/retained rows.
@@ -53,9 +76,18 @@ export function parseSessionEntryJson(
     entry_json: string;
     updated_at?: number;
   } & SqliteSessionOwnerRow,
+  projection: "full" | "list" = "full",
 ): SessionEntry | null {
   const record = parseSqliteSessionEntryRecord(row);
-  return record ? projectSqliteSessionOwner(projectCanonicalSessionEntryShape(record), row) : null;
+  if (!record) {
+    return null;
+  }
+  if (projection === "list") {
+    // SQLite-overdepth JSON bypasses SQL projection but must keep the same metadata contract.
+    delete record.skillsSnapshot;
+    delete record.systemPromptReport;
+  }
+  return projectSqliteSessionOwner(projectCanonicalSessionEntryShape(record), row);
 }
 
 export function readSessionEntriesByStatus(

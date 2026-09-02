@@ -3,8 +3,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import { createApplicationTheme } from "../../app/bootstrap-theme.ts";
 import type { ApplicationContext } from "../../app/context.ts";
-import { loadSettings, patchSettings } from "../../app/settings.ts";
+import { createGatewayStoreTestStore } from "../../app/gateway-store.test-support.ts";
+import { loadSettings, patchSettings, saveSettings } from "../../app/settings.ts";
 import {
   acquireBoardProviderForSession,
   boardProviderForSession,
@@ -84,11 +86,14 @@ function nullBoardProvider(sessionKey: string): BoardProvider {
   return boardProviderForSession({ sessionKey });
 }
 
+let theme: ReturnType<typeof createApplicationTheme>;
+
 function createTestPane(sessions: SessionCapability = {} as SessionCapability) {
   const pane = document.createElement("openclaw-chat-pane") as unknown as TestChatPane;
   const client = {} as GatewayBrowserClient;
   Object.defineProperty(pane, "isConnected", { configurable: true, value: true });
   pane.context = {
+    theme,
     sessions,
     gateway: { snapshot: { client, phase: "connected", hello: sessionMutationGatewayHello() } },
   } as unknown as ApplicationContext;
@@ -170,9 +175,14 @@ beforeEach(() => {
   vi.stubGlobal("localStorage", createStorageMock());
   vi.stubGlobal("sessionStorage", createStorageMock());
   window.history.replaceState({}, "", "/?mockBoard=1");
+  const settings = loadSettings();
+  theme = createApplicationTheme(settings, createGatewayStoreTestStore({ settings }).gateway);
 });
 
 afterEach(() => {
+  theme.dispose();
+  vi.restoreAllMocks();
+  saveSettings(loadSettings());
   window.history.replaceState({}, "", "/");
   localStorage.clear();
   sessionStorage.clear();
@@ -557,13 +567,14 @@ describe("chat pane board shell", () => {
     const pane = createTestPane();
     pane.routeFace = "dashboard";
     pane.boardProvider = mockBoardProvider("agent:main:current");
-    pane.state.settings = {
-      ...loadSettings(),
+    vi.spyOn(localStorage, "setItem").mockImplementation(() => {
+      throw new Error("Storage unavailable");
+    });
+    patchSettings({
       boardSessionViews: {
         "agent:main:current": { activeTabId: "research" },
       },
-    };
-    localStorage.clear();
+    });
 
     expect(pane.resolveBoardView()).toMatchObject({
       activeTabId: "research",

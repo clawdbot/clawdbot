@@ -516,7 +516,7 @@ describe("GitHub tool identity", () => {
     await fs.mkdir(profileDir, { recursive: true, mode: 0o700 });
     await fs.writeFile(
       path.join(profileDir, "hosts.yml"),
-      "github.com:\n  oauth_token: managed-token\n",
+      "github.com:\n  oauth_token: managed-publication-token\n",
       { mode: 0o600 },
     );
     const identity = await prepareGitHubPublicationIdentity({
@@ -545,11 +545,11 @@ describe("GitHub tool identity", () => {
 
     expect(identity.env).toMatchObject({
       GH_CONFIG_DIR: profileDir,
-      GH_TOKEN: "managed-token",
+      GH_TOKEN: "managed-publication-token",
       GITHUB_TOKEN: undefined,
       PREVIEW_SERVICE_TOKEN: undefined,
     });
-    expect(childEnv.GH_TOKEN).toBe("managed-token");
+    expect(childEnv.GH_TOKEN).toBe("managed-publication-token");
     expect(childEnv.GITHUB_TOKEN).toBeUndefined();
     expect(childEnv.GH_CONFIG_DIR).toBe(profileDir);
     expect(childEnv.PREVIEW_SERVICE_TOKEN).toBeUndefined();
@@ -573,9 +573,79 @@ describe("GitHub tool identity", () => {
     expect(fetch).toHaveBeenCalledWith(
       "https://api.github.com/user",
       expect.objectContaining({
-        headers: expect.objectContaining({ Authorization: "Bearer managed-token" }),
+        headers: expect.objectContaining({ Authorization: "Bearer managed-publication-token" }),
       }),
     );
+  });
+
+  it("token rotation bypasses the verification cache", async () => {
+    const root = tempDirs.make("openclaw-github-token-rotation-");
+    const profileId = "ghp_dddddddddddddddddddddddddddddddd";
+    const env = { OPENCLAW_STATE_DIR: root };
+    const config = { tools: { github: { profileId } } };
+    const profileDir = resolveManagedGitHubProfileDir({
+      agentId: "main",
+      scope: "system",
+      profileId,
+      env,
+    });
+    await fs.mkdir(profileDir, { recursive: true, mode: 0o700 });
+    const hosts = path.join(profileDir, "hosts.yml");
+    await fs.writeFile(hosts, "github.com:\n  oauth_token: rotation-token-a\n", { mode: 0o600 });
+    vi.mocked(fetch)
+      .mockResolvedValueOnce(new Response(JSON.stringify({ id: 202, login: "before-rotation" })))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ id: 303, login: "after-rotation" })));
+
+    const before = await prepareGitHubPublicationIdentity({ config, agentId: "main", env });
+    expect(before.account.login).toBe("before-rotation");
+    await fs.writeFile(hosts, "github.com:\n  oauth_token: rotation-token-b\n", { mode: 0o600 });
+    const after = await prepareGitHubPublicationIdentity({ config, agentId: "main", env });
+    expect(after.account).toMatchObject({ accountId: 303, login: "after-rotation" });
+    expect(fetch).toHaveBeenCalledTimes(2);
+    expect(fetch).toHaveBeenNthCalledWith(
+      1,
+      "https://api.github.com/user",
+      expect.objectContaining({
+        headers: expect.objectContaining({ Authorization: "Bearer rotation-token-a" }),
+      }),
+    );
+    expect(fetch).toHaveBeenNthCalledWith(
+      2,
+      "https://api.github.com/user",
+      expect.objectContaining({
+        headers: expect.objectContaining({ Authorization: "Bearer rotation-token-b" }),
+      }),
+    );
+  });
+
+  it("a disconnected profile is unavailable without a probe", async () => {
+    const root = tempDirs.make("openclaw-github-disconnected-");
+    const profileId = "ghp_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee";
+    const env = { OPENCLAW_STATE_DIR: root };
+    const config = { tools: { github: { profileId } } };
+    const profileDir = resolveManagedGitHubProfileDir({
+      agentId: "main",
+      scope: "system",
+      profileId,
+      env,
+    });
+    await fs.mkdir(profileDir, { recursive: true, mode: 0o700 });
+    await fs.writeFile(
+      path.join(profileDir, "hosts.yml"),
+      "github.com:\n  oauth_token: disconnected-token\n",
+      { mode: 0o600 },
+    );
+    expect(
+      (await prepareGitHubPublicationIdentity({ config, agentId: "main", env })).account.login,
+    ).toBe("managed-user");
+    await fs.rm(profileDir, { recursive: true });
+
+    await expect(
+      prepareGitHubPublicationIdentity({ config, agentId: "main", env }),
+    ).rejects.toThrow(
+      "The selected GitHub credential is unavailable; reconnect the agent's GitHub identity in Settings.",
+    );
+    expect(fetch).toHaveBeenCalledOnce();
   });
 
   it("removes a source-owned preview token from native publication commands", async () => {
@@ -688,7 +758,7 @@ describe("GitHub tool identity", () => {
     await fs.mkdir(profileDir, { recursive: true, mode: 0o700 });
     await fs.writeFile(
       path.join(profileDir, "hosts.yml"),
-      "github.com:\n  oauth_token: managed-token\n",
+      `github.com:\n  oauth_token: managed-status-${testCase.httpStatus}\n`,
       { mode: 0o600 },
     );
     vi.mocked(fetch).mockResolvedValue(

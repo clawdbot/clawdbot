@@ -4,7 +4,6 @@
 import { createInlineCodeState } from "../../packages/markdown-core/src/code-spans.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import type { AssistantMessage } from "../llm/types.js";
-import { coerceChatContentText } from "../shared/chat-content.js";
 import { resolveAssistantMessagePhase } from "../shared/chat-message-content.js";
 import { createTextProjection, trimTextFilter } from "../shared/text/text-projection.js";
 import { updateLiveEditDiffProgress } from "./embedded-agent-live-edit-diff.js";
@@ -14,7 +13,6 @@ import {
   recordPendingAssistantReplyDirectives,
 } from "./embedded-agent-subscribe.handlers.messages.replies.js";
 import {
-  buildAssistantStreamData,
   emitAssistantCommentaryStreamData,
   emitAssistantMessageStart,
   emitReasoningEnd,
@@ -67,6 +65,9 @@ export function handleMessageUpdate(
       ? (assistantEvent as Record<string, unknown>)
       : undefined;
   const evtType = typeof assistantRecord?.type === "string" ? assistantRecord.type : "";
+  if (evtType !== "text_delta") {
+    ctx.flushAssistantStream();
+  }
   const liveEditDiff = updateLiveEditDiffProgress(ctx.state.liveEditDiffStateById, assistantRecord);
   if (liveEditDiff) {
     const data = { phase: "input_delta", ...liveEditDiff };
@@ -87,7 +88,9 @@ export function handleMessageUpdate(
   const assistantPhase = resolveAssistantMessagePhase(msg);
   const suppressVisibleAssistantOutput = assistantPhase === "commentary";
   if (suppressVisibleAssistantOutput && !isResponsesTextEvent) {
-    const commentaryText = coerceChatContentText(extractAssistantCommentaryText(msg));
+    // Even hidden commentary closes the preceding visible-text scope.
+    ctx.flushAssistantStream();
+    const commentaryText = extractAssistantCommentaryText(msg);
     if (commentaryText) {
       appendRawStream(() => ({
         ts: Date.now(),
@@ -221,6 +224,7 @@ export function handleMessageUpdate(
   }
   if (streamContentIndex !== undefined) {
     if (streamContentIndex !== ctx.state.lastAssistantStreamContentIndex) {
+      ctx.flushAssistantStream();
       ctx.state.streamBlockText = "";
       ctx.state.streamBlockOffset = ctx.blockChunker.sourceLength;
     }
@@ -248,18 +252,18 @@ export function handleMessageUpdate(
     }
     const commentaryText = isResponsesCommentary
       ? ctx.state.deltaBuffer
-      : coerceChatContentText(extractAssistantCommentaryText(streamAssistant));
-    const commentaryData =
-      commentaryText && (chunk || !hadResponsesCommentaryText || evtType === "text_end")
-        ? buildAssistantStreamData({
-            text: commentaryText,
-            replace: true,
-            phase: "commentary",
-            itemId: deliveryItemId,
-          })
-        : undefined;
-    if (commentaryData) {
-      ctx.emitAssistantStreamData(commentaryData, { finalMessage: evtType === "text_end" });
+      : extractAssistantCommentaryText(streamAssistant);
+    if (commentaryText && (chunk || !hadResponsesCommentaryText || evtType === "text_end")) {
+      ctx.emitAssistantStreamData(
+        {
+          text: commentaryText,
+          delta: "",
+          replace: true,
+          phase: "commentary",
+          itemId: deliveryItemId,
+        },
+        { finalMessage: evtType === "text_end" },
+      );
     }
     return undefined;
   }
@@ -564,13 +568,15 @@ export function handleMessageUpdate(
             })
           : { hold: false, text: cleanedText };
       const releaseHeldSnapshot = currentSourcePartial.text !== cleanedText;
-      const data = buildAssistantStreamData({
-        text: currentSourcePartial.text,
-        delta: releaseHeldSnapshot ? currentSourcePartial.text : deltaText,
-        replace: releaseHeldSnapshot || replace,
-        phase: deliveryPhase ?? assistantPhase,
-      });
-      ctx.emitAssistantStreamData(data, { emitPartialReply: !currentSourcePartial.hold });
+      ctx.emitAssistantStreamData(
+        {
+          text: currentSourcePartial.text,
+          delta: releaseHeldSnapshot ? currentSourcePartial.text : deltaText,
+          replace: releaseHeldSnapshot || replace || undefined,
+          phase: deliveryPhase ?? assistantPhase,
+        },
+        { emitPartialReply: !currentSourcePartial.hold },
+      );
     }
   }
 

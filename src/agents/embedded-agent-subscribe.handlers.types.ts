@@ -68,14 +68,6 @@ export type AssistantStreamData = {
   itemId?: string;
 };
 
-/** Deferred assistant stream event plus whether it should emit partial replies. */
-type AssistantStreamDelivery = {
-  data: AssistantStreamData;
-  eventData?: AssistantStreamData;
-  emitPartialReply: boolean;
-  finalMessage?: boolean;
-};
-
 /** Incremental tag and Markdown parsing state, owned by one stream lane. */
 export type StreamBlockState = {
   thinking: boolean;
@@ -172,7 +164,6 @@ export type EmbeddedAgentSubscribeState = {
   lastDeliveredBlockReplyText?: string;
   deferBlockReplyDelivery: boolean;
   deferredBlockReplies: BlockReplyPayload[];
-  deferredAssistantEvents: AssistantStreamDelivery[];
   toolExecutionSinceLastBlockReply: boolean;
   reasoningStreamOpen: boolean;
   assistantMessageIndex: number;
@@ -308,9 +299,9 @@ export type EmbeddedAgentSubscribeContext = {
     payload: BlockReplyPayload,
     options?: { assistantMessageIndex?: number; consumePendingToolMedia?: boolean },
   ) => void;
-  flushDeferredAssistantEvents: () => void;
+  flushAssistantStream: () => void;
   flushDeferredBlockReplies: () => void;
-  clearDeferredAssistantEvents: () => void;
+  clearAssistantStream: () => void;
   clearDeferredBlockReplies: () => void;
 };
 

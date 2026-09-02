@@ -4966,6 +4966,47 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     expect(callGateway).toHaveBeenCalledTimes(2);
   });
 
+  it("runs the full retry schedule for a typed adapter-resolution failure", async () => {
+    const adapterUnavailable = new PlatformMessageNotDispatchedError(
+      "Outbound not configured for channel: slack",
+      { cause: new Error("adapter unavailable") },
+    );
+    const callGateway = vi
+      .fn()
+      .mockRejectedValueOnce(adapterUnavailable)
+      .mockRejectedValueOnce(adapterUnavailable)
+      .mockRejectedValueOnce(adapterUnavailable)
+      .mockResolvedValueOnce({ result: { payloads: [{ text: "recovered child completion" }] } });
+
+    const result = await deliverSlackChannelAnnouncement({
+      callGateway: callGateway as typeof runtimeCallGateway,
+      directIdempotencyKey: "announce-adapter-resolution-retry",
+    });
+
+    expect(result).toMatchObject({ delivered: true, path: "direct" });
+    expect(callGateway).toHaveBeenCalledTimes(4);
+  });
+
+  it("keeps an exhausted typed adapter-resolution failure retryable", async () => {
+    const callGateway: typeof runtimeCallGateway = vi.fn(async () => {
+      throw new PlatformMessageNotDispatchedError("Outbound not configured for channel: slack", {
+        cause: new Error("adapter unavailable"),
+      });
+    });
+
+    const result = await deliverSlackChannelAnnouncement({
+      callGateway,
+      directIdempotencyKey: "announce-adapter-resolution-exhausted",
+    });
+
+    expect(result).toMatchObject({
+      delivered: false,
+      path: "direct",
+      disposition: "retryable",
+    });
+    expect(callGateway).toHaveBeenCalledTimes(4);
+  });
+
   it.each([
     {
       name: "a wrapped permanent channel failure",

@@ -6,6 +6,7 @@ import type {
   BoardWidgetDeclared,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { clearGitHubCredentialVerificationCache } from "../../agents/github-oauth-client.js";
 import { resolveManagedGitHubProfileDir } from "../../agents/github-tool-identity.js";
 import { createTestBoardStore } from "../../boards/board-store.test-support.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -93,6 +94,7 @@ describe("board authenticated GitHub Actions", () => {
 
   beforeEach(async () => {
     resetPluginRuntimeStateForTest();
+    clearGitHubCredentialVerificationCache();
     state = await createOpenClawTestState({
       prefix: "board-github-",
       env: { GH_TOKEN: undefined, GITHUB_TOKEN: undefined },
@@ -265,6 +267,9 @@ describe("board authenticated GitHub Actions", () => {
       ]);
       const before = store.getSnapshot(target);
       broadcast.mockClear();
+      // Verified credentials are reused within their TTL; expire the entry so the
+      // next pin must prove the credential again.
+      clearGitHubCredentialVerificationCache();
       account.mockImplementationOnce(async () => new Response(token, { status: 401 }));
       const denied = await invoke("board.widget.put", input);
       expect(denied.mock.calls[0]?.[0]).toBe(false);
@@ -691,6 +696,7 @@ describe("board authenticated GitHub Actions", () => {
       const survivor = surviving === "leader" ? leader : follower;
       expect((await survivor.read()).mock.calls[0]).toEqual([true, result]);
       expect(actionCalls()).toHaveLength(1);
+      clearGitHubCredentialVerificationCache();
       account.mockImplementationOnce(async () => {
         await survivor.invoke("board.update", {
           sessionKey: "agent:main:runs",

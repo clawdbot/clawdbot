@@ -218,6 +218,16 @@ setup workspace ~/Projects/work
 `setup` preserves the verified effective model. It does not configure or
 replace inference.
 
+Delegated setup remains tied to the requesting run through configuration,
+workspace, and session preparation. If that run ends or loses authority,
+OpenClaw stops before starting the next persistent effect. Earlier completed
+effects remain, including an agent whose creation already finished; setup may
+still be incomplete. Check `openclaw agents list` and `status`, then request
+setup again from an active run and approve the new request, or finish directly
+with `openclaw setup` on the Gateway host. If cancellation deferred legacy
+history migration for a newly named agent, the next Gateway startup retries it;
+use `openclaw doctor --fix` on the same state/config to finish it sooner.
+
 If inference is missing or its live check fails, leave OpenClaw and run `openclaw onboard`. Guided onboarding tries the configured model first, then authenticated subscription CLIs, API keys, and remaining supported CLIs; it asks each candidate for a real reply and persists only a passing route. OpenClaw starts immediately after that boundary and can then configure the workspace, Gateway, channels, agents, plugins, and other optional features.
 
 The macOS app skips this ladder entirely when it reaches a configured Gateway

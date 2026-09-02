@@ -42,6 +42,7 @@ export type {
   SessionsFilesSetResult as SessionWorkspaceSetResult,
   CronJob,
   CronRunLogEntry,
+  CronScratchGetResult,
   UpdateAvailable,
   UpdateHoldResult,
   UpdateScheduleState,

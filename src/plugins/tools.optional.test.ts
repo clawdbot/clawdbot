@@ -1429,24 +1429,27 @@ describe("resolvePluginTools optional tools", () => {
     expect(factory).not.toHaveBeenCalled();
   });
 
-  it("invokes unnamed optional tool factories when a tool allowlist may match the result", () => {
-    const factory = vi.fn(() => makeTool("optional_tool"));
-    setRegistry([
-      {
-        pluginId: "optional-demo",
-        optional: true,
-        source: "/tmp/optional-demo.js",
-        names: [],
-        declaredNames: ["optional_tool"],
-        factory,
-      },
-    ]);
+  it.each(["optional_tool", "optional_*"])(
+    "invokes unnamed optional tool factories for %s",
+    (allowedName) => {
+      const factory = vi.fn(() => makeTool("optional_tool"));
+      setRegistry([
+        {
+          pluginId: "optional-demo",
+          optional: true,
+          source: "/tmp/optional-demo.js",
+          names: [],
+          declaredNames: ["optional_tool"],
+          factory,
+        },
+      ]);
 
-    const tools = resolveOptionalDemoTools(["optional_tool"]);
+      const tools = resolveOptionalDemoTools([allowedName]);
 
-    expectResolvedToolNames(tools, ["optional_tool"]);
-    expect(factory).toHaveBeenCalledTimes(1);
-  });
+      expectResolvedToolNames(tools, ["optional_tool"]);
+      expect(factory).toHaveBeenCalledTimes(1);
+    },
+  );
 
   it("applies an additive runtime grant only to its owning plugin", () => {
     const ownerFactory = vi.fn(() => makeTool("optional_tool"));
@@ -1480,6 +1483,47 @@ describe("resolvePluginTools optional tools", () => {
     expectResolvedToolNames(tools, ["optional_tool"]);
     expect(ownerFactory).toHaveBeenCalledTimes(1);
     expect(foreignFactory).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { pluginId: "optional-*", toolNames: ["optional_tool"] },
+    { pluginId: "optional-demo", toolNames: ["optional_*"] },
+  ])("keeps runtime grants exact for $pluginId / $toolNames", (runtimePluginToolGrant) => {
+    const factory = vi.fn(() => makeTool("optional_tool"));
+    setRegistry([
+      createNamedToolEntry("optional-demo", "optional_tool", { optional: true, factory }),
+    ]);
+
+    expect(resolvePluginTools(createResolveToolsParams({ runtimePluginToolGrant }))).toEqual([]);
+    expect(factory).not.toHaveBeenCalled();
+  });
+
+  it("reprojects wildcard-selected optional descriptors through narrower allows and denies", async () => {
+    const names = ["bridge__ping", "bridge__other", "unrelated_tool"];
+    const factory = vi.fn(() => names.map(makeTool));
+    setRegistry([createNamedToolEntry("bridge-owner", names, { optional: true, factory })]);
+    const first = resolvePluginTools(createResolveToolsParams({ toolAllowlist: ["BRIDGE__*"] }));
+    const second = resolvePluginTools(
+      createResolveToolsParams({
+        toolAllowlist: ["bridge__*"],
+        toolDenylist: ["*other"],
+      }),
+    );
+
+    expectResolvedToolNames(first, ["bridge__ping", "bridge__other"]);
+    expectResolvedToolNames(second, ["bridge__ping"]);
+    expect(second[0]).not.toBe(first[0]);
+    expect(factory).toHaveBeenCalledTimes(1);
+    expect(resolvePluginTools(createResolveToolsParams({ toolAllowlist: ["absent__*"] }))).toEqual(
+      [],
+    );
+    expect(factory).toHaveBeenCalledTimes(1);
+    await expect(
+      expectDefined(second[0], "cached ping tool").execute("cached-ping", {}, undefined),
+    ).resolves.toEqual({
+      content: [{ type: "text", text: "ok" }],
+    });
+    expect(factory).toHaveBeenCalledTimes(2);
   });
 
   it("uses declared names for an unnamed owner-scoped factory and preserves denies", () => {
@@ -1517,6 +1561,10 @@ describe("resolvePluginTools optional tools", () => {
     {
       name: "allows optional tools by tool name",
       toolAllowlist: ["optional_tool"],
+    },
+    {
+      name: "allows optional tools by case-insensitive wildcard",
+      toolAllowlist: ["OPTIONAL_*"],
     },
     {
       name: "allows optional tools via plugin id",

@@ -825,20 +825,27 @@ function trustedMainFullFixture() {
   return { ...fixture, client, manifest, runs };
 }
 
-function trustedMainNpmBetaFixture() {
+function trustedMainNpmFixture(releaseProfile: "beta" | "stable" = "beta") {
   const fixture = trustedMainFullFixture();
-  const targetVersion = "2026.8.28-beta.1";
-  Object.assign(fixture.manifest, { releaseProfile: "beta", runReleaseSoak: "false" });
+  const beta = releaseProfile === "beta";
+  const coveragePolicy = beta ? "npm-beta-v1" : "npm-stable-v1";
+  const targetVersion = beta ? "2026.8.28-beta.1" : "2026.8.28";
+  Object.assign(fixture.manifest, { releaseProfile, runReleaseSoak: String(!beta) });
   Object.assign(fixture.manifest.validationInputs, {
-    coveragePolicy: "npm-beta-v1",
-    skipPackageTelegramE2e: "true",
+    coveragePolicy,
+    skipPackageTelegramE2e: String(beta),
+    targetContextRef: "release/2026.8.28",
     targetVersion,
   });
-  fixture.manifest.controls.performanceBlocking = false;
-  fixture.manifest.childRuns.productPerformance = { blocking: false, conclusion: "", runId: "" };
+  fixture.manifest.controls.performanceBlocking = !beta;
+  fixture.manifest.controls.stableSoakRequired = !beta;
+  if (beta) {
+    fixture.manifest.childRuns.productPerformance = { blocking: false, conclusion: "", runId: "" };
+  }
   const plannedChildren = expectedChildDispatches(fixture.runId, 1, "main", 3).map((child) => {
     const run = fixture.runs.find((entry) => entry.display_title === child.displayTitle);
-    const selected = !["productPerformance", "npmTelegram"].includes(child.manifestKey);
+    const selected =
+      child.manifestKey !== "npmTelegram" && !(beta && child.manifestKey === "productPerformance");
     return {
       displayTitle: child.displayTitle,
       key: child.manifestKey,
@@ -858,15 +865,15 @@ function trustedMainNpmBetaFixture() {
     attemptEvidenceVersion: 3,
     candidate: null,
     children: plannedChildren,
-    coveragePolicy: "npm-beta-v1",
+    coveragePolicy,
     evidenceReuse: { requested: false },
     expected: {
       candidateRequest: buildFullReleaseCandidateRequest({
         repository: "openclaw/openclaw",
         targetSha: fixture.targetSha,
         toolingSha: fixture.workflowSha,
-        releaseProfile: "beta",
-        releaseSoak: false,
+        releaseProfile,
+        releaseSoak: !beta,
         upgradeSurvivorBaseline: "openclaw@latest",
         upgradeSurvivorBaselines: "",
         upgradeSurvivorScenarios: "",
@@ -882,34 +889,38 @@ function trustedMainNpmBetaFixture() {
       workflowSha: fixture.workflowSha,
     },
     gates: [{ name: "Resolve target ref", required: true, result: "success" }],
-    releaseProfile: "beta",
+    releaseProfile,
     rerunGroup: "all",
     targetVersion,
     trustedWorkflow: { fullRef: "refs/heads/main", ref: "main", sha: fixture.workflowSha },
   });
   const jobs = [{ ...fixture.parentJob, name: "test" }];
-  const composite = composeReleaseAttemptJobs([{ jobs, runAttempt: 1 }], {
-    effectiveRunAttempt: 1,
-    plannedRunAttempt: 1,
-  });
+  const performanceJobs = [{ ...fixture.parentJob, name: "Verify artifact-only report mode" }];
+  const jobsForChild = (key: string) => (key === "productPerformance" ? performanceJobs : jobs);
   Object.assign(fixture.manifest, {
     childEvidence: Object.fromEntries(
       plannedChildren
         .filter((child) => child.selected)
-        .map((child) => [
-          child.key,
-          {
-            compositeJobsSha256: composite.sha256,
-            dispatchActor: "github-actions[bot]",
-            effectiveRunAttempt: 1,
-            jobs: composite.jobs,
-            observedRunAttempts: [1],
-            plannedRunAttempt: 1,
-            repository: "openclaw/openclaw",
-            runId: child.runId,
-            triggeringActor: "github-actions[bot]",
-          },
-        ]),
+        .map((child) => {
+          const composite = composeReleaseAttemptJobs(
+            [{ jobs: jobsForChild(child.key), runAttempt: 1 }],
+            { effectiveRunAttempt: 1, plannedRunAttempt: 1 },
+          );
+          return [
+            child.key,
+            {
+              compositeJobsSha256: composite.sha256,
+              dispatchActor: "github-actions[bot]",
+              effectiveRunAttempt: 1,
+              jobs: composite.jobs,
+              observedRunAttempts: [1],
+              plannedRunAttempt: 1,
+              repository: "openclaw/openclaw",
+              runId: child.runId,
+              triggeringActor: "github-actions[bot]",
+            },
+          ];
+        }),
     ),
     executionPlanSha256: executionPlan.sha256,
     sourceParentRunAttempt: 1,
@@ -917,8 +928,17 @@ function trustedMainNpmBetaFixture() {
   const originalLog = fixture.client.getJobLog;
   const client = {
     ...fixture.client,
-    getJobLog: vi.fn((jobId: number) => `${originalLog(jobId)}\nCI_RELEASE_SCOPE: npm-beta`),
-    getRunAttemptJobs: vi.fn(() => jobs),
+    getJobLog: vi.fn(
+      (jobId: number) => `${originalLog(jobId)}\nCI_RELEASE_SCOPE: npm-${releaseProfile}`,
+    ),
+    getRunAttemptJobs: vi.fn((runId: string) =>
+      jobsForChild(
+        expectDefined(
+          plannedChildren.find((child) => child.runId === runId),
+          "child",
+        ).key,
+      ),
+    ),
     loadExecutionPlan: vi.fn<() => ReleaseExecutionPlan | undefined>(() => executionPlan),
   };
   return { ...fixture, client, executionPlan };
@@ -1388,7 +1408,7 @@ describe("release CI summary child correlation", () => {
   });
 
   it("verifies all five selected children for sealed npm beta coverage", async () => {
-    const fixture = trustedMainNpmBetaFixture();
+    const fixture = trustedMainNpmFixture();
     const options = {
       runId: fixture.runId,
       verifierSourceContent: readFileSync(SCRIPT),
@@ -1409,6 +1429,60 @@ describe("release CI summary child correlation", () => {
     await expect(validateReleaseRunEvidence(options, fixture.client)).rejects.toThrow();
   });
 
+  it("retains blocking product performance in sealed npm stable evidence", async () => {
+    const fixture = trustedMainNpmFixture("stable");
+    const options = {
+      runId: fixture.runId,
+      verifierSourceContent: readFileSync(SCRIPT),
+      verifierSourceSha: "c".repeat(40),
+    };
+    const evidence = await validateReleaseRunEvidence(options, fixture.client);
+    expect(evidence.children.map((child: { role: string }) => child.role).toSorted()).toEqual([
+      "normalCi",
+      "pluginPrereleaseCandidate",
+      "pluginPrereleaseIndependent",
+      "productPerformance",
+      "releaseChecksCandidate",
+      "releaseChecksIndependent",
+    ]);
+    expect(evidence.runReleaseSoak).toBe(true);
+    expect(fixture.client.getRunAttemptJobs).toHaveBeenCalledTimes(6);
+    const performance = expectDefined(
+      fixture.runs.find((run) => run.path === ".github/workflows/openclaw-performance.yml"),
+      "performance child",
+    );
+    performance.conclusion = "failure";
+    await expect(validateReleaseRunEvidence(options, fixture.client)).rejects.toThrow();
+  });
+
+  it.each(["context", "blocking-performance", "soak-control", "soak", "missing-plan"])(
+    "rejects incomplete npm stable qualification: %s",
+    async (drift) => {
+      const fixture = trustedMainNpmFixture("stable");
+      if (drift === "context") {
+        fixture.manifest.validationInputs.targetContextRef = "";
+      } else if (drift === "blocking-performance") {
+        fixture.manifest.controls.performanceBlocking = false;
+      } else if (drift === "soak-control") {
+        fixture.manifest.controls.stableSoakRequired = false;
+      } else if (drift === "soak") {
+        fixture.manifest.runReleaseSoak = "false";
+      } else {
+        fixture.client.loadExecutionPlan.mockReturnValue(undefined);
+      }
+      await expect(
+        validateReleaseRunEvidence(
+          {
+            runId: fixture.runId,
+            verifierSourceContent: readFileSync(SCRIPT),
+            verifierSourceSha: "c".repeat(40),
+          },
+          fixture.client,
+        ),
+      ).rejects.toThrow();
+    },
+  );
+
   it.each([
     "missing-plan",
     "missing-marker",
@@ -1417,7 +1491,7 @@ describe("release CI summary child correlation", () => {
     "deferred-run",
     "package-telegram",
   ])("rejects npm beta coverage drift: %s", async (drift) => {
-    const fixture = trustedMainNpmBetaFixture();
+    const fixture = trustedMainNpmFixture();
     if (drift === "missing-plan") {
       fixture.client.loadExecutionPlan.mockReturnValue(undefined);
     } else if (drift === "missing-marker") {
@@ -1450,71 +1524,85 @@ describe("release CI summary child correlation", () => {
     ).rejects.toThrow();
   });
 
-  it.each(["version", "reused", "group", "profile", "soak", "inputs", "coverage", "target"])(
-    "rejects an ineligible reuse %s before fetching child evidence",
-    async (mismatch) => {
-      const fixture = trustedMainFullFixture();
-      const reuseRequest = {
-        releaseProfile: "full",
-        runReleaseSoak: "true",
-        targetSha: fixture.targetSha,
-        validationInputs: { ...fixture.manifest.validationInputs },
-      };
-      switch (mismatch) {
-        case "version":
-          fixture.manifest.version = 3;
-          break;
-        case "reused":
-          fixture.manifest.evidenceReuse = {
-            changedPaths: [],
-            evidenceSha: fixture.targetSha,
-            policy: "exact-target-full-validation-v1",
-            runId: "29090000000",
-            selectedRunId: "29090000000",
-          };
-          break;
-        case "group":
-          fixture.manifest.rerunGroup = "package";
-          break;
-        case "profile":
-          reuseRequest.releaseProfile = "beta";
-          break;
-        case "soak":
-          reuseRequest.runReleaseSoak = "false";
-          break;
-        case "inputs":
-          reuseRequest.validationInputs.provider = "anthropic";
-          break;
-        case "coverage":
-          reuseRequest.validationInputs.coveragePolicy = "npm-beta-v1";
-          break;
-        case "target":
-          reuseRequest.targetSha = "7".repeat(40);
-          fixture.client.compareCommits = () => ({
-            files: [{ filename: "src/index.ts", status: "modified" }],
-            merge_base_commit: { sha: fixture.targetSha },
-            status: "ahead",
-          });
-      }
-      await expect(
-        validateReleaseRunEvidence(
-          {
-            reuseRequest,
-            runId: fixture.runId,
-            verifierSourceContent: readFileSync(SCRIPT),
-            verifierSourceSha: "c".repeat(40),
-          },
-          fixture.client,
-        ),
-      ).rejects.toThrow(
-        mismatch === "target" ? "failed commit comparison" : "ineligible reuse candidate",
-      );
-      expect(fixture.client.getRun).toHaveBeenCalledExactlyOnceWith(fixture.runId);
-      expect(fixture.client.loadExecutionPlan).not.toHaveBeenCalled();
-      expect(fixture.client.getParentJobs).not.toHaveBeenCalled();
-      expect(fixture.client.getJobLog).not.toHaveBeenCalled();
-    },
-  );
+  it.each([
+    "version",
+    "reused",
+    "group",
+    "profile",
+    "soak",
+    "inputs",
+    "coverage",
+    "stable-coverage",
+    "target-context",
+    "target",
+  ])("rejects an ineligible reuse %s before fetching child evidence", async (mismatch) => {
+    const fixture = trustedMainFullFixture();
+    const reuseRequest = {
+      releaseProfile: "full",
+      runReleaseSoak: "true",
+      targetSha: fixture.targetSha,
+      validationInputs: { ...fixture.manifest.validationInputs },
+    };
+    switch (mismatch) {
+      case "version":
+        fixture.manifest.version = 3;
+        break;
+      case "reused":
+        fixture.manifest.evidenceReuse = {
+          changedPaths: [],
+          evidenceSha: fixture.targetSha,
+          policy: "exact-target-full-validation-v1",
+          runId: "29090000000",
+          selectedRunId: "29090000000",
+        };
+        break;
+      case "group":
+        fixture.manifest.rerunGroup = "package";
+        break;
+      case "profile":
+        reuseRequest.releaseProfile = "beta";
+        break;
+      case "soak":
+        reuseRequest.runReleaseSoak = "false";
+        break;
+      case "inputs":
+        reuseRequest.validationInputs.provider = "anthropic";
+        break;
+      case "coverage":
+        reuseRequest.validationInputs.coveragePolicy = "npm-beta-v1";
+        break;
+      case "stable-coverage":
+        reuseRequest.validationInputs.coveragePolicy = "npm-stable-v1";
+        break;
+      case "target-context":
+        reuseRequest.validationInputs.targetContextRef = "release/2026.8.28-1";
+        break;
+      case "target":
+        reuseRequest.targetSha = "7".repeat(40);
+        fixture.client.compareCommits = () => ({
+          files: [{ filename: "src/index.ts", status: "modified" }],
+          merge_base_commit: { sha: fixture.targetSha },
+          status: "ahead",
+        });
+    }
+    await expect(
+      validateReleaseRunEvidence(
+        {
+          reuseRequest,
+          runId: fixture.runId,
+          verifierSourceContent: readFileSync(SCRIPT),
+          verifierSourceSha: "c".repeat(40),
+        },
+        fixture.client,
+      ),
+    ).rejects.toThrow(
+      mismatch === "target" ? "failed commit comparison" : "ineligible reuse candidate",
+    );
+    expect(fixture.client.getRun).toHaveBeenCalledExactlyOnceWith(fixture.runId);
+    expect(fixture.client.loadExecutionPlan).not.toHaveBeenCalled();
+    expect(fixture.client.getParentJobs).not.toHaveBeenCalled();
+    expect(fixture.client.getJobLog).not.toHaveBeenCalled();
+  });
 
   it.each([false, true])(
     "collects independent child evidence concurrently and drains reads (failure=%s)",
@@ -1528,7 +1616,9 @@ describe("release CI summary child correlation", () => {
         async getJobLog(jobId: number) {
           active += 1;
           peak = Math.max(peak, active);
-          await new Promise<void>((complete) => setImmediate(complete));
+          await new Promise<void>((complete) => {
+            setImmediate(complete);
+          });
           active -= 1;
           completed += 1;
           if (failure && jobId === 201) {

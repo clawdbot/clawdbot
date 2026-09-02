@@ -1893,13 +1893,17 @@ describe("Codex app-server native code mode config", () => {
       expect(request).not.toHaveProperty("effort");
       expect(request).not.toHaveProperty("collaborationMode");
       expect(request).not.toHaveProperty("personality");
-      expect(request.additionalContext).toEqual(
-        notice
+      expect(request.additionalContext).toEqual({
+        openclaw_temporal_context: {
+          kind: "application",
+          value: expect.stringContaining("## Temporal Context"),
+        },
+        ...(notice
           ? {
               openclaw_permission_change: { kind: "application", value: notice },
             }
-          : undefined,
-      );
+          : {}),
+      });
     },
   );
 

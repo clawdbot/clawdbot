@@ -4,8 +4,10 @@ import {
   copyFileSync,
   existsSync,
   mkdirSync,
+  readlinkSync,
   readFileSync,
   readdirSync,
+  realpathSync,
   renameSync,
   rmSync,
   symlinkSync,
@@ -46,6 +48,22 @@ const standaloneBundledChannelSmokeFiles = [
   "scripts/process-warning-filter.mts",
 ];
 
+function linkFixtureParent(packageRoot: string) {
+  const nodeModulesRoot = path.join(packageRoot, "node_modules");
+  const parentRoot = path.join(
+    nodeModulesRoot,
+    ".pnpm",
+    "fixture-parent@1.0.0",
+    "node_modules",
+    "fixture-parent",
+  );
+  symlinkSync(
+    process.platform === "win32" ? parentRoot : path.relative(nodeModulesRoot, parentRoot),
+    path.join(nodeModulesRoot, "fixture-parent"),
+    process.platform === "win32" ? "junction" : "dir",
+  );
+}
+
 function createBundledChannelSmokeFixture(entrySource: string, prepared = false) {
   const rootDir = tempDirs.make("openclaw-prepack-standalone-smoke-");
   for (const relativePath of standaloneBundledChannelSmokeFiles) {
@@ -67,12 +85,45 @@ function createBundledChannelSmokeFixture(entrySource: string, prepared = false)
   );
   writeFileSync(path.join(extensionRoot, "index.js"), entrySource);
 
-  return { rootDir, packageRoot };
+  const nodeModulesRoot = path.join(packageRoot, "node_modules");
+  const parentStoreRoot = path.join(
+    nodeModulesRoot,
+    ".pnpm",
+    "fixture-parent@1.0.0",
+    "node_modules",
+  );
+  const parentRoot = path.join(parentStoreRoot, "fixture-parent");
+  const siblingRoot = path.join(parentStoreRoot, "fixture-sibling");
+  mkdirSync(parentRoot, { recursive: true });
+  mkdirSync(siblingRoot);
+  writeFileSync(
+    path.join(parentRoot, "package.json"),
+    '{"name":"fixture-parent","version":"1.0.0","type":"module","exports":"./index.js"}\n',
+  );
+  writeFileSync(
+    path.join(parentRoot, "index.js"),
+    'import { value } from "fixture-sibling"; export const fixtureValue = value;\n',
+  );
+  writeFileSync(
+    path.join(siblingRoot, "package.json"),
+    '{"name":"fixture-sibling","version":"1.0.0","type":"module","exports":"./index.js"}\n',
+  );
+  writeFileSync(path.join(siblingRoot, "index.js"), 'export const value = "fixture-channel";\n');
+  linkFixtureParent(packageRoot);
+
+  return {
+    rootDir,
+    packageRoot,
+    dependencyFiles: {
+      parent: readFileSync(path.join(parentRoot, "index.js"), "utf8"),
+      sibling: readFileSync(path.join(siblingRoot, "index.js"), "utf8"),
+    },
+  };
 }
 
 function createPreparedPrepackFixture(entrySource: string) {
   const { rootDir } = createBundledChannelSmokeFixture(entrySource, true);
-  mkdirSync(path.join(rootDir, "node_modules"));
+  mkdirSync(path.join(rootDir, "node_modules"), { recursive: true });
   symlinkSync(
     path.dirname(fileURLToPath(import.meta.resolve("tsx/package.json"))),
     path.join(rootDir, "node_modules/tsx"),
@@ -185,13 +236,20 @@ type BundledChannelSmokeLayout = "source" | "installed-env" | "installed-path";
 
 function runStandaloneBundledChannelSmoke(entrySource: string, layout: BundledChannelSmokeLayout) {
   const fixture = createBundledChannelSmokeFixture(entrySource);
-  const { rootDir } = fixture;
+  const { dependencyFiles, rootDir } = fixture;
   let { packageRoot } = fixture;
   if (layout === "installed-path") {
     const installedRoot = path.join(rootDir, "node_modules", "openclaw");
     mkdirSync(path.dirname(installedRoot), { recursive: true });
     renameSync(packageRoot, installedRoot);
     packageRoot = installedRoot;
+    if (process.platform === "win32") {
+      rmSync(path.join(packageRoot, "node_modules/fixture-parent"), {
+        recursive: true,
+        force: true,
+      });
+      linkFixtureParent(packageRoot);
+    }
   }
   const temporaryRoot = path.join(rootDir, "smoke-temp");
   mkdirSync(temporaryRoot);
@@ -230,6 +288,27 @@ function runStandaloneBundledChannelSmoke(entrySource: string, layout: BundledCh
       path.join(packageRoot, "dist", "extensions", "fixture-channel", "index.js"),
       "utf8",
     ),
+    dependencyFiles: {
+      parent: readFileSync(
+        path.join(
+          packageRoot,
+          "node_modules/.pnpm/fixture-parent@1.0.0/node_modules/fixture-parent/index.js",
+        ),
+        "utf8",
+      ),
+      sibling: readFileSync(
+        path.join(
+          packageRoot,
+          "node_modules/.pnpm/fixture-parent@1.0.0/node_modules/fixture-sibling/index.js",
+        ),
+        "utf8",
+      ),
+    },
+    dependencyLink: {
+      target: readlinkSync(path.join(packageRoot, "node_modules/fixture-parent")),
+      resolved: realpathSync(path.join(packageRoot, "node_modules/fixture-parent")),
+    },
+    originalDependencyFiles: dependencyFiles,
   };
 }
 
@@ -244,10 +323,11 @@ describe("standalone bundled channel smoke", () => {
     "preserves the result and releases its layout for $layout with invalid=$invalid",
     ({ layout, invalid }) => {
       const entrySource = invalid
-        ? "export default [];\n"
-        : `export default {
+        ? 'import "fixture-parent"; export default [];\n'
+        : `import { fixtureValue } from "fixture-parent";
+          export default {
             kind: "bundled-channel-entry",
-            loadChannelPlugin() { return { id: "fixture-channel" }; },
+            loadChannelPlugin() { return { id: fixtureValue }; },
           };\n`;
       const observed = runStandaloneBundledChannelSmoke(entrySource, layout);
       const { result } = observed;
@@ -262,6 +342,11 @@ describe("standalone bundled channel smoke", () => {
         expect(result.stdout.match(/\[build-smoke\]/gu)).toHaveLength(1);
       }
       expect(observed.entrySource).toBe(entrySource);
+      expect(observed.dependencyFiles).toEqual(observed.originalDependencyFiles);
+      expect(observed.dependencyLink.target).toContain(".pnpm");
+      expect(observed.dependencyLink.resolved).toContain(
+        path.join(".pnpm", "fixture-parent@1.0.0", "node_modules", "fixture-parent"),
+      );
       expect(observed.sentinel).toBe("preserve caller-owned temporary sibling\n");
       expect(observed.temporaryEntries).toEqual(["unrelated.txt"]);
     },

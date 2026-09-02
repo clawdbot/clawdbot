@@ -84,7 +84,11 @@ export type AgentEventRuntimePayload = AgentEventPayload & {
 };
 
 type AgentEventListener = (evt: AgentEventRuntimePayload) => void;
-type AgentEventListeners = Map<AgentEventListener, number>;
+type AgentEventRegistration = {
+  readonly listener: AgentEventListener;
+  readonly id: number;
+};
+type AgentEventListeners = Map<AgentEventListener, AgentEventRegistration>;
 
 type AgentEventState = {
   seqByRun: Map<string, number>;
@@ -346,7 +350,7 @@ function* iterateAgentEventListeners(
   let lastId = -1;
   let revision = -1;
   let runId: string | undefined;
-  let pending: Array<[AgentEventListener, number]> = [];
+  let pending: AgentEventRegistration[] = [];
   let index = 0;
   while (true) {
     const currentRunId = enriched.runId;
@@ -355,17 +359,34 @@ function* iterateAgentEventListeners(
     if (revision !== state.listenerRevision || runId !== currentRunId) {
       revision = state.listenerRevision;
       runId = currentRunId;
-      pending = [...state.listeners, ...(state.runListeners.get(runId) ?? [])]
-        .filter(([, id]) => id > lastId)
-        .toSorted(([, left], [, right]) => left - right);
+      // Registration IDs follow Map insertion order. Finish the merge before
+      // yielding, when callbacks can mutate either map.
+      const globalRegistrations = state.listeners.values();
+      const runRegistrations = state.runListeners.get(runId)?.values();
+      let global = globalRegistrations.next().value;
+      let scoped = runRegistrations?.next().value;
+      pending = [];
+      while (global || scoped) {
+        if (global && (!scoped || global.id <= scoped.id)) {
+          if (global.id > lastId) {
+            pending.push(global);
+          }
+          global = globalRegistrations.next().value;
+        } else if (scoped) {
+          if (scoped.id > lastId) {
+            pending.push(scoped);
+          }
+          scoped = runRegistrations?.next().value;
+        }
+      }
       index = 0;
     }
     const next = pending[index++];
     if (!next) {
       return;
     }
-    lastId = next[1];
-    yield next[0];
+    lastId = next.id;
+    yield next.listener;
   }
 }
 
@@ -453,7 +474,7 @@ function registerAgentEventListener(listener: AgentEventListener, runId?: string
   const bucket: AgentEventListeners =
     runId === undefined ? state.listeners : (state.runListeners.get(runId) ?? new Map());
   if (!bucket.has(listener)) {
-    bucket.set(listener, state.nextListenerId++);
+    bucket.set(listener, { listener, id: state.nextListenerId++ });
     if (runId !== undefined) {
       state.runListeners.set(runId, bucket);
     }

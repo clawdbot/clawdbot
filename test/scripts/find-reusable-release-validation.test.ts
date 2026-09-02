@@ -1289,29 +1289,48 @@ describe("scripts/github/find-reusable-release-validation.sh", () => {
     },
   );
 
-  it.each(["matching", "legacy-request", "legacy-receipt"])(
-    "requires identical npm beta coverage for reuse: %s",
-    (coverage) => {
+  it.each(
+    ["beta", "stable"].flatMap((profile) =>
+      ["matching", "legacy-request", "legacy-receipt", "other-npm-policy", "different-context"].map(
+        (coverage) => ({ profile, coverage }),
+      ),
+    ),
+  )(
+    "requires identical npm $profile coverage and context for reuse: $coverage",
+    ({ profile, coverage }) => {
       const { clone, priorSha } = getSharedRepo();
       const inputs = {
         ...DEFAULT_INPUTS,
-        coveragePolicy: "npm-beta-v1",
-        skipPackageTelegramE2e: "true",
-        targetVersion: "2026.8.28-beta.1",
+        coveragePolicy: `npm-${profile}-v1`,
+        skipPackageTelegramE2e: String(profile === "beta"),
+        targetVersion: profile === "beta" ? "2026.8.28-beta.1" : "2026.8.28",
+        targetContextRef: "release/2026.8.28",
       };
       const record = normalizedEvidence({
-        releaseProfile: "beta",
-        soak: false,
+        releaseProfile: profile,
+        soak: profile === "stable",
         targetSha: priorSha,
         validationInputs: coverage === "legacy-receipt" ? DEFAULT_INPUTS : inputs,
       });
       const fixtures = setUpFixtures([{ record, runId: "111" }]);
+      const requestedInputs =
+        coverage === "legacy-request"
+          ? DEFAULT_INPUTS
+          : {
+              ...inputs,
+              ...(coverage === "other-npm-policy"
+                ? { coveragePolicy: profile === "beta" ? "npm-stable-v1" : "npm-beta-v1" }
+                : {}),
+              ...(coverage === "different-context"
+                ? { targetContextRef: "release/2026.8.28-1" }
+                : {}),
+            };
       const result = runResolver({
         ...fixtures,
-        inputs: coverage === "legacy-request" ? DEFAULT_INPUTS : inputs,
-        releaseProfile: "beta",
+        inputs: requestedInputs,
+        releaseProfile: profile,
         repoDir: clone,
-        runReleaseSoak: "false",
+        runReleaseSoak: String(profile === "stable"),
         targetSha: priorSha,
       });
       expect(result.status).toBe(0);

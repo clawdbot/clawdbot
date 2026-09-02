@@ -14,7 +14,7 @@ import {
 } from "./agent-runner-execution.test-support.js";
 import { buildKnownAgentRunFailureReplyPayload } from "./agent-runner-failure-reply.js";
 
-const state = setupAgentRunnerExecutionTestState();
+const state = await setupAgentRunnerExecutionTestState();
 
 const CODEX_LOGIN_PRESENTATION = {
   blocks: [

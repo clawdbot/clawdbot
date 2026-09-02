@@ -258,6 +258,28 @@ linuxIt.each(preflightCases)(
   55_000,
 );
 
+linuxIt.each([
+  { job: "checks-fast-core", task: "bundled-protocol" },
+  { job: "check-shard", task: "guards" },
+  { job: "check-shard", task: "npm-lock" },
+])("$job checkout owns $task base history before credential cleanup", async ({ job }) => {
+  const report = await runCiGitStep({
+    job,
+    env: { CHECKOUT_BASE_SHA: base },
+    fetchResults: [0],
+  });
+  expect(report.code).toBe(0);
+  const checkoutFetch = report.fetches.find(({ args }) =>
+    args.includes(`+${candidate}:refs/remotes/origin/ci-target`),
+  );
+  expect(checkoutFetch?.args).toEqual(
+    expect.arrayContaining([
+      `+${candidate}:refs/remotes/origin/ci-target`,
+      `+${base}:refs/remotes/origin/ci-ratchet-base`,
+    ]),
+  );
+});
+
 const historyProfiles: {
   job: string;
   step: string;

@@ -19,11 +19,11 @@ on:
         default: false
         type: boolean
       release_scope:
-        description: Release qualification scope; npm-beta defers native apps for a validated exact beta target.
+        description: Release qualification scope; npm-beta and npm-stable defer native apps for a validated exact release target.
         required: false
         default: full
         type: choice
-        options: [full, npm-beta]
+        options: [full, npm-beta, npm-stable]
       release_gate:
         description: Run an exact-SHA maintainer release-gate fallback when PR CI is capacity-stalled.
         required: false
@@ -582,7 +582,10 @@ jobs:
               if sha == os.environ["WORKFLOW_SHA"]:
                   # Export the workflow revision from the freshly populated index, replacing
                   # retained platform files without updating the index or trusting later edits.
-                  paths = git_output(workspace, "ls-files", "-z", "--", ".github/actions").split("\0")[:-1]
+                  pathspecs = [".github/actions"]
+                  if kind == "preflight":
+                      pathspecs += ["scripts/lib/release-context.mjs", "scripts/lib/release-version.mjs"]
+                  paths = git_output(workspace, "ls-files", "-z", "--", *pathspecs).split("\0")[:-1]
                   run_git(workspace, "checkout-index", "--force", f"--prefix={harness}/", "--", *paths)
               else:
                   run_git(harness, "init", harness)
@@ -737,7 +740,11 @@ jobs:
         with:
           ref: ${{ github.workflow_sha }}
           path: .ci-harness
-          sparse-checkout: .github/actions
+          sparse-checkout: |
+            /.github/actions/
+            /scripts/lib/release-context.mjs
+            /scripts/lib/release-version.mjs
+          sparse-checkout-cone-mode: false
           persist-credentials: false
 
       - name: Resolve logical runner profile
@@ -1058,9 +1065,12 @@ jobs:
             manifest_node_args+=(--import tsx)
           fi
           node "${manifest_node_args[@]}" --input-type=module <<'EOF'
+          import { execFileSync } from "node:child_process";
           import { appendFileSync, existsSync, readFileSync } from "node:fs";
           import { matchesGlob } from "node:path";
           import { resolveTestGitCommits } from "./.ci-harness/.github/actions/git-owner/test-prerequisites.mjs";
+          import { resolveReleaseContextIdentity } from "./.ci-harness/scripts/lib/release-context.mjs";
+          import { classifyReleaseTrain, parseReleaseVersion } from "./.ci-harness/scripts/lib/release-version.mjs";
 
           const eventName = process.env.OPENCLAW_CI_EVENT_NAME ?? "";
           const checkoutRevision = process.env.OPENCLAW_CI_CHECKOUT_REVISION ?? "";
@@ -1174,27 +1184,50 @@ jobs:
           const docsChanged = parseBoolean(process.env.OPENCLAW_CI_DOCS_CHANGED);
           const releaseGate = parseBoolean(process.env.OPENCLAW_CI_RELEASE_GATE);
           const releaseScope = process.env.OPENCLAW_CI_RELEASE_SCOPE ?? "full";
-          const npmBetaQualification = releaseScope === "npm-beta";
-          if (releaseScope !== "full" && !npmBetaQualification) {
-            throw new Error("release_scope must be full or npm-beta");
+          const npmQualification = releaseScope === "npm-beta" || releaseScope === "npm-stable";
+          if (releaseScope !== "full" && !npmQualification) {
+            throw new Error("release_scope must be full, npm-beta, or npm-stable");
           }
-          if (npmBetaQualification) {
-            const betaVersion = String(packageJson.version ?? "").match(
-              /^([0-9]{4}\.(?:[1-9]|1[0-2])\.[1-9][0-9]*)-beta\.[1-9][0-9]*$/u,
-            );
-            const betaContext = betaVersion && (
-              (process.env.OPENCLAW_CI_TARGET_CONTEXT_TARGET === "true" &&
-                process.env.OPENCLAW_CI_TARGET_CONTEXT_REF === `release/${betaVersion[1]}`) ||
-              (historicalTargetApproved &&
-                process.env.OPENCLAW_CI_HISTORICAL_TARGET_TAG === `v${packageJson.version}`)
-            );
+          if (npmQualification) {
+            const packageVersion = String(packageJson.version ?? "");
+            const parsedVersion = parseReleaseVersion(packageVersion);
+            const expectedTrain = releaseScope === "npm-beta" ? "beta" : "stable";
+            const contextRef = process.env.OPENCLAW_CI_TARGET_CONTEXT_TARGET === "true"
+              ? process.env.OPENCLAW_CI_TARGET_CONTEXT_REF
+              : historicalTargetApproved ? process.env.OPENCLAW_CI_HISTORICAL_TARGET_TAG : "";
             if (
               eventName !== "workflow_dispatch" || !isCanonicalRepository || releaseGate ||
               process.env.OPENCLAW_CI_PULL_REQUEST_NUMBER ||
               !/^[0-9a-f]{40}$/u.test(process.env.OPENCLAW_CI_TARGET_REF ?? "") ||
-              process.env.OPENCLAW_CI_TARGET_REF !== checkoutRevision || !betaContext
+              process.env.OPENCLAW_CI_TARGET_REF !== checkoutRevision ||
+              !parsedVersion || parsedVersion.version !== packageVersion ||
+              classifyReleaseTrain(parsedVersion) !== expectedTrain
             ) {
-              throw new Error("release_scope npm-beta requires an exact beta target with validated matching release context and no PR release gate or pull_request_number");
+              throw new Error(`release_scope ${releaseScope} requires an exact ${expectedTrain} target with validated matching release context and no PR release gate or pull_request_number`);
+            }
+            let identity;
+            try {
+              identity = resolveReleaseContextIdentity(contextRef ?? "", packageVersion);
+            } catch (error) {
+              throw new Error(`release_scope ${releaseScope}: ${error.message}`);
+            }
+            if (!identity || identity.kind === "extended-stable branch") {
+              throw new Error(`release_scope ${releaseScope} requires a matching regular release branch or tag`);
+            }
+            if (identity.baseTag) {
+              // Base-package corrections reuse the base tag's exact source; ancestry alone is insufficient.
+              const baseRef = `refs/tags/${identity.baseTag}`;
+              const remoteRefs = execFileSync("python3", [
+                "-I", "-S", `${process.env.RUNNER_TEMP}/ci-git-owner.py`, "--git", "120",
+                "ls-remote", "--tags", "https://github.com/openclaw/openclaw.git", baseRef, `${baseRef}^{}`,
+              ], { encoding: "utf8" });
+              const refs = new Map(remoteRefs.trim().split("\n").filter(Boolean).map((line) => {
+                const [sha, ref] = line.split(/\s+/u);
+                return [ref, sha];
+              }));
+              if (!refs.has(baseRef) || (refs.get(`${baseRef}^{}`) ?? refs.get(baseRef)) !== checkoutRevision) {
+                throw new Error(`release_scope ${releaseScope} correction base ${identity.baseTag} does not resolve to ${checkoutRevision}`);
+              }
             }
           }
           const runNode = parseBoolean(process.env.OPENCLAW_CI_RUN_NODE) && !docsOnly;
@@ -1219,14 +1252,14 @@ jobs:
           const supportsCurrentIosCi = supportsIosBuild && supportsCurrentMacosSwiftCi;
           const runIosBuild =
             parseBoolean(process.env.OPENCLAW_CI_RUN_IOS_BUILD) &&
-            !npmBetaQualification &&
+            !npmQualification &&
             !docsOnly &&
             isCanonicalRepository &&
             (!frozenTarget ||
               supportsCurrentIosCi ||
               (releaseCandidateTarget && supportsIosBuild));
           const runAndroid =
-            parseBoolean(process.env.OPENCLAW_CI_RUN_ANDROID) && !npmBetaQualification &&
+            parseBoolean(process.env.OPENCLAW_CI_RUN_ANDROID) && !npmQualification &&
             !docsOnly && isCanonicalRepository;
           const runWindows =
             parseBoolean(process.env.OPENCLAW_CI_RUN_WINDOWS) &&
@@ -1255,7 +1288,7 @@ jobs:
             hasPackageScript("apple:i18n:check");
           const runNativeI18n =
             parseBoolean(process.env.OPENCLAW_CI_RUN_NATIVE_I18N) &&
-            !npmBetaQualification &&
+            !npmQualification &&
             !docsOnly &&
             (!frozenTarget || supportsNativeI18n);
           const targetWorkflow = existsSync(".github/workflows/ci.yml")
@@ -1568,9 +1601,9 @@ jobs:
                 : [],
             ),
             run_macos_swift:
-              runMacos && !npmBetaQualification &&
+              runMacos && !npmQualification &&
               (!frozenTarget || compatibilityTarget || supportsCurrentMacosSwiftCi),
-            run_openclawkit_tests: runMacos && !npmBetaQualification && supportsOpenClawKitTests,
+            run_openclawkit_tests: runMacos && !npmQualification && supportsOpenClawKitTests,
             run_ios_build: runIosBuild,
             run_android_job: runAndroid,
             use_compatible_android_ci: useCompatibleAndroidCi,
@@ -1613,7 +1646,7 @@ jobs:
           if (process.env.GITHUB_STEP_SUMMARY) {
             appendFileSync(process.env.GITHUB_STEP_SUMMARY,
               `### CI release qualification\n\n- Scope: \`${releaseScope}\`\n- Target: \`${checkoutRevision}\`\n` +
-              (npmBetaQualification ? "- Native app qualification: deferred; Linux, macOS, and Windows Node coverage retained.\n" : ""));
+              (npmQualification ? "- Native app qualification: deferred; Linux, macOS, and Windows Node coverage retained.\n" : ""));
           }
           EOF
 
@@ -2617,6 +2650,7 @@ jobs:
           case "$TASK" in
             bundled-protocol)
               pnpm test:bundled
+              test "$(git rev-parse refs/remotes/origin/ci-ratchet-base^{commit})" = "$PROTOCOL_SINCE_BASE_SHA"
               pnpm protocol:check
               ;;
             contracts-plugins-ci-routing)
@@ -3146,11 +3180,11 @@ jobs:
       contents: read
     name: ${{ matrix.check_name || 'check-shard' }}
     needs: [preflight]
-    env:
-      CHECKOUT_BASE_SHA: ${{ ((matrix.task == 'guards' && github.event_name == 'pull_request') || (matrix.task == 'npm-lock' && github.event_name != 'workflow_dispatch')) && needs.preflight.outputs.diff_base_revision || '' }}
     if: ${{ !cancelled() && always() && needs.preflight.outputs.run_check == 'true' }}
     runs-on: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04' || (vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' && github.repository == 'openclaw/openclaw' && github.event_name == 'workflow_dispatch' && !inputs.release_gate && startsWith(inputs.dispatch_id, 'full-release-validation-') && needs.preflight.outputs.frozen_target == 'true' && matrix.task == 'lint') && (matrix.runner || 'blacksmith-4vcpu-ubuntu-2404') || (vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' && (github.event_name == 'workflow_dispatch' || github.run_attempt > 1 || (matrix.task != 'lint' && matrix.task != 'test-types' && matrix.task != 'dependencies'))) && 'ubuntu-24.04' || ((github.event_name == 'workflow_dispatch' && inputs.release_gate) || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && github.run_attempt > 1)) && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || contains(fromJSON('["OWNER","MEMBER","COLLABORATOR","CONTRIBUTOR"]'), github.event.pull_request.author_association)) && (matrix.runner || 'blacksmith-4vcpu-ubuntu-2404') || 'ubuntu-24.04') }}
     timeout-minutes: 20
+    env:
+      CHECKOUT_BASE_SHA: ${{ ((matrix.task == 'guards' && github.event_name == 'pull_request') || (matrix.task == 'npm-lock' && github.event_name != 'workflow_dispatch')) && needs.preflight.outputs.diff_base_revision || '' }}
     strategy:
       fail-fast: false
       max-parallel: 12
@@ -3317,7 +3351,8 @@ jobs:
                 exit 1
               fi
               if [ -n "$PR_BASE_SHA" ]; then
-                node scripts/report-test-temp-creations.mjs --base "$PR_BASE_SHA" --head HEAD --no-merge-base
+                test "$(git rev-parse refs/remotes/origin/ci-ratchet-base^{commit})" = "$PR_BASE_SHA"
+                node scripts/report-test-temp-creations.mjs --base refs/remotes/origin/ci-ratchet-base --head HEAD --no-merge-base
               fi
               pnpm deps:patches:check
               pnpm lint:webhook:no-low-level-body-read
@@ -3331,9 +3366,14 @@ jobs:
               # dependency-surface changes resolve nothing); dispatches and
               # release validation keep the full sweep, which also covers
               # registry-side drift on unchanged lockfiles.
+              npm_lock_base=""
               if [[ "${GITHUB_EVENT_NAME:-}" != "workflow_dispatch" && -n "$DIFF_BASE_SHA" ]] &&
                 has_package_script "deps:npm-lock:check:changed"; then
-                pnpm deps:npm-lock:check:changed --base "$DIFF_BASE_SHA" --head HEAD
+                npm_lock_base="refs/remotes/origin/ci-ratchet-base"
+                test "$(git rev-parse "${npm_lock_base}^{commit}")" = "$DIFF_BASE_SHA"
+              fi
+              if [[ -n "$npm_lock_base" ]]; then
+                pnpm deps:npm-lock:check:changed --base "$npm_lock_base" --head HEAD
               elif has_package_script "deps:npm-lock:check"; then
                 pnpm deps:npm-lock:check
               elif [[ "$HISTORICAL_TARGET" != "true" ]]; then
@@ -4483,10 +4523,18 @@ jobs:
   ios-build:
     permissions:
       contents: read
-    name: "ios-build"
+    name: ${{ format('ios-build ({0})', matrix.phase) }}
     needs: [preflight]
     if: needs.preflight.outputs.run_ios_build == 'true'
-    runs-on: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'macos-26' || (github.event_name == 'workflow_dispatch' || github.run_attempt > 1) && 'macos-26' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || contains(fromJSON('["OWNER","MEMBER","COLLABORATOR","CONTRIBUTOR"]'), github.event.pull_request.author_association)) && 'blacksmith-12vcpu-macos-26' || 'macos-26') }}
+    # Release device products are not inputs to the simulator test graph.
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        phase: ${{ fromJSON(needs.preflight.outputs.compatibility_target == 'true' && '["tests"]' || '["release","tests"]') }}
+    # Blacksmith macOS 26 admission stalled while hosted retries completed.
+    # Start both phases on the verified hosted image instead of waiting to retry.
+    runs-on: macos-26
     timeout-minutes: 150
     env:
       HISTORICAL_TARGET: ${{ needs.preflight.outputs.compatibility_target }}
@@ -4573,6 +4621,7 @@ jobs:
           fi
 
       - name: Swift lint
+        if: matrix.phase == 'tests'
         run: |
           if [[ -x ./scripts/lint-swift.sh && -x ./scripts/format-swift.sh ]]; then
             ./scripts/lint-swift.sh ios
@@ -4583,13 +4632,19 @@ jobs:
           fi
 
       - name: Build iOS app
+        if: matrix.phase == 'tests'
         run: pnpm ios:build
 
       # Debug's incremental compilation can miss actor-isolation diagnostics
       # that Swift's optimized whole-module Release build enforces.
       - name: Build iOS app (Release)
-        if: env.HISTORICAL_TARGET != 'true'
+        if: matrix.phase == 'release'
         run: |
+          set -euo pipefail
+          ./scripts/ios-configure-signing.sh
+          ./scripts/ios-write-version-xcconfig.sh
+          node scripts/ios-write-swift-filelist.mjs
+          xcodegen generate --spec apps/ios/project.yml --project apps/ios
           xcodebuild \
             -project apps/ios/OpenClaw.xcodeproj \
             -scheme OpenClaw \
@@ -4602,7 +4657,7 @@ jobs:
       # lifecycles. Exercise both owners on the already provisioned simulator.
       - name: Run focused iOS lifecycle simulator tests
         id: ios_lifecycle_tests
-        if: env.HISTORICAL_TARGET != 'true'
+        if: matrix.phase == 'tests' && needs.preflight.outputs.compatibility_target != 'true'
         run: |
           set -euo pipefail
           simulator_id="$(
@@ -4639,7 +4694,7 @@ jobs:
             test
 
       - name: Run focused Apple Watch operation simulator tests
-        if: env.HISTORICAL_TARGET != 'true'
+        if: matrix.phase == 'tests' && needs.preflight.outputs.compatibility_target != 'true'
         run: |
           set -euo pipefail
           simulator_id="$(
@@ -4713,8 +4768,9 @@ jobs:
     needs: [preflight]
     # Full manual/release validation always captures. PRs and their exact-head
     # release-gate substitutes use the same conservative screenshot-risk scope.
-    if: ${{ needs.preflight.outputs.release_scope != 'npm-beta' && ((github.event_name == 'workflow_dispatch' && (!inputs.release_gate || needs.preflight.outputs.run_ios_screenshots == 'true')) || (github.event_name == 'pull_request' && needs.preflight.outputs.run_ios_screenshots == 'true')) && needs.preflight.outputs.compatibility_target != 'true' }}
-    runs-on: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'macos-26' || (github.event_name == 'workflow_dispatch' || github.run_attempt > 1) && 'macos-26' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || contains(fromJSON('["OWNER","MEMBER","COLLABORATOR","CONTRIBUTOR"]'), github.event.pull_request.author_association)) && 'blacksmith-12vcpu-macos-26' || 'macos-26') }}
+    if: ${{ needs.preflight.outputs.release_scope == 'full' && ((github.event_name == 'workflow_dispatch' && (!inputs.release_gate || needs.preflight.outputs.run_ios_screenshots == 'true')) || (github.event_name == 'pull_request' && needs.preflight.outputs.run_ios_screenshots == 'true')) && needs.preflight.outputs.compatibility_target != 'true' }}
+    # Keep capture on the same verified hosted image as the iOS build phases.
+    runs-on: macos-26
     timeout-minutes: 90
     env:
       BUNDLE_DEPLOYMENT: "true"
@@ -4785,7 +4841,7 @@ jobs:
 
       - name: Capture Apple Watch screenshot
         id: watch_screenshot
-        if: matrix.device_family == 'iphone'
+        if: matrix.device_family == 'ipad-13'
         run: |
           source scripts/lib/ios-fastlane.sh
           (
@@ -4824,7 +4880,7 @@ jobs:
             --node-version "$(node --version)"
           )
           node scripts/ios-screenshot-evidence.mjs "${collect_args[@]}"
-          if [[ "$DEVICE_FAMILY" == "iphone" ]]; then
+          if [[ "$DEVICE_FAMILY" == "ipad-13" ]]; then
             collect_args[2]="watch"
             node scripts/ios-screenshot-evidence.mjs "${collect_args[@]}"
           fi
@@ -4854,7 +4910,7 @@ jobs:
       contents: read
     name: "ios-screenshot-evidence"
     needs: [preflight, ios-screenshot-shard]
-    if: ${{ needs.preflight.outputs.release_scope != 'npm-beta' && ((github.event_name == 'workflow_dispatch' && (!inputs.release_gate || needs.preflight.outputs.run_ios_screenshots == 'true')) || (github.event_name == 'pull_request' && needs.preflight.outputs.run_ios_screenshots == 'true')) && needs.preflight.outputs.compatibility_target != 'true' }}
+    if: ${{ needs.preflight.outputs.release_scope == 'full' && ((github.event_name == 'workflow_dispatch' && (!inputs.release_gate || needs.preflight.outputs.run_ios_screenshots == 'true')) || (github.event_name == 'pull_request' && needs.preflight.outputs.run_ios_screenshots == 'true')) && needs.preflight.outputs.compatibility_target != 'true' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
@@ -4924,7 +4980,9 @@ jobs:
     needs: [preflight]
     if: needs.preflight.outputs.run_android_job == 'true'
     runs-on: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04' || (vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' && github.run_attempt > 1) && 'ubuntu-24.04' || (github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && github.run_attempt > 1)) && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || contains(fromJSON('["OWNER","MEMBER","COLLABORATOR","CONTRIBUTOR"]'), github.event.pull_request.author_association)) && 'blacksmith-8vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
-    timeout-minutes: 20
+    # Hosted build-play owns three memory-bounded Gradle invocations. Reevaluate
+    # its budget on retries, which can reuse the first attempt's preflight matrix.
+    timeout-minutes: ${{ matrix.task == 'build-play' && (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || (vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' && github.run_attempt > 1) || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && github.run_attempt > 1) || github.repository != 'openclaw/openclaw' || (github.event_name == 'pull_request' && !contains(fromJSON('["OWNER","MEMBER","COLLABORATOR","CONTRIBUTOR"]'), github.event.pull_request.author_association))) && 35 || 20 }}
     strategy:
       fail-fast: false
       max-parallel: 2
@@ -5230,8 +5288,8 @@ jobs:
             macos-node=${{ needs.macos-node.result }}|${{ needs.preflight.outputs.run_macos_node }}
             macos-swift=${{ needs.macos-swift.result }}|${{ needs.preflight.outputs.run_macos_swift }}
             ios-build=${{ needs.ios-build.result }}|${{ needs.preflight.outputs.run_ios_build }}
-            ios-screenshot-shard=${{ needs.ios-screenshot-shard.result }}|${{ needs.preflight.outputs.release_scope != 'npm-beta' && ((github.event_name == 'workflow_dispatch' && (!inputs.release_gate || needs.preflight.outputs.run_ios_screenshots == 'true')) || (github.event_name == 'pull_request' && needs.preflight.outputs.run_ios_screenshots == 'true')) && needs.preflight.outputs.compatibility_target != 'true' }}
-            ios-screenshot-evidence=${{ needs.ios-screenshot-evidence.result }}|${{ needs.preflight.outputs.release_scope != 'npm-beta' && ((github.event_name == 'workflow_dispatch' && (!inputs.release_gate || needs.preflight.outputs.run_ios_screenshots == 'true')) || (github.event_name == 'pull_request' && needs.preflight.outputs.run_ios_screenshots == 'true')) && needs.preflight.outputs.compatibility_target != 'true' }}
+            ios-screenshot-shard=${{ needs.ios-screenshot-shard.result }}|${{ needs.preflight.outputs.release_scope == 'full' && ((github.event_name == 'workflow_dispatch' && (!inputs.release_gate || needs.preflight.outputs.run_ios_screenshots == 'true')) || (github.event_name == 'pull_request' && needs.preflight.outputs.run_ios_screenshots == 'true')) && needs.preflight.outputs.compatibility_target != 'true' }}
+            ios-screenshot-evidence=${{ needs.ios-screenshot-evidence.result }}|${{ needs.preflight.outputs.release_scope == 'full' && ((github.event_name == 'workflow_dispatch' && (!inputs.release_gate || needs.preflight.outputs.run_ios_screenshots == 'true')) || (github.event_name == 'pull_request' && needs.preflight.outputs.run_ios_screenshots == 'true')) && needs.preflight.outputs.compatibility_target != 'true' }}
             android=${{ needs.android.result }}|${{ needs.preflight.outputs.run_android_job }}
             docker-seed-e2e=${{ needs.docker-seed-e2e.result }}|${{ needs.preflight.outputs.run_docker_seed_e2e }}
         run: |

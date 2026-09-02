@@ -18,8 +18,10 @@ export class CodexThreadBindingConflictError extends Error {
 }
 
 export class CodexAdoptedThreadActiveError extends AgentHarnessPreflightError {
-  constructor() {
-    super("Codex session became active in another runner; wait for it to finish before continuing");
+  constructor(
+    message = "Codex session became active in another runner; wait for it to finish before continuing",
+  ) {
+    super(message);
     this.name = "CodexAdoptedThreadActiveError";
   }
 }

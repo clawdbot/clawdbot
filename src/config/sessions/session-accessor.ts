@@ -70,6 +70,7 @@ export type {
   SessionEntryPatchContext,
   SessionEntryPatchOptions,
   SessionEntryPatchResult,
+  SessionEntryReadScope,
   SessionEntryReadView,
   SessionEntryReplacement,
   SessionEntryReplacementSnapshot,
@@ -302,6 +303,7 @@ export {
   type SessionTranscriptWatermark,
 } from "./session-accessor.sqlite-transcript-watermark.js";
 export {
+  bindSessionTranscriptStoreScope,
   resolveConcreteSessionStorePath,
   resolveSessionTranscriptDatabasePath,
   resolveSessionTranscriptReadTarget,

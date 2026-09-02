@@ -528,11 +528,14 @@ describe("prepareAcpxCodexAuthConfig", () => {
       resolveInstalledClaudeAcpBinPath: async () => installedBinPath,
     });
 
+    const env = { ...process.env };
+    delete env.CODEX_HOME;
     const { stdout } = await execFileAsync(
       process.execPath,
       [generated.wrapperPath, "--permission-mode", "bypass"],
       {
         cwd: root,
+        env,
       },
     );
     const launched = JSON.parse(stdout.trim()) as { argv?: unknown; codexHome?: unknown };

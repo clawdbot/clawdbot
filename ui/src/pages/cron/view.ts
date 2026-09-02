@@ -92,6 +92,7 @@ type CronProps = {
   error: string | null;
   busy: boolean;
   form: CronFormState;
+  heartbeatScratch: string;
   fieldErrors: CronFieldErrors;
   canSubmit: boolean;
   editingJob: CronJob | null;
@@ -1377,6 +1378,8 @@ function renderPromptSection(
   // block carries no aria-invalid/describedby because validateCronForm skips payloadText
   // for locked payloads, so this branch can never render a payload error.
   const codeLanguage = ctx.payloadLocked ? CRON_PAYLOAD_CODE_LANGUAGES[props.form.payloadKind] : "";
+  const payloadText =
+    props.form.payloadKind === "heartbeat" ? props.heartbeatScratch : props.form.payloadText;
   const promptRow = renderFieldRow({
     label: promptLabel,
     controlId: codeLanguage ? "" : "cron-payload-text",
@@ -1395,7 +1398,7 @@ function renderPromptSection(
             tabindex="0"
             aria-label=${promptLabel}
           ><code class="hljs">${unsafeHTML(
-            highlightCodeHtml(props.form.payloadText, codeLanguage),
+            highlightCodeHtml(payloadText, codeLanguage),
           )}</code></pre>
         `
       : html`
@@ -1403,7 +1406,7 @@ function renderPromptSection(
             id="cron-payload-text"
             class="settings-input"
             rows="6"
-            .value=${props.form.payloadText}
+            .value=${payloadText}
             ?readonly=${ctx.payloadLocked}
             aria-required="true"
             placeholder=${t("cron.form.promptPlaceholder")}
