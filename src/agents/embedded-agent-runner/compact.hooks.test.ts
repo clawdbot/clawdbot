@@ -3571,7 +3571,8 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
     expect(contextEngineCompactMock).not.toHaveBeenCalled();
   });
 
-  it("waits for the session lane before primary native harness compaction", async () => {
+  it("holds shipped /compact behind the active session lane before native compaction", async () => {
+    const command = await import("../../auto-reply/reply/commands-compact.test-support.js");
     resolveContextEngineMock.mockResolvedValue({
       info: { ownsCompaction: false },
       compact: contextEngineCompactMock,
@@ -3586,9 +3587,29 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
       await laneRelease.promise;
       return await task();
     });
+    vi.mocked(command.compactEmbeddedAgentSession).mockImplementationOnce(
+      async (params, host) => await compactEmbeddedAgentSession(params, host),
+    );
 
-    const pending = compactEmbeddedAgentSession(
-      wrappedCompactionArgs({ provider: "openai", model: "gpt-5.5", agentHarnessId: "codex" }),
+    const pending = command.handleCompactCommand(
+      {
+        ...command.buildCompactParams("/compact", {
+          commands: { text: true },
+          channels: { whatsapp: { allowFrom: ["*"] } },
+          session: { store: join(TEST_WORKSPACE_DIR, "sessions.json") },
+        }),
+        provider: "openai",
+        model: "gpt-5.5",
+        workspaceDir: TEST_WORKSPACE_DIR,
+        agentDir: join(TEST_WORKSPACE_DIR, "agents/main/agent"),
+        sessionEntry: {
+          sessionId: TEST_SESSION_ID,
+          updatedAt: Date.now(),
+          agentHarnessId: "codex",
+          modelSelectionLocked: true,
+        },
+      },
+      true,
     );
     await vi.waitFor(() => {
       expect(enqueueCommandInLaneMock).toHaveBeenCalledOnce();
@@ -3596,11 +3617,8 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
     expect(maybeCompactAgentHarnessSessionMock).not.toHaveBeenCalled();
 
     laneRelease.resolve();
-    await expect(pending).resolves.toMatchObject({
-      ok: true,
-      compacted: true,
-      compactionKind: "native-harness",
-    });
+    await expect(pending).resolves.toMatchObject({ shouldContinue: false });
+    expect(command.compactEmbeddedAgentSession).toHaveBeenCalledOnce();
     expect(maybeCompactAgentHarnessSessionMock).toHaveBeenCalledOnce();
   });
 
