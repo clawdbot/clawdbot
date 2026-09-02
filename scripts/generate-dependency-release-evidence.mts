@@ -357,6 +357,7 @@ async function runEvidenceReports(
   packageVersion: string,
 ) {
   let riskAcceptance: ReturnType<typeof resolveReleaseDependencyRiskAcceptance> = null;
+  const toolingRoot = path.resolve(import.meta.dirname, "..");
   // Report implementations belong to this tooling checkout; --root selects only the source data.
   // Release branches can keep frozen product bytes while trusted release tooling is repaired.
   for (const report of DEPENDENCY_EVIDENCE_REPORTS) {
@@ -364,8 +365,6 @@ async function runEvidenceReports(
       runCommand(
         "pnpm",
         [
-          "--dir",
-          path.resolve(import.meta.dirname, ".."),
           report.command.slice("pnpm ".length),
           "--",
           "--root",
@@ -376,7 +375,7 @@ async function runEvidenceReports(
           "--markdown",
           reportPath(outputDir, report.markdown),
         ],
-        rootDir,
+        toolingRoot,
         execFileSyncImpl,
       );
     } catch (error) {
