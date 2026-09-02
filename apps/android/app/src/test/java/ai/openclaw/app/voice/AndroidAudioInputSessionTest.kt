@@ -17,6 +17,8 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
 import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
+import org.robolectric.annotation.Implementation
+import org.robolectric.annotation.Implements
 import org.robolectric.shadows.AudioDeviceInfoBuilder
 import org.robolectric.shadows.ShadowAudioManager
 import org.robolectric.util.ReflectionHelpers
@@ -74,6 +76,35 @@ class AndroidAudioInputSessionTest {
     assertEquals(AudioDeviceInfo.TYPE_BLUETOOTH_SCO, session.requestedInputType)
     assertEquals(AudioDeviceInfo.TYPE_BLUETOOTH_SCO, audioManager.communicationDevice?.type)
     session.close()
+  }
+
+  @Test
+  @Config(shadows = [ShadowFallibleCommunicationDeviceAudioManager::class])
+  fun replacementWhoseRouteSetupThrowsStillClearsThePreviousCommunicationDevice() {
+    // The ownership hole: a replacement capture supersedes the previous one the moment it begins,
+    // and the previous one is then no longer allowed to clear the process-wide selection. If the
+    // replacement's own route setup throws before it becomes the active owner, neither close path
+    // may clear it, and the device selection outlives every capture that could have released it.
+    val sco = audioDevice(AudioDeviceInfo.TYPE_BLUETOOTH_SCO)
+    val scoOutput = audioDevice(AudioDeviceInfo.TYPE_BLUETOOTH_SCO)
+    shadowAudioManager.setInputDevices(listOf(sco))
+    shadowAudioManager.setAvailableCommunicationDevices(listOf(scoOutput))
+    val previous = AndroidAudioInputSession.open(context, sampleRateHz = 24_000, frameBytes = 4_800)
+    assertEquals(AudioDeviceInfo.TYPE_BLUETOOTH_SCO, audioManager.communicationDevice?.type)
+
+    ShadowFallibleCommunicationDeviceAudioManager.throwOnSetCommunicationDevice = true
+    val replacement =
+      try {
+        runCatching { AndroidAudioInputSession.open(context, sampleRateHz = 24_000, frameBytes = 4_800) }
+      } finally {
+        ShadowFallibleCommunicationDeviceAudioManager.throwOnSetCommunicationDevice = false
+      }
+    assertEquals("the failed setup must not have cleared the standing route", AudioDeviceInfo.TYPE_BLUETOOTH_SCO, audioManager.communicationDevice?.type)
+
+    replacement.getOrNull()?.close()
+    previous.close()
+
+    assertNull("no capture is left that can release the process-wide selection", audioManager.communicationDevice)
   }
 
   @Test
@@ -242,5 +273,19 @@ class AndroidAudioInputSessionTest {
     val handle = ReflectionHelpers.getField<Any>(port, "mHandle")
     ReflectionHelpers.setField(handle, "mId", nextDeviceId++)
     return device
+  }
+}
+
+/** Accepts communication-device requests until armed, then throws from the request itself. */
+@Implements(AudioManager::class)
+class ShadowFallibleCommunicationDeviceAudioManager : ShadowAudioManager() {
+  @Implementation
+  override fun setCommunicationDevice(device: AudioDeviceInfo): Boolean {
+    if (throwOnSetCommunicationDevice) throw IllegalStateException("communication device unavailable")
+    return super.setCommunicationDevice(device)
+  }
+
+  companion object {
+    @JvmStatic var throwOnSetCommunicationDevice = false
   }
 }

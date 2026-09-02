@@ -458,7 +458,13 @@ internal class AndroidAudioInputSession private constructor(
   }
 }
 
-/** Serializes Android's process-wide communication route across overlapping capture cleanup. */
+/**
+ * Serializes Android's process-wide communication route across overlapping capture cleanup.
+ *
+ * [activeOwner] is whichever capture is responsible for the selection currently standing on the
+ * platform -- not necessarily the one that made it. Responsibility follows the newest capture (see
+ * [claim]), so that exactly one close path can always clear the selection.
+ */
 private class CommunicationDeviceRoute {
   private val tag = "AudioInput"
   private var nextOwner = 0L
@@ -470,7 +476,27 @@ private class CommunicationDeviceRoute {
 
   @Synchronized
   fun begin(owner: Long) {
-    if (owner > latestOwner) latestOwner = owner
+    claim(owner)
+  }
+
+  /**
+   * Makes [owner] the newest capture, handing it the standing selection, or reports it superseded.
+   *
+   * Runs before any fallible platform call, at both entry points: [begin], and [update], which the
+   * platform's initial device callback can reach first. Everything after this point -- device
+   * discovery, `setCommunicationDevice` -- can throw, and [update] and [close] each decline to act
+   * for a superseded owner. Advancing [latestOwner] without moving [activeOwner] would therefore
+   * leave a replacement whose setup threw with a previous owner that may no longer clear and a new
+   * owner that never became active: the process-wide selection would outlive every capture that
+   * could have released it.
+   */
+  private fun claim(owner: Long): Boolean {
+    if (owner < latestOwner) return false
+    if (owner > latestOwner) {
+      latestOwner = owner
+      if (activeOwner != null) activeOwner = owner
+    }
+    return true
   }
 
   /** Returns the device the platform actually selected, or null when it selected none. */
@@ -480,8 +506,7 @@ private class CommunicationDeviceRoute {
     owner: Long,
     device: AudioDeviceInfo?,
   ): AudioDeviceInfo? {
-    if (owner < latestOwner) return null
-    latestOwner = owner
+    if (!claim(owner)) return null
     if (device == null) {
       if (activeOwner != null) audioManager.clearCommunicationDevice()
       activeOwner = null
