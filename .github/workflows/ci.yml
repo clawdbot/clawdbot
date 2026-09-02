@@ -4659,7 +4659,9 @@ jobs:
             -destination "platform=iOS Simulator,id=${simulator_id}" \
             -resultBundlePath "$result_bundle" \
             -parallel-testing-enabled NO \
+            -only-testing:OpenClawLogicTests/WatchVoiceTurnTrackerTests \
             -only-testing:OpenClawTests/DelayedActionGateTests \
+            -only-testing:OpenClawTests/IOSGatewayChatTransportTests \
             -only-testing:OpenClawTests/NodeAppModelInvokeTests \
             -only-testing:OpenClawTests/NotificationServingPreferenceTests \
             -only-testing:OpenClawTests/RootTabsSourceGuardTests \
@@ -4697,6 +4699,7 @@ jobs:
           test_args=(
             -parallel-testing-enabled NO
             -only-testing:OpenClawWatchTests/WatchInboxStoreOperationTests
+            -only-testing:OpenClawWatchTests/WatchSpeechPlaybackTests
           )
           xcodebuild "${xcodebuild_args[@]}" "${test_args[@]}" build-for-testing
           app_path="$(

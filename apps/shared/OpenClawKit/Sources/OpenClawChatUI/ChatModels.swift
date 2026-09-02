@@ -669,12 +669,18 @@ public struct OpenClawChatSessionInfo: Codable, Sendable {
 }
 
 public struct OpenClawChatHistoryPayload: Codable, Sendable {
+    public struct InputConsumption: Codable, Sendable {
+        public let runId: String
+        public let consumedByEventId: String
+    }
+
     public let sessionKey: String
     public let sessionId: String?
     public let messages: [AnyCodable]?
     public let thinkingLevel: String?
     public let sessionInfo: OpenClawChatSessionInfo?
     public let inFlightRun: OpenClawChatInFlightRun?
+    public let inputConsumptions: [InputConsumption]?
 
     public init(
         sessionKey: String,
@@ -682,7 +688,8 @@ public struct OpenClawChatHistoryPayload: Codable, Sendable {
         messages: [AnyCodable]?,
         thinkingLevel: String?,
         sessionInfo: OpenClawChatSessionInfo? = nil,
-        inFlightRun: OpenClawChatInFlightRun? = nil)
+        inFlightRun: OpenClawChatInFlightRun? = nil,
+        inputConsumptions: [InputConsumption]? = nil)
     {
         self.sessionKey = sessionKey
         self.sessionId = sessionId
@@ -690,6 +697,7 @@ public struct OpenClawChatHistoryPayload: Codable, Sendable {
         self.thinkingLevel = thinkingLevel
         self.sessionInfo = sessionInfo
         self.inFlightRun = inFlightRun
+        self.inputConsumptions = inputConsumptions
     }
 }
 

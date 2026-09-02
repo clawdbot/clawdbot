@@ -16,6 +16,8 @@ Talk mode covers five runtime shapes:
 
 Native Talk is a continuous loop: listen for speech, send the transcript to the model through the active session, wait for the response, then speak it via the configured Talk provider (`talk.speak`).
 
+Apple Watch uses a separate [one-turn voice and chat flow](/platforms/ios#apple-watch-voice-and-chat): native dictation, text relayed through the paired iPhone, and system-voice readback on the Watch. It is not a continuous or realtime Talk client.
+
 ## Choose a Talk voice from chat
 
 After setting `talk.provider` and the matching `talk.providers.<provider>` configuration, use `/voice status` to inspect the active provider and voice, `/voice list [limit]` to list its available voices, and `/voice set <voiceId|name>` to save a provider-scoped selection. Discord exposes the same command natively as `/talkvoice`.
