@@ -107,8 +107,8 @@ struct ControlChannelCompatibilityAlertTests {
         let current = alerts.prepare(issue, generation: alerts.routeGeneration)
         #expect(current != nil)
 
-        let accepted = alerts.updateConnection(generation: oldRoute, connected: true)
-        #expect(!accepted)
+        let accepted = alerts.updateConnection(generation: oldRoute, state: .connected)
+        #expect(accepted == nil)
         #expect(alerts.presentation == current)
     }
 
@@ -121,13 +121,40 @@ struct ControlChannelCompatibilityAlertTests {
             if disconnect {
                 alerts.routeChanged()
             } else {
-                _ = alerts.updateConnection(generation: alerts.routeGeneration, connected: true)
+                _ = alerts.updateConnection(generation: alerts.routeGeneration, state: .connected)
             }
             #expect(alerts.presentation == nil)
 
             let next = alerts.prepare(issue, generation: alerts.routeGeneration)
             #expect(next != nil)
             #expect(alerts.presentation != first)
+        }
+    }
+
+    @Test func `recovery keeps the known mismatch until connection or route replacement`() throws {
+        let issue = try self.mismatch()
+        for routeChanged in [false, true] {
+            var alerts = ControlChannelCompatibilityAlerts()
+            _ = alerts.prepare(issue, generation: alerts.routeGeneration)
+            let connecting = alerts.updateConnection(generation: alerts.routeGeneration, state: .connecting)
+            #expect(connecting == .degraded(issue.message))
+            let timeout = alerts.updateConnection(
+                generation: alerts.routeGeneration,
+                state: .degraded("connection timed out"))
+            #expect(timeout == .degraded(issue.message))
+
+            if routeChanged {
+                alerts.routeChanged()
+            } else {
+                let connected = alerts.updateConnection(generation: alerts.routeGeneration, state: .connected)
+                #expect(connected == .connected)
+            }
+            let next = alerts.updateConnection(generation: alerts.routeGeneration, state: .connecting)
+            #expect(next == .connecting)
+            let nextTimeout = alerts.updateConnection(
+                generation: alerts.routeGeneration,
+                state: .degraded("connection timed out"))
+            #expect(nextTimeout == .degraded("connection timed out"))
         }
     }
 }

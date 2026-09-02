@@ -96,10 +96,15 @@ struct ControlChannelCompatibilityAlerts {
         self.presentation = nil
     }
 
-    mutating func updateConnection(generation: UInt64, connected: Bool) -> Bool {
-        guard generation == self.routeGeneration else { return false }
-        if connected { self.presentation = nil }
-        return true
+    mutating func updateConnection(
+        generation: UInt64,
+        state: ControlChannel.ConnectionState) -> ControlChannel.ConnectionState?
+    {
+        guard generation == self.routeGeneration else { return nil }
+        if state == .connected { self.presentation = nil }
+        // A retry may fail before hello. Keep the last authoritative incompatibility
+        // until this route connects successfully or its owner retires it.
+        return self.presentation.map { .degraded($0.issue.message) } ?? state
     }
 
     mutating func prepare(_ issue: GatewayCompatibilityIssue, generation: UInt64) -> Presentation? {
@@ -167,9 +172,9 @@ final class ControlChannel {
     private var stateDebouncer = ControlChannelStateDebouncer()
 
     private func setStateThrottled(_ newState: ConnectionState, generation: UInt64? = nil) {
-        guard self.compatibilityAlerts.updateConnection(
+        guard let newState = self.compatibilityAlerts.updateConnection(
             generation: generation ?? self.compatibilityAlerts.routeGeneration,
-            connected: newState == .connected)
+            state: newState)
         else { return }
         let now = Date()
         if let delay = self.stateDebouncer.delayBeforeApplying(
@@ -329,12 +334,13 @@ final class ControlChannel {
     @discardableResult
     private func reportFailure(_ error: Error, generation: UInt64) -> String {
         let message = Self.friendlyGatewayMessage(error, configRoot: OpenClawConfigFile.loadDict())
+        let presentation = GatewayCompatibilityIssue(error: error).flatMap {
+            self.compatibilityAlerts.prepare($0, generation: generation)
+        }
+        self.logger.error("control channel operation failed \(message, privacy: .public)")
         self.setStateThrottled(.degraded(message), generation: generation)
-        if let issue = GatewayCompatibilityIssue(error: error),
-           let presentation = self.compatibilityAlerts.prepare(
-               issue,
-               generation: generation)
-        {
+        if let presentation {
+            let issue = presentation.issue
             // Present once per route failure. A unique claim also retires queued alerts
             // after a route switch or successful connection with the same later issue.
             DispatchQueue.main.async { [weak self] in
