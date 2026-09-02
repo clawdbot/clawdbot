@@ -3962,7 +3962,7 @@ NODE
     expect(
       JSON.parse(expectDefined(dispatchManifest.outputs.ui_e2e_matrix, "dispatch UI E2E matrix"))
         .include,
-    ).toHaveLength(14);
+    ).toHaveLength(13);
     expect(
       JSON.parse(
         expectDefined(dispatchManifest.outputs.qa_smoke_ci_matrix, "dispatch QA smoke matrix"),
@@ -6780,23 +6780,78 @@ server.listen(0, "127.0.0.1", () => {
     );
   });
 
-  it("runs the transcript reader ratchet as a visible additional check", () => {
-    const workflow = readCiWorkflow();
-    const additionalJob = workflow.jobs["check-additional-shard"];
-    const matrixRows = additionalJob.strategy.matrix.include;
-    expect(matrixRows).toContainEqual({
-      check_name: "check-session-transcript-reader-boundary",
-      group: "session-transcript-reader-boundary",
-      runner: "blacksmith-4vcpu-ubuntu-2404",
-    });
-
+  it("runs all session boundary checks and preserves individual failures", () => {
+    const additionalJob = readCiWorkflow().jobs["check-additional-shard"];
     const runStep = additionalJob.steps.find(
       (step: WorkflowStep) => step.name === "Run additional check shard",
     );
-    expect(runStep.run).toContain("session-transcript-reader-boundary)");
-    expect(runStep.run).toContain(
-      'run_check "lint:tmp:session-transcript-reader-boundary" pnpm run lint:tmp:session-transcript-reader-boundary',
+    const commands = [
+      "lint:tmp:session-accessor-boundary",
+      "lint:tmp:sqlite-transaction-boundary",
+      "lint:tmp:session-transcript-reader-boundary",
+    ];
+    const root = tempDirs.make("openclaw-session-boundary-workflow-");
+    const binDir = path.join(root, "bin");
+    const callsPath = path.join(root, "pnpm-calls.txt");
+    mkdirSync(binDir);
+    const pnpmPath = path.join(binDir, "pnpm");
+    writeFileSync(
+      pnpmPath,
+      '#!/usr/bin/env bash\nset -euo pipefail\nprintf \'%s\\n\' "$*" >> "$PNPM_CALLS"\nif [[ "${2:-}" == "${PNPM_FAIL:-}" ]]; then exit 1; fi\n',
+      "utf8",
     );
+    chmodSync(pnpmPath, 0o755);
+    for (const scenario of [
+      { failed: "", missing: "" },
+      ...commands.map((failed) => ({ failed, missing: "" })),
+      ...commands.map((missing) => ({ failed: "", missing })),
+    ]) {
+      const present = commands.filter((command) => command !== scenario.missing);
+      writeFileSync(
+        path.join(root, "package.json"),
+        JSON.stringify({
+          scripts: Object.fromEntries(present.map((command) => [command, "fixture"])),
+        }),
+      );
+      writeFileSync(callsPath, "");
+      const result = runWorkflowShellScript(runStep.run, {
+        cwd: root,
+        env: {
+          ...process.env,
+          ADDITIONAL_CHECK_GROUP: "session-accessor-boundary",
+          PATH: `${binDir}:${process.env.PATH ?? ""}`,
+          PNPM_CALLS: callsPath,
+          PNPM_FAIL: scenario.failed,
+        },
+      });
+      const context = `${JSON.stringify(scenario)}\n${result.stdout}${result.stderr}`;
+      expect(readFileSync(callsPath, "utf8").trim().split("\n"), context).toEqual(
+        present.map((command) => `run ${command}`),
+      );
+      expect(result.status, context).toBe(scenario.failed ? 1 : 0);
+      expect(result.stdout.match(/^::error .+$/gmu) ?? [], context).toEqual(
+        scenario.failed
+          ? [`::error title=${scenario.failed} failed::${scenario.failed} failed`]
+          : [],
+      );
+      for (const command of present.filter((entry) => entry !== scenario.failed)) {
+        expect(result.stdout, context).toContain(`[ok] ${command}`);
+      }
+      expect(result.stdout.match(/^\[skip\].+$/gmu) ?? [], context).toHaveLength(
+        scenario.missing ? 1 : 0,
+      );
+    }
+    expect(
+      additionalJob.strategy.matrix.include.filter((row: { group: string }) =>
+        ["session-accessor-boundary", "session-transcript-reader-boundary"].includes(row.group),
+      ),
+    ).toEqual([
+      {
+        check_name: "check-session-accessor-boundary",
+        group: "session-accessor-boundary",
+        runner: "blacksmith-4vcpu-ubuntu-2404",
+      },
+    ]);
   });
 
   it("reports the Plugin SDK API diff as a visible additional check", () => {
@@ -10769,36 +10824,39 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
   });
 
   it("uses the target-owned UI project capability for frozen manual matrices and commands", () => {
-    for (const [runnerBackend, jobCount] of [
+    for (const [runnerBackend, legacyJobCount] of [
       ["blacksmith", 4],
       ["github", 14],
       ["hybrid", 14],
     ] as const) {
-      const manifest = runCiManifestFixture({
-        bundledPlanner: true,
-        eventName: "workflow_dispatch",
-        historicalCompatibility: false,
-        runnerBackend,
-        uiE2eProjectsCapability: false,
-      });
-      expect(manifest.status, manifest.output).toBe(0);
-      expect(manifest.outputs.frozen_target).toBe("true");
-      expect(manifest.outputs.compatibility_target).toBe("false");
-      expect(
-        JSON.parse(
-          expectDefined(manifest.outputs.ui_e2e_matrix, `${runnerBackend} legacy UI E2E matrix`),
-        ),
-      ).toEqual({
-        include: Array.from({ length: jobCount }, (_, index) => {
-          const shard = index + 1;
-          return {
-            shard,
-            shard_count: jobCount,
-            task: shard === jobCount ? "browser-extension" : "control-ui",
-            vitest_shard_count: jobCount - 1,
-          };
-        }),
-      });
+      for (const uiE2eProjectsCapability of [false, true]) {
+        const jobCount = uiE2eProjectsCapability ? 13 : legacyJobCount;
+        const manifest = runCiManifestFixture({
+          bundledPlanner: true,
+          eventName: "workflow_dispatch",
+          historicalCompatibility: false,
+          runnerBackend,
+          uiE2eProjectsCapability,
+        });
+        expect(manifest.status, manifest.output).toBe(0);
+        expect(manifest.outputs.frozen_target).toBe("true");
+        expect(manifest.outputs.compatibility_target).toBe("false");
+        expect(
+          JSON.parse(
+            expectDefined(manifest.outputs.ui_e2e_matrix, `${runnerBackend} UI E2E matrix`),
+          ),
+        ).toEqual({
+          include: Array.from({ length: jobCount }, (_, index) => {
+            const shard = index + 1;
+            return {
+              shard,
+              shard_count: jobCount,
+              task: shard === jobCount ? "browser-extension" : "control-ui",
+              vitest_shard_count: jobCount - 1,
+            };
+          }),
+        });
+      }
     }
 
     const uiE2E = readCiWorkflow().jobs["checks-ui-e2e"];
@@ -10867,13 +10925,13 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(uiE2e.strategy["max-parallel"]).toBe(14);
     expect(uiE2e.strategy.matrix).toBe("${{ fromJson(needs.preflight.outputs.ui_e2e_matrix) }}");
     const expectedUiE2eMatrix = {
-      include: Array.from({ length: 14 }, (_, index) => {
+      include: Array.from({ length: 13 }, (_, index) => {
         const shard = index + 1;
         return {
           shard,
-          shard_count: 14,
-          task: shard === 14 ? "browser-extension" : "control-ui",
-          vitest_shard_count: 13,
+          shard_count: 13,
+          task: shard === 13 ? "browser-extension" : "control-ui",
+          vitest_shard_count: 12,
         };
       }),
     };

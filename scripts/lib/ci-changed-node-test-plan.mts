@@ -12,7 +12,7 @@ import {
 } from "../test-projects.test-support.mts";
 import { listAvailableExtensionIds } from "./changed-extensions.mts";
 import {
-  COMPACT_EXPANDED_LARGE_NODE_TEST_JOB_SECONDS,
+  COMPACT_EXPANDED_NODE_TEST_JOB_SECONDS,
   createNodeTestShards,
   isPolicyTestOwnedPath,
   packNodeTestGroups,
@@ -502,8 +502,7 @@ export function createChangedExtensionFallbackShards(
       bin[0].configs[0] !== shard.configs[0] &&
       bin[0].runner === shard.runner &&
       bin[0].requiresDist === shard.requiresDist &&
-      bin[0].predictedSeconds + shard.predictedSeconds <=
-        COMPACT_EXPANDED_LARGE_NODE_TEST_JOB_SECONDS,
+      bin[0].predictedSeconds + shard.predictedSeconds <= COMPACT_EXPANDED_NODE_TEST_JOB_SECONDS,
   );
   // Singleton objects keep their full metadata and original relative order.
   return bins

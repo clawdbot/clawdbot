@@ -1277,10 +1277,10 @@ jobs:
             existsSync("test/vitest/vitest.ui-e2e.config.ts") &&
             readFileSync("test/vitest/vitest.ui-e2e.config.ts", "utf8")
               .includes("ui-e2e-projects-contract-v1");
-          // The registration envelope already charges 14 UI rows on every backend.
-          // Private source servers and resource-sensitive files retain their
-          // single-worker phase inside each weighted Control UI shard.
-          const uiE2eJobCount = supportsUiE2eProjects || usesHostedRunnerProfile ? 14 : 4;
+          // Twelve combined shards reduce repeated checkout/setup while retaining
+          // the target-owned two-worker and single-worker phases. Older configs
+          // retain their existing serial width.
+          const uiE2eJobCount = supportsUiE2eProjects ? 13 : usesHostedRunnerProfile ? 14 : 4;
           const qaSmokeCiPartCount = usesHostedRunnerProfile ? 6 : 4;
           const supportsNativeI18n =
             hasPackageScript("native:i18n:check") &&
@@ -3708,9 +3708,6 @@ jobs:
           - check_name: check-session-accessor-boundary
             group: session-accessor-boundary
             runner: blacksmith-4vcpu-ubuntu-2404
-          - check_name: check-session-transcript-reader-boundary
-            group: session-transcript-reader-boundary
-            runner: blacksmith-4vcpu-ubuntu-2404
           - check_name: check-sqlite-session-schema-baseline
             group: sqlite-session-schema-baseline
             runner: blacksmith-4vcpu-ubuntu-2404
@@ -3901,8 +3898,6 @@ jobs:
               else
                 run_check "lint:tmp:sqlite-transaction-boundary" pnpm run lint:tmp:sqlite-transaction-boundary
               fi
-              ;;
-            session-transcript-reader-boundary)
               if ! node -e 'const pkg = require("./package.json"); process.exit(pkg.scripts?.["lint:tmp:session-transcript-reader-boundary"] ? 0 : 1);'; then
                 echo "[skip] session transcript reader boundary script is not present in package.json"
               else

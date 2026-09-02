@@ -544,6 +544,38 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       const groupNames = (plan: typeof fallback) =>
         plan.flatMap((shard) => shard.groups.map((group) => group.shard_name)).toSorted();
       expect(groupNames(updated)).toEqual(groupNames(fallback));
+
+      // Two complete, compatible configs share setup without changing either
+      // process envelope. Keep the native profile as an unchanged control.
+      const fixtureConfigs = [
+        "test/vitest/vitest.hooks.config.ts",
+        "test/vitest/vitest.secrets.config.ts",
+      ];
+      const originalShards = fullSuiteVitestShards.slice();
+      try {
+        const fixtureShards = originalShards
+          .map((shard) => ({
+            ...shard,
+            projects: shard.projects.filter((config) => fixtureConfigs.includes(config)),
+          }))
+          .filter((shard) => shard.projects.length > 0);
+        fullSuiteVitestShards.splice(0, fullSuiteVitestShards.length, ...fixtureShards);
+        const base = createNodeTestShards(options);
+        expect(base).toHaveLength(2);
+        timings.mockReturnValue(Object.fromEntries(base.map((shard) => [shard.shardName, 70])));
+        const packed = createNodeTestShardBundles(options);
+        expect(packed).toHaveLength(1);
+        expect(packed[0]?.groups).toEqual(
+          base.map(({ checkName: _checkName, shardName, ...group }) => ({
+            ...group,
+            shard_name: shardName,
+          })),
+        );
+        expect(packed[0]?.planConcurrency).toBe(1);
+        expect(packed[0]?.predictedSeconds).toBe(profile === "hybrid" ? 122 : 140);
+      } finally {
+        fullSuiteVitestShards.splice(0, fullSuiteVitestShards.length, ...originalShards);
+      }
     },
   );
 
@@ -599,8 +631,8 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     const tail = updated.find((shard) =>
       shard.groups.some((group) => group.shard_name === "agentic-gateway-core-3"),
     );
-    expect(tail?.groups.map((group) => group.shard_name)).toEqual(["agentic-gateway-core-3"]);
-    expect(tail?.predictedSeconds).toBe(140);
+    expect(tail?.predictedSeconds).toBeGreaterThanOrEqual(140);
+    expect(tail?.predictedSeconds).toBeLessThanOrEqual(150);
   });
 
   it.each([

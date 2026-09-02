@@ -538,7 +538,7 @@ describe("CI changed Node test plan", () => {
     for (const bundle of bundles) {
       expect(bundle.groups).toHaveLength(2);
       expect(new Set(bundle.groups!.flatMap((group) => group.configs)).size).toBe(2);
-      expect(bundle.predictedSeconds).toBeLessThanOrEqual(94);
+      expect(bundle.predictedSeconds).toBeLessThanOrEqual(150);
       expect(bundle.configs).toEqual([]);
       expect(bundle.pretestBuildMode).toBeUndefined();
       expect(bundle.groups!.every((group) => !group.pretestBuildMode)).toBe(true);

@@ -194,14 +194,12 @@ const COMPACT_EMBEDDED_GROUP_NAMES = [
 const MAX_BUNDLED_NODE_TEST_PATTERNS = 64;
 // Compact bundles trade a little serial work for fewer ephemeral runner registrations.
 // Keep runner classes and subprocess isolation intact while bounding each combined job.
-// Default Blacksmith plans pack the Blacksmith base hints with 200s/276s
-// admission caps. GitHub-hosted plans use direct hosted hints with 94s/114s
-// packing caps. Hybrid keeps the expanded topology but packs its attempt-1
-// Blacksmith rows with the refit Blacksmith estimates below.
+// Default Blacksmith plans retain 200s/276s admission caps. Expanded plans
+// share a 150s packing budget to reduce repeated checkout/setup while retaining
+// their file partitions, runner classes, and profile-specific estimates.
 const COMPACT_LARGE_NODE_TEST_JOB_SECONDS = 200;
 const COMPACT_SMALL_NODE_TEST_JOB_SECONDS = 276;
-export const COMPACT_EXPANDED_LARGE_NODE_TEST_JOB_SECONDS = 94;
-const COMPACT_EXPANDED_SMALL_NODE_TEST_JOB_SECONDS = 114;
+export const COMPACT_EXPANDED_NODE_TEST_JOB_SECONDS = 150;
 const COMPACT_GITHUB_GROUP_SECONDS_SCALE = 1.6;
 const COMPACT_HYBRID_GROUP_SECONDS_SCALE = 0.87;
 // Split groups above this hosted prediction before packing. Hybrid reuses the
@@ -2651,9 +2649,7 @@ function createCompactNodeTestShardBundles(
       const secondsCap = exclusive
         ? COMPACT_EXCLUSIVE_JOB_SECONDS
         : usesExpandedRunnerProfile(options.runnerBackend)
-          ? group.runner.includes("-8vcpu-")
-            ? COMPACT_EXPANDED_LARGE_NODE_TEST_JOB_SECONDS
-            : COMPACT_EXPANDED_SMALL_NODE_TEST_JOB_SECONDS
+          ? COMPACT_EXPANDED_NODE_TEST_JOB_SECONDS
           : group.runner.includes("-8vcpu-")
             ? COMPACT_LARGE_NODE_TEST_JOB_SECONDS
             : COMPACT_SMALL_NODE_TEST_JOB_SECONDS;

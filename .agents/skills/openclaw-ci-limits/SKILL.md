@@ -211,9 +211,12 @@ These are intentionally guarded by `test/scripts/ci-workflow-guards.test.ts`:
 - iOS Release, Debug/simulator tests, and both screenshot shards always use
   `macos-26`. Repeated Blacksmith admission stalls were recovered by the same
   hosted image; do not require a failed first attempt to select that capacity.
-  Their four fixed hosted rows are excluded from the 88-row non-Node inventory;
-  conservatively count the remaining 84 rows, including other hosted/skipped
-  jobs. This gives 180 rows per main run and 274 per broad PR, or
+  Excluding those four hosted rows from the current 86-row non-Node inventory
+  leaves 82 potentially eligible rows. Historical targets without the UI
+  named-project contract can use one extra row: 87 total and 83 potentially
+  eligible. Retain the conservative allowance of 84, including other hosted/skipped
+  jobs; the saved capacity remains unspent. This gives 180 rows per main run and
+  274 per broad PR, or
   `4 × 180 + 19 × 274 = 5,926` registrations in the observed five-minute
   arrival envelope. This is not organization-wide headroom: include queued
   carryover, adjacent repositories, and release arrivals. A complete npm
