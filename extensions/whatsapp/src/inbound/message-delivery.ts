@@ -9,6 +9,7 @@ import { defaultRuntime, createSubsystemLogger } from "openclaw/plugin-sdk/runti
 import { maybeResolveWhatsAppApprovalReaction } from "../approval-reactions.js";
 import { resolveComparableIdentity } from "../identity.js";
 import { addWhatsAppImagePreviewFields } from "../image-preview.js";
+import { resolveWhatsAppOutboundPolicy } from "../outbound-policy.js";
 import { maybeResolveWhatsAppQuestionReaction } from "../question-reactions.js";
 import { cacheInboundMessageMeta } from "../quoted-message.js";
 import { formatError } from "../session.js";
@@ -152,6 +153,14 @@ export function createWhatsAppMessageDeliveryCoordinator(options: WhatsAppMessag
 
   const maybeMarkInboundAsRead = async (target: WhatsAppReadReceiptTarget | undefined) => {
     if (!target || options.sendReadReceipts === false) {
+      return;
+    }
+    const policy = resolveWhatsAppOutboundPolicy({
+      cfg: options.loadConfig?.() ?? options.cfg,
+      target: target.remoteJid,
+      action: "read_receipt",
+    });
+    if (policy.status === "deny") {
       return;
     }
     const { id, remoteJid, participant } = target;

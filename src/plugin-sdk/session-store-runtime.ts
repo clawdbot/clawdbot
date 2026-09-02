@@ -625,6 +625,11 @@ export {
   resolveSessionResetType,
   resolveThreadFlag,
 } from "../config/sessions/reset.js";
-export { resolveSendPolicy } from "../sessions/send-policy.js";
+export {
+  resolveSendPolicy,
+  resolveSessionOutboundPolicy,
+  type SessionOutboundPolicyAction,
+  type SessionOutboundPolicyDecision,
+} from "../sessions/send-policy.js";
 export type { SessionEntry } from "../config/sessions/types.js";
 export type { SessionScope } from "../config/sessions/types.js";

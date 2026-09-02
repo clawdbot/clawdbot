@@ -68,7 +68,7 @@ With `messages.groupChat.unmentionedInbound: "room_event"`:
 
 Room events use strict visible delivery. Final assistant text is private. The agent must call `message(action=send)` to post in the room.
 
-Typing and lifecycle status reactions stay suppressed for room events. The one explicit receipt exception is `messages.ackReactionScope: "all"`, which sends the configured ack reaction; use any narrower scope or `"off"` when the room must remain completely silent.
+Typing and lifecycle status reactions stay suppressed for room events. The one explicit receipt exception is `messages.ackReactionScope: "all"`, which sends the configured ack reaction unless the destination session's `session.sendPolicy` denies the outbound reaction. Use `sendPolicy` for monitor-only rooms that must remain completely silent across messages, polls, reactions, typing, and read receipts.
 
 ## Discord example
 

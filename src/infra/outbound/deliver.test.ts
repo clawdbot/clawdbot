@@ -1170,6 +1170,38 @@ describe("deliverOutboundPayloads", () => {
     expect(hookMocks.runner.runMessageSending).not.toHaveBeenCalled();
   });
 
+  it("suppresses durable payload preparation when session.sendPolicy denies delivery", async () => {
+    const onBeforeFirstModifier = vi.fn();
+
+    await expect(
+      prepareOutboundPayloadBatch(
+        {
+          cfg: {
+            session: {
+              sendPolicy: {
+                rules: [{ action: "deny", match: { channel: "matrix", chatType: "group" } }],
+              },
+            },
+          } as OpenClawConfig,
+          channel: "matrix",
+          to: "!room:example",
+          payloads: [{ text: "blocked" }],
+          deps: { matrix: vi.fn() },
+          session: {
+            key: "agent:main:matrix:group:!room:example",
+            conversationKind: "group",
+          },
+        },
+        { onBeforeFirstModifier },
+      ),
+    ).resolves.toMatchObject({
+      entries: [{ sourceIndex: 0, status: "suppressed", reason: "send_policy_denied" }],
+    });
+    expect(onBeforeFirstModifier).not.toHaveBeenCalled();
+    expect(hookMocks.runner.runReplyPayloadSending).not.toHaveBeenCalled();
+    expect(hookMocks.runner.runMessageSending).not.toHaveBeenCalled();
+  });
+
   it("revalidates conversation authority after queue admission and before the adapter", async () => {
     const order: string[] = [];
     queueMocks.enqueueDelivery.mockImplementationOnce(async () => {

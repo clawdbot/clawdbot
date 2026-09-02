@@ -212,6 +212,37 @@ describe("maybeSendAckReaction", () => {
     expect(hoisted.sendReactionWhatsApp).not.toHaveBeenCalled();
   });
 
+  it("suppresses ack reactions when session.sendPolicy denies group reactions", async () => {
+    const cfg = {
+      ...createConfig("ack"),
+      session: {
+        sendPolicy: {
+          rules: [{ action: "deny", match: { channel: "whatsapp", chatType: "group" } }],
+        },
+      },
+    } as OpenClawConfig;
+    const ackReaction = await runAckReaction({
+      cfg,
+      msg: createMessage({
+        platform: {
+          chatJid: "120363000000000000@g.us",
+          recipientJid: "15559876543",
+          fromMe: false,
+        },
+        admission: {
+          accountId: "default",
+          conversation: { kind: "group", id: "120363000000000000@g.us" },
+          sender: { id: "15551234567" },
+        },
+        groupMention: { wasMentioned: true, requireMention: true },
+      }),
+      sessionKey: "agent:agent:whatsapp:group:120363000000000000@g.us",
+    });
+
+    expect(ackReaction).toBeNull();
+    expect(hoisted.sendReactionWhatsApp).not.toHaveBeenCalled();
+  });
+
   it("uses the active account reactionLevel override for ack gating", async () => {
     const cfg = createConfig("off", {
       accounts: {

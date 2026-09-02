@@ -14,6 +14,7 @@ import { resolveWhatsAppGroupSessionRoute } from "../../group-session-key.js";
 import { getPrimaryIdentityId, getSenderIdentity } from "../../identity.js";
 import { requireWhatsAppInboundAdmission } from "../../inbound/admission.js";
 import type { AdmittedWebInboundMessage } from "../../inbound/types.js";
+import { resolveWhatsAppOutboundPolicy } from "../../outbound-policy.js";
 import { normalizeE164 } from "../../text-runtime.js";
 import { buildMentionConfig } from "../mentions.js";
 import type { MentionConfig } from "../mentions.js";
@@ -172,6 +173,44 @@ export function createWebOnMessageHandler(params: {
     // Bound route facts intentionally feed group activation/mention policy.
     // Side-effectful ACP readiness still waits until the group turn is admitted.
     const route = configuredRoute.route;
+    const readReceiptPolicy = resolveWhatsAppOutboundPolicy({
+      cfg,
+      target: msg.platform.chatJid,
+      sessionKey: route.sessionKey,
+      action: "read_receipt",
+    });
+    if (readReceiptPolicy.status === "deny") {
+      msg.readReceiptSuppressed = true;
+    }
+    const messagePolicy = resolveWhatsAppOutboundPolicy({
+      cfg,
+      target: msg.platform.chatJid,
+      sessionKey: route.sessionKey,
+      action: "message",
+    });
+    if (messagePolicy.status === "deny") {
+      msg.platform.reply = async () => ({
+        kind: "text",
+        messageId: "",
+        keys: [],
+        providerAccepted: false,
+      });
+      msg.platform.sendMedia = async () => ({
+        kind: "media",
+        messageId: "",
+        keys: [],
+        providerAccepted: false,
+      });
+    }
+    const typingPolicy = resolveWhatsAppOutboundPolicy({
+      cfg,
+      target: msg.platform.chatJid,
+      sessionKey: route.sessionKey,
+      action: "typing",
+    });
+    if (typingPolicy.status === "deny") {
+      msg.platform.sendComposing = async () => undefined;
+    }
     const groupHistoryKey =
       conversationKind === "group"
         ? buildGroupHistoryKey({

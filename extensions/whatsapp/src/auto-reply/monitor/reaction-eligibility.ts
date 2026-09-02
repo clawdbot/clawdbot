@@ -2,6 +2,7 @@ import { shouldAckReaction } from "openclaw/plugin-sdk/channel-feedback";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { requireWhatsAppInboundAdmission } from "../../inbound/admission.js";
 import type { AdmittedWebInboundMessage } from "../../inbound/types.js";
+import { resolveWhatsAppOutboundPolicy } from "../../outbound-policy.js";
 import { resolveWhatsAppReactionLevel } from "../../reaction-level.js";
 import type { sendReactionWhatsApp } from "../../send.js";
 import { resolveWhatsAppAckEmoji } from "./ack-emoji.js";
@@ -39,6 +40,15 @@ export async function resolveWhatsAppReactionEligibility(params: {
     ackConfig: params.cfg.messages?.ackReaction,
   });
   const isGroup = admission.conversation.kind === "group";
+  const sendPolicy = resolveWhatsAppOutboundPolicy({
+    cfg: params.cfg,
+    target: params.msg.platform.chatJid,
+    sessionKey: params.sessionKey,
+    action: "reaction",
+  });
+  if (sendPolicy.status === "deny") {
+    return DISABLED_REACTION;
+  }
   const activation = isGroup
     ? await resolveGroupActivationFor({
         cfg: params.cfg,

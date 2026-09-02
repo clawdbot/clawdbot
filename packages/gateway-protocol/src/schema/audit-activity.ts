@@ -384,6 +384,7 @@ const outboundSuppressedReasonSchema = Type.Union([
   Type.Literal("empty_after_message_sending_hook"),
   Type.Literal("empty_after_reply_payload_sending_hook"),
   Type.Literal("no_visible_payload"),
+  Type.Literal("send_policy_denied"),
 ]);
 
 const outboundFailureStageSchema = Type.Union([
@@ -613,7 +614,8 @@ type AuditActivityOutboundMessageV1Terminal =
         | "cancelled_by_reply_payload_sending_hook"
         | "empty_after_message_sending_hook"
         | "empty_after_reply_payload_sending_hook"
-        | "no_visible_payload";
+        | "no_visible_payload"
+        | "send_policy_denied";
       failureStage?: never;
       deliveryKind?: never;
     }

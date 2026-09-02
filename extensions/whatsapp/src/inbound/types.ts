@@ -9,6 +9,7 @@ import type { PollInput } from "openclaw/plugin-sdk/poll-runtime";
 import type { WhatsAppIdentity, WhatsAppReplyContext, WhatsAppSelfIdentity } from "../identity.js";
 import type { WhatsAppQuotedMessageKey } from "../quoted-message.js";
 import type { WhatsAppInboundAdmission } from "./admission.js";
+import type { WhatsAppReadReceiptTarget } from "./durable-receive.js";
 import type { WhatsAppSendResult } from "./send-result.js";
 
 export type WebListenerCloseReason = {
@@ -136,6 +137,8 @@ export type WebInboundCallbackMessage = {
     wasMentioned: boolean;
     requireMention: boolean;
   };
+  readReceipt?: WhatsAppReadReceiptTarget;
+  readReceiptSuppressed?: boolean;
 };
 
 export type WebInboundMessage = WebInboundCallbackMessage;

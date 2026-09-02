@@ -554,6 +554,7 @@ const createChannelOutboundContextBase = (params: ChannelHandlerParams) => ({
   cfg: params.cfg,
   to: params.to,
   accountId: params.accountId,
+  sessionKey: params.session?.policyKey ?? params.session?.key,
   replyToId: params.replyToId,
   replyToIdSource: undefined,
   replyToMode: params.replyToMode,

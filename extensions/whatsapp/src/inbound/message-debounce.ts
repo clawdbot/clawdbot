@@ -94,7 +94,13 @@ export function createWhatsAppInboundMessageDebouncer(options: {
             if (orderedEntries.length === 1) {
               await options.onMessage(attachWhatsAppIngressLifecycle(last, admissionLifecycle));
               await settle();
-              await Promise.all(orderedEntries.map((entry) => options.markRead(entry.readReceipt)));
+              await Promise.all(
+                orderedEntries.map((entry) =>
+                  entry.readReceiptSuppressed === true
+                    ? Promise.resolve()
+                    : options.markRead(entry.readReceipt),
+                ),
+              );
               return;
             }
             const mentioned = new Set<string>();
@@ -134,8 +140,19 @@ export function createWhatsAppInboundMessageDebouncer(options: {
               admissionLifecycle,
             );
             await options.onMessage(combinedMessage);
+            if (combinedMessage.readReceiptSuppressed === true) {
+              for (const entry of orderedEntries) {
+                entry.readReceiptSuppressed = true;
+              }
+            }
             await settle();
-            await Promise.all(orderedEntries.map((entry) => options.markRead(entry.readReceipt)));
+            await Promise.all(
+              orderedEntries.map((entry) =>
+                entry.readReceiptSuppressed === true
+                  ? Promise.resolve()
+                  : options.markRead(entry.readReceipt),
+              ),
+            );
           } catch (error) {
             await abandon();
             throw error;
