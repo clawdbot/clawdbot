@@ -251,6 +251,11 @@ describe("plugin management uninstall channel ownership", () => {
               ...(claimed ? { [pluginId]: { enabled: true } } : {}),
               unknown: { enabled: true },
             },
+            plugins: {
+              entries: {
+                [pluginId]: { enabled: false },
+              },
+            },
           },
           nextInstallRecords: {},
         }),
@@ -332,9 +337,14 @@ describe("plugin management uninstall channel ownership", () => {
       expect.objectContaining({
         nextInstallRecords: {},
         nextConfig: {
+          channels: undefined,
           plugins: {
             allow: ["other"],
-            entries: { other: { enabled: true } },
+            entries: {
+              other: { enabled: true },
+              "pack/one": { enabled: false },
+              "pack/two": { enabled: false },
+            },
           },
         },
       }),

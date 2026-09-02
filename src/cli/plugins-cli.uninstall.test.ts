@@ -786,6 +786,11 @@ describe("plugins cli uninstall", () => {
               ...(claimed ? { [pluginId]: { enabled: true } } : {}),
               discord: { enabled: true },
             },
+            plugins: {
+              entries: {
+                [pluginId]: { enabled: false },
+              },
+            },
           },
         );
       } finally {
@@ -840,7 +845,13 @@ describe("plugins cli uninstall", () => {
       );
       try {
         await runPluginsCommand(["plugins", "uninstall", requestedId, "--force", "--keep-files"]);
-        expectInstallRecordsWrittenWithLease({}, { channels: { "pack/one": { enabled: true } } });
+        expectInstallRecordsWrittenWithLease(
+          {},
+          {
+            channels: { "pack/one": { enabled: true } },
+            plugins: { entries: { "pack/one": { enabled: false } } },
+          },
+        );
       } finally {
         indexSpy.mockRestore();
       }
