@@ -77,7 +77,7 @@ struct ExecHostTransportProofTests {
             try output.close()
             let log = try String(contentsOf: outputURL, encoding: .utf8)
             #expect(exitCode == 0, "TypeScript boundary proof failed: \(log)")
-            #expect(log.contains("native START -> response dropped -> client null -> native COMPLETE"))
+            #expect(log.contains("native START -> response dropped -> client outcome-unknown -> native COMPLETE"))
             #expect(log.contains("native success and policy denial verified"))
         } catch {
             await server.stop().value

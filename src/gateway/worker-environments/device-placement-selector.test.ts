@@ -63,6 +63,7 @@ async function selectNodes(
   environments: EnvironmentSummary[],
   options: {
     requirement?: DevicePlacementRequirement;
+    config?: OpenClawConfig;
     availability?: (deviceId: string) => Promise<DeviceWorkerAvailability>;
   } = {},
 ) {
@@ -89,7 +90,7 @@ async function selectNodes(
     environmentService,
     requirement: options.requirement ?? WORKER_REQUIREMENT,
     runtimeId: "test-runtime",
-    config: CONFIG,
+    config: options.config ?? CONFIG,
   });
 }
 
@@ -241,6 +242,63 @@ describe("paired-device automatic placement selection", () => {
     const result = await selectNodes(environments);
 
     expect(result).toEqual({ ok: false, error: expect.stringContaining(message) });
+  });
+
+  it.each([
+    {
+      name: "a declared command missing from Gateway policy",
+      commands: ["runtime.exec"],
+      config: {},
+      reason: "command not allowlisted",
+      policyDenied: true,
+    },
+    {
+      name: "an explicit deny overriding an explicit allow",
+      commands: ["runtime.exec"],
+      config: {
+        gateway: { nodes: { commands: { allow: ["runtime.exec"], deny: ["runtime.exec"] } } },
+      },
+      reason: "command not allowlisted",
+      policyDenied: true,
+    },
+    {
+      name: "an allowed command missing from a nonempty device surface",
+      commands: ["runtime.other"],
+      config: CONFIG,
+      reason: "command not declared by node",
+      policyDenied: false,
+    },
+    {
+      name: "an allowed command on a device declaring no commands",
+      commands: [],
+      config: CONFIG,
+      reason: "node did not declare commands",
+      policyDenied: false,
+    },
+  ])("explains $name with the matching recovery action", async (scenario) => {
+    const environment = nodeEnvironment("runner", 1);
+    const result = await selectNodes([environment], {
+      requirement: REMOTE_REQUIREMENT,
+      config: scenario.config,
+      availability: async () => ({
+        available: true,
+        node: { ...nodeProof(environment), commands: scenario.commands },
+      }),
+    });
+
+    expect(result).toEqual({ ok: false, error: expect.stringContaining(scenario.reason) });
+    expect(result).toEqual({
+      ok: false,
+      error: expect.stringMatching(
+        scenario.policyDenied
+          ? /review gateway\.nodes\.commands\.allow.*gateway\.nodes\.commands\.deny.*deny overrides allow/
+          : /plugin.*device.*reconnect.*approve/,
+      ),
+    });
+    expect(result).not.toEqual({
+      ok: false,
+      error: expect.stringMatching(scenario.policyDenied ? /plugin|reconnect/ : /commands\.allow/),
+    });
   });
 
   it("rejects runtimes that do not declare paired-device placement support", async () => {

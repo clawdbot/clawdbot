@@ -4,8 +4,8 @@ import os from "node:os";
 import path from "node:path";
 import {
   createGitCommandError,
+  enqueueGitRefMutation,
   executeGitCommand,
-  requireGitCommand,
   requireGitCommandBuffer,
   requireGitCommandRaw,
 } from "../../infra/git-exec.js";
@@ -45,7 +45,29 @@ export async function runGit(
     signal?: AbortSignal;
   } = {},
 ): Promise<GitResult> {
-  return await executeGitCommand(cwd, args, { ...options, env: gitEnvironment(options.env) });
+  const env = gitEnvironment(options.env);
+  const run = (gitArgs: string[], baseEnv?: NodeJS.ProcessEnv) =>
+    executeGitCommand(cwd, gitArgs, {
+      ...options,
+      baseEnv,
+      env,
+      input: gitArgs === args ? options.input : undefined,
+    });
+  const mutatesRefs =
+    args[0] === "update-ref" ||
+    (args[0] === "branch" &&
+      args.some((arg) => arg === "-d" || arg === "-D" || arg === "--delete"));
+  if (!mutatesRefs) {
+    return await run(args);
+  }
+  // Discovery and the queued mutation share one captured environment. The
+  // executor still checks cancellation when the queued command actually starts.
+  const baseEnv = { ...process.env };
+  const resolved = await run(["rev-parse", "--git-common-dir"], baseEnv);
+  if (resolved.termination !== "exit" || resolved.code !== 0) {
+    return resolved;
+  }
+  return await enqueueGitRefMutation(cwd, resolved.stdout.trim(), () => run(args, baseEnv));
 }
 
 export function commandError(command: string, result: GitResult): Error {
@@ -62,7 +84,11 @@ export async function requireGit(
     signal?: AbortSignal;
   } = {},
 ): Promise<string> {
-  return await requireGitCommand(cwd, args, { ...options, env: gitEnvironment(options.env) });
+  const result = await runGit(cwd, args, options);
+  if (result.termination !== "exit" || result.code !== 0) {
+    throw commandError(`git ${args.join(" ")}`, result);
+  }
+  return result.stdout.trim();
 }
 
 export async function requireGitRaw(cwd: string, args: string[]): Promise<string> {

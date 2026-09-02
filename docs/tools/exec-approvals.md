@@ -86,7 +86,10 @@ For native chat approval surfaces, a node exec waits for the decision within
 the originating tool call and returns the command output there. Closing or
 cancelling that turn invalidates its pending authority; a late approval cannot
 restart it. A typed `SYSTEM_RUN_DENIED` result means the node rejected execution,
-not that the command may have run.
+not that the command may have run. `SYSTEM_RUN_NOT_STARTED` means a required
+companion request was never submitted; resolve the reported host problem before
+retrying. A lost reply after submission remains an unknown outcome and must not
+be retried automatically.
 
 ## Settings and storage
 

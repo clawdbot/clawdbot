@@ -11,6 +11,7 @@ import {
 } from "../../scripts/lib/build-artifact-cache.mts";
 import { BoundaryInputSnapshot } from "../../scripts/lib/extension-boundary-inputs.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { resolveVitestFsModuleCacheRoot } from "../vitest/vitest.performance-config.js";
 
 const roots = useAutoCleanupTempDirTracker(afterEach);
 const require = createRequire(import.meta.url);
@@ -322,12 +323,14 @@ describe("native owner content records", () => {
     expect(matches()).toBe(false);
   });
 
-  it("ignores tool scratch churn under installed roots", () => {
+  it("ignores owned tool scratch churn", () => {
     const f = fixture(true);
     fs.mkdirSync(path.join(f.root, "node_modules"));
     const run = f.prepare();
     // Sibling config loads mint these between the before and seal walks.
     f.write("node_modules/.vite-temp/vitest.config.ts.timestamp-1-a.mjs", "export default {};");
+    const cacheRoot = resolveVitestFsModuleCacheRoot(f.root);
+    f.write(path.relative(f.root, path.join(cacheRoot, "default/_metadata.json")), "{}");
     const record = f.seal(run);
     const matches = () =>
       new BoundaryInputSnapshot(f.root).matches(
@@ -338,6 +341,7 @@ describe("native owner content records", () => {
       );
     expect(matches()).toBe(true);
     fs.rmSync(path.join(f.root, "node_modules/.vite-temp"), { recursive: true });
+    fs.rmSync(cacheRoot, { recursive: true });
     f.write("node_modules/.cache/jiti/config.deadbeef.mjs", "export default {};");
     expect(matches()).toBe(true);
     f.write("node_modules/.pnpm/pkg@1.0.0/node_modules/pkg/index.js", "export const value = 1;");

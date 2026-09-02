@@ -72,9 +72,9 @@ describe("device placement projection", () => {
       environment: node({ sessionHost: false, workerSlots: undefined }),
       selectable: false,
       reason:
-        "Session hosting is disabled. Run openclaw connect --service --session-host on the device.",
+        "Session hosting is unavailable. Enable nodeHost.workerRuns.enabled on the device, then restart its app or node service and approve its commands.",
       facts: [
-        "Session hosting is disabled. Run openclaw connect --service --session-host on the device.",
+        "Session hosting is unavailable. Enable nodeHost.workerRuns.enabled on the device, then restart its app or node service and approve its commands.",
         "macOS",
         "Camera",
       ],
@@ -160,14 +160,14 @@ describe("device placement projection", () => {
       reason: /enable|approv/i,
     },
     {
-      name: "missing command authority fails closed even when worker slots are free",
+      name: "missing runtime commands explain device plugin setup as well as Gateway policy",
       requirement: {
         requiredNodeCommands: ["codex.exec-server.stdio.v1"],
         consumesWorkerSlot: false,
       },
       environment: { invocableCommands: ["camera.snap"] },
       selectable: false,
-      reason: /enable|approv/i,
+      reason: /plugin.*device.*gateway\.nodes\.commands\.allow/i,
     },
   ])("$name", ({ requirement, environment, selectable, reason }) => {
     const [device] = projectDevicePlacements([node(environment)], requirement);

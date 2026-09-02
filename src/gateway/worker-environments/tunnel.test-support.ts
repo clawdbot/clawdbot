@@ -341,7 +341,9 @@ export async function git(root: string, ...args: string[]): Promise<string> {
     timeoutMs: 30_000,
   });
   if (result.code !== 0) {
-    throw new Error(result.stderr || result.stdout || `git ${args[0] ?? "command"} failed`);
+    throw new Error(result.stderr || result.stdout || `git ${args[0] ?? "command"} failed`, {
+      cause: { code: result.code, signal: result.signal, termination: result.termination },
+    });
   }
   return result.stdout.trim();
 }

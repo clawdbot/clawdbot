@@ -88,6 +88,13 @@ export function createHarness(
   let remainingLeaseFailures = options.leaseFailureCount ?? 0;
   let verifyCalls = 0;
   const log: string[] = [];
+  const verifyWorkspace = async () => {
+    log.push("workspace:verify");
+    verifyCalls += 1;
+    if (options.verifyFails || verifyCalls === options.verifyFailureCall) {
+      throw new Error("workspace changed after reconciliation");
+    }
+  };
   const reportWorkspaceResultConflict = vi.fn(async () => {});
   const reportWorkspaceResultRecoveryFailure = vi.fn(
     async (_recovery: WorkerWorkspaceRecoveryFailureReport) => {},
@@ -234,7 +241,7 @@ export function createHarness(
         }),
       };
     }),
-    reconcileWorkspace: vi.fn(async (request) => {
+    reconcileWorkspace: vi.fn<WorkerTunnelHandle["reconcileWorkspace"]>(async (request) => {
       log.push("workspace:reconcile");
       if (options.reconcileFails || remainingReconcileFailures > 0) {
         remainingReconcileFailures -= 1;
@@ -278,12 +285,14 @@ export function createHarness(
       return {
         manifestRef: reconciledManifestRef,
         changed: options.reconcileChanged ?? true,
-        verifyStable: async () => {
-          log.push("workspace:verify");
-          verifyCalls += 1;
-          if (options.verifyFails || verifyCalls === options.verifyFailureCall) {
-            throw new Error("workspace changed after reconciliation");
+        verifyStable: async (renewal) => {
+          if (renewal) {
+            if (renewal.capture === "before-and-after") {
+              await verifyWorkspace();
+            }
+            await renewal.quiescence.assertActive();
           }
+          await verifyWorkspace();
         },
         verifyLocalStable: async () => {
           log.push("workspace:verify-local");

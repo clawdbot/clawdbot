@@ -122,6 +122,45 @@ it("publishes hosting through the app route and retires it on disconnect", async
     expect(fixture.runtime.updateGatewayConnection).toHaveBeenCalledWith(
       expect.objectContaining({ url: connection.url }),
     );
+    await setImmediate();
+    const runnerPublications = () =>
+      messages.filter(
+        (message) =>
+          message.type === "gateway-request" && message.method === "node.runnerInventory.update",
+      );
+    const published = runnerPublications().length;
+    const connectionUpdates = fixture.runtime.updateGatewayConnection.mock.calls.length;
+    for (const [generation, decision] of [
+      [0, "approved"],
+      [1, "rejected"],
+    ] as const) {
+      input.emit(
+        "line",
+        JSON.stringify({
+          type: "gateway-event",
+          generation,
+          event: "node.pair.resolved",
+          payload: { decision },
+        }),
+      );
+    }
+    await setImmediate();
+    expect(runnerPublications()).toHaveLength(published);
+    input.emit(
+      "line",
+      JSON.stringify({
+        type: "gateway-event",
+        generation: 1,
+        event: "node.pair.resolved",
+        payload: { decision: "approved" },
+      }),
+    );
+    await vi.waitFor(() => expect(runnerPublications()).toHaveLength(published + 1));
+    expect(runnerPublications().at(-1)).toMatchObject({
+      generation: 1,
+      params: { workerHost: { enabled: true } },
+    });
+    expect(fixture.runtime.updateGatewayConnection).toHaveBeenCalledTimes(connectionUpdates);
     input.emit(
       "line",
       JSON.stringify({ type: "gateway-connection", generation: 2, connection: null }),

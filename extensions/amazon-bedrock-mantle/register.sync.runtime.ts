@@ -11,10 +11,10 @@ import {
   resolveClaudeSonnet5ModelIdentity,
 } from "openclaw/plugin-sdk/provider-model-shared";
 import {
+  MANTLE_SONNET_5_COST,
   resolveImplicitMantleProvider,
   resolveMantleBearerToken,
   resolveMantleRuntimeBearerToken,
-  resolveMantleSonnet5Cost,
 } from "./discovery.js";
 import { createMantleAnthropicStreamFn } from "./mantle-anthropic.runtime.js";
 
@@ -34,7 +34,7 @@ function normalizeMantleResolvedModel(params: {
   const cost = resolveClaudeOpus5ModelIdentity(ref)
     ? MANTLE_OPUS_5_COST
     : resolveClaudeSonnet5ModelIdentity(ref)
-      ? resolveMantleSonnet5Cost()
+      ? MANTLE_SONNET_5_COST
       : undefined;
   if (!cost) {
     return undefined;

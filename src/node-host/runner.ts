@@ -244,6 +244,7 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
       deviceIdentity: loadOrCreateDeviceIdentity(),
     },
     onEvent: (evt) => {
+      activeRuntime.handleGatewayEvent(evt);
       if (evt.event === "node.invoke.cancel") {
         const payload = coerceNodeInvokeCancelPayload(evt.payload);
         if (payload) {

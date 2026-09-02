@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import type { WorkerWorkspaceReconcileResult } from "./tunnel-contract.js";
 import {
   runInstrumentedWorkspaceReconcile,
   verifyReconciledWorkspaceFinal,
@@ -18,6 +19,18 @@ vi.mock("../../logging/subsystem.js", async (importOriginal) => {
   };
 });
 
+function remoteVerifier(capture: () => Promise<void>) {
+  return vi.fn<WorkerWorkspaceReconcileResult["verifyStable"]>(async (renewal) => {
+    if (!renewal || renewal.capture === "before-and-after") {
+      await capture();
+    }
+    if (renewal) {
+      await renewal.quiescence.assertActive();
+      await capture();
+    }
+  });
+}
+
 describe("final worker workspace fences", () => {
   it("rechecks remote and local stability after the final quiescence renewal", async () => {
     const log: string[] = [];
@@ -25,9 +38,9 @@ describe("final worker workspace fences", () => {
     const reconciliation = await runInstrumentedWorkspaceReconcile(async () => ({
       manifestRef: "sha256:" + "a".repeat(64),
       changed: true,
-      verifyStable: async () => {
+      verifyStable: remoteVerifier(async () => {
         log.push("remote");
-      },
+      }),
       verifyLocalStable: async () => {
         log.push("local");
       },
@@ -54,12 +67,12 @@ describe("final worker workspace fences", () => {
         {
           manifestRef: "sha256:" + "a".repeat(64),
           changed: true,
-          verifyStable: async () => {
+          verifyStable: remoteVerifier(async () => {
             remoteVerifications += 1;
             if (remoteVerifications === 2) {
               throw new Error("late remote write");
             }
-          },
+          }),
           verifyLocalStable: async () => {},
         },
         { assertActive: async () => {}, resume: async () => {} },
@@ -77,9 +90,9 @@ describe("final worker workspace fences", () => {
         {
           manifestRef: "sha256:" + "a".repeat(64),
           changed: false,
-          verifyStable: async () => {
+          verifyStable: remoteVerifier(async () => {
             throw new Error("late remote write");
-          },
+          }),
           verifyLocalStable: async () => {},
         },
         { assertActive: async () => {}, resume: async () => {} },
@@ -90,15 +103,22 @@ describe("final worker workspace fences", () => {
     });
   });
 
-  it("publishes between remote stability fences under quiescence", async () => {
+  it("delegates two renewal groups without changing the publication fence order", async () => {
     const log: string[] = [];
+    const verifyStable = remoteVerifier(async () => {
+      log.push("remote");
+    });
+    const quiescence = {
+      assertActive: async () => {
+        log.push("quiescence");
+      },
+      resume: async () => {},
+    };
     await verifyReconciledWorkspaceFinal(
       {
         manifestRef: "sha256:" + "b".repeat(64),
         changed: true,
-        verifyStable: async () => {
-          log.push("remote");
-        },
+        verifyStable,
         verifyLocalStable: async () => {
           log.push("local");
         },
@@ -109,13 +129,12 @@ describe("final worker workspace fences", () => {
           log.push("publish");
         },
       },
-      {
-        assertActive: async () => {
-          log.push("quiescence");
-        },
-        resume: async () => {},
-      },
+      quiescence,
     );
+    expect(verifyStable.mock.calls).toEqual([
+      [{ quiescence, capture: "before-and-after" }],
+      [{ quiescence, capture: "after" }],
+    ]);
     expect(log).toEqual([
       "remote",
       "quiescence",
@@ -137,9 +156,9 @@ describe("final worker workspace fences", () => {
         {
           manifestRef: "sha256:" + "c".repeat(64),
           changed: true,
-          verifyStable: async () => {
+          verifyStable: remoteVerifier(async () => {
             log.push("remote");
-          },
+          }),
           verifyLocalStable: async () => {
             log.push("local");
           },
@@ -187,12 +206,12 @@ describe("final worker workspace fences", () => {
         {
           manifestRef: "sha256:" + "c".repeat(64),
           changed: true,
-          verifyStable: async () => {
+          verifyStable: remoteVerifier(async () => {
             remoteVerifications += 1;
             if (remoteVerifications === 2) {
               throw new Error("writer mutated before SIGSTOP");
             }
-          },
+          }),
           verifyLocalStable: async () => {},
           applyPreparedStagedResult: apply,
           publishStagedResult: async () => {},
@@ -214,12 +233,12 @@ describe("final worker workspace fences", () => {
         {
           manifestRef: "sha256:" + "c".repeat(64),
           changed: true,
-          verifyStable: async () => {
+          verifyStable: remoteVerifier(async () => {
             remoteVerifications += 1;
             if (remoteVerifications === 3) {
               throw new Error("late remote write");
             }
-          },
+          }),
           verifyLocalStable: async () => {
             log.push("local");
           },
@@ -248,7 +267,7 @@ describe("final worker workspace fences", () => {
         {
           manifestRef: "sha256:" + "d".repeat(64),
           changed: true,
-          verifyStable: async () => {},
+          verifyStable: remoteVerifier(async () => {}),
           verifyLocalStable: async () => {},
           applyPreparedStagedResult: async () => {},
           publishStagedResult: async () => {

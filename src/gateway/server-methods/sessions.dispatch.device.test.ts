@@ -601,11 +601,14 @@ describe("sessions.dispatch device targets", () => {
         name: "missing",
         declaredCommands: ["system.run"],
         commandPolicy: { allow: ["codex.exec-server.stdio.v1"] },
+        expectedMessage: /command not declared by node.*plugin.*reconnect/,
       },
       {
         name: "declared but denied",
         declaredCommands: ["system.run", "codex.exec-server.stdio.v1"],
         commandPolicy: { deny: ["codex.exec-server.stdio.v1"] },
+        expectedMessage:
+          /command not allowlisted.*gateway\.nodes\.commands\.deny \(deny overrides allow\)/,
       },
     ])("rejects a $name required paired-node command before dispatch", async (scenario) => {
       useDeviceSession("codex");
@@ -635,7 +638,7 @@ describe("sessions.dispatch device targets", () => {
         undefined,
         expect.objectContaining({
           code: ErrorCodes.INVALID_REQUEST,
-          message: expect.stringMatching(/command.*(enabled|approved|declared)/i),
+          message: expect.stringMatching(scenario.expectedMessage),
         }),
       );
     });

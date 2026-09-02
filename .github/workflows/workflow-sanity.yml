@@ -62,6 +62,14 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - *workflow_sanity_checkout_step
+      - name: Checkout trusted CI harness
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: .ci-harness
+          sparse-checkout: .github/actions/pre-commit
+          persist-credentials: false
+
       - name: Setup Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
@@ -146,7 +154,13 @@ jobs:
           PYTHON
 
       - name: Install pre-commit
-        run: python -m pip install --disable-pip-version-check pre-commit==4.6.2
+        run: |
+          set -euo pipefail
+          python3 -I -m venv "$RUNNER_TEMP/pre-commit-venv"
+          "$RUNNER_TEMP/pre-commit-venv/bin/python" -I -m pip install --disable-pip-version-check pre-commit==4.6.2
+
+      - name: Test selected pre-commit runner
+        run: '"$RUNNER_TEMP/pre-commit-venv/bin/python" -I .ci-harness/.github/actions/pre-commit/test-run-selected.py'
 
       - name: Install ShellCheck
         shell: bash
@@ -192,7 +206,7 @@ jobs:
           mapfile -t workflow_files < <(
             find .github/workflows -maxdepth 1 -type f \( -name '*.yml' -o -name '*.yaml' \) | sort
           )
-          pre-commit run --config "${PRE_COMMIT_CONFIG_PATH:-.pre-commit-config.yaml}" zizmor --files "${workflow_files[@]}"
+          "$RUNNER_TEMP/pre-commit-venv/bin/python" -I .ci-harness/.github/actions/pre-commit/run-selected.py "${PRE_COMMIT_CONFIG_PATH:-.pre-commit-config.yaml}" zizmor --files "${workflow_files[@]}"
 
       - name: Disallow direct inputs interpolation in composite run blocks
         run: python3 scripts/check-composite-action-input-interpolation.py

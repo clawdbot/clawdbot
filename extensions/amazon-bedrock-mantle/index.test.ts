@@ -1,6 +1,6 @@
 // Amazon Bedrock Mantle tests cover index plugin behavior.
 import { registerSingleProviderPlugin } from "openclaw/plugin-sdk/plugin-test-runtime";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import bedrockMantlePlugin from "./index.js";
 
 describe("amazon-bedrock-mantle provider plugin", () => {
@@ -154,10 +154,11 @@ describe("amazon-bedrock-mantle provider plugin", () => {
     }
   });
 
-  it("restores missing or stale Sonnet 5 pricing during runtime normalization", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(Date.UTC(2026, 8, 1));
-    try {
+  it.each(["2026-08-31T23:59:59Z", "2026-09-01T00:00:00Z", "2027-01-01T00:00:00Z"])(
+    "restores published Sonnet 5 runtime pricing on %s",
+    async (timestamp) => {
+      const clock = vi.spyOn(Date, "now").mockReturnValue(Date.parse(timestamp));
+      onTestFinished(() => clock.mockRestore());
       const provider = await registerSingleProviderPlugin(bedrockMantlePlugin);
       const model = {
         id: "anthropic.claude-sonnet-5",
@@ -171,14 +172,9 @@ describe("amazon-bedrock-mantle provider plugin", () => {
         maxTokens: 128_000,
         params: { canonicalModelId: "claude-sonnet-5" },
       };
-      const expectedCost = {
-        input: 3,
-        output: 15,
-        cacheRead: 0.3,
-        cacheWrite: 3.75,
-      };
+      const expectedCost = { input: 2, output: 10, cacheRead: 0.2, cacheWrite: 2.5 };
 
-      for (const cost of [undefined, { input: 2, output: 10, cacheRead: 0.2, cacheWrite: 2.5 }]) {
+      for (const cost of [undefined, { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 }]) {
         const normalized = provider.normalizeResolvedModel?.({
           provider: "amazon-bedrock-mantle",
           modelId: "anthropic.claude-sonnet-5",
@@ -186,8 +182,6 @@ describe("amazon-bedrock-mantle provider plugin", () => {
         } as never);
         expect(normalized?.cost).toEqual(expectedCost);
       }
-    } finally {
-      vi.useRealTimers();
-    }
-  });
+    },
+  );
 });

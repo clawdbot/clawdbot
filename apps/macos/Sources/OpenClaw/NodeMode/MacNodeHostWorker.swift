@@ -117,6 +117,7 @@ final class MacNodeHostWorker: MacNodeHostWorking, @unchecked Sendable {
     private var pendingInvokeControlOrder: [String] = []
     private var startTimer: DispatchSourceTimer?
     private var eventDeliveryTask: Task<Void, Never>?
+    private var gatewayEventDelivery: (subscription: GatewayServerEventSubscription, task: Task<Void, Never>)?
     private var gatewayGeneration: UInt64 = 0
 
     init(
@@ -127,6 +128,11 @@ final class MacNodeHostWorker: MacNodeHostWorking, @unchecked Sendable {
         self.session = session
         self.startupTimeout = startupTimeout
         self.onUnexpectedExit = onUnexpectedExit
+    }
+
+    deinit {
+        self.gatewayEventDelivery?.subscription.cancel()
+        self.gatewayEventDelivery?.task.cancel()
     }
 
     func start(launch: MacNodeHostWorkerLaunch) async throws -> MacNodeHostManifest {
@@ -298,6 +304,7 @@ final class MacNodeHostWorker: MacNodeHostWorking, @unchecked Sendable {
                     continuation.resume(returning: false)
                     return
                 }
+                self.cancelGatewayEventDeliveryLocked()
                 self.routeAuthorityGeneration = authorityGeneration
                 self.route = route
                 self.gatewayGeneration &+= 1
@@ -326,18 +333,100 @@ final class MacNodeHostWorker: MacNodeHostWorking, @unchecked Sendable {
     }
 
     func gatewayConnected(ifCurrentRoute route: GatewayNodeSessionRoute) async {
-        guard let data = await self.session.workerConnectionData(ifCurrentRoute: route) else { return }
+        // Capture the worker before actor hops; a suspended snapshot must never
+        // install its connection or buffered events into a replacement owner.
+        let owner: (process: UUID, gateway: UInt64)? = await withCheckedContinuation { continuation in
+            self.queue.async {
+                guard self.route == route, self.gatewayEventDelivery == nil,
+                      self.manifest != nil, self.process?.isRunning == true,
+                      let processGeneration = self.processGeneration
+                else {
+                    continuation.resume(returning: nil)
+                    return
+                }
+                continuation.resume(returning: (processGeneration, self.gatewayGeneration))
+            }
+        }
+        guard let owner else { return }
+        // Subscribe before publication can be acknowledged. Filter before buffering
+        // so unrelated Gateway traffic cannot evict a pairing outcome.
+        let subscription = await self.session.makeServerEventSubscription(bufferingNewest: 16) {
+            $0.event == "node.pair.resolved"
+        }
+        guard let data = await self.session.workerConnectionData(ifCurrentRoute: route),
+              await self.session.currentRoute() == route, !Task.isCancelled
+        else {
+            subscription.cancel()
+            return
+        }
         await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
             self.queue.async {
                 defer { continuation.resume() }
-                guard self.route == route,
-                      let connection = try? JSONSerialization.jsonObject(with: data) else { return }
-                self.gatewayGeneration &+= 1
-                try? self.enqueueWriteLocked([
-                    "type": "gateway-connection", "generation": self.gatewayGeneration, "connection": connection,
-                ])
+                guard self.processGeneration == owner.process,
+                      self.gatewayGeneration == owner.gateway, self.route == route
+                else {
+                    subscription.cancel()
+                    return
+                }
+                do {
+                    let connection = try JSONSerialization.jsonObject(with: data)
+                    self.gatewayGeneration &+= 1
+                    let gatewayGeneration = self.gatewayGeneration
+                    try self.enqueueWriteLocked([
+                        "type": "gateway-connection", "generation": gatewayGeneration, "connection": connection,
+                    ])
+                    let task = Task { [weak self] in
+                        defer { subscription.cancel() }
+                        for await event in subscription.events {
+                            guard !Task.isCancelled else { return }
+                            await self?.forwardGatewayEvent(
+                                event,
+                                route: route,
+                                processGeneration: owner.process,
+                                gatewayGeneration: gatewayGeneration)
+                        }
+                    }
+                    self.gatewayEventDelivery = (subscription, task)
+                } catch {
+                    subscription.cancel()
+                    self.stopLocked(reason: "worker input write failed", notifyUnexpectedExit: true)
+                }
             }
         }
+    }
+
+    private func forwardGatewayEvent(
+        _ event: EventFrame,
+        route: GatewayNodeSessionRoute,
+        processGeneration: UUID,
+        gatewayGeneration: UInt64) async
+    {
+        guard await self.session.currentRoute() == route, !Task.isCancelled else { return }
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            self.queue.async {
+                defer { continuation.resume() }
+                // Finishing a stream can leave buffered events. Revalidate after
+                // every hop instead of relabeling old events with current authority.
+                guard self.processGeneration == processGeneration,
+                      self.gatewayGeneration == gatewayGeneration, self.route == route else { return }
+                do {
+                    let payloadData = try JSONEncoder().encode(event.payload)
+                    let payload = try JSONSerialization.jsonObject(with: payloadData, options: .fragmentsAllowed)
+                    try self.enqueueWriteLocked([
+                        "type": "gateway-event", "generation": gatewayGeneration,
+                        "event": event.event, "payload": payload,
+                    ])
+                } catch {
+                    self.stopLocked(reason: "worker input write failed", notifyUnexpectedExit: true)
+                }
+            }
+        }
+    }
+
+    private func cancelGatewayEventDeliveryLocked() {
+        self.gatewayEventDelivery?.subscription.cancel()
+        self.gatewayEventDelivery?.task.cancel()
+        self.gatewayEventDelivery = nil
     }
 
     func stop() async {
@@ -408,7 +497,6 @@ final class MacNodeHostWorker: MacNodeHostWorking, @unchecked Sendable {
         let privateRuntimePath = launch.environment["PATH"].map { $0 + ":" } ?? ""
         environment["PATH"] = privateRuntimePath + CommandResolver.preferredPaths().joined(separator: ":")
         environment["OPENCLAW_NODE_EXEC_HOST"] = "app"
-        environment["OPENCLAW_NODE_EXEC_FALLBACK"] = "0"
         self.launchedWorker = launch
         self.stdinPipe = stdinPipe
         self.processGeneration = processGeneration
@@ -703,6 +791,7 @@ final class MacNodeHostWorker: MacNodeHostWorking, @unchecked Sendable {
         self.stdoutBuffer.removeAll(keepingCapacity: false)
         self.manifest = nil
         self.route = nil
+        self.cancelGatewayEventDeliveryLocked()
         if !preserveStart {
             self.finishStartLocked(.failure(WorkerError.unavailable(reason: reason, diagnostic: diagnostic)))
         }

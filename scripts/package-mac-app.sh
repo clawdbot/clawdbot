@@ -255,7 +255,7 @@ require_swift_toolchain
 
 if [[ "${SKIP_PNPM_INSTALL:-0}" != "1" ]]; then
   echo "📦 Ensuring deps (pnpm install --frozen-lockfile)"
-  run_pnpm install --frozen-lockfile --config.node-linker=hoisted
+  run_pnpm install --frozen-lockfile
 else
   echo "📦 Skipping pnpm install (SKIP_PNPM_INSTALL=1)"
 fi

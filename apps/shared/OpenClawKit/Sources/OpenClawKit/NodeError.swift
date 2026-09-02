@@ -9,6 +9,7 @@ public enum OpenClawNodeErrorCode: String, Codable, Sendable {
     /// Rejected before a command handler or progress frame; safe for bounded admission recovery.
     case notReady = "NODE_NOT_READY"
     case systemRunDenied = "SYSTEM_RUN_DENIED"
+    case systemRunNotStarted = "SYSTEM_RUN_NOT_STARTED"
 }
 
 public struct OpenClawNodeError: Error, Codable, Sendable, Equatable {

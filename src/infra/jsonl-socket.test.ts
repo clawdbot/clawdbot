@@ -1,198 +1,217 @@
-// Covers JSONL socket request framing and response handling.
+// Covers submission certainty, request half-close, and cancellation over real sockets.
 import { getEventListeners } from "node:events";
 import { syncBuiltinESMExports } from "node:module";
-import net from "node:net";
+import type { Socket } from "node:net";
 import path from "node:path";
 import timers from "node:timers";
 import { describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { withTestDir } from "../test-helpers/temp-dir.js";
+import { requestExecApprovalViaSocket } from "./exec-approvals-socket.js";
 import { requestJsonlSocket } from "./jsonl-socket.js";
-
-async function withSocketServer(
-  server: net.Server,
-  run: (socketPath: string) => Promise<void>,
-): Promise<void> {
-  // macOS sockaddr_un cannot hold the test runner's nested temporary path.
-  await withTestDir({ prefix: "oc-jsonl-", parentDir: "/tmp" }, async (dir) => {
-    const socketPath = path.join(dir, "socket.sock");
-    const sockets: net.Socket[] = [];
-    const closed: Promise<void>[] = [];
-    server.on("connection", (socket) => {
-      sockets.push(socket);
-      closed.push(
-        new Promise<void>((resolve) => {
-          socket.once("close", resolve);
-        }),
-      );
-    });
-    await new Promise<void>((resolve, reject) => {
-      server.once("error", reject);
-      server.listen(socketPath, resolve);
-    });
-    try {
-      await run(socketPath);
-    } finally {
-      for (const socket of sockets) {
-        socket.destroy();
-      }
-      await Promise.all(closed);
-      await new Promise<void>((resolve, reject) => {
-        server.close((error) => (error ? reject(error) : resolve()));
-      });
-    }
-  });
-}
+import { withJsonlSocketPeer } from "./jsonl-socket.test-support.js";
 
 function acceptDoneValue(msg: unknown): number | null | undefined {
   const value = msg as { type?: string; value?: number };
   return value.type === "done" ? (value.value ?? null) : undefined;
 }
 
+const requestLine = '{"hello":"world"}';
+
 describe.runIf(process.platform !== "win32")("requestJsonlSocket", () => {
-  it("ignores malformed and non-accepted lines until one is accepted", async () => {
-    const server = net.createServer((socket) => {
-      socket.on("data", () => {
-        socket.write("{bad json}\n");
-        socket.write('{"type":"ignore"}\n');
-        socket.write('{"type":"done","value":42}\n');
-      });
-    });
-    await withSocketServer(server, async (socketPath) => {
+  it("ignores malformed and unrelated lines and reads the reply after request half-close", async () => {
+    await withJsonlSocketPeer(
+      (socket, wire) => {
+        expect(wire).toBe(`${requestLine}\n`);
+        socket.end('{bad json}\n{"type":"ignore"}\n{"type":"done","value":42}\n');
+      },
+      async ({ socketPath }) => {
+        const controller = new AbortController();
+        await expect(
+          requestJsonlSocket({
+            socketPath,
+            requestLine,
+            timeoutMs: 1_000,
+            accept: acceptDoneValue,
+            signal: controller.signal,
+          }),
+        ).resolves.toEqual({ ok: true, value: 42 });
+        expect(getEventListeners(controller.signal, "abort")).toEqual([]);
+      },
+    );
+  });
+
+  it("reports a missing socket as not-submitted", async () => {
+    await withTestDir({ prefix: "oc-js-", parentDir: "/tmp" }, async (dir) => {
       await expect(
         requestJsonlSocket({
-          socketPath,
-          requestLine: '{"hello":"world"}',
-          timeoutMs: 500,
+          socketPath: path.join(dir, "missing.sock"),
+          requestLine,
+          timeoutMs: 1_000,
           accept: acceptDoneValue,
         }),
-      ).resolves.toBe(42);
+      ).resolves.toEqual({ ok: false, error: "not-submitted" });
     });
   });
 
-  it("does not connect or send an already-aborted request", async () => {
-    const connected = vi.fn();
-    const server = net.createServer((socket) => {
-      connected();
-      socket.resume();
-      socket.on("end", () => socket.end('{"type":"done","value":7}\n'));
-    });
-    await withSocketServer(server, async (socketPath) => {
+  it("does not connect or send an already-cancelled request", async () => {
+    const onRequest = vi.fn();
+    await withJsonlSocketPeer(onRequest, async ({ socketPath, connections }) => {
       await expect(
         requestJsonlSocket({
           socketPath,
-          requestLine: '{"hello":"world"}',
-          timeoutMs: 500,
+          requestLine,
+          timeoutMs: 1_000,
           accept: acceptDoneValue,
           signal: AbortSignal.abort(),
         }),
-      ).resolves.toBeNull();
-      expect(connected).not.toHaveBeenCalled();
+      ).resolves.toEqual({ ok: false, error: "cancelled" });
+      expect(connections).toHaveLength(0);
+      expect(onRequest).not.toHaveBeenCalled();
     });
   });
 
-  it.each([false, true])("half-closes the request and settles after abort=%s", async (abort) => {
-    const received = createDeferred<{ socket: net.Socket; buffer: string }>();
-    const server = net.createServer({ allowHalfOpen: true }, (socket) => {
-      let buffer = "";
-      socket.on("data", (chunk) => {
-        buffer += chunk.toString("utf8");
-      });
-      socket.on("end", () => received.resolve({ socket, buffer }));
-    });
-    await withSocketServer(server, async (socketPath) => {
-      const controller = new AbortController();
-      const completed = vi.fn();
-      const pending = requestJsonlSocket({
-        socketPath,
-        requestLine: '{"hello":"world"}',
-        timeoutMs: 10_000,
-        accept: acceptDoneValue,
-        signal: controller.signal,
-      }).then(completed);
-      try {
-        const { socket, buffer } = await received.promise;
-        expect(buffer).toBe('{"hello":"world"}\n');
-        expect(completed).not.toHaveBeenCalled();
-        if (abort) {
+  it.each(["close", "malformed matching response", "timeout"] as const)(
+    "reports outcome-unknown after submission followed by %s",
+    async (fault) => {
+      await withJsonlSocketPeer(
+        (socket, wire) => {
+          expect(wire).toBe(`${requestLine}\n`);
+          if (fault === "close") {
+            socket.end();
+          } else if (fault === "malformed matching response") {
+            socket.end('{"type":"done"}\n');
+          }
+        },
+        async ({ socketPath, requests }) => {
+          await expect(
+            requestJsonlSocket({
+              socketPath,
+              requestLine,
+              timeoutMs: 500,
+              accept: acceptDoneValue,
+            }),
+          ).resolves.toEqual({ ok: false, error: "outcome-unknown" });
+          expect(requests).toEqual([`${requestLine}\n`]);
+        },
+      );
+    },
+  );
+
+  it("settles on socket close without waiting for the response deadline", async () => {
+    await withJsonlSocketPeer(
+      (socket) => {
+        socket.destroy();
+      },
+      async ({ socketPath }) => {
+        // Leave the deadline frozen: only the real socket close can settle this request.
+        vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+        const schedule = vi.spyOn(timers, "setTimeout").mockImplementation(setTimeout);
+        const clear = vi.spyOn(timers, "clearTimeout").mockImplementation(clearTimeout);
+        syncBuiltinESMExports();
+        try {
+          const pending = requestJsonlSocket({
+            socketPath,
+            requestLine,
+            timeoutMs: 250,
+            accept: () => undefined,
+          });
+          expect(vi.getTimerCount()).toBe(1);
+          await expect(pending).resolves.toEqual({ ok: false, error: "outcome-unknown" });
+          expect(vi.getTimerCount()).toBe(0);
+        } finally {
+          schedule.mockRestore();
+          clear.mockRestore();
+          vi.useRealTimers();
+          syncBuiltinESMExports();
+        }
+      },
+    );
+  });
+
+  it("cancels after submission without confusing cancellation with nonexecution", async () => {
+    const received = createDeferredCore<Socket>();
+    await withJsonlSocketPeer(
+      (socket) => received.resolve(socket),
+      async ({ socketPath }) => {
+        const controller = new AbortController();
+        const completed = vi.fn();
+        const pending = requestJsonlSocket({
+          socketPath,
+          requestLine,
+          timeoutMs: 5_000,
+          accept: acceptDoneValue,
+          signal: controller.signal,
+        }).then(completed);
+        try {
+          const socket = await Promise.race([
+            received.promise,
+            pending.then(() => {
+              throw new Error("Socket request settled before the peer received it");
+            }),
+          ]);
+          expect(completed).not.toHaveBeenCalled();
           controller.abort();
-          await expect.poll(() => completed.mock.calls.length, { timeout: 1_000 }).toBe(1);
-          expect(completed).toHaveBeenCalledWith(null);
-          // EOF already arrived from the normal half-close. A failed peer write
-          // proves cancellation also closed the client's remaining read side.
+          await pending;
+          expect(completed).toHaveBeenCalledExactlyOnceWith({ ok: false, error: "cancelled" });
+          expect(getEventListeners(controller.signal, "abort")).toEqual([]);
+          // Request EOF already arrived. EPIPE proves the response reader also closed.
           const writeError = vi.fn();
           socket.once("error", writeError);
           socket.write('{"type":"done","value":7}\n');
-          await expect.poll(() => writeError.mock.calls.length, { timeout: 1_000 }).toBe(1);
+          await expect.poll(() => writeError.mock.calls.length).toBe(1);
           expect(writeError).toHaveBeenCalledWith(expect.objectContaining({ code: "EPIPE" }));
-        } else {
-          socket.end('{"type":"done","value":7}\n');
+        } finally {
+          controller.abort();
           await pending;
-          expect(completed).toHaveBeenCalledWith(7);
         }
-        expect(getEventListeners(controller.signal, "abort")).toEqual([]);
-      } finally {
-        controller.abort();
-        await pending;
-      }
-    });
+      },
+    );
   });
+});
 
-  it("returns null on timeout and on socket errors", async () => {
-    let closedSocketPath = "";
-    const server = net.createServer({ allowHalfOpen: true }, (socket) => {
-      socket.resume();
-      // Intentionally keep the response side open after the request half-close.
-    });
-    await withSocketServer(server, async (socketPath) => {
-      closedSocketPath = socketPath;
-      await expect(
-        requestJsonlSocket({
-          socketPath,
-          requestLine: "{}",
-          timeoutMs: 50,
-          accept: () => undefined,
-        }),
-      ).resolves.toBeNull();
-    });
-    await expect(
-      requestJsonlSocket({
-        socketPath: closedSocketPath,
-        requestLine: "{}",
-        timeoutMs: 50,
-        accept: () => undefined,
-      }),
-    ).resolves.toBeNull();
-  });
+describe.runIf(process.platform !== "win32")("approval-only socket SDK contract", () => {
+  it.each(["allow-once", "deny"] as const)(
+    "still returns the bare %s decision",
+    async (decision) => {
+      await withJsonlSocketPeer(
+        (socket, wire) => {
+          const request = JSON.parse(wire) as { type: string; id: string; token: string };
+          expect(request.type).toBe("request");
+          expect(request.token).toBe("approval-test-token");
+          socket.end(`${JSON.stringify({ type: "decision", id: request.id, decision })}\n`);
+        },
+        async ({ socketPath }) => {
+          await expect(
+            requestExecApprovalViaSocket({
+              socketPath,
+              token: "approval-test-token",
+              request: { command: "example" },
+              timeoutMs: 1_000,
+            }),
+          ).resolves.toBe(decision);
+        },
+      );
+    },
+  );
 
-  it("returns null when the socket closes without an accepted response", async () => {
-    const server = net.createServer((socket) => {
-      socket.on("data", () => {
-        socket.destroy();
-      });
-    });
-    await withSocketServer(server, async (socketPath) => {
-      // Leave the deadline frozen: only the real socket close can settle this request.
-      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-      const schedule = vi.spyOn(timers, "setTimeout").mockImplementation(setTimeout);
-      const clear = vi.spyOn(timers, "clearTimeout").mockImplementation(clearTimeout);
-      syncBuiltinESMExports();
-      try {
-        const pending = requestJsonlSocket({
-          socketPath,
-          requestLine: "{}",
-          timeoutMs: 250,
-          accept: () => undefined,
-        });
-        expect(vi.getTimerCount()).toBe(1);
-        await expect(pending).resolves.toBeNull();
-        expect(vi.getTimerCount()).toBe(0);
-      } finally {
-        schedule.mockRestore();
-        clear.mockRestore();
-        vi.useRealTimers();
-        syncBuiltinESMExports();
-      }
-    });
+  it("keeps null for missing credentials, pre-send failure, and lost replies", async () => {
+    await withJsonlSocketPeer(
+      (socket) => {
+        socket.end();
+      },
+      async ({ dir, socketPath }) => {
+        for (const credentials of [
+          { socketPath: "", token: "approval-test-token" },
+          { socketPath, token: "" },
+          { socketPath: path.join(dir, "missing.sock"), token: "approval-test-token" },
+          { socketPath, token: "approval-test-token" },
+        ]) {
+          await expect(
+            requestExecApprovalViaSocket({ ...credentials, request: {}, timeoutMs: 1_000 }),
+          ).resolves.toBeNull();
+        }
+      },
+    );
   });
 });

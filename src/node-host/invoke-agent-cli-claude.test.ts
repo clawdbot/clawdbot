@@ -62,7 +62,8 @@ function runCommand(
     client: client([]),
     frame: frame(request),
     request,
-    argv: [executable, ...request.argv],
+    // Exercise real stdio/auth without putting fresh shebang-file startup inside the idle budget.
+    argv: [process.execPath, executable, ...request.argv],
     cwd: undefined,
     env: process.env as Record<string, string>,
     timeoutMs: request.timeoutMs,
@@ -313,7 +314,7 @@ process.stdout.write(JSON.stringify({
           sendInvokeResult: (result: unknown) => Promise<void>;
         }) => {
           await options.runCommand(
-            options.params.command,
+            [process.execPath, ...options.params.command],
             undefined,
             {
               ...process.env,
@@ -386,8 +387,8 @@ process.stdout.write(JSON.stringify({
         ) => Promise<unknown>;
         sendInvokeResult: (result: unknown) => Promise<void>;
       }) => {
-        await options.runCommand(
-          options.params.command,
+        const result = await options.runCommand(
+          [process.execPath, ...options.params.command],
           undefined,
           {
             ...process.env,
@@ -397,6 +398,12 @@ process.stdout.write(JSON.stringify({
           } as Record<string, string>,
           options.params.timeoutMs,
         );
+        expect(result).toMatchObject({
+          exitCode: 0,
+          success: true,
+          timedOut: false,
+          noOutputTimedOut: false,
+        });
         await options.sendInvokeResult({ ok: true });
       },
     );
@@ -416,6 +423,9 @@ process.stdout.write(JSON.stringify({
       .filter((call) => call.method === "node.invoke.progress")
       .map((call) => (call.params as { chunk: string }).chunk)
       .join("");
+    expect(calls.find((call) => call.method === "node.invoke.result")).toMatchObject({
+      params: { ok: true },
+    });
     expect(progress).toContain('"apiKey":"node-native-api-key"');
     expect(progress).toContain('"oauth":"node-native-oauth"');
     expect(progress).toContain('"scrub":"1"');
@@ -443,6 +453,12 @@ process.stdin.on("end", () => {
       timeoutMs: 5_000,
     };
     const result = await runCommand(executable, request, { client: client(calls) });
+    expect(result).toMatchObject({
+      exitCode: 0,
+      success: true,
+      timedOut: false,
+      noOutputTimedOut: false,
+    });
 
     const progress = calls
       .filter((call) => call.method === "node.invoke.progress")
@@ -450,7 +466,6 @@ process.stdin.on("end", () => {
       .join("");
     expect(progress).toContain('"session_id":"node-session"');
     expect(progress).toContain("hello from gateway");
-    expect(result).toMatchObject({ exitCode: 0, success: true });
     expect(result.stderr).toContain("node stderr");
     expect(result.stderr).toContain("content=node system prompt");
     const promptPath = result.stderr.match(/^prompt=(.+)$/mu)?.[1];

@@ -39,41 +39,42 @@ type GatewayConfigOverrides = Pick<
   | "writeConfigFile"
 >;
 
+/** Composes fixture source; readers own legacy roster migration and its in-memory facts. */
+export function composeGatewayTestAgents(baseConfig: Record<string, unknown>) {
+  const fileAgents =
+    baseConfig.agents && typeof baseConfig.agents === "object" && !Array.isArray(baseConfig.agents)
+      ? (baseConfig.agents as Record<string, unknown>)
+      : {};
+  const fileDefaults =
+    fileAgents.defaults &&
+    typeof fileAgents.defaults === "object" &&
+    !Array.isArray(fileAgents.defaults)
+      ? (fileAgents.defaults as Record<string, unknown>)
+      : {};
+  const defaults = {
+    model: { primary: "anthropic/claude-opus-4-6" },
+    workspace: path.join(os.tmpdir(), "openclaw-gateway-test"),
+    ...fileDefaults,
+    ...testState.agentConfig,
+  };
+  const testAgents = testState.agentsConfig;
+  const retainedFileAgents = { ...fileAgents };
+  if (testAgents && Object.hasOwn(testAgents, "list")) {
+    delete retainedFileAgents.entries;
+  }
+  if (testAgents && Object.hasOwn(testAgents, "entries")) {
+    delete retainedFileAgents.list;
+  }
+  return testAgents
+    ? { ...retainedFileAgents, ...testAgents, defaults }
+    : { ...retainedFileAgents, defaults };
+}
+
 /** Creates gateway-test overrides without importing the facade that re-exports mocked IO. */
 export function createGatewayConfigOverrides(actual: GatewayConfigRuntime): GatewayConfigOverrides {
   const resolveConfigPath = () => path.join(testConfigRoot.value, "openclaw.json");
 
   const composeTestConfig = (baseConfig: Record<string, unknown>) => {
-    const fileAgents =
-      baseConfig.agents &&
-      typeof baseConfig.agents === "object" &&
-      !Array.isArray(baseConfig.agents)
-        ? (baseConfig.agents as Record<string, unknown>)
-        : {};
-    const fileDefaults =
-      fileAgents.defaults &&
-      typeof fileAgents.defaults === "object" &&
-      !Array.isArray(fileAgents.defaults)
-        ? (fileAgents.defaults as Record<string, unknown>)
-        : {};
-    const defaults = {
-      model: { primary: "anthropic/claude-opus-4-6" },
-      workspace: path.join(os.tmpdir(), "openclaw-gateway-test"),
-      ...fileDefaults,
-      ...testState.agentConfig,
-    };
-    const testAgents = testState.agentsConfig;
-    const retainedFileAgents = { ...fileAgents };
-    if (testAgents && Object.hasOwn(testAgents, "list")) {
-      delete retainedFileAgents.entries;
-    }
-    if (testAgents && Object.hasOwn(testAgents, "entries")) {
-      delete retainedFileAgents.list;
-    }
-    const agents = testAgents
-      ? { ...retainedFileAgents, ...testAgents, defaults }
-      : { ...retainedFileAgents, defaults };
-
     const fileBindings = Array.isArray(baseConfig.bindings)
       ? (baseConfig.bindings as AgentBinding[])
       : undefined;
@@ -165,7 +166,7 @@ export function createGatewayConfigOverrides(actual: GatewayConfigRuntime): Gate
 
     const composed = {
       ...baseConfig,
-      agents,
+      agents: composeGatewayTestAgents(baseConfig),
       bindings: testState.bindingsConfig ?? fileBindings,
       channels,
       session,

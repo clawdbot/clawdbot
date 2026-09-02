@@ -50,7 +50,7 @@ async function invokeFailure(error: unknown) {
 }
 
 describe("invokeNodeSystemRun failure classification", () => {
-  it("classifies only proven pre-dispatch NOT_CONNECTED as retry-safe", async () => {
+  it("preserves proven pre-dispatch NOT_CONNECTED", async () => {
     await expect(
       invokeFailure(
         gatewayNodeInvokeError({
@@ -62,7 +62,6 @@ describe("invokeNodeSystemRun failure classification", () => {
       ),
     ).resolves.toEqual({
       reason: "not-dispatched",
-      retrySafe: true,
       code: "NOT_CONNECTED",
       message: "node not connected",
       nodeCommandDispatched: false,
@@ -96,7 +95,6 @@ describe("invokeNodeSystemRun failure classification", () => {
   ])("classifies $name as outcome-unknown", async ({ error }) => {
     await expect(invokeFailure(error)).resolves.toMatchObject({
       reason: "outcome-unknown",
-      retrySafe: false,
     });
   });
 
@@ -320,6 +318,50 @@ describe("direct node run", () => {
       }),
     ]);
   });
+
+  it.each(["direct", "approval followup"] as const)(
+    "reports proven companion nonexecution in the %s result without denying Gateway dispatch",
+    async (surface) => {
+      const error = gatewayNodeInvokeError({
+        code: "SYSTEM_RUN_NOT_STARTED",
+        message: "Companion request was not submitted; start the app before retrying.",
+        nodeCommandDispatched: true,
+        requestSent: true,
+      });
+      let text: string;
+      if (surface === "direct") {
+        callGatewayToolMock.mockRejectedValueOnce(error);
+        const result = await dispatchNodeSystemRun(createDirectNodeRun());
+        expect(result.details).toMatchObject({
+          status: "failed",
+          reason: "not-started",
+          nodeInvokeFailure: {
+            failureCode: "SYSTEM_RUN_NOT_STARTED",
+            nodeCommandDispatched: true,
+            requestSent: true,
+          },
+        });
+        text = result.content[0]?.type === "text" ? result.content[0].text : "";
+      } else {
+        const failure = await invokeFailure(error);
+        expect(failure).toMatchObject({
+          reason: "not-started",
+          nodeCommandDispatched: true,
+          requestSent: true,
+        });
+        text = formatNodeInvokeFailureFollowup({
+          failure,
+          nodeId: "node-1",
+          approvalId: "approval-1",
+          command: "tool --version",
+        });
+      }
+      expect(text).toMatch(/not started/i);
+      expect(text).toContain("retry");
+      expect(text).not.toMatch(/may have executed|was denied|was not dispatched/i);
+      expect(callGatewayToolMock).toHaveBeenCalledTimes(1);
+    },
+  );
 
   it("forwards the original cancellation signal to the gateway", async () => {
     const controller = new AbortController();

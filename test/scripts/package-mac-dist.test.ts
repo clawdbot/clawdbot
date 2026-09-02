@@ -207,9 +207,6 @@ describe("package-mac-dist plist validation", () => {
 
     expect(script).toContain("ensure_sparkle_build_deps()");
     expect(script).toContain(
-      "run_dist_pnpm install --frozen-lockfile --config.node-linker=hoisted >&2",
-    );
-    expect(script).toContain(
       '(cd "$ROOT_DIR" && node --import tsx "$ROOT_DIR/scripts/sparkle-build.ts" canonical-build "$1")',
     );
     expect(script).toContain('if [[ "$SPARKLE_BUILD_DEPS_RETRIED" == "1" ]]');
@@ -392,6 +389,7 @@ describe("package-mac-dist plist validation", () => {
       [
         "#!/usr/bin/env bash",
         "set -euo pipefail",
+        'printf "%s\\n" "$*" > "$OPENCLAW_MARKER.args"',
         "echo 'Already up to date'",
         'touch "$OPENCLAW_MARKER"',
         "",
@@ -413,6 +411,7 @@ describe("package-mac-dist plist validation", () => {
 
     expect(result.status).toBe(0);
     expect(result.stdout).toBe("2026060200\n");
+    expect(readFileSync(`${marker}.args`, "utf8")).toBe("install --frozen-lockfile\n");
     expect(result.stderr).toContain("Ensuring deps for Sparkle build metadata");
     expect(result.stderr).toContain("Already up to date");
     expect(result.stderr).toContain("ExperimentalWarning: tsx loader changed");
@@ -640,8 +639,8 @@ describe.runIf(process.platform === "darwin")("package-mac-dist symbol archives"
           .trim()
           .split("\n")
           .map((line) => line.split(" ").slice(0, 3).join(" "))
-          .sort(),
-      ).toEqual(fixture.expectedUUIDs.sort());
+          .toSorted(),
+      ).toEqual(fixture.expectedUUIDs.toSorted());
       expect(existsSync(path.join(fixture.root, "dist", "OpenClaw.dSYM"))).toBe(false);
     },
   );

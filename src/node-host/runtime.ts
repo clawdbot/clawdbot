@@ -263,7 +263,7 @@ export async function prepareNodeHostRuntime(params?: {
   env?: NodeJS.ProcessEnv;
   /** The embedded app worker never advertises native agent runs. */
   enableAgentRuns?: boolean;
-  /** The embedded app worker never advertises full worker session hosting. */
+  /** Enable supervised sessions when the host has also granted node-local consent. */
   enableWorkerRuns?: boolean;
   /** Process-scoped worker hosting for environment-managed disposable nodes. */
   forceWorkerRuns?: boolean;

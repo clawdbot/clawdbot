@@ -14,7 +14,10 @@ import {
 import { NodeRegistry } from "../node-registry.js";
 import type { GatewayWsClient } from "../server/ws-types.js";
 import { nodeHandlers } from "./nodes.js";
-import { createWorkerSupervisorNodeClient } from "./nodes.runner-inventory.test-support.js";
+import {
+  createNodeHandlerOptions,
+  createWorkerSupervisorNodeClient,
+} from "./nodes.runner-inventory.test-support.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
 type UpdatePairedNodeSessionHostParams = Parameters<
@@ -39,19 +42,10 @@ function runnerInventoryOptions(params: {
   client: GatewayWsClient;
   declaration: unknown;
 }): GatewayRequestHandlerOptions {
-  return {
-    req: {
-      type: "req",
-      id: "req-1",
-      method: "node.runnerInventory.update",
-      params: params.declaration,
-    },
-    params: params.declaration,
-    client: params.client as never,
-    isWebchatConnect: () => false,
-    respond: vi.fn(),
-    context: { nodeRegistry: params.nodeRegistry, logGateway: { warn: vi.fn() } },
-  } as unknown as GatewayRequestHandlerOptions;
+  const { opts } = createNodeHandlerOptions(params.declaration, { client: params.client });
+  opts.req.method = "node.runnerInventory.update";
+  opts.context.nodeRegistry = params.nodeRegistry;
+  return opts;
 }
 
 const runnerInventoryHandler = expectDefined(

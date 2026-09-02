@@ -89,12 +89,13 @@ suite.define(() => {
   it("shows authoritative device targets to writers and moves through the exact-source RPC", async () => {
     const context = await suite.newBrowserContext(contextOptions());
     const page = await context.newPage();
+    const session = activeSession();
     const gateway = await installMockGateway(page, {
       featureMethods: ["chat.startup", "environments.list", "sessions.move"],
       operatorScopes: ["operator.read", "operator.write"],
       historyMessages: [{ role: "assistant", content: "Placement move proof." }],
       methodResponses: {
-        "sessions.list": chatSessionListResponse([activeSession()]),
+        "sessions.list": chatSessionListResponse([session]),
         "environments.list": {
           profiles: [{ id: "aws", providerId: "crabbox", trust: "disposable" }],
           environments: [
@@ -148,7 +149,7 @@ suite.define(() => {
       expect(await page.locator('[data-value="device:nonhost"]').isDisabled()).toBe(true);
       await page.getByText("No worker slots are available", { exact: false }).waitFor();
       await page.getByText("Device unavailable", { exact: false }).waitFor();
-      await page.getByText("Session hosting is disabled", { exact: false }).waitFor();
+      await page.getByText("Session hosting is unavailable", { exact: false }).waitFor();
       expect(await gateway.getRequests("node.list")).toHaveLength(0);
       await page.locator('[data-value="device:writer-runner"]').click();
       await capture(page, "01-destination-picker-with-warning.png");
@@ -163,12 +164,35 @@ suite.define(() => {
       await page.getByRole("button", { name: "Moving session…" }).waitFor();
       await capture(page, "03-moving.png");
 
+      const movedSession = {
+        ...session,
+        updatedAt: 3,
+        hasActiveRun: false,
+        placement: {
+          ...session.placement,
+          generation: 10,
+          updatedAtMs: 3,
+          stateChangedAtMs: 3,
+          environmentId: "worker:writer-runner",
+          activeOwnerEpoch: 1,
+          runner: { kind: "device", status: "available" },
+        },
+      };
+      // The move owner refreshes the roster; the RPC acknowledgement is not its projection.
+      await gateway.setMethodResponse("sessions.list", chatSessionListResponse([movedSession]));
       await gateway.resolveDeferred("sessions.move", {
         ok: true,
-        key: "agent:main:placement-move",
-        sessionId: "session-placement-move",
-        placement: { state: "active", generation: 10 },
+        key: movedSession.key,
+        sessionId: movedSession.sessionId,
+        placement: movedSession.placement,
       });
+      await page.getByRole("button", { name: "Runs on device", exact: true }).waitFor();
+      expect(await page.getByRole("button", { name: "Moving session…", exact: true }).count()).toBe(
+        0,
+      );
+      expect(await page.getByRole("button", { name: "Runs on Cloud", exact: true }).count()).toBe(
+        0,
+      );
       await capture(page, "04-moved.png");
     } finally {
       await suite.closeBrowserContext(context);

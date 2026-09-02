@@ -84,14 +84,15 @@ export function parseNodeWorkerWorkspaceExecInput(
   ) {
     throw new Error("INVALID_REQUEST: generation must be a non-negative safe integer");
   }
+  // Plain manifest captures pass an empty base operand; only the executable must be non-empty.
   if (
     !Array.isArray(value.argv) ||
     value.argv.length === 0 ||
     value.argv.length > ARGV_MAX_ITEMS ||
+    value.argv[0] === "" ||
     !value.argv.every(
       (arg) =>
         typeof arg === "string" &&
-        arg.length > 0 &&
         !arg.includes("\0") &&
         Buffer.byteLength(arg, "utf8") <= ARG_MAX_BYTES,
     )
@@ -305,5 +306,7 @@ export function projectNodeWorkerWorkspaceExecResult(
   return parsed;
 }
 
+// Gateway commands use this budget; the node receiver's standalone default is independent.
+export const NODE_WORKER_WORKSPACE_COMMAND_TIMEOUT_MS = 60_000;
 export const NODE_WORKER_WORKSPACE_STDOUT_MAX_BYTES = OUTPUT_MAX_BYTES;
 export const NODE_WORKER_WORKSPACE_STDERR_MAX_BYTES = STDERR_MAX_BYTES;

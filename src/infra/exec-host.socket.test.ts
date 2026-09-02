@@ -130,7 +130,7 @@ describe.runIf(process.platform !== "win32")("exec host real UDS boundary", () =
           request: { command: ["/usr/bin/touch", marker] },
           timeoutMs: 1_000,
         }),
-      ).resolves.toBeNull();
+      ).resolves.toEqual({ ok: false, error: "not-submitted" });
       await expect(fs.readdir(dir)).resolves.toEqual([]);
     });
   });
@@ -155,14 +155,14 @@ describe.runIf(process.platform !== "win32")("exec host real UDS boundary", () =
         });
         await expect(
           requestExecHostViaSocket({ socketPath, token, request, timeoutMs: 1_000 }),
-        ).resolves.toEqual(response);
+        ).resolves.toEqual({ ok: true, value: response });
         expect(order).toEqual(["request-half-closed", "response"]);
       });
     },
   );
 
   it.each(["close", "malformed matching response", "timeout"] as const)(
-    "characterizes null after a signed request starts a child and then %s",
+    "reports outcome-unknown after a signed request starts a child and then %s",
     async (fault) => {
       await withExecPeer(async ({ dir, socketPath, markers, order, children, onRequest }) => {
         const command = [
@@ -212,11 +212,11 @@ describe.runIf(process.platform !== "win32")("exec host real UDS boundary", () =
           order.push("child-completed");
         });
         try {
-          // Characterization only: null currently conflates no delivery with lost outcome.
+          // A lost reply settles the caller without proving the running child has finished.
           await expect(
             requestExecHostViaSocket({ socketPath, token, request, timeoutMs: 1_000 }),
-          ).resolves.toBeNull();
-          order.push("client-null");
+          ).resolves.toEqual({ ok: false, error: "outcome-unknown" });
+          order.push("client-outcome-unknown");
           expect(await fs.readFile(markers, "utf8")).toBe("START\n");
         } finally {
           release.resolve();
@@ -229,7 +229,7 @@ describe.runIf(process.platform !== "win32")("exec host real UDS boundary", () =
           ...(fault === "timeout"
             ? []
             : [fault === "close" ? "response-dropped" : "malformed-response"]),
-          "client-null",
+          "client-outcome-unknown",
           "child-completed",
         ]);
       });

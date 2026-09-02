@@ -685,7 +685,8 @@ async function runCommand(params: {
   const completed = await Promise.race([
     new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve, reject) => {
       child.once("error", reject);
-      child.once("exit", (code, signal) => resolve({ code, signal }));
+      // Inherited pipes can outlive the leader; capture and its deadline end at close.
+      child.once("close", (code, signal) => resolve({ code, signal }));
     }),
     sleep(params.timeoutMs, deadline.signal).then(() => null),
   ]).finally(() => deadline.abort());

@@ -31,8 +31,9 @@ type VitestExperimentalConfig = {
 
 // Linked worktrees may share node_modules; invalidating that cache would remove
 // another checkout's transforms. Keep writable cache ownership in this checkout.
+// Artifact storage keeps metadata churn out of compiler input snapshots.
 export function resolveVitestFsModuleCacheRoot(cwd = process.cwd()): string {
-  return path.join(cwd, ".cache", "vitest");
+  return path.join(cwd, ".artifacts", "vitest");
 }
 
 export function loadVitestExperimentalConfig(

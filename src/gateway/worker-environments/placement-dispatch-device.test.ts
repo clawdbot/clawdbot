@@ -41,6 +41,10 @@ vi.mock("../../config/config.js", async (importOriginal) => {
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const CODEX_COMMAND = "codex.exec-server.stdio.v1";
+const MISSING_COMMAND_GUIDANCE =
+  "paired-device command codex.exec-server.stdio.v1 is unavailable for device-1 (command not declared by node); check that its plugin is installed and enabled on the device, then reconnect and approve the node's commands";
+const POLICY_COMMAND_GUIDANCE =
+  "paired-device command codex.exec-server.stdio.v1 is unavailable for device-1 (command not allowlisted); review gateway.nodes.commands.allow and gateway.nodes.commands.deny (deny overrides allow)";
 const OPENCLAW_DEVICE_REQUIREMENT = { requiredNodeCommands: [], consumesWorkerSlot: true };
 const CODEX_DEVICE_REQUIREMENT = {
   requiredNodeCommands: [CODEX_COMMAND],
@@ -576,7 +580,7 @@ describe("device worker placement dispatch", () => {
       requirement: CODEX_DEVICE_REQUIREMENT,
       config: { gateway: { nodes: { commands: { allow: [CODEX_COMMAND] } } } },
       expected: false,
-      message: "not enabled or approved",
+      message: MISSING_COMMAND_GUIDANCE,
     },
     {
       name: "rejects a declared command denied by Gateway policy",
@@ -584,7 +588,7 @@ describe("device worker placement dispatch", () => {
       requirement: CODEX_DEVICE_REQUIREMENT,
       config: { gateway: { nodes: { commands: { deny: [CODEX_COMMAND] } } } },
       expected: false,
-      message: "not enabled or approved",
+      message: POLICY_COMMAND_GUIDANCE,
     },
     {
       name: "allows an explicitly enabled declared command",
@@ -633,14 +637,14 @@ describe("device worker placement dispatch", () => {
       executionMode: "remote-exec" as const,
       node: deviceProof(0, ["system.run"]),
       providerId: "device",
-      expectedMessage: "not enabled or approved",
+      expectedMessage: MISSING_COMMAND_GUIDANCE,
     },
     {
       name: "non-device remote-exec cloud node missing its required command",
       executionMode: "remote-exec" as const,
       node: deviceProof(0, ["system.run"]),
       providerId: "generic-cloud-node",
-      expectedMessage: "not enabled or approved",
+      expectedMessage: MISSING_COMMAND_GUIDANCE,
     },
     {
       name: "saturated non-device worker-turn cloud node",

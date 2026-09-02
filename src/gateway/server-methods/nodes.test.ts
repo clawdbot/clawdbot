@@ -1,3 +1,4 @@
+import { setImmediate } from "node:timers/promises";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
@@ -11,7 +12,11 @@ import {
   isPairedDeviceNodeBindingCurrent,
   resolveCurrentPairedDeviceNodeBinding,
 } from "../../infra/device-pairing-node-state.js";
-import { approveNodePairing, requestNodePairing } from "../../infra/device-pairing-node.js";
+import {
+  approveNodePairing,
+  listNodePairing,
+  requestNodePairing,
+} from "../../infra/device-pairing-node.js";
 import { revokeDeviceToken, rotateDeviceToken } from "../../infra/device-pairing-tokens.js";
 import {
   listDevicePairing,
@@ -25,12 +30,14 @@ import {
 } from "../../infra/diagnostic-events.js";
 import { NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE } from "../../infra/node-runner-inventory.js";
 import { loadApnsRegistration, registerApnsRegistration } from "../../infra/push-apns.js";
+import { startNodeHostConnection } from "../../node-host/connection.js";
 import { resetRemoteNodeSkillsForTests } from "../../skills/runtime/remote-skills.test-support.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
+import { GatewayClientRequestError } from "../client.js";
 import { drainNodePendingWork, enqueueNodePendingWork } from "../node-pending-work.js";
 import { createNodeRegistryRuntime } from "../node-registry-private.js";
 import { NodeRegistry } from "../node-registry.js";
@@ -45,8 +52,12 @@ import {
 } from "../node-wake-state.test-support.js";
 import { bindDeviceWorkerReconciliation } from "../worker-environments/device-provider.js";
 import { nodeHandlers } from "./nodes.js";
-import { createWorkerSupervisorNodeClient } from "./nodes.runner-inventory.test-support.js";
-import type { GatewayRequestHandlerOptions } from "./types.js";
+import {
+  createNodeHandlerClient as createClient,
+  createNodeHandlerOptions as createOptions,
+  createWorkerSupervisorNodeClient,
+  pairAndroidNodeDevice,
+} from "./nodes.runner-inventory.test-support.js";
 
 const createdStates: OpenClawTestState[] = [];
 const pairingGenerationHooks = vi.hoisted(() => ({
@@ -117,61 +128,6 @@ function captureSecurityEvents(): {
   return { events, stop };
 }
 
-function createContext() {
-  return {
-    broadcast: vi.fn(),
-    disconnectClientsForDevice: vi.fn(),
-    getRuntimeConfig: vi.fn(() => ({})),
-    invalidateClientsForDevice: vi.fn(),
-    logGateway: {
-      debug: vi.fn(),
-      error: vi.fn(),
-      info: vi.fn(),
-      warn: vi.fn(),
-    },
-    nodeRegistry: {
-      get: vi.fn(),
-      listConnected: vi.fn(() => []),
-      listConnectedForPairingStates: vi.fn(() => []),
-      getActiveNode: vi.fn(),
-      updateSurface: vi.fn(),
-      updateNodeSkills: vi.fn(),
-    },
-  };
-}
-
-function createClient(scopes: string[], deviceId?: string, opts?: { isDeviceTokenAuth?: boolean }) {
-  return {
-    ...(opts?.isDeviceTokenAuth !== undefined ? { isDeviceTokenAuth: opts.isDeviceTokenAuth } : {}),
-    connect: {
-      scopes,
-      ...(deviceId ? { device: { id: deviceId } } : {}),
-    },
-  } as never;
-}
-
-function createOptions(
-  params: Record<string, unknown>,
-  overrides?: Partial<GatewayRequestHandlerOptions>,
-): {
-  context: ReturnType<typeof createContext>;
-  opts: GatewayRequestHandlerOptions;
-  respond: ReturnType<typeof vi.fn>;
-} {
-  const context = createContext();
-  const respond = vi.fn();
-  const opts = {
-    req: { type: "req", id: "req-1", method: "node.pair.remove", params },
-    params,
-    client: createClient(["operator.pairing", "operator.admin"]),
-    isWebchatConnect: () => false,
-    respond,
-    context,
-    ...overrides,
-  } as unknown as GatewayRequestHandlerOptions;
-  return { context, opts, respond };
-}
-
 describe("nodeHandlers node.skills.update", () => {
   it("stores and publishes a validated replacement catalog for the calling node", async () => {
     const skill = {
@@ -207,30 +163,6 @@ describe("nodeHandlers node.skills.update", () => {
     );
   });
 });
-
-async function pairAndroidNodeDevice(stateDir: string, nodeId: string): Promise<void> {
-  const pending = await requestDevicePairing(
-    {
-      deviceId: nodeId,
-      publicKey: `public-key-${nodeId}`,
-      displayName: "Galaxy A54 5G",
-      platform: "android",
-      deviceFamily: "Android",
-      clientId: "openclaw-android",
-      clientMode: "node",
-      role: "node",
-      roles: ["node"],
-      scopes: [],
-    },
-    stateDir,
-  );
-  const approved = await approveDevicePairing(
-    pending.request.requestId,
-    { callerScopes: [] },
-    stateDir,
-  );
-  expect(approved?.status).toBe("approved");
-}
 
 async function pairMixedRoleAndroidDevice(stateDir: string, nodeId: string): Promise<void> {
   const pending = await requestDevicePairing(
@@ -469,89 +401,146 @@ describe("nodeHandlers node.pair.approve", () => {
     );
   });
 
-  it("requires current-generation runner inventory after exact live reapproval", async () => {
-    const state = await createState("node-approve-retains-worker-dialect");
-    const nodeId = "node-1";
-    await pairAndroidNodeDevice(state.stateDir, nodeId);
-    await approveNodeSurface(state.stateDir, nodeId);
-    const previousState = await captureNodePairingState(nodeId);
-    expect(previousState?.generation).not.toBeNull();
+  it.each([GATEWAY_CLIENT_IDS.NODE_HOST, GATEWAY_CLIENT_IDS.MACOS_APP])(
+    "%s republishes hosting after acknowledged inventory is retired by live reapproval",
+    async (clientId) => {
+      const state = await createState("node-approve-republishes-worker-hosting");
+      const nodeId = "node-1";
+      await pairAndroidNodeDevice(state.stateDir, nodeId);
+      await approveNodeSurface(state.stateDir, nodeId);
+      const previousState = await captureNodePairingState(nodeId);
+      expect(previousState?.generation).not.toBeNull();
 
-    const runtime = createNodeRegistryRuntime(
-      () =>
-        new NodeRegistry({
-          resolveCurrentPairingState: resolveCurrentPairedDeviceNodeBinding,
-          isPairingStateCurrent: isPairedDeviceNodeBindingCurrent,
-        }),
-    );
-    const client = createWorkerSupervisorNodeClient("conn-surface-reapproval");
-    runtime.nodeRegistry.register(client, {
-      pairingIdentity: previousState?.identity.key ?? "",
-      pairingGeneration: previousState?.generation?.key,
-    });
-    const publication = createOptions(
-      {
-        protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
-        workerHost: { enabled: true, capacity: { total: 2, available: 2 } },
-      },
-      { client: client as never },
-    );
-    Object.assign(publication.context, { nodeRegistry: runtime.nodeRegistry });
-    await expectDefined(
-      nodeHandlers["node.runnerInventory.update"],
-      'nodeHandlers["node.runnerInventory.update"] test invariant',
-    )(publication.opts);
-    await expect(runtime.nodeWorkerSupervisorTransport.listCurrentNodes()).resolves.toEqual([
-      expect.objectContaining({ pairingGeneration: previousState?.generation?.key }),
-    ]);
+      const runtime = createNodeRegistryRuntime(
+        () =>
+          new NodeRegistry({
+            resolveCurrentPairingState: resolveCurrentPairedDeviceNodeBinding,
+            isPairingStateCurrent: isPairedDeviceNodeBindingCurrent,
+          }),
+      );
+      const client = createWorkerSupervisorNodeClient("conn-surface-reapproval");
+      client.connect.client.id = clientId;
+      runtime.nodeRegistry.register(client, {
+        pairingIdentity: previousState?.identity.key ?? "",
+        pairingGeneration: previousState?.generation?.key,
+      });
+      const publicationReplies = vi.fn();
+      const publisher = startNodeHostConnection({
+        client: {
+          async request<T>(method: string, params?: unknown): Promise<T> {
+            if (method !== "node.runnerInventory.update") {
+              return {} as T;
+            }
+            const publication = createOptions(params, { client });
+            Object.assign(publication.context, { nodeRegistry: runtime.nodeRegistry });
+            await expectDefined(nodeHandlers[method], "runner inventory handler")(publication.opts);
+            const [ok, result, error] = expectDefined(
+              publication.respond.mock.calls[0],
+              "inventory response",
+            );
+            if (!ok) {
+              throw new GatewayClientRequestError(error);
+            }
+            publicationReplies(result);
+            return result as T;
+          },
+        },
+        prepared: {
+          manifest: { caps: [], commands: ["system.run"], pathEnv: "/bin" },
+          workerHostingEnabled: true,
+          initialInventory: { skills: null, pluginTools: [] },
+          start(callbacks) {
+            callbacks.onRunnerCapacityChanged?.({ total: 2, available: 2 });
+            return {
+              invoke: async () => {},
+              handleInput: () => {},
+              cancel: () => {},
+              cancelAll: () => {},
+              updateGatewayConnection: () => {},
+              close: async () => {},
+            };
+          },
+        },
+        onManifestChanged: () => {},
+        writeStderrLine: () => {},
+      });
+      client.socket.send = (data) => {
+        if (typeof data !== "string") {
+          throw new Error("expected a JSON text frame");
+        }
+        const event = JSON.parse(data);
+        if (event.event === "node.pair.resolved") {
+          publisher.handleGatewayEvent(event);
+        }
+      };
+      publisher.connect({ url: "ws://gateway.example.test", protocol: 4, capabilities: [] });
+      try {
+        await vi.waitFor(() => expect(publicationReplies).toHaveBeenCalledTimes(1));
+        // Settle the client's acknowledgement before promotion; an in-flight failure
+        // would exercise its existing retry path instead of this lost-publication bug.
+        await setImmediate();
+        const [previousProof] = await runtime.nodeWorkerSupervisorTransport.listCurrentNodes();
+        expect(previousProof?.pairingGeneration).toBe(previousState?.generation?.key);
 
-    const pending = await requestNodePairing(
-      {
-        nodeId,
-        platform: "linux",
-        deviceFamily: "Linux",
-        clientId: GATEWAY_CLIENT_IDS.NODE_HOST,
-        clientMode: GATEWAY_CLIENT_MODES.NODE,
-        displayName: "Worker host reapproved",
-      },
-      state.stateDir,
-    );
-    const approval = createOptions({ requestId: pending.request.requestId });
-    Object.assign(approval.context, { nodeRegistry: runtime.nodeRegistry });
-    await expectDefined(
-      nodeHandlers["node.pair.approve"],
-      'nodeHandlers["node.pair.approve"] test invariant',
-    )(approval.opts);
+        const pending = await requestNodePairing(
+          {
+            nodeId,
+            platform: "linux",
+            deviceFamily: "Linux",
+            clientId: GATEWAY_CLIENT_IDS.NODE_HOST,
+            clientMode: GATEWAY_CLIENT_MODES.NODE,
+            displayName: "Worker host reapproved",
+          },
+          state.stateDir,
+        );
+        const approval = createOptions({ requestId: pending.request.requestId });
+        Object.assign(approval.context, { nodeRegistry: runtime.nodeRegistry });
+        await expectDefined(
+          nodeHandlers["node.pair.approve"],
+          'nodeHandlers["node.pair.approve"] test invariant',
+        )(approval.opts);
 
-    const nextGeneration = await captureNodePairingGeneration(nodeId);
-    expect(nextGeneration?.key).not.toBe(previousState?.generation?.key);
-    expect(approval.opts.respond).toHaveBeenCalledWith(
-      true,
-      expect.objectContaining({ node: expect.objectContaining({ nodeId }) }),
-      undefined,
-    );
-    await expect(runtime.nodeWorkerSupervisorTransport.listCurrentNodes()).resolves.toEqual([]);
-    const republish = createOptions(
-      {
-        protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
-        workerHost: { enabled: true, capacity: { total: 2, available: 2 } },
-      },
-      { client: client as never },
-    );
-    Object.assign(republish.context, { nodeRegistry: runtime.nodeRegistry });
-    await expectDefined(
-      nodeHandlers["node.runnerInventory.update"],
-      'nodeHandlers["node.runnerInventory.update"] test invariant',
-    )(republish.opts);
-
-    await expect(runtime.nodeWorkerSupervisorTransport.listCurrentNodes()).resolves.toEqual([
-      expect.objectContaining({
-        connId: "conn-surface-reapproval",
-        pairingGeneration: nextGeneration?.key,
-      }),
-    ]);
-    runtime.nodeRegistry.unregister("conn-surface-reapproval");
-  });
+        const nextGeneration = await captureNodePairingGeneration(nodeId);
+        expect(nextGeneration?.key).not.toBe(previousState?.generation?.key);
+        expect(approval.opts.respond).toHaveBeenCalledWith(
+          true,
+          expect.objectContaining({ node: expect.objectContaining({ nodeId }) }),
+          undefined,
+        );
+        expect(
+          runtime.nodeWorkerSupervisorTransport.isCurrent(
+            expectDefined(previousProof, "previous runner proof"),
+          ),
+        ).toBe(false);
+        await vi.waitFor(async () => {
+          const describeCall = createOptions({ nodeId });
+          Object.assign(describeCall.context, { nodeRegistry: runtime.nodeRegistry });
+          await expectDefined(
+            nodeHandlers["node.describe"],
+            "node describe handler",
+          )(describeCall.opts);
+          expect(describeCall.respond).toHaveBeenCalledWith(
+            true,
+            expect.objectContaining({ sessionHost: true, workerSlots: { total: 2, available: 2 } }),
+            undefined,
+          );
+          expect(publicationReplies).toHaveBeenCalledTimes(2);
+        });
+        expect((await listNodePairing()).paired).toContainEqual(
+          expect.objectContaining({ nodeId, sessionHost: true }),
+        );
+        await expect(runtime.nodeWorkerSupervisorTransport.listCurrentNodes()).resolves.toEqual([
+          expect.objectContaining({
+            connId: "conn-surface-reapproval",
+            pairingGeneration: nextGeneration?.key,
+          }),
+        ]);
+      } finally {
+        await publisher.close();
+        runtime.nodeRegistry.unregister("conn-surface-reapproval");
+      }
+    },
+  );
 
   it("does not promote a session authenticated before external device reapproval", async () => {
     const state = await createState("node-approve-rejects-stale-live-session");

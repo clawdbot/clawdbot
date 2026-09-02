@@ -31,6 +31,7 @@ A local Unix socket connects the node host service to the macOS app for exec app
 - The app performs the exec in UI context, prompts if needed, and returns output.
 - The socket owns the request lifetime. Node cancellation or a socket deadline closes the response reader, cancelling the native prompt or command and its process group. Stopping the app's exec server also cancels and drains active requests before releasing its socket lease.
 - Clients still half-close their **write** side after sending one JSONL request. That normal request EOF does not cancel execution; the response reader remains open until the result arrives.
+- A failed connection before request submission returns `SYSTEM_RUN_NOT_STARTED`. Once submission begins, losing the reply does not prove nonexecution, even if cancellation stops the remaining work. Neither case falls back to another executor.
 
 Diagram (SCI):
 

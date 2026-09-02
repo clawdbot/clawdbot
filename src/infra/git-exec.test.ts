@@ -119,6 +119,13 @@ describe.each([
     },
     {
       termination: "signal",
+      signal: null,
+      code: 0,
+      killed: false,
+      expected: "terminated",
+    },
+    {
+      termination: "signal",
       signal: "SIGKILL",
       outputLimitExceeded: true,
       code: null,

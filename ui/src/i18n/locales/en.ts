@@ -850,7 +850,9 @@ export const en: TranslationMap & {
     lastSeen: "Last seen {time}",
     deviceUnavailable: "Device unavailable. Reconnect it and try again.",
     sessionHostingDisabled:
-      "Session hosting is disabled. Run openclaw connect --service --session-host on the device.",
+      "Session hosting is unavailable. Enable nodeHost.workerRuns.enabled on the device, then restart its app or node service and approve its commands.",
+    deviceCommandUnavailable:
+      "{command} is unavailable. Check that its plugin is installed and enabled on the device, reconnect and approve the node's commands, and check gateway.nodes.commands.allow.",
     deviceCapacityUnavailable:
       "Worker capacity is unavailable. Restart the device session host and try again.",
     deviceNoSlots: "No worker slots are available. Wait for a slot or pick another device.",

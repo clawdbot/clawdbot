@@ -1,5 +1,6 @@
 /** Connection-scoped publication shared by the CLI and native app node transports. */
 import { isDeepStrictEqual } from "node:util";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { GATEWAY_SERVER_CAPS } from "../../packages/gateway-protocol/src/schema/frames.js";
 import { WORKER_BUNDLE_PREWARM_VERSION } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { GatewayClientRequestError } from "../gateway/client.js";
@@ -114,13 +115,16 @@ export function startNodeHostConnection({
     NodeOptionalPublicationMethod,
     NodeOptionalPublicationState
   >();
-  const retireOptionalPublications = () => {
-    for (const state of optionalPublicationStates.values()) {
+  const retireOptionalPublications = (method?: NodeOptionalPublicationMethod) => {
+    for (const [key, state] of optionalPublicationStates) {
+      if (method && key !== method) {
+        continue;
+      }
       if (state.retryTimer) {
         clearTimeout(state.retryTimer);
       }
+      optionalPublicationStates.delete(key);
     }
-    optionalPublicationStates.clear();
   };
   const retireGatewayConnection = () => {
     gatewayConnectionGeneration += 1;
@@ -142,8 +146,12 @@ export function startNodeHostConnection({
     const connectionGeneration = gatewayConnectionGeneration;
     const gatewayProtocol = connectedGatewayProtocol;
     const connectionClient = publicationClient;
-    const connectionIsCurrent = () => connectionGeneration === gatewayConnectionGeneration;
     let state = optionalPublicationStates.get(method);
+    // Approval can retire a publication without replacing the transport. Its
+    // late acknowledgement or retry must not overwrite the fresh declaration.
+    const connectionIsCurrent = () =>
+      connectionGeneration === gatewayConnectionGeneration &&
+      optionalPublicationStates.get(method) === state;
     if (!state) {
       state = {
         status: "unknown",
@@ -378,6 +386,17 @@ export function startNodeHostConnection({
   });
   return {
     ...runtime,
+    handleGatewayEvent(event: { event: string; payload?: unknown }) {
+      if (
+        gatewayHelloReceived &&
+        event.event === "node.pair.resolved" &&
+        isRecord(event.payload) &&
+        event.payload.decision === "approved"
+      ) {
+        retireOptionalPublications(NODE_RUNNER_INVENTORY_UPDATE_METHOD);
+        publishRunnerInventory();
+      }
+    },
     connect(connection: NodeHostGatewayConnection, connectionClient: NodeHostClient = client) {
       retireGatewayConnection();
       publicationClient = connectionClient;

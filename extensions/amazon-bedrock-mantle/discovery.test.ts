@@ -727,9 +727,6 @@ describe("bedrock mantle discovery", () => {
   // ---------------------------------------------------------------------------
 
   it("resolves implicit provider when bearer token is set", async () => {
-    // This catalog includes the promotional contract before the September pricing cutover.
-    const clock = vi.spyOn(Date, "now").mockReturnValue(Date.UTC(2026, 7, 31));
-    onTestFinished(() => clock.mockRestore());
     const mockFetch = vi.fn().mockResolvedValue(
       modelDiscoveryResponse({
         data: [{ id: "anthropic.claude-sonnet-4-6", object: "model" }],
@@ -797,10 +794,11 @@ describe("bedrock mantle discovery", () => {
     });
   });
 
-  it("rolls Claude Sonnet 5 to standard pricing on September 1, 2026", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(Date.UTC(2026, 8, 1));
-    try {
+  it.each(["2026-08-31T23:59:59Z", "2026-09-01T00:00:00Z", "2027-01-01T00:00:00Z"])(
+    "keeps published Sonnet 5 catalog pricing on %s",
+    async (timestamp) => {
+      const clock = vi.spyOn(Date, "now").mockReturnValue(Date.parse(timestamp));
+      onTestFinished(() => clock.mockRestore());
       const mockFetch = vi.fn().mockResolvedValue(
         modelDiscoveryResponse({
           data: [{ id: "anthropic.claude-sonnet-5", object: "model" }],
@@ -816,11 +814,9 @@ describe("bedrock mantle discovery", () => {
 
       expect(
         provider?.models?.find((model) => model.id === "anthropic.claude-sonnet-5")?.cost,
-      ).toEqual({ input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 });
-    } finally {
-      vi.useRealTimers();
-    }
-  });
+      ).toEqual({ input: 2, output: 10, cacheRead: 0.2, cacheWrite: 2.5 });
+    },
+  );
 
   it("retries identical IAM failures while logging once per region", async () => {
     const tokenProviderFactory = vi.fn(() => {

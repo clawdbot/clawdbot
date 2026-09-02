@@ -61,6 +61,7 @@ import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-cha
 import { buildDeviceAuthPayloadV3 } from "./device-auth.js";
 import type { GatewayServerOptions } from "./server.js";
 import { invalidateSessionSharingSnapshot } from "./session-sharing.js";
+import { composeGatewayTestAgents } from "./test-helpers.config-runtime.js";
 import { GATEWAY_STARTUP_MUTATED_ENV_KEYS } from "./test-helpers.env.js";
 import { resetTestPluginRegistry } from "./test-helpers.plugin-registry.js";
 import {
@@ -103,8 +104,8 @@ let tempHome: string | undefined;
 let tempConfigRoot: string | undefined;
 let tempControlUiRoot: string | undefined;
 let suiteConfigRootSeq = 0;
-let lastSyncedSessionStorePath: string | undefined;
-let lastSyncedSessionConfigJson: string | undefined;
+let lastSyncedConfigJson: string | undefined;
+const publishedAgentConfigs = new Map<string, { source: unknown; published: string }>();
 let gatewayReplyRuntimePrepared = false;
 let activeSuiteGatewayServerCount = 0;
 let activeSuiteHookScopeCount = 0;
@@ -131,21 +132,12 @@ function resolveGatewayTestMainSessionKeys(): string[] {
   return [...keys];
 }
 
-function serializeGatewayTestSessionConfig(): string | undefined {
-  if (!testState.sessionConfig) {
-    return undefined;
-  }
-  return JSON.stringify(testState.sessionConfig);
+function serializeGatewayTestConfig(): string {
+  const { sessionStorePath, sessionConfig, agentsConfig, agentConfig } = testState;
+  return JSON.stringify({ sessionStorePath, sessionConfig, agentsConfig, agentConfig });
 }
 
-function hasUnsyncedGatewayTestSessionConfig(): boolean {
-  return (
-    testState.sessionStorePath !== lastSyncedSessionStorePath ||
-    serializeGatewayTestSessionConfig() !== lastSyncedSessionConfigJson
-  );
-}
-
-async function persistTestSessionConfig(): Promise<void> {
+async function persistGatewayTestConfig(): Promise<void> {
   const configPaths = new Set<string>();
   if (process.env.OPENCLAW_CONFIG_PATH) {
     configPaths.add(process.env.OPENCLAW_CONFIG_PATH);
@@ -204,12 +196,20 @@ async function persistTestSessionConfig(): Promise<void> {
     } else {
       delete config.session;
     }
+    // Recompose from authored agents, not our previous overlay, so fixture removals
+    // and suite resets cannot retain an old roster/default. A file edit takes ownership.
+    const previous = publishedAgentConfigs.get(configPath);
+    const source =
+      previous && JSON.stringify(config.agents) === previous.published
+        ? previous.source
+        : config.agents;
+    config.agents = composeGatewayTestAgents({ ...config, agents: source });
     // Suite servers may still read config from pending session-change callbacks.
     await writeJsonAtomic(configPath, config, { durable: false, trailingNewline: true });
+    publishedAgentConfigs.set(configPath, { source, published: JSON.stringify(config.agents) });
   }
   resetConfigRuntimeState();
-  lastSyncedSessionStorePath = testState.sessionStorePath;
-  lastSyncedSessionConfigJson = serializeGatewayTestSessionConfig();
+  lastSyncedConfigJson = serializeGatewayTestConfig();
 }
 
 export async function writeSessionStore(params: {
@@ -283,7 +283,7 @@ export async function writeSessionStore(params: {
     upsertsByAgentId.set(agentId, upserts);
   }
   clearSessionStoreCacheForTest();
-  await persistTestSessionConfig();
+  await persistGatewayTestConfig();
   await fs.mkdir(path.dirname(storePath), { recursive: true });
   if (upsertsByAgentId.size === 0) {
     upsertsByAgentId.set(normalizeAgentId(params.agentId ?? DEFAULT_AGENT_ID), []);
@@ -383,8 +383,7 @@ function resetGatewayMutableTestFixtures(): void {
   testState.bindingsConfig = undefined;
   testState.channelsConfig = undefined;
   testState.allowFrom = undefined;
-  lastSyncedSessionStorePath = testState.sessionStorePath;
-  lastSyncedSessionConfigJson = serializeGatewayTestSessionConfig();
+  lastSyncedConfigJson = serializeGatewayTestConfig();
   testIsNixMode.value = false;
   cronIsolatedRun.mockReset();
   cronIsolatedRun.mockResolvedValue({ status: "ok", summary: "ok" });
@@ -418,6 +417,7 @@ function resetGatewayMutableTestFixtures(): void {
 }
 
 async function resetGatewayTestState(options: { uniqueConfigRoot: boolean }) {
+  publishedAgentConfigs.clear();
   // Some tests intentionally use fake timers; ensure they don't leak into gateway suites.
   vi.useRealTimers();
   resetGatewayLifecycleTestState({ preserveRuntimeBindings: false });
@@ -525,7 +525,7 @@ async function resetGatewayTestRuntimeOnly() {
   resetTestPluginRegistry();
   resetGatewayMutableTestFixtures();
   clearSessionStoreCacheForTest();
-  await persistTestSessionConfig();
+  await persistGatewayTestConfig();
   for (const sessionKey of resolveGatewayTestMainSessionKeys()) {
     drainSystemEvents(sessionKey);
   }
@@ -1278,8 +1278,8 @@ export async function rpcReq<T extends Record<string, unknown>>(
   params?: unknown,
   timeoutMs?: number,
 ) {
-  if (hasUnsyncedGatewayTestSessionConfig()) {
-    await persistTestSessionConfig();
+  if (serializeGatewayTestConfig() !== lastSyncedConfigJson) {
+    await persistGatewayTestConfig();
   }
   // Refresh mutable config fixtures, but leave in-flight session writers owned
   // by the running Gateway; their producers publish SQLite cache updates.

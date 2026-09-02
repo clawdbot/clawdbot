@@ -240,7 +240,8 @@ install_node() {
   local selected="$2"
   [[ "$selected" != x64 ]] || selected=x86_64
   mkdir -p "$PREFIX"
-  cp -R ${quote(path.join(root, "canonical"))}/"$selected" "$(node_dir)"
+  # This mock installs the canonical payload without applying the caller's umask.
+  cp -pR ${quote(path.join(root, "canonical"))}/"$selected" "$(node_dir)"
   ${quote(process.execPath)} ${quote(path.join(scripts, "record-scratch.cjs"))} install "$PREFIX"
 }
 install_openclaw() { [[ "$(cat "$OPENCLAW_VERSION")" == "inert package mock" ]]; }

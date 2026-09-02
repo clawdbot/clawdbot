@@ -1,5 +1,6 @@
 import process from "node:process";
 import { getWindowsSystem32ExePath } from "../infra/windows-install-roots.js";
+import { isChildProcessTreeAlive } from "./child-process-tree.js";
 import { COMMAND_PROCESS_TREE_KILL_GRACE_MS, spawnCommand } from "./exec-spawn.js";
 import { killProcessTree as terminateProcessTree } from "./kill-tree.js";
 
@@ -99,7 +100,9 @@ export function createCommandTerminationController(params: {
     }
     if (params.processTree && typeof childPid === "number") {
       const force = params.processTree.mode === "force";
-      if (!force) {
+      // Failed roots may leave no group to drain. Only a live or unproven tree
+      // needs the grace window; signaling and escalation retain their owner.
+      if (!force && (process.platform === "win32" || isChildProcessTreeAlive(params.child))) {
         processTreeSettleAt ??= Date.now() + params.killGraceMs;
       }
       if (process.platform === "win32") {

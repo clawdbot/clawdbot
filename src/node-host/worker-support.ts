@@ -16,6 +16,7 @@ type NodeHostWorkerGatewayResponse = { generation: number } & (
 
 type NodeHostWorkerInput =
   | { type: "gateway-connection"; generation: number; connection: NodeHostGatewayConnection | null }
+  | { type: "gateway-event"; generation: number; event: string; payload?: unknown }
   | { type: "invoke"; generation: number; request: NodeInvokeRequestPayload }
   | { type: "invoke-input"; generation: number; invokeId: string; seq: number; payloadJSON: string }
   | { type: "invoke-cancel"; generation: number; invokeId: string }
@@ -45,6 +46,11 @@ export function parseNodeHostWorkerInput(line: string): NodeHostWorkerInput | nu
       const connection =
         parsed?.connection === null ? null : connectionSchema.parse(parsed?.connection);
       return { type, generation, connection };
+    }
+    if (type === "gateway-event") {
+      return typeof parsed?.event === "string"
+        ? { type, generation, event: parsed.event, payload: parsed.payload }
+        : null;
     }
     if (type === "invoke") {
       const request = asRecord(parsed?.request);

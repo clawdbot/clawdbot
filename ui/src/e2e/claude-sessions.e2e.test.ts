@@ -3,6 +3,7 @@ import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { expectRequestCountStable } from "./chat-flow.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import {
   captureTopVisibleVirtualRow,
@@ -166,6 +167,103 @@ async function triggerClaudeCatalogTerminal(page: Page, options: { force?: boole
 async function openClaudeCatalogTerminal(page: Page) {
   await navigateToClaudeCatalog(page);
   await triggerClaudeCatalogTerminal(page);
+}
+
+async function openPaginatedClaudeCatalog(page: Page) {
+  const catalogResponse = (threadId: string, name: string, nextCursor?: string) => ({
+    catalogs: [
+      {
+        id: "claude",
+        label: "Claude Code",
+        capabilities: { continueSession: true, archive: false },
+        hosts: [
+          {
+            hostId: "node:devbox",
+            label: "Dev Box",
+            kind: "node",
+            connected: true,
+            nodeId: "devbox",
+            sessions: [
+              {
+                threadId,
+                name,
+                status: "stored",
+                source: "claude-cli",
+                archived: false,
+                canContinue: false,
+                canArchive: false,
+              },
+            ],
+            ...(nextCursor ? { nextCursor } : {}),
+          },
+        ],
+      },
+    ],
+  });
+  const gateway = await installMockGateway(page, {
+    featureMethods: ["chat.metadata", "chat.startup", "sessions.catalog.list"],
+    methodResponses: {
+      "sessions.catalog.list": {
+        cases: [
+          {
+            match: {
+              agentId: "main",
+              catalogId: "claude",
+              cursors: { "node:devbox": "catalog-page-2" },
+            },
+            response: catalogResponse("older-remote-thread", "Older remote review"),
+          },
+          {
+            match: {},
+            response: catalogResponse(
+              "remote-thread",
+              "Remote architecture review",
+              "catalog-page-2",
+            ),
+          },
+        ],
+      },
+      "sessions.catalog.read": {
+        cases: [
+          {
+            match: { cursor: "older" },
+            response: {
+              hostId: "node:devbox",
+              threadId: "remote-thread",
+              items: [{ id: "a0", type: "agentMessage", text: "older question" }],
+            },
+          },
+          {
+            match: {},
+            response: {
+              hostId: "node:devbox",
+              threadId: "remote-thread",
+              items: Array.from({ length: 40 }, (_, index) => ({
+                id: `a${index + 1}`,
+                type: index % 2 === 0 ? "agentMessage" : "userMessage",
+                text:
+                  index === 0
+                    ? "newer answer"
+                    : `recent transcript message ${index + 1} with enough text to fill the pane`,
+              })),
+              nextCursor: "older",
+            },
+          },
+        ],
+      },
+    },
+  });
+  await page.goto(`${suite.server.baseUrl}chat`);
+  await expandCodingSection(page);
+  const catalog = page.locator('[data-session-section="catalog:claude"]');
+  await page.locator('[data-session-catalog-load-more="claude"]').click();
+  await catalog.getByRole("link", { name: "Older remote review", exact: true }).waitFor();
+  expect((await gateway.getRequests("sessions.catalog.list")).at(-1)?.params).toEqual({
+    agentId: "main",
+    catalogId: "claude",
+    cursors: { "node:devbox": "catalog-page-2" },
+  });
+  return { catalog, gateway };
 }
 
 suite.define(() => {
@@ -490,112 +588,27 @@ suite.define(() => {
     });
   });
 
+  it("preserves loaded catalog pages across the 30-second refresh without refreshing on focus", async () => {
+    await suite.withPage(undefined, async ({ page }) => {
+      await page.clock.install();
+      const { catalog, gateway } = await openPaginatedClaudeCatalog(page);
+      const catalogRequestCount = (await gateway.getRequests("sessions.catalog.list")).length;
+      await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+      await page.clock.runFor(50);
+      expect((await gateway.getRequests("sessions.catalog.list")).length).toBe(catalogRequestCount);
+      await page.clock.fastForward(30_000);
+      await page.clock.runFor(100);
+      await expect
+        .poll(async () => (await gateway.getRequests("sessions.catalog.list")).length)
+        .toBeGreaterThanOrEqual(catalogRequestCount + 1);
+      await catalog.getByRole("link", { name: "Older remote review", exact: true }).waitFor();
+    });
+  });
+
   it("auto-loads older chat without moving the viewport and disables paired-node continuation", async () => {
+    // Native scrolling and the post-paint anchor probe require real animation frames.
     const page = await suite.browser.newPage();
-    await page.clock.install();
-    const catalogResponse = (threadId: string, name: string, nextCursor?: string) => ({
-      catalogs: [
-        {
-          id: "claude",
-          label: "Claude Code",
-          capabilities: { continueSession: true, archive: false },
-          hosts: [
-            {
-              hostId: "node:devbox",
-              label: "Dev Box",
-              kind: "node",
-              connected: true,
-              nodeId: "devbox",
-              sessions: [
-                {
-                  threadId,
-                  name,
-                  status: "stored",
-                  source: "claude-cli",
-                  archived: false,
-                  canContinue: false,
-                  canArchive: false,
-                },
-              ],
-              ...(nextCursor ? { nextCursor } : {}),
-            },
-          ],
-        },
-      ],
-    });
-    const gateway = await installMockGateway(page, {
-      featureMethods: ["chat.metadata", "chat.startup", "sessions.catalog.list"],
-      methodResponses: {
-        "sessions.catalog.list": {
-          cases: [
-            {
-              match: {
-                agentId: "main",
-                catalogId: "claude",
-                cursors: { "node:devbox": "catalog-page-2" },
-              },
-              response: catalogResponse("older-remote-thread", "Older remote review"),
-            },
-            {
-              match: {},
-              response: catalogResponse(
-                "remote-thread",
-                "Remote architecture review",
-                "catalog-page-2",
-              ),
-            },
-          ],
-        },
-        "sessions.catalog.read": {
-          cases: [
-            {
-              match: { cursor: "older" },
-              response: {
-                hostId: "node:devbox",
-                threadId: "remote-thread",
-                items: [{ id: "a0", type: "agentMessage", text: "older question" }],
-              },
-            },
-            {
-              match: {},
-              response: {
-                hostId: "node:devbox",
-                threadId: "remote-thread",
-                items: Array.from({ length: 40 }, (_, index) => ({
-                  id: `a${index + 1}`,
-                  type: index % 2 === 0 ? "agentMessage" : "userMessage",
-                  text:
-                    index === 0
-                      ? "newer answer"
-                      : `recent transcript message ${index + 1} with enough text to fill the pane`,
-                })),
-                nextCursor: "older",
-              },
-            },
-          ],
-        },
-      },
-    });
-    await page.goto(`${suite.server.baseUrl}chat`);
-    await expandCodingSection(page);
-    const catalog = page.locator('[data-session-section="catalog:claude"]');
-    await page.locator('[data-session-catalog-load-more="claude"]').click();
-    await catalog.getByRole("link", { name: "Older remote review", exact: true }).waitFor();
-    expect((await gateway.getRequests("sessions.catalog.list")).at(-1)?.params).toEqual({
-      agentId: "main",
-      catalogId: "claude",
-      cursors: { "node:devbox": "catalog-page-2" },
-    });
-    const catalogRequestCount = (await gateway.getRequests("sessions.catalog.list")).length;
-    await page.evaluate(() => window.dispatchEvent(new Event("focus")));
-    await page.clock.runFor(50);
-    expect((await gateway.getRequests("sessions.catalog.list")).length).toBe(catalogRequestCount);
-    await page.clock.fastForward(30_000);
-    await page.clock.runFor(100);
-    await expect
-      .poll(async () => (await gateway.getRequests("sessions.catalog.list")).length)
-      .toBeGreaterThanOrEqual(catalogRequestCount + 1);
-    await catalog.getByRole("link", { name: "Older remote review", exact: true }).waitFor();
+    const { catalog, gateway } = await openPaginatedClaudeCatalog(page);
     const remote = catalog.getByRole("link", { name: /^Remote architecture review$/ });
     await remote.hover();
     await page.locator(".session-progress-hovercard").waitFor();
@@ -617,7 +630,6 @@ suite.define(() => {
     // be overwritten before the history sentinel observes the top boundary.
     await thread.hover();
     await page.mouse.wheel(0, -10_000);
-    await page.clock.runFor(100);
     await catalogPane.locator(".chat-virtual-row").first().waitFor();
     await expect
       .poll(() => gateway.getRequests("sessions.catalog.read").then((requests) => requests.length))
@@ -638,7 +650,6 @@ suite.define(() => {
           ),
         )
         .toBe(41);
-      await page.clock.runFor(100);
       await waitForPaintedVirtualRowAnchor(thread, anchor);
     } finally {
       paintResult = await stopVirtualRowPaintProbe(thread);
@@ -687,13 +698,11 @@ suite.define(() => {
     const exhaustedReadCount = (await gateway.getRequests("sessions.catalog.read")).length;
     await thread.hover();
     await page.mouse.wheel(0, -10_000);
-    await page.clock.runFor(100);
     await expect.poll(() => thread.evaluate((element) => element.scrollTop)).toBe(0);
     await expect.poll(() => page.getByText("older question", { exact: true }).count()).toBe(1);
-    await page.clock.runFor(500);
-    expect(await catalogPane.locator(".chat-history-sentinel").count()).toBe(0);
+    await expect.poll(() => catalogPane.locator(".chat-history-sentinel").count()).toBe(0);
     expect(await catalogPane.getByRole("button", { name: "Show earlier" }).count()).toBe(0);
-    expect(await gateway.getRequests("sessions.catalog.read")).toHaveLength(exhaustedReadCount);
+    await expectRequestCountStable(gateway, "sessions.catalog.read", exhaustedReadCount);
     await page.close();
   });
 

@@ -166,7 +166,12 @@ const focusedCases = [
 suite.define(() => {
   it("recovers the login gate after its chunk fails without loading it during admission", async () => {
     await suite.withPage(
-      { locale: "en-US", serviceWorkers: "block", viewport },
+      {
+        locale: "en-US",
+        serviceWorkers: "block",
+        viewport,
+        ...(captureUiProof ? { recordVideo: { dir: artifactDir, size: viewport } } : {}),
+      },
       async ({ page }) => {
         const failure = await installChunkFailure(
           page,
@@ -191,6 +196,9 @@ suite.define(() => {
         expect(await error.textContent()).toContain("Failed to fetch dynamically imported module");
         expect(failure.chunkRequestCount()).toBe(1);
         await expect.poll(failure.headCount).toBe(1);
+        if (captureUiProof) {
+          await page.screenshot({ path: path.join(artifactDir, "login-load-failed.png") });
+        }
         await Promise.all([
           page.waitForEvent("domcontentloaded"),
           error.getByRole("button", { name: "Reload", exact: true }).click(),
@@ -199,6 +207,9 @@ suite.define(() => {
         await page.locator('.login-gate__failure[data-kind="auth-required"]').waitFor();
         expect(failure.chunkRequestCount()).toBe(2);
         expect(await error.count()).toBe(0);
+        if (captureUiProof) {
+          await page.screenshot({ path: path.join(artifactDir, "login-load-recovered.png") });
+        }
         const connectCount = (await gateway.getRequests("connect")).length;
         await gateway.deferNext("connect");
         await page.getByRole("button", { name: "Connect", exact: true }).click();
@@ -206,6 +217,13 @@ suite.define(() => {
         await gateway.resolveDeferred("connect");
         await waitForControlUiGatewayReady(page);
         expect(await page.locator("openclaw-login-gate").count()).toBe(0);
+        await page.locator(".agent-chat__composer-combobox textarea").waitFor();
+        if (captureUiProof) {
+          await page.screenshot({
+            animations: "disabled",
+            path: path.join(artifactDir, "login-connected.png"),
+          });
+        }
       },
     );
   });

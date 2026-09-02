@@ -204,6 +204,8 @@ export class OpenClawApp extends OpenClawLightDomElement {
     }
     if (snapshot.phase === "connected") {
       this.loginGatePinned = false;
+      // A late chunk failure or retry probe must not revive recovery after admission.
+      this.loginGateLoader.abandon();
     }
   }
 
@@ -567,7 +569,7 @@ export class OpenClawApp extends OpenClawLightDomElement {
       // Normal admission needs no login renderer. Keep failures visible and retryable
       // if this optional chunk cannot load after a connection failure.
       if (!loadState) {
-        this.loginGateLoader.preload(LOGIN_GATE_ELEMENT, { reportError: true });
+        this.loginGateLoader.request(LOGIN_GATE_ELEMENT);
       }
       return html`<openclaw-tooltip-provider>
         ${loadState?.status === "error"

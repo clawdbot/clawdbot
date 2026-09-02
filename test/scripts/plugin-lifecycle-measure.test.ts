@@ -310,8 +310,16 @@ describe("plugin lifecycle resource sampler", () => {
           },
         );
 
+        const outcome = JSON.stringify({
+          status: result.status,
+          signal: result.signal,
+          error: result.error?.message,
+          stdout: result.stdout?.slice(-2000),
+          stderr: result.stderr?.slice(-2000),
+        });
+        expect(nonEmptyPathExists(pidFile), outcome).toBe(true);
         descendantPid = Number.parseInt(readFileSync(pidFile, "utf8"), 10);
-        expect(result.status).toBe(124);
+        expect(result.status, outcome).toBe(124);
         expect(result.stdout).toContain("signal=timeout");
         expect(readFileSync(summary, "utf8")).toMatch(
           /^stubborn-descendant\t\d+\t[\d.]+\t\d+\t[\d.]+\ttimeout$/mu,

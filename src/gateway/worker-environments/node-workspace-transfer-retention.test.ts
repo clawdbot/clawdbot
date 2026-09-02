@@ -11,15 +11,23 @@ import {
 } from "../../media/staged-inputs.js";
 import { createStagedInputOwnershipFixture } from "../../media/staged-inputs.test-support.js";
 import { NodeWorkerWorkspaceRuntime } from "../../node-host/node-worker-workspace.js";
+import {
+  closeOpenClawStateDatabaseByPath,
+  openOpenClawStateDatabase,
+} from "../../state/openclaw-state-db.js";
 import { captureGitHubPublicationWorkspaceSnapshot } from "../github-publication-git-transport.js";
 import { createNodeWorkerWorkspaceActions } from "./node-worker-workspace-actions.js";
 import { createNodeWorkspaceTransferService } from "./node-workspace-transfer-service.js";
 import { startNodeWorkspaceTransferTestServer } from "./node-workspace-transfer.test-support.js";
+import { createWorkerSessionPlacementStore } from "./placement-store.js";
+import { createWorkerSessionPlacementGate } from "./placement-worker-gate.js";
 import { verifyReconciledWorkspaceFinal } from "./workspace-finalize.js";
 import type { WorkerWorkspaceReconciliationJournal } from "./workspace-manifest.js";
 import { ConcurrentWorkspacePathError } from "./workspace-reconcile.js";
 import {
   deleteStagedWorkerWorkspaceResult,
+  hasWorkerWorkspaceResultRef,
+  preparedWorkerWorkspaceResultRef,
   workerWorkspaceResultRef,
 } from "./workspace-result-staging.js";
 
@@ -355,141 +363,244 @@ it.each([
   },
 );
 
-it("restores node reconciliation after Gateway bootstrap changes without replacing its Git base", async () => {
-  const root = await fs.realpath(tempDirs.make("node-workspace-restart-"));
-  const localPath = path.join(root, "gateway-workspace");
-  await fs.mkdir(localPath);
-  await fs.writeFile(path.join(localPath, "project.txt"), "base project\n");
-  await requireGit(localPath, ["init", "--quiet"]);
-  await requireGit(localPath, ["config", "user.name", "Workspace Test"]);
-  await requireGit(localPath, ["config", "user.email", "workspace@example.invalid"]);
-  await requireGit(localPath, ["add", "."]);
-  await requireGit(localPath, ["commit", "--quiet", "-m", "base before dispatch"]);
-  const baseCommit = (await requireGit(localPath, ["rev-parse", "HEAD"])).trim();
-  const owner = new AbortController();
-  const environmentId = "restart-worker";
-  const sessionId = "restart-session";
-  const ownerEpoch = 1;
-  const createService = () =>
-    createNodeWorkspaceTransferService({
-      getOwner: () => ({
-        credential: { ownerEpoch, sessionId },
-        environment: {
-          ownerEpoch,
-          attachedSessionIds: [sessionId],
-          destroyRequestedAtMs: null,
-          state: "attached",
-        },
-      }),
-      temporaryRoot: path.join(root, "transfers"),
-    });
-  let service = createService();
-  let server = await startNodeWorkspaceTransferTestServer(service);
-  const runtime = new NodeWorkerWorkspaceRuntime({ root: path.join(root, "node") });
-  const createActions = (
-    restoredWorkspace?: Parameters<typeof createNodeWorkerWorkspaceActions>[0]["restoredWorkspace"],
-  ) =>
-    createNodeWorkerWorkspaceActions({
-      environmentId,
-      ownerEpoch,
-      sessionId,
-      ownerSignal: owner.signal,
-      isOwnerCurrent: () => !owner.signal.aborted,
-      workspaceTransfer: service,
-      restoredWorkspace,
-      runWorkspaceCommand: (command) =>
-        runtime.exec(
-          {
-            ...command,
-            argv: [...command.argv],
-            gatewayNamespace: "gateway-restart-test",
-            environmentId,
-            sessionId,
-            generation: ownerEpoch,
+it.each(["unstaged", "staged"] as const)(
+  "restores %s node reconciliation after Gateway bootstrap changes without replacing its Git base",
+  async (mode) => {
+    const root = await fs.realpath(tempDirs.make("node-workspace-restart-"));
+    const localPath = path.join(root, "gateway-workspace");
+    await fs.mkdir(localPath);
+    await fs.writeFile(path.join(localPath, "project.txt"), "base project\n");
+    await requireGit(localPath, ["init", "--quiet"]);
+    await requireGit(localPath, ["config", "user.name", "Workspace Test"]);
+    await requireGit(localPath, ["config", "user.email", "workspace@example.invalid"]);
+    await requireGit(localPath, ["add", "."]);
+    await requireGit(localPath, ["commit", "--quiet", "-m", "base before dispatch"]);
+    const baseCommit = (await requireGit(localPath, ["rev-parse", "HEAD"])).trim();
+    const owner = new AbortController();
+    const environmentId = "restart-worker";
+    const sessionId = "restart-session";
+    const ownerEpoch = 1;
+    const identity = { sessionId, sessionKey: "agent:main:restart-session", agentId: "main" };
+    const createService = () =>
+      createNodeWorkspaceTransferService({
+        getOwner: () => ({
+          credential: { ownerEpoch, sessionId },
+          environment: {
+            ownerEpoch,
+            attachedSessionIds: [sessionId],
+            destroyRequestedAtMs: null,
+            state: "attached",
           },
-          command.signal,
-          { url: server.gatewayUrl },
-        ),
-    });
-  try {
-    const synced = await createActions().syncWorkspace({
-      localPath,
-      sessionId,
-      generation: ownerEpoch,
-    });
-    const remote = synced.remoteWorkspaceDir;
-    for (const name of ["SOUL.md", "USER.md", "IDENTITY.md"]) {
-      await fs.writeFile(path.join(localPath, name), `local bootstrap ${name}\n`);
-    }
-    await requireGit(localPath, ["add", "SOUL.md", "USER.md", "IDENTITY.md"]);
-    await requireGit(localPath, ["commit", "--quiet", "-m", "local bootstrap after dispatch"]);
-    const gatewayCommit = (await requireGit(localPath, ["rev-parse", "HEAD"])).trim();
-    expect(gatewayCommit).not.toBe(baseCommit);
-    await fs.writeFile(path.join(localPath, "project.txt"), "Gateway project edit\n");
-    await fs.writeFile(path.join(remote, "project.txt"), "worker project edit\n");
-    await fs.writeFile(path.join(remote, "result.txt"), "worker result\n");
-    await service.closeAll();
-    await server.close();
-    service = createService();
-    server = await startNodeWorkspaceTransferTestServer(service);
-    const restored = createActions({
-      localPath,
-      manifestRef: synced.manifestRef,
-      remoteWorkspaceDir: remote,
-    });
-    await restored.validateRestoredWorkspace();
-
-    let pending: WorkerWorkspaceReconciliationJournal | undefined;
-    let accepted: string | undefined;
-    const request = {
-      localPath,
-      remoteWorkspaceDir: remote,
-      baseManifestRef: synced.manifestRef,
-      journal: {
-        load: () => pending,
-        begin: (next: WorkerWorkspaceReconciliationJournal) => {
-          pending = next;
-        },
-        commit: (ref: string) => {
-          accepted = ref;
-          pending = undefined;
-        },
-        abort: () => {
-          pending = undefined;
-        },
-      },
-    };
-    const quiescence = await restored.quiesceWorkspace(remote);
+        }),
+        temporaryRoot: path.join(root, "transfers"),
+      });
+    let service = createService();
+    let server = await startNodeWorkspaceTransferTestServer(service);
+    const runtime = new NodeWorkerWorkspaceRuntime({ root: path.join(root, "node") });
+    const createActions = (
+      restoredWorkspace?: Parameters<
+        typeof createNodeWorkerWorkspaceActions
+      >[0]["restoredWorkspace"],
+    ) =>
+      createNodeWorkerWorkspaceActions({
+        environmentId,
+        ownerEpoch,
+        sessionId,
+        ownerSignal: owner.signal,
+        isOwnerCurrent: () => !owner.signal.aborted,
+        workspaceTransfer: service,
+        restoredWorkspace,
+        runWorkspaceCommand: (command) =>
+          runtime.exec(
+            {
+              ...command,
+              argv: [...command.argv],
+              gatewayNamespace: "gateway-restart-test",
+              environmentId,
+              sessionId,
+              generation: ownerEpoch,
+            },
+            command.signal,
+            { url: server.gatewayUrl },
+          ),
+      });
+    let database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
+    let placements = createWorkerSessionPlacementStore({ database });
     try {
-      const result = await restored.reconcileWorkspace(request);
-      await verifyReconciledWorkspaceFinal(result, quiescence);
-      expect(result.getAppliedWorkspaceResult?.()?.conflictPaths).toEqual(["project.txt"]);
-      expect(accepted).toBe(result.manifestRef);
+      const synced = await createActions().syncWorkspace({
+        localPath,
+        sessionId,
+        generation: ownerEpoch,
+      });
+      const remote = synced.remoteWorkspaceDir;
+      let placement = placements.startDispatch(identity);
+      for (const transition of [
+        { from: "requested", to: "provisioning", patch: { environmentId } },
+        { from: "provisioning", to: "syncing", patch: { workerBundleHash: "a".repeat(64) } },
+        {
+          from: "syncing",
+          to: "starting",
+          patch: { remoteWorkspaceDir: remote, workspaceBaseManifestRef: synced.manifestRef },
+        },
+        { from: "starting", to: "active", patch: { activeOwnerEpoch: ownerEpoch } },
+      ] as const) {
+        placement = placements.transition({
+          ...transition,
+          sessionId,
+          expectedGeneration: placement.generation,
+        });
+      }
+      const claim = placements.claimTurn({
+        ...identity,
+        owner: { kind: "worker", environmentId, ownerEpoch },
+        claimId: "restart-result-claim",
+        runId: "restart-result-run",
+      });
+      expect(createWorkerSessionPlacementGate(placements).validateWorkerTurn(claim)).toBe(true);
+      for (const name of ["SOUL.md", "USER.md", "IDENTITY.md"]) {
+        await fs.writeFile(path.join(localPath, name), `local bootstrap ${name}\n`);
+      }
+      await requireGit(localPath, ["add", "SOUL.md", "USER.md", "IDENTITY.md"]);
+      await requireGit(localPath, ["commit", "--quiet", "-m", "local bootstrap after dispatch"]);
+      const gatewayCommit = (await requireGit(localPath, ["rev-parse", "HEAD"])).trim();
+      expect(gatewayCommit).not.toBe(baseCommit);
+      await fs.writeFile(path.join(localPath, "project.txt"), "Gateway project edit\n");
+      await fs.writeFile(path.join(remote, "project.txt"), "worker project edit\n");
+      await fs.writeFile(path.join(remote, "result.txt"), "worker result\n");
+      placements.updateAckCursors({ claim, liveEvent: 1 });
+      const gatewayInstanceId = placements.workspaceResultInstanceId();
+      await service.closeAll();
+      await server.close();
+      closeOpenClawStateDatabaseByPath(database.path);
+      database = openOpenClawStateDatabase({ path: database.path });
+      placements = createWorkerSessionPlacementStore({ database });
+      service = createService();
+      server = await startNodeWorkspaceTransferTestServer(service);
+      const gate = createWorkerSessionPlacementGate(placements, {
+        rejectExistingWorkerClaims: true,
+      });
+      expect(gate.validateWorkerTurn(claim)).toBe(false);
+      expect(placements.validateWorkspaceResultClaim(claim)).toBe(true);
+      expect(placements.workspaceResultInstanceId()).not.toBe(gatewayInstanceId);
+      const draining = placements.startWorkspaceResultDrain(claim);
+      if (draining.state !== "draining") {
+        throw new Error("restart result did not retain its draining placement");
+      }
+      const restored = createActions({
+        localPath,
+        manifestRef: draining.workspaceBaseManifestRef,
+        remoteWorkspaceDir: draining.remoteWorkspaceDir,
+      });
+      await restored.validateRestoredWorkspace();
+
+      const journalOwner = {
+        sessionId,
+        environmentId,
+        ownerEpoch,
+        placementGeneration: claim.placementGeneration,
+      };
+      const stagedResultRef = workerWorkspaceResultRef(claim.claimId);
+      const candidateRef = preparedWorkerWorkspaceResultRef(stagedResultRef);
+      const request = {
+        localPath,
+        remoteWorkspaceDir: draining.remoteWorkspaceDir,
+        baseManifestRef: draining.workspaceBaseManifestRef,
+        journal: {
+          load: () => placements.loadWorkspaceReconciliation(journalOwner),
+          begin: (next: WorkerWorkspaceReconciliationJournal) =>
+            placements.beginWorkspaceReconciliation(journalOwner, next),
+          commit: (manifestRef: string) => {
+            placements.updateWorkspaceBaseManifest({ claim, manifestRef });
+          },
+          abort: () => placements.abortWorkspaceReconciliation(journalOwner),
+        },
+        ...(mode === "staged"
+          ? {
+              stagedResult: {
+                ref: stagedResultRef,
+                record: (ref: string) => placements.recordStagedWorkspaceResult(claim, ref),
+              },
+            }
+          : {}),
+      };
+      const quiescence = await restored.quiesceWorkspace(remote);
+      try {
+        const result = await restored.reconcileWorkspace(request);
+        if (mode === "staged") {
+          await expect(
+            hasWorkerWorkspaceResultRef({ root: localPath, stagedResultRef: candidateRef }),
+          ).resolves.toBe(true);
+          await expect(
+            hasWorkerWorkspaceResultRef({ root: localPath, stagedResultRef }),
+          ).resolves.toBe(false);
+          await expect(fs.stat(path.join(localPath, "result.txt"))).rejects.toMatchObject({
+            code: "ENOENT",
+          });
+          expect(placements.get(sessionId)?.workspaceBaseManifestRef).toBe(synced.manifestRef);
+          expect(placements.listPendingWorkspaceResults()).toMatchObject([
+            { gatewayInstanceId, stagedResultRef: null, workspaceAcceptedAtMs: null },
+          ]);
+        }
+        await verifyReconciledWorkspaceFinal(result, quiescence);
+        expect(result.getAppliedWorkspaceResult?.()?.conflictPaths).toEqual(["project.txt"]);
+        expect(placements.get(sessionId)?.workspaceBaseManifestRef).toBe(result.manifestRef);
+        if (mode === "staged") {
+          await expect(
+            hasWorkerWorkspaceResultRef({ root: localPath, stagedResultRef: candidateRef }),
+          ).resolves.toBe(false);
+          await expect(
+            hasWorkerWorkspaceResultRef({ root: localPath, stagedResultRef }),
+          ).resolves.toBe(true);
+          expect(placements.listPendingWorkspaceResults()).toMatchObject([
+            { gatewayInstanceId, stagedResultRef, workspaceAcceptedAtMs: null },
+          ]);
+          // The accepted workspace keeps local conflicts; its recovery ref must retain worker bytes.
+          for (const [name, bytes] of [
+            ["project.txt", "worker project edit"],
+            ["result.txt", "worker result"],
+          ]) {
+            await expect(
+              requireGit(localPath, ["show", `${stagedResultRef}:${name}`]),
+            ).resolves.toBe(bytes);
+          }
+        }
+        placements.acceptWorkspaceResult(claim);
+        expect(request.journal.load()).toBeUndefined();
+        expect(gate.validateWorkerTurn(claim)).toBe(false);
+        expect(placements.validateWorkspaceResultClaim(claim)).toBe(true);
+      } finally {
+        await quiescence.resume();
+      }
+      for (const workspace of [localPath, remote]) {
+        await expect(fs.readFile(path.join(workspace, "project.txt"), "utf8")).resolves.toBe(
+          "Gateway project edit\n",
+        );
+        await expect(fs.readFile(path.join(workspace, "result.txt"), "utf8")).resolves.toBe(
+          "worker result\n",
+        );
+      }
+      for (const name of ["SOUL.md", "USER.md", "IDENTITY.md"]) {
+        await expect(fs.readFile(path.join(localPath, name), "utf8")).resolves.toBe(
+          `local bootstrap ${name}\n`,
+        );
+      }
+      expect((await requireGit(localPath, ["rev-parse", "HEAD"])).trim()).toBe(gatewayCommit);
+      expect((await requireGit(remote, ["rev-parse", "HEAD"])).trim()).toBe(baseCommit);
+      owner.abort();
+      await expect(restored.reconcileWorkspace(request)).rejects.toThrow(
+        "Node workspace transfer context is unavailable",
+      );
+      placements.completeWorkspaceResultAndReleaseTurn(claim);
+      expect(placements.listPendingWorkspaceResults()).toEqual([]);
+      expect(placements.get(sessionId)?.turnClaim).toBeNull();
     } finally {
-      await quiescence.resume();
+      owner.abort();
+      try {
+        await service.closeAll();
+        await server.close();
+      } finally {
+        closeOpenClawStateDatabaseByPath(database.path);
+      }
     }
-    for (const workspace of [localPath, remote]) {
-      await expect(fs.readFile(path.join(workspace, "project.txt"), "utf8")).resolves.toBe(
-        "Gateway project edit\n",
-      );
-      await expect(fs.readFile(path.join(workspace, "result.txt"), "utf8")).resolves.toBe(
-        "worker result\n",
-      );
-    }
-    for (const name of ["SOUL.md", "USER.md", "IDENTITY.md"]) {
-      await expect(fs.readFile(path.join(localPath, name), "utf8")).resolves.toBe(
-        `local bootstrap ${name}\n`,
-      );
-    }
-    expect((await requireGit(localPath, ["rev-parse", "HEAD"])).trim()).toBe(gatewayCommit);
-    expect((await requireGit(remote, ["rev-parse", "HEAD"])).trim()).toBe(baseCommit);
-    owner.abort();
-    await expect(restored.reconcileWorkspace(request)).rejects.toThrow(
-      "Node workspace transfer context is unavailable",
-    );
-  } finally {
-    owner.abort();
-    await service.closeAll();
-    await server.close();
-  }
-});
+  },
+);

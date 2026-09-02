@@ -89,8 +89,11 @@ export type WorkerWorkspaceReconcileRequest = {
 export type WorkerWorkspaceReconcileResult = {
   manifestRef: string;
   changed: boolean;
-  /** Re-read the remote workspace after local acceptance, immediately before teardown. */
-  verifyStable(): Promise<void>;
+  /** Re-read the remote workspace, optionally renewing quiescence between ordered captures. */
+  verifyStable(renewal?: {
+    quiescence: WorkerWorkspaceQuiescence;
+    capture: "before-and-after" | "after";
+  }): Promise<void>;
   /** Re-read the accepted local result after the remote stability fence. */
   verifyLocalStable(): Promise<void>;
   /** Apply the prepared candidate locally without making it restart-authoritative. */
@@ -103,8 +106,16 @@ export type WorkerWorkspaceReconcileResult = {
 };
 
 export type WorkerWorkspaceQuiescence = {
-  /** Prove the watchdog lease still owns stopped processes and extend it through teardown. */
-  assertActive(): Promise<void>;
+  /** Renew the live lease, optionally checking an exact manifest before and after renewal. */
+  assertActive(fence?: {
+    manifest: {
+      workspaceDir: string;
+      baseCommit: string | null;
+      expectedManifestRef: string;
+      priorManifestDigests: readonly string[];
+    };
+    capture: "before-and-after" | "after";
+  }): Promise<void>;
   /** Resume only the remote processes stopped by this quiescence owner. */
   resume(): Promise<void>;
 };

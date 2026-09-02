@@ -1,6 +1,7 @@
 import { spawn, spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
+import { createConnection } from "node:net";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
@@ -251,14 +252,24 @@ function boundary(name) {
   );
 }
 
-async function until(predicate, label, timeout = 4_000) {
-  const deadline = Date.now() + timeout;
-  while (!predicate()) {
-    if (Date.now() >= deadline) {
-      throw new Error(`Timed out waiting for ${label}`);
+function observe(child) {
+  let outcome;
+  const exited = new Promise((resolve) => {
+    const finish = (value) => {
+      outcome ??= value;
+      resolve(outcome);
+    };
+    // Subscribe immediately after spawn; errors are outcomes, not unhandled
+    // rejections while a caller is still waiting for readiness.
+    child.once("error", (error) => finish({ error: String(error) }));
+    child.once("exit", (code, signal) => finish({ code, signal }));
+    if (child.exitCode !== null || child.signalCode !== null) {
+      finish({ code: child.exitCode, signal: child.signalCode });
     }
-    await delay(10);
-  }
+  });
+  // Errors/exit guide readiness; only the real close event settles physical closure.
+  const closed = new Promise((resolve) => child.once("close", resolve));
+  return { child, exited, closed, getOutcome: () => outcome };
 }
 
 async function waitForReady(predicate, child, stopped = () => !fs.existsSync(lease)) {
@@ -275,7 +286,8 @@ async function waitForReady(predicate, child, stopped = () => !fs.existsSync(lea
 
 function launch(role, attempt) {
   const child = spawn(process.execPath, [fixture, role, root, policyScenario, String(attempt)], {
-    stdio: "ignore",
+    // These descriptors predate self-registration and cover every descendant.
+    stdio: "inherit",
   });
   child.on("error", (error) => {
     throw error;
@@ -321,6 +333,38 @@ function writeConsumer(target, tool) {
 }
 
 async function command() {
+  const gate = path.join(root, "registration-gate.json");
+  if (mode === "git" && args.includes("fetch") && fs.existsSync(gate)) {
+    // Hold the actual Popen-admitted Git before its lease check/PID publication.
+    // Keep the writer open after control EOF; only process death closes our side.
+    let watcher;
+    try {
+      await new Promise((resolve, reject) => {
+        const { port } = JSON.parse(fs.readFileSync(gate, "utf8"));
+        const control = createConnection({ host: "127.0.0.1", port, allowHalfOpen: true });
+        let reported = false;
+        watcher = fs.watch(root, () => {
+          if (
+            !reported &&
+            (!fs.existsSync(root) || fs.existsSync(path.join(root, "report.json")))
+          ) {
+            // This message can only originate from an actor still held alive.
+            reported = true;
+            control.write("receipt-or-deletion-before-closure\n");
+          }
+        });
+        watcher.once("error", reject);
+        control.once("error", reject);
+        control.once("connect", () => {
+          control.write(`${JSON.stringify({ pid: process.pid, parent: process.ppid })}\n`);
+        });
+        control.once("end", resolve);
+        control.resume();
+      });
+    } finally {
+      watcher?.close();
+    }
+  }
   holdLease();
   if (!options.performance || mode !== "observe") record(process.pid, mode);
   if (mode === "sentinel") {
@@ -947,53 +991,60 @@ async function supervise() {
     fs.chmodSync(path.join(bin, scenario.slice("non-executable-".length)), 0o644);
   }
   const output = fs.openSync(path.join(root, "workflow.log"), "w");
-  let sentinel;
   let shell;
+  let workflow;
+  let sentinel;
   let stopping;
-  const pendingChildren = new Set();
-  const track = (child) => {
-    pendingChildren.add(child);
-    // Spawn errors precede close; only close releases a direct child's ownership.
-    const closed = new Promise((resolve) => {
-      child.once("close", (code) => {
-        pendingChildren.delete(child);
-        resolve(code);
-      });
-    });
-    child.on("error", (error) => void stop(error));
-    return closed;
-  };
+  let outputBytes = 0;
+  const outputLimit = 256 * 1024;
+  const streamEnds = new Set();
   const report = {
     code: null,
+    signal: null,
     cancelledDuringCleanup: false,
     boundaries: [],
     readyAttempts: [],
-    cleanupRemaining: [],
+    cleanupRemaining: null,
+    cleanupVerified: false,
+    cleanupErrors: [],
     ownedProcesses: [],
     commands: [],
     output: "",
   };
+  const capture = (data) => {
+    const chunk = Buffer.from(data);
+    const remaining = outputLimit - outputBytes;
+    if (remaining > 0) {
+      fs.writeSync(output, chunk.subarray(0, remaining));
+    }
+    if (outputBytes <= outputLimit && chunk.length > remaining) {
+      fs.writeSync(output, "\n[fixture output truncated]\n");
+    }
+    outputBytes += chunk.length;
+  };
   const stop = (error) => {
-    stopping ??= Promise.resolve().then(async () => {
-      if (error) {
-        report.error = String(error);
-      }
+    if (error && !stopping) {
+      report.error = String(error);
+    }
+    stopping ??= (async () => {
       const deadline = Date.now() + 4_000;
       try {
-        fs.rmSync(lease, { force: true });
-        sentinel?.kill("SIGKILL");
-        if (shell && shell.exitCode === null && shell.signalCode === null) {
-          // Only this fixture's still-owned detached shell group may be signaled.
+        if (shell?.pid && !workflow.getOutcome()) {
+          // TERM reaches both exec-Python and Bash's raw Python child. Killing
+          // their group first would bypass the owner's detached-Git finally drain.
           if (process.platform === "win32") {
             const taskkill = path.join(process.env.SystemRoot, "System32", "taskkill.exe");
-            spawnSync(taskkill, ["/PID", String(shell.pid), "/T", "/F"], {
+            const result = spawnSync(taskkill, ["/PID", String(shell.pid), "/T", "/F"], {
               stdio: "ignore",
               timeout: 2_000,
               killSignal: "SIGKILL",
             });
+            if (result.error || result.status !== 0) {
+              throw new Error(`Fixture taskkill failed (${result.error?.code ?? result.status})`);
+            }
           } else {
             try {
-              process.kill(-shell.pid, "SIGKILL");
+              process.kill(-shell.pid, "SIGTERM");
             } catch (err) {
               if (err.code !== "ESRCH") {
                 throw err;
@@ -1001,24 +1052,56 @@ async function supervise() {
             }
           }
         }
-        // Empty registration does not prove a spawned writer has closed.
-        await until(
-          () => pendingChildren.size === 0,
-          "direct child close",
-          Math.max(0, deadline - Date.now()),
-        );
-        await until(
-          () => {
-            report.cleanupRemaining = liveRecords();
-            return report.cleanupRemaining.length === 0;
-          },
-          "fixture cleanup",
-          Math.max(0, deadline - Date.now()),
-        );
       } catch (err) {
-        // Only the completed report releases the namespace; exit alone does not.
-        const detail = err instanceof Error ? err.message : String(err);
-        console.error(`Fixture cleanup unverified; retaining ${root}: ${detail}`);
+        report.cleanupErrors.push(String(err));
+      }
+      // Preserve EXIT evidence with the sentinel still alive, then release the
+      // lease. The lifecycle itself never times out or masquerades as a join.
+      const lifecycle = (async () => {
+        await workflow?.exited;
+        fs.rmSync(lease, { force: true });
+        // The creator owns even a sentinel blocked before its lease check or registration.
+        sentinel?.child.kill("SIGKILL");
+        await Promise.all([workflow?.closed, sentinel?.closed]);
+        if (workflow && streamEnds.size !== 2) {
+          throw new Error("Workflow streams closed without verified EOF");
+        }
+      })();
+      let timer;
+      try {
+        await Promise.race([
+          lifecycle,
+          new Promise((_, reject) => {
+            timer = setTimeout(
+              () => reject(new Error("CI_CHECKOUT_LIFETIME: unverified fixture closure")),
+              Math.max(0, deadline - Date.now()),
+            );
+          }),
+        ]);
+        if (Date.now() >= deadline) {
+          throw new Error("CI_CHECKOUT_LIFETIME: fixture cleanup deadline exceeded");
+        }
+        report.cleanupVerified = report.cleanupErrors.length === 0;
+      } catch (err) {
+        report.cleanupErrors.push(String(err));
+      } finally {
+        clearTimeout(timer);
+        // Even an unverified owner must release cooperative helpers; the root
+        // remains retained, and this does not turn a timed-out join into success.
+        fs.rmSync(lease, { force: true });
+        sentinel?.child.kill("SIGKILL");
+      }
+      // The one-second census is reporting only. Neither stale PID records nor
+      // a failed census can change the physical closure already observed above.
+      try {
+        report.cleanupRemaining = liveRecords();
+      } catch (error) {
+        // Physical closure does not excuse lost diagnostics. Preserve main's
+        // retained namespace on census failure, without a release receipt.
+        console.error(`Fixture cleanup unverified; retaining ${root}: ${String(error)}`);
+        if (report.error) {
+          console.error(report.error);
+        }
         fs.closeSync(output);
         process.exit(1);
       }
@@ -1055,10 +1138,17 @@ async function supervise() {
       }
       publish("report.json", report);
       fs.closeSync(output);
-      process.exit(report.error ? 1 : 0);
-    });
+      process.exit(report.error || !report.cleanupVerified ? 1 : 0);
+    })();
     return stopping;
   };
+  // Keep the useful IPC channel attached through termination; an explicit stop
+  // request must not trigger the parent's disconnect/close accounting bug.
+  process.on("message", (message) => {
+    if (message?.type === "ci-checkout:stop") {
+      void stop("test parent requested stop");
+    }
+  });
   process.once("disconnect", () => void stop("test parent disconnected"));
   for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"]) {
     process.once(signal, () => void stop(`supervisor received ${signal}`));
@@ -1100,15 +1190,16 @@ async function supervise() {
         { mode: 0o755 },
       );
     }
-    sentinel = spawn(process.execPath, [fixture, "sentinel", root, policyScenario], {
-      // Parent teardown owns this group even before sentinel self-registration.
-      stdio: "ignore",
-    });
-    // stop() joins the sentinel's actual close through pendingChildren before reporting.
-    void track(sentinel);
+    sentinel = observe(
+      spawn(process.execPath, [fixture, "sentinel", root, policyScenario], {
+        // Parent emergency teardown also owns a sentinel blocked before registration.
+        stdio: "ignore",
+      }),
+    );
+    sentinel.child.once("error", (error) => void stop(error));
     const sentinelReady = await waitForReady(
       () => records().some((entry) => entry.role === "sentinel"),
-      sentinel,
+      sentinel.child,
       () => Boolean(stopping),
     );
     if (stopping) {
@@ -1116,7 +1207,7 @@ async function supervise() {
     }
     if (!sentinelReady) {
       throw new Error(
-        `Sentinel exited before readiness (${sentinel.exitCode ?? sentinel.signalCode})`,
+        `Sentinel exited before readiness (${sentinel.child.exitCode ?? sentinel.child.signalCode})`,
       );
     }
     const checkoutScript = shellPath(path.join(root, "checkout.sh"));
@@ -1135,7 +1226,7 @@ async function supervise() {
     shell = spawn("bash", ["--noprofile", "--norc", "-eo", "pipefail", ...shellArgs], {
       cwd: path.join(workspace, options.workingDirectory ?? ""),
       detached: true,
-      stdio: ["ignore", output, output],
+      stdio: ["ignore", "pipe", "pipe"],
       env: {
         PATH: commandPath,
         HOME: home,
@@ -1158,7 +1249,48 @@ async function supervise() {
         ...options.env,
       },
     });
-    const closed = track(shell);
+    const observed = observe(shell);
+    workflow = observed;
+    shell.once("error", (error) => void stop(error));
+    // Inherited stdout/stderr are the descendant lifetime barrier, including raw
+    // Python under Bash. Never discard or destroy these pipes before real EOF.
+    for (const stream of [shell.stdout, shell.stderr]) {
+      stream.on("data", capture);
+      stream.once("end", () => streamEnds.add(stream));
+      stream.once("error", (error) => report.cleanupErrors.push(String(error)));
+    }
+    shell.once("exit", (code, signal) => {
+      report.code = code;
+      report.signal = signal;
+      // Capture the leader's real EXIT before stop can release any descendants.
+      try {
+        if (options.docsAgent && fs.readFileSync(path.join(root, "github-output"), "utf8")) {
+          boundary("output");
+        }
+        if (
+          options.objects &&
+          fs.existsSync(path.join(root, "github-env")) &&
+          fs.readFileSync(path.join(root, "github-env"), "utf8").includes("PRE_COMMIT_CONFIG_PATH=")
+        ) {
+          boundary("config-publication");
+        }
+        for (const [name, file] of options.publisher || options.maturity || options.performance
+          ? [
+              ["output", "github-output"],
+              ["summary", "github-summary"],
+            ]
+          : []) {
+          if (
+            fs.existsSync(path.join(root, file)) &&
+            fs.readFileSync(path.join(root, file), "utf8")
+          )
+            boundary(name);
+        }
+        boundary("exit");
+      } catch (error) {
+        report.error = report.error ? `${report.error}; ${String(error)}` : String(error);
+      }
+    });
     if (shell.pid) {
       record(shell.pid, "shell");
     }
@@ -1206,34 +1338,10 @@ async function supervise() {
       boundary("backoff-cancel");
       shell.kill("SIGTERM");
     }
-    const code = await closed;
-    if (stopping) {
-      // A signal can start cleanup while the supervised shell is closing. Keep
-      // the top-level module alive until that cleanup publishes report.json.
-      await stopping;
-      return;
+    const outcome = await observed.exited;
+    if (outcome.error) {
+      throw new Error(outcome.error);
     }
-    report.code = code;
-    if (options.docsAgent && fs.readFileSync(path.join(root, "github-output"), "utf8")) {
-      boundary("output");
-    }
-    if (
-      options.objects &&
-      fs.existsSync(path.join(root, "github-env")) &&
-      fs.readFileSync(path.join(root, "github-env"), "utf8").includes("PRE_COMMIT_CONFIG_PATH=")
-    ) {
-      boundary("config-publication");
-    }
-    for (const [name, file] of options.publisher || options.maturity || options.performance
-      ? [
-          ["output", "github-output"],
-          ["summary", "github-summary"],
-        ]
-      : []) {
-      if (fs.existsSync(path.join(root, file)) && fs.readFileSync(path.join(root, file), "utf8"))
-        boundary(name);
-    }
-    boundary("exit");
     await stop();
   } catch (error) {
     await stop(error);

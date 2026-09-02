@@ -532,6 +532,15 @@ visible but disabled with an actionable reason. Enable hosting with
 setting, then restart the node host. Update-required hosts must be upgraded and
 restarted before selection.
 
+If a required command is unavailable, follow the reason in the placement error.
+For `command not allowlisted`, review `gateway.nodes.commands.allow` and
+`gateway.nodes.commands.deny`; an explicit deny overrides an allow. For
+`command not declared by node` or `node did not declare commands`, check that
+its plugin is installed and enabled on the device, then reconnect and approve
+its updated command surface. Changing the Gateway allowlist cannot install a
+missing device plugin. Approving an updated command surface refreshes hosting
+automatically; you do not need to restart the app or node host a second time.
+
 While node inventory refreshes, or if that refresh fails, the picker keeps known
 devices visible but disables remote selection and Start until fresh inventory
 arrives. Local remains selectable; cached worker slots never authorize a new
@@ -1022,6 +1031,7 @@ Notes:
 - Exec approvals are enforced locally via
   `~/.openclaw/state/openclaw.sqlite#exec_approvals_config` (see [Exec approvals](/tools/exec-approvals)).
 - On macOS, the headless node host executes `system.run` locally by default. Set `OPENCLAW_NODE_EXEC_HOST=app` to require the companion app exec host, with no local fallback. `OPENCLAW_NODE_EXEC_FALLBACK` does not change current routing.
+- If a companion request cannot be submitted, `SYSTEM_RUN_NOT_STARTED` means the command did not start; start the app before retrying. If the request was submitted but its reply is lost, the outcome is unknown: the command may have executed. Check its effects before deciding whether to retry; OpenClaw never replays it automatically.
 - Add `--tls` / `--tls-fingerprint` when the Gateway WS uses TLS.
 
 ## Mac node mode

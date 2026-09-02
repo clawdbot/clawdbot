@@ -185,10 +185,6 @@ async function runCommandWithOutputEncoding(
   });
   const nodeChild = child.nodeChildProcess;
   const releaseOutput = releaseChildProcessOutputAfterExit(nodeChild);
-  nodeChild.once("exit", (code, signalValue) => {
-    childExited = true;
-    childExitState = { code, signal: signalValue };
-  });
   const terminationController = createCommandTerminationController({
     child: nodeChild,
     cancelController,
@@ -199,6 +195,15 @@ async function runCommandWithOutputEncoding(
     isCommandSettled: () => commandSettled,
     killGraceMs: resolvedKillGraceMs,
   });
+  nodeChild.once("exit", (code, signalValue) => {
+    childExited = true;
+    childExitState = { code, signal: signalValue };
+    // An inner timeout can become an ordinary failed exit while its descendants survive.
+    // Retain the existing tree owner through its drain without changing that exit result.
+    if (killProcessTree && !termination && code !== 0) {
+      terminationController.terminate();
+    }
+  });
 
   const clearNoOutputTimer = () => {
     if (noOutputTimer) {
@@ -208,13 +213,15 @@ async function runCommandWithOutputEncoding(
   };
   const ownsExitedProcessTree = Boolean(killProcessTree && process.platform !== "win32");
   const cancel = (reason: Exclude<CommandTerminationReason, "exit">) => {
-    // Direct exit ends ordinary timer/abort ownership; releaseChildProcessOutputAfterExit
-    // still bounds inherited pipes. POSIX tree mode must reap descendants, while
-    // output caps remain meaningful for bytes drained after exit.
+    // Failed roots already own a drain; later deadlines must preserve their exit result.
+    // Successful POSIX roots retain deadline ownership of inherited descendants.
+    // Output caps remain meaningful for bytes drained after either exit.
     if (
       termination ||
       commandSettled ||
-      (childExited && reason !== "output-limit" && !ownsExitedProcessTree)
+      (childExited &&
+        reason !== "output-limit" &&
+        (!ownsExitedProcessTree || childExitState?.code !== 0))
     ) {
       return;
     }

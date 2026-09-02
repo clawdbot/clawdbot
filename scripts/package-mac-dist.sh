@@ -91,7 +91,7 @@ run_dist_pnpm() {
 
 ensure_sparkle_build_deps() {
   echo "📦 Ensuring deps for Sparkle build metadata" >&2
-  run_dist_pnpm install --frozen-lockfile --config.node-linker=hoisted >&2
+  run_dist_pnpm install --frozen-lockfile >&2
 }
 
 run_sparkle_build_node() {

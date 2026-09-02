@@ -44,7 +44,9 @@ describe("concurrent worker workspace results", () => {
           timeoutMs: 10_000,
         });
         if (result.code !== 0) {
-          throw new Error(result.stderr || result.stdout);
+          throw new Error(result.stderr || result.stdout || `git ${args[0]} failed`, {
+            cause: { code: result.code, signal: result.signal, termination: result.termination },
+          });
         }
         return result.stdout.trim();
       };

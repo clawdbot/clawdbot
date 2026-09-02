@@ -18,6 +18,7 @@ import type {
   NodeWorkerSupervisorReceipt,
 } from "../../worker/node-supervisor-protocol.js";
 import {
+  NODE_WORKER_WORKSPACE_COMMAND_TIMEOUT_MS,
   parseNodeWorkerWorkspaceExecResult,
   type NodeWorkerWorkspaceExecInput,
   type NodeWorkerWorkspaceExecResult,
@@ -53,7 +54,6 @@ import {
 } from "./tunnel-contract.js";
 import { boundedWorkerError } from "./worker-error.js";
 
-const DEFAULT_COMMAND_TIMEOUT_MS = 60_000;
 const COMMAND_RESULT_GRACE_MS = 5_000;
 const RETRY_DELAY_MS = 100;
 const tunnelLog = createSubsystemLogger("gateway/worker-tunnel");
@@ -200,7 +200,7 @@ export function createNodeWorkerTunnelManager(options: NodeWorkerTunnelManagerOp
       }
       command.assertCurrent?.();
     };
-    const commandTimeoutMs = command.timeoutMs ?? DEFAULT_COMMAND_TIMEOUT_MS;
+    const commandTimeoutMs = command.timeoutMs ?? NODE_WORKER_WORKSPACE_COMMAND_TIMEOUT_MS;
     // Keep the subprocess deadline authoritative while allowing its terminal result to cross the
     // node transport. Equal deadlines turn an ordinary process timeout into a transport failure.
     const transportTimeoutMs =
@@ -331,7 +331,7 @@ export function createNodeWorkerTunnelManager(options: NodeWorkerTunnelManagerOp
           input: buildLaunchInput(plan, claim),
           isDispatchAuthorized,
           isCancellationAuthorized: () => hasDurableBinding(entry),
-          timeoutMs: request.timeoutMs ?? DEFAULT_COMMAND_TIMEOUT_MS,
+          timeoutMs: request.timeoutMs ?? NODE_WORKER_WORKSPACE_COMMAND_TIMEOUT_MS,
           ...(request.credentialExpiresAtMs === undefined
             ? {}
             : { credentialExpiresAtMs: request.credentialExpiresAtMs }),
@@ -394,7 +394,7 @@ export function createNodeWorkerTunnelManager(options: NodeWorkerTunnelManagerOp
         // Remote-exec runtimes own their processes separately; this is only the embedded
         // worker's environment lifetime, not a new requirement on the workspace transport.
         if (entry.executionMode === "worker-turn" && reason === undefined) {
-          const signal = AbortSignal.timeout(DEFAULT_COMMAND_TIMEOUT_MS);
+          const signal = AbortSignal.timeout(NODE_WORKER_WORKSPACE_COMMAND_TIMEOUT_MS);
           const { transport, node } = await findNode(entry, signal);
           if (node.workerHost.environmentSession !== NODE_WORKER_ENVIRONMENT_SESSION_VERSION) {
             throw new Error(
@@ -412,7 +412,7 @@ export function createNodeWorkerTunnelManager(options: NodeWorkerTunnelManagerOp
               sessionId: entry.sessionId,
               ownerEpoch: entry.ownerEpoch,
             },
-            timeoutMs: DEFAULT_COMMAND_TIMEOUT_MS,
+            timeoutMs: NODE_WORKER_WORKSPACE_COMMAND_TIMEOUT_MS,
             signal,
             isDispatchAuthorized: () => stopping && retiredEntries.has(entry),
           });

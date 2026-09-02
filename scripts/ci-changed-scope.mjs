@@ -105,7 +105,7 @@ const WINDOWS_WORKSPACE_QUIESCENCE_SCOPE_RE =
 const WINDOWS_WORKER_BUNDLE_SCOPE_RE =
   /^src\/(?:shared\/worker-bundle-(?:archive|hash)(?:\.test)?|gateway\/worker-environments\/bundle(?:-staging)?(?:\.test)?|node-host\/node-worker-bundle-installer(?:\.test)?)\.ts$/;
 const WINDOWS_WORKER_WORKSPACE_SCOPE_RE =
-  /^src\/(?:node-host\/node-worker-transfer-client(?:\.test)?|gateway\/worker-environments\/(?:node-worker-tunnel(?:\.test)?|workspace-sync-(?:scripts|manifest\.test)))\.ts$/;
+  /^src\/(?:infra\/git-exec(?:\.test)?|agents\/worktrees\/git(?:\.test)?|node-host\/node-worker-transfer-client(?:\.test)?|worker\/node-workspace-protocol(?:\.test)?|gateway\/worker-environments\/(?:node-worker-tunnel(?:\.(?:finalization\.)?test)?|node-workspace-final-fence|node-worker-workspace-actions|workspace-finalize(?:\.test)?|workspace-result-(?:git(?:\.test)?|staging|ref-mutation\.test)|workspace-sync-(?:scripts|manifest\.test)))\.ts$/;
 const CONTROL_UI_I18N_SCOPE_RE =
   /^(ui\/src\/i18n\/|ui\/config\/control-ui-locales\.ts$|scripts\/(?:control-ui-i18n(?:-verify)?\.ts|lib\/control-ui-i18n-(?:(?:catalog|config|raw-copy|sync-plan)\.ts|config\.json))$|\.github\/workflows\/control-ui-locale-refresh\.yml$)/;
 const CONTROL_UI_RAW_COPY_SOURCE_RE = /^ui\/src\/(?:app|components|lib|pages)\/.*\.tsx?$/;

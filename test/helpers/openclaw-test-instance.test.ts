@@ -205,6 +205,7 @@ if (kind === "refuse") { process.stderr.write(refusal + " fixture\\n"); process.
 if (kind === "late-refuse") {
   const delayed = spawn(process.execPath, ["-e", 'require("node:http").get(process.argv[1] + "/wait", (response) => { response.resume(); response.on("end", () => process.stderr.write(process.argv[2], () => process.exit(0))); });', controlUrl, refusal + " delayed fixture\\n"], { stdio: ["ignore", "ignore", "inherit"] });
   recordFixtureProcess(delayed.pid);
+  writeFileSync(tracePath + ".delayed-pid", String(delayed.pid));
   process.exit(1);
 }
 if (kind === "resist-after-exit") {
@@ -299,11 +300,21 @@ describe("openclaw test instance", () => {
     { mode: "7", prepare: false },
     { mode: "wait", prepare: false },
     { mode: "0", prepare: true },
+    { mode: "drain", prepare: false },
+    { mode: "drain-timeout", prepare: false },
   ])("releases the CLI deadline after $mode (prepare=$prepare)", async ({ mode, prepare }) => {
-    const control = prepare ? await createGatewayControl() : undefined;
-    await control?.release();
-    const preparation = control ? { url: control.url, holdPreparation: true } : undefined;
-    const { instance, readAttempts } = await createFakeGateway("cli", 1_000, 1_500, preparation);
+    const drain = mode === "drain" || mode === "drain-timeout";
+    const control = prepare || drain ? await createGatewayControl() : undefined;
+    if (prepare) {
+      await control?.release();
+    }
+    const { instance, readAttempts, tracePath } = await createFakeGateway(
+      drain ? "late-refuse" : "cli",
+      1_000,
+      1_500,
+      control ? { url: control.url, holdPreparation: prepare } : undefined,
+    );
+    let writerPid: number | undefined;
     const scope = new AsyncLocalStorage<boolean>();
     const timers = new Map<number, NodeJS.Timeout>();
     const hook = createHook({
@@ -318,17 +329,48 @@ describe("openclaw test instance", () => {
       },
     });
     hook.enable();
+    const timesOut = mode === "wait" || mode === "drain-timeout";
+    const timeoutMs = timesOut ? 1_000 : 30_000;
+    let settled = false;
+    const command = trackOperation(
+      scope
+        .run(true, () => instance.cli([mode], { timeoutMs }))
+        .finally(() => {
+          settled = true;
+        }),
+    );
     try {
-      const timeoutMs = mode === "wait" ? 1_000 : 30_000;
-      const command = trackOperation(scope.run(true, () => instance.cli([mode], { timeoutMs })));
-      if (mode === "wait") {
+      if (drain && control) {
+        await withTestTimeout(
+          control.reached,
+          1_000,
+          "CLI fixture did not reach its held output writer",
+        );
+        expect(control.launches).toHaveLength(1);
+        // Observe native leader exit while its descendant holds inherited stderr
+        // at /wait; neither elapsed time nor CLI settlement is the oracle.
+        await waitForDead(control.launches[0]!, 1_000);
+        writerPid = Number(await fs.readFile(`${tracePath}.delayed-pid`, "utf8"));
+        expect(isProcessAlive(writerPid)).toBe(true);
+        if (!timesOut) {
+          let settledBeforeRelease: boolean | undefined;
+          control.observers.beforeRelease = () => {
+            settledBeforeRelease = settled;
+          };
+          await control.release();
+          expect(settledBeforeRelease, "CLI settled before its output writer was released").toBe(
+            false,
+          );
+        }
+      }
+      if (timesOut) {
         await expect(command).rejects.toThrow(`command timed out after ${timeoutMs}ms`);
       } else {
         await expect(command).resolves.toEqual({
-          code: Number(mode),
+          code: drain ? 1 : Number(mode),
           signal: null,
           stdout: "fake gateway attempt 1\n",
-          stderr: "cli diagnostic\n",
+          stderr: drain ? `${MIGRATION_CONVERGENCE_REFUSAL} delayed fixture\n` : "cli diagnostic\n",
         });
       }
       const attempts = await readAttempts();
@@ -340,11 +382,17 @@ describe("openclaw test instance", () => {
       });
       expect(timers.size, "completed CLI invocation retained a deadline").toBe(0);
     } finally {
+      control?.unblock();
+      await Promise.allSettled([command]);
       hook.disable();
       scope.disable();
       // Retain the failing assertion while releasing only this invocation's timers.
       for (const timer of timers.values()) {
         clearTimeout(timer);
+      }
+      if (drain && control?.launches.length) {
+        writerPid ??= Number(await fs.readFile(`${tracePath}.delayed-pid`, "utf8"));
+        await waitForDead(writerPid, 1_500);
       }
     }
   });

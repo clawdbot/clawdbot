@@ -7872,8 +7872,148 @@ server.listen(0, "127.0.0.1", () => {
       "audit",
     );
     expect(audit.run).toContain(
-      'pre-commit run --config "${PRE_COMMIT_CONFIG_PATH:-.pre-commit-config.yaml}" zizmor',
+      '"$RUNNER_TEMP/pre-commit-venv/bin/python" -I .ci-harness/.github/actions/pre-commit/run-selected.py "${PRE_COMMIT_CONFIG_PATH:-.pre-commit-config.yaml}" zizmor',
     );
+  });
+
+  it("runs each security hook through the trusted harness with its original file selection", () => {
+    const securitySteps: WorkflowStep[] = readCiWorkflow().jobs["security-fast"].steps;
+    const sanitySteps: WorkflowStep[] = readWorkflowSanityWorkflow().jobs.actionlint.steps;
+    const root = tempDirs.make("pre-commit-selection-");
+    const bin = path.join(root, "bin");
+    const runnerTemp = path.join(root, "runner temp");
+    const venvPython = path.join(runnerTemp, "pre-commit-venv/bin/python");
+    mkdirSync(bin);
+    mkdirSync(path.join(root, ".github/workflows"), { recursive: true });
+    const changed = [".github/workflows/changed.yml", ".github/workflows/with space.yaml"];
+    const all = [...changed, ".github/workflows/unchanged.yml"].toSorted();
+    for (const file of all) {
+      writeFileSync(path.join(root, file), "fixture\n");
+    }
+    const receipt = path.join(root, "invocation.txt");
+    const bootstrapReceipt = path.join(root, "bootstrap.txt");
+    const pythonFixture = path.join(root, "venv-python");
+    writeFileSync(pythonFixture, '#!/bin/sh\nprintf "%s\\n" "$0" "$@" > "$INVOCATION_RECEIPT"\n', {
+      mode: 0o755,
+    });
+    for (const command of ["python", "python3"]) {
+      writeFileSync(
+        path.join(bin, command),
+        [
+          "#!/bin/sh",
+          'if [ "$1" = -I ] && { [ "$2" = --version ] || [ "$2" = - ]; }; then echo 3.12.fixture; exit 0; fi',
+          '[ "$1" = -I ] && [ "$2" = -m ] && [ "$3" = venv ] || exit 19',
+          'printf "%s\\n" "$@" > "$BOOTSTRAP_RECEIPT"',
+          'mkdir -p "$4/bin"',
+          'cp "$VENV_PYTHON_FIXTURE" "$4/bin/python"',
+          "",
+        ].join("\n"),
+        { mode: 0o755 },
+      );
+    }
+    writeFileSync(
+      path.join(bin, "git"),
+      `#!/bin/sh\nif [ "$1" = diff ]; then printf '%s\\n' '.github/workflows/changed.yml' '.github/workflows/with space.yaml'; fi\n`,
+      { mode: 0o755 },
+    );
+    const env = {
+      ...process.env,
+      PATH: `${bin}${path.delimiter}${process.env.PATH}`,
+      RUNNER_TEMP: runnerTemp,
+      BASE_SHA: "a".repeat(40),
+      INVOCATION_RECEIPT: receipt,
+      BOOTSTRAP_RECEIPT: bootstrapReceipt,
+      VENV_PYTHON_FIXTURE: pythonFixture,
+    };
+    const runStep = (step: WorkflowStep, extraEnv: NodeJS.ProcessEnv = {}) => {
+      const script = expectDefined(step.run, step.name ?? "workflow step");
+      const result = spawnSync("bash", ["-e", "-c", script], {
+        cwd: root,
+        encoding: "utf8",
+        env: { ...env, ...extraEnv },
+      });
+      expect(result.status, result.stdout + result.stderr).toBe(0);
+    };
+    const probe = expectDefined(
+      securitySteps.find((step) => step.name === "Resolve Python runtime"),
+      "Python runtime probe",
+    );
+    const runtimeOutput = path.join(root, "runtime-output");
+    runStep(probe, { GITHUB_OUTPUT: runtimeOutput });
+    expect(readFileSync(runtimeOutput, "utf8")).toBe("python-version=3.12.fixture\n");
+    for (const [steps, name, selection] of [
+      [securitySteps, "Detect committed private keys", ["detect-private-key", "--all-files"]],
+      [
+        securitySteps,
+        "Audit changed GitHub workflows with zizmor",
+        ["zizmor", "--files", ...changed],
+      ],
+      [sanitySteps, "Audit all workflows with zizmor", ["zizmor", "--files", ...all]],
+    ] as const) {
+      const scan = expectDefined(
+        steps.find((step) => step.name === name),
+        name,
+      );
+      const harness = expectDefined(
+        steps.find((step) => step.name === "Checkout trusted CI harness"),
+        "trusted harness",
+      );
+      expect(harness).toMatchObject({
+        uses: CHECKOUT_V6,
+        with: {
+          ref: "${{ github.workflow_sha }}",
+          path: ".ci-harness",
+          "persist-credentials": false,
+        },
+      });
+      expect([".github/actions", ".github/actions/pre-commit"]).toContain(
+        harness.with?.["sparse-checkout"],
+      );
+      expect(steps.indexOf(harness)).toBeLessThan(steps.indexOf(scan));
+      const install = expectDefined(
+        steps.find((step) => step.name === "Install pre-commit"),
+        "pre-commit installation",
+      );
+      expect(steps.indexOf(install)).toBeLessThan(steps.indexOf(scan));
+      runStep(install);
+      expect(readFileSync(bootstrapReceipt, "utf8").trim().split("\n")).toEqual([
+        "-I",
+        "-m",
+        "venv",
+        path.dirname(path.dirname(venvPython)),
+      ]);
+      expect(readFileSync(receipt, "utf8").trim().split("\n")).toEqual([
+        venvPython,
+        "-I",
+        "-m",
+        "pip",
+        "install",
+        "--disable-pip-version-check",
+        "pre-commit==4.6.2",
+      ]);
+      for (const config of ["", "/trusted config/pre-commit-base.yaml"]) {
+        runStep(scan, { PRE_COMMIT_CONFIG_PATH: config });
+        expect(readFileSync(receipt, "utf8").trim().split("\n")).toEqual([
+          venvPython,
+          "-I",
+          ".ci-harness/.github/actions/pre-commit/run-selected.py",
+          config || ".pre-commit-config.yaml",
+          ...selection,
+        ]);
+      }
+    }
+    const runnerTests = expectDefined(
+      sanitySteps.find((step) => step.name === "Test selected pre-commit runner"),
+      "runner tests",
+    );
+    const installIndex = sanitySteps.findIndex((step) => step.name === "Install pre-commit");
+    expect(installIndex).toBeLessThan(sanitySteps.indexOf(runnerTests));
+    runStep(runnerTests);
+    expect(readFileSync(receipt, "utf8").trim().split("\n")).toEqual([
+      venvPython,
+      "-I",
+      ".ci-harness/.github/actions/pre-commit/test-run-selected.py",
+    ]);
   });
 
   it("prepares Testbox checkouts with one maintained owner and scoped history", () => {

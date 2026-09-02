@@ -408,8 +408,9 @@ publishes its 1,000,000-token context window, 128,000-token output limit, image
 input, and `$5/$25` input/output pricing.
 
 `anthropic/claude-sonnet-5` uses the same adaptive-thinking defaults and request
-restrictions. The catalog uses Anthropic's introductory `$2/$10` input/output
-pricing through August 31, 2026; standard `$3/$15` pricing begins September 1, 2026.
+restrictions. The catalog uses Anthropic's standard `$2/$10` input/output pricing
+per million tokens. Anthropic canceled the previously scheduled September 2026
+increase; see [current model pricing](https://platform.claude.com/docs/en/about-claude/pricing#model-pricing).
 
 `anthropic/claude-fable-5-1` and `anthropic/claude-fable-5` always use adaptive
 thinking and default to `high` effort. Anthropic does not allow thinking to be

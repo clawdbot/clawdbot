@@ -655,7 +655,17 @@ export function createWorkerWorkspaceActions(
           return expectedRemoteRef();
         },
         changed,
-        verifyStable: async () => await verifyStable(expectedRemoteRef()),
+        verifyStable: async (renewal) => {
+          const expectedRef = expectedRemoteRef();
+          // SSH retains its bounded memo round-trip; node batches return only a small receipt.
+          if (renewal) {
+            if (renewal.capture === "before-and-after") {
+              await verifyStable(expectedRef);
+            }
+            await renewal.quiescence.assertActive();
+          }
+          await verifyStable(expectedRef);
+        },
         verifyLocalStable: async () =>
           await runLocalReconciliation(
             async () =>

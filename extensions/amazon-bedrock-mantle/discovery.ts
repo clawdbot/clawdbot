@@ -32,28 +32,15 @@ const DEFAULT_MAX_TOKENS = 4096;
 const DEFAULT_REFRESH_INTERVAL_SECONDS = 3600; // 1 hour
 const MANTLE_DISCOVERY_TIMEOUT_MS = 30_000;
 const MANTLE_DISCOVERY_RESPONSE_MAX_BYTES = 4 * 1024 * 1024;
-// Bedrock's introductory Sonnet 5 rate expires at the documented UTC month boundary.
-const SONNET_5_STANDARD_PRICING_START_MS = Date.UTC(2026, 8, 1);
-const SONNET_5_PROMOTIONAL_COST = {
+// Share published global rates between discovery and normalization, without a dated increase.
+export const MANTLE_SONNET_5_COST = {
   input: 2,
   output: 10,
   cacheRead: 0.2,
   cacheWrite: 2.5,
 };
-const SONNET_5_STANDARD_COST = {
-  input: 3,
-  output: 15,
-  cacheRead: 0.3,
-  cacheWrite: 3.75,
-};
 /** Config auth marker meaning Mantle should mint runtime bearer tokens from IAM. */
 export const MANTLE_IAM_TOKEN_MARKER = "__amazon_bedrock_mantle_iam__";
-
-export function resolveMantleSonnet5Cost(nowMs: number = Date.now()) {
-  return nowMs >= SONNET_5_STANDARD_PRICING_START_MS
-    ? SONNET_5_STANDARD_COST
-    : SONNET_5_PROMOTIONAL_COST;
-}
 
 // ---------------------------------------------------------------------------
 // Mantle region & endpoint helpers
@@ -471,7 +458,7 @@ export async function resolveImplicitMantleProvider(params: {
       mediaInput: {
         image: { maxSidePx: 2576, preferredSidePx: 2576, tokenMode: "provider" },
       },
-      cost: resolveMantleSonnet5Cost(),
+      cost: MANTLE_SONNET_5_COST,
       contextWindow: 1_000_000,
       maxTokens: 128_000,
       thinkingLevelMap: { off: "low", minimal: "low", xhigh: "xhigh", max: "max" },

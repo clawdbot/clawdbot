@@ -1804,8 +1804,8 @@ jobs:
         id: setup-python
         run: |
           set -euo pipefail
-          python3 --version
-          version="$(python3 - <<'PY'
+          python3 -I --version
+          version="$(python3 -I - <<'PY'
           import platform
           print(platform.python_version())
           PY
@@ -1813,10 +1813,13 @@ jobs:
           echo "python-version=${version}" >> "$GITHUB_OUTPUT"
 
       - name: Install pre-commit
-        run: python3 -m pip install --disable-pip-version-check pre-commit==4.6.2
+        run: |
+          set -euo pipefail
+          python3 -I -m venv "$RUNNER_TEMP/pre-commit-venv"
+          "$RUNNER_TEMP/pre-commit-venv/bin/python" -I -m pip install --disable-pip-version-check pre-commit==4.6.2
 
       - name: Detect committed private keys
-        run: pre-commit run --config "${PRE_COMMIT_CONFIG_PATH:-.pre-commit-config.yaml}" --all-files detect-private-key
+        run: '"$RUNNER_TEMP/pre-commit-venv/bin/python" -I .ci-harness/.github/actions/pre-commit/run-selected.py "${PRE_COMMIT_CONFIG_PATH:-.pre-commit-config.yaml}" detect-private-key --all-files'
 
       - name: Audit changed GitHub workflows with zizmor
         env:
@@ -1843,7 +1846,7 @@ jobs:
           fi
 
           printf 'Auditing workflow files:\n%s\n' "${workflow_files[@]}"
-          pre-commit run --config "${PRE_COMMIT_CONFIG_PATH:-.pre-commit-config.yaml}" zizmor --files "${workflow_files[@]}"
+          "$RUNNER_TEMP/pre-commit-venv/bin/python" -I .ci-harness/.github/actions/pre-commit/run-selected.py "${PRE_COMMIT_CONFIG_PATH:-.pre-commit-config.yaml}" zizmor --files "${workflow_files[@]}"
 
       - name: Setup Node.js
         env:

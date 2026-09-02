@@ -32,7 +32,7 @@ import {
 } from "../infra/exec-approvals.js";
 import type { ExecAuthorizationPlan } from "../infra/exec-authorization-plan.js";
 import { resolveExecAutoReviewDecision, type ExecAutoReviewer } from "../infra/exec-auto-review.js";
-import type { ExecHostRequest, ExecHostResponse, ExecHostRunResult } from "../infra/exec-host.js";
+import type { ExecHostRequest, requestExecHostViaSocket } from "../infra/exec-host.js";
 import { resolveExecSafeBinRuntimePolicy } from "../infra/exec-safe-bin-runtime-policy.js";
 import {
   extractEnvAssignmentKeysFromDispatchWrappers,
@@ -92,7 +92,6 @@ type SystemRunDeniedReason =
   | "approval-state-write-failed"
   | "allowlist-miss"
   | "execution-plan-miss"
-  | "companion-unavailable"
   | "cwd-unavailable"
   | "permission:screenRecording";
 
@@ -185,7 +184,6 @@ function normalizeDeniedReason(reason: string | null | undefined): SystemRunDeni
     case "approval-required":
     case "allowlist-miss":
     case "execution-plan-miss":
-    case "companion-unavailable":
     case "cwd-unavailable":
     case "permission:screenRecording":
       return reason;
@@ -242,8 +240,6 @@ type HandleSystemRunInvokeOptions = {
   params: SystemRunParams;
   skillBins: SkillBinsProvider;
   signal?: AbortSignal;
-  execHostEnforced: boolean;
-  execHostFallbackAllowed: boolean;
   resolveExecSecurity: (value?: string) => ExecSecurity;
   resolveExecAsk: (value?: string) => ExecAsk;
   isCmdExeInvocation: (argv: string[]) => boolean;
@@ -255,16 +251,15 @@ type HandleSystemRunInvokeOptions = {
     timeoutMs: number | undefined,
     signal?: AbortSignal,
   ) => Promise<RunResult>;
-  runViaMacAppExecHost: (params: {
+  runViaMacAppExecHost?: (params: {
     approvals: ExecApprovalsResolved;
     request: ExecHostRequest;
     signal?: AbortSignal;
-  }) => Promise<ExecHostResponse | null>;
+  }) => ReturnType<typeof requestExecHostViaSocket>;
   sendNodeEvent: (client: NodeHostClient, event: string, payload: unknown) => Promise<void>;
   buildExecEventPayload: (payload: ExecEventPayload) => ExecEventPayload;
   sendInvokeResult: (result: SystemRunInvokeResult) => Promise<void>;
   sendExecFinishedEvent: (params: ExecFinishedEventParams) => Promise<void>;
-  preferMacAppExecHost: boolean;
   getRuntimeConfig?: () => OpenClawConfig;
   autoReviewer?: ExecAutoReviewer;
   commitExecAuthorization?: typeof commitExecAuthorizationLocked;
@@ -303,11 +298,7 @@ async function sendSystemRunDenied(
   );
   await opts.sendInvokeResult({
     ok: false,
-    // A missing companion reply can follow execution; it is not a policy denial.
-    error: {
-      code: params.reason === "companion-unavailable" ? "UNAVAILABLE" : "SYSTEM_RUN_DENIED",
-      message: params.message,
-    },
+    error: { code: "SYSTEM_RUN_DENIED", message: params.message },
   });
 }
 
@@ -532,7 +523,7 @@ async function evaluateSystemRunPolicyPhase(
     agentId: parsed.agentId,
     defaultSecurity: opts.resolveExecSecurity(undefined),
     defaultAsk: opts.resolveExecAsk(undefined),
-    requireSocket: opts.preferMacAppExecHost,
+    requireSocket: opts.runViaMacAppExecHost !== undefined,
   });
   const { agentExec, globalExec, approvals } = effectivePolicy;
   const currentPolicySnapshot = createExecApprovalPolicySnapshot({
@@ -948,7 +939,7 @@ async function executeSystemRunPhase(
     return;
   }
 
-  if (opts.preferMacAppExecHost) {
+  if (opts.runViaMacAppExecHost) {
     const macApprovalSource =
       phase.approvalSource ??
       (phase.approvalGrantSource === "auto-review" ? "auto-review" : undefined);
@@ -972,7 +963,7 @@ async function executeSystemRunPhase(
       approvalSource: macApprovalSource,
       ...(phase.approvalGrantSource ? { policySnapshot: phase.evaluationPolicySnapshot } : {}),
     };
-    const response = await opts.runViaMacAppExecHost({
+    const outcome = await opts.runViaMacAppExecHost({
       approvals: phase.approvals,
       request: execRequest,
       signal: opts.signal,
@@ -980,25 +971,33 @@ async function executeSystemRunPhase(
     if (opts.signal?.aborted) {
       return;
     }
-    if (!response) {
-      if (opts.execHostEnforced || !opts.execHostFallbackAllowed) {
-        await sendSystemRunDenied(opts, phase.execution, {
-          reason: "companion-unavailable",
-          message: "COMPANION_APP_UNAVAILABLE: macOS app exec host unreachable",
-        });
+    if (!outcome.ok) {
+      if (outcome.error === "cancelled") {
         return;
       }
-    } else if (!response.ok) {
+      const notStarted = outcome.error === "not-submitted";
+      // The failed invoke result retires event authority. Transport loss is not
+      // a policy denial and must never authorize a second, local execution.
+      const error = {
+        code: notStarted ? "SYSTEM_RUN_NOT_STARTED" : "UNAVAILABLE",
+        message: notStarted
+          ? "Companion request was not submitted; start the macOS app before retrying."
+          : "Companion reply was lost after submission; the command may have executed. Do not retry automatically.",
+      };
+      await opts.sendInvokeResult({ ok: false, error });
+      return;
+    }
+    const response = outcome.value;
+    if (!response.ok) {
       await sendSystemRunDenied(opts, phase.execution, {
         reason: normalizeDeniedReason(response.error.reason),
         message: response.error.message,
       });
       return;
-    } else {
-      const result: ExecHostRunResult = response.payload;
-      await sendSystemRunCompleted(opts, phase.execution, result, JSON.stringify(result));
-      return;
     }
+    const result = response.payload;
+    await sendSystemRunCompleted(opts, phase.execution, result, JSON.stringify(result));
+    return;
   }
 
   if (phase.needsScreenRecording) {

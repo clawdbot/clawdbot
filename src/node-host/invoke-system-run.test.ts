@@ -3,6 +3,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { err, ok } from "@openclaw/normalization-core/result";
 import {
   afterAll,
   afterEach,
@@ -47,7 +48,9 @@ vi.mock("../logger.js", async (importOriginal) => ({
 }));
 
 type MockedRunCommand = Mock<HandleSystemRunInvokeOptions["runCommand"]>;
-type MockedRunViaMacAppExecHost = Mock<HandleSystemRunInvokeOptions["runViaMacAppExecHost"]>;
+type MockedRunViaMacAppExecHost = Mock<
+  NonNullable<HandleSystemRunInvokeOptions["runViaMacAppExecHost"]>
+>;
 type MockedSendInvokeResult = Mock<HandleSystemRunInvokeOptions["sendInvokeResult"]>;
 type MockedSendExecFinishedEvent = Mock<HandleSystemRunInvokeOptions["sendExecFinishedEvent"]>;
 type MockedSendNodeEvent = Mock<HandleSystemRunInvokeOptions["sendNodeEvent"]>;
@@ -421,7 +424,9 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
   }): InvokeSpies {
     return {
       runCommand: vi.fn(params?.runCommand ?? (async () => createLocalRunResult())),
-      runViaMacAppExecHost: vi.fn(params?.runViaMacAppExecHost ?? (async () => null)),
+      runViaMacAppExecHost: vi.fn<
+        NonNullable<HandleSystemRunInvokeOptions["runViaMacAppExecHost"]>
+      >(params?.runViaMacAppExecHost ?? (async () => err("outcome-unknown"))),
       sendInvokeResult: vi.fn(params?.sendInvokeResult ?? (async () => {})),
       sendExecFinishedEvent: vi.fn(params?.sendExecFinishedEvent ?? (async () => {})),
       sendNodeEvent: vi.fn(params?.sendNodeEvent ?? (async () => {})),
@@ -546,9 +551,8 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
   }
 
   async function runSystemInvoke(params: {
-    preferMacAppExecHost: boolean;
-    execHostFallbackAllowed?: boolean;
-    runViaResponse?: ExecHostResponse | null;
+    useMacAppExecHost: boolean;
+    runViaResponse?: ExecHostResponse;
     command?: string[];
     env?: Record<string, string>;
     rawCommand?: string | null;
@@ -581,7 +585,8 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
     const spies = createInvokeSpies({
       runCommand: params.runCommand,
       runViaMacAppExecHost:
-        params.runViaMacAppExecHost ?? (async () => params.runViaResponse ?? null),
+        params.runViaMacAppExecHost ??
+        (async () => (params.runViaResponse ? ok(params.runViaResponse) : err("outcome-unknown"))),
       sendInvokeResult: params.sendInvokeResult,
       sendExecFinishedEvent: params.sendExecFinishedEvent,
       sendNodeEvent: params.sendNodeEvent,
@@ -647,15 +652,13 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
         current: params.skillBinsCurrent ?? (async () => []),
       },
       signal: params.signal,
-      execHostEnforced: false,
-      execHostFallbackAllowed: params.execHostFallbackAllowed ?? true,
       resolveExecSecurity: params.resolveExecSecurity ?? (() => params.security ?? "full"),
       resolveExecAsk: params.resolveExecAsk ?? (() => params.ask ?? "off"),
       isCmdExeInvocation: params.isCmdExeInvocation ?? (() => false),
       sanitizeEnv: params.sanitizeEnv ?? (() => undefined),
       ...spies,
       buildExecEventPayload: (payload) => payload,
-      preferMacAppExecHost: params.preferMacAppExecHost,
+      runViaMacAppExecHost: params.useMacAppExecHost ? spies.runViaMacAppExecHost : undefined,
       getRuntimeConfig: () => getRuntimeConfigSnapshot() ?? {},
       autoReviewer: params.autoReviewer,
       commitExecAuthorization: params.commitExecAuthorization,
@@ -667,15 +670,15 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
   type SystemInvokeFixtureParams = Parameters<typeof runSystemInvoke>[0];
 
   async function runLocalSystemInvoke(
-    params: Omit<SystemInvokeFixtureParams, "preferMacAppExecHost"> = {},
+    params: Omit<SystemInvokeFixtureParams, "useMacAppExecHost"> = {},
   ) {
-    return await runSystemInvoke({ ...params, preferMacAppExecHost: false });
+    return await runSystemInvoke({ ...params, useMacAppExecHost: false });
   }
 
   async function runMacSystemInvoke(
-    params: Omit<SystemInvokeFixtureParams, "preferMacAppExecHost"> = {},
+    params: Omit<SystemInvokeFixtureParams, "useMacAppExecHost"> = {},
   ) {
-    return await runSystemInvoke({ ...params, preferMacAppExecHost: true });
+    return await runSystemInvoke({ ...params, useMacAppExecHost: true });
   }
 
   type ExplicitSystemInvokePolicy = {
@@ -686,7 +689,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
   async function runLocalSystemInvokeWithPolicy(
     security: ExplicitSystemInvokePolicy["security"],
     ask: ExplicitSystemInvokePolicy["ask"],
-    params: Omit<SystemInvokeFixtureParams, "preferMacAppExecHost" | "security" | "ask"> = {},
+    params: Omit<SystemInvokeFixtureParams, "useMacAppExecHost" | "security" | "ask"> = {},
   ) {
     return await runLocalSystemInvoke({ ...params, security, ask });
   }
@@ -694,7 +697,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
   async function runMacSystemInvokeWithPolicy(
     security: ExplicitSystemInvokePolicy["security"],
     ask: ExplicitSystemInvokePolicy["ask"],
-    params: Omit<SystemInvokeFixtureParams, "preferMacAppExecHost" | "security" | "ask"> = {},
+    params: Omit<SystemInvokeFixtureParams, "useMacAppExecHost" | "security" | "ask"> = {},
   ) {
     return await runMacSystemInvoke({ ...params, security, ask });
   }
@@ -715,7 +718,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
   });
 
   it("keeps a lost companion response ambiguous", async () => {
-    const result = await runMacSystemInvoke({ execHostFallbackAllowed: false });
+    const result = await runMacSystemInvoke();
     expect(result.runViaMacAppExecHost).toHaveBeenCalledOnce();
     expect(result.runCommand).not.toHaveBeenCalled();
     expect(requireInvokeResult(result.sendInvokeResult)).toMatchObject({
@@ -756,16 +759,20 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
     expect(result.sendExecFinishedEvent).not.toHaveBeenCalled();
   });
 
-  it.each([null, createMacExecHostSuccess()])(
-    "cancels pending Mac exec without replay or publication (%j)",
-    async (response) => {
+  it.each([false, true])(
+    "cancels pending Mac exec without replay or publication (late reply=%s)",
+    async (lateReply) => {
       const controller = new AbortController();
       const result = await runMacSystemInvoke({
         signal: controller.signal,
         runViaMacAppExecHost: ({ signal }) => {
           expect(signal).toBe(controller.signal);
           return new Promise((resolve) => {
-            signal?.addEventListener("abort", () => resolve(response), { once: true });
+            signal?.addEventListener(
+              "abort",
+              () => resolve(lateReply ? ok(createMacExecHostSuccess()) : err("cancelled")),
+              { once: true },
+            );
             queueMicrotask(() => controller.abort());
           });
         },
@@ -1095,11 +1102,11 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
   const approvedEnvShellWrapperCases = [
     {
       name: "preserves wrapper argv for approved env shell commands in local execution",
-      preferMacAppExecHost: false,
+      useMacAppExecHost: false,
     },
     {
       name: "preserves wrapper argv for approved env shell commands in mac app exec host forwarding",
-      preferMacAppExecHost: true,
+      useMacAppExecHost: true,
     },
   ] as const;
 
@@ -1120,7 +1127,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
         });
         const sendInvokeResult = vi.fn(async () => {});
         const invoke = await runSystemInvoke({
-          preferMacAppExecHost: testCase.preferMacAppExecHost,
+          useMacAppExecHost: testCase.useMacAppExecHost,
           command: ["env", "sh", "-c", "echo SAFE"],
           cwd: tmp,
           approved: true,
@@ -1128,7 +1135,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
           ask: "on-miss",
           runCommand,
           sendInvokeResult,
-          runViaResponse: testCase.preferMacAppExecHost
+          runViaResponse: testCase.useMacAppExecHost
             ? {
                 ok: true,
                 payload: {
@@ -1143,7 +1150,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
             : undefined,
         });
 
-        if (testCase.preferMacAppExecHost) {
+        if (testCase.useMacAppExecHost) {
           const canonicalCwd = fs.realpathSync(tmp);
           expect(invoke.runCommand).not.toHaveBeenCalled();
           const macHostCall = requireMacExecHostCall(invoke.runViaMacAppExecHost);

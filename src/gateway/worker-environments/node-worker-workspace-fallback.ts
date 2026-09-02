@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { runCommandWithTimeout, type SpawnResult } from "../../process/exec.js";
+import { NODE_WORKER_WORKSPACE_COMMAND_TIMEOUT_MS } from "../../worker/node-workspace-protocol.js";
 import type {
   WorkerWorkspaceCommand,
   WorkerWorkspaceSyncRequest,
@@ -17,7 +18,6 @@ import {
 } from "./workspace-sync-helpers.js";
 import { REMOTE_WORKSPACE_MANIFEST_JS } from "./workspace-sync-scripts.js";
 
-const GIT_TIMEOUT_MS = 60_000;
 const COMMIT_PATTERN = /^[a-f0-9]{40}(?:[a-f0-9]{24})?$/u;
 const MANIFEST_REF_PATTERN = /^sha256:[a-f0-9]{64}$/u;
 const GIT_NONINTERACTIVE_ARGS = ["-c", "credential.helper=", "-c", "core.askPass="];
@@ -84,7 +84,7 @@ async function localGit(root: string, args: string[]): Promise<string> {
       ...args,
     ],
     {
-      timeoutMs: GIT_TIMEOUT_MS,
+      timeoutMs: NODE_WORKER_WORKSPACE_COMMAND_TIMEOUT_MS,
       maxOutputBytes: 256 * 1024,
       maxCombinedOutputBytes: 512 * 1024,
       outputCapture: "head",
@@ -192,7 +192,7 @@ export function createNodeWorkerWorkspaceFallback(exec: WorkspaceExec) {
         ...(base ? [base, "eligible"] : ["", "all"]),
         ...(reference ? [reference.slice("sha256:".length)] : []),
       ],
-      timeoutMs: GIT_TIMEOUT_MS,
+      timeoutMs: NODE_WORKER_WORKSPACE_COMMAND_TIMEOUT_MS,
       transportRetry: "idempotent",
     });
   const checkoutAndCapture = async (
@@ -203,7 +203,7 @@ export function createNodeWorkerWorkspaceFallback(exec: WorkspaceExec) {
   ): Promise<OriginSyncOutcome> => {
     const checkedOut = await exec({
       argv: ["git", ...GIT_NONINTERACTIVE_ARGS, "checkout", "--detach", "--force", identity.commit],
-      timeoutMs: GIT_TIMEOUT_MS,
+      timeoutMs: NODE_WORKER_WORKSPACE_COMMAND_TIMEOUT_MS,
       transportRetry: "never",
     });
     if (!succeeded(checkedOut) || checkedOut.workspaceDir !== workspaceDir) {
@@ -255,13 +255,13 @@ export function createNodeWorkerWorkspaceFallback(exec: WorkspaceExec) {
           const applied = await exec({
             argv: ["openclaw-internal-workspace-seed"],
             seed: { action: "apply", key: seedKey },
-            timeoutMs: GIT_TIMEOUT_MS,
+            timeoutMs: NODE_WORKER_WORKSPACE_COMMAND_TIMEOUT_MS,
             transportRetry: "never",
           });
           if (succeeded(applied) && applied.stdout.trim() === "applied") {
             const remote = await exec({
               argv: ["git", ...GIT_NONINTERACTIVE_ARGS, "remote", "get-url", "origin"],
-              timeoutMs: GIT_TIMEOUT_MS,
+              timeoutMs: NODE_WORKER_WORKSPACE_COMMAND_TIMEOUT_MS,
               transportRetry: "never",
             });
             if (!succeeded(remote) || remote.stdout.trim() !== identity.origin) {
@@ -276,7 +276,7 @@ export function createNodeWorkerWorkspaceFallback(exec: WorkspaceExec) {
                 "origin",
                 "+refs/heads/*:refs/remotes/origin/*",
               ],
-              timeoutMs: GIT_TIMEOUT_MS,
+              timeoutMs: NODE_WORKER_WORKSPACE_COMMAND_TIMEOUT_MS,
               transportRetry: "never",
             });
             if (!succeeded(fetched)) {
@@ -316,7 +316,7 @@ export function createNodeWorkerWorkspaceFallback(exec: WorkspaceExec) {
             ".",
           ],
           resetWorkspace: true,
-          timeoutMs: GIT_TIMEOUT_MS,
+          timeoutMs: NODE_WORKER_WORKSPACE_COMMAND_TIMEOUT_MS,
           transportRetry: "never",
         });
         if (!succeeded(cloned)) {
@@ -362,7 +362,10 @@ export function createNodeWorkerWorkspaceFallback(exec: WorkspaceExec) {
         return result;
       }
       const author = await resolveWorkerWorkspaceGitAuthor(request, async (argv) =>
-        runCommandWithTimeout(argv, { timeoutMs: GIT_TIMEOUT_MS, maxOutputBytes: 1024 }),
+        runCommandWithTimeout(argv, {
+          timeoutMs: NODE_WORKER_WORKSPACE_COMMAND_TIMEOUT_MS,
+          maxOutputBytes: 1024,
+        }),
       );
       const git = ["git", "-C", result.remoteWorkspaceDir, "config", "--local"];
       for (const [key, value] of Object.entries(author)) {

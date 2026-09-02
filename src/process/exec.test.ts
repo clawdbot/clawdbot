@@ -554,10 +554,10 @@ describe("runCommandBuffered", () => {
     ).resolves.toMatchObject({ code: null, termination: "signal", error: new Error("stop") });
   });
 
-  it.runIf(process.platform !== "win32")(
-    "force-kills inherited-pipe descendants after the direct child exits",
+  it.runIf(process.platform !== "win32").each([0, 7])(
+    "drains descendants on failure or the post-success timeout (exit %s)",
     { timeout: 5_000 },
-    async () =>
+    async (exitCode) =>
       withTempDir("openclaw-exec-descendant-", async (dir) => {
         const pidPath = path.join(dir, "descendant.pid");
         const termPath = path.join(dir, "sigterm");
@@ -573,7 +573,7 @@ describe("runCommandBuffered", () => {
           "const { spawn } = require('node:child_process')",
           "const { writeFileSync } = require('node:fs')",
           `const child = spawn(process.execPath, ['-e', ${JSON.stringify(descendantSource)}], { stdio: ['ignore', 'inherit', 'inherit', 'ipc'] })`,
-          `child.once('message', () => { writeFileSync(${JSON.stringify(pidPath)}, String(child.pid)); process.exit(0) })`,
+          `child.once('message', () => { writeFileSync(${JSON.stringify(pidPath)}, String(child.pid)); process.exit(${exitCode}) })`,
         ].join(";");
         const realSetTimeout = setTimeout;
         const spawnSpy = vi.spyOn(execSpawn, "spawnCommandWithInvocation");
@@ -599,14 +599,17 @@ describe("runCommandBuffered", () => {
             throw new Error("command did not expose a child process");
           }
           expect(await once(parent, "exit", { signal: AbortSignal.timeout(2_000) })).toEqual([
-            0,
+            exitCode,
             null,
           ]);
           const descendantPid = await readPidFile(pidPath);
           expect(isPidAlive(descendantPid)).toBe(true);
           expect(settled).toBe(false);
 
-          await vi.advanceTimersByTimeAsync(50);
+          if (exitCode === 0) {
+            expect(existsSync(termPath)).toBe(false);
+            await vi.advanceTimersByTimeAsync(50);
+          }
           for (let attempt = 0; attempt < 40 && !existsSync(termPath); attempt += 1) {
             await new Promise<void>((resolve) => {
               realSetTimeout(resolve, 25);
@@ -617,7 +620,11 @@ describe("runCommandBuffered", () => {
           expect(settled).toBe(false);
 
           await vi.advanceTimersByTimeAsync(execSpawn.COMMAND_PROCESS_TREE_KILL_GRACE_MS);
-          expect(await command).toMatchObject({ code: null, termination: "timeout" });
+          expect(await command).toMatchObject(
+            exitCode === 0
+              ? { code: null, termination: "timeout" }
+              : { code: exitCode, termination: "exit" },
+          );
           vi.useRealTimers();
           expect(await waitForPidToExit(descendantPid)).toBe(true);
         } finally {

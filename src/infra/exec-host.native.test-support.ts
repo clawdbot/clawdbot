@@ -72,22 +72,18 @@ const success = await requestExecHostViaSocket({
   request: { command: ["/bin/echo", "native-success"], cwd: root, timeoutMs: 5_000 },
   timeoutMs: 10_000,
 });
-assert.equal(success?.ok, true);
-if (success?.ok) {
-  assert.equal(success.payload.success, true);
-  assert.equal(success.payload.exitCode, 0);
-  assert.equal(success.payload.stdout, "native-success\n");
-}
+assert.ok(success.ok && success.value.ok);
+assert.equal(success.value.payload.success, true);
+assert.equal(success.value.payload.exitCode, 0);
+assert.equal(success.value.payload.stdout, "native-success\n");
 const denied = await requestExecHostViaSocket({
   socketPath: nativeSocket,
   token,
   request: { ...request, agentId: "denied" },
   timeoutMs: 10_000,
 });
-assert.equal(denied?.ok, false);
-if (denied && !denied.ok) {
-  assert.equal(denied.error.reason, "security=deny");
-}
+assert.ok(denied.ok && !denied.value.ok);
+assert.equal(denied.value.error.reason, "security=deny");
 await assert.rejects(fs.stat(marker), { code: "ENOENT" });
 console.log("native success and policy denial verified");
 
@@ -139,8 +135,8 @@ try {
   order.push("native-started");
   caller.end();
   order.push("response-dropped");
-  assert.equal(await outcome, null);
-  order.push("client-null");
+  assert.deepEqual(await outcome, { ok: false, error: "outcome-unknown" });
+  order.push("client-outcome-unknown");
   assert.equal(await fs.readFile(marker, "utf8"), "START\n");
   await fs.writeFile(release, "finish\n");
   // Keep draining the native connection: its terminal reply proves the executor
@@ -158,11 +154,11 @@ try {
     "request-half-closed",
     "native-started",
     "response-dropped",
-    "client-null",
+    "client-outcome-unknown",
     "native-completed",
   ]);
   assert.deepEqual(errors, []);
-  console.log("native START -> response dropped -> client null -> native COMPLETE");
+  console.log("native START -> response dropped -> client outcome-unknown -> native COMPLETE");
 } finally {
   await fs.writeFile(release, "finish\n");
   try {

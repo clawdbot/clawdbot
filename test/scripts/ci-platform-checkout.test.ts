@@ -1,4 +1,5 @@
 import { execFileSync, spawnSync } from "node:child_process";
+import { once } from "node:events";
 import {
   chmodSync,
   existsSync,
@@ -11,12 +12,15 @@ import {
   symlinkSync,
   writeFileSync,
 } from "node:fs";
+import { createServer, type Socket } from "node:net";
 import path from "node:path";
+import { createInterface, type Interface } from "node:readline";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeAll, expect, it, vi } from "vitest";
 import { spawnOwnedVitestProcess } from "../../scripts/lib/vitest-process.mts";
 import { isProcessAlive, waitForDead } from "../helpers/process-wait.js";
+import { createDeferred } from "../helpers/promise.js";
 import {
   ciCheckoutFixture,
   expectCiCheckoutCleanup,
@@ -469,6 +473,206 @@ it.concurrent.each([
         expect(readFileSync(path.join(harness, action), "utf8")).toBe(files[action]);
       },
     );
+  },
+  55_000,
+);
+
+async function waitForAdmissionControl<T>(pending: Promise<T>, deadline: number): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      pending,
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(
+          () => reject(new Error("CI_CHECKOUT_LIFETIME: admission control did not settle")),
+          Math.max(0, deadline - Date.now()),
+        );
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+it.skipIf(process.platform === "win32").each(["exec-Python", "prepared raw Python"])(
+  "joins a Popen-admitted Git before receipt/deletion on parent stop (%s)",
+  async (topology) => {
+    const prepared = topology === "prepared raw Python";
+    const server = createServer();
+    let control: Socket | undefined;
+    let controlEnded = false;
+    let releasing = false;
+    let input: Interface | undefined;
+    let controlClosed = Promise.resolve();
+    let caseDeadline: number | undefined;
+    let workflowPid: number | undefined;
+    const errors: unknown[] = [];
+    const admitted = createDeferred<{ pid: number; parent: number }>();
+    const prematureReceipt = createDeferred<never>();
+    // Setup can fail before either promise is raced; keep the original failures observable.
+    void admitted.promise.catch(() => undefined);
+    void prematureReceipt.promise.catch(() => undefined);
+    server.once("connection", (socket) => {
+      control = socket;
+      controlClosed = new Promise<void>((closed) => {
+        socket.once("close", closed);
+      });
+      socket.once("end", () => (controlEnded = true));
+      socket.once("error", (error) => {
+        errors.push(error);
+        admitted.reject(error);
+      });
+      input = createInterface({ input: socket });
+      input.once("line", (line) => {
+        try {
+          admitted.resolve(JSON.parse(line));
+        } catch (error) {
+          admitted.reject(error);
+        }
+      });
+      input.on("line", (line) => {
+        if (line === "receipt-or-deletion-before-closure") {
+          prematureReceipt.reject(
+            new Error("CI_CHECKOUT_LIFETIME: held actor observed receipt/deletion before closure"),
+          );
+        }
+      });
+      if (releasing) {
+        socket.end();
+      }
+    });
+    try {
+      const removedRoot = await withCiCheckoutFixture(
+        `${prepared ? "linux:" : ""}parent-loss-before-registration`,
+        async (root, deadline) => {
+          caseDeadline = deadline;
+          server.listen(0, "127.0.0.1");
+          await waitForAdmissionControl(once(server, "listening"), deadline);
+          const address = server.address();
+          if (!address || typeof address === "string") {
+            throw new Error("Missing admission control address");
+          }
+          writeFileSync(path.join(root, "registration-gate.json"), JSON.stringify(address));
+          let run = readCiCheckoutStep("checks-windows").run;
+          if (prepared) {
+            writeFileSync(
+              path.join(root, "prepare.sh"),
+              readCiCheckoutStep("security-fast", "Prepare Git owner").run,
+            );
+            // Preparation execs in its own shell. Keep outer Bash alive around
+            // the actual saved-owner --git invocation, including its terminal output.
+            run = `CHECKOUT_KIND=prepare bash --noprofile --norc -eo pipefail "$TMPDIR/prepare.sh"
+python3 -I -S "$RUNNER_TEMP/ci-git-owner.py" --git 120 fetch --no-tags --depth=1 origin +${"c".repeat(40)}:refs/remotes/origin/npm-lock-base
+printf 'raw owner returned\\n'
+`;
+          }
+          writeFileSync(path.join(root, "checkout.sh"), run);
+        },
+        (report, result, stderr, root) => {
+          const shell = expectDefined(
+            report.ownedProcesses.find(({ role }) => role === "shell"),
+            "workflow shell",
+          );
+          expect(shell.pid).toBe(workflowPid);
+          expect(result, stderr).toEqual({ code: 1, signal: null });
+          expect(report.error).toContain("test parent requested stop");
+          if (prepared) {
+            expect([
+              { code: null, signal: "SIGTERM" },
+              { code: 143, signal: null },
+            ]).toContainEqual({ code: report.code, signal: report.signal });
+            expect(report.output).not.toContain("raw owner returned");
+          } else {
+            expect(report.code).toBe(143);
+            expect(report.signal).toBeNull();
+          }
+          expect(report.cleanupVerified).toBe(true);
+          expect(report.cleanupErrors).toEqual([]);
+          expect(report.cleanupRemaining).toEqual([]);
+          expect(report.ownedProcesses.filter(({ attempt }) => attempt > 0)).toEqual([]);
+          expect(report.boundaries.at(-1)).toMatchObject({
+            name: "exit",
+            alive: [],
+            sentinelAlive: true,
+          });
+          expect(existsSync(root)).toBe(true);
+          return root;
+        },
+        async (supervisor, root) => {
+          const held = await waitForAdmissionControl(
+            Promise.race([
+              admitted.promise,
+              prematureReceipt.promise,
+              supervisor.wait().then(() => {
+                throw new Error("CI_CHECKOUT_LIFETIME: supervisor closed before admission");
+              }),
+            ]),
+            supervisor.observationDeadline,
+          );
+          expect(existsSync(path.join(root, "pids", `${held.pid}.json`))).toBe(false);
+          workflowPid = held.parent;
+          if (prepared) {
+            // Inspect the live raw Python parent, not a PID-catalog inference.
+            const parent = spawnSync(
+              "/bin/ps",
+              ["-ww", "-p", String(held.parent), "-o", "ppid=,command="],
+              { encoding: "utf8", timeout: 1_000 },
+            );
+            expect(parent.status, parent.stderr).toBe(0);
+            const row = expectDefined(
+              parent.stdout.trim().match(/^(\d+)\s+(.+)$/u),
+              "raw owner parent",
+            );
+            workflowPid = Number(row[1]);
+            expect(workflowPid).not.toBe(held.parent);
+            expect(row[2]).toContain(path.join(root, "temp", "ci-git-owner.py"));
+            expect(row[2]).toContain("--git 120 fetch");
+          }
+          expect(existsSync(path.join(root, "report.json"))).toBe(false);
+          supervisor.stop();
+          // Peer EOF and the producer's inherited-output EOF independently cover
+          // the actor held before registration. Never send parent-side disconnect.
+          await waitForAdmissionControl(
+            Promise.race([
+              Promise.all([supervisor.wait(), controlClosed]),
+              prematureReceipt.promise,
+            ]),
+            supervisor.observationDeadline,
+          );
+          expect(
+            controlEnded,
+            "CI_CHECKOUT_LIFETIME: admission control closed without peer EOF",
+          ).toBe(true);
+        },
+      );
+      expect(existsSync(removedRoot)).toBe(false);
+    } catch (error) {
+      errors.push(error);
+    } finally {
+      // Release the held actor on red/setup-failure paths and join only within
+      // the original fixture deadline; disposing our socket never proves peer death.
+      releasing = true;
+      const serverClosed = new Promise<void>((resolve) => {
+        server.close(() => resolve());
+      });
+      if (control && !control.writableEnded && !control.destroyed) {
+        control.end();
+      }
+      try {
+        await waitForAdmissionControl(
+          Promise.all([controlClosed, serverClosed]),
+          caseDeadline ?? Date.now(),
+        );
+      } catch (error) {
+        errors.push(error);
+        control?.destroy();
+      } finally {
+        input?.close();
+      }
+    }
+    if (errors.length) {
+      throw new AggregateError(errors, "CI_CHECKOUT_LIFETIME: held admission regression failed");
+    }
   },
   55_000,
 );

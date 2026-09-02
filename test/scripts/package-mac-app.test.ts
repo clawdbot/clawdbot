@@ -1222,18 +1222,6 @@ describe("package-mac-app plist stamping", () => {
     expect(result.stderr).toContain(diagnostic);
   });
 
-  it("keeps dependency installation lockfile-safe", () => {
-    const script = readFileSync(scriptPath, "utf8");
-    const installBlock = script.slice(
-      script.indexOf('if [[ "${SKIP_PNPM_INSTALL:-0}" != "1" ]]'),
-      script.indexOf('if [[ -z "${APP_BUILD:-}" ]]'),
-    );
-
-    expect(installBlock).toContain("run_pnpm install --frozen-lockfile");
-    expect(installBlock).toContain("--config.node-linker=hoisted");
-    expect(installBlock).not.toContain("--no-frozen-lockfile");
-  });
-
   it("builds and bundles the MLX TTS helper for every requested architecture", () => {
     const script = readFileSync(scriptPath, "utf8");
     const buildLoop = readFileSync(swiftScriptPath, "utf8");
@@ -1414,6 +1402,11 @@ describe("package-mac-app plist stamping", () => {
   });
 
   it("falls back to corepack pnpm when the pnpm shim is absent", () => {
+    const script = readFileSync(scriptPath, "utf8");
+    const installBlock = script.slice(
+      script.indexOf('if [[ "${SKIP_PNPM_INSTALL:-0}" != "1" ]]'),
+      script.indexOf('if [[ -z "${APP_BUILD:-}" ]]'),
+    );
     const helperBlock = getPackageManagerHelperBlock();
     const tempRoot = tempDirs.make("openclaw-package-pnpm-root-");
     const toolsDir = tempDirs.make("openclaw-package-pnpm-tools-");
@@ -1442,14 +1435,15 @@ describe("package-mac-app plist stamping", () => {
       export OPENCLAW_TEST_LOG
       PATH=${JSON.stringify(`${toolsDir}:/usr/bin:/bin`)}
       ${helperBlock}
-      run_pnpm install --frozen-lockfile --config.node-linker=hoisted
+      SKIP_PNPM_INSTALL=0
+      ${installBlock}
       run_pnpm build
     `);
 
     expect(result.status).toBe(0);
     expect(readFileSync(logPath, "utf8").trim().split("\n")).toEqual([
       `${tempRoot}|pnpm --version`,
-      `${tempRoot}|pnpm install --frozen-lockfile --config.node-linker=hoisted`,
+      `${tempRoot}|pnpm install --frozen-lockfile`,
       `${tempRoot}|pnpm build`,
     ]);
   });

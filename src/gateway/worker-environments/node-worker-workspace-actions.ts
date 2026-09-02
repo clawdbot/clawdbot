@@ -5,7 +5,11 @@ import {
   recordNodeSyncPath,
 } from "./node-worker-workspace-fallback.js";
 import type { NodeWorkspaceTransferService } from "./node-workspace-transfer-service.js";
-import type { WorkerWorkspaceCommand, WorkerWorkspaceTunnelHandle } from "./tunnel-contract.js";
+import type {
+  WorkerWorkspaceCommand,
+  WorkerWorkspaceReconcileResult,
+  WorkerWorkspaceTunnelHandle,
+} from "./tunnel-contract.js";
 import { runInstrumentedWorkspaceReconcile } from "./workspace-finalize.js";
 import { workerProjectSeedKey } from "./workspace-git-base.js";
 import {
@@ -135,13 +139,27 @@ export function createNodeWorkerWorkspaceActions(params: {
     try {
       const changed = uploaded.currentManifestRef !== request.baseManifestRef;
       let expectedRemoteRef = uploaded.currentManifestRef;
-      const verifyStable = async () => {
+      const verifyStable: WorkerWorkspaceReconcileResult["verifyStable"] = async (renewal) => {
+        const expectedRef = expectedRemoteRef;
+        if (renewal) {
+          // Snapshot again after apply: accepted publication can advance the remote reference.
+          await renewal.quiescence.assertActive({
+            manifest: {
+              workspaceDir: request.remoteWorkspaceDir,
+              baseCommit: uploaded.base.baseCommit,
+              expectedManifestRef: expectedRef,
+              priorManifestDigests: [expectedRef.slice("sha256:".length)],
+            },
+            capture: renewal.capture,
+          });
+          return;
+        }
         const observed = await workspace.captureManifest(
           request.remoteWorkspaceDir,
           uploaded.base.baseCommit,
-          expectedRemoteRef,
+          expectedRef,
         );
-        if (observed !== expectedRemoteRef) {
+        if (observed !== expectedRef) {
           throw new Error("Cloud workspace changed during final reconciliation");
         }
       };

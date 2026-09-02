@@ -995,7 +995,7 @@ describe("node.invoke APNs wake path", () => {
       expect(requests).toHaveLength(5);
     });
 
-    it.each(["UNAVAILABLE", "NODE_BACKGROUND_UNAVAILABLE"])(
+    it.each(["UNAVAILABLE", "NODE_BACKGROUND_UNAVAILABLE", "SYSTEM_RUN_NOT_STARTED"])(
       "does not retry a generic or execution-dependent %s rejection",
       async (code) => {
         const invocation = start();

@@ -86,18 +86,18 @@ export async function verifyReconciledWorkspaceFinal(
   try {
     if (reconciliation.applyPreparedStagedResult && reconciliation.publishStagedResult) {
       try {
-        // Fence the prepared remote capture before quiescence renewal can enroll late writers.
-        await runRetryableFinalFenceStep(async () => await reconciliation.verifyStable());
-        // Renew quiescence and freeze any writers that appeared after the prepared capture.
-        await runRetryableFinalFenceStep(async () => await quiescence.assertActive());
-        // Keep this fence: a late writer can mutate before renewal enrolls and SIGSTOPs it.
-        await runRetryableFinalFenceStep(async () => await reconciliation.verifyStable());
+        // Capture on both sides of renewal: a late writer may mutate before renewal freezes it.
+        // The transport owner may batch this ordering, but cannot omit either capture.
+        await runRetryableFinalFenceStep(
+          async () =>
+            await reconciliation.verifyStable({ quiescence, capture: "before-and-after" }),
+        );
         await reconciliation.applyPreparedStagedResult();
         await reconciliation.verifyLocalStable();
-        // Renew after apply so lease expiry cannot race the final publish gate.
-        await runResultPreservingFinalFenceStep(async () => await quiescence.assertActive());
-        // Recheck the remote owner after apply before publishing the prepared result.
-        await runResultPreservingFinalFenceStep(async () => await reconciliation.verifyStable());
+        // Renew after apply, then recheck the remote owner before publishing the prepared result.
+        await runResultPreservingFinalFenceStep(
+          async () => await reconciliation.verifyStable({ quiescence, capture: "after" }),
+        );
         await runResultPreservingFinalFenceStep(
           async () => await reconciliation.verifyLocalStable(),
         );
@@ -115,8 +115,9 @@ export async function verifyReconciledWorkspaceFinal(
       : runRetryableFinalFenceStep;
     await runFenceStep(async () => await reconciliation.verifyStable());
     await runFenceStep(async () => await reconciliation.verifyLocalStable());
-    await runFenceStep(async () => await quiescence.assertActive());
-    await runFenceStep(async () => await reconciliation.verifyStable());
+    await runFenceStep(
+      async () => await reconciliation.verifyStable({ quiescence, capture: "after" }),
+    );
     await runFenceStep(async () => await reconciliation.verifyLocalStable());
     const applied = reconciliation.getAppliedWorkspaceResult?.();
     succeeded = true;

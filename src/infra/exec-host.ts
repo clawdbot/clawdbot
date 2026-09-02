@@ -1,7 +1,8 @@
 // Sends HMAC-protected exec host requests over the local socket.
 import crypto from "node:crypto";
+import { err, type Result } from "@openclaw/normalization-core/result";
 import type { ExecApprovalPolicySnapshot } from "./exec-approvals.js";
-import { requestJsonlSocket } from "./jsonl-socket.js";
+import { requestJsonlSocket, type JsonlSocketFailure } from "./jsonl-socket.js";
 
 // Exec host requests cross the local JSONL socket boundary into a privileged
 // runner, so payloads stay explicit and HMAC-protected.
@@ -19,7 +20,7 @@ export type ExecHostRequest = {
   policySnapshot?: ExecApprovalPolicySnapshot | null;
 };
 
-export type ExecHostRunResult = {
+type ExecHostRunResult = {
   exitCode?: number;
   timedOut: boolean;
   success: boolean;
@@ -45,10 +46,10 @@ export async function requestExecHostViaSocket(params: {
   request: ExecHostRequest;
   timeoutMs?: number;
   signal?: AbortSignal;
-}): Promise<ExecHostResponse | null> {
+}): Promise<Result<ExecHostResponse, JsonlSocketFailure>> {
   const { socketPath, token, request } = params;
   if (!socketPath || !token) {
-    return null;
+    return err("not-submitted");
   }
   const timeoutMs = params.timeoutMs ?? 20_000;
   const requestJson = JSON.stringify(request);
@@ -69,7 +70,7 @@ export async function requestExecHostViaSocket(params: {
     requestJson,
   });
 
-  return await requestJsonlSocket({
+  return await requestJsonlSocket<ExecHostResponse>({
     socketPath,
     requestLine: payload,
     timeoutMs,

@@ -6,37 +6,22 @@ import type { ExecToolDetails } from "./bash-tools.exec-types.js";
 import type { AgentToolResult } from "./runtime/index.js";
 import { callGatewayTool } from "./tools/gateway.js";
 
-type NodeInvokeFailure =
-  | {
-      reason: "policy-denied";
-      retrySafe: false;
-      code: "SYSTEM_RUN_DENIED";
-      message: string;
-      nodeCommandDispatched?: boolean;
-      requestSent?: boolean;
-    }
-  | {
-      reason: "not-dispatched";
-      retrySafe: true;
-      code: "NOT_CONNECTED";
-      message: string;
-      nodeCommandDispatched: false;
-      requestSent?: boolean;
-    }
-  | {
-      reason: "outcome-unknown";
-      retrySafe: false;
-      code?: string;
-      message: string;
-      nodeCommandDispatched?: boolean;
-      requestSent?: boolean;
-    };
+type NodeInvokeFailure = {
+  message: string;
+  nodeCommandDispatched?: boolean;
+  requestSent?: boolean;
+} & (
+  | { reason: "policy-denied"; code: "SYSTEM_RUN_DENIED" }
+  | { reason: "not-started"; code: "SYSTEM_RUN_NOT_STARTED" }
+  | { reason: "not-dispatched"; code: "NOT_CONNECTED"; nodeCommandDispatched: false }
+  | { reason: "outcome-unknown"; code?: string }
+);
 
 type NodeSystemRunInvokeResult =
   | { ok: true; raw: unknown }
   | { ok: false; failure: NodeInvokeFailure };
 
-/** Only NOT_CONNECTED plus explicit pre-dispatch provenance proves a retry cannot duplicate work. */
+/** Nonexecution needs an explicit owning-boundary refusal or pre-dispatch provenance. */
 function classifyNodeInvokeFailure(error: unknown): NodeInvokeFailure {
   const errorRecord = asNullableRecord(error);
   const details = asNullableRecord(errorRecord?.details);
@@ -51,27 +36,21 @@ function classifyNodeInvokeFailure(error: unknown): NodeInvokeFailure {
   const requestSent =
     typeof errorRecord?.requestSent === "boolean" ? errorRecord.requestSent : undefined;
 
-  if (code === "SYSTEM_RUN_DENIED") {
-    return { reason: "policy-denied", retrySafe: false, code, message };
-  }
-  if (code === "NOT_CONNECTED" && nodeCommandDispatched === false) {
-    return {
-      reason: "not-dispatched",
-      retrySafe: true,
-      code,
-      message,
-      nodeCommandDispatched,
-      ...(requestSent !== undefined ? { requestSent } : {}),
-    };
-  }
-  return {
-    reason: "outcome-unknown",
-    retrySafe: false,
-    ...(code ? { code } : {}),
+  const provenance = {
     message,
     ...(nodeCommandDispatched !== undefined ? { nodeCommandDispatched } : {}),
     ...(requestSent !== undefined ? { requestSent } : {}),
   };
+  if (code === "SYSTEM_RUN_DENIED") {
+    return { reason: "policy-denied", code, ...provenance };
+  }
+  if (code === "SYSTEM_RUN_NOT_STARTED") {
+    return { reason: "not-started", code, ...provenance };
+  }
+  if (code === "NOT_CONNECTED" && nodeCommandDispatched === false) {
+    return { reason: "not-dispatched", code, ...provenance, nodeCommandDispatched };
+  }
+  return { reason: "outcome-unknown", ...(code ? { code } : {}), ...provenance };
 }
 
 function formatNodeInvokeFailureText(params: {
@@ -90,10 +69,15 @@ function formatNodeInvokeFailureText(params: {
             `Node command was denied before execution on ${params.nodeId}.`,
             "Resolve the reported refusal before retrying.",
           ]
-        : [
-            `Node command was not dispatched to ${params.nodeId}.`,
-            "It can be retried after the node reconnects.",
-          ];
+        : params.failure.reason === "not-started"
+          ? [
+              `Node command was not started on ${params.nodeId}.`,
+              "Resolve the reported host problem before retrying.",
+            ]
+          : [
+              `Node command was not dispatched to ${params.nodeId}.`,
+              "It can be retried after the node reconnects.",
+            ];
   return [
     ...summary,
     "",
@@ -110,13 +94,15 @@ export function formatNodeInvokeFailureFollowup(params: {
   approvalId: string;
   command: string;
 }): string {
-  const prefix =
+  const outcome =
     params.failure.reason === "outcome-unknown"
-      ? `Exec outcome unknown (node=${params.nodeId} id=${params.approvalId}, outcome-unknown)`
+      ? "outcome unknown"
       : params.failure.reason === "policy-denied"
-        ? `Exec denied (node=${params.nodeId} id=${params.approvalId}, policy-denied)`
-        : `Exec not dispatched (node=${params.nodeId} id=${params.approvalId}, not-dispatched)`;
-  return `${prefix}\n${formatNodeInvokeFailureText(params)}`;
+        ? "denied"
+        : params.failure.reason === "not-started"
+          ? "not started"
+          : "not dispatched";
+  return `Exec ${outcome} (node=${params.nodeId} id=${params.approvalId}, ${params.failure.reason})\n${formatNodeInvokeFailureText(params)}`;
 }
 
 export function formatNodeInvokeFailureToolResult(params: {
@@ -183,7 +169,6 @@ export async function invokeNodeSystemRun(params: {
         ok: false,
         failure: {
           reason: "outcome-unknown",
-          retrySafe: false,
           message: "malformed node invoke response",
         },
       };

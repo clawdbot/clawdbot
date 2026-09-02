@@ -4,6 +4,7 @@ import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync } from "node
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
+import type { Result } from "@openclaw/normalization-core/result";
 import { parse } from "yaml";
 import { z } from "zod";
 import {
@@ -21,6 +22,7 @@ const processRecord = z.object({
 });
 const reportSchema = z.object({
   code: z.number().nullable(),
+  signal: z.string().nullable(),
   cancelledDuringCleanup: z.boolean(),
   error: z.string().optional(),
   boundaries: z.array(
@@ -28,6 +30,8 @@ const reportSchema = z.object({
   ),
   readyAttempts: z.array(z.number()),
   cleanupRemaining: z.array(processRecord).length(0),
+  cleanupVerified: z.literal(true),
+  cleanupErrors: z.array(z.string()).length(0),
   ownedProcesses: z.array(processRecord),
   commands: z.array(
     z.object({
@@ -42,6 +46,11 @@ const reportSchema = z.object({
 });
 type Report = z.infer<typeof reportSchema>;
 type CloseResult = { code: number | null; signal: NodeJS.Signals | null };
+type CheckoutControl = {
+  stop: () => void;
+  wait: () => Promise<CloseResult>;
+  observationDeadline: number;
+};
 
 export const ciCheckoutFixture = fileURLToPath(
   new URL("./fixtures/ci-platform-checkout.mjs", import.meta.url),
@@ -64,19 +73,17 @@ export function renderGitTestClock(
 ) {
   // Command deadlines and TERM grace are independent. Real-clock callers keep
   // real grace unless they explicitly opt into the fixture's immediate escalation.
-  if (!(options.realDrain ?? options.realClock)) {
-    source = source.replace(
-      "kill_at = deadline - cleanup_seconds / 2",
-      "kill_at = time.monotonic()",
-    );
-  }
+  const drainPolicySource =
+    (options.realDrain ?? options.realClock)
+      ? source
+      : source.replace("kill_at = deadline - cleanup_seconds / 2", "kill_at = time.monotonic()");
   if (options.realClock) {
-    return source;
+    return drainPolicySource;
   }
   // Only a ready, deliberately stalled tree advances the fetch clock. Real
   // process startup and teardown retain their independent wall-clock watchdogs.
   return (
-    source
+    drainPolicySource
       .replace(/fetch_timeout_seconds = [^\n]+/u, "fetch_timeout_seconds = 2")
       .replace(
         "def run_git(",
@@ -122,9 +129,14 @@ export function expectCiCheckoutCleanup(report: Report) {
 
 export async function withCiCheckoutFixture<T>(
   scenario: string,
-  prepare: (root: string) => NodeJS.ProcessEnv | void,
+  prepare: (
+    root: string,
+    caseDeadline: number,
+  ) => NodeJS.ProcessEnv | void | Promise<NodeJS.ProcessEnv | void>,
   inspect: (report: Report, result: CloseResult, stderr: string, root: string) => T | Promise<T>,
+  exercise?: (control: CheckoutControl, root: string) => Promise<void>,
 ): Promise<T> {
+  const caseDeadline = Date.now() + 55_000;
   // Detached writers can outlive Vitest's oc-vt TMPDIR. Retained diagnostics must
   // start outside that recursively deleted namespace, including on setup failure.
   const artifacts = fileURLToPath(new URL("../../.artifacts/ci-checkout/", import.meta.url));
@@ -133,7 +145,10 @@ export async function withCiCheckoutFixture<T>(
   let supervisor: ChildProcess;
   try {
     mkdirSync(path.join(root, "workspace"));
-    const env = { ...process.env, ...prepare(root) };
+    const env = { ...process.env, ...(await prepare(root, caseDeadline)) };
+    if (Date.now() >= caseDeadline) {
+      throw new Error("Checkout case deadline expired before supervisor spawn");
+    }
     supervisor = fork(ciCheckoutFixture, ["supervise", root, scenario], {
       detached: true,
       execArgv: [],
@@ -141,40 +156,104 @@ export async function withCiCheckoutFixture<T>(
       env,
     });
   } catch (error) {
-    rmSync(root, { recursive: true, force: true });
+    try {
+      rmSync(root, { recursive: true, force: true });
+    } catch (cleanupError) {
+      throw new AggregateError([error, cleanupError], `Checkout setup failed; retained ${root}`, {
+        cause: cleanupError,
+      });
+    }
     throw error;
   }
+  const observationDeadline = Math.min(Date.now() + 50_000, caseDeadline);
   let stderr = "";
+  let spawnError: Error | undefined;
+  let physicalClose: (CloseResult & { closedAt: number }) | undefined;
   // An error can precede close, including failed spawn. Never reject this join.
-  const closed = new Promise<CloseResult>((resolve) => {
+  const closed = new Promise<CloseResult & { closedAt: number }>((resolve) => {
     supervisor.once("close", (code, signal) => {
-      resolve({ code, signal });
+      physicalClose = { code, signal, closedAt: Date.now() };
+      resolve(physicalClose);
     });
   });
-  supervisor.stderr?.on("data", (data) => (stderr += String(data)));
-  supervisor.on("error", (error) => (stderr += `${error}\n`));
-  let timer: NodeJS.Timeout | undefined;
+  supervisor.stderr?.on("data", (data) => (stderr = (stderr + String(data)).slice(-64 * 1024)));
+  supervisor.on("error", (error) => {
+    spawnError = error;
+    stderr = (stderr + `${error}\n`).slice(-64 * 1024);
+  });
+  const errors: unknown[] = [];
+  const join = async (deadline: number): Promise<CloseResult> => {
+    let timer: NodeJS.Timeout | undefined;
+    try {
+      const completed = await Promise.race([
+        closed,
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(
+            () =>
+              reject(
+                new Error(
+                  deadline === observationDeadline
+                    ? "Checkout supervisor did not close within 50000ms"
+                    : "Checkout supervisor close unverified within the remaining cleanup budget",
+                ),
+              ),
+            Math.max(0, deadline - Date.now()),
+          );
+        }),
+      ]);
+      if (completed.closedAt > deadline) {
+        throw new Error("Checkout supervisor closed after its join deadline");
+      }
+      return { code: completed.code, signal: completed.signal };
+    } finally {
+      clearTimeout(timer);
+    }
+  };
+  const stop = () => {
+    if (supervisor.connected) {
+      // IPC also carries fixture fault/readiness notifications. Keep it attached
+      // until real termination; parent disconnect bypasses Node's close accounting.
+      supervisor.send({ type: "ci-checkout:stop" }, (error) => {
+        if (error && supervisor.exitCode === null && supervisor.signalCode === null) {
+          errors.push(error);
+        }
+      });
+    }
+  };
   let report: Report | undefined;
+  let exercising = false;
+  let outcome: Result<T, unknown>;
   try {
-    const completed = await Promise.race([
-      closed,
-      new Promise<never>((_, reject) => {
-        timer = setTimeout(
-          () => reject(new Error("Checkout supervisor did not close within 50000ms")),
-          50_000,
-        );
-      }),
-    ]);
-    clearTimeout(timer);
+    exercising = true;
+    await exercise?.({ stop, wait: () => join(observationDeadline), observationDeadline }, root);
+    exercising = false;
+    const completed = await join(observationDeadline);
+    if (spawnError) {
+      throw spawnError;
+    }
     report = reportSchema.parse(JSON.parse(readFileSync(path.join(root, "report.json"), "utf8")));
-    return await inspect(report, completed, stderr, root);
-  } finally {
-    clearTimeout(timer);
+    outcome = { ok: true, value: await inspect(report, completed, stderr, root) };
+  } catch (error) {
+    errors.push(error);
+    outcome = { ok: false, error };
+  }
+  try {
     if (report) {
+      await join(caseDeadline);
       // A consumer assertion failure does not revoke the producer's release receipt.
       rmSync(root, { recursive: true, force: true });
     } else {
-      const deadline = Date.now() + 4_000;
+      if (exercising && !physicalClose) {
+        stop();
+        // Give the producer its existing cleanup allowance before emergency
+        // teardown. A failed action remains failed even if this drain succeeds.
+        try {
+          await join(Math.min(caseDeadline, Date.now() + 4_000));
+        } catch (error) {
+          errors.push(error);
+        }
+      }
+      const deadline = Math.min(caseDeadline, Date.now() + 4_000);
       // Keep IPC attached through termination: explicit disconnect can suppress Node's close.
       // Let lease-bound Git descendants stop even if the supervisor cannot run cleanup.
       rmSync(path.join(root, "lease"), { force: true });
@@ -188,13 +267,13 @@ export async function withCiCheckoutFixture<T>(
           ? termination?.processTreeState === "terminated"
           : inspectManagedProcessGroup(supervisor, { errorPolicy: "indeterminate" }) === "dead");
       // Join actual close before checking extinction, sharing the original cleanup budget.
-      const didClose = await Promise.race([
-        closed.then(() => true),
-        new Promise<boolean>((resolve) => {
-          timer = setTimeout(() => resolve(false), Math.max(0, deadline - Date.now()));
-        }),
-      ]);
-      clearTimeout(timer);
+      let didClose = false;
+      try {
+        await join(deadline);
+        didClose = true;
+      } catch (error) {
+        errors.push(error);
+      }
       while (!groupDead()) {
         const remaining = deadline - Date.now();
         if (remaining <= 0) {
@@ -207,6 +286,21 @@ export async function withCiCheckoutFixture<T>(
           `Supervisor close: ${didClose}; group extinction: ${groupDead()}. ` +
           `Inspect workflow.log and stop remaining owned writers before removing this exact directory.\n${stderr}`,
       );
+      if (!didClose || !groupDead()) {
+        errors.push(new Error(`Checkout emergency cleanup unverified; retained ${root}`));
+      }
     }
+  } catch (error) {
+    errors.push(error);
   }
+  if (errors.length > 1) {
+    throw new AggregateError(errors, `Checkout fixture failed at ${root}`);
+  }
+  if (!outcome.ok) {
+    throw outcome.error;
+  }
+  if (errors.length === 1) {
+    throw errors[0];
+  }
+  return outcome.value;
 }

@@ -343,19 +343,25 @@ export const nodePairingHandlers: GatewayRequestHandlers = {
               },
             )
           : null;
+      const resolution = {
+        requestId,
+        nodeId: approvedNode.nodeId,
+        decision: "approved",
+        ts: Date.now(),
+      };
       if (updatedNode) {
         refreshConnectedNodeSurfaceCaches({ context, nodeSession: updatedNode, cfg });
+        // The operator broadcast is scope-filtered away from nodes. Notify only
+        // the promoted connection so it republishes consent for its new generation.
+        await context.nodeRegistry.sendEventForPairingIdentity({
+          nodeId: updatedNode.nodeId,
+          connId: updatedNode.connId,
+          pairingIdentity: approved.pairingIdentity,
+          event: "node.pair.resolved",
+          payload: resolution,
+        });
       }
-      context.broadcast(
-        "node.pair.resolved",
-        {
-          requestId,
-          nodeId: approvedNode.nodeId,
-          decision: "approved",
-          ts: Date.now(),
-        },
-        { dropIfSlow: true },
-      );
+      context.broadcast("node.pair.resolved", resolution, { dropIfSlow: true });
       respond(true, { requestId: approved.requestId, node: approvedNode }, undefined);
     });
   },

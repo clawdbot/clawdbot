@@ -15,8 +15,7 @@ describe("SQLite sessions/transcripts flip built CLI proof", () => {
       expect.arrayContaining([expect.stringMatching(/^dist\/index\.(?:js|mjs)$/u)]),
     );
     assertSqliteFlipProofCore(report);
-    // Source checkouts also discover source-only plugins. Verify the packaged
-    // provider this proof actually exercises without excluding those plugins.
+    // Inspect the packaged provider this lifecycle exercises, not the full registry.
     expect(report.bundledPlugins).toContainEqual({
       id: "openai",
       source: path.resolve("dist", "extensions", "openai", "index.js"),

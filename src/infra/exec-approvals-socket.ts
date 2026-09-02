@@ -20,7 +20,7 @@ export async function requestExecApprovalViaSocket(params: {
     request,
   });
 
-  return await requestJsonlSocket({
+  const result = await requestJsonlSocket({
     socketPath,
     requestLine: payload,
     timeoutMs,
@@ -32,4 +32,6 @@ export async function requestExecApprovalViaSocket(params: {
       return undefined;
     },
   });
+  // The shipped approval-only SDK returns no decision for transport failures.
+  return result.ok ? result.value : null;
 }

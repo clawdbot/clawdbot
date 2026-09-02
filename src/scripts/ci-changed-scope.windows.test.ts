@@ -75,20 +75,33 @@ describe("detectChangedScope Windows routing", () => {
     }
   });
 
-  it("routes paired-worker workspace transfer owners and native regression coverage to Windows", () => {
-    for (const workspacePath of [
-      "src/node-host/node-worker-transfer-client.ts",
-      "src/node-host/node-worker-transfer-client.test.ts",
-      "src/gateway/worker-environments/node-worker-tunnel.ts",
-      "src/gateway/worker-environments/node-worker-tunnel.test.ts",
-      "src/gateway/worker-environments/workspace-sync-scripts.ts",
-      "src/gateway/worker-environments/workspace-sync-manifest.test.ts",
-    ]) {
-      expect(detectChangedScope([workspacePath]), workspacePath).toMatchObject({
-        runNode: true,
-        runWindows: true,
-      });
-    }
+  it.each([
+    "src/infra/git-exec.ts",
+    "src/infra/git-exec.test.ts",
+    "src/agents/worktrees/git.ts",
+    "src/agents/worktrees/git.test.ts",
+    "src/gateway/worker-environments/workspace-result-git.ts",
+    "src/gateway/worker-environments/workspace-result-git.test.ts",
+    "src/gateway/worker-environments/workspace-result-staging.ts",
+    "src/gateway/worker-environments/workspace-result-ref-mutation.test.ts",
+    "src/node-host/node-worker-transfer-client.ts",
+    "src/node-host/node-worker-transfer-client.test.ts",
+    "src/gateway/worker-environments/node-worker-tunnel.ts",
+    "src/gateway/worker-environments/node-worker-tunnel.test.ts",
+    "src/gateway/worker-environments/node-worker-tunnel.finalization.test.ts",
+    "src/gateway/worker-environments/node-workspace-final-fence.ts",
+    "src/gateway/worker-environments/node-worker-workspace-actions.ts",
+    "src/gateway/worker-environments/workspace-finalize.ts",
+    "src/gateway/worker-environments/workspace-finalize.test.ts",
+    "src/gateway/worker-environments/workspace-sync-scripts.ts",
+    "src/gateway/worker-environments/workspace-sync-manifest.test.ts",
+    "src/worker/node-workspace-protocol.ts",
+    "src/worker/node-workspace-protocol.test.ts",
+  ])("routes paired-worker workspace owner or native proof %s to Windows", (workspacePath) => {
+    expect(detectChangedScope([workspacePath])).toMatchObject({
+      runNode: true,
+      runWindows: true,
+    });
   });
 
   it("routes SQLite transcript archive changes to Windows", () => {

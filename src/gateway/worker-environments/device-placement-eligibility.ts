@@ -58,10 +58,15 @@ export async function resolveDevicePlacementEligibility(params: {
     approvedCommands: declaredCommands,
   });
   for (const command of requirement.requiredNodeCommands) {
-    if (!isNodeCommandAllowed({ command, declaredCommands, allowlist }).ok) {
+    const decision = isNodeCommandAllowed({ command, declaredCommands, allowlist });
+    if (!decision.ok) {
+      const recovery =
+        decision.reason === "command not allowlisted"
+          ? "review gateway.nodes.commands.allow and gateway.nodes.commands.deny (deny overrides allow)"
+          : "check that its plugin is installed and enabled on the device, then reconnect and approve the node's commands";
       return {
         ok: false,
-        error: `paired-device command ${command} is not enabled or approved for ${deviceId}; enable it in gateway.nodes.commands.allow and approve the command on the node`,
+        error: `paired-device command ${command} is unavailable for ${deviceId} (${decision.reason}); ${recovery}`,
       };
     }
   }

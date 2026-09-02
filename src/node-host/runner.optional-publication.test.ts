@@ -1,9 +1,11 @@
 import { beforeEach, describe, expect, it, type Mock, vi } from "vitest";
+import type { HelloOk } from "../../packages/gateway-protocol/src/schema/frames.js";
 import { GatewayClientRequestError, type GatewayClientOptions } from "../gateway/client.js";
 import {
   NODE_RUNNER_INVENTORY_UPDATE_METHOD,
   NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
 } from "../infra/node-runner-inventory.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import type { configureNodeHost } from "./config.js";
 import { runNodeHost } from "./runner.js";
 
@@ -119,6 +121,23 @@ vi.mock("./skills.js", () => ({
 vi.mock("./startup-state-migrations.js", () => ({
   runStartupMigrations: vi.fn(async () => undefined),
 }));
+
+function publicationHello(protocol: number, methods: string[] = []): HelloOk {
+  return {
+    type: "hello-ok",
+    protocol,
+    server: { version: "test", connId: "test-connection" },
+    features: { methods, events: [] },
+    snapshot: {
+      presence: [],
+      health: {},
+      stateVersion: { presence: 0, health: 0 },
+      uptimeMs: 0,
+    },
+    auth: { role: "node", scopes: [] },
+    policy: { maxPayload: 1, maxBufferedBytes: 1, tickIntervalMs: 1 },
+  };
+}
 
 async function withReadyNodeHost(
   runTest: (params: {
@@ -248,20 +267,7 @@ describe("runNodeHost connection and optional publications", () => {
           expect(client.stop).not.toHaveBeenCalled();
         }
         rejectTwice();
-        options?.onHelloOk?.({
-          type: "hello-ok",
-          protocol: 4,
-          server: { version: "test", connId: "test-connection" },
-          features: { methods: [], events: [] },
-          snapshot: {
-            presence: [],
-            health: {},
-            stateVersion: { presence: 0, health: 0 },
-            uptimeMs: 0,
-          },
-          auth: { role: "node", scopes: [] },
-          policy: { maxPayload: 1, maxBufferedBytes: 1, tickIntervalMs: 1 },
-        });
+        options?.onHelloOk?.(publicationHello(4));
         rejectTwice();
         expect(client.stop).not.toHaveBeenCalled();
         expect(stderr).not.toHaveBeenCalledWith(expect.stringContaining("permanently rejected"));
@@ -293,10 +299,7 @@ describe("runNodeHost connection and optional publications", () => {
         }
         return {};
       });
-      options?.onHelloOk?.({
-        protocol: 3,
-        features: { methods: ["health", "node.invoke.result", "node.event"], events: [] },
-      } as unknown as Parameters<NonNullable<GatewayClientOptions["onHelloOk"]>>[0]);
+      options?.onHelloOk?.(publicationHello(3, ["health", "node.invoke.result", "node.event"]));
 
       for (let index = 0; index < 10; index += 1) {
         mocks.availabilityChanged?.();
@@ -350,10 +353,7 @@ describe("runNodeHost connection and optional publications", () => {
         }
         return {};
       });
-      options?.onHelloOk?.({
-        protocol: 3,
-        features: { methods: [], events: [] },
-      } as unknown as Parameters<NonNullable<GatewayClientOptions["onHelloOk"]>>[0]);
+      options?.onHelloOk?.(publicationHello(3));
       await vi.waitFor(() => {
         expect(
           client.request.mock.calls.filter(
@@ -380,10 +380,7 @@ describe("runNodeHost connection and optional publications", () => {
 
       client.request.mockResolvedValue({});
       options?.onClose?.(1000, "legacy gateway closed");
-      options?.onHelloOk?.({
-        protocol: 4,
-        features: { methods: [], events: [] },
-      } as unknown as Parameters<NonNullable<GatewayClientOptions["onHelloOk"]>>[0]);
+      options?.onHelloOk?.(publicationHello(4));
 
       await vi.waitFor(() => {
         expect(
@@ -414,10 +411,7 @@ describe("runNodeHost connection and optional publications", () => {
         }
         return {};
       });
-      options?.onHelloOk?.({
-        protocol: 4,
-        features: { methods: [], events: [] },
-      } as unknown as Parameters<NonNullable<GatewayClientOptions["onHelloOk"]>>[0]);
+      options?.onHelloOk?.(publicationHello(4));
       await vi.waitFor(() => {
         expect(
           client.request.mock.calls.filter(
@@ -454,10 +448,7 @@ describe("runNodeHost connection and optional publications", () => {
         }
         return {};
       });
-      options?.onHelloOk?.({
-        protocol,
-        features: { methods: [], events: [] },
-      } as unknown as Parameters<NonNullable<GatewayClientOptions["onHelloOk"]>>[0]);
+      options?.onHelloOk?.(publicationHello(protocol));
       await vi.waitFor(() => {
         expect(
           client.request.mock.calls.filter(
@@ -507,10 +498,7 @@ describe("runNodeHost connection and optional publications", () => {
         }
         return Promise.resolve({});
       });
-      options?.onHelloOk?.({
-        protocol: 3,
-        features: { methods: [], events: [] },
-      } as unknown as Parameters<NonNullable<GatewayClientOptions["onHelloOk"]>>[0]);
+      options?.onHelloOk?.(publicationHello(3));
       await vi.waitFor(() => expect(rejectFirstPluginPublication).toBeDefined());
 
       mocks.nodePluginTools = [];
@@ -525,6 +513,75 @@ describe("runNodeHost connection and optional publications", () => {
     });
   });
 
+  it.each(["acknowledged", "late-success", "late-failure"] as const)(
+    "refreshes runner consent on approval without adopting the %s publication",
+    async (settlement) => {
+      const initial = createDeferredCore<unknown>();
+      await withReadyNodeHost(async ({ client, options }) => {
+        let publications = 0;
+        client.request.mockImplementation((method) => {
+          if (method === NODE_RUNNER_INVENTORY_UPDATE_METHOD && ++publications === 1) {
+            return initial.promise;
+          }
+          return Promise.resolve({});
+        });
+        const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+        try {
+          options?.onHelloOk?.(publicationHello(4));
+          await vi.waitFor(() => expect(publications).toBe(1));
+          if (settlement === "acknowledged") {
+            initial.resolve({});
+            await new Promise<void>((resolve) => {
+              setImmediate(resolve);
+            });
+          }
+          options?.onEvent?.({
+            type: "event",
+            event: "node.pair.resolved",
+            payload: { decision: "rejected" },
+          });
+          expect(publications).toBe(1);
+          options?.onEvent?.({
+            type: "event",
+            event: "node.pair.resolved",
+            payload: { decision: "approved" },
+          });
+          await vi.waitFor(() => expect(publications).toBe(2));
+          vi.useFakeTimers();
+          if (settlement === "late-failure") {
+            initial.reject(new Error("old pairing publication failed"));
+          } else {
+            initial.resolve({});
+          }
+          await vi.advanceTimersByTimeAsync(5_000);
+          expect(publications).toBe(2);
+          expect(stderr).not.toHaveBeenCalledWith(expect.stringContaining("publish failed"));
+          expect(
+            client.request.mock.calls.filter(
+              ([method]) => method === NODE_PLUGIN_TOOLS_UPDATE_METHOD,
+            ),
+          ).toHaveLength(1);
+          expect(
+            client.request.mock.calls.findLast(
+              ([method]) => method === NODE_RUNNER_INVENTORY_UPDATE_METHOD,
+            )?.[1],
+          ).toMatchObject({ workerHost: { enabled: false } });
+          options?.onClose?.(1000, "node disconnected");
+          options?.onEvent?.({
+            type: "event",
+            event: "node.pair.resolved",
+            payload: { decision: "approved" },
+          });
+          expect(publications).toBe(2);
+        } finally {
+          initial.resolve({});
+          vi.useRealTimers();
+          stderr.mockRestore();
+        }
+      });
+    },
+  );
+
   it("deduplicates unchanged successful inventory while publishing and after settlement", async () => {
     let resolveInitialPublication: (() => void) | undefined;
     await withReadyNodeHost(async ({ client, options }) => {
@@ -536,10 +593,7 @@ describe("runNodeHost connection and optional publications", () => {
         }
         return Promise.resolve({});
       });
-      options?.onHelloOk?.({
-        protocol: 4,
-        features: { methods: [], events: [] },
-      } as unknown as Parameters<NonNullable<GatewayClientOptions["onHelloOk"]>>[0]);
+      options?.onHelloOk?.(publicationHello(4));
       await vi.waitFor(() => expect(resolveInitialPublication).toBeDefined());
 
       for (let index = 0; index < 10; index += 1) {
@@ -575,10 +629,7 @@ describe("runNodeHost connection and optional publications", () => {
         }
         return Promise.resolve({});
       });
-      options?.onHelloOk?.({
-        protocol: 4,
-        features: { methods: [], events: [] },
-      } as unknown as Parameters<NonNullable<GatewayClientOptions["onHelloOk"]>>[0]);
+      options?.onHelloOk?.(publicationHello(4));
       await vi.waitFor(() => expect(resolveInitialPublication).toBeDefined());
 
       mocks.nodePluginTools = [];
@@ -617,10 +668,7 @@ describe("runNodeHost connection and optional publications", () => {
         }
         return Promise.resolve({});
       });
-      options?.onHelloOk?.({
-        protocol: 4,
-        features: { methods: [], events: [] },
-      } as unknown as Parameters<NonNullable<GatewayClientOptions["onHelloOk"]>>[0]);
+      options?.onHelloOk?.(publicationHello(4));
       await vi.waitFor(() => expect(rejectPublications[0]).toBeDefined());
 
       vi.useFakeTimers();
@@ -677,10 +725,7 @@ describe("runNodeHost connection and optional publications", () => {
         }
         return Promise.resolve({});
       });
-      options?.onHelloOk?.({
-        protocol: 4,
-        features: { methods: [], events: [] },
-      } as unknown as Parameters<NonNullable<GatewayClientOptions["onHelloOk"]>>[0]);
+      options?.onHelloOk?.(publicationHello(4));
       await vi.waitFor(() => expect(pluginPublicationCount).toBe(1));
       await new Promise<void>((resolve) => {
         setImmediate(resolve);
@@ -729,10 +774,7 @@ describe("runNodeHost connection and optional publications", () => {
         }
         return Promise.resolve({});
       });
-      options?.onHelloOk?.({
-        protocol: 4,
-        features: { methods: [], events: [] },
-      } as unknown as Parameters<NonNullable<GatewayClientOptions["onHelloOk"]>>[0]);
+      options?.onHelloOk?.(publicationHello(4));
       await vi.waitFor(() => expect(rejectFirstPluginPublication).toBeDefined());
 
       mocks.nodePluginTools = [];
@@ -774,10 +816,7 @@ describe("runNodeHost connection and optional publications", () => {
           return Promise.resolve({});
         });
       }
-      options?.onHelloOk?.({
-        protocol: 3,
-        features: { methods: [], events: [] },
-      } as unknown as Parameters<NonNullable<GatewayClientOptions["onHelloOk"]>>[0]);
+      options?.onHelloOk?.(publicationHello(3));
       if (deferInitial) {
         await vi.waitFor(() => expect(resolveInitialPublication).toBeDefined());
       }
@@ -794,10 +833,7 @@ describe("runNodeHost connection and optional publications", () => {
       });
       expect(pluginPublications()).toHaveLength(1);
 
-      options?.onHelloOk?.({
-        protocol: 3,
-        features: { methods: [], events: [] },
-      } as unknown as Parameters<NonNullable<GatewayClientOptions["onHelloOk"]>>[0]);
+      options?.onHelloOk?.(publicationHello(3));
       await vi.waitFor(() => expect(pluginPublications()).toHaveLength(2));
       expect(client.request).toHaveBeenLastCalledWith(NODE_PLUGIN_TOOLS_UPDATE_METHOD, {
         tools: [],
@@ -818,10 +854,7 @@ describe("runNodeHost connection and optional publications", () => {
       });
       const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
       try {
-        options?.onHelloOk?.({
-          protocol: 3,
-          features: { methods: [], events: [] },
-        } as unknown as Parameters<NonNullable<GatewayClientOptions["onHelloOk"]>>[0]);
+        options?.onHelloOk?.(publicationHello(3));
         await vi.waitFor(() => expect(rejectInitialPublication).toBeDefined());
         stderr.mockClear();
 

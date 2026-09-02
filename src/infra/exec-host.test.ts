@@ -1,131 +1,156 @@
-// Covers exec host socket request signing and response handling.
+// Exercises the authenticated exec adapter without mocking the JSONL transport.
+import assert from "node:assert/strict";
+import { execFile } from "node:child_process";
 import crypto from "node:crypto";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import path from "node:path";
+import { promisify } from "node:util";
+import { describe, expect, it } from "vitest";
+import {
+  requestExecHostViaSocket,
+  type ExecHostRequest,
+  type ExecHostResponse,
+} from "./exec-host.js";
+import { withJsonlSocketPeer } from "./jsonl-socket.test-support.js";
 
-const requestJsonlSocketMock = vi.hoisted(() => vi.fn());
-
-vi.mock("./jsonl-socket.js", () => ({
-  requestJsonlSocket: (...args: unknown[]) => requestJsonlSocketMock(...args),
-}));
-
-import { requestExecHostViaSocket } from "./exec-host.js";
-
-type JsonlSocketCall = {
-  socketPath: string;
-  requestLine: string;
-  timeoutMs: number;
-  signal?: AbortSignal;
-  accept: (msg: unknown) => unknown;
+const execFileAsync = promisify(execFile);
+const token = "exec-host-test-token";
+const request: ExecHostRequest = {
+  command: [process.execPath, "-e", 'process.stdout.write("executed")'],
+  cwd: "/tmp",
+  timeoutMs: 10_000,
 };
 
-function requireJsonlSocketCall(): JsonlSocketCall {
-  const call = requestJsonlSocketMock.mock.calls[0]?.[0];
-  if (!call) {
-    throw new Error("expected requestJsonlSocket call");
-  }
-  return call as JsonlSocketCall;
+function readSignedRequest(wire: string): { id: string; request: ExecHostRequest } {
+  expect(wire.endsWith("\n")).toBe(true);
+  expect(wire.trim().split("\n")).toHaveLength(1);
+  const envelope = JSON.parse(wire) as {
+    type: string;
+    id: string;
+    nonce: string;
+    ts: number;
+    hmac: string;
+    requestJson: string;
+  };
+  expect(envelope.type).toBe("exec");
+  expect(envelope.id).toMatch(/^[0-9a-f-]{36}$/);
+  expect(envelope.nonce).toMatch(/^[0-9a-f]{32}$/);
+  expect(typeof envelope.ts).toBe("number");
+  expect(Object.keys(envelope).toSorted()).toEqual([
+    "hmac",
+    "id",
+    "nonce",
+    "requestJson",
+    "ts",
+    "type",
+  ]);
+  expect(envelope.hmac).toBe(
+    crypto
+      .createHmac("sha256", token)
+      .update(`${envelope.nonce}:${envelope.ts}:${envelope.requestJson}`)
+      .digest("hex"),
+  );
+  return { id: envelope.id, request: JSON.parse(envelope.requestJson) as ExecHostRequest };
 }
 
-describe("requestExecHostViaSocket", () => {
-  beforeEach(() => {
-    requestJsonlSocketMock.mockReset();
-  });
+const responses: ExecHostResponse[] = [
+  {
+    ok: true,
+    payload: { success: true, exitCode: 0, timedOut: false, stdout: "done", stderr: "" },
+  },
+  {
+    ok: false,
+    error: { code: "UNAVAILABLE", reason: "security=deny", message: "Denied by host policy" },
+  },
+];
 
-  it("returns null when socket credentials are missing", async () => {
-    await expect(
-      requestExecHostViaSocket({
-        socketPath: "",
-        token: "secret",
-        request: { command: ["echo", "hi"] },
-      }),
-    ).resolves.toBeNull();
-    await expect(
-      requestExecHostViaSocket({
-        socketPath: "/tmp/socket",
-        token: "",
-        request: { command: ["echo", "hi"] },
-      }),
-    ).resolves.toBeNull();
-    expect(requestJsonlSocketMock).not.toHaveBeenCalled();
-  });
-
-  it("signs only the exec request and forwards cancellation outside the envelope", async () => {
-    requestJsonlSocketMock.mockResolvedValueOnce({ ok: true, payload: { success: true } });
-    const controller = new AbortController();
-
-    await expect(
-      requestExecHostViaSocket({
-        socketPath: "/tmp/socket",
-        token: "secret",
-        signal: controller.signal,
-        request: {
-          command: ["echo", "hi"],
-          cwd: "/tmp",
-        },
-      }),
-    ).resolves.toEqual({ ok: true, payload: { success: true } });
-
-    const call = requireJsonlSocketCall();
-
-    expect(call.socketPath).toBe("/tmp/socket");
-    expect(call.timeoutMs).toBe(20_000);
-    expect(call.signal).toBe(controller.signal);
-    const payload = JSON.parse(call.requestLine) as {
-      type: string;
-      id: string;
-      nonce: string;
-      ts: number;
-      hmac: string;
-      requestJson: string;
-    };
-    expect(payload.type).toBe("exec");
-    expect(payload.id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i);
-    expect(payload.nonce).toMatch(/^[0-9a-f]{32}$/);
-    expect(typeof payload.ts).toBe("number");
-    expect(Object.keys(payload).toSorted()).toEqual([
-      "hmac",
-      "id",
-      "nonce",
-      "requestJson",
-      "ts",
-      "type",
-    ]);
-    expect(payload.hmac).toBe(
-      crypto
-        .createHmac("sha256", "secret")
-        .update(`${payload.nonce}:${payload.ts}:${payload.requestJson}`)
-        .digest("hex"),
+describe.runIf(process.platform !== "win32")("requestExecHostViaSocket", () => {
+  it("reports missing credentials and a missing socket as not-submitted without reaching a peer", async () => {
+    await withJsonlSocketPeer(
+      () => {
+        throw new Error("Request must not be submitted");
+      },
+      async ({ dir, socketPath, connections }) => {
+        for (const credentials of [
+          { socketPath: "", token },
+          { socketPath, token: "" },
+          { socketPath: path.join(dir, "missing.sock"), token },
+        ]) {
+          await expect(
+            requestExecHostViaSocket({ ...credentials, request, timeoutMs: 1_000 }),
+          ).resolves.toEqual({ ok: false, error: "not-submitted" });
+        }
+        expect(connections).toHaveLength(0);
+      },
     );
-    expect(JSON.parse(payload.requestJson)).toEqual({
-      command: ["echo", "hi"],
-      cwd: "/tmp",
-    });
   });
 
-  it("accepts only exec response messages and maps malformed matches to null", async () => {
-    requestJsonlSocketMock.mockImplementationOnce(async ({ accept }) => {
-      expect(accept({ type: "ignore" })).toBeUndefined();
-      expect(accept({ type: "exec-res", ok: true, payload: { success: true } })).toEqual({
-        ok: true,
-        payload: { success: true },
-      });
-      expect(accept({ type: "exec-res", ok: false, error: { code: "DENIED" } })).toEqual({
-        ok: false,
-        error: { code: "DENIED" },
-      });
-      expect(accept({ type: "exec-res", ok: true })).toBeNull();
-      return null;
-    });
+  it.each(responses)(
+    "preserves signed delivery and native response after half-close (ok=$ok)",
+    async (response) => {
+      await withJsonlSocketPeer(
+        (socket, wire) => {
+          const received = readSignedRequest(wire);
+          expect(received.request).toEqual(request);
+          socket.end(`${JSON.stringify({ type: "exec-res", id: received.id, ...response })}\n`);
+        },
+        async ({ socketPath }) => {
+          await expect(
+            requestExecHostViaSocket({
+              socketPath,
+              token,
+              request,
+              signal: new AbortController().signal,
+              timeoutMs: 1_000,
+            }),
+          ).resolves.toEqual({ ok: true, value: response });
+        },
+      );
+    },
+  );
 
-    await expect(
-      requestExecHostViaSocket({
-        socketPath: "/tmp/socket",
-        token: "secret",
-        timeoutMs: 123,
-        request: { command: ["echo", "hi"] },
-      }),
-    ).resolves.toBeNull();
-
-    expect(requireJsonlSocketCall().timeoutMs).toBe(123);
-  });
+  it.each(["close", "malformed matching response", "timeout", "cancellation"] as const)(
+    "never reports nonexecution when a completed command is followed by %s",
+    async (fault) => {
+      const controller = new AbortController();
+      const order: string[] = [];
+      await withJsonlSocketPeer(
+        async (socket, wire) => {
+          const received = readSignedRequest(wire);
+          expect(received.request).toEqual(request);
+          const [executable, ...argv] = received.request.command;
+          assert.ok(executable, "Exec request must include an executable");
+          const result = await execFileAsync(executable, argv, {
+            cwd: received.request.cwd ?? undefined,
+            env: { PATH: "/usr/bin:/bin" },
+            timeout: 1_500,
+          });
+          expect(result.stdout).toBe("executed");
+          order.push("executed");
+          if (fault === "close") {
+            socket.end();
+          } else if (fault === "malformed matching response") {
+            socket.end(`${JSON.stringify({ type: "exec-res", id: received.id, ok: true })}\n`);
+          } else if (fault === "cancellation") {
+            controller.abort();
+          }
+        },
+        async ({ socketPath, requests }) => {
+          const result = await requestExecHostViaSocket({
+            socketPath,
+            token,
+            request,
+            signal: controller.signal,
+            timeoutMs: 2_000,
+          });
+          order.push("returned");
+          expect(order).toEqual(["executed", "returned"]);
+          expect(requests).toHaveLength(1);
+          expect(result).toEqual({
+            ok: false,
+            error: fault === "cancellation" ? "cancelled" : "outcome-unknown",
+          });
+        },
+      );
+    },
+  );
 });

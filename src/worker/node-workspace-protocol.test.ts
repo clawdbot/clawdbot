@@ -72,3 +72,21 @@ describe("node workspace seed protocol", () => {
     ).toThrow("INVALID_REQUEST:");
   });
 });
+
+describe("node workspace command arguments", () => {
+  it("preserves the empty base operand used by plain workspace manifest captures", () => {
+    const argv = ["node", "-e", "process.stdout.write(process.argv[1])", ""];
+    expect(parseNodeWorkerWorkspaceExecInput(JSON.stringify({ ...request, argv })).argv).toEqual(
+      argv,
+    );
+  });
+
+  it.each([{ argv: [] }, { argv: [""] }, { argv: ["node", "bad\0operand"] }])(
+    "rejects an invalid argv $argv",
+    ({ argv }) => {
+      expect(() => parseNodeWorkerWorkspaceExecInput(JSON.stringify({ ...request, argv }))).toThrow(
+        "INVALID_REQUEST",
+      );
+    },
+  );
+});

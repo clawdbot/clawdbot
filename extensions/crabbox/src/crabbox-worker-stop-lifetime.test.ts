@@ -96,12 +96,15 @@ describe("Crabbox stop lifetime", () => {
           expect(settled).toBe(false);
         }
       } finally {
-        fs.writeFileSync(`${marker}.tmp`, String(exitCode));
-        fs.renameSync(`${marker}.tmp`, marker);
-        // Drain the SDK's process-tree settlement even when the baseline killed the child.
-        await vi.advanceTimersByTimeAsync(10_000);
-        await operation;
-        vi.useRealTimers();
+        try {
+          fs.writeFileSync(`${marker}.tmp`, String(exitCode));
+          fs.renameSync(`${marker}.tmp`, marker);
+          // Real exit can arm grace after a clock jump; advance until the SDK settles.
+          await vi.waitUntil(() => settled, { timeout: 10_000 });
+          await operation;
+        } finally {
+          vi.useRealTimers();
+        }
       }
       if (outcome === "success") {
         expect(await operation).toEqual({ success: true });
