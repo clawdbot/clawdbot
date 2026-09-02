@@ -30,7 +30,12 @@ describe("sendGatewayCronFailureAlert presentation", () => {
     mocks.sendCronAnnouncePayloadStrict.mockResolvedValue({
       status: "sent",
       results: [],
-      receipt: { primaryPlatformMessageId: undefined, platformMessageIds: [], parts: [] },
+      receipt: {
+        primaryPlatformMessageId: undefined,
+        platformMessageIds: [],
+        parts: [],
+        sentAt: 0,
+      },
     });
   });
 

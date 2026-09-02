@@ -2468,7 +2468,12 @@ describe("gateway server cron", () => {
         return {
           status: "suppressed",
           results: [],
-          receipt: { primaryPlatformMessageId: undefined, platformMessageIds: [], parts: [] },
+          receipt: {
+            primaryPlatformMessageId: undefined,
+            platformMessageIds: [],
+            parts: [],
+            sentAt: 0,
+          },
           reason: "adapter_returned_no_send",
         };
       });
