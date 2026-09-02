@@ -643,6 +643,39 @@ Notes:
 - See the [Browserbase docs](https://docs.browserbase.com) for full API
   reference, SDK guides, and integration examples.
 
+### Browser Use
+
+[Browser Use](https://browser-use.com) provides managed cloud browsers with
+stealth, CAPTCHA handling, proxies, and persistent profiles through a direct
+CDP WebSocket endpoint.
+
+```json5
+{
+  browser: {
+    enabled: true,
+    defaultProfile: "browser-use",
+    profiles: {
+      "browser-use": {
+        cdpUrl: "wss://connect.browser-use.com?apiKey=<BROWSER_USE_API_KEY>&proxyCountryCode=us",
+      },
+    },
+  },
+}
+```
+
+Notes:
+
+- [Sign up](https://cloud.browser-use.com) and copy your API key from
+  [Settings -> API Keys](https://cloud.browser-use.com/settings?tab=api-keys).
+- Replace `<BROWSER_USE_API_KEY>` with your real Browser Use API key.
+- Browser Use creates a browser session when OpenClaw connects and stops it
+  when the WebSocket disconnects.
+- Optional query parameters include `profileId` for a persistent browser
+  profile, `proxyCountryCode` for country-specific routing, and `timeout` for
+  the session duration in seconds.
+- See the [Browser Use OpenClaw guide](https://docs.browser-use.com/cloud/tutorials/integrations/openclaw)
+  for CLI-skill setup and additional examples.
+
 ### Notte
 
 [Notte](https://www.notte.cc) is a cloud platform for running headless
