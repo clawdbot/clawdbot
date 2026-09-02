@@ -4063,7 +4063,6 @@ NODE
       android: "ubuntu-24.04",
       "build-artifacts": "ubuntu-24.04",
       "check-additional-shard": "ubuntu-24.04",
-      "check-docs": "ubuntu-24.04",
       "check-shard": "ubuntu-24.04",
       "ci-gate": "ubuntu-24.04",
       "checks-fast-channel-contracts-shard": "ubuntu-24.04",
@@ -4123,6 +4122,8 @@ NODE
     } as const;
     expect(configurableJobs).toEqual(Object.keys(expectedHostedRunners).toSorted());
     expect(jobs["check-lint-hosted-core-shard"]?.["runs-on"]).toBe("ubuntu-24.04");
+    // check-docs stays hosted in every mode: its ClawHub clone is unauthenticated by design.
+    expect(jobs["check-docs"]?.["runs-on"]).toBe("ubuntu-24.04");
     for (const [jobName, hostedRunner] of Object.entries(expectedHostedRunners)) {
       const expression = jobs[jobName]?.["runs-on"];
       expect(
