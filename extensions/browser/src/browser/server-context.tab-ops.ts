@@ -130,10 +130,15 @@ export function createProfileTabOps({ profile, state, runtime }: TabOpsDeps): Pr
       if (typeof listPagesViaPlaywright === "function") {
         const ssrfPolicy = getCdpControlPolicy();
         const resolved = state().resolved;
-        const timeoutMs = Math.max(
-          resolved.remoteCdpTimeoutMs,
-          resolved.remoteCdpHandshakeTimeoutMs,
-        );
+        // Enumeration budget must reflect the work of listing all tabs, not the
+        // CDP handshake. Prefer a caller-supplied deadline, fall back to the
+        // action-level timeout, and keep it no smaller than the handshake so a
+        // healthy but slow enumeration is not mistaken for a dead connection.
+        const enumerationBudgetMs =
+          typeof options?.timeoutMs === "number" && Number.isFinite(options.timeoutMs)
+            ? options.timeoutMs
+            : resolved.actionTimeoutMs;
+        const timeoutMs = Math.max(enumerationBudgetMs, resolved.remoteCdpHandshakeTimeoutMs);
         await assertCdpEndpointAllowed(profile.cdpUrl, ssrfPolicy);
         const pages = await listPagesViaPlaywright({
           cdpUrl: profile.cdpUrl,
@@ -142,6 +147,7 @@ export function createProfileTabOps({ profile, state, runtime }: TabOpsDeps): Pr
           ...(capabilities.requiresCompleteTargetEnumeration
             ? { requireCompleteTargetList: true }
             : {}),
+          ...(options?.signal ? { signal: options.signal } : {}),
         });
         return pages.filter(isSelectableCdpBrowserTarget).map((p) => ({
           targetId: p.targetId,
@@ -302,6 +308,7 @@ export function createProfileTabOps({ profile, state, runtime }: TabOpsDeps): Pr
             cdpUrl: profile.cdpUrl,
             url,
             cdpPolicy,
+            ...(opts?.signal ? { signal: opts.signal } : {}),
             ...ssrfPolicyOpts,
           });
           createdTargetId = page.targetId;

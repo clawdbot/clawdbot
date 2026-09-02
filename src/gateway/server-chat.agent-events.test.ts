@@ -14,7 +14,6 @@ import {
 } from "../agents/command/attempt-callbacks.js";
 import { createAgentCommandLifecycle } from "../agents/command/lifecycle.js";
 import { createSubscribedSessionHarness } from "../agents/embedded-agent-subscribe.e2e-harness.js";
-import { buildAssistantStreamData } from "../agents/embedded-agent-subscribe.handlers.messages.stream.js";
 import {
   INTERNAL_RUNTIME_CONTEXT_BEGIN,
   INTERNAL_RUNTIME_CONTEXT_END,
@@ -1313,7 +1312,7 @@ describe("agent event handler", () => {
         handler,
         "run-ordinary-relative-media",
         "assistant",
-        buildAssistantStreamData({ text, mediaUrls: [text.slice("MEDIA:".length)] }),
+        { text, delta: "", mediaUrls: [text.slice("MEDIA:".length)] },
         { seq: 1 },
       );
       emitLifecycleEnd(handler, "run-ordinary-relative-media", 2);

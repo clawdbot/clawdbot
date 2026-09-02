@@ -65,12 +65,12 @@ export function controlUiStableChunkName(id: string): string | undefined {
     return "markdown-runtime";
   }
 
-  if (
-    moduleIdIncludesPackage(id, "zod") ||
-    moduleIdIncludesPackage(id, "json5") ||
-    moduleIdIncludesPackage(id, "libphonenumber-js")
-  ) {
+  if (moduleIdIncludesPackage(id, "zod") || moduleIdIncludesPackage(id, "json5")) {
     return "config-runtime";
+  }
+
+  if (moduleIdIncludesPackage(id, "libphonenumber-js")) {
+    return "phone-runtime";
   }
 
   // @noble/hashes stays out of this startup chunk deliberately: it is only

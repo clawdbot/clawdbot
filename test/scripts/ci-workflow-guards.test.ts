@@ -4291,6 +4291,7 @@ NODE
     const workflow = readCiWorkflow();
     const jobs = workflow.jobs as Record<string, { "timeout-minutes": unknown }>;
     const expectedHostedTimeouts = {
+      android: 35,
       "build-artifacts": 35,
       "macos-swift": 30,
     } as const;
@@ -4304,43 +4305,97 @@ NODE
     const canonicalPullRequest = {
       eventName: "pull_request",
       headRepository: "openclaw/openclaw",
+      matrix: { task: "build-play" },
       repository: "openclaw/openclaw",
       runAttempt: 1,
     } as const;
+    const evaluateTimeout = (
+      jobName: string,
+      context: Parameters<typeof evaluateWorkflowExpression>[1],
+    ) => {
+      const value = jobs[jobName]?.["timeout-minutes"];
+      return typeof value === "number" ? value : evaluateWorkflowExpression(value, context);
+    };
 
-    expect(routeDependentTimeoutJobs).toEqual(Object.keys(expectedHostedTimeouts).toSorted());
     for (const [jobName, hostedTimeout] of Object.entries(expectedHostedTimeouts)) {
-      const expression = jobs[jobName]?.["timeout-minutes"];
-      expect(expression, jobName).toContain("vars.OPENCLAW_CI_RUNNER_BACKEND == 'github'");
       expect(
-        evaluateWorkflowExpression(expression, {
+        evaluateTimeout(jobName, {
           ...canonicalPullRequest,
           runnerBackend: "github",
         }),
         jobName,
       ).toBe(hostedTimeout);
       expect(
-        evaluateWorkflowExpression(expression, {
+        evaluateTimeout(jobName, {
           ...canonicalPullRequest,
           runnerBackend: "blacksmith",
         }),
         jobName,
       ).toBe(20);
       expect(
-        evaluateWorkflowExpression(expression, {
+        evaluateTimeout(jobName, {
           ...canonicalPullRequest,
           runnerBackend: "hybrid",
         }),
         jobName,
       ).toBe(20);
       expect(
-        evaluateWorkflowExpression(expression, {
+        evaluateTimeout(jobName, {
           ...canonicalPullRequest,
           runnerBackend: "hybrid",
           runAttempt: 2,
         }),
         jobName,
       ).toBe(hostedTimeout);
+      expect(jobs[jobName]?.["timeout-minutes"], jobName).toContain(
+        "vars.OPENCLAW_CI_RUNNER_BACKEND == 'github'",
+      );
+    }
+    expect(routeDependentTimeoutJobs).toEqual(Object.keys(expectedHostedTimeouts).toSorted());
+
+    const androidRoutes = [
+      ["GitHub override", { runnerBackend: "github" }, "ubuntu-24.04"],
+      ["hybrid retry", { runnerBackend: "hybrid", runAttempt: 2 }, "ubuntu-24.04"],
+      ["manual dispatch", { eventName: "workflow_dispatch" }, "ubuntu-24.04"],
+      ["non-canonical repository", { repository: "contributor/openclaw" }, "ubuntu-24.04"],
+      ["untrusted author", { authorAssociation: "NONE" }, "ubuntu-24.04"],
+      [
+        "untrusted fork",
+        { authorAssociation: "FIRST_TIME_CONTRIBUTOR", headRepository: "contributor/openclaw" },
+        "ubuntu-24.04",
+      ],
+      [
+        "trusted fork first attempt",
+        { headRepository: "contributor/openclaw" },
+        "blacksmith-8vcpu-ubuntu-2404",
+      ],
+      [
+        "trusted fork retry",
+        { headRepository: "contributor/openclaw", runAttempt: 2 },
+        "ubuntu-24.04",
+      ],
+      ["same-repository Blacksmith retry", { runAttempt: 2 }, "blacksmith-8vcpu-ubuntu-2404"],
+    ] as const;
+    for (const [label, overrides, runner] of androidRoutes) {
+      const context = { ...canonicalPullRequest, ...overrides };
+      expect(evaluateWorkflowExpression(workflow.jobs.android["runs-on"], context), label).toBe(
+        runner,
+      );
+      for (const task of [
+        "build-play",
+        "build-play-compat",
+        "build-wear",
+        "ktlint",
+        "test-play",
+        "test-play-compat",
+        "test-third-party",
+        "test-wear",
+      ]) {
+        expect(
+          evaluateTimeout("android", { ...context, matrix: { task } }),
+          `${label}: ${task}`,
+        ).toBe(task === "build-play" && runner === "ubuntu-24.04" ? 35 : 20);
+      }
     }
 
     const macosSwift = workflow.jobs["macos-swift"];
@@ -8698,11 +8753,15 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     const checkShardStep = parsedWorkflow.jobs["check-shard"].steps.find(
       (step: WorkflowStep) => step.name === "Run check shard",
     );
+    expect(parsedWorkflow.jobs["check-shard"].env.CHECKOUT_BASE_SHA).toBe(
+      "${{ ((matrix.task == 'guards' && github.event_name == 'pull_request') || (matrix.task == 'npm-lock' && github.event_name != 'workflow_dispatch')) && needs.preflight.outputs.diff_base_revision || '' }}",
+    );
     expect(checkShardStep.env.PR_BASE_SHA).toBe(
       "${{ github.event_name == 'pull_request' && needs.preflight.outputs.diff_base_revision || '' }}",
     );
+    expect(checkShardStep.run).not.toContain("--checkout-git");
     expect(checkShardStep.run).toContain(
-      'python3 -I -S "$RUNNER_TEMP/ci-git-owner.py" --checkout-git 120 fetch --no-tags --depth=1 origin "+${PR_BASE_SHA}:refs/remotes/origin/ci-base"',
+      'test "$(git rev-parse refs/remotes/origin/ci-ratchet-base^{commit})" = "$PR_BASE_SHA"',
     );
   });
 
@@ -9205,7 +9264,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       "pull-requests": "read",
     });
     expect(checksFastJob.env.CHECKOUT_BASE_SHA).toBe(
-      "${{ (matrix.task == 'baseline-ratchets' || startsWith(matrix.task, 'release-lint-')) && needs.preflight.outputs.diff_base_revision || '' }}",
+      "${{ (matrix.task == 'baseline-ratchets' || matrix.task == 'bundled-protocol' || startsWith(matrix.task, 'release-lint-')) && needs.preflight.outputs.diff_base_revision || '' }}",
     );
     expect(checkout.env.CHECKOUT_SHA).toBe("${{ needs.preflight.outputs.checkout_revision }}");
     expect(releaseGateMerge.if).toBe(
@@ -9259,8 +9318,9 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       'echo "RATCHET_BASE_REF=${frozen_base_sha}" >> "$GITHUB_ENV"',
     );
     expect(checksFastRun.run).not.toContain("PROTOCOL_MANUAL_BASE_SHA");
+    expect(checksFastRun.run).not.toContain("protocol-since-base");
     expect(checksFastRun.run).toContain(
-      '"+${PROTOCOL_SINCE_BASE_SHA}:refs/remotes/origin/protocol-since-base"',
+      'test "$(git rev-parse refs/remotes/origin/ci-ratchet-base^{commit})" = "$PROTOCOL_SINCE_BASE_SHA"',
     );
     expect(checksFastRun.run).toContain(
       'base_ref="${RATCHET_BASE_REF:-refs/remotes/origin/ci-ratchet-base}"',

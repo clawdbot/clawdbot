@@ -57,13 +57,13 @@ export {
   runWithCronCreatorAuthorityResolver,
 } from "../agents/cron-creator-authority-context.js";
 
-/** Materialize static configured MCP under a scheduled Codex authority envelope. */
-export async function materializeStaticMcpToolsForScheduledHarnessRun(
+/** Materialize static configured MCP under the Codex harness authority envelope. */
+export async function materializeStaticMcpToolsForHarnessRun(
   params: Parameters<
-    typeof import("../agents/agent-bundle-mcp-harness.js").materializeStaticMcpToolsForScheduledHarnessRunCore
+    typeof import("../agents/agent-bundle-mcp-harness.js").materializeStaticMcpToolsForHarnessRunCore
   >[0],
 ) {
-  const { materializeStaticMcpToolsForScheduledHarnessRunCore: materialize } =
+  const { materializeStaticMcpToolsForHarnessRunCore: materialize } =
     await import("../agents/agent-bundle-mcp-harness.js");
   return materialize(params);
 }

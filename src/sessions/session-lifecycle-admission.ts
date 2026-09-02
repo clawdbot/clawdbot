@@ -24,6 +24,7 @@ export {
 export const SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS = 15_000;
 type SessionWorkAdmission = HandoffSessionWorkAdmission & {
   phase: "pending" | "acquired";
+  owner?: symbol;
   interrupt?: (reason?: Error) => void;
   released: Promise<void>;
 };
@@ -421,6 +422,23 @@ export function getSessionWorkAdmissionRelease(
   );
 }
 
+/** Completion of a named owner that is starting or actively working on a session. */
+export function getSessionWorkAdmissionOwnerRelease(
+  params: SessionWorkAdmissionReleaseParams & { owner: symbol },
+): Promise<void> | undefined {
+  const matching = new Set<SessionWorkAdmission>();
+  for (const identity of normalizeSessionIdentities(params.scope, params.identities)) {
+    for (const admission of ACTIVE_SESSION_WORK_ADMISSIONS.get(identity) ?? []) {
+      if (admission.owner === params.owner) {
+        matching.add(admission);
+      }
+    }
+  }
+  return matching.size > 0
+    ? Promise.all(Array.from(matching, (admission) => admission.released)).then(() => undefined)
+    : undefined;
+}
+
 /** Active session identities grouped by their authoritative store/lifecycle scope. */
 export function collectActiveSessionWorkAdmissions(): Map<string, Set<string>> {
   const targets = new Map<string, Set<string>>();
@@ -464,6 +482,8 @@ export function getActiveSessionLifecycleMutationCount(): number {
 export async function beginSessionWorkAdmission(params: {
   scope: string;
   identities: Iterable<string | undefined>;
+  /** Stable process-wide identity for owners that must be observable while still pending. */
+  owner?: symbol;
   assertAllowed: () => Promise<void> | void;
   /** Final writer-ordered validation; use when one-time effects must not run during the first check. */
   revalidateAllowed?: () => Promise<void> | void;
@@ -483,6 +503,7 @@ export async function beginSessionWorkAdmission(params: {
   let resolveReleased = () => {};
   const admission: SessionWorkAdmission = {
     phase: "pending",
+    ...(params.owner ? { owner: params.owner } : {}),
     handoffIds: new Set(),
     identities: new Set(identities),
     interrupted: undefined,

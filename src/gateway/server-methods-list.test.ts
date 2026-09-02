@@ -132,6 +132,7 @@ describe("listGatewayMethods", () => {
     "sessions.github.options",
     "sessions.github.status",
     "sessions.github.confirm",
+    "sessions.title.prepare",
   ];
 
   it("advertises plugin surface refresh for capability rotation", () => {
@@ -245,6 +246,16 @@ describe("listGatewayMethods", () => {
     expect(methods).not.toContain("chat.inject");
     expect(methods).not.toContain("nativeHook.invoke");
     expect(methods).not.toContain("sessions.usage");
+  });
+
+  it("rate-limits speculative inference under operator write authority", () => {
+    const descriptors = createCoreGatewayMethodDescriptors(coreGatewayHandlers);
+    expect(
+      descriptors.find((descriptor) => descriptor.name === "sessions.title.prepare"),
+    ).toMatchObject({
+      scope: "operator.write",
+      controlPlaneWrite: true,
+    });
   });
 
   it("registers the hidden node protocol feature publication method", () => {

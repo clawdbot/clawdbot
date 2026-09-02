@@ -502,6 +502,29 @@ struct MacNodeRuntimeTests {
         #expect(response.ok == false)
     }
 
+    @Test @MainActor func `cancelled notification cannot present an overlay`() async throws {
+        let overlay = NotifyOverlayController.shared
+        try #require(!overlay.model.isVisible)
+        defer { overlay.dismiss() }
+        let runtime = MacNodeRuntime()
+        let params = OpenClawSystemNotifyParams(
+            title: "Cancelled notification test",
+            body: "This overlay must not appear.",
+            delivery: .overlay)
+        let request = Task { @MainActor in
+            try await self.invoke(
+                runtime,
+                "cancelled-overlay",
+                OpenClawSystemCommand.notify.rawValue,
+                params: params)
+        }
+        request.cancel()
+        let response = try await request.value
+
+        #expect(!response.ok)
+        #expect(!overlay.model.isVisible)
+    }
+
     @Test func `handle invoke camera list requires enabled camera`() async {
         await TestIsolation.withUserDefaultsValues([cameraEnabledKey: false]) {
             let runtime = MacNodeRuntime()
