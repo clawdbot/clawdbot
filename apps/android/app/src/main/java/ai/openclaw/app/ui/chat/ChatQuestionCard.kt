@@ -234,9 +234,6 @@ private fun QuestionSection(
       }
     }
     if (question.options.isEmpty() || question.isOther == true) {
-      // Secret answers must never render on screen or feed the keyboard's
-      // prediction/autocorrect stores; password transformation + keyboard type
-      // cover both, and single-line keeps the masked value one obscured run.
       val secret = question.isSecret == true
       OutlinedTextField(
         value = draft.otherText[question.questionId].orEmpty(),
@@ -246,7 +243,7 @@ private fun QuestionSection(
         label = { Text(if (secret) nativeString("Secret value") else nativeString("Other answer")) },
         visualTransformation = if (secret) PasswordVisualTransformation() else VisualTransformation.None,
         keyboardOptions =
-          if (secret) KeyboardOptions(keyboardType = KeyboardType.Password) else KeyboardOptions.Default,
+          if (secret) KeyboardOptions(keyboardType = KeyboardType.Password, autoCorrectEnabled = false) else KeyboardOptions.Default,
         minLines = 1,
         maxLines = if (secret) 1 else 4,
       )

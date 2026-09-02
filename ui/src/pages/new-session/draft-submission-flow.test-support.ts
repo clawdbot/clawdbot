@@ -9,6 +9,7 @@ import type { NewSessionRouteData } from "./location.ts";
 import { TestReactiveControllerHost } from "./reactive-controller-host.test-support.ts";
 
 type FixtureOptions = {
+  takePreparedTitle?: () => string | undefined;
   phase?: "connected" | "connecting";
   agents?: unknown[];
   methods?: string[];
@@ -147,7 +148,7 @@ export function createDraftFixture(options: FixtureOptions = {}) {
     gateway,
     place,
     () => ({ context, data: options.data, isConnected: phase === "connected" }),
-    { requestUpdate, closeTransientUi: vi.fn() },
+    { requestUpdate, closeTransientUi: vi.fn(), takePreparedTitle: options.takePreparedTitle },
   );
   gateway.synchronize(context.gateway);
   place.setAgentsHydrated(true);

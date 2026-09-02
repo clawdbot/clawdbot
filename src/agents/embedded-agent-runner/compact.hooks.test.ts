@@ -10,7 +10,10 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi, type Mock }
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { createReplyOperation } from "../../auto-reply/reply/reply-run-registry.js";
-import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
+import {
+  patchSessionEntryCore,
+  upsertSessionEntryCore,
+} from "../../config/sessions/session-accessor.js";
 import type { ContextEngine } from "../../context-engine/types.js";
 import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
@@ -3558,7 +3561,7 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
       ),
     ).rejects.toThrow("native compaction failed");
     expect(dispose).toHaveBeenCalledTimes(1);
-    expect(enqueueCommandInLaneMock).not.toHaveBeenCalled();
+    expect(enqueueCommandInLaneMock).toHaveBeenCalledOnce();
   });
 
   it("reports native harness compaction ownership", async () => {
@@ -3578,6 +3581,75 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
 
     expect(result.compactionKind).toBe("native-harness");
     expect(contextEngineCompactMock).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { outcome: "waits for the active session lane", writerRunId: undefined },
+    { outcome: "rejects a replaced writer claim", writerRunId: "replacement-run" },
+  ])("shipped /compact $outcome before native compaction", async ({ writerRunId }) => {
+    const command = await import("../../auto-reply/reply/commands-compact.test-support.js");
+    vi.mocked(command.compactEmbeddedAgentSession).mockReset();
+    resolveContextEngineMock.mockResolvedValue({
+      info: { ownsCompaction: false },
+      compact: contextEngineCompactMock,
+    });
+    maybeCompactAgentHarnessSessionMock.mockResolvedValueOnce({
+      ok: true,
+      compacted: true,
+      result: { summary: "harness", firstKeptEntryId: "entry-1", tokensBefore: 100 },
+    });
+    const laneRelease = createDeferred();
+    enqueueCommandInLaneMock.mockImplementationOnce(async (_lane, task) => {
+      await laneRelease.promise;
+      return await task();
+    });
+    vi.mocked(command.compactEmbeddedAgentSession).mockImplementationOnce(
+      async (params, host) => await compactEmbeddedAgentSession(params, host),
+    );
+
+    const pending = command.handleCompactCommand(
+      {
+        ...command.buildCompactParams("/compact", {
+          commands: { text: true },
+          channels: { whatsapp: { allowFrom: ["*"] } },
+          session: { store: join(TEST_WORKSPACE_DIR, "sessions.json") },
+        }),
+        provider: "openai",
+        model: "gpt-5.5",
+        workspaceDir: TEST_WORKSPACE_DIR,
+        agentDir: join(TEST_WORKSPACE_DIR, "agents/main/agent"),
+        sessionEntry: {
+          sessionId: TEST_SESSION_ID,
+          updatedAt: Date.now(),
+          agentHarnessId: "codex",
+          modelSelectionLocked: true,
+        },
+      },
+      true,
+    );
+    await vi.waitFor(() => {
+      expect(enqueueCommandInLaneMock).toHaveBeenCalledOnce();
+    });
+    expect(maybeCompactAgentHarnessSessionMock).not.toHaveBeenCalled();
+
+    if (writerRunId) {
+      await patchSessionEntryCore(
+        {
+          agentId: "main",
+          sessionKey: TEST_SESSION_KEY,
+          storePath: join(TEST_WORKSPACE_DIR, "sessions.json"),
+        },
+        (entry) => ({ ...entry, activeWriterRunId: writerRunId }),
+      );
+    }
+    laneRelease.resolve();
+    if (writerRunId) {
+      await expect(pending).rejects.toThrow("session writer claim changed");
+    } else {
+      await expect(pending).resolves.toMatchObject({ shouldContinue: false });
+    }
+    expect(command.compactEmbeddedAgentSession).toHaveBeenCalledOnce();
+    expect(maybeCompactAgentHarnessSessionMock).toHaveBeenCalledTimes(writerRunId ? 0 : 1);
   });
 
   it("preserves a summaryless server-endpoint result through the legacy engine delegate", async () => {
@@ -4328,6 +4400,14 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
       await mkdtemp(join(tmpdir(), "openclaw-native-compaction-queued-")),
     );
     try {
+      await upsertSessionEntryCore(
+        {
+          agentId: "main",
+          sessionKey: TEST_SESSION_KEY,
+          storePath: join(agentDir, "sessions.json"),
+        },
+        { sessionId: TEST_SESSION_ID, updatedAt: 1 },
+      );
       resolveCliBackendConfigMock.mockReturnValue({
         id: "claude-cli",
         ownsNativeCompaction: true,
@@ -4357,6 +4437,7 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
       );
 
       expect(result).toMatchObject({ ok: true, compacted: true });
+      expect(enqueueCommandInLaneMock).toHaveBeenCalledOnce();
       expect(runCliAgentMock).toHaveBeenCalledWith(
         expect.objectContaining({
           provider: "claude-cli",
@@ -4366,6 +4447,67 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
         }),
       );
       expect(resolveContextEngineMock).not.toHaveBeenCalled();
+    } finally {
+      closeOpenClawAgentDatabasesForTest();
+      await rm(agentDir, { force: true, recursive: true });
+    }
+  });
+
+  it("rejects a replaced writer claim before queued native CLI compaction", async () => {
+    const agentDir = await realpath(
+      await mkdtemp(join(tmpdir(), "openclaw-native-compaction-queued-replaced-")),
+    );
+    const storePath = join(agentDir, "sessions.json");
+    try {
+      await upsertSessionEntryCore(
+        { agentId: "main", sessionKey: TEST_SESSION_KEY, storePath },
+        { sessionId: TEST_SESSION_ID, updatedAt: 1 },
+      );
+      resolveCliBackendConfigMock.mockReturnValue({
+        id: "claude-cli",
+        ownsNativeCompaction: true,
+        manualCompaction: {
+          buildPrompt: () => "/compact",
+          input: "arg",
+          validateOutput: () => ({ ok: true }),
+        },
+      });
+      const laneRelease = createDeferred();
+      enqueueCommandInLaneMock.mockImplementationOnce(async (_lane, task) => {
+        await laneRelease.promise;
+        return await task();
+      });
+
+      const pending = compactEmbeddedAgentSession(
+        wrappedCompactionArgs({
+          agentDir,
+          sessionTarget: {
+            agentId: "main",
+            sessionId: TEST_SESSION_ID,
+            sessionKey: TEST_SESSION_KEY,
+            storePath,
+          },
+          trigger: "manual",
+          provider: "anthropic",
+          model: "opus",
+          agentHarnessId: "claude-cli",
+          cliSessionId: "native-session",
+        }),
+      );
+      await vi.waitFor(() => {
+        expect(enqueueCommandInLaneMock).toHaveBeenCalledOnce();
+      });
+      await patchSessionEntryCore(
+        { agentId: "main", sessionKey: TEST_SESSION_KEY, storePath },
+        (entry) => ({ ...entry, activeWriterRunId: "replacement-run" }),
+      );
+
+      laneRelease.resolve();
+      await expect(pending).resolves.toMatchObject({
+        ok: false,
+        reason: expect.stringContaining("session writer claim changed"),
+      });
+      expect(runCliAgentMock).not.toHaveBeenCalled();
     } finally {
       closeOpenClawAgentDatabasesForTest();
       await rm(agentDir, { force: true, recursive: true });
@@ -5271,6 +5413,14 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
       await mkdtemp(join(tmpdir(), "openclaw-native-compaction-authless-")),
     );
     try {
+      await upsertSessionEntryCore(
+        {
+          agentId: "main",
+          sessionKey: TEST_SESSION_KEY,
+          storePath: join(agentDir, "sessions.json"),
+        },
+        { sessionId: TEST_SESSION_ID, updatedAt: 1 },
+      );
       resolveCliBackendConfigMock.mockReturnValue({
         id: "claude-cli",
         ownsNativeCompaction: true,
