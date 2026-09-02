@@ -388,7 +388,7 @@ describe("MCP manager creation ownership", () => {
     await resolutionStarted.promise;
     const competing = manager.getOrCreateRequesterScoped(requesterParams("sender-b"));
     await secondRuntimeCreated.promise;
-    await new Promise<void>(setImmediate);
+    await new Promise<void>((resolve) => setImmediate(resolve));
     releaseResolution.resolve();
 
     expect((await refreshed)?.runtime).toBe(first);

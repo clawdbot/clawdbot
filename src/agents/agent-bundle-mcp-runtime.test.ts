@@ -16,9 +16,13 @@ import {
   makeTempDir,
   useAutoCleanupTempDirTracker,
 } from "../../test/helpers/temp-dir.js";
+import { materializeRequesterScopedMcpToolsForHarnessRun } from "../plugin-sdk/agent-harness-runtime.js";
 import { createCombinedSessionMcpRuntime } from "./agent-bundle-mcp-combined.js";
-import { materializeRequesterScopedMcpToolsForHarnessRunCore } from "./agent-bundle-mcp-harness.js";
-import { completeDeferredSessionMcpRuntimeRetirement } from "./agent-bundle-mcp-manager-api.js";
+import {
+  completeDeferredSessionMcpRuntimeRetirement,
+  getOrCreateRequesterScopedMcpRuntime,
+  getSessionMcpRuntimeManagerForTesting,
+} from "./agent-bundle-mcp-manager-api.js";
 import { runWithSessionMcpRequestSignal } from "./agent-bundle-mcp-request-context.js";
 import {
   createBundleMcpJsonSchemaValidator,
@@ -137,9 +141,12 @@ async function startRequesterScopedMcpProofServer(): Promise<{
   };
 }
 
-function readMcpText(result: CallToolResult, label: string): string {
+function readMcpText(
+  result: { content: ReadonlyArray<{ type: string; text?: string }> },
+  label: string,
+): string {
   const content = expectDefined(result.content[0], label);
-  if (content.type !== "text") {
+  if (content.type !== "text" || typeof content.text !== "string") {
     throw new Error(`${label} did not contain text`);
   }
   return content.text;
@@ -3448,6 +3455,8 @@ process.on("SIGINT", shutdown);`,
   it("keeps a real requester-scoped MCP transport alive during an idle sweep", async () => {
     const proof = await startRequesterScopedMcpProofServer();
     const resolverTesting = await import("./mcp-connection-resolver.js");
+    let firstTools: Awaited<ReturnType<typeof materializeRequesterScopedMcpToolsForHarnessRun>>;
+    let secondTools: Awaited<ReturnType<typeof materializeRequesterScopedMcpToolsForHarnessRun>>;
     let nowMs = 100_000;
     const clock = vi.spyOn(Date, "now").mockImplementation(() => nowMs);
     let resolveCount = 0;
@@ -3470,10 +3479,6 @@ process.on("SIGINT", shutdown);`,
       },
     ]);
     resolverTesting.testing.setMcpConnectionRevalidateMsForTest(1);
-    const manager = testing.createSessionMcpRuntimeManager({
-      now: () => nowMs,
-      enableIdleSweepTimer: false,
-    });
     const declaredServer = {
       transport: "streamable-http" as const,
       url: "https://placeholder.invalid/mcp",
@@ -3487,32 +3492,42 @@ process.on("SIGINT", shutdown);`,
     );
 
     try {
-      const first = await manager.getOrCreateRequesterScoped(params);
-      const firstRuntime = expectDefined(first?.runtime, "first requester runtime");
+      firstTools = expectDefined(
+        await materializeRequesterScopedMcpToolsForHarnessRun(params),
+        "first requester tools",
+      );
+      const firstRuntime = expectDefined(
+        (await getOrCreateRequesterScopedMcpRuntime(params))?.runtime,
+        "first requester runtime",
+      );
+      const firstTool = expectDefined(firstTools.tools[0], "first requester tool");
       const firstSessionId = readMcpText(
-        await firstRuntime.callTool("real-requester", "requester_probe", {}),
+        await firstTool.execute("first-requester-call", {}),
         "first MCP result",
       );
+      await firstTools.dispose();
+      firstTools = undefined;
 
       nowMs += 2;
-      const secondRequest = manager.getOrCreateRequesterScoped(params);
+      const secondRequest = materializeRequesterScopedMcpToolsForHarnessRun(params);
       await resolutionStarted.promise;
 
+      const manager = getSessionMcpRuntimeManagerForTesting();
       const idleTtlMs = 10 * 60 * 1000;
       nowMs += idleTtlMs;
       expect(await manager.sweepIdleRuntimes()).toBe(0);
       expect(manager.listRuntimeKeys()).toHaveLength(1);
 
       releaseResolution.resolve();
-      const second = await secondRequest;
-      expect(second?.runtime).toBe(firstRuntime);
+      secondTools = expectDefined(await secondRequest, "second requester tools");
+      expect((await getOrCreateRequesterScopedMcpRuntime(params))?.runtime).toBe(firstRuntime);
+      const secondTool = expectDefined(secondTools.tools[0], "second requester tool");
       expect(
-        readMcpText(
-          await firstRuntime.callTool("real-requester", "requester_probe", {}),
-          "second MCP result",
-        ),
+        readMcpText(await secondTool.execute("second-requester-call", {}), "second MCP result"),
       ).toBe(firstSessionId);
       expect(proof.session.current).toBe(firstSessionId);
+      await secondTools.dispose();
+      secondTools = undefined;
 
       nowMs += idleTtlMs;
       expect(await manager.sweepIdleRuntimes()).toBe(1);
@@ -3520,7 +3535,8 @@ process.on("SIGINT", shutdown);`,
       expect(proof.session.closed).toBe(firstSessionId);
     } finally {
       releaseResolution.resolve();
-      await manager.disposeAll();
+      await Promise.allSettled([firstTools?.dispose(), secondTools?.dispose()]);
+      await testing.resetSessionMcpRuntimeManager();
       clock.mockRestore();
       await proof.close();
     }
@@ -5356,7 +5372,7 @@ describe("requester-scoped MCP connection resolution", () => {
       };
 
       try {
-        const first = await materializeRequesterScopedMcpToolsForHarnessRunCore({
+        const first = await materializeRequesterScopedMcpToolsForHarnessRun({
           sessionId: "session-harness-removal",
           workspaceDir: "/workspace",
           cfg: scopedConfig as never,
@@ -5365,7 +5381,7 @@ describe("requester-scoped MCP connection resolution", () => {
         expect(first?.advertisedTools.map((tool) => tool.name)).toEqual(["user-mail__inbox"]);
         await first?.dispose();
 
-        const afterRemoval = await materializeRequesterScopedMcpToolsForHarnessRunCore({
+        const afterRemoval = await materializeRequesterScopedMcpToolsForHarnessRun({
           sessionId: "session-harness-removal",
           workspaceDir: "/workspace",
           cfg: staticConfig as never,
