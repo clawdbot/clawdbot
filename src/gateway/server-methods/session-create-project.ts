@@ -10,7 +10,7 @@ import { loadSessionEntry, patchSessionEntryCore } from "../../config/sessions/s
 import { assertAgentRunLifecycleGenerationCurrent } from "../../infra/agent-events.js";
 import { emitAgentRunStatusEvent } from "../../infra/agent-run-status-events.js";
 import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
-import { materializeProjectClone } from "../../projects/project-clone.js";
+import { materializeProjectClone, refreshProjectClone } from "../../projects/project-clone.js";
 import { parseProjectGitUrl } from "../../projects/project-git-url.js";
 import { resolveProjectDirectory } from "../../projects/project-registry.js";
 import { getSessionRepositoryWorkspaceStore } from "../../state/session-repository-workspaces.js";
@@ -25,7 +25,10 @@ import type {
   PrepareGatewaySessionLifecycle,
   PreparedGatewaySessionLifecycle,
 } from "../session-lifecycle-preparation.js";
-import { prepareSessionWorktree } from "../session-worktree-preparation.js";
+import {
+  prepareSessionWorktree,
+  resolveSessionWorktreeBase,
+} from "../session-worktree-preparation.js";
 import { hasActiveAgentRuntimeAuthority } from "./agent-runtime-authority.js";
 import type { AdmittedChatSend } from "./chat-send-admission.js";
 import type { PreparedChatSendSession } from "./chat-send-session.js";
@@ -240,7 +243,18 @@ export async function prepareSessionWorkspace(params: {
     if (!saved || saved.sessionId !== entry.sessionId) {
       throw new Error(SESSION_PROJECT_OWNERSHIP_ERROR);
     }
-    const pending = saved.pendingWorktree;
+    let pending = saved.pendingWorktree;
+    const assertSavedWorkspaceIntent = (current: typeof saved) => {
+      assertRunOwnership();
+      if (
+        current.sessionId !== entry.sessionId ||
+        current.projectId !== saved.projectId ||
+        current.pendingProjectGitUrl !== saved.pendingProjectGitUrl ||
+        !isDeepStrictEqual(current.pendingWorktree, pending)
+      ) {
+        throw new Error(SESSION_PROJECT_OWNERSHIP_ERROR);
+      }
+    };
     const gitUrl = normalizeSessionProjectGitUrl(saved.pendingProjectGitUrl);
     if (
       Object.hasOwn(saved, "pendingProjectGitUrl") &&
@@ -308,12 +322,51 @@ export async function prepareSessionWorkspace(params: {
       sessionRoot: root.value.sessionRoot,
     };
     if (pending) {
+      if (pending.baseRef && !pending.baseCommit) {
+        let resolved = await resolveSessionWorktreeBase(directory, pending.baseRef, signal);
+        if (
+          !resolved.ok &&
+          resolved.error.code === ErrorCodes.INVALID_REQUEST &&
+          project?.source === "cloned"
+        ) {
+          await refreshProjectClone(project, {
+            signal,
+            token: githubApiToken(process.env, cfg),
+          });
+          assertRunOwnership();
+          resolved = await resolveSessionWorktreeBase(directory, pending.baseRef, signal);
+        }
+        if (!resolved.ok) {
+          throw new Error(resolved.error.message);
+        }
+        // Accept once, before setup can fail: retries keep the commit while the
+        // original ref remains publication metadata, never a fallback selection.
+        const next = { ...pending, baseCommit: resolved.value };
+        const updated = await patchSessionEntryCore(
+          target,
+          (current) => {
+            assertSavedWorkspaceIntent(current);
+            return { pendingWorktree: next };
+          },
+          {
+            assertCommitAllowed: assertRunOwnership,
+            requireWriteSuccess: true,
+            skipMaintenance: true,
+          },
+        );
+        if (!updated) {
+          throw new Error(SESSION_PROJECT_OWNERSHIP_ERROR);
+        }
+        Object.assign(saved, updated);
+        pending = next;
+      }
       // Retries inherit workspace intent, not a previous caller's setup authority.
       const result = await prepareSessionWorktree({
         target: { ...target, key: sessionKey, entry: saved },
         workspace: directory,
         name: pending.name,
         baseRef: pending.baseRef,
+        checkoutCommit: pending.baseCommit,
         label: title ?? resolveExplicitSessionName(saved) ?? pending.titleSource,
         runSetupScript: client?.connect?.scopes?.includes(ADMIN_SCOPE) === true,
         signal,
@@ -330,15 +383,7 @@ export async function prepareSessionWorkspace(params: {
       bound = await patchSessionEntryCore(
         target,
         (current) => {
-          assertRunOwnership();
-          if (
-            current.sessionId !== entry.sessionId ||
-            current.projectId !== saved.projectId ||
-            current.pendingProjectGitUrl !== saved.pendingProjectGitUrl ||
-            !isDeepStrictEqual(current.pendingWorktree, pending)
-          ) {
-            throw new Error(SESSION_PROJECT_OWNERSHIP_ERROR);
-          }
+          assertSavedWorkspaceIntent(current);
           return {
             ...(project ? { projectId: project.id } : {}),
             sessionRoot: prepared.sessionRoot,

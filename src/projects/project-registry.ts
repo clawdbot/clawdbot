@@ -123,13 +123,14 @@ function insertProjectRegistry(
 
 export async function withProjectCheckoutLifecycle<T>(
   repoRoot: string,
-  options: OpenClawStateDatabaseOptions,
+  options: OpenClawStateDatabaseOptions & { signal?: AbortSignal },
   run: (lease: OpenClawStateLeaseContext) => Promise<T>,
 ): Promise<T> {
   return await withOpenClawStateLease(
     {
       scope: "projects.checkout",
       key: repoRoot,
+      signal: options.signal,
       database: { scope: "shared", options },
       leaseMs: PROJECT_CHECKOUT_LEASE_MS,
       waitMs: PROJECT_CHECKOUT_WAIT_MS,

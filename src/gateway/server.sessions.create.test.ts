@@ -2226,6 +2226,7 @@ test("sessions.create provisions and reuses a session worktree for later runs", 
   });
   const root = openClawState.root;
   const workspace = await initializeGitWorkspace(root);
+  await execFileAsync("git", ["-C", workspace, "branch", "selected-base"]);
   closeOpenClawStateDatabaseForTest();
   testState.agentConfig = { workspace };
   const { storePath } = await createSessionStoreDir();
@@ -2246,7 +2247,12 @@ test("sessions.create provisions and reuses a session worktree for later runs", 
       worktree: { id: string; path: string; branch: string };
     }>(
       "sessions.create",
-      { agentId: "main", label: "Release planning", worktree: true },
+      {
+        agentId: "main",
+        label: "Release planning",
+        worktree: true,
+        worktreeBaseRef: "selected-base",
+      },
       { client: { connect: { scopes: ["operator.admin"] } } as never },
     );
 
@@ -2271,12 +2277,13 @@ test("sessions.create provisions and reuses a session worktree for later runs", 
     const originalHead = (await execFileAsync("git", ["-C", worktree!.path, "rev-parse", "HEAD"]))
       .stdout;
 
+    await execFileAsync("git", ["-C", workspace, "branch", "-D", "selected-base"]);
     const recreated = await directSessionReq<{
       entry: { spawnedCwd?: string };
       worktree: { id: string; path: string; branch: string };
     }>(
       "sessions.create",
-      { key, agentId: "main", worktree: true },
+      { key, agentId: "main", worktree: true, worktreeBaseRef: "selected-base" },
       { client: { connect: { scopes: ["operator.admin"] } } as never },
     );
     expect(recreated.ok).toBe(true);
@@ -2953,6 +2960,7 @@ test("sessions.create maps worktree options and preserves a nested workspace cwd
   const workspace = path.join(repoRoot, "packages", "app");
   const worktreePath = path.join(openClawState.root, "managed-worktree");
   const key = "agent:main:dashboard:worktree-options";
+  await execFileAsync("git", ["-C", repoRoot, "branch", "base-branch"]);
   await Promise.all([
     fs.mkdir(workspace, { recursive: true }),
     fs.mkdir(worktreePath, { recursive: true }),

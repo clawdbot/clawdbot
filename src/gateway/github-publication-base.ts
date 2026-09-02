@@ -1,6 +1,7 @@
 import os from "node:os";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
+import { gitTransportUnsafeConfigArgs } from "../infra/git-transport-config.js";
 
 export function githubPublicationBaseLookupArgs(repository: string, baseBranch: string): string[] {
   return [
@@ -48,17 +49,6 @@ export function githubPublicationBaseLineageArgs(ancestor: string, descendant: s
   return ["git", "merge-base", "--is-ancestor", ancestor, descendant];
 }
 
-export function githubPublicationUnsafeConfigArgs(scope: "--local" | "--worktree"): string[] {
-  return [
-    "git",
-    "config",
-    scope,
-    "--includes",
-    "--get-regexp",
-    "^(core\\.(alternaterefscommand|askpass|fsmonitor|gitproxy|sshcommand|worktree)|credential\\..*helper|filter\\..*|http\\..*|include(if)?\\..*|push\\..*|remote\\..*\\.(proxy|receivepack|uploadpack|vcs)|uploadpack\\.packobjectshook|url\\..*\\.(insteadof|pushinsteadof))$",
-  ];
-}
-
 // Shared by node-executed capture and restore. Even intent-to-add can run clean
 // conversion while Git rewrites racily clean entries elsewhere in the index.
 export const GITHUB_PUBLICATION_CONFIG_GUARD_JS = String.raw`
@@ -72,7 +62,7 @@ if (worktreeConfig.error || worktreeConfig.status !== 0) {
 if (worktreeConfig.stdout.toString("utf8").trim() === "true") scopes.push("--worktree");
 for (const scope of scopes) {
   const result = spawnSync("git", ["config", scope, "--includes", "--get-regexp",
-    ${JSON.stringify(githubPublicationUnsafeConfigArgs("--local").at(-1))}], {
+    ${JSON.stringify(gitTransportUnsafeConfigArgs("--local").at(-1))}], {
     cwd, env, timeout: 60000, maxBuffer: 128 * 1024,
   });
   if (result.error || result.status !== 1 || result.stdout.length) {

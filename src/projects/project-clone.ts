@@ -10,6 +10,7 @@ import {
   cloneProjectCheckout,
   ensureProjectCheckoutCommit,
   ProjectCloneError,
+  refreshProjectCheckout,
 } from "./project-clone-runtime.js";
 import { parseProjectGitUrl } from "./project-git-url.js";
 import {
@@ -73,8 +74,8 @@ export async function materializeProjectClone(
         }
         const existing = await withProjectCheckoutLifecycle(
           candidate.repoRoot,
-          options,
-          async () => {
+          { ...options, signal: lease.signal },
+          async (checkoutLease) => {
             const current = existingCanonicalProject(input.cfg, parsed.url, options);
             if (current?.repoRoot !== candidate.repoRoot) {
               return undefined;
@@ -82,9 +83,9 @@ export async function materializeProjectClone(
             if (input.requiredCommit) {
               await ensureProjectCheckoutCommit(
                 { url: parsed.url, target: current.repoRoot, commit: input.requiredCommit },
-                { ...options, env, signal: lease.signal },
+                { ...options, env, signal: checkoutLease.signal },
               );
-              lease.assertOwned();
+              checkoutLease.assertOwned();
             }
             return current;
           },
@@ -117,6 +118,37 @@ export async function materializeProjectClone(
       }
     },
   );
+}
+
+/** Refreshes an existing project clone while holding its checkout lifecycle lease. */
+export async function refreshProjectClone(
+  project: ProjectRegistryRecord,
+  options: OpenClawStateDatabaseOptions & {
+    env?: NodeJS.ProcessEnv;
+    signal?: AbortSignal;
+    timeoutMs?: number;
+    token?: string;
+  } = {},
+): Promise<void> {
+  if (project.source !== "cloned") {
+    return;
+  }
+  // Materialization validates the source URL; retries retain that registry identity.
+  const originUrl = project.originUrl;
+  if (!originUrl) {
+    throw new ProjectCloneError(
+      "invalid_url",
+      "Saved project repository is invalid; select the repository and retry.",
+    );
+  }
+  await withProjectCheckoutLifecycle(project.repoRoot, options, async (lease) => {
+    // The registry owns source identity; origin can be changed inside the shared checkout.
+    await refreshProjectCheckout(
+      { target: project.repoRoot, url: originUrl },
+      { ...options, signal: lease.signal },
+    );
+    lease.assertOwned();
+  });
 }
 
 async function resolveClonedProjectCheckout(

@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { ProjectCloneFailureCause } from "../../packages/gateway-protocol/src/index.js";
+import { assertSafeGitTransportConfig } from "../infra/git-transport-config.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 
 const PROJECT_CLONE_TIMEOUT_MS = 10 * 60_000;
@@ -11,6 +12,7 @@ type ProjectCloneOptions = {
   timeoutMs?: number;
   token?: string;
 };
+const PROJECT_FETCH_TIMEOUT_MS = 60_000;
 
 export class ProjectCloneError extends Error {
   constructor(
@@ -54,8 +56,9 @@ function cloneCommandEnv(token: string | undefined, env: NodeJS.ProcessEnv): Nod
   return gitEnv;
 }
 
-function classifyCloneFailure(params: {
+function classifyProjectGitFailure(params: {
   output: string;
+  operation: "clone" | "fetch";
   tokenConfigured: boolean;
   timedOut?: boolean;
 }): ProjectCloneError {
@@ -66,7 +69,7 @@ function classifyCloneFailure(params: {
   ) {
     return new ProjectCloneError(
       "network",
-      "Git clone could not reach GitHub. Check the Gateway network connection and retry.",
+      `Git ${params.operation} could not reach GitHub. Check the Gateway network connection and retry.`,
     );
   }
   if (
@@ -92,7 +95,7 @@ function classifyCloneFailure(params: {
   }
   return new ProjectCloneError(
     "clone_failed",
-    "Git could not clone that repository. Check the URL and Gateway Git configuration, then retry.",
+    `Git could not ${params.operation === "clone" ? "clone" : "refresh"} that repository. Check the URL and Gateway Git configuration, then retry.`,
   );
 }
 
@@ -135,15 +138,49 @@ export async function cloneProjectCheckout(
     return;
   }
   await fs.rm(input.target, { recursive: true, force: true }).catch(() => {});
-  throw classifyCloneFailure({
+  throw classifyProjectGitFailure({
     output: `${result.stderr}\n${result.stdout}`,
+    operation: "clone",
+    tokenConfigured: Boolean(options.token),
+    timedOut: result.termination === "timeout" || result.termination === "no-output-timeout",
+  });
+}
+
+/** Refreshes refs in an existing Gateway-managed project checkout. */
+export async function refreshProjectCheckout(
+  input: { target: string; url: string },
+  options: ProjectCloneOptions = {},
+): Promise<void> {
+  await assertSafeGitTransportConfig(input.target, async (argv) => {
+    // This runner already isolates global/system config and carries the checkout lease signal.
+    const checked = await runProjectCheckoutGit(input, options, argv.slice(1));
+    return { code: checked.code, stdout: Buffer.from(checked.stdout) };
+  });
+  const result = await runProjectCheckoutGit(
+    input,
+    { ...options, timeoutMs: options.timeoutMs ?? PROJECT_FETCH_TIMEOUT_MS },
+    [
+      "fetch",
+      "--prune",
+      "--no-recurse-submodules",
+      "--",
+      input.url,
+      "+refs/heads/*:refs/remotes/origin/*",
+    ],
+  );
+  if (result.code === 0 && result.termination === "exit") {
+    return;
+  }
+  throw classifyProjectGitFailure({
+    output: `${result.stderr}\n${result.stdout}`,
+    operation: "fetch",
     tokenConfigured: Boolean(options.token),
     timedOut: result.termination === "timeout" || result.termination === "no-output-timeout",
   });
 }
 
 function runProjectCheckoutGit(
-  input: { url: string; target: string },
+  input: { target: string },
   options: ProjectCloneOptions,
   args: string[],
 ) {
@@ -190,7 +227,8 @@ export async function ensureProjectCheckoutCommit(
     input.commit,
   ]);
   if (fetched.code !== 0 || fetched.termination !== "exit") {
-    throw classifyCloneFailure({
+    throw classifyProjectGitFailure({
+      operation: "fetch",
       output: `${fetched.stderr}\n${fetched.stdout}`,
       tokenConfigured: Boolean(options.token),
       timedOut: fetched.termination === "timeout" || fetched.termination === "no-output-timeout",
