@@ -26,6 +26,8 @@ import { delimiter, dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import { createVitestResourceOwner } from "../../scripts/lib/vitest-resource-ownership.mts";
+import { createFixtureLifetime } from "../helpers/fixture-lifetime.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import {
   validClawsweeperReviewCommentPages,
@@ -132,8 +134,7 @@ afterAll(() => {
   rmSync(templateRepo, { force: true, recursive: true });
 });
 
-function createRepo(nestedName?: string) {
-  const tempRoot = tempDirs.make("openclaw-pr-operation-lock-");
+function createRepo(nestedName?: string, tempRoot = tempDirs.make("openclaw-pr-operation-lock-")) {
   const dir = nestedName ? join(tempRoot, nestedName) : tempRoot;
   if (nestedName) {
     mkdirSync(dir);
@@ -2633,57 +2634,78 @@ describePosix("scripts/pr per-PR operation lock", () => {
       await cleanupController(repoDir, controller, pidFile);
     }
   }, 15_000);
-  it("retains the lock when a nested managed process group escapes cancellation", async () => {
-    const repoDir = createRepo();
-    const nestedPidFile = join(repoDir, "nested-pgid");
-    const signalRelayedFile = join(repoDir, "nested-signal-relayed");
-    const nestedScript = writeFixtureFile(repoDir, "nested.mjs", [
-      'import fs from "node:fs";',
-      "fs.writeFileSync(process.argv[2], String(process.pid));",
-      'process.on("SIGTERM", () => fs.writeFileSync(process.argv[3], "relayed\\n"));',
-      "setInterval(() => {}, 1000);",
-    ]);
-    const relayScript = writeFixtureFile(repoDir, "relay.mjs", [
-      `import { runManagedCommand } from ${JSON.stringify(managedChildUrl)};`,
-      "process.exitCode = await runManagedCommand({",
-      "  bin: process.execPath,",
-      `  args: [${JSON.stringify(nestedScript)}, ${JSON.stringify(nestedPidFile)}, ${JSON.stringify(signalRelayedFile)}],`,
-      '  stdio: "ignore",',
-      "});",
-    ]);
-    const fixture = writeOperationFixture(repoDir, "nested-operation.sh", [
-      "acquire_pr_operation_lock 42",
-      `node '${relayScript}'`,
-    ]);
-    const controller = spawn(process.execPath, [processGroupRunner, repoDir, fixture], {
-      cwd: repoDir,
-      stdio: "ignore",
-    });
-    let nestedPgid: number | undefined;
-    try {
-      expect(await waitFor(() => existsSync(nestedPidFile) && refExists(repoDir))).toBe(true);
-      nestedPgid = await waitForProcessId(nestedPidFile);
-      const ownerOid = refOid(repoDir);
-      expect(processGroupExists(nestedPgid!)).toBe(true);
-      controller.kill("SIGTERM");
-      expect(await waitFor(() => existsSync(signalRelayedFile))).toBe(true);
-      controller.kill("SIGTERM");
-      await waitForExit(controller, 8000);
-      expect(controller.exitCode).toBe(143);
-      expect(processGroupExists(nestedPgid!)).toBe(true);
-      expect(refOid(repoDir)).toBe(ownerOid);
-      const blocked = probeOperationLock(repoDir);
-      expect(blocked.status).toBe(0);
-      expect(blocked.stdout.trim()).toBe("2");
-      killProcessGroup(nestedPgid!, "SIGKILL");
-      expect(await waitFor(() => !processGroupExists(nestedPgid!))).toBe(true);
-      recoverOperationLock(repoDir, ownerOid);
-    } finally {
-      if (nestedPgid) {
-        await cleanupProcessGroup(nestedPgid);
+  it("retains the lock when a nested managed process group escapes cancellation", async ({
+    onTestFinished,
+  }) => {
+    const lifetime = createFixtureLifetime();
+    onTestFinished(() => lifetime.cleanup());
+    await lifetime.run(async () => {
+      const repoDir = createRepo(undefined, lifetime.createTempDir("pr-escaped-cancellation-"));
+      const resourceOwner = createVitestResourceOwner(repoDir);
+      const nestedPidFile = join(repoDir, "nested-pgid");
+      const signalRelayedFile = join(repoDir, "nested-signal-relayed");
+      const nestedScript = writeFixtureFile(repoDir, "nested.mjs", [
+        'import fs from "node:fs";',
+        "fs.writeFileSync(process.argv[2], String(process.pid));",
+        'process.on("SIGTERM", () => fs.writeFileSync(process.argv[3], "relayed\\n"));',
+        "setInterval(() => {}, 1000);",
+      ]);
+      const relayScript = writeFixtureFile(repoDir, "relay.mjs", [
+        `import { runManagedCommand } from ${JSON.stringify(managedChildUrl)};`,
+        "process.exitCode = await runManagedCommand({",
+        "  bin: process.execPath,",
+        `  args: [${JSON.stringify(nestedScript)}, ${JSON.stringify(nestedPidFile)}, ${JSON.stringify(signalRelayedFile)}],`,
+        '  stdio: "ignore",',
+        "});",
+      ]);
+      const fixture = writeOperationFixture(repoDir, "nested-operation.sh", [
+        "acquire_pr_operation_lock 42",
+        `node '${relayScript}'`,
+      ]);
+      const controller = spawn(process.execPath, [processGroupRunner, repoDir, fixture], {
+        cwd: repoDir,
+        // The test deliberately kills the relay before its managed claim can release.
+        // Only this fixture's independent group census may dispose its retained inputs.
+        env: { ...process.env, TMPDIR: repoDir, TMP: repoDir, TEMP: repoDir },
+        stdio: "ignore",
+      });
+      let nestedPgid: number | undefined;
+      try {
+        expect(await waitFor(() => existsSync(nestedPidFile) && refExists(repoDir))).toBe(true);
+        nestedPgid = await waitForProcessId(nestedPidFile);
+        const ownerOid = refOid(repoDir);
+        expect(processGroupExists(nestedPgid!)).toBe(true);
+        controller.kill("SIGTERM");
+        expect(await waitFor(() => existsSync(signalRelayedFile))).toBe(true);
+        controller.kill("SIGTERM");
+        await waitForExit(controller, 8000);
+        expect(controller.exitCode).toBe(143);
+        expect(processGroupExists(nestedPgid!)).toBe(true);
+        expect(refOid(repoDir)).toBe(ownerOid);
+        const blocked = probeOperationLock(repoDir);
+        expect(blocked.status).toBe(0);
+        expect(blocked.stdout.trim()).toBe("2");
+        expect(() => resourceOwner.assertReleased()).toThrow("Unreleased Vitest resource claim");
+        killProcessGroup(nestedPgid!, "SIGKILL");
+        expect(await waitFor(() => !processGroupExists(nestedPgid!))).toBe(true);
+        recoverOperationLock(repoDir, ownerOid);
+      } finally {
+        await lifetime.verifyCleanup(async () => {
+          try {
+            await cleanupController(repoDir, controller);
+          } finally {
+            // Fence the PID producer before rereading after a failed observation.
+            // A pending claim without a recorded child remains unverified.
+            const recordedPgid = nestedPgid ?? readProcessIdFile(nestedPidFile);
+            if (recordedPgid) {
+              await cleanupProcessGroup(recordedPgid);
+            } else {
+              resourceOwner.assertReleased();
+            }
+          }
+        });
       }
-      await cleanupController(repoDir, controller);
-    }
+    });
   });
   it("has one dispatcher acquisition for composite prepare-run", () => {
     const script = readFileSync(join(repoRoot, "scripts/pr"), "utf8");

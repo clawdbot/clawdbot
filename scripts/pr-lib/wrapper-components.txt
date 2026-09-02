@@ -25,6 +25,7 @@ scripts/lib/vitest-home-selection.mts
 scripts/lib/vitest-local-scheduling.mts
 scripts/lib/vitest-process-env.mts
 scripts/lib/vitest-process.mts
+scripts/lib/vitest-resource-ownership.mts
 scripts/lib/vitest-shard-metadata.mts
 scripts/lib/vitest-unhandled-errors.mts
 scripts/lib/vitest-worker-artifacts.mts

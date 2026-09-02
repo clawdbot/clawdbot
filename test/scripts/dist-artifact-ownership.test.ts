@@ -9,6 +9,7 @@ import {
   TSDOWN_NON_SDK_DTS_CONFIG_GROUPS,
   TSDOWN_PLUGIN_SDK_DTS_CONFIG_GROUPS,
 } from "../../scripts/lib/tsdown-config-groups.mts";
+import { createVitestResourceOwner } from "../../scripts/lib/vitest-resource-ownership.mts";
 import { createFixtureLifetime } from "../helpers/fixture-lifetime.js";
 import { waitForDead } from "../helpers/process-wait.js";
 import { createFixture as createDeclarationFixture } from "./tsdown-declaration-fixture.js";
@@ -134,6 +135,7 @@ async function runWithProcesses(
       root: string,
       script: string,
       args?: string[],
+      resourceOwner?: ReturnType<typeof createVitestResourceOwner>,
     ) => {
       waiting: Promise<void>;
       done: Promise<{ code: unknown; output: string }>;
@@ -228,16 +230,23 @@ async function runWithProcesses(
         socket.on('data', () => socket.end());
       `,
       waitEvent,
-      start: (root, script, args = []) => {
+      start: (root, script, args, resourceOwner) => {
         signal.throwIfAborted();
-        const child = spawn(process.execPath, [script, ...args], {
+        const commandArgs = [script, ...(args ?? [])];
+        const child = spawn(process.execPath, commandArgs, {
           cwd: root,
-          env: { ...process.env, npm_execpath: path.join(root, "pnpm.cjs") },
+          env: {
+            ...process.env,
+            ...(resourceOwner
+              ? { TMPDIR: resourceOwner.root, TMP: resourceOwner.root, TEMP: resourceOwner.root }
+              : {}),
+            npm_execpath: path.join(root, "pnpm.cjs"),
+          },
           stdio: ["ignore", "pipe", "pipe"],
         });
         children.push(child);
         let output = "";
-        diagnostics.push(() => `[fixture ${root}] ${script} ${args.join(" ")}\n${output}`);
+        diagnostics.push(() => `[fixture ${root}] ${commandArgs.join(" ")}\n${output}`);
         let announceWait!: () => void;
         const waiting = new Promise<void>((resolve) => {
           announceWait = resolve;
@@ -554,6 +563,9 @@ describe.skipIf(process.platform === "win32")("dist artifact ownership", () => {
   it("retains ownership when a supervisor exits before its compiler joins", async ({ signal }) => {
     await withProcesses(async ({ checkpoint, waitEvent, start }) => {
       const root = createCheckout();
+      // This fixture deliberately loses the managed owner. Its independent
+      // checkpoint census below still joins the compiler before disposing inputs.
+      const resourceOwner = createVitestResourceOwner(root);
       installCompiler(
         root,
         `require('node:fs').writeFileSync('compiler.pid', String(process.pid)); ${checkpoint("orphan-ready")}`,
@@ -570,7 +582,7 @@ describe.skipIf(process.platform === "win32")("dist artifact ownership", () => {
           `await import(${JSON.stringify(path.join(sourceRoot, "scripts/run-tsgo.mts"))});`,
         ].join("\n"),
       );
-      const supervisor = start(root, owner);
+      const supervisor = start(root, owner, [], resourceOwner);
       const compilerGate = await supervisor.event("orphan-ready");
       const compilerPid = Number(fs.readFileSync(path.join(root, "compiler.pid"), "utf8"));
       (await waitEvent("exit-owner")).write("exit");
@@ -588,6 +600,7 @@ describe.skipIf(process.platform === "win32")("dist artifact ownership", () => {
       expect(fs.existsSync(path.join(root, ".artifacts/dist-artifacts.lock/owner.json"))).toBe(
         true,
       );
+      expect(() => resourceOwner.assertReleased()).toThrow("Unreleased Vitest resource claim");
       compilerGate.write("continue");
       await waitForDead(compilerPid, 2_000);
     }, signal);
@@ -598,6 +611,7 @@ describe.skipIf(process.platform === "win32")("dist artifact ownership", () => {
   }) => {
     await withProcesses(async ({ checkpoint, waitEvent, start }) => {
       const root = createCheckout();
+      const resourceOwner = createVitestResourceOwner(root);
       installCompiler(
         root,
         `require('node:fs').writeFileSync('compiler.json', JSON.stringify({ pid: process.pid, wrapper: process.ppid })); ${checkpoint("nested-compiler-ready")}`,
@@ -617,7 +631,7 @@ describe.skipIf(process.platform === "win32")("dist artifact ownership", () => {
           `bin: process.execPath, args: distArtifactEntryArgs(${JSON.stringify(path.join(sourceRoot, "scripts/run-tsgo.mts"))}, ${JSON.stringify(tsgoArgs)}), requireProcessTreeExit: true }));`,
         ].join("\n"),
       );
-      const supervisor = start(root, owner);
+      const supervisor = start(root, owner, [], resourceOwner);
       const compilerGate = await supervisor.event("nested-compiler-ready");
       const compiler = JSON.parse(fs.readFileSync(path.join(root, "compiler.json"), "utf8"));
       try {
@@ -629,6 +643,7 @@ describe.skipIf(process.platform === "win32")("dist artifact ownership", () => {
           fs.existsSync(path.join(root, declarationPath)),
           "a killed nested wrapper cannot certify compiler completion",
         ).toBe(true);
+        expect(() => resourceOwner.assertReleased()).toThrow("Unreleased Vitest resource claim");
       } finally {
         compilerGate.write("continue");
         await waitForDead(compiler.pid, 2_000);

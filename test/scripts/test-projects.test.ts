@@ -344,6 +344,7 @@ describe("scripts/test-projects changed-target routing", () => {
         expectSingleVitestRunPlan(buildVitestRunPlans([target], cwd), {
           config: "test/vitest/vitest.unit.config.ts",
           forwardedArgs: [`${target}.test.ts`],
+          includePatterns: [`${target}.test.ts`],
         });
         expect(findUnmatchedExplicitTestTargets([target], cwd)).toEqual([]);
 
@@ -1524,6 +1525,79 @@ describe("scripts/test-projects changed-target routing", () => {
     );
   });
 
+  it.each(["src/selector/one.test.ts", "./src/selector/one.test.ts"])(
+    "records exact default-unit ownership for %s without removing CLI filters",
+    (target) => {
+      withTinyFileTree({ "src/selector/one.test.ts": "" }, (cwd) => {
+        expectSingleVitestRunPlan(buildVitestRunPlans([target, "--", "-t", "case"], cwd), {
+          config: "test/vitest/vitest.unit.config.ts",
+          forwardedArgs: ["-t", "case", target],
+          includePatterns: ["src/selector/one.test.ts"],
+        });
+      });
+    },
+  );
+
+  it.each([
+    ["src/selector/missing.test.ts"],
+    ["src/selector/one.spec.ts"],
+    ["src/selector/*.test.ts"],
+    ["src/selector/one.test.ts", "src/selector/one.spec.ts"],
+    ["src/selector/one.test.ts", "src/selector/missing.test.ts"],
+    ["src/selector/one.live.test.ts"],
+    ["outside/one.test.ts"],
+  ])("keeps unsupported default-unit targets on the CLI route: %j", (...targets) => {
+    withTinyFileTree(
+      {
+        "src/selector/one.test.ts": "",
+        "src/selector/one.spec.ts": "",
+        "src/selector/one.live.test.ts": "",
+        "outside/one.test.ts": "",
+      },
+      (cwd) => {
+        expectSingleVitestRunPlan(buildVitestRunPlans(targets, cwd), {
+          config: "test/vitest/vitest.unit.config.ts",
+          forwardedArgs: targets,
+        });
+      },
+    );
+  });
+
+  it("preserves absolute and watch default-unit target semantics", () => {
+    const target = "src/selector/one.test.ts";
+    withTinyFileTree({ [target]: "" }, (cwd) => {
+      const absolute = path.join(cwd, target);
+      expectSingleVitestRunPlan(buildVitestRunPlans([absolute], cwd), {
+        config: "test/vitest/vitest.unit.config.ts",
+        forwardedArgs: [absolute],
+      });
+      expectSingleVitestRunPlan(buildVitestRunPlans(["--watch", target], cwd), {
+        config: "test/vitest/vitest.unit.config.ts",
+        forwardedArgs: [target],
+        watchMode: true,
+      });
+    });
+  });
+
+  it("keeps inherited default-unit include files intersected with the CLI target", () => {
+    const target = "src/selector/one.test.ts";
+    withTinyFileTree({ [target]: "", "include.json": JSON.stringify([]) }, (cwd) => {
+      const includeFile = path.join(cwd, "include.json");
+      const [spec] = createVitestRunSpecs([target], {
+        cwd,
+        baseEnv: { OPENCLAW_VITEST_INCLUDE_FILE: includeFile },
+      });
+      expect(spec).toMatchObject({
+        config: "test/vitest/vitest.unit.config.ts",
+        includePatterns: null,
+        includeFilePath: null,
+        env: { OPENCLAW_VITEST_INCLUDE_FILE: includeFile },
+      });
+      expect(spec?.pnpmArgs.at(-1)).toBe(target);
+      expect(fs.readFileSync(includeFile, "utf8")).toBe("[]");
+    });
+  });
+
   it("routes explicit imported source files through import-graph tests", () => {
     let plans: ReturnType<typeof buildVitestRunPlans> = [];
     withTinyGitRepo(
@@ -1540,7 +1614,7 @@ describe("scripts/test-projects changed-target routing", () => {
       {
         config: "test/vitest/vitest.unit.config.ts",
         forwardedArgs: ["src/runtime.consumer.test.ts"],
-        includePatterns: null,
+        includePatterns: ["src/runtime.consumer.test.ts"],
         watchMode: false,
       },
     ]);
@@ -1564,7 +1638,7 @@ describe("scripts/test-projects changed-target routing", () => {
       {
         config: "test/vitest/vitest.unit.config.ts",
         forwardedArgs: ["src/runtime.consumer.test.ts"],
-        includePatterns: null,
+        includePatterns: ["src/runtime.consumer.test.ts"],
         watchMode: false,
       },
     ]);
@@ -1718,7 +1792,7 @@ describe("scripts/test-projects changed-target routing", () => {
       {
         config: "test/vitest/vitest.unit.config.ts",
         forwardedArgs: ["src/runtime.consumer.test.ts"],
-        includePatterns: null,
+        includePatterns: ["src/runtime.consumer.test.ts"],
         watchMode: false,
       },
     ]);
@@ -3119,7 +3193,7 @@ describe("scripts/test-projects changed-target routing", () => {
       {
         config: "test/vitest/vitest.unit.config.ts",
         forwardedArgs: ["packages/sdk/src/index.test.ts"],
-        includePatterns: null,
+        includePatterns: ["packages/sdk/src/index.test.ts"],
         watchMode: false,
       },
     ]);
@@ -3429,7 +3503,7 @@ describe("scripts/test-projects changed-target routing", () => {
       {
         config: "test/vitest/vitest.unit.config.ts",
         forwardedArgs: ["packages/normalization-core/src/string-normalization.test.ts"],
-        includePatterns: null,
+        includePatterns: ["packages/normalization-core/src/string-normalization.test.ts"],
         watchMode: false,
       },
       {
@@ -3710,7 +3784,11 @@ describe("scripts/test-projects changed-target routing", () => {
     expectChangedTargets(fixturePaths, [owner]);
     expectSingleVitestRunPlan(
       buildVitestRunPlans(["--changed", "origin/main"], process.cwd(), () => fixturePaths),
-      { config: "test/vitest/vitest.unit.config.ts", forwardedArgs: [owner] },
+      {
+        config: "test/vitest/vitest.unit.config.ts",
+        forwardedArgs: [owner],
+        includePatterns: [owner],
+      },
     );
   });
 

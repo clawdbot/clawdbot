@@ -60,6 +60,7 @@ import {
 import { isVoiceCallExtensionRoot } from "../test/vitest/vitest.extension-voice-call-paths.mjs";
 import { isWhatsAppExtensionRoot } from "../test/vitest/vitest.extension-whatsapp-paths.mjs";
 import { isZaloExtensionRoot } from "../test/vitest/vitest.extension-zalo-paths.mjs";
+import { narrowIncludePatternsForCli } from "../test/vitest/vitest.pattern-file.ts";
 import { resolveVitestFsModuleCacheRoot } from "../test/vitest/vitest.performance-config.ts";
 import {
   isPluginSdkLightTarget,
@@ -87,6 +88,8 @@ import {
 import {
   isBoundaryTestFile,
   isBundledPluginDependentUnitTestFile,
+  isUnitConfigTestFile,
+  unitTestIncludePatterns,
 } from "../test/vitest/vitest.unit-paths.mjs";
 import {
   detectChangedLanes,
@@ -4029,8 +4032,34 @@ export function buildVitestRunPlans(
     const useWholeConfigTarget = grouped.some((targetArg) =>
       shouldUseWholeConfigTarget(kind, targetArg, cwd),
     );
+    const scopedTargetArgs = useCliTargetArgs ? uniqueOrdered(grouped) : [];
+    const forwardedPlanArgs = [...nonTargetArgs, ...scopedTargetArgs];
+    const unitCliIncludes =
+      kind === "default" &&
+      useCliTargetArgs &&
+      !watchMode &&
+      !options.env?.[INCLUDE_FILE_ENV_KEY]?.trim()
+        ? narrowIncludePatternsForCli(unitTestIncludePatterns, [
+            "node",
+            "vitest",
+            ...forwardedPlanArgs,
+          ])
+        : null;
+    // CI needs explicit selection metadata. Keep the CLI filters too: the unit
+    // config and runner use them for exclude and empty-selection policy.
+    const scopedUnitIncludes =
+      unitCliIncludes?.length &&
+      grouped.every((targetArg) =>
+        unitCliIncludes.includes(toRepoRelativeTarget(targetArg, cwd)),
+      ) &&
+      unitCliIncludes.every(
+        (file) =>
+          !isGlobTarget(file) && isUnitConfigTestFile(file) && isExistingFileTarget(file, cwd),
+      )
+        ? unitCliIncludes
+        : null;
     const includePatterns = useCliTargetArgs
-      ? null
+      ? scopedUnitIncludes
       : useWholeConfigTarget
         ? null
         : uniqueOrdered(
@@ -4039,8 +4068,6 @@ export function buildVitestRunPlans(
               return lightLanePatterns ?? [toScopedIncludePattern(targetArg, cwd)];
             }),
           );
-    const scopedTargetArgs = useCliTargetArgs ? uniqueOrdered(grouped) : [];
-    const forwardedPlanArgs = [...nonTargetArgs, ...scopedTargetArgs];
     const broadToolingScriptPlans = createBroadToolingScriptPlans({
       config,
       cwd,

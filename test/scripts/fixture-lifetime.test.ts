@@ -1,14 +1,51 @@
 import { getEventListeners } from "node:events";
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { createVitestResourceOwner } from "../../scripts/lib/vitest-resource-ownership.mts";
 import { runNodeStep } from "../../scripts/prepare-extension-package-boundary-artifacts.mts";
 import { createFixtureLifetime } from "../helpers/fixture-lifetime.js";
 import { isProcessAlive, waitForDead } from "../helpers/process-wait.js";
 import { createDeferred } from "../helpers/promise.js";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+let owner: ReturnType<typeof createVitestResourceOwner>;
+beforeEach(() => {
+  // The tests deliberately retain claims, then join/dispose their own probes.
+  // Model that namespace separately from the runner executing these assertions.
+  const root = tempDirs.make("fixture-lifetime-owner-");
+  owner = createVitestResourceOwner(root);
+  for (const key of ["TMPDIR", "TMP", "TEMP"]) {
+    vi.stubEnv(key, root);
+  }
+});
+afterEach(() => vi.unstubAllEnvs());
 const fixture = createFixtureLifetime();
 afterEach(() => fixture.cleanup());
+
+it("registers fresh fixture work after clean release and module reset", async () => {
+  const first = fixture.createTempDir("fixture-first-");
+  await fixture.cleanup();
+  expect(fs.existsSync(first)).toBe(false);
+  expect(() => owner.assertReleased()).not.toThrow();
+  vi.resetModules();
+  const { createFixtureLifetime: createFreshLifetime } =
+    await import("../helpers/fixture-lifetime.js");
+  const nestedOwner = createVitestResourceOwner(tempDirs.make("fixture-explicit-owner-"));
+  const fresh = createFreshLifetime(nestedOwner.root);
+  for (const [lifetime, expectedOwner] of [
+    [fixture, owner],
+    [fresh, nestedOwner],
+  ] as const) {
+    const root = lifetime.createTempDir("fixture-fresh-");
+    expect(path.dirname(root)).toBe(expectedOwner.root);
+    expect(() => expectedOwner.assertReleased()).toThrow("Unreleased Vitest resource claim");
+    await lifetime.cleanup();
+    expect(fs.existsSync(root)).toBe(false);
+    expect(() => expectedOwner.assertReleased()).not.toThrow();
+  }
+});
 
 it("cleans independent roots after a removal failure and retries the retained root", async () => {
   const lifetime = createFixtureLifetime();
@@ -29,11 +66,63 @@ it("cleans independent roots after a removal failure and retries the retained ro
     removal.mockRestore();
     await lifetime.cleanup();
     expect(fs.existsSync(first)).toBe(false);
+    expect(() => owner.assertReleased()).not.toThrow();
   } finally {
     removal.mockRestore();
     for (const root of [first, second]) {
       remove(root, { recursive: true, force: true });
     }
+  }
+});
+
+it("holds claims for work admitted during asynchronous fixture removal", async () => {
+  const lifetime = createFixtureLifetime();
+  const first = lifetime.createTempDir("fixture-removing-");
+  const removing = createDeferred();
+  const allowRemoval = createDeferred();
+  const removed = createDeferred();
+  const allowWork = createDeferred();
+  const remove = fs.promises.rm;
+  const removal = vi.spyOn(fs.promises, "rm").mockImplementation(async (root, options) => {
+    if (root === first) {
+      removing.resolve();
+      await allowRemoval.promise;
+    }
+    await remove(root, options);
+    if (root === first) {
+      removed.resolve();
+    }
+  });
+  let cleaned = false;
+  const cleanup = lifetime.cleanup().then(() => {
+    cleaned = true;
+  });
+  let work: Promise<void> | undefined;
+  try {
+    await removing.promise;
+    const later = lifetime.createTempDir("fixture-admitted-during-removal-");
+    work = lifetime.run(() => allowWork.promise);
+    allowRemoval.resolve();
+    await removed.promise;
+    // Let the first removal's completion callbacks run while the later body is held.
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+    expect(cleaned).toBe(false);
+    expect(() => owner.assertReleased()).toThrow("Unreleased Vitest resource claim");
+    expect(fs.existsSync(later)).toBe(true);
+    allowWork.resolve();
+    await work;
+    await cleanup;
+    expect(fs.existsSync(later)).toBe(false);
+    expect(() => owner.assertReleased()).not.toThrow();
+  } finally {
+    allowRemoval.resolve();
+    allowWork.resolve();
+    await work;
+    await cleanup;
+    removal.mockRestore();
+    await lifetime.cleanup();
   }
 });
 
@@ -300,6 +389,11 @@ it.each(["cause", "aggregate", "cleanup"])(
     try {
       await expect(fixture.cleanup()).rejects.toThrow("Fixture cleanup unverified");
       expect(fs.existsSync(root)).toBe(true);
+      await fixture.cleanup();
+      const next = fixture.createTempDir("fixture-lifetime-reused-");
+      await fixture.cleanup();
+      expect(fs.existsSync(next)).toBe(false);
+      expect(() => owner.assertReleased()).toThrow("Unreleased Vitest resource claim");
     } finally {
       // The injected uncertainty has no process behind it; this test owns its disposal.
       fs.rmSync(root, { recursive: true, force: true });

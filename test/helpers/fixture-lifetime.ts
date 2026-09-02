@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { findVitestResourceOwner } from "../../scripts/lib/vitest-resource-ownership.mts";
 import { makeTempDir } from "./temp-dir.js";
 
 function hasUnjoinedWork(value: unknown): boolean {
@@ -17,13 +18,22 @@ function hasUnjoinedWork(value: unknown): boolean {
   );
 }
 
-/** Own whole fixture bodies as well as commands that can outlive a failed assertion. */
-export function createFixtureLifetime() {
+/** Own whole fixture bodies; an explicit root scopes deliberate retention without changing env. */
+export function createFixtureLifetime(ownerRoot?: string) {
   const roots = new Set<string>();
+  const claims = new Map<string, () => void>();
   let pendingCleanup: Promise<void> | undefined;
   const work: { completion: Promise<unknown>; cleanup: boolean }[] = [];
 
+  function register(root = ownerRoot) {
+    const owner = findVitestResourceOwner(root);
+    if (owner && !claims.has(owner.root)) {
+      claims.set(owner.root, owner.claim());
+    }
+  }
+
   function track<T>(completion: Promise<T>, cleanup = false): Promise<T> {
+    register();
     work.push({ completion, cleanup });
     void completion.catch(() => {});
     return completion;
@@ -32,47 +42,64 @@ export function createFixtureLifetime() {
   function run<T>(body: () => Promise<T>): Promise<T> {
     // Register before the callback's first await, and observe late rejection even
     // when Vitest has already rejected its separate timeout/cancellation promise.
+    register();
     return track(Promise.resolve().then(body));
   }
 
   async function drain() {
     const failures: unknown[] = [];
-    // Bodies can register their final command/cleanup while unwinding. Drain
-    // those too; a rejected command alone does not certify process-group death.
-    while (work.length) {
-      const batch = work.splice(0);
-      const results = await Promise.allSettled(batch.map((item) => item.completion));
-      for (const [index, result] of results.entries()) {
-        const value: unknown = result.status === "rejected" ? result.reason : result.value;
-        if ((batch[index]!.cleanup && result.status === "rejected") || hasUnjoinedWork(value)) {
-          failures.push(value);
+    // Removal yields too: work admitted during it still owns this same claim.
+    // Drain those bodies and roots before publishing any completion receipt.
+    do {
+      // Bodies can register their final command/cleanup while unwinding. Drain
+      // those too; a rejected command alone does not certify process-group death.
+      while (work.length) {
+        const batch = work.splice(0);
+        const results = await Promise.allSettled(batch.map((item) => item.completion));
+        for (const [index, result] of results.entries()) {
+          const value: unknown = result.status === "rejected" ? result.reason : result.value;
+          if ((batch[index]!.cleanup && result.status === "rejected") || hasUnjoinedWork(value)) {
+            failures.push(value);
+          }
         }
       }
-    }
-    if (failures.length) {
-      const ownedRoots = [...roots];
-      roots.clear();
-      throw new AggregateError(
-        failures,
-        `Fixture cleanup unverified; retained ${ownedRoots.join(", ")}`,
+      if (failures.length) {
+        const ownedRoots = [...roots];
+        roots.clear();
+        // Abandon the local handles, never the pending receipts. Later cleanup,
+        // reuse, or module reset cannot certify an earlier failed drain.
+        claims.clear();
+        throw new AggregateError(
+          failures,
+          `Fixture cleanup unverified; retained ${ownedRoots.join(", ")}`,
+        );
+      }
+      // Recursive removal can take seconds on Darwin. Keep sibling command deadlines,
+      // output drainage, and reaping live while releasing these already-joined inputs.
+      const removals = await Promise.allSettled(
+        [...roots].map(async (root) => {
+          await fs.promises.rm(root, {
+            recursive: true,
+            force: true,
+            maxRetries: 5,
+            retryDelay: 20,
+          });
+          roots.delete(root);
+        }),
       );
-    }
-    // Recursive removal can take seconds on Darwin. Keep sibling command deadlines,
-    // output drainage, and reaping live while releasing these already-joined inputs.
-    const removals = await Promise.allSettled(
-      [...roots].map(async (root) => {
-        await fs.promises.rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
-        roots.delete(root);
-      }),
-    );
-    const errors = removals.flatMap((result) =>
-      result.status === "rejected" ? [result.reason] : [],
-    );
-    if (errors.length === 1) {
-      throw errors[0];
-    }
-    if (errors.length > 1) {
-      throw new AggregateError(errors, "Test temporary directory cleanup failed");
+      const errors = removals.flatMap((result) =>
+        result.status === "rejected" ? [result.reason] : [],
+      );
+      if (errors.length === 1) {
+        throw errors[0];
+      }
+      if (errors.length > 1) {
+        throw new AggregateError(errors, "Test temporary directory cleanup failed");
+      }
+    } while (work.length || roots.size);
+    for (const [root, release] of claims) {
+      release();
+      claims.delete(root);
     }
   }
 
@@ -80,9 +107,11 @@ export function createFixtureLifetime() {
     run,
     track,
     verifyCleanup: (body: () => Promise<void>) => {
+      register();
       return track(Promise.resolve().then(body), true);
     },
-    createTempDir: (prefix: string, root?: string) => {
+    createTempDir: (prefix: string, root = ownerRoot) => {
+      register(root);
       return makeTempDir(roots, prefix, root);
     },
     cleanup() {
