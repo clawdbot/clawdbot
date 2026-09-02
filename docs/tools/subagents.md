@@ -368,34 +368,40 @@ sub-agent cannot cancel work owned by another session.
 
 ### Shared working directory advisory
 
-`action: "list"` rows carry an optional `sharedCwd` field when two or more
-**live** sub-agent runs were spawned into the same working directory:
+`action: "list"` reports a bounded `sharedCwdGroups` summary when two or more
+**live** sub-agent runs were spawned into the same working directory. Rows refer
+to a reported group by its small numeric id:
 
 ```json
 {
-  "runId": "…",
-  "sharedCwd": {
-    "path": "/abs/path/to/directory",
-    "peerCount": 4,
-    "peerRunIds": ["…", "…", "…"]
-  }
+  "sharedCwdGroupTotal": 1,
+  "sharedCwdGroups": [
+    {
+      "id": 1,
+      "path": "/abs/path/to/directory",
+      "runCount": 5,
+      "runIds": ["…", "…", "…"]
+    }
+  ],
+  "active": [{ "runId": "…", "sharedCwdGroupId": 1 }]
 }
 ```
 
 `path` is the resolved directory, shortened to 72 characters with a leading
 `...` when it is longer — grouping always uses the full path, so two sibling
 checkouts that differ only in their final segment stay separate groups.
-`peerCount` is the exact number of other live runs sharing the directory,
-excluding the row's own run. `peerRunIds` is a **bounded sample** of at most
-three of those peers, not a complete list; read `peerCount` for the real
-total. The human-readable `text` view appends a matching
-`[shared cwd with N other runs: <path>]` suffix, where `N` is `peerCount`.
+`runCount` is the exact number of live runs sharing the directory. `runIds` is
+a **bounded sample** of at most three runs, not a complete list; read
+`runCount` for the real total. At most eight groups are emitted, while
+`sharedCwdGroupTotal` reports the exact total. Rows for omitted groups carry no
+group id. The human-readable view emits each reported path once in a matching
+`shared working directories` section; individual rows carry only
+`[shared cwd group N]`.
 
-The sample and the length cap exist because a `list` call renders one row per
-live run: naming every peer on every row made the output grow as the square of
-the number of sharing runs, which at the supported maximum of 20 children for
-one agent session reached roughly 7.5K tokens of model-visible text on an
-ordinary `list`.
+The group, sample, and path caps bound this advisory across the complete
+response. Earlier shapes repeated the directory and peers on every row, which
+reached roughly 7.5K tokens for 20 sharing children and roughly 33K tokens for
+the default 50-child swarm group.
 
 The field is **advisory only** — it never blocks or refuses a spawn. Two
 agents editing one checkout can overwrite each other's work, so treat it as
