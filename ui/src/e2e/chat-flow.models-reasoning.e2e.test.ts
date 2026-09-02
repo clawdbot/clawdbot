@@ -198,24 +198,20 @@ suite.define(() => {
       await expect.poll(() => trigger.isEnabled()).toBe(true);
       expect(await trigger.textContent()).toContain("Default");
 
-      const remoteChange = {
-        ...session,
-        permissionMode: "read-only",
-        reason: "patch",
-        sessionKey: session.key,
+      const publishRemoteChange = async (permissionModePending: boolean, updatedAt: number) => {
+        const row = { ...session, permissionMode: "read-only", permissionModePending, updatedAt };
+        // Event-triggered roster refreshes must describe the same remote change.
+        await gateway.setMethodResponse("sessions.list", chatSessionListResponse([row]));
+        await gateway.emitGatewayEvent("sessions.changed", {
+          ...row,
+          reason: "patch",
+          sessionKey: session.key,
+        });
       };
-      await gateway.emitGatewayEvent("sessions.changed", {
-        ...remoteChange,
-        permissionModePending: true,
-        updatedAt: 5,
-      });
+      await publishRemoteChange(true, 5);
       await expect.poll(() => trigger.textContent()).toContain("Applying permissions");
       expect(await trigger.isEnabled()).toBe(false);
-      await gateway.emitGatewayEvent("sessions.changed", {
-        ...remoteChange,
-        permissionModePending: false,
-        updatedAt: 6,
-      });
+      await publishRemoteChange(false, 6);
       await expect.poll(() => trigger.getAttribute("data-chat-select-value")).toBe("read-only");
       await expect.poll(() => trigger.isEnabled()).toBe(true);
       expect(await trigger.textContent()).toContain(

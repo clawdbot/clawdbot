@@ -32,33 +32,27 @@ function installStandaloneNetworkBoundary(): void {
   };
   const framePrototype = HTMLIFrameElement.prototype;
   const frameSrc = Object.getOwnPropertyDescriptor(framePrototype, "src");
-  // oxlint-disable-next-line typescript/unbound-method -- Preserve the native setter for call(this, value) below.
-  const setFrameSrc = frameSrc?.set;
-  if (!setFrameSrc) {
+  if (!frameSrc?.set) {
     throw blocked("unsupported iframe implementation");
   }
   Object.defineProperty(framePrototype, "src", {
     ...frameSrc,
     set(value: string) {
       checkFrameUrl(value);
-      setFrameSrc.call(this, value);
+      frameSrc.set!.call(this, value);
     },
   });
-  // oxlint-disable-next-line typescript/unbound-method -- Preserve the native method for call(this, name, value) below.
-  const setAttribute = framePrototype.setAttribute;
   framePrototype.setAttribute = function (name, value) {
     if (name.toLowerCase() === "src") {
       checkFrameUrl(value);
     }
-    setAttribute.call(this, name, value);
+    Element.prototype.setAttribute.call(this, name, value);
   };
-  // oxlint-disable-next-line typescript/unbound-method -- Preserve the native method for the iframe receiver below.
-  const setAttributeNS = framePrototype.setAttributeNS;
   framePrototype.setAttributeNS = function (namespace, name, value) {
     if (!namespace && name.toLowerCase() === "src") {
       checkFrameUrl(value);
     }
-    setAttributeNS.call(this, namespace, name, value);
+    Element.prototype.setAttributeNS.call(this, namespace, name, value);
   };
 
   // CSP covers resource loads, not native RTC or top-level navigation. Keep
