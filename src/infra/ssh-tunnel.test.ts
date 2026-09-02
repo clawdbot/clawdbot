@@ -174,8 +174,8 @@ describe("startSshPortForward", () => {
 
   it("falls back to an ephemeral port when the preferred port is in use", async () => {
     // ensurePortAvailable raises the domain PortInUseError (no errno `code`),
-    // which the catch must treat as "busy" and route to pickEphemeralPort.
-    // Reserve a real port so pickEphemeralPort (listen(0)) cannot hand the same
+    // which the catch must treat as "busy" and allocate another port.
+    // Reserve a real port so the ephemeral listener cannot hand the same
     // number back and make the assertion flaky.
     const occupied = net.createServer();
     await new Promise<void>((resolve, reject) => {
