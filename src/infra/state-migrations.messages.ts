@@ -40,8 +40,14 @@ export function recordStartupMigrationWarnings(warnings: readonly string[]): voi
   }
 }
 
-export function readStartupMigrationWarning(): string | undefined {
-  return startupMigrationWarning;
+export function readStartupMigrationWarning(includeSensitive = true): string | undefined {
+  // Migration errors can contain host paths; read-only status keeps only the repair hint.
+  return (
+    startupMigrationWarning &&
+    (includeSensitive
+      ? startupMigrationWarning
+      : `Startup migrations need attention. ${STARTUP_MIGRATION_FOLLOW_UP}`)
+  );
 }
 
 export function mergeNotices(sources: NoticeSource[]): string[] {

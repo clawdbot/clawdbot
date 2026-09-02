@@ -525,7 +525,7 @@ export async function getStatusSummary(
     },
     channelSummary,
     queuedSystemEvents,
-    startupMigrationWarning: readStartupMigrationWarning(),
+    startupMigrationWarning: readStartupMigrationWarning(includeSensitive),
     degradedSecretOwners: listActiveDegradedSecretOwners().map(
       ({ ownerKind, ownerId, state, degradationState, paths: ownerPaths, reason }) => {
         const redactedReason: string = redactSecretDegradationReason(reason);
