@@ -69,7 +69,7 @@ describe("memory index", () => {
     await expectHybridKeywordSearchFindsMemory(createCfg(config));
   });
 
-  it("keeps one search generation while a concurrent reindex waits to publish", async () => {
+  it("retries a search when a concurrent reindex publishes during vector retrieval", async () => {
     const manager = await getPersistentManager(
       createCfg({
         vectorEnabled: true,
@@ -91,10 +91,13 @@ describe("memory index", () => {
     const releaseChild = createDeferred<void>();
     const publishedDb = fields.db;
     const publishedChunks = manager.status().chunks;
+    let queryCalls = 0;
+    let childCalls = 0;
     let shadowDb: DatabaseSync | undefined;
     const syncMemoryFiles = fields.syncMemoryFiles.bind(manager);
     const runKnn = knnSubprocess.runVectorKnnInSubprocess;
     const querySpy = vi.spyOn(fields.provider, "embed").mockImplementation(async () => {
+      queryCalls += 1;
       queryStarted.resolve();
       await releaseQuery.promise;
       return [1, 0, 0, 0];
@@ -112,6 +115,7 @@ describe("memory index", () => {
     const childSpy = vi
       .spyOn(knnSubprocess, "runVectorKnnInSubprocess")
       .mockImplementation(async (params) => {
+        childCalls += 1;
         const result = await runKnn(params);
         expect(result.rows.length).toBeGreaterThan(0);
         childReady.resolve();
@@ -129,18 +133,14 @@ describe("memory index", () => {
       releaseQuery.resolve();
       await childReady.promise;
       releaseReindex.resolve();
-      let reindexSettled = false;
-      void reindex.then(() => {
-        reindexSettled = true;
-      });
-      await Promise.resolve();
-      expect(reindexSettled).toBe(false);
+      await reindex;
+      expect(shadowDb?.isOpen).toBe(false);
 
       releaseChild.resolve();
       const results = await search;
       expect(results.some((entry) => entry.path === "memory/2026-01-12.md")).toBe(true);
-      await reindex;
-      expect(shadowDb?.isOpen).toBe(false);
+      expect(queryCalls).toBe(2);
+      expect(childCalls).toBe(2);
     } finally {
       releaseQuery.resolve();
       releaseReindex.resolve();

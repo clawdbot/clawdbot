@@ -148,6 +148,7 @@ export function createFixture(
   const runtimeEntryOwners = new Set([
     "src/infra/runtime-process-entrypoints.ts",
     "extensions/memory-core/src/memory/manager-search-knn-entrypoint.ts",
+    "extensions/memory-core/src/memory/manager-publish-entrypoint.ts",
     "packages/normalization-core/src/mountinfo-path.ts",
   ]);
   for (const source of runtimeEntryOwners) {

@@ -30,6 +30,7 @@ describe("write-unified-entry-dts", () => {
         "scripts/lib/record-shared.mjs",
         "packages/normalization-core/src/mountinfo-path.ts",
         "extensions/memory-core/src/memory/manager-search-knn-entrypoint.ts",
+        "extensions/memory-core/src/memory/manager-publish-entrypoint.ts",
         "src/state/openclaw-state-schema.sql",
         "src/state/openclaw-agent-schema.sql",
       ]),

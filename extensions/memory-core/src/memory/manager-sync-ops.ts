@@ -21,20 +21,18 @@ import {
 } from "./embeddings.js";
 import { MemoryIndexDatabase } from "./manager-database-context.js";
 import {
-  cleanupAgedMemoryReindexTempFiles,
   closeMemoryDatabase,
   openMemoryDatabaseAtPath,
-  publishMemoryDatabaseTables,
   readMemoryDatabaseRevision,
   removeMemoryDatabaseFiles,
 } from "./manager-db.js";
 import { isMemoryEmbeddingOperationError } from "./manager-embedding-errors.js";
-import { withMemoryIndexPublishGeneration } from "./manager-index-generation-lease.js";
 import {
   applyMemoryFallbackProviderState,
   resolveFallbackCurrentProviderId,
   resolveMemoryFallbackProviderRequest,
 } from "./manager-provider-state.js";
+import { publishMemoryDatabaseInWorker } from "./manager-publish-subprocess.js";
 import {
   MEMORY_INDEX_PROVENANCE_VERSION,
   resolveConfiguredScopeHash,
@@ -49,7 +47,6 @@ import {
   markMemoryTargetArchiveFilesDirty,
   runMemoryTargetedSessionSync,
 } from "./manager-targeted-sync.js";
-import { markMemoryVectorIndexClean } from "./manager-vector-rebuild-state.js";
 
 export type { MemoryIndexWorkItem } from "./manager-sync-base.js";
 
@@ -520,6 +517,7 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
     const originalDb = this.db;
     let tempDb: DatabaseSync | undefined;
     let tempDbClosed = false;
+    let operationError: unknown;
     const originalRetryState = this.snapshotReindexRetryState();
     const shouldRetryMemoryOnFailure = this.sources.has("memory");
     const shouldRetrySessionsOnFailure = this.shouldSyncSessions(
@@ -527,7 +525,6 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
       true,
     );
     try {
-      cleanupAgedMemoryReindexTempFiles(dbPath);
       const originalRevision = readMemoryDatabaseRevision(originalDb);
       tempDb = openMemoryDatabaseAtPath(tempDbPath, this.settings.store.vector.enabled);
       const shadow = new MemoryIndexDatabase(tempDb);
@@ -618,29 +615,47 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
 
       closeMemoryDatabase(tempDb);
       tempDbClosed = true;
-      await withMemoryWorkspaceLock(this.workspaceDir, async () => {
-        await withMemoryIndexPublishGeneration(dbPath, async () => {
-          await publishMemoryDatabaseTables({
-            targetDb: originalDb,
+      const publishedRevision = await withMemoryWorkspaceLock(
+        this.workspaceDir,
+        async () =>
+          await publishMemoryDatabaseInWorker({
+            databasePath: dbPath,
             sourcePath: tempDbPath,
             metaKey: MEMORY_INDEX_META_KEY,
             expectedRevision: originalRevision,
             vectorExtensionPath: shadow.vector.extensionPath,
-          });
-        });
-      });
+            vectorIndexComplete: rebuilt.vectorIndexComplete,
+          }),
+      );
 
-      if (rebuilt.vectorIndexComplete) {
-        // Publish completeness only after the shadow tables committed. A crash
-        // before this point leaves the rebuild marker conservative and retryable.
-        markMemoryVectorIndexClean(originalDb);
-      }
       this.database.lastMetaSerialized = null;
       this.resetVectorState();
       this.fts.available = shadow.fts.available;
       this.fts.loadError = shadow.fts.loadError;
       this.vector.dims = rebuilt.nextMeta.vectorDims;
+
+      if (this.cache.enabled) {
+        let cacheSourceDb: DatabaseSync | undefined;
+        try {
+          cacheSourceDb = openMemoryDatabaseAtPath(tempDbPath, false);
+          const completed = await this.replaceEmbeddingCacheFrom(cacheSourceDb, publishedRevision);
+          if (!completed) {
+            log.debug("memory embedding cache publication superseded by a newer index revision");
+          }
+        } catch (err) {
+          // The cache is derivative. Canonical publication already committed, so
+          // a cache failure must not schedule another full shadow reindex.
+          log.warn(`memory embedding cache publication failed: ${formatErrorMessage(err)}`);
+        } finally {
+          if (cacheSourceDb) {
+            try {
+              closeMemoryDatabase(cacheSourceDb);
+            } catch {}
+          }
+        }
+      }
     } catch (err) {
+      operationError = err;
       if (tempDb && !tempDbClosed) {
         try {
           closeMemoryDatabase(tempDb);
@@ -654,15 +669,29 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
       });
       throw err;
     } finally {
+      let cleanupError: unknown;
       if (tempDb && !tempDbClosed) {
         try {
           closeMemoryDatabase(tempDb);
-        } catch {}
+        } catch (err) {
+          cleanupError = err;
+        }
       }
       try {
-        removeMemoryDatabaseFiles(tempDbPath);
+        await removeMemoryDatabaseFiles(tempDbPath);
       } catch (err) {
-        log.warn(`failed to remove memory reindex shadow database: ${formatErrorMessage(err)}`);
+        cleanupError = cleanupError
+          ? new AggregateError([cleanupError, err], "memory reindex shadow cleanup failed")
+          : err;
+      }
+      if (cleanupError) {
+        if (operationError) {
+          throw new AggregateError(
+            [operationError, cleanupError],
+            "memory reindex and shadow cleanup failed",
+          );
+        }
+        throw cleanupError;
       }
     }
   }

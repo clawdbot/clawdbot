@@ -13,7 +13,7 @@ import {
   resetMemoryCoreDreamingStateForTests,
 } from "../test-helpers.js";
 import {
-  cleanupAgedMemoryReindexTempFiles,
+  cleanupMemoryReindexTempFiles,
   closeMemoryDatabase,
   openMemoryDatabaseAtPath,
   publishMemoryDatabaseTables,
@@ -21,6 +21,7 @@ import {
   MemoryIndexRevisionConflictError,
   resetMemoryDatabase,
 } from "./manager-db.js";
+import { publishMemoryDatabaseInWorker } from "./manager-publish-subprocess.js";
 import { waitForMemoryReindexLock } from "./manager-reindex-lock.js";
 
 function ensureTestMemorySchema(db: DatabaseSync, cacheEnabled = true, ftsEnabled = false): void {
@@ -461,32 +462,40 @@ describe("memory manager database publication", () => {
     }
   });
 
-  it("preserves the live embedding cache when the shadow index has caching disabled", async () => {
+  it("leaves the derived embedding cache outside canonical publication", async () => {
     const targetPath = path.join(fixtureRoot, "target.sqlite");
     const sourcePath = path.join(fixtureRoot, "source.sqlite");
     const targetDb = new DatabaseSync(targetPath);
     const sourceDb = new DatabaseSync(sourcePath);
     try {
       ensureTestMemorySchema(targetDb);
-      ensureTestMemorySchema(sourceDb, false);
+      ensureTestMemorySchema(sourceDb);
       targetDb
         .prepare(
           `INSERT INTO memory_embedding_cache (
              provider, model, provider_key, hash, embedding, dims, updated_at
            ) VALUES (?, ?, ?, ?, ?, ?, ?)`,
         )
-        .run("test", "model", "key", "hash", "[]", 0, 1);
+        .run("test", "model", "key", "published", "[]", 0, 1);
+      sourceDb
+        .prepare(
+          `INSERT INTO memory_embedding_cache (
+             provider, model, provider_key, hash, embedding, dims, updated_at
+           ) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        )
+        .run("test", "model", "key", "shadow", "[]", 0, 2);
       sourceDb.close();
 
-      await publishMemoryDatabaseTables({
+      const publishedRevision = await publishMemoryDatabaseTables({
         targetDb,
         sourcePath,
         metaKey: "memory_index_meta",
         expectedRevision: readMemoryDatabaseRevision(targetDb),
       });
 
+      expect(publishedRevision).toBe(readMemoryDatabaseRevision(targetDb));
       expect(targetDb.prepare("SELECT hash FROM memory_embedding_cache").all()).toEqual([
-        { hash: "hash" },
+        { hash: "published" },
       ]);
     } finally {
       try {
@@ -496,30 +505,113 @@ describe("memory manager database publication", () => {
     }
   });
 
-  it("removes aged orphan shadows under the maintenance lease but preserves young shadows", async () => {
+  it("publishes off-thread while readers keep the prior committed index", async () => {
+    const targetPath = path.join(fixtureRoot, "target.sqlite");
+    const sourcePath = path.join(fixtureRoot, "source.sqlite");
+    const targetDb = openMemoryDatabaseAtPath(targetPath, false);
+    const sourceDb = openMemoryDatabaseAtPath(sourcePath, false);
+    try {
+      ensureTestMemorySchema(targetDb);
+      ensureTestMemorySchema(sourceDb);
+      targetDb
+        .prepare(
+          "INSERT INTO memory_index_sources (path, source, hash, mtime, size) VALUES (?, ?, ?, ?, ?)",
+        )
+        .run("memory/published.md", "memory", "published", 1, 1);
+      sourceDb.exec(`
+        WITH RECURSIVE entries(value) AS (
+          SELECT 1 UNION ALL SELECT value + 1 FROM entries WHERE value < 20000
+        )
+        INSERT INTO memory_index_sources (path, source, hash, mtime, size)
+        SELECT 'memory/rebuilt-' || value || '.md', 'memory', 'hash-' || value, value, 128
+        FROM entries;
+        WITH RECURSIVE entries(value) AS (
+          SELECT 1 UNION ALL SELECT value + 1 FROM entries WHERE value < 10000
+        )
+        INSERT INTO memory_index_chunks (
+          id, path, source, start_line, end_line, hash, model, text, embedding, updated_at
+        )
+        SELECT
+          'chunk-' || value, 'memory/rebuilt-' || value || '.md', 'memory', 1, 1,
+          'hash-' || value, 'fts-only', hex(zeroblob(512)), '[]', value
+        FROM entries;
+      `);
+      const expectedRevision = readMemoryDatabaseRevision(targetDb);
+      closeMemoryDatabase(sourceDb);
+      targetDb.exec("PRAGMA wal_checkpoint(TRUNCATE)");
+
+      let settled = false;
+      const publication = publishMemoryDatabaseInWorker({
+        databasePath: targetPath,
+        sourcePath,
+        metaKey: "memory_index_meta",
+        expectedRevision,
+        vectorIndexComplete: false,
+      }).finally(() => {
+        settled = true;
+      });
+      const walPath = `${targetPath}-wal`;
+      let writerEntered = false;
+      for (let attempt = 0; attempt < 500 && !settled; attempt += 1) {
+        const walSize = await fs.stat(walPath).then(
+          (stat) => stat.size,
+          () => 0,
+        );
+        if (walSize > 0) {
+          writerEntered = true;
+          break;
+        }
+        await new Promise<void>((resolve) => setTimeout(resolve, 2));
+      }
+
+      expect(writerEntered).toBe(true);
+      expect(settled).toBe(false);
+      expect(targetDb.prepare("SELECT path FROM memory_index_sources").all()).toEqual([
+        { path: "memory/published.md" },
+      ]);
+      await expect(publication).resolves.toBeGreaterThan(expectedRevision);
+      expect(targetDb.prepare("SELECT COUNT(*) AS count FROM memory_index_sources").get()).toEqual({
+        count: 20000,
+      });
+      expect(targetDb.prepare("SELECT COUNT(*) AS count FROM memory_index_chunks").get()).toEqual({
+        count: 10000,
+      });
+    } finally {
+      try {
+        closeMemoryDatabase(sourceDb);
+      } catch {}
+      closeMemoryDatabase(targetDb);
+    }
+  }, 15_000);
+
+  it("removes every orphan shadow under the exclusive maintenance lease", async () => {
     const databasePath = path.join(fixtureRoot, "agent.sqlite");
     const database = new DatabaseSync(databasePath);
     database.close();
     const oldShadow = `${databasePath}.memory-reindex-11111111-2222-3333-4444-555555555555`;
     const youngShadow = `${databasePath}.memory-reindex-aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee`;
+    const unrelated = `${databasePath}.memory-reindex-not-a-uuid`;
     const old = new Date(Date.now() - 48 * 60 * 60_000);
 
-    for (const suffix of ["", "-wal", "-journal"]) {
+    for (const suffix of ["", "-wal", "-shm", "-journal"]) {
       await fs.writeFile(`${oldShadow}${suffix}`, "orphan");
       await fs.utimes(`${oldShadow}${suffix}`, old, old);
+      await fs.writeFile(`${youngShadow}${suffix}`, "orphan");
     }
-    await fs.writeFile(youngShadow, "active");
+    await fs.writeFile(unrelated, "retained");
 
     const lock = await waitForMemoryReindexLock(databasePath);
     try {
-      cleanupAgedMemoryReindexTempFiles(databasePath);
+      await cleanupMemoryReindexTempFiles(databasePath);
     } finally {
       lock.release();
     }
 
-    await expectPathMissing(oldShadow);
-    await expectPathMissing(`${oldShadow}-wal`);
-    await expectPathMissing(`${oldShadow}-journal`);
-    await expect(fs.access(youngShadow)).resolves.toBeUndefined();
+    for (const shadow of [oldShadow, youngShadow]) {
+      for (const suffix of ["", "-wal", "-shm", "-journal"]) {
+        await expectPathMissing(`${shadow}${suffix}`);
+      }
+    }
+    await expect(fs.readFile(unrelated, "utf8")).resolves.toBe("retained");
   });
 });

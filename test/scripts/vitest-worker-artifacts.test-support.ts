@@ -254,7 +254,7 @@ export function workerProbe(
       const launcherArgv = inject('launcherArgv');
       expect(path.isAbsolute(launcherArgv[1])).toBe(true);
       expect(path.basename(launcherArgv[1])).toBe('vitest.mjs');
-      expect(Object.values(runtimeProcessBuildEntries)).toHaveLength(Object.keys(runtimeProcessEntrypoints).length + 1);
+      expect(Object.values(runtimeProcessBuildEntries)).toHaveLength(Object.keys(runtimeProcessEntrypoints).length + 2);
       for (const source of Object.values(runtimeProcessBuildEntries)) {
         expect(source).not.toContain('/dist/');
         expect(source).toMatch(/\\.ts$/);

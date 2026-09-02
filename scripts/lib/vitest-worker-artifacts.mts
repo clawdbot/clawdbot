@@ -7,6 +7,8 @@ export const runtimeProcessDeclarationEntries = {
   "infra/runtime-process-entrypoints": "src/infra/runtime-process-entrypoints.ts",
   "extensions/memory-core/manager-search-knn-entrypoint":
     "extensions/memory-core/src/memory/manager-search-knn-entrypoint.ts",
+  "extensions/memory-core/manager-publish-entrypoint":
+    "extensions/memory-core/src/memory/manager-publish-entrypoint.ts",
 };
 export const vitestWorkerDeclarationEntries = {
   ...runtimeProcessDeclarationEntries,

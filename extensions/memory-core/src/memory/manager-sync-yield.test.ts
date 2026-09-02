@@ -208,6 +208,10 @@ class EmbeddingCacheSeedHarness extends SessionSyncYieldHarness {
   async seedCache(sourceDb: DatabaseSync): Promise<void> {
     await this.seedEmbeddingCache(sourceDb);
   }
+
+  async replaceCache(sourceDb: DatabaseSync, expectedRevision: number): Promise<boolean> {
+    return await this.replaceEmbeddingCacheFrom(sourceDb, expectedRevision);
+  }
 }
 
 describe("session sync responsiveness", () => {
@@ -323,6 +327,127 @@ describe("embedding cache seed responsiveness", () => {
         rows: 100,
       });
       expect(countCacheRows(targetDb)).toBe(101);
+    } finally {
+      sourceDb.close();
+      targetDb.close();
+    }
+  });
+
+  it("replaces the published cache in committed pages between event-loop yields", async () => {
+    const sourceDb = createCacheDb();
+    const targetDb = createCacheDb();
+    try {
+      const insert = (db: DatabaseSync, prefix: string) => {
+        const statement = db.prepare(
+          `INSERT INTO memory_embedding_cache
+             (provider, model, provider_key, hash, embedding, dims, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        );
+        db.exec("BEGIN");
+        for (let index = 0; index < 101; index += 1) {
+          statement.run("test", "model", "key", `${prefix}-${index}`, "[0.5]", 1, index);
+        }
+        db.exec("COMMIT");
+      };
+      insert(sourceDb, "source");
+      insert(targetDb, "target");
+
+      let observed: { inTransaction: boolean; rows: number } | undefined;
+      let observation: Promise<void> | undefined;
+      targetDb.function("observe_cache_delete", () => {
+        if (!observation) {
+          observation = new Promise<void>((resolve) => {
+            setImmediate(() => {
+              observed = {
+                inTransaction: targetDb.isTransaction,
+                rows: countCacheRows(targetDb),
+              };
+              resolve();
+            });
+          });
+        }
+      });
+      targetDb.exec(`
+        CREATE TEMP TRIGGER observe_cache_delete
+        BEFORE DELETE ON memory_embedding_cache
+        BEGIN SELECT observe_cache_delete(); END
+      `);
+
+      const revision = (
+        targetDb.prepare("SELECT revision FROM memory_index_state WHERE id = 1").get() as {
+          revision: number;
+        }
+      ).revision;
+      await expect(
+        new EmbeddingCacheSeedHarness(targetDb).replaceCache(sourceDb, revision),
+      ).resolves.toBe(true);
+      await observation;
+
+      expect(observed).toEqual({ inTransaction: false, rows: 1 });
+      expect(countCacheRows(targetDb)).toBe(101);
+      expect(
+        targetDb
+          .prepare(
+            "SELECT COUNT(*) AS count FROM memory_embedding_cache WHERE hash LIKE 'source-%'",
+          )
+          .get(),
+      ).toEqual({ count: 101 });
+    } finally {
+      sourceDb.close();
+      targetDb.close();
+    }
+  });
+
+  it("stops cache publication when the canonical index revision changes", async () => {
+    const sourceDb = createCacheDb();
+    const targetDb = createCacheDb();
+    try {
+      const insert = targetDb.prepare(
+        `INSERT INTO memory_embedding_cache
+           (provider, model, provider_key, hash, embedding, dims, updated_at)
+         VALUES ('test', 'model', 'key', ?, '[0.5]', 1, ?)`,
+      );
+      targetDb.exec("BEGIN");
+      for (let index = 0; index < 101; index += 1) {
+        insert.run(`target-${index}`, index);
+      }
+      targetDb.exec("COMMIT");
+      sourceDb
+        .prepare(
+          `INSERT INTO memory_embedding_cache
+             (provider, model, provider_key, hash, embedding, dims, updated_at)
+           VALUES ('test', 'model', 'key', 'stale-shadow', '[0.5]', 1, 1)`,
+        )
+        .run();
+      let revisionAdvanced = false;
+      targetDb.function("advance_index_revision", () => {
+        if (!revisionAdvanced) {
+          revisionAdvanced = true;
+          setImmediate(() => {
+            targetDb.exec("UPDATE memory_index_state SET revision = revision + 1 WHERE id = 1");
+          });
+        }
+      });
+      targetDb.exec(`
+        CREATE TEMP TRIGGER advance_index_revision
+        BEFORE DELETE ON memory_embedding_cache
+        BEGIN SELECT advance_index_revision(); END
+      `);
+      const revision = (
+        targetDb.prepare("SELECT revision FROM memory_index_state WHERE id = 1").get() as {
+          revision: number;
+        }
+      ).revision;
+
+      await expect(
+        new EmbeddingCacheSeedHarness(targetDb).replaceCache(sourceDb, revision),
+      ).resolves.toBe(false);
+      expect(countCacheRows(targetDb)).toBe(1);
+      expect(
+        targetDb
+          .prepare("SELECT hash FROM memory_embedding_cache WHERE hash = 'stale-shadow'")
+          .get(),
+      ).toBeUndefined();
     } finally {
       sourceDb.close();
       targetDb.close();
