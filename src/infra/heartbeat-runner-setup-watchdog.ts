@@ -9,7 +9,7 @@
 // Bound the pre-stream heartbeat preparation phase (lane admission, workspace
 // bootstrap, prompt build, model resolution) so a stall fails fast with a stage
 // name instead of silently waiting for the outer cron watchdog.
-export const HEARTBEAT_SETUP_WATCHDOG_MS = 60_000;
+const HEARTBEAT_SETUP_WATCHDOG_MS = 60_000;
 
 export function resolveHeartbeatSetupTimeoutMs(
   heartbeatTimeoutSeconds: number | undefined,

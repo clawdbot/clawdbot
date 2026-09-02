@@ -4,7 +4,25 @@ import { resolveMainSessionKey } from "../config/sessions.js";
 import { runHeartbeatOnce } from "./heartbeat-runner.js";
 import { seedSessionStore, withTempHeartbeatSandbox } from "./heartbeat-runner.test-utils.js";
 
+let stallHeartbeatDelivery = false;
+
+vi.mock("./outbound/targets.js", async (importActual) => {
+  const actual = await importActual<typeof import("./outbound/targets.js")>();
+  return {
+    ...actual,
+    resolveHeartbeatDeliveryTargetWithSessionRoute: (
+      ...args: Parameters<typeof actual.resolveHeartbeatDeliveryTargetWithSessionRoute>
+    ) => {
+      if (stallHeartbeatDelivery) {
+        return new Promise(() => {});
+      }
+      return actual.resolveHeartbeatDeliveryTargetWithSessionRoute(...args);
+    },
+  };
+});
+
 afterEach(() => {
+  stallHeartbeatDelivery = false;
   vi.restoreAllMocks();
 });
 
@@ -105,6 +123,48 @@ describe("runHeartbeatOnce – heartbeat setup timeout", () => {
       });
 
       expect(result.status).toBe("ran");
+    });
+  });
+
+  it("fails fast when delivery resolution stalls during preparation", async () => {
+    stallHeartbeatDelivery = true;
+    await withTempHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            workspace: tmpDir,
+            heartbeat: {
+              every: "5m",
+              target: "whatsapp",
+              timeoutSeconds: 1800,
+            },
+          },
+        },
+        channels: { whatsapp: { allowFrom: ["*"] } },
+        session: { store: storePath },
+      };
+      const sessionKey = resolveMainSessionKey(cfg);
+      await seedSessionStore(storePath, sessionKey, {
+        lastChannel: "whatsapp",
+        lastTo: "+1555",
+      });
+
+      const result = await runHeartbeatOnce({
+        cfg,
+        sessionKey,
+        setupTimeoutMs: 50,
+        deps: {
+          getReplyFromConfig: replySpy,
+          getQueueSize: () => 0,
+          nowMs: () => 0,
+        },
+      });
+
+      expect(result.status).toBe("failed");
+      if (result.status === "failed") {
+        expect(result.reason).toMatch(/heartbeat setup timeout/);
+        expect(result.reason).toMatch(/no model selected/);
+      }
     });
   });
 });

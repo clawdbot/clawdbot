@@ -999,4 +999,37 @@ describe("cron service timer seam coverage", () => {
 
     createTaskRecordSpy.mockRestore();
   });
+
+  it("resolves the main heartbeat watchdog timeout from the effective agent, not the raw job agentId", async () => {
+    const { storePath } = await makeStorePath();
+    const now = Date.parse("2026-03-23T12:00:00.000Z");
+    const enqueueSystemEvent = vi.fn();
+    const requestHeartbeat = vi.fn();
+    const resolveHeartbeatTimeoutMs = vi.fn(() => 900_000);
+
+    const job = createDueMainJob({ now, wakeMode: "next-heartbeat" });
+    job.agentId = "   ";
+    job.sessionKey = "agent:ops:main";
+    await writeCronStoreSnapshot({ storePath, jobs: [job] });
+
+    const state = createCronServiceState({
+      storePath,
+      cronEnabled: true,
+      log: logger,
+      nowMs: () => now,
+      defaultAgentId: "main",
+      resolveHeartbeatTimeoutMs,
+      enqueueSystemEvent,
+      requestHeartbeat,
+      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
+    });
+
+    await onTimer(state);
+
+    expect(enqueueSystemEvent).toHaveBeenCalledWith("heartbeat seam tick", {
+      agentId: "ops",
+      contextKey: "cron:main-heartbeat-job",
+    });
+    expect(resolveHeartbeatTimeoutMs).toHaveBeenCalledWith("ops");
+  });
 });

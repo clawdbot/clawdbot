@@ -1,6 +1,7 @@
 import { formatErrorMessage } from "../../infra/errors.js";
 import type { CommandLaneTaskMarker } from "../../process/command-queue.js";
 import { type CronActiveJobMarker, isCronActiveJobMarkerCurrent } from "../active-jobs.js";
+import { tryResolveCronJobEffectiveAgentId } from "../agent-id.js";
 import { resolveAdmittedCronCompletionStatus } from "../completion-status.js";
 import { resolveCronDeliveryPlan } from "../delivery-plan.js";
 import { createCronRunDiagnosticsFromError } from "../run-diagnostics.js";
@@ -246,11 +247,23 @@ async function executeJobCoreWithTimeoutUnfinalized(
   const recordTaskExecutionStart = (info?: CronAgentExecutionStarted) => {
     tryUpdateCronTaskRunSession(state, opts?.runId, info?.sessionKey);
   };
-  const resolvedHeartbeatTimeoutMs =
-    (job.payload.kind === "heartbeat" || job.payload.kind === "systemEvent") &&
-    job.sessionTarget === "main"
-      ? state.deps.resolveHeartbeatTimeoutMs?.(job.agentId)
-      : undefined;
+  const resolvedHeartbeatTimeoutMs = (() => {
+    if (
+      (job.payload.kind !== "heartbeat" && job.payload.kind !== "systemEvent") ||
+      job.sessionTarget !== "main" ||
+      !state.deps.resolveHeartbeatTimeoutMs
+    ) {
+      return undefined;
+    }
+    // Match the effective-agent resolution used by main-session execution so a
+    // blank explicit agentId plus a scoped session key uses the session's agent
+    // heartbeat settings instead of the configured default.
+    const effectiveAgentId = tryResolveCronJobEffectiveAgentId(
+      job,
+      state.deps.resolveDefaultAgentId?.() ?? state.deps.defaultAgentId,
+    );
+    return state.deps.resolveHeartbeatTimeoutMs(effectiveAgentId);
+  })();
   const jobTimeoutMs = resolveCronJobTimeoutMs(job, { resolvedHeartbeatTimeoutMs });
   try {
     if (typeof jobTimeoutMs !== "number") {
