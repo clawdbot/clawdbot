@@ -152,10 +152,13 @@ suite.define(() => {
     const mediaBlocked = new Promise<void>((resolve) => {
       releaseMedia = resolve;
     });
+    let metadataRequested = false;
     await page.route("**/__openclaw__/assistant-media?**", async (route) => {
+      const metadata = new URL(route.request().url()).searchParams.has("meta");
+      metadataRequested ||= metadata;
       await mediaBlocked;
       await route.fulfill(
-        new URL(route.request().url()).searchParams.has("meta")
+        metadata
           ? { json: { available: true } }
           : { contentType: "image/png", body: Buffer.from(ONE_PIXEL_PNG_B64, "base64") },
       );
@@ -181,6 +184,7 @@ suite.define(() => {
               fileName: "synthetic.png",
             },
           ],
+          mediaImageLayout: { slots: [{ kind: "inline", factIndex: 0 }] },
         },
       },
     };
@@ -367,9 +371,7 @@ suite.define(() => {
         };
       });
       await gateway.resolveDeferred("chat.startup");
-      await page
-        .locator('[data-chat-row-key="group:user:pending-input:accepted-project-input"]')
-        .waitFor();
+      await expect.poll(() => metadataRequested).toBe(true);
       expect(await page.locator(".chat-notice").count()).toBe(0);
       const working = page.locator('.chat-working-indicator[role="status"]');
       await pollLocatorText(working).toContain("Preparing workspace…");
