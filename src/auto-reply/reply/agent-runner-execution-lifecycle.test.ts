@@ -47,6 +47,10 @@ import {
 } from "./reply-run-registry.js";
 
 const state = setupAgentRunnerExecutionTestState();
+// Register shared mocks before loading the execution graph. A timed-out import
+// must not resume later and consume the next case's one-shot mock.
+const execution = await import("./agent-runner-execution.js");
+const { emitAgentEvent } = await import("../../infra/agent-events.js");
 const compactionTarget = {
   agentId: "main",
   sessionId: "session",
@@ -103,8 +107,7 @@ describe("executeAgentTurn: run lifecycle and ownership", () => {
       });
 
       try {
-        const { executeAgentTurn } = await import("./agent-runner-execution.js");
-        const result = await executeAgentTurn(
+        const result = await execution.executeAgentTurn(
           createMinimalRunAgentTurnParams({ opts: { onAgentRunTerminalOutcome } }),
         );
 
@@ -115,7 +118,6 @@ describe("executeAgentTurn: run lifecycle and ownership", () => {
         });
         expect(onAgentRunTerminalOutcome).not.toHaveBeenCalled();
         expect(isEmbeddedAgentRunActive(sessionId)).toBe(false);
-        const { emitAgentEvent } = await import("../../infra/agent-events.js");
         const terminals = vi
           .mocked(emitAgentEvent)
           .mock.calls.map(([event]) => event)
@@ -517,10 +519,9 @@ describe("executeAgentTurn: run lifecycle and ownership", () => {
       );
 
       try {
-        const { executeAgentTurn } = await import("./agent-runner-execution.js");
         const params = createMinimalRunAgentTurnParams({ replyOperation });
         params.followupRun.run.sourceReplyDeliveryMode = "message_tool_only";
-        const pending = executeAgentTurn(params);
+        const pending = execution.executeAgentTurn(params);
         await candidateSettled.promise;
         upstreamAbort.abort(
           reason === "restart" ? createAgentRunRestartAbortError() : new Error("caller cancelled"),
@@ -637,8 +638,7 @@ describe("executeAgentTurn: run lifecycle and ownership", () => {
         },
       );
 
-      const { executeAgentTurn } = await import("./agent-runner-execution.js");
-      const result = await executeAgentTurn(createMinimalRunAgentTurnParams());
+      const result = await execution.executeAgentTurn(createMinimalRunAgentTurnParams());
 
       expect(result.outcome).toMatchObject({ kind: "settled", autoCompactionCount: 8 });
       expect(result.outcome.compaction).toEqual({
