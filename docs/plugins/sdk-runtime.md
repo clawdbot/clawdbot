@@ -368,6 +368,12 @@ snapshots; OpenClaw owns all persistence and lifecycle coordination.
     const result = await api.runtime.llm.complete({
       messages: [{ role: "user", content: "Return one JSON value." }],
       systemPrompt: "You are a JSON-only function.",
+      outputSchema: {
+        type: "object",
+        properties: { answer: { type: "string" } },
+        required: ["answer"],
+        additionalProperties: false,
+      },
       model: "openai/gpt-5.6-sol",
       execution: {
         mode: "isolated-agent-runtime",
@@ -382,6 +388,14 @@ snapshots; OpenClaw owns all persistence and lifecycle coordination.
     and never falls back to direct provider transport. Unsupported runtimes fail
     before inference. `result.execution.owner` reports the selected owner;
     token usage remains absent when a CLI cannot report it.
+
+    `outputSchema` is an advisory native final-output constraint. The host forwards a
+    detached JSON-safe snapshot only when it fits within 1 KiB; otherwise generation
+    continues without the native constraint. Harnesses such as Codex pass the snapshot
+    to transports that support structured output. Codex retries with a prompt-level
+    constraint when its transport explicitly rejects the schema dialect; other owners
+    may ignore it.
+    Callers must still parse and validate the returned value.
 
     Completion failures expose a stable `code` on the thrown error. Isolated
     callers can distinguish authorization, invalid isolated input, unsupported

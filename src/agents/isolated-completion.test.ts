@@ -335,9 +335,11 @@ describe("runIsolatedCompletion", () => {
   );
 
   it("hands harness-owned authorization to the V2 owner without resolving a host key", async () => {
-    const runIsolatedCompletionV2 = vi.fn(async () => ({
-      assistant: assistant([{ type: "text", text: "native result" }]),
-    }));
+    const runIsolatedCompletionV2 = vi.fn(
+      async (_params: Parameters<NonNullable<AgentHarness["runIsolatedCompletionV2"]>>[0]) => ({
+        assistant: assistant([{ type: "text", text: "native result" }]),
+      }),
+    );
     registerHarness({
       authBootstrap: "harness",
       runIsolatedCompletionV2,
@@ -356,9 +358,16 @@ describe("runIsolatedCompletion", () => {
         authorization: expect.objectContaining({ owner: "harness" }),
       }),
     );
+    expect(runIsolatedCompletionV2.mock.calls[0]?.[0]).not.toHaveProperty("outputSchema");
   });
 
   it("clamps V2 output tokens to the resolved physical model limit", async () => {
+    const outputSchema = {
+      type: "object",
+      properties: { result: { type: "string" } },
+      required: ["result"],
+      additionalProperties: false,
+    };
     mocks.resolveModelWithRegistry.mockReturnValueOnce({
       provider: "openai",
       id: "gpt-test",
@@ -376,12 +385,14 @@ describe("runIsolatedCompletion", () => {
     await runIsolatedCompletion({
       ...request(),
       outputTextPolicy: "strict-visible",
+      outputSchema,
       streamParams: { maxTokens: 4_096, temperature: 0.2 },
     });
 
     expect(runIsolatedCompletionV2).toHaveBeenCalledWith(
       expect.objectContaining({
         outputTextPolicy: "strict-visible",
+        outputSchema,
         streamParams: { maxTokens: 1_024, temperature: 0.2 },
       }),
     );

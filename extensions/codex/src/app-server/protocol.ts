@@ -376,6 +376,7 @@ type CodexTurnInterruptParams = JsonObject & {
 export type CodexTurnStartParams = JsonObject & {
   threadId: string;
   input: CodexUserInput[];
+  outputSchema?: JsonObject;
   additionalContext?: Record<string, { kind: "untrusted" | "application"; value: string }>;
   cwd?: string;
   runtimeWorkspaceRoots?: string[] | null;

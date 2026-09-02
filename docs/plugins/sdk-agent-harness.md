@@ -331,6 +331,14 @@ restore provenance that a harness already discarded, so this is not a universal
 reasoning-privacy guarantee. If the harness cannot enforce isolation, omit the capability.
 Callers that require isolated completion then fail closed before invoking that
 harness; OpenClaw does not replay the request through another runtime.
+
+`outputSchema`, when present, carries an advisory JSON Schema for native final-output
+constraint. The host supplies a detached JSON-safe snapshot only when it fits within
+1 KiB; otherwise it is not forwarded natively. Harnesses may forward the snapshot
+when their transport supports structured output. A harness may retry with a prompt-level
+constraint when its transport explicitly rejects the schema dialect; callers remain
+responsible for validating the returned value.
+
 Plugin callers request isolated execution through
 `api.runtime.llm.complete({ execution: { mode: "isolated-agent-runtime" } })`;
 the harness callback is the provider-side enforcement SPI, not a second caller

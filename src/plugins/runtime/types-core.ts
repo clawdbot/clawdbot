@@ -6,6 +6,7 @@ import type { SessionPluginJsonValue } from "../../config/sessions/types.js";
 import type { HeartbeatRunResult } from "../../infra/heartbeat-wake.js";
 import type { LogLevel } from "../../logging/levels.js";
 import type { MediaUnderstandingRuntime } from "../../media-understanding/runtime-types.js";
+import type { JsonSchemaObject } from "../../shared/json-schema.types.js";
 import type { PluginRuntimeTaskFlows, PluginRuntimeTaskRuns } from "./runtime-tasks.types.js";
 
 type TtsRuntimeApi = typeof import("../../tts/runtime-api.js");
@@ -262,6 +263,8 @@ type LlmDirectCompleteParams = LlmCompleteCommonParams & {
 export type LlmIsolatedAgentRuntimeCompleteParams = LlmCompleteCommonParams & {
   /** Isolated runtimes currently accept one fresh user prompt, not a replayed chat history. */
   messages: [{ role: "user"; content: string }];
+  /** Advisory raw JSON Schema, host-snapshotted and bounded before native dispatch. */
+  outputSchema?: JsonSchemaObject;
   execution: {
     /** Fresh, literal-zero-tool completion through the configured agent runtime. */
     mode: "isolated-agent-runtime";

@@ -58,6 +58,12 @@ function createParams(): IsolatedParams {
     workspaceDir: "/tmp/workspace",
     systemPrompt: "Name the conversation.",
     prompt: "Help me plan a garden.",
+    outputSchema: {
+      type: "object",
+      properties: { title: { type: "string" } },
+      required: ["title"],
+      additionalProperties: false,
+    },
     timeoutMs: 5_000,
   } as unknown as IsolatedParams;
 }
@@ -73,6 +79,7 @@ describe("runCodexIsolatedCompletion", () => {
     mocks.runBoundedTurn.mockResolvedValue({
       text: "Garden Planning",
       model: "gpt-5.4",
+      submittedInput: [{ type: "text", text: "Help me plan a garden.", text_elements: [] }],
       usage: { input: 7, output: 3, cacheRead: 2, total: 10 },
       items: [
         {
@@ -122,6 +129,12 @@ describe("runCodexIsolatedCompletion", () => {
         requireNoExternalCapabilities: true,
         developerInstructions: "Name the conversation.",
         input: [{ type: "text", text: "Help me plan a garden.", text_elements: [] }],
+        outputSchema: {
+          type: "object",
+          properties: { title: { type: "string" } },
+          required: ["title"],
+          additionalProperties: false,
+        },
       }),
     );
     expect(mocks.runBoundedTurn.mock.calls[0]?.[0]).not.toHaveProperty("modelProvider");
@@ -178,10 +191,31 @@ describe("runCodexIsolatedCompletion", () => {
     expect(mocks.runBoundedTurn).not.toHaveBeenCalled();
   });
 
+  it("accepts the exact user input echoed by a schema fallback", async () => {
+    const submittedInput = [
+      { type: "text", text: "Help me plan a garden.", text_elements: [] },
+      { type: "text", text: "Return JSON matching the schema.", text_elements: [] },
+    ];
+    mocks.runBoundedTurn.mockResolvedValue({
+      text: "Garden Planning",
+      model: "gpt-5.4",
+      submittedInput,
+      items: [
+        { id: "prompt", type: "userMessage", content: submittedInput },
+        { id: "answer", type: "agentMessage", text: "Garden Planning" },
+      ],
+    });
+
+    await expect(runCodexIsolatedCompletion(createParams(), {})).resolves.toMatchObject({
+      assistant: { content: [{ type: "text", text: "Garden Planning" }] },
+    });
+  });
+
   it("rejects any native or tool item outside the passive response surface", async () => {
     mocks.runBoundedTurn.mockResolvedValue({
       text: "Garden Planning",
       model: "gpt-5.4",
+      submittedInput: [{ type: "text", text: "Help me plan a garden.", text_elements: [] }],
       items: [{ id: "tool", type: "commandExecution" }],
     });
 

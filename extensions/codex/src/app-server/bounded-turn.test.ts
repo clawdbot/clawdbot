@@ -8,6 +8,7 @@ import {
   threadStartResult as createThreadStartResult,
   turnStartResult,
 } from "./codex-app-server.test-fixtures.js";
+import { assertCodexPassiveTurnItems } from "./protocol-validators.js";
 import type { JsonValue } from "./protocol.js";
 import type { CodexAppServerClientFactory } from "./shared-client.js";
 import { createClientHarness } from "./test-support.js";
@@ -62,6 +63,17 @@ function inProgressTurnResult() {
   return { turn: { ...turnStartResult("turn-finalizer").turn, startedAt: 1 } };
 }
 
+function invalidOutputSchemaError() {
+  return {
+    error: {
+      type: "invalid_request_error",
+      code: "invalid_json_schema",
+      message: "The native transport does not support this schema.",
+      param: "text.format.schema",
+    },
+  };
+}
+
 function createClientFactory(
   options: {
     mcpServers?: unknown[];
@@ -73,6 +85,8 @@ function createClientFactory(
     models?: ReturnType<typeof codexModel>[];
     beforeRequest?: (method: string) => Promise<void>;
     modelProvider?: string;
+    rejectOutputSchema?: boolean;
+    echoUserInput?: boolean;
   } = {},
 ) {
   const methods: string[] = [];
@@ -136,8 +150,25 @@ function createClientFactory(
       if (options.completeTurn === false) {
         return inProgressTurnResult();
       }
+      const rejectOutputSchema =
+        isRecord(params) && isRecord(params.outputSchema) ? options.rejectOutputSchema : undefined;
+      const echoedInput = isRecord(params) && Array.isArray(params.input) ? params.input : [];
       queueMicrotask(() => {
         for (const handler of fixture.notifications) {
+          if (rejectOutputSchema) {
+            void handler({
+              method: "error",
+              params: {
+                threadId: "thread-finalizer",
+                turnId: "turn-finalizer",
+                error: {
+                  message: JSON.stringify(invalidOutputSchemaError()),
+                },
+                willRetry: false,
+              },
+            });
+            continue;
+          }
           if (options.errorBeforeCompletion) {
             void handler({
               method: "error",
@@ -186,7 +217,14 @@ function createClientFactory(
                 status: options.terminalStatus ?? "completed",
                 ...(options.terminalStatus === "interrupted" || options.emptyAnswer
                   ? { items: [] }
-                  : {}),
+                  : options.echoUserInput
+                    ? {
+                        items: [
+                          { id: "prompt-echo", type: "userMessage", content: echoedInput },
+                          ...completedTurnResult().turn.items,
+                        ],
+                      }
+                    : {}),
               },
             },
           });
@@ -319,6 +357,78 @@ describe("runBoundedCodexAppServerTurn settled finalization isolation", () => {
       }
     },
   );
+
+  it("forwards the final-output schema to turn/start", async () => {
+    const fake = createClientFactory();
+    const outputSchema = {
+      type: "object",
+      properties: { result: { type: "string" } },
+      required: ["result"],
+      additionalProperties: false,
+    };
+
+    await runBoundedCodexAppServerTurn({
+      model: { mode: "required", id: "gpt-5.4" },
+      timeoutMs: 5_000,
+      options: { clientFactory: fake.factory },
+      taskLabel: "isolated completion",
+      developerInstructions: "Return structured output.",
+      input: [{ type: "text", text: "Extract the result.", text_elements: [] }],
+      outputSchema,
+      requiredModalities: ["text"],
+      isolation: "configured-transport",
+    });
+
+    const turnStart = fake.request.mock.calls.find(([method]) => method === "turn/start")?.[1];
+    expect(turnStart).toMatchObject({ outputSchema });
+  });
+
+  it("falls back once when Codex rejects the native schema subset", async () => {
+    const fake = createClientFactory({ rejectOutputSchema: true, echoUserInput: true });
+    const assertCurrent = vi.fn();
+    const outputSchema = {
+      type: "object",
+      properties: { result: { type: "string" } },
+    };
+
+    const input = [{ type: "text" as const, text: "Extract the result.", text_elements: [] }];
+    const result = await runBoundedCodexAppServerTurn({
+      model: { mode: "required", id: "gpt-5.4" },
+      timeoutMs: 5_000,
+      assertCurrent,
+      options: { clientFactory: fake.factory },
+      taskLabel: "isolated completion",
+      developerInstructions: "Return structured output.",
+      input,
+      outputSchema,
+      requiredModalities: ["text"],
+      isolation: "configured-transport",
+      requireNoExternalCapabilities: true,
+    });
+    expect(result).toMatchObject({ text: "The message was sent successfully." });
+    expect(() =>
+      assertCodexPassiveTurnItems(result.items, result.submittedInput, "isolated completion"),
+    ).not.toThrow();
+
+    const turns = fake.request.mock.calls.filter(([method]) => method === "turn/start");
+    expect(turns).toHaveLength(2);
+    expect(turns[0]?.[1]).toMatchObject({ outputSchema });
+    expect(turns[1]?.[1]).not.toHaveProperty("outputSchema");
+    const threads = fake.request.mock.calls.filter(([method]) => method === "thread/start");
+    expect(threads).toHaveLength(2);
+    expect(fake.factory).toHaveBeenNthCalledWith(2, expect.objectContaining({ assertCurrent }));
+    expect(threads[1]?.[1]).toMatchObject({ developerInstructions: "Return structured output." });
+    expect(turns[1]?.[1]).toMatchObject({
+      input: expect.arrayContaining([
+        expect.objectContaining({ text: expect.stringContaining(JSON.stringify(outputSchema)) }),
+      ]),
+    });
+    expect(result.submittedInput).toHaveLength(2);
+    expect(result.submittedInput[0]).toEqual(input[0]);
+    expect(result.submittedInput[1]).toMatchObject({
+      text: expect.stringContaining(JSON.stringify(outputSchema)),
+    });
+  });
 
   it("returns an explicit unsupported decline for interactive MCP input", async () => {
     const fake = createClientFactory({ completeTurn: false });
@@ -516,11 +626,13 @@ describe("runBoundedCodexAppServerTurn settled finalization isolation", () => {
         taskLabel: "settled-turn finalization",
         developerInstructions: "Finalize only.",
         input: [{ type: "text", text: "Produce the final answer.", text_elements: [] }],
+        outputSchema: { type: "object" },
         requiredModalities: ["text"],
         isolation: "private-stdio",
         requireNoExternalCapabilities: true,
       }),
     ).rejects.toThrow("terminal upstream failure");
+    expect(fake.request.mock.calls.filter(([method]) => method === "turn/start")).toHaveLength(1);
   });
 
   it("rejects an interrupted turn even when it emitted partial assistant text", async () => {

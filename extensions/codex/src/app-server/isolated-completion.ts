@@ -4,6 +4,7 @@ import { runBoundedCodexAppServerTurn, type CodexBoundedTurnOptions } from "./bo
 import { readCodexPluginConfig, resolveCodexAppServerHomeScope } from "./config.js";
 import { createAttributedCodexAssistantMessage } from "./event-projector-assistant-message.js";
 import { assertCodexPassiveTurnItems } from "./protocol-validators.js";
+import type { JsonObject } from "./protocol.js";
 
 type CodexIsolatedCompletionParams = Parameters<
   NonNullable<AgentHarnessV2["runIsolatedCompletionV2"]>
@@ -56,12 +57,14 @@ export async function runCodexIsolatedCompletion(
     taskLabel: "isolated completion",
     developerInstructions: params.systemPrompt,
     input: [{ type: "text", text: params.prompt, text_elements: [] }],
+    // SAFETY: plugin runtime schemas are JSON objects; Codex narrows their values to JSON-RPC data.
+    ...(params.outputSchema ? { outputSchema: params.outputSchema as JsonObject } : {}),
     requiredModalities: ["text"],
     isolation: "configured-transport",
     requireNoExternalCapabilities: true,
   });
   params.assertCurrent?.();
-  assertCodexPassiveTurnItems(result.items, params.prompt, "isolated completion");
+  assertCodexPassiveTurnItems(result.items, result.submittedInput, "isolated completion");
   return {
     assistant: createAttributedCodexAssistantMessage(
       {
