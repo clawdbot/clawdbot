@@ -8,6 +8,7 @@ import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions.js";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
@@ -1860,14 +1861,8 @@ describe("before_tool_call hook deduplication (#15502)", () => {
 
   it("clears a prior summary for large uncloneable plain-tool input and fences stale finalizers", async () => {
     type ToolResult = { content: []; details: { ok?: boolean; status?: number } };
-    let resolvePresentation!: (result: ToolResult) => void;
-    let resolvePlain!: (result: ToolResult) => void;
-    const presentationExecution = new Promise<ToolResult>((resolve) => {
-      resolvePresentation = resolve;
-    });
-    const plainExecution = new Promise<ToolResult>((resolve) => {
-      resolvePlain = resolve;
-    });
+    const presentationExecution = createDeferred<ToolResult>();
+    const plainExecution = createDeferred<ToolResult>();
     let terminalPresentation: string | undefined = "Previous tool summary";
     let latestOrdinal = -1;
     const onToolOutcome = vi.fn(
@@ -1892,7 +1887,7 @@ describe("before_tool_call hook deduplication (#15502)", () => {
           name: "web_fetch",
           description: "fetch",
           parameters: {},
-          execute: vi.fn(() => presentationExecution),
+          execute: vi.fn(() => presentationExecution.promise),
         }),
         () => ({ text: "Fetched with status 200" }),
       ),
@@ -1904,7 +1899,7 @@ describe("before_tool_call hook deduplication (#15502)", () => {
           name: "read_file",
           description: "read",
           parameters: {},
-          execute: vi.fn(() => plainExecution),
+          execute: vi.fn(() => plainExecution.promise),
         }),
         // Tool-owned preparation can carry private, non-JSON execution state.
         finalizeBeforeToolCallParams: () => ({
@@ -1918,7 +1913,7 @@ describe("before_tool_call hook deduplication (#15502)", () => {
     const presentationResultPromise = presentationTool.execute("call-presentation", {});
     const plainResultPromise = plainTool.execute("call-plain", {});
 
-    resolvePlain({ content: [], details: { ok: true } });
+    plainExecution.resolve({ content: [], details: { ok: true } });
     const plainResult = await plainResultPromise;
     finalizeToolTerminalPresentation({
       toolCallId: "call-plain",
@@ -1928,7 +1923,7 @@ describe("before_tool_call hook deduplication (#15502)", () => {
     });
     expect(terminalPresentation).toBeUndefined();
 
-    resolvePresentation({ content: [], details: { status: 200 } });
+    presentationExecution.resolve({ content: [], details: { status: 200 } });
     const presentationResult = await presentationResultPromise;
     finalizeToolTerminalPresentation({
       toolCallId: "call-presentation",
