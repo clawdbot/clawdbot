@@ -4,6 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { isDeepStrictEqual } from "node:util";
+import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   noteCommittedSharedAuthStoreOwnership,
@@ -125,48 +126,52 @@ function rowDigest(row: StoreRow | StateRow | null): string {
   return createHash("sha256").update(JSON.stringify(row)).digest("hex");
 }
 
-function rowsMatch<T extends StoreRow | StateRow>(left: T, right: T): boolean {
+function rowsMatch<T extends StoreRow | StateRow>(left: T, right: T | null): boolean {
   return JSON.stringify(left) === JSON.stringify(right);
 }
 
-function storeIsContained(sourceRow: StoreRow, targetRow: StoreRow): boolean {
-  try {
-    const source: unknown = JSON.parse(sourceRow.store_json);
-    const target: unknown = JSON.parse(targetRow.store_json);
-    if (
-      !isRecord(source) ||
-      !isRecord(target) ||
-      typeof source.version !== "number" ||
-      !Number.isFinite(source.version) ||
-      source.version <= 0 ||
-      !isRecord(source.profiles) ||
-      !isRecord(target.profiles)
-    ) {
-      return false;
-    }
-    const targetProfiles = target.profiles;
-    // Compare raw records, not runtime coercion: dropping malformed entries or unknown
-    // fields would falsely certify that the only remaining copy can be deleted.
-    return (
-      isDeepStrictEqual({ ...source, profiles: targetProfiles }, target) &&
-      Object.values(targetProfiles).every(isRecord) &&
-      Object.entries(source.profiles).every(
-        ([id, credential]) =>
-          isRecord(credential) &&
-          Object.hasOwn(targetProfiles, id) &&
-          isDeepStrictEqual(credential, targetProfiles[id]),
-      )
-    );
-  } catch {
-    return false;
+function storeConflicts(sourceRow: StoreRow, targetRow: StoreRow): string[] {
+  const source = safeParseJsonRecord(sourceRow.store_json);
+  const target = safeParseJsonRecord(targetRow.store_json);
+  if (
+    !source ||
+    !target ||
+    typeof source.version !== "number" ||
+    !Number.isFinite(source.version) ||
+    source.version <= 0 ||
+    !isRecord(source.profiles) ||
+    !isRecord(target.profiles)
+  ) {
+    return ["invalid credential payload"];
   }
+  // Compare raw records: runtime coercion could discard the only remaining credential.
+  // Diagnostics expose IDs and categories only, never credential or metadata values.
+  const conflicts = isDeepStrictEqual({ ...source, profiles: target.profiles }, target)
+    ? []
+    : ["store metadata differs"];
+  for (const id of [
+    ...new Set([...Object.keys(source.profiles), ...Object.keys(target.profiles)]),
+  ].toSorted()) {
+    const inSource = Object.hasOwn(source.profiles, id);
+    const inTarget = Object.hasOwn(target.profiles, id);
+    if (
+      (inSource && !isRecord(source.profiles[id])) ||
+      (inTarget && !isRecord(target.profiles[id]))
+    ) {
+      conflicts.push(`${JSON.stringify(id)}: malformed credential`);
+    } else if (inSource && !inTarget) {
+      conflicts.push(`${JSON.stringify(id)}: missing from target`);
+    } else if (inSource && !isDeepStrictEqual(source.profiles[id], target.profiles[id])) {
+      conflicts.push(`${JSON.stringify(id)}: credential differs`);
+    }
+  }
+  return conflicts;
 }
 
 function assertRowsMatch(expected: AuthRows, actual: AuthRows, label: string): void {
   if (
-    (expected.store !== null &&
-      (actual.store === null || !rowsMatch(expected.store, actual.store))) ||
-    (expected.state !== null && (actual.state === null || !rowsMatch(expected.state, actual.state)))
+    (expected.store !== null && !rowsMatch(expected.store, actual.store)) ||
+    (expected.state !== null && !rowsMatch(expected.state, actual.state))
   ) {
     throw new Error(`shared auth relocation ${label} verification failed`);
   }
@@ -325,23 +330,25 @@ function copyRowsToState(params: MigrationSnapshot): AuthRows {
     ({ db: database, path: targetDatabasePath }) => {
       const db = getNodeSqliteKysely<SharedAuthMigrationDatabase>(database);
       const target = readTargetRows(database);
-      if (
-        params.sourceRows.store &&
-        target.store &&
-        !rowsMatch(params.sourceRows.store, target.store) &&
-        !storeIsContained(params.sourceRows.store, target.store)
-      ) {
-        throw new Error(
-          "shared auth credential rows conflict with the relocation target. Back up both auth databases, reconcile differing or missing profiles, then rerun openclaw doctor --fix.",
-        );
-      }
+      const conflicts =
+        params.sourceRows.store && target.store && !rowsMatch(params.sourceRows.store, target.store)
+          ? storeConflicts(params.sourceRows.store, target.store).map(
+              (detail) =>
+                `auth_profile_store[primary] -> config_machine_state[authProfiles.store]: ${detail}`,
+            )
+          : [];
       if (
         params.sourceRows.state &&
         target.state &&
         !rowsMatch(params.sourceRows.state, target.state)
       ) {
+        conflicts.push(
+          "auth_profile_state[primary] -> config_machine_state[authProfiles.state]: runtime state or timestamp differs",
+        );
+      }
+      if (conflicts.length > 0) {
         throw new Error(
-          "shared auth state rows conflict with the relocation target. Back up both auth databases, reconcile the runtime state, then rerun openclaw doctor --fix.",
+          `shared auth rows conflict with the relocation target: ${conflicts.join("; ")}. Back up source ${JSON.stringify(params.sourcePath)} and target ${JSON.stringify(targetDatabasePath)} with OpenClaw stopped. Preserve target-only profiles, copy missing source profiles into the target, and reconcile differing entries/metadata/state locally; then rerun openclaw doctor --fix. No auth rows were changed.`,
         );
       }
       if (params.sourceRows.store && !target.store) {

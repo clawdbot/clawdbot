@@ -15,6 +15,7 @@ import {
   type DevicePlacementRequirement,
 } from "../new-session/device-placement.ts";
 import { draftCloudProfileSupportsExecutionMode } from "../new-session/discovery.ts";
+import { resolveChatPaneWorkerPresentation } from "./chat-pane-placement.ts";
 
 async function loadPlacementMoveCatalog(
   client: GatewayBrowserClient,
@@ -257,17 +258,13 @@ export async function reclaimChatPanePlacement(params: {
     return;
   }
   const { showConfirmDialog } = await import("../../components/confirm-dialog.js");
-  const deviceWorker = placement?.state === "active" && placement.runner?.kind === "device";
+  const worker = resolveChatPaneWorkerPresentation(
+    params.row,
+    params.placementStartup.get(params.row.key),
+  );
   const confirmed = await showConfirmDialog({
-    message: t(
-      deviceWorker ? "sessionsView.stopDeviceWorkerConfirm" : "sessionsView.stopCloudWorkerConfirm",
-      { session: params.row.label || params.row.key },
-    ),
-    confirmLabel: t(
-      deviceWorker
-        ? "sessionsView.stopDeviceWorkerConfirmAction"
-        : "sessionsView.stopCloudWorkerConfirmAction",
-    ),
+    message: worker.confirmMessage,
+    confirmLabel: worker.confirmLabel,
     danger: true,
   });
   if (!confirmed) {

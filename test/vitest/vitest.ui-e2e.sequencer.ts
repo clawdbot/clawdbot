@@ -121,8 +121,20 @@ function estimateFileSeconds(moduleId: string): number {
 export class UiE2eSequencer extends BaseSequencer {
   override async shard(files: TestSpecification[]): Promise<TestSpecification[]> {
     // Vitest invokes shard() only when config.shard is present.
-    return selectWeightedShard(files, this.ctx.config.shard!, (file) =>
-      estimateFileSeconds(file.moduleId),
+    return selectWeightedShard(
+      files,
+      this.ctx.config.shard!,
+      (file) => estimateFileSeconds(file.moduleId) / effectiveProjectWorkers(file),
     );
   }
+}
+
+function effectiveProjectWorkers(file: TestSpecification): number {
+  // Mirror Vitest's project-first, root-second worker resolution. The UI config
+  // pins both sources, so an implicit host-sized fallback would hide drift.
+  const workers = file.project.config.maxWorkers ?? file.project.vitest.config.maxWorkers;
+  if (typeof workers !== "number" || !Number.isInteger(workers) || workers < 1) {
+    throw new Error(`Control UI E2E project ${file.project.name} needs an explicit worker count`);
+  }
+  return workers;
 }

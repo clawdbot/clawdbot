@@ -36,6 +36,7 @@ import {
   plainGhAuthenticatedEnv,
   resolvePlainGhBin,
 } from "./lib/plain-gh.mjs";
+import { resolveReleaseContextIdentity } from "./lib/release-context.mjs";
 
 const sortReleaseJsonValueKeys = /** @type {<T>(value: T) => T} */ (sortJsonValueKeys); // Validated release JSON preserves its structural type.
 const DEFAULT_REPO = process.env.OPENCLAW_RELEASE_REPO || "openclaw/openclaw";
@@ -905,6 +906,19 @@ export function validateParentManifest(value, expected) {
     rerunGroup,
     runReleaseSoak,
   });
+  if (
+    coveragePolicy === "npm-stable-v1" &&
+    (!resolveReleaseContextIdentity(
+      validationInputs.targetContextRef || String(value.targetRef ?? ""),
+      validationInputs.targetVersion,
+    ) ||
+      controls.performanceBlocking !== true ||
+      controls.stableSoakRequired !== true)
+  ) {
+    throw new Error(
+      "npm stable coverage policy requires release context, blocking performance, and stable soak",
+    );
+  }
   const childEvidence = normalizeManifestChildEvidence(value.childEvidence);
   const childRuns = value.childRuns;
   if (!childRuns || typeof childRuns !== "object" || Array.isArray(childRuns)) {
@@ -950,7 +964,7 @@ export function validateParentManifest(value, expected) {
           releaseChecks: normalizeOptionalRunId(childRuns.releaseChecks, "release checks run ID"),
         };
   if (
-    coveragePolicy &&
+    coveragePolicy === "npm-beta-v1" &&
     (childRunIds.productPerformance ||
       childRunIds.npmTelegram ||
       controls.performanceBlocking !== false ||

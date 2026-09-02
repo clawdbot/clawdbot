@@ -89,6 +89,7 @@ function createLocalGatewayRequestContext(
       }),
   });
   const context: GatewayRequestContext = {
+    localEmbedded: true,
     deps: params.deps,
     configRevisionProjector: loadGatewayConfigRevisionProjector({ env: process.env }),
     cron,

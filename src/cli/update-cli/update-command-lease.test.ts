@@ -43,6 +43,11 @@ vi.mock("./update-command-service.js", async (importOriginal) => ({
   tryInstallShellCompletion: vi.fn(),
 }));
 
+// The fixture CLI owns lease probes and Doctor phases; triage has its own owner tests.
+vi.mock("../../infra/update-triage.js", () => ({
+  prepareUpdateFailureTriage: async () => async () => ({ status: "completed", hint: "" }),
+}));
+
 import { updateFinalizeCommand } from "./update-command-finalize.js";
 import type { LeaseScenario } from "./update-command-lease.test-support.js";
 import type { PostCorePluginUpdateResult } from "./update-command-plugins.js";
@@ -152,6 +157,20 @@ async function invoke(lane: Lane): Promise<void> {
     startedAt: Date.now(),
     updateStepTimeoutMs: 15_000,
   });
+}
+
+async function invokeReportedFailure(lane: Lane): Promise<void> {
+  if (lane === "resume") {
+    await invoke(lane);
+    expect(defaultRuntime.exit).toHaveBeenCalledWith(0);
+    return;
+  }
+  await expect(invoke(lane)).rejects.toMatchObject(
+    lane === "repair"
+      ? { name: "ExitError", code: 1 }
+      : { name: "UpdateCommandFailure", exitCode: 1 },
+  );
+  expect(defaultRuntime.exit).not.toHaveBeenCalled();
 }
 
 async function events(): Promise<string[]> {
@@ -350,14 +369,7 @@ describe("update orchestration lifecycle ownership", () => {
     "%s retains strict fresh validation after releasing the lease",
     async (lane) => {
       await writeScenario(lane, { invalidConfig: true });
-      if (lane === "current-process") {
-        await expect(invoke(lane)).rejects.toMatchObject({
-          name: "UpdateCommandFailure",
-          exitCode: 1,
-        });
-      } else {
-        await invoke(lane);
-      }
+      await invokeReportedFailure(lane);
       const output =
         lane === "current-process"
           ? mocks.print.mock.lastCall?.[0]
@@ -369,9 +381,6 @@ describe("update orchestration lifecycle ownership", () => {
       expect(mocks.restart).not.toHaveBeenCalled();
       expect(await events()).toContain("post-acquired");
       expect((await events()).at(-1)).toBe("validate");
-      if (lane === "repair") {
-        expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
-      }
     },
   );
 
@@ -431,18 +440,15 @@ describe("update orchestration lifecycle ownership", () => {
     },
   );
 
-  it("retains a final doctor failure while activating a strictly valid install", async () => {
+  it("rejects restart handling after a final doctor failure despite valid config", async () => {
     await writeScenario("current-process", { failDoctor: "post", hostVersion: "1.0.0" });
-    await expect(invoke("current-process")).rejects.toMatchObject({
-      name: "UpdateCommandFailure",
-      exitCode: 1,
-    });
+    await invokeReportedFailure("current-process");
     expect(mocks.print.mock.lastCall?.[0]).toMatchObject({
       status: "error",
+      recovery: { serviceRestartSafe: false, reason: "runtime-verification-failed" },
       postUpdate: { plugins: { reason: "post-plugin-doctor-execution-failed" } },
     });
-    expect(defaultRuntime.exit).not.toHaveBeenCalled();
-    expect(mocks.restart).toHaveBeenCalledOnce();
+    expect(mocks.restart).not.toHaveBeenCalled();
     expect(process.env.OPENCLAW_COMPATIBILITY_HOST_VERSION).toBeUndefined();
     expectDoctorDiagnostics();
     expect(await events()).toEqual(["post-attempt", "post-acquired", "validate", "readiness"]);
@@ -487,14 +493,7 @@ describe("update orchestration lifecycle ownership", () => {
         hostVersion: lane === "repair" ? undefined : "1.0.0",
       });
 
-      if (lane === "current-process") {
-        await expect(invoke(lane)).rejects.toMatchObject({
-          name: "UpdateCommandFailure",
-          exitCode: 1,
-        });
-      } else {
-        await invoke(lane);
-      }
+      await invokeReportedFailure(lane);
 
       const output =
         lane === "current-process"
@@ -504,11 +503,6 @@ describe("update orchestration lifecycle ownership", () => {
         status: "error",
         postUpdate: { plugins: { reason } },
       });
-      if (lane === "current-process") {
-        expect(defaultRuntime.exit).not.toHaveBeenCalled();
-      } else {
-        expect(defaultRuntime.exit).toHaveBeenCalledWith(lane === "resume" ? 0 : 1);
-      }
       expect(mocks.restart).not.toHaveBeenCalled();
       expect(await events()).toEqual([
         ...(lane === "current-process" ? [] : ["pre-attempt", "pre-acquired"]),
@@ -537,7 +531,7 @@ describe("update orchestration lifecycle ownership", () => {
       });
       await writeScenario(lane, { failDoctor: "post", invalidConfig: !valid });
 
-      await invoke(lane);
+      await invokeReportedFailure(lane);
 
       expect(vi.mocked(defaultRuntime.writeJson).mock.lastCall?.[0]).toMatchObject({
         status: "error",
@@ -558,7 +552,7 @@ describe("update orchestration lifecycle ownership", () => {
         env: {},
       });
       expect(startupBlock === null).toBe(valid);
-      expect(await events()).toEqual([
+      expect(await events(), JSON.stringify(vi.mocked(defaultRuntime.error).mock.calls)).toEqual([
         "pre-attempt",
         "pre-acquired",
         "post-attempt",

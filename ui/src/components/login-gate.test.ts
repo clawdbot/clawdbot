@@ -9,18 +9,21 @@ type LoginGateElement = HTMLElement & {
   updateComplete: Promise<boolean>;
 };
 
-async function mountFailure(lastError: string, lastErrorCode: string | null) {
+async function mountFailure(
+  lastError: string,
+  lastErrorCode: string | null,
+  credentials = { token: "", password: "" },
+) {
   const element = document.createElement("openclaw-login-gate") as LoginGateElement;
   element.props = {
     resourceBasePath: "",
     connected: false,
     lastError,
     lastErrorCode,
-    hasToken: false,
-    hasPassword: false,
+    hasToken: Boolean(credentials.token),
+    hasPassword: Boolean(credentials.password),
     gatewayUrl: "ws://127.0.0.1:18789",
-    token: "",
-    password: "",
+    ...credentials,
     showGatewayToken: false,
     showGatewayPassword: false,
     onGatewayUrlChange: vi.fn(),
@@ -43,6 +46,34 @@ afterEach(() => {
 });
 
 describe("login gate failure recovery", () => {
+  it.each([
+    { name: "empty", token: "", password: "" },
+    { name: "populated", token: "test-token", password: "test-password" },
+  ])("explains missing identity headers with $name credentials", async ({ token, password }) => {
+    const element = await mountFailure(
+      "unauthorized",
+      ConnectErrorDetailCodes.AUTH_IDENTITY_HEADER_REQUIRED,
+      { token, password },
+    );
+    const failure = element.querySelector(".login-gate__failure");
+    const steps = failure?.querySelector(".login-gate__failure-steps")?.textContent;
+
+    expect(failure?.getAttribute("data-kind")).toBe("trusted-proxy");
+    expect(steps).toMatch(/(?:open|use|sign in).*?(?:authenticated proxy|SSO).*?URL/iu);
+    expect(steps).toMatch(/configured/iu);
+    expect(failure?.textContent).toMatch(
+      /missing.*?identity[- ]headers?|identity[- ]headers?.*?missing/iu,
+    );
+    expect(steps).toMatch(/forward/iu);
+    expect(steps).toMatch(/WebSocket upgrade/iu);
+    expect(failure?.querySelector(".login-gate__failure-docs")?.getAttribute("href")).toBe(
+      "https://docs.openclaw.ai/gateway/trusted-proxy-auth",
+    );
+    expect(failure?.querySelector(".login-gate__failure-raw")?.textContent).toBe("unauthorized");
+    expect(failure?.querySelectorAll(".login-gate__failure-steps code")).toHaveLength(0);
+    expect(steps).not.toMatch(/generate.*?token|replace.*?(?:token|password)|Gateway is running/iu);
+  });
+
   it.each([
     "Authenticated profile verification is unavailable; retry the request.",
     "GitHub is rate limiting profile verification. Retry shortly; if this continues, ask a gateway administrator to check the GitHub API credential.",

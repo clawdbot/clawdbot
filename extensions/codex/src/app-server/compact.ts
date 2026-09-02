@@ -10,7 +10,6 @@ import { resolveDefaultAgentId } from "openclaw/plugin-sdk/agent-scope-runtime";
 import { createDedupeCache } from "openclaw/plugin-sdk/dedupe-runtime";
 import { coerceErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
 import type { SandboxContext } from "openclaw/plugin-sdk/sandbox";
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { isIncognitoSessionKey } from "../incognito-session.js";
@@ -49,7 +48,10 @@ import {
   releaseLeasedSharedCodexAppServerClient,
   type CodexAppServerClientFactory,
 } from "./shared-client.js";
-import { isSameCodexAppServerThreadOwner } from "./thread-ownership.js";
+import {
+  isSameCodexAppServerThreadOwner,
+  withCodexAppServerThreadMutation,
+} from "./thread-ownership.js";
 import { assertCodexSupervisionThreadLineage } from "./thread-policy.js";
 import { resumeCodexAppServerThread } from "./thread-resume.js";
 import { getExistingCodexAppServerTurnRouter } from "./turn-router.js";
@@ -57,7 +59,6 @@ import { getExistingCodexAppServerTurnRouter } from "./turn-router.js";
 // ttlMs: 0 retains keys until the 4,096-entry LRU cap evicts them, after which a
 // previously suppressed warning can intentionally emit again.
 const warnedIgnoredCompactionOverrides = createDedupeCache({ ttlMs: 0, maxSize: 4096 });
-const codexNativeCompactionQueue = new KeyedAsyncQueue();
 const CODEX_NATIVE_COMPACTION_INTERRUPT_GRACE_MS = 30_000;
 type CodexAppServerCompactOptions = {
   bindingStore: CodexAppServerBindingStore;
@@ -314,7 +315,7 @@ async function runExclusiveCodexNativeCompaction<T>(
 ): Promise<T> {
   signal?.throwIfAborted();
   let started = false;
-  const queued = codexNativeCompactionQueue.enqueue(threadId, async () => {
+  const queued = withCodexAppServerThreadMutation(threadId, async () => {
     started = true;
     signal?.throwIfAborted();
     return run();

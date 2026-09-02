@@ -38,7 +38,6 @@ import {
 } from "./chat-composer-slash-menu.ts";
 import {
   renderChatRunStatusIndicator,
-  renderCompactionIndicator,
   renderFallbackIndicator,
   type ComposerRunStatus,
 } from "./chat-composer-status.ts";
@@ -244,7 +243,6 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
     ? nothing
     : renderChatRunStatusIndicator(composerRunStatus);
   const fallbackStatus = renderFallbackIndicator(props.fallbackStatus);
-  const compactionStatus = renderCompactionIndicator(props.compactionStatus);
   const progressCard = props.progressCard
     ? html`<div class="agent-chat__progress-float">
         ${renderSessionProgressCard(
@@ -295,7 +293,7 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
         : ""}"
     >
       <div class="agent-chat__composer-overlay">
-        ${props.anchoredNotices ?? nothing} ${composerAlerts} ${fallbackStatus} ${compactionStatus}
+        ${props.anchoredNotices ?? nothing} ${composerAlerts} ${fallbackStatus}
         ${interruptedStatus === nothing
           ? nothing
           : html`<div class="agent-chat__composer-run-status">${interruptedStatus}</div>`}
@@ -446,7 +444,7 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
                       handleChatAttachmentPaste(event, props);
                     }
                   }}
-                  aria-label=${placeholder}
+                  aria-label=${t("chat.composer.composerInput")}
                   placeholder=${dictation?.active ? "" : placeholder}
                   rows="1"
                 ></textarea>

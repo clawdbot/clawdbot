@@ -12,6 +12,7 @@ import {
   writePersistedAuthProfileStoreRaw,
 } from "../agents/auth-profiles/sqlite.js";
 import { saveAuthProfileStore } from "../agents/auth-profiles/store.js";
+import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import {
   encodePluginModelCatalogRelativePath,
   loadPersistedPluginModelCatalogsReadOnly,
@@ -23,7 +24,7 @@ import type { RuntimeEnv } from "../runtime.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { maybeMigrateModelCatalogCredentials } from "./doctor-model-catalog-credentials.js";
-import type { DoctorPrompter } from "./doctor-prompter.js";
+import { createDoctorPrompter, type DoctorPrompter } from "./doctor-prompter.js";
 
 const note = vi.hoisted(() => vi.fn());
 vi.mock("../../packages/terminal-core/src/note.js", () => ({ note }));
@@ -170,6 +171,62 @@ describe("doctor model catalog credential migration", () => {
     expect(repaired).toEqual({ detected: 0, migrated: 0, removed: 2, warnings: [] });
     expect(loadPersistedSharedAuthProfileStore(state.env)).toEqual({ version: 1, profiles: {} });
   });
+
+  it.each(["main", "helper"])(
+    "preserves a %s credential replaced while the repair prompt is pending",
+    async (agentId) => {
+      const state = createState();
+      const agentDir = path.join(state.stateDir, "agents", agentId, "agent");
+      fs.mkdirSync(agentDir, { recursive: true });
+      const cfg: OpenClawConfig = {
+        agents: {
+          ownership: "explicit",
+          defaults: { systemAgent: { agentId: "main" } },
+          entries: { main: { agentDir: state.agentDir }, [agentId]: { agentDir } },
+        },
+        models: { providers: { custom: provider("${CUSTOM_PROVIDER_KEY}") } },
+      };
+      const store: AuthProfileStore = {
+        version: 1,
+        profiles: {
+          "custom:default": { type: "api_key", provider: "custom", key: "CUSTOM_PROVIDER_KEY" },
+          "custom:models-json": {
+            type: "api_key",
+            provider: "custom",
+            key: "$CUSTOM_PROVIDER_KEY",
+          },
+        },
+        order: { custom: ["custom:default", "custom:models-json"] },
+        lastGood: { custom: "custom:default" },
+        usageStats: { "custom:default": { lastUsed: 123, errorCount: 0 } },
+      };
+      saveAuthProfileStore(store, agentDir);
+      const params = migrationParams(state, cfg);
+      params.prompter = {
+        ...createDoctorPrompter({ runtime: params.runtime, options: {} }),
+        confirmAutoFix: async () => {
+          store.profiles["custom:default"] = {
+            type: "api_key",
+            provider: "custom",
+            key: "replacement-secret",
+          };
+          saveAuthProfileStore(store, agentDir);
+          return true;
+        },
+      };
+
+      const result = await maybeMigrateModelCatalogCredentials(params);
+
+      expect(result).toEqual({ detected: 0, migrated: 0, removed: 1, warnings: [] });
+      expect(loadPersistedAuthProfileStore(agentDir)).toEqual({
+        version: 1,
+        profiles: { "custom:default": store.profiles["custom:default"] },
+        order: { custom: ["custom:default"] },
+        lastGood: store.lastGood,
+        usageStats: store.usageStats,
+      });
+    },
+  );
 
   it("does not copy a stale generated credential over an explicit provider SecretRef", async () => {
     const state = createState();

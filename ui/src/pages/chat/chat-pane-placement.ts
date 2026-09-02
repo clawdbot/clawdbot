@@ -1,6 +1,7 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ApplicationGatewaySnapshot } from "../../app/context.ts";
+import type { ApplicationPlacementStartupStatus } from "../../app/session-placement-startup.ts";
 import { resolveCloudWorkerStopAction } from "../../components/cloud-worker-stop.ts";
 import { t } from "../../i18n/index.ts";
 import { registerSessionPlacementEnglish } from "../../i18n/locales/en-session-placement.ts";
@@ -107,6 +108,45 @@ export function resolvePlacementComposer(params: {
       disabledReason: restart ? controls.restartDisabledReason : controls.reclaimDisabledReason,
       onAction: restart ? params.onRestart : params.onReclaim,
     },
+  };
+}
+
+export function resolveChatPaneWorkerPresentation(
+  session: GatewaySessionRow,
+  startup: Pick<ApplicationPlacementStartupStatus, "phase" | "targetKind"> | null | undefined,
+) {
+  const placement = session.placement;
+  // Active ownership wins even when cloud placements omit runner. Failed startup
+  // intent is retained for retry, not evidence of a later placement's target;
+  // only a live initial handoff can identify a not-yet-active worker.
+  let targetKind = startup?.phase !== "failed" ? startup?.targetKind : undefined;
+  if (placement?.state === "active") {
+    targetKind = placement.runner?.kind === "device" ? "device" : "profile";
+  }
+  let label: string;
+  let stopKey: string;
+  if (targetKind === "device" || targetKind === "auto-device") {
+    label = t("sessionsView.runsOnDevice");
+    stopKey = "sessionsView.stopDeviceWorker";
+  } else if (targetKind === "profile") {
+    const worker =
+      placement && placement.state !== "local" && placement.state !== "requested"
+        ? placement
+        : undefined;
+    label =
+      worker?.providerId && worker.profileId
+        ? `${worker.providerId} · ${worker.profileId}`
+        : t("newSession.runsOn", { place: t("newSession.cloud") });
+    stopKey = "sessionsView.stopCloudWorker";
+  } else {
+    label = t("sessionsView.runsOnWorker");
+    stopKey = "sessionsView.stopWorker";
+  }
+  return {
+    label,
+    stopLabel: t(stopKey),
+    confirmMessage: t(`${stopKey}Confirm`, { session: session.label || session.key }),
+    confirmLabel: t(`${stopKey}ConfirmAction`),
   };
 }
 

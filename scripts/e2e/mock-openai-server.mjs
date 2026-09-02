@@ -298,6 +298,7 @@ function responseEvents(text, deltas = [text]) {
   return [
     {
       type: "response.output_item.added",
+      output_index: 0,
       item: {
         type: "message",
         id: itemId,
@@ -322,6 +323,7 @@ function responseEvents(text, deltas = [text]) {
     },
     {
       type: "response.output_item.done",
+      output_index: 0,
       item: {
         type: "message",
         id: itemId,
@@ -418,6 +420,7 @@ function preambleThenToolCallEvents(preamble, name, args) {
   return [
     {
       type: "response.output_item.added",
+      output_index: 0,
       item: {
         type: "message",
         id: messageItemId,
@@ -442,6 +445,7 @@ function preambleThenToolCallEvents(preamble, name, args) {
     },
     {
       type: "response.output_item.done",
+      output_index: 0,
       item: {
         type: "message",
         id: messageItemId,

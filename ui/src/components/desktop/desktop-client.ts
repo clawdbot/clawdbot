@@ -139,11 +139,12 @@ export class DesktopClient {
       sendText: (text) => {
         // Mobile IMEs can omit keydown/keyup. "Unidentified" asks noVNC's
         // keyboard owner to translate each inserted character and emit a
-        // balanced press/release, matching its built-in mobile UI fallback.
-        for (let index = 0; index < text.length; index += 1) {
+        // balanced press/release. Line breaks need Enter rather than Unicode LF.
+        const normalizedText = text.replace(/\r\n?/g, "\n");
+        for (let index = 0; index < normalizedText.length; index += 1) {
           dispatchKeyboardEvent(
             new KeyboardEvent("keydown", {
-              key: text.charAt(index),
+              key: normalizedText.charAt(index) === "\n" ? "Enter" : normalizedText.charAt(index),
               code: "Unidentified",
               bubbles: true,
               cancelable: true,

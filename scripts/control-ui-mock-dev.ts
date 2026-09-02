@@ -1,5 +1,7 @@
 // Control Ui Mock Dev script supports OpenClaw repository automation.
 import { createHash } from "node:crypto";
+import { rmSync } from "node:fs";
+import { mkdir, mkdtemp } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import qrcode from "qrcode";
@@ -40,6 +42,7 @@ import {
   buildChannelWizardMocks,
 } from "./control-ui-mock-channels.ts";
 import { buildCronMocks } from "./control-ui-mock-cron.ts";
+import { createStandaloneMockIsolationPlugins } from "./control-ui-mock-isolation.ts";
 import {
   buildPluginCatalogMock,
   buildPluginInspectMock,
@@ -1494,7 +1497,7 @@ async function createChatPickerScenario(
       updatedAtMs: baseTime - 420_000,
     },
   ];
-  const sessionWorkspaceRoot = repoRoot;
+  const sessionWorkspaceRoot = "/mock/workspace";
   const sessionFileContentByPath = new Map([
     [
       "ui/src/ui/views/chat.ts",
@@ -1787,20 +1790,20 @@ async function createChatPickerScenario(
       {
         category: "Research",
         createdActor: MOCK_ACTOR_MIRA,
-        execCwd: "/Users/peter/Projects/clawdbot",
+        execCwd: "/Users/demo/Projects/clawdbot",
         owner: { actor: MOCK_ACTOR_MIRA },
       },
     ),
     sessionRow("agent:main:model-budget", "Model budget review", baseTime - 80_000, {
       category: "Research",
-      execCwd: "/Users/peter/Projects/openclaw",
+      execCwd: "/Users/demo/Projects/openclaw",
       owner: { actor: { type: "human", id: "presence-riley", label: "Riley" } },
       status: "failed",
       lastRunError: "Model out of credits: openai/gpt-5.6",
     }),
     sessionRow("agent:main:work-openclaw", "OpenClaw work checkout", baseTime - 85_000, {
       createdActor: MOCK_ACTOR_PETER,
-      execCwd: "/Users/peter/Work/openclaw",
+      execCwd: "/Users/demo/Work/openclaw",
       lastReadAt: baseTime - 120_000,
       owner: { actor: MOCK_ACTOR_PETER },
       observerDigest: {
@@ -1814,7 +1817,7 @@ async function createChatPickerScenario(
     }),
     mainChildRow,
     sessionRow("agent:main:home-server", "Home server migration", baseTime - 240_000, {
-      execCwd: "/Users/peter/Projects",
+      execCwd: "/Users/demo/Projects",
       execNode: "a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90",
       hasAutomation: true,
       pinned: true,
@@ -2103,6 +2106,7 @@ async function createChatPickerScenario(
         id: selfProfile.id,
         name: selfProfile.displayName ?? undefined,
         email: selfProfile.emails[0],
+        avatarUrl: `/api/users/${selfProfile.id}/avatar`,
       },
       {
         id: "presence-colin",
@@ -2320,8 +2324,8 @@ async function createChatPickerScenario(
         ],
       },
       "system.info": {
-        machineName: "Peters-Mac-Studio",
-        hostname: "peters-mac-studio.local",
+        machineName: "Mock-Workstation",
+        hostname: "mock-workstation.invalid",
         platform: "darwin",
         release: "25.0.0",
         arch: "arm64",
@@ -2334,7 +2338,7 @@ async function createChatPickerScenario(
         memoryFreeBytes: 34_359_738_368,
         diskTotalBytes: 1_000_000_000_000,
         diskAvailableBytes: 640_000_000_000,
-        diskPath: "/Users/peter/.openclaw",
+        diskPath: "/Users/demo/.openclaw",
         defaultAgentUtilityModel: {
           status: "auto",
           model: "anthropic/claude-haiku-4-5",
@@ -2343,43 +2347,43 @@ async function createChatPickerScenario(
       "fs.listDir": {
         cases: [
           {
-            match: { path: "/Users/peter/Projects/openclaw" },
+            match: { path: "/Users/demo/Projects/openclaw" },
             response: {
-              path: "/Users/peter/Projects/openclaw",
-              parent: "/Users/peter/Projects",
-              home: "/Users/peter",
+              path: "/Users/demo/Projects/openclaw",
+              parent: "/Users/demo/Projects",
+              home: "/Users/demo",
               entries: [
-                { name: "ui", path: "/Users/peter/Projects/openclaw/ui" },
-                { name: "src", path: "/Users/peter/Projects/openclaw/src" },
-                { name: "docs", path: "/Users/peter/Projects/openclaw/docs" },
-                { name: "packages", path: "/Users/peter/Projects/openclaw/packages" },
+                { name: "ui", path: "/Users/demo/Projects/openclaw/ui" },
+                { name: "src", path: "/Users/demo/Projects/openclaw/src" },
+                { name: "docs", path: "/Users/demo/Projects/openclaw/docs" },
+                { name: "packages", path: "/Users/demo/Projects/openclaw/packages" },
               ],
             },
           },
           {
-            match: { path: "/Users/peter/Projects" },
+            match: { path: "/Users/demo/Projects" },
             response: {
-              path: "/Users/peter/Projects",
-              parent: "/Users/peter",
-              home: "/Users/peter",
+              path: "/Users/demo/Projects",
+              parent: "/Users/demo",
+              home: "/Users/demo",
               entries: [
-                { name: "openclaw", path: "/Users/peter/Projects/openclaw" },
-                { name: "clawdbot", path: "/Users/peter/Projects/clawdbot" },
-                { name: "sweetistics", path: "/Users/peter/Projects/sweetistics" },
-                { name: "Peekaboo", path: "/Users/peter/Projects/Peekaboo" },
+                { name: "openclaw", path: "/Users/demo/Projects/openclaw" },
+                { name: "clawdbot", path: "/Users/demo/Projects/clawdbot" },
+                { name: "sweetistics", path: "/Users/demo/Projects/sweetistics" },
+                { name: "Peekaboo", path: "/Users/demo/Projects/Peekaboo" },
               ],
             },
           },
           {
             match: {},
             response: {
-              path: "/Users/peter",
+              path: "/Users/demo",
               parent: "/Users",
-              home: "/Users/peter",
+              home: "/Users/demo",
               entries: [
-                { name: "Projects", path: "/Users/peter/Projects" },
-                { name: "Downloads", path: "/Users/peter/Downloads" },
-                { name: ".config", path: "/Users/peter/.config", hidden: true },
+                { name: "Projects", path: "/Users/demo/Projects" },
+                { name: "Downloads", path: "/Users/demo/Downloads" },
+                { name: ".config", path: "/Users/demo/.config", hidden: true },
               ],
             },
           },
@@ -2388,9 +2392,9 @@ async function createChatPickerScenario(
       "worktrees.branches": {
         cases: [
           {
-            match: { repoRoot: "/Users/peter/Projects/openclaw" },
+            match: { repoRoot: "/Users/demo/Projects/openclaw" },
             response: {
-              repoRoot: "/Users/peter/Projects/openclaw",
+              repoRoot: "/Users/demo/Projects/openclaw",
               branches: [
                 { kind: "local", name: "main" },
                 { kind: "local", name: "steipete/place-picker" },
@@ -2400,9 +2404,9 @@ async function createChatPickerScenario(
             },
           },
           {
-            match: { repoRoot: "/Users/peter/Projects/clawdbot" },
+            match: { repoRoot: "/Users/demo/Projects/clawdbot" },
             response: {
-              repoRoot: "/Users/peter/Projects/clawdbot",
+              repoRoot: "/Users/demo/Projects/clawdbot",
               branches: [
                 { kind: "local", name: "main" },
                 { kind: "local", name: "steipete/storage-selector-design" },
@@ -2460,8 +2464,8 @@ async function createChatPickerScenario(
                   command: "openclaw export --target production",
                   agentId: "main",
                   sessionKey: "agent:main:production-export",
-                  host: "peters-mac-studio.local",
-                  cwd: "/Users/peter/Projects/openclaw",
+                  host: "mock-workstation.invalid",
+                  cwd: "/Users/demo/Projects/openclaw",
                   security: "full",
                   ask: "on-miss",
                   allowedDecisions: ["allow-once", "allow-always", "deny"],
@@ -2475,7 +2479,7 @@ async function createChatPickerScenario(
                   command: "git -C /mock/workspace clean -nd",
                   agentId: "release",
                   sessionKey: "agent:main:worktree-cleanup",
-                  host: "peters-mac-studio.local",
+                  host: "mock-workstation.invalid",
                   cwd: "/mock/workspace",
                   security: "sandboxed",
                   ask: "always",
@@ -3053,13 +3057,14 @@ async function createChatPickerScenario(
     sessionArchiveFiltering: true,
     sessions: [
       ...sessions,
+      ...backgroundTasks.sessions,
       ...archivedSessions,
       ...telegramSessions,
       ...claudeSessions,
       taxChildRow,
     ],
     sessionKey: fixture === "workboard" ? workboardMocks.sessionKey : "agent:main:main",
-    workspace: "/Users/peter/Projects/openclaw",
+    workspace: "/Users/demo/Projects/openclaw",
     workspaceGit: true,
   };
 }
@@ -3186,58 +3191,71 @@ const scenario = await createChatPickerScenario(options.fixture);
 if (options.operatorScopes) {
   scenario.operatorScopes = options.operatorScopes;
 }
-const server = await createServer({
-  base: "/",
-  cacheDir: path.join(repoRoot, ".artifacts", "control-ui-mock-vite"),
-  clearScreen: false,
-  configFile: path.join(uiRoot, "vite.config.ts"),
-  define: {
-    "globalThis.OPENCLAW_CONTROL_UI_BUILD_INFO": JSON.stringify({
-      version: "2026.7.10",
-      commit: "0123456789abcdef0123456789abcdef01234567",
-      commitAt: "2026-07-10T11:22:33.000Z",
-      builtAt: "2026-07-10T12:34:56.000Z",
-      branch: null,
-      dirty: null,
-      release: false,
-      buildId: scenario.serverBuildId,
-    }),
-  },
-  logLevel: "error",
-  optimizeDeps: {
-    ...(options.fixture === "board"
-      ? { entries: [path.join(uiRoot, "src", "test-helpers", "board-fixture.ts")] }
-      : {}),
-    include: ["lit/directives/repeat.js"],
-  },
-  plugins: [
-    createMockGatewayPlugin(scenario, options.fixture),
-    createBoardFixturePlugin(),
-    ...(options.fixture === "attachments" ? [createChatAttachmentFixturePlugin()] : []),
-  ],
-  publicDir: path.join(uiRoot, "public"),
-  resolve: {
-    alias: [
-      ...resolveExternalPackageAliasesForVite(),
-      ...resolveSourcePackageAliasesForVite(),
-      ...resolveTsconfigPathAliasesForVite(),
+// Vite replaces its deps cache when fixture plugins or mode change. Concurrent
+// mocks need separate owners so one startup cannot invalidate another's modules.
+const cacheRoot = path.join(repoRoot, ".artifacts", "control-ui-mock-vite");
+await mkdir(cacheRoot, { recursive: true });
+const cacheDir = await mkdtemp(path.join(cacheRoot, "server-"));
+// Vite's SIGTERM handler calls process.exit() after closing, bypassing finally.
+// The process owns this cache, so its exit hook is the single cleanup path.
+process.once("exit", () => rmSync(cacheDir, { recursive: true, force: true }));
+let server: ViteDevServer | undefined;
+try {
+  server = await createServer({
+    base: "/",
+    cacheDir,
+    clearScreen: false,
+    configFile: path.join(uiRoot, "vite.config.ts"),
+    define: {
+      "globalThis.OPENCLAW_CONTROL_UI_BUILD_INFO": JSON.stringify({
+        version: "2026.7.10",
+        commit: "0123456789abcdef0123456789abcdef01234567",
+        commitAt: "2026-07-10T11:22:33.000Z",
+        builtAt: "2026-07-10T12:34:56.000Z",
+        branch: null,
+        dirty: null,
+        release: false,
+        buildId: scenario.serverBuildId,
+      }),
+    },
+    logLevel: "error",
+    optimizeDeps: {
+      ...(options.fixture === "board"
+        ? { entries: [path.join(uiRoot, "src", "test-helpers", "board-fixture.ts")] }
+        : {}),
+      include: ["lit/directives/repeat.js"],
+    },
+    plugins: [
+      ...createStandaloneMockIsolationPlugins(),
+      createMockGatewayPlugin(scenario, options.fixture),
+      createBoardFixturePlugin(),
+      ...(options.fixture === "attachments" ? [createChatAttachmentFixturePlugin()] : []),
     ],
-  },
-  root: uiRoot,
-  server: {
-    allowedHosts: options.allowedHosts,
-    host: options.host,
-    port: options.port,
-    strictPort: true,
-  },
-});
+    publicDir: path.join(uiRoot, "public"),
+    resolve: {
+      alias: [
+        ...resolveExternalPackageAliasesForVite(),
+        ...resolveSourcePackageAliasesForVite(),
+        ...resolveTsconfigPathAliasesForVite(),
+      ],
+    },
+    root: uiRoot,
+    server: {
+      allowedHosts: options.allowedHosts,
+      host: options.host,
+      port: options.port,
+      strictPort: true,
+    },
+  });
 
-await server.listen();
-console.log(
-  `[control-ui-mock] ${resolveServerUrl(server, options.host, controlUiSessionPath(scenario.sessionKey ?? "agent:main:main"))}`,
-);
-console.log(
-  `[control-ui-mock] board fixture: ${resolveServerUrl(server, options.host, boardFixturePath)}`,
-);
-await waitForShutdown();
-await server.close();
+  await server.listen();
+  console.log(
+    `[control-ui-mock] ${resolveServerUrl(server, options.host, controlUiSessionPath(scenario.sessionKey ?? "agent:main:main"))}`,
+  );
+  console.log(
+    `[control-ui-mock] board fixture: ${resolveServerUrl(server, options.host, boardFixturePath)}`,
+  );
+  await waitForShutdown();
+} finally {
+  await server?.close();
+}

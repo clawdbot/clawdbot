@@ -346,6 +346,17 @@ async function start(args: string[]) {
   await import(entryUrl);
 }
 
+function createPreparationGate<T>(prepare: typeof commands.prepare) {
+  const started = createDeferred();
+  const result = createDeferred<T>();
+  prepare.mockImplementation(() => {
+    started.resolve();
+    return result.promise;
+  });
+  // Import completion does not imply admission; observe the preparation owner.
+  return { ...result, started: started.promise };
+}
+
 describe("test-projects build admission", () => {
   const toolingConfig = "test/vitest/vitest.tooling.config.ts";
   const ordinaryTooling = "test/scripts/run-vitest-state-cleanup.test.ts";
@@ -437,15 +448,21 @@ describe("test-projects build admission", () => {
     "holds every reader until preparation completes (parallel=%s)",
     async (parallel) => {
       vi.stubEnv("OPENCLAW_TEST_PROJECTS_PARALLEL", parallel ? "2" : "");
-      const preparation = createDeferred<number>();
+      const preparation = createPreparationGate<number>(commands.prepare);
       const readers = createDeferred<{ code: number; signal: null }>();
-      commands.prepare.mockReturnValue(preparation.promise);
-      commands.reader.mockImplementation(() => ({
-        completion: readers.promise,
-        getForwardedSignal: () => undefined,
-      }));
+      const readersStarted = createDeferred();
+      commands.reader.mockImplementation(() => {
+        if (commands.reader.mock.calls.length === (parallel ? 2 : 1)) {
+          readersStarted.resolve();
+        }
+        return {
+          completion: readers.promise,
+          getForwardedSignal: () => undefined,
+        };
+      });
       await start(targets);
       try {
+        await Promise.race([preparation.started, terminal.promise]);
         expect(commands.reader).not.toHaveBeenCalled();
         expect(commands.prepare).toHaveBeenCalledExactlyOnceWith(
           expect.objectContaining({
@@ -454,7 +471,8 @@ describe("test-projects build admission", () => {
           }),
         );
         preparation.resolve(0);
-        await vi.waitFor(() => expect(commands.reader).toHaveBeenCalledTimes(parallel ? 2 : 1));
+        await Promise.race([readersStarted.promise, terminal.promise]);
+        expect(commands.reader).toHaveBeenCalledTimes(parallel ? 2 : 1);
       } finally {
         preparation.resolve(0);
         readers.resolve({ code: 0, signal: null });
@@ -496,22 +514,25 @@ describe("test-projects build admission", () => {
       if (mode === "prebuilt") {
         vi.stubEnv("OPENCLAW_E2E_USE_PREBUILT_DIST", "1");
       }
-      const preparation = createDeferred<NodeJS.ProcessEnv>();
-      commands.prepareE2e.mockReturnValue(preparation.promise);
+      const preparation = createPreparationGate<NodeJS.ProcessEnv>(commands.prepareE2e);
       if (mode === "prebuilt") {
         preparation.resolve({});
       }
       await start([nativeHostTarget]);
-      if (mode !== "prebuilt") {
-        expect(commands.reader).not.toHaveBeenCalled();
-        expect(commands.prepareE2e).toHaveBeenCalledOnce();
+      try {
+        await Promise.race([preparation.started, terminal.promise]);
+        if (mode !== "prebuilt") {
+          expect(commands.reader).not.toHaveBeenCalled();
+          expect(commands.prepareE2e).toHaveBeenCalledOnce();
+        }
+      } finally {
         if (mode === "failed build") {
           preparation.reject(new Error("build failed"));
         } else {
           preparation.resolve({ OPENCLAW_E2E_USE_PREBUILT_DIST: "1" });
         }
+        await terminal.promise;
       }
-      await terminal.promise;
       expect(commands.prepare).not.toHaveBeenCalled();
       expect(commands.prepareE2e).toHaveBeenCalledOnce();
       expect(commands.reader).toHaveBeenCalledTimes(mode === "failed build" ? 0 : 1);
@@ -549,10 +570,10 @@ describe("test-projects build admission", () => {
 
   it("coalesces mixed E2E and private QA preparation before marking only E2E prebuilt", async () => {
     vi.stubEnv("OPENCLAW_TEST_PROJECTS_PARALLEL", "2");
-    const preparation = createDeferred<NodeJS.ProcessEnv>();
-    commands.prepareE2e.mockReturnValue(preparation.promise);
+    const preparation = createPreparationGate<NodeJS.ProcessEnv>(commands.prepareE2e);
     await start([...targets, e2eTarget]);
     try {
+      await Promise.race([preparation.started, terminal.promise]);
       expect(commands.prepareE2e).toHaveBeenCalledOnce();
       expect(commands.prepare).not.toHaveBeenCalled();
       expect(commands.reader).not.toHaveBeenCalled();
@@ -606,17 +627,14 @@ describe("plugin batch build admission", () => {
         await import("../../scripts/lib/extension-test-plan.mts");
       const { runExtensionBatchPlan } = await import("../../scripts/test-extension-batch.mts");
       const batch = resolveExtensionBatchPlan({ extensionIds: ["qa-lab", "matrix", "firecrawl"] });
-      const preparation = createDeferred<number>();
-      commands.prepare.mockReturnValue(preparation.promise);
+      const preparation = createPreparationGate<number>(commands.prepare);
       const reader = vi.fn().mockResolvedValue(0);
       const running = runExtensionBatchPlan(batch, {
         env: { OPENCLAW_EXTENSION_BATCH_PARALLEL: parallel },
         runGroup: reader,
       });
       try {
-        await new Promise<void>((resolve) => {
-          setImmediate(resolve);
-        });
+        await Promise.race([preparation.started, running]);
         expect(reader).not.toHaveBeenCalled();
         expect(commands.prepare).toHaveBeenCalledExactlyOnceWith(
           expect.objectContaining({

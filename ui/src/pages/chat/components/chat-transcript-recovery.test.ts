@@ -35,6 +35,7 @@ function fullMessage(content: string): FullMessageResult {
 
 class RecoveryTranscriptElement extends LitElement {
   props: ChatThreadProps = threadProps("recovery-pane");
+  resetPresentationOnDisconnect = true;
   private readonly transcript = new ChatTranscriptController(this);
 
   override createRenderRoot() {
@@ -51,7 +52,9 @@ class RecoveryTranscriptElement extends LitElement {
 
   override disconnectedCallback() {
     // Match the pane-specific production reset before Lit disconnects controllers.
-    resetChatViewState(this.props.paneId);
+    if (this.resetPresentationOnDisconnect) {
+      resetChatViewState(this.props.paneId);
+    }
     super.disconnectedCallback();
   }
 }
@@ -109,14 +112,63 @@ describe("chat transcript full-message recovery", () => {
     expect(load).toHaveBeenCalledOnce();
   });
 
-  it("keeps the transport preview when full content is unavailable", async () => {
+  it("keeps the preview through bounded retries and recovers on manual retry", async () => {
     const load = vi.fn<SidebarFullMessageLoader>().mockRejectedValue(new Error("offline"));
     const pane = mountTranscript("recovery-unavailable", load);
     await vi.waitFor(() => expect(pane.textContent).toContain("Could not load the full message."));
+    expect(load).toHaveBeenCalledTimes(3);
     expect(pane.textContent).toContain("Preview");
     expect(pane.textContent).toContain("...(truncated)...");
     expect(pane.querySelector(".chat-message-disclosure__toggle")).toBeNull();
+
+    load.mockResolvedValue(fullMessage("Available after retry."));
+    expectDefined(
+      pane.querySelector<HTMLButtonElement>(".chat-message-load-error__retry"),
+      "full-message retry",
+    ).click();
+    await vi.waitFor(() => expect(pane.textContent).toContain("Available after retry."));
+    expect(load).toHaveBeenCalledTimes(4);
   });
+
+  it.each(["loading", "loaded"] as const)(
+    "retires %s recovery when the same Lit controller reconnects",
+    async (phase) => {
+      const retired = createDeferred<FullMessageResult>();
+      const current = createDeferred<FullMessageResult>();
+      const load = vi
+        .fn<SidebarFullMessageLoader>()
+        .mockImplementationOnce(() => retired.promise)
+        .mockImplementationOnce(() => current.promise);
+      const pane = mountTranscript("recovery-reconnect", load);
+      await vi.waitFor(() => expect(load).toHaveBeenCalledOnce());
+      if (phase === "loaded") {
+        retired.resolve(fullMessage("Retired body."));
+        await vi.waitFor(() => expect(pane.textContent).toContain("Retired body."));
+      }
+
+      // Keep Lit's guarded rows and pane state so only the controller owns invalidation.
+      pane.resetPresentationOnDisconnect = false;
+      pane.remove();
+      document.body.append(pane);
+      pane.requestUpdate();
+      await vi.waitFor(() => expect(load).toHaveBeenCalledTimes(2));
+      await pane.updateComplete;
+      await flushDeferredRowPrune();
+      expect(pane.textContent).not.toContain("Retired body.");
+
+      if (phase === "loading") {
+        const updates = vi.spyOn(pane, "requestUpdate");
+        retired.resolve(fullMessage("Retired body."));
+        await flushDeferredRowPrune();
+        expect(updates).not.toHaveBeenCalled();
+        expect(pane.textContent).not.toContain("Retired body.");
+      }
+
+      current.resolve(fullMessage("Current body."));
+      await vi.waitFor(() => expect(pane.textContent).toContain("Current body."));
+      expect(load).toHaveBeenCalledTimes(2);
+    },
+  );
 
   it("retires a disconnected pane's bodies without invalidating a surviving split pane", async () => {
     const load = vi

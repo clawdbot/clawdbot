@@ -133,13 +133,12 @@ export function resolveOwnedManagedUpdateEnv(params: {
   });
 }
 
-export function resolvePostInstallDoctorEnv(params?: {
+export function resolveUpdateTargetEnv(params?: {
   baseEnv?: NodeJS.ProcessEnv;
   serviceEnv?: NodeJS.ProcessEnv;
   invocationCwd?: string;
 }): NodeJS.ProcessEnv {
   const resolvedEnv = disableUpdatedPackageCompileCacheEnv(params?.baseEnv ?? process.env);
-  delete resolvedEnv.OPENCLAW_SERVICE_REPAIR_POLICY;
   if (!params?.serviceEnv) {
     return resolvedEnv;
   }

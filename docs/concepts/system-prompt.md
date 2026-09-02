@@ -43,11 +43,12 @@ The prompt is compact, with fixed sections:
 - **Sandbox** (when enabled): sandboxed runtime, sandbox paths, elevated-exec availability.
 - **Temporal Context**: local date and time zone below the cache boundary; exact time comes from `session_status` when available.
 - **Assistant Output Directives**: compact attachment, voice-note, and reply-tag syntax.
+- **UI Presentation** (when presentation tools are available): compact widget, dashboard, and portal routing; verify the actual delivered surface.
 - **Collapsible Details** (when supported): teaches the model to keep optional depth in `<details>` disclosures while leaving the primary answer and required actions visible.
 - **Runtime**: host, OS, node, model, repo root (when detected), thinking level (one line).
 - **Reasoning**: current visibility level plus the `/reasoning` toggle hint.
 
-Large stable content (including **Project Context**) stays above the internal prompt cache boundary. Volatile per-turn sections (Control UI embed guidance, **Messaging**, **Collapsible Details**, **Voice**, **Group Chat Context**, **Reactions**, **Runtime**) are appended below that boundary so local backends with prefix caches can reuse the stable workspace prefix across channel turns. The boundary is internal transport metadata: every section remains system-prompt guidance for CLI backends. Tool descriptions should avoid embedding current channel names when the accepted schema already carries that runtime detail.
+Large stable content (including **Project Context**) stays above the internal prompt cache boundary. Volatile per-turn sections (**UI Presentation**, Control UI embed guidance, **Messaging**, **Collapsible Details**, **Voice**, **Group Chat Context**, **Reactions**, **Runtime**) are appended below that boundary so local backends with prefix caches can reuse the stable workspace prefix across channel turns. The boundary is internal transport metadata: every section remains system-prompt guidance for CLI backends. Tool descriptions should avoid embedding current channel names when the accepted schema already carries that runtime detail.
 
 Tooling also carries long-running-work guidance:
 
@@ -68,6 +69,19 @@ teaches metadata-first discovery, task-needed masked requests, and returned stor
 SecretRefs for supported config fields. Named-tool guidance disappears when the
 tool is filtered or disabled. Gateway egress additionally needs an enabled proxy
 and allowed hosts; there is no plaintext fallback. See [Secrets](/tools/secrets).
+
+UI presentation guidance is shared with native Codex developer instructions.
+It includes only current callable tools, including deferred and Code Mode tools;
+minimal prompts omit it. Tool eligibility follows client and channel-presenter
+capabilities, not a hardcoded channel list. A [widget](/tools/show-widget) may
+render inline or use a channel presenter; its returned presentation is authoritative.
+
+The compact guide distinguishes widgets from [dashboard](/web/dashboards) layout,
+[portals](/gateway/portals), and browser tabs. Missing authoring is a session
+limitation, not a platform limitation. Portals open through **Control UI → Portals**,
+not a bare `publicUrl`; token-bearing URLs stay private. The agent must verify the
+delivered interaction or say it is unverified. Tool descriptions and linked docs
+own the detailed sandbox, permission, and server-setup instructions.
 
 Safety guardrails in the system prompt are advisory, not enforcement. Use tool policy, exec approvals, sandboxing, and channel allowlists for hard enforcement; operators can disable prompt guardrails by design.
 

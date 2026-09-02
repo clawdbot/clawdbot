@@ -72,8 +72,8 @@ export async function getAgentLocalStatuses(
     // The gateway keeps a projected first id for wire compatibility. Local status must
     // preserve the selection state so read-only consumers never treat that id as an owner.
     defaultId: agentList.selectionRequired ? null : agentList.defaultId,
-    ownership: agentList.ownership ?? (agentList.selectionRequired === true ? "explicit" : "sole"),
-    selectionRequired: agentList.selectionRequired === true,
+    ownership: agentList.ownership,
+    selectionRequired: agentList.selectionRequired,
     agents: statuses,
     totalSessions: sessionStores.count,
     bootstrapPendingCount,

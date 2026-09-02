@@ -505,6 +505,7 @@ export async function createChildAdapter(params: ChildAdapterInput): Promise<Wor
     pid: child.pid ?? undefined,
     stdin,
     oomScoreWrapperSelected: preparedSpawn.wrapped,
+    supportsRawOutput: true,
     onStdout,
     onStderr,
     wait,

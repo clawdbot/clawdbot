@@ -2685,7 +2685,7 @@ docker_e2e_docker_run_cmd run demo
       expect(script).toContain("openclaw_prepublish_plugin_registry_start");
     }
     expectTextToIncludeAll(registryHelper, [
-      "OPENCLAW_NPM_REGISTRY_UPSTREAM=https://registry.npmjs.org",
+      'OPENCLAW_NPM_REGISTRY_UPSTREAM="${OPENCLAW_NPM_REGISTRY_UPSTREAM:-https://registry.npmjs.org}"',
       '[[ "$candidate_version" =~ -(alpha|beta)\\.[1-9][0-9]*$ ]]',
       'dist_tags="latest=0.0.0,$dist_tags"',
       'OPENCLAW_NPM_REGISTRY_DIST_TAGS="$dist_tags"',
@@ -2736,19 +2736,9 @@ docker_e2e_docker_run_cmd run demo
       publishedRunner.indexOf("phase update-candidate update_candidate"),
     );
     expect(publishedRunner.indexOf("phase update-candidate update_candidate")).toBeLessThan(
-      publishedRunner.indexOf("phase assert-prepublish-requests node"),
+      publishedRunner.indexOf("phase assert-prepublish-requests assert_prepublish_plugin_install"),
     );
-    expectTextToIncludeAll(publishedRunner, [
-      'package-compat.mjs --clawhub-release-security-mode "$candidate_version"',
-      'assert-prepublish-requests "$OPENCLAW_CLAWHUB_URL" "$prepublish_package" "$candidate_version" "$clawhub_security_mode"',
-    ]);
     expect(publishedRunner).not.toContain('if [ "$candidate_version" = "2026.6.35" ]; then');
-    expect(publishedRunner).toContain('prepublish_package="@openclaw/whatsapp"');
-    expect(publishedRunner).toContain("if configured_plugin_installs_enabled; then");
-    expect(publishedRunner).toContain('prepublish_package="@openclaw/matrix"');
-    expect(publishedRunner).toContain(
-      'assert-prepublish-requests "$OPENCLAW_CLAWHUB_URL" "$prepublish_package" "$candidate_version"',
-    );
     expect(publishedRunner).toContain(
       'local tarball="$fixture_root/openclaw-brave-plugin-${candidate_version}.tgz"',
     );
@@ -2757,10 +2747,9 @@ docker_e2e_docker_run_cmd run demo
     expect(publishedRunner).toContain(
       'registry_args+=("@openclaw/brave-plugin" "$candidate_version" "$tarball")',
     );
-    expect(publishedRunner).toContain('"$clawhub_security_mode"');
-    expect(publishedRunner.indexOf("phase assert-prepublish-requests node")).toBeLessThan(
-      publishedRunner.indexOf("phase doctor run_doctor"),
-    );
+    expect(
+      publishedRunner.indexOf("phase assert-prepublish-requests assert_prepublish_plugin_install"),
+    ).toBeLessThan(publishedRunner.indexOf("phase doctor run_doctor"));
     const discordInstallIndex = runner.indexOf(
       'openclaw_e2e_fixture_plugin_command openclaw -- \\\n    plugins install "npm:@openclaw/discord@$package_version" --pin',
     );
@@ -2821,7 +2810,6 @@ docker_e2e_docker_run_cmd run demo
         "unset OPENCLAW_CLAWHUB_URL CLAWHUB_URL",
         'export OPENCLAW_CLAWHUB_URL="http://127.0.0.1:$(cat "$port_file")"',
         'openclaw_e2e_stop_process "${clawhub_fixture_pid:-}"',
-        "assert-prepublish-requests",
       ]);
       expect(script).not.toContain("CLAWHUB_EXPECTED_VERSION");
       expect(script).not.toContain("/__fixture__/requests");
@@ -3520,7 +3508,9 @@ ${lane === "published" ? "prepare_update_restart_probe" : 'prepare_update_restar
           expect(isProcessRunning(records()[0]!.pid)).toBe(false);
           await expect(fetch(url, { signal: AbortSignal.timeout(1_000) })).rejects.toThrow();
           expect(systemctl("start", "openclaw-gateway.service").status).toBe(0);
-          for (let attempt = 0; attempt < 200 && records().length < 2; attempt++) await delay(10);
+          for (let attempt = 0; attempt < 200 && records().length < 2; attempt++) {
+            await delay(10);
+          }
           expect(records()).toHaveLength(2);
         }
         const initial = (await (
@@ -3529,8 +3519,9 @@ ${lane === "published" ? "prepare_update_restart_probe" : 'prepare_update_restar
         expect(initial.managed).toBe(true);
         expect(systemctl("restart", "openclaw-gateway.service").status).toBe(0);
         const expectedStarts = lane === "published" ? 3 : 2;
-        for (let attempt = 0; attempt < 200 && records().length < expectedStarts; attempt++)
+        for (let attempt = 0; attempt < 200 && records().length < expectedStarts; attempt++) {
           await delay(10);
+        }
         expect(records()).toHaveLength(expectedStarts);
         const replacement = (await (
           await fetch(url, { signal: AbortSignal.timeout(1_000) })
@@ -5840,13 +5831,13 @@ grep -Fxq preserved "$TMPDIR/caller-fd"
     expectTextToIncludeAll(runner, [
       "OPENCLAW_DOCKER_ALL_LANES=codex-on-demand",
       "source scripts/e2e/lib/prepublish-plugin-registry.sh",
-      "openclaw_prepublish_plugin_registry_configure_docker_args",
+      'docker_e2e_package_mount_args "$PACKAGE_TGZ"',
       "openclaw_prepublish_plugin_registry_start_mounted",
       "'[\"@openclaw/codex\"]'",
     ]);
     expectTextToIncludeAll(registryHelper, [
       'OPENCLAW_NPM_REGISTRY_DIST_TAGS="$dist_tags"',
-      "OPENCLAW_NPM_REGISTRY_UPSTREAM=https://registry.npmjs.org",
+      'OPENCLAW_NPM_REGISTRY_UPSTREAM="${OPENCLAW_NPM_REGISTRY_UPSTREAM:-https://registry.npmjs.org}"',
     ]);
     expect(runner.indexOf("openclaw_e2e_install_package")).toBeLessThan(
       runner.indexOf("\nconfigure_plugin_registry\n"),
@@ -5861,7 +5852,7 @@ grep -Fxq preserved "$TMPDIR/caller-fd"
 
     expectTextToIncludeAll(runner, [
       'source "$ROOT_DIR/scripts/e2e/lib/prepublish-plugin-registry.sh"',
-      "openclaw_prepublish_plugin_registry_configure_docker_args",
+      'docker_e2e_package_mount_args "$PACKAGE_TGZ"',
       "openclaw_prepublish_plugin_registry_start_mounted",
       "'[\"@openclaw/codex\"]'",
     ]);
@@ -6571,9 +6562,9 @@ source "$ROOT_DIR/scripts/lib/docker-e2e-logs.sh"
       'test "$(command -v openclaw)" = "/usr/local/bin/openclaw"',
       'test "$(command -v openclaw)" = "$PNPM_HOME/bin/openclaw"',
       "OPENCLAW_BUN_GLOBAL_SMOKE_PROOF_PATH",
-      'BUN_HARNESS_DIR="$(mktemp -d',
+      'PACKAGE_HARNESS_DIR="$(mktemp -d',
       "chmod -R a+rX",
-      '-v "$BUN_HARNESS_DIR:/repo:ro"',
+      '-v "$PACKAGE_HARNESS_DIR:/repo:ro"',
       '--container "npm=$NPM_PROOF_CONTAINER"',
       '--container "pnpm=$PNPM_PROOF_CONTAINER"',
       '--container "bun=$BUN_PROOF_CONTAINER"',
@@ -6607,7 +6598,7 @@ source "$ROOT_DIR/scripts/lib/docker-e2e-logs.sh"
     expectTextToIncludeAll(updateRunner, [
       "openclaw update --channel beta",
       'OPENCLAW_NPM_REGISTRY_DIST_TAGS="latest=0.0.0,beta=$package_version"',
-      "OPENCLAW_NPM_REGISTRY_UPSTREAM=https://registry.npmjs.org",
+      'OPENCLAW_NPM_REGISTRY_UPSTREAM="${OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_URL:-https://registry.npmjs.org}"',
       "assert-update beta",
       "assert-config-channel beta",
       "assert-installed-version",
@@ -6631,8 +6622,23 @@ source "$ROOT_DIR/scripts/lib/docker-e2e-logs.sh"
   it("proves gateway suspension across a same-container process restart", () => {
     const runner = readFileSync(GATEWAY_NETWORK_DOCKER_E2E_PATH, "utf8");
     expectTextToIncludeAll(runner, [
+      'source "$ROOT_DIR/scripts/lib/frozen-target-compat.sh"',
       "plugins enable admin-http-rpc",
       "/tmp/gateway-network-configured",
+      'CAPABILITIES_DIR="$(mktemp -d',
+      "GW_CAPABILITIES_PATH=$CAPABILITIES_CONTAINER_PATH",
+      'CAPABILITIES_HOST_USER="$(id -u)"',
+      'CAPABILITIES_HOST_GROUP="$(id -g)"',
+      'if [[ ! -O "$CAPABILITIES_DIR" ]]',
+      '--user "$CAPABILITIES_HOST_USER:$CAPABILITIES_HOST_GROUP"',
+      "trap cleanup EXIT",
+      '[[ -z "$CAPABILITIES_PATH" ]] || rm -f "$CAPABILITIES_PATH"',
+      '[[ -z "$CAPABILITIES_DIR" ]] || rmdir "$CAPABILITIES_DIR"',
+      'if [[ ! -O "$CAPABILITIES_PATH" ]]',
+      'rm "$CAPABILITIES_PATH"',
+      'rmdir "$CAPABILITIES_DIR"',
+      'if [[ "$SUSPENSION_CAPABILITY" == "unsupported" ]]',
+      "openclaw_frozen_target_omissions_authorized",
       "run_suspension_phase() {",
       "GW_MODE=suspension-$stage-restart",
       "run_suspension_phase pre",
@@ -6647,6 +6653,27 @@ source "$ROOT_DIR/scripts/lib/docker-e2e-logs.sh"
       'run_logged_print "gateway-network-suspension-$stage"',
       '"phase":"container-restart","durationMs":%d',
     ]);
+    expect(runner).not.toContain('source "$ROOT_DIR/scripts/lib/live-docker-auth.sh"');
+    expect(runner).not.toContain("openclaw_live_chown_bind_dirs_for_container_user");
+    expect(runner).not.toContain("gateway-network-capabilities-dir");
+    expect(runner).not.toContain("IMAGE_USER=");
+    expect(runner).not.toContain("--user 0:0");
+    expect(runner).not.toContain("chown");
+    expect(runner).not.toContain("chmod");
+    expect(runner).not.toContain('rm -rf "$CAPABILITIES_DIR"');
+
+    const parseIndex = runner.indexOf('SUSPENSION_CAPABILITY="$(');
+    const ownershipIndex = runner.indexOf('if [[ ! -O "$CAPABILITIES_PATH" ]]');
+    const unlinkIndex = runner.indexOf('rm "$CAPABILITIES_PATH"', ownershipIndex);
+    const rmdirIndex = runner.indexOf('rmdir "$CAPABILITIES_DIR"', ownershipIndex);
+    const capabilityBranchIndex = runner.indexOf(
+      'if [[ "$SUSPENSION_CAPABILITY" == "unsupported" ]]',
+    );
+    expect(parseIndex).toBeGreaterThanOrEqual(0);
+    expect(ownershipIndex).toBeGreaterThan(parseIndex);
+    expect(unlinkIndex).toBeGreaterThan(ownershipIndex);
+    expect(rmdirIndex).toBeGreaterThan(unlinkIndex);
+    expect(capabilityBranchIndex).toBeGreaterThan(rmdirIndex);
   });
 
   it.each([

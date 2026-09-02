@@ -70,6 +70,18 @@ suite.define(() => {
           await openSessionMenuSubmenu(page, "Icon & color");
         }
         const picker = page.locator(".session-menu__appearance:visible");
+        await expect
+          .poll(() =>
+            picker.evaluate((element) => {
+              const iconPicker = element.querySelector(".session-menu__icon-picker");
+              const iconsLabel = element.querySelectorAll(".session-menu__icon-section-label")[2];
+              return [
+                iconPicker ? getComputedStyle(iconPicker).marginTop : null,
+                iconsLabel ? getComputedStyle(iconsLabel).marginTop : null,
+              ];
+            }),
+          )
+          .toEqual(["4px", "4px"]);
         const focused = () =>
           page.evaluate(
             () =>
@@ -95,6 +107,13 @@ suite.define(() => {
         await waitForPatch(gateway, (params) => params.key === key && params.icon === "🚀");
         await page.keyboard.press("Tab");
         const reset = picker.getByRole("button", { name: "Reset to default", exact: true });
+        await expect
+          .poll(() =>
+            reset.evaluate(
+              (element) => element.previousElementSibling?.getAttribute("role") ?? null,
+            ),
+          )
+          .toBe("separator");
         await expect
           .poll(() =>
             reset.evaluateAll((elements) =>
@@ -154,6 +173,12 @@ suite.define(() => {
       recordVideo: capture ? { dir: proofDir, size: { width: 1440, height: 900 } } : undefined,
     });
     const page = await context.newPage();
+    const designReview = sessionRow(key, "Design review", now);
+    const sessions = [
+      designReview,
+      { ...sessionRow("agent:main:research", "Research notes", now - 60_000), color: "green" },
+      { ...sessionRow("agent:main:release", "Release checklist", now - 120_000), color: "orange" },
+    ];
     const gateway = await installMockGateway(page, {
       sessionKey: key,
       historyMessages: [
@@ -168,14 +193,7 @@ suite.define(() => {
         },
       ],
       methodResponses: {
-        "sessions.list": sessionsListResponse([
-          sessionRow(key, "Design review", now),
-          { ...sessionRow("agent:main:research", "Research notes", now - 60_000), color: "green" },
-          {
-            ...sessionRow("agent:main:release", "Release checklist", now - 120_000),
-            color: "orange",
-          },
-        ]),
+        "sessions.list": sessionsListResponse(sessions),
         "sessions.patch": {},
         "sessions.catalog.list": {
           catalogs: [
@@ -273,12 +291,17 @@ suite.define(() => {
       await page.keyboard.press("Escape");
       await page.keyboard.press("Escape");
 
+      Object.assign(designReview, { label: "Design review refreshed", color: null });
+      await gateway.setMethodResponse("sessions.list", sessionsListResponse(sessions));
       await gateway.emitGatewayEvent("sessions.changed", { sessionKey: key, color: null });
+      // Only the roster response carries this label; wait for that render so a
+      // transient event-only clear cannot hide a stale color restored by refresh.
+      await row.getByText("Design review refreshed", { exact: true }).waitFor();
+      expect(await row.getAttribute("style")).toBeNull();
       await expect.poll(() => dot.count()).toBe(0);
       await expect
         .poll(() => row.getAttribute("class"))
         .not.toContain("sidebar-recent-session--colored");
-      expect(await row.getAttribute("style")).toBeNull();
 
       await page.setViewportSize({ width: 560, height: 900 });
       await page.locator(".chat-header-session-menu__trigger").click();

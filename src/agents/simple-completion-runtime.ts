@@ -45,7 +45,6 @@ import {
   fingerprintAuthProfileCredential,
   fingerprintResolvedProviderAuth,
 } from "./execution-auth-binding.js";
-import { resolveAgentHarnessPolicy } from "./harness/policy.js";
 import {
   createAgentRuntimeMetadataPluginIdScope,
   type AgentHarnessPluginSelection,
@@ -65,7 +64,7 @@ import {
   resolveModelRefFromString,
 } from "./model-selection.js";
 import { resolveOpenAIModelRoutes, selectOpenAIModelRouteAuth } from "./openai-model-routes.js";
-import { OPENAI_PROVIDER_ID, isOpenAIProvider } from "./openai-routing.js";
+import { isOpenAIProvider } from "./openai-routing.js";
 import {
   acquireAgentRunPreparedModelRuntime,
   type PreparedModelRuntimeSnapshot,
@@ -110,7 +109,7 @@ export type PreparedSimpleCompletionModel =
 type AgentSimpleCompletionSelection = {
   provider: string;
   modelId: string;
-  /** Provider used for auth/transport when runtime policy redirects the logical model ref. */
+  /** Shipped SDK return field; new selections carry canonical identity in provider. */
   runtimeProvider?: string;
   profileId?: string;
   agentDir: string;
@@ -190,17 +189,10 @@ function resolveSimpleCompletionSelectionRequest(
   if (!provider || !modelId) {
     return null;
   }
-  const runtimeProvider =
-    isOpenAIProvider(provider) &&
-    resolveAgentHarnessPolicy({ provider, modelId, config: params.cfg, agentId: params.agentId })
-      .runtime === "codex"
-      ? OPENAI_PROVIDER_ID
-      : undefined;
   return {
     selection: {
       provider,
       modelId,
-      ...(runtimeProvider ? { runtimeProvider } : {}),
       profileId: split?.profile || undefined,
       agentDir: params.agentDir?.trim() || resolveAgentDir(params.cfg, params.agentId),
     },
@@ -569,7 +561,7 @@ export async function prepareSimpleCompletionModelForAgent(params: {
     workspaceDir,
     selections: [
       {
-        provider: tentativeSelection.runtimeProvider ?? tentativeSelection.provider,
+        provider: tentativeSelection.provider,
         modelId: tentativeSelection.modelId,
         agentId: params.agentId,
       },
@@ -599,7 +591,7 @@ export async function prepareSimpleCompletionModelForAgent(params: {
     workspaceDir,
     selections: [
       {
-        provider: selection.runtimeProvider ?? selection.provider,
+        provider: selection.provider,
         modelId: selection.modelId,
         agentId: params.agentId,
       },
@@ -623,20 +615,19 @@ export async function prepareSimpleCompletionModelForAgent(params: {
       return { error: `No model configured for agent ${params.agentId}.` };
     }
   }
-  const selectedProvider = selection.runtimeProvider ?? selection.provider;
   return await withPreparedSimpleCompletionRuntime(
     {
       ...params,
       agentDir: selection.agentDir,
       pluginMetadataSnapshot: metadataSnapshot,
     },
-    [{ provider: selectedProvider, modelId: selection.modelId }],
+    [{ provider: selection.provider, modelId: selection.modelId }],
     async (context) => {
       const prepared = await prepareSimpleCompletionModelCore(
         {
           cfg: params.cfg,
           agentId: params.agentId,
-          provider: selectedProvider,
+          provider: selection.provider,
           modelId: selection.modelId,
           agentDir: selection.agentDir,
           profileId: selection.profileId,

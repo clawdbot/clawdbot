@@ -50,6 +50,77 @@ describe("createAgentCommandLifecycle", () => {
     }
   });
 
+  it.each([
+    { name: "finishing", phase: "finishing", lifecycleError: undefined },
+    { name: "end", phase: "end", lifecycleError: undefined },
+    { name: "result error", phase: "error", lifecycleError: undefined },
+    {
+      name: "explicit lifecycle guidance",
+      phase: "error",
+      lifecycleError: "Reconnect the selected provider, then try again.",
+    },
+  ] as const)("publishes the timeout diagnostic through $name", ({ phase, lifecycleError }) => {
+    emitAgentEvent.mockClear();
+    const error = "Request timed out before a response was generated. Please try again.";
+    const lifecycle = createAgentCommandLifecycle({
+      runId: "timeout-diagnostic-owner",
+      lifecycleGeneration: () => "test-generation",
+      startedAt: 100,
+      state: {
+        currentTurnUserMessagePersisted: true,
+        lifecycleFinishing: false,
+        lifecycleEnded: false,
+        lifecycleError,
+      },
+    });
+    const terminal = {
+      metadata: { aborted: false, replayInvalid: false },
+      outcome: buildAgentRunTerminalOutcome({
+        status: "timeout",
+        stopReason: "timeout",
+        timeoutPhase: "provider",
+        providerStarted: true,
+        error,
+      }),
+    };
+
+    if (phase === "finishing") {
+      lifecycle.emitFinishing(terminal);
+    } else if (phase === "end") {
+      lifecycle.emitEnd(terminal);
+    } else {
+      lifecycle.emitResultError(
+        {
+          payloads: [
+            { text: "An earlier tool failed.", isError: true },
+            { text: error, isError: true },
+          ],
+          meta: {
+            durationMs: 0,
+            error: { kind: "incomplete_turn", message: error, fallbackSafe: false },
+          },
+        },
+        false,
+        terminal,
+      );
+    }
+
+    expect(emitAgentEvent).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        runId: "timeout-diagnostic-owner",
+        stream: "lifecycle",
+        data: expect.objectContaining({
+          phase,
+          error: lifecycleError ?? error,
+          aborted: false,
+          stopReason: "timeout",
+          timeoutPhase: "provider",
+          providerStarted: true,
+        }),
+      }),
+    );
+  });
+
   it.each(["finishing", "end", "error"] as const)(
     "preserves only canonical terminal facts on %s events",
     (phase) => {

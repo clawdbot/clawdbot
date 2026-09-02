@@ -37,14 +37,7 @@ import type { LinkFaviconFetcher } from "../link-favicon-loader.ts";
 import { workspaceResultConflictFromTranscript } from "../workspace-conflict.ts";
 import { renderAssistantAttachments } from "./chat-message-attachments.ts";
 import { renderMessageImages } from "./chat-message-images.ts";
-import {
-  detectJson,
-  jsonSummaryLabel,
-  renderMessageMarkdown,
-  resolveMessageDisplayMarkdown,
-  type AssistantMessageDisclosure,
-  type MessageActionDetails,
-} from "./chat-message-markdown.ts";
+import type { MessageActionDetails } from "./chat-message-markdown.ts";
 import {
   extractImages,
   extractMessageAttachments,
@@ -53,6 +46,13 @@ import {
   type ArtifactDownloadResolver,
   type PairingQrExpiryNotice,
 } from "./chat-message-media.ts";
+import {
+  detectJson,
+  renderMessageJson,
+  renderMessageMarkdown,
+  resolveMessageDisplayMarkdown,
+  type AssistantMessageDisclosure,
+} from "./chat-message-text.ts";
 import type { SidebarContent } from "./chat-sidebar.ts";
 import {
   renderToolApprovalReviews,
@@ -73,15 +73,17 @@ function renderChatIcon(name: string) {
   return icons[name as IconName] ?? icons.zap;
 }
 
-function canonicalImageMessageKey(message: unknown, sessionKey: string | undefined) {
+function imageMessageIdentity(message: unknown, sessionKey: string | undefined) {
   const identity = readSessionMessageIdentity(message);
-  return identity?.role === "user" &&
-    identity.id &&
-    !identity.isImported &&
-    !isPendingSendMessage(message) &&
-    !identity.id.startsWith(CHAT_PENDING_INPUT_MESSAGE_PREFIX)
-    ? JSON.stringify([sessionKey, identity.id, identity.sequence])
-    : undefined;
+  if (identity?.role !== "user" || identity.isImported) {
+    return { localSubmission: false };
+  }
+  if (!identity.id || isPendingSendMessage(message)) {
+    return { localSubmission: Boolean(identity.sendId) };
+  }
+  return identity.id.startsWith(CHAT_PENDING_INPUT_MESSAGE_PREFIX)
+    ? {}
+    : { canonicalMessageKey: JSON.stringify([sessionKey, identity.id, identity.sequence]) };
 }
 
 function renderInlineToolCards(
@@ -262,7 +264,7 @@ export function renderGroupedMessage(
   const images = extractImages(message);
   const hasImages = images.length > 0;
   const imageRenderOptions = {
-    canonicalMessageKey: hasImages ? canonicalImageMessageKey(message, opts.sessionKey) : undefined,
+    ...(hasImages ? imageMessageIdentity(message, opts.sessionKey) : {}),
     connectionEpoch: opts.connectionEpoch,
     localMediaPreviewRoots: opts.localMediaPreviewRoots ?? [],
     resourceBasePath: opts.resourceBasePath,
@@ -314,6 +316,7 @@ export function renderGroupedMessage(
   // Suppress empty bubbles when tool cards are the only content and toggle is off
   if (
     !markdown &&
+    !reasoningMarkdown &&
     !hasToolCards &&
     !hasImages &&
     !hasPairingQrExpiryNotices &&
@@ -437,16 +440,7 @@ export function renderGroupedMessage(
       : nothing}
     ${isStandaloneToolMessage ? nothing : assistantViewContent}
     ${jsonResult
-      ? html`<details
-          class="chat-json-collapse"
-          ?open=${isStandaloneToolMessage && Boolean(opts.autoExpandToolCalls)}
-        >
-          <summary class="chat-json-summary">
-            <span class="chat-json-badge">${t("chat.codeBlock.jsonBadge")}</span>
-            <span class="chat-json-label">${jsonSummaryLabel(jsonResult.parsed)}</span>
-          </summary>
-          <pre class="chat-json-content"><code>${jsonResult.text}</code></pre>
-        </details>`
+      ? renderMessageJson(jsonResult, isStandaloneToolMessage && Boolean(opts.autoExpandToolCalls))
       : bodyMarkdown
         ? renderMessageMarkdown(
             bodyMarkdown,

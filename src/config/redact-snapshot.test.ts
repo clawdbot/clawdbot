@@ -50,14 +50,20 @@ function expectGatewayAuthFieldValue(
 }
 
 describe("redactConfigSnapshot", () => {
-  it.each([true, false])("does not expose internal plugin metadata (valid=%s)", (valid) => {
+  it.each([true, false])("omits private snapshot fields when valid=%s", (valid) => {
+    const token = "synthetic-canonical-token-canary";
+    const preMigrationToken = "synthetic-pre-migration-token-canary";
     const snapshot = {
       ...makeSnapshot({
+        gateway: { auth: { token } },
         plugins: {
           allow: ["demo"],
         },
       }),
       valid,
+      sourceConfigBeforeMigrations: makeSnapshot({
+        gateway: { auth: { token: preMigrationToken } },
+      }).sourceConfig,
       pluginMetadataSnapshot: {
         manifestRegistry: {
           plugins: [
@@ -71,14 +77,27 @@ describe("redactConfigSnapshot", () => {
         },
       },
     };
+    const original = structuredClone(snapshot);
 
     const result = redactConfigSnapshot(snapshot);
+    const serialized = JSON.stringify(result);
 
+    expect(serialized).not.toContain(preMigrationToken);
+    expect(serialized).not.toContain(token);
+    expect(serialized).not.toContain("/private/plugin/root");
+    expect("sourceConfigBeforeMigrations" in result).toBe(false);
     expect("pluginMetadataSnapshot" in result).toBe(false);
+    expect(result).toMatchObject({ path: snapshot.path, hash: "abc123", exists: true, valid });
+    const expectedConfig = valid
+      ? { gateway: { auth: { token: REDACTED_SENTINEL } }, plugins: { allow: ["demo"] } }
+      : {};
+    expect(result.config).toEqual(expectedConfig);
+    expect(result.sourceConfig).toEqual(expectedConfig);
+    expect(snapshot).toEqual(original);
   });
 
   it.each([true, false])(
-    "redacts pre-migration credentials without mutating source (valid=%s)",
+    "omits pre-migration credentials without mutating source (valid=%s)",
     (valid) => {
       const source = makeSnapshot({
         channels: { discord: { token: "synthetic-discord-token" } },
@@ -102,22 +121,7 @@ describe("redactConfigSnapshot", () => {
       const result = redactConfigSnapshot(snapshot, mainSchemaHints);
 
       expect(snapshot).toEqual(before);
-      expect(result.sourceConfigBeforeMigrations).toEqual(
-        valid
-          ? {
-              channels: { discord: { token: REDACTED_SENTINEL } },
-              models: {
-                providers: {
-                  inline: { apiKey: REDACTED_SENTINEL, models: [] },
-                  referenced: {
-                    apiKey: { source: "env", provider: "default", id: REDACTED_SENTINEL },
-                    models: [],
-                  },
-                },
-              },
-            }
-          : {},
-      );
+      expect(result).not.toHaveProperty("sourceConfigBeforeMigrations");
       for (const secret of [
         "synthetic-discord-token",
         "synthetic-provider-key",
@@ -807,11 +811,17 @@ describe("redactConfigSnapshot", () => {
     expect((result.raw ?? "").split(REDACTED_SENTINEL).length).toBe(1);
   });
 
-  it("redacts parsed and resolved objects", () => {
-    const snapshot = makeSnapshot({
+  it("redacts each projection without using its secrets to rewrite another projection", () => {
+    const config = {
       channels: { discord: { token: "MTIzNDU2Nzg5MDEyMzQ1Njc4.GaBcDe.FgH" } },
       gateway: { auth: { token: "supersecrettoken123456" } },
-    });
+      meta: { lastTouchedVersion: "resolved-only-value migration-only-value" },
+    };
+    const snapshot = {
+      ...makeSnapshot(config, JSON.stringify(config)),
+      resolved: { ...config, gateway: { auth: { token: "resolved-only-value" } } },
+      sourceConfigBeforeMigrations: { gateway: { auth: { token: "migration-only-value" } } },
+    };
     const result = redactConfigSnapshot(snapshot);
     const parsed = result.parsed as Record<string, Record<string, Record<string, string>>>;
     const sourceConfig = result.sourceConfig as Record<
@@ -837,6 +847,8 @@ describe("redactConfigSnapshot", () => {
     expect(runtimeDiscord.token).toBe(REDACTED_SENTINEL);
     expect(result.sourceConfig).toBe(result.resolved);
     expect(result.runtimeConfig).toBe(result.config);
+    expect(result).not.toHaveProperty("sourceConfigBeforeMigrations");
+    expect(result.raw).toContain('"lastTouchedVersion":"resolved-only-value migration-only-value"');
   });
 
   it("handles null raw gracefully", () => {

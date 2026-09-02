@@ -6,7 +6,6 @@ import {
   isVitestWorkerDeclaration,
   requestVitestWorkerArtifacts,
   resolveVitestWorkerDeclaration,
-  verifyVitestWorkerArtifacts,
   vitestWorkerDeclarationEntries,
 } from "../../scripts/lib/vitest-worker-artifacts.mts";
 import { getVitestWorkerDescriptor } from "../../scripts/lib/vitest-worker-bootstrap.mts";
@@ -60,8 +59,10 @@ export function compiledSubprocessesPlugin(): Plugin {
         instance[ownerKey] = {
           acquire() {
             return (preparation ??= (async () => {
-              await requestVitestWorkerArtifacts();
-              verifyVitestWorkerArtifacts(directory);
+              await requestVitestWorkerArtifacts().catch((error: unknown) => {
+                failure = error;
+                throw error;
+              });
               return directory;
             })());
           },
@@ -71,19 +72,10 @@ export function compiledSubprocessesPlugin(): Plugin {
             process.exitCode = 1;
           }
         });
-        // Vitest closes its pool concurrently with this hook. Verification is
-        // safe here; deletion belongs to the outer runner after actual child close.
-        vitest.onClose(async () => {
+        // The outer owner verifies before lending and after every borrower closes.
+        // Rechecking here races pool shutdown and consumes Vitest's teardown deadline.
+        vitest.onClose(() => {
           process.off("disconnect", ownerDisconnected);
-          if (preparation) {
-            try {
-              verifyVitestWorkerArtifacts(await preparation);
-            } catch (error) {
-              failure = error;
-              process.exitCode = 1;
-              throw error;
-            }
-          }
         });
       }
       owner = instance[ownerKey];

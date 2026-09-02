@@ -525,42 +525,43 @@ describe("executePreparedCliRun supervisor output capture", () => {
     expect(result.sessionId).toBe("resume-jsonl-session");
   });
 
-  it("classifies failed stdout from the retained parse buffer before the diagnostic tail", async () => {
-    // The error classifier needs the retained parse buffer; the human-facing
-    // diagnostic tail may contain only noise once stdout grows large.
-    const errorPrefix = `${JSON.stringify({
-      type: "result",
-      is_error: true,
-      result: "429 rate limit exceeded",
-    })}\n`;
-    const noisyTail = "x".repeat(80 * 1024);
+  it.each(["stdout", "stderr"] as const)(
+    "classifies failed %s from the retained parse buffer before other candidates",
+    async (stream) => {
+      // The error classifier needs the retained parse buffer; the human-facing
+      // diagnostic tail may contain only noise once stdout grows large.
+      const errorPrefix = `${JSON.stringify({
+        type: "result",
+        is_error: true,
+        result: "429 rate limit exceeded",
+      })}\n`;
+      const noisyTail = "x".repeat(80 * 1024);
 
-    supervisorSpawnMock.mockImplementationOnce(async (...args: unknown[]) => {
-      const input = args[0] as SupervisorSpawnInput;
-      input.onStdout?.(errorPrefix);
-      input.onStdout?.(noisyTail);
-      return createManagedRun({
-        reason: "exit",
-        exitCode: 1,
-        exitSignal: null,
-        durationMs: 50,
-        stdout: input.captureOutput === false ? "" : `${errorPrefix}${noisyTail}`,
-        stderr: "",
-        timedOut: false,
-        noOutputTimedOut: false,
+      supervisorSpawnMock.mockImplementationOnce(async (...args: unknown[]) => {
+        const input = args[0] as SupervisorSpawnInput;
+        const emit = stream === "stderr" ? input.onStderr : input.onStdout;
+        emit?.(errorPrefix);
+        emit?.(noisyTail);
+        if (stream === "stderr") {
+          input.onStdout?.(JSON.stringify({ type: "error", message: "Credit balance is too low" }));
+        }
+        return createManagedRun({
+          reason: "exit",
+          exitCode: 1,
+          exitSignal: null,
+          durationMs: 50,
+          stdout: "",
+          stderr: "",
+          timedOut: false,
+          noOutputTimedOut: false,
+        });
       });
-    });
 
-    try {
-      await executePreparedCliRun(buildPreparedCliRunContext({ output: "text" }));
-    } catch (error) {
-      const classified = error as { reason?: unknown; status?: unknown };
-      expect(classified.reason).toBe("rate_limit");
-      expect(classified.status).toBe(429);
-      return;
-    }
-    throw new Error("Expected CLI run to reject with a rate limit error");
-  });
+      await expect(
+        executePreparedCliRun(buildPreparedCliRunContext({ output: "text" })),
+      ).rejects.toMatchObject({ reason: "rate_limit", status: 429 });
+    },
+  );
 
   it("fails one-shot Claude is_error results even when the process exits successfully", async () => {
     const stdout = `${JSON.stringify({

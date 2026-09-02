@@ -408,6 +408,7 @@ export async function installPluginFromArchive(
             requirePluginManifest: true,
             installPolicyRequest,
             onBeforePluginArtifactCommit: params.onBeforePluginArtifactCommit,
+            beforePersistentApply: params.beforePersistentApply,
             onEffectiveMode: (resolvedMode) => {
               effectiveMode = resolvedMode;
             },

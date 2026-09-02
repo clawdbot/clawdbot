@@ -37,15 +37,14 @@ export type PersistedUserTurnMediaInput = Pick<
 
 export type PersistedUserTurnMessage = Extract<AgentMessage, { role: "user" }> & {
   display?: false;
+  excludeFromContext?: true;
   /** Private transcript correlation; never authorizes an execution. */
   idempotencyKey?: string;
   provenance?: InputProvenance;
   __openclaw?: Record<string, unknown>;
 };
 
-export type UserTurnInput = {
-  /** Internal continuation input stays in model history without impersonating a human chat row. */
-  display?: false;
+export type UserTurnInput = Pick<PersistedUserTurnMessage, "display" | "excludeFromContext"> & {
   text?: string | null;
   media?: readonly PersistedUserTurnMediaInput[] | null;
   /** Restart-safe native image placement; model-visible prompt bytes remain separate. */

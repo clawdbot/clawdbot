@@ -48,6 +48,7 @@ import {
   hasValidSessionEntryIdentity,
   parseSessionEntryJson as parseSessionEntryRow,
   sessionEntryMetadataJson,
+  sessionEntryInventoryJson,
 } from "./session-accessor.sqlite-status.js";
 import { readTranscriptMutationStateInTransaction } from "./session-accessor.sqlite-transcript-state.js";
 import {
@@ -243,30 +244,31 @@ export function readSessionEntryCount(database: OpenClawAgentDatabase): number {
   const db = getSessionKysely(database.db);
   const rows = iterateSqliteQuerySync(
     database.db,
-    db.selectFrom("session_nodes").select(sessionEntryMetadataJson),
+    db.selectFrom("session_nodes").select(sessionEntryInventoryJson),
   );
   let count = 0;
   for (const row of rows) {
-    count += parseSessionEntryRow(row) ? 1 : 0;
+    count +=
+      row.entry_json === null || parseSessionEntryRow({ entry_json: row.entry_json }) ? 1 : 0;
   }
   return count;
 }
 
-export function readSessionEntryKeys(database: OpenClawAgentDatabaseReader): string[] {
+export function* iterateSessionEntryKeys(
+  database: OpenClawAgentDatabaseReader,
+): IterableIterator<string> {
   const db = getSessionKysely(database.db);
-  const keys: string[] = [];
   for (const row of iterateSqliteQuerySync(
     database.db,
     db
       .selectFrom("session_nodes")
-      .select([sessionEntryMetadataJson, "session_key"])
+      .select([sessionEntryInventoryJson, "session_key"])
       .orderBy("session_key", "asc"),
   )) {
-    if (parseSessionEntryRow(row)) {
-      keys.push(row.session_key);
+    if (row.entry_json === null || parseSessionEntryRow({ entry_json: row.entry_json })) {
+      yield row.session_key;
     }
   }
-  return keys;
 }
 
 export function resolveLifecyclePrimaryEntry(
@@ -729,6 +731,10 @@ export function writeSessionEntry(
       updatedAt,
     });
   }
-  publishSessionEntryCacheInvalidation(database, sessionNode, writeGeneration);
+  publishSessionEntryCacheInvalidation(
+    database,
+    { sessionKey, entry: normalizedEntry },
+    writeGeneration,
+  );
   return normalizedEntry;
 }
