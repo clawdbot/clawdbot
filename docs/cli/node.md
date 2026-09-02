@@ -103,10 +103,14 @@ Options:
 ## Gateway auth for node host
 
 `--pair` uses a 10-minute single-use bootstrap token for the first connection.
-After pairing, reconnects use the durable device credential. The setup link
-does not pre-approve `system.run`; normal node approval and SSH verification
-remain in force. `node install --pair` is intentionally unavailable because a
-short-lived bearer setup link must not be persisted in service arguments.
+After pairing, reconnects use the durable device credential. Because an admin
+minted the setup link, the Gateway approves the device pairing and the node's
+initial declared command surface (including `system.run`) at first connect;
+later surface upgrades still need `openclaw nodes approve`. Command execution
+then depends on the node host's [exec approvals](/tools/exec-approvals), which
+default to `full`, so configure them before sharing a link. `node install
+--pair` is intentionally unavailable because a short-lived bearer setup link
+must not be persisted in service arguments.
 
 `openclaw node run` and `openclaw node install` resolve gateway auth from config/env (no `--token`/`--password` flags on node commands):
 
@@ -216,6 +220,21 @@ Otherwise approve manually via:
 openclaw devices list
 openclaw devices approve <requestId>
 ```
+
+Manual approval admits the device only, and a node host paused on
+`PAIRING_REQUIRED` does not reconnect by itself. Restart it (`openclaw node
+restart`, or rerun `openclaw node run`); the reconnect creates a separate
+command-surface request. Approve it so `system.run` / `system.which` become
+effective:
+
+```bash
+openclaw nodes pending
+openclaw nodes approve <requestId>
+```
+
+Until then the node is connected and device-paired with no effective
+commands. SSH-verified pairing and setup-code enrollment (`--pair`,
+`openclaw connect`) approve the initial surface automatically.
 
 Inspect the local node identity the Gateway verifies against:
 

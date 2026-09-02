@@ -56,9 +56,14 @@ leaf certificate. The bootstrap token expires after 10 minutes. Explicit
 The bootstrap token and resulting device credential are separate, like a
 short-lived Tailscale auth key and the durable device identity it admits.
 Revoking or expiring the setup link does not revoke the paired device; remove
-the device separately when needed. The link never pre-approves `system.run` or
-folder sync. Those operations still use pending approval or
+the device separately when needed. Because an admin minted the link, the
+Gateway treats it as consent to the node's initial declared surface: device
+pairing and the first command surface (including `system.run` when the node
+declares it) are approved at first connect, like
 [SSH-verified device auto-approval](#ssh-verified-device-auto-approval-default).
+Only later surface upgrades create a pending request. Command execution is
+still gated by the node host's [exec approvals](/tools/exec-approvals), which
+default to `full`; configure them before sharing a link.
 
 ## CLI workflow (headless friendly)
 

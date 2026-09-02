@@ -37,6 +37,22 @@ For a pending request on an already-paired device, the output shows requested ac
 
 Paired device display names use this precedence: operator label (`operatorLabel` from `devices rename`), then client `displayName`, then `clientId`, then `deviceId`.
 
+### `openclaw devices join-code`
+
+Mint a single-use node onboarding URL for the one-paste flow. Run it on the
+Gateway host with admin credentials, then paste the printed
+`openclaw connect <url>` command on the machine to enroll.
+
+```bash
+openclaw devices join-code
+openclaw devices join-code --json
+```
+
+Requires the bundled `device-pair` plugin and a Gateway URL that node hosts
+can reach; a loopback-only Gateway errors instead of minting a link. See
+[Gateway deployments that cannot host nodes](/nodes#gateway-deployments-that-cannot-host-nodes)
+and [Connect a machine](/cli/connect).
+
 ### `openclaw devices approve [requestId] [--latest]`
 
 Approve a pending pairing request by exact `requestId`. Omitting `requestId`, or passing `--latest`, only previews the newest pending request and exits (code 1); rerun with the exact request ID to approve.

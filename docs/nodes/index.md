@@ -25,12 +25,14 @@ Troubleshooting runbook: [/nodes/troubleshooting](/nodes/troubleshooting)
 
 ## Pairing + status
 
-Nodes use **device pairing**. A node presents a signed device identity during connect; the Gateway creates a device pairing request for `role: node`. Approve via the devices CLI (or UI). The direct Apple Watch setup uses an admin-minted, short-lived node-only setup code to approve its fixed low-risk command surface; later capability expansion still requires normal approval.
+Nodes use **device pairing**. A node presents a signed device identity during connect; the Gateway creates a device pairing request for `role: node`. Approve via the devices CLI (or UI). Device approval admits the connection only: the node's declared command surface is a second approval (`openclaw nodes pending` / `openclaw nodes approve`) unless the device was SSH-verified or enrolled with a setup code. The direct Apple Watch setup uses an admin-minted, short-lived node-only setup code to approve its fixed low-risk command surface; later capability expansion still requires normal approval.
 
 ```bash
 openclaw devices list
 openclaw devices approve <requestId>
 openclaw devices reject <requestId>
+openclaw nodes pending
+openclaw nodes approve <requestId>
 openclaw nodes status
 openclaw nodes describe --node <idOrNameOrIp>
 ```
@@ -128,9 +130,13 @@ openclaw node run --pair "oc-pair://<setup-code>"
 
 The link is single-use and expires after 10 minutes. It supplies the endpoint,
 bootstrap token, TLS mode, and certificate pin when available. Explicit
-gateway flags override the corresponding `--pair` values. Pairing does not
-pre-approve command execution; the first `system.run` request still follows
-the normal pending-approval or SSH-verification path. See
+gateway flags override the corresponding `--pair` values. Because an admin
+minted the link, the Gateway approves the device pairing and the node's
+initial declared command surface (including `system.run` and `system.which`)
+at first connect; only later surface upgrades create a pending request.
+Command execution is then gated by the node host's exec approvals, which
+default to `full`, so set them before sharing a link (see
+[Allowlist the commands](#allowlist-the-commands)). See
 [Node pairing](/gateway/pairing#one-paste-node-pairing).
 
 `node run` also accepts `--pair`, `--context-path` (Gateway WS context path), `--tls`, `--tls-fingerprint <sha256>`, and `--node-id` (override the legacy client instance ID; this does not reset pairing). On macOS, pass `--share-installed-apps` to advertise `device.apps`; sharing is off by default. Use `--no-share-installed-apps` to disable a previously saved opt-in.
@@ -172,15 +178,31 @@ openclaw node restart
 
 ### Pair + name
 
-On the gateway host:
+On the gateway host, approve the device pairing request:
 
 ```bash
 openclaw devices list
 openclaw devices approve <requestId>
-openclaw nodes status
 ```
 
 If the node retries with changed auth details, re-run `openclaw devices list` and approve the current `requestId`.
+
+Device approval admits the connection only, and a node host paused on
+`PAIRING_REQUIRED` does not reconnect by itself. Restart it (`openclaw node
+restart`, or rerun `openclaw node run`). The reconnect creates a separate
+command-surface request; approve it, then check that `system.run` appears in
+the node's commands:
+
+```bash
+openclaw nodes pending
+openclaw nodes approve <requestId>
+openclaw nodes describe --node <id|name|ip>
+```
+
+The two request IDs are distinct. Until the surface is approved, the node is
+connected and device-paired with no effective commands. SSH-verified pairing
+and setup-code enrollment (`--pair`, `openclaw connect`) complete both steps
+automatically.
 
 Naming options:
 
@@ -786,8 +808,8 @@ Node-related settings live under `gateway.nodes` and `tools.exec`:
     exec: {
       // Default exec host: "node" routes all exec calls to a paired node.
       host: "node",
-      // Security mode for node exec: allow only approved/allowlisted commands.
-      security: "allowlist",
+      // Exec policy mode for node exec: allow only approved/allowlisted commands.
+      mode: "allowlist",
       // Pin exec to a specific node (id or name). Omit to allow any node.
       node: "build-node",
     },
