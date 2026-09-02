@@ -104,6 +104,10 @@ export async function resolveTranscriptToolSession(params: {
   // A durable same-tuple rewrite cannot rebind an admitted capture's authority.
   // Historical selection still authorizes the canonical stored source.
   const session = selectedActive?.session ?? entry?.session;
+  // Historical authorization and inference can outlive an entire reopen/stop.
+  // Capture the durable input revision before either awaited operation.
+  const historicalRevision =
+    session && !selectedActive ? params.store.readSummaryInputRevision(session) : undefined;
   if (
     !entry ||
     !session ||
@@ -111,13 +115,21 @@ export async function resolveTranscriptToolSession(params: {
   ) {
     throw new Error(`transcripts session not found: ${value}`);
   }
-  return { session, selector: entry.selector, activeCandidate, selectedActive };
+  return { session, selector: entry.selector, activeCandidate, selectedActive, historicalRevision };
 }
 
 type TranscriptToolSelection = Awaited<ReturnType<typeof resolveTranscriptToolSession>>;
 
-export function isTranscriptSelectionCurrent(selection: TranscriptToolSelection): boolean {
-  return activeSessions.get(selection.session.sessionId) === selection.activeCandidate;
+export function isTranscriptSelectionCurrent(
+  selection: TranscriptToolSelection,
+  store: TranscriptsStore,
+): boolean {
+  return (
+    activeSessions.get(selection.session.sessionId) === selection.activeCandidate &&
+    (selection.selectedActive !== undefined ||
+      (selection.historicalRevision !== undefined &&
+        store.readSummaryInputRevision(selection.session) === selection.historicalRevision))
+  );
 }
 
 export function transcriptSelectionNoLongerActive(selection: TranscriptToolSelection) {

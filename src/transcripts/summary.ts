@@ -1,5 +1,8 @@
 // Builds transcript summaries and normalized transcript metadata.
-import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
+import {
+  normalizeStringEntries,
+  normalizeUniqueStringEntries,
+} from "@openclaw/normalization-core/string-normalization";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import type { TranscriptSessionDescriptor, TranscriptUtterance } from "./provider-types.js";
 
@@ -15,6 +18,9 @@ export type TranscriptsSummary = {
   title: string;
   generatedAt: string;
   overview: string;
+  participants: string[];
+  source: "model" | "heuristic";
+  model?: string;
   transcript: string[];
   decisions: string[];
   actionItems: string[];
@@ -82,6 +88,10 @@ export function summarizeTranscripts(params: {
     title,
     generatedAt: new Date().toISOString(),
     overview,
+    participants: normalizeUniqueStringEntries(
+      utterances.map((utterance) => utterance.speaker?.label ?? ""),
+    ),
+    source: "heuristic",
     transcript: formatTranscript(utterances),
     decisions: collectMatches(utterances, DECISION_PATTERNS),
     actionItems: collectMatches(utterances, ACTION_PATTERNS),
@@ -104,6 +114,10 @@ export function renderTranscriptsMarkdown(summary: TranscriptsSummary): string {
     "",
     "## Overview",
     summary.overview,
+    "",
+    "## Participants",
+    // Persisted summaries from before participant metadata remain renderable.
+    renderList(summary.participants ?? []),
     "",
     "## Transcript",
     renderList(summary.transcript),

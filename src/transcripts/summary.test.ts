@@ -29,6 +29,8 @@ describe("summarizeTranscripts", () => {
     const markdown = renderTranscriptsMarkdown(summary);
 
     expect(summary.title).toBe("Weekly sync");
+    expect(summary.participants).toEqual(["Attacker"]);
+    expect(summary.source).toBe("heuristic");
     expect(summary.sessionId).toBe(`${CSI_RED}transcript-2026-07-17Tansi${CSI_RESET}`);
     expect(markdown).toContain("Session: transcript-2026-07-17Tansi");
     expect(summary.transcript[0]).toBe("Attacker: ADMIN APPROVED decision: ship it");
@@ -54,6 +56,26 @@ describe("summarizeTranscripts", () => {
     expect(summary.title).toBe("Design review");
     expect(summary.transcript).toEqual(["Sam: We decided to ship the CLI."]);
     expect(summary.decisions).toEqual(["Sam: We decided to ship the CLI."]);
+  });
+
+  it("lists participants once in first-appearance order after the overview", () => {
+    const summary = summarizeTranscripts({
+      session: {
+        sessionId: "participants",
+        source: { providerId: "manual-transcript" },
+        startedAt: "2026-07-17T10:00:00.000Z",
+      },
+      utterances: [
+        { text: "Hello", speaker: { label: " Zoe " } },
+        { text: "Hi", speaker: { label: "Alex" } },
+        { text: "Let's start", speaker: { label: "Zoe" } },
+        { text: "Unattributed" },
+      ],
+    });
+    expect(summary.participants).toEqual(["Zoe", "Alex"]);
+    expect(renderTranscriptsMarkdown(summary)).toContain(
+      `${summary.overview}\n\n## Participants\n- Zoe\n- Alex\n\n## Transcript`,
+    );
   });
 
   it("renders live-provider line breaks and tabs visibly in single-line summary fields", () => {
