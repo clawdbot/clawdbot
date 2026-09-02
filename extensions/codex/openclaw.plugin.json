@@ -15,6 +15,11 @@
       "disposition": "regenerable",
       "scope": "agent",
       "relativePath": "codex-home/.tmp/bundled-marketplaces"
+    },
+    {
+      "disposition": "regenerable",
+      "scope": "agent",
+      "relativePath": "codex-home/home/.nix-profile"
     }
   ],
   "doctorContract": {
