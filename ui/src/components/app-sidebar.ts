@@ -1,6 +1,5 @@
 import { html, nothing, type PropertyValues, type TemplateResult } from "lit";
 import { state } from "lit/decorators.js";
-import { keyed } from "lit/directives/keyed.js";
 import type {
   FsListDirResult,
   WorktreeRepositoryStatus,
@@ -59,8 +58,10 @@ import {
 import {
   COMMUNITY_INVITE_KEY,
   type CommunityInviteState,
+  dismissCommunityInvite as persistCommunityInviteDismissal,
   readCommunityInviteState,
-} from "./community-invite-card.ts";
+  resolveCommunityInviteVisibility,
+} from "./community-invite-state.ts";
 import { icons } from "./icons.ts";
 import {
   lobsterPetSeed,
@@ -74,25 +75,6 @@ import { SidebarPeopleController } from "./sidebar-people-controller.ts";
 // The shared loader retries transient chunk failures online; a deploy-pruned
 // chunk still stays off until reload when that retry fails, by design.
 const lobsterPetImport = createIdleImport(() => import("./lobster-pet.runtime.ts"));
-
-const COMMUNITY_INVITE_VISIBLE_MS = 14 * 24 * 60 * 60 * 1000;
-
-export function resolveCommunityInviteVisibility({
-  firstShownAtMs,
-  dismissedAtMs,
-  now,
-}: {
-  firstShownAtMs?: number | null;
-  dismissedAtMs?: number;
-  now: number;
-}): "visible" | "hidden" {
-  if (firstShownAtMs === null || dismissedAtMs !== undefined) {
-    return "hidden";
-  }
-  return firstShownAtMs !== undefined && now - firstShownAtMs >= COMMUNITY_INVITE_VISIBLE_MS
-    ? "hidden"
-    : "visible";
-}
 
 class AppSidebar extends AppSidebarSessionNavigationElement implements SessionListHost {
   @state() override sidebarNarrationLines: ReadonlyMap<string, string> = new Map();
@@ -173,21 +155,20 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
     this.hiddenSessionCatalogIds = loadStoredHiddenSessionCatalogIds();
   };
   @state() private communityInviteVisible = false;
-  @state() private communityInviteRenderGeneration = 0;
-  private communityInviteRetireTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
+  private communityInviteEligible = false;
+  private communityInviteCardLoaded = false;
+  private readonly communityInviteCardImport = createIdleImport(
+    () => import("./community-invite-card.ts"),
+    () => {
+      this.communityInviteCardLoaded = true;
+      if (this.isConnected && this.communityInviteEligible) {
+        this.communityInviteVisible = true;
+      }
+    },
+  );
   private readonly communityInviteStorageChanged = (event: StorageEvent) => {
     if (event.key === COMMUNITY_INVITE_KEY || event.key === null) {
-      const inviteState = readCommunityInviteState();
-      if (
-        this.communityInviteVisible &&
-        inviteState !== null &&
-        inviteState.firstShownAtMs === undefined &&
-        inviteState.dismissedAtMs === undefined
-      ) {
-        // Recreate the card so its mount boundary owns the fresh timestamp.
-        this.communityInviteRenderGeneration += 1;
-      }
-      this.syncCommunityInviteVisibility(inviteState);
+      this.syncCommunityInviteState(readCommunityInviteState());
     }
   };
 
@@ -223,8 +204,8 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
     );
     this.narration?.disconnect();
     this.catalogRendererImport.dispose();
+    this.communityInviteCardImport.dispose();
     window.removeEventListener("storage", this.communityInviteStorageChanged);
-    this.clearCommunityInviteRetireTimer();
     super.disconnectedCallback();
   }
 
@@ -339,45 +320,27 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
       this.hiddenSessionCatalogsChanged,
     );
     window.addEventListener("storage", this.communityInviteStorageChanged);
-    this.syncCommunityInviteVisibility(readCommunityInviteState());
+    this.syncCommunityInviteState(readCommunityInviteState());
+    this.communityInviteCardImport.schedule();
     // The decorative pet's large module stays out of startup and upgrades in place.
     // Its first visit is at least 15 seconds after load, so idle loading cannot miss one.
     lobsterPetImport.schedule();
     this.catalogRendererImport.schedule();
   }
 
-  private clearCommunityInviteRetireTimer() {
-    if (this.communityInviteRetireTimer !== null) {
-      globalThis.clearTimeout(this.communityInviteRetireTimer);
-      this.communityInviteRetireTimer = null;
-    }
-  }
-
-  private syncCommunityInviteVisibility(
-    inviteState: CommunityInviteState | null,
-    now = Date.now(),
-  ) {
-    this.clearCommunityInviteRetireTimer();
-    this.communityInviteVisible =
+  private syncCommunityInviteState(inviteState: CommunityInviteState | null) {
+    this.communityInviteEligible =
       resolveCommunityInviteVisibility({
-        firstShownAtMs: inviteState === null ? null : inviteState.firstShownAtMs,
-        dismissedAtMs: inviteState?.dismissedAtMs,
-        now,
+        dismissedAtMs: inviteState === null ? null : inviteState.dismissedAtMs,
       }) === "visible";
-    if (this.communityInviteVisible && inviteState?.firstShownAtMs !== undefined) {
-      const remaining = COMMUNITY_INVITE_VISIBLE_MS - (now - inviteState.firstShownAtMs);
-      this.communityInviteRetireTimer = globalThis.setTimeout(
-        () => this.syncCommunityInviteVisibility(readCommunityInviteState()),
-        remaining,
-      );
-    }
+    this.communityInviteVisible = this.communityInviteEligible && this.communityInviteCardLoaded;
   }
 
-  private readonly communityInviteStateChanged = (
-    event: CustomEvent<{ state: CommunityInviteState | null }>,
-  ) => {
-    const { state: inviteState } = event.detail;
-    this.syncCommunityInviteVisibility(inviteState);
+  private readonly dismissCommunityInvite = () => {
+    const dismissedState = persistCommunityInviteDismissal();
+    if (dismissedState?.dismissedAtMs !== undefined) {
+      this.syncCommunityInviteState(dismissedState);
+    }
   };
 
   protected override firstUpdated() {
@@ -628,16 +591,13 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
                   className: "sidebar-session-error sidebar-session-catalog-error",
                 })}
           </div>
-          <div class="sidebar-shell__invite">
-            ${this.communityInviteVisible
-              ? keyed(
-                  this.communityInviteRenderGeneration,
-                  html`<openclaw-community-invite-card
-                    @community-invite-state-changed=${this.communityInviteStateChanged}
-                  ></openclaw-community-invite-card>`,
-                )
-              : nothing}
-          </div>
+          ${this.communityInviteVisible
+            ? html`<div class="sidebar-shell__invite">
+                <openclaw-community-invite-card
+                  .onDismiss=${this.dismissCommunityInvite}
+                ></openclaw-community-invite-card>
+              </div>`
+            : nothing}
           <div class="sidebar-shell__footer">
             <openclaw-lobster-pet
               .seed=${lobsterPetSeed(this.sessionKey)}

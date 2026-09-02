@@ -1148,56 +1148,6 @@ openclaw-settings-save-indicator:empty {
   padding-right: var(--sidebar-pad-x);
 }
 
-.sidebar-shell__invite {
-  --community-invite-surface-current: var(
-    --community-invite-dark-surface,
-    var(--sidebar-bg, var(--bg))
-  );
-  --community-invite-fade-height-current: var(--community-invite-dark-fade-height, 36px);
-  --community-invite-fade-opacity-20-current: var(--community-invite-dark-fade-opacity-20, 6%);
-  --community-invite-fade-opacity-45-current: var(--community-invite-dark-fade-opacity-45, 22%);
-  --community-invite-fade-opacity-70-current: var(--community-invite-dark-fade-opacity-70, 60%);
-  --community-invite-fade-opacity-88-current: var(--community-invite-dark-fade-opacity-88, 80%);
-  --community-invite-photo-base-shade-current: var(
-    --community-invite-dark-photo-base-shade,
-    rgb(0 0 0 / 30%)
-  );
-  --community-invite-cta-bg-current: var(--text-strong);
-  --community-invite-cta-fg-current: var(--bg);
-  --community-invite-cta-hover-bg-current: var(--text);
-
-  flex: 0 0 auto;
-  margin-inline: calc(-1 * var(--sidebar-pad-x));
-  pointer-events: none;
-}
-
-:root[data-theme-mode="light"] .sidebar-shell__invite {
-  --community-invite-surface-current: var(
-    --community-invite-light-surface,
-    color-mix(in srgb, var(--sidebar-bg, var(--bg)) 70%, var(--bg-hover) 30%)
-  );
-  --community-invite-fade-height-current: var(--community-invite-light-fade-height, 0px);
-  --community-invite-fade-gradient-current: linear-gradient(
-    to bottom,
-    transparent,
-    var(--community-invite-surface-current)
-  );
-  --community-invite-photo-base-shade-current: var(
-    --community-invite-light-photo-base-shade,
-    rgb(0 0 0 / 30%)
-  );
-  --community-invite-cta-bg-current: var(--text-strong);
-  --community-invite-cta-fg-current: var(--bg);
-  --community-invite-cta-hover-bg-current: var(--text);
-}
-
-.sidebar-shell__invite > openclaw-community-invite-card {
-  display: block;
-  margin: 0;
-  border-block-start: 1px solid color-mix(in srgb, var(--border) 55%, transparent);
-  pointer-events: auto;
-}
-
 /* Chrome, not content: the strip bleeds past both shell gutters. Negating the
    bottom one puts the divider on the settings takeover's line and lets the
    symmetric block padding center the row in the band it leaves. */

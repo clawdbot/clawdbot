@@ -16,7 +16,7 @@ const suite = createControlUiE2eSuite({
 const STORAGE_KEY = "openclaw:control-ui:community-invite";
 
 suite.define(() => {
-  it("shows immediately, survives Join, and stays dismissed across gateways", async () => {
+  it("shows immediately, survives Join, and stays dismissed across gateway connections on one origin", async () => {
     const context = await suite.browser.newContext({
       locale: "en-US",
       serviceWorkers: "block",
@@ -30,20 +30,21 @@ suite.define(() => {
       const card = page.locator("openclaw-community-invite-card");
       await card.waitFor({ state: "visible" });
 
-      const firstState = await page.evaluate((key) => localStorage.getItem(key), STORAGE_KEY);
-      expect(JSON.parse(firstState ?? "null")).toMatchObject({
-        firstShownAtMs: expect.any(Number),
-      });
+      expect(await page.evaluate((key) => localStorage.getItem(key), STORAGE_KEY)).toBeNull();
 
+      const cta = page.getByRole("link", { name: "Join us on Discord", exact: true });
+      expect(await cta.getAttribute("href")).toBe("https://discord.gg/clawd");
+      expect(await cta.getAttribute("target")).toBe("_blank");
+      expect((await cta.getAttribute("rel"))?.split(/\s+/u)).toEqual(
+        expect.arrayContaining(["noopener", "noreferrer"]),
+      );
+      await context.route("https://discord.gg/**", (route) => route.abort());
       const popupPromise = context.waitForEvent("page");
-      await page.getByRole("link", { name: "Join us on Discord", exact: true }).click();
+      await cta.click();
       const popup = await popupPromise;
-      await expect
-        .poll(() => popup.url())
-        .toMatch(/^https:\/\/discord\.(?:gg\/clawd|com\/invite\/clawd)/u);
       await popup.close();
       await card.waitFor({ state: "visible" });
-      expect(await page.evaluate((key) => localStorage.getItem(key), STORAGE_KEY)).toBe(firstState);
+      expect(await page.evaluate((key) => localStorage.getItem(key), STORAGE_KEY)).toBeNull();
 
       await page.getByRole("button", { name: "Dismiss and don't show again" }).click();
       await card.waitFor({ state: "detached" });
@@ -53,7 +54,6 @@ suite.define(() => {
         ),
       ).toMatchObject({
         dismissedAtMs: expect.any(Number),
-        firstShownAtMs: expect.any(Number),
       });
 
       await page.reload();
@@ -96,7 +96,37 @@ suite.define(() => {
     }
   });
 
-  it("restarts the display window after a malformed cross-tab update", async () => {
+  it("keeps the invite visible when dismissal cannot be persisted", async () => {
+    const context = await suite.browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    await page.addInitScript((key) => {
+      const setItem = Storage.prototype.setItem.bind(localStorage);
+      Storage.prototype.setItem = function (storageKey, value) {
+        if (storageKey === key) {
+          throw new DOMException("full", "QuotaExceededError");
+        }
+        setItem(storageKey, value);
+      };
+    }, STORAGE_KEY);
+    await installMockGateway(page);
+
+    try {
+      await page.goto(`${suite.server.baseUrl}chat/main`);
+      const card = page.locator("openclaw-community-invite-card");
+      await card.waitFor({ state: "visible" });
+      await page.getByRole("button", { name: "Dismiss and don't show again" }).click();
+      await card.waitFor({ state: "visible" });
+      expect(await page.evaluate((key) => localStorage.getItem(key), STORAGE_KEY)).toBeNull();
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("hides after a malformed cross-tab state update", async () => {
     const context = await suite.browser.newContext({
       locale: "en-US",
       serviceWorkers: "block",
@@ -115,17 +145,8 @@ suite.define(() => {
         window.dispatchEvent(new StorageEvent("storage", { key, newValue: "{" }));
       }, STORAGE_KEY);
 
-      await page.waitForFunction((key) => {
-        try {
-          const state = JSON.parse(localStorage.getItem(key) ?? "null") as {
-            firstShownAtMs?: unknown;
-          } | null;
-          return typeof state?.firstShownAtMs === "number";
-        } catch {
-          return false;
-        }
-      }, STORAGE_KEY);
-      await card.waitFor({ state: "visible" });
+      await card.waitFor({ state: "detached" });
+      expect(await page.evaluate((key) => localStorage.getItem(key), STORAGE_KEY)).toBe("{");
     } finally {
       await context.close();
     }

@@ -1,76 +1,14 @@
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 // Community invite card, anchored above the sidebar footer. It never dims the
 // app or traps focus; Shadow DOM keeps it off the startup CSS budget.
 import { css, html } from "lit";
+import { property } from "lit/decorators.js";
 import { inferControlUiPublicAssetPath } from "../app/public-assets.ts";
 import { t } from "../i18n/index.ts";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../lib/external-link.ts";
 import { COMMUNITY_DISCORD_URL } from "../lib/product-links.ts";
 import { OpenClawLitElement } from "../lit/openclaw-element.ts";
-import { getSafeLocalStorage } from "../local-storage.ts";
+import "../styles/community-invite-card.css";
 import { icons } from "./icons.ts";
-
-export const COMMUNITY_INVITE_KEY = "openclaw:control-ui:community-invite";
-const COMMUNITY_INVITE_STATE_CHANGED_EVENT = "community-invite-state-changed";
-
-export type CommunityInviteState = {
-  firstShownAtMs?: number;
-  dismissedAtMs?: number;
-};
-
-function timestamp(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
-}
-
-/** Null means storage itself is unavailable; an empty object is a new browser. */
-export function readCommunityInviteState(): CommunityInviteState | null {
-  const storage = getSafeLocalStorage();
-  if (!storage) {
-    return null;
-  }
-  let raw: string | null;
-  try {
-    raw = storage.getItem(COMMUNITY_INVITE_KEY);
-  } catch {
-    return null;
-  }
-  if (!raw) {
-    return {};
-  }
-  let value: unknown;
-  try {
-    value = JSON.parse(raw);
-  } catch {
-    return {};
-  }
-  if (!isRecord(value)) {
-    return {};
-  }
-  const storedFirstShownAtMs = timestamp(value.firstShownAtMs);
-  const firstShownAtMs =
-    storedFirstShownAtMs !== undefined && storedFirstShownAtMs <= Date.now()
-      ? storedFirstShownAtMs
-      : undefined;
-  const dismissedAtMs = timestamp(value.dismissedAtMs);
-  return {
-    ...(firstShownAtMs === undefined ? {} : { firstShownAtMs }),
-    ...(dismissedAtMs === undefined ? {} : { dismissedAtMs }),
-  };
-}
-
-function writeCommunityInviteState(state: CommunityInviteState): boolean {
-  const storage = getSafeLocalStorage();
-  if (!storage) {
-    return false;
-  }
-  try {
-    const serialized = JSON.stringify(state);
-    storage.setItem(COMMUNITY_INVITE_KEY, serialized);
-    return storage.getItem(COMMUNITY_INVITE_KEY) === serialized;
-  } catch {
-    return false;
-  }
-}
 
 // Solid brand mark: the shared lucide set is stroked, so this one carries its own fill.
 const discordMark = html`
@@ -82,11 +20,13 @@ const discordMark = html`
 `;
 
 class OpenClawCommunityInviteCard extends OpenClawLitElement {
+  @property({ attribute: false }) onDismiss?: () => void;
   static override styles = css`
     :host {
       display: block;
       flex: none;
-      margin: var(--sidebar-group-gap, 16px) calc(-1 * var(--sidebar-pad-x, 10px)) 0;
+      margin: 0;
+      border-block-start: 1px solid color-mix(in srgb, var(--border) 55%, transparent);
       animation: invite-enter var(--duration-normal, 180ms) var(--ease-out, ease-out) both;
     }
 
@@ -110,7 +50,7 @@ class OpenClawCommunityInviteCard extends OpenClawLitElement {
 
     .invite__header {
       position: relative;
-      height: var(--community-invite-image-height, 100px);
+      height: 100px;
       flex: none;
       overflow: hidden;
     }
@@ -178,13 +118,14 @@ class OpenClawCommunityInviteCard extends OpenClawLitElement {
       width: 100%;
       height: 100%;
       object-fit: cover;
-      object-position: center var(--community-invite-object-y, 87%);
+      object-position: center 87%;
     }
 
     .invite__close {
       position: absolute;
       z-index: 2;
-      inset: var(--space-2, 8px) var(--space-2, 8px) auto auto;
+      inset-block-start: var(--space-2, 8px);
+      inset-inline-end: var(--space-2, 8px);
       display: grid;
       width: 28px;
       height: 28px;
@@ -192,9 +133,10 @@ class OpenClawCommunityInviteCard extends OpenClawLitElement {
       padding: 0;
       border: 0;
       border-radius: 50%;
+      /* These fixed translucent colors belong to photo chrome, not the theme surface. */
       background: rgb(0 0 0 / 42%);
       color: rgb(255 255 255 / 76%);
-      cursor: var(--cursor-action, pointer);
+      cursor: var(--cursor-action, default);
       transition:
         background 120ms ease,
         color 120ms ease;
@@ -202,7 +144,7 @@ class OpenClawCommunityInviteCard extends OpenClawLitElement {
 
     .invite__close:hover {
       background: rgb(255 255 255 / 14%);
-      color: #fff;
+      color: rgb(255 255 255);
     }
 
     .invite__close:focus-visible {
@@ -224,9 +166,8 @@ class OpenClawCommunityInviteCard extends OpenClawLitElement {
     .invite__body {
       display: flex;
       flex-direction: column;
-      gap: var(--community-invite-body-gap, 5px);
-      padding: var(--community-invite-body-pad-top, 11px) var(--community-invite-body-pad-x, 18px)
-        var(--community-invite-body-pad-bottom, 20px);
+      gap: 5px;
+      padding: 11px 18px 20px;
     }
 
     .invite__title {
@@ -251,12 +192,12 @@ class OpenClawCommunityInviteCard extends OpenClawLitElement {
       align-items: center;
       justify-content: center;
       gap: 8px;
-      min-height: var(--community-invite-cta-min-height, 38px);
-      margin-top: var(--community-invite-cta-gap, var(--space-3, 12px));
-      padding: var(--community-invite-cta-pad-y, 6px) var(--space-2, 8px);
+      min-height: 38px;
+      margin-top: var(--space-3, 12px);
+      padding: 6px var(--space-2, 8px);
       border-radius: var(--radius-md, 10px);
-      background: var(--community-invite-cta-bg-current, var(--text-strong));
-      color: var(--community-invite-cta-fg-current, var(--bg));
+      background: var(--text-strong);
+      color: var(--bg);
       font-size: var(--control-ui-text-sm, 12px);
       font-weight: 600;
       text-decoration: none;
@@ -266,8 +207,8 @@ class OpenClawCommunityInviteCard extends OpenClawLitElement {
     }
 
     .invite__cta:hover {
-      background: var(--community-invite-cta-hover-bg-current, var(--text));
-      color: var(--community-invite-cta-fg-current, var(--bg));
+      background: color-mix(in srgb, var(--text) 92%, var(--bg-hover) 8%);
+      color: var(--bg);
     }
 
     .invite__cta:active {
@@ -302,11 +243,6 @@ class OpenClawCommunityInviteCard extends OpenClawLitElement {
     }
   `;
 
-  override connectedCallback() {
-    super.connectedCallback();
-    this.recordFirstShown();
-  }
-
   override render() {
     return html`
       <aside class="invite" role="complementary" aria-label=${t("communityInvite.cardLabel")}>
@@ -322,7 +258,7 @@ class OpenClawCommunityInviteCard extends OpenClawLitElement {
             class="invite__close"
             type="button"
             aria-label=${t("communityInvite.dismissForever")}
-            @click=${this.dismiss}
+            @click=${() => this.onDismiss?.()}
           >
             ${icons.x}
           </button>
@@ -345,45 +281,6 @@ class OpenClawCommunityInviteCard extends OpenClawLitElement {
       </aside>
     `;
   }
-
-  private publishState(state: CommunityInviteState | null) {
-    this.dispatchEvent(
-      new CustomEvent(COMMUNITY_INVITE_STATE_CHANGED_EVENT, {
-        bubbles: true,
-        composed: true,
-        detail: { state },
-      }),
-    );
-  }
-
-  private recordFirstShown() {
-    const current = readCommunityInviteState();
-    if (current === null || current.dismissedAtMs !== undefined) {
-      this.publishState(current);
-      return;
-    }
-    if (current.firstShownAtMs !== undefined) {
-      this.publishState(current);
-      return;
-    }
-    const next = { ...current, firstShownAtMs: Date.now() };
-    this.publishState(writeCommunityInviteState(next) ? next : null);
-  }
-
-  private dismiss = () => {
-    const current = readCommunityInviteState();
-    if (current === null) {
-      this.publishState(null);
-      return;
-    }
-    const now = Date.now();
-    const next = {
-      ...current,
-      firstShownAtMs: current.firstShownAtMs ?? now,
-      dismissedAtMs: now,
-    };
-    this.publishState(writeCommunityInviteState(next) ? next : null);
-  };
 }
 
 if (!customElements.get("openclaw-community-invite-card")) {

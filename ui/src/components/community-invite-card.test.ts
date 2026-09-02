@@ -3,11 +3,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   COMMUNITY_INVITE_KEY,
+  dismissCommunityInvite,
   readCommunityInviteState,
-  type CommunityInviteState,
-} from "./community-invite-card.ts";
-
-const COMMUNITY_INVITE_STATE_CHANGED_EVENT = "community-invite-state-changed";
+} from "./community-invite-state.ts";
+import "./community-invite-card.ts";
 
 /** The invite link is the product contract this card exists to deliver, so the
  * test states it independently instead of reading back the value under test. */
@@ -15,17 +14,10 @@ const COMMUNITY_INVITE_URL = "https://discord.gg/clawd";
 
 // The tag map carries the element type, so no exported class is needed here.
 let card: HTMLElementTagNameMap["openclaw-community-invite-card"];
-let states: Array<CommunityInviteState | null>;
 
 beforeEach(async () => {
-  vi.useFakeTimers();
-  vi.setSystemTime(1_760_000_000_000);
   localStorage.clear();
-  states = [];
   card = document.createElement("openclaw-community-invite-card");
-  card.addEventListener(COMMUNITY_INVITE_STATE_CHANGED_EVENT, (event) => {
-    states.push((event as CustomEvent<{ state: CommunityInviteState | null }>).detail.state);
-  });
   document.body.append(card);
   await card.updateComplete;
 });
@@ -34,7 +26,6 @@ afterEach(() => {
   card.remove();
   localStorage.clear();
   vi.restoreAllMocks();
-  vi.useRealTimers();
 });
 
 /** Every element the card exposes is an HTMLElement, so one concrete return type
@@ -57,17 +48,8 @@ describe("community invite card", () => {
     expect(card.shadowRoot?.querySelector("[autofocus]")).toBeNull();
   });
 
-  it("records the first real mount once", () => {
-    expect(JSON.parse(localStorage.getItem(COMMUNITY_INVITE_KEY) ?? "null")).toEqual({
-      firstShownAtMs: 1_760_000_000_000,
-    });
-    expect(states).toEqual([{ firstShownAtMs: 1_760_000_000_000 }]);
-
-    card.remove();
-    document.body.append(card);
-    expect(JSON.parse(localStorage.getItem(COMMUNITY_INVITE_KEY) ?? "null")).toEqual({
-      firstShownAtMs: 1_760_000_000_000,
-    });
+  it("leaves persistence to the sidebar owner", () => {
+    expect(localStorage.getItem(COMMUNITY_INVITE_KEY)).toBeNull();
   });
 
   it("fails closed when reading browser storage throws", () => {
@@ -77,25 +59,36 @@ describe("community invite card", () => {
     expect(readCommunityInviteState()).toBeNull();
   });
 
-  it("resets a future first-shown timestamp as a new cache", () => {
-    localStorage.setItem(
-      COMMUNITY_INVITE_KEY,
-      JSON.stringify({ firstShownAtMs: 1_760_000_000_001 }),
-    );
-    expect(readCommunityInviteState()).toEqual({});
+  it("fails closed for stored values that cannot be decoded", () => {
+    for (const value of ["", "{", "null", "[]", "{}", '{"dismissedAtMs":"never"}']) {
+      localStorage.setItem(COMMUNITY_INVITE_KEY, value);
+      expect(readCommunityInviteState()).toBeNull();
+    }
   });
 
-  it("dismisses only from the close button and persists that decision", () => {
+  it("reports dismissal failure when the write cannot be read back", () => {
+    vi.spyOn(localStorage, "setItem").mockImplementationOnce(() => {
+      throw new DOMException("full", "QuotaExceededError");
+    });
+    expect(dismissCommunityInvite()).toBeNull();
+    expect(localStorage.getItem(COMMUNITY_INVITE_KEY)).toBeNull();
+  });
+
+  it("delegates dismissal from the close button", () => {
+    const onDismiss = vi.fn();
+    card.onDismiss = onDismiss;
     const close = shadowQuery(".invite__close");
     expect(close.getAttribute("aria-label")).toBe("Dismiss and don't show again");
-    vi.setSystemTime(1_760_000_001_000);
     close.click();
-    expect(JSON.parse(localStorage.getItem(COMMUNITY_INVITE_KEY) ?? "null")).toEqual({
-      firstShownAtMs: 1_760_000_000_000,
+    expect(onDismiss).toHaveBeenCalledOnce();
+    expect(localStorage.getItem(COMMUNITY_INVITE_KEY)).toBeNull();
+  });
+
+  it("persists dismissal through the state owner", () => {
+    expect(dismissCommunityInvite(1_760_000_001_000)).toEqual({
       dismissedAtMs: 1_760_000_001_000,
     });
-    expect(states.at(-1)).toEqual({
-      firstShownAtMs: 1_760_000_000_000,
+    expect(JSON.parse(localStorage.getItem(COMMUNITY_INVITE_KEY) ?? "null")).toEqual({
       dismissedAtMs: 1_760_000_001_000,
     });
   });
@@ -105,9 +98,8 @@ describe("community invite card", () => {
     expect(cta.getAttribute("href")).toBe(COMMUNITY_INVITE_URL);
     expect(cta.getAttribute("target")).toBe("_blank");
     expect(cta.getAttribute("rel")).toContain("noopener");
-    const before = localStorage.getItem(COMMUNITY_INVITE_KEY);
     cta.click();
-    expect(localStorage.getItem(COMMUNITY_INVITE_KEY)).toBe(before);
+    expect(localStorage.getItem(COMMUNITY_INVITE_KEY)).toBeNull();
     expect(card.isConnected).toBe(true);
   });
 });
