@@ -1,0 +1,127 @@
+title: Telegram native semantic formatting boundaries
+
+scenario:
+  id: telegram-semantic-formatting-boundaries
+  surface: channels
+  coverage:
+    primary:
+      - telegram.conversation-routing-and-delivery
+  objective: Preserve semantic whitespace and formatting ranges across real Telegram message boundaries.
+  successCriteria:
+    - Actual Test Server messages match the literal text, chunk count, and UTF-16 entity ranges.
+    - Code indentation and internal whitespace survive, and each visible checkbox stays with its bold label.
+    - Plain-text fallback cannot satisfy the required native formatting entities.
+  docsRefs:
+    - docs/channels/telegram.md
+    - docs/concepts/markdown-formatting.md
+  codeRefs:
+    - packages/markdown-core/src/render-aware-chunking.ts
+    - extensions/telegram/src/format.ts
+    - extensions/qa-lab/src/live-transports/telegram/adapter.runtime.ts
+  execution:
+    kind: flow
+    channel: telegram
+    retryCount: 0
+    timeoutMs: 180000
+    suiteIsolation: isolated
+    isolationReason: Native receive cursors and default formatting assertions belong to this proof.
+    summary: Send literal Markdown through the normal Gateway and inspect TDLib text and entities.
+    config:
+      requiredProviderMode: live-frontier
+      requiredChannelDriver: live
+
+flow:
+  steps:
+    - name: receives exact native text and formatting for each boundary case
+      actions:
+        - assert:
+            expr: "transport.id === 'telegram' && env.providerMode === config.requiredProviderMode && typeof readTelegramMessages === 'function'"
+            message: this scenario requires the real Telegram adapter and its native observation reader
+        - assert:
+            expr: "env.cfg.channels?.telegram?.richMessages !== true && env.cfg.channels?.telegram?.accounts?.[transport.accountId]?.richMessages !== true && (env.cfg.channels?.telegram?.accounts?.[transport.accountId]?.textChunkLimit ?? env.cfg.channels?.telegram?.textChunkLimit ?? 4000) === 4000"
+            message: this scenario requires the default Telegram formatter and its unchanged 4000-character limit
+        - call: waitForGatewayHealthy
+          args: [{ ref: env }, 60000]
+        - call: waitForTransportReady
+          args: [{ ref: env }, 60000]
+        - resetTransport: true
+        - set: delivery
+          value:
+            expr: "transport.buildAgentDelivery({ target: 'group' })"
+        - call: randomUUID
+          saveAs: runId
+        - set: proofs
+          value: []
+        - set: fixtures
+          value:
+            expr: |
+              [
+                {
+                  id: "inline-code-utf16-and-link",
+                  markdown: "😀 `a   b` [x](https://example.com/qa)",
+                  expectedChunks: [{
+                    text: "😀 a   b x",
+                    entities: [
+                      { offset: 3, length: 5, type: { "@type": "textEntityTypeCode" } },
+                      { offset: 9, length: 1, type: { "@type": "textEntityTypeTextUrl", url: "https://example.com/qa" } }
+                    ]
+                  }]
+                },
+                {
+                  id: "fenced-code-rendered-boundary",
+                  markdown: "```\n" + "A".repeat(3977) + "\n  x  \n \ny\n```",
+                  expectedChunks: [
+                    { text: "A".repeat(3976), entities: [{ offset: 0, length: 3976, type: { "@type": "textEntityTypePre" } }] },
+                    { text: "A\n  x  \n \ny", entities: [{ offset: 0, length: 11, type: { "@type": "textEntityTypePre" } }] }
+                  ]
+                },
+                {
+                  id: "task-marker-boundary",
+                  markdown: "- [ ] **" + "A".repeat(1988) + "**\n- [x] **" + "B".repeat(1988) + "**",
+                  expectedChunks: [
+                    { text: "• [ ] " + "A".repeat(1988), entities: [{ offset: 6, length: 1988, type: { "@type": "textEntityTypeBold" } }] },
+                    { text: "• [x] " + "B".repeat(1988), entities: [{ offset: 6, length: 1988, type: { "@type": "textEntityTypeBold" } }] }
+                  ]
+                }
+              ]
+        - forEach:
+            items: { ref: fixtures }
+            item: fixture
+            actions:
+              - set: startIndex
+                value:
+                  expr: "readTelegramMessages().length"
+              - call: env.gateway.call
+                saveAs: receipt
+                args:
+                  - send
+                  - channel: telegram
+                    accountId: { ref: transport.accountId }
+                    to: { ref: delivery.to }
+                    message: { ref: fixture.markdown }
+                    idempotencyKey:
+                      expr: "`${runId}:${fixture.id}`"
+                  - timeoutMs: 30000
+              - assert:
+                  expr: "Number.isSafeInteger(Number(receipt.messageId)) && Number(receipt.messageId) > 0"
+                  message: the canonical send must return a native Telegram message ID
+              - call: waitForCondition
+                args:
+                  - lambda:
+                      params: []
+                      expr: "readTelegramMessages().slice(startIndex).some((message) => String(message.botApiMessageId) === String(receipt.messageId))"
+                  - 30000
+              - set: received
+                value:
+                  expr: "readTelegramMessages().slice(startIndex)"
+              - set: actual
+                value:
+                  expr: "received.map(({ text, entities }) => ({ text, entities: entities.map(({ offset, length, type }) => ({ offset, length, type: { '@type': type['@type'], ...(type['@type'] === 'textEntityTypeTextUrl' ? { url: type.url } : {}), ...(type['@type'] === 'textEntityTypePreCode' ? { language: type.language } : {}) } })) }))"
+              - assert:
+                  expr: "String(received.at(-1)?.botApiMessageId) === String(receipt.messageId) && JSON.stringify(actual) === JSON.stringify(fixture.expectedChunks)"
+                  message:
+                    expr: "JSON.stringify({ case: fixture.id, expected: fixture.expectedChunks, observed: actual.map((message, index) => ({ text: message.text === fixture.expectedChunks[index]?.text ? message.text : message.text.replace(/\\S/gu, '?'), nonWhitespaceRedacted: message.text !== fixture.expectedChunks[index]?.text, entities: message.entities.map((entity) => ({ offset: entity.offset, length: entity.length, type: entity.type['@type'], expectedTypePayload: JSON.stringify(entity.type) === JSON.stringify(fixture.expectedChunks[index]?.entities.find((expected) => expected.offset === entity.offset && expected.length === entity.length)?.type) })) })) })"
+              - set: proofs
+                value:
+                  expr: "proofs.concat([{ case: fixture.id, chunks: actual }])"
+      detailsExpr: "JSON.stringify({ transport: 'Telegram Test Server', topology: 'leased group', operation: 'Gateway send', modelInvocation: false, cases: proofs })"

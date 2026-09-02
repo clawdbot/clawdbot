@@ -6,6 +6,7 @@ import { createDeferred } from "../../test/helpers/promise.js";
 import { extractText } from "../../ui/src/lib/chat/message-extract.ts";
 import { buildChatMarkdown } from "../../ui/src/pages/chat/export.ts";
 import * as embeddedAgent from "../agents/embedded-agent.js";
+import { SessionManager } from "../agents/sessions/session-manager.js";
 import { getReplyFromConfig } from "../auto-reply/reply/get-reply.js";
 import { clearConfigCache, getRuntimeConfig, setRuntimeConfigSnapshot } from "../config/config.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
@@ -424,7 +425,7 @@ describe("Browser Talk consult input custody", () => {
       tools: ["read", "web_search", "web_fetch", "x_search", "memory_search", "memory_get"],
     },
   ])(
-    "keeps $name consult scaffolding out of live, reloaded, and exported chat",
+    "keeps $name consult scaffolding out of chat and later context but in the raw archive",
     async ({ scopes, tools }) => {
       client.connect.scopes = scopes;
       await rpc("talk.client.transcript", {
@@ -486,6 +487,7 @@ describe("Browser Talk consult input custody", () => {
       expect.soft(generated[0]).toMatchObject({
         role: "user",
         display: false,
+        excludeFromContext: true,
         provenance: { kind: "internal_system" },
       });
       const metadata = asOptionalRecord(generated[0]?.["__openclaw"]);
@@ -502,7 +504,17 @@ describe("Browser Talk consult input custody", () => {
       expect(closeOpenClawAgentDatabaseByPath(databasePath)).toBe(true);
       clearSessionStoreCacheForTest();
       expectVisibleSpeechOnly(await historyMessages(), "reopened chat.history", true);
-      expect(loadTranscriptEventsSync(scope())).not.toEqual([]);
+      for (const manager of [
+        SessionManager.open(scope()),
+        SessionManager.openModelContext(scope()),
+      ]) {
+        const messages = manager.buildSessionContext().messages;
+        expectNoGeneratedInput(messages, "reopened model context");
+        expect(messages.map(extractText)).toEqual(expect.arrayContaining([spoken, answer]));
+      }
+      expect(loadTranscriptEventsSync(scope())).toEqual(
+        expect.arrayContaining([expect.objectContaining({ message: generated[0] })]),
+      );
     },
   );
 });

@@ -464,6 +464,8 @@ export type CronListResult = CronJob[];
 export type CronAddInput = CronJobCreate;
 /** Caller-specific declaration-key visibility and explicit enablement metadata. */
 export type CronAddOptions = {
+  /** Selected revisions captured from a validated caller session, never public input. */
+  skillLibrarySelections?: CronStoredJob["skillLibrarySelections"];
   matchesExisting?: (job: CronJob) => boolean;
   enabledExplicit?: boolean;
   /** Gateway/doctor-owned heartbeat jobs require this opt-in at service creation. */

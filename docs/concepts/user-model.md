@@ -6,6 +6,7 @@ read_when:
   - You need to update a preference without leaving contradictory history
   - You are deciding whether something belongs in USER.md or MEMORY.md
   - You want verified GitHub identity and optional commit credit on your Gateway profile
+  - You want to connect a personal or shared GitHub account for publication
 ---
 
 `USER.md` is the optional user-model artifact in an agent workspace. It stores stable preferences, communication style, relationships, and active-project context as directives that can guide future sessions.
@@ -33,6 +34,36 @@ When your authenticated profile has prompted a session before an agent run, comm
 OpenClaw supplies exact trailers and the ordered contributor list in the model context for that turn and instructs coding agents to retain them through amendments, rebases, and squash commits so credit reaches the final commit merged to the default branch. The Gateway publication broker enforces the same credit directly in its generated commits and pull requests. When the Gateway exposes an external HTTPS session URL, pull requests end with a link to that exact team session. The trailers are not exported through the process or shell environment. Direct Git commands remain ordinary shell execution: OpenClaw does not replace `git` or install repository hooks, so agent instructions and post-commit verification remain their enforcement boundary.
 
 Turning **Git co-author credit** off stops attribution for future runs. It does not rewrite commits that already contain the public trailer.
+
+## GitHub connections
+
+Open **Settings → Profile → GitHub connections** to connect **My GitHub** without changing the shared **System GitHub** account. Both accounts and their connection status remain visible together. Connecting a credential does not change your verified GitHub sign-in identity, display name, avatar, Git co-author credit preference, or OpenClaw permissions.
+
+My GitHub requires an authenticated, durable Gateway profile. An identified operator with `operator.read` can manage only their own connection, even without administrative or general write access. Token/password access alone does not identify a person and cannot create a personal connection. System and per-agent connection changes still require `operator.admin`.
+
+1. Choose **For me** and connect GitHub. For identified administrators, this is the default purpose; **For the system** is an explicit alternative.
+2. Open the displayed `github.com/login/device` link yourself and approve the one-time code. The Gateway verifies the account and keeps the credentials out of browser responses and agent context.
+3. Check the connected account before using it. Personal connections use device authorization; the existing PAT alternative remains available for admin-managed shared connections.
+
+### Publish with your account
+
+For an idle session with a reconciled local worktree, open the compact account arrow beside **Publish PR** to inspect the publisher and account help. The effective shared account remains the default. When only a shared account is available, the popover is informational, with no redundant selector. When multiple accounts are available, choose the publisher in the popover. **My GitHub** always requires explicit selection, even when it is the only available account. If the agent has its own override, the shared account is labeled as an override rather than System.
+
+The account arrow appears only while publication is idle and the account selection is unlocked, before a publication request or result. Pending status, retry actions, confirmation details, errors, and publication results remain inline, not inside the popover.
+
+Publication requires `operator.write` and current access to modify the session; connecting your account alone does not grant either permission.
+
+Personal GitHub is a Gateway-brokered publication connection, not a session-wide shell identity. Ordinary agent `git`/`gh` commands, model-initiated publication, repository previews and discovery, and cloud-worker execution keep their existing credential behavior. Finish and reclaim remote work before publishing it with your personal connection. See [`tools.github`](/gateway/config-tools#tools-github) for shared agent execution.
+
+The Gateway binds personal publication to your authenticated profile, the selected account, and the accepted worktree snapshot. Another participant's message cannot switch that account or authorize later work using your connection. If the account becomes unavailable or the workspace changes, publication stops with a recovery action instead of falling back to System or native credentials.
+
+After a Gateway restart, unfinished personal publication requires your explicit confirmation before it continues. Confirmation reuses the original request and checks for an already-created commit, pushed branch, or pull request so a lost response does not blindly repeat the action. A changed connection or incompatible workspace requires a new, explicitly selected action.
+
+### Disconnect and reconnect
+
+Disconnecting My GitHub removes its usable local credentials and prevents unfinished personal work from using that connection. Reconnecting creates a new selection, even for the same GitHub account; old requests do not acquire the new authorization automatically. Disconnecting does not rewrite published commits or revoke the application grant on GitHub. Revoke that grant separately in GitHub's application settings when needed.
+
+Personal connections share the Gateway's existing trusted-host boundary. They prevent another participant from using your connection through the personal GitHub API; they do not isolate credentials from administrators or code with unrestricted access to the Gateway OS account. See [Operator scopes](/gateway/operator-scopes) and [Gateway security](/gateway/security).
 
 ## Profile appearance preferences
 

@@ -1,5 +1,5 @@
 // Tests /learn prompt rewriting, defaults, standards, and availability gating.
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { migratePersistedImplicitMainRoster } from "../../config/legacy.roster.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { DEFAULT_LEARN_REQUEST } from "../../skills/workshop/learn-prompt.js";
@@ -132,6 +132,42 @@ describe("learn command", () => {
       } else {
         expect(result?.reply?.text).toContain("Skill workshop is not available on this agent");
       }
+    },
+  );
+
+  it.each(["personal", "paired-node"] as const)(
+    "keeps %s authoring from publishing a pending-only request",
+    async (surface) => {
+      const params = buildLearnParams("/learn what we just did");
+      const invoke = vi.fn(async () => {
+        throw new Error("No authoring operation is allowed");
+      });
+      params.opts = {
+        skillLibraryAuthoring: {
+          target: "personal",
+          defaultTarget: surface === "personal" ? "personal" : "workspace",
+          multipleProfiles: surface === "personal",
+          bind: () => {},
+          invoke,
+        },
+      };
+      if (surface === "paired-node") {
+        params.provider = "anthropic";
+        params.model = "claude-sonnet-5";
+        params.sessionEntry = {
+          sessionId: "node-session",
+          updatedAt: 1,
+          execHost: "node",
+          execNode: "paired-node",
+          agentRuntimeOverride: "claude-cli",
+        };
+      }
+      const result = await handleLearnCommand(params, true);
+      expect(result?.shouldContinue).toBe(false);
+      expect(result?.reply?.text).toContain("pending workspace proposal");
+      expect(result?.reply?.text).toContain("publishes a revision");
+      expect(params.ctx.BodyForAgent).toBe("/learn what we just did");
+      expect(invoke).not.toHaveBeenCalled();
     },
   );
 

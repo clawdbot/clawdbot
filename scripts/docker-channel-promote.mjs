@@ -20,7 +20,7 @@ const VARIANTS = Object.freeze([
   { aliasKey: "browser", suffix: "-browser" },
 ]);
 
-/** @typedef {{ imageTagSuffix?: string; images: string[]; version: string }} DockerPromotionParams */
+/** @typedef {{ imageTagSuffix?: string; images: string[]; includeBrowser?: boolean; version: string }} DockerPromotionParams */
 /**
  * @typedef {object} DockerExecOptions
  * @property {"utf8"} encoding
@@ -50,7 +50,12 @@ const VARIANTS = Object.freeze([
  *
  * @param {DockerPromotionParams} params
  */
-export function createDockerChannelPromotionPlan({ version, imageTagSuffix = "", images }) {
+export function createDockerChannelPromotionPlan({
+  version,
+  imageTagSuffix = "",
+  images,
+  includeBrowser = true,
+}) {
   if (images.length === 0) {
     throw new Error("At least one --image is required.");
   }
@@ -62,7 +67,7 @@ export function createDockerChannelPromotionPlan({ version, imageTagSuffix = "",
   for (const image of images) {
     for (const { aliasKey, suffix } of VARIANTS) {
       const aliases = policy.movingAliases[aliasKey];
-      if (aliases.length === 0) {
+      if (aliases.length === 0 || (!includeBrowser && aliasKey === "browser")) {
         continue;
       }
       promotions.push({
@@ -201,15 +206,11 @@ function preventChannelRollback(resolved, version, execFileSyncImpl) {
  * @param {DockerPromotionParams} params
  * @param {DockerPromotionOptions} [options]
  */
-export function promoteDockerChannel({ version, imageTagSuffix = "", images }, options = {}) {
+export function promoteDockerChannel(params, options = {}) {
   const execFileSyncImpl = options.execFileSyncImpl ?? execFileSync;
   const log = options.log ?? console.log;
   const verifyAttestationsImpl = options.verifyAttestationsImpl ?? verifyDockerAttestations;
-  const plan = createDockerChannelPromotionPlan({
-    version,
-    imageTagSuffix,
-    images,
-  });
+  const plan = createDockerChannelPromotionPlan(params);
 
   // Resolve every version-specific source before the first alias write. A missing
   // release variant must not leave the channel partially promoted.

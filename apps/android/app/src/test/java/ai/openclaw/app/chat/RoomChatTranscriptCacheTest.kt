@@ -1,9 +1,10 @@
 package ai.openclaw.app.chat
 
-import androidx.room.Room
+import androidx.room3.Room
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
@@ -14,20 +15,27 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
+import java.util.concurrent.Executor
 
 @RunWith(RobolectricTestRunner::class)
 @OptIn(ExperimentalCoroutinesApi::class)
 class RoomChatTranscriptCacheTest {
-  private var deferTransactions = false
-  private val deferredTransactions = ArrayDeque<Runnable>()
+  private var deferNextDatabaseOperation = false
+  private var deferredDatabaseOperation: Runnable? = null
   private val database: GatewayCacheDatabase =
     Room
       .inMemoryDatabaseBuilder(RuntimeEnvironment.getApplication(), GatewayCacheDatabase::class.java)
       .allowMainThreadQueries()
-      .setQueryExecutor { it.run() }
-      .setTransactionExecutor {
-        if (deferTransactions) deferredTransactions.addLast(it) else it.run()
-      }.build()
+      .setQueryCoroutineContext(
+        Executor { operation ->
+          if (deferNextDatabaseOperation) {
+            deferNextDatabaseOperation = false
+            deferredDatabaseOperation = operation
+          } else {
+            operation.run()
+          }
+        }.asCoroutineDispatcher(),
+      ).build()
   private val store = RoomChatTranscriptCache(database = database)
 
   @After
@@ -90,6 +98,7 @@ class RoomChatTranscriptCacheTest {
           val text = if (++historyRequests == 1) "history A" else "history B"
           historyResponse("session-1", listOf(ReplayHistoryMessage("assistant", text, historyRequests.toLong())))
         }
+
         "health" -> {
           if (++healthRequests == 1) {
             healthStarted?.complete(Unit)
@@ -97,8 +106,14 @@ class RoomChatTranscriptCacheTest {
           }
           "{}"
         }
-        "sessions.list" -> """{"sessions":[{"key":"main"},{"key":"other"}]}"""
-        else -> "{}"
+
+        "sessions.list" -> {
+          """{"sessions":[{"key":"main"},{"key":"other"}]}"""
+        }
+
+        else -> {
+          "{}"
+        }
       }
     }
   }
@@ -131,11 +146,12 @@ class RoomChatTranscriptCacheTest {
   fun queuedTranscriptWriteSurvivesSwitchToADifferentSession() =
     runTest {
       val controller = cachedController()
-      // Keep the cache mutation queue busy with a real Room session-list transaction.
-      deferTransactions = true
+      // Hold the session-list Room operation while it owns the cache mutation queue.
+      // Later reads can proceed, but transcript writes must wait across the session switch.
+      deferNextDatabaseOperation = true
       controller.refreshSessions()
       runCurrent()
-      assertEquals(1, deferredTransactions.size)
+      val releaseSessionWrite = requireNotNull(deferredDatabaseOperation)
 
       controller.load("main")
       runCurrent()
@@ -148,8 +164,7 @@ class RoomChatTranscriptCacheTest {
       assertEquals(listOf("history B"), controller.messages.value.map { it.content.single().text })
       assertTrue(loadTranscript(sessionKey = "other").isEmpty())
 
-      deferTransactions = false
-      deferredTransactions.removeFirst().run()
+      releaseSessionWrite.run()
       advanceUntilIdle()
 
       assertEquals(listOf("history B"), controller.messages.value.map { it.content.single().text })

@@ -31,11 +31,12 @@ import {
   resolveNpmLifecyclePolicyGate,
   resolveExpectedInstalledVersionFromSpec,
   resolveGlobalInstallTarget,
+  verifyPackageUpdateRecovery,
   type CommandRunner,
   type NpmGlobalPrefixLayout,
   type ResolvedGlobalInstallTarget,
 } from "./update-global.js";
-import type { UpdateRunResult } from "./update-runner-types.js";
+import type { UpdateRecovery } from "./update-recovery.js";
 
 const PACKAGE_MANAGER_SWAP_SOURCE_HARDLINKS = "allow" as const;
 
@@ -77,7 +78,7 @@ type PackageUpdateStepsResult = {
   verifiedPackageRoot: string | null;
   afterVersion: string | null;
   failedStep: PackageUpdateStepResult | null;
-  recovery?: UpdateRunResult["recovery"];
+  recovery: UpdateRecovery;
 };
 
 const NPM_PACK_QUIET_FLAGS = ["--json", "--loglevel=error"] as const;
@@ -892,22 +893,24 @@ export async function runGlobalPackageUpdateSteps(params: {
 }): Promise<PackageUpdateStepsResult> {
   let stagedInstall: StagedNpmInstall | null = null;
   let packedInstallDir: string | null = null;
-  let serviceRestartSafe = true;
   let verifiedPackageRoot = params.installTarget.packageRoot ?? params.packageRoot ?? null;
   let afterVersion: string | null = null;
+  // Exposing a prepared Git checkout follows its Doctor pass; the old global
+  // package cannot be authorized against state that candidate may have migrated.
+  let recovery: UpdateRecovery = params.expectedGitCheckout
+    ? { serviceRestartSafe: false, reason: "state-migration-started" }
+    : await verifyPackageUpdateRecovery(verifiedPackageRoot);
   const steps: PackageUpdateStepResult[] = [];
   const packageUpdateFailure = (
     failedStep: PackageUpdateStepResult,
-    packageRoot: string | null,
-    completedSteps = [failedStep],
+    failureRoot: string | null,
+    failedSteps = [failedStep],
   ): PackageUpdateStepsResult => ({
-    steps: completedSteps,
-    verifiedPackageRoot: packageRoot,
+    steps: failedSteps,
+    verifiedPackageRoot: failureRoot,
     afterVersion,
     failedStep,
-    recovery: serviceRestartSafe
-      ? { serviceRestartSafe: true }
-      : { serviceRestartSafe: false, reason: "runtime-verification-failed" },
+    recovery,
   });
 
   try {
@@ -993,6 +996,9 @@ export async function runGlobalPackageUpdateSteps(params: {
     }
 
     const installCommandTarget = stagedInstall?.installTarget ?? params.installTarget;
+    // Package lifecycle hooks can mutate operator state even in a staging prefix.
+    // Only completed candidate verification/Doctor may authorize activation afterward.
+    recovery = { serviceRestartSafe: false, reason: "runtime-verification-failed" };
     const preparedSpec = await prepareNpmGitSourceInstallSpec({
       installTarget: installCommandTarget,
       installSpec: params.installSpec,
@@ -1021,9 +1027,6 @@ export async function runGlobalPackageUpdateSteps(params: {
             preparedSpec.installCwd ?? process.cwd(),
           )
         : preparedSpec.installSpec;
-    // In-place commands may mutate the live tree even when they reject or exit
-    // unsuccessfully. Only a complete verification pipeline proves it runnable.
-    serviceRestartSafe = stagedInstall !== null;
     const updateStep = await params.runStep({
       name: "global update",
       argv: globalInstallArgs(
@@ -1144,14 +1147,14 @@ export async function runGlobalPackageUpdateSteps(params: {
       null;
     const verificationPackageRoot = stagedInstall?.packageRoot ?? livePackageRoot;
     verifiedPackageRoot = livePackageRoot ?? verificationPackageRoot;
-    if (finalInstallStep.exitCode === 0 && !verificationPackageRoot && params.expectedGitCheckout) {
+    if (finalInstallStep.exitCode === 0 && !verificationPackageRoot) {
       const failedStep: PackageUpdateStepResult = {
         name: "global install verify",
-        command: "resolve installed checkout",
+        command: "resolve installed package",
         cwd: updateCwd ?? process.cwd(),
         durationMs: 0,
         exitCode: 1,
-        stderrTail: "could not identify the installed checkout root",
+        stderrTail: "could not identify the installed package root",
       };
       return packageUpdateFailure(failedStep, null, [...steps, failedStep]);
     }
@@ -1231,36 +1234,49 @@ export async function runGlobalPackageUpdateSteps(params: {
           stdoutTail: null,
         });
       }
-
+      let failedVerification = verificationErrors.length > 0;
       if (stagedInstall && verificationErrors.length === 0) {
-        serviceRestartSafe = false;
         const swap = await swapStagedNpmInstall({
           stage: stagedInstall,
           installTarget: params.installTarget,
           packageName: params.packageName,
         });
         steps.push(swap.step);
-        serviceRestartSafe = swap.rollbackVerified;
+        failedVerification = swap.step.exitCode !== 0;
+        // Verified rollback restores package files, not state changed by hooks.
         if (swap.step.exitCode === 0) {
           verifiedPackageRoot = params.installTarget.packageRoot ?? verifiedPackageRoot;
           afterVersion = candidateVersion;
         }
       }
 
-      const failedVerifyOrSwap = steps.find(
-        (step) =>
-          (step.name === "global install verify" || step.name === "global install swap") &&
-          step.exitCode !== 0,
-      );
-      const postVerifyStep = failedVerifyOrSwap
+      const postVerifyStep = failedVerification
         ? null
         : verifiedPackageRoot
           ? await params.postVerifyStep?.(verifiedPackageRoot)
           : null;
       if (postVerifyStep) {
         steps.push(postVerifyStep);
+      } else if (!failedVerification && params.postVerifyStep) {
+        steps.push({
+          name: "post-install verification",
+          command: "verify installed package",
+          cwd: verifiedPackageRoot ?? process.cwd(),
+          durationMs: 0,
+          exitCode: 1,
+          stderrTail:
+            "Required post-install verification did not produce a result; Gateway activation is unsafe.",
+        });
       }
-      if (failedVerifyOrSwap && stagedInstall) {
+      if (
+        !failedVerification &&
+        (!params.postVerifyStep ||
+          (postVerifyStep && !isBlockingPackageUpdateStep(postVerifyStep))) &&
+        candidateVersion
+      ) {
+        recovery = { serviceRestartSafe: true, version: candidateVersion };
+      }
+      if (failedVerification && stagedInstall) {
         afterVersion = await readPackageVersionIfPresent(livePackageRoot);
       }
     }
@@ -1269,20 +1285,24 @@ export async function runGlobalPackageUpdateSteps(params: {
       ? finalInstallStep
       : (steps.find((step) => step !== updateStep && isBlockingPackageUpdateStep(step)) ?? null);
 
-    return failedStep
-      ? packageUpdateFailure(failedStep, verifiedPackageRoot, steps)
-      : { steps, verifiedPackageRoot, afterVersion, failedStep };
+    return {
+      steps,
+      verifiedPackageRoot,
+      afterVersion,
+      failedStep,
+      recovery,
+    };
   } catch (error) {
     const failedStep: PackageUpdateStepResult = {
       name: "package update",
       command: "update installed package",
       cwd: verifiedPackageRoot ?? params.installCwd ?? process.cwd(),
+
       durationMs: 0,
       exitCode: 1,
       stderrTail: formatErrorMessage(error),
     };
-    steps.push(failedStep);
-    return packageUpdateFailure(failedStep, verifiedPackageRoot, steps);
+    return packageUpdateFailure(failedStep, verifiedPackageRoot, [...steps, failedStep]);
   } finally {
     await cleanupStagedNpmInstall(stagedInstall);
     if (packedInstallDir) {

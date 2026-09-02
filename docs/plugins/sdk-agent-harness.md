@@ -126,6 +126,14 @@ snapshot. Preserve the selected attempt's profile, API, and fallback restriction
 when materializing credentials; this keeps control calls on the same billing
 route as agent turns.
 
+For tools that support both standalone and Gateway execution,
+`hasGatewayToolRoutingContext()` from
+`openclaw/plugin-sdk/agent-harness-runtime` reports whether the caller or hosting
+process owns Gateway routing. Local embedded RPC contexts do not count as a
+running Gateway. A caller's or ambient binding remains present after its
+Gateway retires, so dispatch can reject the stale call. The helper does not
+check credentials, grant authority, or guarantee that the Gateway is available.
+
 ### Request-transport contract
 
 `supports(ctx)` receives the resolved model transport in `ctx.modelProvider`.

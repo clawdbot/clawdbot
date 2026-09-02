@@ -5,6 +5,7 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { formatErrorMessage } from "./lib/error-format.mts";
 import { signalExitCode } from "./lib/managed-child-process.mts";
+import { resolveVitestHomeSelection } from "./lib/vitest-home-selection.mts";
 import { spawnOwnedVitestProcess } from "./lib/vitest-process.mts";
 import { installVitestProcessGroupCleanup } from "./vitest-process-group.mts";
 
@@ -102,6 +103,10 @@ async function main() {
 
   const { child, completion } = spawnOwnedVitestProcess({
     ...plan,
+    homeMode: resolveVitestHomeSelection(parsed.vitestArgs, {
+      defaultConfig: "test/vitest/vitest.unit.config.ts",
+      env: process.env,
+    }),
     options: { env: process.env, stdio: "inherit" },
   });
   let forwardedSignal: NodeJS.Signals | undefined;

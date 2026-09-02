@@ -1,13 +1,16 @@
+import { performance } from "node:perf_hooks";
 import { Duplex } from "node:stream";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { mockProcessPlatform } from "../../test-utils/vitest-spies.js";
+import * as childAdapter from "./adapters/child.js";
 import { createStubChild, firstMockArg } from "./adapters/child.test-support.js";
 import {
   encodeServiceChildMessage,
   type ServiceChildAnchorPayload,
 } from "./service-child-protocol.js";
 import { createServiceChildRelayAdapter } from "./service-child-relay-host.js";
+import { createProcessSupervisor } from "./supervisor.js";
 
 const mocks = vi.hoisted(() => ({ spawn: vi.fn() }));
 vi.mock("node:child_process", async (importOriginal) => ({
@@ -29,6 +32,7 @@ afterEach(async () => {
   platformMock?.mockRestore();
   platformMock = undefined;
   mocks.spawn.mockReset();
+  vi.restoreAllMocks();
 });
 
 async function createRelay(platform: "linux" | "win32") {
@@ -88,28 +92,63 @@ async function createRelay(platform: "linux" | "win32") {
       return true;
     });
   }
-  emit({ type: "root-result", code: 0, signal: null });
-  if (platform === "win32") {
-    emit({ type: "output-end", stream: "stdout" });
-    emit({ type: "output-end", stream: "stderr" });
-  } else {
-    stub.child.stdout?.emit("end");
-    stub.child.stderr?.emit("end");
-  }
+  const completeRoot = () => {
+    emit({ type: "root-result", code: 0, signal: null });
+    if (platform === "win32") {
+      emit({ type: "output-end", stream: "stdout" });
+      emit({ type: "output-end", stream: "stderr" });
+    } else {
+      stub.child.stdout?.emit("end");
+      stub.child.stderr?.emit("end");
+    }
+  };
   const close = () => {
     control.destroy();
     stub.disconnectMock();
     stub.emitExit(0);
   };
   cleanups.push(close);
-  return { adapter, cancellations, emit, close };
+  return { adapter, cancellations, emit, completeRoot, close };
 }
+
+it("refreshes the supervisor deadline from text-only Windows Job output", async () => {
+  const { adapter, emit, completeRoot, close } = await createRelay("win32");
+  vi.spyOn(childAdapter, "createChildAdapter").mockResolvedValue(adapter);
+  const nowSpy = vi.spyOn(performance, "now").mockReturnValue(10_000);
+  const supervisor = createProcessSupervisor();
+  const run = await supervisor.spawn({
+    mode: "anchored-shell",
+    command: "synthetic-command",
+    sessionId: "windows-job-output",
+    backendId: "windows-job-output",
+    noOutputTimeoutMs: 1_000,
+  });
+  try {
+    nowSpy.mockReturnValue(10_800);
+    emit({ type: "output", stream: "stdout", chunk: "still running" });
+    nowSpy.mockReturnValue(11_600);
+    completeRoot();
+    await expect(run.wait()).resolves.toMatchObject({
+      reason: "exit",
+      noOutputTimedOut: false,
+      stdout: "still running",
+    });
+  } finally {
+    completeRoot();
+    emit({ type: "closing", reason: "lineage-closed" });
+    close();
+    await run.wait();
+    await run.waitForExtinction!();
+    await supervisor.shutdown();
+  }
+});
 
 describe.each(["linux", "win32"] as const)("service closing authority (%s)", (platform) => {
   it.each(["after receipt", "before receipt"])(
     "preserves confirmed extinction when cancellation starts %s",
     async (order) => {
-      const { adapter, cancellations, emit, close } = await createRelay(platform);
+      const { adapter, cancellations, emit, completeRoot, close } = await createRelay(platform);
+      completeRoot();
       await expect(adapter.wait()).resolves.toEqual({ code: 0, signal: null });
       const extinction = adapter.waitForExtinction();
       const settled = vi.fn();
@@ -135,7 +174,8 @@ describe.each(["linux", "win32"] as const)("service closing authority (%s)", (pl
   it.each(["failed cancellation", "channel close"])(
     "rejects %s without an authoritative closing receipt",
     async (fault) => {
-      const { adapter, cancellations, close } = await createRelay(platform);
+      const { adapter, cancellations, completeRoot, close } = await createRelay(platform);
+      completeRoot();
       const rejected = expect(adapter.waitForExtinction()).rejects.toThrow(
         "service child cleanup identity lost",
       );

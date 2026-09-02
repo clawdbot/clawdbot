@@ -1,3 +1,5 @@
+import type { ChildProcessWithoutNullStreams } from "node:child_process";
+import { once } from "node:events";
 import { describe, expect, it } from "vitest";
 import { formatCliProcessFailure, runCliProcessChild } from "./cli-process-child.test-helpers.js";
 
@@ -64,6 +66,34 @@ describe("runCliProcessChild", () => {
         timeoutMs: 500,
       }),
     ).rejects.toThrow(/500ms deadlock guard[\s\S]*partial/u);
+  });
+
+  it("reaps the child and releases its pipes when interactive input fails", async () => {
+    let child: ChildProcessWithoutNullStreams | undefined;
+    let exited: Promise<unknown> | undefined;
+    try {
+      await expect(
+        runCliProcessChild({
+          nodeArgs: ["-e", "process.stdout.write('ready'); setInterval(() => {}, 1_000);"],
+          env: process.env,
+          interact: async (runningChild) => {
+            child = runningChild;
+            exited = once(runningChild, "exit");
+            await once(runningChild.stdout, "data");
+            throw new Error("interactive input failed");
+          },
+        }),
+      ).rejects.toThrow("interactive input failed");
+
+      expect(child?.killed).toBe(true);
+      expect(child?.stdin.destroyed).toBe(true);
+      expect(child?.stdout.destroyed).toBe(true);
+      expect(child?.stderr.destroyed).toBe(true);
+      await exited;
+    } finally {
+      child?.kill("SIGKILL");
+      await exited;
+    }
   });
 
   it("stops reading a detached grandchild's pipes once the guard fires", async () => {

@@ -2135,6 +2135,33 @@ describe("handleChatGatewayEvent", () => {
     expect(state.chatRunError).toEqual({ summary: diagnostic, runId: "run-1" });
   });
 
+  it("adds bounded OAuth facts to live errors without changing the summary", () => {
+    const summary =
+      "⚠️ Your refresh token has already been used to generate a new access token. Please try signing in again.";
+    const state = createState({ sessionKey: "main", chatRunId: "run-1" });
+
+    expect(
+      handleChatGatewayEvent(state, {
+        runId: "run-1",
+        sessionKey: "main",
+        state: "error",
+        errorMessage: summary,
+        errorDetail: {
+          provider: "openai",
+          failoverReason: "refresh_token_reused",
+          providerRuntimeFailureKind: "auth_refresh",
+          providerErrorType: "invalid_request_error",
+          httpStatus: 401,
+        },
+      }),
+    ).toBe("error");
+    expect(state.chatRunError).toEqual({
+      kind: "auth_refresh",
+      runId: "run-1",
+      summary: `${summary}\n\nProvider: openai\nHTTP status: 401\nReason: refresh_token_reused\nType: invalid_request_error`,
+    });
+  });
+
   it("uses server guidance when an error follows a source-reply final", () => {
     const state = createState({
       sessionKey: "main",

@@ -8,6 +8,7 @@ const SERVICE_REFRESH_PATH_ENV_KEYS = [
   "OPENCLAW_HOME",
   "OPENCLAW_STATE_DIR",
   "OPENCLAW_CONFIG_PATH",
+  "OPENCLAW_WORKSPACE_DIR",
 ] as const;
 const MANAGED_UPDATE_SELECTOR_ENV_KEYS = [
   "OPENCLAW_HOME",
@@ -52,6 +53,34 @@ export function resolveServiceRefreshEnv(
     resolvedEnv[key] = path.resolve(invocationCwd, rawValue);
   }
   return resolvedEnv;
+}
+
+export async function withUpdateInProgressEnv<T>(
+  invocationCwd: string | undefined,
+  run: () => Promise<T>,
+): Promise<T> {
+  const env = resolveServiceRefreshEnv(process.env, invocationCwd);
+  env.OPENCLAW_UPDATE_IN_PROGRESS = "1";
+  const scopedKeys = Object.keys(env).filter(
+    (key) => key === "OPENCLAW_UPDATE_IN_PROGRESS" || env[key] !== process.env[key],
+  );
+  const previousValues = scopedKeys.map((key) => [key, process.env[key]] as const);
+  // Package replacement can remove cwd. All phase owners must share the
+  // invocation's resolved selectors until cleanup finishes.
+  for (const key of scopedKeys) {
+    process.env[key] = env[key];
+  }
+  try {
+    return await run();
+  } finally {
+    for (const [key, value] of previousValues) {
+      if (value === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = value;
+      }
+    }
+  }
 }
 
 export function stripGatewayServiceMarkerEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
@@ -104,7 +133,7 @@ export function resolveOwnedManagedUpdateEnv(params: {
   });
 }
 
-export function resolvePostInstallDoctorEnv(params?: {
+export function resolveUpdateTargetEnv(params?: {
   baseEnv?: NodeJS.ProcessEnv;
   serviceEnv?: NodeJS.ProcessEnv;
   invocationCwd?: string;

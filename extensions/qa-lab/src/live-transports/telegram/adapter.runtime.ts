@@ -115,19 +115,20 @@ export async function createTelegramQaTransportAdapter(
   let logicalConversationId = credentialLease.payload.groupId;
   let logicalConversationKind: "channel" | "direct" | "group" = "channel";
   const nativeMessageIds = new Map<string, number>();
-  const busMessageIds = new Map<number, string>();
+  const busMessages = new Map<number, { id: string; update?: TelegramUserbotUpdate }>();
   let sendsInFlight = 0;
   let deferredReplies: TelegramUserbotUpdate[] = [];
 
   const publishUpdate = async (update: TelegramUserbotUpdate) => {
-    const existingMessageId = busMessageIds.get(update.messageId);
-    if (update.kind === "edit" && existingMessageId) {
+    const existing = busMessages.get(update.messageId);
+    if (update.kind === "edit" && existing) {
       await context.messages.editMessage({
         accountId,
-        messageId: existingMessageId,
+        messageId: existing.id,
         text: update.text,
         timestamp: update.timestamp,
       });
+      existing.update = update;
       return;
     }
     const outbound = await context.messages.addOutboundMessage({
@@ -137,10 +138,10 @@ export async function createTelegramQaTransportAdapter(
       senderName: update.senderUsername,
       text: update.text,
       timestamp: update.timestamp,
-      replyToId: update.replyToMessageId ? busMessageIds.get(update.replyToMessageId) : undefined,
+      replyToId: update.replyToMessageId ? busMessages.get(update.replyToMessageId)?.id : undefined,
     });
     nativeMessageIds.set(outbound.id, update.messageId);
-    busMessageIds.set(update.messageId, outbound.id);
+    busMessages.set(update.messageId, { id: outbound.id, update });
   };
 
   const observeUpdate = async (update: TelegramUserbotUpdate) => {
@@ -154,11 +155,7 @@ export async function createTelegramQaTransportAdapter(
       return;
     }
     observerState.matchedCount += 1;
-    if (
-      sendsInFlight > 0 &&
-      update.replyToMessageId &&
-      !busMessageIds.has(update.replyToMessageId)
-    ) {
+    if (sendsInFlight > 0 && update.replyToMessageId && !busMessages.has(update.replyToMessageId)) {
       deferredReplies.push(update);
       return;
     }
@@ -239,9 +236,9 @@ export async function createTelegramQaTransportAdapter(
           senderId: credentialLease.payload.testerUserId,
         });
         nativeMessageIds.set(message.id, sent.messageId);
-        busMessageIds.set(sent.messageId, message.id);
+        busMessages.set(sent.messageId, { id: message.id });
         const readyReplies = deferredReplies.filter(
-          (update) => update.replyToMessageId && busMessageIds.has(update.replyToMessageId),
+          (update) => update.replyToMessageId && busMessages.has(update.replyToMessageId),
         );
         deferredReplies = deferredReplies.filter((update) => !readyReplies.includes(update));
         for (const update of readyReplies) {
@@ -256,12 +253,24 @@ export async function createTelegramQaTransportAdapter(
       logicalConversationId = credentialLease.payload.groupId;
       logicalConversationKind = "channel";
       nativeMessageIds.clear();
-      busMessageIds.clear();
+      busMessages.clear();
       deferredReplies = [];
       observerState.updateCount = 0;
       observerState.filteredCount = 0;
       observerState.matchedCount = 0;
       observerState.relevantUpdateKinds.clear();
+    },
+    async prepareFlow() {
+      return {
+        readTelegramMessages: () => {
+          activeUserbot.assertHealthy();
+          heartbeat.throwIfFailed();
+          // Share the existing message lifetime; readers cannot mutate a later snapshot.
+          return [...busMessages.values()].flatMap(({ update }) =>
+            update ? [structuredClone(update)] : [],
+          );
+        },
+      };
     },
     createGatewayConfig: () =>
       buildTelegramQaConfig({} as OpenClawConfig, {

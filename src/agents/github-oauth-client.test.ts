@@ -1,8 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { redactRegisteredSecretValues } from "../logging/secret-redaction-registry.js";
 import {
   pollGitHubOAuthDeviceToken,
   refreshGitHubOAuthToken,
   requestGitHubOAuthDeviceCode,
+  verifyGitHubCredential,
 } from "./github-oauth-client.js";
 
 const GITHUB_OAUTH_CLIENT_ID = "Ov23liUjOXHi28w2fDlH";
@@ -53,6 +55,85 @@ afterEach(() => {
 });
 
 describe("GitHub OAuth client", () => {
+  it.each(["managed-user", "managed-user_org"])(
+    "verifies the supplied %s credential at a fixed origin and registers redaction",
+    async (login) => {
+      const token = "synthetic-bound-credential";
+      vi.spyOn(globalThis, "fetch").mockResolvedValue(
+        new Response(
+          JSON.stringify({
+            id: 202,
+            login,
+            avatar_url: null,
+          }),
+          { headers: { "x-oauth-scopes": "read:org, repo, repo" } },
+        ),
+      );
+      expect(await verifyGitHubCredential(token)).toEqual({
+        status: "available",
+        account: { accountId: 202, login, avatarUrl: null },
+        scopes: ["read:org", "repo"],
+      });
+      expect(fetch).toHaveBeenCalledExactlyOnceWith(
+        "https://api.github.com/user",
+        expect.objectContaining({
+          method: "GET",
+          redirect: "error",
+          signal: expect.any(AbortSignal),
+          headers: { Accept: "application/vnd.github+json", Authorization: `Bearer ${token}` },
+        }),
+      );
+      expect(redactRegisteredSecretValues(`failed with ${token}`, () => "[REDACTED]")).toBe(
+        "failed with [REDACTED]",
+      );
+    },
+  );
+
+  it.each([
+    { code: 401, headers: new Headers(), status: "unavailable" },
+    { code: 403, headers: new Headers({ "x-ratelimit-remaining": "0" }), status: "rate_limited" },
+    { code: 403, headers: new Headers({ "retry-after": "60" }), status: "rate_limited" },
+    { code: 429, headers: new Headers(), status: "rate_limited" },
+    { code: 403, headers: new Headers(), status: "unverified" },
+    { code: 500, headers: new Headers(), status: "unverified" },
+  ])(
+    "classifies account HTTP $code as $status without reflecting diagnostics",
+    async ({ code, headers, status }) => {
+      vi.spyOn(globalThis, "fetch").mockResolvedValue(
+        new Response("synthetic-secret-diagnostics", { status: code, headers }),
+      );
+      expect(await verifyGitHubCredential("synthetic-token")).toEqual({ status });
+    },
+  );
+
+  it.each([
+    "not-json synthetic-token",
+    JSON.stringify({ id: 202, login: "x".repeat(101) }),
+    JSON.stringify({ id: "202", login: "managed-user" }),
+    JSON.stringify({ id: 202, login: "managed-user", padding: "x".repeat(17000) }),
+  ])("rejects malformed or unbounded account responses without diagnostics", async (body) => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(body));
+    expect(await verifyGitHubCredential("synthetic-token")).toEqual({ status: "unverified" });
+  });
+
+  it("bounds the account body read and sanitizes network and cancellation errors", async () => {
+    const cancel = vi.fn();
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(new ReadableStream({ cancel })));
+    expect(await verifyGitHubCredential("synthetic-token", { timeoutMs: 10 })).toEqual({
+      status: "unverified",
+    });
+    expect(cancel).toHaveBeenCalled();
+    const caller = new AbortController();
+    vi.mocked(fetch).mockImplementation(async (_url, init) => {
+      caller.abort(new Error("synthetic-token must stay private"));
+      expect(init?.signal?.aborted).toBe(true);
+      throw init?.signal?.reason;
+    });
+    expect(await verifyGitHubCredential("synthetic-token", { signal: caller.signal })).toEqual({
+      status: "unverified",
+    });
+  });
+
   it("requests the fixed GitHub device flow and repository workflow scopes", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValue(
       jsonResponse({

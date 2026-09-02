@@ -150,9 +150,10 @@ export async function projectScreenshotResult(params: {
   // the model pick coordinates against a wider frame than it was shown.
   const longestEdge = Math.max(capture.width ?? 0, capture.height ?? 0);
   const frameScale = longestEdge > params.referenceWidth ? params.referenceWidth / longestEdge : 1;
-  const deliveredWidth = capture.width != null ? Math.round(capture.width * frameScale) : undefined;
+  const deliveredWidth =
+    capture.width != null ? Math.max(1, Math.round(capture.width * frameScale)) : undefined;
   const deliveredHeight =
-    capture.height != null ? Math.round(capture.height * frameScale) : undefined;
+    capture.height != null ? Math.max(1, Math.round(capture.height * frameScale)) : undefined;
   const dims =
     deliveredWidth && deliveredHeight ? `${deliveredWidth}x${deliveredHeight}` : "unknown size";
   const text = [

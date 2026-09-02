@@ -45,6 +45,7 @@ type ReleasePlanSource = {
 };
 
 type CorePackagePolicy = {
+  name: string;
   path: string;
   dependency?: string;
 };
@@ -61,7 +62,7 @@ type ReleasePlanProducerRequest =
 const REPOSITORY = "openclaw/openclaw";
 const VALIDATION_WORKFLOW_PATH = ".github/workflows/full-release-validation.yml";
 const PUBLICATION_WORKFLOW_PATH = ".github/workflows/openclaw-release-publish.yml";
-const NPM_PUBLICATION_WORKFLOW_PATH = ".github/workflows/openclaw-npm-release.yml";
+const NPM_CORE_PACKAGE_POLICY_PATH = "scripts/lib/npm-core-release-packages.json";
 const YAML_PACKAGE_VERSION = "2.9.0";
 const YAML_PACKAGE_INTEGRITY =
   "sha512-2AvhNX3mb8zd6Zy7INTtSpl1F15HW6Wnqj0srWlkKLcpYl/gMIMJiyuGq2KeI2YFxUPjdlB+3Lc10seMLtL4cA==";
@@ -332,49 +333,24 @@ function readPackageManifest(path: string): PluginPackageJson {
   return JSON.parse(readFileSync(path, "utf8")) as PluginPackageJson;
 }
 
-function collectCorePackagePolicy(
-  workflowText: string,
-  workflowDocument: unknown,
-): CorePackagePolicy[] {
-  const workflow = workflowDocument as {
-    jobs?: Record<string, { steps?: Array<{ env?: { CORE_PACKAGE_DIRS?: unknown } }> }>;
-  };
-  const declarations = Object.values(workflow.jobs ?? {}).flatMap((job) =>
-    (job.steps ?? [])
-      .map((step) => step.env?.CORE_PACKAGE_DIRS)
-      .filter((value): value is string => typeof value === "string"),
-  );
-  const [declaration] = declarations;
-  if (declarations.length !== 1 || !declaration) {
-    throw new Error(`${NPM_PUBLICATION_WORKFLOW_PATH} must declare one CORE_PACKAGE_DIRS owner`);
-  }
-  const paths = declaration.trim().split(/\s+/u).filter(Boolean);
+function collectCorePackagePolicy(document: unknown): CorePackagePolicy[] {
   if (
-    paths.length === 0 ||
-    new Set(paths).size !== paths.length ||
-    paths.some((path) => !/^packages\/[a-z0-9-]+$/u.test(path))
+    !Array.isArray(document) ||
+    document.length === 0 ||
+    document.some(
+      (entry) =>
+        !entry ||
+        typeof entry !== "object" ||
+        !/^packages\/[a-z0-9-]+$/u.test(entry.path) ||
+        !/^@openclaw\/[a-z0-9-]+$/u.test(entry.name) ||
+        (entry.dependency !== undefined && entry.dependency !== entry.name),
+    ) ||
+    new Set(document.map((entry) => entry.path)).size !== document.length ||
+    new Set(document.map((entry) => entry.name)).size !== document.length
   ) {
-    throw new Error(`${NPM_PUBLICATION_WORKFLOW_PATH} has invalid CORE_PACKAGE_DIRS`);
+    throw new Error(`${NPM_CORE_PACKAGE_POLICY_PATH} has invalid core package policy`);
   }
-  const dependencyGates = new Map<string, string>();
-  for (const match of workflowText.matchAll(
-    /\[\[ "\$package_dir" == "(packages\/[a-z0-9-]+)" \]\][^\n]*dependencies\?\.\["([^"]+)"\]/gu,
-  )) {
-    if (match[1] && match[2]) {
-      dependencyGates.set(match[1], match[2]);
-    }
-  }
-  for (const path of dependencyGates.keys()) {
-    if (!paths.includes(path)) {
-      throw new Error(`${NPM_PUBLICATION_WORKFLOW_PATH} gates an undeclared core package: ${path}`);
-    }
-  }
-  return paths
-    .map((path) => {
-      const dependency = dependencyGates.get(path);
-      return dependency ? { path, dependency } : { path };
-    })
-    .toSorted((left, right) => compareAscii(left.path, right.path));
+  return document.toSorted((left, right) => compareAscii(left.path, right.path));
 }
 
 function collectPackageInventory(
@@ -447,6 +423,9 @@ function collectPackageInventory(
     }
     if (manifest.version !== version) {
       throw new Error(`${policy.path} version must match openclaw ${version}`);
+    }
+    if (manifest.name !== policy.name) {
+      throw new Error(`${policy.path} must publish ${policy.name}`);
     }
     addPackage(manifest, ["npm"], `${policy.path}/package.json`);
   }
@@ -564,18 +543,18 @@ function produceReleasePlan(params: ReleasePlanSource, runtime: ReleasePlanRunti
   const { candidateSha, repoRoot, toolingFullRef, toolingSha } = resolveSource(params);
   const validationWorkflow = readGitText(repoRoot, toolingSha, VALIDATION_WORKFLOW_PATH);
   const publicationWorkflow = readGitText(repoRoot, toolingSha, PUBLICATION_WORKFLOW_PATH);
-  const npmPublicationWorkflow = readGitText(repoRoot, toolingSha, NPM_PUBLICATION_WORKFLOW_PATH);
-  const [validationDocument, publicationDocument, npmPublicationDocument] =
+  const npmCorePackagePolicy = readGitText(repoRoot, toolingSha, NPM_CORE_PACKAGE_POLICY_PATH);
+  const [validationDocument, publicationDocument, npmCorePackageDocument] =
     parseVerifiedYamlDocuments(
       repoRoot,
       toolingSha,
-      [validationWorkflow, publicationWorkflow, npmPublicationWorkflow],
+      [validationWorkflow, publicationWorkflow, npmCorePackagePolicy],
       runtime,
     );
   const candidate = readCandidateInventory(
     repoRoot,
     candidateSha,
-    collectCorePackagePolicy(npmPublicationWorkflow, npmPublicationDocument),
+    collectCorePackagePolicy(npmCorePackageDocument),
   );
   const policy = deriveReleasePlanPolicy(params.intent, candidate.version, params.validationIntent);
   // ReleasePlan binds the candidate bytes. A branch used only to make the FRV

@@ -2165,10 +2165,9 @@ button.chat-reply-preview--message:disabled {
    covers it. The solid tail sits behind rounded corners, so card silhouettes
    cannot expose unfaded text; its chat-surface color is invisible when there
    is no transcript behind it. */
-.agent-chat__composer-shell::before {
+.chat-main__conversation > .agent-chat__composer-shell::before {
   position: absolute;
-  inset: calc(0px - var(--chat-transcript-fade-height, 20px)) calc(0px - var(--chat-thread-gutter))
-    auto;
+  inset: calc(0px - var(--chat-transcript-fade-height, 20px)) 0 auto;
   height: calc(
     var(--chat-transcript-fade-height, 20px) + var(--chat-transcript-fade-stack-overlap, 20px)
   );
@@ -2953,16 +2952,6 @@ button.chat-reply-preview--message:disabled {
   height: 15px;
 }
 
-.chat-pr__icon svg,
-.chat-pr__warning svg,
-.chat-pr__dismiss svg {
-  fill: none;
-  stroke: currentColor;
-  stroke-width: 2;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-}
-
 .chat-pr__number {
   min-width: 0;
   font-weight: 650;
@@ -3099,11 +3088,6 @@ button.chat-pr__diff {
 .chat-pr__checks-menu-header svg {
   width: 14px;
   height: 14px;
-  fill: none;
-  stroke: currentColor;
-  stroke-width: 2;
-  stroke-linecap: round;
-  stroke-linejoin: round;
 }
 
 .chat-pr__checks-row {
@@ -3188,8 +3172,8 @@ button.chat-pr__diff {
 }
 
 .chat-pr__publication-outcome {
-  grid-column: 1 / -1;
   display: grid;
+  grid-column: 1 / -1;
   gap: 2px;
   color: var(--muted);
   font-size: 12px;
@@ -3759,6 +3743,11 @@ button.chat-pr__diff {
   display: none;
 }
 
+/* Reserve notice height beside publication controls instead of covering them. */
+.chat-prs:has(.chat-pr__create) ~ .agent-chat__composer-shell .agent-chat__composer-overlay {
+  position: static;
+}
+
 .agent-chat__composer-overlay > * {
   pointer-events: auto;
 }
@@ -4255,6 +4244,12 @@ button.chat-pr__diff {
   font-size: 11px;
   font-weight: 400;
   line-height: 1.25;
+}
+
+.agent-chat__capability-menu-item[value^="library-"] .agent-chat__capability-menu-label > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .agent-chat__capability-menu-state {
@@ -7255,6 +7250,10 @@ button.chat-pr__diff {
     gap: 6px;
   }
 
+  .chat-main__conversation > .agent-chat__composer-shell::before {
+    inset-inline: calc(var(--chat-thread-gutter) - var(--chat-mobile-edge-inset, 4px));
+  }
+
   .session-suggestions {
     width: calc(100% - 8px);
   }
@@ -7426,12 +7425,6 @@ button.chat-pr__diff {
    the secondary controls share one smaller box so model and effort can remain
    visible instead of collapsing into the model menu. */
 @media (max-width: 560px) {
-  /* The taller mobile fade follows the transcript content bounds, not the
-     scroll viewport bounds, so the edge gutters and scrollbar stay uncovered. */
-  .agent-chat__composer-shell::before {
-    inset-inline: calc(var(--chat-thread-gutter) - 4px);
-  }
-
   .agent-chat__input--mobile-toolbar {
     --chat-composer-min-height: 105px;
     --chat-mobile-row-target-size: 32px;
@@ -7982,7 +7975,7 @@ button.chat-pr__diff {
 .agent-chat__recents {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 2px;
   width: min(100%, 520px);
   margin-top: 12px;
   text-align: left;
@@ -7994,7 +7987,7 @@ button.chat-pr__diff {
   letter-spacing: 0.04em;
   text-transform: uppercase;
   color: var(--muted);
-  margin: 0 0 2px 4px;
+  margin: 0 0 2px 12px;
 }
 
 .agent-chat__recent {
@@ -8004,19 +7997,16 @@ button.chat-pr__diff {
   min-height: 40px;
   padding: 8px 12px;
   border-radius: var(--radius-md);
-  border: 1px solid transparent;
+  border: none;
   background: transparent;
   color: var(--text);
   font-size: 13px;
   text-align: left;
-  transition:
-    background 0.15s,
-    border-color 0.15s;
+  transition: background 0.15s;
 }
 
 .agent-chat__recent:hover {
-  background: var(--panel);
-  border-color: var(--border);
+  background: var(--bg-hover);
 }
 
 .agent-chat__recent-name {

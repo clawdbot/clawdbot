@@ -1268,12 +1268,12 @@ describe("Discord native plugin command dispatch", () => {
     expect(interaction.deleteReply).toHaveBeenCalledTimes(1);
   });
 
-  it("preserves a hidden error final and its metadata without sending it to Discord", async () => {
+  it.each([false, true])("preserves a hidden final and metadata (isError=%s)", async (isError) => {
     const cfg = createConfig();
     const interaction = createInteraction();
     interaction.responseState = "deferred";
     const finalReply = setReplyPayloadMetadata(
-      { text: "scope-aware model selection result", isError: true },
+      { text: "scope-aware model selection result", isError },
       { assistantMessageIndex: 3 },
     );
     nativeCommandRuntime.dispatchChannelInboundTurn = async (plan) => {
@@ -1282,6 +1282,10 @@ describe("Discord native plugin command dispatch", () => {
       }
       const info = { kind: "final" as const };
       const deliveryResult = await plan.delivery.deliver(finalReply, info);
+      expect(deliveryResult).toEqual({
+        visibleReplySent: false,
+        suppression: { reason: "channel_transform" },
+      });
       await plan.delivery.onDelivered?.(finalReply, info, deliveryResult);
       return {
         admission: { kind: "dispatch" },
@@ -1315,7 +1319,7 @@ describe("Discord native plugin command dispatch", () => {
     });
 
     expect(result.hiddenFinalReply).toBe(finalReply);
-    expect(result.hiddenFinalReply?.isError).toBe(true);
+    expect(result.hiddenFinalReply?.isError).toBe(isError);
     expect(interaction.followUp).not.toHaveBeenCalled();
     expect(interaction.reply).not.toHaveBeenCalled();
     expect(interaction.deleteReply).toHaveBeenCalledTimes(1);
@@ -1330,6 +1334,11 @@ describe("Discord native plugin command dispatch", () => {
     {
       label: "empty final",
       payload: { text: "  " },
+      suppression: { reason: "channel_transform" as const },
+    },
+    {
+      label: "ordinary invisible result",
+      payload: { text: "uncaptured fallback" },
       suppression: { reason: "no_visible_result" as const },
     },
   ])("does not capture a hidden final for $label", async ({ payload, suppression }) => {

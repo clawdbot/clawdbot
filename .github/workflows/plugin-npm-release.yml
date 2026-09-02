@@ -35,6 +35,7 @@ on:
       - "scripts/plugin-npm-release-plan.ts"
       - "scripts/verify-plugin-npm-published-runtime.mts"
       - "src/plugins/package-entrypoints.ts"
+      - "src/utils/run-with-concurrency.ts"
   workflow_dispatch:
     inputs:
       publish_scope:
@@ -503,16 +504,6 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           install-bun: "false"
 
-      - name: Preview publish command
-        env:
-          OPENCLAW_PLUGIN_NPM_PUBLISH_TAG: ${{ inputs.npm_dist_tag == 'extended-stable' && inputs.npm_dist_tag || '' }}
-        run: bash .release-tooling/scripts/plugin-npm-publish.sh --repo-root "$GITHUB_WORKSPACE" --dry-run "${{ matrix.plugin.packageDir }}"
-
-      - name: Preview npm pack contents
-        env:
-          OPENCLAW_PLUGIN_NPM_PUBLISH_TAG: ${{ inputs.npm_dist_tag == 'extended-stable' && inputs.npm_dist_tag || '' }}
-        run: bash .release-tooling/scripts/plugin-npm-publish.sh --repo-root "$GITHUB_WORKSPACE" --pack-dry-run "${{ matrix.plugin.packageDir }}"
-
       - name: Prepare immutable npm preflight artifact
         id: preflight_artifact
         env:
@@ -540,8 +531,7 @@ jobs:
           pack_output="${RUNNER_TEMP}/${EXTENSION_ID}-npm-pack-output.txt"
           pack_json="${artifact_dir}/npm-pack.json"
 
-          OPENCLAW_PLUGIN_NPM_RUNTIME_BUILD=0 \
-            OPENCLAW_PLUGIN_NPM_PACK_OUTPUT_DIR="${artifact_dir}" \
+          OPENCLAW_PLUGIN_NPM_PACK_OUTPUT_DIR="${artifact_dir}" \
             bash .release-tooling/scripts/plugin-npm-publish.sh \
               --repo-root "$GITHUB_WORKSPACE" \
               --pack "${PACKAGE_DIR}" > "${pack_output}"
@@ -766,6 +756,9 @@ jobs:
           persist-credentials: false
           ref: ${{ github.workflow_sha }}
           fetch-depth: 1
+          sparse-checkout: |
+            .github/workflows
+            scripts
 
       - name: Download immutable npm preflight artifact
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
@@ -792,15 +785,18 @@ jobs:
               "fetch",
               "--no-tags",
               "--depth=1",
+              "--filter=blob:none",
               "origin",
               source_sha,
               timeout=120,
               reclaim_locks=True,
           )
+          # The partial fetch leaves this one manifest blob for git show to hydrate.
           package_json = git_output(
               workspace,
               "show",
               f"{source_sha}:{os.environ['PACKAGE_DIR']}/package.json",
+              timeout=120,
           )
           target = os.path.join(
               os.environ["RUNNER_TEMP"],
@@ -1406,15 +1402,18 @@ jobs:
               "fetch",
               "--no-tags",
               "--depth=1",
+              "--filter=blob:none",
               "origin",
               target_sha,
               timeout=120,
               reclaim_locks=True,
           )
+          # The partial fetch leaves this one manifest blob for git show to hydrate.
           package_json = git_output(
               workspace,
               "show",
               f"{target_sha}:{os.environ['PACKAGE_DIR']}/package.json",
+              timeout=120,
           )
           target = os.path.join(
               os.environ["RUNNER_TEMP"],
@@ -1552,6 +1551,9 @@ jobs:
         run: |
           set -euo pipefail
           unset NODE_AUTH_TOKEN NPM_TOKEN NODE_OPTIONS
+          # npm requires distinct user and global config sources, even when both are empty.
+          npmrc="$(mktemp "${RUNNER_TEMP}/plugin-npm-oidc.XXXXXX")"
+          trap 'rm -f "$npmrc"' EXIT
           # Publish the attested bytes; rebuilding here loses the candidate's patched install.
           node scripts/release-tooling-identity.mjs verify \
             --repository "$OPENCLAW_RELEASE_TOOLING_REPOSITORY" \
@@ -1564,7 +1566,7 @@ jobs:
             --release-publish-full-ref "$OPENCLAW_RELEASE_PUBLISH_FULL_REF" \
             --release-publish-parent-state-policy "$OPENCLAW_RELEASE_PUBLISH_PARENT_STATE_POLICY" \
             --allow-prevalidated-ref
-          NPM_CONFIG_USERCONFIG=/dev/null \
+          NPM_CONFIG_USERCONFIG="$npmrc" \
             NPM_CONFIG_GLOBALCONFIG=/dev/null \
             NPM_CONFIG_REGISTRY=https://registry.npmjs.org/ \
             timeout --signal=TERM --kill-after=10s 300s npm publish "$TARBALL_PATH" \

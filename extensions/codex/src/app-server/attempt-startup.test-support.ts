@@ -1,10 +1,18 @@
+import { randomUUID } from "node:crypto";
+import os from "node:os";
+import path from "node:path";
+import type {
+  CodexBundleMcpThreadConfig,
+  EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
+} from "openclaw/plugin-sdk/agent-harness-runtime";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { expect, vi } from "vitest";
 import type { startCodexAttemptThread } from "./attempt-startup.js";
 import { withEphemeralCodexAuthStore } from "./auth-start-options.js";
 import { resolveCodexAppServerRuntimeOptions } from "./config.js";
+import { createCodexTestHostCapabilities } from "./host-capability.test-support.js";
 import { resolveCodexAppServerSpawnIdentity } from "./shared-client.js";
-import { createClientHarness } from "./test-support.js";
+import { createClientHarness, createCodexTestModel } from "./test-support.js";
 
 export type AttemptClientHarness = ReturnType<typeof createClientHarness>;
 export const HARNESS_REQUEST_TIMEOUT_MS = 15_000;
@@ -111,3 +119,53 @@ export function createPairedAttemptRuntime() {
     openDuplex,
   };
 }
+
+export type AttemptPaths = {
+  agentDir: string;
+  cwd: string;
+  sessionFile: string;
+  workspaceDir: string;
+};
+
+export function createAttemptPaths(tempRoots: Set<string>): AttemptPaths {
+  const root = path.join(os.tmpdir(), `openclaw-codex-attempt-startup-${randomUUID()}`);
+  tempRoots.add(root);
+  return {
+    agentDir: path.join(root, "agent"),
+    cwd: path.join(root, "workspace"),
+    sessionFile: path.join(root, "session.jsonl"),
+    workspaceDir: path.join(root, "workspace"),
+  };
+}
+
+export function createAttemptParams(paths: AttemptPaths): EmbeddedRunAttemptParams {
+  return {
+    hostCapabilities: createCodexTestHostCapabilities(),
+    prompt: "hello",
+    sessionId: "session-1",
+    sessionKey: "agent:agent-1:session-1",
+    agentDir: paths.agentDir,
+    sessionFile: paths.sessionFile,
+    effectiveCwd: paths.cwd,
+    workspaceDir: paths.workspaceDir,
+    runId: "run-1",
+    provider: "codex",
+    modelId: "gpt-5.4-codex",
+    model: createCodexTestModel("codex"),
+    thinkLevel: "medium",
+    disableTools: true,
+    timeoutMs: 5_000,
+    authStorage: {} as never,
+    authProfileStore: { version: 1, profiles: {} },
+    modelRegistry: {} as never,
+  } as EmbeddedRunAttemptParams;
+}
+
+export const bundleMcpThreadConfig = {
+  configPatch: undefined,
+  diagnostics: [],
+  evaluated: false,
+  fingerprint: undefined,
+  staticServerNames: [],
+  userStaticServerNames: [],
+} satisfies CodexBundleMcpThreadConfig;

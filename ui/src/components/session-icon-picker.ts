@@ -178,6 +178,7 @@ export function renderSessionAppearancePicker(props: SessionIconPickerProps) {
       onSelect: props.onSelectColor,
     })}
     ${renderSessionIconGrid({ ...props, inline: true })}
+    <div class="session-menu__separator" role="separator"></div>
     <button
       type="button"
       class="session-menu__icon-remove"

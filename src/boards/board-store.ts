@@ -16,6 +16,7 @@ import {
   normalizeBoardLayout,
   type BoardSize,
 } from "./board-layout.js";
+import { GITHUB_ACTIONS_GRANT_PREFIX } from "./github-actions-capability.js";
 
 export type BoardWidgetHtmlDocument = {
   html: string;
@@ -117,7 +118,11 @@ export function createBoardDeclaredSummary(
 ): string[] | undefined {
   const lines = [
     ...(declared?.netOrigins ?? []).map((origin) => `Network access: ${origin}`),
-    ...(declared?.tools ?? []).map((tool) => `Tool access: ${tool}`),
+    ...(declared?.tools ?? []).map((tool) =>
+      tool.startsWith(GITHUB_ACTIONS_GRANT_PREFIX)
+        ? `GitHub Actions metadata: ${tool.slice(GITHUB_ACTIONS_GRANT_PREFIX.length)} (including private repository data accessible to the agent; shared with this widget/session audience)`
+        : `Tool access: ${tool}`,
+    ),
   ];
   return lines.length > 0 ? lines : undefined;
 }

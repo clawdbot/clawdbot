@@ -1,5 +1,6 @@
 import Foundation
 import OpenClawKit
+import Synchronization
 import Testing
 
 private struct ExpectedTimeout: Error {}
@@ -112,6 +113,7 @@ struct AsyncTimeoutTests {
     @Test func `timeout returns when operation ignores cancellation`() async {
         let operation = CancellationIgnoringOperation()
         let cancellation = CancellationProbe()
+        let timeoutCallbacks = Mutex(0)
         let watchdog = Task {
             do {
                 try await Task.sleep(for: .seconds(1))
@@ -122,7 +124,10 @@ struct AsyncTimeoutTests {
         await #expect(throws: ExpectedTimeout.self) {
             try await AsyncTimeout.withTimeout(
                 seconds: 0.05,
-                onTimeout: { ExpectedTimeout() },
+                onTimeout: {
+                    timeoutCallbacks.withLock { $0 += 1 }
+                    return ExpectedTimeout()
+                },
                 operation: {
                     await withTaskCancellationHandler {
                         await operation.run()
@@ -138,12 +143,16 @@ struct AsyncTimeoutTests {
         await operation.release()
         await operation.waitUntilFinished()
         watchdog.cancel()
+        #expect(timeoutCallbacks.withLock { $0 } == 1)
     }
 
     @Test func `successful operation wins`() async throws {
         let result = try await AsyncTimeout.withTimeout(
             seconds: 1,
-            onTimeout: { ExpectedTimeout() },
+            onTimeout: {
+                Issue.record("A successful operation must not invoke the timeout callback")
+                return ExpectedTimeout()
+            },
             operation: { "ready" })
 
         #expect(result == "ready")
@@ -152,7 +161,10 @@ struct AsyncTimeoutTests {
     @Test func `zero timeout preserves unbounded operation semantics`() async throws {
         let result = try await AsyncTimeout.withTimeout(
             seconds: 0,
-            onTimeout: { ExpectedTimeout() },
+            onTimeout: {
+                Issue.record("An unbounded operation must not invoke the timeout callback")
+                return ExpectedTimeout()
+            },
             operation: { "unbounded" })
 
         #expect(result == "unbounded")
@@ -162,7 +174,10 @@ struct AsyncTimeoutTests {
         await #expect(throws: ExpectedOperationFailure.self) {
             try await AsyncTimeout.withTimeout(
                 seconds: 1,
-                onTimeout: { ExpectedTimeout() },
+                onTimeout: {
+                    Issue.record("An operation error must not invoke the timeout callback")
+                    return ExpectedTimeout()
+                },
                 operation: { throw ExpectedOperationFailure() })
         }
     }
@@ -174,7 +189,10 @@ struct AsyncTimeoutTests {
         let task = Task {
             try await AsyncTimeout.withTimeout(
                 seconds: seconds,
-                onTimeout: { ExpectedTimeout() },
+                onTimeout: {
+                    Issue.record("Caller cancellation must not invoke the timeout callback")
+                    return ExpectedTimeout()
+                },
                 operation: {
                     await withTaskCancellationHandler {
                         await operation.run()
@@ -210,7 +228,10 @@ struct AsyncTimeoutTests {
             await entryGate.wait()
             return try await AsyncTimeout.withTimeout(
                 seconds: 1,
-                onTimeout: { ExpectedTimeout() },
+                onTimeout: {
+                    Issue.record("A pre-cancelled caller must not invoke the timeout callback")
+                    return ExpectedTimeout()
+                },
                 operation: {
                     await operationState.markStarted()
                     return "unexpected"

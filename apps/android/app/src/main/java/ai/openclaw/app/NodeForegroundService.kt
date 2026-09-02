@@ -131,10 +131,17 @@ class NodeForegroundService : Service() {
           voiceCaptureMode = state.mode
           val title =
             when {
-              state.connected && state.mode == VoiceCaptureMode.TalkMode ->
+              state.connected && state.mode == VoiceCaptureMode.TalkMode -> {
                 nativeString("OpenClaw Node · Talk")
-              state.connected -> nativeString("OpenClaw Node · Connected")
-              else -> nativeString("OpenClaw Node")
+              }
+
+              state.connected -> {
+                nativeString("OpenClaw Node · Connected")
+              }
+
+              else -> {
+                nativeString("OpenClaw Node")
+              }
             }
           val displayStatus = gatewayConnectionStatusForDisplay(state.status)
           val text =
@@ -182,10 +189,12 @@ class NodeForegroundService : Service() {
         stopSelfResult(startId)
         return START_NOT_STICKY
       }
+
       ACTION_RESUME -> {
         startSuppressed.set(false)
         disconnectRequested = false
       }
+
       ACTION_SET_VOICE_CAPTURE_MODE -> {
         voiceCaptureMode = intent.getStringExtra(EXTRA_VOICE_CAPTURE_MODE).toVoiceCaptureMode()
         startForegroundWithTypes(
@@ -373,6 +382,7 @@ internal fun foregroundServiceTypes(
   val voiceTypes =
     when (voiceMode) {
       VoiceCaptureMode.Off -> base
+
       VoiceCaptureMode.ManualMic,
       VoiceCaptureMode.TalkMode,
       -> base or ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
@@ -399,13 +409,15 @@ internal fun voiceNotificationSuffix(
   talkSpeaking: Boolean,
 ): String =
   when (mode) {
-    VoiceCaptureMode.TalkMode ->
+    VoiceCaptureMode.TalkMode -> {
       when {
         talkSpeaking -> nativeString(" · Talk: Speaking")
         talkListening -> nativeString(" · Talk: Listening")
         else -> nativeString(" · Talk: On")
       }
-    VoiceCaptureMode.ManualMic ->
+    }
+
+    VoiceCaptureMode.ManualMic -> {
       if (manualMicEnabled) {
         if (manualMicListening) {
           nativeString(" · Mic: Listening")
@@ -415,7 +427,11 @@ internal fun voiceNotificationSuffix(
       } else {
         ""
       }
-    VoiceCaptureMode.Off -> ""
+    }
+
+    VoiceCaptureMode.Off -> {
+      ""
+    }
   }
 
 private fun String?.toVoiceCaptureMode(): VoiceCaptureMode =

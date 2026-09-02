@@ -80,7 +80,12 @@ suite.define(() => {
           throw new Error("Expected the mobile Inbox sheet entrance animation");
         }
         const timing = animation.effect.getComputedTiming();
+        // Playwright can reach this sample after the entrance animation has advanced.
+        // Rewind the real effect so start geometry does not depend on runner load.
+        animation.pause();
+        animation.currentTime = 0;
         const startTop = element.getBoundingClientRect().top;
+        animation.play();
         await animation.finished;
         const close = element.querySelector<HTMLElement>(".sidebar-issues-panel__mobile-close")!;
         const header = element.querySelector<HTMLElement>(".sidebar-issues-panel__header")!;

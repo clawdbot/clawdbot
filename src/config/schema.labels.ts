@@ -76,6 +76,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "diagnostics.cacheTrace.enabled": "Cache Trace Enabled",
   "agents.entries.*.identity.avatar": "Identity Avatar",
   "agents.entries.*.skills": "Agent Skill Filter",
+  "agents.entries.*.cwd": "Agent Working Directory",
   "agents.entries.*.runtime": "Agent Runtime",
   "agents.entries.*.runtime.type": "Agent Runtime Type",
   "agents.entries.*.runtime.acp": "Agent ACP Runtime",
@@ -370,6 +371,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "tools.web.fetch.ssrfPolicy.dangerouslyAllowPrivateNetwork":
     "Web Fetch Dangerously Allow Private Network",
   "tools.web.fetch.ssrfPolicy.allowedHostnames": "Web Fetch Allowed Hostnames",
+  "tools.web.fetch.ssrfPolicy.blockedHostnames": "Web Fetch Blocked Hostnames",
   "tools.web.fetch.ssrfPolicy.allowRfc2544BenchmarkRange":
     "Web Fetch Allow RFC 2544 Benchmark Range",
   "tools.web.fetch.ssrfPolicy.allowIpv6UniqueLocalRange": "Web Fetch Allow IPv6 Unique Local Range",
@@ -469,6 +471,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "agents.defaults.subagents.delegationMode": "Sub-agent Delegation Mode",
   "agents.entries.*.subagents.delegationMode": "Sub-agent Delegation Mode",
   "agents.defaults.workspace": "Workspace",
+  "agents.defaults.cwd": "Working Directory",
   "agents.defaults.repoRoot": "Repo Root",
   "agents.defaults.skipOptionalBootstrapFiles": "Skipped Optional Bootstrap Files",
   "agents.defaults.contextInjection": "Context Injection",
@@ -742,6 +745,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "browser.ssrfPolicy": "Browser SSRF Policy",
   "browser.ssrfPolicy.dangerouslyAllowPrivateNetwork": "Browser Dangerously Allow Private Network",
   "browser.ssrfPolicy.allowedHostnames": "Browser Allowed Hostnames",
+  "browser.ssrfPolicy.blockedHostnames": "Browser Blocked Hostnames",
   "browser.ssrfPolicy.allowRfc2544BenchmarkRange": "Browser Allow RFC 2544 Benchmark Range",
   "browser.ssrfPolicy.allowIpv6UniqueLocalRange": "Browser Allow IPv6 Unique Local Range",
   "tools.exec.timeoutSeconds": "Exec Timeout (Seconds)",
@@ -793,11 +797,13 @@ export const FIELD_LABELS: Record<string, string> = {
   "session.maintenance.highWaterBytes": "Session Disk High-water Target",
   cron: "Automations",
   "cron.enabled": "Automations Enabled",
+  "cron.skipMissedJobs": "Skip Missed Recurring Automations",
   "cron.webhookToken": "Automations Webhook Bearer Token",
   "cron.webhookSsrfPolicy": "Automations Webhook SSRF Policy",
   "cron.webhookSsrfPolicy.dangerouslyAllowPrivateNetwork":
     "Automations Webhook Dangerously Allow Private Network",
   "cron.webhookSsrfPolicy.allowedHostnames": "Automations Webhook Allowed Hostnames",
+  "cron.webhookSsrfPolicy.blockedHostnames": "Automations Webhook Blocked Hostnames",
   "cron.webhookSsrfPolicy.allowRfc2544BenchmarkRange":
     "Automations Webhook Allow RFC 2544 Benchmark Range",
   "cron.webhookSsrfPolicy.allowIpv6UniqueLocalRange":

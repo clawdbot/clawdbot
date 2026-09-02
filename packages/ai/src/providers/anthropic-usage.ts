@@ -247,9 +247,8 @@ export function applyAnthropicMessageDeltaUsage(
   } else if (
     outputTokens !== undefined &&
     (messageStartPromptUsage !== undefined ||
-      (inputTokens !== undefined &&
-        cacheReadTokens !== undefined &&
-        cacheWriteTokens !== undefined))
+      ((cacheReadTokens !== undefined || cacheWriteTokens !== undefined) &&
+        readAnthropicPromptUsageSnapshot(usage) !== undefined))
   ) {
     const promptTokens = target.input + target.cacheRead + target.cacheWrite;
     target.contextUsage = {

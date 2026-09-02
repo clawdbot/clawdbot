@@ -97,8 +97,8 @@ export async function resumeExistingCodexThread(
   const assertHandoffCurrent = () => {
     params.params.hostCapabilities.assertActive();
     throwIfAborted();
-    context.assertResumeOwnership?.();
-    context.assertResumeConfiguration?.();
+    context.assertResumeOwnership();
+    context.assertResumeConfiguration();
   };
   const abandonClient =
     params.abandonClient ?? (() => closeCodexStartupClientBestEffort(params.client));
@@ -182,7 +182,7 @@ export async function resumeExistingCodexThread(
     );
     resumeResponseAccepted = true;
     assertCodexThreadAcceptsDirectInput(response.thread);
-    context.assertResumeConfiguration?.();
+    context.assertResumeConfiguration();
     // Current-policy denial must release this subscription and stop, not retry
     // as a fresh thread. A confirmed config change still follows normal rotation.
     const loadedPluginThreadConfig = await context.buildLoadedPluginThreadConfig?.(resumeBinding);
@@ -218,29 +218,21 @@ export async function resumeExistingCodexThread(
           ),
         );
       } catch (error) {
-        context.assertResumeOwnership?.();
+        context.assertResumeOwnership();
         await abandonClient();
         throw new CodexRestrictedToolSurfaceAttestationError(error);
       }
     }
     throwIfAborted();
-    if (
-      resumeBinding.connectionScope === "supervision" &&
-      !resumeBinding.pendingSupervisionBranch
-    ) {
-      if (!context.assertResumeConfiguration) {
-        throw new Error("Codex supervised resume requires verified configuration ownership");
-      }
-      await refreshCodexThreadPolicy({
-        client: params.client,
-        threadId: resumeBinding.threadId,
-        developerInstructions: resumeParams.developerInstructions,
-        timeoutMs: params.appServer.requestTimeoutMs,
-        signal: params.signal,
-        assertCurrent: assertHandoffCurrent,
-      });
-      policyOutcome = "acknowledged";
-    }
+    await refreshCodexThreadPolicy({
+      client: params.client,
+      threadId: resumeBinding.threadId,
+      developerInstructions: resumeParams.developerInstructions,
+      timeoutMs: params.appServer.requestTimeoutMs,
+      signal: params.signal,
+      assertCurrent: assertHandoffCurrent,
+    });
+    policyOutcome = "acknowledged";
     assertHandoffCurrent();
     const resumePatch = {
       // Resume moves native subscription ownership to this physical client.
@@ -371,12 +363,7 @@ export async function resumeExistingCodexThread(
         error instanceof CodexThreadPolicyHandoffError ||
         error instanceof CodexAppServerUnsafeSubscriptionError
           ? error
-          : resumeBinding.connectionScope === "supervision"
-            ? new CodexThreadPolicyHandoffError(policyOutcome, error)
-            : new CodexAppServerUnsafeSubscriptionError(
-                `Codex thread/resume handoff failed: ${error instanceof Error ? error.message : String(error)}`,
-                { cause: error },
-              );
+          : new CodexThreadPolicyHandoffError(policyOutcome, error);
       const subscriptionReleased = await unsubscribeCodexThreadBestEffort(params.client, {
         threadId: resumeBinding.threadId,
         timeoutMs: CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS,
@@ -395,9 +382,15 @@ export async function resumeExistingCodexThread(
           try {
             await abandonClient();
           } catch (cause) {
-            throw new CodexAppServerUnsafeSubscriptionError(
-              "Codex thread/resume client could not be retired",
-              { cause },
+            // A secondary cleanup failure must not erase the native policy-write outcome.
+            throw new CodexThreadPolicyHandoffError(
+              handoffError instanceof CodexThreadPolicyHandoffError
+                ? handoffError.outcome
+                : policyOutcome,
+              new AggregateError(
+                [handoffError, cause],
+                "Codex thread/resume client could not be retired",
+              ),
             );
           }
         }

@@ -2,6 +2,8 @@
  * Shared Claude CLI constants. These identify the synthetic backend, default
  * model refs, aliases, and session-id fields used across runtime and setup.
  */
+import manifest from "./openclaw.plugin.json" with { type: "json" };
+
 /** Synthetic provider/backend id for Claude Code CLI-backed Anthropic models. */
 export const CLAUDE_CLI_BACKEND_ID = "claude-cli";
 /** Retired OpenClaw auth profile replaced by Claude CLI's native login. */
@@ -77,15 +79,9 @@ const CLAUDE_CLI_CANONICAL_DEFAULT_MODEL_ID = CLAUDE_CLI_DEFAULT_MODEL_REF.slice
 /** Canonical model ref routed to the Claude CLI backend by Anthropic setup. */
 export const CLAUDE_CLI_CANONICAL_DEFAULT_MODEL_REF = `anthropic/${CLAUDE_CLI_CANONICAL_DEFAULT_MODEL_ID}`;
 /** Default Claude CLI models allowed when setup seeds the model allowlist. */
-export const CLAUDE_CLI_DEFAULT_ALLOWLIST_REFS = [
-  CLAUDE_CLI_DEFAULT_MODEL_REF,
-  `${CLAUDE_CLI_BACKEND_ID}/claude-sonnet-5`,
-  `${CLAUDE_CLI_BACKEND_ID}/claude-fable-5`,
-  `${CLAUDE_CLI_BACKEND_ID}/claude-opus-4-8`,
-  `${CLAUDE_CLI_BACKEND_ID}/claude-opus-4-7`,
-  `${CLAUDE_CLI_BACKEND_ID}/claude-sonnet-4-6`,
-  `${CLAUDE_CLI_BACKEND_ID}/claude-opus-4-6`,
-] as const;
+export const CLAUDE_CLI_DEFAULT_ALLOWLIST_REFS = manifest.modelCatalog.providers[
+  CLAUDE_CLI_BACKEND_ID
+].models.map(({ id }) => `${CLAUDE_CLI_BACKEND_ID}/${id}`);
 
 /**
  * Claude CLI model ids probed when detecting an existing CLI route, canonical
@@ -97,25 +93,18 @@ export const CLAUDE_CLI_ROUTE_PROBE_MODEL_IDS = CLAUDE_CLI_DEFAULT_ALLOWLIST_REF
   ref.slice(CLAUDE_CLI_BACKEND_ID.length + 1),
 );
 
+/** Provider-owned aliases shared by setup, pricing, and native CLI selectors. */
+export const CLAUDE_MODEL_ID_ALIASES: ReadonlyMap<string, string> = new Map(
+  Object.entries(manifest.modelIdNormalization.providers.anthropic.aliases),
+);
+
 /** User-facing Claude CLI model aliases normalized before execution. */
 export const CLAUDE_CLI_MODEL_ALIASES: Record<string, string> = {
+  ...Object.fromEntries(CLAUDE_MODEL_ID_ALIASES),
+  ...Object.fromEntries(CLAUDE_CLI_ROUTE_PROBE_MODEL_IDS.map((id) => [id, id])),
   opus: "opus",
-  "opus-5": "claude-opus-5",
-  "opus-4.8": "claude-opus-4-8",
-  "opus-4.7": "claude-opus-4-7",
-  "opus-4.6": "claude-opus-4-6",
-  "claude-opus-5": "claude-opus-5",
-  "claude-opus-4-8": "claude-opus-4-8",
-  "claude-opus-4-7": "claude-opus-4-7",
-  "claude-opus-4-6": "claude-opus-4-6",
   sonnet: "sonnet",
-  "sonnet-5": "claude-sonnet-5",
-  "claude-sonnet-5": "claude-sonnet-5",
-  "sonnet-4.6": "claude-sonnet-4-6",
-  "claude-sonnet-4-6": "claude-sonnet-4-6",
   fable: "fable",
-  "fable-5": "claude-fable-5",
-  "claude-fable-5": "claude-fable-5",
   haiku: "haiku",
 };
 
