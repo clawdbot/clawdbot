@@ -224,6 +224,7 @@ export function listTaskRecords(filter?: (task: Readonly<TaskRecord>) => boolean
 
 export function hasActiveTaskForChildSessionKey(params: {
   sessionKey: string;
+  agentId?: string;
   excludeTaskId?: string;
 }): boolean {
   ensureTaskRegistryReady();
@@ -243,7 +244,9 @@ export function hasActiveTaskForChildSessionKey(params: {
     if (
       task &&
       isActiveTaskStatus(task.status) &&
-      normalizeOptionalString(task.childSessionKey) === sessionKey
+      normalizeOptionalString(task.childSessionKey) === sessionKey &&
+      (!params.agentId ||
+        resolveTaskSessionAgentId(task.childSessionKey, task.agentId) === params.agentId)
     ) {
       return true;
     }

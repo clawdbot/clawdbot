@@ -62,6 +62,8 @@ describe("ChatHistoryCursorResultSchema", () => {
       Value.Check(ChatHistoryCursorResultSchema, {
         ...delta,
         inFlightRun: { runId: "run-live", text: "still working" },
+        inputReceipts: [{ runId: "retained-run", state: "pending" }],
+        inputConsumptions: [{ runId: "consumed-run", consumedByEventId: "event-1" }],
       }),
     ).toBe(true);
     expect(Value.Check(ChatHistoryCursorResultSchema, { kind: "reset" })).toBe(true);
@@ -79,6 +81,58 @@ describe("ChatStatusEventSchema", () => {
   it("rejects unknown phases and extra fields", () => {
     expect(Value.Check(ChatStatusEventSchema, { ...statusEvent, phase: "thinking" })).toBe(false);
     expect(Value.Check(ChatStatusEventSchema, { ...statusEvent, detail: "Loading" })).toBe(false);
+  });
+});
+
+describe("ChatErrorEventSchema", () => {
+  const event = { runId: "run-1", sessionKey: "agent:main:main", seq: 1, state: "error" };
+  const detail = {
+    provider: "openai",
+    model: "gpt-5.6-luna",
+    failoverReason: "server_error",
+    providerRuntimeFailureKind: "timeout",
+    providerErrorType: "server_error",
+    httpStatus: 502,
+    providerErrorMessagePreview: "Upstream unavailable",
+  };
+
+  it("round-trips optional closed provider error details", () => {
+    for (const errorDetail of [
+      undefined,
+      {},
+      ...Object.entries(detail).map(([key, value]) => ({ [key]: value })),
+      detail,
+    ]) {
+      const serialized = JSON.stringify({ ...event, errorDetail });
+      const wire = JSON.parse(serialized);
+      expect(Value.Check(ChatEventSchema, wire)).toBe(true);
+    }
+    expect(
+      Value.Check(ChatEventSchema, {
+        ...event,
+        errorDetail: { ...detail, rawErrorPreview: "raw" },
+      }),
+    ).toBe(false);
+    expect(Value.Check(ChatEventSchema, { ...event, state: "final", errorDetail: detail })).toBe(
+      false,
+    );
+  });
+
+  it("enforces string and HTTP status bounds", () => {
+    for (const key of Object.keys(detail).filter((field) => field !== "httpStatus")) {
+      expect(
+        Value.Check(ChatEventSchema, { ...event, errorDetail: { [key]: "x".repeat(300) } }),
+      ).toBe(true);
+      expect(
+        Value.Check(ChatEventSchema, { ...event, errorDetail: { [key]: "x".repeat(301) } }),
+      ).toBe(false);
+    }
+    for (const httpStatus of [100, 599]) {
+      expect(Value.Check(ChatEventSchema, { ...event, errorDetail: { httpStatus } })).toBe(true);
+    }
+    for (const httpStatus of [99, 600, 502.5, "502"]) {
+      expect(Value.Check(ChatEventSchema, { ...event, errorDetail: { httpStatus } })).toBe(false);
+    }
   });
 });
 
@@ -102,5 +156,15 @@ describe("ChatSendParamsSchema", () => {
       }),
     ).toBe(true);
     expect(Value.Check(ChatSendParamsSchema, { ...send, unknown: true })).toBe(false);
+  });
+
+  it("accepts session settings expectations", () => {
+    expect(
+      Value.Check(ChatSendParamsSchema, {
+        ...send,
+        expectedPermissionMode: "guarded",
+        expectedToolOverrides: { webSearch: false },
+      }),
+    ).toBe(true);
   });
 });

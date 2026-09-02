@@ -1,3 +1,4 @@
+import { readSessionMessageIdentity } from "@openclaw/gateway-client/browser";
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { ChatPendingInputsPage } from "../../../../packages/gateway-protocol/src/schema/logs-chat.js";
@@ -33,7 +34,6 @@ import {
   resolveWorkingProgress,
   shouldRenderQueuedSendInThread,
 } from "./chat-progress.ts";
-import { chatMessagesContainQueuedSend } from "./chat-send-support.ts";
 import { groupMessages } from "./chat-thread-grouping.ts";
 import {
   appendCanvasBlockToAssistantMessage,
@@ -68,6 +68,7 @@ import {
 } from "./chat-thread-run-identity.ts";
 import { coalesceToolActivityMessages } from "./chat-tool-activity-coalesce.ts";
 import { safeNormalizeMessage } from "./chat-turn-boundary.ts";
+import { selectChatInputDisplay } from "./history-merge.ts";
 import { resolveSystemNoticeKind } from "./system-notice-kinds.ts";
 import { isLiveTerminalForRun } from "./terminal-message-identity.ts";
 import { buildToolStreamIdentity } from "./tool-stream-identity.ts";
@@ -103,8 +104,6 @@ export type BuildChatItemsProps = {
 export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | MessageGroup> {
   let items: ChatItem[] = [];
   const tools = props.toolMessages.filter((message) => asRecord(message) !== null);
-  const pendingInputs = props.pendingInputs ?? [];
-  const acceptedRunIds = new Set(pendingInputs.map((input) => input.runId));
   const history = composeTranscriptDisplay(
     props.messages.filter(
       (message) =>
@@ -215,12 +214,10 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
     });
   }
   const queuedSends = props.queue ?? [];
-  // Once authoritative history carries the send id, that message owns the bubble.
-  // Keep the queue row for run progress and delivery retirement, but do not render both copies.
-  const threadQueuedSends = queuedSends.filter(
-    (queued) =>
-      !acceptedRunIds.has(queued.sendRunId ?? "") &&
-      !chatMessagesContainQueuedSend(history, queued, true),
+  const { queue: threadQueuedSends, pendingInputs } = selectChatInputDisplay(
+    history,
+    queuedSends,
+    props.pendingInputs ?? [],
   );
   const currentRunQueuedSends = threadQueuedSends.filter(
     (queued) =>
@@ -238,12 +235,13 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
       earliest == null ? queued.createdAt : Math.min(earliest, queued.createdAt),
     null,
   );
-  // Live tool cards and stream segments are collected separately and merged into
-  // the stable history + queued-send rows by timestamp below. We never reorder
-  // the stable rows themselves, so optimistic user bubbles stay after the
-  // preceding assistant reply even when client and Gateway clocks disagree.
-  const timestampedProjectionItems: ChatItem[] = [];
-  const appendQueuedSend = (queued: ChatQueueItem, beforeMessage?: unknown) => {
+  // Transient projections merge into stable history + queued-send rows by timestamp.
+  // Stable rows keep their relative order despite client and Gateway clock skew.
+  const timestampedProjectionItems: ChatItem[] = buildPendingInputItems(
+    pendingInputs,
+    props.searchOpen ? props.searchQuery : undefined,
+  );
+  const appendQueuedSend = (queued: ChatQueueItem) => {
     if (!shouldRenderQueuedSendInThread(queued)) {
       return;
     }
@@ -259,29 +257,28 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
     ) {
       return;
     }
-    const queuedItem: ChatItem = {
+    const runId = queued.sendRunId;
+    // Reconnect can deliver a saved reply before history recovers its user row.
+    // Anchor to the first rendered owned output even after the local run clears;
+    // hidden/imported rows cannot anchor, and unmatched future sends stay last.
+    const insertionIndex = items.findIndex((item) => {
+      if (!runId || item.kind !== "message") {
+        return false;
+      }
+      const identity = readSessionMessageIdentity(item.message);
+      return (
+        isLiveTerminalForRun(item.message, runId) ||
+        (identity?.role === "assistant" && !identity.isImported && identity.runId === runId)
+      );
+    });
+    items.splice(insertionIndex < 0 ? items.length : insertionIndex, 0, {
       kind: "message",
-      // Mirror buildMessageKeys for a send-identity source key so the pending
-      // row and its history successor resolve to the same Lit key.
-      key: queued.sendRunId ? `msg:send:${queued.sendRunId}:0` : `pending-send:${queued.id}`,
+      key: queued.sendRunId ? buildMessageKeys([message])[0]! : `pending-send:${queued.id}`,
       message,
-    };
-    const insertionIndex =
-      beforeMessage === undefined
-        ? -1
-        : items.findIndex((item) => item.kind === "message" && item.message === beforeMessage);
-    if (insertionIndex === -1) {
-      items.push(queuedItem);
-    } else {
-      items.splice(insertionIndex, 0, queuedItem);
-    }
+    });
   };
   for (const queued of currentRunQueuedSends) {
-    const runId = queued.sendRunId;
-    const liveTerminal = runId
-      ? history.find((message) => isLiveTerminalForRun(message, runId))
-      : undefined;
-    appendQueuedSend(queued, liveTerminal);
+    appendQueuedSend(queued);
   }
   const currentTurnBounds = findCurrentTurnBounds(items);
   for (const liftedCanvasSource of liftedCanvasSources) {
@@ -672,19 +669,11 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
       ...optionalBoundaryIdentity(latestBoundaryRunId ?? workingRunId),
     });
   }
-  // Future queued turns are a causal ceiling for every current-run projection.
-  // Append them after tools, streams, progress, and prompts so none can cross the
-  // next user turn when a live item becomes stable transcript history.
+  // Unmatched future turns stay after all current-run projections as a causal
+  // ceiling. A known same-run reply instead anchors its already-attempted prompt.
   for (const queued of futureQueuedSends) {
     appendQueuedSend(queued);
   }
 
-  items.push(
-    ...buildPendingInputItems(
-      pendingInputs,
-      history,
-      props.searchOpen ? props.searchQuery : undefined,
-    ),
-  );
   return groupMessages(coalesceToolActivityMessages(items));
 }

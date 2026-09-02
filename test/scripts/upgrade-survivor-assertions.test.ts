@@ -248,16 +248,34 @@ describe("upgrade recovery result assertions", () => {
       status: "error",
       code: "PLUGIN_CAPABILITY_CONSENT_REQUIRED",
     };
+    const typedConsentResult = withPluginResult({
+      reason: undefined,
+      warnings: [],
+      npm: { outcomes: [consentOutcome] },
+    });
     const validResults = [
       RECOVERABLE_UPDATE,
       withPluginResult({ warnings: [], sync: { errors: [consentError] } }),
       withPluginResult({ warnings: [], npm: { outcomes: [consentOutcome] } }),
+      typedConsentResult,
     ];
     for (const value of validResults) {
-      expect(runJsonAssertion("assert-recoverable-update-json", value, "2026.8.1").status).toBe(0);
+      const result = runJsonAssertion("assert-recoverable-update-json", value, "2026.8.1");
+      expect(result.status, result.stderr).toBe(0);
+      expect(runJsonAssertion("assert-successful-update-json", value, "2026.8.1").status).not.toBe(
+        0,
+      );
     }
 
     const invalidResults = [
+      withPluginResult({ reason: undefined }),
+      ...[
+        { npm: { outcomes: [consentOutcome, { ...consentOutcome, code: "INSTALL_FAILED" }] } },
+        { npm: { outcomes: [{ ...consentOutcome, code: undefined }] } },
+        { npm: { outcomes: [{ ...consentOutcome, pluginId: "unreviewed" }] } },
+        { reason: "registry-timeout" },
+        { reason: null },
+      ].map((patch) => withPluginResult({ ...typedConsentResult.postUpdate.plugins, ...patch })),
       { ...RECOVERABLE_UPDATE, reason: "global-update-failed" },
       { ...RECOVERABLE_UPDATE, after: { version: "2026.7.1-2" } },
       {
@@ -472,7 +490,7 @@ function writeLegacySessionEntriesState(stateDir: string): void {
 }
 
 function runSessionStateAssertion(
-  setup: (stateDir: string) => void | NodeJS.ProcessEnv,
+  setup: (stateDir: string) => NodeJS.ProcessEnv | undefined,
   options: { scenario?: string; commands?: string[] } = {},
 ): void {
   const root = mkdtempSync(join(tmpdir(), "openclaw-upgrade-survivor-session-state-"));
@@ -490,7 +508,7 @@ function runSessionStateAssertion(
       execFileSync(process.execPath, [ASSERTIONS_PATH, command], {
         env: {
           ...process.env,
-          ...(fixtureEnv ?? {}),
+          ...fixtureEnv,
           OPENCLAW_STATE_DIR: stateDir,
           OPENCLAW_TEST_WORKSPACE_DIR: workspace,
           OPENCLAW_UPGRADE_SURVIVOR_SCENARIO: options.scenario ?? "base",
@@ -977,11 +995,11 @@ describe("upgrade survivor assertions", () => {
               "authProfiles.state",
               JSON.stringify(corruption === "state" ? {} : fixture.authState),
             );
-            for (const _source of sources) {
+            sources.forEach(() => {
               db.prepare("INSERT INTO migration_sources VALUES (?, 'completed', 1)").run(
                 "auth-profile-json-to-sqlite-v2",
               );
-            }
+            });
           } finally {
             db.close();
           }
@@ -1173,6 +1191,36 @@ process.stdout.write(sessionDir + "\\n");
       }
     },
   );
+
+  it("requires every seeded legacy cron specimen before update", () => {
+    const root = mkdtempSync(join(tmpdir(), "openclaw-upgrade-survivor-cron-"));
+    try {
+      const stateDir = join(root, "state");
+      const workspace = join(root, "workspace");
+      const env = {
+        ...process.env,
+        OPENCLAW_STATE_DIR: stateDir,
+        OPENCLAW_TEST_WORKSPACE_DIR: workspace,
+        OPENCLAW_UPGRADE_SURVIVOR_SCENARIO: "cron-scheduled-authority",
+        OPENCLAW_UPGRADE_SURVIVOR_ASSERT_STAGE: "baseline",
+      };
+      const run = (command: string) =>
+        spawnSync(process.execPath, [ASSERTIONS_PATH, command], { env, encoding: "utf8" });
+      const seeded = run("seed");
+      expect(seeded.status, seeded.stderr).toBe(0);
+      const cronStore = join(stateDir, "cron", "jobs.json");
+      const baseline = run("assert-state");
+      expect(baseline.status, baseline.stderr).toBe(0);
+      const store = JSON.parse(readFileSync(cronStore, "utf8"));
+      store.jobs.pop();
+      writeJson(cronStore, store);
+      const missingRow = run("assert-state");
+      expect(missingRow.status).not.toBe(0);
+      expect(missingRow.stderr).toContain("legacy cron authority fixture row count changed");
+    } finally {
+      rmSync(root, { force: true, recursive: true });
+    }
+  });
 
   it("accepts the ACPX OpenClaw tools bridge scenario during seed", () => {
     const root = mkdtempSync(join(tmpdir(), "openclaw-upgrade-survivor-acpx-"));

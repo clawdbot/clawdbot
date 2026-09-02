@@ -9,9 +9,10 @@ import {
   writeFileSync,
 } from "node:fs";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it as baseIt } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { registerMacWorkerMaterializationTests } from "./mac-node-worker-materialization.test-support.js";
+import { createMacScriptTest } from "./mac-script-fixture.test-support.js";
 
 registerMacWorkerMaterializationTests();
 
@@ -19,7 +20,7 @@ const temps = useAutoCleanupTempDirTracker(afterEach);
 const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
 
 describe("Mac app worker publication", () => {
-  it.each(["sign", "worker", "seal", "stage", "success"])(
+  baseIt.each(["sign", "worker", "seal", "stage", "success"])(
     "publishes only a verified replacement (%s)",
     (failure) => {
       const root = temps.make("openclaw-worker-publication-");
@@ -81,23 +82,25 @@ describe("Mac app worker publication", () => {
     },
   );
 
-  it("provisions packages without invoking the service owner or changing operator state", () => {
-    const root = temps.make("openclaw-worker-provision-");
-    const home = path.join(root, "home");
-    const prefix = path.join(root, "private");
-    const sentinel = path.join(root, "operator", ".openclaw", "state", "sentinel");
-    mkdirSync(path.dirname(sentinel), { recursive: true });
-    mkdirSync(home);
-    writeFileSync(sentinel, "operator-owned");
-    const nodeDir = path.join(prefix, "tools", "node-v24.19.0");
-    mkdirSync(path.join(nodeDir, "bin"), { recursive: true });
-    // Only npm/network is replaced. The real install_openclaw implementation
-    // must remain a provision-only seam even when a loaded Gateway is reported.
-    symlinkSync(process.execPath, path.join(nodeDir, "bin", "node"));
-    const npm = path.join(nodeDir, "bin", "npm");
-    writeFileSync(
-      npm,
-      `#!/bin/bash
+  baseIt(
+    "provisions packages without invoking the service owner or changing operator state",
+    () => {
+      const root = temps.make("openclaw-worker-provision-");
+      const home = path.join(root, "home");
+      const prefix = path.join(root, "private");
+      const sentinel = path.join(root, "operator", ".openclaw", "state", "sentinel");
+      mkdirSync(path.dirname(sentinel), { recursive: true });
+      mkdirSync(home);
+      writeFileSync(sentinel, "operator-owned");
+      const nodeDir = path.join(prefix, "tools", "node-v24.19.0");
+      mkdirSync(path.join(nodeDir, "bin"), { recursive: true });
+      // Only npm/network is replaced. The real install_openclaw implementation
+      // must remain a provision-only seam even when a loaded Gateway is reported.
+      symlinkSync(process.execPath, path.join(nodeDir, "bin", "node"));
+      const npm = path.join(nodeDir, "bin", "npm");
+      writeFileSync(
+        npm,
+        `#!/bin/bash
 case "$1" in
   --version) echo 11.15.0 ;;
   config) echo null ;;
@@ -108,14 +111,14 @@ case "$1" in
   *) exit 4 ;;
 esac
 `,
-    );
-    chmodSync(npm, 0o755);
-    const calls = path.join(root, "service-calls");
-    const result = spawnSync(
-      "/bin/bash",
-      [
-        "-c",
-        `
+      );
+      chmodSync(npm, 0o755);
+      const calls = path.join(root, "service-calls");
+      const result = spawnSync(
+        "/bin/bash",
+        [
+          "-c",
+          `
       set -euo pipefail
       source scripts/install-cli.sh
       PREFIX=${quote(prefix)}
@@ -125,23 +128,25 @@ esac
       install_openclaw
       test -f "$(node_dir)/lib/node_modules/openclaw/dist/entry.js"
     `,
-      ],
-      {
-        encoding: "utf8",
-        env: {
-          HOME: home,
-          PATH: `${path.join(nodeDir, "bin")}:/usr/bin:/bin`,
-          OPENCLAW_INSTALL_CLI_SH_NO_RUN: "1",
+        ],
+        {
+          encoding: "utf8",
+          env: {
+            HOME: home,
+            PATH: `${path.join(nodeDir, "bin")}:/usr/bin:/bin`,
+            OPENCLAW_INSTALL_CLI_SH_NO_RUN: "1",
+          },
         },
-      },
-    );
-    expect(result.status, result.stderr).toBe(0);
-    expect(existsSync(calls)).toBe(false);
-    expect(readFileSync(sentinel, "utf8")).toBe("operator-owned");
-  });
+      );
+      expect(result.status, result.stderr).toBe(0);
+      expect(existsSync(calls)).toBe(false);
+      expect(readFileSync(sentinel, "utf8")).toBe("operator-owned");
+    },
+  );
 });
 
 describe.runIf(process.platform === "darwin")("Mac worker portability inventory", () => {
+  const it = createMacScriptTest();
   it("audits supported thin and fat formats through real otool", async () => {
     const { auditMacWorkerPortability } =
       await import("../../scripts/lib/mac-worker-portability.mjs");
@@ -164,36 +169,37 @@ describe.runIf(process.platform === "darwin")("Mac worker portability inventory"
     expect(auditMacWorkerPortability(root, node)).toBe(7);
   });
 
-  it.each([
-    "Java",
-    "fat32 archive",
-    "fat64 archive",
-    "thin object",
-    "fat32 object",
-    "fat64 object",
-  ])("preserves %s resources without treating them as loadable images", async (kind) => {
-    const { auditMacWorkerPortability } =
-      await import("../../scripts/lib/mac-worker-portability.mjs");
-    const { machoFixture, nativeObjectFixture, universalArchiveFixture } =
-      await import("../helpers/mac-native.js");
-    const parent = temps.make("openclaw-portability-resource-");
-    const root = path.join(parent, "runtime");
-    mkdirSync(root);
-    const node = path.join(root, "node");
-    writeFileSync(node, machoFixture());
-    const filename = path.join(root, "opaque-resource");
-    const format = kind.startsWith("fat32") ? "fat32" : kind.startsWith("fat64") ? "fat64" : "thin";
-    const inputs = path.join(parent, "resource-inputs");
-    const bytes =
-      kind === "Java"
-        ? Buffer.from("cafebabe0000003d0001", "hex")
-        : kind.endsWith("archive")
-          ? universalArchiveFixture(inputs, format === "fat64", false)
-          : nativeObjectFixture(inputs, format);
-    writeFileSync(filename, bytes);
-    expect(auditMacWorkerPortability(root, node)).toBe(1);
-    expect(readFileSync(filename)).toEqual(bytes);
-  });
+  it.for(["Java", "fat32 archive", "fat64 archive", "thin object", "fat32 object", "fat64 object"])(
+    "preserves %s resources without treating them as loadable images",
+    (kind, { mac }) =>
+      mac.lifetime.run(async () => {
+        const { auditMacWorkerPortability } =
+          await import("../../scripts/lib/mac-worker-portability.mjs");
+        const { machoFixture, nativeObjectFixture, universalArchiveFixture } =
+          await import("../helpers/mac-native.js");
+        const parent = mac.createTempDir("openclaw-portability-resource-");
+        const root = path.join(parent, "runtime");
+        mkdirSync(root);
+        const node = path.join(root, "node");
+        writeFileSync(node, machoFixture());
+        const filename = path.join(root, "opaque-resource");
+        const format = kind.startsWith("fat32")
+          ? "fat32"
+          : kind.startsWith("fat64")
+            ? "fat64"
+            : "thin";
+        const inputs = path.join(parent, "resource-inputs");
+        const bytes =
+          kind === "Java"
+            ? Buffer.from("cafebabe0000003d0001", "hex")
+            : kind.endsWith("archive")
+              ? await universalArchiveFixture(inputs, format === "fat64", false, mac)
+              : await nativeObjectFixture(inputs, format, mac);
+        writeFileSync(filename, bytes);
+        expect(auditMacWorkerPortability(root, node)).toBe(1);
+        expect(readFileSync(filename)).toEqual(bytes);
+      }),
+  );
 
   it.each([false, true])(
     "binds captured symlink targets before publication (replacement: %s)",

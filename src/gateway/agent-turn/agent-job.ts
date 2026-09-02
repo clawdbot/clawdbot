@@ -25,6 +25,7 @@ import {
   type AgentRunTerminalReplySnapshot,
 } from "../../agents/agent-run-terminal-reply.js";
 import { onAgentEvent } from "../../infra/agent-events.js";
+import { formatErrorMessageForDisplay } from "../../infra/error-diagnostics.js";
 import { isNonTerminalAgentRunStatus } from "../../shared/agent-run-status.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import { setSafeTimeout } from "../../utils/timer-delay.js";
@@ -418,16 +419,21 @@ function parseDedupeObservation(entry: DedupeEntry): DedupeObservation {
     readNonBlankString(payload?.stopReason) ?? readNonBlankString(resultMeta?.stopReason);
   const livenessState =
     readNonBlankString(payload?.livenessState) ?? readNonBlankString(resultMeta?.livenessState);
+  const errorMessage =
+    typeof payload?.error === "string"
+      ? payload.error
+      : typeof payload?.summary === "string"
+        ? payload.summary
+        : entry.error?.message;
   const terminalOutcome = buildAgentRunTerminalOutcome({
     status: terminalStatus,
     startedAt,
     endedAt,
+    // RPC errors stay native for retry policy; agent.wait is an operator-facing projection.
     error:
-      typeof payload?.error === "string"
-        ? payload.error
-        : typeof payload?.summary === "string"
-          ? payload.summary
-          : entry.error?.message,
+      errorMessage === undefined
+        ? undefined
+        : formatErrorMessageForDisplay(entry.error, errorMessage),
     stopReason,
     livenessState,
     timeoutPhase: payload?.timeoutPhase ?? resultMeta?.timeoutPhase,

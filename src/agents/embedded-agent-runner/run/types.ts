@@ -295,15 +295,14 @@ export type EmbeddedRunAttemptResult = {
   finalPromptText?: string;
   /** Exact provider-response count when the harness can observe model iterations directly. */
   modelIterations?: number;
+  /** Saved provider retry setting resolved by the prepared session owner. */
+  providerRetryMaxRetries?: number;
   messagesSnapshot: AgentMessage[];
-  /**
-   * Complete application transcript frozen through a settled tool boundary.
-   * Projection-backed finalizers must fail closed when their harness does not provide it.
-   */
-  settledTurnFinalizationContext?: {
-    readonly source: "openclaw-transcript";
-    readonly messages: readonly AgentMessage[];
-  };
+  /** Owner-eligible settled finalization, with frozen evidence or an unavailable projection. */
+  settledTurnFinalizationContext?:
+    | { readonly source: "openclaw-transcript"; readonly messages: readonly AgentMessage[] }
+    | { readonly source: "harness"; readonly data: unknown }
+    | { readonly source: "unavailable" };
   beforeAgentFinalizeRevisionReason?: string;
   assistantTexts: string[];
   latestMcpAppChannelView?: McpAppChannelView;

@@ -9,15 +9,20 @@ import { applyAuthHeaderOverride, applyLocalNoAuthHeaderOverride } from "../../m
 import { appendProgressCardSystemPrompt } from "../../progress-card-system-prompt.js";
 import type { AgentRunSessionTarget } from "../../run-session-target.js";
 import type { AgentRuntimePlan } from "../../runtime-plan/types.js";
-import { resolveSandboxContext } from "../../sandbox/context.js";
 import { resolveSessionPermissionExecMode } from "../../session-permission-exec-mode.js";
 import { resolveSessionPlacementSandbox } from "../../session-placement-admission.js";
+import { resolveSessionSkillResourceSnapshot } from "../../session-placement-skill-resources.js";
 import { createToolTerminalObserver } from "../../tool-terminal-outcome.js";
 import {
   createAdmittedGatewayToolCallerIdentity,
   withGatewayToolCallerIdentity,
 } from "../../tools/gateway-caller-context.js";
 import type { SystemAgentToolOptions } from "../../tools/system-agent-tool.js";
+import {
+  resolveSandboxSkillRuntimeInputs,
+  mapSandboxSkillUsagePaths,
+  remapSkillReferencePaths,
+} from "../sandbox-skills.js";
 import { prepareExecApprovalContinuationForAttempt } from "./attempt-exec-approval-continuation.js";
 import { applyResolvedToolPromptFinalizer } from "./attempt-prompt-support.js";
 import { resolveAttemptWorkspaceSandbox } from "./attempt-setup.js";
@@ -207,27 +212,27 @@ export async function dispatchEmbeddedRunAttempt(input: {
     modelMaxTokens: runtime.model.maxTokens,
     userTurnTranscriptRecorder: params.userTurnTranscriptRecorder,
   });
-  const promptMedia = control.pluginHarnessOwnsTransport
-    ? await (async () => {
-        const workspace = await resolveAttemptWorkspaceSandbox({
-          ...params,
-          agentId: runtime.agentId,
-          cwd: undefined,
-          sessionId: runtime.sessionId,
-          sessionKey: runtime.sessionKey,
-          workspaceDir: runtime.workspaceDir,
-        });
-        return await prepareEmbeddedAttemptPromptExecution({
-          attempt: { ...params, model: runtime.model },
-          mediaOwnerAgentId: workspace.sessionAgentId,
-          effectiveFsWorkspaceOnly: workspace.effectiveFsWorkspaceOnly,
-          effectiveWorkspace: workspace.effectiveWorkspace,
-          prompt: "",
-          sandbox: workspace.sandbox,
-          skipPromptSubmission: false,
-          pluginHarness: true,
-        });
-      })()
+  const pluginWorkspace = control.pluginHarnessOwnsTransport
+    ? await resolveAttemptWorkspaceSandbox({
+        ...params,
+        agentId: runtime.agentId,
+        cwd: undefined,
+        sessionId: runtime.sessionId,
+        sessionKey: runtime.sessionKey,
+        workspaceDir: runtime.workspaceDir,
+      })
+    : undefined;
+  const promptMedia = pluginWorkspace
+    ? await prepareEmbeddedAttemptPromptExecution({
+        attempt: { ...params, model: runtime.model },
+        mediaOwnerAgentId: pluginWorkspace.sessionAgentId,
+        effectiveFsWorkspaceOnly: pluginWorkspace.effectiveFsWorkspaceOnly,
+        effectiveWorkspace: pluginWorkspace.effectiveWorkspace,
+        prompt: "",
+        sandbox: pluginWorkspace.sandbox,
+        skipPromptSubmission: false,
+        pluginHarness: true,
+      })
     : { images: params.images, imageOrder: params.imageOrder, media: params.media };
   // Plugin harnesses own their tool materialization, so the host cannot attest
   // a message tool. Finalize conservatively instead of leaking phantom guidance.
@@ -239,8 +244,6 @@ export async function dispatchEmbeddedRunAttempt(input: {
           finalize: params.finalizePromptForResolvedTools,
         })
       : undefined;
-  const sessionKey = runtime.sessionKey?.trim() || runtime.sessionId;
-  const sandboxSessionKey = params.sandboxSessionKey?.trim() || sessionKey;
   const pluginSandbox = control.pluginHarnessOwnsTransport
     ? ((await resolveSessionPlacementSandbox({
         agentId: runtime.agentId,
@@ -248,14 +251,7 @@ export async function dispatchEmbeddedRunAttempt(input: {
         sessionId: runtime.sessionId,
         sessionKey: runtime.sessionKey,
         workspaceDir: runtime.workspaceDir,
-      })) ??
-      (await resolveSandboxContext({
-        config: params.config,
-        agentId:
-          params.sandboxAgentId ?? (sandboxSessionKey === sessionKey ? runtime.agentId : undefined),
-        sessionKey: sandboxSessionKey,
-        workspaceDir: runtime.workspaceDir,
-      })))
+      })) ?? pluginWorkspace?.sandbox)
     : undefined;
   if (!params.admittedRunContext) {
     throw new Error("embedded attempt reached dispatch without an admitted run context");
@@ -281,6 +277,25 @@ export async function dispatchEmbeddedRunAttempt(input: {
     sessionKey: params.sessionKey,
     toolsAllow: params.toolsAllow,
   });
+  let skillsSnapshot = resolveSessionSkillResourceSnapshot(params.skillsSnapshot);
+  let skillReferencePaths: import("../../../skills/types.js").SkillUsagePath[] | undefined;
+  if (
+    pluginSandbox?.enabled &&
+    !pluginSandbox.readOnlyResourceMounts?.length &&
+    skillsSnapshot?.librarySelections?.length
+  ) {
+    const prepared = resolveSandboxSkillRuntimeInputs({
+      sandbox: pluginSandbox,
+      skillsAnchorWorkspace: runtime.bootstrapWorkspaceDir ?? runtime.workspaceDir,
+      skillsSnapshot,
+    });
+    skillsSnapshot = prepared.skillsSnapshot;
+    skillReferencePaths = mapSandboxSkillUsagePaths({
+      paths: pluginSandbox.skillUsagePaths,
+      skillsWorkspaceDir: prepared.skillsWorkspaceDir,
+      skillsPromptWorkspaceDir: prepared.skillsPromptWorkspaceDir,
+    });
+  }
   const attemptParams: EmbeddedRunAttemptInternalParams = {
     permissionChange: input.permissionChange,
     admittedRunContext: params.admittedRunContext,
@@ -357,8 +372,11 @@ export async function dispatchEmbeddedRunAttempt(input: {
     ...(runtime.authoredContextTokenCap === undefined
       ? {}
       : { authoredContextTokenCap: runtime.authoredContextTokenCap }),
-    skillsSnapshot: params.skillsSnapshot,
-    prompt: pluginHarnessPrompt ?? preparedExecApprovalContinuation.prompt,
+    skillsSnapshot,
+    prompt: remapSkillReferencePaths(
+      pluginHarnessPrompt ?? preparedExecApprovalContinuation.prompt,
+      skillReferencePaths,
+    ),
     transcriptPrompt:
       pluginHarnessPrompt !== undefined && params.transcriptPrompt === undefined
         ? preparedExecApprovalContinuation.prompt

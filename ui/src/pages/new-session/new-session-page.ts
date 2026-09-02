@@ -620,6 +620,10 @@ export class NewSessionPage extends OpenClawLightDomElement {
             }
           },
           onSubmit: () => void this.submission.submit(),
+          onBackgroundSubmit:
+            this.submission.visibility === "draft"
+              ? undefined
+              : () => void this.submission.submit(undefined, true),
         })}
         ${renderNewSessionIncognitoNotice(this.submission.visibility === "incognito")}
       </div>

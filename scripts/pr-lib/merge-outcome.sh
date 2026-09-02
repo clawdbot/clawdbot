@@ -50,9 +50,19 @@ merge_outcome_load_local() {
     MERGE_OUTCOME_RECORD=$(git show "$MERGE_OUTCOME_OID:outcome.json" | jq -ce \
       --argjson repo "$expected_repo" --argjson pr "$pr" '
       def oid: type == "string" and test("^[0-9a-f]{40}$");
+      def attempt: type == "string" and test("^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$");
+      def recovery:
+        if has("recovery") then . as $record | .recovery |
+          type == "object" and
+          ((keys == ["actor","attempt","outcome","reason"]) or
+           (keys == ["actor","attempt","outcome","reason","replacementHead"] and
+            (.replacementHead | oid) and .replacementHead == $record.head)) and
+          (.outcome | oid) and (.attempt | attempt) and
+          (.actor | type == "string" and length > 0) and .reason == "explicit-operator-recovery"
+        else true end;
       select(.version == 1 and ($repo == null or .repo == $repo) and .pr == $pr and .base == "main" and
         (.prId | type == "string" and length > 0) and (.head | oid) and (.main | oid) and
-        (.attempt | test("^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")) and
+        (.attempt | attempt) and recovery and
         (.method == "squash" or .method == "merge" or .method == "rebase") and
         (.route == "immediate" or .route == "admin" or .route == "auto" or .route == "queue") and
         (.accepted | type == "boolean") and
@@ -67,6 +77,18 @@ merge_outcome_load_local() {
       case " $parents " in *" $retained "*) ;; *) merge_outcome_stop "record does not retain required commit $retained"; return 1 ;; esac
       git cat-file -e "$retained^{commit}" || { merge_outcome_stop "required historical commit $retained is unavailable"; return 1; }
     done
+    if printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -e 'has("recovery")' >/dev/null; then
+      retained=$(printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -r .recovery.outcome)
+      if ! git merge-base --is-ancestor "$retained" "$MERGE_OUTCOME_OID" ||
+        ! git show "$retained:outcome.json" | jq -e --argjson next "$MERGE_OUTCOME_RECORD" '
+          .phase == "intent" and .accepted == false and .route == "immediate" and
+          .repo == $next.repo and .pr == $next.pr and .prId == $next.prId and
+          .base == $next.base and .method == $next.method and .attempt == $next.recovery.attempt and
+          $next.route == "immediate" and (.head == $next.head or $next.recovery.replacementHead == $next.head)
+        ' >/dev/null; then
+        merge_outcome_stop "invalid or unretained operator recovery provenance"; return 1
+      fi
+    fi
   else
     git show-ref --verify --quiet "$MERGE_OUTCOME_REF" 2>/dev/null || ref_status=$?
     [ "$ref_status" -eq 1 ] || { merge_outcome_stop "unreadable outcome ref"; return 1; }
@@ -74,7 +96,8 @@ merge_outcome_load_local() {
 }
 
 merge_outcome_write() {
-  local record="$1" blob tree next parent
+  local record="$1" blob tree next parent entries capture
+  shift
   mark_pr_operation_side_effects_started || return 1
   local parents=()
   for parent in $(printf '%s\n' "$record" | jq -r '[.head,.main,.landed] | unique | .[] | select(. != null)'); do
@@ -82,7 +105,15 @@ merge_outcome_write() {
   done
   [ -z "$MERGE_OUTCOME_OID" ] || parents+=(-p "$MERGE_OUTCOME_OID")
   blob=$(printf '%s\n' "$record" | git hash-object -w --stdin) || return 1
-  tree=$(printf '100644 blob %s\toutcome.json\n' "$blob" | git mktree) || return 1
+  entries=$(printf '100644 blob %s\toutcome.json\n' "$blob")
+  # Replacement intent retains old captures as blobs before cleanup can remove
+  # the worktree. Later receipts retain this tree through their outcome parents.
+  for capture in "$@"; do
+    [ -f "$capture" ] && [ ! -L "$capture" ] || { merge_outcome_stop "cannot retain non-regular capture $capture"; return 1; }
+    blob=$(git hash-object -w --no-filters -- "$capture") || return 1
+    entries+=$'\n'"$(printf '100644 blob %s\t%s' "$blob" "${capture##*/}")"
+  done
+  tree=$(printf '%s\n' "$entries" | git mktree) || return 1
   next=$(printf 'Native PR merge outcome\n' | git -c commit.gpgsign=false commit-tree "$tree" "${parents[@]}") || return 1
   if git symbolic-ref -q "$MERGE_OUTCOME_REF" >/dev/null 2>&1 ||
     ! git update-ref --no-deref "$MERGE_OUTCOME_REF" "$next" "${MERGE_OUTCOME_OID:-$(pr_operation_lock_zero_oid)}"; then

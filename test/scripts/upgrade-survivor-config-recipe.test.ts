@@ -166,6 +166,8 @@ describe("upgrade survivor config recipe command resolution", () => {
 
   it("inserts scenario config before final validation", () => {
     const steps = resolveUpgradeSurvivorConfigSteps("feishu-channel");
+    const gateway = JSON.parse(steps.find((step) => step.id === "gateway")?.argv[3] ?? "{}");
+    expect(gateway.reload).toEqual({ mode: "off" });
     expect(steps.find((step) => step.id === "channels-discord")).toBeDefined();
     expect(steps.find((step) => step.id === "channels-feishu")).toBeDefined();
     expect(steps.at(-1)?.id).toBe("validate");

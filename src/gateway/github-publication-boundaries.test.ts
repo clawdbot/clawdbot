@@ -522,12 +522,13 @@ describe("Gateway GitHub publication boundaries", () => {
     await resumed.resumeSessionRequests();
 
     expect(resumed.read(requestId)).toEqual({
+      publisher: { source: "system-configured", accountId: 42, login: "roboclaw-bot" },
       requestId,
       status: "failed",
       code: "workspace_changed",
       message: "GitHub publication failed.",
       nextAction:
-        "Wait for the current turn to finish, inspect the reconciled workspace, and retry.",
+        "Inspect the reconciled workspace and any recorded GitHub effects, then request a new publication after reviewing the changes.",
     });
     expect(commands).toEqual([]);
   });

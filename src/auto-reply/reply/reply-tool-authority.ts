@@ -27,13 +27,15 @@ type ReplyToolAuthoritySnapshot = {
 /** Projects current inbound facts against the active run's frozen authority snapshot. */
 export function resolveInboundReplyToolAuthorityOverlay(params: {
   ctx: RuntimeMsgContext;
-  sessionEntry?: Pick<SessionEntry, "spawnedBy">;
+  sessionEntry?: Pick<SessionEntry, "permissionMode" | "spawnedBy" | "toolOverrides">;
   senderIsOwner: boolean;
   toolsAllow?: string[];
   disableTools: boolean;
 }): ReplyToolAuthorityOverlay {
   const { ctx } = params;
   return {
+    permissionMode: params.sessionEntry?.permissionMode,
+    toolOverrides: params.sessionEntry?.toolOverrides,
     originatingChannel: ctx.OriginatingChannel,
     messageProvider: resolveOriginMessageProvider({
       originatingChannel: ctx.OriginatingChannel,
@@ -101,6 +103,8 @@ function applyReplyToolAuthorityOverlay(
     disableTools: overlay.disableTools,
     run: {
       ...snapshot.run,
+      permissionMode: overlay.permissionMode,
+      toolOverrides: overlay.toolOverrides,
       messageProvider: overlay.messageProvider,
       chatType: overlay.chatType,
       agentAccountId: overlay.agentAccountId,
@@ -187,6 +191,7 @@ function resolveReplyToolAuthoritySnapshotFingerprint(
         agentDir: execution.agentDir,
         workspaceDir: execution.workspaceDir,
         cwd: execution.cwd,
+        permissionMode: execution.permissionMode,
         toolOverrides: execution.toolOverrides,
         execOverrides: execution.execOverrides,
         elevatedLevel: execution.elevatedLevel,

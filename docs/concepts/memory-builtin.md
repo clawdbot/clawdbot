@@ -111,13 +111,29 @@ which support selective deletion after promotion. For coverage and limits, see
   shutdown checkpoints.
 - **File watching:** changes to memory files trigger a debounced reindex
   (1.5s default).
-- **Auto-reindex:** the index rebuilds automatically when the embedding
-  provider, model, chunking config, configured sources, or scope change.
-- **Reindex on demand:** `openclaw memory index --force`
+- **Index compatibility:** changing the embedding provider, model, settings,
+  configured sources, or scope can pause search until you explicitly rebuild.
+  See [provider selection](/reference/memory-config#provider-selection).
+- **Reindex on demand:** `openclaw memory index --force --agent <id>`
 
 Full reindexes build a replacement in a temporary database and publish the
 memory tables atomically. Concurrent searches and status reads keep using the
-published index; a failed rebuild leaves that index intact.
+published index; a failed rebuild leaves that index intact. The embedding cache
+is bounded before publication, not after copying excess entries into the
+shared database.
+
+Other agent state, including sessions and transcripts in the same database,
+is retained. Use the [memory index command](/cli/memory#memory-index) for
+memory-only repair.
+
+`openclaw memory status` reports stored chunk text and JSON embedding bytes
+for each source (`sourceCounts[].chunkBytes` in JSON). These are payload sizes,
+not total disk usage: embedding cache, FTS/vector tables, SQLite overhead, and
+WAL/free pages are excluded.
+
+After an upgrade, automatic project and trigger recall may need to repair
+legacy provenance. That repair runs in the background. Replies continue while
+automatic recall stays empty until the affected sources have been reclassified.
 
 <Info>
 You can also index Markdown files outside the workspace with
@@ -208,6 +224,30 @@ vector store separately from the embedding provider, so `Vector store:
 unavailable` points at sqlite-vec loading while `Embeddings: unavailable`
 points at provider/auth or model readiness. Check logs for the specific load
 error.
+
+### Safe index recovery
+
+To rebuild after stale results or an embedding-provider change, select the
+affected agent explicitly:
+
+```bash
+openclaw memory status --agent <agent-id> --deep
+openclaw memory index --agent <agent-id> --force --verbose
+openclaw memory status --agent <agent-id> --deep
+```
+
+The index shares `openclaw-agent.sqlite` with session history and other durable
+agent state. A full reindex replaces only the memory tables; it does not
+replace the agent database file. Deleting that database, its WAL, or its
+journal can remove conversation history and other state that memory indexing
+cannot reconstruct. Do not treat the agent database as a disposable cache.
+
+If indexing fails or the database grows unexpectedly, keep the database and
+its sidecars, retain the verbose error, and [create and verify a backup](/cli/backup)
+before manual recovery. A large database alone does not show which tables are
+responsible. Reindexing is not a session-history restore: if history is missing
+after moving or deleting the database, recover from a verified backup using
+the [restore workflow](/install/backups#restore-a-full-archive).
 
 ## Configuration
 

@@ -1,12 +1,11 @@
 /** Runs complete model-catalog discovery outside the Gateway event loop. */
-import path from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
-import { Worker } from "node:worker_threads";
 import {
   getConfigResolutionFacts,
   serializeConfigResolutionFacts,
 } from "../config/resolution-facts.js";
 import { projectConfigOntoRuntimeSourceSnapshot } from "../config/runtime-source-projection.js";
+import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
+import { WorkerTaskPool } from "../infra/worker-task-pool.js";
 import { resolveInstalledManifestRegistryIndexFingerprint } from "../plugins/manifest-registry-installed.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import type { PreparedAgentCredentialModes } from "./agent-auth-credential-modes.js";
@@ -33,18 +32,11 @@ export type PreparedModelCatalogWorkerInput = Readonly<{
   sourceConfigResolutionFacts: ReturnType<typeof serializeConfigResolutionFacts>;
   authStore: AuthProfileStore;
   providerIds: readonly string[];
+  preferBuiltPluginArtifacts: boolean;
   pluginMetadataSnapshot: Omit<PluginMetadataSnapshot, "normalizePluginId">;
 }>;
 
 export type PreparedModelWorkerRequest =
-  | Readonly<{ requestId: number; kind: "catalog" }>
-  | Readonly<{
-      requestId: number;
-      kind: "auth-refresh";
-      profileIds?: readonly string[];
-      providerIds: readonly string[];
-    }>;
-type PreparedModelWorkerRequestInput =
   | Readonly<{ kind: "catalog" }>
   | Readonly<{
       kind: "auth-refresh";
@@ -55,7 +47,6 @@ type PreparedModelWorkerRequestInput =
 export type PreparedModelWorkerResult =
   | Readonly<{
       status: "ok";
-      requestId: number;
       kind: "catalog";
       generationFingerprint: string;
       snapshot: ModelCatalogSnapshot;
@@ -64,13 +55,12 @@ export type PreparedModelWorkerResult =
     }>
   | Readonly<{
       status: "ok";
-      requestId: number;
       kind: "auth-refresh";
       generationFingerprint: string;
       authStore: AuthProfileStore;
       authModes: PreparedAgentCredentialModes;
     }>
-  | Readonly<{ status: "failed"; requestId: number; error: string }>;
+  | Readonly<{ status: "failed"; error: string }>;
 
 // Cold source/plugin loading can take well over a minute. Three minutes preserves exact full-view
 // discovery while bounding a wedged provider; expiry rejects and never returns partial results.
@@ -94,6 +84,7 @@ export function fingerprintPreparedModelCatalogGeneration(params: {
   sourceConfigResolutionFacts: ReturnType<typeof serializeConfigResolutionFacts>;
   authStore: AuthProfileStore;
   providerIds: readonly string[];
+  preferBuiltPluginArtifacts?: boolean;
   pluginMetadataSnapshot: PluginMetadataSnapshot;
 }): string {
   return fingerprintPreparedRuntimeFacts({
@@ -103,6 +94,7 @@ export function fingerprintPreparedModelCatalogGeneration(params: {
     sourceConfigResolutionFacts: params.sourceConfigResolutionFacts,
     authStore: params.authStore,
     providerIds: params.providerIds,
+    preferBuiltPluginArtifacts: params.preferBuiltPluginArtifacts === true,
     pluginFingerprint: fingerprintPreparedModelCatalogPlugins(params.pluginMetadataSnapshot),
   });
 }
@@ -110,6 +102,7 @@ export function fingerprintPreparedModelCatalogGeneration(params: {
 export function createPreparedModelCatalogWorkerInput(params: {
   agentFacts: PreparedModelRuntimeAgentFacts;
   pluginMetadataSnapshot: PluginMetadataSnapshot;
+  preferBuiltPluginArtifacts?: boolean;
 }): PreparedModelCatalogWorkerInput {
   const source = params.agentFacts.input;
   // Registries and closures stay process-local. The worker reconstructs them from this exact
@@ -148,6 +141,7 @@ export function createPreparedModelCatalogWorkerInput(params: {
       sourceConfigResolutionFacts,
       authStore,
       providerIds,
+      preferBuiltPluginArtifacts: params.preferBuiltPluginArtifacts,
       pluginMetadataSnapshot: params.pluginMetadataSnapshot,
     }),
     input,
@@ -156,21 +150,9 @@ export function createPreparedModelCatalogWorkerInput(params: {
     sourceConfigResolutionFacts,
     authStore,
     providerIds,
+    preferBuiltPluginArtifacts: params.preferBuiltPluginArtifacts === true,
     pluginMetadataSnapshot,
   };
-}
-
-function resolvePreparedModelCatalogWorkerUrl(currentModuleUrl = import.meta.url): URL {
-  const currentPath = fileURLToPath(currentModuleUrl);
-  const normalized = currentPath.replaceAll(path.sep, "/");
-  const distMarker = "/dist/";
-  const distIndex = normalized.lastIndexOf(distMarker);
-  if (distIndex >= 0) {
-    const distRoot = currentPath.slice(0, distIndex + distMarker.length);
-    return pathToFileURL(path.join(distRoot, "agents", "prepared-model-catalog.worker.js"));
-  }
-  const extension = path.extname(currentPath) || ".js";
-  return new URL(`./prepared-model-catalog.worker${extension}`, currentModuleUrl);
 }
 
 type PreparedModelCatalogWorker = Readonly<{
@@ -186,125 +168,71 @@ export function createPreparedModelCatalogWorker(params: {
     new PreparedModelRuntimePublicationSupersededError(
       `prepared model runtime catalog generation was superseded for ${params.input.input.agentDir}`,
     );
-  let worker: Worker | undefined;
   let generationPoll: NodeJS.Timeout | undefined;
-  let terminalError: Error | undefined;
-  let nextRequestId = 1;
-  const pending = new Map<
-    number,
-    {
-      timeout: NodeJS.Timeout;
-      resolve: (message: Extract<PreparedModelWorkerResult, { status: "ok" }>) => void;
-      reject: (error: Error) => void;
-    }
-  >();
-
-  const rejectPending = (error: Error) => {
-    for (const request of pending.values()) {
-      clearTimeout(request.timeout);
-      request.reject(error);
-    }
-    pending.clear();
-  };
-  const stop = (error: Error) => {
-    terminalError ??= error;
-    if (generationPoll) {
-      clearInterval(generationPoll);
-      generationPoll = undefined;
-    }
-    const active = worker;
-    worker = undefined;
-    active?.removeAllListeners();
-    rejectPending(error);
-    if (active) {
-      void active.terminate();
-    }
-  };
-  const ensureWorker = (): Worker => {
-    if (terminalError) {
-      throw terminalError;
-    }
+  const assertCurrent = () => {
     if (!params.isCurrent()) {
-      const error = superseded();
-      stop(error);
-      throw error;
+      throw superseded();
     }
-    if (worker) {
-      return worker;
-    }
-    const workerUrl = resolvePreparedModelCatalogWorkerUrl();
-    const active = new Worker(workerUrl, {
+  };
+  const pool = new WorkerTaskPool<PreparedModelWorkerRequest, PreparedModelWorkerResult>({
+    workerUrl: resolveRuntimeWorkerUrl({
+      currentModuleUrl: import.meta.url,
+      sourceWorkerName: "prepared-model-catalog.worker",
+      distWorkerPath: "agents/prepared-model-catalog.worker.js",
+    }),
+    maxWorkers: 1,
+    // Recreating this worker would import changed plugin code under the old generation.
+    // Only the lifecycle owner may retire it; crashes close the generation permanently.
+    idleTimeoutMs: 0,
+    restartOnError: false,
+    workerOptions: {
       workerData: params.input,
-      ...(workerUrl.pathname.endsWith(".ts") ? { execArgv: ["--import", "tsx"] } : {}),
       // Establish state/config environment before worker module initialization reads process.env.
       env: { ...process.env, ...params.input.input.env },
-    });
-    active.unref();
-    active.on("message", (message: PreparedModelWorkerResult) => {
-      const request = pending.get(message.requestId);
-      if (!request) {
-        return;
+    },
+    validateResult: (message) => {
+      assertCurrent();
+      if (
+        message.status === "ok" &&
+        message.generationFingerprint !== params.input.generationFingerprint
+      ) {
+        throw new Error("prepared model catalog worker returned a stale generation");
       }
-      pending.delete(message.requestId);
-      clearTimeout(request.timeout);
-      if (!params.isCurrent()) {
-        const error = superseded();
-        request.reject(error);
-        stop(error);
-      } else if (message.status === "failed") {
-        request.reject(new Error(message.error));
-      } else if (message.generationFingerprint !== params.input.generationFingerprint) {
-        const error = new Error("prepared model catalog worker returned a stale generation");
-        request.reject(error);
-        stop(error);
-      } else {
-        request.resolve(message);
-      }
-    });
-    active.once("error", (error) =>
-      stop(error instanceof Error ? error : new Error(String(error))),
-    );
-    active.once("exit", (code) => {
-      if (worker === active) {
-        stop(
-          new Error(
-            `prepared model catalog worker exited with code ${code} before its generation retired`,
-          ),
-        );
-      }
-    });
-    worker = active;
-    generationPoll = setInterval(() => {
-      if (!params.isCurrent()) {
-        stop(superseded());
-      }
-    }, PREPARED_MODEL_CATALOG_WORKER_GENERATION_POLL_MS);
-    generationPoll.unref();
-    return active;
+    },
+  });
+  const stop = (error: Error) => {
+    clearInterval(generationPoll);
+    generationPoll = undefined;
+    return pool.close(error);
   };
-  const request = (
-    value: PreparedModelWorkerRequestInput,
+  const request = async (
+    value: PreparedModelWorkerRequest,
   ): Promise<Extract<PreparedModelWorkerResult, { status: "ok" }>> => {
-    let active: Worker;
+    let message: PreparedModelWorkerResult;
     try {
-      active = ensureWorker();
+      assertCurrent();
+      generationPoll ??= setInterval(() => {
+        if (!params.isCurrent()) {
+          void stop(superseded());
+        }
+      }, PREPARED_MODEL_CATALOG_WORKER_GENERATION_POLL_MS);
+      generationPoll.unref();
+      message = await pool.run(
+        () => {
+          assertCurrent();
+          return value;
+        },
+        { timeoutMs: PREPARED_MODEL_CATALOG_WORKER_TIMEOUT_MS },
+      );
+      assertCurrent();
     } catch (error) {
-      return Promise.reject(error instanceof Error ? error : new Error(String(error)));
+      await stop(error instanceof Error ? error : new Error(String(error)));
+      throw error;
     }
-    const requestId = nextRequestId++;
-    return new Promise<Extract<PreparedModelWorkerResult, { status: "ok" }>>((resolve, reject) => {
-      const timeout = setTimeout(() => {
-        stop(new Error("prepared model catalog worker timed out"));
-      }, PREPARED_MODEL_CATALOG_WORKER_TIMEOUT_MS);
-      timeout.unref();
-      pending.set(requestId, { timeout, resolve, reject });
-      active.postMessage({ ...value, requestId } satisfies PreparedModelWorkerRequest, []);
-    }).then((message) => {
-      if (!params.isCurrent()) {
-        throw superseded();
-      }
-      return message;
-    });
+    if (message.status === "failed") {
+      throw new Error(message.error);
+    }
+    return message;
   };
 
   return {

@@ -1,7 +1,6 @@
 import path from "node:path";
 import type { Plugin } from "vite";
 import type { Vitest } from "vitest/node";
-import { writeFailedTrailer } from "../../scripts/lib/failed-trailer.mts";
 import { isVitestWorkerMetadataRequest } from "../../scripts/lib/vitest-cli-mode.mts";
 import {
   isVitestWorkerDeclaration,
@@ -70,7 +69,6 @@ export function compiledSubprocessesPlugin(): Plugin {
         process.once("exit", () => {
           if (failure) {
             process.exitCode = 1;
-            writeFailedTrailer("test", 1);
           }
         });
         // Vitest closes its pool concurrently with this hook. Verification is
@@ -111,6 +109,7 @@ export function compiledSubprocessesPlugin(): Plugin {
       // compiler's source declarations a distinct URL so replay cannot redirect them.
       if (
         importer.endsWith("/scripts/lib/runtime-process-build-entries.mts") ||
+        importer.endsWith("/scripts/lib/runtime-process-core-build-entries.mts") ||
         importer.endsWith("/scripts/lib/vitest-worker-build-entries.mts")
       ) {
         return `${resolved.id}?openclaw-build-source`;

@@ -34,8 +34,9 @@ import {
 import { getHumanDelay, getHumanDelayMax } from "./reply-dispatch-delay.js";
 import {
   createReplyDispatchSettledCounts,
-  isExplicitlyNonVisibleDelivery,
-  isReplyDispatchProvenInvisible,
+  REPLY_DISPATCH_OUTCOME_COUNTS,
+  resolveReplyDispatchDeliveryOutcome,
+  shouldRetryReplyDispatch,
   type ReplyDispatchDeliveryOutcome,
 } from "./reply-dispatch-outcome.js";
 import {
@@ -446,7 +447,7 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
               finalization && isRecord(result) && isRecord(finalized)
                 ? { ...result, ...finalized, finalization: undefined }
                 : result;
-            return isExplicitlyNonVisibleDelivery(outcome) ? "delivered-not-visible" : "delivered";
+            return resolveReplyDispatchDeliveryOutcome(outcome);
           } catch {
             await settleCustody("unknown");
             return "failed-deliver";
@@ -547,7 +548,7 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
       try {
         const attempt = await delivery;
         deliveryOutcome = await attempt.settlement;
-        if (deliveryFallback && isReplyDispatchProvenInvisible(deliveryOutcome)) {
+        if (deliveryFallback && shouldRetryReplyDispatch(deliveryOutcome)) {
           const fallbackAttempt = await startSerializedDelivery(
             deliveryFallback,
             dispatchInfo,
@@ -555,18 +556,7 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
           );
           deliveryOutcome = await fallbackAttempt.settlement;
         }
-        const counts = settledCounts[kind];
-        if (deliveryOutcome === "delivered") {
-          counts.delivered += 1;
-        } else if (deliveryOutcome === "delivered-not-visible") {
-          counts.deliveredNotVisible += 1;
-        } else if (deliveryOutcome === "cancelled") {
-          counts.cancelled += 1;
-        } else if (deliveryOutcome === "failed-before-deliver") {
-          counts.failedBeforeSend += 1;
-        } else {
-          counts.failedAfterSend += 1;
-        }
+        settledCounts[kind][REPLY_DISPATCH_OUTCOME_COUNTS[deliveryOutcome]] += 1;
       } catch (err: unknown) {
         settledCounts[kind].failedBeforeSend += 1;
         try {

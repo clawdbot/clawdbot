@@ -1,6 +1,5 @@
 import { isNonTerminalAgentRunStatus } from "../../../../src/shared/agent-run-status.js";
 import { GatewayPayloadLimitError, GatewayRequestError } from "../../api/gateway.ts";
-import { setLastActiveSessionKey } from "../../app/settings.ts";
 import { t } from "../../i18n/index.ts";
 import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import { INTERRUPTED_SETTINGS_WAIT_ERROR } from "../../lib/chat/outbox-store-codec.ts";
@@ -659,7 +658,6 @@ export async function deliverChatQueueItem(
     result = drainResult ?? "pending";
   }
   if (result === "sent" && visibleSessionMatches(host, sessionKey, deliveryAgentId)) {
-    setLastActiveSessionKey(host, sessionKey);
     resetChatInputHistoryNavigation(host);
     if (options.restoreDraft && options.previousDraft?.trim()) {
       host.chatMessage = options.previousDraft;

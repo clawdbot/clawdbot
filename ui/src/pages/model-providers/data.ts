@@ -79,7 +79,7 @@ type ModelProviderCardsInput = {
 type CardDraft = {
   ids: Set<string>;
   card: ModelProviderCard;
-  hasMonitoredAuth: boolean;
+  hasModelAuth: boolean;
 };
 
 // Canonicalize alias provider ids (claude-cli → anthropic, minimax-* →
@@ -122,7 +122,7 @@ function ensureDraft(drafts: CardDraft[], id: string, displayName: string): Card
       modelCount: 0,
       availableModelCount: 0,
     },
-    hasMonitoredAuth: false,
+    hasModelAuth: false,
   };
   drafts.push(draft);
   return draft;
@@ -156,7 +156,7 @@ function addLogoutTarget(
 
 /**
  * Builds the provider card list. A provider qualifies as "configured" when it
- * has monitored auth, catalog models (the default models.list view only contains
+ * has model-provider auth, catalog models (the default models.list view only contains
  * configured or auth-backed entries), a live usage snapshot, or recorded
  * local spend. Model presence alone is enough: a configured API-key provider
  * with a broken credential reports available=false and no auth row, and the
@@ -256,7 +256,7 @@ export function buildModelProviderCards(input: ModelProviderCardsInput): ModelPr
     );
     draft.card.apiKey ??= provider.apiKey;
     // Generic auth discovery also includes tool-only API keys; those alone do not make a model card.
-    draft.hasMonitoredAuth ||= isMonitoredAuthProvider(provider);
+    draft.hasModelAuth ||= isMonitoredAuthProvider(provider) || apiKeyCapabilities.has(id);
     const usage = provider.usage;
     if (usage && !draft.card.usage) {
       draft.card.usage = {
@@ -319,7 +319,7 @@ export function buildModelProviderCards(input: ModelProviderCardsInput): ModelPr
   return drafts
     .filter(
       (draft) =>
-        draft.hasMonitoredAuth ||
+        draft.hasModelAuth ||
         (input.configProviderIds ?? []).some((id) => canonicalProviderId(id) === draft.card.id) ||
         Boolean(draft.card.usage) ||
         draft.card.modelCount > 0 ||

@@ -3,6 +3,7 @@
 import fs from "node:fs";
 import { isDeepStrictEqual } from "node:util";
 import { shouldManageGatewayService } from "../commands/doctor-service-repair-policy.js";
+import { emitDoctorNotes } from "../commands/doctor/emit-notes.js";
 import { scrubDoctorErrorMessage } from "./doctor-error-message.js";
 import { hasActiveGatewayExecCredential } from "./doctor-gateway-exec-credential.js";
 import {
@@ -135,6 +136,11 @@ async function runAuthProfileHealth(ctx: DoctorHealthFlowContext): Promise<void>
     prompter: ctx.prompter,
     openAICodexAuthProfileIdMap,
     ...(ctx.env ? { env: ctx.env } : {}),
+  });
+  emitDoctorNotes({
+    note,
+    changeNotes: authProfileMigration.changes,
+    warningNotes: authProfileMigration.warnings,
   });
   if (authProfileMigration.configOwnerMigrationApplied) {
     // The candidate is safe only after the migration verifies and archives its source.

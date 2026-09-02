@@ -419,12 +419,15 @@ export function readSessionPendingInput(
 }
 
 /** Bounded display reconciliation; these durable correlations never authorize replay. */
-export function listSessionPendingInputConsumptions(
+export function listSessionPendingInputReceipts(
   scope: PendingInputScope,
   options: { runIds: readonly string[] },
-): Array<{ runId: string; consumedByEventId: string }> {
+): Array<
+  | { runId: string; state: "pending" }
+  | { runId: string; state: "consumed"; consumedByEventId: string }
+> {
   if (options.runIds.length > 50) {
-    throw new Error("Pending input consumption lookup accepts at most 50 run IDs");
+    throw new Error("Pending input receipt lookup accepts at most 50 run IDs");
   }
   const runIds = [...new Set(options.runIds)];
   if (!runIds.length) {
@@ -452,17 +455,16 @@ export function listSessionPendingInputConsumptions(
     // A run ID is correlation, not unique authority. Never retire an ambiguous
     // provisional message when another source with that run is still pending.
     if (rows.length > 50 || new Set(rows.map((row) => row.run_id)).size !== rows.length) {
-      throw new Error("Pending input consumption lookup has ambiguous source run IDs");
+      throw new Error("Pending input receipt lookup has ambiguous source run IDs");
     }
-    return rows.flatMap((row) =>
+    return rows.map((row) =>
       row.consumed_event_id == null
-        ? []
-        : [
-            {
-              runId: row.run_id,
-              consumedByEventId: row.consumed_event_id,
-            },
-          ],
+        ? { runId: row.run_id, state: "pending" as const }
+        : {
+            runId: row.run_id,
+            state: "consumed" as const,
+            consumedByEventId: row.consumed_event_id,
+          },
     );
   }, toDatabaseOptions(resolved));
   return result.found ? result.value : [];

@@ -106,6 +106,17 @@ export type WorkerPlacementDispatchRequest = {
   };
 };
 
+export type WorkerPlacementDispatchAdmission = <T>(
+  request: Pick<WorkerPlacementDispatchRequest, "sessionId" | "sessionKey" | "agentId">,
+  run: (signal?: AbortSignal) => Promise<T>,
+  authorize?: () => void,
+) => Promise<T>;
+
+/** Canonical admission rejected the session owner, not a caller or process cancellation. */
+export class WorkerPlacementAdmissionTargetError extends Error {
+  readonly code = "invalid_state";
+}
+
 export type WorkerPlacementMoveDestination = Pick<
   WorkerPlacementDispatchRequest,
   | "profileId"

@@ -239,6 +239,9 @@ function npmPack(spec: string, destinationDir: string) {
     "pack",
     spec,
     "--ignore-scripts",
+    // Publication readback must include fresh releases; this downloads only the
+    // requested artifact and does not change the dependency-install age policy.
+    "--min-release-age=0",
     "--pack-destination",
     destinationDir,
   ]);

@@ -1,10 +1,17 @@
-import { expect, it } from "vitest";
+import { beforeAll, expect, it, vi } from "vitest";
 import { runCiGitStep } from "./ci-git-owner.test-support.js";
 import type { PerformanceFixtureOptions } from "./openclaw-performance-workflow.test-support.js";
 
+// Each case owns its checkout and process trees. Overlap their real timeout and
+// drain waits while keeping subprocess pressure bounded.
+beforeAll(() => {
+  vi.setConfig({ maxConcurrency: 2 });
+  return () => vi.resetConfig();
+});
+
 // Performance jobs run on Ubuntu. Exercise their POSIX bodies here; the shared
 // ci-platform-checkout suite owns native Windows Job Object proof.
-const posixIt = it.skipIf(process.platform === "win32");
+const posixIt = it.skipIf(process.platform === "win32").concurrent;
 
 const steps = {
   target: ["resolve_target", "Resolve OpenClaw target ref"],

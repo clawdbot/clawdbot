@@ -1,12 +1,19 @@
 /** Channel recovery replies preserve decisions from the real account lifecycle owner. */
 import { randomUUID } from "node:crypto";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { WebSocket } from "ws";
 import { createDeferred } from "../../test/helpers/promise.js";
 import "../secrets/runtime-telegram.test-support.ts";
 import type { ChannelGatewayContext } from "../channels/plugins/types.adapters.js";
 import type { ChannelPlugin } from "../channels/plugins/types.public.js";
-import { writeConfigFile } from "../config/config.js";
+import {
+  readConfigFileSnapshot,
+  resetConfigRuntimeState,
+  writeConfigFile,
+} from "../config/config.js";
 import { getRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
+import type { SecretRef } from "../config/types.secrets.js";
+import { writeJsonAtomic } from "../infra/json-files.js";
 import { setActiveDegradedSecretOwners } from "../secrets/runtime-degraded-state.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import { withEnvAsync } from "../test-utils/env.js";
@@ -92,38 +99,44 @@ describe("channels.start account outcomes", () => {
         setTestPluginRegistry(
           createTestRegistry([{ pluginId: "telegram", source: "test", plugin }]),
         );
-        await writeConfigFile({
-          gateway: {
-            mode: "local",
-            bind: "loopback",
-            auth: { mode: "none" },
-            reload: { mode: "off" },
-          },
-          secrets: { providers: { default: { source: "env" } } },
-          channels: {
-            telegram: {
-              enabled: true,
-              healthMonitor: { enabled: false },
-              accounts: {
-                plaintext: { botToken: "plaintext-channel-token" },
-                resolved: {
-                  botToken: {
-                    source: "env",
-                    provider: "default",
-                    id: "BREAKER_RESOLVED_CHANNEL_TOKEN",
+        // Authored SecretRefs belong in the source fixture, before runtime config resolution.
+        await writeJsonAtomic(
+          (await readConfigFileSnapshot()).path,
+          {
+            gateway: {
+              mode: "local",
+              bind: "loopback",
+              auth: { mode: "none" },
+              reload: { mode: "off" },
+            },
+            secrets: { providers: { default: { source: "env" } } },
+            channels: {
+              telegram: {
+                enabled: true,
+                healthMonitor: { enabled: false },
+                accounts: {
+                  plaintext: { botToken: "plaintext-channel-token" },
+                  resolved: {
+                    botToken: {
+                      source: "env",
+                      provider: "default",
+                      id: "BREAKER_RESOLVED_CHANNEL_TOKEN",
+                    } satisfies SecretRef,
                   },
-                },
-                unavailable: {
-                  botToken: {
-                    source: "env",
-                    provider: "default",
-                    id: "BREAKER_MISSING_CHANNEL_TOKEN",
+                  unavailable: {
+                    botToken: {
+                      source: "env",
+                      provider: "default",
+                      id: "BREAKER_MISSING_CHANNEL_TOKEN",
+                    } satisfies SecretRef,
                   },
                 },
               },
             },
           },
-        });
+          { durable: false, trailingNewline: true },
+        );
+        resetConfigRuntimeState();
         const port = await getGatewayTestPort();
         server = await startTestGatewayServer(port, {
           auth: { mode: "none" },

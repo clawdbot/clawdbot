@@ -136,7 +136,11 @@ openclaw gateway restart --wait 30s
 
 `--wait <duration>` overrides the drain budget for a plain (non-safe) restart. Accepts bare milliseconds or unit suffixes `ms`, `s`, `m`, `h`, `d` (e.g. `30s`, `5m`, `1h30m`); `--wait 0` waits indefinitely. Not compatible with `--force` or `--safe`.
 
-`--force` skips the active-work drain and restarts immediately. Plain `restart` (no flags) keeps the existing service-manager restart behavior.
+`--force` skips the active-work drain and restarts immediately. Plain `restart` normally uses the service-manager restart path.
+
+On Windows, a plain restart launched from a Gateway service process, including an agent's shell command, automatically uses the safe restart path. The running Gateway owns the deferred Scheduled Task handoff, so stopping its process tree cannot kill the caller before relaunch. This requires a reachable Gateway; the command acknowledges the restart request, not successor health. Use `openclaw gateway status` afterward to verify recovery.
+
+External terminals without Gateway-service markers, externally supervised Gateways, node services, and non-Windows callers keep their existing routing. Explicit `--force`, `--wait`, `--preserve-definition`, or `--skip-deferral` also retain their existing behavior and validation; they do not implicitly enable `--safe`.
 
 <Warning>
 Inline `--password` can be exposed in local process listings. Prefer `--password-file`, env, or a SecretRef-backed `gateway.auth.password`.
@@ -214,6 +218,12 @@ openclaw gateway restart-handoff consume --expected-pid <pid> --json
 Protocol version `1` supports the `consume` operation. Consumption validates the expected PID and bounded handoff fields inside one immediate SQLite transaction. An accepted handoff is deleted before success is returned, so concurrent or replayed consumers cannot both accept it. A PID mismatch is retained for the matching owner; missing, expired, and invalid rows do not authorize a restart.
 
 Valid machine requests return JSON with exit code `0`, including non-restart results. Invalid arguments return `reason: "invalid-expected-pid"` with exit code `2`; state-store failures return `reason: "store-unavailable"` with exit code `1`. Supervisors should probe `capabilities` on the exact runtime or launcher they will use rather than infer support from an OpenClaw version string or read the private SQLite schema directly.
+
+External supervisor implementations should also apply these acceptance rules:
+
+- Bound capability probes with a timeout that accounts for full CLI cold-start latency on the deployed runtime and storage, rather than assuming warm-start timing.
+- If capability negotiation or handoff consumption refuses replacement, exit promptly with a nonzero status so the process manager's recovery policy can run. Do not remain alive without a Gateway child or listener.
+- Treat supervisor process liveness as distinct from replacement startup and channel readiness. Report success only after the new Gateway owns its listener and `/startupz` returns `status: "started"`; monitor `/readyz` separately for configured-channel health, while `/healthz` proves liveness only.
 
 ### Gateway profiling
 
@@ -410,6 +420,7 @@ openclaw gateway status --port 19001
     - JSON output includes `gateway.version` when the running Gateway reports it; `--require-rpc` can fall back to the `status.runtimeVersion` RPC payload if the handshake probe cannot supply version metadata.
     - Use `--require-rpc` in scripts/automation when a listening service is not enough and you need read-scope RPC to be healthy too.
     - `--deep` scans for extra launchd/systemd/schtasks installs; when multiple gateway-like services are found, human output prints cleanup hints (usually run one gateway per machine) and reports a recent supervisor restart handoff when relevant.
+    - `--deep` confirms exact npm targets before suggesting repairs for official-plugin version drift. Unpublished versions or registry failures are reported without an update command; retry deep status after registry access or the release cohort is restored. Ordinary status and readiness checks do not query npm for drift repairs.
     - `--deep` also runs config validation in plugin-aware mode (`pluginValidation: "full"`) and surfaces plugin manifest warnings (e.g. missing channel config metadata). Default `gateway status` keeps the fast read-only path that skips plugin validation.
     - On Linux, status reports the effective service currently loaded by systemd, including loaded drop-ins. If the unit or a drop-in changed on disk, `Systemd reload: pending` means you must run `systemctl --user daemon-reload` (or `sudo systemctl daemon-reload` for a system service) before those changes take effect.
     - Human output includes the resolved file log path plus CLI-vs-service config paths/validity to help diagnose profile or state-dir drift.

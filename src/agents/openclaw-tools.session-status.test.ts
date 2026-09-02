@@ -11,6 +11,7 @@ import {
   type InternalHookEvent,
 } from "../hooks/internal-hooks.js";
 import { normalizeLegacySessionEntryDelivery } from "../infra/state-migrations.legacy-session-store.js";
+import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import { MODEL_SELECTION_LOCKED_MESSAGE } from "../sessions/model-overrides.js";
 import { resolvePreferredSessionKeyForSessionIdMatches } from "../sessions/session-id-resolution.js";
 import type { TaskRecord } from "../tasks/task-registry.types.js";
@@ -51,10 +52,10 @@ const listSessionStateEventsSinceMock = vi.hoisted(() =>
     historyGap: false,
   })),
 );
-const emptyPluginMetadataSnapshot = vi.hoisted(() => ({
+const emptyPluginMetadataSnapshot = {
   configFingerprint: "session-status-test-empty-plugin-metadata",
-  plugins: [],
-}));
+  ...createPluginMetadataSnapshotFixture(),
+};
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 
 const createMockConfig = () => ({

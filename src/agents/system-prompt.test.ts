@@ -14,7 +14,6 @@ import { typedCases } from "../test-utils/typed-cases.js";
 import { listDeliverableMessageChannels } from "../utils/message-channel.js";
 import { resolveOwnerPromptNumbers } from "./owner-display.js";
 import { resolveAgentPromptSurfaceForSessionKey } from "./prompt-surface.js";
-import { buildSkillWorkshopPromptSection } from "./skill-workshop-prompt.js";
 import { buildSubagentSystemPrompt } from "./subagents/spawn/subagent-system-prompt.js";
 import { buildSystemPromptParams } from "./system-prompt-params.js";
 import { buildAgentSystemPrompt } from "./system-prompt.js";
@@ -196,19 +195,23 @@ describe("buildAgentSystemPrompt", () => {
     expect(tokenA).not.toBe(tokenB);
   });
 
-  it("injects the current model identity into the runtime prompt", () => {
-    const prompt = buildAgentSystemPrompt({
-      workspaceDir: "/tmp/openclaw",
-      runtimeInfo: {
-        agentId: "main",
-        model: "openai/gpt-5.5",
-      },
-    });
+  it.each(["full", "minimal", "none"] as const)(
+    "keeps model identity guidance conditional in %s prompts",
+    (promptMode) => {
+      const prompt = buildAgentSystemPrompt({
+        workspaceDir: "/tmp/openclaw",
+        promptMode,
+        runtimeInfo: {
+          agentId: "main",
+          model: "openai/gpt-5.5",
+        },
+      });
 
-    expect(prompt).toContain(
-      "Current model identity: openai/gpt-5.5. Model question: answer this current-run value.",
-    );
-  });
+      expect(prompt).toContain(
+        "Current model identity: openai/gpt-5.5. If asked what model you are, answer with this value for the current run.",
+      );
+    },
+  );
 
   it("omits extended sections in minimal prompt mode", () => {
     const prompt = buildAgentSystemPrompt({
@@ -676,15 +679,15 @@ describe("buildAgentSystemPrompt", () => {
       promptMode: "minimal",
     });
 
-    expect(defaultPrompt).not.toContain("## Control UI Session Companion");
-    expect(webchatPrompt).toContain("## Control UI Session Companion");
-    expect(webchatPrompt).toContain("read-only rail companion");
+    expect(defaultPrompt).not.toContain("## Control UI Side Chat");
+    expect(webchatPrompt).toContain("## Control UI Side Chat");
+    expect(webchatPrompt).toContain("read-only Side chat");
     expect(webchatPrompt).toContain("do not spawn sub-agents or burn main-thread turns");
     expect(webchatPrompt).toContain(
       "Reserve `sessions_spawn` for delegated work with its own deliverable",
     );
     expect(webchatWithoutSpawn).not.toContain("sessions_spawn");
-    expect(minimalWebchatPrompt).not.toContain("## Control UI Session Companion");
+    expect(minimalWebchatPrompt).not.toContain("## Control UI Side Chat");
   });
 
   it("guides subagent workflows to avoid polling loops", () => {
@@ -1318,16 +1321,6 @@ describe("buildAgentSystemPrompt", () => {
   });
 
   it("instructs models to use skill_workshop only when the tool is available", () => {
-    const section = buildSkillWorkshopPromptSection();
-    expect(section).toEqual([
-      "## Skill Workshop",
-      "Durable reusable skill/playbook/workflow work: `skill_workshop`; never write proposal/skill files directly.",
-      "Used skill proved wrong or incomplete: call `skill_workshop` read, then patch it now; the configured autonomous mode disables repair, leaves it pending, or applies it immediately. Capture only durable, evidenced procedure changes—never task artifacts, transient failures, or unresolved guesses.",
-      "Other generated work = pending proposal. Apply/reject/quarantine only explicit user ask.",
-      "proposal_content = complete final skill body, never plan/diff; update/revise preserves unchanged content.",
-      "",
-    ]);
-
     const withoutTool = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
       toolNames: ["read"],
@@ -1339,11 +1332,18 @@ describe("buildAgentSystemPrompt", () => {
       workspaceDir: "/tmp/openclaw",
       toolNames: ["read", "skill_workshop"],
     });
-    expect(withTool).toContain("- skill_workshop: Manage reusable-skill proposals");
+    expect(withTool).toContain("- skill_workshop: Author reusable skills");
     expect(withTool).toContain("## Skill Workshop");
     expect(withTool).toContain("Durable reusable skill/playbook/workflow work");
     expect(withTool).toContain("Used skill proved wrong or incomplete");
-    expect(withTool).toContain("Other generated work = pending proposal");
+    expect(withTool).toContain(
+      "Where supported, autonomous mode may disable repair, stage a proposal, or apply it",
+    );
+    expect(withTool).toContain(
+      "unsolicited improvements stay pending proposals when supported; otherwise describe the suggestion without publishing",
+    );
+    expect(withTool).toContain("Publication-only create/update requires an explicit user request");
+    expect(withTool).not.toContain("patch it now");
   });
 
   it("appends available skills when provided", () => {

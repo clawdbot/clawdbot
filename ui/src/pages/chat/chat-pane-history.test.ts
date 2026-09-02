@@ -27,9 +27,11 @@ import {
   createInitializationContext,
   createSessionCapabilityFixture,
 } from "./chat-pane.test-support.ts";
+import { applyChatPendingInputs } from "./chat-pending-inputs.ts";
 import { createPageState } from "./chat-state-page.ts";
 import { buildChatItems } from "./chat-thread-build.ts";
 import type { ChatProps } from "./chat-view.ts";
+import { reduceChatSessionProjection } from "./history-merge.ts";
 import { applySessionMessagePayload } from "./session-message-apply.ts";
 import { cacheChatSessionSnapshot, readChatSessionSnapshot } from "./session-message-cache.ts";
 
@@ -254,6 +256,49 @@ describe("chat pane native history pagination", () => {
       pagination: state.chatHistoryPagination,
       sessionId: "session-id",
     });
+  });
+
+  it("preserves terminal ownership when custody retires during an older-page load", async () => {
+    const older = createDeferred<ChatHistoryResult>();
+    const { pane, state } = createNativeShowEarlierPane(vi.fn(() => older.promise));
+    state.currentSessionId = "session-id";
+    state.chatMessagesBySession = new Map();
+    const tail = [...state.chatMessages];
+    const runId = "older-page-delivery";
+    reduceChatSessionProjection(state, {
+      type: "sendPending",
+      runId,
+      message: {
+        role: "user",
+        content: "Accepted input",
+        __openclaw: { idempotencyKey: `${runId}:user` },
+      },
+    });
+    const loading = pane.loadOlderMessages();
+    handleChatGatewayEvent(state, {
+      state: "final",
+      runId,
+      sessionKey: state.sessionKey,
+      message: { role: "assistant", content: "Delivered reply" },
+    });
+    const terminal = state.chatMessages.at(-1);
+    applyChatPendingInputs(
+      state,
+      { items: [], total: 0 },
+      {
+        receipts: [{ runId, state: "consumed", consumedByEventId: "collected-turn" }],
+      },
+    );
+    const prefix = [nativeHistoryMessage(1), nativeHistoryMessage(2)];
+    older.resolve({ messages: prefix, hasMore: false, sessionId: "session-id", totalMessages: 4 });
+    await loading;
+    expect(state.chatMessages).toEqual([...prefix, ...tail, terminal]);
+    expect(
+      readChatSessionSnapshot(state.chatMessagesBySession, state, { sessionKey: state.sessionKey })
+        ?.messages,
+    ).toEqual(state.chatMessages);
+    reduceChatSessionProjection(state, { type: "snapshotLoaded", messages: [...prefix, ...tail] });
+    expect(state.chatMessages).toEqual([...prefix, ...tail, terminal]);
   });
 
   it("reveals a final catalog page even when its cursor is exhausted", async () => {

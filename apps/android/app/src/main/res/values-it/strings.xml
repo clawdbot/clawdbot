@@ -107,6 +107,7 @@
     <string name="native_0e570ca6fabe24f9" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Origine"</string>
     <string name="native_0e91610117029a62" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Aggiorna"</string>
     <string name="native_0ee30822ed35a792" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$s in coda"</string>
+    <string name="native_0f082e133791d7da" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Diagramma Mermaid"</string>
     <string name="native_0f4c8529742b31ea" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Avvia chat"</string>
     <string name="native_0f559ff270904904" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Le chiamate agli strumenti di Chat in attesa nel thread attivo rimangono visibili qui."</string>
     <string name="native_0f56cc286a4f23d8" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Revisione del certificato necessaria"</string>
@@ -306,6 +307,7 @@
     <string name="native_2bb186b55caf8791" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Non richiesto"</string>
     <string name="native_2bc8446b79ad43f2" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Configura un provider %1$s sul Gateway"</string>
     <string name="native_2bda9b4dfbabfdb1" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"kill"</string>
+    <string name="native_2bf4472b413525cd" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Opzioni diagramma"</string>
     <string name="native_2bfc3471571e5c00" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Approvazioni"</string>
     <string name="native_2c0cd81e9d67231c" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"File non disponibili"</string>
     <string name="native_2c19d584bf8ad518" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Segna come non letto"</string>
@@ -621,6 +623,7 @@
     <string name="native_5c944156b5353428" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Approvare il dispositivo?"</string>
     <string name="native_5d366a1eee742cee" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Connettiti al tuo Gateway per aprire la dashboard di questa sessione."</string>
     <string name="native_5d410adb9576e266" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Rimuovere %1$s e le relative credenziali salvate da questo telefono?"</string>
+    <string name="native_5d65f77059cf2f36" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Copia sorgente diagramma"</string>
     <string name="native_5d6c41a67139ee26" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Il codice QR punta a un gateway remoto non sicuro. %1$s %2$s"</string>
     <string name="native_5d8856a5f891dbbc" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Associa Gateway"</string>
     <string name="native_5d9235c94e6fa97a" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Connetti il Gateway per caricare i canali."</string>
@@ -659,6 +662,7 @@
     <string name="native_62a2fed3d6e08c44" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"in sospeso"</string>
     <string name="native_62bacf1d615ada7e" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Preparazione nota vocale…"</string>
     <string name="native_6300ef800bb88429" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Mai"</string>
+    <string name="native_6344dbe04b0b2a9e" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Rendering diagramma…"</string>
     <string name="native_63734ae10b7e46e9" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Sottosistema"</string>
     <string name="native_6386ffec7ad722df" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"All\'uscita del comando"</string>
     <string name="native_639a40e82b9a96f0" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Connessione"</string>
@@ -671,6 +675,7 @@
     <string name="native_6516c565123b19ad" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Copia %1$s"</string>
     <string name="native_6519ceb24c85232e" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Sistema · ripristino dopo riavvio"</string>
     <string name="native_651db8587b40535e" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Associato"</string>
+    <string name="native_65202184059cc7e9" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Visualizza diagramma"</string>
     <string name="native_6571f3b12432693a" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Impossibile salvare le parole di attivazione"</string>
     <string name="native_65b001ea12846d0c" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Verrà messa in quarantena \"%1$s\" e lo stato di Skill Workshop verrà aggiornato dal gateway."</string>
     <string name="native_65d45123f8f45969" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Registra nota vocale"</string>
@@ -720,6 +725,7 @@
     <string name="native_6be36ca49ee85210" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Mancante"</string>
     <string name="native_6c12bf40654bb6f2" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Cerca proposte"</string>
     <string name="native_6c45cb72a36e63d5" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"stop"</string>
+    <string name="native_6c55edc007d8336e" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Riprova diagramma"</string>
     <string name="native_6c56493d7db3acad" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Sicuro (TLS)"</string>
     <string name="native_6c7908ccad218ef9" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Nessun nodo o dispositivo associato."</string>
     <string name="native_6c8785f581c130a3" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$s%% rimanente %2$s"</string>
@@ -743,6 +749,7 @@
     <string name="native_6ea82f807eb2e4a3" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Inviato — conferma della consegna in corso…"</string>
     <string name="native_6ed8919ce20490a5" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"audio"</string>
     <string name="native_6eddcceb82e4c01f" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"This gateway connection needs operator.admin to update skills."</string>
+    <string name="native_6ee818aa2de35ea6" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Visualizza sorgente"</string>
     <string name="native_6ef47d9880313fd8" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Valore segreto"</string>
     <string name="native_6f277ebd346b79a6" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Codice di configurazione"</string>
     <string name="native_6f371721dd8088ad" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Aggiorna chat"</string>
@@ -772,6 +779,7 @@
     <string name="native_72361961ef893ce1" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Aiutami a trasformare questo obiettivo in una checklist pratica: "</string>
     <string name="native_7296bfd468e09713" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Cancella ricerca sessioni"</string>
     <string name="native_72e9a59f5a1d6289" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Porta"</string>
+    <string name="native_733acde617084439" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Espandi diagramma"</string>
     <string name="native_7344ef8e67c5337e" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Inserisci codice di configurazione"</string>
     <string name="native_735cca45016888d0" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Impossibile caricare i log del Gateway."</string>
     <string name="native_73bf01fe0c2e8dae" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$s provider pronti"</string>
@@ -827,6 +835,7 @@
     <string name="native_7a50b4ba32889b2e" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Impossibile caricare i dettagli ClawHub per %1$s."</string>
     <string name="native_7ac362063b9f2046" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Nodi"</string>
     <string name="native_7ace190202442cde" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Mantieni attivo"</string>
+    <string name="native_7ad4f63b52f9ec5c" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Diagramma temporaneamente non disponibile. Apri Opzioni diagramma e scegli Riprova diagramma. Puoi comunque leggerne o copiarne il sorgente."</string>
     <string name="native_7adcb107d8b93c15" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"OpenClaw sta rispondendo"</string>
     <string name="native_7af023c43013b9a5" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Documentazione"</string>
     <string name="native_7b18312f3818b69c" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$s pronti"</string>
@@ -860,7 +869,6 @@
     <string name="native_7fc04e3053dfde2a" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Opzioni di installazione"</string>
     <string name="native_7fe837d777c45948" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Tra %1$sh"</string>
     <string name="native_8026a36a8868431c" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"L\'approvazione del Gateway è in sospeso. Esegui questo comando sull\'host del Gateway:"</string>
-    <string name="native_80ece08298d891ca" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$s%%"</string>
     <string name="native_8110607a8b8ec3e1" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Contesto %1$s%% utilizzato"</string>
     <string name="native_812fc837108361ba" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Accesso amministratore richiesto"</string>
     <string name="native_8169e4741bbe5fa4" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"set groups"</string>
@@ -950,6 +958,7 @@
     <string name="native_8e9c32062fc9bc71" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Aggiornato da %1$s"</string>
     <string name="native_8eb626078c16c726" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Ordine: %1$s"</string>
     <string name="native_8ee374b2023b7124" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$s in attesa"</string>
+    <string name="native_8f39db4d7d02e57a" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Anteprima diagramma non disponibile"</string>
     <string name="native_8f4716e674b9f719" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Image Generation"</string>
     <string name="native_8f54b0d1e30092d5" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Nota vocale"</string>
     <string name="native_8fa196125b734940" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Niente richiede la tua attenzione"</string>
@@ -1166,6 +1175,7 @@
     <string name="native_b0375de83dab3599" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"È richiesta l\'autorizzazione per il microfono."</string>
     <string name="native_b0eeb9e9e45398b5" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$s g"</string>
     <string name="native_b10d60f36b858926" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$s disponibili"</string>
+    <string name="native_b184feda7d0f6f0b" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Diagramma non disponibile. Verifica la sintassi o semplifica il diagramma. Puoi comunque leggerne o copiarne il sorgente."</string>
     <string name="native_b1b3f74fe7e32ae1" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Flusso di eventi interrotto; prova ad aggiornare."</string>
     <string name="native_b1c1be6b126d151f" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Impossibile caricare nodi e dispositivi."</string>
     <string name="native_b2087b2e689f4946" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Connetti il gateway per caricare le Skills."</string>
@@ -1531,6 +1541,7 @@
     <string name="native_eae47ccdd51f34b3" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Exec"</string>
     <string name="native_eaf3a81a6411115f" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Filtro app"</string>
     <string name="native_eb814be3ca3b78c0" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Principale"</string>
+    <string name="native_ebcf25a7d61aecec" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Chiudi anteprima diagramma"</string>
     <string name="native_ebd3cf6ef444b1ba" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$sk"</string>
     <string name="native_ebda695e767a518e" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Aggiungi allegato"</string>
     <string name="native_ec1b5ed4436eb57f" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gateway richiesto"</string>

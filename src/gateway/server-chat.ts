@@ -1,9 +1,10 @@
 // Gateway chat runtime projects agent events into chat/session subscriber
 // streams, lifecycle persistence, heartbeat visibility, and live UI updates.
 import { performance } from "node:perf_hooks";
-import type {
-  ChatEvent,
-  ChatRunStartupPhase,
+import {
+  projectChatErrorDetail,
+  type ChatEvent,
+  type ChatRunStartupPhase,
 } from "../../packages/gateway-protocol/src/schema/logs-chat.js";
 import { isAgentLifecycleYieldedWaiting } from "../agents/agent-lifecycle-parent-state.js";
 import {
@@ -773,6 +774,7 @@ export function createAgentEventHandler({
               firstAssistantTimingEntry: finished,
               abortErrorMessage: readToolValidationErrorSummary(evt.data?.toolErrorSummary),
               yielded: yieldedWaiting ? true : undefined,
+              errorObservation: evt.data?.errorObservation,
             },
           );
         }
@@ -1130,6 +1132,7 @@ export function createAgentEventHandler({
       firstAssistantTimingEntry?: ChatRunEntry;
       abortErrorMessage?: string;
       yielded?: true;
+      errorObservation?: unknown;
     },
   ) => {
     const { text, shouldSuppressSilent } = resolveBufferedChatTextState(clientRunId, sourceRunId, {
@@ -1170,6 +1173,7 @@ export function createAgentEventHandler({
       sendChatPayload(sessionKey, payload, opts);
       return;
     }
+    const errorDetail = projectChatErrorDetail(opts?.errorObservation);
     const payload = {
       runId: clientRunId,
       sessionKey,
@@ -1179,6 +1183,7 @@ export function createAgentEventHandler({
       state: "error" as const,
       errorMessage: error ? formatForLog(error) : undefined,
       ...(errorKind && { errorKind }),
+      ...(errorDetail ? { errorDetail } : {}),
       ...(stopReason && { stopReason }),
     };
     sendChatPayload(sessionKey, payload, opts);

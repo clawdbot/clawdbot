@@ -36,6 +36,7 @@ import {
 } from "./dynamic-tool-profile.js";
 import { createCodexDynamicToolBridge } from "./dynamic-tools.js";
 import { createCodexTestHostCapabilities } from "./host-capability.test-support.js";
+import * as nativeExecutionPolicy from "./native-execution-policy.js";
 import { flattenCodexDynamicToolFunctions } from "./protocol.js";
 import { createCodexTestModel } from "./test-support.js";
 
@@ -1101,6 +1102,7 @@ describe("Codex app-server dynamic tool build", () => {
     expect(tools.map((tool) => tool.name)).toEqual(["message"]);
     expect(persistentWebSearchAllowed).toBe(true);
     expect(webSearchAllowed).toBe(false);
+    expect(hoisted.resolveWebSearchToolPolicy).not.toHaveBeenCalled();
   });
 
   it("keeps persistent search denied when runtime toolsAllow also excludes it", async () => {
@@ -1191,7 +1193,10 @@ describe("Codex app-server dynamic tool build", () => {
       return [createRuntimeDynamicTool("message")];
     });
 
-    await buildDynamicToolsForTest(params, workspaceDir);
+    const onPersistentWebSearchPolicyResolved = vi.fn();
+    await buildDynamicToolsForTest(params, workspaceDir, {
+      onPersistentWebSearchPolicyResolved,
+    });
 
     expect(receivedOptions).toMatchObject({
       inputProvenance: params.inputProvenance,
@@ -1205,6 +1210,7 @@ describe("Codex app-server dynamic tool build", () => {
         scheduledToolPolicy: params.scheduledToolPolicy,
       }),
     );
+    expect(onPersistentWebSearchPolicyResolved).toHaveBeenCalledWith(false);
   });
 
   it("keeps persistent search denied when global and sender policy both deny it", async () => {
@@ -1784,11 +1790,20 @@ describe("Codex app-server dynamic tool build", () => {
     params.disableTools = false;
     params.runtimePlan = createCodexRuntimePlanFixture();
     await bindProductionCodexHostCapabilities(params);
+    const resolveExecutionPolicy = vi.spyOn(
+      nativeExecutionPolicy,
+      "resolveCodexNativeExecutionPolicy",
+    );
 
     const tools = await buildDynamicToolsForTest(params, workspaceDir, {
+      sandbox: null,
       nativeToolSurfaceEnabled: true,
     });
 
+    expect(resolveExecutionPolicy).toHaveBeenCalledOnce();
+    expect(resolveExecutionPolicy).toHaveBeenCalledWith(
+      expect.objectContaining({ sandboxAvailable: false }),
+    );
     expect(shellTestToolNames(tools)).toEqual([
       "message",
       "gateway_exec",
@@ -1812,7 +1827,9 @@ describe("Codex app-server dynamic tool build", () => {
       { type: "inputText", text: "Unknown OpenClaw tool: node_process" },
     ]);
     const nodeExec = tools.find((tool) => tool.name === "node_exec");
-    expect(nodeExec?.description).toContain("Select the node by name or id");
+    expect(nodeExec?.description).toContain(
+      "The sole connected node that can execute commands is selected automatically; select by name or id when several can.",
+    );
     expect(nodeExec?.parameters).toMatchObject({
       type: "object",
       properties: {
@@ -1934,6 +1951,10 @@ describe("Codex app-server dynamic tool build", () => {
     const params = createParams(sessionFile, workspaceDir);
     params.disableTools = false;
     params.runtimePlan = createCodexRuntimePlanFixture();
+    const resolveExecutionPolicy = vi.spyOn(
+      nativeExecutionPolicy,
+      "resolveCodexNativeExecutionPolicy",
+    );
 
     const tools = await buildDynamicToolsForTest(params, workspaceDir, {
       sandbox: {
@@ -1944,6 +1965,10 @@ describe("Codex app-server dynamic tool build", () => {
       nativeToolSurfaceEnabled: false,
     });
 
+    expect(resolveExecutionPolicy).toHaveBeenCalledOnce();
+    expect(resolveExecutionPolicy).toHaveBeenCalledWith(
+      expect.objectContaining({ sandboxAvailable: true }),
+    );
     expect(tools.map((tool) => tool.name)).toEqual(["message", "sandbox_exec", "sandbox_process"]);
     expect(tools.find((tool) => tool.name === "sandbox_exec")?.description).toContain(
       "Docker container-path bind layout",
@@ -2327,6 +2352,7 @@ describe("Codex app-server dynamic tool build", () => {
       messageTool.description,
       heartbeatTool.description,
     ]);
+    expect(hoisted.resolveWebSearchToolPolicy).not.toHaveBeenCalled();
   });
 
   it("passes runtime config into Codex exec dynamic tool construction", async () => {
@@ -2396,24 +2422,31 @@ describe("Codex app-server dynamic tool build", () => {
     },
   );
 
-  it("passes the delegation capability into shared OpenClaw tool construction", async () => {
-    const sessionFile = path.join(tempDir, "session.jsonl");
-    const workspaceDir = path.join(tempDir, "workspace");
-    const params = createParams(sessionFile, workspaceDir);
-    params.disableTools = false;
-    params.delegationCapability = "report_only";
-    params.runtimePlan = createCodexRuntimePlanFixture();
-    const factoryOptions: unknown[] = [];
-    setOpenClawCodingToolsFactoryForTests((options) => {
-      factoryOptions.push(options);
-      return [];
-    });
+  it.each(["ultra", "off"] as const)(
+    "passes active %s thinking into shared OpenClaw tool construction",
+    async (thinkLevel) => {
+      const sessionFile = path.join(tempDir, "session.jsonl");
+      const workspaceDir = path.join(tempDir, "workspace");
+      const params = createParams(sessionFile, workspaceDir);
+      params.disableTools = false;
+      params.delegationCapability = "report_only";
+      params.thinkLevel = thinkLevel;
+      params.runtimePlan = createCodexRuntimePlanFixture();
+      const factoryOptions: unknown[] = [];
+      setOpenClawCodingToolsFactoryForTests((options) => {
+        factoryOptions.push(options);
+        return [];
+      });
 
-    await buildDynamicToolsForTest(params, workspaceDir, { sandbox: null as never });
+      await buildDynamicToolsForTest(params, workspaceDir, { sandbox: null as never });
 
-    expect(factoryOptions).toHaveLength(1);
-    expect(factoryOptions[0]).toMatchObject({ delegationCapability: "report_only" });
-  });
+      expect(factoryOptions).toHaveLength(1);
+      expect(factoryOptions[0]).toMatchObject({
+        delegationCapability: "report_only",
+        requesterThinkingLevel: thinkLevel,
+      });
+    },
+  );
 
   it("uses the tool auth profile store for Codex dynamic tool construction", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
@@ -2525,21 +2558,31 @@ describe("Codex app-server dynamic tool build", () => {
     expect(tools.map((tool) => tool.name)).toEqual(["sessions_spawn"]);
   });
 
-  it("disables Codex native tool surfaces for restricted runtime allowlists", () => {
+  it.each([
+    { label: "unresolved", sandbox: undefined, sandboxAvailable: undefined },
+    { label: "resolved absent", sandbox: null, sandboxAvailable: false },
+  ])("disables native tools for restricted allowlists with $label sandbox", (testCase) => {
     const workspaceDir = path.join(tempDir, "workspace");
     const params = createParams(path.join(tempDir, "session.jsonl"), workspaceDir);
     params.disableTools = false;
+    const resolveExecutionPolicy = vi.spyOn(
+      nativeExecutionPolicy,
+      "resolveCodexNativeExecutionPolicy",
+    );
 
-    expect(shouldEnableCodexAppServerNativeToolSurface(params)).toBe(true);
+    expect(shouldEnableCodexAppServerNativeToolSurface(params, testCase.sandbox)).toBe(true);
+    expect(resolveExecutionPolicy).toHaveBeenCalledWith(
+      expect.objectContaining({ sandboxAvailable: testCase.sandboxAvailable }),
+    );
 
     params.toolsAllow = ["*"];
-    expect(shouldEnableCodexAppServerNativeToolSurface(params)).toBe(true);
+    expect(shouldEnableCodexAppServerNativeToolSurface(params, testCase.sandbox)).toBe(true);
 
     params.toolsAllow = [];
-    expect(shouldEnableCodexAppServerNativeToolSurface(params)).toBe(false);
+    expect(shouldEnableCodexAppServerNativeToolSurface(params, testCase.sandbox)).toBe(false);
 
     params.toolsAllow = ["message"];
-    expect(shouldEnableCodexAppServerNativeToolSurface(params)).toBe(false);
+    expect(shouldEnableCodexAppServerNativeToolSurface(params, testCase.sandbox)).toBe(false);
   });
 
   it("disables Codex native tool surfaces when all tools are disabled", () => {

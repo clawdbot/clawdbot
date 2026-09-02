@@ -149,31 +149,22 @@ helper_build_path_for_arch() {
 }
 
 helper_bin_for_arch() {
-  echo "$(helper_build_path_for_arch "$1")/$BUILD_CONFIG/$MLX_TTS_HELPER_PRODUCT"
+  local products
+  products="$(build_mlx_tts_helper "$1" --show-bin-path)" || return
+  echo "$products/$MLX_TTS_HELPER_PRODUCT"
 }
 
 build_mlx_tts_helper() {
   local arch="$1"
-  local swift_path
-  local toolchain_metal
-  local swift_args=(build)
-
-  swift_path="$(xcrun --find swift)"
-  toolchain_metal="$(dirname "$swift_path")/metal"
-
-  if [[ -x "$toolchain_metal" ]] &&
-    ! "$toolchain_metal" --version >/dev/null 2>&1 &&
-    xcrun metal --version >/dev/null 2>&1; then
-    echo "⚠️  Xcode's default Metal shim cannot use the installed toolchain; using the native SwiftPM backend"
-    swift_args+=(--build-system native)
-  fi
-
-  swift "${swift_args[@]}" \
+  shift
+  # Swift 6.3 needs Swift Build for Metal and --show-bin-path for its output directory.
+  swift build --build-system swiftbuild \
     --package-path "$MLX_TTS_HELPER_ROOT" \
     -c "$BUILD_CONFIG" \
     --product "$MLX_TTS_HELPER_PRODUCT" \
     --build-path "$(helper_build_path_for_arch "$arch")" \
-    --arch "$arch"
+    --arch "$arch" \
+    "$@"
 }
 
 sparkle_framework_for_arch() {
@@ -740,6 +731,8 @@ if (actual.version !== version || actual.commit !== commit || actual.builtAt !==
 }
 NODE
 
+node "$ROOT_DIR/scripts/prepare-apple-mermaid.mjs"
+
 # pnpm build owns the Control UI and content-checked build stamps as well.
 mkdir -p "$(dirname "$APP_DESTINATION")"
 APP_STAGE_DIR="$(mktemp -d "$ROOT_DIR/dist/.openclaw-package.XXXXXX")"
@@ -941,28 +934,38 @@ else
 fi
 
 echo "📦 Copying SwiftPM resource bundles"
-SWIFTPM_BUILD_PRODUCTS="$(build_path_for_arch "$PRIMARY_ARCH")/$BUILD_CONFIG"
-# Generated Bundle.module accessors resolve from Bundle.main.bundleURL. In a packaged app,
-# that is the .app root, not Contents/Resources; placing a bundle there traps on first access.
-for resource_bundle_src in "$SWIFTPM_BUILD_PRODUCTS"/*.bundle; do
-  [[ -d "$resource_bundle_src" ]] || continue
-  resource_bundle="${resource_bundle_src##*/}"
-  rm -rf "$APP_ROOT/Contents/Resources/$resource_bundle"
-  cp -R "$resource_bundle_src" "$APP_ROOT/Contents/Resources/$resource_bundle"
+SWIFTPM_BUILD_PRODUCTS=("$(build_path_for_arch "$PRIMARY_ARCH")/$BUILD_CONFIG")
+if [[ "$SKIP_MLX_TTS" != "1" ]]; then
+  SWIFTPM_BUILD_PRODUCTS+=("$(build_mlx_tts_helper "$PRIMARY_ARCH" --show-bin-path)")
+fi
+# Main app and helper dependencies share the signed Resources directory.
+# MLX loads its compiled Metal library from its resource bundle there.
+for build_products in "${SWIFTPM_BUILD_PRODUCTS[@]}"; do
+  for resource_bundle_src in "$build_products"/*.bundle; do
+    [[ -d "$resource_bundle_src" ]] || continue
+    resource_bundle="${resource_bundle_src##*/}"
+    rm -rf "$APP_ROOT/Contents/Resources/$resource_bundle"
+    cp -R "$resource_bundle_src" "$APP_ROOT/Contents/Resources/$resource_bundle"
+  done
 done
 REQUIRED_SWIFTPM_RESOURCE_BUNDLES=(
   "GRDB_GRDB.bundle"
   "KeyboardShortcuts_KeyboardShortcuts.bundle"
   "OpenClaw_OpenClaw.bundle"
   "OpenClawKit_OpenClawKit.bundle"
+  "OpenClawKit_OpenClawChatUI.bundle"
   "SwiftMath_SwiftMath.bundle"
 )
 for resource_bundle in "${REQUIRED_SWIFTPM_RESOURCE_BUNDLES[@]}"; do
   if [[ ! -d "$APP_ROOT/Contents/Resources/$resource_bundle" ]]; then
-    echo "ERROR: Required SwiftPM resource bundle not found at $SWIFTPM_BUILD_PRODUCTS/$resource_bundle" >&2
+    echo "ERROR: Required SwiftPM resource bundle not found at $APP_ROOT/Contents/Resources/$resource_bundle" >&2
     exit 1
   fi
 done
+if [[ "$SKIP_MLX_TTS" != "1" && ! -f "$APP_ROOT/Contents/Resources/mlx-swift_Cmlx.bundle/Contents/Resources/default.metallib" ]]; then
+  echo "ERROR: Required MLX shaders not found at $APP_ROOT/Contents/Resources/mlx-swift_Cmlx.bundle/Contents/Resources/default.metallib" >&2
+  exit 1
+fi
 
 running_packaged_app_pids() {
   command -v pgrep >/dev/null 2>&1 || return 0

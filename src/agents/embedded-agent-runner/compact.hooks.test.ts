@@ -12,7 +12,7 @@ import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js"
 import { createReplyOperation } from "../../auto-reply/reply/reply-run-registry.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import type { ContextEngine } from "../../context-engine/types.js";
-import type { PluginManifestRecord } from "../../plugins/manifest-registry.js";
+import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import {
   createAssistant,
@@ -1551,24 +1551,23 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
   it("keeps manifest-profiled plugin tools executable during compaction", async () => {
     const toolName = "profiled_plugin_tool";
     const metadataSnapshot = {
-      ...getCurrentPluginMetadataSnapshotMock(),
+      ...createPluginMetadataSnapshotFixture({
+        plugins: [
+          {
+            id: "profiled-plugin",
+            origin: "workspace",
+            rootDir: join(TEST_WORKSPACE_DIR, "workspace/profiled-plugin"),
+            source: join(TEST_WORKSPACE_DIR, "workspace/profiled-plugin/index.js"),
+            manifestPath: join(
+              TEST_WORKSPACE_DIR,
+              "workspace/profiled-plugin/openclaw.plugin.json",
+            ),
+            contracts: { tools: [toolName] },
+            toolMetadata: { [toolName]: { profiles: ["coding"] } },
+          },
+        ],
+      }),
       workspaceDir: join(TEST_WORKSPACE_DIR, "workspace"),
-      plugins: [
-        {
-          id: "profiled-plugin",
-          channels: [],
-          providers: [],
-          cliBackends: [],
-          skills: [],
-          hooks: [],
-          origin: "workspace",
-          rootDir: join(TEST_WORKSPACE_DIR, "workspace/profiled-plugin"),
-          source: join(TEST_WORKSPACE_DIR, "workspace/profiled-plugin/index.js"),
-          manifestPath: join(TEST_WORKSPACE_DIR, "workspace/profiled-plugin/openclaw.plugin.json"),
-          contracts: { tools: [toolName] },
-          toolMetadata: { [toolName]: { profiles: ["coding"] } },
-        } satisfies PluginManifestRecord,
-      ],
     };
     const preparedModelRuntime = {
       agentId: "main",
@@ -2075,38 +2074,30 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
   });
 
   it("plans direct compaction from the requested workspace metadata without ambient discovery", async () => {
-    const baseMetadataSnapshot = expectDefined(
-      getCurrentPluginMetadataSnapshotMock(),
-      "default plugin metadata snapshot",
-    );
-    getCurrentPluginMetadataSnapshotMock.mockImplementation((params) =>
-      params?.workspaceDir === TEST_WORKSPACE_DIR
-        ? {
-            ...baseMetadataSnapshot,
-            configFingerprint: "workspace-compaction-normalization",
-            plugins: [
-              {
-                id: "compaction-normalizer",
-                channels: [],
-                providers: ["anthropic"],
-                cliBackends: [],
-                skills: [],
-                hooks: [],
-                origin: "workspace",
-                rootDir: TEST_WORKSPACE_DIR,
-                source: `${TEST_WORKSPACE_DIR}/index.js`,
-                manifestPath: `${TEST_WORKSPACE_DIR}/openclaw.plugin.json`,
-                modelIdNormalization: {
-                  providers: {
-                    anthropic: {
-                      aliases: { legacy: "claude-modern" },
-                    },
-                  },
+    const metadataSnapshot = {
+      ...createPluginMetadataSnapshotFixture({
+        plugins: [
+          {
+            id: "compaction-normalizer",
+            providers: ["anthropic"],
+            origin: "workspace",
+            rootDir: TEST_WORKSPACE_DIR,
+            source: `${TEST_WORKSPACE_DIR}/index.js`,
+            manifestPath: `${TEST_WORKSPACE_DIR}/openclaw.plugin.json`,
+            modelIdNormalization: {
+              providers: {
+                anthropic: {
+                  aliases: { legacy: "claude-modern" },
                 },
-              } satisfies PluginManifestRecord,
-            ],
-          }
-        : undefined,
+              },
+            },
+          },
+        ],
+      }),
+      configFingerprint: "workspace-compaction-normalization",
+    };
+    getCurrentPluginMetadataSnapshotMock.mockImplementation((params) =>
+      params?.workspaceDir === TEST_WORKSPACE_DIR ? metadataSnapshot : undefined,
     );
 
     const result = await compactEmbeddedAgentSessionDirect({

@@ -379,14 +379,14 @@ async function resolveApprovedModel(params: {
       const defaultModel = dependencies.resolveDefaultModel({
         cfg: lifecycleConfig,
         agentId: target.agentId,
-        manifestPlugins: manifestSnapshot.plugins,
+        manifestPlugins: manifestSnapshot,
         ...RUNTIME_MODEL_VISIBILITY_NORMALIZATION,
       });
       const aliasIndex = buildModelAliasIndex({
         cfg: lifecycleConfig,
         agentId: target.agentId,
         defaultProvider: defaultModel.provider,
-        manifestPlugins: manifestSnapshot.plugins,
+        manifestPlugins: manifestSnapshot,
         ...RUNTIME_MODEL_VISIBILITY_NORMALIZATION,
       });
       const resolved = resolveModelRefFromString({
@@ -395,7 +395,7 @@ async function resolveApprovedModel(params: {
         raw: rawRef,
         defaultProvider: defaultModel.provider,
         aliasIndex,
-        manifestPlugins: manifestSnapshot.plugins,
+        manifestPlugins: manifestSnapshot,
         ...RUNTIME_MODEL_VISIBILITY_NORMALIZATION,
       });
       if (
@@ -413,7 +413,7 @@ async function resolveApprovedModel(params: {
         defaultProvider: defaultModel.provider,
         defaultModel: `${defaultModel.provider}/${defaultModel.model}`,
         agentId: target.agentId,
-        manifestPlugins: manifestSnapshot.plugins,
+        manifestPlugins: manifestSnapshot,
         ...RUNTIME_MODEL_VISIBILITY_NORMALIZATION,
       });
       const resolvedKey = modelCatalogLogicalKey({

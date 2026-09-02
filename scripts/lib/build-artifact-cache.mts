@@ -26,24 +26,27 @@ function cacheEntryIncludesFile(entry: BuildCachePath, filePath: string) {
   return entry.extensions.some((extension) => filePath.endsWith(extension));
 }
 
-function listFilesRecursively(
+function collectCacheFiles(
   rootPath: string,
   fsImpl: typeof fs,
-  cacheEntry: BuildCachePath = { path: rootPath },
+  cacheEntry: BuildCachePath,
+  out: string[],
 ) {
   let stat;
   try {
     stat = fsImpl.statSync(rootPath);
   } catch {
-    return [];
+    return;
   }
   if (stat.isFile()) {
-    return cacheEntryIncludesFile(cacheEntry, rootPath) ? [rootPath] : [];
+    if (cacheEntryIncludesFile(cacheEntry, rootPath)) {
+      out.push(rootPath);
+    }
+    return;
   }
   if (!stat.isDirectory()) {
-    return [];
+    return;
   }
-  const out: string[] = [];
   const entries = fsImpl.readdirSync(rootPath, { withFileTypes: true });
   const recursive = cacheEntry.recursive !== false;
   for (const dirent of entries) {
@@ -55,26 +58,28 @@ function listFilesRecursively(
       continue;
     }
     if (dirent.isDirectory() && recursive) {
-      out.push(...listFilesRecursively(entryPath, fsImpl, cacheEntry));
+      collectCacheFiles(entryPath, fsImpl, cacheEntry, out);
     } else if (dirent.isFile() && cacheEntryIncludesFile(cacheEntry, entryPath)) {
       out.push(entryPath);
     }
   }
-  return out;
 }
 
 export function listCacheFiles(rootDir: string, entries: BuildCacheEntry[], fsImpl: typeof fs) {
-  return entries
-    .map((entry) => (typeof entry === "string" ? { path: entry } : entry))
-    .flatMap((entry) => listFilesRecursively(path.resolve(rootDir, entry.path), fsImpl, entry))
-    .toSorted();
+  // One inventory avoids copying each subtree and spreading unbounded argument lists.
+  const files: string[] = [];
+  for (const entry of entries) {
+    const cacheEntry = typeof entry === "string" ? { path: entry } : entry;
+    collectCacheFiles(path.resolve(rootDir, cacheEntry.path), fsImpl, cacheEntry, files);
+  }
+  return files.toSorted();
 }
 
 export function portableRelativePath(rootDir: string, filePath: string) {
   return path.relative(rootDir, filePath).split(path.sep).join("/");
 }
 
-export function hashInputFiles(
+function hashInputFiles(
   rootDir: string,
   files: string[],
   fsImpl: typeof fs,
@@ -100,7 +105,7 @@ export function hashInputFiles(
 }
 
 /** Records every successful output byte; a surviving barrel is not a complete generation. */
-export function collectArtifactRecord(
+function collectArtifactRecord(
   rootDir: string,
   signature: string,
   entries: BuildCacheEntry[],
@@ -159,7 +164,7 @@ export function readArtifactRecord(file: string): ArtifactRecord | undefined {
   }
 }
 
-export function artifactRecordMatches(
+function artifactRecordMatches(
   rootDir: string,
   record: ArtifactRecord | undefined,
   signature: string,
@@ -227,21 +232,25 @@ export function publishArtifactFiles(
 }
 
 /** Identify the emitter selected from tsdown, not a separately hoisted dependency. */
-export function resolveTsdownCompilerIdentity() {
+export function resolveTsdownCompilerFiles() {
   const require = createRequire(import.meta.url);
   const tsdown = fs.realpathSync(require.resolve("tsdown"));
   const tsdownRequire = createRequire(tsdown);
   const dts = fs.realpathSync(tsdownRequire.resolve("rolldown-plugin-dts"));
   const compilerRequire = createRequire(dts);
-  const hash = createHash("sha256");
-  for (const file of [
+  return [
     tsdown,
     require.resolve("tsdown/package.json"),
     dts,
     tsdownRequire.resolve("rolldown-plugin-dts/package.json"),
     compilerRequire.resolve("typescript"),
     compilerRequire.resolve("typescript/package.json"),
-  ]) {
+  ];
+}
+
+function resolveTsdownCompilerIdentity() {
+  const hash = createHash("sha256");
+  for (const file of resolveTsdownCompilerFiles()) {
     hash.update(fs.readFileSync(file));
   }
   return hash.digest("hex");
@@ -276,4 +285,291 @@ export function acquireBuildArtifactLock(target: string, timeoutMs = 600_000) {
     staleRecovery: "remove-if-unchanged",
     shouldRemoveStaleLock: ({ payload }) => ownerIsDead(payload),
   });
+}
+
+export type BuildCache = {
+  env?: string[];
+  inputs: BuildCacheEntry[];
+  outputs: BuildCacheEntry[];
+  requiredOutputs?: string[] | ((env: NodeJS.ProcessEnv) => string[]);
+  restore?: "always";
+  runOnHit?: { env?: NodeJS.ProcessEnv; finalize?: "refresh" };
+};
+
+export type BuildCacheStep = { label: string; env?: NodeJS.ProcessEnv; cache?: BuildCache };
+
+type BuildCacheFs = typeof fs;
+export type BuildCacheParams = {
+  rootDir?: string;
+  // A producer may publish from a private stage while its inputs remain checkout-relative.
+  artifactRoot?: string;
+  fs?: BuildCacheFs;
+  env?: NodeJS.ProcessEnv;
+  // Compiler-owned membership replaces the static byte set, retaining this same
+  // whole-generation record, output validation, lock and publication owner.
+  inputSignature?: (inputs: string[]) => string;
+};
+
+function normalizePortablePath(filePath: string) {
+  return filePath.replaceAll("\\", "/");
+}
+
+function resolveCacheRequiredOutputs(cache: BuildCache, env: NodeJS.ProcessEnv) {
+  const outputs =
+    typeof cache.requiredOutputs === "function"
+      ? cache.requiredOutputs(env)
+      : (cache.requiredOutputs ?? []);
+  return outputs.map((output) => normalizePortablePath(output));
+}
+
+function resolveBuildCacheRoot(rootDir: string, env: NodeJS.ProcessEnv) {
+  // Dev update preflight and final builds run in separate worktrees. A shared
+  // root lets content signatures decide reuse without relocating built trees.
+  const configuredRoot = env?.BUILD_ALL_CACHE_ROOT?.trim();
+  if (!configuredRoot) {
+    return path.resolve(rootDir, ".artifacts/build-all-cache");
+  }
+  return path.isAbsolute(configuredRoot)
+    ? path.normalize(configuredRoot)
+    : path.resolve(rootDir, configuredRoot);
+}
+
+function resolveCachePaths(rootDir: string, step: BuildCacheStep, env: NodeJS.ProcessEnv) {
+  const safeLabel = step.label.replace(/[^a-zA-Z0-9._-]+/g, "_");
+  const cacheDir = path.join(resolveBuildCacheRoot(rootDir, env), safeLabel);
+  return {
+    cacheDir,
+    outputRoot: path.join(cacheDir, "outputs"),
+    stampPath: path.join(cacheDir, "stamp.json"),
+  };
+}
+
+function hasAllFiles(rootDir: string, relativeFiles: string[], fsImpl: BuildCacheFs) {
+  return relativeFiles.every((relativeFile) => {
+    try {
+      return fsImpl.statSync(path.resolve(rootDir, relativeFile)).isFile();
+    } catch {
+      return false;
+    }
+  });
+}
+
+export function resolveBuildStepCacheState(
+  step: BuildCacheStep,
+  params: BuildCacheParams = {},
+): BuildCacheState {
+  if (!step.cache) {
+    return { cacheable: false, fresh: false, reason: "no-cache" };
+  }
+  const rootDir = params.rootDir ?? process.cwd();
+  const artifactRoot = params.artifactRoot ?? rootDir;
+  const fsImpl = params.fs ?? fs;
+  const inputFiles = listCacheFiles(rootDir, step.cache.inputs, fsImpl);
+  if (inputFiles.length === 0) {
+    return { cacheable: true, fresh: false, reason: "missing-inputs" };
+  }
+  const { outputRoot, stampPath } = resolveCachePaths(rootDir, step, params.env ?? process.env);
+  const lock = acquireBuildArtifactLock(stampPath);
+  try {
+    const stamp = readArtifactRecord(stampPath);
+    let signature: string;
+    let consumedInputs: string[] | undefined;
+    if (params.inputSignature) {
+      signature = params.inputSignature([]);
+      try {
+        if (stamp?.inputs) {
+          signature = params.inputSignature(stamp.inputs);
+          consumedInputs = stamp.inputs;
+        }
+      } catch {
+        // Missing previous inputs invalidate normally; the successful compiler
+        // supplies the next membership before this owner can seal a generation.
+      }
+    } else {
+      signature = hashInputFiles(
+        rootDir,
+        inputFiles,
+        fsImpl,
+        step.cache.env ?? [],
+        params.env ?? process.env,
+        step.label.startsWith("tsdown") ? resolveTsdownCompilerIdentity() : "",
+      );
+    }
+    const outputFiles = listCacheFiles(artifactRoot, step.cache.outputs, fsImpl);
+    const relativeOutputFiles = outputFiles.map((file) => portableRelativePath(artifactRoot, file));
+    const stampedOutputs = Object.keys(stamp?.outputs ?? {});
+    const requiredOutputs = resolveCacheRequiredOutputs(step.cache, params.env ?? process.env);
+    const actualOutputsPresent = artifactRecordMatches(
+      artifactRoot,
+      stamp,
+      signature,
+      requiredOutputs,
+    );
+    const cachedOutputsPresent = artifactRecordMatches(
+      outputRoot,
+      stamp,
+      signature,
+      requiredOutputs,
+    );
+    const stampMatches =
+      (!params.inputSignature || consumedInputs !== undefined) && stamp?.signature === signature;
+    const alwaysRestore = step.cache.restore === "always";
+    const actualOutputsAcceptable = actualOutputsPresent && !alwaysRestore;
+    const restorable =
+      stampMatches && cachedOutputsPresent && (alwaysRestore || !actualOutputsPresent);
+    const fresh = stampMatches && (actualOutputsAcceptable || cachedOutputsPresent);
+    return {
+      cacheable: true,
+      fresh,
+      restorable,
+      reason: fresh ? (restorable ? "fresh-cache" : "fresh") : "stale",
+      signature,
+      ...(consumedInputs ? { consumedInputs } : {}),
+      outputRoot,
+      stampPath,
+      inputFiles: inputFiles.length,
+      outputFiles: outputFiles.length,
+      relativeOutputFiles,
+      stampedOutputs,
+      record: stamp,
+    };
+  } finally {
+    lock.release();
+  }
+}
+
+export type BuildCacheState = {
+  cacheable: boolean;
+  fresh: boolean;
+  reason: string;
+  restorable?: boolean;
+  signature?: string;
+  consumedInputs?: string[];
+  outputRoot?: string;
+  stampPath?: string;
+  inputFiles?: number;
+  outputFiles?: number;
+  relativeOutputFiles?: string[];
+  stampedOutputs?: string[];
+  record?: ArtifactRecord;
+};
+
+export function writeBuildStepCacheStamp(
+  step: BuildCacheStep,
+  cacheState: BuildCacheState,
+  params: Pick<BuildCacheParams, "rootDir" | "artifactRoot" | "fs" | "env"> = {},
+) {
+  if (
+    !step.cache ||
+    !cacheState.cacheable ||
+    !cacheState.signature ||
+    !cacheState.stampPath ||
+    !cacheState.outputRoot ||
+    !cacheState.relativeOutputFiles?.length
+  ) {
+    return;
+  }
+  const fsImpl = params.fs ?? fs;
+  const rootDir = params.artifactRoot ?? params.rootDir ?? process.cwd();
+  const requiredOutputs = resolveCacheRequiredOutputs(step.cache, params.env ?? process.env);
+  const relativeOutputSet = new Set(
+    cacheState.relativeOutputFiles.map((output) => normalizePortablePath(output)),
+  );
+  // Validate before copying so an incomplete run cannot mutate the cached tree
+  // while leaving its previous stamp in place.
+  if (
+    !requiredOutputs.every((output) => relativeOutputSet.has(output)) ||
+    !hasAllFiles(rootDir, requiredOutputs, fsImpl)
+  ) {
+    return;
+  }
+  const lock = acquireBuildArtifactLock(cacheState.stampPath);
+  try {
+    const record = collectArtifactRecord(
+      rootDir,
+      cacheState.signature,
+      cacheState.relativeOutputFiles,
+    );
+    if (cacheState.consumedInputs) {
+      record.inputs = cacheState.consumedInputs;
+    }
+    // Invalidate before the first copied byte; readers and publishers use this
+    // same lock, so neither crashes nor overlap can expose a partial snapshot.
+    fsImpl.rmSync(cacheState.stampPath, { force: true });
+    // This cache tree belongs entirely to the step. Replace it even when an old
+    // or missing record cannot enumerate obsolete bytes for pruning.
+    fsImpl.rmSync(cacheState.outputRoot, { force: true, recursive: true });
+    publishArtifactFiles(rootDir, cacheState.outputRoot, Object.keys(record.outputs));
+    if (
+      !artifactRecordMatches(cacheState.outputRoot, record, cacheState.signature, requiredOutputs)
+    ) {
+      throw new Error(`Incomplete build cache snapshot: ${step.label}`);
+    }
+    writeArtifactRecord(cacheState.stampPath, record);
+  } finally {
+    lock.release();
+  }
+}
+
+export function resolveBuildStepCacheStampState(
+  step: BuildCacheStep,
+  cacheState: BuildCacheState,
+  params: Pick<BuildCacheParams, "rootDir" | "artifactRoot" | "fs"> = {},
+) {
+  if (!cacheState.cacheable || !cacheState.signature || !step.cache) {
+    return cacheState;
+  }
+  const rootDir = params.artifactRoot ?? params.rootDir ?? process.cwd();
+  const fsImpl = params.fs ?? fs;
+  const outputFiles = listCacheFiles(rootDir, step.cache.outputs, fsImpl);
+  return {
+    ...cacheState,
+    outputFiles: outputFiles.length,
+    relativeOutputFiles: outputFiles.map((file) => portableRelativePath(rootDir, file)),
+  };
+}
+
+export function restoreBuildStepCacheOutputs(
+  cacheState: BuildCacheState,
+  params: Pick<BuildCacheParams, "rootDir" | "artifactRoot" | "fs"> = {},
+) {
+  if (!cacheState.restorable || !cacheState.outputRoot || !cacheState.stampedOutputs?.length) {
+    return false;
+  }
+  if (!cacheState.stampPath || !cacheState.signature || !cacheState.record) {
+    return false;
+  }
+  const lock = acquireBuildArtifactLock(cacheState.stampPath);
+  try {
+    const record = readArtifactRecord(cacheState.stampPath);
+    if (
+      JSON.stringify(record) !== JSON.stringify(cacheState.record) ||
+      !artifactRecordMatches(cacheState.outputRoot, record, cacheState.signature)
+    ) {
+      return false;
+    }
+    publishArtifactFiles(
+      cacheState.outputRoot,
+      params.artifactRoot ?? params.rootDir ?? process.cwd(),
+      cacheState.stampedOutputs,
+      cacheState.relativeOutputFiles,
+    );
+    return true;
+  } finally {
+    lock.release();
+  }
+}
+
+export function finalizeBuildStepCache(
+  step: BuildCacheStep,
+  cacheState: BuildCacheState,
+  params: BuildCacheParams & { reusedCache?: boolean } = {},
+) {
+  if (params.reusedCache && step.cache?.runOnHit?.finalize !== "refresh") {
+    return restoreBuildStepCacheOutputs(cacheState, params);
+  }
+  // Validator-style cache hits may update a restored seed. Capture that result;
+  // restoring the old seed here would silently discard the validated refresh.
+  writeBuildStepCacheStamp(step, resolveBuildStepCacheStampState(step, cacheState, params), params);
+  return true;
 }

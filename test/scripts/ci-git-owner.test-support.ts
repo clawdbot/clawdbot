@@ -42,11 +42,13 @@ const moved = "d".repeat(40);
 const merge = "e".repeat(40);
 const defaults: Record<string, string> = {
   CHECKOUT_REPO: "fixture/checkout",
+  CHECKOUT_TOKEN: "",
   CHECKOUT_REF: candidate,
   CHECKOUT_SHA: candidate,
   CHECKOUT_FALLBACK_REF: candidate,
   CHECKOUT_EVENT_REF: "refs/heads/main",
   WORKFLOW_SHA: harness,
+  CHECKOUT_GIT_COMMITS_JSON: "null",
   GITHUB_EVENT_NAME: "push",
   GITHUB_REPOSITORY: "fixture/checkout",
   DEFAULT_BRANCH: "main",

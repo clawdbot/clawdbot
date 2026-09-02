@@ -10,7 +10,6 @@ import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../lib/external-link
 import { formatRelativeTimestamp } from "../lib/format.ts";
 import {
   GITHUB_HOVERCARD_OPEN_DELAY_MS,
-  gitHubFilesChangedUrl,
   githubLinkAnchorFromEvent,
   gitHubProfileUrl,
   parseGitHubLinkTarget,
@@ -87,7 +86,6 @@ function parsePreviewResponse(target: GitHubLinkTarget, value: unknown): GitHubP
     ...target,
     additions: asFiniteNumber(value.additions),
     avatarDataUrl: safeAvatarDataUrl(value.avatarDataUrl),
-    changedFiles: asFiniteNumber(value.changedFiles),
     closedAt: readNonBlankString(value.closedAt),
     coAuthorCount: asFiniteNumber(value.coAuthorCount),
     coAuthors: parseCoAuthors(value.coAuthors),
@@ -291,19 +289,9 @@ function renderPreview(card: HTMLDivElement, preview: GitHubPreview): void {
   const metrics = document.createElement("span");
   metrics.className = "github-link-hovercard__metrics";
   if (preview.kind === "pull") {
+    metrics.classList.add("github-link-hovercard__metrics--diff");
     appendMetric(metrics, "github-link-hovercard__metric--additions", `+${preview.additions ?? 0}`);
     appendMetric(metrics, "github-link-hovercard__metric--deletions", `−${preview.deletions ?? 0}`);
-    const files = preview.changedFiles ?? 0;
-    // The diff-size chip's natural next step is the files-changed view; issues
-    // have no such view, so their comment count stays plain text.
-    appendCardLink(
-      metrics,
-      "github-link-hovercard__metric github-link-hovercard__metric--files",
-      gitHubFilesChangedUrl(preview),
-      t(files === 1 ? "githubPreview.file" : "githubPreview.files", {
-        count: String(files),
-      }),
-    );
   } else {
     const comments = preview.comments ?? 0;
     appendMetric(

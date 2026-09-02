@@ -592,8 +592,7 @@ export function handlePageGatewayEvent(
       const shouldRecoverMissingTerminal = Boolean(
         recoveryRunId &&
         recoveryScope &&
-        getChatSessionProjection(state, state.chatMessages, recoveryScope).runs[recoveryRunId]
-          ?.status === "completed",
+        getChatSessionProjection(state, recoveryScope).runs[recoveryRunId]?.status === "completed",
       );
       const recoveryOwnership =
         shouldRecoverMissingTerminal && payload

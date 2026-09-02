@@ -1,5 +1,6 @@
 import com.android.build.api.variant.impl.VariantOutputImpl
 import org.gradle.api.tasks.Exec
+import org.gradle.api.tasks.PathSensitivity
 import java.time.Instant
 import java.time.ZoneOffset
 import java.time.format.DateTimeFormatter
@@ -146,6 +147,7 @@ android {
   sourceSets {
     getByName("main") {
       assets.directories.add("../../shared/OpenClawKit/Sources/OpenClawKit/Resources")
+      assets.directories.add("../../shared/mermaid/assets")
       assets.directories.add(thirdPartyLicensesDir.path)
     }
   }
@@ -319,6 +321,7 @@ kotlin {
 }
 
 ktlint {
+  version.set(libs.versions.ktlint.cli)
   android.set(true)
   ignoreFailures.set(false)
   filter {
@@ -444,8 +447,31 @@ val validateThirdPartyLicenseAssets =
     }
   }
 
+val generateMermaidAssets =
+  tasks.register<Exec>("generateMermaidAssets") {
+    val repositoryRoot = rootProject.projectDir.resolve("../..").canonicalFile
+    workingDir(repositoryRoot)
+    commandLine("pnpm", "--filter", "@openclaw/mermaid-renderer", "build")
+    inputs
+      .files(
+        fileTree(repositoryRoot.resolve("packages/mermaid-renderer")) {
+          exclude("node_modules/**", "dist/**")
+        },
+        fileTree(repositoryRoot.resolve("packages/normalization-core")) {
+          include("src/**", "package.json")
+        },
+        repositoryRoot.resolve("tsconfig.json"),
+      ).withPathSensitivity(PathSensitivity.RELATIVE)
+    inputs.file(repositoryRoot.resolve("pnpm-lock.yaml"))
+    outputs.dir(repositoryRoot.resolve("apps/shared/mermaid/assets/mermaid"))
+  }
+
 tasks.matching { task -> task.name == "preBuild" }.configureEach {
-  dependsOn(validateThirdPartyLicenseAssets)
+  dependsOn(validateThirdPartyLicenseAssets, generateMermaidAssets)
+}
+
+tasks.matching { task -> task.name.startsWith("merge") && task.name.endsWith("Assets") }.configureEach {
+  dependsOn(generateMermaidAssets)
 }
 
 androidComponents {

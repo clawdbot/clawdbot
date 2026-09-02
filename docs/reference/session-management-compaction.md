@@ -156,7 +156,7 @@ Each `sessionKey` points at a current `sessionId` (the SQLite transcript identit
 - **System events** (heartbeat, cron wakeups, exec notifications, gateway bookkeeping) may mutate the session row but never extend daily/idle reset freshness. Reset rollover discards queued system-event notices for the previous session before the fresh prompt is built.
 - **Automatic parent fork policy** uses OpenClaw's active branch when creating a thread or subagent fork. If that branch is too large (over a fixed internal cap, currently 100K tokens), OpenClaw starts the child with isolated context instead of failing or inheriting unusable history. Sizing is automatic and not configurable; legacy `session.parentForkMaxTokens` config is removed by `openclaw doctor --fix`.
 - **Operator forks**: `sessions.create { parentSessionKey, fork: true }` branches from the parent's current state. Admission uses the selected child model's effective usable input capacity, falling back to the 100K safety cap when model capacity is unavailable. A normal fork is refused while the parent has an active run; adding `forkFrom: "last-completed"` copies only through the last completed assistant message, excluding the in-progress tail. Unlike automatic parent forks, an operator fork over its capacity limit is rejected rather than accepted with isolated context. The child inherits the parent's model selection unless one is passed explicitly. The response marks it `forkedFromParent`, and token counters start fresh.
-- **Message forks**: `sessions.fork { sessionKey, entryId }` creates a child from the active-path prefix before the selected user message and returns that message to the composer for editing. The parent remains unchanged. Incognito forks retain the parent's in-memory storage class; restarting the Gateway removes both sessions. See [Control UI](/web/control-ui) for fork and rewind actions.
+- **Message forks**: `sessions.fork { sessionKey, entryId }` creates a child from the active-path prefix before the selected user message and returns that message to the composer for editing. The parent remains unchanged. Incognito forks retain the parent's in-memory storage class; restarting the Gateway removes both sessions. Codex fork verification compares complete attested submitted prompts, including whitespace; the bounded display-import projection is not a substitute for that evidence. See [Control UI](/web/control-ui) for fork and rewind actions.
 
 ## Session store schema
 
@@ -205,6 +205,18 @@ Notable entry types:
 History readers keep the latest reset window across later compactions: explicitly retained reset messages and messages after that reset remain visible, but older messages and compaction summaries do not reappear. Model context follows the latest reset or compaction instead, so compaction can summarize the current conversation without reopening its earlier history.
 
 Model-only callers can use `SessionManager.openModelContext()` to create a detached, non-persisting view. The reader selects payloads in SQLite and retains lightweight navigation outside the model window, without introducing a history size cutoff. Storage-only native prompt text and tool-result details stay out of that view; mirror identity, sender and media facts, tool content, and valid provider replay state remain available. Native fork verification, replay, exports, and doctor operations continue to use full-fidelity evidence readers.
+
+`SessionManager.readSessionContext(target, read, { admission? })` lets a synchronous
+consumer process full-fidelity context messages inside one read-only snapshot.
+The callback receives `(messages, header)`: a lazy message iterable and the
+unvalidated stored header. Missing stores supply an empty iterable and no header
+without creating a database. An optional admission excludes the current admitted
+user row and later events. Callback errors propagate, and the iterator closes
+when the callback returns or throws; it cannot be retained for later reads.
+This lets replay consumers enforce their existing limits during acquisition
+without silently dropping earlier history. Navigation still scales with the
+transcript, and individual selected rows are decoded whole; this is not a fixed
+process-memory ceiling.
 
 OpenClaw intentionally does not "fix up" transcripts; the Gateway uses `SessionManager` to read/write them.
 

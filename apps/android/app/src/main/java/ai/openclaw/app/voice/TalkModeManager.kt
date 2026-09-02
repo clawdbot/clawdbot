@@ -431,6 +431,7 @@ class TalkModeManager internal constructor(
             stopSpeaking(resetInterrupt = true)
           }
         }
+
         else -> { /* regained or duck — ignore */ }
       }
     }
@@ -815,7 +816,7 @@ class TalkModeManager internal constructor(
           autoStopAfterMs = maxDurationMs,
         )
     ) {
-      is PushToTalkStartResult.Existing ->
+      is PushToTalkStartResult.Existing -> {
         TalkPttOnceStart.Busy(
           TalkPttStopPayload(
             captureId = start.payload.captureId,
@@ -823,19 +824,25 @@ class TalkModeManager internal constructor(
             status = "busy",
           ),
         )
-      is PushToTalkStartResult.Started ->
+      }
+
+      is PushToTalkStartResult.Started -> {
         TalkPttOnceStart.Started(
           captureId = start.payload.captureId,
           completion = completion,
         )
+      }
     }
   }
 
   /** Waits for a started one-shot turn without keeping NodeRuntime preparation locked. */
   internal suspend fun awaitPushToTalkOnce(start: TalkPttOnceStart): TalkPttStopPayload =
     when (start) {
-      is TalkPttOnceStart.Busy -> start.payload
-      is TalkPttOnceStart.Started ->
+      is TalkPttOnceStart.Busy -> {
+        start.payload
+      }
+
+      is TalkPttOnceStart.Started -> {
         try {
           start.completion.await()
         } catch (err: Throwable) {
@@ -844,6 +851,7 @@ class TalkModeManager internal constructor(
           }
           throw err
         }
+      }
     }
 
   /** When true, play TTS for all final chat responses (even ones we didn't initiate). */
@@ -884,12 +892,9 @@ class TalkModeManager internal constructor(
     val runId = obj["runId"].asStringOrNull() ?: return
     val state = obj["state"].asStringOrNull() ?: return
 
-    // Only speak events for the active session — prevents TTS from other
-    // sessions/channels leaking into voice mode (privacy + correctness).
     val eventSession = obj["sessionKey"]?.asStringOrNull()
-    val activeSession = mainSessionKey.ifBlank { "main" }
-    if (eventSession != null && eventSession != activeSession) return
-
+    // Consults use the acknowledged agent target, which can differ from the
+    // voice key. Ordinary chat keeps its session privacy filter below.
     if (
       realtimeAgentCoordinator.handleChatEvent(
         sessionKey = eventSession,
@@ -1221,17 +1226,23 @@ class TalkModeManager internal constructor(
 
   private fun realtimeCloseStatus(reason: String?): TalkStatus =
     when (reason) {
-      null, "completed" -> TalkStatus(text = nativeText("Off"), state = TalkStatusState.Off)
-      "error" ->
+      null, "completed" -> {
+        TalkStatus(text = nativeText("Off"), state = TalkStatusState.Off)
+      }
+
+      "error" -> {
         TalkStatus(
           text = nativeText("Talk failed: Realtime provider closed unexpectedly."),
           state = TalkStatusState.TalkFailure,
         )
-      else ->
+      }
+
+      else -> {
         TalkStatus(
           text = nativeText("Talk failed: Realtime provider closed: \$reason", reason),
           state = TalkStatusState.TalkFailure,
         )
+      }
     }
 
   /** Caller holds [realtimeCapturePauseLock] so PTT cannot miss newly installed jobs. */
@@ -1333,6 +1344,7 @@ class TalkModeManager internal constructor(
         _isListening.value = true
         setStatus(nativeText("Listening"))
       }
+
       "inputAudio" -> {
         synchronized(realtimeCapturePauseLock) {
           if (realtimeCapturePause != null) return
@@ -1342,6 +1354,7 @@ class TalkModeManager internal constructor(
         }
         _isListening.value = true
       }
+
       "audio" -> {
         if (realtimeOutputSuppressed) return
         val turnId = obj["talkEvent"].asObjectOrNull()?.get("turnId").asStringOrNull() ?: return
@@ -1358,6 +1371,7 @@ class TalkModeManager internal constructor(
           }
         playRealtimeAudio(bytes)
       }
+
       "clear" -> {
         val turnId = obj["talkEvent"].asObjectOrNull()?.get("turnId").asStringOrNull()
         val activeTurnId = realtimeOutputTurnId
@@ -1368,10 +1382,12 @@ class TalkModeManager internal constructor(
         acknowledgeRealtimePlaybackMarks(marks)
         pendingRealtimeOutputClear?.complete(turnId)
       }
+
       "mark" -> {
         val markName = obj["markName"].asStringOrNull()?.trim()?.takeIf(String::isNotEmpty) ?: return
         queueRealtimePlaybackMark(sessionId, markName)
       }
+
       "transcript" -> {
         val role = obj["role"].asStringOrNull()
         val isFinal = obj["final"].asBooleanOrNull() == true
@@ -1384,7 +1400,10 @@ class TalkModeManager internal constructor(
         var assistantText: String? = null
         if (text != null) {
           when (role) {
-            "user" -> upsertRealtimeConversation(VoiceConversationRole.User, text, isFinal)
+            "user" -> {
+              upsertRealtimeConversation(VoiceConversationRole.User, text, isFinal)
+            }
+
             "assistant" -> {
               finishRealtimeConversationEntry(VoiceConversationRole.User)
               assistantText = upsertRealtimeConversation(VoiceConversationRole.Assistant, text, isFinal)
@@ -1400,6 +1419,7 @@ class TalkModeManager internal constructor(
           scheduleRealtimePlaybackIdle()
         }
       }
+
       "toolCall" -> {
         val callId = obj["callId"].asStringOrNull() ?: return
         val name = obj["name"].asStringOrNull() ?: return
@@ -1410,12 +1430,15 @@ class TalkModeManager internal constructor(
           forced = obj["forced"].asBooleanOrNull() == true,
         )
       }
-      "toolResult" -> Unit
+
+      "toolResult" -> {}
+
       "error" -> {
         val message = obj["message"].asStringOrNull() ?: "realtime talk error"
         setTalkFailure(nativeText("Talk failed: \$message", message))
         Log.w(tag, "realtime error: $message")
       }
+
       "close" -> {
         val closeReason = obj["reason"].asStringOrNull()?.trim()?.takeIf(String::isNotEmpty)
         val closeStatus =
@@ -1428,6 +1451,7 @@ class TalkModeManager internal constructor(
           onStoppedByRelay()
         }
       }
+
       else -> {
         if (type != null) Log.d(tag, "ignored realtime event type=$type")
       }
@@ -1491,7 +1515,10 @@ class TalkModeManager internal constructor(
                       Log.w(tag, "realtime audio playback failed: ${err.message ?: err::class.java.simpleName}")
                     }
                   }
-                  is RealtimePlaybackItem.Mark -> prepareRealtimePlaybackMark(item.name)
+
+                  is RealtimePlaybackItem.Mark -> {
+                    prepareRealtimePlaybackMark(item.name)
+                  }
                 }
               }
             }
@@ -1800,9 +1827,18 @@ class TalkModeManager internal constructor(
         RealtimeCaptureResume.Resumed
       }
     when (outcome) {
-      RealtimeCaptureResume.Skipped -> return
-      RealtimeCaptureResume.Resumed -> return
-      RealtimeCaptureResume.Restart -> start()
+      RealtimeCaptureResume.Skipped -> {
+        return
+      }
+
+      RealtimeCaptureResume.Resumed -> {
+        return
+      }
+
+      RealtimeCaptureResume.Restart -> {
+        start()
+      }
+
       RealtimeCaptureResume.Disconnected -> {
         setStatus(nativeText("Gateway not connected"))
         stopRealtimeRelay(preserveStatus = true)
@@ -1866,7 +1902,10 @@ class TalkModeManager internal constructor(
         realtimeUserEntryAwaitingFinal = false
         realtimeUserEntryAwaitingFinalStartedAtMs = null
       }
-      VoiceConversationRole.Assistant -> realtimeAssistantEntryId = if (isFinal) null else resolvedEntryId
+
+      VoiceConversationRole.Assistant -> {
+        realtimeAssistantEntryId = if (isFinal) null else resolvedEntryId
+      }
     }
     return resolvedText
   }
@@ -2063,11 +2102,17 @@ class TalkModeManager internal constructor(
       try {
         val rung =
           when (candidate) {
-            PushToTalkRecognitionCandidate.RawAudioSegmented ->
+            PushToTalkRecognitionCandidate.RawAudioSegmented -> {
               PushToTalkRecognitionRung.RawAudioSegmented(openPushToTalkAudioSource())
-            PushToTalkRecognitionCandidate.SilenceSegmented -> PushToTalkRecognitionRung.SilenceSegmented
-            PushToTalkRecognitionCandidate.RestartingSingleSession ->
+            }
+
+            PushToTalkRecognitionCandidate.SilenceSegmented -> {
+              PushToTalkRecognitionRung.SilenceSegmented
+            }
+
+            PushToTalkRecognitionCandidate.RestartingSingleSession -> {
               PushToTalkRecognitionRung.RestartingSingleSession
+            }
           }
         pttRecognitionRung = rung
         recognizerInstance.startListening(pushToTalkRecognizerIntent(rung))
@@ -2091,10 +2136,12 @@ class TalkModeManager internal constructor(
       putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 3)
       putExtra(RecognizerIntent.EXTRA_CALLING_PACKAGE, context.packageName)
       when (rung) {
-        is PushToTalkRecognitionRung.RawAudioSegmented ->
+        is PushToTalkRecognitionRung.RawAudioSegmented -> {
           if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             applyRawAudioSegmentedExtras(this, rung.source)
           }
+        }
+
         PushToTalkRecognitionRung.SilenceSegmented -> {
           putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 2500)
           putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, 1800)
@@ -2102,6 +2149,7 @@ class TalkModeManager internal constructor(
             applySilenceSegmentedExtras(this)
           }
         }
+
         PushToTalkRecognitionRung.RestartingSingleSession -> {
           putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 2500)
           putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, 1800)
@@ -2198,20 +2246,25 @@ class TalkModeManager internal constructor(
     val rung = pttRecognitionRung ?: return
     val firstCandidate =
       when (rung) {
-        is PushToTalkRecognitionRung.RawAudioSegmented ->
+        is PushToTalkRecognitionRung.RawAudioSegmented -> {
           if (advanceRung) {
             PushToTalkRecognitionCandidate.SilenceSegmented
           } else {
             PushToTalkRecognitionCandidate.RawAudioSegmented
           }
-        PushToTalkRecognitionRung.SilenceSegmented ->
+        }
+
+        PushToTalkRecognitionRung.SilenceSegmented -> {
           if (advanceRung) {
             PushToTalkRecognitionCandidate.RestartingSingleSession
           } else {
             PushToTalkRecognitionCandidate.SilenceSegmented
           }
-        PushToTalkRecognitionRung.RestartingSingleSession ->
+        }
+
+        PushToTalkRecognitionRung.RestartingSingleSession -> {
           PushToTalkRecognitionCandidate.RestartingSingleSession
+        }
       }
     commitPushToTalkLivePartial()
     closePushToTalkRung()
@@ -2465,9 +2518,12 @@ class TalkModeManager internal constructor(
         // forces its endpointer; for pipe-consuming services it is redundant after EOF.
         runCatching { recognizer?.stopListening() }.onFailure { completion.complete(Unit) }
       }
+
       PushToTalkRecognitionRung.SilenceSegmented,
       PushToTalkRecognitionRung.RestartingSingleSession,
-      -> runCatching { recognizer?.stopListening() }.onFailure { completion.complete(Unit) }
+      -> {
+        runCatching { recognizer?.stopListening() }.onFailure { completion.complete(Unit) }
+      }
     }
     awaitPushToTalkReleaseCompletion(completion, pushToTalkReleaseGraceMs)
     if (pttReleaseCompletion === completion) {
@@ -2761,6 +2817,7 @@ class TalkModeManager internal constructor(
             ensurePlaybackActive(playbackToken)
             Log.d(tag, "talk.speak ok durMs=${SystemClock.elapsedRealtime() - started}")
           }
+
           is TalkSpeakResult.FallbackToLocal -> {
             Log.d(tag, "talk.speak unavailable; using local TTS: ${result.message}")
             ensurePlaybackActive(playbackToken)
@@ -2773,7 +2830,10 @@ class TalkModeManager internal constructor(
             ensurePlaybackActive(playbackToken)
             Log.d(tag, "system tts ok durMs=${SystemClock.elapsedRealtime() - started}")
           }
-          is TalkSpeakResult.Failure -> throw IllegalStateException(result.message)
+
+          is TalkSpeakResult.Failure -> {
+            throw IllegalStateException(result.message)
+          }
         }
       } catch (err: Throwable) {
         if (isPlaybackCancelled(err, playbackToken)) {
@@ -3115,14 +3175,21 @@ class TalkModeManager internal constructor(
         setStatus(
           when (error) {
             SpeechRecognizer.ERROR_AUDIO -> nativeText("Audio error")
+
             SpeechRecognizer.ERROR_CLIENT -> nativeText("Client error")
+
             SpeechRecognizer.ERROR_NETWORK -> nativeText("Network error")
+
             SpeechRecognizer.ERROR_NETWORK_TIMEOUT -> nativeText("Network timeout")
+
             SpeechRecognizer.ERROR_NO_MATCH,
             SpeechRecognizer.ERROR_SPEECH_TIMEOUT,
             -> if (pushToTalkActive) nativeText("Listening (PTT)") else nativeText("Listening")
+
             SpeechRecognizer.ERROR_RECOGNIZER_BUSY -> nativeText("Recognizer busy")
+
             SpeechRecognizer.ERROR_SERVER -> nativeText("Server error")
+
             else -> nativeText("Speech error (\$error)", error)
           },
         )
@@ -3207,6 +3274,7 @@ internal fun requireAcceptedRealtimeOutputCancellation(
     "stale",
     "idle",
     -> Unit
+
     else -> error("unknown talk.session.cancelOutput status")
   }
   check(turnId == null || result.turnId == null || result.turnId == turnId) {

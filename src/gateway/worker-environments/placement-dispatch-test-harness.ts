@@ -63,6 +63,7 @@ export function createHarness(
     terminalizedReclaimError?: Error;
     environmentGeneration?: number;
     failMoveAfterBegin?: boolean;
+    runMoveBarrier?: Parameters<typeof createWorkerPlacementDispatchService>[0]["runMoveBarrier"];
     recoveryBarrierError?: Error;
     prepareAcceptedWorkspacePublication?: Parameters<
       typeof createWorkerPlacementDispatchService
@@ -122,13 +123,6 @@ export function createHarness(
     closeWorkerTurnToolState: (claim) => placementStore.closeWorkerTurnToolState(claim),
     beginPlacementMove: (params) => {
       const begun = placementStore.beginPlacementMove(params);
-      if (!begun.joined) {
-        log.push("placement:draining");
-      }
-      return begun;
-    },
-    preparePlacementMove: async (params, prepareNew) => {
-      const begun = await placementStore.preparePlacementMove(params, prepareNew);
       if (!begun.joined) {
         log.push("placement:draining");
       }
@@ -430,20 +424,22 @@ export function createHarness(
       fail("activation");
       return activate();
     },
-    runMoveBarrier: async ({ authorize, begin }) => {
-      authorize?.();
-      const begun = await begin(async (runId) => {
-        if (options.beforeMoveBegin) {
-          await options.beforeMoveBegin({ runId });
-          authorize?.();
+    runMoveBarrier:
+      options.runMoveBarrier ??
+      (async ({ authorize, begin }) => {
+        authorize?.();
+        const begun = await begin(async (runId) => {
+          if (options.beforeMoveBegin) {
+            await options.beforeMoveBegin({ runId });
+            authorize?.();
+          }
+        });
+        options.afterMoveBegin?.();
+        if (options.failMoveAfterBegin) {
+          throw new Error("move barrier interrupted");
         }
-      });
-      options.afterMoveBegin?.();
-      if (options.failMoveAfterBegin) {
-        throw new Error("move barrier interrupted");
-      }
-      return begun;
-    },
+        return begun;
+      }),
     resolveMoveDestination: async (_identity, target) =>
       target.kind === "gateway"
         ? undefined

@@ -78,7 +78,7 @@ import {
   storedChatOutboxScopeKey,
   updateStoredChatComposerQueueItem,
 } from "./composer-persistence.ts";
-import { getChatSessionProjection, setChatSessionProjection } from "./history-merge.ts";
+import { getChatSessionProjection, publishChatSessionProjection } from "./history-merge.ts";
 import { handleChatInputHistoryKey } from "./input-history.ts";
 import { installOutboxBrowserStorage } from "./outbox-browser.test-support.ts";
 import { prepareOutboxPayload } from "./outbox-payloads.ts";
@@ -1168,6 +1168,12 @@ describe("refreshChat", () => {
         ...(workRefresh === "none" ? { contextTokens: 1500, label: "History Work label" } : {}),
       };
       pendingHistory.resolve({
+        defaults: {
+          contextTokens: null,
+          model: "model-old",
+          modelProvider: "test",
+          modelSelectionTarget: "agent",
+        },
         messages: [{ role: "assistant", content: "History really applied" }],
         sessionInfo: historyRow,
       });
@@ -1183,6 +1189,10 @@ describe("refreshChat", () => {
       expect(sessions.canonicalListRevision).toBeGreaterThan(issuedRevision);
       if (moveRoster) {
         expect(sessions.state.result?.sessions[0]).toEqual(mainRow);
+        expect(
+          expectDefined<SessionsListResult>(state.sessionsResult, "work session result").defaults
+            .modelSelectionTarget,
+        ).toBe("agent");
       }
       expect(afterResolution).toMatchObject(workRefresh === "updated" ? newerWork : historyRow);
     } finally {
@@ -2231,20 +2241,17 @@ describe("handleSendChat", () => {
             const payload = requireRecord(params, "terminal chat send payload");
             rejectedRunId = String(payload.idempotencyKey);
             const scope = { sessionKey: host.sessionKey };
-            const projection = reduceSessionProjection(
-              getChatSessionProjection(host, host.chatMessages, scope),
-              {
-                type: "sendPending",
-                runId: rejectedRunId,
-                message: {
-                  role: "user",
-                  content: [{ type: "text", text: "same visible message" }],
-                  __openclaw: { idempotencyKey: `${rejectedRunId}:user` },
-                },
-                scope,
+            const projection = reduceSessionProjection(getChatSessionProjection(host, scope), {
+              type: "sendPending",
+              runId: rejectedRunId,
+              message: {
+                role: "user",
+                content: [{ type: "text", text: "same visible message" }],
+                __openclaw: { idempotencyKey: `${rejectedRunId}:user` },
               },
-            );
-            setChatSessionProjection(host, projection);
+              scope,
+            });
+            publishChatSessionProjection(host, projection);
             host.chatMessages = [...projection.messages];
             return { runId: rejectedRunId, status };
           },
@@ -2265,7 +2272,7 @@ describe("handleSendChat", () => {
         sendState: "failed",
       });
       expect(
-        getChatSessionProjection(host, host.chatMessages, { sessionKey: host.sessionKey }).entries,
+        getChatSessionProjection(host, { sessionKey: host.sessionKey }).entries,
       ).not.toContainEqual(expect.objectContaining({ pendingRunId: rejectedRunId }));
     },
   );
@@ -6023,6 +6030,7 @@ describe("handleSendChat", () => {
     const inactive = makeChatHost({
       chatQueue: [],
       client,
+      chatSubmissions: visible.chatSubmissions,
       sessionKey: "agent:main:inactive",
     });
     for (const host of [visible, inactive]) {
@@ -6130,7 +6138,11 @@ describe("handleSendChat", () => {
             ? expectDefined(source.client, "live client")
             : clientWithRequest(request);
         const visible = handoff === "live" ? source : makeChatHost({ client, sessionKey });
-        const inactive = makeChatHost({ client, sessionKey: "agent:main:inactive" });
+        const inactive = makeChatHost({
+          client,
+          chatSubmissions: visible.chatSubmissions,
+          sessionKey: "agent:main:inactive",
+        });
         for (const host of [visible, inactive]) {
           Object.assign(host, {
             chatMessagesBySession: new Map(),
@@ -6782,7 +6794,9 @@ describe("handleSendChat", () => {
     const reentry = handleSendChat(host, "same prompt", undefined, firstAction);
     const second = handleSendChat(host, "same prompt", undefined, secondAction);
 
-    expect(host.request.mock.calls.filter(([method]) => method === "chat.send")).toHaveLength(1);
+    await waitForFast(() =>
+      expect(host.request.mock.calls.filter(([method]) => method === "chat.send")).toHaveLength(1),
+    );
     expect(host.chatQueue).toHaveLength(2);
     expect(host.chatQueue.map((item) => item.text)).toEqual(["same prompt", "same prompt"]);
 
@@ -9002,6 +9016,7 @@ describe("handleSendChat", () => {
               ],
               total: 1,
             },
+            inputReceipts: [{ runId: "accepted-source", state: "pending" }],
           };
         },
       },
@@ -9089,10 +9104,16 @@ describe("handleSendChat", () => {
             sessionId: recovery === "replacement session" ? "replacement" : source.sessionId,
             messages: [aggregate],
             pendingInputs: { items: [], total: 0 },
-            inputConsumptions:
+            inputReceipts:
               recovery === "ok replay" && !replayed
                 ? []
-                : [{ runId: source.sendRunId, consumedByEventId: "aggregate" }],
+                : [
+                    {
+                      runId: source.sendRunId,
+                      state: "consumed",
+                      consumedByEventId: "aggregate",
+                    },
+                  ],
             sessionInfo: row(source.sessionKey, {
               sessionId: recovery === "replacement session" ? "replacement" : source.sessionId,
               hasActiveRun: false,

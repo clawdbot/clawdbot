@@ -90,6 +90,7 @@ class RoomChatTranscriptCacheTest {
           val text = if (++historyRequests == 1) "history A" else "history B"
           historyResponse("session-1", listOf(ReplayHistoryMessage("assistant", text, historyRequests.toLong())))
         }
+
         "health" -> {
           if (++healthRequests == 1) {
             healthStarted?.complete(Unit)
@@ -97,8 +98,14 @@ class RoomChatTranscriptCacheTest {
           }
           "{}"
         }
-        "sessions.list" -> """{"sessions":[{"key":"main"},{"key":"other"}]}"""
-        else -> "{}"
+
+        "sessions.list" -> {
+          """{"sessions":[{"key":"main"},{"key":"other"}]}"""
+        }
+
+        else -> {
+          "{}"
+        }
       }
     }
   }

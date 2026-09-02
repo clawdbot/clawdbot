@@ -1,4 +1,3 @@
-import { randomBytes } from "node:crypto";
 import { once } from "node:events";
 import { mkdir, mkdtemp, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
 import { createServer, type Server } from "node:http";
@@ -7,7 +6,6 @@ import path from "node:path";
 import { PassThrough } from "node:stream";
 import { rawDataToString } from "@openclaw/gateway-client/websocket-data";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import sharp from "sharp";
 import { Type } from "typebox";
 import { Value } from "typebox/value";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -1170,13 +1168,7 @@ describe("worker runtime", () => {
   it.each([false, true])(
     "keeps desktop images through RPC, transcript, and inference before closing (cleanup failure: %s)",
     async (computerCleanupFailure) => {
-      const computerSnapshot = (
-        await sharp(randomBytes(512 * 512 * 3), {
-          raw: { width: 512, height: 512, channels: 3 },
-        })
-          .png()
-          .toBuffer()
-      ).toString("base64");
+      const computerSnapshot = createNoisyPngBuffer(512, 512).toString("base64");
       expect(computerSnapshot.length).toBeGreaterThan(64 * 1024);
       const { gateway, launch } = await setup({
         inferencePlans: ["computer", "text"],

@@ -14,7 +14,10 @@ import { buildCachedChatItems } from "../chat-thread.ts";
 import { agentEvent, createHost } from "../tool-stream.test-helpers.ts";
 import { handleAgentEvent } from "../tool-stream.ts";
 import { renderChatNotice } from "./chat-divider.ts";
-import { getChatMediaRenderVersion } from "./chat-message-media.ts";
+import {
+  getChatMediaRenderVersion,
+  releaseChatMediaResourceSubscriber,
+} from "./chat-message-media.ts";
 import {
   dismissConfirmedActionPopovers,
   renderActivityGroup,
@@ -26,13 +29,16 @@ import { renderTurnRecapRow } from "./chat-working-indicator.ts";
 import "./chat-sidebar.ts";
 
 const localStorageValues = new Map<string, string>();
+const mediaSubscribers = new Set<() => void>();
 const renderMarkdownHtml = markdown.toSanitizedMarkdownHtml;
 const markdownRenderMock = vi.fn(
   (value: string, _options?: { codeBlockChrome?: "copy" | "none"; fileLinks?: boolean }) => value,
 );
 const streamingMarkdownRenderMock = vi.fn(
-  (value: string, _options?: { codeBlockChrome?: "copy" | "none"; fileLinks?: boolean }) =>
-    `<div class="streaming-markdown">${value}</div>`,
+  (
+    value: string,
+    _options?: { codeBlockChrome?: "copy" | "none"; fileLinks?: boolean },
+  ): [string, string] => ["", `<div class="streaming-markdown">${value}</div>`],
 );
 
 function getSafeLocalStorageMock(): Storage {
@@ -84,7 +90,7 @@ function pointerClick(element: Element) {
 beforeEach(() => {
   vi.spyOn(localStorageModule, "getSafeLocalStorage").mockImplementation(getSafeLocalStorageMock);
   vi.spyOn(markdown, "toSanitizedMarkdownHtml").mockImplementation(markdownRenderMock);
-  vi.spyOn(markdown, "toStreamingMarkdownHtml").mockImplementation(streamingMarkdownRenderMock);
+  vi.spyOn(markdown, "toStreamingMarkdownParts").mockImplementation(streamingMarkdownRenderMock);
   vi.spyOn(chatAvatar, "renderChatAvatar").mockImplementation(renderChatAvatarMock);
 });
 
@@ -214,6 +220,9 @@ function renderTestMessageGroup(
   group: MessageGroup,
   opts: Partial<RenderMessageGroupOptions> = {},
 ) {
+  if (opts.onRequestUpdate) {
+    mediaSubscribers.add(opts.onRequestUpdate);
+  }
   return renderMessageGroup(group, {
     showReasoning: true,
     showToolCalls: true,
@@ -656,6 +665,11 @@ function mediaTicketPayload(mediaTicket: string, ttlMs = 5 * 60 * 1000) {
 }
 
 afterEach(() => {
+  // These detached render fixtures own the callbacks a live chat pane normally releases.
+  for (const subscriber of mediaSubscribers) {
+    releaseChatMediaResourceSubscriber(subscriber);
+  }
+  mediaSubscribers.clear();
   markdownRenderMock.mockClear();
   document.querySelectorAll("[data-confirmed-action-fixture]").forEach((element) => {
     dismissConfirmedActionPopovers(element);
@@ -1175,7 +1189,7 @@ describe("grouped chat rendering", () => {
     expect(onRewind).toHaveBeenCalledTimes(1);
   });
 
-  it("disables rewind while the agent is working", () => {
+  it("hides rewind while the agent is working", () => {
     const container = document.createElement("div");
     renderMessageGroups(
       container,
@@ -1183,10 +1197,7 @@ describe("grouped chat rendering", () => {
       { onRewind: vi.fn(), rewindDisabled: true },
     );
 
-    const button = container.querySelector<HTMLButtonElement>(".chat-group-rewind");
-    const tooltip = button?.closest("openclaw-tooltip");
-    expect(button?.disabled).toBe(true);
-    expect(tooltip?.content).toBe("Rewind is unavailable while the agent is working");
+    expect(container.querySelector(".chat-group-rewind")).toBeNull();
   });
 
   it.each([

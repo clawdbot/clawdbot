@@ -134,15 +134,20 @@ suite.define(() => {
 
         await captureProof(page, "hovercard-identity-rest.png");
         const trigger = row.locator("a.sidebar-recent-session__link");
-        const identity = card.locator("a.session-hovercard__identity-name");
-        const participant = card.locator("a.session-hovercard__participant-name");
+        const identity = card.locator("a.session-hovercard__attribution-name");
+        const participant = card.locator("openclaw-viewer-facepile a.person-activity-avatar-link");
         await expect.poll(() => identity.textContent()).toBe("Ada King");
         expect(await identity.getAttribute("href")).toBe("/activity?person=profile-ada");
-        // The locale's own "with {name}" phrasing survives per-name linking.
         await expect
-          .poll(() => card.locator(".session-hovercard__participants").textContent())
-          .toContain("with Mira");
-        expect(await participant.textContent()).toBe("Mira");
+          .poll(async () =>
+            (await card.locator(".session-hovercard__attribution-copy").textContent())
+              ?.replace(/\s+/gu, " ")
+              .trim(),
+          )
+          .toBe("Ada King & 1 other");
+        await expect
+          .poll(() => participant.locator(".viewer-avatar").getAttribute("aria-label"))
+          .toBe("Mira");
         expect(await participant.getAttribute("href")).toBe("/activity?person=profile-mira");
         await identity.hover();
         expect(
@@ -150,9 +155,6 @@ suite.define(() => {
         ).toBe("underline");
         await captureProof(page, "hovercard-identity-link.png");
         await participant.hover();
-        expect(
-          await participant.evaluate((element) => getComputedStyle(element).textDecorationLine),
-        ).toBe("underline");
         await captureProof(page, "hovercard-participant-link.png");
 
         // The decorative avatar link stays out of the tab order; the name link is the target.

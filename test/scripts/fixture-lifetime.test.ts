@@ -16,7 +16,7 @@ it("cleans independent roots after a removal failure and retries the retained ro
   const second = lifetime.createTempDir("fixture-lifetime-independent-");
   const failure = Object.assign(new Error("fixture directory busy"), { code: "EBUSY" });
   const remove = fs.rmSync;
-  const removal = vi.spyOn(fs, "rmSync").mockImplementation((root, options) => {
+  const removal = vi.spyOn(fs.promises, "rm").mockImplementation(async (root, options) => {
     if (root === first) {
       throw failure;
     }

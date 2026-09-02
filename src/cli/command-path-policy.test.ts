@@ -1,6 +1,6 @@
 // Command path policy tests cover allowed CLI command path shapes and lazy imports.
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { CliCommandCatalogEntry, CliCommandPathPolicy } from "./command-catalog.js";
 import {
   resolveCliCommandPathPolicy,
@@ -9,6 +9,7 @@ import {
 
 const DEFAULT_EXPECTED_POLICY: CliCommandPathPolicy = {
   configGuard: "run",
+  stateStoreGuard: "skip",
   loadPlugins: "never",
   pluginRegistry: { scope: "all" },
   ownsProtocolStdout: false,
@@ -59,9 +60,23 @@ function expectConfigGuardResolver(
 }
 
 describe("command-path-policy", () => {
-  afterEach(() => {
-    vi.doUnmock("./command-catalog.js");
-    vi.resetModules();
+  it.each([
+    { commandPath: ["configure"] },
+    { commandPath: ["models", "auth"] },
+    { commandPath: ["models", "auth", "paste-token"] },
+    { commandPath: ["channels", "add"] },
+    { commandPath: ["channels", "login"] },
+  ])("guards local state writes for $commandPath", ({ commandPath }) => {
+    expect(resolveCliCommandPathPolicy(commandPath).stateStoreGuard).toBe("run");
+  });
+
+  it.each([
+    { commandPath: ["models", "list"] },
+    { commandPath: ["channels", "status"] },
+    { commandPath: ["config", "set"] },
+    { commandPath: ["onboard"] },
+  ])("does not broaden the state-store guard to $commandPath", ({ commandPath }) => {
+    expect(resolveCliCommandPathPolicy(commandPath).stateStoreGuard).toBe("skip");
   });
 
   it("resolves status policy with shared startup semantics", () => {
@@ -155,6 +170,7 @@ describe("command-path-policy", () => {
       pluginRegistry: { scope: "configured-channels" },
     });
     expectResolvedPolicy(["channels", "login"], {
+      stateStoreGuard: "run",
       loadPlugins: "always",
       pluginRegistry: { scope: "configured-channels" },
     });
@@ -163,6 +179,7 @@ describe("command-path-policy", () => {
       pluginRegistry: { scope: "configured-channels" },
     });
     expectResolvedPolicy(["channels", "add"], {
+      stateStoreGuard: "run",
       loadPlugins: "never",
       pluginRegistry: { scope: "configured-channels" },
       networkProxy: "bypass",
@@ -384,6 +401,7 @@ describe("command-path-policy", () => {
     });
     expectResolvedPolicy(["configure"], {
       configGuard: "skip",
+      stateStoreGuard: "run",
       loadPlugins: "never",
     });
     expectResolvedPolicy(["config"], {
@@ -610,22 +628,28 @@ describe("command-path-policy", () => {
       },
     ];
 
-    vi.doMock("./command-catalog.js", async (importOriginal) => {
-      const actual = await importOriginal<typeof import("./command-catalog.js")>();
-      return { ...actual, cliCommandCatalog: catalog };
-    });
-    const { resolveCliNetworkProxyPolicy: resolveCliNetworkProxyPolicyLocal } =
-      await importFreshModule<typeof import("./command-path-policy.js")>(
-        import.meta.url,
-        "./command-path-policy.js?catalog-overrides",
-      );
+    vi.resetModules();
+    try {
+      vi.doMock("./command-catalog.js", async (importOriginal) => {
+        const actual = await importOriginal<typeof import("./command-catalog.js")>();
+        return { ...actual, cliCommandCatalog: catalog };
+      });
+      const { resolveCliNetworkProxyPolicy: resolveCliNetworkProxyPolicyLocal } =
+        await importFreshModule<typeof import("./command-path-policy.js")>(
+          import.meta.url,
+          "./command-path-policy.js?catalog-overrides",
+        );
 
-    expect(resolveCliNetworkProxyPolicyLocal(["node", "openclaw", "nodes", "camera", "snap"])).toBe(
-      "default",
-    );
-    expect(resolveCliNetworkProxyPolicyLocal(["node", "openclaw", "nodes", "camera", "list"])).toBe(
-      "bypass",
-    );
+      expect(
+        resolveCliNetworkProxyPolicyLocal(["node", "openclaw", "nodes", "camera", "snap"]),
+      ).toBe("default");
+      expect(
+        resolveCliNetworkProxyPolicyLocal(["node", "openclaw", "nodes", "camera", "list"]),
+      ).toBe("bypass");
+    } finally {
+      vi.doUnmock("./command-catalog.js");
+      vi.resetModules();
+    }
   });
 
   it("stops catalog policy resolution before positional arguments", () => {
