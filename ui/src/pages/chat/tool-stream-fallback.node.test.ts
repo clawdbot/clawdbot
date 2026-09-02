@@ -649,6 +649,55 @@ describe("app-tool-stream fallback lifecycle handling", () => {
     expect(host.fallbackStatus).toBeNull();
   });
 
+  it.each([
+    { phase: "start" },
+    { phase: "end", completed: true },
+    { phase: "end", completed: false },
+    { phase: "end", completed: true, willRetry: true },
+  ])("keeps newer compaction active after stale $phase event %j", (staleData) => {
+    useToolStreamFakeTimers();
+    const host = createHost();
+    handleAgentEvent(
+      host,
+      agentEvent("run-1", 1, "compaction", { phase: "start", itemId: "compact-1" }),
+    );
+    handleAgentEvent(
+      host,
+      agentEvent("run-1", 3, "compaction", { phase: "start", itemId: "compact-2" }),
+    );
+    handleAgentEvent(
+      host,
+      agentEvent("run-1", 2, "compaction", { ...staleData, itemId: "compact-1" }),
+    );
+    expect(host.compactionStatus).toMatchObject({ phase: "active", itemId: "compact-2" });
+
+    handleAgentEvent(
+      host,
+      agentEvent("run-1", 4, "compaction", {
+        phase: "end",
+        completed: true,
+        itemId: "compact-2",
+      }),
+    );
+    handleAgentEvent(
+      host,
+      agentEvent("run-1", 3, "compaction", { phase: "start", itemId: "compact-2" }),
+    );
+    expectCompactionCompleteAndRetained(host, "compact-2");
+
+    handleAgentEvent(
+      host,
+      agentEvent("run-2", 1, "compaction", { phase: "start", itemId: "compact-3" }),
+    );
+    expect(host.compactionStatus).toMatchObject({
+      phase: "active",
+      runId: "run-2",
+      itemId: "compact-3",
+    });
+    vi.advanceTimersByTime(5 * 60_000);
+    expect(host.compactionStatus).toBeNull();
+  });
+
   it("keeps compaction in retry-pending state until the matching lifecycle end", () => {
     useToolStreamFakeTimers();
     const host = createHost();
@@ -685,6 +734,7 @@ describe("app-tool-stream fallback lifecycle handling", () => {
     expect(host.compactionClearTimer).not.toBeNull();
 
     handleAgentEvent(host, agentEvent("run-2", 3, "lifecycle", { phase: "end" }));
+    handleAgentEvent(host, agentEvent("run-1", 1, "lifecycle", { phase: "end" }));
 
     expect(host.compactionStatus).toEqual({
       itemId: "compact-1",
