@@ -35,7 +35,6 @@ import {
 } from "./thread-fingerprints.js";
 import {
   CodexAdoptedThreadActiveError,
-  CodexRestrictedToolSurfaceAttestationError,
   CodexThreadBindingConflictError,
   CodexThreadStartRequestError,
 } from "./thread-lifecycle-errors.js";
@@ -205,21 +204,15 @@ export async function resumeExistingCodexThread(
       signal: params.signal,
     });
     if (restrictedToolSurface) {
-      try {
-        await lifecycleTiming.measure("restricted-tool-surface-mcp-attestation", () =>
-          attestCodexRestrictedToolSurfaceMcpServersDisabled(
-            params.client,
-            response.thread.id,
-            resumeParams.config,
-            params.signal,
-            provisionalAppIds.length > 0 ? [CODEX_APPS_MCP_SERVER_NAME] : [],
-          ),
-        );
-      } catch (error) {
-        context.assertResumeOwnership();
-        await abandonClient();
-        throw new CodexRestrictedToolSurfaceAttestationError(error);
-      }
+      await lifecycleTiming.measure("restricted-tool-surface-mcp-attestation", () =>
+        attestCodexRestrictedToolSurfaceMcpServersDisabled(
+          params.client,
+          response.thread.id,
+          resumeParams.config,
+          params.signal,
+          provisionalAppIds.length > 0 ? [CODEX_APPS_MCP_SERVER_NAME] : [],
+        ),
+      );
     }
     throwIfAborted();
     await refreshCodexThreadPolicy({
@@ -347,21 +340,14 @@ export async function resumeExistingCodexThread(
     ) {
       throw error;
     }
-    if (error instanceof CodexRestrictedToolSurfaceAttestationError) {
-      if (
-        !resumeBinding.pendingResumeConfiguration &&
-        resumeBinding.connectionScope !== "supervision"
-      ) {
-        await clearCurrentBinding("retiring a failed restricted-tool-surface attestation");
-      }
-      throw error;
-    }
     if (resumeResponseAccepted) {
       const handoffError =
         error instanceof CodexThreadPolicyHandoffError ||
         error instanceof CodexAppServerUnsafeSubscriptionError
           ? error
           : new CodexThreadPolicyHandoffError(policyOutcome, error);
+      // Resumed threads own native history. Release only this subscription;
+      // deleting a rejected thread would also erase its history and descendants.
       const subscriptionReleased = await unsubscribeCodexThreadBestEffort(params.client, {
         threadId: resumeBinding.threadId,
         timeoutMs: CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS,
@@ -507,8 +493,8 @@ export async function startFreshCodexThread(
   const provisionalAppIds = pluginThreadConfig?.provisionalAppIds;
   // A deny-by-default app becomes callable only under this exact thread's
   // allowlist. Never persist or run the thread before Codex confirms it.
-  if (provisionalAppIds?.length) {
-    try {
+  try {
+    if (provisionalAppIds?.length) {
       await lifecycleTiming.measure("plugin-app-attestation", () =>
         attestCodexPluginThreadApps({
           client: params.client,
@@ -517,25 +503,8 @@ export async function startFreshCodexThread(
           signal: params.signal,
         }),
       );
-    } catch (error) {
-      const cleanupConfirmed = await discardUnattestedCodexPluginThread({
-        client: params.client,
-        threadId: response.thread.id,
-        ephemeral: startParams.ephemeral === true,
-      });
-      if (!cleanupConfirmed) {
-        await (params.abandonClient ?? (() => closeCodexStartupClientBestEffort(params.client)))();
-        throw new CodexAppServerUnsafeSubscriptionError(
-          "Codex plugin app attestation cleanup failed",
-          { cause: error },
-        );
-      }
-      throw error;
     }
-  }
-  const rolloutPath = resolveCodexThreadRolloutPath(response.thread);
-  if (restrictedToolSurface) {
-    try {
+    if (restrictedToolSurface) {
       await lifecycleTiming.measure("restricted-tool-surface-mcp-attestation", () =>
         attestCodexRestrictedToolSurfaceMcpServersDisabled(
           params.client,
@@ -545,11 +514,22 @@ export async function startFreshCodexThread(
           provisionalAppIds?.length ? [CODEX_APPS_MCP_SERVER_NAME] : [],
         ),
       );
-    } catch (error) {
-      await (params.abandonClient ?? (() => closeCodexStartupClientBestEffort(params.client)))();
-      throw error;
     }
+  } catch (error) {
+    const cleanupConfirmed = await discardUnattestedCodexPluginThread({
+      client: params.client,
+      threadId: response.thread.id,
+      ephemeral: startParams.ephemeral === true,
+    });
+    if (!cleanupConfirmed) {
+      await (params.abandonClient ?? (() => closeCodexStartupClientBestEffort(params.client)))();
+      throw new CodexAppServerUnsafeSubscriptionError("Codex thread attestation cleanup failed", {
+        cause: error,
+      });
+    }
+    throw error;
   }
+  const rolloutPath = resolveCodexThreadRolloutPath(response.thread);
   try {
     throwIfAborted();
   } catch (error) {
