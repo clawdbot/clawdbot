@@ -18,15 +18,21 @@ import {
 import { createLazyRuntimeSurface } from "../shared/lazy-runtime.js";
 import {
   activatePluginRecordLifecycleEpoch,
+  capturePluginLifecycleAuthority,
   isPluginRecordLifecycleEpochActive,
   isPluginRegistryActivated,
   isPluginRegistryRetired,
   revokePluginRecordLifecycleEpoch,
 } from "./registry-lifecycle.js";
+import {
+  createLifecycleBoundPluginCronService,
+  type PluginRuntimeGatewayCronHostService,
+} from "./registry-runtime-gateway-cron.js";
 import type { PluginRegistryState } from "./registry-state.js";
 import type { PluginRecord } from "./registry-types.js";
 import {
   getGatewayContextResolver,
+  getPluginRuntimeGatewayRequestScope,
   withPluginRuntimePluginIdScope,
   withPluginRuntimePluginScope,
   withPluginRuntimeRegistryScope,
@@ -186,6 +192,19 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
         );
       }
     };
+    const resolveGatewayCronService = (
+      gateway: PluginRuntime["gateway"],
+    ): PluginRuntimeGatewayCronHostService | undefined => {
+      const bound = gateway.getCron?.();
+      if (bound) {
+        // SAFETY: The host runtime exposes this service only through the guarded facade below.
+        return bound as PluginRuntimeGatewayCronHostService;
+      }
+      const scope = getPluginRuntimeGatewayRequestScope();
+      const context = scope?.resolveGatewayContext?.() ?? scope?.context;
+      // SAFETY: Gateway owns this scheduler; plugins receive only the guarded facade below.
+      return context?.cron as PluginRuntimeGatewayCronHostService | undefined;
+    };
     const runtime = new Proxy(registryParams.runtime, {
       get(target, prop, receiver) {
         const runWithPluginScope = <T>(run: () => T): T => {
@@ -308,14 +327,29 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
           const gateway = getRuntimeProperty();
           return {
             isAvailable: () => runWithPluginScope(() => gateway.isAvailable()),
-            ...(gateway.getCron
-              ? {
-                  getCron: () => {
-                    assertTrustedPluginRuntime("getCron");
-                    return runWithPluginScope(() => gateway.getCron?.());
-                  },
+            getCron: () => {
+              assertTrustedPluginRuntime("getCron");
+              const record =
+                pluginRuntimeRecordById.get(pluginId) ??
+                registry.plugins.find((entry) => entry.id === pluginId);
+              const isActive = capturePluginLifecycleAuthority(registry, record, {
+                scopedRuntime: true,
+              });
+              if (!isActive || !runWithPluginScope(() => resolveGatewayCronService(gateway))) {
+                return undefined;
+              }
+              const assertActive = () => {
+                if (!isActive()) {
+                  throw new Error(
+                    "Gateway cron is unavailable because this plugin runtime has retired.",
+                  );
                 }
-              : {}),
+              };
+              return createLifecycleBoundPluginCronService({
+                assertActive,
+                resolveService: () => runWithPluginScope(() => resolveGatewayCronService(gateway)),
+              });
+            },
             request: async (method, params, options) => {
               const { assertGatewaySessionRequestOwned } = await loadSessionOwnership();
               return await runWithPluginScope(async () => {

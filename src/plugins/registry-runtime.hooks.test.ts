@@ -1,6 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
+import type { GatewayRequestContext } from "../gateway/server-methods/types.js";
+import { markPluginRegistryActive, markPluginRegistryRetired } from "./registry-lifecycle.js";
 import { createPluginRegistry } from "./registry.js";
-import { getPluginRuntimeGatewayRequestScope } from "./runtime/gateway-request-scope.js";
+import {
+  getPluginRuntimeGatewayRequestScope,
+  withPluginRuntimeGatewayContextResolver,
+} from "./runtime/gateway-request-scope.js";
 import { createPluginRuntime } from "./runtime/index.js";
 import type { PluginRuntime } from "./runtime/types.js";
 import { createPluginRecord } from "./status.test-fixtures.js";
@@ -38,6 +43,40 @@ describe("plugin runtime hook dispatch ownership", () => {
       'getCron is only available for trusted plugins in this release. Plugin "untrusted-cron" loaded with origin "workspace"',
     );
     expect(getCron).not.toHaveBeenCalled();
+  });
+
+  it("resolves scheduled Gateway cron scope and revokes its retained facade", async () => {
+    const list = vi.fn(async () => []);
+    const cron = {
+      list,
+      add: vi.fn(async () => ({})),
+      update: vi.fn(async () => ({})),
+      remove: vi.fn(async () => ({ removed: false })),
+      removeStaleJobFamily: vi.fn(async () => 0),
+    };
+    const builder = createPluginRegistry({
+      logger: { info() {}, warn() {}, error() {}, debug() {} },
+      runtime: createPluginRuntime(),
+      activateGlobalSideEffects: false,
+    });
+    const record = createPluginRecord({ id: "scheduled-memory", origin: "bundled" });
+    const api = builder.createApi(record, { config: {} });
+    builder.registry.plugins.push(record);
+    markPluginRegistryActive(builder.registry);
+
+    expect(api.runtime.gateway.getCron?.()).toBeUndefined();
+    let retained: ReturnType<NonNullable<PluginRuntime["gateway"]["getCron"]>>;
+    await withPluginRuntimeGatewayContextResolver(
+      () => ({ cron }) as unknown as GatewayRequestContext,
+      async () => {
+        retained = api.runtime.gateway.getCron?.();
+        await expect(retained?.list()).resolves.toEqual([]);
+      },
+    );
+
+    expect(list).toHaveBeenCalledTimes(1);
+    markPluginRegistryRetired(builder.registry);
+    await expect(retained?.list()).rejects.toThrow("plugin runtime has retired");
   });
 
   it.each([

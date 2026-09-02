@@ -1,5 +1,6 @@
 import { normalizeCronJobCreate, normalizeCronJobPatch } from "../cron/normalize.js";
 import type { PluginHookGatewayCronService } from "../plugins/hook-types.js";
+import type { PluginRuntimeGatewayCronHostService } from "../plugins/registry-runtime-gateway-cron.js";
 import type { GatewayCronServiceContract } from "./server-cron-contract.js";
 import type { GatewayContextResolver } from "./server-methods/types.js";
 
@@ -24,25 +25,36 @@ export function createGatewayPluginCronRuntime(
     // SAFETY: Gateway owns the concrete scheduler behind this narrow plugin facade.
     return cron as GatewayCronServiceContract;
   };
-  const service: PluginHookGatewayCronService = {
+  const composeCommitGuard = (commitGuard?: () => void) => () => {
+    assertActive();
+    commitGuard?.();
+  };
+  const service: PluginRuntimeGatewayCronHostService = {
     list: async (opts) => await resolveCron().list(opts),
-    add: async (input) => {
+    add: async (input, opts) => {
       const normalized = normalizeCronJobCreate(input);
       if (!normalized) {
         throw new Error("Gateway cron create input is invalid.");
       }
-      return await resolveCron().add(normalized, { commitGuard: assertActive });
+      return await resolveCron().add(normalized, {
+        commitGuard: composeCommitGuard(opts?.commitGuard),
+      });
     },
-    update: async (id, patch) => {
+    update: async (id, patch, opts) => {
       const normalized = normalizeCronJobPatch(patch);
       if (!normalized) {
         throw new Error("Gateway cron update input is invalid.");
       }
-      return await resolveCron().update(id, normalized, { commitGuard: assertActive });
+      return await resolveCron().update(id, normalized, {
+        commitGuard: composeCommitGuard(opts?.commitGuard),
+      });
     },
-    remove: async (id) => await resolveCron().remove(id, { commitGuard: assertActive }),
-    removeStaleJobFamily: async (family) =>
-      await resolveCron().removeStaleJobFamily(family, { commitGuard: assertActive }),
+    remove: async (id, opts) =>
+      await resolveCron().remove(id, { commitGuard: composeCommitGuard(opts?.commitGuard) }),
+    removeStaleJobFamily: async (family, opts) =>
+      await resolveCron().removeStaleJobFamily(family, {
+        commitGuard: composeCommitGuard(opts?.commitGuard),
+      }),
   };
   return {
     getService: () => (resolveGatewayContext?.()?.cron ? service : undefined),

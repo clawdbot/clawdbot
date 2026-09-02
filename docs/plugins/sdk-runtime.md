@@ -447,10 +447,10 @@ snapshots; OpenClaw owns all persistence and lifecycle coordination.
 
     `getCron?.()` is available only to bundled or trusted official plugins. It returns a
     lifecycle-revocable facade for the current Gateway cron service, intended for lifecycle work
-    that must survive a plugin hot reload. The accessor is absent outside the Gateway and returns
-    `undefined` after its runtime generation retires. Every `list`, `add`, `update`, `remove`, or
-    `removeStaleJobFamily` call rechecks that generation and fails if it has retired, including on
-    a handle retained from before reload. Resolve a fresh handle from the successor runtime rather
+    that must survive a plugin hot reload. The accessor returns `undefined` outside an active
+    Gateway context. Every `list`, `add`, `update`, `remove`, or `removeStaleJobFamily` call
+    rechecks its runtime generation and fails if that generation has retired, including on a
+    handle retained from before reload. Resolve a fresh handle from the successor runtime rather
     than retaining a `gateway_start` context in plugin-local state.
 
   </Accordion>
