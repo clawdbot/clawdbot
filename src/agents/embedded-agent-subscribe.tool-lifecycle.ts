@@ -30,6 +30,7 @@ export function createEmbeddedToolLifecycleRunner(
   ctx: EmbeddedAgentSubscribeContext,
 ): EmbeddedToolLifecycleRunner {
   return async <T>(toolParams: EmbeddedToolLifecycleParams<T>): Promise<T> => {
+    ctx.flushAssistantStream();
     await handleToolExecutionStart(ctx, {
       type: "tool_execution_start",
       toolName: toolParams.toolName,
@@ -75,6 +76,7 @@ async function finishToolLifecycle(
   toolParams: EmbeddedToolLifecycleParams<unknown>,
   outcome: { executionStarted: boolean; isError: boolean; result: unknown },
 ): Promise<ToolTerminal> {
+  ctx.flushAssistantStream();
   const terminal = await handleToolExecutionEnd(ctx, {
     type: "tool_execution_end",
     toolName: toolParams.toolName,

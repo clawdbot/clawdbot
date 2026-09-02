@@ -916,6 +916,9 @@ export const en: TranslationMap & {
     draft: "Draft",
     draftDescription: "Keep this session to yourself until you publish it",
     messagePlaceholder: "What should this session work on?",
+    titlePreparationDisclosure:
+      "When you pause, draft text is sent to your title provider to prepare a session name. Not used in incognito.",
+    preparedTitle: "Session name: {title}",
     dictate: "Dictate",
     readingAttachment: "Reading attachment",
     start: "Start session",
@@ -5117,6 +5120,7 @@ export const en: TranslationMap & {
   chat: {
     cloudWorkerFailed: "Runner failed: {error}",
     errorDetails: "Error details",
+    details: "Details",
     copyError: "Copy error",
     diskSpace: {
       warningTitle: "Cloud session disk space is low",

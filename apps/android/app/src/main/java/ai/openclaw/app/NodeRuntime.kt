@@ -3,6 +3,7 @@ package ai.openclaw.app
 import ai.openclaw.app.chat.AndroidClientDatabases
 import ai.openclaw.app.chat.BackgroundTask
 import ai.openclaw.app.chat.ChatActiveRunPresentation
+import ai.openclaw.app.chat.ChatAgentSessionSelectionOwner
 import ai.openclaw.app.chat.ChatCacheScope
 import ai.openclaw.app.chat.ChatCommandEntry
 import ai.openclaw.app.chat.ChatCommandOutbox
@@ -97,7 +98,6 @@ import ai.openclaw.app.node.resolveGatewayAccentArgb
 import ai.openclaw.app.node.resolveGatewayThemeFamily
 import ai.openclaw.app.node.resolveGatewayThemeMode
 import ai.openclaw.app.node.resolveProfileAccentArgb
-import ai.openclaw.app.node.resolvePublishedGatewayAccentArgb
 import ai.openclaw.app.systemagent.SystemAgentChatController
 import ai.openclaw.app.systemagent.SystemAgentChatState
 import ai.openclaw.app.systemagent.SystemAgentGatewayAccess
@@ -236,11 +236,6 @@ private val appearancePreferenceKeys = setOf("ui.theme", "ui.themeMode", "ui.acc
 private data class SessionCatalogProgressOwner(
   val progressId: String,
   val agentId: String?,
-)
-
-private data class ChatAgentSessionSelectionOwner(
-  val gatewayStableId: String?,
-  val agentId: String,
 )
 
 internal const val WEAR_AGENT_PULSE_PHONE_BUDGET_MILLIS = 8_000L
@@ -1347,8 +1342,6 @@ class NodeRuntime private constructor(
   // clear it so the newly connected gateway's canonical main agent wins again.
   @Volatile private var selectedChatAgentId: String? = null
   private val chatSelectionSeq = AtomicLong(0)
-  private val lastSelectedChatSessionByOwner =
-    ConcurrentHashMap<ChatAgentSessionSelectionOwner, String>()
   private val _cronStatus = MutableStateFlow(GatewayCronStatus(enabled = false, jobs = 0, nextWakeAtMs = null))
   val cronStatus: StateFlow<GatewayCronStatus> = _cronStatus.asStateFlow()
   private val _cronJobs = MutableStateFlow<List<GatewayCronJobSummary>>(emptyList())
@@ -2066,16 +2059,7 @@ class NodeRuntime private constructor(
   }
 
   private fun publishChatSessionDeletion(deletion: ChatSessionDeletion) {
-    synchronized(gatewayDataScopeLock) {
-      chatSelectionSeq.incrementAndGet()
-      lastSelectedChatSessionByOwner.remove(
-        ChatAgentSessionSelectionOwner(
-          gatewayStableId = deletion.gatewayId,
-          agentId = deletion.agentId,
-        ),
-        deletion.sessionKey,
-      )
-    }
+    synchronized(gatewayDataScopeLock) { chatSelectionSeq.incrementAndGet() }
     chatSessionDeletionListeners.values.forEach { listener -> listener(deletion) }
   }
 
@@ -5224,7 +5208,6 @@ class NodeRuntime private constructor(
     synchronized(gatewayDataScopeLock) {
       retirePendingChatSelection()
       chat.switchSession(sessionKey, ownerAgentId)
-      rememberSelectedChatSession(sessionKey, ownerAgentId)
     }
   }
 
@@ -5277,14 +5260,7 @@ class NodeRuntime private constructor(
       selectedMainSessionKey = mainSessionKey.value
     }
     scope.launch {
-      val candidates =
-        try {
-          chat.fetchSessionSelectionCandidates(normalizedAgentId)
-        } catch (err: CancellationException) {
-          throw err
-        } catch (_: Throwable) {
-          emptyList()
-        } ?: return@launch
+      val selection = chat.resolveSessionSelection(selectionOwner, selectedMainSessionKey) ?: return@launch
       // Validate and commit under the same owner lock as explicit selections.
       synchronized(gatewayDataScopeLock) {
         if (
@@ -5295,23 +5271,7 @@ class NodeRuntime private constructor(
         ) {
           return@launch
         }
-        val remembered = lastSelectedChatSessionByOwner[selectionOwner]
-        val target =
-          selectChatAgentSessionKey(
-            candidates = candidates,
-            agentId = normalizedAgentId,
-            rememberedSessionKey = remembered,
-            mainSessionKey = selectedMainSessionKey,
-          )
-        if (
-          remembered != null &&
-          candidates.none { entry -> entry.key == remembered && entry.archived != true }
-        ) {
-          lastSelectedChatSessionByOwner.remove(selectionOwner, remembered)
-        }
-        if (target != selectedMainSessionKey) {
-          chat.switchSession(target, normalizedAgentId)
-        }
+        chat.restoreSessionSelection(selectionOwner, selection, selectedMainSessionKey)
       }
     }
   }
@@ -5321,19 +5281,6 @@ class NodeRuntime private constructor(
       gatewayStableId = connectedEndpoint?.stableId ?: prefs.gatewayRegistry.activeStableId.value,
       agentId = agentId,
     )
-
-  private fun rememberSelectedChatSession(
-    sessionKey: String,
-    ownerAgentId: String?,
-  ) {
-    val key = sessionKey.trim().takeIf(String::isNotEmpty) ?: return
-    val agentId =
-      resolveAgentIdFromMainSessionKey(key)
-        ?: ownerAgentId?.trim()?.takeIf(String::isNotEmpty)
-        ?: selectedChatAgentId
-        ?: return
-    lastSelectedChatSessionByOwner[chatAgentSessionSelectionOwner(agentId)] = key
-  }
 
   suspend fun fetchChatSessionList(
     search: String?,
@@ -5455,9 +5402,9 @@ class NodeRuntime private constructor(
     if (event == GatewayEvent.VoicewakeChanged.rawValue) {
       applyVoiceWakeWords(payloadJson)
     }
-    if (event == GatewayEvent.UsersPrefsChanged.rawValue) {
-      // The gateway targets this event at connections bound to the caller's own
-      // profile; receipt means our profile appearance changed on another device.
+    if (event == "config.changed" || event == GatewayEvent.UsersPrefsChanged.rawValue) {
+      // Config changes invalidate the snapshot; profile changes are targeted by
+      // the gateway to connections bound to our own profile.
       scope.launch { refreshBrandingFromGateway() }
     }
     if (event == "sessions.catalog.host") {
@@ -6066,7 +6013,6 @@ class NodeRuntime private constructor(
             if (chatSelectionSeq.compareAndSet(selectionSeq, selectionSeq + 1)) {
               stopMessageSpeech()
               chat.switchSession(sessionKey, entry.agentId)
-              rememberSelectedChatSession(sessionKey, entry.agentId)
               opened = true
             }
           }
@@ -6205,6 +6151,10 @@ class NodeRuntime private constructor(
       val res = requestAppearancePreference(gatewayScope, lease, "config.get", "{}")
       val root = json.parseToJsonElement(res).asObjectOrNull()
       val config = root?.get("config").asObjectOrNull()
+      publishAppearancePreferences(gatewayScope, lease, refreshGeneration) {
+        // A profile lookup failure does not invalidate the configured Gateway fallback.
+        _gatewayAccentArgb.value = resolveGatewayAccentArgb(config)
+      }
       val profileRead = fetchProfileAppearancePreferences(gatewayScope, lease)
       if (profileRead is GatewayAppearancePreferencesRead.Unavailable) return
       val profile =
@@ -6248,7 +6198,6 @@ class NodeRuntime private constructor(
           )
         }
       }
-      val gatewayFallbackAccentArgb = resolveGatewayAccentArgb(config)
       val gatewayFallbackThemeFamily = resolveGatewayThemeFamily(config)
       val gatewayFallbackThemeMode = resolveGatewayThemeMode(config)
       publishAppearancePreferences(gatewayScope, lease, refreshGeneration) {
@@ -6271,18 +6220,12 @@ class NodeRuntime private constructor(
             expectedRevision = revisionSnapshot.getValue("ui.themeMode"),
           )
         }
-        val profileAccentFresh =
-          isFresh("ui.accent") &&
-            prefs.applyAppearanceAccentArgbFromGateway(
-              argb = profile?.accentArgb,
-              expectedRevision = revisionSnapshot.getValue("ui.accent"),
-            )
-        _gatewayAccentArgb.value =
-          resolvePublishedGatewayAccentArgb(
-            profileAccentArgb = profile?.accentArgb,
-            gatewayFallbackAccentArgb = gatewayFallbackAccentArgb,
-            profileAccentFresh = profileAccentFresh,
+        if (isFresh("ui.accent")) {
+          prefs.applyAppearanceAccentArgbFromGateway(
+            argb = profile?.accentArgb,
+            expectedRevision = revisionSnapshot.getValue("ui.accent"),
           )
+        }
       }
     } catch (cancelled: CancellationException) {
       throw cancelled
@@ -9938,36 +9881,6 @@ fun channelDisplayLabel(channel: String): String =
         .ifBlank { "Channel" }
     }
   }
-
-internal fun selectChatAgentSessionKey(
-  candidates: List<ChatSessionEntry>,
-  agentId: String,
-  rememberedSessionKey: String?,
-  mainSessionKey: String,
-): String {
-  val normalizedAgentId = agentId.trim()
-  val ownerSessions =
-    candidates.filter { entry ->
-      val owner = resolveAgentIdFromMainSessionKey(entry.key) ?: entry.ownerAgentId
-      owner == null || owner == normalizedAgentId
-    }
-  rememberedSessionKey
-    ?.takeIf { remembered -> ownerSessions.any { entry -> entry.key == remembered && entry.archived != true } }
-    ?.let { return it }
-  return ownerSessions
-    .asSequence()
-    .filter { entry ->
-      entry.archived != true &&
-        entry.isMain != true &&
-        entry.key != mainSessionKey &&
-        entry.key != "main"
-    }.maxWithOrNull(
-      compareBy<ChatSessionEntry> { entry ->
-        entry.lastActivityAt ?: entry.updatedAtMs ?: Long.MIN_VALUE
-      }.thenBy { entry -> entry.key },
-    )?.key
-    ?: mainSessionKey
-}
 
 private fun gatewayControlPageTlsFingerprint(
   prefs: SecurePrefs,

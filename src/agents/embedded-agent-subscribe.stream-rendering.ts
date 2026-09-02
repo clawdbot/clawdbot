@@ -98,6 +98,7 @@ type StreamRenderingParams = {
   log: EmbeddedAgentSubscribeContext["log"];
   blockChunker: EmbeddedAgentSubscribeContext["blockChunker"];
   emitBlockReply: EmbeddedAgentSubscribeContext["emitBlockReply"];
+  flushAssistantStream: EmbeddedAgentSubscribeContext["flushAssistantStream"];
   pendingBlockReplyTasks: Set<Promise<void>>;
   pushAssistantText: (text: string, normalizedText?: string) => void;
   shouldSkipAssistantText: (text: string, normalizedText?: string) => boolean;
@@ -109,6 +110,7 @@ export function createStreamRendering({
   log,
   blockChunker,
   emitBlockReply,
+  flushAssistantStream,
   pendingBlockReplyTasks,
   pushAssistantText,
   shouldSkipAssistantText,
@@ -527,6 +529,7 @@ export function createStreamRendering({
   const flushBlockReplyBuffer: EmbeddedAgentSubscribeContext["flushBlockReplyBuffer"] = (
     options,
   ) => {
+    flushAssistantStream();
     if (!params.onBlockReply) {
       return undefined;
     }
@@ -574,6 +577,7 @@ export function createStreamRendering({
     if (trimmed === state.lastStreamedReasoning) {
       return;
     }
+    flushAssistantStream();
     // Compute delta: new text since the last emitted reasoning.
     // Guard against non-prefix changes (e.g. trim altering earlier content).
     const prior = state.lastStreamedReasoning ?? "";
@@ -612,6 +616,7 @@ export function createStreamRendering({
   };
 
   const resetAssistantMessageState = (nextAssistantTextBaseline: number) => {
+    flushAssistantStream();
     state.deltaBuffer = "";
     state.streamBlockText = "";
     state.streamBlockOffset = 0;

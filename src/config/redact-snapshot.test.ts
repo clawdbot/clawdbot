@@ -265,46 +265,50 @@ describe("redactConfigSnapshot", () => {
 
   it("redacts and restores MCP SSE header values from schema hints", () => {
     const hints = buildConfigSchemaCore().uiHints;
-    const snapshot = makeSnapshot({
+    expect(hints["mcp.servers.*.headers.*"]?.sensitive).toBe(true);
+    const editable = {
+      enabled: false,
+      url: "http://127.0.0.1:19999/mcp",
+      headers: { "X-Empty": "", "X-Blank": "   ", "X-Env": "${MCP_HEADER}" },
+    };
+    const protectedServer = {
+      ...editable,
+      headers: { Authorization: "synthetic-header-value", "X-Test": "ok" },
+    };
+    const config = { mcp: { servers: { editable, protected: protectedServer } } };
+    const snapshot = makeSnapshot(config);
+    const result = redactConfigSnapshot(snapshot, hints);
+    const expected = {
       mcp: {
         servers: {
-          remote: {
-            url: "https://example.com/mcp",
-            headers: {
-              Authorization: "Bearer secret-token",
-              "X-Test": "ok",
-            },
+          editable,
+          protected: {
+            ...protectedServer,
+            headers: { Authorization: REDACTED_SENTINEL, "X-Test": REDACTED_SENTINEL },
           },
         },
       },
+    };
+
+    for (const projection of [
+      result.config,
+      result.parsed,
+      result.sourceConfig,
+      result.resolved,
+      result.runtimeConfig,
+    ]) {
+      expect(projection).toEqual(expected);
+    }
+    expect(result.raw).toBe(JSON.stringify(expected));
+    expect(restoreRedactedValues(result.config, config, hints)).toEqual(config);
+
+    const servers = expectDefined(result.config.mcp?.servers, "redacted MCP servers");
+    const renamed = {
+      mcp: { servers: { renamed: servers.editable, protected: servers.protected } },
+    };
+    expect(restoreRedactedValues(renamed, config, hints)).toEqual({
+      mcp: { servers: { renamed: editable, protected: protectedServer } },
     });
-
-    const result = redactConfigSnapshot(snapshot, hints);
-    const servers = (result.config.mcp as { servers: Record<string, Record<string, unknown>> })
-      .servers;
-    expect(
-      (
-        expectDefined(servers.remote, "servers.remote test invariant").headers as Record<
-          string,
-          string
-        >
-      ).Authorization,
-    ).toBe(REDACTED_SENTINEL);
-    expect(
-      expectDefined(
-        (
-          expectDefined(servers.remote, "servers.remote test invariant").headers as Record<
-            string,
-            string
-          >
-        )["X-Test"],
-        '(servers.remote.headers as Record<string, string>)["X-Test"] test invariant',
-      ),
-    ).toBe(REDACTED_SENTINEL);
-
-    const restored = restoreRedactedValues(result.config, snapshot.config, hints);
-    expect(restored.mcp.servers.remote.headers.Authorization).toBe("Bearer secret-token");
-    expect(restored.mcp.servers.remote.headers["X-Test"]).toBe("ok");
   });
 
   it("redacts sensitive auth material from MCP SSE URLs", () => {
@@ -798,17 +802,17 @@ describe("redactConfigSnapshot", () => {
     expect(restored).toEqual(snapshot.config);
   });
 
-  it("does not mangle raw when a sensitive field value is empty string", () => {
-    const config = {
-      gateway: { auth: { token: "" } },
-      other: "",
-    };
-    const raw = '{ "gateway": { "auth": { "token": "" } }, "other": "" }';
-    const snapshot = makeSnapshot(config, raw);
-    const result = redactConfigSnapshot(snapshot);
-    expect(result.config.gateway?.auth?.token).toBe(REDACTED_SENTINEL);
+  it.each([
+    { kind: "empty", value: "" },
+    { kind: "whitespace", value: "   " },
+    { kind: "environment reference", value: "${GATEWAY_TOKEN}" },
+  ])("does not mangle raw when a sensitive field is $kind", ({ value }) => {
+    const config = { gateway: { auth: { token: value } }, other: value };
+    const raw = JSON.stringify(config);
+    const result = redactConfigSnapshot(makeSnapshot(config, raw));
+    expect(result.config).toEqual(config);
     expect(result.raw).toBe(raw);
-    expect((result.raw ?? "").split(REDACTED_SENTINEL).length).toBe(1);
+    expect(restoreRedactedValues(result.config, config)).toEqual(config);
   });
 
   it("redacts each projection without using its secrets to rewrite another projection", () => {

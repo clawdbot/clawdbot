@@ -31,7 +31,7 @@ openclaw config schema
 openclaw config schema --json
 openclaw config get browser.executablePath
 openclaw config set browser.executablePath "/usr/bin/google-chrome"
-openclaw config set browser.profiles.work.executablePath "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+openclaw config set browser.profiles.work '{"cdpPort":18801,"executablePath":"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"}' --strict-json --merge
 openclaw config set agents.defaults.heartbeat.every "2h"
 openclaw config set logging.audit.executionIdentity true
 openclaw config set 'agents.entries.main.tools.exec.node' "node-id-or-name"
@@ -158,7 +158,7 @@ Values parse as JSON5 when possible; otherwise they are treated as raw strings. 
 ```bash
 openclaw config set agents.defaults.heartbeat.every "0m"
 openclaw config set gateway.port 19001 --strict-json
-openclaw config set channels.whatsapp.groups '["*"]' --strict-json
+openclaw config set channels.whatsapp.groups '{"*":{"requireMention":true}}' --strict-json
 ```
 
 For structured values that are awkward to quote in your shell, put a config-shaped JSON5 object in a file and use [`config patch --file <path> --dry-run`](/cli/config#config-patch). The file contains config keys and their values, not a bare array.
@@ -389,7 +389,7 @@ openclaw config patch --file ./discord.patch.json5 --replace-path 'channels.disc
 
 ## Dry run
 
-`--dry-run` validates changes without writing `openclaw.json`. Available on `config set`, `config patch`, and `config unset`.
+`--dry-run` simulates a change without writing `openclaw.json`. Available on `config set`, `config patch`, and `config unset`. Which checks run depends on the input mode. Value mode (`config set <path> <value>` without `--strict-json`) skips the full schema pass and the ordinary SecretRef resolvability scan. Policy, provider, and model-reference checks can still run. When no checks apply, value mode reports `Dry run successful` even for a value the real write rejects. Use `--strict-json` (or `config patch --file --dry-run`) when you need schema validation.
 
 ```bash
 openclaw config set channels.discord.token \
@@ -409,6 +409,7 @@ openclaw config set channels.discord.token \
 
 <AccordionGroup>
   <Accordion title="Dry-run behavior">
+    - Value mode (a plain `<value>` without `--strict-json`): skips the full schema pass and ordinary SecretRef resolvability scan. Policy, provider, and model-reference checks can still run. When no checks apply, the CLI prints `Dry run note: value mode does not run schema/resolvability checks` and can succeed even when the real write would fail schema validation.
     - Builder mode: runs SecretRef resolvability checks for changed refs/providers.
     - JSON mode (`--strict-json`, `--json`, or batch mode): runs schema validation plus SecretRef resolvability checks.
     - Policy validation runs against the full post-change config, so parent-object writes (for example setting `hooks` as an object) cannot bypass unsupported-surface validation.
@@ -444,7 +445,7 @@ openclaw config set channels.discord.token \
   skippedExecRefs: number,
   errors?: [
     {
-      kind: "missing-path" | "schema" | "resolvability" | "model",
+      kind: "missing-path" | "schema" | "resolvability" | "model" | "conflict",
       message: string,
       ref?: string, // present for resolvability errors
     },
@@ -533,8 +534,8 @@ The active config path must be a regular file. Symlinked `openclaw.json` layouts
 Prefer CLI writes for small edits:
 
 ```bash
-openclaw config set gateway.reload.mode hybrid --dry-run
-openclaw config set gateway.reload.mode hybrid
+openclaw config set gateway.reload.mode '"hybrid"' --strict-json --dry-run
+openclaw config set gateway.reload.mode '"hybrid"' --strict-json
 openclaw config validate
 ```
 

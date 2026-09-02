@@ -42,8 +42,7 @@ vi.mock("../../agents/embedded-agent-helpers/sanitize-user-facing-text.js", asyn
   };
 });
 
-const state = setupAgentRunnerExecutionTestState();
-// Prepare before cases can time out and resume against a later case's mocks.
+const state = await setupAgentRunnerExecutionTestState();
 const executeAgentTurn = await getExecuteAgentTurnForTest();
 
 beforeEach(() => {

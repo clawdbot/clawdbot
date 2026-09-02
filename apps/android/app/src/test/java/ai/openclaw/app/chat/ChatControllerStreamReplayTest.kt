@@ -538,11 +538,97 @@ class ChatControllerStreamReplayTest {
       assertFalse(controller.historyLoading.value)
       assertEquals(listOf("assistant" to "main transcript"), transcript(controller))
 
+      gateway.respond("sessions.patch") { error("rename unavailable") }
+      assertFalse(controller.patchSession(key = "main", label = "Renamed"))
+      assertEquals("rename unavailable", controller.errorText.value)
+
       controller.loadCurrent("main")
 
+      assertEquals("rename unavailable", controller.errorText.value)
       assertEquals(historyCallsAfterLiveLoad, gateway.callCount("chat.history"))
       assertFalse(controller.historyLoading.value)
       assertEquals(listOf("assistant" to "main transcript"), transcript(controller))
+    }
+
+  @Test
+  @OptIn(ExperimentalCoroutinesApi::class)
+  fun sameSessionLoadPreservesActionErrorWhileHistoryIsPending() =
+    runTest {
+      val gateway = ScriptedGateway(json)
+      val controller = newController(gateway)
+      val releaseHistory = CompletableDeferred<Unit>()
+      gateway.respond("chat.history") {
+        releaseHistory.await()
+        historyResponse(
+          sessionId = "session-main",
+          messages = listOf(ReplayHistoryMessage("assistant", "main transcript", 1_000)),
+        )
+      }
+      gateway.respond("sessions.patch") { error("rename unavailable") }
+
+      try {
+        controller.load("main")
+        runCurrent()
+        assertTrue(controller.historyLoading.value)
+        assertFalse(controller.patchSession(key = "main", label = "Renamed"))
+        assertEquals("rename unavailable", controller.errorText.value)
+
+        controller.load("main")
+        assertEquals("rename unavailable", controller.errorText.value)
+        releaseHistory.complete(Unit)
+        advanceUntilIdle()
+
+        assertFalse(controller.historyLoading.value)
+        assertEquals(listOf("assistant" to "main transcript"), transcript(controller))
+        assertEquals("rename unavailable", controller.errorText.value)
+
+        controller.refresh()
+        advanceUntilIdle()
+        assertNull(controller.errorText.value)
+      } finally {
+        releaseHistory.complete(Unit)
+      }
+    }
+
+  @Test
+  @OptIn(ExperimentalCoroutinesApi::class)
+  fun automaticMainAdoptionRefreshPreservesActionError() =
+    runTest {
+      val key = "agent:main:node-device"
+      val adoptionStarted = CompletableDeferred<Unit>()
+      val releaseAdoption = CompletableDeferred<Unit>()
+      val gateway = ScriptedGateway(json)
+      gateway.respondWith("chat.history", historyResponse("session-main", listOf(ReplayHistoryMessage("assistant", "main transcript", 1_000))))
+      gateway.respond("sessions.describe") {
+        adoptionStarted.complete(Unit)
+        releaseAdoption.await()
+        """{"session":{"key":"$key","sessionId":"session-main","agentId":"main","label":"OpenClaw App","archived":false}}"""
+      }
+      gateway.respond("sessions.patch") { error("rename unavailable") }
+      val controller =
+        createChatController(
+          cacheScope = { ChatCacheScope(gatewayId = "gateway-a", connectionGeneration = 1) },
+          requestGateway = gateway::request,
+        )
+      try {
+        controller.load(key)
+        runCurrent()
+        controller.onGatewayConnected(MainSessionBinding(key, "OpenClaw App"))
+        runCurrent()
+        assertTrue(adoptionStarted.isCompleted)
+        assertFalse(controller.patchSession(key = key, label = "Renamed"))
+        assertEquals("rename unavailable", controller.errorText.value)
+
+        releaseAdoption.complete(Unit)
+        runCurrent()
+
+        assertEquals("rename unavailable", controller.errorText.value)
+        assertEquals(2, gateway.callCount("chat.history"))
+        assertFalse(controller.historyLoading.value)
+        assertEquals(listOf("assistant" to "main transcript"), transcript(controller))
+      } finally {
+        releaseAdoption.complete(Unit)
+      }
     }
 
   @Test

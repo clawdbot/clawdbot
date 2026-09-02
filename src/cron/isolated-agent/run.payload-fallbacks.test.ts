@@ -16,7 +16,6 @@ import {
   patchSessionEntryMock,
   resolveAgentConfigMock,
   resolveConfiguredModelRefMock,
-  resolveCliRuntimeExecutionProviderMock,
   resolveEffectiveAgentRuntimeMock,
   resolveAgentModelFallbacksOverrideMock,
   runCliAgentMock,
@@ -226,9 +225,6 @@ describe("runCronIsolatedAgentTurn — payload.fallbacks", () => {
 
   it("plans Anthropic fallbacks canonically while executing compatible attempts through Claude CLI", async () => {
     isCliProviderMock.mockImplementation((provider: string) => provider === "claude-cli");
-    resolveCliRuntimeExecutionProviderMock.mockImplementation(
-      ({ provider }: { provider: string }) => (provider === "anthropic" ? "claude-cli" : undefined),
-    );
     resolveConfiguredModelRefMock.mockReturnValue({
       provider: "anthropic",
       model: "claude-opus-4-6",

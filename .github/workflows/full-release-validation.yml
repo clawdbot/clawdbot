@@ -429,10 +429,12 @@ jobs:
             fi
           fi
 
-          TARGET_VERSION="$target_version" node --input-type=module <<'NODE'
+          TARGET_VERSION="$target_version" RELEASE_CONTEXT_KIND="$identity_kind" node --input-type=module <<'NODE'
           import { appendFileSync } from 'node:fs';
+          import { normalizeReleaseCoveragePolicy } from './workflow/scripts/full-release-validation-policy.mjs';
           import { classifyReleaseTrain, parseReleaseVersion } from './workflow/scripts/lib/release-version.mjs';
-          const version = parseReleaseVersion(process.env.TARGET_VERSION);
+          const env = process.env;
+          const version = parseReleaseVersion(env.TARGET_VERSION);
           if (!version) throw new Error('Invalid release package version.');
           const train = classifyReleaseTrain(version);
           if (train === 'unsupported-extended-stable-correction') {
@@ -440,25 +442,17 @@ jobs:
           }
           const distTag = train === 'stable' ? 'beta' : train;
           const branch = train === 'extended-stable' ? `extended-stable/${version.year}.${version.month}.33` : '';
-          appendFileSync(process.env.GITHUB_OUTPUT, `npm_dist_tag=${distTag}\nrelease_candidate_branch=${branch}\n`);
+          const beta = env.RELEASE_PROFILE === 'beta' && env.RUN_RELEASE_SOAK === 'false' && env.RERUN_GROUP === 'all';
+          const stable = env.RELEASE_PROFILE === 'stable' && env.RUN_RELEASE_SOAK === 'true' && env.RERUN_GROUP === 'all';
+          const releaseContext = ['release branch', 'release tag'].includes(env.RELEASE_CONTEXT_KIND);
+          // Bind qualification scope once; dispatch and sealed evidence consume the same fact.
+          const policy = releaseContext && beta && train === 'beta' ? 'npm-beta-v1'
+            : releaseContext && stable && train === 'stable' ? 'npm-stable-v1' : undefined;
+          normalizeReleaseCoveragePolicy({ coveragePolicy: policy, releaseProfile: env.RELEASE_PROFILE,
+            rerunGroup: env.RERUN_GROUP, runReleaseSoak: env.RUN_RELEASE_SOAK, targetVersion: version.version });
+          const scope = policy === 'npm-beta-v1' ? 'npm-beta' : policy === 'npm-stable-v1' ? 'npm-stable' : 'full';
+          appendFileSync(env.GITHUB_OUTPUT, `npm_dist_tag=${distTag}\nrelease_candidate_branch=${branch}\ncoverage_policy=${policy ?? ''}\nci_release_scope=${scope}\nskip_package_telegram_e2e=${beta ? 'true' : env.SKIP_PACKAGE_TELEGRAM_E2E}\n`);
           NODE
-
-          # Qualification scope is a resolved fact, shared by dispatch and evidence.
-          coverage_policy=""
-          ci_release_scope=full
-          if [[ "$RELEASE_PROFILE" == "beta" && "${RUN_RELEASE_SOAK:-false}" == "false" && "$RERUN_GROUP" == "all" ]]; then
-            SKIP_PACKAGE_TELEGRAM_E2E=true
-            if [[ "$target_version" =~ ^[0-9]{4}\.([1-9]|1[0-2])\.[1-9][0-9]*-beta\.[1-9][0-9]*$ &&
-                  ( "$identity_kind" == "release branch" || "$identity_kind" == "release tag" ) ]]; then
-              coverage_policy=npm-beta-v1
-              ci_release_scope=npm-beta
-            fi
-          fi
-          {
-            printf 'coverage_policy=%s\n' "$coverage_policy"
-            printf 'ci_release_scope=%s\n' "$ci_release_scope"
-            printf 'skip_package_telegram_e2e=%s\n' "$SKIP_PACKAGE_TELEGRAM_E2E"
-          } >> "$GITHUB_OUTPUT"
 
       - name: Summarize target
         env:
@@ -748,85 +742,6 @@ jobs:
             --build-arg OPENCLAW_EXTENSIONS="diagnostics-otel,codex" \
             .
 
-  prepare_npm_package:
-    name: Prepare release npm artifacts
-    needs: resolve_target
-    if: ${{ github.run_attempt == 1 && needs.resolve_target.result == 'success' && (inputs.rerun_group == 'all' || needs.resolve_target.outputs.candidate_required == 'true') }}
-    permissions:
-      actions: read
-      contents: read
-    uses: ./.github/workflows/openclaw-npm-preflight.yml
-    with:
-      tag: ${{ needs.resolve_target.outputs.sha }}
-      release_tag: ${{ needs.resolve_target.outputs.release_tag }}
-      preflight_only: true
-      preflight_phase: prepare
-      npm_dist_tag: ${{ needs.resolve_target.outputs.npm_dist_tag }}
-      release_candidate_branch: ${{ needs.resolve_target.outputs.release_candidate_branch }}
-
-  check_npm_source:
-    name: Check release npm source
-    needs: resolve_target
-    if: ${{ github.run_attempt == 1 && inputs.rerun_group == 'all' && needs.resolve_target.result == 'success' }}
-    permissions:
-      actions: read
-      contents: read
-    uses: ./.github/workflows/openclaw-npm-preflight.yml
-    with:
-      tag: ${{ needs.resolve_target.outputs.sha }}
-      release_tag: ${{ needs.resolve_target.outputs.release_tag }}
-      preflight_only: true
-      preflight_phase: source
-      npm_dist_tag: ${{ needs.resolve_target.outputs.npm_dist_tag }}
-      release_candidate_branch: ${{ needs.resolve_target.outputs.release_candidate_branch }}
-
-  qualify_npm_package:
-    name: Qualify release npm artifacts
-    needs: [resolve_target, prepare_npm_package, check_npm_source]
-    if: ${{ github.run_attempt == 1 && inputs.rerun_group == 'all' && needs.prepare_npm_package.result == 'success' && needs.check_npm_source.result == 'success' }}
-    permissions:
-      actions: read
-      contents: read
-    uses: ./.github/workflows/openclaw-npm-preflight.yml
-    with:
-      tag: ${{ needs.resolve_target.outputs.sha }}
-      release_tag: ${{ needs.resolve_target.outputs.release_tag }}
-      preflight_only: true
-      preflight_phase: verify
-      prepared_bundle_json: ${{ needs.prepare_npm_package.outputs.prepared_bundle_json }}
-      source_check_json: ${{ needs.check_npm_source.outputs.source_check_json }}
-      npm_dist_tag: ${{ needs.resolve_target.outputs.npm_dist_tag }}
-      release_candidate_branch: ${{ needs.resolve_target.outputs.release_candidate_branch }}
-
-  prepare_docker_release:
-    name: Prepare release Docker artifacts
-    needs: resolve_target
-    if: ${{ github.run_attempt == 1 && inputs.rerun_group == 'all' && needs.resolve_target.result == 'success' && !contains(needs.resolve_target.outputs.target_version, '-alpha.') }}
-    permissions:
-      actions: read
-      contents: read
-      packages: read
-    uses: ./.github/workflows/docker-release-prepare.yml
-    with:
-      tag: ${{ needs.resolve_target.outputs.release_tag }}
-      release_sha: ${{ needs.resolve_target.outputs.sha }}
-
-  candidate_acquisition:
-    name: Acquire full release candidate
-    needs: [resolve_target, evidence_reuse, prepare_npm_package]
-    if: ${{ always() && github.run_attempt == 1 && needs.resolve_target.result == 'success' && needs.prepare_npm_package.result == 'success' && needs.evidence_reuse.outputs.reuse != 'true' && needs.resolve_target.outputs.candidate_required == 'true' }}
-    permissions:
-      actions: read
-      contents: read
-      packages: read
-      pull-requests: read
-    uses: ./.github/workflows/full-release-candidate.yml
-    with:
-      ref: ${{ needs.resolve_target.outputs.sha }}
-      request_json: ${{ needs.resolve_target.outputs.candidate_request_json }}
-      request_sha256: ${{ needs.resolve_target.outputs.candidate_request_sha256 }}
-      prepared_npm_bundle_json: ${{ needs.prepare_npm_package.outputs.prepared_bundle_json }}
-
   normal_ci:
     name: Run normal full CI
     needs: [resolve_target, evidence_reuse]
@@ -1013,6 +928,7 @@ jobs:
             echo "run_id=${run_id}" >> "$GITHUB_OUTPUT"
             echo "run_attempt=${child_run_attempt}" >> "$GITHUB_OUTPUT"
             echo "url=${url}" >> "$GITHUB_OUTPUT"
+            echo "dispatch_id=${dispatch_id}" >> "$GITHUB_OUTPUT"
           }
 
           case "$CHILD_WORKFLOW_KIND" in
@@ -1027,7 +943,7 @@ jobs:
               dispatch_run_name="CI ${dispatch_id}"
               ci_release_scope="${CI_RELEASE_SCOPE:-full}"
               include_android=true
-              if [[ "$ci_release_scope" == "npm-beta" ]]; then include_android=false; fi
+              if [[ "$ci_release_scope" == "npm-beta" || "$ci_release_scope" == "npm-stable" ]]; then include_android=false; fi
               args=(-f target_ref="$TARGET_SHA" -f release_scope="$ci_release_scope" -f include_android="$include_android" -f dispatch_id="$dispatch_id")
               context_ref="${TARGET_CONTEXT_REF:-$TARGET_REF}"
               context_ref="${context_ref#refs/heads/}"
@@ -1038,6 +954,17 @@ jobs:
                 args+=(-f target_context_ref="$context_ref")
               fi
               dispatch_child ci.yml "$dispatch_run_name" "${args[@]}"
+              ;;
+            artifact-npm|artifact-candidate|artifact-docker)
+              stage="${CHILD_WORKFLOW_KIND#artifact-}"
+              dispatch_id="full-release-validation-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-artifacts-${stage}"
+              args=(-f stage="$stage" -f dispatch_id="$dispatch_id" -f source_sha="$TARGET_SHA" -f release_tag="$RELEASE_TAG" -f preflight_phase="$PREFLIGHT_PHASE")
+              if [[ "$stage" == "npm" ]]; then
+                args+=(-f npm_dist_tag="$NPM_DIST_TAG" -f release_candidate_branch="$RELEASE_CANDIDATE_BRANCH")
+              elif [[ "$stage" == "candidate" ]]; then
+                args+=(-f request_json="$CANDIDATE_REQUEST_JSON" -f prepared_npm_bundle_json="$PREPARED_NPM_BUNDLE_JSON")
+              fi
+              dispatch_child full-release-artifacts.yml "Full Release Artifacts ${dispatch_id}" "${args[@]}"
               ;;
             plugin-prerelease)
               case "$PHASE" in
@@ -1373,6 +1300,156 @@ jobs:
           CHILD_WORKFLOW_REF: ${{ github.ref_name }}
           PARENT_WORKFLOW_SHA: ${{ github.sha }}
         run: *full_release_child_dispatch
+
+  prepare_npm_package:
+    name: Prepare release npm artifacts
+    needs: resolve_target
+    if: ${{ needs.resolve_target.result == 'success' && (inputs.rerun_group == 'all' || needs.resolve_target.outputs.candidate_required == 'true') }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    outputs:
+      run_id: ${{ steps.producer.outputs.run_id }}
+      run_attempt: ${{ steps.producer.outputs.run_attempt }}
+      dispatch_id: ${{ steps.producer.outputs.dispatch_id }}
+      prepared_bundle_json: ${{ steps.bundle.outputs.prepared_bundle_json }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+      CHILD_WORKFLOW_KIND: artifact-npm
+      ARTIFACT_STAGE: npm
+      ARTIFACT_DISPATCH_ID: full-release-validation-${{ github.run_id }}-1-artifacts-npm
+      TARGET_SHA: ${{ needs.resolve_target.outputs.sha }}
+      RELEASE_TAG: ${{ needs.resolve_target.outputs.release_tag }}
+      NPM_DIST_TAG: ${{ needs.resolve_target.outputs.npm_dist_tag }}
+      RELEASE_CANDIDATE_BRANCH: ${{ needs.resolve_target.outputs.release_candidate_branch }}
+      PREFLIGHT_PHASE: ${{ inputs.rerun_group == 'all' && 'all' || 'prepare' }}
+      CHILD_WORKFLOW_REF: ${{ github.ref_name }}
+      PARENT_WORKFLOW_SHA: ${{ github.sha }}
+    steps:
+      - name: Dispatch immutable npm artifact producer
+        id: dispatch
+        if: github.run_attempt == 1
+        run: *full_release_child_dispatch
+      - &artifact_tooling_checkout
+        name: Checkout artifact receipt tooling
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          sparse-checkout: scripts
+          persist-credentials: false
+      - &artifact_producer_resolution
+        name: Recover original artifact producer
+        id: producer
+        env:
+          ARTIFACT_RUN_ID: ${{ steps.dispatch.outputs.run_id }}
+          ARTIFACT_RUN_ATTEMPT: ${{ steps.dispatch.outputs.run_attempt }}
+        run: node scripts/full-release-artifacts.mjs resolve
+      # Raw bytes unblock package consumers while source/SDK/dependency proof continues.
+      - name: Wait for publishable npm package
+        id: bundle
+        env:
+          ARTIFACT_RUN_ID: ${{ steps.producer.outputs.run_id }}
+          ARTIFACT_RUN_ATTEMPT: ${{ steps.producer.outputs.run_attempt }}
+          ARTIFACT_OUTPUT: raw
+        run: node scripts/full-release-artifacts.mjs wait
+
+  qualify_npm_package:
+    name: Qualify release npm artifacts
+    needs: [resolve_target, prepare_npm_package]
+    if: ${{ inputs.rerun_group == 'all' && needs.prepare_npm_package.result == 'success' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    outputs:
+      qualified_preflight_bundle_json: ${{ steps.bundle.outputs.qualified_preflight_bundle_json }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+      ARTIFACT_STAGE: npm
+      ARTIFACT_DISPATCH_ID: ${{ needs.prepare_npm_package.outputs.dispatch_id }}
+      ARTIFACT_RUN_ID: ${{ needs.prepare_npm_package.outputs.run_id }}
+      ARTIFACT_RUN_ATTEMPT: ${{ needs.prepare_npm_package.outputs.run_attempt }}
+      ARTIFACT_OUTPUT: receipt
+      TARGET_SHA: ${{ needs.resolve_target.outputs.sha }}
+      RELEASE_TAG: ${{ needs.resolve_target.outputs.release_tag }}
+      PREFLIGHT_PHASE: all
+      CHILD_WORKFLOW_REF: ${{ github.ref_name }}
+      PARENT_WORKFLOW_SHA: ${{ github.sha }}
+    steps:
+      - *artifact_tooling_checkout
+      - name: Wait for exact npm qualification
+        id: bundle
+        run: node scripts/full-release-artifacts.mjs wait
+
+  prepare_docker_release:
+    name: Prepare release Docker artifacts
+    needs: resolve_target
+    if: ${{ inputs.rerun_group == 'all' && needs.resolve_target.result == 'success' && !contains(needs.resolve_target.outputs.target_version, '-alpha.') }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    outputs:
+      prepared_run_id: ${{ steps.bundle.outputs.prepared_run_id }}
+      prepared_run_attempt: ${{ steps.bundle.outputs.prepared_run_attempt }}
+      prepared_artifact_name: ${{ steps.bundle.outputs.prepared_artifact_name }}
+      prepared_manifest_sha256: ${{ steps.bundle.outputs.prepared_manifest_sha256 }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+      CHILD_WORKFLOW_KIND: artifact-docker
+      ARTIFACT_STAGE: docker
+      ARTIFACT_DISPATCH_ID: full-release-validation-${{ github.run_id }}-1-artifacts-docker
+      TARGET_SHA: ${{ needs.resolve_target.outputs.sha }}
+      RELEASE_TAG: ${{ needs.resolve_target.outputs.release_tag }}
+      PREFLIGHT_PHASE: all
+      CHILD_WORKFLOW_REF: ${{ github.ref_name }}
+      PARENT_WORKFLOW_SHA: ${{ github.sha }}
+    steps:
+      - name: Dispatch immutable Docker artifact producer
+        id: dispatch
+        if: github.run_attempt == 1
+        run: *full_release_child_dispatch
+      - *artifact_tooling_checkout
+      - *artifact_producer_resolution
+      - name: Wait for exact Docker preparation
+        id: bundle
+        env:
+          ARTIFACT_RUN_ID: ${{ steps.producer.outputs.run_id }}
+          ARTIFACT_RUN_ATTEMPT: ${{ steps.producer.outputs.run_attempt }}
+          ARTIFACT_OUTPUT: receipt
+        run: node scripts/full-release-artifacts.mjs wait
+
+  candidate_acquisition:
+    name: Acquire full release candidate
+    needs: [resolve_target, evidence_reuse, prepare_npm_package]
+    if: ${{ always() && needs.resolve_target.result == 'success' && needs.prepare_npm_package.result == 'success' && needs.evidence_reuse.outputs.reuse != 'true' && needs.resolve_target.outputs.candidate_required == 'true' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    outputs:
+      state: ${{ steps.bundle.outputs.state }}
+      binding_json: ${{ steps.bundle.outputs.binding_json }}
+      candidate_artifact_json: ${{ steps.bundle.outputs.candidate_artifact_json }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+      CHILD_WORKFLOW_KIND: artifact-candidate
+      ARTIFACT_STAGE: candidate
+      ARTIFACT_DISPATCH_ID: full-release-validation-${{ github.run_id }}-1-artifacts-candidate
+      TARGET_SHA: ${{ needs.resolve_target.outputs.sha }}
+      RELEASE_TAG: ${{ needs.resolve_target.outputs.release_tag }}
+      PREFLIGHT_PHASE: all
+      CHILD_WORKFLOW_REF: ${{ github.ref_name }}
+      PARENT_WORKFLOW_SHA: ${{ github.sha }}
+      CANDIDATE_REQUEST_JSON: ${{ needs.resolve_target.outputs.candidate_request_json }}
+      PREPARED_NPM_BUNDLE_JSON: ${{ needs.prepare_npm_package.outputs.prepared_bundle_json }}
+    steps:
+      - name: Dispatch immutable validation candidate producer
+        id: dispatch
+        if: github.run_attempt == 1
+        run: *full_release_child_dispatch
+      - *artifact_tooling_checkout
+      - *artifact_producer_resolution
+      - name: Wait for exact validation candidate
+        id: bundle
+        env:
+          ARTIFACT_RUN_ID: ${{ steps.producer.outputs.run_id }}
+          ARTIFACT_RUN_ATTEMPT: ${{ steps.producer.outputs.run_attempt }}
+          ARTIFACT_OUTPUT: receipt
+        run: node scripts/full-release-artifacts.mjs wait
 
   release_execution_plan:
     name: Seal release execution plan
@@ -1755,7 +1832,6 @@ jobs:
         evidence_reuse,
         docker_runtime_assets_preflight,
         prepare_npm_package,
-        check_npm_source,
         qualify_npm_package,
         prepare_docker_release,
         candidate_acquisition,

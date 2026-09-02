@@ -32,6 +32,7 @@ export {
 export { materializeSessionArchiveForRead } from "../../../../src/config/sessions/archive-compression.js";
 export { canonicalizeMainSessionAlias } from "../../../../src/config/sessions/main-session.js";
 export {
+  listSessionTranscriptArchivesReadOnly,
   listSessionTranscriptInstances,
   type SessionTranscriptInstance,
 } from "../../../../src/config/sessions/session-history.js";

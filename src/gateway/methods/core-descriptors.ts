@@ -649,33 +649,25 @@ const CORE_GATEWAY_METHOD_SPECS = [
     "2026.8",
     { startup: true, controlPlaneWrite: true },
   ],
+  [
+    "sessions.title.prepare",
+    "sessions-title",
+    "operator.write",
+    "2026.8",
+    { controlPlaneWrite: true },
+  ],
 ] as const satisfies readonly CoreGatewayMethodSpecRow[];
 
 export type CoreGatewayHandlerFamily = Exclude<(typeof CORE_GATEWAY_METHOD_SPECS)[number][1], null>;
 
+// Rows are `as const`, so a present policy flag is already the exact literal the spec allows.
 const CORE_GATEWAY_METHOD_SPEC_LIST: readonly CoreGatewayMethodSpec[] =
   CORE_GATEWAY_METHOD_SPECS.map(([name, family, scope, since, policy]) => {
     const spec: CoreGatewayMethodSpec = { name, scope, since };
-    const normalizedPolicy: CoreGatewayMethodPolicy | undefined = policy;
     if (family) {
       spec.family = family;
     }
-    if (normalizedPolicy?.advertise === false) {
-      spec.advertise = false;
-    }
-    if (normalizedPolicy?.startup === true) {
-      spec.startup = true;
-    }
-    if (normalizedPolicy?.controlPlaneWrite === true) {
-      spec.controlPlaneWrite = true;
-    }
-    if (normalizedPolicy?.compatibilityRestored === true) {
-      spec.compatibilityRestored = true;
-    }
-    if (normalizedPolicy?.description) {
-      spec.description = normalizedPolicy.description;
-    }
-    return spec;
+    return Object.assign(spec, policy);
   });
 
 const CORE_GATEWAY_METHOD_SPEC_BY_NAME: ReadonlyMap<string, CoreGatewayMethodSpec> = new Map(

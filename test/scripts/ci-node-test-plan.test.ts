@@ -314,13 +314,10 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
         const groups = plan
           .flatMap((job) => job.groups)
           .filter((group) => group.shard_name.startsWith(`${target.shardName}-hosted-`));
-        // Hosted preparation alone exceeds the serial budget, so its consumer
-        // stays alone; hybrid retains its existing balanced three-way split.
-        expect(groups).toHaveLength(runnerBackend === "github" ? 4 : 3);
+        // Runtime preparation stays in its own child; the remaining test
+        // cost needs three stripes on both runner profiles.
+        expect(groups).toHaveLength(4);
         if (runnerBackend === "github") {
-          expect(groups.find((group) => group.pretestBuildMode)?.includePatterns).toEqual([
-            consumer,
-          ]);
           expect(
             plan
               .filter((job) => job.predictedSeconds! > 150)
@@ -331,9 +328,23 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
         }
         expect(
           groups
-            .filter((group) => group.pretestBuildMode === "runtime")
-            .map((group) => group.includePatterns?.includes(consumer)),
-        ).toEqual([true]);
+            .filter((group) => group.pretestBuildMode !== undefined)
+            .map(({ pretestBuildMode, includePatterns }) => ({
+              pretestBuildMode,
+              includePatterns,
+            })),
+        ).toEqual([{ pretestBuildMode: "runtime", includePatterns: [consumer] }]);
+        for (const job of plan) {
+          if (
+            job.groups.some(
+              (group) => groups.includes(group) && group.pretestBuildMode === undefined,
+            )
+          ) {
+            expect(job.predictedSeconds, `${runnerBackend}/${slowerProfile}`).toBeLessThanOrEqual(
+              150,
+            );
+          }
+        }
         expect(groups.flatMap((group) => group.includePatterns ?? []).toSorted()).toEqual(
           target.includePatterns!.toSorted(),
         );
@@ -544,8 +555,8 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       runnerBackend: "hybrid",
     };
     const fallback = createNodeTestShardBundles(options);
-    // Doctor config/state retains its runtime-build floor. The complete CLI
-    // catalog splits without measurements; its slow gateway file stays alone.
+    // Runtime consumers retain their build floor without unrelated Doctor work.
+    // The complete CLI catalog still leaves its slow gateway files alone.
     expect(
       fallback
         .filter((shard) => !shard.requiresDist)
@@ -563,9 +574,9 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
         predictedSeconds: 200,
       },
       {
-        groups: ["agentic-commands-doctor-config-state"],
-        pretestBuildMode: "runtime",
-        predictedSeconds: 158,
+        groups: ["agentic-cli-process-hosted-2"],
+        pretestBuildMode: undefined,
+        predictedSeconds: 200,
       },
     ]);
     const agentChatStripes = fallback
@@ -687,11 +698,19 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       compactMode: "pull-request",
       runnerBackend: "hybrid",
     });
+    const expectedToolingOwnerNames = Array.from(
+      { length: 16 },
+      (_, index) => `core-tooling-${index + 1}`,
+    );
     const pushExcludedShardNames = new Set([
       "core-runtime-tui-pty",
-      ...Array.from({ length: 16 }, (_, index) => `core-tooling-${index + 1}`),
+      ...expectedToolingOwnerNames,
       "core-tooling-isolated",
     ]);
+    const gatewayFiles = [
+      "src/cli/gateway-backed-exit.process.test.ts",
+      "src/cli/gateway-backed-exit-health.process.test.ts",
+    ];
 
     for (const profile of [
       {
@@ -715,7 +734,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
           "agentic-commands-doctor",
           "agentic-agents-core-isolated",
         ],
-        largeFile: "src/cli/update-dry-run-state.process.test.ts",
+        largeFiles: ["src/cli/update-dry-run-state.process.test.ts"],
       },
       {
         name: "GitHub-hosted",
@@ -726,7 +745,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
           "agentic-agents-tools",
           "core-runtime-infra-storage-state",
         ],
-        largeFile: undefined,
+        largeFiles: [],
       },
       {
         name: "hybrid",
@@ -738,7 +757,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
           "agentic-control-plane-runtime-shared-token",
           "agentic-commands-doctor-platform",
         ],
-        largeFile: "src/cli/gateway-backed-exit.process.test.ts",
+        largeFiles: gatewayFiles,
       },
     ]) {
       expect(profile.push.length, `${profile.name} excludes PR-only work`).toBeLessThan(
@@ -757,8 +776,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
             `${profile.name}: ${owner}`,
           ).toBe(true);
         }
-        const largeFile = profile.largeFile;
-        if (largeFile) {
+        for (const largeFile of profile.largeFiles) {
           const selected = groups.filter((group) => group.includePatterns?.includes(largeFile));
           expect(selected, largeFile).toHaveLength(1);
           expect(selected[0]?.runner, largeFile).toBe(DEFAULT_NODE_TEST_RUNNER);
@@ -768,17 +786,18 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
             group.configs.includes("test/vitest/vitest.cli-process.config.ts"),
           ),
         );
-        expect(cliProcessJobs, profile.name).toHaveLength(5);
-        const gatewayJob = cliProcessJobs.find((shard) =>
-          shard.groups.some((group) =>
-            group.includePatterns?.includes("src/cli/gateway-backed-exit.process.test.ts"),
-          ),
-        );
-        expect(gatewayJob?.groups, profile.name).toEqual([
-          expect.objectContaining({
-            includePatterns: ["src/cli/gateway-backed-exit.process.test.ts"],
+        expect(cliProcessJobs, profile.name).toHaveLength(7);
+        const gatewayJobs = new Set(
+          gatewayFiles.map((file) => {
+            const gatewayJob = cliProcessJobs.find((shard) =>
+              shard.groups.some((group) => group.includePatterns?.includes(file)),
+            );
+            expect(gatewayJob?.groups, `${profile.name}: ${file}`).toEqual([
+              expect.objectContaining({ includePatterns: [file] }),
+            ]);
+            return gatewayJob;
           }),
-        ]);
+        );
         const runtimeCliJobs = cliProcessJobs.filter((shard) => shard.pretestBuildMode);
         expect(runtimeCliJobs).toHaveLength(2);
         expect(runtimeCliJobs).toEqual(
@@ -800,10 +819,10 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
           ),
         );
         for (const shard of cliProcessJobs) {
-          // The indivisible gateway file takes 200s. Hosted runtime preparation
+          // The gateway files retain 200s budgets. Hosted runtime preparation
           // alone costs 160s; other groups retain the 150s admission budget.
           const budget =
-            shard === gatewayJob ||
+            gatewayJobs.has(shard) ||
             (profile.name === "GitHub-hosted" && shard.pretestBuildMode === "runtime")
               ? 200
               : 150;
@@ -960,10 +979,6 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
           );
         }
       }
-    }
-    for (const shardName of pushExcludedShardNames) {
-      expect(compactGroups.some((group) => group.shard_name === shardName)).toBe(false);
-      expect(pullRequestCompactGroups.some((group) => group.shard_name === shardName)).toBe(true);
     }
     // Pushes omit only the explicit low-signal families; PR fallback retains
     // their include-pattern coverage when special setup prevents targeting.
@@ -1141,11 +1156,17 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
         .flatMap((shard) => shard.groups)
         .some((group) => group.shard_name === "core-tooling-docker"),
     ).toBe(false);
-    const toolingGroups = pullRequestCompact
-      .flatMap((shard) => shard.groups)
-      .filter((group) => /^core-tooling-\d+$/u.test(group.shard_name));
+    const toolingGroups = pullRequestCompactGroups.filter((group) =>
+      /^core-tooling-\d+(?:-hosted-\d+)?$/u.test(group.shard_name),
+    );
     const toolingFiles = toolingGroups.flatMap((group) => group.includePatterns ?? []);
-    expect(toolingGroups).toHaveLength(16);
+    expect(
+      new Set(
+        [...compactOwnerNames(pullRequestCompact)].filter((name) =>
+          /^core-tooling-\d+$/u.test(name),
+        ),
+      ),
+    ).toEqual(new Set(expectedToolingOwnerNames));
     expect(
       toolingGroups.every((group) => group.configs[0] === "test/vitest/vitest.tooling.config.ts"),
     ).toBe(true);
@@ -1463,18 +1484,20 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
 
   it("preserves runtime preparation and core-only ownership in full and compact plans", () => {
     const qaConfig = "test/vitest/vitest.extension-qa.config.ts";
-    const runtimeTargets = [
-      "test/e2e/qa-lab/runtime/gateway-support-export-runtime.test.ts",
+    const doctorRuntimeTargets = [
       "src/commands/doctor-config-preflight.process.test.ts",
       "src/commands/doctor-config-preflight.v17-atomicity.process.test.ts",
+    ];
+    const runtimeTargets = [
+      "test/e2e/qa-lab/runtime/gateway-support-export-runtime.test.ts",
+      ...doctorRuntimeTargets,
       "src/gateway/gateway-active-memory.test.ts",
       "src/gateway/gateway-concurrent-streams.test.ts",
       "src/gateway/gateway-cron-process-identity.windows.test.ts",
     ];
-    for (const shards of [
-      createNodeTestShards(),
-      createNodeTestShardBundles({ compact: true, compactMode: "pull-request" }),
-    ]) {
+    const full = createNodeTestShards();
+    const compact = createNodeTestShardBundles({ compact: true, compactMode: "pull-request" });
+    for (const shards of [full, compact]) {
       expect(
         shards.flatMap((shard) =>
           "configs" in shard ? shard.configs : shard.groups.flatMap((group) => group.configs),
@@ -1495,6 +1518,29 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
           ).toBe("runtime");
         }
       }
+    }
+
+    const doctorName = "agentic-commands-doctor-config-state";
+    const doctor = full.find((shard) => shard.shardName === doctorName)!;
+    const placements = compact.flatMap((job, jobIndex) =>
+      job.groups
+        .filter((group) => group.shard_name.replace(/-hosted-\d+$/u, "") === doctorName)
+        .map((group) => ({ group, job, jobIndex })),
+    );
+    const runtimeParts = placements.filter(({ group }) => group.pretestBuildMode === "runtime");
+    expect(runtimeParts).toHaveLength(1);
+    expect(runtimeParts[0]?.group.includePatterns).toEqual(doctorRuntimeTargets);
+    expect(placements.some(({ group }) => group.pretestBuildMode === undefined)).toBe(true);
+    expect(placements.flatMap(({ group }) => group.includePatterns ?? []).toSorted()).toEqual(
+      doctor.includePatterns?.toSorted(),
+    );
+    expect(new Set(placements.map(({ jobIndex }) => jobIndex)).size).toBe(placements.length);
+    for (const { group, job } of placements) {
+      expect(group.configs).toEqual(doctor.configs);
+      expect(group.env).toEqual(doctor.env);
+      expect(group.requiresDist).toBe(doctor.requiresDist);
+      expect(group.runner).toBe(BUNDLED_NODE_TEST_RUNNER);
+      expect(job.planConcurrency).toBe(1);
     }
   });
 

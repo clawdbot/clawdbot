@@ -241,13 +241,34 @@ try {
           'if ($tool -ne "--allow-scripts=pnpm@12.0.0") { throw "tool=$tool" }',
           "$alias = Get-NpmLifecycleAllowArgument -NpmCommand 'npm.cmd' -InstallSpec 'openclaw@npm:@scope/candidate@1.0.0'",
           "if ($alias -ne '--allow-scripts=@scope/candidate') { throw \"alias=$alias\" }",
+          "$archiveAlias = Get-NpmLifecycleAllowArgument -NpmCommand 'npm.cmd' -InstallSpec 'openclaw@npm:@scope/candidate.tgz@1.0.0'",
+          "if ($archiveAlias -ne '--allow-scripts=@scope/candidate.tgz') { throw \"alias=$archiveAlias\" }",
           "$tarball = Get-NpmLifecycleAllowArgument -NpmCommand 'npm.cmd' -InstallSpec 'https://example.invalid/openclaw.tgz'",
           "if ($tarball -ne '--allow-scripts=https://example.invalid/openclaw.tgz') { throw \"tarball=$tarball\" }",
+          '$archiveRoot = Join-Path ([System.IO.Path]::GetTempPath()) "openclaw-archive-identity"',
+          '$safeCwd = Join-Path $archiveRoot "work"',
+          '$candidate = Join-Path $archiveRoot "candidate.tgz"',
+          '$archiveUrl = "file:///" + $candidate.Replace("\\", "/").TrimStart("/")',
+          'foreach ($spec in @($candidate, "../candidate.tgz", "file:$candidate", "file:../candidate.tgz", "file:/../candidate.tgz", "file:///../candidate.tgz", $archiveUrl)) {',
+          '  $protocol = if ($spec.StartsWith("file:")) { "file:" } else { "" }',
+          "  $actual = Get-NpmLifecycleAllowArgument -NpmCommand 'npm.cmd' -InstallSpec $spec -NpmCwd $safeCwd",
+          '  if ($actual -ne "--allow-scripts=$protocol$candidate") { throw "archive=$actual" }',
+          "}",
           '$commaRoot = Join-Path ([System.IO.Path]::GetTempPath()) "openclaw,identity"',
+          "$caught = $false",
+          "try { Get-NpmLifecycleAllowArgument -NpmCommand 'npm.cmd' -InstallSpec (Join-Path $commaRoot 'candidate.tgz') -NpmCwd $commaRoot } catch {",
+          "  if ($_.Exception.Message -notmatch 'without commas') { throw }",
+          "  $caught = $true",
+          "}",
+          "if (-not $caught) { throw 'comma archive policy was accepted' }",
+          "$script:NpmVersion = '11.16.0'",
+          "$legacy = Get-NpmLifecycleAllowArgument -NpmCommand 'npm.cmd' -InstallSpec (Join-Path $commaRoot 'candidate.tgz') -NpmCwd $commaRoot",
+          "if ($legacy -notmatch '^--allow-scripts=\\.[\\\\/]candidate\\.tgz$') { throw \"legacy=$legacy\" }",
+          "$script:NpmVersion = '12.0.0'",
           '$safeCwd = Join-Path $commaRoot "safe"',
-          '$candidate = Join-Path $commaRoot "candidate.tgz"',
+          '$candidate = Join-Path $commaRoot "candidate"',
           "$relative = Get-NpmLifecycleAllowArgument -NpmCommand 'npm.cmd' -InstallSpec $candidate -NpmCwd $safeCwd",
-          "if ($relative -match ',' -or $relative -notmatch '^--allow-scripts=\\.\\.[\\\\/]candidate\\.tgz$') { throw \"relative=$relative\" }",
+          "if ($relative -match ',' -or $relative -notmatch '^--allow-scripts=\\.\\.[\\\\/]candidate$') { throw \"relative=$relative\" }",
           "foreach ($invalidVersion in @('invalid', 'npm 12.0.0 warning')) {",
           "  $script:NpmVersion = $invalidVersion",
           "  $caught = $false",
@@ -1153,12 +1174,12 @@ try {
           throw new Error(`Missing PowerShell fixture ${name}`);
         }
         const invocation = `$ErrorActionPreference = 'Stop'; & ([scriptblock]::Create((Get-Content -LiteralPath ${toPowerShellSingleQuotedLiteral(fixture.scriptPath)} -Raw)))`;
-        const result = spawnSync(engine, ["-NoLogo", "-NoProfile", "-Command", invocation], {
+        const engineResult = spawnSync(engine, ["-NoLogo", "-NoProfile", "-Command", invocation], {
           encoding: "utf8",
         });
         batchedPowerShellResults.set(`${name}:${engine}`, {
-          ok: result.status === 0,
-          error: result.status === 0 ? "" : result.stdout + result.stderr,
+          ok: engineResult.status === 0,
+          error: engineResult.status === 0 ? "" : engineResult.stdout + engineResult.stderr,
         });
       }
     }

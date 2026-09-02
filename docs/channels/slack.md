@@ -1590,6 +1590,7 @@ Both surfaces link the session with **Open in OpenClaw**, but only when that lin
 - Custom outbound username/icon settings keep portable previews enabled. OpenClaw keeps the preview or session card app-authored and delivers the customized final separately. Slack does not allow impersonated messages to be deleted.
 - Media and non-text payloads fall back to normal delivery.
 - Media/error finals cancel pending preview edits; eligible text/block finals flush only when they can edit the preview in place.
+- Native streamed final answers wait for Slack's acknowledgement before delivery is marked successful. A later progress-card finalization failure does not discard an already acknowledged answer.
 - If streaming fails mid-reply, OpenClaw falls back to normal delivery for remaining payloads.
 
 Use draft preview instead of Slack native text streaming:

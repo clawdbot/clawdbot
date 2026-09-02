@@ -762,6 +762,97 @@ class ChatControllerModelSelectionTest {
     }
 
   @Test
+  fun idleSessionSettingsInvalidationWaitsForExactHistoryOutsideVisibleWindow() =
+    runTest {
+      val sessionKey = "agent:ops:conversation"
+      val readStarted = CompletableDeferred<JsonObject>()
+      val releaseRead = CompletableDeferred<Unit>()
+      val nextReadStarted = CompletableDeferred<JsonObject>()
+      val releaseNextRead = CompletableDeferred<Unit>()
+      var changed = false
+      var sessionRow =
+        """{"key":"$sessionKey","agentId":"ops","sessionId":"conversation-id","updatedAt":1,"modelProvider":"synthetic","model":"reasoning",${thinkingFields("high", "off", "high")}}"""
+      val (controller, requests) =
+        chatControllerTestSetup {
+          gatewayAdvertisesCapability = { it == "session-scoped-chat-metadata" }
+          respond(
+            "chat.metadata",
+            """{"commands":[],"models":[{"id":"reasoning","provider":"synthetic","available":true,"input":["text"],"reasoning":true},{"id":"plain","provider":"synthetic","available":true,"input":["text"],"reasoning":false}]}""",
+          )
+          respond("sessions.list") {
+            if (changed) {
+              // A newer conversation displaced the selected row from the one-row drawer window.
+              """{"sessions":[{"key":"agent:ops:newer","sessionId":"newer-id","updatedAt":3}],"totalCount":2,"hasMore":true}"""
+            } else {
+              """{"sessions":[$sessionRow]}"""
+            }
+          }
+          respond("chat.history") { paramsJson ->
+            val params = json.parseToJsonElement(paramsJson.orEmpty()) as JsonObject
+            val response = """{"sessionId":"conversation-id","messages":[],"sessionInfo":$sessionRow}"""
+            if (params["limit"] == JsonPrimitive(1)) {
+              val firstRead = !readStarted.isCompleted
+              (if (firstRead) readStarted else nextReadStarted).complete(params)
+              (if (firstRead) releaseRead else releaseNextRead).await()
+            }
+            response
+          }
+          respond("chat.send", """{"runId":"run-ok","status":"ok"}""")
+        }
+      controller.load(sessionKey)
+      advanceUntilIdle()
+      assertEquals("synthetic/reasoning", controller.selectedModelRef.value)
+      assertTrue(controller.pendingSessionSettingsKeys.value.isEmpty())
+
+      changed = true
+      sessionRow =
+        """{"key":"$sessionKey","agentId":"ops","sessionId":"conversation-id","updatedAt":2,"modelProvider":"synthetic","model":"plain",${thinkingFields("off", "off")}}"""
+      controller.handleGatewayEvent(
+        "sessions.changed",
+        """{"sessionKey":"$sessionKey","agentId":"ops","reason":"command-metadata","ts":2}""",
+      )
+      val send = async { controller.sendMessageAwaitAcceptance("use the refreshed model", "high", emptyList()) }
+      try {
+        runCurrent()
+        assertEquals("Idle invalidation must block Send until the exact settings read returns", 0, requests.count { it.first == "chat.send" })
+        assertFalse(send.isCompleted)
+        assertTrue("The invalidation must start an exact settings read without a local write", readStarted.isCompleted)
+        val read = readStarted.await()
+        assertEquals(JsonPrimitive(sessionKey), read["sessionKey"])
+        assertEquals(JsonPrimitive("ops"), read["agentId"])
+        assertEquals(JsonPrimitive(1), read["limit"])
+        assertEquals(setOf(sessionKey), controller.pendingSessionSettingsKeys.value)
+
+        controller.handleGatewayEvent(
+          "sessions.changed",
+          """{"sessionKey":"$sessionKey","agentId":"ops","reason":"command-metadata","ts":3}""",
+        )
+        releaseRead.complete(Unit)
+        runCurrent()
+        assertFalse("A newer invalidation must fence the first exact response", requests.any { it.first == "chat.send" })
+        assertFalse(send.isCompleted)
+        assertTrue("The newer invalidation must receive its own exact read", nextReadStarted.isCompleted)
+        assertEquals(read, nextReadStarted.await())
+      } finally {
+        releaseRead.complete(Unit)
+        releaseNextRead.complete(Unit)
+      }
+
+      assertTrue(send.await())
+      assertEquals("synthetic/plain", controller.selectedModelRef.value)
+      assertEquals(
+        listOf("off"),
+        controller.thinkingLevelSelection.value.options
+          .map { it.id },
+      )
+      val sentParams = json.parseToJsonElement(requests.single { it.first == "chat.send" }.second.orEmpty()) as JsonObject
+      assertEquals(JsonPrimitive(sessionKey), sentParams["sessionKey"])
+      assertEquals(JsonPrimitive("off"), sentParams["thinking"])
+      assertTrue(controller.pendingSessionSettingsKeys.value.isEmpty())
+      assertFalse(requests.any { it.first == "sessions.patch" })
+    }
+
+  @Test
   fun deletionRetiresActiveAndQueuedModelSelectionsBeforeTheirAcknowledgements() =
     runTest {
       for (sessionKey in listOf("agent:main:conversation", "global")) {
