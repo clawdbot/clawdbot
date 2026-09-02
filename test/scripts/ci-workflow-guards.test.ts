@@ -10268,16 +10268,25 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     const selectedFiles = (test: { exclude: string[]; include: string[] }) =>
       globSync(test.include, { cwd: process.cwd(), exclude: test.exclude }).toSorted();
     const rootTest = config.test as { exclude: string[]; include: string[] };
-    expect(config.test?.globalSetup).toEqual(["test/vitest/vitest.ui-e2e.global-setup.ts"]);
+    expect(config.test?.globalSetup).toEqual([]);
     expect(config.test?.include).toEqual([
       "ui/src/**/*.e2e.test.ts",
       "extensions/qa-lab/src/control-ui-media-transcript.real-gateway.e2e.test.ts",
     ]);
     expect(projects.map((project) => project.test.name)).toEqual([
       "ui-e2e-bundled",
+      "ui-e2e-standalone",
       "ui-e2e-serial",
+      "ui-e2e-serial-standalone",
     ]);
-    expect(projects.every((project) => project.test.globalSetup === undefined)).toBe(true);
+    const chromiumSetup = "test/vitest/vitest.ui-e2e.global-setup.ts";
+    const bundledSetup = "test/vitest/vitest.ui-e2e.bundled.global-setup.ts";
+    expect(projects.map((project) => project.test.globalSetup)).toEqual([
+      [chromiumSetup, bundledSetup],
+      [chromiumSetup],
+      [chromiumSetup, bundledSetup],
+      [chromiumSetup],
+    ]);
     expect(new Set(projects.map((project) => project.cacheDir)).size).toBe(projects.length);
     expect(config.test?.maxWorkers).toBe(Math.min(2, sharedVitestConfig.test.maxWorkers));
     expect(projects[0]?.test).toMatchObject({
@@ -10286,12 +10295,18 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       sequence: { groupOrder: 0 },
     });
     expect(projects[1]?.test).toMatchObject({
-      exclude: expect.not.arrayContaining(uiE2eRealGatewayTestFiles),
-      fileParallelism: false,
-      include: uiE2eSerialTestFiles,
-      maxWorkers: 1,
-      sequence: { groupOrder: 1 },
+      fileParallelism: sharedVitestConfig.test.fileParallelism,
+      maxWorkers: undefined,
+      sequence: { groupOrder: 0 },
     });
+    for (const project of projects.slice(2)) {
+      expect(project.test).toMatchObject({
+        exclude: expect.not.arrayContaining(uiE2eRealGatewayTestFiles),
+        fileParallelism: false,
+        maxWorkers: 1,
+        sequence: { groupOrder: 1 },
+      });
+    }
     expect(projects[0]?.test.exclude).toEqual(expect.arrayContaining(uiE2eSerialTestFiles));
 
     const realGateway = new Set(uiE2eRealGatewayTestFiles);
@@ -10299,8 +10314,16 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     const serial = new Set(uiE2eSerialTestFiles);
     const localSelected = projects.map((project) => selectedFiles(project.test));
     expect(selectedFiles(rootTest)).toEqual(trackedUiE2eFiles);
-    expect(localSelected[0]).toEqual(trackedUiE2eFiles.filter((file) => !serial.has(file)));
-    expect(localSelected[1]).toEqual(uiE2eSerialTestFiles);
+    expect(localSelected.slice(0, 2).flat().toSorted()).toEqual(
+      trackedUiE2eFiles.filter((file) => !serial.has(file)),
+    );
+    expect(localSelected.slice(2).flat().toSorted()).toEqual(uiE2eSerialTestFiles);
+    expect(localSelected[1]).toEqual([
+      "ui/src/e2e/board-fixture.e2e.test.ts",
+      "ui/src/e2e/control-ui-retained-assets.e2e.test.ts",
+      "ui/src/e2e/service-worker-update.e2e.test.ts",
+    ]);
+    expect(localSelected[3]).toEqual(uiE2ePrivateServerTestFiles);
     expect(localSelected.flat().toSorted()).toEqual(trackedUiE2eFiles);
     expect(new Set(localSelected.flat()).size).toBe(trackedUiE2eFiles.length);
 
@@ -10308,16 +10331,25 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     const ordinaryProjects = ordinaryConfig.test?.projects as typeof projects;
     const ordinarySelected = ordinaryProjects.map((project) => selectedFiles(project.test));
     expect(selectedFiles(ordinaryConfig.test as typeof rootTest)).toEqual(ordinary);
-    expect(ordinarySelected[0]).toEqual(ordinary.filter((file) => !serial.has(file)));
-    expect(ordinarySelected[1]).toEqual(ordinary.filter((file) => serial.has(file)));
+    expect(ordinarySelected.slice(0, 2).flat().toSorted()).toEqual(
+      ordinary.filter((file) => !serial.has(file)),
+    );
+    expect(ordinarySelected.slice(2).flat().toSorted()).toEqual(
+      ordinary.filter((file) => serial.has(file)),
+    );
     expect(ordinarySelected.flat().toSorted()).toEqual(ordinary);
     expect(new Set(ordinarySelected.flat()).size).toBe(ordinary.length);
 
     const bundledFile = expectDefined(ordinarySelected[0]?.[0], "bundled Control UI E2E file");
-    const serialFile = expectDefined(ordinarySelected[1]?.[0], "serial Control UI E2E file");
+    const serialFile = expectDefined(ordinarySelected[3]?.[0], "serial Control UI E2E file");
     const narrowedByArgv = createUiE2eVitestConfig({}, ["node", "vitest", serialFile]);
     const argvProjects = narrowedByArgv.test?.projects as typeof projects;
-    expect(argvProjects.map((project) => selectedFiles(project.test))).toEqual([[], [serialFile]]);
+    expect(argvProjects.map((project) => selectedFiles(project.test))).toEqual([
+      [],
+      [],
+      [],
+      [serialFile],
+    ]);
 
     const includeDir = tempDirs.make("openclaw-ui-e2e-project-includes-");
     const includeFile = path.join(includeDir, "include.json");
@@ -10329,6 +10361,8 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     const includeProjects = narrowedByFile.test?.projects as typeof projects;
     expect(includeProjects.map((project) => selectedFiles(project.test))).toEqual([
       [bundledFile],
+      [],
+      [],
       [serialFile],
     ]);
 
@@ -10362,9 +10396,16 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
           test: { maxWorkers?: number; fileParallelism: boolean };
         }>;
         expect(config.test?.maxWorkers).toBe(expectedWorkers);
-        expect(projects.map((project) => project.test.maxWorkers)).toEqual([undefined, 1]);
+        expect(projects.map((project) => project.test.maxWorkers)).toEqual([
+          undefined,
+          undefined,
+          1,
+          1,
+        ]);
         expect(projects.map((project) => project.test.fileParallelism)).toEqual([
           fileParallelism,
+          fileParallelism,
+          false,
           false,
         ]);
       }
