@@ -7,8 +7,8 @@ import type { ChannelMessageActionContext } from "openclaw/plugin-sdk/channel-co
 import type { OpenClawConfig } from "openclaw/plugin-sdk/core";
 import type { OpenClawPluginToolContext } from "openclaw/plugin-sdk/plugin-entry";
 import {
+  resolveAllowlistProviderRuntimeGroupPolicy,
   resolveDefaultGroupPolicy,
-  resolveOpenProviderRuntimeGroupPolicy,
 } from "openclaw/plugin-sdk/runtime-group-policy";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { normalizeFeishuChatType } from "./chat-type.js";
@@ -89,7 +89,7 @@ function isCurrentChat(params: {
 }
 
 function resolveFeishuReadGroupPolicy(cfg: OpenClawConfig, account: ResolvedFeishuAccount) {
-  return resolveOpenProviderRuntimeGroupPolicy({
+  return resolveAllowlistProviderRuntimeGroupPolicy({
     providerConfigPresent: cfg.channels?.feishu !== undefined,
     groupPolicy: account.config.groupPolicy,
     defaultGroupPolicy: resolveDefaultGroupPolicy(cfg),

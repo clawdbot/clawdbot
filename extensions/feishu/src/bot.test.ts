@@ -1690,6 +1690,65 @@ describe("handleFeishuMessage command authorization", () => {
     expect(mockDispatchReplyFromConfig).toHaveBeenCalledTimes(1);
   });
 
+  it("drops unlisted group messages when groupPolicy is unset", async () => {
+    mockShouldComputeCommandAuthorized.mockReturnValue(false);
+
+    const cfg = createFeishuTestConfig({});
+    const event = createFeishuTestEvent({
+      messageId: "msg-unset-group-policy-unlisted",
+      chatId: "oc-group",
+      chatType: "group",
+    });
+
+    const runtime = await dispatchMessage({ cfg, event, botOpenId: "ou-bot" });
+
+    expect(runtime.log).toHaveBeenCalledWith(
+      expect.stringContaining("group oc-group not in groupAllowFrom (groupPolicy=allowlist)"),
+    );
+    expect(mockFinalizeInboundContext).not.toHaveBeenCalled();
+    expect(mockDispatchReplyFromConfig).not.toHaveBeenCalled();
+  });
+
+  it("requires a mention in allowlisted groups when groupPolicy is unset", async () => {
+    mockShouldComputeCommandAuthorized.mockReturnValue(false);
+
+    const cfg = createFeishuTestConfig({ groupAllowFrom: ["oc-group"] });
+    const unmentioned = createFeishuTestEvent({
+      messageId: "msg-unset-group-policy-unmentioned",
+      chatId: "oc-group",
+      chatType: "group",
+    });
+
+    const runtime = await dispatchMessage({ cfg, event: unmentioned, botOpenId: "ou-bot" });
+
+    expect(runtime.log).toHaveBeenCalledWith(
+      expect.stringContaining("message in group oc-group did not mention bot"),
+    );
+    expect(mockFinalizeInboundContext).not.toHaveBeenCalled();
+    expect(mockDispatchReplyFromConfig).not.toHaveBeenCalled();
+
+    const mentioned = createFeishuTestEvent({
+      messageId: "msg-unset-group-policy-mentioned",
+      chatId: "oc-group",
+      chatType: "group",
+      text: "@_user_1 hello",
+      message: {
+        mentions: [{ key: "@_user_1", id: { open_id: "ou-bot" }, name: "Bot", tenant_key: "" }],
+      },
+    });
+
+    await dispatchMessage({ cfg, event: mentioned, botOpenId: "ou-bot" });
+
+    const context = mockCallArg<{ ChatType?: string; GroupRequireMention?: boolean }>(
+      mockFinalizeInboundContext,
+      0,
+      0,
+    );
+    expect(context.ChatType).toBe("group");
+    expect(context.GroupRequireMention).toBe(true);
+    expect(mockDispatchReplyFromConfig).toHaveBeenCalledTimes(1);
+  });
+
   it("verifies app-scoped bot mention ids before admitting bot-authored events", async () => {
     mockShouldComputeCommandAuthorized.mockReturnValue(false);
     const baseFeishuConfig = {
