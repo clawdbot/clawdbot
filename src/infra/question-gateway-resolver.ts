@@ -11,8 +11,16 @@ const QUESTION_RECORD_ID_PATTERN = /^ask_[a-f0-9]{32}$/u;
 export type ResolveQuestionOverGatewayResult =
   | { status: "answered"; questionId: string; optionValue: string }
   | { status: "custom-input"; questionId: string }
-  | { status: "already-terminal"; reason: "already-terminal" | "not-found" }
-  | { status: "denied" };
+  | { status: "already-terminal"; reason: "already-terminal" | "not-found" };
+
+/**
+ * Re-checked after the awaited question read and immediately before the resolve
+ * write, so access lost during that window cannot answer.
+ */
+export type QuestionResolutionAuthorizer = () => boolean | Promise<boolean>;
+
+/** Only a caller that supplies an authorizer can receive this. */
+export type ResolveQuestionOverGatewayDenial = { status: "denied" };
 
 export type ResolveQuestionOverGatewayParams = {
   cfg: OpenClawConfig;
@@ -20,11 +28,6 @@ export type ResolveQuestionOverGatewayParams = {
   senderId?: string | null;
   gatewayUrl?: string;
   clientDisplayName?: string;
-  /**
-   * Re-checked after the awaited question read and immediately before the
-   * resolve write, so access lost during that window cannot answer.
-   */
-  authorize?: () => boolean | Promise<boolean>;
 } & (
   | {
       /** Rendered option value carried by the pressed control (reactions). */
@@ -62,9 +65,21 @@ function readTerminalReason(error: unknown): "already-terminal" | "not-found" | 
 }
 
 /** Resolves one rendered choice or validates a custom-input transition. */
+export type AuthorizedResolveQuestionOverGatewayParams = ResolveQuestionOverGatewayParams & {
+  authorize: QuestionResolutionAuthorizer;
+};
+
+// Only the authorized overload widens the result, so callers that never opt in
+// keep the result union they already exhaust.
+export async function resolveQuestionOverGateway(
+  params: AuthorizedResolveQuestionOverGatewayParams,
+): Promise<ResolveQuestionOverGatewayResult | ResolveQuestionOverGatewayDenial>;
 export async function resolveQuestionOverGateway(
   params: ResolveQuestionOverGatewayParams,
-): Promise<ResolveQuestionOverGatewayResult> {
+): Promise<ResolveQuestionOverGatewayResult>;
+export async function resolveQuestionOverGateway(
+  params: ResolveQuestionOverGatewayParams & { authorize?: QuestionResolutionAuthorizer },
+): Promise<ResolveQuestionOverGatewayResult | ResolveQuestionOverGatewayDenial> {
   if (!QUESTION_RECORD_ID_PATTERN.test(params.questionId)) {
     throw new Error("question resolution requires a valid question record id");
   }
