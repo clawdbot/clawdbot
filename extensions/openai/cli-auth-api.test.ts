@@ -1,6 +1,8 @@
+import { once } from "node:events";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { Worker } from "node:worker_threads";
 import { isPidAlive, killProcessTree } from "openclaw/plugin-sdk/process-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { readCodexCliAccount } from "./cli-auth-api.js";
@@ -25,6 +27,7 @@ async function createProbeFixture(response: unknown, mode = "account") {
   const command = path.join(home, "native codex.mjs");
   const script = `#!/usr/bin/env node
 import { spawn } from 'node:child_process';
+import { once } from 'node:events';
 import fs from 'node:fs';
 import path from 'node:path';
 import readline from 'node:readline';
@@ -32,13 +35,15 @@ const mode = ${JSON.stringify(mode)};
 const response = ${JSON.stringify(response)};
 const tracePath = path.join(process.env.CODEX_HOME ?? ${JSON.stringify(home)}, 'trace.json');
 const trace = { pid: process.pid, codexHome: process.env.CODEX_HOME, args: process.argv.slice(2), messages: [] };
-if (mode === 'stubborn') {
-  process.on('SIGTERM', () => {});
-  const descendant = spawn(process.execPath, ['-e', 'process.on("SIGTERM", () => {}); setInterval(() => {}, 1000)'], { stdio: 'ignore' });
-  trace.descendantPid = descendant.pid;
-}
 const save = () => fs.writeFileSync(tracePath, JSON.stringify(trace));
 save();
+if (mode === 'stubborn' || mode === 'stubborn-descendant') {
+  if (mode === 'stubborn') process.on('SIGTERM', () => {});
+  const descendant = spawn(process.execPath, ['-e', 'process.on("SIGTERM", () => {}); setInterval(() => {}, 1000); process.send("ready", () => process.disconnect());'], { stdio: ['ignore', 'ignore', 'ignore', 'ipc'] });
+  trace.descendantPid = descendant.pid;
+  save();
+  await once(descendant, 'message');
+}
 let initialized = false;
 let notified = false;
 const reply = (message, afterWrite) => {
@@ -91,7 +96,7 @@ async function expectProbeStopped(home: string) {
   return trace;
 }
 
-afterEach(async () => {
+async function cleanupFixtures() {
   for (const home of fixtures) {
     const trace = await readTrace(home).catch(() => undefined);
     for (const pid of [trace?.pid, trace?.descendantPid]) {
@@ -102,10 +107,15 @@ afterEach(async () => {
         });
       }
     }
+    if (trace) {
+      await expectProbeStopped(home);
+    }
     await fs.rm(home, { recursive: true, force: true });
   }
   fixtures.clear();
-});
+}
+
+afterEach(cleanupFixtures);
 
 describe("native Codex account discovery", () => {
   it("waits for initialization and keeps stdin open until the account response", async () => {
@@ -189,6 +199,51 @@ describe("native Codex account discovery", () => {
     const trace = await expectProbeStopped(fixture.home);
     expect(trace.descendantPid).toBeTypeOf("number");
   });
+
+  // POSIX group cleanup must finish before the caller can discard its Worker timers.
+  it.skipIf(process.platform === "win32")(
+    "cleans up a stubborn descendant before its caller terminates the worker",
+    async () => {
+      const fixture = await createProbeFixture(
+        { account: { type: "apiKey" } },
+        "stubborn-descendant",
+      );
+      const workerPath = path.join(fixture.home, "reader-worker.mjs");
+      await fs.writeFile(
+        workerPath,
+        `
+          import { parentPort, workerData } from "node:worker_threads";
+          const { readCodexCliAccount } = await import(workerData.moduleUrl);
+          parentPort.postMessage(await readCodexCliAccount(workerData.fixture));
+        `,
+      );
+      const worker = new Worker(workerPath, {
+        execArgv: ["--import", new URL("../../scripts/tsx.mjs", import.meta.url).href],
+        env: fixture.env,
+        workerData: {
+          moduleUrl: new URL("./cli-auth-api.ts", import.meta.url).href,
+          fixture,
+        },
+      });
+
+      try {
+        const [account] = await once(worker, "message", {
+          signal: AbortSignal.timeout(10_000),
+        });
+        await worker.terminate();
+        expect(account).toEqual({ type: "apiKey" });
+        const trace = await expectProbeStopped(fixture.home);
+        expect(trace.descendantPid).toBeTypeOf("number");
+      } finally {
+        try {
+          await worker.terminate();
+        } finally {
+          await cleanupFixtures();
+        }
+      }
+    },
+    15_000,
+  );
 
   it("ends an unresponsive native probe at its deadline", async () => {
     const fixture = await createProbeFixture({}, "silent");

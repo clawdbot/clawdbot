@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { killProcessTree } from "openclaw/plugin-sdk/process-runtime";
+import { signalProcessTree } from "openclaw/plugin-sdk/process-runtime";
 import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   materializeWindowsSpawnProgram,
@@ -72,24 +72,31 @@ export async function readCodexCliAccount(params: {
       let result: CodexCliAccount | null = null;
       let output = "";
       let outputBytes = 0;
-      const terminate = (force: boolean) => {
-        if (child.pid) {
-          killProcessTree(child.pid, { detached, force, graceMs: 200 });
-        }
-      };
-      const finish = (force: boolean) => {
+      let cleanupTimer: ReturnType<typeof setTimeout> | undefined;
+      const finish = () => {
         if (phase === "closed") {
           return;
         }
         phase = "closed";
         clearTimeout(timer);
-        if (force) {
-          terminate(true);
+        clearTimeout(cleanupTimer);
+        const complete = () => {
+          // A bounded taskkill attempt can fail; still stop our live direct child.
+          if (!detached && child.exitCode === null && child.signalCode === null) {
+            child.kill("SIGKILL");
+          }
+          child.stdin.destroy();
+          child.stdout.destroy();
+          child.unref();
+          resolve(result);
+        };
+        // A Unix group can outlive its leader. Finish signaling before the caller
+        // terminates its worker; Windows must not target an already-exited root PID.
+        if (child.pid && (detached || (child.exitCode === null && child.signalCode === null))) {
+          signalProcessTree(child.pid, "SIGKILL", { detached, onComplete: complete });
+        } else {
+          complete();
         }
-        child.stdin.destroy();
-        child.stdout.destroy();
-        child.unref();
-        resolve(result);
       };
       const stop = (account: CodexCliAccount | null) => {
         if (phase === "closing" || phase === "closed") {
@@ -98,10 +105,15 @@ export async function readCodexCliAccount(params: {
         phase = "closing";
         result = account;
         output = "";
-        // Stop descendants while the parent is alive so Windows can enumerate the tree.
-        terminate(false);
+        // Windows must enumerate the live tree before terminating its root.
+        if (!detached || !child.pid) {
+          finish();
+          return;
+        }
+        signalProcessTree(child.pid, "SIGTERM", { detached });
+        cleanupTimer = setTimeout(finish, 200);
       };
-      const timer = setTimeout(() => finish(true), 3_000);
+      const timer = setTimeout(finish, 3_000);
       const send = (messages: object[]) => {
         try {
           child.stdin.write(`${messages.map((message) => JSON.stringify(message)).join("\n")}\n`);
@@ -110,7 +122,7 @@ export async function readCodexCliAccount(params: {
         }
       };
       child.once("error", () => stop(null));
-      child.once("close", () => finish(phase !== "closing"));
+      child.once("close", finish);
       child.stdin.on("error", () => stop(null));
       child.stdout.on("error", () => stop(null));
       child.stdout.setEncoding("utf8");

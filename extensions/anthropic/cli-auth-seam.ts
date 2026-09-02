@@ -1,5 +1,9 @@
 import { spawnSync } from "node:child_process";
 import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  materializeWindowsSpawnProgram,
+  resolveWindowsSpawnProgram,
+} from "openclaw/plugin-sdk/windows-spawn";
 import { CLAUDE_CLI_CLEAR_ENV } from "./cli-constants.js";
 
 const CLAUDE_CLI_AUTH_METHODS = [
@@ -28,20 +32,27 @@ export function probeClaudeCliAuthStatus(params?: {
   for (const name of CLAUDE_CLI_CLEAR_ENV) {
     delete env[name];
   }
-  const result = spawnSync(params?.command ?? "claude", ["auth", "status", "--json"], {
-    encoding: "utf8",
-    env,
-    maxBuffer: 64 * 1024,
-    timeout: 3_000,
-    windowsHide: true,
-  });
-  if (result.error || result.status === null) {
-    return { status: "unreadable" };
-  }
-  if (result.status !== 0) {
-    return { status: "missing" };
-  }
   try {
+    const program = resolveWindowsSpawnProgram({
+      command: params?.command ?? "claude",
+      env,
+      packageName: "@anthropic-ai/claude-code",
+    });
+    const invocation = materializeWindowsSpawnProgram(program, ["auth", "status", "--json"]);
+    const result = spawnSync(invocation.command, invocation.argv, {
+      encoding: "utf8",
+      env,
+      maxBuffer: 64 * 1024,
+      timeout: 3_000,
+      shell: invocation.shell,
+      windowsHide: invocation.windowsHide ?? true,
+    });
+    if (result.error || result.status === null) {
+      return { status: "unreadable" };
+    }
+    if (result.status !== 0) {
+      return { status: "missing" };
+    }
     const parsed: unknown = JSON.parse(result.stdout);
     if (!isRecord(parsed) || parsed.loggedIn !== true) {
       return { status: "missing" };
