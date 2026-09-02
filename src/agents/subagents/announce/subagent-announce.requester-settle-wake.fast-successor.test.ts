@@ -208,20 +208,12 @@ describe("fast-settled successor requester settle wakes", () => {
       };
     });
 
-    vi.useFakeTimers();
-    vi.setSystemTime(0);
-    try {
-      await expect(
-        maybeWakeRequesterAfterAllChildrenSettled(wakeParams({ settledEntry: original })),
-      ).resolves.toBe(false);
-      expect(completeBatchSpy).toHaveBeenCalledWith(["run-original"], 1);
-      expect(original.requesterSettleWake).toBeUndefined();
-
-      await vi.advanceTimersByTimeAsync(30_000);
-      expect(deliverSpy).toHaveBeenCalledOnce();
-    } finally {
-      vi.useRealTimers();
-    }
+    await expect(
+      maybeWakeRequesterAfterAllChildrenSettled(wakeParams({ settledEntry: original })),
+    ).resolves.toBe(false);
+    expect(completeBatchSpy).toHaveBeenCalledWith(["run-original"], 1);
+    expect(original.requesterSettleWake).toBeUndefined();
+    expect(deliverSpy).toHaveBeenCalledOnce();
   });
 
   it("retries a visible final despite an unrelated durable yielded wake", async () => {
