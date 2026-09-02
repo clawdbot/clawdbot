@@ -270,6 +270,7 @@ class ChatControllerBranchCoordinationTest {
       assertTrue(controller.sendMessageAwaitAcceptance("queued after rewind", "off", emptyList()))
       // A past failure cannot fence dispatch; keep its successful retry pending while checking.
       retryListStarted.await()
+      assertTrue(outbox.branchState("gateway-a", ChatOutboxScope("main", "main"))?.needsReconciliation == true)
       assertEquals(0, gateway.callCount("chat.send"))
       releaseRetryList.complete(Unit)
 
@@ -281,6 +282,7 @@ class ChatControllerBranchCoordinationTest {
 
       assertTrue(listCalls.get() >= 2)
       assertFalse(outbox.branchState("gateway-a", ChatOutboxScope("main", "main"))?.needsReconciliation == true)
+      assertEquals(1, gateway.callCount("chat.send"))
     }
 
   @Test
