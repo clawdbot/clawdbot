@@ -475,8 +475,12 @@ export function hasWebCredsSyncedHistory(authDir: string = resolveDefaultWebAuth
     if (!raw) {
       return false;
     }
-    const parsed = JSON.parse(raw) as { accountSyncCounter?: unknown } | undefined;
-    return typeof parsed?.accountSyncCounter === "number" && parsed.accountSyncCounter > 0;
+    const parsed: unknown = JSON.parse(raw);
+    if (typeof parsed !== "object" || parsed === null || !("accountSyncCounter" in parsed)) {
+      return false;
+    }
+    const counter = parsed.accountSyncCounter;
+    return typeof counter === "number" && counter > 0;
   } catch {
     return false;
   }
