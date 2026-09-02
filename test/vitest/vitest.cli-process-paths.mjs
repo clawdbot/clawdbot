@@ -22,7 +22,6 @@ export const cliProcessTestFiles = [
   "src/cli/program/subcli-descriptors.test.ts",
   "src/cli/state-dir-gateway-check.process.test.ts",
   "src/cli/state-dir-gateway-check.server.test.ts",
-  "src/node-host/worker-exit.process.test.ts",
 ];
 
 const cliProcessTestFileSet = new Set(cliProcessTestFiles);
