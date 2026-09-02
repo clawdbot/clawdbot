@@ -479,10 +479,8 @@ describe("buildSubagentList", () => {
   });
 
   // The shared-cwd advisory warns when a caller deliberately aimed two live
-  // children at one directory. Assertions target the structured `sharedCwd`
-  // field, not just the line suffix: subagents-tool strips `line` from its JSON
-  // output, so line-only coverage would pass while the tool surface carried
-  // nothing.
+  // children at one directory. Each directory is emitted once in a bounded
+  // summary; individual rows carry only a small group id.
   describe("shared cwd advisory", () => {
     const makeRun = (
       suffix: string,
@@ -534,19 +532,19 @@ describe("buildSubagentList", () => {
 
       expect(list.active).toHaveLength(2);
       const byRunId = new Map(list.active.map((item) => [item.runId, item]));
-      expect(byRunId.get(runA.runId)?.sharedCwd).toEqual({
-        path: path.resolve(sharedDir),
-        peerCount: 1,
-        peerRunIds: [runB.runId],
-      });
-      expect(byRunId.get(runB.runId)?.sharedCwd).toEqual({
-        path: path.resolve(sharedDir),
-        peerCount: 1,
-        peerRunIds: [runA.runId],
-      });
-      expect(byRunId.get(runA.runId)?.line).toContain(
-        `[shared cwd with 1 other run: ${path.resolve(sharedDir)}]`,
-      );
+      expect(list.sharedCwdGroupTotal).toBe(1);
+      expect(list.sharedCwdGroups).toEqual([
+        {
+          id: 1,
+          path: path.resolve(sharedDir),
+          runCount: 2,
+          runIds: [runA.runId, runB.runId],
+        },
+      ]);
+      expect(byRunId.get(runA.runId)?.sharedCwdGroupId).toBe(1);
+      expect(byRunId.get(runB.runId)?.sharedCwdGroupId).toBe(1);
+      expect(byRunId.get(runA.runId)?.line).toContain("[shared cwd group 1]");
+      expect(list.text.split(path.resolve(sharedDir))).toHaveLength(2);
     });
 
     it("pluralizes the suffix and excludes self from peers for three sharing runs", async () => {
@@ -565,12 +563,17 @@ describe("buildSubagentList", () => {
       const list = buildSubagentList({ cfg, runs, recentMinutes: 30 });
 
       expect(list.active).toHaveLength(3);
+      expect(list.sharedCwdGroups).toEqual([
+        {
+          id: 1,
+          path: path.resolve(sharedDir),
+          runCount: 3,
+          runIds: runs.map((run) => run.runId),
+        },
+      ]);
       for (const item of list.active) {
-        expect(item.sharedCwd?.path).toBe(path.resolve(sharedDir));
-        expect(item.sharedCwd?.peerRunIds).not.toContain(item.runId);
-        expect(item.sharedCwd?.peerRunIds).toHaveLength(2);
-        expect(item.sharedCwd?.peerCount).toBe(2);
-        expect(item.line).toContain("[shared cwd with 2 other runs:");
+        expect(item.sharedCwdGroupId).toBe(1);
+        expect(item.line).toContain("[shared cwd group 1]");
       }
     });
 
@@ -591,7 +594,7 @@ describe("buildSubagentList", () => {
 
       expect(list.active).toHaveLength(2);
       for (const item of list.active) {
-        expect(item.sharedCwd).toBeUndefined();
+        expect(item.sharedCwdGroupId).toBeUndefined();
         expect(item.line).not.toContain("shared cwd");
       }
     });
@@ -619,7 +622,7 @@ describe("buildSubagentList", () => {
 
       expect(list.active).toHaveLength(2);
       for (const item of list.active) {
-        expect(item.sharedCwd).toBeUndefined();
+        expect(item.sharedCwdGroupId).toBeUndefined();
         expect(item.line).not.toContain("shared cwd");
       }
     });
@@ -646,17 +649,17 @@ describe("buildSubagentList", () => {
       expect(list.active).toHaveLength(2);
       const canonical = await fs.realpath(realDir);
       const byRunId = new Map(list.active.map((item) => [item.runId, item]));
-      expect(byRunId.get(runA.runId)?.sharedCwd).toEqual({
-        path: canonical,
-        peerCount: 1,
-        peerRunIds: [runB.runId],
-      });
+      expect(list.sharedCwdGroups).toEqual([
+        {
+          id: 1,
+          path: canonical,
+          runCount: 2,
+          runIds: [runA.runId, runB.runId],
+        },
+      ]);
+      expect(byRunId.get(runA.runId)?.sharedCwdGroupId).toBe(1);
       // The alias row reports the canonical directory, not the link it named.
-      expect(byRunId.get(runB.runId)?.sharedCwd).toEqual({
-        path: canonical,
-        peerCount: 1,
-        peerRunIds: [runA.runId],
-      });
+      expect(byRunId.get(runB.runId)?.sharedCwdGroupId).toBe(1);
     });
 
     it("falls back to lexical comparison when an explicit directory no longer exists", async () => {
@@ -676,11 +679,15 @@ describe("buildSubagentList", () => {
       const list = buildSubagentList({ cfg, runs: [runA, runB], recentMinutes: 30 });
 
       expect(list.active).toHaveLength(2);
-      for (const item of list.active) {
-        expect(item.sharedCwd?.path).toBe(path.resolve(missingDir));
-        expect(item.sharedCwd?.peerRunIds).toHaveLength(1);
-        expect(item.sharedCwd?.peerCount).toBe(1);
-      }
+      expect(list.sharedCwdGroups).toEqual([
+        {
+          id: 1,
+          path: path.resolve(missingDir),
+          runCount: 2,
+          runIds: [runA.runId, runB.runId],
+        },
+      ]);
+      expect(list.active.every((item) => item.sharedCwdGroupId === 1)).toBe(true);
     });
 
     it("ignores ended runs that shared a directory", async () => {
@@ -700,7 +707,7 @@ describe("buildSubagentList", () => {
       expect(list.active).toStrictEqual([]);
       expect(list.recent).toHaveLength(2);
       for (const item of list.recent) {
-        expect(item.sharedCwd).toBeUndefined();
+        expect(item.sharedCwdGroupId).toBeUndefined();
         expect(item.line).not.toContain("shared cwd");
       }
     });
@@ -711,7 +718,7 @@ describe("buildSubagentList", () => {
     // schema maximum of 20 children for one agent session that measured ~30 KB /
     // ~7.5K tokens of model-visible output. These tests pin the caps, not just
     // the happy path.
-    it("caps the peer sample and reports the exact peer count at the supported child maximum", async () => {
+    it("emits one bounded summary at the supported child maximum", async () => {
       const now = Date.now();
       const sharedDir = path.join(testWorkspaceDir, "shared-tree-max-children");
       // 20 == `maxChildrenPerAgent`'s `.max(20)` in zod-schema.agent-defaults.ts.
@@ -730,20 +737,20 @@ describe("buildSubagentList", () => {
       const list = buildSubagentList({ cfg, runs, recentMinutes: 30 });
 
       expect(list.active).toHaveLength(20);
-      let emittedPeerIds = 0;
+      expect(list.sharedCwdGroupTotal).toBe(1);
+      expect(list.sharedCwdGroups).toEqual([
+        {
+          id: 1,
+          path: path.resolve(sharedDir),
+          runCount: 20,
+          runIds: runs.slice(0, 3).map((run) => run.runId),
+        },
+      ]);
       for (const item of list.active) {
-        // The count stays exact so the operator still learns the real group size...
-        expect(item.sharedCwd?.peerCount).toBe(19);
-        // ...while the id list is a bounded sample, never an inventory.
-        expect(item.sharedCwd?.peerRunIds.length).toBeLessThanOrEqual(3);
-        expect(item.sharedCwd?.peerRunIds).not.toContain(item.runId);
-        emittedPeerIds += item.sharedCwd?.peerRunIds.length ?? 0;
-        // The text view must read peerCount, not the truncated sample length:
-        // reporting "3 other runs" for a group of 20 would be a silent lie.
-        expect(item.line).toContain("[shared cwd with 19 other runs: ");
+        expect(item.sharedCwdGroupId).toBe(1);
+        expect(item.line).toContain("[shared cwd group 1]");
       }
-      // Pre-fix this was 20 * 19 == 380 ids for a single ordinary list call.
-      expect(emittedPeerIds).toBe(60);
+      expect(list.text.split(path.resolve(sharedDir))).toHaveLength(2);
     });
 
     it("caps the reported directory while grouping on the full path", async () => {
@@ -783,9 +790,7 @@ describe("buildSubagentList", () => {
       });
 
       expect(list.active).toHaveLength(4);
-      const byRunId = new Map(list.active.map((item) => [item.runId, item]));
-      const alpha = byRunId.get(sharedRuns[0]!.runId)?.sharedCwd;
-      const beta = byRunId.get(otherRuns[0]!.runId)?.sharedCwd;
+      const [alpha, beta] = list.sharedCwdGroups;
 
       for (const advisory of [alpha, beta]) {
         expect(advisory?.path.length).toBeLessThanOrEqual(72);
@@ -798,10 +803,44 @@ describe("buildSubagentList", () => {
       expect(alpha?.path).not.toBe(beta?.path);
       // Grouping still used the full path: neither group absorbed the other
       // despite sharing every character up to the leaf.
-      expect(alpha?.peerCount).toBe(1);
-      expect(beta?.peerCount).toBe(1);
-      expect(alpha?.peerRunIds).toEqual([sharedRuns[1]!.runId]);
-      expect(beta?.peerRunIds).toEqual([otherRuns[1]!.runId]);
+      expect(alpha?.runCount).toBe(2);
+      expect(beta?.runCount).toBe(2);
+      expect(alpha?.runIds).toEqual(sharedRuns.map((run) => run.runId));
+      expect(beta?.runIds).toEqual(otherRuns.map((run) => run.runId));
+    });
+
+    it("caps directory summaries for a 50-child multi-group swarm", async () => {
+      const now = Date.now();
+      const groups = Array.from({ length: 25 }, (_unused, groupIndex) => ({
+        dir: path.join(testWorkspaceDir, `bounded-group-${String(groupIndex).padStart(2, "0")}`),
+        runs: [0, 1].map((runIndex) => makeRun(`bounded-${groupIndex}-${runIndex}`, now)),
+      }));
+      const runs = groups.flatMap((group) => group.runs);
+      for (const run of runs) {
+        addSubagentRunForTests(run);
+      }
+      const storePath = path.join(testWorkspaceDir, "sessions-shared-cwd-many-groups.json");
+      for (const group of groups) {
+        for (const run of group.runs) {
+          await seedSessionEntry(storePath, run.childSessionKey, group.dir);
+        }
+      }
+      const cfg = { session: { store: storePath } } as OpenClawConfig;
+
+      const list = buildSubagentList({ cfg, runs, recentMinutes: 30 });
+
+      expect(list.active).toHaveLength(50);
+      expect(list.sharedCwdGroupTotal).toBe(25);
+      expect(list.sharedCwdGroups).toHaveLength(8);
+      expect(list.sharedCwdGroups.every((group) => group.runIds.length === 2)).toBe(true);
+      expect(list.active.filter((item) => item.sharedCwdGroupId !== undefined)).toHaveLength(16);
+      expect(list.text).toContain("shared working directories (8/25 shown):");
+      for (const group of groups.slice(0, 8)) {
+        expect(list.text.split(path.resolve(group.dir))).toHaveLength(2);
+      }
+      for (const group of groups.slice(8)) {
+        expect(list.text).not.toContain(path.resolve(group.dir));
+      }
     });
 
     it("does not flag a live run whose only directory peer has ended", async () => {
@@ -822,9 +861,9 @@ describe("buildSubagentList", () => {
 
       expect(list.active).toHaveLength(1);
       expect(list.active[0]?.runId).toBe(liveRun.runId);
-      expect(list.active[0]?.sharedCwd).toBeUndefined();
+      expect(list.active[0]?.sharedCwdGroupId).toBeUndefined();
       expect(list.active[0]?.line).not.toContain("shared cwd");
-      expect(list.recent[0]?.sharedCwd).toBeUndefined();
+      expect(list.recent[0]?.sharedCwdGroupId).toBeUndefined();
     });
   });
 });

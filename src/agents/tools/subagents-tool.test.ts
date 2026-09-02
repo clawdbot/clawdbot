@@ -100,8 +100,8 @@ describe("subagents tool", () => {
   });
 
   it("surfaces the shared-cwd advisory in structured list output", async () => {
-    // `line` is stripped from the tool's JSON payload, so the structured
-    // `sharedCwd` field is the only way this advisory reaches a caller.
+    // `line` is stripped from rows, so the bounded top-level summary is the
+    // structured source of directory details.
     resetSubagentRegistryForTests();
     const now = Date.now();
     const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-subagents-tool-"));
@@ -145,26 +145,29 @@ describe("subagents tool", () => {
       const result = await tool.execute("list-shared-cwd", { action: "list" });
 
       const details = result.details as {
-        active: Array<{ runId: string; line?: string; sharedCwd?: unknown }>;
+        active: Array<{ runId: string; line?: string; sharedCwdGroupId?: number }>;
+        sharedCwdGroupTotal: number;
+        sharedCwdGroups: Array<Record<string, unknown>>;
       };
       expect(details.active).toHaveLength(2);
+      expect(details.sharedCwdGroupTotal).toBe(1);
+      expect(details.sharedCwdGroups).toEqual([
+        {
+          id: 1,
+          path: path.resolve(sharedCwd),
+          runCount: 2,
+          runIds: ["run-tool-shared-a", "run-tool-shared-b"],
+        },
+      ]);
       expect(details.active).toEqual(
         expect.arrayContaining([
           expect.objectContaining({
             runId: "run-tool-shared-a",
-            sharedCwd: {
-              path: path.resolve(sharedCwd),
-              peerCount: 1,
-              peerRunIds: ["run-tool-shared-b"],
-            },
+            sharedCwdGroupId: 1,
           }),
           expect.objectContaining({
             runId: "run-tool-shared-b",
-            sharedCwd: {
-              path: path.resolve(sharedCwd),
-              peerCount: 1,
-              peerRunIds: ["run-tool-shared-a"],
-            },
+            sharedCwdGroupId: 1,
           }),
         ]),
       );

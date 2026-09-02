@@ -27,9 +27,9 @@
  *   1. Pre-fix control: two ACP children in one directory, no `spawnedCwd`
  *      persisted (current `main`) — no advisory. This is the reported bug.
  *   2. Post-fix: the same two ACP children with the field persisted — both
- *      flagged as peers, in the tool JSON and in the `/subagents` text.
+ *      refer to one directory summary in tool JSON and `/subagents` text.
  *   3. Cross-runtime: one native child and one ACP child in one directory —
- *      each names the other.
+ *      both refer to the same group.
  *   4. Symlink alias: two children reach one checkout by different paths —
  *      grouped, and the canonical directory is reported.
  *   5. Inherited workspace (no explicit cwd) — silent.
@@ -39,10 +39,9 @@
  *   8. Model-context bound at the supported child maximum: 20 live children in
  *      one long-pathed directory. Measures the real model-visible payload the
  *      `subagents` tool emits for `action: "list"` and asserts the advisory's
- *      per-row contribution is capped — the P0 regression. Also re-measures at
- *      50 (the swarm `maxChildrenPerGroup` default) to show the growth is
- *      linear rather than quadratic, and pins that a long path is still grouped
- *      on its full value while only its display form is truncated.
+ *      whole-response contribution is capped — the P0 regression. Also drives
+ *      25 shared directories across 50 children to prove only eight directory
+ *      summaries are model-visible.
  *
  * Run: pnpm tsx scripts/proof-135480-subagent-shared-cwd-advisory.ts
  */
@@ -142,8 +141,10 @@ async function main(): Promise<void> {
     return { list, text };
   };
 
-  const advisoryFor = (list: ReturnType<SubagentListModule["buildSubagentList"]>, runId: string) =>
-    list.active.find((item) => item.runId === runId)?.sharedCwd;
+  const groupFor = (list: ReturnType<SubagentListModule["buildSubagentList"]>, runId: string) => {
+    const groupId = list.active.find((item) => item.runId === runId)?.sharedCwdGroupId;
+    return list.sharedCwdGroups.find((group) => group.id === groupId);
+  };
 
   const now = Date.now();
 
@@ -166,7 +167,7 @@ async function main(): Promise<void> {
     check("no advisory — this is the false negative the PR fixes", () => {
       assert.equal(list.active.length, 2);
       for (const run of runs) {
-        assert.equal(advisoryFor(list, run.runId), undefined);
+        assert.equal(groupFor(list, run.runId), undefined);
       }
     });
   }
@@ -185,26 +186,21 @@ async function main(): Promise<void> {
       });
     }
     const { list, text } = listFor(store, runs);
-    const first = advisoryFor(list, runs[0]!.runId);
-    console.log(`   run ${runs[0]!.runId} advisory: ${JSON.stringify(first)}`);
-    check("both ACP rows are flagged and name each other", () => {
-      assert.deepEqual(advisoryFor(list, runs[0]!.runId), {
+    const first = groupFor(list, runs[0]!.runId);
+    console.log(`   run ${runs[0]!.runId} group: ${JSON.stringify(first)}`);
+    check("both ACP rows refer to one exact group summary", () => {
+      assert.deepEqual(first, {
+        id: 1,
         path: dir,
-        peerCount: 1,
-        peerRunIds: [runs[1]!.runId],
+        runCount: 2,
+        runIds: runs.map((run) => run.runId),
       });
-      assert.deepEqual(advisoryFor(list, runs[1]!.runId), {
-        path: dir,
-        peerCount: 1,
-        peerRunIds: [runs[0]!.runId],
-      });
+      assert.equal(list.active[0]?.sharedCwdGroupId, 1);
+      assert.equal(list.active[1]?.sharedCwdGroupId, 1);
     });
-    check("the /subagents text surface carries the suffix", () => {
+    check("the /subagents text surface emits the directory once", () => {
       const rendered = JSON.stringify(text);
-      assert.ok(
-        rendered.includes(`[shared cwd with 1 other run: ${dir}]`),
-        `command text did not carry the advisory: ${rendered.slice(0, 400)}`,
-      );
+      assert.equal(rendered.split(dir).length, 2);
     });
   }
 
@@ -223,9 +219,10 @@ async function main(): Promise<void> {
       });
     }
     const { list } = listFor(store, [nativeRun, acpRun]);
-    check("the native row names the ACP run and vice versa", () => {
-      assert.deepEqual(advisoryFor(list, nativeRun.runId)?.peerRunIds, [acpRun.runId]);
-      assert.deepEqual(advisoryFor(list, acpRun.runId)?.peerRunIds, [nativeRun.runId]);
+    check("the native and ACP rows refer to the same group", () => {
+      assert.equal(list.active.find((item) => item.runId === nativeRun.runId)?.sharedCwdGroupId, 1);
+      assert.equal(list.active.find((item) => item.runId === acpRun.runId)?.sharedCwdGroupId, 1);
+      assert.deepEqual(groupFor(list, nativeRun.runId)?.runIds, [nativeRun.runId, acpRun.runId]);
     });
   }
 
@@ -251,18 +248,15 @@ async function main(): Promise<void> {
     });
     const { list } = listFor(store, [realRun, linkRun]);
     console.log(`   ${linkDir} -> ${canonical}`);
-    console.log(`   alias row advisory: ${JSON.stringify(advisoryFor(list, linkRun.runId))}`);
+    console.log(`   alias group: ${JSON.stringify(groupFor(list, linkRun.runId))}`);
     check("aliased runs group together and report the canonical directory", () => {
-      assert.deepEqual(advisoryFor(list, realRun.runId), {
+      assert.deepEqual(groupFor(list, realRun.runId), {
+        id: 1,
         path: canonical,
-        peerCount: 1,
-        peerRunIds: [linkRun.runId],
+        runCount: 2,
+        runIds: [realRun.runId, linkRun.runId],
       });
-      assert.deepEqual(advisoryFor(list, linkRun.runId), {
-        path: canonical,
-        peerCount: 1,
-        peerRunIds: [realRun.runId],
-      });
+      assert.equal(list.active.find((item) => item.runId === linkRun.runId)?.sharedCwdGroupId, 1);
     });
   }
 
@@ -277,7 +271,7 @@ async function main(): Promise<void> {
     check("no advisory for children that named no directory", () => {
       assert.equal(list.active.length, 2);
       for (const run of runs) {
-        assert.equal(advisoryFor(list, run.runId), undefined);
+        assert.equal(groupFor(list, run.runId), undefined);
       }
     });
   }
@@ -303,8 +297,8 @@ async function main(): Promise<void> {
     });
     const { list } = listFor(store, [runA, runB]);
     check("two different checkouts are not reported as a collision", () => {
-      assert.equal(advisoryFor(list, runA.runId), undefined);
-      assert.equal(advisoryFor(list, runB.runId), undefined);
+      assert.equal(groupFor(list, runA.runId), undefined);
+      assert.equal(groupFor(list, runB.runId), undefined);
     });
   }
 
@@ -326,8 +320,7 @@ async function main(): Promise<void> {
     console.log(`   ${dir} removed after spawn; advisory still resolves`);
     check("grouping survives an unresolvable directory without throwing", () => {
       for (const run of runs) {
-        assert.equal(advisoryFor(list, run.runId)?.path, dir);
-        assert.equal(advisoryFor(list, run.runId)?.peerRunIds.length, 1);
+        assert.equal(groupFor(list, run.runId)?.path, dir);
       }
     });
   }
@@ -337,7 +330,6 @@ async function main(): Promise<void> {
     // The advisory attaches to every row of `subagents list` AND to the rendered
     // text view, so naming every peer made one ordinary call grow as O(runs^2).
     // This scenario drives the real tool payload shape and measures it.
-    const SAMPLE_MAX = 3;
     const PATH_MAX = 72;
     // A realistically long checkout path, as the finding calls out.
     const deepDir = path.join(
@@ -363,15 +355,13 @@ async function main(): Promise<void> {
       // Exactly what subagents-tool.ts emits for `action: "list"`: structured
       // rows with `line` stripped, plus the rendered text view.
       const modelVisible = JSON.stringify({
+        sharedCwdGroupTotal: list.sharedCwdGroupTotal,
+        sharedCwdGroups: list.sharedCwdGroups,
         active: list.active.map(({ line: _line, ...view }) => view),
         recent: list.recent.map(({ line: _line, ...view }) => view),
         text: list.text,
       });
-      const emittedPeerIds = list.active.reduce(
-        (sum, item) => sum + (item.sharedCwd?.peerRunIds.length ?? 0),
-        0,
-      );
-      return { list, runs, modelVisible, emittedPeerIds };
+      return { list, runs, modelVisible };
     };
 
     const at20 = await measure(20);
@@ -381,53 +371,32 @@ async function main(): Promise<void> {
       [50, at50],
     ] as const) {
       console.log(
-        `   ${String(childCount).padStart(2)} children sharing one cwd: ${m.modelVisible.length} B model-visible, ${m.emittedPeerIds} peer ids emitted (pre-fix would be ${childCount * (childCount - 1)})`,
+        `   ${String(childCount).padStart(2)} children sharing one cwd: ${m.modelVisible.length} B model-visible, ${m.list.sharedCwdGroups.length} directory summary`,
       );
     }
 
-    check("every row reports the exact peer count, not the sample size", () => {
-      for (const item of at20.list.active) {
-        assert.equal(item.sharedCwd?.peerCount, 19);
-      }
-    });
-    check(`no row emits more than ${SAMPLE_MAX} peer ids`, () => {
-      for (const item of at20.list.active) {
-        const ids = item.sharedCwd?.peerRunIds ?? [];
-        assert.ok(ids.length <= SAMPLE_MAX, `row emitted ${ids.length} peer ids`);
-        assert.ok(!ids.includes(item.runId), "a row listed itself as its own peer");
-      }
-    });
-    check("total peer ids grow linearly, not quadratically", () => {
-      // min(SAMPLE_MAX, n-1) * n, versus n*(n-1) before the fix.
-      assert.equal(at20.emittedPeerIds, 60);
-      assert.equal(at50.emittedPeerIds, 150);
+    check("one summary reports the exact group size with a fixed run-id sample", () => {
+      assert.equal(at20.list.sharedCwdGroups.length, 1);
+      assert.equal(at20.list.sharedCwdGroups[0]?.runCount, 20);
+      assert.equal(at20.list.sharedCwdGroups[0]?.runIds.length, 3);
+      assert.equal(at50.list.sharedCwdGroups.length, 1);
+      assert.equal(at50.list.sharedCwdGroups[0]?.runCount, 50);
+      assert.equal(at50.list.sharedCwdGroups[0]?.runIds.length, 3);
     });
     check(`the reported directory is capped at ${PATH_MAX} characters`, () => {
-      for (const item of at20.list.active) {
-        const reported = item.sharedCwd?.path ?? "";
-        assert.ok(
-          reported.length <= PATH_MAX,
-          `reported path was ${reported.length} characters: ${reported}`,
-        );
-        assert.ok(reported.startsWith("..."), `expected a truncation marker: ${reported}`);
-        // The tail is what identifies the checkout, so it must survive.
-        assert.ok(reported.endsWith("packages/agent-core"), `lost the path tail: ${reported}`);
-      }
+      const reported = at20.list.sharedCwdGroups[0]?.path ?? "";
+      assert.ok(reported.length <= PATH_MAX, `reported path was ${reported.length} characters`);
+      assert.ok(reported.startsWith("..."), `expected a truncation marker: ${reported}`);
+      assert.ok(reported.endsWith("packages/agent-core"), `lost the path tail: ${reported}`);
       // The untruncated path must not leak into the payload anywhere.
       assert.ok(
         !at20.modelVisible.includes(deepDir),
         "the full path reached the model-visible payload",
       );
     });
-    check("the text view reports the true group size", () => {
-      assert.ok(
-        at20.list.text.includes("[shared cwd with 19 other runs: "),
-        "the text view did not report the real peer count",
-      );
-      assert.ok(
-        !at20.list.text.includes(`[shared cwd with ${SAMPLE_MAX} other runs`),
-        "the text view reported the sample size instead of the real count",
-      );
+    check("the text view emits the group once with its true size", () => {
+      assert.ok(at20.list.text.includes("[cwd 1] 20 live runs:"));
+      assert.equal(at20.list.text.split(at20.list.sharedCwdGroups[0]!.path).length, 2);
     });
     // Sibling checkouts identical for their first 100+ characters, differing
     // only past the display cap: grouping must still keep them apart.
@@ -451,20 +420,43 @@ async function main(): Promise<void> {
       }
     }
     const siblingList = listFor(siblingStore, [...alphaRuns, ...betaRuns]).list;
-    const alphaAdvisory = advisoryFor(siblingList, alphaRuns[0]!.runId);
-    const betaAdvisory = advisoryFor(siblingList, betaRuns[0]!.runId);
+    const alphaAdvisory = groupFor(siblingList, alphaRuns[0]!.runId);
+    const betaAdvisory = groupFor(siblingList, betaRuns[0]!.runId);
     console.log(`   sibling alpha reports: ${alphaAdvisory?.path}`);
     console.log(`   sibling beta  reports: ${betaAdvisory?.path}`);
     check("sibling checkouts past the display cap remain distinct groups", () => {
-      assert.equal(alphaAdvisory?.peerCount, 1);
-      assert.equal(betaAdvisory?.peerCount, 1);
-      assert.deepEqual(alphaAdvisory?.peerRunIds, [alphaRuns[1]!.runId]);
-      assert.deepEqual(betaAdvisory?.peerRunIds, [betaRuns[1]!.runId]);
+      assert.equal(alphaAdvisory?.runCount, 2);
+      assert.equal(betaAdvisory?.runCount, 2);
       assert.notEqual(
         alphaAdvisory?.path,
         betaAdvisory?.path,
         "the display cap collapsed two distinct directories into one label",
       );
+    });
+
+    const manyStore = path.join(root, "sessions-bound-many-groups.json");
+    const manyRuns: SubagentRunRecord[] = [];
+    for (let groupIndex = 0; groupIndex < 25; groupIndex += 1) {
+      const dir = path.join(root, `many-group-${String(groupIndex).padStart(2, "0")}`);
+      for (let runIndex = 0; runIndex < 2; runIndex += 1) {
+        const run = makeRun(`many-${groupIndex}-${runIndex}`, now);
+        manyRuns.push(run);
+        await createChildSession({
+          storePath: manyStore,
+          sessionKey: run.childSessionKey,
+          requestedCwd: dir,
+        });
+      }
+    }
+    const manyList = listFor(manyStore, manyRuns).list;
+    check("50 children across 25 shared directories emit only eight summaries", () => {
+      assert.equal(manyList.sharedCwdGroupTotal, 25);
+      assert.equal(manyList.sharedCwdGroups.length, 8);
+      assert.equal(
+        manyList.active.filter((item) => item.sharedCwdGroupId !== undefined).length,
+        16,
+      );
+      assert.ok(manyList.text.includes("shared working directories (8/25 shown):"));
     });
   }
 

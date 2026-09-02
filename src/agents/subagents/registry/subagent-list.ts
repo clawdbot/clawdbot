@@ -46,11 +46,11 @@ import { resolveSubagentDisplayStatus } from "./subagent-session-metrics.js";
  * ordinary `list` call emitted 380 run ids and 40 copies of the directory —
  * measured at ~30 KB / ~7.5K tokens, and ~134 KB / ~33K tokens for a 50-child
  * swarm group. AGENTS.md's model-context budget makes an unbounded model-visible
- * item a release blocker, so a row carries the exact peer *count* (a scalar) plus
- * a hard-capped id sample and a hard-capped path. Both caps are constants, so the
- * advisory's contribution is linear in live runs with a fixed per-row ceiling.
+ * item a release blocker, so each shared directory is emitted once in a bounded
+ * top-level summary. Rows carry only its small numeric group id.
  */
-const SHARED_CWD_PEER_SAMPLE_MAX = 3;
+const SHARED_CWD_GROUP_MAX = 8;
+const SHARED_CWD_RUN_SAMPLE_MAX = 3;
 const SHARED_CWD_PATH_MAX_CHARS = 72;
 
 /**
@@ -58,19 +58,21 @@ const SHARED_CWD_PATH_MAX_CHARS = 72;
  * Present only when the spawner passed an explicit `cwd`; inherited workspaces
  * are shared by design and are never reported.
  */
-type SubagentSharedCwd = {
+type SubagentSharedCwdGroup = {
+  /** Stable within one list response; rows refer to this id. */
+  id: number;
   /**
    * The shared directory, capped at `SHARED_CWD_PATH_MAX_CHARS` for display. The
    * untruncated path stays internal to grouping and is never emitted per row.
    */
   path: string;
-  /** Live peers sharing the directory, excluding this run. Always exact. */
-  peerCount: number;
+  /** Exact live-run count for the group. */
+  runCount: number;
   /**
-   * At most `SHARED_CWD_PEER_SAMPLE_MAX` peer run ids, in list order. A sample,
-   * not an inventory — read `peerCount` for the real total.
+   * At most `SHARED_CWD_RUN_SAMPLE_MAX` run ids, in list order. A sample,
+   * not an inventory — read `runCount` for the real total.
    */
-  peerRunIds: string[];
+  runIds: string[];
 };
 
 type SubagentListItem = {
@@ -90,13 +92,15 @@ type SubagentListItem = {
   totalTokens?: number;
   startedAt?: number;
   endedAt?: number;
-  sharedCwd?: SubagentSharedCwd;
+  sharedCwdGroupId?: number;
 };
 
 type BuiltSubagentList = {
   total: number;
   active: SubagentListItem[];
   recent: SubagentListItem[];
+  sharedCwdGroupTotal: number;
+  sharedCwdGroups: SubagentSharedCwdGroup[];
   text: string;
 };
 
@@ -245,7 +249,6 @@ function buildSharedCwdIndex(params: {
   now: number;
 }) {
   const groups = new Map<string, { path: string; displayPath: string; runIds: string[] }>();
-  const groupKeyByRunId = new Map<string, string>();
   const identityMemo = new Map<string, string>();
   for (const run of params.runs) {
     if (!isLiveUnendedSubagentRun(run, params.now)) {
@@ -265,7 +268,6 @@ function buildSharedCwdIndex(params: {
     }
     const identity = canonicalCwdIdentity(resolved, identityMemo);
     const groupKey = sharedCwdGroupKey(identity);
-    groupKeyByRunId.set(run.runId, groupKey);
     const existing = groups.get(groupKey);
     if (existing) {
       existing.runIds.push(run.runId);
@@ -280,31 +282,32 @@ function buildSharedCwdIndex(params: {
       runIds: [run.runId],
     });
   }
-  return (runId: string): SubagentSharedCwd | undefined => {
-    const groupKey = groupKeyByRunId.get(runId);
-    const group = groupKey ? groups.get(groupKey) : undefined;
-    if (!group || group.runIds.length < 2) {
-      return undefined;
+  const sharedCwdGroups: SubagentSharedCwdGroup[] = [];
+  const groupIdByRunId = new Map<string, number>();
+  let sharedCwdGroupTotal = 0;
+  for (const group of groups.values()) {
+    if (group.runIds.length < 2) {
+      continue;
     }
-    // Collect only the sample rather than filtering the whole group per row:
-    // the old `filter` also made the *work* quadratic, not just the output.
-    const peerRunIds: string[] = [];
-    for (const peerRunId of group.runIds) {
-      if (peerRunId === runId) {
-        continue;
-      }
-      peerRunIds.push(peerRunId);
-      if (peerRunIds.length >= SHARED_CWD_PEER_SAMPLE_MAX) {
-        break;
-      }
+    sharedCwdGroupTotal += 1;
+    if (sharedCwdGroups.length >= SHARED_CWD_GROUP_MAX) {
+      continue;
     }
-    return {
+    const id = sharedCwdGroups.length + 1;
+    sharedCwdGroups.push({
+      id,
       path: group.displayPath,
-      // Every run in the group is a peer of every other, so the count is exact
-      // without walking the list.
-      peerCount: group.runIds.length - 1,
-      peerRunIds,
-    };
+      runCount: group.runIds.length,
+      runIds: group.runIds.slice(0, SHARED_CWD_RUN_SAMPLE_MAX),
+    });
+    for (const runId of group.runIds) {
+      groupIdByRunId.set(runId, id);
+    }
+  }
+  return {
+    resolveGroupId: (runId: string) => groupIdByRunId.get(runId),
+    sharedCwdGroupTotal,
+    sharedCwdGroups,
   };
 }
 
@@ -332,6 +335,8 @@ function buildListText(params: {
   active: Array<{ line: string }>;
   recent: Array<{ line: string }>;
   recentMinutes: number;
+  sharedCwdGroupTotal: number;
+  sharedCwdGroups: SubagentSharedCwdGroup[];
 }) {
   const lines: string[] = [];
   lines.push("active subagents:");
@@ -346,6 +351,17 @@ function buildListText(params: {
     lines.push("(none)");
   } else {
     lines.push(...params.recent.map((entry) => entry.line));
+  }
+  if (params.sharedCwdGroupTotal > 0) {
+    lines.push("");
+    lines.push(
+      `shared working directories (${params.sharedCwdGroups.length}/${params.sharedCwdGroupTotal} shown):`,
+    );
+    for (const group of params.sharedCwdGroups) {
+      lines.push(
+        `[cwd ${group.id}] ${group.runCount} live runs: ${group.path} (sample: ${group.runIds.join(", ")})`,
+      );
+    }
   }
   return lines.join("\n");
 }
@@ -371,7 +387,7 @@ export function buildSubagentList(params: {
   });
   // `runView.latest` is upstream's extraction of this function's former
   // `dedupedRuns`: same sort, same dedup by childSessionKey, same authority.
-  const resolveSharedCwd = buildSharedCwdIndex({
+  const sharedCwdIndex = buildSharedCwdIndex({
     cfg: params.cfg,
     runs: runView.latest,
     cache,
@@ -394,12 +410,8 @@ export function buildSubagentList(params: {
     const task = truncateLine(entry.task.trim(), params.taskMaxChars ?? 72);
     const taskName = entry.taskName?.trim();
     const taskNamePrefix = taskName ? `${taskName}: ` : "";
-    const sharedCwd = resolveSharedCwd(entry.runId);
-    // `peerCount`, never `peerRunIds.length`: the id list is a capped sample, so
-    // reading its length would under-report every group larger than the cap.
-    const sharedCwdSuffix = sharedCwd
-      ? ` [shared cwd with ${sharedCwd.peerCount} other run${sharedCwd.peerCount === 1 ? "" : "s"}: ${sharedCwd.path}]`
-      : "";
+    const sharedCwdGroupId = sharedCwdIndex.resolveGroupId(entry.runId);
+    const sharedCwdSuffix = sharedCwdGroupId ? ` [shared cwd group ${sharedCwdGroupId}]` : "";
     const line = `${index}. ${taskNamePrefix}${label} (${resolveModelDisplay(sessionEntry, entry.model)}, ${runtime}${usageText ? `, ${usageText}` : ""}) ${status}${normalizeLowercaseStringOrEmpty(task) !== normalizeLowercaseStringOrEmpty(label) ? ` - ${task}` : ""}${sharedCwdSuffix}`;
     const view: SubagentListItem = {
       index,
@@ -418,9 +430,7 @@ export function buildSubagentList(params: {
       totalTokens,
       startedAt: getSubagentSessionStartedAt(entry),
       ...(entry.execution.endedAt ? { endedAt: entry.execution.endedAt } : {}),
-      // The structured field is the primary surface: subagents-tool strips
-      // `line` from its JSON output, so the suffix alone would reach no caller.
-      ...(sharedCwd ? { sharedCwd } : {}),
+      ...(sharedCwdGroupId ? { sharedCwdGroupId } : {}),
     };
     index += 1;
     return view;
@@ -435,6 +445,14 @@ export function buildSubagentList(params: {
     total: runView.latest.length,
     active,
     recent,
-    text: buildListText({ active, recent, recentMinutes: params.recentMinutes }),
+    sharedCwdGroupTotal: sharedCwdIndex.sharedCwdGroupTotal,
+    sharedCwdGroups: sharedCwdIndex.sharedCwdGroups,
+    text: buildListText({
+      active,
+      recent,
+      recentMinutes: params.recentMinutes,
+      sharedCwdGroupTotal: sharedCwdIndex.sharedCwdGroupTotal,
+      sharedCwdGroups: sharedCwdIndex.sharedCwdGroups,
+    }),
   };
 }
