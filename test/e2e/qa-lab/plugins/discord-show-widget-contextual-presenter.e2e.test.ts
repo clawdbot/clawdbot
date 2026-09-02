@@ -3,13 +3,13 @@ import { readFile, writeFile } from "node:fs/promises";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { MessageFlags } from "discord-api-types/v10";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   GatewayClient,
   startGatewayClientWhenEventLoopReady,
 } from "openclaw/plugin-sdk/gateway-runtime";
 import { afterEach, describe, expect, it } from "vitest";
+import { MessageFlags } from "../../../../extensions/discord/test/discord-api-types-v10-runtime.js";
 import {
   type MockOpenAiRequestSnapshot,
   createQaGatewayChild,

@@ -94,7 +94,7 @@ describe("tsdown config", () => {
         ...manifest.dependencies,
         ...manifest.optionalDependencies,
       })) {
-        const installed = path.resolve("node_modules", name);
+        const installed = path.resolve("extensions/memory-lancedb/node_modules", name);
         if (!fs.existsSync(installed)) {
           continue;
         }
