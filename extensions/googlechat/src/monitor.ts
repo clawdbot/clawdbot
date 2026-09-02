@@ -12,6 +12,7 @@ import { channelBlockedPatch, channelReadyPatch } from "openclaw/plugin-sdk/gate
 import { MediaFetchError } from "openclaw/plugin-sdk/media-runtime";
 import { parseDateStringTimestampMs as resolveGoogleChatTimestampMs } from "openclaw/plugin-sdk/number-runtime";
 import { mergePairLoopGuardConfig } from "openclaw/plugin-sdk/pair-loop-guard-runtime";
+import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { OpenClawConfig } from "../runtime-api.js";
 import { resolveWebhookPath } from "../runtime-api.js";
@@ -67,6 +68,18 @@ function normalizeAudienceType(value?: string | null): GoogleChatAudienceType | 
     return "project-number";
   }
   return undefined;
+}
+
+function normalizeGoogleChatReplyTarget(params: {
+  payload: ReplyPayload;
+  sourceMessageName?: string;
+  replyThreadName?: string;
+}): ReplyPayload {
+  const sourceMessageName = params.sourceMessageName;
+  if (!sourceMessageName || params.payload.replyToId !== sourceMessageName) {
+    return params.payload;
+  }
+  return { ...params.payload, replyToId: params.replyThreadName };
 }
 
 function resolveGoogleChatBotLoopProtection(params: {
@@ -448,14 +461,22 @@ async function processMessageWithPipeline(params: {
         delivery: {
           durable: (payload, info) =>
             resolveGoogleChatDurableReplyOptions({
-              payload,
+              payload: normalizeGoogleChatReplyTarget({
+                payload,
+                sourceMessageName: message.name,
+                replyThreadName,
+              }),
               infoKind: info.kind,
               spaceId,
               hasTypingMessage: Boolean(typingMessage),
             }),
           deliver: async (payload) => {
             await deliverGoogleChatReply({
-              payload,
+              payload: normalizeGoogleChatReplyTarget({
+                payload,
+                sourceMessageName: message.name,
+                replyThreadName,
+              }),
               account,
               spaceId,
               runtime,
