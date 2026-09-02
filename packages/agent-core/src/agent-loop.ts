@@ -29,6 +29,7 @@ import {
   type AgentToolExecutionContext,
   runWithAgentToolExecutionContext,
 } from "./tool-execution-context.js";
+import { applyShortReplyAnchor } from "./harness/short-reply-anchor.js";
 import {
   appendInterruptedTurnMessage,
   createFailureMessage,
@@ -553,9 +554,16 @@ async function streamAssistantResponse(
   // Convert to LLM-compatible messages (AgentMessage[] → Message[])
   const llmMessages = await config.convertToLlm(messages);
 
+  // Short-reply anchor: when the trailing human user turn is a very short
+  // selection ("2", "yes", "that one"), append an ephemeral directive that
+  // binds the referent to the most recent assistant turn. This prevents the
+  // model from reaching back to a stale enumerated list surviving in
+  // compaction summaries or older context. No-op on every other turn.
+  const anchoredSystemPrompt = applyShortReplyAnchor(context.systemPrompt, llmMessages);
+
   // Build LLM context
   const llmContext: Context = {
-    systemPrompt: context.systemPrompt,
+    systemPrompt: anchoredSystemPrompt,
     messages: llmMessages,
     tools: context.tools,
   };

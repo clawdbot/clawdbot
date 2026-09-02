@@ -8,6 +8,13 @@ export * from "./types.js";
 export * from "./validation.js";
 export * from "./harness/env/kill-tree.js";
 export * from "./harness/messages.js";
+export {
+  applyShortReplyAnchor,
+  matchesShortSelectionReply,
+  shouldApplyShortReplyAnchor,
+  SHORT_REPLY_ANCHOR_DIRECTIVE,
+  SHORT_REPLY_MAX_CHARS,
+} from "./harness/short-reply-anchor.js";
 export * from "./harness/prompt-template-arguments.js";
 export { buildSessionContext } from "./harness/session/session.js";
 export { uuidv7 } from "./harness/session/uuid.js";
