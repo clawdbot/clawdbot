@@ -6,6 +6,10 @@ on:
       tag:
         required: true
         type: string
+      release_tag:
+        description: Resolved publication tag when tag is an immutable source SHA
+        type: string
+        default: ""
       npm_dist_tag:
         required: true
         type: string
@@ -392,15 +396,26 @@ jobs:
           PREFLIGHT_WORKFLOW_REF: ${{ github.workflow_ref }}
           PREFLIGHT_WORKFLOW_SHA: ${{ github.workflow_sha }}
           RELEASE_REF: ${{ inputs.tag }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
           RELEASE_NPM_DIST_TAG: ${{ inputs.npm_dist_tag }}
         run: |
           set -euo pipefail
           [[ "$(git -C .release-harness rev-parse HEAD)" == "$PREFLIGHT_WORKFLOW_SHA" ]]
           [[ -z "$(git -C .release-harness status --porcelain)" ]]
+          node --input-type=module <<'NODE'
+          import { execFileSync } from 'node:child_process';
+          import { readFileSync } from 'node:fs';
+          import { resolveReleaseTagPackageIdentity } from './.release-harness/scripts/lib/release-version.mjs';
+          const version = JSON.parse(readFileSync('package.json', 'utf8')).version;
+          const ref = process.env.RELEASE_REF;
+          const tag = process.env.RELEASE_TAG || (/^[a-f0-9]{40}$/.test(ref) ? `v${version}` : ref);
+          const { baseTag } = resolveReleaseTagPackageIdentity(tag, version);
+          if (baseTag) execFileSync('git', ['fetch', '--no-tags', '--depth=1', 'origin', `refs/tags/${baseTag}:refs/tags/${baseTag}`], { stdio: 'inherit' });
+          NODE
           node .release-harness/scripts/npm-prepared-bundle.mjs prepare \
             --source-dir "$GITHUB_WORKSPACE" \
             --output-dir "$RUNNER_TEMP/openclaw-npm-package" \
-            --release-ref "$RELEASE_REF" --npm-dist-tag "$RELEASE_NPM_DIST_TAG"
+            --release-ref "$RELEASE_REF" --release-tag "$RELEASE_TAG" --npm-dist-tag "$RELEASE_NPM_DIST_TAG"
 
       - name: Upload publishable npm package set
         id: artifact
@@ -523,6 +538,8 @@ jobs:
           SOURCE_CHECK_JSON: ${{ inputs.source_check_json || needs.check_openclaw_npm.outputs.source_check_json }}
           WORKFLOW_SHA: ${{ github.workflow_sha }}
           RELEASE_NPM_DIST_TAG: ${{ inputs.npm_dist_tag }}
+          RELEASE_REF: ${{ inputs.tag }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
         run: |
           set -euo pipefail
           [[ "$(git -C .release-harness rev-parse HEAD)" == "$WORKFLOW_SHA" ]]
@@ -530,19 +547,25 @@ jobs:
           printf '%s\n' "$PREPARED_BUNDLE_JSON" > "$RUNNER_TEMP/prepared-npm-bundle.json"
           printf '%s\n' "$SOURCE_CHECK_JSON" > "$RUNNER_TEMP/npm-source-check.json"
           source_sha="$(git rev-parse HEAD)"
+          release_tag="${RELEASE_TAG:-$RELEASE_REF}"
+          if [[ "$release_tag" =~ ^[a-f0-9]{40}$ ]]; then
+            release_tag="v$(node -p "require('./package.json').version")"
+          fi
           node .release-harness/scripts/npm-prepared-bundle.mjs verify-source \
             --descriptor "$RUNNER_TEMP/npm-source-check.json" --repository "$GITHUB_REPOSITORY" \
             --source-sha "$source_sha" --tooling-sha "$WORKFLOW_SHA"
           node .release-harness/scripts/npm-prepared-bundle.mjs download \
             --descriptor "$RUNNER_TEMP/prepared-npm-bundle.json" --repository "$GITHUB_REPOSITORY" \
             --source-sha "$source_sha" --tooling-sha "$WORKFLOW_SHA" \
-            --output-dir "$RUNNER_TEMP/openclaw-prepared-npm" --npm-dist-tag "$RELEASE_NPM_DIST_TAG"
+            --output-dir "$RUNNER_TEMP/openclaw-prepared-npm" --npm-dist-tag "$RELEASE_NPM_DIST_TAG" \
+            --release-tag "$release_tag"
 
       - name: Validate release metadata
         if: ${{ inputs.preflight_run_id == '' }}
         env:
           OPENCLAW_NPM_RELEASE_SKIP_PACK_CHECK: "1"
           RELEASE_REF: ${{ inputs.tag }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
           PREFLIGHT_ONLY: ${{ inputs.preflight_only }}
           WORKFLOW_REF_NAME: ${{ github.ref_name }}
           OPENCLAW_NPM_PUBLISH_TAG: ${{ inputs.npm_dist_tag }}
@@ -556,11 +579,11 @@ jobs:
           RELEASE_BRANCH_REF="refs/remotes/origin/${WORKFLOW_REF_NAME}"
           export RELEASE_SHA RELEASE_BRANCH_REF
           if [[ "${RELEASE_REF}" =~ ^[0-9a-fA-F]{40}$ ]]; then
-            RELEASE_TAG="v$(node -p "require('./package.json').version")"
+            RELEASE_TAG="${RELEASE_TAG:-v$(node -p "require('./package.json').version")}"
             export RELEASE_TAG
             RELEASE_BRANCH_REF="${RELEASE_SHA}"
             export RELEASE_BRANCH_REF
-            echo "Validation-only SHA mode: using synthetic release tag ${RELEASE_TAG} for package metadata checks."
+            echo "Validation-only SHA mode: using release tag ${RELEASE_TAG} for package metadata checks."
           else
             # The workflow runs from trusted main, while beta and stable tags can
             # point at their frozen release branch after it diverged from main.
@@ -572,12 +595,16 @@ jobs:
                 echo "Tagged commit is not reachable from ${WORKFLOW_REF_NAME}." >&2
                 exit 1
               fi
-              if [[ "${RELEASE_REF}" =~ ^v([0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*)($|-) ]]; then
-                RELEASE_BRANCH_NAME="release/${BASH_REMATCH[1]}"
-              else
-                echo "Release tag does not identify a canonical release branch." >&2
-                exit 1
-              fi
+              # Base-package corrections retain the base branch; separately
+              # versioned corrections own their suffixed release branch.
+              RELEASE_BRANCH_NAME="$(node --input-type=module <<'NODE'
+          import { readFileSync } from 'node:fs';
+          import { releaseBranchForTag } from './.release-harness/scripts/lib/release-context.mjs';
+          import { resolveReleaseTagPackageIdentity } from './.release-harness/scripts/lib/release-version.mjs';
+          const { baseTag } = resolveReleaseTagPackageIdentity(process.env.RELEASE_REF, JSON.parse(readFileSync('package.json', 'utf8')).version);
+          process.stdout.write(releaseBranchForTag(baseTag || process.env.RELEASE_REF));
+          NODE
+              )"
               RELEASE_BRANCH_REF="refs/remotes/origin/${RELEASE_BRANCH_NAME}"
               timeout --signal=TERM --kill-after=10s 120s git fetch --no-tags origin "+refs/heads/${RELEASE_BRANCH_NAME}:${RELEASE_BRANCH_REF}"
               export RELEASE_BRANCH_REF

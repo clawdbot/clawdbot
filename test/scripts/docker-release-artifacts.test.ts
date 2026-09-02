@@ -44,7 +44,7 @@ function writeJson(file: string, value: unknown) {
 function createLayout(
   directory: string,
   architecture: string,
-  options: { labelSha?: string; provenance?: boolean } = {},
+  options: { labelSha?: string; provenance?: boolean; version?: string } = {},
 ) {
   function blob(value: unknown) {
     const bytes = Buffer.from(JSON.stringify(value));
@@ -61,7 +61,7 @@ function createLayout(
     config: {
       Labels: {
         "org.opencontainers.image.revision": options.labelSha ?? sourceSha,
-        "org.opencontainers.image.version": "2026.8.1-beta.2",
+        "org.opencontainers.image.version": options.version ?? "2026.8.1-beta.2",
         "org.opencontainers.image.created": "2026-09-01T00:00:00.000Z",
       },
     },
@@ -116,7 +116,7 @@ function createLayout(
   };
 }
 
-async function createPreparedRelease(includeBrowser = true) {
+async function createPreparedRelease(includeBrowser = true, version = "2026.8.1-beta.2") {
   const root = temporaryDirectory();
   const artifactName = dockerReleaseArtifactName(sourceSha, runAttempt);
   const context = {
@@ -124,8 +124,8 @@ async function createPreparedRelease(includeBrowser = true) {
     repository,
     sourceSha,
     toolingSha,
-    tag: "v2026.8.1-beta.2",
-    version: "2026.8.1-beta.2",
+    tag: `v${version}`,
+    version,
     imageTagSuffix: "-r20260901",
     builtAt: "2026-09-01T00:00:00.000Z",
     includeBrowser,
@@ -206,7 +206,7 @@ async function createPreparedRelease(includeBrowser = true) {
     const images = [];
     for (const variant of includeBrowser ? ["default", "browser"] : ["default"]) {
       const directory = path.join(root, "payloads", `${artifactName}-${architecture}`, variant);
-      const image = createLayout(directory, architecture);
+      const image = createLayout(directory, architecture, { version });
       const verified = await verifyDockerReleaseLayout({
         ...context,
         directory,
@@ -454,15 +454,43 @@ describe("prepared Docker publication", () => {
     expect(execute).toHaveBeenCalledTimes(2);
   });
 
-  it("accepts exact package and correction tags while rejecting a lookalike version", () => {
-    for (const tag of ["v2026.8.1", "v2026.8.1-2"]) {
-      expect(
-        validateDockerReleaseIdentity({ tag, sourceSha, packageVersion: "2026.8.1" }).channel,
-      ).toBe("stable");
+  it.each([
+    ["2026.8.1", "v2026.8.1"],
+    ["2026.8.1", "v2026.8.1-2"],
+    ["2026.8.1-2", "v2026.8.1-2"],
+  ] as const)("seals package %s for exactly release %s", async (packageVersion, tag) => {
+    const policy = validateDockerReleaseIdentity({ tag, sourceSha, packageVersion });
+    expect(policy.channel).toBe("stable");
+    expect(policy.version).toBe(tag.slice(1));
+    const { manifest } = await createPreparedRelease(false, policy.version);
+    const expected = {
+      repository,
+      sourceSha,
+      tag,
+      imageTagSuffix: manifest.imageTagSuffix,
+      artifactName: manifest.artifactName,
+      runId,
+      runAttempt,
+    };
+    expect(validateDockerReleaseManifest(manifest, expected)).toBe(manifest);
+    for (const otherTag of ["v2026.8.1", "v2026.8.1-2", "v2026.8.1-3"].filter(
+      (candidate) => candidate !== tag,
+    )) {
+      expect(() => validateDockerReleaseManifest(manifest, { ...expected, tag: otherTag })).toThrow(
+        "does not match the release",
+      );
     }
-    expect(() =>
-      validateDockerReleaseIdentity({ tag: "v2026.8.11-2", sourceSha, packageVersion: "2026.8.1" }),
-    ).toThrow("package.json");
+  });
+
+  it("rejects a correction for another package base or an unsupported release train", () => {
+    for (const [packageVersion, tag] of [
+      ["2026.8.1", "v2026.8.11-2"],
+      ["2026.8.1-2", "v2026.8.1-3"],
+    ] as const) {
+      expect(() => validateDockerReleaseIdentity({ tag, sourceSha, packageVersion })).toThrow(
+        "does not match release tag",
+      );
+    }
     expect(() =>
       validateDockerReleaseIdentity({
         tag: "v2026.8.1-alpha.2",

@@ -27,6 +27,7 @@ import {
   stripLeadingPackageManagerSeparator,
 } from "./lib/arg-utils.mts";
 import { readBoundedResponseText } from "./lib/bounded-response.mjs";
+import { releaseBranchForTag } from "./lib/release-context.mjs";
 import {
   validateFullReleaseNpmPreflight,
   verifyNpmPreflightProducer,
@@ -172,14 +173,6 @@ Options:
   --plugins <names>                   Required when plugin scope is selected.
   --output-dir <dir>                  Evidence output dir. Default: .artifacts/release-candidate/<tag>
 `;
-}
-
-export function releaseBranchForTag(tag: string) {
-  if (tag.includes("-alpha.")) {
-    return "";
-  }
-  const version = tag.replace(/^v/u, "").split("-", 1)[0];
-  return `release/${version}`;
 }
 
 /**

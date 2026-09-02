@@ -32,8 +32,12 @@ authorizes the initial Tooling SHA selection; it does not authorize refreshing
 the tooling from moving `main`.
 
 `provider` also accepts `anthropic` or `minimax` for cross-OS onboarding and the
-end-to-end agent turn. Regular `release/*` targets accept only the branch's final
-package version or a matching beta prerelease. Tideclaw alpha validation uses
+end-to-end agent turn. Regular `release/*` targets accept the branch's final
+package version or a matching beta prerelease. For a correction, use
+`--target-ref release/YYYY.M.PATCH-N` to preserve the intended final tag before
+tagging. Its base package version is also accepted when `vYYYY.M.PATCH` resolves
+to the exact Code SHA; preparation retains the package version and seals both
+npm and Docker artifacts for `vYYYY.M.PATCH-N`. Tideclaw alpha validation uses
 its exact alpha tag and matching alpha branch. The helper maps beta releases and
 exact alpha tags to the `beta` profile and final versions to `stable`. Pass
 alternate workflow inputs with `-f key=value`; use `-f release_profile=full`

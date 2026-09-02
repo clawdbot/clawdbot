@@ -468,6 +468,7 @@ function runFullReleaseInputValidation(
     env: {
       PATH: process.env.PATH,
       GITHUB_OUTPUT: resolve(workdir, "output"),
+      GITHUB_REPOSITORY: "openclaw/openclaw",
       RELEASE_PROFILE: releaseProfile,
       SKIP_PACKAGE_TELEGRAM_E2E: skipTelegram,
       TELEGRAM_WAIVER: options.telegramWaiver ?? "",
@@ -480,6 +481,7 @@ function runFullReleaseInputValidation(
 }
 
 function runFullReleaseTargetIdentityValidation(params: {
+  baseTagSha?: string;
   comparisonStatus?: string;
   remoteSha?: string;
   targetContextRef?: string;
@@ -508,7 +510,12 @@ function runFullReleaseTargetIdentityValidation(params: {
     `#!/usr/bin/env bash
 set -euo pipefail
 if [[ "$*" == *"ls-remote"* ]]; then
-  printf '%s\\t%s\\n' "$FAKE_REMOTE_SHA" "$FAKE_REMOTE_REF"
+  ref="\${!#}"
+  if [[ "$ref" == "refs/tags/v$FAKE_PACKAGE_VERSION" || "$ref" == "refs/tags/v$FAKE_PACKAGE_VERSION^{}" ]]; then
+    printf '%s\\t%s\\n' "$FAKE_BASE_SHA" "$ref"
+  else
+    printf '%s\\t%s\\n' "$FAKE_REMOTE_SHA" "$FAKE_REMOTE_REF"
+  fi
   exit 0
 fi
 exit 64
@@ -542,6 +549,8 @@ exit 64
       FAKE_COMPARISON_STATUS: params.comparisonStatus ?? "ahead",
       FAKE_REMOTE_REF: remoteRef,
       FAKE_REMOTE_SHA: params.remoteSha ?? targetSha,
+      FAKE_BASE_SHA: params.baseTagSha ?? params.remoteSha ?? targetSha,
+      FAKE_PACKAGE_VERSION: params.version,
       GH_TOKEN: "test-token",
       GITHUB_REPOSITORY: "openclaw/openclaw",
       GITHUB_OUTPUT: outputPath,
@@ -4095,8 +4104,10 @@ printf 'core_failed=%s\n' "$failed"
     ["full", "v2026.8.1", "", "historical_target_tag=v2026.8.1"],
     ["npm-beta", "refs/tags/v2026.8.1-beta.3", "", "historical_target_tag=v2026.8.1-beta.3"],
     ["full", "main", "release/2026.8.1", "target_context_ref=release/2026.8.1"],
+    ["full", "main", "release/2026.8.1-1", "target_context_ref=release/2026.8.1-1"],
     ["npm-beta", "main", "refs/heads/release/2026.8.1", "target_context_ref=release/2026.8.1"],
     ["full", "main", "v2026.8.1", "historical_target_tag=v2026.8.1"],
+    ["full", "main", "v2026.8.1-1", "historical_target_tag=v2026.8.1-1"],
     ["npm-beta", "main", "refs/tags/v2026.8.1-beta.3", "historical_target_tag=v2026.8.1-beta.3"],
   ])(
     "dispatches %s CI scope for target=%s context=%s",
@@ -4676,6 +4687,9 @@ describe("package artifact reuse", () => {
     const qualify = workflowJob(FULL_RELEASE_VALIDATION_WORKFLOW, "qualify_npm_package");
     for (const job of [prepare, source, docker]) {
       expect(jobNeeds(job)).toEqual(["resolve_target"]);
+    }
+    for (const job of [prepare, source, qualify]) {
+      expect(job.with?.release_tag).toBe("${{ needs.resolve_target.outputs.release_tag }}");
     }
     expect(jobNeeds(qualify)).toEqual([
       "resolve_target",
@@ -6158,6 +6172,35 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
   });
 
   it.each([
+    ["release/2026.8.1-1", "2026.8.1"],
+    ["refs/heads/release/2026.8.1-1", "2026.8.1-1"],
+    ["v2026.8.1-1", "2026.8.1"],
+  ])("preserves the correction publication tag for %s with package %s", (context, version) => {
+    const result = runFullReleaseTargetIdentityValidation({
+      targetContextRef: context,
+      targetRef: "a".repeat(40),
+      version,
+    });
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.output).toContain("release_tag=v2026.8.1-1\n");
+    expect(result.output).toContain(`target_version=${version}\n`);
+  });
+
+  it.each(["", "b".repeat(40)])(
+    "rejects a correction with unproven base source %s",
+    (baseTagSha) => {
+      const result = runFullReleaseTargetIdentityValidation({
+        baseTagSha,
+        targetContextRef: "release/2026.8.1-1",
+        targetRef: "a".repeat(40),
+        version: "2026.8.1",
+      });
+      expect(result.status).not.toBe(0);
+      expect(result.stderr).toContain("must match base release tag");
+    },
+  );
+
+  it.each([
     {
       context: "refs/heads/extended-stable/2026.6.33",
       version: "2026.6.35",
@@ -6948,8 +6991,10 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
 
     for (const contextRef of [
       "release/2026.8.1",
+      "release/2026.8.1-1",
       "refs/heads/extended-stable/2026.8.33",
       "v2026.8.1",
+      "refs/tags/v2026.8.1-1",
       "refs/tags/v2026.8.1-alpha.2",
       "v2026.8.1-beta.3",
     ]) {
@@ -7669,8 +7714,6 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
     ]);
     expectTextToIncludeAll(releaseInputValidation.run, [
       'target_version="$(jq -er',
-      "does not belong to release branch",
-      "does not match ${identity_kind}",
       "is not reachable from release context branch",
       "does not match release tag",
       "target_context_ref must be a canonical OpenClaw release branch or tag.",
@@ -8879,16 +8922,144 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
     expect(result.status, result.stderr).toBe(0);
   });
 
-  it("accepts tag-matched frozen release branches in OpenClaw npm preflight", () => {
-    const preflight = workflowJob(OPENCLAW_NPM_PREFLIGHT_WORKFLOW, "verify_openclaw_npm");
-    const metadata = workflowStep(preflight, "Validate release metadata");
-
-    expect(metadata.run).toContain("git merge-base --is-ancestor");
-    expect(metadata.run).toContain('RELEASE_BRANCH_NAME="release/${BASH_REMATCH[1]}"');
-    expect(metadata.run).toContain(
-      'git fetch --no-tags origin "+refs/heads/${RELEASE_BRANCH_NAME}:${RELEASE_BRANCH_REF}"',
+  it.each([
+    {
+      name: "a separately versioned correction on its own branch",
+      version: "2026.8.1-1",
+      tag: "v2026.8.1-1",
+      branch: "release/2026.8.1-1",
+      accepted: true,
+    },
+    {
+      name: "a same-source correction with only the base branch",
+      version: "2026.8.1",
+      tag: "v2026.8.1-1",
+      branch: "release/2026.8.1",
+      accepted: true,
+    },
+    {
+      name: "a beta on its frozen release branch",
+      version: "2026.8.1-beta.1",
+      tag: "v2026.8.1-beta.1",
+      branch: "release/2026.8.1",
+      accepted: true,
+    },
+    {
+      name: "a stable version on its frozen release branch",
+      version: "2026.8.1",
+      tag: "v2026.8.1",
+      branch: "release/2026.8.1",
+      accepted: true,
+    },
+    {
+      name: "an alpha outside the workflow branch",
+      version: "2026.8.1-alpha.1",
+      tag: "v2026.8.1-alpha.1",
+      branch: "release/2026.8.1",
+      accepted: false,
+    },
+  ])("validates frozen npm release ancestry for $name", (scenario) => {
+    const metadata = workflowStep(
+      workflowJob(OPENCLAW_NPM_PREFLIGHT_WORKFLOW, "verify_openclaw_npm"),
+      "Validate release metadata",
     );
-    expect(metadata.run).toContain('[[ "${RELEASE_REF}" == *"-alpha."* ]]');
+    const root = tempDirs.make("npm-preflight-release-ancestry-");
+    const origin = join(root, "origin");
+    const source = join(root, "source");
+    mkdirSync(origin);
+    const git = (cwd: string, ...args: string[]) =>
+      execFileSync(
+        "git",
+        [
+          "-c",
+          "user.name=OpenClaw Test",
+          "-c",
+          "user.email=openclaw-test@example.com",
+          "-c",
+          "commit.gpgsign=false",
+          "-c",
+          "core.hooksPath=/dev/null",
+          ...args,
+        ],
+        { cwd, encoding: "utf8" },
+      ).trim();
+    git(origin, "init", "-q", "--initial-branch=main");
+    writeFileSync(join(origin, "package.json"), JSON.stringify({ version: "2026.8.1" }));
+    git(origin, "add", "package.json");
+    git(origin, "commit", "-qm", "main before release");
+    git(origin, "switch", "-q", "-c", "release/2026.8.1");
+    git(origin, "commit", "--allow-empty", "-qm", "frozen release");
+    if (scenario.branch !== "release/2026.8.1") {
+      git(origin, "switch", "-q", "-c", scenario.branch);
+    }
+    if (scenario.version !== "2026.8.1") {
+      writeFileSync(join(origin, "package.json"), JSON.stringify({ version: scenario.version }));
+      git(origin, "commit", "-qam", "versioned candidate");
+    }
+    git(origin, "tag", scenario.tag);
+    if (scenario.version === "2026.8.1" && scenario.tag !== "v2026.8.1") {
+      git(origin, "tag", "v2026.8.1");
+    }
+    git(origin, "switch", "-q", "main");
+    git(origin, "commit", "--allow-empty", "-qm", "main advances independently");
+    git(
+      root,
+      "clone",
+      "-q",
+      "--depth=1",
+      "--branch",
+      scenario.tag,
+      pathToFileURL(origin).href,
+      source,
+    );
+    const tooling = join(source, ".release-harness", "scripts", "lib");
+    mkdirSync(tooling, { recursive: true });
+    for (const name of ["release-context.mjs", "release-version.mjs"]) {
+      copyFileSync(join(REPO_ROOT, "scripts", "lib", name), join(tooling, name));
+    }
+    const factsPath = join(root, "package-check-facts");
+    // Use real shallow Git history; the package-check stand-in enforces the
+    // same ancestry boundary without building or contacting a registry.
+    const result = spawnSync(
+      "bash",
+      [
+        "-c",
+        [
+          'timeout() { shift 3; "$@"; }',
+          "pnpm() {",
+          '  [[ "$*" == release:openclaw:npm:check ]]',
+          '  printf "%s\\n" "$RELEASE_TAG" "$RELEASE_MAIN_REF" > "$PACKAGE_CHECK_FACTS"',
+          '  git merge-base --is-ancestor "$RELEASE_SHA" "$RELEASE_MAIN_REF"',
+          "}",
+          metadata.run,
+        ].join("\n"),
+      ],
+      {
+        cwd: source,
+        encoding: "utf8",
+        timeout: 10_000,
+        env: {
+          PATH: [dirname(process.execPath), process.env.PATH].join(":"),
+          PACKAGE_CHECK_FACTS: factsPath,
+          RELEASE_REF: scenario.tag,
+          RELEASE_TAG: "",
+          PREFLIGHT_ONLY: "true",
+          WORKFLOW_REF_NAME: "main",
+          OPENCLAW_NPM_PUBLISH_TAG: "beta",
+          OPENCLAW_NPM_RELEASE_SKIP_PACK_CHECK: "1",
+        },
+      },
+    );
+    expect(result.status, result.stderr).toBe(scenario.accepted ? 0 : 1);
+    if (scenario.accepted) {
+      expect(readFileSync(factsPath, "utf8").trim().split("\n")).toEqual([
+        scenario.tag,
+        "refs/remotes/origin/" + scenario.branch,
+      ]);
+    } else {
+      expect(result.stderr).toContain("Tagged commit is not reachable from main.");
+      expect(existsSync(factsPath)).toBe(false);
+    }
   });
 
   it("gates stable GitHub publication on the Windows Hub release asset contract", () => {

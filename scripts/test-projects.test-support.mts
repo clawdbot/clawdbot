@@ -2220,9 +2220,12 @@ const EXACT_TOOLING_TARGETS = new Map<string, string[]>([
       "android-version",
       "android-pin-version",
       "docker-release-policy",
+      "docker-release-artifacts",
+      "full-release-validation-at-sha",
       "ios-version",
       "openclaw-npm-extended-stable-release",
       "openclaw-npm-publish",
+      "npm-prepared-bundle",
       "release-preflight",
       "release-prepare",
       "release-upgrade-baseline",
@@ -2230,6 +2233,10 @@ const EXACT_TOOLING_TARGETS = new Map<string, string[]>([
       "upgrade-survivor-baselines",
       "upgrade-survivor-config-recipe",
     ],
+  ],
+  [
+    "scripts/lib/release-context.mjs",
+    ["full-release-validation-at-sha", "release-candidate-checklist", packageAcceptance],
   ],
   [
     "scripts/lib/clawhub-bootstrap-artifact.mjs",

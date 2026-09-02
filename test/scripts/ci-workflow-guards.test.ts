@@ -3469,7 +3469,11 @@ NODE
     expect(step.run).toContain('"$comparison_status" != "ahead"');
     expect(step.run).toContain('"$comparison_status" != "identical"');
 
-    for (const contextRef of ["release/2026.8.1", "extended-stable/2026.8.33"]) {
+    for (const contextRef of [
+      "release/2026.8.1",
+      "release/2026.8.1-1",
+      "extended-stable/2026.8.33",
+    ]) {
       for (const comparisonStatus of ["ahead", "identical"]) {
         const result = runTargetContextValidation(contextRef, targetSha, comparisonStatus);
         expect(result.status, `${contextRef}: ${result.output}`).toBe(0);

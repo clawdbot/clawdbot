@@ -15,6 +15,7 @@ import { isDeepStrictEqual, parseArgs } from "node:util";
 import { promoteDockerChannel } from "./docker-channel-promote.mjs";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
 import { resolveDockerReleasePolicy } from "./lib/docker-release-policy.mjs";
+import { resolveReleaseTagPackageIdentity } from "./lib/release-version.mjs";
 import {
   collectDockerAttestationErrors,
   inspectRaw,
@@ -132,15 +133,11 @@ export function validateDockerReleaseIdentity({
     "Docker releases require a v-prefixed tag.",
   );
   const policy = resolveDockerReleasePolicy(tag.slice(1));
-  if (packageVersion !== undefined) {
-    const correction = tag.slice(`v${packageVersion}`.length);
-    requireValue(
-      tag === `v${packageVersion}` ||
-        (tag.startsWith(`v${packageVersion}-`) && /^-[1-9][0-9]*$/u.test(correction)),
-      "Release tag does not match package.json or its correction-tag form.",
-    );
-  }
-  return policy;
+  const baseTag =
+    packageVersion === undefined
+      ? null
+      : resolveReleaseTagPackageIdentity(tag, packageVersion).baseTag;
+  return { ...policy, baseTag };
 }
 
 /** Verify the OCI closure before smoke testing or registry writes. */

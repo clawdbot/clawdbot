@@ -23,6 +23,7 @@ import {
   readBoundedRegularFile,
 } from "./lib/actions-artifact-archive.mjs";
 import { isRecord } from "./lib/record-shared.mjs";
+import { resolveReleaseTagPackageIdentity } from "./lib/release-version.mjs";
 import { runReleaseToolingGh } from "./release-tooling-identity.mjs";
 
 export const NPM_PACKAGE_PRODUCER_WORKFLOW = ".github/workflows/openclaw-npm-preflight.yml";
@@ -364,6 +365,7 @@ export async function downloadPreparedNpmBundle({
   outputDir,
   token,
   npmDistTag,
+  releaseTag = "",
   runGh = runReleaseToolingGh,
   fetchImpl,
 }) {
@@ -394,6 +396,10 @@ export async function downloadPreparedNpmBundle({
   const manifest = verifyPreparedNpmBundleFiles({ descriptor, files });
   if (npmDistTag !== undefined && manifest.npmDistTag !== npmDistTag) {
     throw new Error("Prepared npm bundle dist-tag mismatch.");
+  }
+  // Candidate acceptance binds source bytes; qualification also pins the publication tag.
+  if (releaseTag && manifest.releaseTag !== releaseTag) {
+    throw new Error("Prepared npm bundle release tag mismatch.");
   }
   // Validate the complete archive before any bytes become consumer input.
   mkdirSync(outputDir, { recursive: true });
@@ -470,6 +476,7 @@ export function prepareNpmPackageBundle({
   sourceDir,
   outputDir,
   releaseRef,
+  releaseTag: requestedReleaseTag = "",
   npmDistTag,
   producer,
   runPack = (directory, destination) =>
@@ -489,12 +496,25 @@ export function prepareNpmPackageBundle({
     encoding: "utf8",
   }).trim();
   const root = readJson(join(sourceDir, "package.json"));
-  const releaseTag = /^[a-f0-9]{40}$/u.test(releaseRef) ? `v${root.version}` : releaseRef;
+  const sourceRefIsSha = /^[a-f0-9]{40}$/u.test(releaseRef);
+  const { releaseTag, baseTag } = resolveReleaseTagPackageIdentity(
+    requestedReleaseTag || (sourceRefIsSha ? `v${root.version}` : releaseRef),
+    root.version,
+  );
   if (
-    releaseTag !== `v${root.version}` ||
-    (/^[a-f0-9]{40}$/u.test(releaseRef) && releaseRef !== sourceSha)
+    (sourceRefIsSha && releaseRef !== sourceSha) ||
+    (!sourceRefIsSha && releaseRef !== releaseTag)
   ) {
     throw new Error("npm package source does not match the release ref.");
+  }
+  // A correction may retain base-version bytes only at the exact published base source.
+  if (
+    baseTag &&
+    execFileSync("git", ["-C", sourceDir, "rev-parse", "--verify", `${baseTag}^{commit}`], {
+      encoding: "utf8",
+    }).trim() !== sourceSha
+  ) {
+    throw new Error("npm correction package source does not match its base release tag.");
   }
   mkdirSync(outputDir, { recursive: true });
   if (readdirSync(outputDir).length !== 0) {
@@ -664,6 +684,7 @@ async function main() {
         "input-dir",
         "source-dir",
         "release-ref",
+        "release-tag",
         "npm-dist-tag",
         "plugin-sdk-evidence",
         "dependency-evidence-dir",
@@ -684,6 +705,7 @@ async function main() {
       outputDir: resolve(values["output-dir"]),
       token: process.env.GH_TOKEN,
       npmDistTag: values["npm-dist-tag"],
+      releaseTag: values["release-tag"],
     });
   } else if (command === "verify-source") {
     result = verifyNpmSourceCheck({
@@ -704,6 +726,7 @@ async function main() {
       sourceDir: resolve(values["source-dir"]),
       outputDir: resolve(values["output-dir"]),
       releaseRef: values["release-ref"],
+      releaseTag: values["release-tag"],
       npmDistTag: values["npm-dist-tag"],
       producer: resolveCurrentProducer(process.env, PREPARE_JOB_NAME),
     });

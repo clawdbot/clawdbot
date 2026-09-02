@@ -385,54 +385,36 @@ jobs:
           });
           NODE
           fi
+          release_context="$(TARGET_VERSION="$target_version" node --input-type=module <<'NODE'
+          import { resolveReleaseContextIdentity } from './workflow/scripts/lib/release-context.mjs';
+          const env = process.env;
+          const identity = resolveReleaseContextIdentity(env.TARGET_CONTEXT_REF || env.TARGET_REF, env.TARGET_VERSION);
+          if (!identity && env.TARGET_CONTEXT_REF) throw new Error('target_context_ref must be a canonical OpenClaw release branch or tag.');
+          console.log(JSON.stringify(identity ?? { kind: '', releaseTag: `v${env.TARGET_VERSION}`, baseTag: null }));
+          NODE
+          )"
+          identity_kind="$(jq -r '.kind' <<< "$release_context")"
+          release_tag="$(jq -r '.releaseTag' <<< "$release_context")"
+          base_tag="$(jq -r '.baseTag // empty' <<< "$release_context")"
+          repository_url="https://github.com/${GITHUB_REPOSITORY}.git"
+          if [[ -n "$base_tag" ]]; then
+            base_sha="$(git ls-remote --tags "$repository_url" "refs/tags/${base_tag}^{}" | awk 'NR == 1 { print $1 }')"
+            if [[ -z "$base_sha" ]]; then
+              base_sha="$(git ls-remote --tags "$repository_url" "refs/tags/${base_tag}" | awk 'NR == 1 { print $1 }')"
+            fi
+            if [[ "$base_sha" != "$TARGET_SHA" ]]; then
+              echo "Correction source ${TARGET_SHA} must match base release tag ${base_tag}." >&2
+              exit 1
+            fi
+          fi
           if [[ -n "${GITHUB_OUTPUT:-}" ]]; then
-            printf 'target_version=%s\n' "$target_version" >> "$GITHUB_OUTPUT"
-            release_tag="v$target_version"
-            if [[ "$context_ref" == v* ]]; then release_tag="$context_ref"; fi
-            printf 'release_tag=%s\n' "$release_tag" >> "$GITHUB_OUTPUT"
-          fi
-          extended_stable_line=""
-          release_version_pattern=""
-          expected_version=""
-          identity_kind=""
-          if [[ "$context_ref" =~ ^release/([0-9]{4}\.([1-9]|1[0-2])\.[1-9][0-9]*)$ ]]; then
-            expected_version="${BASH_REMATCH[1]}"
-            release_version_pattern="${expected_version//./\\.}"
-            identity_kind="release branch"
-            if [[ "$target_version" != "$expected_version" &&
-                  ! "$target_version" =~ ^${release_version_pattern}-beta\.[1-9][0-9]*$ ]]; then
-              echo "Target package version ${target_version} does not belong to release branch ${context_ref}; expected ${expected_version} or a beta prerelease of it." >&2
-              exit 1
-            fi
-          elif [[ "$context_ref" =~ ^extended-stable/([0-9]{4}\.([1-9]|1[0-2])\.33)$ ]]; then
-            extended_stable_line="${BASH_REMATCH[1]%.33}"
-            identity_kind="extended-stable branch"
-          elif [[ "$context_ref" =~ ^v([0-9]{4}\.([1-9]|1[0-2])\.[1-9][0-9]*(-(alpha|beta)\.[1-9][0-9]*)?)$ ]]; then
-            expected_version="${BASH_REMATCH[1]}"
-            identity_kind="release tag"
-          elif [[ -n "$TARGET_CONTEXT_REF" ]]; then
-            echo "target_context_ref must be a canonical OpenClaw release branch or tag." >&2
-            exit 1
-          fi
-          if [[ "$identity_kind" == "extended-stable branch" ]]; then
-            if [[ ! "$target_version" =~ ^([0-9]{4}\.([1-9]|1[0-2]))\.([1-9][0-9]*)$ ]] ||
-               [[ "${BASH_REMATCH[1]}" != "$extended_stable_line" ]] ||
-               (( 10#${BASH_REMATCH[3]} < 33 )); then
-              echo "Target package version ${target_version} does not belong to extended-stable branch ${context_ref}; expected a final ${extended_stable_line}.PATCH version with PATCH >= 33." >&2
-              exit 1
-            fi
-          elif [[ -n "$expected_version" &&
-                "$identity_kind" != "release branch" &&
-                "$target_version" != "$expected_version" ]]; then
-            echo "Target package version ${target_version} does not match ${identity_kind} ${context_ref}; expected ${expected_version}." >&2
-            exit 1
+            printf 'target_version=%s\nrelease_tag=%s\n' "$target_version" "$release_tag" >> "$GITHUB_OUTPUT"
           fi
           if [[ -n "$TARGET_CONTEXT_REF" ]]; then
             if [[ ! "$TARGET_REF" =~ ^[a-f0-9]{40}$ || "$TARGET_REF" != "$TARGET_SHA" ]]; then
               echo "target_context_ref requires ref to be the resolved full Validation SHA." >&2
               exit 1
             fi
-            repository_url="https://github.com/${GITHUB_REPOSITORY}.git"
             if [[ "$identity_kind" == "release tag" ]]; then
               remote_sha="$(git ls-remote --tags "$repository_url" "refs/tags/${context_ref}^{}" | awk 'NR == 1 { print $1 }')"
               if [[ -z "$remote_sha" ]]; then
@@ -800,6 +782,7 @@ jobs:
     uses: ./.github/workflows/openclaw-npm-preflight.yml
     with:
       tag: ${{ needs.resolve_target.outputs.sha }}
+      release_tag: ${{ needs.resolve_target.outputs.release_tag }}
       preflight_only: true
       preflight_phase: prepare
       npm_dist_tag: ${{ needs.resolve_target.outputs.npm_dist_tag }}
@@ -815,6 +798,7 @@ jobs:
     uses: ./.github/workflows/openclaw-npm-preflight.yml
     with:
       tag: ${{ needs.resolve_target.outputs.sha }}
+      release_tag: ${{ needs.resolve_target.outputs.release_tag }}
       preflight_only: true
       preflight_phase: source
       npm_dist_tag: ${{ needs.resolve_target.outputs.npm_dist_tag }}
@@ -830,6 +814,7 @@ jobs:
     uses: ./.github/workflows/openclaw-npm-preflight.yml
     with:
       tag: ${{ needs.resolve_target.outputs.sha }}
+      release_tag: ${{ needs.resolve_target.outputs.release_tag }}
       preflight_only: true
       preflight_phase: verify
       prepared_bundle_json: ${{ needs.prepare_npm_package.outputs.prepared_bundle_json }}
@@ -1071,9 +1056,9 @@ jobs:
               context_ref="${TARGET_CONTEXT_REF:-$TARGET_REF}"
               context_ref="${context_ref#refs/heads/}"
               context_ref="${context_ref#refs/tags/}"
-              if [[ "$context_ref" =~ ^v[0-9]{4}\.[0-9]+\.[0-9]+(-(alpha|beta)\.[0-9]+)?$ ]]; then
+              if [[ "$context_ref" =~ ^v[0-9]{4}\.[0-9]+\.[0-9]+((-(alpha|beta)\.[0-9]+)|(-[1-9][0-9]*))?$ ]]; then
                 args+=(-f historical_target_tag="$context_ref")
-              elif [[ "$context_ref" =~ ^(release/[0-9]{4}\.[0-9]+\.[0-9]+|extended-stable/[0-9]{4}\.[0-9]+\.33)$ ]]; then
+              elif [[ "$context_ref" =~ ^(release/[0-9]{4}\.[0-9]+\.[0-9]+(-[1-9][0-9]*)?|extended-stable/[0-9]{4}\.[0-9]+\.33)$ ]]; then
                 args+=(-f target_context_ref="$context_ref")
               fi
               dispatch_child ci.yml "$dispatch_run_name" "${args[@]}"

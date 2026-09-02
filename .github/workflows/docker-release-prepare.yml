@@ -91,10 +91,16 @@ jobs:
           set -euo pipefail
           test "$(git -C source rev-parse HEAD)" = "${RELEASE_SHA}"
           node --input-type=module <<'NODE'
+          import { execFileSync } from 'node:child_process';
           import { appendFileSync, readFileSync } from 'node:fs';
           import { dockerReleaseArtifactName, validateDockerReleaseIdentity } from './workflow-source/scripts/docker-release-artifacts.mjs';
           const env = process.env;
           const policy = validateDockerReleaseIdentity({ tag: env.RELEASE_TAG, sourceSha: env.RELEASE_SHA, imageTagSuffix: env.IMAGE_TAG_SUFFIX, packageVersion: JSON.parse(readFileSync('source/package.json', 'utf8')).version });
+          if (policy.baseTag) {
+            execFileSync('git', ['-C', 'source', 'fetch', '--no-tags', '--depth=1', 'origin', `refs/tags/${policy.baseTag}:refs/tags/${policy.baseTag}`], { stdio: 'inherit' });
+            const baseSha = execFileSync('git', ['-C', 'source', 'rev-parse', `${policy.baseTag}^{commit}`], { encoding: 'utf8' }).trim();
+            if (baseSha !== env.RELEASE_SHA) throw new Error('Docker correction source must match its base release tag.');
+          }
           const includeBrowser = /^ARG OPENCLAW_INSTALL_BROWSER/m.test(readFileSync('source/Dockerfile', 'utf8'));
           appendFileSync(env.GITHUB_OUTPUT, `version=${policy.version}\ninclude_browser=${includeBrowser}\nbuilt_at=${new Date().toISOString()}\nartifact_name=${dockerReleaseArtifactName(env.RELEASE_SHA, env.GITHUB_RUN_ATTEMPT)}\n`);
           NODE

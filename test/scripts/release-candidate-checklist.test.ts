@@ -7,6 +7,7 @@ import { dirname, join } from "node:path";
 import { runInNewContext } from "node:vm";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { parse } from "yaml";
+import { releaseBranchForTag } from "../../scripts/lib/release-context.mjs";
 import {
   buildReleaseCandidateState,
   buildPublishCommand,
@@ -23,7 +24,6 @@ import {
   preflightCorePackageTarballs,
   preflightDependencyTarballs,
   reconcileReleaseCandidateState,
-  releaseBranchForTag,
   resolveArtifactName,
   requireRunIdFromDispatchOutput,
   run,
@@ -1170,7 +1170,7 @@ describe("release candidate checklist", () => {
   it("keeps release validation context on the canonical release branch", () => {
     expect(releaseBranchForTag("v2026.7.1-beta.4")).toBe("release/2026.7.1");
     expect(releaseBranchForTag("v2026.7.1")).toBe("release/2026.7.1");
-    expect(releaseBranchForTag("v2026.7.1-1")).toBe("release/2026.7.1");
+    expect(releaseBranchForTag("v2026.7.1-1")).toBe("release/2026.7.1-1");
     expect(releaseBranchForTag("v2026.7.1-alpha.4")).toBe("");
 
     const source = readFileSync("scripts/release-candidate-checklist.mts", "utf8");
