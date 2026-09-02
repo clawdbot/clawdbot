@@ -9,6 +9,7 @@ import {
   listBundledPluginBuildEntries,
   listBundledPluginPackArtifacts,
 } from "../../scripts/lib/bundled-plugin-build-entries.mjs";
+import { resolvePluginNpmRuntimeBuildPlan } from "../../scripts/lib/plugin-npm-runtime-build.mts";
 import { expectNoNodeFsScans } from "../../src/test-utils/fs-scan-assertions.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
@@ -101,14 +102,14 @@ describe("bundled plugin build entries", () => {
     expect(pickEntries(entries, Object.keys(expectedEntries))).toStrictEqual(expectedEntries);
   });
 
-  it("keeps the Matrix packaged runtime shim in bundled plugin build entries", () => {
+  it("keeps the Matrix packaged runtime shim in its package-owned build", () => {
     const entries = listBundledPluginBuildEntries();
-    const expectedEntries = {
-      "extensions/matrix/plugin-entry.handlers.runtime":
-        "extensions/matrix/plugin-entry.handlers.runtime.ts",
-    };
-
-    expect(pickEntries(entries, Object.keys(expectedEntries))).toStrictEqual(expectedEntries);
+    const plan = resolvePluginNpmRuntimeBuildPlan({ packageDir: "extensions/matrix" });
+    expect(entries["extensions/matrix/plugin-entry.handlers.runtime"]).toBeUndefined();
+    expect(plan?.entry["plugin-entry.handlers.runtime"]).toBe(
+      path.resolve("extensions/matrix/plugin-entry.handlers.runtime.ts"),
+    );
+    expect(plan?.runtimeBuildOutputs).toContain("./dist/plugin-entry.handlers.runtime.js");
   });
 
   it("keeps Codex CLI metadata in bundled build and standalone pack entries", () => {
@@ -197,10 +198,10 @@ describe("bundled plugin build entries", () => {
     expect(artifacts).not.toContain("dist/extensions/image-generation-core/openclaw.plugin.json");
   });
 
-  it("packs the Matrix packaged runtime shim", () => {
+  it("leaves Matrix packaging to the standalone package build", () => {
     const artifacts = listBundledPluginPackArtifacts({ includeRootPackageExcludedDirs: true });
 
-    expect(artifacts).toContain("dist/extensions/matrix/plugin-entry.handlers.runtime.js");
+    expectNoPrefixMatches(artifacts, "dist/extensions/matrix/");
   });
 
   it("keeps private QA bundles out of required npm pack artifacts", () => {
