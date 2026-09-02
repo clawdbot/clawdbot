@@ -119,6 +119,7 @@ describe("duplicate paragraphs", () => {
       expected: "    first\n\n    second\n\ntail",
     },
     { text: "repeat\n\n    repeat\n\nrepeat", expected: "repeat\n\n    repeat\n\nrepeat" },
+    { text: "Run `x`.\n\nRun `x`.", expected: "Run `x`." },
     { text: "repeat\n\nrepeat `x`", expected: "repeat\n\nrepeat `x`" },
     { text: "Do `x` repeat\n\nrepeat", expected: "Do `x` repeat\n\nrepeat" },
   ])("preserves canonical separators and whitespace %#", ({ text, expected }) => {

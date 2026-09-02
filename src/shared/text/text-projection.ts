@@ -174,10 +174,16 @@ function collapseDuplicateParagraphs(text: string): string {
   while (text.includes(marker)) {
     marker += "\0";
   }
-  const protectedRegions = regions.map((region, index) => ({
-    region,
-    token: `${marker}${index}${marker}`,
-  }));
+  const inlineTokens = new Map<string, string>();
+  const protectedRegions = regions.map((region, index) => {
+    const source = text.slice(region.start, region.end);
+    let token = `${marker}${index}${marker}`;
+    if (!region.block) {
+      token = inlineTokens.get(source) ?? token;
+      inlineTokens.set(source, token);
+    }
+    return { region, token };
+  });
   let masked = "";
   let cursor = 0;
   for (const { region, token } of protectedRegions) {
