@@ -2,7 +2,7 @@ import { vi, type Mock } from "vitest";
 import { createStreamingDirectiveAccumulator } from "../auto-reply/reply/streaming-directives.js";
 import { EmbeddedBlockChunker } from "./embedded-agent-block-chunker.js";
 import { handleMessageEnd } from "./embedded-agent-subscribe.handlers.messages.lifecycle.js";
-import { handleMessageUpdate } from "./embedded-agent-subscribe.handlers.messages.update.js";
+import { handleMessageUpdate as handleMessageUpdateProd } from "./embedded-agent-subscribe.handlers.messages.update.js";
 import type { EmbeddedAgentSubscribeContext } from "./embedded-agent-subscribe.handlers.types.js";
 import { createReplyDelivery } from "./embedded-agent-subscribe.reply-delivery.js";
 import { createEmbeddedAgentSubscribeState } from "./embedded-agent-subscribe.run-state.js";
@@ -11,12 +11,27 @@ import { createStreamRendering } from "./embedded-agent-subscribe.stream-renderi
 export function updateMessage(
   context: EmbeddedAgentSubscribeContext,
   event: { message: unknown; assistantMessageEvent?: unknown },
+  openReasoningStreamOverride?: () => void,
 ) {
   // Stream fixtures intentionally include incomplete and malformed provider payloads.
-  return handleMessageUpdate(context, {
+  // If an openReasoningStream override is provided, temporarily replace the module-level function.
+  if (openReasoningStreamOverride) {
+    const originalOpenReasoningStream = (context as unknown as Record<string, unknown>)
+      .openReasoningStream as typeof openReasoningStreamOverride;
+    (context as unknown as Record<string, unknown>).openReasoningStream =
+      openReasoningStreamOverride;
+    const result = handleMessageUpdateProd(context, {
+      type: "message_update",
+      ...event,
+    } as Parameters<typeof handleMessageUpdateProd>[1]);
+    (context as unknown as Record<string, unknown>).openReasoningStream =
+      originalOpenReasoningStream;
+    return result;
+  }
+  return handleMessageUpdateProd(context, {
     type: "message_update",
     ...event,
-  } as Parameters<typeof handleMessageUpdate>[1]);
+  } as Parameters<typeof handleMessageUpdateProd>[1]);
 }
 
 export function endMessage(context: EmbeddedAgentSubscribeContext, event: { message: unknown }) {
@@ -39,6 +54,7 @@ export function createMessageUpdateContext(
     consumePartialReplyDirectives?: ReturnType<typeof vi.fn>;
     stripBlockTags?: ReturnType<typeof vi.fn>;
     emitReasoningStream?: ReturnType<typeof vi.fn>;
+    openReasoningStream?: ReturnType<typeof vi.fn>;
     state?: Record<string, unknown>;
   } = {},
 ) {
@@ -66,6 +82,7 @@ export function createMessageUpdateContext(
         partialReplyDirectiveAccumulator.consume(text, options),
       ),
     emitReasoningStream: params.emitReasoningStream ?? vi.fn(),
+    openReasoningStream: params.openReasoningStream ?? vi.fn(),
     flushBlockReplyBuffer: params.flushBlockReplyBuffer ?? vi.fn(),
     blockChunker: new EmbeddedBlockChunker(),
     resetAssistantMessageState: params.resetAssistantMessageState ?? vi.fn(),

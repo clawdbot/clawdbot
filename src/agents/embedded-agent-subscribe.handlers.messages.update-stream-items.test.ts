@@ -406,18 +406,17 @@ describe("handleMessageUpdate reasoning stream control for reasoning-capable mod
     // Issue #134662: Reasoning-capable models fall back to medium thinking without explicit negotiation.
     // When thinkingLevel falls back implicitly (not via thinking_start event), ensure reasoning stream
     // is still opened to prevent reasoning leakage into visible message content.
-    const openReasoningStream = vi.fn();
+    const openReasoningStreamMock = vi.fn();
     const emitReasoningStream = vi.fn();
     const stripBlockTags = vi.fn((text: string) => text);
     const context = createMessageUpdateContext({
       emitReasoningStream,
       stripBlockTags,
+      openReasoningStream: openReasoningStreamMock,
       state: {
         reasoningStreamOpen: false,
       },
     });
-    // Add openReasoningStream mock to context
-    (context as unknown as Record<string, unknown>).openReasoningStream = openReasoningStream;
 
     // Simulate a reasoning-capable model (e.g., ollama/glm-5.3:cloud) with implicit thinkingLevel fallback
     // The session has thinkingLevel set to "medium" via fallback, but no thinking_start event was fired
@@ -439,16 +438,17 @@ describe("handleMessageUpdate reasoning stream control for reasoning-capable mod
         text: "<thinking>Let me solve this step by step...</thinking>Hello!",
         delta: "",
       }),
+      openReasoningStreamMock,
     );
 
     // Reasoning stream should be opened on text_start for reasoning-capable models
-    expect(openReasoningStream).toHaveBeenCalled();
+    expect(openReasoningStreamMock).toHaveBeenCalled();
   });
 
   it("opens reasoning stream when reasoning tags are detected in chunk for reasoning-capable model", async () => {
     // Issue #134662: Ensure reasoning stream is opened even when thinking_start event is missing
     // but reasoning tags are detected in the text chunk
-    const openReasoningStream = vi.fn();
+    const openReasoningStreamMock = vi.fn();
     const emitReasoningStream = vi.fn();
     const stripBlockTags = vi.fn((text: string, state: Record<string, unknown>) => {
       // Simulate stripBlockTags detecting and processing reasoning tags
@@ -460,12 +460,12 @@ describe("handleMessageUpdate reasoning stream control for reasoning-capable mod
     const context = createMessageUpdateContext({
       emitReasoningStream,
       stripBlockTags,
+      openReasoningStream: openReasoningStreamMock,
       state: {
         reasoningStreamOpen: false,
         partialBlockState: { thinking: false, final: false, inlineCode: { open: false } },
       },
     });
-    (context as unknown as Record<string, unknown>).openReasoningStream = openReasoningStream;
 
     (context.params as unknown as Record<string, unknown>).catalog = [
       { provider: "ollama", id: "glm-5.3:cloud", reasoning: true },
@@ -485,10 +485,11 @@ describe("handleMessageUpdate reasoning stream control for reasoning-capable mod
         text: "<thinking>Solving...</thinking>Answer",
         delta: "<thinking>Solving...</thinking>Answer",
       }),
+      openReasoningStreamMock,
     );
 
     // Reasoning stream should be opened when tags are detected
-    expect(openReasoningStream).toHaveBeenCalled();
+    expect(openReasoningStreamMock).toHaveBeenCalled();
   });
 
   it("does not open reasoning stream for non-reasoning model", async () => {

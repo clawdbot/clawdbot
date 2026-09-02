@@ -111,14 +111,32 @@ export function handleMessageUpdate(
   // ensure reasoning stream is properly isolated regardless of whether thinkingLevel was set explicitly
   // or via implicit fallback. This prevents reasoning leakage into visible message content.
   // See: issue #134662 - reasoning-capable models fall back to medium thinking without explicit negotiation.
+  const session = ctx.params.session as
+    | {
+        provider?: string;
+        model?: string;
+        thinkingLevel?: string;
+        modelCatalogEntry?: { reasoning?: boolean };
+      }
+    | undefined;
+  const catalog = (
+    ctx.params as { catalog?: { provider: string; id: string; reasoning?: boolean }[] }
+  ).catalog;
   const modelHasReasoningCapability =
-    ctx.session?.modelCatalogEntry?.reasoning === true ||
-    (ctx.session?.provider &&
-      ctx.session?.model &&
-      ctx.params.catalog?.find(
-        (entry) => entry.provider === ctx.session!.provider && entry.id === ctx.session!.model,
+    session?.modelCatalogEntry?.reasoning === true ||
+    (session?.provider &&
+      session?.model &&
+      catalog?.find(
+        (entry: { provider: string; id: string; reasoning?: boolean }) =>
+          entry.provider === session!.provider && entry.id === session!.model,
       )?.reasoning === true);
-  const thinkingEnabled = ctx.session?.thinkingLevel && ctx.session.thinkingLevel !== "off";
+  const thinkingEnabled = session?.thinkingLevel && session.thinkingLevel !== "off";
+  // Use ctx.openReasoningStream if available (for test injection), otherwise use the imported function.
+  const openReasoning: typeof openReasoningStream =
+    typeof (ctx as unknown as Record<string, unknown>).openReasoningStream === "function"
+      ? ((ctx as unknown as Record<string, unknown>)
+          .openReasoningStream as typeof openReasoningStream)
+      : openReasoningStream;
   if (
     evtType === "text_start" &&
     modelHasReasoningCapability &&
@@ -129,7 +147,7 @@ export function handleMessageUpdate(
     // This can happen when thinkingLevel falls back implicitly (e.g., to "medium")
     // without triggering the normal thinking_start event path. Force open the
     // reasoning stream to ensure proper isolation of reasoning content.
-    openReasoningStream(ctx);
+    openReasoning(ctx);
   }
 
   if (evtType === "thinking_start" || evtType === "thinking_delta" || evtType === "thinking_end") {
@@ -137,7 +155,7 @@ export function handleMessageUpdate(
       !suppressMessageToolOnlySourceReplyOutput &&
       (evtType === "thinking_start" || evtType === "thinking_delta")
     ) {
-      openReasoningStream(ctx);
+      openReasoning(ctx);
     }
     const thinkingDelta = typeof assistantRecord?.delta === "string" ? assistantRecord.delta : "";
     const thinkingContent =
@@ -164,7 +182,7 @@ export function handleMessageUpdate(
       // would fire the lane's end hook (onReasoningEnd) for a lane that never
       // rendered, leaking the boundary signal.
       if (!ctx.state.reasoningStreamOpen) {
-        openReasoningStream(ctx);
+        openReasoning(ctx);
       }
       emitReasoningEnd(ctx);
     }
@@ -431,7 +449,7 @@ export function handleMessageUpdate(
         !ctx.state.reasoningStreamOpen &&
         recomputeState.thinking
       ) {
-        openReasoningStream(ctx);
+        openReasoning(ctx);
       }
     } else {
       visibleDelta =
@@ -461,7 +479,7 @@ export function handleMessageUpdate(
       !wasThinking &&
       ctx.state.partialBlockState.thinking
     ) {
-      openReasoningStream(ctx);
+      openReasoning(ctx);
     }
     // Detect when thinking block ends (</think> tag processed)
     if (
