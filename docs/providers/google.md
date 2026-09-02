@@ -16,7 +16,8 @@ The Google plugin provides access to Gemini models through Google AI Studio, plu
 
 <Note>
   To use Gemini models through Google Cloud Vertex AI with GCP project billing,
-  see the [Google Vertex AI](/providers/google-vertex) provider instead.
+  see the [Google Vertex AI](/providers/google-vertex) guide, which covers the
+  ADC setup path.
 </Note>
 
 ## Getting started

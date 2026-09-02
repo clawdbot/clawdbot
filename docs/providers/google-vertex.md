@@ -8,9 +8,9 @@ read_when:
 ---
 
 The `google-vertex` provider routes Gemini model requests through Google Cloud
-Vertex AI using Application Default Credentials (ADC). It is part of the bundled
-Google plugin, alongside the `google` (AI Studio) and `google-gemini-cli`
-providers.
+Vertex AI. It is part of the bundled Google plugin, alongside the `google`
+(AI Studio) and `google-gemini-cli` providers. This guide covers the
+Application Default Credentials (ADC) setup path.
 
 - Provider: `google-vertex`
 - Auth: Application Default Credentials from a credentials file (gcloud user ADC or a service account key)
