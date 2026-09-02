@@ -435,7 +435,9 @@ describe("gateway startup-migration refusal", () => {
         expect(logs).not.toContain(STARTUP_REFUSAL);
         const status = await instance.cli(["gateway", "call", "status", "--json"]);
         expect(status.code, status.stdout + "\n" + status.stderr).toBe(0);
-        expect(JSON.parse(status.stdout).startupMigrationWarning).toContain(warning);
+        expect(JSON.parse(status.stdout).startupMigrationWarning).toBe(
+          'Startup migrations need attention. Run "openclaw doctor --fix" against the same state/config, then restart the gateway.',
+        );
         expect(fs.existsSync(path.join(stateDir, "plugin-state", "state.sqlite"))).toBe(true);
       } finally {
         await instance.stopGateway();
