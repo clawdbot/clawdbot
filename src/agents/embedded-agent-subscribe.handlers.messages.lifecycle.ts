@@ -39,6 +39,7 @@ import {
   isOpenAiCompletionsAssistantMessage,
   isResponsesApiAssistantMessage,
   isSubscribeTranscriptOnlyOpenClawAssistantMessage,
+  resolveAssistantStreamItemId,
   scopeAssistantMessageToStreamBlock,
   shouldSuppressDeterministicApprovalOutput,
 } from "./embedded-agent-subscribe.handlers.messages.stream.js";
@@ -135,13 +136,18 @@ export function handleMessageEnd(
   ctx.commitAssistantUsage();
   if (suppressVisibleAssistantOutput) {
     const isResponsesCommentary = isResponsesApiAssistantMessage(assistantMessage);
+    const commentaryItemId =
+      ctx.state.lastAssistantStreamItemId ??
+      (isResponsesCommentary
+        ? undefined
+        : resolveAssistantStreamItemId({ message: assistantMessage }));
     const shouldScopeCommentary =
       isResponsesCommentary || isAnthropicAssistantMessage(assistantMessage);
     const commentaryMessage = shouldScopeCommentary
       ? scopeAssistantMessageToStreamBlock(
           assistantMessage as AssistantMessage,
           ctx.state.lastAssistantStreamContentIndex,
-          ctx.state.lastAssistantStreamItemId,
+          commentaryItemId,
         )
       : assistantMessage;
     const rawCommentaryText = coerceChatContentText(
@@ -157,7 +163,7 @@ export function handleMessageEnd(
     }));
     emitResolvedCommentaryDisplay(ctx, rawCommentaryText, {
       final: true,
-      itemId: ctx.state.lastAssistantStreamItemId,
+      itemId: commentaryItemId,
       preferReplace: !ctx.state.commentaryStreamedWithDelta,
     });
     // Commentary-tagged tool turns can still carry durable reasoning under /reasoning on.

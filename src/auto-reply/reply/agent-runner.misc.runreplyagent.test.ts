@@ -460,7 +460,9 @@ describe("runReplyAgent auto-compaction token update", () => {
     options?: {
       agentEvents?: Array<{ stream: string; data: Record<string, unknown> }>;
       config?: OpenClawConfig;
+      isHeartbeat?: boolean;
       onBlockReply?: (payload: unknown) => Promise<void> | void;
+      reasoningPayloadsEnabled?: boolean;
     },
   ) {
     const sessionKey = "main";
@@ -504,7 +506,14 @@ describe("runReplyAgent auto-compaction token update", () => {
         reasoningLevel: "on",
       },
       reply: {
-        opts: options?.onBlockReply ? { onBlockReply: options.onBlockReply } : undefined,
+        opts:
+          options?.onBlockReply || options?.isHeartbeat || options?.reasoningPayloadsEnabled
+            ? {
+                ...(options.onBlockReply ? { onBlockReply: options.onBlockReply } : {}),
+                ...(options.isHeartbeat ? { isHeartbeat: true } : {}),
+                ...(options.reasoningPayloadsEnabled ? { reasoningPayloadsEnabled: true } : {}),
+              }
+            : undefined,
         sessionEntry,
         sessionStore: { [sessionKey]: sessionEntry },
         sessionKey,
@@ -804,6 +813,15 @@ describe("runReplyAgent auto-compaction token update", () => {
           },
         },
       },
+    );
+
+    expect(result).toBeUndefined();
+  });
+
+  it("keeps empty heartbeat replies silent", async () => {
+    const result = await runEmptyDirectReply(
+      { meta: { agentMeta: {} } },
+      { isHeartbeat: true, reasoningPayloadsEnabled: true },
     );
 
     expect(result).toBeUndefined();

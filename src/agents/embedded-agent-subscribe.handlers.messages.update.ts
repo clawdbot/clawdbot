@@ -111,10 +111,15 @@ export function handleMessageUpdate(
     (evtType === "text_start" || evtType === "text_delta" || evtType === "text_end");
   const suppressVisibleAssistantOutput = resolveAssistantMessagePhase(msg) === "commentary";
   if (suppressVisibleAssistantOutput && !isResponsesTextEvent && !isAnthropicTextEvent) {
+    const commentaryItemId =
+      ctx.state.lastAssistantStreamItemId ??
+      (isResponsesApiAssistantMessage(eventAssistantMessage)
+        ? undefined
+        : resolveAssistantStreamItemId({ message: eventAssistantMessage }));
     const commentaryMessage = scopeAssistantMessageToStreamBlock(
       eventAssistantMessage,
       ctx.state.lastAssistantStreamContentIndex,
-      ctx.state.lastAssistantStreamItemId,
+      commentaryItemId,
     );
     const rawCommentaryText = coerceChatContentText(
       extractAssistantCommentaryText(commentaryMessage),
@@ -129,7 +134,7 @@ export function handleMessageUpdate(
       content: rawCommentaryText,
     }));
     emitResolvedCommentaryDisplay(ctx, rawCommentaryText, {
-      itemId: ctx.state.lastAssistantStreamItemId,
+      itemId: commentaryItemId,
       preferReplace: true,
     });
     return;

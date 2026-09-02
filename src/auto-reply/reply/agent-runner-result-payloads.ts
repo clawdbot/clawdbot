@@ -201,13 +201,13 @@ export async function prepareReplyAgentPayloads(state: {
         sessionCtx,
         cfg,
       });
-  const buildTerminalEmptyInteractiveReplyPayload = () =>
+  const buildTerminalEmptyInteractiveReplyPayload = (heartbeat: boolean) =>
     buildEmptyInteractiveReplyPayload({
       isInteractive:
         followupRun.currentInboundEventKind !== "room_event" &&
         (followupRun.run.inputProvenance?.kind === undefined ||
           followupRun.run.inputProvenance.kind === "external_user"),
-      isHeartbeat: false,
+      isHeartbeat: heartbeat,
       silentExpected: followupRun.run.silentExpected,
       allowEmptyAssistantReplyAsSilent: followupRun.run.allowEmptyAssistantReplyAsSilent,
       hasPendingContinuation:
@@ -518,7 +518,7 @@ export async function prepareReplyAgentPayloads(state: {
       return { kind: "return" as const, value: silentFallbackFailurePayload };
     }
     const emptyFallbackPayload =
-      emptyInteractiveReplyPayload ?? buildTerminalEmptyInteractiveReplyPayload();
+      emptyInteractiveReplyPayload ?? buildTerminalEmptyInteractiveReplyPayload(isHeartbeat);
     if (emptyFallbackPayload && !effectiveContinuationSignal && !hasQueuedDelegateWork) {
       const emptyPayloadResult = await buildFinalPayloads([emptyFallbackPayload]);
       if (emptyPayloadResult.replyPayloads.length > 0) {
@@ -558,7 +558,7 @@ export async function prepareReplyAgentPayloads(state: {
     !hasQueuedDelegateWork
   ) {
     const emptyPayloadResult = await buildFinalPayloads(
-      [buildTerminalEmptyInteractiveReplyPayload()].filter(
+      [buildTerminalEmptyInteractiveReplyPayload(false)].filter(
         (payload): payload is ReplyPayload => payload !== undefined,
       ),
     );
