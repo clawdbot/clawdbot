@@ -167,12 +167,47 @@ describe("plugin-sdk/channel-ingress-runtime", () => {
     ]);
 
     await expect(combined.settle()).rejects.toThrow("adoption failed");
-    const failure = new Error("dispatch failed");
-    await combined.abandon(failure);
+    await combined.abandon(new Error("dispatch failed"));
 
-    expect(failed).toHaveBeenCalledExactlyOnceWith(failure);
+    expect(failed).toHaveBeenCalledOnce();
+    expect(failed.mock.calls[0]?.[0]).toHaveProperty("message", "adoption failed");
     expect(abandoned).not.toHaveBeenCalled();
     expect(legacyAbandoned).toHaveBeenCalledOnce();
+  });
+
+  it("releases the claims a rejected adoption never reached", async () => {
+    const order: string[] = [];
+    const lifecycleFor = (name: string, onAdopted: () => Promise<void>) => ({
+      abortSignal: new AbortController().signal,
+      onAdopted,
+      onDeferred: vi.fn(),
+      onAdoptionFinalizing: vi.fn(),
+      onFailed: vi.fn(async () => {
+        order.push(`failed:${name}`);
+      }),
+      onAbandoned: vi.fn(async () => {
+        order.push(`abandoned:${name}`);
+      }),
+    });
+    const first = lifecycleFor("first", async () => {
+      order.push("adopted:first");
+    });
+    const second = lifecycleFor("second", async () => {
+      throw new Error("claim reclaimed");
+    });
+    const third = lifecycleFor("third", async () => {
+      order.push("adopted:third");
+    });
+    const combined = fanInChannelIngressLifecycles([first, second, third]);
+
+    await expect(combined.lifecycle?.onAdopted()).rejects.toThrow("claim reclaimed");
+    // The delivery catch abandons after a failed handoff; every claim must
+    // already carry a disposition by then rather than wait for recovery.
+    await combined.abandon(new Error("delivery failed"));
+
+    expect(order).toEqual(["adopted:first", "failed:second", "failed:third"]);
+    expect(first.onFailed).not.toHaveBeenCalled();
+    expect(first.onAbandoned).not.toHaveBeenCalled();
   });
 
   it("derives store allowlists, command auth, sender separation, and redaction", async () => {

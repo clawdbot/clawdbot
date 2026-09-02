@@ -75,7 +75,10 @@ Pass the events' lifecycles in the order they were claimed; `undefined` entries
 are skipped, and an empty input yields `lifecycle: undefined` so a caller can
 fall back to the single-claim path without branching. Adopting the combined
 lifecycle adopts every claim, and abandoning it returns every claim to its retry
-budget — a partial outcome is what this exists to prevent.
+budget — a partial outcome is what this exists to prevent. Adoption runs in the
+order the claims were passed, and a claim whose adoption is rejected — the drain
+raises that when another owner has taken it — releases itself and every claim
+behind it, so a rejection reaches the caller with nothing left held.
 
 Use it only when one agent turn genuinely consumes several claims. A channel
 that answers each event on its own keeps passing that event's lifecycle

@@ -151,19 +151,35 @@ export function fanInChannelIngressLifecycles(
   }
 
   let handedOff = false;
-  const adoptAll = async () => {
-    for (const lifecycle of lifecycles) {
-      await lifecycle.onAdopted();
-    }
-  };
-  const fanOut = async (invoke: (lifecycle: ChannelIngressLifecycle) => void | Promise<void>) => {
-    await Promise.all(lifecycles.map(async (lifecycle) => await invoke(lifecycle)));
+  const fanOut = async (
+    invoke: (lifecycle: ChannelIngressLifecycle) => void | Promise<void>,
+    targets: readonly ChannelIngressLifecycle[] = lifecycles,
+  ) => {
+    await Promise.all(targets.map(async (lifecycle) => await invoke(lifecycle)));
   };
   const abandonAll = () => fanOut((lifecycle) => lifecycle.onAbandoned());
-  const failAll = (error: unknown) =>
-    fanOut((lifecycle) =>
-      lifecycle.onFailed ? lifecycle.onFailed(error) : lifecycle.onAbandoned(),
+  const failEach = (targets: readonly ChannelIngressLifecycle[], error: unknown) =>
+    fanOut(
+      (lifecycle) => (lifecycle.onFailed ? lifecycle.onFailed(error) : lifecycle.onAbandoned()),
+      targets,
     );
+  const failAll = (error: unknown) => failEach(lifecycles, error);
+  // Adoption runs in claim order so each durable source settles in the order it
+  // was taken. Handoff is already marked by the time this runs, so a caller's
+  // abandon after a rejection here is a no-op; release the claim that threw and
+  // every claim after it instead of leaving them held until recovery.
+  const adoptAll = async () => {
+    for (const [index, lifecycle] of lifecycles.entries()) {
+      try {
+        await lifecycle.onAdopted();
+      } catch (error) {
+        // Callers match the adoption error itself (isIngressAdoptionLostError),
+        // so a failing release must not replace it.
+        await Promise.allSettled([failEach(lifecycles.slice(index), error)]);
+        throw error;
+      }
+    }
+  };
   const supportsCancellation = lifecycles.every((lifecycle) => lifecycle.onCancelled !== undefined);
   // Omit aggregate cancellation unless every durable source supports it. Callers
   // can then use settle/abandon without an acknowledged-but-unsettled claim.
@@ -217,8 +233,10 @@ export function fanInChannelIngressLifecycles(
     // A gated or deliberately skipped turn still consumed every source claim.
     settle: async () => {
       if (!handedOff) {
-        await adoptAll();
+        // Mark before adopting, matching onAdopted: a rejection partway has
+        // already released the rest, so a later abandon must stay a no-op.
         handedOff = true;
+        await adoptAll();
       }
     },
     abandon: async (error?: unknown) => {

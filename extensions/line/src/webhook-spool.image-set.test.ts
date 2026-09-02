@@ -423,4 +423,67 @@ describe("LINE webhook spool image sets", () => {
       }
     });
   });
+  // A later part's adoption write can lose its claim to another owner. The
+  // handoff is already marked by then, so the parts the adoption loop never
+  // reached have to be released here or they stay claimed until recovery.
+  it("returns the parts a rejected mid-set adoption never reached", async () => {
+    await withQueue(async (queue) => {
+      const reclaimed = "message:message-event-lost-2";
+      const lossyQueue: typeof queue = {
+        ...queue,
+        complete: async (idOrClaim, options) => {
+          const id = typeof idOrClaim === "string" ? idOrClaim : idOrClaim.id;
+          // false means another owner holds the claim; the drain turns that into
+          // IngressAdoptionLostError, rejecting this constituent's adoption.
+          return id === reclaimed ? false : await queue.complete(idOrClaim, options);
+        },
+      };
+      const deliver = vi.fn(
+        async (
+          _events: readonly webhook.Event[],
+          _destination: string,
+          control: { turnAdoptionLifecycle: LineWebhookTurnAdoptionLifecycle },
+        ) => {
+          await control.turnAdoptionLifecycle.onAdopted();
+        },
+      );
+      const spool = createLineWebhookSpool({
+        accountId: "default",
+        runtime: runtime(),
+        queue: lossyQueue,
+        deliver,
+      });
+
+      spool.start();
+      try {
+        for (const index of [1, 2, 3]) {
+          await spool.accept(
+            callback(
+              createEvent({
+                webhookEventId: `event-lost-${index}`,
+                userId: "user-lost",
+                imageSet: { id: "set-lost", index, total: 3 },
+              }),
+            ),
+          );
+        }
+
+        await vi.waitFor(() => expect(deliver).toHaveBeenCalledTimes(1), { timeout: 20_000 });
+        // The third part sat behind the lost one and was never adopted; it comes
+        // back for retry instead of staying held.
+        // The third part sat behind the lost one and was never adopted; it comes
+        // back for retry instead of staying held until recovery.
+        const stranded = "message:message-event-lost-3";
+        await vi.waitFor(
+          async () => {
+            expect((await queue.listPending()).map((record) => record.id)).toContain(stranded);
+          },
+          { timeout: 20_000 },
+        );
+        expect((await queue.listClaims()).map((claim) => claim.id)).not.toContain(stranded);
+      } finally {
+        await spool.stop();
+      }
+    });
+  });
 });
