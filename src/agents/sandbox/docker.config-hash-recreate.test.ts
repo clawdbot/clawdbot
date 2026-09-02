@@ -647,9 +647,7 @@ describe("ensureSandboxContainer config-hash recreation", () => {
       const cfg = createSandboxConfig([], undefined, workspaceAccess);
 
       spawnState.inspectRunning = false;
-      spawnState.labelHash = "";
       registryMocks.readRegistryEntry.mockResolvedValue(null);
-      registryMocks.updateRegistry.mockResolvedValue(undefined);
 
       const createCall = await ensureSandboxCreateCallForTest({ cfg, workspaceDir });
 

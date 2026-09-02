@@ -48,7 +48,7 @@ export function resolveMaterializedSandboxSkillsWorkspaceDir(rootDir: string): s
 }
 
 /** Returns true when a skill mount source exists inside the canonical mount root. */
-export function isExistingWorkspaceSkillMountSource(params: {
+function isExistingWorkspaceSkillMountSource(params: {
   rootDir: string;
   hostPath: string;
 }): boolean {
