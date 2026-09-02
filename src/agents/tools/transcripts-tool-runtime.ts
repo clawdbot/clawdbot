@@ -56,6 +56,13 @@ type ActiveTranscriptsSession = {
 
 // Process-local ownership shared by tool-driven and configured transcript captures.
 export const activeSessions = new Map<string, ActiveTranscriptsSession>();
+
+export function isTranscriptSessionActive(
+  session: Pick<TranscriptSessionDescriptor, "sessionId" | "startedAt">,
+): boolean {
+  const entry = activeSessions.get(session.sessionId);
+  return entry?.session.startedAt === session.startedAt && entry.phase !== "terminal";
+}
 // Reserve ids across async provider startup so overlapping starts cannot
 // replace the only cleanup owner for an existing or still-starting capture.
 const startingSessionIds = new Set<string>();

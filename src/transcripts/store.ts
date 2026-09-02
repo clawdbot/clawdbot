@@ -39,6 +39,7 @@ import {
   assertTranscriptExportPathAvailable,
   hasAliasedCanonicalTranscriptExportPathOwner,
 } from "./store-export-ownership.js";
+import { queryTranscriptReadEntries, type TranscriptReadOptions } from "./store-read.js";
 import {
   appendMeetingTranscriptUtterance,
   meetingTranscriptDb,
@@ -341,6 +342,29 @@ export class TranscriptsStore {
 
   readSummaryInputRevision(session: TranscriptSessionDescriptor): string | undefined {
     return readTranscriptSummaryInputRevision(this.database().db, session);
+  }
+
+  listReadEntries(options: TranscriptReadOptions) {
+    return queryTranscriptReadEntries(this.database().db, options);
+  }
+
+  readUtteranceEntries(session: TranscriptSessionDescriptor, maxUtterances: number) {
+    const database = this.database();
+    return executeSqliteQuerySync(
+      database.db,
+      meetingTranscriptUtteranceQuery(database.db, session)
+        .select([
+          "sequence",
+          "started_at",
+          "ended_at",
+          "speaker_id",
+          "speaker_label",
+          "text",
+          "final",
+        ])
+        .orderBy("sequence", "desc")
+        .limit(maxUtterances),
+    ).rows.toReversed();
   }
 
   async writeSession(session: TranscriptSessionDescriptor): Promise<void> {
