@@ -27,10 +27,13 @@ import {
   stripLeadingPackageManagerSeparator,
 } from "./lib/arg-utils.mts";
 import { readBoundedResponseText } from "./lib/bounded-response.mjs";
+import { releaseBranchForTag } from "./lib/release-context.mjs";
 import {
-  validateNpmPreflightProducer,
+  validateFullReleaseNpmPreflight,
+  verifyNpmPreflightProducer,
   validateReleasePreflightTagIdentity,
 } from "./npm-preflight-tooling-identity.mjs";
+import { validateNpmPreflightDistTag } from "./openclaw-npm-extended-stable-release.mjs";
 import { validatePluginSdkApiReleaseEvidence } from "./plugin-sdk-api-release-evidence.mjs";
 import { verifyReleaseToolingIdentity } from "./release-tooling-identity.mjs";
 import {
@@ -154,7 +157,7 @@ Options:
   --plugin-sdk-api-acknowledgement <digest>
                                       8-character digest from the Plugin SDK API diff report.
   --windows-node-tag <tag>            Exact Windows Node release tag. Required for stable.
-  --skip-dispatch                     Require both run ids; do not dispatch workflows.
+  --skip-dispatch                     Require Full Release Validation run; separate npm run only for historical recovery.
   --skip-local-generated-check        Do not run local generated release baseline checks before dispatch.
   --run-parallels                    Force candidate Parallels smoke; beta defaults to postpublish release:beta-smoke.
   --skip-parallels                   Force-skip candidate Parallels smoke; stable/full run by default.
@@ -170,14 +173,6 @@ Options:
   --plugins <names>                   Required when plugin scope is selected.
   --output-dir <dir>                  Evidence output dir. Default: .artifacts/release-candidate/<tag>
 `;
-}
-
-export function releaseBranchForTag(tag: string) {
-  if (tag.includes("-alpha.")) {
-    return "";
-  }
-  const version = tag.replace(/^v/u, "").split("-", 1)[0];
-  return `release/${version}`;
 }
 
 /**
@@ -317,8 +312,8 @@ export function parseArgs(argv: string[]) {
       ? "deferred to postpublish release:beta-smoke"
       : "operator skipped --skip-parallels"
     : "";
-  if (options.skipDispatch && (!options.fullReleaseRunId || !options.npmPreflightRunId)) {
-    throw new Error("--skip-dispatch requires --full-release-run and --npm-preflight-run");
+  if (options.skipDispatch && !options.fullReleaseRunId) {
+    throw new Error("--skip-dispatch requires --full-release-run");
   }
   if (options.pluginPublishScope === "selected" && !options.plugins.trim()) {
     throw new Error("--plugin-publish-scope selected requires --plugins");
@@ -1580,11 +1575,7 @@ export function validatePreflightManifest(manifest: JsonRecord, params: JsonReco
       `npm preflight SHA mismatch: expected ${formatJsonValue(params.targetSha)}, got ${formatJsonValue(manifest.releaseSha)}`,
     );
   }
-  if (manifest.npmDistTag !== params.npmDistTag) {
-    throw new Error(
-      `npm preflight dist-tag mismatch: expected ${formatJsonValue(params.npmDistTag)}, got ${formatJsonValue(manifest.npmDistTag)}`,
-    );
-  }
+  validateNpmPreflightDistTag({ manifest, npmDistTag: params.npmDistTag });
   if (!manifest.tarballName || !manifest.tarballSha256) {
     throw new Error("npm preflight manifest missing tarball metadata");
   }
@@ -1973,18 +1964,9 @@ async function main() {
     });
   }
 
-  if (!options.npmPreflightRunId && !options.skipDispatch) {
-    const workflowFile = "openclaw-npm-release.yml";
-    options.npmPreflightRunId = dispatchWorkflow(options.repo, workflowFile, options.workflowRef, {
-      tag: targetSha,
-      preflight_only: "true",
-      npm_dist_tag: options.npmDistTag,
-      plugin_sdk_api_acknowledgement: options.pluginSdkApiAcknowledgement,
-    });
-    candidateState = updateReleaseCandidateState(statePath, candidateState, "dispatching", {
-      npmPreflightRunId: options.npmPreflightRunId,
-    });
-  }
+  // Full validation qualifies its package producer. Explicit separate run IDs
+  // remain the recovery contract for releases prepared by older tooling.
+  options.npmPreflightRunId ||= options.fullReleaseRunId;
   candidateState = updateReleaseCandidateState(statePath, candidateState, "waiting", {
     fullReleaseRunId: options.fullReleaseRunId,
     npmPreflightRunId: options.npmPreflightRunId,
@@ -1995,32 +1977,59 @@ async function main() {
     workflowRef: options.workflowRef,
     allowShaPinnedWorkflowRef: true,
   });
-  const { run: npmRun, source: npmPreflightSource } = await waitForSuccessfulRun(
-    options.repo,
-    options.npmPreflightRunId,
-    {
-      workflowName: "OpenClaw NPM Release",
-      workflowRef: options.workflowRef,
-      validateSource: (workflowRun) =>
-        validateNpmPreflightRunSource({
-          repository: options.repo,
-          runId: options.npmPreflightRunId,
-          workflowRun,
-          workflowRef: options.workflowRef,
-        }),
-    },
-  );
+  const npmUsesFullRun = options.npmPreflightRunId === options.fullReleaseRunId;
+  const { run: npmRun, source: npmPreflightSource } = npmUsesFullRun
+    ? {
+        run: fullRun,
+        source: { status: "passed", headSha: fullRun.headSha, workflowRef: options.workflowRef },
+      }
+    : await waitForSuccessfulRun(options.repo, options.npmPreflightRunId, {
+        workflowName: "OpenClaw NPM Release",
+        workflowRef: options.workflowRef,
+        validateSource: (workflowRun) =>
+          validateNpmPreflightRunSource({
+            repository: options.repo,
+            runId: options.npmPreflightRunId,
+            workflowRun,
+            workflowRef: options.workflowRef,
+          }),
+      });
 
   const npmDir = join(options.outputDir, "npm-preflight");
   const pluginSdkApiDir = join(options.outputDir, "plugin-sdk-api-evidence");
   const fullDir = join(options.outputDir, "full-release-validation");
+  if (!Number.isInteger(fullRun.runAttempt) || fullRun.runAttempt < 1) {
+    throw new Error(`Full Release Validation run ${options.fullReleaseRunId} has invalid attempt.`);
+  }
+  const fullArtifactName = `full-release-validation-${options.fullReleaseRunId}-${fullRun.runAttempt}`;
+  downloadArtifact(options.repo, options.fullReleaseRunId, fullArtifactName, fullDir);
+  const fullManifest = readJson(
+    join(fullDir, "full-release-validation-manifest.json"),
+    "full validation manifest",
+  );
+  const qualifiedPreflight = npmUsesFullRun
+    ? validateFullReleaseNpmPreflight({
+        manifest: fullManifest,
+        runId: options.fullReleaseRunId,
+        runAttempt: fullRun.runAttempt,
+        sourceSha: targetSha,
+        toolingSha: fullRun.headSha,
+      })
+    : undefined;
   const npmArtifact = await downloadResolvedArtifact(
     options.repo,
     options.npmPreflightRunId,
-    `openclaw-npm-preflight-${options.tag}`,
+    qualifiedPreflight?.artifact.name ?? `openclaw-npm-preflight-${options.tag}`,
     "openclaw-npm-preflight-",
     npmDir,
   );
+  if (
+    qualifiedPreflight &&
+    (String(npmArtifact.id) !== qualifiedPreflight.artifact.id ||
+      npmArtifact.digest !== `sha256:${qualifiedPreflight.artifact.digest}`)
+  ) {
+    throw new Error("npm preflight artifact differs from the immutable full validation descriptor");
+  }
   const npmArtifactName = npmArtifact.name;
   if (!Number.isInteger(npmRun.runAttempt) || npmRun.runAttempt < 1) {
     throw new Error(`OpenClaw npm preflight run ${options.npmPreflightRunId} has invalid attempt.`);
@@ -2031,20 +2040,17 @@ async function main() {
     `plugin-sdk-api-release-diff-${options.npmPreflightRunId}-${npmRun.runAttempt}`,
     pluginSdkApiDir,
   );
-  if (!Number.isInteger(fullRun.runAttempt) || fullRun.runAttempt < 1) {
-    throw new Error(`Full Release Validation run ${options.fullReleaseRunId} has invalid attempt.`);
-  }
-  const fullArtifactName = `full-release-validation-${options.fullReleaseRunId}-${fullRun.runAttempt}`;
-  downloadArtifact(options.repo, options.fullReleaseRunId, fullArtifactName, fullDir);
-
   const npmManifest = readJson(join(npmDir, "preflight-manifest.json"), "npm preflight manifest");
-  const npmPreflightProducer = validateNpmPreflightProducer({
+  const npmPreflightProducer = verifyNpmPreflightProducer({
     manifest: npmManifest,
     repository: options.repo,
     workflowFullRef: `refs/${npmRun.headBranch?.startsWith("release-publish/") ? "tags" : "heads"}/${npmRun.headBranch}`,
     workflowSha: npmRun.headSha,
     runId: options.npmPreflightRunId,
     runAttempt: npmRun.runAttempt,
+    workflowPath: String(npmRun.workflowPath).split("@", 1)[0],
+    fullReleaseManifest: fullManifest,
+    manifestSha256: sha256(join(npmDir, "preflight-manifest.json")),
   });
   const immutablePluginSdkApiEvidence = readJson(
     join(pluginSdkApiDir, "plugin-sdk-api-release-evidence.json"),
@@ -2055,10 +2061,6 @@ async function main() {
       "npm preflight manifest Plugin SDK API evidence does not match its immutable artifact",
     );
   }
-  const fullManifest = readJson(
-    join(fullDir, "full-release-validation-manifest.json"),
-    "full validation manifest",
-  );
   run("git", ["fetch", "--no-tags", "origin", "+refs/heads/main:refs/remotes/origin/main"], {
     capture: true,
   });
@@ -2087,6 +2089,7 @@ async function main() {
     evidence: npmManifest.pluginSdkApi,
     expectedHeadSha: targetSha,
     expectedWorkflowSha: npmRun.headSha,
+    npmDistTag: options.npmDistTag,
   });
   validateFullManifest(fullManifest, {
     targetSha,

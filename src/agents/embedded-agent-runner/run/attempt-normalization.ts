@@ -1,6 +1,5 @@
 import { projectAgentRunAttemptTerminal } from "../../agent-run-terminal-outcome.js";
 import { formatAssistantErrorText } from "../../embedded-agent-helpers.js";
-import { createAgentRunDirectAbortError } from "../../run-termination.js";
 import { normalizeUsage, type UsageLike } from "../../usage.js";
 import { hasOutboundDeliveryEvidence } from "../delivery-evidence.js";
 import { log } from "../logger.js";
@@ -129,10 +128,9 @@ export async function normalizeEmbeddedRunAttempt(input: {
   }
   await sessionPromptState.waitForCurrentUserMessagePersistence();
   sessionPromptState.suppressNextUserMessagePersistence = sessionPromptState.activePrompt.persisted;
-  if (dispatchedAttempt.cancellationRequested) {
-    runInput.laneController.throwIfAborted();
-    throw createAgentRunDirectAbortError();
-  }
+  // Parent Stop can revoke attempt callbacks before they run. The lane signal,
+  // not a callback-derived latch, owns cancellation after persistence settles.
+  runInput.laneController.throwIfAborted();
   const {
     terminal,
     preflightRecovery,

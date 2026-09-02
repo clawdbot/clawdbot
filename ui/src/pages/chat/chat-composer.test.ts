@@ -174,9 +174,7 @@ describe("renderChatComposer controls", () => {
     const { container } = renderComposer();
     const textarea = container.querySelector<HTMLTextAreaElement>("textarea");
 
-    expect(textarea?.getAttribute("aria-label")).toBe(
-      t("chat.composer.placeholder", { name: "OpenClaw" }),
-    );
+    expect(textarea?.getAttribute("aria-label")).toBe(t("chat.composer.composerInput"));
   });
 
   it("clears a whitespace-only draft on blur so the native placeholder returns", () => {
@@ -329,6 +327,22 @@ describe("renderChatComposer controls", () => {
       reason,
     );
     expect(container.querySelector<HTMLTextAreaElement>("textarea")?.disabled).toBe(true);
+  });
+
+  it("shows placement work as an attached busy status while composing is disabled", () => {
+    const { container } = renderComposer({
+      canSend: false,
+      disabledReason: "Preparing workspace…",
+      disabledReasonTone: "info",
+      disabledReasonBusy: true,
+      draft: "Keep this draft",
+    });
+
+    expect(container.querySelector<HTMLTextAreaElement>("textarea")?.disabled).toBe(true);
+    expect(container.querySelector(".agent-chat__input")?.getAttribute("aria-busy")).toBe("true");
+    const status = container.querySelector('.agent-chat__composer-underlaps[data-tone="info"]');
+    expect(status?.textContent).toContain("Preparing workspace…");
+    expect(status?.querySelector(".btn__spinner")).not.toBeNull();
   });
 
   it("opens the microphone picker, marks the selected input, and persists a selection", async () => {

@@ -6,6 +6,8 @@ import {
   writeControlPlaneUpdateRestartSentinel,
   type ControlPlaneUpdateSentinelMetaFile,
 } from "../../infra/update-control-plane-sentinel.js";
+import { verifyPackageUpdateRecovery } from "../../infra/update-global.js";
+import { readCurrentGitUpdateRecovery } from "../../infra/update-runner-git-recovery.js";
 import type { UpdateRunResult } from "../../infra/update-runner.js";
 import { defaultRuntime } from "../../runtime.js";
 import { printResult } from "./progress.js";
@@ -37,7 +39,13 @@ export async function reportPreMutationUpdateFailure(params: {
     mode: params.installKind === "git" ? "git" : "unknown",
     root: params.root,
     reason: params.reason,
-    recovery: { serviceRestartSafe: true },
+    ...(params.opts.dryRun !== true
+      ? {
+          recovery: await (params.installKind === "git"
+            ? readCurrentGitUpdateRecovery(params.root)
+            : verifyPackageUpdateRecovery(params.root)),
+        }
+      : {}),
     steps: [],
     durationMs: 0,
   };

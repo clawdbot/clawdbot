@@ -9,6 +9,7 @@ import { formatErrorMessage } from "../infra/errors.js";
 import { resolveRequiredHomeDir } from "../infra/home-dir.js";
 import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
 import { resolveOpenClawDevSourceRoot } from "./dev-source-root.js";
+import { PLUGIN_SOURCE_MODULE_EXTENSIONS } from "./native-module-require.js";
 import {
   parsePluginCacheJson,
   pluginCacheExistsSync,
@@ -1554,7 +1555,7 @@ export function buildPluginLoaderJitiOptions(
     // When jiti must transform a plugin entry, keep OpenClaw's own package
     // chunks on the native module graph instead of re-evaluating them in jiti.
     nativeModules: resolvePluginLoaderJitiNativeModules(),
-    extensions: [".ts", ".tsx", ".mts", ".cts", ".mtsx", ".ctsx", ".js", ".mjs", ".cjs", ".json"],
+    extensions: [...PLUGIN_SOURCE_MODULE_EXTENSIONS, ".js", ".mjs", ".cjs", ".json"],
     ...(hasAliases
       ? {
           alias: jitiAliasMap,

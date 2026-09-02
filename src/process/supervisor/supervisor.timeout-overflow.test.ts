@@ -36,6 +36,7 @@ function createTimeoutTestAdapter(): TimeoutTestAdapter {
 
   return {
     pid: 1234,
+    supportsRawOutput: false,
     onStdout: (listener) => {
       stdoutListener = listener;
     },

@@ -34,6 +34,7 @@ export async function settleAgentFallbackCycle(params: {
   // run-entry owns the canonical reply/receipt facts. Carry them through the
   // fallback backstop so downstream waiters never have to rederive them.
   const terminalMetadata = fallbackResult.terminal.metadata;
+  const terminalOutcome = fallbackResult.terminal.outcome;
   const settledLifecycleTerminal =
     cycle.state.pendingLifecycleTerminal?.provider === fallbackProvider &&
     cycle.state.pendingLifecycleTerminal.model === fallbackModel
@@ -68,9 +69,10 @@ export async function settleAgentFallbackCycle(params: {
   const userFacingErrorPayload = runResult.payloads?.find(
     (payload) => payload.isError === true && typeof payload.text === "string",
   )?.text;
+  // The timeout owner distinguishes its diagnostic from earlier tool failures.
   const terminalErrorMessage =
     deferredLifecycleError ??
-    userFacingErrorPayload ??
+    (terminalOutcome.status === "timeout" ? terminalOutcome.error : userFacingErrorPayload) ??
     (embeddedError ? "Agent run failed" : undefined);
   const emitSettledLifecycleError = (error: Error, extraData?: Record<string, unknown>) => {
     if (settledLifecycleTerminal) {
@@ -163,7 +165,7 @@ export async function settleAgentFallbackCycle(params: {
     });
     turn.replyOperation?.retainFailureUntilComplete();
     turn.replyOperation?.fail("run_failed", exhaustionError);
-  } else if (deferredLifecycleError || embeddedError) {
+  } else if (deferredLifecycleError || embeddedError || terminalOutcome.status === "timeout") {
     const terminalError = new Error(terminalErrorMessage ?? "Agent run failed");
     terminalRunFailed = true;
     cycle.modelPatch.captureFailure(embeddedError ?? terminalError);

@@ -199,18 +199,15 @@ export function applyAnthropicMessageStartUsage(
   return promptTokens > 0 ? promptUsage : undefined;
 }
 
-/** Keep cumulative billing separate from the final server-side iteration context. */
+/** Keep billing and context distinct; omitted usage preserves the last snapshot. */
 export function applyAnthropicMessageDeltaUsage(
   target: Usage,
-  payload: AnthropicUsagePayload | undefined,
+  usage: AnthropicUsagePayload | undefined,
   messageStartPromptUsage: AnthropicPromptUsageSnapshot | undefined,
 ): void {
-  // An omitted usage object reports nothing; overwriting here would discard the
-  // message_start prompt snapshot that Anthropic-compatible proxies never repeat.
-  if (!payload) {
+  if (!usage) {
     return;
   }
-  const usage = payload;
   const billedIterations = readAnthropicCompactionBilledUsage(usage.iterations);
   const inputTokens = readAnthropicUsageTokenCount(usage.input_tokens);
   const outputTokens = readAnthropicUsageTokenCount(usage.output_tokens);
@@ -252,9 +249,8 @@ export function applyAnthropicMessageDeltaUsage(
   } else if (
     outputTokens !== undefined &&
     (messageStartPromptUsage !== undefined ||
-      (inputTokens !== undefined &&
-        cacheReadTokens !== undefined &&
-        cacheWriteTokens !== undefined))
+      ((cacheReadTokens !== undefined || cacheWriteTokens !== undefined) &&
+        readAnthropicPromptUsageSnapshot(usage) !== undefined))
   ) {
     const promptTokens = target.input + target.cacheRead + target.cacheWrite;
     target.contextUsage = {

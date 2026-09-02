@@ -142,7 +142,32 @@ export function resolvePreviousReleaseTag({
     return localTag;
   }
   if (fetchOnMiss) {
-    runCommand("git", ["fetch", "--tags", "--force", "origin"], rootDir, execFileSyncImpl);
+    const releaseSha = commandOutput("git", ["rev-parse", "HEAD"], rootDir, execFileSyncImpl);
+    if (!releaseSha) {
+      throw new Error("Could not resolve the release commit SHA.");
+    }
+    const shallow = commandOutput(
+      "git",
+      ["rev-parse", "--is-shallow-repository"],
+      rootDir,
+      execFileSyncImpl,
+    );
+    // Describe needs complete target ancestry; unrelated branches and tooling tags do not.
+    runCommand(
+      "git",
+      [
+        "fetch",
+        "--filter=blob:none",
+        "--no-tags",
+        "--force",
+        ...(shallow === "true" ? ["--unshallow"] : []),
+        "origin",
+        releaseSha,
+        "+refs/tags/v*:refs/tags/v*",
+      ],
+      rootDir,
+      execFileSyncImpl,
+    );
   }
   const fetchedTag = commandOutput("git", describeArgs, rootDir, execFileSyncImpl, true);
   if (fetchedTag) {

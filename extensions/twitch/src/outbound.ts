@@ -146,7 +146,7 @@ export const twitchOutbound: ChannelOutboundAdapter = {
     if (!configured) {
       throw new Error(
         `Account ${normalizedAccountId} is not properly configured. ` +
-          "Required: username, clientId, and token (config or env for default account).",
+          "Required: username, clientId, and accessToken (config or env for default account).",
       );
     }
     // A target that normalizes to empty still uses the account's default channel.

@@ -423,6 +423,9 @@ export async function executeSystemAgentOperation(
             return await createAgentForOperation({
               name: operation.agentId,
               ...(operation.workspace ? { workspace: operation.workspace } : {}),
+              ...(ctx.assertPersistentApply
+                ? { beforePersistentApply: ctx.assertPersistentApply }
+                : {}),
               provenance: {
                 createdVia: "agent",
                 creatorAgentId: operation.requesterAgentId ?? SYSTEM_AGENT_ID,

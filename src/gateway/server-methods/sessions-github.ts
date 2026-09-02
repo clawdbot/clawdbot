@@ -8,10 +8,7 @@ import {
 } from "../../../packages/gateway-protocol/src/index.js";
 import { getGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
 import { prepareCurrentGitHubPublicationIdentity } from "../github-publication-availability.js";
-import {
-  createSessionListEntryFilter,
-  SessionMutationAuthorizationChangedError,
-} from "../session-sharing.js";
+import { SessionMutationAuthorizationChangedError } from "../session-sharing.js";
 import { loadGatewaySessionEntryReadOnly } from "../session-utils.js";
 import {
   preparePersonalGitHubAction,
@@ -104,18 +101,10 @@ export const sessionsGitHubHandlers: GatewayRequestHandlers = {
     validateSessionGitHubOptionsParams,
     async (options) => {
       try {
-        const read = prepareGitHubPublicationOptionsRead(options);
-        const loaded = loadGatewaySessionEntryReadOnly(options.params.sessionKey);
-        const filter = createSessionListEntryFilter({
-          cfg: options.context.getRuntimeConfig(),
-          client: read.currentClient(),
-        });
-        if (!loaded.entry || filter?.(loaded.canonicalKey, loaded.entry) === false) {
-          throw new Error("GitHub publication session was not found.");
-        }
+        const read = prepareGitHubPublicationOptionsRead(options, options.params.sessionKey);
         let shared = null;
         try {
-          const identity = await prepareCurrentGitHubPublicationIdentity(loaded.agentId);
+          const identity = await prepareCurrentGitHubPublicationIdentity(read.session.agentId);
           shared = {
             source: identity.source,
             accountId: identity.account.accountId,
@@ -133,29 +122,12 @@ export const sessionsGitHubHandlers: GatewayRequestHandlers = {
         }
         const action = read.personal.kind === "eligible" ? read.personal.action : null;
         const personal = action ? await service!.status(action) : null;
-        const current = loadGatewaySessionEntryReadOnly(loaded.canonicalKey, {
-          agentId: loaded.agentId,
-        });
-        const currentFilter = createSessionListEntryFilter({
-          cfg: options.context.getRuntimeConfig(),
-          client: read.currentClient(),
-        });
-        if (
-          !current.entry ||
-          current.entry.sessionId !== loaded.entry.sessionId ||
-          currentFilter?.(current.canonicalKey, current.entry) === false
-        ) {
-          throw new Error("GitHub publication session access changed; select the session again.");
-        }
+        const session = read.currentSession();
         options.respond(true, {
           personal,
           shared,
           pendingPersonal: action
-            ? options.context.githubPublicationService!.personalPending(action, {
-                sessionKey: loaded.canonicalKey,
-                agentId: loaded.agentId,
-                sessionId: current.entry.sessionId,
-              })
+            ? options.context.githubPublicationService!.personalPending(action, session)
             : null,
         });
       } catch (error) {
@@ -176,31 +148,12 @@ export const sessionsGitHubHandlers: GatewayRequestHandlers = {
     (options) => {
       try {
         const action = preparePersonalGitHubAction(options);
-        const read = prepareGitHubPublicationOptionsRead(options);
-        const loaded = loadGatewaySessionEntryReadOnly(options.params.sessionKey);
-        const filter = createSessionListEntryFilter({
-          cfg: options.context.getRuntimeConfig(),
-          client: read.currentClient(),
-        });
-        if (!loaded.entry || filter?.(loaded.canonicalKey, loaded.entry) === false) {
-          throw new Error("GitHub publication session was not found.");
-        }
+        const { session } = prepareGitHubPublicationOptionsRead(options, options.params.sessionKey);
         const service = options.context.githubPublicationService;
         if (!service) {
           throw new Error("GitHub publication is unavailable.");
         }
-        options.respond(
-          true,
-          service.personalStatus(
-            action,
-            {
-              sessionKey: loaded.canonicalKey,
-              agentId: loaded.agentId,
-              sessionId: loaded.entry.sessionId,
-            },
-            options.params.requestId,
-          ),
-        );
+        options.respond(true, service.personalStatus(action, session, options.params.requestId));
       } catch (error) {
         options.respond(
           false,

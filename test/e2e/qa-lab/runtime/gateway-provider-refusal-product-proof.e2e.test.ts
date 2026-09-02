@@ -7,6 +7,7 @@ import { stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
 
 const PRIMARY_MODEL = "anthropic/claude-opus-4-8";
 const FALLBACK_MODEL = "anthropic/claude-sonnet-4-6";
+const REFUSAL_EXPLANATION = "Service unavailable. Try again.";
 const REFUSAL_TEXT =
   "The provider refused this request (category: reasoning_extraction). Revise the request and try again.";
 
@@ -71,7 +72,7 @@ async function startRefusingAnthropicProvider() {
               stop_details: {
                 type: "refusal",
                 category: "reasoning_extraction",
-                explanation: "Service unavailable. Try again.",
+                explanation: REFUSAL_EXPLANATION,
               },
             },
             usage: { input_tokens: 3, output_tokens: 0 },
@@ -171,7 +172,9 @@ describe("Gateway provider refusal product proof", () => {
     expect(proof).toMatchObject({
       requestCount: 1,
       requestModels: ["claude-opus-4-8"],
+      terminalStatus: "error",
       refusalText: REFUSAL_TEXT,
     });
+    expect(JSON.stringify({ terminal, history })).not.toContain(REFUSAL_EXPLANATION);
   }, 60_000);
 });

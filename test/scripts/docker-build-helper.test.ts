@@ -2685,7 +2685,7 @@ docker_e2e_docker_run_cmd run demo
       expect(script).toContain("openclaw_prepublish_plugin_registry_start");
     }
     expectTextToIncludeAll(registryHelper, [
-      "OPENCLAW_NPM_REGISTRY_UPSTREAM=https://registry.npmjs.org",
+      'OPENCLAW_NPM_REGISTRY_UPSTREAM="${OPENCLAW_NPM_REGISTRY_UPSTREAM:-https://registry.npmjs.org}"',
       '[[ "$candidate_version" =~ -(alpha|beta)\\.[1-9][0-9]*$ ]]',
       'dist_tags="latest=0.0.0,$dist_tags"',
       'OPENCLAW_NPM_REGISTRY_DIST_TAGS="$dist_tags"',
@@ -3520,7 +3520,9 @@ ${lane === "published" ? "prepare_update_restart_probe" : 'prepare_update_restar
           expect(isProcessRunning(records()[0]!.pid)).toBe(false);
           await expect(fetch(url, { signal: AbortSignal.timeout(1_000) })).rejects.toThrow();
           expect(systemctl("start", "openclaw-gateway.service").status).toBe(0);
-          for (let attempt = 0; attempt < 200 && records().length < 2; attempt++) await delay(10);
+          for (let attempt = 0; attempt < 200 && records().length < 2; attempt++) {
+            await delay(10);
+          }
           expect(records()).toHaveLength(2);
         }
         const initial = (await (
@@ -3529,8 +3531,9 @@ ${lane === "published" ? "prepare_update_restart_probe" : 'prepare_update_restar
         expect(initial.managed).toBe(true);
         expect(systemctl("restart", "openclaw-gateway.service").status).toBe(0);
         const expectedStarts = lane === "published" ? 3 : 2;
-        for (let attempt = 0; attempt < 200 && records().length < expectedStarts; attempt++)
+        for (let attempt = 0; attempt < 200 && records().length < expectedStarts; attempt++) {
           await delay(10);
+        }
         expect(records()).toHaveLength(expectedStarts);
         const replacement = (await (
           await fetch(url, { signal: AbortSignal.timeout(1_000) })
@@ -5840,13 +5843,13 @@ grep -Fxq preserved "$TMPDIR/caller-fd"
     expectTextToIncludeAll(runner, [
       "OPENCLAW_DOCKER_ALL_LANES=codex-on-demand",
       "source scripts/e2e/lib/prepublish-plugin-registry.sh",
-      "openclaw_prepublish_plugin_registry_configure_docker_args",
+      'docker_e2e_package_mount_args "$PACKAGE_TGZ"',
       "openclaw_prepublish_plugin_registry_start_mounted",
       "'[\"@openclaw/codex\"]'",
     ]);
     expectTextToIncludeAll(registryHelper, [
       'OPENCLAW_NPM_REGISTRY_DIST_TAGS="$dist_tags"',
-      "OPENCLAW_NPM_REGISTRY_UPSTREAM=https://registry.npmjs.org",
+      'OPENCLAW_NPM_REGISTRY_UPSTREAM="${OPENCLAW_NPM_REGISTRY_UPSTREAM:-https://registry.npmjs.org}"',
     ]);
     expect(runner.indexOf("openclaw_e2e_install_package")).toBeLessThan(
       runner.indexOf("\nconfigure_plugin_registry\n"),
@@ -5861,7 +5864,7 @@ grep -Fxq preserved "$TMPDIR/caller-fd"
 
     expectTextToIncludeAll(runner, [
       'source "$ROOT_DIR/scripts/e2e/lib/prepublish-plugin-registry.sh"',
-      "openclaw_prepublish_plugin_registry_configure_docker_args",
+      'docker_e2e_package_mount_args "$PACKAGE_TGZ"',
       "openclaw_prepublish_plugin_registry_start_mounted",
       "'[\"@openclaw/codex\"]'",
     ]);
@@ -6571,9 +6574,9 @@ source "$ROOT_DIR/scripts/lib/docker-e2e-logs.sh"
       'test "$(command -v openclaw)" = "/usr/local/bin/openclaw"',
       'test "$(command -v openclaw)" = "$PNPM_HOME/bin/openclaw"',
       "OPENCLAW_BUN_GLOBAL_SMOKE_PROOF_PATH",
-      'BUN_HARNESS_DIR="$(mktemp -d',
+      'PACKAGE_HARNESS_DIR="$(mktemp -d',
       "chmod -R a+rX",
-      '-v "$BUN_HARNESS_DIR:/repo:ro"',
+      '-v "$PACKAGE_HARNESS_DIR:/repo:ro"',
       '--container "npm=$NPM_PROOF_CONTAINER"',
       '--container "pnpm=$PNPM_PROOF_CONTAINER"',
       '--container "bun=$BUN_PROOF_CONTAINER"',
@@ -6607,7 +6610,7 @@ source "$ROOT_DIR/scripts/lib/docker-e2e-logs.sh"
     expectTextToIncludeAll(updateRunner, [
       "openclaw update --channel beta",
       'OPENCLAW_NPM_REGISTRY_DIST_TAGS="latest=0.0.0,beta=$package_version"',
-      "OPENCLAW_NPM_REGISTRY_UPSTREAM=https://registry.npmjs.org",
+      'OPENCLAW_NPM_REGISTRY_UPSTREAM="${OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_URL:-https://registry.npmjs.org}"',
       "assert-update beta",
       "assert-config-channel beta",
       "assert-installed-version",

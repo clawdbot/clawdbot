@@ -180,14 +180,21 @@ export const sharedVitestConfig = {
       },
       {
         find: "discord-api-types/v10",
-        replacement: path.join(repoRoot, "test", "vitest", "discord-api-types-v10-runtime.ts"),
+        replacement: path.join(
+          repoRoot,
+          "extensions",
+          "discord",
+          "test",
+          "discord-api-types-v10-runtime.ts",
+        ),
       },
       {
         find: "discord-api-types/payloads/v10",
         replacement: path.join(
           repoRoot,
+          "extensions",
+          "discord",
           "test",
-          "vitest",
           "discord-api-types-payloads-v10-runtime.ts",
         ),
       },

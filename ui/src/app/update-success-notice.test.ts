@@ -1,5 +1,5 @@
 // @vitest-environment node
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createStorageMock } from "../test-helpers/storage.ts";
 
 const { getSafeSessionStorageMock, reloadControlUiIfStaleMock, showToastMock } = vi.hoisted(() => ({
@@ -20,16 +20,21 @@ vi.mock("../local-storage.ts", () => ({
 }));
 
 describe("update success notice", () => {
-  beforeEach(() => {
+  let createUpdateNoticeSession: typeof import("./update-success-notice.ts").createUpdateNoticeSession;
+
+  beforeAll(async () => {
+    // Discard any owner import that predates this suite's mocked boundaries.
     vi.resetModules();
+    ({ createUpdateNoticeSession } = await import("./update-success-notice.ts"));
+  });
+
+  beforeEach(() => {
     vi.clearAllMocks();
     getSafeSessionStorageMock.mockReturnValue(null);
     reloadControlUiIfStaleMock.mockReturnValue(false);
   });
 
-  it("announces a non-reloading success when session storage is unavailable", async () => {
-    const { createUpdateNoticeSession } = await import("./update-success-notice.ts");
-
+  it("announces a non-reloading success when session storage is unavailable", () => {
     createUpdateNoticeSession("ws://gateway.test").announceVerifiedInstall(
       { version: "2026.8.11", sha: "abcdef1234567890" },
       { gateway: "ws://gateway.test", profileId: null },
@@ -42,8 +47,7 @@ describe("update success notice", () => {
 
   it.each(["handoff", "verified"] as const)(
     "hydrates the previous bundle's flat %s notice on upgrade",
-    async (kind) => {
-      const { createUpdateNoticeSession } = await import("./update-success-notice.ts");
+    (kind) => {
       const storage = createStorageMock();
       getSafeSessionStorageMock.mockReturnValue(storage);
       const scope = { gateway: "ws://gateway.test", profileId: "operator" };
@@ -82,8 +86,7 @@ describe("update success notice", () => {
     "quota exceeded",
     "invalid receipts",
     "oversized history",
-  ])("does not consume triage or erase history when storage is %s", async (failure) => {
-    const { createUpdateNoticeSession } = await import("./update-success-notice.ts");
+  ])("does not consume triage or erase history when storage is %s", (failure) => {
     const storage = createStorageMock();
     getSafeSessionStorageMock.mockReturnValue(storage);
     const scope = { gateway: "ws://gateway.test", profileId: null };
@@ -127,8 +130,7 @@ describe("update success notice", () => {
     expect(storage.getItem("openclaw:control-ui:update:v1")).toBe(previous);
   });
 
-  it("preserves consumed identities when another receipt exceeds the size limit", async () => {
-    const { createUpdateNoticeSession } = await import("./update-success-notice.ts");
+  it("preserves consumed identities when another receipt exceeds the size limit", () => {
     const storage = createStorageMock();
     getSafeSessionStorageMock.mockReturnValue(storage);
     const scope = { gateway: "ws://gateway.test", profileId: null };
@@ -143,8 +145,7 @@ describe("update success notice", () => {
     expect(createUpdateNoticeSession(scope.gateway).hasTriaged(scope, "previous")).toBe(true);
   });
 
-  it("retains the latest 32 consumed identities independently of pending and success notices", async () => {
-    const { createUpdateNoticeSession } = await import("./update-success-notice.ts");
+  it("retains the latest 32 consumed identities independently of pending and success notices", () => {
     getSafeSessionStorageMock.mockReturnValue(createStorageMock());
     const scope = { gateway: "ws://gateway.test", profileId: null };
     const session = createUpdateNoticeSession(scope.gateway);

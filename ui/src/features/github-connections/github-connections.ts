@@ -20,6 +20,7 @@ import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { PROFILE_SETTINGS_TARGET_IDS } from "../../pages/config/settings-targets.ts";
 import { GitHubIdentityController } from "./github-identity-controller.ts";
 import {
+  renderGitHubConnectionError,
   renderGitHubConnectionSetup,
   renderGitHubDetails,
   renderGitHubHealth,
@@ -258,24 +259,19 @@ export class GitHubConnections extends OpenClawLightDomElement {
                 : renderSettingsValue(t("githubConnections.adminManaged"))}`,
             })}
           </div>
-          ${this.personal.error || this.system.error
-            ? renderSettingsRow({
-                title: t("agentTools.githubErrorTitle"),
-                description: html`<span role="alert"
-                  >${this.personal.error ?? this.system.error}</span
-                >`,
-                control: html`<button
-                  class="btn btn--sm"
-                  ?disabled=${this.locked}
-                  @click=${() => {
-                    void this.personal.verify();
-                    void this.system.verify();
-                  }}
-                >
-                  ${t("common.retry")}
-                </button>`,
-              })
-            : nothing}
+          ${renderGitHubConnectionError(
+            this.personal.error ?? this.system.error,
+            html`<button
+              class="btn btn--sm"
+              ?disabled=${this.locked}
+              @click=${() => {
+                void this.personal.verify();
+                void this.system.verify();
+              }}
+            >
+              ${t("common.retry")}
+            </button>`,
+          )}
           ${showSetup
             ? html`<div class="settings-subrows" data-github-setup>
                 ${renderSettingsRow({

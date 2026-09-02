@@ -123,17 +123,15 @@ describe("plugin npm extended-stable workflow", () => {
     );
   });
 
-  it("uses one override for check, plan, preview, pack, and publish", () => {
+  it("uses one override for check, plan, pack, and publish", () => {
     const parsed = workflow();
     const raw = readFileSync(workflowPath, "utf8");
     expect(raw.match(/--npm-dist-tag "\$\{NPM_DIST_TAG\}"/gu)).toHaveLength(2);
     const expectedOverride =
       "${{ inputs.npm_dist_tag == 'extended-stable' && inputs.npm_dist_tag || '' }}";
-    for (const name of ["Preview publish command", "Preview npm pack contents"]) {
-      expect(step(parsed.jobs?.preview_plugin_pack, name).env).toMatchObject({
-        OPENCLAW_PLUGIN_NPM_PUBLISH_TAG: expectedOverride,
-      });
-    }
+    expect(
+      step(parsed.jobs?.preview_plugin_pack, "Prepare immutable npm preflight artifact").env,
+    ).toMatchObject({ OPENCLAW_PLUGIN_NPM_PUBLISH_TAG: expectedOverride });
   });
 
   it("runs complete trusted packaging tooling against the frozen source checkout", () => {
@@ -147,12 +145,9 @@ describe("plugin npm extended-stable workflow", () => {
       path: ".release-tooling",
       "sparse-checkout": "packages/normalization-core\nscripts\n",
     });
-    const previewCommand = step(parsed.jobs?.preview_plugin_pack, "Preview publish command").run;
-    expect(previewCommand).toContain(".release-tooling/scripts/plugin-npm-publish.sh");
-    expect(previewCommand).toContain('--repo-root "$GITHUB_WORKSPACE"');
-    expect(
-      step(parsed.jobs?.preview_plugin_pack, "Prepare immutable npm preflight artifact").run,
-    ).toContain(".release-tooling/scripts/plugin-npm-publish.sh");
+    const pack = step(parsed.jobs?.preview_plugin_pack, "Prepare immutable npm preflight artifact");
+    expect(pack.run).toContain(".release-tooling/scripts/plugin-npm-publish.sh");
+    expect(pack.run).toContain('--repo-root "$GITHUB_WORKSPACE"');
 
     const publish = step(parsed.jobs?.publish_plugins_npm, "Publish with trusted publisher");
     expect(publish.env).toMatchObject({
@@ -364,6 +359,10 @@ process.exit(${JSON.stringify(command)} === "node" ? Number(process.env.IDENTITY
     expect(prepare.run).toContain("bash .release-tooling/scripts/plugin-npm-publish.sh");
     expect(prepare.run).toContain('--repo-root "$GITHUB_WORKSPACE"');
     expect(prepare.run).toContain('--pack "${PACKAGE_DIR}"');
+    expect(prepare.run).not.toContain("OPENCLAW_PLUGIN_NPM_RUNTIME_BUILD=0");
+    expect(
+      preview?.steps?.filter((entry) => entry.run?.includes("plugin-npm-publish.sh")),
+    ).toHaveLength(1);
     expect(prepare.run).toContain(
       'import { resolveNpmJsonEntries } from "./.release-tooling/scripts/lib/npm-json-output.mts";',
     );
@@ -560,20 +559,16 @@ process.exit(${JSON.stringify(command)} === "node" ? Number(process.env.IDENTITY
     expect(pluginManifest.id).toBe("meta");
   });
 
-  it("owns external Git while retaining the npm publish deadline", () => {
-    const source = readFileSync(workflowPath, "utf8");
-    const npmPublishLines = source
-      .split("\n")
-      .filter((line) => line.includes('npm publish "$TARBALL_PATH"'));
-
-    expect(source).not.toMatch(
-      /timeout[^\n]*git|(?:^|\s)git (?:fetch|rev-parse|merge-base|for-each-ref|show)\b/mu,
-    );
-    expect(source.match(/timeout=120/gu)).toHaveLength(5);
-    expect(npmPublishLines).toHaveLength(2);
-    expect(
-      npmPublishLines.every((line) => line.includes("timeout --signal=TERM --kill-after=10s 300s")),
-    ).toBe(true);
+  it("retains the npm publish deadline for both publication routes", () => {
+    const publish = workflow().jobs?.publish_plugins_npm;
+    for (const stepName of [
+      "Publish with trusted publisher",
+      "Publish approved bootstrap tarball",
+    ]) {
+      expect(step(publish, stepName).run, stepName).toContain(
+        'timeout --signal=TERM --kill-after=10s 300s npm publish "$TARBALL_PATH"',
+      );
+    }
   });
 
   it("publishes extended-stable with OIDC only and verifies every package tag", () => {

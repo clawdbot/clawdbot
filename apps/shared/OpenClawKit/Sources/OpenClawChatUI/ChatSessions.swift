@@ -95,6 +95,9 @@ public struct OpenClawChatModelChoice: Identifiable, Codable, Sendable, Hashable
     public let modelID: String
     public let name: String
     public let provider: String
+    public let available: Bool?
+    public let unavailableReason: String?
+    public let unavailableUntil: Int?
     public let contextWindow: Int?
     public let reasoning: Bool?
 
@@ -102,12 +105,18 @@ public struct OpenClawChatModelChoice: Identifiable, Codable, Sendable, Hashable
         modelID: String,
         name: String,
         provider: String,
+        available: Bool? = nil,
+        unavailableReason: String? = nil,
+        unavailableUntil: Int? = nil,
         contextWindow: Int?,
         reasoning: Bool? = nil)
     {
         self.modelID = modelID
         self.name = name
         self.provider = provider
+        self.available = available
+        self.unavailableReason = unavailableReason
+        self.unavailableUntil = unavailableUntil
         self.contextWindow = contextWindow
         self.reasoning = reasoning
     }
@@ -125,6 +134,42 @@ public struct OpenClawChatModelChoice: Identifiable, Codable, Sendable, Hashable
 
     public var displayLabel: String {
         self.selectionID
+    }
+
+    public var availabilityReason: OpenClawChatModelUnavailableReason? {
+        OpenClawChatModelUnavailableReason(rawValue: self.unavailableReason)
+    }
+}
+
+public enum OpenClawChatModelUnavailableReason: Sendable, Equatable, Hashable {
+    case missingAuth
+    case authFailed
+    case cooldown
+    case unknown(String)
+
+    public init?(rawValue: String?) {
+        guard let value = rawValue?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(),
+              !value.isEmpty
+        else { return nil }
+        switch value {
+        case "missing-auth": self = .missingAuth
+        case "auth-failed": self = .authFailed
+        case "cooldown": self = .cooldown
+        default: self = .unknown(value)
+        }
+    }
+
+    public var pickerDescription: String {
+        switch self {
+        case .missingAuth: String(localized: "Sign-in needed")
+        case .authFailed: String(localized: "Authentication failed")
+        case .cooldown: String(localized: "Cooling down")
+        case .unknown: String(localized: "Unavailable")
+        }
+    }
+
+    var blocksSend: Bool {
+        self == .missingAuth || self == .authFailed
     }
 }
 
@@ -339,6 +384,7 @@ public struct OpenClawChatModelPatchResult: Decodable, Sendable, Equatable {
 public struct OpenClawChatSessionsDefaults: Codable, Sendable {
     public let modelProvider: String?
     public let model: String?
+    public let modelSelectionTarget: String?
     public let contextTokens: Int?
     public let thinkingLevels: [OpenClawChatThinkingLevelOption]?
     public let thinkingOptions: [String]?
@@ -352,10 +398,12 @@ public struct OpenClawChatSessionsDefaults: Codable, Sendable {
         thinkingLevels: [OpenClawChatThinkingLevelOption]? = nil,
         thinkingOptions: [String]? = nil,
         thinkingDefault: String? = nil,
-        mainSessionKey: String? = nil)
+        mainSessionKey: String? = nil,
+        modelSelectionTarget: String? = nil)
     {
         self.modelProvider = modelProvider
         self.model = model
+        self.modelSelectionTarget = modelSelectionTarget
         self.contextTokens = contextTokens
         self.thinkingLevels = thinkingLevels
         self.thinkingOptions = thinkingOptions

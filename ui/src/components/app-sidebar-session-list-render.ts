@@ -174,7 +174,7 @@ function renderSessionSection(params: {
                       aria-hidden="true"
                     ></openclaw-viewer-avatar>`
                   : nothing}
-                <span class="sidebar-recent-sessions__label-text">${label}</span>
+                <span class="sidebar-recent-sessions__label-text hover-marquee">${label}</span>
                 ${collapsed && totalRowCount > 0
                   ? html`<span class="sidebar-session-group-count">${totalRowCount}</span>`
                   : nothing}
@@ -357,6 +357,7 @@ function renderSessionCatalog(params: {
       mainKey: snapshot.mainKey,
       collapsedSections: host.collapsedSessionSections,
       loadingMoreCatalogIds: snapshot.loadingMoreCatalogIds,
+      visibleSessionLimits: host.sessionData.visibleSessionLimits,
       projectGrouping: snapshot.projectGrouping,
       liveRows: snapshot.liveRows,
       ownerId: snapshot.ownerId,
@@ -384,6 +385,7 @@ function renderSessionCatalog(params: {
         host.sidebarMenus.toggleCatalogViewMenu(catalogId, trigger);
       },
       onLoadMore: (catalogId) => void host.sessionData.loadMoreSessionCatalog(catalogId),
+      onSetVisibleSessionLimit: (sectionId, limit) => host.setVisibleSessionLimit(sectionId, limit),
       onOpenNewSession: (agentId, target) => host.requestOpenNewSession(agentId, target),
       newSessionDisabledReason: newSessionAccess.allowed ? undefined : newSessionAccess.reason,
       sectionDragDisabledReason: groupWriteAccess.allowed ? undefined : groupWriteAccess.reason,

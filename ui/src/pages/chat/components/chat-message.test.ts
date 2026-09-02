@@ -1189,7 +1189,7 @@ describe("grouped chat rendering", () => {
     expect(onRewind).toHaveBeenCalledTimes(1);
   });
 
-  it("disables rewind while the agent is working", () => {
+  it("hides rewind while the agent is working", () => {
     const container = document.createElement("div");
     renderMessageGroups(
       container,
@@ -1197,10 +1197,7 @@ describe("grouped chat rendering", () => {
       { onRewind: vi.fn(), rewindDisabled: true },
     );
 
-    const button = container.querySelector<HTMLButtonElement>(".chat-group-rewind");
-    const tooltip = button?.closest("openclaw-tooltip");
-    expect(button?.disabled).toBe(true);
-    expect(tooltip?.content).toBe("Rewind is unavailable while the agent is working");
+    expect(container.querySelector(".chat-group-rewind")).toBeNull();
   });
 
   it.each([
@@ -1822,19 +1819,19 @@ describe("grouped chat rendering", () => {
       render(renderTurnRecapRow({ runtimeMs, outputTokens: null }), container);
       expect(container.querySelector(".chat-turn-recap")?.textContent?.trim()).toBe(expected);
     }
-
-    const withTokens = document.createElement("div");
-    render(renderTurnRecapRow({ runtimeMs: 30_000, outputTokens: 2_400 }), withTokens);
-    expect(
-      withTokens.querySelector(".chat-turn-recap")?.textContent?.replace(/\s+/g, " ").trim(),
-    ).toBe("Done in 30 seconds · 2,400 output tokens");
   });
 
   it.each([
     [0, "0 output tokens"],
     [1, "1 output token"],
-    [5_500, "5,500 output tokens"],
-  ])("shows %i output tokens beside elapsed time", (outputTokens, label) => {
+    [999, "999 output tokens"],
+    [1_000, "1k output tokens"],
+    [5_500, "5.5k output tokens"],
+    [7_094, "7.1k output tokens"],
+    [999_950, "1M output tokens"],
+    [1_500_000, "1.5M output tokens"],
+    [4_132_000_000, "4.1B output tokens"],
+  ])("shows compact %i output tokens during and after a run", (outputTokens, label) => {
     const container = document.createElement("div");
 
     render(
@@ -1850,6 +1847,11 @@ describe("grouped chat rendering", () => {
     );
     // Known usage replaces the pre-usage working phrase.
     expect(container.querySelector("openclaw-working-phrase")).toBeNull();
+
+    render(renderTurnRecapRow({ runtimeMs: 30_000, outputTokens }), container);
+    expect(
+      container.querySelector(".chat-turn-recap")?.textContent?.replace(/\s+/g, " ").trim(),
+    ).toBe(`Done in 30 seconds · ${label}`);
   });
 
   it("relabels the working indicator while the run waits for approval", () => {
@@ -1869,7 +1871,7 @@ describe("grouped chat rendering", () => {
     );
     expect(container.querySelector(".chat-working-indicator__elapsed")).toBeNull();
     expect(container.querySelector(".chat-working-indicator__tokens")?.textContent).toBe(
-      "5,500 output tokens",
+      "5.5k output tokens",
     );
   });
 

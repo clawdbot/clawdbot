@@ -35,7 +35,6 @@ import {
   resolveFallbackCurrentProviderId,
   resolveMemoryFallbackProviderRequest,
 } from "./manager-provider-state.js";
-import { type MemoryReindexLockHandle, waitForMemoryReindexLock } from "./manager-reindex-lock.js";
 import {
   MEMORY_INDEX_PROVENANCE_VERSION,
   resolveConfiguredScopeHash,
@@ -519,7 +518,6 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
     const dbPath = resolveUserPath(this.settings.store.databasePath);
     const tempDbPath = `${dbPath}.memory-reindex-${randomUUID()}`;
     const originalDb = this.db;
-    let reindexLock: MemoryReindexLockHandle | undefined;
     let tempDb: DatabaseSync | undefined;
     let tempDbClosed = false;
     const originalRetryState = this.snapshotReindexRetryState();
@@ -530,7 +528,6 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
     );
     try {
       cleanupAgedMemoryReindexTempFiles(dbPath);
-      reindexLock = await waitForMemoryReindexLock(dbPath);
       const originalRevision = readMemoryDatabaseRevision(originalDb);
       tempDb = openMemoryDatabaseAtPath(tempDbPath, this.settings.store.vector.enabled);
       const shadow = new MemoryIndexDatabase(tempDb);
@@ -666,11 +663,6 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
         removeMemoryDatabaseFiles(tempDbPath);
       } catch (err) {
         log.warn(`failed to remove memory reindex shadow database: ${formatErrorMessage(err)}`);
-      }
-      try {
-        reindexLock?.release();
-      } catch (err) {
-        log.warn(`failed to release memory reindex lock for ${dbPath}: ${formatErrorMessage(err)}`);
       }
     }
   }

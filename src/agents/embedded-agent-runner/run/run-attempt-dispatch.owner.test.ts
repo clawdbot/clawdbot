@@ -1,4 +1,5 @@
 import { afterEach, expect, it, vi } from "vitest";
+import { getAgentEventLifecycleGeneration } from "../../../infra/agent-events.js";
 import { createEmptyPluginRegistry } from "../../../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../../../plugins/runtime.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
@@ -9,6 +10,7 @@ import {
 import { registerAgentHarness } from "../../harness/registry.js";
 import type { AgentHarness } from "../../harness/types.js";
 import { registerSandboxBackend } from "../../sandbox/backend.js";
+import { createEmbeddedRunLaneController } from "./lane-controller.js";
 import { dispatchEmbeddedRunAttempt } from "./run-attempt-dispatch.js";
 
 afterEach(() => setActivePluginRegistry(createEmptyPluginRegistry()));
@@ -88,20 +90,33 @@ it.each([
         conversationToolPolicySupport: "exact",
         runAttempt,
       });
-      const input = {
-        params: {
-          admittedRunContext,
-          agentId,
-          config,
-          runId,
-          sessionId: `${agentId}-global`,
-          sessionKey: "global",
-          sandboxSessionKey,
-          workspaceDir: state.workspaceDir,
-          sessionFile: "global",
-          prompt: "hello",
-          timeoutMs: 5_000,
+      const params = {
+        admittedRunContext,
+        agentId,
+        config,
+        runId,
+        sessionId: `${agentId}-global`,
+        sessionKey: "global",
+        sandboxSessionKey,
+        workspaceDir: state.workspaceDir,
+        sessionFile: "global",
+        prompt: "hello",
+        timeoutMs: 5_000,
+      };
+      let lifecycleGeneration = getAgentEventLifecycleGeneration();
+      const { createAttemptControls } = createEmbeddedRunLaneController({
+        getLifecycleGeneration: () => lifecycleGeneration,
+        getParams: () => params,
+        globalLane: "owner-dispatch-global",
+        sessionLane: "owner-dispatch-session",
+        initialQueuedLifecycleGeneration: lifecycleGeneration,
+        setLifecycleGeneration: (value) => {
+          lifecycleGeneration = value;
         },
+        setParams: () => {},
+      });
+      const input = {
+        params,
         runtime: {
           agentId,
           sessionId: `${agentId}-global`,
@@ -135,14 +150,22 @@ it.each([
           captureRuntimeArtifact: false,
         },
         control: {
+          lifecycleGeneration,
           pluginHarnessOwnsTransport: true,
-          laneTaskAbortController: new AbortController(),
-          laneTaskReleaseController: new AbortController(),
-          noteLaneTaskProgress() {},
+          createAttemptControls,
+          onToolOutcome: vi.fn(),
+          isTurnTainted: () => false,
+          allocateToolOutcomeOrdinal: () => 1,
+          onToolStreamBoundary: vi.fn(),
+          onRunProgress: vi.fn(),
+          onToolResult: vi.fn(),
+          onAgentEvent: vi.fn(),
+          onUserMessagePersisted: vi.fn(),
+          onUserMessagePersistenceInvalidated: vi.fn(),
           getPostCompactionAbortError: () => undefined,
           setPostCompactionAbortController() {},
           clearPostCompactionAbortController() {},
-        },
+        } satisfies Parameters<typeof dispatchEmbeddedRunAttempt>[0]["control"],
         transcriptOwnership: { kind: "runtime-target" },
         runStartedAtMs: Date.now(),
         bootstrapPromptWarningSignaturesSeen: [],

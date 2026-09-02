@@ -15,6 +15,7 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
 import org.junit.Test
@@ -210,5 +211,78 @@ class ChatControllerSessionSearchTest {
       releaseResponse.complete(sessionsListJson(sessionRowJson(key = "agent:agent-a:old", updatedAt = 10)))
 
       assertTrue(pending.await().isEmpty())
+    }
+
+  @Test
+  fun fetchSessionSelectionCandidatesQueriesRequestedOwnerWithoutChangingVisibleOwner() =
+    runTest {
+      val cacheScope = ChatCacheScope(gatewayId = "gateway-a", connectionGeneration = 1)
+      val gateway = ScriptedGateway(json)
+      gateway.respond("sessions.list") {
+        sessionsListJson(sessionRowJson(key = "agent:scout:topic", updatedAt = 100))
+      }
+      val controller =
+        ChatController(
+          scope = this,
+          json = json,
+          requestGateway = gateway::request,
+          cacheScope = { cacheScope },
+        )
+
+      val candidates = controller.fetchSessionSelectionCandidates("scout").orEmpty()
+
+      assertEquals(listOf("agent:scout:topic"), candidates.map { it.key })
+      assertEquals(listOf("scout"), candidates.map { it.ownerAgentId })
+      assertEquals("scout", paramField(gateway.calls.single().paramsJson, "agentId"))
+      assertEquals("main", controller.sessionKey.value)
+    }
+
+  @Test
+  fun fetchSessionSelectionCandidatesDropsLateResponseAfterGatewaySwitch() =
+    runTest {
+      var cacheScope = ChatCacheScope(gatewayId = "gateway-a", connectionGeneration = 1)
+      val requestStarted = CompletableDeferred<Unit>()
+      val releaseResponse = CompletableDeferred<String>()
+      val gateway = ScriptedGateway(json)
+      gateway.respond("sessions.list") {
+        requestStarted.complete(Unit)
+        releaseResponse.await()
+      }
+      val controller =
+        ChatController(
+          scope = this,
+          json = json,
+          requestGateway = gateway::request,
+          cacheScope = { cacheScope },
+        )
+
+      val pending = async { controller.fetchSessionSelectionCandidates("scout") }
+      runCurrent()
+      requestStarted.await()
+      cacheScope = ChatCacheScope(gatewayId = "gateway-b", connectionGeneration = 2)
+      releaseResponse.complete(sessionsListJson(sessionRowJson(key = "agent:scout:old", updatedAt = 10)))
+
+      assertNull(pending.await())
+    }
+
+  @Test
+  fun fetchSessionSelectionCandidatesRethrowsCancellation() =
+    runTest {
+      val gateway = ScriptedGateway(json)
+      gateway.respond("sessions.list") { throw CancellationException("superseded") }
+      val controller =
+        ChatController(
+          scope = this,
+          json = json,
+          requestGateway = gateway::request,
+          cacheScope = { ChatCacheScope(gatewayId = "gateway-a", connectionGeneration = 1) },
+        )
+
+      try {
+        controller.fetchSessionSelectionCandidates("scout")
+        fail("expected CancellationException to propagate")
+      } catch (_: CancellationException) {
+        // A superseded owner lookup must cancel instead of restoring stale state.
+      }
     }
 }

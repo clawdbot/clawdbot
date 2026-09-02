@@ -1,6 +1,17 @@
 // Normalization Core module implements string normalization behavior.
 import { normalizeOptionalLowercaseString, normalizeOptionalString } from "./string-coerce.js";
 
+/** Detects C0 and DEL without rejecting C1 or other Unicode text. */
+export function containsAsciiControlCharacter(value: string): boolean {
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index);
+    if (code <= 0x1f || code === 0x7f) {
+      return true;
+    }
+  }
+  return false;
+}
+
 /** Retains runtime string entries from arrays without normalizing their contents. */
 export function filterStringEntries(value: unknown): string[] {
   return Array.isArray(value)

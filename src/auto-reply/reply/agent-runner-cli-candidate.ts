@@ -412,6 +412,7 @@ export async function runCliFallbackCandidate(
             approvalReviewerDeviceId: turn.followupRun.run.approvalReviewerDeviceId,
             toolsAllow: turn.opts?.toolsAllow,
             skillWorkshopProposalRevision: params.candidateRun.skillWorkshopProposalRevision,
+            skillLibraryAuthoring: params.candidateRun.skillLibraryAuthoring,
             disableTools: turn.opts?.disableTools,
             toolAuthorityFingerprint: resolveFollowupRunToolAuthorityFingerprint(
               turn.followupRun,
