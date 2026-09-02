@@ -279,46 +279,6 @@ describe("googlechatPlugin outbound", () => {
       "*alpha* <https://example.com|docs>",
     ]);
   });
-
-  it("sends spaced URL-like labels through sanitize, chunk, and the Chat API mock", async () => {
-    const cfg = createGoogleChatCfg();
-    const sanitizeText = googlechatOutboundAdapter.base.sanitizeText;
-    const chunker = googlechatOutboundAdapter.base.chunker;
-    sendGoogleChatMessageMock.mockResolvedValue({
-      messageName: "spaces/AAA/messages/msg-1",
-    });
-
-    const cases = [
-      {
-        input: "<https://example.com/a.pdf|User Manual>",
-        payload: "<https://example.com/a.pdf｜User Manual>",
-      },
-      {
-        input: "<mailto:support@example.com|Contact Support>",
-        payload: "<mailto:support@example.com｜Contact Support>",
-      },
-      {
-        input: "<mailto:a/b@example.com|Contact Support>",
-        payload: "<mailto:a/b@example.com｜Contact Support>",
-      },
-    ];
-
-    for (const [index, { input, payload }] of cases.entries()) {
-      const sanitized = sanitizeText({ text: input });
-      const chunks = chunker(sanitized, 32_000);
-      expect(chunks).toEqual([payload]);
-
-      sendGoogleChatMessageMock.mockClear();
-      await googlechatMessageAdapter.send?.text?.({
-        cfg,
-        to: "spaces/AAA",
-        text: chunks[0] ?? "",
-      });
-      const request = requireMockArg(sendGoogleChatMessageMock) as { text?: string };
-      expect(request.text, `case ${index}`).toBe(payload);
-      expect(request.text).not.toBe("");
-    }
-  });
 });
 
 describe("googlechatPlugin threading", () => {

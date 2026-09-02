@@ -8,9 +8,9 @@ import { stripInternalRuntimeScaffolding } from "./protocol-scaffolding.js";
 export { stripInternalRuntimeScaffolding };
 
 // A tag name ends at whitespace, `/`, or `>`; `<user@example.com>` is prose, not markup.
-// Opening autolink schemes (`https://`, `http://`, `mailto:`) are not tags, including `<scheme:…|label>`; `</scheme:…>` still strips.
-const HTML_TAG_RE =
-  /<(?:\/(?:https?:\/\/|mailto:)[^>]*>|(?!(?:https?:\/\/|mailto:))\/?[a-z][a-z0-9_.:-]*(?=[\s/>])[^>]*>)/gi;
+const HTML_TAG_RE = /<\/?[a-z][a-z0-9_.:-]*(?=[\s/>])[^>]*>/gi;
+const LABELED_ANGLE_LINK_RE =
+  /<(?:https?:\/\/|mailto:)[^<>\s|]+\|([^<>\r\n|]*[^<>\s|][^<>\r\n|]*)>/gi;
 const MAY_CONTAIN_MARKDOWN_CODE_RE = /[`~]|\t| {4}/;
 const CODE_ESCAPE = "\u0000e";
 const CODE_PLACEHOLDER = "\u0000p";
@@ -40,6 +40,8 @@ function convertHtmlOutsideCode(text: string, options: { style?: "markdown" }): 
     text
       // Preserve angle-bracket autolinks as plain URLs before tag stripping.
       .replace(/<((?:https?:\/\/|mailto:)[^<>\s]+)>/gi, "$1")
+      // Raw channel link syntax is not an input dialect; retain only its visible label.
+      .replace(LABELED_ANGLE_LINK_RE, "$1")
       // Normalize attributes once; conversions below only need exact bare tag names.
       .replace(CONVERTIBLE_HTML_OPEN_TAG_RE, "<$1>"),
     EMPTY_HTML_ELEMENT_RE,

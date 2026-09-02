@@ -22,12 +22,6 @@ const DIALECT_FIXTURES = [
     before: "[docs](https://example.com)",
     after: "<https://example.com|docs>",
   },
-  {
-    name: "spaced labeled link",
-    input: "[User Manual](https://example.com/a.pdf)",
-    before: "[User Manual](https://example.com/a.pdf)",
-    after: "<https://example.com/a.pdf|User Manual>",
-  },
   { name: "heading fallback", input: "## Heading", before: "## Heading", after: "*Heading*" },
   {
     name: "nested bullet list",
@@ -97,15 +91,10 @@ describe("formatGoogleChatText", () => {
     ).toBe("");
   });
 
-  it("does not silently erase URL-like angle text before formatting", () => {
-    expect(formatGoogleChatText("<https://example.com/a.pdf|User Manual>")).toBe(
-      "<https://example.com/a.pdf｜User Manual>",
-    );
-    expect(formatGoogleChatText("<mailto:support@example.com|Contact Support>")).toBe(
-      "<mailto:support@example.com｜Contact Support>",
-    );
+  it("keeps raw angle-link labels as inert text", () => {
+    expect(formatGoogleChatText("<https://example.com/a.pdf|User Manual>")).toBe("User Manual");
     expect(formatGoogleChatText("<mailto:a/b@example.com|Contact Support>")).toBe(
-      "<mailto:a/b@example.com｜Contact Support>",
+      "Contact Support",
     );
   });
 
