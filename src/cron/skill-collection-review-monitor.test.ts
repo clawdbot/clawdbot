@@ -43,6 +43,22 @@ describe("resolveSkillCollectionReviewMonitorSpecs", () => {
     expect(repeated[0]?.input.schedule).toEqual(specs[0]?.input.schedule);
   });
 
+  it("owns the job with the system agent or the first agent of an explicit fleet", () => {
+    const explicitFleet = {
+      agents: { ownership: "explicit", entries: { ops: {}, research: {} } },
+    } as unknown as OpenClawConfig;
+    expect(resolveSkillCollectionReviewMonitorSpecs(explicitFleet)[0]?.agentId).toBe("ops");
+
+    const systemAgentFleet = {
+      agents: {
+        ownership: "explicit",
+        entries: { ops: {}, research: {} },
+        defaults: { systemAgent: { agentId: "research" } },
+      },
+    } as unknown as OpenClawConfig;
+    expect(resolveSkillCollectionReviewMonitorSpecs(systemAgentFleet)[0]?.agentId).toBe("research");
+  });
+
   it("retains monitor rows while autonomous review is disabled", () => {
     const cfg = {
       agents: { list: [{ id: "main", workspace: "/tmp/openclaw-disabled" }] },

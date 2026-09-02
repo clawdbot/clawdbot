@@ -1,5 +1,5 @@
 /** Canonical projection from skill workshop config to system-owned cron jobs. */
-import { resolveAmbientOwnerAgentId } from "../agents/agent-scope.js";
+import { listAgentIds, tryResolveAmbientOwnerAgentId } from "../agents/agent-scope.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveHeartbeatSchedulerSeed } from "../infra/heartbeat-runner.js";
 import { resolveHeartbeatPhaseMs } from "../infra/heartbeat-schedule.js";
@@ -21,14 +21,19 @@ export function skillCollectionReviewMonitorAgentId(job: CronJob): string | unde
 }
 
 /**
- * One job, because the Workshop owns one global skill collection. It runs as the ambient
- * system agent; a second job would only contend for the same review lease.
+ * One job, because the Workshop owns one global skill collection; a second job would only
+ * contend for the same review lease. The owner is a scheduler identity, not a workspace: the
+ * review never touches agent workspaces, so an explicit fleet without a system agent falls
+ * back to its first configured agent instead of failing cron startup.
  */
 export function resolveSkillCollectionReviewMonitorSpecs(
   cfg: OpenClawConfig,
   options: { schedulerSeed?: string } = {},
 ): Array<{ agentId: string; input: CronJobCreate }> {
-  const agentId = resolveAmbientOwnerAgentId(cfg);
+  const agentId = tryResolveAmbientOwnerAgentId(cfg) ?? listAgentIds(cfg)[0];
+  if (!agentId) {
+    return [];
+  }
   const schedulerSeed = resolveHeartbeatSchedulerSeed(options.schedulerSeed);
   return [
     {

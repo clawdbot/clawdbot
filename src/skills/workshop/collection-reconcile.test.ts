@@ -133,7 +133,7 @@ describe("skill collection reconciliation", () => {
 
       await expect(
         stageSkillCollectionDrop({
-          workspaceDir,
+          skillsRoot: skillsDir,
           name: "procedure",
           baseDir: path.join(skillsDir, "procedure"),
         }),

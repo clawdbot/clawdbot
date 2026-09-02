@@ -644,9 +644,9 @@ describe("runBeforeToolCallHook — embedded mode approvals", () => {
     });
     const approvalCall = requireApprovalRequestCall("skill_workshop approval request");
     expect(approvalCall.request.pluginId).toBeUndefined();
-    expect(approvalCall.request.title).toBe("Apply workspace skill proposal");
+    expect(approvalCall.request.title).toBe("Apply Skill Workshop proposal");
     expect(approvalCall.request.description).toBe(
-      "Apply a pending workspace skill proposal into live workspace skills.",
+      "Apply a pending proposal inside the global Skill Workshop directory.",
     );
     expect(approvalCall.request.severity).toBe("warning");
     expect(approvalCall.request.allowedDecisions).toEqual(["allow-once", "deny"]);
@@ -690,7 +690,7 @@ describe("runBeforeToolCallHook — embedded mode approvals", () => {
       const adjustedApprovalCall = requireApprovalRequestCall(
         "skill_workshop adjusted approval request",
       );
-      expect(adjustedApprovalCall.request.title).toBe("Apply workspace skill proposal");
+      expect(adjustedApprovalCall.request.title).toBe("Apply Skill Workshop proposal");
       expect(adjustedApprovalCall.request.toolName).toBe("skill_workshop");
       expect(adjustedApprovalCall.request.toolCallId).toBe("call-skill-hook-apply");
       expect(runBeforeToolCallMock).toHaveBeenCalledTimes(1);
@@ -729,7 +729,7 @@ describe("runBeforeToolCallHook — embedded mode approvals", () => {
     expect(approvalCall.request).toMatchObject({
       title: "Restore previous skill collection",
       description:
-        "Replace current workspace skills with the previous collection backup. Later skill changes may be removed.",
+        "Replace current Workshop-generated skills with the previous collection backup. Later Workshop changes may be removed.",
       severity: "warning",
       toolName: "skill_workshop",
       toolCallId: "call-skill-restore",

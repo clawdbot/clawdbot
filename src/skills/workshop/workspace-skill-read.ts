@@ -11,7 +11,7 @@ import { resolveSkillKey } from "../loading/frontmatter.js";
 import { loadSkillRootRecords } from "../loading/workspace-skill-loader.js";
 import { resolveWorkshopSkillsDir } from "./skills-root.js";
 
-export function assertWritableSkillTarget(
+function assertWritableSkillTarget(
   skill: Pick<Skill, "baseDir" | "filePath" | "name">,
   env?: NodeJS.ProcessEnv,
 ): void {
