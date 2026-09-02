@@ -122,6 +122,11 @@ export async function exportTrajectoryCommand(
   if (resolvedOpts.agent !== undefined && !requestedAgent) {
     throwTrajectoryExportError("--agent must not be blank");
   }
+  // Same contract as --agent above; a blank value here reaches the configured
+  // default store instead of the one the caller named.
+  if (resolvedOpts.store !== undefined && !resolvedOpts.store.trim()) {
+    throwTrajectoryExportError("--store must not be blank");
+  }
   let targetAgentId: string;
   try {
     targetAgentId = requestedAgent

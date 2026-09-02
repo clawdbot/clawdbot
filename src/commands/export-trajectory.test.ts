@@ -202,6 +202,22 @@ describe("exportTrajectoryCommand", () => {
     expect(mocks.exportTrajectoryForCommand).not.toHaveBeenCalled();
   });
 
+  it.each([
+    ["empty", ""],
+    ["whitespace-only", "   "],
+  ])("rejects an %s explicit store before resolving one", async (_label, store) => {
+    const runtime = createRuntime();
+
+    await expectTrajectoryFailure(
+      exportTrajectoryCommand({ sessionKey: "agent:main:telegram:direct:123", store }, runtime),
+      runtime,
+      "--store must not be blank",
+    );
+    expect(mocks.resolveStorePath).not.toHaveBeenCalled();
+    expect(mocks.loadSessionEntryReadOnly).not.toHaveBeenCalled();
+    expect(mocks.exportTrajectoryForCommand).not.toHaveBeenCalled();
+  });
+
   it("routes invalid explicit stores through the command failure owner", async () => {
     const runtime = createRuntime();
     mocks.resolveStorePath.mockReturnValue("/tmp/missing.sqlite");

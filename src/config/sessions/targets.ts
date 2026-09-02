@@ -663,6 +663,10 @@ export function resolveSessionStoreTargets(
   if (opts.agent !== undefined && !requestedAgent) {
     throw new Error("--agent must not be blank");
   }
+  // An explicitly blank --store is not "no store": it would select the default one.
+  if (opts.store !== undefined && !opts.store.trim()) {
+    throw new Error("--store must not be blank");
+  }
   const hasAgent = requestedAgent !== undefined;
   const allAgents = opts.allAgents === true;
   if (hasAgent && allAgents) {
