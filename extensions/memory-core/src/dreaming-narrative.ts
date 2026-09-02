@@ -10,6 +10,7 @@ import {
 } from "openclaw/plugin-sdk/error-runtime";
 import { resolveGlobalMap } from "openclaw/plugin-sdk/global-singleton";
 import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
+import type { PluginRuntime } from "openclaw/plugin-sdk/runtime-store";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import pLimit from "p-limit";
 import { readDreamsFile, resolveDreamsPath, updateDreamsFile } from "./dreaming-dreams-file.js";
@@ -22,18 +23,10 @@ import { readStore } from "./short-term-promotion-store.js";
 
 // ── Types ──────────────────────────────────────────────────────────────
 
+type SubagentRunParams = Parameters<PluginRuntime["subagent"]["run"]>[0];
+
 export type SubagentSurface = {
-  run: (params: {
-    idempotencyKey: string;
-    sessionKey: string;
-    message: string;
-    disableTools?: boolean;
-    model?: string;
-    extraSystemPrompt?: string;
-    lane?: string;
-    lightContext?: boolean;
-    deliver?: boolean;
-  }) => Promise<{ runId: string }>;
+  run: (params: SubagentRunParams) => Promise<{ runId: string }>;
   waitForRun: (params: { runId: string; timeoutMs?: number }) => Promise<{
     status: string;
     error?: string;
@@ -261,6 +254,7 @@ async function startNarrativeRunOrFallback(params: {
       disableTools: true,
       ...(params.model ? { model: params.model } : {}),
       extraSystemPrompt: NARRATIVE_SYSTEM_PROMPT,
+      promptMode: "minimal",
       lane: `dreaming-narrative:${params.sessionKey}`,
       lightContext: true,
       deliver: false,

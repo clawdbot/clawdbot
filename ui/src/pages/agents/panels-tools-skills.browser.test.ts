@@ -2,8 +2,8 @@
 import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
 import type { SkillStatusEntry } from "../../api/types.ts";
+import { GitHubIdentityController } from "../../features/github-connections/github-identity-controller.ts";
 import { installBrowserHistoryIsolation } from "../../test-helpers/browser-history.ts";
-import { GitHubIdentityController } from "./github-identity-controller.ts";
 import { renderAgentSkills, renderAgentTools } from "./panels-tools-skills.ts";
 
 installBrowserHistoryIsolation();
@@ -20,8 +20,7 @@ function createBaseParams(overrides: Partial<Parameters<typeof renderAgentTools>
   githubIdentity.sync({
     client: null,
     connected: false,
-    agentId: "main",
-    config: null,
+    target: { kind: "shared", scope: "agent", agentId: "main", config: null },
     statusReadable: true,
     configurable: false,
     authorizable: false,
@@ -47,6 +46,7 @@ function createBaseParams(overrides: Partial<Parameters<typeof renderAgentTools>
     runtimeSessionKey: "main",
     runtimeSessionMatchesSelectedAgent: true,
     githubIdentity,
+    onOpenGitHubConnections: vi.fn(),
     onProfileChange: () => undefined,
     onOverridesChange: () => undefined,
     onConfigReload: () => undefined,
@@ -173,7 +173,7 @@ describe("agents tools panel (browser)", () => {
       Array.from(container.querySelectorAll(".settings-section__heading")).map((heading) =>
         heading.textContent?.trim(),
       ),
-    ).toEqual(["Tool Access", "Available Right Now", "GitHub Identity", "Tool Catalog"]);
+    ).toEqual(["Tool Access", "Available Right Now", "GitHub account", "Tool Catalog"]);
     expect(
       Array.from(container.querySelectorAll(".settings-row__title")).some(
         (title) => title.textContent?.trim() === "Quick Presets",
@@ -253,14 +253,23 @@ describe("agents tools panel (browser)", () => {
       row.querySelector(".settings-row__title")?.textContent?.includes("Git Author"),
     );
     expect(authorRow?.querySelector(".settings-row__value")?.textContent?.trim()).toBe("Not set");
-    expect(section.querySelector(".settings-segmented")).not.toBeNull();
+    expect(section.querySelector(".settings-segmented")).toBeNull();
     expect(section.querySelector(".settings-secret input")).toBeNull();
-    expect(section.textContent).toContain("Disconnected");
+    expect(section.textContent).toContain("Manage connections in Profile");
+    expect(section.textContent).not.toContain("Advanced: agent GitHub override");
   });
 
   it("renders only the pinned device link and one-time code while authorization is active", async () => {
     const container = document.createElement("div");
-    const client = { request: vi.fn() } as never;
+    const client = {
+      request: vi.fn(async () => ({
+        requestId: "github-device-11111111111111111111111111111111",
+        userCode: "ABCD-1234",
+        verificationUri: "https://github.com/login/device",
+        expiresInMs: 900_000,
+        pollAfterMs: 60_000,
+      })),
+    } as never;
     const githubIdentity = new GitHubIdentityController({
       requestUpdate: () => undefined,
       runExternalMutation: async () => ({
@@ -272,22 +281,13 @@ describe("agents tools panel (browser)", () => {
     githubIdentity.sync({
       client,
       connected: true,
-      agentId: "main",
-      config: {},
+      target: { kind: "shared", scope: "agent", agentId: "main", config: {} },
       statusReadable: true,
       configurable: true,
       authorizable: true,
       clientRevision: 1,
     });
-    githubIdentity.authorization = {
-      phase: "code",
-      requestId: "github-device-11111111111111111111111111111111",
-      userCode: "ABCD-1234",
-      verificationUri: "https://github.com/login/device",
-      expiresInMs: 900_000,
-      pollAfterMs: 5_000,
-      displayExpiresAtMs: 1_900_000_000_000,
-    };
+    await githubIdentity.startAuthorization();
 
     render(renderAgentTools(createBaseParams({ githubIdentity })), container);
     await Promise.resolve();
@@ -301,7 +301,8 @@ describe("agents tools panel (browser)", () => {
     expect(link?.rel.split(/\s+/)).toEqual(expect.arrayContaining(["noopener", "noreferrer"]));
     expect(container.querySelector(".settings-secret input")).toBeNull();
     expect(container.textContent).not.toContain("github-device-11111111111111111111111111111111");
-    expect(container.querySelector(".settings-segmented")?.hasAttribute("disabled")).toBe(true);
+    expect(container.querySelector(".settings-segmented")).toBeNull();
+    githubIdentity.dispose();
   });
 
   it("keeps complete effective facts when This Agent inherits System", async () => {
@@ -319,7 +320,6 @@ describe("agents tools panel (browser)", () => {
       oauthScopes: ["repo", "workflow"],
       repositoryGrants: "unknown" as const,
     };
-    params.githubIdentity.scope = "agent";
     params.githubIdentity.status = {
       agentId: "main",
       selectedScope: "agent",
@@ -334,7 +334,7 @@ describe("agents tools panel (browser)", () => {
     expect(container.textContent).toContain("System Author · system@example.com");
     expect(container.textContent).toContain("Managed GitHub authorization");
     expect(container.textContent).toContain("repo, workflow");
-    expect(container.textContent).toContain("This scope inherits the effective identity");
+    expect(container.textContent).toContain("System GitHub");
   });
 
   it("keeps PAT fields hidden until the explicit fallback is selected", async () => {
@@ -351,8 +351,7 @@ describe("agents tools panel (browser)", () => {
     githubIdentity.sync({
       client,
       connected: true,
-      agentId: "main",
-      config: {},
+      target: { kind: "shared", scope: "agent", agentId: "main", config: {} },
       statusReadable: true,
       configurable: true,
       authorizable: true,
@@ -368,7 +367,7 @@ describe("agents tools panel (browser)", () => {
     render(renderAgentTools(createBaseParams({ githubIdentity })), container);
     await Promise.resolve();
     expect(container.querySelector(".settings-secret input")).not.toBeNull();
-    expect(container.textContent).not.toContain("Connect GitHub");
+    expect(container.textContent).not.toContain("Continue with GitHub");
 
     githubIdentity.busy = true;
     render(renderAgentTools(createBaseParams({ githubIdentity })), container);
@@ -671,6 +670,79 @@ describe("agents tools panel (browser)", () => {
       replaceState.mockRestore();
       container.remove();
     }
+  });
+
+  it.each([
+    {
+      name: "prefix wildcard",
+      tools: { allow: ["web_*"] },
+      expected: { web_fetch: true, web_: true, read: false },
+    },
+    {
+      name: "suffix wildcard",
+      tools: { allow: ["*fetch"] },
+      expected: { web_fetch: true, read: false },
+    },
+    {
+      name: "literal dots in wildcard",
+      tools: { allow: ["mcp.server.*"] },
+      expected: { "mcp.server.tool": true, mcpXserverXtool: false },
+    },
+    {
+      name: "base exec alias and direct deny",
+      tools: { allow: [" BASH "], deny: ["exec"] },
+      expected: { exec: false, apply_patch: true, write: false },
+    },
+    {
+      name: "override exec deny",
+      tools: { profile: "full", deny: ["exec"] },
+      expected: { exec: false, apply_patch: false, write: true },
+    },
+    {
+      name: "group expansion and direct deny",
+      tools: { allow: ["group:fs"], deny: ["write"] },
+      expected: { read: true, write: false, apply_patch: true },
+    },
+  ])("renders policy-controlled switches: $name", async ({ tools, expected }) => {
+    const container = document.createElement("div");
+    render(
+      renderAgentTools(
+        createBaseParams({
+          configForm: {
+            agents: { entries: { main: { default: true, tools } } },
+          },
+          toolsCatalogResult: {
+            agentId: "main",
+            profiles: [{ id: "full", label: "Full" }],
+            groups: [
+              {
+                id: "policy",
+                label: "Policy",
+                source: "core",
+                tools: Object.keys(expected).map((id) => ({
+                  id,
+                  label: id,
+                  description: id,
+                  source: "core" as const,
+                  defaultProfiles: [],
+                })),
+              },
+            ],
+          },
+        }),
+      ),
+      container,
+    );
+    await Promise.resolve();
+
+    expect(
+      Object.fromEntries(
+        Array.from(container.querySelectorAll(".agent-tool-card"), (card) => [
+          card.querySelector(".agent-tool-title")?.textContent?.trim(),
+          card.querySelector<HTMLElement & { checked: boolean }>("wa-switch")?.checked,
+        ]),
+      ),
+    ).toEqual(expected);
   });
 });
 

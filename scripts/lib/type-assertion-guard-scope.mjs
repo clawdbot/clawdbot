@@ -130,7 +130,7 @@ export const CHAINED_ASSERTION_EXCLUDED_ROOTS = [
   "src/config/schema.hints.ts", // Zod pipe internals cross its public type namespace.
   "src/config/sessions/store-entry-shape.ts", // Legacy projection accepts partially validated session records.
   "src/gateway/cli-session-history.claude.ts", // External CLI messages cross the canonical transcript redactor.
-  "src/gateway/mcp-app-standalone.ts", // Generated standalone browser code bridges the DOM namespace.
+  "src/gateway/mcp-app-standalone-host.ts", // Generated standalone browser code bridges the DOM namespace.
   "src/gateway/server-methods/chat-transcript-inject.ts", // Gateway media blocks exceed the canonical message content union.
   "src/gateway/test-http-response.ts", // Test support.
   "src/infra/backup-volatile-stat-cache.ts", // node-tar's cache expects full Stats for a synthetic sentinel.

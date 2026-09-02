@@ -1,3 +1,4 @@
+import type { runAgentHarnessBeforeCompactionHook } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { AgentPlanStep } from "openclaw/plugin-sdk/channel-outbound";
 import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
 import type { CodexThreadItem, JsonValue } from "./protocol.js";
@@ -7,6 +8,7 @@ import type { CodexTrajectoryRecorder } from "./trajectory.js";
 export type CodexAsyncDeliverySettlement = "settled" | "retry";
 
 export type CodexAppServerEventProjectorOptions = {
+  agentHookContext?: Parameters<typeof runAgentHarnessBeforeCompactionHook>[0]["ctx"];
   initialContextTokens?: number;
   nativePostToolUseRelayEnabled?: boolean;
   asyncUserMessageAllowed?: boolean;

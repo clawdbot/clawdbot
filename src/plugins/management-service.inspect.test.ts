@@ -5,6 +5,7 @@ import {
   hostedFeedDiffsEntry,
   metadataSnapshot,
 } from "./management-service.test-helpers.js";
+import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
 
 const mocks = vi.hoisted(() => ({ metadata: vi.fn(), officialCatalog: vi.fn() }));
 
@@ -24,6 +25,7 @@ const { clearManagedPluginOfficialCatalogCache, inspectManagedPlugin } =
 
 describe("managed plugin inspection", () => {
   beforeEach(() => {
+    clearPluginMetadataLifecycleCaches();
     clearManagedPluginOfficialCatalogCache();
     mocks.metadata.mockReset();
     mocks.officialCatalog.mockReset();
@@ -34,7 +36,7 @@ describe("managed plugin inspection", () => {
     mocks.metadata.mockReturnValue(metadataSnapshot({ enabled: true }));
 
     const inspection = await inspectManagedPlugin({
-      config: {},
+      config: { plugins: { entries: { workboard: { enabled: true } } } },
       env: {},
       pluginId: "workboard",
     });
@@ -93,6 +95,7 @@ describe("managed plugin inspection", () => {
         plugins: {
           entries: {
             "community-plugin": {
+              enabled: false,
               hooks: { allowPromptInjection: false, allowConversationAccess: true },
               llm: { allowModelOverride: true },
             },
@@ -148,7 +151,7 @@ describe("managed plugin inspection", () => {
     );
 
     const inspection = await inspectManagedPlugin({
-      config: {},
+      config: { plugins: { entries: { "community-plugin": { enabled: false } } } },
       env: {},
       pluginId: "community-plugin",
     });
@@ -189,29 +192,57 @@ describe("managed plugin inspection", () => {
     },
   );
 
-  it("inspects official catalog manifests and their actual pinned install candidate", async () => {
-    mocks.metadata.mockReturnValue(emptyMetadataSnapshot());
-    mocks.officialCatalog.mockResolvedValue({ source: "hosted", entries: [hostedFeedDiffsEntry] });
-
-    const inspection = await inspectManagedPlugin({ config: {}, env: {}, pluginId: "diffs" });
-
-    expect(inspection).toMatchObject({
-      plugin: { id: "diffs", name: "Diffs", origin: "official", installed: false, enabled: false },
-      source: {
-        kind: "official-catalog",
-        packageName: "@openclaw/diffs",
-        integrity: expect.stringMatching(/^sha256-/),
-        integrityKind: "sha256",
-      },
-      grants: {
-        hooks: {
-          allowPromptInjection: { effective: true },
-          allowConversationAccess: { effective: false },
+  it.each([false, true])(
+    "inspects the pinned catalog candidate with npm available: %s",
+    async (npm) => {
+      mocks.metadata.mockReturnValue(emptyMetadataSnapshot());
+      const entry = {
+        ...hostedFeedDiffsEntry,
+        install: {
+          candidates: [
+            ...hostedFeedDiffsEntry.install.candidates,
+            ...(npm
+              ? [
+                  {
+                    sourceRef: "public-npm",
+                    package: "@vendor/diffs-npm",
+                    version: "1.2.3",
+                    integrity: "sha512-bnBtLXBpbg==",
+                  },
+                ]
+              : []),
+          ],
         },
-      },
-    });
-    expect(inspection.reviewToken).toBe(computeDeclaredSurfaceHash(inspection.declared));
-  });
+      };
+      mocks.officialCatalog.mockResolvedValue({ source: "hosted", entries: [entry] });
+
+      const inspection = await inspectManagedPlugin({ config: {}, env: {}, pluginId: "diffs" });
+
+      expect(inspection).toMatchObject({
+        plugin: {
+          id: "diffs",
+          name: "Diffs",
+          origin: "official",
+          installed: false,
+          enabled: false,
+        },
+        source: {
+          kind: "official-catalog",
+          packageName: npm ? "@vendor/diffs-npm" : "@openclaw/diffs",
+          spec: npm ? "@vendor/diffs-npm@1.2.3" : "clawhub:@openclaw/diffs@2026.6.11",
+          integrity: npm ? "sha512-bnBtLXBpbg==" : expect.stringMatching(/^sha256-/),
+          integrityKind: npm ? "ssri" : "sha256",
+        },
+        grants: {
+          hooks: {
+            allowPromptInjection: { effective: true },
+            allowConversationAccess: { effective: false },
+          },
+        },
+      });
+      expect(inspection.reviewToken).toBe(computeDeclaredSurfaceHash(inspection.declared));
+    },
+  );
 
   it("rejects inspection ids absent from installed metadata and the official catalog", async () => {
     mocks.metadata.mockReturnValue(emptyMetadataSnapshot());

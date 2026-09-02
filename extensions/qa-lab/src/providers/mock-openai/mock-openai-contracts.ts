@@ -4,7 +4,6 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { setTimeout as sleep } from "node:timers/promises";
 import { asNullableRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { readRequestBodyWithLimit } from "openclaw/plugin-sdk/webhook-ingress";
-import { writeJson } from "../shared/http-json.js";
 
 export type ResponsesInputItem = Record<string, unknown>;
 
@@ -89,6 +88,7 @@ export type StreamEvent =
       type: "response.completed";
       response: {
         id: string;
+        object: "response";
         status: "completed";
         output: Array<Record<string, unknown>>;
         usage: {
@@ -98,6 +98,24 @@ export type StreamEvent =
         };
       };
     };
+
+export function buildCompletedResponseEvent(
+  id: string,
+  output: Array<Record<string, unknown>>,
+  outputTokens: number,
+): Extract<StreamEvent, { type: "response.completed" }> {
+  return {
+    type: "response.completed",
+    response: {
+      id,
+      // SDK clients use this discriminator to expose output_text.
+      object: "response",
+      status: "completed",
+      output,
+      usage: { input_tokens: 64, output_tokens: outputTokens, total_tokens: 64 + outputTokens },
+    },
+  };
+}
 
 /**
  * Provider variant tag for `body.model`. The mock previously ignored
@@ -232,6 +250,8 @@ export const QA_EMPTY_RESPONSE_RECOVERY_PROMPT_RE = /empty response continuation
 export const QA_EMPTY_RESPONSE_EXHAUSTION_PROMPT_RE = /empty response exhaustion qa check/i;
 export const QA_EMPTY_RESPONSE_SIDE_EFFECT_RECOVERY_PROMPT_RE =
   /empty response after write recovery qa check/i;
+export const QA_EMPTY_RESPONSE_SIDE_EFFECT_EXHAUSTION_PROMPT_RE =
+  /empty response after write exhaustion qa check/i;
 export const QA_REPEATED_REQUEST_RECOVERY_PROMPT_RE = /repeated request recovery gateway qa check/i;
 export const QA_REPEATED_REQUEST_QUEUED_REPLY_PROMPT_RE =
   /repeated request queued reply gateway qa check/i;
@@ -239,13 +259,14 @@ export const QA_REPEATED_REQUEST_QUEUED_REPLY_MARKER = "GATEWAY_REPEATED_REQUEST
 export const QA_STREAMING_PROMPT_RE = /(?:partial|quiet) streaming qa check/i;
 export const QA_FINAL_ONLY_MARKER_STREAMING_PROMPT_RE = /final-only marker streaming qa check/i;
 export const QA_BLOCK_STREAMING_PROMPT_RE = /block streaming qa check/i;
-export const QA_TOOL_PROGRESS_ERROR_PROMPT_RE = /tool progress error qa check/i;
-export const QA_TOOL_PROGRESS_PROMPT_RE = /tool progress qa check/i;
+export const QA_TOOL_PROGRESS_PROMPT_RE = /tool progress( error)? qa check/i;
 export const QA_TOOL_LOOP_GLOBAL_BREAKER_PROMPT_RE = /global tool loop breaker qa check/i;
 export const QA_PROVIDER_HTTP_503_AFTER_TOOL_PROMPT_RE = /provider http 503 after tool qa check/i;
 export const QA_GROUP_VISIBLE_REPLY_TOOL_PROMPT_RE = /qa group visible reply tool check/i;
 export const QA_MSTEAMS_AMBIGUOUS_TIMEOUT_PROMPT_RE = /qa msteams ambiguous gateway timeout/i;
 export const QA_MSTEAMS_THREAD_DEDUPE_PROMPT_RE = /qa msteams thread message-tool final dedupe/i;
+export const QA_THREAD_REPLY_RECEIPT_PROMPT_RE =
+  /qa thread reply receipt check[\s\S]*channel id: `([^`]+)`[\s\S]*thread id: `([^`]+)`/i;
 export const QA_A2A_MESSAGE_TOOL_MIRROR_PROMPT_RE = /qa a2a message-tool mirror check/i;
 export const QA_GROUP_MESSAGE_UNAVAILABLE_FALLBACK_PROMPT_RE =
   /qa group message unavailable fallback check/i;
@@ -354,6 +375,8 @@ export const QA_TOOL_SEARCH_FAILURE_PROMPT_RE = /tool search qa failure/i;
 export const QA_MCP_CODE_MODE_PROMPT_RE = /mcp code mode qa check/i;
 export const QA_RESTART_CODE_MODE_WAIT_PROMPT_RE = /code mode restart wait qa check/i;
 export const QA_RESTART_RECOVERY_PROMPT_RE = /previous turn was interrupted by a gateway restart/i;
+export const QA_KILL_RESTART_PROMPT_RE = /\bKILL-RESTART-PROMPT\b/u;
+export const QA_KILL_RESTART_RECOVERED_MARKER = "KILL-RESTART-RECOVERED-OK";
 const QA_AUDIO_TRANSCRIPTION_TEXT =
   "Reply with only this exact marker: WHATSAPP_QA_AUDIO_TRANSCRIPT_OK";
 const QA_GROUP_AUDIO_TRANSCRIPTION_TEXT =
@@ -404,6 +427,8 @@ export function readBody(req: IncomingMessage): Promise<string> {
   return readRequestBodyWithLimit(req, {
     maxBytes: MOCK_OPENAI_MAX_BODY_BYTES,
     timeoutMs: MOCK_OPENAI_BODY_TIMEOUT_MS,
+    // The HTTP handler must deliver the rejection before closing the request.
+    destroyOnLimit: false,
   });
 }
 
@@ -416,15 +441,6 @@ export function parseJsonObjectBody(raw: string): Record<string, unknown> | null
   }
 }
 
-export function writeOpenAiMalformedJsonError(res: ServerResponse, label: string) {
-  writeJson(res, 400, {
-    error: {
-      type: "invalid_request_error",
-      message: `Malformed JSON body for ${label} request.`,
-    },
-  });
-}
-
 export function transcriptionTextForAudioRequest(rawBody: string) {
   if (rawBody.includes(QA_MATRIX_VOICE_TRANSCRIPTION_TRIGGER)) {
     return QA_MATRIX_VOICE_TRANSCRIPTION_TEXT;
@@ -435,14 +451,34 @@ export function transcriptionTextForAudioRequest(rawBody: string) {
   return QA_AUDIO_TRANSCRIPTION_TEXT;
 }
 
-export function writeSse(res: ServerResponse, events: StreamEvent[]) {
-  const body = `${events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join("")}data: [DONE]\n\n`;
+export async function writeSse(
+  res: ServerResponse,
+  events: Array<StreamEvent | AnthropicStreamEvent>,
+  protocol: "responses" | "anthropic",
+  pauseMs?: number,
+) {
+  const frames = events.map(
+    (event) =>
+      `${protocol === "anthropic" ? `event: ${event.type}\n` : ""}data: ${JSON.stringify(event)}\n\n`,
+  );
+  const completionIndex =
+    pauseMs === undefined
+      ? -1
+      : events.findIndex((event) => event.type === "response.output_text.done");
+  const body =
+    frames.slice(Math.max(0, completionIndex)).join("") +
+    (protocol === "responses" ? "data: [DONE]\n\n" : "");
   res.writeHead(200, {
     "content-type": "text/event-stream",
     "cache-control": "no-store",
     connection: "keep-alive",
-    "content-length": Buffer.byteLength(body),
+    ...(completionIndex < 0 ? { "content-length": Buffer.byteLength(body) } : {}),
   });
+  if (completionIndex >= 0) {
+    // Flush preview deltas before delaying the final text and completion frames.
+    res.write(frames.slice(0, completionIndex).join(""));
+    await sleep(pauseMs);
+  }
   res.end(body);
 }
 
@@ -462,59 +498,13 @@ export function buildRemoteCompactionV2Events(): [
   };
   return [
     { type: "response.output_item.done", item },
-    {
-      type: "response.completed",
-      response: {
-        id: "resp_mock_compaction_1",
-        status: "completed",
-        output: [item],
-        usage: { input_tokens: 64, output_tokens: 16, total_tokens: 80 },
-      },
-    },
+    buildCompletedResponseEvent("resp_mock_compaction_1", [item], 16),
   ];
-}
-
-export async function writeSseWithPreviewPause(
-  res: ServerResponse,
-  events: StreamEvent[],
-  pauseMs: number,
-) {
-  const completionIndex = events.findIndex((event) => event.type === "response.output_text.done");
-  if (completionIndex < 0) {
-    writeSse(res, events);
-    return;
-  }
-  res.writeHead(200, {
-    "content-type": "text/event-stream",
-    "cache-control": "no-store",
-    connection: "keep-alive",
-  });
-  for (const event of events.slice(0, completionIndex)) {
-    res.write(`data: ${JSON.stringify(event)}\n\n`);
-  }
-  await sleep(pauseMs);
-  for (const event of events.slice(completionIndex)) {
-    res.write(`data: ${JSON.stringify(event)}\n\n`);
-  }
-  res.end("data: [DONE]\n\n");
 }
 
 export type AnthropicStreamEvent = Record<string, unknown> & {
   type: string;
 };
-
-export function writeAnthropicSse(res: ServerResponse, events: AnthropicStreamEvent[]) {
-  const body = events
-    .map((event) => `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`)
-    .join("");
-  res.writeHead(200, {
-    "content-type": "text/event-stream",
-    "cache-control": "no-store",
-    connection: "keep-alive",
-    "content-length": Buffer.byteLength(body),
-  });
-  res.end(body);
-}
 
 export function countApproxTokens(text: string) {
   const trimmed = text.trim();

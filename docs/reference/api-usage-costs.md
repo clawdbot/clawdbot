@@ -27,6 +27,8 @@ Map of OpenClaw features that can call paid provider APIs, where each reads its 
 **Control UI → Usage** (cross-session analysis)
 
 - Shows transcript-derived token and estimated-cost totals for the selected date range, with breakdowns by provider, model, agent, channel, and token type.
+- Named sessions use their stored agent owner. Identical session IDs under different agents remain separate, including when historical lineage is grouped.
+- Grouped history remains visible after a session reset, even before the new session has its first message. Filtering and JSON exports retain the breakdown of entries with missing model prices.
 - Compares shorter calendar windows ending on the selected range end date. Missing dates count as zero-usage calendar days; they are not skipped to create a denser window.
 - Labels the daily chart scale directly. A `√` badge means square-root compression is keeping low-usage days visible.
 - These totals describe the available local session history, not a provider invoice or lifetime billing ledger. The UI warns when pricing is missing for some entries.

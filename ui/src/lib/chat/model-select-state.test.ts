@@ -9,7 +9,7 @@ import {
   DEFAULT_CHAT_MODEL_CATALOG,
 } from "../../test-helpers/chat-model.ts";
 import {
-  isChatModelUnavailable,
+  resolveChatModelUnavailableReason,
   resolveChatFastModeSelectState,
   resolveChatModelOverrideValue,
   resolveChatModelSelectState,
@@ -20,11 +20,14 @@ type ChatModelStateInput = Parameters<typeof resolveChatModelSelectState>[0];
 function createChatModelState(
   params: Partial<Omit<ChatModelStateInput, "sessionKey">> = {},
 ): ChatModelStateInput {
+  const sessionsResult =
+    params.sessionsResult ?? createSessionsListResult({ model: null, modelProvider: null });
   return {
+    activeSession: params.activeSession ?? sessionsResult.sessions[0],
     sessionKey: "main",
     modelOverrides: {},
     chatModelCatalog: [],
-    sessionsResult: createSessionsListResult({ model: null, modelProvider: null }),
+    sessionsResult,
     ...params,
   };
 }
@@ -51,16 +54,64 @@ function resolveFastModeState(params: {
     catalog: [],
     connected: true,
     currentModelOverride: `${params.provider}/model`,
+    fastModeTarget: sessionsResult.sessions[0],
     gatewayAvailable: true,
     loading: false,
     sending: false,
-    sessionKey: "main",
     sessionsResult,
     stream: null,
   });
 }
 
 describe("chat-model-select-state", () => {
+  it.each([
+    { reason: "missing-auth", expected: "missing-auth" },
+    { reason: "auth-failed", expected: "auth-failed" },
+    { reason: "cooldown", expected: "cooldown" },
+    { reason: undefined, expected: undefined },
+  ] as const)("preserves the recorded $reason availability reason", ({ reason, expected }) => {
+    const catalog = [
+      {
+        id: "gpt-5.6-luna",
+        name: "GPT-5.6 Luna",
+        provider: "openai",
+        available: false,
+        unavailableReason: reason,
+      },
+    ];
+    expect(resolveChatModelUnavailableReason("gpt-5.6-luna", "openai", catalog)).toBe(expected);
+    expect(resolveChatModelUnavailableReason("other-model", "openai", catalog)).toBeUndefined();
+  });
+
+  it.each([
+    { available: true, reason: undefined, expected: undefined },
+    { available: undefined, reason: undefined, expected: undefined },
+    { available: false, reason: undefined, expected: undefined },
+    { available: false, reason: "cooldown", expected: "cooldown" },
+    { available: false, reason: "missing-auth", expected: "auth-failed" },
+  ] as const)(
+    "does not let an auth-failed alias override a $reason/$available route",
+    ({ available, reason, expected }) => {
+      const catalog = [
+        {
+          id: "gpt-5.6-luna",
+          name: "GPT-5.6 Luna",
+          provider: "codex",
+          available: false,
+          unavailableReason: "auth-failed" as const,
+        },
+        {
+          id: "gpt-5.6-luna",
+          name: "GPT-5.6 Luna",
+          provider: "openai",
+          available,
+          unavailableReason: reason,
+        },
+      ];
+      expect(resolveChatModelUnavailableReason("gpt-5.6-luna", "openai", catalog)).toBe(expected);
+    },
+  );
+
   it("toggles between Standard and Fast for OpenAI models", () => {
     expect(resolveFastModeState({ provider: "openai" })).toMatchObject({
       active: false,
@@ -357,12 +408,14 @@ describe("chat-model-select-state", () => {
           name: "GPT-5.6 Sol",
           provider: "openai",
           available: false,
+          unavailableReason: "missing-auth",
         },
         {
           id: "gpt-5.6-luna",
           name: "GPT-5.6 Luna",
           provider: "openai",
           available: false,
+          unavailableReason: "missing-auth",
         },
       ),
       sessionsResult: createSessionsListResult({
@@ -375,10 +428,22 @@ describe("chat-model-select-state", () => {
 
     const resolved = resolveChatModelSelectState(state);
     expect(resolved.defaultLabel).toBe("Default (GPT-5.6 Sol)");
-    expect(isChatModelUnavailable("gpt-5.6-sol", "openai", state.chatModelCatalog)).toBe(true);
+    expect(resolveChatModelUnavailableReason("gpt-5.6-sol", "openai", state.chatModelCatalog)).toBe(
+      "missing-auth",
+    );
     expect(resolved.options).toEqual([
-      { value: "openai/gpt-5.6-sol", label: "GPT-5.6 Sol", disabled: true },
-      { value: "openai/gpt-5.6-luna", label: "GPT-5.6 Luna", disabled: true },
+      {
+        value: "openai/gpt-5.6-sol",
+        label: "GPT-5.6 Sol",
+        disabled: true,
+        unavailableReason: "missing-auth",
+      },
+      {
+        value: "openai/gpt-5.6-luna",
+        label: "GPT-5.6 Luna",
+        disabled: true,
+        unavailableReason: "missing-auth",
+      },
     ]);
   });
 
@@ -396,10 +461,10 @@ describe("chat-model-select-state", () => {
         catalog: [],
         connected: true,
         currentModelOverride: "",
+        fastModeTarget: sessionsResult.sessions[0],
         gatewayAvailable: true,
         loading: false,
         sending: false,
-        sessionKey: "main",
         sessionsResult,
         stream: null,
       }).supported,
@@ -424,10 +489,10 @@ describe("chat-model-select-state", () => {
         catalog: providers.map((provider) => ({ id: model, name: "Gemma", provider })),
         connected: true,
         currentModelOverride: model,
+        fastModeTarget: sessionsResult.sessions[0],
         gatewayAvailable: true,
         loading: false,
         sending: false,
-        sessionKey: "main",
         sessionsResult,
         stream: null,
       }).supported,
@@ -476,10 +541,10 @@ describe("chat-model-select-state", () => {
         ],
         connected: true,
         currentModelOverride: "anthropic/claude-opus-4-8",
+        fastModeTarget: sessionsResult.sessions[0],
         gatewayAvailable: true,
         loading: false,
         sending: false,
-        sessionKey: "main",
         sessionsResult,
         stream: null,
       }).supported,
@@ -516,10 +581,10 @@ describe("chat-model-select-state", () => {
         ],
         connected: true,
         currentModelOverride: "anthropic/claude-opus-4-8",
+        fastModeTarget: sessionsResult.sessions[0],
         gatewayAvailable: true,
         loading: false,
         sending: false,
-        sessionKey: "main",
         sessionsResult,
         stream: null,
       }).supported,
@@ -551,10 +616,10 @@ describe("chat-model-select-state", () => {
         ],
         connected: true,
         currentModelOverride: "google/gemini-2.5-pro",
+        fastModeTarget: sessionsResult.sessions[0],
         gatewayAvailable: true,
         loading: false,
         sending: false,
-        sessionKey: "main",
         sessionsResult,
         stream: null,
       }).supported,
@@ -586,10 +651,10 @@ describe("chat-model-select-state", () => {
         ],
         connected: true,
         currentModelOverride: "vendor/model",
+        fastModeTarget: sessionsResult.sessions[0],
         gatewayAvailable: true,
         loading: false,
         sending: false,
-        sessionKey: "main",
         sessionsResult,
         stream: null,
       }).supported,

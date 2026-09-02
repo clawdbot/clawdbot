@@ -3,7 +3,7 @@
  * One structural pattern for every settings surface:
  *   .settings-page > .settings-section > .settings-group > .settings-row
  *
- * Rules (see ui/docs/settings-design.md):
+ * Rules (see ui/docs/design-system/settings-design.md):
  * - Sections are typography (heading outside any surface), not chrome.
  * - Exactly one level of elevation: the group. Never nest a card in a group.
  * - Status is a dot + plain text, never a colored pill.
@@ -48,12 +48,15 @@
 /* The page headline adopts the column of the page below it; without this the
    shell caps headers at 1120px while narrow pages use a 760px column, leaving
    the title floating left of the content. */
-.shell--settings .content:has(.settings-page) .content-header {
+.shell--settings .content:has(.settings-page) .content-header,
+.content:has(.settings-page) .content-header--settings {
   max-width: 760px;
+  margin-inline: auto;
   padding-inline: var(--space-4);
 }
 
-.shell--settings .content:has(.settings-page--wide) .content-header {
+.shell--settings .content:has(.settings-page--wide) .content-header,
+.content:has(.settings-page--wide) .content-header--settings {
   max-width: 1120px;
 }
 
@@ -279,65 +282,20 @@
   min-width: 0;
 }
 
-.config-advanced-divider {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--space-3);
+.config-advanced-disclosure {
   margin-top: var(--space-5);
-  padding: 0 var(--space-4) var(--space-2);
-  color: var(--muted);
-  font-size: var(--control-ui-text-xs);
-  font-weight: 550;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
 }
 
-.config-advanced-divider__toggle {
-  border: 0;
-  background: none;
-  padding: 0;
-  color: var(--accent);
-  font-size: var(--control-ui-text-xs);
-  font-weight: 600;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
+.config-tier-groups > .config-advanced-disclosure:first-child {
+  margin-top: 0;
+}
+
+.config-advanced-disclosure__summary {
   cursor: var(--cursor-action);
 }
 
-.config-advanced-divider__toggle:hover {
-  text-decoration: underline;
-}
-
-.config-advanced-ghost {
-  width: 100%;
-  min-height: 48px;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--space-4);
-  padding: var(--space-3) var(--space-4);
-  border: 1px solid color-mix(in srgb, var(--border) 85%, transparent);
-  border-radius: var(--radius-lg);
-  background: var(--secondary);
-  text-align: left;
-  transition: background var(--duration-fast) ease;
-}
-
-.config-advanced-ghost:hover {
-  background: var(--bg-hover);
-}
-
-.config-advanced-ghost__count {
-  color: var(--muted);
-  font-size: var(--control-ui-text-sm);
-}
-
-.config-advanced-ghost__action {
-  color: var(--accent);
-  font-size: var(--control-ui-text-sm);
-  font-weight: 600;
-  flex: 0 0 auto;
+.config-advanced-disclosure > .settings-group {
+  margin-top: var(--space-3);
 }
 
 /* ── Row ── */
@@ -360,7 +318,7 @@
 .settings-row__text {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 0;
   min-width: 0;
   flex: 1 1 auto;
 }
@@ -533,6 +491,17 @@
   padding-inline: 0;
 }
 
+.settings-section__actions .btn--xs.btn--icon {
+  width: 28px;
+  min-width: 28px;
+  height: 28px;
+}
+
+.settings-section__actions .btn--xs.btn--icon svg {
+  width: 16px;
+  height: 16px;
+}
+
 .settings-toggle {
   display: inline-flex;
   align-items: center;
@@ -673,6 +642,12 @@ textarea.settings-input {
   align-items: center;
   justify-content: flex-end;
   gap: var(--space-3);
+  min-width: 0;
+
+  .settings-status {
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
 }
 
 .updates-attempt-details {
@@ -732,6 +707,45 @@ textarea.settings-input {
   font-size: var(--control-ui-text-sm);
   color: var(--muted);
   text-align: center;
+}
+
+.settings-loading-skeleton,
+.settings-loading-skeleton__rows {
+  width: 100%;
+}
+
+.settings-loading-skeleton__title,
+.settings-loading-skeleton__description,
+.settings-loading-skeleton__control {
+  display: block;
+}
+
+.settings-loading-skeleton__title {
+  width: min(42%, 220px);
+  height: 14px;
+}
+
+.settings-loading-skeleton__description {
+  width: min(72%, 420px);
+  height: 11px;
+}
+
+.settings-loading-skeleton__row:nth-child(3n + 2) .settings-loading-skeleton__title {
+  width: min(34%, 180px);
+}
+
+.settings-loading-skeleton__row:nth-child(3n) .settings-loading-skeleton__description {
+  width: min(58%, 340px);
+}
+
+.settings-loading-skeleton__control {
+  width: 72px;
+  height: 30px;
+  flex: 0 0 auto;
+}
+
+.settings-loading-skeleton__control--wide {
+  width: 104px;
 }
 
 /* ── Key/value facts (About build info, agent facts) ── */
@@ -798,6 +812,7 @@ textarea.settings-input {
   font-size: var(--control-ui-text-lg);
   font-weight: 700;
   letter-spacing: 0.08em;
+  user-select: all;
 }
 
 /* ── Mobile ── */
@@ -805,6 +820,23 @@ textarea.settings-input {
 @media (max-width: 640px) {
   .settings-page {
     padding-inline: var(--space-3);
+  }
+
+  .shell--settings .content:not(.content--custodian),
+  .content:has(.plugins-hub-header) {
+    --content-inline-padding: var(--space-3);
+    --settings-header-inline-padding: 0;
+    padding: var(--space-3) var(--space-3) var(--space-4);
+  }
+
+  .shell--settings .content:has(.settings-workspace) .content-header,
+  .content:has(.plugins-hub-header) .content-header,
+  .shell--settings .settings-page,
+  .content:has(.plugins-hub-header) .settings-page,
+  .shell--settings .config-content,
+  .shell--settings .config-lead,
+  .shell--settings .config-content-callout {
+    padding-inline: 0;
   }
 
   .settings-section__header:has(.settings-section__copy) {

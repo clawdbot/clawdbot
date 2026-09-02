@@ -15,6 +15,7 @@ import {
   finishCronRunReceiptInDatabase,
   inspectActiveCronRunReceipt,
   isCronRunReceiptOwnerStale,
+  listActiveCronRunReceiptJobIdsInDatabase,
   type CronRunReceiptRecoveryCandidate,
 } from "../store/run-receipt-store.js";
 import type { CronJob } from "../types.js";
@@ -68,6 +69,7 @@ function repairInDatabase(params: {
   database: OpenClawStateDatabase;
   proposal: CronRunRecoveryProposal;
   proposedReceiptIsStale: boolean;
+  mode: "startup" | "reclaim";
 }): CronRunRecoveryResult {
   const { state, database, proposal } = params;
   const storeKey = cronStoreKey(state.deps.storePath);
@@ -166,6 +168,7 @@ function repairInDatabase(params: {
         taskRunId: task.taskRunId,
         runningAtMs: proposal.runningAtMs,
         nowMs,
+        recoverInterruptedOneShot: params.mode === "startup",
         deferredNotifications: notifications,
       });
       replacementAtMs = interrupted.replacementAtMs;
@@ -176,6 +179,11 @@ function repairInDatabase(params: {
           nowMs,
           deferredNotifications: notifications,
         });
+      }
+      if (params.mode === "startup" && job.schedule.kind === "at") {
+        // Commit the pending occurrence with receipt retirement, so another
+        // restart before admission cannot consume it as terminal run history.
+        job.state.startupCatchupAtMs = job.state.nextRunAtMs;
       }
     }
     if (proposal.receipt) {
@@ -224,7 +232,9 @@ function repairInDatabase(params: {
     kind: "repaired",
     ...(interrupted ? { interrupted } : {}),
     notifications,
-    ...(replacementAtMs === undefined && proposal.runningAtMs !== undefined
+    ...(replacementAtMs === undefined &&
+    proposal.runningAtMs !== undefined &&
+    !(params.mode === "startup" && interrupted && job.schedule.kind === "at")
       ? { skipStartupCatchup: true }
       : {}),
   };
@@ -284,6 +294,7 @@ export function recoverNonTerminalCronRunReceipts(state: CronServiceState): {
 export function recoverCronRunProposal(
   state: CronServiceState,
   proposal: CronRunRecoveryProposal,
+  mode: "startup" | "reclaim" = "reclaim",
 ): CronRunRecoveryResult {
   // Process liveness is observed before taking SQLite's write lock, but the
   // transaction decides only after proving this exact receipt is still active.
@@ -291,7 +302,7 @@ export function recoverCronRunProposal(
     ? isCronRunReceiptOwnerStale(proposal.receipt, state.deps.nowMs())
     : true;
   const result = runOpenClawStateWriteTransaction(
-    (database) => repairInDatabase({ state, database, proposal, proposedReceiptIsStale }),
+    (database) => repairInDatabase({ state, database, proposal, proposedReceiptIsStale, mode }),
     {},
     { operationLabel: "cron.run-recovery" },
   );
@@ -317,17 +328,15 @@ export function recomputeUnownedCronSchedules(
       const notifications: DeferredCronNotifications = [];
       let changed = false;
       const jobs: CronJob[] = [];
-      for (const row of loadCronRows(db, storeKey)) {
-        if (
-          findActiveCronRunReceiptInDatabase({
-            database: db,
-            storePath: state.deps.storePath,
-            jobId: row.job_id,
-          })
-        ) {
+      const rows = loadCronRows(db, storeKey);
+      const decodedJobs = loadedCronStoreFromRows(rows).store.jobs;
+      const jobsById = new Map(decodedJobs.map((job) => [job.id, job]));
+      const activeJobIds = listActiveCronRunReceiptJobIdsInDatabase(db, state.deps.storePath);
+      for (const row of rows) {
+        if (activeJobIds.has(row.job_id)) {
           continue;
         }
-        const job = loadedCronStoreFromRows([row]).store.jobs[0];
+        const job = jobsById.get(row.job_id);
         if (!job) {
           continue;
         }

@@ -61,64 +61,100 @@ suite.define(() => {
       .toBe(true);
     expect(await thread.locator(".chat-virtual-row").count()).toBeLessThan(30);
 
-    const checkPlacement = async (edge: "first" | "last", sparse: boolean) => {
+    const checkPlacement = async (
+      edge: "first" | "last",
+      sparse: boolean,
+      expectedRowKey: string,
+    ) => {
       // Focused outliers stay mounted, so text visibility can precede the new
-      // virtual range. Wait for placement, keeping the same geometry bounds.
+      // virtual range. Require the gap beside that outlier and the normal range
+      // covering the requested viewport, not the previous range plus its outlier.
       await vi.waitFor(async () => {
-        const placement = await thread.evaluate((element, placementEdge) => {
-          const rows = [...element.querySelectorAll<HTMLElement>(".chat-virtual-row")];
-          const sizer = element.querySelector<HTMLElement>(".chat-virtual-sizer")!;
-          const focused = document.activeElement?.closest<HTMLElement>(".chat-virtual-row");
-          const edgeRow = placementEdge === "first" ? rows[0]! : rows.at(-1)!;
-          const gaps = rows.slice(1).map((row, index) => ({
-            skipped: Number(row.dataset.index) - Number(rows[index]!.dataset.index) - 1,
-            pixels: row.getBoundingClientRect().top - rows[index]!.getBoundingClientRect().bottom,
-          }));
-          return {
-            focused: focused === edgeRow,
-            edgeDelta:
-              placementEdge === "first"
-                ? edgeRow.getBoundingClientRect().top - sizer.getBoundingClientRect().top
-                : sizer.getBoundingClientRect().bottom - edgeRow.getBoundingClientRect().bottom,
-            gaps,
-            count: rows.length,
-          };
-        }, edge);
+        const placement = await thread.evaluate(
+          (element, { edge: placementEdge, sparse: isSparse }) => {
+            const rows = [...element.querySelectorAll<HTMLElement>(".chat-virtual-row")];
+            const sizer = element
+              .querySelector<HTMLElement>(".chat-virtual-sizer")!
+              .getBoundingClientRect();
+            const focused = document.activeElement?.closest<HTMLElement>(".chat-virtual-row");
+            const edgeRow = placementEdge === "first" ? rows[0]! : rows.at(-1)!;
+            const normalRows = isSparse ? rows.filter((row) => row !== edgeRow) : rows;
+            const viewportTop = element.getBoundingClientRect().top + element.clientTop;
+            const viewportBottom = viewportTop + element.clientHeight;
+            const atStart = isSparse ? placementEdge === "last" : placementEdge === "first";
+            const gaps = rows.slice(1).map((row, index) => ({
+              skipped: Number(row.dataset.index) - Number(rows[index]!.dataset.index) - 1,
+              pixels: row.getBoundingClientRect().top - rows[index]!.getBoundingClientRect().bottom,
+            }));
+            return {
+              focused: focused === edgeRow,
+              focusedRowKey: focused?.dataset.virtualRowKey,
+              edgeDelta:
+                placementEdge === "first"
+                  ? edgeRow.getBoundingClientRect().top - sizer.top
+                  : sizer.bottom - edgeRow.getBoundingClientRect().bottom,
+              scrollEdgeDelta: atStart
+                ? element.scrollTop
+                : element.scrollHeight - element.clientHeight - element.scrollTop,
+              // Scroller padding is not missing transcript content.
+              uncovered: [
+                normalRows[0]!.getBoundingClientRect().top - Math.max(viewportTop, sizer.top),
+                Math.min(viewportBottom, sizer.bottom) -
+                  normalRows.at(-1)!.getBoundingClientRect().bottom,
+              ],
+              gaps,
+              count: rows.length,
+            };
+          },
+          { edge, sparse },
+        );
         expect(placement.focused).toBe(true);
+        expect(placement.focusedRowKey).toBe(expectedRowKey);
         expect(Math.abs(placement.edgeDelta)).toBeLessThanOrEqual(2);
         expect(placement.count).toBeLessThan(30);
         expect(placement.gaps.filter((gap) => gap.skipped > 0)).toHaveLength(sparse ? 1 : 0);
-        for (const gap of placement.gaps) {
+        for (const [index, gap] of placement.gaps.entries()) {
           if (gap.skipped > 0) {
+            expect(index).toBe(edge === "first" ? 0 : placement.gaps.length - 1);
             expect(gap.pixels).toBeGreaterThan(1000);
           } else {
+            expect(gap.skipped).toBe(0);
             expect(Math.abs(gap.pixels)).toBeLessThanOrEqual(1);
           }
         }
+        expect(Math.abs(placement.scrollEdgeDelta)).toBeLessThanOrEqual(1);
+        for (const pixels of placement.uncovered) {
+          expect(pixels).toBeLessThanOrEqual(2);
+        }
       });
     };
-    await checkPlacement("last", true);
+    await checkPlacement("last", true, focusedRowKey);
     await thread.evaluate((element) => {
       element.scrollTop = element.scrollHeight;
     });
     await page.getByText(/^focus retention message 200\n/).waitFor({ state: "visible" });
-    await checkPlacement("last", false);
+    await checkPlacement("last", false, focusedRowKey);
 
     await thread.evaluate((element) => {
       element.scrollTop = 0;
     });
     await page.getByText(/^focus retention message 1\n/).waitFor({ state: "visible" });
-    await thread.locator("button.chat-reply-btn").first().focus();
+    const firstAction = thread.locator("button.chat-reply-btn").first();
+    await firstAction.focus();
+    const firstRowKey = await firstAction.evaluate(
+      (element) => element.closest<HTMLElement>(".chat-virtual-row")?.dataset.virtualRowKey ?? "",
+    );
+    expect(firstRowKey).not.toBe("");
     await thread.evaluate((element) => {
       element.scrollTop = element.scrollHeight;
     });
     await page.getByText(/^focus retention message 200\n/).waitFor({ state: "visible" });
-    await checkPlacement("first", true);
+    await checkPlacement("first", true, firstRowKey);
     await thread.evaluate((element) => {
       element.scrollTop = 0;
     });
     await page.getByText(/^focus retention message 1\n/).waitFor({ state: "visible" });
-    await checkPlacement("first", false);
+    await checkPlacement("first", false, firstRowKey);
     await page.close();
   });
 });

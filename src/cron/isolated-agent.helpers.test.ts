@@ -1,11 +1,16 @@
 // Isolated agent helper tests cover utility behavior used by cron agent runs.
 import { describe, expect, it } from "vitest";
+import { buildEmbeddedRunPayloads } from "../agents/embedded-agent-runner/run/payloads.js";
 import {
   getReplyPayloadMetadata,
   setReplyPayloadMetadata,
   type ReplyPayload,
 } from "../auto-reply/reply-payload.js";
 import { resolveCronPayloadOutcome } from "./isolated-agent/helpers.js";
+
+function createToolWarning(text: string, toolName: string): ReplyPayload {
+  return setReplyPayloadMetadata({ text, isError: true }, { toolErrorWarning: { toolName } });
+}
 
 describe("resolveCronPayloadOutcome", () => {
   it("uses the last non-empty non-error payload as summary and output", () => {
@@ -21,10 +26,7 @@ describe("resolveCronPayloadOutcome", () => {
   it("returns a fatal error from the last error payload when no success follows", () => {
     const result = resolveCronPayloadOutcome({
       payloads: [
-        {
-          text: "⚠️ 🛠️ Exec failed: /bin/bash: line 1: python: command not found",
-          isError: true,
-        },
+        createToolWarning("⚠️ Exec failed: /bin/bash: line 1: python: command not found", "exec"),
       ],
     });
 
@@ -40,7 +42,7 @@ describe("resolveCronPayloadOutcome", () => {
     ["reasoning-prefixed", "<think>internal reasoning</think>\nNO_REPLY"],
   ])("keeps tool warnings fatal when terminal output is a silent %s", (_label, text) => {
     const result = resolveCronPayloadOutcome({
-      payloads: [{ text: "⚠️ 🛠️ Bash failed: mount unavailable", isError: true }],
+      payloads: [createToolWarning("⚠️ Bash failed: mount unavailable", "bash")],
       finalAssistantVisibleText: text,
       preferFinalAssistantVisibleText: true,
     });
@@ -51,7 +53,12 @@ describe("resolveCronPayloadOutcome", () => {
 
   it("keeps genuine visible terminal output as recovery proof", () => {
     const result = resolveCronPayloadOutcome({
-      payloads: [{ text: "⚠️ 🛠️ Bash failed: mount unavailable", isError: true }],
+      payloads: buildEmbeddedRunPayloads({
+        assistantTexts: [],
+        lastAssistant: undefined,
+        lastToolError: { toolName: "bash", error: "mount unavailable" },
+        sessionKey: "cron:test",
+      }),
       finalAssistantVisibleText: "Mount restored; report written.",
       preferFinalAssistantVisibleText: true,
     });
@@ -62,12 +69,7 @@ describe("resolveCronPayloadOutcome", () => {
 
   it("lets preferred final assistant text recover a plain tool warning", () => {
     const result = resolveCronPayloadOutcome({
-      payloads: [
-        {
-          text: "⚠️ 🛠️ jq -s '{total:length}' (agent) failed",
-          isError: true,
-        },
-      ],
+      payloads: [createToolWarning("⚠️ Exec failed: jq -s '{total:length}'", "exec")],
       finalAssistantVisibleText: "**Clawsweeper 6h report**\nClosed: 34 total",
       preferFinalAssistantVisibleText: true,
     });
@@ -84,14 +86,8 @@ describe("resolveCronPayloadOutcome", () => {
   it("lets final assistant text recover multiple plain tool warnings globally", () => {
     const result = resolveCronPayloadOutcome({
       payloads: [
-        {
-          text: "⚠️ 🛠️ zsh (agent) failed",
-          isError: true,
-        },
-        {
-          text: "⚠️ 🛠️ node (agent) failed",
-          isError: true,
-        },
+        createToolWarning("⚠️ Exec failed: zsh", "exec"),
+        createToolWarning("⚠️ Bash failed: node", "Bash"),
       ],
       finalAssistantVisibleText: "**Daily GTM analytics**\nPostHog and revenue summary complete.",
     });
@@ -165,14 +161,14 @@ describe("resolveCronPayloadOutcome", () => {
 
   it("treats trailing message delivery warnings as non-fatal when final assistant text exists", () => {
     const result = resolveCronPayloadOutcome({
-      payloads: [{ text: "Draft output" }, { text: "⚠️ ✉️ Message failed", isError: true }],
+      payloads: [{ text: "Draft output" }, createToolWarning("⚠️ Message failed", "message")],
       finalAssistantVisibleText: "Final cron report",
       preferFinalAssistantVisibleText: true,
     });
 
     expect(result.hasFatalErrorPayload).toBe(false);
     expect(result.embeddedRunError).toBeUndefined();
-    expect(result.pendingPresentationWarningError).toBe("⚠️ ✉️ Message failed");
+    expect(result.pendingPresentationWarningError).toBe("⚠️ Message failed");
     expect(result.summary).toBe("Final cron report");
     expect(result.outputText).toBe("Final cron report");
     expect(result.deliveryPayloads).toEqual([{ text: "Final cron report" }]);
@@ -180,39 +176,44 @@ describe("resolveCronPayloadOutcome", () => {
 
   it("keeps trailing canvas warnings fatal even when earlier assistant output exists", () => {
     const result = resolveCronPayloadOutcome({
-      payloads: [{ text: "Saved report to disk." }, { text: "⚠️ 🖼️ Canvas failed", isError: true }],
+      payloads: [
+        { text: "Saved report to disk." },
+        createToolWarning("⚠️ Canvas failed", "canvas"),
+      ],
+      finalAssistantVisibleText: "Saved report to disk.",
     });
 
     expect(result.hasFatalErrorPayload).toBe(true);
     expect(result.pendingPresentationWarningError).toBeUndefined();
-    expect(result.embeddedRunError).toBe("⚠️ 🖼️ Canvas failed");
-    expect(result.deliveryPayloads).toEqual([{ text: "⚠️ 🖼️ Canvas failed", isError: true }]);
+    expect(result.embeddedRunError).toBe("⚠️ Canvas failed");
+    expect(result.deliveryPayloads).toEqual([{ text: "⚠️ Canvas failed", isError: true }]);
   });
 
   it("keeps standalone presentation warnings fatal when there is no cron output", () => {
     const result = resolveCronPayloadOutcome({
-      payloads: [{ text: "⚠️ ✉️ Message failed", isError: true }],
+      payloads: [createToolWarning("⚠️ Message failed", "message")],
     });
 
     expect(result.hasFatalErrorPayload).toBe(true);
-    expect(result.embeddedRunError).toBe("⚠️ ✉️ Message failed");
-    expect(result.deliveryPayloads).toEqual([{ text: "⚠️ ✉️ Message failed", isError: true }]);
+    expect(result.embeddedRunError).toBe("⚠️ Message failed");
+    expect(result.deliveryPayloads).toEqual([{ text: "⚠️ Message failed", isError: true }]);
   });
 
-  it("keeps real trailing errors fatal even when earlier assistant output exists", () => {
-    const result = resolveCronPayloadOutcome({
-      payloads: [{ text: "Partial result" }, { text: "model provider unreachable", isError: true }],
-      finalAssistantVisibleText: "Partial result",
-      preferFinalAssistantVisibleText: true,
-    });
+  it.each(["model provider unreachable", "⚠️ 🛠️ Exec failed", "⚠️ ✉️ Message failed"])(
+    "keeps unmarked trailing error %s fatal despite earlier output",
+    (errorText) => {
+      const result = resolveCronPayloadOutcome({
+        payloads: [{ text: "Partial result" }, { text: errorText, isError: true }],
+        finalAssistantVisibleText: "Partial result",
+        preferFinalAssistantVisibleText: true,
+      });
 
-    expect(result.hasFatalErrorPayload).toBe(true);
-    expect(result.embeddedRunError).toBe("model provider unreachable");
-    expect(result.outputText).toBe("model provider unreachable");
-    expect(result.deliveryPayloads).toEqual([
-      { text: "model provider unreachable", isError: true },
-    ]);
-  });
+      expect(result.hasFatalErrorPayload).toBe(true);
+      expect(result.embeddedRunError).toBe(errorText);
+      expect(result.outputText).toBe(errorText);
+      expect(result.deliveryPayloads).toEqual([{ text: errorText, isError: true }]);
+    },
+  );
 
   it("keeps error payloads fatal when the run also reported a run-level error", () => {
     const result = resolveCronPayloadOutcome({
@@ -370,8 +371,8 @@ describe("resolveCronPayloadOutcome", () => {
     },
     {
       name: "matching recovered tool warning",
-      texts: ["⚠️ 🛠️ Exec failed"],
-      finalText: "⚠️ 🛠️ Exec failed",
+      texts: ["⚠️ Exec failed"],
+      finalText: "⚠️ Exec failed",
       speech: false,
       isError: true,
     },
@@ -382,6 +383,7 @@ describe("resolveCronPayloadOutcome", () => {
         { text, ...(isError ? { isError } : {}) },
         {
           tts,
+          ...(isError ? { toolErrorWarning: { toolName: "exec" } } : {}),
           sourceReplyTranscriptMirror: { sessionKey: "agent:main:source" },
           pendingFinalDeliveryCompletion: {
             deliveryId: "delivery-1",

@@ -165,7 +165,7 @@ describe("cron service timer regressions", () => {
           status: "error",
           error: params.firstError ?? "429 rate limit exceeded",
         })
-        .mockResolvedValueOnce({ status: "ok", summary: "done" });
+        .mockResolvedValueOnce({ status: "ok", summary: "done", delivered: true });
       const state = createCronServiceState({
         cronEnabled: true,
         storePath: store.storePath,
@@ -216,6 +216,67 @@ describe("cron service timer regressions", () => {
     );
     expect(overloadedJob?.state.lastStatus).toBe("ok");
     expect(overloadedResult.runIsolatedAgentJob).toHaveBeenCalledTimes(2);
+  });
+
+  it("#131491: retains a deleteAfterRun one-shot whose stale guard suppressed its delivery", async () => {
+    const store = timerRegressionFixtures.makeStorePath();
+    const scheduledAt = Date.parse("2026-02-06T10:00:00.000Z");
+    const firedAt = scheduledAt + 18 * 60 * 60_000;
+
+    const cronJob = createIsolatedRegressionJob({
+      id: "oneshot-stale-delivery",
+      name: "late report",
+      scheduledAt,
+      schedule: { kind: "at", at: new Date(scheduledAt).toISOString() },
+      payload: { kind: "agentTurn", message: "summarize and report" },
+      state: { nextRunAtMs: scheduledAt },
+    });
+    cronJob.deleteAfterRun = true;
+    await saveCronStore(store.storePath, { version: 1, jobs: [cronJob] });
+
+    // Execution succeeded, but the delivery owner rejected its stale output.
+    const runIsolatedAgentJob = vi.fn().mockResolvedValue({
+      status: "ok",
+      summary: "report finished",
+      outputText: "report finished",
+      delivered: false,
+      deliveryAttempted: true,
+      deliveryState: {
+        delivered: false,
+        status: "not-delivered",
+        error: "skipping stale delivery scheduled at 2026-02-06T10:00:00.000Z, started 1080m late",
+        failureNotification: { status: "not-requested" },
+      },
+    });
+    const state = createCronServiceState({
+      cronEnabled: true,
+      storePath: store.storePath,
+      log: noopLogger,
+      nowMs: () => firedAt,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeat: vi.fn(),
+      runIsolatedAgentJob,
+    });
+
+    await onTimer(state);
+
+    const persisted = await loadCronStore(store.storePath);
+    expect(persisted.jobs).toHaveLength(1);
+    const job = requireJob({ store: persisted }, cronJob.id);
+    expect(job.enabled).toBe(false);
+    expect(job.state.nextRunAtMs).toBeUndefined();
+    expect(job.state.lastStatus).toBe("ok");
+    expect(job.state.lastDelivered).toBe(false);
+    expect(job.state.lastDeliveryStatus).toBe("not-delivered");
+    expect(job.state.lastDeliveryError).toContain("skipping stale delivery");
+
+    // A fresh scheduler must retain the evidence without replaying completed work.
+    stop(state);
+    const restarted = createCronServiceState(state.deps);
+    await onTimer(restarted);
+    expect(runIsolatedAgentJob).toHaveBeenCalledTimes(1);
+    expect((await loadCronStore(store.storePath)).jobs).toEqual(persisted.jobs);
+    stop(restarted);
   });
 
   it("#24355: one-shot job disabled after max transient retries", async () => {
@@ -1732,7 +1793,7 @@ describe("cron service timer regressions", () => {
     }
   });
 
-  it("does not persist retired scheduled outcomes after restart generation advance", async () => {
+  it("recovers completed scheduled outcomes after restart generation advance", async () => {
     const store = timerRegressionFixtures.makeStorePath();
     const scheduledAt = Date.parse("2026-05-13T12:45:00.000Z");
     const cronJob = createDueIsolatedJob({
@@ -1767,8 +1828,8 @@ describe("cron service timer regressions", () => {
 
     const persisted = await loadCronStore(store.storePath);
     const persistedJob = persisted.jobs.find((job) => job.id === cronJob.id);
-    expect(persistedJob?.state.lastStatus).not.toBe("ok");
-    expect(persistedJob?.state.runningAtMs).toBe(scheduledAt);
+    expect(persistedJob?.state.lastStatus).toBe("ok");
+    expect(persistedJob?.state.runningAtMs).toBeUndefined();
   });
 
   it("releases due-job reservations instead of admitting workers after scheduler stop wins", async () => {
@@ -2519,7 +2580,7 @@ describe("cron service timer regressions", () => {
     }
   });
 
-  it("does not persist stale startup catch-up outcomes after the old service stops", async () => {
+  it("recovers stopped catch-up outcomes without overwriting replacement reservations", async () => {
     resetTaskRegistryForTests();
     const store = timerRegressionFixtures.makeStorePath();
     const scheduledAt = Date.parse("2026-05-10T08:58:45.000Z");
@@ -2582,8 +2643,8 @@ describe("cron service timer regressions", () => {
     const persistedReplacementClaimedJob = persisted.jobs.find(
       (entry) => entry.id === replacementClaimedJob.id,
     );
-    expect(persistedJob?.state.runningAtMs).toBe(scheduledAt);
-    expect(persistedJob?.state.lastStatus).toBeUndefined();
+    expect(persistedJob?.state.runningAtMs).toBeUndefined();
+    expect(persistedJob?.state.lastStatus).toBe("ok");
     expect(persistedUnstartedJob?.state.runningAtMs).toBeUndefined();
     expect(persistedUnstartedJob?.state.lastStatus).toBeUndefined();
     expect(persistedReplacementClaimedJob?.state.queuedAtMs).toBe(replacementReservationMs);

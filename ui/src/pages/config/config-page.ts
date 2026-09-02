@@ -10,7 +10,7 @@ import type {
 } from "../../../../packages/gateway-protocol/src/index.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ModelCatalogEntry } from "../../api/types.ts";
-import { titleForRoute } from "../../app-navigation.ts";
+import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
 import { pathForRoute, type RouteId } from "../../app-route-paths.ts";
 import {
   applicationContext,
@@ -43,11 +43,12 @@ import {
 import { renderLearnMoreLink, renderSettingsPageHeader } from "../../components/settings-ui.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { i18n, isSupportedLocale, t, type Locale } from "../../i18n/index.ts";
+import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import { resolveControlUiServerQueueMode } from "../../lib/chat/follow-up-mode.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { isMissingOperatorReadScopeError } from "../../lib/gateway-errors.ts";
 import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
-import { loadModels } from "../../lib/model-catalog-store.ts";
+import { loadModelCatalog } from "../../lib/model-catalog-store.ts";
 import { resolveScrollBehavior } from "../../lib/scroll-behavior.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { PollController } from "../../lit/poll-controller.ts";
@@ -88,6 +89,8 @@ import {
   type ConfigViewState,
 } from "./view.ts";
 
+registerSettingsEnglish();
+
 export type { ConfigPageId } from "./config-sections.ts";
 
 type ConfigFormMode = "form" | "raw";
@@ -98,6 +101,7 @@ type ConfigPageSetting =
   | "textScale"
   | "sidebarLiveActivity"
   | "chatMessageMaxWidth"
+  | "chatCollapseTaskProgress"
   | "showAdvancedSettings"
   | "chatSendShortcut"
   | "chatFollowUpMode"
@@ -113,6 +117,7 @@ const MOVED_SECTION_ROUTES: Record<string, { routeId: RouteId; keepSection: bool
   "communications:channels": { routeId: "channels", keepSection: false },
   "communications:broadcast": { routeId: "advanced", keepSection: true },
   "communications:talk": { routeId: "talk", keepSection: true },
+  "appearance:wizard": { routeId: "advanced", keepSection: true },
   "automation:approvals": { routeId: "security", keepSection: true },
   "ai-agents:memory": { routeId: "memory", keepSection: true },
   "ai-agents:models": { routeId: "model-providers", keepSection: false },
@@ -196,7 +201,7 @@ function renderConfigPageSubtitle(pageId: ConfigPageId) {
     case "updates":
       return t("updates.page.intro");
     default:
-      return undefined;
+      return subtitleForRoute(pageId);
   }
 }
 
@@ -511,7 +516,7 @@ export class ConfigPage extends OpenClawLightDomElement {
     this.syncUpdateCountdownPolling();
     this.scrollToPendingRouteTarget();
     // Device labels stay hidden until the user grants media permission; each
-    // refresh button next to a picker requests its permission explicitly.
+    // picker requests its permission explicitly when opened.
     if (this.pageId === "appearance" && !this.microphoneLoaded) {
       this.microphoneLoaded = true;
       void this.refreshMicrophones(false);
@@ -808,8 +813,8 @@ export class ConfigPage extends OpenClawLightDomElement {
       this.systemInfoGatewaySource === gatewaySource &&
       this.context.gateway.snapshot.client === client &&
       this.context.agentSelection.state.selectedId === agentId;
-    const promise = loadModels(client, { agentId, preparedOnly: true })
-      .then((models) => {
+    const promise = loadModelCatalog(client, { agentId, preparedOnly: true })
+      .then(({ models }) => {
         if (isCurrent()) {
           this.sessionObserverModels = models;
           this.sessionObserverModelsClient = client;
@@ -1101,6 +1106,8 @@ export class ConfigPage extends OpenClawLightDomElement {
         canHoldUpdate: canCallGatewayMethod(gatewaySnapshot, "update.hold", "operator.admin"),
         updateBusy: this.isUpdateBusy(),
         onChannelChange: (channel) => runtimeConfig.patchForm(["update", "channel"], channel),
+        onUpdateChecksChange: (enabled) =>
+          runtimeConfig.patchForm(["update", "checkOnStart"], enabled),
         onAutomaticUpdatesChange: (enabled) =>
           runtimeConfig.patchForm(["update", "auto", "enabled"], enabled),
         onUpdateNow: () =>
@@ -1218,7 +1225,6 @@ export class ConfigPage extends OpenClawLightDomElement {
         ? localePref.resetValue
         : undefined,
       onLocaleChange: (locale) => this.setLocale(locale),
-      resetLocale: () => this.resetLocale(),
       setTheme: (theme, transitionContext) => this.setTheme(theme, transitionContext),
       setThemeMode: (mode, transitionContext) => this.setThemeMode(mode, transitionContext),
       setAccent: (accent) =>
@@ -1255,6 +1261,9 @@ export class ConfigPage extends OpenClawLightDomElement {
       setSessionCatalogHidden: setStoredSessionCatalogHidden,
       chatMessageMaxWidth: this.settings.chatMessageMaxWidth,
       setChatMessageMaxWidth: (value) => this.setSetting("chatMessageMaxWidth", value),
+      chatCollapseTaskProgress: this.settings.chatCollapseTaskProgress === true,
+      setChatCollapseTaskProgress: (enabled) =>
+        this.setSetting("chatCollapseTaskProgress", enabled),
       showAdvancedSettings: this.settings.showAdvancedSettings === true,
       setShowAdvancedSettings: (enabled) => this.setSetting("showAdvancedSettings", enabled),
       forceShowAdvanced: this.pageId === "advanced",
@@ -1299,7 +1308,6 @@ export class ConfigPage extends OpenClawLightDomElement {
       chatSendShortcutResetValue:
         chatSendShortcutPref.resetValue ?? UI_APPEARANCE_DEFAULTS.chatSendShortcut,
       setChatSendShortcut: (value) => this.setSetting("chatSendShortcut", value),
-      resetChatSendShortcut: () => this.resetSyncedAppearancePref("chatSendShortcut"),
       chatFollowUpMode: this.settings.chatFollowUpMode,
       chatFollowUpModeOverridden: chatFollowUpModePref.overridden,
       chatFollowUpModeProvenance: chatFollowUpModePref.provenance,
@@ -1336,6 +1344,7 @@ export class ConfigPage extends OpenClawLightDomElement {
       assistantName: this.context.config.current.assistantIdentity.name,
       configPath: configState.configSnapshot?.path ?? null,
       navRootLabel: this.pageId === "advanced" ? undefined : configPageTitle(this.pageId),
+      showSectionDocs: this.pageId !== "communications",
       sectionPrelude:
         activeSection === "browser" && browserPanelAvailable
           ? renderBrowserLinkPreferencesRow({
@@ -1353,9 +1362,13 @@ export class ConfigPage extends OpenClawLightDomElement {
         this.context.nativeNotifications?.requestPermission(),
       onNativeNotificationsSendTest: () => this.context.nativeNotifications?.sendTest(),
       webPush: this.context.webPush.snapshot,
-      onWebPushSubscribe: () => void this.context.webPush.enable(),
-      onWebPushUnsubscribe: () => void this.context.webPush.disable(),
-      onWebPushTest: () => void this.context.webPush.sendTest(),
+      onWebPushSubscribe: () => void this.context.webPush.run({ kind: "enable" }),
+      onWebPushUnsubscribe: () => void this.context.webPush.run({ kind: "disable" }),
+      onWebPushTest: () => void this.context.webPush.run({ kind: "test" }),
+      onWebPushSetUserPreferences: (preferences) =>
+        void this.context.webPush.run({ kind: "set", scope: "user", preferences }),
+      onWebPushSetDevicePreferences: (preferences) =>
+        void this.context.webPush.run({ kind: "set", scope: "device", preferences }),
     };
     if (this.pageId === "mcp") {
       return renderMcp({
@@ -1422,7 +1435,6 @@ export class ConfigPage extends OpenClawLightDomElement {
           }
           runtimeConfig.patchForm(["browser", "enabled"], false);
         },
-        onBrowserEnabledReset: () => runtimeConfig.removeFormValue(["browser", "enabled"]),
         onToolProfileChange: (profile) => {
           if (profile === "full") {
             runtimeConfig.removeFormValue(["tools", "profile"]);
@@ -1430,7 +1442,6 @@ export class ConfigPage extends OpenClawLightDomElement {
           }
           runtimeConfig.patchForm(["tools", "profile"], profile);
         },
-        onToolProfileReset: () => runtimeConfig.removeFormValue(["tools", "profile"]),
         editor: renderConfig({ ...props, embeddedEditor: true }),
       });
     }

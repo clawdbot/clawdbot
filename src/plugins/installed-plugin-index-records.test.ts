@@ -11,9 +11,10 @@ import {
 } from "../config/plugin-install-record-map.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
+import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
+import * as stateDbReadOnly from "../state/openclaw-state-db-readonly.js";
 import {
   closeOpenClawStateDatabaseForTest,
-  OPENCLAW_STATE_SCHEMA_VERSION,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
 import { withMockedWindowsPlatform } from "../test-utils/vitest-spies.js";
@@ -23,11 +24,13 @@ import {
   resolvePluginNpmGenerationProjectDir,
   resolvePluginNpmProjectDir,
 } from "./install-paths.js";
+import { inspectPersistedInstalledPluginIndexInstallRecordsSync } from "./installed-plugin-index-record-state.js";
 import {
   clearLoadInstalledPluginIndexInstallRecordsCache,
   loadInstalledPluginIndexInstallRecords,
   loadInstalledPluginIndexInstallRecordsSync,
   readPersistedInstalledPluginIndexInstallRecords,
+  readPersistedInstalledPluginIndexInstallRecordsSync,
   recordPluginInstallInRecords,
   removePluginInstallRecordFromRecords,
   resolveInstalledPluginIndexRecordsStorePath,
@@ -107,6 +110,50 @@ afterEach(() => {
 });
 
 describe("plugin index install records store", () => {
+  it.each([
+    { code: "EACCES" },
+    { code: "ERR_SQLITE_ERROR", errcode: 5, errstr: "database is locked" },
+    { code: "ERR_SQLITE_ERROR", errcode: 6, errstr: "database table is locked" },
+  ])("preserves read errors without recovery or cache poisoning: %j", async (details) => {
+    const stateDir = tempDirs.make("openclaw-plugin-index-records-");
+    const records = { authoritative: { source: "npm", spec: "authoritative@1.0.0" } } as const;
+    await writePersistedInstalledPluginIndexInstallRecords(records, { stateDir, candidates: [] });
+    writeManagedNpmPlugin({
+      stateDir,
+      packageName: "recoverable",
+      pluginId: "recoverable",
+      version: "1.0.0",
+    });
+    const error = Object.assign(new Error("plugin index read failed"), details);
+    const readSpy = vi.spyOn(stateDbReadOnly, "withExistingOpenClawStateDatabaseReadOnly");
+    const scanSpy = vi.spyOn(fs, "readdirSync");
+    for (const read of [
+      inspectPersistedInstalledPluginIndexInstallRecordsSync,
+      readPersistedInstalledPluginIndexInstallRecordsSync,
+      readPersistedInstalledPluginIndexInstallRecords,
+      loadInstalledPluginIndexInstallRecordsSync,
+      loadInstalledPluginIndexInstallRecords,
+    ]) {
+      readSpy.mockImplementationOnce(() => {
+        throw error;
+      });
+      await expect
+        .soft(
+          Promise.resolve().then(() => read({ stateDir })),
+          read.name,
+        )
+        .rejects.toBe(error);
+    }
+    expect(scanSpy).not.toHaveBeenCalled();
+    readSpy.mockRestore();
+    scanSpy.mockRestore();
+
+    const restored = await loadInstalledPluginIndexInstallRecords({ stateDir });
+    expect(restored.authoritative).toEqual(records.authoritative);
+    expect(restored.recoverable).toMatchObject({ source: "npm", spec: "recoverable@1.0.0" });
+    expect(loadInstalledPluginIndexInstallRecordsSync({ stateDir })).toEqual(restored);
+  });
+
   it("writes machine-managed install records outside config", async () => {
     const stateDir = tempDirs.make("openclaw-plugin-index-records-");
     const candidate = createPluginCandidate(stateDir, "twitch");

@@ -77,6 +77,21 @@ function normalizeSlackNameSlugEntry(entry: string): string | null {
 }
 
 export const slackIngressIdentity = defineStableChannelIngressIdentity({
+  resolveParticipant: (subject) => {
+    const qualified = subject.aliases?.workspaceSenderId;
+    if (typeof qualified !== "string") {
+      return undefined;
+    }
+    const normalized = normalizeSlackWorkspaceUserEntry(qualified);
+    const target = normalized ? parseSlackTarget(normalized) : undefined;
+    return target?.teamId
+      ? {
+          domain: target.teamId,
+          idKind: target.id.startsWith("b") ? "bot-id" : "user-id",
+          id: target.id,
+        }
+      : undefined;
+  },
   key: "senderId",
   kind: "stable-id",
   // Direct Slack transports bind this id, while relay mode only authenticates its relay peer.

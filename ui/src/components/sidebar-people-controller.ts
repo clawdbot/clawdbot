@@ -73,12 +73,6 @@ export class SidebarPeopleController implements ReactiveController {
       return;
     }
     // Input modality belongs to the runtime; row intent only warms its lazy code.
-    if (
-      event.type === "click" &&
-      !(event.target instanceof Element && event.target.closest(".sidebar-online__details"))
-    ) {
-      return;
-    }
     const generation = ++this.generation;
     this.pendingTarget = target;
     document.addEventListener("pointerdown", this.cancelPending, true);

@@ -327,6 +327,7 @@ describe("subagent registry sqlite store", () => {
         generation: 3,
         createdAt: 100,
         execution: {
+          status: "terminal",
           startedAt: 110,
           endedAt: 250,
           outcome: { status: "error" },

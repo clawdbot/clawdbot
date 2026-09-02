@@ -50,6 +50,20 @@ See [Configuration - agents](/gateway/config-agents) for:
   - `talk.silenceTimeoutMs`: when unset, Talk keeps the platform default pause window before sending the transcript (`700 ms on macOS and Android, 900 ms on iOS`)
   - `talk.realtime.consultRouting`: Gateway relay fallback for finalized realtime Talk transcripts that skip `openclaw_agent_consult`
 
+## `worktreeRoot`
+
+Optional global root directory for [managed worktree](/concepts/managed-worktrees) checkouts. Defaults to `<openclaw-state-dir>/worktrees`.
+
+```json5
+{
+  worktreeRoot: "/mnt/workspaces/openclaw-worktrees",
+}
+```
+
+Use an absolute Gateway-host path, `~` for the Gateway user's home directory, or `~/` followed by a folder inside it; relative paths are rejected. OpenClaw creates checkouts at `<worktreeRoot>/<repo-fingerprint>/<name>`. This setting applies to all agents and all managed-worktree owners, with no per-agent override. The shared state database and allocation limits remain under the existing state directory.
+
+Changes affect new allocations only. Registered worktrees retain their original paths for reuse, cleanup, and snapshot restore; existing checkouts are not moved automatically. Keep their original storage available while those records are still needed.
+
 ## Tools and custom providers
 
 Tool policy, experimental toggles, provider-backed tool config, and custom
@@ -428,6 +442,7 @@ See [Plugins](/tools/plugin).
       // dangerouslyAllowPrivateNetwork: true, // opt in only for trusted private-network access
       // allowPrivateNetwork: true, // legacy alias
       // allowedHostnames: ["*.example.com", "example.com", "localhost"],
+      // blockedHostnames: ["tracker.example.com", "*.ads.example.com"],
     },
     tabCleanup: {
       enabled: true,
@@ -485,6 +500,7 @@ See [Plugins](/tools/plugin).
 - In strict mode, remote CDP profile endpoints (`profiles.*.cdpUrl`) are subject to the same private-network blocking during reachability/discovery checks.
 - `ssrfPolicy.allowPrivateNetwork` remains supported as a legacy alias.
 - In strict mode, use the wildcard-aware `ssrfPolicy.allowedHostnames` for exact-host and pattern exceptions.
+- `ssrfPolicy.blockedHostnames` denies exact hosts and `*.example.com` subdomains before DNS and allow rules, including private-network exceptions. Wildcards exclude the apex; add `example.com` separately to block it. Empty or unset adds no denials.
 - Remote profiles are attach-only (start/stop/reset disabled).
 - `profiles.*.cdpUrl` accepts `http://`, `https://`, `ws://`, and `wss://`.
   Use HTTP(S) when you want OpenClaw to discover `/json/version`; use WS(S)
@@ -503,6 +519,8 @@ See [Plugins](/tools/plugin).
   behind a DevTools HTTP(S) discovery endpoint or direct WS(S) endpoint. In that
   mode OpenClaw passes the endpoint to Chrome MCP instead of using auto-connect;
   `userDataDir` is ignored for Chrome MCP launch arguments.
+  Valid endpoint arguments in `mcpArgs` take precedence over `cdpUrl`; see
+  [Custom Chrome MCP launch](/tools/browser#custom-chrome-mcp-launch).
 - `existing-session` profiles keep the current Chrome MCP route limits:
   snapshot/ref-driven actions instead of CSS-selector targeting, one-file upload
   hooks, no dialog timeout overrides, no `wait --load networkidle`, and no
@@ -531,7 +549,7 @@ See [Plugins](/tools/plugin).
   ui: {
     seamColor: "#FF4500",
     prefs: {
-      theme: "claw", // claw | knot | dash | custom
+      theme: "claw", // claw | knot | dash | absolutely | tide | beacon | phosphor | crt | manuscript | rose | miami | custom
       themeMode: "system", // light | dark | system
       locale: "en",
       chatShowThinking: true,
@@ -668,10 +686,13 @@ only while it is connected and the effective approved command remains allowed.
 
 For VncAuth, `desktop.host.passwordFile` stays on the node and is delivered only
 to the Gateway's authenticated relay. Without a password file, the Control UI
-prompts for the VNC password. macOS ARD credentials are always prompted per
-observation. The Gateway completes ARD or VNC authentication before exposing a
-no-auth RFB handshake to the browser, so credentials are not returned in URLs,
-logs, or RPC results.
+prompts for the VNC password. macOS ARD asks for account credentials when you
+first connect to a node in the Desktop panel. The panel keeps them in memory
+for reconnects to the same node. Closing the panel or selecting another desktop
+clears them; an authentication rejection asks for the password again. The
+Gateway completes ARD or VNC authentication before exposing a no-auth RFB
+handshake to the browser, so credentials are not returned in URLs, logs, or RPC
+results.
 
 Desktop bytes use a dedicated outbound binary WebSocket from the node. The
 normal node invoke remains only as the cancellable lifecycle handle and never
@@ -933,10 +954,12 @@ See [Multiple Gateways](/gateway/multiple-gateways).
 ```
 
 - `enabled`: enables TLS termination at the gateway listener (HTTPS/WSS) (default: `false`).
-- `autoGenerate`: auto-generates a local self-signed cert/key pair when explicit files are not configured; for local/dev use only. Generated files are published without overwriting existing paths and their parent directories are synchronized when the filesystem supports it; unsupported directory flushing emits a structured degraded-durability warning.
+- `autoGenerate`: defaults to `true`. Gateway startup generates a local self-signed cert/key pair only when both files are missing, including at configured paths; for local/dev use only. An existing partial pair is left untouched and startup fails. Generated files are published without overwriting existing paths and their parent directories are synchronized when the filesystem supports it; unsupported directory flushing emits a structured degraded-durability warning.
 - `certPath`: filesystem path to the TLS certificate file.
 - `keyPath`: filesystem path to the TLS private key file; keep permission-restricted.
 - `caPath`: optional CA bundle path for client verification or custom trust chains.
+
+Client commands such as `triage`, `gateway status`, and `gateway probe` only read the public certificate to determine a local TLS pin. They never generate or repair TLS files and do not need the server private key or CA bundle. Without `certPath`, they inspect `gateway/tls/gateway-cert.pem` under the state directory. A missing or unreadable certificate supplies no implicit pin; normal connection trust checks still apply. Start the Gateway to generate a missing pair, or provide the configured certificate files before connecting.
 
 ### `gateway.reload`
 
@@ -1001,15 +1024,15 @@ The bundled `crabbox` provider provisions a disposable machine through the local
 }
 ```
 
-- `settings.provider` (required): Crabbox backend passed through `--provider`; `aws` selects the direct AWS backend.
-- `settings.class` (required): Crabbox machine class passed to `--class`.
+- `settings.provider` (required): backend from the [Crabbox provider reference](https://crabbox.sh/providers/index.html), passed through `--provider`. Direct or coordinator-backed operation follows Crabbox's configuration.
+- `settings.class`: optional Crabbox machine class passed to `--class`. Omission leaves selection to Crabbox unless the placement supplies `machineClass`; OpenClaw does not invent a default or hardware size. Explicit `null`, empty or whitespace strings, and nonstring values are invalid. Edit classless profiles through **Settings → Advanced**.
 - `settings.ttl` and `settings.idleTimeout` (required): positive Go duration strings passed to `--ttl` and `--idle-timeout` as provider-side failsafes.
-- `settings.warmImage`: set to `true` to capture a reusable machine image at each stop and start later workers with the same profile from it; pair with `suspendAfter` so suspended sessions wake warm. Disabled by default because images incur provider snapshot storage charges and retain whatever `setup` wrote outside the scrubbed worker state. Capture adds at most about three minutes to a stop on providers with slow native snapshots, then degrades to cold-only provisioning.
+- `settings.warmImage`: prepares a project's committed checkout and node runtime for capture before enrollment, then starts later workers for that project and profile from the image. Without a prepared Git project, capture remains at eligible worker teardown. Pair with `suspendAfter` so suspended sessions can wake warm. Enabled by default when a configured or placement class is known and `setupEnv` is empty or omitted. Without an effective class, omission stays cold. A nonempty `setupEnv` keeps the default cold because forwarded host environment could leave setup-derived credentials in a shared image. Explicit `true` opts in but requires a known effective class before provider commands; explicit `false` always stays cold. The resolved class and original cold/checkpoint choice are recorded before allocation and remain fixed through retries and restart. Images incur provider snapshot storage charges and retain machine-level caches, including pristine Git seeds, alongside whatever `setup` wrote outside scrubbed worker state. Scrubbing has a three-minute timeout; checkpoint creation has a separate three-minute timeout, ten on `machine0`. An uncertain project capture blocks enrollment on its source but still permits lease cleanup. See [Warm images](/gateway/cloud-workers#warm-images) for refresh, retention, and Doctor migration and recovery.
 - `settings.binary`: optional absolute Crabbox executable path. Without it, OpenClaw checks the sibling Crabbox checkout, then executable entries on `PATH`, and finally invokes `crabbox` so a missing CLI remains a visible provider error.
 
 Unknown settings are rejected. Crabbox credentials and backend-specific account configuration remain owned by Crabbox; do not place them in `settings`. OpenClaw invokes only the local CLI and makes no provider network calls from this plugin. Provisioning passes one deterministic canonical lease ID through `--lease-id`, keeps `--slug` as display metadata only, and always passes `--keep=true`; OpenClaw owns the external lifecycle and destroys the lease with `crabbox stop --id <canonical-id>`. After an ambiguous result, Gateway reconciliation repeats the same fixed-ID operation. Crabbox must return the exactly attested lease or fail closed; OpenClaw never falls back to slug adoption or replacement allocation.
 
-For coordinator-backed AWS, Crabbox's own `aws.sshCIDRs` should include the Gateway host's outbound IPv4 as a `/32`. Verify it with `crabbox config show --json` and `crabbox doctor --provider aws --json` before provisioning; do not place this provider-ingress setting in OpenClaw `settings`. See [Coordinator-backed Crabbox](/gateway/cloud-workers#coordinator-backed-crabbox).
+Provider support and backend-specific setup belong to [Crabbox](https://crabbox.sh/providers/index.html). Configure credentials, coordinator access, networking, and snapshots there rather than duplicating them in OpenClaw settings. The installed backend must satisfy OpenClaw's [cloud-worker lifecycle requirements](/gateway/cloud-workers#crabbox-provider-support).
 
 Crabbox setup uses an environment-owned one-use pairing credential and the configured public Gateway URL. The provider returns the exact authenticated node id; the Gateway then installs its current bundle and transfers the workspace through authenticated node routes. For Codex remote execution, Crabbox prepares the bundled Codex plugin and pinned managed binary in the node's private state, and the Gateway requires the explicitly allowed `codex.exec-server.stdio.v1` command plus critical allow-once approval for each attempt. No OpenClaw worker child or worker slot is used in that mode. OpenClaw does not persist Crabbox SSH endpoint, key, host-key, or fallback-port output.
 
@@ -1130,11 +1153,11 @@ Gmail-path mappings receive a larger derived allowance described below. Generic
 hooks parse JSON but do not require the JSON content-type header; the TaskFlow
 plugin does enforce it.
 
-| Endpoint             | Payload and result                                                                                                                                                                                                                                        |
-| -------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `POST /hooks/wake`   | Required nonempty `text`; optional `mode` (`"now"` default or `"next-heartbeat"`), `agentId`, `sessionKey`. Returns `200 { ok: true, mode }` after enqueueing the system event. `now` also requests a heartbeat; neither result proves the heartbeat ran. |
-| `POST /hooks/agent`  | [Agent payload](/gateway/configuration-reference#hook-agent-payload). Returns `200 { ok: true, runId }` after session/global placement admission, not completion.                                                                                         |
-| `POST /hooks/<name>` | First matching mapping produces wake/agent actions. No matching mapping returns `404`; no actions returns `204`. Agent fan-out has the [batch response contract](/gateway/configuration-reference#hook-retries-and-fan-out).                              |
+| Endpoint             | Payload and result                                                                                                                                                                                                                                                                                                                                                                                     |
+| -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `POST /hooks/wake`   | Required nonempty `text`; optional `mode` (`"now"` default or `"next-heartbeat"`), `agentId`, `sessionKey`. Returns `200 { ok: true, mode, eventOutcome }`; `eventOutcome` is `"queued"` when the queue accepts the wake or `"coalesced"` when the same wake is already the queue's most recent pending event. `now` requests a heartbeat in either case; the result does not prove the heartbeat ran. |
+| `POST /hooks/agent`  | [Agent payload](/gateway/configuration-reference#hook-agent-payload). Returns `200 { ok: true, runId }` after session/global placement admission, not completion.                                                                                                                                                                                                                                      |
+| `POST /hooks/<name>` | First matching mapping produces wake/agent actions. No matching mapping returns `404`; no actions returns `204`. Agent fan-out has the [batch response contract](/gateway/configuration-reference#hook-retries-and-fan-out).                                                                                                                                                                           |
 
 The direct `/wake` and `/agent` endpoints take precedence over mappings with
 those names. `/hooks` itself has no action.
@@ -1294,8 +1317,10 @@ pending items return non-2xx with `ok: false`, an incomplete-batch `error`, admi
 Agent fan-out derives replay identity from each rendered action even without an
 explicit idempotency key. Identical retries reconcile pending/admitted items
 within the cache lifetime; keep transforms deterministic for retries. Wake
-actions enqueue immediately and have no replay identity, including mixed
-wake/agent batches. This is not durable exactly-once processing.
+actions dispatch immediately and have no replay identity, including mixed
+wake/agent batches. Their response includes `eventOutcome: "queued"` if any wake
+was accepted by its queue, or `"coalesced"` if every wake was coalesced by its queue.
+This is not durable exactly-once processing.
 
 ### Gmail integration
 
@@ -1573,8 +1598,8 @@ Notes:
 - `file` provider supports `mode: "json"` and `mode: "singleValue"` (`id` must be `"value"` in singleValue mode).
 - File and exec provider paths fail closed when Windows ACL verification is unavailable. Use paths whose ACLs OpenClaw can verify; there is no provider-level bypass.
 - `exec` provider requires an absolute `command` path and uses protocol payloads on stdin/stdout.
-- Symlink command paths are rejected. Configure the resolved absolute binary path instead.
-- If `trustedDirs` is configured, the command path must be inside an approved directory.
+- Symlink command paths are rejected. Configure the resolved absolute binary path instead; it must not be group- or world-writable and, on POSIX, must be owned by the current user.
+- If `trustedDirs` is configured, the command path (after `~` expansion) must be inside an approved directory; symlinked commands are rejected before this check, so the configured path itself is what `trustedDirs` constrains.
 - `exec` child environment is minimal by default; pass required variables explicitly with `passEnv`.
 - Secret refs are resolved at activation time into an in-memory snapshot, then request paths read the snapshot only.
 - Active-surface filtering applies during activation: unresolved refs on enabled surfaces fail startup/reload, while inactive surfaces are skipped with diagnostics.
@@ -1896,13 +1921,15 @@ Current builds no longer include the TCP bridge. Nodes connect over the Gateway 
 ```
 
 - `enabled`: execute stored automation jobs (default: `true`). Set `false` to pause all automation execution without deleting jobs.
+- `skipMissedJobs`: skip missed recurring (`cron`/`every`) slots at startup and advance to the next future occurrence (default: `false`). One-shot (`at`) catch-up is unchanged.
 - `triggers.enabled`: run event-driven automation triggers (default: `true`). Set `false` to disable condition triggers, script payloads, and stream schedules.
 - `sessionRetention`: how long to keep completed isolated automation run sessions before pruning SQLite session rows. Also controls cleanup of archived deleted automation transcripts. Default: `24h`; set `false` or a zero duration such as `"0h"` to disable (negative durations are invalid).
 - Terminal run history is retained for 7 days (`lost` rows for 24 hours), with the newest 2000 rows per job and history class enforced as an additional ceiling.
 - `webhookToken`: bearer token used for automation webhook POST delivery (`delivery.mode = "webhook"`), if omitted no auth header is sent.
 - `webhookSsrfPolicy`: shared outbound SSRF policy for primary, completion, failure-destination, and failure-alert webhooks. Private/internal targets are blocked when omitted. Prefer exact `allowedHostnames`; use `dangerouslyAllowPrivateNetwork: true` only for trusted private-network receivers. The narrow fake-IP proxy flags are `allowRfc2544BenchmarkRange` and `allowIpv6UniqueLocalRange`.
+- `webhookSsrfPolicy.blockedHostnames`: denies exact hosts and wildcard subdomains before DNS and all allow rules. `*.example.com` excludes the apex; add `example.com` separately to block it. Empty or unset adds no denials.
 
-The `cron` block is strict; `cron.enabled`, `cron.triggers`, `cron.webhookToken`,
+The `cron` block is strict; `cron.enabled`, `cron.skipMissedJobs`, `cron.triggers`, `cron.webhookToken`,
 `cron.webhookSsrfPolicy`, `cron.sessionRetention`, and `cron.failureAlert` are the only accepted keys. The
 retired `cron.webhook` fallback URL is gone: runtime delivery uses per-job
 `delivery.mode = "webhook"` plus `delivery.to`, or `delivery.completionDestination`

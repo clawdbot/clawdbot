@@ -32,7 +32,11 @@ import {
   rotateAgentEventLifecycleGeneration,
 } from "../../infra/agent-events.js";
 import { registerAgentRunContext } from "../../infra/agent-run-registry.js";
-import { moveDeliveryQueueEntryToFailed } from "../../infra/delivery-queue-sqlite.js";
+import {
+  loadDeliveryQueueEntry,
+  moveDeliveryQueueEntryToFailed,
+  upsertDeliveryQueueEntry,
+} from "../../infra/delivery-queue-sqlite.js";
 import { OUTBOUND_DELIVERY_QUEUE_NAME } from "../../infra/outbound/delivery-queue-media-staging.js";
 import { ackDelivery, enqueueDeliveryOnce } from "../../infra/outbound/delivery-queue-storage.js";
 import {
@@ -66,6 +70,7 @@ import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { buildCurrentRunRestartRecoveryClaim } from "../agent-command-restart-recovery.js";
+import { beginAgentDeletion } from "../agent-lifecycle-registry.js";
 import { deliverAgentCommandResult } from "../command/delivery.js";
 import { setActiveEmbeddedRunLifecycleGeneration } from "../embedded-agent-runner/run-state.js";
 import {
@@ -690,6 +695,55 @@ describe("main-session-restart-recovery", () => {
 
     expect(storePaths).toContain(path.join(configuredSessionsDir, "sessions.json"));
     expect(storePaths).not.toContain(path.join(staleSessionsDir, "sessions.json"));
+  });
+
+  it("marks an admitted custom-store turn after a deleted agent leaves its directory behind", async () => {
+    await withEnvAsync({ OPENCLAW_STATE_DIR: tmpDir }, async () => {
+      const staleSessionsDir = await makeSessionsDir("retired-probe");
+      await writeMainSession({
+        sessionsDir: staleSessionsDir,
+        sessionKey: "agent:retired-probe:main",
+      });
+      closeOpenClawAgentDatabasesForTest();
+      const deletion = beginAgentDeletion({
+        agentId: "retired-probe",
+        agentDir: path.join(tmpDir, "agents", "retired-probe", "agent"),
+        workspaceDir: path.join(tmpDir, "workspace-retired-probe"),
+        sessionsDir: staleSessionsDir,
+        deleteFiles: false,
+      });
+      const storePath = path.join(tmpDir, "active-custom-store", "sessions.json");
+      const sessionKey = "agent:main:custom";
+      let admission: Awaited<ReturnType<typeof beginSessionWorkAdmission>> | undefined;
+      try {
+        await writeStorePath(storePath, {
+          [sessionKey]: runningSessionEntry("custom-session"),
+        });
+        admission = await beginSessionWorkAdmission({
+          scope: storePath,
+          identities: [sessionKey, "custom-session"],
+          assertAllowed: () => undefined,
+        });
+
+        await expect(
+          markRestartAbortedMainSessions({
+            cfg: { agents: { list: [{ id: "main", default: true }] } },
+            stateDir: tmpDir,
+            activeRuns: [],
+          }),
+        ).resolves.toEqual({ marked: 1, skipped: 0 });
+        expect(loadSessionEntry({ sessionKey, storePath })).toMatchObject({
+          sessionId: "custom-session",
+          abortedLastRun: true,
+          restartRecoveryForceSafeTools: true,
+        });
+      } finally {
+        admission?.release();
+        deletion.rollback();
+        closeOpenClawAgentDatabasesForTest();
+        closeOpenClawStateDatabaseForTest();
+      }
+    });
   });
 
   it("keeps a configured fixed store when its path carries a retired owner id", async () => {
@@ -2539,6 +2593,34 @@ describe("main-session-restart-recovery", () => {
     });
   });
 
+  it.each(["owed", "unresolved", "acknowledged"] as const)(
+    "preserves a prior %s notice when the same pending final completes",
+    async (state) => {
+      const sessionsDir = await makeSessionsDir();
+      const storePath = path.join(sessionsDir, "sessions.json");
+      const pending = makePendingFinalDelivery("Uncertain reply.", {
+        context: discordDeliveryContext,
+        intentId: "intent-notice-retained",
+        deliveries: [{ id: "delivery-notice-retained", state: "unknown" }],
+      });
+      await writeMainSession({
+        sessionsDir,
+        pendingFinalDelivery: pending,
+        pendingDeliveryNotice: {
+          createdAt: pending.createdAt,
+          context: discordDeliveryContext,
+          intentId: "intent-notice-retained",
+          state,
+        },
+      });
+      await expectRecovery({ started: 0, settled: 1, failed: 0, skipped: 0 });
+      const entry = loadSessionEntry({ sessionKey: "agent:main:main", storePath });
+      expect(entry?.pendingFinalDelivery).toBeUndefined();
+      expect(entry?.pendingDeliveryNotice?.state).toBe(state);
+      expect(sendRecoveryNotice).not.toHaveBeenCalled();
+    },
+  );
+
   it("completes an unqueued text and media final with owed notice debt instead of replaying", async () => {
     const sessionsDir = await makeSessionsDir();
     const storePath = path.join(sessionsDir, "sessions.json");
@@ -2595,7 +2677,7 @@ describe("main-session-restart-recovery", () => {
     },
   );
 
-  it.each(["pending", "failed", "completed"] as const)(
+  it.each(["pending", "failed", "completed", "settling"] as const)(
     "keeps a prepared pending final aligned with its exact queue owner in %s",
     async (ownerStatus) => {
       const deliveryId = `delivery-owner-${ownerStatus}`;
@@ -2611,7 +2693,15 @@ describe("main-session-restart-recovery", () => {
           deliveryId,
           tmpDir,
         );
-        if (ownerStatus === "failed") {
+        if (ownerStatus === "settling") {
+          const entry = loadDeliveryQueueEntry(OUTBOUND_DELIVERY_QUEUE_NAME, deliveryId, tmpDir)!;
+          upsertDeliveryQueueEntry({
+            queueName: OUTBOUND_DELIVERY_QUEUE_NAME,
+            entry: { ...entry, recoveryState: "settlement_pending" },
+            status: "failed",
+            stateDir: tmpDir,
+          });
+        } else if (ownerStatus === "failed") {
           moveDeliveryQueueEntryToFailed(OUTBOUND_DELIVERY_QUEUE_NAME, deliveryId, tmpDir);
         } else if (ownerStatus === "completed") {
           await ackDelivery(deliveryId, tmpDir);
@@ -2627,14 +2717,14 @@ describe("main-session-restart-recovery", () => {
         });
 
         await expectRecovery(
-          ownerStatus === "pending"
+          ownerStatus === "pending" || ownerStatus === "settling"
             ? { started: 0, settled: 0, failed: 0, skipped: 1 }
             : { started: 0, settled: 1, failed: 0, skipped: 0 },
         );
 
         expect(callGateway).not.toHaveBeenCalled();
         expect(sendRecoveryNotice).not.toHaveBeenCalled();
-        if (ownerStatus !== "pending") {
+        if (ownerStatus !== "pending" && ownerStatus !== "settling") {
           const sessionsStorePath = path.join(sessionsDir, "sessions.json");
           expect(
             loadSessionEntry({ sessionKey: "agent:main:main", storePath: sessionsStorePath })

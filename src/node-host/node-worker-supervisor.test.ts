@@ -6,8 +6,9 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { NODE_WORKER_CAPACITY_EXHAUSTED_ERROR_CODE } from "../infra/node-commands.js";
 import { NODE_WORKER_CAPACITY_MAX } from "../infra/node-runner-inventory.js";
-import { registerSecretValueForRedaction } from "../logging/secret-redaction-registry.js";
+import * as secretRegistry from "../logging/secret-redaction-registry.js";
 import { resetSecretRedactionRegistryForTest } from "../logging/secret-redaction-registry.test-support.js";
+import * as processTree from "../process/kill-tree.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
@@ -18,6 +19,10 @@ import {
   inspectNodeWorkerProcessIdentity,
   requireNodeWorkerProcessIdentity,
 } from "./node-worker-process-identity.js";
+import {
+  createNodeWorkerSupervisorFixture,
+  waitForNodeWorkerTerminal as waitForTerminal,
+} from "./node-worker-supervisor.fixture.test-support.js";
 import { createNodeWorkerSupervisor } from "./node-worker-supervisor.js";
 import {
   TEST_WORKER_CREDENTIAL,
@@ -40,17 +45,8 @@ afterEach(() => {
   closeOpenClawStateDatabaseForTest();
 });
 
-function fixture(
-  options: {
-    capacity?: number;
-    capacityWaitMs?: number;
-    onCapacityChanged?: (capacity: { total: number; available: number }) => void;
-  } = {},
-) {
-  const root = tempDirs.make("node-worker-supervisor-");
-  const { bundleRoot, env, stateDir, workspaceDir } = writeNodeWorkerFixture(root);
-  const supervisor = createNodeWorkerSupervisor({ bundleRoot, env, ...options });
-  return { bundleRoot, env, root, stateDir, supervisor, workspaceDir };
+function fixture(options: Parameters<typeof createNodeWorkerSupervisor>[0] = {}) {
+  return createNodeWorkerSupervisorFixture(tempDirs.make("node-worker-supervisor-"), options);
 }
 
 function launchInput(workspaceDir: string, launchId: string, prompt = "success") {
@@ -60,18 +56,17 @@ function launchInput(workspaceDir: string, launchId: string, prompt = "success")
   return input;
 }
 
-async function waitForTerminal(supervisor: NodeWorkerSupervisor, launchId: string) {
-  await vi.waitFor(
-    async () => {
-      expect((await supervisor.status(launchId))?.state).not.toMatch(/^(?:pending|running)$/u);
-    },
-    { timeout: 5_000 },
-  );
-  const receipt = await supervisor.status(launchId);
-  if (!receipt) {
-    throw new Error(`missing launch receipt ${launchId}`);
-  }
-  return receipt;
+function evictWorkerCredentialsOnRegistration() {
+  const { registerSecretValueForRedaction } = secretRegistry;
+  // Both launch paths register before sending a turn. Evict every registration so a
+  // later launch cannot restore the global secret and hide a missing worker scrubber.
+  return vi.spyOn(secretRegistry, "registerSecretValueForRedaction").mockImplementation((value) => {
+    registerSecretValueForRedaction(value);
+    for (let index = 0; index < 600; index += 1) {
+      registerSecretValueForRedaction(`eviction-secret-${index}`);
+    }
+    expect(secretRegistry.isSecretValueRegisteredForRedaction(value)).toBe(false);
+  });
 }
 
 describe("node worker supervisor", () => {
@@ -550,12 +545,12 @@ describe("node worker supervisor", () => {
     const failureInput = launchInput(workspaceDir, "failure-launch", "secret-fail");
     const overflowInput = launchInput(workspaceDir, "overflow-launch", "overflow");
 
+    const registrations = evictWorkerCredentialsOnRegistration();
     await supervisor.launch(successInput, TEST_WORKER_ENDPOINT);
     await supervisor.launch(failureInput, TEST_WORKER_ENDPOINT);
     await supervisor.launch(overflowInput, TEST_WORKER_ENDPOINT);
-    for (let index = 0; index < 600; index += 1) {
-      registerSecretValueForRedaction(`eviction-secret-${index}`);
-    }
+    expect(registrations).toHaveBeenCalledTimes(3);
+    expect(registrations).toHaveBeenCalledWith(TEST_WORKER_CREDENTIAL);
     const success = await waitForTerminal(supervisor, successInput.launchId);
     const failure = await waitForTerminal(supervisor, failureInput.launchId);
     const overflow = await waitForTerminal(supervisor, overflowInput.launchId);
@@ -614,12 +609,11 @@ describe("node worker supervisor", () => {
     try {
       const original = await supervisor.launch(first, TEST_WORKER_ENDPOINT);
       await waitForTerminal(supervisor, first.launchId);
+      const registrations = evictWorkerCredentialsOnRegistration();
       expect(await supervisor.launch(second, TEST_WORKER_ENDPOINT)).toMatchObject({
         worker: original.worker,
       });
-      for (let index = 0; index < 600; index += 1) {
-        registerSecretValueForRedaction(`rotated-eviction-secret-${index}`);
-      }
+      expect(registrations).toHaveBeenCalledWith(second.descriptor.admission.credential);
       const completed = await waitForTerminal(supervisor, second.launchId);
       expect(JSON.parse(completed.resultJson ?? "null")).toEqual({
         status: "completed",
@@ -627,6 +621,7 @@ describe("node worker supervisor", () => {
         transcriptNextSeq: 2,
       });
 
+      registrations.mockRestore();
       await supervisor.launch(last, TEST_WORKER_ENDPOINT);
       const failed = await waitForTerminal(supervisor, last.launchId);
       expect(failed).toMatchObject({
@@ -642,10 +637,21 @@ describe("node worker supervisor", () => {
   });
 
   it("does not open or signal a child after markRunning observes its terminal receipt", async () => {
-    const { supervisor, workspaceDir } = fixture();
+    const capacities: Array<{ total: number; available: number }> = [];
+    const { supervisor, workspaceDir, env } = fixture({
+      capacity: 1,
+      onCapacityChanged: (capacity) => capacities.push(capacity),
+    });
     const input = launchInput(workspaceDir, "fast-terminal-launch", "fast-terminal");
+    const captureSpawn = vi.spyOn(childProcess.ChildProcess.prototype, "emit");
+    const signalTree = vi.spyOn(processTree, "signalProcessTree");
+    let child: ChildProcess | undefined;
     vi.spyOn(NodeWorkerLaunchStore.prototype, "markRunning").mockImplementation(
       function (this: NodeWorkerLaunchStore, params) {
+        child = captureSpawn.mock.contexts.find(
+          (context): context is ChildProcess =>
+            context instanceof childProcess.ChildProcess && context.pid === params.worker.pid,
+        );
         return this.finish({
           launchId: params.launchId,
           planHash: params.planHash,
@@ -657,15 +663,25 @@ describe("node worker supervisor", () => {
       },
     );
 
-    expect(await supervisor.launch(input, TEST_WORKER_ENDPOINT)).toMatchObject({
-      state: "completed",
-    });
-    const marker = path.join(workspaceDir, "fast-terminal-marker");
-    await new Promise((resolve) => {
-      setTimeout(resolve, 150);
-    });
-    expect(fs.existsSync(marker)).toBe(false);
-    await supervisor.close();
+    try {
+      expect(await supervisor.launch(input, TEST_WORKER_ENDPOINT)).toMatchObject({
+        state: "completed",
+      });
+      // Capacity returns only after the real child exit and adapter settlement.
+      await vi.waitFor(() => expect(capacities.at(-1)).toEqual({ total: 1, available: 1 }), {
+        timeout: 5_000,
+      });
+      expect(child?.exitCode).toBe(0);
+      expect(child?.signalCode).toBeNull();
+      expect(child?.stdout?.closed).toBe(true);
+      expect(child?.stderr?.closed).toBe(true);
+      expect(fs.existsSync(path.join(workspaceDir, "fast-terminal-marker"))).toBe(false);
+      expect(new NodeWorkerLaunchStore({ env }).get(input.launchId)?.state).toBe("completed");
+      await supervisor.close();
+      expect(signalTree).not.toHaveBeenCalled();
+    } finally {
+      await supervisor.close();
+    }
   });
 
   it("records a gated child that exits before journal readiness as terminal", async () => {
@@ -691,29 +707,6 @@ describe("node worker supervisor", () => {
     await supervisor.close();
   });
 
-  it.each([
-    ["cancel", "cancelled"],
-    ["close", "interrupted"],
-  ] as const)("records %s while awaiting the owned child", async (operation, state) => {
-    const { supervisor, workspaceDir } = fixture();
-    const input = launchInput(workspaceDir, `${operation}-launch`, "wait");
-    expect(await supervisor.launch(input, TEST_WORKER_ENDPOINT)).toMatchObject({
-      state: "running",
-    });
-
-    if (operation === "cancel") {
-      await supervisor.cancel(testNodeWorkerLaunchIdentity(input));
-    } else {
-      await supervisor.close();
-    }
-
-    expect(await supervisor.status(input.launchId)).toMatchObject({
-      state,
-      worker: { pid: expect.any(Number), startTime: expect.any(Number) },
-    });
-    await supervisor.close();
-  });
-
   it("bounds a blocked cancellation write and stops only its physical owner", async () => {
     const capacities: Array<{ total: number; available: number }> = [];
     const { env, supervisor, workspaceDir } = fixture({
@@ -724,6 +717,7 @@ describe("node worker supervisor", () => {
     const input = launchInput(workspaceDir, "blocked-cancel", "wait");
     const sibling = launchInput(workspaceDir, "unrelated-worker", "wait");
     const captureSpawn = vi.spyOn(childProcess.ChildProcess.prototype, "emit");
+    const signalTree = vi.spyOn(processTree, "signalProcessTree");
     let heldWrite: { data: unknown; callback?: (error?: Error | null) => void } | undefined;
     let restoreWrite: (() => void) | undefined;
     let cancellation: ReturnType<NodeWorkerSupervisor["cancel"]> | undefined;
@@ -746,17 +740,29 @@ describe("node worker supervisor", () => {
         return false;
       });
       restoreWrite = () => write.mockRestore();
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
       cancellation = supervisor.cancel(testNodeWorkerLaunchIdentity(input)).then((receipt) => {
         cancelled = receipt;
         return receipt;
       });
-      await vi.waitFor(() => {
-        expect(heldWrite?.data).toBe(
-          `${JSON.stringify({ type: "cancel", turnId: input.launchId })}\n`,
-        );
-        expect(heldWrite?.callback).toEqual(expect.any(Function));
-      });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(heldWrite?.data).toBe(
+        `${JSON.stringify({ type: "cancel", turnId: input.launchId })}\n`,
+      );
+      expect(heldWrite?.callback).toEqual(expect.any(Function));
 
+      await vi.advanceTimersByTimeAsync(4_999);
+      expect(signalTree).not.toHaveBeenCalled();
+      expect(cancelled).toBeUndefined();
+      expect(new NodeWorkerLaunchStore({ env }).get(input.launchId)?.state).toBe("running");
+      expect(inspectNodeWorkerProcessIdentity(running.worker!)).toBe("live");
+      expect(inspectNodeWorkerProcessIdentity(unrelated.worker!)).toBe("live");
+      expect(capacities.at(-1)).toEqual({ total: 2, available: 0 });
+
+      // Fire only the blocked-write deadline. Restore real timers before its
+      // rejection continuation schedules process termination and escalation.
+      vi.advanceTimersByTime(1);
+      vi.useRealTimers();
       await vi.waitFor(
         () => {
           expect(cancelled).toMatchObject({ state: "cancelled", worker: running.worker });
@@ -775,6 +781,7 @@ describe("node worker supervisor", () => {
         ),
       ).resolves.toMatchObject({ state: "running" });
     } finally {
+      vi.useRealTimers();
       captureSpawn.mockRestore();
       restoreWrite?.();
       // Release the injected write even on the pre-fix failure, so cleanup cannot inherit its hang.

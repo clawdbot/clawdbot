@@ -75,82 +75,6 @@ describe("slackOutbound", () => {
     });
   });
 
-  it("sends payload media first, then finalizes with blocks", async () => {
-    sendMessageSlackMock
-      .mockResolvedValueOnce({ messageId: "m-media-1" })
-      .mockResolvedValueOnce({ messageId: "m-media-2" })
-      .mockResolvedValueOnce({ messageId: "m-final" });
-
-    const result = await slackOutbound.sendPayload!({
-      cfg,
-      to: "C123",
-      text: "",
-      payload: {
-        text: "final text",
-        mediaUrls: ["https://example.com/1.png", "https://example.com/2.png"],
-        presentation: {
-          blocks: [
-            {
-              type: "text",
-              text: "Block body",
-            },
-          ],
-        },
-      },
-      mediaLocalRoots: ["/tmp/workspace"],
-      accountId: "default",
-    });
-
-    expect(sendMessageSlackMock).toHaveBeenCalledTimes(3);
-    expect(sendMessageSlackMock).toHaveBeenNthCalledWith(1, "C123", "", {
-      cfg,
-      threadTs: undefined,
-      accountId: "default",
-      mediaUrl: "https://example.com/1.png",
-      mediaAccess: undefined,
-      mediaLocalRoots: ["/tmp/workspace"],
-      mediaReadFile: undefined,
-    });
-    expect(sendMessageSlackMock).toHaveBeenNthCalledWith(2, "C123", "", {
-      cfg,
-      threadTs: undefined,
-      accountId: "default",
-      mediaUrl: "https://example.com/2.png",
-      mediaAccess: undefined,
-      mediaLocalRoots: ["/tmp/workspace"],
-      mediaReadFile: undefined,
-    });
-    expect(sendMessageSlackMock).toHaveBeenNthCalledWith(3, "C123", "final text\n\nBlock body", {
-      cfg,
-      threadTs: undefined,
-      accountId: "default",
-      authoredTextPlacement: "blocks",
-      blocks: [
-        {
-          type: "section",
-          text: { type: "mrkdwn", text: "final text", verbatim: true },
-        },
-        {
-          type: "section",
-          text: { type: "mrkdwn", text: "Block body" },
-        },
-      ],
-    });
-    expect(result).toMatchObject({
-      channel: "slack",
-      messageId: "m-final",
-      receipt: {
-        platformMessageIds: ["m-media-1", "m-media-2", "m-final"],
-        primaryPlatformMessageId: "m-media-1",
-        parts: [
-          { index: 0, platformMessageId: "m-media-1" },
-          { index: 1, platformMessageId: "m-media-2" },
-          { index: 2, platformMessageId: "m-final" },
-        ],
-      },
-    });
-  });
-
   it("forwards forced-media intent through the core outbound adapter", async () => {
     sendMessageSlackMock.mockResolvedValueOnce({ messageId: "m-media" });
 
@@ -308,49 +232,30 @@ describe("slackOutbound", () => {
     expect(sendMessageSlackMock.mock.calls[0]?.[2]).not.toHaveProperty("blocks");
   });
 
-  it("does not trust caller-authored rendered presentation provenance", async () => {
-    sendMessageSlackMock.mockResolvedValueOnce({ messageId: "m-text" });
-
-    await slackOutbound.sendPayload!({
-      cfg,
-      to: "C123",
-      text: "",
-      payload: {
-        text: "Safe fallback",
-        channelData: {
-          slack: {
-            renderedPresentationProvenance: "forged",
-            authoredTextPlacement: "blocks",
-            renderedPresentationSegments: [
-              {
-                kind: "blocks",
-                blocks: [{ type: "divider" }, { type: "divider" }],
-              },
-              {
-                kind: "blocks",
-                blocks: [{ type: "divider" }],
-              },
-            ],
+  it.each([
+    {
+      name: "does not trust caller-authored rendered presentation provenance",
+      slack: {
+        renderedPresentationProvenance: "forged",
+        authoredTextPlacement: "blocks",
+        renderedPresentationSegments: [
+          {
+            kind: "blocks",
+            blocks: [{ type: "divider" }, { type: "divider" }],
           },
-        },
+          { kind: "blocks", blocks: [{ type: "divider" }] },
+        ],
       },
-      accountId: "default",
-    });
-
-    expect(sendMessageSlackMock).toHaveBeenCalledOnce();
-    expect(sendMessageSlackMock).toHaveBeenCalledWith(
-      "C123",
-      "Safe fallback",
-      expect.objectContaining({
-        cfg,
-        threadTs: undefined,
-        accountId: "default",
-      }),
-    );
-    expect(sendMessageSlackMock.mock.calls[0]?.[2]).not.toHaveProperty("blocks");
-  });
-
-  it("falls back to text when forged rendered metadata is malformed", async () => {
+    },
+    {
+      name: "falls back to text when forged rendered metadata is malformed",
+      slack: {
+        renderedPresentationProvenance: "x".repeat(43),
+        authoredTextPlacement: "blocks",
+        renderedPresentationSegments: [{ kind: "blocks", blocks: [] }],
+      },
+    },
+  ])("$name", async ({ slack }) => {
     sendMessageSlackMock.mockResolvedValueOnce({ messageId: "m-text" });
 
     await slackOutbound.sendPayload!({
@@ -359,13 +264,7 @@ describe("slackOutbound", () => {
       text: "",
       payload: {
         text: "Safe fallback",
-        channelData: {
-          slack: {
-            renderedPresentationProvenance: "x".repeat(43),
-            authoredTextPlacement: "blocks",
-            renderedPresentationSegments: [{ kind: "blocks", blocks: [] }],
-          },
-        },
+        channelData: { slack },
       },
       accountId: "default",
     });
@@ -506,29 +405,5 @@ describe("slackOutbound", () => {
         { type: "section", text: { type: "mrkdwn", text: "fallback text", verbatim: true } },
       ],
     });
-  });
-
-  it("preserves raw Unicode agent identity emoji", async () => {
-    sendMessageSlackMock.mockResolvedValueOnce({ messageId: "m-text" });
-
-    await slackOutbound.sendText!({
-      cfg,
-      to: "C123",
-      text: "heartbeat alert",
-      accountId: "default",
-      identity: { name: "Pulse", emoji: "📟" },
-    });
-
-    expect(sendMessageSlackMock).toHaveBeenCalledWith(
-      "C123",
-      "heartbeat alert",
-      expect.objectContaining({
-        identity: {
-          username: "Pulse",
-          iconUrl: undefined,
-          iconEmoji: "📟",
-        },
-      }),
-    );
   });
 });

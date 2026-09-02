@@ -67,11 +67,11 @@ export async function withCodexConversationThreadActivity<T>(
   return await nativeThreadOwners.enqueue(`conversation:${bindingId}`, run);
 }
 
-/** Publishes one owned persistent subscription into the shared bounded idle registry. */
+/** Publishes one owned subscription with its persistent or ephemeral retention lifetime. */
 export async function retainCodexAppServerBindingSubscription(
   client: CodexAppServerClient,
   threadId: string,
-  ownership?: CodexAppServerLiveThreadOwnership,
+  ownership?: Partial<CodexAppServerLiveThreadOwnership>,
 ): Promise<boolean> {
   return await retainCodexAppServerLiveThread(
     client,
@@ -93,6 +93,7 @@ export async function retainCodexAppServerBindingSubscription(
       }),
     ownership?.configFingerprint,
     ownership?.serviceTier,
+    ownership?.ephemeralPolicy,
   );
 }
 

@@ -265,7 +265,7 @@ When `mode: "all"`, outputs are labeled `[Image 1/2]`, `[Audio 2/2]`, etc.
 - Files rejected by an operator-configured `allowedMimes` list get `[Attachment type not allowed: <mime>]` instead, so the prompt never claims support the active configuration disables.
 - Read failures get `[Attachment could not be read]`.
 - URL attachments get `[Attachment skipped: URL file sources are disabled]` when URL file sources are disabled.
-- A file with no extractable text gets `[No extractable text]`.
+- A file with no extractable text, including an empty local text file, gets `[No extractable text]` and does not consume the skip-marker budget.
 - At most five skip markers render per message; further skipped attachments collapse into one reason-neutral `[<n> more attachments skipped]` summary so junk attachments cannot grow the prompt without bound. File and image, audio, or video markers share this five-marker budget.
 - If a PDF falls back to rendered page images, OpenClaw forwards those images to vision-capable reply models and keeps the placeholder `[PDF content rendered to images]` in the file block.
 - Image, audio, and video decisions record one closed disposition for every attachment candidate: handled, handed to native vision, not selected after the attachment limit, disabled, missing a model, denied by chat scope, or failed.

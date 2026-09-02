@@ -4,14 +4,12 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const completeWithPreparedSimpleCompletionModel = vi.hoisted(() => vi.fn());
-const prepareSimpleCompletionModelForAgent = vi.hoisted(() => vi.fn());
+const runIsolatedCompletion = vi.hoisted(() => vi.fn());
+const prepareUtilityCompletionForAgent = vi.hoisted(() => vi.fn());
 const resolveUtilityModelRefForAgent = vi.hoisted(() => vi.fn());
 
-vi.mock("../agents/simple-completion-runtime.js", () => ({
-  completeWithPreparedSimpleCompletionModel,
-  prepareSimpleCompletionModelForAgent,
-}));
+vi.mock("../agents/isolated-completion.js", () => ({ runIsolatedCompletion }));
+vi.mock("../agents/utility-completion.js", () => ({ prepareUtilityCompletionForAgent }));
 
 vi.mock("../agents/utility-model.js", () => ({
   resolveUtilityModelRefForAgent,
@@ -25,17 +23,22 @@ import { generateToolCallTitles } from "./chat-tool-titles.js";
 const AGENT_ID = "main";
 
 function mockPreparedModel(): void {
-  prepareSimpleCompletionModelForAgent.mockResolvedValue({
-    selection: { provider: "openai", modelId: "gpt-test", agentDir: "/tmp/openclaw-agent" },
-    model: { provider: "openai", id: "gpt-test", maxTokens: 8192 },
-    auth: { apiKey: "k", mode: "api-key" },
+  prepareUtilityCompletionForAgent.mockResolvedValue({
+    config: {},
+    provider: "openai",
+    model: "gpt-test",
+    outputTextPolicy: "strict-visible",
+    agentId: AGENT_ID,
+    agentDir: "/tmp/openclaw-agent",
   });
 }
 
 function mockCompletionTitles(titles: Record<string, string>): void {
-  completeWithPreparedSimpleCompletionModel.mockResolvedValue({
-    stopReason: "stop",
-    content: [{ type: "text", text: JSON.stringify({ titles }) }],
+  runIsolatedCompletion.mockResolvedValue({
+    text: JSON.stringify({ titles }),
+    provider: "openai",
+    model: "gpt-test",
+    owner: { kind: "harness", id: "openclaw" },
   });
 }
 
@@ -44,8 +47,8 @@ describe("generateToolCallTitles", () => {
   let previousStateDir: string | undefined;
 
   beforeEach(() => {
-    completeWithPreparedSimpleCompletionModel.mockReset();
-    prepareSimpleCompletionModelForAgent.mockReset();
+    runIsolatedCompletion.mockReset();
+    prepareUtilityCompletionForAgent.mockReset();
     resolveUtilityModelRefForAgent.mockReset();
     // Default: canonical utility routing resolves a cheap same-provider model.
     resolveUtilityModelRefForAgent.mockReturnValue("openai/gpt-test");
@@ -83,7 +86,7 @@ describe("generateToolCallTitles", () => {
       "item-1": "Checked repo status",
       "item-2": "Listed source files",
     });
-    expect(completeWithPreparedSimpleCompletionModel).toHaveBeenCalledTimes(1);
+    expect(runIsolatedCompletion).toHaveBeenCalledTimes(1);
   });
 
   it("redacts secret-bearing inputs before they reach the utility model", async () => {
@@ -104,10 +107,10 @@ describe("generateToolCallTitles", () => {
       ],
     });
 
-    const call = completeWithPreparedSimpleCompletionModel.mock.calls[0]?.[0] as {
-      context: { messages: Array<{ content: string }> };
+    const call = runIsolatedCompletion.mock.calls[0]?.[0] as {
+      prompt: string;
     };
-    expect(call.context.messages[0]?.content).not.toContain(token);
+    expect(call.prompt).not.toContain(token);
   });
 
   it("redacts secrets that straddle the prompt truncation boundary", async () => {
@@ -125,10 +128,10 @@ describe("generateToolCallTitles", () => {
       items: [{ id: "item-1", name: "bash", input }],
     });
 
-    const call = completeWithPreparedSimpleCompletionModel.mock.calls[0]?.[0] as {
-      context: { messages: Array<{ content: string }> };
+    const call = runIsolatedCompletion.mock.calls[0]?.[0] as {
+      prompt: string;
     };
-    const content = call.context.messages[0]?.content ?? "";
+    const content = call.prompt ?? "";
     expect(content).not.toContain(token);
     expect(content).not.toContain(token.slice(0, 12));
   });
@@ -143,10 +146,10 @@ describe("generateToolCallTitles", () => {
       items: [{ id: "item-1", name: "bash", input: `${"a".repeat(1_999)}😀tail` }],
     });
 
-    const call = completeWithPreparedSimpleCompletionModel.mock.calls[0]?.[0] as {
-      context: { messages: Array<{ content: string }> };
+    const call = runIsolatedCompletion.mock.calls[0]?.[0] as {
+      prompt: string;
     };
-    const promptPayload = JSON.parse(call.context.messages[0]?.content ?? "{}") as {
+    const promptPayload = JSON.parse(call.prompt ?? "{}") as {
       items?: Array<{ input?: string }>;
     };
     expect(promptPayload.items?.[0]?.input).toBe("a".repeat(1_999));
@@ -166,13 +169,11 @@ describe("generateToolCallTitles", () => {
 
     expect(first).toEqual({ "item-1": "Checked repo status" });
     expect(second).toEqual(first);
-    expect(completeWithPreparedSimpleCompletionModel).toHaveBeenCalledTimes(1);
+    expect(runIsolatedCompletion).toHaveBeenCalledTimes(1);
   });
 
   it("fails closed to an empty result when model preparation errors", async () => {
-    prepareSimpleCompletionModelForAgent.mockResolvedValue({
-      error: 'No API key resolved for provider "openai".',
-    });
+    prepareUtilityCompletionForAgent.mockRejectedValue(new Error("No utility model configured."));
 
     await expect(
       generateToolCallTitles({
@@ -181,7 +182,7 @@ describe("generateToolCallTitles", () => {
         items: [{ id: "item-1", name: "bash", input: "git status --short" }],
       }),
     ).resolves.toEqual({});
-    expect(completeWithPreparedSimpleCompletionModel).not.toHaveBeenCalled();
+    expect(runIsolatedCompletion).not.toHaveBeenCalled();
   });
 
   it("prepares the canonical utility model ref", async () => {
@@ -200,12 +201,11 @@ describe("generateToolCallTitles", () => {
       agentId: AGENT_ID,
       primaryProvider: undefined,
     });
-    expect(prepareSimpleCompletionModelForAgent).toHaveBeenCalledWith({
+    expect(prepareUtilityCompletionForAgent).toHaveBeenCalledWith({
       cfg,
       agentId: AGENT_ID,
       modelRef: "openai/gpt-test",
       preferredProfile: undefined,
-      allowMissingApiKeyModes: ["aws-sdk"],
     });
   });
 
@@ -224,7 +224,7 @@ describe("generateToolCallTitles", () => {
       items: [{ id: "item-1", name: "bash", input: "git status --short" }],
     });
 
-    expect(prepareSimpleCompletionModelForAgent).toHaveBeenCalledWith(
+    expect(prepareUtilityCompletionForAgent).toHaveBeenCalledWith(
       expect.objectContaining({ modelRef: "openai/gpt-test@work", preferredProfile: "work" }),
     );
   });
@@ -280,8 +280,8 @@ describe("generateToolCallTitles", () => {
         items: [{ id: "item-1", name: "bash", input: "git status --short" }],
       }),
     ).resolves.toEqual({});
-    expect(prepareSimpleCompletionModelForAgent).not.toHaveBeenCalled();
-    expect(completeWithPreparedSimpleCompletionModel).not.toHaveBeenCalled();
+    expect(prepareUtilityCompletionForAgent).not.toHaveBeenCalled();
+    expect(runIsolatedCompletion).not.toHaveBeenCalled();
   });
 
   it("skips generation when utility routing is disabled or has no default", async () => {
@@ -296,7 +296,7 @@ describe("generateToolCallTitles", () => {
         items: [{ id: "item-1", name: "bash", input: "git status --short" }],
       }),
     ).resolves.toEqual({});
-    expect(prepareSimpleCompletionModelForAgent).not.toHaveBeenCalled();
-    expect(completeWithPreparedSimpleCompletionModel).not.toHaveBeenCalled();
+    expect(prepareUtilityCompletionForAgent).not.toHaveBeenCalled();
+    expect(runIsolatedCompletion).not.toHaveBeenCalled();
   });
 });

@@ -33,7 +33,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -369,14 +368,19 @@ private fun WorkspaceFilePreview(
       }
 
       when {
-        loading ->
+        loading -> {
           Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center) {
             CircularProgressIndicator(modifier = Modifier.size(22.dp))
           }
-        errorText != null ->
+        }
+
+        errorText != null -> {
           ClawEmptyState(title = nativeString("No preview"), body = errorText.orEmpty())
-        file != null ->
+        }
+
+        file != null -> {
           WorkspaceFileContent(file = file ?: return@Column)
+        }
       }
     }
   }
@@ -387,28 +391,33 @@ private fun WorkspaceFileContent(file: GatewayWorkspaceFile) {
   if (file.isBase64 && file.mimeType.startsWith("image/")) {
     val imageState = rememberBase64ImageState(file.content)
     when {
-      imageState.image != null ->
+      imageState.image != null -> {
         Image(
           bitmap = imageState.image,
           contentDescription = file.name,
           modifier = Modifier.fillMaxWidth().verticalScroll(rememberScrollState()),
         )
-      imageState.failed -> ClawEmptyState(title = nativeString("No preview"), body = nativeString("This image could not be decoded."))
-      else -> CircularProgressIndicator(modifier = Modifier.size(22.dp))
+      }
+
+      imageState.failed -> {
+        ClawEmptyState(title = nativeString("No preview"), body = nativeString("This image could not be decoded."))
+      }
+
+      else -> {
+        CircularProgressIndicator(modifier = Modifier.size(22.dp))
+      }
     }
   } else {
     // Reuse the chat renderer's code block so previews highlight and cap
     // exactly like fenced code in the transcript.
-    SelectionContainer {
-      Column(
-        modifier =
-          Modifier
-            .fillMaxSize()
-            .verticalScroll(rememberScrollState())
-            .padding(bottom = 12.dp),
-      ) {
-        ChatCodeBlock(code = file.content, language = workspaceLanguageHint(file.name))
-      }
+    Column(
+      modifier =
+        Modifier
+          .fillMaxSize()
+          .verticalScroll(rememberScrollState())
+          .padding(bottom = 12.dp),
+    ) {
+      ChatCodeBlock(code = file.content, language = workspaceLanguageHint(file.name))
     }
   }
 }

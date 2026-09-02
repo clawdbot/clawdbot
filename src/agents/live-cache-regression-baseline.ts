@@ -49,6 +49,7 @@ export const LIVE_CACHE_REGRESSION_BASELINE = {
       observedHitRate: 0.996,
       minCacheReadOrWrite: 5_400,
       minCacheWrite: 1,
+      minHitRate: 0.9,
     },
     tool: {
       observedCacheRead: 6_223,

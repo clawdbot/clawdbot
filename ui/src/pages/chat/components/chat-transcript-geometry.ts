@@ -9,11 +9,20 @@ function transcriptScrollMargin(element: Element | null): number {
   return Number.isFinite(margin) ? margin : 0;
 }
 
+/** Row offsets start below the scroll padding plus the in-flow history header. */
+export function resolveTranscriptScrollMargin(
+  scrollElement: Element | null,
+  headerHeight: number,
+): number {
+  return transcriptScrollMargin(scrollElement) + headerHeight;
+}
+
 export function syncScrollMargin(
   scrollElement: HTMLDivElement | null,
   virtualizer: Virtualizer<HTMLDivElement, HTMLElement>,
+  headerHeight: number,
 ): void {
-  const scrollMargin = transcriptScrollMargin(scrollElement);
+  const scrollMargin = resolveTranscriptScrollMargin(scrollElement, headerHeight);
   if (scrollMargin === virtualizer.options.scrollMargin) {
     return;
   }

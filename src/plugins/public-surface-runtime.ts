@@ -1,8 +1,8 @@
 // Loads plugin public runtime surfaces through documented entrypoints.
-import fs from "node:fs";
 import path from "node:path";
 import { resolveUserPath } from "../utils.js";
 import { areBundledPluginsDisabled, resolveBundledPluginsDir } from "./bundled-dir.js";
+import { pluginCacheExistsSync, pluginCacheRealpathSync } from "./plugin-cache-files.js";
 
 export const PUBLIC_SURFACE_SOURCE_EXTENSIONS = [
   ".ts",
@@ -68,7 +68,7 @@ export function resolveBundledPluginSourcePublicSurfacePath(params: {
   const sourceBaseName = artifactBasename.replace(/\.js$/u, "");
   for (const ext of PUBLIC_SURFACE_SOURCE_EXTENSIONS) {
     const sourceCandidate = path.resolve(params.sourceRoot, dirName, `${sourceBaseName}${ext}`);
-    if (fs.existsSync(sourceCandidate)) {
+    if (pluginCacheExistsSync(sourceCandidate)) {
       return sourceCandidate;
     }
   }
@@ -86,14 +86,14 @@ export function resolvePluginRootPublicSurfacePath(params: {
     path.join(pluginRoot, artifactBasename),
     path.join(pluginRoot, "dist", artifactBasename),
   ]) {
-    if (fs.existsSync(candidate)) {
+    if (pluginCacheExistsSync(candidate)) {
       return candidate;
     }
   }
   const sourceBaseName = artifactBasename.replace(/\.js$/u, "");
   for (const ext of PUBLIC_SURFACE_SOURCE_EXTENSIONS) {
     const candidate = path.join(pluginRoot, `${sourceBaseName}${ext}`);
-    if (fs.existsSync(candidate)) {
+    if (pluginCacheExistsSync(candidate)) {
       return candidate;
     }
   }
@@ -120,23 +120,42 @@ function resolvePackageFallbackForBundledDir(params: {
       continue;
     }
     const builtCandidate = path.join(packageBundledDir, params.dirName, params.artifactBasename);
-    if (fs.existsSync(builtCandidate)) {
+    if (pluginCacheExistsSync(builtCandidate)) {
       return builtCandidate;
     }
   }
-  return resolveBundledPluginSourcePublicSurfacePath({
-    sourceRoot: path.join(normalizedRootDir, "extensions"),
-    dirName: params.dirName,
-    artifactBasename: params.artifactBasename,
-  });
+  return (
+    resolveRetainedConfigDoctorPath(params) ??
+    resolveBundledPluginSourcePublicSurfacePath({
+      sourceRoot: path.join(normalizedRootDir, "extensions"),
+      dirName: params.dirName,
+      artifactBasename: params.artifactBasename,
+    })
+  );
+}
+
+function resolveRetainedConfigDoctorPath(params: {
+  rootDir: string;
+  dirName: string;
+  artifactBasename: string;
+}): string | null {
+  if (params.artifactBasename !== "config-doctor-api.js") {
+    return null;
+  }
+  // Externalizing a channel removes its runtime entry, but shipped config still needs
+  // its core-version migration before that plugin can be installed or granted capabilities.
+  for (const dist of ["dist", "dist-runtime"]) {
+    const candidate = path.resolve(params.rootDir, dist, "config-doctor", `${params.dirName}.js`);
+    if (pluginCacheExistsSync(candidate)) {
+      return candidate;
+    }
+  }
+  return null;
 }
 
 function sameExistingPath(left: string, right: string): boolean {
-  try {
-    return fs.realpathSync.native(left) === fs.realpathSync.native(right);
-  } catch {
-    return false;
-  }
+  const canonicalLeft = pluginCacheRealpathSync(left);
+  return canonicalLeft !== null && canonicalLeft === pluginCacheRealpathSync(right);
 }
 
 function resolveExplicitEnvBundledPluginsDir(env: NodeJS.ProcessEnv): string | undefined {
@@ -160,11 +179,11 @@ function resolvePublicSurfaceFromBundledDir(params: {
 }): string | null {
   const pluginDir = path.resolve(params.bundledPluginsDir, params.dirName);
   const builtCandidate = path.join(pluginDir, params.artifactBasename);
-  if (fs.existsSync(builtCandidate)) {
+  if (pluginCacheExistsSync(builtCandidate)) {
     return builtCandidate;
   }
   const packageLocalBuiltCandidate = path.join(pluginDir, "dist", params.artifactBasename);
-  if (fs.existsSync(packageLocalBuiltCandidate)) {
+  if (pluginCacheExistsSync(packageLocalBuiltCandidate)) {
     return packageLocalBuiltCandidate;
   }
   return (
@@ -241,9 +260,9 @@ export function resolveBundledPluginPublicSurfacePath(params: {
     path.resolve(params.rootDir, "dist", "extensions", dirName, artifactBasename),
     path.resolve(params.rootDir, "dist-runtime", "extensions", dirName, artifactBasename),
   ]) {
-    if (fs.existsSync(candidate)) {
+    if (pluginCacheExistsSync(candidate)) {
       return candidate;
     }
   }
-  return null;
+  return resolveRetainedConfigDoctorPath({ ...params, dirName, artifactBasename });
 }

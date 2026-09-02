@@ -60,7 +60,6 @@ final class GatewayConnectivityCoordinator {
             },
             refresh: { await GatewayEndpointStore.shared.refresh() },
             log: { message in gatewayConnectivityLogger.error("\(message, privacy: .public)") })
-        self.start()
     }
 
     func start() {

@@ -174,7 +174,7 @@ Each entry lists the package, distribution route, and description.
 
 ## Official external packages
 
-91 plugins
+90 plugins
 
 - **[acpx](/plugins/reference/acpx)** (`@openclaw/acpx`) - npm; ClawHub. OpenClaw ACP runtime backend with plugin-owned session and transport management.
 
@@ -210,8 +210,6 @@ Each entry lists the package, distribution route, and description.
 
 - **[copilot](/plugins/reference/copilot)** (`@openclaw/copilot`) - npm; ClawHub: `clawhub:@openclaw/copilot`. Registers the GitHub Copilot agent runtime.
 
-- **[daytona](/plugins/reference/daytona)** (`@openclaw/daytona-sandbox`) - npm; ClawHub. OpenClaw sandbox backend that runs agent exec and file tools inside Daytona cloud sandboxes over the Daytona toolbox API.
-
 - **[deepinfra](/plugins/reference/deepinfra)** (`@openclaw/deepinfra-provider`) - npm; ClawHub: `clawhub:@openclaw/deepinfra-provider`. Adds DeepInfra model provider support to OpenClaw.
 
 - **[deepseek](/plugins/reference/deepseek)** (`@openclaw/deepseek-provider`) - npm; ClawHub: `clawhub:@openclaw/deepseek-provider`. Adds DeepSeek model provider support to OpenClaw.
@@ -220,7 +218,7 @@ Each entry lists the package, distribution route, and description.
 
 - **[diagnostics-prometheus](/plugins/reference/diagnostics-prometheus)** (`@openclaw/diagnostics-prometheus`) - npm; ClawHub: `clawhub:@openclaw/diagnostics-prometheus`. OpenClaw diagnostics Prometheus exporter for runtime metrics.
 
-- **[diffs](/plugins/reference/diffs)** (`@openclaw/diffs`) - npm; ClawHub. OpenClaw read-only diff viewer plugin and file renderer for agents.
+- **[diffs](/plugins/reference/diffs)** (`@openclaw/diffs`) - npm; ClawHub: `clawhub:@openclaw/diffs`. OpenClaw read-only diff viewer plugin and file renderer for agents.
 
 - **[diffs-language-pack](/plugins/reference/diffs-language-pack)** (`@openclaw/diffs-language-pack`) - npm; ClawHub: `clawhub:@openclaw/diffs-language-pack`. Adds syntax highlighting for languages outside the default diffs viewer set.
 
@@ -360,8 +358,10 @@ Each entry lists the package, distribution route, and description.
 
 ## Source checkout only
 
-2 plugins
+3 plugins
 
 - **[qa-channel](/plugins/reference/qa-channel)** (`@openclaw/qa-channel`) - source checkout only. Adds the QA Channel surface for sending and receiving OpenClaw messages.
 
 - **[qa-lab](/plugins/reference/qa-lab)** (`@openclaw/qa-lab`) - source checkout only. OpenClaw QA lab plugin with private debugger UI and scenario runner.
+
+- **[visitor-access](/plugins/reference/visitor-access)** (`@openclaw/visitor-access`) - source checkout only. Manage expiring visitor grants through one Cloudflare Access email policy.

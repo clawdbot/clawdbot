@@ -340,6 +340,8 @@ on:
         required: false
       DEEPINFRA_API_KEY:
         required: false
+      DEEPSEEK_API_KEY:
+        required: false
       DASHSCOPE_API_KEY:
         required: false
       GROQ_API_KEY:
@@ -796,7 +798,7 @@ jobs:
           set -euo pipefail
           fallback_baseline="$FALLBACK_BASELINE"
           if [[ "$fallback_baseline" == "openclaw@latest" ]]; then
-            fallback_version="$(npm view openclaw@latest version)"
+            fallback_version="$(npm view openclaw@latest version --prefer-online)"
             [[ "$fallback_version" =~ ^[0-9]{4}\.[0-9]+\.[0-9]+(-[A-Za-z0-9.-]+)?$ ]] || {
               echo "Could not resolve openclaw@latest to an exact release version." >&2
               exit 1
@@ -1026,8 +1028,10 @@ jobs:
             echo "Installed OpenClaw version $installed_version differs from expected $EXPECTED_PACKAGE_VERSION." >&2
             exit 1
           }
-          guard="$install_prefix/lib/node_modules/openclaw/dist/openclaw-install-guard"
-          [[ ! -e "$guard" ]]
+          pending="$install_prefix/lib/node_modules/openclaw/.openclaw-lifecycle-pending"
+          legacy_guard="$install_prefix/lib/node_modules/openclaw/dist/openclaw-install-guard"
+          [[ ! -e "$pending" ]]
+          [[ ! -e "$legacy_guard" ]]
 
   docker_acceptance:
     name: Docker product acceptance (artifact-only)
@@ -1086,6 +1090,7 @@ jobs:
       BYTEPLUS_API_KEY: ${{ secrets.BYTEPLUS_API_KEY }}
       CEREBRAS_API_KEY: ${{ secrets.CEREBRAS_API_KEY }}
       DEEPINFRA_API_KEY: ${{ secrets.DEEPINFRA_API_KEY }}
+      DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
       DASHSCOPE_API_KEY: ${{ secrets.DASHSCOPE_API_KEY }}
       GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
       KIMI_API_KEY: ${{ secrets.KIMI_API_KEY }}

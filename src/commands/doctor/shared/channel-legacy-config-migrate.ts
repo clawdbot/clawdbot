@@ -100,7 +100,10 @@ function collectPluginDoctorCompatibilityIds(params: {
 }
 
 /** Apply bundled and plugin channel compatibility migrations to a legacy config object. */
-export function applyChannelDoctorCompatibilityMigrations(cfg: Record<string, unknown>): {
+export function applyChannelDoctorCompatibilityMigrations(
+  cfg: Record<string, unknown>,
+  options?: { pluginContracts?: boolean },
+): {
   next: Record<string, unknown>;
   changes: string[];
 } {
@@ -126,7 +129,12 @@ export function applyChannelDoctorCompatibilityMigrations(cfg: Record<string, un
     changes.push(...mutation.changes);
   }
 
-  const pluginIds = collectPluginDoctorCompatibilityIds({ raw: cfg, unresolvedChannelIds });
+  // Plugin id collection loads the installed-plugin registry from the shared state
+  // database; state-free preview callers opt out and rely on the full committer run.
+  const pluginIds =
+    options?.pluginContracts === false
+      ? []
+      : collectPluginDoctorCompatibilityIds({ raw: cfg, unresolvedChannelIds });
   if (pluginIds.length > 0) {
     const compat = applyPluginDoctorCompatibilityMigrations(nextCfg, {
       config: cfg as OpenClawConfig,

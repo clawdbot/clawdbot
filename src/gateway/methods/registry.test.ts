@@ -6,11 +6,11 @@ import { ADMIN_SCOPE, READ_SCOPE, WRITE_SCOPE } from "../operator-scopes.js";
 import type { GatewayRequestHandler } from "../server-methods/types.js";
 import { isSessionProfileDependentMethod } from "../session-sharing-target-input.js";
 import { listCoreGatewayMethodNames } from "./core-descriptors.js";
+import { createPluginGatewayMethodDescriptor } from "./descriptor.js";
 import {
   createCoreGatewayMethodDescriptors,
   createGatewayMethodRegistry,
   createPluginGatewayMethodDescriptors,
-  createPluginGatewayMethodDescriptor,
 } from "./registry.js";
 
 const handler: GatewayRequestHandler = ({ respond }) => respond(true, { ok: true });
@@ -60,6 +60,15 @@ describe("gateway method registry", () => {
         },
       ]),
     ).toThrow("gateway method already registered: example.duplicate");
+  });
+
+  it("rejects unknown core handlers while accepting hidden core methods", () => {
+    expect(() => createCoreGatewayMethodDescriptors({ "example.unknown": handler })).toThrow(
+      "gateway method handler is missing a descriptor: example.unknown",
+    );
+    expect(createCoreGatewayMethodDescriptors({ "config.openFile": handler })).toMatchObject([
+      { name: "config.openFile", advertise: false, handler },
+    ]);
   });
 
   it("coerces reserved plugin namespaces to admin scope", () => {

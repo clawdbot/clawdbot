@@ -331,7 +331,7 @@ async function runSessionsLifecycleCommand(
             deleteTranscript: true,
             ...(session.archived === true ? { archivedOnly: true } : {}),
           },
-          { defaultTimeoutMs: 30_000 },
+          { defaultTimeoutMs: SESSION_ARCHIVE_REQUEST_TIMEOUT_MS },
         )) as SessionsDeleteResult;
         if (!response.deleted) {
           results[index] = notFoundResult(session.key, agent);

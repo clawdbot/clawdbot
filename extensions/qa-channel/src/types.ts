@@ -7,6 +7,8 @@ type QaChannelActionConfig = {
 };
 
 export type QaChannelAccountConfig = {
+  /** Megabyte cap for media this channel accepts and delivers. */
+  mediaMaxMb?: number;
   name?: string;
   enabled?: boolean;
   responsePrefix?: string;
@@ -52,5 +54,6 @@ export type ResolvedQaChannelAccount = {
   botUserId: string;
   botDisplayName: string;
   pollTimeoutMs: number;
+  mediaMaxBytes?: number;
   config: QaChannelAccountConfig;
 };

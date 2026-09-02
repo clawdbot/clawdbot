@@ -8,7 +8,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { GatewayClient } from "openclaw/plugin-sdk/gateway-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { type RawData, WebSocketServer } from "ws";
-import { startQaGatewayChild } from "../../../../extensions/qa-lab/api.js";
+import { createQaGatewayChild, type QaGatewayChild } from "../../../../extensions/qa-lab/api.js";
 import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
@@ -25,7 +25,15 @@ import {
   loadOrCreateDeviceIdentity,
   type DeviceIdentity,
 } from "../../../../src/infra/device-identity.js";
+import { stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
 import { useAutoCleanupTempDirTracker } from "../../../helpers/temp-dir.js";
+
+const gatewayOwners: ReturnType<typeof createQaGatewayChild>[] = [];
+afterEach(async () => {
+  for (const owner of gatewayOwners.splice(0)) {
+    await stopQaGatewayFixture(owner);
+  }
+});
 
 const TEST_TIMEOUT_MS = 180_000;
 const REQUEST_TIMEOUT_MS = 20_000;
@@ -42,7 +50,7 @@ const FIXTURE_CAPABILITY = "qa-rolling-surface";
 const FIXTURE_COMMAND = "qa.rolling.echo";
 const FIXTURE_ROUTE = "/qa-rolling-surface";
 
-type GatewayHandle = Awaited<ReturnType<typeof startQaGatewayChild>>;
+type GatewayHandle = QaGatewayChild;
 type GatewayConnection = Pick<GatewayHandle, "logs" | "runtimeEnv" | "token" | "wsUrl">;
 type NodeRead = {
   nodeId: string;
@@ -91,7 +99,9 @@ describe("Gateway node control plane", () => {
     "pairs, inventories, invokes, and records presence for one remote device",
     { timeout: TEST_TIMEOUT_MS },
     async () => {
-      const gateway = await startQaGatewayChild({
+      const gatewayOwner = createQaGatewayChild();
+      gatewayOwners.push(gatewayOwner);
+      const gateway = await gatewayOwner.start({
         repoRoot: process.cwd(),
         command: {
           executablePath: process.execPath,
@@ -102,15 +112,14 @@ describe("Gateway node control plane", () => {
         transportBaseUrl: "http://127.0.0.1",
         controlUiEnabled: false,
         runtimeEnvPatch: {
-          OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
           OPENCLAW_SKIP_CHANNELS: "1",
           OPENCLAW_SKIP_PROVIDERS: "1",
           OPENCLAW_TEST_MINIMAL_GATEWAY: "1",
         },
         mutateConfig: (cfg) => {
-          const { plugins: _plugins, ...withoutPlugins } = cfg;
           return {
-            ...withoutPlugins,
+            ...cfg,
+            plugins: { enabled: false },
             gateway: {
               ...cfg.gateway,
               nodes: {
@@ -506,7 +515,9 @@ describe("Gateway node control plane", () => {
       const invocationResponses: Promise<void>[] = [];
 
       try {
-        gateway = await startQaGatewayChild({
+        const gatewayOwner = createQaGatewayChild();
+        gatewayOwners.push(gatewayOwner);
+        gateway = await gatewayOwner.start({
           repoRoot: process.cwd(),
           command: {
             executablePath: process.execPath,
@@ -517,19 +528,18 @@ describe("Gateway node control plane", () => {
           transportBaseUrl: "http://127.0.0.1",
           controlUiEnabled: false,
           runtimeEnvPatch: {
-            OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
             OPENCLAW_SKIP_CHANNELS: "1",
             OPENCLAW_SKIP_PROVIDERS: "1",
             OPENCLAW_TEST_MINIMAL_GATEWAY: "1",
           },
           mutateConfig: (cfg) => {
             // This control-plane fixture must not request unrelated QA runtime plugin installs.
-            const { plugins: _plugins, ...withoutPlugins } = cfg;
             return {
-              ...withoutPlugins,
+              ...cfg,
               plugins: {
                 enabled: true,
                 allow: [FIXTURE_PLUGIN_ID],
+                slots: { memory: "none" },
                 load: { paths: [fixture.pluginDir] },
                 entries: { [FIXTURE_PLUGIN_ID]: { enabled: true } },
               },

@@ -1,14 +1,9 @@
-import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { relayTestKey } from "../../chrome-extension/relay-key.test-support.js";
 import {
-  assertOwnedPath,
   chromeProductRoots,
-  discoverChromeExtensionIds,
   generateChromeExtensionIdForPath,
   installStableChromeExtension,
   stableChromeExtensionDir,
@@ -18,72 +13,16 @@ import {
   installChromeExtensionBootstrap,
   normalizeExtensionInstallWaitMs,
   repairOwnedChromeExtensionNativeHosts,
-  resolveChromeExtensionLoadPath,
   uninstallChromeExtensionNativeHosts,
 } from "./extension-install.js";
+import {
+  FOUNDATION_STORE_ID,
+  predictedId,
+  useExtensionInstallFixture,
+  writeChromePreferences,
+} from "./extension-install.test-support.js";
 
-const ID_A = "abcdefghijklmnopabcdefghijklmnop";
-const FOUNDATION_STORE_ID = "kcdjddhmeafeomebliikmbpblkmkfoig";
-// Changed-file CI runs source tests without dist; full-build lanes exercise the real native host.
-const BUILT_NATIVE_HOST_PATH = path.resolve("dist/extensions/browser/native-host-entry.js");
-const tempRoots: string[] = [];
-const fileModesToRestore: Array<{ target: string; mode: number }> = [];
-
-async function predictedId(candidate: string, platform: NodeJS.Platform = process.platform) {
-  return generateChromeExtensionIdForPath(await fs.realpath(candidate), platform);
-}
-
-async function fixture(platform: NodeJS.Platform = "linux") {
-  const root = await fs.realpath(
-    await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-extension-install-")),
-  );
-  tempRoots.push(root);
-  const homeDir = path.join(root, "home");
-  const stateDir = path.join(homeDir, ".openclaw");
-  const bundledDir = path.join(root, "package", "extensions", "browser", "chrome-extension");
-  const pluginRoot = path.dirname(bundledDir);
-  const nativeHostPath = path.join(root, "package", "native-host-entry.js");
-  await fs.mkdir(path.join(bundledDir, "modules"), { recursive: true, mode: 0o700 });
-  await fs.mkdir(homeDir, { recursive: true, mode: 0o700 });
-  await fs.writeFile(path.join(bundledDir, "manifest.json"), '{"manifest_version":3}\n');
-  await fs.writeFile(path.join(bundledDir, "background.js"), "export {};\n");
-  await fs.writeFile(path.join(bundledDir, "modules", "runtime.js"), "export {};\n");
-  await fs.writeFile(path.join(bundledDir, "modules", "runtime.test.ts"), "throw new Error();\n");
-  await fs.writeFile(path.join(bundledDir, "sidepanel.html"), "must not ship\n");
-  await fs.writeFile(nativeHostPath, "export {};\n", { mode: 0o600 });
-  const nodePath = path.join(root, "bin", "node");
-  await fs.mkdir(path.dirname(nodePath), { recursive: true, mode: 0o700 });
-  await fs.writeFile(nodePath, "#!/bin/sh\nexit 0\n", { mode: 0o700 });
-  const deps = {
-    platform,
-    homeDir,
-    stateDir,
-    env: {
-      HOME: homeDir,
-      LOCALAPPDATA: path.join(homeDir, "AppData", "Local"),
-    },
-    nativeHostPath,
-    // A fixture-owned interpreter keeps assertOwnedPath hermetic: the host's
-    // process.execPath can be group/world-writable (GitHub hostedtoolcache),
-    // which install correctly refuses and every registration test then fails.
-    nodePath,
-  };
-  return { root, homeDir, stateDir, bundledDir, pluginRoot, nativeHostPath, deps };
-}
-
-async function writeSecurePreferences(params: {
-  userDataDir: string;
-  profile: string;
-  entries: Record<string, unknown>;
-}) {
-  const profileDir = path.join(params.userDataDir, params.profile);
-  await fs.mkdir(profileDir, { recursive: true, mode: 0o700 });
-  const file = path.join(profileDir, "Secure Preferences");
-  await fs.writeFile(file, JSON.stringify({ extensions: { settings: params.entries } }), {
-    mode: 0o600,
-  });
-  return file;
-}
+const fixture = useExtensionInstallFixture();
 
 async function rewriteRegistrationOrigins(manifestPath: string, origins: string[]) {
   const manifest = JSON.parse(await fs.readFile(manifestPath, "utf8")) as {
@@ -108,451 +47,14 @@ async function rewriteRegistrationOrigins(manifestPath: string, origins: string[
   return manifest;
 }
 
-afterEach(async () => {
+afterEach(() => {
   vi.restoreAllMocks();
-  await Promise.all(
-    fileModesToRestore
-      .splice(0)
-      .map(({ target, mode }) => fs.chmod(target, mode).catch(() => undefined)),
-  );
-  await Promise.all(
-    tempRoots.splice(0).map((root) => fs.rm(root, { recursive: true, force: true })),
-  );
-});
-
-async function makeTestFilePrivate(target: string): Promise<void> {
-  if (process.platform === "win32") {
-    return;
-  }
-  const mode = (await fs.stat(target)).mode & 0o777;
-  fileModesToRestore.push({ target, mode });
-  await fs.chmod(target, mode & ~0o022);
-}
-
-function statsWithUid<T extends Awaited<ReturnType<typeof fs.lstat>>>(info: T, uid: number): T {
-  return new Proxy(info, {
-    get(target, property) {
-      if (property === "uid") {
-        return uid;
-      }
-      const value = Reflect.get(target, property, target);
-      return typeof value === "function" ? value.bind(target) : value;
-    },
-  });
-}
-
-describe.runIf(process.platform !== "win32")("extension install ownership policy", () => {
-  it("allows only explicit read-only root-owned inputs", async () => {
-    const target = "/opt/openclaw/native-host-entry.js";
-    const getuidSpy = vi.spyOn(process, "getuid").mockReturnValue(1000);
-    const lstatSpy = vi.spyOn(fs, "lstat").mockResolvedValue({
-      isDirectory: () => false,
-      isFile: () => true,
-      isSymbolicLink: () => false,
-      mode: 0o100644,
-      uid: 0,
-    } as Awaited<ReturnType<typeof fs.lstat>>);
-    const realpathSpy = vi.spyOn(fs, "realpath").mockResolvedValue(target);
-    try {
-      await expect(
-        assertOwnedPath(target, "file", { allowRootOwner: true }),
-      ).resolves.toBeUndefined();
-      await expect(assertOwnedPath(target, "file")).rejects.toThrow("foreign owner");
-    } finally {
-      realpathSpy.mockRestore();
-      lstatSpy.mockRestore();
-      getuidSpy.mockRestore();
-    }
-  });
-
-  it.each([
-    { label: "root-owned state", uid: 0, mode: 0o100600, allowRootOwner: false },
-    { label: "foreign-owned input", uid: 2000, mode: 0o100600, allowRootOwner: true },
-    { label: "root-owned group-writable input", uid: 0, mode: 0o100660, allowRootOwner: true },
-    { label: "user-owned world-writable input", uid: 1000, mode: 0o100602, allowRootOwner: false },
-  ])("rejects $label", async ({ uid, mode, allowRootOwner }) => {
-    const target = "/opt/openclaw/unsafe";
-    const getuidSpy = vi.spyOn(process, "getuid").mockReturnValue(1000);
-    const lstatSpy = vi.spyOn(fs, "lstat").mockResolvedValue({
-      isDirectory: () => false,
-      isFile: () => true,
-      isSymbolicLink: () => false,
-      mode,
-      uid,
-    } as Awaited<ReturnType<typeof fs.lstat>>);
-    const realpathSpy = vi.spyOn(fs, "realpath").mockResolvedValue(target);
-    try {
-      await expect(assertOwnedPath(target, "file", { allowRootOwner })).rejects.toThrow(
-        uid !== 1000 && !(allowRootOwner && uid === 0) ? "foreign owner" : "group/world-writable",
-      );
-    } finally {
-      realpathSpy.mockRestore();
-      lstatSpy.mockRestore();
-      getuidSpy.mockRestore();
-    }
-  });
-
-  it("installs from a package-shaped root-owned tree into user-owned state", async () => {
-    const value = await fixture();
-    const chromium = chromeProductRoots(value.deps).find((root) => root.product === "chromium");
-    if (!chromium) {
-      throw new Error("missing Chromium fixture root");
-    }
-    await fs.mkdir(chromium.userDataDir, { recursive: true, mode: 0o700 });
-    const userUid = process.getuid?.() ?? 1000;
-    const packageRoot = path.join(value.root, "package");
-    const canonicalNodePath = await fs.realpath(value.deps.nodePath);
-    const realLstat = fs.lstat.bind(fs);
-    const lstatSpy = vi.spyOn(fs, "lstat").mockImplementation(async (target) => {
-      const info = await realLstat(target);
-      const resolved = path.resolve(String(target));
-      const rootOwned =
-        resolved.startsWith(`${packageRoot}${path.sep}`) || resolved === canonicalNodePath;
-      return statsWithUid(info, rootOwned ? 0 : userUid);
-    });
-    try {
-      let now = 0;
-      const status = await installChromeExtensionBootstrap({
-        bundledDir: value.bundledDir,
-        pluginRoot: value.pluginRoot,
-        waitMs: 1_000,
-        deps: {
-          ...value.deps,
-          now: () => now,
-          sleep: async (ms) => {
-            now += ms;
-          },
-        },
-      });
-
-      expect(status.installedCopy).toMatchObject({ present: true, owned: true });
-      expect(status.registrations.find((entry) => entry.product === "chromium")?.state).toBe(
-        "owned",
-      );
-    } finally {
-      lstatSpy.mockRestore();
-    }
-  });
-});
-
-describe("stable extension copy", () => {
-  it("atomically replaces only its owned runtime copy with private modes", async () => {
-    const value = await fixture();
-    const installed = await installStableChromeExtension(value.bundledDir, value.deps);
-    await fs.writeFile(
-      path.join(value.bundledDir, "background.js"),
-      "export const updated = true;\n",
-    );
-    await installStableChromeExtension(value.bundledDir, value.deps);
-
-    expect(await fs.readFile(path.join(installed, "background.js"), "utf8")).toContain("updated");
-    expect(await fs.readFile(path.join(installed, ".openclaw-owned.json"), "utf8")).toContain(
-      '"owner":"openclaw"',
-    );
-    expect(await fs.readdir(path.join(installed, "modules"))).toEqual(["runtime.js"]);
-    expect(await fs.readdir(installed)).not.toContain("sidepanel.html");
-    if (process.platform !== "win32") {
-      expect((await fs.stat(installed)).mode & 0o777).toBe(0o700);
-      expect((await fs.stat(path.join(installed, "background.js"))).mode & 0o777).toBe(0o600);
-    }
-  });
-
-  it("refuses a foreign target and symlinked source content", async () => {
-    const value = await fixture();
-    const target = stableChromeExtensionDir(value.deps);
-    await fs.mkdir(target, { recursive: true, mode: 0o700 });
-    await expect(installStableChromeExtension(value.bundledDir, value.deps)).rejects.toThrow(
-      "foreign Chrome extension directory",
-    );
-
-    await fs.rm(target, { recursive: true, force: true });
-    await fs.symlink(
-      path.join(value.bundledDir, "background.js"),
-      path.join(value.bundledDir, "link.js"),
-    );
-    await expect(installStableChromeExtension(value.bundledDir, value.deps)).rejects.toThrow(
-      "Refusing symlink",
-    );
-  });
-
-  it("keeps path read-only and prefers the installed copy", async () => {
-    const value = await fixture();
-    await expect(resolveChromeExtensionLoadPath(value.bundledDir, value.deps)).resolves.toBe(
-      await fs.realpath(value.bundledDir),
-    );
-    expect(await fs.stat(value.stateDir).catch(() => null)).toBeNull();
-    const installed = await installStableChromeExtension(value.bundledDir, value.deps);
-    await expect(resolveChromeExtensionLoadPath(value.bundledDir, value.deps)).resolves.toBe(
-      installed,
-    );
-  });
-});
-
-describe("deterministic unpacked extension ID", () => {
-  it("matches Chromium's published POSIX and Windows path vectors", () => {
-    expect(generateChromeExtensionIdForPath("/path/to/file.ext", "linux")).toBe(
-      "lnkgfdknojmdambfcanadbhmfjfljobb",
-    );
-    expect(generateChromeExtensionIdForPath("/path/to/file.ext", "win32")).toBe(
-      "jjlkojfgbeklddcpckipekckcmgcbfjn",
-    );
-  });
-
-  it("normalizes only a lowercase Windows drive letter", () => {
-    expect(generateChromeExtensionIdForPath("c:\\OpenClaw\\extension", "win32")).toBe(
-      generateChromeExtensionIdForPath("C:\\OpenClaw\\extension", "win32"),
-    );
-  });
-});
-
-describe("Secure Preferences discovery", () => {
-  it("discovers multiple exact unpacked IDs and ignores name, location, and path lookalikes", async () => {
-    const value = await fixture();
-    const installed = await installStableChromeExtension(value.bundledDir, value.deps);
-    const chrome = chromeProductRoots(value.deps).find((root) => root.product === "chrome");
-    if (!chrome) {
-      throw new Error("missing Chrome fixture root");
-    }
-    const installedId = await predictedId(installed, value.deps.platform);
-    const bundledId = await predictedId(value.bundledDir, value.deps.platform);
-    await writeSecurePreferences({
-      userDataDir: chrome.userDataDir,
-      profile: "Default",
-      entries: {
-        [installedId]: { location: 4, path: installed, manifest: { name: "Not OpenClaw" } },
-        [FOUNDATION_STORE_ID]: {
-          location: 1,
-          from_webstore: true,
-          path: path.join(value.root, "foreign-store-lookalike"),
-        },
-        ["p".repeat(32)]: { location: 1, path: installed, manifest: { name: "OpenClaw" } },
-      },
-    });
-    await writeSecurePreferences({
-      userDataDir: chrome.userDataDir,
-      profile: "Profile 1",
-      entries: {
-        [bundledId]: { location: 4, path: value.bundledDir },
-        [FOUNDATION_STORE_ID]: { location: 1, from_webstore: false },
-        ["o".repeat(32)]: { location: 4, path: path.join(value.root, "lookalike") },
-      },
-    });
-
-    const result = await discoverChromeExtensionIds({
-      approvedDirs: [installed, value.bundledDir],
-      storeExtensionId: FOUNDATION_STORE_ID,
-      deps: value.deps,
-    });
-
-    expect(result.discovered.map((entry) => [entry.profile, entry.extensionId])).toEqual([
-      ["Default", installedId],
-      ["Profile 1", bundledId],
-    ]);
-    for (const entry of result.discovered) {
-      expect(entry.extensionId).toBe(
-        generateChromeExtensionIdForPath(entry.extensionPath, value.deps.platform),
-      );
-    }
-    expect(result.storeDiscovered).toEqual([
-      expect.objectContaining({
-        profile: "Default",
-        extensionId: FOUNDATION_STORE_ID,
-      }),
-    ]);
-    expect(result.discovered.map((entry) => entry.extensionId)).not.toContain(FOUNDATION_STORE_ID);
-  });
-
-  it("rejects a recorded ID that does not match the canonical approved path", async () => {
-    const value = await fixture();
-    const installed = await installStableChromeExtension(value.bundledDir, value.deps);
-    const chrome = chromeProductRoots(value.deps).find((root) => root.product === "chrome");
-    if (!chrome) {
-      throw new Error("missing Chrome fixture root");
-    }
-    const expected = await predictedId(installed, value.deps.platform);
-    await writeSecurePreferences({
-      userDataDir: chrome.userDataDir,
-      profile: "Default",
-      entries: { [ID_A]: { location: 4, path: installed } },
-    });
-
-    const result = await discoverChromeExtensionIds({
-      approvedDirs: [installed],
-      deps: value.deps,
-    });
-
-    expect(result.discovered).toEqual([]);
-    expect(result.identityMismatches).toHaveLength(1);
-    expect(result.issues[0]).toContain(`does not match predicted ID ${expected}`);
-  });
-
-  it("fails closed on malformed, oversized, locked, and symlinked profile metadata", async () => {
-    const value = await fixture();
-    const chrome = chromeProductRoots(value.deps).find((root) => root.product === "chrome");
-    if (!chrome) {
-      throw new Error("missing Chrome fixture root");
-    }
-    const malformed = await writeSecurePreferences({
-      userDataDir: chrome.userDataDir,
-      profile: "Default",
-      entries: {},
-    });
-    await fs.writeFile(malformed, "{partial", { mode: 0o600 });
-    const profileLink = path.join(chrome.userDataDir, "Profile 2");
-    await fs.symlink(path.join(chrome.userDataDir, "Default"), profileLink);
-    const oversized = await writeSecurePreferences({
-      userDataDir: chrome.userDataDir,
-      profile: "Profile 3",
-      entries: {},
-    });
-    await fs.truncate(oversized, 32 * 1024 * 1024 + 1);
-    const canLockFile = process.platform !== "win32" && process.getuid?.() !== 0;
-    if (canLockFile) {
-      const locked = await writeSecurePreferences({
-        userDataDir: chrome.userDataDir,
-        profile: "Profile 4",
-        entries: {},
-      });
-      await fs.chmod(locked, 0o000);
-    }
-
-    const result = await discoverChromeExtensionIds({
-      approvedDirs: [value.bundledDir],
-      deps: value.deps,
-    });
-    expect(result.discovered).toEqual([]);
-    expect(result.issues.join("\n")).toContain("Default");
-    expect(result.issues.join("\n")).toContain("Profile 3");
-    if (canLockFile) {
-      expect(result.issues.join("\n")).toContain("Profile 4");
-    }
-  });
-
-  it("does not approve a foreign stable copy in status discovery", async () => {
-    const value = await fixture();
-    const target = stableChromeExtensionDir(value.deps);
-    await fs.mkdir(target, { recursive: true, mode: 0o700 });
-    await fs.writeFile(path.join(target, "manifest.json"), "{}\n", { mode: 0o600 });
-    const chrome = chromeProductRoots(value.deps).find((root) => root.product === "chrome");
-    if (!chrome) {
-      throw new Error("missing Chrome fixture root");
-    }
-    await writeSecurePreferences({
-      userDataDir: chrome.userDataDir,
-      profile: "Default",
-      entries: { [await predictedId(target, value.deps.platform)]: { location: 4, path: target } },
-    });
-
-    const status = await browserExtensionStatus({
-      bundledDir: value.bundledDir,
-      deps: value.deps,
-    });
-
-    expect(status.discovered).toEqual([]);
-    expect(status.manualSetupRequired).toBe(true);
-    expect(status.issues.join("\n")).toContain("not OpenClaw-owned");
-  });
 });
 
 describe("native host registration", () => {
-  it.runIf(existsSync(BUILT_NATIVE_HOST_PATH))(
-    "launches with the exact custom installation context when Chrome has no selectors",
-    async () => {
-      const value = await fixture();
-      const stateDir = path.join(value.root, "custom state's dir");
-      const configPath = path.join(value.root, "custom config's dir", "openclaw.json");
-      const nativeHostPath = BUILT_NATIVE_HOST_PATH;
-      await makeTestFilePrivate(nativeHostPath);
-      const relayPort = 19_031;
-      const token = relayTestKey(4);
-      const deps = {
-        ...value.deps,
-        stateDir,
-        nativeHostPath,
-        // This test executes the launcher, so it needs the real interpreter;
-        // dev/CI node installs are never group/world-writable, unlike the
-        // hosted-toolcache binary the fixture default protects against.
-        nodePath: process.execPath,
-        env: {
-          ...value.deps.env,
-          OPENCLAW_STATE_DIR: stateDir,
-          OPENCLAW_CONFIG_PATH: configPath,
-        },
-      };
-      await fs.mkdir(path.join(stateDir, "credentials"), { recursive: true, mode: 0o700 });
-      await fs.mkdir(path.dirname(configPath), { recursive: true, mode: 0o700 });
-      await fs.writeFile(
-        path.join(stateDir, "credentials", "browser-extension-relay.secret"),
-        `${token}\n`,
-        { mode: 0o600 },
-      );
-      await fs.writeFile(
-        configPath,
-        `${JSON.stringify({ browser: { profiles: { e2e: { driver: "extension", cdpPort: relayPort } } } })}\n`,
-        { mode: 0o600 },
-      );
-      const installed = await installStableChromeExtension(value.bundledDir, deps);
-      const chromium = chromeProductRoots(deps).find((root) => root.product === "chromium");
-      if (!chromium) {
-        throw new Error("missing Chromium fixture root");
-      }
-      const extensionId = await predictedId(installed, deps.platform);
-      await writeSecurePreferences({
-        userDataDir: chromium.userDataDir,
-        profile: "Default",
-        entries: { [extensionId]: { location: 4, path: installed } },
-      });
-      const status = await installChromeExtensionBootstrap({
-        bundledDir: value.bundledDir,
-        pluginRoot: value.pluginRoot,
-        waitMs: 1_000,
-        deps,
-      });
-      const registration = status.registrations.find((entry) => entry.product === "chromium");
-      expect(registration, status.issues.join("\n")).toMatchObject({ state: "owned" });
-      const manifest = JSON.parse(await fs.readFile(registration?.manifestPath ?? "", "utf8")) as {
-        path: string;
-      };
-
-      const nonce = Buffer.alloc(16, 7).toString("base64url");
-      const requestBody = Buffer.from(JSON.stringify({ v: 1, op: "bootstrap", nonce }));
-      const requestFrame = Buffer.alloc(requestBody.length + 4);
-      if (os.endianness() === "LE") {
-        requestFrame.writeUInt32LE(requestBody.length);
-      } else {
-        requestFrame.writeUInt32BE(requestBody.length);
-      }
-      requestBody.copy(requestFrame, 4);
-      const host = spawnSync(manifest.path, [`chrome-extension://${extensionId}/`], {
-        input: requestFrame,
-        env: { HOME: value.homeDir },
-        timeout: 10_000,
-      });
-      expect(host.status, host.stderr.toString("utf8")).toBe(0);
-      const frameLength =
-        os.endianness() === "LE" ? host.stdout.readUInt32LE() : host.stdout.readUInt32BE();
-      expect(host.stdout).toHaveLength(frameLength + 4);
-      expect(JSON.parse(host.stdout.subarray(4).toString("utf8"))).toEqual({
-        v: 1,
-        ok: true,
-        nonce,
-        pairingString: `ws://127.0.0.1:18789/browser/extension?gateway=ws%3A%2F%2F127.0.0.1%3A18789#${token}`,
-      });
-    },
-  );
-
-  it("pre-registers predicted IDs before waiting, then verifies Chrome's recorded ID", async () => {
+  it("guides first-time setup when no browser user-data directory exists", async () => {
     const value = await fixture();
-    const installed = stableChromeExtensionDir(value.deps);
-    const chromium = chromeProductRoots(value.deps).find((root) => root.product === "chromium");
-    if (!chromium) {
-      throw new Error("missing Chromium fixture root");
-    }
-    await fs.mkdir(chromium.userDataDir, { recursive: true, mode: 0o700 });
-    const installedId = generateChromeExtensionIdForPath(installed, value.deps.platform);
-    const bundledId = await predictedId(value.bundledDir, value.deps.platform);
     let now = 0;
-    let wroteProfile = false;
     const status = await installChromeExtensionBootstrap({
       bundledDir: value.bundledDir,
       pluginRoot: value.pluginRoot,
@@ -562,57 +64,109 @@ describe("native host registration", () => {
         now: () => now,
         sleep: async (ms) => {
           now += ms;
-          if (!wroteProfile) {
-            const manifestPath = path.join(
-              chromium.nativeManifestDir,
-              "ai.openclaw.browser_bootstrap.json",
-            );
-            const preRegistration = JSON.parse(await fs.readFile(manifestPath, "utf8")) as {
-              allowed_origins: string[];
-            };
-            expect(preRegistration.allowed_origins).toEqual(
-              [installedId, bundledId, FOUNDATION_STORE_ID]
-                .toSorted()
-                .map((id) => `chrome-extension://${id}/`),
-            );
-            wroteProfile = true;
-            await writeSecurePreferences({
-              userDataDir: chromium.userDataDir,
-              profile: "Default",
-              entries: {
-                [installedId]: { location: 4, path: installed },
-              },
-            });
-          }
         },
       },
     });
 
-    expect(status.manualSetupRequired).toBe(false);
-    const registration = status.registrations.find((entry) => entry.product === "chromium");
-    expect(registration).toMatchObject({
-      state: "owned",
-      extensionIds: [installedId, bundledId, FOUNDATION_STORE_ID].toSorted(),
-    });
-    const manifest = await fs.readFile(registration?.manifestPath ?? "", "utf8");
-    expect(manifest).toContain(`chrome-extension://${installedId}/`);
-    expect(manifest).toContain(`chrome-extension://${FOUNDATION_STORE_ID}/`);
-    expect(manifest).not.toMatch(/[0-9a-f]{64}/u);
-    expect(JSON.stringify(status)).not.toMatch(/pairingString|token|Bearer/u);
-    if (process.platform !== "win32") {
-      expect((await fs.stat(registration?.manifestPath ?? "")).mode & 0o777).toBe(0o600);
-      const launcherPath = (JSON.parse(manifest) as { path: string }).path;
-      expect((await fs.stat(launcherPath)).mode & 0o777).toBe(0o700);
-      const launcher = await fs.readFile(launcherPath, "utf8");
-      const expectedOrigins = [installedId, bundledId, FOUNDATION_STORE_ID]
-        .toSorted()
-        .map((id) => `chrome-extension://${id}/`);
-      expect(launcher.match(/chrome-extension:\/\/[a-p]{32}\//gu)?.toSorted()).toEqual(
-        expectedOrigins,
-      );
-      expect(launcher).not.toMatch(/pairingString|Bearer|#[A-Za-z0-9_-]{20}/u);
-    }
+    expect(status.manualSetupRequired).toBe(true);
+    expect(status.registrations.every((entry) => entry.state === "missing")).toBe(true);
+    expect(status.issues).toEqual([expect.stringContaining("No native host was pre-registered.")]);
+    expect(status.issues[0]).toContain("if Chrome has not been launched yet, launch it first");
   });
+
+  it.each(["Preferences", "Secure Preferences"] as const)(
+    "pre-registers predicted IDs before waiting, then verifies Chrome's recorded ID in %s",
+    async (filename) => {
+      const value = await fixture();
+      const installed = stableChromeExtensionDir(value.deps);
+      const chromium = chromeProductRoots(value.deps).find((root) => root.product === "chromium");
+      if (!chromium) {
+        throw new Error("missing Chromium fixture root");
+      }
+      await fs.mkdir(chromium.userDataDir, { recursive: true, mode: 0o700 });
+      const installedId = generateChromeExtensionIdForPath(installed, value.deps.platform);
+      const bundledId = await predictedId(value.bundledDir, value.deps.platform);
+      let now = 0;
+      let wroteProfile = false;
+      await writeChromePreferences({
+        userDataDir: chromium.userDataDir,
+        profile: "Default",
+        filename: filename === "Preferences" ? "Secure Preferences" : "Preferences",
+        entries: {},
+      });
+      const status = await installChromeExtensionBootstrap({
+        bundledDir: value.bundledDir,
+        pluginRoot: value.pluginRoot,
+        waitMs: 1_000,
+        deps: {
+          ...value.deps,
+          now: () => now,
+          sleep: async (ms) => {
+            now += ms;
+            if (!wroteProfile) {
+              const manifestPath = path.join(
+                chromium.nativeManifestDir,
+                "ai.openclaw.browser_bootstrap.json",
+              );
+              const preRegistration = JSON.parse(await fs.readFile(manifestPath, "utf8")) as {
+                allowed_origins: string[];
+              };
+              expect(preRegistration.allowed_origins).toEqual(
+                [installedId, bundledId, FOUNDATION_STORE_ID]
+                  .toSorted()
+                  .map((id) => `chrome-extension://${id}/`),
+              );
+              wroteProfile = true;
+              await writeChromePreferences({
+                filename,
+                userDataDir: chromium.userDataDir,
+                profile: "Default",
+                entries: {
+                  [installedId]: { location: 4, path: installed, disable_reasons: [] },
+                },
+              });
+            }
+          },
+        },
+      });
+
+      expect(status.issues).toEqual([]);
+      expect(status.discovered).toEqual([
+        expect.objectContaining({
+          extensionId: installedId,
+          extensionPath: installed,
+          securePreferencesPath: path.join(chromium.userDataDir, "Default", filename),
+        }),
+      ]);
+      expect(status.manualSetupRequired).toBe(false);
+      await expect(
+        browserExtensionStatus({ bundledDir: value.bundledDir, deps: value.deps }),
+      ).resolves.toEqual(status);
+      const registration = status.registrations.find((entry) => entry.product === "chromium");
+      expect(registration).toMatchObject({
+        state: "owned",
+        extensionIds: [installedId, bundledId, FOUNDATION_STORE_ID].toSorted(),
+      });
+      const manifest = await fs.readFile(registration?.manifestPath ?? "", "utf8");
+      expect(manifest).toContain(`chrome-extension://${installedId}/`);
+      expect(manifest).toContain(`chrome-extension://${FOUNDATION_STORE_ID}/`);
+      expect(manifest).not.toMatch(/[0-9a-f]{64}/u);
+      expect(JSON.stringify(status)).not.toMatch(/pairingString|token|Bearer/u);
+      if (process.platform !== "win32") {
+        expect((await fs.stat(registration?.manifestPath ?? "")).mode & 0o777).toBe(0o600);
+        const launcherPath = (JSON.parse(manifest) as { path: string }).path;
+        expect((await fs.stat(launcherPath)).mode & 0o777).toBe(0o700);
+        const launcher = await fs.readFile(launcherPath, "utf8");
+        const expectedOrigins = [installedId, bundledId, FOUNDATION_STORE_ID]
+          .toSorted()
+          .map((id) => `chrome-extension://${id}/`);
+        expect(launcher.match(/chrome-extension:\/\/[a-p]{32}\//gu)?.toSorted()).toEqual(
+          expectedOrigins,
+        );
+        expect(launcher).not.toMatch(/pairingString|Bearer|#[A-Za-z0-9_-]{20}/u);
+      }
+    },
+  );
 
   it("treats the exact Store record as installed without approving its recorded path", async () => {
     const value = await fixture();
@@ -621,7 +175,7 @@ describe("native host registration", () => {
       throw new Error("missing Chrome fixture root");
     }
     const arbitraryPath = path.join(value.root, "not-an-owned-extension-path");
-    await writeSecurePreferences({
+    await writeChromePreferences({
       userDataDir: chrome.userDataDir,
       profile: "Default",
       entries: {
@@ -656,7 +210,7 @@ describe("native host registration", () => {
     if (!chrome) {
       throw new Error("missing Chrome fixture root");
     }
-    await writeSecurePreferences({
+    await writeChromePreferences({
       userDataDir: chrome.userDataDir,
       profile: "Default",
       entries: { [extensionId]: { location: 4, path: installed } },
@@ -681,6 +235,8 @@ describe("native host registration", () => {
     });
     expect(status.manualSetupRequired).toBe(true);
     expect(status.issues.join("\n")).toContain("pre-registration refused");
+    expect(status.issues.join("\n")).toContain("No native host was pre-registered.");
+    expect(status.issues.join("\n")).not.toContain("No existing Chrome-family user-data directory");
     const repair = await repairOwnedChromeExtensionNativeHosts({
       bundledDir: value.bundledDir,
       pluginRoot: value.pluginRoot,
@@ -710,7 +266,7 @@ describe("native host registration", () => {
       JSON.stringify({ name: "foreign", path: "/foreign/host", allowed_origins: [] }),
       { mode: 0o600 },
     );
-    await writeSecurePreferences({
+    await writeChromePreferences({
       userDataDir: chromium.userDataDir,
       profile: "Default",
       entries: { [extensionId]: { location: 4, path: installed } },
@@ -736,7 +292,7 @@ describe("native host registration", () => {
     if (!chrome) {
       throw new Error("missing Chrome fixture root");
     }
-    await writeSecurePreferences({
+    await writeChromePreferences({
       userDataDir: chrome.userDataDir,
       profile: "Default",
       entries: { [installedId]: { location: 4, path: installed } },
@@ -794,7 +350,7 @@ describe("native host registration", () => {
       if (!chrome) {
         throw new Error("missing Chrome fixture root");
       }
-      await writeSecurePreferences({
+      await writeChromePreferences({
         userDataDir: chrome.userDataDir,
         profile: "Default",
         entries: { [installedId]: { location: 4, path: installed } },
@@ -832,7 +388,7 @@ describe("native host registration", () => {
     if (!chrome) {
       throw new Error("missing Chrome fixture root");
     }
-    await writeSecurePreferences({
+    await writeChromePreferences({
       userDataDir: chrome.userDataDir,
       profile: "Default",
       entries: { [extensionId]: { location: 4, path: installed } },
@@ -870,7 +426,7 @@ describe("native host registration", () => {
     if (!chrome) {
       throw new Error("missing Chrome fixture root");
     }
-    await writeSecurePreferences({
+    await writeChromePreferences({
       userDataDir: chrome.userDataDir,
       profile: "Default",
       entries: { [installedId]: { location: 4, path: installed } },
@@ -922,7 +478,7 @@ describe("native host registration", () => {
     if (!chrome) {
       throw new Error("missing Chrome fixture root");
     }
-    await writeSecurePreferences({
+    await writeChromePreferences({
       userDataDir: chrome.userDataDir,
       profile: "Default",
       entries: { [installedId]: { location: 4, path: installed } },
@@ -978,7 +534,7 @@ describe("native host registration", () => {
     if (!chrome) {
       throw new Error("missing Chrome fixture root");
     }
-    await writeSecurePreferences({
+    await writeChromePreferences({
       userDataDir: chrome.userDataDir,
       profile: "Default",
       entries: { [installedId]: { location: 4, path: installed } },
@@ -1017,29 +573,215 @@ describe("native host registration", () => {
     });
     await expect(fs.readFile(manifest.path, "utf8")).resolves.toContain(movedNativeHost);
   });
-});
 
-describe("platform roots", () => {
-  it("maps Chrome, Chrome for Testing, and Chromium profile roots on every supported OS", async () => {
-    const linux = await fixture("linux");
-    expect(chromeProductRoots(linux.deps).map((entry) => entry.product)).toEqual([
-      "chrome",
-      "chrome-for-testing",
-      "chromium",
-    ]);
-    const mac = await fixture("darwin");
-    expect(chromeProductRoots(mac.deps).map((entry) => entry.product)).toEqual([
-      "chrome",
-      "chrome-for-testing",
-      "chrome-for-testing",
-      "chromium",
-    ]);
-    const windows = await fixture("win32");
-    expect(chromeProductRoots(windows.deps).map((entry) => entry.userDataDir)).toEqual([
-      path.join(windows.deps.env.LOCALAPPDATA, "Google", "Chrome", "User Data"),
-      path.join(windows.deps.env.LOCALAPPDATA, "Google", "Chrome for Testing", "User Data"),
-      path.join(windows.deps.env.LOCALAPPDATA, "Chromium", "User Data"),
-    ]);
+  it.for([
+    { target: "nodePath", failure: "missing", recovery: "repair" },
+    { target: "nativeHostPath", failure: "missing", recovery: "install" },
+    { target: "nodePath", failure: "missing", recovery: "uninstall" },
+    { target: "nodePath", failure: "non-executable", recovery: "repair" },
+    {
+      target: "nativeHostPath",
+      failure: "unreadable",
+      recovery: "install",
+    },
+    { target: "nativeHostPath", failure: "directory", recovery: "repair" },
+    { target: "nodePath", failure: "symlink", recovery: "install" },
+    { target: "nativeHostPath", failure: "unsafe-mode", recovery: "repair" },
+    { target: "nodePath", failure: "relative", recovery: "repair" },
+  ] as const)(
+    "keeps an owned $failure $target non-ready and allows $recovery",
+    async ({ target, failure, recovery }, { skip }) => {
+      if (process.platform === "win32" || (failure === "unreadable" && process.getuid?.() === 0)) {
+        skip();
+      }
+      const value = await fixture();
+      const versionDir = path.join(value.root, "runtime's version '1");
+      await fs.mkdir(versionDir, { mode: 0o700 });
+      const registeredDeps = {
+        ...value.deps,
+        nodePath: path.join(versionDir, "node"),
+        nativeHostPath: path.join(versionDir, "native-host-entry.js"),
+        env: {
+          ...value.deps.env,
+          OPENCLAW_CONFIG_PATH: path.join(value.root, "config's dir", "openclaw.json"),
+        },
+      };
+      const executed = path.join(value.root, "target-executed");
+      await fs.writeFile(value.deps.nodePath, `#!/bin/sh\n: > '${executed}'\nexit 1\n`);
+      await fs.writeFile(
+        value.nativeHostPath,
+        `import { writeFileSync } from 'node:fs';\nwriteFileSync(${JSON.stringify(executed)}, 'executed');\n`,
+      );
+      // Both replacement paths stay available while the registered version disappears.
+      await fs.copyFile(value.deps.nodePath, registeredDeps.nodePath);
+      await fs.copyFile(value.nativeHostPath, registeredDeps.nativeHostPath);
+      const chromium = chromeProductRoots(value.deps).find((root) => root.product === "chromium");
+      if (!chromium) {
+        throw new Error("missing Chromium fixture root");
+      }
+      await writeChromePreferences({
+        userDataDir: chromium.userDataDir,
+        profile: "Default",
+        entries: { [FOUNDATION_STORE_ID]: { location: 1, from_webstore: true } },
+      });
+      const params = { bundledDir: value.bundledDir, pluginRoot: value.pluginRoot, waitMs: 1_000 };
+      const before = await installChromeExtensionBootstrap({ ...params, deps: registeredDeps });
+      expect(before.manualSetupRequired, before.issues.join("\n")).toBe(false);
+      const registration = before.registrations.find((entry) => entry.product === "chromium");
+      if (!registration) {
+        throw new Error("missing Chromium fixture registration");
+      }
+      const manifestBytes = await fs.readFile(registration.manifestPath, "utf8");
+      const manifest = JSON.parse(manifestBytes) as { path: string };
+      let launcherBytes = await fs.readFile(manifest.path, "utf8");
+      const deps = {
+        ...registeredDeps,
+        nodePath: value.deps.nodePath,
+        nativeHostPath: value.nativeHostPath,
+      };
+      await expect(browserExtensionStatus({ ...params, deps })).resolves.toMatchObject({
+        manualSetupRequired: false,
+        issues: [],
+      });
+      const registeredTarget = registeredDeps[target];
+      if (failure === "relative") {
+        const relativeTarget = path.relative(process.cwd(), registeredTarget);
+        await fs.access(relativeTarget, fs.constants.X_OK);
+        const quoteTarget = (launcherTarget: string) =>
+          `'${launcherTarget.replaceAll("'", `'"'"'`)}'`;
+        const relativeLauncher = launcherBytes.replace(
+          quoteTarget(registeredTarget),
+          quoteTarget(relativeTarget),
+        );
+        expect(relativeLauncher).not.toBe(launcherBytes);
+        launcherBytes = relativeLauncher;
+        await fs.writeFile(manifest.path, launcherBytes);
+      } else if (failure === "missing" || failure === "directory" || failure === "symlink") {
+        await fs.rename(registeredTarget, `${registeredTarget}.removed`);
+        if (failure === "directory") {
+          await fs.mkdir(registeredTarget, { mode: 0o700 });
+        } else if (failure === "symlink") {
+          await fs.symlink(deps[target], registeredTarget);
+        }
+      } else {
+        await fs.chmod(
+          registeredTarget,
+          failure === "non-executable" ? 0o600 : failure === "unreadable" ? 0o000 : 0o664,
+        );
+      }
+
+      const broken = await browserExtensionStatus({ ...params, deps });
+      expect(broken.manualSetupRequired).toBe(true);
+      const brokenRegistration = broken.registrations.find((entry) => entry.product === "chromium");
+      if (!brokenRegistration?.issue) {
+        throw new Error("missing Chromium fixture registration issue");
+      }
+      expect(brokenRegistration).toMatchObject({
+        state: "owned",
+        extensionIds: registration.extensionIds,
+      });
+      expect(brokenRegistration.issue).toContain("openclaw browser extension install");
+      expect(brokenRegistration.issue.length).toBeLessThan(200);
+      expect(broken.issues).toEqual([`Chromium: ${brokenRegistration.issue}`]);
+      expect(JSON.stringify(broken)).not.toMatch(/pairingString|token|Bearer|runtime's version/u);
+      expect(brokenRegistration.issue).not.toContain(value.root);
+      expect(await fs.readFile(registration.manifestPath, "utf8")).toBe(manifestBytes);
+      expect(await fs.readFile(manifest.path, "utf8")).toBe(launcherBytes);
+      expect(existsSync(executed)).toBe(false);
+
+      if (failure === "non-executable" || failure === "unreadable" || failure === "unsafe-mode") {
+        const onProgress = vi.fn();
+        const reinstall = await installChromeExtensionBootstrap({
+          ...params,
+          deps: registeredDeps,
+          onProgress,
+        });
+        expect(reinstall.manualSetupRequired).toBe(true);
+        expect(onProgress).not.toHaveBeenCalledWith(
+          expect.stringContaining("Native bootstrap is ready"),
+        );
+        expect(reinstall.issues.join("\n")).toContain("pre-registration refused");
+        expect(reinstall.issues.join("\n")).toContain("No native host was pre-registered.");
+        expect(reinstall.issues.join("\n")).not.toContain(
+          "No existing Chrome-family user-data directory",
+        );
+        expect(await fs.readFile(registration.manifestPath, "utf8")).toBe(manifestBytes);
+        expect(await fs.readFile(manifest.path, "utf8")).toBe(launcherBytes);
+      }
+
+      if (recovery === "uninstall") {
+        await expect(uninstallChromeExtensionNativeHosts({ deps })).resolves.toEqual({
+          removed: [registration.manifestPath, manifest.path],
+          refused: [],
+          manualRequired: false,
+        });
+        expect(existsSync(registration.manifestPath)).toBe(false);
+        expect(existsSync(manifest.path)).toBe(false);
+        return;
+      }
+      if (recovery === "repair") {
+        await expect(repairOwnedChromeExtensionNativeHosts({ ...params, deps })).resolves.toEqual({
+          changes: ["Repaired Chromium OpenClaw native messaging registration."],
+          warnings: [],
+        });
+      } else {
+        expect(
+          (await installChromeExtensionBootstrap({ ...params, deps })).manualSetupRequired,
+        ).toBe(false);
+      }
+      const repaired = await browserExtensionStatus({ ...params, deps });
+      expect(repaired.manualSetupRequired).toBe(false);
+      expect(repaired.issues).toEqual([]);
+      expect(repaired.registrations).toEqual(before.registrations);
+      expect(await fs.readFile(registration.manifestPath, "utf8")).toBe(manifestBytes);
+      expect((await fs.stat(registration.manifestPath)).mode & 0o777).toBe(0o600);
+      expect((await fs.stat(manifest.path)).mode & 0o777).toBe(0o700);
+      expect(existsSync(executed)).toBe(false);
+    },
+  );
+
+  it("keeps an unavailable unused host as a warning after repairing the discovered product", async () => {
+    const value = await fixture();
+    const roots = chromeProductRoots(value.deps);
+    const chrome = roots.find((root) => root.product === "chrome");
+    const chromium = roots.find((root) => root.product === "chromium");
+    if (!chrome || !chromium) {
+      throw new Error("missing browser fixture roots");
+    }
+    await fs.mkdir(chrome.userDataDir, { recursive: true, mode: 0o700 });
+    const installed = await installStableChromeExtension(value.bundledDir, value.deps);
+    await writeChromePreferences({
+      userDataDir: chromium.userDataDir,
+      profile: "Default",
+      entries: {
+        [await predictedId(installed, value.deps.platform)]: { location: 4, path: installed },
+      },
+    });
+    const params = { bundledDir: value.bundledDir, pluginRoot: value.pluginRoot, waitMs: 1_000 };
+    const before = await installChromeExtensionBootstrap({ ...params, deps: value.deps });
+    expect(before.manualSetupRequired).toBe(false);
+    expect(before.registrations.filter((entry) => entry.state === "owned")).toHaveLength(2);
+    const nodePath = `${value.deps.nodePath}-replacement`;
+    await fs.rename(value.deps.nodePath, nodePath);
+    const deps = { ...value.deps, nodePath };
+    const broken = await browserExtensionStatus({ ...params, deps });
+    expect(broken.manualSetupRequired).toBe(true);
+    await expect(repairOwnedChromeExtensionNativeHosts({ ...params, deps })).resolves.toEqual({
+      changes: ["Repaired Chromium OpenClaw native messaging registration."],
+      warnings: [],
+    });
+    const repaired = await browserExtensionStatus({ ...params, deps });
+    expect(repaired.manualSetupRequired).toBe(false);
+    expect(repaired.registrations.find((entry) => entry.product === "chromium")).toEqual(
+      before.registrations.find((entry) => entry.product === "chromium"),
+    );
+    const unused = repaired.registrations.find((entry) => entry.product === "chrome");
+    if (!unused) {
+      throw new Error("missing Chrome fixture registration");
+    }
+    expect(unused.state).toBe("owned");
+    expect(unused.issue).toContain("openclaw browser extension install");
+    expect(repaired.issues).toEqual([`Google Chrome: ${unused.issue}`]);
   });
 });
 

@@ -57,6 +57,7 @@ type OpenAICompatibleChatCompletionChunk = Omit<ChatCompletionChunk, "choices"> 
 type CompletionsStreamOptions = {
   signal?: AbortSignal;
   emitReasoning?: boolean;
+  strictReasoningTags?: boolean;
   firstEventTimeoutMs?: number;
   abortFirstEventStream?: (reason: Error) => void;
   onFirstEventTimeout?: (reason: Error) => void;
@@ -107,6 +108,9 @@ export async function processCompletionsStream(
   const deepSeekTextFilter = shouldFilterDeepSeekDsmlText ? createDeepSeekTextFilter() : null;
   const deepSeekToolCallRecoverer = shouldFilterDeepSeekDsmlText ? createDsmlRecoverer() : null;
   const reasoningTagTextPartitioner = createReasoningTagTextPartitioner();
+  if (options?.strictReasoningTags) {
+    reasoningTagTextPartitioner.markStrict();
+  }
   type ToolCallBlock = {
     type: "toolCall";
     id: string;

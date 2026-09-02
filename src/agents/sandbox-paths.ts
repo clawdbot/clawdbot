@@ -110,6 +110,7 @@ async function assertRawParentWithinRoot(params: {
   filePath: string;
   cwd: string;
   root: string;
+  rootCanonical: string;
 }): Promise<{ rootCanonical: string; targetCanonical: string }> {
   // Win32 resolves reparse-point/.. paths lexically, so it has no equivalent escape.
   // Avoid adding another realpath to this hot path on Windows, where it is expensive.
@@ -134,10 +135,8 @@ async function assertRawParentWithinRoot(params: {
   const rawParent = hasTrailingSeparator ? rawAbsolute : path.dirname(rawAbsolute);
   const finalSegment = hasTrailingSeparator ? "." : path.basename(rawAbsolute);
   const rootResolved = path.resolve(params.root);
-  const [rootCanonical, parentCanonical] = await Promise.all([
-    resolveRawPathViaExistingAncestor(rootResolved),
-    resolveRawPathViaExistingAncestor(rawParent),
-  ]);
+  const { rootCanonical } = params;
+  const parentCanonical = await resolveRawPathViaExistingAncestor(rawParent);
   const targetCanonical =
     path.resolve(rawAbsolute) === rootResolved
       ? await resolveRawPathViaExistingAncestor(rawAbsolute)
@@ -157,20 +156,67 @@ export async function assertSandboxPath(params: {
   allowFinalSymlinkForUnlink?: boolean;
   allowFinalHardlinkForUnlink?: boolean;
 }) {
-  const resolved = resolveSandboxPath(params);
+  const root = path.resolve(params.root);
+  const cwd = path.resolve(params.cwd);
+  let rootCanonical = root;
+  let resolutionCwd = cwd;
+  let filePath = params.filePath;
+  const expanded = expandPath(filePath);
+  if (process.platform !== "win32" && !isWindowsDrivePath(expanded)) {
+    const rootPromise = resolveRawPathViaExistingAncestor(root);
+    const [canonicalRoot, canonicalCwd] = await Promise.all([
+      rootPromise,
+      cwd === root ? rootPromise : resolveRawPathViaExistingAncestor(cwd),
+    ]);
+    rootCanonical = canonicalRoot;
+    resolutionCwd = path.resolve(root, path.relative(rootCanonical, canonicalCwd));
+    // Only caller-owned prefixes may change spelling. Canonicalizing the input
+    // itself would admit unrelated external links pointing into the workspace.
+    const prefixes: [string, string][] = [
+      [cwd, resolutionCwd],
+      [root, root],
+      [rootCanonical, root],
+    ];
+    if (path.isAbsolute(expanded) && isPathInside(rootCanonical, canonicalCwd)) {
+      const rootAlias = path.resolve(cwd, path.relative(canonicalCwd, rootCanonical));
+      // Cwd may itself link deeper into the root; its ancestors are trusted only
+      // after proving the candidate has the recorded root's canonical identity.
+      if (
+        !prefixes.some(([prefix]) => prefix === rootAlias) &&
+        (await resolveRawPathViaExistingAncestor(rootAlias)) === rootCanonical
+      ) {
+        prefixes.push([rootAlias, root]);
+      }
+    }
+    for (const [prefix, replacement] of prefixes.toSorted((a, b) => b[0].length - a[0].length)) {
+      if (expanded === prefix) {
+        filePath = replacement;
+        break;
+      }
+      const prefixWithSeparator = prefix.endsWith(path.sep) ? prefix : `${prefix}${path.sep}`;
+      if (expanded.startsWith(prefixWithSeparator)) {
+        // Preserve raw '..' and trailing separators for the path guards below.
+        const separator = replacement.endsWith(path.sep) ? "" : path.sep;
+        filePath = `${replacement}${separator}${expanded.slice(prefixWithSeparator.length)}`;
+        break;
+      }
+    }
+  }
+  const normalized = { filePath, cwd: resolutionCwd, root, rootCanonical };
+  const resolved = resolveSandboxPath(normalized);
   const policy: PathAliasPolicy = {
     allowFinalSymlinkForUnlink: params.allowFinalSymlinkForUnlink,
     allowFinalHardlinkForUnlink: params.allowFinalHardlinkForUnlink,
   };
   await assertNoPathAliasEscape({
     absolutePath: resolved.resolved,
-    rootPath: params.root,
+    rootPath: root,
     boundaryLabel: "sandbox root",
     policy,
   });
-  // The alias guard owns its specific symlink/hardlink errors; this closes the raw
-  // symlink-then-`..` gap that lexical normalization hides from that guard.
-  const rawTarget = await assertRawParentWithinRoot(params);
+  // Also check raw parents: absolute input can enter the root only after a
+  // symlink/.. prefix outside it, which the alias guard normalizes away.
+  const rawTarget = await assertRawParentWithinRoot(normalized);
   if (path.resolve(rawTarget.targetCanonical) !== path.resolve(resolved.resolved)) {
     await assertNoPathAliasEscape({
       absolutePath: rawTarget.targetCanonical,

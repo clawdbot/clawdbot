@@ -1,8 +1,8 @@
 // Control UI E2E coverage for operator-facing Skills, Nodes, and exec approvals administration.
-import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import type { BrowserContext, Page } from "playwright";
-import { expect, it } from "vitest";
+import { beforeEach, expect, it } from "vitest";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
   installMockGateway,
   type MockGatewayControls,
@@ -17,7 +17,12 @@ const suite = createControlUiE2eSuite({
 });
 
 const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
-const proofDir = path.join(process.cwd(), ".artifacts", "control-ui-e2e", "operator-admin");
+let proofDir: string;
+beforeEach(() => {
+  if (captureUiProof) {
+    proofDir = createControlUiE2eArtifactDir("operator-admin");
+  }
+});
 const viewport = { height: 960, width: 1440 };
 
 const agentRoster = [
@@ -116,9 +121,6 @@ async function waitForRequest(
 }
 
 async function createContext(): Promise<BrowserContext> {
-  if (captureUiProof) {
-    await mkdir(proofDir, { recursive: true });
-  }
   return suite.browser.newContext({
     locale: "en-US",
     serviceWorkers: "block",

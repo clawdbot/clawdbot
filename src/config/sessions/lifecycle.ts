@@ -9,6 +9,10 @@ import {
   type SessionEntry,
   type SessionScope,
 } from "./types.js";
+import {
+  SESSION_WORK_START_CHANGED_ERROR_CODE,
+  SESSION_WORK_START_INVALIDATED_ERROR_CODE,
+} from "./work-start-error.js";
 
 type SessionLifecycleEntry = Pick<
   SessionEntry,
@@ -22,11 +26,15 @@ type SessionWorkStartEntry = Pick<
   | "mainRestartRecovery"
   | "modelSelectionLocked"
   | "sessionId"
+  | "pendingProjectGitUrl"
+  | "pendingWorktree"
 >;
 
 type SessionWorkStartOptions = {
   allowRestartTombstoneReplacement?: boolean;
   expectedSessionId?: string;
+  /** Only workspace preparers and lifecycle cancellation may enter pending sessions. */
+  allowPendingWorkspace?: true;
 };
 
 export function isRestartRecoveryTombstone(
@@ -37,7 +45,6 @@ export function isRestartRecoveryTombstone(
 
 /** Stable Gateway error detail for stale session lifecycle requests. */
 export const SESSION_LIFECYCLE_CHANGED_ERROR_REASON = "session-changed";
-const SESSION_WORK_START_INVALIDATED_ERROR_CODE = "SESSION_WORK_START_INVALIDATED";
 export const SESSION_RESTART_RECOVERY_TOMBSTONE_ERROR_CODE = "SESSION_RESTART_RECOVERY_TOMBSTONE";
 
 export class SessionWorkStartInvalidatedError extends Error {
@@ -49,15 +56,34 @@ export class SessionWorkStartInvalidatedError extends Error {
   }
 }
 
+export class SessionWorkStartChangedError extends Error {
+  readonly code = SESSION_WORK_START_CHANGED_ERROR_CODE;
+
+  constructor(message: string) {
+    super(message);
+    this.name = "SessionWorkStartChangedError";
+  }
+}
+
+export function createSessionWorkStartChangedError(
+  sessionKey: string,
+): SessionWorkStartChangedError {
+  return new SessionWorkStartChangedError(
+    `Session "${sessionKey}" changed while starting work. Retry.`,
+  );
+}
+
 export function isSessionWorkStartInvalidatedError(
   error: unknown,
-): error is SessionWorkStartInvalidatedError {
+): error is SessionWorkStartInvalidatedError | SessionWorkStartChangedError {
   return (
     error instanceof SessionWorkStartInvalidatedError ||
+    error instanceof SessionWorkStartChangedError ||
     (typeof error === "object" &&
       error !== null &&
       "code" in error &&
-      error.code === SESSION_WORK_START_INVALIDATED_ERROR_CODE)
+      (error.code === SESSION_WORK_START_INVALIDATED_ERROR_CODE ||
+        error.code === SESSION_WORK_START_CHANGED_ERROR_CODE))
   );
 }
 
@@ -94,9 +120,16 @@ export function resolveSessionWorkStartError(
       ? `Session "${sessionKey}" ended during restart recovery and cannot be replaced while model selection is locked. Open it in WebChat and use Resume in new session.`
       : `Session "${sessionKey}" ended during restart recovery. Use /new or /reset to start a replacement session.`;
   }
-  return entry?.archivedAt === undefined
-    ? undefined
-    : `Session "${sessionKey}" is archived. Restore it before starting new work.`;
+  if (entry?.archivedAt !== undefined) {
+    return `Session "${sessionKey}" is archived. Restore it before starting new work.`;
+  }
+  if (
+    !options?.allowPendingWorkspace &&
+    (entry?.pendingProjectGitUrl !== undefined || entry?.pendingWorktree !== undefined)
+  ) {
+    return `Session "${sessionKey}" workspace is not ready. Wait for setup to finish or retry in chat.`;
+  }
+  return undefined;
 }
 
 // Transcript headers are read lazily to recover startedAt without parsing full files.

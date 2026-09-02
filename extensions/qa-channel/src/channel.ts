@@ -219,6 +219,63 @@ export const qaChannelPlugin: ChannelPlugin<ResolvedQaChannelAccount> = createCh
         await startQaGatewayAccount(QA_CHANNEL_ID, qaChannelRuntimeMeta.label, ctx);
       },
     },
+    threading: {
+      matchesToolContextTarget: ({ target, toolContext }) => {
+        const requested = parseQaTarget(target, {
+          defaultChatType: toolContext.currentChatType ?? "channel",
+        });
+        return [toolContext.currentChannelId, toolContext.currentMessagingTarget].some(
+          (currentTarget) => {
+            if (!currentTarget) {
+              return false;
+            }
+            const current = parseQaTarget(currentTarget, {
+              defaultChatType: toolContext.currentChatType ?? requested.chatType,
+            });
+            return (
+              current.chatType === requested.chatType &&
+              current.conversationId === requested.conversationId &&
+              (!requested.threadId ||
+                requested.threadId === current.threadId ||
+                requested.threadId === toolContext.currentThreadTs)
+            );
+          },
+        );
+      },
+      buildToolContext: ({ context, hasRepliedRef }) => {
+        const currentMessagingTarget = context.To?.trim() || undefined;
+        const parsedTarget = currentMessagingTarget
+          ? parseQaTarget(currentMessagingTarget, {
+              defaultChatType:
+                context.ChatType === "direct" ||
+                context.ChatType === "group" ||
+                context.ChatType === "channel"
+                  ? context.ChatType
+                  : "channel",
+            })
+          : undefined;
+        const currentThreadTs =
+          context.MessageThreadId != null
+            ? String(context.MessageThreadId)
+            : parsedTarget?.threadId;
+        return {
+          currentChannelId:
+            context.NativeChannelId?.trim() ||
+            parsedTarget?.conversationId ||
+            currentMessagingTarget,
+          currentChatType:
+            context.ChatType === "direct" ||
+            context.ChatType === "group" ||
+            context.ChatType === "channel"
+              ? context.ChatType
+              : parsedTarget?.chatType,
+          currentMessagingTarget,
+          currentThreadTs,
+          ...(currentThreadTs ? { replyToMode: "all" as const } : {}),
+          hasRepliedRef,
+        };
+      },
+    },
     actions: qaChannelMessageActions,
     message: qaChannelMessageAdapter,
   },

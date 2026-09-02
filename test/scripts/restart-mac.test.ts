@@ -667,18 +667,6 @@ describe("scripts/restart-mac.sh", () => {
     expect(launchIndex).toBeGreaterThan(switchIndex);
   });
 
-  it("restores the previous bundle if the staged install cannot complete", () => {
-    const script = readFileSync(restartScriptPath, "utf8");
-    const installBlock = script.slice(
-      script.indexOf("install_staged_app()"),
-      script.indexOf("choose_app_bundle()"),
-    );
-
-    expect(installBlock).toContain('mv "${TARGET_APP_BUNDLE}" "${previous}"');
-    expect(installBlock).toContain('if ! mv "${STAGED_APP_BUNDLE}" "${TARGET_APP_BUNDLE}"');
-    expect(installBlock).toContain('mv "${previous}" "${TARGET_APP_BUNDLE}"');
-  });
-
   it("escalates only exact managed app processes when graceful shutdown stalls", () => {
     const script = readFileSync(restartScriptPath, "utf8");
     const managedKillBlock = script.slice(

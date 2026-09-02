@@ -316,16 +316,16 @@ class InvokeDispatcherTest {
         ),
       deviceHandler = DeviceHandler(appContext),
       notificationsHandler =
-        NotificationsHandler.forTesting(
+        NotificationsHandler(
           appContext = appContext,
           stateProvider = InvokeDispatcherFakeNotificationsStateProvider(),
         ),
-      systemHandler = SystemHandler.forTesting(InvokeDispatcherFakeSystemNotificationPoster()),
+      systemHandler = SystemHandler(InvokeDispatcherFakeSystemNotificationPoster()),
       talkHandler = talkHandler,
-      photosHandler = PhotosHandler.forTesting(appContext, InvokeDispatcherFakePhotosDataSource()),
-      contactsHandler = ContactsHandler.forTesting(appContext, InvokeDispatcherFakeContactsDataSource()),
-      calendarHandler = CalendarHandler.forTesting(appContext, InvokeDispatcherFakeCalendarDataSource()),
-      motionHandler = MotionHandler.forTesting(appContext, InvokeDispatcherFakeMotionDataSource()),
+      photosHandler = PhotosHandler(appContext, InvokeDispatcherFakePhotosDataSource()),
+      contactsHandler = ContactsHandler(appContext, InvokeDispatcherFakeContactsDataSource()),
+      calendarHandler = CalendarHandler(appContext, InvokeDispatcherFakeCalendarDataSource()),
+      motionHandler = MotionHandler(appContext, InvokeDispatcherFakeMotionDataSource()),
       smsHandler = SmsHandler(SmsManager(appContext)),
       debugHandler = DebugHandler(appContext, testDeviceIdentityStore(appContext)),
       callLogHandler = CallLogHandler.forTesting(appContext, InvokeDispatcherFakeCallLogDataSource()),

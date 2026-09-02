@@ -2,8 +2,10 @@ import { createHash } from "node:crypto";
 import { stableStringify } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { CodeModeOutputState } from "./code-mode-json.js";
 import { createCodeModeNamespaceRuntime } from "./code-mode-namespaces.js";
 import { consumeRepairableCodeModeFailure } from "./code-mode-repair-provenance.js";
+import type { CodeModeWorkerResult } from "./code-mode-runtime.js";
 import { applyCodeModeCatalog, resolveCodeModeConfig } from "./code-mode.js";
 import {
   createCodeModeHarness,
@@ -45,34 +47,53 @@ vi.mock("./tools/agents-wait-tool.js", async (importOriginal) => ({
 
 const config = resolveCodeModeConfig({ tools: { codeMode: true } } as never);
 
+function projectWorkerResult(result: CodeModeWorkerResult) {
+  const output = new CodeModeOutputState(config.maxOutputBytes);
+  output.append(result.output);
+  return {
+    ...result,
+    ...output.take(
+      result.status === "completed"
+        ? { value: result.value }
+        : result.status === "failed"
+          ? { error: result.error }
+          : {},
+    ),
+  };
+}
+
 function workerExec(source: string, swarmEnabled: boolean) {
-  return testing.runCodeModeWorker(
-    {
-      kind: "exec",
-      source,
-      config,
-      catalog: [],
-      apiFiles: [],
-      namespaces: [],
-      swarmEnabled,
-    },
-    10_000,
-  );
+  return testing
+    .runCodeModeWorker(
+      {
+        kind: "exec",
+        source,
+        config,
+        catalog: [],
+        apiFiles: [],
+        namespaces: [],
+        swarmEnabled,
+      },
+      10_000,
+    )
+    .then(projectWorkerResult);
 }
 
 function workerResume(
   waiting: Extract<Awaited<ReturnType<typeof workerExec>>, { status: "waiting" }>,
   settledRequests: Array<{ id: string; ok: true; value: unknown }>,
 ) {
-  return testing.runCodeModeWorker(
-    {
-      kind: "resume",
-      snapshotBytes: waiting.snapshotBytes,
-      config,
-      settledRequests,
-    },
-    10_000,
-  );
+  return testing
+    .runCodeModeWorker(
+      {
+        kind: "resume",
+        snapshot: waiting.snapshot,
+        config,
+        settledRequests,
+      },
+      10_000,
+    )
+    .then(projectWorkerResult);
 }
 
 function expectWaiting(
@@ -531,7 +552,7 @@ describe("Code Mode swarm host bridge", () => {
   it("renews expired snapshots while agentWait remains pending", () => {
     const now = 10_000;
     testing.activeRuns.set("cm-pending-agent", {
-      releaseOwner: () => undefined,
+      owner: { close: () => undefined },
       config: { ...config, snapshotTtlSeconds: 60 },
       expiresAt: now - 1,
       agentWaitRetainUntil: now + 120_000,
@@ -554,7 +575,7 @@ describe("Code Mode swarm host bridge", () => {
     const now = 10_000;
     const cancel = vi.fn();
     testing.activeRuns.set("cm-expired-agent", {
-      releaseOwner: () => undefined,
+      owner: { close: () => undefined },
       config: { ...config, snapshotTtlSeconds: 60 },
       expiresAt: now - 1,
       agentWaitRetainUntil: now - 1,

@@ -10,12 +10,12 @@ import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/acco
 import { resolveNormalizedAccountEntry } from "openclaw/plugin-sdk/account-resolution-runtime";
 import { resolveIntegerOption } from "openclaw/plugin-sdk/number-runtime";
 import { mergePairLoopGuardConfig } from "openclaw/plugin-sdk/pair-loop-guard-runtime";
-import { resolveDefaultSecretProviderAlias } from "openclaw/plugin-sdk/provider-auth";
 import { tryReadSecretFileSync } from "openclaw/plugin-sdk/secret-file-runtime";
 import {
   normalizeSecretInputString,
   resolveSecretInputString,
 } from "openclaw/plugin-sdk/secret-input";
+import { canResolveEnvSecretRefInReadOnlyPath } from "openclaw/plugin-sdk/secret-ref-readonly";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type {
   ClickClackAccountConfig,
@@ -160,24 +160,20 @@ function resolveClickClackToken(params: {
         : { token: "", tokenSource: "none", tokenStatus: "missing" };
     }
     if (resolved.status === "configured_unavailable" && resolved.ref.source === "env") {
-      const providerConfig = params.cfg.secrets?.providers?.[resolved.ref.provider];
-      if (providerConfig) {
+      if (!canResolveEnvSecretRefInReadOnlyPath({ cfg: params.cfg, ...resolved.ref })) {
+        const providerConfig = params.cfg.secrets?.providers?.[resolved.ref.provider];
+        if (!providerConfig) {
+          throw new Error(
+            `Secret provider "${resolved.ref.provider}" is not configured (ref: env:${resolved.ref.provider}:${resolved.ref.id}).`,
+          );
+        }
         if (providerConfig.source !== "env") {
           throw new Error(
             `Secret provider "${resolved.ref.provider}" has source "${providerConfig.source}" but ref requests "env".`,
           );
         }
-        if (providerConfig.allowlist && !providerConfig.allowlist.includes(resolved.ref.id)) {
-          throw new Error(
-            `Environment variable "${resolved.ref.id}" is not allowlisted in secrets.providers.${resolved.ref.provider}.allowlist.`,
-          );
-        }
-      } else if (
-        resolved.ref.provider !==
-        resolveDefaultSecretProviderAlias({ secrets: params.cfg.secrets }, "env")
-      ) {
         throw new Error(
-          `Secret provider "${resolved.ref.provider}" is not configured (ref: env:${resolved.ref.provider}:${resolved.ref.id}).`,
+          `Environment variable "${resolved.ref.id}" is not allowlisted in secrets.providers.${resolved.ref.provider}.allowlist.`,
         );
       }
       const token = normalizeSecretInputString((params.env ?? process.env)[resolved.ref.id]);

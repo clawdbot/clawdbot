@@ -1,25 +1,25 @@
 // Duration-weighted sharding keeps serial Control UI E2E runners from
 // clustering the slowest browser suites behind Vitest's equal-file-count hash.
 import { statSync } from "node:fs";
-import { basename } from "node:path";
+import { basename, relative } from "node:path";
+import { fileURLToPath } from "node:url";
 import { BaseSequencer, type TestSpecification } from "vitest/node";
+import { readUiE2eFileTimings } from "../../scripts/lib/ci-test-timings.mts";
+import { selectWeightedShard } from "./vitest.weighted-sharding.ts";
 
-// Measured wall seconds per file, medianed over the checks-ui-e2e job logs of
-// CI runs 33063115103 and 33055390669 (2026-08-27). Only the slowest files are
-// listed, and deliberately so: they carry the tallest shard, while the ~4s
-// median file is interchangeable and rides the byte proxy below.
+// Cold-start fallback when committed measurements are missing. Refresh
+// config/ci-test-timings.json with `pnpm ci:timings:refit`, not these literals.
 //
-// Listing every file does not pay. Cross-validated over runs 33116963478,
-// 33117411412, and 33117811987 (weights fit on two runs, shards scored on the
-// held-out third), a full 286-file table beat this one by ~13s on the tallest
-// shard at 11 shards and by ~0-7s at 13-14, because per-file run-to-run noise
-// (p50 16%, p90 40%) swamps the remaining prediction error. Dropping the hints
-// entirely does cost real time -- bytes alone correlate at r=0.79, mispredict
-// by up to 3.6x, and push the tallest shard from ~222s to ~259s at 11 shards --
-// so keep this table sized to the slow tail and re-measure it when that tail
-// shifts. The tallest shard is bounded by shard count and the ~116s per-shard
-// job floor, not by this map; see the `checks-ui-e2e` note in docs/ci.md.
-// Refresh by summing `<file> (n tests) <ms>` per file across two runs' logs.
+// Only the slow tail is listed here, deliberately: cross-validated over CI runs
+// 33116963478, 33117411412, and 33117811987 (weights fit on two, shards scored
+// on the held-out third), a full 286-file table beat this one by ~13s on the
+// tallest shard at 11 shards and ~0-7s at 13-14, because per-file run-to-run
+// noise (p50 16%, p90 40%) swamps the remaining prediction error. That same
+// noise is why the refit keeps a weight until the new median moves >15%.
+// Dropping the hints entirely does cost real time -- bytes alone correlate at
+// r=0.79, mispredict by up to 3.6x, and push the tallest shard from ~222s to
+// ~259s at 11 shards. The tallest shard is bounded by shard count and the
+// ~116s per-shard job floor, not by this map; see docs/ci.md.
 const UI_E2E_FILE_SECONDS_HINTS = new Map<string, number>([
   ["activity-run-inspector.e2e.test.ts", 23],
   ["agent-file-lifecycle.e2e.test.ts", 35],
@@ -106,43 +106,35 @@ const UI_E2E_FILE_SECONDS_HINTS = new Map<string, number>([
 // Median seconds per KB across all 247 measured suites. Unlisted files -- new
 // tests included -- keep rebalancing automatically off their source size.
 const UI_E2E_FALLBACK_SECONDS_PER_KB = 0.38;
-
-type ShardBucket = {
-  seconds: number;
-  files: TestSpecification[];
-};
+const repoRoot = fileURLToPath(new URL("../../", import.meta.url));
 
 function estimateFileSeconds(moduleId: string): number {
-  const hint = UI_E2E_FILE_SECONDS_HINTS.get(basename(moduleId));
-  if (hint !== undefined) {
-    return hint;
-  }
-  return (statSync(moduleId).size / 1024) * UI_E2E_FALLBACK_SECONDS_PER_KB;
+  const { fileSeconds, perFileOverheadSeconds } = readUiE2eFileTimings();
+  const repoPath = relative(repoRoot, moduleId).replaceAll("\\", "/");
+  const seconds =
+    fileSeconds[repoPath] ??
+    UI_E2E_FILE_SECONDS_HINTS.get(basename(moduleId)) ??
+    (statSync(moduleId).size / 1024) * UI_E2E_FALLBACK_SECONDS_PER_KB;
+  return seconds + perFileOverheadSeconds;
 }
 
 export class UiE2eSequencer extends BaseSequencer {
   override async shard(files: TestSpecification[]): Promise<TestSpecification[]> {
     // Vitest invokes shard() only when config.shard is present.
-    const { count, index } = this.ctx.config.shard!;
-    const buckets: ShardBucket[] = Array.from({ length: count }, () => ({
-      seconds: 0,
-      files: [],
-    }));
-    const weightedFiles = files
-      .map((file) => ({ seconds: estimateFileSeconds(file.moduleId), file }))
-      .sort(
-        (left, right) =>
-          right.seconds - left.seconds || left.file.moduleId.localeCompare(right.file.moduleId),
-      );
-
-    for (const weightedFile of weightedFiles) {
-      const bucket = buckets.reduce((lightest, candidate) =>
-        candidate.seconds < lightest.seconds ? candidate : lightest,
-      );
-      bucket.seconds += weightedFile.seconds;
-      bucket.files.push(weightedFile.file);
-    }
-
-    return buckets[index - 1]!.files;
+    return selectWeightedShard(
+      files,
+      this.ctx.config.shard!,
+      (file) => estimateFileSeconds(file.moduleId) / effectiveProjectWorkers(file),
+    );
   }
+}
+
+function effectiveProjectWorkers(file: TestSpecification): number {
+  // Mirror Vitest's project-first, root-second worker resolution. The UI config
+  // pins both sources, so an implicit host-sized fallback would hide drift.
+  const workers = file.project.config.maxWorkers ?? file.project.vitest.config.maxWorkers;
+  if (typeof workers !== "number" || !Number.isInteger(workers) || workers < 1) {
+    throw new Error(`Control UI E2E project ${file.project.name} needs an explicit worker count`);
+  }
+  return workers;
 }

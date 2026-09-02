@@ -1,5 +1,7 @@
 // Openshell tests cover mirror plugin behavior.
+import { execFileSync } from "node:child_process";
 import fs from "node:fs/promises";
+import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
@@ -13,7 +15,8 @@ import {
 const dirs: string[] = [];
 
 async function makeTmpDir(): Promise<string> {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-mirror-test-"));
+  // Keep nested socket paths within macOS's 104-byte sockaddr_un.sun_path.
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "oc-mir-"));
   dirs.push(dir);
   return dir;
 }
@@ -233,6 +236,36 @@ describe("replaceDirectoryContents", () => {
     await expectPathMissing(path.join(target, "escaped-link"));
     await expectPathMissing(path.join(target, "nested", "escaped-dir"));
   });
+
+  it.runIf(process.platform !== "win32")(
+    "preserves target-only special files and their ancestor directories",
+    async () => {
+      const source = await makeTmpDir();
+      const target = await makeTmpDir();
+      const nested = path.join(target, "nested");
+      const fifoPath = path.join(nested, "host.fifo");
+      const socketPath = path.join(nested, "host.sock");
+      await fs.mkdir(nested);
+      execFileSync("mkfifo", [fifoPath]);
+      const server = net.createServer();
+      server.listen(socketPath);
+      await new Promise<void>((resolve, reject) => {
+        server.once("listening", resolve);
+        server.once("error", reject);
+      });
+
+      try {
+        await replaceDirectoryContents({ sourceDir: source, targetDir: target });
+
+        expect((await fs.lstat(fifoPath)).isFIFO()).toBe(true);
+        expect((await fs.lstat(socketPath)).isSocket()).toBe(true);
+      } finally {
+        await new Promise<void>((resolve, reject) => {
+          server.close((error) => (error ? reject(error) : resolve()));
+        });
+      }
+    },
+  );
 
   it.each(["directory", "absent", "file", "symlink"] as const)(
     "preserves trusted host symlinks when their remote ancestor is %s",

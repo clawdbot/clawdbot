@@ -124,6 +124,7 @@ Allowed MIME types (default): `text/plain`, `text/markdown`, `text/html`, `text/
 
 Current behavior:
 
+- Text inferred from otherwise untyped bytes retains its detected encoding, including UTF-16 and Windows-1252. Declared text charsets remain supported.
 - File content is decoded and added to the **system prompt**, not the user message, so it stays ephemeral (not persisted in session history).
 - Decoded file text is wrapped as **untrusted external content** before it is added, so file bytes are treated as data, not trusted instructions. The injected block uses explicit boundary markers (`<<<EXTERNAL_UNTRUSTED_CONTENT id="...">>>` / `<<<END_EXTERNAL_UNTRUSTED_CONTENT id="...">>>`) and a `Source: External` metadata line. It intentionally omits the long `SECURITY NOTICE:` banner to preserve prompt budget; the boundary markers and metadata still apply.
 - PDFs are parsed for text first. If little text is found, the first pages are rasterized into images and passed to the model, and the injected file block uses the placeholder `[PDF content rendered to images]`.
@@ -224,6 +225,8 @@ Set `stream: true` to receive Server-Sent Events:
 - Stream ends with `data: [DONE]`
 
 Event types currently emitted: `response.created`, `response.in_progress`, `response.output_item.added`, `response.content_part.added`, `response.output_text.delta`, `response.output_text.done`, `response.content_part.done`, `response.output_item.done`, `response.completed`, `response.failed` (on error).
+
+Failed agent runs, including whole-agent timeouts, return a failed response. Streaming failures emit `response.failed` followed by `[DONE]`; partial content may already have reached the client. Timeout settings follow the [agent loop](/concepts/agent-loop#timeouts).
 
 ## Usage
 

@@ -1,5 +1,7 @@
 package ai.openclaw.app.node
 
+import ai.openclaw.app.AppearanceThemeFamily
+import ai.openclaw.app.AppearanceThemeMode
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
@@ -81,6 +83,44 @@ class NodeUtilsTest {
       assertEquals(source, expected, resolveGatewayAccentArgb(config))
     }
     assertNull(resolveGatewayAccentArgb(null))
+  }
+
+  @Test
+  fun resolveGatewayThemeFallbacksHonorPrefsAndWebDefaults() {
+    val configured =
+      json.parseToJsonElement(
+        """{"ui":{"prefs":{"theme":"dash","themeMode":"light"}}}""",
+      ) as JsonObject
+    val invalid =
+      json.parseToJsonElement(
+        """{"ui":{"prefs":{"theme":"unknown","themeMode":"unknown"}}}""",
+      ) as JsonObject
+
+    assertEquals(AppearanceThemeFamily.Dash, resolveGatewayThemeFamily(configured))
+    assertEquals(AppearanceThemeMode.Light, resolveGatewayThemeMode(configured))
+    assertEquals(AppearanceThemeFamily.Claw, resolveGatewayThemeFamily(invalid))
+    assertEquals(AppearanceThemeMode.System, resolveGatewayThemeMode(invalid))
+    assertEquals(AppearanceThemeFamily.Claw, resolveGatewayThemeFamily(null))
+    assertEquals(AppearanceThemeMode.System, resolveGatewayThemeMode(null))
+  }
+
+  @Test
+  fun resolvePublishedGatewayAccentArgb_preservesFallbackWhileProfileAccentIsStale() {
+    val profileAccent = 0xFF123456L
+    val gatewayFallback = 0xFFABCDEFL
+
+    assertEquals(
+      gatewayFallback,
+      resolvePublishedGatewayAccentArgb(profileAccent, gatewayFallback, profileAccentFresh = false),
+    )
+    assertEquals(
+      gatewayFallback,
+      resolvePublishedGatewayAccentArgb(null, gatewayFallback, profileAccentFresh = false),
+    )
+    assertEquals(
+      profileAccent,
+      resolvePublishedGatewayAccentArgb(profileAccent, gatewayFallback, profileAccentFresh = true),
+    )
   }
 
   @Test

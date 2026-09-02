@@ -72,13 +72,14 @@ import {
 } from "./control-ui-routing.js";
 import { normalizeControlUiBasePath } from "./control-ui-shared.js";
 import {
+  isControlUiFileUnmodified,
   isControlUiPrecompressedAssetExtension,
   isControlUiStaticAssetExtension,
   readAndCloseControlUiFile,
-  readAndCloseControlUiFileText,
   resolveControlUiHtmlEncoding,
   resolveOpenedControlUiRepresentation,
   respondControlUiNotAcceptable,
+  respondControlUiNotModified,
   respondHeadForControlUiFile,
   sendControlUiHtmlBody,
   serveControlUiAsset,
@@ -709,7 +710,7 @@ function resolveSafeControlUiFile(
   rootReal: string,
   filePath: string,
   rejectHardlinks: boolean,
-): { path: string; fd: number; size: number } | null {
+): { path: string; fd: number; size: number; mtimeMs: number } | null {
   const opened = openRootFileSync({
     absolutePath: filePath,
     rootPath: rootReal,
@@ -729,7 +730,7 @@ function resolveSafeControlUiFile(
       fallback: () => null,
     });
   }
-  return { path: opened.path, fd: opened.fd, size: opened.stat.size };
+  return { path: opened.path, fd: opened.fd, size: opened.stat.size, mtimeMs: opened.stat.mtimeMs };
 }
 
 function isSafeRelativePath(relPath: string) {
@@ -880,7 +881,11 @@ export async function handleControlUiHttpRequest(
     const assistantAgentId = resolvedIdentity?.agentId;
     const avatarProjection =
       config && resolvedIdentity
-        ? resolveGatewayAssistantAvatar({ cfg: config, identity: resolvedIdentity })
+        ? resolveGatewayAssistantAvatar({
+            cfg: config,
+            identity: resolvedIdentity,
+            httpBasePath: basePath,
+          })
         : { avatar: identity.avatar, resolution: null };
     const avatarMeta = controlUiAvatarResolutionMeta(avatarProjection.resolution);
     sendJson(res, 200, {
@@ -1024,34 +1029,10 @@ export async function handleControlUiHttpRequest(
       safeFile = resolveSafeControlUiFile(retained.rootRealPath, retained.filePath, true);
     }
   }
-  if (safeFile) {
-    if (path.basename(safeFile.path) === "index.html") {
-      if (req.method === "HEAD") {
-        try {
-          const encoding = resolveControlUiHtmlEncoding(req);
-          if (encoding === "not-acceptable") {
-            respondControlUiNotAcceptable(res);
-            return true;
-          }
-          respondHeadForControlUiFile(res, safeFile.path, {
-            encoding: encoding === "identity" ? undefined : encoding,
-          });
-          return true;
-        } finally {
-          fs.closeSync(safeFile.fd);
-        }
-      }
-      const body = await readAndCloseControlUiFileText(safeFile.fd);
-      await serveResolvedIndexHtml(
-        req,
-        res,
-        body,
-        basePath,
-        terminalEnabled,
-        opts?.config?.gateway?.controlUi?.environment,
-      );
-      return true;
-    }
+  if (safeFile && path.basename(safeFile.path) !== "index.html") {
+    // Future filesystem clocks must not make later replacements look unmodified;
+    // clamp to response origination as in resolveByteResponse.
+    const lastModifiedMs = Math.floor(Math.min(safeFile.mtimeMs, Date.now()) / 1_000) * 1_000;
     const representation = resolveOpenedControlUiRepresentation({
       req,
       sourceFile: safeFile,
@@ -1063,44 +1044,51 @@ export async function handleControlUiHttpRequest(
       respondControlUiNotAcceptable(res);
       return true;
     }
+    // Negotiation failures precede preconditions; release the selected representation on 304.
+    if (isControlUiFileUnmodified(req, lastModifiedMs)) {
+      fs.closeSync(representation.bodyFile.fd);
+      respondControlUiNotModified(res, { immutable: immutableAsset, lastModifiedMs });
+      return true;
+    }
     if (req.method === "HEAD") {
       try {
         respondHeadForControlUiFile(res, representation.contentPath, {
           immutable: immutableAsset,
           encoding: representation.encoding,
           contentLength: representation.bodyFile.size,
+          lastModifiedMs,
         });
         return true;
       } finally {
         fs.closeSync(representation.bodyFile.fd);
       }
     }
-    const body = await readAndCloseControlUiFile(representation.bodyFile.fd);
+    const body = await readAndCloseControlUiFile(representation.bodyFile);
     await serveControlUiAsset(res, representation.contentPath, body, {
       immutable: immutableAsset,
       encoding: representation.encoding,
+      lastModifiedMs,
     });
     return true;
   }
 
-  // If the requested path looks like a static asset (known extension), return
-  // 404 rather than falling through to the SPA index.html fallback.  We check
-  // against the same extension set used by the static response helper so
-  // that dotted SPA routes (e.g. /user/jane.doe, /v2.0) still get the
-  // client-side router fallback.
-  if (isControlUiStaticAssetExtension(path.extname(fileRel).toLowerCase())) {
-    respondControlUiNotFound(res);
-    return true;
+  if (!safeFile) {
+    // Missing assets stay 404; dotted routes can still use the SPA document.
+    if (isControlUiStaticAssetExtension(path.extname(fileRel).toLowerCase())) {
+      respondControlUiNotFound(res);
+      return true;
+    }
+    if (!route.spaFallback) {
+      return false;
+    }
+    const indexPath = path.resolve(root, "index.html");
+    if (filePath !== indexPath) {
+      safeFile = resolveSafeControlUiFile(rootReal, indexPath, rejectHardlinks);
+    }
   }
 
-  if (!route.spaFallback) {
-    return false;
-  }
-
-  // SPA fallback (client-side router): serve index.html for unknown paths.
-  const indexPath = path.join(root, "index.html");
-  const safeIndex = resolveSafeControlUiFile(rootReal, indexPath, rejectHardlinks);
-  if (safeIndex) {
+  // Direct documents and SPA fallbacks share rewriting, CSP, encoding and fd ownership.
+  if (safeFile) {
     if (req.method === "HEAD") {
       try {
         const encoding = resolveControlUiHtmlEncoding(req);
@@ -1108,15 +1096,15 @@ export async function handleControlUiHttpRequest(
           respondControlUiNotAcceptable(res);
           return true;
         }
-        respondHeadForControlUiFile(res, safeIndex.path, {
+        respondHeadForControlUiFile(res, safeFile.path, {
           encoding: encoding === "identity" ? undefined : encoding,
         });
         return true;
       } finally {
-        fs.closeSync(safeIndex.fd);
+        fs.closeSync(safeFile.fd);
       }
     }
-    const body = await readAndCloseControlUiFileText(safeIndex.fd);
+    const body = (await readAndCloseControlUiFile(safeFile)).toString("utf8");
     await serveResolvedIndexHtml(
       req,
       res,

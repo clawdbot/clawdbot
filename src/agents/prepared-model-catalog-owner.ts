@@ -1,10 +1,11 @@
 import { normalizeAgentId } from "../routing/session-key.js";
-import { listAgentIds, resolveAgentDir, resolveAgentWorkspaceDir } from "./agent-scope.js";
+import { listAgentIds, resolveAgentDir, resolveAgentWorkspaceDir } from "./agent-scope-config.js";
 import type {
   PublishedModelCatalogOwnerCandidate,
   ResolvedPublishedModelCatalogOwner,
 } from "./prepared-model-catalog.types.js";
 import { getPreparedModelRuntimeAuthStore } from "./prepared-model-runtime-auth.js";
+import type { PreparedModelRuntimeInput } from "./prepared-model-runtime.types.js";
 
 class PublishedModelCatalogOwnerResolutionError extends Error {
   constructor(message: string) {
@@ -13,31 +14,40 @@ class PublishedModelCatalogOwnerResolutionError extends Error {
   }
 }
 
-export function resolvePublishedModelCatalogOwner(
-  snapshot: PublishedModelCatalogOwnerCandidate,
-): ResolvedPublishedModelCatalogOwner {
-  const configuredAgentIds = listAgentIds(snapshot.config);
-  const directoryAgentIds = configuredAgentIds.filter(
-    (candidate) => resolveAgentDir(snapshot.config, candidate) === snapshot.agentDir,
-  );
-  const agentId = snapshot.agentId
+export function preparePublishedModelCatalogOwnerIdentity(
+  input: PreparedModelRuntimeInput,
+): PublishedModelCatalogOwnerCandidate["catalogOwner"] {
+  const env = input.env ?? process.env;
+  const configuredAgentIds = listAgentIds(input.config);
+  const directoryAgentIds = input.agentId
+    ? []
+    : configuredAgentIds.filter(
+        (candidate) => resolveAgentDir(input.config, candidate, env) === input.agentDir,
+      );
+  const agentId = input.agentId
     ? configuredAgentIds.find(
-        (candidate) => normalizeAgentId(candidate) === normalizeAgentId(snapshot.agentId),
+        (candidate) => normalizeAgentId(candidate) === normalizeAgentId(input.agentId),
       )
     : directoryAgentIds.length === 1
       ? directoryAgentIds[0]
       : undefined;
-  if (!agentId || resolveAgentDir(snapshot.config, agentId) !== snapshot.agentDir) {
+  if (!agentId || resolveAgentDir(input.config, agentId, env) !== input.agentDir) {
+    return undefined;
+  }
+  const workspaceDir = input.workspaceDir ?? resolveAgentWorkspaceDir(input.config, agentId, env);
+  return workspaceDir ? Object.freeze({ agentId, workspaceDir }) : undefined;
+}
+
+export function resolvePublishedModelCatalogOwner(
+  snapshot: PublishedModelCatalogOwnerCandidate,
+): ResolvedPublishedModelCatalogOwner {
+  const { catalogOwner } = snapshot;
+  if (!catalogOwner) {
     throw new PublishedModelCatalogOwnerResolutionError(
       `published model catalog owner did not identify one configured agent (${snapshot.agentDir})`,
     );
   }
-  const workspaceDir = snapshot.workspaceDir ?? resolveAgentWorkspaceDir(snapshot.config, agentId);
-  if (!workspaceDir) {
-    throw new PublishedModelCatalogOwnerResolutionError(
-      `published model catalog owner did not identify a workspace (${agentId})`,
-    );
-  }
+  const { agentId, workspaceDir } = catalogOwner;
   const authStore = snapshot.authStore ?? getPreparedModelRuntimeAuthStore(snapshot);
   if (!authStore) {
     throw new PublishedModelCatalogOwnerResolutionError(
@@ -45,6 +55,7 @@ export function resolvePublishedModelCatalogOwner(
     );
   }
   return Object.freeze({
+    catalogOwner,
     agentId,
     agentDir: snapshot.agentDir,
     workspaceDir,

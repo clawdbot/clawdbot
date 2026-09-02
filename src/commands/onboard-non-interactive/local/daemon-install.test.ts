@@ -9,6 +9,7 @@ const buildGatewayInstallPlan = vi.hoisted(() => vi.fn());
 const gatewayInstallErrorHint = vi.hoisted(() => vi.fn(() => "hint"));
 const resolveGatewayInstallToken = vi.hoisted(() => vi.fn());
 const serviceInstall = vi.hoisted(() => vi.fn(async () => {}));
+const serviceReadCommand = vi.hoisted(() => vi.fn());
 const ensureSystemdUserLingerNonInteractive = vi.hoisted(() => vi.fn(async () => {}));
 const isSystemdUserServiceAvailable = vi.hoisted(() => vi.fn(async () => true));
 
@@ -24,6 +25,7 @@ vi.mock("../../gateway-install-token.js", () => ({
 vi.mock("../../../daemon/service.js", () => ({
   resolveGatewayService: vi.fn(() => ({
     install: serviceInstall,
+    readCommand: serviceReadCommand,
   })),
 }));
 
@@ -43,6 +45,7 @@ vi.mock("../../systemd-linger.js", () => ({
 describe("installGatewayDaemonNonInteractive", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    serviceReadCommand.mockResolvedValue(null);
     isSystemdUserServiceAvailable.mockResolvedValue(true);
     resolveGatewayInstallToken.mockResolvedValue({
       token: undefined,
@@ -56,8 +59,25 @@ describe("installGatewayDaemonNonInteractive", () => {
     });
   });
 
-  it("does not pass plaintext token for SecretRef-managed install", async () => {
+  it("preserves stored heap controls without passing plaintext tokens for SecretRef-managed install", async () => {
     const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+    const managedDefinition = {
+      programArguments: [
+        "/usr/bin/node",
+        "--max-old-space-size=24576",
+        "--require=/tmp/service-preload.js",
+        "/usr/local/bin/openclaw",
+        "gateway",
+      ],
+      environment: { NODE_OPTIONS: "--max-heap-size=32768", UNRELATED: "not-persisted" },
+    };
+    const existingCommand = {
+      programArguments: ["/operator/drop-in-wrapper", "gateway"],
+      environment: { NODE_OPTIONS: "--max-old-space-size=1024" },
+      managedDefinition,
+      managedOverrides: { environment: { keys: ["NODE_OPTIONS"] } },
+    };
+    serviceReadCommand.mockResolvedValue(existingCommand);
 
     await installGatewayDaemonNonInteractive({
       nextConfig: {
@@ -79,6 +99,12 @@ describe("installGatewayDaemonNonInteractive", () => {
 
     expect(resolveGatewayInstallToken).toHaveBeenCalledTimes(1);
     expect(buildGatewayInstallPlan).toHaveBeenCalledTimes(1);
+    expect(buildGatewayInstallPlan).toHaveBeenCalledWith(
+      expect.objectContaining({
+        existingCommand,
+      }),
+    );
+    expect(buildGatewayInstallPlan.mock.calls[0]?.[0]).not.toHaveProperty("existingEnvironment");
     expect(
       "token" in
         expectDefined(

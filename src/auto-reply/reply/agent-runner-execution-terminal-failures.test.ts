@@ -1,10 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
 import { FailoverError } from "../../agents/failover-error.js";
 import {
-  BILLING_ERROR_USER_MESSAGE,
+  formatBillingErrorMessage,
   HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT,
 } from "../../agents/failover/user-copy.js";
 import { AgentHarnessSessionSupersededError } from "../../agents/harness/errors.js";
+import { createAgentRunRestartAbortError } from "../../agents/run-termination.js";
 import { CommandLaneClearedError, GatewayDrainingError } from "../../process/command-queue.js";
 import { getReplyPayloadMetadata } from "../reply-payload.js";
 import type { TemplateContext } from "../templating.js";
@@ -24,6 +25,7 @@ import {
   createTestFallbackSummaryError,
 } from "./agent-runner-execution.test-support.js";
 import { buildKnownAgentRunFailureReplyPayload } from "./agent-runner-failure-reply.js";
+import { createReplyOperation } from "./reply-run-registry.js";
 
 const state = setupAgentRunnerExecutionTestState();
 
@@ -67,7 +69,7 @@ describe("executeAgentTurn: terminal failures", () => {
 
     expect(result.kind).toBe("final");
     if (result.kind === "final") {
-      expect(result.payload.text).toBe(BILLING_ERROR_USER_MESSAGE);
+      expect(result.payload.text).toBe(formatBillingErrorMessage());
       expect(result.payload.text).not.toContain("All models failed");
       expect(result.payload.text).not.toContain("402 (billing)");
       expect(result.payload.text).not.toContain("Rate-limited");
@@ -219,7 +221,7 @@ describe("executeAgentTurn: terminal failures", () => {
 
     expect(result.kind).toBe("final");
     if (result.kind === "final") {
-      expect(result.payload.text).toBe(BILLING_ERROR_USER_MESSAGE);
+      expect(result.payload.text).toBe(formatBillingErrorMessage());
     }
   });
 
@@ -331,59 +333,72 @@ describe("executeAgentTurn: terminal failures", () => {
     expect(failCall[1]).toBeInstanceOf(CommandLaneClearedError);
   });
 
-  it("stays silent (NO_REPLY) when the reply operation was aborted for restart", async () => {
-    const agentEvents = await import("../../infra/agent-events.js");
-    const emitAgentEvent = vi.mocked(agentEvents.emitAgentEvent);
-    const { replyOperation, failMock } = createMockReplyOperation();
-    Object.defineProperty(replyOperation, "result", {
-      value: { kind: "aborted", code: "aborted_for_restart" } as const,
-      configurable: true,
-    });
-    state.runEmbeddedAgentMock.mockRejectedValueOnce(
-      Object.assign(new Error("aborted"), { name: "AbortError" }),
-    );
+  it.each([
+    { reason: "restart", code: "aborted_for_restart", phase: "end", stopReason: "restart" },
+    { reason: "user", code: "aborted_by_user", phase: "error", stopReason: "aborted" },
+    { reason: "user", code: "aborted_by_user", phase: "error", stopReason: "timeout" },
+    {
+      reason: "superseded",
+      code: "aborted_for_supersession",
+      phase: "error",
+      stopReason: "superseded",
+    },
+  ] as const)(
+    "records one $stopReason abort terminal event without returning a reply",
+    async ({ reason, code, phase, stopReason }) => {
+      const agentEvents = await import("../../infra/agent-events.js");
+      const emitAgentEvent = vi.mocked(agentEvents.emitAgentEvent);
+      const upstreamAbort = new AbortController();
+      const replyOperation = createReplyOperation({
+        sessionKey: "agent:main:abort-terminal",
+        sessionId: "session",
+        resetTriggered: false,
+        upstreamAbortSignal: upstreamAbort.signal,
+      });
+      replyOperation.setPhase("running");
+      const failMock = vi.spyOn(replyOperation, "fail");
+      state.runEmbeddedAgentMock.mockImplementationOnce(async () => {
+        if (reason === "superseded") {
+          replyOperation.supersede();
+        } else {
+          const abortReason =
+            reason === "restart"
+              ? createAgentRunRestartAbortError()
+              : stopReason === "timeout"
+                ? new DOMException("upstream deadline exceeded", "TimeoutError")
+                : new Error("caller cancelled");
+          upstreamAbort.abort(abortReason);
+        }
+        throw Object.assign(new Error("aborted"), { name: "AbortError" });
+      });
 
-    const executeAgentTurn = await getExecuteAgentTurnForTest();
-    const result = await executeAgentTurn({
-      commandBody: "hello",
-      followupRun: createFollowupRun(),
-      sessionCtx: {
-        Provider: "whatsapp",
-        MessageSid: "msg",
-      } as unknown as TemplateContext,
-      replyOperation,
-      opts: {},
-      typingSignals: createMockTypingSignaler(),
-      blockReplyPipeline: null,
-      blockStreamingEnabled: false,
-      resolvedBlockStreamingBreak: "message_end",
-      applyReplyToMode: (payload) => payload,
-      shouldEmitToolResult: () => true,
-      shouldEmitToolOutput: () => false,
-      pendingToolTasks: new Set(),
-      resetSessionAfterRoleOrderingConflict: async () => false,
-      isHeartbeat: false,
-      sessionKey: "main",
-      getActiveSessionEntry: () => undefined,
-      resolvedVerboseLevel: "off",
-      isRestartRecoveryArmed: () => true,
-    });
+      try {
+        const { executeAgentTurn } = await import("./agent-runner-execution.js");
+        const result = await executeAgentTurn({
+          ...createMinimalRunAgentTurnParams({ replyOperation }),
+          isRestartRecoveryArmed: () => true,
+        });
 
-    expect(result.kind).toBe("final");
-    if (result.kind === "final") {
-      expect(result.payload.text).toBe(SILENT_REPLY_TOKEN);
-    }
-    expect(failMock).not.toHaveBeenCalled();
-    expect(
-      emitAgentEvent.mock.calls.some(
-        ([event]) =>
-          event.stream === "lifecycle" &&
-          event.data.phase === "end" &&
-          event.data.aborted === true &&
-          event.data.stopReason === "restart",
-      ),
-    ).toBe(true);
-  });
+        expect(result.outcome).toEqual({ kind: "aborted", reason });
+        expect(replyOperation.result).toEqual({ kind: "aborted", code });
+        expect(failMock).not.toHaveBeenCalled();
+        expect(state.runEmbeddedAgentMock).toHaveBeenCalledOnce();
+        const terminals = emitAgentEvent.mock.calls
+          .map(([event]) => event)
+          .filter(
+            (event) =>
+              event.runId === result.runId &&
+              event.stream === "lifecycle" &&
+              (event.data.phase === "end" || event.data.phase === "error"),
+          );
+        expect(terminals).toHaveLength(1);
+        expect(terminals[0]?.data).toMatchObject({ phase, aborted: true, stopReason });
+      } finally {
+        replyOperation.complete();
+        failMock.mockRestore();
+      }
+    },
+  );
 
   it("preserves restart ownership when an aborted embedded runner resolves normally", async () => {
     const agentEvents = await import("../../infra/agent-events.js");

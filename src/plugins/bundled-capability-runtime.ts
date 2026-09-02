@@ -1,6 +1,7 @@
 /** Loads capability providers through the canonical scoped plugin loader. */
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { withBundledPluginEnablementCompat } from "./bundled-compat.js";
+import { getGatewayPluginMetadataSnapshot } from "./current-plugin-metadata-state.js";
 import { discoverOpenClawPlugins, type PluginDiscoveryResult } from "./discovery.js";
 import { loadOpenClawPluginsWithInternalOverrides } from "./loader-runtime-load.js";
 import type { PluginLoadOptions } from "./loader.js";
@@ -51,8 +52,14 @@ export function loadBundledCapabilityRuntimeRegistry(
       : (withBundledPluginEnablementCompat({
           config: params.config,
           pluginIds: params.pluginIds,
+          env,
         }) ?? {});
-  const discovery = params.manifestRegistry
+  const snapshot =
+    !params.discovery && !params.installRecords ? getGatewayPluginMetadataSnapshot() : undefined;
+  const preparedRegistry =
+    params.manifestRegistry ??
+    (snapshot ? (snapshot.bundledManifestRegistry ?? { plugins: [], diagnostics: [] }) : undefined);
+  const discovery = preparedRegistry
     ? undefined
     : (params.discovery ??
       discoverOpenClawPlugins({
@@ -62,7 +69,7 @@ export function loadBundledCapabilityRuntimeRegistry(
       }));
   const pluginIds = new Set(params.pluginIds);
   const manifestRegistry =
-    params.manifestRegistry ??
+    preparedRegistry ??
     loadPluginManifestRegistryCore({
       config,
       env,

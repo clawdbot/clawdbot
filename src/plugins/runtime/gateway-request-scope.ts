@@ -8,8 +8,39 @@ import type {
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import type { PluginOrigin } from "../plugin-origin.types.js";
 import type { PluginRegistry } from "../registry-types.js";
+import type { OpenClawPluginNodeWorkspace } from "../types.node-host.js";
 
 type PluginRuntimeGatewayRequestScope = {
+  /** Exact placement owner captured before the local harness begins. */
+  assertNodeExecutionCurrent?: (request: {
+    runId: string;
+    agentId: string;
+    nodeId: string;
+    workspace: OpenClawPluginNodeWorkspace;
+  }) => void;
+  /** In-process admitted owner only; never projected into RPC parameters. */
+  invokeWithSessionNodeAuthority?: <T>(
+    request: {
+      pluginId: string;
+      command: string;
+      source: "session-full" | "human-approved";
+      nodeId: string;
+      workspace: OpenClawPluginNodeWorkspace;
+    },
+    invoke: (assertCurrent: () => void, signal: AbortSignal) => Promise<T>,
+  ) => Promise<T | undefined>;
+  /** Closure-bound admitted owner used to validate placement grant bindings. */
+  nodePlacementGrantAuthority?: {
+    agentId: string;
+    sessionKey: string;
+    runId: string;
+    assertCurrent: (request: {
+      pluginId: string;
+      command: string;
+      nodeId: string;
+      workspace: OpenClawPluginNodeWorkspace;
+    }) => void;
+  };
   context?: GatewayRequestContext;
   resolveGatewayContext?: GatewayContextResolver;
   client?: GatewayRequestOptions["client"];
@@ -59,13 +90,23 @@ export const getGatewayContextResolver = (owner: object) => gatewayContextResolv
 
 export const clearGatewayContextResolver = (owner: object) => gatewayContextResolvers.delete(owner);
 
+/** Carry only closure-bound node authorities into a nested request scope. */
+export function getPluginRuntimeGatewayNodeAuthorities() {
+  const scope = pluginRuntimeGatewayRequestScope.getStore();
+  return {
+    invokeWithSessionNodeAuthority: scope?.invokeWithSessionNodeAuthority,
+    nodePlacementGrantAuthority: scope?.nodePlacementGrantAuthority,
+  };
+}
+
 export function getSharedGatewayContextResolver(
   owners: readonly object[],
 ): GatewayContextResolver | undefined {
   const first = owners[0] ? gatewayContextResolvers.get(owners[0]) : undefined;
-  return first && owners.every((owner) => gatewayContextResolvers.get(owner) === first)
+  // Absence permits ambient routing; incompatible owners must retain a rejecting binding.
+  return owners.every((owner) => gatewayContextResolvers.get(owner) === first)
     ? first
-    : undefined;
+    : () => undefined;
 }
 
 /**

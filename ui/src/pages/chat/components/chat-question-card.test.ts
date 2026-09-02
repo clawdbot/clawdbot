@@ -109,6 +109,21 @@ describe("shared question panel", () => {
     drawGateway(prompt, { onSubmit });
     const panel = await panelIn(container);
 
+    expect(
+      container.querySelector('[role="radio"] .chat-question-panel__option-marker'),
+    ).not.toBeNull();
+    expect(container.querySelector('[role="radio"] kbd')).not.toBeNull();
+    expect(
+      container.querySelector(
+        ".chat-question-panel__option--other .chat-question-panel__option-marker",
+      ),
+    ).not.toBeNull();
+    expect(container.querySelector(".chat-question-panel__option--other kbd")).not.toBeNull();
+    expect(container.querySelector('[role="radiogroup"]')).not.toBeNull();
+    expect(
+      container.querySelector<HTMLInputElement>(".chat-question-panel__option--other input")
+        ?.placeholder,
+    ).toBe("Type your own answer here");
     expect(container.querySelector(".chat-question-panel__progress")?.textContent).toBe("1/2");
     container.querySelector<HTMLButtonElement>('[role="radio"]')?.click();
     await panel.updateComplete;
@@ -169,6 +184,11 @@ describe("shared question panel", () => {
 
     expect(hosts.value).toBe("api.example.test");
     expect(secret.autocomplete).toBe("off");
+    expect(secret.placeholder).toBe("FAKE_DEPLOYMENT_API_KEY");
+    expect(secret.closest("label")?.textContent).toContain("API key");
+    expect(container.querySelector(".chat-question-panel__options")).toBeNull();
+    expect(container.querySelector(".chat-question-panel__option-marker")).toBeNull();
+    expect(container.querySelector("kbd")).toBeNull();
     expect(container.textContent).toContain("release-agent");
     expect(container.textContent).toContain("agent:main:main");
     expect(container.textContent).toContain("Stores FAKE_DEPLOYMENT_API_KEY as Protected secret");
@@ -181,15 +201,75 @@ describe("shared question panel", () => {
     await panel.updateComplete;
     expect(prompt.secretStoreAllowedHostsDraft).toBe("api.example.test, uploads.example.test");
 
-    const fakeSecret = "fake-secret-value-for-ui-test";
+    const fakeSecret = "  fake-secret-value-for-ui-test  ";
     secret.value = fakeSecret;
     secret.dispatchEvent(new InputEvent("input", { bubbles: true }));
     await panel.updateComplete;
+    expect(prompt.drafts.get("api_key")?.freeText).toBe(fakeSecret);
+    expect(secret.value).toBe(fakeSecret);
     expect(container.textContent).not.toContain(fakeSecret);
     expect(container.innerHTML).not.toContain(fakeSecret);
 
     container.querySelector<HTMLButtonElement>(".chat-question-panel__advance")?.click();
     expect(onSubmit).toHaveBeenCalledWith({ api_key: [fakeSecret] });
+  });
+
+  it.each([
+    { isSecret: true, value: "  synthetic-value  ", expected: "  synthetic-value  " },
+    { isSecret: true, value: "   ", expected: "   " },
+    { isSecret: true, value: "", expected: null },
+    { isSecret: false, value: "  normal answer  ", expected: "normal answer" },
+    { isSecret: false, value: "   ", expected: null },
+  ])(
+    "preserves or normalizes hydrated drafts: $isSecret / '$value'",
+    async ({ isSecret, value, expected }) => {
+      const prompt = gatewayPrompt({
+        questions: [
+          {
+            questionId: "value",
+            header: "Value",
+            question: "Provide a value",
+            options: [],
+            isSecret,
+          },
+        ],
+        drafts: new Map([["value", { selected: new Set<string>(), freeText: value }]]),
+      });
+      const onSubmit = vi.fn();
+      drawGateway(prompt, { onSubmit });
+      await panelIn(container);
+      const input = container.querySelector<HTMLInputElement>("input")!;
+      const submit = container.querySelector<HTMLButtonElement>(".chat-question-panel__advance")!;
+      expect(input.value).toBe(expected ?? "");
+      expect(input.placeholder).toBe("Value");
+      expect(submit.disabled).toBe(expected === null);
+      submit.click();
+      if (expected === null) {
+        expect(onSubmit).not.toHaveBeenCalled();
+      } else {
+        expect(onSubmit).toHaveBeenCalledWith({ value: [expected] });
+      }
+    },
+  );
+
+  it("labels optionless answers when the compact header is empty", async () => {
+    drawGateway(
+      gatewayPrompt({
+        questions: [
+          {
+            questionId: "value",
+            header: "",
+            question: "Provide a value",
+            options: [],
+          },
+        ],
+      }),
+    );
+    await panelIn(container);
+
+    const input = container.querySelector<HTMLInputElement>("input")!;
+    expect(input.closest("label")?.textContent).toContain("Answer");
+    expect(input.placeholder).toBe("Answer");
   });
 
   it("keeps environment store requests masked without exposing a destination-host editor", async () => {
@@ -243,6 +323,29 @@ describe("shared question panel", () => {
 
     expect(container.querySelector('[aria-checked="true"]')).toBeNull();
     expect(onSubmit).not.toHaveBeenCalled();
+  });
+
+  it("does not expose an Other shortcut for optionless free text", async () => {
+    drawGateway(
+      gatewayPrompt({
+        questions: [
+          {
+            questionId: "value",
+            header: "Value",
+            question: "Provide a value",
+            options: [],
+            isOther: true,
+          },
+        ],
+      }),
+    );
+    await panelIn(container);
+    const group = container.querySelector<HTMLElement>(".chat-question-panel")!;
+    const event = new KeyboardEvent("keydown", { key: "1", bubbles: true, cancelable: true });
+
+    group.dispatchEvent(event);
+
+    expect(event.defaultPrevented).toBe(false);
   });
 
   it("uses roving radio focus and arrow-key selection", async () => {

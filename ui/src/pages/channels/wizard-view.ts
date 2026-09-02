@@ -2,7 +2,6 @@
 // confirm/multiselect) plus the WhatsApp QR linking phase after config write.
 import { html, nothing, type TemplateResult } from "lit";
 import { renderChannelIcon } from "../../components/channel-icon.ts";
-import { handleCopyButton } from "../../components/copy-button.ts";
 import {
   renderWizardBusyButton,
   renderWizardStepControls,
@@ -52,26 +51,10 @@ function renderNoteStep(step: ChannelWizardStep, props: ChannelWizardViewProps) 
     `;
   }
   const looksLikeCode = message.includes("{") || message.includes("  ");
-  const copyLabel = t("channels.setup.copyText");
-  const onCopy = (event: Event) => void handleCopyButton(event, message, copyLabel);
+  const outputClass = `channels-wizard__output${looksLikeCode ? " channels-wizard__output--code" : ""}`;
   return html`
     ${step.title ? html`<div class="channels-wizard__message">${step.title}</div>` : nothing}
-    ${message
-      ? html`<div
-          class="channels-wizard__note ${looksLikeCode ? "channels-wizard__note--code" : ""}"
-        >
-          ${message}
-        </div>`
-      : nothing}
-    ${message
-      ? html`
-          <div class="channels-wizard__links">
-            <button type="button" class="btn btn--sm" @click=${onCopy}>
-              <span data-copy-label>${copyLabel}</span>
-            </button>
-          </div>
-        `
-      : nothing}
+    ${message ? html`<div class=${outputClass}>${message}</div>` : nothing}
     <div class="channels-wizard__footer">
       ${stepIsBusy(props)
         ? renderWizardBusyButton(t("channels.setup.working"))

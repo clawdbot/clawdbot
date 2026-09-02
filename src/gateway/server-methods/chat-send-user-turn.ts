@@ -4,6 +4,7 @@ import type { RuntimeMsgContext as MsgContext } from "../../auto-reply/templatin
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { MediaFact } from "../../media/media-facts.js";
 import type { InputProvenance } from "../../sessions/input-provenance.js";
+import { prepareSessionParticipantInput } from "../../sessions/session-participant-input.js";
 import type { UserTurnInput } from "../../sessions/user-turn-transcript.js";
 import { INTERNAL_MESSAGE_CHANNEL, isOperatorUiClient } from "../../utils/message-channel.js";
 import {
@@ -13,6 +14,8 @@ import {
   persistInboundImagesForTranscript,
 } from "../chat-attachments.js";
 import { resolveCreatorSandbox } from "../operator-role-policy.js";
+import { resolveGatewayInputParticipant } from "../session-input-participant.js";
+import { prepareSkillLibrarySessionCreation } from "../skill-library-session.js";
 import { isAcpBridgeClient } from "./chat-origin-routing.js";
 import type { AdmittedChatSend } from "./chat-send-admission.js";
 import type { prepareChatSendAttachments } from "./chat-send-attachments.js";
@@ -84,6 +87,7 @@ function buildChatSendPromptMedia(
 function buildChatSendMessageContext(params: {
   agentId: string;
   cfg?: OpenClawConfig;
+  getConfig?: () => OpenClawConfig;
   client: GatewayRequestHandlerOptions["client"];
   clientInfo?: GatewayClientInfo;
   clientRunId: string;
@@ -115,7 +119,13 @@ function buildChatSendMessageContext(params: {
       : undefined;
   const { originatingChannel, originatingTo, accountId, messageThreadId, explicitDeliverRoute } =
     params.originatingRoute;
-  const creation = resolveOperatorSessionCreation(params.client);
+  const creation = params.systemInputProvenance
+    ? resolveOperatorSessionCreation(params.client)
+    : prepareSkillLibrarySessionCreation(
+        params.client,
+        params.getConfig ?? params.cfg ?? {},
+        resolveOperatorSessionCreation(params.client),
+      );
   const sandbox = params.cfg ? resolveCreatorSandbox(params.cfg, creation) : undefined;
   // Current and historical turns must reach the single LLM timestamp boundary
   // with identical bare text. Stamping this live turn would bust the prompt cache.
@@ -200,6 +210,7 @@ export function prepareChatSendUserTurn(params: {
   attachments: PreparedChatSendAttachments;
   client: GatewayRequestHandlerOptions["client"];
   logGateway: GatewayRequestContext["logGateway"];
+  getConfig?: () => OpenClawConfig;
   userTurn: ChatSendUserTurnInputController;
 }) {
   const { request, session, admission, attachments, client, logGateway, userTurn } = params;
@@ -239,6 +250,7 @@ export function prepareChatSendUserTurn(params: {
   const messageContext = buildChatSendMessageContext({
     agentId: session.agentId,
     cfg: session.cfg,
+    getConfig: params.getConfig,
     client,
     clientInfo: request.clientInfo,
     clientRunId: session.clientRunId,
@@ -256,6 +268,10 @@ export function prepareChatSendUserTurn(params: {
   const mediaPathOffloadsIncludeImages = attachments.mediaPathOffloadTypes.some((type) =>
     type.startsWith("image/"),
   );
+  const participant = resolveGatewayInputParticipant(client, request.systemInputProvenance);
+  if (participant) {
+    prepareSessionParticipantInput(messageContext.ctx, participant, userTurn.baseInput.timestamp);
+  }
   return {
     ...messageContext,
     pluginBoundMediaPromise,

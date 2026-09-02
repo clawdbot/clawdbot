@@ -10,6 +10,63 @@ import {
 import "../../components/app-sidebar.ts";
 
 describe("AppSidebar catalog row lifecycle", () => {
+  it.each([
+    { label: undefined, expected: "Captured native title" },
+    { label: "Operator chosen label", expected: "Operator chosen label" },
+  ])(
+    "keeps the adopted session name $expected after a native rename",
+    async ({ label, expected }) => {
+      const adoptedKey = "agent:main:adopted-title";
+      const sessions = createSessionsHarness("main", ["agent:main:main", adoptedKey]);
+      const adoptedRow = sessions.sessions.state.result!.sessions.find(
+        (row) => row.key === adoptedKey,
+      )!;
+      adoptedRow.label = label;
+      adoptedRow.displayName = "Captured native title";
+      adoptedRow.boardFace = "dashboard";
+      const { sidebar } = await mountSidebar(
+        createGateway({} as GatewayBrowserClient),
+        sessions.sessions,
+      );
+      sidebar.sessionData.sessionCatalogs = catalogPage([
+        { threadId: "thread-adopted-title", name: "Renamed upstream", sessionKey: adoptedKey },
+      ]).catalogs;
+      sidebar.sessionData.requestSessionDataUpdate();
+      await sidebar.updateComplete;
+
+      const row = sidebar.querySelector(`[data-session-key="${adoptedKey}"]`);
+      expect(row?.querySelector(".sidebar-recent-session__name")?.textContent).toBe(expected);
+      expect(row?.querySelector("[data-session-menu]")?.getAttribute("aria-label")).toContain(
+        expected,
+      );
+      expect(row?.querySelector("a")?.getAttribute("href")).toBe(
+        "/dashboard/main/adopted-title?nav=collapsed",
+      );
+    },
+  );
+  it("uses catalog colors only until the live session owns the row", async () => {
+    const key = "agent:main:adopted-color";
+    const sessions = createSessionsHarness("main", [key]);
+    const { sidebar } = await mountSidebar(
+      createGateway({} as GatewayBrowserClient),
+      sessions.sessions,
+    );
+    const catalog = catalogPage([{ threadId: "colored", name: "CLI session", color: "cyan" }]);
+    sidebar.sessionData.sessionCatalogs = catalog.catalogs;
+    sidebar.sessionData.requestSessionDataUpdate();
+    await sidebar.updateComplete;
+    const row = () => sidebar.querySelector<HTMLElement>("[data-catalog-session-key]");
+    expect(row()?.classList.contains("sidebar-recent-session--colored")).toBe(true);
+    expect(row()?.style.getPropertyValue("--session-color")).toBe("var(--session-color-cyan)");
+    sidebar.sessionData.sessionCatalogs = catalogPage([
+      { threadId: "colored", name: "CLI session", color: "cyan", sessionKey: key },
+    ]).catalogs;
+    sidebar.sessionData.requestSessionDataUpdate();
+    await sidebar.updateComplete;
+    expect(row()?.classList.contains("sidebar-recent-session--colored")).toBe(false);
+    expect(row()?.style.getPropertyValue("--session-color")).toBe("");
+  });
+
   it("retargets an open menu when its row is adopted", async () => {
     const adoptedKey = "agent:main:adopted-menu";
     const gateway = createGateway({} as GatewayBrowserClient);
@@ -56,12 +113,15 @@ describe("AppSidebar catalog row lifecycle", () => {
       await sidebar.updateComplete;
     };
     await setLabel("A long catalog session title");
-    const oldLabel = sidebar.querySelector<HTMLElement>(".hover-marquee");
+    const labelSelector = "[data-catalog-session-key] .sidebar-recent-session__name";
+    const oldLabel = sidebar.querySelector<HTMLElement>(labelSelector);
+    expect(oldLabel?.textContent).toBe("A long catalog session title");
     oldLabel?.classList.add("hover-marquee--scrolling");
     oldLabel?.style.setProperty("--hover-marquee-shift", "-80px");
     await setLabel("Short");
 
-    const updatedLabel = sidebar.querySelector<HTMLElement>(".hover-marquee");
+    const updatedLabel = sidebar.querySelector<HTMLElement>(labelSelector);
+    expect(updatedLabel?.textContent).toBe("Short");
     expect(updatedLabel).not.toBe(oldLabel);
     expect(updatedLabel?.classList.contains("hover-marquee--scrolling")).toBe(false);
     expect(updatedLabel?.style.getPropertyValue("--hover-marquee-shift")).toBe("");

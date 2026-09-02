@@ -204,6 +204,11 @@ final class MacNodeModeCoordinator: NSObject {
             object: nil)
         self.notificationCenter.addObserver(
             self,
+            selector: #selector(self.nodeHostManifestChanged),
+            name: .openclawNodeHostManifestChanged,
+            object: nil)
+        self.notificationCenter.addObserver(
+            self,
             selector: #selector(self.nodeHostWorkerFailed),
             name: .openclawNodeHostWorkerFailed,
             object: nil)
@@ -215,13 +220,14 @@ final class MacNodeModeCoordinator: NSObject {
         self.notificationCenter.addObserver(
             self,
             selector: #selector(self.nodeHostConfigurationChanged),
-            name: .openclawCLIInstalled,
-            object: nil)
-        self.notificationCenter.addObserver(
-            self,
-            selector: #selector(self.nodeHostConfigurationChanged),
             name: .openclawCuaDriverAvailabilityChanged,
             object: nil)
+    }
+
+    @objc private nonisolated func nodeHostManifestChanged() {
+        Task { @MainActor [weak self] in
+            self?.enqueueRouteInvalidation(mode: .reconnectRefresh)
+        }
     }
 
     deinit {
@@ -662,7 +668,7 @@ final class MacNodeModeCoordinator: NSObject {
                     installedRoute,
                     authorityGeneration: attempt.routeAuthorityGeneration) ?? true
                 guard workerRouteInstalled else { return }
-                await self.nodeHostWorker?.publishInventory(ifCurrentRoute: installedRoute)
+                await self.nodeHostWorker?.gatewayConnected(ifCurrentRoute: installedRoute)
                 await self.cancelReconnectProbe()
                 await self.channelStatus.record(.connected(
                     workerUnavailableReason: attempt.workerUnavailable?.reason,
@@ -977,27 +983,17 @@ extension MacNodeModeCoordinator {
         }
         if let activeInput = self.activeNodeHostWorkerInput {
             // Worker launch metadata is startup-scoped. Route retries reuse it instead of
-            // repeating CLI and runtime discovery until an explicit restart resets state.
+            // resolving the bundle again until an explicit restart resets state.
             try self.nodeHostWorkerRetryPolicy.prepareForStart(activeInput)
             return try await nodeHostWorker.start(launch: activeInput.launch)
         }
         let launch: MacNodeHostWorkerLaunch
         do {
-            if let projectLaunch = try await CommandResolver.projectNodeHostWorkerLaunch() {
-                launch = projectLaunch
-            } else {
-                switch await CLIInstaller.status() {
-                case let .ready(location, _):
-                    launch = MacNodeHostWorkerLaunch(command: CommandResolver.nodeHostWorkerCommand(
-                        prefix: [location]))
-                case let status:
-                    throw MacNodeHostWorker.WorkerError.unavailable(reason: status.message)
-                }
-            }
+            launch = try await CommandResolver.nodeHostWorkerLaunch()
         } catch let error as RuntimeResolutionError {
             throw MacNodeHostWorker.WorkerError.unavailable(reason: RuntimeLocator.describeFailure(error))
         }
-        var workerEnvironment: [String: String] = [:]
+        var workerEnvironment = launch.environment
         if provider == .cua, let endpoint = CuaDriverHostCoordinator.shared.workerEndpoint {
             workerEnvironment[CuaDriverWorkerEnvironment.endpoint] = try endpoint.environmentValue()
         }

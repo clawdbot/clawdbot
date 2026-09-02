@@ -11,7 +11,6 @@ import {
   resolveAdaptiveReadMaxBytes,
   type SkillInstructionDeliveryCache,
   wrapReadToolWithSkillContent,
-  wrapToolWorkspaceRootGuard,
   wrapToolWorkspaceRootGuardWithOptions,
 } from "./agent-tools.read.js";
 import type { AnyAgentTool } from "./agent-tools.types.js";
@@ -25,12 +24,8 @@ import type { MemoryWriteProvenanceObserver } from "./memory-write-provenance.js
 import type { SandboxContext } from "./sandbox.js";
 import { buildSandboxFsMounts } from "./sandbox/fs-paths.js";
 import { resolveReadOnlyWorkspaceSkillMounts } from "./sandbox/workspace-mounts.js";
-import type {
-  createEditTool,
-  createReadTool as CreateReadTool,
-  createWriteTool,
-} from "./sessions/tools/index.js";
 import { createReadTool } from "./sessions/tools/read.js";
+import { resolveToolResultBudget } from "./tool-result-limits.js";
 
 function sandboxReadMounts(
   sandbox: SandboxContext,
@@ -59,14 +54,14 @@ function guardHostWorkspaceTool(
   tool: AnyAgentTool,
   options: Pick<CoreCodingToolsOptions, "codingRoot" | "containmentRoot">,
 ): AnyAgentTool {
-  return path.resolve(options.containmentRoot) === path.resolve(options.codingRoot)
-    ? wrapToolWorkspaceRootGuard(tool, options.codingRoot)
-    : wrapToolWorkspaceRootGuardWithOptions(tool, options.containmentRoot, {
-        resolutionCwd: options.codingRoot,
-      });
+  return wrapToolWorkspaceRootGuardWithOptions(tool, options.containmentRoot, {
+    resolutionCwd: options.codingRoot,
+    normalizeGuardedPathParams: true,
+  });
 }
 
 type CoreCodingToolsOptions = {
+  abortSignal?: AbortSignal;
   codingRoot: string;
   containmentRoot: string;
   includeBaseCodingTools: boolean;
@@ -81,12 +76,6 @@ type CoreCodingToolsOptions = {
   imageSanitization?: ImageSanitizationLimits;
   modelHasVision?: boolean;
   memoryWriteProvenance?: MemoryWriteProvenanceObserver;
-  baseToolNames?: readonly string[];
-  baseToolFactories?: {
-    createEditTool: typeof createEditTool;
-    createReadTool: typeof CreateReadTool;
-    createWriteTool: typeof createWriteTool;
-  };
   applyPatchEnabled: boolean;
   applyPatchWorkspaceOnly: boolean;
   execDefaults: ExecToolDefaults;
@@ -124,67 +113,68 @@ export function createCoreCodingTools(options: CoreCodingToolsOptions): AnyAgent
 
   const base: AnyAgentTool[] = [];
   if (options.includeBaseCodingTools) {
-    const baseToolNames = new Set(options.baseToolNames ?? ["read", "edit", "write"]);
-    if (baseToolNames.has("read")) {
-      const wrapped = sandboxRoot
-        ? createSandboxedReadTool({
-            root: sandboxRoot,
-            bridge: sandboxFsBridge!,
-            modelContextWindowTokens: options.modelContextWindowTokens,
-            imageSanitization: options.imageSanitization,
-            modelHasVision: options.modelHasVision,
-            createTool: options.baseToolFactories?.createReadTool,
-          })
-        : createOpenClawReadTool(
-            (options.baseToolFactories?.createReadTool ?? createReadTool)(options.codingRoot, {
-              maxBytes: resolveAdaptiveReadMaxBytes(options),
-              modelHasVision: options.modelHasVision,
-            }),
-            {
-              modelContextWindowTokens: options.modelContextWindowTokens,
-              imageSanitization: options.imageSanitization,
-              cwd: options.codingRoot,
-            },
-          );
-      const guarded = options.workspaceOnly
-        ? wrapToolWorkspaceRootGuardWithOptions(
-            wrapped,
-            sandboxRoot ?? options.containmentRoot,
-            sandboxRoot
-              ? {
-                  additionalContainerMounts: sandboxReadMounts(sandbox),
-                  containerWorkdir: sandbox.containerWorkdir,
-                  bridge: sandboxFsBridge,
-                }
-              : { additionalRoots: skillReadRoots, resolutionCwd: options.codingRoot },
-          )
-        : wrapped;
-      base.push(
-        wrapReadToolWithSkillContent(guarded, options.skillsSnapshot?.resolvedSkills, {
+    const read = sandboxRoot
+      ? createSandboxedReadTool({
+          root: sandboxRoot,
+          bridge: sandboxFsBridge!,
+          modelContextWindowTokens: options.modelContextWindowTokens,
+          imageSanitization: options.imageSanitization,
+          modelHasVision: options.modelHasVision,
+        })
+      : createReadTool(options.codingRoot, {
+          maxBytes: resolveAdaptiveReadMaxBytes(options),
+          modelBudget: resolveToolResultBudget(options.modelContextWindowTokens),
+          modelHasVision: options.modelHasVision,
+        });
+    const guarded = options.workspaceOnly
+      ? wrapToolWorkspaceRootGuardWithOptions(
+          read,
+          sandboxRoot ?? options.containmentRoot,
+          sandboxRoot
+            ? {
+                additionalContainerMounts: sandboxReadMounts(sandbox),
+                containerWorkdir: sandbox.containerWorkdir,
+                bridge: sandboxFsBridge,
+              }
+            : {
+                additionalRoots: skillReadRoots,
+                resolutionCwd: options.codingRoot,
+                normalizeGuardedPathParams: true,
+              },
+        )
+      : read;
+    // Relative read semantics (including optional daily journals) run before
+    // the guard forwards its checked absolute path to the filesystem reader.
+    const wrapped = sandboxRoot
+      ? guarded
+      : createOpenClawReadTool(guarded, {
           modelContextWindowTokens: options.modelContextWindowTokens,
           imageSanitization: options.imageSanitization,
           cwd: options.codingRoot,
-          containerWorkdir: sandbox?.containerWorkdir,
-          instructionPaths: options.skillInstructionPaths,
-          instructionDeliveryCache: options.skillInstructionDeliveryCache,
-        }),
-      );
-    }
-    if (!options.readOnly && !sandboxRoot && baseToolNames.has("edit")) {
+        });
+    base.push(
+      wrapReadToolWithSkillContent(wrapped, options.skillsSnapshot?.resolvedSkills, {
+        modelContextWindowTokens: options.modelContextWindowTokens,
+        imageSanitization: options.imageSanitization,
+        cwd: options.codingRoot,
+        containerWorkdir: sandbox?.containerWorkdir,
+        instructionPaths: options.skillInstructionPaths,
+        instructionDeliveryCache: options.skillInstructionDeliveryCache,
+      }),
+    );
+    if (!options.readOnly && !sandboxRoot) {
       const edit = createHostWorkspaceEditTool(options.codingRoot, {
         containmentRoot: options.containmentRoot,
         workspaceOnly: options.workspaceOnly,
         memoryWriteProvenance: options.memoryWriteProvenance,
-        createTool: options.baseToolFactories?.createEditTool,
+        abortSignal: options.abortSignal,
       });
       base.push(options.workspaceOnly ? guardHostWorkspaceTool(edit, options) : edit);
-    }
-    if (!options.readOnly && !sandboxRoot && baseToolNames.has("write")) {
       const write = createHostWorkspaceWriteTool(options.codingRoot, {
         containmentRoot: options.containmentRoot,
         workspaceOnly: options.workspaceOnly,
         memoryWriteProvenance: options.memoryWriteProvenance,
-        createTool: options.baseToolFactories?.createWriteTool,
+        abortSignal: options.abortSignal,
       });
       base.push(options.workspaceOnly ? guardHostWorkspaceTool(write, options) : write);
     }
@@ -195,15 +185,10 @@ export function createCoreCodingTools(options: CoreCodingToolsOptions): AnyAgent
       root: sandboxRoot,
       bridge: sandboxFsBridge!,
       memoryWriteProvenance: options.memoryWriteProvenance,
+      abortSignal: options.abortSignal,
     };
-    const edit = createSandboxedEditTool({
-      ...toolOptions,
-      createTool: options.baseToolFactories?.createEditTool,
-    });
-    const write = createSandboxedWriteTool({
-      ...toolOptions,
-      createTool: options.baseToolFactories?.createWriteTool,
-    });
+    const edit = createSandboxedEditTool(toolOptions);
+    const write = createSandboxedWriteTool(toolOptions);
     base.push(
       options.workspaceOnly
         ? wrapToolWorkspaceRootGuardWithOptions(edit, sandboxRoot, {
@@ -234,6 +219,7 @@ export function createCoreCodingTools(options: CoreCodingToolsOptions): AnyAgent
               : undefined,
           workspaceOnly: options.applyPatchWorkspaceOnly,
           memoryWriteProvenance: options.memoryWriteProvenance,
+          abortSignal: options.abortSignal,
         }),
       );
     }

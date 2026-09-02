@@ -16,10 +16,7 @@ type ModelObservationProjection = NonNullable<ComputerActResult["observation"]> 
   truncatedElements?: number;
 };
 
-export function computerActResultText(
-  action: ComputerToolAction,
-  result: ComputerActResult,
-): string {
+function projectComputerActResultMetadata(result: ComputerActResult) {
   let observation: ModelObservationProjection | undefined = result.observation
     ? { ...result.observation, ...(result.observation.base64 ? { base64: "[image]" } : {}) }
     : undefined;
@@ -40,12 +37,18 @@ export function computerActResultText(
     details.elements = details.elements.slice(0, MODEL_OBSERVATION_MAX_ELEMENTS);
     details.truncatedElements = originalLength - MODEL_OBSERVATION_MAX_ELEMENTS;
   }
-  return JSON.stringify({
-    action,
+  return {
     ...result,
     ...(observation ? { observation } : {}),
     ...(details ? { details } : {}),
-  });
+  };
+}
+
+export function computerActResultText(
+  action: ComputerToolAction,
+  result: ComputerActResult,
+): string {
+  return JSON.stringify({ action, ...projectComputerActResultMetadata(result) });
 }
 
 function computerFrameImageIdentity(
@@ -147,9 +150,10 @@ export async function projectScreenshotResult(params: {
   // the model pick coordinates against a wider frame than it was shown.
   const longestEdge = Math.max(capture.width ?? 0, capture.height ?? 0);
   const frameScale = longestEdge > params.referenceWidth ? params.referenceWidth / longestEdge : 1;
-  const deliveredWidth = capture.width != null ? Math.round(capture.width * frameScale) : undefined;
+  const deliveredWidth =
+    capture.width != null ? Math.max(1, Math.round(capture.width * frameScale)) : undefined;
   const deliveredHeight =
-    capture.height != null ? Math.round(capture.height * frameScale) : undefined;
+    capture.height != null ? Math.max(1, Math.round(capture.height * frameScale)) : undefined;
   const dims =
     deliveredWidth && deliveredHeight ? `${deliveredWidth}x${deliveredHeight}` : "unknown size";
   const text = [
@@ -205,8 +209,11 @@ export async function projectComputerActResult(params: {
   modelHasVision?: boolean;
 }): Promise<AgentToolResult<unknown>> {
   const observation = params.result.observation;
+  // Pixels belong only in image content; diagnostic copies exceed transcript
+  // control budgets and can expose images even when model vision is disabled.
+  const result = projectComputerActResultMetadata(params.result);
   const content: AgentToolResult<unknown>["content"] = [
-    { type: "text", text: computerActResultText(params.action, params.result) },
+    { type: "text", text: JSON.stringify({ action: params.action, ...result }) },
   ];
   // Observation images have no context-presence tracking, so they must never be deduplicated.
   if (observation?.base64 && params.modelHasVision !== false) {
@@ -223,7 +230,7 @@ export async function projectComputerActResult(params: {
         node: params.target.nodeId,
         action: params.action,
         screenIndex: params.target.screenIndex,
-        result: params.result,
+        result,
         media: { outbound: false },
       },
     },

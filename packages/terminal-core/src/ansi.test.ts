@@ -278,6 +278,7 @@ describe("terminal ansi helpers", () => {
     expect(truncateToVisibleWidth("abc", 2)).toBe("ab");
     expect(truncateToVisibleWidth("abc", 5)).toBe("abc");
     expect(truncateToVisibleWidth("anything", 0)).toBe("");
+    expect(truncateToVisibleWidth("abc", Number.NaN)).toBe("");
     // A wide grapheme that cannot fit the remaining budget is dropped whole,
     // never emitted half-width, so the result never exceeds the budget.
     expect(truncateToVisibleWidth("表文", 2)).toBe("表");
@@ -306,6 +307,19 @@ describe("terminal ansi helpers", () => {
     expect(truncateToVisibleWidth("a\u200Bb", 1)).toBe("a\u200B");
     expect(truncateToVisibleWidth("abc\u200B", 2)).toBe("ab");
     expect(truncateToVisibleWidth("\u200Babc", 2)).toBe("\u200Bab");
+  });
+
+  it.each([
+    ["表".repeat(16) + "a".repeat(16), 40, "表".repeat(16) + "a".repeat(8)],
+    ["a".repeat(16) + "表".repeat(16), 20, "a".repeat(16) + "表".repeat(2)],
+    ["a" + "\u200B".repeat(64) + "表b", 1, "a" + "\u200B".repeat(64)],
+    ["表" + "\u200B".repeat(64) + "b", 1, ""],
+    ["a" + "\u0300".repeat(64) + "表b", 1, "a" + "\u0300".repeat(64)],
+    ["🇬🇧".repeat(32) + "a", 63, "🇬🇧".repeat(31)],
+    ["a" + "\u093e".repeat(40) + "\u0300".repeat(32768), 40, ""],
+  ])("fits uneven and invisible grapheme runs (case %#)", (input, width, expected) => {
+    expect(truncateToVisibleWidth(input, width)).toBe(expected);
+    expect(visibleWidth(expected)).toBeLessThanOrEqual(width);
   });
 
   it("preserves ANSI sequences when truncating styled text", () => {

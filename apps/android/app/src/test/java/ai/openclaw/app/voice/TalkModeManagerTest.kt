@@ -52,6 +52,7 @@ import kotlinx.coroutines.test.setMain
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import okhttp3.Response
@@ -1016,7 +1017,73 @@ class TalkModeManagerTest {
     return track
   }
 
-  private suspend fun withRealtimePlayback(block: suspend (RealtimePlaybackProof) -> Unit) {
+  @Test
+  fun relayConsultReturnsCanonicalOwnedResultOverGatewayConnection() =
+    runBlocking {
+      for ((voiceKey, agentKey) in listOf("main" to "agent:voice:main", "global" to "global")) {
+        for (early in listOf(false, true)) {
+          val socket = CompletableDeferred<WebSocket>()
+          val result = CompletableDeferred<JsonObject>()
+          val final = """{"type":"event","event":"chat","payload":{"sessionKey":"$agentKey","runId":"owned-run","state":"final","message":{"role":"assistant","content":"Owned reply"}}}"""
+          withRealtimePlayback(
+            sessionKey = voiceKey,
+            responseForRequest = { request, webSocket ->
+              socket.complete(webSocket)
+              val params = request["params"]?.jsonObject
+              when (request.getValue("method").jsonPrimitive.content) {
+                "talk.client.toolCall" -> {
+                  assertEquals(voiceKey, params?.getValue("sessionKey")?.jsonPrimitive?.content)
+                  if (early) webSocket.send(final)
+                  """{"runId":"owned-run","agentId":"voice","agentSessionKey":"$agentKey"}"""
+                }
+
+                "talk.session.submitToolResult" -> {
+                  result.complete(checkNotNull(params))
+                  "{}"
+                }
+
+                else -> {
+                  null
+                }
+              }
+            },
+          ) { proof ->
+            proof.manager.ttsOnAllResponses = true
+            socket.await().send("""{"type":"event","event":"chat","payload":{"sessionKey":"other-session","runId":"private-run","state":"final","message":{"role":"assistant","content":"Private reply"}}}""")
+            socket.await().send("""{"type":"event","event":"talk.event","payload":{"relaySessionId":"playback-relay","type":"toolCall","callId":"owned-call","name":"openclaw_agent_consult","args":{"question":"Synthetic question"}}}""")
+            val deadline = System.nanoTime() + 5_000_000_000L
+            var finalSent = early
+            while (!result.isCompleted) {
+              proof.scheduler.runCurrent()
+              if (!finalSent && proof.manager.awaitingAgent.value) {
+                socket.await().send(final)
+                finalSent = true
+              }
+              check(System.nanoTime() < deadline) { "Android did not return the owned consult result (key=$voiceKey, early=$early)" }
+              withContext(Dispatchers.Default) { delay(10) }
+            }
+            val submitted = result.await()
+            assertEquals("playback-relay", submitted.getValue("sessionId").jsonPrimitive.content)
+            assertEquals("owned-call", submitted.getValue("callId").jsonPrimitive.content)
+            assertEquals(
+              "Owned reply",
+              submitted
+                .getValue("result")
+                .jsonObject
+                .getValue("text")
+                .jsonPrimitive.content,
+            )
+            assertFalse(proof.synthesizer.requested.isCompleted)
+          }
+        }
+      }
+    }
+
+  private suspend fun withRealtimePlayback(
+    sessionKey: String = "main",
+    responseForRequest: (JsonObject, WebSocket) -> String? = { _, _ -> null },
+    block: suspend (RealtimePlaybackProof) -> Unit,
+  ) {
     val app = RuntimeEnvironment.getApplication()
     shadowOf(app).grantPermissions(Manifest.permission.RECORD_AUDIO)
     val sessionJob = SupervisorJob()
@@ -1034,6 +1101,7 @@ class TalkModeManagerTest {
         }
       }
     val connected = CompletableDeferred<Unit>()
+    lateinit var manager: TalkModeManager
     val session =
       GatewaySession(
         scope = CoroutineScope(sessionJob + Dispatchers.Default),
@@ -1041,12 +1109,12 @@ class TalkModeManagerTest {
         deviceAuthStore = DeviceAuthStore(SecurePrefs(app, app.getSharedPreferences("talk-playback-${System.nanoTime()}", 0))),
         onConnected = { connected.complete(Unit) },
         onDisconnected = {},
-        onEvent = { _, _ -> },
+        onEvent = { event, payload -> manager.handleGatewayEvent(event, payload) },
       )
     val synthesizer = FakeTalkSpeechSynthesizer()
     val player = FakeTalkAudioPlayer()
     var callbackDepth = 0
-    val manager =
+    manager =
       TalkModeManager(
         context = app,
         scope = managerScope,
@@ -1083,7 +1151,7 @@ class TalkModeManagerTest {
                 if (request["type"]?.jsonPrimitive?.content != "req") return
                 val id = request.getValue("id").jsonPrimitive.content
                 val payload =
-                  when (request.getValue("method").jsonPrimitive.content) {
+                  responseForRequest(request, webSocket) ?: when (request.getValue("method").jsonPrimitive.content) {
                     "connect" -> """{"snapshot":{"sessionDefaults":{"mainSessionKey":"main"}}}"""
                     "talk.config" -> """{"config":{}}"""
                     "talk.session.create" -> """{"relaySessionId":"playback-relay"}"""
@@ -1118,6 +1186,7 @@ class TalkModeManagerTest {
             ),
         )
         withContext(Dispatchers.Default) { withTimeout(5_000) { connected.await() } }
+        manager.setMainSessionKey(sessionKey)
         manager.setEnabled(true)
         val deadline = System.nanoTime() + 5_000_000_000L
         while (!manager.isListening.value) {

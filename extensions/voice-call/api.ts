@@ -9,6 +9,7 @@ export {
   type OpenClawPluginApi,
   readRequestBodyWithLimit,
   requestBodyErrorToText,
+  sendHttpRequestRejection,
   type SessionEntry,
   sleep,
   TtsAutoSchema,

@@ -221,7 +221,7 @@ export type {
   MemoryPromptSectionBuilder,
 } from "../plugins/memory-state.js";
 export { resolveDefaultAgentId } from "../agents/agent-scope-config.js";
-export { resolveSessionAgentId } from "../agents/agent-scope.js";
+export { resolveSessionAgentId } from "./agent-scope-runtime.js";
 export { resolveSessionTranscriptsDirForAgent } from "../config/sessions/paths.js";
 
 async function listMarkdownFilesRecursive(rootDir: string): Promise<string[]> {

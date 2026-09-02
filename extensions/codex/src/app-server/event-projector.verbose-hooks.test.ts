@@ -341,7 +341,22 @@ describe("CodexAppServerEventProjector verbose output and hook projection", () =
   });
 
   it("fires before_compaction and after_compaction hooks for codex compaction items", async () => {
-    const { projector, beforeCompaction, afterCompaction } = await createProjectorWithHooks();
+    const agentHookContext = {
+      runId: "run-1",
+      sessionId: "session-1",
+      accountId: "account-a",
+      channel: "telegram",
+      channelId: "chat-a",
+      chatId: "chat-a",
+      senderId: "sender-a",
+      channelContext: {
+        sender: { id: "sender-a" },
+        chat: { id: "chat-a" },
+      },
+    };
+    const { projector, beforeCompaction, afterCompaction } = await createProjectorWithHooks({
+      agentHookContext,
+    });
     const openSpy = vi.spyOn(SessionManager, "open");
 
     await projector.handleNotification(
@@ -370,6 +385,7 @@ describe("CodexAppServerEventProjector verbose output and hook projection", () =
     );
     expect(beforeContext.runId).toBe("run-1");
     expect(beforeContext.sessionId).toBe("session-1");
+    expect(beforeContext).toMatchObject(agentHookContext);
     const afterPayload = requireRecord(
       mockCallArg(afterCompaction, 0, 0, "afterCompaction"),
       "after payload",
@@ -383,6 +399,7 @@ describe("CodexAppServerEventProjector verbose output and hook projection", () =
     );
     expect(afterContext.runId).toBe("run-1");
     expect(afterContext.sessionId).toBe("session-1");
+    expect(afterContext).toMatchObject(agentHookContext);
   });
 
   it("projects codex hook started and completed notifications into agent events", async () => {

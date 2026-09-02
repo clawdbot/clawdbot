@@ -4,7 +4,6 @@ import type { GatewaySessionRow, SessionsListResult } from "../api/types.ts";
 import { SIDEBAR_NAV_ROUTES, type NavigationRouteId } from "../app-navigation.ts";
 import type { RouteId } from "../app-route-paths.ts";
 import type { ApplicationContext } from "../app/context.ts";
-import { t } from "../i18n/index.ts";
 import { listSelectableAgents } from "../lib/agents/display.ts";
 import {
   isCronSessionKey,
@@ -23,16 +22,12 @@ import {
   sessionMatchesVisibleSessionScope,
 } from "../lib/sessions/index.ts";
 import {
-  resolveSessionPreferredFace,
-  sessionNavigationTarget,
-} from "../lib/sessions/route-navigation.ts";
-import {
   areUiSessionKeysEquivalent,
   buildAgentMainSessionKey,
   isAcpSessionKey,
   isUiGlobalScopeConfigured,
   normalizeAgentId,
-  resolveUiCanonicalMainSessionKey,
+  readSessionDefaults,
   resolveUiConfiguredMainKey,
   resolveUiDefaultAgentId,
   resolveUiSessionNavigationParentKey,
@@ -164,12 +159,6 @@ export function buildSidebarSessionNavigationState(input: {
   resolveAgentStatusNote: (row: GatewaySessionRow) => string | undefined;
 }): SidebarSessionNavigationState {
   const { context } = input;
-  const mainKey = context
-    ? resolveUiConfiguredMainKey({
-        agentsList: context.agents.state.agentsList,
-        hello: context.gateway.snapshot.hello,
-      })
-    : undefined;
   const navigation = resolveSessionNavigation({
     result: input.sessionsResult,
     activeSession: input.activeSession,
@@ -209,15 +198,6 @@ export function buildSidebarSessionNavigationState(input: {
       userLabel: row.label,
       subtitle: resolveSessionWorkSubtitle(row),
       workContext: resolveSessionWorkContext(row),
-      href: sessionNavigationTarget({
-        face: resolveSessionPreferredFace(row),
-        sessionKey: row.key,
-        fallbackAgentId: navigation.selectedAgentId,
-        basePath: context?.basePath ?? "",
-        row,
-        mainKey,
-        preferenceDerivedFace: true,
-      }).href,
       active: row.key === navigation.activeRowKey,
       visuallyActive: input.highlightCurrentSession && row.key === navigation.currentSessionKey,
       // Normalize optional gateway state before collapsing it to the sidebar's required fact.
@@ -232,6 +212,7 @@ export function buildSidebarSessionNavigationState(input: {
       draftOwnedBySelf: isSidebarDraftOwnedBySelf(row, context?.gateway.snapshot.selfUser?.id),
       category: normalizeOptionalString(row.category),
       icon: normalizeOptionalString(row.icon),
+      color: normalizeOptionalString(row.color),
       channelAvatarUrl: normalizeOptionalString(row.channelAvatarUrl),
       boardFace: row.boardFace,
       channel: channelInfo.channel,
@@ -243,6 +224,10 @@ export function buildSidebarSessionNavigationState(input: {
       worktreeId: row.worktree?.id,
       execNode: row.execNode,
       placementState: row.placement?.state,
+      placementProviderId:
+        row.placement && "providerId" in row.placement ? row.placement.providerId : undefined,
+      placementProfileId:
+        row.placement && "profileId" in row.placement ? row.placement.profileId : undefined,
       diskSpaceStatus:
         row.placement?.state === "active" ? row.placement.diskSpace?.status : undefined,
       workspaceConflictCount:
@@ -483,13 +468,6 @@ export function resolveSidebarAgentResumeKey(
   return latest?.key ?? buildAgentMainSessionKey({ agentId, mainKey });
 }
 
-export function resolveSidebarAgentChipSubtitle(latest: SessionRow | null): string {
-  if (latest && isSessionRunActive(latest)) {
-    return t("agentChip.working");
-  }
-  return latest ? resolveSessionDisplayName(latest.key, latest) : t("agentChip.ready");
-}
-
 export function collectKnownSidebarSessionCatalogIds(input: {
   loadedCatalogIds: readonly string[];
   hasLoaded: boolean;
@@ -515,7 +493,7 @@ export function resolveSidebarMainSessionKey(input: {
   // Global-scope gateways advertise the canonical main session as the
   // literal "global" key; a synthesized agent key would never match it.
   if (isUiGlobalScopeConfigured(host)) {
-    return resolveUiCanonicalMainSessionKey(host);
+    return normalizeOptionalString(readSessionDefaults(host)?.mainSessionKey) ?? "global";
   }
   return buildAgentMainSessionKey({
     agentId: input.agentId,

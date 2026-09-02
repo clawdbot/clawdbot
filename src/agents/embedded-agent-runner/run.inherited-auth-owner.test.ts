@@ -1,6 +1,7 @@
 import path from "node:path";
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { OpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { listAgentIds } from "../agent-scope-config.js";
 import { makeAttemptResult } from "./run.overflow-compaction.fixture.js";
 import {
@@ -8,7 +9,7 @@ import {
   mockedAcquireAgentRunPreparedModelRuntime,
   mockedBuildEmbeddedRunPayloads,
   mockedRunEmbeddedAttempt,
-  overflowBaseRunParams,
+  createOverflowRunParams,
   resetSharedRunIntegrationHarnessMocks,
   useOpenAIPlatformAuthFixture,
 } from "./run.overflow-compaction.harness.js";
@@ -28,12 +29,20 @@ function projectSetupExecutionConfig(source: OpenClawConfig): OpenClawConfig {
   };
 }
 
+let state: OpenClawTestState;
+
 describe("embedded setup inference inherited auth owner", () => {
   // Provider-pinned runs stay on the mocked plugin harness, so no host-route
-  // warmup is needed here; see overflowBaseRunParams for the route trap.
-  beforeEach(() => {
+  // warmup is needed here; see createOverflowRunParams for the route trap.
+  beforeEach(async () => {
     resetSharedRunIntegrationHarnessMocks();
+    const { createOpenClawTestState } = await import("../../test-utils/openclaw-test-state.js");
+    state = await createOpenClawTestState({ label: "run.inherited-auth-owner" });
     useOpenAIPlatformAuthFixture();
+  });
+
+  afterEach(async () => {
+    await state?.cleanup();
   });
 
   it.each([
@@ -49,7 +58,7 @@ describe("embedded setup inference inherited auth owner", () => {
       mockedRunEmbeddedAttempt.mockResolvedValueOnce(makeAttemptResult({ assistantTexts: ["OK"] }));
 
       await runEmbeddedAgent({
-        ...overflowBaseRunParams,
+        ...createOverflowRunParams(state),
         // Auth-owner resolution is provider-agnostic. Route through the mocked
         // plugin harness so this shard does not compile the bundled Anthropic
         // provider policy from source just to assert an agent directory.

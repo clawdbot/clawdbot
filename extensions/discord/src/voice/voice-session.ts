@@ -5,6 +5,7 @@ import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
 import type { Client } from "../internal/discord.js";
 import type { VoicePlugin } from "../internal/voice.js";
 import { formatMention } from "../mentions.js";
+import { getDiscordRuntime } from "../runtime.js";
 import { parseDiscordTarget } from "../target-parsing.js";
 import { createVoiceCaptureState, stopVoiceCaptureState } from "./capture-state.js";
 import { resolveDiscordVoiceRealtimeBootstrapContext } from "./ingress.js";
@@ -35,6 +36,20 @@ const REALTIME_PLAYBACK_MAX_MISSED_FRAMES = 100;
 
 function isVoiceSessionStopped(entry: VoiceSessionEntry): boolean {
   return entry.sessionLifecycle.status === "stopped";
+}
+
+function retireTranscripts(entry: VoiceSessionEntry): void {
+  const transcripts = entry.transcripts;
+  entry.transcripts = undefined;
+  // Detach before notifying: retained delivery and reentrant stop cannot target
+  // this binding or a replacement installed while notification settles.
+  try {
+    void Promise.resolve(transcripts?.onStop?.()).catch((error: unknown) => {
+      logger.warn(`discord voice: transcripts retirement failed: ${formatErrorMessage(error)}`);
+    });
+  } catch (error) {
+    logger.warn(`discord voice: transcripts retirement failed: ${formatErrorMessage(error)}`);
+  }
 }
 
 type DiscordVoiceSdk = ReturnType<typeof loadDiscordVoiceSdk>;
@@ -173,6 +188,7 @@ export class DiscordVoiceSessions {
         existing.generation = authority.generation;
       }
       if (options?.transcripts) {
+        retireTranscripts(existing);
         existing.transcripts = options.transcripts;
       }
       if (
@@ -239,6 +255,12 @@ export class DiscordVoiceSessions {
       return { ok: false, message: "Discord voice plugin is not available." };
     }
 
+    const audioInputBudget = await getDiscordRuntime().mediaUnderstanding.resolveAudioInputBudget({
+      cfg: this.params.cfg,
+    });
+    if (authority && !authority.isCurrent()) {
+      return cancelledJoinResult();
+    }
     const adapterCreator = voicePlugin.getGatewayAdapterCreator(guildId);
     const daveEncryption = voiceConfig?.daveEncryption;
     const decryptionFailureTolerance = voiceConfig?.decryptionFailureTolerance;
@@ -388,6 +410,7 @@ export class DiscordVoiceSessions {
         return;
       }
       entry.sessionLifecycle = { status: "stopped", reason: optionsLocal.reason };
+      retireTranscripts(entry);
       // A late callback from an old connection must not remove its replacement.
       if (this.params.sessions.get(guildId) === entry) {
         this.params.sessions.delete(guildId);
@@ -444,6 +467,7 @@ export class DiscordVoiceSessions {
       player,
       playbackQueue: Promise.resolve(),
       processingQueue: Promise.resolve(),
+      audioInputBudget,
       ttsStreamFallbackWarned: false,
       capture: createVoiceCaptureState(),
       transcripts: options?.transcripts,
@@ -590,7 +614,7 @@ export class DiscordVoiceSessions {
         entry.realtimeLifecycle.status === "active" ||
         entry.realtimeLifecycle.status === "starting"
       ) {
-        entry.transcripts = undefined;
+        retireTranscripts(entry);
         return {
           ok: true,
           message: `Stopped transcripts for ${formatMention({ channelId: entry.channelId })}.`,

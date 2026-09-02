@@ -4,9 +4,12 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { Readable } from "node:stream";
 import { promisify } from "node:util";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanupTempDirs, useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { AgentRunTerminalOutcomeError } from "../agents/agent-run-terminal-error.js";
+import { createAgentHarnessToolSurfaceRuntimeCore } from "../agents/harness/tool-surface-bridge.js";
+import { createStubTool } from "../agents/test-helpers/agent-tool-stubs.js";
 import { enqueueExecutionIdentityContextAtAdmission } from "../audit/execution-identity-admission.js";
 import {
   clearRuntimeConfigSnapshot,
@@ -16,12 +19,12 @@ import {
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { RuntimeEnv } from "../runtime.js";
 import {
-  agentExecCommand,
   buildExecRunConfig,
-  classifyAgentExecResult,
   resolveAgentExecPrompt,
   resolveExecBaseConfig,
-} from "./agent-exec.js";
+} from "./agent-exec-input.js";
+import { classifyAgentExecResult } from "./agent-exec-result.js";
+import { agentExecCommand } from "./agent-exec.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const externalTempDirs: string[] = [];
@@ -489,28 +492,67 @@ describe("agent exec command composition", () => {
     await expect(fs.stat(retainedRunStateDir)).resolves.toBeDefined();
   });
 
-  it("applies explicit Code Mode and lean local-model controls to the isolated config", async () => {
-    const { runtime } = createRuntime();
-    let observedConfig: unknown;
-
-    const result = await agentExecCommand(
-      "inspect",
-      { codeMode: "code", localModelLean: true },
-      runtime,
-      {
-        runAgent: vi.fn(async () => {
-          observedConfig = getRuntimeConfigSnapshot();
-          return successResult();
-        }),
-      },
-    );
-
-    expect(result.exitCode).toBe(0);
-    expect(observedConfig).toMatchObject({
-      agents: { defaults: { experimental: { localModelLean: true } } },
-      tools: { codeMode: true },
-    });
-  });
+  it.each([
+    { mode: "direct", configured: true, capability: "preferred", enabled: false },
+    { mode: "code", configured: false, capability: "capable", enabled: true },
+    { mode: "auto", configured: false, capability: "preferred", enabled: true },
+    { mode: "auto", configured: true, capability: "capable", enabled: false },
+  ] as const)(
+    "honors --code-mode $mode over model settings ($capability)",
+    async ({ mode, configured, capability, enabled }) => {
+      const { runtime } = createRuntime();
+      const codeMode = { enabled: configured, maxOutputBytes: 4096 };
+      setRuntimeConfigSnapshot({
+        agents: {
+          defaults: {
+            systemAgent: { agentId: "main" },
+            models: { "test/model-a": { codeMode: configured } },
+          },
+          entries: {
+            main: { models: { "test/model-a": { codeMode: configured } } },
+          },
+        },
+        tools: { codeMode, toolSearch: false },
+      });
+      let visibleTools: string[] | undefined;
+      try {
+        const result = await agentExecCommand(
+          "inspect",
+          { codeMode: mode, model: "test/model-a", localModelLean: true },
+          runtime,
+          {
+            runAgent: vi.fn(async (invocation) => {
+              const config = expectDefined(getRuntimeConfigSnapshot(), "isolated run config");
+              expect(config.tools?.codeMode).toEqual(codeMode);
+              expect(config.agents?.defaults?.experimental?.localModelLean).toBe(true);
+              const surface = createAgentHarnessToolSurfaceRuntimeCore({
+                config,
+                agentId: "main",
+                modelProvider: "test",
+                modelId: "model-a",
+                model: { compat: { codeMode: capability } },
+                codeModeOverride: invocation.codeModeOverride as boolean | "auto" | undefined,
+                modelToolsEnabled: true,
+                executeTool: async () => ({ content: [], details: {} }),
+              });
+              try {
+                visibleTools = surface
+                  .compactTools([createStubTool("read")])
+                  .tools.map((tool) => tool.name);
+              } finally {
+                surface.cleanup();
+              }
+              return successResult();
+            }),
+          },
+        );
+        expect(result.exitCode).toBe(0);
+        expect(visibleTools).toEqual(enabled ? ["exec", "wait"] : ["read"]);
+      } finally {
+        clearRuntimeConfigSnapshot();
+      }
+    },
+  );
 
   it("rejects invalid programmatic Code Mode values", async () => {
     const { runtime } = createRuntime();
@@ -526,6 +568,46 @@ describe("agent exec command composition", () => {
         error: { kind: "exception", message: "--code-mode must be one of direct, auto, code." },
       },
     });
+  });
+
+  it.each([
+    { kind: "exception", status: "error", exitCode: 1, thrown: true },
+    { kind: "timeout", status: "timeout", exitCode: 2, thrown: true },
+    { kind: "context_overflow", status: "error", exitCode: 1, thrown: false },
+  ] as const)("preserves $kind when temporary-state cleanup also fails", async (failure) => {
+    const { runtime, log, error } = createRuntime();
+    let observedStateDir = "";
+    vi.spyOn(fs, "rm").mockRejectedValueOnce(new Error("cleanup denied"));
+
+    const result = await agentExecCommand("inspect", { json: true }, runtime, {
+      runAgent: async () => {
+        observedStateDir = process.env.OPENCLAW_STATE_DIR ?? "";
+        if (failure.thrown) {
+          throw Object.assign(new Error("original run failure"), {
+            name: failure.kind === "timeout" ? "TimeoutError" : "Error",
+          });
+        }
+        return {
+          ...successResult("partial answer"),
+          meta: { durationMs: 25, error: { kind: failure.kind, message: "original run failure" } },
+        };
+      },
+    });
+    externalTempDirs.push(observedStateDir);
+
+    expect(result).toMatchObject({
+      exitCode: failure.exitCode,
+      envelope: {
+        status: failure.status,
+        final: failure.thrown ? "" : "partial answer",
+        payloads: failure.thrown ? [] : [{ text: "partial answer" }],
+        error: { kind: failure.kind, message: "original run failure" },
+      },
+    });
+    expect(log).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(String(log.mock.calls[0]?.[0]))).toEqual(result.envelope);
+    expect(error).toHaveBeenCalledWith("original run failure");
+    expect(error).toHaveBeenCalledWith("Agent exec cleanup failed: cleanup denied");
   });
 
   it("classifies cleanup failures before emitting the JSON envelope", async () => {
@@ -839,14 +921,14 @@ describe("agent exec run config layering", () => {
     expect(runtime?.type === "acp" ? runtime.acp?.agent : undefined).toBe("codex");
   });
 
-  it("lets explicit flags outrank the resolved config", () => {
+  it("keeps Code Mode limits while enabling the lean local-model flag", () => {
     const config = buildExecRunConfig({
-      base: { tools: { codeMode: { enabled: true } } },
+      base: { tools: { codeMode: { enabled: true, maxOutputBytes: 4096 } } },
       cwd: "/run/here",
-      opts: { codeMode: "direct", localModelLean: true },
+      opts: { localModelLean: true },
     });
 
-    expect(config.tools?.codeMode).toBe(false);
+    expect(config.tools?.codeMode).toEqual({ enabled: true, maxOutputBytes: 4096 });
     expect(config.agents?.defaults?.experimental?.localModelLean).toBe(true);
   });
 });

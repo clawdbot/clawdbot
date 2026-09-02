@@ -46,7 +46,11 @@ struct SettingsDashboardHandoffTests {
         let fallbackURL = try #require(URL(string: "http://127.0.0.1:18789/control/skills"))
         let controller = DashboardWindowController(
             url: baseURL,
-            auth: DashboardWindowAuth(gatewayUrl: nil, token: nil, password: nil))
+            auth: DashboardWindowAuth(gatewayUrl: nil, token: nil, password: nil),
+            websiteDataStore: .nonPersistent(),
+            windowAutosaveName: "",
+            requestBrowserProfileImportOffer: { _ in false })
+        defer { controller.closeDashboard() }
         let navigation = DashboardNativeNavigation(path: "/skills", fallbackURL: fallbackURL)
 
         controller.dispatchNativeNavigation(navigation)
@@ -59,7 +63,11 @@ struct SettingsDashboardHandoffTests {
         let fallbackURL = try #require(URL(string: "http://127.0.0.1:18789/control/skills"))
         let controller = DashboardWindowController(
             url: baseURL,
-            auth: DashboardWindowAuth(gatewayUrl: nil, token: nil, password: nil))
+            auth: DashboardWindowAuth(gatewayUrl: nil, token: nil, password: nil),
+            websiteDataStore: .nonPersistent(),
+            windowAutosaveName: "",
+            requestBrowserProfileImportOffer: { _ in false })
+        defer { controller.closeDashboard() }
 
         controller.dispatchNativeNavigation(DashboardNativeNavigation(
             path: "/skills",
@@ -77,15 +85,19 @@ struct SettingsDashboardHandoffTests {
 
     @Test func `newer Dashboard dispatch invalidates stale in-flight fallback`() throws {
         let baseURL = try #require(URL(string: "http://127.0.0.1:18789/control/"))
-        let first = DashboardNativeNavigation(
+        let first = try DashboardNativeNavigation(
             path: "/skills",
-            fallbackURL: try #require(URL(string: "http://127.0.0.1:18789/control/skills")))
-        let second = DashboardNativeNavigation(
+            fallbackURL: #require(URL(string: "http://127.0.0.1:18789/control/skills")))
+        let second = try DashboardNativeNavigation(
             path: "/cron",
-            fallbackURL: try #require(URL(string: "http://127.0.0.1:18789/control/cron")))
+            fallbackURL: #require(URL(string: "http://127.0.0.1:18789/control/cron")))
         let controller = DashboardWindowController(
             url: baseURL,
-            auth: DashboardWindowAuth(gatewayUrl: nil, token: nil, password: nil))
+            auth: DashboardWindowAuth(gatewayUrl: nil, token: nil, password: nil),
+            websiteDataStore: .nonPersistent(),
+            windowAutosaveName: "",
+            requestBrowserProfileImportOffer: { _ in false })
+        defer { controller.closeDashboard() }
 
         controller.dispatchNativeNavigation(first)
         let staleGeneration = controller._testNavigationGeneration

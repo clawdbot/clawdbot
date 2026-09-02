@@ -152,7 +152,9 @@ export const MODEL_FIELD_HELP: Record<string, string> = {
   "auth.profiles": "Named auth profiles (provider + mode + optional email).",
   "auth.order": "Ordered auth profile IDs per provider (used for automatic failover).",
   "agents.defaults.workspace":
-    "Default workspace path exposed to agent runtime tools for filesystem context and repo-aware behavior. Set this explicitly when running from wrappers so path resolution stays deterministic.",
+    "Default agent workspace for bootstrap and memory files. Also used as the working directory when agents.defaults.cwd is unset. Set this explicitly when running from wrappers so path resolution stays deterministic.",
+  "agents.defaults.cwd":
+    "Working directory for agent reply runs, separate from workspace bootstrap and memory files. Agent-specific cwd and session-spawned cwd take precedence. Supports ~ and relative paths; a distinct cwd requires an unsandboxed run.",
   "agents.defaults.skipOptionalBootstrapFiles":
     "Optional bootstrap files that should not be created in agent workspaces. Valid values: SOUL.md, USER.md, IDENTITY.md (HEARTBEAT.md is accepted but a no-op).",
   "agents.defaults.contextInjection":
@@ -182,7 +184,7 @@ export const MODEL_FIELD_HELP: Record<string, string> = {
   "agents.defaults.repoRoot":
     "Optional repository root shown in the system prompt runtime line (overrides auto-detect).",
   "agents.defaults.models":
-    "Configured model catalog and per-model settings. Entries provide aliases, params, and runtime metadata; they do not restrict model overrides.",
+    "Configured model catalog and per-model settings. Entries provide aliases, params, runtime metadata, and Code Mode overrides; they do not restrict model overrides.",
   "agents.defaults.modelSelectionScope":
     'Optional scope for chat commands and Gateway session model updates without an explicit scope: "session" changes only the current session, "agent" also updates that agent\'s primary, and "global" also updates the shared agents.defaults.model fallback. Omit to preserve existing behavior. Explicit scope flags take precedence; configured-default writes still require owner/admin authority. Telegram callback pickers and the embedded local TUI stay session-only.',
   "agents.defaults.modelPolicy":
@@ -193,6 +195,8 @@ export const MODEL_FIELD_HELP: Record<string, string> = {
     "Optional per-model runtime policy for the default agent. Use this for model-specific runtime exceptions instead of setting a whole-agent runtime.",
   "agents.defaults.models.*.agentRuntime.id":
     'Default-agent model runtime id: "openclaw", "auto", a registered plugin harness id such as "codex", or a supported CLI backend alias such as "claude-cli".',
+  "agents.defaults.models.*.codeMode":
+    "OpenClaw Code Mode for this exact provider/model: On forces it on, Off disables it, and Default inherits tools.codeMode.enabled. Agent-specific activation settings take precedence. This does not change the selected runtime or Codex native Code Mode.",
   "memory.search": "Vector search over MEMORY.md and memory/*.md (per-agent overrides supported).",
   "memory.search.enabled":
     "Master toggle for memory search indexing and retrieval behavior on this agent profile. Keep enabled for semantic recall, and disable when you want fully stateless responses.",

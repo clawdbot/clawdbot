@@ -1,7 +1,8 @@
 // Codex supervision tests cover passive listing and safe local session takeover.
 /* oxlint-disable typescript/unbound-method -- assertions inspect vi.fn-backed object methods, not unbound class methods. */
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
+  transcriptMirrorMocks,
   continueLocalCodexSession,
   config,
   idleThread,
@@ -18,105 +19,7 @@ import {
   createCodexTestBindingStore,
   type CodexAppServerBindingStore,
   type CodexAppServerThreadBinding,
-  originalPath,
-  tempDirs,
-  fs,
 } from "./session-catalog.test-helpers.js";
-
-const commandRpcMocks = vi.hoisted(() => ({
-  codexControlRequest: vi.fn(),
-}));
-const pinnedConnectionMocks = vi.hoisted(() => ({
-  client: { connectionId: "pinned-catalog-client" },
-  getClient: vi.fn(),
-  releaseClient: vi.fn(),
-  request: vi.fn(),
-}));
-const transcriptMirrorMocks = vi.hoisted(() => ({
-  importCodexThreadHistoryToTranscript: vi.fn(async () => ({
-    importedMessages: 0,
-    omittedMessages: 0,
-  })),
-}));
-const nodeHostMocks = vi.hoisted(() => ({
-  runNodePtyCommand: vi.fn(async () => ({ exitCode: 0 })),
-  userShellPaths: new Map<string, string>(),
-}));
-
-vi.mock("./command-rpc.js", () => ({
-  codexControlRequest: commandRpcMocks.codexControlRequest,
-}));
-vi.mock("./app-server/request.js", () => ({
-  requestCodexAppServerClientJson: pinnedConnectionMocks.request,
-}));
-vi.mock("./app-server/shared-client.js", () => ({
-  getLeasedSharedCodexAppServerClient: pinnedConnectionMocks.getClient,
-  releaseLeasedSharedCodexAppServerClient: pinnedConnectionMocks.releaseClient,
-}));
-vi.mock("./app-server/transcript-mirror.js", () => ({
-  importCodexThreadHistoryToTranscript: transcriptMirrorMocks.importCodexThreadHistoryToTranscript,
-}));
-vi.mock("./session-catalog-pty.runtime.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./session-catalog-pty.runtime.js")>();
-  return {
-    ...actual,
-    runNodePtyCommand: nodeHostMocks.runNodePtyCommand,
-    resolveNodeHostExecutable: (
-      command: string,
-      options: {
-        env?: NodeJS.ProcessEnv;
-        pathEnv?: string;
-        includeExtensionless?: boolean;
-        strategy: "direct" | "fallback" | "prefer";
-      },
-    ) => {
-      const env = options.env ?? process.env;
-      const pathEnv = options.pathEnv ?? env.PATH ?? env.Path ?? "";
-      const direct = actual.resolveNodeHostExecutable(command, {
-        env,
-        pathEnv,
-        includeExtensionless: options.includeExtensionless,
-        strategy: "direct",
-      });
-      if (direct && options.strategy !== "prefer") {
-        return direct;
-      }
-      const shellPath = nodeHostMocks.userShellPaths.get(command);
-      if (!shellPath) {
-        return direct;
-      }
-      const shellExecutable = actual.resolveNodeHostExecutable(command, {
-        env,
-        pathEnv: shellPath,
-        includeExtensionless: options.includeExtensionless,
-        strategy: "direct",
-      });
-      return shellExecutable
-        ? { executable: shellExecutable.executable, pathEnv: shellPath }
-        : direct;
-    },
-  };
-});
-
-beforeEach(() => {
-  nodeHostMocks.runNodePtyCommand.mockClear();
-  nodeHostMocks.userShellPaths.clear();
-  commandRpcMocks.codexControlRequest.mockReset();
-  pinnedConnectionMocks.getClient.mockReset();
-  pinnedConnectionMocks.getClient.mockResolvedValue(pinnedConnectionMocks.client);
-  pinnedConnectionMocks.releaseClient.mockReset();
-  pinnedConnectionMocks.request.mockReset();
-  transcriptMirrorMocks.importCodexThreadHistoryToTranscript.mockReset();
-  transcriptMirrorMocks.importCodexThreadHistoryToTranscript.mockResolvedValue({
-    importedMessages: 0,
-    omittedMessages: 0,
-  });
-});
-
-afterEach(async () => {
-  process.env.PATH = originalPath;
-  await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
-});
 
 describe("Codex supervision actions", () => {
   it("recovers the same pending session after a restart before binding commit", async () => {
@@ -294,8 +197,8 @@ describe("Codex supervision actions", () => {
         control: createEligibleControl(),
         threadId: "thread-1",
       }),
-    ).rejects.toThrow("OpenClaw session is already bound to Codex thread thread-1");
-    expect(entries).toEqual([]);
+    ).rejects.toThrow("guarded rollback did not complete");
+    expect(entries[0]?.entry.initializationPending).toBe(true);
   });
 
   it("does not infer a terminal boundary from completedAt without a terminal status", async () => {
@@ -327,7 +230,8 @@ describe("Codex supervision actions", () => {
     await expect(
       bindingStore.read(
         sessionBindingIdentity({
-          sessionId: "openclaw-session-1",
+          sessionId: runtime.agent.session.getSessionEntry({ sessionKey: result.sessionKey })!
+            .sessionId,
           sessionKey: result.sessionKey,
           config,
         }),
@@ -339,7 +243,8 @@ describe("Codex supervision actions", () => {
     });
     const binding = await bindingStore.read(
       sessionBindingIdentity({
-        sessionId: "openclaw-session-1",
+        sessionId: runtime.agent.session.getSessionEntry({ sessionKey: result.sessionKey })!
+          .sessionId,
         sessionKey: result.sessionKey,
         config,
       }),
@@ -560,94 +465,10 @@ describe("Codex supervision actions", () => {
         control,
         threadId: "thread-1",
       }),
-    ).rejects.toThrow("failed to bind OpenClaw session to Codex thread thread-1");
+    ).rejects.toThrow("Codex session binding changed during initialization");
     expect(entries).toEqual([]);
     expect(createSessionEntry).toHaveBeenCalledOnce();
     expect(transcriptMirrorMocks.importCodexThreadHistoryToTranscript).toHaveBeenCalledOnce();
-    expect(control.archiveThread).not.toHaveBeenCalled();
-  });
-
-  it("clears a committed pending binding when session finalization fails", async () => {
-    const { runtime } = createRuntime({ failAfterCreate: () => true });
-    const { api } = createGatewayApi(runtime);
-    const bindingStore = createCodexTestBindingStore();
-    const control = createEligibleControl();
-
-    await expect(
-      continueLocalCodexSession({
-        api,
-        bindingStore,
-        config,
-        control,
-        threadId: "thread-1",
-      }),
-    ).rejects.toThrow("session finalization failed after binding commit");
-    await expect(
-      bindingStore.read(
-        sessionBindingIdentity({
-          sessionId: "openclaw-session-1",
-          sessionKey: supervisionSessionKey("thread-1"),
-          config,
-        }),
-      ),
-    ).resolves.toBeUndefined();
-    expect(control.archiveThread).not.toHaveBeenCalled();
-  });
-
-  it("preserves successor cleanup state when failed finalization loses its binding CAS", async () => {
-    const { runtime } = createRuntime({ failAfterCreate: () => true });
-    const { api } = createGatewayApi(runtime);
-    const inner = createCodexTestBindingStore();
-    const successorThreadId = "thread-successor-probe";
-    let replaced = false;
-    const bindingStore: CodexAppServerBindingStore = {
-      ...inner,
-      mutate: async (identity, mutation) => {
-        if (!replaced && mutation.kind === "clear") {
-          const current = await inner.read(identity);
-          const pending = current?.pendingSupervisionBranch;
-          if (!pending) {
-            throw new Error("missing pending supervision binding before cleanup");
-          }
-          replaced = true;
-          const patched = await inner.mutate(identity, {
-            kind: "patch-pending-supervision-branch",
-            expected: pending,
-            pending: { ...pending, cleanupThreadIds: [successorThreadId] },
-          });
-          if (!patched) {
-            throw new Error("failed to install successor supervision cleanup state");
-          }
-        }
-        return await inner.mutate(identity, mutation);
-      },
-    };
-    const control = createEligibleControl();
-
-    await expect(
-      continueLocalCodexSession({
-        api,
-        bindingStore,
-        config,
-        control,
-        threadId: "thread-1",
-      }),
-    ).rejects.toThrow("session finalization failed after binding commit");
-    await expect(
-      bindingStore.read(
-        sessionBindingIdentity({
-          sessionId: "openclaw-session-1",
-          sessionKey: supervisionSessionKey("thread-1"),
-          config,
-        }),
-      ),
-    ).resolves.toMatchObject({
-      threadId: "thread-1",
-      pendingSupervisionBranch: {
-        sourceThreadId: "thread-1",
-        cleanupThreadIds: [successorThreadId],
-      },
-    });
     expect(control.archiveThread).not.toHaveBeenCalled();
   });
 });

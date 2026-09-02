@@ -183,6 +183,7 @@ function createTraceTelegramDeps(captured: CapturedDispatch): TelegramBotDeps {
       providers: [],
       resolvedDefault: { provider: "openai", model: "gpt-test" },
       modelNames: new Map<string, string>(),
+      modelCatalog: [],
     })) as unknown as TelegramBotDeps["buildModelsProviderData"],
     listSkillCommandsForAgents:
       (() => []) as unknown as TelegramBotDeps["listSkillCommandsForAgents"],

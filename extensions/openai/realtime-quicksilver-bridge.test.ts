@@ -40,15 +40,15 @@ class FakeSocket extends EventEmitter {
     if (this.deferClose) {
       return;
     }
-    this.finishClose();
+    this.finishClose(1000);
   }
 
-  finishClose(): void {
+  finishClose(code = 1006): void {
     if (this.readyState === 3) {
       return;
     }
     this.readyState = 3;
-    queueMicrotask(() => this.emit("close"));
+    queueMicrotask(() => this.emit("close", code, Buffer.alloc(0)));
   }
 
   serverEvent(event: unknown): void {
@@ -89,7 +89,7 @@ function createHarness(params?: {
   const bridge = new OpenAIQuicksilverVoiceBridge({
     providerConfig: {},
     model: "gpt-live-1-codex",
-    voice: "marin",
+    voice: "spruce",
     instructions: "Use delegation for real work.",
     audioFormat:
       params?.audioFormat === "g711_ulaw"
@@ -141,7 +141,7 @@ describe("OpenAIQuicksilverVoiceBridge", () => {
       type: "session.update",
       session: {
         instructions: "Use delegation for real work.",
-        audio: { output: { voice: "marin" } },
+        audio: { output: { voice: "spruce" } },
         delegation: { type: "client" },
       },
     });
@@ -186,6 +186,20 @@ describe("OpenAIQuicksilverVoiceBridge", () => {
 
     await Promise.all([firstConnect, secondConnect]);
     expect(harness.onReady).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    [1000, "completed"],
+    [1006, "error"],
+  ] as const)("classifies an established session closing with code %s", async (code, reason) => {
+    const harness = createHarness();
+    await harness.bridge.connect();
+
+    harness.socket.finishClose(code);
+    await Promise.resolve();
+
+    expect(harness.onClose).toHaveBeenCalledExactlyOnceWith(reason);
+    expect(harness.bridge.isConnected()).toBe(false);
   });
 
   it("bounds queued audio by aggregate bytes before session readiness", async () => {
@@ -332,7 +346,10 @@ describe("OpenAIQuicksilverVoiceBridge", () => {
     expect(harness.onError).not.toHaveBeenCalled();
   });
 
-  it("reports a buffered terminal event that follows session readiness", async () => {
+  it.each([
+    [1000, "completed"],
+    [1006, "error"],
+  ] as const)("classifies a buffered close after readiness with code %s", async (code, reason) => {
     const harness = createHarness({
       autoStart: false,
       afterOpen: (socket) => {
@@ -340,18 +357,21 @@ describe("OpenAIQuicksilverVoiceBridge", () => {
           type: "session.started",
           session: { id: "live-1", expires_at: Math.floor(Date.now() / 1000) + 60 },
         });
-        socket.finishClose();
+        socket.finishClose(code);
       },
     });
 
     await harness.bridge.connect();
 
     expect(harness.onReady).toHaveBeenCalledOnce();
-    expect(harness.onError).toHaveBeenCalledWith(
-      new Error("GPT-Live WebSocket closed during startup"),
-    );
-    expect(harness.onClose).toHaveBeenCalledOnce();
-    expect(harness.onClose).toHaveBeenCalledWith("error");
+    if (reason === "error") {
+      expect(harness.onError).toHaveBeenCalledWith(
+        new Error("GPT-Live WebSocket closed during startup"),
+      );
+    } else {
+      expect(harness.onError).not.toHaveBeenCalled();
+    }
+    expect(harness.onClose).toHaveBeenCalledExactlyOnceWith(reason);
     expect(harness.bridge.isConnected()).toBe(false);
   });
 

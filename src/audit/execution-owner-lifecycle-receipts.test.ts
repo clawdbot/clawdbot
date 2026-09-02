@@ -6,9 +6,9 @@ import type { ExecutionIdentityContextV1 } from "../../packages/gateway-protocol
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { AdmittedRunContext } from "../agents/admitted-run-context.js";
 import { bindCronRunReceiptExecution } from "../cron/store/run-receipt-store.js";
+import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
 import { tableHasColumn, tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import {
-  OPENCLAW_STATE_SCHEMA_VERSION,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";

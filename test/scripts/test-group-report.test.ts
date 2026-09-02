@@ -25,6 +25,15 @@ import {
   spawnText,
 } from "../../scripts/test-group-report.mts";
 import { withEnv } from "../../src/test-utils/env.js";
+import { killPidIfAlive } from "../../src/test-utils/process-tree.js";
+import {
+  isProcessAlive,
+  waitForChildClose,
+  waitForDead,
+  waitForFile,
+  waitForPidFile,
+} from "../helpers/process-wait.js";
+import { startProcessWatchdogFixture } from "../helpers/process-watchdog.js";
 import { cleanupTempDirs, makeTempDir } from "../helpers/temp-dir.js";
 
 const tempDirs = new Set<string>();
@@ -33,58 +42,6 @@ const tsxImport = import.meta.resolve("tsx");
 afterAll(() => {
   cleanupTempDirs(tempDirs);
 });
-
-function isProcessAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-async function sleep(ms: number): Promise<void> {
-  await new Promise((resolve) => {
-    setTimeout(resolve, ms);
-  });
-}
-
-async function waitForFile(filePath: string, timeoutMs: number): Promise<void> {
-  const deadlineAt = Date.now() + timeoutMs;
-  while (Date.now() < deadlineAt) {
-    if (fs.existsSync(filePath)) {
-      return;
-    }
-    await sleep(5);
-  }
-  throw new Error(`timed out waiting for ${filePath}`);
-}
-
-async function waitForDead(pid: number, timeoutMs: number): Promise<void> {
-  const deadlineAt = Date.now() + timeoutMs;
-  while (Date.now() < deadlineAt) {
-    if (!isProcessAlive(pid)) {
-      return;
-    }
-    await sleep(5);
-  }
-  throw new Error(`timed out waiting for pid ${pid} to exit`);
-}
-
-function waitForChildClose(
-  child: ReturnType<typeof spawn>,
-  timeoutMs = 5_000,
-): Promise<{ code: number | null; signal: NodeJS.Signals | null }> {
-  return new Promise((resolve, reject) => {
-    const timeout = setTimeout(() => {
-      reject(new Error("child did not close before timeout"));
-    }, timeoutMs);
-    child.once("close", (code, signal) => {
-      clearTimeout(timeout);
-      resolve({ code, signal });
-    });
-  });
-}
 
 function writeGroupedReport(filePath: string) {
   fs.writeFileSync(
@@ -771,6 +728,9 @@ describe("scripts/test-group-report arg parsing", () => {
         "--allow-failures",
         "--",
         "--maxWorkers=1",
+        "--",
+        "--limit",
+        "99",
       ]),
     ).toStrictEqual({
       allowFailures: true,
@@ -787,7 +747,7 @@ describe("scripts/test-group-report arg parsing", () => {
       rss: process.platform !== "win32",
       timeoutMs: 1800000,
       topFiles: 25,
-      vitestArgs: ["--maxWorkers=1"],
+      vitestArgs: ["--maxWorkers=1", "--", "--limit", "99"],
     });
   });
 
@@ -840,6 +800,51 @@ describe("scripts/test-group-report arg parsing", () => {
       killGraceMs: 250,
       timeoutMs: 5000,
     });
+  });
+
+  it("keeps repeated boolean controls idempotent", () => {
+    expect(
+      parseTestGroupReportArgs([
+        "--help",
+        "--help",
+        "--allow-failures",
+        "--allow-failures",
+        "--full-suite",
+        "--full-suite",
+        "--no-rss",
+        "--no-rss",
+      ]),
+    ).toMatchObject({
+      allowFailures: true,
+      fullSuite: true,
+      help: true,
+      rss: false,
+    });
+  });
+
+  it.each([
+    "--config=a.ts",
+    "--compare=before.json",
+    "--report=a.json",
+    "--group-by=area",
+    "--output=report.json",
+    "--limit=5",
+    "--max-test-ms=100",
+    "--timeout-ms=1000",
+    "--kill-grace-ms=100",
+    "--concurrency=2",
+    "--top-files=5",
+  ])("rejects split-option inline form %s", (arg) => {
+    expect(() => parseTestGroupReportArgs([arg])).toThrow(`Unknown option: ${arg}`);
+  });
+
+  it("does not let help short-circuit later parse errors", () => {
+    expect(() => parseTestGroupReportArgs(["--help", "--unknown"])).toThrow(
+      "Unknown option: --unknown",
+    );
+    expect(() => parseTestGroupReportArgs(["--help", "--limit"])).toThrow(
+      "--limit requires a value",
+    );
   });
 
   it("rejects malformed positive integer flags", () => {
@@ -926,6 +931,31 @@ describe("scripts/test-group-report arg parsing", () => {
       "a.json",
       "b.json",
     ]);
+  });
+
+  it("validates a repeated value before reporting a duplicate", () => {
+    for (const flag of [
+      "--limit",
+      "--top-files",
+      "--max-test-ms",
+      "--timeout-ms",
+      "--kill-grace-ms",
+      "--concurrency",
+    ]) {
+      expect(() => parseTestGroupReportArgs([flag, "5", flag])).toThrow(`${flag} requires a value`);
+      expect(() => parseTestGroupReportArgs([flag, "5", flag, "20x"])).toThrow(
+        `${flag} must be a positive integer`,
+      );
+    }
+    expect(() =>
+      parseTestGroupReportArgs([
+        "--compare",
+        "before.json",
+        "after.json",
+        "--compare",
+        "second-before.json",
+      ]),
+    ).toThrow("--compare requires a value");
   });
 });
 
@@ -1055,9 +1085,7 @@ describe("scripts/test-group-report child process guard", () => {
       });
       expect(parsed.output).toContain("sending SIGKILL");
     } finally {
-      if (childPid !== undefined && isProcessAlive(childPid)) {
-        process.kill(childPid, "SIGKILL");
-      }
+      killPidIfAlive(childPid);
       fs.rmSync(tempDir, { recursive: true, force: true });
     }
   });
@@ -1126,9 +1154,7 @@ describe("scripts/test-group-report child process guard", () => {
       if (runner?.pid && isProcessAlive(runner.pid)) {
         runner.kill("SIGKILL");
       }
-      if (childPid !== undefined && isProcessAlive(childPid)) {
-        process.kill(childPid, "SIGKILL");
-      }
+      killPidIfAlive(childPid);
       fs.rmSync(tempDir, { recursive: true, force: true });
     }
   });
@@ -1140,40 +1166,37 @@ describe("scripts/test-group-report child process guard", () => {
 
     const tempDir = makeTempDir(tempDirs, "openclaw-test-group-report-");
     const childPidPath = path.join(tempDir, "child.pid");
-    const readyPath = path.join(tempDir, "child.ready");
     const cleanupPath = path.join(tempDir, "child.cleanup");
-    let childPid: number | undefined;
-    try {
-      const childScript = [
-        "const fs = require('node:fs');",
-        `fs.writeFileSync(${JSON.stringify(childPidPath)}, String(process.pid));`,
-        "process.on('SIGTERM', () => {",
-        "  setTimeout(() => {",
-        `    fs.writeFileSync(${JSON.stringify(cleanupPath)}, "clean");`,
-        "    process.exit(0);",
-        "  }, 25);",
-        "});",
-        `fs.writeFileSync(${JSON.stringify(readyPath)}, "ready");`,
-        "setInterval(() => {}, 1000);",
-      ].join("\n");
-      const parentScript = [
-        "const { spawn } = require('node:child_process');",
-        `spawn(process.execPath, ["--eval", ${JSON.stringify(childScript)}], { stdio: "ignore" });`,
-        "process.on('SIGTERM', () => process.exit(0));",
-        "setInterval(() => {}, 1000);",
-      ].join("\n");
-
-      const startedAt = Date.now();
-      const runPromise = spawnText(process.execPath, ["--eval", parentScript], {
+    const childScript = [
+      "const fs = require('node:fs');",
+      "process.on('SIGTERM', () => {",
+      "  setTimeout(() => {",
+      `    fs.writeFileSync(${JSON.stringify(cleanupPath)}, "clean");`,
+      "    process.exit(0);",
+      "  }, 25);",
+      "});",
+      "setInterval(() => {}, 1000);",
+      `fs.writeFileSync(${JSON.stringify(childPidPath)}, String(process.pid));`,
+    ].join("\n");
+    const parentScript = [
+      "const { spawn } = require('node:child_process');",
+      "process.on('SIGTERM', () => process.exit(0));",
+      `spawn(process.execPath, ["--eval", ${JSON.stringify(childScript)}], { stdio: "ignore" });`,
+      "setInterval(() => {}, 1000);",
+    ].join("\n");
+    const releaseAndWait = startProcessWatchdogFixture(() =>
+      spawnText(process.execPath, ["--eval", parentScript], {
         cwd: process.cwd(),
         env: process.env,
         killGraceMs: 250,
         timeoutMs: 250,
-      });
-
-      await waitForFile(readyPath, 2_000);
-      childPid = Number.parseInt(fs.readFileSync(childPidPath, "utf8"), 10);
-      const result = await runPromise;
+      }),
+    );
+    let childPid: number | undefined;
+    try {
+      childPid = await waitForPidFile(childPidPath, 2_000);
+      const startedAt = Date.now();
+      const result = await releaseAndWait();
 
       expect(result).toMatchObject({
         status: 1,
@@ -1184,10 +1207,14 @@ describe("scripts/test-group-report child process guard", () => {
       expect(Date.now() - startedAt).toBeLessThan(900);
       await waitForDead(childPid, 2_000);
     } finally {
-      if (childPid !== undefined && isProcessAlive(childPid)) {
-        process.kill(childPid, "SIGKILL");
+      try {
+        await releaseAndWait();
+      } finally {
+        if (childPid !== undefined) {
+          killPidIfAlive(childPid);
+          await waitForDead(childPid, 2_000);
+        }
       }
-      fs.rmSync(tempDir, { recursive: true, force: true });
     }
   });
 
@@ -1378,8 +1405,8 @@ describe("scripts/test-group-report run plans", () => {
     );
 
     expect(specs.map((spec) => spec.env.OPENCLAW_VITEST_FS_MODULE_CACHE_PATH)).toEqual([
-      path.join("/repo", "node_modules", ".experimental-vitest-cache", "0-a.ts"),
-      path.join("/repo", "node_modules", ".experimental-vitest-cache", "1-b.ts"),
+      path.join("/repo", ".cache", "vitest", "0-a.ts"),
+      path.join("/repo", ".cache", "vitest", "1-b.ts"),
     ]);
     expect(specs.map((spec) => spec.vitestArgs)).toEqual([[], []]);
   });

@@ -52,57 +52,6 @@ export const desktopPanelLauncherStyles = css`
   .desktop-app-button__icon--launching {
     animation: desktop-app-launch 900ms linear infinite;
   }
-  .desktop-connecting {
-    position: absolute;
-    inset: 0;
-    /* Status overlay only; clicks must reach the take-control surface below. */
-    pointer-events: none;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    flex-direction: column;
-    gap: 14px;
-    background: color-mix(in srgb, var(--bg) 94%, transparent);
-    color: var(--muted);
-    font-size: 12px;
-    text-align: center;
-  }
-  .desktop-connecting__monitor {
-    display: inline-flex;
-    width: 38px;
-    height: 38px;
-    color: color-mix(in srgb, var(--text) 76%, var(--muted));
-    animation: desktop-monitor-glow 1.8s ease-in-out infinite;
-  }
-  .desktop-connecting__monitor svg {
-    width: 100%;
-    height: 100%;
-    stroke-width: 1.25;
-  }
-  .desktop-connecting__copy {
-    display: flex;
-    align-items: baseline;
-    gap: 1px;
-  }
-  .desktop-connecting__dots {
-    display: inline-flex;
-    width: 16px;
-    gap: 1px;
-  }
-  .desktop-connecting__dot {
-    width: 2px;
-    height: 2px;
-    border-radius: 50%;
-    animation: desktop-traveling-dot 1.2s ease-in-out infinite;
-    background: currentColor;
-    opacity: 0.25;
-  }
-  .desktop-connecting__dot:nth-child(2) {
-    animation-delay: 160ms;
-  }
-  .desktop-connecting__dot:nth-child(3) {
-    animation-delay: 320ms;
-  }
   @keyframes desktop-app-launch {
     50% {
       opacity: 0.6;
@@ -112,26 +61,9 @@ export const desktopPanelLauncherStyles = css`
       transform: rotate(360deg);
     }
   }
-  @keyframes desktop-monitor-glow {
-    50% {
-      color: var(--text);
-      filter: drop-shadow(0 0 7px color-mix(in srgb, var(--accent) 32%, transparent));
-    }
-  }
-  @keyframes desktop-traveling-dot {
-    40% {
-      opacity: 1;
-      transform: translateY(-2px);
-    }
-  }
   @media (prefers-reduced-motion: reduce) {
-    .desktop-app-button__icon--launching,
-    .desktop-connecting__monitor,
-    .desktop-connecting__dot {
+    .desktop-app-button__icon--launching {
       animation: none;
-    }
-    .desktop-connecting__dot {
-      opacity: 0.65;
     }
   }
 `;

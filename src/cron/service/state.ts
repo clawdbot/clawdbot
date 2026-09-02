@@ -3,7 +3,7 @@
 import type { AdmittedRunContext } from "../../agents/admitted-run-context.js";
 import type { ExecutionIdentityAdmissionFacts } from "../../audit/execution-identity-admission.js";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
-import type { NormalizeReplySkipReason } from "../../auto-reply/reply/normalize-reply.js";
+import type { NormalizeReplySkipReason } from "../../auto-reply/reply/normalize-reply-skip-reason.js";
 import type { SessionCreatedActor } from "../../config/sessions/session-entry-provenance.js";
 import type { CronConfig } from "../../config/types.cron.js";
 import type { HeartbeatRunResult, HeartbeatWakeRequest } from "../../infra/heartbeat-wake.js";
@@ -25,6 +25,7 @@ import type {
   CronFailureNotificationDetail,
   CronDeliveryStatus,
   CronDeliveryTrace,
+  CronResolvedDeliveryState,
   CronJob,
   CronNextCheckProposal,
   CronJobCreate,
@@ -36,6 +37,7 @@ import type {
   CronRunTelemetry,
   CronStoredJob,
   CronStoreFile,
+  CronToolsAllowExecTarget,
   CronToolsAllowProvenance,
 } from "../types.js";
 
@@ -107,7 +109,7 @@ export type CronServiceDeps = {
   /** List enabled, configured channel ids without exposing channel machinery to cron core. */
   listConfiguredChannels?: () => readonly string[] | Promise<readonly string[]>;
   evaluateCronTrigger?: (params: {
-    job: CronJob;
+    job: CronStoredJob;
     script: string;
     state: unknown;
     streamBatch?: string;
@@ -169,6 +171,11 @@ export type CronServiceDeps = {
     opts: HeartbeatWakeRequest,
     retry?: Extract<HeartbeatRunResult, { status: "skipped" }>,
   ) => void;
+  /** Waits for the terminal result of a cron-owned coalesced heartbeat wake. */
+  requestHeartbeatAndWait?: (
+    opts: HeartbeatWakeRequest,
+    lifecycle: { abortSignal?: AbortSignal },
+  ) => Promise<HeartbeatRunResult>;
   runHeartbeatOnce?: (opts?: {
     source?: HeartbeatWakeRequest["source"];
     intent?: HeartbeatWakeRequest["intent"];
@@ -218,6 +225,7 @@ export type CronServiceDeps = {
       delivered?: boolean;
       deliveryError?: string;
       deliverySuppressionReason?: NormalizeReplySkipReason;
+      deliveryState?: CronResolvedDeliveryState;
       /**
        * `true` when announce/direct delivery was attempted for this run, even
        * if the final per-message ack status is uncertain.
@@ -233,11 +241,13 @@ export type CronServiceDeps = {
       delivered?: boolean;
       deliveryAttempted?: boolean;
       deliveryError?: string;
+      deliverySuppressionReason?: NormalizeReplySkipReason;
+      deliveryState?: CronResolvedDeliveryState;
       delivery?: CronDeliveryTrace;
     } & CronRunOutcome
   >;
   runScriptJob?: (params: {
-    job: CronJob;
+    job: CronStoredJob;
     streamBatch?: string;
     abortSignal?: AbortSignal;
   }) => Promise<
@@ -245,6 +255,8 @@ export type CronServiceDeps = {
       delivered?: boolean;
       deliveryAttempted?: boolean;
       deliveryError?: string;
+      deliverySuppressionReason?: NormalizeReplySkipReason;
+      deliveryState?: CronResolvedDeliveryState;
       delivery?: CronDeliveryTrace;
       notify?: string;
       wake?: "now" | "next-heartbeat";
@@ -452,6 +464,8 @@ export type CronListResult = CronJob[];
 export type CronAddInput = CronJobCreate;
 /** Caller-specific declaration-key visibility and explicit enablement metadata. */
 export type CronAddOptions = {
+  /** Selected revisions captured from a validated caller session, never public input. */
+  skillLibrarySelections?: CronStoredJob["skillLibrarySelections"];
   matchesExisting?: (job: CronJob) => boolean;
   enabledExplicit?: boolean;
   /** Gateway/doctor-owned heartbeat jobs require this opt-in at service creation. */
@@ -462,6 +476,8 @@ export type CronAddOptions = {
   scheduledToolPolicy?: CronScheduledToolPolicy;
   /** Private proof from an authenticated agent-runtime caller. */
   toolsAllowProvenance?: CronToolsAllowProvenance;
+  /** Restrict-only exec pin from the signed creator-turn identity. */
+  toolsAllowExecTarget?: CronToolsAllowExecTarget;
   /** Synchronous Gateway-owned liveness guard consumed immediately before mutation. */
   commitGuard?: () => void;
   /** One-use fresh capture; callback presence means fresh even when it returns undefined. */
@@ -473,6 +489,8 @@ export type CronUpdateInput = CronJobPatch;
 export type CronUpdateOptions = {
   scheduledToolPolicy?: CronScheduledToolPolicy;
   toolsAllowProvenance?: CronToolsAllowProvenance;
+  /** Restrict-only exec pin from the signed creator-turn identity. */
+  toolsAllowExecTarget?: CronToolsAllowExecTarget;
   /** Synchronous Gateway-owned liveness guard consumed immediately before mutation. */
   commitGuard?: () => void;
   /** One-use fresh capture; callback presence means fresh even when it returns undefined. */

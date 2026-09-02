@@ -24,7 +24,6 @@ import type {
   CronPayload,
 } from "../../api/types.ts";
 import { t } from "../../i18n/index.ts";
-import { resolveCronJobLastRunStatus } from "../cron-status.ts";
 import { formatUiError } from "../format-error.ts";
 import { toNumber } from "../format.ts";
 import {
@@ -32,9 +31,8 @@ import {
   isMissingOperatorReadScopeError,
 } from "../gateway-errors.ts";
 import { parseCronEveryMs } from "./decimal.ts";
-import { loadCronFailingCount } from "./scope.ts";
 
-export { loadCronFailingCount, loadCronScopeStats } from "./scope.ts";
+export { loadCronScopeStats } from "./scope.ts";
 
 const CRON_CHANNEL_LAST = "last";
 type CronDelivery = NonNullable<CronJob["delivery"]>;
@@ -164,7 +162,7 @@ const DEFAULT_CRON_FORM: CronFormState = {
   payloadModel: "",
   payloadThinking: "",
   payloadLightContext: false,
-  deliveryMode: "announce",
+  deliveryMode: "none",
   deliveryChannel: "last",
   deliveryTo: "",
   deliveryAccountId: "",
@@ -206,6 +204,7 @@ export type CronState = {
   client: GatewayBrowserClient | null;
   connected: boolean;
   cronLoading: boolean;
+  cronJobsError: string | null;
   cronJobsLoadingMore: boolean;
   cronJobsReloadPending: boolean;
   cronJobsReloadPendingTableFilters: boolean;
@@ -226,9 +225,6 @@ export type CronState = {
   cronStatus: CronStatus | null;
   cronScopedTotal: number | null;
   cronScopedNextWakeAtMs: number | null;
-  // Global enabled+error job count for the stats card; null until loaded.
-  // Kept separate from cronJobs, which only holds the filtered/paged table.
-  cronFailingCount: number | null;
   cronError: string | null;
   cronForm: CronFormState;
   // True while the create panel owns the detail pane; job selection (editing)
@@ -270,6 +266,7 @@ export function createInitialCronState(
     client: snapshot.client ?? null,
     connected: snapshot.connected ?? false,
     cronLoading: false,
+    cronJobsError: null,
     cronJobsLoadingMore: false,
     cronJobsReloadPending: false,
     cronJobsReloadPendingTableFilters: false,
@@ -290,7 +287,6 @@ export function createInitialCronState(
     cronStatus: null,
     cronScopedTotal: null,
     cronScopedNextWakeAtMs: null,
-    cronFailingCount: null,
     cronError: null,
     cronForm: { ...DEFAULT_CRON_FORM },
     cronCreateOpen: false,
@@ -713,7 +709,7 @@ export async function loadCronJobsPage(
   } else {
     state.cronLoading = true;
   }
-  state.cronError = null;
+  state.cronJobsError = null;
   try {
     const offset = append ? Math.max(0, state.cronJobsNextOffset ?? state.cronJobs.length) : 0;
     const res = await state.client.request<CronJobsListResult>("cron.list", {
@@ -756,7 +752,7 @@ export async function loadCronJobsPage(
     // A filtered/paged list is not deletion authority. Only an explicit remove
     // may clear an editor opened from an exact job definition.
   } catch (err) {
-    state.cronError = formatUiError(err);
+    state.cronJobsError = formatUiError(err);
   } finally {
     if (append) {
       state.cronJobsLoadingMore = false;
@@ -794,54 +790,8 @@ export function updateCronJobsFilter(
   state.cronJobsSortDir = patch.cronJobsSortDir ?? state.cronJobsSortDir;
 }
 
-export function getVisibleCronJobs(
-  state: Pick<
-    CronState,
-    "cronJobs" | "cronJobsScheduleKindFilter" | "cronJobsLastStatusFilter" | "cronJobsTriggerFilter"
-  >,
-): CronJob[] {
-  return state.cronJobs.filter((job) => {
-    const scheduleKind = resolveCronJobScheduleKind(job);
-    if (!scheduleKind) {
-      return false;
-    }
-    if (
-      state.cronJobsScheduleKindFilter !== "all" &&
-      scheduleKind !== state.cronJobsScheduleKindFilter
-    ) {
-      return false;
-    }
-    if (
-      state.cronJobsLastStatusFilter !== "all" &&
-      resolveCronJobLastRunStatus(job) !== state.cronJobsLastStatusFilter
-    ) {
-      return false;
-    }
-    if (state.cronJobsTriggerFilter === "conditional" && !job.trigger) {
-      return false;
-    }
-    if (state.cronJobsTriggerFilter === "unconditional" && job.trigger) {
-      return false;
-    }
-    return true;
-  });
-}
-
-function resolveCronJobScheduleKind(job: CronJob): string | null {
-  const scheduleKind = (job.schedule as { kind?: unknown } | null | undefined)?.kind;
-  if (
-    scheduleKind === "at" ||
-    scheduleKind === "every" ||
-    scheduleKind === "cron" ||
-    scheduleKind === "on-exit" ||
-    scheduleKind === "stream"
-  ) {
-    return scheduleKind;
-  }
-  return null;
-}
-
 function clearCronEditState(state: CronState) {
+  state.cronError = null;
   state.cronEditingJob = null;
   state.cronCloningJob = null;
   state.cronEditingJobId = null;
@@ -1371,12 +1321,10 @@ export async function addCronJob(state: CronState): Promise<CronSaveResult> {
   return result;
 }
 
-// Every mutation reloads the same trio so the table, scheduler status, and
-// the failing-count stat card can never drift apart after add/toggle/remove.
+// Mutations reload the list and scheduler status so both canonical views stay current.
 async function reloadCronJobsSnapshot(state: CronState) {
   await loadCronJobsPage(state, { tableFilters: true });
   await loadCronStatus(state);
-  await loadCronFailingCount(state);
 }
 
 export async function toggleCronJob(
@@ -1542,7 +1490,8 @@ export async function loadCronRuns(
   state.cronRunsLoadingMore = append;
   try {
     const res = await client.request<CronRunsResult>("cron.runs", {
-      ...(request.agentId ? { agentId: request.agentId } : {}),
+      // An exact job owns its history; the overview's agent filter may select another owner.
+      ...(request.scope === "all" && request.agentId ? { agentId: request.agentId } : {}),
       scope: request.scope,
       id: request.jobId ?? undefined,
       limit: request.limit,
@@ -1623,6 +1572,7 @@ export function updateCronRunsFilter(
 }
 
 function setCronEditState(state: CronState, job: CronJob, form: CronFormState) {
+  state.cronError = null;
   state.cronEditingJob = job;
   state.cronCloningJob = null;
   state.cronEditingJobId = job.id;

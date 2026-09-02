@@ -18,10 +18,15 @@ import type { SkillSnapshot } from "../../skills/types.js";
 import {
   normalizeCronScheduledToolCallerOrigin,
   normalizeCronScheduledToolPolicy,
+  normalizeCronToolsAllowExecTarget,
+  normalizeCronToolsAllowExecTargetRequirement,
+  stripCronPinnedExecGrant,
 } from "../scheduled-tool-policy.js";
 import type {
   CronScheduledToolCallerOrigin,
   CronScheduledToolPolicy,
+  CronToolsAllowExecTarget,
+  CronToolsAllowExecTargetRequirement,
 } from "../scheduled-tool-policy.js";
 import { setSessionRuntimeModel } from "./run.runtime.js";
 import type { resolveCronSession } from "./session.js";
@@ -252,6 +257,8 @@ export function createCronRunContinuationSession(params: {
   toolsAllowIsDefault?: boolean;
   scheduledToolPolicy?: CronScheduledToolPolicy;
   scheduledToolCallerOrigin?: CronScheduledToolCallerOrigin;
+  toolsAllowExecTarget?: CronToolsAllowExecTarget;
+  toolsAllowExecTargetRequirement?: CronToolsAllowExecTargetRequirement;
   cliSessionBindingFacts?: {
     extraSystemPromptStatic?: string;
     sourceReplyDeliveryMode?: "automatic" | "message_tool_only";
@@ -266,13 +273,27 @@ export function createCronRunContinuationSession(params: {
   const scheduledToolCallerOrigin = normalizeCronScheduledToolCallerOrigin(
     params.scheduledToolCallerOrigin,
   );
+  const toolsAllowExecTarget =
+    params.toolsAllow === undefined
+      ? undefined
+      : normalizeCronToolsAllowExecTarget(params.toolsAllowExecTarget);
+  const toolsAllowExecTargetRequirement =
+    params.toolsAllow === undefined
+      ? undefined
+      : normalizeCronToolsAllowExecTargetRequirement(params.toolsAllowExecTargetRequirement);
+  const storedToolsAllow = stripCronPinnedExecGrant({
+    toolsAllow: params.toolsAllow,
+    requirement: toolsAllowExecTargetRequirement,
+  });
   const continuation: NonNullable<SessionEntry["cronRunContinuation"]> = {
     lifecycleRevision: params.cronSession.lifecycleRevision,
     phase: "running" as const,
-    ...(params.toolsAllow !== undefined ? { toolsAllow: [...params.toolsAllow] } : {}),
+    ...(storedToolsAllow !== undefined ? { toolsAllow: storedToolsAllow } : {}),
     ...(params.toolsAllowIsDefault === true ? { toolsAllowIsDefault: true } : {}),
     ...(scheduledToolPolicy ? { scheduledToolPolicy } : {}),
     ...(scheduledToolPolicy?.mode === "account" ? { scheduledToolCallerOrigin } : {}),
+    ...(toolsAllowExecTarget ? { toolsAllowExecTarget } : {}),
+    ...(toolsAllowExecTargetRequirement ? { toolsAllowExecTargetRequirement } : {}),
     ...(params.cliSessionBindingFacts
       ? { cliSessionBindingFacts: { ...params.cliSessionBindingFacts } }
       : {}),

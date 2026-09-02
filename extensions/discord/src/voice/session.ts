@@ -1,3 +1,4 @@
+import type { PluginRuntime } from "openclaw/plugin-sdk/channel-core";
 // Discord plugin module implements session behavior.
 import type { DiscordAccountConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
@@ -104,12 +105,16 @@ export type VoiceSessionEntry = {
   player: import("@discordjs/voice").AudioPlayer;
   playbackQueue: Promise<void>;
   processingQueue: Promise<void>;
+  audioInputBudget: Awaited<
+    ReturnType<PluginRuntime["mediaUnderstanding"]["resolveAudioInputBudget"]>
+  >;
   ttsStreamFallbackWarned: boolean;
   capture: VoiceCaptureState;
   realtimeLifecycle: VoiceRealtimeLifecycle;
   transcripts?: {
     sessionId: string;
     onUtterance: (utterance: TranscriptUtterance) => void | Promise<void>;
+    onStop?: () => void | Promise<void>;
   };
   receiveRecovery: VoiceReceiveRecoveryState;
   stop: (reason?: string) => void;

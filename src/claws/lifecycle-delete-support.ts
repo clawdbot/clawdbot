@@ -26,6 +26,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { root as fsSafeRoot, FsSafeError } from "../infra/fs-safe.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { unregisterOpenClawAgentDatabases } from "../state/openclaw-agent-db-registry.js";
+import type { OpenClawStateDatabase } from "../state/openclaw-state-db-contract.js";
 import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
@@ -460,13 +461,15 @@ export function releaseClawRemoveRows(
   agentId: string,
   files: RemovedWorkspaceFile[],
   complete: boolean,
+  completeDeletion: (database: OpenClawStateDatabase) => void,
   options: OpenClawStateDatabaseOptions,
 ): void {
   if (complete) {
     // Keep the install record as the retry owner until database discovery is released.
     unregisterOpenClawAgentDatabases({ agentId, env: options.env });
   }
-  runOpenClawStateWriteTransaction(({ db }) => {
+  runOpenClawStateWriteTransaction((database) => {
+    const { db } = database;
     if (clawStateTableExists(db, "claw_workspace_files")) {
       for (const file of files.filter((candidate) => candidate.action !== "error")) {
         db /* sqlite-allow-raw: remove one owned Claw workspace-file row. */
@@ -474,6 +477,7 @@ export function releaseClawRemoveRows(
           .run(agentId, file.path);
       }
     }
+    // Partial removals keep both the journal fence and install retry owner intact.
     if (!complete) {
       return;
     }
@@ -487,6 +491,8 @@ export function releaseClawRemoveRows(
         .prepare("DELETE FROM claw_installs WHERE agent_id = ?")
         .run(agentId);
     }
+    // Complete removals release the fence and retry owner in the same transaction.
+    completeDeletion(database);
   }, options);
   if (complete) {
     deleteCachedClawInstallSchemaVersion(agentId, options);

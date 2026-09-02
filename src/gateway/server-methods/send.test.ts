@@ -24,6 +24,7 @@ import {
   releaseAgentRunDelegatedAuthority,
 } from "../../infra/agent-run-registry.js";
 import { OutboundDeliveryError } from "../../infra/outbound/deliver-types.js";
+import { resolveOutboundTargetWithPlugin } from "../../infra/outbound/targets-resolve-shared.js";
 import { buildOutboundMediaLoadOptions } from "../../media/load-options.js";
 import { loadWebMediaRaw } from "../../media/web-media.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
@@ -2510,7 +2511,7 @@ describe("gateway send mirroring", () => {
       expect(firstRespondCall(respond)[0]).toBe(true);
       expect(ensureSessionEntryCall()?.creation).toEqual({
         via: "operator",
-        actor: { type: "human", id: profile.id },
+        actor: { type: "human", source: "profile", id: profile.id },
         sandbox: "required",
       });
     });
@@ -4458,6 +4459,169 @@ describe("gateway send mirroring", () => {
 
     expect(firstRespondCall(respond)[0]).toBe(true);
     expect(lastDispatchChannelMessageActionCall()?.reply).toEqual(reply);
+  });
+
+  describe("canonical outbound send", () => {
+    let plugin: ChannelPlugin;
+
+    beforeEach(() => {
+      plugin = {
+        ...createChannelTestPluginBase({
+          id: "twitch",
+          capabilities: { chatTypes: ["group"] },
+          config: {
+            listAccountIds: () => ["default", "secondary"],
+            resolveAccount: () => ({ enabled: true }),
+            isConfigured: () => true,
+            resolveDefaultTo: ({ accountId }) => `${accountId ?? "default"}-room`,
+          },
+        }),
+        actions: { describeMessageTool: () => ({ actions: ["send"] }) },
+        messaging: {
+          targetResolver: { looksLikeId: () => true, hint: "<room>" },
+        },
+        outbound: {
+          deliveryMode: "direct",
+          sendText: async () => ({ channel: "twitch", messageId: "core-send" }),
+        },
+      };
+      mocks.getChannelPlugin.mockReturnValue(plugin);
+      setActivePluginRegistry(
+        createTestRegistry([{ pluginId: "twitch", source: "test", plugin }]),
+        `send-test-canonical-${registrySeq}`,
+      );
+      mocks.resolveMessageChannelSelection.mockResolvedValue({ channel: "twitch", plugin });
+      mocks.resolveOutboundTarget.mockImplementation((target) =>
+        expectDefined(
+          resolveOutboundTargetWithPlugin({ plugin, target }),
+          "registered plugin resolves outbound targets",
+        ),
+      );
+      mocks.dispatchChannelMessageAction.mockResolvedValue(null);
+      mocks.deliverOutboundPayloads.mockResolvedValue([
+        { channel: "twitch", messageId: "core-send" },
+      ]);
+    });
+
+    it.each([
+      {
+        name: "an explicit target without a native handler",
+        params: { to: "explicit-room" },
+        accountId: undefined,
+        gatewayMode: false,
+        nativeDeclines: false,
+        expectedTarget: "explicit-room",
+      },
+      {
+        name: "a target alias when native actions decline send",
+        params: { target: "alias-room" },
+        accountId: undefined,
+        gatewayMode: false,
+        nativeDeclines: true,
+        expectedTarget: "alias-room",
+      },
+      {
+        name: "an account default on the active gateway adapter",
+        params: {},
+        accountId: "secondary",
+        gatewayMode: true,
+        nativeDeclines: false,
+        expectedTarget: "secondary-room",
+      },
+    ])("routes $name through one canonical outbound send", async (testCase) => {
+      if (testCase.nativeDeclines) {
+        plugin.actions = {
+          describeMessageTool: () => ({ actions: ["send", "react"] }),
+          supportsAction: ({ action }) => action === "react",
+          prepareSendPayload: ({ payload }) => ({ ...payload, text: "prepared hello" }),
+          handleAction: async () => jsonResult({ ok: true }),
+        };
+      }
+      if (testCase.gatewayMode) {
+        plugin.outbound!.deliveryMode = "gateway";
+      }
+      const { respond } = await runMessageActionRequest(
+        {
+          channel: "twitch",
+          action: "send",
+          params: { ...testCase.params, message: "hello" },
+          ...(testCase.accountId ? { accountId: testCase.accountId } : {}),
+          idempotencyKey: `canonical-send-${testCase.expectedTarget}`,
+        },
+        directCliClient(),
+      );
+
+      const response = firstRespondCall(respond);
+      expect(response[2]).toBeUndefined();
+      expect(response[0]).toBe(true);
+      expect(response[1]).toMatchObject({
+        channel: "twitch",
+        to: testCase.expectedTarget,
+        via: "direct",
+        deliveryStatus: "sent",
+        result: { messageId: "core-send" },
+      });
+      expect(mocks.deliverOutboundPayloads).toHaveBeenCalledOnce();
+      expect(deliveryCall()).toMatchObject({
+        to: testCase.expectedTarget,
+        accountId: testCase.accountId ?? "default",
+        payloads: [
+          expect.objectContaining({ text: testCase.nativeDeclines ? "prepared hello" : "hello" }),
+        ],
+      });
+      expect(mocks.appendAssistantMessageToSessionTranscript).not.toHaveBeenCalled();
+    });
+
+    it("rejects a channel without canonical outbound send capability", async () => {
+      plugin.outbound = undefined;
+      const { respond } = await runMessageActionRequest({
+        channel: "twitch",
+        action: "send",
+        params: { to: "explicit-room", message: "hello" },
+        idempotencyKey: "canonical-send-unsupported",
+      });
+
+      expect(firstRespondCall(respond)[0]).toBe(false);
+      expect(firstRespondCall(respond)[2]).toMatchObject({
+        code: ErrorCodes.INVALID_REQUEST,
+        message: "Channel twitch does not support action send.",
+      });
+      expect(mocks.deliverOutboundPayloads).not.toHaveBeenCalled();
+    });
+
+    it("fences canonical outbound send when runtime authority closes during preparation", async () => {
+      let authorityActive = true;
+      const platformSend = vi.fn();
+      mocks.deliverOutboundPayloads.mockImplementationOnce(
+        async (params: { onPlatformSendDispatch?: () => Promise<void> }) => {
+          authorityActive = false;
+          await params.onPlatformSendDispatch?.();
+          platformSend();
+          return [{ channel: "twitch", messageId: "must-not-send" }];
+        },
+      );
+      const sessionKey = "agent:main:twitch:group:explicit-room";
+      const { respond } = await runMessageActionRequest(
+        {
+          channel: "twitch",
+          action: "send",
+          params: { to: "explicit-room", message: "must not escape" },
+          sessionKey,
+          idempotencyKey: "canonical-send-authority-race",
+        },
+        agentRuntimeClient(sessionKey),
+        {
+          ...makeContext(),
+          validateAgentRuntimeApprovalAuthority: () => authorityActive,
+        } as GatewayRequestContext,
+      );
+
+      expect(firstRespondCall(respond)[0]).toBe(false);
+      expect(firstRespondCall(respond)[2]?.message).toContain("authority is no longer active");
+      expect(deliveryCall()?.skipQueue).toBe(true);
+      expect(platformSend).not.toHaveBeenCalled();
+      expect(mocks.appendAssistantMessageToSessionTranscript).not.toHaveBeenCalled();
+    });
   });
 
   it("falls back once to canonical outbound poll delivery when plugin actions decline", async () => {

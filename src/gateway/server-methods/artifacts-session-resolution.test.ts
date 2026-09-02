@@ -104,7 +104,7 @@ describe("artifact session authorization", () => {
         {
           sessionId: "session-foreign-artifacts",
           updatedAt: 1,
-          createdActor: { type: "human", id: "owner@example.com" },
+          createdActor: { type: "human", source: "profile", id: "owner@example.com" },
           visibility: "shared",
         },
       );

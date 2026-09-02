@@ -1,8 +1,8 @@
-import type { SessionEntry } from "../config/sessions.js";
+import type { InternalSessionEntry } from "../config/sessions.js";
 import { normalizeLegacySessionEntryDelivery } from "../infra/state-migrations.legacy-session-store.js";
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
 
-export type CommandSessionEntryFixture = Partial<SessionEntry> & {
+export type CommandSessionEntryFixture = Partial<InternalSessionEntry> & {
   channel?: string;
   deliveryContext?: DeliveryContext;
   lastThreadId?: string | number;
@@ -10,18 +10,18 @@ export type CommandSessionEntryFixture = Partial<SessionEntry> & {
 
 export function createCommandSessionEntry(
   overrides: CommandSessionEntryFixture = {},
-): SessionEntry {
+): InternalSessionEntry {
   return normalizeLegacySessionEntryDelivery({
     sessionId: "session-1",
     updatedAt: 1,
     ...overrides,
-  } as SessionEntry);
+  } as InternalSessionEntry);
 }
 
 export function createCommandSessionFixture(
   overrides: CommandSessionEntryFixture = {},
   sessionKey = "agent:main:main",
-): { entry: SessionEntry; store: Record<string, SessionEntry> } {
+): { entry: InternalSessionEntry; store: Record<string, InternalSessionEntry> } {
   const entry = createCommandSessionEntry({
     skillsSnapshot: { prompt: "", skills: [], version: 0 },
     ...overrides,

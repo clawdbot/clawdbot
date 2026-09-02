@@ -2,9 +2,9 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import type { BrowserConfig, BrowserProfileConfig } from "openclaw/plugin-sdk/config-contracts";
 import { withEnv, withTempDir } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it, vi } from "vitest";
-import type { BrowserConfig, BrowserProfileConfig } from "../config/config.js";
 import { resolveUserPath } from "../utils.js";
 import {
   getManagedBrowserMissingDisplayError,

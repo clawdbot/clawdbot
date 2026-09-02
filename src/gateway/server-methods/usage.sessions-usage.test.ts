@@ -1,12 +1,12 @@
 // Session usage tests cover aggregate cost/token usage across configured and
 // discovered agent session logs.
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { withEnvAsync } from "../../test-utils/env.js";
+import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 
 vi.mock("../../config/config.js", () => {
   return {
@@ -25,6 +25,7 @@ vi.mock("../session-utils.js", async () => {
     ...actual,
     loadGatewaySessionEntryReadOnly: vi.fn(actual.loadGatewaySessionEntryReadOnly),
     loadCombinedSessionStoreForGatewayCore: vi.fn(() => ({
+      agentIdBySessionKey: new Map(),
       durableTargets: [],
       storePath: "(multiple)",
       store: {},
@@ -224,22 +225,15 @@ function mockStoredSession(
 async function withUsageState(
   run: (writeSessionFile: (fileName: string) => string) => Promise<void>,
 ) {
-  const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-usage-test-"));
-  const agentSessionsDir = path.join(stateDir, "agents", "opus", "sessions");
-  const writeSessionFile = (fileName: string) => {
-    const sessionFile = path.join(agentSessionsDir, fileName);
-    fs.writeFileSync(sessionFile, "", "utf-8");
-    return sessionFile;
-  };
-
-  try {
-    await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
-      fs.mkdirSync(agentSessionsDir, { recursive: true });
-      await run(writeSessionFile);
+  await withOpenClawTestState({ label: "usage" }, async (state) => {
+    const agentSessionsDir = state.sessionsDir("opus");
+    fs.mkdirSync(agentSessionsDir, { recursive: true });
+    await run((fileName) => {
+      const sessionFile = path.join(agentSessionsDir, fileName);
+      fs.writeFileSync(sessionFile, "", "utf-8");
+      return sessionFile;
     });
-  } finally {
-    fs.rmSync(stateDir, { recursive: true, force: true });
-  }
+  });
 }
 
 describe("sessions.usage", () => {
@@ -516,6 +510,7 @@ describe("sessions.usage", () => {
 
   it("does not attach out-of-scope store entries to list-style usage results", async () => {
     vi.mocked(loadCombinedSessionStoreForGatewayCore).mockReturnValue({
+      agentIdBySessionKey: new Map([["agent:main:s-opus", "main"]]),
       durableTargets: [],
       storePath: "(multiple)",
       store: {
@@ -548,6 +543,7 @@ describe("sessions.usage", () => {
       mockStoredSession("agent:opus:main", "main");
 
       vi.mocked(loadCombinedSessionStoreForGatewayCore).mockReturnValue({
+        agentIdBySessionKey: new Map([["agent:opus:main", "opus"]]),
         durableTargets: [],
         storePath: "(multiple)",
         store: {
@@ -603,6 +599,7 @@ describe("sessions.usage", () => {
         updatedAt: 999,
       };
       vi.mocked(loadCombinedSessionStoreForGatewayCore).mockReturnValue({
+        agentIdBySessionKey: new Map([["global", "opus"]]),
         durableTargets: [],
         storePath: "(multiple)",
         store: {
@@ -642,6 +639,7 @@ describe("sessions.usage", () => {
       const sessionFile = writeSessionFile("shared.jsonl");
 
       vi.mocked(loadCombinedSessionStoreForGatewayCore).mockReturnValue({
+        agentIdBySessionKey: new Map([["agent:main:shared", "main"]]),
         durableTargets: [],
         storePath: "(multiple)",
         store: {
@@ -688,6 +686,7 @@ describe("sessions.usage", () => {
       // Swap the store mock for this test: the canonical key differs from the discovered key
       // but points at the same sessionId.
       vi.mocked(loadCombinedSessionStoreForGatewayCore).mockReturnValue({
+        agentIdBySessionKey: new Map([[storeKey, "opus"]]),
         durableTargets: [],
         storePath: "(multiple)",
         store: {
@@ -718,17 +717,19 @@ describe("sessions.usage", () => {
     const storeKey = "agent:opus:main";
 
     await withUsageState(async (writeSessionFile) => {
-      writeSessionFile("current.jsonl");
-      writeSessionFile("old.jsonl.reset.2026-02-01T00-00-00.000Z");
+      const oldSessionFile = writeSessionFile("old.jsonl.reset.2026-02-01T00-00-00.000Z");
       mockStoredSession(storeKey, "current");
+      vi.mocked(discoverAllSessions).mockResolvedValueOnce([
+        { sessionId: "old", sessionFile: oldSessionFile, mtime: 1_000 },
+      ]);
 
       vi.mocked(loadCombinedSessionStoreForGatewayCore).mockReturnValue({
+        agentIdBySessionKey: new Map([[storeKey, "opus"]]),
         durableTargets: [],
         storePath: "(multiple)",
         store: {
           [storeKey]: {
             sessionId: "current",
-            sessionFile: "current.jsonl",
             updatedAt: 1_000,
             usageFamilyKey: storeKey,
             usageFamilySessionIds: ["old", "current"],
@@ -865,6 +866,10 @@ describe("sessions.usage", () => {
       mockStoredSession(preferredKey, "run-dup");
 
       vi.mocked(loadCombinedSessionStoreForGatewayCore).mockReturnValue({
+        agentIdBySessionKey: new Map([
+          [preferredKey, "opus"],
+          ["agent:other:main", "other"],
+        ]),
         durableTargets: [],
         storePath: "(multiple)",
         store: {
@@ -929,35 +934,38 @@ describe("sessions.usage", () => {
   });
 
   it("loads bare-key usage details through the persisted fixed-store owner", async () => {
-    const config: OpenClawConfig = {
-      session: { store: "/tmp/shared-sessions.sqlite", scope: "global" },
-      agents: {
-        ownership: "explicit",
-        list: [{ id: "ops" }, { id: "research" }],
-        defaults: { sessionStore: { agentId: "ops" } },
-      },
-    };
-    const entry = { sessionId: "s-ops", updatedAt: 1_000 };
-    vi.mocked(loadGatewaySessionEntryReadOnly).mockReturnValueOnce({
-      cfg: config,
-      agentId: "ops",
-      canonicalKey: "global",
-      entry,
-      legacyKey: undefined,
-      store: { global: entry },
-      storeKeys: ["global"],
-      storePath: "/tmp/shared-sessions.sqlite",
-    });
+    await withOpenClawTestState({ label: "usage-fixed-store-owner" }, async (state) => {
+      const storePath = state.statePath("shared-sessions.sqlite");
+      const config: OpenClawConfig = {
+        session: { store: storePath, scope: "global" },
+        agents: {
+          ownership: "explicit",
+          list: [{ id: "ops" }, { id: "research" }],
+          defaults: { sessionStore: { agentId: "ops" } },
+        },
+      };
+      const entry = { sessionId: "s-ops", updatedAt: 1_000 };
+      vi.mocked(loadGatewaySessionEntryReadOnly).mockReturnValueOnce({
+        cfg: config,
+        agentId: "ops",
+        canonicalKey: "global",
+        entry,
+        legacyKey: undefined,
+        store: { global: entry },
+        storeKeys: ["global"],
+        storePath,
+      });
 
-    const respond = await runSessionsUsageTimeseries({ key: "global" }, config);
+      const respond = await runSessionsUsageTimeseries({ key: "global" }, config);
 
-    expect(mockArg(respond, 0, 0)).toBe(true);
-    expect(vi.mocked(loadGatewaySessionEntryReadOnly)).toHaveBeenCalledWith("global", {
-      agentId: "ops",
+      expect(mockArg(respond, 0, 0)).toBe(true);
+      expect(vi.mocked(loadGatewaySessionEntryReadOnly)).toHaveBeenCalledWith("global", {
+        agentId: "ops",
+      });
+      expect(vi.mocked(loadSessionUsageTimeSeries)).toHaveBeenCalledWith(
+        expect.objectContaining({ agentId: "ops" }),
+      );
     });
-    expect(vi.mocked(loadSessionUsageTimeSeries)).toHaveBeenCalledWith(
-      expect.objectContaining({ agentId: "ops" }),
-    );
   });
 
   it("preserves JSONL detail lookup for storeless sessions", async () => {

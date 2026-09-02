@@ -20,6 +20,8 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.contentOrNull
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -155,15 +157,16 @@ class ChatControllerOutboxTest {
       }
     }
 
-    override suspend fun claimForSending(
+    override suspend fun claimForSendingIfAttempt(
       id: String,
+      expectedAttemptVersion: Int,
       retryCount: Int,
       lastError: String?,
     ): Int {
       claimGate?.await()
       sendingStatusUpdateFailure?.let { throw it }
       val current = rows[id] ?: return 0
-      if (current.status != ChatOutboxStatus.Queued) return 0
+      if (current.attemptVersion != expectedAttemptVersion || current.status != ChatOutboxStatus.Queued) return 0
       rows[id] = current.copy(status = ChatOutboxStatus.Sending, retryCount = retryCount, lastError = lastError)
       onStatusUpdated?.invoke(ChatOutboxStatus.Sending)
       return 1
@@ -178,9 +181,10 @@ class ChatControllerOutboxTest {
       rows[id] = current.copy(sessionKey = sessionKey)
     }
 
-    override suspend fun confirmDelivered(ids: Set<String>): Int {
+    override suspend fun confirmDeliveredAttempts(ids: Map<String, Int>): Int {
       var removed = 0
-      for (id in ids) {
+      for ((id, attemptVersion) in ids) {
+        if (rows[id]?.attemptVersion != attemptVersion) continue
         if (rows.remove(id) != null) {
           attachmentBytes.remove(id)
           gatewayIds.remove(id)
@@ -190,12 +194,16 @@ class ChatControllerOutboxTest {
       return removed
     }
 
-    override suspend fun updateStatus(
+    override suspend fun updateStatusIfAttempt(
       id: String,
+      expectedAttemptVersion: Int,
       status: ChatOutboxStatus,
       retryCount: Int,
       lastError: String?,
+      expectedStatus: ChatOutboxStatus?,
     ): Int {
+      val current = rows[id] ?: return 0
+      if (current.attemptVersion != expectedAttemptVersion || (expectedStatus != null && current.status != expectedStatus)) return 0
       if (status == ChatOutboxStatus.Failed && deleteOnFailedStatus) {
         rows.remove(id)
         gatewayIds.remove(id)
@@ -205,21 +213,37 @@ class ChatControllerOutboxTest {
       if (status == ChatOutboxStatus.Accepted) acceptedStatusUpdateFailure?.let { throw it }
       if (status == ChatOutboxStatus.Queued) queuedStatusUpdateFailure?.let { throw it }
       if (status == ChatOutboxStatus.Sending) sendingStatusUpdateFailure?.let { throw it }
-      val current = rows[id] ?: return 0
-      rows[id] = current.copy(status = status, retryCount = retryCount, lastError = lastError)
+      rows[id] =
+        current.copy(
+          status = status,
+          retryCount = retryCount,
+          lastError = lastError,
+          attemptVersion = expectedAttemptVersion + if (status == ChatOutboxStatus.Queued) 1 else 0,
+          hadUnacknowledgedSend = true,
+        )
       onStatusUpdated?.invoke(status)
       return 1
     }
 
-    override suspend fun requeueForRetry(
+    override suspend fun requeueForRetryIfCurrent(
       gatewayId: String,
       id: String,
+      expectedAttemptVersion: Int,
+      expectedRetryCount: Int,
+      expectedLastError: String?,
       nowMs: Long,
       gatedEpoch: Long?,
       ownerAgentId: String?,
+      replacementId: String?,
     ): Int {
       val current = rows[id] ?: return 0
-      if (gatewayIds[id] != gatewayId || current.status != ChatOutboxStatus.Failed) return 0
+      if (
+        gatewayIds[id] != gatewayId || current.status != ChatOutboxStatus.Failed ||
+        current.attemptVersion != expectedAttemptVersion || current.retryCount != expectedRetryCount ||
+        current.lastError != expectedLastError
+      ) {
+        return 0
+      }
       var createdAt = maxOf(nowMs, nextCreatedAt)
       rows[id] =
         current.copy(
@@ -229,6 +253,9 @@ class ChatControllerOutboxTest {
           createdAtMs = createdAt,
           gatedEpoch = gatedEpoch,
           ownerAgentId = current.ownerAgentId ?: ownerAgentId,
+          attemptVersion = expectedAttemptVersion + 1,
+          parkedWasAccepted = false,
+          hadUnacknowledgedSend = false,
         )
       // Mirror the Room store: queued same-session successors follow the retried row.
       val successors =
@@ -298,7 +325,7 @@ class ChatControllerOutboxTest {
       recoveryFailure?.let { throw it }
       for ((id, item) in rows) {
         if (item.status == ChatOutboxStatus.Sending) {
-          rows[id] = item.copy(status = ChatOutboxStatus.Failed, lastError = OUTBOX_DELIVERY_UNCONFIRMED_ERROR)
+          rows[id] = item.copy(status = ChatOutboxStatus.Failed, lastError = OUTBOX_DELIVERY_UNCONFIRMED_ERROR, hadUnacknowledgedSend = true)
         }
       }
     }
@@ -342,9 +369,22 @@ class ChatControllerOutboxTest {
     val historyAgentIds = mutableListOf<String?>()
     var echoDeliveredSendsInHistory = true
     private val deliveredSends = mutableListOf<DeliveredSend>()
+    private val sessionSettings = mutableMapOf<Pair<String?, String?>, JsonObject>()
     var historyMessagesJson = "[]"
     val historyMessagesByAgent = mutableMapOf<String, String>()
     var metadataModelsJson = "[]"
+
+    fun captureRequestLease(gatewayScope: ChatCacheScope?): GatewaySession.RequestLease? {
+      if (!online) return null
+      return GatewaySession.RequestLease(
+        endpointStableId = gatewayScope?.gatewayId.orEmpty(),
+        isCurrentImpl = { online },
+      ) { method, paramsJson, _, withEnqueue ->
+        if (!online) throw GatewayRequestNotEnqueued("offline")
+        withEnqueue {}
+        request(method, paramsJson)
+      }
+    }
 
     suspend fun request(
       method: String,
@@ -382,6 +422,7 @@ class ChatControllerOutboxTest {
           }
           response
         }
+
         "chat.history" -> {
           val params =
             runCatching {
@@ -405,18 +446,42 @@ class ChatControllerOutboxTest {
             }
           val explicitJson = requestedAgentId?.let(historyMessagesByAgent::get) ?: historyMessagesJson
           val explicit = (json.parseToJsonElement(explicitJson) as JsonArray).map { it.toString() }
-          """{"sessionId":"session-1","messages":[${(explicit + echoed).joinToString(",")}]}"""
+          val sessionInfo =
+            buildJsonObject {
+              put("key", JsonPrimitive(requestedKey))
+              put("agentId", JsonPrimitive(requestedAgentId))
+              put("sessionId", JsonPrimitive("session-1"))
+              sessionSettings[requestedAgentId to requestedKey]?.forEach { (key, value) -> put(key, value) }
+            }
+          """{"sessionId":"session-1","sessionInfo":$sessionInfo,"messages":[${(explicit + echoed).joinToString(",")}]}"""
         }
-        "chat.metadata" -> """{"commands":[],"models":$metadataModelsJson}"""
+
+        "chat.metadata" -> {
+          """{"commands":[],"models":$metadataModelsJson}"""
+        }
+
         "sessions.patch" -> {
           settingsPatchStarted?.complete(Unit)
           settingsPatchGate?.await()
           if (settingsPatchFailures.isNotEmpty()) {
             settingsPatchFailures.removeAt(0)?.let { throw it }
           }
+          val params = json.parseToJsonElement(paramsJson.orEmpty()) as JsonObject
+          val owner = (params["agentId"] as? JsonPrimitive)?.content to (params["key"] as? JsonPrimitive)?.content
+          val settings = sessionSettings[owner].orEmpty().toMutableMap()
+          params["model"]?.let {
+            val model = (it as JsonPrimitive).contentOrNull
+            settings["modelProvider"] = JsonPrimitive(model?.substringBefore('/'))
+            settings["model"] = JsonPrimitive(model?.substringAfter('/'))
+          }
+          params["thinkingLevel"]?.let { settings["thinkingLevel"] = it }
+          sessionSettings[owner] = JsonObject(settings)
           "{}"
         }
-        else -> "{}"
+
+        else -> {
+          "{}"
+        }
       }
     }
   }
@@ -430,6 +495,7 @@ class ChatControllerOutboxTest {
       scope = scope,
       json = json,
       requestGateway = gateway::request,
+      captureRequestLease = gateway::captureRequestLease,
       cacheScope = { ChatCacheScope(gatewayId = "gateway-test", connectionGeneration = 1L) },
       currentDefaultAgentId = { "main" },
       commandOutbox = outbox,
@@ -452,6 +518,7 @@ class ChatControllerOutboxTest {
         scope = scope,
         json = json,
         requestGateway = gateway::request,
+        captureRequestLease = gateway::captureRequestLease,
         cacheScope = cacheScope,
         currentDefaultAgentId = currentDefaultAgentId,
         currentDefaultAgentRevision = currentDefaultAgentRevision,

@@ -146,6 +146,7 @@ export async function readLocalClaudeTranscriptPage(
           const item = parseTranscriptLine(line, readBoundedString);
           fragments = [];
           if (item) {
+            item.resumeCursor = encodeOffset(position + index + 1 + line.length);
             found.push({ item, start: position + index + 1 });
             if (found.length > params.limit) {
               break;
@@ -163,6 +164,7 @@ export async function readLocalClaudeTranscriptPage(
           const line = Buffer.concat([prefix, ...fragments.toReversed()]);
           const item = parseTranscriptLine(line, readBoundedString);
           if (item) {
+            item.resumeCursor = encodeOffset(line.length);
             found.push({ item, start: 0 });
           }
         }

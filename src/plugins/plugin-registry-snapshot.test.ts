@@ -4,10 +4,10 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { setCurrentPluginMetadataSnapshot } from "./current-plugin-metadata-snapshot.js";
+import { setCurrentPluginMetadataSnapshot } from "./current-plugin-metadata.test-support.js";
 import type { PluginCandidate } from "./discovery.js";
 import { loadInstalledPluginIndexInstallRecordsSync } from "./installed-plugin-index-records.js";
-import { writePersistedInstalledPluginIndexSync } from "./installed-plugin-index-store.js";
+import { writePersistedInstalledPluginIndexSync } from "./installed-plugin-index-store-write.js";
 import {
   loadInstalledPluginIndex,
   resolveInstalledPluginIndexPolicyHash,
@@ -18,6 +18,7 @@ import { loadPluginManifestRegistryForInstalledIndex } from "./manifest-registry
 import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
 import { loadPluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
 import type { PluginMetadataSnapshot } from "./plugin-metadata-snapshot.types.js";
+import { createPluginMetadataSnapshotFixture } from "./plugin-metadata.test-support.js";
 import { loadPluginRegistrySnapshotWithMetadata } from "./plugin-registry-snapshot.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
 import { writeManagedNpmPlugin } from "./test-helpers/managed-npm-plugin.js";
@@ -40,6 +41,22 @@ function createHermeticEnv(rootDir: string): NodeJS.ProcessEnv {
     OPENCLAW_STATE_DIR: path.join(rootDir, "state"),
     OPENCLAW_VERSION: "2026.4.26",
     VITEST: "true",
+  };
+}
+
+function createCurrentMetadataSnapshot(
+  config: OpenClawConfig,
+  workspaceDir: string,
+): PluginMetadataSnapshot {
+  const snapshot = createPluginMetadataSnapshotFixture();
+  const policyHash = resolveInstalledPluginIndexPolicyHash(config);
+  snapshot.index.policyHash = policyHash;
+  return {
+    ...snapshot,
+    policyHash,
+    configFingerprint: "",
+    workspaceDir,
+    normalizePluginId: (pluginId) => pluginId,
   };
 }
 
@@ -223,52 +240,57 @@ function dropStartupConfigPaths(
 }
 
 describe("loadPluginRegistrySnapshotWithMetadata", () => {
+  it.each(["persisted", "current"])(
+    "reselects checkout plugins for a fresh config request after a %s global selection",
+    (cache) => {
+      const root = fs.realpathSync(makeTempDir());
+      const packageRoot = path.join(root, "openclaw");
+      const bundledRoot = path.join(packageRoot, "dist", "extensions");
+      const bundledPlugin = path.join(bundledRoot, "demo");
+      const globalPlugin = path.join(root, "state", "extensions", "demo");
+      const env: NodeJS.ProcessEnv = {
+        ...createHermeticEnv(root),
+        OPENCLAW_BUNDLED_PLUGINS_DIR: bundledRoot,
+      };
+      fs.mkdirSync(path.join(packageRoot, "src"), { recursive: true });
+      fs.mkdirSync(path.join(packageRoot, "extensions"));
+      fs.writeFileSync(path.join(packageRoot, "package.json"), '{"name":"openclaw"}');
+      fs.writeFileSync(path.join(packageRoot, "pnpm-workspace.yaml"), "packages: []\n");
+      writeBundledPlugin(bundledPlugin, "demo", "index.js");
+      writeBundledPlugin(globalPlugin, "demo", "index.js");
+      const config = { plugins: { entries: { demo: { enabled: true } } } };
+      const index = loadInstalledPluginIndex({
+        config,
+        env,
+        installRecords: {
+          demo: { source: "path", sourcePath: globalPlugin, installPath: globalPlugin },
+        },
+      });
+      expect(requirePluginRecord(index.plugins, "demo").origin).toBe("global");
+      writePersistedInstalledPluginIndexSync(index, { stateDir: env.OPENCLAW_STATE_DIR });
+      if (cache === "current") {
+        setCurrentPluginMetadataSnapshot(loadPluginMetadataSnapshot({ config, env }), {
+          config,
+          env,
+        });
+      }
+      const result = loadPluginRegistrySnapshotWithMetadata({
+        config: structuredClone(config),
+        env: { ...env, OPENCLAW_DEV_SOURCE_ROOT: packageRoot },
+      });
+      expect(requirePluginRecord(result.snapshot.plugins, "demo")).toMatchObject({
+        origin: "bundled",
+        rootDir: bundledPlugin,
+      });
+    },
+  );
+
   it("reuses a compatible current metadata snapshot", () => {
     const env = createHermeticEnv(makeTempDir());
     const config = {};
     const workspaceDir = path.join(makeTempDir(), "workspace");
-    const policyHash = resolveInstalledPluginIndexPolicyHash(config);
-    const index: InstalledPluginIndex = {
-      version: 1,
-      hostContractVersion: "test",
-      compatRegistryVersion: "test",
-      migrationVersion: 1,
-      policyHash,
-      generatedAtMs: 0,
-      installRecords: {},
-      plugins: [],
-      diagnostics: [],
-    };
-    const snapshot: PluginMetadataSnapshot = {
-      policyHash,
-      configFingerprint: "",
-      workspaceDir,
-      index,
-      registryDiagnostics: [],
-      manifestRegistry: { plugins: [], diagnostics: [] },
-      plugins: [],
-      diagnostics: [],
-      byPluginId: new Map(),
-      normalizePluginId: (pluginId: string) => pluginId,
-      owners: {
-        channels: new Map(),
-        channelConfigs: new Map(),
-        providers: new Map(),
-        modelCatalogProviders: new Map(),
-        cliBackends: new Map(),
-        setupProviders: new Map(),
-        commandAliases: new Map(),
-        contracts: new Map(),
-      },
-      metrics: {
-        registrySnapshotMs: 0,
-        manifestRegistryMs: 0,
-        ownerMapsMs: 0,
-        totalMs: 0,
-        indexPluginCount: 0,
-        manifestPluginCount: 0,
-      },
-    };
+    const snapshot = createCurrentMetadataSnapshot(config, workspaceDir);
+    const index = snapshot.index;
     setCurrentPluginMetadataSnapshot(snapshot, { config, env, workspaceDir });
 
     const result = loadPluginRegistrySnapshotWithMetadata({ config, env, workspaceDir });
@@ -314,24 +336,11 @@ describe("loadPluginRegistrySnapshotWithMetadata", () => {
     };
     const config = {};
     const workspaceDir = path.join(makeTempDir(), "workspace");
-    const policyHash = resolveInstalledPluginIndexPolicyHash(config);
-    const index: InstalledPluginIndex = {
-      version: 1,
-      hostContractVersion: "test",
-      compatRegistryVersion: "test",
-      migrationVersion: 1,
-      policyHash,
-      generatedAtMs: 0,
-      installRecords: {},
-      plugins: [],
-      diagnostics: [],
-    };
+    const snapshot = createCurrentMetadataSnapshot(config, workspaceDir);
+    const index = snapshot.index;
     setCurrentPluginMetadataSnapshot(
       {
-        policyHash,
-        configFingerprint: "",
-        workspaceDir,
-        index,
+        ...snapshot,
         registrySource: "derived",
         registryDiagnostics: [
           {
@@ -340,29 +349,6 @@ describe("loadPluginRegistrySnapshotWithMetadata", () => {
             message: "missing",
           },
         ],
-        manifestRegistry: { plugins: [], diagnostics: [] },
-        plugins: [],
-        diagnostics: [],
-        byPluginId: new Map(),
-        normalizePluginId: (pluginId: string) => pluginId,
-        owners: {
-          channels: new Map(),
-          channelConfigs: new Map(),
-          providers: new Map(),
-          modelCatalogProviders: new Map(),
-          cliBackends: new Map(),
-          setupProviders: new Map(),
-          commandAliases: new Map(),
-          contracts: new Map(),
-        },
-        metrics: {
-          registrySnapshotMs: 0,
-          manifestRegistryMs: 0,
-          ownerMapsMs: 0,
-          totalMs: 0,
-          indexPluginCount: 0,
-          manifestPluginCount: 0,
-        },
       },
       { config, env, workspaceDir },
     );
@@ -397,51 +383,11 @@ describe("loadPluginRegistrySnapshotWithMetadata", () => {
     };
     const config = {};
     const workspaceDir = path.join(tempRoot, "workspace");
-    const policyHash = resolveInstalledPluginIndexPolicyHash(config);
-    const currentIndex: InstalledPluginIndex = {
-      version: 1,
-      hostContractVersion: "test",
-      compatRegistryVersion: "test",
-      migrationVersion: 1,
-      policyHash,
-      generatedAtMs: 0,
-      installRecords: {},
-      plugins: [],
-      diagnostics: [],
-    };
-    setCurrentPluginMetadataSnapshot(
-      {
-        policyHash,
-        configFingerprint: "",
-        workspaceDir,
-        index: currentIndex,
-        registryDiagnostics: [],
-        manifestRegistry: { plugins: [], diagnostics: [] },
-        plugins: [],
-        diagnostics: [],
-        byPluginId: new Map(),
-        normalizePluginId: (pluginId: string) => pluginId,
-        owners: {
-          channels: new Map(),
-          channelConfigs: new Map(),
-          providers: new Map(),
-          modelCatalogProviders: new Map(),
-          cliBackends: new Map(),
-          setupProviders: new Map(),
-          commandAliases: new Map(),
-          contracts: new Map(),
-        },
-        metrics: {
-          registrySnapshotMs: 0,
-          manifestRegistryMs: 0,
-          ownerMapsMs: 0,
-          totalMs: 0,
-          indexPluginCount: 0,
-          manifestPluginCount: 0,
-        },
-      },
-      { config, env, workspaceDir },
-    );
+    setCurrentPluginMetadataSnapshot(createCurrentMetadataSnapshot(config, workspaceDir), {
+      config,
+      env,
+      workspaceDir,
+    });
 
     const result = loadPluginRegistrySnapshotWithMetadata({
       config,
