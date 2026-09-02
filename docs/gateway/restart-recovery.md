@@ -53,6 +53,12 @@ See [Database schemas](/reference/database-schemas) for downgrade precautions.
 
 ## Graceful restarts drain first
 
+Startup migration warnings do not prevent the Gateway from starting. It logs the
+warnings once and starts degraded; `openclaw status` and `openclaw doctor` show the
+running Gateway's warning report. Run `openclaw doctor --fix` against the same
+state/config, then restart the Gateway. Unfinished migrations remain pending for
+a later startup. Errors that leave required state unsafe to read still stop startup.
+
 A requested restart (`openclaw gateway restart`, a config change that requires
 a restart, or a gateway update) does not kill in-flight work immediately. The
 gateway stops accepting new work, then waits for active agent turns and

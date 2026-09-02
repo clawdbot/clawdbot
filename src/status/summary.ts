@@ -25,6 +25,7 @@ import { listGatewayAgentsBasic } from "../gateway/agent-list.js";
 import { resolveHeartbeatSessionKey } from "../infra/heartbeat-runner-session.js";
 import { resolveHeartbeatSummaryForAgent } from "../infra/heartbeat-summary.js";
 import { hasResolvableHeartbeatOwnerRoute } from "../infra/outbound/targets.js";
+import { readStartupMigrationWarning } from "../infra/state-migrations.messages.js";
 import { peekSystemEvents } from "../infra/system-events.js";
 import {
   listActiveDegradedPlugins,
@@ -524,6 +525,7 @@ export async function getStatusSummary(
     },
     channelSummary,
     queuedSystemEvents,
+    startupMigrationWarning: readStartupMigrationWarning(),
     degradedSecretOwners: listActiveDegradedSecretOwners().map(
       ({ ownerKind, ownerId, state, degradationState, paths: ownerPaths, reason }) => {
         const redactedReason: string = redactSecretDegradationReason(reason);

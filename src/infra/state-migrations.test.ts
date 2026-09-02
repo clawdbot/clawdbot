@@ -1080,6 +1080,40 @@ describe("state migrations", () => {
     );
   });
 
+  it("preserves retired config locators before an advisory transcript migration return", async () => {
+    const root = await createTempDir();
+    const stateDir = path.join(root, ".openclaw");
+    const env = createEnv(stateDir);
+    const databasePath = path.join(stateDir, "agents", "main", "agent", "openclaw-agent.sqlite");
+    fsSync.mkdirSync(path.dirname(databasePath), { recursive: true });
+    const database = new DatabaseSync(databasePath);
+    try {
+      ensureOpenClawAgentDatabaseSchema(database, {
+        agentId: "main",
+        env,
+        path: databasePath,
+        register: false,
+      });
+      database
+        .prepare(
+          "INSERT INTO schema_meta(meta_key,role,schema_version,agent_id,app_version,created_at,updated_at) VALUES(?,?,?,?,?,?,?)",
+        )
+        .run("historical-transcript-directives-v1", "agent", 1, "main", "invalid-json", 1, 1);
+    } finally {
+      database.close();
+    }
+    const store = path.join(root, "legacy-jobs.json");
+    const result = await autoMigrateLegacyState({
+      cfg: { agents: { ownership: "explicit", entries: { main: {} } }, cron: { store } },
+      env,
+    });
+    expect(result.warnings).toContainEqual(
+      expect.stringContaining("invalid historical transcript migration cursor"),
+    );
+    expect(readConfigMachineState("cron.store", { env })).toBe(store);
+    expect(result.changes).toContain("Migrated cron.store → shared SQLite state");
+  });
+
   it("ignores a schema-only legacy agent database without selecting an owner", async () => {
     const root = await createTempDir();
     const stateDir = path.join(root, ".openclaw");
@@ -1114,7 +1148,7 @@ describe("state migrations", () => {
   });
 
   it.each([null, "", "   "])(
-    "keeps a schema-only legacy agent database with invalid owner %j blocking",
+    "preserves a schema-only legacy agent database with invalid owner %j as advisory",
     async (agentId) => {
       const root = await createTempDir();
       const stateDir = path.join(root, ".openclaw");
@@ -1125,13 +1159,8 @@ describe("state migrations", () => {
       const databasePath = seedSchemaOnlyLegacyAgentDatabase(stateDir, { agentId });
 
       const automatic = await autoMigrateLegacyState({ cfg, env, homedir: () => root });
-
-      expect(automatic.skipped).toBe(false);
       expect(automatic.warnings).toContainEqual(
         expect.stringContaining("agent schema owner is missing or blank"),
-      );
-      expect(automatic.notices ?? []).not.toContain(
-        "Deferred legacy agent/session migration: select an agent owner",
       );
       expect(fsSync.existsSync(databasePath)).toBe(true);
       expect(fsSync.existsSync(path.join(stateDir, "agents", "main", "agent"))).toBe(false);
@@ -3823,15 +3852,13 @@ describe("state migrations", () => {
       },
     ];
 
-    const result = await autoMigrateLegacyPluginDoctorState({
-      config: cfg,
-      env,
-      homedir: () => root,
-    });
-
-    expect(result.changes).toStrictEqual([]);
-    expect(result.warnings).toHaveLength(1);
-    expect(result.warnings[0]).toContain("Failed migrating shared state database schema");
+    await expect(
+      autoMigrateLegacyPluginDoctorState({
+        config: cfg,
+        env,
+        homedir: () => root,
+      }),
+    ).rejects.toThrow("Failed migrating shared state database schema");
     expect(detectLegacyState).not.toHaveBeenCalled();
     expect(migrateLegacyState).not.toHaveBeenCalled();
   });
@@ -3853,13 +3880,9 @@ describe("state migrations", () => {
       db.close();
     }
 
-    const result = await autoMigrateLegacyState({ cfg, env, homedir: () => root });
-
-    expect(result.migrated).toBe(false);
-    expect(result.skipped).toBe(false);
-    expect(result.changes).toStrictEqual([]);
-    expect(result.warnings).toHaveLength(1);
-    expect(result.warnings[0]).toContain("Failed migrating shared state database schema");
+    await expect(autoMigrateLegacyState({ cfg, env, homedir: () => root })).rejects.toThrow(
+      "Failed migrating shared state database schema",
+    );
     await expect(fs.readFile(voiceWakePath, "utf8")).resolves.toContain("leave-me");
     await expect(fs.stat(`${voiceWakePath}.migrated`)).rejects.toMatchObject({ code: "ENOENT" });
   });
