@@ -44,9 +44,9 @@ export function gatewayAncestryBlockMessage(pid: unknown): string | undefined {
   if (!inherited && !getSelfAndAncestorPidsSync().has(gatewayPid)) {
     return undefined;
   }
-  return `This command is running inside the gateway process tree.
-Gateway PID ${gatewayPid} is an ancestor of this process, so this command cannot safely stop or restart the gateway that owns it.
-Run this command from a shell outside the gateway service, or stop the gateway service first and retry.`;
+  return `This command is running inside the gateway process tree (gateway PID ${gatewayPid}).
+A gateway cannot update itself from a child process, and stopping the service from here would kill this command.
+Ask the OpenClaw owner to run \`openclaw update\` from a terminal, or start the update from chat with the gateway update action or /update, which hands it to a managed helper.`;
 }
 
 export async function handoffUpdateFromGateway(params: {
