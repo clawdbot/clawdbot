@@ -2113,6 +2113,8 @@ function installControlUiMockGateway(
         };
       case "commands.list":
         return { commands: [] };
+      case "plugins.list":
+        return { plugins: [] };
       case "health":
         return {
           agents: [],
