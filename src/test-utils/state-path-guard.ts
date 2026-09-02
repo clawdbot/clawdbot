@@ -1,6 +1,7 @@
 // Test instrumentation rejects state access outside the shared worker home without redirecting it.
 import path from "node:path";
 import { afterEach, beforeEach, vi } from "vitest";
+import { resolveIdentityPathViaExistingAncestorSync } from "../infra/boundary-path.js";
 import * as nodeSqlite from "../infra/node-sqlite.js";
 import * as statePaths from "../state/openclaw-state-db.paths.js";
 
@@ -14,8 +15,14 @@ export function useIsolatedStateGuard(): void {
     if (!testHome) {
       throw new Error("State isolation checks require the shared isolated test home.");
     }
+    // Physical containment: a symlinked state root inside the home would pass a lexical
+    // check while SQLite follows it elsewhere; the home itself may be a tmpdir symlink.
+    const ownedRoot = resolveIdentityPathViaExistingAncestorSync(testHome);
     const assertOwnedPath = (pathname: string) => {
-      const relative = path.relative(testHome, pathname);
+      const relative = path.relative(
+        ownedRoot,
+        resolveIdentityPathViaExistingAncestorSync(pathname),
+      );
       if (relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
         throw new Error(`OpenClaw state escaped the isolated test home: ${pathname}`);
       }

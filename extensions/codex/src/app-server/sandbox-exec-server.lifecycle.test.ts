@@ -1,6 +1,7 @@
 // Codex tests cover sandbox exec-server child and backend lease lifecycle ordering.
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { EventEmitter } from "node:events";
+import fs from "node:fs";
 import path from "node:path";
 import { PassThrough } from "node:stream";
 import type { SandboxContext } from "openclaw/plugin-sdk/sandbox";
@@ -99,12 +100,25 @@ afterEach(() => {
 });
 
 describe("Codex sandbox exec-server lifecycle", () => {
-  it.each(["HOME", "OPENCLAW_STATE_DIR"])(
-    "refuses host metadata discovery outside the isolated home after %s changes",
-    async (key) => {
-      const foreignRoot = path.join(process.env.OPENCLAW_TEST_HOME!, "..", "foreign-state");
+  it.each([
+    { key: "HOME", via: "path" },
+    { key: "OPENCLAW_STATE_DIR", via: "path" },
+    { key: "OPENCLAW_STATE_DIR", via: "symlink" },
+  ] as const)(
+    "refuses host metadata discovery outside the isolated home after $key changes ($via)",
+    async ({ key, via }) => {
+      const testHome = process.env.OPENCLAW_TEST_HOME!;
+      const foreignRoot = path.join(testHome, "..", `foreign-state-${via}`);
+      let target = foreignRoot;
+      if (via === "symlink") {
+        // A state root that lexically sits inside the home but physically points outside.
+        fs.mkdirSync(foreignRoot, { recursive: true });
+        target = path.join(testHome, "linked-state");
+        fs.rmSync(target, { force: true });
+        fs.symlinkSync(foreignRoot, target, "dir");
+      }
       spawnMock.mockReturnValue(createFakeChild());
-      await withEnvAsync({ [key]: foreignRoot }, async () => {
+      await withEnvAsync({ [key]: target }, async () => {
         await expect(
           startProcess(
             createExecServer(createSandboxContext({})),
