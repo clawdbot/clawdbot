@@ -2727,7 +2727,7 @@ src/cron/isolated-agent/session-cleanup.ts	2
 src/cron/isolated-agent/session.ts	2
 src/cron/job-session-bindings.ts	1
 src/cron/normalize.ts	5
-src/cron/persisted-shape.ts	4
+src/cron/persisted-shape.ts	3
 src/cron/retry-hint.ts	3
 src/cron/run-diagnostics-normalize.ts	2
 src/cron/run-diagnostics.ts	3
