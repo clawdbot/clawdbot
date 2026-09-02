@@ -124,6 +124,51 @@ suite.define(() => {
               .poll(() => readFile(path.join(mainWorkspace, "AGENTS.md"), "utf8"))
               .toBe("# Saved through real Gateway\n");
             await captureAgentFileScreenshot(page, "07-real-gateway-main-save.png");
+
+            const agentsFile = path.join(mainWorkspace, "AGENTS.md");
+            const appended = "# Saved through real Gateway\n- agent appended a memory\n";
+            await writeFile(agentsFile, appended, "utf8");
+            await editor.fill("# Operator draft that never saw the memory\n");
+            await save.click();
+            const conflict = page.locator(".callout.danger");
+            await expect.poll(() => conflict.isVisible()).toBe(true);
+            expect(await readFile(agentsFile, "utf8")).toBe(appended);
+            await captureAgentFileScreenshot(page, "08-real-gateway-stale-save-refused.png");
+
+            await save.click();
+            await expect.poll(() => conflict.isVisible()).toBe(true);
+            expect(await readFile(agentsFile, "utf8")).toBe(appended);
+
+            await conflict.getByRole("button", { name: "Overwrite" }).click();
+            await expect
+              .poll(() => readFile(agentsFile, "utf8"))
+              .toBe("# Operator draft that never saw the memory\n");
+            await expect.poll(() => conflict.isVisible()).toBe(false);
+
+            const secondAppend = "# Operator draft that never saw the memory\n- second memory\n";
+            await writeFile(agentsFile, secondAppend, "utf8");
+            await editor.fill("# Another operator draft\n");
+            await save.click();
+            await expect.poll(() => conflict.isVisible()).toBe(true);
+            expect(await readFile(agentsFile, "utf8")).toBe(secondAppend);
+            await conflict.getByRole("button", { name: "Reload" }).click();
+            await expect.poll(() => editor.inputValue()).toBe(secondAppend);
+            expect(await readFile(agentsFile, "utf8")).toBe(secondAppend);
+            await captureAgentFileScreenshot(page, "09-real-gateway-conflict-reloaded.png");
+
+            await editor.fill("# Draft typed before the refresh\n");
+            const thirdAppend = `${secondAppend}- third memory\n`;
+            await writeFile(agentsFile, thirdAppend, "utf8");
+            await page
+              .locator(".settings-section__header")
+              .filter({ hasText: "Core Files" })
+              .getByRole("button", { name: "Refresh" })
+              .click();
+            await expect.poll(() => editor.inputValue()).toBe("# Draft typed before the refresh\n");
+            await save.click();
+            await expect.poll(() => conflict.isVisible()).toBe(true);
+            expect(await readFile(agentsFile, "utf8")).toBe(thirdAppend);
+            await captureAgentFileScreenshot(page, "10-real-gateway-refresh-then-save.png");
           },
         );
       },

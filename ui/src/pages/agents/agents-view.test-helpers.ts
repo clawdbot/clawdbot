@@ -1,7 +1,20 @@
 import { GitHubIdentityController } from "../../features/github-connections/github-identity-controller.ts";
+import type { renderAgentFiles } from "./panels-status-files.ts";
 import type { renderAgents } from "./view.ts";
 
 type AgentsViewProps = Parameters<typeof renderAgents>[0];
+type AgentFilesProps = Parameters<typeof renderAgentFiles>[0];
+
+export const inertAgentFileControls = {
+  agentFileConflict: null,
+  onLoadFiles: () => undefined,
+  onSelectFile: () => undefined,
+  onFileDraftChange: () => undefined,
+  onFileReset: () => undefined,
+  onFileSave: () => undefined,
+  onFileReload: () => undefined,
+  onFileOverwrite: () => undefined,
+} satisfies Partial<AgentFilesProps>;
 
 export function createAgentViewTestProps(
   overrides: Partial<AgentsViewProps> = {},
@@ -58,6 +71,7 @@ export function createAgentViewTestProps(
       contents: {},
       drafts: {},
       saving: false,
+      conflict: null,
     },
     agentIdentityLoading: false,
     agentIdentityError: null,
@@ -105,6 +119,8 @@ export function createAgentViewTestProps(
     onFileDraftChange: () => undefined,
     onFileReset: () => undefined,
     onFileSave: () => undefined,
+    onFileReload: () => undefined,
+    onFileOverwrite: () => undefined,
     onToolsProfileChange: () => undefined,
     onToolsOverridesChange: () => undefined,
     onConfigReload: () => undefined,
