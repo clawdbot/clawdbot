@@ -292,8 +292,9 @@ restart the Gateway, and trigger an event to verify the running process. See
 `api.on()` returns `void`, so a plugin cannot tell that the host refused one of
 its hook registrations. Refusals are recorded instead: they appear as
 `Blocked hooks` in `openclaw plugins inspect <id> --runtime` and as
-`Blocked plugin hooks` in `/status plugins`, and they stay there for the life of
-the Gateway process rather than only in the startup log. A refusal the operator
+`Blocked plugin hooks` in `/status plugins`. The CLI command performs a fresh,
+non-activating evaluation of the current files and config; `/status plugins`
+reports the refusals retained by the running Gateway for its lifetime. A refusal the operator
 never asked for — a non-bundled plugin registering a conversation hook with no
 `allowConversationAccess` setting at all — is logged at `error`, because it
 silently disables a handler nobody chose to disable. Refusals that follow an
