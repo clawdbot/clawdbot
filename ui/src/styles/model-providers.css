@@ -239,23 +239,9 @@
   font-size: var(--control-ui-text-xs);
 }
 
-.settings-section__actions .model-providers__refresh-button {
-  font-size: var(--control-ui-text-xs);
-}
-
 .settings-section__actions .model-providers__refresh-button.btn--icon.btn--xs svg {
-  width: 1em;
-  height: 1em;
-}
-
-.settings-section__header:has(.model-providers__refresh-button) {
-  align-items: center;
-}
-
-@media (max-width: 640px) {
-  .settings-section__header:has(.model-providers__refresh-button) {
-    align-items: stretch;
-  }
+  width: var(--control-ui-text-xs);
+  height: var(--control-ui-text-xs);
 }
 
 .model-providers__defaults .model-picker {
