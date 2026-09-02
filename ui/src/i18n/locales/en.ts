@@ -3910,7 +3910,7 @@ export const en: TranslationMap & {
       noOtherTabs: "No other tabs",
       resize: "Resize",
       autoHeight: "Auto height",
-      remove: "Remove",
+      remove: "Delete",
       needsApproval: "Needs approval",
       needsApprovalDetail: "This widget requested additional access.",
       networkAccess: "Network origins",
