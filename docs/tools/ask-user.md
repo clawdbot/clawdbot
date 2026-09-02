@@ -28,8 +28,8 @@ You can answer from any supported conversation surface:
   resolving the question.
 - Discord, Slack, and Mattermost render native buttons for a single-choice,
   single-question prompt. Mattermost retires its prompt on the tap it accepts;
-  a question that ends elsewhere leaves the buttons in place until someone
-  taps one and is told the question is already closed.
+  a question that ends elsewhere leaves the buttons in place until someone taps
+  one and is told it was already answered.
 - A plain-text reply works on any channel. Reply with a number, an option label,
   or your own answer. For multi-select questions, separate choices with commas.
 

@@ -373,8 +373,8 @@ Buttons come from the semantic `presentation` payload (in normal agent replies a
 
 The options an `ask_user` question offers are also rendered as buttons, and tapping one answers
 that question directly. The question stays answerable by typing, and an option the Gateway does
-not index — the "Other…" choice, a multi-select question, or one with more than four options —
-stays in the prose instead. Other typed presentation actions (`command`, `callback`) are not
+not index — the "Other…" choice, or a question that is multi-select, secret, or does not offer two
+to four distinct options — stays in the prose instead. Other typed presentation actions (`command`, `callback`) are not
 rendered as buttons on Mattermost: a click here reaches the agent as a message rather than
 running the action, so those stay readable text instead of becoming a control that does
 something other than what it says.
