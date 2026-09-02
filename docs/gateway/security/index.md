@@ -188,7 +188,7 @@ Prefer pairing + allowlists for DMs. For groups, decide by membership, not by ch
 
 ### Allowlists (two layers)
 
-- **DM allowlist** (`allowFrom` / `channels.discord.allowFrom` / `channels.slack.allowFrom`; legacy: `channels.discord.dm.allowFrom`, `channels.slack.dm.allowFrom`): who can DM the bot. When `dmPolicy="pairing"`, approvals write to `~/.openclaw/credentials/<channel>-allowFrom.json` (default account) or `<channel>-<accountId>-allowFrom.json` (non-default accounts), merged with config allowlists.
+- **DM allowlist** (`allowFrom` / `channels.discord.allowFrom` / `channels.slack.allowFrom`; legacy: `channels.discord.dm.allowFrom`, `channels.slack.dm.allowFrom`): who can DM the bot. When `dmPolicy="pairing"`, approvals are stored in the shared SQLite state database (see [Where the state lives](/channels/pairing#where-the-state-lives)), merged with config allowlists.
 - **Group allowlist** (channel-specific): which groups/channels/guilds the bot accepts at all.
   - `channels.whatsapp.groups`, `channels.telegram.groups`, `channels.imessage.groups`: per-group defaults like `requireMention`; when set, also acts as a group allowlist (include `"*"` to keep allow-all behavior). Customize mention triggers with `agents.entries.*.groupChat.mentionPatterns` (for example `["@openclaw", "@mybot"]`) so `requireMention` gates on your own bot names.
   - `groupPolicy="allowlist"` + `groupAllowFrom`: restrict who can trigger the bot inside a group session (WhatsApp/Telegram/Signal/iMessage/Microsoft Teams).
@@ -799,7 +799,7 @@ Also useful for backup decisions:
 - Telegram bot token: config/env or `channels.telegram.tokenFile` (regular file only; symlinks rejected)
 - Discord bot token: config/env or SecretRef (env/file/exec/store providers)
 - Slack tokens: config/env (`channels.slack.*`)
-- Pairing allowlists: `~/.openclaw/credentials/<channel>-allowFrom.json` (default account) / `<channel>-<accountId>-allowFrom.json` (non-default accounts)
+- Pairing allowlists: `~/.openclaw/state/openclaw.sqlite` (`channel_pairing_allow_entries`; see [Where the state lives](/channels/pairing#where-the-state-lives))
 - Model auth profiles: `~/.openclaw/agents/<agentId>/agent/openclaw-agent.sqlite` (`auth_profile_store`)
 - MCP OAuth sessions: `~/.openclaw/state/openclaw.sqlite` (`mcp_oauth_stores`)
 - Legacy OAuth import: `~/.openclaw/credentials/oauth.json`
