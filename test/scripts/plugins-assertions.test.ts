@@ -1489,6 +1489,9 @@ ${command}
       writeJson(path.join(home, ".openclaw", "plugins", "installs.json"), {
         installRecords: {},
       });
+      writeJson(path.join(home, ".openclaw", "openclaw.json"), {
+        plugins: { entries: { "demo-plugin-tgz": { enabled: false } } },
+      });
 
       const result = spawnSync(process.execPath, [ASSERTIONS_SCRIPT, "plugin-tgz-removed"], {
         encoding: "utf8",
