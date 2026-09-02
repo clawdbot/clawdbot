@@ -4659,33 +4659,168 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
         error: "channel_transform",
       },
     },
+    ...[
+      ["adapter_returned_no_identity"],
+      ["cancelled_by_message_sending_hook", "adapter_returned_no_identity"],
+      ["no_visible_payload", "adapter_returned_no_identity"],
+    ].map((reasons) => ({
+      name: `unidentified adapter after ${reasons[0]}`,
+      payloads: reasons.map((_, index) => ({ text: `Generated completion ${index}` })),
+      deliveryStatus: {
+        requested: true,
+        attempted: true,
+        status: "suppressed",
+        succeeded: true,
+        resultCount: 0,
+        reason: reasons[0],
+        payloadOutcomes: reasons.map((reason, index) => ({
+          index,
+          status: "suppressed",
+          reason,
+        })),
+      },
+      expected: {
+        delivered: false,
+        disposition: "ambiguous",
+      },
+    })),
+    {
+      name: "empty output before a hook cancellation",
+      payloads: [{ text: "" }, { text: "Cancelled completion" }],
+      deliveryStatus: {
+        requested: true,
+        attempted: true,
+        status: "suppressed",
+        succeeded: true,
+        resultCount: 0,
+        reason: "no_visible_payload",
+        payloadOutcomes: [
+          { index: 0, status: "suppressed", reason: "no_visible_payload" },
+          { index: 1, status: "suppressed", reason: "cancelled_by_message_sending_hook" },
+        ],
+      },
+      expected: {
+        delivered: false,
+        disposition: "intentional_non_delivery",
+        reason: "delivery_suppressed",
+        error: "cancelled_by_message_sending_hook",
+      },
+    },
+    ...["adapter_returned_no_identity", "cancelled_by_message_sending_hook"].map((reason) => ({
+      name: `source progress before ${reason}`,
+      sourceProgress: true,
+      deliveryStatus: {
+        requested: true,
+        attempted: true,
+        status: "suppressed",
+        succeeded: true,
+        resultCount: 0,
+        reason,
+        payloadOutcomes: [{ index: 0, status: "suppressed", reason }],
+      },
+      expected:
+        reason === "adapter_returned_no_identity"
+          ? { delivered: false, disposition: "ambiguous" }
+          : {
+              delivered: false,
+              disposition: "intentional_non_delivery",
+              reason: "delivery_suppressed",
+              error: reason,
+            },
+    })),
+    {
+      name: "unidentified adapter before a later failure",
+      payloads: [{ text: "Unidentified completion" }, { text: "Failed supplement" }],
+      deliveryStatus: {
+        requested: true,
+        attempted: true,
+        status: "failed",
+        succeeded: false,
+        error: true,
+        errorMessage: "supplement failed",
+        payloadOutcomes: [
+          { index: 0, status: "suppressed", reason: "adapter_returned_no_identity" },
+          {
+            index: 1,
+            status: "failed",
+            sentBeforeError: false,
+            stage: "platform_send",
+            error: "supplement failed",
+          },
+        ],
+      },
+      expected: {
+        delivered: false,
+        disposition: "ambiguous",
+      },
+    },
+    {
+      name: "partial send without per-payload details",
+      deliveryStatus: {
+        requested: true,
+        attempted: true,
+        status: "partial_failed",
+        succeeded: "partial",
+        resultCount: 1,
+        sentBeforeError: true,
+        error: true,
+        errorMessage: "supplement failed",
+      },
+      expected: {
+        delivered: false,
+        disposition: "ambiguous",
+      },
+    },
     { name: "missing", deliveryStatus: undefined },
     { name: "empty", deliveryStatus: { status: "sent", resultCount: 0 } },
-  ])(
-    "does not credit a $name automatic completion receipt",
-    async ({ deliveryStatus, expected, payloads }) => {
-      const callGateway = createGatewayMock({
-        result: { payloads: payloads ?? [{ text: "Generated completion" }], deliveryStatus },
-      });
-      const queueEmbeddedAgentMessageWithOutcome = createQueueOutcomeMock(false);
-      const result = await deliverSlackThreadAnnouncement({
-        callGateway,
-        queueEmbeddedAgentMessageWithOutcome,
-        directIdempotencyKey: "announce-undelivered-receipt",
-      });
+  ])("does not credit a $name automatic completion receipt", async (testCase) => {
+    const { deliveryStatus, expected } = testCase;
+    const payloads = "payloads" in testCase ? testCase.payloads : undefined;
+    const sourceProgress = "sourceProgress" in testCase && testCase.sourceProgress;
+    const callGateway = createGatewayMock({
+      result: {
+        payloads: payloads ?? [{ text: "Generated completion" }],
+        deliveryStatus,
+        ...(sourceProgress
+          ? {
+              didSendViaMessagingTool: true,
+              messagingToolSentTargets: [
+                {
+                  tool: "message",
+                  provider: "slack",
+                  accountId: "acct-1",
+                  to: "channel:C123",
+                  threadId: "171.222",
+                  text: "Work is in progress",
+                  sourceReplyFinal: false,
+                },
+              ],
+            }
+          : {}),
+      },
+    });
+    const queueEmbeddedAgentMessageWithOutcome = createQueueOutcomeMock(false);
+    const result = await deliverSlackThreadAnnouncement({
+      callGateway,
+      queueEmbeddedAgentMessageWithOutcome,
+      directIdempotencyKey: "announce-undelivered-receipt",
+    });
 
-      expect(result).toMatchObject(
-        expected ?? {
-          delivered: false,
-          reason: "visible_reply_missing",
-        },
-      );
-      expect(result.requesterVisibleFinalDelivered).toBeUndefined();
-      if (deliveryStatus?.status === "suppressed") {
-        expect(queueEmbeddedAgentMessageWithOutcome).not.toHaveBeenCalled();
-      }
-    },
-  );
+    expect(result).toMatchObject(
+      expected ?? {
+        delivered: false,
+        reason: "visible_reply_missing",
+      },
+    );
+    expect(result.requesterVisibleFinalDelivered).toBeUndefined();
+    if (expected?.disposition === "ambiguous") {
+      expect(result.reason).toBeUndefined();
+      expect(result.terminal).toBeUndefined();
+    }
+    if (deliveryStatus?.status === "suppressed" || expected?.disposition === "ambiguous") {
+      expect(queueEmbeddedAgentMessageWithOutcome).not.toHaveBeenCalled();
+    }
+  });
 
   const requesterSettleSourceTarget = {
     tool: "message",

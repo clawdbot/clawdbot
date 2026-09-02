@@ -22,7 +22,7 @@ import {
   getAgentCommandDeliveryFailure,
   getGatewayAgentResult,
   hasCommittedOutboundDeliveryEvidence,
-  hasPayloadOutcomeSendEvidence,
+  getAutomaticDeliveryEvidence,
 } from "../../embedded-agent-runner/delivery-evidence.js";
 import {
   hasIntentionalSilentAgentPayload,
@@ -484,24 +484,34 @@ export async function sendSubagentAnnounceDirectly(params: {
     }
 
     const directAnnounceResult = getGatewayAgentResult(directAnnounceResponse);
+    const hasFinalMessagingToolDelivery = Boolean(
+      directAnnounceResult &&
+      hasMessagingToolDeliveryToSource(directAnnounceResult, deliveryTarget, {
+        requireFinalReply: true,
+      }),
+    );
     const hasMessagingToolDelivery = Boolean(
       directAnnounceResult &&
       hasMessagingToolDeliveryToSource(directAnnounceResult, deliveryTarget),
     );
+    const requiresAutomaticFinalReceipt =
+      shouldDeliverAgentFinal && (params.expectsCompletionMessage || params.requireVisibleReply);
+    const automaticEvidence = getAutomaticDeliveryEvidence(directAnnounceResult ?? {});
     const directDeliveryFailure =
       (shouldDeliverAgentFinal || requiresMessageToolDelivery) && directAnnounceResult
         ? getAgentCommandDeliveryFailure(directAnnounceResult)
         : undefined;
     // Automatic-delivery diagnostics and a committed source message are independent facts.
     // Once the message tool delivered the owed final, the task must settle as delivered.
-    if (directDeliveryFailure && !hasMessagingToolDelivery) {
+    if (
+      directDeliveryFailure &&
+      !(requiresAutomaticFinalReceipt ? hasFinalMessagingToolDelivery : hasMessagingToolDelivery)
+    ) {
       return {
         delivered: false,
         path: "direct",
         error: directDeliveryFailure,
-        ...(directAnnounceResult && hasPayloadOutcomeSendEvidence(directAnnounceResult)
-          ? { disposition: "ambiguous" as const }
-          : {}),
+        ...(automaticEvidence.mayHaveSent ? { disposition: "ambiguous" as const } : {}),
       };
     }
     const completionPayloadVisibility = {
@@ -522,22 +532,23 @@ export async function sendSubagentAnnounceDirectly(params: {
     const automaticFinalDelivered =
       terminalDelivery?.status === "sent" && terminalDelivery.resultCount > 0;
     if (
-      shouldDeliverAgentFinal &&
-      (params.expectsCompletionMessage || params.requireVisibleReply) &&
-      !hasMessagingToolDelivery &&
+      requiresAutomaticFinalReceipt &&
+      !hasFinalMessagingToolDelivery &&
       terminalDelivery?.status === "suppressed" &&
-      // Empty model output still owes the requester a completion via the existing
-      // fallback below; unlike a hook or channel veto, it is not delivery policy.
-      directAnnounceResult?.deliveryStatus?.reason !== "no_visible_payload"
+      // Only genuinely empty output can fall back; another payload may have
+      // been sent or intentionally cancelled by policy.
+      (automaticEvidence.mayHaveSent ||
+        automaticEvidence.suppressionReason !== "no_visible_payload")
     ) {
-      const reason = directAnnounceResult?.deliveryStatus?.reason;
       return {
         delivered: false,
         path: "direct",
-        reason: "delivery_suppressed",
-        error: typeof reason === "string" ? reason : "automatic completion delivery suppressed",
-        disposition: "intentional_non_delivery",
-        terminal: true,
+        reason: automaticEvidence.mayHaveSent ? undefined : "delivery_suppressed",
+        error: automaticEvidence.mayHaveSent
+          ? "automatic completion delivery could not be confirmed"
+          : (automaticEvidence.suppressionReason ?? "automatic completion delivery suppressed"),
+        disposition: automaticEvidence.mayHaveSent ? "ambiguous" : "intentional_non_delivery",
+        terminal: automaticEvidence.mayHaveSent ? undefined : true,
       };
     }
     const hasIntentionalSilentCompletionReply = Boolean(
@@ -613,13 +624,8 @@ export async function sendSubagentAnnounceDirectly(params: {
         error: "completion agent did not use the message tool for message-tool-only delivery",
       };
     }
-    const requesterVisibleFinalDelivered = Boolean(
-      directAnnounceResult &&
-      (hasMessagingToolDeliveryToSource(directAnnounceResult, deliveryTarget, {
-        requireFinalReply: true,
-      }) ||
-        (shouldDeliverAgentFinal && automaticFinalDelivered)),
-    );
+    const requesterVisibleFinalDelivered =
+      hasFinalMessagingToolDelivery || (shouldDeliverAgentFinal && automaticFinalDelivered);
     const hasVisibleCompletionReply =
       requesterVisibleFinalDelivered ||
       (!shouldDeliverAgentFinal && !params.requireVisibleReply && hasMessagingToolDelivery) ||
