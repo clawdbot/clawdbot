@@ -9,6 +9,7 @@ import type {
   HeartbeatScheduledTask,
   HeartbeatWakeHandler,
   HeartbeatWakeIntent,
+  HeartbeatWakeOverride,
   HeartbeatWakeRequest,
   HeartbeatWakeSource,
 } from "./heartbeat-wake-contracts.js";
@@ -37,7 +38,6 @@ export type {
   HeartbeatScheduledTask,
   HeartbeatWakeHandler,
   HeartbeatWakeIntent,
-  HeartbeatWakeOverride,
   HeartbeatWakeRequest,
   HeartbeatWakeSource,
 } from "./heartbeat-wake-contracts.js";
