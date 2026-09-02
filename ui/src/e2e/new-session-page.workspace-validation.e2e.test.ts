@@ -603,9 +603,11 @@ suite.define(() => {
               "The Gateway changed while this session was starting. Check recent sessions before starting this task again.",
           })
           .waitFor();
+        // Restarts keep the same draft owner; changed or missing owners cannot inherit its text.
+        const expectedMessage = change === "process restarts" ? "do not duplicate this task" : "";
         await expect
           .poll(() => page.locator(".new-session-page__message").inputValue())
-          .toBe("do not duplicate this task");
+          .toBe(expectedMessage);
         expect(await page.locator(".new-session-page__starting").isVisible()).toBe(false);
         expect(await page.getByRole("button", { name: "Start session" }).isDisabled()).toBe(true);
         expect(await gateway.getRequests("sessions.create")).toHaveLength(1);
