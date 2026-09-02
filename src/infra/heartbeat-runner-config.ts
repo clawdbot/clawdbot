@@ -19,7 +19,6 @@ import {
   resolveHeartbeatConfig,
   resolveHeartbeatIntervalMs,
 } from "./heartbeat-config.js";
-import type { HeartbeatWakeOverride } from "./heartbeat-wake-contracts.js";
 import type { HeartbeatWakeSource } from "./heartbeat-wake.js";
 
 export {
@@ -80,10 +79,12 @@ function omitExplicitHeartbeatDestination(heartbeat: HeartbeatConfig | undefined
 export function resolveHeartbeatForWake(params: {
   cfg: OpenClawConfig;
   agentId: string;
-  requestedHeartbeat?: HeartbeatWakeOverride;
+  configuredHeartbeat?: HeartbeatConfig;
+  requestedHeartbeat?: HeartbeatConfig;
   source?: HeartbeatWakeSource;
 }): HeartbeatConfig | undefined {
-  const configuredHeartbeat = resolveHeartbeatConfig(params.cfg, params.agentId);
+  const configuredHeartbeat =
+    params.configuredHeartbeat ?? resolveHeartbeatConfig(params.cfg, params.agentId);
   const heartbeat = params.requestedHeartbeat
     ? { ...configuredHeartbeat, ...params.requestedHeartbeat }
     : configuredHeartbeat;

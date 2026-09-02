@@ -62,6 +62,7 @@ import {
   resolveHeartbeatTimeoutOverrideSeconds,
   shouldUseHeartbeatResponseToolPrompt,
   tryResolveAmbientHeartbeatAgentId,
+  type HeartbeatConfig,
 } from "./heartbeat-runner-config.js";
 import {
   resolveHeartbeatPreflight,
@@ -87,7 +88,6 @@ import {
   HEARTBEAT_SKIP_CRON_IN_PROGRESS,
   HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT,
   type HeartbeatScheduledTask,
-  type HeartbeatWakeOverride,
   type HeartbeatWakeIntent,
   type HeartbeatWakeSource,
 } from "./heartbeat-wake.js";
@@ -144,7 +144,7 @@ export type HeartbeatRunOptions = {
   cfg?: OpenClawConfig;
   agentId?: string;
   sessionKey?: string;
-  heartbeat?: HeartbeatWakeOverride;
+  heartbeat?: HeartbeatConfig;
   source?: HeartbeatWakeSource;
   intent?: HeartbeatWakeIntent;
   reason?: string;

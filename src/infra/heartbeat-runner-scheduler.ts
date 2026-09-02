@@ -9,6 +9,7 @@ import {
   heartbeatLog,
   isHeartbeatOwnerUnresolved,
   resolveHeartbeatAgents,
+  resolveHeartbeatForWake,
   resolveHeartbeatIntervalMs,
   tryResolveAmbientHeartbeatAgentId,
   type HeartbeatConfig,
@@ -275,12 +276,25 @@ export function startHeartbeatRunner(opts: {
         }
       }
 
+      // Persisted ticks use their enrolled config; targeted wakes merge their
+      // destination override before the execution boundary.
+      const useEnrolledHeartbeat =
+        !targeted ||
+        ((isInterval || authoritativeScheduledTick) && !requestedSessionKey && !requestedHeartbeat);
       let res: HeartbeatRunResult;
       try {
         res = await runOnce({
           cfg: wakeConfig,
           agentId,
-          heartbeat: requestedHeartbeat,
+          heartbeat: useEnrolledHeartbeat
+            ? agent?.heartbeat
+            : resolveHeartbeatForWake({
+                cfg: wakeConfig,
+                agentId,
+                configuredHeartbeat: agent?.heartbeat,
+                requestedHeartbeat,
+                source: params.source,
+              }),
           source: params.source,
           intent,
           reason,

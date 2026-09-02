@@ -65,7 +65,6 @@ export function createCronAgentWatchdog(params: {
   jobTimeoutMs: number;
   triggerTimeout: (reason: string) => void;
 }): CronAgentWatchdog {
-  let jobTimeoutMs = params.jobTimeoutMs;
   let state: CronAgentWatchdogState = params.deferUntilRunner ? "waiting_for_runner" : "executing";
   let timeoutId: NodeJS.Timeout | undefined;
   let setupTimeoutId: NodeJS.Timeout | undefined;
@@ -87,7 +86,7 @@ export function createCronAgentWatchdog(params: {
     }
     timeoutId = setTimeout(() => {
       setTimedOut(timeoutErrorMessage(activeExecution));
-    }, jobTimeoutMs);
+    }, params.jobTimeoutMs);
   };
   const clearSetupTimeout = () => {
     if (!setupTimeoutId) {
@@ -124,7 +123,7 @@ export function createCronAgentWatchdog(params: {
       if (isWaitingForExecution()) {
         setTimedOut(preExecutionTimeoutErrorMessage(activeExecution));
       }
-    }, resolveCronAgentPreExecutionWatchdogMs(jobTimeoutMs));
+    }, resolveCronAgentPreExecutionWatchdogMs(params.jobTimeoutMs));
   };
   const noteExecutionProgress = (info?: CronAgentExecutionStarted) => {
     if (!info) {
@@ -153,18 +152,15 @@ export function createCronAgentWatchdog(params: {
       startTimeout();
     },
     replaceTimeout: (timeoutMs) => {
-      if (state === "timed_out" || state === "disposed") {
-        return;
-      }
+      // A heartbeat handoff starts a distinct configured deadline. Keeping the
+      // original timer would still abort long heartbeat turns at the cron default.
       if (timeoutId) {
         clearTimeout(timeoutId);
-        timeoutId = undefined;
       }
-      if (timeoutMs === undefined) {
-        return;
-      }
-      jobTimeoutMs = timeoutMs;
-      startTimeout();
+      timeoutId =
+        timeoutMs !== undefined && state !== "timed_out" && state !== "disposed"
+          ? setTimeout(() => setTimedOut(timeoutErrorMessage(activeExecution)), timeoutMs)
+          : undefined;
     },
     noteLaneWait: () => {
       if (state === "waiting_for_runner") {
