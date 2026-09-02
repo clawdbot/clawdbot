@@ -20,7 +20,9 @@ describe("cron metadata", () => {
 
   it("resolves Gateway-owned jobs to the reserved System group", () => {
     expect(resolveCronJobGroup(job({ payload: { kind: "heartbeat" } }))).toBe("System");
-    expect(resolveCronJobGroup(job({ declarationKey: "heartbeat-task:main:abc" }))).toBe("System");
+    expect(resolveCronJobGroup(job({ declarationKey: "heartbeat-task:main:abc" }))).toBe(
+      "Ungrouped",
+    );
     expect(resolveCronJobGroup(job({ group: "Work" }))).toBe("Work");
     expect(resolveCronJobGroup(job())).toBe("Ungrouped");
   });

@@ -343,12 +343,12 @@ describe("heartbeat payload execution", () => {
       expect(requestHeartbeat).not.toHaveBeenCalled();
       expect(enqueueSystemEvent).not.toHaveBeenCalled();
 
-      // Declaration-owned task rows resolve to the read-only System group and
-      // cannot be edited or removed through the ordinary client surface.
+      // Doctor-migrated heartbeat tasks keep their public system-event payload
+      // and remain editable/removable through the ordinary client surface.
       await expect(
         cron.update(job.id, { payload: { kind: "systemEvent", text: "Check priority inbox" } }),
-      ).rejects.toThrow(/system-owned/);
-      await expect(cron.remove(job.id)).rejects.toThrow(/system-owned/);
+      ).resolves.toMatchObject({ id: job.id });
+      await expect(cron.remove(job.id)).resolves.toEqual({ ok: true, removed: true });
     } finally {
       cron.stop();
       await cleanup();
