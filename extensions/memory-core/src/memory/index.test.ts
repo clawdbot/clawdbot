@@ -788,6 +788,64 @@ describe("memory index", () => {
     });
   });
 
+  it("reports an uninitialized status without creating agent or registry databases", async () => {
+    const stateDir = path.join(fixture.paths.workspace, "missing-status-state");
+    fixture.setStateDir(stateDir);
+    const agentPath = resolveOpenClawAgentSqlitePath({ agentId: "main" });
+    const statePath = path.join(stateDir, "state", "openclaw.sqlite");
+
+    const result = await getMemorySearchManager({
+      cfg: createCfg({}),
+      agentId: "main",
+      purpose: "status",
+      inspectSources: true,
+    });
+
+    try {
+      expect(result.error).toBeUndefined();
+      expect(result.manager?.status()).toMatchObject({
+        files: 0,
+        chunks: 0,
+        dirty: true,
+        custom: { indexIdentity: { status: "missing" } },
+      });
+      await expect(fs.access(agentPath)).rejects.toThrow("ENOENT");
+      await expect(fs.access(statePath)).rejects.toThrow("ENOENT");
+    } finally {
+      await result.manager?.close?.();
+    }
+  });
+
+  it("reads committed WAL status without changing database artifacts", async () => {
+    const cfg = createCfg({});
+    const indexingManager = await getFreshManager(cfg, "cli");
+    await indexingManager.sync({ reason: "test", force: true });
+    await indexingManager.close?.();
+
+    const agentPath = resolveOpenClawAgentSqlitePath({ agentId: "main" });
+    const writer = new DatabaseSync(agentPath);
+    let statusManager: MemoryIndexManager | undefined;
+    try {
+      writer.exec("PRAGMA wal_autocheckpoint = 0; PRAGMA wal_checkpoint(TRUNCATE);");
+      writer
+        .prepare("UPDATE memory_index_sources SET hash = ? WHERE path = ? AND source = 'memory'")
+        .run("committed-in-wal", "memory/2026-01-12.md");
+      const databaseBefore = await fs.readFile(agentPath);
+      const walBefore = await fs.readFile(`${agentPath}-wal`);
+
+      statusManager = await getFreshManager(cfg, "status", true);
+      expect(statusManager.status().dirty).toBe(true);
+      await statusManager.close?.();
+      statusManager = undefined;
+
+      expect(await fs.readFile(agentPath)).toEqual(databaseBefore);
+      expect(await fs.readFile(`${agentPath}-wal`)).toEqual(walBefore);
+    } finally {
+      await statusManager?.close?.();
+      writer.close();
+    }
+  });
+
   it("batches dirty memory chunks across files", async () => {
     await fs.writeFile(
       path.join(fixture.paths.memory, "2026-01-13.md"),
@@ -2449,10 +2507,14 @@ describe("memory index", () => {
         storeAvailable: undefined,
       });
 
-      const db = Reflect.get(statusManager, "db") as DatabaseSync;
-      db.prepare("UPDATE memory_index_meta SET value = '1' WHERE key = ?").run(
-        "memory_vector_rebuild_v1",
-      );
+      const writer = new DatabaseSync(resolveOpenClawAgentSqlitePath({ agentId: "main" }));
+      try {
+        writer
+          .prepare("UPDATE memory_index_meta SET value = '1' WHERE key = ?")
+          .run("memory_vector_rebuild_v1");
+      } finally {
+        writer.close();
+      }
       expect(statusManager.status().vector?.index).toEqual({ state: "incomplete" });
     } finally {
       await statusManager.close?.();
@@ -2711,18 +2773,21 @@ describe("memory index", () => {
       const statusManager = await getFreshManager(cfg, "status", true);
       trackManager(statusManager);
       expect(statusManager.status().dirty).toBe(true);
+      await statusManager.close?.();
 
-      await statusManager.sync({ reason: "cli" });
+      const repairManager = await getFreshManager(cfg, "cli");
+      trackManager(repairManager);
+      await repairManager.sync({ reason: "cli" });
       expect(providerFixture.embedBatchCalls).toBe(0);
-      const deletedResults = await statusManager.search("ORBIT-DELETE-91", {
+      const deletedResults = await repairManager.search("ORBIT-DELETE-91", {
         minScore: 0,
         sources: ["sessions"],
       });
       expect(deletedResults.some((result) => result.path.includes(sessionId))).toBe(false);
       await expect(
-        statusManager.search("ORBIT-SURVIVE-92", { minScore: 0, sources: ["sessions"] }),
+        repairManager.search("ORBIT-SURVIVE-92", { minScore: 0, sources: ["sessions"] }),
       ).resolves.not.toEqual([]);
-      const db = Reflect.get(statusManager, "db") as DatabaseSync;
+      const db = Reflect.get(repairManager, "db") as DatabaseSync;
       const sourceCount = db
         .prepare("SELECT COUNT(*) AS count FROM memory_index_sources WHERE source = 'sessions'")
         .get() as { count: number };

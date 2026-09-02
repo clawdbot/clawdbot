@@ -779,6 +779,33 @@ describe("native app i18n inventory", () => {
       cleanupTempDirs(tempDirs);
     }
   });
+  it("rejects invalid native placeholders inside the translation batch", async () => {
+    const tempDirs: string[] = [];
+    const translationsDir = makeTempDir(tempDirs, "openclaw-native-i18n-");
+    const entry = testEntry("native.apple.progress", "apple", "Processed %lld of %@");
+    let translatorReturned = false;
+
+    try {
+      await expect(
+        syncNativeLocale("sv", [entry], {
+          glossary: [],
+          translationsDir,
+          translate: async (_pending, locale, _glossary, validateTranslation) => {
+            const translated = "Bearbetade %@";
+            validateTranslation?.(entry.source, translated, entry.id, locale);
+            translatorReturned = true;
+            return new Map([[entry.id, translated]]);
+          },
+        }),
+      ).rejects.toThrow(
+        `native translation changed placeholders or line breaks for sv:${entry.id}`,
+      );
+      expect(translatorReturned).toBe(false);
+    } finally {
+      cleanupTempDirs(tempDirs);
+    }
+  });
+
   it("rejects native printf placeholder drift", async () => {
     const tempDirs: string[] = [];
     const translationsDir = makeTempDir(tempDirs, "openclaw-native-i18n-");
@@ -882,14 +909,14 @@ describe("native app i18n inventory", () => {
         }),
       },
       {
-        expected: "translation changed structural tokens or line breaks",
+        expected: `native translation changed placeholders or line breaks for sv:${greeting.id}`,
         mutate: (artifact) => ({
           ...artifact,
           translations: { ...artifact.translations, [greeting.id]: "Hej\nNästa" },
         }),
       },
       {
-        expected: "translation changed structural tokens or line breaks",
+        expected: `native translation changed placeholders or line breaks for sv:${greeting.id}`,
         mutate: (artifact) => ({
           ...artifact,
           translations: { ...artifact.translations, [greeting.id]: "Hej ${name} Nästa" },

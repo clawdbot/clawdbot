@@ -171,6 +171,7 @@ export function createCodexAttemptNotificationController(
     if (!projector || !turnId || state.projectionClosed) {
       return;
     }
+    projector.recordMcpToolCallReceipt(notification);
     if (isTerminalTurnNotificationForTurn(notification, turnId)) {
       state.terminalTurnNotificationQueued = true;
       steeringQueueRef.current?.sealAdmission();

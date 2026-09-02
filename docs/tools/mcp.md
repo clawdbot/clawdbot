@@ -95,7 +95,18 @@ An enabled server needs either a command (stdio) or a URL (SSE or Streamable HTT
 
 ## Approvals
 
-Codex MCP tool approvals follow the session permission posture: the default full-permission posture does not prompt, while stricter modes check tools without safety annotations (`workspace` can use automatic review; `guarded` and `read-only` can prompt the operator). When offered, **Allow Always** remembers the tool, even when its arguments change. For servers configured through OpenClaw, this lasts for the current Codex session; Codex can persist the choice across sessions when the server is also saved in its native config. Override a server with `openclaw mcp configure <server> --approval approve|prompt|auto`; an explicit mode takes precedence over the posture-derived default. See [Codex tool approvals](/cli/mcp#codex-tool-approvals) for details and [Native approvals in Slack](/channels/slack#native-approvals-in-slack) for Slack button delivery.
+Codex MCP tool approvals follow the session permission posture: the default full-permission posture does not prompt, while stricter modes check tools without safety annotations (`workspace` can use automatic review; `guarded` and `read-only` can prompt the operator).
+
+When durable persistence is offered, **Allow Always** saves a per-agent grant
+for the exact configured server and tool, even when its arguments change.
+This applies to Gateway-hosted Codex runs when OpenClaw can unambiguously match
+the approval to a live Gateway-owned tool call; missing or ambiguous matches retain
+Codex's native/session behavior. Codex apps, native plugin servers, and
+computer-use servers are excluded. Grants survive restarts and apply at the
+next thread configuration and hook registration, such as a new session or
+restart; the current session uses Codex's remembered decision.
+
+Override a server with `openclaw mcp configure <server> --approval approve|prompt|auto`; an explicit mode takes precedence over the posture-derived default. Stored grants apply only under `auto` or an unspecified server mode; explicit `prompt` keeps asking. Inspect or revoke grants through [MCP tool grants](/tools/exec-approvals#mcp-tool-grants). See [Codex tool approvals](/cli/mcp#codex-tool-approvals) for details and [Native approvals in Slack](/channels/slack#native-approvals-in-slack) for Slack button delivery.
 
 ## Troubleshooting
 

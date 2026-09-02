@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { callGatewayTool } from "../tools/gateway.js";
 import { invokeNativeHookRelay, registerNativeHookRelay, testing } from "./native-hook-relay.js";
 
@@ -7,6 +7,15 @@ vi.mock("../tools/gateway.js", () => ({
 }));
 
 const mockCallGatewayTool = vi.mocked(callGatewayTool);
+const approvalMocks = vi.hoisted(() => ({ loadExecApprovalsReadOnly: vi.fn() }));
+
+vi.mock("../../infra/exec-approvals-store.js", () => ({
+  loadExecApprovalsReadOnly: approvalMocks.loadExecApprovalsReadOnly,
+}));
+
+beforeEach(() => {
+  approvalMocks.loadExecApprovalsReadOnly.mockReset().mockReturnValue({ version: 1, agents: {} });
+});
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -15,6 +24,65 @@ afterEach(() => {
 });
 
 describe("native hook relay approval wait handling", () => {
+  it("defers all native MCP names to Codex when the exact agent has a prepared durable grant", async () => {
+    const grant = { server: "raw-server_", tool: "_raw.tool", source: "allow-always", addedAt: 1 };
+    approvalMocks.loadExecApprovalsReadOnly.mockReturnValue({
+      version: 1,
+      agents: { main: { mcpTools: [grant] }, "*": { mcpTools: [grant] } },
+    });
+    mockCallGatewayTool.mockResolvedValue({ id: "unexpected-approval", decision: "deny" });
+    const relay = registerNativeHookRelay({
+      provider: "codex",
+      agentId: "main",
+      sessionId: "session-1",
+      runId: "run-1",
+    });
+    approvalMocks.loadExecApprovalsReadOnly.mockReturnValue({ version: 1, agents: {} });
+    for (const toolName of [
+      "mcp__raw_server__raw_tool",
+      "mcp__hashed_a13e__shortened",
+      "mcp__codex_apps__write",
+    ]) {
+      for (const query of ["first", "different arguments"]) {
+        const result = await invokeNativeHookRelay({
+          provider: "codex",
+          relayId: relay.relayId,
+          event: "permission_request",
+          rawPayload: {
+            hook_event_name: "PermissionRequest",
+            tool_name: toolName,
+            tool_input: { query },
+          },
+        });
+        expect(result).toEqual({ stdout: "", stderr: "", exitCode: 0 });
+      }
+    }
+    expect(mockCallGatewayTool).not.toHaveBeenCalled();
+    expect(approvalMocks.loadExecApprovalsReadOnly).toHaveBeenCalledTimes(1);
+    relay.unregister();
+    approvalMocks.loadExecApprovalsReadOnly.mockReturnValue({
+      version: 1,
+      agents: { "*": { mcpTools: [grant] } },
+    });
+    const nextRelay = registerNativeHookRelay({
+      provider: "codex",
+      agentId: "main",
+      sessionId: "session-2",
+      runId: "run-2",
+    });
+    const result = await invokeNativeHookRelay({
+      provider: "codex",
+      relayId: nextRelay.relayId,
+      event: "permission_request",
+      rawPayload: {
+        hook_event_name: "PermissionRequest",
+        tool_name: "mcp__raw_server__raw_tool",
+        tool_input: {},
+      },
+    });
+    expect(JSON.parse(result.stdout).hookSpecificOutput.decision.behavior).toBe("deny");
+  });
+
   it.each(
     [
       { fullPermission: true, mode: undefined, decision: "defer" },

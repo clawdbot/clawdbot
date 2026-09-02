@@ -1,7 +1,7 @@
 #!/usr/bin/env -S node --import tsx
 // Regenerates ui/config/control-ui-boot-modules.json: the measured module set
-// the default Control UI boot flow loads lazily. Builds without the previous
-// boot group, then captures Chat-ready chunk sources against the mocked Gateway.
+// shared shell and route-specific boot flows load lazily. Builds without the
+// previous boot groups, then captures ready routes against the mocked Gateway.
 import fs from "node:fs";
 import http from "node:http";
 import os from "node:os";
@@ -72,7 +72,11 @@ function readDistBuildId(distDir: string): string {
   return buildId;
 }
 
-async function collectBootChunkPaths(baseUrl: string, distDir: string): Promise<Set<string>> {
+async function collectBootChunkPaths(
+  baseUrl: string,
+  distDir: string,
+  route: "new" | "chat",
+): Promise<Set<string>> {
   const browser = await chromium.launch();
   try {
     const page = await browser.newPage();
@@ -84,11 +88,12 @@ async function collectBootChunkPaths(baseUrl: string, distDir: string): Promise<
       }
     });
     await installMockGateway(page, { serverBuildId: readDistBuildId(distDir) });
-    await page.goto(`${baseUrl}/chat`, { waitUntil: "commit" });
-    // Chat readiness proves the boot flow completed instead of stalling on an
-    // error surface; a manifest captured from a broken boot would be garbage.
+    await page.goto(`${baseUrl}/${route}`, { waitUntil: "commit" });
+    // Route readiness proves the capture did not stall on an error surface.
     await page
-      .locator(".agent-chat__composer-combobox textarea")
+      .locator(
+        route === "chat" ? ".agent-chat__composer-combobox textarea" : ".new-session-page__message",
+      )
       .waitFor({ timeout: READY_TIMEOUT_MS });
     await page.waitForTimeout(SETTLE_MS);
     return chunkPaths;
@@ -134,7 +139,8 @@ async function main(): Promise<void> {
               codeSplitting: {
                 ...controlUiCodeSplitting,
                 groups: controlUiCodeSplitting.groups.filter(
-                  (group) => group.name !== "control-ui-boot",
+                  (group) =>
+                    typeof group.name !== "string" || !group.name.startsWith("control-ui-boot"),
                 ),
               },
             };
@@ -144,14 +150,32 @@ async function main(): Promise<void> {
     });
     const server = await serveDist(distDir);
     try {
-      const chunkPaths = await collectBootChunkPaths(server.baseUrl, distDir);
-      const keys = manifestKeysForChunks(chunkPaths, distDir);
-      if (keys.length < 100) {
-        throw new Error(`Boot capture looks truncated: only ${keys.length} modules recorded`);
+      const routes = {} as Record<"new" | "chat", Set<string>>;
+      for (const route of ["new", "chat"] as const) {
+        const chunks = await collectBootChunkPaths(server.baseUrl, distDir, route);
+        routes[route] = new Set(manifestKeysForChunks(chunks, distDir));
+        if (routes[route].size < 100) {
+          throw new Error(
+            `Boot capture looks truncated: ${route} recorded only ${routes[route].size} modules`,
+          );
+        }
+        console.log(
+          `control-ui-boot-manifest: ${route}: ${chunks.size} chunks, ${routes[route].size} modules`,
+        );
       }
-      fs.writeFileSync(manifestPath, `${JSON.stringify(keys, null, 1)}\n`);
+      const shared = new Set([...routes.new].filter((key) => routes.chat.has(key)));
+      const sorted = (keys: Iterable<string>) =>
+        [...keys].toSorted((left, right) => (left < right ? -1 : left > right ? 1 : 0));
+      const manifest = {
+        shared: sorted(shared),
+        new: sorted([...routes.new].filter((key) => !shared.has(key))),
+        chat: sorted([...routes.chat].filter((key) => !shared.has(key))),
+      };
+      fs.writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 1)}\n`);
       console.log(
-        `control-ui-boot-manifest: ${chunkPaths.size} boot chunks -> ${keys.length} modules -> ${path.relative(repoRoot, manifestPath)}`,
+        `control-ui-boot-manifest: ${Object.entries(manifest)
+          .map(([name, keys]) => `${name}: ${keys.length}`)
+          .join(", ")} -> ${path.relative(repoRoot, manifestPath)}`,
       );
     } finally {
       await server.close();
