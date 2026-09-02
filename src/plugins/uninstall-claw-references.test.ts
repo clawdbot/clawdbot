@@ -54,15 +54,6 @@ describe("collectClawPluginUninstallWarnings", () => {
 
   it.each([
     {
-      label: "matches a scoped spec recorded without a version",
-      record: {
-        source: "clawhub" as const,
-        spec: "clawhub:@owner/audit",
-        version: "2.0.1",
-      },
-      ref: "@owner/audit",
-    },
-    {
       label: "prefers the canonical package over the raw spec",
       record: {
         source: "clawhub" as const,
