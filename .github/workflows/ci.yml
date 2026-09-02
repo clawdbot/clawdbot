@@ -89,7 +89,7 @@ jobs:
     permissions:
       contents: read
     if: github.event_name != 'pull_request' || !github.event.pull_request.draft
-    runs-on: ${{ (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid') && 'ubuntu-24.04' || (github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && github.run_attempt > 1)) && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || contains(fromJSON('["OWNER","MEMBER","COLLABORATOR","CONTRIBUTOR"]'), github.event.pull_request.author_association)) && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
+    runs-on: ${{ (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || (vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' && github.run_attempt > 1)) && 'ubuntu-24.04' || (github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && github.run_attempt > 1)) && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || contains(fromJSON('["OWNER","MEMBER","COLLABORATOR","CONTRIBUTOR"]'), github.event.pull_request.author_association)) && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
     timeout-minutes: 20
     outputs:
       checkout_revision: ${{ steps.checkout_ref.outputs.sha }}
@@ -1681,7 +1681,7 @@ jobs:
     permissions:
       contents: read
     if: github.event_name != 'pull_request' || !github.event.pull_request.draft
-    runs-on: ubuntu-24.04
+    runs-on: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' && github.run_attempt == 1 && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || contains(fromJSON('["OWNER","MEMBER","COLLABORATOR","CONTRIBUTOR"]'), github.event.pull_request.author_association)) && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04' }}
     timeout-minutes: 20
     env:
       PRE_COMMIT_HOME: .cache/pre-commit-security-fast
@@ -3993,11 +3993,52 @@ jobs:
         run: pnpm format:check
 
       - name: Checkout ClawHub docs source
+        id: clawhub-source
         shell: bash
         env:
           CHECKOUT_KIND: clawhub
           CHECKOUT_REPO: openclaw/clawhub
+          GIT_TRACE_CURL: ${{ runner.temp }}/clawhub-checkout-http.trace
+          GIT_TRACE_CURL_NO_DATA: "1"
+          GIT_TRACE_REDACT: "1"
         run: *owned_checkout_run
+
+      - name: Summarize ClawHub checkout transport
+        if: ${{ always() && steps.clawhub-source.outcome != 'skipped' }}
+        shell: bash
+        env:
+          CLAWHUB_CHECKOUT_OUTCOME: ${{ steps.clawhub-source.outcome }}
+        run: |
+          python3 -I -S "$RUNNER_TEMP/ci-git-owner.py" --policy - <<'PYTHON'
+          import json, os, re
+          from pathlib import Path
+          import ci_git_owner as owner
+
+          trace = Path(os.environ["RUNNER_TEMP"]) / "clawhub-checkout-http.trace"
+          try:
+              if os.environ["CLAWHUB_CHECKOUT_OUTCOME"] == "failure":
+                  workspace = str(Path(os.environ["GITHUB_WORKSPACE"]) / "clawhub-source")
+                  remote = "https://github.com/openclaw/clawhub.git"
+                  result = {"httpStatus": [], "tracePresent": trace.is_file()}
+                  if trace.is_file():
+                      with trace.open(errors="replace") as stream:
+                          for line in stream:
+                              match = re.search(r"<= Recv header: HTTP/\S+ (\d{3})(?:\s|$)", line)
+                              if match and len(result["httpStatus"]) < 64:
+                                  result["httpStatus"].append(int(match[1]))
+                  version = owner.git_output(workspace, "--version", timeout=5).strip()
+                  result["gitVersion"] = version if re.fullmatch(r"git version [0-9][a-zA-Z0-9.+-]{0,63}", version) else "unrecognized"
+                  result["remoteMatchesExpected"] = owner.git_output(workspace, "remote", "get-url", "origin", timeout=5).strip() == remote
+                  try:
+                      proactive = owner.git_output(workspace, "config", "--get-urlmatch", "http.proactiveAuth", remote, timeout=5).strip()
+                      result["proactiveAuth"] = proactive if proactive in ("none", "basic", "auto") else "unrecognized"
+                  except owner.GitFailure as error:
+                      result["proactiveAuth"] = "unset" if error.code == 1 else "unavailable"
+                  # Only allowlisted facts leave the runner; discard raw headers on every outcome.
+                  print(json.dumps(result, sort_keys=True))
+          finally:
+              trace.unlink(missing_ok=True)
+          PYTHON
 
       - name: Check docs
         env:
@@ -5255,7 +5296,7 @@ jobs:
     # Report failed prerequisites, but let superseded runs release their slot
     # without waiting for an aggregate runner after workflow cancellation.
     if: ${{ !cancelled() && (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}
-    runs-on: ubuntu-24.04
+    runs-on: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' && github.run_attempt == 1 && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || contains(fromJSON('["OWNER","MEMBER","COLLABORATOR","CONTRIBUTOR"]'), github.event.pull_request.author_association)) && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04' }}
     timeout-minutes: 5
     steps:
       - name: Verify selected CI lanes

@@ -3802,7 +3802,7 @@ NODE
     expect(source).not.toContain("blacksmith-");
   });
 
-  it("keeps hybrid control jobs hosted and preserves default preflight routing", () => {
+  it("routes hybrid control jobs without changing hosted fallbacks", () => {
     const workflow = readCiWorkflow();
     const context = {
       eventName: "pull_request",
@@ -3811,29 +3811,29 @@ NODE
       runnerBackend: "hybrid",
     } as const;
 
-    expect(workflow.jobs["security-fast"]["runs-on"]).toBe("ubuntu-24.04");
-    expect(workflow.jobs["ci-gate"]["runs-on"]).toBe("ubuntu-24.04");
-    const expression = workflow.jobs.preflight["runs-on"];
-    for (const eventName of ["pull_request", "push"] as const) {
-      expect(evaluateWorkflowExpression(expression, { ...context, eventName })).toBe(
-        "ubuntu-24.04",
-      );
-    }
-    for (const override of [
-      { runAttempt: 2 },
-      { runnerBackend: "github" },
-      { eventName: "workflow_dispatch" },
-      { repository: "contributor/openclaw" },
-      { authorAssociation: "NONE", headRepository: "contributor/openclaw" },
-    ] as const) {
-      expect(evaluateWorkflowExpression(expression, { ...context, ...override })).toBe(
-        "ubuntu-24.04",
-      );
-    }
-    for (const runnerBackend of ["", "blacksmith"] as const) {
-      expect(evaluateWorkflowExpression(expression, { ...context, runnerBackend })).toBe(
-        "blacksmith-4vcpu-ubuntu-2404",
-      );
+    for (const jobName of ["preflight", "security-fast", "ci-gate"]) {
+      const expression = workflow.jobs[jobName]["runs-on"];
+      for (const eventName of ["pull_request", "push"] as const) {
+        expect(evaluateWorkflowExpression(expression, { ...context, eventName }), jobName).toBe(
+          "blacksmith-4vcpu-ubuntu-2404",
+        );
+      }
+      for (const override of [
+        { runAttempt: 2 },
+        { runnerBackend: "github" },
+        { eventName: "workflow_dispatch" },
+        { repository: "contributor/openclaw" },
+        { authorAssociation: "NONE", headRepository: "contributor/openclaw" },
+      ] as const) {
+        expect(evaluateWorkflowExpression(expression, { ...context, ...override }), jobName).toBe(
+          "ubuntu-24.04",
+        );
+      }
+      for (const runnerBackend of ["", "blacksmith"] as const) {
+        expect(evaluateWorkflowExpression(expression, { ...context, runnerBackend }), jobName).toBe(
+          jobName === "preflight" ? "blacksmith-4vcpu-ubuntu-2404" : "ubuntu-24.04",
+        );
+      }
     }
   });
 
@@ -4061,6 +4061,7 @@ NODE
       "check-additional-shard": "ubuntu-24.04",
       "check-docs": "ubuntu-24.04",
       "check-shard": "ubuntu-24.04",
+      "ci-gate": "ubuntu-24.04",
       "checks-fast-channel-contracts-shard": "ubuntu-24.04",
       "checks-fast-core": "ubuntu-24.04",
       "checks-fast-plugin-contracts-shard": "ubuntu-24.04",
@@ -4076,6 +4077,7 @@ NODE
       "native-i18n": "ubuntu-24.04",
       "pnpm-store-warmup": "ubuntu-24.04",
       preflight: "ubuntu-24.04",
+      "security-fast": "ubuntu-24.04",
       "qa-smoke-ci-profile": "ubuntu-24.04",
       "skills-python": "ubuntu-24.04",
       "check-test-types-hosted-core-shard": "ubuntu-24.04",
@@ -4083,6 +4085,9 @@ NODE
     } as const;
     const expectedHybridFirstAttemptRunners = {
       ...expectedHostedRunners,
+      preflight: "blacksmith-4vcpu-ubuntu-2404",
+      "security-fast": "blacksmith-4vcpu-ubuntu-2404",
+      "ci-gate": "blacksmith-4vcpu-ubuntu-2404",
       android: "blacksmith-8vcpu-ubuntu-2404",
       "build-artifacts": "blacksmith-32vcpu-ubuntu-2404",
       "checks-node-core-test-nondist-shard": "blacksmith-32vcpu-ubuntu-2404",

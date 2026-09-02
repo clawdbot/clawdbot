@@ -186,13 +186,12 @@ These are intentionally guarded by `test/scripts/ci-workflow-guards.test.ts`:
   before build and transform warming. Preflight and downstream Node jobs are
   restore-only consumers on eligible self-hosted runners. Exact misses and
   hosted paths, including Mac Node jobs, use the ordinary pnpm-store cache.
-- Hybrid `preflight`, `security-fast`, and `ci-gate` stay on GitHub-hosted
-  runners so Blacksmith admission cannot hold matrix planning or final status
-  reporting. They add no Blacksmith registrations. All-Blacksmith preflight,
-  contributor trust, manual/non-canonical fallbacks, hosted retries, and the
-  `github` outage override remain intact. The aggregate uses `!cancelled()`
-  to report failed prerequisites without holding a superseded run open after
-  workflow cancellation.
+- Hybrid first attempts route `preflight`, `security-fast`, and `ci-gate` to
+  the existing 4-vCPU Blacksmith runner after measured hosted queue delays.
+  Contributor trust, manual/non-canonical fallbacks, hosted retries, and the
+  `github` outage override remain intact. Budget all three registrations.
+  The aggregate uses `!cancelled()` to report failed prerequisites without
+  holding a superseded run open after workflow cancellation.
 - CI matrix caps: fast/check lanes at 12, Node test shards at 28 on Blacksmith
   and 96 with the GitHub or hybrid planner profile, Windows at 2, and Android
   at 2. The compact row budgets are 112 for hosted-only GitHub and 96 for

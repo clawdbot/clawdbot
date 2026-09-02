@@ -2630,7 +2630,6 @@ src/config/runtime-overrides.ts	2
 src/config/runtime-snapshot.ts	1
 src/config/runtime-source-projection.ts	4
 src/config/schema.hints.ts	15
-src/config/schema.tags.ts	1
 src/config/schema.ts	1
 src/config/sessions/archive-compression.ts	1
 src/config/sessions/cleanup-service.ts	3
@@ -3452,7 +3451,7 @@ src/plugins/installed-plugin-index-policy.ts	1
 src/plugins/installed-plugin-index-record-builder.ts	1
 src/plugins/installed-plugin-index-record-state.ts	1
 src/plugins/installed-plugin-index-store.ts	2
-src/plugins/interactive-state.ts	3
+src/plugins/interactive-state.ts	2
 src/plugins/interactive.ts	4
 src/plugins/lazy-service-module.ts	1
 src/plugins/legacy-session-surfaces.ts	3
