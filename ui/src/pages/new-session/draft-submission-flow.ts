@@ -28,7 +28,7 @@ import {
   projectDraftSessionPlacementRecovery,
   resolveDraftSessionPlacement,
 } from "./draft-session-placement.ts";
-import { DraftSessionStartup } from "./draft-session-startup.ts";
+import { DraftSessionStartup, type DraftStartupResumption } from "./draft-session-startup.ts";
 import type {
   DraftSubmissionCallbacks,
   DraftSubmissionSnapshot,
@@ -213,11 +213,11 @@ export class DraftSubmissionFlow {
 
   private buildDraftSessionCreateParams(options: DraftSessionCreateOverrides = {}) {
     return this.place.buildSessionCreateParams({
+      ...options,
       message: options.message ?? "",
       toolOverrides: this.capabilities.toolOverrides,
       permissionMode: this.permission.value,
       visibility: options.visibility ?? this.visibilityValue,
-      attachments: options.attachments,
       catalogId: this.read().data?.catalogId,
       category: this.gateway.resolvedGroupCategory(),
     });
@@ -379,16 +379,14 @@ export class DraftSubmissionFlow {
     }
   }
 
-  async submit(
-    startup?: { params: SessionCreateParams; startedAt: number },
-    backgroundRequested = false,
-  ) {
+  async submit(startup?: DraftStartupResumption, backgroundRequested = false) {
     const background = backgroundRequested && !startup && this.visibilityValue !== "draft";
     const context = this.read().context;
     if (!context || (!startup && !this.canSubmit())) {
       this.noteBlockedSubmitAttempt();
       return;
     }
+    const preparedTitle = this.callbacks.takePreparedTitle?.();
     this.blockedSubmitGate = null;
     const pendingPlacement = !startup && Boolean(this.pendingPlacement.sessionKey);
     const message =
@@ -471,6 +469,7 @@ export class DraftSubmissionFlow {
         startup?.params ??
         this.buildDraftSessionCreateParams({
           message: placementTarget ? "" : message,
+          displayName: preparedTitle,
           visibility:
             this.visibilityValue === "draft" &&
             !this.capabilities.canStartAsDraft(this.read().context)

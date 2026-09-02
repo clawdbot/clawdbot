@@ -17,8 +17,8 @@ import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Settings
-import androidx.compose.material3.adaptive.navigationsuite.NavigationSuiteScaffold
-import androidx.compose.material3.adaptive.navigationsuite.NavigationSuiteType
+import androidx.compose.material3.DrawerValue
+import androidx.compose.material3.rememberDrawerState
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
 import androidx.compose.ui.Modifier
@@ -63,13 +63,11 @@ class SettingsDetailInsetsTest {
   private val settingsFrameBottomPadding = 4.dp
 
   @Test
-  fun keyboardInsetsResizeSettingsWithoutNavigation() = verifyInsets(NavigationSuiteType.None)
+  @Config(qualifiers = "w360dp-h800dp-420dpi")
+  fun keyboardInsetsResizeSettingsInCompactSidebarShell() = verifyInsets()
 
   @Test
-  fun navigationBarInsetsAreNotAppliedTwice() = verifyInsets(NavigationSuiteType.NavigationBar)
-
-  @Test
-  fun navigationRailLeavesBottomInsetsToSettings() = verifyInsets(NavigationSuiteType.NavigationRail)
+  fun keyboardInsetsResizeSettingsInWideSidebarShell() = verifyInsets()
 
   @Test
   @Config(qualifiers = "w320dp-h800dp-mdpi")
@@ -115,7 +113,7 @@ class SettingsDetailInsetsTest {
     }
   }
 
-  private fun verifyInsets(navigationType: NavigationSuiteType) {
+  private fun verifyInsets() {
     lateinit var view: View
     var observedBottomInsets: Pair<Int, Int>? = null
     composeRule.setContent {
@@ -130,8 +128,11 @@ class SettingsDetailInsetsTest {
         observedBottomInsets = imeBottom to safeBottom
       }
       ClawDesignTheme {
-        NavigationSuiteScaffold(navigationSuiteItems = {}, layoutType = navigationType) {
-          Box(Modifier.fillMaxSize().testTag("settings-host")) {
+        Box(Modifier.fillMaxSize().testTag("settings-host")) {
+          SidebarNavigationShell(
+            drawerState = rememberDrawerState(initialValue = DrawerValue.Closed),
+            drawerContent = {},
+          ) {
             SettingsDetailFrame(title = "Gateway", subtitle = "", icon = Icons.Default.Settings, onBack = {}) {
               repeat(20) { index -> ClawTextField("Field $index", {}, "") }
               ClawTextField("Unsubmitted draft", {}, "Password", modifier = Modifier.testTag("last-field"))
@@ -165,10 +166,9 @@ class SettingsDetailInsetsTest {
       composeRule.onNodeWithText("Save").performScrollTo()
       val host = composeRule.onNodeWithTag("settings-host").getUnclippedBoundsInRoot()
       val viewport = composeRule.onNode(hasScrollAction()).getUnclippedBoundsInRoot()
-      val ancestorBottom = if (navigationType == NavigationSuiteType.NavigationBar) navigationBottom else 0
-      val remainingBottom = (maxOf(navigationBottom, imeBottom) - ancestorBottom) / density
+      val remainingBottom = maxOf(navigationBottom, imeBottom) / density
       assertEquals(
-        "$navigationType must consume the remaining bottom inset (IME=$imeBottom)",
+        "Sidebar settings must consume the bottom inset once (IME=$imeBottom)",
         host.bottom.value - remainingBottom - settingsFrameBottomPadding.value,
         viewport.bottom.value,
         1f / density,

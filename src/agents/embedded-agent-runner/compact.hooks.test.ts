@@ -61,7 +61,7 @@ import {
   resolveContextEngineMock,
   resolveDefaultAgentDirMock,
   resolveEffectiveCompactionModeMock,
-  resolveEmbeddedAgentStreamFnMock,
+  resolveEmbeddedAgentStreamMock,
   resolveMemorySearchConfigMock,
   resolveModelAsyncMock,
   resolveModelMock,
@@ -838,7 +838,7 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
         return options?.authProfileId === "openai:missing";
       }),
     ).toBe(true);
-    expect(resolveEmbeddedAgentStreamFnMock).toHaveBeenCalledWith(
+    expect(resolveEmbeddedAgentStreamMock).toHaveBeenCalledWith(
       expect.objectContaining({ authProfileId: "openai:backup" }),
     );
     expect(buildAgentRuntimePlanMock).toHaveBeenCalledWith(
@@ -1297,7 +1297,10 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
       mockResolvedModel(
         "providerTimeoutMs" in scenario ? { requestTimeoutMs: scenario.providerTimeoutMs } : {},
       );
-      resolveEmbeddedAgentStreamFnMock.mockReturnValue(vi.fn(() => providerRequest.promise));
+      resolveEmbeddedAgentStreamMock.mockReturnValue({
+        streamFn: vi.fn(() => providerRequest.promise),
+        strategy: "session-custom",
+      });
       attemptServerEndpointCompactionMock.mockImplementationOnce(async (input) => {
         const { context, model, streamFn } = input;
         const messages = context.messages.filter(
@@ -1360,7 +1363,10 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
 
   it("routes compaction through shared stream resolution and extra params", async () => {
     const resolvedStreamFn = vi.fn();
-    resolveEmbeddedAgentStreamFnMock.mockReturnValue(resolvedStreamFn);
+    resolveEmbeddedAgentStreamMock.mockReturnValue({
+      streamFn: resolvedStreamFn,
+      strategy: "session-custom",
+    });
     applyExtraParamsToAgentMock.mockReturnValue({
       effectiveExtraParams: { transport: "websocket" },
     });
@@ -1393,7 +1399,7 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
       } as never,
     });
 
-    const streamArg = mockCallArg(resolveEmbeddedAgentStreamFnMock) as Record<string, unknown>;
+    const streamArg = mockCallArg(resolveEmbeddedAgentStreamMock) as Record<string, unknown>;
     expect(streamArg.currentStreamFn).toBeTypeOf("function");
     expect(streamArg.sessionId).toBe("session-1");
     expect(streamArg.authProfileId).toBe("openai:profile-1");
@@ -1888,7 +1894,7 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
         const [
           { createAgentSessionForEmbeddedRunner },
           { guardSessionManager },
-          { resolveEmbeddedAgentStreamFn },
+          { resolveEmbeddedAgentStream },
           { buildEmbeddedExtensionFactories },
         ] = await Promise.all([
           import("../sessions/sdk.js"),
@@ -1956,7 +1962,10 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
         vi.mocked(guardSessionManager).mockReturnValue(sessionManager);
         limitHistoryTurnsMock.mockImplementation((messages) => messages);
         resolveEffectiveCompactionModeMock.mockReturnValue("safeguard");
-        vi.mocked(resolveEmbeddedAgentStreamFn).mockReturnValue(stream);
+        vi.mocked(resolveEmbeddedAgentStream).mockReturnValue({
+          streamFn: stream,
+          strategy: "session-custom",
+        });
         vi.mocked(buildEmbeddedExtensionFactories).mockImplementation(({ model }) => {
           setSafeguardRuntime(sessionManager, {
             model,
@@ -2282,7 +2291,7 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
       resolveModelMock,
       ([provider, modelId]) => provider === "openai" && modelId === "gpt-5.4-mini",
     );
-    expectRecordFields(mockCallArg(resolveEmbeddedAgentStreamFnMock, 1), {
+    expectRecordFields(mockCallArg(resolveEmbeddedAgentStreamMock, 1), {
       authProfileId: "openai:default",
     });
   });

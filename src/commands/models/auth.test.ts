@@ -383,6 +383,10 @@ describe("modelsAuthLoginCommand", () => {
     mocks.upsertAuthProfileAfterLoginWithLock.mockReset();
     mocks.upsertAuthProfileAfterLoginWithLock.mockResolvedValue(undefined);
     mocks.promoteAuthProfileInOrder.mockReset();
+    mocks.promoteAuthProfileInOrder.mockResolvedValue({
+      ok: true,
+      value: { version: 1, profiles: {} },
+    });
     mocks.removeProviderAuthProfilesWithLock.mockReset();
     mocks.removeProviderAuthProfilesWithLock.mockResolvedValue({ version: 1, profiles: {} });
 

@@ -499,10 +499,8 @@ export async function executeSetup(
           : undefined;
       const workspace =
         recovery?.workspace ?? resolveUserPath(operation.workspace ?? process.cwd());
-      // The guarded setup transaction publishes the load-time injected main
-      // roster before any workspace provisioning or other follow-up effect.
-      // The outer boundary covers injected implementations. The production
-      // setup helper also uses this same seam for each of its internal writes.
+      // Cover injected implementations at entry and carry the same synchronous
+      // authority into production setup's workspace and config owners.
       const applied = await ctx.commit(() =>
         applySetup(
           {
@@ -513,7 +511,7 @@ export async function executeSetup(
             surface,
             runtime: ctx.runtime,
           },
-          { commit: (effect) => ctx.commit(effect) },
+          { beforePersistentApply: ctx.assertPersistentApply },
         ),
       );
       if (!applied.workspaceReady) {

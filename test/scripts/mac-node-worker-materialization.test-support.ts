@@ -24,6 +24,18 @@ const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
 const materializer = "scripts/materialize-mac-node-worker.py";
 const inventory = "scripts/lib/mac-native-inventory.py";
 
+type WorkerScratchObservation = {
+  phase: "pack" | "install" | "verify";
+  home: string;
+  temporary: string;
+  createdDirectory: string;
+  privateRoot: string | null;
+  privateRootMode: number | null;
+  product: string;
+  productDevice: string;
+  productInode: string;
+};
+
 function snapshot(root: string) {
   const records: { path: string; mode: number; kind: string; content?: string }[] = [];
   function visit(file: string) {
@@ -129,25 +141,69 @@ async function stagingFixture(mac: MacScriptFixture) {
   const scripts = path.join(root, "scripts");
   const destination = path.join(root, "published");
   const calls = path.join(root, "verification-calls");
+  const scratchLog = path.join(root, "scratch-observations");
   const tmp = path.join(root, "tmp");
   await mkdir(scripts);
   await mkdir(tmp);
+  await write(path.join(root, "operator-sentinel"), "ambient home must remain untouched");
+  await write(path.join(tmp, "other-task/sentinel"), "unrelated scratch must survive");
   await cp("scripts/stage-mac-node-worker.sh", path.join(scripts, "stage-mac-node-worker.sh"));
   await cp(materializer, path.join(scripts, path.basename(materializer)));
   await write(path.join(scripts, "lib/mac-native-inventory.py"), readFileSync(inventory));
-  await write(path.join(root, "canonical.tgz"), "inert package mock");
   await write(path.join(root, "dist/build-info.json"), '{"buildId":"unchanged-build"}');
   await write(
+    path.join(scripts, "record-scratch.cjs"),
+    `
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+module.exports = (phase, product) => {
+  const home = fs.realpathSync(process.env.HOME);
+  assert(fs.statSync(home).isDirectory(), 'child HOME must already exist');
+  assert(!fs.existsSync(path.join(home, 'operator-sentinel')), 'ambient HOME leaked');
+  assert.equal(process.env.OPENCLAW_STATE_DIR, undefined, 'ambient state leaked');
+  const temporary = fs.realpathSync(os.tmpdir());
+  const component = path.relative(${JSON.stringify(tmp)}, temporary).split(path.sep)[0];
+  const privateRoot = component && component !== '..' ? path.join(${JSON.stringify(tmp)}, component) : null;
+  const createdDirectory = fs.mkdtempSync(path.join(temporary, 'fixture-scratch-'));
+  fs.writeFileSync(path.join(createdDirectory, 'sentinel'), phase);
+  fs.mkdirSync(path.join(home, '.npm'), { recursive: true });
+  fs.writeFileSync(path.join(home, '.npm/cache'), phase);
+  const info = fs.statSync(product, { bigint: true });
+  fs.appendFileSync(${JSON.stringify(scratchLog)}, JSON.stringify({
+    phase, home, temporary, createdDirectory, privateRoot,
+    privateRootMode: privateRoot === null ? null : fs.statSync(privateRoot).mode & 0o777,
+    product, productDevice: info.dev.toString(), productInode: info.ino.toString(),
+  }) + '\\n');
+};
+if (require.main === module) module.exports(process.argv[2], process.argv[3]);
+`,
+  );
+  await write(
     path.join(scripts, "package-openclaw-for-docker.mjs"),
-    `import assert from 'node:assert/strict';\nassert(process.argv.includes('--pnpm-pack'), 'worker package must use the repository-pinned packer');\nconsole.log(${JSON.stringify(path.join(root, "canonical.tgz"))});\n`,
+    `
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
+import recordScratch from './record-scratch.cjs';
+assert(process.argv.includes('--pnpm-pack'), 'worker package must use the repository-pinned packer');
+const target = path.join(process.argv[process.argv.indexOf('--output-dir') + 1], process.argv[process.argv.indexOf('--output-name') + 1]);
+fs.writeFileSync(target, 'inert package mock');
+recordScratch('pack', target);
+if (fs.existsSync(${JSON.stringify(path.join(root, "reject-pack"))})) process.exit(41);
+console.log(target);
+`,
   );
   await write(
     path.join(scripts, "verify-mac-node-worker.mjs"),
     `
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import recordScratch from './record-scratch.cjs';
 assert.equal(process.argv[3], ${JSON.stringify(path.join(root, "dist/build-info.json"))});
 assert.equal(fs.readFileSync(process.argv[2]+'/build-info.json', 'utf8'), fs.readFileSync(process.argv[3], 'utf8'));
+recordScratch('verify', process.argv[2]);
 if (process.argv[2].includes('/x86_64/') && fs.existsSync(${JSON.stringify(path.join(root, "reject-verification"))})) process.exit(42);
 `,
   );
@@ -177,6 +233,7 @@ exec ${quote(process.execPath)} "$@"
   await write(
     path.join(scripts, "install-cli.sh"),
     `
+[[ -d "$HOME" ]] || { echo "fixture installer HOME must exist before source" >&2; exit 96; }
 node_dir() { printf '%s' "$PREFIX/node"; }
 node_bin() { printf '%s/bin/node' "$(node_dir)"; }
 install_node() {
@@ -184,15 +241,26 @@ install_node() {
   [[ "$selected" != x64 ]] || selected=x86_64
   mkdir -p "$PREFIX"
   cp -R ${quote(path.join(root, "canonical"))}/"$selected" "$(node_dir)"
+  ${quote(process.execPath)} ${quote(path.join(scripts, "record-scratch.cjs"))} install "$PREFIX"
 }
-install_openclaw() { :; }
+install_openclaw() { [[ "$(cat "$OPENCLAW_VERSION")" == "inert package mock" ]]; }
 `,
   );
   return {
     root,
     destination,
     calls,
+    scratchLog,
     tmp,
+    temporaryBefore: snapshot(tmp),
+    readScratchObservations(): WorkerScratchObservation[] {
+      return existsSync(scratchLog)
+        ? readFileSync(scratchLog, "utf8")
+            .trim()
+            .split("\n")
+            .map((line) => JSON.parse(line) as WorkerScratchObservation)
+        : [];
+    },
     async run(variant: string, tempRoot = tmp) {
       return await mac.run(
         "/bin/bash",
@@ -202,6 +270,7 @@ install_openclaw() { :; }
           env: {
             HOME: root,
             TMPDIR: tempRoot,
+            OPENCLAW_STATE_DIR: path.join(root, "operator-state"),
             PATH: `${path.dirname(process.execPath)}:${systemPath}`,
             OPENCLAW_MAC_SIGNING_VARIANT: variant,
           },
@@ -211,17 +280,54 @@ install_openclaw() { :; }
   };
 }
 
+function expectWorkerScratchCleaned(fixture: Awaited<ReturnType<typeof stagingFixture>>) {
+  for (const observation of fixture.readScratchObservations()) {
+    expect(existsSync(observation.home)).toBe(false);
+    expect(existsSync(observation.createdDirectory)).toBe(false);
+  }
+  expect(snapshot(fixture.tmp)).toEqual(fixture.temporaryBefore);
+}
+
 export function registerMacWorkerMaterializationTests() {
   describe.skipIf(process.platform !== "darwin")("elevation worker materialization", () => {
     const it = createMacScriptTest();
-    it("provisions beside the destination when system temp is unavailable", ({ mac }) =>
-      mac.lifetime.run(async () => {
-        for (const variant of ["standard", "elevation-host"]) {
+    it.for(["standard", "elevation-host"])(
+      "keeps %s worker scratch in caller temp and publishes runtimes by same-volume moves",
+      (variant, { mac }) =>
+        mac.lifetime.run(async () => {
           const fixture = await stagingFixture(mac);
           const before = snapshot(path.join(fixture.root, "canonical"));
-          const result = await fixture.run(variant, path.join(fixture.tmp, "unavailable"));
+          const result = await fixture.run(variant);
           expect(result.status, result.stderr).toBe(0);
           expect(snapshot(path.join(fixture.root, "canonical"))).toEqual(before);
+          const observations = fixture.readScratchObservations();
+          expect(observations.map(({ phase }) => phase)).toEqual([
+            "pack",
+            "install",
+            "verify",
+            "install",
+            "verify",
+          ]);
+          expect(new Set(observations.map(({ privateRoot }) => privateRoot)).size).toBe(1);
+          for (const observation of observations) {
+            expect(observation.privateRoot).not.toBeNull();
+            expect(path.dirname(observation.privateRoot!)).toBe(fixture.tmp);
+            expect(observation.privateRootMode).toBe(0o700);
+            for (const file of [observation.home, observation.temporary]) {
+              expect(path.relative(observation.privateRoot!, file).split(path.sep)[0]).not.toBe(
+                "..",
+              );
+            }
+            expect(observation.createdDirectory.startsWith(`${observation.temporary}/`)).toBe(true);
+            if (observation.phase === "pack") {
+              expect(observation.product.startsWith(`${observation.privateRoot}/`)).toBe(true);
+            } else {
+              expect(observation.product.startsWith(`${fixture.tmp}/`)).toBe(false);
+              expect(observation.productDevice).toBe(
+                statSync(path.dirname(fixture.destination), { bigint: true }).dev.toString(),
+              );
+            }
+          }
           const calls = readFileSync(fixture.calls, "utf8").trim().split("\n");
           expect(calls).toHaveLength(2);
           for (const [index, call] of calls.entries()) {
@@ -235,15 +341,57 @@ export function registerMacWorkerMaterializationTests() {
             const scratch = path.resolve(runtime!, "../..");
             expect(path.dirname(scratch)).toBe(path.dirname(fixture.destination));
             expect(existsSync(scratch)).toBe(false);
+            const verified = observations.find(
+              ({ phase, product }) => phase === "verify" && product === runtime,
+            );
+            expect(verified).toBeDefined();
+            expect(
+              statSync(path.join(fixture.destination, arch), { bigint: true }).ino.toString(),
+            ).toBe(verified!.productInode);
             expect(snapshot(path.join(fixture.destination, arch))).toEqual(
               snapshot(path.join(fixture.root, "canonical", arch)).filter(
                 (entry) => variant === "standard" || entry.path !== "foreign.node",
               ),
             );
           }
-          expect(readdirSync(fixture.tmp)).toEqual([]);
-        }
-      }));
+          expectWorkerScratchCleaned(fixture);
+        }),
+    );
+
+    it.for(["standard", "elevation-host"])(
+      "rejects unavailable worker scratch before %s publication",
+      (variant, { mac }) =>
+        mac.lifetime.run(async () => {
+          const fixture = await stagingFixture(mac);
+          const before = snapshot(fixture.root);
+          const result = await fixture.run(variant, path.join(fixture.tmp, "unavailable"));
+          expect(result.status, result.stderr).not.toBe(0);
+          expect(fixture.readScratchObservations()).toEqual([]);
+          expect(existsSync(fixture.calls)).toBe(false);
+          expect(snapshot(fixture.root)).toEqual(before);
+        }),
+    );
+
+    it.for(["standard", "elevation-host"])(
+      "cleans worker scratch and product staging after %s pack failure",
+      (variant, { mac }) =>
+        mac.lifetime.run(async () => {
+          const fixture = await stagingFixture(mac);
+          await write(path.join(fixture.root, "reject-pack"), "");
+          const before = readdirSync(fixture.root).toSorted();
+          const result = await fixture.run(variant);
+          expect(result.status, result.stderr).toBe(41);
+          expect(fixture.readScratchObservations().map(({ phase }) => phase)).toEqual(["pack"]);
+          expect(existsSync(fixture.calls)).toBe(false);
+          expect(existsSync(fixture.destination)).toBe(false);
+          expectWorkerScratchCleaned(fixture);
+          expect(
+            readdirSync(fixture.root)
+              .filter((name) => name !== path.basename(fixture.scratchLog))
+              .toSorted(),
+          ).toEqual(before);
+        }),
+    );
 
     it.for(
       ["standard", "elevation-host"].flatMap((variant) =>
@@ -274,7 +422,8 @@ export function registerMacWorkerMaterializationTests() {
           expect(existsSync(fixture.destination) ? snapshot(fixture.destination) : []).toEqual(
             before,
           );
-          expect(readdirSync(fixture.tmp)).toEqual([]);
+          expect(fixture.readScratchObservations()).toHaveLength(5);
+          expectWorkerScratchCleaned(fixture);
         }),
     );
 
