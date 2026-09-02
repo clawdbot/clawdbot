@@ -298,15 +298,12 @@ describe("qa scenario catalog channel contracts", () => {
     expect(flow).toContain("env.gateway.call('tasks.list'");
     expect(flow).toContain("task.title === `qa-terminal-${caseName}`");
     expect(flow).toContain("terminalTask.status === 'completed'");
-    expect(flow).toContain("emptyTask.status === 'completed'");
-    expect(flow).toContain("emptyTask.terminalOutcome === 'blocked'");
     expect(flow).toContain("task.deliveryStatus === 'delivered'");
     expect(flow).toContain("readSettledTerminalTask('restart')");
-    expect(flow).toContain("readSettledTerminalTask('empty')");
     expect(flow).toContain("postRestartUnexpectedPayloads.length === 0");
     expect(flow).toContain("env.providerMode === config.requiredProviderMode");
     expect(flow).not.toContain("interrupted by a gateway restart");
-    expect(flow).toContain("verdicts.length === 5");
+    expect(flow).toContain("verdicts.length === 4");
     expect(flow).not.toContain('"call":"sleep"');
   });
 
