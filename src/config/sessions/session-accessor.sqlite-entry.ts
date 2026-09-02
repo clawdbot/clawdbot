@@ -32,8 +32,10 @@ import {
   assertLifecycleTargetSnapshotUnchanged,
   type SqliteLifecycleTargetSnapshot,
 } from "./session-accessor.sqlite-entry-equality.js";
+import { readUnchangedLifecycleTargetSnapshot } from "./session-accessor.sqlite-entry-revalidation.js";
 import {
   collectSessionEntryLookupKeys,
+  normalizeLifecycleTarget,
   parseReadableSqliteSessionEntryRow,
   readExactSessionEntryRowValidated,
   readSessionEntryRow,
@@ -446,6 +448,7 @@ export async function patchSessionEntryCore(
         options.replaceEntry === true,
       ),
     resolved,
+    revalidationKeys: [resolved.sessionKey],
     sessionKey: resolved.sessionKey,
     storePath: resolveSessionStorePathForScope(scope),
     update,
@@ -467,6 +470,7 @@ export async function patchSessionEntryTarget(
     options,
     readSnapshot: (database) => readLifecycleTargetSnapshot(database, scope.target),
     resolved,
+    revalidationKeys: normalizeLifecycleTarget(scope.target).storeKeys,
     sessionKey: scope.target.canonicalKey,
     storePath: resolveSessionStorePathForScope({
       agentId: scope.agentId,
@@ -482,6 +486,8 @@ type SqliteSessionEntrySnapshotPatchParams = {
   options: SqliteSessionEntryPatchOptions;
   readSnapshot: (database: OpenClawAgentDatabase) => SqliteLifecycleTargetSnapshot;
   resolved: ResolvedSqliteScope;
+  /** Every persisted key readSnapshot consults; unchanged rows let the commit skip re-decoding. */
+  revalidationKeys: readonly string[];
   sessionKey: string;
   storePath: string;
   update: (
@@ -530,8 +536,17 @@ async function patchSqliteSessionEntrySnapshot(
     let previousIdentity = new Map<string, SessionEntry>();
     let currentIdentity = new Map<string, SessionEntry>();
     runOpenClawAgentWriteTransaction((writeDatabase) => {
-      const fresh = params.readSnapshot(writeDatabase);
-      assertLifecycleTargetSnapshotUnchanged(prepared, fresh, params.operationLabel);
+      // Rows that are byte-for-byte unchanged since preparation decode to the same entries,
+      // so the commit only re-decodes and deep-compares when a persisted row moved.
+      const unchanged = readUnchangedLifecycleTargetSnapshot(
+        writeDatabase,
+        prepared,
+        params.revalidationKeys,
+      );
+      const fresh = unchanged ?? params.readSnapshot(writeDatabase);
+      if (!unchanged) {
+        assertLifecycleTargetSnapshotUnchanged(prepared, fresh, params.operationLabel);
+      }
       options.assertCommitAllowed?.();
       if (!next) {
         result = cloneSessionEntry(writeBase);
@@ -541,6 +556,8 @@ async function patchSqliteSessionEntrySnapshot(
       previousIdentity = new Map(fresh.map((row) => [row.sessionKey, row.entry]));
       const selectedPreviousEntry = fresh[0]?.entry ?? writeBase;
       const persisted = writeSessionEntry(writeDatabase, sessionKey, next, {
+        // The commit snapshot already holds the exact canonical row, or proved it absent.
+        canonicalPreviousEntry: fresh.find((row) => row.sessionKey === sessionKey)?.entry ?? null,
         previousEntry: selectedPreviousEntry,
       });
       maintenancePlans.push(
@@ -552,7 +569,11 @@ async function patchSqliteSessionEntrySnapshot(
           storePath: params.storePath,
         }),
       );
-      currentIdentity = readSessionIdentitySnapshot(writeDatabase, [sessionKey]);
+      // Identity publication only reads sessionId, which the persisted entry already carries.
+      currentIdentity =
+        sessionKey.trim() === sessionKey
+          ? new Map([[sessionKey, persisted]])
+          : readSessionIdentitySnapshot(writeDatabase, [sessionKey]);
       result = cloneSessionEntry(persisted);
     }, toDatabaseOptions(resolved));
     try {

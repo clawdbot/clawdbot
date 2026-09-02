@@ -174,7 +174,9 @@ export function readSessionEntrySelectionSnapshot(
   const selected = exact
     ? readExactSessionEntryRow(database, sessionKey)
     : readSessionEntryRow(database, sessionKey);
-  return selected ? [{ entry: selected.entry, sessionKey: selected.row.session_key }] : [];
+  return selected
+    ? [{ entry: selected.entry, sessionKey: selected.row.session_key, row: selected.row }]
+    : [];
 }
 
 export function readExactSessionEntryRow(
@@ -279,7 +281,7 @@ export function resolveLifecyclePrimaryEntry(
   const rows = target.storeKeys.flatMap((key) => {
     const sessionKey = key.trim();
     const row = readExactSessionEntryRow(database, sessionKey);
-    return row ? [{ sessionKey, entry: row.entry }] : [];
+    return row ? [{ sessionKey, entry: row.entry, row: row.row }] : [];
   });
   if (rows.length > 1) {
     throw canonicalSessionKeyMigrationRequiredError(
@@ -558,6 +560,11 @@ export function writeSessionEntry(
   entry: SessionEntry,
   options: {
     allowStoredAliases?: boolean;
+    /**
+     * The exact canonical row's decoded entry as read inside this transaction, or null when
+     * the caller verified no such row exists. Undefined reads it here.
+     */
+    canonicalPreviousEntry?: SessionEntry | null;
     preserveNodeSuggestions?: boolean;
     previousEntry?: SessionEntry | null;
     routeContext?: ConversationRouteContext | null;
@@ -583,7 +590,9 @@ export function writeSessionEntry(
   const canonicalPreviousEntry =
     options.allowStoredAliases && options.previousEntry !== undefined
       ? (options.previousEntry ?? undefined)
-      : readExactSessionEntryRow(database, sessionKey)?.entry;
+      : options.canonicalPreviousEntry !== undefined
+        ? (options.canonicalPreviousEntry ?? undefined)
+        : readExactSessionEntryRow(database, sessionKey)?.entry;
   if (canonicalPreviousEntry?.sandbox === "required") {
     if (
       normalizedEntry.sandbox !== "required" ||
