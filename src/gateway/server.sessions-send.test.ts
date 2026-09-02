@@ -630,24 +630,23 @@ describe("sessions_send label lookup", () => {
 });
 
 describe("sessions_send agent targeting", () => {
-  it(
-    "starts configured agent main session by agentId before sending",
+  it.each([
+    { name: "default cross-agent access", tools: undefined },
+    {
+      name: "explicit cross-agent access",
+      tools: { sessions: { visibility: "all" }, agentToAgent: { enabled: true } },
+    },
+  ] as const)(
+    "starts configured agent main session by agentId before sending with $name",
     { timeout: SESSION_SEND_E2E_TIMEOUT_MS },
-    async () => {
+    async ({ tools }) => {
       const configPath = process.env.OPENCLAW_CONFIG_PATH;
       if (!configPath) {
         throw new Error("OPENCLAW_CONFIG_PATH missing in gateway test environment");
       }
       const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sessions-send-agent-"));
       const config: OpenClawConfig = {
-        tools: {
-          sessions: {
-            visibility: "all",
-          },
-          agentToAgent: {
-            enabled: true,
-          },
-        },
+        ...(tools ? { tools } : {}),
         agents: {
           list: [{ id: "main", default: true }, { id: "orion" }],
         },
