@@ -11649,6 +11649,18 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     );
     const proofUpload = uiE2eRealGateway.steps[proofUploadIndex];
     const realGatewayIndex = uiE2eRealGateway.steps.indexOf(realGatewayStep);
+    // Same-origin admission compares exact build IDs, including the build timestamp.
+    // Include private QA so media bootstrap cannot rebuild runtime behind the UI.
+    const realGatewayBuild = expectDefined(
+      uiE2eRealGateway.steps.find((step: WorkflowStep) => step.run === "pnpm build:ci-artifacts"),
+      "paired runtime and Control UI build",
+    );
+    expect(realGatewayBuild.if).toBeUndefined();
+    expect(realGatewayBuild["continue-on-error"]).toBeFalsy();
+    expect(realGatewayBuild.env).toEqual({ OPENCLAW_BUILD_PRIVATE_QA: "1" });
+    const realGatewayBuildIndex = uiE2eRealGateway.steps.indexOf(realGatewayBuild);
+    expect(realGatewayBuildIndex).toBeGreaterThan(uiE2eRealGateway.steps.indexOf(realGatewaySetup));
+    expect(realGatewayBuildIndex).toBeLessThan(realGatewayIndex);
     expect(realGatewayStep.env).toEqual({
       OPENCLAW_CAPTURE_UI_PROOF:
         "${{ github.event_name == 'workflow_dispatch' && inputs.capture_ui_proof && '1' || '0' }}",

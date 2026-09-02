@@ -2492,8 +2492,10 @@ jobs:
       - *cache_playwright_chromium
       - *install_playwright_chromium
 
-      - name: Build Control UI bundle for real-Gateway tests
-        run: pnpm ui:build
+      - name: Build runtime and Control UI artifacts for real-Gateway tests
+        env:
+          OPENCLAW_BUILD_PRIVATE_QA: "1"
+        run: pnpm build:ci-artifacts
 
       - name: Test Control UI suites with a real Gateway
         env:
