@@ -30,14 +30,22 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const TEST_GGUF_SHA256 = "b83633aa785344791618f2fddf131b010ea04912a60430760b070bad293f65bd";
 
 async function withHuggingFaceMetadataFixture(
-  endpoint: "manifest" | "tree",
-  run: (params: { cacheDir: string; setPadding: (padding: string) => void }) => Promise<void>,
+  endpoint: "manifest" | "file" | "tree",
+  run: (params: {
+    cacheDir: string;
+    setPadding: (target: "manifest" | "file" | "tree", padding: string) => void;
+    pathInfoBodies: unknown[];
+    requestedUrls: string[];
+  }) => Promise<void>,
 ): Promise<void> {
   const cacheDir = tempDirs.make(`llama-cpp-hf-${endpoint}-`);
   await fs.writeFile(path.join(cacheDir, "hf_owner_repo_model.gguf"), "GGUF");
   let padding = "x".repeat(1024 * 1024);
+  const pathInfoBodies: unknown[] = [];
+  const requestedUrls: string[] = [];
   const server = http.createServer((req, res) => {
     res.setHeader("content-type", "application/json");
+    requestedUrls.push(req.url ?? "");
     if (req.url?.startsWith("/v2/owner/repo/manifests/latest")) {
       res.end(
         JSON.stringify({
@@ -45,6 +53,20 @@ async function withHuggingFaceMetadataFixture(
           ...(endpoint === "manifest" ? { padding } : {}),
         }),
       );
+      return;
+    }
+    if (req.url?.startsWith("/api/models/owner/repo/paths-info/main")) {
+      const chunks: Buffer[] = [];
+      req.on("data", (chunk: Buffer) => chunks.push(chunk));
+      req.on("end", () => {
+        pathInfoBodies.push(JSON.parse(Buffer.concat(chunks).toString("utf8")));
+        res.end(
+          JSON.stringify([
+            { path: "model.gguf", size: 4, lfs: { oid: TEST_GGUF_SHA256 } },
+            ...(endpoint === "file" ? [padding] : []),
+          ]),
+        );
+      });
       return;
     }
     if (req.url?.startsWith("/api/models/owner/repo/tree/main")) {
@@ -76,7 +98,16 @@ async function withHuggingFaceMetadataFixture(
   });
   vi.stubGlobal("fetch", localFetch);
   try {
-    await run({ cacheDir, setPadding: (next) => (padding = next) });
+    await run({
+      cacheDir,
+      setPadding: (target, next) => {
+        if (target === endpoint) {
+          padding = next;
+        }
+      },
+      pathInfoBodies,
+      requestedUrls,
+    });
   } finally {
     vi.unstubAllGlobals();
   }
@@ -300,8 +331,8 @@ describe("managed llama-server", () => {
     ).rejects.toThrow("Run interactive llama.cpp setup or correct params.modelPath");
   });
 
-  it.each(["manifest", "tree"] as const)(
-    "bounds Hugging Face %s metadata while preserving a legitimate large response",
+  it.each(["manifest", "file"] as const)(
+    "bounds Hugging Face %s metadata while preserving a legitimate response",
     async (endpoint) => {
       await withHuggingFaceMetadataFixture(endpoint, async ({ cacheDir, setPadding }) => {
         await expect(
@@ -312,7 +343,7 @@ describe("managed llama-server", () => {
           }),
         ).resolves.toBe(path.join(cacheDir, "hf_owner_repo_model.gguf"));
 
-        setPadding("x".repeat(16 * 1024 * 1024 + 1));
+        setPadding(endpoint, "x".repeat(16 * 1024 * 1024 + 1));
         await expect(
           ensureLlamaCppModel({
             source: "hf:owner/repo",
@@ -320,11 +351,29 @@ describe("managed llama-server", () => {
             download: false,
           }),
         ).rejects.toThrow(
-          `llama.cpp Hugging Face ${endpoint}: JSON response exceeds 16777216 bytes`,
+          `llama.cpp Hugging Face ${endpoint === "manifest" ? "manifest" : "file metadata"}: JSON response exceeds 16777216 bytes`,
         );
       });
     },
   );
+
+  it("resolves a cached GGUF when unrelated repository tree metadata is oversized", async () => {
+    await withHuggingFaceMetadataFixture(
+      "tree",
+      async ({ cacheDir, setPadding, pathInfoBodies, requestedUrls }) => {
+        setPadding("tree", "x".repeat(16 * 1024 * 1024 + 1));
+        await expect(
+          ensureLlamaCppModel({
+            source: "hf:owner/repo",
+            cacheDir,
+            download: false,
+          }),
+        ).resolves.toBe(path.join(cacheDir, "hf_owner_repo_model.gguf"));
+        expect(pathInfoBodies).toEqual([{ paths: ["model.gguf"], expand: false }]);
+        expect(requestedUrls).not.toContain(expect.stringContaining("/tree/"));
+      },
+    );
+  });
 
   it("reports only facts observed from health, models, props, and metrics", async () => {
     const server = http.createServer((req, res) => {
