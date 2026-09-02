@@ -347,7 +347,9 @@ describe("OpenClaw native shell", () => {
       { path: "/dashboard/main/tasks/review", routeId: "dashboard" },
       { path: "/settings/agents/main/overview", routeId: "agents" },
       { path: "/settings/memory/dreams", routeId: "memory" },
-    ].flatMap((target) => ["", "/gateway"].map((basePath) => ({ ...target, basePath }))),
+    ].flatMap(({ path, routeId, search }) =>
+      ["", "/gateway"].map((basePath) => ({ path, routeId, search, basePath })),
+    ),
   )(
     "preserves native destination $basePath$path and acknowledges it",
     ({ path, routeId, search, basePath }) => {

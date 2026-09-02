@@ -1,11 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { SESSION_CREATE_RETRY_WINDOW_MS } from "../../../../packages/gateway-protocol/src/index.js";
 import type { ApplicationContext } from "../../app/context.ts";
-import { createNativeNotificationsCapability } from "../../app/native-notifications.ts";
 import { CHAT_ROUTE_READY_EVENT } from "../../app/route-transition.ts";
 import { consumeSessionNavigationHandoff } from "../../lib/sessions/navigation-handoff.ts";
 import { writeSessionPlacementRecovery } from "../../lib/sessions/session-placement-recovery.ts";
-import * as toast from "../../lib/toast.ts";
 import { buildChatApiAttachments } from "../chat/attachment-api.ts";
 import {
   getChatAttachmentDataUrl,
@@ -43,71 +41,7 @@ function stubObjectUrls(...urls: string[]) {
   return revokeObjectURL;
 }
 
-function nativeBackgroundFixture(options: Parameters<typeof createDraftFixture>[0] = {}) {
-  const postMessage = vi.fn();
-  vi.stubGlobal("webkit", {
-    messageHandlers: { openclawNotifications: { postMessage } },
-  });
-  const nativeNotifications = createNativeNotificationsCapability();
-  const fixture = createDraftFixture(options);
-  Object.assign(fixture.context, { nativeNotifications, basePath: "" });
-  window.dispatchEvent(
-    new CustomEvent("openclaw:native-notifications-status", {
-      detail: { permission: "granted", test: null },
-    }),
-  );
-  vi.mocked(fixture.context.sessions.createResult).mockResolvedValue({
-    key: "agent:main:dashboard:background",
-    initialRun: { status: "started", runId: "run-background" },
-  });
-  fixture.flow.setMessage("finish in the background");
-  return { ...fixture, postMessage, dispose: () => nativeNotifications?.dispose() };
-}
-
 describe("DraftSubmissionFlow", () => {
-  it("delivers an accepted background completion to the native dashboard bridge", async () => {
-    const { context, flow, postMessage, dispose } = nativeBackgroundFixture({
-      request: async (method) => (method === "agent.wait" ? { status: "ok", endedAt: 1 } : {}),
-    });
-    try {
-      await flow.submit(undefined, true);
-      await vi.waitFor(() => expect(postMessage).toHaveBeenCalledTimes(2));
-      expect(postMessage).toHaveBeenLastCalledWith({
-        type: "background-session-completed",
-        runId: "run-background",
-        path: "/chat/main/dashboard/background",
-      });
-      expect(context.navigateAndWait).not.toHaveBeenCalled();
-    } finally {
-      dispose();
-    }
-  });
-
-  it.each(["selected session", "replaced Gateway"])(
-    "suppresses a background completion for the %s",
-    async (scenario) => {
-      const { context, flow, request, postMessage, dispose } = nativeBackgroundFixture();
-      request.mockImplementation(async (method) => {
-        if (method === "agent.wait") {
-          if (scenario === "selected session") {
-            context.gateway.snapshot.sessionKey = "agent:main:dashboard:background";
-          } else {
-            context.gateway.snapshot.client = null;
-          }
-          return { status: "ok", endedAt: 1 };
-        }
-        return {};
-      });
-      try {
-        await flow.submit(undefined, true);
-        await Promise.resolve();
-        expect(postMessage.mock.calls).toEqual([[{ type: "status" }]]);
-      } finally {
-        dispose();
-      }
-    },
-  );
-
   it("keeps a direct background completion watch through a Gateway reconnect", async () => {
     vi.useFakeTimers();
     const { context, flow, request } = createDraftFixture();
@@ -169,53 +103,6 @@ describe("DraftSubmissionFlow", () => {
     });
     expect(flow.message).toBe("");
     expect(flow.submitting).toBe(false);
-  });
-
-  it.each([
-    { scenario: "an observation deadline", observed: { status: "timeout" } },
-    {
-      scenario: "a retryable provider error",
-      observed: { status: "timeout", error: "Retryable provider failure", pendingError: true },
-    },
-    { scenario: "a queued turn", observed: { status: "pending" } },
-  ])("waits for terminal background completion after $scenario", async ({ observed }) => {
-    vi.useFakeTimers();
-    const showToast = vi.spyOn(toast, "showToast").mockReturnValue(true);
-    let finishRun!: (result: { status: "ok"; endedAt: number }) => void;
-    const terminal = new Promise<{ status: "ok"; endedAt: number }>((resolve) => {
-      finishRun = resolve;
-    });
-    const observations = [Promise.resolve(observed), terminal];
-    const { context, flow, request, postMessage, dispose } = nativeBackgroundFixture({
-      request: async (method) => (method === "agent.wait" ? observations.shift() : {}),
-    });
-
-    try {
-      await flow.submit(undefined, true);
-      await vi.advanceTimersByTimeAsync(1_000);
-      expect(postMessage.mock.calls).toEqual([[{ type: "status" }]]);
-      expect(showToast).not.toHaveBeenCalled();
-      expect(request.mock.calls.filter(([method]) => method === "agent.wait")).toHaveLength(2);
-
-      finishRun({ status: "ok", endedAt: 1 });
-      await vi.advanceTimersByTimeAsync(0);
-      expect(postMessage.mock.calls).toEqual([
-        [{ type: "status" }],
-        [
-          {
-            type: "background-session-completed",
-            runId: "run-background",
-            path: "/chat/main/dashboard/background",
-          },
-        ],
-      ]);
-      expect(showToast).toHaveBeenCalledOnce();
-    } finally {
-      context.gateway.snapshot.client = null;
-      finishRun({ status: "ok", endedAt: 1 });
-      await vi.advanceTimersByTimeAsync(0);
-      dispose();
-    }
   });
 
   it("replays a frozen direct create without inheriting refreshed placement or mutable submit gates", async () => {

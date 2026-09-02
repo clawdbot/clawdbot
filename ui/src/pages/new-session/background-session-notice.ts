@@ -53,9 +53,10 @@ async function notifyWhenBackgroundSessionEnds(params: {
       if (observed.status === "pending" || observed.pendingError === true) {
         await delayRetry();
       } else if (observationalTimeout) {
-        const placement = params.context.placementStartup.get(params.key);
-        if (placement?.phase === "failed") {
-          result = { status: "error", error: placement.error };
+        // Startup display errors can mean unconfirmed delivery, not a failed run.
+        const initialTurn = params.context.placementStartup.get(params.key)?.initialTurn;
+        if (initialTurn?.sendState === "failed" && initialTurn.sendRunId === params.runId) {
+          result = { status: "error", error: initialTurn.sendError };
         } else {
           // A wait deadline is not a run outcome, even after startup custody retires.
           await delayRetry();
