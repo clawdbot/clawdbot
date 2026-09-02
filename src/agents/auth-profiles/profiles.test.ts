@@ -32,10 +32,7 @@ import {
   upsertAuthProfileAfterLoginWithLockOrThrow,
   upsertAuthProfileWithLock,
 } from "./profiles.js";
-import {
-  getRuntimeExternalCliProfileIds,
-  getRuntimeLocalProfileIds,
-} from "./runtime-external-profile-references.js";
+import { getRuntimeExternalCliProfileIds } from "./runtime-external-profile-references.js";
 import {
   clearRuntimeAuthProfileStoreSnapshots,
   getRuntimeAuthProfileStoreSnapshotCore as getInternalRuntimeAuthProfileStoreSnapshot,
@@ -1676,11 +1673,13 @@ describe("promoteAuthProfileInOrder", () => {
       };
       saveAuthProfileStore(initialStore, agentDir);
 
-      const removedStore = await removeProviderAuthProfilesWithLock({
-        agentDir,
-        provider: "openrouter",
-        profileIds: ["openrouter:oauth"],
-      });
+      const removedStore: RuntimeAuthProfileStore | null = await removeProviderAuthProfilesWithLock(
+        {
+          agentDir,
+          provider: "openrouter",
+          profileIds: ["openrouter:oauth"],
+        },
+      );
 
       expect(loadAuthProfileStoreForRuntime(agentDir)).toMatchObject({
         profiles: { "openrouter:api-key": expect.any(Object) },
@@ -1690,9 +1689,7 @@ describe("promoteAuthProfileInOrder", () => {
       expect(loadAuthProfileStoreForRuntime(agentDir).profiles["openrouter:oauth"]).toBeUndefined();
       expect(loadAuthProfileStoreForRuntime(agentDir).lastGood).toBeUndefined();
       expect(removedStore?.runtimePersistedProfileIds ?? []).not.toContain("openrouter:oauth");
-      expect(removedStore ? getRuntimeLocalProfileIds(removedStore) : []).not.toContain(
-        "openrouter:oauth",
-      );
+      expect(removedStore?.runtimeLocalProfileIds ?? []).not.toContain("openrouter:oauth");
       expect(removedStore?.runtimeExternalProfileIds ?? []).not.toContain("openrouter:oauth");
       expect(removedStore ? getRuntimeExternalCliProfileIds(removedStore) : []).not.toContain(
         "openrouter:oauth",
