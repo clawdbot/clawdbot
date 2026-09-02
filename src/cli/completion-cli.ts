@@ -399,6 +399,10 @@ _${rootCmd}_completion() {
     local cur opts command_path candidate_path value_options word flag i cword remaining_line word_prefix
     local choice_flag choice_prefix choice_completion_prefix short_group short_flag short_index
     local -a words=()
+    # Before Bash 4.3, COMP_POINT is a byte offset; string spans must use the same units.
+    if ((BASH_VERSINFO[0] < 4 || (BASH_VERSINFO[0] == 4 && BASH_VERSINFO[1] < 3))); then
+        local LC_ALL=C
+    fi
     COMPREPLY=()
     remaining_line="\${COMP_LINE}"
     # Rejoin '=' and ':' wordbreaks, preserving redirections and whitespace boundaries.
@@ -415,6 +419,8 @@ _${rootCmd}_completion() {
     done
     cword=$((\${#words[@]} - 1))
     cur="\${words[cword]}"
+    # COMP_WORDS includes text after the cursor; only the prefix participates in completion.
+    cur="\${cur:0:\${#cur} + COMP_POINT - \${#COMP_LINE} + \${#remaining_line}}"
     word_prefix="\${cur%"$2"}"
     opts="${root.completions.join(" ")}"
     value_options="${root.valueOptions.join(" ")}"

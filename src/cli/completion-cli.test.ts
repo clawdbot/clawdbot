@@ -5,9 +5,11 @@ import os from "node:os";
 import path from "node:path";
 import { Command, Option } from "commander";
 import { afterAll, describe, expect, it } from "vitest";
-import { getCompletionScript, registerCompletionCli } from "./completion-cli.js";
+import { getCompletionScript } from "./completion-cli.js";
 import {
   createAliasedCompletionProgram,
+  createCompletionProgram,
+  createDocumentedCompletionProgram,
   itWithFish,
   itWithPowerShell,
   PowerShellCompletionRunner,
@@ -21,39 +23,6 @@ const powerShellCompletion = new PowerShellCompletionRunner();
 afterAll(async () => {
   await powerShellCompletion.close();
 });
-
-function createCompletionProgram(): Command {
-  const program = new Command();
-  program.name("openclaw");
-  program.description("CLI root");
-  program.option("-v, --verbose", "Verbose output");
-  program.option(
-    "--status-json",
-    "Output JSON (alias for `models status --json`) in $OPENCLAW_STATE_DIR",
-  );
-
-  const gateway = program.command("gateway").description("Gateway commands");
-  gateway.option("--force", "Force the action");
-  gateway.option("-t, --token <token>", "Gateway token");
-
-  gateway.command("status").description("Show gateway status").option("--json", "JSON output");
-  gateway.command("restart").description("Restart gateway");
-  program
-    .command("agent")
-    .description("Agent commands")
-    .option("--verbose <on|off>", "Set verbosity");
-  const sessions = program.command("sessions").description("Session commands");
-  sessions.option("--verbose", "Verbose output");
-  sessions.command("cleanup").description("Clean sessions").option("--dry-run", "Preview cleanup");
-
-  return program;
-}
-
-function createDocumentedCompletionProgram(): Command {
-  const program = createCompletionProgram();
-  registerCompletionCli(program);
-  return program;
-}
 
 function createOptionalChoiceCompletionProgram(): Command {
   const program = new Command().name("openclaw");
@@ -749,55 +718,6 @@ _openclaw_root_completion
     expect(runGeneratedBashCompletion(createDocumentedCompletionProgram(), words)).toEqual(
       expected,
     );
-  });
-
-  it.skipIf(process.platform === "win32").each([
-    {
-      line: "openclaw completion --shell=",
-      words: ["openclaw", "completion", "--shell", "="],
-      word: "",
-      expected: ["zsh", "bash", "powershell", "fish"],
-    },
-    {
-      line: "openclaw --profile=gateway completion --shell f",
-      words: ["openclaw", "--profile", "=", "gateway", "completion", "--shell", "f"],
-      word: "f",
-      expected: ["fish"],
-    },
-    {
-      line: "openclaw completion --shell=f",
-      words: ["openclaw", "completion", "--shell=f"],
-      word: "f",
-      expected: ["fish"],
-    },
-    {
-      line: "openclaw gateway --token = status --j",
-      words: ["openclaw", "gateway", "--token", "=", "status", "--j"],
-      word: "--j",
-      expected: ["--json"],
-    },
-    {
-      line: "openclaw completion>/dev/null --shell f",
-      words: ["openclaw", "completion", ">", "/dev/null", "--shell", "f"],
-      word: "f",
-      expected: ["fish"],
-    },
-    {
-      line: "openclaw gateway --token=prefix:status --f",
-      words: ["openclaw", "gateway", "--token", "=", "prefix", ":", "status", "--f"],
-      word: "--f",
-      expected: ["--force"],
-    },
-    {
-      line: "openclaw gateway --token=foo==status --f",
-      words: ["openclaw", "gateway", "--token", "=", "foo", "==", "status", "--f"],
-      word: "--f",
-      expected: ["--force"],
-    },
-  ])("respects native Bash word boundaries in $line", ({ line, words, word, expected }) => {
-    const program = createDocumentedCompletionProgram().option("--profile <name>", "Profile");
-
-    expect(runGeneratedBashCompletion(program, words, { line, word })).toEqual(expected);
   });
 
   it.skipIf(process.platform === "win32").each([
