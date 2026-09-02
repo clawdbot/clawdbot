@@ -333,7 +333,7 @@ export function createReplyDelivery({ params, state, log }: ReplyDeliveryParams)
         pendingToolMedia?.attachments?.[index] ?? {},
       ]),
     );
-    const blockPayload =
+    const blockPayload: BlockReplyPayload =
       autoDeliveryMediaUrls.length === 0
         ? withToolMedia
         : markReplyPayloadForSourceSuppressionDelivery({
