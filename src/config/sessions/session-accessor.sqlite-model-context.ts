@@ -12,6 +12,7 @@ import {
 } from "../../infra/kysely-sync.js";
 import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
+import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import type {
   SessionTranscriptReadScope,
   TranscriptEvent,
@@ -92,87 +93,98 @@ function withTranscriptContextSnapshot<T>(
     (database) =>
       runSqliteDeferredTransactionSync(
         database.db,
-        () => {
-          const db = getSessionKysely(database.db);
-          const fence = resolveSqliteSessionTranscriptReadFence({ database, ...resolved });
-          const base = db
-            .selectFrom("transcript_events")
-            .where("session_id", "=", resolved.sessionId)
-            .$if(fence !== undefined, (query) => query.where("seq", "<", fence!.beforeRawSeq));
-          const header = executeSqliteQueryTakeFirstSync(
-            database.db,
-            base
-              .select("event_json")
-              .where(
-                /* kysely-allow-raw: the header discriminator is owned by the transcript codec. */
-                sql<string>`json_extract(event_json, '$.type')`,
-                "=",
-                "session",
-              )
-              .orderBy("seq", "asc")
-              .limit(1),
-          );
-          const tree = scanSessionTranscriptTree(
-            (function* () {
-              for (const row of iterateSqliteQuerySync(
-                database.db,
-                base
-                  .select((eb) => [
-                    "seq",
-                    projectModelContextNavigationSql(eb.ref("event_json")).as("navigation_json"),
-                  ])
-                  .orderBy("seq", "asc"),
-              )) {
-                // Only navigation crosses into JavaScript before the canonical context is selected.
-                // SAFETY: SQL preserves entry discriminants and replaces payloads with readable empty bodies.
-                yield { ...(JSON.parse(row.navigation_json) as SessionTreeEntry), seq: row.seq };
-              }
-            })(),
-          );
-          // Navigation entries belong to this snapshot; normalize ancestry without another copy.
-          const entries = selectSessionTranscriptTreePathNodes(tree, tree.leafId).map(
-            ({ entry, parentId }) => {
-              entry.parentId = parentId;
-              return entry;
-            },
-          );
-          const readPayload = prepareSqliteQuerySync<
-            { seq: number; omitCheckpoint: number },
-            { event_json: string }
-          >(database.db, (parameter) =>
-            base
-              .select((eb) =>
-                view === "model-context"
-                  ? projectModelContextEventSql(
-                      eb.ref("event_json"),
-                      parameter((row) => row.omitCheckpoint),
-                    ).as("event_json")
-                  : eb.ref("event_json").as("event_json"),
-              )
-              .where(
-                "seq",
-                "=",
-                parameter((row) => row.seq),
-              ),
-          );
-          return read({
-            header: header ? JSON.parse(header.event_json) : undefined,
-            entries,
-            readEntry: (entry, omitCheckpoint = false) => {
-              const row = readPayload({ seq: entry.seq, omitCheckpoint: omitCheckpoint ? 1 : 0 })
-                .rows[0];
-              return {
-                // SAFETY: The canonical payload is selected by its navigation row in this snapshot.
-                ...(JSON.parse(row!.event_json) as SessionTreeEntry),
-                parentId: entry.parentId,
-              };
-            },
-          });
-        },
+        () => readTranscriptContextSnapshotInTransaction(database, resolved, view, read),
         { operationLabel: "session context snapshot read" },
       ),
     toDatabaseOptions(resolved),
     { throwOnMissingTable: true },
   );
   return result;
+}
+
+export function readTranscriptContextSnapshotInTransaction<T>(
+  database: Pick<OpenClawAgentDatabase, "db" | "path">,
+  resolved: ReturnType<typeof resolveSqliteTranscriptReadScope>,
+  view: "model-context" | "transcript",
+  read: (snapshot: TranscriptContextSnapshot) => T,
+  selectedParentId?: string | null,
+): T {
+  const db = getSessionKysely(database.db);
+  const fence =
+    selectedParentId === undefined
+      ? resolveSqliteSessionTranscriptReadFence({ database, ...resolved })
+      : undefined;
+  const base = db
+    .selectFrom("transcript_events")
+    .where("session_id", "=", resolved.sessionId)
+    .$if(fence !== undefined, (query) => query.where("seq", "<", fence!.beforeRawSeq));
+  const header = executeSqliteQueryTakeFirstSync(
+    database.db,
+    base
+      .select("event_json")
+      .where(
+        /* kysely-allow-raw: the header discriminator is owned by the transcript codec. */
+        sql<string>`json_extract(event_json, '$.type')`,
+        "=",
+        "session",
+      )
+      .orderBy("seq", "asc")
+      .limit(1),
+  );
+  const tree = scanSessionTranscriptTree(
+    (function* () {
+      for (const row of iterateSqliteQuerySync(
+        database.db,
+        base
+          .select((eb) => [
+            "seq",
+            projectModelContextNavigationSql(eb.ref("event_json")).as("navigation_json"),
+          ])
+          .orderBy("seq", "asc"),
+      )) {
+        // Only navigation crosses into JavaScript before the canonical context is selected.
+        // SAFETY: SQL preserves entry discriminants and replaces payloads with readable empty bodies.
+        yield { ...(JSON.parse(row.navigation_json) as SessionTreeEntry), seq: row.seq };
+      }
+    })(),
+  );
+  // Navigation entries belong to this snapshot; normalize ancestry without another copy.
+  const entries = selectSessionTranscriptTreePathNodes(
+    tree,
+    selectedParentId === undefined ? tree.leafId : selectedParentId,
+  ).map(({ entry, parentId }) => {
+    entry.parentId = parentId;
+    return entry;
+  });
+  const readPayload = prepareSqliteQuerySync<
+    { seq: number; omitCheckpoint: number },
+    { event_json: string }
+  >(database.db, (parameter) =>
+    base
+      .select((eb) =>
+        view === "model-context"
+          ? projectModelContextEventSql(
+              eb.ref("event_json"),
+              parameter((row) => row.omitCheckpoint),
+            ).as("event_json")
+          : eb.ref("event_json").as("event_json"),
+      )
+      .where(
+        "seq",
+        "=",
+        parameter((row) => row.seq),
+      ),
+  );
+  return read({
+    header: header ? JSON.parse(header.event_json) : undefined,
+    entries,
+    readEntry: (entry, omitCheckpoint = false) => {
+      const row = readPayload({ seq: entry.seq, omitCheckpoint: omitCheckpoint ? 1 : 0 }).rows[0];
+      return {
+        // SAFETY: The canonical payload is selected by its navigation row in this snapshot.
+        ...(JSON.parse(row!.event_json) as SessionTreeEntry),
+        parentId: entry.parentId,
+      };
+    },
+  });
 }

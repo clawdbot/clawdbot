@@ -222,6 +222,7 @@ export async function claimPendingAgentQuestionAnswer(params: {
   sessionKey?: string;
   text: string;
   persist?: () => Promise<void>;
+  requiresSteering?: boolean;
 }): Promise<boolean> {
   const sessionKey = params.sessionKey?.trim();
   const state = sessionKey ? pendingAgentQuestions.get(sessionKey) : undefined;
@@ -231,6 +232,12 @@ export async function claimPendingAgentQuestionAnswer(params: {
   if (state.kind === "secret") {
     state.resolving = true;
     return state.settle(params.text);
+  }
+  // Answer-only bridges cannot deliver changed context. Release those replies
+  // to ordinary steering, but never let secret answers enter the transcript.
+  if (params.requiresSteering) {
+    await cancelPendingAgentQuestionForSession({ sessionKey, resolvedBy: "context-change" });
+    return false;
   }
   state.resolving = true;
   const answers = buildAgentHarnessUserInputAnswers(state.questions, params.text);

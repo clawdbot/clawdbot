@@ -96,6 +96,7 @@ function buildChatSendMessageContext(params: {
   mediaPathOffloadWorkspaceDir?: string;
   originatingRoute: AdmittedChatSend["originatingRoute"];
   parsedMessage: string;
+  workContext?: string | null;
   sessionKey: string;
   suppressCommandInterpretation: boolean;
   systemInputProvenance?: InputProvenance;
@@ -134,6 +135,7 @@ function buildChatSendMessageContext(params: {
     BodyForAgent: messageForAgent,
     BodyForCommands: commandBody,
     RawBody: params.parsedMessage,
+    WorkContext: params.workContext,
     CommandBody: commandBody,
     InputProvenance: params.systemInputProvenance,
     SessionKey: params.sessionKey,
@@ -259,6 +261,7 @@ export function prepareChatSendUserTurn(params: {
     mediaPathOffloadWorkspaceDir: attachments.mediaPathOffloadWorkspaceDir,
     originatingRoute: admission.originatingRoute,
     parsedMessage: attachments.parsedMessage,
+    workContext: userTurn.baseInput.workContext,
     sessionKey: session.sessionKey,
     suppressCommandInterpretation: request.suppressCommandInterpretation,
     systemInputProvenance: request.systemInputProvenance,

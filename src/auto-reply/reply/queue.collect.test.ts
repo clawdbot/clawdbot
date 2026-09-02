@@ -1817,6 +1817,28 @@ describe("followup queue collect routing", () => {
     expect(calls.map((call) => call.prompt)).toEqual(["normal", "revise proposal"]);
   });
 
+  it("preserves separate captured work selections and clear when collect mode drains", async () => {
+    const { key, calls, done, runFollowup, settings } = createQueueCase(
+      `test-collect-work-context-${Date.now()}`,
+      {},
+      3,
+    );
+    const snapshots = ["selection A", "selection B", null];
+    for (const [index, workContext] of snapshots.entries()) {
+      const run = createRun({ prompt: `user ${index}` });
+      run.userTurnTranscriptRecorder = createUserTurnTranscriptRecorder({
+        input: { text: run.prompt, workContext },
+        target: () => undefined,
+      });
+      enqueueFollowupRun(key, run, settings);
+    }
+    await drainRecordedQueue(key, runFollowup, done);
+    expect(calls.map((call) => call.prompt)).toEqual(["user 0", "user 1", "user 2"]);
+    expect(
+      calls.map((call) => call.userTurnTranscriptRecorder?.message?.["__openclaw"]?.workContext),
+    ).toEqual(snapshots);
+  });
+
   it("can prepend priority followups before already queued items", () => {
     const key = `test-priority-followup-front-${Date.now()}`;
     const settings = createQueueSettings({ mode: "followup" });

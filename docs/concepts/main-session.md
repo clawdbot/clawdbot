@@ -41,13 +41,26 @@ The dock uses your real Home conversation, including its history, tools,
 approvals, and message queue. **Open Home full page** opens that conversation
 in the main area and temporarily hides its dock to avoid duplicate composers.
 
-Expand **Working on** to inspect the small reference snapshot accompanying your
-next message: the current page and, when available, the work session, workspace,
-and visible file path. Select text in the work area and use **Attach selected
-text** to include a bounded excerpt. Use **Remove work context** to send without
-the snapshot. It becomes part of the sent message and remains unchanged through
-queueing and retries; slash commands do not include it. References do not grant
-the Home agent additional access to another agent's sessions or files.
+Expand **Working on** to inspect the reference snapshot captured when you send:
+the current page and, when available, the work session, workspace, and visible
+file path. Select text in the work area and use **Attach selected text** to
+include a bounded excerpt.
+
+Home sends this bounded, quoted reference separately from your message, keeping
+the visible user message free of the snapshot. The first snapshot and any changed
+snapshot are retained as hidden model context. A supplied snapshot is not
+repeated while that exact snapshot remains the effective retained model context.
+Navigating between pages does not send a turn, and no separate assistant
+acknowledgment is needed for a context update.
+
+Use **Remove work context** to send a context-clear update on your next sent turn.
+Queueing, retrying, or editing a queued message keeps its originally captured
+snapshot rather than capturing the page again. Slash commands do not include work
+context. If a reset or compaction loses the exact retained snapshot, Home
+reestablishes it on the next turn that supplies it.
+
+Work context is quoted reference data, not instructions or permission to access
+another agent's sessions or files.
 
 ## What flows into the main session
 

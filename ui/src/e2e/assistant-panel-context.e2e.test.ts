@@ -83,7 +83,9 @@ suite.define(() => {
         await composer.press("Enter");
         const sent = await gateway.waitForRequest("chat.send");
         expect(sent.params).toMatchObject({
-          message: expect.stringContaining('"title":"Renamed workspace"'),
+          sessionKey: home.key,
+          message: "Review the current work",
+          workContext: expect.stringContaining('"title":"Renamed workspace"'),
         });
         expect(await gateway.getRequests("chat.send")).toHaveLength(1);
       },

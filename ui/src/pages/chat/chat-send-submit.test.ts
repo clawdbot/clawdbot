@@ -569,12 +569,8 @@ describe("handleSendChat browser annotation context", () => {
         pendingSettingsPatches: { "agent:main": settingsPatch.promise },
       });
 
-      // Annotation context is prepended by the attachment path; Home work context
-      // trails the message so session titles derive from what the person asked.
       const expected =
-        source === "home"
-          ? "Use the marked area\n\nStable browser context"
-          : "Stable browser context\n\nUse the marked area";
+        source === "home" ? "Use the marked area" : "Stable browser context\n\nUse the marked area";
 
       const send = handleSendChat(host);
       await vi.waitFor(() => expect(host.chatQueue).toHaveLength(1));
@@ -598,6 +594,11 @@ describe("handleSendChat browser annotation context", () => {
         expected,
         expected,
       ]);
+      expect(sendRequest.mock.calls.map(([params]) => params.workContext)).toEqual(
+        source === "home"
+          ? ["Stable browser context", "Stable browser context"]
+          : [undefined, undefined],
+      );
     },
   );
 });
@@ -613,13 +614,12 @@ describe("Home work context admission", () => {
       });
       const host = makeChatHost({
         chatMessage: "Explain this task",
-        getWorkContext: () => (included ? text : undefined),
+        getWorkContext: () => (included ? text : null),
         requestHandlers: { "chat.send": { status: "started" } },
       });
       await handleSendChat(host);
-      expect(findChatSendPayload(host).message).toBe(
-        included ? `Explain this task\n\n${text}` : "Explain this task",
-      );
+      expect(findChatSendPayload(host).message).toBe("Explain this task");
+      expect(findChatSendPayload(host).workContext).toBe(included ? text : null);
       expect(host.chatLocalInputHistoryBySession[host.sessionKey]?.[0]?.text).toBe(
         "Explain this task",
       );

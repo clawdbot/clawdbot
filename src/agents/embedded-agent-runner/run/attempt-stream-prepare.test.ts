@@ -8,7 +8,14 @@ import {
   projectNestedToolActivityForHooks,
   type NestedToolActivity,
 } from "../../../sessions/nested-tool-activity.js";
+import { createUserTurnTranscriptRecorder } from "../../../sessions/user-turn-transcript.js";
+import { createTestUserTurnTranscriptTarget } from "../../../sessions/user-turn-transcript.test-support.js";
+import { createWorkContextMessage } from "../../../sessions/work-context.js";
 import { buildToolLifecycleErrorResult } from "../../embedded-agent-tool-results.js";
+import {
+  registerPendingAgentQuestion,
+  runAgentHarnessGatewayQuestion,
+} from "../../harness/gateway-question.js";
 import {
   isAgentRunRestartAbortReason,
   isAgentRunSupersededAbortReason,
@@ -64,6 +71,8 @@ function prepareCatalogExecutor(
     markExternalAbort?: () => void;
     toolProgressDetail?: "explain" | "raw";
     onAgentEvent?: (event: { stream: string; data: Record<string, unknown> }) => void;
+    sessionManager?: SessionManager;
+    steer?: Parameters<typeof prepareEmbeddedAttemptStream>[0]["activeSession"]["steer"];
   },
 ) {
   const runAbortController = options?.runAbortController ?? new AbortController();
@@ -78,9 +87,11 @@ function prepareCatalogExecutor(
       onAgentEvent: options?.onAgentEvent,
     } as never,
     activeSession: {
-      agent: {},
+      agent: { state: { messages: [] } },
+      messages: [],
       isStreaming: false,
-      sessionManager: SessionManager.inMemory(),
+      sessionManager: options?.sessionManager ?? SessionManager.inMemory(),
+      steer: options?.steer,
       subscribe: () => () => {},
     } as never,
     hookRunner: undefined as never,
@@ -144,6 +155,121 @@ describe("prepareEmbeddedAttemptStream", () => {
     });
     mocks.runBeforeFinalizeHook.mockResolvedValue({ action: "continue" });
   });
+
+  it.each(
+    [
+      { name: "changed", previous: "selection A", workContext: "selection B", changed: true },
+      { name: "cleared", previous: "selection A", workContext: null, changed: true },
+      { name: "unchanged", previous: "selection A", workContext: "selection A", changed: false },
+      { name: "null-equal", previous: null, workContext: null, changed: false },
+      { name: "absent", previous: "selection A", workContext: undefined, changed: false },
+      {
+        name: "secret-with-changed",
+        previous: "selection A",
+        workContext: "selection B",
+        changed: false,
+      },
+    ].flatMap((scenario) => ["queue", "claim"].map((route) => ({ scenario, route }))),
+  )(
+    "routes $scenario.name context through the $route entry point exactly once",
+    async ({ scenario, route }) => {
+      const sessionKey = "agent:main:context-handoff";
+      const sessionManager = SessionManager.inMemory();
+      sessionManager.appendMessage(createWorkContextMessage(scenario.previous, 1));
+      const steer = vi.fn(async () => undefined);
+      const prepared = prepareCatalogExecutor([], { sessionKey, sessionManager, steer });
+      const text = "Continue";
+      const recorder = createUserTurnTranscriptRecorder({
+        input: { text, workContext: scenario.workContext },
+        target: createTestUserTurnTranscriptTarget({ sessionKey }),
+      });
+      const persist = vi.spyOn(recorder, "persistApproved").mockResolvedValue(undefined);
+      const onQueueAccepted = vi.fn();
+      const options = {
+        isInboundUserMessage: true,
+        userTurnTranscriptRecorder: recorder,
+        onQueueAccepted,
+      };
+      const isSecret = scenario.name === "secret-with-changed";
+      const questions = [
+        {
+          id: "answer",
+          header: "Answer",
+          question: "Continue?",
+          isOther: true,
+          isSecret,
+          options: [],
+        },
+      ];
+      const gatewayCall = vi.fn(async () => undefined);
+      const controller = new AbortController();
+      const reservation = isSecret
+        ? undefined
+        : registerPendingAgentQuestion({
+            questionId: "ask_77777777777777777777777777777777",
+            sessionKey,
+            questions,
+            gatewayCall,
+            answer: Promise.resolve({ status: "cancelled" }),
+          });
+      const secretAnswer = isSecret
+        ? runAgentHarnessGatewayQuestion({
+            questions,
+            sessionKey,
+            timeoutMs: 60_000,
+            gatewayCall,
+            delivery: { onBlockReply: vi.fn() },
+            signal: controller.signal,
+          })
+        : undefined;
+      try {
+        if (route === "claim") {
+          await expect(
+            prepared.queueHandle.claimPendingUserInputAnswer?.(text, options),
+          ).resolves.toBe(!scenario.changed);
+        } else {
+          await prepared.queueHandle.queueMessage(text, options);
+          expect(onQueueAccepted).toHaveBeenCalledExactlyOnceWith(true);
+        }
+        expect(steer).toHaveBeenCalledTimes(scenario.changed && route === "queue" ? 1 : 0);
+        if (scenario.changed && route === "queue") {
+          expect(steer.mock.calls[0]).toEqual([
+            text,
+            undefined,
+            recorder,
+            undefined,
+            undefined,
+            undefined,
+            expect.any(Function),
+          ]);
+        }
+        expect(persist).toHaveBeenCalledTimes(scenario.changed || isSecret ? 0 : 1);
+        if (isSecret) {
+          await expect(secretAnswer).resolves.toEqual({
+            status: "answered",
+            answers: { answers: { answer: [text] } },
+          });
+          expect(gatewayCall).not.toHaveBeenCalled();
+        } else {
+          expect(gatewayCall).toHaveBeenCalledExactlyOnceWith(
+            "question.resolve",
+            expect.any(Object),
+            expect.objectContaining(
+              scenario.changed
+                ? { cancel: true, resolvedBy: "context-change" }
+                : { answers: { answers: { answer: [text] } } },
+            ),
+          );
+        }
+      } finally {
+        reservation?.dispose();
+        controller.abort();
+        await secretAnswer;
+        prepared.stopAcceptingSteerMessages();
+        ACTIVE_EMBEDDED_RUNS.clear();
+      }
+    },
+  );
 
   it.each([
     [undefined, "check git status"],

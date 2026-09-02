@@ -152,7 +152,7 @@ export class OpenClawHomeSession extends OpenClawLightDomElement {
           .active=${true}
           .compact=${true}
           .narrow=${true}
-          .workContext=${this.includeContext ? text : undefined}
+          .workContext=${this.includeContext ? text : null}
         ></openclaw-chat-pane>`,
       )}
     `;

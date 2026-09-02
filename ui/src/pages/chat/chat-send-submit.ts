@@ -116,12 +116,14 @@ function chatSubmitKey(
   kind: "detached" | "local" | "message" | "queued-edit" | "goal",
   message: string,
   attachments: ChatAttachment[],
+  workContext?: string | null,
 ): string {
   return JSON.stringify([
     kind,
     host.sessionKey,
     message.trim(),
     attachments.map(attachmentSubmitSignature),
+    ...(workContext !== undefined ? [workContext] : []),
   ]);
 }
 
@@ -512,19 +514,17 @@ export async function handleSendChat(
   // Ambient work context is only for a new model message, never a command, Goal,
   // or queued-row edit (which already contains its original frozen context).
   const workContext =
-    !intent && !isInlineEditSubmission && !userMessage.startsWith("/")
-      ? host.getWorkContext?.()
-      : undefined;
-  // The person's words lead. Session titles are derived from the first user
-  // message, so a leading reference block would title the conversation after
-  // the snapshot instead of what was actually asked.
-  const effectiveMessage = workContext ? `${quotedMessage}\n\n${workContext}` : quotedMessage;
+    intent || userMessage.startsWith("/")
+      ? undefined
+      : isInlineEditSubmission
+        ? inlineEdit.source.workContext
+        : host.getWorkContext?.();
 
   const refreshSessions = Boolean(intent) || isChatResetCommand(message);
   // A row edit and a composer send may intentionally carry the same payload.
   // Keep their guards independent so submitting one cannot suppress the other.
   const submitKind = requestedEditId ? "queued-edit" : intent ? "goal" : "message";
-  const submitKey = chatSubmitKey(host, submitKind, effectiveMessage, attachmentsToSend);
+  const submitKey = chatSubmitKey(host, submitKind, quotedMessage, attachmentsToSend, workContext);
   let accepted = false;
   const submitMessage = async () => {
     if (host.chatLoading) {
@@ -584,7 +584,7 @@ export async function handleSendChat(
       requestedEditId && resumedEditCandidate?.id === requestedEditId ? resumedEditCandidate : null;
     const submission = createPendingSendMessage(
       host,
-      effectiveMessage,
+      quotedMessage,
       deliveredAttachments.length ? deliveredAttachments : undefined,
       refreshSessions,
       submittedAtMs,
@@ -599,6 +599,9 @@ export async function handleSendChat(
       return;
     }
     let queued = submission.item;
+    if (workContext !== undefined) {
+      queued.workContext = workContext;
+    }
     if (queued.attachments?.length) {
       const payload = await prepareOutboxPayload(host, queued);
       const currentEdit = activeQueuedMessageEdit(host);
@@ -737,7 +740,7 @@ function prependReplyQuote(
   message: string,
   replyTarget: NonNullable<ChatHost["chatReplyTarget"]>,
 ): string {
-  const label = escapeMarkdownInline(replyTarget.senderLabel ?? "User");
+  const label = (replyTarget.senderLabel ?? "User").replace(/([\\`*_{}[\]()#+\-.!|>])/g, "\\$1");
   const text = replyTarget.text.trim();
   if (!text.includes("\n")) {
     return `> **${label}:** ${text}\n\n${message}`;
@@ -747,8 +750,4 @@ function prependReplyQuote(
     .map((line) => `> ${line}`)
     .join("\n");
   return `> **${label}:**\n${quoted}\n\n${message}`;
-}
-
-function escapeMarkdownInline(value: string): string {
-  return value.replace(/([\\`*_{}[\]()#+\-.!|>])/g, "\\$1");
 }

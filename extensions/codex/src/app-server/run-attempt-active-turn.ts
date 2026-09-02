@@ -7,6 +7,7 @@ import {
   resolveAttemptFsWorkspaceOnly,
   setActiveEmbeddedRun,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { resolveWorkContextMessage } from "openclaw/plugin-sdk/codex-session-transcript-runtime";
 import { getAgentScopedMediaLocalRoots } from "openclaw/plugin-sdk/media-local-roots";
 import { hasPromptImageInput } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { terminateCodexBackgroundTerminals } from "./attempt-client-cleanup.js";
@@ -318,6 +319,11 @@ export function activateCodexAttemptTurn(
     requestTimeoutMs: connection.appServer.requestTimeoutMs,
     signal: runAbortController.signal,
     assertActive: assertSteeringActive,
+    additionalContext: state.additionalContext,
+    workContextMessage: resolveWorkContextMessage(
+      context.historyState.messages,
+      runtime.runtimeParams.userTurnTranscriptRecorder?.message,
+    ),
     prepareMessage: async (text, options) => {
       const result = await detectAndLoadAgentHarnessPromptImages({
         ...imageContext,
@@ -385,6 +391,7 @@ export function activateCodexAttemptTurn(
     return await claimPendingAgentQuestionAnswer({
       sessionKey: params.sessionKey ?? params.sessionId,
       text,
+      requiresSteering: activeSteeringQueue.hasWorkContextChange(optionsLocal),
       persist: optionsLocal.userTurnTranscriptRecorder
         ? async () => {
             await optionsLocal.userTurnTranscriptRecorder?.persistApproved();

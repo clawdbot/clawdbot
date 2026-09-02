@@ -18,6 +18,7 @@ import type {
   CodexServerNotification,
   CodexDynamicToolCallParams,
   CodexDynamicToolCallResponse,
+  CodexTurnStartParams,
 } from "./protocol.js";
 import type { CodexAttemptResources } from "./run-attempt-resources.js";
 import { createCodexDynamicToolExecutionRegistry } from "./run-attempt-tools.js";
@@ -36,6 +37,8 @@ export function createCodexAttemptTurnState(resources: CodexAttemptResources) {
   const { connection } = prompt.context.runtime;
   const { params, options, runAbortController } = connection;
   const state = {
+    // SAFETY: Unset until turn/start succeeds; then holds that accepted request's exact context map.
+    additionalContext: undefined as CodexTurnStartParams["additionalContext"],
     latestStartupErrorNotification: undefined as CodexServerNotification | undefined,
     rateLimitsRevisionBeforeLastTurnStart: undefined as number | undefined,
     completed: false,

@@ -115,6 +115,7 @@ export type MsgContext = Partial<CanonicalInboundText> & {
    * Should use real newlines (`\n`), not escaped `\\n`.
    */
   BodyForAgent?: string;
+  WorkContext?: string | null;
   /**
    * Recent chat history for context (untrusted user content). Prefer passing this
    * as structured context blocks in the user prompt rather than rendering plaintext envelopes.

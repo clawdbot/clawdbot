@@ -36,6 +36,7 @@ import type {
   UserTurnTranscriptTargetResolver,
   UserTurnTranscriptUpdateMode,
 } from "./user-turn-transcript.types.js";
+import { readWorkContextSnapshot } from "./work-context.js";
 
 const pendingInputReceipts = new WeakMap<
   UserTurnTranscriptRecorder,
@@ -187,6 +188,23 @@ export function createUserTurnTranscriptRecorder(
 ): UserTurnTranscriptRecorder {
   const logicalTurnId = randomUUID();
   let message = resolvePersistedUserTurnMessage(params);
+  const workContext = readWorkContextSnapshot(message);
+  const input = params.input ? { ...params.input, workContext } : undefined;
+  const previousRevision = message?.["__openclaw"]?.workContextRevision;
+  const workContextRevision =
+    workContext === undefined
+      ? undefined
+      : typeof previousRevision === "string"
+        ? previousRevision
+        : randomUUID();
+  const applyWorkContext = (candidate: PersistedUserTurnMessage | undefined) =>
+    candidate && workContext !== undefined
+      ? {
+          ...candidate,
+          __openclaw: { ...candidate["__openclaw"], workContext, workContextRevision },
+        }
+      : candidate;
+  message = applyWorkContext(message);
   let blocked = false;
   let persisted = false;
   let runtimePersisted = false;
@@ -216,7 +234,10 @@ export function createUserTurnTranscriptRecorder(
   };
 
   const applyMessageOverrides = (candidate: PersistedUserTurnMessage | undefined) =>
-    rewritePersistedSteerTargetRunId(applyReplacementText(candidate), confirmedSteerTargetRunId);
+    rewritePersistedSteerTargetRunId(
+      applyWorkContext(applyReplacementText(candidate)),
+      confirmedSteerTargetRunId,
+    );
 
   const handlePersistenceError = (error: unknown) => {
     if (params.onPersistenceError) {
@@ -240,7 +261,7 @@ export function createUserTurnTranscriptRecorder(
           const resolvedMessage =
             resolvePersistedUserTurnMessage({
               message: params.message,
-              input: resolvedInput ?? params.input,
+              input: resolvedInput ? { ...resolvedInput, workContext } : input,
             }) ?? message;
           resolvedBeforeProvider = !sentToProvider;
           return applyMessageOverrides(resolvedMessage);

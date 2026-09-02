@@ -306,6 +306,7 @@ export async function steerActiveSessionWithOptionalDeliveryWait(
   options: EmbeddedAgentQueueMessageOptions | undefined,
   sessionKey?: string,
   canInject?: () => boolean,
+  requiresSteering?: boolean,
 ): Promise<void | EmbeddedAgentQueueMessageResult> {
   const isInboundUserMessage = options?.isInboundUserMessage === true;
   const isPlainTextAnswer = !hasPromptImageInput(options);
@@ -321,7 +322,7 @@ export async function steerActiveSessionWithOptionalDeliveryWait(
   if (
     isInboundUserMessage &&
     isPlainTextAnswer &&
-    (await claimEmbeddedPendingUserInputAnswer(text, options, sessionKey))
+    (await claimEmbeddedPendingUserInputAnswer(text, options, sessionKey, requiresSteering))
   ) {
     options?.onQueueAccepted?.(true);
     return;
@@ -371,18 +372,19 @@ export async function claimEmbeddedPendingUserInputAnswer(
   text: string,
   options: EmbeddedAgentQueueMessageOptions | undefined,
   sessionKey?: string,
+  requiresSteering?: boolean,
 ): Promise<boolean> {
   if (options?.isInboundUserMessage !== true || hasPromptImageInput(options)) {
     return false;
   }
-  const claimed = await claimPendingAgentQuestionAnswer({
+  return await claimPendingAgentQuestionAnswer({
     sessionKey,
     text,
+    requiresSteering,
     persist: options.userTurnTranscriptRecorder
       ? async () => {
           await options.userTurnTranscriptRecorder?.persistApproved();
         }
       : undefined,
   });
-  return claimed;
 }

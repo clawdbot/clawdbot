@@ -28,6 +28,10 @@ import {
   projectNestedToolActivityForHooks,
   type NestedToolActivity,
 } from "../../../sessions/nested-tool-activity.js";
+import {
+  readWorkContextSnapshot,
+  resolveWorkContextMessage,
+} from "../../../sessions/work-context.js";
 import { raceWithAbortSignal } from "../../agent-tools.abort.js";
 import { recordStructuredReplayTrustForToolCall } from "../../agent-tools.before-tool-call.js";
 import { subscribeEmbeddedAgentSession } from "../../embedded-agent-subscribe.js";
@@ -54,6 +58,7 @@ import { log } from "../logger.js";
 import {
   ACTIVE_EMBEDDED_RUNS,
   ACTIVE_EMBEDDED_RUNS_BY_RUN_ID,
+  type EmbeddedAgentQueueMessageOptions,
   setActiveEmbeddedRunLifecycleGeneration,
 } from "../run-state.js";
 import {
@@ -513,6 +518,16 @@ export function prepareEmbeddedAttemptStream(input: {
           : undefined;
     input.abortRun(false, abortReason);
   };
+  const hasWorkContextChange = (options?: EmbeddedAgentQueueMessageOptions): boolean => {
+    const snapshot = readWorkContextSnapshot(options?.userTurnTranscriptRecorder?.message);
+    if (options?.isInboundUserMessage !== true || snapshot === undefined) {
+      return false;
+    }
+    const selected = resolveWorkContextMessage(
+      input.activeSession.sessionManager.buildSessionContext().messages,
+    );
+    return snapshot !== readWorkContextSnapshot(selected);
+  };
   const queueMessage: AttemptStreamQueueHandle["queueMessage"] = async (text, options) => {
     const canInject = () =>
       acceptingSteerMessages &&
@@ -526,12 +541,14 @@ export function prepareEmbeddedAttemptStream(input: {
       if (options?.steeringMode) {
         input.activeSession.agent.steeringMode = options.steeringMode;
       }
+      const requiresSteering = hasWorkContextChange(options);
       return await steerActiveSessionWithOptionalDeliveryWait(
         input.activeSession,
         text,
         options,
         attempt.sessionKey,
         canInject,
+        requiresSteering,
       );
     } finally {
       activeQueueAdmissions--;
@@ -572,8 +589,15 @@ export function prepareEmbeddedAttemptStream(input: {
           }
         }
       : undefined,
-    claimPendingUserInputAnswer: (text, options) =>
-      claimEmbeddedPendingUserInputAnswer(text, options, attempt.sessionKey),
+    claimPendingUserInputAnswer: (text, options) => {
+      const requiresSteering = hasWorkContextChange(options);
+      return claimEmbeddedPendingUserInputAnswer(
+        text,
+        options,
+        attempt.sessionKey,
+        requiresSteering,
+      );
+    },
     cancelPendingUserInput: (resolvedBy) =>
       cancelPendingAgentQuestionForSession({ sessionKey: attempt.sessionKey, resolvedBy }),
     preemptByVisibleTurn: heartbeatReplyOperation

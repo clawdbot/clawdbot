@@ -97,6 +97,31 @@ function createAttachments(
 }
 
 describe("prepareChatSendUserTurn", () => {
+  it.each(["selection", null])(
+    "carries work context %j outside all message bodies",
+    (workContext) => {
+      const { controller } = createUserTurnInputController();
+      controller.baseInput.workContext = workContext;
+      const prepared = prepareChatSendUserTurn({
+        request: { normalizedAttachments: [], suppressCommandInterpretation: false },
+        session: { agentId: "main", clientRunId: "run-1", sessionKey: "agent:main:main" },
+        admission: {
+          originatingRoute: { originatingChannel: "webchat", explicitDeliverRoute: false },
+        },
+        attachments: createAttachments({ parsedMessage: "clean" }),
+        client: null,
+        logGateway: { warn: vi.fn() } as never,
+        userTurn: controller,
+      });
+      expect(prepared.ctx).toMatchObject({
+        WorkContext: workContext,
+        Body: "clean",
+        BodyForAgent: "clean",
+        RawBody: "clean",
+      });
+    },
+  );
+
   it.each(["profile", "synthetic", "profileless", "profileless-ui", "system"] as const)(
     "records only accepted authenticated external input after retargeting: %s",
     async (kind) => {

@@ -646,6 +646,7 @@ function resolveAggregateOwner(items: readonly FollowupRun[]): FollowupRun | und
 
 function requiresIndividualCollectDrain(item: FollowupRun): boolean {
   return (
+    item.userTurnTranscriptRecorder?.message?.["__openclaw"]?.workContext !== undefined ||
     item.disableCollectBatching === true ||
     item.run.skillWorkshopProposalRevision !== undefined ||
     item.run.skillLibraryAuthoring !== undefined ||

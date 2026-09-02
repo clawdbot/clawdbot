@@ -41,6 +41,7 @@ type ChatSendRequestParams = {
   agentId?: string;
   sessionId?: string;
   message: string;
+  workContext?: string | null;
   intent?: ChatSendIntent;
   thinking?: string;
   fastMode?: FastMode;
@@ -115,7 +116,10 @@ export function normalizeChatSendRequest(params: {
     };
   }
 
-  const p = controlUiReconnectResume.params as ChatSendRequestParams;
+  const p = { ...(controlUiReconnectResume.params as ChatSendRequestParams) };
+  if (typeof p.workContext === "string" && p.workContext.length > 2048) {
+    return { ok: false, error: "invalid chat.send params: workContext exceeds 2048 characters" };
+  }
   const suppressCommandInterpretation = p.suppressCommandInterpretation === true;
   const explicitOriginResult = normalizeExplicitChatSendOrigin({
     originatingChannel: p.originatingChannel,

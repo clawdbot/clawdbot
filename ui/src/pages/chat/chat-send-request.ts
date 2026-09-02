@@ -17,6 +17,7 @@ export async function requestChatSend(
   state: ChatState,
   params: {
     message: string;
+    workContext?: string | null;
     attachments?: ChatAttachment[];
     runId: string;
     sessionKey?: string;
@@ -41,6 +42,7 @@ export async function requestChatSend(
     ...(sessionId ? { sessionId } : {}),
     ...(controlUiReconnectResume ? { __controlUiReconnectResume: true } : {}),
     message: params.message,
+    ...(params.workContext !== undefined ? { workContext: params.workContext } : {}),
     ...(params.intent ? { intent: params.intent } : {}),
     deliver: false,
     ...(params.replyToId ? { replyToId: params.replyToId } : {}),

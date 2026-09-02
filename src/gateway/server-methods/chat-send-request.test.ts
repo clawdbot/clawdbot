@@ -126,6 +126,37 @@ describe("normalizeChatSendRequest", () => {
     });
   });
 
+  it.each([undefined, null, "", "quoted work context", "x".repeat(2048)])(
+    "accepts bounded work context separately from the user message (%s)",
+    (workContext) => {
+      const result = normalizeChatSendRequest({
+        params: validParams(workContext === undefined ? {} : { workContext }),
+        client: null,
+      });
+
+      expect(result).toMatchObject({
+        ok: true,
+        value: { rawMessage: "hello", p: { message: " hello " } },
+      });
+      if (!result.ok) {
+        throw new Error(result.error);
+      }
+      expect(result.value.p).toEqual(
+        expect.objectContaining(workContext === undefined ? {} : { workContext }),
+      );
+      expect(Object.hasOwn(result.value.p, "workContext")).toBe(workContext !== undefined);
+    },
+  );
+
+  it.each(["x".repeat(2049), "🌲".repeat(1025), false, 1, { text: "context" }])(
+    "rejects invalid work context before admission (%s)",
+    (workContext) => {
+      expect(
+        normalizeChatSendRequest({ params: validParams({ workContext }), client: null }),
+      ).toMatchObject({ ok: false });
+    },
+  );
+
   it("rejects an empty text-and-attachment request", () => {
     const result = normalizeChatSendRequest({
       params: validParams({ message: "  " }),

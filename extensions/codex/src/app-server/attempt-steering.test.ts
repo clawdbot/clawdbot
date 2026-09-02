@@ -43,6 +43,54 @@ describe("Codex app-server steering queue", () => {
 
   const steerRequestOptions = { timeoutMs: 60_000, signal: expect.any(AbortSignal) };
 
+  it("keeps changed and cleared snapshots paired with their own steered input", async () => {
+    const request = vi.fn(async (_method: string, _params: unknown) => ({ turnId: "turn-1" }));
+    const queue = createQueue({ request });
+    const deliveries = ["selection A", "selection B", null].map((workContext, index) => {
+      const message = {
+        role: "user" as const,
+        content: `input ${index}`,
+        timestamp: index + 1,
+        __openclaw: { workContext, workContextRevision: `revision-${index}` },
+      };
+      return queue.queue(message.content, {
+        debounceMs: 500,
+        userTurnTranscriptRecorder: {
+          message,
+          resolveMessage: async () => message,
+          getAdmissionReceipt: () => undefined,
+          markRuntimePersistencePending: vi.fn(),
+          markRuntimePersisted: vi.fn(),
+          markBlocked: vi.fn(),
+          hasPersisted: () => false,
+          isBlocked: () => false,
+          hasRuntimePersistencePending: () => false,
+          waitForRuntimePersistence: async () => {},
+          persistApproved: async () => undefined,
+          persistBlocked: async () => undefined,
+          persistFallback: async () => undefined,
+        },
+      });
+    });
+    await vi.advanceTimersByTimeAsync(500);
+    expect(request).toHaveBeenCalledTimes(3);
+    for (const [index, [, params]] of request.mock.calls.entries()) {
+      expect(params).toMatchObject({
+        input: [{ type: "text", text: `input ${index}`, text_elements: [] }],
+        additionalContext: {
+          openclaw_work_context: {
+            kind: "untrusted",
+            value: expect.stringContaining(
+              index === 2 ? "cleared" : `selection ${index === 0 ? "A" : "B"}`,
+            ),
+          },
+        },
+      });
+      await queue.confirmConsumed(`openclaw:turn-1:steer:${index + 1}`);
+    }
+    await Promise.all(deliveries);
+  });
+
   it("resolves only after the matching Codex user message completes", async () => {
     const request = vi.fn(async (_method: string, _params: unknown) => ({ turnId: "turn-1" }));
     const queue = createQueue({ request });

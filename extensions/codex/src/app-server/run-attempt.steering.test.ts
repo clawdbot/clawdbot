@@ -10,20 +10,16 @@ import {
 import { describe, expect, it, vi } from "vitest";
 import type { CodexSteeringQueueOptions } from "./attempt-steering.js";
 import { readAttemptTerminal } from "./attempt-terminal.test-helper.js";
-import type { CodexServerNotification, JsonObject } from "./protocol.js";
+import type { JsonObject } from "./protocol.js";
 import {
   createParams,
   createStartedThreadHarness,
   fastWait,
-  mockClientRuntimeMethods,
   queueActiveRunMessageForTest,
   runCodexAppServerAttempt,
   seedRunSessionOwnerForTest,
-  setCodexAppServerClientFactoryForTest,
   setupRunAttemptTestHooks,
   tempDir,
-  threadStartResult,
-  turnStartResult,
 } from "./run-attempt-test-harness.js";
 import { readCodexAppServerBinding } from "./session-binding.test-helpers.js";
 
@@ -31,7 +27,6 @@ const activeRunRegistrationMocks = vi.hoisted(() => ({
   cancelPendingAgentQuestionForSession: vi.fn(),
   clearActiveEmbeddedRun: vi.fn(),
   setActiveEmbeddedRun: vi.fn(),
-  questionWaiters: new Map<string, (value: unknown) => void>(),
   cancelQuestionError: undefined as Error | undefined,
 }));
 
@@ -49,26 +44,6 @@ vi.mock("openclaw/plugin-sdk/agent-harness-runtime", async (importOriginal) => {
         throw error;
       }
       return await actual.cancelPendingAgentQuestionForSession(...args);
-    },
-    callGatewayTool: async (...args: Parameters<typeof actual.callGatewayTool>) => {
-      const [method, , rawParams] = args;
-      const params = rawParams as { id?: string; answers?: unknown; cancel?: boolean } | undefined;
-      if (method === "question.request") {
-        return { id: params?.id, expiresAtMs: Date.now() + 60_000 };
-      }
-      if (method === "question.waitAnswer") {
-        return await new Promise((resolve) => {
-          activeRunRegistrationMocks.questionWaiters.set(params?.id ?? "", resolve);
-        });
-      }
-      if (method === "question.resolve") {
-        const result = params?.cancel
-          ? { status: "cancelled" as const }
-          : { status: "answered" as const, answers: params?.answers };
-        activeRunRegistrationMocks.questionWaiters.get(params?.id ?? "")?.(result);
-        return result;
-      }
-      return await actual.callGatewayTool(...args);
     },
     clearActiveEmbeddedRun: (
       ...args: Parameters<typeof actual.clearActiveEmbeddedRun>
@@ -387,7 +362,15 @@ describe("runCodexAppServerAttempt steering", () => {
       });
       let steerPersisted = false;
       const userTurnTranscriptRecorder = {
-        message: { role: "user" as const, content: "steer this active turn", timestamp: 1 },
+        message: {
+          role: "user" as const,
+          content: "steer this active turn",
+          timestamp: 1,
+          __openclaw: {
+            workContext: "Selected steering task",
+            workContextRevision: "steer-revision",
+          },
+        },
         async resolveMessage() {
           return this.message;
         },
@@ -508,6 +491,14 @@ describe("runCodexAppServerAttempt steering", () => {
         fastWait,
       );
       const steer = requests.find((entry) => entry.method === "turn/steer");
+      expect(steer?.params).toMatchObject({
+        additionalContext: {
+          openclaw_work_context: {
+            kind: "untrusted",
+            value: expect.stringContaining("Selected steering task"),
+          },
+        },
+      });
       const clientUserMessageId = (steer?.params as { clientUserMessageId?: string } | undefined)
         ?.clientUserMessageId;
       if (!clientUserMessageId) {
@@ -893,130 +884,5 @@ describe("runCodexAppServerAttempt steering", () => {
       handle!.queueMessage("too late", { debounceMs: 0, onQueueAccepted: onLateAccepted }),
     ).rejects.toThrow("steering queue cancelled");
     expect(onLateAccepted).toHaveBeenCalledWith(false);
-  });
-
-  it.each([
-    { name: "gateway-backed", isSecret: false },
-    { name: "secret", isSecret: true },
-  ])("routes $name user prompts without consuming internal steering", async ({ isSecret }) => {
-    const turnStarted = createDeferred<void>();
-    let notify: (notification: CodexServerNotification) => Promise<void> = async () => undefined;
-    let handleRequest:
-      | ((request: { id: string; method: string; params?: unknown }) => Promise<unknown>)
-      | undefined;
-    const request = vi.fn(async (method: string, _params?: unknown) => {
-      if (method === "thread/start") {
-        return threadStartResult();
-      }
-      if (method === "turn/start") {
-        turnStarted.resolve();
-        return turnStartResult();
-      }
-      return {};
-    });
-    setCodexAppServerClientFactoryForTest(
-      async () =>
-        ({
-          ...mockClientRuntimeMethods(),
-          request,
-          addNotificationHandler: (handler: typeof notify) => {
-            notify = handler;
-            return () => undefined;
-          },
-          addRequestHandler: (
-            handler: (request: {
-              id: string;
-              method: string;
-              params?: unknown;
-            }) => Promise<unknown>,
-          ) => {
-            handleRequest = handler;
-            return () => undefined;
-          },
-        }) as never,
-    );
-
-    const params = createSteeringParams();
-    params.onBlockReply = vi.fn();
-    const onRunProgress = vi.fn();
-    params.onRunProgress = onRunProgress;
-    const run = runCodexAppServerAttempt(params);
-    await turnStarted.promise;
-    await vi.waitFor(() => expect(handleRequest).toBeTypeOf("function"), fastWait);
-
-    const response = handleRequest?.({
-      id: "request-input-1",
-      method: "item/tool/requestUserInput",
-      params: {
-        threadId: "thread-1",
-        turnId: "turn-1",
-        itemId: "ask-1",
-        isBlocking: true,
-        questions: [
-          {
-            id: "mode",
-            header: "Mode",
-            question: "Pick a mode",
-            isOther: false,
-            isSecret,
-            options: [
-              { label: "Fast", description: "Use less reasoning" },
-              { label: "Deep", description: "Use more reasoning" },
-            ],
-          },
-        ],
-      },
-    });
-
-    await vi.waitFor(() => expect(params.onBlockReply).toHaveBeenCalledTimes(1), fastWait);
-    await waitAndQueueActiveRunMessage(params.sessionId, "tool progress", { debounceMs: 0 });
-    await vi.waitFor(
-      () => expect(request.mock.calls.map(([method]) => method)).toContain("turn/steer"),
-      fastWait,
-    );
-    const sourceSteer = request.mock.calls.findLast(([method]) => method === "turn/steer");
-    const sourceMessageId = (sourceSteer?.[1] as { clientUserMessageId?: string } | undefined)
-      ?.clientUserMessageId;
-    if (!sourceMessageId) {
-      throw new Error("source turn/steer clientUserMessageId missing");
-    }
-    await notify({
-      method: "item/completed",
-      params: {
-        threadId: "thread-1",
-        turnId: "turn-1",
-        item: { id: "source-message", type: "userMessage", clientId: sourceMessageId },
-      },
-    });
-    expect(
-      onRunProgress.mock.calls.some(
-        ([event]) =>
-          (event as { reason?: string }).reason === "request:item/tool/requestUserInput:response",
-      ),
-    ).toBe(false);
-    const onQuestionAccepted = vi.fn();
-    await waitAndQueueActiveRunMessage(params.sessionId, "2", {
-      isInboundUserMessage: true,
-      onQueueAccepted: onQuestionAccepted,
-      toolAuthorityFingerprint: params.toolAuthorityFingerprint,
-    });
-    await expect(response).resolves.toEqual({
-      answers: { mode: { answers: ["Deep"] } },
-    });
-    expect(onRunProgress).toHaveBeenCalledWith(
-      expect.objectContaining({ reason: "request:item/tool/requestUserInput:response" }),
-    );
-    expect(onQuestionAccepted).toHaveBeenCalledWith(true);
-    expect(request.mock.calls.filter(([method]) => method === "turn/steer")).toHaveLength(1);
-
-    await notify({
-      method: "turn/completed",
-      params: {
-        threadId: "thread-1",
-        turnId: "turn-1",
-        turn: { id: "turn-1", status: "completed" },
-      },
-    });
-    await run;
   });
 });

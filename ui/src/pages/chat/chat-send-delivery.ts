@@ -299,6 +299,7 @@ async function sendQueuedChatMessage(
       : options?.expectedLeafEntryId;
     const ack = await requestChatSend(host, {
       message,
+      workContext: prepared.workContext,
       attachments: attachments.length ? attachments : undefined,
       runId,
       sessionKey,

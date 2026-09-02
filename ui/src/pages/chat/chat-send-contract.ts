@@ -40,7 +40,7 @@ export type ChatHost = ChatInputHistoryState &
     chatLoading: boolean;
     chatMessage: string;
     /** Captured once at submit; queued delivery never re-reads the current page. */
-    getWorkContext?: () => string | undefined;
+    getWorkContext?: () => string | null | undefined;
     chatGoalDraftMode?: ChatGoalDraftMode | null;
     chatMessages: unknown[];
     chatThinkingLevel: string | null;

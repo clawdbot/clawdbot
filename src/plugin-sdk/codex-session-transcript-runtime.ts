@@ -24,6 +24,8 @@ import {
   type SessionTranscriptTargetParams,
 } from "./session-transcript-runtime.js";
 
+export { resolveWorkContextMessage } from "../sessions/work-context.js";
+
 /** Reads the bundled Codex mirror strictly before one admitted user row. */
 export async function readCodexSessionTranscriptEventsBeforeAdmission(
   params: SessionTranscriptTargetParams,

@@ -2,12 +2,15 @@ import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import { resolveTimestampMsToIsoString } from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { iterateSessionContextEntries } from "../../../packages/agent-core/src/harness/session/session.js";
+import { createWorkContextMessage, readWorkContextSnapshot } from "../../sessions/work-context.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import type {
   TranscriptMessageAppendOptions,
   TranscriptMessageAppendResult,
 } from "./session-accessor.sqlite-contract.js";
 import { readSessionEntryRow } from "./session-accessor.sqlite-entry-store.js";
+import { readTranscriptContextSnapshotInTransaction } from "./session-accessor.sqlite-model-context.js";
 import {
   consumeSessionPendingInput,
   resolveSessionPendingInputAppend,
@@ -134,7 +137,63 @@ export function appendTranscriptMessageInTransaction<TMessage>(
   const now = options.now ?? Date.now();
   const finalMessage = pending ? prepared : serializeForStorage(prepared);
   ensureTranscriptHeader(database, resolved, options.cwd);
-  const parentId = resolveTranscriptMessageAppendParent(database, resolved.sessionId, options);
+  let parentId = resolveTranscriptMessageAppendParent(database, resolved.sessionId, options);
+  const workContext =
+    isRecord(finalMessage) && finalMessage.role === "user"
+      ? readWorkContextSnapshot(finalMessage)
+      : undefined;
+  if (workContext !== undefined) {
+    const existing = readTranscriptMessageByEventId(database, resolved, messageId);
+    if (existing) {
+      if (!messagesMatchForIdempotentReplay(existing.message, finalMessage)) {
+        throw new TranscriptTurnAdmissionConflictError(idempotencyKey ?? `event:${messageId}`);
+      }
+      return existingAppendResult(existing);
+    }
+    const selected = readTranscriptContextSnapshotInTransaction(
+      database,
+      resolved,
+      "model-context",
+      ({ entries, readEntry }) => {
+        let snapshot: string | null | undefined;
+        for (const { entry } of iterateSessionContextEntries(entries)) {
+          if (
+            entry.type === "message" &&
+            entry.message.role === "custom" &&
+            entry.message.customType === "openclaw.work-context"
+          ) {
+            const full = readEntry(entry);
+            if (full.type === "message") {
+              snapshot = readWorkContextSnapshot(full.message);
+            }
+          }
+        }
+        return snapshot;
+      },
+      parentId ?? null,
+    );
+    if (workContext !== selected) {
+      const metadata =
+        isRecord(finalMessage) && isRecord(finalMessage["__openclaw"])
+          ? finalMessage["__openclaw"]
+          : undefined;
+      const contextId =
+        typeof metadata?.workContextRevision === "string"
+          ? metadata.workContextRevision
+          : randomUUID();
+      const contextAppended = appendTranscriptEventInTransaction(database, resolved, {
+        type: "message",
+        id: contextId,
+        parentId: parentId ?? null,
+        timestamp: resolveTimestampMsToIsoString(now),
+        message: createWorkContextMessage(workContext, now, contextId),
+      });
+      if (!contextAppended) {
+        throw new Error("Work context revision already belongs to this transcript");
+      }
+      parentId = contextId;
+    }
+  }
   const event = {
     type: "message",
     id: messageId,

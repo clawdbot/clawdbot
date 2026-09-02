@@ -296,62 +296,100 @@ describe("gateway harness questions", () => {
     await expect(run).rejects.toThrow("gateway unavailable");
   });
 
-  it("accepts a later text answer after cancellation fails", async () => {
-    const answer = deferred<{
-      status: "answered";
-      answers: { answers: Record<string, string[]> };
-    }>();
-    let cancelAttempts = 0;
-    const gatewayCall: AgentHarnessQuestionGatewayCall = async (method, _opts, params) => {
-      if (method === "question.request") {
-        return { id: (params as { id: string }).id };
-      }
-      if (method === "question.waitAnswer") {
-        return await answer.promise;
-      }
-      if (method === "question.resolve") {
-        const resolvedAnswers = (params as { answers?: { answers: Record<string, string[]> } })
-          .answers;
-        if (!resolvedAnswers) {
-          cancelAttempts += 1;
-          throw new Error("temporary gateway failure");
-        }
-        const result = { status: "answered" as const, answers: resolvedAnswers };
-        answer.resolve(result);
-        return result;
-      }
-      throw new Error(`unexpected gateway method: ${method}`);
-    };
-    const onBlockReply = vi.fn();
-    const run = runAgentHarnessGatewayQuestion({
-      questions,
-      sessionKey: "agent:main:cancel-retry",
-      timeoutMs: 60_000,
-      gatewayCall,
-      delivery: { onBlockReply },
-      questionId: "ask_44444444444444444444444444444444",
+  it("returns a changed-context reply to steering without recording an answer", async () => {
+    const gatewayCall = vi.fn<AgentHarnessQuestionGatewayCall>().mockResolvedValue({
+      status: "cancelled",
     });
-    await vi.waitFor(() => expect(onBlockReply).toHaveBeenCalledOnce());
+    const questionId = "ask_66666666666666666666666666666666";
+    const sessionKey = "agent:main:context-change";
+    const reservation = registerPendingAgentQuestion({
+      questionId,
+      sessionKey,
+      questions,
+      gatewayCall,
+      answer: Promise.resolve({ status: "cancelled" }),
+    });
+    const persist = vi.fn(async () => undefined);
+    const claimOptions = { sessionKey, text: "Continue", persist, requiresSteering: true };
+    try {
+      await expect(claimPendingAgentQuestionAnswer(claimOptions)).resolves.toBe(false);
+      expect(persist).not.toHaveBeenCalled();
+      expect(gatewayCall).toHaveBeenCalledExactlyOnceWith("question.resolve", expect.any(Object), {
+        id: questionId,
+        cancel: true,
+        resolvedBy: "context-change",
+      });
+    } finally {
+      reservation.dispose();
+    }
+  });
 
-    await expect(
-      cancelPendingAgentQuestionForSession({
+  it.each(["explicit cancellation", "changed-context reply"] as const)(
+    "accepts a later text answer after %s fails",
+    async (route) => {
+      const answer = deferred<{
+        status: "answered";
+        answers: { answers: Record<string, string[]> };
+      }>();
+      let cancelAttempts = 0;
+      const gatewayCall: AgentHarnessQuestionGatewayCall = async (method, _opts, params) => {
+        if (method === "question.request") {
+          return { id: (params as { id: string }).id };
+        }
+        if (method === "question.waitAnswer") {
+          return await answer.promise;
+        }
+        if (method === "question.resolve") {
+          const resolvedAnswers = (params as { answers?: { answers: Record<string, string[]> } })
+            .answers;
+          if (!resolvedAnswers) {
+            cancelAttempts += 1;
+            throw new Error("temporary gateway failure");
+          }
+          const result = { status: "answered" as const, answers: resolvedAnswers };
+          answer.resolve(result);
+          return result;
+        }
+        throw new Error(`unexpected gateway method: ${method}`);
+      };
+      const onBlockReply = vi.fn();
+      const run = runAgentHarnessGatewayQuestion({
+        questions,
         sessionKey: "agent:main:cancel-retry",
-        resolvedBy: "image-reply",
-      }),
-    ).rejects.toThrow("temporary gateway failure");
-    await expect(
-      claimPendingAgentQuestionAnswer({
+        timeoutMs: 60_000,
+        gatewayCall,
+        delivery: { onBlockReply },
+        questionId: "ask_44444444444444444444444444444444",
+      });
+      await vi.waitFor(() => expect(onBlockReply).toHaveBeenCalledOnce());
+
+      const claimOptions = {
         sessionKey: "agent:main:cancel-retry",
         text: "Continue",
-      }),
-    ).resolves.toBe(true);
+        requiresSteering: true,
+      };
+      await expect(
+        route === "changed-context reply"
+          ? claimPendingAgentQuestionAnswer(claimOptions)
+          : cancelPendingAgentQuestionForSession({
+              sessionKey: "agent:main:cancel-retry",
+              resolvedBy: "image-reply",
+            }),
+      ).rejects.toThrow("temporary gateway failure");
+      await expect(
+        claimPendingAgentQuestionAnswer({
+          sessionKey: "agent:main:cancel-retry",
+          text: "Continue",
+        }),
+      ).resolves.toBe(true);
 
-    await expect(run).resolves.toEqual({
-      status: "answered",
-      answers: { answers: { answer: ["Continue"] } },
-    });
-    expect(cancelAttempts).toBe(1);
-  });
+      await expect(run).resolves.toEqual({
+        status: "answered",
+        answers: { answers: { answer: ["Continue"] } },
+      });
+      expect(cancelAttempts).toBe(1);
+    },
+  );
 
   it("returns a gateway answer without waiting for stalled prompt delivery", async () => {
     const answer = deferred<{

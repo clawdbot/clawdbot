@@ -48,6 +48,7 @@ export function createGatewayChatUserTurnController(params: {
     ...params.transcript,
     ...(request.goalOperation?.action === "resume" ? { display: false } : {}),
     text: request.rawMessage,
+    workContext: request.p.workContext,
     timestamp: session.now,
     idempotencyKey: buildRunUserTurnIdempotencyKey(session.clientRunId),
     ...(request.p.replyToId ? { replyToId: request.p.replyToId } : {}),

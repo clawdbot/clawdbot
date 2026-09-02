@@ -6,6 +6,7 @@ import { buildTimestampPrefix } from "../../../gateway/server-methods/agent-time
 import { INTER_SESSION_PROMPT_PREFIX_BASE } from "../../../sessions/input-provenance.js";
 import { hasPersistedMedia, MEDIA_ONLY_USER_TEXT } from "../../../sessions/user-turn-media.js";
 import { buildLateMediaAttachedProjection } from "../../../sessions/user-turn-transcript.js";
+import { projectWorkContextMessages } from "../../../sessions/work-context.js";
 import { stripHistoricalRuntimeContextCustomMessages } from "../../internal-runtime-context.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import { stripToolResultDetails } from "../../session-transcript-repair.js";
@@ -60,7 +61,9 @@ export function normalizeMessagesForLlmBoundary(
     options?.projectPersistedSenderContext === false
       ? withoutHistoricalInboundMetadata
       : projectPersistedSenderContext(withoutHistoricalInboundMetadata, userTranscriptMessages);
-  return stripHistoricalRuntimeContextCustomMessages(withPersistedSenderContext);
+  return stripHistoricalRuntimeContextCustomMessages(
+    projectWorkContextMessages(withPersistedSenderContext, userTranscriptMessages),
+  );
 }
 
 /** Normalizes existing transcript messages as if the current prompt were appended last. */
@@ -83,7 +86,7 @@ export function normalizeCurrentPromptTextForLlmBoundary(params: {
   currentUserTranscriptMessage?: AgentMessage;
 }): string {
   const { message, options } = buildCurrentPromptBoundaryInput(params);
-  const [normalized] = normalizeMessagesForLlmBoundary([message], options);
+  const normalized = normalizeMessagesForLlmBoundary([message], options).at(-1);
   const content = (normalized as { content?: unknown } | undefined)?.content;
   return typeof content === "string" ? content : params.prompt;
 }

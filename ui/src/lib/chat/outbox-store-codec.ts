@@ -92,6 +92,9 @@ export function normalizeStoredQueueItem(value: unknown): ChatQueueItem | null {
         .filter((item): item is ChatAttachment => item !== null)
     : [];
   const item: ChatQueueItem = { id, text, createdAt };
+  if (entry.workContext === null || typeof entry.workContext === "string") {
+    item.workContext = entry.workContext;
+  }
   if (entry.attachmentPayload !== undefined) {
     const payload = entry.attachmentPayload;
     if (

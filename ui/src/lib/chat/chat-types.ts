@@ -90,6 +90,7 @@ export type ChatQueueItem = {
   id: string;
   text: string;
   createdAt: number;
+  workContext?: string | null;
   /** Operator-owned queue position; absent means "wherever arrival put it". */
   orderKey?: number;
   /** Immutable bytes belong to this queued input; routing belongs to the outbox metadata. */

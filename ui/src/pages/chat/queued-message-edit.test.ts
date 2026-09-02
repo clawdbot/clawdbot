@@ -329,19 +329,34 @@ describe("queued message edit round-trip", () => {
     expect(sendRequest).not.toHaveBeenCalled();
   });
 
-  it("preserves attachments and reply context on the replacement", async () => {
-    const kept = stageQueuedImage("att-kept");
-    const { host } = queueHost([{}, { attachments: [kept], replyToId: "reply-source" }, {}]);
-    beginQueuedMessageEdit(host as never, "queued-2");
-    updateQueuedMessageEdit(host as never, "message 2, corrected");
-    await submitQueuedEdit(host);
+  it.each([
+    ["Frozen original task", "message 2, corrected", "Frozen original task"],
+    [null, "message 2, corrected", null],
+    [undefined, "message 2, corrected", undefined],
+    ["Frozen original task", "/review-this", undefined],
+    [null, "/review-this", undefined],
+  ] as const)(
+    "preserves attachments and reply when editing context %s to %s",
+    async (workContext, message, expectedContext) => {
+      const kept = stageQueuedImage("att-kept");
+      const { host } = queueHost(
+        [{}, { attachments: [kept], replyToId: "reply-source", workContext }, {}],
+        {
+          getWorkContext: () => "Different page at edit time",
+        },
+      );
+      beginQueuedMessageEdit(host as never, "queued-2");
+      updateQueuedMessageEdit(host as never, message);
+      await submitQueuedEdit(host);
 
-    expect(storedOrder(host)).toEqual(["message 1", "message 2, corrected", "message 3"]);
-    const replacement = listStoredChatOutboxes(host as never)[0]?.queue[1];
-    expect(replacement?.attachments?.map((attachment) => attachment.id)).toEqual(["att-kept"]);
-    expect(replacement?.replyToId).toBe("reply-source");
-    expect(getChatAttachmentDataUrl(kept)).not.toBeNull();
-  });
+      expect(storedOrder(host)).toEqual(["message 1", message, "message 3"]);
+      const replacement = listStoredChatOutboxes(host as never)[0]?.queue[1];
+      expect(replacement?.attachments?.map((attachment) => attachment.id)).toEqual(["att-kept"]);
+      expect(replacement?.replyToId).toBe("reply-source");
+      expect(replacement?.workContext).toBe(expectedContext);
+      expect(getChatAttachmentDataUrl(kept)).not.toBeNull();
+    },
+  );
 
   it("keeps the original queued when the replacement's stored write is rejected", async () => {
     const { host } = queueHost([{}, {}, {}]);

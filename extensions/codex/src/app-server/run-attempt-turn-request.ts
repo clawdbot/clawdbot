@@ -1,4 +1,5 @@
 import { embeddedAgentLog, formatErrorMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { resolveWorkContextMessage } from "openclaw/plugin-sdk/codex-session-transcript-runtime";
 import {
   interruptCodexTurnAndWaitBestEffort,
   retireUnsafeCodexTurnClientBestEffort,
@@ -122,6 +123,10 @@ export async function prepareCodexAttemptTurnRequest(
       turnScopedDeveloperInstructions: workspaceBootstrapContext.turnScopedDeveloperInstructions,
       skillsCollaborationInstructions: context.skillsCollaborationInstructions,
       memoryCollaborationInstructions: workspaceBootstrapContext.memoryCollaborationInstructions,
+      workContextMessage: resolveWorkContextMessage(
+        context.historyState.messages,
+        runtimeParams.userTurnTranscriptRecorder?.message,
+      ),
       preserveNativeTurnSettings: usesSupervisionConnection,
     });
     codexModelCallDiagnostics.setRequestPayloadBytes(utf8JsonByteLength(turnStartParams));
@@ -149,6 +154,7 @@ export async function prepareCodexAttemptTurnRequest(
       );
       acceptedTurnId = startedTurn.turn.id;
       throwIfTurnStartAcceptedAfterAbort();
+      state.additionalContext = turnStartParams.additionalContext;
       return startedTurn;
     } catch (error) {
       if (acceptedTurnId || isCodexAppServerIndeterminateRequestCancellationError(error)) {

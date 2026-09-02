@@ -6,12 +6,14 @@ import {
   embeddedAgentLog,
   type queueAgentHarnessMessage,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { resolveWorkContextMessage } from "openclaw/plugin-sdk/codex-session-transcript-runtime";
 import {
   isCodexAppServerIndeterminateRequestCancellationError,
   isCodexAppServerIndeterminateTransportError,
   type CodexAppServerClient,
 } from "./client.js";
-import type { CodexUserInput } from "./protocol.js";
+import type { CodexTurnStartParams, CodexUserInput } from "./protocol.js";
+import { buildCodexWorkContextEntry } from "./turn-params.js";
 
 const CODEX_STEER_ALL_DEBOUNCE_MS = 500;
 type AgentHarnessQueueMessageOptions = NonNullable<Parameters<typeof queueAgentHarnessMessage>[2]>;
@@ -53,6 +55,8 @@ export function createCodexSteeringQueue(params: {
   assertActive: () => void;
   prepareMessage: (text: string, options: CodexSteeringQueueOptions) => Promise<CodexUserInput[]>;
   beforeConfirmConsumed?: (items: readonly CodexSteeringCommitItem[]) => Promise<void>;
+  workContextMessage?: ReturnType<typeof resolveWorkContextMessage>;
+  additionalContext?: CodexTurnStartParams["additionalContext"];
 }) {
   type PendingSteerMessage = CodexSteeringQueueOptions & {
     acceptance: "open" | "accepted" | "rejected";
@@ -72,6 +76,7 @@ export function createCodexSteeringQueue(params: {
   let sendChain: Promise<void> = Promise.resolve();
   let sealedError: Error | undefined;
   let closedError: Error | undefined;
+  let workContextMessage = params.workContextMessage;
 
   const assertActive = () => {
     const unavailableError = closedError ?? sealedError;
@@ -183,7 +188,16 @@ export function createCodexSteeringQueue(params: {
       for (const item of liveItems) {
         input.push(...(await params.prepareMessage(item.text, item)));
         assertActive();
+        workContextMessage = resolveWorkContextMessage(
+          workContextMessage ? [workContextMessage] : [],
+          item.userTurnTranscriptRecorder?.message,
+        );
       }
+      const workContext = buildCodexWorkContextEntry(workContextMessage);
+      // Codex replaces its entire context map; retain the accepted turn's other entries.
+      const additionalContext = workContext
+        ? { ...params.additionalContext, ...workContext }
+        : params.additionalContext;
       // No await between final owner validation and RPC dispatch. Only these
       // batches become accepted-unconfirmed if cancellation races the response.
       clientUserMessageId = `openclaw:${params.turnId}:steer:${++batchSequence}`;
@@ -199,6 +213,7 @@ export function createCodexSteeringQueue(params: {
           expectedTurnId: params.turnId,
           input,
           clientUserMessageId,
+          ...(additionalContext ? { additionalContext } : {}),
         },
         { timeoutMs: params.requestTimeoutMs, signal: params.signal },
       );
@@ -277,6 +292,14 @@ export function createCodexSteeringQueue(params: {
   }
 
   return {
+    hasWorkContextChange(options?: CodexSteeringQueueOptions) {
+      return (
+        resolveWorkContextMessage(
+          workContextMessage ? [workContextMessage] : [],
+          options?.userTurnTranscriptRecorder?.message,
+        ) !== workContextMessage
+      );
+    },
     async queue(text: string, options?: CodexSteeringQueueOptions) {
       try {
         assertActive();
@@ -285,10 +308,15 @@ export function createCodexSteeringQueue(params: {
         throw error;
       }
       const { item, delivery } = createPendingMessage(text, options);
+      const hasWorkContext =
+        options?.userTurnTranscriptRecorder?.message?.["__openclaw"]?.workContext !== undefined;
+      if (hasWorkContext) {
+        void flushBatch();
+      }
       batchedMessages.push(item);
       clearBatchTimer();
       const debounceMs = normalizeCodexSteerDebounceMs(options?.debounceMs);
-      if (debounceMs === 0) {
+      if (hasWorkContext || debounceMs === 0) {
         void flushBatch();
       } else {
         batchTimer = setTimeout(() => {

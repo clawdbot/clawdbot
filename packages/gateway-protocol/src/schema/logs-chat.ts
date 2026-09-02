@@ -222,6 +222,7 @@ export const ChatSendParamsSchema = closedObject({
   agentId: Type.Optional(NonEmptyString),
   sessionId: Type.Optional(NonEmptyString),
   message: Type.String(),
+  workContext: Type.Optional(Type.Union([Type.String({ maxLength: 2048 }), Type.Null()])),
   intent: Type.Optional(ChatSendIntentSchema),
   thinking: Type.Optional(Type.String()),
   fastMode: Type.Optional(Type.Union([Type.Boolean(), Type.Literal("auto")])),

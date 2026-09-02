@@ -59,6 +59,7 @@ export function buildPersistedUserTurnMetadata(
   const replyPreviewSender = normalizeOptionalString(input.replyToPreview?.senderLabel);
   return {
     // Privileged synthetic handoffs may execute owner tools but never author trusted memory.
+    ...(input.workContext === undefined ? {} : { workContext: input.workContext }),
     ...(input.senderIsOwner === undefined
       ? {}
       : {
@@ -135,6 +136,8 @@ export function restorePreparedUserTurnOperationalMetaForRuntime(params: {
   }
   const preparedMeta = params.preparedMessage["__openclaw"];
   const senderIsOwner = preparedMeta?.senderIsOwner;
+  const workContext = preparedMeta?.workContext;
+  const workContextRevision = preparedMeta?.workContextRevision;
   const steerTargetRunId = normalizePersistedSteerTargetRunId(preparedMeta?.steerTargetRunId);
   const nextMessage: AgentMessage & { display?: false; __openclaw?: Record<string, unknown> } = {
     ...params.runtimeMessage,
@@ -147,6 +150,14 @@ export function restorePreparedUserTurnOperationalMetaForRuntime(params: {
     nextMessage.display = false;
   }
   const runtimeMeta = { ...nextMessage["__openclaw"] };
+  delete runtimeMeta.workContext;
+  delete runtimeMeta.workContextRevision;
+  if (workContext !== undefined) {
+    runtimeMeta.workContext = workContext;
+    if (workContextRevision !== undefined) {
+      runtimeMeta.workContextRevision = workContextRevision;
+    }
+  }
   delete runtimeMeta.intent;
   if (preparedMeta?.intent) {
     runtimeMeta.intent = preparedMeta.intent;
@@ -209,6 +220,8 @@ export function preparePersistedUserTurnMessageForTranscriptWrite(
   const intent =
     originalMeta?.intent === undefined ? undefined : structuredClone(originalMeta.intent);
   const senderIsOwner = originalMeta?.senderIsOwner;
+  const workContext = originalMeta?.workContext;
+  const workContextRevision = originalMeta?.workContextRevision;
   const replyToId = normalizeOptionalString(originalMeta?.replyToId);
   const originalReplyPreview = asOptionalRecord(originalMeta?.replyToPreview);
   const replyPreviewText = normalizeOptionalString(originalReplyPreview?.text);
@@ -258,6 +271,14 @@ export function preparePersistedUserTurnMessageForTranscriptWrite(
   };
   if (intent === undefined) {
     delete protectedMeta.intent;
+  }
+  delete protectedMeta.workContext;
+  delete protectedMeta.workContextRevision;
+  if (workContext !== undefined) {
+    protectedMeta.workContext = workContext;
+    if (workContextRevision !== undefined) {
+      protectedMeta.workContextRevision = workContextRevision;
+    }
   }
   delete protectedMeta.steerTargetRunId;
   if (steerTargetRunId) {

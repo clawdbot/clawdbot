@@ -212,7 +212,9 @@ Outside onboarding, this page can show at most one dismissible event chip per vi
 
 Use the **Home** button in the sidebar footer to open the selected agent's main conversation alongside your current page. Home and Ask OpenClaw share the dock. When the same Home conversation is already open as the page, the dock stays hidden rather than showing it twice.
 
-Home can include a bounded, quoted work-context reference with your message. That reference belongs to the page's agent and session, not merely the Home conversation receiving it, and stays current when session titles or visible files change. It is reference data, not permission to access another conversation; you can remove it before sending.
+Home sends a bounded, quoted work-context reference separately from your visible message. Expand **Working on** to inspect it. The reference belongs to the page's agent and session, not merely the Home conversation receiving it, and reflects session-title or visible-file changes when captured at send time. It is reference data, not instructions or permission to access another conversation.
+
+The first snapshot and changed snapshots are retained as hidden model context. A supplied snapshot is not repeated while that exact snapshot remains the effective retained model context. **Remove work context** sends a context-clear update on the next sent turn. Navigation alone does not send a turn, and context updates need no separate assistant acknowledgment. See [Talk to Home while working](/concepts/main-session#talk-to-home-while-working) for how captured context is retained through queueing, retries, and queued-message edits, or reestablished after reset or compaction.
 
 ## Manage plugins
 
