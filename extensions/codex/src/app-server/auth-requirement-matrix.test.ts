@@ -269,7 +269,7 @@ describe("native Codex account verification", () => {
   it.each(NATIVE_ACCOUNT_MATRIX)(
     "$expected authRequirement=$authRequirement against native account $account",
     async ({ authRequirement, account, expected }) => {
-      const request = vi.fn(async () => ({ account }));
+      const request = vi.fn(async (_method: string, _params?: unknown) => ({ account }));
       const apply = applyCodexAppServerAuthProfile({
         client: { request } as never,
         agentDir: AGENT_DIR,
@@ -282,12 +282,11 @@ describe("native Codex account verification", () => {
       } else {
         await expect(apply).resolves.toBeUndefined();
       }
-      expect(request).not.toHaveBeenCalledWith("account/login/start", expect.anything());
-      if (authRequirement) {
-        expect(request).toHaveBeenCalledWith("account/read", { refreshToken: false });
-      } else {
-        expect(request).not.toHaveBeenCalled();
-      }
+      expect(
+        request.mock.calls.map(([method, requestParams]) => ({ method, params: requestParams })),
+      ).toEqual(
+        authRequirement ? [{ method: "account/read", params: { refreshToken: false } }] : [],
+      );
     },
   );
 });

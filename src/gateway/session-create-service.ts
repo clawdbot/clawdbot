@@ -85,10 +85,10 @@ import { recordSessionCreated } from "../sessions/session-state-events.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { isUserModelAuthProfileId } from "../state/user-model-account-id.js";
 import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
+import type { UserModelAccountSelection } from "./model-account-authority.js";
 import { authorizeGatewaySessionCreation, resolveCreatorSandbox } from "./operator-role-policy.js";
 import { ADMIN_SCOPE } from "./operator-scopes.js";
 import type { GatewayOperatorRoleActor } from "./server-methods/shared-types.js";
-import type { UserModelAccountSelection } from "./server-methods/users-model-account-access.js";
 import { buildForkedGatewaySessionEntry } from "./session-create-fork-entry.js";
 import { resolveSessionCreateModelSelection } from "./session-create-model-selection.js";
 import {

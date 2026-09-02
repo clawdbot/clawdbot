@@ -4,10 +4,11 @@ import { roleScopesAllow } from "../../shared/operator-scope-compat.js";
 import { isUserModelAuthProfileId } from "../../state/user-model-account-id.js";
 import { isUserModelAuthProfileOwner } from "../../state/user-model-accounts.js";
 import { getUserProfileListItem, resolveUserProfileId } from "../../state/user-profiles.js";
-import {
-  ModelAccountConnectAuthorityError,
-  type ModelAccountConnectAction,
-} from "../model-account-connect.js";
+import type {
+  ModelAccountConnectAction,
+  UserModelAccountSelection,
+} from "../model-account-authority.js";
+import { ModelAccountConnectAuthorityError } from "../model-account-connect.js";
 import { resolveOperatorRolePolicyForProfile } from "../operator-role-policy.js";
 import { isGatewayClientProfilePending } from "./gateway-client-identity.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
@@ -59,8 +60,6 @@ export function prepareUserModelAccountAction(
   assertCurrent();
   return { owner, assertCurrent };
 }
-
-export type UserModelAccountSelection = ModelAccountConnectAction & { authProfileId: string };
 
 /** Preview and commit share the same self-owned selection; scope follows the requested action. */
 export function preparePersonalModelAccountSelection(

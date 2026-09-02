@@ -1,5 +1,5 @@
 import type { ChatAccountSelection } from "../../../packages/gateway-protocol/src/schema/users.js";
-import type { UserModelAccountSelection } from "./users-model-account-access.js";
+import type { UserModelAccountSelection } from "../model-account-authority.js";
 
 export type ChatMetadataSessionEntry = {
   authProfileOverride?: string;

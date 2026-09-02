@@ -124,14 +124,6 @@ async function handleChatMetadataRequest({
     return;
   }
   const metadataParams = params;
-  if (metadataParams.sessionKey && metadataParams.authProfileId) {
-    respond(
-      false,
-      undefined,
-      errorShape(ErrorCodes.INVALID_REQUEST, "authProfileId cannot be combined with sessionKey"),
-    );
-    return;
-  }
   const cfg = context.getRuntimeConfig();
   if (metadataParams.sessionKey) {
     const requested = resolveRequestedChatAgentId({

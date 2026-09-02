@@ -12,10 +12,10 @@ import {
 import { registerSecretValueForRedaction } from "../../logging/secret-redaction-registry.js";
 import { validateAnthropicSetupToken } from "../../plugins/provider-auth-token.js";
 import { UserProfileNotFoundError } from "../../state/user-profiles.js";
+import type { ModelAccountConnectAction } from "../model-account-authority.js";
 import {
   ModelAccountConnectAuthorityError,
   ModelAccountConnectInputError,
-  type ModelAccountConnectAction,
 } from "../model-account-connect.js";
 import type {
   GatewayRequestContext,

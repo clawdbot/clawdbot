@@ -17,6 +17,14 @@ import { completeWithPreparedSimpleCompletionModel } from "./simple-completion-r
 
 const context = { messages: [{ role: "user" as const, content: "pong", timestamp: 1 }] };
 
+function completionRequests() {
+  return mocks.complete.mock.calls.map(([model, completionContext, options]) => ({
+    model,
+    context: completionContext,
+    options,
+  }));
+}
+
 const baseModel = {
   provider: "openai",
   id: "gpt-5.4",
@@ -68,9 +76,9 @@ describe("completeWithPreparedSimpleCompletionModel", () => {
       model,
       cfg,
     });
-    expect(mocks.complete).toHaveBeenCalledWith(preparedModel, context, {
-      apiKey: "ollama-local",
-    });
+    expect(completionRequests()).toEqual([
+      { model: preparedModel, context, options: { apiKey: "ollama-local" } },
+    ]);
   });
 
   it.each([
@@ -97,10 +105,13 @@ describe("completeWithPreparedSimpleCompletionModel", () => {
       context,
       options: { reasoning },
     });
-    expect(mocks.complete).toHaveBeenCalledWith(model, context, {
-      ...(expected ? { reasoning: expected } : {}),
-      apiKey: "sk-test",
-    });
+    expect(completionRequests()).toEqual([
+      {
+        model,
+        context,
+        options: { ...(expected ? { reasoning: expected } : {}), apiKey: "sk-test" },
+      },
+    ]);
   });
 
   it("carries strict visibility internally without adding a wire option", async () => {
@@ -142,9 +153,8 @@ describe("completeWithPreparedSimpleCompletionModel", () => {
       options: { reasoning: "off" },
     });
 
-    expect(mocks.complete).toHaveBeenCalledWith(preparedModel, context, {
-      reasoning: "off",
-      apiKey: "sk-test",
-    });
+    expect(completionRequests()).toEqual([
+      { model: preparedModel, context, options: { reasoning: "off", apiKey: "sk-test" } },
+    ]);
   });
 });

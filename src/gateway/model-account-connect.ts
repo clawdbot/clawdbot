@@ -25,8 +25,8 @@ import {
   readUserModelAccountSummary,
   setUserProfileAuthLink,
 } from "../state/user-model-accounts.js";
+import type { ModelAccountConnectAction } from "./model-account-authority.js";
 
-export type ModelAccountConnectAction = { owner: string; assertCurrent: () => void };
 type AuthorizationResult =
   | {
       status: "authorized";

@@ -74,7 +74,7 @@ import {
   SESSION_AGENT_STATUS_MAX_TTL_MINUTES,
 } from "../sessions/session-agent-status.js";
 import { isUserModelAuthProfileId } from "../state/user-model-account-id.js";
-import type { UserModelAccountSelection } from "./server-methods/users-model-account-access.js";
+import type { UserModelAccountSelection } from "./model-account-authority.js";
 import {
   isAgentSessionModelPatchOrigin,
   snapshotAgentModelFallback,

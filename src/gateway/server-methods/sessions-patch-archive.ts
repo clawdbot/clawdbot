@@ -16,6 +16,7 @@ import {
   SessionWorktreeLifecycleError,
   synchronizeSessionWorktreeArchive,
 } from "../../sessions/session-worktree-lifecycle.js";
+import type { UserModelAccountSelection } from "../model-account-authority.js";
 import { ModelAccountConnectAuthorityError } from "../model-account-connect.js";
 import { resolvePluginSessionOwnershipError } from "../session-plugin-ownership.js";
 import { tryResolveSessionCompatibilityOwnerAgentId } from "../session-request-agent.js";
@@ -40,7 +41,6 @@ import {
   sessionLog,
 } from "./sessions-shared.js";
 import type { GatewayRequestContext } from "./types.js";
-import type { UserModelAccountSelection } from "./users-model-account-access.js";
 
 export type SessionPatchArchivePreparation = {
   canonicalKey: string;
