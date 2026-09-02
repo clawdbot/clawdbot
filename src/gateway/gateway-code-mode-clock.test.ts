@@ -282,14 +282,24 @@ describe("Gateway Code Mode clock rollback", () => {
           caps: [GATEWAY_CLIENT_CAPS.APPROVALS],
           deviceIdentity,
           onEvent: (event) => {
-            if (event.event !== "plugin.approval.requested") return;
+            if (event.event !== "plugin.approval.requested") {
+              return;
+            }
             const payload = event.payload;
-            if (!payload || typeof payload !== "object") return;
+            if (!payload || typeof payload !== "object") {
+              return;
+            }
             const request = (payload as { request?: unknown }).request;
-            if (!request || typeof request !== "object") return;
-            if ((request as { pluginId?: unknown }).pluginId !== approvalPluginId) return;
+            if (!request || typeof request !== "object") {
+              return;
+            }
+            if ((request as { pluginId?: unknown }).pluginId !== approvalPluginId) {
+              return;
+            }
             const id = (payload as { id?: unknown }).id;
-            if (typeof id === "string") approvalId = id;
+            if (typeof id === "string") {
+              approvalId = id;
+            }
           },
         });
         try {
