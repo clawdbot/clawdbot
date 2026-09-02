@@ -238,7 +238,7 @@ archive records are not refreshed by the npm hook updater.
 when reached through the deprecated alias; it is not a hooks-only bulk command.
 
 When an applicable stored integrity hash differs from the downloaded artifact,
-the updater warns and asks for confirmation in the terminal. No flag answers
+the updater warns and asks for confirmation in the terminal. No CLI flag answers
 that prompt: neither `plugins update` nor the `hooks update` alias accepts
 `--yes`, and `--acknowledge-install-policy-warning` covers only install-policy
 warnings. `--dry-run` reports the drift without prompting.
