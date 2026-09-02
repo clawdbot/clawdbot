@@ -88,7 +88,7 @@ export function renderNewSessionPlaceControls({
     machineClass: place.machineClass,
     deviceId: place.deviceId,
     autoDevice: place.autoDevice,
-    devicePlacement: place.devicePlacementRequirement(),
+    devicePlacement: place.devicePlacementRuntime()?.devicePlacement,
     deviceDisabledReason:
       place.modelControl.devicePlacementUnsupportedReason() ?? gateway.deviceCatalogDisabledReason,
   });
