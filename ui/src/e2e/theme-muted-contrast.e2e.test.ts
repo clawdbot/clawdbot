@@ -6,10 +6,6 @@ import { controlUiBundledGatewayUrl, installMockGateway } from "../test-helpers/
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
-const proofDirectory = path.resolve(
-  process.cwd(),
-  ".artifacts/control-ui-e2e/theme-muted-contrast",
-);
 
 const themeCases = [
   { family: "claw", mode: "dark", resolved: "dark" },
@@ -28,6 +24,12 @@ const themeCases = [
   { family: "phosphor", mode: "light", resolved: "phosphor-light" },
   { family: "crt", mode: "dark", resolved: "crt" },
   { family: "crt", mode: "light", resolved: "crt-light" },
+  { family: "manuscript", mode: "dark", resolved: "manuscript" },
+  { family: "manuscript", mode: "light", resolved: "manuscript-light" },
+  { family: "rose", mode: "dark", resolved: "rose" },
+  { family: "rose", mode: "light", resolved: "rose-light" },
+  { family: "miami", mode: "dark", resolved: "miami" },
+  { family: "miami", mode: "light", resolved: "miami-light" },
 ] as const;
 
 const textTokens = [
@@ -42,7 +44,18 @@ const textTokens = [
 const surfaceTokens = ["--bg", "--bg-elevated", "--bg-muted", "--card", "--panel"] as const;
 
 function themeConfigResponse(
-  family: "claw" | "knot" | "dash" | "absolutely" | "tide" | "beacon" | "phosphor" | "crt",
+  family:
+    | "claw"
+    | "knot"
+    | "dash"
+    | "absolutely"
+    | "tide"
+    | "beacon"
+    | "phosphor"
+    | "crt"
+    | "manuscript"
+    | "rose"
+    | "miami",
   mode: "dark" | "light",
   accent?: string,
 ) {
@@ -369,15 +382,18 @@ suite.define(() => {
         expect(await selected.getAttribute("value")).toBe(selectedValue);
 
         if (captureUiProof) {
-          await mkdir(proofDirectory, { recursive: true });
+          await mkdir(path.join(suite.artifactDir, "theme-muted-contrast"), { recursive: true });
           const proofName = accent ? `${resolved}-${accent.slice(1)}` : resolved;
           await page.screenshot({
             animations: "disabled",
             fullPage: true,
-            path: path.join(proofDirectory, `${proofName}.png`),
+            path: path.join(
+              path.join(suite.artifactDir, "theme-muted-contrast"),
+              `${proofName}.png`,
+            ),
           });
           await writeFile(
-            path.join(proofDirectory, `${proofName}.json`),
+            path.join(path.join(suite.artifactDir, "theme-muted-contrast"), `${proofName}.json`),
             `${JSON.stringify(
               {
                 accent,
@@ -480,14 +496,20 @@ suite.define(() => {
         expect(rendered.bodyWidth).toBeLessThanOrEqual(rendered.viewportWidth);
 
         if (captureUiProof) {
-          await mkdir(proofDirectory, { recursive: true });
+          await mkdir(path.join(suite.artifactDir, "theme-muted-contrast"), { recursive: true });
           await page.screenshot({
             animations: "disabled",
             fullPage: true,
-            path: path.join(proofDirectory, "skill-workshop-today-mobile.png"),
+            path: path.join(
+              path.join(suite.artifactDir, "theme-muted-contrast"),
+              "skill-workshop-today-mobile.png",
+            ),
           });
           await writeFile(
-            path.join(proofDirectory, "skill-workshop-today-mobile.json"),
+            path.join(
+              path.join(suite.artifactDir, "theme-muted-contrast"),
+              "skill-workshop-today-mobile.json",
+            ),
             `${JSON.stringify(rendered, null, 2)}\n`,
           );
         }

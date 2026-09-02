@@ -1558,7 +1558,9 @@ In `progress` mode, Slack's native agent card is the default: the whole turn is 
 
 Set `channels.slack.streaming.progress.nativeTaskCards` to `false` to fall back to the Block Kit session card, which posts a separate message showing a plain status summary, narration, and authored milestones, and finalizes to success or error. It does not add tool rows, generated emoji, or tool/file/time counters.
 
-Set `channels.slack.streaming.progress.style` to `"compact"` for one plain-text progress draft instead of either card surface. With the other progress controls below, commentary appears as italic text only, and an eligible final text answer replaces that same Slack message:
+Set `channels.slack.streaming.progress.style` to `"compact"` for one plain-text progress draft instead of either card surface. This is also the default when `progress.toolProgress` is `false` and no style is selected. With the other progress controls below, only authored commentary appears as italic text: plan checklists and tool-status lines never replace it. An eligible final text answer replaces that same Slack message. Set `style: "card"` explicitly to retain a card while hiding tool progress.
+
+For streamed preambles, Slack waits for the first complete preamble before creating the message, so its notification contains the full thought rather than a single token. Once that message exists, later preambles can stream as edits without another notification.
 
 ```json5
 {
@@ -2042,6 +2044,11 @@ openclaw channels status --probe
 openclaw logs --follow
 openclaw doctor
 ```
+
+    When preparation rejects an inbound event, the info-level log records
+    `Slack inbound event rejected during preparation` with a reason and routing IDs.
+    Records describe attempts: a rejected `message` event can still be followed by a
+    successful `app_mention` event for the same post. Self-message loop prevention stays quiet.
 
   </Accordion>
 

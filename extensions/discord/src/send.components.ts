@@ -172,6 +172,7 @@ type DiscordComponentSendOpts = {
   /** Persist the concrete platform send before component bookkeeping can fail. */
   onDeliveryResult?: (result: DiscordSendResult) => Promise<void> | void;
   onPlatformSendDispatch?: () => Promise<void>;
+  assertPlatformSendAuthorized?: () => void;
 };
 
 export function registerBuiltDiscordComponentMessage(params: {
@@ -294,6 +295,7 @@ export async function sendDiscordComponentMessage(
       chunkMode: opts.chunkMode,
       onDeliveryResult: opts.onDeliveryResult,
       onPlatformSendDispatch: opts.onPlatformSendDispatch,
+      assertPlatformSendAuthorized: opts.assertPlatformSendAuthorized,
       ...(opts.suppressEmbeds === undefined ? {} : { suppressEmbeds: opts.suppressEmbeds }),
     });
   }
@@ -326,6 +328,7 @@ export async function sendDiscordComponentMessage(
     result = (await request(
       async () => {
         await opts.onPlatformSendDispatch?.();
+        opts.assertPlatformSendAuthorized?.();
         return createChannelMessage<{ id: string; channel_id: string }>(rest, channelId, {
           body,
         });

@@ -11,7 +11,7 @@ import {
   estimateStringChars,
 } from "@openclaw/normalization-core/cjk-chars";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { sliceUtf16Safe, truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { resolveAgentReasoningOption } from "../../reasoning.js";
 import {
   type AgentCoreCompletionRuntimeDeps,
@@ -49,6 +49,8 @@ export interface CompactionDetails {
   readFiles: string[];
   /** Files modified in the compacted history. */
   modifiedFiles: string[];
+  /** Run-owned request that remains active across another compaction generation. */
+  latestUnresolvedUserRequest?: string;
 }
 
 function parseCompactionDetails(value: unknown): CompactionDetails | undefined {
@@ -62,7 +64,16 @@ function parseCompactionDetails(value: unknown): CompactionDetails | undefined {
   ) {
     return undefined;
   }
-  return { readFiles: details.readFiles, modifiedFiles: details.modifiedFiles };
+  const request = details.latestUnresolvedUserRequest;
+  const latestUnresolvedUserRequest =
+    typeof request === "string" && request.length <= MAX_LATEST_USER_REQUEST_CHARS
+      ? request
+      : undefined;
+  return {
+    readFiles: details.readFiles,
+    modifiedFiles: details.modifiedFiles,
+    ...(latestUnresolvedUserRequest ? { latestUnresolvedUserRequest } : {}),
+  };
 }
 
 function extractFileOperations(
@@ -109,6 +120,27 @@ export interface CompactionResult<T = unknown> {
 // this provider-independent 16K hard bound.
 export const MAX_COMPACTION_SUMMARY_CHARS = 16_000;
 export const SUMMARY_TRUNCATED_MARKER = "\n\n[Compaction summary truncated to fit budget]";
+const MAX_LATEST_USER_REQUEST_CHARS = 800;
+const LATEST_USER_REQUEST_TRUNCATED_MARKER = "\n[... latest user request truncated ...]\n";
+
+function extractLatestUserRequest(messages: AgentMessage[]): string | undefined {
+  let source = "";
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (message?.role === "user") {
+      source = getCompactionContent(message.content).text.trim();
+      if (source) {
+        break;
+      }
+    }
+  }
+  if (!source || source.length <= MAX_LATEST_USER_REQUEST_CHARS) {
+    return source || undefined;
+  }
+  const contentBudget = MAX_LATEST_USER_REQUEST_CHARS - LATEST_USER_REQUEST_TRUNCATED_MARKER.length;
+  const headBudget = Math.floor(contentBudget / 2);
+  return `${truncateUtf16Safe(source, headBudget)}${LATEST_USER_REQUEST_TRUNCATED_MARKER}${sliceUtf16Safe(source, -(contentBudget - headBudget))}`;
+}
 
 export function capCompactionSummary(
   summary: string,
@@ -703,6 +735,8 @@ export interface CompactionPreparation {
   turnPrefixMessages: AgentMessage[];
   /** Whether compaction splits a turn. */
   isSplitTurn: boolean;
+  /** Bounded request that the run owner will resume after compaction. */
+  latestUnresolvedUserRequest?: string;
   /** Estimated context tokens before compaction. */
   tokensBefore: number;
   /** Previous compaction summary used for iterative updates. */
@@ -719,6 +753,7 @@ export interface CompactionPreparation {
 export function prepareCompaction(
   pathEntries: SessionTreeEntry[],
   settings: CompactionSettings,
+  requestState?: "unresolved",
 ): Result<CompactionPreparation | undefined, CompactionError> {
   const lastEntry = pathEntries.at(-1);
   if (
@@ -741,14 +776,19 @@ export function prepareCompaction(
 
   let previousSummary: string | undefined;
   let previousSummaryDetails: CompactionDetails | undefined;
+  let previousLatestUnresolvedUserRequest: string | undefined;
   let effectiveEntries = pathEntries;
   let resetPreludeMessages: AgentMessage[] = [];
   let boundaryStart = 0;
   if (prevBoundaryIndex >= 0) {
     const prevBoundary = pathEntries[prevBoundaryIndex];
     previousSummary = prevBoundary?.type === "compaction" ? prevBoundary.summary : undefined;
-    if (prevBoundary?.type === "compaction" && !prevBoundary.fromHook) {
-      previousSummaryDetails = parseCompactionDetails(prevBoundary.details);
+    if (prevBoundary?.type === "compaction") {
+      const details = parseCompactionDetails(prevBoundary.details);
+      previousLatestUnresolvedUserRequest = details?.latestUnresolvedUserRequest;
+      if (!prevBoundary.fromHook) {
+        previousSummaryDetails = details;
+      }
     }
     const firstKeptEntryId =
       prevBoundary?.type === "compaction" || prevBoundary?.type === "reset"
@@ -773,6 +813,9 @@ export function prepareCompaction(
   const boundaryEnd = effectiveEntries.length;
 
   const contextMessages = buildSessionContext(pathEntries).messages;
+  const latestUnresolvedUserRequest = requestState
+    ? (extractLatestUserRequest(contextMessages) ?? previousLatestUnresolvedUserRequest)
+    : undefined;
   const contextUsage = estimateContextTokens(contextMessages);
   const tokensBefore = contextUsage.tokens;
   const totalEstimatedTokens = contextMessages.reduce(
@@ -848,6 +891,7 @@ export function prepareCompaction(
     messagesToSummarize,
     turnPrefixMessages,
     isSplitTurn: cutPoint.isSplitTurn,
+    ...(latestUnresolvedUserRequest ? { latestUnresolvedUserRequest } : {}),
     tokensBefore,
     previousSummary,
     previousSummaryDetails,
@@ -896,7 +940,6 @@ export async function compact(
     fileOps,
     settings,
   } = preparation;
-
   if (!firstKeptEntryId) {
     return err(
       new CompactionError(
@@ -972,8 +1015,11 @@ export async function compact(
     fileOperations.length -
     preservedHistoryChars;
   latestContext = `${capCompactionSummary(latestContext, latestContextBudget)}${fileOperations}`;
+  const unresolvedRequestContext = preparation.latestUnresolvedUserRequest
+    ? `## Latest unresolved user request\n${JSON.stringify(preparation.latestUnresolvedUserRequest)}\n\n`
+    : "";
   const summary = capCompactionSummary(
-    `${historyResult.value}${latestContext}`,
+    `${unresolvedRequestContext}${historyResult.value}${latestContext}`,
     MAX_COMPACTION_SUMMARY_CHARS,
     latestContext,
   );
@@ -982,7 +1028,13 @@ export async function compact(
     summary,
     firstKeptEntryId,
     tokensBefore,
-    details: { readFiles, modifiedFiles } as CompactionDetails,
+    details: {
+      readFiles,
+      modifiedFiles,
+      ...(preparation.latestUnresolvedUserRequest
+        ? { latestUnresolvedUserRequest: preparation.latestUnresolvedUserRequest }
+        : {}),
+    } as CompactionDetails,
   });
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

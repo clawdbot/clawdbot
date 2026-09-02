@@ -1,8 +1,19 @@
-import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import { sessionBindingIdentity, type CodexAppServerBindingStore } from "./session-binding.js";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import {
+  createPluginRuntimeMock,
+  resetPluginRuntimeStateForTest,
+} from "openclaw/plugin-sdk/plugin-test-runtime";
+import {
+  closeOpenClawAgentDatabasesForTest,
+  closeOpenClawStateDatabaseForTest,
+} from "openclaw/plugin-sdk/sqlite-runtime-testing";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { CodexAppServerBindingStore } from "./session-binding.js";
 import { createCodexTestBindingStore } from "./session-binding.test-helpers.js";
 import {
+  createForkTestRuntime,
   forkControl,
   forkParams,
   forkResponse,
@@ -22,8 +33,7 @@ const transcriptMocks = vi.hoisted(() => ({
 
 const boundary = {
   beforeTurnId: "turn-2",
-  targetTurnId: "turn-2",
-  retainedMarker: { turnId: "turn-1", userMessageCount: 1 },
+  lastRetainedTurnId: "turn-1",
 } as const;
 
 vi.mock("openclaw/plugin-sdk/session-catalog", async (importOriginal) => ({
@@ -49,7 +59,10 @@ vi.mock("./upstream-fork-boundary.js", () => ({
 
 import { forkCodexUpstreamSession } from "./upstream-session-fork.js";
 
+let stateDir: string;
 beforeEach(() => {
+  stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "codex-fork-owner-"));
+  vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
   boundaryMocks.listTurns.mockReset();
   linkMocks.delete.mockReset();
   linkMocks.upsert.mockReset().mockReturnValue(true);
@@ -57,6 +70,15 @@ beforeEach(() => {
     importedMessages: 1,
     omittedMessages: 0,
   });
+});
+
+afterEach(() => {
+  closeOpenClawAgentDatabasesForTest();
+  closeOpenClawStateDatabaseForTest();
+  resetPluginRuntimeStateForTest();
+  vi.unstubAllEnvs();
+  vi.restoreAllMocks();
+  fs.rmSync(stateDir, { recursive: true, force: true });
 });
 
 describe("forkCodexUpstreamSession", () => {
@@ -72,18 +94,17 @@ describe("forkCodexUpstreamSession", () => {
       events.push("link");
       return true;
     });
-    const mutate = vi.fn(async () => {
+    const bindingStore = createCodexTestBindingStore();
+    const write = bindingStore.mutate.bind(bindingStore);
+    const mutate = vi.spyOn(bindingStore, "mutate").mockImplementation(async (...args) => {
       events.push("bind");
-      return true;
+      return await write(...args);
     });
-    const runtime = createPluginRuntimeMock();
+    const runtime = createForkTestRuntime(undefined, bindingStore, "codex-custom");
     const createSessionEntry = vi.mocked(runtime.agent.session.createSessionEntry);
 
     const result = await forkCodexUpstreamSession(forkParams(), {
-      bindingStore: {
-        read: vi.fn(async () => undefined),
-        mutate,
-      } as unknown as CodexAppServerBindingStore,
+      bindingStore,
       controlFactory,
       harnessRuntimeId: "codex-custom",
       resolveConfig: () => ({}),
@@ -109,6 +130,7 @@ describe("forkCodexUpstreamSession", () => {
         sessionKey: "agent:main:dashboard:forked",
         threadId: "thread-forked",
       }),
+      expect.objectContaining({ ifAbsent: true }),
     );
     expect(runtime.agent.session.createSessionEntry).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -132,6 +154,7 @@ describe("forkCodexUpstreamSession", () => {
           },
         }),
       }),
+      expect.any(Function),
     );
     expect(result).toEqual({
       status: "created",
@@ -146,20 +169,23 @@ describe("forkCodexUpstreamSession", () => {
       .mockResolvedValueOnce([codexForkTurn("turn-2", "edit me")])
       .mockResolvedValueOnce([codexForkTurn("turn-1", "one")]);
     const { controlFactory, forkThread } = forkControl();
+    const bindingStore = createCodexTestBindingStore();
+    const runtime = createForkTestRuntime(undefined, bindingStore, "codex-custom");
     const requiredFork = { ...forkParams(), sandbox: "required" as const };
 
     const result = await forkCodexUpstreamSession(requiredFork, {
-      bindingStore: {
-        read: vi.fn(async () => undefined),
-        mutate: vi.fn(async () => true),
-      } as unknown as CodexAppServerBindingStore,
+      bindingStore,
       controlFactory,
       harnessRuntimeId: "codex-custom",
       resolveConfig: () => ({}),
-      runtime: createPluginRuntimeMock(),
+      runtime,
     });
 
-    expect(result).toMatchObject({ status: "created" });
+    expect(result).toEqual({
+      status: "created",
+      key: forkParams().targetKey,
+      editorText: "edit me",
+    });
     expect(forkThread).toHaveBeenCalledWith(
       expect.objectContaining({ sandbox: "workspace-write" }),
     );
@@ -216,10 +242,7 @@ describe("forkCodexUpstreamSession", () => {
     const runtime = createPluginRuntimeMock();
 
     const result = await forkCodexUpstreamSession(forkParams(), {
-      bindingStore: {
-        read: vi.fn(async () => undefined),
-        mutate: vi.fn(),
-      } as unknown as CodexAppServerBindingStore,
+      bindingStore: createCodexTestBindingStore(),
       controlFactory,
       harnessRuntimeId: "codex",
       runtime,
@@ -230,124 +253,12 @@ describe("forkCodexUpstreamSession", () => {
       code: "upstream-unavailable",
       message: expect.stringContaining("Codex version"),
     });
-    expect(archiveThread).toHaveBeenCalledWith("thread-forked");
+    expect(archiveThread).toHaveBeenCalledWith("thread-forked", undefined);
     expect(runtime.agent.session.createSessionEntry).not.toHaveBeenCalled();
     expect(linkMocks.upsert).not.toHaveBeenCalled();
   });
 
-  it("cleans the link and archives the fork when binding materialization fails", async () => {
-    boundaryMocks.listTurns
-      .mockResolvedValueOnce([codexForkTurn("turn-2", "edit me")])
-      .mockResolvedValueOnce([codexForkTurn("turn-1", "one")]);
-    const { archiveThread, controlFactory } = forkControl();
-    const mutate = vi.fn(async () => false);
-
-    const result = await forkCodexUpstreamSession(forkParams(), {
-      bindingStore: {
-        read: vi.fn(async () => undefined),
-        mutate,
-      } as unknown as CodexAppServerBindingStore,
-      controlFactory,
-      harnessRuntimeId: "codex",
-      runtime: createPluginRuntimeMock(),
-    });
-
-    expect(result).toMatchObject({ status: "failed", code: "upstream-unavailable" });
-    expect(linkMocks.delete).toHaveBeenCalledWith("agent:main:dashboard:forked", "main");
-    expect(mutate).toHaveBeenCalledOnce();
-    expect(archiveThread).toHaveBeenCalledWith("thread-forked");
-  });
-
-  it.each([
-    "set threw before write",
-    "set committed then threw",
-    "finalization",
-    "pending successor",
-    "materialized successor",
-  ])("compensates only its exact pending creation after %s fails", async (failure) => {
-    boundaryMocks.listTurns
-      .mockResolvedValueOnce([codexForkTurn("turn-2", "edit me")])
-      .mockResolvedValueOnce([codexForkTurn("turn-1", "one")]);
-    const { archiveThread, controlFactory } = forkControl();
-    const bindingStore = createCodexTestBindingStore();
-    const mutate = bindingStore.mutate.bind(bindingStore);
-    if (failure === "set threw before write" || failure === "set committed then threw") {
-      vi.spyOn(bindingStore, "mutate").mockImplementation(async (identity, mutation) => {
-        if (mutation.kind === "set" && failure === "set threw before write") {
-          throw new Error("Pre-write failure");
-        }
-        const result = await mutate(identity, mutation);
-        if (mutation.kind === "set") {
-          throw new Error("Post-write failure");
-        }
-        return result;
-      });
-    }
-    const runtime = createPluginRuntimeMock();
-    const createSession = vi.mocked(runtime.agent.session.createSessionEntry);
-    const initialize = createSession.getMockImplementation()!;
-    let createdIdentity: ReturnType<typeof sessionBindingIdentity> | undefined;
-    let successor: Awaited<ReturnType<typeof bindingStore.read>>;
-    createSession.mockImplementation(async (params) => {
-      if (params.recoverMatchingInitialEntry) {
-        throw new Error("Message forks must initialize a fresh child, not recover an existing one");
-      }
-      // Capture the callback's physical generation, including a post-write throw.
-      const created = await initialize({
-        ...params,
-        afterCreate: async (entry) => {
-          createdIdentity = sessionBindingIdentity({
-            agentId: entry.agentId,
-            sessionId: entry.sessionId,
-            sessionKey: entry.key,
-          });
-          return await params.afterCreate?.(entry);
-        },
-      });
-      const identity = createdIdentity!;
-      const pending = (await bindingStore.read(identity))!.pendingSupervisionBranch!;
-      if (failure === "pending successor") {
-        await mutate(identity, {
-          kind: "patch-pending-supervision-branch",
-          expected: pending,
-          pending: { ...pending, cleanupThreadIds: ["thread-successor-probe"] },
-        });
-      } else if (failure === "materialized successor") {
-        await mutate(identity, {
-          kind: "commit-pending-supervision-branch",
-          expected: pending,
-          threadId: "thread-successor-canonical",
-          patch: { appServerRuntimeFingerprint: "fingerprint" },
-        });
-      }
-      successor = await bindingStore.read(identity);
-      expect(created.entry.modelSelectionLocked).toBe(true);
-      throw new Error("Session finalization failed");
-    });
-
-    await expect(
-      forkCodexUpstreamSession(forkParams(), {
-        bindingStore,
-        controlFactory,
-        harnessRuntimeId: "codex",
-        runtime,
-      }),
-    ).resolves.toMatchObject({ status: "failed", code: "upstream-unavailable" });
-
-    const remaining = await bindingStore.read(createdIdentity!);
-    if (failure === "pending successor" || failure === "materialized successor") {
-      expect(remaining).toEqual(successor);
-      expect(linkMocks.delete).not.toHaveBeenCalled();
-      expect(archiveThread).not.toHaveBeenCalled();
-    } else {
-      expect(remaining).toBeUndefined();
-      expect(linkMocks.delete).toHaveBeenCalledWith(forkParams().targetKey, "main");
-      expect(archiveThread).toHaveBeenCalledExactlyOnceWith("thread-forked");
-    }
-    expect(createSession.mock.calls[0]?.[0].initialEntry.modelSelectionLocked).toBe(true);
-  });
-
-  it("archives a recoverable orphan id when the fork response is invalid", async () => {
+  it("leaves unverified orphan ids unowned when the fork response is invalid", async () => {
     boundaryMocks.listTurns.mockResolvedValueOnce([codexForkTurn("turn-2", "edit me")]);
     const { archiveThread, controlFactory } = forkControl(
       vi.fn(async () => ({ thread: { id: "thread-orphan" } })),
@@ -361,7 +272,7 @@ describe("forkCodexUpstreamSession", () => {
     });
 
     expect(result).toMatchObject({ status: "failed", code: "upstream-unavailable" });
-    expect(archiveThread).toHaveBeenCalledWith("thread-orphan");
+    expect(archiveThread).not.toHaveBeenCalled();
   });
 
   it.each(["thread-source", "thread-canonical"])(

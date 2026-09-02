@@ -7,10 +7,11 @@ import { tryBeginGatewayRootWorkAdmission } from "../../process/gateway-work-adm
 type GatewayBoundaryHandler = () => Promise<boolean> | boolean;
 
 async function runWithGatewayBoundaryWorkAdmission(
+  origin: string,
   reject: () => void,
   run: GatewayBoundaryHandler,
 ): Promise<boolean> {
-  const admission = tryBeginGatewayRootWorkAdmission();
+  const admission = tryBeginGatewayRootWorkAdmission(origin);
   if (!admission) {
     reject();
     return true;
@@ -28,6 +29,7 @@ export async function runWithGatewayHttpWorkAdmission(
   run: GatewayBoundaryHandler,
 ): Promise<boolean> {
   return await runWithGatewayBoundaryWorkAdmission(
+    "http:request",
     () => {
       res.statusCode = 503;
       res.setHeader("Content-Type", "application/json; charset=utf-8");
@@ -72,8 +74,12 @@ export async function runWithGatewayUpgradeWorkAdmission(
   socket: Duplex,
   run: GatewayBoundaryHandler,
 ): Promise<boolean> {
-  return await runWithGatewayBoundaryWorkAdmission(() => {
-    writeGatewayUpgradeServiceUnavailable(socket, "Gateway websocket admission closed");
-    socket.destroy();
-  }, run);
+  return await runWithGatewayBoundaryWorkAdmission(
+    "http:upgrade",
+    () => {
+      writeGatewayUpgradeServiceUnavailable(socket, "Gateway websocket admission closed");
+      socket.destroy();
+    },
+    run,
+  );
 }

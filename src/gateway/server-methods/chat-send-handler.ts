@@ -26,6 +26,10 @@ import type { ChatRunTiming } from "../server-chat-state.js";
 import { SessionMutationAuthorizationChangedError } from "../session-sharing.js";
 import { loadSessionEntry } from "../session-utils.js";
 import {
+  prepareGatewaySkillAuthoring,
+  invalidateSkillAuthoringForOtherRequester,
+} from "../skill-library-authoring.js";
+import {
   terminalizeRestartSafeChatAdmission,
   type RestartSafeChatTerminalState,
 } from "./chat-restart-recovery.js";
@@ -54,6 +58,7 @@ import type { GatewayRequestHandlerOptions } from "./types.js";
 type ChatSendInternalOptions = {
   goalResume?: SessionGoalOperation & { action: "resume" };
   trustedSystemInput?: boolean;
+  transcript?: Parameters<typeof createGatewayChatUserTurnController>[0]["transcript"];
   toolsAllow?: string[];
   skillWorkshopProposalRevision?: SkillWorkshopProposalRevisionConstraint;
 };
@@ -172,6 +177,7 @@ async function handleChatSendWithOptions(
       client,
       request: normalizedRequest.value,
       session: preparedSession.value,
+      transcript: options?.transcript,
       startedAt: admissionStartedAt,
       warn: (message) => context.logGateway.warn(message),
       assertGoalCurrent: () => {
@@ -180,6 +186,7 @@ async function handleChatSendWithOptions(
         const currentConfig = context.getRuntimeConfig();
         const initialEntry = admitted.value.initialSessionEntry;
         if (initialEntry) {
+          admitted.value.assertInitialSkillSelection?.();
           // Missing targets have no sharing owner yet; revalidate their creator before SQL commit.
           const currentTarget = loadSessionEntry(
             preparedSession.value.sessionLoadKey,
@@ -235,6 +242,7 @@ async function handleChatSendWithOptions(
       attachments: preparedAttachments.value,
       client,
       logGateway: context.logGateway,
+      getConfig: context.getRuntimeConfig,
       userTurn,
     });
     const { ctx, isInternalTextSlashCommandTurn } = preparedUserTurn;
@@ -365,10 +373,17 @@ async function handleChatSendWithOptions(
       }
     }
 
+    if (messageInjectionTarget) {
+      invalidateSkillAuthoringForOtherRequester(
+        sessionKey,
+        client?.internal?.syntheticClient ? undefined : client?.authenticatedUserProfile?.profileId,
+      );
+    }
     const beginCapturedMessageInjection = createChatSendMessageInjectionStarter({
       target: messageInjectionTarget,
       request: normalizedRequest.value,
       session: preparedSession.value,
+      admittedSessionSettings: admitted.value.admittedSessionSettings,
       turn: preparedUserTurn,
       imageOrder,
       userTurnTranscriptRecorder: userTurnRecorder,
@@ -399,6 +414,23 @@ async function handleChatSendWithOptions(
       return;
     }
     messageInjectionAttempt = preAckInjection.attempt;
+    // The admitted turn owns authoring after creating a session; the request's
+    // absent-target authorization expires when that session is materialized.
+    const skillLibraryAuthoring = prepareGatewaySkillAuthoring(
+      {
+        client,
+        context,
+        sessionMutationCommitGuard: () => {
+          sessionMutationCommitGuard?.();
+          admitted.value.assertWorkAdmissionCurrent();
+        },
+      },
+      sessionKey,
+      !options &&
+        !systemInputProvenance &&
+        !reconnectResumeRequested &&
+        normalizedRequest.value.turnKind === "main",
+    );
     const serverTiming = shouldIncludeChatSendAckServerTiming(clientInfo)
       ? {
           receivedToAckMs: roundedChatSendTimingMs(performance.now() - chatSendReceivedAtMs),
@@ -420,10 +452,13 @@ async function handleChatSendWithOptions(
       clientRunId,
       ...(chatSendTiming ? { chatSendTiming } : {}),
     });
+    // Only the recorder can attest transcript placement; custody and a started ACK cannot.
+    const receipt = userTurnRecorder.getAdmissionReceipt?.();
     const ackPayload = {
       ...goalResult,
       runId: clientRunId,
       status: "started" as const,
+      ...(receipt ? { messageSeq: receipt.activeMessagePosition + 1 } : {}),
       ...(interruptedActiveRun ? { interruptedActiveRun: true } : {}),
       ...(serverTiming ? { serverTiming } : {}),
     };
@@ -455,6 +490,7 @@ async function handleChatSendWithOptions(
       context,
       toolsAllow: options?.toolsAllow,
       skillWorkshopProposalRevision: options?.skillWorkshopProposalRevision,
+      skillLibraryAuthoring,
       cronCreatorAuthority,
       externalAuthorityAdmission,
       injection: {
@@ -504,14 +540,6 @@ export async function handleSessionGoalResumeChat(
   await handleChatSendWithOptions(options, undefined, undefined, { goalResume: operation });
 }
 
-/** Dispatches an internally delegated turn within its caller-owned tool boundary. */
-export async function handleChatSendWithRuntimeTools(
-  options: GatewayRequestHandlerOptions,
-  toolsAllow: string[],
-): Promise<void> {
-  await handleChatSendWithOptions(options, undefined, undefined, { toolsAllow });
-}
-
 /** Dispatches an operator-requested proposal revision with its reviewed revision bound to the run. */
 export async function handleChatSendWithSkillWorkshopProposalRevision(
   options: GatewayRequestHandlerOptions,
@@ -527,8 +555,10 @@ export async function handleChatSendWithSkillWorkshopProposalRevision(
 export async function handleTrustedInternalChatSend(
   options: GatewayRequestHandlerOptions,
   onAdmissionOwned?: () => Promise<boolean>,
+  inputOptions?: Pick<ChatSendInternalOptions, "transcript" | "toolsAllow">,
 ): Promise<void> {
   await handleChatSendWithOptions(options, onAdmissionOwned, undefined, {
+    ...inputOptions,
     trustedSystemInput: true,
   });
 }

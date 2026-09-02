@@ -210,16 +210,21 @@ describe("diagnostic session state pruning", () => {
     expect(diagnosticSessionStates.size).toBe(1);
   });
 
-  it("caps tracked session states to a bounded max", () => {
-    const now = Date.now();
-    for (let i = 0; i < 2001; i += 1) {
-      vi.setSystemTime(now + i);
-      getDiagnosticSessionState({ sessionKey: `session-${i}` }).queueDepth = 1;
-    }
+  it.each(["session-0", ""])(
+    "caps tracked session states when the oldest key is %j",
+    (oldestKey) => {
+      const now = Date.now();
+      for (let i = 0; i < 2001; i += 1) {
+        vi.setSystemTime(now + i);
+        getDiagnosticSessionState({
+          sessionKey: i === 0 ? oldestKey : `session-${i}`,
+        }).queueDepth = 1;
+      }
 
-    expect(diagnosticSessionStates.size).toBe(2000);
-    expect(diagnosticSessionStates.has("session-0")).toBe(false);
-  });
+      expect(diagnosticSessionStates.size).toBe(2000);
+      expect(diagnosticSessionStates.has(oldestKey)).toBe(false);
+    },
+  );
 
   it("reuses keyed session state when later looked up by sessionId", () => {
     const keyed = getDiagnosticSessionState({

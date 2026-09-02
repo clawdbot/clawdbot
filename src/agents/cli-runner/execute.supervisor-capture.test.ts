@@ -17,6 +17,9 @@ import {
   type TrustedToolExecutionEvent,
 } from "../../infra/diagnostic-events.js";
 import type { CliBackendParseJsonlEvent } from "../../plugins/cli-backend.types.js";
+import { getPluginModuleLoaderStats } from "../../plugins/plugin-module-loader-cache.js";
+import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
+import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import type { getProcessSupervisor } from "../../process/supervisor/index.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { createTestUserTurnTranscriptTarget } from "../../sessions/user-turn-transcript.test-support.js";
@@ -151,6 +154,20 @@ beforeEach(() => {
   resetAgentEventsForTest();
   resetDiagnosticEventsForTest();
   supervisorSpawnMock.mockReset();
+  // These contexts bypass preparation, which normally loads the provider owner.
+  // Unknown CLI errors must not materialize bundled plugins inside this fixture.
+  const registry = createEmptyPluginRegistry();
+  registry.providers.push({
+    pluginId: "fixture-cli-provider",
+    provider: {
+      id: "fixture-cli-provider",
+      label: "Fixture CLI provider",
+      hookAliases: ["claude-cli", "codex-cli", "google-gemini-cli"],
+      auth: [],
+    },
+    source: "test",
+  });
+  setActivePluginRegistry(registry);
 });
 
 describe("executePreparedCliRun supervisor output capture", () => {
@@ -508,42 +525,43 @@ describe("executePreparedCliRun supervisor output capture", () => {
     expect(result.sessionId).toBe("resume-jsonl-session");
   });
 
-  it("classifies failed stdout from the retained parse buffer before the diagnostic tail", async () => {
-    // The error classifier needs the retained parse buffer; the human-facing
-    // diagnostic tail may contain only noise once stdout grows large.
-    const errorPrefix = `${JSON.stringify({
-      type: "result",
-      is_error: true,
-      result: "429 rate limit exceeded",
-    })}\n`;
-    const noisyTail = "x".repeat(80 * 1024);
+  it.each(["stdout", "stderr"] as const)(
+    "classifies failed %s from the retained parse buffer before other candidates",
+    async (stream) => {
+      // The error classifier needs the retained parse buffer; the human-facing
+      // diagnostic tail may contain only noise once stdout grows large.
+      const errorPrefix = `${JSON.stringify({
+        type: "result",
+        is_error: true,
+        result: "429 rate limit exceeded",
+      })}\n`;
+      const noisyTail = "x".repeat(80 * 1024);
 
-    supervisorSpawnMock.mockImplementationOnce(async (...args: unknown[]) => {
-      const input = args[0] as SupervisorSpawnInput;
-      input.onStdout?.(errorPrefix);
-      input.onStdout?.(noisyTail);
-      return createManagedRun({
-        reason: "exit",
-        exitCode: 1,
-        exitSignal: null,
-        durationMs: 50,
-        stdout: input.captureOutput === false ? "" : `${errorPrefix}${noisyTail}`,
-        stderr: "",
-        timedOut: false,
-        noOutputTimedOut: false,
+      supervisorSpawnMock.mockImplementationOnce(async (...args: unknown[]) => {
+        const input = args[0] as SupervisorSpawnInput;
+        const emit = stream === "stderr" ? input.onStderr : input.onStdout;
+        emit?.(errorPrefix);
+        emit?.(noisyTail);
+        if (stream === "stderr") {
+          input.onStdout?.(JSON.stringify({ type: "error", message: "Credit balance is too low" }));
+        }
+        return createManagedRun({
+          reason: "exit",
+          exitCode: 1,
+          exitSignal: null,
+          durationMs: 50,
+          stdout: "",
+          stderr: "",
+          timedOut: false,
+          noOutputTimedOut: false,
+        });
       });
-    });
 
-    try {
-      await executePreparedCliRun(buildPreparedCliRunContext({ output: "text" }));
-    } catch (error) {
-      const classified = error as { reason?: unknown; status?: unknown };
-      expect(classified.reason).toBe("rate_limit");
-      expect(classified.status).toBe(429);
-      return;
-    }
-    throw new Error("Expected CLI run to reject with a rate limit error");
-  });
+      await expect(
+        executePreparedCliRun(buildPreparedCliRunContext({ output: "text" })),
+      ).rejects.toMatchObject({ reason: "rate_limit", status: 429 });
+    },
+  );
 
   it("fails one-shot Claude is_error results even when the process exits successfully", async () => {
     const stdout = `${JSON.stringify({
@@ -1581,6 +1599,7 @@ describe("executePreparedCliRun supervisor output capture", () => {
   });
 
   it("finishes parsed CLI tools when the process exits before a tool result", async () => {
+    const pluginLoaderCalls = getPluginModuleLoaderStats().calls;
     const toolEvents: TrustedToolExecutionEvent[] = [];
     const stop = onTrustedToolExecutionEvent((event) => toolEvents.push(event));
     const toolStart = `${JSON.stringify({
@@ -1633,6 +1652,10 @@ describe("executePreparedCliRun supervisor output capture", () => {
         errorCategory: "cli_tool_incomplete",
       },
     ]);
+    expect(
+      getPluginModuleLoaderStats().calls,
+      "prepared CLI execution must not materialize provider plugins",
+    ).toBe(pluginLoaderCalls);
   });
 
   it("cancels an outstanding parsed CLI tool when the enclosing run is aborted", async () => {

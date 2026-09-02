@@ -29,6 +29,7 @@ import {
   assertDisjointPromotionTargets,
   assertSupportedStagedStateTree,
   createPromotionResume,
+  migrationPathEntryExists,
   moveRecordedEmptyTarget,
   PROMOTION_JOURNAL_FILE,
   PROMOTION_JOURNAL_VERSION,
@@ -81,21 +82,9 @@ type SetupMigrationStage = {
   cleanup: () => Promise<void>;
 };
 
-async function pathExists(candidate: string): Promise<boolean> {
-  try {
-    await fs.lstat(candidate);
-    return true;
-  } catch (error) {
-    if (isNotFoundPathError(error)) {
-      return false;
-    }
-    throw error;
-  }
-}
-
 async function findExistingAncestor(candidate: string): Promise<string> {
   let current = path.resolve(candidate);
-  while (!(await pathExists(current))) {
+  while (!(await migrationPathEntryExists(current))) {
     const parent = path.dirname(current);
     if (parent === current) {
       throw new Error(`Could not find an existing parent for migration staging at ${candidate}.`);
@@ -388,7 +377,8 @@ export async function createSetupMigrationStage(params: {
       ];
       const existingComponents: PromotionComponent[] = [];
       for (const component of components) {
-        if (component.name === "workspace" || (await pathExists(component.stagedPath))) {
+        const { name, stagedPath } = component;
+        if (name === "workspace" || (await migrationPathEntryExists(stagedPath))) {
           existingComponents.push(component);
         }
       }

@@ -50,6 +50,22 @@ function click(anchor: HTMLAnchorElement, init: MouseEventInit = {}) {
   return event;
 }
 
+function clickWithoutNavigation(anchor: HTMLAnchorElement, init: MouseEventInit = {}) {
+  let defaultPrevented: boolean | undefined;
+  const preventNavigation = (event: MouseEvent) => {
+    defaultPrevented = event.defaultPrevented;
+    event.preventDefault();
+  };
+  // Observe after the native router, then suppress jsdom's default navigation.
+  window.addEventListener("click", preventNavigation, { once: true });
+  try {
+    click(anchor, init);
+    return defaultPrevented;
+  } finally {
+    window.removeEventListener("click", preventNavigation);
+  }
+}
+
 function contextMenu(anchor: HTMLAnchorElement) {
   const event = new MouseEvent("contextmenu", {
     bubbles: true,
@@ -192,7 +208,7 @@ describe("native link routing", () => {
     ]);
   });
 
-  it("preserves modifiers, local/file/download links, and non-web schemes", () => {
+  it("preserves modified, local, file, download, and untrusted app-link clicks", () => {
     const bridge = installBridge();
     routing = startNativeLinkRouting();
     const links = [
@@ -202,15 +218,11 @@ describe("native link routing", () => {
       appendLink("mailto:hello@example.com"),
     ];
     for (const anchor of links) {
-      anchor.addEventListener("click", (event) => event.preventDefault());
-      click(anchor);
+      expect(clickWithoutNavigation(anchor)).toBe(false);
     }
     const modified = appendLink("https://example.com/modified");
-    const bubbleHandler = vi.fn((event: Event) => event.preventDefault());
-    modified.addEventListener("click", bubbleHandler);
-    click(modified, { metaKey: true });
+    expect(clickWithoutNavigation(modified, { metaKey: true })).toBe(false);
 
-    expect(bubbleHandler).toHaveBeenCalledOnce();
     expect(bridge.messages).toEqual([]);
   });
 
@@ -317,9 +329,10 @@ describe("native link routing", () => {
 
     routing.dispose();
     routing = undefined;
-    anchor.addEventListener("click", (event) => event.preventDefault());
-    click(anchor);
 
+    expect(document.querySelector("openclaw-native-link-menu")).toBeNull();
+    expect(clickWithoutNavigation(anchor)).toBe(false);
+    expect(contextMenu(anchor).defaultPrevented).toBe(false);
     expect(document.querySelector("openclaw-native-link-menu")).toBeNull();
     expect(bridge.messages).toEqual([]);
   });

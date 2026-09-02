@@ -1,5 +1,10 @@
 // Hook update helpers refresh installed hook records and config references.
+import { expectDefined } from "@openclaw/normalization-core";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import {
+  requestDeferredPackageDirInstall,
+  resolvePackageDirInstallTransaction,
+} from "../infra/install-package-dir.js";
 import { buildNpmResolutionFields } from "../infra/install-source-utils.js";
 import {
   expectedIntegrityForUpdate,
@@ -7,12 +12,15 @@ import {
   readInstalledPackageVersion,
 } from "../infra/package-update-utils.js";
 import type { InstallSafetyOverrides } from "../plugins/install-security-scan.types.js";
+import { resolvePluginInstallTransactionSink } from "../plugins/install-transaction.js";
+import type { PluginLifecycleLeaseContext } from "../plugins/plugin-lifecycle-lease.js";
+import { stageHookInstall } from "./install-record-transaction.js";
 import {
   installHooksFromNpmSpec,
   type HookNpmIntegrityDriftParams,
   resolveHookInstallDir,
 } from "./install.js";
-import { readHookInstalls, recordHookInstall } from "./installs.js";
+import { readHookInstalls } from "./installs.js";
 
 /** Logger contract for hook pack update operations. */
 type HookPackUpdateLogger = {
@@ -82,14 +90,32 @@ export async function updateNpmInstalledHookPacks(params: {
   logger?: HookPackUpdateLogger;
   hookIds?: string[];
   dryRun?: boolean;
+  lease?: PluginLifecycleLeaseContext;
+  beforePersistentApply?: () => void;
   specOverrides?: Record<string, string>;
   onIntegrityDrift?: (params: HookPackUpdateIntegrityDriftParams) => boolean | Promise<boolean>;
 }): Promise<HookPackUpdateSummary> {
   const logger = params.logger ?? {};
-  const installs = readHookInstalls();
+  // The caller owns the config commit and settles every staged payload/record together.
+  const persistence = params.dryRun
+    ? undefined
+    : {
+        lease: expectDefined(params.lease, "hook update lifecycle lease"),
+        transactions: expectDefined(
+          resolvePluginInstallTransactionSink(params),
+          "hook update transaction sink",
+        ),
+      };
+  const beforePersistentApply = () => {
+    persistence?.lease.assertOwned();
+    params.beforePersistentApply?.();
+  };
+  if (persistence) {
+    beforePersistentApply();
+  }
+  const installs = readHookInstalls(persistence ? { path: persistence.lease.databasePath } : {});
   const targets = params.hookIds?.length ? params.hookIds : Object.keys(installs);
   const outcomes: HookPackUpdateOutcome[] = [];
-  let next = params.config;
   let changed = false;
 
   for (const hookId of targets) {
@@ -139,23 +165,26 @@ export async function updateNpmInstalledHookPacks(params: {
       continue;
     }
     const currentVersion = await readInstalledPackageVersion(installPath);
-    const result = await installHooksFromNpmSpec({
-      config: params.config,
-      dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
-      onInstallPolicyWarning: params.onInstallPolicyWarning,
-      spec: effectiveSpec,
-      mode: "update",
-      dryRun: params.dryRun,
-      expectedHookPackId: hookId,
-      expectedIntegrity,
-      onIntegrityDrift: createHookPackUpdateIntegrityDriftHandler({
-        hookId,
-        dryRun: Boolean(params.dryRun),
+    const result = await installHooksFromNpmSpec(
+      requestDeferredPackageDirInstall({
+        config: params.config,
+        dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
+        onInstallPolicyWarning: params.onInstallPolicyWarning,
+        spec: effectiveSpec,
+        mode: "update",
+        dryRun: params.dryRun,
+        beforePersistentApply,
+        expectedHookPackId: hookId,
+        expectedIntegrity,
+        onIntegrityDrift: createHookPackUpdateIntegrityDriftHandler({
+          hookId,
+          dryRun: Boolean(params.dryRun),
+          logger,
+          onIntegrityDrift: params.onIntegrityDrift,
+        }),
         logger,
-        onIntegrityDrift: params.onIntegrityDrift,
       }),
-      logger,
-    });
+    );
 
     if (!result.ok) {
       outcomes.push({
@@ -173,7 +202,7 @@ export async function updateNpmInstalledHookPacks(params: {
       currentVersion && nextVersion && currentVersion === nextVersion ? "unchanged" : "updated";
     const downgraded = isPackageVersionDowngrade(currentVersion, nextVersion);
 
-    if (params.dryRun) {
+    if (!persistence) {
       outcomes.push({
         hookId,
         status,
@@ -187,15 +216,22 @@ export async function updateNpmInstalledHookPacks(params: {
       continue;
     }
 
-    next = recordHookInstall(next, {
-      hookId,
-      source: "npm",
-      spec: effectiveSpec,
-      installPath: result.targetDir,
-      version: nextVersion,
-      ...buildNpmResolutionFields(result.npmResolution),
-      hooks: result.hooks,
-    });
+    persistence.transactions.push(
+      await stageHookInstall({
+        update: {
+          hookId,
+          source: "npm",
+          spec: effectiveSpec,
+          installPath: result.targetDir,
+          version: nextVersion,
+          ...buildNpmResolutionFields(result.npmResolution),
+          hooks: result.hooks,
+        },
+        payloadTransaction: resolvePackageDirInstallTransaction(result),
+        lease: persistence.lease,
+        beforePersistentApply,
+      }),
+    );
     changed = true;
 
     outcomes.push({
@@ -210,5 +246,5 @@ export async function updateNpmInstalledHookPacks(params: {
     });
   }
 
-  return { config: next, changed, outcomes };
+  return { config: params.config, changed, outcomes };
 }

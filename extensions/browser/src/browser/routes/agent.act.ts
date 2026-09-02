@@ -171,29 +171,6 @@ async function assertExistingSessionPostInteractionNavigationAllowed(
   throw new Error("Unable to verify stable post-interaction navigation");
 }
 
-async function runExistingSessionActionWithNavigationGuard<T>(params: {
-  execute: () => Promise<T>;
-  guard?: Parameters<typeof assertExistingSessionPostInteractionNavigationAllowed>[0];
-}): Promise<T> {
-  let actionError: unknown;
-  let result: T | undefined;
-  try {
-    result = await params.execute();
-  } catch (error) {
-    actionError = error;
-  }
-
-  if (params.guard) {
-    await assertExistingSessionPostInteractionNavigationAllowed(params.guard);
-  }
-
-  if (actionError) {
-    throw toErrorObject(actionError, "Non-Error thrown");
-  }
-
-  return result as T;
-}
-
 function buildExistingSessionWaitPredicate(params: {
   text?: string;
   textGone?: string;
@@ -552,115 +529,112 @@ export function registerBrowserAgentActRoutes(
                 unsupportedMessage,
               );
             }
+            const runGuardedAction = async <T>(execute: () => Promise<T>): Promise<T> => {
+              let actionError: unknown;
+              let result: T | undefined;
+              try {
+                result = await execute();
+              } catch (error) {
+                actionError = error;
+              }
+              await assertExistingSessionPostInteractionNavigationAllowed(
+                existingSessionNavigationGuard,
+              );
+              if (actionError) {
+                throw toErrorObject(actionError, "Non-Error thrown");
+              }
+              return result as T;
+            };
             switch (action.kind) {
               case "click":
-                await runExistingSessionActionWithNavigationGuard({
-                  execute: () =>
-                    clickChromeMcpElement({
-                      ...existingSessionTarget,
-                      uid: action.ref!,
-                      doubleClick: action.doubleClick ?? false,
-                    }),
-                  guard: existingSessionNavigationGuard,
-                });
+                await runGuardedAction(() =>
+                  clickChromeMcpElement({
+                    ...existingSessionTarget,
+                    uid: action.ref!,
+                    doubleClick: action.doubleClick ?? false,
+                  }),
+                );
                 return await jsonOk(undefined, { resolveCurrentTarget: true });
               case "clickCoords":
-                await runExistingSessionActionWithNavigationGuard({
-                  execute: () =>
-                    clickChromeMcpCoords({
-                      ...existingSessionTarget,
-                      x: action.x,
-                      y: action.y,
-                      doubleClick: action.doubleClick ?? false,
-                      button: action.button as "left" | "right" | "middle" | undefined,
-                      delayMs: action.delayMs,
-                    }),
-                  guard: existingSessionNavigationGuard,
-                });
+                await runGuardedAction(() =>
+                  clickChromeMcpCoords({
+                    ...existingSessionTarget,
+                    x: action.x,
+                    y: action.y,
+                    doubleClick: action.doubleClick ?? false,
+                    button: action.button as "left" | "right" | "middle" | undefined,
+                    delayMs: action.delayMs,
+                  }),
+                );
                 return await jsonOk(undefined, { resolveCurrentTarget: true });
               case "type":
-                await runExistingSessionActionWithNavigationGuard({
-                  execute: async () => {
-                    await fillChromeMcpElement({
+                await runGuardedAction(async () => {
+                  await fillChromeMcpElement({
+                    ...existingSessionTarget,
+                    uid: action.ref!,
+                    value: action.text,
+                  });
+                  if (action.submit) {
+                    await pressChromeMcpKey({
                       ...existingSessionTarget,
-                      uid: action.ref!,
-                      value: action.text,
+                      key: "Enter",
                     });
-                    if (action.submit) {
-                      await pressChromeMcpKey({
-                        ...existingSessionTarget,
-                        key: "Enter",
-                      });
-                    }
-                  },
-                  guard: existingSessionNavigationGuard,
+                  }
                 });
                 return await jsonOk(undefined, { resolveCurrentTarget: true });
               case "press":
-                await runExistingSessionActionWithNavigationGuard({
-                  execute: () =>
-                    pressChromeMcpKey({
-                      ...existingSessionTarget,
-                      key: action.key,
-                    }),
-                  guard: existingSessionNavigationGuard,
-                });
+                await runGuardedAction(() =>
+                  pressChromeMcpKey({
+                    ...existingSessionTarget,
+                    key: action.key,
+                  }),
+                );
                 return await jsonOk(undefined, { resolveCurrentTarget: true });
               case "hover":
-                await runExistingSessionActionWithNavigationGuard({
-                  execute: () =>
-                    hoverChromeMcpElement({
-                      ...existingSessionTarget,
-                      uid: action.ref!,
-                    }),
-                  guard: existingSessionNavigationGuard,
-                });
+                await runGuardedAction(() =>
+                  hoverChromeMcpElement({
+                    ...existingSessionTarget,
+                    uid: action.ref!,
+                  }),
+                );
                 return await jsonOk(undefined, { resolveCurrentTarget: true });
               case "scrollIntoView":
-                await runExistingSessionActionWithNavigationGuard({
-                  execute: () =>
-                    evaluateChromeMcpScript({
-                      ...existingSessionTarget,
-                      fn: `(el) => { el.scrollIntoView({ block: "center", inline: "center" }); return true; }`,
-                      args: [action.ref!],
-                    }),
-                  guard: existingSessionNavigationGuard,
-                });
+                await runGuardedAction(() =>
+                  evaluateChromeMcpScript({
+                    ...existingSessionTarget,
+                    fn: `(el) => { el.scrollIntoView({ block: "center", inline: "center" }); return true; }`,
+                    args: [action.ref!],
+                  }),
+                );
                 return await jsonOk(undefined, { resolveCurrentTarget: true });
               case "drag":
-                await runExistingSessionActionWithNavigationGuard({
-                  execute: () =>
-                    dragChromeMcpElement({
-                      ...existingSessionTarget,
-                      fromUid: action.startRef!,
-                      toUid: action.endRef!,
-                    }),
-                  guard: existingSessionNavigationGuard,
-                });
+                await runGuardedAction(() =>
+                  dragChromeMcpElement({
+                    ...existingSessionTarget,
+                    fromUid: action.startRef!,
+                    toUid: action.endRef!,
+                  }),
+                );
                 return await jsonOk(undefined, { resolveCurrentTarget: true });
               case "select":
-                await runExistingSessionActionWithNavigationGuard({
-                  execute: () =>
-                    fillChromeMcpElement({
-                      ...existingSessionTarget,
-                      uid: action.ref!,
-                      value: action.values[0] ?? "",
-                    }),
-                  guard: existingSessionNavigationGuard,
-                });
+                await runGuardedAction(() =>
+                  fillChromeMcpElement({
+                    ...existingSessionTarget,
+                    uid: action.ref!,
+                    value: action.values[0] ?? "",
+                  }),
+                );
                 return await jsonOk(undefined, { resolveCurrentTarget: true });
               case "fill":
-                await runExistingSessionActionWithNavigationGuard({
-                  execute: () =>
-                    fillChromeMcpForm({
-                      ...existingSessionTarget,
-                      elements: action.fields.map((field) => ({
-                        uid: field.ref,
-                        value: String(field.value ?? ""),
-                      })),
-                    }),
-                  guard: existingSessionNavigationGuard,
-                });
+                await runGuardedAction(() =>
+                  fillChromeMcpForm({
+                    ...existingSessionTarget,
+                    elements: action.fields.map((field) => ({
+                      uid: field.ref,
+                      value: String(field.value ?? ""),
+                    })),
+                  }),
+                );
                 return await jsonOk(undefined, { resolveCurrentTarget: true });
               case "resize":
                 await resizeChromeMcpPage({
@@ -670,35 +644,31 @@ export function registerBrowserAgentActRoutes(
                 });
                 return await jsonOk();
               case "wait":
-                await runExistingSessionActionWithNavigationGuard({
-                  execute: () =>
-                    waitForExistingSessionCondition({
-                      ...existingSessionTarget,
-                      timeMs: action.timeMs,
-                      text: action.text,
-                      textGone: action.textGone,
-                      selector: action.selector,
-                      url: action.url,
-                      loadState: action.loadState,
-                      fn: action.fn,
-                      ...navigationPolicy,
-                    }),
-                  guard: existingSessionNavigationGuard,
-                });
+                await runGuardedAction(() =>
+                  waitForExistingSessionCondition({
+                    ...existingSessionTarget,
+                    timeMs: action.timeMs,
+                    text: action.text,
+                    textGone: action.textGone,
+                    selector: action.selector,
+                    url: action.url,
+                    loadState: action.loadState,
+                    fn: action.fn,
+                    ...navigationPolicy,
+                  }),
+                );
                 return await jsonOk();
               case "evaluate": {
-                const result = await runExistingSessionActionWithNavigationGuard({
-                  execute: () =>
-                    evaluateChromeMcpScript({
-                      ...existingSessionTarget,
-                      fn: normalizeBrowserEvaluateFunctionSource(
-                        action.fn,
-                        action.ref ? { argumentName: "el" } : undefined,
-                      ),
-                      args: action.ref ? [action.ref] : undefined,
-                    }),
-                  guard: existingSessionNavigationGuard,
-                });
+                const result = await runGuardedAction(() =>
+                  evaluateChromeMcpScript({
+                    ...existingSessionTarget,
+                    fn: normalizeBrowserEvaluateFunctionSource(
+                      action.fn,
+                      action.ref ? { argumentName: "el" } : undefined,
+                    ),
+                    args: action.ref ? [action.ref] : undefined,
+                  }),
+                );
                 return await jsonOk({ result }, { resolveCurrentTarget: true });
               }
               case "close":

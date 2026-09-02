@@ -452,20 +452,19 @@ function resolveAudioProviderPrompt(params: {
   hasConfiguredPrompt: boolean;
   language?: string;
 }): string | undefined {
-  const language = params.language?.trim().toLowerCase();
-  const isEnglish =
-    !language ||
+  const language = normalizeLowercaseStringOrEmpty(params.language);
+  const isExplicitEnglish =
     language === "en" ||
     language === "eng" ||
     language === "english" ||
     language.startsWith("en-") ||
     language.startsWith("en_");
-  if (params.hasConfiguredPrompt || isEnglish) {
+  if (params.hasConfiguredPrompt || isExplicitEnglish) {
     return params.prompt;
   }
   // OpenAI-compatible transcription prompts guide style/context and should
-  // match the audio language; omit OpenClaw's English default for non-English
-  // language hints unless the user supplied an explicit prompt.
+  // match the audio language; omit OpenClaw's English default for autodetection
+  // and non-English hints unless the user supplied an explicit prompt.
   return undefined;
 }
 

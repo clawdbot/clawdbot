@@ -21,6 +21,10 @@ const DEFAULT_STARTUP_BUDGET_BASELINE_PATH = path.resolve(
 // may accumulate. The fixed startup JS ceiling bounds that cumulative creep.
 const CONTROL_UI_STARTUP_JS_GZIP_TOLERANCE_BYTES = 512;
 const CONTROL_UI_STARTUP_JS_GZIP_BUILD_VARIANCE_BYTES = 64;
+// The opaque Mermaid sandbox loads one self-contained classic script only when
+// a diagram is viewed. Keep its size visible without relaxing ordinary chunks.
+const MERMAID_RENDERER_ASSET = /^assets\/mermaid\.min-[\w-]+\.js$/u;
+const MERMAID_RENDERER_GZIP_BYTES = 960 * KIB;
 
 // Small, explicit headroom over the optimized baseline. Budget changes should
 // accompany an intentional loading or chunking decision.
@@ -125,8 +129,10 @@ export function collectControlUiPerformanceMetrics(distDir: string) {
     return asset;
   });
   const jsAssets = assets.filter((asset) => asset.type === "js");
+  const mermaidRenderer = jsAssets.filter((asset) => MERMAID_RENDERER_ASSET.test(asset.file));
+  const ordinaryJsAssets = jsAssets.filter((asset) => !MERMAID_RENDERER_ASSET.test(asset.file));
   const cssAssets = assets.filter((asset) => asset.type === "css");
-  if (jsAssets.length === 0 || cssAssets.length === 0 || startup.length === 0) {
+  if (ordinaryJsAssets.length === 0 || cssAssets.length === 0 || startup.length === 0) {
     throw new Error("Control UI performance check found an incomplete production bundle");
   }
   return {
@@ -141,9 +147,10 @@ export function collectControlUiPerformanceMetrics(distDir: string) {
       css: summarizeAssets(cssAssets),
     },
     largest: {
-      js: largestAsset(jsAssets),
+      js: largestAsset(ordinaryJsAssets),
       css: largestAsset(cssAssets),
     },
+    mermaidRenderer,
   };
 }
 
@@ -166,6 +173,19 @@ export function evaluateControlUiPerformanceBudgets(
     ["startup CSS gzip", metrics.startup.css.gzipBytes, budgets.startupCssGzipBytes, "bytes"],
     ["largest JS gzip", metrics.largest.js.gzipBytes, budgets.largestJsGzipBytes, "bytes"],
     ["largest CSS gzip", metrics.largest.css.gzipBytes, budgets.largestCssGzipBytes, "bytes"],
+    ["isolated Mermaid JS assets", metrics.mermaidRenderer.length, 1, "count"],
+    [
+      "isolated Mermaid JS gzip",
+      summarizeAssets(metrics.mermaidRenderer).gzipBytes,
+      MERMAID_RENDERER_GZIP_BYTES,
+      "bytes",
+    ],
+    [
+      "startup Mermaid JS assets",
+      metrics.startup.assets.filter((asset) => MERMAID_RENDERER_ASSET.test(asset.file)).length,
+      0,
+      "count",
+    ],
   ];
   const violations = checks.flatMap(([metric, actual, limit, unit]) =>
     actual > limit ? [{ metric, actual, limit, unit }] : [],
@@ -265,11 +285,16 @@ export function formatControlUiPerformanceReport(
   }
   lines.push(
     `  startup CSS: ${formatAssetSummary(metrics.startup.css)} (limits: ${formatRequestCount(budgets.startupCssRequests)}, ${formatControlUiPerformanceBytes(budgets.startupCssGzipBytes)} gzip)`,
-    `  largest JS: ${metrics.largest.js.file}, ${formatControlUiPerformanceBytes(metrics.largest.js.gzipBytes)} gzip (limit: ${formatControlUiPerformanceBytes(budgets.largestJsGzipBytes)})`,
+    `  largest ordinary JS: ${metrics.largest.js.file}, ${formatControlUiPerformanceBytes(metrics.largest.js.gzipBytes)} gzip (limit: ${formatControlUiPerformanceBytes(budgets.largestJsGzipBytes)})`,
     `  largest CSS: ${metrics.largest.css.file}, ${formatControlUiPerformanceBytes(metrics.largest.css.gzipBytes)} gzip (limit: ${formatControlUiPerformanceBytes(budgets.largestCssGzipBytes)})`,
     `  all JS: ${formatAssetSummary(metrics.total.js)}`,
     `  all CSS: ${formatAssetSummary(metrics.total.css)}`,
   );
+  if (metrics.mermaidRenderer.length > 0) {
+    lines.push(
+      `  isolated Mermaid JS: ${formatAssetSummary(summarizeAssets(metrics.mermaidRenderer))} (limits: 1 deferred asset, ${formatControlUiPerformanceBytes(MERMAID_RENDERER_GZIP_BYTES)} gzip; forbidden at startup)`,
+    );
+  }
   if (
     startupBudgetBaseline &&
     metrics.startup.js.gzipBytes + STARTUP_JS_BASELINE_RATCHET_BYTES <

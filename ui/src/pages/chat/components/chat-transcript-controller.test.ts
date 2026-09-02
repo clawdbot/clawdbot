@@ -364,13 +364,14 @@ describe("chat transcript controller", () => {
   });
 
   it.each([
-    { behavior: "auto", resizeBefore: true, deltaY: -100 },
-    { behavior: "smooth", resizeBefore: true, deltaY: -100 },
-    { behavior: "smooth", resizeBefore: false, deltaY: -100 },
-    { behavior: "smooth", resizeBefore: true, deltaY: 100 },
+    { behavior: "auto", resizeBefore: true, deltaY: -100, observerLate: false },
+    { behavior: "smooth", resizeBefore: true, deltaY: -100, observerLate: false },
+    { behavior: "smooth", resizeBefore: false, deltaY: -100, observerLate: false },
+    { behavior: "smooth", resizeBefore: true, deltaY: 100, observerLate: false },
+    { behavior: "smooth", resizeBefore: true, deltaY: -100, observerLate: true },
   ] as const)(
-    "recovers $behavior measurements with resizeBeforeInterruption=$resizeBefore and wheel=$deltaY",
-    async ({ behavior, resizeBefore, deltaY }) => {
+    "recovers $behavior measurements with resizeBeforeInterruption=$resizeBefore, wheel=$deltaY, and late offset=$observerLate",
+    async ({ behavior, resizeBefore, deltaY, observerLate }) => {
       const flushFrames = stubAnimationFrames();
       transcriptDomState.measuredRowHeight = 120;
       const rows: TestContentRow[] = Array.from({ length: 40 }, (_, index) => ({
@@ -379,10 +380,15 @@ describe("chat transcript controller", () => {
         content: html`<div>row ${index}</div>`,
       }));
       const { container, renderRows, transcript } = await mountTestTranscript(
-        `pane-${behavior}-${resizeBefore}-resize`,
+        `pane-${behavior}-${resizeBefore}-${deltaY}-${observerLate}-resize`,
         rows,
       );
       try {
+        container.scrollTo = (options?: ScrollToOptions | number) => {
+          if (typeof options === "object" && options.behavior !== "smooth") {
+            container.scrollTop = options.top ?? container.scrollTop;
+          }
+        };
         Object.defineProperties(container, {
           clientHeight: { configurable: true, value: 600 },
           scrollHeight: { configurable: true, value: 4000 },
@@ -409,12 +415,23 @@ describe("chat transcript controller", () => {
           }
         };
         transcript.scrollToEnd({ behavior });
+        if (observerLate) {
+          container.scrollTop = 135;
+          container.dispatchEvent(new Event("scroll"));
+        }
         if (resizeBefore) {
           resize();
         }
+        if (observerLate) {
+          // Native wheel movement can precede both input delivery and the
+          // offset observer. Remeasurement must use this viewport, not 135.
+          container.scrollTop = 0;
+        }
         container.dispatchEvent(new WheelEvent("wheel", { deltaY }));
-        container.scrollTop = 0;
-        container.dispatchEvent(new Event("scroll"));
+        if (!observerLate) {
+          container.scrollTop = 0;
+          container.dispatchEvent(new Event("scroll"));
+        }
         if (!resizeBefore) {
           resize();
         }
@@ -422,6 +439,12 @@ describe("chat transcript controller", () => {
         renderRows(rows);
         expect(transcriptSize(container)).toBe(initialSize + 80);
         expect(container.scrollTop).toBe(0);
+        if (observerLate) {
+          container.dispatchEvent(new Event("scroll"));
+          flushFrames();
+          renderRows(rows);
+          expect(container.scrollTop).toBe(0);
+        }
       } finally {
         transcript.hostDisconnected();
       }

@@ -27,6 +27,7 @@ function isOpenClawLoopbackServer(name: string, server: McpServerConfig): boolea
 export function resolveProjectedMcpCodexToolApprovalMode(
   serverName: string,
   server: McpServerConfig,
+  projectedServer?: Record<string, unknown>,
 ): McpCodexToolApprovalMode | undefined {
   const codex =
     server.codex && typeof server.codex === "object" && !Array.isArray(server.codex)
@@ -35,15 +36,9 @@ export function resolveProjectedMcpCodexToolApprovalMode(
   return (
     normalizeApprovalMode(codex.defaultToolsApprovalMode) ??
     normalizeApprovalMode(codex.default_tools_approval_mode) ??
+    normalizeApprovalMode(projectedServer?.default_tools_approval_mode) ??
     (isOpenClawLoopbackServer(serverName, server) ? "approve" : undefined)
   );
-}
-
-export function resolveMcpCodexToolApprovalMode(
-  serverName: string,
-  server: McpServerConfig,
-): McpCodexToolApprovalMode {
-  return resolveProjectedMcpCodexToolApprovalMode(serverName, server) ?? "auto";
 }
 
 export function normalizeMcpCodexToolAnnotations(value: unknown): McpCodexToolAnnotations {
@@ -65,15 +60,17 @@ export function normalizeMcpCodexToolAnnotations(value: unknown): McpCodexToolAn
   return result;
 }
 
-/** Mirrors Codex `auto` approval semantics for unattended dynamic execution. */
+/** Explicit server policy outranks the prepared session posture. */
 export function requiresMcpCodexToolApproval(params: {
-  mode: McpCodexToolApprovalMode;
+  mode?: McpCodexToolApprovalMode;
+  fullPermission?: boolean;
   annotations?: McpCodexToolAnnotations;
 }): boolean {
-  if (params.mode === "approve") {
+  const mode = params.mode ?? (params.fullPermission ? "approve" : "auto");
+  if (mode === "approve") {
     return false;
   }
-  if (params.mode === "prompt") {
+  if (mode === "prompt") {
     return true;
   }
   const annotations = params.annotations ?? {};
@@ -84,4 +81,10 @@ export function requiresMcpCodexToolApproval(params: {
     return false;
   }
   return annotations.destructiveHint !== false || annotations.openWorldHint !== false;
+}
+
+export function formatMcpCodexApprovalRemedy(serverName?: string): string {
+  // Config keys are unbounded; keep model-visible hints short and never emit a CLI option as a name.
+  const server = serverName && /^[\w.][\w.-]{0,127}$/.test(serverName) ? serverName : "<server>";
+  return `Run openclaw mcp configure ${server} --approval approve for a trusted server, or change the session permission mode.`;
 }

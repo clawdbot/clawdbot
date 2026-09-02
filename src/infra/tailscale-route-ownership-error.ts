@@ -5,11 +5,11 @@ const TAILSCALE_ROUTE_OWNERSHIP_CONFLICT_CODE = "TAILSCALE_ROUTE_OWNERSHIP_CONFL
 export class TailscaleRouteOwnershipConflictError extends Error {
   readonly code = TAILSCALE_ROUTE_OWNERSHIP_CONFLICT_CODE;
 
-  constructor() {
+  constructor(port = 443) {
     super(
-      "Tailscale HTTPS port 443 is already owned by a route whose ownership OpenClaw cannot prove; it was not modified. " +
-        "Inspect `tailscale serve status`. If it is a stale route from an older OpenClaw release, remove its root handler with " +
-        "`tailscale serve --yes --https=443 --set-path=/ off` or `tailscale funnel --yes --https=443 --set-path=/ off`, then restart the Gateway. " +
+      `Tailscale HTTPS port ${port} is already owned by a route whose ownership OpenClaw cannot prove; it was not modified. ` +
+        "Inspect `tailscale serve status`. If the route belongs to the current Tailscale hostname and is stale from an older OpenClaw release, remove its root handler with " +
+        `\`tailscale serve --yes --https=${port} --set-path=/ off\`, then restart the Gateway. ` +
         "Otherwise disable managed Tailscale ingress or reconfigure the route before restarting.",
     );
     this.name = "TailscaleRouteOwnershipConflictError";

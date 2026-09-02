@@ -8,6 +8,7 @@ import {
 } from "@openclaw/ai/transports";
 import { formatSqliteSessionFileMarker } from "../../config/sessions/legacy-sqlite-marker.js";
 import { captureOwnedTranscriptWriteAssertion } from "../../config/sessions/transcript-write-context.js";
+import type { ContextEngineSessionTarget } from "../../context-engine/types.js";
 import type { CapturedCompactionCheckpointSnapshot } from "../../gateway/session-compaction-checkpoints.js";
 import { resolveDiagnosticModelContentCapturePolicy } from "../../infra/diagnostic-llm-content.js";
 import { formatErrorMessage } from "../../infra/errors.js";
@@ -124,42 +125,49 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
 
   try {
     const compactionTimeoutMs = resolveCompactionTimeoutMs(params.config);
-    const sessionTarget = await resolveAgentRunSessionTarget({
-      agentId: sessionAgentId,
-      config: params.config,
-      missingSessionKey: "resolve-existing",
-      sessionFile: params.sessionFile,
-      sessionId: params.sessionId,
-      sessionKey: params.sessionKey,
-      sessionTarget: params.sessionTarget,
-    });
-    const assertActive = captureOwnedTranscriptWriteAssertion(sessionTarget);
+    const accountingRecorder = readCompactionAccountingRecorder(params.contextEngineRuntimeContext);
+    const memoryTranscript = accountingRecorder?.memoryTranscript;
+    const sessionTarget =
+      memoryTranscript?.sessionTarget ??
+      (await resolveAgentRunSessionTarget({
+        agentId: sessionAgentId,
+        config: params.config,
+        missingSessionKey: "resolve-existing",
+        sessionFile: params.sessionFile,
+        sessionId: params.sessionId,
+        sessionKey: params.sessionKey,
+        sessionTarget: params.sessionTarget,
+      }));
+    const assertActive =
+      memoryTranscript?.assertActive ?? captureOwnedTranscriptWriteAssertion(sessionTarget);
     try {
       assertActive();
       const transcriptPolicy = runtimePlan.transcript.resolvePolicy(runtimePlanModelContext);
-      const sessionManager = guardSessionManager(SessionManager.open(sessionTarget), {
-        agentId: sessionAgentId,
-        sessionKey: params.sessionKey,
-        config: params.config,
-        contextWindowTokens: contextTokenBudget,
-        allowSyntheticToolResults: transcriptPolicy.allowSyntheticToolResults,
-        missingToolResultText:
-          effectiveModel.api === "openai-responses" ||
-          effectiveModel.api === "azure-openai-responses" ||
-          effectiveModel.api === "openai-chatgpt-responses"
-            ? "aborted"
-            : undefined,
-        allowedToolNames,
-      });
-      checkpointSnapshot = await compactionCheckpointStore.captureSnapshot({
-        sessionManager,
-        sessionFile: params.sessionFile,
-        sessionTarget,
-      });
-      compactionSessionManager = sessionManager;
-      const accountingRecorder = readCompactionAccountingRecorder(
-        params.contextEngineRuntimeContext,
+      const sessionManager = guardSessionManager(
+        memoryTranscript?.sessionManager ?? SessionManager.open(sessionTarget),
+        {
+          agentId: sessionAgentId,
+          sessionKey: params.sessionKey,
+          config: params.config,
+          contextWindowTokens: contextTokenBudget,
+          allowSyntheticToolResults: transcriptPolicy.allowSyntheticToolResults,
+          missingToolResultText:
+            effectiveModel.api === "openai-responses" ||
+            effectiveModel.api === "azure-openai-responses" ||
+            effectiveModel.api === "openai-chatgpt-responses"
+              ? "aborted"
+              : undefined,
+          allowedToolNames,
+        },
       );
+      checkpointSnapshot = memoryTranscript
+        ? null
+        : await compactionCheckpointStore.captureSnapshot({
+            sessionManager,
+            sessionFile: params.sessionFile,
+            sessionTarget,
+          });
+      compactionSessionManager = sessionManager;
       const recordUsage = accountingRecorder
         ? (usage: UsageLike) => {
             const normalized = normalizeUsage(usage);
@@ -277,9 +285,10 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
             {},
           );
           session = createdSession.session;
-          if (accountingRecorder) {
-            session[agentSessionSetContextReplacementHook](accountingRecorder.recordCompaction);
-          }
+          session[agentSessionSetContextReplacementHook](
+            accountingRecorder?.recordCompaction,
+            assertActive,
+          );
           session.setActiveToolsByName(sessionToolAllowlist);
           applySystemPromptToSession(session, systemPromptText);
           // Compaction builds the same embedded system prompt, so it must flow
@@ -520,10 +529,20 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
                 (_signal, resetTimeout) => {
                   resetCompactionTimeout = resetTimeout;
                   setCompactionSafeguardCancellation(compactionSessionManager, undefined);
-                  return resolveEffectiveCompactionMode(params.config) === "default" &&
-                    trigger !== "manual"
-                    ? activeSession[agentSessionAutomaticCompaction](params.customInstructions)
-                    : activeSession.compact(params.customInstructions);
+                  const requestState = trigger === "overflow" ? ("unresolved" as const) : undefined;
+                  if (trigger === "manual") {
+                    return activeSession.compact(params.customInstructions);
+                  }
+                  return resolveEffectiveCompactionMode(params.config) === "default"
+                    ? activeSession[agentSessionAutomaticCompaction](
+                        params.customInstructions,
+                        requestState,
+                      )
+                    : activeSession[agentSessionAutomaticCompaction](
+                        params.customInstructions,
+                        requestState,
+                        "none",
+                      );
                 },
                 compactionTimeoutMs,
                 {
@@ -551,18 +570,22 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
               });
           const messageCountAfter = session.messages.length;
           const compactedCount = Math.max(0, messageCountOriginal - messageCountAfter);
-          const activeSessionFile = formatSqliteSessionFileMarker({
-            ...sessionTarget,
-            sessionId: params.sessionId,
-          });
-          await runPostCompactionSideEffects({
-            config: params.config,
-            sessionKey: params.sessionKey,
-            sessionId: params.sessionId,
-            agentId: sessionAgentId,
-            sessionFile: activeSessionFile,
-            assertActive,
-          });
+          const activeSessionFile = memoryTranscript
+            ? params.sessionFile
+            : formatSqliteSessionFileMarker({
+                ...sessionTarget,
+                sessionId: params.sessionId,
+              });
+          if (!memoryTranscript) {
+            await runPostCompactionSideEffects({
+              config: params.config,
+              sessionKey: params.sessionKey,
+              sessionId: params.sessionId,
+              agentId: sessionAgentId,
+              sessionFile: activeSessionFile,
+              assertActive,
+            });
+          }
           if (clientResult) {
             checkpointSnapshotRetained = await persistCompactionCheckpoint({
               config: params.config,
@@ -614,11 +637,21 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
             assertActive,
             onHookMessages: params.onCompactionHookMessages,
           });
+          const resultSessionTarget: ContextEngineSessionTarget = {
+            agentId: sessionTarget.agentId,
+            sessionId: sessionTarget.sessionId,
+            sessionKey: sessionTarget.sessionKey,
+            storePath: sessionTarget.storePath,
+          };
+          if (params.sessionTarget?.threadId !== undefined) {
+            resultSessionTarget.threadId = params.sessionTarget.threadId;
+          }
           return {
             ok: true,
             compacted: true,
             ...(serverResult ? { compactionKind: "server-endpoint" as const } : {}),
             result: {
+              sessionTarget: resultSessionTarget,
               ...(clientResult
                 ? {
                     summary: clientResult.summary,

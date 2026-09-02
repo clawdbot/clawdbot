@@ -1,12 +1,12 @@
-import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { createControlUiSessionRow as sessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import {
   controlUiSessionUrl,
   createSessionManagementE2eSuite,
   installMockGateway,
   openSessionMenuSubmenu,
-  sessionRow,
   sessionsListResponse,
   waitForPatch,
 } from "./session-management.test-support.ts";
@@ -70,6 +70,18 @@ suite.define(() => {
           await openSessionMenuSubmenu(page, "Icon & color");
         }
         const picker = page.locator(".session-menu__appearance:visible");
+        await expect
+          .poll(() =>
+            picker.evaluate((element) => {
+              const iconPicker = element.querySelector(".session-menu__icon-picker");
+              const iconsLabel = element.querySelectorAll(".session-menu__icon-section-label")[2];
+              return [
+                iconPicker ? getComputedStyle(iconPicker).marginTop : null,
+                iconsLabel ? getComputedStyle(iconsLabel).marginTop : null,
+              ];
+            }),
+          )
+          .toEqual(["4px", "4px"]);
         const focused = () =>
           page.evaluate(
             () =>
@@ -95,6 +107,13 @@ suite.define(() => {
         await waitForPatch(gateway, (params) => params.key === key && params.icon === "🚀");
         await page.keyboard.press("Tab");
         const reset = picker.getByRole("button", { name: "Reset to default", exact: true });
+        await expect
+          .poll(() =>
+            reset.evaluate(
+              (element) => element.previousElementSibling?.getAttribute("role") ?? null,
+            ),
+          )
+          .toBe("separator");
         await expect
           .poll(() =>
             reset.evaluateAll((elements) =>
@@ -142,8 +161,10 @@ suite.define(() => {
   it("sets and clears session colors through desktop and compact menus", async () => {
     const key = "agent:main:color-proof";
     const now = Date.now();
-    const proofDir = "/tmp/session-color-web-proof";
     const capture = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
+    const proofDir = capture
+      ? createControlUiE2eArtifactDir("session-color-web-proof", "/tmp/session-color-web-proof")
+      : "";
     const context = await suite.browser.newContext({
       locale: "en-US",
       colorScheme: "dark",
@@ -152,6 +173,12 @@ suite.define(() => {
       recordVideo: capture ? { dir: proofDir, size: { width: 1440, height: 900 } } : undefined,
     });
     const page = await context.newPage();
+    const designReview = sessionRow(key, "Design review", now);
+    const sessions = [
+      designReview,
+      { ...sessionRow("agent:main:research", "Research notes", now - 60_000), color: "green" },
+      { ...sessionRow("agent:main:release", "Release checklist", now - 120_000), color: "orange" },
+    ];
     const gateway = await installMockGateway(page, {
       sessionKey: key,
       historyMessages: [
@@ -166,14 +193,7 @@ suite.define(() => {
         },
       ],
       methodResponses: {
-        "sessions.list": sessionsListResponse([
-          sessionRow(key, "Design review", now),
-          { ...sessionRow("agent:main:research", "Research notes", now - 60_000), color: "green" },
-          {
-            ...sessionRow("agent:main:release", "Release checklist", now - 120_000),
-            color: "orange",
-          },
-        ]),
+        "sessions.list": sessionsListResponse(sessions),
         "sessions.patch": {},
         "sessions.catalog.list": {
           catalogs: [
@@ -207,7 +227,6 @@ suite.define(() => {
     });
     const shot = async (name: string) => {
       if (capture) {
-        await mkdir(proofDir, { recursive: true });
         await page.screenshot({
           path: path.join(proofDir, name),
           animations: "disabled",
@@ -272,12 +291,17 @@ suite.define(() => {
       await page.keyboard.press("Escape");
       await page.keyboard.press("Escape");
 
+      Object.assign(designReview, { label: "Design review refreshed", color: null });
+      await gateway.setMethodResponse("sessions.list", sessionsListResponse(sessions));
       await gateway.emitGatewayEvent("sessions.changed", { sessionKey: key, color: null });
+      // Only the roster response carries this label; wait for that render so a
+      // transient event-only clear cannot hide a stale color restored by refresh.
+      await row.getByText("Design review refreshed", { exact: true }).waitFor();
+      expect(await row.getAttribute("style")).toBeNull();
       await expect.poll(() => dot.count()).toBe(0);
       await expect
         .poll(() => row.getAttribute("class"))
         .not.toContain("sidebar-recent-session--colored");
-      expect(await row.getAttribute("style")).toBeNull();
 
       await page.setViewportSize({ width: 560, height: 900 });
       await page.locator(".chat-header-session-menu__trigger").click();

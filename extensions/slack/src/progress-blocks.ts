@@ -1,4 +1,3 @@
-// Slack plugin module implements progress blocks behavior.
 import type { AnyChunk, TaskUpdateChunk } from "@slack/types";
 import type { Block, KnownBlock } from "@slack/web-api";
 import type { AgentPlanStep, ChannelProgressDraftLine } from "openclaw/plugin-sdk/channel-outbound";
@@ -13,26 +12,13 @@ const DEFAULT_SLACK_PROGRESS_DETAIL_MAX_CHARS = 120;
 const SLACK_PROGRESS_CHUNK_TEXT_MAX = 256;
 const SLACK_PROGRESS_TASK_TITLE_MAX = 120;
 
-type SlackPlanTaskStatus = "pending" | "in_progress" | "complete" | "error";
-
-type SlackPlanTask = {
-  id: string;
-  title: string;
-  status: SlackPlanTaskStatus;
-};
+type SlackPlanTask = Pick<TaskUpdateChunk, "id" | "title" | "status">;
 
 function buildSessionSources(url: string): NonNullable<TaskUpdateChunk["sources"]> {
   // The live Slack API requires url_source; @slack/types 3.0.0 still declares the old `url` tag.
   return [{ type: "url_source", url, text: "Open in OpenClaw" }] as unknown as NonNullable<
     TaskUpdateChunk["sources"]
   >;
-}
-
-function field(text: string) {
-  return {
-    type: "mrkdwn" as const,
-    text: truncateSlackText(text, SLACK_PROGRESS_FIELD_MAX),
-  };
 }
 
 function resolveMaxLineChars(value: number | undefined, fallback: number): number {
@@ -107,8 +93,7 @@ export function buildSlackProgressStreamChunks(params: {
   title?: string;
   lines: readonly ChannelProgressDraftLine[];
   plan?: readonly AgentPlanStep[];
-  completeInProgress?: boolean;
-  finalInProgressStatus?: SlackPlanTaskStatus;
+  finalInProgressStatus?: "complete" | "error";
   sessionUrl?: string;
 }): AnyChunk[] | undefined {
   const title = compactChunkText(params.title?.trim() || params.label?.trim() || "Working");
@@ -141,7 +126,7 @@ export function buildSlackProgressStreamChunks(params: {
       status: "error",
     };
   }
-  if (attention && !(params.completeInProgress && attention.status === "pending")) {
+  if (attention && !(params.finalInProgressStatus && attention.status === "pending")) {
     tasks.push(attention);
   }
   const finalTaskIndex = tasks.length - 1;
@@ -151,9 +136,7 @@ export function buildSlackProgressStreamChunks(params: {
       id: task.id,
       title: task.title,
       status:
-        task.status === "in_progress"
-          ? (params.finalInProgressStatus ?? (params.completeInProgress ? "complete" : task.status))
-          : task.status,
+        task.status === "in_progress" ? (params.finalInProgressStatus ?? task.status) : task.status,
     };
     if (index === finalTaskIndex && params.sessionUrl) {
       chunk.sources = buildSessionSources(params.sessionUrl);
@@ -192,60 +175,36 @@ export function buildSlackProgressCardBlocks(params: {
   const attention = resolveProgressAttention(params.lines);
   const status =
     params.state === "success" ? "Completed: " : params.state === "error" ? "Failed: " : "";
-  const blocks: (Block | KnownBlock)[] = [
-    {
-      type: "section" as const,
-      text: field(`${status}*${escapeSlackMrkdwn(params.title.trim() || "Working")}*`),
-    },
-    ...(narration
-      ? [
-          {
-            type: "section" as const,
-            text: field(`_${escapeSlackMrkdwn(narration)}_`),
-          },
-        ]
-      : []),
-    ...(planLines.length > 0
-      ? [
-          {
-            type: "section" as const,
-            text: field(planLines.map((line) => escapeSlackMrkdwn(line)).join("\n")),
-          },
-        ]
-      : []),
-    ...(authoredText
-      ? [
-          {
-            type: "section" as const,
-            text: field(authoredText),
-          },
-        ]
-      : []),
-    ...(attention && !(params.state !== "working" && attention.status === "pending")
-      ? [{ type: "section" as const, text: field(escapeSlackMrkdwn(attention.title)) }]
-      : []),
-    ...(params.state !== "working" && params.sessionUrl
-      ? [
-          {
-            type: "actions" as const,
-            elements: [
-              {
-                type: "button" as const,
-                action_id: SLACK_SESSION_LINK_ACTION_ID,
-                text: { type: "plain_text" as const, text: "Open in OpenClaw" },
-                url: params.sessionUrl,
-              },
-            ],
-          },
-        ]
-      : []),
+  const sections = [
+    `${status}*${escapeSlackMrkdwn(params.title.trim() || "Working")}*`,
+    narration ? `_${escapeSlackMrkdwn(narration)}_` : "",
+    planLines.map((line) => escapeSlackMrkdwn(line)).join("\n"),
+    authoredText,
+    attention && !(params.state !== "working" && attention.status === "pending")
+      ? escapeSlackMrkdwn(attention.title)
+      : "",
   ];
+  const blocks: (Block | KnownBlock)[] = sections.filter(Boolean).map((text) => ({
+    type: "section",
+    text: { type: "mrkdwn", text: truncateSlackText(text, SLACK_PROGRESS_FIELD_MAX) },
+  }));
+  if (params.state !== "working" && params.sessionUrl) {
+    blocks.push({
+      type: "actions",
+      elements: [
+        {
+          type: "button",
+          action_id: SLACK_SESSION_LINK_ACTION_ID,
+          text: { type: "plain_text", text: "Open in OpenClaw" },
+          url: params.sessionUrl,
+        },
+      ],
+    });
+  }
   return blocks.slice(0, SLACK_MAX_BLOCKS);
 }
 
-type SlackNativeTaskRow = {
-  title: string;
-  status: SlackPlanTaskStatus;
+type SlackNativeTaskRow = Pick<TaskUpdateChunk, "title" | "status"> & {
   sourcesSent?: boolean;
 };
 
@@ -327,15 +286,4 @@ export function reconcileSlackNativeTaskChunks(params: {
     chunks: emitted.length > 0 ? emitted : undefined,
     snapshot: { ...(planTitle ? { planTitle } : {}), tasks: nextTasks },
   };
-}
-
-export function buildSlackProgressStreamCompletionChunks(params: {
-  label?: string;
-  title?: string;
-  lines: readonly ChannelProgressDraftLine[];
-  plan?: readonly AgentPlanStep[];
-  finalInProgressStatus?: SlackPlanTaskStatus;
-  sessionUrl?: string;
-}): AnyChunk[] | undefined {
-  return buildSlackProgressStreamChunks({ ...params, completeInProgress: true });
 }

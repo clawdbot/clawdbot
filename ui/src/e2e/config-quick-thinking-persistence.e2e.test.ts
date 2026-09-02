@@ -36,7 +36,7 @@ function configResponse(
 function requestRaw(request: MockGatewayRequest): Record<string, unknown> {
   const params = request.params;
   if (!params || typeof params !== "object" || Array.isArray(params)) {
-    throw new Error("Expected config.set params");
+    throw new Error("Expected config mutation params");
   }
   return JSON.parse(String((params as Record<string, unknown>).raw)) as Record<string, unknown>;
 }
@@ -63,7 +63,7 @@ suite.define(() => {
     );
   });
 
-  it("reads and writes only agents.defaults.thinkingDefault", async () => {
+  it("persists agents.defaults.thinkingDefault through autosave", async () => {
     await suite.withPage(
       {
         locale: "en-US",
@@ -75,8 +75,8 @@ suite.define(() => {
         const savedConfig = configResponse("high", "hash-2");
         const gateway = await installMockGateway(page, {
           methodResponses: {
-            "config.get": initialConfig,
-            "config.set": savedConfig,
+            "config.get": { sequence: [initialConfig, savedConfig] },
+            "config.patch": savedConfig,
           },
         });
 
@@ -90,12 +90,19 @@ suite.define(() => {
 
         await modelCard.getByRole("radio", { name: "High", exact: true }).click();
 
-        const raw = requestRaw(await gateway.waitForRequest("config.set"));
+        const raw = requestRaw(await gateway.waitForRequest("config.patch"));
         expect(raw).toEqual({
-          agents: { defaults: { model: "openai/gpt-5.5", thinkingDefault: "high" } },
+          agents: {
+            defaults: {
+              model: "openai/gpt-5.5",
+              utilityModel: null,
+              thinkingDefault: "high",
+              fastModeDefault: null,
+            },
+          },
         });
         expect(JSON.stringify(raw)).not.toContain("thinkingLevel");
-        expect(JSON.stringify(raw)).not.toContain("fastMode");
+        expect(raw.agents).not.toHaveProperty("defaults.fastMode");
 
         const freshPage = await context.newPage();
         await installMockGateway(freshPage, {
@@ -112,9 +119,9 @@ suite.define(() => {
   });
 
   it.each([
-    { initial: false, initialLabel: "Standard", next: true, nextLabel: "Fast" },
-    { initial: true, initialLabel: "Fast", next: "auto" as const, nextLabel: "Auto" },
-    { initial: "auto" as const, initialLabel: "Auto", next: false, nextLabel: "Standard" },
+    { initial: false, initialLabel: "Off", next: true, nextLabel: "On" },
+    { initial: true, initialLabel: "On", next: "auto" as const, nextLabel: "Auto" },
+    { initial: "auto" as const, initialLabel: "Auto", next: false, nextLabel: "Off" },
   ])(
     "persists agents.defaults.fastModeDefault from $initialLabel to $nextLabel",
     async ({ initial, initialLabel, next, nextLabel }) => {
@@ -124,27 +131,36 @@ suite.define(() => {
           serviceWorkers: "block",
           viewport: { height: 900, width: 1280 },
         },
-        async ({ page }) => {
+        async ({ context, page }) => {
           const initialConfig = configResponse("low", "hash-1", initial);
+          const savedConfig = configResponse("low", "hash-2", next);
           const gateway = await installMockGateway(page, {
-            methodResponses: { "config.get": initialConfig },
+            methodResponses: {
+              "config.get": { sequence: [initialConfig, savedConfig] },
+              "config.patch": savedConfig,
+            },
           });
 
           const response = await page.goto(`${suite.server.baseUrl}settings/model-providers`);
           expect(response?.status()).toBe(200);
 
           const modelCard = page.locator("#settings-model-behavior");
-          const initialButton = modelCard.getByRole("radio", { name: initialLabel, exact: true });
+          const fastModeGroup = modelCard.locator("wa-radio-group").nth(1);
+          const initialButton = fastModeGroup.getByRole("radio", {
+            name: initialLabel,
+            exact: true,
+          });
           await initialButton.waitFor();
           expect(await initialButton.getAttribute("aria-checked")).toBe("true");
 
-          await modelCard.getByRole("radio", { name: nextLabel, exact: true }).click();
+          await fastModeGroup.getByRole("radio", { name: nextLabel, exact: true }).click();
 
-          const raw = requestRaw(await gateway.waitForRequest("config.set"));
+          const raw = requestRaw(await gateway.waitForRequest("config.patch"));
           expect(raw).toEqual({
             agents: {
               defaults: {
                 model: "openai/gpt-5.5",
+                utilityModel: null,
                 thinkingDefault: "low",
                 fastModeDefault: next,
               },
@@ -152,9 +168,21 @@ suite.define(() => {
           });
           expect(raw.agents).not.toHaveProperty("defaults.fastMode");
 
-          const reloadResponse = await page.reload();
+          const freshPage = await context.newPage();
+          await installMockGateway(freshPage, {
+            methodResponses: { "config.get": savedConfig },
+          });
+          const reloadResponse = await freshPage.goto(
+            `${suite.server.baseUrl}settings/model-providers`,
+          );
           expect(reloadResponse?.status()).toBe(200);
-          const persistedButton = modelCard.getByRole("radio", { name: nextLabel, exact: true });
+          const persistedButton = freshPage
+            .locator("#settings-model-behavior wa-radio-group")
+            .nth(1)
+            .getByRole("radio", {
+              name: nextLabel,
+              exact: true,
+            });
           await persistedButton.waitFor();
           expect(await persistedButton.getAttribute("aria-checked")).toBe("true");
         },

@@ -30,7 +30,7 @@ import {
   resolveCodexAppServerModelProvider,
   resolveCodexAppServerRequestModelSelection,
 } from "./thread-model-selection.js";
-import { buildDeveloperInstructions } from "./thread-prompt.js";
+import { buildDeveloperInstructions, type CodexThreadPromptContext } from "./thread-prompt.js";
 import { applyCodexManagedShellEnvironment } from "./thread-shell-environment.js";
 import { resolveCodexWebSearchPlan, type CodexNativeWebSearchSupport } from "./web-search.js";
 
@@ -153,30 +153,73 @@ const CODEX_RING_ZERO_OVERRIDABLE_LAYER_TYPES = new Set([
   "sessionFlags",
 ]);
 
+export type CodexThreadConfigurationContext = CodexThreadPromptContext &
+  Pick<
+    EmbeddedRunAttemptParams,
+    | "pluginHarnessToolPolicyRestricted"
+    | "pluginHarnessToolPolicySafeDeniedTools"
+    | "authoredContextTokenCap"
+    | "bootstrapContextMode"
+  >;
+
+type CodexThreadConfigurationOptions = {
+  cwd?: string;
+  dynamicTools?: CodexDynamicToolSpec[];
+  appServer: CodexAppServerRuntimeOptions;
+  developerInstructions?: string;
+  config?: JsonObject;
+  nativeCodeModeEnabled?: boolean;
+  nativeProviderWebSearchSupport?: CodexNativeWebSearchSupport;
+  nativeCodeModeOnlyEnabled?: boolean;
+  webSearchAllowed?: boolean;
+  environmentSelection?: CodexTurnEnvironmentParams[];
+  model?: string | null;
+  modelProvider?: string | null;
+  hostSystemAgentActive?: boolean;
+  restrictedToolSurfaceInheritedMcpServerNames?: readonly string[];
+  shellEnvironment?: Readonly<Record<string, string>>;
+  disableLoginShell?: boolean;
+};
+
+/** Common deterministic start/resume/fork fields; no run resources or unsupported setters. */
+export function buildCodexThreadConfiguration(
+  params: CodexThreadConfigurationContext,
+  options: CodexThreadConfigurationOptions,
+) {
+  return {
+    ...(options.cwd !== undefined ? { cwd: options.cwd } : {}),
+    ...(options.appServer.sessionRoot
+      ? { runtimeWorkspaceRoots: [options.appServer.sessionRoot] }
+      : {}),
+    approvalPolicy: options.appServer.approvalPolicy,
+    approvalsReviewer: resolveCodexThreadApprovalsReviewer(options.appServer, options.config),
+    ...codexThreadSandboxOrPermissions(options.appServer),
+    ...(options.appServer.serviceTier !== undefined
+      ? { serviceTier: options.appServer.serviceTier }
+      : {}),
+    config: buildCodexRuntimeThreadConfigForRun(params, options.config, {
+      nativeCodeModeEnabled: options.nativeCodeModeEnabled,
+      nativeProviderWebSearchSupport: options.nativeProviderWebSearchSupport,
+      nativeCodeModeOnlyEnabled: options.nativeCodeModeOnlyEnabled,
+      directOnlyToolNamespaces: resolveDirectOnlyToolNamespaces(options.dynamicTools),
+      webSearchAllowed: options.webSearchAllowed,
+      appServer: options.appServer,
+      hostSystemAgentActive: options.hostSystemAgentActive,
+      restrictedToolSurfaceInheritedMcpServerNames:
+        options.restrictedToolSurfaceInheritedMcpServerNames,
+      shellEnvironment: options.shellEnvironment,
+      disableLoginShell: options.disableLoginShell,
+    }),
+    developerInstructions:
+      options.developerInstructions ??
+      buildDeveloperInstructions(params, { dynamicTools: options.dynamicTools }),
+  };
+}
+
 export function buildThreadStartParams(
   params: EmbeddedRunAttemptParams,
-  options: {
-    cwd: string;
-    dynamicTools: CodexDynamicToolSpec[];
-    appServer: CodexAppServerRuntimeOptions;
-    developerInstructions?: string;
-    config?: JsonObject;
-    nativeCodeModeEnabled?: boolean;
-    nativeProviderWebSearchSupport?: CodexNativeWebSearchSupport;
-    nativeCodeModeOnlyEnabled?: boolean;
-    webSearchAllowed?: boolean;
-    environmentSelection?: CodexTurnEnvironmentParams[];
-    model?: string | null;
-    modelProvider?: string | null;
-    hostSystemAgentActive?: boolean;
-    restrictedToolSurfaceInheritedMcpServerNames?: readonly string[];
-    shellEnvironment?: Readonly<Record<string, string>>;
-    disableLoginShell?: boolean;
-  },
+  options: CodexThreadConfigurationOptions & { cwd: string; dynamicTools: CodexDynamicToolSpec[] },
 ): CodexThreadStartParams {
-  const ringZeroActive =
-    (options.hostSystemAgentActive ?? isHostScopedAgentToolActive("openclaw")) &&
-    isSystemAgentOnlyCodexDynamicToolAllowlist(params.toolsAllow);
   const resolvedModelProvider = resolveCodexAppServerModelProvider({
     provider: params.provider,
     authProfileId: params.authProfileId,
@@ -195,36 +238,14 @@ export function buildThreadStartParams(
   return {
     model: modelSelection.model,
     ...(modelSelection.modelProvider ? { modelProvider: modelSelection.modelProvider } : {}),
-    cwd: options.cwd,
-    ...(options.appServer.sessionRoot
-      ? { runtimeWorkspaceRoots: [options.appServer.sessionRoot] }
-      : {}),
-    approvalPolicy: options.appServer.approvalPolicy,
-    approvalsReviewer: resolveCodexThreadApprovalsReviewer(options.appServer, options.config),
-    ...codexThreadSandboxOrPermissions(options.appServer),
-    ...(options.appServer.serviceTier !== undefined
-      ? { serviceTier: options.appServer.serviceTier }
+    ...buildCodexThreadConfiguration(params, options),
+    ...((options.hostSystemAgentActive ?? isHostScopedAgentToolActive("openclaw")) &&
+    isSystemAgentOnlyCodexDynamicToolAllowlist(params.toolsAllow)
+      ? { baseInstructions: CODEX_RING_ZERO_BASE_INSTRUCTIONS }
       : {}),
     personality: CODEX_NATIVE_PERSONALITY_NONE,
     serviceName: "OpenClaw",
-    ...(ringZeroActive ? { baseInstructions: CODEX_RING_ZERO_BASE_INSTRUCTIONS } : {}),
-    config: buildCodexRuntimeThreadConfigForRun(params, options.config, {
-      nativeCodeModeEnabled: options.nativeCodeModeEnabled,
-      nativeProviderWebSearchSupport: options.nativeProviderWebSearchSupport,
-      nativeCodeModeOnlyEnabled: options.nativeCodeModeOnlyEnabled,
-      directOnlyToolNamespaces: resolveDirectOnlyToolNamespaces(options.dynamicTools),
-      webSearchAllowed: options.webSearchAllowed,
-      appServer: options.appServer,
-      hostSystemAgentActive: options.hostSystemAgentActive,
-      restrictedToolSurfaceInheritedMcpServerNames:
-        options.restrictedToolSurfaceInheritedMcpServerNames,
-      shellEnvironment: options.shellEnvironment,
-      disableLoginShell: options.disableLoginShell,
-    }),
     ...resolveCodexThreadEnvironmentSelection(options),
-    developerInstructions:
-      options.developerInstructions ??
-      buildDeveloperInstructions(params, { dynamicTools: options.dynamicTools }),
     // Codex 0.146 accepts canonical typed function and namespace specs natively.
     dynamicTools: [...options.dynamicTools],
     experimentalRawEvents: true,
@@ -237,27 +258,12 @@ export function buildThreadStartParams(
 
 export function buildThreadResumeParams(
   params: EmbeddedRunAttemptParams,
-  options: {
+  options: CodexThreadConfigurationOptions & {
     threadId: string;
-    cwd?: string;
     authProfileId?: string;
-    modelProvider?: string | null;
-    appServer: CodexAppServerRuntimeOptions;
-    dynamicTools?: CodexDynamicToolSpec[];
-    developerInstructions?: string;
-    config?: JsonObject;
-    nativeCodeModeEnabled?: boolean;
-    nativeProviderWebSearchSupport?: CodexNativeWebSearchSupport;
-    nativeCodeModeOnlyEnabled?: boolean;
-    webSearchAllowed?: boolean;
-    model?: string | null;
-    hostSystemAgentActive?: boolean;
-    restrictedToolSurfaceInheritedMcpServerNames?: readonly string[];
-    shellEnvironment?: Readonly<Record<string, string>>;
-    disableLoginShell?: boolean;
     preserveNativeModel?: boolean;
   },
-): CodexThreadResumeParams {
+): CodexThreadResumeParams & { developerInstructions: string } {
   const modelSelection = options.preserveNativeModel
     ? undefined
     : resolveCodexAppServerRequestModelSelection({
@@ -278,10 +284,6 @@ export function buildThreadResumeParams(
       });
   return {
     threadId: options.threadId,
-    ...(options.cwd ? { cwd: options.cwd } : {}),
-    ...(options.appServer.sessionRoot
-      ? { runtimeWorkspaceRoots: [options.appServer.sessionRoot] }
-      : {}),
     // Only the latest turn id/status is needed to preserve active-turn conflict
     // handling; avoid rebuilding and validating the full persisted history.
     excludeTurns: true,
@@ -296,29 +298,8 @@ export function buildThreadResumeParams(
           ...(modelSelection.modelProvider ? { modelProvider: modelSelection.modelProvider } : {}),
         }
       : {}),
-    approvalPolicy: options.appServer.approvalPolicy,
-    approvalsReviewer: resolveCodexThreadApprovalsReviewer(options.appServer, options.config),
-    ...codexThreadSandboxOrPermissions(options.appServer),
-    ...(options.appServer.serviceTier !== undefined
-      ? { serviceTier: options.appServer.serviceTier }
-      : {}),
+    ...buildCodexThreadConfiguration(params, options),
     personality: CODEX_NATIVE_PERSONALITY_NONE,
-    config: buildCodexRuntimeThreadConfigForRun(params, options.config, {
-      nativeCodeModeEnabled: options.nativeCodeModeEnabled,
-      nativeProviderWebSearchSupport: options.nativeProviderWebSearchSupport,
-      nativeCodeModeOnlyEnabled: options.nativeCodeModeOnlyEnabled,
-      directOnlyToolNamespaces: resolveDirectOnlyToolNamespaces(options.dynamicTools),
-      webSearchAllowed: options.webSearchAllowed,
-      appServer: options.appServer,
-      hostSystemAgentActive: options.hostSystemAgentActive,
-      restrictedToolSurfaceInheritedMcpServerNames:
-        options.restrictedToolSurfaceInheritedMcpServerNames,
-      shellEnvironment: options.shellEnvironment,
-      disableLoginShell: options.disableLoginShell,
-    }),
-    developerInstructions:
-      options.developerInstructions ??
-      buildDeveloperInstructions(params, { dynamicTools: options.dynamicTools }),
   };
 }
 
@@ -414,7 +395,7 @@ function resolveDirectOnlyToolNamespaces(
 }
 
 export function buildCodexRuntimeThreadConfigForRun(
-  params: EmbeddedRunAttemptParams,
+  params: CodexThreadConfigurationContext,
   config: JsonObject | undefined,
   options: {
     nativeCodeModeEnabled?: boolean;

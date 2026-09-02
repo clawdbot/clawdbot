@@ -52,26 +52,12 @@ export function createPluginMetadataSnapshotFixture(
     })),
     diagnostics: manifestRegistry.diagnostics,
   };
-  const snapshot: PluginMetadataSnapshot = {
+  const snapshot: Parameters<typeof rebasePluginMetadataSnapshotManifestRegistry>[0] = {
     policyHash: "test-policy",
     index,
     registryIndex: index,
     registryDiagnostics: [],
-    manifestRegistry,
-    plugins,
-    diagnostics: manifestRegistry.diagnostics,
-    byPluginId: new Map(plugins.map((plugin) => [plugin.id, plugin])),
     normalizePluginId: (pluginId) => pluginId.trim().toLowerCase(),
-    owners: {
-      channels: new Map(),
-      channelConfigs: new Map(),
-      providers: new Map(),
-      modelCatalogProviders: new Map(),
-      cliBackends: new Map(),
-      setupProviders: new Map(),
-      commandAliases: new Map(),
-      contracts: new Map(),
-    },
     metrics: {
       registrySnapshotMs: 0,
       manifestRegistryMs: 0,

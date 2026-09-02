@@ -261,7 +261,6 @@ async function ensureDesiredRelay(params: {
           unregister = registerBorrowedRelayCdpAccess(
             `http://127.0.0.1:${profile.cdpPort}`,
             borrowed,
-            assertCurrent,
           );
         }
         actor.cleanupRelays.add(handle);

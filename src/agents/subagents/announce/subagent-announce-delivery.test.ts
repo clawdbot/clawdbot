@@ -2187,6 +2187,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
 
     const ownerContext = { owner: "gateway-a" } as never;
     const resolveGatewayContext = () => ownerContext;
+    const signal = new AbortController().signal;
     const result = await deliverSubagentAnnouncement({
       requesterSessionKey: "agent:main:slack:channel:C123:thread:171.222",
       targetRequesterSessionKey: "agent:main:slack:channel:C123:thread:171.222",
@@ -2206,6 +2207,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       bestEffortDeliver: true,
       directIdempotencyKey: "announce-local-dispatch",
       resolveGatewayContext,
+      signal,
     });
 
     expectDeliveryPath(result, "direct");
@@ -2221,6 +2223,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     });
     const dispatchOptions = mockCallArg(dispatchGatewayMethodInProcess, 0, 2);
     expect(dispatchOptions).toMatchObject({
+      cancelOnDeadline: true,
       expectFinal: true,
       forceSyntheticClient: true,
       operatorRoleActor: { kind: "system" },
@@ -2233,6 +2236,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       },
       timeoutMs: 120_000,
       resolveGatewayContext,
+      signal,
     });
   });
 
@@ -2241,6 +2245,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       runId: "descendant-wake-run",
     });
     const resolveGatewayContext: GatewayContextResolver = () => undefined;
+    const signal = new AbortController().signal;
     const replaceSubagentRunAfterSteer = vi.fn(async () => true);
     testing.setDepsForTest({
       getRuntimeConfig: () => cfg,
@@ -2257,6 +2262,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       hasUsableSessionEntry: (entry): entry is Record<string, unknown> =>
         typeof entry === "object" && entry !== null,
       resolveGatewayContext,
+      signal,
       deps: {
         callGateway: createGatewayMock(),
         dispatchGatewayMethodInProcess,
@@ -2267,7 +2273,9 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
 
     expect(woke).toBe(true);
     expect(mockCallArg(dispatchGatewayMethodInProcess, 0, 2)).toMatchObject({
+      cancelOnDeadline: true,
       resolveGatewayContext,
+      signal,
     });
     expect(replaceSubagentRunAfterSteer).toHaveBeenCalledWith(
       expect.objectContaining({

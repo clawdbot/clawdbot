@@ -109,10 +109,13 @@ describe("getNetworkRequestsViaPlaywright", () => {
       };
       const state = {
         console: [],
-        requests: [
-          matching,
-          { ...matching, id: "2", url: "https://example.com/logo.png", resourceType: "image" },
-        ],
+        requests: new Map([
+          ["1", matching],
+          [
+            "2",
+            { ...matching, id: "2", url: "https://example.com/logo.png", resourceType: "image" },
+          ],
+        ]),
         requestIds: new WeakMap(),
         armIdUpload: 0,
         armIdDownload: 0,
@@ -126,7 +129,7 @@ describe("getNetworkRequestsViaPlaywright", () => {
           clear: true,
         }),
       ).toEqual({ requests: [matching] });
-      expect(state.requests).toEqual([]);
+      expect(state.requests).toEqual(new Map());
     },
   );
 });
