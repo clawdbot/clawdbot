@@ -6991,9 +6991,10 @@ done
     const doctorRunner = readFileSync(DOCTOR_SWITCH_DOCKER_E2E_PATH, "utf8");
     expect(doctorRunner).toContain("scripts/e2e/lib/doctor-install-switch/scenario.sh");
     expectTextToIncludeAll(doctorRunner, [
-      'ROOT_DIR="$(cd "${OPENCLAW_DOCKER_E2E_REPO_ROOT:-$HARNESS_ROOT_DIR}" && pwd)"',
-      'DOCKER_E2E_HARNESS_ROOT_DIR="$HARNESS_ROOT_DIR"',
-      'source "$HARNESS_ROOT_DIR/scripts/lib/docker-e2e-image.sh"',
+      'TARGET_ROOT_DIR="$(cd "${OPENCLAW_DOCKER_E2E_REPO_ROOT:-$ROOT_DIR}" && pwd)"',
+      'TARGET_CONTRACT_DIR="$TARGET_ROOT_DIR/scripts/e2e/lib/doctor-install-switch"',
+      'source "$ROOT_DIR/scripts/lib/docker-e2e-image.sh"',
+      '"$TARGET_CONTRACT_DIR:/app/scripts/e2e/lib/doctor-install-switch:ro"',
     ]);
     expectTextToIncludeAll(doctorScenario, [
       "OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_SERVICE_REPAIR=1",
