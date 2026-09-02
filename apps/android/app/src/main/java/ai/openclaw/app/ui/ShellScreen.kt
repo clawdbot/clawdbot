@@ -69,7 +69,6 @@ import androidx.compose.material.icons.filled.Cloud
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.Groups
-import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.Mic
@@ -83,12 +82,10 @@ import androidx.compose.material.icons.filled.Storage
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.outlined.AccessTime
 import androidx.compose.material.icons.outlined.ChatBubbleOutline
-import androidx.compose.material.icons.outlined.Dashboard
 import androidx.compose.material.icons.outlined.DesktopWindows
 import androidx.compose.material.icons.outlined.Folder
 import androidx.compose.material.icons.outlined.Inventory2
 import androidx.compose.material.icons.outlined.MicNone
-import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material.icons.outlined.Terminal
 import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.HorizontalDivider
@@ -119,19 +116,14 @@ import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.launch
 import java.util.Locale
 
-internal enum class Tab(
-  val key: String,
-  val label: NativeText,
-  val icon: ImageVector,
-) {
-  Overview(key = "overview", label = nativeText("Home"), icon = Icons.Default.Home),
-  Chat(key = "chat", label = nativeText("Chat"), icon = Icons.Outlined.ChatBubbleOutline),
-  Voice(key = "voice", label = nativeText("Voice"), icon = Icons.Outlined.MicNone),
-  Sessions(key = "sessions", label = nativeText("Threads"), icon = Icons.Outlined.AccessTime),
-  Settings(key = "settings", label = nativeText("Settings"), icon = Icons.Outlined.Settings),
-  ProvidersModels(key = "providers-models", label = nativeText("Providers"), icon = Icons.Outlined.Inventory2),
-  Files(key = "files", label = nativeText("Files"), icon = Icons.Outlined.Folder),
-  Dashboard(key = "dashboard", label = nativeText("Dashboard"), icon = Icons.Outlined.Dashboard),
+internal enum class Tab {
+  Overview,
+  Chat,
+  Sessions,
+  Settings,
+  ProvidersModels,
+  Files,
+  Dashboard,
 }
 
 private val shellContentInsets: WindowInsets
@@ -313,15 +305,6 @@ fun ShellScreen(
               onOpenDashboard = nav::openSessionDashboard,
               onOpenGatewaySettings = { nav.openSettingsRoute(SettingsRoute.Gateway) },
               onOpenProvidersModels = { nav.openDetailTab(Tab.ProvidersModels) },
-            )
-          }
-
-          Tab.Voice -> {
-            VoiceShellScreen(
-              viewModel = viewModel,
-              onOpenCommand = { commandOpen = true },
-              onOpenGatewaySettings = { nav.openSettingsRoute(SettingsRoute.Gateway) },
-              onOpenVoiceSettings = { nav.openSettingsRoute(SettingsRoute.Voice) },
             )
           }
 
@@ -1466,26 +1449,6 @@ private fun RecentSessionRowContent(
         tint = ClawTheme.colors.textMuted,
       )
     }
-  }
-}
-
-@Composable
-private fun VoiceShellScreen(
-  viewModel: MainViewModel,
-  onOpenCommand: () -> Unit,
-  onOpenGatewaySettings: () -> Unit,
-  onOpenVoiceSettings: () -> Unit,
-) {
-  ClawScaffold(
-    contentPadding = PaddingValues(start = 0.dp, top = 8.dp, end = 0.dp, bottom = 0.dp),
-    contentWindowInsets = shellContentInsets,
-  ) {
-    VoiceScreen(
-      viewModel = viewModel,
-      onOpenCommand = onOpenCommand,
-      onOpenGatewaySettings = onOpenGatewaySettings,
-      onOpenVoiceSettings = onOpenVoiceSettings,
-    )
   }
 }
 

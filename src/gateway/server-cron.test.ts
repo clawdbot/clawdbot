@@ -2859,7 +2859,7 @@ describe("buildGatewayCronService", () => {
     },
   );
 
-  it("does not inherit explicit heartbeat destinations for direct target-last wakes", async () => {
+  it("passes direct target-last wakes as destination-only overrides", async () => {
     const cfg = {
       ...createCronConfig("server-cron-direct-heartbeat-route"),
       agents: {
@@ -2869,6 +2869,7 @@ describe("buildGatewayCronService", () => {
             prompt: "Default heartbeat prompt",
             target: "none",
             directPolicy: "block",
+            timeoutSeconds: 900,
             to: "telegram:dm",
             accountId: "default",
           },
@@ -2894,13 +2895,45 @@ describe("buildGatewayCronService", () => {
       expect(call.sessionKey).toBe("agent:main:telegram:group:123:topic:456");
       expect(call.owningCronLaneTaskMarker).toEqual(owningCronLaneTaskMarker);
       expect(call.heartbeat).toEqual({
-        every: "1h",
-        prompt: "Default heartbeat prompt",
         target: "last",
-        directPolicy: "block",
         to: undefined,
         accountId: undefined,
       });
+      expect(
+        cronDeps?.resolveHeartbeatTimeoutMs?.({
+          source: "cron",
+          intent: "immediate",
+          reason: "cron:test",
+          agentId: "main",
+          heartbeat: { target: "last" },
+        }),
+      ).toBe(900_000);
+    } finally {
+      state.cron.stop();
+    }
+  });
+
+  it("preserves the unlimited agent timeout for heartbeat watchdogs", () => {
+    const cfg = {
+      ...createCronConfig("server-cron-unlimited-heartbeat"),
+      agents: {
+        defaults: {
+          timeoutSeconds: 0,
+          heartbeat: { every: "1h" },
+        },
+      },
+    } as OpenClawConfig;
+    const state = loadCronService(cfg);
+    try {
+      expect(
+        getCronDeps(state)?.resolveHeartbeatTimeoutMs?.({
+          source: "cron",
+          intent: "immediate",
+          reason: "cron:test",
+          agentId: "main",
+          heartbeat: { target: "last" },
+        }),
+      ).toBeUndefined();
     } finally {
       state.cron.stop();
     }

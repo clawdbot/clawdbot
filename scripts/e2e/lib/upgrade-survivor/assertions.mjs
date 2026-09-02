@@ -5,7 +5,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { pathToFileURL } from "node:url";
+import { validatePrepublishPluginRegistryArtifact } from "../../../prepublish-plugin-registry-artifact.mjs";
 import { readPluginInstallIndex } from "../plugin-index-sqlite.mjs";
 import { readPostCoreSnapshot } from "./diagnostics.mjs";
 import {
@@ -1140,35 +1140,6 @@ function hasCompanionPluginConsent(record) {
   ].some((value) => value !== undefined);
 }
 
-async function loadTrustedOfficialInstallRecordPredicate() {
-  const candidatePackageRoot = path.join(
-    requireEnv("npm_config_prefix"),
-    "lib",
-    "node_modules",
-    "openclaw",
-  );
-  const modulePath = path.join(
-    candidatePackageRoot,
-    "dist",
-    "plugins",
-    "official-external-install-records.js",
-  );
-  assert(
-    fs.existsSync(modulePath),
-    `candidate official install record module missing: ${modulePath}`,
-  );
-  const module = await import(pathToFileURL(modulePath).href);
-  assert(
-    typeof module.isTrustedOfficialPluginInstallRecord === "function",
-    `candidate official install record predicate missing: ${modulePath}`,
-  );
-  return module.isTrustedOfficialPluginInstallRecord;
-}
-
-function isTrustedOfficialNpmCompanion(record, pluginId, packageName, isTrustedOfficialRecord) {
-  return isTrustedOfficialRecord?.({ pluginId, packageName, record }) === true;
-}
-
 function assertCompanionPluginConsent(record, pluginId, integrity) {
   assert(
     record.acceptedSurface && typeof record.acceptedSurface === "object",
@@ -1195,21 +1166,72 @@ function assertCompanionPluginConsent(record, pluginId, integrity) {
   );
 }
 
-async function assertCompanionPluginInstalls([expectedVersion, capabilityConsentSupported]) {
+function assertNpmPluginInstall([
+  pluginId,
+  packageName,
+  expectedVersion,
+  capabilityConsentSupported,
+  pendingUpdateFile,
+  observationRoot,
+  baselineVersion,
+]) {
+  assert(
+    pluginId && packageName && expectedVersion,
+    "npm plugin assertion requires identity and version",
+  );
+  assert(
+    capabilityConsentSupported === "0" || capabilityConsentSupported === "1",
+    "npm plugin assertion requires candidate capability-consent support",
+  );
+  if (
+    pendingUpdateFile &&
+    assertRecoverableUpdateJson([
+      pendingUpdateFile,
+      expectedVersion,
+      observationRoot,
+      baselineVersion,
+    ]).has(pluginId)
+  ) {
+    // Only this plugin's recorded denial defers its artifact check until repair.
+    process.stdout.write(`Plugin "${pluginId}" is awaiting fixture capability consent.\n`);
+    return;
+  }
+  const records = readInstalledPluginIndex().installRecords ?? {};
+  const packageJson = assertExternalPluginInstall(records, pluginId, packageName);
+  const record = records[pluginId];
+  assert(record.source === "npm", `${pluginId} plugin must be installed from npm`);
+  assertPluginArtifactConsent(
+    record,
+    pluginId,
+    packageJson,
+    expectedVersion,
+    capabilityConsentSupported,
+  );
+  const artifactDir = requireEnv("OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR");
+  const { manifest } = validatePrepublishPluginRegistryArtifact({
+    artifactDir,
+    expectedSourceSha: requireEnv("OPENCLAW_DOCKER_E2E_SELECTED_SHA"),
+    expectedCandidateVersion: expectedVersion,
+    expectedManifestSha256: requireEnv("OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_MANIFEST_SHA256"),
+    requiredPackages: [packageName],
+  });
+  const artifact = manifest.packages.find((entry) => entry.name === packageName);
+  const archive = fs.readFileSync(path.join(artifactDir, artifact.tarball));
+  const integrity = `sha512-${createHash("sha512").update(archive).digest("base64")}`;
+  assert(record.integrity === integrity, `${pluginId} plugin registry artifact integrity changed`);
+}
+
+function assertCompanionPluginInstalls([expectedVersion, capabilityConsentSupported]) {
   assert(expectedVersion, "assert-companion-installs requires <expected-version>");
   assert(
     capabilityConsentSupported === "0" || capabilityConsentSupported === "1",
     "assert-companion-installs requires candidate capability-consent support",
   );
-  const isTrustedOfficialRecord =
-    capabilityConsentSupported === "1"
-      ? await loadTrustedOfficialInstallRecordPredicate()
-      : undefined;
   const records = readInstalledPluginIndex().installRecords ?? {};
-  for (const [pluginId, packageName, source, allowsOfficialConsentExemption] of [
-    ["discord", "@openclaw/discord", "npm", true],
-    ["whatsapp", "@openclaw/whatsapp", "clawhub", false],
-    ["codex", "@openclaw/codex", "npm", true],
+  for (const [pluginId, packageName, source] of [
+    ["discord", "@openclaw/discord", "npm"],
+    ["whatsapp", "@openclaw/whatsapp", "clawhub"],
+    ["codex", "@openclaw/codex", "npm"],
   ]) {
     const packageJson = assertExternalPluginInstall(records, pluginId, packageName);
     const record = records[pluginId];
@@ -1220,8 +1242,6 @@ async function assertCompanionPluginInstalls([expectedVersion, capabilityConsent
       packageJson,
       expectedVersion,
       capabilityConsentSupported,
-      isTrustedOfficialRecord,
-      allowsOfficialConsentExemption,
     );
   }
 }
@@ -1232,8 +1252,6 @@ function assertPluginArtifactConsent(
   packageJson,
   expectedVersion,
   capabilityConsentSupported,
-  isTrustedOfficialRecord,
-  allowsOfficialConsentExemption = false,
 ) {
   const installedVersion = record.source === "clawhub" ? record.version : record.resolvedVersion;
   assert(
@@ -1249,14 +1267,38 @@ function assertPluginArtifactConsent(
     typeof integrity === "string" && integrity.length > 0,
     `${pluginId} plugin integrity missing`,
   );
-  // Verified first-party packages intentionally omit operator-acceptance metadata.
-  // Any unverified or partially accepted record still takes the strict path below.
-  if (
-    capabilityConsentSupported === "1" &&
-    (!allowsOfficialConsentExemption ||
-      hasCompanionPluginConsent(record) ||
-      !isTrustedOfficialNpmCompanion(record, pluginId, packageJson.name, isTrustedOfficialRecord))
-  ) {
+  if (capabilityConsentSupported === "1") {
+    const inspection = JSON.parse(
+      execFileSync("openclaw", ["plugins", "inspect", pluginId, "--json"], {
+        encoding: "utf8",
+        timeout: 120_000,
+      }),
+    );
+    assert(inspection.plugin?.id === pluginId, `${pluginId} inspected plugin id changed`);
+    assert(
+      inspection.plugin.packageName === packageJson.name,
+      `${pluginId} inspected package name changed`,
+    );
+    assert(
+      typeof inspection.plugin.rootDir === "string" &&
+        fs.realpathSync(inspection.plugin.rootDir) ===
+          fs.realpathSync(resolveHomePath(record.installPath)),
+      `${pluginId} inspected install path changed`,
+    );
+    assertStrict.deepEqual(
+      inspection.install,
+      record,
+      `${pluginId} inspected install record changed`,
+    );
+    // Official provenance is not operator acceptance. Use the metadata owner's
+    // decision for this exact record, but validate any recorded acceptance so a
+    // partial or stale artifact claim cannot pass the upgrade proof.
+    if (inspection.plugin.trustedOfficialInstall === true && !hasCompanionPluginConsent(record)) {
+      process.stdout.write(
+        `Plugin "${pluginId}" has verified official capability-consent exemption.\n`,
+      );
+      return;
+    }
     assertCompanionPluginConsent(record, pluginId, integrity);
   }
 }
@@ -1617,8 +1659,10 @@ if (command === "list-scenarios") {
     "transcript export requires the meeting scenario",
   );
   assertMeetingTranscriptExport(requireEnv("OPENCLAW_STATE_DIR"));
+} else if (command === "assert-npm-plugin-install") {
+  assertNpmPluginInstall(process.argv.slice(3));
 } else if (command === "assert-companion-installs") {
-  await assertCompanionPluginInstalls(process.argv.slice(3));
+  assertCompanionPluginInstalls(process.argv.slice(3));
 } else if (command === "assert-recovered-plugin-installs") {
   assertRecoveredPluginInstalls(process.argv.slice(3));
 } else if (command === "assert-status-json") {

@@ -176,7 +176,10 @@ function buildGroupedMessageRenderOptions(
   };
 }
 
-function isPeerSenderGroup(group: MessageGroup, userId: string | null | undefined): boolean {
+function isPeerSenderGroup(
+  group: Pick<MessageGroup, "sender">,
+  userId: string | null | undefined,
+): boolean {
   const identity = group.sender?.identity;
   return Boolean(
     group.sender && !(userId && identity?.type === "profile" && identity.id === userId),
@@ -286,7 +289,7 @@ export function renderActivityGroup(
 }
 
 export function resolveMessageGroupSenderLabel(
-  group: MessageGroup,
+  group: Pick<MessageGroup, "role" | "sender" | "senderLabel" | "messages">,
   opts: Pick<RenderMessageGroupOptions, "assistantName" | "userId" | "userName" | "userAvatar">,
 ): string {
   const normalizedRole = normalizeRoleForGrouping(group.role);

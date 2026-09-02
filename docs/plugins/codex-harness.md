@@ -103,8 +103,8 @@ channel is the communication surface.
 
 - The official `@openclaw/codex` plugin installed. Include `codex` in
   `plugins.allow` if your config uses an allowlist.
-- Managed Codex app-server `0.151.0`. The plugin ships and manages
-  `@openai/codex` `0.151.0` by default, so a `codex` command on `PATH` does not
+- Managed Codex app-server `0.152.1`. The plugin ships and manages
+  `@openai/codex` `0.152.1` by default, so a `codex` command on `PATH` does not
   affect normal startup. Explicit custom, remote, and macOS desktop-owned
   app-servers must report a parseable semantic version of `0.149.0` or newer.
   Newer versions continue with a compatibility warning and normal runtime
@@ -1051,10 +1051,11 @@ When `/codex resume` attaches a thread without an existing verified harness
 binding, its next turn checks the native thread's stored tool catalog and
 applies the current harness configuration before continuing. This first
 attachment requires the local stdio app-server and its per-agent Codex home.
-It also needs exclusive use of that app-server while applying configuration;
-if another turn or native child is active, wait for it to finish and retry.
-Use [Codex supervision](/plugins/codex-supervision) or native Codex to continue
-threads in a shared user home or on another app-server.
+The target native thread must be idle. OpenClaw coordinates attachment, resume,
+and release of that thread; unrelated chats and catalog reads can continue on
+the same app-server. If the target thread is active, wait for its turn to finish
+and retry. Use [Codex supervision](/plugins/codex-supervision) or native Codex to
+continue threads in a shared user home or on another app-server.
 
 Native child threads controlled by a parent cannot be attached with `/codex
 resume` or `/codex bind`. OpenClaw reports that restriction and keeps the current
@@ -1407,6 +1408,20 @@ attempt: progress does not reset it, and `0` means unlimited execution.
 OpenClaw still bounds its own requests, dynamic tools, cancellation, and local
 settlement. See [Timeouts](/plugins/codex-harness-reference#timeouts) for those
 budgets, Stop and replay behavior, and Doctor migration of retired idle settings.
+
+### Parallel chats and thread ownership
+
+Independent chats can share a Codex app-server and run concurrently. Resuming
+an idle chat does not require unrelated chats, model discovery, or tool-catalog
+reads to finish. OpenClaw coordinates its own lifecycle operations for each
+native thread and preserves that thread's identity across ordinary resumes.
+A closed, replaced, or retired client still cannot complete a stale handoff.
+
+This coordination does not make native configuration replacement atomic against
+Codex-internal controllers. Native subagent reloads or another native controller
+can operate outside OpenClaw's thread queue. Avoid concurrently reconfiguring the
+same native thread through multiple controllers; observing native teardown alone
+does not reserve it against a subsequent native reload.
 
 ### Local testing env overrides
 

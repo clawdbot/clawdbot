@@ -684,7 +684,12 @@ async function tryWriteSingleTopLevelIncludeMutation(params: {
     resolveManagedUnsetPathsForWrite(params.writeOptions?.unsetPaths),
   );
   const changedKeys = getChangedTopLevelKeys(params.snapshot.sourceConfig, nextConfig);
-  if (changedKeys.length !== 1 || changedKeys[0] === "<root>") {
+  // An include-only commit cannot also persist the root roster format.
+  if (
+    params.writeOptions?.persistCanonicalAgentRoster === true ||
+    changedKeys.length !== 1 ||
+    changedKeys[0] === "<root>"
+  ) {
     return null;
   }
 
