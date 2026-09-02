@@ -4,7 +4,6 @@ import { formatCliCommand } from "../cli/command-format.js";
 import { parseLaunchdPlistStdioPaths } from "./launchd-plist.js";
 import {
   formatLaunchdStderrRewriteGuidance,
-  isLaunchdStdioSuppressed,
   resolveAdvertisedLaunchdStderr,
 } from "./launchd-stdio.js";
 
@@ -24,10 +23,9 @@ describe("launchd stdio advertisement", () => {
   });
 
   it("treats /dev/null and a missing plist as suppressed", () => {
-    expect(isLaunchdStdioSuppressed("/dev/null")).toBe(true);
-    expect(isLaunchdStdioSuppressed(null)).toBe(true);
     expect(resolveAdvertisedLaunchdStderr("/dev/null")).toEqual({ kind: "suppressed" });
     expect(resolveAdvertisedLaunchdStderr(null)).toEqual({ kind: "suppressed" });
+    expect(resolveAdvertisedLaunchdStderr("")).toEqual({ kind: "suppressed" });
   });
 
   it("points a loaded legacy LaunchAgent at rewrite-capable commands", () => {

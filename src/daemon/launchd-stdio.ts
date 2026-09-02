@@ -9,7 +9,7 @@ const LAUNCHD_NULL_STDIO_PATH = "/dev/null";
 
 // Type predicate so advertised-file callers get a real path. A plain boolean
 // leaves `string | null` in the file branch and fails check-prod-types.
-export function isLaunchdStdioSuppressed(
+function isLaunchdStdioSuppressed(
   path: string | null | undefined,
 ): path is null | undefined | "" | typeof LAUNCHD_NULL_STDIO_PATH {
   return !path || path === LAUNCHD_NULL_STDIO_PATH;
