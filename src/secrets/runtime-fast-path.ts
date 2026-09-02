@@ -223,6 +223,8 @@ export function prepareSecretsRuntimeFastPathSnapshot(params: {
 } | null {
   const runtimeEnv = mergeSecretsRuntimeEnv(params.env);
   const authStoreCredentialsRevision = getRuntimeAuthProfileStoreCredentialsRevision();
+  // Capture before store reads. A live mutation during preparation must advance past
+  // this watermark, or activation could overwrite it with the prepared candidate.
   const authStoreSnapshotsRevision = getRuntimeAuthProfileStoreSnapshotsRevision();
   const sourceConfig = cloneConfigWithResolutionFacts(params.config);
   const resolvedConfig = cloneConfigWithResolutionFacts(params.config);

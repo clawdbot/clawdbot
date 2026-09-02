@@ -58,7 +58,7 @@ export type PreparedSecretsRuntimeSnapshot = {
   config: OpenClawConfig;
   authStores: OwnedRuntimeAuthProfileStoreSnapshotEntry[];
   authStoreCredentialsRevision: number;
-  authStoreSnapshotsRevision?: number;
+  authStoreSnapshotsRevision: number;
   warnings: SecretResolverWarning[];
   degradedOwners?: DegradedSecretOwner[];
   secretOwners?: SecretOwnerRefState[];
@@ -260,8 +260,8 @@ function cloneSnapshot(snapshot: PreparedSecretsRuntimeSnapshot): PreparedSecret
 
 function mergeLiveAuthStoreBookkeeping(
   authStores: PreparedSecretsRuntimeSnapshot["authStores"],
+  preparedSnapshotsRevision: number,
   degradedOwners: readonly DegradedSecretOwner[] = [],
-  preparedSnapshotsRevision?: number,
 ): PreparedSecretsRuntimeSnapshot["authStores"] {
   const liveEntries = new Map(
     listOwnedRuntimeAuthProfileStoreSnapshots().map((entry) => [entry.databasePath, entry]),
@@ -274,9 +274,8 @@ function mergeLiveAuthStoreBookkeeping(
     let bookkeeping = entry.store;
     if (isDeepStrictEqual(snapshotMutationOwner(entry), snapshotMutationOwner(live))) {
       if (
-        preparedSnapshotsRevision !== undefined &&
         getRuntimeAuthProfileStoreSnapshotRevisionAtDatabasePath(entry.databasePath) <=
-          preparedSnapshotsRevision
+        preparedSnapshotsRevision
       ) {
         return entry;
       }
@@ -979,8 +978,8 @@ export function activateSecretsRuntimeSnapshotState(params: {
   if (params.mergeLiveAuthBookkeeping !== false) {
     next.authStores = mergeLiveAuthStoreBookkeeping(
       next.authStores,
-      next.degradedOwners,
       next.authStoreSnapshotsRevision,
+      next.degradedOwners,
     );
   }
   const activationAuthStores = listOwnedRuntimeAuthProfileStoreSnapshots();
@@ -1127,8 +1126,8 @@ export function restoreSecretsRuntimeSnapshotStateIfCurrent(
           ),
           ...independentEntries,
         ],
-        params.snapshot.degradedOwners,
         params.snapshot.authStoreSnapshotsRevision,
+        params.snapshot.degradedOwners,
       ).toSorted((left, right) => left.agentDir.localeCompare(right.agentDir)),
       authStoreCredentialsRevision: currentCredentialsRevision,
       authStoreSnapshotsRevision: getRuntimeAuthProfileStoreSnapshotsRevision(),
