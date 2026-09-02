@@ -310,6 +310,24 @@ describe("qa scenario catalog channel contracts", () => {
     expect(flow).not.toContain('"call":"sleep"');
   });
 
+  it("proves empty subagent completion from durable non-delivery state", () => {
+    const scenario = requireFlowScenario(
+      readQaScenarioById("subagent-empty-completion-non-delivery"),
+    );
+    const flow = JSON.stringify(scenario.execution.flow);
+
+    expect(scenario.execution.providerMode).toBe("mock-openai");
+    expect(flow).toContain("task.deliveryStatus === 'not_applicable'");
+    expect(flow).toContain("task.terminalOutcome === 'succeeded'");
+    expect(flow).toContain("emptyTerminalOutbound.length === 0");
+    expect(flow).toContain("emptyParentAcknowledgements.length === 1");
+    expect(flow).toContain("request.plannedToolName === 'write'");
+    expect(flow).toContain(
+      "JSON.stringify(postRestartOutbound) === JSON.stringify(preRestartOutbound)",
+    );
+    expect(flow).not.toContain('"call":"sleep"');
+  });
+
   it("keeps channel streaming evidence portable across QA Channel and Crabline Telegram", () => {
     const scenario = requireFlowScenario(readQaScenarioById("channel-message-flows"));
 

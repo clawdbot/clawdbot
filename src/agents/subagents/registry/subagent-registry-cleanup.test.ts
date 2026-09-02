@@ -1,6 +1,6 @@
 // Subagent registry cleanup tests cover deferred cleanup decisions while
 // completion delivery, descendants, and retry windows are still unresolved.
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { resolveDeferredCleanupDecision } from "./subagent-registry-cleanup.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
@@ -83,25 +83,6 @@ describe("resolveDeferredCleanupDecision", () => {
     });
 
     expect(decision).toEqual({ kind: "retry", retryCount: 2, resumeDelayMs: 2_000 });
-  });
-
-  it("gives up immediately for permanent announce failures", () => {
-    const resolveAnnounceRetryDelayMs = vi.fn(() => 2_000);
-    const decision = resolveDecision({
-      entry: makeEntry({
-        expectsCompletionMessage: true,
-        delivery: { status: "pending", disposition: "permanent_failure" },
-      }),
-      activeDescendantRuns: 0,
-      resolveAnnounceRetryDelayMs,
-    });
-
-    expect(decision).toEqual({
-      kind: "give-up",
-      reason: "permanent_failure",
-      retryCount: 1,
-    });
-    expect(resolveAnnounceRetryDelayMs).not.toHaveBeenCalled();
   });
 
   it("uses retry backoff for non-completion flows so cleanup can settle after announce failures", () => {

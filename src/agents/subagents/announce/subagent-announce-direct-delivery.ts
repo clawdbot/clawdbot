@@ -70,16 +70,6 @@ import {
 } from "./subagent-announce-origin.js";
 import { resolveRequesterStoreKey } from "./subagent-requester-store-key.js";
 
-function emptySubagentOutputResult(): SubagentAnnounceDeliveryResult {
-  return {
-    delivered: false,
-    path: "direct",
-    reason: "source_output_empty",
-    error: "child produced no output (nothing to announce)",
-    disposition: "permanent_failure",
-  };
-}
-
 async function runAnnounceAgentCall(params: {
   agentParams: Record<string, unknown>;
   delegatedToolPolicyHandoff?: SubagentCompletionToolHandoffRegistration;
@@ -190,10 +180,10 @@ export async function sendSubagentAnnounceDirectly(params: {
       (trustedCompletionEvent?.result.trim() === "(no output)" ||
         hasFailedSubagentNoOutputCompletion(params.internalEvents));
     const hasSuccessfulTrustedSubagentNoOutputCompletion =
-      params.expectsCompletionMessage &&
-      isSubagentCompletion &&
-      trustedCompletionEvent?.status === "ok" &&
-      trustedCompletionEvent.result.trim() === "(no output)";
+      hasRequiredSubagentNoOutputCompletion && trustedCompletionEvent?.status === "ok";
+    const textCompletionDirectDeliveryKind = hasFailedTrustedSubagentCompletion
+      ? "failed_notice"
+      : "completed_result";
     const agentMediatedCompletion =
       params.expectsCompletionMessage && isAgentMediatedCompletionSourceTool(sourceToolId);
     const completionRouteRequiresMessageToolDelivery =
@@ -512,14 +502,17 @@ export async function sendSubagentAnnounceDirectly(params: {
       !hasVisibleNonSilentGatewayPayload &&
       !hasMessagingToolDelivery
     ) {
-      const textDelivery = await tryTextCompletionDirectDelivery(
-        hasFailedTrustedSubagentCompletion ? "failed_notice" : "completed_result",
-      );
+      const textDelivery = await tryTextCompletionDirectDelivery(textCompletionDirectDeliveryKind);
       if (textDelivery) {
         return textDelivery;
       }
       if (hasSuccessfulTrustedSubagentNoOutputCompletion && !hasCompletionSideEffect) {
-        return emptySubagentOutputResult();
+        return {
+          delivered: false,
+          path: "direct",
+          reason: "visible_reply_missing",
+          error: "completion agent did not produce a visible reply",
+        };
       }
     }
     if (
@@ -527,7 +520,13 @@ export async function sendSubagentAnnounceDirectly(params: {
       !hasVisibleRequiredCompletionReply &&
       hasCompletionSideEffect
     ) {
-      return emptySubagentOutputResult();
+      return {
+        delivered: false,
+        path: "direct",
+        reason: "visible_reply_missing",
+        error: "completion agent did not produce a visible reply",
+        disposition: "permanent_failure",
+      };
     }
     if (
       params.expectsCompletionMessage &&
@@ -538,11 +537,16 @@ export async function sendSubagentAnnounceDirectly(params: {
         hasRequiredSubagentNoOutputCompletion)
     ) {
       if (hasSuccessfulTrustedSubagentNoOutputCompletion) {
-        return emptySubagentOutputResult();
+        return {
+          delivered: false,
+          path: "direct",
+          reason: "visible_reply_missing",
+          error: "completion agent did not produce a visible reply",
+        };
       }
       if (subagentDirectMessageCompletionRequiresMessageTool) {
         const textDelivery = await tryTextCompletionDirectDelivery(
-          hasFailedTrustedSubagentCompletion ? "failed_notice" : "completed_result",
+          textCompletionDirectDeliveryKind,
         );
         if (textDelivery) {
           return textDelivery;
