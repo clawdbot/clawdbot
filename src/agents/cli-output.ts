@@ -53,8 +53,9 @@ export function formatCliOutputError(
       "Retry with a higher --max-turns value or a narrower task.",
     ].join(" ");
   }
-  // OpenClaw runs the CLI with `--setting-sources user`, so a user-scope Claude
-  // Code hook can end a headless turn the operator never sees configured here.
+  // A user-scope Claude Code hook can end a headless turn the operator never
+  // sees configured here, and the settings source is the backend's own choice,
+  // so the guidance names the hook rather than one backend's CLI flags.
   const hookStopped =
     terminalFailure.terminalReason === "hook_stopped" ||
     terminalFailure.terminalReason === "stop_hook_prevented";
@@ -64,8 +65,8 @@ export function formatCliOutputError(
     "Tool actions may already have run; verify their effects before retrying.",
     ...(hookStopped
       ? [
-          "A Claude Code hook stopped this turn; OpenClaw runs the CLI with --setting-sources user, " +
-            "so user-scope hooks apply — move or disable that hook.",
+          "A Claude Code hook stopped this turn; user-scope hooks (including plugin hooks) " +
+            "apply to headless runs — move or disable that hook.",
         ]
       : []),
   ].join(" ");

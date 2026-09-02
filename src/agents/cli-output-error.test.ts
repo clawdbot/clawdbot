@@ -46,8 +46,8 @@ describe("formatCliOutputError", () => {
       "Claude CLI ended the turn without a reply (terminal_reason: hook_stopped, stop_reason: tool_use). " +
         "OpenClaw run: run-1. OpenClaw session: session-1. Claude session: claude-session-1. " +
         "Tool actions may already have run; verify their effects before retrying. " +
-        "A Claude Code hook stopped this turn; OpenClaw runs the CLI with --setting-sources user, " +
-        "so user-scope hooks apply — move or disable that hook.",
+        "A Claude Code hook stopped this turn; user-scope hooks (including plugin hooks) " +
+        "apply to headless runs — move or disable that hook.",
     );
   });
 
