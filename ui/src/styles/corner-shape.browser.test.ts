@@ -260,10 +260,9 @@ async function probeCorners(browser: Browser, fixtureFile: string): Promise<Corn
             const style = getComputedStyle(element);
             const radius =
               corner === "bottomLeft" ? style.borderBottomLeftRadius : style.borderTopLeftRadius;
-            // Older Chromium keeps the keyword spelling of the same computed shape.
-            const computedShape = style.getPropertyValue("corner-shape");
-            const shape = computedShape === "round" ? "superellipse(1)" : computedShape;
-            return [selector, { radius, shape }];
+            const shape = style.getPropertyValue("corner-shape");
+            // CSS defines round as superellipse(1); Chromium versions serialize either form.
+            return [selector, { radius, shape: shape === "round" ? "superellipse(1)" : shape }];
           }),
         );
       },
