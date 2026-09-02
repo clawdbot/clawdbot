@@ -24,6 +24,18 @@ final class CookieSyncManager: NSObject {
         let endpoint: Endpoint
     }
 
+    /// `CookieSyncManager` is @MainActor and not Sendable, so its off-main DispatchSource
+    /// handlers below (explicitly @Sendable to avoid inheriting @MainActor isolation and
+    /// trapping on entry when Dispatch invokes them on `queue`) cannot capture `self`
+    /// directly. They read `manager` only from inside a `Task { @MainActor in }` hop, so a
+    /// plain unsynchronized weak reference is safe here.
+    private final class OwnerRef: @unchecked Sendable {
+        weak var manager: CookieSyncManager?
+        init(_ manager: CookieSyncManager) {
+            self.manager = manager
+        }
+    }
+
     static let shared = CookieSyncManager()
 
     private(set) var state: State = .stopped
@@ -31,6 +43,7 @@ final class CookieSyncManager: NSObject {
 
     @ObservationIgnored private let logger = Logger(subsystem: "ai.openclaw", category: "cookie-sync")
     @ObservationIgnored private let queue = DispatchQueue(label: "ai.openclaw.cookie-sync")
+    @ObservationIgnored private lazy var ownerRef = OwnerRef(self)
     @ObservationIgnored private weak var appState: AppState?
     @ObservationIgnored private var endpointState: GatewayEndpointState?
     @ObservationIgnored private var endpointTask: Task<Void, Never>?
@@ -43,7 +56,7 @@ final class CookieSyncManager: NSObject {
     @ObservationIgnored private var stderrSource: DispatchSourceRead?
     @ObservationIgnored private var startupWatchdog: DispatchSourceTimer?
     @ObservationIgnored private var stdoutBuffer = Data()
-    @ObservationIgnored private var processGeneration: UUID?
+    @ObservationIgnored var processGeneration: UUID?
     @ObservationIgnored private var runningIntent: SyncIntent?
     @ObservationIgnored private var reconcileGeneration: UInt64 = 0
     @ObservationIgnored private var retryAttempt = 0
@@ -235,12 +248,14 @@ final class CookieSyncManager: NSObject {
             environment["OPENCLAW_GATEWAY_PASSWORD"] = password
         }
         process.environment = environment
-        process.terminationHandler = { [weak self] process in
+        let owner = self.ownerRef
+        let terminationHandler: @Sendable (Process) -> Void = { process in
             let terminationStatus = process.terminationStatus
-            Task { @MainActor [weak self] in
-                self?.childTerminated(generation: generation, status: terminationStatus)
+            Task { @MainActor in
+                owner.manager?.childTerminated(generation: generation, status: terminationStatus)
             }
         }
+        process.terminationHandler = terminationHandler
 
         self.process = process
         self.stdoutPipe = stdoutPipe
@@ -264,44 +279,53 @@ final class CookieSyncManager: NSObject {
         }
     }
 
-    private func installReadSources(stdoutPipe: Pipe, stderrPipe: Pipe, generation: UUID) {
+    func installReadSources(stdoutPipe: Pipe, stderrPipe: Pipe, generation: UUID) {
+        let owner = self.ownerRef
+
         let stdoutDescriptor = stdoutPipe.fileHandleForReading.fileDescriptor
         let stdoutSource = DispatchSource.makeReadSource(fileDescriptor: stdoutDescriptor, queue: self.queue)
-        stdoutSource.setEventHandler { [weak self] in
-            let data = Self.readAvailable(fileDescriptor: stdoutDescriptor, byteCount: stdoutSource.data)
-            Task { @MainActor [weak self] in
-                self?.consumeStdout(data, generation: generation)
+        // Can't capture `stdoutSource` here to size the read off `source.data`: it isn't
+        // Sendable, and this handler is explicitly @Sendable (see installReadSources doc).
+        // Reading up to the existing 64KB cap unconditionally is a harmless simplification.
+        let stdoutHandler: @Sendable () -> Void = {
+            let data = Self.readAvailable(fileDescriptor: stdoutDescriptor)
+            Task { @MainActor in
+                owner.manager?.consumeStdout(data, generation: generation)
             }
         }
+        stdoutSource.setEventHandler(handler: stdoutHandler)
         self.stdoutSource = stdoutSource
         stdoutSource.resume()
 
         let stderrDescriptor = stderrPipe.fileHandleForReading.fileDescriptor
         let stderrSource = DispatchSource.makeReadSource(fileDescriptor: stderrDescriptor, queue: self.queue)
-        stderrSource.setEventHandler { [weak self] in
-            let data = Self.readAvailable(fileDescriptor: stderrDescriptor, byteCount: stderrSource.data)
-            Task { @MainActor [weak self] in
-                self?.consumeStderr(data, generation: generation)
+        let stderrHandler: @Sendable () -> Void = {
+            let data = Self.readAvailable(fileDescriptor: stderrDescriptor)
+            Task { @MainActor in
+                owner.manager?.consumeStderr(data, generation: generation)
             }
         }
+        stderrSource.setEventHandler(handler: stderrHandler)
         self.stderrSource = stderrSource
         stderrSource.resume()
     }
 
     private func installStartupWatchdog(generation: UUID) {
+        let owner = self.ownerRef
         let timer = DispatchSource.makeTimerSource(queue: self.queue)
         timer.schedule(deadline: .now() + 5)
-        timer.setEventHandler { [weak self] in
-            Task { @MainActor [weak self] in
-                guard let self, self.processGeneration == generation else { return }
-                self.startupWatchdog?.cancel()
-                self.startupWatchdog = nil
-                if self.process?.isRunning == true {
-                    self.retryAttempt = 0
-                    self.logger.debug("cookie sync startup watchdog passed")
+        let handler: @Sendable () -> Void = {
+            Task { @MainActor in
+                guard let manager = owner.manager, manager.processGeneration == generation else { return }
+                manager.startupWatchdog?.cancel()
+                manager.startupWatchdog = nil
+                if manager.process?.isRunning == true {
+                    manager.retryAttempt = 0
+                    manager.logger.debug("cookie sync startup watchdog passed")
                 }
             }
         }
+        timer.setEventHandler(handler: handler)
         self.startupWatchdog = timer
         timer.resume()
     }
@@ -399,8 +423,8 @@ final class CookieSyncManager: NSObject {
         self.state = nextState
     }
 
-    private nonisolated static func readAvailable(fileDescriptor: Int32, byteCount: UInt) -> Data {
-        let count = max(1, min(Int(byteCount), 64 * 1024))
+    private nonisolated static func readAvailable(fileDescriptor: Int32) -> Data {
+        let count = 64 * 1024
         var data = Data(count: count)
         let bytesRead = data.withUnsafeMutableBytes { buffer in
             Darwin.read(fileDescriptor, buffer.baseAddress, count)
