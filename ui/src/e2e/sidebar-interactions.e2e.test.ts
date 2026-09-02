@@ -46,7 +46,7 @@ suite.define(() => {
               capabilities: {
                 continueSession: true,
                 archive: false,
-                createSession: { model: "openai/gpt-5.6-luna" },
+                startTerminal: true,
               },
               hosts: [],
             },

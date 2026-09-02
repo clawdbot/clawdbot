@@ -348,9 +348,38 @@ New session **+** controls are links: click to open the draft in the current bro
 
 The **+** in the sidebar's **Sessions** toolbar opens a full-page draft at `/new`: nothing is created until you send the first message. A unified **Place** picker chooses a Gateway project or folder and an execution destination. Connections with `operator.write` can choose **Gateway · local**, **Auto** (least-busy device), or any paired device returned by `environments.list`; administrators additionally see configured cloud profiles and **Connect a machine…**. A cloud profile is selectable when its advertised execution modes include the selected runtime, so one Crabbox **Cloud · profile** row supports both OpenClaw and Codex. Automatic selection chooses the eligible host with the most available worker slots, breaking ties by device ID; runtimes that do not consume worker slots use device ID order. Device eligibility remains authoritative to the environment catalog and the selected runtime: OpenClaw `worker-turn` requires an available current session host with valid worker capacity and at least one free slot; Codex `remote-exec` requires its currently invocable, explicitly authorized exec-server command and consumes no worker slot. Offline known hosts, connected non-hosts, incompatible or saturated hosts, hosts missing required capabilities, outdated hosts, and unavailable hosts remain visible with a reason and next step.
 
-On a normal foreground send, the submitted text and attachments appear immediately with a **Starting** indicator while the Gateway creates or adopts the session. This is a pending submission, not a Gateway acknowledgment. If creation is rejected, your prompt and attachments remain available to correct and retry. Once creation succeeds, the UI opens the session's chat.
+The folder defaults to the agent workspace. Write-scoped connections can browse, restore recent Gateway folders, and start sessions anywhere inside a configured agent workspace; another absolute Gateway path requires `operator.admin` but can run directly without being a Git checkout. Local placement keeps the optional **Worktree** control with a base-branch picker backed by `worktrees.branches` (no fetch) and an optional worktree name (the branch becomes `openclaw/<name>`). Choosing either a device or cloud profile forces a managed worktree from the selected Gateway source.
 
-The folder defaults to the agent workspace. Write-scoped connections can browse, restore recent Gateway folders, and start sessions anywhere inside a configured agent workspace; another absolute Gateway path requires `operator.admin` but can run directly without being a Git checkout. Local placement keeps the optional **Worktree** control with a base-branch picker backed by `worktrees.branches` (no fetch) and an optional worktree name (the branch becomes `openclaw/<name>`). Choosing either a device or cloud profile forces a managed worktree from the selected Gateway source. **Start in terminal** is available only for local placement.
+### Start a native coding CLI
+
+The **+** beside **Codex** or **Claude Code** opens a native CLI draft, not an
+OpenClaw Chat. Choose the machine and folder, optionally enter a first prompt,
+and press **Start in terminal** or Enter (or your configured submit shortcut).
+The terminal opens with keyboard focus. The CLI uses that
+machine's native account, model, and configuration; OpenClaw does not translate
+model or authentication settings or automatically adopt the native session.
+Native draft text is not sent to OpenClaw for automatic title preparation.
+Ordinary **New Chat** and explicit catalog continuation remain separate flows.
+
+Native starts require `operator.admin`, `gateway.cliAgents.enabled`,
+an enabled catalog plugin, and its installed CLI. Terminals are on by default;
+`gateway.terminal.enabled: false` blocks native starts.
+No matching OpenClaw model route is required. The host picker lists only local
+CLI sources and connected nodes with the exact fresh-start command currently
+invocable. Resume-only nodes are not eligible. After installing a CLI or approving
+a node capability change, reconnect the node and refresh the host picker.
+
+On the Gateway, the folder/worktree controls still provision the selected managed
+worktree before launching. On a node, enter an existing absolute directory on
+that node; create a worktree there first if needed. Native starts do not use
+OpenClaw worker placement, cloud/Auto selection, attachment submission, model
+controls, or Incognito. Add files and change native CLI settings in the terminal.
+A missing directory, disabled capability, or disconnected host produces an error;
+OpenClaw never starts a Chat or substitutes another host or home directory.
+
+### OpenClaw Chat workspace startup
+
+On a normal foreground OpenClaw Chat send, the submitted text and attachments appear immediately with a **Starting** indicator while the Gateway creates or adopts the session. This is a pending submission, not a Gateway acknowledgment. If creation is rejected, your prompt and attachments remain available to correct and retry. Once creation succeeds, the UI opens the session's chat.
 
 The project picker refreshes after sign-in and reconnects. Gateway reconnects and Git verification retries preserve your edited base branch and worktree name. Choosing another folder or project clears those repository-specific details.
 
