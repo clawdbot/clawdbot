@@ -1607,7 +1607,7 @@ function buildLegacyStateMigrationSteps(
           cfg: params.sessionConfig ?? params.config,
           env: isDoctor ? { ...env, OPENCLAW_STATE_DIR: stateDir } : env,
           now,
-          ...(isDoctor ? {} : { pluginSessionStoreAgentIds: params.pluginSessionStoreAgentIds }),
+          pluginSessionStoreAgentIds: params.pluginSessionStoreAgentIds,
           legacySessionSurfaces: params.legacySessionSurfaces,
         }),
       ),
@@ -2124,20 +2124,6 @@ export async function autoMigrateLegacyState(params: {
   const mode: LegacyStateMigrationMode =
     params.doctorOnlyStateMigrations === true ? "doctor" : "automatic";
   const executionOptions = { rethrowUnexpectedFailures: mode === "automatic" };
-  const requireSafeAutomaticExecution = (execution: {
-    halted: boolean;
-    sources: readonly MigrationMessages[];
-  }): void => {
-    if (mode !== "automatic" || !execution.halted) {
-      return;
-    }
-    const warnings = execution.sources.flatMap((result) => result.warnings);
-    throw new Error(
-      formatStartupMigrationFailure(
-        warnings.length > 0 ? warnings : ["Legacy state migration was refused."],
-      ),
-    );
-  };
   const initialStateDir = resolveStateDir(env, homedir);
   const checkKey = `${path.resolve(initialStateDir)}\0${mode}`;
   if (autoMigrateChecked.has(checkKey)) {
@@ -2256,7 +2242,6 @@ export async function autoMigrateLegacyState(params: {
     undefined,
     executionOptions,
   );
-  requireSafeAutomaticExecution(agentTargetDiscovery);
   const agentTargetResult = agentTargetDiscovery.entries[0]?.result ?? {
     changes: [],
     warnings: [],
@@ -2344,7 +2329,6 @@ export async function autoMigrateLegacyState(params: {
       undefined,
       executionOptions,
     );
-    requireSafeAutomaticExecution(execution);
     preludeReceipts.push(...execution.receipts);
     preludeHalted ||= execution.halted;
     return execution.entries[0]?.result ?? { changes: [], warnings: [] };
@@ -2482,7 +2466,6 @@ export async function autoMigrateLegacyState(params: {
     undefined,
     executionOptions,
   );
-  requireSafeAutomaticExecution(detectionExecution);
   preludeReceipts.push(...detectionExecution.receipts);
   if (detectionExecution.halted || !detected) {
     const completed = [
@@ -2533,7 +2516,6 @@ export async function autoMigrateLegacyState(params: {
     undefined,
     executionOptions,
   );
-  requireSafeAutomaticExecution(eagerMigrations);
   if (eagerMigrations.halted) {
     const completed = [
       stateSchema,
@@ -2621,7 +2603,6 @@ export async function autoMigrateLegacyState(params: {
       (step) => step.id === "legacy-main-session-keys" || step.id === "acp-session-metadata",
       executionOptions,
     );
-    requireSafeAutomaticExecution(fastPathMigrations);
     const alwaysRunSources = fastPathMigrations.sources;
     const completedSources = [
       ...initialMigrationSources,
@@ -2663,7 +2644,6 @@ export async function autoMigrateLegacyState(params: {
     undefined,
     executionOptions,
   );
-  requireSafeAutomaticExecution(migrations);
   const completedSources = [
     ...initialMigrationSources,
     ...migrations.sharedSources,

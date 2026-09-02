@@ -2434,9 +2434,12 @@ describe("state migrations", () => {
         await realSaveSessionStore(storePath, store, options);
       });
     try {
-      await expect(
-        runLegacyStateMigrations({ detected, config: cfg, now: () => 1234 }),
-      ).rejects.toThrow("simulated alias write failure");
+      const result = await runLegacyStateMigrations({ detected, config: cfg, now: () => 1234 });
+      expect(result.warnings).toContain("simulated alias write failure");
+      expect(result.stepReceipts.find((receipt) => receipt.id === "sessions")).toMatchObject({
+        outcome: "refused",
+        refusal: { code: "step-threw", message: "simulated alias write failure" },
+      });
     } finally {
       saveSpy.mockRestore();
     }
@@ -2546,17 +2549,24 @@ describe("state migrations", () => {
       >;
     });
 
-    it("preserves plugin ownership captured before an aliased store rewrite", () => {
+    it("preserves plugin ownership and receipts the alias refusal before dependent ACP work", () => {
       expect(targetStore["agent:main:desk"]?.sessionId).toBe("foreign-main");
       expect(targetStore["agent:worker-1:main"]?.sessionId).toBe("worker-main");
       expect(targetStore["agent:worker-1:desk"]).toBeUndefined();
       expect(targetStore["agent:worker-1:main"]).toHaveProperty("acp");
       expect(fsSync.statSync(configuredStorePath).ino).toBe(fsSync.statSync(targetStorePath).ino);
+      expect(result.stepReceipts.find((receipt) => receipt.id === "sessions")).toMatchObject({
+        outcome: "refused",
+        requiredness: "required",
+        refusal: { code: "step-refused" },
+      });
+      expect(
+        result.stepReceipts.find((receipt) => receipt.id === "acp-session-metadata"),
+      ).toBeUndefined();
       expect(result.warnings).toEqual(
         expect.arrayContaining([
           expect.stringContaining(`aliased store ${configuredStorePath}`),
           expect.stringContaining(`aliased store ${targetStorePath}`),
-          expect.stringContaining("Deferred ACP metadata migration"),
         ]),
       );
     });
