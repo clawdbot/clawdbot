@@ -22,8 +22,15 @@ import type { ReplyOperation } from "./reply-run-registry.js";
 
 const ttsRuntimeLoader = createLazyImportLoader(() => import("../../tts/tts.runtime.js"));
 
-export const NO_VISIBLE_REPLY_FALLBACK_TEXT =
-  "No reply was generated for this message. This is usually a temporary model failure - please try again.";
+const NO_VISIBLE_REPLY_FALLBACK_TEXT =
+  "⚠️ OpenClaw couldn't produce or deliver a reply. Please try again. If this keeps happening, ask the operator to check the gateway logs.";
+
+export function buildNoVisibleReplyFallbackText(runId?: string): string {
+  const reference = normalizeOptionalString(runId);
+  return reference
+    ? `${NO_VISIBLE_REPLY_FALLBACK_TEXT} Reference: ${reference}.`
+    : NO_VISIBLE_REPLY_FALLBACK_TEXT;
+}
 
 export const QUEUE_CAP_REJECTION_TEXT =
   "This message was not queued because the session queue is full. Please try again after the current response finishes.";
