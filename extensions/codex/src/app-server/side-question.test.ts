@@ -23,6 +23,7 @@ import {
   createFakeCodexAppServerClient,
 } from "./codex-app-server.test-fixtures.js";
 import { resolveCodexSupervisionAppServerRuntimeOptions } from "./config.js";
+import * as elicitationBridge from "./elicitation-bridge.js";
 import { buildCodexAppServerConnectionFingerprint } from "./plugin-app-cache-key.js";
 import {
   isJsonObject,
@@ -841,12 +842,26 @@ describe("runCodexAppServerSideQuestion", () => {
   );
 
   it("returns an explicit unsupported decline for ordinary MCP input", async () => {
+    const approvalSpy = vi.spyOn(elicitationBridge, "routeCodexAppServerElicitationRequest");
     const client = createFakeClient({ completeTurn: false });
     getSharedCodexAppServerClientMock.mockResolvedValue(client);
     const run = runCodexAppServerSideQuestion(sideParams());
     await vi.waitFor(() =>
       expect(client.request.mock.calls.map(([method]) => method)).toContain("turn/start"),
     );
+
+    const item = {
+      type: "mcpToolCall",
+      id: "side-mcp",
+      server: "configured-server",
+      tool: "raw-tool",
+      arguments: { query: "side query" },
+      status: "inProgress",
+    };
+    client.emit({
+      method: "item/started",
+      params: { threadId: "side-thread", turnId: "turn-1", item },
+    });
 
     await expect(
       handleClientRequestWhenReady(client, {
@@ -869,9 +884,20 @@ describe("runCodexAppServerSideQuestion", () => {
       },
     });
 
-    client.emit(agentDelta("side-thread", "turn-1", "Side answer."));
-    client.emit(turnCompleted("side-thread", "turn-1", "Side answer."));
-    await expect(run).resolves.toEqual({ text: "Side answer." });
+    const correlate = approvalSpy.mock.calls[0]?.[0].getActiveMcpToolCall;
+    try {
+      expect(correlate?.(item.server)).toEqual({
+        id: item.id,
+        server: item.server,
+        tool: item.tool,
+        arguments: item.arguments,
+      });
+    } finally {
+      client.emit(agentDelta("side-thread", "turn-1", "Side answer."));
+      client.emit(turnCompleted("side-thread", "turn-1", "Side answer."));
+      await expect(run).resolves.toEqual({ text: "Side answer." });
+    }
+    expect(correlate?.(item.server)).toBeUndefined();
   });
 
   it("routes a remote-exec side question through the injected sandbox environment", async () => {

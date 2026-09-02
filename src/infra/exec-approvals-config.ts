@@ -52,6 +52,17 @@ const persistedExecAllowlistEntrySchema = z
   );
 const persistedExecApprovalsAgentSchema = persistedExecApprovalPolicySchema.extend({
   allowlist: z.array(persistedExecAllowlistEntrySchema).optional(),
+  mcpTools: z
+    .array(
+      z.looseObject({
+        server: z.string().refine((value) => value.trim().length > 0),
+        tool: z.string().refine((value) => value.trim().length > 0),
+        source: z.literal("allow-always"),
+        addedAt: z.number().finite().nonnegative(),
+        lastUsedAt: z.number().finite().nonnegative().optional(),
+      }),
+    )
+    .optional(),
 });
 const persistedExecApprovalsAgentsSchema = z
   .unknown()
@@ -142,6 +153,10 @@ const diagnosticFields = new Set([
   "askFallback",
   "autoAllowSkills",
   "allowlist",
+  "mcpTools",
+  "server",
+  "tool",
+  "addedAt",
   "pattern",
   "id",
   "source",
@@ -174,7 +189,7 @@ function formatPersistedExecApprovalsIssue(issue: z.core.$ZodIssue, parsed: unkn
       location += ` entry #${ordinal}`;
     } else if (
       index === 3 &&
-      issuePath[2] === "allowlist" &&
+      (issuePath[2] === "allowlist" || issuePath[2] === "mcpTools") &&
       typeof segment === "number" &&
       Number.isSafeInteger(segment) &&
       segment >= 0
@@ -289,11 +304,25 @@ function mergeLegacyAgent(
   }
 
   return {
+    ...legacy,
+    ...current,
     security: current.security ?? legacy.security,
     ask: current.ask ?? legacy.ask,
     askFallback: current.askFallback ?? legacy.askFallback,
     autoAllowSkills: current.autoAllowSkills ?? legacy.autoAllowSkills,
     allowlist: allowlist.length > 0 ? allowlist : undefined,
+    mcpTools:
+      current.mcpTools || legacy.mcpTools
+        ? [
+            ...(current.mcpTools ?? []),
+            ...(legacy.mcpTools ?? []).filter(
+              (grant) =>
+                !current.mcpTools?.some(
+                  (entry) => entry.server === grant.server && entry.tool === grant.tool,
+                ),
+            ),
+          ]
+        : undefined,
   };
 }
 
