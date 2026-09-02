@@ -374,6 +374,27 @@ describe("startGatewayMaintenanceTimers", () => {
     await stopMaintenanceTimers(timers);
   });
 
+  it("prunes idle tool-event recipients by their active and finalized lifetimes", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-03-22T00:00:00Z"));
+    const { startGatewayMaintenanceTimers } = await import("./server-maintenance.js");
+    const deps = createMaintenanceTimerDeps();
+    deps.chatRunState.toolEventRecipients.add("active-expired", "conn-active");
+
+    await vi.advanceTimersByTimeAsync(9 * 60_000 + 31_000);
+    deps.chatRunState.toolEventRecipients.add("finalized-expired", "conn-final");
+    deps.chatRunState.toolEventRecipients.markFinal("finalized-expired");
+    deps.chatRunState.toolEventRecipients.add("recent", "conn-recent");
+
+    const timers = startGatewayMaintenanceTimers(deps);
+    await vi.advanceTimersByTimeAsync(60_000);
+
+    expect(deps.chatRunState.runs.has("active-expired")).toBe(false);
+    expect(deps.chatRunState.runs.has("finalized-expired")).toBe(false);
+    expect(deps.chatRunState.runs.has("recent")).toBe(true);
+    await stopMaintenanceTimers(timers);
+  });
+
   it("runs queue media cleanup at startup and hourly", async () => {
     vi.useFakeTimers();
     const { startGatewayMaintenanceTimers } = await import("./server-maintenance.js");

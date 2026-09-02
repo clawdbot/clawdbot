@@ -278,6 +278,7 @@ export function startGatewayMaintenanceTimers(params: {
   const dedupeCleanup = setInterval(() => {
     const AGENT_RUN_SEQ_MAX = 10_000;
     const now = Date.now();
+    params.chatRunState.toolEventRecipients.pruneExpired(now);
     void performDevicePairSetupCompletionGc(now);
     if (now - deliveryQueueMediaGcStartedAtMs >= DELIVERY_QUEUE_MEDIA_GC_INTERVAL_MS) {
       void performDeliveryQueueMediaGc();

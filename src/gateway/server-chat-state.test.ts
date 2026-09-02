@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   createChatAbortMarker,
   createChatRunState,
@@ -6,6 +6,33 @@ import {
 } from "./server-chat-state.js";
 
 describe("createChatRunState", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("prunes expired tool-event recipients while preserving the late-event grace window", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-03-22T00:00:00Z"));
+    const state = createChatRunState();
+    state.toolEventRecipients.add("active-expired", "conn-active");
+
+    vi.advanceTimersByTime(9 * 60_000 + 31_000);
+    state.toolEventRecipients.add("finalized-expired", "conn-final");
+    state.toolEventRecipients.markFinal("finalized-expired");
+    vi.advanceTimersByTime(2_000);
+    state.toolEventRecipients.add("finalized-grace", "conn-grace");
+    state.toolEventRecipients.markFinal("finalized-grace");
+    state.toolEventRecipients.add("recent", "conn-recent");
+    vi.advanceTimersByTime(29_000);
+
+    state.toolEventRecipients.pruneExpired(Date.now());
+
+    expect(state.runs.has("active-expired")).toBe(false);
+    expect(state.runs.has("finalized-expired")).toBe(false);
+    expect(state.runs.has("finalized-grace")).toBe(true);
+    expect(state.runs.has("recent")).toBe(true);
+  });
+
   it("clears transient projection state without dropping run ownership or abort tombstones", () => {
     const state = createChatRunState();
     state.registry.add("run-1", { sessionKey: "session-1", clientRunId: "client-1" });
