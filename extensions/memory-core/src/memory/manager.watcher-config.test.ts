@@ -1124,7 +1124,7 @@ describe("memory watcher config", () => {
     expect(memoryLoggerWarn).toHaveBeenCalledWith("memory watcher error: watcher error: ENOSPC");
   });
 
-  it("warns when chokidar memory watching tracks many paths", async () => {
+  it("warns with supported offline guidance when chokidar tracks many paths", async () => {
     await setupWatcherWorkspace({ name: "notes.md", contents: "hello" });
     const cfg = createWatcherConfig();
     vi.useFakeTimers();
@@ -1143,8 +1143,13 @@ describe("memory watcher config", () => {
     );
     await vi.advanceTimersByTimeAsync(10_000);
 
-    expect(memoryLoggerWarn).toHaveBeenCalledWith(
-      expect.stringContaining("Memory file watching is tracking 2002 paths."),
-    );
+    const warning = memoryLoggerWarn.mock.calls
+      .map(([message]) => String(message))
+      .find((message) => message.includes("Memory file watching is tracking 2002 paths."));
+    expect(warning).toContain("Reduce or remove large extraPaths.");
+    expect(warning).toContain("stop the Gateway");
+    expect(warning).toContain("openclaw memory index --agent <id>");
+    expect(warning).toContain("restart the Gateway");
+    expect(warning).not.toContain("memory.search.sync");
   });
 });

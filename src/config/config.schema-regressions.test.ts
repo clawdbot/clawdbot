@@ -161,6 +161,25 @@ describe("config schema regressions", () => {
     ).toBe(true);
   });
 
+  it("rejects unsupported memory.search.sync settings", () => {
+    const result = validateConfigObject({
+      memory: { search: { sync: { watch: false } } },
+      agents: { defaults: {} },
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.issues).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            path: "memory.search",
+            message: expect.stringContaining('Unrecognized key: "sync"'),
+          }),
+        ]),
+      );
+    }
+  });
+
   it.each([
     { pattern: "**/*.md" },
     { path: "../shared", pattern: 42 },
