@@ -366,8 +366,8 @@ async function executeJobCoreWithTimeoutUnfinalized(
       assertRunCurrent,
       executionIdentity: opts?.executionIdentity,
     };
-    const corePromise = executeJobCore(state, job, runAbortController.signal, coreOptions);
     watchdog.start();
+    const corePromise = executeJobCore(state, job, runAbortController.signal, coreOptions);
     const runPromise = corePromise.then(async (result) => {
       progress.completedCoreResult = result;
       return await deliverPrimaryWebhook(

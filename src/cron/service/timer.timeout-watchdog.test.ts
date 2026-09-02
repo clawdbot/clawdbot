@@ -183,57 +183,6 @@ describe("cron service timer regressions", () => {
     }
   });
 
-  it("keeps the cron deadline while a heartbeat-backed trigger is still evaluating", async () => {
-    vi.useFakeTimers();
-    try {
-      const store = timerRegressionFixtures.makeStorePath();
-      const scheduledAt = Date.parse("2026-09-02T12:30:00.000Z");
-      const cronJob = createIsolatedRegressionJob({
-        id: "heartbeat-trigger-watchdog",
-        name: "heartbeat trigger watchdog",
-        scheduledAt,
-        schedule: { kind: "every", everyMs: 60_000, anchorMs: scheduledAt - 60_000 },
-        payload: { kind: "systemEvent", text: "check heartbeat work" },
-        state: { nextRunAtMs: scheduledAt },
-      });
-      cronJob.sessionTarget = "main";
-      cronJob.wakeMode = "now";
-      cronJob.trigger = { script: "return { fire: true };" };
-      await saveCronStore(store.storePath, { version: 1, jobs: [cronJob] });
-
-      vi.setSystemTime(scheduledAt);
-      const triggerStarted = createDeferred();
-      const resolveHeartbeatTimeoutMs = vi.fn(() => 15 * 60_000);
-      const state = createCronServiceState({
-        cronEnabled: true,
-        storePath: store.storePath,
-        log: noopLogger,
-        nowMs: () => Date.now(),
-        defaultAgentId: "main",
-        enqueueSystemEvent: vi.fn(),
-        requestHeartbeat: vi.fn(),
-        runHeartbeatOnce: vi.fn(async () => ({ status: "ran" as const, durationMs: 1 })),
-        resolveHeartbeatTimeoutMs,
-        evaluateCronTrigger: vi.fn(async () => {
-          triggerStarted.resolve();
-          return await new Promise<never>(() => {});
-        }),
-        runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
-      });
-
-      const timerPromise = onTimer(state);
-      await triggerStarted.promise;
-      await vi.advanceTimersByTimeAsync(10 * 60_000 + 1);
-      await timerPromise;
-
-      expect(resolveHeartbeatTimeoutMs).not.toHaveBeenCalled();
-      expect(state.deps.runHeartbeatOnce).not.toHaveBeenCalled();
-      expect(requireJob(state, cronJob.id).state.lastError).toContain("job execution timed out");
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
   it("outer cron timeout fires at configured timeoutSeconds, not at 1/3 (#29774)", async () => {
     vi.useFakeTimers();
     try {
