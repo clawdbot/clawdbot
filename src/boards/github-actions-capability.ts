@@ -1,3 +1,4 @@
+import { containsAsciiControlCharacter } from "@openclaw/normalization-core/string-normalization";
 import { z } from "zod";
 import { BoardValidationError } from "./board-layout.js";
 
@@ -38,9 +39,8 @@ const paramsSchema = z.strictObject({
     .string()
     .min(1)
     .max(255)
-    // https://git-scm.com/docs/git-check-ref-format, rule 4.
-    // oxlint-disable-next-line eslint/no-control-regex -- Git refs forbid ASCII bytes below 040 and 177 (DEL).
-    .regex(/^[^\u0000-\u001f\u007f]+$/u)
+    // Git ref names forbid C0 and DEL (git-check-ref-format, rule 4).
+    .refine((value) => !containsAsciiControlCharacter(value))
     .optional(),
   status: z
     .enum([
