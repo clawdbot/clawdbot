@@ -4054,7 +4054,6 @@ ui/src/pages/config/security.ts	1
 ui/src/pages/config/settings-search.ts	1
 ui/src/pages/config/settings-select-row.ts	1
 ui/src/pages/config/talk-page.ts	1
-ui/src/pages/config/talk.ts	1
 ui/src/pages/config/view-appearance-preferences.ts	2
 ui/src/pages/config/view-appearance.ts	1
 ui/src/pages/config/view-diff.ts	6
