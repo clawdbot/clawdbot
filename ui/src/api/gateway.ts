@@ -76,6 +76,14 @@ function browserSecureContext(): boolean {
   return win?.isSecureContext === true;
 }
 
+function browserDeviceFamily(): string | undefined {
+  if (navigator.platform !== "MacIntel") {
+    return undefined;
+  }
+  // Desktop-mode iPads share the Mac platform string; keep that pairing identity unchanged.
+  return navigator.maxTouchPoints > 1 || /iPad/u.test(navigator.userAgent) ? "iPad" : "Mac";
+}
+
 function isTrustedRetryEndpoint(url: string): boolean {
   try {
     const gatewayUrl = new URL(url, window.location.href);
@@ -403,7 +411,9 @@ export class GatewayBrowserClient {
       version: this.opts.clientVersion ?? "control-ui",
       buildId: this.opts.clientBuildId,
       platform: this.opts.platform ?? navigator.platform ?? "web",
-      deviceFamily: this.opts.deviceFamily,
+      deviceFamily:
+        this.opts.deviceFamily ??
+        (this.opts.platform === undefined ? browserDeviceFamily() : undefined),
       mode: this.opts.mode ?? GATEWAY_CLIENT_MODES.WEBCHAT,
       instanceId: this.opts.instanceId,
       ...(timeZone ? { timeZone } : {}),

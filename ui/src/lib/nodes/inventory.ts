@@ -41,6 +41,7 @@ type NodeListEntry = {
   nodeId: string;
   displayName?: string;
   platform?: string;
+  deviceFamily?: string;
   version?: string;
   coreVersion?: string;
   uiVersion?: string;
@@ -69,6 +70,7 @@ export type DeviceInventoryEntry = {
   clientId?: string;
   clientMode?: string;
   platform?: string;
+  deviceFamily?: string;
   version?: string;
   modelIdentifier?: string;
   remoteIp?: string;
@@ -153,6 +155,7 @@ function parseNodeListEntry(raw: Record<string, unknown>): NodeListEntry | null 
     nodeId,
     displayName: normalizeOptionalString(raw.displayName),
     platform: normalizeOptionalString(raw.platform),
+    deviceFamily: normalizeOptionalString(raw.deviceFamily),
     version: normalizeOptionalString(raw.version),
     coreVersion: normalizeOptionalString(raw.coreVersion),
     uiVersion: normalizeOptionalString(raw.uiVersion),
@@ -225,6 +228,10 @@ function buildEntry(
       normalizeOptionalString(presence?.platform) ??
       normalizeOptionalString(device?.platform) ??
       node?.platform,
+    deviceFamily:
+      normalizeOptionalString(presence?.deviceFamily) ??
+      normalizeOptionalString(device?.deviceFamily) ??
+      node?.deviceFamily,
     version: normalizeOptionalString(presence?.version) ?? node?.version,
     modelIdentifier: normalizeOptionalString(presence?.modelIdentifier) ?? node?.modelIdentifier,
     remoteIp: normalizeOptionalString(device?.remoteIp) ?? node?.remoteIp,

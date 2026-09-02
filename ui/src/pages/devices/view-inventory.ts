@@ -252,7 +252,7 @@ function formatInputRecency(lastInputSeconds: number): string {
 function entryMetaLine(entry: DeviceInventoryEntry): string {
   const parts: string[] = [];
   if (entry.platform) {
-    parts.push(prettifyPlatform(entry.platform));
+    parts.push(prettifyPlatform(entry.platform, entry.deviceFamily));
   }
   if (entry.modelIdentifier) {
     const family = macFamilyLabel(entry.modelIdentifier);
@@ -417,7 +417,7 @@ function renderInventoryEntry(entry: DeviceInventoryEntry, props: DevicesProps) 
 function presenceMetaParts(entry: PresenceEntry): string[] {
   const parts: string[] = [];
   if (entry.platform) {
-    parts.push(prettifyPlatform(entry.platform));
+    parts.push(prettifyPlatform(entry.platform, entry.deviceFamily));
   }
   if (entry.modelIdentifier) {
     const family = macFamilyLabel(entry.modelIdentifier);

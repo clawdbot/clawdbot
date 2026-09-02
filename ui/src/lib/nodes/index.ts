@@ -66,6 +66,7 @@ export type PairedDevice = {
   /** Operator-assigned label; preferred over client displayName when rendering. */
   operatorLabel?: string;
   platform?: string;
+  deviceFamily?: string;
   clientId?: string;
   clientMode?: string;
   role?: string;
