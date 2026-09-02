@@ -246,7 +246,7 @@ export class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatT
       observeElementOffset: (instance, callback) => {
         const element = this.scrollElement;
         const interrupt = (event: Event) => {
-          if (element !== this.scrollElement || instance.scrollElement !== element) {
+          if (!element || element !== this.scrollElement || instance.scrollElement !== element) {
             return;
           }
           if (
@@ -260,6 +260,12 @@ export class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatT
           }
           this.pendingInteractionAnchor = null;
           this.cancelScroll();
+          // Native input can move the viewport before its scroll event. Publish
+          // that offset before queued remeasurement compensates against a stale fold.
+          const offset = element.scrollTop;
+          if (offset !== instance.scrollOffset) {
+            callback(offset, instance.isScrolling);
+          }
           this.callbacks.onReaderScroll?.();
         };
         for (const type of ["wheel", "touchstart", "keydown", "pointerdown"]) {
@@ -488,7 +494,7 @@ export class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatT
     const element = this.scrollElement;
     if (element) {
       // Cancellation is one instant target replacement, never the multi-frame
-      // restoration API. Reconcile committed rows after core's offset listener.
+      // restoration API.
       this.virtualizerController
         .getVirtualizer()
         .scrollToOffset(element.scrollTop, { behavior: "instant" });
