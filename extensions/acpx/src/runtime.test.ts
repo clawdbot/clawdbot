@@ -339,7 +339,7 @@ describe("AcpxRuntime fresh reset wrapper", () => {
     expect(openClawServer?.args).toEqual(["dist/mcp/openclaw-tools-serve.js"]);
   });
 
-  it("rejects cached model changes and rebuilds after closing a fresh reset", async () => {
+  it("reuses an identity-free Codex delegate and rebuilds it after a fresh reset", async () => {
     const baseStore: TestSessionStore = {
       load: vi.fn(async () => undefined),
       save: vi.fn(async () => {}),
@@ -372,7 +372,6 @@ describe("AcpxRuntime fresh reset wrapper", () => {
 
     const firstDelegate = exposedRuntime.resolveManagedToolsDelegateForSession({
       sessionKey: "agent:codex:main",
-      model: "openai/gpt-5.5",
     });
     const firstEnsure = vi.spyOn(firstDelegate, "ensureSession").mockResolvedValue({
       sessionKey: "agent:codex:main",
@@ -393,15 +392,16 @@ describe("AcpxRuntime fresh reset wrapper", () => {
       agent: "codex",
       mode: "persistent",
     });
-    await expect(
-      runtime.ensureSession({
-        sessionKey: "agent:codex:main",
-        agent: "codex",
-        mode: "persistent",
-        model: "openai/gpt-5.6",
-      }),
-    ).rejects.toMatchObject({ code: "ACP_BACKEND_UNSUPPORTED_CONTROL" });
-    expect(firstEnsure).toHaveBeenCalledTimes(2);
+    await runtime.ensureSession({
+      sessionKey: "agent:codex:main",
+      agent: "codex",
+      mode: "persistent",
+      model: "openai/gpt-5.6",
+    });
+    expect(firstEnsure).toHaveBeenCalledTimes(3);
+    expect(firstDelegate.options?.mcpServers?.[0]?.args).toEqual([
+      "dist/mcp/plugin-tools-serve.js",
+    ]);
 
     await runtime.prepareFreshSession({ sessionKey: "agent:codex:main" });
 
@@ -409,13 +409,10 @@ describe("AcpxRuntime fresh reset wrapper", () => {
     expect(exposedRuntime.managedToolsSessionDelegates.has("agent:codex:main")).toBe(false);
     const secondDelegate = exposedRuntime.resolveManagedToolsDelegateForSession({
       sessionKey: "agent:codex:main",
-      model: "openai/gpt-5.6",
     });
     expect(secondDelegate).not.toBe(firstDelegate);
     expect(secondDelegate.options?.mcpServers?.[0]?.args).toEqual([
       "dist/mcp/plugin-tools-serve.js",
-      "--openclaw-model-ref",
-      "openai/gpt-5.6",
     ]);
   });
 
@@ -1837,7 +1834,7 @@ describe("AcpxRuntime fresh reset wrapper", () => {
     });
   });
 
-  it("projects the Codex provider when the managed plugin-tools model is inherited", async () => {
+  it("withholds unverifiable inherited Codex identity from managed plugin tools", async () => {
     const baseStore: TestSessionStore = {
       load: vi.fn(async () => undefined),
       save: vi.fn(async () => {}),
@@ -1884,17 +1881,17 @@ describe("AcpxRuntime fresh reset wrapper", () => {
     expect(ensure).toHaveBeenCalledOnce();
     expect(resolveDelegateForSession).toHaveBeenCalledWith({
       command: CODEX_ACP_COMMAND,
-      model: "openai",
+      model: undefined,
       sessionKey: "agent:codex:acp:test",
     });
   });
 
   it.each([
-    { inputModel: undefined, expectedModel: "azure_foundry/gpt-5.5-1" },
-    { inputModel: "openai/gpt-5.6", expectedModel: "azure_foundry/gpt-5.6" },
+    { inputModel: undefined, configuredModel: "azure_foundry/gpt-5.5-1" },
+    { inputModel: "openai/gpt-5.6", configuredModel: "azure_foundry/gpt-5.6" },
   ])(
-    "projects the configured Codex provider for managed plugin tools ($expectedModel)",
-    async ({ inputModel, expectedModel }) => {
+    "withholds unverifiable configured Codex identity from managed plugin tools ($configuredModel)",
+    async ({ inputModel }) => {
       const baseStore: TestSessionStore = {
         load: vi.fn(async () => undefined),
         save: vi.fn(async () => {}),
@@ -1943,7 +1940,7 @@ describe("AcpxRuntime fresh reset wrapper", () => {
 
       expect(resolveDelegateForSession).toHaveBeenCalledWith({
         command: CODEX_ACP_COMMAND,
-        model: expectedModel,
+        model: undefined,
         sessionKey: "agent:codex:acp:test",
       });
     },
@@ -2041,7 +2038,7 @@ describe("AcpxRuntime fresh reset wrapper", () => {
     });
   });
 
-  it("requires a fresh session to change model with the managed plugin-tools bridge", async () => {
+  it("allows Codex model changes when managed plugin tools use fail-closed identity", async () => {
     const baseStore: TestSessionStore = {
       load: vi.fn(async () => ({
         acpxRecordId: "agent:codex:acp:test",
@@ -2078,10 +2075,17 @@ describe("AcpxRuntime fresh reset wrapper", () => {
       acpxRecordId: "agent:codex:acp:test",
     };
 
+    const accepted = { configOptions: [{ id: "model", currentValue: "gpt-5.6" }] };
+    setConfigOption.mockResolvedValue(accepted);
+
     await expect(
       runtime.setConfigOption({ handle, key: "model", value: "openai/gpt-5.6" }),
-    ).rejects.toMatchObject({ code: "ACP_BACKEND_UNSUPPORTED_CONTROL" });
-    expect(setConfigOption).not.toHaveBeenCalled();
+    ).resolves.toBe(accepted);
+    expect(setConfigOption).toHaveBeenCalledWith({
+      handle,
+      key: "model",
+      value: "gpt-5.6",
+    });
   });
 
   it.each(["anthropic/claude-opus-4-6", "amazon-bedrock/global.anthropic.claude-sonnet-5"])(

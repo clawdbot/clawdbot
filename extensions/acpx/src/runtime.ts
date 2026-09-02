@@ -863,8 +863,6 @@ export class AcpxRuntime implements CompleteAcpRuntime {
   private readonly wrapperRoot: string | undefined;
   private readonly gatewayInstanceId: string | undefined;
   private readonly processLeaseStore: AcpxProcessLeaseStore | undefined;
-  private readonly codexModel: string | undefined;
-  private readonly codexModelProvider: string | undefined;
   private readonly launchLeaseScope = new AsyncLocalStorage<AcpxLaunchLeaseContext | undefined>();
   private readonly ensureSessionTails = new Map<string, Promise<void>>();
   private readonly processLeaseTransitionTails = new Map<string, Promise<void>>();
@@ -879,8 +877,6 @@ export class AcpxRuntime implements CompleteAcpRuntime {
     this.wrapperRoot = options.openclawWrapperRoot;
     this.gatewayInstanceId = options.openclawGatewayInstanceId;
     this.processLeaseStore = options.openclawProcessLeaseStore;
-    this.codexModel = options.openclawCodexModel?.trim() || undefined;
-    this.codexModelProvider = options.openclawCodexModelProvider?.trim() || undefined;
     this.pluginToolsMcpBridgeEnabled = options.pluginToolsMcpBridgeEnabled === true;
     this.openclawToolsMcpBridgeEnabled = options.openclawToolsMcpBridgeEnabled === true;
     this.managedToolsMcpBridgeEnabled =
@@ -1620,16 +1616,13 @@ export class AcpxRuntime implements CompleteAcpRuntime {
       classifiedCodexOverride && Object.keys(classifiedCodexOverride).length > 0
         ? classifiedCodexOverride
         : undefined;
-    // The managed MCP child receives only adapter-owned identity. Cached sessions
-    // retain their original fact; capability fallback rebuilds without the fact.
+    // Codex resolves managed/MDM config after this MCP child is launched, and ACP
+    // does not expose its effective provider. Never project the pre-launch Codex
+    // identity into plugin policy: an omitted identity makes provider-specific
+    // policy fail closed in plugin-tools-serve. Claude's explicit ACP model is
+    // authoritative at this boundary and remains safe to project.
     const managedToolsModelRef = isCodexAcp
-      ? codexModelOverride?.model && this.codexModelProvider
-        ? `${this.codexModelProvider}/${codexModelOverride.model}`
-        : this.managedToolsSessionModelRefs.has(input.sessionKey)
-          ? this.managedToolsSessionModelRefs.get(input.sessionKey)
-          : this.codexModelProvider
-            ? `${this.codexModelProvider}${this.codexModel ? `/${this.codexModel}` : ""}`
-            : undefined
+      ? undefined
       : resolveClaudeAcpManagedModelRef(input.model, claudeModelOverride);
     let delegate = this.resolveDelegateForSession({
       command,
@@ -1940,7 +1933,7 @@ export class AcpxRuntime implements CompleteAcpRuntime {
     const isCodexAcp = isCodexAcpCommand(command);
     if (
       key === "model" &&
-      (isCodexAcp || isClaudeAcpCommand(command)) &&
+      isClaudeAcpCommand(command) &&
       this.pluginToolsMcpBridgeEnabled &&
       !shouldUseBridgeSafeDelegateForCommand(command)
     ) {

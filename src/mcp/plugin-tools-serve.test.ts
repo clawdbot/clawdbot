@@ -450,6 +450,32 @@ describe("plugin tools MCP server", () => {
     },
   );
 
+  it("stops fail-closed calls before plugin execution when ACP identity is unverifiable", async () => {
+    const execute = vi.fn().mockResolvedValue({ content: "unexpected" });
+    resolvePluginToolsMock.mockReturnValue([
+      {
+        name: "provider_controlled_tool",
+        description: "Provider-controlled tool",
+        parameters: { type: "object", properties: {} },
+        execute,
+      },
+    ] as unknown as AnyAgentTool[]);
+    const config = {
+      plugins: { enabled: true },
+      tools: { byProvider: { openai: { allow: ["provider_controlled_tool"] } } },
+    } as never;
+    const { resolvePluginToolsForMcp } = await import("./plugin-tools-serve.js");
+
+    const tools = resolvePluginToolsForMcp({ config });
+    const handlers = createPluginToolsMcpHandlers(tools);
+
+    await expect(handlers.listTools()).resolves.toEqual({ tools: [] });
+    await expect(handlers.callTool({ name: "provider_controlled_tool" })).resolves.toMatchObject({
+      isError: true,
+    });
+    expect(execute).not.toHaveBeenCalled();
+  });
+
   it("applies provider-wide policy without applying unrelated provider policy", async () => {
     loadManifestContractSnapshotMock.mockReturnValue({
       plugins: [{ providers: ["openai"] }],
