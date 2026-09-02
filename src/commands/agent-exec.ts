@@ -439,8 +439,12 @@ export async function agentExecCommand(
     const cleanupFailure = new Error(
       `Agent exec cleanup failed: ${formatErrorMessage(cleanupError)}`,
     );
-    const envelope = errorEnvelope(cleanupFailure, sessionId);
-    commandResult = { envelope, exitCode: exitCodeForEnvelope(envelope) };
+    if (commandResult.envelope.ok) {
+      const envelope = errorEnvelope(cleanupFailure, sessionId);
+      commandResult = { envelope, exitCode: exitCodeForEnvelope(envelope) };
+    } else {
+      runtime.error(cleanupFailure.message);
+    }
   }
 
   const receivedSignal = signalBridge?.getReceivedSignal();

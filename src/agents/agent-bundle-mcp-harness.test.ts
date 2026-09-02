@@ -383,13 +383,12 @@ describe("materializeStaticMcpToolsForScheduledHarnessRunCore", () => {
     await result.dispose();
   });
 
-  it("allows prompt-mode app tools only under host-confirmed yolo", async () => {
+  it("allows unannotated app tools under host-confirmed full permission", async () => {
     const runtime = makeRuntime({ sessionId: "scheduled-app-yolo", requesterSenderId: "unused" });
     runtime.sessionKey = "agent:main:main";
     delete runtime.requesterScope;
     const catalog = runtime.peekCatalog()!;
     catalog.servers["user-mail"]!.toolCount = 2;
-    catalog.servers["user-mail"]!.codexApprovalMode = "prompt";
     catalog.tools = [
       {
         serverName: "user-mail",
@@ -503,15 +502,22 @@ describe("materializeStaticMcpToolsForScheduledHarnessRunCore", () => {
 
     expect(result.tools).toEqual([]);
     expect(result.diagnosticNotice).toContain("user-mail/inbox");
-    expect(result.diagnosticNotice).toContain('defaultToolsApprovalMode="approve"');
+    expect(result.diagnosticNotice).toContain(
+      "openclaw mcp configure user-mail --approval approve",
+    );
     expect(callTool).not.toHaveBeenCalled();
     await result?.dispose();
   });
 
-  it("bypasses scheduled MCP prompting only for the host-confirmed yolo profile", async () => {
+  it.each([
+    { mode: undefined, allowed: true },
+    { mode: "auto" as const, allowed: false },
+    { mode: "prompt" as const, allowed: false },
+    { mode: "approve" as const, allowed: true },
+  ])("honors explicit $mode in scheduled full-permission sessions", async ({ mode, allowed }) => {
     const runtime = makeRuntime({ sessionId: "scheduled-yolo", requesterSenderId: "unused" });
     delete runtime.requesterScope;
-    runtime.peekCatalog()!.servers["user-mail"]!.codexApprovalMode = "prompt";
+    runtime.peekCatalog()!.servers["user-mail"]!.codexApprovalMode = mode;
     mocks.getOrCreateSessionMcpRuntime.mockResolvedValue(runtime);
     const callTool = vi.spyOn(runtime, "callTool");
 
@@ -522,8 +528,14 @@ describe("materializeStaticMcpToolsForScheduledHarnessRunCore", () => {
       autoApproveCodexAppServerApprovals: true,
     });
 
-    await expect(result.tools[0]!.execute("call-1", {})).resolves.toBeDefined();
-    expect(callTool).toHaveBeenCalledOnce();
+    if (allowed) {
+      await expect(result.tools[0]!.execute("call-1", {})).resolves.toBeDefined();
+      expect(callTool).toHaveBeenCalledOnce();
+    } else {
+      expect(result.tools).toEqual([]);
+      expect(result.diagnosticNotice).toContain("user-mail/inbox");
+      expect(callTool).not.toHaveBeenCalled();
+    }
     await result.dispose();
   });
 
@@ -566,7 +578,9 @@ describe("materializeStaticMcpToolsForScheduledHarnessRunCore", () => {
 
     expect(result.tools).toEqual([]);
     expect(result.diagnosticNotice).toContain("user-mail/inbox");
-    expect(result.diagnosticNotice).toContain('defaultToolsApprovalMode="approve"');
+    expect(result.diagnosticNotice).toContain(
+      "openclaw mcp configure user-mail --approval approve",
+    );
     expect(callTool).not.toHaveBeenCalled();
     await result?.dispose();
   });

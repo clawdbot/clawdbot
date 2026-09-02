@@ -79,6 +79,8 @@ type SqliteTableContract = {
 
 type SqliteSchemaContract = Map<string, SqliteTableContract>;
 
+export type SqliteTableContractReader = (tableName: string) => SqliteTableContract | undefined;
+
 export type CanonicalSqliteNamedIndexContract = {
   definition: string;
   fingerprint: SqliteIndexContract;
@@ -89,6 +91,17 @@ export type CanonicalSqliteNamedIndexContract = {
 
 const schemaContractCache = new Map<string, SqliteSchemaContract>();
 
+/** Reuse actual table facts only within one unchanged read transaction on this connection. */
+export function createSqliteTableContractReader(database: DatabaseSync): SqliteTableContractReader {
+  const tables = new Map<string, SqliteTableContract | undefined>();
+  return (tableName) => {
+    if (!tables.has(tableName)) {
+      tables.set(tableName, collectSqliteTableContract(database, tableName));
+    }
+    return tables.get(tableName);
+  };
+}
+
 /**
  * Require every object from one committed schema while allowing unrelated
  * tables and indexes that do not replace a canonical object.
@@ -98,8 +111,9 @@ export function assertSqliteSchemaContains(
   databaseLabel: string,
   schemaSql: string,
   compatibility: SqliteSchemaCompatibility = {},
+  readTable?: SqliteTableContractReader,
 ): void {
-  const issues = collectSqliteSchemaIssues(database, schemaSql, compatibility);
+  const issues = collectSqliteSchemaIssues(database, schemaSql, compatibility, readTable);
   if (issues.length > 0) {
     throwSqliteSchemaMismatches(databaseLabel, legacySqliteSchemaIssueMessages(issues));
   }
@@ -110,6 +124,7 @@ export function collectSqliteSchemaIssues(
   database: DatabaseSync,
   schemaSql: string,
   compatibility: SqliteSchemaCompatibility = {},
+  readTable?: SqliteTableContractReader,
 ): SqliteSchemaIssue[] {
   const expected = getSqliteSchemaContract(schemaSql);
   const allowedMissingTables = new Set(compatibility.allowedMissingTables ?? []);
@@ -120,7 +135,9 @@ export function collectSqliteSchemaIssues(
     issues.push(createSqliteSchemaIssue(code, objectName, message));
   };
   for (const [tableName, expectedTable] of expected) {
-    const actualTable = collectSqliteTableContract(database, tableName);
+    const actualTable = readTable
+      ? readTable(tableName)
+      : collectSqliteTableContract(database, tableName);
     if (!actualTable) {
       if (allowedMissingTables.has(tableName)) {
         continue;

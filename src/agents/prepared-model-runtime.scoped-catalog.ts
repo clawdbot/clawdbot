@@ -9,7 +9,10 @@ import {
   prepareAgentCatalogSource,
   prepareWorkspaceBuildGroup,
 } from "./prepared-model-runtime.facts.js";
-import { prepareFullCatalogFacts } from "./prepared-model-runtime.full-catalog.js";
+import {
+  materializePreparedModelCatalog,
+  prepareFullCatalogFacts,
+} from "./prepared-model-runtime.full-catalog.js";
 import {
   listPreparedSyntheticAuthProviderRefs,
   resolvePreparedSyntheticAuth,
@@ -46,9 +49,13 @@ async function prepareScopedReadOnlyModelCatalogWithMode(
     false,
     catalogMode === "live" ? { providerDiscoveryProviderIds } : {},
   );
-  return (
-    await prepareFullCatalogFacts(agentFactsForInput, pluginGeneration, catalogMode, catalogSource)
-  ).modelCatalog;
+  const { modelCatalog } = await prepareFullCatalogFacts(
+    agentFactsForInput,
+    pluginGeneration,
+    catalogMode,
+    catalogSource,
+  );
+  return materializePreparedModelCatalog(modelCatalog, agentFactsForInput.runtimeCapabilityModels);
 }
 
 /** Resolves provider-scoped, secret-free auth modes without live model discovery. */

@@ -481,9 +481,8 @@ export function applyMemoryConsolidationPlan(params: {
 }
 
 export async function consolidateMemory(params: {
+  agentId: string;
   subagent: SubagentSurface;
-  /** Workspace owner resolved by the dreaming sweep; absent only for an ownerless sweep. */
-  agentId?: string;
   workspaceDir: string;
   existingMemory: string;
   candidates: PromotionCandidate[];
@@ -498,14 +497,14 @@ export async function consolidateMemory(params: {
   if (candidates.length === 0) {
     return null;
   }
+  // Sessions live in per-agent stores, so the key must name its owning agent; an unscoped key
+  // cannot be routed under explicit multi-agent ownership. Run keys stay unscoped so the
+  // orphan-transcript scrub keeps matching DREAMING_TRANSCRIPT_RUN_MARKER on the runId.
   const runPrefix = `dreaming-narrative-consolidation-${createHash("sha1")
     .update(params.workspaceDir)
     .digest("hex")
     .slice(0, 12)}-${randomUUID()}`;
-  // Sessions live in per-agent stores, so the key must name its owning agent; an unscoped key
-  // cannot be routed under explicit multi-agent ownership. Run keys stay unscoped so the
-  // orphan-transcript scrub keeps matching DREAMING_TRANSCRIPT_RUN_MARKER on the runId.
-  const sessionPrefix = params.agentId ? `agent:${params.agentId}:${runPrefix}` : runPrefix;
+  const sessionPrefix = `agent:${params.agentId}:${runPrefix}`;
   const maxPromotedSnippetTokens = Math.max(
     1,
     Math.floor(

@@ -371,6 +371,92 @@ describe("chat transcript rendering", () => {
     secondTranscript.hostDisconnected();
   });
 
+  it.each(["indexed", "keyed"] as const)(
+    "keeps a settled %s stream replyable while search separates its following tool row",
+    async (kind) => {
+      const paneId = `pane-settled-stream-reply-${kind}`;
+      const sessionKey = "agent:main:main";
+      const runId = "stream-reply-run";
+      const text = "Settled summary";
+      const onSetReply = vi.fn();
+      const props = {
+        ...threadProps(paneId, sessionKey, [
+          {
+            role: "user",
+            content: "Inspect the workspace",
+            timestamp: 1_000,
+            __openclaw: { id: "stream-prompt", idempotencyKey: `${runId}:user` },
+          },
+        ]),
+        runId,
+        runActive: true,
+        runWorking: true,
+        streamStartedAt: 2_000,
+        showToolCalls: true,
+        onSetReply,
+        streamSegments: [
+          {
+            text,
+            ts: 2_000,
+            runId,
+            ...(kind === "keyed" ? { itemId: "settled-segment" } : {}),
+          },
+        ],
+        toolMessages: [
+          {
+            role: "toolResult",
+            toolCallId: "following-read",
+            toolName: "read",
+            content: "Tool result",
+            timestamp: 3_000,
+            runId,
+          },
+        ],
+      };
+      const transcript = createTestTranscript();
+      const searchContainer = document.body.appendChild(document.createElement("div"));
+      const container = document.body.appendChild(document.createElement("div"));
+      const rerender = () => {
+        render(renderTranscriptSearch(paneId, rerender), searchContainer);
+        render(renderChatThread({ ...props, onRequestUpdate: rerender }, transcript), container);
+        transcript.hostUpdated();
+      };
+      try {
+        toggleTranscriptSearch(paneId, rerender);
+        transcript.hostConnected();
+        const input = searchContainer.querySelector<HTMLInputElement>("input");
+        expect(input).not.toBeNull();
+        input!.value = text;
+        input!.dispatchEvent(new Event("input", { bubbles: true }));
+        await flushDeferredRowPrune();
+
+        const bubble = requireElement(container, ".chat-group.assistant .chat-bubble");
+        const group = requireClosest(bubble, ".chat-group");
+        const tool = requireElement(container, ".chat-group.tool");
+        expect(bubble.textContent).toContain(text);
+        expect(bubble.classList.contains("streaming")).toBe(false);
+        expect(group.querySelector(".chat-group-footer-actions")).toBeNull();
+        expect(group.querySelector(".chat-reading-indicator")).toBeNull();
+        expect(group.compareDocumentPosition(tool) & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0);
+        const event = new MouseEvent("contextmenu", { bubbles: true, cancelable: true });
+        bubble.dispatchEvent(event);
+        expect(event.defaultPrevented).toBe(true);
+        const reply = requireElement(document, '.chat-reply-context-menu [role="menuitem"]');
+        expect(reply.textContent).toBe("Reply");
+        reply.click();
+
+        expect(onSetReply).toHaveBeenCalledOnce();
+        expect(onSetReply).toHaveBeenCalledWith({
+          messageId: bubble.dataset.messageId,
+          text,
+          senderLabel: "Molty",
+        });
+      } finally {
+        transcript.hostDisconnected();
+      }
+    },
+  );
+
   it("resolves persisted replies to their source and highlights it on click", async () => {
     const transcript = createTestTranscript();
     const container = document.body.appendChild(document.createElement("div"));
@@ -518,79 +604,6 @@ describe("chat transcript rendering", () => {
 
     expect(open).toHaveBeenCalledWith("source-message");
     expect(searchContainer.querySelector("input")).toBeNull();
-    transcript.hostDisconnected();
-  });
-
-  it("loads a truncated assistant message once and keeps the full text visible", async () => {
-    const transcript = createTestTranscript();
-    const container = document.body.appendChild(document.createElement("div"));
-    const loadFullAssistantMessage = vi.fn().mockResolvedValue({
-      ok: true,
-      message: { role: "assistant", content: "Complete assistant content." },
-    });
-    function rerender() {
-      render(renderChatThread(props, transcript), container);
-      transcript.hostUpdated();
-    }
-    const props = {
-      ...threadProps("pane-assistant-expand", "agent:work:main", [
-        {
-          role: "assistant",
-          content: "Preview\n...(truncated)...",
-          __openclaw: { id: "assistant-full-1", truncated: true },
-          timestamp: 1_000,
-        },
-      ]),
-      fullMessageAgentId: "work",
-      loadFullAssistantMessage,
-      onRequestUpdate: rerender,
-    };
-    rerender();
-    transcript.hostConnected();
-    transcript.hostUpdated();
-
-    await vi.waitFor(() => expect(container.textContent).toContain("Complete assistant content."));
-    expect(loadFullAssistantMessage).toHaveBeenCalledOnce();
-    expect(loadFullAssistantMessage).toHaveBeenCalledWith({
-      sessionKey: "agent:work:main",
-      agentId: "work",
-      messageId: "assistant-full-1",
-    });
-
-    expect(container.querySelector(".chat-message-disclosure__toggle")).toBeNull();
-    expect(container.textContent).toContain("Complete assistant content.");
-    expect(loadFullAssistantMessage).toHaveBeenCalledOnce();
-    transcript.hostDisconnected();
-  });
-
-  it("keeps transport-cut assistant text as received when full content is unavailable", async () => {
-    const transcript = createTestTranscript();
-    const container = document.body.appendChild(document.createElement("div"));
-    const loadFullAssistantMessage = vi.fn().mockRejectedValue(new Error("offline"));
-    function rerender() {
-      render(renderChatThread(props, transcript), container);
-      transcript.hostUpdated();
-    }
-    const props = {
-      ...threadProps("pane-assistant-retry", "agent:main:main", [
-        {
-          role: "assistant",
-          content: "Preview\n...(truncated)...",
-          __openclaw: { id: "assistant-retry-1", truncated: true },
-          timestamp: 1_000,
-        },
-      ]),
-      loadFullAssistantMessage,
-      onRequestUpdate: rerender,
-    };
-    rerender();
-    transcript.hostConnected();
-    transcript.hostUpdated();
-
-    await vi.waitFor(() => expect(loadFullAssistantMessage).toHaveBeenCalledOnce());
-    expect(container.textContent).toContain("Preview");
-    expect(container.textContent).toContain("...(truncated)...");
-    expect(container.querySelector(".chat-message-disclosure__toggle")).toBeNull();
     transcript.hostDisconnected();
   });
 

@@ -12,7 +12,7 @@ import {
 } from "./embedded-agent-subscribe.openai-responses.test-helpers.js";
 
 describe("handleMessageUpdate text signatures", () => {
-  it("emits a commentary snapshot when Anthropic text is classified after deltas", () => {
+  it("emits a commentary snapshot when Anthropic text is classified after deltas", async () => {
     const onAgentEvent = vi.fn();
     const context = createMessageUpdateContext({ onAgentEvent });
     const narration = "I'll check the repo first.";
@@ -28,7 +28,7 @@ describe("handleMessageUpdate text signatures", () => {
       ],
     };
 
-    updateMessage(context, {
+    await updateMessage(context, {
       message: {
         role: "assistant",
         api: "anthropic-messages",
@@ -36,7 +36,7 @@ describe("handleMessageUpdate text signatures", () => {
       },
       assistantMessageEvent: { type: "text_delta", delta: narration },
     });
-    updateMessage(context, {
+    await updateMessage(context, {
       message: { role: "assistant", api: "anthropic-messages", content: [] },
       assistantMessageEvent: {
         type: "text_end",
@@ -58,7 +58,45 @@ describe("handleMessageUpdate text signatures", () => {
     );
   });
 
-  it("uses incremental deltas for same-item phased streams", () => {
+  it.each([
+    {
+      name: "ordinary text",
+      chunks: ["Hello", " world"],
+      updates: [
+        { text: "Hello", delta: "Hello" },
+        { text: "Hello world", delta: " world" },
+      ],
+    },
+    {
+      name: "held whitespace",
+      chunks: ["  Hello ", "world", "\n\n", "Next"],
+      updates: [
+        { text: "Hello", delta: "Hello" },
+        { text: "Hello world", delta: " world" },
+        { text: "Hello world\n\nNext", delta: "\n\nNext" },
+      ],
+    },
+    {
+      name: "user-visible sanitizer",
+      chunks: [
+        "Visible\n<tool_call>{",
+        '"name":"read","arguments":{"file_path":"secret.md"}}</tool_call>',
+        "\nDone.",
+      ],
+      updates: [
+        { text: "Visible", delta: "Visible" },
+        { text: "Visible\n\nDone.", delta: "\n\nDone." },
+      ],
+    },
+    {
+      name: "initially hidden tool call",
+      chunks: [
+        "<tool_call>{",
+        '"name":"read","arguments":{"file_path":"secret.md"}}</tool_call>\nDone.',
+      ],
+      updates: [{ text: "Done.", delta: "Done." }],
+    },
+  ])("uses append events for same-item phased streams ($name)", async ({ chunks, updates }) => {
     const onAgentEvent = vi.fn();
     const context = createMessageUpdateContext({ onAgentEvent });
     const signature = JSON.stringify({ v: 1, id: "item-final", phase: "final_answer" });
@@ -86,111 +124,55 @@ describe("handleMessageUpdate text signatures", () => {
         },
       }) as never;
 
-    updateMessage(context, createPhasedDelta("Hello"));
-    updateMessage(context, createPhasedDelta(" world"));
+    for (const chunk of chunks) {
+      await updateMessage(context, createPhasedDelta(chunk));
+    }
 
-    expect(onAgentEvent.mock.calls.map(([event]) => event)).toMatchObject([
-      {
+    expect(onAgentEvent.mock.calls.map(([event]) => event)).toMatchObject(
+      updates.map((data) => ({
         stream: "assistant",
-        data: { text: "Hello", delta: "Hello", phase: "final_answer" },
-      },
-      {
-        stream: "assistant",
-        data: { text: "Hello world", delta: " world", phase: "final_answer" },
-      },
-    ]);
-  });
-
-  it("keeps same-item phased stream deltas on the user-visible sanitizer path", () => {
-    const onAgentEvent = vi.fn();
-    const context = createMessageUpdateContext({ onAgentEvent });
-    const signature = JSON.stringify({ v: 1, id: "item-final", phase: "final_answer" });
-    const partial = {
-      role: "assistant",
-      phase: "final_answer",
-      content: [
-        {
-          type: "text",
-          textSignature: signature,
-          get text() {
-            throw new Error("full partial text should not be read");
-          },
-        },
-      ],
-    };
-
-    const createPhasedDelta = (delta: string) =>
-      ({
-        message: { role: "assistant", content: [] },
-        assistantMessageEvent: {
-          type: "text_delta",
-          delta,
-          partial,
-        },
-      }) as never;
-
-    updateMessage(context, createPhasedDelta("Visible\n<tool_call>{"));
-    updateMessage(
-      context,
-      createPhasedDelta('"name":"read","arguments":{"file_path":"secret.md"}}</tool_call>'),
+        data: { ...data, replace: undefined, phase: "final_answer" },
+      })),
     );
-    updateMessage(context, createPhasedDelta("\nDone."));
-
-    expect(onAgentEvent.mock.calls.map(([event]) => event)).toMatchObject([
-      {
-        stream: "assistant",
-        data: { text: "Visible", delta: "Visible", phase: "final_answer" },
-      },
-      {
-        stream: "assistant",
-        data: { text: "Visible\n\nDone.", delta: "\n\nDone.", phase: "final_answer" },
-      },
-    ]);
   });
 
-  it("keeps sanitizer context when a same-item phased stream starts hidden", () => {
-    const onAgentEvent = vi.fn();
-    const context = createMessageUpdateContext({ onAgentEvent });
-    const signature = JSON.stringify({ v: 1, id: "item-final", phase: "final_answer" });
-    const partial = {
-      role: "assistant",
-      phase: "final_answer",
-      content: [
+  it.each(["Hello", ""])(
+    "replaces a phased reply with the final snapshot %j",
+    async (finalText) => {
+      const onAgentEvent = vi.fn();
+      const context = createMessageUpdateContext({ onAgentEvent });
+      for (const event of [
+        { type: "text_delta" as const, text: "Hello world", delta: "Hello world" },
+        { type: "text_delta" as const, text: "", delta: "" },
+        { type: "text_end" as const, text: finalText },
+      ]) {
+        const pending = updateMessage(
+          context,
+          createTextUpdateEvent({
+            ...event,
+            id: "item-final",
+            signaturePhase: "final_answer",
+            partialPhase: "final_answer",
+          }),
+        );
+        if (event.type === "text_delta") {
+          expect(onAgentEvent).toHaveBeenCalledTimes(1);
+        }
+        await pending;
+      }
+
+      expect(onAgentEvent.mock.calls.map(([event]) => event)).toMatchObject([
         {
-          type: "text",
-          textSignature: signature,
-          get text() {
-            throw new Error("full partial text should not be read");
-          },
+          stream: "assistant",
+          data: { text: "Hello world", delta: "Hello world", replace: undefined },
         },
-      ],
-    };
+        { stream: "assistant", data: { text: finalText, delta: "", replace: true } },
+      ]);
+      expect(context.blockChunker.bufferedText).toBe(finalText);
+    },
+  );
 
-    const createPhasedDelta = (delta: string) =>
-      ({
-        message: { role: "assistant", content: [] },
-        assistantMessageEvent: {
-          type: "text_delta",
-          delta,
-          partial,
-        },
-      }) as never;
-
-    updateMessage(context, createPhasedDelta("<tool_call>{"));
-    updateMessage(
-      context,
-      createPhasedDelta('"name":"read","arguments":{"file_path":"secret.md"}}</tool_call>\nDone.'),
-    );
-
-    expect(onAgentEvent.mock.calls.map(([event]) => event)).toMatchObject([
-      {
-        stream: "assistant",
-        data: { text: "Done.", delta: "Done.", phase: "final_answer" },
-      },
-    ]);
-  });
-
-  it("treats phased textSignature item changes as assistant-message boundaries", () => {
+  it("treats phased textSignature item changes as assistant-message boundaries", async () => {
     const flushBlockReplyBuffer = vi.fn();
     const resetAssistantMessageState = vi.fn();
     const onAssistantMessageStart = vi.fn();
@@ -205,7 +187,7 @@ describe("handleMessageUpdate text signatures", () => {
     context.state.lastAssistantStreamItemId = "item-1";
     context.state.assistantMessageIndex = 7;
 
-    updateMessage(context, {
+    const pending = updateMessage(context, {
       message: { role: "assistant", content: [] },
       assistantMessageEvent: {
         type: "text_delta",
@@ -251,9 +233,10 @@ describe("handleMessageUpdate text signatures", () => {
     );
     expect(context.state.lastAssistantStreamContentIndex).toBe(1);
     expect(context.state.lastAssistantStreamItemId).toBe("item-2");
+    await pending;
   });
 
-  it("does not replay a deferred item snapshot before its first delta", () => {
+  it("does not replay a deferred item snapshot before its first delta", async () => {
     const flushBlockReplyBuffer = vi.fn();
     const resetAssistantMessageState = vi.fn();
     const onAssistantMessageStart = vi.fn();
@@ -286,7 +269,7 @@ describe("handleMessageUpdate text signatures", () => {
       api: "openai-responses",
     };
 
-    updateMessage(context, {
+    const startPending = updateMessage(context, {
       message: partial,
       assistantMessageEvent: {
         type: "text_start",
@@ -294,7 +277,7 @@ describe("handleMessageUpdate text signatures", () => {
         partial,
       },
     });
-    updateMessage(context, {
+    const deltaPending = updateMessage(context, {
       message: partial,
       assistantMessageEvent: {
         type: "text_delta",
@@ -314,9 +297,10 @@ describe("handleMessageUpdate text signatures", () => {
         phase: "final_answer",
       }),
     );
+    await Promise.all([startPending, deltaPending]);
   });
 
-  it("keeps same-block OpenAI Responses snapshot extensions in one assistant message", () => {
+  it("keeps same-block OpenAI Responses snapshot extensions in one assistant message", async () => {
     const flushBlockReplyBuffer = vi.fn();
     const resetAssistantMessageState = vi.fn();
     const onAssistantMessageStart = vi.fn();
@@ -335,7 +319,7 @@ describe("handleMessageUpdate text signatures", () => {
     });
     context.params.onAssistantMessageStart = onAssistantMessageStart;
 
-    updateMessage(context, {
+    const pending = updateMessage(context, {
       message: { role: "assistant", content: [] },
       assistantMessageEvent: {
         type: "text_end",
@@ -350,7 +334,7 @@ describe("handleMessageUpdate text signatures", () => {
       },
     });
 
-    expect(flushBlockReplyBuffer).not.toHaveBeenCalled();
+    expect(flushBlockReplyBuffer.mock.calls).toEqual([[{ assistantMessageIndex: 0, final: true }]]);
     expect(resetAssistantMessageState).not.toHaveBeenCalled();
     expect(onAssistantMessageStart).not.toHaveBeenCalled();
     expect(onPartialReply).toHaveBeenCalledWith(
@@ -362,9 +346,10 @@ describe("handleMessageUpdate text signatures", () => {
     );
     expect(context.state.lastAssistantStreamContentIndex).toBe(0);
     expect(context.state.lastAssistantStreamItemId).toBe("item-1");
+    await pending;
   });
 
-  it("scopes item-id fallback boundaries to the matching signed block", () => {
+  it("scopes item-id fallback boundaries to the matching signed block", async () => {
     const onPartialReply = vi.fn();
     const resetAssistantMessageState = vi.fn();
     const context = createMessageUpdateContext({
@@ -373,7 +358,7 @@ describe("handleMessageUpdate text signatures", () => {
       state: { lastAssistantStreamItemId: "item-1" },
     });
 
-    updateMessage(context, {
+    await updateMessage(context, {
       message: { role: "assistant", content: [] },
       assistantMessageEvent: {
         type: "text_delta",
@@ -413,7 +398,7 @@ describe("handleMessageUpdate text signatures", () => {
     expect(context.state.lastAssistantStreamItemId).toBe("item-2");
   });
 
-  it("preserves phase-aware voice and reply directives while deferring final media delivery", () => {
+  it("preserves phase-aware voice and reply directives while deferring final media delivery", async () => {
     const accumulator = createStreamingDirectiveAccumulator();
     const ctx = createMessageUpdateContext({
       consumePartialReplyDirectives: vi.fn((text: string, options?: { final?: boolean }) =>
@@ -425,7 +410,7 @@ describe("handleMessageUpdate text signatures", () => {
     });
     const replyText = "Done.\n\n[[reply_to_current]]\n[[audio_as_voice]]\nMEDIA:/tmp/reply.ogg";
 
-    updateMessage(
+    await updateMessage(
       ctx,
       createTextUpdateEvent({
         type: "text_delta",
@@ -435,7 +420,7 @@ describe("handleMessageUpdate text signatures", () => {
         partialPhase: "final_answer",
       }),
     );
-    updateMessage(
+    await updateMessage(
       ctx,
       createTextUpdateEvent({
         type: "text_end",
@@ -446,7 +431,7 @@ describe("handleMessageUpdate text signatures", () => {
       }),
     );
 
-    expect(ctx.state.blockBuffer).toBe("Done.");
+    expect(ctx.blockChunker.bufferedText).toBe("Done.");
     expect(
       consumePendingAssistantReplyDirectivesIntoReply(ctx.state, {
         text: "Done.",

@@ -63,7 +63,7 @@ function createMainRefreshTemplate(directory: string) {
   writeFileSync(join(canonical, "package.json"), '{"type":"module"}\n');
   cpSync(join(process.cwd(), "tsconfig.json"), join(canonical, "tsconfig.json"));
   writeFileSync(join(canonical, ".gitignore"), ".worktrees/\n.local/\nnode_modules\n");
-  mkdirSync(join(canonical, "src"));
+  mkdirSync(join(canonical, "src"), { recursive: true });
   writeFileSync(join(canonical, "src", "subject.ts"), "export const subject = 'base';\n");
   git(canonical, "add", ".");
   git(canonical, "commit", "-qm", "test: trusted native wrapper");
@@ -198,9 +198,12 @@ export function createMainRefreshFixture(directory: string) {
     metadata,
     authorPermission: "write",
     failFetch: false,
+    failPrFetch: false,
+    failDetach: false,
     failFetchAt: 0,
     pauseFetchAt: 0,
     failAuth: false,
+    viewerRateLimited: false,
     moveAfterFirstFetch: false,
     moveAtGate: false,
     moveAtChecks: false,
@@ -219,6 +222,15 @@ export function createMainRefreshFixture(directory: string) {
       | "scheduled-failure"
       | "api-error",
     requiredChecks: "pass" as "pass" | "fail" | "pending" | "api-error",
+    reviewComments: [
+      {
+        id: 1,
+        body: `<!-- clawsweeper-review-version item=42 reviewed_at=${new Date().toISOString()} sha=${head} source_revision=${"b".repeat(64)} lease_owner=github-run-1 lease_comment_id=1 v=1 -->
+
+<!-- clawsweeper-review item=42 -->`,
+        user: { id: 274271284, login: "clawsweeper[bot]", type: "Bot" },
+      },
+    ],
   };
   writeFileSync(controlFile, JSON.stringify(control));
   writeFileSync(eventsFile, "");
@@ -250,6 +262,11 @@ function runGit(args, input) {
     instrumentedGit,
     prelude +
       `
+if ((control.failPrFetch && args.includes('fetch') && args.includes('pull/42/head:pr-42')) ||
+    (control.failDetach && args[0] === 'checkout' && args[1] === '--detach')) {
+  console.error('fatal: injected prepare handoff failure');
+  process.exit(73);
+}
 const mainFetch = args.includes('fetch') && args.some(arg =>
   arg === 'main' || arg.startsWith('+refs/heads/main:') || arg === 'refs/heads/main'
 );
@@ -369,6 +386,11 @@ if (args[0] === 'pr' && args[1] === 'view') {
   if (endpoint === 'graphql') {
     if (control.failAuth) process.exit(1);
     if (args.some(arg => arg.includes('viewer { login }'))) {
+      if (control.viewerRateLimited) {
+        if (args.includes('--include')) process.stdout.write('HTTP/2.0 200 OK\\nX-RateLimit-Resource: graphql\\r\\nX-RateLimit-Remaining: 0\\r\\n\\r\\n');
+        console.log(JSON.stringify({ errors: [{ type: 'RATE_LIMITED', message: 'Synthetic quota failure' }] }));
+        process.exit(1);
+      }
       value = { data: { viewer: { login: 'fixture' } } };
     } else if (args.some(arg => arg.includes('ref(qualifiedName:'))) {
       value = { data: { repository: {
@@ -384,8 +406,13 @@ if (args[0] === 'pr' && args[1] === 'view') {
   } else if (endpoint === 'repos/fixture/repo/collaborators/fixture/permission') {
     if (control.authorPermission === 'error') process.exit(1);
     value = { permission: control.authorPermission };
-  } else if (endpoint === 'repos/fixture/repo/issues/42/comments' && args.includes('POST')) {
-    value = { html_url: 'https://example.invalid/pr/42#completion' };
+  } else if (endpoint.startsWith('repos/fixture/repo/issues/42/comments')) {
+    if (args.includes('POST')) {
+      value = { html_url: 'https://example.invalid/pr/42#completion' };
+    } else {
+      event({ kind: 'review-comments' });
+      value = [control.reviewComments];
+    }
   } else if (endpoint === 'repos/fixture/repo/pulls/42') {
     let baseSha = control.metadata.baseRefOid;
     if (control.remoteOnlyBase) {
@@ -454,6 +481,7 @@ if (args[0] === 'pr' && args[1] === 'view') {
   throw new Error('Unexpected GitHub command ' + args.join(' '));
 }
 const jqIndex = args.indexOf('--jq');
+if (args.includes('--include')) process.stdout.write('HTTP/2.0 200 OK\\n\\n');
 if (jqIndex >= 0) {
   const result = spawnSync('jq', ['-r', args[jqIndex + 1]], {
     input: JSON.stringify(value),
@@ -510,8 +538,11 @@ if (process.argv[1]?.endsWith('/watch-pr-ci.mts')) {
     metadata,
     configure(update: Partial<typeof control>) {
       Object.assign(control, update);
-      if (control.hostedCi === "scheduled") delete env.NODE_OPTIONS;
-      else env.NODE_OPTIONS = `--import=${clock}`;
+      if (control.hostedCi === "scheduled") {
+        delete env.NODE_OPTIONS;
+      } else {
+        env.NODE_OPTIONS = `--import=${clock}`;
+      }
       writeFileSync(controlFile, JSON.stringify(control));
     },
     events() {

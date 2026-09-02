@@ -20,6 +20,11 @@ export type ReplySessionBinding = {
   storePath?: string;
 };
 
+export type PendingContinuationSettlement = {
+  statusPayload: ReplyPayload;
+  settle: (statusDelivered: boolean) => Promise<void>;
+};
+
 type InternalReplySessionOptions = {
   prepareAssistantTranscriptMessage?: PrepareAssistantTranscriptMessage;
   /** Exact authority-bearing settings captured by Gateway chat admission. */
@@ -30,7 +35,8 @@ type InternalReplySessionOptions = {
   /** First dispatch only: admission created this exact pinned session before reply initialization. */
   newlyCreatedSessionId?: string;
   onDeliberateSilentTerminalReply?: () => void;
-  onPendingContinuation?: () => void;
+  /** Defers the child-completion wake until the visible waiting status is delivered. */
+  onPendingContinuation?: (settlement?: PendingContinuationSettlement) => void;
   onSessionPrepared?: (binding: ReplySessionBinding) => void;
   /** Prevent implicit rollover after a caller has durably admitted this exact session. */
   pinExpectedExistingSession?: boolean;
@@ -48,6 +54,7 @@ type InternalReplySessionOptions = {
   skillOverrides?: SessionToolOverrides["skills"];
   /** Gateway-private optimistic-concurrency constraint for an operator-requested proposal revision. */
   skillWorkshopProposalRevision?: SkillWorkshopProposalRevisionConstraint;
+  skillLibraryAuthoring?: import("../../skills/library/authoring.js").SkillLibraryAuthoringCapability;
 };
 
 export type InternalGetReplyOptions = GetReplyOptions &

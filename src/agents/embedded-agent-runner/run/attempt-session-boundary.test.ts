@@ -589,65 +589,77 @@ describe("prepareEmbeddedAttemptSessionBoundary", () => {
     },
   );
 
-  it("repairs a durable user leaf that does not match the admitted current user", async () => {
-    const currentUser = {
-      role: "user" as const,
-      content: "current prompt",
-      idempotencyKey: "current-run:user",
-      timestamp: 2,
-    };
-    const repairedMessages: AgentMessage[] = [currentUser];
-    const { activeSession } = createActiveSession([]);
-    const branch = vi.fn();
-    const clearNextUserMessagePersistenceSuppression = vi.fn();
-    const onUserMessagePersistenceInvalidated = vi.fn();
-    const sessionManager = createSessionManager({
-      getLeafEntry: () => ({
-        id: "orphan-user",
-        parentId: "previous-assistant",
-        timestamp: "2026-07-13T00:00:00.000Z",
-        type: "message",
-        message: {
-          role: "user",
-          content: "old prompt",
-          idempotencyKey: "previous-run:user",
-          timestamp: 1,
+  it.each([false, true])(
+    "handles a different durable user leaf with current-turn exclusion %s",
+    async (excludeFromContext) => {
+      const currentUser = {
+        role: "user" as const,
+        content: "current prompt",
+        idempotencyKey: "current-run:user",
+        excludeFromContext,
+        timestamp: 2,
+      };
+      const repairedMessages: AgentMessage[] = [currentUser];
+      const { activeSession } = createActiveSession([]);
+      const branch = vi.fn();
+      const clearNextUserMessagePersistenceSuppression = vi.fn();
+      const onUserMessagePersistenceInvalidated = vi.fn();
+      const sessionManager = createSessionManager({
+        getLeafEntry: () => ({
+          id: "orphan-user",
+          parentId: "previous-assistant",
+          timestamp: "2026-07-13T00:00:00.000Z",
+          type: "message",
+          message: {
+            role: "user",
+            content: "old prompt",
+            idempotencyKey: "previous-run:user",
+            timestamp: 1,
+          },
+        }),
+        branch,
+        clearNextUserMessagePersistenceSuppression,
+        buildSessionContext: () => ({ messages: repairedMessages }),
+      });
+      const recorder = {
+        getPersistedMessage: () => currentUser,
+        hasPersisted: () => true,
+      } as unknown as NonNullable<
+        Parameters<
+          typeof prepareEmbeddedAttemptSessionBoundary
+        >[0]["attempt"]["userTurnTranscriptRecorder"]
+      >;
+
+      const boundary = await prepareEmbeddedAttemptSessionBoundary({
+        activeSession,
+        attempt: {
+          onUserMessagePersistenceInvalidated,
+          prompt: "current prompt",
+          trigger: "user",
+          userTurnTranscriptRecorder: recorder,
         },
-      }),
-      branch,
-      clearNextUserMessagePersistenceSuppression,
-      buildSessionContext: () => ({ messages: repairedMessages }),
-    });
-    const recorder = {
-      getPersistedMessage: () => currentUser,
-      hasPersisted: () => true,
-    } as unknown as NonNullable<
-      Parameters<
-        typeof prepareEmbeddedAttemptSessionBoundary
-      >[0]["attempt"]["userTurnTranscriptRecorder"]
-    >;
+        getUserTranscriptContexts: () => undefined,
+        isRawModelRun: false,
+        preparedUserTurnMessage: undefined,
+        sessionManager,
+        setActiveSessionSystemPrompt: vi.fn(),
+      });
 
-    const boundary = await prepareEmbeddedAttemptSessionBoundary({
-      activeSession,
-      attempt: {
-        onUserMessagePersistenceInvalidated,
-        prompt: "current prompt",
-        trigger: "user",
-        userTurnTranscriptRecorder: recorder,
-      },
-      getUserTranscriptContexts: () => undefined,
-      isRawModelRun: false,
-      preparedUserTurnMessage: undefined,
-      sessionManager,
-      setActiveSessionSystemPrompt: vi.fn(),
-    });
-
-    expect(boundary.orphanRepair?.removeLeaf).toBe(true);
-    expect(branch).toHaveBeenCalledWith("previous-assistant");
-    expect(clearNextUserMessagePersistenceSuppression).toHaveBeenCalledOnce();
-    expect(onUserMessagePersistenceInvalidated).toHaveBeenCalledOnce();
-    expect(activeSession.agent.state.messages).toBe(repairedMessages);
-  });
+      if (excludeFromContext) {
+        expect(boundary.orphanRepair).toBeUndefined();
+        expect(branch).not.toHaveBeenCalled();
+        expect(clearNextUserMessagePersistenceSuppression).not.toHaveBeenCalled();
+        expect(onUserMessagePersistenceInvalidated).not.toHaveBeenCalled();
+        expect(activeSession.agent.state.messages).toEqual([]);
+      } else {
+        expect(boundary.orphanRepair?.removeLeaf).toBe(true);
+        expect(branch).toHaveBeenCalledWith("previous-assistant");
+        expect(clearNextUserMessagePersistenceSuppression).toHaveBeenCalledOnce();
+        expect(onUserMessagePersistenceInvalidated).toHaveBeenCalledOnce();
+        expect(activeSession.agent.state.messages).toBe(repairedMessages);
+      }
+    },
+  );
 
   it("repairs an orphaned user leaf before rebuilding active session messages", async () => {
     const repairedMessages: AgentMessage[] = [

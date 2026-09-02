@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import {
+  buildNpmResolutionFields,
   formatNpmCommandFailureOutput,
   type NpmIntegrityDrift,
   type NpmSpecResolution,
@@ -33,6 +34,7 @@ import {
   listManagedNpmRootPackageNames,
   listNewManagedNpmRootPackageDirs,
   quarantineManagedNpmProjectRebuildArtifacts,
+  removeEmptyDirectoryIfPresent,
   resolveManagedNpmGenerationUseForInstall,
   resolveManagedNpmInstallRoot,
   resolveManagedNpmRootDependencySpecForInstall,
@@ -577,6 +579,15 @@ export async function installPluginFromManagedNpmRoot(
       ...(policyMode === "update" ? { currentArtifactDir: installRoot } : {}),
       stagedArtifactDir: installRoot,
       mode: policyMode,
+      ...(params.installPolicyRequest.source?.kind === "npm"
+        ? {
+            sourceRecord: {
+              source: "npm" as const,
+              spec: params.displaySpec,
+              ...buildNpmResolutionFields(params.npmResolution),
+            },
+          }
+        : {}),
     });
     return {
       ...result,
@@ -611,6 +622,10 @@ export async function installPluginFromManagedNpmRoot(
       logger,
     });
     await cleanupManagedNpmPluginInstallRollbackSnapshot({ snapshot: rollbackSnapshot, logger });
+    // Prepared npm-pack archives must be gone before retiring an empty failed project.
+    await removeEmptyDirectoryIfPresent(npmRoot).catch((error: unknown) =>
+      logger.warn?.(`Failed to remove empty managed npm project ${npmRoot}: ${String(error)}`),
+    );
   };
 
   try {

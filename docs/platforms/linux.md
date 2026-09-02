@@ -245,6 +245,14 @@ Camera devices must be readable by the service user, commonly through the `video
 
 `camera.snap` and `camera.clip` also require explicit Gateway arming through `gateway.nodes.commands.allow`. See [Camera capture](/nodes/camera) and [Location command](/nodes/location-command) for payloads, limits, and errors.
 
+## Retired Linux Canvas
+
+The bundled Linux Canvas bridge and its desktop Canvas window have been removed.
+For inline widgets in the Control UI, use [`show_widget`](/tools/show-widget).
+The separate [macOS widget panel](/platforms/mac/canvas) requires a connected
+Mac and is render-only. These widget surfaces do not restore the former Linux
+Canvas bridge or its A2UI push commands.
+
 ## Install
 
 - [Getting Started](/start/getting-started)

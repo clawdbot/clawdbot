@@ -30,7 +30,7 @@ type ExecFileMock = (
 const execFileMock = vi.hoisted(() => vi.fn<ExecFileMock>());
 const existsSyncMock = vi.hoisted(() => vi.fn(() => false));
 const assertNoSystemSystemdOwnershipMock = vi.hoisted(() =>
-  vi.fn<(unitName: string) => Promise<void>>(async () => {}),
+  vi.fn<(unitName: string, timeoutMs?: number) => Promise<void>>(async () => {}),
 );
 const findSystemGatewayServicesMock = vi.hoisted(() =>
   vi.fn<
@@ -53,8 +53,10 @@ vi.mock("./inspect.js", () => ({
 
 vi.mock("./systemd-system.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./systemd-system.js")>()),
-  assertNoSystemSystemdOwnership: (unitName: string) =>
-    assertNoSystemSystemdOwnershipMock(unitName),
+  assertNoSystemSystemdOwnership: (unitName: string, timeoutMs?: number) =>
+    timeoutMs === undefined
+      ? assertNoSystemSystemdOwnershipMock(unitName)
+      : assertNoSystemSystemdOwnershipMock(unitName, timeoutMs),
 }));
 
 vi.mock("node:fs", async (importOriginal) => ({
@@ -105,6 +107,7 @@ import {
   isSystemdUserServiceAvailable,
   readSystemdServiceRuntime,
   readSystemdServiceExecStart,
+  refreshLegacySystemdServiceMetadata,
   restartSystemdService,
   resolveSystemdUserServiceAccount,
   startSystemdService,
@@ -2370,6 +2373,160 @@ describe("stageSystemdService", () => {
     }));
     assertNoSystemSystemdOwnershipMock.mockReset();
     assertNoSystemSystemdOwnershipMock.mockResolvedValue();
+  });
+
+  it("removes legacy gateway version metadata without restarting the service", async () => {
+    await withStageFixture(async ({ env, unitPath }) => {
+      await fs.mkdir(path.dirname(unitPath), { recursive: true });
+      await fs.writeFile(
+        unitPath,
+        [
+          "[Unit]",
+          "Description=OpenClaw Gateway (v2026.7.1-2)",
+          "",
+          "[Service]",
+          "ExecStart=/usr/bin/openclaw gateway run",
+          "Environment=OPENCLAW_SERVICE_MARKER=openclaw",
+          "Environment=OPENCLAW_SERVICE_KIND=gateway",
+          'Environment=OPENCLAW_SERVICE_VERSION=2026.7.1-2 "OTHER_SETTING=kept value"',
+          "Environment=OPENCLAW_GATEWAY_PORT=18789",
+          "",
+        ].join("\n"),
+        "utf8",
+      );
+      execFileMock.mockImplementationOnce(systemctlUserSuccess("daemon-reload"));
+
+      await expect(refreshLegacySystemdServiceMetadata(env, 5_000)).resolves.toBe(true);
+
+      const unit = await fs.readFile(unitPath, "utf8");
+      expect(unit).toContain("Description=OpenClaw Gateway\n");
+      expect(unit).not.toContain("OPENCLAW_SERVICE_VERSION");
+      expect(unit).toContain('Environment="OTHER_SETTING=kept value"');
+      expect(unit).toContain("Environment=OPENCLAW_GATEWAY_PORT=18789");
+      expect(execFileMock).toHaveBeenCalledTimes(1);
+      for (const [, timeoutMs] of assertNoSystemSystemdOwnershipMock.mock.calls) {
+        expect(timeoutMs).toBeGreaterThan(0);
+        expect(timeoutMs).toBeLessThanOrEqual(5_000);
+      }
+      expect(assertNoSystemSystemdOwnershipMock).toHaveBeenCalledTimes(3);
+      expect(execFileMock.mock.calls[0]?.[2]).toMatchObject({
+        killSignal: "SIGKILL",
+        timeout: expect.any(Number),
+      });
+    });
+  });
+
+  it("preserves a hand-written unit with the formerly documented version metadata", async () => {
+    await withStageFixture(async ({ env, unitPath }) => {
+      const previous = [
+        "[Unit]",
+        "Description=OpenClaw Gateway (v2026.7.1-2)",
+        "",
+        "[Service]",
+        "ExecStart=/usr/bin/openclaw gateway run",
+        "Environment=OPENCLAW_SERVICE_VERSION=2026.7.1-2",
+        "",
+      ].join("\n");
+      await fs.mkdir(path.dirname(unitPath), { recursive: true });
+      await fs.writeFile(unitPath, previous, "utf8");
+      execFileMock.mockImplementationOnce(systemctlUserSuccess("daemon-reload"));
+
+      await expect(refreshLegacySystemdServiceMetadata(env, 5_000)).resolves.toBe(false);
+
+      await expect(fs.readFile(unitPath, "utf8")).resolves.toBe(previous);
+      expect(execFileMock).not.toHaveBeenCalled();
+    });
+  });
+
+  it.each([
+    {
+      label: "version marker does not match the Description",
+      environment: [
+        "Environment=OPENCLAW_SERVICE_MARKER=openclaw",
+        "Environment=OPENCLAW_SERVICE_KIND=gateway",
+        "Environment=OPENCLAW_SERVICE_VERSION=2026.7.1-1",
+      ],
+    },
+    {
+      label: "managed markers were reset",
+      environment: [
+        "Environment=OPENCLAW_SERVICE_MARKER=openclaw OPENCLAW_SERVICE_KIND=gateway",
+        "Environment=",
+        "Environment=OPENCLAW_SERVICE_VERSION=2026.7.1-2",
+      ],
+    },
+  ])("preserves a unit when $label", async ({ environment }) => {
+    await withStageFixture(async ({ env, unitPath }) => {
+      const previous = [
+        "[Unit]",
+        "Description=OpenClaw Gateway (v2026.7.1-2)",
+        "",
+        "[Service]",
+        ...environment,
+        "",
+      ].join("\n");
+      await fs.mkdir(path.dirname(unitPath), { recursive: true });
+      await fs.writeFile(unitPath, previous, "utf8");
+
+      await expect(refreshLegacySystemdServiceMetadata(env, 5_000)).resolves.toBe(false);
+
+      await expect(fs.readFile(unitPath, "utf8")).resolves.toBe(previous);
+      expect(assertNoSystemSystemdOwnershipMock).not.toHaveBeenCalled();
+      expect(execFileMock).not.toHaveBeenCalled();
+    });
+  });
+
+  it("preserves legacy metadata when the system unit owns the gateway name", async () => {
+    await withStageFixture(async ({ env, unitPath }) => {
+      const previous = [
+        "[Unit]",
+        "Description=OpenClaw Gateway (v2026.7.1-2)",
+        "",
+        "[Service]",
+        "Environment=OPENCLAW_SERVICE_MARKER=openclaw",
+        "Environment=OPENCLAW_SERVICE_KIND=gateway",
+        "Environment=OPENCLAW_SERVICE_VERSION=2026.7.1-2",
+        "",
+      ].join("\n");
+      await fs.mkdir(path.dirname(unitPath), { recursive: true });
+      await fs.writeFile(unitPath, previous, "utf8");
+      assertNoSystemSystemdOwnershipMock.mockRejectedValueOnce(new Error("system ownership"));
+
+      await expect(refreshLegacySystemdServiceMetadata(env, 5_000)).rejects.toThrow(
+        "system ownership",
+      );
+
+      await expect(fs.readFile(unitPath, "utf8")).resolves.toBe(previous);
+      expect(execFileMock).not.toHaveBeenCalled();
+    });
+  });
+
+  it("restores legacy metadata when system ownership appears after publication", async () => {
+    await withStageFixture(async ({ env, unitPath }) => {
+      const previous = [
+        "[Unit]",
+        "Description=OpenClaw Gateway (v2026.7.1-2)",
+        "",
+        "[Service]",
+        "Environment=OPENCLAW_SERVICE_MARKER=openclaw",
+        "Environment=OPENCLAW_SERVICE_KIND=gateway",
+        "Environment=OPENCLAW_SERVICE_VERSION=2026.7.1-2",
+        "",
+      ].join("\n");
+      await fs.mkdir(path.dirname(unitPath), { recursive: true });
+      await fs.writeFile(unitPath, previous, "utf8");
+      assertNoSystemSystemdOwnershipMock
+        .mockResolvedValueOnce()
+        .mockResolvedValueOnce()
+        .mockRejectedValueOnce(new Error("system ownership appeared"));
+
+      await expect(refreshLegacySystemdServiceMetadata(env, 5_000)).rejects.toThrow(
+        "system ownership appeared",
+      );
+
+      await expect(fs.readFile(unitPath, "utf8")).resolves.toBe(previous);
+      expect(execFileMock).not.toHaveBeenCalled();
+    });
   });
 
   it("blocks before mutating user files when the same system unit owns the name", async () => {

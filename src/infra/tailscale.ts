@@ -13,6 +13,7 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { runExec } from "../process/exec.js";
 import { signalProcessTree } from "../process/kill-tree.js";
+import { extractTailscaleServeGatewayUrls } from "../shared/tailscale-status.js";
 import { isVitestRuntimeEnv } from "./env.js";
 import { toErrorObject } from "./errors.js";
 import { retryAsync } from "./retry.js";
@@ -94,7 +95,7 @@ export async function findTailscaleBinary(): Promise<string | null> {
       return false;
     }
     try {
-      await runExec(filePath, ["--version"], { timeoutMs: 3000 });
+      await runExec(filePath, ["version"], { timeoutMs: 3000 });
       return true;
     } catch {
       return false;
@@ -226,13 +227,12 @@ type TailscaleRouteOwnerFailure = Pick<
   "code" | "stdout" | "stderr"
 >;
 
-function isPort443RouteConflict(message: TailscaleRouteOwnerFailure): boolean {
-  return /listener already exists for port 443/i.test(`${message.stderr}\n${message.stdout}`);
-}
-
 function routeClaimError(message: TailscaleRouteOwnerFailure): Error {
-  if (isPort443RouteConflict(message)) {
-    return new TailscaleRouteOwnershipConflictError();
+  const conflict = /listener already exists for port (\d+)/i.exec(
+    `${message.stderr}\n${message.stdout}`,
+  );
+  if (conflict) {
+    return new TailscaleRouteOwnershipConflictError(Number(conflict[1]));
   }
   const detail = [message.stderr.trim(), message.stdout.trim()].find(Boolean);
   return Object.assign(new Error(detail || "Tailscale route owner exited before claiming route"), {
@@ -383,18 +383,38 @@ async function startTailscaleRouteOwner(argv: string[]): Promise<TailscaleRouteC
 
 export async function claimTailscaleRoute(
   mode: "serve" | "funnel",
-  target: number | string,
+  target: number,
+  gatewayPort: number,
+  info: (message: string) => void,
 ): Promise<TailscaleRouteClaim> {
   const tailscaleBin = await getTailscaleBinary();
-  const args = [mode, "--yes", "--bg=false", `${target}`];
+  let adopted = false;
+  const start = async (bin: string, prefix: string[] = []) => {
+    const exec = (args: string[]) =>
+      runExec(bin, [...prefix, ...args], { timeoutMs: 5000, maxBuffer: 400_000 });
+    const { stdout } = await exec(["serve", "status", "--json"]);
+    const routes = extractTailscaleServeGatewayUrls(stdout, gatewayPort, true);
+    // Foreground claims require a free port. Never clear sibling handlers or
+    // infer ownership from the new ephemeral backend instead of the Gateway port.
+    if (routes?.some((url) => !new URL(url).port)) {
+      await exec(["serve", "--yes", "--https=443", "--set-path=/", "off"]);
+      adopted = true;
+    }
+    return startTailscaleRouteOwner([bin, ...prefix, mode, "--yes", "--bg=false", `${target}`]);
+  };
+  let claim: TailscaleRouteClaim;
   try {
-    return await startTailscaleRouteOwner([tailscaleBin, ...args]);
+    claim = await start(tailscaleBin);
   } catch (error) {
     if (!isPermissionDeniedError(error)) {
       throw error;
     }
-    return await startTailscaleRouteOwner(["sudo", "-n", tailscaleBin, ...args]);
+    claim = await start("sudo", ["-n", tailscaleBin]);
   }
+  if (adopted) {
+    info("Tailscale route adopted from a previous OpenClaw release");
+  }
+  return claim;
 }
 
 /** Resolve the hostname after Serve startup, while the local daemon may still be settling. */

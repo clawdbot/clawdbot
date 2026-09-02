@@ -14,15 +14,23 @@ type SessionNodeInvocation = NonNullable<
     ReturnType<typeof getPluginRuntimeGatewayRequestScope>
   >["invokeWithSessionNodeAuthority"]
 >;
+type SessionNodeRequest = Parameters<SessionNodeInvocation>[0];
+type SessionNodeGrantAuthority = NonNullable<
+  NonNullable<ReturnType<typeof getPluginRuntimeGatewayRequestScope>>["nodePlacementGrantAuthority"]
+>;
+type SessionNodeAuthorities = {
+  invokeWithSessionNodeAuthority?: SessionNodeInvocation;
+  nodePlacementGrantAuthority?: SessionNodeGrantAuthority;
+};
 
 /** Full is admitted host authority, narrowed to one placement claim, never a request flag. */
-export function createSessionNodeInvocation(
+export function createSessionNodeAuthorities(
   attempt: HostAttempt,
   pluginId: string,
   requiredNodeCommands: ReadonlySet<string>,
   assertActive: () => void,
   signal: AbortSignal,
-): SessionNodeInvocation | undefined {
+): SessionNodeAuthorities {
   const admittedFull = attempt.permissionMode === "full";
   const resolveContext = getGatewayContextResolver(attempt.admittedRunContext);
   const context = resolveContext?.();
@@ -45,45 +53,61 @@ export function createSessionNodeInvocation(
     !attempt.sessionId ||
     !assertPlacementCurrent
   ) {
-    return undefined;
+    return {};
   }
   const session = {
     agentId: attempt.agentId,
     sessionKey: attempt.sessionKey,
     storePath: target.storePath,
   };
-  return async (request, invoke) => {
+  const assertRequestCurrent = (request: SessionNodeRequest) => {
+    if (
+      request.source === "session-full" &&
+      (!admittedFull || !requiredNodeCommands.has(request.command))
+    ) {
+      throw new Error("admitted node execution authority does not cover this command");
+    }
+    assertActive();
+    // This read can only revoke the admitted permission. It cannot create Full authority.
+    const entry = loadSessionEntryReadOnly(session);
+    if (
+      signal.aborted ||
+      getActivePluginRegistry() !== gatewayRegistry ||
+      pluginOwners.some((isCurrent) => !isCurrent?.()) ||
+      (request.source === "session-full" &&
+        (attempt.permissionMode !== "full" || !requiredNodeCommands.has(request.command))) ||
+      (resolveContext && resolveContext() !== context) ||
+      request.pluginId !== pluginId ||
+      !entry ||
+      entry.sessionId !== attempt.sessionId ||
+      (request.source === "session-full" && entry.permissionMode !== "full") ||
+      request.workspace.sessionKey !== attempt.sessionKey ||
+      request.workspace.sessionId !== attempt.sessionId
+    ) {
+      throw new Error("admitted node execution authority is no longer current");
+    }
+    assertPlacementCurrent({ ...request, runId: attempt.runId, agentId: session.agentId });
+  };
+  const invokeWithSessionNodeAuthority: SessionNodeInvocation = async (request, invoke) => {
     if (
       request.source === "session-full" &&
       (!admittedFull || !requiredNodeCommands.has(request.command))
     ) {
       return undefined;
     }
-    const assertCurrent = () => {
-      assertActive();
-      // This read can only revoke the admitted permission. It cannot create Full authority.
-      const entry = loadSessionEntryReadOnly(session);
-      if (
-        signal.aborted ||
-        getActivePluginRegistry() !== gatewayRegistry ||
-        pluginOwners.some((isCurrent) => !isCurrent?.()) ||
-        (request.source === "session-full" &&
-          (attempt.permissionMode !== "full" || !requiredNodeCommands.has(request.command))) ||
-        (resolveContext && resolveContext() !== context) ||
-        request.pluginId !== pluginId ||
-        !entry ||
-        entry.sessionId !== attempt.sessionId ||
-        (request.source === "session-full" && entry.permissionMode !== "full") ||
-        request.workspace.sessionKey !== attempt.sessionKey ||
-        request.workspace.sessionId !== attempt.sessionId
-      ) {
-        throw new Error("admitted node execution authority is no longer current");
-      }
-      assertPlacementCurrent({ ...request, runId: attempt.runId, agentId: session.agentId });
-    };
+    const assertCurrent = () => assertRequestCurrent(request);
     assertCurrent();
     const result = await invoke(assertCurrent, signal);
     assertCurrent();
     return result;
+  };
+  return {
+    invokeWithSessionNodeAuthority,
+    nodePlacementGrantAuthority: {
+      agentId: session.agentId,
+      sessionKey: attempt.sessionKey,
+      runId: attempt.runId,
+      assertCurrent: (request) => assertRequestCurrent({ ...request, source: "human-approved" }),
+    },
   };
 }

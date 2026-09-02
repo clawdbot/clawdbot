@@ -1,14 +1,17 @@
 // Gateway chat runtime projects agent events into chat/session subscriber
 // streams, lifecycle persistence, heartbeat visibility, and live UI updates.
 import { performance } from "node:perf_hooks";
-import type {
-  ChatEvent,
-  ChatRunStartupPhase,
+import {
+  projectChatErrorDetail,
+  type ChatEvent,
+  type ChatRunStartupPhase,
 } from "../../packages/gateway-protocol/src/schema/logs-chat.js";
 import { isAgentLifecycleYieldedWaiting } from "../agents/agent-lifecycle-parent-state.js";
 import {
+  AGENT_RUN_TERMINAL_RETRY_GRACE_MS,
   buildAgentRunTerminalOutcomeFromLifecycleEvent,
   classifyAgentRunTerminalOutcome,
+  isDefinitiveRunLifecycle,
 } from "../agents/agent-run-terminal-outcome.js";
 import { isActiveEmbeddedRunId } from "../agents/embedded-agent-runner/runs.js";
 import { isTimeoutError, resolveFailoverReasonFromError } from "../agents/failover-error.js";
@@ -217,11 +220,6 @@ function normalizeHeartbeatChatFinalText(params: {
   return { suppress: false, text: stripped.text };
 }
 
-/**
- * Keep this aligned with the agent.wait lifecycle-error grace so chat surfaces
- * do not finalize a run before fallback or retry reuses the same runId.
- */
-const AGENT_LIFECYCLE_ERROR_RETRY_GRACE_MS = 15_000;
 const LIVE_TEXT_PACING_MS = 75;
 
 export type ChatEventBroadcast = GatewayBroadcastFn;
@@ -447,7 +445,7 @@ export function createAgentEventHandler({
   sessionMessageSubscribers,
   loadGatewaySessionLifecycleSnapshotForEvent = loadGatewaySessionLifecycleSnapshot,
   persistGatewaySessionLifecycleEventForEvent = persistGatewaySessionLifecycleEvent,
-  lifecycleErrorRetryGraceMs = AGENT_LIFECYCLE_ERROR_RETRY_GRACE_MS,
+  lifecycleErrorRetryGraceMs = AGENT_RUN_TERMINAL_RETRY_GRACE_MS,
   isChatSendRunActive = () => false,
   clearTrackedActiveRun,
   settleTrackedTerminal,
@@ -773,6 +771,7 @@ export function createAgentEventHandler({
               firstAssistantTimingEntry: finished,
               abortErrorMessage: readToolValidationErrorSummary(evt.data?.toolErrorSummary),
               yielded: yieldedWaiting ? true : undefined,
+              errorObservation: evt.data?.errorObservation,
             },
           );
         }
@@ -1130,6 +1129,7 @@ export function createAgentEventHandler({
       firstAssistantTimingEntry?: ChatRunEntry;
       abortErrorMessage?: string;
       yielded?: true;
+      errorObservation?: unknown;
     },
   ) => {
     const { text, shouldSuppressSilent } = resolveBufferedChatTextState(clientRunId, sourceRunId, {
@@ -1170,6 +1170,7 @@ export function createAgentEventHandler({
       sendChatPayload(sessionKey, payload, opts);
       return;
     }
+    const errorDetail = projectChatErrorDetail(opts?.errorObservation);
     const payload = {
       runId: clientRunId,
       sessionKey,
@@ -1179,6 +1180,7 @@ export function createAgentEventHandler({
       state: "error" as const,
       errorMessage: error ? formatForLog(error) : undefined,
       ...(errorKind && { errorKind }),
+      ...(errorDetail ? { errorDetail } : {}),
       ...(stopReason && { stopReason }),
     };
     sendChatPayload(sessionKey, payload, opts);
@@ -1709,11 +1711,14 @@ export function createAgentEventHandler({
 
     if (lifecyclePhase === "error") {
       const skipChatErrorFinal = isChatSendRunActive(evt.runId) && !chatLink;
-      const isFallbackExhaustedFailure = evt.data?.fallbackExhaustedFailure === true;
-      // Per-attempt provider errors keep the retry grace so fallback can reuse
-      // the runId. Once the runner marks fallback as exhausted, clear chat state
-      // immediately so webchat sessions do not stay in progress until the timer.
-      if (isAborted || isFallbackExhaustedFailure || lifecycleErrorRetryGraceMs <= 0) {
+      const definitiveTerminal = isDefinitiveRunLifecycle({
+        phase: lifecyclePhase,
+        data: evt.data,
+      });
+      // Only retryable errors get grace. Definitive timeouts must persist their
+      // reason before dispatch closes the run and the sidebar reads its status.
+      if (isAborted || definitiveTerminal || lifecycleErrorRetryGraceMs <= 0) {
+        clearPendingTerminalLifecycleError(evt.runId);
         // finalizeLifecycleEvent clears the buffer itself, after emitChatTerminal
         // has flushed the throttled tail and resolved the terminal message.
         finalizeLifecycleEvent(evt, { skipChatErrorFinal, restartRecoveryState });

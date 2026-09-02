@@ -10,7 +10,11 @@ import { CHROME_MCP_ENDPOINT_FLAGS } from "./chrome-mcp-contracts.js";
 import type { ResolvedBrowserProfile } from "./config.js";
 import { BrowserProfileUnavailableError } from "./errors.js";
 import { getBrowserProfileCapabilities } from "./profile-capabilities.js";
-import { isCdpHostnameTrustedByPolicy, withExactHostnamePolicy } from "./ssrf-policy-helpers.js";
+import {
+  isCdpHostnameBlockedByPolicy,
+  isCdpHostnameTrustedByPolicy,
+  withExactHostnamePolicy,
+} from "./ssrf-policy-helpers.js";
 
 // Synthetic exact-host CDP policies must retain the operator's original intent;
 // otherwise Chrome MCP cannot distinguish default control-plane scoping from a
@@ -38,16 +42,22 @@ function hasPolicyEntries(values?: string[]): boolean {
   return (values ?? []).some((value) => value.trim().length > 0);
 }
 
-function requiresPinnedChromeMcpCdpTransport(cdpPolicy?: SsrFPolicy): boolean {
+function requiresPinnedChromeMcpCdpTransport(
+  cdpPolicy: SsrFPolicy | undefined,
+  cdpHost: string,
+): boolean {
   if (!cdpPolicy) {
     return false;
   }
   const policyIntent = cdpControlSourcePolicyByScopedPolicy.get(cdpPolicy) ?? cdpPolicy;
+  // A blocklist only restricts this endpoint when its own host is denied;
+  // unrelated denials must not disable a trusted explicit CDP endpoint.
   const hasScopedPolicy =
     policyIntent.allowRfc2544BenchmarkRange === true ||
     policyIntent.allowIpv6UniqueLocalRange === true ||
     hasPolicyEntries(policyIntent.allowedHostnames) ||
     hasPolicyEntries(policyIntent.hostnameAllowlist) ||
+    isCdpHostnameBlockedByPolicy(policyIntent, cdpHost) ||
     hasPolicyEntries(policyIntent.allowedOrigins);
   return !(
     !hasScopedPolicy &&
@@ -91,7 +101,7 @@ export function assertChromeMcpCdpTransportAllowed(
   if (profile.driver !== "existing-session" || !hasExplicitEndpoint) {
     return;
   }
-  if (!requiresPinnedChromeMcpCdpTransport(cdpPolicy)) {
+  if (!requiresPinnedChromeMcpCdpTransport(cdpPolicy, profile.cdpHost)) {
     return;
   }
   throw new BrowserProfileUnavailableError(

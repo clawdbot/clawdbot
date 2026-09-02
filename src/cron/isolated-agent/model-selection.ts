@@ -207,12 +207,21 @@ export async function resolveCronModelSelection(
     config: owner.config,
     agentConfigOverride: ownerAgentConfigOverride,
   });
-  const catalog = owner.modelCatalog.entries;
   const resolvedDefault = resolveConfiguredModelRef({
     cfg: cfgWithAgentDefaults,
     defaultProvider: DEFAULT_PROVIDER,
     defaultModel: DEFAULT_MODEL,
+    manifestPlugins: owner.metadataSnapshot,
   });
+  // Overrides keep the owner's agent policy; flattened defaults only select the default model.
+  const selectionParams = {
+    cfg: owner.config,
+    catalog: owner.modelCatalog.entries,
+    defaultProvider: resolvedDefault.provider,
+    defaultModel: resolvedDefault.model,
+    agentId: ownerAgentId,
+    manifestPlugins: owner.metadataSnapshot,
+  };
   let provider = resolvedDefault.provider;
   let model = resolvedDefault.model;
   let modelSource: CronModelSelectionSource = "default";
@@ -232,12 +241,8 @@ export async function resolveCronModelSelection(
     // Subagent/agent model config is advisory here: invalid refs fall back to
     // defaults so an agent config typo does not prevent unrelated cron runs.
     const resolvedSubagent = resolveAllowedModelRefCore({
-      cfg: owner.config,
-      catalog,
+      ...selectionParams,
       raw: subagentModelRaw,
-      defaultProvider: resolvedDefault.provider,
-      defaultModel: resolvedDefault.model,
-      agentId: ownerAgentId,
     });
     if (!("error" in resolvedSubagent)) {
       provider = resolvedSubagent.ref.provider;
@@ -252,18 +257,15 @@ export async function resolveCronModelSelection(
     ? resolveHooksGmailModel({
         cfg: owner.config,
         defaultProvider: DEFAULT_PROVIDER,
+        manifestPlugins: owner.metadataSnapshot,
       })
     : null;
   if (hooksGmailModelRef) {
     // Gmail hook models are specialized defaults: apply them only when the
     // configured ref is allowed, otherwise keep the broader cron default.
     const status = getModelRefStatus({
-      cfg: owner.config,
-      catalog,
+      ...selectionParams,
       ref: hooksGmailModelRef,
-      defaultProvider: resolvedDefault.provider,
-      defaultModel: resolvedDefault.model,
-      agentId: ownerAgentId,
     });
     if (status.allowed) {
       provider = hooksGmailModelRef.provider;
@@ -282,12 +284,8 @@ export async function resolveCronModelSelection(
     // Payload model overrides are explicit cron config, so reject disallowed
     // refs instead of silently falling back to defaults.
     const resolvedOverride = resolveAllowedModelRefCore({
-      cfg: owner.config,
-      catalog,
+      ...selectionParams,
       raw: modelOverride,
-      defaultProvider: resolvedDefault.provider,
-      defaultModel: resolvedDefault.model,
-      agentId: ownerAgentId,
     });
     if ("error" in resolvedOverride) {
       return {
@@ -314,12 +312,8 @@ export async function resolveCronModelSelection(
       const sessionProviderOverride =
         params.sessionEntry.providerOverride?.trim() || resolvedDefault.provider;
       const resolvedSessionOverride = resolveAllowedModelRefCore({
-        cfg: owner.config,
-        catalog,
+        ...selectionParams,
         raw: `${sessionProviderOverride}/${sessionModelOverride}`,
-        defaultProvider: resolvedDefault.provider,
-        defaultModel: resolvedDefault.model,
-        agentId: ownerAgentId,
       });
       if (!("error" in resolvedSessionOverride)) {
         provider = resolvedSessionOverride.ref.provider;

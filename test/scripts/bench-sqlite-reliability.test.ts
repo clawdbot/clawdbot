@@ -5,6 +5,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { parseSqliteReliabilityCli } from "../../scripts/lib/sqlite-reliability-cli.js";
 import {
+  formatReliabilityStderr,
   STRESS_TABLE_SQL,
   type ReliabilityReport,
 } from "../../scripts/lib/sqlite-reliability-contract.js";
@@ -113,6 +114,17 @@ async function waitForChildExit(child: ChildProcess): Promise<{
 }
 
 describe("scripts/bench-sqlite-reliability", () => {
+  it.each([
+    ["whitespace-only stderr", " \n\t ", ""],
+    [
+      "multiline quoted stderr",
+      ' first line\n"quoted"\\path ',
+      ' stderr="first line\\n\\"quoted\\"\\\\path"',
+    ],
+  ])("formats %s", (_name, stderr, expected) => {
+    expect(formatReliabilityStderr(stderr)).toBe(expected);
+  });
+
   it("detects a transient WAL overrun before the file shrinks", async () => {
     const walPath = path.join(
       tempDirs.make("openclaw-sqlite-reliability-test-"),

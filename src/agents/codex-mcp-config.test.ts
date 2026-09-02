@@ -6,6 +6,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   buildCodexMcpServersConfig,
+  loadCodexBundleMcpApprovalConfig,
   loadCodexBundleMcpThreadConfigCore,
 } from "./codex-mcp-config.js";
 import { testing as resolverTesting } from "./mcp-connection-resolver.js";
@@ -120,6 +121,7 @@ describe("loadCodexBundleMcpThreadConfigCore", () => {
           weather: {
             command: "node",
             env: { PLUGIN_DATA: dataDir },
+            codex: { defaultToolsApprovalMode: "prompt" },
           },
           broken: { command: "node", env: { PLUGIN_DATA: collisionPath } },
         },
@@ -131,6 +133,11 @@ describe("loadCodexBundleMcpThreadConfigCore", () => {
       },
     });
 
+    expect(loadCodexBundleMcpApprovalConfig({ workspaceDir: "/workspace" })).toEqual({
+      weather: { default_tools_approval_mode: "prompt" },
+      broken: { default_tools_approval_mode: undefined },
+    });
+    await expect(fs.stat(dataDir)).rejects.toMatchObject({ code: "ENOENT" });
     const loaded = loadCodexBundleMcpThreadConfigCore({ workspaceDir: "/workspace" });
 
     expect((await fs.stat(dataDir)).isDirectory()).toBe(true);

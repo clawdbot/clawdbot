@@ -22,6 +22,7 @@ import { readPackageVersion } from "./package-json.js";
 import { applyPathPrepend } from "./path-prepend.js";
 import { parseSemver } from "./runtime-guard.js";
 import { collectGitRuntimeErrors, type GitRuntimeIdentity } from "./update-git-runtime.js";
+import type { UpdateRecovery } from "./update-recovery.js";
 
 /** Supported package managers for OpenClaw global install and update flows. */
 export type GlobalInstallManager = "npm" | "pnpm" | "bun";
@@ -311,6 +312,27 @@ export async function collectInstalledGlobalPackageErrors(params: {
     );
   }
   return errors;
+}
+
+// Call only before potentially state-mutating work. Package file validity
+// cannot undo lifecycle state changes or a rejected Doctor result.
+export async function verifyPackageUpdateRecovery(
+  root: string | null | undefined,
+): Promise<UpdateRecovery> {
+  const version = root ? await readPackageVersion(root).catch(() => null) : null;
+  if (
+    root &&
+    version &&
+    (
+      await collectInstalledGlobalPackageErrors({
+        packageRoot: root,
+        expectedVersion: version,
+      }).catch(() => ["verification failed"])
+    ).length === 0
+  ) {
+    return { serviceRestartSafe: true, version };
+  }
+  return { serviceRestartSafe: false, reason: "runtime-verification-failed" };
 }
 
 async function collectSourceCheckoutInstallErrors(packageRoot: string): Promise<string[]> {

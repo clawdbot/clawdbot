@@ -6,6 +6,7 @@ import "../../components/modal-dialog.ts";
 import { renderPicker } from "../../components/select-picker.ts";
 import {
   renderSettingsEmpty,
+  renderSettingsLoadingSkeleton,
   renderSettingsSection,
   renderSettingsStatus,
 } from "../../components/settings-ui.ts";
@@ -197,7 +198,7 @@ export function renderChannelPairingQueue(props: ChannelsProps) {
                 : nothing}
               ${snapshot ? renderFilters(props) : nothing}
               ${props.pairingLoading && !snapshot
-                ? html`<div class="settings-row">${t("common.loading")}</div>`
+                ? renderSettingsLoadingSkeleton({ rows: 2 })
                 : accounts.length === 0
                   ? renderSettingsEmpty(t("channels.pairing.noAccounts"))
                   : requests.length === 0

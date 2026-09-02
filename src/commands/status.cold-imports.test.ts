@@ -54,6 +54,6 @@ describe("status cold imports", () => {
     ]);
 
     expect(scan.scanStatus).toBeTypeOf("function");
-    expect(textRuntime.formatPluginCompatibilityNotice).toBeTypeOf("function");
+    expect(textRuntime.buildStatusCommandReportData).toBeTypeOf("function");
   });
 });

@@ -149,7 +149,7 @@ export function registerCodexEventProjectorTestLifecycle(): void {
   });
 }
 
-export async function createProjectorWithHooks() {
+export async function createProjectorWithHooks(options?: CodexAppServerEventProjectorOptions) {
   const beforeCompaction = vi.fn();
   const afterCompaction = vi.fn();
   initializeGlobalHookRunner(
@@ -158,7 +158,7 @@ export async function createProjectorWithHooks() {
       { hookName: "after_compaction", handler: afterCompaction },
     ]),
   );
-  const projector = await createProjector();
+  const projector = await createProjector(undefined, options);
   return { projector, beforeCompaction, afterCompaction };
 }
 

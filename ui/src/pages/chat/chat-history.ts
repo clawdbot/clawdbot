@@ -1,3 +1,4 @@
+import type { ChatEvent } from "../../../../packages/gateway-protocol/src/schema/logs-chat.ts";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { AgentsListResult } from "../../api/types.ts";
 import {
@@ -21,6 +22,8 @@ type LoadChatHistoryOptions = {
   supersedeInFlight?: boolean;
   startup?: boolean;
 };
+
+type ChatErrorDetail = Extract<ChatEvent, { state: "error" }>["errorDetail"];
 
 export async function loadChatHistory(
   state: ChatState,
@@ -187,6 +190,7 @@ export type ChatEventPayload = {
   deltaText?: string;
   replace?: boolean;
   errorMessage?: string;
+  errorDetail?: ChatErrorDetail;
   stopReason?: string;
   yielded?: true;
 };

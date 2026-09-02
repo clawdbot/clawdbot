@@ -7,7 +7,10 @@ import {
   isRequestBodyLimitError,
   readRequestBodyWithLimit,
 } from "openclaw/plugin-sdk/webhook-ingress";
-import { runDetachedWebhookWork } from "openclaw/plugin-sdk/webhook-request-guards";
+import {
+  runDetachedWebhookWork,
+  sendHttpRequestRejection,
+} from "openclaw/plugin-sdk/webhook-request-guards";
 import {
   A2aProtocolError,
   A2aRpcRequestSchema,
@@ -270,13 +273,27 @@ export function createA2aHttpHandler(params: A2aHttpHandlerParams) {
     try {
       body = await readRequestBodyWithLimit(request, {
         maxBytes: MAX_REQUEST_BODY_BYTES,
+        // Defer destruction so the rejection below reaches the peer before the close.
         destroyOnLimit: false,
       });
     } catch (error) {
-      if (isRequestBodyLimitError(error, "PAYLOAD_TOO_LARGE")) {
-        response.setHeader("connection", "close");
-        response.once("finish", () => request.destroy());
-        writeJsonResponse(response, 413, { error: "Request body exceeds the 1 MiB limit" });
+      const bodyRejection = isRequestBodyLimitError(error, "PAYLOAD_TOO_LARGE")
+        ? { statusCode: 413, body: { error: "Request body exceeds the 1 MiB limit" } }
+        : isRequestBodyLimitError(error, "REQUEST_BODY_TIMEOUT")
+          ? {
+              statusCode: 200,
+              body: createRpcError(null, -32000, "Request body could not be read"),
+            }
+          : undefined;
+      if (bodyRejection) {
+        response.setHeader("cache-control", "no-store");
+        await sendHttpRequestRejection(
+          request,
+          response,
+          bodyRejection.statusCode,
+          JSON.stringify(bodyRejection.body),
+          "application/json; charset=utf-8",
+        );
         return true;
       }
       writeJsonResponse(
