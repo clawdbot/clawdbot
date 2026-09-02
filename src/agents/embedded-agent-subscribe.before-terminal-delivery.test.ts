@@ -2,6 +2,7 @@
 // release deferred assistant events and block replies at run completion.
 import { describe, expect, it, vi } from "vitest";
 import { getReplyPayloadMetadata } from "../auto-reply/reply-payload.js";
+import type { AssistantMessage } from "../llm/types.js";
 import {
   emitAssistantTextDeltaAndEnd,
   createSubscribedSessionHarness,
@@ -25,6 +26,73 @@ function hasLifecycleEndEvent(calls: Array<unknown[]>): boolean {
 }
 
 describe("subscribeEmbeddedAgentSession before terminal delivery", () => {
+  it("streams commentary before tools while retaining the revisable final reply gate", async () => {
+    const onAgentEvent = vi.fn();
+    const onBeforeTerminalDelivery = vi.fn(async () => ({
+      suppressTerminalDelivery: true as const,
+    }));
+    const { emit, subscription } = createSubscribedSessionHarness({
+      runId: "run-before-terminal-commentary",
+      onAgentEvent,
+      onBeforeTerminalDelivery,
+      blockReplyBreak: "message_end",
+    });
+    const commentaryMessage = {
+      role: "assistant",
+      content: [
+        {
+          type: "text",
+          text: "Checking current state.",
+          textSignature: JSON.stringify({ v: 1, id: "progress", phase: "commentary" }),
+        },
+      ],
+      stopReason: "toolUse",
+    } as AssistantMessage;
+
+    emit({ type: "message_start", message: commentaryMessage });
+    emit({ type: "message_end", message: commentaryMessage });
+
+    expect(onAgentEvent).toHaveBeenCalledWith({
+      stream: "item",
+      data: expect.objectContaining({
+        kind: "preamble",
+        progressText: "Checking current state.",
+      }),
+    });
+    emit({
+      type: "tool_execution_start",
+      toolName: "read",
+      toolCallId: "tool-after-commentary",
+      args: {},
+    });
+    const preambleCallIndex = onAgentEvent.mock.calls.findIndex(
+      ([event]) => event.stream === "item" && event.data?.kind === "preamble",
+    );
+    const toolCallIndex = onAgentEvent.mock.calls.findIndex(
+      ([event]) => event.stream === "item" && event.data?.kind === "tool",
+    );
+    expect(preambleCallIndex).toBeGreaterThanOrEqual(0);
+    expect(toolCallIndex).toBeGreaterThan(preambleCallIndex);
+
+    emitAssistantTextDeltaAndEnd({ emit, text: "Visible final answer." });
+    expect(hasAssistantEvent(onAgentEvent.mock.calls)).toBe(false);
+
+    emit({
+      type: "agent_end",
+      messages: [
+        {
+          role: "assistant",
+          content: [{ type: "text", text: "Visible final answer." }],
+          stopReason: "stop",
+        },
+      ],
+      willRetry: false,
+    });
+
+    await subscription.waitForPendingEvents();
+    expect(hasAssistantEvent(onAgentEvent.mock.calls)).toBe(false);
+  });
+
   it("suppresses deferred block replies when the terminal gate requests a revision", async () => {
     const onBlockReply = vi.fn();
     const onAgentEvent = vi.fn();
