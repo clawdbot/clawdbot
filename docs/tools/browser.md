@@ -321,8 +321,10 @@ main model can read the screenshot directly.
   config. A profile you declare by hand must set `cdpPort` itself, or `cdpUrl`
   for a remote endpoint: the schema rejects an `openclaw` or `clawd` profile
   that sets neither with `Profile must set cdpPort or cdpUrl`.
-  `existing-session` profiles take the endpoint from `cdpUrl` and ignore
-  `cdpPort`; `extension` profiles own their relay port and reject `cdpUrl`.
+  `existing-session` profiles use `cdpUrl` unless valid endpoint arguments in
+  `mcpArgs` override it; see [Custom Chrome MCP launch](/tools/browser#custom-chrome-mcp-launch).
+  They ignore `cdpPort`; `extension` profiles own their relay port and reject
+  `cdpUrl`.
 - Remote and `attachOnly` CDP reachability, WebSocket handshakes, and local
   managed-Chrome startup use built-in deadlines.
 - Repeated managed Chrome launch/readiness failures are circuit-broken per

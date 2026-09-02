@@ -519,6 +519,8 @@ See [Plugins](/tools/plugin).
   behind a DevTools HTTP(S) discovery endpoint or direct WS(S) endpoint. In that
   mode OpenClaw passes the endpoint to Chrome MCP instead of using auto-connect;
   `userDataDir` is ignored for Chrome MCP launch arguments.
+  Valid endpoint arguments in `mcpArgs` take precedence over `cdpUrl`; see
+  [Custom Chrome MCP launch](/tools/browser#custom-chrome-mcp-launch).
 - `existing-session` profiles keep the current Chrome MCP route limits:
   snapshot/ref-driven actions instead of CSS-selector targeting, one-file upload
   hooks, no dialog timeout overrides, no `wait --load networkidle`, and no
