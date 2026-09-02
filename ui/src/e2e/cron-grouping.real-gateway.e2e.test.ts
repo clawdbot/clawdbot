@@ -80,7 +80,7 @@ suite.define(() => {
             await page.locator("#cron-group").fill(group);
             await page.locator("#cron-tags").fill(tags);
             await page.locator("#cron-payload-text").fill(`${name} fired`);
-            await page.locator("wa-select#cron-payload-kind").click();
+            await page.locator("wa-select#cron-payload-kind").click({ force: true });
             await page.getByRole("option", { name: "Post to main timeline", exact: true }).click();
             await page.locator('[data-test-id="cron-submit"]').click();
             await page
