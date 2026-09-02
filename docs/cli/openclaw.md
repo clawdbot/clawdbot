@@ -123,6 +123,13 @@ operator approval flow used by Ask OpenClaw; the approval summary names the
 requesting agent. OpenClaw remains the executor, and approved creation records
 that requesting agent as the new agent's creator.
 
+Delegated creation remains tied to the requesting run. If that run ends or loses
+authority during preparation, OpenClaw stops before starting the next persistent
+write. A write already in progress may finish, and workspace files created earlier
+are not automatically removed. Check `openclaw agents list` before retrying from
+an active run; an agent whose creation already completed is not removed when its
+requesting run ends.
+
 Doctor repairs are unavailable inside OpenClaw because they can rewrite the provider, authentication, or default-agent inference route powering the session. Exit OpenClaw and run `openclaw doctor --fix` in a terminal. Read-only `doctor` remains available inside OpenClaw.
 
 New agents inherit the live-verified default inference route. The agent ids `openclaw` and `crestodian` are reserved for the system agent and cannot be created as normal agents. The retired id remains blocked so an old config cannot claim it.
@@ -210,6 +217,16 @@ setup workspace ~/Projects/work
 
 `setup` preserves the verified effective model. It does not configure or
 replace inference.
+
+Delegated setup remains tied to the requesting run through configuration,
+workspace, and session preparation. If that run ends or loses authority,
+OpenClaw stops before starting the next persistent effect. Earlier completed
+effects remain, including an agent whose creation already finished; setup may
+still be incomplete. Check `openclaw agents list` and `status`, then request
+setup again from an active run and approve the new request, or finish directly
+with `openclaw setup` on the Gateway host. If cancellation deferred legacy
+history migration for a newly named agent, the next Gateway startup retries it;
+use `openclaw doctor --fix` on the same state/config to finish it sooner.
 
 If inference is missing or its live check fails, leave OpenClaw and run `openclaw onboard`. Guided onboarding tries the configured model first, then authenticated subscription CLIs, API keys, and remaining supported CLIs; it asks each candidate for a real reply and persists only a passing route. OpenClaw starts immediately after that boundary and can then configure the workspace, Gateway, channels, agents, plugins, and other optional features.
 

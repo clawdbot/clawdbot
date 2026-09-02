@@ -277,9 +277,11 @@ describe("xai code_execution tool", () => {
     ).rejects.toThrow("xAI code execution failed: malformed JSON response");
   });
 
-  it("rejects code_execution success JSON without answer text", async () => {
+  it("reports missing code_execution answers without blaming JSON decoding", async () => {
     const mockFetch = vi.fn((_input?: unknown, _init?: unknown) =>
-      Promise.resolve(jsonResponse({ output: [{ type: "code_interpreter_call" }] })),
+      Promise.resolve(
+        jsonResponse({ status: "incomplete", output: [{ type: "code_interpreter_call" }] }),
+      ),
     );
     global.fetch = withFetchPreconnect(mockFetch);
     const tool = createCodeExecutionTool({
@@ -302,6 +304,6 @@ describe("xai code_execution tool", () => {
       tool?.execute?.("code-execution:missing-text", {
         task: "Calculate the mean of [40, 42, 44]",
       }),
-    ).rejects.toThrow("xAI code execution failed: malformed JSON response");
+    ).rejects.toThrow("xAI code execution failed: no answer text returned; try a simpler request");
   });
 });

@@ -2,7 +2,6 @@
 import { isSensitiveUrlConfigPath } from "@openclaw/net-policy/redact-sensitive-url";
 import { VERSION } from "../version.js";
 import { FIELD_HELP } from "./schema.help.js";
-import type { ConfigUiHints } from "./schema.hints.js";
 import {
   applySensitiveUrlHints,
   buildBaseHints,
@@ -14,6 +13,7 @@ import {
   asSchemaObject,
   cloneSchema,
   type ConfigJsonSchemaObject as JsonSchemaObject,
+  type ConfigSchemaResponse,
 } from "./schema.shared.js";
 import { applyDerivedTags } from "./schema.tags.js";
 import { applyResolvedConfigTierHints } from "./schema.tiers.js";
@@ -94,20 +94,13 @@ function applyNodeDocumentation(node: JsonSchemaObject, pathCandidates: readonly
   }
 }
 
-type BaseConfigSchemaResponse = {
-  schema: ConfigSchema;
-  uiHints: ConfigUiHints;
-  version: string;
-  generatedAt: string;
-};
-
-type BaseConfigSchemaStablePayload = Omit<BaseConfigSchemaResponse, "generatedAt">;
+type BaseConfigSchemaStablePayload = Omit<ConfigSchemaResponse, "generatedAt">;
 
 function preparePublicSchema(schema: ConfigSchema): ConfigSchema {
-  const next = cloneSchema(schema);
-  const root = asSchemaObject(next);
+  // Zod returns an independent JSON tree; prepare it before publishing the cache.
+  const root = asSchemaObject(schema);
   if (!root || !root.properties) {
-    return next;
+    return schema;
   }
   // Allow `$schema` in config files for editor tooling, but hide it from the
   // Control UI form schema so it does not show up as a configurable section.
@@ -120,18 +113,14 @@ function preparePublicSchema(schema: ConfigSchema): ConfigSchema {
     // Keep plugin config permissive without advertising an untyped lookup wildcard.
     channelsNode.additionalProperties = true;
   }
-  return next;
+  return schema;
 }
 
 let baseConfigSchemaStablePayload: BaseConfigSchemaStablePayload | null = null;
 
 function computeBaseConfigSchemaStablePayload(): BaseConfigSchemaStablePayload {
   if (baseConfigSchemaStablePayload) {
-    return {
-      schema: cloneSchema(baseConfigSchemaStablePayload.schema),
-      uiHints: cloneSchema(baseConfigSchemaStablePayload.uiHints),
-      version: baseConfigSchemaStablePayload.version,
-    };
+    return baseConfigSchemaStablePayload;
   }
   const schema = OpenClawSchema.toJSONSchema({
     io: "input",
@@ -161,20 +150,16 @@ function computeBaseConfigSchemaStablePayload(): BaseConfigSchemaStablePayload {
     version: VERSION,
   } satisfies BaseConfigSchemaStablePayload;
   baseConfigSchemaStablePayload = stablePayload;
-  return {
-    schema: cloneSchema(stablePayload.schema),
-    uiHints: cloneSchema(stablePayload.uiHints),
-    version: stablePayload.version,
-  };
+  return stablePayload;
 }
 
 export function computeBaseConfigSchemaResponse(params?: {
   generatedAt?: string;
-}): BaseConfigSchemaResponse {
+}): ConfigSchemaResponse {
   const stablePayload = computeBaseConfigSchemaStablePayload();
   return {
-    schema: stablePayload.schema,
-    uiHints: stablePayload.uiHints,
+    schema: cloneSchema(stablePayload.schema),
+    uiHints: cloneSchema(stablePayload.uiHints),
     version: stablePayload.version,
     generatedAt: params?.generatedAt ?? new Date().toISOString(),
   };

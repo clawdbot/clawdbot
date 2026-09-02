@@ -162,9 +162,7 @@ export async function downloadGeneratedMusicAsset(params: {
         new Error(`${params.provider} generated music download exceeds ${maxBytesLocal} bytes`),
     };
     const buffer = params.validateBinaryResponse
-      ? Buffer.from(
-          await readProviderBinaryResponse(handle.response, deadline.label, "audio", readOptions),
-        )
+      ? await readProviderBinaryResponse(handle.response, deadline.label, "audio", readOptions)
       : await readResponseWithLimit(handle.response, maxBytes, readOptions);
     return {
       buffer,

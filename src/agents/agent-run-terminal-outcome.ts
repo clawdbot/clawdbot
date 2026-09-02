@@ -621,6 +621,11 @@ export function buildAgentRunTerminalOutcomeFromLifecycleEvent(input: {
   return stopReason && outcome.stopReason !== stopReason ? { ...outcome, stopReason } : outcome;
 }
 
+/** Reads the outer execution owner's publication fact, independent of outcome. */
+export function hasExecutionSettlement(data?: Record<string, unknown>): boolean {
+  return data?.executionSettled === true;
+}
+
 /** True for lifecycle events that cannot be followed by a same-run retry. */
 export function isDefinitiveRunLifecycle(input: AgentRunLifecycleInput) {
   if (input.phase === "end") {
@@ -633,7 +638,11 @@ export function isDefinitiveRunLifecycle(input: AgentRunLifecycleInput) {
     phase: "error",
     data: input.data,
   });
-  return input.data?.fallbackExhaustedFailure === true || outcome.reason !== "failed";
+  return (
+    hasExecutionSettlement(input.data) ||
+    input.data?.fallbackExhaustedFailure === true ||
+    outcome.reason !== "failed"
+  );
 }
 
 function hasNestedAbortReason(value: unknown, matches: (candidate: unknown) => boolean): boolean {

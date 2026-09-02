@@ -7,6 +7,10 @@ import {
   waitForMcpLoopbackToolCallCaptureIdle,
 } from "../../gateway/mcp-http.loopback-runtime.js";
 import { shouldUseInternalSourceReplySink } from "../../infra/outbound/internal-source-reply.js";
+import {
+  normalizeAcceptedSessionSpawnResult,
+  type AcceptedSessionSpawn,
+} from "../accepted-session-spawn.js";
 import type { CliOutput, CliToolUseStartDelta } from "../cli-output-contracts.js";
 import { readEmbeddedMessageDeliveryFact } from "../embedded-agent-message-delivery.js";
 import {
@@ -98,6 +102,7 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
   const toolMediaUrlKeys = new Set<string>();
   let toolAudioAsVoice = false;
   let toolTrustedLocalMedia = false;
+  const acceptedSessionSpawns: AcceptedSessionSpawn[] = [];
   const matchesCliLoopbackCall = (
     toolName: string,
     toolArgs: Record<string, unknown>,
@@ -449,6 +454,16 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
           markCliLoopbackCallsAmbiguous(candidates);
         }
         const toolName = normalizeCliMessagingToolName(call.toolName);
+        const acceptedSessionSpawn =
+          toolName === "sessions_spawn" && call.outcome === "completed" && "result" in call
+            ? normalizeAcceptedSessionSpawnResult(call.result)
+            : null;
+        if (
+          acceptedSessionSpawn &&
+          acceptedSessionSpawns.length < CLI_LOOPBACK_CORRELATION_MAX_CALLS
+        ) {
+          acceptedSessionSpawns.push(acceptedSessionSpawn);
+        }
         if (isMessagingToolDeliveryAction(toolName, call.args)) {
           commitMessagingToolResult({
             toolName,
@@ -641,6 +656,7 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
     toolMediaUrls,
     toolAudioAsVoice,
     toolTrustedLocalMedia,
+    acceptedSessionSpawns,
   });
   return {
     beginGatewayCapture,
@@ -676,6 +692,9 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
           : {}),
         ...(current.toolAudioAsVoice ? { toolAudioAsVoice: true } : {}),
         ...(current.toolTrustedLocalMedia ? { toolTrustedLocalMedia: true } : {}),
+        ...(current.acceptedSessionSpawns.length > 0
+          ? { acceptedSessionSpawns: current.acceptedSessionSpawns.slice() }
+          : {}),
       };
     },
     attachDeliveryEvidence(error: unknown) {

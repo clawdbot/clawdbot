@@ -15,6 +15,8 @@ import {
   collectAllLiveTestFiles,
   parseLiveShardArgs,
   removeLiveShardReportFile,
+  resolveLiveShardBuildEntrypoint,
+  resolveLiveShardBuildProfile,
   resolveLiveShardPreparation,
   selectLiveShardFiles,
   validateLiveShardReportPayload,
@@ -249,9 +251,46 @@ describe("scripts/test-live-shard", () => {
         OPENCLAW_PLUGIN_LIFECYCLE_TRACE: "1",
       },
     });
+  });
+
+  it.each(["native-live-src-gateway-core", "native-live-src-gateway-backends"])(
+    "prepares the source gateway runtime before %s starts Vitest",
+    (shard) => {
+      expect(resolveLiveShardPreparation(selectLiveShardFiles(shard, allFiles))).toEqual({
+        env: {},
+        profile: "sourcePerformance",
+        requiredArtifact: "dist/.runtime-postbuildstamp",
+      });
+    },
+  );
+
+  it("prepares system-agent gateway tests without building unrelated source shards", () => {
+    expect(resolveLiveShardPreparation(["src/system-agent/rescue-channel.live.test.ts"])).toEqual({
+      env: {},
+      profile: "sourcePerformance",
+      requiredArtifact: "dist/.runtime-postbuildstamp",
+    });
     expect(
-      resolveLiveShardPreparation(selectLiveShardFiles("native-live-src-gateway-core", allFiles)),
+      resolveLiveShardPreparation(selectLiveShardFiles("native-live-src-infra", allFiles)),
     ).toBeNull();
+  });
+
+  it("runs the frozen candidate's available build entrypoint and advertised profile", () => {
+    expect(resolveLiveShardBuildEntrypoint((file) => file === "scripts/build-all.mts")).toEqual([
+      "--import",
+      "tsx",
+      "scripts/build-all.mts",
+    ]);
+    expect(resolveLiveShardBuildEntrypoint((file) => file === "scripts/build-all.mjs")).toEqual([
+      "scripts/build-all.mjs",
+    ]);
+    expect(() => resolveLiveShardBuildEntrypoint(() => false)).toThrow(
+      "Live test shard cannot find scripts/build-all.{mts,mjs}",
+    );
+    expect(
+      resolveLiveShardBuildProfile("sourcePerformance", "Profiles:\n  full\n  sourcePerformance\n"),
+    ).toBe("sourcePerformance");
+    expect(resolveLiveShardBuildProfile("sourcePerformance", "Profiles:\n  full\n")).toBe("full");
   });
 
   it.each(["native-live-src-agents", "native-live-extensions-openai"])(
@@ -452,6 +491,8 @@ describe("scripts/test-live-shard", () => {
 
   it.each([
     ["src/skills/workshop/experience-review.live.test.ts", "OPENCLAW_LIVE_SKILL_EXPERIENCE_REVIEW"],
+    ["src/agents/subagent-announce.live.test.ts", "OPENCLAW_LIVE_SUBAGENT_E2E"],
+    ["src/agents/subagents/announce/subagent-announce.live.test.ts", "OPENCLAW_LIVE_SUBAGENT_E2E"],
     [
       "src/agents/sessions/agent-session.openai-compaction.live.test.ts",
       "OPENCLAW_LIVE_OPENAI_COMPACTION",
@@ -650,8 +691,11 @@ describe("scripts/test-live-shard", () => {
         runner.kill("SIGTERM");
 
         await expect(waitForClose(runner)).resolves.toEqual({ code: null, signal: "SIGTERM" });
-        await waitFor(() => existsSync(signaledPath), 5_000);
-        expect(readFileSync(signaledPath, "utf8")).toBe("SIGTERM");
+        // Creation precedes the synchronous write; wait for the signal receipt itself.
+        await waitFor(
+          () => existsSync(signaledPath) && readFileSync(signaledPath, "utf8") === "SIGTERM",
+          5_000,
+        );
         await waitFor(() => !isProcessAlive(childPid), 5_000);
         await waitFor(() => !isProcessAlive(descendantPid), 5_000);
       } finally {

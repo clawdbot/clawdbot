@@ -1,9 +1,9 @@
 import { randomUUID } from "node:crypto";
 import { getRuntimeConfig } from "../../config/config.js";
 import { resolveNodeCommandAllowlist } from "../node-command-policy.js";
-import { resolveDevicePlacementEligibility } from "./device-placement-eligibility.js";
 import {
   createPlacementFailureActions,
+  isExactAttachedEnvironment,
   type WorkerActivationBarrier,
   type WorkerActiveDispatchPlacement,
   type WorkerDispatchEnvironmentService,
@@ -24,11 +24,14 @@ import {
   type WorkerPlacementMoveBarrier,
 } from "./placement-move-service.js";
 import type { WorkerPlacementRunnerAvailabilityReader } from "./placement-projector.js";
-import type {
-  WorkerPlacementReclaimBarriers,
-  WorkerReclaimPlacement,
+import {
+  matchesWorkerPlacementTarget,
+  type WorkerPlacementCancellationTarget,
+  type WorkerPlacementReclaimBarriers,
+  type WorkerPlacementPendingOperations,
+  type WorkerReclaimPlacement,
 } from "./placement-reclaim-contract.js";
-import { placementTurnOwner } from "./placement-record.js";
+import { placementTurnOwner, reportPlacementTransition } from "./placement-record.js";
 import {
   completeMovedWorkspaceTeardown,
   completeReclaimedWorkspaceTeardown,
@@ -70,10 +73,9 @@ type WorkerLocalDispatchBarrier = (params: {
   agentId: string;
   executionMode: WorkerPlacementDispatchRequest["executionMode"];
   authorize?: WorkerPlacementAuthorization;
+  signal?: AbortSignal;
   startDispatch: () => WorkerDispatchPlacement;
 }) => Promise<WorkerDispatchPlacement>;
-
-type WorkerDrainingDispatchPlacement = Extract<WorkerDispatchPlacement, { state: "draining" }>;
 
 type WorkerPlacementDispatchOptions = WorkerPlacementReclaimBarriers & {
   placements: WorkerDispatchPlacementStore;
@@ -120,36 +122,9 @@ type WorkerPlacementDispatchOptions = WorkerPlacementReclaimBarriers & {
   isCurrentNodePlacement?: WorkerNodePlacementAuthority;
 };
 
-function isExactAttachedEnvironment(
-  environment: ReturnType<WorkerDispatchEnvironmentService["get"]>,
-  placement: WorkerActiveDispatchPlacement | WorkerDrainingDispatchPlacement,
-): boolean {
-  return Boolean(
-    environment &&
-    environment.environmentId === placement.environmentId &&
-    environment.state === "attached" &&
-    environment.destroyRequestedAtMs === null &&
-    environment.ownerEpoch === placement.activeOwnerEpoch &&
-    environment.attachedSessionIds.length === 1 &&
-    environment.attachedSessionIds[0] === placement.sessionId,
-  );
-}
-
 export function createWorkerPlacementDispatchService(options: WorkerPlacementDispatchOptions) {
   const { environments, placements } = options;
   const failure = createPlacementFailureActions({ environments, placements });
-  let recoverPlacementMoves = async (): Promise<Set<string>> => new Set();
-
-  const reportTransition = (
-    observer: ((placement: WorkerDispatchPlacement) => void) | undefined,
-    placement: WorkerDispatchPlacement,
-  ): void => {
-    try {
-      observer?.(placement);
-    } catch {
-      // Reporting cannot overturn the durable placement transition.
-    }
-  };
 
   const startup = createWorkerPlacementDispatchStartup({
     placements,
@@ -161,7 +136,7 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
     resolveGitAuthor: options.resolveGitAuthor,
     resolveDevicePlacementRequirement: options.resolveDevicePlacementRequirement,
     isCurrentNodePlacement: options.isCurrentNodePlacement,
-    reportTransition,
+    reportTransition: reportPlacementTransition,
   });
 
   const recovery = createPlacementRecoveryActions({
@@ -174,7 +149,7 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
       ? { reportWorkspaceResultRecoveryFailure: options.reportWorkspaceResultRecoveryFailure }
       : {}),
     resolveWorkspaceResultConflict: options.resolveWorkspaceResultConflict,
-    recoverPlacementMoves: () => recoverPlacementMoves(),
+    recoverPlacementMoves: (environmentId) => moveService.recoverAll(environmentId),
     workspaceOperations: options.workspaceOperations,
     ...(options.prepareAcceptedWorkspacePublication
       ? { prepareAcceptedWorkspacePublication: options.prepareAcceptedWorkspacePublication }
@@ -188,29 +163,24 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
     request: WorkerPlacementDispatchRequest,
     onTransition?: (placement: WorkerDispatchPlacement) => void,
     authorize?: WorkerPlacementAuthorization,
+    signal?: AbortSignal,
   ): Promise<WorkerActiveDispatchPlacement> => {
+    const assertCurrent = signal
+      ? () => {
+          signal.throwIfAborted();
+          authorize?.();
+        }
+      : authorize;
     let placement: WorkerDispatchPlacement | undefined;
-    const validateDevicePlacement = async () => {
-      if (!request.deviceId) {
-        return;
-      }
-      const eligibility = await resolveDevicePlacementEligibility({
-        environmentService: environments,
-        deviceId: request.deviceId,
-        requirement: request.devicePlacement,
-        config: getRuntimeConfig(),
-      });
-      if (!eligibility.ok) {
-        throw new Error(eligibility.error);
-      }
-    };
     try {
+      signal?.throwIfAborted();
       placement = await options.runLocalBarrier({
         sessionId: request.sessionId,
         sessionKey: request.sessionKey,
         agentId: request.agentId,
         executionMode: request.executionMode,
-        authorize,
+        authorize: assertCurrent,
+        signal,
         startDispatch: () => {
           placement = placements.startDispatch({
             sessionId: request.sessionId,
@@ -218,7 +188,7 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
             agentId: request.agentId,
             executionMode: request.executionMode,
           });
-          reportTransition(onTransition, placement);
+          reportPlacementTransition(onTransition, placement);
           return placement;
         },
       });
@@ -240,10 +210,12 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
           );
         }
       }
-      await validateDevicePlacement();
+      await startup.validateDevicePlacement(request);
+      signal?.throwIfAborted();
       const localPath = await options.resolveWorkspacePath(request);
       // Workspace preparation yields; fence the current paired node again before durable provision.
-      await validateDevicePlacement();
+      await startup.validateDevicePlacement(request);
+      assertCurrent?.();
       const idempotencyKey =
         request.idempotencyKey ?? `session-dispatch:${request.sessionId}:${placement.generation}`;
       const expectedEnvironmentId = deriveEnvironmentIntent(idempotencyKey).environmentId;
@@ -254,7 +226,7 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
         expectedGeneration: placement.generation,
         patch: { environmentId: expectedEnvironmentId },
       });
-      reportTransition(onTransition, placement);
+      reportPlacementTransition(onTransition, placement);
       const environment = request.inheritedProfile
         ? await environments.createFromProfileSnapshot(
             {
@@ -265,12 +237,16 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
             idempotencyKey,
             request.machineClass,
             request.executionMode,
+            localPath,
+            signal,
           )
         : await environments.create(
             request.profileId,
             idempotencyKey,
             request.machineClass,
             request.executionMode,
+            localPath,
+            signal,
           );
       return await startup.continueProvisionedDispatch({
         request,
@@ -279,7 +255,8 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
         expectedEnvironmentId,
         localPath,
         onTransition,
-        authorize,
+        authorize: assertCurrent,
+        signal,
       });
     } catch (error) {
       try {
@@ -306,7 +283,7 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
       } finally {
         const finalPlacement = placements.get(request.sessionId);
         if (finalPlacement) {
-          reportTransition(onTransition, finalPlacement);
+          reportPlacementTransition(onTransition, finalPlacement);
         }
       }
       throw error;
@@ -318,6 +295,7 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
     moveIntent?: WorkerPlacementMoveIntent,
     authorize?: WorkerPlacementAuthorization,
     beforeDrain?: WorkerPlacementAuthorization,
+    onTransition?: (placement: WorkerDispatchPlacement) => void,
   ): Promise<WorkerReclaimPlacement> =>
     await options.runReclaimBarrier({
       ...request,
@@ -355,6 +333,7 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
         if (draining.state !== "draining") {
           throw new Error(`Session ${request.sessionKey} did not enter draining placement`);
         }
+        reportPlacementTransition(onTransition, draining);
         return draining;
       },
       reclaim: async (localPath, current, reauthorize) => {
@@ -537,7 +516,7 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
                   complete: () => {
                     // Destroy is the final privileged effect. Once it commits, durable placement
                     // completion must finish even if caller authority closes during the await.
-                    return moveIntent
+                    const completed = moveIntent
                       ? completeMovedWorkspaceTeardown({
                           placements,
                           turnClaim: reclaimClaim,
@@ -551,6 +530,9 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
                           environmentId: current.environmentId,
                           ownerEpoch: current.activeOwnerEpoch,
                         });
+                    // Publish the committed owner before cleanup refs and the tunnel can yield.
+                    reportPlacementTransition(onTransition, completed);
+                    return completed;
                   },
                   validateCompleted: (completed) => {
                     const expectedState = moveIntent ? "local" : "reclaimed";
@@ -609,6 +591,8 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
     authorize?: WorkerPlacementAuthorization,
     beforeDrain?: WorkerPlacementAuthorization,
     initial?: WorkerDispatchPlacement,
+    completedOperation?: WorkerPlacementCancellationTarget,
+    onTransition?: (placement: WorkerDispatchPlacement) => void,
   ): Promise<WorkerReclaimPlacement> => {
     authorize?.();
     beforeDrain?.();
@@ -616,19 +600,29 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
     if (current?.state === "reclaimed") {
       return current;
     }
+    // Only a captured operation's successful result makes local an idempotent Stop.
+    // Its real cleanup has settled, and the lifecycle and exact tuple still match.
+    if (current?.state === "local" && matchesWorkerPlacementTarget(current, completedOperation)) {
+      return current;
+    }
     try {
       // The preparation/placement wait can span another completed failed cleanup.
       // Its old generation classifies an idempotent result, never authorizes new teardown.
       const owned = current?.state === "local" && initial?.state === "failed" ? initial : current;
-      if (owned?.state === "failed") {
+      if (owned?.state === "failed" || owned?.state === "provisioning") {
         return await options.runFailedReclaimBarrier({
           ...request,
           authorize,
           reclaim: async (reauthorize) => {
-            const failedPlacement = placements.get(request.sessionId);
+            let failedPlacement = placements.get(request.sessionId);
+            if (owned.state === "provisioning") {
+              failedPlacement = failure.cancelProvisioning(failedPlacement, initial);
+              reportPlacementTransition(onTransition, failedPlacement);
+            }
             // A preceding cleanup can finish while this request waits for the lifecycle fence.
             if (
               failedPlacement?.state === "local" &&
+              owned.state === "failed" &&
               failedPlacement.generation === owned.generation + 1 &&
               failedPlacement.sessionKey === request.sessionKey &&
               failedPlacement.agentId === request.agentId
@@ -660,11 +654,12 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
             if (local.state !== "local") {
               throw new Error("Failed cloud worker reclaim did not produce a local placement");
             }
+            reportPlacementTransition(onTransition, local);
             return local;
           },
         });
       }
-      return await reclaimOnce(request, undefined, authorize, beforeDrain);
+      return await reclaimOnce(request, undefined, authorize, beforeDrain, onTransition);
     } catch (error) {
       // Another teardown path can win after this call has crossed its durable completion fence.
       // Report the committed terminal state instead of leaking a stale tunnel error to callers.
@@ -683,14 +678,29 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
     serialize: (
       run: () => Promise<WorkerReclaimPlacement>,
     ) => Promise<WorkerReclaimPlacement> = async (run) => await run(),
+    pendingOperations?: WorkerPlacementPendingOperations,
+    onTransition?: (placement: WorkerDispatchPlacement) => void,
   ): Promise<WorkerReclaimPlacement> => {
     const initial = placements.get(request.sessionId);
+    if (initial) {
+      reportPlacementTransition(onTransition, initial);
+    }
     return await options.runReclaimPreparation({
       ...request,
       authorize,
       beforeDrain,
+      pendingOperations,
       run: (reauthorize) =>
-        serialize(() => reclaimCurrent(request, reauthorize, beforeDrain, initial)),
+        serialize(() =>
+          reclaimCurrent(
+            request,
+            reauthorize,
+            beforeDrain,
+            initial,
+            pendingOperations?.completedPlacement(),
+            onTransition,
+          ),
+        ),
     });
   };
 
@@ -701,12 +711,12 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
     environments,
     runMoveBarrier: options.runMoveBarrier,
     dispatch,
-    reclaimSource: reclaimOnce,
+    reclaimSource: (request, intent, authorize, onTransition) =>
+      reclaimOnce(request, intent, authorize, undefined, onTransition),
     validateAbandonSource: abandonment.validateAbandonSource,
     abandonSource: abandonment.abandonSource,
     resolveDestination: options.resolveMoveDestination,
   });
-  recoverPlacementMoves = moveService.recoverAll;
 
   return {
     dispatch,

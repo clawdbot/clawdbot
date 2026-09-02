@@ -7,7 +7,6 @@ import { retireStoredComposerDrafts } from "./outbox-store-retirement.ts";
 import {
   readProjectedOutboxStore,
   readStoredOutboxStore,
-  resolveStoredChatOutboxScope,
   storedChatOutboxScopeKey,
   storageTargetForGateway,
   subscribeStoredChatOutboxChanges,
@@ -149,12 +148,6 @@ describe("stored outbox summaries", () => {
         }),
       );
       expect(summarizeStoredChatOutboxes({ settings: { gatewayUrl } }).total).toBe(1);
-      expect(
-        resolveStoredChatOutboxScope(
-          { settings: { gatewayUrl }, agentsList: null, hello: null },
-          "workspace",
-        ),
-      ).toEqual({ sessionKey: "workspace" });
     }
 
     sessionStorage.clear();
@@ -164,12 +157,6 @@ describe("stored outbox summaries", () => {
     unsubscribe();
 
     for (const gatewayUrl of gatewayUrls) {
-      expect(
-        resolveStoredChatOutboxScope(
-          { settings: { gatewayUrl }, agentsList: null, hello: null },
-          "workspace",
-        ),
-      ).toEqual({ sessionKey: "workspace" });
       expect(summarizeStoredChatOutboxes({ settings: { gatewayUrl } }).total).toBe(0);
     }
     expect(listener).toHaveBeenCalledOnce();
@@ -290,7 +277,76 @@ describe("stored outbox summaries", () => {
     unsubscribe();
   });
 
-  it("lists only non-empty drafts under the same scope used by sidebar sessions", () => {
+  it.each([
+    {
+      name: "named sessions before defaults",
+      state: { hello: null },
+      storedKey: "thread-draft\u0000agent:main",
+      present: ["thread-draft"],
+      absent: ["agent:main:thread-draft"],
+    },
+    {
+      name: "unresolved main before defaults",
+      state: { hello: null },
+      storedKey: "main\u0000agent:@unresolved",
+      present: ["main"],
+      absent: ["agent:main:main"],
+    },
+    {
+      name: "configured default-main aliases",
+      state: {
+        assistantAgentId: "previous",
+        agentsList: { defaultId: "work", mainKey: "workspace" },
+      },
+      storedKey: "agent:work:workspace\u0000agent:work",
+      present: ["main", "workspace", "agent:work:main", "agent:work:workspace"],
+      absent: ["agent:previous:main"],
+    },
+    {
+      name: "qualified cross-agent main aliases",
+      state: { agentsList: { defaultId: "main", mainKey: "workspace" } },
+      storedKey: "agent:work:workspace\u0000agent:work",
+      present: ["agent:work:main", "agent:work:workspace"],
+      absent: ["main", "workspace", "agent:main:workspace"],
+    },
+    {
+      name: "raw global and qualified selected-agent aliases",
+      state: {
+        assistantAgentId: "work",
+        agentsList: { defaultId: "main", mainKey: "workspace", scope: "global" },
+      },
+      storedKey: "global\u0000agent:work",
+      present: ["global", "agent:work:main", "agent:work:workspace"],
+      absent: ["main", "workspace", "agent:main:main", "agent:work:global"],
+    },
+    {
+      name: "global default-main aliases with another agent selected",
+      state: {
+        assistantAgentId: "work",
+        agentsList: { defaultId: "main", mainKey: "workspace", scope: "global" },
+      },
+      storedKey: "global\u0000agent:main",
+      present: ["main", "workspace", "agent:main:main"],
+      absent: ["global", "agent:work:main"],
+    },
+    {
+      name: "qualified global-named session",
+      state: {
+        assistantAgentId: "work",
+        agentsList: { defaultId: "main", mainKey: "workspace", scope: "global" },
+      },
+      storedKey: "agent:work:global\u0000agent:work",
+      present: ["agent:work:global"],
+      absent: ["global", "main", "agent:work:main"],
+    },
+    {
+      name: "opaque qualified session casing",
+      state: { agentsList: { defaultId: "main", mainKey: "main" } },
+      storedKey: "agent:work:matrix:channel:!Room:Server\u0000agent:work",
+      present: ["agent:work:matrix:channel:!Room:Server", "Agent:Work:MATRIX:CHANNEL:!Room:Server"],
+      absent: ["agent:work:matrix:channel:!room:server"],
+    },
+  ])("queries draft and attention snapshots for $name", ({ state, storedKey, present, absent }) => {
     const gatewayUrl = "ws://gateway.test/control";
     sessionStorage.setItem(
       `openclaw.control.chatComposer.v4:${encodeURIComponent(gatewayUrl)}`,
@@ -299,9 +355,12 @@ describe("stored outbox summaries", () => {
         recovery: {},
         gatewayOwner: gatewayUrl,
         sessions: {
-          "thread-draft\u0000agent:main": {
+          [storedKey]: {
             draft: "finish this message",
             draftRevision: 3,
+            queue: [
+              { id: "failed", text: "retry this message", createdAt: 3, sendState: "failed" },
+            ],
             updatedAt: 3,
           },
           "thread-empty\u0000agent:main": { draftRevision: 2, updatedAt: 2 },
@@ -312,11 +371,20 @@ describe("stored outbox summaries", () => {
         },
       }),
     );
-    const state = { settings: { gatewayUrl } };
+    const summary = summarizeStoredChatOutboxes({ ...state, settings: { gatewayUrl } });
+    const read = vi.spyOn(sessionStorage, "getItem");
+    sessionStorage.clear();
 
-    expect([...summarizeStoredChatOutboxes(state).draftScopes]).toEqual([
-      storedChatOutboxScopeKey(resolveStoredChatOutboxScope(state, "thread-draft")),
-    ]);
+    expect(summary.total).toBe(2);
+    for (const sessionKey of present) {
+      expect(summary.hasSessionDraft(sessionKey), sessionKey).toBe(true);
+      expect(summary.attentionCountForSession(sessionKey), sessionKey).toBe(1);
+    }
+    for (const sessionKey of [...absent, "thread-empty", "thread-queue", "absent"]) {
+      expect(summary.hasSessionDraft(sessionKey), sessionKey).toBe(false);
+      expect(summary.attentionCountForSession(sessionKey), sessionKey).toBe(0);
+    }
+    expect(read).not.toHaveBeenCalled();
   });
 
   it("bridges matching storage events until the last subscriber leaves", () => {
@@ -432,8 +500,6 @@ describe("stored outbox summaries", () => {
 
     const summary = summarizeStoredChatOutboxes({ settings: { gatewayUrl } });
     expect(summary.total).toBe(2);
-    expect(summary.countsByScope.get(storedChatOutboxScopeKey({ sessionKey: "thread-a" }))).toBe(1);
-    expect(summary.countsByScope.get(storedChatOutboxScopeKey({ sessionKey: "thread-b" }))).toBe(1);
   });
 
   it("counts only durable operator-review states for session-row attention", () => {
@@ -474,6 +540,13 @@ describe("stored outbox summaries", () => {
                 createdAt: 13,
                 sendState: "unconfirmed",
               },
+              {
+                id: "other-owner",
+                text: "another credential's attachment",
+                createdAt: 14,
+                sendState: "failed",
+                attachmentPayload: { key: "bundle", recoveryScope: "other-owner", tabId: "tab" },
+              },
             ],
             updatedAt: 13,
           },
@@ -493,14 +566,10 @@ describe("stored outbox summaries", () => {
     );
 
     const summary = summarizeStoredChatOutboxes({ settings: { gatewayUrl } });
-    const threadA = storedChatOutboxScopeKey({ sessionKey: "thread-a" });
-    const threadB = storedChatOutboxScopeKey({ sessionKey: "thread-b" });
-
     expect(summary.total).toBe(8);
-    expect(summary.countsByScope.get(threadA)).toBe(7);
-    expect(summary.countsByScope.get(threadB)).toBe(1);
-    expect(summary.attentionCountsByScope.get(threadA)).toBe(3);
-    expect(summary.attentionCountsByScope.get(threadB)).toBe(1);
+    expect(summary.attentionCountForSession("thread-a")).toBe(3);
+    expect(summary.attentionCountForSession("thread-b")).toBe(1);
+    expect(summary.attentionCountForSession("absent")).toBe(0);
   });
 
   it("derives badges and replay from the same migrated durable queue", () => {
@@ -536,7 +605,6 @@ describe("stored outbox summaries", () => {
     const outboxes = listStoredChatOutboxes(state);
 
     expect(summary.total).toBe(1);
-    expect(summary.countsByScope.get(storedChatOutboxScopeKey(outboxes[0]!))).toBe(1);
     expect(outboxes[0]?.queue).toEqual([
       {
         id: "shared",

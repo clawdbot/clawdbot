@@ -851,6 +851,16 @@ describeControlUiE2e("Control UI real auth transports E2E", () => {
     );
     expect(untrustedEvidence.gatewayResult?.message).toContain("unauthorized");
     expect(untrustedEvidence.gatewayResult?.errorReason).toBe(expectedReason);
+    expect(untrustedEvidence.gatewayResult?.errorCode).toBe(
+      ConnectErrorDetailCodes.AUTH_IDENTITY_HEADER_REQUIRED,
+    );
+    const failure = rejected.page.locator(".login-gate__failure");
+    expect(await failure.getAttribute("data-kind")).toBe("trusted-proxy");
+    expect(await failure.locator(".login-gate__failure-steps").textContent()).toContain("SSO");
+    expect(await failure.locator(".login-gate__failure-steps").textContent()).toContain(
+      "WebSocket upgrade",
+    );
+    expect(await failure.locator(".login-gate__command").count()).toBe(0);
     expect(untrustedEvidence.identityInjected).toBe(false);
     expect(untrustedEvidence.requiredHeaderInjected).toBe(false);
     await captureChromiumScreenshot(rejected.page, "02-untrusted-proxy-rejected.png");
@@ -990,6 +1000,9 @@ describeControlUiE2e("Control UI real auth transports E2E", () => {
   it("confirms gatewayUrl, accepts the allowed origin, and rejects an unlisted origin", async () => {
     const rejected = await createBrowserPage(rejectedUi.baseUrl, proxy.trustedUrl);
     await waitForVisibleFailure(rejected.page, "origin not allowed");
+    const originFailure = rejected.page.locator(".login-gate__failure");
+    expect(await originFailure.getAttribute("data-kind")).toBe("origin-not-allowed");
+    expect(await originFailure.locator(".login-gate__command").count()).toBe(0);
     const rejectedOrigin = new URL(rejectedUi.baseUrl).origin;
     const rejectedEvidence = await waitForConnectionEvidence(
       (entry) =>

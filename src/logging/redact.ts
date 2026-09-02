@@ -855,7 +855,8 @@ export function computeSensitiveRedactionBitmap(
   text: string,
   resolved: ResolvedRedactOptions,
 ): boolean[] {
-  const bitmap: boolean[] = Array.from({ length: text.length }, () => false);
+  // oxlint-disable-next-line unicorn/no-new-array -- Fill the dense bitmap without a callback for every character.
+  const bitmap = new Array<boolean>(text.length).fill(false);
   if (resolved.mode === "off" || !resolved.patterns.length || !text) {
     return bitmap;
   }

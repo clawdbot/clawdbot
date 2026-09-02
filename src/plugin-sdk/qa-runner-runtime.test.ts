@@ -3,7 +3,7 @@
  */
 import path from "node:path";
 import type { Command } from "commander";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   cleanupTempDirs,
   expectPrivateQaLabRuntimeSurfaceLoad,
@@ -50,8 +50,11 @@ describe("plugin-sdk qa-runner-runtime", () => {
   const originalPrivateQaCli = process.env.OPENCLAW_ENABLE_PRIVATE_QA_CLI;
   const originalBundledPluginsDir = process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
 
-  beforeEach(() => {
+  beforeAll(() => {
     vi.resetModules();
+  });
+
+  beforeEach(() => {
     loadPluginManifestRegistryCore.mockReset().mockReturnValue({
       plugins: [],
       diagnostics: [],
@@ -78,6 +81,7 @@ describe("plugin-sdk qa-runner-runtime", () => {
   });
 
   it("stays cold until runner discovery is requested", async () => {
+    vi.resetModules();
     await import("./qa-runner-runtime.js");
 
     expect(loadPluginManifestRegistryCore).not.toHaveBeenCalled();

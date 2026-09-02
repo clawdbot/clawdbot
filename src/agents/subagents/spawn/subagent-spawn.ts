@@ -19,6 +19,7 @@ import {
   recordSessionCreated,
   recordSubagentSpawned,
 } from "../../../sessions/session-state-events.js";
+import { hasDeliveryTargetFields } from "../../../utils/delivery-context.shared.js";
 import { hasPromptUnsafeControlCharacter } from "../../sanitize-for-prompt.js";
 import {
   runSpawnPipeline,
@@ -65,10 +66,7 @@ import {
   createInitialSubagentSession,
   persistInitialChildSessionRuntimeModel,
 } from "./subagent-spawn-session-patch.js";
-import {
-  bindThreadForSubagentSpawn,
-  hasRoutableDeliveryOrigin,
-} from "./subagent-spawn-thread-binding.js";
+import { bindThreadForSubagentSpawn } from "./subagent-spawn-thread-binding.js";
 import {
   buildSubagentSystemPrompt,
   emitSessionLifecycleEvent,
@@ -179,6 +177,7 @@ export async function spawnSubagentDirect(
     const spawnedByKey = requesterInternalKey;
     const { resolvedModel, thinkingOverride } = plan;
     const initialSession = await createInitialSubagentSession({
+      assertActive,
       cfg,
       targetAgentId,
       childSessionKey,
@@ -263,7 +262,7 @@ export async function spawnSubagentDirect(
         agentId: targetAgentId,
         label: label || undefined,
         mode: spawnMode,
-        requesterSessionKey: ownership.threadBindingRequesterSessionKey,
+        requesterSessionKey: ownership.controllerSessionKey,
         requester: {
           channel: childSessionOrigin?.channel,
           accountId: childSessionOrigin?.accountId,
@@ -280,7 +279,7 @@ export async function spawnSubagentDirect(
         };
       }
       threadBindingReady = true;
-      hasBoundThreadDeliveryOrigin = hasRoutableDeliveryOrigin(bindResult.deliveryOrigin);
+      hasBoundThreadDeliveryOrigin = hasDeliveryTargetFields(bindResult.deliveryOrigin);
       childSessionOrigin =
         mergeDeliveryContext(bindResult.deliveryOrigin, childSessionOrigin) ?? childSessionOrigin;
     }
@@ -639,7 +638,7 @@ export async function spawnSubagentDirect(
               throw error;
             }
             await emitSpawnLifecycleHooks(gatewayRunId);
-          });
+          }, "subagents:spawn");
         },
         onStartFailure: async (error) => {
           if (error instanceof GatewayDrainingError) {
@@ -699,6 +698,7 @@ export async function spawnSubagentDirect(
       ...(collectorSessionKey ? { sessionKey: collectorSessionKey } : {}),
       runId: childRunId,
       mode: spawnMode,
+      expectsCompletionMessage: shouldAnnounceCompletion,
       context: preparedSpawnContext.mode,
       taskName,
       note: preparedSpawnContext.forkFallbackNote

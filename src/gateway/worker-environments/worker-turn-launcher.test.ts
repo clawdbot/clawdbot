@@ -7,10 +7,8 @@ import {
   abortAndDrainEmbeddedAgentRun,
   setActiveEmbeddedRun,
 } from "../../agents/embedded-agent-runner/runs.js";
-import {
-  installSessionPlacementAdmissionProvider,
-  resolveSessionPlacementForcedTerminalSettlement,
-} from "../../agents/session-placement-admission.js";
+import { installSessionPlacementAdmissionProvider } from "../../agents/session-placement-admission.js";
+import { resolveSessionPlacementForcedTerminalSettlement } from "../../agents/session-placement-forced-terminal-settlement.js";
 import { setRuntimeConfigSnapshot } from "../../config/io.js";
 import {
   loadSessionEntry,
@@ -792,7 +790,10 @@ describe("worker turn launcher local placement", () => {
     {
       scenario: "failed execution",
       executionFailure: "Codex paired execution device disconnected; start a fresh attempt",
-      expectedError: "Codex paired execution device disconnected; start a fresh attempt",
+      expectedError:
+        "Codex paired execution device disconnected; start a fresh attempt\n\n" +
+        "Workspace recovery also failed: workspace manifest memo exceeds its entry limit. " +
+        "Remote changes may not have been applied locally. Resolve the workspace error, then retry.",
       expectedTerminalReason: "Codex paired execution device disconnected; start a fresh attempt",
     },
   ])(
@@ -953,7 +954,11 @@ describe("worker turn launcher local placement", () => {
         ),
       ).rejects.toMatchObject({
         message:
-          executionFailure ?? expect.stringContaining("workspace result could not be reconciled"),
+          executionFailure === undefined
+            ? expect.stringContaining("workspace result could not be reconciled")
+            : expect.stringContaining(
+                `${executionFailure}\n\nWorkspace recovery also failed: device worker node is not connected`,
+              ),
         cause: expect.any(Error),
       });
 

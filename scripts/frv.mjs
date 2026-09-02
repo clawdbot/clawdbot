@@ -163,18 +163,27 @@ async function execGhRead(args, options = {}) {
   throw lastError;
 }
 
+function readFreshGhApi(repository, path, args = []) {
+  // Rerun decisions require current attempts and jobs, not a relay's earlier snapshot.
+  return execGhRead([
+    "api",
+    `repos/${repository}/${path}`,
+    "-H",
+    "Cache-Control: max-age=0",
+    ...args,
+  ]);
+}
+
 async function ghJson(repository, path) {
-  return JSON.parse(await execGhRead(["api", `repos/${repository}/${path}`]));
+  return JSON.parse(await readFreshGhApi(repository, path));
 }
 
 async function ghAttemptJobs(repository, runId, runAttempt) {
-  const output = await execGhRead([
-    "api",
-    "--paginate",
-    `repos/${repository}/actions/runs/${runId}/attempts/${runAttempt}/jobs?per_page=100`,
-    "--jq",
-    ".jobs[] | @json",
-  ]);
+  const output = await readFreshGhApi(
+    repository,
+    `actions/runs/${runId}/attempts/${runAttempt}/jobs?per_page=100`,
+    ["--paginate", "--jq", ".jobs[] | @json"],
+  );
   return output
     ? output
         .split("\n")
@@ -217,6 +226,15 @@ async function downloadExecutionPlan(repository, runId) {
 
 function selectedChildren(plan) {
   return plan.children.filter((child) => child.selected);
+}
+
+function hasExactChildRunIdentity(child) {
+  return (
+    typeof child.runId === "string" &&
+    /^[1-9][0-9]*$/u.test(child.runId) &&
+    Number.isSafeInteger(child.runAttempt) &&
+    child.runAttempt > 0
+  );
 }
 
 function assertChildRunIdentity(child, run, repository = DEFAULT_REPOSITORY) {
@@ -281,6 +299,29 @@ export async function preflightContinuation(
     throw new Error("source full release parent identity changed");
   }
   const parentJobs = await client.getParentJobs(source.sourceRunId);
+  if (
+    parentJobs.some(
+      (job) =>
+        Number(job.run_attempt) === source.sourceRunAttempt &&
+        job.conclusion !== "skipped" &&
+        /^(?:Prepare release npm artifacts|Prepare release Docker artifacts) \/ /u.test(
+          job.name ?? "",
+        ),
+    )
+  ) {
+    throw new Error(
+      "parent-owned publication artifacts do not survive parent reruns; start a fresh all-group FRV",
+    );
+  }
+  const missingChildren = selectedChildren(plan)
+    .filter((child) => !hasExactChildRunIdentity(child))
+    .map((child) => child.key)
+    .toSorted();
+  if (missingChildren.length > 0) {
+    throw new Error(
+      `selected FRV children did not record exact run IDs and attempts: ${missingChildren.join(", ")}; start a fresh all-group FRV`,
+    );
+  }
   const resolveJobs = parentJobs.filter(
     (job) =>
       job.name === "Resolve target ref" &&
@@ -326,6 +367,19 @@ export async function preflightContinuation(
 export async function inspectContinuation(plan, client) {
   const children = await Promise.all(
     selectedChildren(plan).map(async (child) => {
+      if (!hasExactChildRunIdentity(child)) {
+        return {
+          compositeJobsSha256: "",
+          conclusion: "",
+          effectiveRunAttempt: null,
+          key: child.key,
+          passed: false,
+          plannedRunAttempt: child.runAttempt ?? null,
+          runId: String(child.runId ?? ""),
+          status: "missing",
+          url: String(child.url ?? ""),
+        };
+      }
       const run = await client.getRun(child.runId);
       assertChildRunIdentity(child, run, client.repository ?? DEFAULT_REPOSITORY);
       const effectiveRunAttempt = positiveInteger(run.run_attempt, `${child.key} run attempt`);
@@ -396,6 +450,7 @@ export async function inspectContinuation(plan, client) {
     children,
     failed: children.filter((child) => child.status === "failed"),
     active: children.filter((child) => child.status === "active"),
+    missing: children.filter((child) => child.status === "missing"),
     passed: children.filter((child) => child.status === "passed"),
   };
 }
@@ -404,12 +459,7 @@ export function createClient(repository, dependencies = {}) {
   const apiJson = dependencies.apiJson ?? ((path) => ghJson(repository, path));
   const apiText =
     dependencies.apiText ??
-    ((path, jq) =>
-      execGhRead(
-        jq
-          ? ["api", "--paginate", `repos/${repository}/${path}`, "--jq", jq]
-          : ["api", `repos/${repository}/${path}`],
-      ));
+    ((path, jq) => readFreshGhApi(repository, path, jq ? ["--paginate", "--jq", jq] : []));
   const mutate = dependencies.mutate ?? ((args) => execGh(args));
   const rerun = (runId, action) =>
     mutate(["api", "-X", "POST", `repos/${repository}/actions/runs/${runId}/${action}`]);

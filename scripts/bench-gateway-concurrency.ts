@@ -16,6 +16,7 @@ import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { pathToFileURL } from "node:url";
 import { asFiniteNumber } from "../packages/normalization-core/src/number-coercion.ts";
+import { isRecord } from "../packages/normalization-core/src/record-coerce.ts";
 import { sliceUtf16Safe } from "../packages/normalization-core/src/utf16-slice.ts";
 import { applyMockOpenAiModelConfig } from "./e2e/lib/fixtures/mock-openai-config.mjs";
 import { delay, stopChild } from "./lib/gateway-bench-child.ts";
@@ -346,7 +347,7 @@ Options:
   --subscribers <n> Dedicated session-message subscription clients
   --stream-chunk-delay-ms <n> Mock-provider delay between stream chunks (default: ${MOCK_RESPONSE_CHUNK_DELAY_MS})
   --visible-observer Mark subscribed clients visible to exercise session observation
-  --no-diagnostics-timeline Disable synchronous diagnostics timeline file writes
+  --no-diagnostics-timeline Disable diagnostics timeline file writes
   --plugin-count <n> Configure synthetic plugins through plugins.load.paths (default: 0)
   --tool-events      Make every synthetic turn execute a tool before replying
   --workspace-fanout Bind each turn to a distinct workspace
@@ -395,34 +396,43 @@ function summarizePluginMetadataScans(events: readonly DiagnosticsTimelineSpan[]
   };
 }
 
-function readDiagnosticsTimelineSpans(timelinePath: string): DiagnosticsTimelineSpan[] {
-  try {
-    return readFileSync(timelinePath, "utf8")
-      .split(/\r?\n/u)
-      .filter(Boolean)
-      .flatMap((line) => {
-        try {
-          const event = JSON.parse(line) as {
-            durationMs?: unknown;
-            name?: unknown;
-            type?: unknown;
-          };
-          if (event.type !== "span.end" || typeof event.name !== "string") {
-            return [];
-          }
-          return [
-            {
-              name: event.name,
-              ...(typeof event.durationMs === "number" ? { durationMs: event.durationMs } : {}),
-            },
-          ];
-        } catch {
-          return [];
-        }
-      });
-  } catch {
-    return [];
+function readDiagnosticsTimelineSpans(
+  timelinePath: string,
+  window?: { from: number; through: number },
+): DiagnosticsTimelineSpan[] {
+  const contents = readFileSync(timelinePath, "utf8");
+  if (!contents.trim() || !contents.endsWith("\n")) {
+    throw new Error("diagnostics timeline is empty or incomplete");
   }
+  return contents
+    .split(/\r?\n/u)
+    .filter(Boolean)
+    .flatMap((line) => {
+      const event: unknown = JSON.parse(line);
+      if (
+        !isRecord(event) ||
+        event.schemaVersion !== "openclaw.diagnostics.v1" ||
+        typeof event.timestamp !== "string" ||
+        !Number.isFinite(Date.parse(event.timestamp))
+      ) {
+        throw new Error("invalid diagnostics timeline record");
+      }
+      const timestamp = Date.parse(event.timestamp);
+      if (window && (timestamp < window.from || timestamp > window.through)) {
+        return [];
+      }
+      if (event.type !== "span.end") {
+        return [];
+      }
+      if (
+        typeof event.name !== "string" ||
+        typeof event.durationMs !== "number" ||
+        !Number.isFinite(event.durationMs)
+      ) {
+        throw new Error("invalid diagnostics timeline span");
+      }
+      return [{ name: event.name, durationMs: event.durationMs }];
+    });
 }
 
 function remainingMs(deadlineAt: number): number {
@@ -992,403 +1002,462 @@ async function runGatewaySample(options: {
   const auxiliaryClients: Array<Awaited<ReturnType<typeof connectGateway>>> = [];
   let gatewayOutput = { readOutput: () => "", readStderrTail: () => "" };
   let mockOutput = { readOutput: () => "", readStderrTail: () => "" };
+  let result: BenchmarkRun;
+  let gatewayExit: Awaited<ReturnType<typeof stopChild>> | undefined;
+  let timelineWindow: { from: number; through: number } | undefined;
 
   try {
-    const configPath = buildConfig(root, mockPort, options.concurrency, options.pluginCount);
-    mockProvider = spawn(process.execPath, ["scripts/e2e/mock-openai-server.mjs"], {
-      cwd: process.cwd(),
-      detached: process.platform !== "win32",
-      env: {
-        LANG: process.env.LANG ?? "en_US.UTF-8",
-        PATH: process.env.PATH,
-        MOCK_PORT: String(mockPort),
-        MOCK_REQUEST_LOG: requestLogPath,
-        MOCK_RESPONSE_CHUNK_DELAY_MS: String(options.streamChunkDelayMs),
-        SUCCESS_MARKER: "OpenClaw gateway concurrency benchmark streaming response.",
-      },
-    });
-    mockOutput = captureChildOutput(mockProvider);
-    await waitForMockServer(mockPort, options.deadlineAt);
-
-    if (options.cpuProfDir) {
-      mkdirSync(options.cpuProfDir, { recursive: true });
-    }
-    const gatewayArgs = buildGatewayBenchChildArgs(options.entry, port);
-    gateway = spawn(
-      process.execPath,
-      options.cpuProfDir
-        ? ["--cpu-prof", `--cpu-prof-dir=${options.cpuProfDir}`, ...gatewayArgs]
-        : gatewayArgs,
-      {
+    try {
+      const configPath = buildConfig(root, mockPort, options.concurrency, options.pluginCount);
+      mockProvider = spawn(process.execPath, ["scripts/e2e/mock-openai-server.mjs"], {
         cwd: process.cwd(),
         detached: process.platform !== "win32",
         env: {
-          ...createGatewayBenchEnv(root, configPath, {
-            caseEnv: {
-              ...(options.diagnosticsTimeline
-                ? {
-                    OPENCLAW_DIAGNOSTICS: "timeline",
-                    OPENCLAW_DIAGNOSTICS_TIMELINE_PATH: timelinePath,
-                  }
-                : {}),
-              OPENCLAW_SKIP_CHANNELS: "1",
-            },
-          }),
-          OPENAI_API_KEY: "gateway-concurrency-benchmark",
+          LANG: process.env.LANG ?? "en_US.UTF-8",
+          PATH: process.env.PATH,
+          MOCK_PORT: String(mockPort),
+          MOCK_REQUEST_LOG: requestLogPath,
+          MOCK_RESPONSE_CHUNK_DELAY_MS: String(options.streamChunkDelayMs),
+          SUCCESS_MARKER: "OpenClaw gateway concurrency benchmark streaming response.",
         },
-      },
-    );
-    gatewayOutput = captureChildOutput(gateway);
-    const ready = await waitForInitialProbe({
-      deadlineAt: options.deadlineAt,
-      isDone: () => gateway?.exitCode != null || gateway?.signalCode != null,
-      path: "/readyz",
-      port,
-      startAt: runStartedAt,
-    });
-    if (ready.status !== 200) {
-      throw new Error(`gateway did not become ready\n${gatewayOutput.readOutput()}`);
-    }
-    await waitForGatewayDispatchReady(gatewayOutput.readOutput, options.deadlineAt);
-    client = await connectGateway(port, options.deadlineAt, protocolVersion);
-    const rpc = client.request;
-    if (options.visibleObserver) {
-      await rpc("sessions.observer.visibility", { visible: true });
-    }
-    // The first authenticated RPC lazily imports the server-method graph. It measured 6.9s
-    // on an idle M4 Pro (previously 18.4s) and crossed 20s on Linux; hot probes took 15-40ms.
-    // Keep that cold work out of the load-phase deadline and latency distributions.
-    const probeWarmupDeadlineAt = performance.now() + PROBE_WARMUP_TIMEOUT_MS;
-    client.setDeadlineAt(probeWarmupDeadlineAt);
-    const probeWarmup = await warmGatewayProbes({
-      deadlineAt: probeWarmupDeadlineAt,
-      sample: (deadlineAt) =>
-        sampleGateway({
-          deadlineAt,
-          port,
-          rpc,
-          runStartedAt,
-        }),
-    });
-    const setupDeadlineAt = performance.now() + options.timeoutMs;
-    const setupStartedAt = performance.now();
-    client.setDeadlineAt(setupDeadlineAt);
-    const sessionCount = Math.max(options.concurrency, options.sessionCount);
-    const prepareSessions =
-      options.workspaceFanout ||
-      options.sessionCount > 0 ||
-      options.historyClients > 0 ||
-      options.sessionUpdates > 0 ||
-      options.subscribers > 0;
-    const sessionKeys = Array.from(
-      { length: sessionCount },
-      (_, index) => `agent:main:gateway-concurrency-${index + 1}`,
-    );
-    const sessionSeedStartedAt = performance.now();
-    if (prepareSessions) {
-      let nextSessionIndex = 0;
-      let seededSessionCount = 0;
-      await Promise.all(
-        Array.from({ length: Math.min(MAX_SESSION_SEED_CONCURRENCY, sessionCount) }, async () => {
-          for (;;) {
-            const index = nextSessionIndex++;
-            const sessionKey = sessionKeys[index];
-            if (!sessionKey) {
-              return;
-            }
-            const workspaceDir = options.workspaceFanout
-              ? path.join(root, `workspace-${index + 1}`)
-              : undefined;
-            if (workspaceDir) {
-              mkdirSync(workspaceDir, { recursive: true });
-            }
-            await rpc("sessions.create", {
-              key: sessionKey,
-              agentId: "main",
-              ...(workspaceDir ? { cwd: workspaceDir } : {}),
-            });
-            seededSessionCount += 1;
-            if (sessionCount >= 250 && seededSessionCount % 250 === 0) {
-              console.error(
-                `[bench-gateway-concurrency] seeded ${seededSessionCount}/${sessionCount} sessions`,
-              );
-            }
-          }
-        }),
-      );
-    }
-    const sessionSeedDurationMs = performance.now() - sessionSeedStartedAt;
-    const messageSubscriptions: TimedProbe[] = [];
-    for (let index = 0; index < options.subscribers; index += 1) {
-      const subscriber = await connectGateway(port, setupDeadlineAt, protocolVersion, false);
-      auxiliaryClients.push(subscriber);
-      if (options.visibleObserver) {
-        await subscriber.request("sessions.observer.visibility", { visible: true });
-      }
-      const subscription = await timeRpcProbe(
-        subscriber.request,
-        "sessions.messages.subscribe",
-        { key: sessionKeys[index % sessionKeys.length] },
-        runStartedAt,
-      );
-      messageSubscriptions.push(subscription);
-      if (!subscription.ok) {
-        throw new Error(`session message subscription failed: ${subscription.error}`);
-      }
-    }
-    const historyClients = await Promise.all(
-      Array.from({ length: options.historyClients }, async () => {
-        const historyClient = await connectGateway(port, setupDeadlineAt, protocolVersion, false);
-        auxiliaryClients.push(historyClient);
-        return historyClient;
-      }),
-    );
-    const sessionUpdateClients = await Promise.all(
-      Array.from(
-        { length: options.sessionUpdates > 0 ? options.sessionUpdateClients : 0 },
-        async () => {
-          const updateClient = await connectGateway(port, setupDeadlineAt, protocolVersion, false);
-          auxiliaryClients.push(updateClient);
-          return updateClient;
-        },
-      ),
-    );
-    const subscriptionProbeClient =
-      options.subscribers > 0
-        ? await connectGateway(port, setupDeadlineAt, protocolVersion, false)
-        : undefined;
-    if (subscriptionProbeClient) {
-      auxiliaryClients.push(subscriptionProbeClient);
-    }
-    const memoryBefore = await readGatewayMemory(rpc, runStartedAt);
-    const setupDurationMs = performance.now() - setupStartedAt;
-    // Large session fixtures are setup, not benchmarked load. Every measured
-    // run therefore gets its complete timeout after all clients are ready.
-    const loadDeadlineAt = performance.now() + options.timeoutMs;
-    client.setDeadlineAt(loadDeadlineAt);
-    for (const auxiliaryClient of auxiliaryClients) {
-      auxiliaryClient.setDeadlineAt(loadDeadlineAt);
-    }
-    // The benchmark compares runtime event work, so discard startup and lazy-import spans.
-    if (options.diagnosticsTimeline) {
-      writeFileSync(timelinePath, "");
-    }
+      });
+      mockOutput = captureChildOutput(mockProvider);
+      await waitForMockServer(mockPort, options.deadlineAt);
 
-    const controlUi: ControlUiProbe[] = [];
-    const history: TimedProbe[] = [];
-    const messageSubscriptionsDuringLoad: TimedProbe[] = [];
-    const readyz: ReadyProbe[] = [];
-    const sessionsList: TimedProbe[] = [];
-    const sessionUpdates: TimedProbe[] = [];
-    let peakRssMb = memoryBefore.rssMb;
-    let lastRssSampleAt = performance.now();
-    let turnsDone = false;
-    let updatesDone = options.sessionUpdates === 0;
-    const workloadDone = () => turnsDone && updatesDone;
-    let startedTurnCount = 0;
-    let resolveAllTurnsStarted!: () => void;
-    const allTurnsStarted = new Promise<void>((resolve) => {
-      resolveAllTurnsStarted = resolve;
-    });
-    const turnsStartedAt = performance.now();
-    const turns = Promise.all(
-      Array.from({ length: options.concurrency }, (_, index) =>
-        runTurn(rpc, index, loadDeadlineAt, options.toolEvents, {
-          onStarted: () => {
-            startedTurnCount += 1;
-            if (startedTurnCount === options.concurrency) {
-              resolveAllTurnsStarted();
-            }
-          },
-          ...(sessionKeys[index] ? { sessionKey: sessionKeys[index] } : {}),
-        }),
-      ),
-    ).finally(() => {
-      turnsDone = true;
-      resolveAllTurnsStarted();
-    });
-    const freshConnection = allTurnsStarted.then(async (): Promise<FreshConnectionProbe> => {
-      const startedAt = performance.now();
-      try {
-        const freshClient = await connectGateway(port, loadDeadlineAt, protocolVersion, false);
-        freshClient.close();
-        return { error: null, latencyMs: performance.now() - startedAt, ok: true };
-      } catch (error) {
-        return {
-          error: describeProbeError(error),
-          latencyMs: performance.now() - startedAt,
-          ok: false,
-        };
+      if (options.cpuProfDir) {
+        mkdirSync(options.cpuProfDir, { recursive: true });
       }
-    });
-    const sampler = (async () => {
-      for (;;) {
-        const sampleStartedAt = performance.now();
-        const subscriptionKey = sessionKeys[readyz.length % sessionKeys.length];
-        const [sample, subscription] = await Promise.all([
+      const gatewayArgs = buildGatewayBenchChildArgs(options.entry, port);
+      gateway = spawn(
+        process.execPath,
+        options.cpuProfDir
+          ? ["--cpu-prof", `--cpu-prof-dir=${options.cpuProfDir}`, ...gatewayArgs]
+          : gatewayArgs,
+        {
+          cwd: process.cwd(),
+          detached: process.platform !== "win32",
+          env: {
+            ...createGatewayBenchEnv(root, configPath, {
+              caseEnv: {
+                ...(options.diagnosticsTimeline
+                  ? {
+                      OPENCLAW_DIAGNOSTICS: "timeline",
+                      OPENCLAW_DIAGNOSTICS_TIMELINE_PATH: timelinePath,
+                    }
+                  : {}),
+                OPENCLAW_SKIP_CHANNELS: "1",
+              },
+            }),
+            OPENAI_API_KEY: "gateway-concurrency-benchmark",
+          },
+        },
+      );
+      gatewayOutput = captureChildOutput(gateway);
+      const ready = await waitForInitialProbe({
+        deadlineAt: options.deadlineAt,
+        isDone: () => gateway?.exitCode != null || gateway?.signalCode != null,
+        path: "/readyz",
+        port,
+        startAt: runStartedAt,
+      });
+      if (ready.status !== 200) {
+        throw new Error(`gateway did not become ready\n${gatewayOutput.readOutput()}`);
+      }
+      await waitForGatewayDispatchReady(gatewayOutput.readOutput, options.deadlineAt);
+      client = await connectGateway(port, options.deadlineAt, protocolVersion);
+      const rpc = client.request;
+      if (options.visibleObserver) {
+        await rpc("sessions.observer.visibility", { visible: true });
+      }
+      // The first authenticated RPC lazily imports the server-method graph. It measured 6.9s
+      // on an idle M4 Pro (previously 18.4s) and crossed 20s on Linux; hot probes took 15-40ms.
+      // Keep that cold work out of the load-phase deadline and latency distributions.
+      const probeWarmupDeadlineAt = performance.now() + PROBE_WARMUP_TIMEOUT_MS;
+      client.setDeadlineAt(probeWarmupDeadlineAt);
+      const probeWarmup = await warmGatewayProbes({
+        deadlineAt: probeWarmupDeadlineAt,
+        sample: (deadlineAt) =>
           sampleGateway({
-            deadlineAt: loadDeadlineAt,
+            deadlineAt,
             port,
             rpc,
             runStartedAt,
           }),
-          subscriptionProbeClient && subscriptionKey
-            ? timeRpcProbe(
-                subscriptionProbeClient.request,
-                "sessions.messages.subscribe",
-                { key: subscriptionKey },
-                runStartedAt,
-              )
-            : Promise.resolve(undefined),
-        ]);
-        if (subscription) {
-          messageSubscriptionsDuringLoad.push(subscription);
-          if (subscription.ok) {
-            await subscriptionProbeClient?.request("sessions.messages.unsubscribe", {
-              key: subscriptionKey,
-            });
-          }
-        }
-        readyz.push(sample.readyz);
-        sessionsList.push(sample.sessionsList);
-        controlUi.push(sample.controlUi);
-        if (performance.now() - lastRssSampleAt >= 1_000) {
-          // Linux reads procfs without spawning a process. Non-Linux hosts use
-          // the shared ps fallback at most once per second to bound perturbation.
-          peakRssMb = Math.max(peakRssMb, readGatewayProcessRssMb(gateway?.pid) ?? 0);
-          lastRssSampleAt = performance.now();
-        }
-        if (workloadDone() || readyz.length >= MAX_SAMPLES_PER_RUN) {
-          break;
-        }
-        await delay(
-          Math.min(
-            Math.max(0, options.cadenceMs - (performance.now() - sampleStartedAt)),
-            requireRemainingMs(loadDeadlineAt, "sampling gateway load"),
-          ),
+      });
+      const setupDeadlineAt = performance.now() + options.timeoutMs;
+      const setupStartedAt = performance.now();
+      client.setDeadlineAt(setupDeadlineAt);
+      const sessionCount = Math.max(options.concurrency, options.sessionCount);
+      const prepareSessions =
+        options.workspaceFanout ||
+        options.sessionCount > 0 ||
+        options.historyClients > 0 ||
+        options.sessionUpdates > 0 ||
+        options.subscribers > 0;
+      const sessionKeys = Array.from(
+        { length: sessionCount },
+        (_, index) => `agent:main:gateway-concurrency-${index + 1}`,
+      );
+      const sessionSeedStartedAt = performance.now();
+      if (prepareSessions) {
+        let nextSessionIndex = 0;
+        let seededSessionCount = 0;
+        await Promise.all(
+          Array.from({ length: Math.min(MAX_SESSION_SEED_CONCURRENCY, sessionCount) }, async () => {
+            for (;;) {
+              const index = nextSessionIndex++;
+              const sessionKey = sessionKeys[index];
+              if (!sessionKey) {
+                return;
+              }
+              const workspaceDir = options.workspaceFanout
+                ? path.join(root, `workspace-${index + 1}`)
+                : undefined;
+              if (workspaceDir) {
+                mkdirSync(workspaceDir, { recursive: true });
+              }
+              await rpc("sessions.create", {
+                key: sessionKey,
+                agentId: "main",
+                ...(workspaceDir ? { cwd: workspaceDir } : {}),
+              });
+              seededSessionCount += 1;
+              if (sessionCount >= 250 && seededSessionCount % 250 === 0) {
+                console.error(
+                  `[bench-gateway-concurrency] seeded ${seededSessionCount}/${sessionCount} sessions`,
+                );
+              }
+            }
+          }),
         );
       }
-    })();
-    const historyLoad = Promise.all(
-      historyClients.map(async (historyClient, clientIndex) => {
-        let offset = clientIndex * options.historyBurst;
-        while (!workloadDone() && history.length < MAX_SAMPLES_PER_RUN) {
-          const probes = await Promise.all(
-            Array.from({ length: options.historyBurst }, (_, index) =>
-              timeRpcProbe(
-                historyClient.request,
-                "chat.history",
-                { sessionKey: sessionKeys[(offset + index) % sessionKeys.length] },
-                runStartedAt,
-              ),
+      const sessionSeedDurationMs = performance.now() - sessionSeedStartedAt;
+      const messageSubscriptions: TimedProbe[] = [];
+      for (let index = 0; index < options.subscribers; index += 1) {
+        const subscriber = await connectGateway(port, setupDeadlineAt, protocolVersion, false);
+        auxiliaryClients.push(subscriber);
+        if (options.visibleObserver) {
+          await subscriber.request("sessions.observer.visibility", { visible: true });
+        }
+        const subscription = await timeRpcProbe(
+          subscriber.request,
+          "sessions.messages.subscribe",
+          { key: sessionKeys[index % sessionKeys.length] },
+          runStartedAt,
+        );
+        messageSubscriptions.push(subscription);
+        if (!subscription.ok) {
+          throw new Error(`session message subscription failed: ${subscription.error}`);
+        }
+      }
+      const historyClients = await Promise.all(
+        Array.from({ length: options.historyClients }, async () => {
+          const historyClient = await connectGateway(port, setupDeadlineAt, protocolVersion, false);
+          auxiliaryClients.push(historyClient);
+          return historyClient;
+        }),
+      );
+      const sessionUpdateClients = await Promise.all(
+        Array.from(
+          { length: options.sessionUpdates > 0 ? options.sessionUpdateClients : 0 },
+          async () => {
+            const updateClient = await connectGateway(
+              port,
+              setupDeadlineAt,
+              protocolVersion,
+              false,
+            );
+            auxiliaryClients.push(updateClient);
+            return updateClient;
+          },
+        ),
+      );
+      const subscriptionProbeClient =
+        options.subscribers > 0
+          ? await connectGateway(port, setupDeadlineAt, protocolVersion, false)
+          : undefined;
+      if (subscriptionProbeClient) {
+        auxiliaryClients.push(subscriptionProbeClient);
+      }
+      const memoryBefore = await readGatewayMemory(rpc, runStartedAt);
+      const setupDurationMs = performance.now() - setupStartedAt;
+      // Large session fixtures are setup, not benchmarked load. Every measured
+      // run therefore gets its complete timeout after all clients are ready.
+      const loadDeadlineAt = performance.now() + options.timeoutMs;
+      client.setDeadlineAt(loadDeadlineAt);
+      for (const auxiliaryClient of auxiliaryClients) {
+        auxiliaryClient.setDeadlineAt(loadDeadlineAt);
+      }
+      const controlUi: ControlUiProbe[] = [];
+      const history: TimedProbe[] = [];
+      const messageSubscriptionsDuringLoad: TimedProbe[] = [];
+      const readyz: ReadyProbe[] = [];
+      const sessionsList: TimedProbe[] = [];
+      const sessionUpdates: TimedProbe[] = [];
+      let peakRssMb = memoryBefore.rssMb;
+      let lastRssSampleAt = performance.now();
+      let turnsDone = false;
+      let updatesDone = options.sessionUpdates === 0;
+      const workloadDone = () => turnsDone && updatesDone;
+      let startedTurnCount = 0;
+      let resolveAllTurnsStarted!: () => void;
+      const allTurnsStarted = new Promise<void>((resolve) => {
+        resolveAllTurnsStarted = resolve;
+      });
+      const turnsStartedAt = performance.now();
+      // Keep the live artifact intact: buffered setup writes can arrive after this boundary.
+      // Inclusive millisecond timestamps conservatively include events on the boundary.
+      const timelineFrom = Date.now();
+      const turns = Promise.all(
+        Array.from({ length: options.concurrency }, (_, index) =>
+          runTurn(rpc, index, loadDeadlineAt, options.toolEvents, {
+            onStarted: () => {
+              startedTurnCount += 1;
+              if (startedTurnCount === options.concurrency) {
+                resolveAllTurnsStarted();
+              }
+            },
+            ...(sessionKeys[index] ? { sessionKey: sessionKeys[index] } : {}),
+          }),
+        ),
+      ).finally(() => {
+        turnsDone = true;
+        resolveAllTurnsStarted();
+      });
+      const freshConnection = allTurnsStarted.then(async (): Promise<FreshConnectionProbe> => {
+        const startedAt = performance.now();
+        try {
+          const freshClient = await connectGateway(port, loadDeadlineAt, protocolVersion, false);
+          freshClient.close();
+          return { error: null, latencyMs: performance.now() - startedAt, ok: true };
+        } catch (error) {
+          return {
+            error: describeProbeError(error),
+            latencyMs: performance.now() - startedAt,
+            ok: false,
+          };
+        }
+      });
+      const sampler = (async () => {
+        for (;;) {
+          const sampleStartedAt = performance.now();
+          const subscriptionKey = sessionKeys[readyz.length % sessionKeys.length];
+          const [sample, subscription] = await Promise.all([
+            sampleGateway({
+              deadlineAt: loadDeadlineAt,
+              port,
+              rpc,
+              runStartedAt,
+            }),
+            subscriptionProbeClient && subscriptionKey
+              ? timeRpcProbe(
+                  subscriptionProbeClient.request,
+                  "sessions.messages.subscribe",
+                  { key: subscriptionKey },
+                  runStartedAt,
+                )
+              : Promise.resolve(undefined),
+          ]);
+          if (subscription) {
+            messageSubscriptionsDuringLoad.push(subscription);
+            if (subscription.ok) {
+              await subscriptionProbeClient?.request("sessions.messages.unsubscribe", {
+                key: subscriptionKey,
+              });
+            }
+          }
+          readyz.push(sample.readyz);
+          sessionsList.push(sample.sessionsList);
+          controlUi.push(sample.controlUi);
+          if (performance.now() - lastRssSampleAt >= 1_000) {
+            // Linux reads procfs without spawning a process. Non-Linux hosts use
+            // the shared ps fallback at most once per second to bound perturbation.
+            peakRssMb = Math.max(peakRssMb, readGatewayProcessRssMb(gateway?.pid) ?? 0);
+            lastRssSampleAt = performance.now();
+          }
+          if (workloadDone() || readyz.length >= MAX_SAMPLES_PER_RUN) {
+            break;
+          }
+          await delay(
+            Math.min(
+              Math.max(0, options.cadenceMs - (performance.now() - sampleStartedAt)),
+              requireRemainingMs(loadDeadlineAt, "sampling gateway load"),
             ),
           );
-          history.push(...probes);
-          offset += options.historyBurst;
-          if (!workloadDone()) {
-            await delay(Math.min(options.cadenceMs, remainingMs(loadDeadlineAt)));
-          }
         }
-      }),
-    );
-    let nextUpdateIndex = 0;
-    const sessionUpdateLoad = Promise.all(
-      sessionUpdateClients.map(async (updateClient) => {
-        for (;;) {
-          const index = nextUpdateIndex++;
-          if (index >= options.sessionUpdates) {
-            return;
+      })();
+      const historyLoad = Promise.all(
+        historyClients.map(async (historyClient, clientIndex) => {
+          let offset = clientIndex * options.historyBurst;
+          while (!workloadDone() && history.length < MAX_SAMPLES_PER_RUN) {
+            const probes = await Promise.all(
+              Array.from({ length: options.historyBurst }, (_, index) =>
+                timeRpcProbe(
+                  historyClient.request,
+                  "chat.history",
+                  { sessionKey: sessionKeys[(offset + index) % sessionKeys.length] },
+                  runStartedAt,
+                ),
+              ),
+            );
+            history.push(...probes);
+            offset += options.historyBurst;
+            if (!workloadDone()) {
+              await delay(Math.min(options.cadenceMs, remainingMs(loadDeadlineAt)));
+            }
           }
-          const sessionKey = sessionKeys[index % sessionKeys.length];
-          const update = await timeRpcProbe(
-            updateClient.request,
-            "sessions.patch",
-            { key: sessionKey, label: `Benchmark update ${index + 1}` },
-            runStartedAt,
-          );
-          sessionUpdates.push(update);
-          if (!update.ok) {
-            throw new Error(`sessions.patch load probe failed: ${update.error}`);
+        }),
+      );
+      let nextUpdateIndex = 0;
+      const sessionUpdateLoad = Promise.all(
+        sessionUpdateClients.map(async (updateClient) => {
+          for (;;) {
+            const index = nextUpdateIndex++;
+            if (index >= options.sessionUpdates) {
+              return;
+            }
+            const sessionKey = sessionKeys[index % sessionKeys.length];
+            const update = await timeRpcProbe(
+              updateClient.request,
+              "sessions.patch",
+              { key: sessionKey, label: `Benchmark update ${index + 1}` },
+              runStartedAt,
+            );
+            sessionUpdates.push(update);
+            if (!update.ok) {
+              throw new Error(`sessions.patch load probe failed: ${update.error}`);
+            }
           }
-        }
-      }),
-    ).finally(() => {
-      updatesDone = true;
-    });
-    await Promise.all([turns, sampler, historyLoad, sessionUpdateLoad]);
-    if (options.historyClients > 0 && !history.some((sample) => sample.ok)) {
-      const failure = history[0]?.error ?? "no requests completed before turns finished";
-      throw new Error(`all configured chat.history load probes failed: ${failure}`);
-    }
-    const freshConnectionResult = await freshConnection;
-    const turnsDurationMs = performance.now() - turnsStartedAt;
-    const memoryAfter = await readGatewayMemory(rpc, runStartedAt);
-    peakRssMb = Math.max(peakRssMb, memoryAfter.rssMb);
-    const modelRequestCount = existsSync(requestLogPath)
-      ? readFileSync(requestLogPath, "utf8").split(/\r?\n/u).filter(Boolean).length
-      : 0;
-
-    return {
-      controlUi,
-      durationMs: performance.now() - runStartedAt,
-      freshConnection: freshConnectionResult,
-      history,
-      memory: { after: memoryAfter, before: memoryBefore, peakRssMb },
-      messageSubscriptions,
-      messageSubscriptionsDuringLoad,
-      modelRequestCount,
-      probeWarmup,
-      pluginMetadataScans: summarizePluginMetadataScans(
-        options.diagnosticsTimeline ? readDiagnosticsTimelineSpans(timelinePath) : [],
-      ),
-      readyz,
-      sessionSeedDurationMs,
-      sessionsList,
-      sessionUpdates,
-      setupDurationMs,
-      turnCount: options.concurrency,
-      turnsDurationMs,
-    };
-  } catch (error) {
-    const detail = formatRunFailure(error, gatewayOutput, mockOutput);
-    throw new Error(detail, { cause: error });
-  } finally {
-    for (const auxiliaryClient of auxiliaryClients) {
-      auxiliaryClient.close();
-    }
-    client?.close();
-    if (gateway) {
-      if (options.cpuProfDir && gateway.exitCode === null && gateway.signalCode === null) {
-        // V8 flushes the main-isolate CPU profile on its normal interrupt path.
-        const profileFlushed = new Promise<void>((resolve) => {
-          gateway!.once("exit", () => {
-            resolve();
-          });
-        });
-        gateway.kill("SIGINT");
-        await Promise.race([profileFlushed, delay(2_000)]);
+        }),
+      ).finally(() => {
+        updatesDone = true;
+      });
+      await Promise.all([turns, sampler, historyLoad, sessionUpdateLoad]);
+      if (options.historyClients > 0 && !history.some((sample) => sample.ok)) {
+        const failure = history[0]?.error ?? "no requests completed before turns finished";
+        throw new Error(`all configured chat.history load probes failed: ${failure}`);
       }
-      await stopChild(gateway);
+      const freshConnectionResult = await freshConnection;
+      const turnsDurationMs = performance.now() - turnsStartedAt;
+      const memoryAfter = await readGatewayMemory(rpc, runStartedAt);
+      peakRssMb = Math.max(peakRssMb, memoryAfter.rssMb);
+      const modelRequestCount = existsSync(requestLogPath)
+        ? readFileSync(requestLogPath, "utf8").split(/\r?\n/u).filter(Boolean).length
+        : 0;
+
+      timelineWindow = { from: timelineFrom, through: Date.now() };
+      result = {
+        controlUi,
+        durationMs: performance.now() - runStartedAt,
+        freshConnection: freshConnectionResult,
+        history,
+        memory: { after: memoryAfter, before: memoryBefore, peakRssMb },
+        messageSubscriptions,
+        messageSubscriptionsDuringLoad,
+        modelRequestCount,
+        probeWarmup,
+        pluginMetadataScans: summarizePluginMetadataScans([]),
+        readyz,
+        sessionSeedDurationMs,
+        sessionsList,
+        sessionUpdates,
+        setupDurationMs,
+        turnCount: options.concurrency,
+        turnsDurationMs,
+      };
+    } catch (error) {
+      const detail = formatRunFailure(error, gatewayOutput, mockOutput);
+      throw new Error(detail, { cause: error });
+    } finally {
+      for (const auxiliaryClient of auxiliaryClients) {
+        auxiliaryClient.close();
+      }
+      client?.close();
+      if (gateway) {
+        if (options.cpuProfDir && gateway.exitCode === null && gateway.signalCode === null) {
+          // V8 flushes the main-isolate CPU profile on its normal interrupt path.
+          const profileFlushed = new Promise<void>((resolve) => {
+            gateway!.once("exit", () => {
+              resolve();
+            });
+          });
+          gateway.kill("SIGINT");
+          await Promise.race([profileFlushed, delay(2_000)]);
+        }
+        gatewayExit = await stopChild(gateway);
+      }
     }
-    if (mockProvider) {
-      await stopChild(mockProvider);
+    if (options.diagnosticsTimeline) {
+      if (!gatewayExit || gatewayExit.exitCode !== 0 || gatewayExit.signal !== null) {
+        throw new Error("Gateway did not exit cleanly; diagnostics timeline may be incomplete");
+      }
+      if (gatewayOutput.readOutput().includes("[diagnostics] failed to write timeline event")) {
+        throw new Error("Gateway reported a diagnostics timeline write failure");
+      }
+      result.pluginMetadataScans = summarizePluginMetadataScans(
+        readDiagnosticsTimelineSpans(timelinePath, timelineWindow),
+      );
     }
-    rmSync(root, { force: true, maxRetries: 3, recursive: true, retryDelay: 100 });
+    return result;
+  } finally {
+    try {
+      if (mockProvider) {
+        await stopChild(mockProvider);
+      }
+    } finally {
+      rmSync(root, { force: true, maxRetries: 3, recursive: true, retryDelay: 100 });
+    }
   }
 }
 
-function summarizeRuns(runs: readonly BenchmarkRun[]) {
+function summarizeRuns(
+  runs: readonly BenchmarkRun[],
+  options: Pick<CliOptions, "maxControlMs" | "maxHandshakeMs"> = {},
+) {
+  const controlUi = runs.flatMap((run) => run.controlUi);
   const readyz = runs.flatMap((run) => run.readyz);
+  const sessionsList = runs.flatMap((run) => run.sessionsList);
   const history = runs.flatMap((run) => run.history);
   const subscriptions = runs.flatMap((run) => run.messageSubscriptions);
   const subscriptionsDuringLoad = runs.flatMap((run) => run.messageSubscriptionsDuringLoad);
   const sessionUpdates = runs.flatMap((run) => run.sessionUpdates);
+  // Setup subscriptions and warmup probes are not load-phase measurements.
+  const budgetViolations = [
+    {
+      name: "fresh Gateway connection",
+      maxMs: options.maxHandshakeMs,
+      samples: runs.map((run) => run.freshConnection),
+    },
+    ...(
+      [
+        ["readyz", readyz],
+        ["Control UI", controlUi],
+        ["sessions.list", sessionsList],
+        ["chat.history", history],
+        ["sessions.messages.subscribe", subscriptionsDuringLoad],
+        ["sessions.patch", sessionUpdates],
+      ] as const
+    ).map(([name, samples]) => ({
+      name: `Gateway ${name} probe`,
+      maxMs: options.maxControlMs,
+      samples,
+    })),
+  ].flatMap(({ name, maxMs, samples }) => {
+    if (maxMs === undefined) {
+      return [];
+    }
+    const violation = samples.find((sample) => !sample.ok || sample.latencyMs > maxMs);
+    return violation
+      ? [
+          `${name} exceeded ${maxMs}ms: ok=${violation.ok} ` +
+            `latencyMs=${violation.latencyMs.toFixed(1)} error=${violation.error ?? "none"}`,
+        ]
+      : [];
+  });
   return {
-    controlUiFailedSamples: runs.flatMap((run) => run.controlUi).filter((sample) => !sample.ok)
-      .length,
-    controlUiLatencyMs: summarizeNumbers(
-      runs.flatMap((run) => run.controlUi.map((sample) => sample.latencyMs)),
-    ),
+    budgetViolations,
+    controlUiFailedSamples: controlUi.filter((sample) => !sample.ok).length,
+    controlUiLatencyMs: summarizeNumbers(controlUi.map((sample) => sample.latencyMs)),
     cpuCoreRatio: summarizeNumbers(
       readyz.flatMap((sample) => (sample.cpuCoreRatio == null ? [] : [sample.cpuCoreRatio])),
     ),
@@ -1429,12 +1498,8 @@ function summarizeRuns(runs: readonly BenchmarkRun[]) {
     readyzFailedSamples: readyz.filter((sample) => !sample.ok).length,
     sampleCount: readyz.length,
     sessionSeedDurationMs: summarizeNumbers(runs.map((run) => run.sessionSeedDurationMs)),
-    sessionsListLatencyMs: summarizeNumbers(
-      runs.flatMap((run) => run.sessionsList.map((sample) => sample.latencyMs)),
-    ),
-    sessionsListFailedSamples: runs
-      .flatMap((run) => run.sessionsList)
-      .filter((sample) => !sample.ok).length,
+    sessionsListLatencyMs: summarizeNumbers(sessionsList.map((sample) => sample.latencyMs)),
+    sessionsListFailedSamples: sessionsList.filter((sample) => !sample.ok).length,
     sessionUpdateFailedSamples: sessionUpdates.filter((sample) => !sample.ok).length,
     sessionUpdateLatencyMs: summarizeNumbers(sessionUpdates.map((sample) => sample.latencyMs)),
     sessionUpdateSampleCount: sessionUpdates.length,
@@ -1496,7 +1561,7 @@ async function main(): Promise<void> {
     sessionUpdates: options.sessionUpdates,
     streamChunkDelayMs: options.streamChunkDelayMs,
     subscribers: options.subscribers,
-    summary: summarizeRuns(runs),
+    summary: summarizeRuns(runs, options),
     toolEvents: options.toolEvents,
     visibleObserver: options.visibleObserver,
     workspaceFanout: options.workspaceFanout,
@@ -1508,37 +1573,8 @@ async function main(): Promise<void> {
   if (options.json || !options.output) {
     console.log(JSON.stringify(payload, null, 2));
   }
-  if (options.maxHandshakeMs !== undefined) {
-    const violation = runs.find(
-      (run) => !run.freshConnection.ok || run.freshConnection.latencyMs > options.maxHandshakeMs!,
-    );
-    if (violation) {
-      throw new Error(
-        `fresh Gateway connection exceeded ${options.maxHandshakeMs}ms: ` +
-          `ok=${violation.freshConnection.ok} ` +
-          `latencyMs=${violation.freshConnection.latencyMs.toFixed(1)} ` +
-          `error=${violation.freshConnection.error ?? "none"}`,
-      );
-    }
-  }
-  if (options.maxControlMs !== undefined) {
-    const controlSamples: Array<{ name: string; sample: TimedProbe }> = [];
-    for (const run of runs) {
-      controlSamples.push(
-        ...run.readyz.map((sample) => ({ name: "readyz", sample })),
-        ...run.sessionsList.map((sample) => ({ name: "sessions.list", sample })),
-      );
-    }
-    const violation = controlSamples.find(
-      ({ sample }) => !sample.ok || sample.latencyMs > options.maxControlMs!,
-    );
-    if (violation) {
-      throw new Error(
-        `Gateway ${violation.name} probe exceeded ${options.maxControlMs}ms: ` +
-          `ok=${violation.sample.ok} latencyMs=${violation.sample.latencyMs.toFixed(1)} ` +
-          `error=${violation.sample.error ?? "none"}`,
-      );
-    }
+  if (payload.summary.budgetViolations.length > 0) {
+    throw new Error(payload.summary.budgetViolations.join("\n"));
   }
 }
 
@@ -1550,6 +1586,7 @@ export const testing = {
   runBenchmarkSamples,
   runTurn,
   sampleGateway,
+  readDiagnosticsTimelineSpans,
   summarizePluginMetadataScans,
   summarizeNumbers,
   summarizeRuns,

@@ -1,4 +1,4 @@
-// Covers which ChatGPT Responses failures the SSE transport retries.
+// Covers that ChatGPT Responses leaves transient retry ownership to the runner.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { configureAiTransportHost } from "../host.js";
 import { responsesPromptObserver, type ResponsesPromptObservation } from "../internal/openai.js";
@@ -74,7 +74,7 @@ describe("streamOpenAICodexResponses retry classification", () => {
     },
   );
 
-  it("still retries retryable ChatGPT responses", async () => {
+  it("does not retry retryable ChatGPT responses", async () => {
     const prompt = "PRIVATE-NATIVE-SSE-RETRY-PROMPT";
     const observations: ResponsesPromptObservation[] = [];
     const fetchMock = vi
@@ -112,10 +112,12 @@ describe("streamOpenAICodexResponses retry classification", () => {
     ).result();
 
     expect(result.stopReason).toBe("error");
-    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(acceptanceObserver).not.toHaveBeenCalled();
-    expect(onResponse.mock.calls.map(([response]) => response.status)).toEqual([503, 401]);
-    expect(observations).toHaveLength(2);
+    expect(
+      onResponse.mock.calls.map(([response]) => response.status).every((status) => status === 503),
+    ).toBe(true);
+    expect(observations).toHaveLength(1);
     expect(observations.every((entry) => entry.egress === "native-codex-sse")).toBe(true);
     expect(observations.every((entry) => entry.payloadVariant === "initial")).toBe(true);
     expect(observations.every((entry) => entry.matchesAssembledPrompt)).toBe(true);
@@ -176,7 +178,7 @@ describe("streamOpenAICodexResponses retry classification", () => {
     expect(setTimeoutSpy).not.toHaveBeenCalled();
   });
 
-  it("keeps retrying transient network failures", async () => {
+  it("does not retry transient network failures", async () => {
     const fetchMock = vi
       .fn<typeof fetch>()
       .mockRejectedValueOnce(Object.assign(new Error("socket hang up"), { code: "ECONNRESET" }))
@@ -195,7 +197,7 @@ describe("streamOpenAICodexResponses retry classification", () => {
     }).result();
 
     expect(result.stopReason).toBe("error");
-    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
   it.each([
@@ -226,8 +228,28 @@ describe("streamOpenAICodexResponses retry classification", () => {
       transport: "sse",
     }).result();
 
-    expect(fetchMock).toHaveBeenCalledTimes(2);
-    expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), 7_000);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(setTimeoutSpy).not.toHaveBeenCalled();
+  });
+
+  it("carries Retry-After header timing in the terminal error text", async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(
+      new Response(JSON.stringify({ error: { message: "Too many requests" } }), {
+        status: 429,
+        statusText: "Too Many Requests",
+        headers: { "retry-after": "7" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await streamOpenAICodexResponses(model, context, {
+      apiKey: jwt,
+      transport: "sse",
+    }).result();
+
+    expect(result.stopReason).toBe("error");
+    expect(result.errorMessage).toContain("Retry-After: 7 seconds");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
   it("does not retry a bodyless 304 response", async () => {

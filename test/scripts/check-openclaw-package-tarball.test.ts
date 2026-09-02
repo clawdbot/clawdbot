@@ -15,7 +15,11 @@ import { delimiter, dirname, isAbsolute, join } from "node:path";
 import { gte as semverGte, valid as validSemver } from "semver";
 import { describe, expect, it } from "vitest";
 import { LOCAL_BUILD_METADATA_DIST_PATHS } from "../../scripts/lib/local-build-metadata-paths.mts";
-import { PACKAGE_INSTALL_GUARD_RELATIVE_PATH } from "../../scripts/lib/package-dist-inventory.ts";
+import {
+  LEGACY_PACKAGE_INSTALL_GUARD_RELATIVE_PATH,
+  PACKAGE_LIFECYCLE_MARKER_CONTRACT_RELATIVE_PATH,
+  PACKAGE_LIFECYCLE_PENDING_RELATIVE_PATH,
+} from "../../scripts/lib/package-lifecycle-marker.mjs";
 import { WORKSPACE_TEMPLATE_PACK_PATHS } from "../../scripts/lib/workspace-bootstrap-smoke.mts";
 
 const CHECK_SCRIPT = "scripts/check-openclaw-package-tarball.mts";
@@ -75,7 +79,7 @@ function withTarball(
     includeCodeModeWorker?: boolean;
     includeCodeModeWorkerInInventory?: boolean;
     includeControlUi?: boolean;
-    includeInstallGuard?: boolean;
+    includeLifecycleMarker?: boolean;
     includeShrinkwrap?: boolean;
     includeWorkspaceTemplates?: boolean;
     packageJson?: Record<string, unknown>;
@@ -130,12 +134,12 @@ function withTarball(
               `# ${relativePath}\n`,
             ]),
           );
-    const installGuardFile =
-      options.includeInstallGuard === false
+    const lifecycleMarkerFile =
+      options.includeLifecycleMarker === false
         ? {}
         : {
-            [PACKAGE_INSTALL_GUARD_RELATIVE_PATH]:
-              "OpenClaw package preinstall has not completed.\n",
+            [PACKAGE_LIFECYCLE_PENDING_RELATIVE_PATH]: "pending\n",
+            [PACKAGE_LIFECYCLE_MARKER_CONTRACT_RELATIVE_PATH]: "export {};\n",
           };
     const shrinkwrapFile =
       (options.includeShrinkwrap ?? usesLegacyShrinkwrapByDefault(version))
@@ -151,7 +155,7 @@ function withTarball(
     const tarFiles = {
       ...workspaceTemplates,
       ...controlUiFiles,
-      ...installGuardFile,
+      ...lifecycleMarkerFile,
       ...shrinkwrapFile,
       ...(includeCodeModeWorker ? { [CODE_MODE_WORKER_PATH]: "export {};\n" } : {}),
       ...files,
@@ -388,27 +392,40 @@ describe("check-openclaw-package-tarball", () => {
     it(testCase.name, () => checkTarball(testCase));
   }
 
-  it("requires an install guard omitted from the dist inventory", () => {
+  it("requires package lifecycle state outside the dist inventory", () => {
     checkTarball({
       version: "0.0.0",
-      options: { includeInstallGuard: false },
+      options: { includeLifecycleMarker: false },
       status: "nonzero",
-      stderr: [`missing required tar entry ${PACKAGE_INSTALL_GUARD_RELATIVE_PATH}`],
+      stderr: [`missing required tar entry ${PACKAGE_LIFECYCLE_PENDING_RELATIVE_PATH}`],
     });
 
     checkTarball({
-      inventory: ["dist/index.js", PACKAGE_INSTALL_GUARD_RELATIVE_PATH],
+      version: "2026.8.2",
+      files: {
+        "dist/index.js": "export {};\n",
+        [LEGACY_PACKAGE_INSTALL_GUARD_RELATIVE_PATH]: "pending\n",
+      },
       status: "nonzero",
-      stderr: [
-        `package dist inventory must omit install guard ${PACKAGE_INSTALL_GUARD_RELATIVE_PATH}`,
-      ],
+      stderr: [`forbidden legacy tar entry ${LEGACY_PACKAGE_INSTALL_GUARD_RELATIVE_PATH}`],
     });
 
     checkTarball({
-      version: "2026.7.1",
-      options: { includeInstallGuard: false },
+      version: "2026.8.1",
+      options: { includeLifecycleMarker: false },
       status: 0,
-      stderr: ["legacy package omits the preinstall completion guard"],
+      stderr: ["legacy package omits the lifecycle pending marker"],
+    });
+
+    checkTarball({
+      version: "2026.8.1",
+      files: {
+        "dist/index.js": "export {};\n",
+        [PACKAGE_LIFECYCLE_MARKER_CONTRACT_RELATIVE_PATH]: "export {};\n",
+      },
+      options: { includeLifecycleMarker: false },
+      status: "nonzero",
+      stderr: [`missing required tar entry ${PACKAGE_LIFECYCLE_PENDING_RELATIVE_PATH}`],
     });
   });
 

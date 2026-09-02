@@ -11,6 +11,7 @@ import {
 import { canResolveEnvSecretRefInReadOnlyPath } from "openclaw/plugin-sdk/secret-ref-readonly";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
+  listTelegramAccountIds,
   mergeTelegramAccountConfig,
   resolveDefaultTelegramAccountId,
   resolveTelegramAccountConfig,
@@ -23,7 +24,7 @@ type CredentialUnavailableDiagnostic = Extract<
 
 export type TelegramCredentialStatus = "available" | "configured_unavailable" | "missing";
 
-export type InspectedTelegramAccount = {
+type TelegramAccountInspection = {
   accountId: string;
   enabled: boolean;
   name?: string;
@@ -32,7 +33,13 @@ export type InspectedTelegramAccount = {
   tokenStatus: TelegramCredentialStatus;
   credentialDiagnostics?: CredentialUnavailableDiagnostic[];
   configured: boolean;
+  stateReason?: string;
   config: TelegramAccountConfig;
+};
+
+export type InspectedTelegramAccount = TelegramAccountInspection & {
+  mode: "webhook" | "polling";
+  allowUnmentionedGroups: boolean;
 };
 
 function inspectTokenFile(
@@ -136,7 +143,7 @@ function inspectTelegramAccountPrimary(params: {
   cfg: OpenClawConfig;
   accountId: string;
   envToken?: string | null;
-}): InspectedTelegramAccount {
+}): TelegramAccountInspection {
   const accountId = normalizeAccountId(params.accountId);
   const merged = mergeTelegramAccountConfig(params.cfg, accountId);
   const enabled = params.cfg.channels?.telegram?.enabled !== false && merged.enabled !== false;
@@ -246,15 +253,18 @@ function inspectTelegramAccountPrimary(params: {
     tokenSource: "none",
     tokenStatus: "missing",
     configured: false,
+    stateReason: allowChannelCredentialFallback
+      ? undefined
+      : `not configured: unknown accountId "${accountId}" in multi-bot setup`,
     config: merged,
   };
 }
 
-export function inspectTelegramAccount(params: {
+function readTelegramAccount(params: {
   cfg: OpenClawConfig;
   accountId?: string | null;
   envToken?: string | null;
-}): InspectedTelegramAccount {
+}): TelegramAccountInspection {
   const resolvedAccountId = params.accountId ?? resolveDefaultTelegramAccountId(params.cfg);
   return resolveAccountWithDefaultFallback({
     accountId: resolvedAccountId,
@@ -268,4 +278,63 @@ export function inspectTelegramAccount(params: {
     hasCredential: (account) => account.tokenSource !== "none",
     resolveDefaultAccountId: () => resolveDefaultTelegramAccountId(params.cfg),
   });
+}
+
+export function findTelegramTokenOwnerAccountId(params: {
+  cfg: OpenClawConfig;
+  accountId: string;
+  envToken?: string | null;
+}): string | null {
+  const normalizedAccountId = normalizeAccountId(params.accountId);
+  const tokenOwners = new Map<string, string>();
+  for (const id of listTelegramAccountIds(params.cfg)) {
+    // Read credentials before policy projection so duplicate inspection cannot recurse.
+    const account = readTelegramAccount({ ...params, accountId: id });
+    const token = account.token.trim();
+    if (!token) {
+      continue;
+    }
+    const ownerAccountId = tokenOwners.get(token);
+    if (!ownerAccountId) {
+      tokenOwners.set(token, account.accountId);
+      continue;
+    }
+    if (account.accountId === normalizedAccountId) {
+      return ownerAccountId;
+    }
+  }
+  return null;
+}
+
+export function formatDuplicateTelegramTokenReason(params: {
+  accountId: string;
+  ownerAccountId: string;
+}): string {
+  return (
+    `Duplicate Telegram bot token: account "${params.accountId}" shares a token with ` +
+    `account "${params.ownerAccountId}". Keep one owner account per bot token.`
+  );
+}
+
+export function inspectTelegramAccount(
+  params: Parameters<typeof readTelegramAccount>[0],
+): InspectedTelegramAccount {
+  const account = readTelegramAccount(params);
+  const ownerAccountId = account.token
+    ? findTelegramTokenOwnerAccountId({ ...params, accountId: account.accountId })
+    : null;
+  const groups =
+    params.cfg.channels?.telegram?.accounts?.[account.accountId]?.groups ??
+    params.cfg.channels?.telegram?.groups;
+  return {
+    ...account,
+    configured: account.configured && !ownerAccountId,
+    stateReason: ownerAccountId
+      ? formatDuplicateTelegramTokenReason({ accountId: account.accountId, ownerAccountId })
+      : account.stateReason,
+    mode: account.config.webhookUrl ? "webhook" : "polling",
+    allowUnmentionedGroups: Object.values(groups ?? {}).some(
+      (group) => group?.requireMention === false,
+    ),
+  };
 }

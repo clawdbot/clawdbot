@@ -2,7 +2,8 @@ import type { HealthFinding } from "openclaw/plugin-sdk/health";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { PolicyEvidence, PolicyIngressEvidence } from "../policy-state.js";
 import { ingressPolicyShapeFinding } from "./access-shapes.js";
-import { CHECK_IDS, POLICY_CHECK_IDS } from "./check-ids.js";
+import { CHECK_IDS } from "./check-ids.js";
+import { policyEvidenceFinding as ingressFinding } from "./policy-evidence-finding.js";
 import { normalizePolicyChannelId } from "./policy-runtime.js";
 import { channelScopedPolicyTargets } from "./policy-scope.js";
 import { hasValidScopedPolicy } from "./scoped-policy-shape.js";
@@ -234,28 +235,6 @@ function scopedIngressChannelMatches(
   policyChannelId: string,
 ): boolean {
   return normalizePolicyChannelId(entry.channel ?? "") === policyChannelId;
-}
-
-function ingressFinding(
-  entry: PolicyIngressEvidence,
-  params: {
-    readonly checkId: (typeof POLICY_CHECK_IDS)[number];
-    readonly message: string;
-    readonly requirement: string;
-    readonly fixHint: string;
-  },
-): HealthFinding {
-  return {
-    checkId: params.checkId,
-    severity: "error",
-    message: params.message,
-    source: "policy",
-    path: "openclaw config",
-    ocPath: entry.source,
-    target: entry.source,
-    requirement: params.requirement,
-    fixHint: params.fixHint,
-  };
 }
 
 function ingressLabel(entry: PolicyIngressEvidence): string {

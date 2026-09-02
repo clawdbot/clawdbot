@@ -20,10 +20,9 @@ import {
 import type { SessionOwnerOption } from "./session-owner-chip.ts";
 
 /**
- * Worktree-session extras resolved lazily by the menu host after open; null
- * hides the block entirely (plain chat sessions), loading keeps the items
- * rendered-but-disabled so the menu layout never shifts under the pointer.
- * A resolved null `worktreePath` drops the editor row for good — see
+ * Worktree-session extras resolved lazily by the menu host after open.
+ * Only resolved destinations are offered. A null `worktreePath` hides editor
+ * destinations — see
  * `native-editor-locality.runtime.ts` for which checkouts ever get one.
  */
 export type SessionMenuWork = {
@@ -43,6 +42,9 @@ export type SessionMenuActionKind = SessionMenuAction["kind"];
 class SessionMenu extends OpenClawLightDomElement {
   @property({ attribute: false }) session: SessionMenuData = EMPTY_SESSION_MENU_DATA;
   @property({ attribute: false }) compact = false;
+  @property({ attribute: false }) navigationAllowed = false;
+  @property({ attribute: false }) copyMarkdownAllowed = false;
+  @property({ attribute: false }) splitAllowed = false;
   // >1 renders the batch menu: only actions that apply to every selected
   // session (unread/group/archive/delete); `session` then carries aggregated
   // flags (unread = all unread, category = shared category or null).
@@ -74,6 +76,9 @@ class SessionMenu extends OpenClawLightDomElement {
       session: this.session,
       selectionCount: this.selectionCount,
       compact: this.compact,
+      navigationAllowed: this.navigationAllowed,
+      copyMarkdownAllowed: this.copyMarkdownAllowed,
+      splitAllowed: this.splitAllowed,
       disabled: this.disabled,
       actionDisabledReasons: this.actionDisabledReasons,
       forkDisabled: this.forkDisabled,
@@ -134,9 +139,7 @@ class SessionMenu extends OpenClawLightDomElement {
     if (compactView) {
       this.compactView = compactView;
       this.managementActions.prepareCompactView(compactView);
-      void this.updateComplete.then(() => {
-        this.querySelector<HTMLElement>("wa-dropdown-item:not([disabled])")?.focus();
-      });
+      this.managementActions.focusCurrentView();
       return;
     }
     if (this.managementActions.handleSelect(value)) {
@@ -159,16 +162,10 @@ class SessionMenu extends OpenClawLightDomElement {
   };
 
   private renderWorkItems() {
-    const work = this.work;
-    if (!work) {
+    const pullRequestUrl = this.work?.pullRequestUrl;
+    if (!pullRequestUrl) {
       return nothing;
     }
-    const pullRequestUrl = work.pullRequestUrl;
-    const worktreePath = work.worktreePath;
-    // Hold the row while the path resolves so the menu does not shift under the
-    // pointer, then drop it once we know the checkout is unreachable from this
-    // browser: a disabled row would only advertise a handoff that cannot run.
-    const showEditorEntry = work.loading || Boolean(worktreePath);
     return html`
       <wa-dropdown-item
         class="session-menu__item"
@@ -184,8 +181,6 @@ class SessionMenu extends OpenClawLightDomElement {
         <span class="session-menu__text">${t("sessionsView.openPullRequest")}</span>
         ${menuShortcutHint("g")}
       </wa-dropdown-item>
-      ${showEditorEntry ? this.managementActions.renderOpenInEntry(worktreePath) : nothing}
-      <div class="session-menu__separator" role="separator"></div>
     `;
   }
 
@@ -227,8 +222,9 @@ class SessionMenu extends OpenClawLightDomElement {
                     ${t("sessionsView.lastActive", { time: this.lastActive })}
                   </div>`
                 : nothing}
-              ${batch ? nothing : this.renderWorkItems()}
               ${this.managementActions.renderPrimaryActions()}
+              <div class="session-menu__separator" role="separator"></div>
+              ${this.managementActions.renderOrganizationActions()}
               ${!batch && this.workboard
                 ? html`
                     <wa-dropdown-item
@@ -250,7 +246,12 @@ class SessionMenu extends OpenClawLightDomElement {
                     </wa-dropdown-item>
                   `
                 : nothing}
-              ${this.managementActions.renderGroupAction()}
+              ${batch
+                ? nothing
+                : html`
+                    <div class="session-menu__separator" role="separator"></div>
+                    ${this.managementActions.renderTransferActions()} ${this.renderWorkItems()}
+                  `}
               <div class="session-menu__separator" role="separator"></div>
               ${!batch && this.cloudWorkerStopAllowed
                 ? html`
@@ -268,7 +269,7 @@ class SessionMenu extends OpenClawLightDomElement {
                     </wa-dropdown-item>
                   `
                 : nothing}
-              ${this.managementActions.renderLifecycleActions()}
+              ${this.managementActions.renderDeleteAction()}
             `}
       </wa-dropdown>`,
     );

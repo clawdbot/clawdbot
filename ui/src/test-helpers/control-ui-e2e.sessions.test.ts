@@ -143,6 +143,27 @@ it.for(["rows", "static list"])(
   },
 );
 
+it("returns a missing descriptor without materializing an unseeded session", async ({
+  connect,
+}) => {
+  const { request } = await connect({
+    defaultAgentId: "ops",
+    sessionKey: notes.key,
+    sessions: [notes],
+  });
+  const missingKey = "agent:ops:main";
+
+  expect((await request("sessions.describe", { key: missingKey })).payload).toEqual({
+    session: null,
+  });
+  expect((await request("sessions.list")).payload.sessions).toEqual([
+    expect.objectContaining(notes),
+  ]);
+  expect((await request("chat.history", { sessionKey: missingKey })).payload).not.toHaveProperty(
+    "sessionInfo",
+  );
+});
+
 it.for(["cases", "sequence"])(
   "does not invent metadata for %s-only rows",
   async (kind, { connect }) => {
@@ -162,7 +183,6 @@ it.for(["cases", "sequence"])(
             : { sequence: [list, { sessions: [] }] },
       },
     });
-    const identity = { key: row.key, sessionId: row.sessionId };
     for (const method of ["chat.startup", "chat.history"]) {
       // A sessionInfo is a complete row replacement at the UI boundary, not a patch.
       expect((await request(method, { sessionKey: row.key })).payload).not.toHaveProperty(
@@ -170,9 +190,8 @@ it.for(["cases", "sequence"])(
       );
     }
     expect((await request("sessions.list")).payload.sessions).toEqual([row]);
-    expect((await request("sessions.describe", { key: row.key })).payload.session).toEqual(
-      identity,
-    );
+    // Wire-only list responses do not declare a canonical stored row for describe.
+    expect((await request("sessions.describe", { key: row.key })).payload.session).toBeNull();
   },
 );
 

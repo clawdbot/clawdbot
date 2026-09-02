@@ -375,15 +375,16 @@ describe("ConfigPage header", () => {
 
 describe("ConfigPage moved section routes", () => {
   it.each([
-    ["channels", "channels", ""],
-    ["broadcast", "advanced", "?section=broadcast"],
-    ["talk", "talk", "?section=talk"],
-  ])("redirects the former Communications %s section", (section, routeId, search) => {
+    ["communications", "channels", "channels", ""],
+    ["communications", "broadcast", "advanced", "?section=broadcast"],
+    ["communications", "talk", "talk", "?section=talk"],
+    ["appearance", "wizard", "advanced", "?section=wizard"],
+  ])("redirects the former %s %s section", (pageId, section, routeId, search) => {
     const navigate = vi.fn();
     const page = new ConfigPage();
     const state = page as unknown as {
       context: { navigate: typeof navigate };
-      pageId: "communications";
+      pageId: string;
       routeData: {
         pathname: string;
         search: string;
@@ -396,9 +397,9 @@ describe("ConfigPage moved section routes", () => {
       syncRouteData: () => void;
     };
     state.context = { navigate };
-    state.pageId = "communications";
+    state.pageId = pageId;
     state.routeData = {
-      pathname: "/settings/communications",
+      pathname: `/settings/${pageId}`,
       search: `?section=${section}`,
       hash: "",
       section,
@@ -850,7 +851,20 @@ describe("ConfigPage Updates integration", () => {
     }
     channel.value = "beta";
     channel.dispatchEvent(new Event("change"));
-    const automatic = container.querySelector<HTMLElement & { checked: boolean }>("wa-switch");
+    const policySwitches = [
+      ...container.querySelectorAll<HTMLElement & { checked: boolean }>("wa-switch"),
+    ];
+    const checks = policySwitches.find(
+      (control) => control.textContent?.trim() === "Check for updates",
+    );
+    if (!checks) {
+      throw new Error("Missing update checks control");
+    }
+    checks.checked = false;
+    checks.dispatchEvent(new Event("change"));
+    const automatic = policySwitches.find(
+      (control) => control.textContent?.trim() === "Automatic updates",
+    );
     if (!automatic) {
       throw new Error("Missing automatic update control");
     }
@@ -862,6 +876,7 @@ describe("ConfigPage Updates integration", () => {
     await nextFrame();
 
     expect(patchForm).toHaveBeenCalledWith(["update", "channel"], "beta");
+    expect(patchForm).toHaveBeenCalledWith(["update", "checkOnStart"], false);
     expect(patchForm).toHaveBeenCalledWith(["update", "auto", "enabled"], true);
     // Settings shares the sidebar card's confirmation gate: nothing runs on the click itself.
     expect(runUpdate).not.toHaveBeenCalled();

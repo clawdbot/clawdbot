@@ -129,9 +129,6 @@ describe("monitorTwitchProvider", () => {
           resolveStorePath: vi.fn(() => "/tmp/sessions.json"),
           recordInboundSession: vi.fn(),
         },
-        text: {
-          resolveMarkdownTableMode: vi.fn(() => "off"),
-        },
       },
     });
   });

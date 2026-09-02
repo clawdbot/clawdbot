@@ -158,7 +158,7 @@ session to confirm the effective tool list.
 **Defaults:**
 
 - **Model:** native sub-agents inherit the caller unless you set `agents.defaults.subagents.model` (or per-agent `agents.entries.*.subagents.model`). ACP runtime spawns use the same configured subagent model when present; otherwise the ACP harness keeps its own default. An explicit `sessions_spawn.model` still wins.
-- **Thinking:** native sub-agents inherit the caller unless you set `agents.defaults.subagents.thinking` (or per-agent `agents.entries.*.subagents.thinking`). ACP runtime spawns also apply `agents.defaults.models["provider/model"].params.thinking` for the selected model. An explicit `sessions_spawn.thinking` still wins.
+- **Thinking:** native sub-agents inherit the caller's active turn, including one-shot thinking overrides, unless you set `agents.defaults.subagents.thinking` (or per-agent `agents.entries.*.subagents.thinking`). ACP runtime spawns also apply `agents.defaults.models["provider/model"].params.thinking` for the selected model. An explicit `sessions_spawn.thinking` still wins.
 - **Run timeout:** pass `runTimeoutSeconds` to set a timeout for a specific native, ACP, or visible sub-agent run. When omitted, OpenClaw uses `agents.defaults.subagents.runTimeoutSeconds` if configured; otherwise it falls back to `0` (no timeout). An explicit `0` disables the timeout for that run.
 - **Process lifetime:** a detached OpenClaw sub-agent has its own run lifecycle. A background task created inside an external CLI backend is different: it shares the parent CLI subprocess and stops if that parent reaches `agents.defaults.timeoutSeconds`.
 - **Task delivery:** native sub-agents receive their delegated task in a `[Subagent Task]` message appended after any forked history. Inherited task envelopes are context, not the current child's assignment. The sub-agent system prompt carries runtime rules and routing context, not a hidden duplicate of the task.
@@ -337,9 +337,7 @@ waiting.
 
 Automatic continuation is specific to the plugin runtime API above. Ordinary
 follow-ups through routes not tracked as sub-agent runs neither continue the
-paused run nor announce its requester. Explicit `subagents` steering is
-different: it deliberately replaces the yielded run and continues the same
-child session.
+paused run nor announce its requester.
 
 Among plugin runtime follow-ups, continuation applies to those that use default
 delivery. A follow-up that supplies its own requester or completion-delivery
@@ -463,6 +461,9 @@ remain spawnable while inheriting defaults.
 - Configured run timeouts do **not** auto-archive; they only stop the run. The session remains until auto-archive.
 - Auto-archive applies equally to depth-1 and depth-2 sessions.
 - Browser cleanup is separate from archive cleanup: tracked browser tabs/processes are best-effort closed when the run finishes, even if the transcript/session record is kept.
+
+The `subagent_ended` plugin hook is best-effort. Hook execution or plugin runtime
+loading failures are logged and do not abort sub-agent cleanup.
 
 ## Nested sub-agents
 

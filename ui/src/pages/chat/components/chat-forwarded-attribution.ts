@@ -1,12 +1,16 @@
 // Attribution row for cross-session (sessions_send) forwarded messages.
 import { html, nothing } from "lit";
+import type { AgentsListResult } from "../../../api/types.ts";
 import { icons } from "../../../components/icons.ts";
 import { t } from "../../../i18n/index.ts";
 import type { MessageGroup } from "../../../lib/chat/chat-types.ts";
 import { parseAgentSessionKey } from "../../../lib/sessions/session-key.ts";
-import type { SenderAgentAvatarOptions } from "../chat-avatar.ts";
 
-type ForwardedAttributionOptions = SenderAgentAvatarOptions & { mainKey?: string };
+type ForwardedAttributionOptions = {
+  agentId?: string;
+  agents?: AgentsListResult["agents"];
+  mainKey?: string;
+};
 
 /**
  * Label rules (operator decision, 2026-08-30): an agent's main session reads

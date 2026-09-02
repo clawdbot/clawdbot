@@ -43,6 +43,7 @@ export function resolveCompactionRuntimeSelection(params: {
   authProfileId?: string | null;
   modelSelectionLocked?: boolean;
   sandboxSessionKey?: string | null;
+  sandboxAgentId?: string;
   sessionKey?: string | null;
   agentId?: string;
   boundHarnessRuntime?: string | null;
@@ -52,9 +53,10 @@ export function resolveCompactionRuntimeSelection(params: {
 }) {
   const runtimePolicySessionKey = params.sandboxSessionKey ?? params.sessionKey ?? undefined;
   const runtimePolicyAgentId =
-    params.sandboxSessionKey && parseAgentSessionKey(params.sandboxSessionKey)
+    params.sandboxAgentId ??
+    (params.sandboxSessionKey && parseAgentSessionKey(params.sandboxSessionKey)
       ? undefined
-      : params.agentId;
+      : params.agentId);
   const policyTarget = resolveEmbeddedCompactionTarget({
     config: params.config,
     provider: params.provider,

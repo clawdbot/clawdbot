@@ -312,6 +312,7 @@ export type MsgContext = Partial<CanonicalInboundText> & {
   SenderId?: string;
   /** Trusted in-process creation provenance; never populated from channel payloads. */
   SessionCreation?: {
+    skillLibrarySelections?: import("../../packages/gateway-protocol/src/schema/skill-library.js").SkillLibrarySelection[];
     via: import("../config/sessions/session-entry-provenance.js").SessionCreatedVia;
     actor?: import("../config/sessions/session-entry-provenance.js").SessionCreatedActor;
     sandbox?: "required";

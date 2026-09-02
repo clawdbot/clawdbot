@@ -84,6 +84,30 @@ describe("mergeAttemptToolMediaPayloads", () => {
     expect(getReplyPayloadMetadata(mediaReply ?? {})).toBeUndefined();
   });
 
+  it("delivers contract-owned tool media without private source text", () => {
+    const [privateReply, mediaReply] =
+      mergeAttemptToolMediaPayloads({
+        payloads: [{ text: "PRIVATE_FINAL_83636_MUST_NOT_APPEAR" }],
+        toolMediaUrls: ["/tmp/reply.opus"],
+        toolAutoDeliveryMediaUrls: ["/tmp/reply.opus"],
+        toolAudioAsVoice: true,
+        toolTrustedLocalMedia: true,
+        sourceReplyDeliveryMode: "message_tool_only",
+      }) ?? [];
+
+    expect(privateReply).toEqual({ text: "PRIVATE_FINAL_83636_MUST_NOT_APPEAR" });
+    expect(getReplyPayloadMetadata(privateReply ?? {})).toBeUndefined();
+    expect(mediaReply).toEqual({
+      mediaUrls: ["/tmp/reply.opus"],
+      mediaUrl: "/tmp/reply.opus",
+      audioAsVoice: true,
+      trustedLocalMedia: true,
+    });
+    expect(getReplyPayloadMetadata(mediaReply ?? {})).toMatchObject({
+      deliverDespiteSourceReplySuppression: true,
+    });
+  });
+
   it("ignores host-owned provenance outside the delivered tool media set", () => {
     const [mediaReply] =
       mergeAttemptToolMediaPayloads({

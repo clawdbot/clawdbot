@@ -40,7 +40,7 @@ describe("mixed-case plugin policy ids", () => {
         origin: "bundled",
         config: normalizePluginsConfig({ deny: ["malicious-scraper"] }),
         enabledByDefault: true,
-        isBundledChannelEnabledByChannelConfig: () => false,
+        resolveChannelConfigEnablement: () => undefined,
       }),
     ).toMatchObject({ enabled: false, activated: false, cause: "blocked-by-denylist" });
   });

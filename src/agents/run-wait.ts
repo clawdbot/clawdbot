@@ -126,7 +126,7 @@ const RECOVERABLE_AGENT_WAIT_ERROR_PATTERNS: readonly RegExp[] = [
 ];
 
 /** Return true for transient gateway/transport failures that callers may retry. */
-export function isRecoverableAgentWaitError(error: string | undefined): boolean {
+function isRecoverableAgentWaitError(error: string | undefined): boolean {
   const message = error?.trim();
   if (!message) {
     return false;
@@ -390,6 +390,7 @@ export async function waitForAgentRun(params: {
           ? "timeout"
           : "error",
       error,
+      ...(isRecoverableAgentWaitError(error) ? { retryableTransportError: true as const } : {}),
     };
   }
 }

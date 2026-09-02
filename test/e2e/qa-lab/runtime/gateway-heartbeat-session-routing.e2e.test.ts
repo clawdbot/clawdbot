@@ -2,7 +2,6 @@ import fs from "node:fs/promises";
 import { createServer, type ServerResponse } from "node:http";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { markCompleteReplyConfig } from "../../../../src/auto-reply/reply/get-reply-fast-path.test-support.js";
 import {
   clearConfigCache,
   clearRuntimeConfigSnapshot,
@@ -328,6 +327,7 @@ describe("Gateway heartbeat session routing", () => {
                 [provider.modelRef]: {
                   params: { transport: "sse", openaiWsWarmup: false },
                 },
+                "catalog-proof/*": {},
               },
             },
             entries: { main: { default: true } },
@@ -343,6 +343,8 @@ describe("Gateway heartbeat session routing", () => {
               },
             },
           },
+          // Full configs may contain nested nulls; heartbeat admission must not reinterpret them as patches.
+          tts: { providers: { fixture: { disabledVoice: null } } },
           gateway: { auth: { mode: "token", token } },
           plugins: {
             enabled: true,
@@ -359,11 +361,20 @@ describe("Gateway heartbeat session routing", () => {
           token,
           clientDisplayName: "vitest-gateway-heartbeat-session-routing",
         });
+        await gateway.server.startupSettled;
+        await disconnectGatewayClient(gateway.client);
+        await gateway.server.close({ reason: "heartbeat catalog-owner restart proof" });
+        gateway = await startGatewayWithClient({
+          cfg: config,
+          configPath,
+          token,
+          clientDisplayName: "vitest-gateway-heartbeat-session-routing-restarted",
+        });
+        await gateway.server.startupSettled;
         const runtimeConfig = getRuntimeConfigSnapshot();
         if (!runtimeConfig) {
           throw new Error("gateway runtime config snapshot was not initialized");
         }
-        markCompleteReplyConfig(runtimeConfig, { runtimeMode: "full" });
         const client = gateway.client;
 
         const seedSession = async (params: {

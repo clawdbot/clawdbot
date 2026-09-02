@@ -5,6 +5,7 @@ import path from "node:path";
 import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { StaleOpenClawUpdateLaunchdJob } from "../../daemon/launchd.js";
+import type { ServiceConfigAudit } from "../../daemon/service-audit.js";
 import { createMockGatewayService } from "../../daemon/service.test-helpers.js";
 import type { PortListener, PortUsageStatus } from "../../infra/ports-types.js";
 import type { GatewayRestartHandoff } from "../../infra/restart-handoff.js";
@@ -41,10 +42,9 @@ const callGatewayStatusProbe = vi.fn<
 const isDefaultInstallIdentity = vi.fn((_env?: NodeJS.ProcessEnv) => true);
 const isGatewayExternallySupervised = vi.fn((_env?: NodeJS.ProcessEnv) => false);
 const resolveGatewayProbeAuthSafeWithSecretInputsCalls = vi.fn<(opts?: unknown) => void>();
-const loadGatewayTlsRuntime = vi.fn(async (_cfg?: unknown) => ({
-  enabled: true,
-  required: true,
-  fingerprintSha256: "sha256:11:22:33:44",
+const inspectGatewayTlsCertificate = vi.fn(async (_cfg?: unknown) => ({
+  ok: true as const,
+  value: { cert: "public-certificate", fingerprintSha256: "sha256:11:22:33:44" },
 }));
 const findExtraGatewayServices = vi.fn(async (_env?: unknown, _opts?: unknown) => []);
 const findStaleOpenClawUpdateLaunchdJobs = vi.fn<
@@ -103,6 +103,13 @@ const loadInstalledPluginIndexInstallRecords = vi.fn<
     filePath?: string;
   }) => Promise<Record<string, unknown>>
 >(async (_params?) => ({}));
+const fetchNpmPackageTargetStatus = vi.fn(
+  async (params: { packageName?: string; target: string }) => ({
+    target: params.target,
+    version: params.target,
+    nodeEngine: null,
+  }),
+);
 const readGatewayRestartHandoffSync = vi.fn<
   (_env?: NodeJS.ProcessEnv) => GatewayRestartHandoff | null
 >(() => null);
@@ -113,7 +120,9 @@ const inspectWindowsGatewayFirewall = vi.fn<(opts?: unknown) => Promise<unknown>
   message: "Windows LAN firewall diagnostics do not apply.",
   details: [],
 }));
-const auditGatewayServiceConfig = vi.fn(async (_opts?: unknown) => undefined);
+const auditGatewayServiceConfig = vi.fn<(_opts?: unknown) => Promise<ServiceConfigAudit>>(
+  async () => ({ ok: true, issues: [] }),
+);
 const serviceIsLoaded = vi.fn<
   (opts?: { env?: NodeJS.ProcessEnv; timeoutMs?: number }) => Promise<boolean>
 >(async (_opts?: { env?: NodeJS.ProcessEnv; timeoutMs?: number }) => true);
@@ -313,11 +322,17 @@ vi.mock("../../infra/tailnet.js", () => ({
 }));
 
 vi.mock("../../infra/tls/gateway.js", () => ({
-  loadGatewayTlsRuntime: (cfg: unknown) => loadGatewayTlsRuntime(cfg),
+  inspectGatewayTlsCertificate: (cfg: unknown) => inspectGatewayTlsCertificate(cfg),
 }));
 
 vi.mock("../../infra/windows-gateway-firewall-diagnostics.js", () => ({
   inspectWindowsGatewayFirewall: (opts: unknown) => inspectWindowsGatewayFirewall(opts),
+}));
+
+vi.mock("../../infra/update-check-package-target.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../infra/update-check-package-target.js")>()),
+  fetchNpmPackageTargetStatus: (params: { packageName?: string; target: string }) =>
+    fetchNpmPackageTargetStatus(params),
 }));
 
 vi.mock("./probe.js", () => ({
@@ -425,7 +440,13 @@ describe("gatherDaemonStatus", () => {
     findStaleOpenClawUpdateLaunchdJobs.mockResolvedValue([]);
     loadInstalledPluginIndexInstallRecords.mockClear();
     loadInstalledPluginIndexInstallRecords.mockResolvedValue({});
-    loadGatewayTlsRuntime.mockClear();
+    fetchNpmPackageTargetStatus.mockClear();
+    fetchNpmPackageTargetStatus.mockImplementation(async (params) => ({
+      target: params.target,
+      version: params.target,
+      nodeEngine: null,
+    }));
+    inspectGatewayTlsCertificate.mockClear();
     inspectGatewayRestart.mockClear();
     inspectPortUsage.mockReset();
     inspectPortUsage.mockImplementation(async (port: number) => ({
@@ -511,7 +532,7 @@ describe("gatherDaemonStatus", () => {
   it("uses wss probe URL and forwards TLS fingerprint when daemon TLS is enabled", async () => {
     const status = await gatherStatus();
 
-    expect(loadGatewayTlsRuntime).toHaveBeenCalledTimes(1);
+    expect(inspectGatewayTlsCertificate).toHaveBeenCalledTimes(1);
     const probeInput = callArg(callGatewayStatusProbe) as {
       url?: string;
       tlsFingerprint?: string;
@@ -751,7 +772,7 @@ describe("gatherDaemonStatus", () => {
 
     const status = await gatherStatus({ rpc: { url: rawUrl } });
 
-    expect(loadGatewayTlsRuntime).not.toHaveBeenCalled();
+    expect(inspectGatewayTlsCertificate).not.toHaveBeenCalled();
     const probeInput = callArg(callGatewayStatusProbe) as {
       url?: string;
       tlsFingerprint?: string;
@@ -880,6 +901,28 @@ describe("gatherDaemonStatus", () => {
     expect(status.service.loaded).toBe(true);
     expect(status.service.runtime?.status).toBe("running");
     expect((status.service.runtime as { detail?: string }).detail).toBe("19001");
+  });
+
+  it("retains service audit findings when the active command is absent", async () => {
+    serviceReadCommand.mockResolvedValueOnce(null);
+    auditGatewayServiceConfig.mockResolvedValueOnce({
+      ok: false,
+      issues: [
+        {
+          code: "systemd-unit-backup-unsafe",
+          message: "Systemd service backup exposes gateway credentials.",
+        },
+      ],
+    });
+
+    const status = await gatherStatus({ probe: false });
+
+    expect(auditGatewayServiceConfig).toHaveBeenCalledWith(
+      expect.objectContaining({ command: null }),
+    );
+    expect(status.service.configAudit?.issues).toEqual([
+      expect.objectContaining({ code: "systemd-unit-backup-unsafe" }),
+    ]);
   });
 
   it("renders Gateway-specific recovery in text and JSON after service reads time out", async () => {
@@ -1530,7 +1573,7 @@ describe("gatherDaemonStatus", () => {
   it("skips TLS runtime loading when probe is disabled", async () => {
     const status = await gatherStatus({ probe: false });
 
-    expect(loadGatewayTlsRuntime).not.toHaveBeenCalled();
+    expect(inspectGatewayTlsCertificate).not.toHaveBeenCalled();
     expect(callGatewayStatusProbe).not.toHaveBeenCalled();
     expect(status.rpc).toBeUndefined();
   });
@@ -1678,6 +1721,37 @@ describe("gatherDaemonStatus", () => {
     expect(status.pluginVersionDrift?.gatewayVersion).toBe("2026.5.4");
     expect(status.pluginVersionDrift?.drifts.map((d) => d.pluginId)).toEqual(["whatsapp"]);
   });
+
+  it.each([false, true])(
+    "collects local drift without registry lookups (deep=%s)",
+    async (deep) => {
+      callGatewayStatusProbe.mockResolvedValueOnce({
+        ok: true,
+        url: "ws://127.0.0.1:19001",
+        error: null,
+        server: { version: "2026.7.1-2", connId: "c1" },
+      } as never);
+      loadInstalledPluginIndexInstallRecords.mockResolvedValueOnce({
+        brave: {
+          source: "npm",
+          spec: "@openclaw/brave-plugin@2026.7.1-beta.2",
+          resolvedName: "@openclaw/brave-plugin",
+          resolvedVersion: "2026.7.1-beta.2",
+        },
+      } as never);
+      fetchNpmPackageTargetStatus.mockResolvedValueOnce({
+        target: "2026.7.1",
+        version: "2026.7.1",
+        nodeEngine: null,
+      });
+
+      const status = await gatherStatus({ deep });
+
+      expect(fetchNpmPackageTargetStatus).not.toHaveBeenCalled();
+      expect(status.pluginVersionDrift?.drifts[0]?.pluginId).toBe("brave");
+      expect(status.pluginVersionDrift?.drifts[0]?.targetResolution).toBeUndefined();
+    },
+  );
 
   it("reads install records from the merged daemon service environment, not the CLI process env", async () => {
     await gatherStatus({ deep: true });

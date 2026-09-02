@@ -1,5 +1,7 @@
+import { createApiRegistry } from "@openclaw/ai";
 import { beforeEach, expect, it, vi } from "vitest";
 import type { Model } from "../llm/types.js";
+import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import type { resolveModelAsync } from "./embedded-agent-runner/model.js";
 import { AuthStorage, ModelRegistry } from "./sessions/index.js";
 
@@ -45,7 +47,10 @@ vi.mock("../plugins/provider-runtime.runtime.js", () => ({
 
 vi.mock("./sessions/model-registry-runtime.js", () => ({
   initializeModelRegistryRuntime: vi.fn(),
-  getModelRegistryRuntime: () => ({ llmRuntime: { registry: {}, streamSimple: vi.fn() } }),
+  getModelRegistryRuntime: () => {
+    const apiRegistry = createApiRegistry();
+    return { apiRegistry, llmRuntime: { registry: apiRegistry, streamSimple: vi.fn() } };
+  },
 }));
 
 import {
@@ -77,10 +82,9 @@ beforeEach(() => {
   mocks.acquireRuntimeLease.mockReset();
   mocks.getApiKeyForModel.mockReset();
   mocks.prepareProviderRuntimeAuth.mockReset();
-  mocks.resolvePluginMetadataSnapshot.mockReset().mockReturnValue({
-    plugins: [],
-    index: { plugins: [] },
-  });
+  mocks.resolvePluginMetadataSnapshot
+    .mockReset()
+    .mockReturnValue(createPluginMetadataSnapshotFixture());
   const authStorage = AuthStorage.inMemory({});
   const modelRegistry = ModelRegistry.inMemory(authStorage);
   mocks.acquireRuntimeLease.mockResolvedValue({
@@ -90,7 +94,7 @@ beforeEach(() => {
       workspaceDir: "/tmp/runtime-workspace",
       config: {},
       authModes: {},
-      metadataSnapshot: { plugins: [], index: { plugins: [] } },
+      metadataSnapshot: createPluginMetadataSnapshotFixture(),
       allowGatewaySubagentBinding: false,
       modelCatalog: { entries: [] },
       configuredRuntimeModels: [],
@@ -224,7 +228,7 @@ it("selects an explicit agent completion model before runtime acquisition", asyn
 });
 
 it("acquires the canonical manifest-derived utility model selection", async () => {
-  const metadataSnapshot = {
+  const metadataSnapshot = createPluginMetadataSnapshotFixture({
     plugins: [
       {
         id: "selected-provider",
@@ -238,8 +242,7 @@ it("acquires the canonical manifest-derived utility model selection", async () =
         },
       },
     ],
-    index: { plugins: [] },
-  };
+  });
   mocks.resolvePluginMetadataSnapshot.mockReturnValue(metadataSnapshot);
 
   const result = await prepareSimpleCompletionModelForAgent({

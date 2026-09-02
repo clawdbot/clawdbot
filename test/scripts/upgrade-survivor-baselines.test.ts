@@ -1,8 +1,10 @@
 // Upgrade Survivor Baselines tests cover upgrade survivor baselines script behavior.
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { parse } from "yaml";
 import { parseArgs, resolveBaselines } from "../../scripts/resolve-upgrade-survivor-baselines.mts";
 
 function withReleaseFixture<T>(releases: unknown[], fn: (file: string) => T): T {
@@ -36,6 +38,80 @@ describe("scripts/resolve-upgrade-survivor-baselines", () => {
   it("keeps the single fallback baseline when no expanded request is provided", () => {
     expect(resolveBaselines(new Map([["fallback", "2026.4.23"]]))).toEqual(["openclaw@2026.4.23"]);
   });
+
+  it.each(["package", "update-migration", "historical"])(
+    "pins the %s workflow baseline once before Docker fanout",
+    (entrypoint) => {
+      const workflow = parse(readFileSync(".github/workflows/package-acceptance.yml", "utf8")) as {
+        on: {
+          workflow_call: {
+            inputs: Record<
+              "published_upgrade_survivor_baseline" | "published_upgrade_survivor_baselines",
+              { default: string }
+            >;
+          };
+        };
+        jobs: { resolve_package: { steps: Array<{ id?: string; run?: string }> } };
+      };
+      const migration = parse(readFileSync(".github/workflows/update-migration.yml", "utf8")) as {
+        on: { workflow_dispatch: { inputs: { baselines: { default: string } } } };
+      };
+      const inputs = workflow.on.workflow_call.inputs;
+      const step = workflow.jobs.resolve_package.steps.find(
+        (entry) => entry.id === "upgrade_survivor_baselines",
+      );
+      const run = step?.run;
+      if (!run) {
+        throw new Error("Missing baseline preparation step");
+      }
+      const requested =
+        entrypoint === "update-migration"
+          ? migration.on.workflow_dispatch.inputs.baselines.default
+          : entrypoint === "historical"
+            ? "2026.4.23"
+            : inputs.published_upgrade_survivor_baselines.default;
+
+      withJsonFixture("output", {}, (output) => {
+        const root = path.dirname(output);
+        const bin = path.join(root, "bin");
+        const calls = path.join(root, "npm-calls");
+        mkdirSync(bin);
+        writeFileSync(output, "");
+        writeFileSync(
+          path.join(bin, "npm"),
+          `#!/usr/bin/env node
+const fs = require("node:fs");
+const file = process.env.FIXTURE_NPM_CALLS;
+const first = !fs.existsSync(file);
+fs.appendFileSync(file, JSON.stringify(process.argv.slice(2)) + "\\n");
+console.log(first ? "2026.7.1-2" : "2026.8.1");
+`,
+          { mode: 0o755 },
+        );
+        writeFileSync(path.join(bin, "gh"), "#!/bin/sh\nexit 75\n", { mode: 0o755 });
+        execFileSync("bash", ["-c", run], {
+          encoding: "utf8",
+          env: {
+            ...process.env,
+            PATH: `${bin}${path.delimiter}${process.env.PATH ?? ""}`,
+            FALLBACK_BASELINE: inputs.published_upgrade_survivor_baseline.default,
+            REQUESTED_BASELINES: requested,
+            GITHUB_OUTPUT: output,
+            FIXTURE_NPM_CALLS: calls,
+          },
+        });
+        expect(readFileSync(output, "utf8")).toBe(
+          `baselines=openclaw@${entrypoint === "historical" ? "2026.4.23" : "2026.7.1-2"}\nbaseline=openclaw@2026.7.1-2\n`,
+        );
+        expect(
+          readFileSync(calls, "utf8")
+            .trim()
+            .split("\n")
+            .map((line) => JSON.parse(line)),
+        ).toEqual([["view", "openclaw@latest", "version", "--prefer-online"]]);
+      });
+    },
+  );
 
   it("resolves release-history to last six stable releases plus explicit legacy anchors", () => {
     const releases = (

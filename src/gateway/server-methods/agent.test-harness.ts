@@ -614,6 +614,7 @@ function resetSessionAccessorMocks() {
       : options.message;
     return message
       ? {
+          state: "queued",
           inputId: "test-user-turn",
           message,
           run: (operation) => operation(),

@@ -640,37 +640,12 @@ function writeProviderPluginScaffold(params: { rootDir: string; id: string; name
     `Replace https://api.example.com/v1 with your ${params.name} API base URL.`,
   );
   const indexSource = `import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
-import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-auth-api-key";
-import { buildSingleProviderApiKeyCatalog } from "openclaw/plugin-sdk/provider-catalog-shared";
-import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
+import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-auth";
 
 const PLUGIN_ID = ${idLiteral};
 const PROVIDER_ID = PLUGIN_ID;
 const DEFAULT_MODEL_ID = ${defaultModelIdLiteral};
 const DEFAULT_MODEL_REF = ${defaultModelRefLiteral};
-
-function buildProvider(): ModelProviderConfig {
-  return {
-    api: "openai-completions",
-    baseUrl: "https://api.example.com/v1",
-    models: [
-      {
-        id: DEFAULT_MODEL_ID,
-        name: "Example Chat",
-        reasoning: false,
-        input: ["text"],
-        cost: {
-          input: 0,
-          output: 0,
-          cacheRead: 0,
-          cacheWrite: 0,
-        },
-        contextWindow: 128000,
-        maxTokens: 8192,
-      },
-    ],
-  };
-}
 
 export default definePluginEntry({
   id: PLUGIN_ID,
@@ -700,13 +675,38 @@ export default definePluginEntry({
       ],
       catalog: {
         order: "simple",
-        run: (ctx) =>
-          buildSingleProviderApiKeyCatalog({
-            ctx,
-            providerId: PROVIDER_ID,
-            buildProvider,
-            allowExplicitBaseUrl: true,
-          }),
+        run: async (ctx) => {
+          const apiKey = ctx.resolveProviderApiKey(PROVIDER_ID).apiKey;
+          if (!apiKey) {
+            return null;
+          }
+          const configuredProvider = Object.entries(ctx.config.models?.providers ?? {}).find(
+            ([providerId]) => providerId.trim().toLowerCase() === PROVIDER_ID.toLowerCase(),
+          )?.[1];
+          return {
+            provider: {
+              api: "openai-completions",
+              models: [
+                {
+                  id: DEFAULT_MODEL_ID,
+                  name: "Example Chat",
+                  reasoning: false,
+                  input: ["text"],
+                  cost: {
+                    input: 0,
+                    output: 0,
+                    cacheRead: 0,
+                    cacheWrite: 0,
+                  },
+                  contextWindow: 128000,
+                  maxTokens: 8192,
+                },
+              ],
+              apiKey,
+              baseUrl: configuredProvider?.baseUrl?.trim() || "https://api.example.com/v1",
+            },
+          };
+        },
       },
     });
   },
@@ -717,7 +717,7 @@ import type { OpenClawPluginApi, ProviderPlugin } from "openclaw/plugin-sdk/plug
 import entry from "./index.js";
 
 describe(${idLiteral}, () => {
-  it("registers the provider", () => {
+  it("registers the provider and resolves its authenticated catalog", async () => {
     const providers: ProviderPlugin[] = [];
     const api = {
       registerProvider(provider: ProviderPlugin) {
@@ -730,6 +730,47 @@ describe(${idLiteral}, () => {
     expect(providers.map((provider) => provider.id)).toEqual([${idLiteral}]);
     expect(providers[0]?.label).toBe(${nameLiteral});
     expect(providers[0]?.envVars).toEqual([${envVarLiteral}]);
+
+    const provider = providers[0];
+    if (!provider?.catalog) {
+      throw new Error("Generated provider did not register its catalog");
+    }
+    expect(provider.auth).toMatchObject([
+      { id: "api-key", kind: "api_key", starterModel: ${defaultModelRefLiteral} },
+    ]);
+    for (const [apiKey, configuredId, baseUrl, expectedBaseUrl] of [
+      [undefined, ${idLiteral}, "https://configured.example/v1", null],
+      ["fixture-api-key", ${jsStringLiteral(`${params.id}-unrelated`)}, "https://unrelated.example/v1", "https://api.example.com/v1"],
+      ["fixture-api-key", ${jsStringLiteral(` ${params.id.toUpperCase()} `)}, " https://configured.example/v1 ", "https://configured.example/v1"],
+      ["fixture-api-key", ${idLiteral}, " ", "https://api.example.com/v1"],
+    ] as const) {
+      const result = await provider.catalog.run({
+        config: { models: { providers: { [configuredId]: { baseUrl, models: [] } } } },
+        env: {},
+        resolveProviderApiKey: () => ({ apiKey }),
+        resolveProviderAuth: () => ({ apiKey, mode: "api_key", source: "env" }),
+      });
+      expect(result).toEqual(
+        expectedBaseUrl === null
+          ? null
+          : {
+              provider: {
+                api: "openai-completions",
+                apiKey,
+                baseUrl: expectedBaseUrl,
+                models: [{
+                  id: ${defaultModelIdLiteral},
+                  name: "Example Chat",
+                  reasoning: false,
+                  input: ["text"],
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                  contextWindow: 128000,
+                  maxTokens: 8192,
+                }],
+              },
+            },
+      );
+    }
   });
 });
 `;

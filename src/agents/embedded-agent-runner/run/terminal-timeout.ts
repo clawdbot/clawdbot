@@ -1,13 +1,14 @@
 import { projectAgentRunAttemptTerminal } from "../../agent-run-terminal-outcome.js";
 import { hasMessagingToolDeliveryEvidence } from "../delivery-evidence.js";
 import type { EmbeddedAgentMeta, EmbeddedAgentRunResult } from "../types.js";
+import { copyAttemptDeliveryState } from "./attempt-delivery-state.js";
 import { resolveRunLivenessState } from "./incomplete-turn-resolution.js";
 import {
   isEmbeddedRunTerminalAbort,
   isEmbeddedRunTerminalTimeout,
+  isEmbeddedRunTimeoutFinal,
   type EmbeddedRunTerminalState,
 } from "./terminal-outcome.js";
-import { copyAttemptDeliveryState } from "./terminal-resolution.js";
 import type { EmbeddedRunAttemptResult } from "./types.js";
 
 // Carries the prepared terminal facts forward as one bundle instead of
@@ -28,17 +29,18 @@ type EmbeddedRunTerminalPreparedFacts = {
 
 export function resolveEmbeddedRunTerminalTimeout(input: {
   terminalPrepared: EmbeddedRunTerminalPreparedFacts;
-  shouldSurfaceCodexCompletionTimeout: boolean;
   attempt: EmbeddedRunAttemptResult;
   terminalState: EmbeddedRunTerminalState;
   resolveReplayInvalid: (incompleteTurnText?: string | null) => boolean;
   setTerminalLifecycleMeta: NonNullable<EmbeddedRunAttemptResult["setTerminalLifecycleMeta"]>;
   startedAtMs: number;
 }): EmbeddedAgentRunResult | undefined {
+  const timeoutFinal = isEmbeddedRunTimeoutFinal(input.attempt);
   if (
     !input.terminalPrepared.timedOutDuringPrompt ||
-    input.terminalPrepared.hasSuccessfulFinalAssistantAfterPromptTimeout ||
-    (!input.shouldSurfaceCodexCompletionTimeout && hasMessagingToolDeliveryEvidence(input.attempt))
+    (!timeoutFinal &&
+      (input.terminalPrepared.hasSuccessfulFinalAssistantAfterPromptTimeout ||
+        hasMessagingToolDeliveryEvidence(input.attempt)))
   ) {
     return undefined;
   }
@@ -77,7 +79,7 @@ export function resolveEmbeddedRunTerminalTimeout(input: {
   input.setTerminalLifecycleMeta({ replayInvalid, livenessState, ...timeoutAttribution });
   return {
     payloads: [
-      ...(input.terminalPrepared.hasPartialAssistantTextAfterPromptTimeout
+      ...(input.terminalPrepared.hasPartialAssistantTextAfterPromptTimeout && !timeoutFinal
         ? []
         : input.terminalPrepared.payloadsWithToolMedia || []),
       { text: timeoutText, isError: true },
@@ -93,15 +95,13 @@ export function resolveEmbeddedRunTerminalTimeout(input: {
       replayInvalid,
       livenessState,
       ...timeoutAttribution,
-      ...(input.shouldSurfaceCodexCompletionTimeout
-        ? {
-            error: {
-              kind: "incomplete_turn" as const,
-              message: timeoutText,
-              fallbackSafe: false,
-            },
-          }
-        : {}),
+      // Recovery and eligible fallback already ran. Keep this final timeout out
+      // of successful settlement and prevent earlier tool errors from reopening replay.
+      error: {
+        kind: "incomplete_turn",
+        message: timeoutText,
+        fallbackSafe: false,
+      },
       toolSummary: input.terminalPrepared.attemptToolSummary,
       ...(input.terminalPrepared.failureSignal
         ? { failureSignal: input.terminalPrepared.failureSignal }

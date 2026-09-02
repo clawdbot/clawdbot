@@ -1007,4 +1007,36 @@ describe.skipIf(process.platform === "win32")("systemd definition mutation owner
       }
     },
   );
+
+  it("bounds manager inspection by the mutation deadline", async () => {
+    await withSystemdDefinitionMutation(env, env, async () => undefined, { timeoutMs: 50 });
+
+    expect(busctl).toHaveBeenCalled();
+    for (const call of busctl.mock.calls) {
+      const timeoutMs = call[2];
+      expect(timeoutMs).toBeGreaterThan(0);
+      expect(timeoutMs).toBeLessThanOrEqual(50);
+    }
+  });
+
+  it("bounds lock acquisition by the mutation deadline", async () => {
+    const { promise: barrier, resolve: release } = createDeferred();
+    const { promise: firstStarted, resolve: entered } = createDeferred();
+    const first = withSystemdDefinitionMutation(env, env, async () => {
+      entered();
+      await barrier;
+    });
+    await firstStarted;
+
+    const startedAt = Date.now();
+    try {
+      await expect(
+        withSystemdDefinitionMutation(env, env, async () => undefined, { timeoutMs: 100 }),
+      ).rejects.toMatchObject({ code: "file_lock_timeout" });
+      expect(Date.now() - startedAt).toBeLessThan(2_000);
+    } finally {
+      release();
+      await first;
+    }
+  });
 });

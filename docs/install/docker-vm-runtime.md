@@ -80,8 +80,8 @@ from the provider guide.
 ## Bake required binaries into the image
 
 Installing binaries inside a running container is a trap: anything installed
-at runtime is lost on restart. Bake every external binary a skill needs into
-the image at build time.
+at runtime is lost when the container is recreated. Bake every external binary
+a skill needs into the image at build time.
 
 The examples below cover three binaries only, alphabetically:
 
@@ -165,6 +165,31 @@ truth. Long-lived state must survive restarts, rebuilds, and reboots.
 | External binaries    | `/usr/local/bin/`                   | Docker image                | Must be baked at build time                                                                |
 | Node and OS packages | Container filesystem                | Docker image                | Rebuilt with the image; do not install at runtime                                          |
 | Docker container     | Ephemeral                           | Restartable                 | Safe to replace after mounted state is verified                                            |
+
+## Common pitfall: never file-bind `openclaw.json`
+
+Mount the gateway state **as a directory**, never as a single file. The repo
+`docker-compose.yml` already does this:
+
+```yaml
+# Supported: whole state directory.
+- "${OPENCLAW_CONFIG_DIR:-${HOME:-/tmp}/.openclaw}:/home/node/.openclaw"
+```
+
+```yaml
+# Unsupported: single-file bind. Do not use this.
+# - "./openclaw.json:/home/node/.openclaw/openclaw.json"
+```
+
+A single-file bind remains attached to the mounted file. Normal OpenClaw
+configuration saves replace `openclaw.json`. If a host-side save replaces the
+source of a single-file bind after the container starts, the container can keep
+reading the old file while the host path points to the new one. The host-side
+save can succeed without updating what the container sees. An edit that writes
+to the same file in place does not cause this divergence.
+
+Fix: keep the directory mount from Compose. Edit `openclaw.json` on the host
+inside that directory.
 
 ## Update OpenClaw
 

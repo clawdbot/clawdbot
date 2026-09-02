@@ -7,6 +7,7 @@ import type {
   SessionContextBudgetStatus,
   SessionSystemPromptReport,
 } from "../../config/sessions/types.js";
+import type { ContextEngineSessionTarget } from "../../context-engine/types.js";
 import type { DiagnosticTraceContext } from "../../infra/diagnostic-trace-context.js";
 import type { AcceptedSessionSpawn } from "../accepted-session-spawn.js";
 import type { AgentRunTerminalReceipt } from "../agent-run-terminal-receipt.js";
@@ -111,7 +112,7 @@ export type TraceAttempt = {
     | "surface_error"
     | "candidate_failed"
     | "rotate_profile"
-    | "same_model_rate_limit"
+    | "same_model_transient"
     | "fallback_model"
     | "aborted"
     | "error";
@@ -201,6 +202,8 @@ export type EmbeddedAgentRunMeta = {
   yielded?: boolean;
   /** Explicit user-facing waiting status supplied to sessions_yield. */
   yieldAcknowledgment?: string;
+  /** A visible parent delegated its otherwise-empty result to completion children. */
+  continuationPending?: true;
   error?: {
     kind:
       | "context_overflow"
@@ -292,6 +295,7 @@ export type EmbeddedAgentCompactResult = {
   result?: {
     /** Identifies summaryless provider compaction in RPC and UI consumers. */
     kind?: "server-endpoint";
+    sessionTarget?: ContextEngineSessionTarget;
     /** Server-endpoint compaction has no transcript summary or first-kept entry. */
     summary?: string;
     firstKeptEntryId?: string;

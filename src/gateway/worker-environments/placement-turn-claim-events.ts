@@ -43,7 +43,7 @@ const workerTurnClaimClosedHandlers = resolveGlobalMap<
 export type WorkerTurnExecutionIdentity = Readonly<{
   agentId: string;
   delegatedAuthority: AgentRunDelegatedAuthority;
-  executionIdentityToken: ExecutionIdentityAdmissionToken;
+  executionIdentityToken?: ExecutionIdentityAdmissionToken;
   operationalRunInstance: OperationalRunInstanceRef;
   receiptAuthority: () => void;
   sessionKey: string;
@@ -55,10 +55,10 @@ export type WorkerTurnExecutionIdentityCapability = Readonly<{
 }>;
 
 type BoundWorkerTurnOwner = {
-  capability?: WorkerTurnExecutionIdentityCapability;
+  capability: WorkerTurnExecutionIdentityCapability;
   claim: WorkerSessionTurnClaim;
   claimKey: string;
-  runtime?: {
+  runtime: {
     delegatedAuthority: AgentRunDelegatedAuthority;
     prepareAssistantTranscriptMessage?: PrepareAssistantTranscriptMessage;
     scope?: GatewayRootWorkAdmissionContinuationScope;
@@ -95,21 +95,28 @@ function claimKey(claim: WorkerSessionTurnClaim): string {
   ]);
 }
 
-/** Bind diagnostic provenance to the exact live run and worker owners. */
-export function bindWorkerTurnExecutionIdentity(
+/** Bind every worker to its live run; diagnostic provenance remains optional. */
+export function bindWorkerTurnOwner(
   store: WorkerTurnExecutionIdentityStore,
   claim: WorkerSessionTurnClaim,
-  token: ExecutionIdentityAdmissionToken,
+  token: ExecutionIdentityAdmissionToken | undefined,
   operationalRunInstance: OperationalRunInstanceRef,
   source: { agentId: string; sessionKey: string },
+  assertRunActive: () => void,
+  prepareAssistantTranscriptMessage?: PrepareAssistantTranscriptMessage,
 ): void {
+  const scope = captureGatewayRootWorkAdmissionContinuationScope();
   const path = store[WORKER_TURN_EXECUTION_IDENTITY_PATH];
   const delegatedAuthority = getActiveAgentRunDelegatedAuthority(operationalRunInstance);
   if (!path || !store.validateTurnClaim(claim) || !delegatedAuthority) {
+    scope?.release();
     throw new Error(`Session ${claim.sessionId} worker turn authority changed`);
   }
+  const owners = workerTurnOwners.get(path) ?? new Map();
   const assertActive = () => {
+    assertRunActive();
     if (
+      owners.get(claim.sessionId) !== owner ||
       !store.validateTurnClaim(claim) ||
       !validateAgentRunDelegatedAuthority(delegatedAuthority)
     ) {
@@ -119,7 +126,7 @@ export function bindWorkerTurnExecutionIdentity(
   const identity = Object.freeze({
     agentId: source.agentId,
     delegatedAuthority,
-    executionIdentityToken: token,
+    ...(token ? { executionIdentityToken: token } : {}),
     operationalRunInstance,
     receiptAuthority: assertActive,
     sessionKey: source.sessionKey,
@@ -134,18 +141,21 @@ export function bindWorkerTurnExecutionIdentity(
       return result;
     },
   });
-  const owners = workerTurnOwners.get(path) ?? new Map();
   const existing = owners.get(claim.sessionId);
   const currentClaimKey = claimKey(claim);
-  if (existing && existing.claimKey !== currentClaimKey) {
-    existing.runtime?.scope?.release();
-  }
-  owners.set(claim.sessionId, {
-    ...(existing?.claimKey === currentClaimKey ? existing : {}),
+  existing?.runtime.scope?.release();
+  const owner: BoundWorkerTurnOwner = {
     capability,
     claim,
     claimKey: currentClaimKey,
-  });
+    runtime: {
+      delegatedAuthority,
+      prepareAssistantTranscriptMessage,
+      scope: scope ?? undefined,
+      store,
+    },
+  };
+  owners.set(claim.sessionId, owner);
   workerTurnOwners.set(path, owners);
 }
 
@@ -160,39 +170,9 @@ export function getWorkerTurnExecutionIdentityCapability(
     : undefined;
 }
 
-/** Completion and transcript preparation follow the exact run, not optional audit provenance. */
-export function bindWorkerTurnAdmissionContinuation(
-  store: WorkerTurnExecutionIdentityStore,
-  claim: WorkerSessionTurnClaim,
-  operationalRunInstance: OperationalRunInstanceRef,
-  prepareAssistantTranscriptMessage?: PrepareAssistantTranscriptMessage,
-): void {
-  const scope = captureGatewayRootWorkAdmissionContinuationScope();
-  if (!scope && !prepareAssistantTranscriptMessage) {
-    return;
-  }
-  const path = store[WORKER_TURN_EXECUTION_IDENTITY_PATH];
-  const delegatedAuthority = getActiveAgentRunDelegatedAuthority(operationalRunInstance);
-  if (!path || !store.validateTurnClaim(claim) || !delegatedAuthority) {
-    scope?.release();
-    throw new Error(`Session ${claim.sessionId} worker turn authority changed`);
-  }
-  const owners = workerTurnOwners.get(path) ?? new Map();
-  const existing = owners.get(claim.sessionId);
-  existing?.runtime?.scope?.release();
-  const currentClaimKey = claimKey(claim);
-  owners.set(claim.sessionId, {
-    ...(existing?.claimKey === currentClaimKey ? existing : {}),
-    claim,
-    claimKey: currentClaimKey,
-    runtime: { delegatedAuthority, prepareAssistantTranscriptMessage, scope, store },
-  });
-  workerTurnOwners.set(path, owners);
-}
-
 function resolveWorkerTurnRuntime(
   identity: WorkerConnectionIdentity,
-): BoundWorkerTurnOwner["runtime"] {
+): BoundWorkerTurnOwner["runtime"] | undefined {
   const claim = identity.turnClaim;
   if (
     !claim ||

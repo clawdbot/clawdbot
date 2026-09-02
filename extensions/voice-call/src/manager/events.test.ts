@@ -1,15 +1,19 @@
+import type { OpenKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
 // Voice Call tests cover events plugin behavior.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { VoiceCallConfigSchema } from "../config.js";
+import { CallManager } from "../manager.js";
 import {
   createEventManagerHarness,
   EVENT_MANAGER_REPLAY_KEY_LIMIT,
 } from "../manager.test-harness.js";
 import type { VoiceCallProvider } from "../providers/base.js";
+import { getOptionalVoiceCallStateRuntime } from "../runtime-state.js";
 import type { CallRecord, HangupCallInput, NormalizedEvent } from "../types.js";
 import { processEvent } from "./events.js";
 import { speakInitialMessage } from "./outbound.js";
 import { MAX_CALL_REPLAY_KEYS } from "./replay-keys.js";
+import { persistCallRecord } from "./store.js";
 
 const logSpy = vi.hoisted(() => {
   const logEntries: string[] = [];
@@ -133,40 +137,113 @@ describe("processEvent (functional)", () => {
     },
   );
 
-  it("updates providerCallId map when provider ID changes", () => {
-    const now = Date.now();
-    const ctx = createContext();
-    ctx.activeCalls.set("call-1", {
-      callId: "call-1",
-      providerCallId: "request-uuid",
-      provider: "plivo",
-      direction: "outbound",
-      state: "initiated",
-      from: "+15550000000",
-      to: "+15550000001",
-      startedAt: now,
-      transcript: [],
-      processedEventIds: [],
-      metadata: {},
-    });
-    ctx.providerCallIdMap.set("request-uuid", "call-1");
+  it.each(["request-uuid", "call-1"])(
+    "upgrades provider identity without downgrading a known alias via %s",
+    (aliasCallId) => {
+      const now = Date.now();
+      const ctx = createContext();
+      ctx.activeCalls.set("call-1", {
+        callId: "call-1",
+        providerCallId: "request-uuid",
+        provider: "plivo",
+        direction: "outbound",
+        state: "initiated",
+        from: "+15550000000",
+        to: "+15550000001",
+        startedAt: now,
+        transcript: [],
+        processedEventIds: [],
+        metadata: {},
+      });
+      ctx.providerCallIdMap.set("request-uuid", "call-1");
+      const initialCall = ctx.activeCalls.get("call-1");
+      if (!initialCall) {
+        throw new Error("expected the initial call");
+      }
+      persistCallRecord(ctx.storePath, initialCall);
 
-    processEvent(ctx, {
-      id: "evt-provider-id-change",
-      type: "call.answered",
-      callId: "call-1",
-      providerCallId: "call-uuid",
-      timestamp: now + 1,
-    });
+      processEvent(ctx, {
+        id: "evt-provider-id-change",
+        type: "call.answered",
+        callId: "call-1",
+        providerCallId: "call-uuid",
+        timestamp: now + 1,
+      });
 
-    const activeCall = ctx.activeCalls.get("call-1");
-    if (!activeCall) {
-      throw new Error("expected active call after provider id change");
-    }
-    expect(activeCall.providerCallId).toBe("call-uuid");
-    expect(ctx.providerCallIdMap.get("call-uuid")).toBe("call-1");
-    expect(ctx.providerCallIdMap.has("request-uuid")).toBe(false);
-  });
+      const activeCall = ctx.activeCalls.get("call-1");
+      if (!activeCall) {
+        throw new Error("expected active call after provider id change");
+      }
+      expect(activeCall.providerCallId).toBe("call-uuid");
+      expect(ctx.providerCallIdMap.get("call-uuid")).toBe("call-1");
+      expect(ctx.providerCallIdMap.has("request-uuid")).toBe(false);
+
+      const result = processEvent(ctx, {
+        id: "evt-old-provider-alias",
+        type: "call.speech",
+        callId: aliasCallId,
+        providerCallId: "request-uuid",
+        timestamp: now + 2,
+        direction: "outbound",
+        transcript: "Continue the existing call.",
+        isFinal: true,
+      });
+      if (result.kind !== "final-speech") {
+        throw new Error("expected speech for the live call");
+      }
+      expect(result.call).toBe(activeCall);
+      expect(ctx.activeCalls.size).toBe(1);
+      expect(activeCall.providerCallId).toBe("call-uuid");
+      expect(ctx.providerCallIdMap.get("call-uuid")).toBe("call-1");
+      expect(ctx.providerCallIdMap.has("request-uuid")).toBe(false);
+    },
+  );
+
+  it.each(["admission", "status"] as const)(
+    "surfaces call history read failure during %s without claiming absence or writing a call",
+    async (operation) => {
+      const provider = createProvider();
+      const ctx = createContext({ provider });
+      const manager = new CallManager(ctx.config, ctx.storePath);
+      await manager.initialize(provider, "https://example.com/voice/webhook");
+      const state = getOptionalVoiceCallStateRuntime()?.state;
+      if (!state) {
+        throw new Error("expected the fixture state runtime");
+      }
+      const openStore = state.openSyncKeyedStore.bind(state);
+      const fault = vi
+        .spyOn(state, "openSyncKeyedStore")
+        .mockImplementation(<T>(options: OpenKeyedStoreOptions) => {
+          const store = openStore<T>(options);
+          store.entries = () => {
+            throw new Error("synthetic call history read failure");
+          };
+          return store;
+        });
+      try {
+        if (operation === "status") {
+          await expect(manager.getCallFromMemoryOrStore("provider-unknown")).rejects.toThrow(
+            "synthetic call history read failure",
+          );
+        } else {
+          expect(() =>
+            manager.processEvent({
+              ...createInboundInitiatedEvent({
+                id: "event-unreadable-history",
+                providerCallId: "provider-unknown",
+                from: "+15550000001",
+              }),
+              direction: "outbound",
+            }),
+          ).toThrow("synthetic call history read failure");
+        }
+      } finally {
+        fault.mockRestore();
+      }
+      expect(manager.getActiveCalls()).toEqual([]);
+      expect(await manager.getCallHistory()).toEqual([]);
+    },
+  );
 
   it("does not burn replay keys for unknown calls before a later replay can resolve them", () => {
     const now = Date.now();

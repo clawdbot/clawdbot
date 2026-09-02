@@ -107,18 +107,21 @@ describe("message-normalizer", () => {
       expect(result.audioAsVoice).toBeUndefined();
     });
 
-    it("normalizes message with array content", () => {
-      const result = normalizeMessage({
+    it("normalizes mixed text, thinking, and tool content", () => {
+      const message = {
         role: "assistant",
         content: [
           { type: "text", text: "Here is the result" },
           { type: "tool_use", name: "bash", args: { command: "ls" } },
+          { type: "thinking", thinking: "Checking the result." },
         ],
         timestamp: 2000,
-      });
+      };
+      const result = normalizeMessage(message);
 
       expect(result.role).toBe("toolResult");
-      expect(result.content).toHaveLength(2);
+      expect(isStandaloneToolMessageForDisplay(message)).toBe(false);
+      expect(result.content).toHaveLength(3);
       expect(result.content[0]).toEqual({
         type: "text",
         text: "Here is the result",
@@ -131,6 +134,7 @@ describe("message-normalizer", () => {
         name: "bash",
         args: { command: "ls" },
       });
+      expect(result.content[2]).toEqual({ type: "thinking", thinking: "Checking the result." });
     });
 
     it("normalizes persisted Responses text blocks as renderable text", () => {
@@ -519,6 +523,68 @@ describe("message-normalizer", () => {
         },
       ]);
     });
+
+    it.each(["audioAsVoice", "replyToCurrent"])(
+      "ignores the entire delivery record when %s has an invalid flag",
+      (field) => {
+        for (const value of [false, null, 0, "true"]) {
+          const result = normalizeMessage({
+            role: "assistant",
+            content: "The answer remains visible.",
+            openclawDelivery: {
+              audioAsVoice: true,
+              replyToCurrent: true,
+              replyToId: "target",
+              [field]: value,
+            },
+          });
+          expect(result.content).toEqual([{ type: "text", text: "The answer remains visible." }]);
+          expect(result).not.toHaveProperty("audioAsVoice");
+          expect(result).not.toHaveProperty("replyTarget");
+        }
+      },
+    );
+
+    it.each([Number.NaN, Infinity, -Infinity])(
+      "omits non-finite canvas and media dimensions: %s",
+      (value) => {
+        const result = normalizeMessage({
+          role: "assistant",
+          content: [
+            {
+              type: "canvas",
+              preview: {
+                kind: "canvas",
+                render: "url",
+                url: "/canvas/one",
+                preferredHeight: value,
+              },
+            },
+            {
+              type: "video",
+              url: "/media/clip",
+              sizeBytes: value,
+              durationMs: value,
+              width: value,
+              height: value,
+            },
+          ],
+        });
+        expect(result.content).toEqual([
+          {
+            type: "canvas",
+            preview: {
+              kind: "canvas",
+              surface: "assistant_message",
+              render: "url",
+              url: "/canvas/one",
+            },
+            rawText: null,
+          },
+          { type: "attachment", attachment: { kind: "video", url: "/media/clip", label: "Video" } },
+        ]);
+      },
+    );
 
     it("marks media-only audio attachments as voice notes from delivery facts", () => {
       const result = normalizeMessage({

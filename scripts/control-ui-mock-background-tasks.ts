@@ -77,50 +77,43 @@ export function buildBackgroundTasksMock(baseTime: number) {
     finishedTask(5, now),
   ];
   return {
-    "chat.history": {
-      cases: [
-        {
-          match: { sessionKey: taskSessionKey },
-          response: {
-            messages: [
-              historyMessage(
-                "user",
-                "Map the run-status indicator code and report the active execution path.",
-                baseTime + 40 * 60_000,
-              ),
-              historyMessage(
-                "assistant",
-                "Tracing task events from the gateway through the chat background-tasks rail.",
-                baseTime + 40 * 60_000 + 8_000,
-              ),
-            ],
-            sessionId: "control-ui-mock-task-session",
-            thinkingLevel: null,
-          },
-        },
-        {
-          match: { sessionKey: secondTaskSessionKey },
-          response: {
-            messages: [
-              historyMessage(
-                "user",
-                "Audit the gateway task-event scope guards.",
-                baseTime + 41 * 60_000,
-              ),
-              historyMessage(
-                "assistant",
-                "Comparing requester, owner, and child-session event routing.",
-                baseTime + 41 * 60_000 + 6_000,
-              ),
-            ],
-            sessionId: "control-ui-mock-task-session-2",
-            thinkingLevel: null,
-          },
-        },
-      ],
+    sessions: [taskSessionKey, secondTaskSessionKey].map((key) => ({ key })),
+    sessionTranscripts: {
+      [taskSessionKey]: {
+        messages: [
+          historyMessage(
+            "user",
+            "Map the run-status indicator code and report the active execution path.",
+            baseTime + 40 * 60_000,
+          ),
+          historyMessage(
+            "assistant",
+            "Tracing task events from the gateway through the chat background-tasks rail.",
+            baseTime + 40 * 60_000 + 8_000,
+          ),
+        ],
+        thinkingLevel: null,
+      },
+      [secondTaskSessionKey]: {
+        messages: [
+          historyMessage(
+            "user",
+            "Audit the gateway task-event scope guards.",
+            baseTime + 41 * 60_000,
+          ),
+          historyMessage(
+            "assistant",
+            "Comparing requester, owner, and child-session event routing.",
+            baseTime + 41 * 60_000 + 6_000,
+          ),
+        ],
+        thinkingLevel: null,
+      },
     },
-    // One live subagent task exercises the rail, collapsed badge, and running-task status row.
-    "tasks.list": { tasks },
-    "tasks.get": { cases: tasks.map(taskDetailCase) },
+    methodResponses: {
+      // One live subagent task exercises the rail, collapsed badge, and running-task status row.
+      "tasks.list": { tasks },
+      "tasks.get": { cases: tasks.map(taskDetailCase) },
+    },
   };
 }

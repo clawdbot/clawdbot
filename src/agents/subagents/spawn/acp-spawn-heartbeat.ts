@@ -6,7 +6,10 @@ import { loadSessionEntryReadOnly } from "../../../config/sessions/session-acces
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { isHeartbeatEnabledForAgent } from "../../../infra/heartbeat-summary.js";
 import { areHeartbeatsEnabled } from "../../../infra/heartbeat-wake.js";
-import { deliveryContextFromSession } from "../../../utils/delivery-context.shared.js";
+import {
+  deliveryContextFromSession,
+  hasDeliveryTargetFields,
+} from "../../../utils/delivery-context.shared.js";
 import { resolveAgentConfig, resolveSessionAgentIds } from "../../agent-scope.js";
 
 export function isHeartbeatEnabledForSessionAgent(params: {
@@ -96,5 +99,5 @@ export function hasSessionLocalHeartbeatRelayRoute(params: {
     clone: false,
   });
   const parentDeliveryContext = deliveryContextFromSession(parentEntry);
-  return Boolean(parentDeliveryContext?.channel && parentDeliveryContext.to);
+  return hasDeliveryTargetFields(parentDeliveryContext);
 }

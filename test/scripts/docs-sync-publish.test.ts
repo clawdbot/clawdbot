@@ -174,7 +174,6 @@ describe("docs-sync-publish", () => {
     ]);
 
     const releaseTab = english!.tabs.find((tab) => tab.tab === "Release & CI");
-    const releaseRoutes = collectPages(releaseTab);
     const releaseNotes = collectPages(releaseTab?.groups?.[0]);
     expect(releaseTab?.groups?.map((group) => group.group)).toEqual([
       "Release notes",
@@ -182,8 +181,28 @@ describe("docs-sync-publish", () => {
       "Release process",
       "Testing and CI",
     ]);
+    // Every release adds a releases/<version> page, so read the published versions from the
+    // navigation rather than pinning them here; only the index-first ordering and the version
+    // route shape are invariant. Pinning the list makes this assertion fail on release PRs whose
+    // change classification never selects this lane, so the break first lands on main.
     expect(releaseNotes[0]).toBe("releases/index");
-    expect(new Set(collectPages(releaseTab))).toHaveLength(releaseRoutes.length);
+    expect(releaseNotes.length).toBeGreaterThan(1);
+    for (const page of releaseNotes.slice(1)) {
+      expect(page).toMatch(/^releases\/\d{4}\.\d{1,2}\.\d+$/);
+    }
+    const releaseRoutes = [
+      ...releaseNotes,
+      "maturity/scorecard",
+      "maturity/taxonomy",
+      "reference/RELEASING",
+      "reference/full-release-validation",
+      "reference/release-performance-sweep",
+      "reference/test",
+      "ci",
+      "help/scripts",
+    ];
+    expect(collectPages(releaseTab)).toEqual(releaseRoutes);
+    expect(new Set(releaseRoutes)).toHaveLength(releaseRoutes.length);
 
     const englishWithoutClawHub = {
       ...english,

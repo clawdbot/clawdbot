@@ -1,6 +1,6 @@
-import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { waitForControlUiGatewayReconnecting } from "../test-helpers/control-ui-e2e-readiness.ts";
 import {
   chatSessionListResponse,
@@ -187,8 +187,7 @@ suite.define(() => {
       });
       const startupIndicator = page.locator('.chat-working-indicator[role="status"]');
       if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
-        const startupProofDir = path.resolve(".artifacts/control-ui-e2e/duplicate-session-naming");
-        await mkdir(startupProofDir, { recursive: true });
+        const startupProofDir = path.join(suite.artifactDir, "duplicate-session-naming");
         await page.screenshot({ path: path.join(startupProofDir, "steer.png"), fullPage: true });
       }
       await expect.poll(() => startupIndicator.textContent()).not.toContain("Naming worktree…");
@@ -483,9 +482,11 @@ suite.define(() => {
             )
             .toEqual([initialText, beforeText, steerText, afterText]);
         } finally {
-          const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+          const artifactDirParent = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+          const artifactDir = artifactDirParent
+            ? createControlUiE2eArtifactDir("chat-flow.active-run-follow-ups", artifactDirParent)
+            : undefined;
           if (artifactDir) {
-            await mkdir(artifactDir, { recursive: true });
             await page.screenshot({
               fullPage: true,
               path: path.join(artifactDir, `steer-history-${historyOrder}-live-event.png`),
@@ -544,9 +545,11 @@ suite.define(() => {
         state: "delta",
       });
     const capture = async (name: string) => {
-      const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+      const artifactDirParent = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+      const artifactDir = artifactDirParent
+        ? createControlUiE2eArtifactDir("chat-flow.active-run-follow-ups", artifactDirParent)
+        : undefined;
       if (artifactDir) {
-        await mkdir(artifactDir, { recursive: true });
         await page.screenshot({
           fullPage: true,
           path: path.join(artifactDir, `steer-split-commentary-${name}.png`),
