@@ -2103,6 +2103,7 @@ async function createChatPickerScenario(
         id: selfProfile.id,
         name: selfProfile.displayName ?? undefined,
         email: selfProfile.emails[0],
+        avatarUrl: `/api/users/${selfProfile.id}/avatar`,
       },
       {
         id: "presence-colin",
