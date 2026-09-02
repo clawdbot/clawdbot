@@ -4644,6 +4644,7 @@ jobs:
             -resultBundlePath "$result_bundle" \
             -parallel-testing-enabled NO \
             -only-testing:OpenClawLogicTests/WatchVoiceTurnTrackerTests \
+            -only-testing:OpenClawLogicTests/WatchComposerInputTests \
             -only-testing:OpenClawTests/DelayedActionGateTests \
             -only-testing:OpenClawTests/IOSGatewayChatTransportTests \
             -only-testing:OpenClawTests/NodeAppModelInvokeTests \

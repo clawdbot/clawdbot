@@ -156,11 +156,16 @@ devices. The companion uses the iPhone relay and does not need separate
 Gateway pairing.
 
 1. Connect the iPhone to your Gateway and select the chat you want to use.
-2. On the Watch, open **Talk to Claw**, then tap the voice button beside
-   **Message OpenClaw**.
-3. Use the native input sheet to dictate and submit your message. Keep Chat
-   open on the Watch to hear the reply. The message pill also opens native
-   input, but does not request a spoken reply.
+2. On the Watch, open **Talk to Claw**, then tap the microphone button beside
+   **Message OpenClaw**. It opens watchOS dictation directly and shows the
+   transcript while you speak.
+3. Tap **Done** to send the transcript. Keep Chat open on the Watch to hear
+   the reply. The **Message OpenClaw** pill opens the keyboard or Scribble
+   input instead and does not request a spoken reply.
+
+The sent text appears in Chat right away while the iPhone relays it. On-watch
+transcription uses the system dictation screen because Apple does not ship the
+Speech framework on watchOS.
 
 The iPhone must remain available to relay messages. If its Gateway connection
 is asleep, Watch messages use the same bounded background reconnect as Watch
