@@ -650,7 +650,7 @@ describe("subagent registry lifecycle hardening", () => {
           reason: "message_tool_delivery_missing",
           error: "completion agent did not use the message tool",
         });
-        return "retryable";
+        return "retryable" as const;
       },
     );
     const controller = createLifecycleController({ entry, runSubagentAnnounceFlow });

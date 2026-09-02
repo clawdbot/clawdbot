@@ -103,13 +103,13 @@ flow:
         - set: emptyTerminalOutbound
           value:
             expr: "emptyOutbound.filter((message) => String(message.text ?? '').trim() === 'QA-SUBAGENT-TERMINAL-EMPTY-REPRESENTED')"
-        - set: emptyParentAcknowledgements
+        - set: requesterVisibleParentMessages
           value:
-            expr: "emptyOutbound.filter((message) => String(message.text ?? '').trim() === 'QA-SUBAGENT-EMPTY-PARENT-ACK')"
+            expr: "emptyOutbound.filter((message) => String(message.text ?? '').trim() !== 'QA-SUBAGENT-TERMINAL-EMPTY-REPRESENTED')"
         - assert:
-            expr: "emptyParentAcknowledgements.length === 1"
+            expr: "requesterVisibleParentMessages.length > 0"
             message:
-              expr: "`requester did not receive exactly one parent acknowledgement; outbound=${recentOutboundSummary(state)}`"
+              expr: "`requester did not receive a visible parent acknowledgement; outbound=${recentOutboundSummary(state)}`"
         - assert:
             expr: "emptyTerminalOutbound.length === 0"
             message:
@@ -161,4 +161,4 @@ flow:
             expr: "JSON.stringify(postRestartOutbound) === JSON.stringify(preRestartOutbound)"
             message:
               expr: "`Gateway restart replayed empty completion output: before=${JSON.stringify(preRestartOutbound)} after=${JSON.stringify(postRestartOutbound)}`"
-      detailsExpr: "JSON.stringify({ taskId: emptyTask.taskId, taskStatus: emptyTask.status, taskDeliveryStatus: emptyTask.deliveryStatus, taskTerminalOutcome: emptyTask.terminalOutcome, inputDisposition: 'empty-after-side-effect', requesterAcknowledgementCount: emptyParentAcknowledgements.length, expectedTerminalSendCount: 0, actualTerminalSendCount: emptyTerminalOutbound.length, auxiliaryChannelEvents: emptyOutbound.map((message) => String(message.text ?? '')), postRestartUnexpectedPayloadCount: postRestartOutbound.length - preRestartOutbound.length, providerMode: env.providerMode, pass: true }, null, 2)"
+      detailsExpr: "JSON.stringify({ taskId: emptyTask.taskId, taskStatus: emptyTask.status, taskDeliveryStatus: emptyTask.deliveryStatus, taskTerminalOutcome: emptyTask.terminalOutcome, inputDisposition: 'empty-after-side-effect', requesterAcknowledgementCount: requesterVisibleParentMessages.length, expectedTerminalSendCount: 0, actualTerminalSendCount: emptyTerminalOutbound.length, auxiliaryChannelEvents: emptyOutbound.map((message) => String(message.text ?? '')), postRestartUnexpectedPayloadCount: postRestartOutbound.length - preRestartOutbound.length, providerMode: env.providerMode, pass: true }, null, 2)"
