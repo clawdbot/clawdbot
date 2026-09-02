@@ -18,11 +18,13 @@ import {
   hasSchemaRefusal,
 } from "./schema-preflight.js";
 import {
+  normalizeTag,
   resolveGitInstallDir,
   UpdatePreMutationError,
   type UpdateCommandOptions,
 } from "./shared.js";
 import { createBeforeGitMutation, updateGitInstall } from "./update-command-git.js";
+import { handoffUpdateFromGateway } from "./update-command-handoff.js";
 import {
   captureOwnedManagedUpdateContext,
   type OwnedManagedUpdateContext,
@@ -113,6 +115,27 @@ export async function executeMutableUpdate(params: {
           jsonMode: Boolean(params.opts.json),
           timeoutMs: params.updateStepTimeoutMs,
           phase,
+          handoffFromGateway: (state) =>
+            handoffUpdateFromGateway({
+              state,
+              root: mutationRoot,
+              opts: params.opts,
+              // Pin the inspected package. Extended-stable resolves its protected
+              // selector again because its public CLI contract forbids --tag.
+              tag:
+                params.updateInstallKind === "package" && params.channel !== "extended-stable"
+                  ? (normalizeTag(params.packageInstallSpec) ?? undefined)
+                  : undefined,
+              mode:
+                params.updateInstallKind === "git"
+                  ? "git"
+                  : (params.packageInstallTarget?.manager ?? "unknown"),
+              timeoutMs: params.updateStepTimeoutMs,
+              devTarget: params.devTarget,
+              nodeRunner: params.packageUpdateNodeRunner,
+              invocationCwd: params.invocationCwd,
+              stopProgress: params.stop,
+            }),
         });
         if (preManagedServiceStop.windowsTaskAutoStartRecovery) {
           params.recoveryState.windowsTaskAutoStartRecovery =

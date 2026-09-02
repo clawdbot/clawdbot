@@ -22,6 +22,7 @@ import {
 } from "../daemon/constants.js";
 import { mockSystemAccountHome } from "../daemon/service.test-helpers.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { SUPERVISOR_HINT_ENV_VARS } from "../infra/supervisor-markers.js";
 import { isBetaTag } from "../infra/update-channels.js";
 import { applyDevUpdateTargetEnv } from "../infra/update-dev-target.js";
 import {
@@ -62,6 +63,11 @@ const suspendScheduledTaskAutoStartForUpdate = vi.fn();
 const resumeScheduledTaskAutoStartAfterUpdate = vi.fn();
 const prepareRestartScript = vi.fn();
 const runRestartScript = vi.fn();
+const managedUpdateHandoff = vi.hoisted(() => ({
+  start: vi.fn(),
+  transfer: vi.fn(),
+  cancel: vi.fn(),
+}));
 const mockedRunDaemonInstall = vi.fn();
 const serviceReadCommand = vi.fn();
 const serviceReadRuntime = vi.fn();
@@ -115,6 +121,8 @@ const execFile = vi.fn((...args: unknown[]) => {
 const spawn = vi.fn();
 const { defaultRuntime: runtimeCapture, resetRuntimeCapture } = createCliRuntimeCapture();
 const serviceEnvSnapshot = captureEnv([
+  ...SUPERVISOR_HINT_ENV_VARS,
+  "OPENCLAW_UPDATE_RUN_HANDOFF",
   "OPENCLAW_SERVICE_MARKER",
   "OPENCLAW_SERVICE_KIND",
   GATEWAY_SERVICE_RUNTIME_PID_ENV,
@@ -128,6 +136,12 @@ vi.mock("@clack/prompts", () => ({
   isCancel,
   spinner,
   note: vi.fn(),
+}));
+
+vi.mock("../infra/update-managed-service-handoff.js", () => ({
+  startManagedServiceUpdateHandoff: managedUpdateHandoff.start,
+  transferManagedServiceUpdateHandoff: managedUpdateHandoff.transfer,
+  cancelManagedServiceUpdateHandoff: managedUpdateHandoff.cancel,
 }));
 
 // Fresh diagnostic processes have owner coverage; interactive cases retain the
@@ -1692,7 +1706,11 @@ describe("update-cli", () => {
     delete process.env.OPENCLAW_SERVICE_MARKER;
     delete process.env.OPENCLAW_SERVICE_KIND;
     delete process.env[GATEWAY_SERVICE_RUNTIME_PID_ENV];
-    for (const key of GATEWAY_SERVICE_SELECTOR_ENV_KEYS) {
+    for (const key of [
+      ...GATEWAY_SERVICE_SELECTOR_ENV_KEYS,
+      ...SUPERVISOR_HINT_ENV_VARS,
+      "OPENCLAW_UPDATE_RUN_HANDOFF",
+    ]) {
       delete process.env[key];
     }
     restartHealthTestControl.snapshot = undefined;
@@ -2045,6 +2063,7 @@ describe("update-cli", () => {
       expect(freshRestartCalls().length).toBe(restart ? 1 : 0);
       expect(serviceStart).not.toHaveBeenCalled();
       expectNoSideEffects(
+        managedUpdateHandoff.start,
         runDaemonInstall,
         runDaemonRestart,
         prepareRestartScript,
@@ -5599,6 +5618,95 @@ describe("update-cli", () => {
     expect(serviceStop).not.toHaveBeenCalled();
     expect(packageInstallCommandCall()).toBeUndefined();
   });
+
+  it.each(
+    (
+      [
+        { platform: "linux", env: { INVOCATION_ID: "gateway-invocation" }, supervisor: "systemd" },
+        { platform: "linux", env: { JOURNAL_STREAM: "8:123" }, supervisor: "systemd" },
+        {
+          platform: "linux",
+          env: { OPENCLAW_SYSTEMD_UNIT: "openclaw-gateway.service" },
+          supervisor: "systemd",
+        },
+        { platform: "linux", env: {}, supervisor: "systemd", ancestor: true },
+        {
+          platform: "linux",
+          env: { INVOCATION_ID: "gateway-invocation" },
+          supervisor: "systemd",
+          options: { tag: "./candidate.tgz" },
+          tag: "./candidate.tgz",
+        },
+        {
+          platform: "linux",
+          env: { INVOCATION_ID: "gateway-invocation" },
+          supervisor: "systemd",
+          options: { channel: "extended-stable" },
+          tag: undefined,
+        },
+        {
+          platform: "darwin",
+          env: { OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.gateway" },
+          supervisor: "launchd",
+        },
+      ] as const
+    ).map((testCase) => ({ options: {}, tag: "9999.0.0", ancestor: false, ...testCase })),
+  )(
+    "hands agent-initiated updates to $supervisor before stopping the gateway ($env)",
+    async ({ platform, env, supervisor, options, tag, ancestor }) => {
+      vi.spyOn(process, "platform", "get").mockReturnValue(platform);
+      const { pkgRoot: root, entryPath } = await setupInstalledPackageRoot(
+        createCaseDir("openclaw-update-handoff"),
+      );
+      mockFileBackedPathExists();
+      mockRunningManagedGateway([process.execPath, entryPath, "gateway", "run"]);
+      if (ancestor) {
+        mockGetSelfAndAncestorPidsSync.mockReturnValue(new Set([process.pid, gatewayFixturePid]));
+      }
+      managedUpdateHandoff.start.mockResolvedValue({
+        status: "started",
+        handoffId: "test-handoff",
+        installRoot: root,
+        logPath: "/tmp/update-handoff/handoff.log",
+        command: "openclaw update --yes",
+        pid: 12345,
+      });
+      managedUpdateHandoff.transfer.mockResolvedValue(true);
+
+      await withEnvAsync(env, () =>
+        invokeUpdateCli({ yes: true, json: true, acceptCapabilities: true, ...options }),
+      );
+
+      expect(managedUpdateHandoff.start, getErrorOutput() || getLogOutput()).toHaveBeenCalledWith(
+        expect.objectContaining({
+          root,
+          supervisor,
+          parentPid: gatewayFixturePid,
+          invocationCwd: process.cwd(),
+          tag,
+          acceptCapabilities: true,
+        }),
+      );
+      expect(managedUpdateHandoff.transfer).toHaveBeenCalledWith({
+        kind: "managed-update-handoff",
+        handoffId: "test-handoff",
+        installRoot: root,
+      });
+      expectNoSideEffects(serviceStop, serviceRestart, runRestartScript);
+      expect(packageInstallCommandCall()).toBeUndefined();
+      expect(defaultRuntime.exit).not.toHaveBeenCalledWith(1);
+      expect(lastWriteJsonCall()).toMatchObject({
+        status: "skipped",
+        reason: "managed-service-handoff-started",
+        steps: [
+          expect.objectContaining({
+            stdoutTail: expect.stringContaining("/tmp/update-handoff/handoff.log"),
+          }),
+        ],
+      });
+      expect(JSON.stringify(lastWriteJsonCall())).toContain("gateway status --deep");
+    },
+  );
 
   it.each(["preparation", "final ancestry recheck"])(
     "reports a Git service refusal during %s without an unsafe recovery verdict",

@@ -1,16 +1,11 @@
 // Managed service identity, shutdown, and recovery shared by update and Doctor.
 import { Writable } from "node:stream";
-import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
 import { stableStringify } from "@openclaw/normalization-core/stable-stringify";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { createConfigIO } from "../../config/io.js";
 import { resolveGatewayPort } from "../../config/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import {
-  GATEWAY_SERVICE_RUNTIME_PID_ENV,
-  isGatewayServiceEnv,
-  resolveGatewayProfileSuffix,
-} from "../../daemon/constants.js";
+import { isGatewayServiceEnv, resolveGatewayProfileSuffix } from "../../daemon/constants.js";
 import { resolveLaunchAgentLabel } from "../../daemon/launchd-label.js";
 import { resolveTaskName } from "../../daemon/schtasks-layout.js";
 import {
@@ -30,7 +25,6 @@ import {
 import { readGatewayServiceState, resolveGatewayService } from "../../daemon/service.js";
 import { resolveSystemdServiceName } from "../../daemon/systemd-service-files.js";
 import { sha256Hex } from "../../infra/crypto-digest.js";
-import { getSelfAndAncestorPidsSync } from "../../infra/restart-stale-pids.js";
 import { parseTcpPortFromArgs } from "../../infra/tcp-port.js";
 import type { UpdateRunResult } from "../../infra/update-runner.js";
 import { defaultRuntime } from "../../runtime.js";
@@ -44,6 +38,7 @@ import {
   waitForSignalExitBarriers,
 } from "../signal-exit-barrier.js";
 import { UpdatePreMutationError } from "./shared.js";
+import { gatewayAncestryBlockMessage } from "./update-command-handoff.js";
 import { runUpdatedInstallGatewayCommand } from "./update-command-service-command.js";
 import {
   assertGatewayServiceManagementAllowedForUpdate,
@@ -245,30 +240,6 @@ export class UpdateCommandAbort extends Error {
   }
 }
 
-function parsePositivePid(value: unknown): number | null {
-  if (typeof value === "number") {
-    return Number.isFinite(value) && value > 0 ? Math.floor(value) : null;
-  }
-  const trimmed = typeof value === "string" ? value.trim() : "";
-  return /^\d+$/u.test(trimmed) ? (parseStrictPositiveInteger(trimmed) ?? null) : null;
-}
-
-function gatewayAncestryBlockMessage(pid: unknown): string | undefined {
-  const gatewayPid = parsePositivePid(pid);
-  if (gatewayPid === null) {
-    return undefined;
-  }
-  const inherited =
-    isGatewayServiceEnv(process.env) &&
-    parsePositivePid(process.env[GATEWAY_SERVICE_RUNTIME_PID_ENV]) === gatewayPid;
-  if (!inherited && !getSelfAndAncestorPidsSync().has(gatewayPid)) {
-    return undefined;
-  }
-  return `This command is running inside the gateway process tree.
-Gateway PID ${gatewayPid} is an ancestor of this process, so this command cannot safely stop or restart the gateway that owns it.
-Run this command from a shell outside the gateway service, or stop the gateway service first and retry.`;
-}
-
 function serviceControlStdoutForMode(jsonMode: boolean): NodeJS.WritableStream {
   return jsonMode ? JSON_MODE_SERVICE_STDOUT : process.stdout;
 }
@@ -418,6 +389,7 @@ export async function maybeStopManagedServiceBeforeMutableUpdate(params: {
   shouldRestart: boolean;
   jsonMode: boolean;
   phase?: "inspect" | "prepare";
+  handoffFromGateway?: (state: GatewayServiceState) => Promise<boolean>;
   expectedService?: Pick<PreManagedServiceStop, "serviceEnv" | "serviceUpdateVerdict">;
   timeoutMs?: number;
 }): Promise<PreManagedServiceStop> {
@@ -493,6 +465,16 @@ export async function maybeStopManagedServiceBeforeMutableUpdate(params: {
       serviceMutationSkipMessage:
         "Gateway service management skipped: the service belongs to a different OpenClaw installation and was left untouched.",
     };
+  }
+  // Transfer before either inspection-only Git planning or native shutdown can
+  // return control to an updater still owned by this service.
+  if (
+    serviceUpdateVerdict.kind === "owned" &&
+    params.shouldRestart &&
+    serviceState.running &&
+    (await params.handoffFromGateway?.(serviceState))
+  ) {
+    throw new UpdateCommandAbort();
   }
   if (serviceUpdateVerdict.kind === "absent" || params.phase === "inspect") {
     return inspected;
