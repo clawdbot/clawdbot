@@ -219,7 +219,7 @@ openclaw fleet restore acme --from ./acme.tgz
 
 These are host-operator-privileged commands. Archives contain tenant state and auth secrets, are created with mode `0600`, and must be stored like credentials. Backup refuses a running cell so SQLite state is captured consistently. Restore refuses a running cell unless `--force` is supplied, replaces only that tenant's state, rotates the Gateway token, and prints the new token once. Fleet backs up one tenant at a time; all-tenant backup is a separate operator action.
 
-Restore needs an existing stopped container because its inspected runtime profile supplies the replacement limits, user mapping, environment provenance, and image. If the registered container was removed out of band, first run `openclaw fleet rm <tenant> --force` without `--purge-data`, then recreate a stopped cell with the complete original provisioning profile before retrying restore:
+Restore needs an existing stopped container because its inspected runtime profile supplies the replacement limits, user mapping, environment provenance, and image. If the registered container was removed out of band, first run `openclaw fleet rm <tenant> --force` without `--purge-data`, then, under the same original OS user and group identity and the same Docker or Podman rootless/rootful context, recreate a stopped cell with the complete original provisioning profile before retrying restore:
 
 ```bash
 openclaw fleet create <tenant> \
@@ -236,6 +236,8 @@ openclaw fleet create <tenant> \
 ```
 
 Replace every placeholder with the original value and repeat `--env` for every original environment entry; omit only options that were not originally set. If any original value is unknown, recover it from the saved provisioning command or deployment record before recreating the cell. Do not guess or rely on `fleet create` defaults: they can change the cell's port, network egress, resource limits, or environment. The `<runtime>` value is the one named by the restore error (`docker` or `podman`). The first removal keeps both tenant data directories intact.
+
+Run the `fleet create` command as the same OS user and group and against the same Docker or Podman rootless/rootful context that created the original cell. Fleet derives the container user mapping from that invoking identity and runtime context; the registry does not retain it after the container is gone.
 
 Both commands accept `--max-bytes <bytes>` to bound archived or extracted file data, and both apply the same fixed one-million budget of archive path segments so metadata-only archive bombs cannot exhaust host inodes and every accepted backup stays restorable. Backup accepts `--out <path>` and both commands support `--json`.
 

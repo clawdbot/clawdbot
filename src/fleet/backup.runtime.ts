@@ -58,7 +58,7 @@ const RESTORE_EXTRACT_TIMEOUT_MS = 30 * 60_000;
 function missingContainerRecoveryHint(
   record: Pick<FleetCellRecord, "tenantId" | "runtime">,
 ): string {
-  return `remove the stale registration without purging data (openclaw fleet rm ${record.tenantId} --force), recreate a stopped cell with the original full provisioning profile (openclaw fleet create ${record.tenantId} --runtime ${record.runtime} --image <image> --port <port> --memory <memory> --cpus <cpus> --pids-limit <pids-limit> --network <bridge|internal> [--disk <disk>] [--env KEY=VALUE ...] --no-start; replace every placeholder with the original value, omit only options that were not originally set, and if any value is unknown recover it from the original provisioning command or deployment record before continuing; do not use create defaults), then retry fleet restore`;
+  return `remove the stale registration without purging data (openclaw fleet rm ${record.tenantId} --force), under the same original OS user and group identity and the same Docker or Podman rootless/rootful context, recreate a stopped cell with the original full provisioning profile (openclaw fleet create ${record.tenantId} --runtime ${record.runtime} --image <image> --port <port> --memory <memory> --cpus <cpus> --pids-limit <pids-limit> --network <bridge|internal> [--disk <disk>] [--env KEY=VALUE ...] --no-start; replace every placeholder with the original value, omit only options that were not originally set, and if any value is unknown recover it from the original provisioning command or deployment record before continuing; do not use create defaults), then retry fleet restore`;
 }
 
 type FleetBackupManifest = {

@@ -468,7 +468,7 @@ describe("fleet restore runtime", () => {
     const containers = containerMock({ kind: "missing", state: "missing" });
 
     await expect(restoreFleetCell(restoreParams(containers, archive))).rejects.toThrow(
-      /fleet rm acme --force.*original full provisioning profile.*fleet create acme --runtime docker --image <image> --port <port> --memory <memory> --cpus <cpus> --pids-limit <pids-limit> --network <bridge\|internal>.*--env KEY=VALUE.*original provisioning command or deployment record.*do not use create defaults.*retry fleet restore/iu,
+      /fleet rm acme --force.*same original OS user and group identity.*same Docker or Podman rootless\/rootful context.*original full provisioning profile.*fleet create acme --runtime docker --image <image> --port <port> --memory <memory> --cpus <cpus> --pids-limit <pids-limit> --network <bridge\|internal>.*--env KEY=VALUE.*original provisioning command or deployment record.*do not use create defaults.*retry fleet restore/iu,
     );
     expect(containers.remove).not.toHaveBeenCalled();
   });
@@ -701,7 +701,7 @@ describe("fleet restore runtime", () => {
     expect(message).toMatch(/transient removal failure/iu);
     expect(message).toMatch(/previous cell container is missing/iu);
     expect(message).toMatch(
-      /original full provisioning profile.*fleet create acme --runtime podman --image <image> --port <port> --memory <memory> --cpus <cpus> --pids-limit <pids-limit> --network <bridge\|internal>.*--disk <disk>.*--env KEY=VALUE.*original provisioning command or deployment record.*do not use create defaults.*retry fleet restore/iu,
+      /same original OS user and group identity.*same Docker or Podman rootless\/rootful context.*original full provisioning profile.*fleet create acme --runtime podman --image <image> --port <port> --memory <memory> --cpus <cpus> --pids-limit <pids-limit> --network <bridge\|internal>.*--disk <disk>.*--env KEY=VALUE.*original provisioning command or deployment record.*do not use create defaults.*retry fleet restore/iu,
     );
     expect(message).not.toMatch(/fleet start acme/iu);
     expect(containers.start).not.toHaveBeenCalled();
