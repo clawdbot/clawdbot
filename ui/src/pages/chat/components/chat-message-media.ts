@@ -2,6 +2,7 @@ import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { asNonArrayRecord, asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type { ImageLightboxItem } from "../../../components/image-lightbox.ts";
 import { t } from "../../../i18n/index.ts";
+import { formatBytes } from "../../../lib/agents/display.ts";
 import type { MessageContentItem } from "../../../lib/chat/chat-types.ts";
 import { readTranscriptMediaEntries } from "../../../lib/chat/message-extract.ts";
 import { normalizeMessage } from "../../../lib/chat/message-normalizer.ts";
@@ -674,6 +675,18 @@ export function extractMessageMediaText(
     ...extractImages(message).map(
       (image) => image.fileName?.trim() || image.alt?.trim() || t("chat.imageLightbox.untitled"),
     ),
+    ...content.flatMap((item) => {
+      if (item.type !== "omitted_media") {
+        return [];
+      }
+      const reason =
+        item.media.sizeBytes === undefined
+          ? t("chat.attachments.omittedFromHistory")
+          : t("chat.attachments.omittedFromHistoryWithSize", {
+              size: formatBytes(item.media.sizeBytes),
+            });
+      return [`${t("chat.attachments.image")} · ${reason}`];
+    }),
     ...extractMessageAttachments(message, content).map(
       (item) => item.attachment.label.trim() || t("chat.attachments.attachedFile"),
     ),
