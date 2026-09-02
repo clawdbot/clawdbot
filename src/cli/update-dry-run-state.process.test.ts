@@ -30,8 +30,7 @@ async function snapshotTree(root: string): Promise<string[]> {
         snapshot.push(`l ${relativePath} ${await fs.readlink(absolutePath)}`);
         continue;
       }
-      const contents = await fs.readFile(absolutePath);
-      snapshot.push(`f ${relativePath} ${contents.toString("base64")}`);
+      snapshot.push(`f ${relativePath} ${await sha256File(absolutePath)}`);
     }
   };
   await walk(root, "");
@@ -171,43 +170,49 @@ describe("update process state", () => {
     expect(snapshotDatabaseArtifacts(await snapshotTree(root))).toEqual(databaseArtifactsBefore);
   });
 
-  it("defers legacy-state migration until the updated runtime", async () => {
-    const root = tempDirs.make("openclaw-update-legacy-state-");
-    const configPath = path.join(root, "config", "openclaw.json");
-    const sessionsDir = path.join(root, "state", "sessions");
-    const sessionId = "legacy-会議-session";
-    await fs.mkdir(path.dirname(configPath), { recursive: true });
-    await fs.mkdir(sessionsDir, { recursive: true });
-    await fs.writeFile(configPath, '{ "gateway": { "mode": "local" } }\n');
-    await fs.writeFile(
-      path.join(sessionsDir, "sessions.json"),
-      `${JSON.stringify({
-        "agent:main:discord:direct:user": {
-          sessionId,
-          sessionFile: path.join(sessionsDir, `${sessionId}.jsonl`),
-          updatedAt: 1,
-        },
-      })}\n`,
-    );
-    await fs.writeFile(
-      path.join(sessionsDir, `${sessionId}.jsonl`),
-      `${JSON.stringify({ type: "session", id: sessionId })}\n`,
-    );
-    const before = await snapshotTree(root);
+  it.each(["update", "repair"])(
+    "keeps rejected %s arguments from touching legacy state",
+    async (command) => {
+      const root = tempDirs.make("openclaw-update-legacy-state-");
+      const configPath = path.join(root, "config", "openclaw.json");
+      const sessionsDir = path.join(root, "state", "sessions");
+      const sessionId = "legacy-会議-session";
+      await fs.mkdir(path.dirname(configPath), { recursive: true });
+      await fs.mkdir(sessionsDir, { recursive: true });
+      await fs.writeFile(configPath, '{ "gateway": { "mode": "local" } }\n');
+      await fs.writeFile(
+        path.join(sessionsDir, "sessions.json"),
+        `${JSON.stringify({
+          "agent:main:discord:direct:user": {
+            sessionId,
+            sessionFile: path.join(sessionsDir, `${sessionId}.jsonl`),
+            updatedAt: 1,
+          },
+        })}\n`,
+      );
+      await fs.writeFile(
+        path.join(sessionsDir, `${sessionId}.jsonl`),
+        `${JSON.stringify({ type: "session", id: sessionId })}\n`,
+      );
+      const before = await snapshotTree(root);
 
-    const result = runUpdateProcess(root, [
-      "update",
-      "--timeout",
-      "invalid",
-      "--no-restart",
-      "--json",
-    ]);
+      const result = runUpdateProcess(root, [
+        "update",
+        ...(command === "repair" ? ["repair"] : []),
+        "--timeout",
+        "invalid",
+        ...(command === "update" ? ["--no-restart"] : []),
+        "--json",
+      ]);
 
-    expect(result.error).toBeUndefined();
-    expect(result.status).not.toBe(0);
-    expect(`${result.stdout}\n${result.stderr}`).toMatch(/--timeout must be a positive integer/iu);
-    expect(await snapshotTree(root)).toEqual(before);
-  });
+      expect(result.error).toBeUndefined();
+      expect(result.status).not.toBe(0);
+      expect(`${result.stdout}\n${result.stderr}`).toMatch(
+        /--timeout must be a positive integer/iu,
+      );
+      expect(await snapshotTree(root)).toEqual(before);
+    },
+  );
 
   it("keeps an orphaned SQLite journal immutable when a managed handoff is refused", async () => {
     const root = tempDirs.make("openclaw-update-refused-handoff-");
@@ -234,7 +239,7 @@ describe("update process state", () => {
     expect(await snapshotTree(root)).toEqual(before);
   });
 
-  it.each(["update", "cleanup"])(
+  it.each(["update", "repair", "cleanup"])(
     "fences the mutable %s path before observation or action",
     async (command) => {
       const root = tempDirs.make("openclaw-update-owned-state-");
@@ -260,7 +265,13 @@ describe("update process state", () => {
         root,
         command === "cleanup"
           ? ["update", "cleanup", "--yes", "--json"]
-          : ["update", "--timeout", "1", "--no-restart", "--json"],
+          : [
+              "update",
+              ...(command === "repair" ? ["repair"] : ["--no-restart"]),
+              "--timeout",
+              "1",
+              "--json",
+            ],
       );
 
       expect(refused.error).toBeUndefined();

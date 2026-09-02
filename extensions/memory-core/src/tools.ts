@@ -509,6 +509,7 @@ export function createMemorySearchTool(options: MemoryToolOptions) {
                 ...(wiki ? [wiki] : []),
               ];
               const staleness = memoryValue?.staleness;
+              const recoveryAction = memoryValue?.unavailableResult?.action;
               const metadata = composeMemoryCorpusMetadata(
                 attempts,
                 staleness?.warning ? [staleness.warning] : [],
@@ -529,6 +530,8 @@ export function createMemorySearchTool(options: MemoryToolOptions) {
                 citations: resolveMemoryCitationsMode(cfg),
                 mode: memoryValue?.mode,
                 ...(attempts.length > 0 ? metadata : {}),
+                // Another corpus can succeed while primary memory still needs repair.
+                ...(recoveryAction ? { action: recoveryAction } : {}),
                 ...staleness,
                 debug,
               });

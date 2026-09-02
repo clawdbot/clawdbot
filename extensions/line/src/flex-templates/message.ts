@@ -1,6 +1,9 @@
-// Line plugin module implements message behavior.
 import type { messagingApi } from "@line/bot-sdk";
 import type { FlexContainer } from "./types.js";
+
+// LINE limits serialized UTF-8 JSON for each bubble and the whole carousel.
+export const LINE_FLEX_BUBBLE_MAX_BYTES = 30_000;
+export const LINE_FLEX_CAROUSEL_MAX_BYTES = 50_000;
 
 /**
  * Wrap a FlexContainer in a FlexMessage

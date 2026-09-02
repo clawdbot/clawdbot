@@ -215,3 +215,26 @@ describe("formatGoogleChatText", () => {
     });
   });
 });
+
+describe("Google Chat semantic whitespace", () => {
+  it.each([
+    { name: "standalone fenced block", prefix: "", expected: ["```\n \n```"] },
+    {
+      name: "fenced block after a full default-limit paragraph",
+      prefix: "A".repeat(32_000) + "\n\n",
+      expected: ["A".repeat(32_000), "\n\n```\n \n```"],
+    },
+  ])("preserves semantic whitespace: $name", ({ prefix, expected }) => {
+    const chunks = formatGoogleChatTextChunks(prefix + "```\n \n```");
+    expect(chunks).toEqual(expected);
+    expect(chunks.every((chunk) => Buffer.byteLength(chunk, "utf8") <= 32_000)).toBe(true);
+  });
+});
+
+it("preserves task-list fallback when semantic whitespace joins the next chunk", () => {
+  const paragraph = "A".repeat(31_998);
+  const chunks = formatGoogleChatTextChunks(`**${paragraph}**\n\n- [x] done`);
+
+  expect(chunks).toEqual([`*${paragraph}*`, "\n\n[x] done"]);
+  expect(chunks.every((chunk) => Buffer.byteLength(chunk, "utf8") <= 32_000)).toBe(true);
+});

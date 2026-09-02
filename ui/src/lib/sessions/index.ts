@@ -316,15 +316,17 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     const result = decorateRows(
       reconcileSessionHistory(state.result, row, defaults, historyOptions, preserveCanonicalRow),
     );
-    if (result === state.result) {
+    const agentId = options?.resultAgentId?.trim()
+      ? normalizeAgentId(options.resultAgentId)
+      : state.agentId;
+    // Ownership can change without changing any rows; subscribers need both.
+    if (result === state.result && agentId === state.agentId) {
       return true;
     }
     publish({
       ...state,
       result,
-      agentId: options?.resultAgentId?.trim()
-        ? normalizeAgentId(options.resultAgentId)
-        : state.agentId,
+      agentId,
     });
     return true;
   };

@@ -2,15 +2,17 @@
 import { spawnSync } from "node:child_process";
 import {
   chmodSync,
+  copyFileSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 const scriptPath = "scripts/build-and-run-mac.sh";
@@ -108,6 +110,82 @@ afterEach(() => {
 });
 
 describe("scripts/build-and-run-mac.sh", () => {
+  it.each(["pnpm", "corepack"])(
+    "prepares the Apple resource bundle before SwiftPM with %s",
+    (runner) => {
+      const root = mkdtempSync(join(tmpdir(), "openclaw-mac-mermaid-test-"));
+      tempRoots.push(root);
+      const binDir = join(root, "bin");
+      mkdirSync(binDir);
+      mkdirSync(join(root, "apps/macos"), { recursive: true });
+      for (const path of [
+        scriptPath,
+        "scripts/prepare-apple-mermaid.mjs",
+        "scripts/pnpm-runner.mts",
+        "scripts/lib/windows-cmd-helpers-runtime.mts",
+        "scripts/lib/record-shared.mjs",
+        "scripts/windows-cmd-helpers.mjs",
+      ]) {
+        const target = join(root, path);
+        mkdirSync(dirname(target), { recursive: true });
+        copyFileSync(path, target);
+      }
+      const resources = join(
+        root,
+        "apps/shared/OpenClawKit/Sources/OpenClawChatUI/Resources/Mermaid",
+      );
+      mkdirSync(resources, { recursive: true });
+      writeFileSync(join(resources, "stale.js"), "stale");
+      symlinkSync(process.execPath, join(binDir, "node"));
+      const expectedArgs = ["--filter", "@openclaw/mermaid-renderer", "build"];
+      if (runner === "corepack") {
+        expectedArgs.unshift("pnpm");
+      }
+      for (const [name, body] of [
+        [
+          runner,
+          [
+            'const { mkdirSync, writeFileSync } = require("node:fs");',
+            'const assert = require("node:assert/strict");',
+            `assert.deepEqual(process.argv.slice(2), ${JSON.stringify(expectedArgs)});`,
+            'mkdirSync("apps/shared/mermaid/assets/mermaid", { recursive: true });',
+            'writeFileSync("apps/shared/mermaid/assets/mermaid/index.html", "offline diagram");',
+          ],
+        ],
+        [
+          "swift",
+          [
+            'const { existsSync, readFileSync, writeFileSync } = require("node:fs");',
+            'const assert = require("node:assert/strict");',
+            `const resources = ${JSON.stringify(resources)};`,
+            'assert.equal(readFileSync(`${resources}/index.html`, "utf8"), "offline diagram");',
+            "assert.equal(existsSync(`${resources}/stale.js`), false);",
+            `writeFileSync(${JSON.stringify(join(root, "prepared-before-swift"))}, "ready");`,
+            "process.exit(23);",
+          ],
+        ],
+      ] as const) {
+        const target = join(binDir, name);
+        writeFileSync(target, ["#!/usr/bin/env node", ...body].join("\n"));
+        chmodSync(target, 0o755);
+      }
+
+      const result = spawnSync("bash", [join(root, scriptPath)], {
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          npm_execpath: "",
+          OPENCLAW_MAC_RUN_LOG: join(root, "launch.log"),
+          PATH: `${binDir}:/usr/bin:/bin`,
+        },
+      });
+
+      // The fake compiler stops the real entrypoint before any app cleanup or launch.
+      expect(result.status, result.stderr).toBe(23);
+      expect(existsSync(join(root, "prepared-before-swift"))).toBe(true);
+    },
+  );
+
   it("prints help before build or launch side effects", () => {
     const result = spawnSync("bash", [scriptPath, "--help"], {
       cwd: process.cwd(),

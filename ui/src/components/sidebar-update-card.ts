@@ -7,12 +7,12 @@ import {
   NATIVE_UPDATE_DECLINED_EVENT,
 } from "../app/native-link-routing.ts";
 import { confirmAndStartUpdate, type UpdateProgress } from "../app/update-confirmation.ts";
+import type { ApplicationStatusBanner } from "../app/update-overlay-helpers.ts";
 import {
   formatUpdateCampaignLabel,
   formatUpdateTargetLabel,
   isUpdateActionable,
-  type ApplicationStatusBanner,
-} from "../app/update-overlay-helpers.ts";
+} from "../app/update-schedule-projection.ts";
 import { t } from "../i18n/index.ts";
 import { OpenClawLightDomContentsElement } from "../lit/openclaw-element.ts";
 import { PollController } from "../lit/poll-controller.ts";

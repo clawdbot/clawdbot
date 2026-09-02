@@ -6,6 +6,7 @@ import { getRuntimeConfig } from "../config/config.js";
 import type { HookInstallRecord } from "../config/types.hooks.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
+import { PLUGIN_INSTALL_ERROR_CODE } from "../plugins/install-types.js";
 import type { InstalledPluginIndex } from "../plugins/installed-plugin-index.js";
 import { recordPluginManifestInstallOwner } from "../plugins/manifest-install-owner.js";
 import { invokePluginArtifactInstallMock } from "../plugins/test-helpers/install-fixtures.js";
@@ -687,13 +688,7 @@ vi.mock("./prompt.js", () => ({
 }));
 
 vi.mock("../plugins/install.js", () => ({
-  PLUGIN_INSTALL_ERROR_CODE: {
-    NPM_PACKAGE_NOT_FOUND: "npm_package_not_found",
-    RELEASE_COHORT_UNAVAILABLE: "release_cohort_unavailable",
-    SECURITY_SCAN_BLOCKED: "security_scan_blocked",
-    SECURITY_SCAN_FAILED: "security_scan_failed",
-    UNSUPPORTED_PLAIN_FILE_PLUGIN: "unsupported_plain_file_plugin",
-  },
+  PLUGIN_INSTALL_ERROR_CODE,
   installPluginFromNpmSpec: ((
     params: Parameters<(typeof import("../plugins/install.js"))["installPluginFromNpmSpec"]>[0],
   ) =>

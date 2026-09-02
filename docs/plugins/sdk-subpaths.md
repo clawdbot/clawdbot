@@ -263,6 +263,7 @@ Use `isLoopbackHost(host)` when a plugin must accept only the local machine. It 
     | `plugin-sdk/node-selection-runtime` | Private-local bundled runtime facade for shared capability-gated node selection policy |
     | `plugin-sdk/cli-argv` | Dependency-light root-option parsing for CLI metadata, including `getRootOptionAwareCommandPath` and `consumeRootOptionToken` |
     | `plugin-sdk/cli-runtime` | Private-local after July 2026; Deprecated broad barrel for CLI formatting, wait, version, argument-invocation, and lazy command-group helpers; prefer focused CLI/runtime subpaths |
+    | `plugin-sdk/node-cli-runtime` | Shared node CLI Gateway options, invoke envelope, terminal presentation, and authorization-hint error handling for plugin-owned node commands |
     | `plugin-sdk/qa-runner-runtime` | Private-local after July 2026; Supported facade exposing plugin QA scenarios through the CLI command surface |
     | `plugin-sdk/tts-runtime` | Private-local after July 2026; Supported facade for text-to-speech config schemas and runtime helpers |
     | `plugin-sdk/gateway-config-runtime` | Private-local bundled runtime facade for dependency-light Gateway port resolution (`resolveGatewayPort`); not for third-party plugins |
@@ -300,7 +301,7 @@ Use `isLoopbackHost(host)` when a plugin must accept only the local machine. It 
     | `plugin-sdk/tool-payload` | Private-local after July 2026; Extract normalized payloads from tool result objects |
     | `plugin-sdk/tool-results` | Typed text and JSON agent tool result builders |
     | `plugin-sdk/tool-send` | Extract canonical send target fields from tool args |
-    | `plugin-sdk/sandbox` | Private-local after July 2026; Sandbox backend types and SSH/OpenShell command helpers, including fail-fast exec command preflight |
+    | `plugin-sdk/sandbox` | Private-local after July 2026; Sandbox backend types and SSH/OpenShell command helpers, including fail-fast exec command preflight and `resolveReadOnlyWorkspaceSkillMounts` for canonical read-only skill overlays in writable workspaces |
     | `plugin-sdk/temp-path` | Shared temp-download path helpers and private secure temp workspaces |
     | `plugin-sdk/logging-core` | Subsystem logger and redaction helpers |
     | `plugin-sdk/markdown-table-runtime` | Private-local after July 2026; Markdown table mode and conversion helpers |

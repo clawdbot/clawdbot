@@ -149,7 +149,9 @@ suite.define(() => {
         ).toBeDisabled();
         await expect(page.getByRole("textbox", { name: "GitHub username" })).toHaveCount(0);
         await expect(
-          page.getByRole("button", { name: /Link GitHub|Change|Disconnect/u }),
+          page
+            .locator("#settings-profile-identity")
+            .getByRole("button", { name: /Link GitHub|Change|Disconnect/u }),
         ).toHaveCount(0);
         await screenshot(page, "08-github-identity-unlinked.png");
 

@@ -173,7 +173,7 @@ type AgentMenuAgent = {
 };
 
 type SidebarAgentMenuParams = {
-  position: { x: number; top: number } | null;
+  position: { x: number; top: number };
   basePath: string;
   activeId: string;
   activeName: string;
@@ -194,7 +194,7 @@ type SidebarAgentMenuParams = {
 };
 
 type SidebarIdentityMenuParams = {
-  position: { x: number; bottom: number; width: number } | null;
+  position: { x: number; bottom: number; width: number };
   canPairDevice: boolean;
   basePath: string;
   gatewayVersion: string | null;
@@ -297,9 +297,6 @@ function renderIdentityMenuHelpSubmenu() {
 
 export function renderSidebarAgentMenu(params: SidebarAgentMenuParams) {
   const position = params.position;
-  if (!position) {
-    return nothing;
-  }
   const { activeId, activeName, agents } = params;
   const rows = sidebarAgentMenuRows(params);
   return html`
@@ -417,9 +414,6 @@ export function renderSidebarAgentMenu(params: SidebarAgentMenuParams) {
 
 export function renderSidebarIdentityMenu(params: SidebarIdentityMenuParams) {
   const position = params.position;
-  if (!position) {
-    return nothing;
-  }
   const profileName = params.profileViewer?.name ?? params.profileViewer?.email;
   const profileEmail =
     params.profileViewer?.email && params.profileViewer.email !== profileName

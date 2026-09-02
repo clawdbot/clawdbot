@@ -51,7 +51,7 @@ const MACOS_NATIVE_RE =
 const GIT_OWNER_SCOPE_RE =
   /^(?:\.github\/(?:actions\/(?:git-owner|ensure-base-commit|publish-generated-pr|mantis-validate-trusted-ref)\/|workflows\/(?:workflow-sanity|qa-profile-evidence|maturity-scorecard|docs-agent|docs-sync-publish|openclaw-performance|linux-app-release|macos-release|npm-placeholder-bootstrap|plugin-clawhub-release|plugin-npm-release|mantis-(?:discord-(?:smoke|status-reactions|thread-attachment)|slack-desktop-smoke|web-ui-chat-proof))\.yml$)|scripts\/generate-ci-git-owner\.mts$|test\/scripts\/(?:ci-(?:checkout|git-owner|linux-git|platform-checkout)\.test(?:-support)?\.ts|generated-publisher\.test-support\.ts|openclaw-performance-(?:workflow\.test(?:-support)?|git-lifecycle\.test)\.ts|plugin-release-git-lifecycle\.test\.ts|release-workflow-git-lifecycle\.test\.ts|fixtures\/(?:ci-platform-checkout\.mjs|ci-windows-process-census\.py))$)/;
 const MACOS_SCRIPT_SCOPE_RE =
-  /^(?:scripts\/(?:check-swift-tools|codesign-mac-app|create-dmg|format-swift|install-swift-tools|install-xcodegen|lint-swift|mac-elevation-host|notarize-mac-artifact|package-mac-app|package-mac-dist|restart-mac|stage-cua-driver-macos|stage-mac-node-worker)\.sh|scripts\/test-macos-native\.mts|scripts\/(?:verify-mac-node-worker(?:-fs)?|lib\/(?:mac-node-worker-proof-state|mac-worker-portability))\.mjs|scripts\/(?:materialize-mac-node-worker|swift-build-cache-metadata|lib\/(?:mac-native-inventory|mac-bundle-mutation))\.py|scripts\/lib\/(?:mac-app-bundle|plistbuddy|swift-toolchain)\.sh|test\/helpers\/mac-(?:native|signing)\.ts|test\/scripts\/(?:codesign-mac-app|create-dmg|mac-elevation-artifact|mac-elevation-host|mac-node-worker|macos-native-test-launch|notarize-mac-artifact|package-mac-app|package-mac-dist|restart-mac|swift-build-cache-metadata|verify-mac-node-worker-fs)\.test\.ts|test\/scripts\/(?:mac-elevation-artifact|mac-native-fixtures|mac-node-worker-materialization)\.test-support\.ts)$/;
+  /^(?:scripts\/(?:build-and-run-mac|check-swift-tools|codesign-mac-app|create-dmg|format-swift|install-swift-tools|install-xcodegen|lint-swift|mac-elevation-host|notarize-mac-artifact|package-mac-app|package-mac-dist|prepush-ci|restart-mac|stage-cua-driver-macos|stage-mac-node-worker)\.sh|scripts\/test-macos-native\.mts|scripts\/(?:verify-mac-node-worker(?:-fs)?|lib\/(?:mac-node-worker-proof-state|mac-worker-portability))\.mjs|scripts\/(?:materialize-mac-node-worker|swift-build-cache-metadata|lib\/(?:mac-native-inventory|mac-bundle-mutation))\.py|scripts\/lib\/(?:mac-app-bundle|plistbuddy|swift-toolchain)\.sh|test\/helpers\/mac-(?:native|signing)\.ts|test\/scripts\/(?:codesign-mac-app|create-dmg|mac-elevation-artifact|mac-elevation-host|mac-node-worker|macos-native-test-launch|notarize-mac-artifact|package-mac-app|package-mac-dist|restart-mac|swift-build-cache-metadata|verify-mac-node-worker-fs)\.test\.ts|test\/scripts\/(?:mac-elevation-artifact|mac-native-fixtures|mac-node-worker-materialization)\.test-support\.ts)$/;
 const WORKSPACE_RSYNC_RECEIVER_SCOPE_RE =
   /^src\/(?:shared\/worker-bundle-hash\.ts|worker\/workspace-rsync-receiver\.ts|gateway\/worker-environments\/workspace-(?:accepted-(?:remote-script|sync)|mutation-remote-script|rsync-path\.test|sync(?:-helpers)?)\.ts)$/;
 const IOS_BUILD_RE =
@@ -61,6 +61,9 @@ const IOS_SCREENSHOT_APP_SCOPE_RE =
 const IOS_SCREENSHOT_SCRIPT_SCOPE_RE =
   /^scripts\/(?:check-swift-tools|format-swift|install-swift-tools|install-xcodegen|lint-swift)\.sh$|^scripts\/(?:ios-(?:configure-signing|screenshots|team-id|write-version-xcconfig)\.sh|ios-screenshot-evidence\.(?:mjs|d\.mts)|ios-write-swift-filelist\.m[jt]s|ios-version\.ts)$|^scripts\/lib\/(?:ios-fastlane\.sh|ios-version\.ts|release-version\.mjs|version-script-args\.ts)$/;
 const ANDROID_NATIVE_RE = /^(apps\/android\/|apps\/shared\/)/;
+// Native bundling reads the root aliases and this shared coercion dependency.
+const MERMAID_ASSET_INPUT_RE =
+  /^(?:packages\/(?:mermaid-renderer\/|normalization-core\/(?:package\.json|src\/record-coerce\.ts)$)|tsconfig\.json$)/;
 const NODE_SCOPE_RE =
   /^(src\/|test\/|extensions\/|packages\/|scripts\/|ui\/|\.github\/|openclaw\.mjs$|package\.json$|pnpm-lock\.yaml$|pnpm-workspace\.yaml$|tsconfig.*\.json$|vitest.*\.ts$|tsdown\.config\.ts$|\.oxlintrc\.json$|\.oxfmtrc\.jsonc$)/;
 const WINDOWS_SQLITE_SCOPE_RE = /^src\/(?:state\/|.*sqlite.*\.ts$)/;
@@ -144,6 +147,15 @@ export function isMacosToolingPath(path) {
   return MACOS_SCRIPT_SCOPE_RE.test(path);
 }
 
+/** @param {string} path Canonical repository-relative build input. */
+function isAppleSharedBuildInput(path) {
+  return (
+    APPLE_SWIFT_CONFIG_RE.test(path) ||
+    MERMAID_ASSET_INPUT_RE.test(path) ||
+    path === "scripts/prepare-apple-mermaid.mjs"
+  );
+}
+
 /**
  * Detects high-level CI scope from changed file paths.
  * @param {string[]} changedPaths
@@ -189,7 +201,7 @@ export function detectChangedScope(changedPaths) {
       continue;
     }
 
-    const isAppleSwiftConfig = APPLE_SWIFT_CONFIG_RE.test(path);
+    const isAppleBuildInput = isAppleSharedBuildInput(path);
 
     if (facts.surface === "docs") {
       continue;
@@ -214,16 +226,19 @@ export function detectChangedScope(changedPaths) {
         isMacosToolingPath(path) ||
         WORKSPACE_RSYNC_RECEIVER_SCOPE_RE.test(path) ||
         APPLE_SHARED_CONTRACT_FIXTURE_RE.test(path) ||
-        isAppleSwiftConfig)
+        isAppleBuildInput)
     ) {
       runMacos = true;
     }
 
-    if (IOS_BUILD_RE.test(path) || isAppleSwiftConfig) {
+    if (IOS_BUILD_RE.test(path) || isAppleBuildInput) {
       runIosBuild = true;
     }
 
-    if (!NATIVE_PROTOCOL_GEN_RE.test(path) && ANDROID_NATIVE_RE.test(path)) {
+    if (
+      !NATIVE_PROTOCOL_GEN_RE.test(path) &&
+      (ANDROID_NATIVE_RE.test(path) || MERMAID_ASSET_INPUT_RE.test(path))
+    ) {
       runAndroid = true;
     }
 
@@ -267,7 +282,7 @@ export function detectChangedScope(changedPaths) {
       runControlUiI18n = true;
     }
 
-    if (CHROMIUM_UI_TEST_SCOPE_RE.test(path)) {
+    if (CHROMIUM_UI_TEST_SCOPE_RE.test(path) || MERMAID_ASSET_INPUT_RE.test(path)) {
       runUiTests = true;
     }
 
@@ -309,7 +324,7 @@ export function shouldRunIosScreenshots(changedPaths) {
     return (
       IOS_SCREENSHOT_APP_SCOPE_RE.test(path) ||
       IOS_SCREENSHOT_SCRIPT_SCOPE_RE.test(path) ||
-      APPLE_SWIFT_CONFIG_RE.test(path)
+      isAppleSharedBuildInput(path)
     );
   });
 }

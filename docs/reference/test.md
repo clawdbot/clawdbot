@@ -163,6 +163,17 @@ verify lease cleanup; never stop the operator's Gateway.
 2. `pnpm test <path-or-filter>` for one file, directory, or explicit target.
 3. `pnpm test` only when you intentionally need the full local Vitest suite.
 
+When a one-shot routed run targets only explicit test-file paths, each selected
+Vitest invocation must discover at least one test file. Excluding every selected
+file fails even when the lane normally permits empty runs. To allow that outcome
+intentionally, use `pnpm test <test-file-path> -- --passWithNoTests`. Use
+`--passWithNoTests=false` to require nonempty discovery explicitly. Broader
+selectors and source-derived selections retain their lane defaults.
+
+An explicit `--config` run through `scripts/run-vitest.mjs` keeps its stricter
+named-file policy and does not permit empty named-file runs. Plugin
+`--allow-no-tests` and `--allow-empty-after-exclude` controls are unchanged.
+
 Codex and other linked/sparse worktrees can run local tests and checks. When the
 dependency install is ready, use the normal commands above. If pnpm would
 reconcile a shared install, use the direct Node harnesses to bypass that
@@ -178,9 +189,15 @@ reconcile dependencies before the remote wrapper starts.
 
 ## Core commands
 
-Maintained JavaScript tooling wrappers and root package commands use tsx's
-in-process transform cache. They skip its shared disk cache before the loader
-starts, and child tooling inherits that policy. This cache policy does not clean
+Maintained JavaScript tooling wrappers and root package commands load TypeScript
+through `scripts/tsx.mjs`, using tsx's ESM entry. This preserves native loading of
+compiled ESM plugins and their import-only dependencies, including when loaded
+through `require()`. Source TypeScript imports and tsconfig path aliases remain
+available.
+
+These launchers retain tsx's in-process transform cache and Node's module cache.
+They skip tsx's shared disk cache before the loader starts, and child tooling
+inherits that policy. This cache policy does not clean
 existing temporary directories, Node or Vitest caches, or other global caches. Standalone
 `pnpm ui:build` keeps native startup and applies the same preload to its post-build
 validators; it does not require `TSX_DISABLE_CACHE` in the invoking shell. Raw
@@ -234,13 +251,12 @@ Every preparation compiles current source; checkout `dist/` is neither an input
 nor a fallback. Build errors, missing artifacts, and changes to recorded build
 inputs fail the run. Compilation includes the native subprocess fixtures before
 they impose resource limits. Third-party dependencies remain external except for
-the always-bundled OpenClaw packages. Each generation carries all seven fs-safe
-native helpers in its own private tree, using the package runtime's loader-relative
-layout. The package itself shares one native tree between runtime entries and its
-sealed worker; it does not copy a second tree beside that worker. The helpers'
-original source hashes are pinned before copying and verified alongside compiler
-output; missing or altered assets fail verification. The default stays off, and
-the existing `off`/`auto`/`require` opt-ins retain their behavior.
+the always-bundled OpenClaw packages. fs-safe remains external so its native loader
+resolves the optional platform package from fs-safe's own dependency scope, including
+nested pnpm installs. Compiled workers use that same installed package; they do not
+copy native binaries. The default stays off, and the existing `off`/`auto`/`require`
+opt-ins retain their behavior. Sealed portable worker bundles use guarded JavaScript
+only and explicitly disable native loading.
 
 Watch mode deliberately keeps the existing live-source path, including tsx for
 Node subprocesses and native TypeScript handling for Bun. It creates no prepared generation, so a new child launch
@@ -305,8 +321,8 @@ machine-readable tool output. Successful runs have no failure trailer. Signals
 forwarded during child execution and shard timeouts fail the command; whole-host
 loss or `SIGKILL` of the reporting process can prevent a final line.
 
-Local plugin lint and package-boundary compilation consume native declarations in
-`packages/plugin-sdk/dist` and seven separate plugin API trees in
+Local plugin lint consumes native SDK declarations in `packages/plugin-sdk/dist`.
+The dedicated package-boundary compiler also consumes seven plugin API trees in
 `.artifacts/extension-package-boundary/plugins`. Each declaration and compile
 owner validates its consumed source content, inherited config, selected compiler,
 and complete output inventory. Unrelated existing source or test edits retain
@@ -336,21 +352,47 @@ allowing artifact stamps or downstream checks to proceed. Windows retains normal
 joined-launcher completion because strict group verification is unsupported there.
 This does not detect descendants that deliberately leave the managed groups.
 
-On POSIX hosts, `run-vitest` (including project shards), plugin batches, `test-live`
+`run-vitest` (including project shards), plugin batches, `test-live`
 (including live shards), `run-vitest-profile`, and the TUI PTY watcher give each
 Vitest invocation an owned temporary namespace through `TMPDIR`, `TMP`, and `TEMP`.
+Before Vitest starts, isolated invocations also receive native `HOME` and
+`USERPROFILE` inside that namespace. This protects home fallbacks used by worker
+threads, named builtin imports, and import-time captures; changing only a worker's
+JavaScript `process.env` does not change native thread home lookup. Per-worker and
+per-test fixture homes remain separate. Installed Corepack and Playwright browser
+caches retain their caller-selected locations.
+
+Live-aware setup still loads the original profile and stages live state when
+requested. A bounded invocation artifact carries the original home to that setup;
+it does not grant live access, and hermetic setup never consults it. Known
+hermetic selections ignore ambient live and real-home flags. Known wholly
+live-aware selections retain explicit `OPENCLAW_LIVE_USE_REAL_HOME` behavior.
+An explicitly real-home live invocation is refused before config loading if its
+selection mixes home policies or cannot be classified, including custom configs
+and ambiguous project selectors. Run hermetic tests without `LIVE`,
+`OPENCLAW_LIVE_TEST`, `OPENCLAW_LIVE_GATEWAY`, and `OPENCLAW_LIVE_USE_REAL_HOME`
+using `node scripts/run-vitest.mjs <test-path>`, then run the intended live
+selection separately using `node scripts/test-live.mts -- <live-test-path>`.
+The launcher does not split runs or change watch, filter, or report semantics.
+
 The namespace contains isolated homes, their JIT caches, SDK/shared-home allocation
 roots, and fallback SQLite state; its lifetime spans shared-worker files and module
-resets. The parent removes
+resets. On POSIX detached launches, the parent removes
 only that namespace after its child process group has stopped and output pipes
 have closed, including passing and failing runs, child crashes, caught `SIGINT`/`SIGTERM`
 signals, and watchdog termination where supported. Explicit state, profile output,
 and mirror artifacts outside the namespace remain untouched. Failed or unverified
 group joins retain the namespace and report the exact path for manual recovery.
-Windows and raw external invocations retain their existing behavior. Forced parent
+Windows and non-detached launches allocate the same isolated native home, but retain
+their namespace with a diagnostic after child exit and pipe closure because
+descendant completion cannot be verified. Raw external invocations do not gain
+this boundary. Forced parent
 or supervisor death (such as `SIGKILL`) can prevent cleanup; descendants that
 intentionally escape the owned group can recreate removed paths. The wrappers do
 not sweep old directories or infer ownership from names, ages, or PIDs.
+This is home isolation, not a filesystem sandbox: explicit absolute paths,
+`os.userInfo()` account lookup, children with stripped or replaced home variables,
+and intentionally real-home live execution remain outside its protection.
 
 - `src/test-utils/openclaw-test-state.ts`: use from Vitest when a test needs an isolated `HOME`, `OPENCLAW_STATE_DIR`, `OPENCLAW_CONFIG_PATH`, config fixture, workspace, agent dir, or auth-profile store.
 - `pnpm test:env-mutations:report`: non-blocking report of tests/harnesses that mutate `HOME`, `OPENCLAW_STATE_DIR`, `OPENCLAW_CONFIG_PATH`, `OPENCLAW_WORKSPACE_DIR`, or related env keys directly. Use it to find migration candidates for the shared test-state helper.

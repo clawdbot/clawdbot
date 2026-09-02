@@ -94,6 +94,45 @@ suite.define(() => {
       );
     },
   );
+
+  it("does not repeat an auth failure below the composer when the run error is visible", async () => {
+    await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
+      const message =
+        "Your refresh token has already been used to generate a new access token. Please try signing in again.";
+      const gateway = await installMockGateway(page, {
+        inFlightRun: { runId: "auth-failed-run", text: "" },
+        models: [
+          {
+            id: "gpt-5.5",
+            name: "GPT-5.5",
+            provider: "openai",
+            available: false,
+            unavailableReason: "auth-failed",
+          },
+        ],
+      });
+
+      await page.goto(`${suite.server.baseUrl}chat`);
+      await gateway.waitForRequest("chat.startup");
+      await gateway.emitGatewayEvent("chat", {
+        errorDetail: {
+          provider: "openai",
+          failoverReason: "refresh_token_reused",
+          providerRuntimeFailureKind: "auth_refresh",
+          providerErrorType: "invalid_request_error",
+          httpStatus: 401,
+        },
+        errorMessage: `⚠️ ${message}`,
+        runId: "auth-failed-run",
+        sessionKey: "main",
+        state: "error",
+      });
+      await expect.poll(() => page.locator(".chat-error").textContent()).toContain(message);
+      await expect.poll(() => page.locator(".agent-chat__composer-status-band").count()).toBe(0);
+      await expect.poll(() => page.locator(".agent-chat__input textarea").isDisabled()).toBe(true);
+    });
+  });
+
   it("keeps the loading model picker beside the microphone", async () => {
     const artifactRoot = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
     const artifactDir = artifactRoot

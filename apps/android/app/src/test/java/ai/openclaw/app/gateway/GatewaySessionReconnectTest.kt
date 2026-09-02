@@ -749,7 +749,10 @@ class GatewaySessionReconnectTest {
       val server =
         startGatewayServer(json = json) { webSocket, id, method ->
           when (method) {
-            "connect" -> webSocket.send(connectResponseFrame(id))
+            "connect" -> {
+              webSocket.send(connectResponseFrame(id))
+            }
+
             "node.event" -> {
               receivedNodeEventCount.incrementAndGet()
               receivedNodeEvent.complete(Unit)
@@ -1278,13 +1281,17 @@ class GatewaySessionReconnectTest {
       val server =
         startGatewayServer(json = json) { webSocket, id, method ->
           when (method) {
-            "connect" -> webSocket.send(connectResponseFrame(id))
-            "question.list" ->
+            "connect" -> {
+              webSocket.send(connectResponseFrame(id))
+            }
+
+            "question.list" -> {
               webSocket.send(
                 """
                 {"type":"res","id":"$id","ok":false,"error":{"code":"FORBIDDEN","message":"permission denied","details":{"code":"MISSING_SCOPE","missingScope":"operator.questions","requiredScopes":["operator.questions"]}}}
                 """.trimIndent(),
               )
+            }
           }
         }
       val harness = createReconnectHarness(onConnected = { connected.complete(Unit) })

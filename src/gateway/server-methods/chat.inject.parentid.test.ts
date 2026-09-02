@@ -83,6 +83,47 @@ async function readLastTranscriptRecord(
 // Guardrail: Gateway-injected assistant transcript messages must attach to the
 // current leaf with a `parentId` and must not sever compaction history.
 describe("gateway chat.inject transcript writes", () => {
+  it("keeps display-only blocks out of model transcript content", async () => {
+    const fixture = await createSqliteTranscriptFixture({
+      prefix: "openclaw-chat-inject-display-content-",
+      sessionId: "sess-display-content",
+    });
+    const modelContent = [
+      { type: "thinking", thinking: "reasoning" },
+      { type: "text", text: "Slides ready" },
+      { type: "toolCall", id: "call-1", name: "read", arguments: {} },
+    ];
+    const attachment = {
+      type: "attachment",
+      attachment: { kind: "document", label: "slides.pptx" },
+    };
+
+    try {
+      const appended = await appendInjectedAssistantMessageToTranscript({
+        agentId: fixture.agentId,
+        sessionId: fixture.sessionId,
+        sessionKey: fixture.sessionKey,
+        storePath: fixture.storePath,
+        message: "Slides ready",
+        content: [...modelContent, attachment],
+      });
+      const last = (await readLastTranscriptRecord(fixture)) as {
+        message?: Record<string, unknown>;
+      };
+
+      expect(appended.message).toMatchObject({
+        role: "assistant",
+        content: [...modelContent, attachment],
+      });
+      expect(last.message).toMatchObject({
+        content: modelContent,
+        openclawDisplayContent: [...modelContent, attachment],
+      });
+    } finally {
+      await cleanupFixture(fixture);
+    }
+  });
+
   it("appends a agent session entry that includes parentId", async () => {
     const fixture = await createSqliteTranscriptFixture({
       prefix: "openclaw-chat-inject-",

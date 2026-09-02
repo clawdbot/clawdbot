@@ -250,6 +250,11 @@ html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-
   border-radius: 0;
 }
 
+/* Drawer navigation keeps toggle and search in the mobile topbar. */
+.shell--mobile-nav .sidebar-brand__desktop-control {
+  display: none;
+}
+
 .shell--mobile-nav .nav-item {
   margin: 0;
   min-height: 40px;

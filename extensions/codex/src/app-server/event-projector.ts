@@ -481,16 +481,7 @@ export class CodexAppServerEventProjector {
       await runAgentHarnessBeforeCompactionHook({
         sessionFile: this.params.sessionFile,
         messages: await this.toolTranscriptProjection.readMirroredSessionMessages(),
-        ctx: {
-          runId: this.params.runId,
-          agentId: this.params.agentId,
-          sessionKey: this.params.sessionKey,
-          sessionId: this.params.sessionId,
-          workspaceDir: this.params.workspaceDir,
-          messageProvider: this.params.messageProvider ?? undefined,
-          trigger: this.params.trigger,
-          channelId: this.params.messageChannel ?? this.params.messageProvider ?? undefined,
-        },
+        ctx: this.options.agentHookContext ?? {},
       });
       this.emitAgentEvent({
         stream: "compaction",
@@ -545,16 +536,7 @@ export class CodexAppServerEventProjector {
         sessionFile: this.params.sessionFile,
         messages: await this.toolTranscriptProjection.readMirroredSessionMessages(),
         compactedCount: -1,
-        ctx: {
-          runId: this.params.runId,
-          agentId: this.params.agentId,
-          sessionKey: this.params.sessionKey,
-          sessionId: this.params.sessionId,
-          workspaceDir: this.params.workspaceDir,
-          messageProvider: this.params.messageProvider ?? undefined,
-          trigger: this.params.trigger,
-          channelId: this.params.messageChannel ?? this.params.messageProvider ?? undefined,
-        },
+        ctx: this.options.agentHookContext ?? {},
       });
       await persistCodexContextCompactionActivity({
         sessionTarget: this.params.sessionTarget,

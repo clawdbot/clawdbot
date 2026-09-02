@@ -710,6 +710,7 @@ describe("memory cli", () => {
         makeMemoryStatus({
           files: 2,
           chunks: 5,
+          sourceCounts: [{ source: "memory", files: 2, chunks: 5, chunkBytes: 2048 }],
           cache: { enabled: true, entries: 123, maxEntries: 50000 },
           fts: { enabled: true, available: true },
           vector: {
@@ -735,6 +736,7 @@ describe("memory cli", () => {
     expectLogged(log, "Vector dims: 1024");
     expectLogged(log, "Vector path: /opt/sqlite-vec.dylib");
     expectLogged(log, "FTS: ready");
+    expectLogged(log, "2.0 KiB text + embeddings");
     expectLogged(log, "Embedding cache: enabled (123 entries)");
     expect(close).toHaveBeenCalled();
   });

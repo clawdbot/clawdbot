@@ -51,6 +51,7 @@ import { withOwnedSessionTranscriptWrites } from "../../config/sessions/transcri
 import { getAgentRunContext } from "../../infra/agent-run-registry.js";
 import { RUN_STALE_TAKEOVER_MS } from "../../logging/diagnostic-run-activity.js";
 import { runExclusiveSessionLifecycleMutation } from "../../sessions/session-lifecycle-admission.js";
+import { projectAssistantDisplayContent } from "../../shared/assistant-display-content.js";
 import {
   disposeOpenClawAgentDatabaseByPath,
   openOpenClawAgentDatabase,
@@ -744,7 +745,7 @@ async function appendSourceReplyMirrorEntry(params: {
   });
 }
 
-async function readActiveAssistantTranscriptMessages(): Promise<Array<Record<string, unknown>>> {
+async function readRawActiveAssistantTranscriptMessages(): Promise<Array<Record<string, unknown>>> {
   return readTranscriptJsonLines(mockState.transcriptPath)
     .map((entry) => entry.message)
     .filter(
@@ -753,6 +754,10 @@ async function readActiveAssistantTranscriptMessages(): Promise<Array<Record<str
         message !== null &&
         (message as { role?: unknown }).role === "assistant",
     );
+}
+
+async function readActiveAssistantTranscriptMessages(): Promise<Array<Record<string, unknown>>> {
+  return (await readRawActiveAssistantTranscriptMessages()).map(projectAssistantDisplayContent);
 }
 
 function extractFirstTextBlock(payload: unknown): string | undefined {
@@ -830,16 +835,22 @@ function lastNodeSendCall(context: ChatContext) {
 }
 
 function findAssistantTranscriptUpdates() {
-  return mockState.emittedTranscriptUpdates.filter(
-    (update) =>
-      typeof update.message === "object" &&
-      update.message !== null &&
-      (update.message as { role?: unknown }).role === "assistant",
-  );
+  return mockState.emittedTranscriptUpdates
+    .filter(
+      (update) =>
+        typeof update.message === "object" &&
+        update.message !== null &&
+        (update.message as { role?: unknown }).role === "assistant",
+    )
+    .map((update) => {
+      const message = update.message as Record<string, unknown>;
+      const projected = projectAssistantDisplayContent(message);
+      return projected === message ? update : Object.assign({}, update, { message: projected });
+    });
 }
 
 function findAssistantUpdateWithBlock(predicate: (block: Record<string, any>) => boolean) {
-  return mockState.emittedTranscriptUpdates.find((update) => {
+  return findAssistantTranscriptUpdates().find((update) => {
     const message = update.message as { role?: unknown; content?: unknown } | undefined;
     return (
       message?.role === "assistant" &&
@@ -1387,16 +1398,14 @@ async function expectUnpersistedAgentRunFinal(params: {
       (entry as { role?: string }).role === "assistant",
   );
   if (params.expectedMediaFailure) {
-    expect(assistantUpdates).toHaveLength(1);
-    expect(assistantUpdates[0]?.message).toMatchObject({
-      role: "assistant",
-      content: [
-        { type: "text", text: params.payload.text },
-        { type: "attachment_error", attachment: params.expectedMediaFailure },
-      ],
-    });
     expect(assistantEntries).toHaveLength(1);
+    const message = (assistantEntries[0] as { message?: Record<string, unknown> }).message;
+    const modelContent = Array.isArray(message?.content) ? message.content : [];
+    expect(JSON.stringify(assistantUpdates)).toContain('"type":"attachment_error"');
+    expect(JSON.stringify(assistantUpdates)).toContain(params.expectedMediaFailure.label);
     expect(JSON.stringify(assistantUpdates)).not.toContain(staleAudioPath);
+    expect(JSON.stringify(modelContent)).not.toContain("attachment_error");
+    expect(JSON.stringify(message?.openclawDisplayContent)).toContain("attachment_error");
     return;
   }
 
@@ -2844,7 +2853,9 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       message: "hello from codex",
     });
 
-    const assistantEntries = await readActiveAssistantTranscriptMessages();
+    const rawAssistantEntries = await readRawActiveAssistantTranscriptMessages();
+    const assistantEntries = rawAssistantEntries.map(projectAssistantDisplayContent);
+    expect(JSON.stringify(rawAssistantEntries[0]?.content)).not.toContain("attachment_error");
     expect(JSON.stringify(assistantEntries[0])).toContain('"type":"attachment_error"');
     expect(JSON.stringify(assistantEntries[0])).toContain('"label":"report.7z"');
     expect(JSON.stringify(assistantEntries[0])).not.toContain("Media failed");
@@ -3406,6 +3417,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
         });
 
         const messages = await readActiveAssistantTranscriptMessages();
+        const rawMessages = await readRawActiveAssistantTranscriptMessages();
         expect(messages).toHaveLength(3);
         expect(messages[0]?.content).toEqual([
           { type: "text", text: `Stale reply\nMEDIA:${mediaUrl}` },
@@ -3414,18 +3426,24 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
         const content = Array.isArray(messages[1]?.content)
           ? (messages[1].content as Array<Record<string, unknown>>)
           : [];
-        expect(content[0]).toEqual({ type: "thinking", thinking: "preserve runtime reasoning" });
         expect(content.filter((block) => block.type === "text")).toEqual([
           { type: "text", text: "Earlier chunk" },
           { type: "text", text: "Image reply" },
         ]);
         expect(content.filter((block) => block.type === "image")).toHaveLength(1);
-        expect(content.at(-1)).toEqual({
-          type: "toolCall",
-          id: "call-1",
-          name: "read",
-          arguments: {},
-        });
+        expect(content.map((block) => block.type)).toEqual([
+          "thinking",
+          "text",
+          "text",
+          "image",
+          "toolCall",
+        ]);
+        expect(rawMessages[1]?.content).toEqual([
+          { type: "thinking", thinking: "preserve runtime reasoning" },
+          { type: "text", text: "Earlier chunk" },
+          { type: "text", text: "Image reply" },
+          { type: "toolCall", id: "call-1", name: "read", arguments: {} },
+        ]);
         expect(JSON.stringify(content)).toContain("artifact_managed_image_");
         expect(JSON.stringify(content)).not.toContain("MEDIA:");
         expect(messages[1]?.openclawDelivery).toEqual({ mediaUrls: [mediaUrl] });
@@ -3551,7 +3569,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     );
   });
 
-  it("persists a named failure when agent-run media disappears before delivery", async () => {
+  it("keeps text while excluding the failure card from durable history for agent-run media", async () => {
     await expectUnpersistedAgentRunFinal({
       transcriptPrefix: "openclaw-chat-send-agent-stale-tts-",
       idempotencyKey: "idem-stale-agent-media",
@@ -6278,12 +6296,15 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
           ?.replyToCurrent === true,
     );
     const transcriptMessage = transcriptUpdate?.message as Record<string, any> | undefined;
+    const displayContent = Array.isArray(transcriptMessage?.openclawDisplayContent)
+      ? transcriptMessage.openclawDisplayContent
+      : transcriptMessage?.content;
     expect(transcriptMessage?.role).toBe("assistant");
-    expect(transcriptMessage?.content?.[0]).toEqual({
+    expect(displayContent?.[0]).toEqual({
       type: "text",
       text: "Image reply",
     });
-    expect(transcriptMessage?.content?.[1]).toMatchObject({
+    expect(displayContent?.[1]).toMatchObject({
       type: "image",
       artifactId: expect.stringMatching(/^artifact_managed_image_/u),
       mimeType: "image/png",

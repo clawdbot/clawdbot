@@ -319,6 +319,8 @@ class ChatController internal constructor(
 
     data object Superseded : HistoryRefreshResult
 
+    data object BranchInvalidated : HistoryRefreshResult
+
     data object OwnerUnavailable : HistoryRefreshResult
 
     data object Failed : HistoryRefreshResult
@@ -2015,10 +2017,14 @@ class ChatController internal constructor(
       val updatedAt =
         obj["updatedAt"]?.let { value ->
           when (value) {
-            JsonNull -> null
-            else ->
+            JsonNull -> {
+              null
+            }
+
+            else -> {
               value.asStringOrNull()
                 ?: throw IllegalStateException("sessions.branches.list returned an invalid timestamp")
+            }
           }
         }
       SessionBranch(
@@ -2063,12 +2069,23 @@ class ChatController internal constructor(
       val scope = snapshot.outboxScope()
       val stateApplied =
         when {
-          outbox == null || !outbox.supportsBranchCoordination -> true
-          gatewayId == null -> false
-          purpose == BranchRefreshPurpose.FinalizeMutation ->
+          outbox == null || !outbox.supportsBranchCoordination -> {
+            true
+          }
+
+          gatewayId == null -> {
+            false
+          }
+
+          purpose == BranchRefreshPurpose.FinalizeMutation -> {
             confirmOutboxBranchChange(snapshot, activeLeaf, mutationLease ?: return false)
-          previousState == null || (purpose == BranchRefreshPurpose.ReadOnly && previousState.needsReconciliation) -> false
-          else ->
+          }
+
+          previousState == null || (purpose == BranchRefreshPurpose.ReadOnly && previousState.needsReconciliation) -> {
+            false
+          }
+
+          else -> {
             outbox.reconcileBranchScope(
               gatewayId = gatewayId,
               scope = scope,
@@ -2077,6 +2094,7 @@ class ChatController internal constructor(
               activeTranscriptEntryIds = _messages.value.mapNotNullTo(mutableSetOf()) { it.entryId },
               lastError = OUTBOX_BRANCH_CHANGED_ERROR,
             ) != null
+          }
         }
       if (!stateApplied) return false
       synchronized(gatewayScopeApplyLock) {
@@ -2768,7 +2786,8 @@ class ChatController internal constructor(
           }
           null
         }
-        else ->
+
+        else -> {
           enqueueDurableSend(
             outbox = outbox,
             outboxScope = sendCacheScope,
@@ -2780,6 +2799,7 @@ class ChatController internal constructor(
             ownerAgentId = capturedOwner.agentId,
             idempotencyKey = idempotencyKey,
           ) ?: return false
+        }
       }
     if (journaled != null && !ownsCapturedUi()) {
       // Restore the draft only when the still-queued row is atomically removed. A reconnect
@@ -3045,14 +3065,24 @@ class ChatController internal constructor(
       )
     val clockKey =
       when {
-        selectedRunId != null && selectedRunId in liveLocalRunIds ->
+        selectedRunId != null && selectedRunId in liveLocalRunIds -> {
           pendingRunProjectionsByRunId[selectedRunId]?.optimisticMessage?.id
             ?: optimisticMessagesByRunId[selectedRunId]?.id
             ?: unresolvedRepliesByRunId[selectedRunId]?.id
             ?: selectedRunId
-        selectedRunId != null -> selectedRunId
-        activeCount > 0 -> session?.startedAt?.let { "${_sessionKey.value}:active:$it" } ?: "${_sessionKey.value}:active"
-        else -> null
+        }
+
+        selectedRunId != null -> {
+          selectedRunId
+        }
+
+        activeCount > 0 -> {
+          session?.startedAt?.let { "${_sessionKey.value}:active:$it" } ?: "${_sessionKey.value}:active"
+        }
+
+        else -> {
+          null
+        }
       }
     _pendingRunCount.value = localRunIds.size
     selectedActiveRunPresentationState.value =
@@ -3431,6 +3461,7 @@ class ChatController internal constructor(
           scope.launch { pollHealthIfNeeded(force = false) }
         }
       }
+
       "health" -> {
         refreshQuestions()
         refreshProgressCard()
@@ -3441,6 +3472,7 @@ class ChatController internal constructor(
           refreshCommandsAfterReconnect()
         }
       }
+
       "seqGap" -> {
         // Metadata notifications can be dropped too, even when history and health remain current.
         refreshCommands()
@@ -3456,15 +3488,21 @@ class ChatController internal constructor(
         refreshProgressCard()
         refreshHistoryForRecovery()
       }
+
       "progressCard.changed" -> {
         if (payloadJson.isNullOrBlank()) return
         handleProgressCardChanged(payloadJson)
       }
+
       "chat" -> {
         if (payloadJson.isNullOrBlank()) return
         handleChatEvent(payloadJson)
       }
-      "chat.metadata.changed" -> refreshCommands()
+
+      "chat.metadata.changed" -> {
+        refreshCommands()
+      }
+
       "sessions.changed" -> {
         if (payloadJson.isNullOrBlank()) {
           refreshSessionsForCurrentWindow()
@@ -3472,26 +3510,32 @@ class ChatController internal constructor(
           handleSessionsChangedEvent(payloadJson)
         }
       }
+
       "session.observer" -> {
         if (payloadJson.isNullOrBlank()) return
         handleSessionObserverEvent(payloadJson)
       }
+
       "session.message" -> {
         if (payloadJson.isNullOrBlank()) return
         handleSessionMessageEvent(payloadJson)
       }
+
       "agent" -> {
         if (payloadJson.isNullOrBlank()) return
         handleAgentEvent(payloadJson)
       }
+
       "task" -> {
         if (payloadJson.isNullOrBlank()) return
         handleTaskEvent(payloadJson)
       }
+
       "question.requested" -> {
         if (payloadJson.isNullOrBlank()) return
         handleQuestionRequested(payloadJson)
       }
+
       "question.resolved" -> {
         if (payloadJson.isNullOrBlank()) return
         handleQuestionResolved(payloadJson)
@@ -3984,14 +4028,21 @@ class ChatController internal constructor(
     // live chat.history response always replaces cached rows wholesale.
     primeFromCache(sessionKey, generation)
     try {
-      val historyResult =
-        fetchAndApplyHistory(
-          sessionKey,
-          generation,
-          updateSessionInfo = true,
-          runIdsToReconcile = runIdsToReconcile,
-          refreshBranches = true,
-        )
+      var historyResult: HistoryRefreshResult
+      do {
+        currentCoroutineContext().ensureActive()
+        if (!isCurrentHistoryLoad(sessionKey, _sessionKey.value, generation, historyLoadGeneration.get())) return
+        historyResult =
+          fetchAndApplyHistory(
+            sessionKey,
+            generation,
+            updateSessionInfo = true,
+            runIdsToReconcile = runIdsToReconcile,
+            refreshBranches = true,
+          )
+        // Branch evidence can fence the only recovery request without a successor load.
+        // Keep this owner, but fetch new history rather than adopting the rejected response.
+      } while (historyResult == HistoryRefreshResult.BranchInvalidated)
       if (historyResult !is HistoryRefreshResult.Applied) {
         if (
           historyResult == HistoryRefreshResult.OwnerUnavailable &&
@@ -4011,6 +4062,8 @@ class ChatController internal constructor(
       if (refreshSessions) {
         fetchSessions(limit = 50)
       }
+    } catch (err: CancellationException) {
+      throw err
     } catch (err: Throwable) {
       if (!isCurrentHistoryLoad(sessionKey, _sessionKey.value, generation, historyLoadGeneration.get())) return
       updateErrorText(err.message, historyGeneration = generation)
@@ -4089,7 +4142,7 @@ class ChatController internal constructor(
       }
     val applied =
       historyPublicationMutex.withLock {
-        if (!synchronized(gatewayScopeApplyLock) { isCurrent() }) return@withLock false
+        if (!synchronized(gatewayScopeApplyLock) { isCurrent() }) return@withLock HistoryRefreshResult.Superseded
         val previousState =
           historyBranchState?.let { captured ->
             // Continue only a committed history publication from this load. Never recapture after
@@ -4113,16 +4166,16 @@ class ChatController internal constructor(
         ) {
           // Room still checks the exact revision and parks all earlier input before publication.
           historyBranchState = commandOutbox?.reconcileBranchScope(
-            gatewayId = requestCacheScope?.gatewayId ?: return@withLock false,
+            gatewayId = requestCacheScope?.gatewayId ?: return@withLock HistoryRefreshResult.OwnerUnavailable,
             scope = branchSnapshot.outboxScope(),
             evidence = ChatOutboxBranchEvidence.History(previousState),
             activeLeafEntryId = tip,
             activeTranscriptEntryIds = history.messages.mapNotNullTo(mutableSetOf()) { it.entryId },
             lastError = OUTBOX_BRANCH_CHANGED_ERROR,
-          ) ?: return@withLock false
+          ) ?: return@withLock HistoryRefreshResult.BranchInvalidated
         }
         synchronized(gatewayScopeApplyLock) {
-          if (!isCurrent()) return@synchronized false
+          if (!isCurrent()) return@synchronized HistoryRefreshResult.Superseded
           val runIdsOwnedAfterRequest =
             synchronized(pendingRuns) {
               pendingRuns.filterNotTo(mutableSetOf()) { it in runIdsOwnedAtRequest }
@@ -4204,17 +4257,17 @@ class ChatController internal constructor(
             ?.takeIf { it.isNotEmpty() }
             ?.let { _thinkingLevel.value = it }
           enqueueTranscriptCacheWrite(requestCacheScope, requestAgentId, sessionKey, history.messages)
-          true
+          HistoryRefreshResult.Applied(historyBranchState)
         }
       }
-    if (!applied) return HistoryRefreshResult.Superseded
+    if (applied !is HistoryRefreshResult.Applied) return applied
     if (refreshBranches && branchSnapshot != null) {
       refreshSessionBranches(branchSnapshot, historyBranchState, BranchRefreshPurpose.Reconcile)
     }
     completeReconnectRecoveryIfOwned(sessionKey, generation)
     confirmDurableSendsFromHistory(requestCacheScope, history, requestAgentId)
     publishOutbox()
-    return HistoryRefreshResult.Applied(historyBranchState)
+    return applied
   }
 
   private suspend fun awaitMainSessionReadiness(
@@ -4887,24 +4940,28 @@ class ChatController internal constructor(
         publishOutbox()
         result.item
       }
+
       ChatOutboxEnqueueResult.QueueFull -> {
         if (canPublishUi()) {
           updateLocalizedErrorText(nativeText("Offline queue is full (\$OUTBOX_MAX_QUEUED messages); delete queued items first.", OUTBOX_MAX_QUEUED))
         }
         null
       }
+
       ChatOutboxEnqueueResult.AttachmentsTooLarge -> {
         if (canPublishUi()) {
           updateLocalizedErrorText(nativeText("Attachments are too large to queue for one message; remove some and try again."))
         }
         null
       }
+
       ChatOutboxEnqueueResult.StorageFull -> {
         if (canPublishUi()) {
           updateLocalizedErrorText(nativeText("Offline attachment storage is full; delete queued items first."))
         }
         null
       }
+
       ChatOutboxEnqueueResult.Unavailable -> {
         if (canPublishUi()) updateLocalizedErrorText(nativeText("Gateway health not OK; cannot send"))
         null
@@ -5097,9 +5154,15 @@ class ChatController internal constructor(
         }
         val next = nextFlushableRow(rows, flushScope) ?: break
         when (sendOutboxItem(outbox, next, flushScope)) {
-          OutboxSendOutcome.Sent -> flushedAny = true
+          OutboxSendOutcome.Sent -> {
+            flushedAny = true
+          }
+
           OutboxSendOutcome.Continue -> {}
-          OutboxSendOutcome.Stop -> break
+
+          OutboxSendOutcome.Stop -> {
+            break
+          }
         }
       }
       // Accepted rows from an earlier process have no live run ownership; prove them against
@@ -5539,6 +5602,7 @@ class ChatController internal constructor(
           OutboxSendOutcome.Sent
         }
       }
+
       is OutboxSendResult.NotDispatched -> {
         // This frame never entered the socket queue, so reconnect may retry it safely.
         val requeued = updateOutboxStatusOrNull(outbox, item, ChatOutboxStatus.Queued, result.error)
@@ -5547,6 +5611,7 @@ class ChatController internal constructor(
         _healthOk.value = false
         OutboxSendOutcome.Stop
       }
+
       OutboxSendResult.OwnerChanged -> {
         val parked = updateOutboxStatusOrNull(outbox, item, ChatOutboxStatus.Failed, OUTBOX_OWNER_CHANGED_ERROR)
         if (parked == null) rearmOutboxRecovery()
@@ -5558,6 +5623,7 @@ class ChatController internal constructor(
           OutboxSendOutcome.Continue
         }
       }
+
       is OutboxSendResult.DeliveryUnconfirmed -> {
         // Every transmitted failure is ambiguous: gateway error responses can be cached after
         // agent dispatch, and gateway dedupe is process-local and time-bounded.
@@ -5577,10 +5643,12 @@ class ChatController internal constructor(
             _healthOk.value = false
             OutboxSendOutcome.Stop
           }
+
           result.gatewayResponse == GatewayResponseState.Unknown -> {
             _healthOk.value = false
             OutboxSendOutcome.Stop
           }
+
           else -> {
             // Sending is controller-owned and Retry only transitions Failed. A zero update can
             // only mean a concurrent delete removed the claimed row; a received response makes
@@ -5694,14 +5762,21 @@ class ChatController internal constructor(
         )
       val ack = parseChatSendAck(json, requestGatewayBound(gatewayId, "chat.send", params))
       when (ack.normalizedStatus) {
-        "ok", "started", "in_flight" ->
+        "ok", "started", "in_flight" -> {
           if (ack.runId.isNullOrBlank()) {
             OutboxSendResult.DeliveryUnconfirmed(GatewayResponseState.Received)
           } else {
             OutboxSendResult.Accepted(ack.runId)
           }
-        "timeout", "error" -> OutboxSendResult.DeliveryUnconfirmed(GatewayResponseState.Received)
-        else -> OutboxSendResult.DeliveryUnconfirmed(GatewayResponseState.Received)
+        }
+
+        "timeout", "error" -> {
+          OutboxSendResult.DeliveryUnconfirmed(GatewayResponseState.Received)
+        }
+
+        else -> {
+          OutboxSendResult.DeliveryUnconfirmed(GatewayResponseState.Received)
+        }
       }
     } catch (err: CancellationException) {
       // Teardown must not be recorded as a send failure; the row stays 'sending' and the
@@ -5777,6 +5852,7 @@ class ChatController internal constructor(
           _streamingAssistantText.value = text
         }
       }
+
       "final", "aborted", "error" -> {
         val terminalHasAssistantMessage =
           state == "final" && payload["message"].asObjectOrNull()?.get("role").asStringOrNull() == "assistant"
@@ -6084,6 +6160,7 @@ class ChatController internal constructor(
           val orderedSequence = sequence ?: return
           if (applyLiveRunLifecycle(lifecycleRunId, orderedSequence, terminal = false)) publishRunPresentation()
         }
+
         "end", "error" -> {
           val accepted =
             if (sequence == null) {
@@ -6112,6 +6189,7 @@ class ChatController internal constructor(
           _streamingAssistantText.value = text
         }
       }
+
       "tool" -> {
         val phase = data?.get("phase")?.asStringOrNull()
         val name = data?.get("name")?.asStringOrNull()
@@ -6133,6 +6211,7 @@ class ChatController internal constructor(
               )
             publishPendingToolCalls()
           }
+
           "input_delta" -> {
             val diff = parseChatDiffStat(data["diff"], includeFiles = false) ?: return
             val existing = pendingToolCallsById[toolCallId]
@@ -6146,12 +6225,14 @@ class ChatController internal constructor(
                 )
             publishPendingToolCalls()
           }
+
           "result" -> {
             pendingToolCallsById.remove(toolCallId)
             publishPendingToolCalls()
           }
         }
       }
+
       "plan" -> {
         // Released Gateways through v2026.8.x only emit stream:"plan" and lack progressCard.get.
         // SUNSET 2026-10-18: this fallback is a fixed cutover window, not a permanent contract.
@@ -6173,6 +6254,7 @@ class ChatController internal constructor(
             steps = steps,
           )
       }
+
       "error" -> {
         updateLocalizedErrorText(nativeText("Event stream interrupted; try refreshing."))
         if (runId == null) {
@@ -6487,9 +6569,13 @@ class ChatController internal constructor(
           armPendingRunTimeout(runId)
           return@launch
         }
-        if (currentSession && !freshSnapshotApplied && historyResult == HistoryRefreshResult.Superseded) {
-          // The newer current-session load owns reconciliation but has not applied
-          // yet. Defer expiry; its snapshot or the next watchdog decides the run.
+        if (
+          currentSession &&
+          !freshSnapshotApplied &&
+          (historyResult == HistoryRefreshResult.Superseded || historyResult == HistoryRefreshResult.BranchInvalidated)
+        ) {
+          // A newer load or branch evidence fenced this snapshot. Defer expiry;
+          // fresh history or the next watchdog must decide the run.
           armPendingRunTimeout(runId)
           return@launch
         }
@@ -6815,7 +6901,7 @@ class ChatController internal constructor(
       content = content,
       timestampMs = obj["timestamp"].asLongOrNull(),
       idempotencyKey = obj["idempotencyKey"].asStringOrNull(),
-      entryId = metadata?.get("id").asJsonStringOrNull(),
+      entryId = metadata?.get("id").asJsonStringOrNull()?.takeIf { it.isNotBlank() },
       isSyntheticDisplay = obj["openclawMessageToolMirror"].asObjectOrNull() != null || obj["openclawStreamFallback"].asObjectOrNull() != null,
       truncated =
         truncated == JsonPrimitive(true) ||
@@ -7405,11 +7491,12 @@ internal fun isCurrentHistoryLoad(
 internal fun parseChatMessageContent(el: JsonElement): ChatMessageContent? {
   val obj = el.asObjectOrNull() ?: return null
   return when (obj["type"].asStringOrNull() ?: "text") {
-    "text", "input_text", "output_text" ->
+    "text", "input_text", "output_text" -> {
       ChatMessageContent(
         type = "text",
         text = obj["text"].asStringOrNull() ?: obj["content"].asStringOrNull(),
       )
+    }
 
     "image", "audio", "video" -> {
       val type = obj["type"].asStringOrNull() ?: "image"
@@ -7485,7 +7572,9 @@ internal fun parseChatMessageContent(el: JsonElement): ChatMessageContent? {
       )
     }
 
-    else -> null
+    else -> {
+      null
+    }
   }
 }
 

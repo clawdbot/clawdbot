@@ -1,4 +1,5 @@
-import { cleanupTempDirs, makeTempDir } from "./temp-dir.js";
+import fs from "node:fs";
+import { makeTempDir } from "./temp-dir.js";
 
 function hasUnjoinedWork(value: unknown): boolean {
   if (!value || typeof value !== "object") {
@@ -56,7 +57,23 @@ export function createFixtureLifetime() {
         `Fixture cleanup unverified; retained ${ownedRoots.join(", ")}`,
       );
     }
-    cleanupTempDirs(roots);
+    // Recursive removal can take seconds on Darwin. Keep sibling command deadlines,
+    // output drainage, and reaping live while releasing these already-joined inputs.
+    const removals = await Promise.allSettled(
+      [...roots].map(async (root) => {
+        await fs.promises.rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
+        roots.delete(root);
+      }),
+    );
+    const errors = removals.flatMap((result) =>
+      result.status === "rejected" ? [result.reason] : [],
+    );
+    if (errors.length === 1) {
+      throw errors[0];
+    }
+    if (errors.length > 1) {
+      throw new AggregateError(errors, "Test temporary directory cleanup failed");
+    }
   }
 
   return {

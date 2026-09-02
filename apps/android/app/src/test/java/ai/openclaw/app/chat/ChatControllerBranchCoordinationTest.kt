@@ -3,7 +3,7 @@ package ai.openclaw.app.chat
 import ai.openclaw.app.gateway.GatewayRequestOutcomeUnknown
 import ai.openclaw.app.gateway.GatewayRequestRejected
 import ai.openclaw.app.gateway.GatewaySession
-import androidx.room.Room
+import androidx.room3.Room
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
@@ -178,7 +178,10 @@ class ChatControllerBranchCoordinationTest {
       gateway.respond("sessions.rewind") { throw GatewayRequestOutcomeUnknown("response lost") }
       gateway.respond("chat.history") {
         when (historyCalls.incrementAndGet()) {
-          1, 2 -> throw IllegalStateException("history temporarily unavailable")
+          1, 2 -> {
+            throw IllegalStateException("history temporarily unavailable")
+          }
+
           else -> {
             retryHistoryStarted.complete(Unit)
             releaseRetryHistory.await()
@@ -578,13 +581,22 @@ class ChatControllerBranchCoordinationTest {
     val ownerJob = requireNotNull(controllerScopes.last().coroutineContext[Job])
     holdBranches = true
     when (lane) {
-      DispatchGateLane.Refresh -> controller.refresh()
-      DispatchGateLane.RemoteEvent -> controller.handleGatewayEvent("sessions.changed", """{"reason":"branch-switch","sessionKey":"$key","agentId":"main"}""")
+      DispatchGateLane.Refresh -> {
+        controller.refresh()
+      }
+
+      DispatchGateLane.RemoteEvent -> {
+        controller.handleGatewayEvent("sessions.changed", """{"reason":"branch-switch","sessionKey":"$key","agentId":"main"}""")
+      }
+
       DispatchGateLane.Reconnect -> {
         controller.onDisconnected("Reconnecting")
         controller.onGatewayConnected()
       }
-      else -> controller.handleGatewayEvent("health", null)
+
+      else -> {
+        controller.handleGatewayEvent("health", null)
+      }
     }
     awaitBranchProgress { heldListings.isNotEmpty() }
     // The gateway changes branches after the history snapshot, without a mutation event.
@@ -732,7 +744,7 @@ class ChatControllerBranchCoordinationTest {
     assertEquals(admitted.id, retained.id)
     assertEquals(admitted.branchEpoch, retained.branchEpoch)
     assertEquals(admitted.attemptVersion, retained.attemptVersion)
-    assertEquals(if (independentListing || olderFirst && branchSwitch) ChatOutboxStatus.Failed else ChatOutboxStatus.Queued, retained.status)
+    assertEquals(if (independentListing || (olderFirst && branchSwitch)) ChatOutboxStatus.Failed else ChatOutboxStatus.Queued, retained.status)
     assertEquals(3, gateway.callCount("chat.history"))
     assertEquals(0, gateway.callCount("chat.send"))
   }
@@ -748,6 +760,109 @@ class ChatControllerBranchCoordinationTest {
 
   @Test
   fun inputAdmittedWhileRemoteBranchHistoryWaitsSurvivesForExplicitRetry() = runTest { verifyInputAcrossHistoryReplacement(gate = ReplacementGate.History, remoteMutation = true) }
+
+  @Test
+  fun blankHistoryEntryIdDoesNotStrandBootstrap() =
+    runTest {
+      val gateway = ScriptedGateway(json)
+      gateway.respondWith(
+        "chat.history",
+        historyResponse("main", listOf(ReplayHistoryMessage("assistant", "History", 1, entryId = " \t"))),
+      )
+      gateway.respondWith("sessions.branches.list", """{"branches":[]}""")
+      val controller = controller(gateway, StandardTestDispatcher(testScheduler))
+      val ownerJob = requireNotNull(controllerScopes.last().coroutineContext[Job])
+      runCurrent()
+      controller.awaitOutboxRestore()
+      controller.load("main")
+      awaitBranchProgress { ownerJob.children.none() }
+
+      assertTrue(controller.healthOk.value)
+      assertFalse(controller.historyLoading.value)
+      assertNull(
+        controller.messages.value
+          .single()
+          .entryId,
+      )
+      assertEquals(1, gateway.callCount("chat.history"))
+    }
+
+  @Test
+  fun reconnectCompletesWhenEarlierBranchListingFencesHistory() =
+    runTest {
+      val key = "agent:main:branch-proof"
+      val gateway = ScriptedGateway(json)
+      val transcript = AtomicReference(listOf("A"))
+      val holdBranches = AtomicBoolean(false)
+      val holdReconnectHistory = AtomicBoolean(false)
+      val branchesEntered = CompletableDeferred<Job>()
+      val releaseBranches = CompletableDeferred<Unit>()
+      val reconnectHistoryEntered = CompletableDeferred<Job>()
+      val releaseReconnectHistory = CompletableDeferred<Unit>()
+      gateway.respond("chat.history") {
+        val entries = transcript.get()
+        val response =
+          historyResponse(
+            sessionId = "session-${entries.first()}",
+            messages =
+              entries.mapIndexed { index, entry ->
+                ReplayHistoryMessage("assistant", "history $entry", index.toLong() + 1, entryId = "entry-$entry")
+              },
+          )
+        if (holdReconnectHistory.compareAndSet(true, false)) {
+          reconnectHistoryEntered.complete(requireNotNull(currentCoroutineContext()[Job]))
+          releaseReconnectHistory.await()
+        }
+        response
+      }
+      gateway.respond("sessions.branches.list") {
+        val entries = transcript.get()
+        val response = """{"branches":[{"leafEntryId":"entry-${entries.last()}","headline":"Current","messageCount":${entries.size},"active":true}]}"""
+        if (holdBranches.compareAndSet(true, false)) {
+          branchesEntered.complete(requireNotNull(currentCoroutineContext()[Job]))
+          releaseBranches.await()
+        }
+        response
+      }
+      val controller = controller(gateway, StandardTestDispatcher(testScheduler))
+      val ownerJob = requireNotNull(controllerScopes.last().coroutineContext[Job])
+      runCurrent()
+      controller.awaitOutboxRestore()
+      controller.load(key)
+      awaitBranchProgress { controller.healthOk.value && !controller.historyLoading.value && ownerJob.children.none() }
+      assertEquals("session-A", controller.sessionId.value)
+
+      transcript.set(listOf("B"))
+      holdBranches.set(true)
+      controller.handleGatewayEvent("sessions.changed", """{"reason":"branch-switch","sessionKey":"$key","agentId":"main"}""")
+      awaitBranchProgress { branchesEntered.isCompleted }
+      val branchesJob = branchesEntered.await()
+      assertEquals("session-B", controller.sessionId.value)
+
+      holdReconnectHistory.set(true)
+      controller.onDisconnected("Reconnecting")
+      controller.onGatewayConnected()
+      awaitBranchProgress { reconnectHistoryEntered.isCompleted }
+      val reconnectHistoryJob = reconnectHistoryEntered.await()
+      assertFalse(controller.healthOk.value)
+      assertTrue(controller.historyLoading.value)
+
+      // The listing settles after reconnect captured its branch evidence, before history returns.
+      releaseBranches.complete(Unit)
+      awaitBranchProgress { branchesJob.isCompleted }
+      // The held response stays at B; recovery must read again to observe this continuation.
+      transcript.set(listOf("B", "B2"))
+      releaseReconnectHistory.complete(Unit)
+      awaitBranchProgress { reconnectHistoryJob.isCompleted && ownerJob.children.none() }
+
+      assertEquals(
+        "Branch listing completed=${branchesJob.isCompleted}; reconnect completed=${reconnectHistoryJob.isCompleted}; " +
+          "remaining controller jobs=${ownerJob.children.count()}",
+        Triple(true, false, "session-B"),
+        Triple(controller.healthOk.value, controller.historyLoading.value, controller.sessionId.value),
+      )
+      assertEquals(listOf("history B", "history B2"), controller.messages.value.map { it.content.single().text })
+    }
 
   @Test
   fun inputAdmittedAfterHistoryWhileBranchesWaitSendsOnceOnReconnect() = runTest { verifyInputAcrossHistoryReplacement(bootstrap = true, gate = ReplacementGate.Branches) }
@@ -1118,11 +1233,13 @@ class ChatControllerBranchCoordinationTest {
               messages = listOf(ReplayHistoryMessage("user", "local", 1, entryId = "leaf-local")),
             )
           }
-          else ->
+
+          else -> {
             historyResponse(
               sessionId = "session-main",
               messages = listOf(ReplayHistoryMessage("user", "winner", 2, entryId = "leaf-winner")),
             )
+          }
         }
       }
       gateway.respond("sessions.branches.list") {
@@ -1284,11 +1401,15 @@ class ChatControllerBranchCoordinationTest {
       runCurrent()
       controller.awaitOutboxRestore()
 
+      val ownerJob = requireNotNull(controllerScopes.last().coroutineContext[Job])
+      val previousJobs = ownerJob.children.toSet()
       controller.handleGatewayEvent(
         "sessions.changed",
         """{"reason":"branch-switch","sessionKey":"$backgroundKey","agentId":"main"}""",
       )
-      runCurrent()
+      // Completing this event's work, not draining the test dispatcher, joins Room's IO.
+      val eventJobs = ownerJob.children.filterNot { it in previousJobs }.toList()
+      eventJobs.forEach { it.join() }
       assertTrue(outbox.branchState("gateway-a", backgroundScope)?.needsReconciliation == true)
     }
 

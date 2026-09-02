@@ -17,8 +17,6 @@ import {
 } from "../infra/cli-root-options.js";
 import { isTruthyEnvValue, normalizeEnv } from "../infra/env.js";
 import type { ProxyHandle } from "../infra/net/proxy/proxy-lifecycle.js";
-import { ensureOpenClawCliOnPath } from "../infra/path-env.js";
-import { assertSupportedRuntime } from "../infra/runtime-guard.js";
 import { tryProcessCwd } from "../infra/safe-cwd.js";
 import type { PluginCliLoadSession } from "../plugins/cli-registry-loader.js";
 import { createPluginCache, getPluginCache, withPluginCache } from "../plugins/plugin-cache.js";
@@ -1154,6 +1152,7 @@ async function runCliWithPreparedOutputMode(
   startupTrace.mark("argv");
 
   // Enforce the minimum supported runtime before gateway selection can read or recover config.
+  const { assertSupportedRuntime } = await import("../infra/runtime-guard.js");
   assertSupportedRuntime();
 
   if (
@@ -1185,6 +1184,7 @@ async function runCliWithPreparedOutputMode(
   }
   normalizeEnv();
   if (shouldEnsureCliPath(normalizedArgv)) {
+    const { ensureOpenClawCliOnPath } = await import("../infra/path-env.js");
     ensureOpenClawCliOnPath();
   }
   // Cheap import gate only. Session-ref owns the authoritative URL/options parse.

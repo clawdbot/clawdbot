@@ -977,7 +977,9 @@ Notes:
 
 ## Exec node binding
 
-When multiple nodes are available, you can bind exec to a specific node. This sets the default node for `exec host=node` (and can be overridden per agent).
+With no node target set, `exec host=node` selects the sole paired, connected node that supports `system.run`. Other paired devices do not make the selection ambiguous. If multiple executable nodes are connected, choose a target per call or bind exec to a specific node; the active Canvas target does not select the exec host. A bound or explicit target that is offline or cannot execute commands is rejected rather than redirected to another node.
+
+A binding sets the default node for `exec host=node` and can be overridden per agent.
 
 Global default:
 
@@ -992,7 +994,7 @@ openclaw config get agents.entries
 openclaw config set 'agents.entries.main.tools.exec.node' "node-id-or-name"
 ```
 
-Unset to allow any node:
+Unset the binding to use the sole eligible node, or choose a target per call when multiple eligible nodes are connected:
 
 ```bash
 openclaw config unset tools.exec.node

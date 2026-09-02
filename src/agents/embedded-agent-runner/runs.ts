@@ -46,7 +46,7 @@ import { logMessageQueuedWithBacklogPolicy } from "../../logging/diagnostic-runt
 import { diagnosticLogger as diag, logSessionStateChange } from "../../logging/diagnostic.js";
 import { hasPromptImageInput } from "../../media/prompt-image-input.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
-import { resolveSessionPlacementForcedTerminalSettlement } from "../session-placement-admission.js";
+import { resolveSessionPlacementForcedTerminalSettlement } from "../session-placement-forced-terminal-settlement.js";
 import { getGatewayToolCallerIdentity } from "../tools/gateway-caller-context.js";
 import {
   ACTIVE_EMBEDDED_RUNS,
