@@ -32,7 +32,7 @@ const RESTART_MARKER =
   "[openclaw-test-instance] restarting gateway after migration convergence refusal";
 const fakeInstances: {
   instance: Awaited<ReturnType<typeof createOpenClawTestInstance>>;
-  lateWriterPidPath?: string;
+  writerPidPath?: string;
 }[] = [];
 const fakeRoots: string[] = [];
 const fakeOperations: Promise<unknown>[] = [];
@@ -65,14 +65,14 @@ afterEach(async () => {
   await Promise.allSettled(fakeOperations.splice(0));
   const results = await Promise.allSettled(
     fakeInstances.splice(0).map(async (owner) => {
-      const { instance, lateWriterPidPath } = owner;
+      const { instance, writerPidPath } = owner;
       // Baseline failures can spawn after cleanup has already marked itself done.
       try {
         await runQaGatewayFixture(
           () => instance.stopGateway(),
           async () => {
-            if (lateWriterPidPath) {
-              const pid = Number(await fs.readFile(lateWriterPidPath, "utf8"));
+            if (writerPidPath) {
+              const pid = Number(await fs.readFile(writerPidPath, "utf8"));
               expect(Number.isSafeInteger(pid) && pid > 1).toBe(true);
               await waitForDead(pid, 5_000);
             }
@@ -204,6 +204,12 @@ import { createServer } from "node:http";
 ${processReceipt}
 const tracePath = process.env.OPENCLAW_FAKE_GATEWAY_TRACE;
 const controlUrl = process.env.OPENCLAW_FAKE_GATEWAY_CONTROL;
+function spawnInheritedWriter(stream, output) {
+  // Windows must keep the writer alive after its leader exits; the HTTP gate owns release.
+  const delayed = spawn(process.execPath, ["-e", 'require("node:http").get(process.argv[1] + "/wait", (response) => { response.resume(); response.on("end", () => process[process.argv[2]].write(process.argv[3], () => process.exit(0))); });', controlUrl, stream, output], { detached: process.platform === "win32", stdio: ["ignore", stream === "stdout" ? "inherit" : "ignore", stream === "stderr" ? "inherit" : "ignore"] });
+  recordFixtureProcess(delayed.pid);
+  writeFileSync(tracePath + ".writer-pid", String(delayed.pid));
+}
 if (controlUrl) await (await fetch(controlUrl + "/launch?pid=" + process.pid)).text();
 const countPath = tracePath + ".count";
 let attempt = 1;
@@ -228,14 +234,14 @@ if (kind === "cli-json") {
   process.exit(0);
 }
 process.stdout.write("fake gateway attempt " + attempt + "\\n");
-if (kind === "cli") {
+if (kind === "cli" || kind === "cli-drain") {
   process.stderr.write("cli diagnostic\\n");
   if (argv[0] === "wait") {
     setInterval(() => {}, 1_000);
     await new Promise(() => {});
   }
-  if (argv[0] === "drain") {
-    spawn(process.execPath, ["-e", 'setTimeout(() => console.log("drained cli output"), 50)'], { stdio: ["ignore", "inherit", "inherit"] });
+  if (kind === "cli-drain") {
+    spawnInheritedWriter("stdout", "drained cli output\\n");
     process.exit(0);
   }
   if (argv[0] === "large") {
@@ -247,10 +253,7 @@ if (kind === "cli") {
 const refusal = ${JSON.stringify(MIGRATION_CONVERGENCE_REFUSAL)};
 if (kind === "refuse") { process.stderr.write(refusal + " fixture\\n"); process.exit(1); }
 if (kind === "late-refuse") {
-  // Windows otherwise kills the writer when its leader exits; keep inherited stderr open.
-  const delayed = spawn(process.execPath, ["-e", 'require("node:http").get(process.argv[1] + "/wait", (response) => { response.resume(); response.on("end", () => process.stderr.write(process.argv[2], () => process.exit(0))); });', controlUrl, refusal + " delayed fixture\\n"], { detached: process.platform === "win32", stdio: ["ignore", "ignore", "inherit"] });
-  recordFixtureProcess(delayed.pid);
-  writeFileSync(tracePath + ".late-pid", String(delayed.pid));
+  spawnInheritedWriter("stderr", refusal + " delayed fixture\\n");
   process.exit(1);
 }
 if (kind === "resist-after-exit") {
@@ -308,9 +311,11 @@ writeFileSync("dist/.runtime-postbuildstamp", "");
   });
   fakeInstances.push({
     instance,
-    // The released HTTP gate owns this writer even when readiness fails.
-    lateWriterPidPath: sequence.split(",").includes("late-refuse")
-      ? `${tracePath}.late-pid`
+    // Join inherited writers after releasing their HTTP gate, including failed commands/startup.
+    writerPidPath: sequence
+      .split(",")
+      .some((kind) => kind === "late-refuse" || kind === "cli-drain")
+      ? `${tracePath}.writer-pid`
       : undefined,
   });
   return {
@@ -398,10 +403,17 @@ describe("openclaw test instance", () => {
     { mode: "wait", prepare: false },
     { mode: "0", prepare: true },
   ])("releases the CLI deadline after $mode (prepare=$prepare)", async ({ mode, prepare }) => {
-    const control = prepare ? await createGatewayControl() : undefined;
-    await control?.release();
-    const preparation = control ? { url: control.url, holdPreparation: true } : undefined;
-    const { instance, readAttempts } = await createFakeGateway("cli", 1_000, 1_500, preparation);
+    const control = prepare || mode === "drain" ? await createGatewayControl() : undefined;
+    if (prepare) {
+      await control?.release();
+    }
+    const fixtureControl = control ? { url: control.url, holdPreparation: prepare } : undefined;
+    const { instance, readAttempts } = await createFakeGateway(
+      mode === "drain" ? "cli-drain" : "cli",
+      1_000,
+      1_500,
+      fixtureControl,
+    );
     const scope = new AsyncLocalStorage<boolean>();
     const timers = new Map<number, NodeJS.Timeout>();
     const hook = createHook({
@@ -419,6 +431,12 @@ describe("openclaw test instance", () => {
     try {
       const timeoutMs = mode === "wait" ? 1_000 : 30_000;
       const command = trackOperation(scope.run(true, () => instance.cli([mode], { timeoutMs })));
+      if (mode === "drain") {
+        await withTestTimeout(control!.reached, 5_000, "CLI stdout writer did not reach its gate");
+        const [attempt] = await readAttempts();
+        await waitForDead(attempt!.pid, 5_000);
+        await control!.release();
+      }
       if (mode === "wait") {
         await expect(command).rejects.toThrow(`command timed out after ${timeoutMs}ms`);
       } else {
@@ -474,7 +492,7 @@ describe("openclaw test instance", () => {
         "CLI stderr fixture did not reach its release gate",
       );
       const [attempt] = await readAttempts();
-      writerPid = Number(await fs.readFile(`${tracePath}.late-pid`, "utf8"));
+      writerPid = Number(await fs.readFile(`${tracePath}.writer-pid`, "utf8"));
       await waitForDead(attempt!.pid, 5_000);
       // Release the inherited stderr writer only after the CLI leader has exited.
       await control.release();
