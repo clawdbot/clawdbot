@@ -7,6 +7,11 @@ import OSLog
 @MainActor
 @Observable
 final class CronJobsStore {
+    enum Consumer: Hashable {
+        case statusMenu
+        case settings
+    }
+
     static let shared = CronJobsStore()
 
     var jobs: [CronJob] = []
@@ -22,6 +27,7 @@ final class CronJobsStore {
     var lastError: String?
     var statusMessage: String?
 
+    @ObservationIgnored private var consumers: Set<Consumer> = []
     private let logger = Logger(subsystem: "ai.openclaw", category: "cron.ui")
     private var refreshTask: Task<Void, Never>?
     private var runsTask: Task<Void, Never>?
@@ -39,8 +45,12 @@ final class CronJobsStore {
         self.isPreview = isPreview
     }
 
-    func start() {
-        guard !self.isPreview, self.eventTask == nil else { return }
+    func start(_ consumer: Consumer) {
+        guard !self.isPreview, self.consumers.insert(consumer).inserted else { return }
+        guard self.eventTask == nil else {
+            self.scheduleRefresh(delayMs: 0)
+            return
+        }
         self.eventTask = Task { [weak self, gateway] in
             for await push in await gateway.subscribe() {
                 guard !Task.isCancelled, let self else { return }
@@ -52,19 +62,24 @@ final class CronJobsStore {
         }
     }
 
-    func stop() {
+    func stop(_ consumer: Consumer) {
+        self.consumers.remove(consumer)
+        // Settings owns history; either visible surface can keep job updates alive.
+        if consumer == .settings || self.consumers.isEmpty {
+            self.invalidateRuns()
+        }
+        guard self.consumers.isEmpty else { return }
         self.jobsGeneration &+= 1
         self.isLoadingJobs = false
         SimpleTaskSupport.stop(task: &self.refreshTask)
-        self.invalidateRuns()
         SimpleTaskSupport.stop(task: &self.eventTask)
         SimpleTaskSupport.stop(task: &self.pollTask)
     }
 
     func refreshJobs() async {
         guard !self.isLoadingJobs, !Task.isCancelled else { return }
-        // Manual and scheduled refreshes share the pane's lifetime; stop also
-        // invalidates callers whose task is not owned by this store.
+        // Manual and scheduled refreshes share the active consumers' lifetime; the final
+        // stop also invalidates callers whose task is not owned by this store.
         self.jobsGeneration &+= 1
         let generation = self.jobsGeneration
         self.isLoadingJobs = true
@@ -193,13 +208,20 @@ final class CronJobsStore {
     private func handle(cronEvent evt: CronEvent) {
         // Keep UI in sync with the gateway scheduler.
         self.scheduleRefresh(delayMs: 250)
-        if evt.action == "finished", let selected = self.selectedJobId, selected == evt.jobId {
+        if self.consumers.contains(.settings), evt.action == "finished",
+           let selected = self.selectedJobId, selected == evt.jobId
+        {
             self.refreshRuns(jobId: selected, delay: 0.2)
         }
     }
 
     private func scheduleRefresh(delayMs: Int = 250) {
-        SimpleTaskSupport.schedule(task: &self.refreshTask, delay: TimeInterval(delayMs) / 1000) { [weak self] in
+        let previousTask = self.refreshTask
+        previousTask?.cancel()
+        self.refreshTask = Task { [weak self] in
+            // Even a canceled debounce must drain its predecessor before a replacement can refresh.
+            await previousTask?.value
+            guard await SimpleTaskSupport.waitForNextOperation(interval: TimeInterval(delayMs) / 1000) else { return }
             await self?.refreshJobs()
         }
     }

@@ -41,6 +41,18 @@ describe("Android Fastlane release upload gates", () => {
     expect(wearTrack).not.toContain('"qa"');
   });
 
+  it("executes the app and Wear signing validators during release preflight", () => {
+    const validation = functionBody(readFastfile(), "validate_android_release_signing!");
+
+    expect(validation).toContain('":app:validateSigningPlayRelease"');
+    expect(validation).toContain('":wear:validateSigningRelease"');
+    expect(validation).toContain('"-PopenclawBuildCommit=#{build_commit}"');
+    expect(validation).toContain('"-PopenclawBuildTimestamp=#{build_timestamp}"');
+    expect(validation).not.toContain("--dry-run");
+    expect(validation).not.toContain(":app:bundlePlayRelease");
+    expect(validation).not.toContain(":wear:bundleRelease");
+  });
+
   it("preflights and records mobile release refs around Play build upload", () => {
     const fastfile = readFastfile();
     const uploadBuild = functionBody(fastfile, "upload_play_store_build!");

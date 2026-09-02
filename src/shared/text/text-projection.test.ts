@@ -1,4 +1,5 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { findCodeRegions } from "./code-regions.js";
 import {
   applyTextFilters,
   createTextProjection,
@@ -7,6 +8,11 @@ import {
   trimTextFilter,
   type TextFilter,
 } from "./text-projection.js";
+
+vi.mock("./code-regions.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./code-regions.js")>();
+  return { ...actual, findCodeRegions: vi.fn(actual.findCodeRegions) };
+});
 
 describe("createTextProjection", () => {
   it("activates split markers, reprojects completed syntax, and replaces the source", () => {
@@ -94,7 +100,7 @@ describe("createTextProjection", () => {
 describe("duplicate paragraphs", () => {
   it.each([
     { text: " \r\n\t ", expected: " \r\n\t " },
-    { text: "  A \n\n \tA  ", expected: "A" },
+    { text: "  A \n\n A  ", expected: "A" },
     { text: "A\n\nB\n\nA", expected: "A\n\nB\n\nA" },
     { text: "A  B\n\nA\tB", expected: "A  B" },
     { text: "A\r\n\r\nA", expected: "A\r\n\r\nA" },
@@ -104,6 +110,18 @@ describe("duplicate paragraphs", () => {
     { text: "A\n\n \n\nA", expected: "A\n\n \n\nA" },
     { text: "A\n\nA\n\n \n\nB", expected: "A\n\n\n\nB" },
     { text: "\n\n \n\nA\n\nA\n\n \n\n", expected: "A" },
+    {
+      text: "```text\nrepeat\n\nrepeat\n```",
+      expected: "```text\nrepeat\n\nrepeat\n```",
+    },
+    {
+      text: "    first\n\n    second\n\ntail\n\ntail",
+      expected: "    first\n\n    second\n\ntail",
+    },
+    { text: "repeat\n\n    repeat\n\nrepeat", expected: "repeat\n\n    repeat\n\nrepeat" },
+    { text: "Run `x`.\n\nRun `x`.", expected: "Run `x`." },
+    { text: "repeat\n\nrepeat `x`", expected: "repeat\n\nrepeat `x`" },
+    { text: "Do `x` repeat\n\nrepeat", expected: "Do `x` repeat\n\nrepeat" },
   ])("preserves canonical separators and whitespace %#", ({ text, expected }) => {
     expect(duplicateParagraphTextFilter.transform(text)).toBe(expected);
     const partitions = [
@@ -149,4 +167,22 @@ describe("duplicate paragraphs", () => {
       expect(projection.append("word")).toEqual({ text: "New\n\nLast word", delta: " word" });
     },
   );
+
+  it("keeps code-bearing continuation appends on the incremental suffix path", () => {
+    const parser = vi.mocked(findCodeRegions);
+    parser.mockClear();
+    const code = "```text\ninside\n\ninside\n```";
+    const source = `${code}\n\nrepeat\n\nrepeat\n\ntail`;
+    const projection = createTextProjection([duplicateParagraphTextFilter]);
+    expect(projection.append(source).text).toBe(`${code}\n\nrepeat\n\ntail`);
+    const initialParses = parser.mock.calls.length;
+    expect(initialParses).toBeGreaterThan(0);
+
+    for (let index = 0; index < 256; index++) {
+      const delta = `-${index}`;
+      expect(projection.append(delta).delta).toBe(delta);
+    }
+    expect(parser).toHaveBeenCalledTimes(initialParses);
+    expect(projection.text).toBe(duplicateParagraphTextFilter.transform(projection.source));
+  });
 });

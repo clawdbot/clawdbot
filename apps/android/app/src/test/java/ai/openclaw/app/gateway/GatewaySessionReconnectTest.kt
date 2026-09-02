@@ -1336,6 +1336,7 @@ class GatewaySessionReconnectTest {
         Triple("AUTH_TOKEN_NOT_CONFIGURED", false, true),
         Triple("AUTH_PASSWORD_NOT_CONFIGURED", false, true),
         Triple("AUTH_SCOPE_MISMATCH", false, true),
+        Triple("AUTH_VERIFIED_USER_REQUIRED", false, true),
       )
 
     for ((code, pendingDeviceTokenRetry, expected) in cases) {

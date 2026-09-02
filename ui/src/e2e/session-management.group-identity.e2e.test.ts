@@ -90,7 +90,7 @@ suite.define(() => {
           await row.getByRole("button", { name: "Open session menu" }).click();
         }
         await openSessionMenuSubmenu(page, batch ? "Move 2 to group" : "Move to group");
-        await activateSelfRemovingControl(page.getByRole("menuitem", { name: "New group…" }));
+        await activateSelfRemovingControl(page.getByRole("menuitem", { name: "New group" }));
         const input = page.getByLabel("New group name");
         await input.fill(group);
         await capture("editing");

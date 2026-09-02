@@ -1,7 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import "../../../styles.css";
-import "../../../styles/chat.css";
+import "../../../styles/chat.ts";
 import "../../../styles/chat/side-panel.css";
 import "./chat-sidebar.ts";
 

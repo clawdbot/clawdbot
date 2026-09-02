@@ -214,7 +214,7 @@ jobs:
   kova:
     name: ${{ matrix.title }}
     needs: resolve_target
-    runs-on: blacksmith-16vcpu-ubuntu-2404
+    runs-on: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04' || 'blacksmith-16vcpu-ubuntu-2404' }}
     timeout-minutes: 240
     strategy:
       fail-fast: false
@@ -421,7 +421,9 @@ jobs:
 
           python3 -I -S "$CI_GIT_OWNER" --git 0 init -b main "$KOVA_SRC"
           python3 -I -S "$CI_GIT_OWNER" --git 0 -C "$KOVA_SRC" remote add origin "https://github.com/${KOVA_REPOSITORY}.git"
-          python3 -I -S "$CI_GIT_OWNER" --git 0 -C "$KOVA_SRC" fetch --filter=blob:none --depth 1 origin "$KOVA_REF"
+          # The complete worktree is consumed next; do not defer its blobs to a
+          # second unauthenticated promisor fetch during checkout.
+          python3 -I -S "$CI_GIT_OWNER" --git 0 -C "$KOVA_SRC" fetch --depth 1 origin "$KOVA_REF"
           python3 -I -S "$CI_GIT_OWNER" --git 0 -C "$KOVA_SRC" checkout --detach FETCH_HEAD
           npm --prefix "$KOVA_SRC" ci --ignore-scripts --no-audit --no-fund
           node - "$KOVA_SRC" <<'NODE'
@@ -692,7 +694,7 @@ jobs:
   source_performance:
     name: OpenClaw source performance probes
     needs: resolve_target
-    runs-on: blacksmith-16vcpu-ubuntu-2404
+    runs-on: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04' || 'blacksmith-16vcpu-ubuntu-2404' }}
     timeout-minutes: 120
     env:
       PERFORMANCE_HELPER_DIR: ${{ github.workspace }}/.artifacts/performance-workflow

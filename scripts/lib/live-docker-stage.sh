@@ -317,6 +317,16 @@ openclaw_live_stage_node_modules() {
 
   mkdir -p "$target_dir"
   cp -aRs /app/node_modules/. "$target_dir"
+  local source_modules staged_modules
+  # Source staging excludes node_modules everywhere. Restore each workspace's
+  # dependency links too, or package-local imports cannot reach the pnpm store.
+  for source_modules in /app/packages/*/node_modules /app/extensions/*/node_modules /app/ui/node_modules; do
+    [ -d "$source_modules" ] || continue
+    staged_modules="$dest_dir/${source_modules#/app/}"
+    [ -d "$(dirname "$staged_modules")" ] || continue
+    mkdir -p "$staged_modules"
+    cp -aRs "$source_modules/." "$staged_modules"
+  done
   rm -rf "$target_dir/.vite-temp"
   mkdir -p "$target_dir/.vite-temp"
 }

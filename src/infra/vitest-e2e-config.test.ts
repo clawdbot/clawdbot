@@ -41,6 +41,7 @@ describe("e2e vitest config", () => {
       "src/tui/tui-reset-transition-pty.e2e.test.ts",
       "src/tui/tui-task-suggestions-pty.e2e.test.ts",
       "src/tui/tui-error-pty.e2e.test.ts",
+      "src/tui/tui-hyperlinks-pty.e2e.test.ts",
       "src/tui/tui-pty-local.e2e.test.ts",
     ];
 

@@ -98,18 +98,19 @@ Release rules:
 
 - `apps/android/version.json` is the pinned Android release version source.
 - `apps/android/Config/Version.properties` is generated from that source and read by Gradle.
-- `apps/android/CHANGELOG.md` is the Android-only changelog and release-note source.
-- `apps/android/fastlane/metadata/android/en-US/release_notes.txt` is generated from that changelog by `pnpm android:version:sync`.
+- `apps/mobile/version.json` is the shared mobile gateway version source.
+- `apps/ios/CHANGELOG.md` supplies shared mobile release notes.
+- `apps/android/fastlane/metadata/android/en-US/release_notes.txt` is committed by the shared mobile cutter.
+- `apps/android/CHANGELOG.md` remains historical Android release documentation and is not a release-preparation input.
 - `apps/android/Config/ReleaseSigning.json` pins the encrypted Android signing assets in the shared signing repo.
 - `apkCertificateSha256` in that manifest pins the upload certificate accepted for standalone release APKs; rotate it only with the encrypted keystore.
 - `MATCH_PASSWORD` enables Fastlane to pull encrypted Android signing assets into `apps/android/build/release-signing/` before release validation or archive builds.
 - Supported pinned Android versions use CalVer: `YYYY.M.D`.
 - Phone `versionCode` uses `YYYYMMDDNN`, where `NN` is `01` through `49`; the matching Wear APK adds `50` and uses `51` through `99`.
-- `pnpm android:version:pin -- --from-gateway` promotes the current root gateway version into the pinned Android release version.
-- `pnpm android:version:pin -- --version 2026.6.5 --version-code 2026060502` increments another build on the same Android release train.
-- `pnpm android:version:sync` updates generated version artifacts.
-- `pnpm android:version:check` validates checked-in Android version artifacts.
-- `pnpm android:release:preflight` validates Google Play auth, Android release signing, synced versioning, release notes, and prints the package/track/version/versionCode that will be uploaded.
+- `scripts/mobile-release-version.ts` is the sole owner that prepares Android version metadata and release notes.
+- `pnpm android:version:pin` and `pnpm android:version:sync` are retired release entry points and fail without writing.
+- `pnpm android:version:check` validates checked-in Android version artifacts without changing them.
+- `pnpm android:release:preflight` validates Google Play auth, Android release signing, committed cutter outputs, release notes, and prints the package/track/version/versionCode that will be uploaded.
 - `pnpm android:release:signing:sync:pull` pulls encrypted Android signing assets from `apps-signing`.
 - `pnpm android:release:signing:sync:push` creates or refreshes encrypted Android signing assets in `apps-signing`.
 - `pnpm android:screenshots` builds and installs the phone and Wear OS debug
