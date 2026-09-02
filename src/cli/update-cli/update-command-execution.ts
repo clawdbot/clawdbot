@@ -24,7 +24,10 @@ import {
   type UpdateCommandOptions,
 } from "./shared.js";
 import { createBeforeGitMutation, updateGitInstall } from "./update-command-git.js";
-import { handoffUpdateFromGateway } from "./update-command-handoff.js";
+import {
+  formatUpdateAncestryBlockMessage,
+  handoffUpdateFromGateway,
+} from "./update-command-handoff.js";
 import {
   captureOwnedManagedUpdateContext,
   type OwnedManagedUpdateContext,
@@ -205,7 +208,7 @@ export async function executeMutableUpdate(params: {
       params.stop();
       throw new UpdatePreMutationError(
         "managed-service-preflight",
-        preManagedServiceStop.blockMessage,
+        formatUpdateAncestryBlockMessage(preManagedServiceStop.blockMessage),
       );
     }
   };

@@ -44,9 +44,21 @@ export function gatewayAncestryBlockMessage(pid: unknown): string | undefined {
   if (!inherited && !getSelfAndAncestorPidsSync().has(gatewayPid)) {
     return undefined;
   }
+  // Shared by doctor and update: never advise stopping the service from here,
+  // because the stop would kill the caller and nothing restarts the gateway.
   return `This command is running inside the gateway process tree (gateway PID ${gatewayPid}).
-A gateway cannot update itself from a child process, and stopping the service from here would kill this command.
-Ask the OpenClaw owner to run \`openclaw update\` from a terminal, or start the update from chat with the gateway update action or /update, which hands it to a managed helper.`;
+Stopping or restarting the gateway from here would kill this command, so it cannot safely manage the gateway that owns it.
+Run this command from a shell outside the gateway service.`;
+}
+
+const ANCESTRY_BLOCK_MARKER = "inside the gateway process tree";
+
+/** Update-specific follow-up for an ancestry block: the chat path hands off to the managed helper. */
+export function formatUpdateAncestryBlockMessage(blockMessage: string): string {
+  if (!blockMessage.includes(ANCESTRY_BLOCK_MARKER)) {
+    return blockMessage;
+  }
+  return `${blockMessage}\nFrom chat, the OpenClaw owner can start the update with the gateway update action or /update, which hands it to a managed helper.`;
 }
 
 export async function handoffUpdateFromGateway(params: {

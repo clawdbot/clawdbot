@@ -5591,8 +5591,10 @@ describe("update-cli", () => {
     expect(errors).toContain(
       `This command is running inside the gateway process tree (gateway PID ${gatewayFixturePid}).`,
     );
-    expect(errors).toContain("Ask the OpenClaw owner to run `openclaw update` from a terminal");
-    expect(errors).toContain("stopping the service from here would kill this command");
+    expect(errors).toContain("Run this command from a shell outside the gateway service.");
+    expect(errors).toContain("would kill this command");
+    expect(errors).toContain("gateway update action or /update");
+    expect(errors).not.toContain("stop the gateway service first");
     expect(defaultRuntime.exit).not.toHaveBeenCalled();
     expect(serviceStop).not.toHaveBeenCalled();
     expect(packageInstallCommandCall()).toBeUndefined();
@@ -5743,9 +5745,7 @@ describe("update-cli", () => {
         recovery: { serviceRestartSafe: true },
         steps: [
           expect.objectContaining({
-            stderrTail: expect.stringContaining(
-              "stopping the service from here would kill this command",
-            ),
+            stderrTail: expect.stringContaining("would kill this command"),
           }),
         ],
       },
@@ -5778,8 +5778,10 @@ describe("update-cli", () => {
     expect(errors).toContain(
       `This command is running inside the gateway process tree (gateway PID ${gatewayFixturePid}).`,
     );
-    expect(errors).toContain("Ask the OpenClaw owner to run `openclaw update` from a terminal");
-    expect(errors).toContain("stopping the service from here would kill this command");
+    expect(errors).toContain("Run this command from a shell outside the gateway service.");
+    expect(errors).toContain("would kill this command");
+    expect(errors).toContain("gateway update action or /update");
+    expect(errors).not.toContain("stop the gateway service first");
     expect(defaultRuntime.exit).not.toHaveBeenCalled();
     expect(serviceStop).not.toHaveBeenCalled();
     expect(packageInstallCommandCall()).toBeUndefined();
