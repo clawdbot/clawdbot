@@ -4125,6 +4125,7 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
   it.each([undefined, "compact"] as const)(
     "buffers the first notifying preamble but streams later edits (style=%s)",
     async (style) => {
+      const checkpoint = vi.fn();
       let postedMessageId: string | undefined;
       const draftStream = {
         ...createDraftStreamStub(),
@@ -4146,6 +4147,7 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
           run: async () => {
             // Even a timer/flush must not post the first token: Slack freezes
             // its push notification at creation, then edits do not re-notify.
+            checkpoint();
             await draftStream.flush();
             expect(draftStream.update).not.toHaveBeenCalled();
             expect(postedMessageId).toBeUndefined();
@@ -4161,6 +4163,7 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
         {
           kind: "checkpoint",
           run: async () => {
+            checkpoint();
             expect(draftStream.update).not.toHaveBeenCalled();
           },
         },
@@ -4174,6 +4177,7 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
         {
           kind: "checkpoint",
           run: async () => {
+            checkpoint();
             expect(postedMessageId).toBe("171234.567");
             expect(draftUpdateTexts(draftStream)).toEqual(["_I will check the result._"]);
           },
@@ -4188,6 +4192,7 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
         {
           kind: "checkpoint",
           run: async () => {
+            checkpoint();
             expectLastDraftUpdateText(draftStream, "_The result_");
           },
         },
@@ -4217,6 +4222,9 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
         }),
       );
 
+      // Assert the intermediate observations ran; the final text alone cannot
+      // prove that Slack never received a first-token notification.
+      expect(checkpoint).toHaveBeenCalledTimes(4);
       expectLastDraftUpdateText(draftStream, "_The result is ready._");
       expectMockCallArgFields(finalizeSlackPreviewEditMock, 0, "same-message final edit", {
         messageId: "171234.567",
