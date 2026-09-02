@@ -25,6 +25,7 @@ export default defineConfig({
       async closeBundle() {
         await mkdir(output, { recursive: true });
         await copyFile(new URL("./native/index.html", import.meta.url), `${output}/index.html`);
+        await copyFile(new URL("./native/NOTICE.txt", import.meta.url), `${output}/NOTICE.txt`);
       },
     },
   ],

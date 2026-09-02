@@ -309,6 +309,8 @@ The menu groups routine actions first: **Pin/Unpin**, **Rename**, **Mark as unre
 
 A selected session running on a worker shows a quiet **Runs on Cloud** chip in the chat header. Connections with `operator.write` can choose **Move session…** to continue on the Gateway or an eligible paired device, and can use **Stop cloud worker…** through the write-scoped `sessions.reclaim` lifecycle. Moving to a configured cloud profile requires `operator.admin`. Cloud rows are filtered against all execution modes advertised by each profile: the same bundled Crabbox profile is selectable for OpenClaw `worker-turn` and Codex `remote-exec`, while a genuinely single-mode profile stays disabled for the other runtime. Profiles with multiple machine classes show a machine picker; choosing the default omits an override, while choosing a different class on the current profile resizes the session. The confirmation explains that an active turn is interrupted and never replayed; OpenClaw reconciles the workspace before activating the destination. While the durable operation is in progress, the chip shows **Moving to…**. If recovery is blocked, the chip exposes the bounded error after reconnect so the action never fails silently.
 
+During the initial handoff, the chat placement menu and stop confirmation use the selected destination: **Stop device worker…** for explicit or automatic paired-device placement, **Stop cloud worker…** for a cloud profile, or neutral **Stop worker…** when the target is unknown; all use `sessions.reclaim`. A destination retained for retry after a failed startup does not label a later restart.
+
 ### Session icons
 
 Choose **Icon & color** from a single session's context menu to give its sidebar row one persistent emoji or monochrome icon. The picker includes common emoji and six named icons: `braces`, `book`, `monitor`, `bot`, `kanban`, and `coins`. Choose **Custom emoji…** to enter any single emoji; on macOS, press Control-Command-Space to open the system emoji picker, or press Windows-period on Windows. The `sessions` agent tool can set the same `icon` field. An empty value removes it. This decoration replaces the owner avatar in the leading glyph slot, but temporary attention state always takes precedence so an operator request cannot be hidden.
@@ -988,6 +990,8 @@ pnpm ui:build
 ```
 
 For bundled builds, the Gateway retains manifest-verified assets so already-open tabs can fetch older asset URLs after an update. The cache keeps at most three generations and 96 MiB total, preferring the current generation; older generations can be pruned sooner to meet the byte budget. Background startup preparation reuses verified inventories through publication and pruning instead of rereading unchanged retained assets at each step. Newly published assets are verified before reuse, including a concurrent publisher's winning copy. Configured `gateway.controlUi.root` builds do not use this cache.
+
+Non-index static assets use `Last-Modified` for conditional `GET` and `HEAD` requests. `If-None-Match` takes precedence over `If-Modified-Since`: `*` matches an existing asset, while other values receive the normal `200` response because static assets do not emit ETags. Date-only revalidation still returns `304` for unchanged assets. If no available content encoding is acceptable, the Gateway returns `406` before evaluating either condition.
 
 Optional absolute base (fixed asset URLs):
 

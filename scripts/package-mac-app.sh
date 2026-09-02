@@ -731,6 +731,8 @@ if (actual.version !== version || actual.commit !== commit || actual.builtAt !==
 }
 NODE
 
+node "$ROOT_DIR/scripts/prepare-apple-mermaid.mjs"
+
 # pnpm build owns the Control UI and content-checked build stamps as well.
 mkdir -p "$(dirname "$APP_DESTINATION")"
 APP_STAGE_DIR="$(mktemp -d "$ROOT_DIR/dist/.openclaw-package.XXXXXX")"
@@ -951,6 +953,7 @@ REQUIRED_SWIFTPM_RESOURCE_BUNDLES=(
   "KeyboardShortcuts_KeyboardShortcuts.bundle"
   "OpenClaw_OpenClaw.bundle"
   "OpenClawKit_OpenClawKit.bundle"
+  "OpenClawKit_OpenClawChatUI.bundle"
   "SwiftMath_SwiftMath.bundle"
 )
 for resource_bundle in "${REQUIRED_SWIFTPM_RESOURCE_BUNDLES[@]}"; do

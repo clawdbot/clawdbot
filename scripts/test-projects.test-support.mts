@@ -702,6 +702,14 @@ const MERMAID_RENDERER_TEST_TARGETS = [
 ];
 const SOURCE_TEST_TARGETS = new Map([
   ...PRECISE_SOURCE_TEST_TARGETS,
+  [
+    "scripts/prepare-apple-mermaid.mjs",
+    [
+      "test/scripts/build-and-run-mac.test.ts",
+      "test/scripts/package-mac-app.test.ts",
+      "test/scripts/ci-workflow-guards.test.ts",
+    ],
+  ],
   ["packages/mermaid-renderer/package.json", MERMAID_RENDERER_TEST_TARGETS],
   ["packages/mermaid-renderer/vite.config.ts", MERMAID_RENDERER_TEST_TARGETS],
   ["packages/mermaid-renderer/native/index.html", MERMAID_RENDERER_TEST_TARGETS],
@@ -2892,11 +2900,9 @@ const SEMANTIC_TOOLING_TARGET_PATTERNS: Array<[RegExp, string[]]> = [
       "src/agents/agent-bundle-mcp-tools.materialize.test.ts",
     ],
   ],
-  [/^scripts\/e2e\/system-agent-(?:first-run|rescue)-docker\.sh$/u, ["docker-e2e-system-agent"]],
   [
     /^test\/e2e\/qa-lab\/runtime\/system-agent-first-run-docker-client\.ts$/u,
     [
-      "docker-e2e-system-agent",
       "src/cli/program/register.onboard.test.ts",
       "src/cli/run-main.test.ts",
       "src/cli/run-main.exit.test.ts",
@@ -2912,16 +2918,11 @@ const SEMANTIC_TOOLING_TARGET_PATTERNS: Array<[RegExp, string[]]> = [
   ],
   [
     /^scripts\/e2e\/system-agent-first-run-spec\.json$/u,
-    [
-      "docker-e2e-system-agent",
-      "src/system-agent/operations.test.ts",
-      "src/system-agent/audit.test.ts",
-    ],
+    ["src/system-agent/operations.test.ts", "src/system-agent/audit.test.ts"],
   ],
   [
     /^scripts\/e2e\/system-agent-rescue-docker-client\.ts$/u,
     [
-      "docker-e2e-system-agent",
       "src/system-agent/rescue-policy.test.ts",
       "src/system-agent/rescue-message.test.ts",
       "src/system-agent/operations.test.ts",

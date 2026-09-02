@@ -287,6 +287,16 @@ describe("scripts/test-projects changed-target routing", () => {
     });
   });
 
+  it("routes Apple Mermaid preparation to its build and packaging proof", () => {
+    const plan = resolveChangedTestTargetPlan(["scripts/prepare-apple-mermaid.mjs"]);
+    expect(plan.mode).toBe("targets");
+    expect(plan.targets).toEqual([
+      "test/scripts/build-and-run-mac.test.ts",
+      "test/scripts/package-mac-app.test.ts",
+      "test/scripts/ci-workflow-guards.test.ts",
+    ]);
+  });
+
   it("bounds extensionless prefix probes while excluding deleted cached matches", () => {
     const target = "src/selector/topic";
     const rejectedFiles = [
@@ -2127,7 +2137,6 @@ describe("scripts/test-projects changed-target routing", () => {
     expectChangedTargets(targets, [
       "test/scripts/docker-build-helper.test.ts",
       "test/scripts/docker-e2e-plan.test.ts",
-      "test/scripts/docker-e2e-system-agent.test.ts",
       "src/cli/program/register.onboard.test.ts",
       "src/cli/run-main.test.ts",
       "src/cli/run-main.exit.test.ts",
@@ -2162,6 +2171,7 @@ describe("scripts/test-projects changed-target routing", () => {
           "test/scripts/android-version.test.ts",
           "test/scripts/ci-git-prerequisites.test.ts",
           "test/scripts/ios-release-plan.test.ts",
+          "test/scripts/mac-native-fixtures.test.ts",
         ],
         watchMode: false,
       },

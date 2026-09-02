@@ -4208,13 +4208,35 @@ jobs:
     steps:
       - *platform_checkout_step
 
+      - name: Setup Node environment for Apple assets
+        if: hashFiles('scripts/prepare-apple-mermaid.mjs') != ''
+        uses: ./.ci-harness/.github/actions/setup-node-env
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache-mode: ${{ needs.preflight.outputs.cache_mode }}
+          install-bun: "false"
+          install-deps: "true"
+
       - name: Setup Node.js for native test tooling
+        if: hashFiles('scripts/prepare-apple-mermaid.mjs') == ''
         env:
           REQUESTED_NODE_VERSION: ${{ env.NODE_VERSION }}
         run: |
           set -euo pipefail
           source .ci-harness/.github/actions/setup-pnpm-store-cache/ensure-node.sh
           openclaw_ensure_node "$REQUESTED_NODE_VERSION"
+
+      - name: Prepare Apple Mermaid assets
+        run: |
+          set -euo pipefail
+          if [[ -f scripts/prepare-apple-mermaid.mjs ]]; then
+            node scripts/prepare-apple-mermaid.mjs
+          elif [[ "$HISTORICAL_TARGET" == "true" ]]; then
+            echo "Frozen target predates bundled Mermaid assets."
+          else
+            echo "Current CI targets must provide scripts/prepare-apple-mermaid.mjs." >&2
+            exit 1
+          fi
 
       - name: Install XcodeGen / SwiftLint / SwiftFormat
         if: matrix.phase == 'release'

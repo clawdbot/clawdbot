@@ -323,6 +323,34 @@ describe("scripts/pr wrappers", () => {
         ["123", "not-an-outcome", "--confirmed-operator-recovery"],
         ["123", "a".repeat(40), "--confirmed-no-running-tools"],
         ["123", "a".repeat(40), "--confirmed-operator-recovery", "--auto-merge"],
+        ...[
+          [],
+          [""],
+          ["HEAD"],
+          ["a".repeat(39)],
+          ["A".repeat(40)],
+          ["b".repeat(40), "--replacement-head", "c".repeat(40)],
+          ["b".repeat(40), "--confirmed-operator-recovery"],
+        ].map((suffix) =>
+          ["123", "a".repeat(40), "--confirmed-operator-recovery", "--replacement-head"].concat(
+            suffix,
+          ),
+        ),
+        [
+          "123",
+          "a".repeat(40),
+          "--replacement-head",
+          "b".repeat(40),
+          "--confirmed-operator-recovery",
+        ],
+        ["123", "a".repeat(40), "--replacement-head", "b".repeat(40)],
+        [
+          "0123",
+          "a".repeat(40),
+          "--confirmed-operator-recovery",
+          "--replacement-head",
+          "b".repeat(40),
+        ],
       ]) {
         const result = spawnSync(
           join(fixture.canonical, "scripts", "pr"),
@@ -332,6 +360,30 @@ describe("scripts/pr wrappers", () => {
         expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(2);
         expect(result.stdout).toContain("Usage:");
         expect(result.stderr).not.toContain("only support PRs targeting main");
+      }
+    } finally {
+      fixture.cleanup();
+    }
+  });
+
+  itPosix("dispatches explicit replacement arguments through the same merge owner", () => {
+    const fixture = makeMismatchedWrapperRepo();
+    try {
+      writeFileSync(join(fixture.bin, "gh"), `#!/bin/sh\nprintf '{"baseRefName":"main"}\\n'\n`);
+      writeFileSync(
+        join(fixture.canonical, "scripts/pr-lib/merge.sh"),
+        `merge_run() { printf '<%s>\\n' "$@"; }\n`,
+      );
+      for (const replacement of [[], ["--replacement-head", "b".repeat(40)]]) {
+        const result = spawnSync(
+          join(fixture.canonical, "scripts/pr"),
+          ["merge-recover", "123", "a".repeat(40), "--confirmed-operator-recovery", ...replacement],
+          { cwd: fixture.canonical, encoding: "utf8", env: fixture.env },
+        );
+        expect(result.status, result.stdout + result.stderr).toBe(0);
+        expect(result.stdout).toBe(
+          `<123>\n<false>\n<${"a".repeat(40)}>\n<${replacement[1] ?? ""}>\n`,
+        );
       }
     } finally {
       fixture.cleanup();
