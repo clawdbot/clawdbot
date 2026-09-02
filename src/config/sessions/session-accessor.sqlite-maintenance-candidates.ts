@@ -6,7 +6,6 @@ import {
   sessionEntryMetadataJson,
 } from "./session-accessor.sqlite-status.js";
 import { normalizeStoreSessionKey } from "./store-entry.js";
-import { shouldPreserveMaintenanceEntry } from "./store-maintenance.js";
 import type { SessionEntry } from "./types.js";
 
 export function collectSqliteSessionMaintenanceBaseKeys(
@@ -36,6 +35,7 @@ export function readSessionMaintenanceKeyProjection(
     db
       .selectFrom("session_nodes")
       .select(["current_session_id", "parent_session_key", "session_key", "updated_at"])
+      .where("archived_at", "is", null)
       .orderBy("session_key", "asc"),
   )) {
     store[row.session_key] = {
@@ -76,19 +76,15 @@ export function readSessionMaintenanceAgeCandidates(params: {
 export function readSessionMaintenanceCapCandidates(params: {
   database: OpenClawAgentDatabase;
   excludedKeys: ReadonlySet<string>;
-  overflow: number;
-  preserveKeys: ReadonlySet<string> | undefined;
-  preserveRecentMs: number | null | undefined;
 }): Record<string, SessionEntry> {
   const db = getSessionKysely(params.database.db);
   const store: Record<string, SessionEntry> = {};
-  let eligible = 0;
   for (const row of iterateSqliteQuerySync(
     params.database.db,
     db
       .selectFrom("session_nodes")
       .select([sessionEntryMetadataJson, "current_session_id", "session_key", "updated_at"])
-      .orderBy("updated_at", "asc")
+      .where("archived_at", "is", null)
       // Stable cap ties previously inherited full-store session-key order.
       .orderBy("session_key", "asc"),
   )) {
@@ -100,19 +96,6 @@ export function readSessionMaintenanceCapCandidates(params: {
       continue;
     }
     store[row.session_key] = entry;
-    if (
-      !shouldPreserveMaintenanceEntry({
-        key: row.session_key,
-        entry,
-        preserveKeys: params.preserveKeys,
-        preserveRecentMs: params.preserveRecentMs,
-      })
-    ) {
-      eligible += 1;
-      if (eligible >= params.overflow) {
-        break;
-      }
-    }
   }
   return store;
 }

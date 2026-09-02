@@ -169,7 +169,7 @@ describe("Codex supervision actions", () => {
       }
       throw new Error(`unexpected command: ${command}`);
     });
-    const { runtime, createSessionEntry, patchSessionEntry } = createRuntime({
+    const { runtime, entries, createSessionEntry, patchSessionEntry } = createRuntime({
       nodes: [
         {
           nodeId: "devbox",
@@ -199,6 +199,13 @@ describe("Codex supervision actions", () => {
     const pendingList = await provider?.list({ agentId: "alpha", hostIds: ["node:devbox"] });
     expect(pendingList?.[0]?.sessions[0]?.sessionKey).toBeUndefined();
     await first?.afterConversationBound?.();
+    const adopted = entries.find((entry) => entry.sessionKey === first?.sessionKey)?.entry;
+    if (!adopted) {
+      throw new Error("expected adopted session entry");
+    }
+    adopted.archivedAt = 123;
+    adopted.archivedBy = { type: "human", id: "operator-1" };
+    adopted.archiveReason = "manual";
     runtimeConfig = {
       agents: { list: [{ id: "alpha" }, { id: "beta", default: true }] },
     } as OpenClawConfig;
@@ -262,6 +269,10 @@ describe("Codex supervision actions", () => {
     );
     // One finalize patch per continue; the restore rides afterConversationBound.
     expect(patchSessionEntry).toHaveBeenCalledTimes(2);
+    const restored = entries.find((entry) => entry.sessionKey === second?.sessionKey)?.entry;
+    expect(restored?.archivedAt).toBeUndefined();
+    expect(restored?.archivedBy).toBeUndefined();
+    expect(restored?.archiveReason).toBeUndefined();
 
     const listed = await provider?.list({ hostIds: ["node:devbox"] });
     expect(listed?.[0]?.sessions[0]).toMatchObject({

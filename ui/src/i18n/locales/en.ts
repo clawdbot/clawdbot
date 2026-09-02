@@ -996,6 +996,12 @@ export const en: TranslationMap & {
     createdBy: "Created by {name}",
     ownedBy: "Owned by {name}",
     archivedBy: "Archived by {name}",
+    archiveReason: "Archive reason",
+    archiveReasonManual: "Archived manually",
+    archiveReasonActiveSessionCap:
+      "Automatically archived because the active-session limit was reached",
+    archiveReasonStaleDashboard: "Automatically archived after dashboard inactivity",
+    archiveReasonRestartRecovery: "Archived when a replacement session was recovered",
     viewingNow: "viewing now",
     owners: "Owners",
     allOwners: "All owners",

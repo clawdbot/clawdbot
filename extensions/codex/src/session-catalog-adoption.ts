@@ -378,7 +378,7 @@ async function continueLocalCodexSessionInner(
         ) {
           throw changedError();
         }
-        return { archivedAt: undefined };
+        return { archivedAt: undefined, archivedBy: undefined, archiveReason: undefined };
       },
     });
     if (!restored) {
