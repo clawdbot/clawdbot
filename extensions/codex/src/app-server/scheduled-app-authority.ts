@@ -33,7 +33,7 @@ type CronRuntimeAuthority = NonNullable<EmbeddedRunAttemptParams["scheduledRunti
 type CodexAppToolApprovalMode = "auto" | "prompt" | "writes" | "approve";
 export type CurrentCodexScheduledAppPolicy = {
   config: Record<string, unknown>;
-  toolNamesByApp: ReadonlyMap<string, ReadonlySet<string>>;
+  toolsByApp: ReadonlyMap<string, ReadonlyMap<string, string | undefined>>;
 };
 
 export type ScheduledCodexAppCreatorAuth =
@@ -215,11 +215,11 @@ type CodexScheduledAppPolicyRequest = (
   params: Record<string, unknown>,
 ) => Promise<unknown>;
 
-async function readCodexScheduledAppToolNamesByApp(params: {
+async function readCodexScheduledAppToolsByApp(params: {
   request: CodexScheduledAppPolicyRequest;
   threadId?: string;
-}): Promise<Map<string, Set<string>>> {
-  const toolNamesByApp = new Map<string, Set<string>>();
+}): Promise<Map<string, Map<string, string | undefined>>> {
+  const toolsByApp = new Map<string, Map<string, string | undefined>>();
   const seenCursors = new Set<string>();
   let cursor: string | null | undefined;
   for (let page = 0; page < MCP_STATUS_MAX_PAGES; page += 1) {
@@ -242,9 +242,10 @@ async function readCodexScheduledAppToolNamesByApp(params: {
       for (const [toolName, tool] of Object.entries(status.tools)) {
         const connectorId = readCodexMcpToolConnectorId(tool);
         if (connectorId) {
-          const names = toolNamesByApp.get(connectorId) ?? new Set<string>();
-          names.add(toolName);
-          toolNamesByApp.set(connectorId, names);
+          const tools = toolsByApp.get(connectorId) ?? new Map<string, string | undefined>();
+          const title = asOptionalRecord(tool)?.title;
+          tools.set(toolName, typeof title === "string" ? title : undefined);
+          toolsByApp.set(connectorId, tools);
         }
       }
     }
@@ -257,7 +258,7 @@ async function readCodexScheduledAppToolNamesByApp(params: {
     }
     cursor = response.nextCursor;
     if (!cursor) {
-      return toolNamesByApp;
+      return toolsByApp;
     }
     if (seenCursors.has(cursor)) {
       throw new Error("Codex app connector inventory repeated its pagination cursor");
@@ -267,25 +268,25 @@ async function readCodexScheduledAppToolNamesByApp(params: {
   throw new Error("Codex app connector inventory exceeded its bounded page limit");
 }
 
-/** Reads the current account policy and connector-backed tool names under one caller deadline. */
+/** Reads current account policy and connector-backed tool metadata under one caller deadline. */
 export async function readCurrentCodexScheduledAppPolicy(params: {
   request: CodexScheduledAppPolicyRequest;
   configCwd?: string;
   threadId?: string;
 }): Promise<CurrentCodexScheduledAppPolicy> {
-  const [configResponse, toolNamesByApp] = await Promise.all([
+  const [configResponse, toolsByApp] = await Promise.all([
     params.request("config/read", {
       includeLayers: false,
       ...(params.configCwd ? { cwd: params.configCwd } : {}),
     }),
-    readCodexScheduledAppToolNamesByApp(params),
+    readCodexScheduledAppToolsByApp(params),
   ]);
   if (!isJsonObject(configResponse)) {
     throw new Error("Codex config/read returned an invalid scheduled app policy response");
   }
   return {
     config: isJsonObject(configResponse.config) ? configResponse.config : {},
-    toolNamesByApp,
+    toolsByApp,
   };
 }
 
@@ -293,10 +294,16 @@ function readCurrentToolPolicy(
   config: Record<string, unknown>,
   appId: string,
   toolName: string,
+  toolTitle: string | undefined,
   fallbackApprovalMode: CodexAppToolApprovalMode = "auto",
 ): { enabled: boolean; approvalMode: CodexAppToolApprovalMode } {
   const app = asOptionalRecord(asOptionalRecord(config.apps)?.[appId]);
-  const tool = asOptionalRecord(asOptionalRecord(app?.tools)?.[toolName]);
+  const tools = asOptionalRecord(app?.tools);
+  // Codex selects the full-name entry before the title entry, not each field
+  // independently. Preserve that precedence for both enablement and approval.
+  const tool = asOptionalRecord(
+    tools?.[toolName] ?? (toolTitle !== undefined ? tools?.[toolTitle] : undefined),
+  );
   const defaultToolsEnabled = app?.default_tools_enabled;
   return {
     enabled:
@@ -384,14 +391,14 @@ export async function captureScheduledCodexAppAuthority(params: {
     installed.apps.filter((app) => app.enabled && app.callable).map((app) => app.id),
   );
   const apps = Object.entries(params.policyContext.apps)
-    .filter(([id]) => callableIds.has(id) && currentPolicy.toolNamesByApp.has(id))
+    .filter(([id]) => callableIds.has(id) && currentPolicy.toolsByApp.has(id))
     .map(([id, policy]) => ({
       id,
       allowDestructiveActions: policy.allowDestructiveActions,
       allowOpenWorld: policy.allowOpenWorld !== false,
       destructiveApprovalMode: defaultApprovalMode(policy),
       tools: Object.fromEntries(
-        [...(currentPolicy.toolNamesByApp.get(id) ?? [])]
+        [...(currentPolicy.toolsByApp.get(id)?.keys() ?? [])]
           .toSorted()
           .map((toolName) => [
             toolName,
@@ -399,6 +406,7 @@ export async function captureScheduledCodexAppAuthority(params: {
               currentPolicy.config,
               id,
               toolName,
+              currentPolicy.toolsByApp.get(id)?.get(toolName),
               appApprovalCeiling(defaultApprovalMode(policy)),
             ).approvalMode,
           ]),
@@ -501,7 +509,7 @@ export function intersectCodexPluginThreadConfigWithScheduledAuthority(
   authority: EmbeddedRunAttemptParams["scheduledRuntimeAuthority"],
   currentPolicy: CurrentCodexScheduledAppPolicy = {
     config: {},
-    toolNamesByApp: new Map(),
+    toolsByApp: new Map(),
   },
 ): CodexPluginThreadConfig {
   const scheduled = parseScheduledCodexAppAuthority(authority);
@@ -511,7 +519,7 @@ export function intersectCodexPluginThreadConfigWithScheduledAuthority(
   const omittedAppIds = scheduled.apps
     .map((app) => app.id)
     .filter((id) => {
-      const currentTools = currentPolicy.toolNamesByApp.get(id);
+      const currentTools = currentPolicy.toolsByApp.get(id);
       return (
         !Object.hasOwn(config.policyContext.apps, id) || !currentTools || currentTools.size === 0
       );
@@ -562,14 +570,15 @@ export function intersectCodexPluginThreadConfigWithScheduledAuthority(
     const currentAppCeiling = appApprovalCeiling(defaultApprovalMode(currentApp));
     // Current inventory owns existence; captured modes only cap tools that
     // still exist (and tools added later within the already-authorized app).
-    const toolNames = currentPolicy.toolNamesByApp.get(appId) ?? new Set<string>();
+    const tools = currentPolicy.toolsByApp.get(appId) ?? new Map<string, string | undefined>();
     appPatch.tools = Object.fromEntries(
-      [...toolNames].toSorted().map((toolName) => {
+      [...tools.keys()].toSorted().map((toolName) => {
         const capturedMode = captured.tools[toolName] ?? storedAppCeiling;
         const currentToolPolicy = readCurrentToolPolicy(
           currentPolicy.config,
           appId,
           toolName,
+          tools.get(toolName),
           currentAppCeiling,
         );
         return [

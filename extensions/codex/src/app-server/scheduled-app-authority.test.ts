@@ -166,7 +166,7 @@ describe("scheduled Codex app authority", () => {
             {
               name: "codex_apps",
               tools: {
-                list: { _meta: { connector_id: "calendar" } },
+                list: { title: "List events", _meta: { connector_id: "calendar" } },
                 create: { _meta: { connector_id: "calendar" } },
                 unrelated: { _meta: { connector_id: "other" } },
               },
@@ -177,7 +177,7 @@ describe("scheduled Codex app authority", () => {
       }
       if (method === "config/read") {
         return {
-          config: { apps: { calendar: { tools: { list: { approval_mode: "writes" } } } } },
+          config: { apps: { calendar: { tools: { "List events": { approval_mode: "writes" } } } } },
         };
       }
       throw new Error(`unexpected method ${method}`);
@@ -386,7 +386,16 @@ describe("scheduled Codex app authority", () => {
             },
           },
         },
-        toolNamesByApp: new Map([["calendar", new Set(["list", "edit", "newly_added"])]]),
+        toolsByApp: new Map([
+          [
+            "calendar",
+            new Map<string, string | undefined>([
+              ["list", undefined],
+              ["edit", undefined],
+              ["newly_added", undefined],
+            ]),
+          ],
+        ]),
       },
     );
 
@@ -442,13 +451,45 @@ describe("scheduled Codex app authority", () => {
       },
       expectedEnabled: true,
     },
+    {
+      name: "title-keyed enablement over app default disablement",
+      appConfig: {
+        default_tools_enabled: false,
+        tools: { "Edit event": { enabled: true } },
+      },
+      expectedEnabled: true,
+    },
+    {
+      name: "title-keyed disablement over app default enablement",
+      appConfig: {
+        default_tools_enabled: true,
+        tools: { "Edit event": { enabled: false } },
+      },
+      expectedEnabled: false,
+    },
+    {
+      name: "full-name disablement over title-keyed enablement",
+      appConfig: {
+        default_tools_enabled: true,
+        tools: { edit: { enabled: false }, "Edit event": { enabled: true } },
+      },
+      expectedEnabled: false,
+    },
+    {
+      name: "full-name entry without enablement over title-keyed enablement",
+      appConfig: {
+        default_tools_enabled: false,
+        tools: { edit: { approval_mode: "prompt" }, "Edit event": { enabled: true } },
+      },
+      expectedEnabled: false,
+    },
   ])("preserves $name from the current Codex config", ({ appConfig, expectedEnabled }) => {
     const intersected = intersectCodexPluginThreadConfigWithScheduledAuthority(
       threadConfig(),
       authority(),
       {
         config: { apps: { calendar: appConfig } },
-        toolNamesByApp: new Map([["calendar", new Set(["edit"])]]),
+        toolsByApp: new Map([["calendar", new Map([["edit", "Edit event"]])]]),
       },
     );
 
@@ -469,7 +510,15 @@ describe("scheduled Codex app authority", () => {
       authority(),
       {
         config: {},
-        toolNamesByApp: new Map([["calendar", new Set(["list", "edit"])]]),
+        toolsByApp: new Map([
+          [
+            "calendar",
+            new Map<string, string | undefined>([
+              ["list", undefined],
+              ["edit", undefined],
+            ]),
+          ],
+        ]),
       },
     );
     const narrowed = intersectCodexPluginThreadConfigWithScheduledAuthority(
@@ -477,7 +526,9 @@ describe("scheduled Codex app authority", () => {
       authority(),
       {
         config: {},
-        toolNamesByApp: new Map([["calendar", new Set(["list"])]]),
+        toolsByApp: new Map([
+          ["calendar", new Map<string, string | undefined>([["list", undefined]])],
+        ]),
       },
     );
 
@@ -495,7 +546,7 @@ describe("scheduled Codex app authority", () => {
     expect(() =>
       intersectCodexPluginThreadConfigWithScheduledAuthority(threadConfig(), authority(), {
         config: {},
-        toolNamesByApp: new Map(),
+        toolsByApp: new Map(),
       }),
     ).toThrow("Scheduled Codex apps are unavailable under the current policy or account: calendar");
   });
@@ -531,7 +582,9 @@ describe("scheduled Codex app authority", () => {
       authority(),
       {
         config: {},
-        toolNamesByApp: new Map([["calendar", new Set(["edit"])]]),
+        toolsByApp: new Map([
+          ["calendar", new Map<string, string | undefined>([["edit", undefined]])],
+        ]),
       },
     );
 
