@@ -49,11 +49,15 @@ async function raceWithSetupAbort<T>(
   return Promise.race([
     promise,
     new Promise<never>((_, reject) => {
+      const rejectWithAbortReason = () => {
+        const reason = signal.reason;
+        reject(reason instanceof Error ? reason : new Error(String(reason)));
+      };
       if (signal.aborted) {
-        reject(signal.reason);
+        rejectWithAbortReason();
         return;
       }
-      signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+      signal.addEventListener("abort", rejectWithAbortReason, { once: true });
     }),
   ]);
 }
@@ -83,10 +87,12 @@ export async function runHeartbeatOnce(opts: HeartbeatRunOptions): Promise<Heart
       prepareHeartbeatRunStage(wake, setupWatchdog.signal),
     );
     if (stageResult.kind === "skipped") {
+      setupWatchdog.disarm();
       return { status: "skipped", reason: stageResult.reason };
     }
     prepared = stageResult;
   } catch (err) {
+    setupWatchdog.disarm();
     const reason = formatErrorMessage(err);
     emitHeartbeatEvent({
       status: "failed",
@@ -100,6 +106,7 @@ export async function runHeartbeatOnce(opts: HeartbeatRunOptions): Promise<Heart
   const { outboundPolicySessionKey, hasRelayableExecCompletion } = prepared;
 
   if (!visibility.showAlerts && !visibility.showOk && !visibility.useIndicator) {
+    setupWatchdog.disarm();
     emitHeartbeatEvent({
       status: "skipped",
       reason: "alerts-disabled",
