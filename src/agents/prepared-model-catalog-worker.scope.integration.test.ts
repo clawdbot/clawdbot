@@ -138,6 +138,11 @@ describe("prepared model catalog worker plugin scope", () => {
       readPrepared: async () => await projectSnapshot(false),
     });
     const respond = vi.fn();
+    const context = Object.assign({} as GatewayRequestContext, {
+      getRuntimeConfig: () => config,
+      loadGatewayModelCatalogSnapshot,
+      logGateway: { debug: vi.fn(), warn: vi.fn() },
+    });
     await expectDefined(
       modelsHandlers["models.list"],
       'modelsHandlers["models.list"] test invariant',
@@ -147,11 +152,7 @@ describe("prepared model catalog worker plugin scope", () => {
       respond: respond as RespondFn,
       client: null,
       isWebchatConnect: () => false,
-      context: {
-        getRuntimeConfig: () => config,
-        loadGatewayModelCatalogSnapshot,
-        logGateway: { debug: vi.fn(), warn: vi.fn() },
-      } as GatewayRequestContext,
+      context,
     });
 
     expect(respond).toHaveBeenCalledWith(
