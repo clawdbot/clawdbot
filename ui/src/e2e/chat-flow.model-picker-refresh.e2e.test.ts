@@ -92,7 +92,7 @@ suite.define(() => {
         .toBe("openai/gpt-5.6-terra");
       await screenshot(page, "06-global-target-after-touch-selection.png");
 
-      await gateway.setMethodResponse("sessions.list", {
+      await gateway.setSessionsListResponse({
         ts: 2,
         path: "",
         count: 1,

@@ -571,6 +571,8 @@ export function setSharedControlUiE2eServerBaseUrl(baseUrl: string | null): void
   sharedControlUiE2eServerBaseUrl = baseUrl;
 }
 
+type MockSessionsListResponse = { sessions: unknown[]; [field: string]: unknown };
+
 export type MockGatewayControls = {
   closeLatest: (code?: number, reason?: string) => Promise<void>;
   deliverLatest: (frame: unknown) => Promise<void>;
@@ -592,7 +594,7 @@ export type MockGatewayControls = {
   setOperatorScopes: (scopes: string[]) => Promise<void>;
   setHistoryMessages: (messages: unknown[]) => Promise<void>;
   setMethodResponse: (method: string, payload: unknown) => Promise<void>;
-  setSessionsListResponse: (payload: { sessions: unknown[] }) => Promise<void>;
+  setSessionsListResponse: (payload: MockSessionsListResponse) => Promise<void>;
   setSessionSharingPolicy: (policy: {
     allowedSessionVisibilities: Array<"shared" | "read-only" | "suggest" | "draft">;
     hasMultipleSessionSharingIdentities: boolean;
@@ -1083,7 +1085,7 @@ export type ControlUiMockGateway = {
   setOperatorScopes: (scopes: string[]) => void;
   setHistoryMessages: (messages: unknown[]) => void;
   setMethodResponse: (method: string, payload: unknown) => void;
-  setSessionsListResponse: (payload: { sessions: unknown[] }) => void;
+  setSessionsListResponse: (payload: MockSessionsListResponse) => void;
   setRequestHandler: (method: string, handler: ControlUiMockRequestHandler) => void;
   setSessionSharingPolicy: (policy: {
     allowedSessionVisibilities: Array<"shared" | "read-only" | "suggest" | "draft">;

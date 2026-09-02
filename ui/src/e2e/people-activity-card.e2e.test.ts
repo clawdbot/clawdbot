@@ -176,10 +176,7 @@ suite.define(() => {
         expect(initialShift).not.toBe("");
         const listRequests = (await gateway.getRequests("sessions.list")).length;
         const updatedScenario = scenario(updatedRecentLabel);
-        await gateway.setMethodResponse(
-          "sessions.list",
-          updatedScenario.methodResponses["sessions.list"],
-        );
+        await gateway.setSessionsListResponse(updatedScenario.methodResponses["sessions.list"]);
         await gateway.emitGatewayEvent("sessions.changed", {
           reason: "update",
           sessionKey: "agent:main:card-recent",
@@ -246,8 +243,7 @@ suite.define(() => {
         );
         const focusedListRequests = (await gateway.getRequests("sessions.list")).length;
         const focusUpdatedScenario = scenario(focusUpdatedRecentLabel);
-        await gateway.setMethodResponse(
-          "sessions.list",
+        await gateway.setSessionsListResponse(
           focusUpdatedScenario.methodResponses["sessions.list"],
         );
         await gateway.emitGatewayEvent("sessions.changed", {

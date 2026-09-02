@@ -155,7 +155,7 @@ async function installActiveRunSnapshot(
   const snapshot = activeRunSnapshot(runId, prompt, streamText, opts);
   await gateway.setMethodResponse("chat.startup", snapshot);
   await gateway.setMethodResponse("chat.history", snapshot);
-  await gateway.setMethodResponse("sessions.list", {
+  await gateway.setSessionsListResponse({
     count: 1,
     defaults: { contextTokens: null, model: "gpt-5.5", modelProvider: "openai" },
     path: "",
@@ -431,7 +431,7 @@ suite.define(() => {
         });
         await gateway.setMethodResponse("chat.startup", history);
         await gateway.setMethodResponse("chat.history", history);
-        await gateway.setMethodResponse("sessions.list", {
+        await gateway.setSessionsListResponse({
           count: 1,
           sessions: [sessionInfo],
           defaults: {},
@@ -490,7 +490,7 @@ suite.define(() => {
         await gateway.setHistoryMessages(completeHistory.messages);
         await gateway.setMethodResponse("chat.startup", completeHistory);
         await gateway.setMethodResponse("chat.history", completeHistory);
-        await gateway.setMethodResponse("sessions.list", {
+        await gateway.setSessionsListResponse({
           count: 1,
           sessions: [replySessionInfo],
           defaults: {},

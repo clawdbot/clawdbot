@@ -482,7 +482,7 @@ suite.define(() => {
         label: string,
         includeNeutral = false,
       ) => {
-        await gateway.setMethodResponse("sessions.list", {
+        await gateway.setSessionsListResponse({
           count: includeNeutral ? 2 : 1,
           path: "",
           defaults: SESSION_LIST_DEFAULTS,
@@ -585,7 +585,7 @@ suite.define(() => {
       const promptBubbles = page.locator(".chat-group.user .chat-bubble", { hasText: message });
       await expect.poll(() => promptBubbles.count()).toBe(1);
 
-      await gateway.setMethodResponse("sessions.list", {
+      await gateway.setSessionsListResponse({
         count: 4,
         path: "",
         defaults: {},
