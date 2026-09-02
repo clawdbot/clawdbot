@@ -2,7 +2,10 @@ import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import type { ModelCatalogSnapshot } from "../model-catalog.types.js";
-import { augmentModelCatalogWithAgentHarness } from "./model-catalog.js";
+import {
+  augmentModelCatalogWithAgentHarnesses,
+  augmentPreparedModelCatalogWithAgentHarnesses,
+} from "./model-catalog.js";
 
 const cfg = {
   agents: {
@@ -94,6 +97,76 @@ function registryWithCatalog(loadModelCatalog: () => Promise<readonly never[]>) 
 }
 
 describe("agent harness model catalog", () => {
+  it("hydrates a fallback when a different primary harness fails", async () => {
+    const loadPrimaryModelCatalog = vi.fn(async () => {
+      throw new Error("primary model catalog unavailable");
+    });
+    const loadModelCatalog = vi.fn(async () => [
+      {
+        provider: "openai",
+        id: "gpt-5.6-sol",
+        name: "GPT-5.6 Sol (account)",
+        nativeRuntime: "codex",
+        reasoning: true,
+        compat: {
+          supportsReasoningEffort: true,
+          supportedReasoningEfforts: ["low", "medium", "high", "xhigh", "max", "ultra"],
+        },
+      },
+    ]);
+    const pluginRegistry = registryWithCatalog(loadModelCatalog as never);
+    pluginRegistry.agentHarnesses.unshift({
+      pluginId: "claude-cli",
+      source: "test",
+      harness: {
+        id: "claude-cli",
+        label: "Claude CLI",
+        supports: () => ({ supported: true }),
+        runAttempt: vi.fn(),
+        loadModelCatalog: loadPrimaryModelCatalog,
+      } as never,
+    });
+    const mixedRuntimeConfig = {
+      agents: {
+        defaults: {
+          model: {
+            primary: "anthropic/claude-opus-5",
+            fallbacks: ["openai/gpt-5.6-sol"],
+          },
+          models: {
+            "anthropic/claude-opus-5": { agentRuntime: { id: "claude-cli" } },
+            "openai/gpt-5.6-sol": {},
+          },
+        },
+        list: [{ id: "main", default: true }],
+      },
+    } as OpenClawConfig;
+
+    const result = await augmentPreparedModelCatalogWithAgentHarnesses({
+      input: {
+        config: mixedRuntimeConfig,
+        agentId: "main",
+        agentDir: "/tmp/main-agent",
+        workspaceDir: "/tmp/workspace",
+        runtimePluginSelections: [
+          { provider: "anthropic", modelId: "claude-opus-5", agentId: "main" },
+          { provider: "openai", modelId: "gpt-5.6-sol", agentId: "main" },
+        ],
+      },
+      snapshot,
+      pluginRegistry,
+    });
+
+    expect(loadPrimaryModelCatalog).toHaveBeenCalledOnce();
+    expect(loadModelCatalog).toHaveBeenCalledOnce();
+    expect(result.entries[0]).toMatchObject({
+      id: "gpt-5.6-sol",
+      compat: {
+        supportedReasoningEfforts: ["low", "medium", "high", "xhigh", "max", "ultra"],
+      },
+    });
+  });
+
   it.each([false, true])(
     "does not donate host transport or capabilities to native-owned rows (host sibling: %s)",
     async (includeHostRow) => {
@@ -105,13 +178,12 @@ describe("agent harness model catalog", () => {
         reasoning: true,
       };
       const host = { provider: "openai", id: "gpt-5.6-terra", name: "Host model" };
-      const result = await augmentModelCatalogWithAgentHarness({
+      const result = await augmentModelCatalogWithAgentHarnesses({
         cfg,
         agentId: "main",
         agentDir: "/tmp/main-agent",
         workspaceDir: "/tmp/workspace",
-        defaultProvider: "openai",
-        defaultModel: "openai/gpt-5.6-sol",
+        modelSelections: [{ provider: "openai", modelId: "gpt-5.6-sol", agentId: "main" }],
         snapshot,
         pluginRegistry: registryWithCatalog(
           async () => (includeHostRow ? [native, host] : [native]) as never,
@@ -169,13 +241,12 @@ describe("agent harness model catalog", () => {
       },
     ]);
 
-    const result = await augmentModelCatalogWithAgentHarness({
+    const result = await augmentModelCatalogWithAgentHarnesses({
       cfg,
       agentId: "main",
       agentDir: "/tmp/main-agent",
       workspaceDir: "/tmp/workspace",
-      defaultProvider: "anthropic",
-      defaultModel: "openai/gpt-5.6-sol",
+      modelSelections: [{ provider: "openai", modelId: "gpt-5.6-sol", agentId: "main" }],
       snapshot,
       pluginRegistry: registryWithCatalog(loadModelCatalog as never),
     });
@@ -217,13 +288,12 @@ describe("agent harness model catalog", () => {
 
   it("keeps prepared rows when harness discovery fails", async () => {
     const onError = vi.fn();
-    const result = await augmentModelCatalogWithAgentHarness({
+    const result = await augmentModelCatalogWithAgentHarnesses({
       cfg,
       agentId: "main",
       agentDir: "/tmp/main-agent",
       workspaceDir: "/tmp/workspace",
-      defaultProvider: "anthropic",
-      defaultModel: "openai/gpt-5.6-sol",
+      modelSelections: [{ provider: "openai", modelId: "gpt-5.6-sol", agentId: "main" }],
       snapshot,
       pluginRegistry: registryWithCatalog(async () => {
         throw new Error("model/list unavailable");

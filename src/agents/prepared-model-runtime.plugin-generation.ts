@@ -3,7 +3,7 @@ import {
   registryContainsRuntimePluginIds,
 } from "../plugins/active-runtime-registry.js";
 import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
-import { augmentPreparedModelCatalogWithAgentHarness } from "./harness/model-catalog.js";
+import { augmentPreparedModelCatalogWithAgentHarnesses } from "./harness/model-catalog.js";
 import {
   resolveAgentRuntimePluginLoadPlan,
   resolveAgentRuntimePluginSelections,
@@ -136,7 +136,7 @@ export async function buildPreparedPluginModelCatalog(params: {
       ...(input.workspaceDir ? { workspaceDir: input.workspaceDir } : {}),
     });
     return params.catalogMode === "live"
-      ? await augmentPreparedModelCatalogWithAgentHarness({
+      ? await augmentPreparedModelCatalogWithAgentHarnesses({
           input,
           snapshot,
           pluginRegistry,

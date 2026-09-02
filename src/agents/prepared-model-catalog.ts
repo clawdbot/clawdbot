@@ -380,8 +380,8 @@ export async function loadProviderScopedThinkingCatalog(params: {
   };
   const augmentHarnessCatalog = async (snapshot: ModelCatalogSnapshot) => {
     const agentId = params.agentId ?? resolveAmbientOwnerAgentId(params.config);
-    const { augmentModelCatalogWithAgentHarness } = await import("./harness/model-catalog.js");
-    const augmented = await augmentModelCatalogWithAgentHarness({
+    const { augmentModelCatalogWithAgentHarnesses } = await import("./harness/model-catalog.js");
+    const augmented = await augmentModelCatalogWithAgentHarnesses({
       cfg: params.config,
       agentId,
       agentDir: params.agentDir ?? resolveAgentDir(params.config, agentId),
@@ -389,8 +389,7 @@ export async function loadProviderScopedThinkingCatalog(params: {
         params.workspaceDir ??
         resolveAgentWorkspaceDir(params.config, agentId) ??
         resolveDefaultAgentWorkspaceDir(),
-      defaultProvider: params.provider,
-      defaultModel: `${params.provider}/${params.model}`,
+      modelSelections: [{ provider: params.provider, modelId: params.model, agentId }],
       snapshot,
     });
     const entries = normalizeThinkingCatalogProviders(augmented.entries);
