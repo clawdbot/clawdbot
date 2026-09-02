@@ -548,16 +548,16 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
 
       // Two complete, compatible configs share setup without changing either
       // process envelope. Only Blacksmith requests capacity for overlapping plans.
-      const fixtureConfigs = [
+      const fixtureConfigs = new Set([
         "test/vitest/vitest.hooks.config.ts",
         "test/vitest/vitest.secrets.config.ts",
-      ];
+      ]);
       const originalShards = fullSuiteVitestShards.slice();
       try {
         const fixtureShards = originalShards
           .map((shard) => ({
             ...shard,
-            projects: shard.projects.filter((config) => fixtureConfigs.includes(config)),
+            projects: shard.projects.filter((config) => fixtureConfigs.has(config)),
           }))
           .filter((shard) => shard.projects.length > 0);
         fullSuiteVitestShards.splice(0, fullSuiteVitestShards.length, ...fixtureShards);
@@ -978,7 +978,14 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
         expect(shard.requiresDist).toBe(false);
       } else {
         expect(shard.planConcurrency).toBe(1);
-        expect(shard.runner).toBe(shard.groups[0]?.runner);
+        const blacksmithTooling =
+          pullRequestCompact.includes(shard) &&
+          shard.groups.some((group) =>
+            group.configs.includes("test/vitest/vitest.tooling.config.ts"),
+          );
+        expect(shard.runner).toBe(
+          blacksmithTooling ? EXTRA_LARGE_NODE_TEST_RUNNER : shard.groups[0]?.runner,
+        );
       }
     }
     expect(
@@ -1683,7 +1690,9 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       );
       // This fixture runs the real full-build guard, which needs more than the
       // available heap observed inside a small runner's retained tooling graph.
-      expect(owner?.runner, runnerBackend).toBe(DEFAULT_NODE_TEST_RUNNER);
+      expect(owner?.runner, runnerBackend).toBe(
+        runnerBackend === "blacksmith" ? EXTRA_LARGE_NODE_TEST_RUNNER : DEFAULT_NODE_TEST_RUNNER,
+      );
       expect(
         jobs
           .flatMap((job) => job.groups)

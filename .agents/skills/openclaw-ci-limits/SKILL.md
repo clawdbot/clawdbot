@@ -254,6 +254,13 @@ These are intentionally guarded by `test/scripts/ci-workflow-guards.test.ts`:
   elapsed time, peak memory and cleanup still need native proof.
 - The whole Blacksmith agent-support group requests `blacksmith-32vcpu-ubuntu-2404`.
   Its file inventory and resource-derived worker policy remain unchanged.
+- Numbered Blacksmith tooling bins request the same 32-vCPU class after packing.
+  Keep their logical classes, names, file inventories, serial project/file
+  execution and two-worker pins. This adds no jobs and does not promote hosted
+  or hybrid tooling. The native two-CPU/8-GB tails require a larger-host timing
+  comparison; capacity alone is not a measured speedup.
+- The Docker seed job requests `blacksmith-32vcpu-ubuntu-2404`; its weighted
+  scheduler and serial declaration compiler policy stay unchanged.
 - `build-artifacts` on `blacksmith-32vcpu-ubuntu-2404`.
 - CPU-heavy test-type, core test-type stripe, runtime-topology, and npm preflight
   jobs request `blacksmith-32vcpu-ubuntu-2404`. The 2026-09-01 x64 probe

@@ -2713,12 +2713,20 @@ function createCompactNodeTestShardBundles(
         !pretestBuildMode
           ? 2
           : 1;
+      // Tooling's nested compilers need host capacity while keeping serial isolation.
+      // Promote only the emitted runner so packing, names and timing keys stay stable.
+      const capacityRunner =
+        planConcurrency === 2 ||
+        ((options.runnerBackend ?? "blacksmith") === "blacksmith" &&
+          bin.some((group) => group.configs.includes(TOOLING_CONFIG)))
+          ? EXTRA_LARGE_NODE_TEST_RUNNER
+          : runner;
       compactJobs.push({
         checkName,
         groups: bin,
         ...(pretestBuildMode ? { pretestBuildMode } : {}),
         requiresDist: firstGroup.requiresDist,
-        runner: planConcurrency === 2 ? EXTRA_LARGE_NODE_TEST_RUNNER : runner,
+        runner: capacityRunner,
         shardName: `compact-${runnerClass}${distSuffix}-${index + 1}`,
         // Whole-config groups run entire suites; keep their generous timeout.
         ...(bin.some((group) => !group.includePatterns)

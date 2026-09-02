@@ -12,6 +12,7 @@ import {
 } from "node:fs";
 import os, { tmpdir } from "node:os";
 import path from "node:path";
+import { setImmediate as nextTurn } from "node:timers/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   buildChildEnv,
@@ -23,6 +24,7 @@ import {
   runShardPlans,
 } from "../../scripts/ci-run-node-test-shard.mts";
 import { refitTestTimings } from "../../scripts/lib/ci-test-timings-refit.mts";
+import { createDeferred } from "../helpers/promise.js";
 
 const scratchDirs: string[] = [];
 
@@ -546,8 +548,8 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
     "joins admitted plans and stops scheduling after a %s failure",
     async (failure) => {
       const started: string[] = [];
-      const held = Promise.withResolvers<void>();
-      const failed = Promise.withResolvers<void>();
+      const held = createDeferred();
+      const failed = createDeferred();
       const children: Promise<number>[] = [];
       const error = new Error("second child rejected");
       let settled = false;
@@ -586,19 +588,19 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
       )
         .then(
           (exitCode) => ({ exitCode, error: undefined }),
-          (error: unknown) => ({ exitCode: undefined, error }),
+          (cause: unknown) => ({ exitCode: undefined, error: cause }),
         )
         .finally(() => {
           settled = true;
         });
       try {
         await failed.promise;
-        await new Promise<void>((resolve) => setImmediate(resolve));
+        await nextTurn();
         expect(settled).toBe(false);
         expect(started).toEqual(["a", "b"]);
       } finally {
         held.resolve();
-        await new Promise<void>((resolve) => setImmediate(resolve));
+        await nextTurn();
         await Promise.allSettled(children);
         await pending;
       }
