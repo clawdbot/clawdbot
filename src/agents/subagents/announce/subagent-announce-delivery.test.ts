@@ -2861,8 +2861,21 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     expect(sendMessage).not.toHaveBeenCalled();
   });
 
-  it("does not credit stale thread completions without a delivery receipt", async () => {
-    const callGateway = createPayloadGatewayMock();
+  it.each([
+    { name: "a missing receipt", deliveryStatus: undefined },
+    {
+      name: "no-visible-payload suppression",
+      deliveryStatus: {
+        requested: true,
+        attempted: false,
+        status: "suppressed",
+        succeeded: true,
+        reason: "no_visible_payload",
+        resultCount: 0,
+      },
+    },
+  ])("does not credit stale thread completions after $name", async ({ deliveryStatus }) => {
+    const callGateway = createGatewayMock({ result: { payloads: [], deliveryStatus } });
     const sendMessage = createSendMessageMock();
     const queueEmbeddedAgentMessageWithOutcome = createQueueOutcomeSequenceMock([
       "transcript_commit_wait_unsupported",
@@ -4630,13 +4643,29 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
         error: "cancelled_by_message_sending_hook",
       },
     },
+    {
+      name: "channel-transformed",
+      payloads: [],
+      deliveryStatus: {
+        status: "suppressed",
+        attempted: false,
+        resultCount: 0,
+        reason: "channel_transform",
+      },
+      expected: {
+        delivered: false,
+        disposition: "intentional_non_delivery",
+        reason: "delivery_suppressed",
+        error: "channel_transform",
+      },
+    },
     { name: "missing", deliveryStatus: undefined },
     { name: "empty", deliveryStatus: { status: "sent", resultCount: 0 } },
   ])(
     "does not credit a $name automatic completion receipt",
-    async ({ deliveryStatus, expected }) => {
+    async ({ deliveryStatus, expected, payloads }) => {
       const callGateway = createGatewayMock({
-        result: { payloads: [{ text: "Generated completion" }], deliveryStatus },
+        result: { payloads: payloads ?? [{ text: "Generated completion" }], deliveryStatus },
       });
       const queueEmbeddedAgentMessageWithOutcome = createQueueOutcomeMock(false);
       const result = await deliverSlackThreadAnnouncement({

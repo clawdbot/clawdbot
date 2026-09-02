@@ -166,10 +166,8 @@ export async function sendSubagentAnnounceDirectly(params: {
     params.requesterAgentId,
   );
   try {
-    // Merge completionDirectOrigin with directOrigin so that missing fields
-    // (channel, to, accountId) fall back to the originating session's
-    // lastChannel / lastTo. Without this, a completion origin that carries a
-    // channel but not a `to` would prevent external delivery.
+    // A partial completion origin must retain the target from the requester's
+    // recorded delivery context or the generated reply becomes undeliverable.
     const { directOrigin, requesterSessionOrigin, effectiveDirectOrigin } =
       resolveCompletionDeliveryOrigins(params);
     const sessionOnlyOrigin = effectiveDirectOrigin?.channel
@@ -527,7 +525,10 @@ export async function sendSubagentAnnounceDirectly(params: {
       shouldDeliverAgentFinal &&
       (params.expectsCompletionMessage || params.requireVisibleReply) &&
       !hasMessagingToolDelivery &&
-      terminalDelivery?.status === "suppressed"
+      terminalDelivery?.status === "suppressed" &&
+      // Empty model output still owes the requester a completion via the existing
+      // fallback below; unlike a hook or channel veto, it is not delivery policy.
+      directAnnounceResult?.deliveryStatus?.reason !== "no_visible_payload"
     ) {
       const reason = directAnnounceResult?.deliveryStatus?.reason;
       return {

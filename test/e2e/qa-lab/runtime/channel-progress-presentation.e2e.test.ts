@@ -444,6 +444,40 @@ describe("channel progress presentation through an isolated Gateway", () => {
     let releaseRequester: (() => void) | undefined;
     let requesterHeld = false;
     const slowRequesterCases = new Set<string>();
+    const caseNames = ["visible", "restart"] as const;
+    const settledRequesterCases: string[] = [];
+    const observerFailures = () => {
+      let attempts = 0;
+      return gateway
+        .logs()
+        .split("\n")
+        .flatMap((line) => {
+          try {
+            const value = asRecord(JSON.parse(line));
+            const message = readStringValue(value.message) ?? "";
+            if (
+              value.subsystem === "provider-transport-fetch" &&
+              message.startsWith("[model-fetch] start ") &&
+              message.includes("model=observer-failure-fixture ")
+            ) {
+              attempts += 1;
+            }
+            if (message === "session observer disabled after consecutive failures") {
+              const failure = {
+                message,
+                error: value.error,
+                runId: value.runId,
+                attempts,
+              };
+              attempts = 0;
+              return [failure];
+            }
+            return [];
+          } catch {
+            return [];
+          }
+        });
+    };
     // The shared terminal fixture intentionally requests a direct fallback.
     // Supply a visible model final over HTTP to exercise automatic-final receipts.
     const proxy = createServer((request, response) => {
@@ -563,6 +597,20 @@ describe("channel progress presentation through an isolated Gateway", () => {
           // A deliberately slow provider crosses the observer's 30s final-digest
           // threshold; this is scenario input, not a wait for eventual delivery.
           await sleep(31_000);
+        }
+        const workerCase = /Subagent terminal reply QA worker:\s*(visible|restart)/i
+          .exec(currentText)?.[1]
+          ?.toLowerCase();
+        if (workerCase) {
+          // Child completion starts another requester run. Keep it pending until
+          // the current observer records its outcome, or that run is superseded.
+          await waitForFact(
+            () =>
+              observerFailures().length ===
+              caseNames.findIndex((caseName) => caseName === workerCase) * 2 + 1,
+            `${workerCase} requester observer settled before child completion`,
+          );
+          settledRequesterCases.push(workerCase);
         }
         const upstream = await fetch(new URL(request.url ?? "/", provider.baseUrl), {
           method: request.method,
@@ -707,7 +755,7 @@ describe("channel progress presentation through an isolated Gateway", () => {
     cleanups.push(() => disconnectGatewayClient(client));
     await client.request("sessions.observer.visibility", { visible: true });
     let threadId: string | undefined;
-    for (const caseName of ["visible", "restart"]) {
+    for (const [caseIndex, caseName] of caseNames.entries()) {
       const inbound = adapter.createInbound({
         input: {
           conversation: { id: "C12345678", kind: "group" },
@@ -789,7 +837,14 @@ describe("channel progress presentation through an isolated Gateway", () => {
           "cancelled_by_message_sending_hook",
         );
       }
+      // Delivery settlement does not join the final observer digest. Wait before
+      // admitting another turn on this session so its failure cannot be dropped.
+      await waitForFact(
+        () => observerFailures().length === (caseIndex + 1) * 2,
+        `${caseName} completion observer settled before the next Slack turn`,
+      );
     }
+    expect(settledRequesterCases).toEqual(caseNames);
     expect(tasks[1]?.sessionKey).toBe(tasks[0]?.sessionKey);
     expect(completions.filter((marker) => marker === cancelledMarker)).toHaveLength(1);
     expect(
@@ -800,45 +855,7 @@ describe("channel progress presentation through an isolated Gateway", () => {
         (readStringValue(message.text) ?? "").includes(deliveredMarker),
       ),
     ).toHaveLength(1);
-    const observerFailures = () => {
-      let attempts = 0;
-      return gateway
-        .logs()
-        .split("\n")
-        .flatMap((line) => {
-          try {
-            const value = asRecord(JSON.parse(line));
-            const message = readStringValue(value.message) ?? "";
-            if (
-              value.subsystem === "provider-transport-fetch" &&
-              message.startsWith("[model-fetch] start ") &&
-              message.includes("model=observer-failure-fixture ")
-            ) {
-              attempts += 1;
-            }
-            if (message === "session observer disabled after consecutive failures") {
-              const failure = {
-                message,
-                error: value.error,
-                runId: value.runId,
-                attempts,
-              };
-              attempts = 0;
-              return [failure];
-            }
-            return [];
-          } catch {
-            return [];
-          }
-        });
-    };
-    // Both slow requester turns and each completion preamble qualify for a
-    // final digest. Task delivery settles before these observer runs finish.
-    const observerRunCount = slowRequesterCases.size + completions.length;
-    await waitForFact(
-      () => new Set(observerFailures().map((failure) => failure.runId)).size === observerRunCount,
-      "recorded failures for every requester and completion observer run",
-    );
+    expect(new Set(observerFailures().map((failure) => failure.runId)).size).toBe(4);
     // Isolated completion rejects an error stop reason before observer logging;
     // its bounded owner error, not the provider's raw body, is the recorded cause.
     expect(
