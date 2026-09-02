@@ -4,7 +4,12 @@ import path from "node:path";
 // End-to-end subscription tests cover usage, lifecycle, tool logging,
 // messaging/media side effects, and replay-state behavior for embedded runs.
 import { expectDefined } from "@openclaw/normalization-core";
-import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
+import {
+  AssistantMessageEventStream,
+  type AssistantMessage,
+  type Message,
+  type Model,
+} from "openclaw/plugin-sdk/llm";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { HEARTBEAT_RESPONSE_TOOL_NAME } from "../auto-reply/heartbeat-tool-response.js";
@@ -26,6 +31,7 @@ import {
   createOpenAiResponsesTextBlock,
   createOpenAiResponsesTextEvent,
 } from "./embedded-agent-subscribe.openai-responses.test-helpers.js";
+import { runAgentLoop, type AgentEvent } from "./runtime/index.js";
 import { SessionManager } from "./sessions/session-manager.js";
 import { recordSessionModelUsage } from "./sessions/session-model-usage.js";
 import { markCoreTtsToolResult } from "./tools/tts-tool-result-provenance.js";
@@ -37,6 +43,116 @@ const retryingCompactionEnd = () =>
     reason: "overflow",
     outcome: { status: "completed", tokensBefore: 100, tokensAfter: 50, willRetry: true },
   }) as const;
+
+type StreamUsage = AssistantMessage["usage"] & { reasoningTokens?: number };
+type UsageCall = {
+  usage: StreamUsage;
+  streamedUsage?: StreamUsage;
+  text?: string;
+  stopReason?: "stop" | "error" | "aborted";
+};
+
+function makeUsage(
+  values: Partial<Omit<StreamUsage, "cost">> & { cost?: number; billed?: boolean } = {},
+): StreamUsage {
+  const { cost = 0, billed, ...tokens } = values;
+  const usage = { ...makeZeroUsageSnapshot(), ...tokens };
+  usage.totalTokens =
+    tokens.totalTokens ?? usage.input + usage.output + usage.cacheRead + usage.cacheWrite;
+  usage.cost = {
+    ...usage.cost,
+    total: cost,
+    ...(billed ? { totalOrigin: "provider-billed" } : {}),
+  };
+  return usage;
+}
+
+async function runUsageCalls(
+  { emit, subscription }: ReturnType<typeof createSubscribedSessionHarness>,
+  calls: UsageCall[],
+  onEvent?: (event: AgentEvent) => void,
+): Promise<AssistantMessage[]> {
+  const model: Model = {
+    id: "usage-model",
+    name: "Usage Model",
+    api: "openai-completions",
+    provider: "test-provider",
+    baseUrl: "https://example.test",
+    reasoning: false,
+    input: ["text"],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 100_000,
+    maxTokens: 8_000,
+  };
+  const completed: AssistantMessage[] = [];
+  let callIndex = 0;
+  await runAgentLoop(
+    [{ role: "user", content: "First request.", timestamp: 0 }],
+    { systemPrompt: "", messages: [] },
+    {
+      model,
+      convertToLlm: (messages) =>
+        messages.filter(
+          (message): message is Message =>
+            message.role === "user" ||
+            message.role === "assistant" ||
+            message.role === "toolResult",
+        ),
+      getFollowUpMessages: async () =>
+        callIndex < calls.length
+          ? [{ role: "user", content: "Next request.", timestamp: callIndex }]
+          : [],
+    },
+    async (event) => {
+      emit(event);
+      // AgentSession persists assistant messages after its listeners return.
+      if (event.type === "message_end" && event.message.role === "assistant") {
+        completed.push(structuredClone(event.message));
+      }
+      onEvent?.(event);
+      if (event.type === "agent_end") {
+        await subscription.waitForPendingEvents();
+      }
+    },
+    undefined,
+    () => {
+      const call = expectDefined(calls[callIndex++], "Expected a configured model call");
+      const text = call.text ?? "Reply.";
+      const message: AssistantMessage = {
+        role: "assistant",
+        content: [{ type: "text", text }],
+        api: model.api,
+        provider: model.provider,
+        model: model.id,
+        usage: call.usage,
+        stopReason: call.stopReason ?? "stop",
+        ...(call.stopReason && call.stopReason !== "stop"
+          ? { errorMessage: "Provider stopped." }
+          : {}),
+        timestamp: callIndex,
+      };
+      const stream = new AssistantMessageEventStream();
+      stream.push({ type: "start", partial: { ...message, content: [], usage: makeUsage() } });
+      if (call.streamedUsage) {
+        stream.push({
+          type: "text_end",
+          contentIndex: 0,
+          content: text,
+          partial: { ...message, usage: call.streamedUsage },
+        });
+      }
+      if (message.stopReason === "error" || message.stopReason === "aborted") {
+        stream.push({ type: "error", reason: message.stopReason, error: message });
+      } else {
+        stream.push({ type: "done", reason: "stop", message });
+      }
+      stream.end();
+      return stream;
+    },
+  );
+  expect(callIndex).toBe(calls.length);
+  return completed;
+}
 
 describe("subscribeEmbeddedAgentSession", () => {
   async function flushBlockReplyCallbacks(): Promise<void> {
@@ -285,142 +401,99 @@ describe("subscribeEmbeddedAgentSession", () => {
     }
   }
 
-  it("captures usage from completions timings on done events", () => {
-    const { emit, subscription } = createSubscribedSessionHarness({ runId: "run" });
-
-    emit({ type: "message_start", message: { role: "assistant" } });
-    emit({
-      type: "message_update",
-      message: { role: "assistant" },
-      assistantMessageEvent: {
-        type: "done",
-        timings: {
-          prompt_n: 30_834,
-          predicted_n: 34,
-        },
-      },
-    });
-    emit({
-      type: "message_end",
-      message: {
-        role: "assistant",
-        usage: makeZeroUsageSnapshot(),
-      },
-    });
-
-    expect(subscription.getUsageTotals()).toEqual({
-      input: 30_834,
-      output: 34,
-      cacheRead: undefined,
-      cacheWrite: undefined,
-      total: 30_868,
-    });
-  });
-
-  it("emits cumulative run output usage once per completed assistant message", () => {
-    const { emit, onAgentEvent } = createAgentEventHarness({
-      runId: "usage-event-run",
-      lifecycleGeneration: agentEvents.getAgentEventLifecycleGeneration(),
-    });
-    const emitAssistantUsage = (output: number) => {
-      const usage = { input: 100, output, totalTokens: 100 + output };
-      emit({ type: "message_start", message: { role: "assistant" } });
-      emit({
-        type: "message_update",
-        message: { role: "assistant" },
-        assistantMessageEvent: { type: "done", usage },
-      });
-      emit({ type: "message_end", message: { role: "assistant", usage } });
-    };
-
-    emitAssistantUsage(12);
-    emitAssistantUsage(8);
-
-    const usageEvents = onAgentEvent.mock.calls
-      .map(([event]) => event)
-      .filter((event) => event.stream === "usage");
-    expect(usageEvents).toEqual([
-      { stream: "usage", data: { outputTokens: 12 } },
-      { stream: "usage", data: { outputTokens: 20 } },
-    ]);
-  });
-
-  it.each([false, true])(
-    "accounts each assistant message when block delivery queues usage across retry=%j",
-    async (retry) => {
+  it.each([
+    { blockReplyBreak: "text_end", retry: false },
+    { blockReplyBreak: "text_end", retry: true },
+    { blockReplyBreak: "message_end", retry: false },
+    { blockReplyBreak: "message_end", retry: true },
+  ] as const)(
+    "accounts queued $blockReplyBreak delivery across retry=$retry",
+    async ({ blockReplyBreak, retry }) => {
       const deliveryStarted = createDeferred();
       const releaseDelivery = createDeferred();
+      const secondCompleted = createDeferred();
+      const admittedUsage: StreamUsage[] = [];
       const onAgentEvent = vi.fn();
+      const onBlockReplyFlush = vi.fn();
       const onBlockReply = vi.fn().mockImplementationOnce(() => {
         deliveryStarted.resolve();
         return releaseDelivery.promise;
       });
-      const { emit, subscription } = createSubscribedSessionHarness({
-        runId: `queued-usage-${retry}`,
+      const harness = createSubscribedSessionHarness({
+        runId: "queued-usage-" + blockReplyBreak + "-" + retry,
         lifecycleGeneration: agentEvents.getAgentEventLifecycleGeneration(),
         sessionPersistence: "detached",
-        blockReplyBreak: "text_end",
+        blockReplyBreak,
         onBlockReply,
+        onBlockReplyFlush,
         onAgentEvent,
       });
-      try {
-        for (const [index, { text, input, output, cost }] of [
-          { text: "First reply.", input: 100, output: 12, cost: 0.125 },
-          { text: "Second reply.", input: 200, output: 8, cost: 0.5 },
-        ].entries()) {
-          const message = {
-            role: "assistant",
-            content: [{ type: "text", text }],
-            usage: makeZeroUsageSnapshot(),
-          };
-          emit({ type: "message_start", message });
-          emitAssistantTextDelta(emit, text, message);
-          emitAssistantTextEnd(emit, text, message);
-          if (index === 0) {
-            await deliveryStarted.promise;
+      const { emit, subscription } = harness;
+      const running = runUsageCalls(
+        harness,
+        [
+          {
+            text: "First reply.",
+            streamedUsage: makeUsage({ input: 100, output: 12, cost: 0.125, billed: true }),
+            usage: makeUsage(),
+          },
+          {
+            text: "Second reply.",
+            streamedUsage: makeUsage({ input: 200, output: 8, cost: 0.5, billed: true }),
+            usage: makeUsage(),
+          },
+        ],
+        (event) => {
+          if (event.type !== "message_end" || event.message.role !== "assistant") {
+            return;
           }
-          emit({
-            type: "message_update",
-            message,
-            assistantMessageEvent: {
-              type: "done",
-              usage: {
-                input,
-                output,
-                totalTokens: input + output,
-                cost: { total: cost, totalOrigin: "provider-billed" },
-              },
-            },
-          });
-          emit({ type: "message_end", message });
-          if (index === 0 && retry) {
+          admittedUsage.push(structuredClone(event.message.usage));
+          if (admittedUsage.length === 1 && retry) {
             emit(retryingCompactionEnd());
           }
-        }
+          if (admittedUsage.length === 2) {
+            secondCompleted.resolve();
+          }
+        },
+      );
+      try {
+        await Promise.race([deliveryStarted.promise, running]);
+        await Promise.race([secondCompleted.promise, running]);
+        expect(onBlockReply).toHaveBeenCalledOnce();
+        expect(onBlockReplyFlush).not.toHaveBeenCalled();
+        expect(admittedUsage).toMatchObject([
+          { input: 100, output: 12, totalTokens: 112, cost: { total: 0.125 } },
+          { input: 200, output: 8, totalTokens: 208, cost: { total: 0.5 } },
+        ]);
+        expect(subscription.getUsageTotals()).toMatchObject({
+          input: 300,
+          output: 20,
+          total: 320,
+          cost: { total: 0.625 },
+        });
+        expect(subscription.getLastAssistantUsage()).toMatchObject({
+          input: 200,
+          output: 8,
+          total: 208,
+          cost: { total: 0.5, totalOrigin: "provider-billed" },
+        });
+        const usageEvents = onAgentEvent.mock.calls
+          .map(([event]) => event)
+          .filter((event) => event.stream === "usage");
+        expect(usageEvents).toEqual([
+          { stream: "usage", data: { outputTokens: 12 } },
+          { stream: "usage", data: { outputTokens: 20 } },
+        ]);
       } finally {
         releaseDelivery.resolve();
-        await subscription.waitForPendingEvents();
-        subscription.unsubscribe();
+        await running.finally(() => subscription.unsubscribe());
       }
-      expect(subscription.getUsageTotals()).toMatchObject({
-        input: 300,
-        output: 20,
-        total: 320,
-        cost: { total: 0.625 },
-      });
-      expect(subscription.getLastAssistantUsage()).toEqual({
-        input: 200,
-        output: 8,
-        total: 208,
-        cost: { total: 0.5, totalOrigin: "provider-billed" },
-      });
-      const usageEvents = onAgentEvent.mock.calls
-        .map(([event]) => event)
-        .filter((event) => event.stream === "usage");
-      expect(usageEvents).toEqual([
-        { stream: "usage", data: { outputTokens: 12 } },
-        { stream: "usage", data: { outputTokens: 20 } },
-      ]);
+      expect(onBlockReply).toHaveBeenCalledTimes(2);
+      expect(onBlockReplyFlush.mock.calls.map(([event]) => event.reason)).toEqual(
+        blockReplyBreak === "message_end"
+          ? ["message_end", "message_end", "terminal"]
+          : ["terminal"],
+      );
     },
   );
 
@@ -479,97 +552,109 @@ describe("subscribeEmbeddedAgentSession", () => {
     });
   });
 
-  it("does not double-count usage or cost when done and message_end carry the same snapshot", () => {
-    const { emit, subscription } = createSubscribedSessionHarness({ runId: "run" });
-    const usage = {
-      input: 100,
-      output: 20,
-      totalTokens: 120,
-      cost: { total: 0.125, totalOrigin: "provider-billed" },
-    };
-
-    emit({ type: "message_start", message: { role: "assistant" } });
-    emit({
-      type: "message_update",
-      message: { role: "assistant" },
-      assistantMessageEvent: {
-        type: "done",
-        message: {
-          role: "assistant",
-          usage,
-        },
-      },
-    });
-    emit({
-      type: "message_end",
-      message: {
-        role: "assistant",
-        usage,
-      },
-    });
-
-    expect(subscription.getUsageTotals()).toEqual({
-      input: 100,
-      output: 20,
-      cacheRead: undefined,
-      cacheWrite: undefined,
-      total: 120,
-      cost: { total: 0.125 },
-    });
-    expect(subscription.getLastAssistantUsage()).toEqual({
-      input: 100,
-      output: 20,
-      total: 120,
-      cost: { total: 0.125, totalOrigin: "provider-billed" },
-    });
-  });
-
   it.each([
-    { costTotal: 0, source: "done" },
-    { costTotal: 0.125, source: "done" },
-    { costTotal: undefined, source: "done" },
-    { costTotal: 0, source: "text_end" },
-    { costTotal: 0.125, source: "text_end" },
-    { costTotal: undefined, source: "text_end" },
+    {
+      name: "different final counts and price",
+      call: {
+        streamedUsage: makeUsage({ input: 7, output: 5, cost: 0.125 }),
+        usage: makeUsage({ input: 11, output: 3, cost: 0.25 }),
+      },
+      expected: { input: 11, output: 3, total: 14, cost: { total: 0.25 } },
+      contextTokens: 11,
+    },
+    ...[0, 0.125].map((cost) => ({
+      name: "billed " + cost + " over a later estimate",
+      call: {
+        streamedUsage: makeUsage({ input: 7, output: 5, cost, billed: true }),
+        usage: makeUsage({ input: 11, output: 3, cost: 0.5 }),
+      },
+      expected: {
+        input: 11,
+        output: 3,
+        total: 14,
+        cost: { total: cost, totalOrigin: "provider-billed" },
+      },
+      contextTokens: 11,
+    })),
+    ...[0, 0.125].map((cost) => ({
+      name: "final billing-only " + cost + " with streamed tokens",
+      call: {
+        streamedUsage: makeUsage({ input: 7, output: 5, cost: 0.1 }),
+        usage: makeUsage({ cost, billed: true }),
+      },
+      expected: {
+        input: 7,
+        output: 5,
+        total: 12,
+        cost: { total: cost, totalOrigin: "provider-billed" },
+      },
+      contextTokens: 7,
+    })),
+    {
+      name: "streamed usage before a zero error result",
+      call: {
+        streamedUsage: makeUsage({
+          input: 7,
+          output: 5,
+          cacheWrite: 4,
+          cacheWrite1h: 3,
+          reasoningTokens: 2,
+          cost: 0.125,
+          billed: true,
+        }),
+        usage: makeUsage(),
+        stopReason: "error" as const,
+      },
+      expected: {
+        input: 7,
+        output: 5,
+        cacheWrite: 4,
+        cacheWrite1h: 3,
+        reasoningTokens: 2,
+        total: 16,
+        cost: { total: 0.125, totalOrigin: "provider-billed" },
+      },
+      contextTokens: 11,
+    },
   ])(
-    "preserves pending streamed cost $costTotal from $source when terminal usage is zeroed",
-    ({ costTotal, source }) => {
-      const { emit, subscription } = createSubscribedSessionHarness({ runId: "run-pending-cost" });
-      const usage = {
-        input: 100,
-        output: 20,
-        cacheWrite: 40,
-        cacheWrite1h: 30,
-        totalTokens: 160,
-        ...(costTotal !== undefined
-          ? { cost: { total: costTotal, totalOrigin: "provider-billed" as const } }
-          : {}),
-      };
-      const message = { role: "assistant", usage: makeZeroUsageSnapshot() };
-      emit({ type: "message_start", message: { role: "assistant" } });
-      emit({
-        type: "message_update",
-        message: { role: "assistant" },
-        assistantMessageEvent: { type: source, usage },
+    "settles $name through the core event producer",
+    async ({ name, call, expected, contextTokens }) => {
+      const onAgentEvent = vi.fn();
+      const onContextAccountingEvent = vi.fn();
+      const harness = createSubscribedSessionHarness({
+        runId: "usage-" + name,
+        lifecycleGeneration: agentEvents.getAgentEventLifecycleGeneration(),
+        onAgentEvent,
+        onContextAccountingEvent,
       });
-      emit({ type: "message_end", message });
-
-      expect(subscription.getUsageTotals()?.cost).toEqual(
-        costTotal !== undefined ? { total: costTotal } : undefined,
-      );
-      expect(subscription.getLastAssistantUsage()).toMatchObject({
-        input: 100,
-        output: 20,
-        cacheWrite: 40,
-        cacheWrite1h: 30,
-      });
-      if (costTotal !== undefined) {
-        expect(message.usage.cost).toMatchObject({
-          total: costTotal,
-          totalOrigin: "provider-billed",
+      const { subscription } = harness;
+      try {
+        const [completed] = await runUsageCalls(harness, [call], (event) => {
+          if (event.type === "message_update" && event.assistantMessageEvent.type === "text_end") {
+            expect(subscription.getUsageTotals()).toBeUndefined();
+            expect(onAgentEvent.mock.calls.some(([emitted]) => emitted.stream === "usage")).toBe(
+              false,
+            );
+          }
         });
+        const { total, cost, ...tokens } = expected;
+        expect(completed?.usage).toMatchObject({ ...tokens, totalTokens: total, cost });
+        expect(subscription.getUsageTotals()).toMatchObject({
+          ...tokens,
+          total,
+          cost: { total: cost.total },
+        });
+        expect(subscription.getLastAssistantUsage()).toMatchObject(expected);
+        expect(subscription.getCurrentAttemptAssistant()).toEqual(completed);
+        expect(onContextAccountingEvent.mock.calls).toEqual([[{ kind: "model", contextTokens }]]);
+        expect(
+          onAgentEvent.mock.calls
+            .map(([event]) => event)
+            .filter((event) => event.stream === "usage"),
+        ).toEqual([{ stream: "usage", data: { outputTokens: expected.output } }]);
+      } finally {
+        subscription.unsubscribe();
       }
-      subscription.unsubscribe();
     },
   );
 
@@ -580,131 +665,108 @@ describe("subscribeEmbeddedAgentSession", () => {
     { costTotal: 0.125, priorCall: true },
   ])(
     "retains billed cost-only $costTotal with prior call $priorCall",
-    ({ costTotal, priorCall }) => {
-      const { emit, session, subscription } = createSubscribedSessionHarness({
-        runId: "run-cost-only",
+    async ({ costTotal, priorCall }) => {
+      const onAgentEvent = vi.fn();
+      const harness = createSubscribedSessionHarness({
+        runId: "run-cost-only-" + costTotal + "-" + priorCall,
+        lifecycleGeneration: agentEvents.getAgentEventLifecycleGeneration(),
+        onAgentEvent,
         sessionExtras: { sessionManager: SessionManager.inMemory() },
       });
-      const previousUsage = { input: 100, output: 20, totalTokens: 120, cost: { total: 0.25 } };
-      if (priorCall) {
-        emit({ type: "message_start", message: { role: "assistant" } });
-        emit({ type: "message_end", message: { role: "assistant", usage: previousUsage } });
-      }
-      const lastCallUsage = subscription.getLastAssistantUsage();
-      const usage = makeZeroUsageSnapshot();
-      usage.cost.total = costTotal;
-      usage.cost.totalOrigin = "provider-billed";
-      const message = { role: "assistant", usage: makeZeroUsageSnapshot() };
-      emit({ type: "message_start", message: { role: "assistant" } });
-      emit({
-        type: "message_update",
-        message: { role: "assistant" },
-        assistantMessageEvent: { type: "done", usage },
-      });
-      emit({ type: "message_end", message });
-
+      const { session, subscription } = harness;
       const priorCost = priorCall ? 0.25 : 0;
-      expect(subscription.getUsageTotals()?.cost).toEqual({ total: priorCost + costTotal });
-      expect(subscription.getLastAssistantUsage()).toEqual(lastCallUsage);
-      expect(message.usage.cost).toMatchObject({
-        total: costTotal,
-        totalOrigin: "provider-billed",
+      const usage = makeUsage({ cost: costTotal, billed: true });
+      try {
+        const completed = await runUsageCalls(harness, [
+          ...(priorCall ? [{ usage: makeUsage({ input: 100, output: 20, cost: priorCost }) }] : []),
+          { usage },
+        ]);
+        expect(subscription.getUsageTotals()?.cost).toEqual({ total: priorCost + costTotal });
+        const lastCallUsage = subscription.getLastAssistantUsage();
+        if (priorCall) {
+          expect(lastCallUsage).toMatchObject({ input: 100, output: 20, total: 120 });
+        } else {
+          expect(lastCallUsage).toBeUndefined();
+        }
+        expect(completed.at(-1)?.usage.cost).toMatchObject({
+          total: costTotal,
+          totalOrigin: "provider-billed",
+        });
+        recordSessionModelUsage(session.sessionManager, usage);
+        recordSessionModelUsage(
+          session.sessionManager,
+          makeUsage({ input: 5, output: 2, cost: 0.05 }),
+        );
+        expect(subscription.getUsageTotals()).toMatchObject({
+          input: (priorCall ? 100 : 0) + 5,
+          output: (priorCall ? 20 : 0) + 2,
+          cost: { total: priorCost + costTotal * 2 + 0.05 },
+        });
+        expect(subscription.getLastAssistantUsage()).toEqual(lastCallUsage);
+        expect(
+          onAgentEvent.mock.calls
+            .map(([event]) => event)
+            .filter((event) => event.stream === "usage"),
+        ).toEqual([
+          ...(priorCall ? [{ stream: "usage", data: { outputTokens: 20 } }] : []),
+          { stream: "usage", data: { outputTokens: (priorCall ? 20 : 0) + 2 } },
+        ]);
+      } finally {
+        subscription.unsubscribe();
+      }
+      recordSessionModelUsage(session.sessionManager, makeUsage({ input: 9, output: 9, cost: 9 }));
+      expect(subscription.getUsageTotals()?.cost).toEqual({
+        total: priorCost + costTotal * 2 + 0.05,
       });
-      recordSessionModelUsage(session.sessionManager, usage);
-      expect(subscription.getUsageTotals()?.cost).toEqual({ total: priorCost + costTotal * 2 });
-      expect(subscription.getLastAssistantUsage()).toEqual(lastCallUsage);
-      subscription.unsubscribe();
     },
   );
 
-  it.each([
-    { costTotal: 0, terminalTokens: false },
-    { costTotal: 0.125, terminalTokens: false },
-    { costTotal: 0, terminalTokens: true },
-    { costTotal: 0.125, terminalTokens: true },
-  ])(
-    "merges cost-only billing $costTotal with terminal tokens $terminalTokens",
-    ({ costTotal, terminalTokens }) => {
-      const { emit, subscription } = createSubscribedSessionHarness({ runId: "run-late-billing" });
-      const tokens = { input: 100, output: 20 };
-      const message = {
-        role: "assistant",
-        usage: { ...makeZeroUsageSnapshot(), ...(terminalTokens ? tokens : {}) },
-      };
-      emit({ type: "message_start", message: { role: "assistant" } });
-      emit({
-        type: "message_update",
-        message: { role: "assistant" },
-        assistantMessageEvent: { type: "text_end", usage: tokens },
-      });
-      emit({
-        type: "message_update",
-        message: { role: "assistant" },
-        assistantMessageEvent: {
-          type: "done",
-          usage: { cost: { total: costTotal, totalOrigin: "provider-billed" } },
-        },
-      });
-      emit({ type: "message_end", message });
-
+  it("sums per-call prices without selecting a tier from the tool-loop token total", async () => {
+    const harness = createSubscribedSessionHarness({ runId: "run-loop-cost" });
+    const { subscription } = harness;
+    try {
+      await runUsageCalls(
+        harness,
+        [0.125, 0.5].map((cost) => ({
+          usage: makeUsage({ input: 150_000, output: 100, totalTokens: 0, cost }),
+        })),
+      );
       expect(subscription.getUsageTotals()).toMatchObject({
-        ...tokens,
-        cost: { total: costTotal },
+        input: 300_000,
+        output: 200,
+        total: 300_200,
+        cost: { total: 0.625 },
       });
-      expect(subscription.getLastAssistantUsage()).toMatchObject(tokens);
-      expect(message.usage.cost).toMatchObject({
-        total: costTotal,
-        totalOrigin: "provider-billed",
-      });
+      expect(subscription.getLastAssistantUsage()?.cost).toEqual({ total: 0.5 });
+    } finally {
       subscription.unsubscribe();
-    },
-  );
-
-  it("sums per-call prices without selecting a tier from the tool-loop token total", () => {
-    const { emit, subscription } = createSubscribedSessionHarness({ runId: "run-loop-cost" });
-    for (const total of [0.125, 0.5]) {
-      const message = {
-        role: "assistant",
-        usage: { input: 150_000, output: 100, totalTokens: 0, cost: { total } },
-      };
-      emit({ type: "message_start", message });
-      emit({ type: "message_end", message });
     }
-
-    expect(subscription.getUsageTotals()).toMatchObject({
-      input: 300_000,
-      output: 200,
-      total: 300_200,
-      cost: { total: 0.625 },
-    });
-    expect(subscription.getLastAssistantUsage()?.cost).toEqual({ total: 0.5 });
-    subscription.unsubscribe();
   });
 
-  it("retains the last nonzero call when a later aborted message reports zero usage", () => {
-    const { emit, subscription } = createSubscribedSessionHarness({ runId: "run" });
-    const usage = { input: 38_333, output: 66, cacheRead: 120_320, totalTokens: 158_719 };
-
-    emit({ type: "message_start", message: { role: "assistant" } });
-    emit({ type: "message_end", message: { role: "assistant", usage } });
-    emit({ type: "message_start", message: { role: "assistant" } });
-    emit({
-      type: "message_end",
-      message: { role: "assistant", stopReason: "aborted", usage: makeZeroUsageSnapshot() },
-    });
-
-    expect(subscription.getLastAssistantUsage()).toEqual({
-      input: 38_333,
-      output: 66,
-      cacheRead: 120_320,
-      total: 158_719,
-    });
+  it("retains the last nonzero call when a later aborted message reports zero usage", async () => {
+    const harness = createSubscribedSessionHarness({ runId: "run-aborted-usage" });
+    const { subscription } = harness;
+    try {
+      const completed = await runUsageCalls(harness, [
+        { usage: makeUsage({ input: 38_333, output: 66, cacheRead: 120_320 }) },
+        { usage: makeUsage(), stopReason: "aborted" },
+      ]);
+      expect(subscription.getLastAssistantUsage()).toMatchObject({
+        input: 38_333,
+        output: 66,
+        cacheRead: 120_320,
+        total: 158_719,
+      });
+      expect(completed.at(-1)?.usage).toMatchObject({ input: 0, output: 0, totalTokens: 0 });
+    } finally {
+      subscription.unsubscribe();
+    }
   });
 
   it.each([
     {
       name: "keeps a successful retry call when later post-call processing fails",
-      retryUsage: { input: 240, output: 30, totalTokens: 270 },
+      retryUsage: makeUsage({ input: 240, output: 30 }),
       expected: { input: 240, output: 30, total: 270 },
     },
     {
@@ -712,39 +774,100 @@ describe("subscribeEmbeddedAgentSession", () => {
       retryUsage: undefined,
       expected: { input: 100, output: 20, total: 120 },
     },
-  ])("$name", ({ retryUsage, expected }) => {
-    const { emit, subscription } = createSubscribedSessionHarness({ runId: "run" });
-
-    emit({ type: "message_start", message: { role: "assistant" } });
-    emit({
-      type: "message_end",
-      message: {
-        role: "assistant",
-        content: [{ type: "text", text: "Before retry." }],
-        usage: { input: 100, output: 20, totalTokens: 120 },
-      },
-    });
-    expect(subscription.assistantTexts).toEqual(["Before retry."]);
-    expect(subscription.getLastAssistantTextMessageIndex()).toEqual(expect.any(Number));
-    emit(retryingCompactionEnd());
-    expect(subscription.assistantTexts).toEqual([]);
-    expect(subscription.getLastAssistantTextMessageIndex()).toBeUndefined();
-    if (retryUsage) {
-      emit({ type: "message_start", message: { role: "assistant" } });
-      emit({ type: "message_end", message: { role: "assistant", usage: retryUsage } });
+  ])("$name", async ({ retryUsage, expected }) => {
+    const harness = createSubscribedSessionHarness({ runId: "run-retry-usage" });
+    const { emit, subscription } = harness;
+    let completed = 0;
+    try {
+      await runUsageCalls(
+        harness,
+        [
+          { text: "Before retry.", usage: makeUsage({ input: 100, output: 20 }) },
+          ...(retryUsage ? [{ usage: retryUsage }] : []),
+          { usage: makeUsage(), stopReason: "error" },
+        ],
+        (event) => {
+          if (
+            event.type !== "message_end" ||
+            event.message.role !== "assistant" ||
+            completed++ !== 0
+          ) {
+            return;
+          }
+          expect(subscription.assistantTexts).toEqual(["Before retry."]);
+          expect(subscription.getLastAssistantTextMessageIndex()).toEqual(expect.any(Number));
+          emit(retryingCompactionEnd());
+          expect(subscription.assistantTexts).toEqual([]);
+          expect(subscription.getLastAssistantTextMessageIndex()).toBeUndefined();
+          expect(subscription.getCurrentAttemptAssistant()).toBeUndefined();
+        },
+      );
+      expect(subscription.getLastAssistantUsage()).toMatchObject(expected);
+      expect(subscription.getUsageTotals()).toMatchObject(
+        retryUsage
+          ? { input: 340, output: 50, total: 390 }
+          : { input: 100, output: 20, total: 120 },
+      );
+    } finally {
+      subscription.unsubscribe();
     }
-    emit({ type: "message_start", message: { role: "assistant" } });
-    emit({
-      type: "message_end",
-      message: {
-        role: "assistant",
-        stopReason: "error",
-        usage: makeZeroUsageSnapshot(),
-      },
-    });
-
-    expect(subscription.getLastAssistantUsage()).toEqual(expected);
   });
+
+  it.each([false, true])(
+    "distinguishes transport zero from explicitly unknown context=%j",
+    async (unknownContext) => {
+      const onAgentEvent = vi.fn();
+      const onContextAccountingEvent = vi.fn();
+      const harness = createSubscribedSessionHarness({
+        runId: "run-zero-usage-" + unknownContext,
+        lifecycleGeneration: agentEvents.getAgentEventLifecycleGeneration(),
+        onAgentEvent,
+        onContextAccountingEvent,
+      });
+      const { subscription } = harness;
+      let terminal: AssistantMessage | undefined;
+      try {
+        await runUsageCalls(
+          harness,
+          [
+            {
+              usage: makeUsage(unknownContext ? { contextUsage: { state: "unavailable" } } : {}),
+            },
+          ],
+          (event) => {
+            if (event.type === "message_end" && event.message.role === "assistant") {
+              terminal = event.message;
+            }
+          },
+        );
+        expect(onContextAccountingEvent.mock.calls).toEqual([
+          [{ kind: "model", contextTokens: undefined }],
+        ]);
+        const usageEvents = onAgentEvent.mock.calls
+          .map(([event]) => event)
+          .filter((event) => event.stream === "usage");
+        if (unknownContext) {
+          expect(subscription.getLastAssistantUsage()?.contextUsage).toEqual({
+            state: "unavailable",
+          });
+        } else {
+          expect(subscription.getUsageTotals()).toBeUndefined();
+          expect(subscription.getLastAssistantUsage()).toBeUndefined();
+        }
+        expect(usageEvents).toEqual([]);
+        expectDefined(terminal, "Expected assistant completion").usage.input = 999;
+        const snapshot = expectDefined(
+          subscription.getCurrentAttemptAssistant(),
+          "Expected the owned assistant snapshot",
+        );
+        expect(snapshot.usage.input).toBe(0);
+        snapshot.usage.input = 500;
+        expect(subscription.getCurrentAttemptAssistant()?.usage.input).toBe(0);
+      } finally {
+        subscription.unsubscribe();
+      }
+    },
+  );
 
   it.each(THINKING_TAG_CASES)(
     "streams <%s> reasoning via onReasoningStream without leaking into final text",

@@ -59,7 +59,6 @@ export function createMessageUpdateContext(
     },
     log: { debug: params.debug ?? vi.fn() },
     noteLastAssistant: vi.fn(),
-    noteCompletedAssistant: vi.fn(),
     stripBlockTags: params.stripBlockTags ?? vi.fn((text: string) => text),
     consumePartialReplyDirectives:
       params.consumePartialReplyDirectives ??
@@ -70,8 +69,7 @@ export function createMessageUpdateContext(
     flushBlockReplyBuffer: params.flushBlockReplyBuffer ?? vi.fn(),
     blockChunker: new EmbeddedBlockChunker(),
     resetAssistantMessageState: params.resetAssistantMessageState ?? vi.fn(),
-    recordAssistantUsage: vi.fn(),
-    commitAssistantUsage: vi.fn(),
+    captureModelEvent: vi.fn(),
     resetBlockReplyDirectives: vi.fn(),
     resetPartialReplyDirectives: () => {
       partialReplyDirectiveAccumulator.reset();
@@ -125,9 +123,7 @@ export function createMessageEndContext(
       ...(params.onBlockReply ? { onBlockReply: params.onBlockReply } : { onBlockReply: vi.fn() }),
     },
     noteLastAssistant: vi.fn(),
-    noteCompletedAssistant: vi.fn(),
-    recordAssistantUsage: vi.fn(),
-    commitAssistantUsage: vi.fn(),
+    captureModelEvent: vi.fn(),
     log: { debug: vi.fn(), info: vi.fn(), warn: params.warn ?? vi.fn() },
     builtinToolNames: params.builtinToolNames,
     blockChunker: new EmbeddedBlockChunker(),

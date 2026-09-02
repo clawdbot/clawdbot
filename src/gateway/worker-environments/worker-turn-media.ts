@@ -8,11 +8,7 @@ import {
   hydratePromptMediaMessages,
 } from "../../agents/embedded-agent-runner/run/images.js";
 import { resolveMediaFactLocalRef } from "../../agents/embedded-agent-runner/run/images.media-refs.js";
-import {
-  readPersistedMediaImageLayout,
-  readPersistedImageBlockFactIndexes,
-  type ImageFactIndex,
-} from "../../agents/embedded-agent-runner/run/prompt-image-metadata.js";
+import type { ImageFactIndex } from "../../agents/embedded-agent-runner/run/prompt-image-metadata.js";
 import { resolveImageSanitizationLimits } from "../../agents/image-sanitization.js";
 import type { AgentMessage } from "../../agents/runtime/index.js";
 import type { SessionPlacementTurnParams } from "../../agents/session-placement-admission.js";
@@ -30,6 +26,7 @@ import {
   stagedInputFileName,
 } from "../../media/staged-inputs.js";
 import { MEDIA_MAX_BYTES } from "../../media/store.js";
+import { readPersistedImageBlockFactIndexes } from "../../sessions/user-turn-transcript.metadata.js";
 import type { WorkerLaunchPlan } from "../../worker/launch-descriptor.js";
 import {
   cloneImageContent,
@@ -81,6 +78,7 @@ export async function prepareWorkerTurnMedia(params: {
   history: AgentMessage[];
   images: Awaited<ReturnType<typeof detectAndLoadPromptImages>>["images"];
   imageFactIndexes: Awaited<ReturnType<typeof detectAndLoadPromptImages>>["imageFactIndexes"];
+  mediaImageLayout: Awaited<ReturnType<typeof detectAndLoadPromptImages>>["mediaImageLayout"];
 }> {
   const { turn, signal } = params;
   const assertCurrent = () => {
@@ -90,9 +88,7 @@ export async function prepareWorkerTurnMedia(params: {
     }
   };
   assertCurrent();
-  const recorded =
-    turn.userTurnTranscriptRecorder?.message ??
-    (await turn.userTurnTranscriptRecorder?.resolveMessage());
+  const recorded = await turn.userTurnTranscriptRecorder?.resolveMessage();
   assertCurrent();
   const recordedMedia = recorded ? readPersistedMediaFacts(recorded) : undefined;
   const media = recordedMedia?.length ? recordedMedia : (turn.media ?? []);
@@ -116,7 +112,7 @@ export async function prepareWorkerTurnMedia(params: {
     existingImages: turn.images,
     imageOrder: turn.imageOrder,
     media,
-    mediaImageLayout: recorded ? readPersistedMediaImageLayout(recorded) : undefined,
+    userTurnTranscriptRecorder: turn.userTurnTranscriptRecorder,
   });
   assertCurrent();
   if (currentImages.failedMediaCount) {
@@ -293,6 +289,7 @@ export async function prepareWorkerTurnMedia(params: {
   return {
     images: currentImages.images,
     imageFactIndexes: currentImages.imageFactIndexes,
+    mediaImageLayout: currentImages.mediaImageLayout,
     prompt: prompt.length === 1 && prompt[0]?.type === "text" ? prompt[0].text : prompt,
     history: history.map((message) => {
       const input = message.role === "user" ? replay.get(message) : undefined;

@@ -9,7 +9,7 @@ import { streamMistral } from "../providers/mistral.js";
 import { streamOpenAICodexResponses } from "../providers/openai-chatgpt-responses.js";
 import { streamOpenAICompletions } from "../providers/openai-completions.js";
 import { streamOpenAIResponses } from "../providers/openai-responses.js";
-import type { Api, Context, ImageContent, Model, StreamOptions } from "../types.js";
+import type { Api, Context, ImageContent, Model, StreamFn, StreamOptions } from "../types.js";
 import { createAnthropicMessagesTransportStreamFn } from "./anthropic-transport-stream.js";
 import { createOpenAICompletionsTransportStreamFn } from "./openai-completions-transport.js";
 import { createOpenAIResponsesTransportStreamFn } from "./openai-responses-client.js";
@@ -47,7 +47,7 @@ type RunFixture = (
   baseUrl: string,
   context: Context,
   options: StreamOptions,
-) => ReturnType<ReturnType<typeof createOpenAIResponsesTransportStreamFn>>;
+) => ReturnType<StreamFn>;
 
 const nativeResponses = createOpenAIResponsesTransportStreamFn();
 const nativeChat = createOpenAICompletionsTransportStreamFn();
@@ -128,7 +128,12 @@ const fixtures = [
     run: (baseUrl, context, options) =>
       streamMistral(model("mistral-conversations", baseUrl), context, options),
   },
-] satisfies Array<{ name: string; protocol: Protocol; path: string; run: RunFixture }>;
+] as const satisfies ReadonlyArray<{
+  name: string;
+  protocol: Protocol;
+  path: string;
+  run: RunFixture;
+}>;
 
 function messageParts(payload: unknown, protocol: Protocol): unknown[] {
   if (!isRecord(payload)) {
@@ -157,7 +162,7 @@ function messageParts(payload: unknown, protocol: Protocol): unknown[] {
 }
 
 function completedResponse(protocol: Protocol): string {
-  let events: object[];
+  let events: Array<Record<string, unknown> & { type?: string }>;
   if (protocol === "responses") {
     const response = {
       id: "resp_image_fixture",
@@ -220,7 +225,7 @@ function completedResponse(protocol: Protocol): string {
   return events
     .map(
       (event) =>
-        `${"type" in event ? `event: ${event.type}\n` : ""}data: ${JSON.stringify(event)}\n\n`,
+        `${event.type !== undefined ? `event: ${event.type}\n` : ""}data: ${JSON.stringify(event)}\n\n`,
     )
     .join("");
 }
@@ -229,6 +234,10 @@ async function captureRequest(
   fixture: (typeof fixtures)[number],
   action: HookAction,
   image: ImageContent = { type: "image", mimeType: "image/png", data: PNG },
+  extra: {
+    precedingImages?: ImageContent[];
+    onPayload?: (parts: unknown[]) => void;
+  } = {},
 ): Promise<unknown[]> {
   const originalImageJson = JSON.stringify(image);
   const currentImage = action === "ordinary" ? image : withRuntimeImageHistory(image, SOURCE);
@@ -236,7 +245,7 @@ async function captureRequest(
     messages: [
       {
         role: "user",
-        content: [{ type: "text", text: QUESTION }, currentImage],
+        content: [{ type: "text", text: QUESTION }, ...(extra.precedingImages ?? []), currentImage],
         timestamp: 1,
       },
     ],
@@ -283,9 +292,9 @@ async function captureRequest(
       onPayload: (payload) => {
         hookCalls += 1;
         const parts = messageParts(payload, fixture.protocol);
-        expect(parts).toHaveLength(2);
+        expect(parts).toHaveLength(2 + (extra.precedingImages?.length ?? 0));
         expect(parts[0]).toMatchObject({ text: QUESTION });
-        const imagePart = parts[1];
+        const imagePart = parts.at(-1);
         if (!isRecord(imagePart)) {
           throw new Error("Expected the converted image before the payload hook");
         }
@@ -296,6 +305,7 @@ async function captureRequest(
             image_url: `data:image/bmp;base64,${BMP}`,
           });
         }
+        extra.onPayload?.(parts);
         if (action === "remove") {
           parts.splice(1, 1);
         } else if (action === "replace") {
@@ -331,8 +341,9 @@ async function captureRequest(
                 ? "input"
                 : "messages";
           // Clone wire messages without serializing SDK-only objects such as AbortSignal.
-          return { ...payload, [field]: JSON.parse(JSON.stringify(payload[field])) as unknown };
+          return { ...payload, [field]: structuredClone(payload[field]) };
         }
+        return undefined;
       },
     });
     expect((await stream.result()).stopReason).toBe("stop");
@@ -342,7 +353,11 @@ async function captureRequest(
     ]);
     expect(JSON.stringify(context)).toBe(originalContextJson);
     expect(JSON.stringify(currentImage)).toBe(originalImageJson);
-    return messageParts(JSON.parse(requests[0]!.body) as unknown, fixture.protocol);
+    const request = requests[0];
+    if (!request) {
+      throw new Error("transport produced no HTTP request");
+    }
+    return messageParts(JSON.parse(request.body) as unknown, fixture.protocol);
   } finally {
     abort.abort();
     configureAiTransportHost(previousHost);
@@ -354,7 +369,7 @@ async function captureRequest(
 }
 
 function expectedParts(protocol: Protocol, action: HookAction): object[] {
-  const text = action === "keep" ? `${QUESTION}\n\n${NOTE}` : QUESTION;
+  const text = action === "keep" || action === "clone" ? `${QUESTION}\n\n${NOTE}` : QUESTION;
   const textPart =
     protocol === "google"
       ? { text }
@@ -387,16 +402,185 @@ describe.each(fixtures)("$name retained image HTTP projection", (fixture) => {
 });
 
 describe("native Responses final image format decision", () => {
-  it("omits provenance when a complete retained BMP is removed after the payload hook", async () => {
-    const fixture = fixtures[0]!;
-    const parts = await captureRequest(fixture, "keep", {
-      type: "image",
-      mimeType: "image/bmp",
-      data: BMP,
+  it.each(["keep", "clone"] as const)(
+    "retains the source through canonical MIME normalization after %s",
+    async (action) => {
+      const parts = await captureRequest(
+        fixtures[0],
+        action,
+        {
+          type: "image",
+          mimeType: "image/jpeg",
+          data: PNG,
+        },
+        {
+          onPayload: (input) => {
+            expect(input[1]).toEqual({
+              type: "input_image",
+              detail: "auto",
+              image_url: `data:image/jpeg;base64,${PNG}`,
+            });
+          },
+        },
+      );
+      expect(parts).toEqual(expectedParts("responses", "keep"));
+    },
+  );
+
+  it.each(["keep", "clone"] as const)(
+    "omits provenance when a complete retained BMP is removed after payload action %s",
+    async (action) => {
+      const fixture = fixtures[0];
+      const parts = await captureRequest(fixture, action, {
+        type: "image",
+        mimeType: "image/bmp",
+        data: BMP,
+      });
+      expect(parts).toEqual([
+        { type: "input_text", text: QUESTION },
+        { type: "input_text", text: IMAGE_OMISSION },
+      ]);
+    },
+  );
+});
+
+const OTHER_SOURCE = { key: "retained-J\0other.png", sourceText: "from Grace, message retained-J" };
+const OTHER_SECOND_NOTE = "[Recent image 2 from Grace, message retained-J, attached as media.]";
+const ordinaryImage = (data = PNG): ImageContent => ({
+  type: "image",
+  mimeType: "image/png",
+  data,
+});
+
+describe("native Responses image occurrence provenance", () => {
+  const cases = [
+    {
+      name: "keeps an ordinary and retained image with identical bytes distinct",
+      preceding: () => ordinaryImage(),
+      data: [PNG, PNG],
+      notes: NOTE,
+    },
+    {
+      name: "follows exact identities when two retained sources with identical bytes are reordered",
+      preceding: () => withRuntimeImageHistory(ordinaryImage(), OTHER_SOURCE),
+      rewrite: (parts) => {
+        parts.splice(1, 2, parts[2], parts[1]);
+      },
+      data: [PNG, PNG],
+      notes: `${NOTE}\n${OTHER_SECOND_NOTE}`,
+    },
+    {
+      name: "reserves a later ordinary identity before matching a retained clone",
+      preceding: () => ordinaryImage(),
+      rewrite: (parts) => {
+        parts.splice(1, 2, structuredClone(parts[2]), parts[1]);
+      },
+      data: [PNG, PNG],
+      notes: NOTE,
+    },
+    {
+      name: "keeps a retained identity when the identical ordinary image is cloned",
+      preceding: () => ordinaryImage(),
+      rewrite: (parts) => {
+        parts[1] = structuredClone(parts[1]);
+      },
+      data: [PNG, PNG],
+      notes: NOTE,
+    },
+    {
+      name: "leaves all-clone ordinary and retained occurrences unannotated when bytes coincide",
+      preceding: () => ordinaryImage(),
+      rewrite: (parts) => {
+        parts.splice(1, 2, ...structuredClone(parts.slice(1)));
+      },
+      data: [PNG, PNG],
+      notes: "",
+    },
+    {
+      name: "does not assign a removed retained origin to an identical ordinary clone",
+      preceding: () => ordinaryImage(),
+      rewrite: (parts) => {
+        parts.splice(1, 2, structuredClone(parts[1]));
+      },
+      data: [PNG],
+      notes: "",
+    },
+    {
+      name: "recovers the retained clone when ordinary bytes are different",
+      preceding: () => ordinaryImage(REPLACEMENT_PNG),
+      rewrite: (parts) => {
+        parts.splice(1, 2, ...structuredClone(parts.slice(1)));
+      },
+      data: [REPLACEMENT_PNG, PNG],
+      notes: NOTE,
+    },
+    {
+      name: "leaves cloned identical bytes with conflicting source histories unannotated",
+      preceding: () => withRuntimeImageHistory(ordinaryImage(), OTHER_SOURCE),
+      rewrite: (parts) => {
+        parts.splice(1, 2, ...structuredClone(parts.slice(1)));
+      },
+      data: [PNG, PNG],
+      notes: "",
+    },
+    {
+      name: "does not let a mutated retained identity borrow another removed origin",
+      preceding: () => withRuntimeImageHistory(ordinaryImage(REPLACEMENT_PNG), OTHER_SOURCE),
+      rewrite: (parts) => {
+        const replacement = parts[1];
+        const retained = parts[2];
+        if (!isRecord(replacement) || !isRecord(retained)) {
+          throw new Error("Expected two native image parts");
+        }
+        retained.image_url = replacement.image_url;
+        parts.splice(1, 1);
+      },
+      data: [REPLACEMENT_PNG],
+      notes: "",
+    },
+    {
+      name: "retains a saved clone when the original identity changes its image bytes",
+      rewrite: (parts) => {
+        const original = parts[1];
+        if (!isRecord(original)) {
+          throw new Error("Expected the native retained image");
+        }
+        const clone = structuredClone(original);
+        original.image_url = `data:image/png;base64,${REPLACEMENT_PNG}`;
+        parts.splice(1, 1, original, clone);
+      },
+      data: [REPLACEMENT_PNG, PNG],
+      notes: NOTE,
+    },
+    {
+      name: "consumes a retained occurrence only once when the hook duplicates its clone",
+      rewrite: (parts) => {
+        const clone = structuredClone(parts[1]);
+        parts.splice(1, 1, clone, structuredClone(clone));
+      },
+      data: [PNG, PNG],
+      notes: NOTE,
+    },
+  ] satisfies Array<{
+    name: string;
+    preceding?: () => ImageContent;
+    rewrite?: (parts: unknown[]) => void;
+    data: string[];
+    notes: string;
+  }>;
+
+  it.each(cases)("$name", async (scenario) => {
+    const parts = await captureRequest(fixtures[0], "keep", ordinaryImage(), {
+      precedingImages: scenario.preceding ? [scenario.preceding()] : [],
+      onPayload: scenario.rewrite,
     });
     expect(parts).toEqual([
-      { type: "input_text", text: QUESTION },
-      { type: "input_text", text: IMAGE_OMISSION },
+      { type: "input_text", text: scenario.notes ? `${QUESTION}\n\n${scenario.notes}` : QUESTION },
+      ...scenario.data.map((data) => ({
+        type: "input_image",
+        detail: "auto",
+        image_url: `data:image/png;base64,${data}`,
+      })),
     ]);
   });
 });

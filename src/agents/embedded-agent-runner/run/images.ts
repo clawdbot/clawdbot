@@ -25,6 +25,10 @@ import { resolveMediaReferenceLocalPath } from "../../../media/media-reference.j
 import type { PromptImageOrderEntry } from "../../../media/prompt-image-order.js";
 import { finalizeRuntimePromptImages } from "../../../media/runtime-prompt-image-provenance.js";
 import { loadWebMedia, type WebMediaResult } from "../../../media/web-media.js";
+import {
+  readPersistedImageBlockFactIndexes,
+  readPersistedMediaImageLayout,
+} from "../../../sessions/user-turn-transcript.metadata.js";
 import type { UserTurnTranscriptRecorder } from "../../../sessions/user-turn-transcript.types.js";
 import { resolveUserPath } from "../../../utils.js";
 import type { ImageSanitizationLimits } from "../../image-sanitization.js";
@@ -46,8 +50,6 @@ import {
 import {
   type ImageFactIndex,
   type MediaImageLayout,
-  readPersistedImageBlockFactIndexes,
-  readPersistedMediaImageLayout,
   resolveMediaImageLayout,
 } from "./prompt-image-metadata.js";
 
@@ -93,6 +95,8 @@ function normalizeRefForDedupe(raw: string): string {
 type PromptImageEntry = {
   image: ImageContent;
   factIndex: ImageFactIndex;
+  // Sanitization may drop earlier images; placement stays tied to the original slot.
+  sourceSlotIndex?: number;
 };
 
 async function sanitizeImageEntriesWithLog(
@@ -108,8 +112,8 @@ async function sanitizeImageEntriesWithLog(
     const image = result.images[0];
     if (image) {
       sanitized.push({
+        ...entry,
         image: withRuntimeImageHistory(image, readRuntimeImageHistory(entry.image)),
-        factIndex: entry.factIndex,
       });
     }
     dropped += result.dropped;
@@ -295,7 +299,10 @@ async function loadImageFromRef(
 
 export async function detectAndLoadPromptImages(params: {
   prompt: string;
-  userTurnTranscriptRecorder?: Pick<UserTurnTranscriptRecorder, "resolveMessage">;
+  userTurnTranscriptRecorder?: Pick<
+    UserTurnTranscriptRecorder,
+    "resolveMessage" | "getRuntimeMediaImageLayout"
+  >;
   media?: readonly MediaFact[];
   workspaceDir: string;
   model: { input?: string[] };
@@ -311,6 +318,7 @@ export async function detectAndLoadPromptImages(params: {
 }): Promise<{
   images: ImageContent[];
   imageFactIndexes: ImageFactIndex[];
+  mediaImageLayout: MediaImageLayout;
   detectedRefs: MediaFileRef[];
   failedMediaCount: number;
   loadedCount: number;
@@ -318,8 +326,7 @@ export async function detectAndLoadPromptImages(params: {
 }> {
   if (!params.model.input?.includes("image")) {
     return {
-      images: [],
-      imageFactIndexes: [],
+      ...finalizeRuntimePromptImages([], params.mediaImageLayout),
       detectedRefs: [],
       failedMediaCount: 0,
       loadedCount: 0,
@@ -333,7 +340,10 @@ export async function detectAndLoadPromptImages(params: {
     (message ? readPersistedMediaFacts(message) : undefined) ?? params.media,
   );
   const declaredMediaImageLayout =
-    (message ? readPersistedMediaImageLayout(message) : undefined) ?? params.mediaImageLayout;
+    (message
+      ? (params.userTurnTranscriptRecorder?.getRuntimeMediaImageLayout?.() ??
+        readPersistedMediaImageLayout(message))
+      : undefined) ?? params.mediaImageLayout;
   const mediaImageLayout = resolveMediaImageLayout({
     media,
     imageOrder: params.imageOrder,
@@ -343,8 +353,10 @@ export async function detectAndLoadPromptImages(params: {
   const suppressed = new Set(mediaImageLayout.suppressedFactIndexes);
   const refs = collectMediaImageRefs(media);
   const refsByFact = new Map(refs.flatMap((ref) => (ref ? [[ref.factIndex, ref] as const] : [])));
-  const slots = mediaImageLayout.slots.filter(
-    (slot) => slot.factIndex === undefined || !suppressed.has(slot.factIndex),
+  const slots = mediaImageLayout.slots.flatMap((slot, sourceSlotIndex) =>
+    slot.factIndex === undefined || !suppressed.has(slot.factIndex)
+      ? [{ ...slot, sourceSlotIndex }]
+      : [],
   );
   const layoutInlineIndexes = (declaredMediaImageLayout?.slots ?? mediaImageLayout.slots).flatMap(
     (slot) => (slot.kind === "inline" ? [slot.factIndex ?? null] : []),
@@ -425,7 +437,7 @@ export async function detectAndLoadPromptImages(params: {
   for (const slot of slots) {
     const existing = takeExisting(slot.factIndex, slot.kind === "inline");
     if (existing) {
-      promptImages.push(existing);
+      promptImages.push({ ...existing, sourceSlotIndex: slot.sourceSlotIndex });
       continue;
     }
     // Gateway-owned transcripts retain managed facts, not necessarily inline bytes.
@@ -436,7 +448,11 @@ export async function detectAndLoadPromptImages(params: {
       failedMediaCount++;
     }
     if (image) {
-      promptImages.push({ image, factIndex: ref?.factIndex ?? null });
+      promptImages.push({
+        image,
+        factIndex: ref?.factIndex ?? null,
+        sourceSlotIndex: slot.sourceSlotIndex,
+      });
     }
   }
   promptImages.push(...unusedExisting);
@@ -450,7 +466,7 @@ export async function detectAndLoadPromptImages(params: {
     maxBytes: params.maxBytes,
     maxDimensionPx: params.maxDimensionPx,
   });
-  const finalized = finalizeRuntimePromptImages(sanitizedPromptImages.entries);
+  const finalized = finalizeRuntimePromptImages(sanitizedPromptImages.entries, mediaImageLayout);
 
   return {
     ...finalized,
@@ -524,17 +540,28 @@ async function projectOrderedPromptMedia(params: {
   media: MediaFact[];
   images: ImageContent[];
   imageFactIndexes: ImageFactIndex[];
+  mediaImageLayout: MediaImageLayout;
   options: PromptMediaOptions;
   budget: { remaining: number };
-}): Promise<ModelInputContent[]> {
+}): Promise<{
+  content: ModelInputContent[];
+  imageFactIndexes: ImageFactIndex[];
+  mediaImageLayout: MediaImageLayout;
+}> {
   const generatedMarkers = new Set<string>(Object.values(VIDEO_OMISSION));
   const projected: ModelInputContent[] = params.content.filter(
     (block): block is TextContent => block.type === "text" && !generatedMarkers.has(block.text),
   );
   // Hydration already resolved image order, including inline blocks with no managed fact.
   if (!params.media.some(isVideoMediaFact)) {
-    return [...projected, ...params.images];
+    return {
+      content: [...projected, ...params.images],
+      imageFactIndexes: params.imageFactIndexes,
+      mediaImageLayout: params.mediaImageLayout,
+    };
   }
+  const projectedImageFactIndexes: ImageFactIndex[] = [];
+  const projectedSlots: Array<MediaImageLayout["slots"][number]> = [];
   const imagesByFact = new Map<number, ImageContent[]>();
   const factlessImages: ImageContent[] = [];
   params.images.forEach((image, index) => {
@@ -547,7 +574,12 @@ async function projectOrderedPromptMedia(params: {
   });
   for (const [factIndex, fact] of params.media.entries()) {
     if (isImageMediaFact(fact)) {
-      projected.push(...(imagesByFact.get(factIndex) ?? []));
+      const images = imagesByFact.get(factIndex) ?? [];
+      projected.push(...images);
+      projectedImageFactIndexes.push(...images.map(() => factIndex));
+      projectedSlots.push(
+        ...params.mediaImageLayout.slots.filter((slot) => slot.factIndex === factIndex),
+      );
     } else if (isVideoMediaFact(fact)) {
       projected.push(
         params.options.provider
@@ -557,7 +589,15 @@ async function projectOrderedPromptMedia(params: {
     }
   }
   projected.push(...factlessImages);
-  return projected;
+  projectedImageFactIndexes.push(...factlessImages.map(() => null));
+  projectedSlots.push(
+    ...params.mediaImageLayout.slots.filter((slot) => slot.factIndex === undefined),
+  );
+  return {
+    content: projected,
+    imageFactIndexes: projectedImageFactIndexes,
+    mediaImageLayout: { ...params.mediaImageLayout, slots: projectedSlots },
+  };
 }
 
 /** Hydrates exact-message media facts for canonical replay or one provider call. */
@@ -600,14 +640,16 @@ async function materializePromptMediaMessages(
       localRoots: options.localRoots,
       sandbox: options.sandbox,
     });
-    const projectedContent = await projectOrderedPromptMedia({
+    const projection = await projectOrderedPromptMedia({
       content,
       media: resolvedMedia,
       images: result.images,
       imageFactIndexes: result.imageFactIndexes,
+      mediaImageLayout: result.mediaImageLayout,
       options,
       budget: videoBudget,
     });
+    const projectedContent = projection.content;
     if (
       (options.provider || options.onCurrentTurnImageFailure) &&
       index === activeUserIndex &&
@@ -633,10 +675,18 @@ async function materializePromptMediaMessages(
       meta && typeof meta === "object" && !Array.isArray(meta)
         ? { ...(meta as Record<string, unknown>) }
         : {};
-    if (result.images.length > 0) {
-      nextMeta.mediaImageBlockFactIndexes = result.imageFactIndexes;
+    if (projection.imageFactIndexes.length > 0) {
+      nextMeta.mediaImageBlockFactIndexes = projection.imageFactIndexes;
     } else {
       delete nextMeta.mediaImageBlockFactIndexes;
+    }
+    if (
+      projection.mediaImageLayout.slots.length ||
+      projection.mediaImageLayout.suppressedFactIndexes?.length
+    ) {
+      nextMeta.mediaImageLayout = projection.mediaImageLayout;
+    } else {
+      delete nextMeta.mediaImageLayout;
     }
     const hydratedMessage = {
       ...message,

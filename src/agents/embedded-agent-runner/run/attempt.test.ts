@@ -33,7 +33,6 @@ import {
 import { composeSystemPromptWithHookContext } from "./attempt-thread-helpers.js";
 import { wrapStreamFnSanitizeMalformedToolCalls } from "./attempt-tool-call-replay-sanitization.js";
 import { wrapStreamFnTrimToolCallNames } from "./attempt-tool-call-stream-normalization.js";
-import { buildEmbeddedAttemptToolRunContext } from "./attempt-tool-run-context.js";
 import { wrapStreamFnRepairMalformedToolCallArguments } from "./attempt.tool-call-argument-repair.js";
 
 const llmRuntime = {
@@ -120,21 +119,6 @@ function firstBaseContext(baseFn: ReturnType<typeof vi.fn>): { messages: unknown
   }
   return call[1] as { messages: unknown[] };
 }
-
-describe("buildEmbeddedAttemptToolRunContext", () => {
-  it("carries runtime toolsAllow into coding tool construction", () => {
-    const context = buildEmbeddedAttemptToolRunContext({
-      trigger: "manual",
-      jobId: "job-1",
-      memoryFlushWritePath: "memory/log.md",
-      toolsAllow: ["memory_search", "memory_get"],
-    });
-    expect(context.trigger).toBe("manual");
-    expect(context.jobId).toBe("job-1");
-    expect(context.memoryFlushWritePath).toBe("memory/log.md");
-    expect(context.runtimeToolAllowlist).toEqual(["memory_search", "memory_get"]);
-  });
-});
 
 describe("resolvePromptBuildHookResult", () => {
   it("preserves prompt-build context fields", async () => {
@@ -300,7 +284,7 @@ describe("mergeOrphanedTrailingUserPrompt", () => {
       }),
     ).toEqual({
       merged: true,
-      removeLeaf: true,
+      removeLeaf: false,
       prompt:
         "[Queued user message from a previous active turn; preserved as context only. Continue with the active prompt below.]\n" +
         "older active-turn message\n\nnewest inbound message",
@@ -353,7 +337,7 @@ describe("mergeOrphanedTrailingUserPrompt", () => {
       }),
     ).toEqual({
       merged: true,
-      removeLeaf: true,
+      removeLeaf: false,
       prompt:
         "[Queued user message from a previous active turn; preserved as context only. Continue with the active prompt below.]\n" +
         "forwarded user request\n\nnewest inbound message",
@@ -371,7 +355,7 @@ describe("mergeOrphanedTrailingUserPrompt", () => {
       }),
     ).toEqual({
       merged: false,
-      removeLeaf: true,
+      removeLeaf: false,
       prompt: "summary\nolder active-turn message\nnewest inbound message",
     });
   });
@@ -387,14 +371,14 @@ describe("mergeOrphanedTrailingUserPrompt", () => {
       }),
     ).toEqual({
       merged: true,
-      removeLeaf: true,
+      removeLeaf: false,
       prompt:
         "[Queued user message from a previous active turn; preserved as context only. Continue with the active prompt below.]\n" +
         "ok\n\nplease inspect this token",
     });
   });
 
-  it("preserves structured orphaned user content before removing the leaf", () => {
+  it("preserves structured orphaned user content while keeping the leaf for later turns", () => {
     expect(
       mergeOrphanedTrailingUserPrompt({
         prompt: "newest inbound message",
@@ -409,7 +393,7 @@ describe("mergeOrphanedTrailingUserPrompt", () => {
       }),
     ).toEqual({
       merged: true,
-      removeLeaf: true,
+      removeLeaf: false,
       prompt:
         "[Queued user message from a previous active turn; preserved as context only. Continue with the active prompt below.]\n" +
         "please inspect this\n" +
@@ -434,7 +418,7 @@ describe("mergeOrphanedTrailingUserPrompt", () => {
     });
 
     expect(result.merged).toBe(true);
-    expect(result.removeLeaf).toBe(true);
+    expect(result.removeLeaf).toBe(false);
     expect(result.prompt).toContain("please inspect this inline image");
     expect(result.prompt).toContain("[image_url] inline data URI (image/png, 4118 chars)");
     expect(result.prompt).not.toContain("base64");
@@ -460,7 +444,7 @@ describe("mergeOrphanedTrailingUserPrompt", () => {
     });
 
     expect(result.merged).toBe(true);
-    expect(result.removeLeaf).toBe(true);
+    expect(result.removeLeaf).toBe(false);
     expect(result.prompt).toContain("[value] inline data URI (image/png, 10022 chars)");
     expect(result.prompt).toContain("bbbb");
     expect(result.prompt).toContain("(2000 chars)");
@@ -495,7 +479,7 @@ describe("mergeOrphanedTrailingUserPrompt", () => {
       }),
     ).toEqual({
       merged: true,
-      removeLeaf: true,
+      removeLeaf: false,
       prompt:
         "[Queued user message from a previous active turn; preserved as context only. Continue with the active prompt below.]\n" +
         "older active-turn message\n\nHEARTBEAT_OK",

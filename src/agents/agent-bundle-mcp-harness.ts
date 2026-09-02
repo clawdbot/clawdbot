@@ -23,7 +23,10 @@ import {
 } from "./conversation-capability-profile.js";
 import { applyFinalEffectiveToolPolicy } from "./embedded-agent-runner/effective-tool-policy.js";
 import { applyEmbeddedAttemptToolsAllow } from "./embedded-agent-runner/run/attempt-tool-construction-plan.js";
-import { requiresMcpCodexToolApproval } from "./mcp-codex-tool-approval.js";
+import {
+  formatMcpCodexApprovalRemedy,
+  requiresMcpCodexToolApproval,
+} from "./mcp-codex-tool-approval.js";
 import type { AnyAgentTool } from "./tools/common.js";
 
 type RequesterScopedHarnessMcpTools = {
@@ -59,27 +62,24 @@ function formatScheduledMcpDiagnosticNotice(messages: readonly string[]): string
   );
 }
 
-function isScheduledCodexApprovalAllowed(tool: AnyAgentTool, autoApprove: boolean): boolean {
-  const mcp = getPluginToolMeta(tool)?.mcp;
-  return (
-    mcp?.operation !== "tool" ||
-    autoApprove ||
-    (mcp.codexApproval !== undefined && !requiresMcpCodexToolApproval(mcp.codexApproval))
-  );
-}
-
 function filterScheduledCodexApproval(
   tools: readonly AnyAgentTool[],
   autoApprove: boolean,
   onOmitted?: (message: string) => void,
 ): AnyAgentTool[] {
   return tools.filter((tool) => {
-    if (isScheduledCodexApprovalAllowed(tool, autoApprove)) {
+    const mcp = getPluginToolMeta(tool)?.mcp;
+    if (
+      mcp?.operation !== "tool" ||
+      !requiresMcpCodexToolApproval({
+        ...mcp.codexApproval,
+        fullPermission: autoApprove,
+      })
+    ) {
       return true;
     }
-    const mcp = getPluginToolMeta(tool)?.mcp;
     onOmitted?.(
-      `${mcp?.serverName ?? "configured MCP"}/${mcp?.toolName ?? tool.name}: requires interactive Codex approval (${mcp?.codexApproval?.mode ?? "auto"}); configure codex.defaultToolsApprovalMode="approve" or use the host-confirmed yolo profile`,
+      `${mcp.serverName}/${mcp.toolName}: requires interactive Codex approval (${mcp.codexApproval?.mode ?? "auto"}); ${formatMcpCodexApprovalRemedy(mcp.serverName)}`,
     );
     return false;
   });

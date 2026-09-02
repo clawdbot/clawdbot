@@ -157,6 +157,19 @@ export class CodexAppServerEventProjector {
     return this.completedTurn?.status;
   }
 
+  getActiveMcpToolCall(serverName: string) {
+    if (this.projectionClosed || this.aborted) {
+      return undefined;
+    }
+    return this.nativeToolLifecycleProjector.getActiveMcpToolCall(serverName);
+  }
+
+  recordMcpToolCallReceipt(notification: CodexServerNotification): void {
+    if (!this.projectionClosed) {
+      this.nativeToolLifecycleProjector.recordMcpToolCallReceipt(notification);
+    }
+  }
+
   buildSteeringTranscriptPrefix(): AgentMessage[] {
     const snapshot = buildCodexSteeringMessagesSnapshot({
       runParams: this.params,
@@ -604,18 +617,13 @@ export class CodexAppServerEventProjector {
     const unsettledAsyncDeliveries = this.asyncDeliveryProjection.pending();
     // The final snapshot is authoritative when item notifications were omitted.
     // Only its last relevant tool may change the terminal presentation.
-    for (let index = turnItems.length - 1; index >= 0; index -= 1) {
-      const item = turnItems[index];
-      if (!item || !matchesCodexSnapshotTurn(item, this.turnId)) {
-        continue;
-      }
-      if (item?.type === "dynamicToolCall") {
-        break;
-      }
-      if (shouldClearTerminalPresentationForNativeItem(item)) {
-        this.clearTerminalPresentationForNativeItem(item);
-        break;
-      }
+    const lastToolItem = turnItems.findLast(
+      (item) =>
+        matchesCodexSnapshotTurn(item, this.turnId) &&
+        (item.type === "dynamicToolCall" || shouldClearTerminalPresentationForNativeItem(item)),
+    );
+    if (lastToolItem?.type !== "dynamicToolCall") {
+      this.clearTerminalPresentationForNativeItem(lastToolItem);
     }
     for (const item of turnItems) {
       if (!this.asyncDeliveryProjection.allows(item)) {

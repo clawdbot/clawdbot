@@ -1046,6 +1046,7 @@ describe("scripts/test-projects changed-target routing", () => {
         "test/scripts/openclaw-npm-extended-stable-workflow.test.ts",
         "test/scripts/package-acceptance-workflow.test.ts",
         "test/scripts/authorized-beta-focused-evidence.test.ts",
+        "test/scripts/npm-prepared-bundle.test.ts",
         "test/scripts/openclaw-npm-resume-run.test.ts",
         "test/scripts/release-candidate-checklist.test.ts",
         "test/scripts/ci-workflow-guards.test.ts",
@@ -3221,23 +3222,96 @@ describe("scripts/test-projects changed-target routing", () => {
     );
   });
 
-  it("routes changed ui support files to the ui lane without dead include globs", () => {
-    const plans = buildVitestRunPlans(["--changed", "origin/main"], process.cwd(), () => [
-      "ui/src/styles/base.css",
-      "ui/src/test-helpers/lit-warnings.setup.ts",
-    ]);
+  it.each(["changed", "explicit"])(
+    "routes %s ui support files to the ui lane without dead include globs",
+    (mode) => {
+      const targets = ["ui/src/styles/base.css", "ui/src/test-helpers/lit-warnings.setup.ts"];
+      const plans = buildVitestRunPlans(
+        mode === "changed" ? ["--changed", "origin/main"] : targets,
+        process.cwd(),
+        () => targets,
+      );
 
-    expect(plans[0]).toEqual({
-      config: "test/vitest/vitest.ui.config.ts",
-      forwardedArgs: [],
-      includePatterns: null,
-      watchMode: false,
-    });
-    expect(plans[1]?.config).toBe("test/vitest/vitest.ui-browser.config.ts");
-    expect(plans[1]?.includePatterns).toContain(
-      "ui/src/components/markdown-mermaid.runtime.browser.test.ts",
-    );
-  });
+      expect(plans[0]).toEqual({
+        config: "test/vitest/vitest.ui.config.ts",
+        forwardedArgs: [],
+        includePatterns: null,
+        watchMode: false,
+      });
+      expect(plans[1]?.config).toBe("test/vitest/vitest.ui-browser.config.ts");
+      expect(plans[1]?.includePatterns).toContain(
+        "ui/src/components/markdown-mermaid.runtime.browser.test.ts",
+      );
+    },
+  );
+
+  it.each(["relative", "trailing slash", "absolute", "dot segments"])(
+    "keeps an existing nested ui directory and explicit e2es scoped (%s)",
+    (spelling) => {
+      const directory = "ui/src/pages/new-session";
+      const isolated = `${directory}/draft-persistence.test.ts`;
+      const unitFiles = [
+        `${directory}/view.test.ts`,
+        `${directory}/nested/child.test.ts`,
+        isolated,
+      ];
+      const e2es = [
+        "ui/src/e2e/new-session-page.workspace-validation.e2e.test.ts",
+        "ui/src/e2e/new-session-page.projects-places.e2e.test.ts",
+        "ui/src/e2e/new-session-page.device-dispatch.e2e.test.ts",
+      ];
+      withTinyFileTree(
+        Object.fromEntries(
+          [
+            ...unitFiles,
+            ...e2es,
+            "ui/src/pages/other/view.test.ts",
+            "ui/src/pages/workboard/view.test.ts",
+            "ui/src/components/other.browser.test.ts",
+            "ui/src/e2e/other.e2e.test.ts",
+          ].map((file) => [file, ""]),
+        ),
+        (cwd) => {
+          const target =
+            spelling === "absolute"
+              ? path.join(cwd, directory)
+              : spelling === "trailing slash"
+                ? `./${directory}/`
+                : spelling === "dot segments"
+                  ? "ui/src/pages/./new-session/../new-session"
+                  : directory;
+          const plans = buildVitestRunPlans([target, ...e2es], cwd);
+          expect(plans).toEqual([
+            {
+              config: "test/vitest/vitest.ui.config.ts",
+              forwardedArgs: [],
+              includePatterns: [`${directory}/**/*.test.ts`],
+              watchMode: false,
+            },
+            {
+              config: "test/vitest/vitest.ui-isolated.config.ts",
+              forwardedArgs: [],
+              includePatterns: [isolated],
+              watchMode: false,
+            },
+            {
+              config: "test/vitest/vitest.ui-e2e.config.ts",
+              forwardedArgs: [],
+              includePatterns: e2es,
+              watchMode: false,
+            },
+          ]);
+          const includeFile = path.join(cwd, "include.json");
+          const filesByPlan = plans.map((plan) => {
+            writeVitestIncludeFile(includeFile, plan.includePatterns!, { cwd });
+            return JSON.parse(fs.readFileSync(includeFile, "utf8"));
+          });
+          // Shared UI intersects these files with its ownership exclusions.
+          expect(filesByPlan).toEqual([unitFiles.toSorted(), [isolated], e2es]);
+        },
+      );
+    },
+  );
 
   it("keeps mixed Control UI root and source changes in the UI lane", () => {
     const plans = buildVitestRunPlans(["--changed", "origin/main"], process.cwd(), () => [

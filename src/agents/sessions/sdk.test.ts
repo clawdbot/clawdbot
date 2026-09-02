@@ -1,3 +1,4 @@
+import fs from "node:fs/promises";
 import path from "node:path";
 import { registerSessionResourceCleanup } from "@openclaw/ai/internal/runtime";
 import { createAssistantMessageEventStream, type AssistantMessage } from "openclaw/plugin-sdk/llm";
@@ -5,12 +6,15 @@ import { createAssistantMessageEventStream, type AssistantMessage } from "opencl
 // session write-settlement behavior.
 import { Type } from "typebox";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createSolidPngBuffer } from "../../../test/helpers/image-fixtures.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { loadSessionEntry, loadTranscriptEvents } from "../../config/sessions/session-accessor.js";
 import { getStreamLlmRuntime } from "../../llm/model-runtime-binding.js";
 import type { ImageContent, Model, SimpleStreamOptions } from "../../llm/types.js";
-import { readRuntimePromptImageOrder } from "../../media/media-facts.js";
-import { finalizeRuntimePromptImages } from "../../media/runtime-prompt-image-provenance.js";
+import {
+  readRuntimePromptImageOrder,
+  readRuntimePromptMediaFacts,
+} from "../../media/media-facts.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { createTestUserTurnTranscriptTarget } from "../../sessions/user-turn-transcript.test-support.js";
 import { disposeOpenClawAgentDatabaseByPath } from "../../state/openclaw-agent-db.js";
@@ -30,6 +34,10 @@ vi.mock("../../llm/stream.js", () => ({
   streamSimple: streamMocks.streamSimple,
 }));
 import { takeRuntimeUserTurnTranscriptContext } from "../../sessions/user-turn-transcript-runtime-context.js";
+import {
+  detectAndLoadPromptImages,
+  hydratePromptMediaMessages,
+} from "../embedded-agent-runner/run/images.js";
 import { AuthStorage } from "./auth-storage.js";
 import { createExtensionRuntime } from "./extensions/loader.js";
 import type { LoadExtensionsResult, ToolDefinition } from "./extensions/types.js";
@@ -489,40 +497,82 @@ describe("AgentSession queued user turns", () => {
     });
   });
 
-  it("preserves prompt image ownership across steered and follow-up messages", async () => {
+  it("preserves prepared image replay through native steering and follow-up producers", async () => {
+    const workspaceDir = sdkSessionTempDirs.make("openclaw-sdk-image-provenance-");
+    const currentPath = path.join(workspaceDir, "current.png");
+    const currentBytes = createSolidPngBuffer(1, 1, { r: 0, g: 0, b: 255 });
+    const history: ImageContent = {
+      type: "image",
+      data: createSolidPngBuffer(1, 1, { r: 255, g: 0, b: 0 }).toString("base64"),
+      mimeType: "image/png",
+    };
+    const media = [{ path: currentPath, contentType: "image/png" }];
+    const prepared = await detectAndLoadPromptImages({
+      prompt: "compare",
+      media,
+      mediaImageLayout: {
+        slots: [{ kind: "inline" }, { kind: "offloaded", factIndex: 0 }, { kind: "inline" }],
+      },
+      existingImages: [
+        {
+          type: "image",
+          data: Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]).toString("base64"),
+          mimeType: "image/png",
+        },
+        history,
+      ],
+      model: { input: ["text", "image"] },
+      workspaceDir,
+      localRoots: [workspaceDir],
+    });
+    expect(prepared.images).toEqual([history]);
+    expect(prepared.imageFactIndexes).toEqual([null]);
+    expect(prepared.failedMediaCount).toBe(1);
     const session = await createSessionFromManager(SessionManager.inMemory());
     const steer = vi.spyOn(session.agent, "steer").mockImplementation(() => undefined);
     const followUp = vi.spyOn(session.agent, "followUp").mockImplementation(() => undefined);
-    const media = [{ path: "/tmp/a.png", contentType: "image/png" }];
-    const imageOrder = ["inline"] as const;
-    const image: ImageContent = { type: "image", data: "aW1hZ2U=", mimeType: "image/png" };
-    const { images } = finalizeRuntimePromptImages([{ image, factIndex: 0 }]);
-
-    await session.steer("[media attached: /tmp/a.png (image/png)]", images, undefined, media, [
-      ...imageOrder,
-    ]);
-
-    const runtimeMessage = steer.mock.calls[0]?.[0];
-    expect(runtimeMessage).toBeDefined();
-    const mediaSymbol = Object.getOwnPropertySymbols(runtimeMessage ?? {}).find(
-      (symbol) => Symbol.keyFor(symbol) === "openclaw.runtimePromptMediaFacts",
-    );
-    expect(mediaSymbol).toBeDefined();
-    if (!runtimeMessage || !mediaSymbol) {
-      throw new Error("expected runtime prompt media message and symbol");
+    try {
+      await session.steer("compare", prepared.images, undefined, media, ["inline"]);
+      await session.followUp("inspect queued attachment", prepared.images);
+      const runtimeMessage = steer.mock.calls[0]?.[0];
+      const followUpMessage = followUp.mock.calls[0]?.[0];
+      if (!runtimeMessage || !followUpMessage) {
+        throw new Error("Expected both native queued user messages");
+      }
+      for (const message of [runtimeMessage, followUpMessage]) {
+        expect(message).toMatchObject({
+          content: [expect.objectContaining({ type: "text" }), history],
+          __openclaw: {
+            mediaImageBlockFactIndexes: [null],
+            mediaImageLayout: { slots: [{ kind: "offloaded", factIndex: 0 }, { kind: "inline" }] },
+          },
+        });
+      }
+      expect(readRuntimePromptMediaFacts(runtimeMessage)).toMatchObject(media);
+      expect(readRuntimePromptImageOrder(runtimeMessage)).toEqual(["inline"]);
+      expect(JSON.stringify(runtimeMessage)).not.toContain("runtimePromptMediaFacts");
+      await fs.writeFile(currentPath, currentBytes);
+      const failures: number[] = [];
+      const [replayed] = await hydratePromptMediaMessages([runtimeMessage], {
+        workspaceDir,
+        model: { input: ["text", "image"] },
+        localRoots: [workspaceDir],
+        onCurrentTurnImageFailure: (count) => {
+          failures.push(count);
+        },
+      });
+      if (replayed?.role !== "user") {
+        throw new Error("Expected the prepared native user message to hydrate");
+      }
+      expect(replayed.content).toEqual([
+        { type: "text", text: "compare" },
+        { type: "image", data: currentBytes.toString("base64"), mimeType: "image/png" },
+        history,
+      ]);
+      expect(failures).toEqual([]);
+    } finally {
+      session.dispose();
     }
-    expect((runtimeMessage as unknown as Record<PropertyKey, unknown>)[mediaSymbol]).toEqual([
-      expect.objectContaining({ path: "/tmp/a.png", contentType: "image/png", kind: "image" }),
-    ]);
-    expect(readRuntimePromptImageOrder(runtimeMessage)).toEqual(imageOrder);
-    expect((runtimeMessage as unknown as Record<string, unknown>)["__openclaw"]).toEqual({
-      mediaImageBlockFactIndexes: [0],
-    });
-    expect(JSON.stringify(runtimeMessage)).not.toContain("runtimePromptMediaFacts");
-    await session.followUp("inspect queued attachment", images);
-    expect(followUp.mock.calls[0]?.[0]).toMatchObject({
-      __openclaw: { mediaImageBlockFactIndexes: [0] },
-    });
   });
 });
 

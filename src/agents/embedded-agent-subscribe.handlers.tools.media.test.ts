@@ -69,7 +69,6 @@ function createMockContext(overrides?: {
     // Fill in remaining required fields with no-ops.
     blockChunker: new EmbeddedBlockChunker(),
     noteLastAssistant: vi.fn(),
-    noteCompletedAssistant: vi.fn(),
     stripBlockTags: vi.fn((t: string) => t),
     emitBlockChunk: vi.fn(),
     flushBlockReplyBuffer: vi.fn(),
@@ -83,7 +82,7 @@ function createMockContext(overrides?: {
     noteCompactionRetry: vi.fn(),
     resolveCompactionRetry: vi.fn(),
     maybeResolveCompactionWait: vi.fn(),
-    recordAssistantUsage: vi.fn(),
+    captureModelEvent: vi.fn(),
     incrementCompactionCount: vi.fn(),
     getUsageTotals: vi.fn(() => undefined),
     getLastAssistantUsage: vi.fn(() => undefined),

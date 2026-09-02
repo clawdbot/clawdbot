@@ -90,7 +90,10 @@ export function buildPersistedUserTurnMetadata(
     ...(input.mediaImageLayout
       ? {
           mediaImageLayout: {
-            slots: input.mediaImageLayout.slots.map((slot) => ({ ...slot })),
+            // Text-only input messages cannot replay transient, factless image bytes.
+            slots: input.mediaImageLayout.slots
+              .filter((slot) => slot.factIndex !== undefined)
+              .map((slot) => ({ ...slot })),
             ...(input.mediaImageLayout.suppressedFactIndexes?.length
               ? {
                   suppressedFactIndexes: [...input.mediaImageLayout.suppressedFactIndexes],
@@ -273,4 +276,55 @@ export function preparePersistedUserTurnMessageForTranscriptWrite(
     protectedMessage["__openclaw"] = protectedMeta;
   }
   return protectedMessage;
+}
+
+export function readPersistedImageBlockFactIndexes(
+  message: AgentMessage,
+): Array<number | null> | undefined {
+  const value = asOptionalRecord(Reflect.get(message, "__openclaw"))?.mediaImageBlockFactIndexes;
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+  return value.map((entry) =>
+    typeof entry === "number" && Number.isSafeInteger(entry) && entry >= 0 ? entry : null,
+  );
+}
+
+export function readPersistedMediaImageLayout(
+  message: AgentMessage,
+): NonNullable<UserTurnInput["mediaImageLayout"]> | undefined {
+  const record = asOptionalRecord(
+    asOptionalRecord(Reflect.get(message, "__openclaw"))?.mediaImageLayout,
+  );
+  if (!record) {
+    return undefined;
+  }
+  const slots = Array.isArray(record.slots)
+    ? record.slots.flatMap((entry) => {
+        const slot = asOptionalRecord(entry);
+        if (!slot || (slot.kind !== "inline" && slot.kind !== "offloaded")) {
+          return [];
+        }
+        const kind: NonNullable<UserTurnInput["mediaImageLayout"]>["slots"][number]["kind"] =
+          slot.kind;
+        const factIndex = slot.factIndex;
+        return [
+          {
+            kind,
+            ...(typeof factIndex === "number" && Number.isSafeInteger(factIndex) && factIndex >= 0
+              ? { factIndex }
+              : {}),
+          },
+        ];
+      })
+    : [];
+  const suppressedFactIndexes = Array.isArray(record.suppressedFactIndexes)
+    ? record.suppressedFactIndexes.filter(
+        (entry): entry is number =>
+          typeof entry === "number" && Number.isSafeInteger(entry) && entry >= 0,
+      )
+    : [];
+  return slots.length > 0 || suppressedFactIndexes.length > 0
+    ? { slots, suppressedFactIndexes }
+    : undefined;
 }

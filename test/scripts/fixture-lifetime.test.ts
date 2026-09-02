@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { getEventListeners } from "node:events";
 import fs from "node:fs";
 import path from "node:path";
@@ -23,6 +24,30 @@ beforeEach(() => {
 afterEach(() => vi.unstubAllEnvs());
 const fixture = createFixtureLifetime();
 afterEach(() => fixture.cleanup());
+
+it("releases inputs and claims after a native execFileSync ENOENT error", async () => {
+  const lifetime = createFixtureLifetime();
+  const root = lifetime.createTempDir("fixture-missing-command-");
+  const error = await lifetime
+    .run(async () => execFileSync(path.join(root, "absent-command"), [], { stdio: "pipe" }))
+    .catch((cause: unknown) => cause);
+  expect(error).toHaveProperty("code", "ENOENT");
+  expect(error).toHaveProperty("error", error);
+  await lifetime.cleanup();
+  expect(fs.existsSync(root)).toBe(false);
+  expect(() => owner.assertReleased()).not.toThrow();
+});
+
+it("releases cyclic joined results without treating repeated objects as uncertainty", async () => {
+  const lifetime = createFixtureLifetime();
+  const root = lifetime.createTempDir("fixture-joined-cycle-");
+  const result = new AggregateError([], "joined failures");
+  result.errors.push(result, { cause: result }, { error: result, processTreeState: "terminated" });
+  await lifetime.run(async () => result);
+  await lifetime.cleanup();
+  expect(fs.existsSync(root)).toBe(false);
+  expect(() => owner.assertReleased()).not.toThrow();
+});
 
 it("registers fresh fixture work after clean release and module reset", async () => {
   const first = fixture.createTempDir("fixture-first-");
@@ -366,7 +391,7 @@ it
   },
 );
 
-it.each(["cause", "aggregate", "cleanup"])(
+it.each(["cause", "error", "aggregate", "cyclic aggregate", "cleanup"])(
   "retains inputs and reports unverified %s cleanup even when the body handled its rejection",
   async (kind) => {
     const root = fixture.createTempDir("fixture-lifetime-retained-");
@@ -374,12 +399,19 @@ it.each(["cause", "aggregate", "cleanup"])(
       code: "EPROCESSGROUP_CLEANUP_FAILED",
       processTreeState: "indeterminate",
     });
+    const aggregate = new AggregateError([], "sibling cleanup");
+    aggregate.errors.push(
+      kind === "cyclic aggregate" ? aggregate : new Error("primary failure"),
+      new Error("command failed", { cause: { error: uncertainty } }),
+    );
     const error =
       kind === "cause"
         ? new Error("command failed", { cause: uncertainty })
-        : kind === "aggregate"
-          ? new AggregateError([new Error("primary failure"), uncertainty], "sibling cleanup")
-          : new Error("orphan verification failed");
+        : kind === "error"
+          ? Object.assign(new Error("command failed"), { error: uncertainty })
+          : kind === "cleanup"
+            ? new Error("orphan verification failed")
+            : aggregate;
     const run = kind === "cleanup" ? fixture.verifyCleanup : fixture.run;
     await expect(
       run(async () => {

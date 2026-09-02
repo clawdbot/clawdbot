@@ -1,4 +1,5 @@
 import type { Api, AssistantMessage, Context, Model } from "@openclaw/llm-core";
+import { readRuntimeImageHistory } from "@openclaw/media-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type {
   ResponseFunctionCallOutputItemList,
@@ -370,7 +371,7 @@ function convertResponsesMessagesWithStyle(
                     detail: "auto",
                     image_url: `data:${item.mimeType};base64,${item.data}`,
                   },
-                  item,
+                  readRuntimeImageHistory(item),
                   "responses",
                 ),
           ) as ResponseInputMessageContentList

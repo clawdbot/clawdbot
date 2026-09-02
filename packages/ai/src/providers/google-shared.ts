@@ -13,8 +13,9 @@ import {
   type ThinkingConfig,
   ThinkingLevel,
 } from "@google/genai";
+import { readRuntimeImageHistory } from "@openclaw/media-core";
 import {
-  projectRequestImageHistory,
+  createRequestImageHistoryProjector,
   withRequestImageHistory,
 } from "../internal/request-image-history.js";
 import { calculateCost, clampThinkingLevel } from "../model-utils.js";
@@ -222,7 +223,7 @@ export function convertMessages<T extends GoogleApiType>(
                 data: item.data,
               },
             },
-            item,
+            readRuntimeImageHistory(item),
             "google",
           );
         });
@@ -450,12 +451,14 @@ export async function runGoogleGenerateContentLifecycle<T extends GoogleApiType>
   try {
     const client = params.createClient();
     let requestParams = params.buildParams();
+    const imageHistory = createRequestImageHistoryProjector(requestParams, "google");
     const nextParams = await options?.onPayload?.(requestParams, model);
     if (nextParams !== undefined) {
       requestParams = nextParams as GenerateContentParameters;
     }
+    requestParams = imageHistory.bind(requestParams);
     const googleStream = await client.models.generateContentStream(
-      projectRequestImageHistory(requestParams, "google"),
+      imageHistory.project(requestParams),
     );
     const googleIterator = googleStream[Symbol.asyncIterator]();
     await notifyProviderStreamOpened({

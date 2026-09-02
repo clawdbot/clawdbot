@@ -336,15 +336,19 @@ merge_verify() {
   echo "merge-verify passed for PR #$pr"
 }
 
+snapshot_merge_body() {
+  node "${BASH_SOURCE[0]%/*}/merge-body.mjs" read "$1"
+}
+
 prepare_squash_merge_body() {
-  local pr="$1" source_head="${LOCAL_PREP_HEAD_SHA:-$PREP_HEAD_SHA}"
+  local pr="$1" captured="${2:-}" source_head="${LOCAL_PREP_HEAD_SHA:-$PREP_HEAD_SHA}"
   local source_trailers
   # GraphQL publication can collapse local fixups. Preserve their reviewed
   # trailers, excluding main's ancestry, rather than inspecting current HEAD.
   source_trailers=$(git -c trailer.separators=: -c trailer.co-authored-by.key=Co-authored-by log --reverse \
     --no-show-signature --no-notes --no-color --no-decorate --encoding=UTF-8 \
     --format='%(trailers:key=Co-authored-by,only,unfold)' "$PR_MAIN_SHA..$source_head") || return 1
-  [ -n "$source_trailers" ] || return 0
+  [ -n "$source_trailers" ] || [ -n "$captured" ] || return 0
 
   local repo_nwo preview
   repo_nwo=$(gh repo view --json nameWithOwner --jq .nameWithOwner) || return 1
@@ -359,44 +363,11 @@ prepare_squash_merge_body() {
     return 1
   fi
 
-  local body_file envelope original_trailers final_trailers message trailer
+  local body_file
   body_file=$(mktemp .local/merge-body.XXXXXX) || return 1
-  # Git parses complete commit messages; a body containing only trailers needs
-  # a temporary subject. Keep all authors in one terminal trailer block.
-  envelope=$'OpenClaw merge message\n\n'
-  printf '%s' "$envelope" > "$body_file" || return 1
-  printf '%s\n' "$preview" | jq -r '.data.repository.pullRequest.viewerMergeBodyText' >> "$body_file" || return 1
-  original_trailers=$(git -c trailer.separators=: -c trailer.co-authored-by.key=Co-authored-by interpret-trailers \
-    --parse --no-divider "$body_file") || return 1
-  # Mutating interpret-trailers runs configured trailer commands. Parse only,
-  # then append missing values without rewriting the server's existing text.
-  message=$(printf '%s\n' "$preview" | jq -r '.data.repository.pullRequest.viewerMergeBodyText') || return 1
-  while [[ "$message" == *$'\n'* ]] && [[ "${message##*$'\n'}" != *[!$' \t\r']* ]]; do
-    message="${message%$'\n'*}"
-  done
-  local known_trailers="$original_trailers" separator=$'\n\n'
-  [ -z "$original_trailers" ] || separator=$'\n'
-  while IFS= read -r trailer; do
-    [ -n "$trailer" ] || continue
-    if ! printf '%s\n' "$known_trailers" | grep -Fxq -- "$trailer"; then
-      [ -z "$message" ] || message+="$separator"
-      message+="$trailer"
-      known_trailers+=$'\n'"$trailer"
-      separator=$'\n'
-    fi
-  done <<< "$source_trailers"
-  printf '%s%s\n' "$envelope" "$message" > "$body_file" || return 1
-  final_trailers=$(git -c trailer.separators=: -c trailer.co-authored-by.key=Co-authored-by interpret-trailers \
-    --parse --no-divider "$body_file") || return 1
-  while IFS= read -r trailer; do
-    [ -n "$trailer" ] || continue
-    if ! printf '%s\n' "$final_trailers" | grep -Fxq -- "$trailer"; then
-      echo "Cannot preserve squash credit: the final message lost a source or preview trailer." >&2
-      return 1
-    fi
-  done <<< "$original_trailers
-$source_trailers"
-  printf '%s\n' "$message" > "$body_file" || return 1
+  printf '%s\n' "$preview" | jq -c --arg source "$source_trailers" --arg captured "$captured" '
+    {preview:.data.repository.pullRequest.viewerMergeBodyText,source:$source,captured:$captured}
+  ' | node "${BASH_SOURCE[0]%/*}/merge-body.mjs" compose > "$body_file" || return 1
   printf '%s\n' "$body_file"
 }
 
@@ -430,6 +401,8 @@ merge_run() {
   local auto_merge_requested="${2:-false}"
   local recovery_oid="${3:-}" recovery_record="" recovery_actor=""
   local replacement_head="${4:-}" replacement_artifacts="" recovery_captures=()
+  local body_path="${5:-}" captured_body="" merge_body_snapshot=""
+  [ -z "$body_path" ] || body_path=$(node -e 'process.stdout.write(require("node:path").resolve(process.argv[1]))' -- "$body_path") || return 1
   if [ -n "$replacement_head" ] &&
     { [ -z "$recovery_oid" ] || ! [[ "$replacement_head" =~ ^[0-9a-f]{40}$ ]]; }; then
     echo "Replacement head requires an exact recovery outcome and full lowercase 40-character SHA." >&2
@@ -451,6 +424,14 @@ merge_run() {
     # Reconciliation needs neither the old worktree nor its prepare artifacts.
     merge_outcome_resume "$pr"
     return
+  fi
+  # Capture before gates or cwd changes; retained outcomes above reconcile even
+  # when the original operator file no longer exists.
+  if [ -n "$body_path" ]; then
+    [ "${OPENCLAW_PR_MERGE_METHOD:-squash}" = squash ] || {
+      echo "--body-file requires squash merge." >&2; return 2;
+    }
+    captured_body=$(snapshot_merge_body "$body_path") || return 1
   fi
   enter_worktree "$pr" false || return 1
   # Earlier wrappers captured output at dispatch without recording intent. Even
@@ -560,8 +541,9 @@ merge_run() {
   local merge_args=(--match-head-commit "$PREP_HEAD_SHA")
   if [ "$merge_method" = "squash" ]; then
     local merge_body_file
-    merge_body_file=$(prepare_squash_merge_body "$pr") || return 1
+    merge_body_file=$(prepare_squash_merge_body "$pr" "$captured_body") || return 1
     [ -z "$merge_body_file" ] || merge_args+=(--body-file "$merge_body_file")
+    [ -z "$captured_body" ] || merge_body_snapshot=$(snapshot_merge_body "$merge_body_file") || return 1
   fi
 
   local crabbox_final_main_sha="" route=immediate
@@ -620,6 +602,10 @@ merge_run() {
       *) merge_outcome_stop "auto-merge admission requires MERGEABLE with CLEAN or BEHIND status"; return 1 ;;
     esac
   fi
+  if [ -n "$captured_body" ] && [ "$route" = queue ]; then
+    merge_outcome_stop "--body-file requires a non-queue PR"
+    return 1
+  fi
   if [ -n "$recovery_oid" ] && [ "$route" != immediate ]; then
     merge_outcome_stop "operator recovery requires current immediate admission without admin, auto, or queue routing"
     return 1
@@ -668,6 +654,11 @@ merge_run() {
       return 1
     fi
     verify_prep_branch_matches_prepared_head "$pr" "$LOCAL_PREP_HEAD_SHA" || return 1
+  fi
+  if [ -n "$captured_body" ] &&
+    [ "$merge_body_snapshot" != "$(snapshot_merge_body "$merge_body_file")" ]; then
+    merge_outcome_stop "merge body changed during admission; no request was dispatched"
+    return 1
   fi
   local intent attempt
   attempt=$(node -e 'process.stdout.write(require("node:crypto").randomUUID())') || return 1

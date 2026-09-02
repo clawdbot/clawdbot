@@ -1,4 +1,4 @@
-import type { TemplateResult } from "lit";
+import { html, type TemplateResult } from "lit";
 import { vi } from "vitest";
 import type {
   SessionSuggestion,
@@ -22,6 +22,7 @@ import type { GatewaySessionRow } from "../../api/types.ts";
 import { createChatAttachmentHandoff } from "../../app/chat-attachment-handoff.ts";
 import { createChatSubmissions } from "../../app/chat-submissions.ts";
 import type { ApplicationContext } from "../../app/context.ts";
+import type { ApplicationPlacementStartupStatus } from "../../app/session-placement-startup.ts";
 import type { CatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
 import type { TaskSuggestionAcceptMode } from "../../lib/task-suggestion-acceptance.ts";
@@ -31,8 +32,11 @@ import {
   SESSION_MUTATION_TEST_METHODS,
   sessionMutationGatewayHello,
 } from "../../test-helpers/gateway-methods.ts";
+import { ChatPane } from "./chat-pane-render.ts";
 import { attachChatRealtimeActions, createInitialChatRealtimeState } from "./chat-realtime.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
+import { createPageState } from "./chat-state-page.ts";
+import type { ChatProps } from "./chat-view.ts";
 import { createBackgroundTasksProps } from "./components/chat-background-tasks.ts";
 import type { HeaderMenuAction } from "./components/chat-header-session-menu.ts";
 import { createSessionWorkspaceProps } from "./components/chat-session-workspace.ts";
@@ -167,6 +171,7 @@ export type TestChatPane = HTMLElement & {
     catalog: boolean,
     agentWorkspace: undefined,
     workspaceGit: boolean,
+    placementStartupStatus: ApplicationPlacementStartupStatus | null | undefined,
   ) => TemplateResult;
 };
 
@@ -355,6 +360,7 @@ export function createTestChatPane(params: {
     connectionEpoch: 4,
     hello: sessionMutationGatewayHello(),
     lastError: null,
+    modelAuthStatusRequestVersion: 0,
     requestUpdate,
     sessionKey: "agent:main:current",
     sessions: params.sessions,
@@ -434,4 +440,34 @@ export function offlineDeviceSession(): GatewaySessionRow & { placement: ActiveP
       runner: { kind: "device", status: "offline" },
     },
   };
+}
+
+class RenderTestChatPane extends ChatPane {
+  chatProps: ChatProps | undefined;
+
+  initialize(context: ApplicationContext) {
+    this.context = context;
+    this.state = createPageState(
+      context,
+      { afterCommit: () => () => {}, invalidate: () => {} },
+      this,
+    );
+    return this.state;
+  }
+
+  protected override renderChatPaneLayout(params: { chatProps: ChatProps }) {
+    this.chatProps = params.chatProps;
+    return html``;
+  }
+
+  override applySessionsState(state: ApplicationContext["sessions"]["state"]) {
+    super.applySessionsState(state);
+  }
+}
+
+export function createRenderTestChatPane() {
+  if (!customElements.get("openclaw-chat-render-regression")) {
+    customElements.define("openclaw-chat-render-regression", RenderTestChatPane);
+  }
+  return document.createElement("openclaw-chat-render-regression") as RenderTestChatPane;
 }

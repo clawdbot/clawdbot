@@ -118,6 +118,8 @@ function sameChatItem(previous: RenderChatItem, next: RenderChatItem): boolean {
     case "divider":
       return (
         previous.kind === "divider" &&
+        previous.compaction === next.compaction &&
+        previous.compactionId === next.compactionId &&
         previous.label === next.label &&
         previous.metric === next.metric &&
         previous.description === next.description &&
@@ -177,7 +179,16 @@ function stabilizeChatItems(
     next.filter((item) => item.kind === "group").map((item) => item.key),
   );
   const claimedGroupKeys = new Set<string>();
+  const previousCompactions = new Map(
+    previous.flatMap((item) =>
+      item.kind === "divider" && item.compactionId ? [[item.compactionId, item.key] as const] : [],
+    ),
+  );
   const reconciled = next.map((item) => {
+    if (item.kind === "divider" && item.compactionId) {
+      const key = previousCompactions.get(item.compactionId);
+      return key ? { ...item, key } : item;
+    }
     if (item.kind !== "group") {
       return item;
     }
@@ -245,6 +256,7 @@ function sameChatItemsStructuralInput(
     previous.archiveNotice?.key === next.archiveNotice?.key &&
     previous.archiveNotice?.label === next.archiveNotice?.label &&
     previous.runId === next.runId &&
+    previous.compactionStatus === next.compactionStatus &&
     previous.locale === next.locale &&
     previous.messages === next.messages &&
     previous.toolMessages === next.toolMessages &&

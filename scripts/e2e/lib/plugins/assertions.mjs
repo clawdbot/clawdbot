@@ -12,6 +12,7 @@ import {
   readPluginInstallRecords,
   writePluginInstallIndexForE2E,
 } from "../plugin-index-sqlite.mjs";
+import { isExplicitPluginDisableMarker } from "../plugin-uninstall-assertions.mjs";
 import { readTextFileTail } from "../text-file-utils.mjs";
 
 const command = process.argv[2];
@@ -159,8 +160,8 @@ function assertPluginRemoved(params) {
   }
 
   const config = readOpenClawConfig();
-  if (config.plugins?.entries?.[params.pluginId]) {
-    throw new Error(`${params.pluginId} config entry still present after uninstall`);
+  if (!isExplicitPluginDisableMarker(config, params.pluginId)) {
+    throw new Error(`${params.pluginId} exact disabled uninstall marker missing`);
   }
   if ((config.plugins?.allow || []).includes(params.pluginId)) {
     throw new Error(`${params.pluginId} allowlist entry still present after uninstall`);
@@ -1011,8 +1012,8 @@ function assertClawHubRemoved() {
   const configAfterUninstall = fs.existsSync(configAfterUninstallPath)
     ? readJson(configAfterUninstallPath)
     : {};
-  if (configAfterUninstall.plugins?.entries?.[pluginId]) {
-    throw new Error(`ClawHub config entry still present after uninstall: ${pluginId}`);
+  if (!isExplicitPluginDisableMarker(configAfterUninstall, pluginId)) {
+    throw new Error(`ClawHub exact disabled uninstall marker missing: ${pluginId}`);
   }
   if ((configAfterUninstall.plugins?.allow || []).includes(pluginId)) {
     throw new Error(`ClawHub allowlist entry still present after uninstall: ${pluginId}`);

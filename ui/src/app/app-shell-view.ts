@@ -411,6 +411,8 @@ export function renderApplicationShell(host: ShellViewHost) {
       : renderLazyElementModal(host.lazyCustomElements)}
     ${isOptionalElementDefined(host.commandPaletteElement)
       ? html`<openclaw-command-palette
+          .desktopAvailable=${desktopPanelAvailable}
+          .custodianAvailable=${custodianPanelAvailable}
           .onNavigate=${(routeId: RouteId, options?: ApplicationNavigationOptions) =>
             host.navigate(routeId, options)}
           .onSelectSession=${(sessionKey: string) => host.selectChatSession(sessionKey)}

@@ -182,14 +182,10 @@ export async function resolveCurrentTurnImages(params: {
         unresolvedSourceIndexes.push(attachment.index);
       }
     }
-    // History images carry synthetic source indexes past the current turn's, so
-    // they append after it without a second ordering rule.
-    const currentSourceIndexes = new Set(
-      undescribedImageAttachments.map((attachment) => attachment.index),
-    );
-    for (const [resolvedIndex, image] of imageByResolvedIndex) {
-      if (image && !currentSourceIndexes.has(resolvedIndex)) {
-        appendOrderedImages({ entries, images: [image], sourceIndex: resolvedIndex });
+    // History has no current-turn media fact; keep its identity outside that fact space.
+    for (const image of images) {
+      if (readRuntimeImageHistory(image)) {
+        appendOrderedImages({ entries, images: [image], sourceIndex: -1 });
       }
     }
     const merged = resolveMergedTurnImages(entries);

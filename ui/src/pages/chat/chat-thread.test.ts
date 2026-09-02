@@ -945,7 +945,7 @@ describe("collapseCompletedTurnWork", () => {
     },
   );
 
-  it("keeps durable context compaction inside completed work instead of treating it as the reply", () => {
+  it("renders durable context compaction as a marker, not an assistant reply", () => {
     const items = collapsedItems({
       messages: [
         userMessage("do it", 1_000),
@@ -963,16 +963,8 @@ describe("collapseCompletedTurnWork", () => {
       ],
     });
 
-    expect(items.map((item) => item.kind)).toEqual(["group", "work-group", "group"]);
-    const work = requireWorkGroup(items[1]);
-    expect(work.groups).toHaveLength(1);
-    expect(work.groups[0]?.messages[0]?.message).toMatchObject({
-      role: "assistant",
-      content: [{ type: "text", text: "Context compacted" }],
-      runId: "run-1",
-      __openclaw: { runtimeActivityKind: "context_compaction" },
-    });
-    expect(work.groups[0]?.messages[0]?.message).not.toHaveProperty("idempotencyKey");
+    expect(items.map((item) => item.kind)).toEqual(["group", "divider", "group"]);
+    expect(items[1]).toMatchObject({ compaction: "complete", label: "Context compacted" });
     expect(requireGroup(items[2]).messages[0]?.message).toMatchObject({
       content: "All done.",
     });
@@ -4619,8 +4611,8 @@ describe("buildCachedChatItems", () => {
     expect(items).toHaveLength(1);
     const divider = requireRecord(items[0]);
     expect(divider.kind).toBe("divider");
-    expect(divider.label).toBe("Compacted history");
-    expect(divider.icon).toBe("foldVertical");
+    expect(divider.label).toBe("Context compacted");
+    expect(divider.compaction).toBe("complete");
     expect(divider.description).toBe("The compacted transcript is preserved as a checkpoint.");
     const action = requireRecord(divider.action);
     expect(action.kind).toBe("session-checkpoints");
@@ -4641,7 +4633,7 @@ describe("buildCachedChatItems", () => {
 
     expect(items[0]).toMatchObject({
       kind: "divider",
-      label: "Compacted history",
+      label: "Context compacted",
       metric: "saved 875.3k tokens",
     });
   });

@@ -1,4 +1,3 @@
-// Anthropic provider adapts Anthropic streams and tool calls for the runtime.
 import Anthropic from "@anthropic-ai/sdk";
 import { Stream } from "@anthropic-ai/sdk/core/streaming.js";
 import type {
@@ -9,6 +8,8 @@ import type {
   RawMessageStreamEvent,
   TextBlockParam,
 } from "@anthropic-ai/sdk/resources/messages.js";
+// Anthropic provider adapts Anthropic streams and tool calls for the runtime.
+import { readRuntimeImageHistory } from "@openclaw/media-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { getEnvApiKey } from "../env-api-keys.js";
 import { getAiTransportHost, resolveAiTransportHeaderSentinels } from "../host.js";
@@ -19,7 +20,7 @@ import {
   type AnthropicInlineImageBudget,
 } from "../internal/anthropic-inline-images.js";
 import {
-  projectRequestImageHistory,
+  createRequestImageHistoryProjector,
   withRequestImageHistory,
 } from "../internal/request-image-history.js";
 import { calculateCost } from "../model-utils.js";
@@ -419,12 +420,14 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicComp
       usedCompactionReplay = builtParams.usedCompactionReplay;
       let params = builtParams.params;
       const toolProjection = builtParams.toolProjection;
+      const imageHistory = createRequestImageHistoryProjector(params, "anthropic");
       const nextParams = await requestOptions?.onPayload?.(params, model);
       if (nextParams !== undefined) {
         params = nextParams as MessageCreateParamsStreaming;
       }
+      params = imageHistory.bind(params);
       applyClaudeRequestContract(params, model);
-      params = projectRequestImageHistory(params, "anthropic");
+      params = imageHistory.project(params);
       const sdkRequestOptions = {
         ...(requestOptions?.signal ? { signal: requestOptions.signal } : {}),
         ...(requestOptions?.timeoutMs !== undefined ? { timeout: requestOptions.timeoutMs } : {}),
@@ -676,11 +679,7 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicComp
               output.stopReason = mapAnthropicStopReason(event.delta.stop_reason);
             }
           }
-          // Only update usage fields if present (not null).
-          // Preserves input_tokens from message_start when proxies omit it in message_delta.
-          if (event.usage) {
-            applyAnthropicMessageDeltaUsage(output.usage, event.usage, messageStartPromptUsage);
-          }
+          applyAnthropicMessageDeltaUsage(output.usage, event.usage, messageStartPromptUsage);
           calculateCost(costModel, output.usage);
         }
       }
@@ -1220,7 +1219,7 @@ async function convertMessages(
                 data: item.data,
               },
             } satisfies ContentBlockParam,
-            item,
+            readRuntimeImageHistory(item),
             "anthropic",
           );
         });

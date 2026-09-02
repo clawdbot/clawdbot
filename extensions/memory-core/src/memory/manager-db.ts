@@ -8,6 +8,7 @@ import {
   dropMemoryPathFtsTriggers,
   ensureDir,
   ensureMemoryChunkProvenance,
+  ensureMemoryIndexSchema,
   ensureMemoryRecallMetadataSchema,
   ensureMemoryPathFtsTriggers,
   loadSqliteVecExtension,
@@ -16,6 +17,7 @@ import {
   MEMORY_INDEX_DERIVED_TABLES,
   MEMORY_INDEX_STATE_TABLE,
   MEMORY_INDEX_VECTOR_TABLE,
+  openOpenClawAgentDatabaseReadOnly,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import {
   ensureOpenClawAgentDatabaseSchema,
@@ -28,6 +30,7 @@ import { waitForMemoryReindexLock } from "./manager-reindex-lock.js";
 
 const MEMORY_REINDEX_SCHEMA = "memory_reindex";
 const MEMORY_INDEX_STATE_ID = 1;
+const READ_ONLY_MEMORY_DATABASES = new WeakMap<DatabaseSync, () => void>();
 const MEMORY_DATABASE_FILE_SUFFIXES = ["", "-wal", "-shm", "-journal"] as const;
 const MEMORY_REINDEX_ENTRY_SUFFIXES = ["-wal", "-shm", "-journal", ""] as const;
 const MEMORY_REINDEX_UUID_PATTERN =
@@ -69,6 +72,8 @@ function tableExists(db: DatabaseSync, schema: string, tableName: string): boole
   return row?.ok === 1;
 }
 
+export { tableExists as memoryDatabaseTableExists };
+
 function readTableSql(db: DatabaseSync, schema: string, tableName: string): string | null {
   const row = db
     .prepare(`SELECT sql FROM ${schema}.sqlite_master WHERE type = 'table' AND name = ?`)
@@ -96,6 +101,8 @@ export function readMemoryDatabaseRevision(db: DatabaseSync): number {
   }
   return row.revision;
 }
+
+export class MemoryIndexRevisionConflictError extends Error {}
 
 /** Reset derived content without replacing the shared agent database or its schema. */
 export async function resetMemoryDatabase(params: {
@@ -243,7 +250,7 @@ export async function publishMemoryDatabaseTables(params: {
     runSqliteImmediateTransactionSync(params.targetDb, () => {
       const liveRevision = readMemoryDatabaseRevision(params.targetDb);
       if (liveRevision !== params.expectedRevision) {
-        throw new Error(
+        throw new MemoryIndexRevisionConflictError(
           `Memory index changed while full reindex was building ` +
             `(expected revision ${params.expectedRevision}, found ${liveRevision}); retry the full reindex.`,
         );
@@ -417,7 +424,52 @@ export function openMemoryDatabaseAtPath(
   }
 }
 
+function openUninitializedMemoryDatabase(allowExtension: boolean): DatabaseSync {
+  const database = openNodeSqliteDatabase(":memory:", { allowExtension });
+  try {
+    ensureMemoryIndexSchema({ cacheEnabled: true, db: database, ftsEnabled: true });
+    database.exec("PRAGMA query_only = ON");
+    READ_ONLY_MEMORY_DATABASES.set(database, () => database.close());
+    return database;
+  } catch (error) {
+    database.close();
+    throw error;
+  }
+}
+
+/** Open an existing memory index through the agent database query-only owner. */
+export function openMemoryDatabaseReadOnlyAtPath(
+  dbPath: string,
+  allowExtension: boolean,
+  agentId: string,
+): DatabaseSync {
+  const opened = openOpenClawAgentDatabaseReadOnly({ agentId, path: dbPath }, { allowExtension });
+  if (!opened.found) {
+    if (opened.reason === "database-missing") {
+      return openUninitializedMemoryDatabase(allowExtension);
+    }
+    throw new Error(`Memory index database schema is missing: ${dbPath}`);
+  }
+  const { database } = opened;
+  if (!tableExists(database.db, "main", MEMORY_INDEX_STATE_TABLE)) {
+    database.close();
+    return openUninitializedMemoryDatabase(allowExtension);
+  }
+  READ_ONLY_MEMORY_DATABASES.set(database.db, database.close);
+  return database.db;
+}
+
 export function closeMemoryDatabase(db: DatabaseSync): void {
+  const closeReadOnly = READ_ONLY_MEMORY_DATABASES.get(db);
+  if (closeReadOnly) {
+    READ_ONLY_MEMORY_DATABASES.delete(db);
+    closeReadOnly();
+    return;
+  }
   closeMemorySqliteWalMaintenance(db);
   db.close();
+}
+
+export function isMemoryDatabaseReadOnly(db: DatabaseSync): boolean {
+  return READ_ONLY_MEMORY_DATABASES.has(db);
 }

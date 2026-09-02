@@ -5,8 +5,10 @@ import { readRuntimeImageHistory } from "@openclaw/media-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import { detectAndLoadPromptImages } from "../../agents/embedded-agent-runner/run/images.js";
-import { readPersistedMediaImageLayout } from "../../agents/embedded-agent-runner/run/prompt-image-metadata.js";
+import {
+  detectAndLoadPromptImages,
+  hydratePromptMediaMessages,
+} from "../../agents/embedded-agent-runner/run/images.js";
 import { prepareEmbeddedAttemptPromptExecution } from "../../agents/embedded-agent-runner/run/prompt-image-preparation.js";
 import {
   listSessionPendingInputs,
@@ -21,6 +23,8 @@ import {
   type PersistedUserTurnMessage,
   type UserTurnTranscriptRecorder,
 } from "../../sessions/user-turn-transcript.js";
+import { isUserMessage } from "../../sessions/user-turn-transcript.message.js";
+import { readPersistedMediaImageLayout } from "../../sessions/user-turn-transcript.metadata.js";
 import { createTestUserTurnTranscriptTarget } from "../../sessions/user-turn-transcript.test-support.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import { withTestDir } from "../../test-helpers/temp-dir.js";
@@ -107,7 +111,7 @@ describe("collected history with managed current images", () => {
             expect(current.images?.map(imageHash)).toEqual([expectedHashes[0]]);
             expect(current.imageOrder).toEqual(["inline"]);
             expect(current.unresolvedSourceIndexes ?? []).toEqual([]);
-            expect(current.imageSourceIndexes).toEqual([index === 0 ? 2 : 0]);
+            expect(current.imageSourceIndexes).toEqual([-1]);
             const projection = buildInboundMediaNoteProjection(ctx);
             const inboundMediaIndexes = projection.mediaIndexes ?? [];
             const promptSourceIndexes = current.imageSourceIndexes?.map((sourceIndex) => {
@@ -288,12 +292,12 @@ describe("collected history with managed current images", () => {
                   hash: imageHash(image),
                   factIndex: after.imageFactIndexes[index],
                 }))
-                .sort((left, right) => left.hash.localeCompare(right.hash)),
+                .toSorted((left, right) => left.hash.localeCompare(right.hash)),
               loadedCount: after.loadedCount,
             }).toEqual({
               images: expectedHashes
                 .map((hash, index) => ({ hash, factIndex: index === 0 ? null : 0 }))
-                .sort((left, right) => left.hash.localeCompare(right.hash)),
+                .toSorted((left, right) => left.hash.localeCompare(right.hash)),
               loadedCount: 1,
             });
           } finally {
@@ -608,7 +612,7 @@ describe("collected images through embedded transcript preparation", () => {
             message: PersistedUserTurnMessage;
           }> = [];
           const failures: unknown[] = [];
-          const drained = createDeferred<void>();
+          const drained = createDeferred();
           for (const source of ordered) {
             expect(
               enqueueFollowupRun(sessionKey, source.run, { mode: "collect", debounceMs: 0 }),
@@ -652,8 +656,10 @@ describe("collected images through embedded transcript preparation", () => {
             .filter((event) => event.type === "message");
           expect(stored).toHaveLength(1);
           const storedMessage = stored[0]?.message;
-          if (!isRecord(storedMessage)) {
-            throw new Error("collected user turn is absent from the real transcript store");
+          if (!isUserMessage(storedMessage) || typeof storedMessage.content !== "string") {
+            throw new Error(
+              "collected text-only user turn is absent from the real transcript store",
+            );
           }
           expect(readPersistedMediaFacts(storedMessage)).toEqual(expectedMedia);
           expect(observe(collected.result)).toEqual({
@@ -662,6 +668,29 @@ describe("collected images through embedded transcript preparation", () => {
             loadedCount: sources.reduce((count, source) => count + source.before.loadedCount, 0),
             failedMediaCount: 0,
             skippedCount: 0,
+          });
+          const replayFailures: number[] = [];
+          const [replayed] = await hydratePromptMediaMessages([storedMessage], {
+            workspaceDir,
+            model: { input: ["text", "image"] },
+            localRoots: getDefaultMediaLocalRoots(),
+            onCurrentTurnImageFailure: (count) => {
+              replayFailures.push(count);
+            },
+          });
+          if (replayed?.role !== "user" || !Array.isArray(replayed.content)) {
+            throw new Error("stored collected turn was not materialized for replay");
+          }
+          expect({
+            imageHashes: replayed.content.filter((block) => block.type === "image").map(imageHash),
+            text: replayed.content.flatMap((block) => (block.type === "text" ? [block.text] : [])),
+            failures: replayFailures,
+          }).toEqual({
+            imageHashes: ordered.flatMap((source) =>
+              source.name === "history" ? (historyOnly ? [] : [hashes[1]]) : [hashes[2]],
+            ),
+            text: [storedMessage.content],
+            failures: [],
           });
         } finally {
           clearFollowupQueue(sessionKey);

@@ -9,7 +9,10 @@ import {
   normalizeStructuredMediaEntryForTranscript,
   resolveTranscriptMediaPath,
 } from "./user-turn-transcript.media-normalize.js";
-import { buildPersistedUserTurnMetadata } from "./user-turn-transcript.metadata.js";
+import {
+  buildPersistedUserTurnMetadata,
+  readPersistedMediaImageLayout,
+} from "./user-turn-transcript.metadata.js";
 import type {
   PersistedUserTurnMediaInput,
   PersistedUserTurnMessage,
@@ -30,7 +33,7 @@ function resolveTranscriptMediaType(params: {
   return params.explicitType ?? mimeTypeFromFilePath(params.mediaPath ?? params.mediaUrl);
 }
 
-export function buildPersistedUserTurnMediaInputsFromFields(
+function buildPersistedUserTurnMediaInputsFromFields(
   fields: PersistedUserTurnMessage | null | undefined,
 ): PersistedUserTurnMediaInput[] {
   const facts = fields ? (readPersistedMediaFacts(fields) ?? []) : [];
@@ -195,12 +198,23 @@ export function mergePreparedUserTurnMessageForRuntime(params: {
   }
   const runtimeMeta = readOpenClawMessageMeta(params.runtimeMessage);
   const preparedMeta = readOpenClawMessageMeta(params.preparedMessage);
+  const hasRuntimeImages = userMessageHasImageContent(params.runtimeMessage);
+  // The detector records only surviving byte slots; text-only input has a different layout.
+  const runtimeLayout = hasRuntimeImages
+    ? readPersistedMediaImageLayout(params.runtimeMessage)
+    : undefined;
   return {
     ...params.runtimeMessage,
     ...params.preparedMessage,
-    ...(preparedMeta ? { __openclaw: { ...runtimeMeta, ...preparedMeta } } : {}),
-    ...(userMessageHasImageContent(params.runtimeMessage)
-      ? { content: params.runtimeMessage.content }
+    ...(preparedMeta || runtimeLayout
+      ? {
+          __openclaw: {
+            ...runtimeMeta,
+            ...preparedMeta,
+            ...(runtimeLayout ? { mediaImageLayout: runtimeLayout } : {}),
+          },
+        }
       : {}),
+    ...(hasRuntimeImages ? { content: params.runtimeMessage.content } : {}),
   };
 }

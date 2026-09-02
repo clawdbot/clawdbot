@@ -68,7 +68,40 @@ it.each([
   "package.json",
   ".github/workflows/ci.yml",
   "test/vitest/vitest.ui-paths.mjs",
+  "test/vitest/vitest.ui-isolated-paths.mjs",
   "test/vitest/vitest.ui-browser.config.ts",
-])("runs Chromium UI tests when %s can change the browser copilot CI route", (changedPath) => {
+  "test/vitest/vitest.ui-e2e.config.ts",
+  "test/vitest/vitest.ui-e2e.global-setup.ts",
+  "test/vitest/vitest.ui-e2e.bundled.global-setup.ts",
+  "test/vitest/vitest.ui-e2e.setup.ts",
+  "test/vitest/vitest.ui-e2e.sequencer.ts",
+  "test/vitest/vitest.pattern-file.ts",
+  "test/vitest/vitest.performance-config.ts",
+  "test/vitest/vitest.timeouts.ts",
+  "test/vitest/vitest.weighted-sharding.ts",
+  "scripts/lib/vitest-local-scheduling.mts",
+  "test/helpers/temp-dir.ts",
+  "scripts/control-ui-mock-dev.ts",
+  "scripts/control-ui-mock-isolation.ts",
+  "scripts/control-ui-mock-preview.ts",
+  "scripts/control-ui-mock-attachments.ts",
+  "scripts/lib/ci-test-timings.mts",
+  "scripts/lib/ci-test-timings-schema.mts",
+  "config/ci-test-timings.json",
+  "extensions/qa-lab/src/control-ui-media-transcript.real-gateway.e2e.test.ts",
+])("runs Chromium UI tests when %s changes browser test inputs", (changedPath) => {
   expect(detectChangedScope([changedPath]).runUiTests).toBe(true);
+});
+
+it.each([
+  "test/vitest/vitest.e2e.config.ts",
+  "test/vitest/vitest.e2e.sequencer.ts",
+  "test/vitest/vitest.tooling.config.ts",
+  "test/vitest/vitest.ui.config.ts",
+  "test/vitest/vitest.ui-isolated.config.ts",
+  "scripts/lib/ci-node-test-plan.mts",
+  "scripts/control-ui-i18n.ts",
+  "extensions/qa-lab/src/suite-runtime-parity-runner.control-ui.test.ts",
+])("keeps unrelated changes out of Chromium UI tests: %s", (changedPath) => {
+  expect(detectChangedScope([changedPath]).runUiTests).toBe(false);
 });

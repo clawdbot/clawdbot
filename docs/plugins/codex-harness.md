@@ -67,7 +67,9 @@ starting more work. This uses Codex's terminal ownership; it does not guarantee
 cleanup of commands that deliberately detach from that ownership.
 
 With the default `tools.exec.host: "auto"` and no active OpenClaw sandbox,
-Codex also receives `node_exec` for commands on paired nodes. Native shell
+Codex also receives `node_exec` when a connected node supports `system.run`.
+Offline paired devices and devices without shell support do not expose this tool.
+When a node is configured, that binding must resolve to an eligible node. Native shell
 remains on the Codex app-server host and workspace
 (Gateway-local for the default stdio deployment); `node_exec` selects the sole
 connected node that supports `system.run`, or requires a name or id when several
@@ -78,9 +80,10 @@ an execution environment, OpenClaw keeps its policy-filtered `exec` and
 `process` tools available instead for direct, unsandboxed execution.
 
 When `tools.exec.host: "node"` or `/exec host=node` makes the node the session
-default, OpenClaw hides the Codex-native shell and exposes `node_exec` as the
-shell path. This keeps the configured execution host from silently falling
-back to the app-server or Gateway machine.
+default, OpenClaw hides the Codex-native shell and exposes `node_exec` only while
+the node target is eligible. If it is unavailable, reconnect the configured node
+or explicitly change the exec host. OpenClaw does not silently fall back to the
+app-server or Gateway machine.
 
 `gateway_exec` is not exposed when an active OpenClaw sandbox, a node-default
 execution policy, memory-flush restrictions, tool allow/deny policy, or

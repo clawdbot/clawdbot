@@ -52,13 +52,17 @@ export function createReplyDelivery({ params, state, log }: ReplyDeliveryParams)
     const itemId = eventData?.itemId ?? "";
     const progressText =
       eventData?.phase === "commentary" ? eventData.text.replace(/\s+/g, " ").trim() : "";
+    const preamblePhase = delivery.finalMessage ? "end" : "update";
+    // Completion must survive an identical last delta: first-notification
+    // consumers wait for this boundary, not a timer or a repeated text snapshot.
+    const commentarySignature = `${preamblePhase}\0${progressText}`;
     const event = progressText
       ? {
           stream: "item" as const,
           data: {
             kind: "preamble",
             title: "Preamble",
-            phase: "update",
+            phase: preamblePhase,
             progressText,
             ...(itemId ? { itemId } : {}),
           },
@@ -68,10 +72,10 @@ export function createReplyDelivery({ params, state, log }: ReplyDeliveryParams)
         : { stream: "assistant" as const, data: eventData };
     if (
       event &&
-      (event.stream !== "item" || lastEmittedCommentaryByItem.get(itemId) !== progressText)
+      (event.stream !== "item" || lastEmittedCommentaryByItem.get(itemId) !== commentarySignature)
     ) {
       if (event.stream === "item") {
-        lastEmittedCommentaryByItem.set(itemId, progressText);
+        lastEmittedCommentaryByItem.set(itemId, commentarySignature);
       }
       emitAgentEvent({ runId: params.runId, ...event });
       if (params.onAgentEvent) {
@@ -151,11 +155,16 @@ export function createReplyDelivery({ params, state, log }: ReplyDeliveryParams)
     }
     // Project before deferral while these message/block indices are current.
     // Channel partials retain their block-scoped payload; the bus gets a whole message.
-    const delivery = { data, eventData, emitPartialReply: options?.emitPartialReply === true };
+    const delivery = {
+      data,
+      eventData,
+      emitPartialReply: options?.emitPartialReply === true,
+      finalMessage: options?.finalMessage === true,
+    };
     if (!eventData && !delivery.emitPartialReply) {
       return;
     }
-    if (state.deferBlockReplyDelivery) {
+    if (state.deferBlockReplyDelivery && data.phase !== "commentary") {
       state.deferredAssistantEvents.push(delivery);
       return;
     }

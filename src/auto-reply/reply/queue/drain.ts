@@ -4,7 +4,6 @@ import { expectDefined, stableStringify } from "@openclaw/normalization-core";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   type MediaImageLayout,
-  readPersistedMediaImageLayout,
   resolveMediaImageLayout,
 } from "../../../agents/embedded-agent-runner/run/prompt-image-metadata.js";
 import { runAgentHarnessBeforeMessageWriteHook } from "../../../agents/harness/hook-helpers.js";
@@ -29,6 +28,7 @@ import {
   createUserTurnTranscriptRecorder,
   type PersistedUserTurnMessage,
 } from "../../../sessions/user-turn-transcript.js";
+import { readPersistedMediaImageLayout } from "../../../sessions/user-turn-transcript.metadata.js";
 import { extractTextFromChatContent } from "../../../shared/chat-content.js";
 import { resolveGlobalMap, resolveGlobalSingleton } from "../../../shared/global-singleton.js";
 import { normalizeMessageChannel } from "../../../utils/message-channel.js";
@@ -625,7 +625,10 @@ function createCollectUserTurnTranscriptRecorder(items: FollowupRun[]) {
     const { media, mediaImageLayout } = collectQueuedPromptMedia(
       messages.map((message, index) => ({
         media: message ? readPersistedMediaFacts(message) : undefined,
-        mediaImageLayout: message ? readPersistedMediaImageLayout(message) : undefined,
+        mediaImageLayout: message
+          ? (transcriptSources[index]?.userTurnTranscriptRecorder?.getRuntimeMediaImageLayout?.() ??
+            readPersistedMediaImageLayout(message))
+          : undefined,
         // Without an optional layout, source order keeps current images bound to
         // their facts and history-only images in unbound inline positions.
         imageOrder: message ? transcriptSources[index]?.imageOrder : undefined,

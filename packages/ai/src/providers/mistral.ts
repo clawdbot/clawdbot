@@ -1,4 +1,3 @@
-// Mistral provider adapts Mistral streams and tool calls to the runtime.
 import { randomUUID } from "node:crypto";
 import { HTTPClient, type Fetcher } from "@mistralai/mistralai/lib/http";
 import type {
@@ -9,10 +8,12 @@ import type {
   FunctionTool,
 } from "@mistralai/mistralai/models/components";
 import { Chat } from "@mistralai/mistralai/sdk/chat";
+// Mistral provider adapts Mistral streams and tool calls to the runtime.
+import { readRuntimeImageHistory } from "@openclaw/media-core";
 import { getEnvApiKey } from "../env-api-keys.js";
 import { getAiTransportHost } from "../host.js";
 import {
-  projectRequestImageHistory,
+  createRequestImageHistoryProjector,
   withRequestImageHistory,
 } from "../internal/request-image-history.js";
 import { calculateCost, clampThinkingLevel } from "../model-utils.js";
@@ -181,11 +182,13 @@ export const streamMistral: StreamFunction<"mistral-conversations", MistralOptio
       );
 
       let payload = buildChatPayload(model, context, transformedMessages, options);
+      const imageHistory = createRequestImageHistoryProjector(payload, "mistral");
       const nextPayload = await options?.onPayload?.(payload, model);
       if (nextPayload !== undefined) {
         payload = nextPayload as ChatCompletionStreamRequest;
       }
-      payload = projectRequestImageHistory(payload, "mistral");
+      payload = imageHistory.bind(payload);
+      payload = imageHistory.project(payload);
       const headers = { ...model.headers, ...options?.headers };
       // Mistral infrastructure uses `x-affinity` for KV-cache reuse (prefix caching).
       // Respect explicit caller-provided header values.
@@ -883,7 +886,7 @@ function toChatMessages(
               type: "image_url",
               imageUrl: `data:${item.mimeType};base64,${item.data}`,
             } satisfies ContentChunk,
-            item,
+            readRuntimeImageHistory(item),
             "mistral",
           );
         });

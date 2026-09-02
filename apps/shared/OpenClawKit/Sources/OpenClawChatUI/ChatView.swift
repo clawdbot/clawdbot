@@ -1123,6 +1123,7 @@ extension OpenClawChatView {
                 content: content,
                 timestamp: last.timestamp,
                 transcriptMessageID: last.transcriptMessageID,
+                transcriptRunID: last.transcriptRunID,
                 isTruncated: last.isTruncated,
                 idempotencyKey: last.idempotencyKey,
                 toolCallId: last.toolCallId,

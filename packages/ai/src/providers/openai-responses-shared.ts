@@ -4,7 +4,7 @@ import type {
   ResponseInput,
   ResponseStreamEvent,
 } from "openai/resources/responses/responses.js";
-import { projectRequestImageHistory } from "../internal/request-image-history.js";
+import { createRequestImageHistoryProjector } from "../internal/request-image-history.js";
 import { clampThinkingLevel } from "../model-utils.js";
 import type { BaseOpenAIStreamOptions } from "../provider-options.js";
 import {
@@ -270,11 +270,13 @@ export async function runResponsesStreamLifecycle<TApi extends Api>(params: {
     const client = params.createClient(model);
     const buildRequest = async (replayMode: OpenAIResponsesReplayMode) => {
       let request = params.buildParams(model, replayMode);
+      const imageHistory = createRequestImageHistoryProjector(request, "responses");
       const nextRequest = await options?.onPayload?.(request, model);
       if (nextRequest !== undefined) {
         request = nextRequest as ResponsesLifecycleRequest;
       }
-      return projectRequestImageHistory(request, "responses");
+      request = imageHistory.bind(request);
+      return imageHistory.project(request);
     };
     const requestParams = await buildRequest("checkpoint");
 

@@ -1,4 +1,4 @@
-import { readPersistedMediaImageLayout } from "../agents/embedded-agent-runner/run/prompt-image-metadata.js";
+import { readPersistedMediaImageLayout } from "../sessions/user-turn-transcript.metadata.js";
 import type { UserTurnTranscriptRecorder } from "../sessions/user-turn-transcript.types.js";
 import { isImageMediaFact, readPersistedMediaFacts, type MediaFact } from "./media-facts.js";
 import type { PromptImageOrderEntry } from "./prompt-image-order.js";

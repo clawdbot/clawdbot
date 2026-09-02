@@ -100,6 +100,17 @@ async function reconnectForBranchRediscovery(page: Page, gateway: MockGateway) {
     .toBe(branchRequests + 1);
 }
 
+async function expectPendingNewSession(page: Page, message: string) {
+  const startup = page.locator(".new-session-page__starting");
+  const submittedPrompt = startup.locator(".chat-group.user");
+  await expect.poll(() => submittedPrompt.isVisible()).toBe(true);
+  await pollLocatorText(submittedPrompt).toContain(message);
+  await pollLocatorText(startup.locator('.chat-working-indicator[role="status"]')).toContain(
+    "Starting…",
+  );
+  expect(await page.locator(".new-session-page__message").isVisible()).toBe(false);
+}
+
 suite.define(() => {
   it("blocks a selected workspace worktree when branch rediscovery is unavailable until cleared", async () => {
     await withNewSessionPage(BASE_CONTEXT, async (page) => {
@@ -422,14 +433,15 @@ suite.define(() => {
         await page.goto(`${suite.server.baseUrl}new`);
         await page.getByRole("heading", { name: "Original agent" }).waitFor();
         const message = page.locator(".new-session-page__message");
-        const projectTrigger = page.locator("#new-session-project-trigger");
         const start = page.locator("button.new-session-page__start-submit");
-        await message.fill("retry this draft after reconnect");
+        const submittedMessage = "retry this draft after reconnect";
+        await message.fill(submittedMessage);
         await gateway.deferNext("sessions.create");
         await start.click();
         const originalCreate = await gateway.waitForRequest("sessions.create");
-        await expect.poll(() => start.isDisabled()).toBe(true);
+        await expectPendingNewSession(page, submittedMessage);
         await gateway.deferNext("sessions.create");
+        const agentRequestsBefore = (await gateway.getRequests("agents.list")).length;
 
         if (reconnectKind === "client replacement") {
           await gateway.setMethodResponse(
@@ -439,32 +451,27 @@ suite.define(() => {
           const socketsBefore = await gateway.getSocketCount();
           await replaceGatewayClient(page);
           await expect.poll(() => gateway.getSocketCount()).toBe(socketsBefore + 1);
-          await page.getByRole("heading", { name: "Replacement agent" }).waitFor();
+          await waitForControlUiGatewayReady(page);
         } else {
-          const agentRequestsBefore = (await gateway.getRequests("agents.list")).length;
           await gateway.setOnline(false);
           await waitForControlUiGatewayReconnecting(page);
-          expect(await message.isDisabled()).toBe(true);
-          expect(await projectTrigger.isDisabled()).toBe(true);
-          expect(await start.getAttribute("aria-busy")).toBe("true");
+          await expectPendingNewSession(page, submittedMessage);
           await gateway.setOnline(true);
           await waitForControlUiGatewayReady(page);
-          await expect
-            .poll(async () => (await gateway.getRequests("agents.list")).length)
-            .toBe(agentRequestsBefore + 1);
         }
+        await expect
+          .poll(async () => (await gateway.getRequests("agents.list")).length)
+          .toBe(agentRequestsBefore + 1);
         await expect
           .poll(async () => (await gateway.getRequests("sessions.create")).length)
           .toBe(2);
         const resumedCreate = (await gateway.getRequests("sessions.create")).at(-1);
         expect(originalCreate.params).toMatchObject({
           idempotencyKey: expect.any(String),
-          message: "retry this draft after reconnect",
+          message: submittedMessage,
         });
         expect(resumedCreate?.params).toEqual(originalCreate.params);
-        expect(await message.inputValue()).toBe("retry this draft after reconnect");
-        expect(await message.isDisabled()).toBe(true);
-        expect(await projectTrigger.isDisabled()).toBe(true);
+        await expectPendingNewSession(page, submittedMessage);
         await gateway.resolveDeferred("sessions.create", { key: sessionKey });
         await gateway.resolveDeferred("sessions.create", { key: sessionKey });
         await page.waitForURL((url) => url.pathname === controlUiSessionPath(sessionKey));
@@ -486,6 +493,7 @@ suite.define(() => {
       await gateway.deferNext("sessions.create");
       await page.getByRole("button", { name: "Start session" }).click();
       await gateway.waitForRequest("sessions.create");
+      await expectPendingNewSession(page, "do not duplicate this task");
 
       await gateway.setOnline(false);
       await waitForControlUiGatewayReconnecting(page);
@@ -500,6 +508,11 @@ suite.define(() => {
             "The Gateway changed while this session was starting. Check recent sessions before starting this task again.",
         })
         .waitFor();
+      await expect
+        .poll(() => page.locator(".new-session-page__message").inputValue())
+        .toBe("do not duplicate this task");
+      expect(await page.locator(".new-session-page__starting").isVisible()).toBe(false);
+      expect(await page.getByRole("button", { name: "Start session" }).isDisabled()).toBe(true);
       expect(await gateway.getRequests("sessions.create")).toHaveLength(1);
       expect(new URL(page.url()).pathname).toBe("/new");
     });

@@ -9,7 +9,7 @@ import type {
 } from "openai/resources/chat/completions.js";
 import { getEnvApiKey } from "../env-api-keys.js";
 import { getAiTransportHost } from "../host.js";
-import { projectRequestImageHistory } from "../internal/request-image-history.js";
+import { createRequestImageHistoryProjector } from "../internal/request-image-history.js";
 import { clampThinkingLevel } from "../model-utils.js";
 import { convertMessages, hasToolCallHistory } from "../openai-completions-messages.js";
 import { reasoningTagTextPolicy, type OpenAICompletionsOptions } from "../provider-options.js";
@@ -125,11 +125,13 @@ export const streamOpenAICompletions: StreamFunction<
       const cacheSessionId = cacheRetention === "none" ? undefined : options?.sessionId;
       const client = createClient(model, context, apiKey, options?.headers, cacheSessionId, compat);
       let params = buildParams(model, context, options, compat, cacheRetention);
+      const imageHistory = createRequestImageHistoryProjector(params, "chat");
       const nextParams = await options?.onPayload?.(params, model);
       if (nextParams !== undefined) {
         params = nextParams as typeof params;
       }
-      params = projectRequestImageHistory(params, "chat");
+      params = imageHistory.bind(params);
+      params = imageHistory.project(params);
       firstEventAbort = createFirstStreamEventAbortController(options?.signal);
       const requestOptions = {
         signal: firstEventAbort.signal,

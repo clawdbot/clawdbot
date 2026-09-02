@@ -9,6 +9,7 @@ import type {
   TextContent,
   ToolCall,
 } from "@openclaw/llm-core";
+import { readRuntimeImageHistory } from "@openclaw/media-core";
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 /**
  * Native Anthropic Messages streaming transport.
@@ -25,7 +26,7 @@ import {
   type AnthropicInlineImageBudget,
 } from "../internal/anthropic-inline-images.js";
 import {
-  projectRequestImageHistory,
+  createRequestImageHistoryProjector,
   withRequestImageHistory,
 } from "../internal/request-image-history.js";
 import { calculateCost } from "../model-utils.js";
@@ -412,7 +413,7 @@ async function convertAnthropicMessages(
                   data: item.data,
                 },
               },
-              item,
+              readRuntimeImageHistory(item),
               "anthropic",
             ),
       );
@@ -1195,12 +1196,14 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
         usedCompactionReplay = builtParams.usedCompactionReplay;
         let params = builtParams.params;
         const toolProjection = builtParams.toolProjection;
+        const imageHistory = createRequestImageHistoryProjector(params, "anthropic");
         const nextParams = await transportOptions.onPayload?.(params, model);
         if (nextParams !== undefined) {
           params = nextParams as Record<string, unknown>;
         }
+        params = imageHistory.bind(params);
         applyClaudeRequestContract(params, model);
-        params = projectRequestImageHistory(params, "anthropic");
+        params = imageHistory.project(params);
         const { response, stream: anthropicStream } = await client.messages.stream(
           { ...params, stream: true },
           transportOptions.signal ? { signal: transportOptions.signal } : undefined,

@@ -44,7 +44,11 @@ function makeSandbox() {
 
 type WakeNowRunMode = "direct" | "queued" | "scheduled";
 
-async function runMainCronCase(mode: WakeNowRunMode, wakeMode: "now" | "next-heartbeat" = "now") {
+async function runMainCronCase(
+  mode: WakeNowRunMode,
+  wakeMode: "now" | "next-heartbeat" = "now",
+  options: { heartbeatEvery?: string; deleteAfterRun?: boolean } = {},
+) {
   const sandbox = makeSandbox();
   const getReplySpy = vi.fn().mockResolvedValue({ text: "Handled the reminder" });
   const sendTelegram = vi.fn().mockResolvedValue({ messageId: "m1", chatId: "155462274" });
@@ -58,7 +62,7 @@ async function runMainCronCase(mode: WakeNowRunMode, wakeMode: "now" | "next-hea
     agents: {
       defaults: {
         workspace: sandbox.dir,
-        heartbeat: { every: "5m", target: "telegram" },
+        heartbeat: { every: options.heartbeatEvery ?? "5m", target: "telegram" },
       },
     },
     channels: { telegram: { allowFrom: ["*"] } },
@@ -116,6 +120,7 @@ async function runMainCronCase(mode: WakeNowRunMode, wakeMode: "now" | "next-hea
       sessionTarget: "main",
       wakeMode,
       payload: { kind: "systemEvent", text: "Reminder: Send the nightly report" },
+      ...(options.deleteAfterRun === undefined ? {} : { deleteAfterRun: options.deleteAfterRun }),
     });
 
     if (mode === "direct") {
@@ -167,6 +172,9 @@ async function runMainCronCase(mode: WakeNowRunMode, wakeMode: "now" | "next-hea
     expect(replyCtx.SessionKey).toBe(expectedMainSessionKey);
     expect(replyCtx.Body).toContain("Reminder: Send the nightly report");
     expect(peekSystemEventEntries(expectedMainSessionKey)).toHaveLength(0);
+    if (options.deleteAfterRun) {
+      expect(cron.getJob(job.id)).toBeUndefined();
+    }
   } finally {
     cron.stop();
     const drained = await waitForActiveCronJobs(5_000);
@@ -190,5 +198,9 @@ describe("main cron with the real heartbeat runner", () => {
 
   it("delivers a next-heartbeat event through a later scheduled main-session heartbeat", async () => {
     await runMainCronCase("direct", "next-heartbeat");
+  });
+
+  it("delivers and removes an immediate one-shot when heartbeat cadence is disabled", async () => {
+    await runMainCronCase("scheduled", "now", { heartbeatEvery: "0m", deleteAfterRun: true });
   });
 });

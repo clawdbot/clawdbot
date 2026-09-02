@@ -245,7 +245,9 @@ async function withResponsesSession(
   } finally {
     configureAiTransportHost(previousHost);
     server.closeAllConnections();
-    await new Promise<void>((resolve) => server.close(() => resolve()));
+    await new Promise<void>((resolve) => {
+      server.close(() => resolve());
+    });
   }
 }
 

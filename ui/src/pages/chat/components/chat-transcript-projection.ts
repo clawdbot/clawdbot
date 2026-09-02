@@ -91,8 +91,7 @@ export function projectChatTranscript(
     (sessionHost !== null &&
       isUiGlobalScopeConfigured(sessionHost) &&
       resolveUiGlobalAliasAgentId(sessionHost, props.sessionKey) !== null);
-  const reasoningLevel = activeSession?.reasoningLevel ?? "off";
-  const showReasoning = props.showThinking && reasoningLevel !== "off";
+  const showReasoning = props.showThinking && activeSession?.reasoningLevel === "on";
   const assistantIdentity = {
     name: props.assistantName,
     avatar: resolveAssistantDisplayAvatar(props),
@@ -117,6 +116,7 @@ export function projectChatTranscript(
     sessionKey: props.sessionKey,
     archiveNotice,
     runId: props.runId ?? null,
+    compactionStatus: props.compactionStatus,
     locale,
     messages: props.messages,
     toolMessages: props.toolMessages,

@@ -559,20 +559,16 @@ process.exit(${JSON.stringify(command)} === "node" ? Number(process.env.IDENTITY
     expect(pluginManifest.id).toBe("meta");
   });
 
-  it("owns external Git while retaining the npm publish deadline", () => {
-    const source = readFileSync(workflowPath, "utf8");
-    const npmPublishLines = source
-      .split("\n")
-      .filter((line) => line.includes('npm publish "$TARBALL_PATH"'));
-
-    expect(source).not.toMatch(
-      /timeout[^\n]*git|(?:^|\s)git (?:fetch|rev-parse|merge-base|for-each-ref|show)\b/mu,
-    );
-    expect(source.match(/timeout=120/gu)).toHaveLength(5);
-    expect(npmPublishLines).toHaveLength(2);
-    expect(
-      npmPublishLines.every((line) => line.includes("timeout --signal=TERM --kill-after=10s 300s")),
-    ).toBe(true);
+  it("retains the npm publish deadline for both publication routes", () => {
+    const publish = workflow().jobs?.publish_plugins_npm;
+    for (const stepName of [
+      "Publish with trusted publisher",
+      "Publish approved bootstrap tarball",
+    ]) {
+      expect(step(publish, stepName).run, stepName).toContain(
+        'timeout --signal=TERM --kill-after=10s 300s npm publish "$TARBALL_PATH"',
+      );
+    }
   });
 
   it("publishes extended-stable with OIDC only and verifies every package tag", () => {

@@ -13,6 +13,7 @@ import {
   prepareNpmPackageBundle,
   qualifyNpmPackageBundle,
   validatePreparedNpmBundleDescriptor,
+  verifyNpmBundleProducer,
   verifyPreparedNpmBundleFiles,
   verifyNpmSourceCheck,
 } from "../../scripts/npm-prepared-bundle.mjs";
@@ -26,10 +27,10 @@ const toolingSha = "b".repeat(40);
 const workflowPath = ".github/workflows/full-release-validation.yml";
 const hash = (bytes: Buffer) => createHash("sha256").update(bytes).digest("hex");
 
-function packageProducer() {
+function packageProducer(callerWorkflowPath = workflowPath) {
   return {
     repository,
-    workflowRef: `${repository}/${workflowPath}@refs/heads/main`,
+    workflowRef: `${repository}/${callerWorkflowPath}@refs/heads/main`,
     workflowSha: toolingSha,
     runId: "12",
     runAttempt: "2",
@@ -96,8 +97,8 @@ function packageSourceFixture(
   };
 }
 
-async function bundleFixture() {
-  const producer = packageProducer();
+async function bundleFixture(callerWorkflowPath = workflowPath) {
+  const producer = packageProducer(callerWorkflowPath);
   const tarball = Buffer.from("exact publishable root archive");
   const aiTarball = Buffer.from("exact publishable AI archive");
   const corePackage = {
@@ -158,7 +159,7 @@ async function bundleFixture() {
     id: 12,
     run_attempt: 2,
     head_sha: toolingSha,
-    path: workflowPath,
+    path: callerWorkflowPath,
     head_branch: "main",
     event: "workflow_dispatch",
     repository: { full_name: repository },
@@ -210,6 +211,60 @@ async function bundleFixture() {
 }
 
 describe("prepared npm bundle", () => {
+  it.each(["failure", "cancelled"])(
+    "reuses successful preparation and source jobs after parent %s",
+    async (conclusion) => {
+      const fixture = await bundleFixture(".github/workflows/openclaw-npm-release.yml");
+      Object.assign(fixture.run, { status: "completed", conclusion });
+      const downloaded = await downloadPreparedNpmBundle({
+        ...fixture,
+        repository,
+        sourceSha,
+        toolingSha,
+        outputDir: join(tempDirs.make("npm-retry-"), "prepared"),
+        token: "test-token",
+        npmDistTag: "beta",
+        releaseTag: fixture.manifest.releaseTag,
+      });
+      expect(readFileSync(downloaded.tarballPath)).toEqual(
+        fixture.files.get(fixture.manifest.tarballName),
+      );
+      const descriptor = {
+        schema: NPM_SOURCE_CHECK_SCHEMA,
+        source: { sha: sourceSha },
+        producer: { ...fixture.descriptor.producer, jobName: "Check npm release source" },
+      };
+      fixture.job.name = descriptor.producer.jobName;
+      const source = { descriptor, repository, sourceSha, toolingSha, runGh: fixture.runGh };
+      expect(verifyNpmSourceCheck(source).job.id).toBe(fixture.job.id);
+      fixture.job.run_attempt += 1;
+      expect(() => verifyNpmSourceCheck(source)).toThrow("unique exact completed producer job");
+    },
+  );
+
+  it.each([
+    ["completed", "failure"],
+    ["completed", "cancelled"],
+    ["in_progress", null],
+  ])("requires a successful parent for publication (%s/%s)", async (status, conclusion) => {
+    const fixture = await bundleFixture(".github/workflows/openclaw-npm-release.yml");
+    Object.assign(fixture.run, { status, conclusion });
+    fixture.job.name = "Qualify prepared npm package";
+    const options = {
+      producer: { ...fixture.descriptor.producer, jobName: fixture.job.name },
+      repository,
+      toolingSha,
+      qualified: true,
+      requireCompletedParent: true,
+      runGh: fixture.runGh,
+    };
+    expect(() => verifyNpmBundleProducer(options)).toThrow("parent");
+    Object.assign(fixture.run, { status: "completed", conclusion: "success" });
+    expect(verifyNpmBundleProducer(options).job.id).toBe(fixture.job.id);
+    fixture.job.conclusion = "failure";
+    expect(() => verifyNpmBundleProducer(options)).toThrow("unique exact completed producer job");
+  });
+
   it.each([
     ["2026.8.1", "v2026.8.1-2", "same-source"],
     ["2026.8.1-2", "v2026.8.1-2", undefined],

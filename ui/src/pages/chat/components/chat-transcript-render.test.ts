@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewaySessionRow, SessionsListResult } from "../../../api/types.ts";
 import { createTestGatewayClient } from "../../../test-helpers/gateway-client.ts";
 import { createTestTranscript } from "../chat-view.test-helpers.ts";
+import { getChatSessionProjection, reduceChatSessionProjection } from "../history-merge.ts";
 import { agentEvent, createHost } from "../tool-stream.test-helpers.ts";
 import { handleAgentEvent } from "../tool-stream.ts";
 import { renderTranscriptSearch, toggleTranscriptSearch } from "./chat-thread-interactions.ts";
@@ -41,6 +42,131 @@ function touchPointerUp(element: Element): void {
 describe("chat transcript rendering", () => {
   beforeEach(installTranscriptDomMocks);
   afterEach(resetTranscriptTestDom);
+
+  it("keeps one inline compaction row through completion and history refresh", async () => {
+    const props: ReturnType<typeof threadProps> = {
+      ...threadProps("pane-compaction"),
+      runWorking: true,
+      compactionStatus: {
+        phase: "active",
+        runId: "compact-run",
+        startedAt: 5_000,
+        completedAt: null,
+      },
+    };
+    const container = document.createElement("div");
+    document.body.append(container);
+    const transcript = createTestTranscript();
+    const rerender = () => {
+      render(renderChatThread(props, transcript), container);
+      transcript.hostUpdated();
+    };
+    try {
+      rerender();
+      transcript.hostConnected();
+      await flushDeferredRowPrune();
+      const marker = requireElement(container, ".chat-compaction");
+      const glyph = requireElement(marker, ".chat-compaction__glyph");
+      expect(marker.textContent).toContain("Compacting context");
+      expect(container.querySelector(".chat-working-indicator")).toBeNull();
+      props.compactionStatus = {
+        phase: "complete",
+        runId: "compact-run",
+        startedAt: 5_000,
+        completedAt: 6_000,
+      };
+      rerender();
+      expect(container.querySelector(".chat-compaction")).toBe(marker);
+      expect(marker.textContent).toContain("Context compacted");
+      const owner = {
+        sessionKey: props.sessionKey,
+        chatMessages: props.messages,
+        compactionStatus: props.compactionStatus,
+      };
+      getChatSessionProjection(owner, {
+        sessionKey: props.sessionKey,
+        activeLeafEntryId: "previous",
+      });
+      const messages = [
+        ...props.messages,
+        {
+          role: "custom",
+          customType: "openclaw.context-compaction",
+          content: "Context compacted",
+          __openclaw: { id: "compacted-item", runId: "compact-run" },
+          timestamp: 6_000,
+        },
+      ];
+      reduceChatSessionProjection(
+        owner,
+        { type: "snapshotLoaded", messages },
+        {
+          scope: { sessionKey: props.sessionKey, activeLeafEntryId: "compacted-item" },
+        },
+      );
+      props.messages = owner.chatMessages;
+      props.compactionStatus = owner.compactionStatus;
+      rerender();
+      expect(container.querySelectorAll(".chat-compaction")).toHaveLength(1);
+      expect(container.querySelector(".chat-compaction")).toBe(marker);
+      expect(marker.querySelector(".chat-compaction__glyph")).toBe(glyph);
+      expect(container.textContent?.match(/Context compacted/g)).toHaveLength(1);
+      props.compactionStatus = null;
+      rerender();
+      expect(container.querySelector(".chat-compaction")).toBe(marker);
+      props.messages = [
+        ...props.messages,
+        { role: "assistant", content: "Next reply", timestamp: 9_000 },
+      ];
+      rerender();
+      expect(container.querySelector(".chat-compaction")).toBe(marker);
+    } finally {
+      transcript.hostDisconnected();
+      container.remove();
+    }
+  });
+
+  it("keeps repeated compactions in one run distinct during history adoption", async () => {
+    const persisted = (itemId: string, timestamp: number) => ({
+      role: "custom",
+      customType: "openclaw.context-compaction",
+      content: "Context compacted",
+      __openclaw: { id: itemId, runId: "same-run", itemId },
+      timestamp,
+    });
+    const props = threadProps("pane-repeated-compaction", "agent:main:main", [
+      persisted("first", 1_000),
+    ]);
+    props.compactionStatus = {
+      phase: "active",
+      runId: "same-run",
+      itemId: "second",
+      startedAt: 2_000,
+      completedAt: null,
+    };
+    const container = document.body.appendChild(document.createElement("div"));
+    const transcript = createTestTranscript();
+    const rerender = () => {
+      render(renderChatThread(props, transcript), container);
+      transcript.hostUpdated();
+    };
+    try {
+      rerender();
+      transcript.hostConnected();
+      await flushDeferredRowPrune();
+      const active = requireElement(container, ".chat-compaction--active");
+      expect(container.querySelectorAll(".chat-compaction")).toHaveLength(2);
+      props.messages = [...props.messages, persisted("second", 3_000)];
+      rerender();
+      expect(container.querySelectorAll(".chat-compaction")).toHaveLength(2);
+      expect(active.isConnected).toBe(true);
+      expect(active.classList.contains("chat-compaction--complete")).toBe(true);
+      expect(container.querySelector(".chat-compaction--active")).toBeNull();
+    } finally {
+      transcript.hostDisconnected();
+      container.remove();
+    }
+  });
 
   it("keeps exact-run usage visible through final event batching and later corrections", async () => {
     const runId = "watched-run";
@@ -88,7 +214,7 @@ describe("chat transcript rendering", () => {
     handleAgentEvent(host, agentEvent(runId, 1, "usage", { outputTokens: 6_900 }, sessionKey));
     rerender();
     expect(requireElement(container, ".chat-working-indicator__tokens").textContent).toBe(
-      "6,900 output tokens",
+      "6.9k output tokens",
     );
     // Final usage and lifecycle can share one browser render; neither may discard the count.
     handleAgentEvent(host, agentEvent(runId, 2, "usage", { outputTokens: 6_950 }, sessionKey));
@@ -102,13 +228,11 @@ describe("chat transcript rendering", () => {
       runtimeMs: 14_000,
     };
     rerender();
-    expect(requireElement(container, ".chat-turn-recap").textContent).toContain(
-      "6,950 output tokens",
-    );
-    handleAgentEvent(host, agentEvent(runId, 4, "usage", { outputTokens: 6_951 }, sessionKey));
+    expect(requireElement(container, ".chat-turn-recap").textContent).toContain("7k output tokens");
+    handleAgentEvent(host, agentEvent(runId, 4, "usage", { outputTokens: 7_094 }, sessionKey));
     rerender();
     expect(requireElement(container, ".chat-turn-recap").textContent).toContain(
-      "6,951 output tokens",
+      "7.1k output tokens",
     );
     handleAgentEvent(
       host,
@@ -116,7 +240,7 @@ describe("chat transcript rendering", () => {
     );
     rerender();
     expect(requireElement(container, ".chat-turn-recap").textContent).toContain(
-      "6,951 output tokens",
+      "7.1k output tokens",
     );
     for (const replaceOwner of [
       () => {
@@ -137,7 +261,7 @@ describe("chat transcript rendering", () => {
       props.runWorking = false;
       rerender();
       expect(requireElement(container, ".chat-turn-recap").textContent).toContain(
-        "6,951 output tokens",
+        "7.1k output tokens",
       );
     }
     props.messages = [

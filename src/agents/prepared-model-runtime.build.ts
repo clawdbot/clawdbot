@@ -3,11 +3,13 @@ import { setImmediate as yieldToEventLoop } from "node:timers/promises";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
 import pLimit from "p-limit";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { runAbortableTimeout } from "../node-host/with-timeout.js";
 import { prepareModelCatalogThinkingPolicies } from "../plugins/provider-thinking.js";
 import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
 import { resolveUsableAgentCredentialModes } from "./agent-auth-credentials.js";
 import { getPreparedRuntimeAuthMaterializations } from "./auth-profiles/runtime-materializations.js";
+import { collectConfiguredAgentHarnessRuntimes } from "./harness-runtimes.js";
 import type { ModelCatalogSnapshot } from "./model-catalog.types.js";
 import {
   createPreparedModelCatalogWorker,
@@ -352,6 +354,9 @@ async function buildSnapshotBatch(
     return prepared;
   };
   const loadInboundPluginRegistry = createPreparedInboundRegistryLoader();
+  // Config objects can change between publications. Share this projection only
+  // inside the current build batch so every later publication reads fresh config.
+  const configuredHarnessRuntimesByConfig = new Map<OpenClawConfig, readonly string[]>();
   let runtimePluginMs = 0;
   let pluginMetadataMs = 0;
   let staticProviderCatalogMs = 0;
@@ -370,12 +375,22 @@ async function buildSnapshotBatch(
     );
     const preferBuiltPluginArtifacts =
       pluginGeneration?.preferBuiltPluginArtifacts ?? prepareInboundPluginRegistry;
+    const getConfiguredHarnessRuntimes = () => {
+      const config = groupCandidates[0]!.input.config;
+      let runtimes = configuredHarnessRuntimesByConfig.get(config);
+      if (!runtimes) {
+        runtimes = collectConfiguredAgentHarnessRuntimes(config);
+        configuredHarnessRuntimesByConfig.set(config, runtimes);
+      }
+      return runtimes;
+    };
     const prepared = await prepareWorkspaceBuildGroup(
       groupCandidates.map(({ input }) => input),
       catalogMode,
       {
         preferBuiltPluginArtifacts,
         includeCredentialProviders,
+        getConfiguredHarnessRuntimes,
       },
       prepareInboundPluginRegistry ? loadInboundPluginRegistry : undefined,
       pluginGeneration,

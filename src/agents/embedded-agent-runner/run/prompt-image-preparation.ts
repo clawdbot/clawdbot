@@ -15,6 +15,7 @@ function emptyPromptImages(): PromptImageResult {
   return {
     images: [],
     imageFactIndexes: [],
+    mediaImageLayout: { slots: [] },
     detectedRefs: [],
     failedMediaCount: 0,
     loadedCount: 0,

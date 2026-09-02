@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { buildInboundMediaNoteProjection } from "../../../auto-reply/media-note.js";
-import { readRuntimePromptImageFactIndexes } from "../../../media/runtime-prompt-image-provenance.js";
+import { readRuntimePromptImageProvenance } from "../../../media/runtime-prompt-image-provenance.js";
 import { captureEnv, setTestEnvValue } from "../../../test-utils/env.js";
 import { prepareEmbeddedAttemptPromptExecution } from "./prompt-image-preparation.js";
 
@@ -196,7 +196,7 @@ describe("plugin harness prompt media", () => {
       expect(result.images).toEqual([
         { type: "image", data: TINY_PNG_BASE64, mimeType: "image/png" },
       ]);
-      expect(readRuntimePromptImageFactIndexes(result.images ?? [])).toEqual([0]);
+      expect(readRuntimePromptImageProvenance(result.images ?? [])?.imageFactIndexes).toEqual([0]);
       expect(result.imageOrder).toEqual(["inline"]);
       expect(result.media).toBeUndefined();
       expect(JSON.stringify(result)).not.toContain(imagePath);

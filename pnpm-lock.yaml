@@ -159,9 +159,6 @@ importers:
       '@agentclientprotocol/sdk':
         specifier: 1.4.0
         version: 1.4.0(zod@4.4.3)
-      '@anthropic-ai/claude-agent-sdk':
-        specifier: 0.3.241
-        version: 0.3.241(@anthropic-ai/sdk@0.120.0(zod@4.4.3))(@modelcontextprotocol/sdk@1.30.0(supports-color@10.2.2)(zod@4.4.3))(zod@4.4.3)
       '@anthropic-ai/sdk':
         specifier: 0.120.0
         version: 0.120.0(zod@4.4.3)
@@ -361,6 +358,9 @@ importers:
       '@a2ui/web_core':
         specifier: 0.10.6
         version: 0.10.6
+      '@anthropic-ai/claude-agent-sdk':
+        specifier: 0.3.241
+        version: 0.3.241(@anthropic-ai/sdk@0.120.0(zod@4.4.3))(@modelcontextprotocol/sdk@1.30.0(supports-color@10.2.2)(zod@4.4.3))(zod@4.4.3)
       '@copilotkit/aimock':
         specifier: 1.39.0
         version: 1.39.0(vitest@4.1.11)
@@ -377,8 +377,8 @@ importers:
         specifier: 3.1.1
         version: 3.1.1(supports-color@10.2.2)
       '@openclaw/crabline':
-        specifier: 0.1.17
-        version: 0.1.17
+        specifier: 0.1.20
+        version: 0.1.20
       '@openclaw/session-url-contract':
         specifier: workspace:*
         version: link:packages/session-url-contract
@@ -711,6 +711,9 @@ importers:
       ws:
         specifier: 8.21.3
         version: 8.21.3
+      yargs-parser:
+        specifier: 22.0.0
+        version: 22.0.0
       zod:
         specifier: 4.4.3
         version: 4.4.3
@@ -718,6 +721,9 @@ importers:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
+      '@types/yargs-parser':
+        specifier: 21.0.3
+        version: 21.0.3
       undici:
         specifier: 8.10.0
         version: 8.10.0
@@ -1802,8 +1808,8 @@ importers:
         specifier: 1.30.0
         version: 1.30.0(supports-color@10.2.2)(zod@4.4.3)
       '@openclaw/crabline':
-        specifier: 0.1.17
-        version: 0.1.17
+        specifier: 0.1.20
+        version: 0.1.20
       playwright-core:
         specifier: 1.62.1
         version: 1.62.1
@@ -4143,8 +4149,8 @@ packages:
     cpu: [x64]
     os: [win32]
 
-  '@openclaw/crabline@0.1.17':
-    resolution: {integrity: sha512-tMjpIhzJvCulDA6mYL8nOA6XExWXZoBOrD4XgL3gsNdEDAWY4FCaHYyNCXwKPU2QSs78FU0xZ3NIQRr9ErHRpQ==}
+  '@openclaw/crabline@0.1.20':
+    resolution: {integrity: sha512-2m2Vfmp6qvXKrpbaPKoTYx3s2VVeyVkWBcXnCe4Vpj1PhPXrLfE0rW7KZ9M+/+23tqAYGGzp8wKsqe0CHko+OQ==}
     engines: {node: '>=22'}
     hasBin: true
 
@@ -5493,6 +5499,9 @@ packages:
 
   '@types/ws@8.18.1':
     resolution: {integrity: sha512-ThVF6DCVhA8kUGy+aazFQ4kXQ7E1Ty7A3ypFOe0IcJV8O/M511G99AW24irKrW56Wt44yG9+ij8FaqoBGkuBXg==}
+
+  '@types/yargs-parser@21.0.3':
+    resolution: {integrity: sha512-I4q9QU9MQv4oEOz4tAHJtNz1cwuLxn2F3xcc2iV5WdqLPpUnj30aUuxt1mAxYTG+oe8CZMV/+6rU4S4gRDzqtQ==}
 
   '@typescript/native-preview-darwin-arm64@7.0.0-dev.20260707.2':
     resolution: {integrity: sha512-wny2pgKjGbiZtnOIHVa3tXC1UfDqxNEFzyPGmiqybedG8hipG2Nfp0l5UxbaKCjkLacUpH/W5bP2hBOMVhCOzg==}
@@ -9606,6 +9615,10 @@ packages:
     resolution: {integrity: sha512-tVpsJW7DdjecAiFpbIB1e3qxIQsE6NoPc5/eTdrbbIC4h0LVsWhnoa3g+m2HclBIujHzsxZ4VJVA+GUuc2/LBw==}
     engines: {node: '>=12'}
 
+  yargs-parser@22.0.0:
+    resolution: {integrity: sha512-rwu/ClNdSMpkSrUb+d6BRsSkLUq1fmfsY6TOpYzTwvwkg1/NRG85KBy3kq++A8LKQwX6lsu+aWad+2khvuXrqw==}
+    engines: {node: ^20.19.0 || ^22.12.0 || >=23}
+
   yargs@15.4.1:
     resolution: {integrity: sha512-aePbxDmcYW++PaqBsJ+HYUFwCdv4LVvdnhBy78E57PIor8/OVvhMrADFFEDh8DHDFRv/O9i3lPhsENjO7QX0+A==}
     engines: {node: '>=8'}
@@ -9645,6 +9658,9 @@ packages:
 
   zod@4.4.3:
     resolution: {integrity: sha512-ytENFjIJFl2UwYglde2jchW2Hwm4GJFLDiSXWdTrJQBIN9Fcyp7n4DhxJEiWNAJMV1/BqWfW/kkg71UDcHJyTQ==}
+
+  zod@4.5.2:
+    resolution: {integrity: sha512-XkYXCol10+ba/6F/cueWV+TezUeOqXW0hdeJt5CdXjTYeAgAQg5N03RQdJ80mhfFE72+pblvYMW4wy2Qp4Qbrg==}
 
   zwitch@2.0.4:
     resolution: {integrity: sha512-bXE4cR/kVZhKZX/RjPEflHaKVhUVl85noU3v6b8apfQEc1x4A+zBxjZ4lN8LqGd6WZ3dl98pY4o717VFmoPp+A==}
@@ -11431,7 +11447,7 @@ snapshots:
   '@openai/codex@0.151.0-win32-x64':
     optional: true
 
-  '@openclaw/crabline@0.1.17':
+  '@openclaw/crabline@0.1.20':
     dependencies:
       '@types/node': 22.20.1
       commander: 15.0.0
@@ -11442,7 +11458,7 @@ snapshots:
       re2js: 2.8.6
       ws: 8.21.3
       yaml: 2.9.0
-      zod: 4.4.3
+      zod: 4.5.2
     transitivePeerDependencies:
       - bufferutil
       - utf-8-validate
@@ -12757,6 +12773,8 @@ snapshots:
   '@types/ws@8.18.1':
     dependencies:
       '@types/node': 26.2.0
+
+  '@types/yargs-parser@21.0.3': {}
 
   '@typescript/native-preview-darwin-arm64@7.0.0-dev.20260707.2':
     optional: true
@@ -17176,6 +17194,8 @@ snapshots:
 
   yargs-parser@21.1.1: {}
 
+  yargs-parser@22.0.0: {}
+
   yargs@15.4.1:
     dependencies:
       cliui: 6.0.0
@@ -17268,5 +17288,7 @@ snapshots:
   zod@3.25.76: {}
 
   zod@4.4.3: {}
+
+  zod@4.5.2: {}
 
   zwitch@2.0.4: {}

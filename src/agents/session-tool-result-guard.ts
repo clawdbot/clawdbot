@@ -760,6 +760,8 @@ export function installSessionToolResultGuard(
   const guardedAppendCompaction = ((
     ...args: Parameters<SessionManager["appendCompaction"]>
   ): string => {
+    // Replayed boundaries supply their recorded identity; new ones inherit the owning run.
+    args[5] = { runId: transcriptRunId, ...args[5] };
     const append = () => originalAppendCompaction(...args);
     return opts?.withCompactionPersistence
       ? opts.withCompactionPersistence(append, isExpectedCompactionAppend)

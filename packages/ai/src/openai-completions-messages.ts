@@ -1,3 +1,4 @@
+import { readRuntimeImageHistory } from "@openclaw/media-core";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type {
   ChatCompletionAssistantMessageParam,
@@ -139,7 +140,7 @@ export function convertMessages(
                 type: "image_url",
                 image_url: { url: `data:${item.mimeType};base64,${item.data}` },
               } satisfies ChatCompletionContentPartImage,
-              item,
+              readRuntimeImageHistory(item),
               "chat",
             );
           });

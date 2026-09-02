@@ -58,6 +58,7 @@ function mockReferencedStoreSnapshot() {
     config: {},
     authStores: [],
     authStoreCredentialsRevision: 0,
+    authStoreSnapshotsRevision: 0,
     warnings: [],
     webTools: {
       search: { providerSource: "none", diagnostics: [] },
