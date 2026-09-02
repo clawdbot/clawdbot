@@ -2,6 +2,8 @@
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import type { CDPSession } from "playwright-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_UPLOAD_DIR } from "./paths.js";
 import type { PageState } from "./pw-session-contracts.js";
@@ -16,6 +18,16 @@ installPwToolsCoreTestHooks();
 const sessionMocks = getPwToolsCoreSessionMocks();
 const mod = await import("./pw-tools-core.interactions.js");
 const downloads = await import("./pw-tools-core.downloads.js");
+
+function screenshotElement(screenshot: () => Promise<Buffer>) {
+  return {
+    elementHandle: async () => ({
+      screenshot,
+      scrollIntoViewIfNeeded: vi.fn(async () => {}),
+      dispose: vi.fn(async () => {}),
+    }),
+  };
+}
 
 function createFileChooserPageMocks() {
   const fileChooser = { setFiles: vi.fn(async () => {}) };
@@ -37,7 +49,7 @@ describe("pw-tools-core", () => {
     const elementScreenshot = vi.fn(async () => Buffer.from("E"));
     const page = {
       locator: vi.fn(() => ({
-        first: () => ({ screenshot: elementScreenshot }),
+        first: () => screenshotElement(elementScreenshot),
       })),
       screenshot: vi.fn(async () => Buffer.from("P")),
     };
@@ -54,11 +66,11 @@ describe("pw-tools-core", () => {
     expect(res.buffer.toString()).toBe("E");
     expect(sessionMocks.getPageForTargetId).toHaveBeenCalled();
     expect(page.locator as ReturnType<typeof vi.fn>).toHaveBeenCalledWith("#main");
-    expect(elementScreenshot).toHaveBeenCalledWith({ type: "png", timeout: 1234 });
+    expect(elementScreenshot).toHaveBeenCalledWith({ type: "png", timeout: 0 });
   });
   it("screenshots a ref locator", async () => {
     const refScreenshot = vi.fn(async () => Buffer.from("R"));
-    setPwToolsCoreCurrentRefLocator({ screenshot: refScreenshot });
+    setPwToolsCoreCurrentRefLocator(screenshotElement(refScreenshot));
     const page = {
       locator: vi.fn(),
       screenshot: vi.fn(async () => Buffer.from("P")),
@@ -75,7 +87,7 @@ describe("pw-tools-core", () => {
 
     expect(res.buffer.toString()).toBe("R");
     expect(sessionMocks.refLocator).toHaveBeenCalledWith(page, "76");
-    expect(refScreenshot).toHaveBeenCalledWith({ type: "jpeg", timeout: 2345 });
+    expect(refScreenshot).toHaveBeenCalledWith({ type: "jpeg", timeout: 0 });
   });
   it("rejects fullPage for element or ref screenshots", async () => {
     setPwToolsCoreCurrentRefLocator({ screenshot: vi.fn(async () => Buffer.from("R")) });
@@ -165,6 +177,104 @@ describe("pw-tools-core", () => {
       }
     },
   );
+  it.each([
+    "Page.getLayoutMetrics",
+    "Page.captureScreenshot",
+    "Emulation.setTouchEmulationEnabled",
+    "Playwright.screenshot",
+  ])("rejects mutations behind an interrupted %s until it settles", async (blockedMethod) => {
+    vi.useFakeTimers();
+    const started = createDeferred<void>();
+    const release = createDeferred<void>();
+    const waitAt = async (method: string) => {
+      if (method === blockedMethod) {
+        started.resolve();
+        await release.promise;
+      }
+    };
+    const send = vi.fn(async (method: string) => {
+      await waitAt(method);
+      return method === "Page.getLayoutMetrics"
+        ? {
+            visualViewport: { pageX: 0, pageY: 0, scale: 1 },
+            cssLayoutViewport: { pageX: 0, pageY: 0 },
+            cssContentSize: { x: 0, y: 0, width: 390, height: 664 },
+          }
+        : { data: Buffer.from("capture").toString("base64") };
+    });
+    const session = { send } as unknown as CDPSession;
+    const page = {
+      viewportSize: () => ({ width: 390, height: 664 }),
+      setViewportSize: vi.fn(async () => {}),
+      screenshot: vi.fn(async () => {
+        await waitAt("Playwright.screenshot");
+        return Buffer.from("capture");
+      }),
+    };
+    setPwToolsCoreCurrentPage(page);
+    const state = sessionMocks.ensurePageState() as unknown as PageState;
+    state.emulation = {
+      session: Promise.resolve(session),
+      ...(blockedMethod === "Playwright.screenshot"
+        ? {}
+        : { metricsOwner: { session, viewport: { width: 390, height: 664 } } }),
+      touch: { session, enabled: true },
+    };
+    const { resizeViewportViaPlaywright } = await import("./pw-tools-core.snapshot.js");
+    const { setDeviceViaPlaywright } = await import("./pw-tools-core.state.js");
+    const target = { cdpUrl: "http://127.0.0.1:18792", targetId: "T1" };
+    const controller = new AbortController();
+    const outcome = (operation: Promise<unknown>) =>
+      operation.then(
+        () => "success",
+        (error: unknown) => String(error),
+      );
+    const screenshot = outcome(
+      mod.takeScreenshotViaPlaywright({ ...target, timeoutMs: 25, signal: controller.signal }),
+    );
+    const mutations: Promise<string>[] = [];
+    try {
+      await started.promise;
+      const outcomes: string[] = [];
+      mutations.push(
+        outcome(resizeViewportViaPlaywright({ ...target, width: 800, height: 600 })).then(
+          (value) => {
+            outcomes.push(value);
+            return value;
+          },
+        ),
+      );
+      if (blockedMethod === "Playwright.screenshot") {
+        controller.abort(new Error("request closed"));
+        await vi.advanceTimersByTimeAsync(25);
+        expect(await screenshot).toContain("request closed");
+      } else {
+        await vi.advanceTimersByTimeAsync(25);
+        expect(await screenshot).toContain("timed out");
+      }
+      mutations.push(
+        outcome(setDeviceViaPlaywright({ ...target, name: "Desktop Chrome" })).then((value) => {
+          outcomes.push(value);
+          return value;
+        }),
+      );
+      await vi.advanceTimersByTimeAsync(0);
+      expect([...outcomes]).toEqual([
+        expect.stringContaining("close and reopen this tab"),
+        expect.stringContaining("close and reopen this tab"),
+      ]);
+      expect(page.setViewportSize).not.toHaveBeenCalled();
+    } finally {
+      release.resolve();
+      await screenshot;
+      await Promise.all(mutations);
+      await state.emulation?.transitionTail;
+      vi.useRealTimers();
+    }
+    expect(page.setViewportSize).not.toHaveBeenCalled();
+    await resizeViewportViaPlaywright({ ...target, width: 1280, height: 720 });
+    expect(page.setViewportSize).toHaveBeenCalledExactlyOnceWith({ width: 1280, height: 720 });
+  });
   it("arms the next file chooser and sets files (default timeout)", async () => {
     const uploadPath = path.join(DEFAULT_UPLOAD_DIR, `vitest-upload-${crypto.randomUUID()}.txt`);
     await fs.mkdir(path.dirname(uploadPath), { recursive: true });

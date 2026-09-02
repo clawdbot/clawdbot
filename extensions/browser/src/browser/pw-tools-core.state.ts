@@ -6,6 +6,10 @@ import type { CDPSession, Page } from "playwright-core";
 import { getPlaywrightCore } from "./playwright-core.runtime.js";
 import type { PageState } from "./pw-session-contracts.js";
 import { ensurePageState, getPageForTargetId } from "./pw-session.js";
+import {
+  awaitActionWithAbort,
+  createAbortPromiseWithListener,
+} from "./pw-tools-core.interactions.navigation.js";
 
 type DeviceSize = { width: number; height: number };
 type PageCdpSend = (method: string, params?: Record<string, unknown>) => Promise<unknown>;
@@ -57,16 +61,18 @@ async function withPageEmulationCdpClient<T>(params: {
 }
 
 export async function setViewportSizeOnPage(page: Page, state: PageState, viewport: DeviceSize) {
-  const previous = state.emulation?.metricsOwner ? page.viewportSize() : null;
-  await page.setViewportSize(viewport);
-  // Playwright skips identical metrics. Record a changed viewport immediately,
-  // even when a later device override fails and leaves the descriptor incomplete.
+  const emulation = state.emulation;
   if (
-    state.emulation &&
-    (previous?.width !== viewport.width || previous?.height !== viewport.height)
+    emulation?.metricsOwner &&
+    (emulation.metricsOwner.viewport.width !== viewport.width ||
+      emulation.metricsOwner.viewport.height !== viewport.height)
   ) {
-    delete state.emulation.metricsOwner;
+    // Chromium caches metrics per session. Release the device owner before
+    // Playwright writes, or reapplying the same device silently skips its DPR/screen.
+    await emulation.metricsOwner.session.send("Emulation.clearDeviceMetricsOverride");
+    delete emulation.metricsOwner;
   }
+  await page.setViewportSize(viewport);
 }
 
 export async function runPageEmulationTransition<T>(params: {
@@ -76,26 +82,50 @@ export async function runPageEmulationTransition<T>(params: {
 }): Promise<T> {
   params.signal?.throwIfAborted();
   const emulation = resolvePageEmulationState(params.state);
+  const interrupted = (emulation.transitionAbort ??= new AbortController());
+  interrupted.signal.throwIfAborted();
+  const signal = params.signal
+    ? AbortSignal.any([params.signal, interrupted.signal])
+    : interrupted.signal;
+  const { abortPromise, cleanup } = createAbortPromiseWithListener(signal);
   const previous = emulation.transitionTail ?? Promise.resolve();
   const transition = previous
     .catch(() => {})
     .then(async () => {
-      params.signal?.throwIfAborted();
+      signal.throwIfAborted();
       // Device changes and captures share one queue: neither may observe or
       // restore only part of another operation's viewport, metrics, or touch state.
-      return await params.run();
+      const interrupt = () =>
+        interrupted.abort(
+          new Error(
+            "A previous screenshot or emulation action was cancelled but is still running. Retry when it finishes; if it remains stuck, close and reopen this tab.",
+          ),
+        );
+      params.signal?.addEventListener("abort", interrupt, { once: true });
+      try {
+        return await params.run();
+      } finally {
+        params.signal?.removeEventListener("abort", interrupt);
+      }
     });
-  const tail = transition.then(
-    () => {},
-    () => {},
-  );
+  // Cancellation cannot stop Chromium's pending capture/restoration. Reject
+  // waiting callers, but retain the mutation owner until its cleanup settles.
+  const tail = transition
+    .then(
+      () => {},
+      () => {},
+    )
+    .finally(() => {
+      if (emulation.transitionTail === tail) {
+        delete emulation.transitionTail;
+        delete emulation.transitionAbort;
+      }
+    });
   emulation.transitionTail = tail;
   try {
-    return await transition;
+    return await awaitActionWithAbort(transition, abortPromise);
   } finally {
-    if (emulation.transitionTail === tail) {
-      delete emulation.transitionTail;
-    }
+    cleanup();
   }
 }
 

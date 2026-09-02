@@ -242,7 +242,7 @@ type ScreenshotOptions = {
 async function runScreenshotOperation<T>(
   page: Page,
   opts: ScreenshotOptions,
-  run: () => Promise<T>,
+  run: (signal: AbortSignal) => Promise<T>,
 ) {
   const controller = new AbortController();
   const signal = opts.signal
@@ -250,7 +250,7 @@ async function runScreenshotOperation<T>(
     : controller.signal;
   const timeoutMs = opts.timeoutMs ?? DEFAULT_BROWSER_SCREENSHOT_TIMEOUT_MS;
   return await withTimeout(
-    runPageEmulationTransition({ state: ensurePageState(page), signal, run }),
+    runPageEmulationTransition({ state: ensurePageState(page), signal, run: () => run(signal) }),
     timeoutMs,
     {
       createError: () => {
@@ -267,21 +267,32 @@ function screenshotLocator(page: Page, ref?: string, element?: string): Locator 
 }
 
 async function capturePageScreenshot(page: Page, opts: ScreenshotOptions, locator?: Locator) {
+  opts.signal?.throwIfAborted();
   if (locator && opts.fullPage) {
     throw new Error("fullPage is not supported for element screenshots");
   }
   const type = opts.type ?? "png";
   const emulation = ensurePageState(page).emulation;
   const owner = emulation?.metricsOwner;
+  const preparation = {
+    timeout: opts.timeoutMs ?? DEFAULT_BROWSER_SCREENSHOT_TIMEOUT_MS,
+    signal: opts.signal,
+  };
+  // Resolve a fixed handle with a bounded wait: an unbounded Locator screenshot
+  // could keep retrying a missing selector after the caller has already timed out.
+  const element = await locator?.elementHandle({ timeout: preparation.timeout });
   try {
+    await element?.scrollIntoViewIfNeeded(preparation);
+    opts.signal?.throwIfAborted();
     if (!owner) {
-      return await (locator
-        ? locator.screenshot({ type, timeout: opts.timeoutMs })
-        : page.screenshot({ type, fullPage: Boolean(opts.fullPage), timeout: opts.timeoutMs }));
+      // The outer deadline owns cancellation. Playwright's timeout rejects
+      // before native capture/restoration finishes, releasing the queue too early.
+      return await (element
+        ? element.screenshot({ type, timeout: 0 })
+        : page.screenshot({ type, fullPage: Boolean(opts.fullPage), timeout: 0 }));
     }
 
-    await locator?.scrollIntoViewIfNeeded({ timeout: opts.timeoutMs });
-    const box = locator ? await locator.boundingBox() : undefined;
+    const box = element ? await element.boundingBox() : undefined;
     if (locator && (!box || !box.width || !box.height)) {
       throw new Error("Cannot take a screenshot of an element that is not visible or has no size");
     }
@@ -311,6 +322,7 @@ async function capturePageScreenshot(page: Page, opts: ScreenshotOptions, locato
       (opts.fullPage || locator) &&
       (clip.width > owner.viewport.width || clip.height > owner.viewport.height),
     );
+    opts.signal?.throwIfAborted();
     // Chromium restores the capturing session's metrics. A new session or
     // Playwright's own session would replace this device owner's DPR and screen.
     const result = await owner.session.send("Page.captureScreenshot", {
@@ -320,12 +332,16 @@ async function capturePageScreenshot(page: Page, opts: ScreenshotOptions, locato
     });
     return Buffer.from(result.data, "base64");
   } finally {
-    if (emulation?.touch) {
-      // Full-page and oversized element captures can reset touch emulation.
-      // Both screenshot backends restore the value set by this page's owner.
-      await emulation.touch.session.send("Emulation.setTouchEmulationEnabled", {
-        enabled: emulation.touch.enabled,
-      });
+    try {
+      if (emulation?.touch) {
+        // Full-page and oversized element captures can reset touch emulation.
+        // Both screenshot backends restore the value set by this page's owner.
+        await emulation.touch.session.send("Emulation.setTouchEmulationEnabled", {
+          enabled: emulation.touch.enabled,
+        });
+      }
+    } finally {
+      await element?.dispose();
     }
   }
 }
@@ -334,12 +350,12 @@ export async function takeScreenshotViaPlaywright(
   opts: InteractionTargetOptions & ScreenshotOptions & { ref?: string; element?: string },
 ): Promise<{ buffer: Buffer }> {
   const page = await getPageForTargetId(opts);
-  return await runScreenshotOperation(page, opts, async () => {
+  return await runScreenshotOperation(page, opts, async (signal) => {
     restoreRoleRefsForTarget({ cdpUrl: opts.cdpUrl, targetId: opts.targetId, page });
     return {
       buffer: await capturePageScreenshot(
         page,
-        opts,
+        { ...opts, signal },
         screenshotLocator(page, opts.ref, opts.element),
       ),
     };
@@ -356,7 +372,9 @@ type LabeledScreenshotOptions = InteractionTargetOptions &
 
 export async function screenshotWithLabelsViaPlaywright(opts: LabeledScreenshotOptions) {
   const page = await getPageForTargetId(opts);
-  return await runScreenshotOperation(page, opts, () => screenshotWithLabelsOnPage(page, opts));
+  return await runScreenshotOperation(page, opts, (signal) =>
+    screenshotWithLabelsOnPage(page, { ...opts, signal }),
+  );
 }
 
 async function screenshotWithLabelsOnPage(
@@ -452,6 +470,7 @@ async function screenshotWithLabelsOnPage(
   });
 
   try {
+    opts.signal?.throwIfAborted();
     if (plan.overlayItems.length > 0) {
       const captureY = space === "element" ? elementRect?.y : space === "viewport" ? scroll.y : 0;
       await page.evaluate(buildOverlayInjectionScript({ items: plan.overlayItems, captureY }));

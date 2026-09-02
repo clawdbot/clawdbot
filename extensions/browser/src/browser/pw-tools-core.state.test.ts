@@ -129,6 +129,7 @@ describe("setDeviceViaPlaywright", () => {
         },
       ],
       ["Emulation.setTouchEmulationEnabled", { enabled: true }],
+      ["Emulation.clearDeviceMetricsOverride"],
       ["Emulation.setUserAgentOverride", { userAgent: "desktop-chrome-user-agent" }],
       [
         "Emulation.setDeviceMetricsOverride",
@@ -233,6 +234,7 @@ describe("setDeviceViaPlaywright", () => {
       "Emulation.setUserAgentOverride",
       "Emulation.setDeviceMetricsOverride",
       "Emulation.setTouchEmulationEnabled",
+      "Emulation.clearDeviceMetricsOverride",
       "Emulation.setUserAgentOverride",
       "Emulation.setDeviceMetricsOverride",
       "Emulation.setTouchEmulationEnabled",

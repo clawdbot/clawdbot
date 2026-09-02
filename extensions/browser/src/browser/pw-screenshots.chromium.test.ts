@@ -132,6 +132,8 @@ describe.runIf(process.env.OPENCLAW_BROWSER_SNAPSHOT_E2E === "1")(
     it("keeps device DPR, screen, scroll, and touch across viewport, element, labels, and full-page captures", async () => {
       await withBrowser(async (target) => {
         await setDeviceViaPlaywright({ ...target, name: "iPhone 13" });
+        await resizeViewportViaPlaywright({ ...target, width: 640, height: 480 });
+        await setDeviceViaPlaywright({ ...target, name: "iPhone 13" });
         await resizeViewportViaPlaywright({ ...target, width: 390, height: 664 });
         const page = await getPageForTargetId(target);
         await page.evaluate(() => scrollTo(0, 420));

@@ -966,6 +966,10 @@ How it maps:
   that resolve to a download skip it.
 - `browser act` uses the snapshot `ref` IDs to click/type/drag/select.
 - `browser screenshot` captures pixels (full page, element, or labeled refs).
+- If a screenshot times out while the browser is still capturing or restoring
+  page settings, further screenshots, resizing, and device changes on that tab
+  return a recovery error. Retry after the capture finishes. If it stays stuck,
+  close and reopen the affected tab; other tabs remain available.
 - `browser doctor` checks Gateway, plugin, profile, browser, and tab readiness.
 - `browser` accepts:
   - `profile` to choose a named browser profile (openclaw, chrome, or remote CDP).

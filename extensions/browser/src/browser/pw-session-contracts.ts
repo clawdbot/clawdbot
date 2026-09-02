@@ -126,6 +126,7 @@ export type PageState = {
   emulation?: {
     session?: Promise<CDPSession>;
     transitionTail?: Promise<void>;
+    transitionAbort?: AbortController;
     metricsOwner?: { session: CDPSession; viewport: { width: number; height: number } };
     touch?: { session: CDPSession; enabled: boolean };
   };
