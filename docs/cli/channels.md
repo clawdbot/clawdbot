@@ -22,6 +22,7 @@ Related docs:
 openclaw channels list
 openclaw channels list --all
 openclaw channels status
+openclaw channels status --probe
 openclaw channels capabilities
 openclaw channels capabilities --channel discord --target channel:123
 openclaw channels resolve --channel slack "#general" "@jane"
@@ -63,6 +64,8 @@ such as `discord-archive` do not match `discord`.
 state plus probe results such as `works`, `probe failed`, `audit ok`, or `audit failed`.
 If the gateway is unreachable, `channels status` falls back to config-only summaries
 instead of live probe output.
+
+`channels status` does not support `--deep`; use `openclaw channels status --probe` for channel checks. The separate top-level `openclaw status --deep` command provides a broader status probe.
 
 ## Inbound dead letters
 
