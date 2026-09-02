@@ -482,4 +482,64 @@ describe("Feishu reply fallback for withdrawn/deleted targets", () => {
 
     expect(createMock).not.toHaveBeenCalled();
   });
+
+  it("falls back to create for 99992354 not-exists reply (fulfilled response)", async () => {
+    // Reproduction: Feishu's reply API returns feishu_code 99992354 with
+    // msg "... or not exists ..." when the supplied open_message_id does
+    // not resolve. The pre-fix classifier only matched "not found", so
+    // the error bubbled up and the agent response was never delivered.
+    // After the fix, code 99992354 is in WITHDRAWN_REPLY_ERROR_CODES and
+    // the msg also matches "not exists", so the reply path falls back
+    // to a direct create-message send.
+    replyMock.mockResolvedValue({
+      code: 99992354,
+      msg: "The request you send is not a valid {open_message_id} or not exists, ...",
+    });
+    createMock.mockResolvedValue({
+      code: 0,
+      data: { message_id: "om_99992354_fallback" },
+    });
+
+    await expectFallbackResult(
+      () =>
+        sendMessageFeishu({
+          cfg: {} as never,
+          to: "user:ou_target",
+          text: "hello",
+          replyToMessageId: "om_parent",
+        }),
+      "om_99992354_fallback",
+    );
+  });
+
+  it("falls back to create when reply throws a 99992354 not-exists AxiosError", async () => {
+    // Same as above, but via the thrown AxiosError shape: the SDK
+    // sometimes rejects before returning a fulfilled response, so the
+    // classifier must also recognize the code on err.response.data.
+    const axiosError = Object.assign(new Error("Request failed with status code 400"), {
+      response: {
+        status: 400,
+        data: {
+          code: 99992354,
+          msg: "The request you send is not a valid {open_message_id} or not exists, ...",
+        },
+      },
+    });
+    replyMock.mockRejectedValue(axiosError);
+    createMock.mockResolvedValue({
+      code: 0,
+      data: { message_id: "om_99992354_axios_fallback" },
+    });
+
+    await expectFallbackResult(
+      () =>
+        sendMessageFeishu({
+          cfg: {} as never,
+          to: "user:ou_target",
+          text: "hello",
+          replyToMessageId: "om_parent",
+        }),
+      "om_99992354_axios_fallback",
+    );
+  });
 });
