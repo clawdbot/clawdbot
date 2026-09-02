@@ -768,9 +768,9 @@ describe("openclaw test instance", () => {
     }
   });
 
-  it.each(["refuse", "late-refuse"])(
+  it.for(["refuse", "late-refuse"])(
     "restarts one %s refusal with identical launch state and owns the ready child",
-    async (refusalAction) => {
+    async (refusalAction, { signal: testSignal }) => {
       const control = refusalAction === "late-refuse" ? await createGatewayControl() : undefined;
       const { instance, readAttempts } = await createFakeGateway(
         `${refusalAction},ready`,
@@ -778,6 +778,13 @@ describe("openclaw test instance", () => {
         1_500,
         control,
       );
+      // This case owns refusal/retry ordering, not deadline expiry. Keep native
+      // bootstrap and HTTP gates real without charging them to the policy clock.
+      testSignal.throwIfAborted();
+      const fixtureTime = Date.now();
+      const clock = vi.spyOn(Date, "now").mockReturnValue(fixtureTime);
+      const restoreClock = () => clock.mockRestore();
+      testSignal.addEventListener("abort", restoreClock, { once: true });
       const exited = createDeferred<{ code: number | null; signal: NodeJS.Signals | null }>();
       if (control) {
         control.observers.onLaunch = () => {
@@ -805,6 +812,8 @@ describe("openclaw test instance", () => {
         }
         await startup;
       } finally {
+        restoreClock();
+        testSignal.removeEventListener("abort", restoreClock);
         control?.unblock();
         await Promise.allSettled([startup]);
       }
