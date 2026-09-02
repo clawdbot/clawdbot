@@ -41,6 +41,40 @@ private final class DashboardBrowserImportGate {
     }
 }
 
+/// FIFO suspension gate: `wait()` parks until a matching `releaseOldest()`.
+/// `waitForNextArrival()` reports the next `wait()` call that parks. Arrivals
+/// are counted rather than signaled through a single continuation, so a
+/// `wait()` that parks before its matching `waitForNextArrival()` is called
+/// is still observed — the two calls do not depend on scheduling order.
+private actor DashboardOpenAttemptGate {
+    private var parked: [CheckedContinuation<Void, Never>] = []
+    private var arrivalContinuation: CheckedContinuation<Void, Never>?
+    private var unclaimedArrivals = 0
+
+    func wait() async {
+        if let continuation = self.arrivalContinuation {
+            self.arrivalContinuation = nil
+            continuation.resume()
+        } else {
+            self.unclaimedArrivals += 1
+        }
+        await withCheckedContinuation { self.parked.append($0) }
+    }
+
+    func waitForNextArrival() async {
+        if self.unclaimedArrivals > 0 {
+            self.unclaimedArrivals -= 1
+            return
+        }
+        await withCheckedContinuation { self.arrivalContinuation = $0 }
+    }
+
+    func releaseOldest() {
+        guard !self.parked.isEmpty else { return }
+        self.parked.removeFirst().resume()
+    }
+}
+
 private final class DashboardWindowGestureSpy: NSWindow {
     private(set) var dragCount = 0
     private(set) var zoomCount = 0
@@ -241,6 +275,118 @@ struct DashboardWindowSmokeTests {
         // after a later recovery reload.
         controller.showFailure(title: "Dashboard unavailable", message: "offline")
         #expect(controller._testPendingNativeCommands.isEmpty)
+    }
+
+    @Test func `closing dashboard window retires queued native intent`() throws {
+        let url = try #require(URL(string: "http://127.0.0.1:18789/control/"))
+        let controller = DashboardWindowController(
+            url: url,
+            auth: DashboardWindowAuth(gatewayUrl: nil, token: nil, password: nil))
+        controller.show()
+
+        controller.dispatchNativeCommand(.newSession)
+        controller.dispatchNativeNavigation(DashboardNativeNavigation(path: "/settings", search: nil, fallbackURL: url))
+        #expect(!controller._testPendingNativeCommands.isEmpty)
+        #expect(controller._testPendingNativeNavigation != nil)
+        let generationBeforeClose = controller._testNavigationGeneration
+
+        // Ordinary close, not the route-replacement transfer that reuses the
+        // window without a close cycle: a later reopen must not replay intent
+        // that was only ever valid for the window that is now gone.
+        controller.closeDashboard()
+
+        #expect(controller._testPendingNativeCommands.isEmpty)
+        #expect(controller._testPendingNativeNavigation == nil)
+        #expect(controller._testNavigationGeneration != generationBeforeClose)
+    }
+
+    @Test func `closing primary dashboard window retires manager presentation state`() throws {
+        let url = try #require(URL(string: "http://127.0.0.1:18789/control/"))
+        let controller = DashboardWindowController(
+            url: url,
+            auth: DashboardWindowAuth(gatewayUrl: nil, token: nil, password: nil))
+        let manager = DashboardManager._testMake()
+        manager._testSetController(controller)
+        controller.show()
+
+        // A native close (the red-button path, not manager.close()) must
+        // still retire the manager's generations: a suspended show(atPath:)
+        // or command-open task guards on these before resuming.
+        let generationBeforeClose = manager._testNavigationGeneration()
+        controller.closeDashboard()
+
+        #expect(manager._testNavigationGeneration() != generationBeforeClose)
+    }
+
+    @Test func `stale command-open task does not clobber a successor after close`() async {
+        struct OpenAttemptFailure: Error {}
+        let previousMode = AppStateStore.shared.connectionMode
+        AppStateStore.shared.connectionMode = .unconfigured
+        defer { AppStateStore.shared.connectionMode = previousMode }
+        let gate = DashboardOpenAttemptGate()
+        let manager = DashboardManager._testMake(primaryEndpointProvider: { _ in
+            await gate.wait()
+            throw OpenAttemptFailure()
+        })
+
+        // ⌘N before any window exists starts a command-open task that parks
+        // awaiting the endpoint.
+        manager.dispatchNativeCommand(.newSession)
+        await gate.waitForNextArrival()
+
+        // A close retires that task's generation and cancels it, but it is
+        // still parked in primaryEndpoint(mode:) — it has not unwound yet.
+        manager.close()
+
+        // ⌘K after close installs a successor command-open task, since the
+        // manager-owned handle was cleared synchronously by close().
+        manager.dispatchNativeCommand(.commandPalette)
+        await gate.waitForNextArrival()
+        #expect(manager._testHasOpenForCommandTask())
+
+        // Let the stale task resume and unwind. Pre-fix, its unconditional
+        // `defer` clears whichever task is currently stored — the successor's
+        // handle — even though the successor is still in flight.
+        await gate.releaseOldest()
+        for _ in 0..<200 { await Task.yield() }
+
+        #expect(manager._testHasOpenForCommandTask())
+        await gate.releaseOldest()
+        for _ in 0..<200 { await Task.yield() }
+    }
+
+    @Test func `stale gateway switch does not replace a natively closed primary controller`() async throws {
+        let url = try #require(URL(string: "http://127.0.0.1:18789/control/"))
+        let controller = DashboardWindowController(
+            url: url,
+            auth: DashboardWindowAuth(gatewayUrl: nil, token: nil, password: nil))
+        let gate = DashboardOpenAttemptGate()
+        let manager = DashboardManager._testMake(profileEndpointProvider: { profileID in
+            await gate.wait()
+            let endpointURL = try #require(URL(string: "ws://127.0.0.1:60002"))
+            return GatewayConnection.EndpointSnapshot(
+                config: (url: endpointURL, token: profileID, password: nil),
+                routeAuthority: nil)
+        })
+        manager._testSetController(controller)
+        controller.show()
+
+        // A gateway switch parks awaiting the profile endpoint while the
+        // primary window is still open.
+        let switchTask = Task { await manager._testSwitchTarget(.profile("test-profile"), in: controller) }
+        await gate.waitForNextArrival()
+
+        // A native close must invalidate this controller's in-flight switch
+        // generation the same way installAuxiliaryWindowCloseHandler does for
+        // auxiliary windows. Pre-fix, switchGenerations is left untouched, so
+        // the parked switch below still passes switchIsCurrent and replaces
+        // the closed controller with a stale gateway target.
+        controller.closeDashboard()
+        await gate.releaseOldest()
+        await switchTask.value
+
+        #expect(manager._testController() === controller)
+        #expect(manager._testMainTarget() == .primary)
     }
 
     @Test func `dashboard navigation stays on same endpoint`() throws {

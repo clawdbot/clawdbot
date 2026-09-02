@@ -1070,6 +1070,12 @@ extension DashboardWindowController {
     func windowWillClose(_: Notification) {
         self.webView.stopLoading()
         self.closeLinkBrowser(focusDashboard: false)
+        self.advanceNavigationGeneration()
+        // Close retires this moment's queued intent, same as a terminal load
+        // failure: a reopen must not replay ⌘N/⌘K or navigation queued before
+        // the window went away.
+        self.pendingNativeCommands = []
+        self.pendingNativeNavigation = nil
         self.onClosed?()
     }
 

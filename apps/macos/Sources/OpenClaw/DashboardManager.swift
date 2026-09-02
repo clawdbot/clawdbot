@@ -30,7 +30,17 @@ final class DashboardManager {
 
     private struct SupersededDashboardPresentation: Error {}
 
-    @ObservationIgnored private var controller: DashboardWindowController?
+    /// The primary controller is reused across many creation/replacement call
+    /// sites (initial load, failure fallback, endpoint/route replacement,
+    /// target switch). `didSet` installs the close handler exactly once per
+    /// assignment instead of repeating the wiring at every site.
+    @ObservationIgnored private var controller: DashboardWindowController? {
+        didSet {
+            guard let controller, controller !== oldValue else { return }
+            self.installPrimaryWindowCloseHandler(controller)
+        }
+    }
+
     @ObservationIgnored private var mainTarget = DashboardGatewayTarget.primary
     @ObservationIgnored private var auxiliaryWindows: [UUID: AuxiliaryWindowInstance] = [:]
     @ObservationIgnored private var auxiliaryWindowOrder: [UUID] = []
@@ -38,6 +48,7 @@ final class DashboardManager {
     @ObservationIgnored private var presentationTask: Task<Void, Error>?
     @ObservationIgnored private var pendingOpenCommands: [DashboardNativeCommand] = []
     @ObservationIgnored private var openForCommandTask: Task<Void, Never>?
+    @ObservationIgnored private var openForCommandGeneration: UInt64 = 0
     @ObservationIgnored private var navigationGeneration: UInt64 = 0
     @ObservationIgnored private var updater: UpdaterProviding?
     @ObservationIgnored private var displayedRouteRevision: UInt64?
@@ -466,14 +477,7 @@ final class DashboardManager {
     }
 
     func close() {
-        self.endpointGeneration &+= 1
-        self.presentationGeneration &+= 1
-        self.presentationTask?.cancel()
-        self.presentationTask = nil
-        self.navigationGeneration &+= 1
-        self.openForCommandTask?.cancel()
-        self.openForCommandTask = nil
-        self.pendingOpenCommands.removeAll()
+        self.retirePrimaryPresentationState()
         self.switchGenerations.removeAll()
         self.controller?.closeDashboard()
         let controllers = self.auxiliaryWindows.values.map(\.controller)
@@ -500,8 +504,17 @@ final class DashboardManager {
         // press would race window creation and reorder ⌘N/⌘K delivery.
         self.pendingOpenCommands.append(command)
         guard self.openForCommandTask == nil else { return }
+        self.openForCommandGeneration &+= 1
+        let generation = self.openForCommandGeneration
         self.openForCommandTask = Task { @MainActor in
-            defer { self.openForCommandTask = nil }
+            // A close mid-await bumps openForCommandGeneration and can install a
+            // successor task before this one resumes; the generation check keeps
+            // this stale task from clobbering the successor's handle or queue.
+            defer {
+                if self.openForCommandGeneration == generation {
+                    self.openForCommandTask = nil
+                }
+            }
             if !self.showConfiguredWindowIfPossible() {
                 do {
                     try await self.show()
@@ -513,6 +526,7 @@ final class DashboardManager {
                     return
                 }
             }
+            guard self.openForCommandGeneration == generation else { return }
             let commands = self.pendingOpenCommands
             self.pendingOpenCommands = []
             for command in commands {
@@ -753,20 +767,6 @@ final class DashboardManager {
             })
     }
 
-    private func installAuxiliaryWindowCloseHandler(_ controller: DashboardWindowController, windowID: UUID) {
-        controller.onClosed = { [weak self, weak controller] in
-            guard let self, let controller,
-                  self.auxiliaryWindows[windowID]?.controller === controller
-            else {
-                return
-            }
-            self.switchGenerations[ObjectIdentifier(controller)] = nil
-            self.auxiliaryWindows.removeValue(forKey: windowID)
-            self.auxiliaryWindowOrder.removeAll { $0 == windowID }
-            self.updateFrontmostDashboardTarget()
-        }
-    }
-
     private func autosaveName(for target: DashboardGatewayTarget) -> String {
         switch target {
         case .primary:
@@ -892,6 +892,50 @@ extension DashboardManager {
 extension DashboardManager {
     func show() async throws {
         try await self.currentPresentationTask().value
+    }
+
+    /// Shared by `close()` and the primary controller's native close handler:
+    /// both are terminal for whatever presentation/navigation/command-open
+    /// work was in flight for the primary window, so both retire the same
+    /// manager-owned generations and tasks.
+    private func retirePrimaryPresentationState() {
+        self.endpointGeneration &+= 1
+        self.presentationGeneration &+= 1
+        self.presentationTask?.cancel()
+        self.presentationTask = nil
+        self.navigationGeneration &+= 1
+        self.openForCommandGeneration &+= 1
+        self.openForCommandTask?.cancel()
+        self.openForCommandTask = nil
+        self.pendingOpenCommands.removeAll()
+        // Mirrors installAuxiliaryWindowCloseHandler: without this, a
+        // switchTarget(...) already awaiting windowConfiguration still passes
+        // switchIsCurrent after this controller closes, then replaces it with
+        // a stale gateway target on reopen.
+        if let controller {
+            self.switchGenerations[ObjectIdentifier(controller)] = nil
+        }
+    }
+
+    private func installPrimaryWindowCloseHandler(_ controller: DashboardWindowController) {
+        controller.onClosed = { [weak self, weak controller] in
+            guard let self, let controller, self.controller === controller else { return }
+            self.retirePrimaryPresentationState()
+        }
+    }
+
+    private func installAuxiliaryWindowCloseHandler(_ controller: DashboardWindowController, windowID: UUID) {
+        controller.onClosed = { [weak self, weak controller] in
+            guard let self, let controller,
+                  self.auxiliaryWindows[windowID]?.controller === controller
+            else {
+                return
+            }
+            self.switchGenerations[ObjectIdentifier(controller)] = nil
+            self.auxiliaryWindows.removeValue(forKey: windowID)
+            self.auxiliaryWindowOrder.removeAll { $0 == windowID }
+            self.updateFrontmostDashboardTarget()
+        }
     }
 
     private func showResolvedDashboard() async throws {
@@ -1232,6 +1276,14 @@ extension DashboardManager {
 
     func _testSetController(_ controller: DashboardWindowController?) {
         self.controller = controller
+    }
+
+    func _testNavigationGeneration() -> UInt64 {
+        self.navigationGeneration
+    }
+
+    func _testHasOpenForCommandTask() -> Bool {
+        self.openForCommandTask != nil
     }
 
     func _testController() -> DashboardWindowController? {
