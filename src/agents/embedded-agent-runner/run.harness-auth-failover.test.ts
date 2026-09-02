@@ -1,6 +1,7 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { OpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import type { AgentHarness } from "../harness/types.js";
 import { makeAttemptResult } from "./run.overflow-compaction.fixture.js";
 import {
   loadRunOverflowCompactionHarness,
@@ -32,17 +33,40 @@ function permanentAuthFailure(): Error {
   });
 }
 
-function prepareAuthFailoverRun(nativeModelOwned = false) {
+function prepareAuthFailoverRun(
+  nativeModelOwned = false,
+  options: {
+    nativeModelRef?: () => { provider: string; model: string } | undefined;
+    rejectAuthoredRequests?: boolean;
+  } = {},
+) {
   const { registerPreparedAgentHarness, runEmbeddedAgent } = runHarness;
   registerPreparedAgentHarness({
     id: "codex",
     label: "Codex",
     authBootstrap: "harness",
-    supports: ({ provider }) =>
-      provider === "openai" ? { supported: true, priority: 100 } : { supported: false },
+    supports: ({ provider, modelProvider }) => {
+      if (
+        options.rejectAuthoredRequests &&
+        modelProvider?.requestTransportOverrides === "present"
+      ) {
+        return {
+          supported: false,
+          reason: "native transport cannot reproduce authored requests",
+          fallbackRuntime: "openclaw",
+        };
+      }
+      return provider === "openai" ? { supported: true, priority: 100 } : { supported: false };
+    },
     ...(nativeModelOwned
       ? {
-          resolveSessionRuntimeOwnership: async () => ({ model: "native", auth: "host" }) as const,
+          resolveSessionRuntimeOwnership: ({
+            assertCurrent,
+          }: Parameters<NonNullable<AgentHarness["resolveSessionRuntimeOwnership"]>>[0]) => {
+            assertCurrent();
+            const modelRef = options.nativeModelRef?.();
+            return { model: "native", auth: "host", ...(modelRef ? { modelRef } : {}) } as const;
+          },
         }
       : {}),
     runAttempt: async (params) => await mockedRunEmbeddedAttempt(params),
@@ -89,10 +113,182 @@ describe("native harness auth failover", () => {
       await state?.cleanup();
     }
   });
+  async function createNativeHostRunParams() {
+    const params = {
+      ...createOverflowRunParams(state),
+      provider: "openai",
+      model: "gpt-5.6-sol",
+      agentHarnessId: "codex",
+      agentHarnessRuntimeOverride: "codex",
+      modelSelectionLocked: true,
+      authProfileId: failedProfile,
+      authProfileIdSource: "auto" as const,
+    };
+    await replaceSessionEntry(
+      { agentId: "main", sessionKey: params.sessionKey },
+      {
+        sessionId: params.sessionId,
+        updatedAt: 1,
+        agentHarnessId: "codex",
+        modelSelectionLocked: true,
+      },
+    );
+    return params;
+  }
+
+  it.each(["auto", "user"] as const)(
+    "plans divergent native host-auth model selection while retaining %s profile strictness",
+    async (authProfileIdSource) => {
+      const modelRef = { provider: "openai", model: "gpt-5.6-luna" };
+      const runEmbeddedAgent = prepareAuthFailoverRun(true, { nativeModelRef: () => modelRef });
+      const params = await createNativeHostRunParams();
+      const failure = permanentAuthFailure();
+      mockedBuildEmbeddedRunPayloads.mockReturnValue([{ text: "OK" }]);
+      mockedRunEmbeddedAttempt
+        .mockRejectedValueOnce(failure)
+        .mockResolvedValueOnce(makeAttemptResult({ assistantTexts: ["OK"] }));
+      const run = runEmbeddedAgent({ ...params, authProfileIdSource });
+      if (authProfileIdSource === "user") {
+        await expect(run).rejects.toBe(failure);
+      } else {
+        await expect(run).resolves.toMatchObject({ payloads: [{ text: "OK" }] });
+      }
+      const attempts = mockedRunEmbeddedAttempt.mock.calls.map(([attempt]) => attempt);
+      expect(attempts.map((attempt) => attempt.authProfileId)).toEqual(
+        authProfileIdSource === "user" ? [failedProfile] : [failedProfile, backupProfile],
+      );
+      for (const attempt of attempts) {
+        expect(attempt).toMatchObject({
+          provider: modelRef.provider,
+          modelId: modelRef.model,
+          expectedSessionRuntimeOwnership: { model: "native", auth: "host", modelRef },
+        });
+      }
+      expect(mockedGetApiKeyForModel.mock.calls[0]?.[0]?.model).toMatchObject({
+        provider: modelRef.provider,
+        id: modelRef.model,
+      });
+    },
+  );
+
+  it("plans native host-auth credentials for the owned provider instead of the unrelated outer provider", async () => {
+    const modelRef = { provider: "openai", model: "gpt-5.6-luna" };
+    const runEmbeddedAgent = prepareAuthFailoverRun(true, { nativeModelRef: () => modelRef });
+    const params = await createNativeHostRunParams();
+    mockedBuildEmbeddedRunPayloads.mockReturnValue([{ text: "OK" }]);
+    mockedRunEmbeddedAttempt.mockResolvedValue(makeAttemptResult({ assistantTexts: ["OK"] }));
+    await expect(
+      runEmbeddedAgent({
+        ...params,
+        provider: "anthropic",
+        model: "outer-model",
+        authProfileIdSource: "user",
+      }),
+    ).resolves.toMatchObject({ payloads: [{ text: "OK" }] });
+    expect(mockedResolveAuthProfileOrder).toHaveBeenCalledWith(
+      expect.objectContaining({ provider: "openai" }),
+    );
+    expect(mockedRunEmbeddedAttempt.mock.calls[0]?.[0]).toMatchObject({
+      provider: "openai",
+      modelId: "gpt-5.6-luna",
+      authProfileId: failedProfile,
+    });
+  });
+
+  it.each(["outer-model", "actual-model", "per-run"] as const)(
+    "enforces native host-auth request controls from %s without changing runtime ownership",
+    async (source) => {
+      const modelRef = { provider: "openai", model: "gpt-5.6-luna" };
+      const runEmbeddedAgent = prepareAuthFailoverRun(true, {
+        nativeModelRef: () => modelRef,
+        rejectAuthoredRequests: true,
+      });
+      const params = await createNativeHostRunParams();
+      const configuredModel =
+        source === "outer-model" ? "openai/gpt-5.6-sol" : "openai/gpt-5.6-luna";
+      const runParams = {
+        ...params,
+        ...(source === "per-run"
+          ? { streamParams: { temperature: 0.2 } }
+          : {
+              config: {
+                agents: {
+                  defaults: {
+                    models: { [configuredModel]: { params: { responsesServerCompaction: true } } },
+                  },
+                },
+              },
+            }),
+      };
+      mockedBuildEmbeddedRunPayloads.mockReturnValue([{ text: "OK" }]);
+      mockedRunEmbeddedAttempt.mockResolvedValue(makeAttemptResult({ assistantTexts: ["OK"] }));
+      if (source === "outer-model") {
+        await expect(runEmbeddedAgent(runParams)).resolves.toMatchObject({
+          payloads: [{ text: "OK" }],
+        });
+        expect(mockedRunEmbeddedAttempt.mock.calls[0]?.[0]).toMatchObject({
+          provider: "openai",
+          modelId: "gpt-5.6-luna",
+        });
+      } else {
+        await expect(runEmbeddedAgent(runParams)).rejects.toMatchObject({
+          name: "AgentHarnessPreflightError",
+        });
+        expect(mockedRunEmbeddedAttempt).not.toHaveBeenCalled();
+      }
+    },
+  );
+
+  it("rejects native host-auth ownership without a model tuple instead of borrowing the outer model", async () => {
+    const runEmbeddedAgent = prepareAuthFailoverRun(true, { nativeModelRef: () => undefined });
+    const params = await createNativeHostRunParams();
+    mockedRunEmbeddedAttempt.mockResolvedValue(
+      makeAttemptResult({ assistantTexts: ["must not infer"] }),
+    );
+    await expect(runEmbeddedAgent(params)).rejects.toMatchObject({
+      name: "AgentHarnessPreflightError",
+    });
+    expect(mockedGetApiKeyForModel).not.toHaveBeenCalled();
+    expect(mockedRunEmbeddedAttempt).not.toHaveBeenCalled();
+  });
+
+  it.each(["model", "provider"] as const)(
+    "rejects a native host-auth %s change after host credential preparation",
+    async (field) => {
+      let modelRef = { provider: "openai", model: "gpt-5.6-luna" };
+      const runEmbeddedAgent = prepareAuthFailoverRun(true, { nativeModelRef: () => modelRef });
+      const params = await createNativeHostRunParams();
+      mockedGetApiKeyForModel.mockImplementation(async ({ profileId } = {}) => {
+        modelRef = {
+          ...modelRef,
+          [field]: field === "model" ? "gpt-5.6-sol" : "different-native-provider",
+        };
+        return {
+          apiKey: "prepared-key",
+          profileId: profileId ?? failedProfile,
+          source: "test",
+          mode: "api-key",
+        };
+      });
+      mockedRunEmbeddedAttempt.mockResolvedValue(
+        makeAttemptResult({ assistantTexts: ["must not infer"] }),
+      );
+      await expect(runEmbeddedAgent(params)).rejects.toMatchObject({
+        name: "AgentHarnessPreflightError",
+      });
+      expect(mockedGetApiKeyForModel).toHaveBeenCalled();
+      expect(mockedRunEmbeddedAttempt).not.toHaveBeenCalled();
+      expect(mockedMarkAuthProfileFailure).not.toHaveBeenCalled();
+    },
+  );
+
   it.each([false, true])(
     "retries host auth with the next automatic profile (native model: %s)",
     async (nativeModelOwned) => {
-      const runEmbeddedAgent = prepareAuthFailoverRun(nativeModelOwned);
+      const modelRef = { provider: "openai", model: "gpt-5.6-luna" };
+      const runEmbeddedAgent = prepareAuthFailoverRun(nativeModelOwned, {
+        nativeModelRef: () => modelRef,
+      });
       const nativePin = nativeModelOwned
         ? { agentHarnessId: "codex", modelSelectionLocked: true }
         : {};
@@ -123,7 +319,7 @@ describe("native harness auth failover", () => {
         failedProfile,
         backupProfile,
       ]);
-      const ownership = nativeModelOwned ? { model: "native", auth: "host" } : undefined;
+      const ownership = nativeModelOwned ? { model: "native", auth: "host", modelRef } : undefined;
       expect(
         mockedRunEmbeddedAttempt.mock.calls.map(
           ([params]) => params.expectedSessionRuntimeOwnership,
@@ -179,7 +375,7 @@ describe("native harness auth failover", () => {
       label: "Codex",
       authBootstrap: "harness",
       supports: () => ({ supported: false }),
-      resolveSessionRuntimeOwnership: async ({ assertCurrent }) => {
+      resolveSessionRuntimeOwnership: ({ assertCurrent }) => {
         assertCurrent();
         return { model: "native", auth: "native" };
       },

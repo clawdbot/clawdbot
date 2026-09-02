@@ -283,7 +283,7 @@ describe("model chat and native model ownership", () => {
           },
         },
       };
-      const fixture = await createFixture(config, async () => ({
+      const fixture = await createFixture(config, () => ({
         model: "native",
         auth: "native",
       }));
@@ -312,7 +312,7 @@ describe("model chat and native model ownership", () => {
   );
 
   it("does not replace a pinned session whose native ownership is unavailable", async () => {
-    const fixture = await createFixture({}, async () => undefined);
+    const fixture = await createFixture({}, () => undefined);
     await expect(fixture.resolve()).rejects.toMatchObject({
       name: "AgentHarnessPreflightError",
       scope: undefined,
@@ -322,7 +322,7 @@ describe("model chat and native model ownership", () => {
   });
 
   it("rejects explicit request parameters rather than dropping them on a native connection", async () => {
-    const fixture = await createFixture({}, async () => ({ model: "native", auth: "native" }));
+    const fixture = await createFixture({}, () => ({ model: "native", auth: "native" }));
     fixture.runParams.streamParams = { temperature: 0.5 };
     await expect(fixture.resolve()).rejects.toThrow("cannot apply provider stream parameters");
     expect(fixture.runParams.streamParams).toEqual({ temperature: 0.5 });
@@ -330,9 +330,13 @@ describe("model chat and native model ownership", () => {
 
   it("closes the host assertion after the ownership callback returns", async () => {
     let retained: (() => void) | undefined;
-    const fixture = await createFixture({}, async ({ assertCurrent }) => {
+    const fixture = await createFixture({}, ({ assertCurrent }) => {
       retained = assertCurrent;
-      return { model: "native", auth: "host" };
+      return {
+        model: "native",
+        auth: "host",
+        modelRef: { provider: "openai", model: "fixture-model" },
+      };
     });
     await fixture.resolve();
     expect(retained).toBeTypeOf("function");
@@ -341,8 +345,14 @@ describe("model chat and native model ownership", () => {
 
   it("uses the native owner fact and rejects a lost binding before dispatch", async () => {
     let native = true;
-    const fixture = await createFixture({}, async () =>
-      native ? { model: "native", auth: "host" } : undefined,
+    const fixture = await createFixture({}, () =>
+      native
+        ? {
+            model: "native",
+            auth: "host",
+            modelRef: { provider: "openai", model: "fixture-model" },
+          }
+        : undefined,
     );
     const setup = await fixture.resolve();
     expect(setup.nativeModelOwned).toBe(true);
@@ -352,22 +362,20 @@ describe("model chat and native model ownership", () => {
     await expect(setup.nativeSessionRuntime?.assertCurrent()).rejects.toThrow("ownership changed");
   });
 
-  it.each(["session", "harness"] as const)(
-    "rejects %s replacement while native ownership is being read",
-    async (replacement) => {
-      const fixture = await createFixture({}, async () => {
-        await replace();
-        return { model: "native", auth: "host" };
-      });
-      const replace = async () => {
-        if (replacement === "session") {
-          await patchSessionEntryCore(fixture.target, () => ({ lifecycleRevision: "replacement" }));
-        } else {
-          registerAgentHarness({ ...fixture.harness });
-        }
-      };
-      await expect(fixture.resolve()).rejects.toThrow("ownership changed");
-      expect(fixture.generation.resolveDynamicModel).not.toHaveBeenCalled();
-    },
-  );
+  it("rejects harness replacement while native ownership is being read", async () => {
+    const fixture = await createFixture({}, () => {
+      registerAgentHarness({ ...fixture.harness });
+      return { model: "native", auth: "native" };
+    });
+    await expect(fixture.resolve()).rejects.toThrow("ownership changed");
+    expect(fixture.generation.resolveDynamicModel).not.toHaveBeenCalled();
+  });
+
+  it("rejects session generation replacement after preparing native ownership", async () => {
+    const fixture = await createFixture({}, () => ({ model: "native", auth: "native" }));
+    const setup = await fixture.resolve();
+    await patchSessionEntryCore(fixture.target, () => ({ lifecycleRevision: "replacement" }));
+    await expect(setup.nativeSessionRuntime?.assertCurrent()).rejects.toThrow("ownership changed");
+    expect(fixture.generation.resolveDynamicModel).not.toHaveBeenCalled();
+  });
 });

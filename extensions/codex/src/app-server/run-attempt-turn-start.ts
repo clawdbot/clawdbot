@@ -131,7 +131,7 @@ export async function startCodexAttemptTurn(
           );
         } else {
           resourceState.thread = await resourceState.restartContextEngineCodexThread();
-          const retryBinding = await bindingStore.read(bindingIdentity);
+          const retryBinding = bindingStore.read(bindingIdentity);
           if (
             retryBinding &&
             retryBinding.threadId === resourceState.thread.threadId &&

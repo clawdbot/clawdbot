@@ -105,13 +105,11 @@ export async function cleanupCodexAttempt(
           resourceState.thread.connectionScope !== "supervision" &&
           !resourceState.thread.ringZeroConfigFingerprint)) &&
       resourceState.thread.clientId === resolveCodexAppServerClientInstanceId(resourceState.client)
-        ? (await bindingStore.read(bindingIdentity))?.threadId === resourceState.thread.threadId &&
+        ? bindingStore.read(bindingIdentity)?.threadId === resourceState.thread.threadId &&
           (await bindingStore.withLease(bindingIdentity, async () => {
             // Reset/end uses this same generation lease. Never publish an old
             // active turn after its session binding has already been retired.
-            if (
-              (await bindingStore.read(bindingIdentity))?.threadId !== resourceState.thread.threadId
-            ) {
+            if (bindingStore.read(bindingIdentity)?.threadId !== resourceState.thread.threadId) {
               return false;
             }
             return await retainCodexAppServerBindingSubscription(

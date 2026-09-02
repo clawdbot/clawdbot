@@ -9,6 +9,7 @@ import {
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { openFileBackedSessionManagerForTest } from "openclaw/plugin-sdk/agent-runtime-test-contracts";
 import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { initializeGlobalHookRunner } from "openclaw/plugin-sdk/hook-runtime";
 import { MESSAGE_TOOL_DELIVERY_HINTS } from "openclaw/plugin-sdk/message-tool-delivery-hints";
 import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
@@ -1329,11 +1330,18 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
       openFileBackedSessionManagerForTest(sessionFile, { sessionId: "session-1" }).appendMessage(
         assistantMessage("pre-compaction context", Date.now()) as never,
       );
+      const nativeModel = threadStartResult("thread-old");
       await writeCodexAppServerBinding(sessionFile, {
         threadId: "thread-old",
         cwd: workspaceDir,
         dynamicToolsFingerprint: "[]",
-        ...(nativeOwned ? { preserveNativeModel: true } : {}),
+        ...(nativeOwned
+          ? {
+              preserveNativeModel: true,
+              model: nativeModel.model,
+              modelProvider: nativeModel.modelProvider,
+            }
+          : {}),
         contextEngine: {
           schemaVersion: 1,
           engineId: "lossless-claw",
@@ -1371,6 +1379,7 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
         }),
       );
       const contextEngine = createContextEngine({ assemble, compact });
+      const freshTurnStarted = createDeferred<void>();
       const harness = createStartedThreadHarness(
         async (method, requestParams) => {
           const request = requireRecord(requestParams, `${method} params`);
@@ -1384,6 +1393,7 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
             return threadStartResult("thread-fresh");
           }
           if (method === "turn/start" && request.threadId === "thread-fresh") {
+            freshTurnStarted.resolve();
             return turnStartResult("turn-fresh");
           }
           return undefined;
@@ -1394,7 +1404,11 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
       params.contextEngine = contextEngine;
       params.contextTokenBudget = 400_000;
       if (nativeOwned) {
-        params.expectedSessionRuntimeOwnership = { model: "native", auth: "host" };
+        params.expectedSessionRuntimeOwnership = {
+          model: "native",
+          auth: "host",
+          modelRef: { model: nativeModel.model, provider: nativeModel.modelProvider },
+        };
       }
 
       const run = runCodexAppServerAttempt(params);
@@ -1408,7 +1422,15 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
         expect(compact).not.toHaveBeenCalled();
         return;
       }
-      await vi.waitFor(() =>
+      try {
+        await Promise.race([
+          freshTurnStarted.promise,
+          run.then((result) => {
+            throw new Error("Codex attempt settled before fresh turn/start", {
+              cause: readAttemptTerminal(result),
+            });
+          }),
+        ]);
         expect(harness.requests.map((request) => request.method)).toEqual([
           "thread/read",
           "thread/resume",
@@ -1416,32 +1438,35 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
           "turn/start",
           "thread/start",
           "turn/start",
-        ]),
-      );
-      await harness.notify({
-        method: "turn/completed",
-        params: {
-          threadId: "thread-fresh",
-          turnId: "turn-fresh",
-          turn: {
-            id: "turn-fresh",
-            status: "completed",
-            items: [{ type: "agentMessage", id: "msg-1", text: "fresh answer" }],
+        ]);
+        await harness.notify({
+          method: "turn/completed",
+          params: {
+            threadId: "thread-fresh",
+            turnId: "turn-fresh",
+            turn: {
+              id: "turn-fresh",
+              status: "completed",
+              items: [{ type: "agentMessage", id: "msg-1", text: "fresh answer" }],
+            },
           },
-        },
-      });
-      const result = await run;
+        });
+        const result = await run;
 
-      expect(result.assistantTexts).toContain("fresh answer");
-      expect(compact).not.toHaveBeenCalled();
-      expect(assemble).toHaveBeenCalledTimes(1);
-      const retryInputText = getRequestInputTextAt(harness, -1);
-      expect(retryInputText).toBe("hello");
-      expect(retryInputText).not.toContain("successor compacted context");
-      const savedBinding = await readCodexAppServerBinding(sessionFile);
-      expect(savedBinding?.threadId).toBe("thread-fresh");
-      expect(savedBinding?.contextEngine?.engineId).toBe("lossless-claw");
-      expect(savedBinding?.contextEngine?.projection).toBeUndefined();
+        expect(result.assistantTexts).toContain("fresh answer");
+        expect(compact).not.toHaveBeenCalled();
+        expect(assemble).toHaveBeenCalledTimes(1);
+        const retryInputText = getRequestInputTextAt(harness, -1);
+        expect(retryInputText).toBe("hello");
+        expect(retryInputText).not.toContain("successor compacted context");
+        const savedBinding = await readCodexAppServerBinding(sessionFile);
+        expect(savedBinding?.threadId).toBe("thread-fresh");
+        expect(savedBinding?.contextEngine?.engineId).toBe("lossless-claw");
+        expect(savedBinding?.contextEngine?.projection).toBeUndefined();
+      } finally {
+        await harness.client.closeAndWait();
+        await run.catch(() => undefined);
+      }
     },
   );
 
@@ -1608,11 +1633,18 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
       openFileBackedSessionManagerForTest(sessionFile, { sessionId: "session-1" }).appendMessage(
         assistantMessage("pre-compaction context", Date.now()) as never,
       );
+      const nativeModel = threadStartResult("thread-old");
       await writeCodexAppServerBinding(sessionFile, {
         threadId: "thread-old",
         cwd: workspaceDir,
         dynamicToolsFingerprint: "[]",
-        ...(nativeOwned ? { preserveNativeModel: true } : {}),
+        ...(nativeOwned
+          ? {
+              preserveNativeModel: true,
+              model: nativeModel.model,
+              modelProvider: nativeModel.modelProvider,
+            }
+          : {}),
         contextEngine: {
           schemaVersion: 1,
           engineId: "lossless-claw",
@@ -1655,7 +1687,11 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
       params.contextEngine = contextEngine;
       params.contextTokenBudget = 400_000;
       if (nativeOwned) {
-        params.expectedSessionRuntimeOwnership = { model: "native", auth: "host" };
+        params.expectedSessionRuntimeOwnership = {
+          model: "native",
+          auth: "host",
+          modelRef: { model: nativeModel.model, provider: nativeModel.modelProvider },
+        };
       }
 
       const run = runCodexAppServerAttempt(params);

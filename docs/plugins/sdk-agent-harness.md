@@ -98,7 +98,7 @@ The optional `resolveSessionRuntimeOwnership({ config, agentId, sessionId,
 sessionKey, assertCurrent })` callback reports private binding ownership. Core
 calls it only on the exact pinned harness after validating the durable session
 identity. `sessionId` and `assertCurrent` are required; `config`, `agentId`, and
-`sessionKey` are optional. Return a Promise of:
+`sessionKey` are optional. Return synchronously:
 
 - `{ model: "native", auth: "native" }` when the binding owns both model selection
   and authentication through its native connection.
@@ -115,9 +115,15 @@ request or model lock alone cannot establish native ownership. Paired-node
 Codex sessions use their owning node handler; a missing local binding must not
 turn a misrouted continuation into a local run.
 
-Read the existing private binding only. Call `assertCurrent()` before and after
-awaited work. Do not reclaim a generation, start a client, authenticate, or
-mutate the binding from this callback. Its result does not authorize execution.
+Include `modelRef: { provider, model }` only when both values are known from that
+same binding. Do not infer a missing value from outer configuration, credentials,
+or usage. Host-auth ownership requires this tuple before credential preparation;
+native-auth pending branches may omit it until their native owner selects a model.
+
+Read the existing private binding synchronously. Call `assertCurrent()` before
+and after the read. Do not discover models, reclaim a generation, start a client,
+authenticate, or mutate the binding. The assertion expires when the callback
+returns. This ownership fact is neither execution authority nor credential readiness.
 
 The Codex implementation reports native model ownership from `preserveNativeModel`.
 It reports native auth only for the separate private supervision connection;
@@ -127,12 +133,30 @@ outer model route/auth metadata or forwarding a host profile. Native connection
 policy still applies. Explicit per-run provider stream parameters are rejected
 rather than dropped; use a concrete model chat to apply them.
 
-Core carries the result into the attempt as optional
-`expectedSessionRuntimeOwnership`. This is a nonauthorizing comparison, not a
-binding, credential, or retained capability. The harness must revalidate its
-actual binding during preflight and again under its binding lease before native
-execution. If the expected ownership disappears or changes, fail closed; never
-replace the lost native session with a fresh thread.
+For host-auth bindings, the actual native tuple controls model, auth, and request
+transport preparation. Explicit profile locks remain strict; automatic profile
+rotation remains available. Authored settings on that tuple and explicit per-run
+parameters must be supported by the pinned runtime, not silently dropped or
+redirected through another runtime.
+
+Core carries optional `expectedSessionRuntimeOwnership` into the attempt, including
+`modelRef` for host-auth bindings. This is a nonauthorizing comparison, not a binding,
+credential, or retained capability. Revalidate during preflight, under the binding
+lease, and against the ready thread after resume before inference. A changed host-auth
+tuple rejects stale prepared credentials while retaining the newly observed binding.
+Native-auth connections may follow their native owner's model changes. Missing or
+changed ownership must never start a replacement thread.
+
+The same synchronous read supplies session rows, events, and session-scoped chat
+metadata. Native-auth metadata omits inapplicable host availability fields only for
+the session's rendered model; it does not set `available: true` or modify the shared
+catalog. Pending native branches may still show a configured placeholder until a
+native tuple exists.
+
+An attempt may report `runtimeModelSelection: { provider, model }` from its ready
+native thread. Core accepts this diagnostic only for a prepared native-owned run.
+It records the selected model separately from response/billing attribution, so a
+host finalizer's model does not overwrite the native session's selection.
 
 ### Verified setup runtime artifacts
 

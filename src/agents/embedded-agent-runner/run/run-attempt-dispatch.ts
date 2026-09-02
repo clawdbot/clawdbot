@@ -368,6 +368,9 @@ export async function dispatchEmbeddedRunAttempt(input: {
           expectedSessionRuntimeOwnership: {
             model: "native",
             auth: runtime.nativeSessionRuntime.auth,
+            ...(runtime.nativeSessionRuntime.auth === "host"
+              ? { modelRef: runtime.nativeSessionRuntime.modelRef }
+              : {}),
           },
         }
       : {}),

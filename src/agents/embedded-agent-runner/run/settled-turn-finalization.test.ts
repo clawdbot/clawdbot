@@ -380,10 +380,12 @@ describe("prepareTerminalWithSettledTurnFinalization", () => {
     });
   });
 
-  it("preserves the settled runtime context window through isolated finalization", async () => {
+  it("preserves runtime context and model selection through isolated finalization", async () => {
+    const runtimeModelSelection = { provider: "openai", model: "native-selected-model" };
     const attempt = {
       ...settledFailedAttempt(),
       agentHarnessId: "codex",
+      runtimeModelSelection,
       contextTokens: 1_000_000,
       contextTokensSource: "runtime" as const,
     };
@@ -395,6 +397,8 @@ describe("prepareTerminalWithSettledTurnFinalization", () => {
       auth: { credentialSource: { kind: "profile" } },
     } as never;
     const finalAssistant = buildEmbeddedRunnerAssistant({
+      provider: "host-finalizer",
+      model: "summary-model",
       content: [{ type: "text", text: "The exec tool failed: post-processing error." }],
     });
     backendMocks.runSettledFinalization.mockResolvedValueOnce({
@@ -410,6 +414,7 @@ describe("prepareTerminalWithSettledTurnFinalization", () => {
 
     expect(result.attempt).toMatchObject({
       agentHarnessId: "codex",
+      runtimeModelSelection,
       modelAttempt: {
         provider: "openai",
         model: "gpt-5.6-luna",
@@ -420,6 +425,9 @@ describe("prepareTerminalWithSettledTurnFinalization", () => {
     });
     expect(result.prepared.agentMeta).toMatchObject({
       agentHarnessId: "codex",
+      provider: "host-finalizer",
+      model: "summary-model",
+      runtimeModelSelection,
       credentialSource: { kind: "profile" },
       contextTokens: 1_000_000,
       contextTokensSource: "runtime",

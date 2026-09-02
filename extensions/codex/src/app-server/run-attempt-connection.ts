@@ -209,7 +209,7 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
       bindingIdentity = physicalIdentity;
     }
   }
-  let startupBinding = await bindingStore.read(bindingIdentity);
+  let startupBinding = bindingStore.read(bindingIdentity);
   assertCodexSessionRuntimeOwnership(startupBinding, params.expectedSessionRuntimeOwnership);
   if (!startupBinding && bindingIdentity.kind === "session" && bindingIdentity.sessionKey) {
     const reclaimed = await reclaimCurrentCodexSessionGeneration({
@@ -221,7 +221,7 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
     if (!reclaimed) {
       throw createCodexSessionGenerationSupersededError(bindingIdentity.sessionId);
     }
-    startupBinding = await bindingStore.read(bindingIdentity);
+    startupBinding = bindingStore.read(bindingIdentity);
   }
   preDynamicStartupStages.mark("read-binding");
   const usesSupervisionConnection = startupBinding?.connectionScope === "supervision";

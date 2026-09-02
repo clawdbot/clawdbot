@@ -218,7 +218,7 @@ extensions/codex/src/app-server/sandbox-exec-server/json-rpc.ts	3
 extensions/codex/src/app-server/sandbox-exec-server/processes.ts	1
 extensions/codex/src/app-server/sandbox-guard.ts	2
 extensions/codex/src/app-server/scheduled-app-authority.ts	5
-extensions/codex/src/app-server/session-binding.ts	4
+extensions/codex/src/app-server/session-binding.ts	2
 extensions/codex/src/app-server/shared-client.ts	4
 extensions/codex/src/app-server/side-question.ts	8
 extensions/codex/src/app-server/startup-binding.ts	2

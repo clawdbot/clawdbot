@@ -99,6 +99,7 @@ export async function finalizeCodexAttempt(
   const {
     activeTurnId,
     activeProjector,
+    runtimeModelSelection,
     streamState,
     freezeRunTerminalOutcome,
     notifyUserMessagePersisted,
@@ -528,6 +529,7 @@ export async function finalizeCodexAttempt(
   );
   // Preserve the exact result identity carrying host-issued TTS delivery provenance.
   const finalizedResult: EmbeddedRunAttemptResult = Object.assign(result, {
+    ...(runtimeModelSelection ? { runtimeModelSelection } : {}),
     ...(toolState.yieldAcknowledgment
       ? { yieldAcknowledgment: toolState.yieldAcknowledgment }
       : {}),

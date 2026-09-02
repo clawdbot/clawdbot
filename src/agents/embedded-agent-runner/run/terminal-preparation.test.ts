@@ -248,60 +248,85 @@ describe("prepareEmbeddedRunTerminal", () => {
     },
   );
 
-  it("uses the current completed assistant instead of stale session evidence", async () => {
-    const { prepareEmbeddedRunTerminal } = await import("./terminal-preparation.js");
-    const finalText = "The requested update is complete.";
-    const staleAssistant = {
-      ...assistantMessage("toolUse"),
-      content: [{ type: "toolCall" as const, id: "tool_1", name: "update_plan", arguments: {} }],
-    };
-    const currentAssistant = {
-      ...assistantMessage("stop"),
-      content: [{ type: "text" as const, text: finalText }],
-      usage: {
-        ...assistantMessage("stop").usage,
-        input: 200,
-        output: 20,
-        totalTokens: 220,
-      },
-    };
-    const prepared = prepareEmbeddedRunTerminal({
-      runParams: {
-        admittedRunContext: createTestAdmittedRunContext("run-current"),
-        sessionId: "session-current",
-        runId: "run-current",
-        workspaceDir: "/tmp/openclaw-test",
-        prompt: "hi",
-        trigger: "user",
-        timeoutMs: 60_000,
-      },
-      attempt: attemptResult({
-        assistantTexts: ["Analysis...", finalText],
-        toolMetas: [{ toolName: "update_plan" }],
-        lastAssistant: staleAssistant,
-        currentAttemptAssistant: currentAssistant,
-        currentAttemptCompletedAssistant: currentAssistant,
-      }),
-      currentAttemptCompletedAssistant: currentAssistant,
-      provider: "openai",
-      model: "gpt-5.4",
-      activeErrorContext: { provider: "openai", model: "gpt-5.4" },
-      authProfileStore: { version: 1, profiles: {} },
-      sessionIdUsed: "session-current",
-      outerContextTokenMeta: {},
-      usageAccumulator: createUsageAccumulator(),
-      contextRecoveryState: createEmbeddedRunContextRecoveryState(),
-      resolvedToolResultFormat: "markdown",
-      terminalState: {
-        outcome: { reason: "completed", status: "ok", stopReason: "stop" },
-        signalOwnedInterruption: false,
-      },
-    });
+  it.each([true, false])(
+    "uses current-attempt attribution instead of stale session evidence (completed: %s)",
+    async (completed) => {
+      const { prepareEmbeddedRunTerminal } = await import("./terminal-preparation.js");
+      const finalText = "The requested update is complete.";
+      const nativeSelection = { provider: "native-provider", model: "native-model" };
+      const staleAssistant = {
+        ...assistantMessage("toolUse"),
+        content: [{ type: "toolCall" as const, id: "tool_1", name: "update_plan", arguments: {} }],
+      };
+      const currentAssistant = {
+        ...assistantMessage("stop"),
+        ...nativeSelection,
+        content: [{ type: "text" as const, text: finalText }],
+        usage: {
+          ...assistantMessage("stop").usage,
+          input: 200,
+          output: 20,
+          totalTokens: 220,
+        },
+      };
+      const completedAssistant = completed ? currentAssistant : undefined;
+      const prepared = prepareEmbeddedRunTerminal({
+        runParams: {
+          admittedRunContext: createTestAdmittedRunContext("run-current"),
+          sessionId: "session-current",
+          runId: "run-current",
+          workspaceDir: "/tmp/openclaw-test",
+          prompt: "hi",
+          trigger: "user",
+          timeoutMs: 60_000,
+        },
+        attempt: attemptResult({
+          assistantTexts: ["Analysis...", finalText],
+          toolMetas: [{ toolName: "update_plan" }],
+          lastAssistant: staleAssistant,
+          currentAttemptAssistant: currentAssistant,
+          currentAttemptCompletedAssistant: completedAssistant,
+          runtimeModelSelection: nativeSelection,
+        }),
+        currentAttemptCompletedAssistant: completedAssistant,
+        provider: "openai",
+        model: "gpt-5.4",
+        activeErrorContext: { provider: "openai", model: "gpt-5.4" },
+        authProfileStore: { version: 1, profiles: {} },
+        sessionIdUsed: "session-current",
+        outerContextTokenMeta: {},
+        usageAccumulator: createUsageAccumulator(),
+        contextRecoveryState: createEmbeddedRunContextRecoveryState(),
+        resolvedToolResultFormat: "markdown",
+        terminalState: {
+          outcome: { reason: "completed", status: "ok", stopReason: "stop" },
+          signalOwnedInterruption: false,
+        },
+      });
 
-    expect(prepared.finalAssistantVisibleText).toBe(finalText);
-    expect(prepared.finalAssistantRawText).toBe(finalText);
-    expect(prepared.agentMeta.lastCallUsage).toMatchObject({ input: 200, output: 20, total: 220 });
-  });
+      expect(prepared.finalAssistantVisibleText).toBe(finalText);
+      expect(prepared.finalAssistantRawText).toBe(finalText);
+      expect(prepared.agentMeta).toMatchObject({
+        ...nativeSelection,
+        runtimeModelSelection: nativeSelection,
+      });
+      expect(payloadMocks.buildEmbeddedRunPayloads).toHaveBeenCalledWith(
+        expect.objectContaining({
+          lastAssistant: completedAssistant,
+          currentAssistant: completedAssistant ?? null,
+        }),
+      );
+      if (completed) {
+        expect(prepared.agentMeta.lastCallUsage).toMatchObject({
+          input: 200,
+          output: 20,
+          total: 220,
+        });
+      } else {
+        expect(prepared.agentMeta.lastCallUsage).toBeUndefined();
+      }
+    },
+  );
 
   it("projects a Code Mode cron tool failure into terminal metadata", async () => {
     const { prepareEmbeddedRunTerminal } = await import("./terminal-preparation.js");

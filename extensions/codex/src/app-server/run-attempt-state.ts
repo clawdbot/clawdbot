@@ -18,7 +18,7 @@ export async function clearCodexBindingAfterInvalidImagePayload(
   fields: { phase: string; threadId?: string; turnId?: string; error?: string },
   expected?: EmbeddedRunAttemptParams["expectedSessionRuntimeOwnership"],
 ): Promise<void> {
-  const currentBinding = await bindingStore.read(identity);
+  const currentBinding = bindingStore.read(identity);
   const expectedThreadId = fields.threadId ?? currentBinding?.threadId;
   if (!expectedThreadId) {
     return;

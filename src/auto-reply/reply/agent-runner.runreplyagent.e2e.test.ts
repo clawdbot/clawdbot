@@ -5436,6 +5436,78 @@ describe("runReplyAgent typing (heartbeat)", () => {
     },
   );
 
+  it("clears native fallback state without attributing finalizer response usage to the native model", async () => {
+    const runtimeModelSelection = { provider: "openai", model: "gpt-5.6-sol" };
+    const response = { provider: "google", model: "gemini-2.5-flash" };
+    const selectedModelRef = `${runtimeModelSelection.provider}/${runtimeModelSelection.model}`;
+    const responseModelRef = `${response.provider}/${response.model}`;
+    const runId = "native-fallback-cleared";
+    const usage = { input: 120, output: 8 };
+    const { sessionEntry, sessionStore, storePath } = await makeSessionFixture({
+      modelProvider: runtimeModelSelection.provider,
+      model: runtimeModelSelection.model,
+      fallbackNotice: {
+        kind: "active",
+        selectedModel: selectedModelRef,
+        activeModel: responseModelRef,
+        reason: "timeout",
+      },
+    });
+    state.runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "finalized answer" }],
+      meta: {
+        agentMeta: {
+          sessionId: "session",
+          ...response,
+          agentHarnessId: "codex",
+          runtimeModelSelection,
+          usage,
+        },
+      },
+    });
+    const { run } = createMinimalRun({
+      opts: { runId },
+      sessionEntry,
+      sessionStore,
+      storePath,
+      runOverrides: runtimeModelSelection,
+      sessionCtx: { ChatType: "direct" },
+    });
+    const fallbackEvents: Array<Record<string, unknown>> = [];
+    const off = onAgentEvent((event) => {
+      if (
+        event.runId === runId &&
+        event.stream === "lifecycle" &&
+        (event.data.phase === "fallback" || event.data.phase === "fallback_cleared")
+      ) {
+        fallbackEvents.push(event.data);
+      }
+    });
+    try {
+      const result = await run();
+      const text = (Array.isArray(result) ? result : [result])
+        .map((payload) => payload?.text ?? "")
+        .join("\n");
+
+      expect(requireStoredSessionEntry(storePath).fallbackNotice).toBeUndefined();
+      expect(fallbackEvents).toEqual([
+        expect.objectContaining({
+          phase: "fallback_cleared",
+          selectedProvider: runtimeModelSelection.provider,
+          selectedModel: runtimeModelSelection.model,
+          activeProvider: runtimeModelSelection.provider,
+          activeModel: runtimeModelSelection.model,
+          previousActiveModel: responseModelRef,
+        }),
+      ]);
+      expect(text).toContain(`Model Fallback cleared: ${selectedModelRef}`);
+      expect(text).toContain("finalized answer");
+      expect(consumeReplyUsageState(runId)).toMatchObject({ ...response, usage });
+    } finally {
+      off();
+    }
+  });
+
   it("announces fallback transitions and emits lifecycle events while verbose is off", async () => {
     const sessionEntry = makeSessionEntry();
     const sessionStore = { main: sessionEntry };

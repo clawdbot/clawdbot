@@ -31,27 +31,35 @@ import { withCodexThreadLifecycleBinding } from "./thread-lifecycle-adoption.js"
 setupRunAttemptTestHooks();
 
 describe("prepareCodexAttemptConnection", () => {
-  it.each(["missing", "ordinary", "auth-changed"] as const)(
+  it.each(["missing", "ordinary", "auth-changed", "model-changed", "provider-changed"] as const)(
     "rejects %s expected native ownership before reclaim or connection preparation",
     async (state) => {
       const sessionFile = path.join(tempDir, "expected-ownership.jsonl");
       const workspaceDir = path.join(tempDir, "expected-ownership-workspace");
       const params = createParams(sessionFile, workspaceDir);
-      params.expectedSessionRuntimeOwnership = {
-        model: "native",
-        auth: state === "auth-changed" ? "native" : "host",
+      const expectedOwnership = {
+        model: "native" as const,
+        auth: state === "auth-changed" ? ("native" as const) : ("host" as const),
+        modelRef: { provider: "openai", model: "gpt-5.6-luna" },
       };
+      params.expectedSessionRuntimeOwnership = expectedOwnership;
       registerCodexTestSessionIdentity(sessionFile, params.sessionId, params.sessionKey);
       if (state !== "missing") {
         await writeCodexAppServerBinding(sessionFile, {
           threadId: "thread-existing",
           cwd: workspaceDir,
-          ...(state === "auth-changed" ? { preserveNativeModel: true } : {}),
+          ...(state !== "ordinary" ? { preserveNativeModel: true } : {}),
+          model: state === "model-changed" ? "gpt-5.6-sol" : "gpt-5.6-luna",
+          modelProvider: state === "provider-changed" ? "other-native-provider" : "openai",
         });
       }
       const before = await readCodexAppServerBinding(sessionFile);
       const reclaim = vi.spyOn(testCodexAppServerBindingStore, "prepareSessionGenerationReclaim");
-      const connect = vi.spyOn(bindingConnection, "resolveCodexBindingAppServerConnection");
+      const connect = vi
+        .spyOn(bindingConnection, "resolveCodexBindingAppServerConnection")
+        .mockImplementation(() => {
+          throw new Error("invalid ownership reached connection preparation");
+        });
 
       await expect(
         prepareCodexAttemptConnection({
@@ -68,18 +76,32 @@ describe("prepareCodexAttemptConnection", () => {
     },
   );
 
-  it.each(["preserved", "missing", "ordinary", "auth-changed"] as const)(
+  it.each([
+    "preserved",
+    "missing",
+    "ordinary",
+    "auth-changed",
+    "model-changed",
+    "provider-changed",
+  ] as const)(
     "rechecks %s native ownership after acquiring the lifecycle binding lease",
     async (state) => {
       const sessionFile = path.join(tempDir, "leased-ownership.jsonl");
       const workspaceDir = path.join(tempDir, "leased-ownership-workspace");
       const params = createParams(sessionFile, workspaceDir);
-      params.expectedSessionRuntimeOwnership = { model: "native", auth: "host" };
+      const expectedOwnership = {
+        model: "native" as const,
+        auth: "host" as const,
+        modelRef: { provider: "openai", model: "gpt-5.6-luna" },
+      };
+      params.expectedSessionRuntimeOwnership = expectedOwnership;
       registerCodexTestSessionIdentity(sessionFile, params.sessionId, params.sessionKey);
       await writeCodexAppServerBinding(sessionFile, {
         threadId: "thread-existing",
         cwd: workspaceDir,
         preserveNativeModel: true,
+        model: "gpt-5.6-luna",
+        modelProvider: "openai",
       });
       const bindingStore = testCodexAppServerBindingStore;
       const withLease = bindingStore.withLease.bind(bindingStore);
@@ -94,13 +116,17 @@ describe("prepareCodexAttemptConnection", () => {
             patch:
               state === "ordinary"
                 ? { preserveNativeModel: undefined }
-                : {
-                    connectionScope: "supervision",
-                    supervisionSourceThreadId: "native-source",
-                    conversationSourceTransferComplete: true,
-                    model: "native-model",
-                    modelProvider: "native-provider",
-                  },
+                : state === "model-changed"
+                  ? { model: "gpt-5.6-sol" }
+                  : state === "provider-changed"
+                    ? { modelProvider: "other-native-provider" }
+                    : {
+                        connectionScope: "supervision",
+                        supervisionSourceThreadId: "native-source",
+                        conversationSourceTransferComplete: true,
+                        model: "native-model",
+                        modelProvider: "native-provider",
+                      },
           });
         }
         return withLease(identity, run);

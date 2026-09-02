@@ -3611,6 +3611,7 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
   ])("shipped /compact $outcome before native compaction", async ({ writerRunId }) => {
     const command = await import("../../auto-reply/reply/commands-compact.test-support.js");
     vi.mocked(command.compactEmbeddedAgentSession).mockReset();
+    await nativeCompactionArgs({ agentHarnessId: "codex" });
     resolveContextEngineMock.mockResolvedValue({
       info: { ownsCompaction: false },
       compact: contextEngineCompactMock,

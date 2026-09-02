@@ -65,11 +65,20 @@ export async function runEmbeddedAttemptWithBackend(
       });
     }
   }
-  const { modelAttempt: _backendModelAttempt, ...attempt } = result;
+  const { modelAttempt: _backendModelAttempt, runtimeModelSelection, ...attempt } = result;
   const modelAttempt = resolveRuntimeModelAttempt(params.runtimePlan);
   return copyCoreTtsAttemptResultProvenance(result, {
     ...attempt,
     ...(modelAttempt ? { modelAttempt } : {}),
+    // Only private prepared ownership permits a runtime to select the session model.
+    ...(nativeSessionRuntime && runtimeModelSelection
+      ? {
+          runtimeModelSelection: {
+            provider: runtimeModelSelection.provider,
+            model: runtimeModelSelection.model,
+          },
+        }
+      : {}),
   });
 }
 

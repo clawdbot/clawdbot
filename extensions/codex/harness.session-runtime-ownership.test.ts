@@ -1,4 +1,3 @@
-import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { describe, expect, it, vi } from "vitest";
 import { createCodexAppServerAgentHarness } from "./harness.js";
 import { clearCodexBindingAfterInvalidImagePayload } from "./src/app-server/run-attempt-state.js";
@@ -41,14 +40,22 @@ describe("Codex session runtime ownership", () => {
   it.each<{
     name: string;
     binding?: CodexAppServerThreadBinding;
-    expected?: { model: "native"; auth: "native" | "host" };
+    expected?: {
+      model: "native";
+      auth: "native" | "host";
+      modelRef?: { provider: string; model: string };
+    };
   }>([
     { name: "missing binding" },
     { name: "ordinary binding with an observed native model", binding: observedBinding },
     {
       name: "native model ownership retaining host auth without supervision",
       binding: { ...observedBinding, preserveNativeModel: true },
-      expected: { model: "native", auth: "host" },
+      expected: {
+        model: "native",
+        auth: "host",
+        modelRef: { provider: "native-provider", model: "native-model" },
+      },
     },
     {
       name: "materialized supervision with a concrete native model",
@@ -59,7 +66,11 @@ describe("Codex session runtime ownership", () => {
         preserveNativeModel: true,
         conversationSourceTransferComplete: true,
       },
-      expected: { model: "native", auth: "native" },
+      expected: {
+        model: "native",
+        auth: "native",
+        modelRef: { provider: "native-provider", model: "native-model" },
+      },
     },
     {
       name: "pending supervision without a model selection",
@@ -80,8 +91,8 @@ describe("Codex session runtime ownership", () => {
       await fixture.bindingStore.mutate(identity, { kind: "set", binding });
     }
 
-    await expect(fixture.resolveOwnership()).resolves.toEqual(expected);
-    await expect(fixture.bindingStore.read(identity)).resolves.toEqual(binding);
+    expect(fixture.resolveOwnership()).toEqual(expected);
+    expect(fixture.bindingStore.read(identity)).toEqual(binding);
   });
 
   it.each([false, true])(
@@ -98,9 +109,7 @@ describe("Codex session runtime ownership", () => {
         expected ? { model: "native", auth: "host" } : undefined,
       );
 
-      await expect(fixture.bindingStore.read(identity)).resolves.toEqual(
-        expected ? binding : undefined,
-      );
+      expect(fixture.bindingStore.read(identity)).toEqual(expected ? binding : undefined);
     },
   );
 
@@ -109,10 +118,8 @@ describe("Codex session runtime ownership", () => {
     const binding = { ...observedBinding, preserveNativeModel: true as const };
     await fixture.bindingStore.mutate(identity, { kind: "set", binding });
 
-    await expect(
-      fixture.resolveOwnership({ sessionId: "session-successor" }),
-    ).resolves.toBeUndefined();
-    await expect(fixture.bindingStore.read(identity)).resolves.toEqual(binding);
+    expect(fixture.resolveOwnership({ sessionId: "session-successor" })).toBeUndefined();
+    expect(fixture.bindingStore.read(identity)).toEqual(binding);
   });
 
   it("does not reuse model ownership after binding retirement", async () => {
@@ -121,10 +128,14 @@ describe("Codex session runtime ownership", () => {
       kind: "set",
       binding: { ...observedBinding, preserveNativeModel: true },
     });
-    await expect(fixture.resolveOwnership()).resolves.toEqual({ model: "native", auth: "host" });
+    expect(fixture.resolveOwnership()).toEqual({
+      model: "native",
+      auth: "host",
+      modelRef: { provider: "native-provider", model: "native-model" },
+    });
     await fixture.bindingStore.retireSessionGeneration(identity);
 
-    await expect(fixture.resolveOwnership()).resolves.toBeUndefined();
+    expect(fixture.resolveOwnership()).toBeUndefined();
   });
 
   it.each(["revoked", "disposed"] as const)(
@@ -141,29 +152,12 @@ describe("Codex session runtime ownership", () => {
         }
       };
 
-      await expect(fixture.resolveOwnership({ assertCurrent })).rejects.toThrow(
+      expect(() => fixture.resolveOwnership({ assertCurrent })).toThrow(
         reason === "disposed" ? "harness is disposed" : "admission revoked",
       );
       expect(read).not.toHaveBeenCalled();
     },
   );
-
-  it("rechecks admission after the lazy import and before reading private state", async () => {
-    const fixture = createOwnershipFixture();
-    const read = vi.spyOn(fixture.bindingStore, "read");
-    let current = true;
-    const resolving = fixture.resolveOwnership({
-      assertCurrent() {
-        if (!current) {
-          throw new Error("admission revoked");
-        }
-      },
-    });
-    current = false;
-
-    await expect(resolving).rejects.toThrow("admission revoked");
-    expect(read).not.toHaveBeenCalled();
-  });
 
   it.each(["revoked", "disposed"] as const)(
     "rejects ownership when admission becomes %s during the binding read",
@@ -174,33 +168,35 @@ describe("Codex session runtime ownership", () => {
         binding: { ...observedBinding, preserveNativeModel: true },
       });
       const readBinding = fixture.bindingStore.read.bind(fixture.bindingStore);
-      const started = createDeferred<void>();
-      const released = createDeferred<void>();
-      vi.spyOn(fixture.bindingStore, "read").mockImplementationOnce(async (requestedIdentity) => {
-        const binding = await readBinding(requestedIdentity);
-        started.resolve();
-        await released.promise;
+      let current = true;
+      const cleanup: { disposal?: Promise<void> } = {};
+      vi.spyOn(fixture.bindingStore, "read").mockImplementationOnce((requestedIdentity) => {
+        const binding = readBinding(requestedIdentity);
+        if (reason === "disposed") {
+          const disposal = fixture.harness.dispose?.();
+          if (disposal) {
+            cleanup.disposal = disposal;
+          }
+        } else {
+          current = false;
+        }
         return binding;
       });
-      let current = true;
-      const resolving = fixture.resolveOwnership({
-        assertCurrent() {
-          if (!current) {
-            throw new Error("admission revoked");
-          }
-        },
-      });
-      await started.promise;
-      if (reason === "disposed") {
-        await fixture.harness.dispose?.();
-      } else {
-        current = false;
+      try {
+        expect(() =>
+          fixture.resolveOwnership({
+            assertCurrent() {
+              if (!current) {
+                throw new Error("admission revoked");
+              }
+            },
+          }),
+        ).toThrow(reason === "disposed" ? "harness is disposed" : "admission revoked");
+      } finally {
+        if (cleanup.disposal) {
+          await cleanup.disposal;
+        }
       }
-      released.resolve();
-
-      await expect(resolving).rejects.toThrow(
-        reason === "disposed" ? "harness is disposed" : "admission revoked",
-      );
     },
   );
 });

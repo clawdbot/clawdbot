@@ -144,6 +144,20 @@ do not receive a forwarded host profile. They reject explicit per-run provider
 stream parameters rather than silently dropping them. Use a concrete model chat
 when you need to apply those parameters.
 
+When a native model still uses host authentication, its actual provider/model
+pair controls credential and request preparation, not the outer default. An
+explicit auth profile remains locked. If resume changes that pair after credentials
+were prepared, the turn stops before inference and preserves the newly observed
+native state; it does not retry with stale credentials or replace the thread.
+
+Session rows and events use the native owner's known model pair. A pending native
+branch can show a configured placeholder until its first turn selects a model.
+For native-auth sessions, chat metadata removes the unrelated host-credential gate
+from that rendered row without claiming native credentials are ready. Global model
+availability and concrete-model chats keep their normal host-auth checks. The native
+selection also remains separate from a final response's billing model, including
+when a host finalizer supplies the last answer.
+
 ## Runtime selection
 
 OpenClaw resolves an embedded runtime after provider and model resolution, in
