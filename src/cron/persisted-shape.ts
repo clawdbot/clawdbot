@@ -61,30 +61,9 @@ type InvalidPersistedCronJobReason =
   | "missing-payload"
   | "invalid-payload";
 
-/** Returns the first structural reason a persisted cron job cannot be loaded safely. */
-export function getInvalidPersistedCronJobReason(
-  candidate: Record<string, unknown>,
+function getInvalidPersistedCronScheduleReason(
+  scheduleRecord: Record<string, unknown>,
 ): InvalidPersistedCronJobReason | null {
-  const id = candidate.id;
-  if (typeof id !== "string" || !id.trim()) {
-    return "missing-id";
-  }
-  if (getInvalidCronJobStateTimestampField(candidate.state)) {
-    return "invalid-state";
-  }
-  const schedule = candidate.schedule;
-  if (!schedule || Array.isArray(schedule)) {
-    return "missing-schedule";
-  }
-  if (typeof schedule === "string") {
-    // Legacy shorthand schedules are normalized later by the full cron parser;
-    // this guard only rejects shapes that cannot be persisted or quarantined.
-    return null;
-  }
-  if (typeof schedule !== "object") {
-    return "missing-schedule";
-  }
-  const scheduleRecord = schedule as Record<string, unknown>;
   const scheduleKind = scheduleRecord.kind;
   if (
     scheduleKind !== "at" &&
@@ -155,6 +134,43 @@ export function getInvalidPersistedCronJobReason(
       if (!compileSafeRegex(scheduleRecord.match as string)) {
         return "invalid-schedule";
       }
+    }
+  }
+  return null;
+}
+
+/** Returns the first structural reason a persisted cron job cannot be loaded safely. */
+export function getInvalidPersistedCronJobReason(
+  candidate: Record<string, unknown>,
+): InvalidPersistedCronJobReason | null {
+  const id = candidate.id;
+  if (typeof id !== "string" || !id.trim()) {
+    return "missing-id";
+  }
+  if (getInvalidCronJobStateTimestampField(candidate.state)) {
+    return "invalid-state";
+  }
+  const schedule = candidate.schedule;
+  if (
+    !schedule ||
+    Array.isArray(schedule) ||
+    (typeof schedule !== "object" && typeof schedule !== "string")
+  ) {
+    return "missing-schedule";
+  }
+  // A legacy shorthand schedule is a string the full cron parser normalizes
+  // later, so only the record form can be shape-checked here. Trigger and
+  // payload still have to be: returning early for the string form let a
+  // payload-less row count as loadable, and the SQLite binder then threw on
+  // job.payload.kind and lost the whole store write instead of quarantining
+  // that one row.
+  const scheduleRecord =
+    typeof schedule === "string" ? undefined : (schedule as Record<string, unknown>);
+  const scheduleKind = scheduleRecord?.kind;
+  if (scheduleRecord) {
+    const invalidSchedule = getInvalidPersistedCronScheduleReason(scheduleRecord);
+    if (invalidSchedule) {
+      return invalidSchedule;
     }
   }
   if ("trigger" in candidate) {
