@@ -548,6 +548,8 @@ describe("Full Access delegated chat", () => {
       })),
     ),
     { source: "typed" as const, previousRun: "storage-failure" as const },
+    { source: "typed" as const, previousRun: "unregistered-closed" as const },
+    { source: "typed" as const, previousRun: "registration-failure" as const },
   ])(
     "applies Full Access via $source without inheriting a $previousRun proposal",
     async ({ source, previousRun }) => {
@@ -633,10 +635,22 @@ describe("Full Access delegated chat", () => {
       const sessions = new Map<string, SystemAgentChatSession>([
         ["delegate-full", delegatedSession],
       ]);
+      const approvalDatabasePath = path.join(stateDir, "approvals.sqlite");
+      if (previousRun === "registration-failure") {
+        fs.mkdirSync(approvalDatabasePath);
+      }
       const manager = new ExecApprovalManager<SystemAgentApprovalRequestPayload>({
         approvalKind: "system-agent",
         resolveAllowedDecisions: (request) => request.allowedDecisions,
         validateAgentRuntimeDelegatedAuthority: validateAgentRunDelegatedAuthority,
+        ...(previousRun === "registration-failure"
+          ? {
+              persistence: {
+                runtimeEpoch: "registration-failure",
+                databaseOptions: { path: approvalDatabasePath },
+              },
+            }
+          : {}),
       });
       const operationalRunInstance = createOperationalRunInstanceRef("delegated-full-run");
       const authority = claimAgentRunDelegatedAuthority(operationalRunInstance);
@@ -702,12 +716,26 @@ describe("Full Access delegated chat", () => {
         }),
       );
 
-      const restricted = await withGatewayToolCallerIdentity(
+      if (previousRun === "unregistered-closed") {
+        const handle = engine.handle.bind(engine);
+        vi.spyOn(engine, "handle").mockImplementationOnce(async (...args) => {
+          const reply = await handle(...args);
+          // Close the real requesting run after staging, before the Gateway resolves its proposal.
+          expect(engine.getPendingOperatorProposal()?.operation).toEqual({
+            kind: "config-set",
+            path: "logging.level",
+            value: "info",
+          });
+          expect(releaseAgentRunDelegatedAuthority(authority)).toBe(true);
+          return reply;
+        });
+      }
+      const proposalCall = withGatewayToolCallerIdentity(
         {
           agentId: "main",
           sessionKey: "agent:main:main",
           operationalRunInstance,
-          fullPermission: false,
+          fullPermission: previousRun === "unregistered-closed",
         },
         () =>
           callChat({
@@ -716,19 +744,33 @@ describe("Full Access delegated chat", () => {
             delegation: { agentId: "main", sessionKey: "agent:main:main" },
           }),
       );
-      expect(restricted.payload).toMatchObject({ needsApproval: true });
+      if (previousRun === "unregistered-closed" || previousRun === "registration-failure") {
+        await expect(proposalCall).rejects.toThrow(
+          previousRun === "unregistered-closed"
+            ? "system-agent approval authority is no longer active"
+            : /EISDIR|directory|open database/u,
+        );
+        expect.soft(delegatedSession.pendingApproval).toBeUndefined();
+        expect(manager.listPendingRecords()).toEqual([]);
+        expect.soft(engine.getPendingOperatorProposal()).toBeNull();
+      } else {
+        expect((await proposalCall).payload).toMatchObject({ needsApproval: true });
+        expect(manager.listPendingRecords()).toHaveLength(1);
+      }
       expect(runConfigSet).toHaveBeenCalledOnce();
-      expect(manager.listPendingRecords()).toHaveLength(1);
-      const pending = expectDefined(manager.listPendingRecords()[0], "restricted proposal");
+      const pending = manager.listPendingRecords()[0];
       if (previousRun === "closed") {
         releaseAgentRunDelegatedAuthority(authority);
-        manager.forceDenyIfRuntimeAuthorityClosed(pending.id);
-        expect(manager.getSnapshot(pending.id)?.status).toBe("cancelled");
+        const pendingId = expectDefined(pending, "restricted proposal").id;
+        manager.forceDenyIfRuntimeAuthorityClosed(pendingId);
+        expect(manager.getSnapshot(pendingId)?.status).toBe("cancelled");
       }
 
       const replacementRun = createOperationalRunInstanceRef("delegated-replacement-run");
       const replacementAuthority = claimAgentRunDelegatedAuthority(replacementRun);
-      expect(validateAgentRunDelegatedAuthority(authority)).toBe(previousRun !== "closed");
+      const previousAuthorityActive =
+        previousRun !== "closed" && previousRun !== "unregistered-closed";
+      expect(validateAgentRunDelegatedAuthority(authority)).toBe(previousAuthorityActive);
       expect(validateAgentRunDelegatedAuthority(replacementAuthority)).toBe(true);
       const readOnly = () =>
         withGatewayToolCallerIdentity(
@@ -762,14 +804,16 @@ describe("Full Access delegated chat", () => {
       }
       const readOnlyReply = await readOnly();
       expect(readOnlyReply.error).toBeUndefined();
+      expect.soft(runConfigSet).toHaveBeenCalledOnce();
       expect(readOnlyReply.payload).toMatchObject({
         reply: expect.stringContaining("logging.level: not set"),
       });
-      expect(runConfigSet).toHaveBeenCalledOnce();
       expect(engine.getPendingOperatorProposal()).toBeNull();
       expect(manager.listPendingRecords()).toEqual([]);
-      expect(manager.resolve(pending.id, "allow-once", "late-operator")).toBe(false);
-      expect(validateAgentRunDelegatedAuthority(authority)).toBe(previousRun !== "closed");
+      if (pending) {
+        expect(manager.resolve(pending.id, "allow-once", "late-operator")).toBe(false);
+      }
+      expect(validateAgentRunDelegatedAuthority(authority)).toBe(previousAuthorityActive);
     },
   );
 });

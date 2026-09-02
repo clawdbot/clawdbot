@@ -45,6 +45,23 @@ function sameApprovalAuthority(
     : true;
 }
 
+async function retireSystemAgentProposal(
+  session: GatewaySystemAgentSession,
+  manager: GatewayRequestContext["systemAgentApprovalManager"],
+  proposalHash: string,
+): Promise<void> {
+  try {
+    const pending = session.pendingApproval;
+    if (pending?.proposalHash === proposalHash) {
+      // Retire the exact local owner before closing its record; storage failure cannot retain it.
+      session.pendingApproval = undefined;
+      manager?.forceDenyIfRuntimeAuthorityClosed(pending.id);
+    }
+  } finally {
+    await session.engine.resolveOperatorApproval(null, proposalHash);
+  }
+}
+
 async function reconcileSystemAgentApproval(
   session: GatewaySystemAgentSession,
   manager: GatewayRequestContext["systemAgentApprovalManager"],
@@ -66,17 +83,9 @@ async function reconcileSystemAgentApproval(
   ) {
     return pending;
   }
-  // A new run cannot inherit even a still-live run's proposal. Removing the
-  // exact pending owner also closes its approval before routing the new input.
-  session.pendingApproval = undefined;
-  try {
-    if (!closed) {
-      manager?.forceDenyIfRuntimeAuthorityClosed(pending.id);
-    }
-  } finally {
-    // Registry failure must not orphan an executable proposal for the next run.
-    await session.engine.resolveOperatorApproval(null, pending.proposalHash);
-  }
+  // A new run cannot inherit even a still-live run's proposal. Retire it before input;
+  // skip a second store transition when the registry already closed the record above.
+  await retireSystemAgentProposal(session, closed ? undefined : manager, pending.proposalHash);
   return undefined;
 }
 
@@ -153,21 +162,32 @@ export async function prepareDelegatedSystemAgentApproval(params: {
   assertLiveApprovalAuthority();
 
   return async (proposal) => {
-    assertLiveApprovalAuthority();
-    if (params.session.pendingApproval) {
-      const pending = await reconcileSystemAgentApproval(
-        params.session,
-        manager,
-        runtimeApprovalAuthority,
-      );
-      if (pending?.proposalHash === proposal.hash) {
-        return { kind: "approval", id: pending.id };
-      }
-      await params.session.engine.resolveOperatorApproval(null, proposal.hash);
-      throw new Error("OpenClaw change is no longer pending. Retry the request.");
-    }
-    const applyDecision = async (decision: ExecApprovalDecision | null) => {
+    const withProposalFailureCleanup = async <T>(resolve: () => Promise<T>): Promise<T> => {
       try {
+        return await resolve();
+      } catch (error) {
+        // Entry, registration, and apply failures all retire this exact proposal.
+        // Otherwise a later run can inherit it without the failed run's authority.
+        if (params.sessions.get(params.sessionId) === params.session) {
+          await retireSystemAgentProposal(params.session, manager, proposal.hash);
+        }
+        throw error;
+      }
+    };
+    return await withProposalFailureCleanup(async (): ReturnType<DelegatedProposalResolver> => {
+      assertLiveApprovalAuthority();
+      if (params.session.pendingApproval) {
+        const pending = await reconcileSystemAgentApproval(
+          params.session,
+          manager,
+          runtimeApprovalAuthority,
+        );
+        if (pending?.proposalHash === proposal.hash) {
+          return { kind: "approval", id: pending.id };
+        }
+        throw new Error("OpenClaw change is no longer pending. Retry the request.");
+      }
+      const applyDecision = async (decision: ExecApprovalDecision | null) => {
         if (decision && decision !== "deny") {
           assertLiveApprovalAuthority();
         }
@@ -176,123 +196,118 @@ export async function prepareDelegatedSystemAgentApproval(params: {
           proposal.hash,
           assertLiveApprovalAuthority,
         );
-      } catch (error) {
-        // Authority can close before the executor consumes the proposal.
-        // Invalidate that exact operation instead of leaving it for a later run.
-        if (params.sessions.get(params.sessionId) === params.session) {
-          await params.session.engine.resolveOperatorApproval(null, proposal.hash);
+      };
+      // Only a fresh proposal belongs to this input. An existing operator request
+      // stays bound to its original decision, even if this caller has Full Access.
+      if (callerIdentity?.fullPermission === true) {
+        const reply = await applyDecision("allow-once");
+        if (!reply) {
+          throw new Error("OpenClaw change is no longer pending. Retry the request.");
         }
-        throw error;
+        return { kind: "completed", reply };
       }
-    };
-    // Only a fresh proposal belongs to this input. An existing operator request
-    // stays bound to its original decision, even if this caller has Full Access.
-    if (callerIdentity?.fullPermission === true) {
-      const reply = await applyDecision("allow-once");
-      if (!reply) {
-        throw new Error("OpenClaw change is no longer pending. Retry the request.");
+      if (!manager) {
+        throw new Error("OpenClaw approval registry unavailable");
       }
-      return { kind: "completed", reply };
-    }
-    if (!manager) {
-      throw new Error("OpenClaw approval registry unavailable");
-    }
-    const description = describeSystemAgentPersistentOperation(proposal.operation);
-    const request: SystemAgentApprovalRequestPayload = {
-      title: "OpenClaw change",
-      description,
-      command: description,
-      proposalHash: proposal.hash,
-      allowedDecisions: SYSTEM_AGENT_APPROVAL_DECISIONS,
-      agentId: params.delegation.agentId ?? null,
-      sessionKey: params.delegation.sessionKey ?? null,
-      sessionId: params.sessionId,
-      turnSourceChannel: params.delegation.turnSourceChannel ?? null,
-      turnSourceTo: params.delegation.turnSourceTo ?? null,
-      turnSourceAccountId: params.delegation.turnSourceAccountId ?? null,
-      turnSourceThreadId: params.delegation.turnSourceThreadId ?? null,
-      runId: callerIdentity?.operationalRunInstance?.runId ?? null,
-    };
-    const record = manager.create(
-      request,
-      SYSTEM_AGENT_APPROVAL_TIMEOUT_MS,
-      `system-agent:${randomUUID()}`,
-    );
-    const pendingApproval = { id: record.id, proposalHash: proposal.hash };
-    params.session.pendingApproval = pendingApproval;
-    record.agentRuntimeDelegatedAuthority = runtimeApprovalAuthority;
-    // The request loses authority when replaced, even while its source run lives.
-    record.approvalAuthority = () =>
-      isAuthorityActive() &&
-      params.sessions.get(params.sessionId) === params.session &&
-      params.session.pendingApproval === pendingApproval;
-    if (callerIdentity?.approvalSignals?.length) {
-      record.approvalSignals = callerIdentity.approvalSignals;
-    }
-    const decisionPromise = manager.register(record, SYSTEM_AGENT_APPROVAL_TIMEOUT_MS);
-    const requestEvent = buildRequestedApprovalEvent(record, "system-agent");
-    const publishApplicationResult = (
-      decision: ExecApprovalDecision,
-      applicationStatus: SystemAgentApprovalApplicationStatus,
-    ) => {
-      const resolvedEvent = {
-        id: record.id,
-        decision,
-        resolvedBy: record.resolvedBy ?? null,
-        ts: Date.now(),
+      const description = describeSystemAgentPersistentOperation(proposal.operation);
+      const request: SystemAgentApprovalRequestPayload = {
+        title: "OpenClaw change",
+        description,
+        command: description,
+        proposalHash: proposal.hash,
+        allowedDecisions: SYSTEM_AGENT_APPROVAL_DECISIONS,
+        agentId: params.delegation.agentId ?? null,
+        sessionKey: params.delegation.sessionKey ?? null,
+        sessionId: params.sessionId,
+        turnSourceChannel: params.delegation.turnSourceChannel ?? null,
+        turnSourceTo: params.delegation.turnSourceTo ?? null,
+        turnSourceAccountId: params.delegation.turnSourceAccountId ?? null,
+        turnSourceThreadId: params.delegation.turnSourceThreadId ?? null,
+        runId: callerIdentity?.operationalRunInstance?.runId ?? null,
+      };
+      const record = manager.create(
         request,
-        applicationStatus,
-      } satisfies SystemAgentApprovalResolved;
-      broadcastApprovalResolvedEvent({
-        approvalKind: "system-agent",
-        context: params.context,
+        SYSTEM_AGENT_APPROVAL_TIMEOUT_MS,
+        `system-agent:${randomUUID()}`,
+      );
+      const pendingApproval = { id: record.id, proposalHash: proposal.hash };
+      params.session.pendingApproval = pendingApproval;
+      record.agentRuntimeDelegatedAuthority = runtimeApprovalAuthority;
+      // The request loses authority when replaced, even while its source run lives.
+      record.approvalAuthority = () =>
+        isAuthorityActive() &&
+        params.sessions.get(params.sessionId) === params.session &&
+        params.session.pendingApproval === pendingApproval;
+      if (callerIdentity?.approvalSignals?.length) {
+        record.approvalSignals = callerIdentity.approvalSignals;
+      }
+      const decisionPromise = manager.register(record, SYSTEM_AGENT_APPROVAL_TIMEOUT_MS);
+      const requestEvent = buildRequestedApprovalEvent(record, "system-agent");
+      const publishApplicationResult = (
+        decision: ExecApprovalDecision,
+        applicationStatus: SystemAgentApprovalApplicationStatus,
+      ) => {
+        const resolvedEvent = {
+          id: record.id,
+          decision,
+          resolvedBy: record.resolvedBy ?? null,
+          ts: Date.now(),
+          request,
+          applicationStatus,
+        } satisfies SystemAgentApprovalResolved;
+        broadcastApprovalResolvedEvent({
+          approvalKind: "system-agent",
+          context: params.context,
+          record,
+          event: resolvedEvent,
+        });
+        params.context.approvalEvents?.publishResolved("system-agent", resolvedEvent);
+      };
+      void handlePendingApprovalRequest({
+        manager,
         record,
-        event: resolvedEvent,
+        decisionPromise,
+        respond: () => undefined,
+        context: params.context,
+        requestEventName: "openclaw.approval.requested",
+        requestEvent,
+        twoPhase: true,
+        approvalKind: "system-agent",
+        deliverRequest: () => false,
+        keepPendingWithoutRoute: true,
+        requireDeliveryRoute: false,
+        afterDecision: async (decision) => {
+          try {
+            const reply = await runWithGatewayIndependentRootWorkContinuation(
+              () =>
+                runSystemAgentGatewayTask(async () => {
+                  if (
+                    params.sessions.get(params.sessionId) !== params.session ||
+                    params.session.pendingApproval !== pendingApproval
+                  ) {
+                    return null;
+                  }
+                  params.session.pendingApproval = undefined;
+                  // Retire failures before releasing this task; a later run may propose the same hash.
+                  return await withProposalFailureCleanup(() => applyDecision(decision));
+                }),
+              "system-agent:task",
+            );
+            if (decision) {
+              const applicationStatus = reply?.applied === true ? "applied" : "not-applied";
+              publishApplicationResult(decision, applicationStatus);
+            }
+          } catch (error) {
+            if (decision) {
+              publishApplicationResult(decision, "not-applied");
+            }
+            throw error;
+          }
+        },
+        afterDecisionErrorLabel: "OpenClaw approval apply failed",
       });
-      params.context.approvalEvents?.publishResolved("system-agent", resolvedEvent);
-    };
-    void handlePendingApprovalRequest({
-      manager,
-      record,
-      decisionPromise,
-      respond: () => undefined,
-      context: params.context,
-      requestEventName: "openclaw.approval.requested",
-      requestEvent,
-      twoPhase: true,
-      approvalKind: "system-agent",
-      deliverRequest: () => false,
-      keepPendingWithoutRoute: true,
-      requireDeliveryRoute: false,
-      afterDecision: async (decision) => {
-        try {
-          const reply = await runWithGatewayIndependentRootWorkContinuation(
-            () =>
-              runSystemAgentGatewayTask(async () => {
-                if (
-                  params.sessions.get(params.sessionId) !== params.session ||
-                  params.session.pendingApproval !== pendingApproval
-                ) {
-                  return null;
-                }
-                params.session.pendingApproval = undefined;
-                return await applyDecision(decision);
-              }),
-            "system-agent:task",
-          );
-          if (decision) {
-            publishApplicationResult(decision, reply?.applied === true ? "applied" : "not-applied");
-          }
-        } catch (error) {
-          if (decision) {
-            publishApplicationResult(decision, "not-applied");
-          }
-          throw error;
-        }
-      },
-      afterDecisionErrorLabel: "OpenClaw approval apply failed",
+      return { kind: "approval", id: record.id };
     });
-    return { kind: "approval", id: record.id };
   };
 }
 
