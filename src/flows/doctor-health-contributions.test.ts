@@ -3191,6 +3191,7 @@ describe("doctor health contributions", () => {
     expect(mocks.collectDevicePairingHealthFindings).toHaveBeenCalledWith({
       cfg: ctx.cfg,
       healthOk: false,
+      env: ctx.env,
     });
   });
 
