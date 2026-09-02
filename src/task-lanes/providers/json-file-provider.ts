@@ -42,7 +42,27 @@ const ALLOWED_URL_SCHEMES = new Set(["http:", "https:"]);
 /** Injectable file reader so tests can stub the filesystem. */
 type JsonFileReader = (filePath: string) => Promise<Buffer>;
 
-const defaultReader: JsonFileReader = (filePath) => fs.readFile(filePath);
+/** Distinguished so the loader rethrows it unwrapped by the generic read-error diagnostic. */
+class TaskLaneFileTooLargeError extends Error {}
+
+const defaultReader: JsonFileReader = async (filePath) => {
+  const handle = await fs.open(filePath, "r");
+  try {
+    const stat = await handle.stat();
+    if (stat.size > TASK_LANE_MAX_FILE_BYTES) {
+      throw new TaskLaneFileTooLargeError(
+        `task lane file too large: ${stat.size} > ${TASK_LANE_MAX_FILE_BYTES}`,
+      );
+    }
+    // One spare byte detects a file that grew between stat and read; the
+    // byte-length cap check below still backstops it.
+    const buffer = Buffer.alloc(TASK_LANE_MAX_FILE_BYTES + 1);
+    const { bytesRead } = await handle.read(buffer, 0, TASK_LANE_MAX_FILE_BYTES + 1, 0);
+    return buffer.subarray(0, bytesRead);
+  } finally {
+    await handle.close();
+  }
+};
 
 /** Returns true when `child` is the same path as `parent` or sits inside it. */
 function isPathInside(parent: string, child: string): boolean {
@@ -201,6 +221,9 @@ async function loadJsonFileProviderLanes(options: JsonFileProviderOptions): Prom
   try {
     buffer = await (options.reader ?? defaultReader)(real);
   } catch (error) {
+    if (error instanceof TaskLaneFileTooLargeError) {
+      throw error;
+    }
     throw new Error(`task lane file could not be read (${fsErrorCode(error)})`, { cause: error });
   }
   if (buffer.byteLength > TASK_LANE_MAX_FILE_BYTES) {
@@ -227,12 +250,19 @@ async function loadJsonFileProviderLanes(options: JsonFileProviderOptions): Prom
     throw new Error("task lane file is missing the lanes array");
   }
   const lanes: TaskLane[] = [];
+  const seenLaneIds = new Set<string>();
   for (const candidateLane of root.lanes) {
     if (lanes.length >= TASK_LANE_MAX_LANES) {
       break;
     }
     const lane = normalizeLane(candidateLane);
     if (lane) {
+      // Duplicate ids would merge two lanes' items under one provider/lane key.
+      // The id itself is file content and is never echoed in diagnostics.
+      if (seenLaneIds.has(lane.id)) {
+        throw new Error("task lane file has duplicate lane ids");
+      }
+      seenLaneIds.add(lane.id);
       lanes.push(lane);
     }
   }

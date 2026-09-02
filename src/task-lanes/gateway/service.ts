@@ -15,6 +15,7 @@ export type TaskLaneGatewayService = {
     limit?: number;
     offset?: number;
   }): Promise<TaskLaneSnapshot>;
+  hasProviders(): boolean;
   registry(): TaskLaneRegistry;
 };
 
@@ -26,6 +27,9 @@ export function createTaskLaneGatewayService(): TaskLaneGatewayService {
     },
     snapshot(options) {
       return loadTaskLaneSnapshot(registry, options);
+    },
+    hasProviders() {
+      return registry.providers.size > 0;
     },
     registry() {
       return registry;

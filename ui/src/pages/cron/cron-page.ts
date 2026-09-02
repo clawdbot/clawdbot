@@ -162,7 +162,16 @@ class CronPage extends OpenClawLightDomElement {
       void this.context.agents.ensureList();
     }
     if (!this.cron.cronStatus && !this.cron.cronLoading) {
-      void this.refreshCron({ tableFilters: true, coalesce: true });
+      // Lane data loads only after cron.status resolves the capability gate,
+      // so an unconfigured install never issues a taskLanes.list request.
+      // The continuation binds to this connection epoch: a replaced state
+      // (reconnect) reloads lanes through its own path.
+      const cronState = this.cron;
+      void this.refreshCron({ tableFilters: true, coalesce: true }).then(() => {
+        if (this.cron === cronState) {
+          this.requestTaskLanesLoad();
+        }
+      });
     } else if (!this.cron.cronRuns.length && !this.cron.cronRunsLoadingMore) {
       void this.loadRuns(this.cron.cronRunsScope === "all" ? null : this.cron.cronRunsJobId);
     }
@@ -171,20 +180,38 @@ class CronPage extends OpenClawLightDomElement {
       this.modelSuggestionsState = cronState;
       void this.loadModelSuggestions(cronState);
     }
-    void this.runCronTask((current) => loadTaskLanes(current));
+    if (this.cron.cronStatus) {
+      this.requestTaskLanesLoad();
+    }
+  }
+
+  private requestTaskLanesLoad() {
+    if (this.taskLanesRequestAllowed()) {
+      void this.runCronTask((current) => loadTaskLanes(current));
+    }
   }
 
   private taskLanesReloadTimer: ReturnType<typeof setTimeout> | null = null;
 
+  // Absent capability stays absent: an unconfigured install never requests
+  // lane data and never renders an empty panel. `taskLanesConfigured` is
+  // undefined on older gateways, which keeps the request path enabled.
+  private taskLanesRequestAllowed() {
+    return this.cron.cronStatus?.taskLanesConfigured !== false;
+  }
+
   // Task lanes reflect cron mutations (a run adds lane items); coalesce
   // bursts into one trailing reload so rapid actions stay one request.
   private scheduleTaskLanesReload() {
+    if (!this.taskLanesRequestAllowed()) {
+      return;
+    }
     if (this.taskLanesReloadTimer !== null) {
       clearTimeout(this.taskLanesReloadTimer);
     }
     this.taskLanesReloadTimer = setTimeout(() => {
       this.taskLanesReloadTimer = null;
-      void this.runCronTask((current) => loadTaskLanes(current));
+      this.requestTaskLanesLoad();
     }, 150);
   }
 

@@ -85,4 +85,15 @@ describe("registerConfiguredTaskLaneProviders", () => {
       await fs.rm(rootDir, { recursive: true, force: true });
     }
   });
+
+  it("reports provider presence so the UI can keep unconfigured installs absent", () => {
+    const service = createTaskLaneGatewayService();
+    expect(service.hasProviders()).toBe(false);
+    service.addProvider({
+      id: "stub",
+      label: "Stub",
+      load: async () => ({ lanes: [] }),
+    });
+    expect(service.hasProviders()).toBe(true);
+  });
 });

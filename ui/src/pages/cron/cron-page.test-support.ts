@@ -159,7 +159,12 @@ export function cronListResponse(jobs: CronJob[]): CronJobsListResult {
 }
 
 export function createRequest(
-  cronStatus: { enabled: boolean; jobs: number; triggersEnabled: boolean } = {
+  cronStatus: {
+    enabled: boolean;
+    jobs: number;
+    triggersEnabled: boolean;
+    taskLanesConfigured?: boolean;
+  } = {
     enabled: true,
     jobs: 0,
     triggersEnabled: true,

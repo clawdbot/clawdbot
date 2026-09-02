@@ -2,7 +2,7 @@
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { TASK_LANE_MAX_FILE_BYTES } from "../types.js";
 import { createJsonFileProvider, type JsonFileProviderOptions } from "./json-file-provider.js";
 
@@ -32,6 +32,26 @@ const VALID_DOC = {
 function readerReturning(value: unknown) {
   return async () => Buffer.from(JSON.stringify(value), "utf8");
 }
+
+describe("json-file provider duplicate lane ids", () => {
+  it("rejects two lanes sharing an id within one provider document", async () => {
+    const duplicate = {
+      schemaVersion: 1,
+      lanes: [
+        { id: "work", label: "Work", items: [{ id: "a", title: "A", state: "pending" }] },
+        { id: "work", label: "Work mirror", items: [{ id: "b", title: "B", state: "pending" }] },
+      ],
+    };
+    await expect(
+      loadJsonFileProviderLanes({
+        rootDir: "/data/lanes",
+        filePath: "board.json",
+        reader: readerReturning(duplicate),
+        resolveRealpath: async (p) => p,
+      }),
+    ).rejects.toThrow(/duplicate lane id/);
+  });
+});
 
 describe("json-file task-lane provider", () => {
   it("loads a well-formed file", async () => {
@@ -92,6 +112,29 @@ describe("json-file task-lane provider", () => {
         resolveRealpath: async (p) => p,
       }),
     ).rejects.toThrow(/too large/);
+  });
+
+  it("bounds the production read before allocating an oversized file", async () => {
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "task-lane-cap-"));
+    try {
+      const root = path.join(tmp, "root");
+      await fs.mkdir(root);
+      const board = path.join(root, "board.json");
+      await fs.writeFile(board, "x", { flag: "wx" });
+      await fs.truncate(board, TASK_LANE_MAX_FILE_BYTES + 1);
+      const readFileSpy = vi.spyOn(fs, "readFile");
+      try {
+        await expect(
+          loadJsonFileProviderLanes({ rootDir: root, filePath: "board.json" }),
+        ).rejects.toThrow(/too large/);
+        // The unbounded whole-file read is the allocation the cap must precede.
+        expect(readFileSpy).not.toHaveBeenCalled();
+      } finally {
+        readFileSpy.mockRestore();
+      }
+    } finally {
+      await fs.rm(tmp, { recursive: true, force: true });
+    }
   });
 
   it("never echoes filesystem paths in load errors", async () => {
