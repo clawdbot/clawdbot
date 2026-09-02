@@ -152,6 +152,7 @@ describe("write-plugin-sdk-entry-dts", () => {
     ).toHaveLength(2);
     expectOutputs(root, qa, Object.keys(treeHashes(path.join(root, "dist"))));
     expectStagingClean(root);
+    const beforeChanged = treeHashes(path.join(root, "dist"));
 
     writeDeclarations("after");
     fs.rmSync(path.join(root, "contracts/before.ts"));
@@ -189,8 +190,10 @@ describe("write-plugin-sdk-entry-dts", () => {
       writeRelocated(relative, content);
     }
     // SDK publication owns flat entries; historical shared chunks belong to other groups.
-    for (const file of Object.keys(before).filter((entry) => !entry.startsWith("plugin-sdk/"))) {
-      expect(first[file]).toBe(before[file]);
+    for (const file of Object.keys(beforeChanged).filter(
+      (entry) => !entry.startsWith("plugin-sdk/"),
+    )) {
+      expect(first[file]).toBe(beforeChanged[file]);
       writeRelocated(`dist/${file}`, fs.readFileSync(path.join(root, "dist", file), "utf8"));
     }
     writeRelocated("dist/plugin-sdk/obsolete.d.ts", "obsolete restored declaration");
