@@ -77,6 +77,20 @@ function shouldPreservePublishedExplicitRunTimeout(params: { entry: SubagentRunR
   );
 }
 
+function isLateStopEvidenceForUnconfirmedExplicitTimeout(params: {
+  entry: SubagentRunRecord;
+  endedAt: number;
+}): boolean {
+  if (
+    params.entry.execution.outcome?.status !== "timeout" ||
+    params.entry.execution.outcome.timeoutDisposition !== "child-unconfirmed"
+  ) {
+    return false;
+  }
+  const deadlineMs = resolveSubagentRunDeadlineMs(params.entry);
+  return deadlineMs !== undefined && params.endedAt > deadlineMs;
+}
+
 function resolveExpiredExplicitRunDeadlineMs(params: {
   entry: SubagentRunRecord;
   nextEndedAt: number;
@@ -236,19 +250,26 @@ export async function completeSubagentRunAttempt(
       }
     }
     sessionSuperseded = context.newerGenerationOwnsSession(currentEntry);
+    let requestedEndedAt =
+      typeof completeParams.endedAt === "number" ? completeParams.endedAt : Date.now();
     if (
       completeParams.reason === SUBAGENT_ENDED_REASON_KILLED &&
       entry.killIntent === undefined &&
       entry.endedReason !== undefined &&
       entry.endedReason !== SUBAGENT_ENDED_REASON_KILLED &&
-      entry.execution.outcome !== undefined
+      entry.execution.outcome !== undefined &&
+      !isLateStopEvidenceForUnconfirmedExplicitTimeout({
+        entry,
+        endedAt: requestedEndedAt,
+      })
     ) {
       // Any finalized provider outcome is canonical. A delayed abort listener
-      // must not replace success, failure, or timeout with a killed marker.
+      // must not replace success, failure, or a settled timeout with a killed marker.
+      // An unconfirmed explicit timeout is deliberately provisional: a later
+      // post-deadline abort is stop evidence, so let deadline normalization
+      // promote its disposition without replacing the timeout outcome.
       return;
     }
-    let requestedEndedAt =
-      typeof completeParams.endedAt === "number" ? completeParams.endedAt : Date.now();
     if (
       shouldPreservePublishedExplicitRunTimeout({
         entry,

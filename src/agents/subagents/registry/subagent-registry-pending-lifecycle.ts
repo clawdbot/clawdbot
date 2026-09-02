@@ -58,7 +58,7 @@ export function createPendingLifecycleScheduler(params: {
       }
       if (
         kind === "error"
-          ? entry.endedReason === SUBAGENT_ENDED_REASON_COMPLETE ||
+          ? (!pending.cancellation && entry.endedReason === SUBAGENT_ENDED_REASON_COMPLETE) ||
             entry.execution.outcome?.status === "ok"
           : entry.execution.outcome?.status === "ok" || entry.pauseReason === "sessions_yield"
       ) {
