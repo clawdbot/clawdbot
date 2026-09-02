@@ -262,10 +262,10 @@ esac
   it.each([null, "2026.8.1-beta.2", "2026.8.1"])(
     "authors a schema-valid explicit agent roster for baseline %s",
     (version) => {
-      const step = resolveUpgradeSurvivorConfigStepsForBaseline("base", version).find(
+      const agentStep = resolveUpgradeSurvivorConfigStepsForBaseline("base", version).find(
         (step) => step.id === "agents",
       );
-      const agents = JSON.parse(step?.argv[3] ?? "{}");
+      const agents = JSON.parse(agentStep?.argv[3] ?? "{}");
       expect(AgentsSchema.safeParse(agents).success).toBe(true);
       expect(agents.ownership).toBe("explicit");
       expect(agents.defaults.heartbeat.every).toBe("0m");
@@ -277,10 +277,10 @@ esac
   it.each(["2026.3.13", "2026.4.1", "2026.8.1-beta.1"])(
     "preserves the legacy agent contract for baseline %s",
     (version) => {
-      const step = resolveUpgradeSurvivorConfigStepsForBaseline("base", version).find(
+      const agentStep = resolveUpgradeSurvivorConfigStepsForBaseline("base", version).find(
         (step) => step.id === "agents",
       );
-      const agents = JSON.parse(step?.argv[3] ?? "{}");
+      const agents = JSON.parse(agentStep?.argv[3] ?? "{}");
       expect(agents.ownership).toBeUndefined();
       expect(agents.entries).toBeUndefined();
       expect(agents.list.map((agent: { id: string }) => agent.id)).toEqual(["main", "ops"]);
