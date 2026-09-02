@@ -310,44 +310,51 @@ describe("startSshPortForward", () => {
   });
 
   it("rejects with the spawn error when ssh binary is missing", async () => {
-    vi.useFakeTimers();
-    const spawnError = new Error("ENOENT: no such file or directory, spawn /usr/bin/ssh");
-    (spawnError as NodeJS.ErrnoException).code = "ENOENT";
-    const kill = vi.fn(() => false);
-    mocks.spawn.mockImplementation(() => {
-      const child = new EventEmitter() as EventEmitter & {
-        killed: boolean;
-        pid?: number;
-        stderr: EventEmitter & { setEncoding: (enc: string) => void };
-        kill: (signal?: string) => boolean;
-      };
-      child.killed = false;
-      const stderr = new EventEmitter() as EventEmitter & { setEncoding: (enc: string) => void };
-      stderr.setEncoding = () => {};
-      child.stderr = stderr;
-      child.kill = kill;
-      queueMicrotask(() => {
-        child.emit("error", spawnError);
-        child.emit("close", -2, null);
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    for (const probeFailed of [false, true]) {
+      const socket = new net.Socket();
+      const connect = vi.spyOn(net, "connect").mockReturnValue(socket);
+      const spawnError = Object.assign(new Error("ENOENT: spawn /usr/bin/ssh"), { code: "ENOENT" });
+      const kill = vi.fn(() => false);
+      const child = Object.assign(new EventEmitter(), {
+        stderr: Object.assign(new EventEmitter(), { setEncoding: () => {} }),
+        kill,
       });
-      return child;
-    });
+      mocks.spawn.mockReturnValue(child);
+      const forwarding = startSshPortForward({
+        target: "me@example.com:2222",
+        localPortPreferred: 43210,
+        remotePort: 18789,
+        timeoutMs: 500,
+      });
+      const rejection = expect(forwarding).rejects.toMatchObject({
+        message: expect.stringContaining("ENOENT"),
+        cause: spawnError,
+      });
 
-    const forwarding = startSshPortForward({
-      target: "me@example.com:2222",
-      localPortPreferred: 43210,
-      remotePort: 18789,
-      timeoutMs: 500,
-    });
-    const rejection = expect(forwarding).rejects.toMatchObject({
-      message: expect.stringContaining("ENOENT"),
-      cause: spawnError,
-    });
+      try {
+        await vi.advanceTimersByTimeAsync(0);
+        if (probeFailed) {
+          // Exercise cancellation during the retry delay as well as an in-flight socket.
+          socket.emit("error", new Error("ECONNREFUSED"));
+          await vi.advanceTimersByTimeAsync(0);
+        }
+        child.emit("error", spawnError);
+        await vi.advanceTimersByTimeAsync(0);
+        expect(kill).toHaveBeenCalledExactlyOnceWith("SIGTERM");
+        child.emit("close", -2, null);
+        await rejection;
 
-    await vi.advanceTimersByTimeAsync(0);
-    expect(vi.getTimerCount()).toBe(0);
-    await rejection;
-    expect(kill).toHaveBeenCalledWith("SIGTERM");
+        expect(socket.destroyed).toBe(true);
+        expect(vi.getTimerCount()).toBe(0);
+        await vi.runAllTimersAsync();
+        expect(kill).toHaveBeenCalledExactlyOnceWith("SIGTERM");
+        expect(vi.getTimerCount()).toBe(0);
+      } finally {
+        socket.destroy();
+        connect.mockRestore();
+      }
+    }
   });
 
   it.each(["active", "teardown"] as const)(

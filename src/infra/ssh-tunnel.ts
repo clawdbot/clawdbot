@@ -4,6 +4,7 @@ import net from "node:net";
 import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { createAbortError, isAbortError, racePromiseWithAbortSignal } from "./abort-signal.js";
+import { sleepWithAbort } from "./backoff.js";
 import { formatErrorMessage, isErrno } from "./errors.js";
 import { ensurePortAvailable, PortInUseError } from "./ports.js";
 import { resolveSshClient } from "./ssh-client.js";
@@ -111,29 +112,37 @@ async function pickEphemeralPort(): Promise<number> {
   });
 }
 
-async function canConnectLocal(port: number): Promise<boolean> {
+async function canConnectLocal(port: number, signal: AbortSignal): Promise<boolean> {
   return await new Promise<boolean>((resolve) => {
     const socket = net.connect({ host: "127.0.0.1", port });
     const done = (ok: boolean) => {
+      signal.removeEventListener("abort", onAbort);
       socket.removeAllListeners();
       socket.destroy();
       resolve(ok);
     };
+    const onAbort = () => done(false);
     socket.once("connect", () => done(true));
     socket.once("error", () => done(false));
     socket.setTimeout(250, () => done(false));
+    signal.addEventListener("abort", onAbort, { once: true });
+    if (signal.aborted) {
+      onAbort();
+    }
   });
 }
 
-async function waitForLocalListener(port: number, timeoutMs: number): Promise<void> {
+async function waitForLocalListener(
+  port: number,
+  timeoutMs: number,
+  signal: AbortSignal,
+): Promise<void> {
   const startedAt = Date.now();
   while (Date.now() - startedAt < timeoutMs) {
-    if (await canConnectLocal(port)) {
+    if (await canConnectLocal(port, signal)) {
       return;
     }
-    await new Promise((r) => {
-      setTimeout(r, 50);
-    });
+    await sleepWithAbort(50, signal);
   }
   throw new Error(`ssh tunnel did not start listening on localhost:${port}`);
 }
@@ -224,10 +233,13 @@ export async function startSshPortForward(opts: {
       onAbort = undefined;
     }
   };
+  const listenerAbort = new AbortController();
   let stopping: Promise<void> | undefined;
   const stop = () =>
     (stopping ??= (async () => {
       detachAbort();
+      // A rejected startup race does not cancel its losing socket/poll operation.
+      listenerAbort.abort();
       // Sending a signal is not exit; every caller must await the same child lifetime.
       const timer = setTimeout(() => child.kill("SIGKILL"), 1500);
       try {
@@ -241,7 +253,7 @@ export async function startSshPortForward(opts: {
   try {
     await racePromiseWithAbortSignal(
       Promise.race([
-        waitForLocalListener(localPort, Math.max(250, opts.timeoutMs)),
+        waitForLocalListener(localPort, Math.max(250, opts.timeoutMs), listenerAbort.signal),
         new Promise<void>((_, reject) => {
           child.once("error", (err) => reject(err));
           child.once("exit", (code, signal) => {
