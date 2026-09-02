@@ -54,7 +54,6 @@ import {
 } from "./thread-ownership.js";
 import { assertCodexSupervisionThreadLineage } from "./thread-policy.js";
 import { resumeCodexAppServerThread } from "./thread-resume.js";
-import { getExistingCodexAppServerTurnRouter } from "./turn-router.js";
 
 // ttlMs: 0 retains keys until the 4,096-entry LRU cap evicts them, after which a
 // previously suppressed warning can intentionally emit again.
@@ -552,8 +551,6 @@ async function compactCodexNativeThread(
         let compactionSucceeded = false;
         let compactionRequestDefinitelyRejected = false;
         let tokensAfter: number | undefined;
-        const nativeCompletionTimeoutMs =
-          options.nativeCompletionTimeoutMs ?? resolveCompactionTimeoutMs(params.config);
         const releaseCompactionThread = async (threadId: string) => {
           if (
             await unsubscribeCodexThreadBestEffort(client, {
@@ -572,7 +569,7 @@ async function compactCodexNativeThread(
           client,
           threadId: binding.threadId,
           signal: params.abortSignal,
-          timeoutMs: nativeCompletionTimeoutMs,
+          timeoutMs: options.nativeCompletionTimeoutMs ?? resolveCompactionTimeoutMs(params.config),
           interruptGraceMs:
             options.nativeInterruptGraceMs ?? CODEX_NATIVE_COMPACTION_INTERRUPT_GRACE_MS,
           retireUnconfirmed: async () => {
@@ -612,20 +609,6 @@ async function compactCodexNativeThread(
             throw new Error("failed to detach unconfirmed codex app-server thread binding");
           },
         });
-        const threadRouter = getExistingCodexAppServerTurnRouter(client);
-        if (threadRouter) {
-          const threadIdle = await threadRouter.waitForThreadIdle({
-            threadId: binding.threadId,
-            timeoutMs: nativeCompletionTimeoutMs,
-            ...(params.abortSignal ? { signal: params.abortSignal } : {}),
-          });
-          if (!threadIdle) {
-            params.abortSignal?.throwIfAborted();
-            throw new Error(
-              "codex app-server active thread writer did not become idle before native compaction",
-            );
-          }
-        }
         const acquireThreadSubscription = async (timeoutMs?: number) => {
           if (!isIncognitoSessionKey(params.sessionKey)) {
             // Remove any idle ownership first: sibling cleanup must not evict
@@ -733,10 +716,7 @@ async function compactCodexNativeThread(
                 await client.request(
                   "thread/compact/start",
                   { threadId: binding.threadId },
-                  {
-                    timeoutMs: guardedRequestTimeoutMs,
-                    ...(params.abortSignal ? { signal: params.abortSignal } : {}),
-                  },
+                  { timeoutMs: guardedRequestTimeoutMs },
                 );
               }
               return { started: true as const, accepted: true as const };

@@ -3549,7 +3549,7 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
       ),
     ).rejects.toThrow("native compaction failed");
     expect(dispose).toHaveBeenCalledTimes(1);
-    expect(enqueueCommandInLaneMock).not.toHaveBeenCalled();
+    expect(enqueueCommandInLaneMock).toHaveBeenCalledOnce();
   });
 
   it("reports native harness compaction ownership", async () => {
@@ -3569,6 +3569,39 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
 
     expect(result.compactionKind).toBe("native-harness");
     expect(contextEngineCompactMock).not.toHaveBeenCalled();
+  });
+
+  it("waits for the session lane before primary native harness compaction", async () => {
+    resolveContextEngineMock.mockResolvedValue({
+      info: { ownsCompaction: false },
+      compact: contextEngineCompactMock,
+    });
+    maybeCompactAgentHarnessSessionMock.mockResolvedValueOnce({
+      ok: true,
+      compacted: true,
+      result: { summary: "harness", firstKeptEntryId: "entry-1", tokensBefore: 100 },
+    });
+    const laneRelease = createDeferred();
+    enqueueCommandInLaneMock.mockImplementationOnce(async (_lane, task) => {
+      await laneRelease.promise;
+      return await task();
+    });
+
+    const pending = compactEmbeddedAgentSession(
+      wrappedCompactionArgs({ provider: "openai", model: "gpt-5.5", agentHarnessId: "codex" }),
+    );
+    await vi.waitFor(() => {
+      expect(enqueueCommandInLaneMock).toHaveBeenCalledOnce();
+    });
+    expect(maybeCompactAgentHarnessSessionMock).not.toHaveBeenCalled();
+
+    laneRelease.resolve();
+    await expect(pending).resolves.toMatchObject({
+      ok: true,
+      compacted: true,
+      compactionKind: "native-harness",
+    });
+    expect(maybeCompactAgentHarnessSessionMock).toHaveBeenCalledOnce();
   });
 
   it("preserves a summaryless server-endpoint result through the legacy engine delegate", async () => {
@@ -4348,6 +4381,7 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
       );
 
       expect(result).toMatchObject({ ok: true, compacted: true });
+      expect(enqueueCommandInLaneMock).toHaveBeenCalledOnce();
       expect(runCliAgentMock).toHaveBeenCalledWith(
         expect.objectContaining({
           provider: "claude-cli",

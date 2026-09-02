@@ -64,11 +64,6 @@ type RouteOptions = Partial<CodexThreadRouteHandlers> & {
 
 export type CodexAppServerTurnRouter = {
   reserveThread: (options: RouteOptions) => CodexThreadRouteReservation;
-  waitForThreadIdle: (options: {
-    threadId: string;
-    timeoutMs: number;
-    signal?: AbortSignal;
-  }) => Promise<boolean>;
   watchNativeTurnCompletion: (options: {
     threadId: string;
     turnId: string;
@@ -123,13 +118,6 @@ export function getCodexAppServerTurnRouter(
   const router = new ClientTurnRouter(client);
   routers.set(client, router);
   return router;
-}
-
-/** Returns the router already installed on a client without creating one. */
-export function getExistingCodexAppServerTurnRouter(
-  client: CodexAppServerClient,
-): CodexAppServerTurnRouter | undefined {
-  return routers.get(client);
 }
 
 class ClientTurnRouter implements CodexAppServerTurnRouter {
@@ -196,37 +184,6 @@ class ClientTurnRouter implements CodexAppServerTurnRouter {
       drain: () => this.drainNotifications(route),
       release: () => this.release(route),
     };
-  }
-
-  async waitForThreadIdle(options: {
-    threadId: string;
-    timeoutMs: number;
-    signal?: AbortSignal;
-  }): Promise<boolean> {
-    this.assertActive();
-    const threadId = requireId(options.threadId, "thread id");
-    const route = this.routes.get(threadId);
-    if (!route) {
-      return true;
-    }
-    if (route.gate === "open") {
-      const observedNativeTurn = route.observedNativeTurn;
-      if (!observedNativeTurn || observedNativeTurn.completed) {
-        return true;
-      }
-      const completion = this.watchNativeTurnCompletion({
-        threadId,
-        turnId: observedNativeTurn.id,
-        timeoutMs: options.timeoutMs,
-        ...(options.signal ? { signal: options.signal } : {}),
-      });
-      return await completion.completion;
-    }
-    return await waitForPromiseOrAbort(
-      route.ended.promise.then(() => !this.disposed),
-      options.signal,
-      options.timeoutMs,
-    );
   }
 
   watchNativeTurnCompletion(options: {
@@ -643,40 +600,26 @@ class ClientTurnRouter implements CodexAppServerTurnRouter {
 
 async function waitForPromiseOrAbort(
   promise: Promise<unknown>,
-  signal: AbortSignal | undefined,
-  timeoutMs?: number,
+  signal: AbortSignal,
 ): Promise<boolean> {
-  if (signal?.aborted) {
+  if (signal.aborted) {
     return false;
   }
   let removeAbort: (() => void) | undefined;
-  let timeout: ReturnType<typeof setTimeout> | undefined;
   try {
-    const result = await Promise.race([
+    return await Promise.race([
       promise.then(() => true),
       new Promise<boolean>((resolve) => {
         const onAbort = () => resolve(false);
-        signal?.addEventListener("abort", onAbort, { once: true });
-        removeAbort = () => signal?.removeEventListener("abort", onAbort);
-        if (signal?.aborted) {
+        signal.addEventListener("abort", onAbort, { once: true });
+        removeAbort = () => signal.removeEventListener("abort", onAbort);
+        if (signal.aborted) {
           onAbort();
         }
       }),
-      ...(timeoutMs === undefined
-        ? []
-        : [
-            new Promise<boolean>((resolve) => {
-              timeout = setTimeout(() => resolve(false), Math.max(1, timeoutMs));
-              timeout.unref?.();
-            }),
-          ]),
     ]);
-    return result;
   } finally {
     removeAbort?.();
-    if (timeout) {
-      clearTimeout(timeout);
-    }
   }
 }
 
