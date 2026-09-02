@@ -91,6 +91,26 @@ describe("memory reindex state", () => {
     });
   });
 
+  it("classifies missing metadata as OpenClaw-owned", () => {
+    expect(resolveMemoryIndexIdentityState(createIdentityParams({ meta: null }))).toEqual({
+      status: "missing",
+      reason: "index metadata is missing",
+      code: "metadata_missing",
+      owner: "openclaw",
+    });
+  });
+
+  it.each([
+    { name: "chunk settings", params: { chunkTokens: 3999 }, code: "chunking" },
+    { name: "FTS tokenizer", params: { ftsTokenizer: "porter" }, code: "fts_tokenizer" },
+  ])("classifies changed $name as configuration-owned", ({ params, code }) => {
+    expect(resolveMemoryIndexIdentityState(createIdentityParams(params))).toMatchObject({
+      status: "mismatched",
+      code,
+      owner: "configuration",
+    });
+  });
+
   it("retains the primary provider identity when its model is empty", () => {
     expect(
       resolveMemoryIndexProviderIdentities({
@@ -101,12 +121,10 @@ describe("memory reindex state", () => {
 
   it("marks identity dirty when the embedding model changes", () => {
     expect(
-      isMemoryIndexIdentityDirty(
-        createIdentityParams({
-          provider: { id: "openai", model: "mock-embed-v2" },
-        }),
+      resolveMemoryIndexIdentityState(
+        createIdentityParams({ provider: { id: "openai", model: "mock-embed-v2" } }),
       ),
-    ).toBe(true);
+    ).toMatchObject({ status: "mismatched", code: "model", owner: "configuration" });
   });
 
   it("returns a mismatch reason when provider identity changes", () => {
@@ -127,7 +145,7 @@ describe("memory reindex state", () => {
 
   it("marks identity dirty when the provider cache key changes", () => {
     expect(
-      isMemoryIndexIdentityDirty(
+      resolveMemoryIndexIdentityState(
         createIdentityParams({
           provider: { id: "gemini", model: "gemini-embedding-2-preview" },
           providerKey: "provider-key-dims-768",
@@ -138,7 +156,11 @@ describe("memory reindex state", () => {
           }),
         }),
       ),
-    ).toBe(true);
+    ).toMatchObject({
+      status: "mismatched",
+      code: "provider_settings",
+      owner: "configuration",
+    });
   });
 
   it("can defer provider key comparison until provider initialization", () => {
@@ -277,13 +299,13 @@ describe("memory reindex state", () => {
     });
 
     expect(
-      isMemoryIndexIdentityDirty(
+      resolveMemoryIndexIdentityState(
         createIdentityParams({
           meta: createMeta({ scopeHash: firstScopeHash }),
           configuredScopeHash: secondScopeHash,
         }),
       ),
-    ).toBe(true);
+    ).toMatchObject({ status: "mismatched", code: "scope", owner: "configuration" });
   });
 
   it("includes extra path patterns in stable scope identity", () => {
@@ -336,12 +358,12 @@ describe("memory reindex state", () => {
 
   it("marks identity dirty when configured sources add sessions", () => {
     expect(
-      isMemoryIndexIdentityDirty(
+      resolveMemoryIndexIdentityState(
         createIdentityParams({
           configuredSources: ["memory", "sessions"],
         }),
       ),
-    ).toBe(true);
+    ).toMatchObject({ status: "mismatched", code: "sources", owner: "configuration" });
   });
 
   it("marks identity dirty when multimodal settings change", () => {
@@ -366,13 +388,13 @@ describe("memory reindex state", () => {
     });
 
     expect(
-      isMemoryIndexIdentityDirty(
+      resolveMemoryIndexIdentityState(
         createIdentityParams({
           meta: createMeta({ scopeHash: firstScopeHash }),
           configuredScopeHash: secondScopeHash,
         }),
       ),
-    ).toBe(true);
+    ).toMatchObject({ status: "mismatched", code: "scope", owner: "configuration" });
   });
 
   it("keeps older indexes with missing sources compatible with memory-only config", () => {

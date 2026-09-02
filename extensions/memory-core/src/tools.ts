@@ -414,7 +414,7 @@ export function createMemorySearchTool(options: MemoryToolOptions) {
                 results: [],
                 unavailableResult: buildPausedMemoryIndexUnavailableResult(
                   executed.pausedIndexIdentity,
-                  { agentId, provider: executed.status.provider },
+                  { agentId, status: executed.status },
                 ),
               },
               executed.pausedIndexIdentity.reason,

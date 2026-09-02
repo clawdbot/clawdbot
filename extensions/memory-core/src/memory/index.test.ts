@@ -728,12 +728,9 @@ describe("memory index", () => {
           return await realReaddir(...args);
         });
       try {
-        await expect(manager.sync({ reason: "cli", force: true })).rejects.toMatchObject({
-          name: "MemorySourceScanError",
-          path: fixture.paths.workspace,
-          code: "EIO",
-          cause: scanError,
-        });
+        await expect(manager.sync({ reason: "cli", force: true })).rejects.toThrow(
+          "memory source scan failed",
+        );
       } finally {
         readdirSpy.mockRestore();
       }

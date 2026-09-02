@@ -190,52 +190,112 @@ export type MemoryProviderStatus = {
   custom?: Record<string, unknown>;
 };
 
-export type MemoryIndexIdentityOwner = "openclaw" | "configuration";
+export type MemoryIndexIdentityState =
+  | { status: "valid" }
+  | {
+      status: "missing";
+      reason: string;
+      code: "metadata_missing";
+      owner: "openclaw";
+    }
+  | ({ status: "mismatched"; reason: string } & (
+      | {
+          code: "provenance_version" | "chunking_version";
+          owner: "openclaw";
+        }
+      | {
+          code:
+            | "model"
+            | "provider"
+            | "provider_settings"
+            | "sources"
+            | "scope"
+            | "chunking"
+            | "vector_dims"
+            | "fts_tokenizer";
+          owner: "configuration";
+        }
+    ));
 
-export type MemoryIndexIdentityDiagnostic = {
-  reason: string;
-  code: string;
-  owner: MemoryIndexIdentityOwner;
-};
+export type MemoryIndexIdentityDiagnostic = Exclude<MemoryIndexIdentityState, { status: "valid" }>;
 
-export function resolveMemoryIndexIdentityDiagnostic(
+function readMemoryIndexIdentityReason(
   status: Pick<MemoryProviderStatus, "custom">,
-): MemoryIndexIdentityDiagnostic | undefined {
+): string | undefined {
   const identity = asNullableRecord(status.custom?.indexIdentity);
   if (identity?.status !== "mismatched" && identity?.status !== "missing") {
     return undefined;
   }
   const reason = typeof identity.reason === "string" ? identity.reason.trim() : "";
-  const code = typeof identity.code === "string" ? identity.code.trim() : "";
-  return {
-    reason: reason || "memory index identity is missing or mismatched",
-    code: code || identity.status,
-    owner: identity.owner === "openclaw" ? "openclaw" : "configuration",
-  };
+  return reason || "memory index identity is missing or mismatched";
+}
+
+export function resolveMemoryIndexIdentityDiagnostic(
+  status: Pick<MemoryProviderStatus, "custom">,
+): MemoryIndexIdentityDiagnostic | undefined {
+  const identity = asNullableRecord(status.custom?.indexIdentity);
+  const reason = typeof identity?.reason === "string" ? identity.reason.trim() : "";
+  if (!identity || !reason) {
+    return undefined;
+  }
+  if (
+    identity.status === "missing" &&
+    identity.code === "metadata_missing" &&
+    identity.owner === "openclaw"
+  ) {
+    return { status: "missing", reason, code: "metadata_missing", owner: "openclaw" };
+  }
+  if (identity.status !== "mismatched") {
+    return undefined;
+  }
+  if (
+    identity.owner === "openclaw" &&
+    (identity.code === "provenance_version" || identity.code === "chunking_version")
+  ) {
+    return { status: "mismatched", reason, code: identity.code, owner: "openclaw" };
+  }
+  if (
+    identity.owner === "configuration" &&
+    (identity.code === "model" ||
+      identity.code === "provider" ||
+      identity.code === "provider_settings" ||
+      identity.code === "sources" ||
+      identity.code === "scope" ||
+      identity.code === "chunking" ||
+      identity.code === "vector_dims" ||
+      identity.code === "fts_tokenizer")
+  ) {
+    return { status: "mismatched", reason, code: identity.code, owner: "configuration" };
+  }
+  return undefined;
 }
 
 export function resolveMemoryIndexIdentityReason(
   status: Pick<MemoryProviderStatus, "custom">,
 ): string | undefined {
-  return resolveMemoryIndexIdentityDiagnostic(status)?.reason;
+  return readMemoryIndexIdentityReason(status);
 }
 
 export function formatMemoryIndexIdentityReason(diagnostic: MemoryIndexIdentityDiagnostic): string {
   return `${diagnostic.reason} (owner: ${diagnostic.owner}, code: ${diagnostic.code})`;
 }
 
-export function formatMemoryIndexRebuildCommand(agentId?: string): string {
-  return `openclaw memory status --index${agentId?.trim() ? ` --agent ${agentId.trim()}` : ""}`;
-}
-
-export function formatMemoryIndexRebuildDisclosure(provider?: string): string {
-  return provider === "none"
-    ? "Rebuilding uses keyword indexing only and does not call an embedding provider."
-    : `Rebuilding may call the configured embedding provider${provider ? ` (${provider})` : ""} and can incur provider cost.`;
+export function formatMemoryIndexRebuildGuidance(
+  status: Partial<Pick<MemoryProviderStatus, "provider" | "requestedProvider">>,
+  agentId?: string,
+): string {
+  const command = `openclaw memory status --index${agentId?.trim() ? ` --agent ${agentId.trim()}` : ""}`;
+  const configuredProvider = status.requestedProvider?.trim() || status.provider?.trim();
+  const disclosure =
+    configuredProvider === "none"
+      ? "Rebuilding uses keyword indexing only and does not call an embedding provider."
+      : "Rebuilding may call the configured embedding provider and can incur provider cost.";
+  return `${command}. ${disclosure}`;
 }
 
 export function resolveMemorySearchStaleness(
-  status: Pick<MemoryProviderStatus, "custom" | "lastSyncError" | "provider">,
+  status: Pick<MemoryProviderStatus, "custom" | "lastSyncError"> &
+    Partial<Pick<MemoryProviderStatus, "provider" | "requestedProvider">>,
   agentId?: string,
 ): { stale: true; warning: string; action: string } | null {
   const diagnostic = resolveMemoryIndexIdentityDiagnostic(status);
@@ -248,7 +308,7 @@ export function resolveMemorySearchStaleness(
   return {
     stale: true,
     warning: `Memory index is stale: ${reason}. Search results may be incomplete.`,
-    action: `Run: ${formatMemoryIndexRebuildCommand(agentId)}. ${formatMemoryIndexRebuildDisclosure(status.provider)}`,
+    action: `Run: ${formatMemoryIndexRebuildGuidance(status, agentId)}`,
   };
 }
 

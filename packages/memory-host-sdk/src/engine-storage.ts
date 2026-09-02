@@ -39,8 +39,7 @@ export {
 export { resolveMemoryBackendConfig } from "./host/backend-config.js";
 export {
   formatMemoryIndexIdentityReason,
-  formatMemoryIndexRebuildCommand,
-  formatMemoryIndexRebuildDisclosure,
+  formatMemoryIndexRebuildGuidance,
   isAutomaticMemoryEntryEligible,
   isMemoryOriginEligibleForAutomaticInjection,
   resolveMemoryIndexIdentityDiagnostic,
@@ -53,7 +52,7 @@ export type {
   MemoryEntryProvenance,
   MemoryExtraPath,
   MemoryIndexIdentityDiagnostic,
-  MemoryIndexIdentityOwner,
+  MemoryIndexIdentityState,
   MemoryOriginClass,
   MemoryProviderStatus,
   MemorySearchManager,

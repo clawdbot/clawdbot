@@ -28,6 +28,44 @@ describe("memory_search real manager", () => {
     testing.resetMemorySearchToolCooldowns();
   });
 
+  it("attributes a persisted provenance mismatch to OpenClaw", async () => {
+    const cfg = fixture.createConfig({
+      provider: "none",
+      vectorEnabled: false,
+      onSearch: false,
+    });
+    const manager = await fixture.getFreshManager(cfg);
+    await manager.sync({ reason: "cli", force: true });
+    await manager.close();
+    await closeAllMemorySearchManagers();
+
+    const db = openOpenClawAgentDatabase({ agentId: "main" }).db;
+    const row = db
+      .prepare("SELECT value FROM memory_index_meta WHERE key = 'memory_index_meta_v1'")
+      .get() as { value: string };
+    db.prepare("UPDATE memory_index_meta SET value = ? WHERE key = 'memory_index_meta_v1'").run(
+      JSON.stringify({ ...JSON.parse(row.value), provenanceVersion: 0 }),
+    );
+    closeOpenClawAgentDatabasesForTest();
+
+    const tool = createMemorySearchTool({ config: cfg, agentId: "main" });
+    if (!tool) {
+      throw new Error("memory_search tool missing");
+    }
+    const result = await tool.execute("provenance-mismatch", { query: "alpha" });
+
+    expect(result.details).toMatchObject({
+      disabled: true,
+      unavailable: true,
+      error: "index provenance classifier changed",
+      warning:
+        "Tell the user: memory search is paused because this OpenClaw version changed the memory index format (index provenance classifier changed); no configuration change is needed.",
+      action:
+        "Tell the user to run: openclaw memory status --index --agent main. Rebuilding uses keyword indexing only and does not call an embedding provider.",
+    });
+    expect(fixture.provider.embedQueryCalls).toBe(0);
+  });
+
   it("preserves reindex guidance alongside wiki results after an embedding model change", async () => {
     const manager = await fixture.getFreshManager(
       fixture.createConfig({ model: "old-embed", vectorEnabled: false, onSearch: false }),
@@ -57,13 +95,13 @@ describe("memory_search real manager", () => {
       if (!tool) {
         throw new Error("memory_search tool missing");
       }
-      const actionPattern =
-        /Tell the user to run: openclaw memory status --index --agent main\. Rebuilding may call the configured embedding provider \(.+\) and can incur provider cost\./;
+      const action =
+        "Tell the user to run: openclaw memory status --index --agent main. Rebuilding may call the configured embedding provider and can incur provider cost.";
       const primary = await tool.execute("paused-primary", { query: "alpha" });
       expect(primary.details).toMatchObject({
         disabled: true,
         unavailable: true,
-        action: expect.stringMatching(actionPattern),
+        action,
       });
 
       const combined = await tool.execute("paused-with-wiki", { query: "alpha", corpus: "all" });
@@ -74,11 +112,11 @@ describe("memory_search real manager", () => {
           { corpus: "wiki", outcome: "ok" },
         ],
         warning: expect.stringContaining("Memory corpus unavailable"),
-        action: expect.stringMatching(actionPattern),
+        action,
       });
       expect(combined.content).toContainEqual({
         type: "text",
-        text: expect.stringMatching(actionPattern),
+        text: expect.stringContaining(action),
       });
       expect(combined.details).not.toHaveProperty("disabled");
       expect(combined.details).not.toHaveProperty("unavailable");

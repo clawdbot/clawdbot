@@ -911,7 +911,7 @@ describe("memory cli", () => {
     expectLogged(log, "Vector search: paused until memory is rebuilt");
     expectLogged(
       log,
-      "Fix: Run: openclaw memory status --index --agent main. Rebuilding may call the configured embedding provider (ollama) and can incur provider cost.",
+      "Fix: Run: openclaw memory status --index --agent main. Rebuilding may call the configured embedding provider and can incur provider cost.",
     );
     expect(close).toHaveBeenCalled();
   });
@@ -2176,9 +2176,8 @@ describe("memory cli", () => {
       results: [],
       stale: true,
       warning: `Memory index is stale: ${reason} (owner: configuration, code: model). Search results may be incomplete.`,
-      action: expect.stringMatching(
-        /^Run: openclaw memory status --index --agent main\. Rebuilding (may call the configured embedding provider.*|uses keyword indexing only.*)$/,
-      ),
+      action:
+        "Run: openclaw memory status --index --agent main. Rebuilding may call the configured embedding provider and can incur provider cost.",
     });
   });
 

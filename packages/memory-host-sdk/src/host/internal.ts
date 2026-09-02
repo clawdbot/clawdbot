@@ -200,8 +200,11 @@ class MemorySourceScanError extends Error {
 
   constructor(sourcePath: string, cause: unknown) {
     const code =
-      cause && typeof cause === "object" && typeof (cause as { code?: unknown }).code === "string"
-        ? (cause as { code: string }).code
+      cause !== null &&
+      typeof cause === "object" &&
+      "code" in cause &&
+      typeof cause.code === "string"
+        ? cause.code
         : undefined;
     const detail = cause instanceof Error ? cause.message : String(cause);
     super(`memory source scan failed at ${sourcePath}${code ? ` (${code})` : ""}: ${detail}`, {
