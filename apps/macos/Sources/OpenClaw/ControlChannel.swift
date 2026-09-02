@@ -110,6 +110,7 @@ final class ControlChannel {
             NotificationCenter.default.post(name: .controlChannelStateDidChange, object: nil)
             switch self.state {
             case .connected:
+                self.presentedCompatibilityIssue = nil
                 self.logger.info("control channel state -> connected")
             case .connecting:
                 self.logger.info("control channel state -> connecting")
@@ -132,6 +133,7 @@ final class ControlChannel {
     private var eventTask: Task<Void, Never>?
     private var recoveryTask: Task<Void, Never>?
     private var lastRecoveryAt: Date?
+    private var presentedCompatibilityIssue: GatewayCompatibilityIssue?
 
     // Coalesce rapid connecting/degraded oscillations while the gateway connection is unstable.
     private var pendingStateTask: Task<Void, Never>?
@@ -210,12 +212,12 @@ final class ControlChannel {
             self.setStateThrottled(.connected)
             PresenceReporter.shared.sendImmediate(reason: "connect")
         } catch {
-            let message = Self.friendlyGatewayMessage(error, configRoot: OpenClawConfigFile.loadDict())
-            self.setStateThrottled(.degraded(message))
+            self.reportFailure(error)
         }
     }
 
     func disconnect() async {
+        self.presentedCompatibilityIssue = nil
         self.setStateThrottled(.disconnected)
         await GatewayConnection.shared.shutdown()
     }
@@ -275,16 +277,40 @@ final class ControlChannel {
             // Closing a view cancels its requests, not the shared connection.
             // Only failures belonging to a live caller may trigger recovery.
             try Task.checkCancellation()
-            let message = Self.friendlyGatewayMessage(error, configRoot: OpenClawConfigFile.loadDict())
-            self.setStateThrottled(.degraded(message))
+            let message = self.reportFailure(error)
             throw ControlChannelError.badResponse(message)
         }
+    }
+
+    @discardableResult
+    private func reportFailure(_ error: Error) -> String {
+        let message = Self.friendlyGatewayMessage(error, configRoot: OpenClawConfigFile.loadDict())
+        self.setStateThrottled(.degraded(message))
+        if let issue = GatewayCompatibilityIssue(error: error), issue != self.presentedCompatibilityIssue {
+            self.presentedCompatibilityIssue = issue
+            // A menu-bar-only failure looks like the app never opened. Present once
+            // per failed connection, not on every background health/recovery request.
+            DispatchQueue.main.async { [weak self] in
+                guard self?.presentedCompatibilityIssue == issue else { return }
+                let alert = NSAlert()
+                alert.messageText = issue.problem.title
+                alert.informativeText = issue.message
+                alert.addButton(withTitle: String(localized: "OK"))
+                NSApp.activate(ignoringOtherApps: true)
+                alert.runModal()
+            }
+        }
+        return message
     }
 
     static func friendlyGatewayMessage(_ error: Error, configRoot: [String: Any]) -> String {
         // Map URLSession/WS errors into user-facing, actionable text.
         if let ctrlErr = error as? ControlChannelError, let desc = ctrlErr.errorDescription {
             return desc
+        }
+
+        if let issue = GatewayCompatibilityIssue(error: error) {
+            return issue.message
         }
 
         if let authIssue = RemoteGatewayAuthIssue(error: error) {

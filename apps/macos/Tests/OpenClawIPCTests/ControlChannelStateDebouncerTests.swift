@@ -1,4 +1,5 @@
 import Foundation
+import OpenClawKit
 import Testing
 @testable import OpenClaw
 
@@ -61,6 +62,60 @@ struct ControlChannelStateDebouncerTests {
 
 @MainActor
 struct ControlChannelGatewayMessageTests {
+    @Test func `compatibility copy identifies the known app release without inventing the gateway release`() throws {
+        let issue = try #require(GatewayCompatibilityIssue(
+            error: GatewayConnectAuthError(
+                message: "protocol mismatch",
+                detailCode: "INVALID_REQUEST",
+                canRetryWithDeviceToken: false,
+                expectedProtocol: 3),
+            appVersion: "2026.8.1"))
+
+        #expect(issue.message.contains("OpenClaw app: 2026.8.1"))
+        #expect(issue.message.contains("did not report its release version"))
+    }
+
+    @Test func `unrelated invalid requests are not version failures`() {
+        let error = GatewayConnectAuthError(
+            message: "invalid connect params",
+            detailCode: "INVALID_REQUEST",
+            canRetryWithDeviceToken: false)
+
+        #expect(GatewayCompatibilityIssue(error: error) == nil)
+    }
+
+    @Test(arguments: [3, 5])
+    func `protocol failures name both sides and the update owner`(expectedProtocol: Int) {
+        let error = GatewayConnectAuthError(
+            message: "protocol mismatch",
+            detailCode: GatewayConnectAuthDetailCode.protocolMismatch.rawValue,
+            canRetryWithDeviceToken: false,
+            clientMinProtocol: 4,
+            clientMaxProtocol: 4,
+            expectedProtocol: expectedProtocol)
+
+        let message = ControlChannel.friendlyGatewayMessage(error, configRoot: [:])
+
+        #expect(message.contains("App protocol: 4"))
+        #expect(message.contains("Gateway protocol: \(expectedProtocol)"))
+        #expect(message.contains(expectedProtocol < 4 ? "openclaw update" : "Update app"))
+    }
+
+    @Test func `published gateway mismatch without detail code is actionable`() {
+        // v2026.4.26 rejects an incompatible hello with only expectedProtocol.
+        let error = GatewayConnectAuthError(
+            message: "protocol mismatch",
+            detailCode: "INVALID_REQUEST",
+            canRetryWithDeviceToken: false,
+            expectedProtocol: 3)
+
+        let message = ControlChannel.friendlyGatewayMessage(error, configRoot: [:])
+
+        #expect(message.contains("App protocol: 4"))
+        #expect(message.contains("Gateway protocol: 3"))
+        #expect(message.contains("openclaw update"))
+    }
+
     @Test(arguments: [
         URLError.Code.cannotFindHost,
         URLError.Code.cannotConnectToHost,

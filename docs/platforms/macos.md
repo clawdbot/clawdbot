@@ -60,6 +60,14 @@ independently of the sidebar, keeping permission and capability controls reachab
 
 ## Updates
 
+If the Gateway rejects the app's protocol version, the app shows an update alert
+and keeps the explanation in its connection status. The message names the app
+release and both protocol versions, and tells you which side needs updating:
+run `openclaw update` on an older Gateway host, or install a newer Mac app from
+the [download options](#download). A rejected handshake may not report the
+Gateway's release version; the app marks that information as unavailable.
+Different release numbers alone do not trigger this alert.
+
 The dashboard update card names what the app will update:
 
 - **Update Mac app + Gateway** means the signed app owns the local launchd
