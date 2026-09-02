@@ -106,6 +106,32 @@ export function handleMessageUpdate(
   const suppressDeterministicApprovalOutput = shouldSuppressDeterministicApprovalOutput(ctx.state);
   const suppressMessageToolOnlySourceReplyOutput = hasMessageToolOnlySourceDelivery(ctx);
 
+  // Scheme 2 fix: Force reasoning stream control at streaming entry point for reasoning-capable models.
+  // When a model has native reasoning capability (catalog.reasoning=true) and thinkingLevel is not "off",
+  // ensure reasoning stream is properly isolated regardless of whether thinkingLevel was set explicitly
+  // or via implicit fallback. This prevents reasoning leakage into visible message content.
+  // See: issue #134662 - reasoning-capable models fall back to medium thinking without explicit negotiation.
+  const modelHasReasoningCapability =
+    ctx.session?.modelCatalogEntry?.reasoning === true ||
+    (ctx.session?.provider &&
+      ctx.session?.model &&
+      ctx.params.catalog?.find(
+        (entry) => entry.provider === ctx.session!.provider && entry.id === ctx.session!.model,
+      )?.reasoning === true);
+  const thinkingEnabled = ctx.session?.thinkingLevel && ctx.session.thinkingLevel !== "off";
+  if (
+    evtType === "text_start" &&
+    modelHasReasoningCapability &&
+    thinkingEnabled &&
+    !ctx.state.reasoningStreamOpen
+  ) {
+    // Reasoning-capable model with thinking enabled but stream not yet opened.
+    // This can happen when thinkingLevel falls back implicitly (e.g., to "medium")
+    // without triggering the normal thinking_start event path. Force open the
+    // reasoning stream to ensure proper isolation of reasoning content.
+    openReasoningStream(ctx);
+  }
+
   if (evtType === "thinking_start" || evtType === "thinking_delta" || evtType === "thinking_end") {
     if (
       !suppressMessageToolOnlySourceReplyOutput &&
@@ -396,6 +422,17 @@ export function handleMessageUpdate(
         : recomputedRawText.slice(previousText.length);
       nextRawStreamText = recomputedRawText;
       ctx.state.partialBlockState = recomputeState;
+      // Scheme 2 fix continuation: When reasoning tags are detected in a reasoning-capable model,
+      // ensure reasoning stream is opened even if thinking_start event was not fired.
+      // This handles models that emit reasoning inline without separate thinking_* events.
+      if (
+        modelHasReasoningCapability &&
+        thinkingEnabled &&
+        !ctx.state.reasoningStreamOpen &&
+        recomputeState.thinking
+      ) {
+        openReasoningStream(ctx);
+      }
     } else {
       visibleDelta =
         chunk || evtType === "text_end"

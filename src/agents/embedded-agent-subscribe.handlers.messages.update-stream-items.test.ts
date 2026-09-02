@@ -400,3 +400,167 @@ describe("handleMessageUpdate text signatures", () => {
     expect(context.state.deltaBuffer).toBe("Working now");
   });
 });
+
+describe("handleMessageUpdate reasoning stream control for reasoning-capable models", () => {
+  it("opens reasoning stream on text_start for reasoning-capable model with implicit thinkingLevel fallback", async () => {
+    // Issue #134662: Reasoning-capable models fall back to medium thinking without explicit negotiation.
+    // When thinkingLevel falls back implicitly (not via thinking_start event), ensure reasoning stream
+    // is still opened to prevent reasoning leakage into visible message content.
+    const openReasoningStream = vi.fn();
+    const emitReasoningStream = vi.fn();
+    const stripBlockTags = vi.fn((text: string) => text);
+    const context = createMessageUpdateContext({
+      emitReasoningStream,
+      stripBlockTags,
+      state: {
+        reasoningStreamOpen: false,
+      },
+    });
+    // Add openReasoningStream mock to context
+    (context as unknown as Record<string, unknown>).openReasoningStream = openReasoningStream;
+
+    // Simulate a reasoning-capable model (e.g., ollama/glm-5.3:cloud) with implicit thinkingLevel fallback
+    // The session has thinkingLevel set to "medium" via fallback, but no thinking_start event was fired
+    (context.params as unknown as Record<string, unknown>).catalog = [
+      { provider: "ollama", id: "glm-5.3:cloud", reasoning: true },
+    ];
+    (context.params.session as unknown as Record<string, unknown>) = {
+      provider: "ollama",
+      model: "glm-5.3:cloud",
+      thinkingLevel: "medium", // Implicitly set via fallback, not explicit configuration
+      modelCatalogEntry: { provider: "ollama", id: "glm-5.3:cloud", reasoning: true },
+    };
+
+    // Simulate text_start event without prior thinking_start event
+    await updateMessage(
+      context,
+      createTextUpdateEvent({
+        type: "text_start",
+        text: "<thinking>Let me solve this step by step...</thinking>Hello!",
+        delta: "",
+      }),
+    );
+
+    // Reasoning stream should be opened on text_start for reasoning-capable models
+    expect(openReasoningStream).toHaveBeenCalled();
+  });
+
+  it("opens reasoning stream when reasoning tags are detected in chunk for reasoning-capable model", async () => {
+    // Issue #134662: Ensure reasoning stream is opened even when thinking_start event is missing
+    // but reasoning tags are detected in the text chunk
+    const openReasoningStream = vi.fn();
+    const emitReasoningStream = vi.fn();
+    const stripBlockTags = vi.fn((text: string, state: Record<string, unknown>) => {
+      // Simulate stripBlockTags detecting and processing reasoning tags
+      if (text.includes("<thinking>")) {
+        state.thinking = true;
+      }
+      return text.replace(/<\/?thinking>/g, "");
+    });
+    const context = createMessageUpdateContext({
+      emitReasoningStream,
+      stripBlockTags,
+      state: {
+        reasoningStreamOpen: false,
+        partialBlockState: { thinking: false, final: false, inlineCode: { open: false } },
+      },
+    });
+    (context as unknown as Record<string, unknown>).openReasoningStream = openReasoningStream;
+
+    (context.params as unknown as Record<string, unknown>).catalog = [
+      { provider: "ollama", id: "glm-5.3:cloud", reasoning: true },
+    ];
+    (context.params.session as unknown as Record<string, unknown>) = {
+      provider: "ollama",
+      model: "glm-5.3:cloud",
+      thinkingLevel: "medium",
+      modelCatalogEntry: { provider: "ollama", id: "glm-5.3:cloud", reasoning: true },
+    };
+
+    // Simulate text_delta with reasoning tags
+    await updateMessage(
+      context,
+      createTextUpdateEvent({
+        type: "text_delta",
+        text: "<thinking>Solving...</thinking>Answer",
+        delta: "<thinking>Solving...</thinking>Answer",
+      }),
+    );
+
+    // Reasoning stream should be opened when tags are detected
+    expect(openReasoningStream).toHaveBeenCalled();
+  });
+
+  it("does not open reasoning stream for non-reasoning model", async () => {
+    // Verify that non-reasoning models are not affected by the fix
+    const openReasoningStream = vi.fn();
+    const emitReasoningStream = vi.fn();
+    const stripBlockTags = vi.fn((text: string) => text);
+    const context = createMessageUpdateContext({
+      emitReasoningStream,
+      stripBlockTags,
+      state: {
+        reasoningStreamOpen: false,
+      },
+    });
+    (context as unknown as Record<string, unknown>).openReasoningStream = openReasoningStream;
+
+    // Non-reasoning model
+    (context.params.catalog as unknown) = [{ provider: "openai", id: "gpt-4o", reasoning: false }];
+    (context.params.session as unknown as Record<string, unknown>) = {
+      provider: "openai",
+      model: "gpt-4o",
+      thinkingLevel: "off",
+      modelCatalogEntry: { provider: "openai", id: "gpt-4o", reasoning: false },
+    };
+
+    await updateMessage(
+      context,
+      createTextUpdateEvent({
+        type: "text_start",
+        text: "Hello!",
+        delta: "",
+      }),
+    );
+
+    // Reasoning stream should not be opened for non-reasoning models
+    expect(openReasoningStream).not.toHaveBeenCalled();
+  });
+
+  it("does not open reasoning stream when thinkingLevel is 'off'", async () => {
+    // Verify that reasoning-capable models with thinkingLevel='off' don't trigger the fix
+    const openReasoningStream = vi.fn();
+    const emitReasoningStream = vi.fn();
+    const stripBlockTags = vi.fn((text: string) => text);
+    const context = createMessageUpdateContext({
+      emitReasoningStream,
+      stripBlockTags,
+      state: {
+        reasoningStreamOpen: false,
+      },
+    });
+    (context as unknown as Record<string, unknown>).openReasoningStream = openReasoningStream;
+
+    (context.params.catalog as unknown) = [
+      { provider: "ollama", id: "glm-5.3:cloud", reasoning: true },
+    ];
+    (context.params.session as unknown as Record<string, unknown>) = {
+      provider: "ollama",
+      model: "glm-5.3:cloud",
+      thinkingLevel: "off", // Explicitly disabled
+      modelCatalogEntry: { provider: "ollama", id: "glm-5.3:cloud", reasoning: true },
+    };
+
+    await updateMessage(
+      context,
+      createTextUpdateEvent({
+        type: "text_start",
+        text: "Hello!",
+        delta: "",
+      }),
+    );
+
+    // Reasoning stream should not be opened when thinking is disabled
+    expect(openReasoningStream).not.toHaveBeenCalled();
+  });
+});
