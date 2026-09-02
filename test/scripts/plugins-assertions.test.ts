@@ -1466,7 +1466,9 @@ ${command}
         env: {
           ...process.env,
           HOME: home,
+          OPENCLAW_CONFIG_PATH: path.join(home, ".openclaw", "openclaw.json"),
           OPENCLAW_PLUGINS_TMP_DIR: scratchRoot,
+          OPENCLAW_STATE_DIR: path.join(home, ".openclaw"),
         },
       });
 
