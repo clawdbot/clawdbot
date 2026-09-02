@@ -72,41 +72,34 @@ it("observes only the named session admission owner while it is starting", async
   const identities = ["agent:main:named-owner", "session-named-owner"];
   const owner = Symbol.for("openclaw.test.namedSessionWorkAdmissionOwner");
   const unrelated = await beginSessionWorkAdmission({ scope, identities, assertAllowed: () => {} });
-  const ownerStarted = createDeferred();
-  const allowOwner = createDeferred();
+  const started = createDeferred();
+  const allowed = createDeferred();
   const admissionPromise = beginSessionWorkAdmission({
     scope,
     identities,
     owner,
     assertAllowed: async () => {
-      ownerStarted.resolve();
-      await allowOwner.promise;
+      started.resolve();
+      await allowed.promise;
     },
   });
-  let admission: Awaited<typeof admissionPromise> | undefined;
-  let release: Promise<void> | undefined;
   try {
-    await ownerStarted.promise;
-    release = getSessionWorkAdmissionOwnerRelease({ scope, identities, owner });
+    await started.promise;
+    const release = getSessionWorkAdmissionOwnerRelease({ scope, identities, owner });
     expect(release).toBeInstanceOf(Promise);
-
     unrelated.release();
-    await Promise.resolve();
     expect(getSessionWorkAdmissionOwnerRelease({ scope, identities, owner })).toBeInstanceOf(
       Promise,
     );
-
-    allowOwner.resolve();
-    admission = await admissionPromise;
+    allowed.resolve();
+    const admission = await admissionPromise;
     admission.release();
     await release;
     expect(getSessionWorkAdmissionOwnerRelease({ scope, identities, owner })).toBeUndefined();
   } finally {
     unrelated.release();
-    allowOwner.resolve();
-    admission ??= await admissionPromise;
-    admission.release();
-    await release;
+    allowed.resolve();
+    (await admissionPromise).release();
   }
 });
 

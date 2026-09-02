@@ -17,6 +17,7 @@ import {
 } from "../../config/sessions/lifecycle.js";
 import { loadSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { InternalSessionEntry, SessionEntry } from "../../config/sessions/types.js";
+import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import {
@@ -52,12 +53,7 @@ import { isReplyRunRecoveryBlocked } from "./reply-run-registry.state.js";
 
 /** Admission result for a reply turn attempting to own the session run slot. */
 type ReplyTurnAdmission =
-  | {
-      status: "owned";
-      operation: ReplyOperation;
-      sessionEntry?: SessionEntry;
-      queueOwnerRelease?: Promise<void>;
-    }
+  | { status: "owned"; operation: ReplyOperation; sessionEntry?: SessionEntry }
   | {
       status: "skipped";
       reason: "active-run" | "aborted" | "lifecycle-invalidated";
@@ -215,7 +211,6 @@ export async function admitReplyTurn(
       let operation: ReplyOperation | undefined;
       let admittedSessionEntry: InternalSessionEntry | undefined;
       let recoveryOwnerLease: MainSessionRecoveryOwnerLease | undefined;
-      let queueOwnerRelease: Promise<void> | undefined;
       let interruptedBeforeOperation = false;
       const admission = storePath
         ? await beginSessionWorkAdmission({
@@ -306,7 +301,7 @@ export async function admitReplyTurn(
           storePath && !params.resetTriggered && params.allowRestartTombstoneParentFork !== true;
         // The named admission is the authoritative process-local busy fact even
         // after startup recovery has cleared the durable aborted marker.
-        queueOwnerRelease = mayWaitForRecoveryOwner
+        const recoveryOwnerRelease = mayWaitForRecoveryOwner
           ? getSessionWorkAdmissionOwnerRelease({
               scope: storePath,
               identities: [params.sessionKey, sessionId],
@@ -321,7 +316,7 @@ export async function admitReplyTurn(
               admittedSessionEntry.restartRecoveryRuns !== undefined)) ||
             admittedSessionEntry.mainRestartRecovery?.tombstone !== undefined) &&
           isMainRestartRecoveryCandidate(admittedSessionEntry, params.sessionKey);
-        if (shouldClaimRecoveryOwner && queueOwnerRelease === undefined) {
+        if (shouldClaimRecoveryOwner && recoveryOwnerRelease === undefined) {
           const ownerClaim = await claimMainSessionRecoveryOwner({
             lifecycleGeneration: getAgentEventLifecycleGeneration(),
             sessionId,
@@ -335,6 +330,11 @@ export async function admitReplyTurn(
             });
           }
           recoveryOwnerLease = ownerClaim.kind === "claimed" ? ownerClaim.lease : undefined;
+        }
+        if (params.kind === "queued_followup" && recoveryOwnerRelease) {
+          admission?.release();
+          await racePromiseWithAbortSignal(recoveryOwnerRelease, params.upstreamAbortSignal);
+          continue;
         }
         if (interruptedBeforeOperation || isAbortSignalAborted(params.upstreamAbortSignal)) {
           rejectLifecycleInvalidatedWork({
@@ -418,7 +418,6 @@ export async function admitReplyTurn(
         status: "owned",
         operation,
         ...(admittedSessionEntry ? { sessionEntry: admittedSessionEntry } : {}),
-        ...(queueOwnerRelease ? { queueOwnerRelease } : {}),
       };
     } catch (error) {
       if (isAbortSignalAborted(params.upstreamAbortSignal)) {

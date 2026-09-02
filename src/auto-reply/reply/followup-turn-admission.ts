@@ -86,7 +86,6 @@ export type AdmittedFollowupTurn = {
 
 type FollowupAdmissionResult =
   | { kind: "admitted"; turn: AdmittedFollowupTurn }
-  | { kind: "owner-wait"; release: Promise<void> }
   | { kind: "deferred"; reason: "active-run" }
   | {
       kind: "skipped";
@@ -160,10 +159,6 @@ export async function admitFollowupTurn(params: {
     return { kind: "deferred", reason: "active-run" };
   }
   const operation = admission.operation;
-  if (admission.queueOwnerRelease) {
-    operation.complete();
-    return { kind: "owner-wait", release: admission.queueOwnerRelease };
-  }
   operation.retainFailureUntilComplete();
   let queuedFollowupAdmitted = false;
   try {

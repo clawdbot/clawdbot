@@ -473,7 +473,7 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
     resolveActiveEmbeddedSessionId() ??
     resolveActiveReplyOperationSessionId() ??
     preparedSessionState.sessionId;
-  let queueOwnerRelease = opts?.queueOwnerRelease;
+  let recoveryOwnerActive = false;
   const resolveQueueBusyState = () => {
     const embeddedActiveSessionId = resolveActiveEmbeddedSessionId();
     const replyOperationActiveSessionId = resolveActiveReplyOperationSessionId();
@@ -484,12 +484,12 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
           owner: MAIN_SESSION_RECOVERY_WORK_ADMISSION_OWNER,
         })
       : undefined;
-    queueOwnerRelease = recoveryOwnerRelease ?? queueOwnerRelease;
+    recoveryOwnerActive = recoveryOwnerRelease !== undefined;
     const activeSessionId =
       embeddedActiveSessionId ?? replyOperationActiveSessionId ?? preparedSessionState.sessionId;
     if (
       !activeSessionId ||
-      (!embeddedAgentRuntime && !replyOperationActiveSessionId && !queueOwnerRelease)
+      (!embeddedAgentRuntime && !replyOperationActiveSessionId && !recoveryOwnerActive)
     ) {
       return { activeSessionId: undefined, isActive: false };
     }
@@ -505,7 +505,7 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
         (embeddedActiveSessionId != null &&
           (embeddedAgentRuntime?.isEmbeddedAgentRunActive(embeddedActiveSessionId) ?? false)) ||
         replyOperationActive ||
-        queueOwnerRelease !== undefined,
+        recoveryOwnerActive,
     };
   };
   if (commandTurnContinuationTargetKey && providedReplyOperation) {
@@ -558,11 +558,11 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
     !context.isHeartbeat &&
     !effectiveResetTriggered &&
     !visibleTurnPreemptsHeartbeat &&
-    queueOwnerRelease === undefined &&
+    !recoveryOwnerActive &&
     resolvedQueue.mode === "steer";
   const shouldFollowup =
     !effectiveResetTriggered &&
-    (queueOwnerRelease !== undefined ||
+    (recoveryOwnerActive ||
       (!visibleTurnPreemptsHeartbeat &&
         ((isRoomEvent && isActive) ||
           resolvedQueue.mode === "steer" ||
@@ -667,7 +667,6 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
     shouldFollowup,
     queueAdmissionState,
     isActive,
-    queueOwnerRelease,
     authProfileId,
     authProfileIdSource,
   } as const;

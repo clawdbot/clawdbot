@@ -1,5 +1,4 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
 import type { ReplyPayload } from "../types.js";
 import type { AdmittedFollowupTurn } from "./followup-turn-admission.js";
 import type { FollowupExecutionResult } from "./followup-turn-execution.js";
@@ -51,10 +50,6 @@ vi.mock("./followup-delivery.js", () => ({
 vi.mock("./queue.js", () => ({
   completeFollowupRunLifecycle: (...args: unknown[]) => state.completeLifecycle(...args),
   FollowupRunDeferredError: class FollowupRunDeferredError extends Error {},
-  resolveFollowupAbortSignal: (run: FollowupRun) =>
-    run.abortSignal && run.queueAbortSignal
-      ? AbortSignal.any([run.abortSignal, run.queueAbortSignal])
-      : (run.abortSignal ?? run.queueAbortSignal),
 }));
 
 vi.mock("../../runtime.js", () => ({ defaultRuntime: { error: vi.fn() } }));
@@ -146,120 +141,6 @@ beforeEach(() => {
 });
 
 describe("createFollowupRunner", () => {
-  it("waits for the queued owner release before seeking reply-lane admission", async () => {
-    const ownerRelease = createDeferred();
-    const abortController = new AbortController();
-    const removeAbortListener = vi.spyOn(abortController.signal, "removeEventListener");
-    const queued = createQueuedRun({
-      queueOwnerRelease: ownerRelease.promise,
-      queueAbortSignal: abortController.signal,
-    });
-    state.admit.mockResolvedValue({ kind: "skipped", reason: "aborted" });
-
-    const run = createFollowupRunner({
-      typing: createTypingController(),
-      typingMode: "instant",
-      defaultModel: "claude",
-    })(queued);
-    await Promise.resolve();
-    expect(state.admit).not.toHaveBeenCalled();
-
-    ownerRelease.resolve();
-    await run;
-    expect(state.admit).toHaveBeenCalledOnce();
-    expect(removeAbortListener).toHaveBeenCalledOnce();
-  });
-
-  it("resamples recovery ownership after each asynchronous admission", async () => {
-    const initialOwnerRelease = createDeferred();
-    const replacementOwnerRelease = createDeferred();
-    const turn = createTurn();
-    state.admit
-      .mockResolvedValueOnce({ kind: "owner-wait", release: replacementOwnerRelease.promise })
-      .mockResolvedValueOnce({ kind: "admitted", turn });
-    state.execute.mockResolvedValue(createRejectedExecution());
-    state.account.mockResolvedValue(undefined);
-    state.deliver.mockResolvedValue(undefined);
-
-    const run = createFollowupRunner({
-      typing: createTypingController(),
-      typingMode: "instant",
-      defaultModel: "claude",
-    })(createQueuedRun({ queueOwnerRelease: initialOwnerRelease.promise }));
-    await Promise.resolve();
-    expect(state.admit).not.toHaveBeenCalled();
-
-    initialOwnerRelease.resolve();
-    await vi.waitFor(() => expect(state.admit).toHaveBeenCalledOnce());
-    expect(state.execute).not.toHaveBeenCalled();
-
-    replacementOwnerRelease.resolve();
-    await run;
-    expect(state.admit).toHaveBeenCalledTimes(2);
-    expect(state.execute).toHaveBeenCalledOnce();
-  });
-
-  it("consumes an item canceled while waiting for a replacement recovery owner", async () => {
-    const replacementOwnerRelease = createDeferred();
-    const abortController = new AbortController();
-    const queued = createQueuedRun({ queueAbortSignal: abortController.signal });
-    state.admit.mockResolvedValue({
-      kind: "owner-wait",
-      release: replacementOwnerRelease.promise,
-    });
-
-    const run = createFollowupRunner({
-      typing: createTypingController(),
-      typingMode: "instant",
-      defaultModel: "claude",
-    })(queued);
-    let runSettled = false;
-    void run.then(() => {
-      runSettled = true;
-    });
-    await vi.waitFor(() => expect(state.admit).toHaveBeenCalledOnce());
-    await new Promise<void>((resolve) => {
-      setImmediate(resolve);
-    });
-    expect(runSettled).toBe(false);
-    abortController.abort();
-    await run;
-
-    expect(state.admit).toHaveBeenCalledOnce();
-    expect(state.execute).not.toHaveBeenCalled();
-    expect(state.completeLifecycle).toHaveBeenCalledWith(queued);
-  });
-
-  it.each(["before", "during"] as const)(
-    "consumes an item aborted %s the queued owner wait",
-    async (timing) => {
-      const ownerRelease = createDeferred();
-      const abortController = new AbortController();
-      const typing = createTypingController();
-      const queued = createQueuedRun({
-        queueOwnerRelease: ownerRelease.promise,
-        queueAbortSignal: abortController.signal,
-      });
-
-      if (timing === "before") {
-        abortController.abort();
-      }
-      const run = createFollowupRunner({
-        typing,
-        typingMode: "instant",
-        defaultModel: "claude",
-      })(queued);
-      if (timing === "during") {
-        abortController.abort();
-      }
-      await run;
-
-      expect(state.admit).not.toHaveBeenCalled();
-      expect(state.completeLifecycle).toHaveBeenCalledWith(queued);
-      expect(typing.markDispatchIdle).toHaveBeenCalledOnce();
-    },
-  );
-
   it("completes lifecycle and both typing signals for an already-aborted item", async () => {
     const typing = createTypingController();
     const controller = new AbortController();

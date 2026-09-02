@@ -2571,42 +2571,6 @@ describe("followup queue collect routing", () => {
     expect(calls[0]?.prompt).toContain("two");
   });
 
-  it("keeps a queued owner fence on the collected batch", async () => {
-    const key = `test-collect-owner-fence-${Date.now()}`;
-    const ownerRelease = createDeferred();
-    const drainStarted = createDeferred();
-    const drained = createDeferred<FollowupRun>();
-    let drainSettled = false;
-    const settings = createQueueSettings();
-    const first = createRun({ prompt: "one", originatingChannel: "webchat" });
-    first.queueOwnerRelease = ownerRelease.promise;
-    enqueueFollowupRun(key, first, settings);
-    enqueueTestRun(key, { prompt: "two", originatingChannel: "webchat" }, settings);
-
-    scheduleFollowupDrain(key, async (run) => {
-      drainStarted.resolve();
-      await run.queueOwnerRelease;
-      drainSettled = true;
-      drained.resolve(run);
-    });
-    try {
-      await drainStarted.promise;
-      await new Promise<void>((resolve) => {
-        setImmediate(resolve);
-      });
-      expect(drainSettled).toBe(false);
-
-      ownerRelease.resolve();
-      const collected = await drained.promise;
-      expect(collected.prompt).toContain("Queued #1\none");
-      expect(collected.prompt).toContain("Queued #2\ntwo");
-      await vi.waitFor(() => expect(getExistingFollowupQueue(key)).toBeUndefined());
-    } finally {
-      ownerRelease.resolve();
-      clearFollowupQueue(key);
-    }
-  });
-
   it("does not collect Slack messages when thread ids differ", async () => {
     const { key, calls, done, runFollowup, settings } = createQueueCase(
       `test-collect-slack-thread-diff-${Date.now()}`,
@@ -2706,55 +2670,24 @@ describe("followup queue collect routing", () => {
 
   it("retries overflow summary delivery without losing dropped previews", async () => {
     const key = `test-overflow-summary-retry-${Date.now()}`;
-    const ownerRelease = createDeferred();
-    const retryStarted = createDeferred();
-    const summaryDone = createDeferred<FollowupRun>();
-    const delivered: FollowupRun[] = [];
-    let summaryAttempts = 0;
-    let summarySettled = false;
-    void summaryDone.promise.then(() => {
-      summarySettled = true;
-    });
+    const { calls, done } = createDrainRecorder();
+    let attempt = 0;
     const runFollowup = async (run: FollowupRun) => {
-      if (!run.prompt.startsWith("[Queue overflow]")) {
-        delivered.push(run);
-        return;
-      }
-      summaryAttempts += 1;
-      if (summaryAttempts === 1) {
+      attempt += 1;
+      if (attempt === 1) {
         throw new Error("transient failure");
       }
-      retryStarted.resolve();
-      await run.queueOwnerRelease;
-      delivered.push(run);
-      summaryDone.resolve(run);
+      calls.push(run);
+      done.resolve();
     };
     const settings = createQueueSettings({ mode: "followup", cap: 1 });
 
-    const first = createRun({ prompt: "first" });
-    first.queueOwnerRelease = ownerRelease.promise;
-    enqueueFollowupRun(key, first, settings);
+    enqueueFollowupRun(key, createRun({ prompt: "first" }), settings);
     enqueueFollowupRun(key, createRun({ prompt: "second" }), settings);
 
-    scheduleFollowupDrain(key, runFollowup);
-    try {
-      await retryStarted.promise;
-      await new Promise<void>((resolve) => {
-        setImmediate(resolve);
-      });
-      expect(summarySettled).toBe(false);
-      expect(delivered).toEqual([]);
-      ownerRelease.resolve();
-      const summary = await summaryDone.promise;
-      await vi.waitFor(() => expect(getExistingFollowupQueue(key)).toBeUndefined());
-      expect(summary.prompt).toContain("[Queue overflow] Dropped 1 message due to cap.");
-      expect(summary.prompt).toContain("- first");
-      expect(summaryAttempts).toBe(2);
-      expect(delivered.map((run) => run.prompt)).toContain("second");
-    } finally {
-      ownerRelease.resolve();
-      clearFollowupQueue(key);
-    }
+    await drainRecordedQueue(key, runFollowup, done);
+    expect(calls[0]?.prompt).toContain("[Queue overflow] Dropped 1 message due to cap.");
+    expect(calls[0]?.prompt).toContain("- first");
   });
 
   it("persists overflow summaries to the session selected after queue admission", async () => {

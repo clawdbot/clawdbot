@@ -157,24 +157,6 @@ describe("admitFollowupTurn", () => {
     expect(state.preflight).not.toHaveBeenCalled();
   });
 
-  it("releases a transient reply operation before waiting for a recovery owner", async () => {
-    const operation = createOperation();
-    const ownerRelease = Promise.resolve();
-    state.admitReply.mockResolvedValue({
-      status: "owned",
-      operation,
-      queueOwnerRelease: ownerRelease,
-    });
-
-    await expect(
-      admitFollowupTurn({ queued: createRun(), defaults: createDefaults() }),
-    ).resolves.toEqual({ kind: "owner-wait", release: ownerRelease });
-
-    expect(operation.complete).toHaveBeenCalledOnce();
-    expect(operation.retainFailureUntilComplete).not.toHaveBeenCalled();
-    expect(state.admitLifecycle).not.toHaveBeenCalled();
-  });
-
   it("uses admission-time session generation, model lock, policy, and goal context", async () => {
     const operation = createOperation("admitted-session");
     const queuedEntry: SessionEntry = { sessionId: "queued-session", updatedAt: 1 };

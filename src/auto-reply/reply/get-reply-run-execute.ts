@@ -80,7 +80,6 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
     shouldFollowup,
     queueAdmissionState,
     isActive,
-    queueOwnerRelease,
     authProfileId,
     authProfileIdSource,
   } = state;
@@ -364,7 +363,6 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
     currentInboundContext,
     explicitSkillSelections: params.explicitSkillSelections,
     ...(queuedFollowupAbortSignal ? { abortSignal: queuedFollowupAbortSignal } : {}),
-    ...(queueOwnerRelease ? { queueOwnerRelease } : {}),
     deliveryCorrelations: opts?.queuedDeliveryCorrelations,
     turnAdoptionLifecycle: opts?.turnAdoptionLifecycle,
     ...(opts?.onFollowupQueueDisposition

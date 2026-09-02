@@ -1,6 +1,5 @@
 /** Composes queued admission, canonical execution, accounting, and delivery. */
 import { hasCompletedSourceReplyDeliveryEvidence } from "../../agents/embedded-agent-runner/delivery-evidence.js";
-import { isAbortError, racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import { clearAgentRunContext } from "../../infra/agent-run-registry.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { defaultRuntime } from "../../runtime.js";
@@ -16,7 +15,6 @@ import { executeFollowupTurn } from "./followup-turn-execution.js";
 import {
   completeFollowupRunLifecycle,
   FollowupRunDeferredError,
-  resolveFollowupAbortSignal,
   type FollowupRun,
 } from "./queue.js";
 import type { ReplyOperation } from "./reply-run-registry.js";
@@ -35,16 +33,6 @@ export function createFollowupRunner(
     let operation: ReplyOperation | undefined;
     let admittedRunId: string | undefined;
     let queuedFollowupAdmitted = false;
-    const abortSignal = resolveFollowupAbortSignal(queued);
-    if (queued.queueOwnerRelease && !abortSignal?.aborted) {
-      try {
-        await racePromiseWithAbortSignal(queued.queueOwnerRelease, abortSignal);
-      } catch (error) {
-        if (!isAbortError(error)) {
-          throw error;
-        }
-      }
-    }
     const initiallyAborted =
       queued.abortSignal?.aborted === true || queued.queueAbortSignal?.aborted === true;
     const endDeliveryCorrelations = initiallyAborted
@@ -57,34 +45,20 @@ export function createFollowupRunner(
         disposition = { kind: "consumed" };
         return;
       }
-      const admit = () =>
-        admitFollowupTurn({
-          queued,
-          defaults,
-          onCompactionNoticePayload: async (payload, turn) => {
-            await deliverFollowupDecision({
-              decision: { kind: "deliver", payloads: [payload] },
-              turn,
-              defaults,
-              runId: turn.runId,
-              runFollowup,
-              kind: "block",
-            });
-          },
-        });
-      let admission = await admit();
-      while (admission.kind === "owner-wait") {
-        try {
-          await racePromiseWithAbortSignal(admission.release, abortSignal);
-        } catch (error) {
-          if (!isAbortError(error)) {
-            throw error;
-          }
-          disposition = { kind: "consumed" };
-          return;
-        }
-        admission = await admit();
-      }
+      const admission = await admitFollowupTurn({
+        queued,
+        defaults,
+        onCompactionNoticePayload: async (payload, turn) => {
+          await deliverFollowupDecision({
+            decision: { kind: "deliver", payloads: [payload] },
+            turn,
+            defaults,
+            runId: turn.runId,
+            runFollowup,
+            kind: "block",
+          });
+        },
+      });
       switch (admission.kind) {
         case "deferred":
           throw new FollowupRunDeferredError(

@@ -263,7 +263,6 @@ export function createDispatchReplyOperationCoordinator(params: {
   routeThreadId?: string | number;
 }) {
   let dispatchReplyOperation: ReplyOperation | undefined;
-  let dispatchQueueOwnerRelease: Promise<void> | undefined;
   let dispatchAbortOperation: ReplyOperation | undefined;
   let preDispatchAbortOperation: ReplyOperation | undefined;
   let preDispatchLifecycleAdmission: SessionWorkAdmissionLease | undefined;
@@ -570,7 +569,6 @@ export function createDispatchReplyOperationCoordinator(params: {
       admission.operation.markTerminalRecovery();
     }
     dispatchReplyOperation = admission.operation;
-    dispatchQueueOwnerRelease = admission.queueOwnerRelease;
     dispatchReplyOperation.retainFailureUntilComplete();
     dispatchAbortOperation = admission.operation;
     return { status: "ready" };
@@ -672,7 +670,6 @@ export function createDispatchReplyOperationCoordinator(params: {
       onAgentRunStart,
       onAgentRunTerminalOutcome,
       ...(dispatchReplyOperation ? { replyOperation: dispatchReplyOperation } : {}),
-      ...(dispatchQueueOwnerRelease ? { queueOwnerRelease: dispatchQueueOwnerRelease } : {}),
     };
   };
 
