@@ -102,7 +102,7 @@ const CRON_COMMAND_LANE: string = CommandLane.Cron;
 
 export type HeartbeatDeps = OutboundSendDeps &
   ChannelHeartbeatDeps & {
-    getReplyFromConfig?: typeof import("./heartbeat-runner.runtime.js").getReplyFromConfig;
+    getReplyFromConfig?: typeof import("./heartbeat-runner.runtime.js").getHeartbeatReplyFromConfig;
     runtime?: RuntimeEnv;
     getQueueSize?: (lane?: string) => number;
     isReplyRunActive?: (sessionKey: string) => boolean;
@@ -605,7 +605,8 @@ export async function invokeHeartbeatAgentRun(
   const replyOperationRunState: ReplyOperationRunState = {};
   const heartbeatModelOverride = normalizeOptionalString(heartbeat?.model);
   const getReplyFromConfig =
-    opts.deps?.getReplyFromConfig ?? (await loadHeartbeatRunnerRuntime()).getReplyFromConfig;
+    opts.deps?.getReplyFromConfig ??
+    (await loadHeartbeatRunnerRuntime()).getHeartbeatReplyFromConfig;
   const heartbeatWakeAbortSignal = getHeartbeatWakeAbortSignal();
   const replyOpts = {
     isHeartbeat: true,

@@ -4,7 +4,7 @@ import { loadPublishedGatewayReplyDispatchRuntime } from "../agents/prepared-mod
 import { getReplyFromConfig as resolveReplyFromConfig } from "../auto-reply/reply.js";
 import { bindPreparedReplyDispatchRuntime } from "../auto-reply/reply/prepared-reply-dispatch-context.js";
 
-export async function getReplyFromConfig(
+export async function getHeartbeatReplyFromConfig(
   ...args: Parameters<typeof resolveReplyFromConfig>
 ): ReturnType<typeof resolveReplyFromConfig> {
   const [ctx, opts, configOverride] = args;
