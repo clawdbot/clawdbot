@@ -224,10 +224,11 @@ export async function probeMediaFilesWithinBudget(
   options: MediaProbeBatchOptions,
 ): Promise<MediaProbeResult[]> {
   const results: MediaProbeResult[] = inputs.map(() => ({}));
-  const deadlineMs = Date.now() + options.budgetMs;
+  // Monotonic clock: a wall-clock step while probes run must not expire or extend the budget.
+  const deadlineMs = performance.now() + options.budgetMs;
   const probeCount = Math.min(inputs.length, options.maxProbes);
   for (let offset = 0; offset < probeCount; offset += options.concurrency) {
-    const timeoutMs = deadlineMs - Date.now();
+    const timeoutMs = deadlineMs - performance.now();
     if (timeoutMs <= 0) {
       break;
     }

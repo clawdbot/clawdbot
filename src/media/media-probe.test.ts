@@ -236,7 +236,7 @@ describe("probeMediaFilesWithinBudget", () => {
   });
 
   it("stops launching probes after the batch budget expires", async () => {
-    const nowSpy = vi.spyOn(Date, "now").mockReturnValueOnce(1000).mockReturnValue(5000);
+    const nowSpy = vi.spyOn(performance, "now").mockReturnValueOnce(1000).mockReturnValue(5000);
     try {
       const results = await probeMediaFilesWithinBudget([{ filePath: songPath, kind: "audio" }], {
         budgetMs: 3000,
@@ -249,6 +249,36 @@ describe("probeMediaFilesWithinBudget", () => {
       nowSpy.mockRestore();
     }
   });
+
+  it.each([60_000, -60_000])(
+    "keeps the batch budget through a %s ms wall-clock step",
+    async (stepMs) => {
+      const now = Date.now;
+      let offset = 0;
+      const clock = vi.spyOn(Date, "now").mockImplementation(() => now() + offset);
+      runFfprobe.mockImplementation(async () => {
+        // Step the wall clock once the first probe is running.
+        offset = stepMs;
+        return JSON.stringify({ format: { duration: "1" } });
+      });
+      try {
+        const results = await probeMediaFilesWithinBudget(
+          Array.from({ length: 4 }, () => ({ filePath: songPath, kind: "audio" as const })),
+          { budgetMs: 3000, concurrency: 1, maxProbes: 4 },
+        );
+        // The wall clock moves after the first probe launches; the remaining probes must
+        // still run within the original budget rather than see it expired or inflated.
+        expect(runFfprobe).toHaveBeenCalledTimes(4);
+        expect(results.every((result) => result.durationMs === 1000)).toBe(true);
+        const timeouts = runFfprobe.mock.calls.map(
+          ([, opts]) => (opts as { timeoutMs: number }).timeoutMs,
+        );
+        expect(timeouts.every((timeoutMs) => timeoutMs > 0 && timeoutMs <= 3000)).toBe(true);
+      } finally {
+        clock.mockRestore();
+      }
+    },
+  );
 });
 
 describe("probeVideoDimensions", () => {
