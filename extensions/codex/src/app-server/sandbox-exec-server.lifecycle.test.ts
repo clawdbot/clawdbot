@@ -1,8 +1,10 @@
 // Codex tests cover sandbox exec-server child and backend lease lifecycle ordering.
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { EventEmitter } from "node:events";
+import path from "node:path";
 import { PassThrough } from "node:stream";
 import type { SandboxContext } from "openclaw/plugin-sdk/sandbox";
+import { useIsolatedStateGuard, withEnvAsync } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 const spawnMock = vi.hoisted(() => vi.fn());
@@ -88,6 +90,8 @@ function streamingHttpParams(requestId: string) {
   };
 }
 
+useIsolatedStateGuard();
+
 afterEach(() => {
   vi.useRealTimers();
   spawnMock.mockReset();
@@ -95,6 +99,25 @@ afterEach(() => {
 });
 
 describe("Codex sandbox exec-server lifecycle", () => {
+  it.each(["HOME", "OPENCLAW_STATE_DIR"])(
+    "refuses host metadata discovery outside the isolated home after %s changes",
+    async (key) => {
+      const foreignRoot = path.join(process.env.OPENCLAW_TEST_HOME!, "..", "foreign-state");
+      spawnMock.mockReturnValue(createFakeChild());
+      await withEnvAsync({ [key]: foreignRoot }, async () => {
+        await expect(
+          startProcess(
+            createExecServer(createSandboxContext({})),
+            new Map(),
+            createFakeNotifications().send,
+            processStartParams("foreign-state"),
+          ),
+        ).rejects.toThrow("state escaped the isolated test home");
+      });
+      expect(spawnMock).not.toHaveBeenCalled();
+    },
+  );
+
   it("owns JSON-RPC delivery, ordered process notifications, and idempotent session cleanup", async () => {
     const child = createFakeChild();
     spawnMock.mockReturnValue(child);
