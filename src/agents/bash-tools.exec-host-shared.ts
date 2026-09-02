@@ -464,9 +464,9 @@ type ExecApprovalRequestRoute<TTimeoutContext> =
 /** Registers an approval and resolves terminal no-route fallback through the shared policy owner. */
 export async function createExecApprovalRequestRoute<TTimeoutContext = undefined>(
   params: DefaultExecApprovalRequestParams &
-    Omit<ExecApprovalDecisionParams<TTimeoutContext>, "decision"> & {
+    Omit<ExecApprovalDecisionParams<TTimeoutContext>, "decision" | "requiresExplicitApproval"> & {
       /** When true, fail closed if no approval delivery route is available. */
-      requiresExplicitApproval?: boolean;
+      requiresExplicitApproval?: boolean | ((context: TTimeoutContext | undefined) => boolean);
       /** When true, allow execution even without approval delivery (durable exact-command trust). */
       hasExactCommandDurableTrust?: boolean;
     },
@@ -480,11 +480,19 @@ export async function createExecApprovalRequestRoute<TTimeoutContext = undefined
   // execution must be denied rather than proceeding without approval.
   // This is critical in containerized gateway environments where approval
   // channels may be misconfigured or unavailable.
-  // Exception: exact-command durable trust already grants permission, so allow execution.
-  if (request.unavailableReason !== null && !params.hasExactCommandDurableTrust) {
+  // Exceptions:
+  // - exact-command durable trust already grants permission, so allow execution.
+  // - askFallback="full" means the host permits execution via fallback, so
+  //   resolve through the normal fallback path instead of hard-denying.
+  if (
+    request.unavailableReason !== null &&
+    !params.hasExactCommandDurableTrust &&
+    params.askFallback !== "full"
+  ) {
     // Create a failed state that will deny execution
     const state = await resolveExecApprovalDecisionState<TTimeoutContext>({
       ...params,
+      requiresExplicitApproval: params.requiresExplicitApproval ?? false,
       decision: "deny",
     });
     return {
@@ -494,7 +502,11 @@ export async function createExecApprovalRequestRoute<TTimeoutContext = undefined
       state,
     };
   }
-  const state = await resolveExecApprovalDecisionState({ ...params, decision: null });
+  const state = await resolveExecApprovalDecisionState({
+    ...params,
+    requiresExplicitApproval: params.requiresExplicitApproval ?? false,
+    decision: null,
+  });
   return { ...request, kind: "inline", preResolvedDecision: null, state };
 }
 
