@@ -120,6 +120,7 @@ afterAll(async () => {
 beforeEach(() => {
   clearPluginIconCacheForTest();
   vi.clearAllMocks();
+  writeFileSync(localIconPath, PNG_BYTES);
   configForRequest = () => testConfig;
   mocks.authorize.mockReset();
   mocks.authorize.mockResolvedValue({
@@ -286,8 +287,12 @@ describe("Control UI plugin and catalog icon routes", () => {
     ),
   )(
     "normalizes APNG $label bytes declared as $contentType to PNG",
-    async ({ pathname, contentType }) => {
-      mocks.readRemoteMediaBuffer.mockResolvedValueOnce({ buffer: APNG_BYTES, contentType });
+    async ({ label, pathname, contentType }) => {
+      if (label === "plugin") {
+        writeFileSync(localIconPath, APNG_BYTES);
+      } else {
+        mocks.readRemoteMediaBuffer.mockResolvedValueOnce({ buffer: APNG_BYTES, contentType });
+      }
       mocks.encodeImage.mockResolvedValue({ data: PNG_BYTES });
 
       const response = await request(pathname);
