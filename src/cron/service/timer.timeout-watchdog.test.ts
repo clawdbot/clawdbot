@@ -74,25 +74,27 @@ describe("cron service timer regressions", () => {
         enqueueSystemEvent: vi.fn(),
         requestHeartbeat: vi.fn(),
         resolveHeartbeatTimeoutMs,
-        requestHeartbeatAndWait: vi.fn(async (_wake, { abortSignal }) => {
-          heartbeatStarted.resolve();
-          await new Promise<void>((resolve) => {
-            if (abortSignal?.aborted) {
-              abortObserved = true;
-              resolve();
-              return;
-            }
-            abortSignal?.addEventListener(
-              "abort",
-              () => {
+        requestHeartbeatAndWait: vi.fn<NonNullable<CronServiceDeps["requestHeartbeatAndWait"]>>(
+          async (_wake, { abortSignal }) => {
+            heartbeatStarted.resolve();
+            await new Promise<void>((resolve) => {
+              if (abortSignal?.aborted) {
                 abortObserved = true;
                 resolve();
-              },
-              { once: true },
-            );
-          });
-          return { status: "failed", reason: "aborted" };
-        }),
+                return;
+              }
+              abortSignal?.addEventListener(
+                "abort",
+                () => {
+                  abortObserved = true;
+                  resolve();
+                },
+                { once: true },
+              );
+            });
+            return { status: "failed", reason: "aborted" };
+          },
+        ),
         runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
       });
 
