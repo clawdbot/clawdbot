@@ -129,8 +129,11 @@ export type MSTeamsConfig = Omit<
     replyStyle?: MSTeamsReplyStyle;
     /** Per-team config. Key is team ID (from the /team/ URL path segment). */
     teams?: Record<string, MSTeamsTeamConfig>;
-    /** SharePoint site ID for file uploads in group chats/channels (e.g., "contoso.sharepoint.com,guid1,guid2"). */
+    /** SharePoint site ID for file uploads in group chats/channels (e.g., "contoso.sharepoint.com,guid1,guid2").
+     *  When omitted, the team's own SharePoint site is resolved automatically via Graph. */
     sharePointSiteId?: string;
+    /** Folder name for bot-uploaded files on the SharePoint site (default: "OpenClawShared"). */
+    sharePointFolder?: string;
     /** Show a welcome Adaptive Card when the bot is added to a 1:1 chat. Default: true. */
     welcomeCard?: boolean;
     /** Custom prompt starter labels shown on the welcome card. */

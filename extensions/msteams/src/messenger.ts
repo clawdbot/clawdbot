@@ -24,7 +24,7 @@ import { formatMSTeamsMarkdown } from "./format.js";
 import { buildTeamsFileInfoCard } from "./graph-chat.js";
 import {
   getDriveItemProperties,
-  requireMSTeamsSharePointSiteId,
+  resolveUploadSiteId,
   uploadAndShareSharePoint,
 } from "./graph-upload.js";
 import { extractFilename, extractMessageId, getMimeType, isLocalPath } from "./media-helpers.js";
@@ -277,6 +277,7 @@ async function buildActivity(
   conversationRef: StoredConversationReference,
   tokenProvider?: MSTeamsAccessTokenProvider,
   sharePointSiteId?: string,
+  sharePointFolder?: string,
   mediaMaxBytes?: number,
   options?: { feedbackLoopEnabled?: boolean },
 ): Promise<Record<string, unknown>> {
@@ -341,12 +342,14 @@ async function buildActivity(
       }
 
       if (!isPersonal && !isImage) {
-        // Non-images in group chats/channels require SharePoint because an
-        // application token has no signed-in `/me/drive` to fall back to.
-        const siteId = requireMSTeamsSharePointSiteId(sharePointSiteId);
         if (!tokenProvider) {
           throw new Error("MS Teams Graph token provider unavailable for SharePoint file send");
         }
+        const siteId = await resolveUploadSiteId({
+          configuredSiteId: sharePointSiteId,
+          teamId: conversationRef.teamId,
+          tokenProvider,
+        });
         const chatId = conversationRef.conversation?.id;
 
         const uploaded = await uploadAndShareSharePoint({
@@ -357,6 +360,7 @@ async function buildActivity(
           siteId,
           chatId: chatId ?? undefined,
           usePerUserSharing: conversationType === "groupchat",
+          folderName: sharePointFolder,
         });
 
         const driveItem = await getDriveItemProperties({
@@ -402,6 +406,8 @@ export async function sendMSTeamsMessages(params: {
   tokenProvider?: MSTeamsAccessTokenProvider;
   /** SharePoint site ID for file uploads in group chats/channels */
   sharePointSiteId?: string;
+  /** Folder name for bot-uploaded files on the SharePoint site */
+  sharePointFolder?: string;
   /** Max media size in bytes. Default: 100MB. */
   mediaMaxBytes?: number;
   /** Enable the Teams feedback loop (thumbs up/down) on sent messages. */
@@ -465,6 +471,7 @@ export async function sendMSTeamsMessages(params: {
             params.conversationRef,
             params.tokenProvider,
             params.sharePointSiteId,
+            params.sharePointFolder,
             params.mediaMaxBytes,
             { feedbackLoopEnabled: params.feedbackLoopEnabled },
           );
