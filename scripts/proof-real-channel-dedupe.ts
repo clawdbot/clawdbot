@@ -9,6 +9,7 @@ import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { telegramPlugin } from "../extensions/telegram/channel-plugin-api.js";
+import { subscribeEmbeddedAgentSession } from "../src/agents/embedded-agent-subscribe.js";
 import { createMessageTool } from "../src/agents/tools/message-tool-execution.js";
 import { buildReplyPayloads } from "../src/auto-reply/reply/agent-runner-payloads.js";
 import { routeReply } from "../src/auto-reply/reply/route-reply.js";
@@ -187,6 +188,7 @@ async function createBotApiRecorder() {
 async function main() {
   const recorder = await createBotApiRecorder();
   const tempStateDir = mkdtempSync(join(tmpdir(), "openclaw-pr-128580-proof-"));
+  let unsubscribe: (() => void) | undefined;
   const tempConfigPath = join(tempStateDir, "openclaw.json");
   writeFileSync(tempConfigPath, "{}\n", "utf8");
   const previousConfigPath = process.env.OPENCLAW_CONFIG_PATH;
@@ -226,6 +228,25 @@ async function main() {
         },
       },
     } as OpenClawConfig;
+    const sessionManager = {};
+    const session = {
+      sessionManager,
+      subscribe: () => () => {},
+      isCompacting: false,
+      abortCompaction() {},
+    } as Parameters<typeof subscribeEmbeddedAgentSession>[0]["session"];
+    const subscription = subscribeEmbeddedAgentSession({
+      session,
+      runId: "pr-128580-proof-run",
+      messageChannel: "telegram",
+      config: cfg,
+      sessionKey: "agent:main:main",
+      currentChannelId: PROOF_CHAT_ID,
+      currentMessagingTarget: PROOF_CHAT_ID,
+      currentAccountId: "default",
+      replyToMode: "off",
+    });
+    unsubscribe = subscription.unsubscribe;
     const tool = createMessageTool({
       config: cfg,
       getRuntimeConfig: () => cfg,
@@ -243,11 +264,24 @@ async function main() {
       }),
     });
     const text = "MANTIS BLANK-MEDIA DEDUPE — one visible reply expected";
-    const toolResult = await tool.execute("proof-message-tool-call", {
-      action: "send",
-      to: "12345",
-      message: text,
+    const toolResult = await subscription.runToolLifecycle({
+      toolName: "message",
+      toolCallId: "proof-message-tool-call",
+      args: { action: "send", to: PROOF_CHAT_ID, message: text },
+      execute: async (onImplementationStart) => {
+        onImplementationStart();
+        return await tool.execute("proof-message-tool-call", {
+          action: "send",
+          to: PROOF_CHAT_ID,
+          message: text,
+        });
+      },
     });
+    const runResultDeliveryFacts = {
+      messagingToolSentTexts: subscription.getMessagingToolSentTexts(),
+      messagingToolSentMediaUrls: subscription.getMessagingToolSentMediaUrls(),
+      messagingToolSentTargets: subscription.getMessagingToolSentTargets(),
+    };
     const common = {
       isHeartbeat: false,
       didLogHeartbeatStrip: false,
@@ -256,9 +290,8 @@ async function main() {
       replyToMode: "off" as const,
       messageProvider: "telegram",
       originatingChannel: "telegram",
-      originatingTo: "12345",
-      messagingToolSentTexts: [text],
-      messagingToolSentTargets: [{ tool: "telegram", provider: "telegram", to: "12345", text }],
+      originatingTo: PROOF_CHAT_ID,
+      ...runResultDeliveryFacts,
     };
     const blank = await buildReplyPayloads({
       ...common,
@@ -278,7 +311,7 @@ async function main() {
           await routeReply({
             payload,
             channel: "telegram",
-            to: "12345",
+            to: PROOF_CHAT_ID,
             cfg,
             sessionKey: "agent:main:main",
             mirror: false,
@@ -320,6 +353,7 @@ async function main() {
           productionPath:
             "createMessageTool -> runMessageAction -> Telegram durable send; buildReplyPayloads -> routeReply -> sendDurableMessageBatchCore -> Telegram Bot API adapter",
           toolResult: toolResult.content?.[0],
+          runResultDeliveryFacts,
           botApiMethods: recorder.requests.map((request) => request.method),
           messageToolSendMessageCalls: sendMessageRequests.length,
           blankFinal: {
@@ -342,6 +376,7 @@ async function main() {
       process.exitCode = 1;
     }
   } finally {
+    unsubscribe?.();
     if (previousConfigPath === undefined) {
       delete process.env.OPENCLAW_CONFIG_PATH;
     } else {
