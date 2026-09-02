@@ -328,6 +328,9 @@ function pruneHistoryForContextShare(params: {
   let droppedTokens = 0;
 
   const parts = normalizeCompactionParts(params.parts ?? DEFAULT_PARTS, keptMessages.length);
+  const originalMessageIndexes = new Map(
+    params.messages.map((message, index) => [message, index] as const),
+  );
 
   while (keptMessages.length > 0 && estimateMessagesTokens(keptMessages) > budgetTokens) {
     const chunks = splitMessagesByTokenShare(keptMessages, parts);
@@ -346,6 +349,12 @@ function pruneHistoryForContextShare(params: {
     allDroppedMessages.push(...dropped, ...repairedDropped);
     keptMessages = repairReport.messages;
   }
+
+  allDroppedMessages.sort(
+    (left, right) =>
+      (originalMessageIndexes.get(left) ?? params.messages.length) -
+      (originalMessageIndexes.get(right) ?? params.messages.length),
+  );
 
   return {
     messages: keptMessages,

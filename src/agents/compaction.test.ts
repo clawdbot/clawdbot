@@ -636,9 +636,7 @@ describe("pruneHistoryForContextShare", () => {
     });
 
     expect(pruned.messages).not.toContain(messages[2]!);
-    expect(
-      pruned.droppedMessagesList.map((message) => message.timestamp).toSorted(compareTimestampIds),
-    ).toEqual([1, 2, 3, 5]);
+    expect(pruned.droppedMessagesList.map((message) => message.timestamp)).toEqual([1, 2, 3, 5]);
     expect(pruned.droppedMessages).toBe(pruned.droppedMessagesList.length);
   });
 
