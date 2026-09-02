@@ -23,7 +23,6 @@ import { buildContextEnginePromptCacheInfo } from "./attempt-context-engine-help
 import {
   buildAfterTurnRuntimeContext,
   buildAfterTurnRuntimeContextFromUsage,
-  excludeOrphanedTrailingUserMessageFromModelContext,
   mergeOrphanedTrailingUserPrompt,
   prependSystemPromptAddition,
   resolveAttemptFsWorkspaceOnly,
@@ -485,35 +484,6 @@ describe("mergeOrphanedTrailingUserPrompt", () => {
         "[Queued user message from a previous active turn; preserved as context only. Continue with the active prompt below.]\n" +
         "older active-turn message\n\nHEARTBEAT_OK",
     });
-  });
-});
-
-describe("excludeOrphanedTrailingUserMessageFromModelContext", () => {
-  it("drops only the trailing orphan user row from this turn's messages", () => {
-    const messages = [
-      { role: "user", content: "warmup", timestamp: 1 },
-      { role: "assistant", content: "ack", timestamp: 2 },
-      { role: "user", content: "SLOW:20000 crash-me", timestamp: 3 },
-    ] as never[];
-    expect(
-      excludeOrphanedTrailingUserMessageFromModelContext({
-        messages,
-        leafMessage: { content: "SLOW:20000 crash-me" },
-      }),
-    ).toEqual([
-      { role: "user", content: "warmup", timestamp: 1 },
-      { role: "assistant", content: "ack", timestamp: 2 },
-    ]);
-  });
-
-  it("leaves history unchanged when the trailing user row does not match", () => {
-    const messages = [{ role: "user", content: "still active", timestamp: 1 }] as never[];
-    expect(
-      excludeOrphanedTrailingUserMessageFromModelContext({
-        messages,
-        leafMessage: { content: "other" },
-      }),
-    ).toBe(messages);
   });
 });
 

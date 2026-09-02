@@ -29,7 +29,6 @@ import {
   buildActiveMusicGenerationTaskPromptContextForSession,
   buildActiveVideoGenerationTaskPromptContextForSession,
 } from "../../media-generation-task-status.js";
-import type { AgentMessage } from "../../runtime/index.js";
 import { resolveEffectiveToolFsWorkspaceOnly } from "../../tool-fs-policy.js";
 import { deriveContextPromptTokens, type NormalizedUsage } from "../../usage.js";
 import { buildEmbeddedCompactionRuntimeContext } from "../compaction-runtime-context.js";
@@ -432,37 +431,6 @@ export function mergeOrphanedTrailingUserPrompt(params: {
     merged: true,
     removeLeaf: false,
   };
-}
-
-/**
- * Drops the repaired trailing user leaf from this turn's assembled messages
- * without detaching it from the session tree. Used when orphan text was merged
- * into the active prompt (or already present there) but must remain canonical
- * history for subsequent turns.
- */
-export function excludeOrphanedTrailingUserMessageFromModelContext(params: {
-  messages: AgentMessage[];
-  leafMessage: { content?: unknown };
-}): AgentMessage[] {
-  const orphanText = extractUserMessagePromptText(params.leafMessage.content);
-  if (!orphanText || params.messages.length === 0) {
-    return params.messages;
-  }
-  for (let index = params.messages.length - 1; index >= 0; index -= 1) {
-    const message = params.messages[index];
-    // SAFETY: AgentMessage is a closed union; probe role before treating the row as user text.
-    if ((message as { role?: unknown }).role !== "user") {
-      continue;
-    }
-    // SAFETY: user rows expose content as string | parts; extractor accepts unknown.
-    const messageText = extractUserMessagePromptText((message as { content?: unknown }).content);
-    if (messageText === orphanText) {
-      return [...params.messages.slice(0, index), ...params.messages.slice(index + 1)];
-    }
-    // Only consider the newest trailing user row; older history stays intact.
-    break;
-  }
-  return params.messages;
 }
 
 export function resolveAttemptFsWorkspaceOnly(params: {

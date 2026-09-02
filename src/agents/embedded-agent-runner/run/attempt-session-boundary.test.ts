@@ -22,7 +22,7 @@ import {
 import { buildTimestampPrefix } from "../../../gateway/server-methods/agent-timestamp.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
 import type { AgentMessage } from "../../runtime/index.js";
-import type { guardSessionManager } from "../../session-tool-result-guard-wrapper.js";
+import { guardSessionManager } from "../../session-tool-result-guard-wrapper.js";
 import type { AgentSession } from "../../sessions/index.js";
 import { SessionManager } from "../../sessions/session-manager.js";
 import { prepareEmbeddedAttemptSessionBoundary } from "./attempt-session-prepare.js";
@@ -611,7 +611,13 @@ describe("prepareEmbeddedAttemptSessionBoundary", () => {
         excludeFromContext,
         timestamp: 2,
       };
-      const repairedMessages: AgentMessage[] = [currentUser];
+      const orphanUser = {
+        role: "user" as const,
+        content: "old prompt",
+        idempotencyKey: "previous-run:user",
+        timestamp: 1,
+      };
+      const repairedMessages: AgentMessage[] = [orphanUser];
       const { activeSession } = createActiveSession([]);
       const branch = vi.fn();
       const clearNextUserMessagePersistenceSuppression = vi.fn();
@@ -622,12 +628,7 @@ describe("prepareEmbeddedAttemptSessionBoundary", () => {
           parentId: "previous-assistant",
           timestamp: "2026-07-13T00:00:00.000Z",
           type: "message",
-          message: {
-            role: "user",
-            content: "old prompt",
-            idempotencyKey: "previous-run:user",
-            timestamp: 1,
-          },
+          message: orphanUser,
         }),
         branch,
         clearNextUserMessagePersistenceSuppression,
@@ -668,7 +669,7 @@ describe("prepareEmbeddedAttemptSessionBoundary", () => {
         expect(branch).not.toHaveBeenCalled();
         expect(clearNextUserMessagePersistenceSuppression).not.toHaveBeenCalled();
         expect(onUserMessagePersistenceInvalidated).not.toHaveBeenCalled();
-        expect(activeSession.agent.state.messages).toEqual(repairedMessages);
+        expect(activeSession.agent.state.messages).toEqual([]);
       }
     },
   );
@@ -729,10 +730,6 @@ describe("prepareEmbeddedAttemptSessionBoundary", () => {
   it("keeps one durable and provider-visible copy after restart recovery preserves the orphan", async () => {
     const interrupted = "interrupted user wake";
     const recoveryPrompt = "gateway restart recovery";
-    const { activeSession } = createActiveSession([]);
-    const { guardSessionManager } = await import("../../session-tool-result-guard-wrapper.js");
-    // Seed the interrupted leaf first, then enable one-shot suppression the way
-    // restart recovery does before the recovery prompt would persist.
     const bare = SessionManager.inMemory();
     bare.appendMessage({
       role: "assistant",
@@ -744,6 +741,7 @@ describe("prepareEmbeddedAttemptSessionBoundary", () => {
       content: interrupted,
       timestamp: 2,
     });
+    const { activeSession } = createActiveSession(bare.buildSessionContext().messages);
     const sessionManager = guardSessionManager(bare, {
       runId: "restart-recovery",
       suppressNextUserMessagePersistence: true,
@@ -764,14 +762,7 @@ describe("prepareEmbeddedAttemptSessionBoundary", () => {
 
     expect(boundary.orphanRepair?.removeLeaf).toBe(false);
     expect(sessionManager.getLeafId()).toBe(orphanId);
-    // This turn excludes the preserved orphan (text already in the recovery prompt).
-    expect(
-      activeSession.agent.state.messages.some((message) => {
-        const content = (message as { content?: unknown }).content;
-        return content === interrupted || JSON.stringify(content).includes(interrupted);
-      }),
-    ).toBe(false);
-    // Recovery prompt must stay suppressed so it does not become a second durable user row.
+    expect(activeSession.agent.state.messages).toMatchObject([{ role: "assistant" }]);
     expect(
       sessionManager.appendMessage({
         role: "user",
@@ -785,36 +776,11 @@ describe("prepareEmbeddedAttemptSessionBoundary", () => {
       timestamp: 4,
     });
 
-    const nextTurnMessages = sessionManager.buildSessionContext().messages;
-    const interruptedUserCopies = nextTurnMessages.filter((message) => {
-      const content = (message as { content?: unknown }).content;
-      const text =
-        typeof content === "string"
-          ? content
-          : Array.isArray(content)
-            ? content
-                .map((part) =>
-                  part && typeof part === "object" && "text" in part
-                    ? String((part as { text?: unknown }).text ?? "")
-                    : "",
-                )
-                .join("")
-            : JSON.stringify(content ?? "");
-      return message.role === "user" && text.includes(interrupted);
-    });
-    // Exactly one durable / next-turn provider-visible copy of the interrupted request.
-    expect(interruptedUserCopies).toHaveLength(1);
-    expect(interruptedUserCopies[0]?.content).toBe(interrupted);
-    expect(
-      nextTurnMessages.some((message) => {
-        const content = (message as { content?: unknown }).content;
-        return (
-          message.role === "user" &&
-          typeof content === "string" &&
-          content.includes(recoveryPrompt) &&
-          content.includes(interrupted)
-        );
-      }),
-    ).toBe(false);
+    // This exact context seeds the next turn's provider request.
+    expect(sessionManager.buildSessionContext().messages).toMatchObject([
+      { role: "assistant", content: [{ type: "text", text: "prior" }] },
+      { role: "user", content: interrupted },
+      { role: "assistant", content: [{ type: "text", text: "recovery reply" }] },
+    ]);
   });
 });

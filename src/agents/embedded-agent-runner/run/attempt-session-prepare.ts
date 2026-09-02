@@ -48,10 +48,7 @@ import {
   replayTrailingEntriesForOrphanRepair,
   resolveOrphanRepairPlan,
 } from "./attempt-orphan-repair.js";
-import {
-  buildAfterTurnRuntimeContext,
-  excludeOrphanedTrailingUserMessageFromModelContext,
-} from "./attempt-prompt-helpers.js";
+import { buildAfterTurnRuntimeContext } from "./attempt-prompt-helpers.js";
 import { resolveExistingAttemptTranscriptState } from "./attempt-transcript-helpers.js";
 import type { EmbeddedAttemptTranscriptLifecycle } from "./attempt-transcript-lifecycle.js";
 import { createUserTranscriptContextRegistry } from "./attempt-user-transcript-context-registry.js";
@@ -446,20 +443,16 @@ export async function prepareEmbeddedAttemptSessionBoundary(input: {
     // discard the merged replacement prompt.
     sessionManager.clearNextUserMessagePersistenceSuppression?.();
     attempt.onUserMessagePersistenceInvalidated?.();
-    activeSession.agent.state.messages = sanitizeCompactionReplayMessages(
+  }
+  if (orphanRepair) {
+    const repairedMessages = sanitizeCompactionReplayMessages(
       sessionManager.buildSessionContext().messages,
     );
-  } else if (orphanRepair) {
-    // Keep the interrupted/queued user leaf on the canonical branch for later
-    // turns, but exclude it from this provider turn — its text already rides in
-    // the merged (or already-present) active prompt.
-    // Keep one-shot user-message persistence suppression: clearing it would
-    // persist the recovery prompt as a second durable user row and duplicate
-    // the interrupted request in later context.
-    activeSession.agent.state.messages = excludeOrphanedTrailingUserMessageFromModelContext({
-      messages: sanitizeCompactionReplayMessages(sessionManager.buildSessionContext().messages),
-      leafMessage: orphanRepair.messageEntry.message,
-    });
+    // A preserved orphan is the final message in this canonical context. Keep
+    // it durable, but omit it from this provider call because prompt assembly includes it.
+    activeSession.agent.state.messages = orphanRepair.removeLeaf
+      ? repairedMessages
+      : repairedMessages.slice(0, -1);
   }
 
   // This is the single timestamping source for user messages sent to the LLM.
