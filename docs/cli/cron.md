@@ -64,6 +64,29 @@ that label with `automations add|edit --display-name`. Use
 the stable name in list and detail views. The set and clear options cannot be
 combined.
 
+## Schedule types
+
+In addition to positional schedules, `automations add|create` and
+`automations edit` accept these schedule options:
+
+- `--at <when>` creates a one-shot job from an ISO timestamp or a duration such
+  as `20m`. Offset-less timestamps use UTC unless `--tz <iana>` is supplied.
+- `--every <duration>` creates a recurring interval such as `10m`, `1h`, or
+  `1d`.
+- `--cron <expression>` creates a five- or six-field cron schedule. Use
+  `--tz <iana>` for the evaluation timezone, or `--exact`/`--stagger <duration>`
+  to control top-of-hour staggering.
+- `--on-exit <shell>` starts a watched command and fires the job once when it
+  exits. Use `--on-exit-cwd <path>` to select its working directory.
+- `--stream-command <json>` supervises a long-lived command and fires the job
+  from its output. Use `--stream-cwd`, `--stream-mode line|match`,
+  `--stream-match <regex>`, `--stream-batch-ms <n>`, and
+  `--stream-max-batch-bytes <n>` to configure the source and batching.
+
+`--tz`, `--exact`, and `--stagger` apply only to cron schedules. See
+[Automations](/automation/cron-jobs#schedule-types) for stream lifecycle,
+batching limits, and trigger details.
+
 ## Sessions
 
 `--session` accepts `main`, `isolated`, `current`, or `session:<id>`.
