@@ -64,7 +64,7 @@ describe("prepared title creation handoff", () => {
       expect(
         request.mock.calls.filter(([method]) => method === "sessions.title.prepare"),
       ).toHaveLength(0);
-      expect(titles.available()).toBe(false);
+      expect(titles.preparedTitle()).toBeUndefined();
       titles.hostDisconnected();
       flow.disconnect();
     },
