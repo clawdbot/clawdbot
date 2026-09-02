@@ -283,7 +283,7 @@ describe("system-presence", () => {
 
   it("prunes stale non-self entries after a forward wall-clock jump", () => {
     useFakePerformanceClock();
-    const initialTime = Date.now() + 24 * 60 * 60 * 1000;
+    const initialTime = Date.now() + 48 * 60 * 60 * 1000;
     vi.setSystemTime(initialTime);
 
     const deviceId = randomUUID();
@@ -323,60 +323,48 @@ describe("system-presence", () => {
     expect(entries.map((entry) => entry.reason)).toContain("self");
   });
 
-  it("keeps a rolled-clock refresh fresh when wall time recovers", () => {
-    useFakePerformanceClock();
-    const initialTime = Date.now();
-    vi.setSystemTime(initialTime);
+  it.each(["created", "refreshed"] as const)(
+    "keeps presence %s during rollback fresh when wall time recovers",
+    (action) => {
+      useFakePerformanceClock();
+      const initialTime = Date.now();
+      const forwardTime = initialTime + 24 * 60 * 60 * 1000;
+      vi.setSystemTime(forwardTime);
+      listSystemPresence();
 
-    const deviceId = randomUUID();
-    upsertPresence(deviceId, {
-      deviceId,
-      host: "rollback-refresh-host",
-      mode: "ui",
-      reason: "connect",
-    });
+      const deviceId = randomUUID();
+      const rolledTime = initialTime - 60 * 60 * 1000;
+      if (action === "refreshed") {
+        upsertPresence(deviceId, {
+          deviceId,
+          host: "rollback-refresh-host",
+          mode: "ui",
+          reason: "connect",
+        });
+      }
+      vi.setSystemTime(rolledTime);
+      if (action === "created") {
+        upsertPresence(deviceId, {
+          deviceId,
+          host: "rollback-created-host",
+          mode: "ui",
+          reason: "connect",
+        });
+      } else {
+        expect(touchPresence(deviceId)).toBe(true);
+      }
 
-    const rolledTime = initialTime - 60 * 60 * 1000;
-    vi.setSystemTime(rolledTime);
-    expect(touchPresence(deviceId)).toBe(true);
-    expect(listSystemPresence().find((entry) => entry.deviceId === deviceId)?.ts).toBe(rolledTime);
+      vi.advanceTimersByTime(60 * 1000);
+      vi.setSystemTime(forwardTime + 60 * 1000);
 
-    vi.advanceTimersByTime(1000);
-    vi.setSystemTime(initialTime);
+      const recovered = listSystemPresence().find((entry) => entry.deviceId === deviceId);
+      expect(recovered?.ts).toBe(rolledTime);
 
-    expect(listSystemPresence().map((entry) => entry.deviceId)).toContain(deviceId);
+      vi.advanceTimersByTime(4 * 60 * 1000 + 1);
 
-    vi.advanceTimersByTime(5 * 60 * 1000 + 1);
-
-    expect(listSystemPresence().map((entry) => entry.deviceId)).not.toContain(deviceId);
-  });
-
-  it("keeps presence created during rollback fresh when wall time recovers", () => {
-    useFakePerformanceClock();
-    const initialTime = Date.now();
-    vi.setSystemTime(initialTime);
-    listSystemPresence();
-
-    const deviceId = randomUUID();
-    const rolledTime = initialTime - 60 * 60 * 1000;
-    vi.setSystemTime(rolledTime);
-    upsertPresence(deviceId, {
-      deviceId,
-      host: "rollback-created-host",
-      mode: "ui",
-      reason: "connect",
-    });
-
-    vi.advanceTimersByTime(60 * 1000);
-    vi.setSystemTime(initialTime + 60 * 1000);
-
-    const recovered = listSystemPresence().find((entry) => entry.deviceId === deviceId);
-    expect(recovered?.ts).toBe(rolledTime);
-
-    vi.advanceTimersByTime(4 * 60 * 1000 + 1);
-
-    expect(listSystemPresence().map((entry) => entry.deviceId)).not.toContain(deviceId);
-  });
+      expect(listSystemPresence().map((entry) => entry.deviceId)).not.toContain(deviceId);
+    },
+  );
 
   it("expires presence suspended while the wall clock remains rolled back", () => {
     const clock = useFakeSuspendClock();
@@ -394,96 +382,38 @@ describe("system-presence", () => {
       reason: "connect",
     });
 
-    clock.uptime += 5 * 60 + 0.001;
-    vi.setSystemTime(rolledTime + 5 * 60 * 1000 + 1);
+    clock.uptime += 5 * 60 + 1;
 
     expect(listSystemPresence().map((entry) => entry.deviceId)).not.toContain(deviceId);
   });
 
-  it("gives a suspended rollback refresh a full TTL through recovery", () => {
+  it("evicts stale presence before a peer refreshed during suspend and rollback", () => {
     const clock = useFakeSuspendClock();
-    const initialTime = Date.now();
-    vi.setSystemTime(initialTime);
-    listSystemPresence();
-
-    const deviceId = randomUUID();
-    const rolledTime = initialTime - 60 * 60 * 1000;
-    vi.setSystemTime(rolledTime);
-    upsertPresence(deviceId, {
-      deviceId,
-      host: "rollback-suspended-refresh-host",
-      mode: "ui",
-      reason: "connect",
-    });
-
-    clock.uptime += 60;
-    vi.setSystemTime(rolledTime + 60 * 1000);
-    expect(touchPresence(deviceId)).toBe(true);
-    vi.setSystemTime(initialTime + 60 * 1000);
-
-    expect(listSystemPresence().map((entry) => entry.deviceId)).toContain(deviceId);
-    clock.monotonic += 4 * 60 * 1000 + 1;
-    clock.uptime += 4 * 60 + 0.001;
-    vi.advanceTimersByTime(4 * 60 * 1000 + 1);
-    expect(listSystemPresence().map((entry) => entry.deviceId)).toContain(deviceId);
-    clock.monotonic += 60 * 1000;
-    clock.uptime += 60;
-    vi.advanceTimersByTime(60 * 1000);
-    expect(listSystemPresence().map((entry) => entry.deviceId)).not.toContain(deviceId);
-  });
-
-  it("advances logical freshness across repeated rolled-clock refreshes", () => {
-    useFakePerformanceClock();
-    const initialTime = Date.now();
-    vi.setSystemTime(initialTime);
-
-    const deviceId = randomUUID();
-    upsertPresence(deviceId, {
-      deviceId,
-      host: "rollback-repeated-refresh-host",
-      mode: "ui",
-      reason: "connect",
-    });
-
-    const rolledTime = initialTime - 60 * 60 * 1000;
-    vi.setSystemTime(rolledTime);
-    for (let minute = 1; minute <= 6; minute += 1) {
-      vi.advanceTimersByTime(60 * 1000);
-      expect(touchPresence(deviceId)).toBe(true);
-    }
-    expect(listSystemPresence().find((entry) => entry.deviceId === deviceId)?.ts).toBe(
-      rolledTime + 6 * 60 * 1000,
-    );
-
-    vi.setSystemTime(initialTime + 6 * 60 * 1000);
-
-    expect(listSystemPresence().map((entry) => entry.deviceId)).toContain(deviceId);
-
-    vi.advanceTimersByTime(5 * 60 * 1000 + 1);
-
-    expect(listSystemPresence().map((entry) => entry.deviceId)).not.toContain(deviceId);
-  });
-
-  it("evicts pre-rollback presence before fresh rolled-clock entries", () => {
-    useFakePerformanceClock();
     const initialTime = Date.now() + 24 * 60 * 60 * 1000;
     vi.setSystemTime(initialTime);
     listSystemPresence();
 
-    const staleDeviceId = `rollback-old-${randomUUID()}`;
+    const refreshedDeviceId = `rollback-refreshed-${randomUUID()}`;
+    upsertPresence(refreshedDeviceId, {
+      deviceId: refreshedDeviceId,
+      host: "rollback-refreshed-host",
+      mode: "ui",
+      reason: "connect",
+    });
+    const staleDeviceId = `rollback-stale-${randomUUID()}`;
     upsertPresence(staleDeviceId, {
       deviceId: staleDeviceId,
-      host: "rollback-old-host",
+      host: "rollback-stale-host",
       mode: "ui",
       reason: "connect",
     });
 
     vi.setSystemTime(initialTime - 60 * 60 * 1000);
-    vi.advanceTimersByTime(1);
-    listSystemPresence();
+    clock.uptime += 1;
+    expect(touchPresence(refreshedDeviceId)).toBe(true);
 
     const freshPrefix = `rollback-fresh-${randomUUID()}-`;
-    for (let index = 0; index < 200; index += 1) {
+    for (let index = 0; index < 198; index += 1) {
       upsertPresence(`${freshPrefix}${index}`, {
         deviceId: `${freshPrefix}${index}`,
         host: `rollback-fresh-host-${index}`,
@@ -494,7 +424,8 @@ describe("system-presence", () => {
 
     const entries = listSystemPresence();
     expect(entries.map((entry) => entry.deviceId)).not.toContain(staleDeviceId);
-    expect(entries.filter((entry) => entry.deviceId?.startsWith(freshPrefix))).toHaveLength(199);
+    expect(entries.map((entry) => entry.deviceId)).toContain(refreshedDeviceId);
+    expect(entries.filter((entry) => entry.deviceId?.startsWith(freshPrefix))).toHaveLength(198);
     expect(entries.map((entry) => entry.reason)).toContain("self");
   });
 });

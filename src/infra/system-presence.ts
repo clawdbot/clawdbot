@@ -46,33 +46,37 @@ type SystemPresenceUpdate = {
   changedKeys: (keyof SystemPresence)[];
 };
 
+type StoredPresence = {
+  presence: SystemPresence;
+  freshness: number;
+};
+
 // The gateway owns a private key; caller-supplied string identities remain peers.
 const SELF_KEY = Symbol("system-presence-self");
-const entries = new Map<string | symbol, SystemPresence>();
-const freshnessAt = new WeakMap<SystemPresence, { monotonic: number; wall: number }>();
+const entries = new Map<string | symbol, StoredPresence>();
 const TTL_MS = 5 * 60 * 1000; // 5 minutes
 const MAX_ENTRIES = 200;
 const SELF_INSTANCE_ID = randomUUID();
 const uptimeOrigin = os.uptime() * 1000 - performance.now();
+let freshnessTime = Date.now();
+let freshnessSample = continuousTimeNow();
 
-function freshnessNow(): number {
-  // System uptime includes suspend without following wall-clock adjustments.
+function continuousTimeNow(): number {
+  // Uptime covers suspend on platforms where the high-resolution clock pauses.
   return Math.max(performance.now(), os.uptime() * 1000 - uptimeOrigin);
 }
 
+function freshnessNow(): number {
+  const sample = continuousTimeNow();
+  const elapsed = Math.max(0, sample - freshnessSample);
+  freshnessSample = sample;
+  // Preserve forward-clock expiry while continuous elapsed keeps rollback and suspend moving.
+  freshnessTime = Math.max(Date.now(), freshnessTime + elapsed);
+  return freshnessTime;
+}
+
 function setPresence(key: string | symbol, presence: SystemPresence) {
-  const previous = entries.get(key);
-  const monotonic = freshnessNow();
-  const previousFreshness = previous ? freshnessAt.get(previous) : undefined;
-  // Keep logical wall freshness monotonic across rollback/recovery while public ts follows heartbeat time.
-  const wall = Math.max(
-    presence.ts,
-    previousFreshness
-      ? previousFreshness.wall + Math.max(0, monotonic - previousFreshness.monotonic)
-      : performance.timeOrigin + monotonic,
-  );
-  entries.set(key, presence);
-  freshnessAt.set(presence, { monotonic, wall });
+  entries.set(key, { presence, freshness: freshnessNow() });
 }
 
 function normalizePresenceKey(key: string | undefined): string | undefined {
@@ -142,7 +146,7 @@ function initSelfPresence() {
 }
 
 function touchSelfPresence() {
-  const existing = entries.get(SELF_KEY);
+  const existing = entries.get(SELF_KEY)?.presence;
   if (existing) {
     setPresence(SELF_KEY, { ...existing, ts: Date.now() });
   } else {
@@ -230,7 +234,7 @@ export function updateSystemPresence(payload: SystemPresencePayload): SystemPres
     truncateUtf16Safe(parsed.text, 64) ||
     normalizeLowercaseStringOrEmpty(os.hostname());
   const hadExisting = entries.has(key);
-  const existing = entries.get(key) ?? ({} as SystemPresence);
+  const existing = entries.get(key)?.presence ?? ({} as SystemPresence);
   const merged: SystemPresence = {
     ...existing,
     ...parsed,
@@ -277,7 +281,7 @@ export function updateSystemPresence(payload: SystemPresencePayload): SystemPres
 
 export function upsertPresence(key: string, presence: Partial<SystemPresence>) {
   const normalizedKey = normalizePresenceKey(key) ?? normalizeLowercaseStringOrEmpty(os.hostname());
-  const existing = entries.get(normalizedKey) ?? ({} as SystemPresence);
+  const existing = entries.get(normalizedKey)?.presence ?? ({} as SystemPresence);
   const roles = mergeStringList(existing.roles, presence.roles);
   const scopes = mergeStringList(existing.scopes, presence.scopes);
   const merged: SystemPresence = {
@@ -302,7 +306,7 @@ export function touchPresence(key: string): boolean {
   if (!normalizedKey) {
     return false;
   }
-  const existing = entries.get(normalizedKey);
+  const existing = entries.get(normalizedKey)?.presence;
   if (!existing) {
     return false;
   }
@@ -312,33 +316,21 @@ export function touchPresence(key: string): boolean {
 
 export function listSystemPresence(): SystemPresence[] {
   touchSelfPresence();
-  const wallNow = Date.now();
-  const monotonicNow = freshnessNow();
-  for (const [k, v] of entries) {
-    const freshness = freshnessAt.get(v);
-    // Wall time covers forward jumps; continuous time covers rollback and suspend.
-    if (
-      k !== SELF_KEY &&
-      (freshness === undefined ||
-        wallNow - freshness.wall > TTL_MS ||
-        monotonicNow - freshness.monotonic > TTL_MS)
-    ) {
-      entries.delete(k);
+  const now = freshnessNow();
+  for (const [key, entry] of entries) {
+    if (key !== SELF_KEY && now - entry.freshness > TTL_MS) {
+      entries.delete(key);
     }
   }
-  // Enforce max size by the same monotonic freshness used for expiry.
+  // Expiry and capacity share one freshness order even when public timestamps roll back.
   if (entries.size > MAX_ENTRIES) {
     const sorted = [...entries.entries()]
       .filter(([key]) => key !== SELF_KEY)
-      .toSorted(
-        (a, b) =>
-          (freshnessAt.get(a[1])?.monotonic ?? Number.NEGATIVE_INFINITY) -
-          (freshnessAt.get(b[1])?.monotonic ?? Number.NEGATIVE_INFINITY),
-      );
+      .toSorted((a, b) => a[1].freshness - b[1].freshness);
     const toDrop = entries.size - MAX_ENTRIES;
     for (const [key] of sorted.slice(0, toDrop)) {
       entries.delete(key);
     }
   }
-  return [...entries.values()].toSorted((a, b) => b.ts - a.ts);
+  return [...entries.values()].map((entry) => entry.presence).toSorted((a, b) => b.ts - a.ts);
 }
