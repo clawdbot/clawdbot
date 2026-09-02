@@ -162,6 +162,19 @@ describe("json-file task-lane provider", () => {
     ).rejects.toThrow(/schemaVersion/);
   });
 
+  it("reports an unsupported schemaVersion without echoing the file's value", async () => {
+    const error: unknown = await loadJsonFileProviderLanes({
+      rootDir: "/data/lanes",
+      filePath: "board.json",
+      reader: readerReturning({ ...VALID_DOC, schemaVersion: "sentinel-LEAK<img src=x>" }),
+      resolveRealpath: async (p) => p,
+    }).catch((e: unknown) => e);
+    const message = (error as Error).message;
+    expect(message).toMatch(/schemaVersion/);
+    expect(message).not.toContain("sentinel-LEAK");
+    expect(message).not.toContain("<img");
+  });
+
   it("truncates lanes beyond the lane cap", async () => {
     const many = Array.from({ length: 25 }, (_, index) => ({
       id: `lane-${index}`,

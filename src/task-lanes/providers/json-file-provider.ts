@@ -204,7 +204,9 @@ export async function loadJsonFileProviderLanes(options: JsonFileProviderOptions
   }
   const root = parsed as Record<string, unknown>;
   if (root.schemaVersion !== TASK_LANE_SCHEMA_VERSION) {
-    throw new Error(`unsupported task lane schemaVersion: ${String(root.schemaVersion)}`);
+    // Diagnostics are RPC-visible; the file's schemaVersion value is untrusted
+    // and never echoed back.
+    throw new Error(`unsupported task lane schemaVersion (expected ${TASK_LANE_SCHEMA_VERSION})`);
   }
   if (!Array.isArray(root.lanes)) {
     throw new Error("task lane file is missing the lanes array");
