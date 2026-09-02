@@ -288,6 +288,8 @@ describe("getStatusSummary", () => {
     vi.mocked(resolveSessionStorePathCore).mockReturnValue("/tmp/sessions.json");
     vi.mocked(listGatewayAgentsBasic).mockReturnValue({
       defaultId: "main",
+      ownership: "sole",
+      selectionRequired: false,
       mainKey: "main",
       scope: "per-sender",
       agents: [{ id: "main" }],
@@ -821,6 +823,8 @@ describe("getStatusSummary", () => {
   it("passes agent scope when listing configured agent session stores", async () => {
     vi.mocked(listGatewayAgentsBasic).mockReturnValue({
       defaultId: "main",
+      ownership: "sole",
+      selectionRequired: false,
       mainKey: "main",
       scope: "per-sender",
       agents: [{ id: "main" }, { id: "ops" }],
