@@ -665,7 +665,7 @@ function createCronPromptExecutor(
                 cliSessionBinding && hasCliSessionReuseMetadata(cliSessionBinding)
                   ? cliSessionBinding
                   : undefined;
-              const result = await runCliAgent({
+              const candidateResult = await runCliAgent({
                 preparedRunAdmission,
                 sessionId: params.cronSession.sessionEntry.sessionId,
                 sessionKey: params.runSessionKey,
@@ -733,26 +733,30 @@ function createCronPromptExecutor(
               const classification = classifyResult({
                 provider: providerOverride,
                 model: modelOverride,
-                result,
+                result: candidateResult,
               });
               // Cleanup can seal this run after rejection. Publish the candidate
               // to the live entry only once the base persistence owner accepts it.
               const settledEntry = { ...params.cronSession.sessionEntry };
               if (
-                (result.meta.agentMeta?.clearCliSessionBinding === true ||
+                (candidateResult.meta.agentMeta?.clearCliSessionBinding === true ||
                   (!params.abortSignal?.aborted && !classification)) &&
-                applyCliSessionBindingResult(settledEntry, executionProvider, result.meta.agentMeta)
+                applyCliSessionBindingResult(
+                  settledEntry,
+                  executionProvider,
+                  candidateResult.meta.agentMeta,
+                )
               ) {
                 const assertCommitAllowed = () =>
                   assertCliSessionBindingResultCommitAllowed(
-                    result.meta.agentMeta,
+                    candidateResult.meta.agentMeta,
                     assertSettlementCurrent,
                     params.abortSignal,
                   );
                 await params.persistSessionEntry(assertCommitAllowed, settledEntry);
                 await params.persistRunContinuationSession?.(assertCommitAllowed);
               }
-              return result;
+              return candidateResult;
             },
             { abortSignal: params.abortSignal, trigger: "cron" },
           );

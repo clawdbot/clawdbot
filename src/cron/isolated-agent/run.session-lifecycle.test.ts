@@ -286,12 +286,8 @@ describe("runCronIsolatedAgentTurn session lifecycle", () => {
           },
         };
       });
-      const patchWithAbort: typeof accessor.patchSessionEntryCore = (
-        scope,
-        update,
-        options = {},
-      ) => {
-        const assertCommitAllowed = options.assertCommitAllowed;
+      const patchWithAbort: typeof accessor.patchSessionEntryCore = (scope, update, options) => {
+        const assertCommitAllowed = options?.assertCommitAllowed;
         return accessor.patchSessionEntryCore(scope, update, {
           ...options,
           ...(assertCommitAllowed

@@ -465,8 +465,8 @@ describe("local turn placement admission", () => {
     "closes a standalone CLI settlement assertion after its lane task is %s",
     async (ending) => {
       const sessionId = `standalone-${ending}`;
-      const started = createDeferredCore<void>();
-      const release = createDeferredCore<void>();
+      const started = createDeferredCore();
+      const release = createDeferredCore();
       let retained: (() => void) | undefined;
       const running = withLocalSessionPlacementTurnSettlement(
         { sessionId, runId: sessionId },
