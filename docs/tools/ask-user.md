@@ -26,8 +26,10 @@ You can answer from any supported conversation surface:
 - Telegram renders each choice as a full-width native button for one
   single-select question. **Other…** switches to Telegram's reply input without
   resolving the question.
-- Discord and Slack render native buttons for a single-choice, single-question
-  prompt.
+- Discord, Slack, and Mattermost render native buttons for a single-choice,
+  single-question prompt. Mattermost retires its prompt on the tap it accepts;
+  a question that ends elsewhere leaves the buttons in place until someone
+  taps one and is told the question is already closed.
 - A plain-text reply works on any channel. Reply with a number, an option label,
   or your own answer. For multi-select questions, separate choices with commas.
 
