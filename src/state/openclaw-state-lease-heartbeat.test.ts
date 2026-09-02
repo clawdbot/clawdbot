@@ -152,7 +152,9 @@ describe("maintenance lease heartbeat", () => {
           async (lease) => {
             retained = lease;
             if (ending === "abort") {
+              const [worker] = await spawned;
               controller.abort();
+              await once(worker, "exit");
               const stopped = readLease(state.env);
               await new Promise((resolve) => {
                 setTimeout(resolve, 450);

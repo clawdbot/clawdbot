@@ -157,22 +157,7 @@ export const leadingEmptyLinesTextFilter: TextFilter = {
 };
 
 function collapsePlainDuplicateParagraphs(text: string): string {
-  const trimmed = text.trim();
-  if (!trimmed) {
-    return text;
-  }
-  const blocks = trimmed.split(/\n{2,}/);
-  const result: string[] = [];
-  let lastNormalized: string | null = null;
-  for (const block of blocks) {
-    const normalized = block.trim().replace(/\s+/g, " ");
-    if (lastNormalized && normalized === lastNormalized) {
-      continue;
-    }
-    result.push(block.trim());
-    lastNormalized = normalized;
-  }
-  return result.length === blocks.length ? text : result.join("\n\n");
+  return createDuplicateParagraphProjector(false)({ text, delta: null }).text;
 }
 
 function collapseDuplicateParagraphs(text: string): string {
@@ -206,10 +191,11 @@ function collapseDuplicateParagraphs(text: string): string {
   return projected;
 }
 
-function createDuplicateParagraphProjector(): TextProjector {
+function createDuplicateParagraphProjector(protectCode = true): TextProjector {
   let active = false;
   let trailingNewline = false;
   let text = "";
+  let completed = "";
   let lastNormalized: string | null = null;
   let pendingEmpty = 0;
   let paragraph = "";
@@ -218,6 +204,8 @@ function createDuplicateParagraphProjector(): TextProjector {
   let equal = false;
   let newlines = 0;
   let hasDuplicate = false;
+  let wasCollapsed = false;
+  let wasDuplicate = false;
   return (input) => {
     let appended = input.delta ?? input.text;
     if (!active) {
@@ -229,9 +217,13 @@ function createDuplicateParagraphProjector(): TextProjector {
       }
       appended = input.text;
     }
+    let completedParagraph = false;
+    let added = "";
     for (const part of appended.matchAll(/\n+|[^\n]+/g)) {
       if (part[0].startsWith("\n")) {
         if (newlines < 2 && newlines + part[0].length >= 2) {
+          // One append can leave and re-enter duplicate state across this boundary.
+          completedParagraph = true;
           if (!paragraph) {
             if (lastNormalized !== null) {
               pendingEmpty++;
@@ -239,6 +231,7 @@ function createDuplicateParagraphProjector(): TextProjector {
           } else if (equal && normalizedLength === lastNormalized?.length) {
             hasDuplicate = true;
           } else {
+            completed += (completed ? "\n\n" : "") + paragraph;
             lastNormalized = paragraph.replace(/\s+/g, " ");
           }
           paragraph = "";
@@ -260,12 +253,18 @@ function createDuplicateParagraphProjector(): TextProjector {
       }
       const piece = pending + content;
       pending = raw.slice(content.length);
-      if (!paragraph && pendingEmpty) {
-        pendingEmpty = 0;
-        lastNormalized = "";
-        equal = false;
+      if (!paragraph) {
+        const empty = "\n\n".repeat(pendingEmpty);
+        if (pendingEmpty) {
+          completed += empty;
+          pendingEmpty = 0;
+          lastNormalized = "";
+          equal = false;
+        }
+        added += completed ? empty + "\n\n" : "";
       }
       paragraph += piece;
+      added += piece;
       if (equal) {
         const normalized = piece.replace(/\s+/g, " ");
         equal = lastNormalized?.startsWith(normalized, normalizedLength) === true;
@@ -273,16 +272,29 @@ function createDuplicateParagraphProjector(): TextProjector {
       }
     }
     const duplicate = Boolean(paragraph) && equal && normalizedLength === lastNormalized?.length;
-    const projected =
-      hasDuplicate || duplicate ? collapseDuplicateParagraphs(input.text) : input.text;
-    const delta =
-      input.delta === null
-        ? null
-        : projected.startsWith(text)
-          ? projected.slice(text.length)
-          : null;
-    text = projected;
-    return projected === input.text && delta === input.delta ? input : { text, delta };
+    const collapsed = hasDuplicate || duplicate;
+    let delta = input.delta;
+    if (collapsed) {
+      delta =
+        input.delta === null || !wasCollapsed || duplicate !== wasDuplicate || completedParagraph
+          ? null
+          : added;
+      text =
+        delta === null
+          ? protectCode
+            ? collapseDuplicateParagraphs(input.text)
+            : completed + (paragraph && !duplicate ? (completed ? "\n\n" : "") + paragraph : "")
+          : text + delta;
+    } else {
+      text = input.text;
+      // A provisional duplicate can diverge, restoring every original separator, not just its own.
+      if (wasCollapsed) {
+        delta = null;
+      }
+    }
+    wasCollapsed = collapsed;
+    wasDuplicate = duplicate;
+    return { text, delta };
   };
 }
 

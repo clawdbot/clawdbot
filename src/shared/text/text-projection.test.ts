@@ -1,4 +1,5 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { findCodeRegions } from "./code-regions.js";
 import {
   applyTextFilters,
   createTextProjection,
@@ -7,6 +8,11 @@ import {
   trimTextFilter,
   type TextFilter,
 } from "./text-projection.js";
+
+vi.mock("./code-regions.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./code-regions.js")>();
+  return { ...actual, findCodeRegions: vi.fn(actual.findCodeRegions) };
+});
 
 describe("createTextProjection", () => {
   it("activates split markers, reprojects completed syntax, and replaces the source", () => {
@@ -160,4 +166,22 @@ describe("duplicate paragraphs", () => {
       expect(projection.append("word")).toEqual({ text: "New\n\nLast word", delta: " word" });
     },
   );
+
+  it("keeps code-bearing continuation appends on the incremental suffix path", () => {
+    const parser = vi.mocked(findCodeRegions);
+    parser.mockClear();
+    const code = "```text\ninside\n\ninside\n```";
+    const source = `${code}\n\nrepeat\n\nrepeat\n\ntail`;
+    const projection = createTextProjection([duplicateParagraphTextFilter]);
+    expect(projection.append(source).text).toBe(`${code}\n\nrepeat\n\ntail`);
+    const initialParses = parser.mock.calls.length;
+    expect(initialParses).toBeGreaterThan(0);
+
+    for (let index = 0; index < 256; index++) {
+      const delta = `-${index}`;
+      expect(projection.append(delta).delta).toBe(delta);
+    }
+    expect(parser).toHaveBeenCalledTimes(initialParses);
+    expect(projection.text).toBe(duplicateParagraphTextFilter.transform(projection.source));
+  });
 });
