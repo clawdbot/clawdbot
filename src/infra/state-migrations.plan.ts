@@ -1,6 +1,8 @@
 import { createHash } from "node:crypto";
+import fs from "node:fs/promises";
 import path from "node:path";
 import { stableStringify } from "@openclaw/normalization-core";
+import { sha256File } from "./crypto-digest.js";
 import {
   LEGACY_STATE_MIGRATION_PLAN_SCHEMA_VERSION,
   type LegacyStateMigrationMode,
@@ -13,6 +15,99 @@ export type PreparedLegacyStateMigrationStep = Omit<LegacyStateMigrationStepPlan
 
 function digest(value: unknown): string {
   return `sha256:${createHash("sha256").update(stableStringify(value)).digest("hex")}`;
+}
+
+async function digestFile(filePath: string): Promise<string> {
+  const before = await fs.lstat(filePath);
+  if (!before.isFile()) {
+    throw new Error(`Snapshot path is not a regular file: ${filePath}`);
+  }
+  const fileDigest = await sha256File(filePath);
+  const after = await fs.lstat(filePath);
+  if (
+    !after.isFile() ||
+    before.dev !== after.dev ||
+    before.ino !== after.ino ||
+    before.size !== after.size ||
+    before.mtimeMs !== after.mtimeMs
+  ) {
+    throw new Error(`Snapshot file changed while hashing: ${filePath}`);
+  }
+  return `sha256:${fileDigest}`;
+}
+
+async function digestDirectory(directory: string): Promise<string> {
+  const rootStat = await fs.lstat(directory);
+  if (!rootStat.isDirectory()) {
+    throw new Error(`Snapshot state path is not a directory: ${directory}`);
+  }
+  const hash = createHash("sha256");
+  const visit = async (current: string, relative: string): Promise<void> => {
+    const stat = await fs.lstat(current);
+    // A symlink can escape the copied tree after identity capture. Plans bind only
+    // regular entries owned by the supplied snapshot.
+    if (stat.isSymbolicLink()) {
+      throw new Error(`Snapshot tree contains a symbolic link: ${current}`);
+    }
+    const portableRelative = relative.split(path.sep).join("/");
+    if (stat.isFile()) {
+      const fileDigest = await sha256File(current);
+      const after = await fs.lstat(current);
+      if (
+        !after.isFile() ||
+        stat.dev !== after.dev ||
+        stat.ino !== after.ino ||
+        stat.size !== after.size ||
+        stat.mtimeMs !== after.mtimeMs
+      ) {
+        throw new Error(`Snapshot file changed while hashing: ${current}`);
+      }
+      hash.update("file\0").update(portableRelative).update("\0").update(fileDigest).update("\0");
+      return;
+    }
+    if (!stat.isDirectory()) {
+      throw new Error(`Snapshot tree contains a non-file entry: ${current}`);
+    }
+    hash.update("directory\0").update(portableRelative).update("\0");
+    const entries = (await fs.readdir(current)).toSorted();
+    for (const entry of entries) {
+      await visit(path.join(current, entry), path.join(relative, entry));
+    }
+    const verifiedEntries = (await fs.readdir(current)).toSorted();
+    if (
+      entries.length !== verifiedEntries.length ||
+      entries.some((entry, i) => entry !== verifiedEntries[i])
+    ) {
+      throw new Error(`Snapshot directory changed while hashing: ${current}`);
+    }
+  };
+  await visit(directory, "");
+  return `sha256:${hash.digest("hex")}`;
+}
+
+export async function captureLegacyStateSnapshotIdentity(params: {
+  configPath: string;
+  stateDir: string;
+}): Promise<{ configDigest?: string; stateDigest?: string; warnings: string[] }> {
+  const warnings: string[] = [];
+  const capture = async (label: string, pathname: string, read: () => Promise<string>) => {
+    try {
+      return await read();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      warnings.push(`Could not bind copied ${label} at ${pathname}: ${message}`);
+      return undefined;
+    }
+  };
+  const configPath = path.resolve(params.configPath);
+  const stateDir = path.resolve(params.stateDir);
+  const configDigest = await capture("config", configPath, () => digestFile(configPath));
+  const stateDigest = await capture("state", stateDir, () => digestDirectory(stateDir));
+  return {
+    ...(configDigest ? { configDigest } : {}),
+    ...(stateDigest ? { stateDigest } : {}),
+    warnings,
+  };
 }
 
 function normalizeEndpoint(endpoint: LegacyStateMigrationEndpoint): LegacyStateMigrationEndpoint {
@@ -47,18 +142,18 @@ export function createLegacyStateMigrationPlan(params: {
   snapshot: LegacyStateMigrationPlan["snapshot"];
   steps: readonly PreparedLegacyStateMigrationStep[];
   warnings?: readonly string[];
+  refusal?: { code: string; message: string };
 }): LegacyStateMigrationPlan {
   const candidate = {
     root: path.resolve(params.candidate.root),
     version: params.candidate.version,
-    digest: params.candidate.digest,
   };
   const snapshot = {
     homeDir: path.resolve(params.snapshot.homeDir),
     configPath: path.resolve(params.snapshot.configPath),
-    configDigest: params.snapshot.configDigest,
     stateDir: path.resolve(params.snapshot.stateDir),
-    stateDigest: params.snapshot.stateDigest,
+    ...(params.snapshot.configDigest ? { configDigest: params.snapshot.configDigest } : {}),
+    ...(params.snapshot.stateDigest ? { stateDigest: params.snapshot.stateDigest } : {}),
   };
   const stepIds = new Set<string>();
   const steps = params.steps.map((step): LegacyStateMigrationStepPlan => {
@@ -78,23 +173,43 @@ export function createLegacyStateMigrationPlan(params: {
             : "planned",
     };
   });
+  const warnings = [...(params.warnings ?? [])];
+  const refusal =
+    params.refusal ??
+    (warnings.length > 0
+      ? {
+          code: "migration-planning-warning",
+          message: warnings.join("\n"),
+        }
+      : undefined);
   const plan = {
     schemaVersion: LEGACY_STATE_MIGRATION_PLAN_SCHEMA_VERSION,
     mutationAllowed: false as const,
-    outcome: params.warnings?.length ? ("refused" as const) : ("planned" as const),
-    warnings: [...(params.warnings ?? [])],
-    ...(params.warnings?.length
-      ? {
-          refusal: {
-            code: "migration-planning-warning",
-            message: params.warnings.join("\n"),
-          },
-        }
-      : {}),
+    outcome: refusal ? ("refused" as const) : ("planned" as const),
+    warnings,
+    ...(refusal ? { refusal } : {}),
     mode: params.mode,
     candidate,
     snapshot,
     steps,
   };
   return { ...plan, planIntegrity: digest(plan) };
+}
+
+export function refuseLegacyStateMigrationPlan(
+  plan: LegacyStateMigrationPlan,
+  refusal: { code: string; message: string },
+): LegacyStateMigrationPlan {
+  const { planIntegrity: _planIntegrity, ...unsignedPlan } = plan;
+  const warnings = unsignedPlan.warnings.includes(refusal.message)
+    ? unsignedPlan.warnings
+    : [...unsignedPlan.warnings, refusal.message];
+  return createLegacyStateMigrationPlan({
+    mode: unsignedPlan.mode,
+    candidate: unsignedPlan.candidate,
+    snapshot: unsignedPlan.snapshot,
+    steps: unsignedPlan.steps.map(({ outcome: _outcome, ...step }) => step),
+    warnings,
+    refusal,
+  });
 }

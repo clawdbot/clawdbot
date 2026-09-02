@@ -1309,9 +1309,9 @@ function buildLegacyStateMigrationSteps(
   }
 
   return [
+    ...eagerStateSteps,
     ...managedWorktreePrelude,
     ...sharedSteps,
-    ...eagerStateSteps,
     ...doctorStateSteps,
     ...finalSteps,
   ];

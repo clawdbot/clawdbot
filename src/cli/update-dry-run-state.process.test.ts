@@ -198,14 +198,8 @@ describe("update process state", () => {
       root,
       "--snapshot-config",
       configPath,
-      "--config-digest",
-      `sha256:${await sha256File(configPath)}`,
       "--snapshot-state",
       stateDir,
-      "--state-digest",
-      "sha256:copied-state",
-      "--candidate-digest",
-      "sha256:candidate-runtime",
       "--json",
     ]);
 
@@ -213,12 +207,17 @@ describe("update process state", () => {
     expect(result.status, result.stderr).toBe(0);
     const plan = JSON.parse(result.stdout) as {
       mutationAllowed: boolean;
-      candidate: { root: string; digest: string };
+      candidate: { root: string; version: string };
+      snapshot: { configDigest: string; stateDigest: string };
       steps: Array<{ id: string; outcome: string }>;
     };
     expect(plan).toMatchObject({
       mutationAllowed: false,
-      candidate: { root: path.resolve("."), digest: "sha256:candidate-runtime" },
+      candidate: { root: path.resolve("."), version: expect.any(String) },
+      snapshot: {
+        configDigest: `sha256:${await sha256File(configPath)}`,
+        stateDigest: expect.stringMatching(/^sha256:[a-f0-9]{64}$/u),
+      },
     });
     expect(plan.steps).toEqual(
       expect.arrayContaining([
@@ -227,6 +226,68 @@ describe("update process state", () => {
         expect.objectContaining({ id: "plugin-doctor-state", outcome: "deferred" }),
       ]),
     );
+    expect(await snapshotTree(root)).toEqual(before);
+  });
+
+  it("rejects caller-supplied snapshot identity without touching the copy", async () => {
+    const root = tempDirs.make("openclaw-update-migration-plan-identity-");
+    const configPath = path.join(root, "config", "openclaw.json");
+    const stateDir = path.join(root, "state");
+    await fs.mkdir(path.dirname(configPath), { recursive: true });
+    await fs.mkdir(stateDir, { recursive: true });
+    await fs.writeFile(configPath, "{}\n");
+    const before = await snapshotTree(root);
+
+    const result = runUpdateProcess(root, [
+      "update",
+      "migration-plan",
+      "--snapshot-home",
+      root,
+      "--snapshot-config",
+      configPath,
+      "--snapshot-state",
+      stateDir,
+      "--config-digest",
+      "sha256:caller-claim",
+      "--json",
+    ]);
+
+    expect(result.error).toBeUndefined();
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain('does not recognize option "--config-digest"');
+    expect(await snapshotTree(root)).toEqual(before);
+  });
+
+  it("refuses a copied state path that is not a directory", async () => {
+    const root = tempDirs.make("openclaw-update-migration-plan-unbound-");
+    const configPath = path.join(root, "config", "openclaw.json");
+    const stateDir = path.join(root, "copied-state-file");
+    await fs.mkdir(path.dirname(configPath), { recursive: true });
+    await fs.mkdir(path.join(root, "state"));
+    await fs.writeFile(configPath, "{}\n");
+    await fs.writeFile(stateDir, "not a state directory\n");
+    const before = await snapshotTree(root);
+
+    const result = runUpdateProcess(root, [
+      "update",
+      "migration-plan",
+      "--snapshot-home",
+      root,
+      "--snapshot-config",
+      configPath,
+      "--snapshot-state",
+      stateDir,
+      "--json",
+    ]);
+
+    expect(result.error).toBeUndefined();
+    expect(result.status).toBe(1);
+    expect(JSON.parse(result.stdout)).toMatchObject({
+      mutationAllowed: false,
+      outcome: "refused",
+      refusal: { code: "snapshot-identity-unavailable" },
+      snapshot: { configDigest: `sha256:${await sha256File(configPath)}` },
+    });
     expect(await snapshotTree(root)).toEqual(before);
   });
 

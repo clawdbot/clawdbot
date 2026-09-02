@@ -105,7 +105,6 @@ describe("legacy state migration caller mode", () => {
       candidate: {
         root: path.join(fixture.root, "candidate"),
         version: "2026.9.2-candidate",
-        digest: "sha256:candidate",
       },
       snapshot: {
         homeDir: fixture.homeDir,
@@ -126,7 +125,6 @@ describe("legacy state migration caller mode", () => {
       candidate: {
         root: path.resolve(fixture.root, "candidate"),
         version: "2026.9.2-candidate",
-        digest: "sha256:candidate",
       },
       snapshot: {
         homeDir: fixture.homeDir,
@@ -180,7 +178,7 @@ describe("legacy state migration caller mode", () => {
     const plan = await planLegacyStateMigrationsReadOnly({
       cfg,
       mode: "automatic",
-      candidate: { root: fixture.root, version: "test", digest: "sha256:candidate" },
+      candidate: { root: fixture.root, version: "test" },
       snapshot: {
         homeDir: fixture.homeDir,
         configPath: fixture.configPath,
@@ -208,7 +206,7 @@ describe("legacy state migration caller mode", () => {
     const plan = await planLegacyStateMigrationsReadOnly({
       cfg: fixture.cfg,
       mode: "doctor",
-      candidate: { root: fixture.root, version: "test", digest: "sha256:candidate" },
+      candidate: { root: fixture.root, version: "test" },
       snapshot: {
         homeDir: fixture.homeDir,
         configPath: fixture.configPath,
@@ -234,6 +232,19 @@ describe("legacy state migration caller mode", () => {
     const { execPath, tuiPath } = writeLegacyDoctorSources(fixture.stateDir, {
       terminal: { sessionKey: "agent:main:tui:execute", updatedAt: 100 },
     });
+    const plan = await planLegacyStateMigrationsReadOnly({
+      cfg: {},
+      mode: "doctor",
+      candidate: { root: fixture.root, version: "test" },
+      snapshot: {
+        homeDir: fixture.homeDir,
+        configPath: fixture.configPath,
+        configDigest: sha256(fixture.configBytes),
+        stateDir: fixture.stateDir,
+        stateDigest: "sha256:copied-state",
+      },
+      env: fixture.env,
+    });
 
     const result = await autoMigrateLegacyState({
       cfg: {},
@@ -244,6 +255,9 @@ describe("legacy state migration caller mode", () => {
     });
 
     expect(result.mode).toBe("doctor");
+    expect(result.stepReceipts.map((receipt) => receipt.id)).toEqual(
+      plan.steps.map((step) => step.id),
+    );
     expect(result.stepReceipts.find((receipt) => receipt.id === "exec-approvals")).toMatchObject({
       source: [{ kind: "path", path: execPath }],
       outcome: "completed",

@@ -218,14 +218,13 @@ export type LegacyStateMigrationPlan = {
   candidate: {
     root: string;
     version: string;
-    digest: string;
   };
   snapshot: {
     homeDir: string;
     configPath: string;
-    configDigest: string;
+    configDigest?: string;
     stateDir: string;
-    stateDigest: string;
+    stateDigest?: string;
   };
   steps: LegacyStateMigrationStepPlan[];
   planIntegrity: string;
