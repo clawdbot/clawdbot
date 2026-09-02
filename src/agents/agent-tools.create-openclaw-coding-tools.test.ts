@@ -2672,35 +2672,68 @@ describe("createOpenClawCodingTools", () => {
     }
   });
 
-  it("records sandbox-backed memory writes before mutation", async () => {
-    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-memory-sandbox-taint-"));
-    try {
-      const sandbox = createAgentToolsSandboxContext({
-        workspaceDir,
-        fsBridge: createHostSandboxFsBridge(workspaceDir),
-        workspaceAccess: "rw",
-      });
-      const tools = createOpenClawCodingTools({
-        workspaceDir,
-        sandbox,
-        senderIsOwner: true,
-        isTurnTainted: () => true,
-      });
-      await requireToolExecute(requireTool(tools, "write"))("sandbox-memory", {
-        path: "memory/2026-07-29.md",
-        content: "sandbox network note\n",
-      });
-
-      await expect(
-        readMemoryArtifactProvenance({
+  it.each(["relative", "container"])(
+    "records sandbox-backed %s memory writes before mutation",
+    async (pathKind) => {
+      const workspaceDir = await fs.mkdtemp(
+        path.join(os.tmpdir(), "openclaw-memory-sandbox-taint-"),
+      );
+      const sandboxRoot = path.join(workspaceDir, "private");
+      await fs.mkdir(sandboxRoot);
+      try {
+        const sandbox = createAgentToolsSandboxContext({
+          workspaceDir: sandboxRoot,
+          agentWorkspaceDir: workspaceDir,
+          fsBridge: createContainerWorkspaceSandboxFsBridge(sandboxRoot),
+          workspaceAccess: "none",
+        });
+        const tools = createOpenClawCodingTools({
           workspaceDir,
-          relativePath: "memory/2026-07-29.md",
-        }),
-      ).resolves.toMatchObject({ originClass: "untrusted" });
-    } finally {
-      await fs.rm(workspaceDir, { recursive: true, force: true });
-    }
-  });
+          sandbox,
+          senderIsOwner: true,
+          isTurnTainted: () => true,
+        });
+        const filePath = (relative: string) =>
+          pathKind === "container" ? `/workspace/${relative}` : relative;
+        await requireToolExecute(requireTool(tools, "write"))("sandbox-project", {
+          path: filePath("project.txt"),
+          content: "before\n",
+        });
+        await requireToolExecute(requireTool(tools, "edit"))("sandbox-edit", {
+          path: filePath("project.txt"),
+          edits: [{ oldText: "before", newText: "after" }],
+        });
+        await expect(fs.readFile(path.join(sandboxRoot, "project.txt"), "utf8")).resolves.toBe(
+          "after\n",
+        );
+        await requireToolExecute(requireTool(tools, "write"))("sandbox-memory", {
+          path: filePath("memory/2026-07-29.md"),
+          content: "sandbox network note\n",
+        });
+        await requireToolExecute(requireTool(tools, "apply_patch"))("sandbox-patch", {
+          input: `*** Begin Patch\n*** Add File: ${filePath("memory/nested/project.md")}\n+project note\n*** End Patch`,
+        });
+        await expect(
+          readMemoryArtifactProvenance({
+            workspaceDir: sandboxRoot,
+            relativePath: "memory/nested/project.md",
+          }),
+        ).resolves.toMatchObject({ originClass: "untrusted" });
+
+        await expect(
+          readMemoryArtifactProvenance({
+            workspaceDir: sandboxRoot,
+            relativePath: "memory/2026-07-29.md",
+          }),
+        ).resolves.toMatchObject({ originClass: "untrusted" });
+        await expect(
+          readMemoryArtifactProvenance({ workspaceDir, relativePath: "memory/2026-07-29.md" }),
+        ).resolves.toBeUndefined();
+      } finally {
+        await fs.rm(workspaceDir, { recursive: true, force: true });
+      }
+    },
+  );
 
   it("rejects legacy alias parameters", async () => {
     const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-legacy-alias-"));
