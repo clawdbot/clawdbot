@@ -10,6 +10,7 @@ import {
   type RuntimeEnv,
 } from "openclaw/plugin-sdk/runtime-env";
 import {
+  SignalSseRejectionError,
   type SignalSseEvent,
   type SignalTransportKind,
   streamSignalEvents,
@@ -22,18 +23,15 @@ const DEFAULT_RECONNECT_POLICY: BackoffPolicy = {
   jitter: 0.2,
 };
 
-// Only the native signal-cli transport (client.ts) throws this shape on a non-2xx
-// daemon response; the container/WebSocket transport never surfaces a status this way,
-// so an unmatched message falls through to the generic transient-error handling below.
-const SSE_REJECTION_STATUS_PATTERN = /^Signal SSE failed \((\d{3})\b/;
+// Only the native signal-cli transport (client.ts) throws SignalSseRejectionError on a
+// non-2xx daemon response; the container/WebSocket transport never throws this type, so
+// an unmatched rejection falls through to the generic transient-error handling below.
 const UNAUTHORIZED_ACCOUNT_STATUS = 401;
 const UNAUTHORIZED_ACCOUNT_MESSAGE =
   'Signal daemon rejected the connection (401 Unauthorized). This usually means the account needs re-linking (`signal-cli link -n "OpenClaw"`) or re-registering; if the daemon sits behind its own auth proxy, its credentials may need attention instead. Restart the channel once resolved.';
 
-function parseSseRejectionStatus(err: unknown): number | undefined {
-  const message = err instanceof Error ? err.message : undefined;
-  const match = message ? SSE_REJECTION_STATUS_PATTERN.exec(message) : null;
-  return match ? Number(match[1]) : undefined;
+function readSseRejectionStatus(err: unknown): number | undefined {
+  return err instanceof SignalSseRejectionError ? err.status : undefined;
 }
 
 export type SignalStatusSink = (patch: Omit<ChannelAccountSnapshot, "accountId">) => void;
@@ -121,7 +119,7 @@ export async function runSignalSseLoop({
         return;
       }
       runtime.error?.(`Signal stream error: ${String(err)}`);
-      if (parseSseRejectionStatus(err) === UNAUTHORIZED_ACCOUNT_STATUS) {
+      if (readSseRejectionStatus(err) === UNAUTHORIZED_ACCOUNT_STATUS) {
         runtime.log?.(`Signal reconnect stopped: ${UNAUTHORIZED_ACCOUNT_MESSAGE}`);
         statusSink?.(channelBlockedPatch(UNAUTHORIZED_ACCOUNT_MESSAGE, { connected: false }));
         return;
