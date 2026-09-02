@@ -52,4 +52,64 @@ class NetworkMonitorTest {
 
     assertEquals(false, state.update("wifi", isValidated = true))
   }
+
+  @Test
+  fun bootstrapGraceCoversTheRegistrationReplayWindow() {
+    // registerNetworkCallback() replays every already-validated network's state right after
+    // registration, and there is no non-deprecated synchronous way to seed all of them up front
+    // (only the single active network). Without this grace window, a second already-validated
+    // network's replay would misread as a fresh restore at every cold start. Regression for the
+    // P2 finding on #127873.
+    val registeredAt = 1_000_000_000L
+
+    assertEquals(true, isWithinNetworkMonitorBootstrapGrace(registeredAt, registeredAt))
+    assertEquals(
+      true,
+      isWithinNetworkMonitorBootstrapGrace(registeredAt, registeredAt + NETWORK_MONITOR_BOOTSTRAP_GRACE_NANOS - 1),
+    )
+  }
+
+  @Test
+  fun bootstrapGraceExpiresSoALaterRestoreStillWakes() {
+    val registeredAt = 1_000_000_000L
+
+    assertEquals(
+      false,
+      isWithinNetworkMonitorBootstrapGrace(registeredAt, registeredAt + NETWORK_MONITOR_BOOTSTRAP_GRACE_NANOS),
+    )
+    assertEquals(
+      false,
+      isWithinNetworkMonitorBootstrapGrace(registeredAt, registeredAt + NETWORK_MONITOR_BOOTSTRAP_GRACE_NANOS * 100),
+    )
+  }
+
+  @Test
+  fun notifyDebounceCoalescesASimultaneousMultiNetworkRestore() {
+    // Wi-Fi and cellular reactivating together (e.g. leaving doze) each produce their own
+    // ValidatedNetworkState edge; without coalescing, the second one's fan-out would close the
+    // reconnect attempt the first one just started. Regression for the P2 finding on #127873.
+    val firstNotifyAt = 1_000_000_000L
+
+    assertEquals(false, isWithinNetworkMonitorNotifyDebounce(lastNotifiedAtNanos = null, nowNanos = firstNotifyAt))
+    assertEquals(
+      true,
+      isWithinNetworkMonitorNotifyDebounce(
+        lastNotifiedAtNanos = firstNotifyAt,
+        nowNanos = firstNotifyAt + NETWORK_MONITOR_NOTIFY_DEBOUNCE_NANOS - 1,
+      ),
+    )
+  }
+
+  @Test
+  fun notifyDebounceExpiresSoALaterRestoreStillWakes() {
+    val firstNotifyAt = 1_000_000_000L
+
+    assertEquals(
+      false,
+      isWithinNetworkMonitorNotifyDebounce(
+        lastNotifiedAtNanos = firstNotifyAt,
+        nowNanos = firstNotifyAt + NETWORK_MONITOR_NOTIFY_DEBOUNCE_NANOS,
+      ),
+    )
+  }
 }

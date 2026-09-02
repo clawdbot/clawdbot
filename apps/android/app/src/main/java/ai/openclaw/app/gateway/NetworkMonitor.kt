@@ -28,14 +28,36 @@ internal class NetworkMonitor(
   // should signal.
   private val validatedNetworks = ValidatedNetworkState<Network>()
 
+  // registerNetworkCallback() replays every already-matching network's current state right after
+  // registration, and that replay is indistinguishable from a later genuine change: there is no
+  // non-deprecated synchronous "list every current network" call to seed all of them up front
+  // (only the single active one, below), so any other network that was already validated before
+  // this monitor existed looks like a fresh restore the moment its replay arrives. The replay
+  // delivers cached state ConnectivityService already holds, not a fresh validation check, so it
+  // resolves within milliseconds of registration; the window only needs to be short enough to
+  // cover that, not long enough to risk absorbing a genuine restore that happens to land in the
+  // same instant. A missed genuine restore in this narrow window is not unbounded: the affected
+  // session still falls back to its own independent backoff retry, the same bound this PR already
+  // asks for acceptance of elsewhere in this body.
+  private val registeredAtNanos = System.nanoTime()
+
+  // The fan-out a notification triggers reaches every session regardless of which network
+  // changed, so when several transports validate close together (e.g. Wi-Fi and cellular both
+  // reactivating from doze at once) each one's own edge would otherwise fire its own full
+  // fan-out — repeatedly closing a session's just-started reconnect attempt before its handshake
+  // can finish. This debounces to one notification per burst; nothing about which network caused
+  // it is lost, because the fan-out is not per-network to begin with.
+  @Volatile private var lastNotifiedAtNanos: Long? = null
+
   private val callback =
     object : ConnectivityManager.NetworkCallback() {
       override fun onCapabilitiesChanged(
         network: Network,
         capabilities: NetworkCapabilities,
       ) {
-        if (validatedNetworks.update(network, isTransportValidated(capabilities))) {
-          notifyValidatedNetworkAvailable()
+        val justValidated = validatedNetworks.update(network, isTransportValidated(capabilities))
+        if (justValidated && !isWithinNetworkMonitorBootstrapGrace(registeredAtNanos, System.nanoTime())) {
+          notifyValidatedNetworkAvailableDebounced()
         }
       }
 
@@ -59,6 +81,15 @@ internal class NetworkMonitor(
     } catch (err: Throwable) {
       Log.w(logTag, "registerNetworkCallback failed: ${err.message ?: err::class.java.simpleName}")
     }
+  }
+
+  private fun notifyValidatedNetworkAvailableDebounced() {
+    val now = System.nanoTime()
+    synchronized(this) {
+      if (isWithinNetworkMonitorNotifyDebounce(lastNotifiedAtNanos, now)) return
+      lastNotifiedAtNanos = now
+    }
+    notifyValidatedNetworkAvailable()
   }
 
   private fun notifyValidatedNetworkAvailable() {
@@ -117,3 +148,38 @@ internal class ValidatedNetworkState<T>(
  * predicate can be unit-tested without a Robolectric ConnectivityManager shadow.
  */
 internal fun isTransportValidated(capabilities: NetworkCapabilities): Boolean = capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
+
+/**
+ * How long after registration a just-validated network is treated as registration replay, not a
+ * restore. Short by design: the replay carries cached state, not a fresh validation check, so it
+ * resolves in milliseconds; this only needs to outlast that, not cover any real elapsed time.
+ */
+internal const val NETWORK_MONITOR_BOOTSTRAP_GRACE_NANOS = 500_000_000L
+
+/**
+ * Whether a just-validated network observed at [nowNanos] is still inside the registration replay
+ * window that started at [registeredAtNanos]. Exposed internal so the boundary can be unit-tested
+ * without a Robolectric ConnectivityManager shadow.
+ */
+internal fun isWithinNetworkMonitorBootstrapGrace(
+  registeredAtNanos: Long,
+  nowNanos: Long,
+): Boolean = nowNanos - registeredAtNanos < NETWORK_MONITOR_BOOTSTRAP_GRACE_NANOS
+
+/**
+ * How long one notification suppresses another. Long enough to coalesce several transports
+ * validating together (radios reactivating from doze tend to land within the same instant, not
+ * seconds apart); short enough that a later, genuinely separate restore is not meaningfully
+ * delayed.
+ */
+internal const val NETWORK_MONITOR_NOTIFY_DEBOUNCE_NANOS = 2_000_000_000L
+
+/**
+ * Whether a notification at [nowNanos] falls inside the debounce window after [lastNotifiedAtNanos]
+ * (`null` meaning no notification has happened yet). Exposed internal so the boundary can be
+ * unit-tested without a Robolectric ConnectivityManager shadow.
+ */
+internal fun isWithinNetworkMonitorNotifyDebounce(
+  lastNotifiedAtNanos: Long?,
+  nowNanos: Long,
+): Boolean = lastNotifiedAtNanos != null && nowNanos - lastNotifiedAtNanos < NETWORK_MONITOR_NOTIFY_DEBOUNCE_NANOS

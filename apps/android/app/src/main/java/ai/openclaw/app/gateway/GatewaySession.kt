@@ -500,7 +500,7 @@ class GatewaySession(
 
   /** Forces the current socket closed so the loop reconnects to the current desired endpoint. */
   fun reconnect() {
-    signalReconnect(resumeAuthPaused = true)
+    signalReconnect(resumeAuthPaused = true, skipIfReady = false)
   }
 
   /**
@@ -509,14 +509,19 @@ class GatewaySession(
    * A network-restore fan-out reaches every session, including ones that are already connected
    * over a different route (e.g. cellular kept a secondary alive while its own Wi-Fi was down).
    * Forcing that connection closed would interrupt real in-flight work for no benefit, so a ready
-   * session is left alone here; [reconnect] still overrides it for a deliberate manual retry.
+   * session is left alone here; [reconnect] still overrides it for a deliberate manual retry. The
+   * readiness check itself happens inside [signalReconnect]'s lock, not here: reading it outside
+   * the lock would leave a window where a connecting session finishes becoming ready between the
+   * check and the close, and gets closed anyway.
    */
   internal fun retryAfterNetworkRestore() {
-    if (isReady()) return
-    signalReconnect(resumeAuthPaused = false)
+    signalReconnect(resumeAuthPaused = false, skipIfReady = true)
   }
 
-  private fun signalReconnect(resumeAuthPaused: Boolean) {
+  private fun signalReconnect(
+    resumeAuthPaused: Boolean,
+    skipIfReady: Boolean,
+  ) {
     synchronized(lifecycleLock) {
       val target = desired ?: return
       if (resumeAuthPaused) {
@@ -524,6 +529,7 @@ class GatewaySession(
       } else if (target.reconnectPausedForAuthFailure) {
         return
       }
+      if (skipIfReady && currentConnection?.isReady() == true) return
       currentConnection?.closeQuietly()
       reconnectWakeCount += 1
       reconnectSignal.trySend(Unit)
