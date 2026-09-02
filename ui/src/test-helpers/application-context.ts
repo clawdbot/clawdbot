@@ -22,14 +22,18 @@ const emptySidebarAttentionStore = {
 
 export function createApplicationContextProvider(context: ApplicationContext<RouteId>) {
   const host = document.createElement("div");
+  const normalize = (value: ApplicationContext<RouteId>) => {
+    if (!value.sidebarAttention) {
+      Object.assign(value, { sidebarAttention: emptySidebarAttentionStore });
+    }
+    return value;
+  };
   const provider = new ContextProvider(host, {
     context: applicationContext,
-    initialValue: context.sidebarAttention
-      ? context
-      : { ...context, sidebarAttention: emptySidebarAttentionStore },
+    initialValue: normalize(context),
   });
   return Object.assign(host, {
-    setContext: (value: ApplicationContext<RouteId>) => provider.setValue(value),
+    setContext: (value: ApplicationContext<RouteId>) => provider.setValue(normalize(value)),
   });
 }
 

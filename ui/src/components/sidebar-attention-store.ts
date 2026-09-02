@@ -157,17 +157,17 @@ export class SidebarAttentionStoreController implements StoreController {
     });
   }
 
-  private reconcileDismissals(): void {
+  private reconcileDismissals(scope: {
+    cronInventoryComplete: boolean;
+    modelAuthAgentId: string | null;
+  }): void {
     if (!this.dismissedScope) {
       return;
     }
     this.dismissed = reconcileSidebarAttentionDismissals({
       active: this.buildEntries().flatMap((entry) => (entry.dismissal ? [entry.dismissal] : [])),
       gatewayUrl: this.dismissedScope,
-      scope: {
-        cronInventoryComplete: this.sources.agentSelection.state.scopeId === null,
-        modelAuthAgentId: this.modelAuthAgentId,
-      },
+      scope,
     });
   }
 
@@ -191,39 +191,47 @@ export class SidebarAttentionStoreController implements StoreController {
       this.ownerEquals(owner, this.owner()) &&
       this.sources.agentSelection.state.selectedId === agentScope.selectedId &&
       this.sources.agentSelection.state.scopeId === agentScope.scopeId;
-    const loads: Promise<unknown>[] = [
-      Promise.all([loadCronJobsPage(cron), loadCronStatus(cron)]).then(() => {
-        if (current()) {
-          this.cronJobs = cron.cronJobs;
-          this.cronSchedulerEnabled = cron.cronStatus?.enabled ?? null;
-        }
-      }),
-    ];
+    const publishSource = (scope: {
+      cronInventoryComplete: boolean;
+      modelAuthAgentId: string | null;
+    }) => {
+      if (!current()) {
+        return;
+      }
+      this.loadedAtMs = Date.now();
+      this.reconcileDismissals(scope);
+      this.onChange();
+    };
+    void Promise.all([loadCronJobsPage(cron), loadCronStatus(cron)]).then(() => {
+      if (current()) {
+        this.cronJobs = cron.cronJobs;
+        this.cronSchedulerEnabled = cron.cronStatus?.enabled ?? null;
+        publishSource({
+          cronInventoryComplete: agentScope.scopeId === null,
+          modelAuthAgentId: null,
+        });
+      }
+    });
     if (
       (refreshModelAuth || agentScope.selectedId !== this.modelAuthAgentId) &&
       agentScope.selectedId
     ) {
-      loads.push(
-        loadModelAuthStatus(client, { agentId: agentScope.selectedId })
-          .catch(() => null)
-          .then((status) => {
-            if (current()) {
-              this.modelAuthStatus = status;
-              this.modelAuthAgentId = agentScope.selectedId;
-            }
-          }),
-      );
+      void loadModelAuthStatus(client, { agentId: agentScope.selectedId })
+        .catch(() => null)
+        .then((status) => {
+          if (current()) {
+            this.modelAuthStatus = status;
+            this.modelAuthAgentId = agentScope.selectedId;
+            publishSource({
+              cronInventoryComplete: false,
+              modelAuthAgentId: agentScope.selectedId,
+            });
+          }
+        });
     } else if (!agentScope.selectedId) {
       this.modelAuthStatus = null;
       this.modelAuthAgentId = null;
     }
-    void Promise.allSettled(loads).then(() => {
-      if (current()) {
-        this.loadedAtMs = Date.now();
-        this.reconcileDismissals();
-        this.onChange();
-      }
-    });
   }
 
   private synchronizeGateway(): void {
