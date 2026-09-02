@@ -6225,11 +6225,14 @@ describe("update-cli", () => {
       );
     }
     expect(
-      (await fs.readdir(nodeModules)).filter(
-        (entry) =>
-          entry.startsWith(".openclaw-update-stage-") ||
-          entry.startsWith(".openclaw-backup-") ||
-          entry.startsWith(".openclaw.shim-backup-"),
+      (await fs.readdir(nodeModules)).filter((entry) =>
+        [
+          ".openclaw-update-stage-",
+          ".openclaw.package-backup-",
+          ".openclaw-package-backup-",
+          ".openclaw.shim-backup-",
+          ".openclaw-shim-backup-",
+        ].some((prefix) => entry.startsWith(prefix)),
       ),
     ).toEqual([]);
     expectNoSideEffects(serviceStart, serviceRestart);
