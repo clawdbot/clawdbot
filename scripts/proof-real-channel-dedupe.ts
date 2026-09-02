@@ -3,6 +3,7 @@
  * Bot API boundary. No Telegram credentials or external network are needed.
  */
 
+import { createHash } from "node:crypto";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
@@ -23,8 +24,94 @@ type RecordedRequest = {
   body: Record<string, unknown>;
 };
 
+type RecordedMultipartFile = {
+  filename: string;
+  contentType: string;
+  byteLength: number;
+  contentSha256: string;
+};
+
 const TINY_PNG_BASE64 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9ZQmcAAAAASUVORK5CYII=";
+const TINY_PNG_BYTES = Buffer.from(TINY_PNG_BASE64, "base64");
+const TINY_PNG_SHA256 = createHash("sha256").update(TINY_PNG_BYTES).digest("hex");
+const PROOF_CHAT_ID = "12345";
+const PROOF_MEDIA_FILENAME = "report.png";
+
+function parseMultipartFormData(body: Buffer, contentType: string): Record<string, unknown> {
+  const boundaryMatch = /boundary=(?:"([^"]+)"|([^;]+))/i.exec(contentType);
+  const boundary = boundaryMatch?.[1] ?? boundaryMatch?.[2]?.trim();
+  if (!boundary) {
+    throw new Error("multipart request is missing its boundary");
+  }
+
+  const parts = body.toString("latin1").split(`--${boundary}`);
+  const fields: Record<string, unknown> = {};
+  for (const rawPart of parts.slice(1)) {
+    if (rawPart.startsWith("--")) {
+      break;
+    }
+    const part = rawPart.startsWith("\r\n") ? rawPart.slice(2) : rawPart;
+    const separator = part.indexOf("\r\n\r\n");
+    if (separator < 0) {
+      continue;
+    }
+    const headers = part.slice(0, separator);
+    let value = part.slice(separator + 4);
+    if (value.endsWith("\r\n")) {
+      value = value.slice(0, -2);
+    }
+    const disposition = /(?:^|\r\n)content-disposition:[^\r\n]+/i.exec(headers)?.[0];
+    const nameMatch = /\bname=(?:"([^"]+)"|([^;\s]+))/i.exec(disposition ?? "");
+    const name = nameMatch?.[1] ?? nameMatch?.[2];
+    if (!name) {
+      continue;
+    }
+    const filenameMatch = /\bfilename=(?:"([^"]*)"|([^;\s]+))/i.exec(headers);
+    const filename = filenameMatch?.[1] ?? filenameMatch?.[2];
+    if (filename !== undefined) {
+      const fileBytes = Buffer.from(value, "latin1");
+      fields[name] = {
+        filename,
+        contentType: /(?:^|\r\n)content-type:\s*([^\r\n]+)/i.exec(headers)?.[1]?.trim() ?? "",
+        byteLength: fileBytes.length,
+        contentSha256: createHash("sha256").update(fileBytes).digest("hex"),
+      } satisfies RecordedMultipartFile;
+    } else {
+      fields[name] = value;
+    }
+  }
+  return fields;
+}
+
+function validatePhotoRequest(body: Record<string, unknown>): string | undefined {
+  if (body.chat_id !== PROOF_CHAT_ID) {
+    return `unexpected sendPhoto chat_id: ${String(body.chat_id)}`;
+  }
+  const photo = body.photo;
+  if (typeof photo !== "string" || !photo.startsWith("attach://")) {
+    return "sendPhoto is missing its multipart photo attachment reference";
+  }
+  const attachmentName = photo.slice("attach://".length);
+  const attachment = body[attachmentName];
+  if (!attachment || typeof attachment !== "object" || Array.isArray(attachment)) {
+    return "sendPhoto attachment reference has no multipart file part";
+  }
+  const file = attachment as Partial<RecordedMultipartFile>;
+  if (file.filename !== PROOF_MEDIA_FILENAME) {
+    return `unexpected photo filename: ${String(file.filename)}`;
+  }
+  if (!file.contentType) {
+    return "multipart photo file is missing its content type";
+  }
+  if (file.byteLength !== TINY_PNG_BYTES.length) {
+    return `unexpected photo byte length: ${String(file.byteLength)}`;
+  }
+  if (file.contentSha256 !== TINY_PNG_SHA256) {
+    return `unexpected photo sha256: ${String(file.contentSha256)}`;
+  }
+  return undefined;
+}
 
 async function createBotApiRecorder() {
   const requests: RecordedRequest[] = [];
@@ -34,28 +121,41 @@ async function createBotApiRecorder() {
       for await (const chunk of request) {
         chunks.push(Buffer.from(chunk));
       }
-      const rawBody = Buffer.concat(chunks).toString("utf8");
+      const rawBody = Buffer.concat(chunks);
       const contentType = request.headers["content-type"] ?? "";
       let body: Record<string, unknown> = {};
-      if (rawBody) {
-        body = contentType.includes("application/json")
-          ? JSON.parse(rawBody)
-          : Object.fromEntries(new URLSearchParams(rawBody).entries());
+      let parseError: string | undefined;
+      if (rawBody.length > 0) {
+        try {
+          body = contentType.includes("application/json")
+            ? JSON.parse(rawBody.toString("utf8"))
+            : contentType.includes("multipart/form-data")
+              ? parseMultipartFormData(rawBody, contentType)
+              : Object.fromEntries(new URLSearchParams(rawBody.toString("utf8")).entries());
+        } catch (error) {
+          parseError = error instanceof Error ? error.message : String(error);
+        }
       }
       const method = (request.url ?? "/").split("/").at(-1) ?? "unknown";
       requests.push({ method, body });
-      const chatId = Number(body.chat_id) || 12345;
-      response.writeHead(200, { "content-type": "application/json" });
+      const validationError =
+        parseError ?? (method === "sendPhoto" ? validatePhotoRequest(body) : undefined);
+      const chatId = Number(body.chat_id) || Number(PROOF_CHAT_ID);
+      response.writeHead(validationError ? 400 : 200, { "content-type": "application/json" });
       response.end(
-        JSON.stringify({
-          ok: true,
-          result: {
-            message_id: 50000 + requests.length,
-            date: Math.floor(Date.now() / 1000),
-            chat: { id: chatId, type: "private" },
-            ...(typeof body.text === "string" ? { text: body.text } : {}),
-          },
-        }),
+        JSON.stringify(
+          validationError
+            ? { ok: false, error_code: 400, description: validationError }
+            : {
+                ok: true,
+                result: {
+                  message_id: 50000 + requests.length,
+                  date: Math.floor(Date.now() / 1000),
+                  chat: { id: chatId, type: "private" },
+                  ...(typeof body.text === "string" ? { text: body.text } : {}),
+                },
+              },
+        ),
       );
     })().catch((error: unknown) => {
       response.destroy(error instanceof Error ? error : new Error(String(error)));
@@ -168,7 +268,7 @@ async function main() {
       ...common,
       payloads: [{ text, mediaUrl: join(tempStateDir, "report.png") }],
     });
-    writeFileSync(join(tempStateDir, "report.png"), Buffer.from(TINY_PNG_BASE64, "base64"));
+    writeFileSync(join(tempStateDir, PROOF_MEDIA_FILENAME), TINY_PNG_BYTES);
     const deliverFinalPayloads = async (
       payloads: Awaited<ReturnType<typeof buildReplyPayloads>>["replyPayloads"],
     ) => {
@@ -198,6 +298,10 @@ async function main() {
       (request) => request.method === "sendMessage",
     );
     const sendPhotoRequests = recorder.requests.filter((request) => request.method === "sendPhoto");
+    const photoValidationError =
+      sendPhotoRequests.length === 1
+        ? validatePhotoRequest(sendPhotoRequests[0].body)
+        : "expected one sendPhoto request";
     const passed =
       sendMessageRequests.length === 1 &&
       blank.replyPayloads.length === 0 &&
@@ -208,7 +312,7 @@ async function main() {
       realMediaFinalResults[0]?.ok === true &&
       realMediaFinalResults[0]?.delivered &&
       realMediaApiCalls.filter((request) => request.method === "sendPhoto").length === 1 &&
-      sendPhotoRequests.length === 1;
+      photoValidationError === undefined;
     console.log(
       JSON.stringify(
         {
@@ -227,6 +331,7 @@ async function main() {
             retainedPayloads: realMedia.replyPayloads.length,
             routeResults: realMediaFinalResults,
             additionalBotApiMethods: realMediaApiCalls.map((request) => request.method),
+            photoRequestValidation: photoValidationError ?? "PASS",
           },
         },
         null,
