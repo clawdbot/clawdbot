@@ -10,6 +10,130 @@ import {
 const suite = createChatFlowE2eSuite();
 
 suite.define(() => {
+  it.each([
+    { order: "before hydration", tool: false },
+    { order: "after hydration", tool: false },
+    { order: "replayed after hydration", tool: false },
+    { order: "before hydration", tool: true },
+  ])(
+    "renders one durable answer when persistence arrives $order (tool: $tool)",
+    async ({ order, tool }) => {
+      await suite.withPage(
+        { locale: "en-US", serviceWorkers: "block", viewport: { height: 900, width: 1280 } },
+        async ({ page }) => {
+          const runId = "hydrated-answer-run";
+          const text = "The workspace check is complete.";
+          const toolEvent = {
+            sessionKey: "agent:main:main",
+            runId,
+            seq: 1,
+            ts: 1_001,
+            stream: "tool",
+            data: {
+              phase: "result",
+              toolCallId: "workspace-check",
+              name: "read",
+              result: { content: [{ type: "text", text: "Workspace ready." }] },
+            },
+          };
+          const message = {
+            role: "assistant",
+            content: [{ type: "text", text }],
+            __openclaw: { id: "hydrated-answer", seq: 2, runId },
+          };
+          const sessionInfo = {
+            key: "agent:main:main",
+            hasActiveRun: true,
+            activeRunIds: [runId],
+          };
+          const inFlightRun = {
+            runId,
+            startedAt: 1_000,
+            text,
+            ...(tool ? { events: [toolEvent] } : {}),
+          };
+          const gateway = await installMockGateway(page, {
+            historyMessages: [],
+            inFlightRun: { ...inFlightRun, text: "" },
+            sessionInfo,
+          });
+          await page.goto(`${suite.server.baseUrl}chat`);
+          await page.getByRole("button", { name: "Stop generating" }).waitFor();
+          await gateway.emitGatewayEvent("chat", {
+            sessionKey: "agent:main:main",
+            runId,
+            state: "delta",
+            deltaText: text,
+            message: { role: "assistant", content: [{ type: "text", text }] },
+          });
+          if (tool) {
+            await gateway.emitGatewayEvent("agent", toolEvent);
+          }
+          const persist = () =>
+            gateway.emitGatewayEvent("session.message", {
+              sessionKey: "agent:main:main",
+              runId,
+              hasActiveRun: true,
+              activeRunIds: [runId],
+              messageId: "hydrated-answer",
+              messageSeq: 2,
+              message,
+            });
+          const startupCount = (await gateway.getRequests("chat.startup")).length;
+          await gateway.deferNext("chat.startup");
+          await gateway.setOnline(false);
+          await gateway.setOnline(true);
+          await gateway.waitForRequest("chat.startup", { after: startupCount });
+          if (order !== "after hydration") {
+            await persist();
+          }
+          await gateway.resolveDeferred("chat.startup", {
+            messages: [message],
+            inFlightRun,
+            sessionInfo,
+            thinkingLevel: null,
+          });
+          await page.waitForFunction(() => {
+            const pane = document.querySelector<HTMLElement & { state?: { chatLoading: boolean } }>(
+              "openclaw-chat-pane",
+            );
+            return pane?.state?.chatLoading === false;
+          });
+          await page.locator(".chat-group.assistant .chat-text", { hasText: text }).waitFor();
+          if (order !== "before hydration") {
+            await persist();
+          }
+          await gateway.deferNext("chat.history");
+          await gateway.emitGatewayEvent("chat", {
+            sessionKey: "agent:main:main",
+            runId,
+            state: "final",
+            message: {
+              role: "assistant",
+              content: [{ type: "text", text: tool ? `Checking the workspace.\n\n${text}` : text }],
+            },
+          });
+          await page.getByRole("button", { name: "Stop generating" }).waitFor({ state: "hidden" });
+          if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
+            await page.screenshot({
+              fullPage: true,
+              path: path.join(suite.artifactDir, "hydrated-answer.png"),
+            });
+          }
+          expect(
+            (await page.locator(".chat-group.assistant .chat-text").allTextContents()).map(
+              (value) => value.trim(),
+            ),
+          ).toEqual([text]);
+          expect(await page.locator(".chat-duplicate-count").count()).toBe(0);
+          if (tool) {
+            expect(await page.locator(".chat-tool-msg-summary").count()).toBe(1);
+          }
+        },
+      );
+    },
+  );
+
   it("reconciles distinct commentary items once across reconnect", async () => {
     await suite.withPage(
       {
