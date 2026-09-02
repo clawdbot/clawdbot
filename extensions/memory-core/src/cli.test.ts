@@ -2295,6 +2295,82 @@ describe("memory cli", () => {
     });
   });
 
+  it("resolves rem-harness dreaming config from the selected LanceDB memory plugin", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      const nowMs = Date.now();
+      const isoDay = new Date(nowMs).toISOString().slice(0, 10);
+      await fs.mkdir(path.join(workspaceDir, "memory"), { recursive: true });
+      await fs.writeFile(
+        path.join(workspaceDir, "memory", `${isoDay}.md`),
+        "Always check weather before suggesting outdoor plans.\n",
+        "utf-8",
+      );
+
+      getRuntimeConfig.mockReturnValue({
+        plugins: {
+          slots: { memory: "memory-lancedb" },
+          entries: {
+            "memory-lancedb": {
+              config: {
+                dreaming: {
+                  enabled: true,
+                  phases: {
+                    rem: {
+                      enabled: true,
+                      limit: 7,
+                    },
+                    deep: {
+                      enabled: true,
+                      minScore: 0.4,
+                      recencyHalfLifeDays: 9,
+                    },
+                  },
+                },
+              },
+            },
+            // Foreign key on the unselected store plugin must be ignored.
+            "memory-core": {
+              config: {
+                dreaming: {
+                  enabled: false,
+                  phases: {
+                    rem: {
+                      enabled: true,
+                      limit: 2,
+                    },
+                    deep: {
+                      enabled: true,
+                      minScore: 0.9,
+                      recencyHalfLifeDays: 30,
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      });
+
+      const close = vi.fn(async () => {});
+      mockManager({
+        status: () => makeMemoryStatus({ workspaceDir }),
+        close,
+      });
+
+      const writeJson = spyRuntimeJson(defaultRuntime);
+      await runMemoryCli(["rem-harness", "--json"]);
+
+      const payload = firstWrittenJsonArg<{
+        remConfig?: { limit?: number };
+        deepConfig?: { minScore?: number; recencyHalfLifeDays?: number };
+      }>(writeJson);
+      expect(payload?.remConfig?.limit).toBe(7);
+      expect(payload?.deepConfig?.minScore).toBe(0.4);
+      expect(payload?.deepConfig?.recencyHalfLifeDays).toBe(9);
+      expect(close).toHaveBeenCalled();
+    });
+  });
+
   it("previews rem harness output as json", async () => {
     await withTempWorkspace(async (workspaceDir) => {
       const nowMs = Date.now();
@@ -3363,6 +3439,8 @@ describe("memory cli", () => {
           source: "memory",
         },
       ]);
+      // The unselected memory-core entry disables Dreaming, so reading the
+      // wrong (unselected) config owner suppresses recall recording.
       getRuntimeConfig.mockReturnValue({
         plugins: {
           slots: { memory: "memory-lancedb" },
@@ -3371,6 +3449,13 @@ describe("memory cli", () => {
               config: {
                 dreaming: {
                   enabled: true,
+                },
+              },
+            },
+            "memory-core": {
+              config: {
+                dreaming: {
+                  enabled: false,
                 },
               },
             },

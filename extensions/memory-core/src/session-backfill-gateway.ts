@@ -7,6 +7,7 @@ import {
 } from "openclaw/plugin-sdk/gateway-runtime";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { listAgentIds } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
+import { resolveMemoryDreamingPluginConfig } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import { resolveMemoryRemDreamingConfig } from "openclaw/plugin-sdk/memory-core-host-status";
 import { resolvePluginConfigObject } from "openclaw/plugin-sdk/plugin-config-runtime";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
@@ -101,7 +102,9 @@ function resolveExecutionContext(api: OpenClawPluginApi, agentId: string) {
   const pluginConfig = resolvePluginConfigObject(config, "memory-core");
   const remConfig = resolveMemoryRemDreamingConfig({
     cfg: config,
-    pluginConfig,
+    // Dreaming-phase settings (timezone) follow the selected memory plugin;
+    // admission policy stays on the memory-core store entry.
+    pluginConfig: resolveMemoryDreamingPluginConfig(config),
   });
   return {
     workspaceDir,

@@ -130,7 +130,7 @@ export async function runMemoryRemHarness(
     run: async ({ manager, cfg, agentId }) => {
       const status = manager.status();
       const managerWorkspaceDir = status.workspaceDir?.trim();
-      const pluginConfig = resolveMemoryPluginConfig(cfg);
+      const pluginConfig = resolveMemoryDreamingPluginConfigForCli(cfg);
       if (!managerWorkspaceDir && !opts.path) {
         defaultRuntime.error("Memory rem-harness requires a resolvable workspace directory.");
         process.exitCode = 1;

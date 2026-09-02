@@ -20,7 +20,9 @@ function updateDreamingEnabledInConfig(cfg: OpenClawConfig, enabled: boolean): O
   const entries = { ...cfg.plugins?.entries };
   // The selected memory plugin owns Dreaming configuration, so the toggle must
   // write the entry the Dreaming resolver actually reads.
-  const pluginId = resolveMemoryDreamingPluginId(cfg);
+  // Config normalization lowercases plugin ids; match it so the toggle can
+  // never create a duplicate mixed-case entry alongside the real one.
+  const pluginId = resolveMemoryDreamingPluginId(cfg).toLowerCase();
   const existingEntry = asNullableRecord(entries[pluginId]) ?? {};
   const existingConfig = asNullableRecord(existingEntry.config) ?? {};
   const existingSleep = asNullableRecord(existingConfig.dreaming) ?? {};
