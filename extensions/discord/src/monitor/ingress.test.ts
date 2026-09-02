@@ -8,12 +8,17 @@ import {
   createChannelIngressQueueForTests,
 } from "openclaw/plugin-sdk/channel-ingress-test-runtime";
 import type { ChannelIngressQueue } from "openclaw/plugin-sdk/channel-outbound";
+import type { DiscordAccountConfig, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { createDiscordIngressMonitor, type DiscordIngressLifecycle } from "./ingress.js";
 
-type DiscordTestMessage = APIMessage & { channel_type?: number; guild_id?: string };
+type DiscordTestMessage = APIMessage & {
+  channel?: unknown;
+  channel_type?: number;
+  guild_id?: string;
+};
 
 type DiscordIngressPayload = {
   version: 1;
@@ -22,8 +27,29 @@ type DiscordIngressPayload = {
   channelKind?: "non-thread" | "thread";
 };
 
+const configuredChannelCases: Array<{
+  name: string;
+  channels: Record<string, { enabled?: boolean }>;
+  expected: "dispatched" | "failed";
+  channelInfo: { name?: string; type: number };
+}> = [
+  {
+    name: "retains unresolved configured-guild channel membership",
+    channels: { general: {} },
+    expected: "dispatched",
+    channelInfo: { type: ChannelType.GuildText },
+  },
+  {
+    name: "disposes positively allowed configured-guild channel membership",
+    channels: { general: {} },
+    expected: "failed",
+    channelInfo: { name: "general", type: ChannelType.GuildText },
+  },
+];
+
 const FROZEN_NOW = Date.parse("2026-08-20T03:00:00.000Z");
 const STALE_AT = FROZEN_NOW - 16 * 60 * 1_000;
+const DISCORD_INGRESS_RUNTIME_WARM_TIMEOUT_MS = 30_000;
 const BOT_USER_ID = "bot-1";
 const GUILD_ID = "guild-1";
 
@@ -61,6 +87,12 @@ function runtime(): Pick<RuntimeEnv, "error" | "log"> {
   return { error: vi.fn(), log: vi.fn() };
 }
 
+function createIngressClient() {
+  return {
+    getGatewayChannelInfo: () => undefined,
+  } as never;
+}
+
 function payloadFor(rawMessage: APIMessage): DiscordIngressPayload {
   return { version: 1, receivedAt: Date.now(), rawMessage };
 }
@@ -68,15 +100,24 @@ function payloadFor(rawMessage: APIMessage): DiscordIngressPayload {
 function createPolicyMonitor(params: {
   queue: ChannelIngressQueue<DiscordIngressPayload>;
   dispatch: Parameters<typeof createDiscordIngressMonitor>[0]["dispatch"];
+  cfg?: OpenClawConfig;
+  discordConfig?: DiscordAccountConfig;
+  threadBindings?: { getByThreadId?: (threadId: string) => unknown };
+  channelInfo?: { name?: string; parentId?: string; type: number };
 }) {
   return createDiscordIngressMonitor({
     accountId: "default",
-    client: {} as never,
+    client: {
+      getGatewayChannelInfo: () => params.channelInfo ?? { type: ChannelType.GuildText },
+    } as never,
     runtime: runtime(),
     queue: params.queue,
     now: () => FROZEN_NOW,
     botUserId: BOT_USER_ID,
+    cfg: params.cfg,
+    discordConfig: params.discordConfig,
     guildEntries: { [GUILD_ID]: {} },
+    threadBindings: params.threadBindings,
     dispatch: params.dispatch,
   });
 }
@@ -106,6 +147,10 @@ async function stopAll(monitors: DiscordIngressMonitor[]): Promise<void> {
 }
 
 describe("Discord durable ingress", () => {
+  beforeAll(async () => {
+    await import("openclaw/plugin-sdk/channel-inbound");
+  }, DISCORD_INGRESS_RUNTIME_WARM_TIMEOUT_MS);
+
   afterEach(() => {
     closeOpenClawStateDatabaseForTest();
   });
@@ -123,7 +168,7 @@ describe("Discord durable ingress", () => {
       });
       const monitor = createDiscordIngressMonitor({
         accountId: "default",
-        client: {} as never,
+        client: createIngressClient(),
         runtime: runtime(),
         queue: gatedQueue,
         dispatch,
@@ -149,7 +194,7 @@ describe("Discord durable ingress", () => {
       const dispatch = vi.fn();
       const monitor = createDiscordIngressMonitor({
         accountId: "default",
-        client: {} as never,
+        client: createIngressClient(),
         runtime: runtime(),
         queue,
         dispatch,
@@ -175,7 +220,7 @@ describe("Discord durable ingress", () => {
       const firstDispatch = vi.fn(async () => ({ kind: "deferred" as const }));
       const first = createDiscordIngressMonitor({
         accountId: "default",
-        client: {} as never,
+        client: createIngressClient(),
         runtime: runtime(),
         queue,
         dispatch: firstDispatch,
@@ -192,7 +237,7 @@ describe("Discord durable ingress", () => {
         });
         const recovered = createDiscordIngressMonitor({
           accountId: "default",
-          client: {} as never,
+          client: createIngressClient(),
           runtime: runtime(),
           queue,
           dispatch: recoveredDispatch,
@@ -218,7 +263,7 @@ describe("Discord durable ingress", () => {
       });
       const monitor = createDiscordIngressMonitor({
         accountId: "default",
-        client: {} as never,
+        client: createIngressClient(),
         runtime: runtime(),
         queue,
         dispatch,
@@ -253,7 +298,7 @@ describe("Discord durable ingress", () => {
       });
       const monitor = createDiscordIngressMonitor({
         accountId: "default",
-        client: {} as never,
+        client: createIngressClient(),
         runtime: runtime(),
         queue,
         dispatch,
@@ -280,7 +325,7 @@ describe("Discord durable ingress", () => {
     await withQueue(async (queue) => {
       const monitor = createDiscordIngressMonitor({
         accountId: "default",
-        client: {} as never,
+        client: createIngressClient(),
         runtime: runtime(),
         queue,
         dispatch: async () => {
@@ -306,16 +351,49 @@ describe("Discord durable ingress", () => {
     { channelType: ChannelType.PublicThread, expected: "thread" },
   ])("persists channel kind $expected at durable admission", async ({ channelType, expected }) => {
     await withQueue(async (queue) => {
-      const monitor = createPolicyMonitor({ queue, dispatch: vi.fn() });
+      const monitor = createDiscordIngressMonitor({
+        accountId: "default",
+        client: {
+          getGatewayChannelInfo: () => ({ type: channelType }),
+        } as never,
+        runtime: runtime(),
+        queue,
+        dispatch: vi.fn(),
+      });
       try {
         await monitor.accept(
           createRawMessage("kind", "channel-1", {
             guild_id: GUILD_ID,
-            channel_type: channelType,
           }),
         );
         expect(await queue.listPending({ limit: "all" })).toMatchObject([
           { id: "kind", payload: { channelKind: expected } },
+        ]);
+      } finally {
+        await monitor.stop();
+      }
+    });
+  });
+
+  it("persists channel kind from the gateway channel inventory", async () => {
+    await withQueue(async (queue) => {
+      const monitor = createDiscordIngressMonitor({
+        accountId: "default",
+        client: {
+          getGatewayChannelInfo: () => ({ type: ChannelType.GuildText }),
+        } as never,
+        runtime: runtime(),
+        queue,
+        dispatch: vi.fn(),
+      });
+      try {
+        await monitor.accept(
+          createRawMessage("gateway-kind", "channel-1", {
+            guild_id: GUILD_ID,
+          }),
+        );
+        expect(await queue.listPending({ limit: "all" })).toMatchObject([
+          { id: "gateway-kind", payload: { channelKind: "non-thread" } },
         ]);
       } finally {
         await monitor.stop();
@@ -467,7 +545,133 @@ describe("Discord durable ingress", () => {
       }),
       channelKind: "thread" as const,
     },
-  ])("keeps $name claimable", async ({ receivedAt, rawMessage, channelKind }) => {
+    {
+      name: "fully hydrated ordinary reply",
+      receivedAt: STALE_AT,
+      rawMessage: createRawMessage("ordinary-reply", "channel-1", {
+        guild_id: GUILD_ID,
+        channel_type: ChannelType.GuildText,
+        type: 19,
+        message_reference: {
+          type: 0,
+          message_id: "other-message",
+          channel_id: "channel-1",
+          guild_id: GUILD_ID,
+        },
+        referenced_message: createRawMessage("other-message", "channel-1", {
+          guild_id: GUILD_ID,
+          channel_type: ChannelType.GuildText,
+        }),
+        timestamp: new Date(STALE_AT).toISOString(),
+      }),
+      channelKind: "non-thread" as const,
+    },
+    {
+      name: "bound thread work",
+      receivedAt: STALE_AT,
+      rawMessage: createRawMessage("bound-thread", "bound-thread-1", {
+        guild_id: GUILD_ID,
+        timestamp: new Date(STALE_AT).toISOString(),
+      }),
+      channelKind: "non-thread" as const,
+      threadBindings: { getByThreadId: () => ({ sessionKey: "agent:main" }) },
+    },
+    {
+      name: "unknown channel inventory work",
+      receivedAt: STALE_AT,
+      rawMessage: createRawMessage("unknown-kind", "unknown-kind-1", {
+        guild_id: GUILD_ID,
+        timestamp: new Date(STALE_AT).toISOString(),
+      }),
+      channelKind: undefined,
+    },
+    {
+      name: "configured text mention",
+      receivedAt: STALE_AT,
+      rawMessage: createRawMessage("configured-mention", "channel-1", {
+        guild_id: GUILD_ID,
+        content: "openclaw can you check the incident",
+        timestamp: new Date(STALE_AT).toISOString(),
+      }),
+      channelKind: "non-thread" as const,
+      cfg: { messages: { groupChat: { mentionPatterns: ["openclaw"] } } },
+    },
+    {
+      name: "provider-scoped identity mention",
+      receivedAt: STALE_AT,
+      rawMessage: createRawMessage("provider-mention", "channel-1", {
+        guild_id: GUILD_ID,
+        content: "Policy Bot can you check the incident?",
+        timestamp: new Date(STALE_AT).toISOString(),
+      }),
+      channelKind: "non-thread" as const,
+      cfg: { agents: { list: [{ id: "main", identity: { name: "Policy Bot" } }] } },
+      discordConfig: { mentionPatterns: { mode: "deny", allowIn: ["channel-1"] } },
+    },
+    {
+      name: "identity-derived name mention",
+      receivedAt: STALE_AT,
+      rawMessage: createRawMessage("identity-name", "channel-1", {
+        guild_id: GUILD_ID,
+        content: "Molty can you check the incident?",
+        timestamp: new Date(STALE_AT).toISOString(),
+      }),
+      channelKind: "non-thread" as const,
+      cfg: { agents: { list: [{ id: "main", identity: { name: "Molty" } }] } },
+    },
+    {
+      name: "identity-derived emoji mention",
+      receivedAt: STALE_AT,
+      rawMessage: createRawMessage("identity-emoji", "channel-1", {
+        guild_id: GUILD_ID,
+        content: "🦀 can you check the incident?",
+        timestamp: new Date(STALE_AT).toISOString(),
+      }),
+      channelKind: "non-thread" as const,
+      cfg: { agents: { list: [{ id: "main", identity: { emoji: "🦀" } }] } },
+    },
+    {
+      name: "everyone mention",
+      receivedAt: STALE_AT,
+      rawMessage: createRawMessage("everyone", "channel-1", {
+        guild_id: GUILD_ID,
+        content: "@everyone can someone check the incident?",
+        mention_everyone: true,
+        timestamp: new Date(STALE_AT).toISOString(),
+      }),
+      channelKind: "non-thread" as const,
+    },
+    {
+      name: "audio-only configured mention candidate",
+      receivedAt: STALE_AT,
+      rawMessage: createRawMessage("audio-mention", "channel-1", {
+        guild_id: GUILD_ID,
+        content: "",
+        attachments: [
+          {
+            id: "attachment-1",
+            filename: "voice.ogg",
+            url: "https://cdn.discordapp.com/attachments/voice.ogg",
+            proxy_url: "https://cdn.discordapp.com/attachments/voice.ogg",
+            content_type: "audio/ogg",
+            size: 1024,
+          },
+        ],
+        timestamp: new Date(STALE_AT).toISOString(),
+      }),
+      channelKind: "non-thread" as const,
+      cfg: { messages: { groupChat: { mentionPatterns: ["openclaw"] } } },
+    },
+  ] satisfies Array<{
+    name: string;
+    receivedAt: number;
+    rawMessage: DiscordTestMessage;
+    channelKind?: "non-thread" | "thread";
+    cfg?: OpenClawConfig;
+    discordConfig?: DiscordAccountConfig;
+    threadBindings?: { getByThreadId?: (threadId: string) => unknown };
+  }>)("keeps $name claimable", async (testCase) => {
+    const { receivedAt, rawMessage, channelKind } = testCase;
     await withQueue(async (queue) => {
       await queue.enqueue(
         rawMessage.id,
@@ -477,11 +681,68 @@ describe("Discord durable ingress", () => {
       const dispatch = vi.fn(async (_event, lifecycle: DiscordIngressLifecycle) => {
         await lifecycle.onAdopted();
       });
-      const monitor = createPolicyMonitor({ queue, dispatch });
+      const monitor = createPolicyMonitor({
+        queue,
+        dispatch,
+        cfg: testCase.cfg,
+        discordConfig: testCase.discordConfig,
+        threadBindings: testCase.threadBindings,
+      });
       monitor.start();
       try {
         await vi.waitFor(() => expect(dispatch).toHaveBeenCalledOnce());
         expect(await queue.listFailed?.({ limit: "all" })).toEqual([]);
+      } finally {
+        await monitor.stop();
+      }
+    });
+  });
+
+  it.each(configuredChannelCases)("$name", async ({ channels, expected, channelInfo }) => {
+    await withQueue(async (queue) => {
+      const rawMessage = createRawMessage("configured-ambiguous", "channel-1", {
+        guild_id: GUILD_ID,
+        channel_type: ChannelType.GuildText,
+        timestamp: new Date(STALE_AT).toISOString(),
+      });
+      await queue.enqueue(
+        rawMessage.id,
+        {
+          version: 1,
+          receivedAt: STALE_AT,
+          rawMessage,
+          channelKind: "non-thread",
+        },
+        { laneKey: "channel:channel-1", receivedAt: STALE_AT },
+      );
+      const dispatch = vi.fn(async (_event, lifecycle: DiscordIngressLifecycle) => {
+        await lifecycle.onAdopted();
+      });
+      const monitor = createDiscordIngressMonitor({
+        accountId: "default",
+        client: {
+          getGatewayChannelInfo: () => channelInfo,
+        } as never,
+        runtime: runtime(),
+        queue,
+        now: () => FROZEN_NOW,
+        botUserId: BOT_USER_ID,
+        guildEntries: { [GUILD_ID]: { channels } },
+        dispatch,
+      });
+      monitor.start();
+      try {
+        if (expected === "dispatched") {
+          await vi.waitFor(() => expect(dispatch).toHaveBeenCalledOnce());
+          expect(await queue.listFailed?.({ limit: "all" })).toEqual([]);
+        } else {
+          await vi.waitFor(async () => {
+            expect(await queue.listFailed?.({ limit: "all" })).toMatchObject([
+              { id: "configured-ambiguous", reason: "stale-ambient-backlog" },
+            ]);
+          });
+          expect(dispatch).not.toHaveBeenCalled();
+        }
       } finally {
         await monitor.stop();
       }

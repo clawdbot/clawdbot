@@ -20,7 +20,6 @@ import {
   resolveDiscordGuildEntry,
   type DiscordGuildEntryResolved,
 } from "./allow-list.js";
-import { resolveDiscordChannelInfoSafe } from "./channel-access.js";
 import { hasRawDiscordUserMention } from "./message-handler.raw-mention.js";
 
 const DISCORD_STALE_AMBIENT_BACKLOG_MS = 15 * 60 * 1_000;
@@ -36,8 +35,6 @@ type DiscordGatewayAttachment = APIMessage["attachments"][number] & {
 
 export type DiscordGatewayMessage = Omit<APIMessage, "attachments"> & {
   attachments: DiscordGatewayAttachment[];
-  channel?: unknown;
-  channel_type?: unknown;
   guild_id?: unknown;
 };
 
@@ -115,9 +112,9 @@ export function readDiscordIngressPendingRow(payload: unknown): DiscordIngressPe
         ? payloadReceivedAt
         : null,
     channelKind:
-      (payload.channelKind === "non-thread" || payload.channelKind === "thread"
+      payload.channelKind === "non-thread" || payload.channelKind === "thread"
         ? payload.channelKind
-        : undefined) ?? resolveDiscordIngressChannelKind(rawMessage.channel_type),
+        : undefined,
   };
 }
 
@@ -148,7 +145,7 @@ function isDiscordAddressedMessage(rawMessage: DiscordGatewayMessage, botUserId?
   );
 }
 
-function hasHydrateableDiscordReplyReference(rawMessage: DiscordGatewayMessage): boolean {
+function isOrdinaryDiscordReply(rawMessage: DiscordGatewayMessage): boolean {
   const reference = rawMessage.message_reference;
   if (!reference || !nonEmptyString(reference.message_id)) {
     return false;
@@ -159,11 +156,7 @@ function hasHydrateableDiscordReplyReference(rawMessage: DiscordGatewayMessage):
   if (rawMessage.type != null && rawMessage.type !== MessageType.Reply) {
     return false;
   }
-  if (!Object.hasOwn(rawMessage, "referenced_message")) {
-    return true;
-  }
-  const nested = rawMessage.referenced_message;
-  return !isRecord(nested) || nonEmptyString(nested.id) !== nonEmptyString(reference.message_id);
+  return true;
 }
 
 function hasBoundThread(
@@ -179,21 +172,6 @@ function hasBoundThread(
   } catch {
     return true;
   }
-}
-
-function hasCachedThreadChannel(rawMessage: DiscordGatewayMessage): boolean {
-  if (!isRecord(rawMessage.channel)) {
-    return false;
-  }
-  const isThread = rawMessage.channel.isThread;
-  if (typeof isThread === "function") {
-    try {
-      return isThread() === true;
-    } catch {
-      return true;
-    }
-  }
-  return isDiscordThreadChannelType(rawMessage.channel.type);
 }
 
 function hasPotentialDiscordAudioAttachment(rawMessage: DiscordGatewayMessage): boolean {
@@ -281,7 +259,12 @@ function hasPotentialActiveDiscordTextControlCommand(
 function canExpireDiscordStaleAmbientBacklog(
   rawMessage: DiscordGatewayMessage,
   channelKind: DiscordIngressChannelKind | undefined,
-  guildEntries?: Record<string, DiscordGuildEntryResolved>,
+  params: {
+    guildEntries?: Record<string, DiscordGuildEntryResolved>;
+    resolveChannelInfo?: (
+      channelId: string,
+    ) => { name?: string; parentId?: string; type: number } | undefined;
+  },
 ): boolean {
   const guildId = nonEmptyString(rawMessage.guild_id);
   if (!guildId || channelKind !== "non-thread") {
@@ -289,26 +272,24 @@ function canExpireDiscordStaleAmbientBacklog(
   }
   const guildInfo = resolveDiscordGuildEntry({
     guildId,
-    guildEntries,
+    guildEntries: params.guildEntries,
   });
-  if (guildEntries && Object.keys(guildEntries).length > 0 && !guildInfo) {
+  if (params.guildEntries && Object.keys(params.guildEntries).length > 0 && !guildInfo) {
     return false;
   }
-  const channelInfo = resolveDiscordChannelInfoSafe(rawMessage.channel);
+  const channelInfo = params.resolveChannelInfo?.(rawMessage.channel_id);
   const channelConfig = resolveDiscordChannelConfigWithFallback({
     guildInfo,
     channelId: rawMessage.channel_id,
-    channelName: channelInfo.name,
-    channelSlug: channelInfo.name ? normalizeDiscordSlug(channelInfo.name) : "",
-    parentId: channelInfo.parentId,
-    parentName: channelInfo.parentName,
-    parentSlug: channelInfo.parentName ? normalizeDiscordSlug(channelInfo.parentName) : "",
+    channelName: channelInfo?.name,
+    channelSlug: channelInfo?.name ? normalizeDiscordSlug(channelInfo.name) : "",
+    parentId: channelInfo?.parentId,
     scope: "channel",
   });
-  const hasConfiguredChannels = Boolean(
-    guildInfo?.channels && Object.keys(guildInfo.channels).length > 0,
-  );
-  return !hasConfiguredChannels || channelConfig?.allowed !== false;
+  if (guildInfo?.channels && Object.keys(guildInfo.channels).length > 0) {
+    return channelConfig?.allowed === true;
+  }
+  return true;
 }
 
 export function createDiscordStaleAmbientPendingDisposition(params: {
@@ -317,6 +298,9 @@ export function createDiscordStaleAmbientPendingDisposition(params: {
   discordConfig?: DiscordAccountConfig | null;
   guildEntries?: Record<string, DiscordGuildEntryResolved>;
   threadBindings?: DiscordIngressThreadBindingLookup;
+  resolveChannelInfo?: (
+    channelId: string,
+  ) => { name?: string; parentId?: string; type: number } | undefined;
 }) {
   return async (
     record: ChannelIngressQueueRecord<unknown>,
@@ -328,11 +312,10 @@ export function createDiscordStaleAmbientPendingDisposition(params: {
       isDiscordAddressedMessage(row.rawMessage, params.botUserId) ||
       context.now - discordIngressRowSentAtMs(record, row) <= DISCORD_STALE_AMBIENT_BACKLOG_MS ||
       hasPotentialActiveDiscordTextControlCommand(row.rawMessage, params.cfg) ||
-      hasHydrateableDiscordReplyReference(row.rawMessage) ||
+      isOrdinaryDiscordReply(row.rawMessage) ||
       hasBoundThread(row.rawMessage, params.threadBindings) ||
-      hasCachedThreadChannel(row.rawMessage) ||
       (await matchesConfiguredDiscordMentionText(row.rawMessage, params)) ||
-      !canExpireDiscordStaleAmbientBacklog(row.rawMessage, row.channelKind, params.guildEntries)
+      !canExpireDiscordStaleAmbientBacklog(row.rawMessage, row.channelKind, params)
     ) {
       return null;
     }

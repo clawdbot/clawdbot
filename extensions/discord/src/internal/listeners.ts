@@ -27,10 +27,6 @@ export type DiscordMessageDispatchData = {
   channel?: unknown;
 };
 
-type DiscordMessageCreateEvent = APIMessage & {
-  channel_type?: number;
-};
-
 type DiscordReactionDispatchData = {
   user_id?: string;
   channel_id: string;
@@ -77,7 +73,7 @@ export abstract class GuildDeleteListener extends BaseListener {
 
 export abstract class MessageCreateListener extends BaseListener {
   readonly type = GatewayDispatchEvents.MessageCreate;
-  abstract override handle(data: DiscordMessageCreateEvent, client: Client): Promise<void> | void;
+  abstract override handle(data: APIMessage, client: Client): Promise<void> | void;
 }
 
 export abstract class InteractionCreateListener extends BaseListener {

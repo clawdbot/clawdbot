@@ -2,6 +2,7 @@
 import { EventEmitter } from "node:events";
 import { expectDefined } from "@openclaw/normalization-core";
 import {
+  ChannelType,
   GatewayCloseCodes,
   GatewayDispatchEvents,
   GatewayIntentBits,
@@ -14,6 +15,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { DiscordVoiceStateUpdateListener } from "../voice/listeners.js";
 import { sharedGatewayIdentifyLimiter } from "./gateway-identify-limiter.js";
 import { GatewayPlugin } from "./gateway.js";
+import { MessageCreateListener } from "./listeners.js";
+import { createInternalTestClient } from "./test-builders.test-support.js";
 
 function attachOpenSocket(gateway: GatewayPlugin) {
   const send = vi.fn();
@@ -345,6 +348,53 @@ describe("GatewayPlugin", () => {
     expect(dispatched.author?.id).toBe("u1");
     expect(dispatched.content).toBe("hello");
     expect(dispatched.message).toBeUndefined();
+  });
+
+  it("resolves MESSAGE_CREATE channel type from the gateway guild inventory", async () => {
+    const client = createInternalTestClient();
+    let received: unknown;
+    let channelInfo: { name?: string; type: number } | undefined;
+    client.registerListener(
+      new (class extends MessageCreateListener {
+        override handle(data: Parameters<MessageCreateListener["handle"]>[0]) {
+          received = data;
+          channelInfo = client.getGatewayChannelInfo(data.channel_id);
+        }
+      })(),
+    );
+    const gateway = new GatewayPlugin({ autoInteractions: false });
+    (gateway as unknown as { client: unknown }).client = client;
+    const handleDispatch = (t: string, d: unknown): Promise<void> =>
+      (
+        gateway as unknown as {
+          handleDispatch(payload: { t: string; d: unknown }): Promise<void>;
+        }
+      ).handleDispatch({ t, d });
+
+    await handleDispatch(GatewayDispatchEvents.GuildCreate, {
+      id: "g1",
+      channels: [{ id: "c1", name: "general", type: 0 }],
+      threads: [],
+      members: [],
+      voice_states: [],
+    });
+    await handleDispatch(GatewayDispatchEvents.MessageCreate, {
+      id: "m1",
+      channel_id: "c1",
+      guild_id: "g1",
+      content: "hello",
+      attachments: [],
+      timestamp: new Date().toISOString(),
+      author: { id: "u1", username: "user", discriminator: "0", avatar: null },
+      type: 0,
+      tts: false,
+      mention_everyone: false,
+      pinned: false,
+      flags: 0,
+    });
+
+    expect(received).not.toHaveProperty("channel_type");
+    expect(channelInfo).toEqual({ guildId: "g1", name: "general", type: ChannelType.GuildText });
   });
 
   it("tracks the live voice roster across guild snapshots and voice updates", async () => {

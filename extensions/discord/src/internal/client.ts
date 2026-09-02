@@ -1,5 +1,6 @@
 // Discord plugin module implements client behavior.
-import type { APIInteraction } from "discord-api-types/v10";
+import { GatewayDispatchEvents, type APIInteraction } from "discord-api-types/v10";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { DiscordCommandDeployHashStore } from "../command-deploy-store.js";
 import { DiscordCommandDeployer, type DeployCommandOptions } from "./command-deploy.js";
 import type { DiscordCommand } from "./commands.js";
@@ -53,6 +54,13 @@ interface ClientOptions {
   restCacheTtlMs?: number;
 }
 
+export type DiscordGatewayChannelInfo = {
+  guildId?: string;
+  name?: string;
+  parentId?: string;
+  type: number;
+};
+
 export class Client {
   routes: Route[] = [];
   plugins: Array<{ id: string; plugin: Plugin }> = [];
@@ -64,6 +72,7 @@ export class Client {
   private commandDeployer: DiscordCommandDeployer;
   private entityCache: DiscordEntityCache;
   private eventQueue?: DiscordEventQueue;
+  private gatewayChannels = new Map<string, DiscordGatewayChannelInfo>();
   modalHandler = new ComponentRegistry<Modal>();
   shardId?: number;
   totalShards?: number;
@@ -168,6 +177,10 @@ export class Client {
     return await this.entityCache.fetchGuildEmojis(guildId, fetcher);
   }
 
+  getGatewayChannelInfo(channelId: string): DiscordGatewayChannelInfo | undefined {
+    return this.gatewayChannels.get(channelId);
+  }
+
   async deployCommands(options: DeployCommandOptions = {}) {
     return await this.commandDeployer.deploy(options);
   }
@@ -178,6 +191,7 @@ export class Client {
 
   async dispatchGatewayEvent(type: string, data: unknown): Promise<void> {
     this.entityCache.invalidateForGatewayEvent(type, data);
+    this.updateGatewayChannelTypes(type, data);
     const listeners = this.listeners.filter((entry) => entry.type === type);
     if (!this.eventQueue) {
       for (const listener of listeners) {
@@ -196,5 +210,96 @@ export class Client {
         }),
       ),
     );
+  }
+
+  private updateGatewayChannelTypes(type: string, data: unknown): void {
+    const record = isRecord(data) ? data : undefined;
+    if (type === GatewayDispatchEvents.Ready) {
+      // READY starts a new authoritative guild snapshot. RESUMED intentionally
+      // retains the prior inventory until Discord sends incremental updates.
+      this.gatewayChannels.clear();
+      return;
+    }
+    if (!record) {
+      return;
+    }
+    if (type === GatewayDispatchEvents.GuildCreate) {
+      const guildId = typeof record.id === "string" ? record.id : undefined;
+      if (!guildId) {
+        return;
+      }
+      this.deleteGatewayGuildChannels(guildId);
+      for (const channel of [
+        ...this.readGatewayChannels(record.channels),
+        ...this.readGatewayChannels(record.threads),
+      ]) {
+        const { id, ...info } = channel;
+        this.gatewayChannels.set(id, { ...info, guildId });
+      }
+      return;
+    }
+    if (type === GatewayDispatchEvents.GuildDelete) {
+      if (typeof record.id === "string") {
+        this.deleteGatewayGuildChannels(record.id);
+      }
+      return;
+    }
+    if (
+      type === GatewayDispatchEvents.ChannelCreate ||
+      type === GatewayDispatchEvents.ChannelUpdate ||
+      type === GatewayDispatchEvents.ThreadCreate ||
+      type === GatewayDispatchEvents.ThreadUpdate
+    ) {
+      const channel = this.readGatewayChannel(record);
+      if (channel) {
+        const { id, ...info } = channel;
+        const guildId = typeof record.guild_id === "string" ? record.guild_id : undefined;
+        this.gatewayChannels.set(id, {
+          ...info,
+          ...(guildId ? { guildId } : {}),
+        });
+      }
+      return;
+    }
+    if (
+      type === GatewayDispatchEvents.ChannelDelete ||
+      type === GatewayDispatchEvents.ThreadDelete
+    ) {
+      if (typeof record.id === "string") {
+        this.gatewayChannels.delete(record.id);
+      }
+    }
+  }
+
+  private readGatewayChannels(value: unknown): Array<DiscordGatewayChannelInfo & { id: string }> {
+    return Array.isArray(value)
+      ? value.flatMap((entry) => {
+          const channel = this.readGatewayChannel(entry);
+          return channel ? [channel] : [];
+        })
+      : [];
+  }
+
+  private readGatewayChannel(value: unknown): (DiscordGatewayChannelInfo & { id: string }) | null {
+    if (!isRecord(value)) {
+      return null;
+    }
+    if (typeof value.id !== "string" || typeof value.type !== "number") {
+      return null;
+    }
+    return {
+      id: value.id,
+      type: value.type,
+      ...(typeof value.name === "string" ? { name: value.name } : {}),
+      ...(typeof value.parent_id === "string" ? { parentId: value.parent_id } : {}),
+    };
+  }
+
+  private deleteGatewayGuildChannels(guildId: string): void {
+    for (const [channelId, channel] of this.gatewayChannels) {
+      if (channel.guildId === guildId) {
+        this.gatewayChannels.delete(channelId);
+      }
+    }
   }
 }
