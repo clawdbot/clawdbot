@@ -764,7 +764,9 @@ final class DashboardManager {
         let presented: DashboardWindowController?
         if let source {
             if self.requiresIsolatedDashboardDocument(
-                source, auth: configuration.auth, endpoint: endpoint,
+                source,
+                auth: configuration.auth,
+                endpoint: endpoint,
                 comparePrimaryRoute: source === self.controller && target == .primary)
             {
                 presented = self.replaceWindowController(
@@ -796,93 +798,6 @@ final class DashboardManager {
         }
         self.updateFrontmostDashboardTarget()
         return presented
-    }
-
-    func openBackgroundSession(
-        _ completion: DashboardBackgroundSessionCompletion,
-        target: DashboardGatewayTarget,
-        sourceURL: URL) async
-    {
-        let endpointGeneration = self.endpointGeneration
-        let source = self.dashboardController(for: target) ?? (self.mainTarget == target ? self.controller : nil)
-        let window = source?.window
-        let currentController = {
-            guard let window else {
-                return self.dashboardController(for: target) ?? (self.mainTarget == target ? self.controller : nil)
-            }
-            // AppKit updates this owner when the privileged document is replaced;
-            // changing focus must not retarget an already admitted click.
-            guard let controller = window.windowController as? DashboardWindowController,
-                  self.target(for: controller) == target else { return nil }
-            return controller
-        }
-        let intent = self.beginNavigation(for: target, source: source)
-        defer { self.finishNavigation(intent, for: target) }
-        let sourceGeneration = source?.windowIntentGeneration
-        let isCurrent = {
-            guard !Task.isCancelled, self.navigationIntents[target]?.id == intent,
-                  target != .primary || self.endpointGeneration == endpointGeneration else { return false }
-            guard let window else { return source == nil }
-            guard let current = currentController(), let sourceGeneration else { return false }
-            return current.window === window && current.windowIntentGeneration == sourceGeneration
-        }
-        do {
-            let (configuration, endpoint) = try await self.windowConfiguration(for: target)
-            guard isCurrent() else { return }
-            guard sourceURL == Self.notificationRoute(configuration.url) else {
-                throw NSError(domain: "Dashboard", code: 1, userInfo: [
-                    NSLocalizedDescriptionKey:
-                        "This Gateway connection changed. Open the session from its Gateway's session list.",
-                ])
-            }
-            // Configuration lookup is the only suspension: a newer navigation or
-            // window close cannot interleave restoration and dispatch.
-            guard let controller = self.presentDashboard(
-                configuration: configuration, endpoint: endpoint, target: target, source: currentController()),
-                let fallbackURL = DashboardRouteMap.dashboardURL(
-                    byAppendingSameAppPath: completion.path,
-                    search: completion.search,
-                    to: configuration.url)
-            else {
-                throw NSError(domain: "Dashboard", code: 1, userInfo: [
-                    NSLocalizedDescriptionKey:
-                        "The originating Gateway window is no longer available. Open the session from its Gateway's session list.",
-                ])
-            }
-            controller.dispatchNativeNavigation(DashboardNativeNavigation(
-                path: completion.path, search: completion.search, fallbackURL: fallbackURL))
-            Task { await self.refreshGatewaySnapshots() }
-        } catch {
-            guard isCurrent() else { return }
-            Self.showGatewayError(error, message: "Could Not Open Background Session")
-        }
-    }
-
-    static func notificationRoute(_ url: URL) -> URL? {
-        // Retain only Gateway origin and mount. Authentication is supplied by
-        // the current owner when a notification opens its session.
-        guard let source = URLComponents(url: url, resolvingAgainstBaseURL: false) else { return nil }
-        var route = URLComponents()
-        route.scheme = source.scheme
-        route.host = source.host
-        route.port = source.port
-        route.path = source.path
-        return route.url
-    }
-
-    private func handleWindowClosed(_ controller: DashboardWindowController) {
-        guard let target = self.target(for: controller) else { return }
-        if let intent = self.navigationIntents[target],
-           intent.windowID == nil || intent.windowID == controller.window.map(ObjectIdentifier.init)
-        {
-            self.navigationIntents[target] = nil
-        }
-        self.switchGenerations[ObjectIdentifier(controller)] = nil
-        if let windowID = self.auxiliaryWindows.first(where: { $0.value.controller === controller })?.key {
-            self.auxiliaryWindows.removeValue(forKey: windowID)
-            self.auxiliaryWindowOrder.removeAll { $0 == windowID }
-        }
-        self.updateFrontmostDashboardTarget()
     }
 
     private func autosaveName(for target: DashboardGatewayTarget) -> String {
@@ -1008,6 +923,94 @@ extension DashboardManager {
 }
 
 extension DashboardManager {
+    func openBackgroundSession(
+        _ completion: DashboardBackgroundSessionCompletion,
+        target: DashboardGatewayTarget,
+        sourceURL: URL) async
+    {
+        let endpointGeneration = self.endpointGeneration
+        let source = self.dashboardController(for: target) ?? (self.mainTarget == target ? self.controller : nil)
+        let window = source?.window
+        let currentController = {
+            guard let window else {
+                return self.dashboardController(for: target) ?? (self.mainTarget == target ? self.controller : nil)
+            }
+            // AppKit updates this owner when the privileged document is replaced;
+            // changing focus must not retarget an already admitted click.
+            guard let controller = window.windowController as? DashboardWindowController,
+                  self.target(for: controller) == target else { return nil }
+            return controller
+        }
+        let intent = self.beginNavigation(for: target, source: source)
+        defer { self.finishNavigation(intent, for: target) }
+        let sourceGeneration = source?.windowIntentGeneration
+        let isCurrent = {
+            guard !Task.isCancelled, self.navigationIntents[target]?.id == intent,
+                  target != .primary || self.endpointGeneration == endpointGeneration else { return false }
+            guard let window else { return source == nil }
+            guard let current = currentController(), let sourceGeneration else { return false }
+            return current.window === window && current.windowIntentGeneration == sourceGeneration
+        }
+        do {
+            let (configuration, endpoint) = try await self.windowConfiguration(for: target)
+            guard isCurrent() else { return }
+            guard sourceURL == Self.notificationRoute(configuration.url) else {
+                throw NSError(domain: "Dashboard", code: 1, userInfo: [
+                    NSLocalizedDescriptionKey:
+                        "This Gateway connection changed. Open the session from its Gateway's session list.",
+                ])
+            }
+            // Configuration lookup is the only suspension: a newer navigation or
+            // window close cannot interleave restoration and dispatch.
+            guard let controller = self.presentDashboard(
+                configuration: configuration, endpoint: endpoint, target: target, source: currentController()),
+                let fallbackURL = DashboardRouteMap.dashboardURL(
+                    byAppendingSameAppPath: completion.path,
+                    search: completion.search,
+                    to: configuration.url)
+            else {
+                throw NSError(domain: "Dashboard", code: 1, userInfo: [
+                    NSLocalizedDescriptionKey:
+                        "The originating Gateway window is no longer available. " +
+                        "Open the session from its Gateway's session list.",
+                ])
+            }
+            controller.dispatchNativeNavigation(DashboardNativeNavigation(
+                path: completion.path, search: completion.search, fallbackURL: fallbackURL))
+            Task { await self.refreshGatewaySnapshots() }
+        } catch {
+            guard isCurrent() else { return }
+            Self.showGatewayError(error, message: "Could Not Open Background Session")
+        }
+    }
+
+    static func notificationRoute(_ url: URL) -> URL? {
+        // Retain only Gateway origin and mount. Authentication is supplied by
+        // the current owner when a notification opens its session.
+        guard let source = URLComponents(url: url, resolvingAgainstBaseURL: false) else { return nil }
+        var route = URLComponents()
+        route.scheme = source.scheme
+        route.host = source.host
+        route.port = source.port
+        route.path = source.path
+        return route.url
+    }
+
+    private func handleWindowClosed(_ controller: DashboardWindowController) {
+        guard let target = self.target(for: controller) else { return }
+        if let intent = self.navigationIntents[target],
+           intent.windowID == nil || intent.windowID == controller.window.map(ObjectIdentifier.init)
+        {
+            self.navigationIntents[target] = nil
+        }
+        self.switchGenerations[ObjectIdentifier(controller)] = nil
+        if let windowID = self.auxiliaryWindows.first(where: { $0.value.controller === controller })?.key {
+            self.auxiliaryWindows.removeValue(forKey: windowID)
+            self.auxiliaryWindowOrder.removeAll { $0 == windowID }
+        }
+        self.updateFrontmostDashboardTarget()
+    }
+
     func show() async throws {
         try await self.currentPresentationTask().value
     }
