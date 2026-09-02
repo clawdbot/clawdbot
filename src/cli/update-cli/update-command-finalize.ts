@@ -26,8 +26,8 @@ import {
   type UpdateFinalizeOptions,
 } from "./shared.js";
 import { suppressDeprecations } from "./suppress-deprecations.js";
+import { createUpdateConfigSnapshot } from "./update-command-config-snapshot.js";
 import {
-  createUpdateConfigSnapshot,
   persistRequestedUpdateChannel,
   persistValidatedDowngradeConfig,
   readPostCorePreUpdateSourceConfig,
