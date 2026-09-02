@@ -383,6 +383,7 @@ internal class AndroidAudioInputSession private constructor(
       AudioDeviceInfo.TYPE_DOCK,
       AudioDeviceInfo.TYPE_HDMI,
       -> true
+
       else -> false
     }
 

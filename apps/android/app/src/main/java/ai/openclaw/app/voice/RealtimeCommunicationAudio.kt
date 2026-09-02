@@ -365,6 +365,7 @@ internal class RealtimeCommunicationAudioOwner {
         if (activeOwner == null) return
         focusActive = true
       }
+
       AudioManager.AUDIOFOCUS_LOSS,
       AudioManager.AUDIOFOCUS_LOSS_TRANSIENT,
       AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK,
@@ -373,7 +374,10 @@ internal class RealtimeCommunicationAudioOwner {
         focusActive = false
         focusRevokedGeneration = generation
       }
-      else -> return
+
+      else -> {
+        return
+      }
     }
     publishSnapshot()
   }
