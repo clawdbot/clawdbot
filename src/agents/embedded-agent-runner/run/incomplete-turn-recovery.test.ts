@@ -8,6 +8,7 @@ import {
   resolveReasoningOnlyRetryInstruction,
   shouldTreatEmptyAssistantReplyAsSilent,
 } from "./incomplete-turn-recovery.js";
+import { resolveIncompleteTurnPayloadText } from "./incomplete-turn-resolution.js";
 
 const EMPTY_RESPONSE_RETRY_INSTRUCTION =
   "The previous attempt did not produce a user-visible answer. Continue from the current state and produce the visible answer now. Do not restart from scratch.";
@@ -31,6 +32,34 @@ function emptyAttempt(assistant = emptyAssistant()) {
 }
 
 describe("incomplete-turn recovery policy", () => {
+  it.each(["required", "optional"] as const)(
+    "keeps async-owned work out of completed silence (reply=%s)",
+    (terminalReplyExpectation) => {
+      const assistant = emptyAssistant({ content: [{ type: "text", text: "NO_REPLY" }] });
+      const attempt = makeEmbeddedRunnerAttempt({
+        assistantTexts: ["NO_REPLY"],
+        lastAssistant: assistant,
+        currentAttemptAssistant: assistant,
+        toolMetas: [{ toolName: "image_generate", asyncStarted: true, replaySafe: false }],
+        replayMetadata: { hadPotentialSideEffects: true, replaySafe: false },
+        currentAttemptReplayMetadata: { hadPotentialSideEffects: true, replaySafe: false },
+      });
+      const state = { payloadCount: 0, aborted: false, timedOut: false, attempt };
+      // Silence must not steal completion ownership from background work. Nor
+      // may it trigger a replay or a spurious warning while that owner continues.
+      expect(
+        shouldTreatEmptyAssistantReplyAsSilent({
+          ...state,
+          allowEmptyAssistantReplyAsSilent: true,
+          onlyExplicitSilentReply: true,
+          terminalReplyExpectation,
+        }),
+      ).toBe(false);
+      expect(resolveEmptyResponseRetryInstruction(state)).toBeNull();
+      expect(resolveIncompleteTurnPayloadText({ ...state, externalAbort: false })).toBeNull();
+    },
+  );
+
   it.each([
     {
       name: "a completed reaction",
