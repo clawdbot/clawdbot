@@ -193,7 +193,8 @@ Place the portable plugin icon at `assets/icon.png`, relative to the plugin root
 field is required. Use a square PNG that remains recognizable at 16 px; 512×512 is recommended.
 Missing, unreadable, or invalid icons are ignored and do not invalidate the plugin.
 
-The fixed package path follows the convention proposed for Agent Plugins 1.1. It keeps packages
+The fixed package path follows the convention proposed in
+[Agent Plugins 1.1](https://github.com/agentplugins/agent-plugins-spec/pull/66). It keeps packages
 portable and inspectable, avoids manifest path indirection and precedence rules, and lets clients
 render the icon without a runtime network request. Manifest-provided icon URLs are not loaded.
 
