@@ -339,8 +339,9 @@ class ChatControllerBranchCoordinationTest {
       assertNull(outbox.branchState("gateway-a", branchScope)?.lastActiveLeafEntryId)
       assertTrue(controller.sendMessageAwaitAcceptance("submitted head", "off", emptyList()))
       val head = outbox.load("gateway-a").single()
-      assertEquals(ChatOutboxStatus.Accepted, head.status)
       runningHead.set(head)
+      // Admission can return while the flush lane is still persisting its ACK.
+      awaitBranchProgress { outbox.load("gateway-a").single().status == ChatOutboxStatus.Accepted }
 
       // Keep the target's reconciled scope while moving its live run offscreen.
       healthy.set(false)
