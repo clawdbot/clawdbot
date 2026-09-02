@@ -390,18 +390,19 @@ describe("openclaw test instance", () => {
               ? resolveMaxOutputBytes(undefined, "stdout")
               : resolveMaxOutputBytes(undefined, "stdout") / 2;
         const command = trackOperation(instance.cli([String(characters), mode]));
-        if (control) {
-          await withTestTimeout(control.reached, 5_000, "overflow close control gate");
-          await control.release();
-        }
         if (mode !== "complete") {
-          const outcome = await command.then(
+          const outcomePromise = command.then(
             (result) => ({
               code: result.code,
               stdoutBytes: Buffer.byteLength(result.stdout),
             }),
             (error: unknown) => error,
           );
+          if (control) {
+            await withTestTimeout(control.reached, 5_000, "overflow close control gate");
+            await control.release();
+          }
+          const outcome = await outcomePromise;
           if (!(outcome instanceof Error)) {
             throw new Error(`Expected command output overflow failure: ${JSON.stringify(outcome)}`);
           }
