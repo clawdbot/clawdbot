@@ -209,12 +209,12 @@ export function renderSessionCatalogGroups(params: SessionCatalogGroupsParams) {
     const hasBrandIcon = hasProviderBrandIcon(catalog.id);
     const loadingMore = params.loadingMoreCatalogIds.has(catalog.id);
     const hasMore = hosts.some((host) => Boolean(host.nextCursor));
-    const canCreateSession = catalog.capabilities.createSession !== undefined;
+    const canCreateSession = catalog.capabilities.startTerminal === true;
     const errorMessages = catalogErrorMessages(catalog);
     const hasError = errorMessages.length > 0;
     // Keep provider failures distinguishable from successful empty results.
     // Hiding both states would silently mask unavailable session sources.
-    if (rows.length === 0 && !hasMore && !hasError && !catalog.capabilities.createSession) {
+    if (rows.length === 0 && !hasMore && !hasError && !canCreateSession) {
       return nothing;
     }
     const errorMessage = errorMessages.join("; ");

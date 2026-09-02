@@ -26,6 +26,7 @@ import {
 } from "./session-catalog-parsing.js";
 import {
   CODEX_TERMINAL_RESUME_COMMAND,
+  CODEX_TERMINAL_START_COMMAND,
   openCodexCatalogTerminal,
   resolveLocalCodexTerminalExecutable,
   startCodexCatalogTerminal,
@@ -56,10 +57,25 @@ export function createCodexSessionCatalogNodeInvokePolicies(): OpenClawPluginNod
         CODEX_APP_SERVER_THREADS_LIST_COMMAND,
         CODEX_APP_SERVER_THREAD_TURNS_LIST_COMMAND,
         CODEX_TERMINAL_RESUME_COMMAND,
+        CODEX_TERMINAL_START_COMMAND,
       ],
       defaultPlatforms: ["macos", "linux", "windows"],
-      handle: (context) =>
-        context.command === CODEX_TERMINAL_RESUME_COMMAND ? { ok: true } : context.invokeNode(),
+      handle: (context) => {
+        if (context.command === CODEX_TERMINAL_START_COMMAND) {
+          return context.client?.scopes?.includes("operator.admin") &&
+            context.config.gateway?.cliAgents?.enabled === true &&
+            context.config.gateway?.terminal?.enabled !== false
+            ? { ok: true }
+            : {
+                ok: false,
+                message:
+                  "Native terminal start requires operator.admin and enabled CLI agents and terminals",
+              };
+        }
+        return context.command === CODEX_TERMINAL_RESUME_COMMAND
+          ? { ok: true }
+          : context.invokeNode();
+      },
     },
   ];
 }
@@ -197,9 +213,17 @@ function registerCodexSessionCatalog(params: {
         ...gatewayQuery
       } = query;
       const agentId = resolveRequestAgentId(requestedAgentId);
-      const mapHost = (host: CodexSessionCatalogHost) =>
-        toGenericCatalogHost(host, localTerminalAvailable);
       const localHomes = [...catalogHomes(agentId, allowProcessHomeFallback)];
+      const mapHost = (host: CodexSessionCatalogHost) => ({
+        ...toGenericCatalogHost(host, localTerminalAvailable),
+        canStartTerminal:
+          host.kind === "gateway"
+            ? localTerminalAvailable &&
+              localHomes.some(
+                (home) => home.hostId === host.hostId && home.appServer.start.transport === "stdio",
+              )
+            : host.canStartTerminal === true,
+      });
       return (
         await listCodexSessionCatalog({
           agentId,
@@ -317,16 +341,20 @@ function registerCodexSessionCatalog(params: {
       });
     },
     startTerminalSession: async (request) => {
-      if (
-        !request.nodeId &&
-        catalogHomes(request.agentId, request.allowProcessHomeFallback).length === 0
-      ) {
-        throw new CatalogParamsError("local Codex sessions are unavailable in isolated state");
+      const source = request.nodeId
+        ? undefined
+        : resolveLocalCatalogHomeForThread({
+            homes: [...catalogHomes(request.agentId, request.allowProcessHomeFallback)],
+            hostId: request.hostId ?? CODEX_LOCAL_SESSION_HOST_ID,
+          });
+      if (source && source.appServer.start.transport !== "stdio") {
+        throw new CatalogParamsError("Native terminal start requires a local Codex source");
       }
       return await startCodexCatalogTerminal({
         getPluginConfig: params.getPluginConfig,
         getRuntimeConfig: params.getRuntimeConfig,
         ...request,
+        source,
       });
     },
   };

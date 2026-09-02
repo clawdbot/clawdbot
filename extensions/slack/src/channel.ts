@@ -80,7 +80,11 @@ import {
   parseSlackTarget,
 } from "./target-parsing.js";
 import { slackContextTargetsMatch } from "./targets.js";
-import { normalizeSlackThreadTsCandidate, resolveSlackThreadTsValue } from "./thread-ts.js";
+import {
+  normalizeSlackThreadTsCandidate,
+  resolveSlackReplyThreadTs,
+  resolveSlackThreadTsValue,
+} from "./thread-ts.js";
 import { buildSlackThreadingToolContext } from "./threading-tool-context.js";
 
 // Lazy SDK loaders. The dynamic import is hidden behind a string-literal
@@ -876,14 +880,19 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount, SlackProbe> = crea
               toolContext,
             }),
           ),
-    resolveReplyTransport: ({ threadId, replyToId, replyToIsExplicit, replyDelivery }) => {
-      const allowedReplyToId = replyDelivery?.replyToMode === "off" ? undefined : replyToId;
-      // Slack's thread_ts identifies the root. Only known inherited replies may let
-      // that root replace a child timestamp; explicit and unknown callers stay reply-first.
-      const preferThreadId = replyToIsExplicit === false;
-      const resolvedReplyToId = resolveSlackThreadTsValue({
-        replyToId: preferThreadId ? threadId : allowedReplyToId,
-        threadId: preferThreadId ? allowedReplyToId : threadId,
+    resolveReplyTransport: ({
+      threadId,
+      replyToId,
+      replyToIsExplicit,
+      replyToCurrent,
+      replyDelivery,
+    }) => {
+      const resolvedReplyToId = resolveSlackReplyThreadTs({
+        replyToId: normalizeSlackThreadTsCandidate(replyToId),
+        threadId: normalizeSlackThreadTsCandidate(threadId),
+        replyToMode: replyDelivery?.replyToMode,
+        replyToIsExplicit,
+        replyToCurrent,
       });
       return {
         replyToId:

@@ -422,6 +422,53 @@ describe("sessions_spawn tool", () => {
     });
   });
 
+  it("declares expectsCompletionMessage and forwards false to hidden, ACP, and visible spawns", async () => {
+    registerAcpBackendForTest();
+    await withTestDir({ prefix: "openclaw-spawn-completion-" }, async (dir) => {
+      const callGateway = vi.fn(async () => ({
+        key: "agent:main:dashboard:child",
+        runStarted: true,
+        runId: "run-visible",
+      }));
+      const registerRun = vi.fn();
+      const tool = createSessionsSpawnTool({
+        agentSessionKey: "agent:main:main",
+        config: { session: { store: path.join(dir, "sessions.json") } },
+        callGateway: callGateway as never,
+        registerRun,
+        countActiveRuns: () => 0,
+      });
+      const schema = tool.parameters as {
+        properties?: Record<string, { type?: string } | undefined>;
+      };
+      expect(schema.properties?.expectsCompletionMessage).toMatchObject({ type: "boolean" });
+
+      await tool.execute("hidden", { task: "hidden child", expectsCompletionMessage: false });
+      expect(
+        mockCallArg(hoisted.spawnSubagentDirectMock, 0, 0, "spawnSubagentDirect")
+          .expectsCompletionMessage,
+      ).toBe(false);
+
+      await tool.execute("acp", {
+        task: "ACP child",
+        runtime: "acp",
+        expectsCompletionMessage: false,
+      });
+      expect(
+        mockCallArg(hoisted.spawnAcpDirectMock, 0, 0, "spawnAcpDirect").expectsCompletionMessage,
+      ).toBe(false);
+
+      await tool.execute("visible", {
+        task: "visible child",
+        visible: true,
+        expectsCompletionMessage: false,
+      });
+      expect(registerRun).toHaveBeenCalledWith(
+        expect.objectContaining({ expectsCompletionMessage: false }),
+      );
+    });
+  });
+
   it("forwards collector parameters and requesting run identity when enabled", async () => {
     const tool = createSessionsSpawnTool({
       agentSessionKey: "agent:main:main",

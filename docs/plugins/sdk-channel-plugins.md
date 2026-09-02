@@ -750,6 +750,12 @@ surfaces:
 - `openclaw/plugin-sdk/thread-bindings-runtime` for thread-binding lifecycle
   and adapter registration
 
+The `threading.resolveReplyTransport` hook receives the payload's optional
+`replyToCurrent` intent separately from `replyToIsExplicit`. Channels whose
+native API requires a thread root can resolve a current-message reply against
+the admitted thread without redirecting arbitrary explicit `replyToId` targets.
+Omitted intent keeps the existing explicit-target behavior.
+
 Auth-only channels can usually stop at the default path: core handles
 approvals and the plugin just exposes outbound/auth capabilities. Native
 approval channels such as Matrix, Slack, Telegram, and custom chat transports

@@ -7,6 +7,10 @@ import { t } from "../../i18n/index.ts";
 import { normalizeMessage } from "../../lib/chat/message-normalizer.ts";
 import { resolveIdentityHue } from "../../lib/identity-avatar.ts";
 import type { SessionToolOverrides } from "../../lib/sessions/patch.ts";
+import "../../styles/chat/message-layout.css";
+import "../../styles/chat/text.css";
+import "../../styles/chat/grouped.css";
+import "../../styles/chat/working-indicator.css";
 import { refreshSlashCommands } from "../chat/chat-commands.ts";
 import type { CapabilityMenuProps } from "../chat/components/chat-composer-types.ts";
 import { renderAssistantAttachments } from "../chat/components/chat-message-attachments.ts";
@@ -133,11 +137,8 @@ export function renderNewSessionDraftComposer(options: {
   dictationActive?: boolean;
   dictationPreview?: string;
   dictationStatus?: TemplateResult | typeof nothing;
-  terminalAction?: {
-    canStart: boolean;
-    disabledReason?: string;
-    onStart: () => void;
-  };
+  nativeTerminal?: boolean;
+  onUnsupportedAttachment?: () => void;
   submitting: boolean;
   messageLocked?: boolean;
   onInput: (message: string) => void;
@@ -147,7 +148,9 @@ export function renderNewSessionDraftComposer(options: {
   onBackgroundSubmit?: () => void;
 }) {
   const readSignal = options.attachmentDraft.readSignal;
-  const commandClient = options.context?.gateway.snapshot.client ?? null;
+  const commandClient = options.nativeTerminal
+    ? null
+    : (options.context?.gateway.snapshot.client ?? null);
   options.textareaController.syncSkillCommandOwner(
     commandClient,
     options.agentId,
@@ -194,7 +197,8 @@ export function renderNewSessionDraftComposer(options: {
     dictationActive: options.dictationActive,
     dictationPreview: options.dictationPreview,
     dictationStatus: options.dictationStatus,
-    terminalAction: options.terminalAction,
+    nativeTerminal: options.nativeTerminal,
+    onUnsupportedAttachment: options.onUnsupportedAttachment,
     submitting: options.submitting,
     textareaController: options.textareaController,
     voiceControl: options.voiceControl,

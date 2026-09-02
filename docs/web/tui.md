@@ -51,6 +51,7 @@ openclaw tui --local
 
 - Header: connection URL, current agent, current session.
 - Chat log: user messages, assistant replies, system notices, tool cards.
+- On terminals with hyperlink support, Markdown links open their authored destination, including wrapped links and URL-shaped labels.
 - Status line: connection/run state (connecting, running, streaming, idle, error).
 - Footer: agent + session + model + goal state + think/fast/verbose/trace/reasoning + token counts + deliver.
 - Input: text editor with autocomplete.

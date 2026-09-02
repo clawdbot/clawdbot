@@ -13,6 +13,7 @@ export type NewSessionRouteData = {
   model: string;
   catalogLabel: string;
   startTerminal: boolean;
+  terminalHosts?: Array<{ hostId: string; label: string }>;
 };
 
 export type NewSessionTarget =

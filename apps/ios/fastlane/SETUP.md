@@ -131,9 +131,10 @@ The screenshot lane runs the app with `--openclaw-screenshot-mode`, which enters
 Upload to App Store Connect:
 
 ```bash
-pnpm ios:release:plan -- --json
-pnpm ios:release:cut
-# Review and commit apps/ios/CHANGELOG.md.
+node --import tsx scripts/mobile-release-version.ts --prepare --version 2026.8.2 --write
+pnpm ios:release:plan -- --json > /tmp/ios-release-plan.json
+node --import tsx scripts/mobile-release-version.ts --finalize --version 2026.8.2 --plan /tmp/ios-release-plan.json --write
+# Review and commit all five cutter outputs.
 pnpm ios:release:upload
 ```
 
@@ -160,14 +161,15 @@ cd apps/ios
 BUNDLE_GEMFILE="$PWD/Gemfile" bundle _2.6.9_ exec fastlane ios auth_check
 ```
 
-4. Plan and cut the exact encoded-version changelog section:
+4. Prepare and finalize the shared mobile release:
 
 ```bash
-pnpm ios:release:plan -- --json
-pnpm ios:release:cut
+node --import tsx scripts/mobile-release-version.ts --prepare --version 2026.8.2 --write
+pnpm ios:release:plan -- --json > /tmp/ios-release-plan.json
+node --import tsx scripts/mobile-release-version.ts --finalize --version 2026.8.2 --plan /tmp/ios-release-plan.json --write
 ```
 
-5. Review and commit `apps/ios/CHANGELOG.md`, then upload:
+5. Review and commit all five cutter outputs, then upload:
 
 ```bash
 pnpm ios:release:upload
@@ -182,14 +184,14 @@ Quick verification after upload:
 
 Versioning rules:
 
-- App Store release uploads derive the gateway from root `package.json` and revision/build state from App Store Connect
+- App Store release uploads derive the gateway from `apps/mobile/version.json` and revision/build state from App Store Connect
 - explicit `--version`, `--revision`, and `--build-number` values are checked overrides
 - `apps/ios/CHANGELOG.md` is the iOS-only changelog and release-note source
 - Gateway versions use CalVer: `YYYY.M.D`
 - Fastlane appends one unpadded revision digit: gateway `YYYY.M.D`, revision `R`, becomes `YYYY.M.DR`
 - Gateway `2026.7.2`, revision `1` sets `CFBundleShortVersionString` to `2026.7.21`
 - Fastlane resolves `CFBundleVersion` from the maximum awaiting, processing, failed, or complete build-upload record plus one
-- Run `pnpm ios:release:cut` after changing `## Unreleased`, then review and commit the exact encoded heading
+- Run the shared mobile cutter prepare/plan/finalize flow after changing `## Unreleased`, then review and commit all five outputs
 - `pnpm ios:version:check` validates that release notes can be generated from the iOS changelog
 - The release flow regenerates `apps/ios/OpenClaw.xcodeproj` from `apps/ios/project.yml` before archiving
 - Local App Store signing uses a temporary generated xcconfig with profile names from `apps/ios/Config/AppStoreSigning.json` and leaves local development signing overrides untouched

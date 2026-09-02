@@ -33,7 +33,7 @@ describeBrowser("working claw browser layout", () => {
       const css = [
         "ui/src/styles/base.css",
         "ui/src/styles/components.css",
-        "ui/src/styles/chat/tool-cards.css",
+        "ui/src/styles/chat/working-indicator.css",
         // Production code splitting can attach grouped chat CSS after the
         // indicator chunk. The centering invariant must not depend on order.
         "ui/src/styles/chat/grouped.css",

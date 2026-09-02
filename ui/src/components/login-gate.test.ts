@@ -46,6 +46,25 @@ afterEach(() => {
 });
 
 describe("login gate failure recovery", () => {
+  it("explains how to reconnect with a verified user identity", async () => {
+    const element = await mountFailure(
+      "operator role policies require a verified user identity for this authentication method",
+      ConnectErrorDetailCodes.AUTH_VERIFIED_USER_REQUIRED,
+    );
+    const failure = element.querySelector(".login-gate__failure");
+    const steps = failure?.querySelector(".login-gate__failure-steps")?.textContent;
+
+    expect(failure?.getAttribute("data-kind")).toBe("verified-user-required");
+    expect(failure?.querySelector(".login-gate__failure-title")?.textContent).toBe(
+      "Verified identity required",
+    );
+    expect(steps).toMatch(/trusted proxy or Tailscale/iu);
+    expect(steps).toMatch(/shared Gateway token or password/iu);
+    expect(failure?.querySelector(".login-gate__failure-docs")?.getAttribute("href")).toBe(
+      "https://docs.openclaw.ai/gateway/operator-scopes",
+    );
+  });
+
   it.each([
     { name: "empty", token: "", password: "" },
     { name: "populated", token: "test-token", password: "test-password" },

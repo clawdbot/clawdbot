@@ -632,13 +632,6 @@ function createCronPromptExecutor(
         // CLI providers can resume provider-native sessions; embedded providers
         // use OpenClaw's transcript/session file plus prompt-cache affinity.
         if (cliExecution) {
-          const cliSessionBinding = params.cronSession.isNewSession
-            ? undefined
-            : await getCliSessionBinding(params.cronSession.sessionEntry, executionProvider);
-          const guardedCliSessionBinding =
-            cliSessionBinding && hasCliSessionReuseMetadata(cliSessionBinding)
-              ? cliSessionBinding
-              : undefined;
           // Cron intentionally reuses its durable session id as the run id; turn
           // claims stay unique via per-claim ids and the worker gate handles this
           // via credential rotation (see worker-environments/service.ts fences).
@@ -649,8 +642,15 @@ function createCronPromptExecutor(
               agentId: params.agentId,
               runId,
             },
-            async () =>
-              await runCliAgent({
+            async () => {
+              const cliSessionBinding = params.cronSession.isNewSession
+                ? undefined
+                : await getCliSessionBinding(params.cronSession.sessionEntry, executionProvider);
+              const guardedCliSessionBinding =
+                cliSessionBinding && hasCliSessionReuseMetadata(cliSessionBinding)
+                  ? cliSessionBinding
+                  : undefined;
+              return await runCliAgent({
                 preparedRunAdmission,
                 sessionId: params.cronSession.sessionEntry.sessionId,
                 sessionKey: params.runSessionKey,
@@ -714,7 +714,9 @@ function createCronPromptExecutor(
                 suppressNextUserMessagePersistence:
                   userTurnTranscriptRecorder.hasPersisted() ||
                   userTurnTranscriptRecorder.isBlocked(),
-              }),
+              });
+            },
+            { abortSignal: params.abortSignal, trigger: "cron" },
           );
           bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
             result.meta?.systemPromptReport,

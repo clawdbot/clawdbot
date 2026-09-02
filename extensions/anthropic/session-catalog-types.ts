@@ -34,6 +34,7 @@ export type ClaudeSessionCatalogHost = ClaudeSessionCatalogPage & {
   nodeId?: string;
   canContinueClaude?: boolean;
   canOpenTerminalClaude?: boolean;
+  canStartTerminal?: boolean;
   error?: { code: string; message: string };
 };
 

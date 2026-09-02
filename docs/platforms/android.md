@@ -21,6 +21,10 @@ The official Android app is available on [Google Play](https://play.google.com/s
   - Protocols: [Gateway protocol](/gateway/protocol) (nodes + control plane).
 - **Settings → OpenClaw** opens a dedicated Gateway settings assistant when the operator connection has `operator.admin` and the Gateway supports `openclaw.chat`. Its setup conversation stays separate from ordinary Chat, redacts secret replies locally, and moves to Chat only after you tap **Open Chat**.
 
+Its reply field switches to masked input for secret prompts. Tap it again if a prompt change closes the keyboard. Android sends sensitive replies without trimming them and clears unsent drafts when you leave this page or background the app.
+
+New replies stay in view while you are at the end of the settings conversation. Scroll up to read earlier steps without being pulled away, then tap **Jump to latest** to resume following. Following also resumes if resizing the window makes the whole conversation visible. **Restart**, when offered after an error, opens a new conversation at its latest reply.
+
 System control (launchd/systemd) lives on the Gateway host — see [Gateway](/gateway).
 
 ## Simultaneous gateway sessions
@@ -236,6 +240,8 @@ In the Android app:
 - After setup, open **Settings → Gateway**. **Add Gateway** lets you scan or paste a setup code, or connect to a discovered Gateway.
 - If discovery is blocked, use **Manual Gateway** on that page: enter the host and port, select **Connection security**, and tap **Save & Connect**. Private LAN hosts support `ws://`; for Tailscale/public hosts, use **Secure (TLS)** with a `wss://` / Tailscale Serve endpoint.
 
+Gateway tokens, bootstrap tokens, passwords, and setup codes are masked and accept paste. The app requests password input with autocorrection disabled, but cannot guarantee how a third-party keyboard stores or learns from input.
+
 After the first successful pairing, Android auto-reconnects on launch to the active paired gateway (best-effort for discovered gateways, which must be visible on the network).
 
 Android retries temporary connection losses automatically. For a fresh attempt with the saved endpoint, open **Settings → Gateway** and tap **Reconnect**. **Disconnect** stops the connections and suppresses automatic reconnect for the current app session; it does not forget the pairing. Authentication or pairing errors can pause retries until you address the reported problem.
@@ -327,6 +333,7 @@ Open **Home** from the sidebar's **Pages** menu to chat, or select an existing s
 - Archiving the open session returns to the app's main chat only if that same session is still selected. Switching sessions, agents, or Gateways while the archive finishes preserves your newer selection. A successful archive also retires the archived chat's remembered selection even if its push notification is missed.
 - **New** in the sidebar creates and selects a fresh chat from any page without clearing the previous session. History refreshes do not cancel creation; selecting another session, agent, or Gateway while it finishes preserves that newer selection.
 - Offline history: cached transcripts update in the order live histories are accepted, so a delayed reconnect health check cannot restore an older snapshot. Switching sessions preserves queued cache updates for the session you left.
+- **Refresh chat** in chat actions reloads history and rechecks Gateway health without clearing pending messages. A failed health check marks chat offline even if history still loads; refresh again once the Gateway recovers. History failures do not stop subsequent health checks.
 - Send: `chat.send`
 - Queued message controls: **Delete** removes the local queued copy, including when a reconnect refresh is still finishing. It does not undo a message already accepted by the Gateway; use **Stop** to cancel an active turn.
 - Durable sending: every send (text, picked images, and voice notes) is journaled to a per-gateway on-device outbox before any network attempt, so app termination cannot lose submitted input. Sends queued while offline deliver in order on reconnect with stable idempotency keys, and a send is retired only after the turn is visible in canonical `chat.history` — an acknowledgement alone is not treated as proof of delivery. Acknowledged reconnect sends show the same streaming progress as online sends; requests that never reach the socket queue remain queued for the next connection. Ambiguous outcomes (lost acknowledgement, app killed mid-send, gateway restart before the transcript write) surface as visible rows with explicit **Retry**/**Delete** instead of auto-resending. If refreshed history changes branches, earlier queued input keeps its text and attachments but requires explicit retry; input admitted after that history is displayed can send normally when reconnecting to the same branch. Slash commands never auto-replay across a reconnect; they park for explicit retry. The queue is bounded (50 messages and 48 MB of attachment bytes per gateway) and unsent rows expire after 48 hours. Composer drafts that were never submitted are not process-durable.
@@ -401,6 +408,8 @@ multi-select options, option descriptions, free-text **Other** answers, and an
 expiry countdown. Reconnects reload pending questions from the Gateway. A card
 locks when this device answers it, another surface answers it first, or the
 question expires or is cancelled.
+
+Secret answer fields mask typed or pasted values and request password input with autocorrection disabled. Android submits secret answers without trimming leading or trailing whitespace.
 
 ## Assistant entrypoints
 

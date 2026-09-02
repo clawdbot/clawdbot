@@ -27,6 +27,7 @@ export const uiE2ePrivateServerTestFiles = [
   "ui/src/e2e/approval-bootstrap.e2e.test.ts",
   "ui/src/e2e/build-info-unicode.e2e.test.ts",
   "ui/src/e2e/chat-code-block-fences.e2e.test.ts",
+  "ui/src/e2e/chat-export-attribution.e2e.test.ts",
   "ui/src/e2e/chat-markdown-table-interactions.e2e.test.ts",
   "ui/src/e2e/child-session-load-errors.e2e.test.ts",
   "ui/src/e2e/composer-draft-store.e2e.test.ts",

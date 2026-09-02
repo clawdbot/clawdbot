@@ -7,6 +7,7 @@ import { resolveClaudeTerminalExecutable } from "./session-catalog-executable.js
 import {
   CLAUDE_SESSIONS_LIST_COMMAND,
   CLAUDE_TERMINAL_RESUME_COMMAND,
+  CLAUDE_TERMINAL_START_COMMAND,
   ClaudeCatalogParamsError,
   isResumableClaudeSource,
 } from "./session-catalog-shared.js";
@@ -32,12 +33,17 @@ export function claudeNodeTerminalCapability(node: {
   commands?: string[];
   invocableCommands?: string[];
 }): {
-  canOpenTerminalClaude?: true;
+  canOpenTerminalClaude: boolean;
+  canStartTerminal: boolean;
 } {
   const commands = node.invocableCommands ?? node.commands;
-  return node.connected === true && commands?.includes(CLAUDE_TERMINAL_RESUME_COMMAND) === true
-    ? { canOpenTerminalClaude: true }
-    : {};
+  return {
+    canOpenTerminalClaude:
+      node.connected === true && commands?.includes(CLAUDE_TERMINAL_RESUME_COMMAND) === true,
+    canStartTerminal:
+      node.connected === true &&
+      node.invocableCommands?.includes(CLAUDE_TERMINAL_START_COMMAND) === true,
+  };
 }
 
 function isLocalClaudeResumable(host: { hostId: string }, source: string | undefined): boolean {
@@ -73,9 +79,14 @@ export async function startClaudeCatalogTerminal(params: {
   nodeId?: string;
 }): Promise<SessionCatalogTerminalPlan> {
   if (params.nodeId) {
-    throw new ClaudeCatalogParamsError(
-      "Paired-node Claude terminal start is unavailable; omit hostId to start on the gateway host",
-    );
+    return {
+      kind: "node",
+      nodeId: params.nodeId,
+      command: CLAUDE_TERMINAL_START_COMMAND,
+      paramsJSON: JSON.stringify({ cwd: params.cwd, initialMessage: params.initialMessage }),
+      cwd: params.cwd,
+      title: "claude",
+    };
   }
   const resolution = resolveClaudeTerminalExecutable();
   if (!resolution) {

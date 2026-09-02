@@ -5,6 +5,7 @@ import { isCloudWorkerPlacementState } from "../../../packages/gateway-protocol/
 import type { SessionPlacementDiskSpace } from "../../../packages/gateway-protocol/src/schema/session-placement.js";
 import type { SessionCatalogPullRequestSummary } from "../../../packages/gateway-protocol/src/schema/sessions-catalog.js";
 import type { GatewaySessionRow } from "../api/types.ts";
+import type { ApplicationGatewaySnapshot } from "../app/gateway.ts";
 import { t } from "../i18n/index.ts";
 import { icons } from "./icons.ts";
 
@@ -190,19 +191,41 @@ export function renderSessionRowBadges(params: {
   </span>`;
 }
 
+export function resolveSidebarConnectionStatus(props: {
+  offline: boolean;
+  restartPending?: boolean;
+  suspensionPhase?: ApplicationGatewaySnapshot["suspensionPhase"];
+}) {
+  if (props.restartPending) {
+    return "restarting";
+  }
+  if (props.offline) {
+    return "offline";
+  }
+  switch (props.suspensionPhase) {
+    case "preparing":
+    case "draining":
+      return "suspending";
+    case "prepared":
+      return "suspended";
+    default:
+      return null;
+  }
+}
+
 export function renderSidebarConnectionStatus(props: {
-  kind: "offline" | "restarting";
+  kind: NonNullable<ReturnType<typeof resolveSidebarConnectionStatus>>;
   queuedOutboxCount?: number;
   title?: string;
   onRetry: () => void;
 }) {
-  if (props.kind === "restarting") {
+  if (props.kind !== "offline") {
     return html`<span
-      class="sidebar-footer-bar__status sidebar-footer-bar__status--restarting"
+      class=${`sidebar-footer-bar__status sidebar-footer-bar__status--${props.kind}`}
       role="status"
       aria-live="polite"
       ><span class="sidebar-footer-bar__status-dot" aria-hidden="true"></span>${t(
-        "connection.restarting",
+        `connection.${props.kind}`,
       )}</span
     >`;
   }
