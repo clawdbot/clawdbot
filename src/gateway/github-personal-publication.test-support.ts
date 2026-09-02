@@ -25,12 +25,12 @@ const mocks = githubPublicationTestMocks();
 export const personalPublicationAccount = { accountId: 101, login: "personal-alice" };
 const account = personalPublicationAccount;
 const profileId = "ghp_22222222222222222222222222222222";
-const personalToken = "synthetic-personal-credential";
 
 export async function createPersonalPublicationFixture() {
   const owner = ensureProfileForEmail("alice@example.test").id;
   const otherOwner = ensureProfileForEmail("bob@example.test").id;
   const generation = randomUUID();
+  const personalToken = `synthetic-personal-credential-${generation}`;
   updateUserGitHubConnection(
     owner,
     () => ({

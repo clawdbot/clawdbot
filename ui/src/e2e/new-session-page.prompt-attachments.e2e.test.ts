@@ -43,10 +43,7 @@ async function expectDecodedThumbnail(image: Locator, expectedNaturalWidth?: num
   await image.scrollIntoViewIfNeeded();
   await expect
     .poll(() =>
-      image.evaluate(async (element, expectedWidth) => {
-        if (!(element instanceof HTMLImageElement)) {
-          return false;
-        }
+      image.evaluate(async (element: HTMLImageElement, expectedWidth) => {
         await element.decode();
         const bounds = element.getBoundingClientRect();
         return (
