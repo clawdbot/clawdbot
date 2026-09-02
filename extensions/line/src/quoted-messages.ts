@@ -17,7 +17,12 @@ export type LineQuotedMessage = {
   fromBot: boolean;
 };
 
-/** A stored answer plus the conversation that is allowed to receive it. */
+/**
+ * A stored answer plus the conversation that is allowed to receive it. An event
+ * whose source names no group, room, or user shares one bucket with every other
+ * such event; that needs a signed webhook with no identifiable source, so the
+ * bucket is accepted rather than guarded.
+ */
 type LineInboundRecord = { quoted: LineQuotedMessage; conversationId: string };
 
 // LINE's webhook reports a quoted message's id but never its author or its text,
