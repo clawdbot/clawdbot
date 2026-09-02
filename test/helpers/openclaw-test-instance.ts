@@ -670,8 +670,8 @@ async function runCommand(params: {
   if (!command) {
     throw new Error("missing command");
   }
-  const stdout = createBoundedStringLog();
-  const stderr = createBoundedStringLog();
+  const stdout: string[] = [];
+  const stderr: string[] = [];
   const child = spawn(command, args, {
     cwd: params.cwd,
     env: params.env,
@@ -680,8 +680,8 @@ async function runCommand(params: {
   });
   child.stdout?.setEncoding("utf8");
   child.stderr?.setEncoding("utf8");
-  child.stdout?.on("data", (d) => appendLogChunk(stdout, d));
-  child.stderr?.on("data", (d) => appendLogChunk(stderr, d));
+  child.stdout?.on("data", (d) => stdout.push(String(d)));
+  child.stderr?.on("data", (d) => stderr.push(String(d)));
 
   const deadline = new AbortController();
   const completed = await Promise.race([
@@ -700,8 +700,8 @@ async function runCommand(params: {
   }
   return {
     ...completed,
-    stdout: readLogBuffer(stdout),
-    stderr: readLogBuffer(stderr),
+    stdout: stdout.join(""),
+    stderr: stderr.join(""),
   };
 }
 

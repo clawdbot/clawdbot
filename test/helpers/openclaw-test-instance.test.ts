@@ -202,6 +202,10 @@ if (kind === "cli") {
     spawn(process.execPath, ["-e", 'setTimeout(() => console.log("drained cli output"), 50)'], { stdio: ["ignore", "inherit", "inherit"] });
     process.exit(0);
   }
+  if (argv[0] === "large") {
+    await new Promise((resolve) => process.stdout.write("x".repeat(300 * 1024), resolve));
+    process.exit(0);
+  }
   process.exit(Number(argv[0]));
 }
 const refusal = ${JSON.stringify(MIGRATION_CONVERGENCE_REFUSAL)};
@@ -302,6 +306,7 @@ describe("openclaw test instance", () => {
     { mode: "0", prepare: false },
     { mode: "7", prepare: false },
     { mode: "drain", prepare: false },
+    { mode: "large", prepare: false },
     { mode: "wait", prepare: false },
     { mode: "0", prepare: true },
   ])("releases the CLI deadline after $mode (prepare=$prepare)", async ({ mode, prepare }) => {
@@ -329,15 +334,22 @@ describe("openclaw test instance", () => {
       if (mode === "wait") {
         await expect(command).rejects.toThrow(`command timed out after ${timeoutMs}ms`);
       } else {
-        await expect(command).resolves.toEqual({
-          code: mode === "drain" ? 0 : Number(mode),
+        const result = await command;
+        expect(result).toMatchObject({
+          code: mode === "drain" || mode === "large" ? 0 : Number(mode),
           signal: null,
-          stdout:
+          stderr: "cli diagnostic\n",
+        });
+        if (mode === "large") {
+          expect(result.stdout.startsWith("fake gateway attempt 1\n")).toBe(true);
+          expect(result.stdout.length).toBe("fake gateway attempt 1\n".length + 300 * 1024);
+        } else {
+          expect(result.stdout).toBe(
             mode === "drain"
               ? "fake gateway attempt 1\ndrained cli output\n"
               : "fake gateway attempt 1\n",
-          stderr: "cli diagnostic\n",
-        });
+          );
+        }
       }
       const attempts = await readAttempts();
       expect(attempts).toHaveLength(1);
