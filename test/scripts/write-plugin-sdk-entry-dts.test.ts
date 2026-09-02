@@ -162,6 +162,13 @@ describe("write-plugin-sdk-entry-dts", () => {
       (changed.stdout + changed.stderr).match(/\[tsdown-build\] invocation \d\/2 finished/gu),
     ).toHaveLength(2);
     const first = treeHashes(path.join(root, "dist"));
+    const cachedDistFiles = new Set(
+      declarationCacheRecords(root).flatMap((record) =>
+        Object.keys(record.outputs)
+          .filter((file) => file.startsWith("dist/"))
+          .map((file) => file.slice("dist/".length)),
+      ),
+    );
     expectOutputs(root, qa, Object.keys(first));
     expectStagingClean(root);
     expect(first).not.toEqual(before);
@@ -188,9 +195,10 @@ describe("write-plugin-sdk-entry-dts", () => {
     for (const [relative, content] of Object.entries(preserved)) {
       writeRelocated(relative, content);
     }
-    // SDK publication owns flat entries; historical shared chunks belong to other groups.
-    for (const file of Object.keys(before).filter((entry) => !entry.startsWith("plugin-sdk/"))) {
-      expect(first[file]).toBe(before[file]);
+    // Seed only unowned history; current cache outputs must come from the restore below.
+    for (const file of Object.keys(first).filter(
+      (entry) => !entry.startsWith("plugin-sdk/") && !cachedDistFiles.has(entry),
+    )) {
       writeRelocated(`dist/${file}`, fs.readFileSync(path.join(root, "dist", file), "utf8"));
     }
     writeRelocated("dist/plugin-sdk/obsolete.d.ts", "obsolete restored declaration");

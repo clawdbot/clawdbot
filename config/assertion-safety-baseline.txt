@@ -1789,7 +1789,7 @@ src/agents/embedded-agent-runner/run/attempt-sessions-yield.ts	1
 src/agents/embedded-agent-runner/run/attempt-setup.ts	1
 src/agents/embedded-agent-runner/run/attempt-stop-reason-recovery.ts	3
 src/agents/embedded-agent-runner/run/attempt-stream-prepare.ts	3
-src/agents/embedded-agent-runner/run/attempt-stream.ts	9
+src/agents/embedded-agent-runner/run/attempt-stream.ts	8
 src/agents/embedded-agent-runner/run/attempt-subscription-cleanup.ts	2
 src/agents/embedded-agent-runner/run/attempt-tool-call-replay-sanitization.ts	17
 src/agents/embedded-agent-runner/run/attempt-tool-call-stream-normalization.ts	4
@@ -2742,7 +2742,6 @@ src/cron/store/quarantine.ts	1
 src/cron/store/row-codec.ts	4
 src/cron/store/transaction-hooks.ts	1
 src/cron/task-run-detail.ts	2
-src/cron/task-run-history.ts	1
 src/daemon/arg-split.ts	2
 src/daemon/launchd-install.ts	7
 src/daemon/launchd-lifecycle.ts	4

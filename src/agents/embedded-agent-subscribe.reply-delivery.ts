@@ -155,7 +155,7 @@ export function createReplyDelivery({ params, state, log }: ReplyDeliveryParams)
     if (!eventData && !delivery.emitPartialReply) {
       return;
     }
-    if (state.deferBlockReplyDelivery) {
+    if (state.deferBlockReplyDelivery && data.phase !== "commentary") {
       state.deferredAssistantEvents.push(delivery);
       return;
     }
