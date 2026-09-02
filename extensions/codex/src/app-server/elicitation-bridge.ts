@@ -17,9 +17,11 @@ import {
 } from "./elicitation-response.js";
 import type { CodexActiveMcpToolCall } from "./event-projector-native-tool-lifecycle.js";
 import {
+  requestPluginApproval,
   requestPluginApprovalOutcome,
   sanitizeCodexApprovalVisibleText,
   truncateCodexApprovalDisplayText as truncateDisplayText,
+  type AppServerApprovalOutcome,
   type ExecApprovalDecision,
   type PluginApprovalOutcome,
 } from "./plugin-approval-roundtrip.js";
