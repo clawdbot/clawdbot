@@ -23,7 +23,10 @@ import {
   TAILSCALE_ROUTE_OWNER_ARG,
   type TailscaleRouteOwnerMessage,
 } from "./tailscale-route-owner-protocol.js";
-import { TailscaleRouteOwnershipConflictError } from "./tailscale-route-ownership-error.js";
+import {
+  TailscaleRouteOwnershipConflictError,
+  isTailscaleRouteOwnershipConflictError,
+} from "./tailscale-route-ownership-error.js";
 
 const TAILSCALE_STATUS_ATTEMPTS = 3;
 const TAILSCALE_STATUS_RETRY_DELAY_MS = 500;
@@ -381,6 +384,13 @@ async function startTailscaleRouteOwner(argv: string[]): Promise<TailscaleRouteC
   }
 }
 
+function describeError(error: unknown): string {
+  if (error instanceof Error) {
+    return error.message;
+  }
+  return String(error);
+}
+
 export async function claimTailscaleRoute(
   mode: "serve" | "funnel",
   target: number,
@@ -409,7 +419,24 @@ export async function claimTailscaleRoute(
     if (!isPermissionDeniedError(error)) {
       throw error;
     }
-    claim = await start("sudo", ["-n", tailscaleBin]);
+    try {
+      claim = await start("sudo", ["-n", tailscaleBin]);
+    } catch (sudoError) {
+      // Ownership conflicts carry their own recovery instructions and must
+      // pass through untouched.
+      if (isTailscaleRouteOwnershipConflictError(sudoError)) {
+        throw sudoError;
+      }
+      // Under a systemd user service there is no TTY and OpenClaw installs no
+      // NOPASSWD sudoers rule, so `sudo -n` can only fail there. Name the
+      // supported fix instead of surfacing a bare "a password is required".
+      throw new Error(
+        `Tailscale ${mode} needs elevated access and the sudo fallback failed: ${describeError(sudoError)}. ` +
+          `Run \`tailscale set --operator=${process.env.USER || "$USER"}\` (or the same with your operator username) so the unprivileged path succeeds, ` +
+          "or install a NOPASSWD sudoers rule for the tailscale binary.",
+        { cause: sudoError },
+      );
+    }
   }
   if (adopted) {
     info("Tailscale route adopted from a previous OpenClaw release");

@@ -227,6 +227,23 @@ describe("tailscale helpers", () => {
   );
 
   it.runIf(process.platform !== "win32")(
+    "names the operator fix when the sudo fallback cannot run without a TTY",
+    async () => {
+      const fixture = fileURLToPath(
+        new URL("../../test/fixtures/tailscale-sudo-password-fixture.mjs", import.meta.url),
+      );
+      const fakeBin = tempDirs.make("openclaw-tailscale-bin-");
+      symlinkSync(fixture, path.join(fakeBin, "sudo"));
+      process.env.PATH = `${fakeBin}${path.delimiter}${process.env.PATH ?? ""}`;
+      process.env.OPENCLAW_TEST_TAILSCALE_BINARY = fixture;
+
+      await expect(claimTailscaleRoute("serve", 18791, 18791, vi.fn())).rejects.toThrow(
+        /tailscale set --operator=/,
+      );
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
     "preserves an ownership conflict from the privileged route retry",
     async () => {
       const fixture = fileURLToPath(
