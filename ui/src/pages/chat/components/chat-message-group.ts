@@ -37,7 +37,6 @@ import {
   renderMessageActionButtons,
   renderReplyButton,
   resolveMessageActionDetails,
-  type AssistantMessageDisclosure,
   type MessageActionDetails,
   type MessageReplyTarget,
 } from "./chat-message-markdown.ts";
@@ -47,6 +46,7 @@ import {
   type StreamGroupOptions,
   type StreamGroupPart,
 } from "./chat-message-stream.ts";
+import type { AssistantMessageDisclosure } from "./chat-message-text.ts";
 import { extractGroupMeta, renderMessageMeta } from "./chat-message-timestamp.ts";
 import type { SidebarContent, SidebarFullMessageLoader } from "./chat-sidebar.ts";
 import {
