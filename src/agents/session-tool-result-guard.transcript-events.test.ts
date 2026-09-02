@@ -160,7 +160,7 @@ describe("guardSessionManager transcript updates", () => {
         mediaImageLayout: provenance.mediaImageLayout,
       },
     };
-    expect(runtimeMessage.__openclaw.mediaImageBlockFactIndexes).toEqual(expectedFactIndexes);
+    expect(runtimeMessage["__openclaw"].mediaImageBlockFactIndexes).toEqual(expectedFactIndexes);
     const guarded = guardSessionManager(sessionManager, {
       agentId: target.agentId,
       sessionKey: target.sessionKey,

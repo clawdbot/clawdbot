@@ -147,16 +147,19 @@ describe("maintenance lease heartbeat", () => {
         const controller = new AbortController();
         const spawned = once(process, "worker") as Promise<[Worker]>;
         let retained: OpenClawStateLeaseContext | undefined;
+        let expiresAtBeforeClosing: number | undefined;
         const operation = withOpenClawStateLease(
-          options(state.env, controller.signal),
+          // Check closure before expiry without making worker startup the timing oracle.
+          { ...options(state.env, controller.signal), leaseMs: 10_000 },
           async (lease) => {
             retained = lease;
+            expiresAtBeforeClosing = Number(readLease(state.env)?.expires_at);
             if (ending === "abort") {
+              const [worker] = await spawned;
+              const exited = once(worker, "exit");
               controller.abort();
               const stopped = readLease(state.env);
-              await new Promise((resolve) => {
-                setTimeout(resolve, 450);
-              });
+              await exited;
               expect(readLease(state.env)).toEqual(stopped);
             } else if (ending === "throw") {
               throw new Error("operation failed");
@@ -173,6 +176,7 @@ describe("maintenance lease heartbeat", () => {
         }
         const [worker] = await spawned;
         expect(worker.threadId).toBe(-1);
+        expect(expiresAtBeforeClosing).toBeGreaterThan(Date.now());
         expect(readLease(state.env)).toBeUndefined();
         expect(retained).toBeDefined();
         expect(() => retained?.assertOwned()).toThrow();

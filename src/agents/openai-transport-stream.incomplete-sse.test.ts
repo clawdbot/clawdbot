@@ -84,7 +84,7 @@ describe("incomplete Responses loopback SSE", () => {
         maxTokens: 4_096,
       } satisfies Model;
 
-      const stream = await transport.createStream()(
+      const stream = transport.createStream()(
         model,
         {
           messages: [{ role: "user", content: "Reply with a partial sentence", timestamp: 0 }],

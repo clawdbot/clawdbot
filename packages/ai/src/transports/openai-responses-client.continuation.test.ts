@@ -128,7 +128,7 @@ async function run(
     signal?: AbortSignal;
   },
 ): Promise<AssistantMessage> {
-  const stream = await createOpenAIResponsesTransportStreamFn()(model, context, {
+  const stream = createOpenAIResponsesTransportStreamFn()(model, context, {
     apiKey: "test-key",
     sessionId: options.sessionId ?? "session-1",
     transport: "sse",

@@ -74,7 +74,7 @@ describeLive("native HTTP Responses continuation with current tools", () => {
             tool_choice: "auto",
           }),
         } satisfies OpenAIResponsesOptions;
-        const stream = await createOpenAIResponsesTransportStreamFn()(model, context, options);
+        const stream = createOpenAIResponsesTransportStreamFn()(model, context, options);
         const result = await stream.result();
         if (result.responseId) {
           responseIds.push(result.responseId);

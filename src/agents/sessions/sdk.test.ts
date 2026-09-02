@@ -652,40 +652,6 @@ describe("createAgentSession tool defaults", () => {
     });
   });
 
-  it("keeps custom tools active when only builtin tools are disabled", async () => {
-    // `noTools: "builtin"` removes stock tools only; extension/custom tools are
-    // still explicitly supplied session capabilities.
-    const customTool: ToolDefinition = {
-      name: "custom_lookup",
-      label: "Custom Lookup",
-      description: "Looks up a test value.",
-      promptSnippet: "Lookup test values",
-      promptGuidelines: ["Use custom_lookup for test values."],
-      parameters: Type.Object({}),
-      execute: async () => ({
-        content: [{ type: "text", text: "ok" }],
-        details: {},
-      }),
-    };
-
-    const { session } = await createAgentSession({
-      model: testModel,
-      noTools: "builtin",
-      customTools: [customTool],
-      resourceLoader: createEmptyResourceLoader(),
-      sessionManager: SessionManager.inMemory(),
-      settingsManager: SettingsManager.inMemory(),
-      modelRegistry: ModelRegistry.inMemory(AuthStorage.inMemory()),
-    });
-
-    expect(session.getActiveToolNames()).toEqual(["custom_lookup"]);
-    expect(session.getAllTools().map((tool) => tool.name)).toEqual(["custom_lookup"]);
-
-    session.setActiveToolsByName(["bash", "custom_lookup"]);
-
-    expect(session.getActiveToolNames()).toEqual(["custom_lookup"]);
-  });
-
   it("preserves channel-progress visibility for custom tools", async () => {
     const hiddenTool: ToolDefinition = {
       name: "internal_wait",
@@ -717,7 +683,7 @@ describe("createAgentSession tool defaults", () => {
     ]);
   });
 
-  it("preserves an exact base system prompt when active tools change", async () => {
+  it("preserves custom tools and an exact base prompt when builtin tools are disabled", async () => {
     const customTool: ToolDefinition = {
       name: "custom_lookup",
       label: "Custom Lookup",
@@ -741,6 +707,9 @@ describe("createAgentSession tool defaults", () => {
       modelRegistry: ModelRegistry.inMemory(AuthStorage.inMemory()),
     });
     const systemPrompt = "You are a personal assistant running inside OpenClaw.";
+
+    expect(session.getActiveToolNames()).toEqual(["custom_lookup"]);
+    expect(session.getAllTools().map((tool) => tool.name)).toEqual(["custom_lookup"]);
 
     session.setBaseSystemPrompt(systemPrompt);
     session.setActiveToolsByName(["bash", "custom_lookup"]);
@@ -837,23 +806,28 @@ describe("createAgentSession tool defaults", () => {
     expect(events).toEqual(["settlement:start", "hook", "settlement:end"]);
   });
 
-  it("runs write-capable tool hooks under the configured write settlement", async () => {
+  it.each([false, true])("fences tool execution with extension hook=%s", async (hasHook) => {
+    // Settlement protects shared session state even when no extension hook is registered.
     const events: string[] = [];
     const handlers = new Map<string, Array<(...args: unknown[]) => Promise<unknown>>>([
       [
         "tool_call",
-        [
-          async () => {
-            events.push("hook");
-            return undefined;
-          },
-        ],
+        hasHook
+          ? [
+              async () => {
+                events.push("hook");
+                return undefined;
+              },
+            ]
+          : [],
       ],
     ]);
 
     const { session } = await createAgentSession({
       model: testModel,
-      resourceLoader: createResourceLoaderWithHandlers(handlers),
+      resourceLoader: hasHook
+        ? createResourceLoaderWithHandlers(handlers)
+        : createEmptyResourceLoader(),
       sessionManager: SessionManager.inMemory(),
       settingsManager: SettingsManager.inMemory(),
       modelRegistry: ModelRegistry.inMemory(AuthStorage.inMemory()),
@@ -885,7 +859,12 @@ describe("createAgentSession tool defaults", () => {
         stopReason: "toolUse",
         timestamp: Date.now(),
       },
-      toolCall: { type: "toolCall", id: "call_1", name: "read", arguments: {} },
+      toolCall: {
+        type: "toolCall",
+        id: "call_1",
+        name: hasHook ? "read" : "write_file",
+        arguments: {},
+      },
       args: {},
       context: {
         systemPrompt: "",
@@ -894,57 +873,11 @@ describe("createAgentSession tool defaults", () => {
       },
     });
 
-    expect(events).toEqual(["settlement:start", "hook", "settlement:end"]);
-  });
-
-  it("fences tool execution when no extension hook is registered", async () => {
-    // Write-capable tools still enter the settlement boundary even without hooks;
-    // it covers shared session state, not just extension execution.
-    const events: string[] = [];
-    const { session } = await createAgentSession({
-      model: testModel,
-      resourceLoader: createEmptyResourceLoader(),
-      sessionManager: SessionManager.inMemory(),
-      settingsManager: SettingsManager.inMemory(),
-      modelRegistry: ModelRegistry.inMemory(AuthStorage.inMemory()),
-      withSessionWriteSettlement: async (run) => {
-        events.push("settlement:start");
-        try {
-          return await run();
-        } finally {
-          events.push("settlement:end");
-        }
-      },
-    });
-
-    await session.agent.beforeToolCall?.({
-      assistantMessage: {
-        role: "assistant",
-        content: [],
-        api: testModel.api,
-        provider: testModel.provider,
-        model: testModel.id,
-        usage: {
-          input: 0,
-          output: 0,
-          cacheRead: 0,
-          cacheWrite: 0,
-          totalTokens: 0,
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-        },
-        stopReason: "toolUse",
-        timestamp: Date.now(),
-      },
-      toolCall: { type: "toolCall", id: "call_1", name: "write_file", arguments: {} },
-      args: {},
-      context: {
-        systemPrompt: "",
-        messages: [],
-        tools: [],
-      },
-    });
-
-    expect(events).toEqual(["settlement:start", "settlement:end"]);
+    expect(events).toEqual(
+      hasHook
+        ? ["settlement:start", "hook", "settlement:end"]
+        : ["settlement:start", "settlement:end"],
+    );
   });
 });
 

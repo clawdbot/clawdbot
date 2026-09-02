@@ -29,24 +29,25 @@ export function finalizeRuntimePromptImages<TImage extends object>(
     ...(factIndex === null ? {} : { factIndex }),
   });
   // Missing facts retain their place; absent factless slots have no recoverable bytes.
-  const slots = (declaredLayout?.slots ?? []).flatMap((slot, index) => {
+  const slots: Array<MediaImageLayout["slots"][number]> = [];
+  for (const [index, slot] of (declaredLayout?.slots ?? []).entries()) {
     if (slot.factIndex !== undefined && suppressed.has(slot.factIndex)) {
-      return [];
+      continue;
     }
     const entry = successfulBySlot.get(index);
-    return [
-      ...(entry ? [inline(entry.factIndex)] : []),
-      ...(slot.factIndex !== undefined && entry?.factIndex !== slot.factIndex
-        ? [{ kind: "offloaded" as const, factIndex: slot.factIndex }]
-        : []),
-    ];
-  });
+    if (entry) {
+      slots.push(inline(entry.factIndex));
+    }
+    if (slot.factIndex !== undefined && entry?.factIndex !== slot.factIndex) {
+      slots.push({ kind: "offloaded", factIndex: slot.factIndex });
+    }
+  }
   // Extras have no declaration position; the detector already ordered their delivered bytes.
-  slots.push(
-    ...entries
-      .filter((entry) => entry.sourceSlotIndex === undefined)
-      .map((entry) => inline(entry.factIndex)),
-  );
+  for (const entry of entries) {
+    if (entry.sourceSlotIndex === undefined) {
+      slots.push(inline(entry.factIndex));
+    }
+  }
   const mediaImageLayout: MediaImageLayout = {
     slots,
     ...(suppressed.size ? { suppressedFactIndexes: [...suppressed] } : {}),

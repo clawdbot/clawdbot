@@ -271,7 +271,7 @@ describe("structured prompt media replay", () => {
       ...persisted,
       content: [{ type: "text" as const, text: "compare image and video" }, history],
       __openclaw: {
-        ...persisted.__openclaw,
+        ...persisted["__openclaw"],
         mediaImageBlockFactIndexes: [null],
         mediaImageLayout: { slots: [{ kind: "inline" }, { kind: "offloaded", factIndex: 0 }] },
       },
@@ -298,7 +298,8 @@ describe("structured prompt media replay", () => {
         throw new Error("Expected the first hydrated user message");
       }
       expect(first.content).toEqual(expectedContent);
-      const restored = JSON.parse(JSON.stringify(first)) as AgentMessage;
+      const serialized = JSON.stringify(first);
+      const restored = JSON.parse(serialized) as AgentMessage;
       await fs.rm(currentPath);
       const [second] = await hydratePromptMediaMessages([restored], options);
       if (second?.role !== "user") {

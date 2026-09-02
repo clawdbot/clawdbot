@@ -91,9 +91,9 @@ export function buildPersistedUserTurnMetadata(
       ? {
           mediaImageLayout: {
             // Text-only input messages cannot replay transient, factless image bytes.
-            slots: input.mediaImageLayout.slots
-              .filter((slot) => slot.factIndex !== undefined)
-              .map((slot) => ({ ...slot })),
+            slots: input.mediaImageLayout.slots.flatMap(({ kind, factIndex }) =>
+              factIndex === undefined ? [] : [{ kind, factIndex }],
+            ),
             ...(input.mediaImageLayout.suppressedFactIndexes?.length
               ? {
                   suppressedFactIndexes: [...input.mediaImageLayout.suppressedFactIndexes],

@@ -26,7 +26,7 @@ describe("buildLateResolvedMediaMessage", () => {
     expect(lateMessage).toEqual({
       ...resolvedMessage,
       idempotencyKey: "media:user:late-media",
-      __openclaw: { ...resolvedMessage.__openclaw, lateMedia: true },
+      __openclaw: { ...resolvedMessage["__openclaw"], lateMedia: true },
     });
     expect(lateMessage && buildLateMediaAttachedProjection(lateMessage).media).toEqual([
       { path: "/tmp/a.png", contentType: "image/png", kind: "image", transcribed: false },

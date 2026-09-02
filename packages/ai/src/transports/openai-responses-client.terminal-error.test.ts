@@ -66,7 +66,7 @@ describe("managed Responses transport terminal errors", () => {
       })(),
       response: new Response(null, { status: 200 }),
     });
-    const stream = await createOpenAIResponsesTransportStreamFn()(
+    const stream = createOpenAIResponsesTransportStreamFn()(
       model,
       { messages: [], tools: [] },
       {

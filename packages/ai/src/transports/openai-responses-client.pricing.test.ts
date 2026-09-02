@@ -81,7 +81,7 @@ function completedResponse(serviceTier: string): SdkResponse {
 describe("managed Responses transport service-tier pricing", () => {
   it("applies the canonical 2.5x gpt-5.5 priority multiplier to usage cost", async () => {
     sseState.outcomes.push(completedResponse("priority"));
-    const stream = await createOpenAIResponsesTransportStreamFn()(
+    const stream = createOpenAIResponsesTransportStreamFn()(
       model,
       { messages: [], tools: [] },
       { apiKey: "test-key", sessionId: "session-pricing", transport: "sse" } as never,
