@@ -294,7 +294,6 @@ export function startHeartbeatRunner(opts: {
                 configuredHeartbeat: agent?.heartbeat,
                 requestedHeartbeat,
                 source: params.source,
-                mergeRequestedHeartbeat: true,
               }),
           source: params.source,
           intent,

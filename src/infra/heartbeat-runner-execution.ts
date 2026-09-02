@@ -74,6 +74,10 @@ import {
   resolveIsolatedHeartbeatSessionKey,
   resolveStaleHeartbeatIsolatedSessionKey,
 } from "./heartbeat-runner-session.js";
+import {
+  createHeartbeatSetupAbortController,
+  resolveHeartbeatSetupTimeoutMs,
+} from "./heartbeat-runner-setup-watchdog.js";
 import { isHeartbeatEnabledForAgent, resolveHeartbeatIntervalMs } from "./heartbeat-summary.js";
 import { resolveHeartbeatVisibility } from "./heartbeat-visibility.js";
 import {
@@ -144,6 +148,11 @@ export type HeartbeatRunOptions = {
   owningCronJobMarker?: CronActiveJobMarker;
   owningCronLaneTaskMarker?: CommandLaneTaskMarker;
   deps?: HeartbeatDeps;
+  /**
+   * Override the pre-stream setup watchdog for tests. Production code leaves this
+   * unset and uses HEARTBEAT_SETUP_WATCHDOG_MS.
+   */
+  setupTimeoutMs?: number;
 };
 
 export async function resolveHeartbeatWakeStage(opts: HeartbeatRunOptions) {
@@ -163,7 +172,6 @@ export async function resolveHeartbeatWakeStage(opts: HeartbeatRunOptions) {
     agentId,
     requestedHeartbeat: opts.heartbeat,
     source: wakeSource,
-    mergeRequestedHeartbeat: wakeSource === "cron",
   });
   const scheduledTasks = [...(opts.tasks ?? [])].toSorted((left, right) =>
     left.jobId.localeCompare(right.jobId),
@@ -645,6 +653,20 @@ export async function invokeHeartbeatAgentRun(
   const getReplyFromConfig =
     opts.deps?.getReplyFromConfig ?? (await loadHeartbeatRunnerRuntime()).getReplyFromConfig;
   const heartbeatWakeAbortSignal = getHeartbeatWakeAbortSignal();
+  const heartbeatTimeoutSeconds = resolveHeartbeatTimeoutOverrideSeconds(cfg, heartbeat);
+  const setupTimeoutMs = resolveHeartbeatSetupTimeoutMs(
+    heartbeatTimeoutSeconds,
+    opts.setupTimeoutMs,
+  );
+  const setupWatchdog = createHeartbeatSetupAbortController({
+    timeoutMs: setupTimeoutMs,
+    heartbeatWakeAbortSignal,
+    onTimeout: () =>
+      new Error(
+        `heartbeat setup timeout: no model selected within ${Math.floor(setupTimeoutMs / 1000)}s`,
+      ),
+  });
+  const onModelSelected = replyPrefix.onModelSelected;
   const replyOpts = {
     isHeartbeat: true,
     [REPLY_OPERATION_RUN_STATE]: replyOperationRunState,
@@ -652,29 +674,42 @@ export async function invokeHeartbeatAgentRun(
     suppressToolErrorWarnings: false,
     ...(usesHeartbeatResponseTool ? { enableHeartbeatTool: true, forceHeartbeatTool: true } : {}),
     ...(usesHeartbeatResponseTool ? { sourceReplyDeliveryMode: "message_tool_only" as const } : {}),
-    ...(heartbeatWakeAbortSignal ? { abortSignal: heartbeatWakeAbortSignal } : {}),
+    abortSignal: setupWatchdog.signal,
     // Heartbeat timeout is a per-run override so user turns keep the global default.
-    timeoutOverrideSeconds: resolveHeartbeatTimeoutOverrideSeconds(cfg, heartbeat),
+    timeoutOverrideSeconds: heartbeatTimeoutSeconds,
     bootstrapContextMode: heartbeat?.lightContext === true ? ("lightweight" as const) : undefined,
-    onModelSelected: replyPrefix.onModelSelected,
+    onModelSelected: onModelSelected
+      ? (ctx: Parameters<typeof onModelSelected>[0]) => {
+          setupWatchdog.disarm();
+          onModelSelected(ctx);
+        }
+      : undefined,
   };
-  const replyResult = await getReplyFromConfig(
-    {
-      Body: appendCronStyleCurrentTimeLine(prompt, cfg, startedAt),
-      From: sender,
-      To: sender,
-      OriginatingChannel:
-        !suppressOriginatingContext && delivery.channel !== "none" ? delivery.channel : undefined,
-      OriginatingTo: !suppressOriginatingContext ? delivery.to : undefined,
-      AccountId: delivery.accountId,
-      MessageThreadId: delivery.threadId,
-      InternalTurnSource: hasExecCompletion ? "exec" : hasCronEvents ? "cron" : "heartbeat",
-      SessionKey: runSessionKey,
-      AgentId: agentId,
-    },
-    replyOpts,
-    cfg,
-  );
+  const replyResult = await (async () => {
+    try {
+      return await getReplyFromConfig(
+        {
+          Body: appendCronStyleCurrentTimeLine(prompt, cfg, startedAt),
+          From: sender,
+          To: sender,
+          OriginatingChannel:
+            !suppressOriginatingContext && delivery.channel !== "none"
+              ? delivery.channel
+              : undefined,
+          OriginatingTo: !suppressOriginatingContext ? delivery.to : undefined,
+          AccountId: delivery.accountId,
+          MessageThreadId: delivery.threadId,
+          InternalTurnSource: hasExecCompletion ? "exec" : hasCronEvents ? "cron" : "heartbeat",
+          SessionKey: runSessionKey,
+          AgentId: agentId,
+        },
+        replyOpts,
+        cfg,
+      );
+    } finally {
+      setupWatchdog.disarm();
+    }
+  })();
   const agentTurnStatus = resolveReplyOperationAgentTurn(replyOperationRunState);
   if (agentTurnStatus === "superseded" || agentTurnStatus === "cancelled") {
     return { kind: agentTurnStatus === "superseded" ? "preempted" : "cancelled" } as const;

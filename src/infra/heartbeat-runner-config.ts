@@ -24,6 +24,7 @@ import type { HeartbeatWakeSource } from "./heartbeat-wake.js";
 export {
   isHeartbeatOwnerUnresolved,
   resolveHeartbeatAgents,
+  resolveHeartbeatConfig,
   resolveHeartbeatIntervalMs,
   type HeartbeatConfig,
 } from "./heartbeat-config.js";
@@ -82,13 +83,12 @@ export function resolveHeartbeatForWake(params: {
   configuredHeartbeat?: HeartbeatConfig;
   requestedHeartbeat?: HeartbeatConfig;
   source?: HeartbeatWakeSource;
-  mergeRequestedHeartbeat: boolean;
 }): HeartbeatConfig | undefined {
   const base = params.configuredHeartbeat ?? resolveHeartbeatConfig(params.cfg, params.agentId);
-  const heartbeat =
-    params.requestedHeartbeat && params.mergeRequestedHeartbeat
-      ? { ...base, ...params.requestedHeartbeat }
-      : (params.requestedHeartbeat ?? base);
+  // Public wake overrides are destination-only (target/to/accountId). Always merge
+  // them with configured state so non-cron wakes do not silently drop
+  // timeoutSeconds, lightContext, or other heartbeat settings.
+  const heartbeat = params.requestedHeartbeat ? { ...base, ...params.requestedHeartbeat } : base;
   return params.source === "cron" && params.requestedHeartbeat?.target === "last"
     ? omitExplicitHeartbeatDestination(heartbeat)
     : heartbeat;

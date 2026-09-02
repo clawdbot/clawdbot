@@ -1,5 +1,6 @@
 // Gateway cron runtime service runs scheduled agent turns, heartbeat wakeups,
 // plugin hooks, notifications, and cron lifecycle cleanup.
+import { finiteSecondsToTimerSafeMilliseconds } from "@openclaw/normalization-core/number-coercion";
 import { retireSessionMcpRuntime } from "../agents/agent-bundle-mcp-tools.js";
 import { isAgentDeletionBlocked } from "../agents/agent-lifecycle-registry.js";
 import {
@@ -68,6 +69,10 @@ import type {
 } from "../cron/types.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { resolveMainScopedEventSessionKey } from "../infra/event-session-routing.js";
+import {
+  resolveHeartbeatConfig,
+  resolveHeartbeatTimeoutOverrideSeconds,
+} from "../infra/heartbeat-runner-config.js";
 import { runHeartbeatOnce } from "../infra/heartbeat-runner-run.js";
 import {
   requestHeartbeat,
@@ -907,6 +912,13 @@ export function buildGatewayCronService(params: {
         owningCronLaneTaskMarker: opts?.owningCronLaneTaskMarker,
         deps: { ...params.deps, runtime: defaultRuntime },
       });
+    },
+    resolveHeartbeatTimeoutMs: (agentId) => {
+      const cfg = getRuntimeConfig();
+      const heartbeat = resolveHeartbeatConfig(cfg, agentId);
+      return finiteSecondsToTimerSafeMilliseconds(
+        resolveHeartbeatTimeoutOverrideSeconds(cfg, heartbeat),
+      );
     },
     runSkillCollectionReview: ({ agentId, abortSignal }) =>
       runSkillCollectionReviewForAgent({

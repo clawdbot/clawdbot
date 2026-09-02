@@ -246,7 +246,12 @@ async function executeJobCoreWithTimeoutUnfinalized(
   const recordTaskExecutionStart = (info?: CronAgentExecutionStarted) => {
     tryUpdateCronTaskRunSession(state, opts?.runId, info?.sessionKey);
   };
-  const jobTimeoutMs = resolveCronJobTimeoutMs(job);
+  const resolvedHeartbeatTimeoutMs =
+    (job.payload.kind === "heartbeat" || job.payload.kind === "systemEvent") &&
+    job.sessionTarget === "main"
+      ? state.deps.resolveHeartbeatTimeoutMs?.(job.agentId)
+      : undefined;
+  const jobTimeoutMs = resolveCronJobTimeoutMs(job, { resolvedHeartbeatTimeoutMs });
   try {
     if (typeof jobTimeoutMs !== "number") {
       // No wall-clock timeout means no watchdog to accumulate the resolved run
