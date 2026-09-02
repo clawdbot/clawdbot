@@ -767,7 +767,12 @@ describe("Codex plugin thread config", () => {
       });
       const request = vi.fn(async (method: string, params?: unknown) => {
         if (method === "app/installed" || method === "app/read") {
-          return codexAppInventoryResponse(method, [linearApp], params);
+          return codexAppInventoryResponse(
+            method,
+            [linearApp],
+            // SAFETY: the dispatcher supplies the narrowed inventory method's parameters.
+            params as CodexAppServerRequestParams<typeof method>,
+          );
         }
         if (method === "plugin/installed" || method === "plugin/list") {
           return pluginList([pluginSummary("linear", { installed: true, enabled: true })]);
