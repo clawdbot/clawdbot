@@ -6,6 +6,7 @@ import {
   collectChannelConfigDoctorBuildEntries,
   collectPluginDeclarationSourceEntries,
   collectRootPackageExcludedExtensionDirs,
+  collectSourceCheckoutPluginBuildEntries,
   DOCKER_SELECTED_PLUGIN_BUILD_IDS_ENV,
   listBundledPluginBuildEntries,
   listBundledPluginPackArtifacts,
@@ -138,9 +139,11 @@ describe("bundled plugin build entries", () => {
   it("keeps Codex CLI metadata in bundled build and standalone pack entries", () => {
     const entries = listBundledPluginBuildEntries();
     const artifacts = listBundledPluginPackArtifacts({ includeRootPackageExcludedDirs: true });
+    const sourceEntry = collectSourceCheckoutPluginBuildEntries().find(({ id }) => id === "codex");
 
     expect(entries["extensions/codex/cli-metadata"]).toBe("extensions/codex/cli-metadata.ts");
     expect(artifacts).toContain("dist/extensions/codex/cli-metadata.js");
+    expect(sourceEntry).toMatchObject({ isolated: true, runtimeExtension: ".js" });
   });
 
   it("builds narrow QA runner public surfaces", () => {
