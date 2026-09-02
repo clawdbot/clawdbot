@@ -161,14 +161,10 @@ const installRunEmbeddedMocks = () => {
     }),
     resolveEmbeddedAuthCooldownProbePolicy: resolveEmbeddedAuthCooldownProbePolicyActual,
   }));
-  vi.doMock("./models-config.js", async () => {
-    const mod = await vi.importActual<typeof import("./models-config.js")>("./models-config.js");
-    return {
-      ...mod,
-      ensureOpenClawModelsJson: (...args: Parameters<typeof ensureOpenClawModelsJsonMock>) =>
-        ensureOpenClawModelsJsonMock(...args),
-    };
-  });
+  vi.doMock("./models-config.js", () => ({
+    ensureOpenClawModelsJson: (...args: Parameters<typeof ensureOpenClawModelsJsonMock>) =>
+      ensureOpenClawModelsJsonMock(...args),
+  }));
 };
 
 type ProductionRunEmbeddedAgent = typeof import("./embedded-agent-runner/run.js").runEmbeddedAgent;
