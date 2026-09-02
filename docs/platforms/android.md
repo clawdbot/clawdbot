@@ -23,6 +23,8 @@ The official Android app is available on [Google Play](https://play.google.com/s
 
 Its reply field switches to masked input for secret prompts. Tap it again if a prompt change closes the keyboard. Android sends sensitive replies without trimming them and clears unsent drafts when you leave this page or background the app.
 
+New replies stay in view while you are at the end of the settings conversation. Scroll up to read earlier steps without being pulled away, then tap **Jump to latest** to resume following. Following also resumes if resizing the window makes the whole conversation visible. **Restart**, when offered after an error, opens a new conversation at its latest reply.
+
 System control (launchd/systemd) lives on the Gateway host — see [Gateway](/gateway).
 
 ## Simultaneous gateway sessions
