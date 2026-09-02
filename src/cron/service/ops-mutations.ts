@@ -15,7 +15,7 @@ import {
   requestActiveCronJobCancellation,
 } from "../active-jobs.js";
 import { resolveCronJobConfigRevision } from "../config-revision.js";
-import { isSystemOwnedCronJob } from "../metadata.js";
+import { assertValidCronMetadata, isSystemOwnedCronJob } from "../metadata.js";
 import { cronSchedulingInputsEqual } from "../schedule-identity.js";
 import { removeCronJobBaseSession } from "../session-reaper.js";
 import { removeStaleCronJobFamilyRows } from "../store.js";
@@ -320,6 +320,9 @@ export async function add(
   let pendingSessionCleanup: Promise<void> | undefined;
   return await locked(state, async () => {
     warnIfDisabled(state, "add");
+    // Validate at the shared service boundary before declaration matching so
+    // declarative re-upserts cannot bypass the metadata contract.
+    assertValidCronMetadata(input);
     if (input.payload.kind === "heartbeat" && opts?.systemOwned !== true) {
       throw new Error("system-owned payloads cannot be created by cron clients");
     }

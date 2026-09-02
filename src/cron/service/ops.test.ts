@@ -432,6 +432,37 @@ describe("scheduled tool policy provenance", () => {
     }
   });
 
+  it("rejects invalid metadata before declarative re-upsert", async () => {
+    const { storePath } = await makeStorePath();
+    const state = createOkIsolatedCronState({ storePath, now: Date.now() });
+    const input = {
+      declarationKey: "plugin:test:metadata-validation",
+      name: "declarative metadata validation",
+      enabled: true,
+      schedule: { kind: "every" as const, everyMs: 60_000 },
+      sessionTarget: "isolated" as const,
+      wakeMode: "now" as const,
+      payload: { kind: "agentTurn" as const, message: "run" },
+      group: "Work",
+      tags: ["reports"],
+    };
+
+    const created = requireDeclarativeAddResult(await add(state, input));
+    await expect(add(state, { ...input, group: "System" })).rejects.toThrow(/reserved/);
+    await expect(add(state, { ...input, tags: ["reports", "REPORTS"] })).rejects.toThrow(
+      /duplicates/,
+    );
+    expect(state.store?.jobs).toHaveLength(1);
+    expect(state.store?.jobs[0]).toMatchObject({
+      id: created.job.id,
+      group: "Work",
+      tags: ["reports"],
+    });
+    if (state.timer) {
+      clearTimeout(state.timer);
+    }
+  });
+
   it("stamps trusted and authenticated-account creates", async () => {
     const { storePath } = await makeStorePath();
     const now = Date.parse("2026-07-23T12:00:00.000Z");

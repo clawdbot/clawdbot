@@ -1,7 +1,6 @@
 import { html } from "lit";
 import { ifDefined } from "lit/directives/if-defined.js";
 import type {
-  CronJobsLastStatusFilter,
   CronJobsScheduleKindFilter,
   CronJobsSortBy,
   CronJobsTriggerFilter,
@@ -10,6 +9,7 @@ import type {
 import { icon } from "../../components/icons.ts";
 import type { PickerOption } from "../../components/select-picker.ts";
 import { t } from "../../i18n/index.ts";
+import type { CronJobsLastStatusFilter } from "../../lib/cron/index.ts";
 
 type CronSelectOption = PickerOption;
 
