@@ -4,8 +4,18 @@ import path from "node:path";
 import { afterAll, describe, expect, it, vi } from "vitest";
 import { cleanupTempDirs, makeTempDir } from "../../../test/helpers/temp-dir.js";
 import type { SessionEntry } from "../../config/sessions.js";
-import { appendTranscriptMessage } from "../../config/sessions/session-accessor.js";
+import {
+  appendTranscriptMessage,
+  applySessionEntryLifecycleMutation,
+  replaceSessionEntry,
+} from "../../config/sessions/session-accessor.js";
+import { readTranscriptEventRows } from "../../config/sessions/session-accessor.sqlite-read.js";
+import { resolveSqliteTargetFromSessionStorePath } from "../../config/sessions/session-sqlite-target.js";
 import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admission.js";
+import {
+  closeOpenClawAgentDatabasesForTest,
+  openOpenClawAgentDatabase,
+} from "../../state/openclaw-agent-db.js";
 
 const resetBoundaryMocks = vi.hoisted(() => ({
   clearBootstrap: vi.fn(),
@@ -58,6 +68,7 @@ function makeGuardedPersistSessionEntry(persistedStore: Record<string, SessionEn
     async (params: {
       fallbackEntry: SessionEntry;
       resetBoundaryReason?: "cron-stale";
+      resetBoundaryCwd?: string;
       sessionKey: string;
       storePath: string;
       update: (currentEntry: SessionEntry | undefined) => SessionEntry;
@@ -223,6 +234,136 @@ describe("createPersistCronSessionEntry", () => {
       sessionKey: "agent:main:cron:job",
     });
     expect(cronSession.resetBoundaryPending).toBeUndefined();
+  });
+
+  it("forwards the cron workspace alongside a pending reset boundary", async () => {
+    const lifecycleRevision = "00000000-0000-4000-8000-000000000002";
+    const existingEntry = makeSessionEntry({ lifecycleRevision });
+    const cronSession = {
+      ...makeCronSession(existingEntry),
+      initialSessionEntry: existingEntry,
+      lifecycleRevision,
+      resetBoundaryPending: {
+        reason: "cron-stale" as const,
+        sessionFile: "sqlite:main:run-session-id:/tmp/sessions.json",
+      },
+    } as MutableCronSession;
+    const persistSessionEntry = makeGuardedPersistSessionEntry({
+      "agent:main:cron:job": existingEntry,
+    });
+
+    await createPersistCronSessionEntry({
+      cronSession,
+      agentSessionKey: "agent:main:cron:job",
+      workspaceDir: "/tmp/cron-run-workspace",
+      persistSessionEntry,
+    })();
+
+    expect(persistSessionEntry).toHaveBeenCalledWith(
+      expect.objectContaining({
+        resetBoundaryReason: "cron-stale",
+        resetBoundaryCwd: "/tmp/cron-run-workspace",
+      }),
+    );
+  });
+
+  it("does not forward a workspace when no reset boundary is pending", async () => {
+    const cronSession = makeCronSession();
+    const persistSessionEntry = makeGuardedPersistSessionEntry({});
+
+    await createPersistCronSessionEntry({
+      cronSession,
+      agentSessionKey: "agent:main:cron:job",
+      workspaceDir: "/tmp/cron-run-workspace",
+      persistSessionEntry,
+    })();
+
+    expect(persistSessionEntry).toHaveBeenCalledWith(
+      expect.not.objectContaining({ resetBoundaryCwd: expect.anything() }),
+    );
+  });
+
+  // Regression (review P1): a stale cron reset landing on an empty prior
+  // transcript used to create the header from process.cwd(), so the window
+  // persisted the gateway process directory as its workspace.
+  it("records the cron workspace in the header when a stale reset lands on an empty window", async () => {
+    const dir = makeTempDir(cronSessionTempDirs, "openclaw-cron-session-");
+    const storePath = path.join(dir, "sessions.json");
+    const agentSessionKey = "agent:main:cron:stale-empty-window";
+    const lifecycleRevision = crypto.randomUUID();
+    const previousEntry: SessionEntry = {
+      sessionId: "cron-empty-window",
+      updatedAt: 10,
+      lifecycleRevision,
+    };
+    await replaceSessionEntry({ sessionKey: agentSessionKey, storePath }, previousEntry);
+    const cronSession = {
+      ...makeCronSession(
+        makeSessionEntry({ sessionId: "cron-next-window", lifecycleRevision }),
+        storePath,
+      ),
+      initialSessionEntry: previousEntry,
+      lifecycleRevision,
+      resetBoundaryPending: {
+        reason: "cron-stale" as const,
+        sessionFile: `sqlite:main:cron-empty-window:${storePath}`,
+      },
+    } as MutableCronSession;
+
+    // Mirrors the run-prepare producer: a pending boundary goes through the
+    // batched lifecycle mutation with the run workspace attached.
+    await createPersistCronSessionEntry({
+      cronSession,
+      agentSessionKey,
+      workspaceDir: "/tmp/cron-stale-workspace",
+      persistSessionEntry: async ({
+        sessionKey,
+        storePath: rowStorePath,
+        resetBoundaryReason,
+        resetBoundaryCwd,
+        update,
+      }) => {
+        if (!resetBoundaryReason) {
+          throw new Error("expected a pending cron reset boundary");
+        }
+        await applySessionEntryLifecycleMutation({
+          activeSessionKey: sessionKey,
+          agentId: "main",
+          storePath: rowStorePath,
+          upserts: [
+            {
+              sessionKey,
+              resetBoundary: { context: "preserve-tail", reason: resetBoundaryReason },
+              ...(resetBoundaryCwd ? { resetBoundaryCwd } : {}),
+              buildEntry: ({ currentEntry }) => update(currentEntry),
+            },
+          ],
+          skipMaintenance: true,
+        });
+      },
+    })();
+
+    const target = resolveSqliteTargetFromSessionStorePath(storePath);
+    if (!target.path) {
+      throw new Error("expected SQLite database path");
+    }
+    const database = openOpenClawAgentDatabase({
+      agentId: target.agentId ?? "main",
+      path: target.path,
+    });
+    try {
+      const events = readTranscriptEventRows(database, "cron-empty-window").map(
+        (row) => JSON.parse(row.eventJson) as { type?: unknown; version?: unknown; cwd?: unknown },
+      );
+      expect(events[0]?.type).toBe("session");
+      expect(events[0]?.version).toBe(3);
+      expect(events[0]?.cwd).toBe("/tmp/cron-stale-workspace");
+      expect(events[1]?.type).toBe("reset");
+      expect(events).toHaveLength(2);
+    } finally {
+      closeOpenClawAgentDatabasesForTest();
+    }
+    expect(cronSession.store[agentSessionKey]?.sessionId).toBe("cron-next-window");
   });
 
   it("keeps a pending reset boundary when the guarded row commit fails", async () => {

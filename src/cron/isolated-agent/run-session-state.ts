@@ -58,6 +58,8 @@ export type CronLiveSelection = LiveSessionModelSelection;
 type PersistSessionEntry = (params: {
   fallbackEntry: SessionEntry;
   resetBoundaryReason?: "cron-stale";
+  /** Cron run workspace recorded in a header created for an empty window at reset time. */
+  resetBoundaryCwd?: string;
   sessionKey: string;
   storePath: string;
   update: (currentEntry: SessionEntry | undefined) => SessionEntry;
@@ -147,6 +149,9 @@ export function createPersistCronSessionEntry(params: {
   agentSessionKey: string;
   createdActor?: SessionCreatedActor;
   sandbox?: "required";
+  /** Resolved run workspace, forwarded with a pending reset boundary so an
+   * empty prior window records it (not the gateway process cwd) in its header. */
+  workspaceDir?: string;
   persistSessionEntry: PersistSessionEntry;
 }): PersistCronSessionEntry {
   return async (assertCommitAllowed, liveEntry = params.cronSession.sessionEntry) => {
@@ -172,7 +177,12 @@ export function createPersistCronSessionEntry(params: {
       sessionKey: params.agentSessionKey,
       fallbackEntry: persistedEntry,
       assertCommitAllowed,
-      ...(resetBoundaryPending ? { resetBoundaryReason: "cron-stale" as const } : {}),
+      ...(resetBoundaryPending
+        ? {
+            resetBoundaryReason: "cron-stale" as const,
+            ...(params.workspaceDir ? { resetBoundaryCwd: params.workspaceDir } : {}),
+          }
+        : {}),
       update: (currentEntry) => {
         if (!currentEntry) {
           const creationStamp = buildSessionCreationStamp({

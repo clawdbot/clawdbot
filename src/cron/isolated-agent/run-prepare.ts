@@ -308,6 +308,7 @@ export async function prepareCronRunContext(params: {
       sessionKey,
       fallbackEntry,
       resetBoundaryReason,
+      resetBoundaryCwd,
       update,
       assertCommitAllowed,
     }: {
@@ -315,6 +316,7 @@ export async function prepareCronRunContext(params: {
       sessionKey: string;
       fallbackEntry: SessionEntry;
       resetBoundaryReason?: "cron-stale";
+      resetBoundaryCwd?: string;
       update: (entry: SessionEntry | undefined) => SessionEntry;
       assertCommitAllowed?: () => void;
     }) => {
@@ -329,6 +331,7 @@ export async function prepareCronRunContext(params: {
             {
               sessionKey,
               resetBoundary: { context: "preserve-tail", reason: resetBoundaryReason },
+              ...(resetBoundaryCwd ? { resetBoundaryCwd } : {}),
               buildEntry: ({ currentEntry }) => update(currentEntry),
             },
           ],
@@ -348,6 +351,7 @@ export async function prepareCronRunContext(params: {
       agentSessionKey,
       createdActor: input.job.createdActor,
       sandbox,
+      workspaceDir,
       persistSessionEntry: persistCronSessionRow,
     });
     const withRunSession: WithRunSession = (result) => ({
