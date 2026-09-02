@@ -1,4 +1,5 @@
 // Static payload checks for installed plugins after a core update swaps package files.
+import { existsSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
@@ -41,6 +42,23 @@ export type MissingPluginInstallPayload = {
   installPath?: string;
   reason: "missing-install-path" | "missing-package-dir" | "missing-package-json";
 };
+
+/** Reports whether an install record has neither a package nor a valid bundle payload. */
+export function isInstalledPluginPayloadMissingOnDisk(
+  record: PluginInstallRecord | undefined,
+  env: NodeJS.ProcessEnv,
+): boolean {
+  const installPath = normalizeOptionalString(record?.installPath);
+  if (!installPath) {
+    return true;
+  }
+  const resolved = resolveUserPath(installPath, env);
+  if (existsSync(path.join(resolved, "package.json"))) {
+    return false;
+  }
+  const bundleFormat = detectBundleManifestFormat(resolved);
+  return !bundleFormat || !loadBundleManifest({ rootDir: resolved, bundleFormat }).ok;
+}
 
 /** Finds tracked install records whose package payload is absent on disk. */
 export async function collectMissingPluginInstallPayloads(params: {
@@ -105,7 +123,7 @@ export async function collectMissingPluginInstallPayloads(params: {
       }
       continue;
     }
-    if (!(await pathExists(path.join(installPath, "package.json")))) {
+    if (isInstalledPluginPayloadMissingOnDisk(record, env)) {
       missing.push({ pluginId, installPath, reason: "missing-package-json" });
     }
   }

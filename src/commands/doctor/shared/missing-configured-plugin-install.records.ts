@@ -1,12 +1,7 @@
-import { existsSync } from "node:fs";
 import path from "node:path";
 import type { PluginInstallRecord } from "../../../config/types.plugins.js";
 import { parseClawHubPluginSpec } from "../../../infra/clawhub-spec.js";
 import { parseRegistryNpmSpec } from "../../../infra/npm-registry-spec.js";
-import {
-  detectBundleManifestFormat,
-  loadBundleManifest,
-} from "../../../plugins/bundle-manifest.js";
 import {
   resolveDefaultPluginExtensionsDir,
   resolveDefaultPluginNpmDir,
@@ -23,22 +18,6 @@ export function forceNpmInstallRecordRepair(record: PluginInstallRecord): Plugin
   delete next.resolvedSpec;
   delete next.resolvedVersion;
   return next;
-}
-
-export function isInstalledRecordMissingOnDisk(
-  record: PluginInstallRecord | undefined,
-  env: NodeJS.ProcessEnv,
-): boolean {
-  const installPath = record?.installPath?.trim();
-  if (!installPath) {
-    return true;
-  }
-  const resolved = resolveUserPath(installPath, env);
-  if (existsSync(path.join(resolved, "package.json"))) {
-    return false;
-  }
-  const bundleFormat = detectBundleManifestFormat(resolved);
-  return !bundleFormat || !loadBundleManifest({ rootDir: resolved, bundleFormat }).ok;
 }
 
 export function installPathsEqual(left: string, right: string): boolean {

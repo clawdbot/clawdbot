@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import {
@@ -10,6 +11,7 @@ import {
 import { loadManifestMetadataSnapshot } from "../../../plugins/manifest-contract-eligibility.js";
 import { clearPluginMetadataLifecycleCaches } from "../../../plugins/plugin-metadata-lifecycle.js";
 import {
+  configuredPluginInstallIssueToRepairEffect,
   detectConfiguredPluginInstallHealthIssues,
   repairMissingConfiguredPluginInstalls,
 } from "./missing-configured-plugin-install.js";
@@ -50,23 +52,62 @@ function writeProviderPlugin(rootDir: string): void {
   );
 }
 
-async function writeStalePathInstallRecord(params: {
+async function writePathInstallRecord(params: {
   cfg: OpenClawConfig;
   env: NodeJS.ProcessEnv;
   pluginId: string;
-  stalePath: string;
+  installPath: string;
   sourcePath?: string;
 }): Promise<void> {
   await writePersistedInstalledPluginIndexInstallRecords(
     {
       [params.pluginId]: {
         source: "path",
-        sourcePath: params.sourcePath ?? params.stalePath,
-        installPath: params.stalePath,
+        sourcePath: params.sourcePath ?? params.installPath,
+        installPath: params.installPath,
       },
     },
     { config: params.cfg, env: params.env },
   );
+}
+
+async function createConfiguredCodexBundleFixture(
+  manifestState: "valid" | "absent" | "malformed",
+): Promise<{ cfg: OpenClawConfig; env: NodeJS.ProcessEnv; pluginDir: string }> {
+  const rootDir = fs.realpathSync(
+    fs.mkdtempSync(path.join(os.tmpdir(), `openclaw-codex-${manifestState}-`)),
+  );
+  tempDirs.push(rootDir);
+  const pluginDir = path.join(rootDir, "gmail");
+  fs.mkdirSync(path.join(pluginDir, ".codex-plugin"), { recursive: true });
+  if (manifestState !== "absent") {
+    fs.writeFileSync(
+      path.join(pluginDir, ".codex-plugin", "plugin.json"),
+      manifestState === "valid"
+        ? JSON.stringify({ name: "gmail", apps: "./.app.json" })
+        : "{not-json",
+      "utf8",
+    );
+  }
+  fs.writeFileSync(
+    path.join(pluginDir, ".app.json"),
+    JSON.stringify({ apps: { gmail: { id: "connector_test" } } }),
+    "utf8",
+  );
+  const cfg: OpenClawConfig = {
+    plugins: {
+      load: { paths: [pluginDir] },
+      entries: { gmail: { enabled: true } },
+    },
+  };
+  const env = {
+    OPENCLAW_BUNDLED_PLUGINS_DIR: path.join(rootDir, "bundled"),
+    OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+    OPENCLAW_STATE_DIR: path.join(rootDir, "state"),
+    VITEST: "true",
+  };
+  await writePathInstallRecord({ cfg, env, pluginId: "gmail", installPath: pluginDir });
+  return { cfg, env, pluginDir };
 }
 
 function writeBundledOpenCodeGoPlugin(bundledPluginsDir: string): void {
@@ -126,7 +167,7 @@ describe("configured plugin install health for explicit load paths", () => {
       OPENCLAW_STATE_DIR: path.join(rootDir, "state"),
       VITEST: "true",
     };
-    await writeStalePathInstallRecord({ cfg, env, pluginId: "kilocode", stalePath });
+    await writePathInstallRecord({ cfg, env, pluginId: "kilocode", installPath: stalePath });
 
     const snapshot = loadManifestMetadataSnapshot({ config: cfg, env });
     expect(snapshot.plugins).toEqual(
@@ -169,7 +210,7 @@ describe("configured plugin install health for explicit load paths", () => {
       OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR: "1",
       VITEST: "true",
     };
-    await writeStalePathInstallRecord({ cfg, env, pluginId: "opencode-go", stalePath });
+    await writePathInstallRecord({ cfg, env, pluginId: "opencode-go", installPath: stalePath });
 
     const snapshot = loadManifestMetadataSnapshot({ config: cfg, env });
     expect(snapshot.plugins).toEqual(
@@ -212,11 +253,11 @@ describe("configured plugin install health for explicit load paths", () => {
       OPENCLAW_STATE_DIR: path.join(rootDir, "state"),
       VITEST: "true",
     };
-    await writeStalePathInstallRecord({
+    await writePathInstallRecord({
       cfg,
       env,
       pluginId: "kilocode",
-      stalePath,
+      installPath: stalePath,
       sourcePath: sourceAlias,
     });
 
@@ -262,6 +303,50 @@ describe("configured plugin install health for explicit load paths", () => {
       warnings: [],
     });
   });
+
+  it("keeps a configured Gmail Codex app bundle without package.json", async () => {
+    const { cfg, env, pluginDir } = await createConfiguredCodexBundleFixture("valid");
+
+    const snapshot = loadManifestMetadataSnapshot({ config: cfg, env });
+    expect(snapshot.plugins).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "gmail",
+          origin: "config",
+          rootDir: pluginDir,
+          bundleFormat: "codex",
+        }),
+      ]),
+    );
+    expect(await detectConfiguredPluginInstallHealthIssues({ cfg, env })).toStrictEqual([]);
+
+    const repair = await repairMissingConfiguredPluginInstalls({ cfg, env });
+    expect(repair).toMatchObject({ changes: [], warnings: [] });
+    expect(repair.records.gmail).toMatchObject({ source: "path", installPath: pluginDir });
+    expect(await loadInstalledPluginIndexInstallRecords({ env })).toHaveProperty("gmail");
+  });
+
+  it.each(["absent", "malformed"] as const)(
+    "classifies a Codex bundle manifest in %s state as repairable",
+    async (manifestState) => {
+      const { cfg, env } = await createConfiguredCodexBundleFixture(manifestState);
+
+      const issues = await detectConfiguredPluginInstallHealthIssues({ cfg, env });
+      expect(issues).toEqual([
+        expect.objectContaining({ kind: "missing-installed-payload", pluginId: "gmail" }),
+      ]);
+      expect(
+        configuredPluginInstallIssueToRepairEffect(
+          expectDefined(issues[0], "configured plugin issue"),
+        ),
+      ).toEqual({
+        kind: "package",
+        action: "would-reinstall-configured-plugin",
+        target: "gmail",
+        dryRunSafe: false,
+      });
+    },
+  );
 
   it("discovers packaged OpenCode Go before configured-plugin repair", async () => {
     const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-bundled-opencode-go-"));

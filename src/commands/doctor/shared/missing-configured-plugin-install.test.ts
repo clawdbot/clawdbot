@@ -1170,34 +1170,6 @@ describe("repairMissingConfiguredPluginInstalls", () => {
     ]);
   });
 
-  it("recognizes a path-installed Codex app bundle without package.json", async () => {
-    const installPath = tempDirs.make("openclaw-gmail-codex-app-");
-    fs.mkdirSync(path.join(installPath, ".codex-plugin"), { recursive: true });
-    fs.writeFileSync(
-      path.join(installPath, ".codex-plugin", "plugin.json"),
-      JSON.stringify({ name: "gmail", apps: "./.app.json" }),
-      "utf8",
-    );
-    fs.writeFileSync(
-      path.join(installPath, ".app.json"),
-      JSON.stringify({ apps: { gmail: { id: "connector_test" } } }),
-      "utf8",
-    );
-
-    const { isInstalledRecordMissingOnDisk } =
-      await import("./missing-configured-plugin-install.records.js");
-    expect(
-      isInstalledRecordMissingOnDisk(
-        {
-          source: "path",
-          sourcePath: installPath,
-          installPath,
-        },
-        testEnv,
-      ),
-    ).toBe(false);
-  });
-
   it("persists no-op baseline records with the active plugin policy", async () => {
     const cfg = {
       plugins: {

@@ -9,6 +9,7 @@ import {
   resolveEffectiveEnableState,
 } from "../../../plugins/config-state.js";
 import { writePersistedInstalledPluginIndexInstallRecords } from "../../../plugins/installed-plugin-index-records.js";
+import { isInstalledPluginPayloadMissingOnDisk } from "../../../plugins/payload-verification.js";
 import { withPluginLifecycleLease } from "../../../plugins/plugin-lifecycle-lease.js";
 import { updateNpmInstalledPlugins, type PluginUpdateOutcome } from "../../../plugins/update.js";
 import { resolveUserPath } from "../../../utils.js";
@@ -30,7 +31,6 @@ import {
 } from "./missing-configured-plugin-install.install.js";
 import {
   forceNpmInstallRecordRepair,
-  isInstalledRecordMissingOnDisk,
   isTrustedOfficialInstallRecordForCandidate,
   installPathsEqual,
   recordMatchesBundledPackage,
@@ -188,7 +188,7 @@ async function repairMissingPluginInstallsWithLease(
     const retainedEnabledInstall =
       code === PLUGIN_CAPABILITY_CONSENT_REQUIRED &&
       knownIds.has(pluginId) &&
-      !isInstalledRecordMissingOnDisk(records[pluginId], env) &&
+      !isInstalledPluginPayloadMissingOnDisk(records[pluginId], env) &&
       !installedPluginIdsWithRepairablePackageDiagnostics.has(pluginId) &&
       !configuredPluginIdsWithStaleDescriptors.has(pluginId) &&
       resolveEffectiveEnableState({
@@ -243,7 +243,7 @@ async function repairMissingPluginInstallsWithLease(
     for (const pluginId of updateDeferredPluginIds) {
       deferredPluginIds.add(pluginId);
       const record = nextRecords[pluginId];
-      if (!record || !isInstalledRecordMissingOnDisk(record, env)) {
+      if (!record || !isInstalledPluginPayloadMissingOnDisk(record, env)) {
         continue;
       }
       const detail = `Skipped package-manager repair for configured plugin "${pluginId}" during package update; rerun "openclaw doctor --fix" after the update completes.`;
@@ -259,7 +259,8 @@ async function repairMissingPluginInstallsWithLease(
       Object.hasOwn(nextRecords, pluginId) &&
       !bundledPluginsById.has(pluginId) &&
       ((params.pluginIds.has(pluginId) &&
-        (!knownIds.has(pluginId) || isInstalledRecordMissingOnDisk(nextRecords[pluginId], env))) ||
+        (!knownIds.has(pluginId) ||
+          isInstalledPluginPayloadMissingOnDisk(nextRecords[pluginId], env))) ||
         configuredPluginIdsWithStaleDescriptors.has(pluginId) ||
         installedPluginIdsWithRepairablePackages.has(pluginId)),
   );
@@ -332,7 +333,7 @@ async function repairMissingPluginInstallsWithLease(
         (!knownIds.has(pluginId) && !hasRecord && !bundledPluginsById.has(pluginId)) ||
         (hasRecord &&
           !bundledPluginsById.has(pluginId) &&
-          isInstalledRecordMissingOnDisk(nextRecords[pluginId], env))
+          isInstalledPluginPayloadMissingOnDisk(nextRecords[pluginId], env))
       );
     }),
   );
@@ -365,7 +366,7 @@ async function repairMissingPluginInstallsWithLease(
     }
     const hasRecord = Object.hasOwn(nextRecords, candidate.pluginId);
     const hasUsableRecord =
-      hasRecord && !isInstalledRecordMissingOnDisk(nextRecords[candidate.pluginId], env);
+      hasRecord && !isInstalledPluginPayloadMissingOnDisk(nextRecords[candidate.pluginId], env);
     if (
       !shouldReplaceBrokenOfficialInstall &&
       (hasUsableRecord || (knownIds.has(candidate.pluginId) && !hasRecord))
