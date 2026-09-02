@@ -557,18 +557,18 @@ credentials, sessions, and unowned local state are excluded.
 
 ## Command reference
 
-| Command                             | Purpose                                             |
-| ----------------------------------- | --------------------------------------------------- |
-| `claws create [path]`               | Create a minimal local Claw project.                |
-| `claws validate [path]`             | Validate project inputs and package contents.       |
-| `claws dev [path]`                  | Build and preview locally without mutation.         |
-| `claws build [path] --out <tgz>`    | Build a deterministic package artifact.             |
-| `claws inspect <source>`            | Validate a package directory or grouped manifest.   |
-| `claws add <source>`                | Preview or create one agent and its workspace.      |
-| `claws status [claw-or-agent]`      | Report installed state, ownership, and drift.       |
-| `claws update <claw-or-agent>`      | Preview or apply changes from the selected source.  |
-| `claws remove <claw-or-agent>`      | Preview or remove the agent and eligible resources. |
-| `claws export <agent> --out <path>` | Create a portable package from an installed agent.  |
+| Command                             | Purpose                                                                                                                           |
+| ----------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| `claws create [path]`               | Create a minimal local Claw project.                                                                                              |
+| `claws validate [path]`             | Validate project inputs and package contents.                                                                                     |
+| `claws dev [path]`                  | Build and preview locally without mutation.                                                                                       |
+| `claws build [path] --out <tgz>`    | Build a deterministic package artifact.                                                                                           |
+| `claws inspect <source>`            | Validate a package directory or grouped manifest.                                                                                 |
+| `claws add <source>`                | Preview or create one agent and its workspace; adopt existing ones with `--adopt-existing-workspace` or `--adopt-existing-agent`. |
+| `claws status [claw-or-agent]`      | Report installed state, ownership, and drift.                                                                                     |
+| `claws update <claw-or-agent>`      | Preview or apply changes from the selected source.                                                                                |
+| `claws remove <claw-or-agent>`      | Preview or remove the agent and eligible resources.                                                                               |
+| `claws export <agent> --out <path>` | Create a portable package from an installed agent.                                                                                |
 
 Use `--json` for experimental machine-readable output.
 
