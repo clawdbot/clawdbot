@@ -76,6 +76,7 @@ function lockedHarnessCompactionFailure(runtime: string | undefined): EmbeddedAg
 export async function compactNativeCliSession(params: {
   runtime: string | undefined;
   compactParams: CompactEmbeddedAgentSessionParamsWithSessionFile;
+  runControlOperation?: (run: () => Promise<void>) => Promise<void>;
 }): Promise<EmbeddedAgentCompactResult | undefined> {
   const runtime = normalizeOptionalAgentRuntimeId(params.runtime);
   if (!runtime || params.compactParams.trigger !== "manual") {
@@ -118,43 +119,50 @@ export async function compactNativeCliSession(params: {
     "agents.native-compaction",
   );
   try {
-    await runCliAgent({
-      preparedRunAdmission,
-      sessionId: params.compactParams.sessionId,
-      sessionKey: params.compactParams.sessionKey,
-      sessionFile: params.compactParams.sessionFile,
-      agentId: params.compactParams.agentId,
-      workspaceDir: params.compactParams.workspaceDir,
-      cwd: params.compactParams.cwd,
-      agentDir: params.compactParams.agentDir,
-      config: params.compactParams.config,
-      prompt: manualCompaction.buildPrompt(params.compactParams.customInstructions),
-      provider: runtime,
-      modelProvider: params.compactParams.provider,
-      model: params.compactParams.model,
-      thinkLevel: params.compactParams.thinkLevel,
-      timeoutMs: resolveCompactionTimeoutMs(params.compactParams.config),
-      runId,
-      cliSessionId,
-      ...(cliSessionBinding ? { cliSessionBinding } : {}),
-      ...(cliSessionBinding?.authProfileId
-        ? { authProfileId: cliSessionBinding.authProfileId }
-        : params.compactParams.authProfileId
-          ? { authProfileId: params.compactParams.authProfileId }
+    const runControlOperation = async () => {
+      await runCliAgent({
+        preparedRunAdmission,
+        sessionId: params.compactParams.sessionId,
+        sessionKey: params.compactParams.sessionKey,
+        sessionFile: params.compactParams.sessionFile,
+        agentId: params.compactParams.agentId,
+        workspaceDir: params.compactParams.workspaceDir,
+        cwd: params.compactParams.cwd,
+        agentDir: params.compactParams.agentDir,
+        config: params.compactParams.config,
+        prompt: manualCompaction.buildPrompt(params.compactParams.customInstructions),
+        provider: runtime,
+        modelProvider: params.compactParams.provider,
+        model: params.compactParams.model,
+        thinkLevel: params.compactParams.thinkLevel,
+        timeoutMs: resolveCompactionTimeoutMs(params.compactParams.config),
+        runId,
+        cliSessionId,
+        ...(cliSessionBinding ? { cliSessionBinding } : {}),
+        ...(cliSessionBinding?.authProfileId
+          ? { authProfileId: cliSessionBinding.authProfileId }
+          : params.compactParams.authProfileId
+            ? { authProfileId: params.compactParams.authProfileId }
+            : {}),
+        ...(params.compactParams.sessionEntry
+          ? { sessionEntry: params.compactParams.sessionEntry }
           : {}),
-      ...(params.compactParams.sessionEntry
-        ? { sessionEntry: params.compactParams.sessionEntry }
-        : {}),
-      contextWindow: params.compactParams.sessionEntry?.contextWindow,
-      trigger: "manual",
-      controlOperation: "compact",
-      disableCliLiveSession: true,
-      // Compaction rewrites the persisted session behind any idle SDK query. Retire that query
-      // after the control turn so the next user turn reloads the compacted conversation.
-      cleanupCliLiveSessionOnRunEnd: true,
-      allowEmptyAssistantReplyAsSilent: true,
-      abortSignal: params.compactParams.abortSignal,
-    });
+        contextWindow: params.compactParams.sessionEntry?.contextWindow,
+        trigger: "manual",
+        controlOperation: "compact",
+        disableCliLiveSession: true,
+        // Compaction rewrites the persisted session behind any idle SDK query. Retire that query
+        // after the control turn so the next user turn reloads the compacted conversation.
+        cleanupCliLiveSessionOnRunEnd: true,
+        allowEmptyAssistantReplyAsSilent: true,
+        abortSignal: params.compactParams.abortSignal,
+      });
+    };
+    if (params.runControlOperation) {
+      await params.runControlOperation(runControlOperation);
+    } else {
+      await runControlOperation();
+    }
   } catch (err) {
     return {
       ok: false,

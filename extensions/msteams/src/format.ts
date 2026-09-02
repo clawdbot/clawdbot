@@ -35,7 +35,10 @@ const MSTEAMS_MARKERS = {
 } as const;
 
 function createTokenPrefix(text: string, label: string): string {
-  const normalized = markdownToIR(text, { autolink: false, linkify: false }).text;
+  // With these parser options, the leading marker must be literal or entity-decoded.
+  const normalized = /[\u{E000}&]/u.test(text)
+    ? markdownToIR(text, { autolink: false, linkify: false }).text
+    : "";
   let prefix: string;
   do {
     prefix = `\u{E000}${label}-${randomUUID()}\u{E001}`;
