@@ -4370,6 +4370,19 @@ describe("grouped chat rendering", () => {
       expect(card.textContent).not.toContain("NaN");
     });
 
+    it("does not render an image control for an omitted image with a blank URL", () => {
+      const container = document.createElement("div");
+      renderGroupedMessage(
+        container,
+        createUserMessage([{ type: "image", omitted: true, bytes: 12 * 1024, url: "   " }]),
+        "user",
+      );
+
+      expect(container.querySelectorAll(".chat-assistant-attachment-card")).toHaveLength(1);
+      expect(container.textContent).toContain("Omitted from history");
+      expect(container.querySelector(".chat-message-image-button, img")).toBeNull();
+    });
+
     it("renders omitted media beside surviving message text", () => {
       const container = document.createElement("div");
       renderGroupedMessage(

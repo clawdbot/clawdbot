@@ -1,5 +1,6 @@
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { asNonArrayRecord, asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { ImageLightboxItem } from "../../../components/image-lightbox.ts";
 import { t } from "../../../i18n/index.ts";
 import { formatBytes } from "../../../lib/agents/display.ts";
@@ -498,11 +499,12 @@ export function extractImages(message: unknown): ImageBlock[] {
             }),
             ...imageMeta,
           });
-        } else if (
-          typeof b.url === "string" &&
-          !crossOriginStructuredSvgAttachment(b.url, b.mimeType ?? source?.media_type, b)
-        ) {
-          appendImageBlock(blockImages, { url: b.url, ...imageMeta });
+        } else {
+          const imageUrl = normalizeOptionalString(b.url);
+          const mediaType = b.mimeType ?? source?.media_type;
+          if (imageUrl && !crossOriginStructuredSvgAttachment(imageUrl, mediaType, b)) {
+            appendImageBlock(blockImages, { url: imageUrl, ...imageMeta });
+          }
         }
       } else if (b.type === "image_url") {
         // OpenAI format
