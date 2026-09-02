@@ -1142,15 +1142,21 @@ exit 99
     details?: string[];
     absent?: string[];
   }[] = [
-    {
-      name: "primary GraphQL quota exhaustion",
-      status: 200,
-      code: 1,
-      body: rateError,
-      headers: quota,
-      diagnostic: "rate limited",
-      details: ["resource=graphql; remaining=0; limit=5000", "reset=2030-01-01T00:00:00Z", "Wait"],
-    },
+    ...[{ type: "RATE_LIMITED" }, { type: "RATE_LIMIT", code: "graphql_rate_limit" }].map(
+      (error) => ({
+        name: `primary GraphQL quota exhaustion (${error.type})`,
+        status: 200,
+        code: 1,
+        body: { errors: [{ ...error, message: "synthetic-private-detail" }] },
+        headers: quota,
+        diagnostic: "rate limited",
+        details: [
+          "resource=graphql; remaining=0; limit=5000",
+          "reset=2030-01-01T00:00:00Z",
+          "Wait until 2030-01-01T00:00:00Z (UTC), then retry manually.",
+        ],
+      }),
+    ),
     {
       name: "primary HTTP 403 exhaustion",
       status: 403,

@@ -212,6 +212,7 @@ describe("chat header session menu", () => {
           false,
           undefined,
           false,
+          null,
         ),
         container,
       );
@@ -290,6 +291,7 @@ describe("chat header session menu", () => {
         false,
         undefined,
         false,
+        null,
       ),
       container,
     );
