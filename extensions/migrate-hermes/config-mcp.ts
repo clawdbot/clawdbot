@@ -146,7 +146,16 @@ export function mapMcpServer(
       continue;
     }
     if (!mcpValueHasEnvReferences(sourceValue)) {
-      next[key] = sourceValue;
+      // Route literal values through resolveMcpEnvReferences so the ASCII
+      // safety check (RFC 7230 §3.2.6) runs on values without env-refs too,
+      // not only on env-ref-substituted ones. This catches copy-paste bugs
+      // like a Unicode placeholder in command/cwd/url that would otherwise
+      // silently flow through and explode at Node.js undici HTTP-call time
+      // with "Cannot convert argument to a ByteString".
+      const resolved = resolveMcpEnvReferences(sourceValue, {});
+      if (!resolved.unresolved) {
+        next[key] = resolved.value;
+      }
       continue;
     }
     if (includeSecrets) {

@@ -8,6 +8,8 @@ import {
   type TempWorkspace,
 } from "openclaw/plugin-sdk/temp-path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { resolveMcpEnvReferences } from "./config-env.js";
+import { mcpManualItems, mapMcpServer } from "./config-mcp.js";
 import { buildHermesMigrationProvider } from "./provider.js";
 import { makeConfigRuntime, makeContext, writeFile } from "./test/provider-helpers.js";
 
@@ -1151,6 +1153,86 @@ describe("Hermes migration config mapping", () => {
     expect(
       (config.mcp as { servers?: { beta?: { command?: string } } }).servers?.beta?.command,
     ).toBe("beta");
+  });
+});
+
+describe("ASCII safety check for MCP env values", () => {
+  it("marks unresolved when a literal string contains non-ASCII characters", () => {
+    // U+2026 HORIZONTAL ELLIPSIS substitutes for "..." in many rendering pipelines.
+    const result = resolveMcpEnvReferences("d7c2cc…6a96", {});
+    expect(result.unresolved).toBe(true);
+    expect(result.value).toBe("d7c2cc…6a96");
+  });
+
+  it("marks unresolved when an env-ref resolves to non-ASCII content", () => {
+    const result = resolveMcpEnvReferences("${TICKTICK_ACCESS_TOKEN}", {
+      TICKTICK_ACCESS_TOKEN: "d7c2cc…6a96",
+    });
+    expect(result.unresolved).toBe(true);
+  });
+
+  it("does not mark unresolved for valid ASCII literals", () => {
+    const good = "d7c2cc92-9475-4a39-97d2-e330e8066a96";
+    const result = resolveMcpEnvReferences(good, {});
+    expect(result.unresolved).toBe(false);
+    expect(result.value).toBe(good);
+  });
+
+  it("does not mark unresolved for valid ASCII env-ref substitutions", () => {
+    const good = "d7c2cc92-9475-4a39-97d2-e330e8066a96";
+    const result = resolveMcpEnvReferences("${TICKTICK_ACCESS_TOKEN}", {
+      TICKTICK_ACCESS_TOKEN: good,
+    });
+    expect(result.unresolved).toBe(false);
+    expect(result.value).toBe(good);
+  });
+
+  it("mcpManualItems reports unresolved-secrets when env value contains non-ASCII", () => {
+    const items = mcpManualItems({
+      name: "ticktick",
+      raw: {
+        command: "node",
+        env: { TICKTICK_ACCESS_TOKEN: "d7c2cc…6a96" },
+        transport: "stdio",
+      },
+      includeSecrets: true,
+      env: {},
+      source: "test",
+    });
+    expect(items.some((item) => item.id === "manual:mcp-server-unresolved-secrets:ticktick")).toBe(
+      true,
+    );
+  });
+
+  it("mcpManualItems does not warn for valid ASCII env values", () => {
+    const items = mcpManualItems({
+      name: "ticktick",
+      raw: {
+        command: "node",
+        env: { TICKTICK_ACCESS_TOKEN: "d7c2cc92-9475-4a39-97d2-e330e8066a96" },
+        transport: "stdio",
+      },
+      includeSecrets: true,
+      env: {},
+      source: "test",
+    });
+    expect(items.some((item) => item.id === "manual:mcp-server-unresolved-secrets:ticktick")).toBe(
+      false,
+    );
+  });
+
+  it("mapMcpServer omits connection fields whose literal value is non-ASCII", () => {
+    // U+2026 in cwd is the realistic bug surface; command stays ASCII so the
+    // server is still imported (but with the bad cwd dropped, not passed through).
+    const result = mapMcpServer({ command: "node", cwd: "/home/admin/wor…space/foo" }, true, {});
+    expect(result).not.toHaveProperty("cwd");
+    expect(result).toHaveProperty("command", "node");
+  });
+
+  it("mapMcpServer keeps connection fields whose literal value is pure ASCII", () => {
+    const result = mapMcpServer({ command: "node", cwd: "/home/admin/workspace/foo" }, true, {});
+    expect(result).toHaveProperty("cwd", "/home/admin/workspace/foo");
+    expect(result).toHaveProperty("command", "node");
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
