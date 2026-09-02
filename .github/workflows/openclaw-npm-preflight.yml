@@ -596,7 +596,7 @@ jobs:
             scripts
 
       - name: Install trusted qualification dependencies
-        run: pnpm --dir .artifacts/plugin-sdk-release-tooling install --frozen-lockfile --ignore-scripts --filter openclaw
+        run: (cd .artifacts/plugin-sdk-release-tooling && pnpm install --frozen-lockfile --ignore-scripts --filter openclaw)
 
       - name: Generate dependency release evidence
         id: dependency_evidence
@@ -709,7 +709,7 @@ jobs:
             scripts
 
       - name: Install trusted qualification dependencies
-        run: pnpm --dir .artifacts/plugin-sdk-release-tooling install --frozen-lockfile --ignore-scripts --filter openclaw
+        run: (cd .artifacts/plugin-sdk-release-tooling && pnpm install --frozen-lockfile --ignore-scripts --filter openclaw)
 
       - name: Verify final npm package bytes and lifecycle
         env:
