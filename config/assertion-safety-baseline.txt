@@ -2422,7 +2422,7 @@ src/commands/auth-choice-prompt.ts	1
 src/commands/auth-choice.apply.api-providers.ts	1
 src/commands/backup-git.ts	1
 src/commands/backup-restore.ts	1
-src/commands/backup-schedule.ts	2
+src/commands/backup-schedule.ts	1
 src/commands/backup-shared.ts	1
 src/commands/backup-verify.ts	2
 src/commands/channel-setup/config-compatibility.ts	2
