@@ -136,8 +136,8 @@ export function createRequestImageHistoryProjector(request: object, format: Requ
         if (capturedParts.has(image.part) || image.history) {
           continue;
         }
-        const candidates = Array.from(remaining).filter((item) => sameSource(item, image));
-        const candidate = candidates[0];
+        const candidates = captured.filter((item) => sameSource(item, image));
+        const candidate = candidates.find((item) => remaining.has(item));
         const history = candidate?.history;
         // Byte-identical ordinary/retained or conflicting origins are ambiguous
         // after cloning. Do not infer provenance from message or image positions.

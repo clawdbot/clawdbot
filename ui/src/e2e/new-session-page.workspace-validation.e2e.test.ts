@@ -619,6 +619,13 @@ suite.define(() => {
   it("resets agent-derived workspace state when retargeted to a catalog", async () => {
     await withNewSessionPage(DESKTOP_CONTEXT, async (page) => {
       const gateway = await installMockGateway(page, {
+        cliAgentsEnabled: true,
+        terminalEnabled: true,
+        featureMethods: [
+          "sessions.catalog.list",
+          "sessions.catalog.startTerminal",
+          "terminal.open",
+        ],
         methodResponses: {
           "agents.list": {
             agents: [
@@ -650,13 +657,22 @@ suite.define(() => {
                 capabilities: {
                   continueSession: true,
                   archive: false,
-                  createSession: { model: "anthropic/claude-opus-4-8" },
+                  startTerminal: true,
                 },
-                hosts: [],
+                hosts: [
+                  {
+                    hostId: "gateway:local",
+                    label: "Local Claude Code",
+                    kind: "gateway",
+                    connected: true,
+                    canStartTerminal: true,
+                    sessions: [],
+                  },
+                ],
               },
             ],
           },
-          "sessions.create": { key: "agent:main:claude-retarget" },
+          "sessions.catalog.startTerminal": { sessionId: "claude-retarget" },
         },
       });
       await page.goto(`${suite.server.baseUrl}new?agent=research`);
@@ -673,16 +689,16 @@ suite.define(() => {
       await pollLocatorText(page.locator(".new-session-page__runtime")).toContain("Claude Code");
       await pollLocatorText(folderLabel).toBe("openclaw");
       await page.locator(".new-session-page__message").fill("retarget this draft");
-      await page.getByRole("button", { name: "Start session" }).click();
+      await page.getByRole("button", { name: "Start in terminal" }).click();
 
-      const create = await gateway.waitForRequest("sessions.create");
+      const create = await gateway.waitForRequest("sessions.catalog.startTerminal");
       expect(create.params).toMatchObject({
         agentId: "main",
-        message: "retarget this draft",
+        initialMessage: "retarget this draft",
         catalogId: "claude",
       });
       expect(create.params).not.toHaveProperty("model");
-      expect(create.params).not.toHaveProperty("cwd");
+      expect(create.params).toHaveProperty("cwd", WORKSPACE);
     });
   });
 });

@@ -8,7 +8,6 @@ import {
   listExactDirectMessageBindingPeerIds,
   resolveAgentRoute,
   resolveInboundLastRouteSessionKey,
-  resolveUnknownDirectMessageRoute,
 } from "./resolve-route.js";
 
 type ResolvedRouteExpectation = {
@@ -1267,10 +1266,11 @@ describe("unknown direct-message route decisions", () => {
       match: { channel: "telegram", accountId: "*" },
     });
 
-    const route = resolveUnknownDirectMessageRoute({
+    const route = resolveAgentRoute({
       cfg: { bindings },
       channel: "telegram",
       accountId: "default",
+      peer: { kind: "direct", id: "" },
     });
 
     expect(route.matchedBy).toBe(expectedMatchedBy);
@@ -1598,7 +1598,12 @@ describe("resolved route cache keys", () => {
       matchedBy: "binding.channel",
     });
     expectResolvedRoute(
-      resolveUnknownDirectMessageRoute({ cfg, channel: "telegram", accountId: "default" }),
+      resolveAgentRoute({
+        cfg,
+        channel: "telegram",
+        accountId: "default",
+        peer: { kind: "direct", id: "" },
+      }),
       { agentId: "any-direct", matchedBy: "binding.peer.wildcard" },
     );
     expectResolvedRoute(
@@ -1632,7 +1637,12 @@ describe("resolved route cache keys", () => {
       matchedBy: "binding.channel",
     });
     expectResolvedRoute(
-      resolveUnknownDirectMessageRoute({ cfg, channel: "telegram", accountId: "default" }),
+      resolveAgentRoute({
+        cfg,
+        channel: "telegram",
+        accountId: "default",
+        peer: { kind: "direct", id: "" },
+      }),
       { agentId: "any-direct", matchedBy: "binding.peer.wildcard" },
     );
   });

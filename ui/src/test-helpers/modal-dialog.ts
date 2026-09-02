@@ -43,6 +43,69 @@ export function installDialogPolyfill(): () => void {
   };
 }
 
+export function createModalDialogTestFixture() {
+  const restoreDialogPolyfill = installDialogPolyfill();
+  const operations: Promise<unknown>[] = [];
+  const requests: Promise<unknown>[] = [];
+  const modals = new Set<HTMLElement>();
+  const captureModals = () => {
+    for (const modal of document.body.querySelectorAll("openclaw-modal-dialog")) {
+      modals.add(modal);
+    }
+  };
+  const observer = new MutationObserver(captureModals);
+  observer.observe(document.body, { childList: true, subtree: true });
+  let pendingCleanup: Promise<void> | undefined;
+
+  function track<T>(completion: Promise<T>, work: Promise<unknown>[]) {
+    work.push(completion);
+    void completion.catch(() => {});
+    return completion;
+  }
+
+  async function cleanup() {
+    let joined = false;
+    try {
+      // An assertion can fail before the lazy dialog exists. Catalog completion
+      // can repaint its host, so join those responses before cancelling the owner.
+      await vi.dynamicImportSettled();
+      await Promise.allSettled(requests);
+      await vi.dynamicImportSettled();
+      captureModals();
+      for (const modal of modals) {
+        if (modal.parentElement) {
+          modal.dispatchEvent(new CustomEvent("modal-cancel", { cancelable: true }));
+        }
+      }
+      const results = await Promise.allSettled(operations);
+      await vi.dynamicImportSettled();
+      joined = true;
+      const errors = results.flatMap((result) =>
+        result.status === "rejected" ? [result.reason] : [],
+      );
+      if (errors.length === 1) {
+        throw errors[0];
+      }
+      if (errors.length > 1) {
+        throw new AggregateError(errors, "Dialog operations failed during fixture cleanup");
+      }
+    } finally {
+      observer.disconnect();
+      if (joined) {
+        document.body.replaceChildren();
+        restoreDialogPolyfill();
+      }
+    }
+  }
+
+  return {
+    track: <T>(completion: Promise<T>) => track(completion, operations),
+    mockRequest: <Args extends unknown[], Result>(request: (...args: Args) => Promise<Result>) =>
+      vi.fn((...args: Args) => track(request(...args), requests)),
+    cleanup: () => (pendingCleanup ??= cleanup()),
+  };
+}
+
 /**
  * Wait for the confirm dialog `showConfirmDialog` renders into `document.body`.
  * Returned separately from answering it so tests can mutate owner state (a

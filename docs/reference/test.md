@@ -294,6 +294,13 @@ trailer.
 | `pnpm changed:lanes`                              | Shows the architectural lanes triggered by the diff against `origin/main`.                                                                                                                                                                                                                                                                            |
 | `pnpm check:changed`                              | Runs the local changed formatting/typecheck/lint/guard plan, including targeted Vitest owner tests for selected paths. Use `pnpm test:changed` or `pnpm test <target>` for additional test proof matching the touched contract.                                                                                                                       |
 
+`pnpm check:changed` also runs the mobile protocol-event coverage guard when
+changes affect the gateway event catalog or constants, scanned mobile sources,
+coverage declarations, or the guard, its execution helpers, and its routing.
+All-lane checks include it too. Every gateway event must have a handler or an
+explicitly approved non-consumption declaration for each mobile client. To run
+only this guard, use `pnpm check:protocol-coverage`.
+
 For native app changes, `pnpm check:changed` uses platform scope to select lint:
 Android selects `pnpm android:lint` (the Gradle ktlint checks), while Apple app
 changes retain Swift lint. Android-only changes do not select Swift lint or its
@@ -433,6 +440,8 @@ and intentionally real-home live execution remain outside its protection.
 - `pnpm test:channels` runs `vitest.channels.config.ts`.
 
 ### Retained mocked Control UI proof
+
+For startup ownership changes, exercise authenticated hello before browser recovery migration finishes. Project and environment discovery can start from hello; migration completion must not refetch those catalogs or invalidate an admitted start. Keep changed-owner, process-restart, and late-result fences covered separately. Count storage reads by key around rerenders, typing, and streaming without recording credential values. Compare route payload bytes and loaded module closures separately from timings; CSS ownership changes also need retained screenshots and computed-style or geometry checks across New session and Chat.
 
 Ordinary mocked browser screenshots, recordings, and reports use fresh directories
 for each test attempt or standalone capture invocation. The Node-only

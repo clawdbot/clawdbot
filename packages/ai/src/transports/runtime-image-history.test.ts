@@ -399,6 +399,19 @@ describe.each(fixtures)("$name retained image HTTP projection", (fixture) => {
       );
     },
   );
+
+  it("does not borrow provenance when a payload hook duplicates an ordinary image", async () => {
+    const [textPart, imagePart] = expectedParts(fixture.protocol, "ordinary");
+    const parts = await captureRequest(fixture, "keep", undefined, {
+      precedingImages: [{ type: "image", mimeType: "image/png", data: PNG }],
+      onPayload: (input) => {
+        expect(input[1]).toEqual(input[2]);
+        const ordinary = input[1];
+        input.splice(1, 2, ordinary, structuredClone(ordinary));
+      },
+    });
+    expect(parts).toEqual([textPart, imagePart, imagePart]);
+  });
 });
 
 describe("native Responses final image format decision", () => {
@@ -470,13 +483,13 @@ describe("native Responses image occurrence provenance", () => {
       notes: `${NOTE}\n${OTHER_SECOND_NOTE}`,
     },
     {
-      name: "reserves a later ordinary identity before matching a retained clone",
+      name: "does not borrow provenance for an ambiguous retained clone before an ordinary identity",
       preceding: () => ordinaryImage(),
       rewrite: (parts) => {
         parts.splice(1, 2, structuredClone(parts[2]), parts[1]);
       },
       data: [PNG, PNG],
-      notes: NOTE,
+      notes: "",
     },
     {
       name: "keeps a retained identity when the identical ordinary image is cloned",
@@ -513,6 +526,15 @@ describe("native Responses image occurrence provenance", () => {
       },
       data: [REPLACEMENT_PNG, PNG],
       notes: NOTE,
+    },
+    {
+      name: "does not borrow provenance from a removed conflicting source after retaining its identical peer",
+      preceding: () => withRuntimeImageHistory(ordinaryImage(), OTHER_SOURCE),
+      rewrite: (parts) => {
+        parts.splice(1, 2, parts[1], structuredClone(parts[1]));
+      },
+      data: [PNG, PNG],
+      notes: "[Recent image 1 from Grace, message retained-J, attached as media.]",
     },
     {
       name: "leaves cloned identical bytes with conflicting source histories unannotated",

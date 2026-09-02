@@ -1,7 +1,8 @@
 /* @vitest-environment jsdom */
 
+import { expectDefined } from "@openclaw/normalization-core";
 import { render } from "lit";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { renderAssistantAttachments } from "./chat-message-attachments.ts";
 import { releaseChatMediaResourceSubscriber, type AttachmentItem } from "./chat-message-media.ts";
 import type { SidebarContent } from "./chat-sidebar-content-types.ts";
@@ -62,10 +63,15 @@ afterEach(() => {
 
 describe("attachment sidebar source ownership", () => {
   it.each([
-    ["sample-image.png", "image/png"],
-    ["photo.jpg", "image/jpeg"],
-  ])("renders document-shaped %s attachments as expandable images", (label, mimeType) => {
-    const source = `https://example.com/${label}`;
+    ["sample-image.png", "image/png", "https://example.com/sample-image.png"],
+    ["photo.jpg", "image/jpeg", "https://example.com/photo.jpg"],
+    ["photo.png", "application/octet-stream", `${window.location.origin}/download/opaque`],
+    [
+      "photo",
+      "application/octet-stream; charset=binary",
+      `${window.location.origin}/download/photo.png`,
+    ],
+  ])("renders document-shaped %s attachments as expandable images", (label, mimeType, source) => {
     const container = document.body.appendChild(document.createElement("div"));
     const onOpenImage = vi.fn();
     render(
@@ -90,34 +96,87 @@ describe("attachment sidebar source ownership", () => {
     container.remove();
   });
 
-  it("keeps a raster filename image-shaped when its source URL is opaque", () => {
-    const source = `${window.location.origin}/download/opaque`;
-    const container = document.body.appendChild(document.createElement("div"));
-    const onOpenImage = vi.fn();
-    render(
-      renderAssistantAttachments(
-        [
-          {
-            type: "attachment",
-            attachment: {
-              kind: "document",
-              label: "photo.png",
-              mimeType: "application/octet-stream",
-              url: source,
-            },
-          },
-        ],
-        { onOpenImage },
-      ),
-      container,
-    );
-
-    expect(container.querySelector(".chat-assistant-attachment-card")).toBeNull();
-    expect(container.querySelector("img.chat-message-image")?.getAttribute("src")).toBe(source);
-    container.querySelector<HTMLButtonElement>(".chat-message-image-button")?.click();
-    expect(onOpenImage).toHaveBeenCalledWith(expect.objectContaining({ src: source }));
-    container.remove();
-  });
+  it.each([
+    { kind: "image", outcome: "offline" },
+    { kind: "document", outcome: "offline" },
+    { kind: "image", outcome: "missing" },
+    { kind: "document", outcome: "denied" },
+  ] as const)(
+    "handles $outcome renewal after a local $kind raster has loaded",
+    async ({ kind, outcome }) => {
+      vi.useFakeTimers();
+      const availableResponse = (mediaTicket: string) =>
+        Response.json({
+          available: true,
+          mediaTicket,
+          mediaTicketExpiresAt: new Date(Date.now() + 31_000).toISOString(),
+        });
+      const fetchMock = vi.fn<typeof fetch>().mockResolvedValueOnce(availableResponse("loaded"));
+      vi.stubGlobal("fetch", fetchMock);
+      const container = document.body.appendChild(document.createElement("div"));
+      onTestFinished(() => {
+        render(null, container);
+      });
+      const attachment: AttachmentItem = {
+        type: "attachment",
+        attachment: {
+          kind,
+          label: "photo.png",
+          mimeType: "image/png",
+          url: `/tmp/openclaw/${crypto.randomUUID()}.png`,
+        },
+      };
+      const rerender = () =>
+        render(
+          renderAssistantAttachments([attachment], {
+            authToken: "test-token",
+            localMediaPreviewRoots: ["/tmp/openclaw"],
+            onRequestUpdate: rerender,
+          }),
+          container,
+        );
+      subscribers.add(rerender);
+      rerender();
+      await vi.advanceTimersByTimeAsync(0);
+      const displayed = expectDefined(container.querySelector("img"), "loaded raster image");
+      expect(displayed.getAttribute("src")).toContain("mediaTicket=loaded");
+      Object.defineProperty(displayed, "naturalWidth", { value: 1 });
+      displayed.dispatchEvent(new Event("load"));
+      if (outcome === "offline") {
+        fetchMock.mockRejectedValue(new TypeError("Gateway offline"));
+        await vi.advanceTimersByTimeAsync(11_000);
+        expect(container.querySelector("img")).toBe(displayed);
+        await vi.advanceTimersByTimeAsync(20_001);
+        expect(container.querySelector("img")).toBe(displayed);
+        expect(container.querySelector(".chat-assistant-attachment-card")).toBeNull();
+      } else {
+        const retryable = outcome === "missing";
+        fetchMock.mockResolvedValueOnce(
+          Response.json({ available: false, reason: "Attachment removed", retryable }),
+        );
+        await vi.advanceTimersByTimeAsync(1_000);
+        expect(container.querySelector("img")).toBeNull();
+        displayed.dispatchEvent(new Event("load"));
+        displayed.dispatchEvent(new Event("error"));
+        expect(container.querySelector("img")).toBeNull();
+        const retry = container.querySelector<HTMLButtonElement>(
+          ".chat-assistant-attachment-card__retry",
+        );
+        if (outcome === "missing") {
+          expect(container.textContent).toContain("Attachment removed");
+          fetchMock.mockResolvedValueOnce(availableResponse("recovered"));
+          expectDefined(retry, "Retry action for a recoverable missing image").click();
+          await vi.advanceTimersByTimeAsync(0);
+          expect(container.querySelector("img")?.getAttribute("src")).toContain(
+            "mediaTicket=recovered",
+          );
+        } else {
+          expect(container.textContent).toContain("Unavailable");
+          expect(retry).toBeNull();
+        }
+      }
+    },
+  );
 
   it("routes an SVG filename with an opaque source through the bounded SVG renderer", () => {
     const container = document.body.appendChild(document.createElement("div"));
@@ -166,32 +225,6 @@ describe("attachment sidebar source ownership", () => {
 
     expect(container.querySelector("openclaw-chat-svg-attachment")).toBeNull();
     expect(container.querySelector(".chat-assistant-attachment-card")).not.toBeNull();
-    container.remove();
-  });
-
-  it("infers a raster URL when generic MIME includes parameters", () => {
-    const source = `${window.location.origin}/download/photo.png`;
-    const container = document.body.appendChild(document.createElement("div"));
-    render(
-      renderAssistantAttachments(
-        [
-          {
-            type: "attachment",
-            attachment: {
-              kind: "document",
-              label: "photo",
-              mimeType: "application/octet-stream; charset=binary",
-              url: source,
-            },
-          },
-        ],
-        {},
-      ),
-      container,
-    );
-
-    expect(container.querySelector("img.chat-message-image")?.getAttribute("src")).toBe(source);
-    expect(container.querySelector(".chat-assistant-attachment-card")).toBeNull();
     container.remove();
   });
 

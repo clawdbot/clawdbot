@@ -85,6 +85,28 @@ describe("renderModelSetup", () => {
     expect(container.querySelectorAll("img")).toHaveLength(0);
   });
 
+  it.each(["logged in · ChatGPT account · alex@example.com", "logged in · API key (usage-billed)"])(
+    "shows detected authentication without credential values: %s",
+    (detail) => {
+      const secret = "synthetic-private-token";
+      const container = mount(
+        props({
+          page: {
+            phase: "ready",
+            result: {
+              ...detected,
+              candidates: [{ ...detected.candidates[0]!, detail: `${detail} · token=${secret}` }],
+            },
+          },
+        }),
+      );
+      const row = container.querySelector('[data-candidate-kind="codex-cli"]')!;
+
+      expect(text(row)).toContain(detail);
+      expect(text(row)).not.toContain(secret);
+    },
+  );
+
   it("identifies provider families separately from their credential methods", () => {
     const container = mount(
       props({

@@ -6,7 +6,6 @@ import { mediaKindFromMime } from "@openclaw/media-core/constants";
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { asOptionalRecord, readStringField } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { z } from "zod";
 import { stripInboundMetadata } from "../../../../src/auto-reply/reply/strip-inbound-meta.js";
 import {
   extractCanvasShortcodes,
@@ -31,23 +30,6 @@ import { formatSenderLabel, normalizeSenderIdentity } from "./sender-label.ts";
 const OPAQUE_ID_LABEL_SUFFIX_RE =
   /\s+\(([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\)$/iu;
 
-const optionalMessageStringSchema = z.string().optional().catch(undefined);
-const optionalMessageNumberSchema = z.number().optional().catch(undefined);
-const rawAttachmentSchema = z
-  .looseObject({
-    code: optionalMessageStringSchema,
-    kind: optionalMessageStringSchema,
-    url: optionalMessageStringSchema,
-    label: optionalMessageStringSchema,
-    mimeType: optionalMessageStringSchema,
-    artifactId: optionalMessageStringSchema,
-    sizeBytes: optionalMessageNumberSchema,
-    durationMs: optionalMessageNumberSchema,
-    width: optionalMessageNumberSchema,
-    height: optionalMessageNumberSchema,
-  })
-  .optional()
-  .catch(undefined);
 type CanvasPreview = Extract<MessageContentItem, { type: "canvas" }>["preview"];
 type MessageDelivery = { audioAsVoice?: true; replyToCurrent?: true; replyToId?: string };
 
@@ -245,42 +227,22 @@ function coerceAudioContentBlock(
   const rawMediaType = readStringField(source, "media_type")?.trim();
   const mediaType = rawMediaType?.toLowerCase().startsWith("audio/") ? rawMediaType : "audio/mpeg";
   const type = source.type;
-  const rawData = readStringField(source, "data");
-  if (type === "base64" && rawData !== undefined) {
-    const data = rawData.trim();
-    if (!data) {
-      return null;
-    }
-    const url = data.startsWith("data:") ? data : `data:${mediaType};base64,${data}`;
-    return {
-      type: "attachment",
-      attachment: {
-        url,
-        kind: "audio",
-        label: readStringField(item, "label")?.trim() || "Audio",
-        mimeType: mediaType,
-        ...(item.isVoiceNote === true ? { isVoiceNote: true } : {}),
-      },
-    };
+  const data = readStringField(source, type === "base64" ? "data" : "url")?.trim();
+  if (!data || (type !== "base64" && type !== "url")) {
+    return null;
   }
-  const rawUrl = readStringField(source, "url");
-  if (type === "url" && rawUrl !== undefined) {
-    const url = rawUrl.trim();
-    if (!url) {
-      return null;
-    }
-    return {
-      type: "attachment",
-      attachment: {
-        url,
-        kind: "audio",
-        label: readStringField(item, "label")?.trim() || "Audio",
-        mimeType: mediaType,
-        ...(item.isVoiceNote === true ? { isVoiceNote: true } : {}),
-      },
-    };
-  }
-  return null;
+  const url =
+    type === "base64" && !data.startsWith("data:") ? `data:${mediaType};base64,${data}` : data;
+  return {
+    type: "attachment",
+    attachment: {
+      url,
+      kind: "audio",
+      label: readStringField(item, "label")?.trim() || "Audio",
+      mimeType: mediaType,
+      ...(item.isVoiceNote === true ? { isVoiceNote: true } : {}),
+    },
+  };
 }
 
 function coerceManagedMediaContentBlock(
@@ -479,12 +441,7 @@ export function normalizeMessage(message: unknown): NormalizedMessage {
         return [];
       }
       if (type === "attachment" || type === "attachment_error") {
-        return (
-          normalizeAttachmentContentBlock({
-            type,
-            attachment: rawAttachmentSchema.parse(item.attachment),
-          }) ?? []
-        );
+        return normalizeAttachmentContentBlock(item) ?? [];
       }
       const rawPreview = type === "canvas" ? asOptionalRecord(item.preview) : undefined;
       if (rawPreview) {

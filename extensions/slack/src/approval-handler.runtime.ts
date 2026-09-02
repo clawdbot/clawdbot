@@ -61,7 +61,6 @@ type SlackApprovalHandlerContext = {
   config: SlackExecApprovalConfig;
   resolveClient?: (teamId?: string) => WebClient | undefined;
   enterprise?: {
-    apiAppId?: string;
     enterpriseId: string;
   };
 };

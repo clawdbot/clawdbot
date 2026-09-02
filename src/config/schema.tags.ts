@@ -3,25 +3,25 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 import type { ConfigUiHint, ConfigUiHints } from "../shared/config-ui-hints-types.js";
 
 /** Stable config UI tag vocabulary and display order. */
-const TAG_PRIORITY = {
-  security: 0,
-  auth: 1,
-  access: 2,
-  network: 3,
-  privacy: 4,
-  observability: 5,
-  reliability: 6,
-  performance: 7,
-  storage: 8,
-  models: 9,
-  media: 10,
-  automation: 11,
-  channels: 12,
-  tools: 13,
-  advanced: 14,
-};
+const TAG_ORDER = [
+  "security",
+  "auth",
+  "access",
+  "network",
+  "privacy",
+  "observability",
+  "reliability",
+  "performance",
+  "storage",
+  "models",
+  "media",
+  "automation",
+  "channels",
+  "tools",
+  "advanced",
+] as const;
 
-type ConfigTag = keyof typeof TAG_PRIORITY;
+type ConfigTag = (typeof TAG_ORDER)[number];
 
 const TAG_OVERRIDES: Record<string, ConfigTag[]> = {
   worktreeRoot: ["storage", "advanced"],
@@ -97,19 +97,6 @@ const MEDIA_PATH_PATTERN = /(tools\.media\.|^audio\.|^talk\.|image|video|stt|tts
 const AUTOMATION_PATH_PATTERN = /(cron|heartbeat|schedule|onstart|watchdebounce)/i;
 const AUTH_KEYWORD_PATTERN = /(token|password|secret|api[_.-]?key|credential|oauth)/i;
 
-function normalizeTags(known: Set<ConfigTag>, tags: ReadonlyArray<string>): string[] {
-  const custom = new Set<string>();
-  for (const tag of tags) {
-    const normalized = normalizeLowercaseStringOrEmpty(tag);
-    if (Object.hasOwn(TAG_PRIORITY, normalized)) {
-      known.add(normalized as ConfigTag);
-    } else if (normalized) {
-      custom.add(normalized);
-    }
-  }
-  return [...[...known].toSorted((a, b) => TAG_PRIORITY[a] - TAG_PRIORITY[b]), ...custom];
-}
-
 function patternToRegExp(pattern: string): RegExp {
   const escaped = pattern.replace(/[.+?^${}()|[\]\\]/g, "\\$&").replace(/\*/g, "[^.]+");
   return new RegExp(`^${escaped}$`, "i");
@@ -175,9 +162,18 @@ export function applyDerivedTags(hints: ConfigUiHints): ConfigUiHints {
   const next: ConfigUiHints = {};
   for (const [path, hint] of Object.entries(hints)) {
     const existingTags = Array.isArray(hint?.tags) ? hint.tags : [];
-    const derivedTags = deriveTagsForPath(path, hint);
+    const derivedTags: Set<string> = deriveTagsForPath(path, hint);
+    for (const tag of existingTags) {
+      const normalized = normalizeLowercaseStringOrEmpty(tag);
+      if (normalized) {
+        derivedTags.add(normalized);
+      }
+    }
     // Preserve unknown tags after known tags so external/custom UI tags survive normalization.
-    const tags = normalizeTags(derivedTags, existingTags);
+    const tags: string[] = TAG_ORDER.filter((tag) => derivedTags.delete(tag));
+    for (const tag of derivedTags) {
+      tags.push(tag);
+    }
     next[path] = { ...hint, tags };
   }
   return next;

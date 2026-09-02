@@ -37,6 +37,10 @@ openclaw agents delete work
 
 Options: `--json`, `--bindings` (include full routing rules, not only per-agent counts/summaries).
 
+Identity fields saved in config take precedence. Fields that are not configured
+fall back to `IDENTITY.md` in the agent's workspace. Unsupported avatar values
+and unreadable local images also fall back to the workspace avatar.
+
 ### `agents add [name]`
 
 Options: `--workspace <dir>`, `--model <id>`, `--agent-dir <dir>`, `--bind <channel[:accountId]>` (repeatable), `--non-interactive`, `--json`.

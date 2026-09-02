@@ -157,16 +157,18 @@ describe("cross-OS release checks workflow", () => {
     expect(baselineMetadata.run).toContain("const entry = resolveNpmJsonEntries(payload).at(-1);");
   });
 
-  it("passes a frozen-line predecessor from target resolution to installer update smoke", () => {
+  it("passes a frozen-line predecessor to every upgrade-validation caller", () => {
     const release = readWorkflow(RELEASE_CHECKS_PATH);
     const target = job(release, "resolve_target");
-    const baseline = step(target, "Resolve frozen installer update baseline");
+    const baseline = step(target, "Resolve frozen upgrade baseline");
     const installSmoke = job(release, "install_smoke_release_checks");
+    const packageAcceptance = job(release, "package_acceptance_release_checks");
 
-    expect(target.outputs?.installer_smoke_update_baseline).toBe(
-      "${{ steps.frozen_installer_smoke_baseline.outputs.value }}",
+    expect(target.outputs?.frozen_upgrade_baseline).toBe(
+      "${{ steps.frozen_upgrade_baseline.outputs.value }}",
     );
     expect(baseline.if).toContain("steps.inputs.outputs.install_smoke_scheduled == 'true'");
+    expect(baseline.if).toContain("steps.inputs.outputs.package_acceptance_scheduled == 'true'");
     expect(baseline.if).toContain("startsWith(inputs.target_context_ref, 'extended-stable/')");
     expect(baseline.env).toMatchObject({
       GH_TOKEN: "${{ github.token }}",
@@ -176,7 +178,10 @@ describe("cross-OS release checks workflow", () => {
     expect(baseline.run).toContain("node workflow/scripts/lib/release-upgrade-baseline.mjs");
     expect(baseline.run).toContain('echo "value=${baseline#openclaw@}"');
     expect(installSmoke.with?.update_baseline_version).toBe(
-      "${{ needs.resolve_target.outputs.installer_smoke_update_baseline || 'latest' }}",
+      "${{ needs.resolve_target.outputs.frozen_upgrade_baseline || 'latest' }}",
+    );
+    expect(packageAcceptance.with?.published_upgrade_survivor_baseline).toBe(
+      "${{ needs.resolve_target.outputs.frozen_upgrade_baseline && format('openclaw@{0}', needs.resolve_target.outputs.frozen_upgrade_baseline) || 'openclaw@latest' }}",
     );
   });
 

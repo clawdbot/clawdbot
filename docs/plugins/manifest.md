@@ -1471,7 +1471,9 @@ Use it when setup, doctor, status, or read-only presence flows need a cheap yes/
 }
 ```
 
-Use `env.allOf` when every listed variable is required and `env.anyOf` when any one non-empty variable is enough. If a tiny non-runtime check needs more than environment metadata, use `specifier` plus `exportName` as shown for `persistedAuthState`; when `env` is present, OpenClaw uses it without loading that module. If the check needs full config resolution or the real channel runtime, keep that logic in the plugin `config.hasConfiguredState` hook instead.
+Use `env.allOf` when every listed variable is required and `env.anyOf` when any one non-empty variable is enough. If a tiny non-runtime check needs more than environment metadata, use `specifier` plus `exportName` as shown for `persistedAuthState`. A complete `specifier` and `exportName` pair takes precedence over `env`; env-only metadata avoids loading a module. If the check needs full config resolution or the real channel runtime, keep that logic in the plugin `config.hasConfiguredState` hook instead.
+
+For both state probes, OpenClaw builds rewrite source specifiers to the exact emitted JavaScript artifact, including its `.js` or `.cjs` extension. Built checkout metadata uses paths relative to the plugin root; standalone packages use the plugin-local `dist/` directory.
 
 ## Discovery precedence (duplicate plugin ids)
 

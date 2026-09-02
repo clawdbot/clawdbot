@@ -60,8 +60,11 @@ import {
   toDatabaseOptions,
   type ResolvedSqliteScope,
 } from "./session-accessor.sqlite-scope.js";
-import { readSessionEntriesByStatus } from "./session-accessor.sqlite-status.js";
-import type { SessionEntryListScope } from "./session-accessor.types.js";
+import {
+  readSessionEntriesByStatus,
+  selectSessionEntryRows,
+} from "./session-accessor.sqlite-status.js";
+import type { SessionEntryListScope, SessionEntryReadScope } from "./session-accessor.types.js";
 import {
   assertCanonicalSessionKeyWrite,
   assertCanonicalSqliteSessionKeysCurrent,
@@ -133,15 +136,28 @@ export function loadSessionEntryReadOnly(scope: SessionAccessScope): SessionEntr
 }
 
 /** Loads one exact persisted-key entry from the additive SQLite session store. */
-export function loadExactSessionEntry(scope: SessionAccessScope): ExactSessionEntry | undefined {
+export function loadExactSessionEntry(scope: SessionEntryReadScope): ExactSessionEntry | undefined {
+  return loadExactSessionEntryWithMode(scope, false);
+}
+
+function loadExactSessionEntryWithMode(
+  scope: SessionEntryReadScope,
+  readOnly: boolean,
+): ExactSessionEntry | undefined {
   const sessionKey = scope.sessionKey.trim();
   if (!sessionKey) {
     return undefined;
   }
   const resolved = resolveSqliteScope(scope);
-  const database = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
-  const entry = readExactSessionEntryRowValidated(database, sessionKey)?.entry;
-  return entry ? { sessionKey, entry } : undefined;
+  const read = (database: Pick<OpenClawAgentDatabase, "agentId" | "db">) => {
+    const entry = readExactSessionEntryRowValidated(database, sessionKey, scope.projection)?.entry;
+    return entry ? { sessionKey, entry } : undefined;
+  };
+  if (!readOnly) {
+    return read(openOpenClawAgentDatabase(toDatabaseOptions(resolved)));
+  }
+  const result = withOpenClawAgentDatabaseReadOnly(read, toDatabaseOptions(resolved));
+  return result.found ? result.value : undefined;
 }
 
 /** Lists persisted session keys without materializing their entry JSON. */
@@ -161,36 +177,29 @@ export function listSessionEntryKeysReadOnly(
 
 /** Exact persisted-key probe on the read-only handle, for per-row hot paths. */
 export function loadExactSessionEntryReadOnly(
-  scope: SessionAccessScope,
+  scope: SessionEntryReadScope,
 ): ExactSessionEntry | undefined {
-  const sessionKey = scope.sessionKey.trim();
-  if (!sessionKey) {
-    return undefined;
-  }
-  const resolved = resolveSqliteScope(scope);
-  const result = withOpenClawAgentDatabaseReadOnly(
-    (database) => readExactSessionEntryRowValidated(database, sessionKey)?.entry,
-    toDatabaseOptions(resolved),
-  );
-  return result.found && result.value
-    ? {
-        sessionKey,
-        entry: result.value,
-      }
-    : undefined;
+  return loadExactSessionEntryWithMode(scope, true);
 }
 
 /** Lists direct child rows without cloning or rebuilding the complete session store. */
-export function listSessionChildEntriesReadOnly(scope: SessionAccessScope): SessionEntrySummary[] {
+export function listSessionChildEntriesReadOnly(
+  scope: SessionEntryReadScope,
+): SessionEntrySummary[] {
   const resolved = resolveSqliteScope(scope);
   const result = withOpenClawAgentDatabaseReadOnly((database) => {
     assertCanonicalSqliteSessionKeysCurrent(database);
     const db = getSessionKysely(database.db);
+    const query =
+      scope.projection === "list"
+        ? selectSessionEntryRows(database, scope.projection).select([
+            "current_session_id",
+            "updated_at",
+          ])
+        : db.selectFrom("session_nodes").selectAll();
     const childRows = executeSqliteQuerySync(
       database.db,
-      db
-        .selectFrom("session_nodes")
-        .selectAll()
+      query
         .where((expression) =>
           expression.or([
             expression("parent_session_key", "=", resolved.sessionKey),
@@ -204,7 +213,7 @@ export function listSessionChildEntriesReadOnly(scope: SessionAccessScope): Sess
       if (isInternalSessionEffectsKey(row.session_key)) {
         return [];
       }
-      const entry = parseReadableSqliteSessionEntryRow(database, row);
+      const entry = parseReadableSqliteSessionEntryRow(database, row, scope.projection);
       return entry ? [{ sessionKey: row.session_key, entry }] : [];
     });
   }, toDatabaseOptions(resolved));

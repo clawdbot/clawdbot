@@ -40,8 +40,8 @@ afterEach(() => {
 describe("maintenance lease heartbeat", () => {
   it("retains ownership while synchronous maintenance exceeds the lease duration", async () => {
     await withOpenClawTestState({ label: "maintenance-lease-blocked" }, async (state) => {
-      await withOpenClawStateLease(options(state.env), async (lease) => {
-        block(1_250);
+      await withOpenClawStateLease({ ...options(state.env), leaseMs: 10_000 }, async (lease) => {
+        block(10_250);
         expect(() => lease.renew?.()).not.toThrow();
         expect(() => lease.assertOwned()).not.toThrow();
         expect(lease.signal.aborted).toBe(false);
@@ -158,9 +158,12 @@ describe("maintenance lease heartbeat", () => {
               const [worker] = await spawned;
               const exited = once(worker, "exit");
               controller.abort();
-              const stopped = readLease(state.env);
+              // Abort closes callbacks immediately; worker exit owns renewal quiescence.
+              const aborted = expect.objectContaining({ code: "OPENCLAW_STATE_LEASE_ABORTED" });
+              expect(lease.signal.aborted).toBe(true);
+              expect(() => lease.assertOwned()).toThrowError(aborted);
+              expect(() => lease.renew?.()).toThrowError(aborted);
               await exited;
-              expect(readLease(state.env)).toEqual(stopped);
             } else if (ending === "throw") {
               throw new Error("operation failed");
             }
