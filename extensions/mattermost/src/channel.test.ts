@@ -1624,6 +1624,64 @@ describe("mattermostPlugin", () => {
       });
     });
 
+    it("posts the question and its guidance as the prompt text beside the buttons", async () => {
+      // Core blanks the authored text in fallback mode, so the post body is
+      // whatever this renderer flattens; that body is what the reader sees.
+      const renderPresentation = requireMattermostRenderPresentation();
+      const cfg = createMattermostTestConfig();
+      const questionId = "01JD3ZK8Q0000000000000000A";
+      const presentation = {
+        blocks: [
+          { type: "text" as const, text: "Which environment?" },
+          {
+            type: "text" as const,
+            text: `- staging
+- production
+
+Tap an option, or reply with the option number or text.`,
+          },
+          {
+            type: "buttons" as const,
+            buttons: [
+              {
+                label: "staging",
+                action: { type: "question" as const, questionId, optionValue: "staging" },
+              },
+              {
+                label: "production",
+                action: { type: "question" as const, questionId, optionValue: "production" },
+              },
+            ],
+          },
+        ],
+      };
+      const payload = {
+        presentation,
+        presentationTextMode: "fallback" as const,
+        channelData: { askUser: { questionId, optionValues: ["staging", "production"] } },
+      };
+
+      const rendered = await renderPresentation({
+        payload,
+        presentation,
+        ctx: { cfg, to: "channel:CHAN1", text: "", payload },
+      });
+
+      expect(rendered?.text).toBe(
+        [
+          "Which environment?",
+          "",
+          "- staging",
+          "- production",
+          "",
+          "Tap an option, or reply with the option number or text.",
+          "",
+          "- staging",
+          "- production",
+        ].join("\n"),
+      );
+    });
+
     it("renders presentation buttons for normal reply payload delivery", async () => {
       const renderPresentation = requireMattermostRenderPresentation();
       const sendPayload = requireMattermostSendPayload();
