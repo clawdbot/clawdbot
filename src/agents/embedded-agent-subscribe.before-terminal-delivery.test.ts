@@ -5,6 +5,7 @@ import { getReplyPayloadMetadata } from "../auto-reply/reply-payload.js";
 import type { AssistantMessage } from "../llm/types.js";
 import {
   emitAssistantTextDeltaAndEnd,
+  emitAssistantTextDelta,
   createSubscribedSessionHarness,
   emitMessageStartAndEndForAssistantText,
 } from "./embedded-agent-subscribe.e2e-harness.js";
@@ -199,9 +200,12 @@ describe("subscribeEmbeddedAgentSession before terminal delivery", () => {
       blockReplyBreak: "message_end",
     });
 
-    emitAssistantTextDeltaAndEnd({
-      emit,
-      text: "Visible stream.",
+    for (const delta of ["Visible", " stream", "."]) {
+      emitAssistantTextDelta({ emit, delta });
+    }
+    emit({
+      type: "message_end",
+      message: { role: "assistant", content: [{ type: "text", text: "Visible stream." }] },
     });
     expect(hasAssistantEvent(onAgentEvent.mock.calls)).toBe(false);
     expect(onPartialReply).not.toHaveBeenCalled();
@@ -219,8 +223,17 @@ describe("subscribeEmbeddedAgentSession before terminal delivery", () => {
     });
 
     await subscription.waitForPendingEvents();
-    expect(hasAssistantEvent(onAgentEvent.mock.calls)).toBe(true);
-    expect(onPartialReply).toHaveBeenCalled();
+    const assistantEvents = onAgentEvent.mock.calls.filter(
+      ([event]) => event.stream === "assistant",
+    );
+    expect(assistantEvents).toHaveLength(1);
+    expect(assistantEvents[0]?.[0].data).toMatchObject({
+      text: "Visible stream.",
+      delta: "Visible stream.",
+    });
+    expect(onPartialReply).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ text: "Visible stream.", delta: "Visible stream." }),
+    );
     expect(hasLifecycleEndEvent(onAgentEvent.mock.calls)).toBe(true);
   });
 

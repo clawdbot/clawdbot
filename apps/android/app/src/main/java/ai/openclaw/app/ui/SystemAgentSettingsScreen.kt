@@ -11,11 +11,10 @@ import ai.openclaw.app.ui.design.ClawPlainIconButton
 import ai.openclaw.app.ui.design.ClawPrimaryButton
 import ai.openclaw.app.ui.design.ClawScaffold
 import ai.openclaw.app.ui.design.ClawSecondaryButton
+import ai.openclaw.app.ui.design.ClawTextField
 import ai.openclaw.app.ui.design.ClawTheme
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -26,8 +25,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.BasicTextField
-import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Bolt
@@ -42,9 +39,6 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.text.input.KeyboardType
-import androidx.compose.ui.text.input.PasswordVisualTransformation
-import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
@@ -280,39 +274,18 @@ private fun SystemAgentComposer(
   onSend: () -> Unit,
 ) {
   Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-    BasicTextField(
+    ClawTextField(
       value = state.input,
       onValueChange = onInputChange,
-      modifier =
-        Modifier
-          .fillMaxWidth()
-          .border(1.dp, ClawTheme.colors.border, RoundedCornerShape(ClawTheme.radii.control))
-          .background(ClawTheme.colors.surfaceRaised, RoundedCornerShape(ClawTheme.radii.control))
-          .padding(12.dp),
-      textStyle = ClawTheme.type.body.copy(color = ClawTheme.colors.text),
-      keyboardOptions = KeyboardOptions(keyboardType = if (state.expectsSensitiveReply) KeyboardType.Password else KeyboardType.Text),
-      visualTransformation = if (state.expectsSensitiveReply) PasswordVisualTransformation() else VisualTransformation.None,
-      minLines = 1,
+      placeholder =
+        if (state.expectsSensitiveReply) {
+          nativeString("Enter secret…")
+        } else {
+          nativeString("Reply to OpenClaw…")
+        },
+      secret = state.expectsSensitiveReply,
       maxLines = 5,
       enabled = !state.sending && state.errorText == null,
-      decorationBox = { inner ->
-        Box {
-          if (state.input.isEmpty()) {
-            val placeholder =
-              if (state.expectsSensitiveReply) {
-                nativeString("Enter secret…")
-              } else {
-                nativeString("Reply to OpenClaw…")
-              }
-            Text(
-              placeholder,
-              style = ClawTheme.type.body,
-              color = ClawTheme.colors.textSubtle,
-            )
-          }
-          inner()
-        }
-      },
     )
     ClawPrimaryButton(
       text = nativeString("Send"),

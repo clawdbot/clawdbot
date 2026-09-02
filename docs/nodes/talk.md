@@ -381,6 +381,11 @@ to waitlist-enabled Platform access.
 - Losing audio focus or encountering a playback-device failure ends realtime
   Talk with an error. Interruption clears queued output before capture resumes;
   stopped sessions cannot acknowledge playback through a replacement Gateway.
+- Realtime **Thinking** follows provider response generation or an accepted
+  OpenClaw consult, not input transcription, which may finish after the answer.
+  Direct replies without a provider or Gateway response-start signal stay
+  **Listening** until output arrives. Empty completed responses return to **Listening**;
+  buffered audio stays **Speaking** until playback drains.
 - Dictation and voice-note recording stop when the app leaves the foreground or
   the user leaves Chat.
 - Talk Mode keeps running until toggled off or the node disconnects, using Android's microphone foreground-service type while active.

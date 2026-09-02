@@ -141,6 +141,7 @@ describe("talk realtime gateway relay", () => {
   });
 
   it.each([
+    [{ status: "completed" as const, responseId: "response-1" }, "turn.ended"],
     [
       { status: "failed" as const, responseId: "response-1", message: "provider failed" },
       "turn.ended",
@@ -170,9 +171,14 @@ describe("talk realtime gateway relay", () => {
         return makeRelayTransport({ close });
       },
     };
-    const events: Array<{ payload: unknown }> = [];
+    const events: Array<{ payload: unknown; delivery?: { dropIfSlow?: boolean } }> = [];
     const context = {
-      broadcastToConnIds: (_event: string, payload: unknown) => events.push({ payload }),
+      broadcastToConnIds: (
+        _event: string,
+        payload: unknown,
+        _owners: Set<string>,
+        delivery?: { dropIfSlow?: boolean },
+      ) => events.push({ payload, delivery }),
     } as never;
     const session = createTalkRealtimeRelaySession({
       context,
@@ -193,11 +199,26 @@ describe("talk realtime gateway relay", () => {
       audioBase64: Buffer.from("first").toString("base64"),
       timestamp: 1,
     });
+    expect(
+      events.some(({ payload }) => (payload as { type?: string }).type === "responseStarted"),
+    ).toBe(false);
     bridgeRequest.onEvent?.({
       direction: "server",
       type: "response.created",
       responseId: outcome.responseId,
     });
+    expect(events.at(-1)).toMatchObject({
+      payload: {
+        type: "responseStarted",
+        relaySessionId: session.relaySessionId,
+        turnId: expect.any(String),
+      },
+      delivery: { dropIfSlow: false },
+    });
+    const firstTurnId = findEventPayload(
+      events,
+      (payload) => payload.type === "responseStarted",
+    ).turnId;
     bridgeRequest.onResponseDone?.(outcome);
     bridgeRequest.onEvent?.({
       direction: "server",
@@ -211,9 +232,11 @@ describe("talk realtime gateway relay", () => {
       .filter((event): event is Record<string, unknown> => Boolean(event));
     expect(firstTalkEvents.filter((event) => event.type === terminalType)).toHaveLength(1);
     expect(firstPayloads.filter((payload) => payload.type === "error")).toHaveLength(
-      outcome.status === "cancelled" ? 0 : 1,
+      outcome.status === "failed" || outcome.status === "incomplete" ? 1 : 0,
     );
-    expect(firstPayloads.filter((payload) => payload.type === "audioDone")).toHaveLength(1);
+    expect(firstPayloads.filter((payload) => payload.type === "audioDone")).toEqual([
+      expect.objectContaining({ talkEvent: expect.objectContaining({ turnId: firstTurnId }) }),
+    ]);
     expect(relaySessions.has(session.relaySessionId)).toBe(true);
     expect(close).not.toHaveBeenCalled();
 
@@ -228,6 +251,11 @@ describe("talk realtime gateway relay", () => {
       type: "response.created",
       responseId: "response-2",
     });
+    expect(events.at(-1)?.payload).toMatchObject({
+      type: "responseStarted",
+      turnId: expect.any(String),
+    });
+    expect(events.at(-1)?.payload).not.toMatchObject({ turnId: firstTurnId });
     bridgeRequest.onResponseDone?.({ status: "completed" });
     bridgeRequest.onEvent?.({
       direction: "server",
@@ -449,6 +477,11 @@ describe("talk realtime gateway relay", () => {
       }
       lateRequest.onReady?.();
       lateRequest.onError?.(new Error("late provider error"));
+      lateRequest.onEvent?.({
+        direction: "server",
+        type: "response.created",
+        responseId: "late-response",
+      });
       lateRequest.onEvent?.({ direction: "server", type: "response.done" });
       lateRequest.onAudio(Buffer.from("late audio"));
       lateRequest.onClearAudio("barge-in");
@@ -2956,6 +2989,11 @@ describe("talk realtime gateway relay", () => {
       type: "response.created",
       ...(responseId ? { responseId } : {}),
     });
+    expect(broadcastToConnIds.mock.calls.at(-1)?.[1]).toMatchObject({
+      type: "responseStarted",
+      relaySessionId: session.relaySessionId,
+      turnId: expect.any(String),
+    });
     bridgeRequest?.onEvent?.({
       direction: "server",
       type: "response.output_audio.delta",
@@ -3547,6 +3585,11 @@ describe("talk realtime gateway relay", () => {
     expect(
       broadcastToConnIds.mock.calls.some((call) => (call[1] as { type?: string }).type === "error"),
     ).toBe(true);
+    expect(
+      broadcastToConnIds.mock.calls.filter(
+        (call) => (call[1] as { type?: string }).type === "responseStarted",
+      ),
+    ).toHaveLength(1);
   });
 
   it("closes a stalled turn-bound cancellation after its drain deadline", async () => {

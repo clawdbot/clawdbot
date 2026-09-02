@@ -1,5 +1,6 @@
 import Foundation
 import OpenClawIPC
+import OpenClawKit
 import Security
 import UserNotifications
 
@@ -21,8 +22,10 @@ struct NotificationManager {
         }
         let center = UNUserNotificationCenter.current()
         let status = await center.notificationSettings()
+        guard !Task.isCancelled else { return false }
         if status.authorizationStatus == .notDetermined {
             let granted = try? await center.requestAuthorization(options: [.alert, .sound, .badge])
+            guard !Task.isCancelled else { return false }
             if granted != true {
                 self.logger.warning("notification permission denied (request)")
                 return false
@@ -59,7 +62,7 @@ struct NotificationManager {
 
         let req = UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil)
         do {
-            try await center.add(req)
+            try await LiveNotificationCenter(center: center).add(req)
             self.logger.debug("notification queued")
             return true
         } catch {

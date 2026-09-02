@@ -141,6 +141,7 @@ internal class RealtimePlayout(
                   if (owner === command.session) {
                     statusOwner = command.statusOwner
                     poll()
+                    if (isPlaying) command.session.onState(true, level, command.statusOwner)
                   } else {
                     command.session.onState(false, null, command.statusOwner)
                   }

@@ -307,6 +307,14 @@ export function createTalkRealtimeRelaySession(
       if (event.direction !== "server") {
         return;
       }
+      if (event.type === "response.created") {
+        // Response admission owns work status; asynchronous input transcripts do not.
+        const turnId = outputOwnership.resolve(false);
+        if (turnId) {
+          emit({ relaySessionId, type: "responseStarted", turnId });
+        }
+        return;
+      }
       if (event.type === "session.created") {
         continuityResetActive = false;
       }

@@ -29,9 +29,13 @@ vi.mock("./session-accessor.sqlite-status.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./session-accessor.sqlite-status.js")>();
   return {
     ...actual,
-    parseSessionEntryJson: (row: Parameters<typeof actual.parseSessionEntryJson>[0]) => {
-      parseSessionEntryCalls(row.entry_json);
-      return actual.parseSessionEntryJson(row);
+    parseSessionEntryJson: (...args: Parameters<typeof actual.parseSessionEntryJson>) => {
+      // Snapshot/publication rows omit the current-id column; exact writer CAS reads
+      // share this decoder but are outside the cache work measured here.
+      if (args[0].current_session_id === undefined) {
+        parseSessionEntryCalls(args[0].entry_json);
+      }
+      return actual.parseSessionEntryJson(...args);
     },
   };
 });
@@ -734,7 +738,7 @@ describe("SQLite session entry cache", () => {
   it("bypasses the cache in a transaction and reuses the persisted snapshot after rollback", async () => {
     const scope = createSessionScope("transaction-rollback");
     await upsertSessionEntryCore(scope, { label: "before", sessionId: "rollback", updatedAt: 1 });
-    const borrowedBefore = openSessionEntryReadView(scope).get(scope.sessionKey);
+    const borrowedBefore = listSessionEntriesCore({ ...scope, clone: false })[0]?.entry;
     expect(borrowedBefore?.label).toBe("before");
     if (!borrowedBefore) {
       throw new Error("missing seeded rollback entry");
@@ -752,7 +756,7 @@ describe("SQLite session entry cache", () => {
     ).toThrow("roll back cache probe");
 
     parseSessionEntryCalls.mockClear();
-    const borrowedAfter = openSessionEntryReadView(scope).get(scope.sessionKey);
+    const borrowedAfter = listSessionEntriesCore({ ...scope, clone: false })[0]?.entry;
     expect(borrowedAfter).toStrictEqual(borrowedBefore);
     expect(borrowedAfter?.label).toBe("before");
     expect(parseSessionEntryCalls).not.toHaveBeenCalled();

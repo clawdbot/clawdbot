@@ -294,7 +294,10 @@ function releasePublishOrchestration(job: WorkflowJob): WorkflowStep {
   return { ...dispatch, run: [functions, ...(phases ?? []).map((step) => step.run)].join("\n") };
 }
 
-function createReleasePublishFixture(overrides: Record<string, string> = {}) {
+function createReleasePublishFixture(
+  overrides: Record<string, string> = {},
+  { functions = "", mockEvidence = true } = {},
+) {
   const root = tempDirs.make("release-publish-phases-");
   const eventsPath = join(root, "events");
   const outputPath = join(root, "output");
@@ -336,9 +339,10 @@ promote_windows_release_assets() { record windows; }
 verify_published_release() {
   record "verify:$clawhub_failed:bootstrap=$plugin_clawhub_bootstrap_completed:workflow=$openclaw_npm_expected_workflow_ref"
 }
-upload_dependency_evidence_release_asset() { record dependency-evidence; }
+${mockEvidence ? "upload_dependency_evidence_release_asset() { record dependency-evidence; }" : ""}
 upload_release_evidence_assets() { record release-evidence; }
-append_release_proof_to_github_release() { record proof; }
+${mockEvidence ? "append_release_proof_to_github_release() { record proof; }" : ""}
+${functions}
 `,
   );
   const outputs = () =>
@@ -349,6 +353,7 @@ append_release_proof_to_github_release() { record proof; }
         .map((line) => [line.slice(0, line.indexOf("=")), line.slice(line.indexOf("=") + 1)]),
     );
   return {
+    root,
     events: () => readFileSync(eventsPath, "utf8").trim().split("\n"),
     outputs,
     record: (event: string) => writeFileSync(eventsPath, `${event}\n`, { flag: "a" }),
@@ -1725,7 +1730,7 @@ exit 64
 `,
     { mode: 0o755 },
   );
-  return spawnSync("bash", ["-c", script], {
+  const result = spawnSync("bash", ["-c", script], {
     cwd: workdir,
     encoding: "utf8",
     env: {
@@ -1759,6 +1764,7 @@ exit 64
       WORKFLOW_SHA: params.currentWorkflowSha,
     },
   });
+  return { ...result, outputPath: resolve(workdir, "github-output") };
 }
 
 async function runOpenClawNpmPreflightConsumerGuard(params: ProtectedPreflightConsumerParams) {
@@ -2610,6 +2616,154 @@ describe("package acceptance workflow", () => {
       }
     },
   );
+
+  it.each([
+    { name: "standalone FRV", fullReleasePreflight: true, independentProducer: true },
+    { name: "direct FRV", fullReleasePreflight: true, independentProducer: false },
+    { name: "historical NPM", fullReleasePreflight: false, independentProducer: false },
+  ])("carries the $name artifact owner without replacing publication authority", async (mode) => {
+    const producerRunId = mode.independentProducer ? "333" : "111";
+    const fullReleaseRunId = mode.fullReleasePreflight ? "111" : "222";
+    const resolved = await runReleasePublishPreflightConsumerGuard({
+      ...mode,
+      currentRef: "refs/heads/main",
+      currentWorkflowSha: "b".repeat(40),
+      preflightHeadBranch: "main",
+      preflightHeadSha: "a".repeat(40),
+    });
+    expect(resolved.status, resolved.stderr).toBe(0);
+    const stepOutputs = Object.fromEntries(
+      readFileSync(resolved.outputPath, "utf8")
+        .trim()
+        .split("\n")
+        .map((line) => line.split("=")),
+    );
+    const target = workflowJob(RELEASE_PUBLISH_WORKFLOW, "resolve_release_target");
+    const expressions: Record<string, string> = {
+      "${{ inputs.preflight_run_id }}": "111",
+      "${{ inputs.full_release_validation_run_id }}": fullReleaseRunId,
+    };
+    for (const [name, value] of Object.entries(target.outputs ?? {})) {
+      const field = value.match(/^\$\{\{ steps\.preflight_artifact\.outputs\.(\w+) \}\}$/u)?.[1];
+      if (field) {
+        expressions[`\${{ needs.resolve_release_target.outputs.${name} }}`] = stepOutputs[field];
+      }
+    }
+    const publish = workflowJob(RELEASE_PUBLISH_WORKFLOW, "publish");
+    const stepEnv = (step: WorkflowStep) =>
+      Object.fromEntries(
+        Object.entries({ ...publish.env, ...step.env })
+          .filter(([, value]) => value in expressions)
+          .map(([key, value]) => [key, expressions[value]]),
+      );
+    const fixture = createReleasePublishFixture(
+      {
+        EXPECTED_PRODUCER_RUN_ID: producerRunId,
+        RELEASE_TAG: "v2026.8.1-beta.3",
+        TARGET_SHA: "d".repeat(40),
+        OPENCLAW_NPM_RESUME_RUN_ID: "777",
+        NPM_TELEGRAM_RUN_ID: "",
+      },
+      {
+        mockEvidence: false,
+        functions: `
+gh() {
+  if [[ "$1 $2" == "run download" ]]; then
+    record "download:$3"
+    if [[ "$3" != "$EXPECTED_PRODUCER_RUN_ID" ]]; then
+      echo "artifact belongs to $EXPECTED_PRODUCER_RUN_ID, not $3" >&2
+      return 41
+    fi
+    shift 3
+    local destination=""
+    while (( $# )); do
+      if [[ "$1" == "--dir" ]]; then destination="$2"; shift; fi
+      shift
+    done
+    cp "$RUNNER_TEMP/preflight-manifest.json" "$destination/"
+    cp -R "$RUNNER_TEMP/dependency-evidence" "$destination/"
+  elif [[ "$1 $2" == "release edit" ]]; then
+    record notes
+  else return 99; fi
+}
+npm() { printf '%s\\n' 'https://example.invalid/openclaw.tgz'; }
+curl() {
+  while [[ "$1" != "-o" ]]; do shift; done
+  cp "$RUNNER_TEMP/registry.tgz" "$2"
+}
+node() {
+  if [[ "\${3:-}" == "$GITHUB_WORKSPACE/.release-harness/scripts/openclaw-npm-resume-run.mts" ]]; then
+    printf '%s\\n' '{"url":"https://example.invalid/runs/777","workflowRef":"refs/tags/release-publish-verified","workflowSha":"${"a".repeat(40)}"}'
+  else command node "$@"; fi
+}
+zip() { cat > "$3"; }
+attach_or_verify_release_asset() { record "asset:$(cat "$1")"; }
+write_clawhub_runtime_state() { printf '%s\\n' '{"proofLines":{"normal":"normal","bootstrap":"bootstrap"}}' > "$1"; }
+render_github_release_notes() { cp "$2" "$1"; printf '%s\\n' '{"verificationIncluded":true}' > "$3"; }
+`,
+      },
+    );
+    const tarball = Buffer.from("published candidate bytes");
+    writeFileSync(join(fixture.root, "registry.tgz"), tarball);
+    writeFileSync(
+      join(fixture.root, "preflight-manifest.json"),
+      JSON.stringify({
+        releaseSha: "d".repeat(40),
+        tarballSha256: createHash("sha256").update(tarball).digest("hex"),
+      }),
+    );
+    mkdirSync(join(fixture.root, "dependency-evidence"));
+    writeFileSync(join(fixture.root, "dependency-evidence/report.json"), "{}");
+    writeFileSync(
+      join(fixture.root, "release-postpublish-evidence.json"),
+      JSON.stringify({
+        openclawNpmTarball: "https://example.invalid/openclaw.tgz",
+        openclawNpmIntegrity: "sha512-fixture",
+      }),
+    );
+    const resume = fixture.run(
+      {
+        run: 'set -euo pipefail; source "$GITHUB_WORKSPACE/.release-harness/scripts/lib/release-publish-children.sh"; resolve_openclaw_npm_publish_state; [[ "$openclaw_npm_already_published" == true ]]',
+      },
+      stepEnv(workflowStep(publish, "Dispatch publish workflows")),
+    );
+    expect.soft(resume.status, resume.stderr).toBe(0);
+    const evidence = fixture.run(
+      {
+        run: 'set -euo pipefail; source "$GITHUB_WORKSPACE/.release-harness/scripts/lib/release-publish-children.sh"; upload_dependency_evidence_release_asset',
+      },
+      stepEnv(workflowStep(publish, "Complete publish workflows")),
+    );
+    expect.soft(evidence.status, evidence.stderr).toBe(0);
+    expect.soft(fixture.events()).toContain("asset:dependency-evidence/report.json");
+
+    const core = workflowStep(publish, "Start core npm publication");
+    const dispatched = fixture.run(core, stepEnv(core));
+    expect(dispatched.status, dispatched.stderr).toBe(0);
+    const dispatch = fixture.events().find((event) => event.startsWith("dispatch:"));
+    expect(dispatch).toContain("-f preflight_run_id=111");
+    expect(dispatch).toContain(`-f full_release_validation_run_id=${fullReleaseRunId}`);
+
+    const proof = fixture.run(
+      {
+        run: 'set -euo pipefail; source "$GITHUB_WORKSPACE/.release-harness/scripts/lib/release-publish-children.sh"; plugin_npm_run_id=101; openclaw_npm_run_id=404; windows_node_run_id=""; android_release_note=""; append_release_proof_to_github_release',
+      },
+      {
+        ...stepEnv(workflowStep(publish, "Complete publish workflows")),
+        POSTPUBLISH_EVIDENCE_DIR: fixture.root,
+      },
+    );
+    expect(proof.status, proof.stderr).toBe(0);
+    const proofText = readFileSync(join(fixture.root, "release-verification.md"), "utf8");
+    expect
+      .soft(proofText)
+      .toContain(
+        `- npm preflight: https://github.com/openclaw/openclaw/actions/runs/${producerRunId}`,
+      );
+    expect(proofText).toContain(
+      `- full release validation: https://github.com/openclaw/openclaw/actions/runs/${fullReleaseRunId}`,
+    );
+  });
 
   it("uses the canonical tooling identity verifier for token-bootstrap evidence", () => {
     const publishJob = workflowJob(PLUGIN_NPM_RELEASE_WORKFLOW, "publish_plugins_npm");
@@ -4053,6 +4207,46 @@ NODE
     expect(npm12Step.run).toContain("extract_openclaw_semver");
     expect(npm12Step.run).toContain(".openclaw-lifecycle-pending");
     expect(JSON.stringify(npm12Job)).not.toContain("secrets.");
+  });
+
+  it("binds npm 12 installation to the supplied prerelease dependency artifact", () => {
+    const job = workflowJob(PACKAGE_ACCEPTANCE_WORKFLOW, "npm_12_install_sh");
+    const validate = workflowStep(job, "Validate prerelease plugin registry artifact identity");
+    const download = workflowStep(job, "Download prerelease plugin registry artifact");
+    const install = workflowStep(job, "Run install.sh with npm 12");
+    const tuple = "needs.resolve_package.outputs.prepublish_plugin_registry_json";
+    const field = (name: string) =>
+      `\${{ fromJSON(${tuple} || '{}').prepublishPluginRegistry${name} || '' }}`;
+
+    expect(validate.if).toBe(`${tuple} != ''`);
+    expect(validate.env).toMatchObject({
+      ARTIFACT_DIGEST: field("ArtifactDigest"),
+      ARTIFACT_ID: field("ArtifactId"),
+      ARTIFACT_NAME: field("ArtifactName"),
+      ARTIFACT_RUN_ATTEMPT: field("ArtifactRunAttempt"),
+      ARTIFACT_RUN_ID: field("ArtifactRunId"),
+    });
+    expect(validate.run).toContain('verify-upload "Prerelease plugin registry"');
+    expect(download.if).toBe(validate.if);
+    expect(download.uses).toBe(DOWNLOAD_ARTIFACT_V8);
+    expect(download.with).toMatchObject({
+      "artifact-ids": field("ArtifactId"),
+      "run-id": field("ArtifactRunId"),
+      path: ".artifacts/prepublish-plugin-registry",
+    });
+    expect(install.env).toMatchObject({
+      OPENCLAW_DOCKER_E2E_SELECTED_SHA: "${{ needs.resolve_package.outputs.package_source_sha }}",
+      OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_CANDIDATE_VERSION:
+        "${{ needs.resolve_package.outputs.package_version }}",
+      OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR: `\${{ ${tuple} != '' && format('{0}/.artifacts/prepublish-plugin-registry', github.workspace) || '' }}`,
+      OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_MANIFEST_SHA256: field("ManifestSha256"),
+    });
+    expect(install.run).toMatch(
+      /bash scripts\/e2e\/lib\/prepublish-plugin-registry\.sh\s*\\\s*bash scripts\/install\.sh/u,
+    );
+    const steps = job.steps ?? [];
+    expect(steps.indexOf(validate)).toBeLessThan(steps.indexOf(download));
+    expect(steps.indexOf(download)).toBeLessThan(steps.indexOf(install));
   });
 
   it("keeps ref packaging independent of workflow-checkout dependencies", () => {

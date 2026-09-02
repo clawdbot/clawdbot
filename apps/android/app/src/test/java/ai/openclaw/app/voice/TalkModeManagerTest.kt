@@ -619,11 +619,13 @@ class TalkModeManagerTest {
   }
 
   @Test
-  fun finalUserTranscriptMarksAwaitingAgentUntilStatusMovesOn() {
+  fun responseStartMarksAwaitingAgentUntilStatusMovesOn() {
     val manager = createRealtimeManager()
 
     assertFalse(manager.awaitingAgent.value)
     manager.transcript("user", "hello", final = true)
+    assertFalse("A transcript does not prove response work has started", manager.awaitingAgent.value)
+    manager.realtimeEvent("""{"relaySessionId":"relay-1","type":"responseStarted","turnId":"response-turn"}""")
     assertTrue(manager.awaitingAgent.value)
     // Any later status transition clears the typed flag; forgetting it at a
     // new setStatus site fails safe instead of showing a stale Thinking wave.
@@ -1314,12 +1316,13 @@ class TalkModeManagerTest {
   @Test
   fun finalAssistantTextRestoresIdleWithoutConsumingLaterAudio() =
     runBlocking {
-      for (playbackEnabled in listOf(false, true)) {
+      for ((playbackEnabled, responseStarted) in listOf(false, true).flatMap { playback -> listOf(playback to false, playback to true) }) {
         withRealtimePlayback { proof ->
           proof.manager.setPlaybackEnabled(playbackEnabled)
           proof.manager.realtimeEvent("""{"relaySessionId":"playback-relay","type":"transcript","role":"user","text":"Question","final":true}""")
-          assertTrue(proof.manager.awaitingAgent.value)
-          proof.manager.realtimeEvent("""{"relaySessionId":"playback-relay","type":"transcript","role":"assistant","text":"Answer","final":true}""")
+          if (responseStarted) proof.manager.realtimeEvent("""{"relaySessionId":"playback-relay","type":"responseStarted","turnId":"realtime-turn"}""")
+          assertEquals(responseStarted, proof.manager.awaitingAgent.value)
+          proof.manager.realtimeEvent("""{"relaySessionId":"playback-relay","type":"transcript","role":"assistant","text":"Answer","final":true,"talkEvent":{"turnId":"realtime-turn"}}""")
           proof.scheduler.runCurrent()
           assertEquals("Answer", proof.manager.lastAssistantText.value)
           assertFalse("Final text with no pending playback must leave Thinking", proof.manager.awaitingAgent.value)
@@ -1347,10 +1350,11 @@ class TalkModeManagerTest {
           null
         }) { proof ->
           proof.manager.realtimeEvent("""{"relaySessionId":"playback-relay","type":"transcript","role":"user","text":"Question","final":true}""")
+          proof.manager.realtimeEvent("""{"relaySessionId":"playback-relay","type":"responseStarted","turnId":"realtime-turn"}""")
           val pcm = ByteArray(4_800)
           proof.manager.realtimeEvent("""{"relaySessionId":"playback-relay","type":"audio","talkEvent":{"turnId":"realtime-turn"},"audioBase64":"${Base64.encodeToString(pcm, Base64.NO_WRAP)}"}""")
           proof.manager.realtimeEvent("""{"relaySessionId":"playback-relay","type":"mark","markName":"last-chunk"}""")
-          proof.manager.realtimeEvent("""{"relaySessionId":"playback-relay","type":"transcript","role":"assistant","text":"Answer","final":true}""")
+          proof.manager.realtimeEvent("""{"relaySessionId":"playback-relay","type":"transcript","role":"assistant","text":"Answer","final":true,"talkEvent":{"turnId":"realtime-turn"}}""")
           assertTrue("Queued audio must be observed before changing response status", proof.manager.awaitingAgent.value)
           proof.scheduler.runCurrent()
           assertTrue(proof.manager.isSpeaking.value)
@@ -1372,7 +1376,7 @@ class TalkModeManagerTest {
 
   @Test
   @Config(shadows = [PlayoutAudioTrack::class])
-  fun providerClearStopsPreviousAudioAfterNextTranscript() =
+  fun providerClearStopsPreviousAudioAfterNextResponseStarts() =
     runBlocking {
       PlayoutAudioTrack.reset()
       try {
@@ -1381,6 +1385,7 @@ class TalkModeManagerTest {
           val track = startRealtimeAudio(proof)
           proof.manager.realtimeEvent("""{"relaySessionId":"playback-relay","type":"transcript","role":"assistant","text":"First answer","final":true,"talkEvent":{"turnId":"realtime-turn"}}""")
           proof.manager.realtimeEvent("""{"relaySessionId":"playback-relay","type":"transcript","role":"user","text":"Second question","final":true,"talkEvent":{"turnId":"next-turn"}}""")
+          proof.manager.realtimeEvent("""{"relaySessionId":"playback-relay","type":"responseStarted","turnId":"next-turn"}""")
           proof.manager.realtimeEvent("""{"relaySessionId":"playback-relay","type":"transcript","role":"assistant","text":"Second answer","final":false,"talkEvent":{"turnId":"next-turn"}}""")
           proof.scheduler.runCurrent()
           assertTrue(proof.manager.isSpeaking.value)
@@ -1424,20 +1429,136 @@ class TalkModeManagerTest {
 
   @Test
   @Config(shadows = [PlayoutAudioTrack::class])
+  fun responseLifecycleOwnsStatusAcrossContinuationAndLateInput() =
+    runBlocking {
+      for (drainedBeforeInput in listOf(false, true)) {
+        PlayoutAudioTrack.reset()
+        try {
+          withRealtimePlayback { proof ->
+            proof.manager.realtimeEvent("""{"relaySessionId":"playback-relay","type":"transcript","role":"user","text":"First question","final":true}""")
+            proof.manager.realtimeEvent("""{"relaySessionId":"playback-relay","type":"responseStarted","turnId":"realtime-turn"}""")
+            startRealtimeAudio(proof)
+            proof.manager.realtimeEvent("""{"relaySessionId":"playback-relay","type":"audioDone","talkEvent":{"type":"turn.ended","turnId":"realtime-turn","final":true}}""")
+            PlayoutAudioTrack.timestampFrames = 2_400L
+            proof.scheduler.advanceTimeBy(20)
+            proof.scheduler.runCurrent()
+            assertEquals("Listening", proof.manager.statusText.value)
+
+            val continuationStart = """{"relaySessionId":"playback-relay","type":"responseStarted","turnId":"continuation-turn"}"""
+            proof.manager.realtimeEvent(continuationStart)
+            assertTrue("A continuation is admitted work without a new user transcript", proof.manager.awaitingAgent.value)
+            proof.manager.realtimeEvent("""{"relaySessionId":"playback-relay","type":"audio","audioBase64":"${Base64.encodeToString(ByteArray(4_800), Base64.NO_WRAP)}","talkEvent":{"turnId":"continuation-turn"}}""")
+            proof.scheduler.runCurrent()
+            assertTrue(proof.manager.isSpeaking.value)
+            proof.manager.realtimeEvent(continuationStart)
+            assertEquals("A duplicate response start cannot reset playback", "Speaking…", proof.manager.statusText.value)
+            assertFalse(proof.manager.awaitingAgent.value)
+            if (drainedBeforeInput) {
+              PlayoutAudioTrack.timestampFrames = 4_800L
+              proof.scheduler.advanceTimeBy(20)
+              proof.scheduler.runCurrent()
+              assertFalse(proof.manager.isSpeaking.value)
+            }
+            proof.manager.realtimeEvent("""{"relaySessionId":"playback-relay","type":"transcript","role":"user","text":"Next question","final":true,"talkEvent":{"turnId":"continuation-turn"}}""")
+            assertEquals(
+              "Next question",
+              proof.manager.conversation.value
+                .last()
+                .text,
+            )
+            assertFalse("Late input does not identify what the continuation answered", proof.manager.awaitingAgent.value)
+            assertEquals(if (drainedBeforeInput) "Listening" else "Speaking…", proof.manager.statusText.value)
+
+            proof.manager.realtimeEvent("""{"relaySessionId":"playback-relay","type":"responseStarted","turnId":"next-turn"}""")
+            assertTrue(proof.manager.awaitingAgent.value)
+            proof.manager.realtimeEvent("""{"relaySessionId":"playback-relay","type":"audioDone","talkEvent":{"type":"turn.ended","turnId":"continuation-turn","final":true}}""")
+            proof.scheduler.runCurrent()
+            assertEquals(!drainedBeforeInput, proof.manager.isSpeaking.value)
+            assertTrue("A stale terminal cannot finish newer work", proof.manager.awaitingAgent.value)
+            assertEquals("Thinking…", proof.manager.statusText.value)
+            proof.manager.realtimeEvent("""{"relaySessionId":"playback-relay","type":"audioDone","talkEvent":{"type":"turn.ended","turnId":"next-turn","final":true}}""")
+            proof.scheduler.runCurrent()
+            assertEquals(!drainedBeforeInput, proof.manager.isSpeaking.value)
+            assertFalse("An empty matching terminal must finish its response while earlier audio remains buffered", proof.manager.awaitingAgent.value)
+            assertEquals(if (drainedBeforeInput) "Listening" else "Speaking…", proof.manager.statusText.value)
+            PlayoutAudioTrack.timestampFrames = 4_800L
+            proof.scheduler.advanceTimeBy(20)
+            proof.scheduler.runCurrent()
+            assertFalse(proof.manager.isSpeaking.value)
+            assertEquals("Listening", proof.manager.statusText.value)
+          }
+        } finally {
+          PlayoutAudioTrack.reset()
+        }
+      }
+    }
+
+  @Test
+  @Config(shadows = [PlayoutAudioTrack::class])
+  fun consultWorkCannotBeFinishedByEarlierPlayback() =
+    runBlocking {
+      PlayoutAudioTrack.reset()
+      try {
+        withRealtimePlayback(responseForRequest = { request, _ ->
+          if (request.getValue("method").jsonPrimitive.content == "talk.client.toolCall") """{"runId":"working-run"}""" else null
+        }) { proof ->
+          startRealtimeAudio(proof)
+          proof.manager.realtimeEvent("""{"relaySessionId":"playback-relay","type":"toolCall","callId":"next-consult","name":"openclaw_agent_consult","args":{"question":"Next question"}}""")
+          withTimeout(5_000) {
+            while (!proof.manager.awaitingAgent.value) {
+              proof.scheduler.runCurrent()
+              withContext(Dispatchers.Default) { delay(10) }
+            }
+          }
+          PlayoutAudioTrack.timestampFrames = 2_400L
+          proof.scheduler.advanceTimeBy(20)
+          proof.scheduler.runCurrent()
+          assertFalse(proof.manager.isSpeaking.value)
+          assertTrue("Earlier playback cannot finish an admitted consult", proof.manager.awaitingAgent.value)
+          assertEquals("Thinking…", proof.manager.statusText.value)
+          startRealtimeAudio(proof)
+          assertFalse("Newly admitted audio can advance the current work phase", proof.manager.awaitingAgent.value)
+          assertEquals("Speaking…", proof.manager.statusText.value)
+        }
+      } finally {
+        PlayoutAudioTrack.reset()
+      }
+    }
+
+  @Test
+  @Config(shadows = [PlayoutAudioTrack::class])
   fun lateFinalUserTranscriptKeepsTheAnsweredUtteranceStatus() =
     runBlocking {
-      for ((mode, earlyPartial) in listOf("consult-audio", "stopped-audio", "cleared-audio", "active-audio", "drained-audio", "local-replay").flatMap { mode -> listOf(mode to true, mode to false) }) {
+      val cases =
+        listOf("consult-audio", "stopped-audio", "cleared-audio", "active-audio", "drained-audio", "local-replay")
+          .flatMap { mode -> listOf(Triple(mode, true, false), Triple(mode, false, false)) } +
+          listOf(Triple("active-audio", false, true), Triple("drained-audio", false, true))
+      for ((mode, earlyPartial, completedPreviousTurn) in cases) {
         PlayoutAudioTrack.reset()
         try {
           withRealtimePlayback(responseForRequest = { request, _ ->
             if (request.getValue("method").jsonPrimitive.content == "talk.client.toolCall") """{"runId":"consult-run"}""" else null
           }) { proof ->
+            val encodedAudio = Base64.encodeToString(ByteArray(4_800), Base64.NO_WRAP)
+            if (completedPreviousTurn) {
+              proof.manager.realtimeEvent("""{"relaySessionId":"playback-relay","type":"transcript","role":"user","text":"Previous question","final":true,"talkEvent":{"turnId":"previous-turn"}}""")
+              proof.manager.realtimeEvent("""{"relaySessionId":"playback-relay","type":"audio","audioBase64":"$encodedAudio","talkEvent":{"turnId":"previous-turn"}}""")
+              proof.manager.realtimeEvent("""{"relaySessionId":"playback-relay","type":"transcript","role":"assistant","text":"Previous answer","final":true,"talkEvent":{"turnId":"previous-turn"}}""")
+              proof.scheduler.runCurrent()
+              assertTrue(proof.manager.isSpeaking.value)
+              PlayoutAudioTrack.timestampFrames = 2_400L
+              proof.scheduler.advanceTimeBy(20)
+              proof.scheduler.runCurrent()
+              assertFalse(proof.manager.isSpeaking.value)
+              assertEquals("Listening", proof.manager.statusText.value)
+            }
+            val completedFrames = if (completedPreviousTurn) 4_800L else 2_400L
             if (earlyPartial) {
               proof.manager.realtimeEvent("""{"relaySessionId":"playback-relay","type":"transcript","role":"user","text":"Can you tack","final":false,"talkEvent":{"turnId":"active-turn"}}""")
             }
             val partialUserId =
               proof.manager.conversation.value
-                .singleOrNull()
+                .lastOrNull { it.role == VoiceConversationRole.User }
                 ?.id
             if (mode == "consult-audio") {
               proof.manager.realtimeEvent("""{"relaySessionId":"playback-relay","type":"toolCall","callId":"consult-call","name":"openclaw_agent_consult","args":{"question":"Synthetic question"}}""")
@@ -1448,7 +1569,7 @@ class TalkModeManagerTest {
                 }
               }
             }
-            val audio = """{"relaySessionId":"playback-relay","type":"audio","audioBase64":"${Base64.encodeToString(ByteArray(4_800), Base64.NO_WRAP)}","talkEvent":{"turnId":"active-turn"}}"""
+            val audio = """{"relaySessionId":"playback-relay","type":"audio","audioBase64":"$encodedAudio","talkEvent":{"turnId":"active-turn"}}"""
             if (mode == "local-replay") {
               proof.manager.realtimeEvent("""{"relaySessionId":"playback-relay","type":"transcript","role":"assistant","text":"Checking","final":true}""")
             } else {
@@ -1467,7 +1588,7 @@ class TalkModeManagerTest {
               assertFalse(proof.manager.isSpeaking.value)
             }
             if (mode == "drained-audio") {
-              PlayoutAudioTrack.timestampFrames = 2_400L
+              PlayoutAudioTrack.timestampFrames = completedFrames
               proof.scheduler.advanceTimeBy(20)
               proof.scheduler.runCurrent()
               assertFalse(proof.manager.isSpeaking.value)
@@ -1475,30 +1596,44 @@ class TalkModeManagerTest {
             proof.manager.realtimeEvent("""{"relaySessionId":"playback-relay","type":"transcript","role":"user","text":"Can you check?","final":true,"talkEvent":{"turnId":"active-turn"}}""")
             val userEntry =
               proof.manager.conversation.value
-                .single { it.role == VoiceConversationRole.User }
+                .last { it.role == VoiceConversationRole.User }
             if (earlyPartial) assertEquals(partialUserId, userEntry.id)
             val userId = userEntry.id
             assertEquals("Can you check?", userEntry.text)
-            assertFalse("Finalizing the already answered user utterance cannot restart Thinking ($mode, earlyPartial=$earlyPartial)", proof.manager.awaitingAgent.value)
+            val awaitingAfterUserTranscript = proof.manager.awaitingAgent.value
             proof.manager.realtimeEvent("""{"relaySessionId":"playback-relay","type":"transcript","role":"assistant","text":"Checking","final":true,"talkEvent":{"turnId":"active-turn"}}""")
-            PlayoutAudioTrack.timestampFrames = 2_400L
+            PlayoutAudioTrack.timestampFrames = completedFrames
             proof.scheduler.advanceTimeBy(20)
             proof.scheduler.runCurrent()
-            assertEquals("Listening", proof.manager.statusText.value)
+            assertFalse(proof.manager.isSpeaking.value)
+            assertEquals(
+              "Finalizing an answered utterance cannot restart Thinking or outlive playback ($mode, earlyPartial=$earlyPartial, completedPreviousTurn=$completedPreviousTurn)",
+              false to "Listening",
+              awaitingAfterUserTranscript to proof.manager.statusText.value,
+            )
             proof.manager.realtimeEvent("""{"relaySessionId":"playback-relay","type":"transcript","role":"user","text":"Second question","final":false,"talkEvent":{"turnId":"active-turn"}}""")
             if (mode != "local-replay") {
               proof.manager.realtimeEvent(audio)
               proof.scheduler.runCurrent()
-              assertEquals("Old output cannot reclaim a new partial utterance", "Listening", proof.manager.statusText.value)
+              assertEquals("A partial transcript does not replace the physical playback phase", if (mode == "stopped-audio") "Listening" else "Speaking…", proof.manager.statusText.value)
             }
             proof.manager.realtimeEvent("""{"relaySessionId":"playback-relay","type":"transcript","role":"user","text":"Second question","final":true,"talkEvent":{"turnId":"active-turn"}}""")
-            assertTrue("A distinct user utterance still owns a new response", proof.manager.awaitingAgent.value)
+            assertFalse("Even a distinct transcript does not prove new work was admitted", proof.manager.awaitingAgent.value)
             assertTrue(
               userId !=
                 proof.manager.conversation.value
                   .last()
                   .id,
             )
+            proof.manager.realtimeEvent("""{"relaySessionId":"playback-relay","type":"inputAudio","byteLength":960}""")
+            proof.manager.realtimeEvent("""{"relaySessionId":"playback-relay","type":"responseStarted","turnId":"next-turn"}""")
+            assertTrue("An admitted response owns the waiting status", proof.manager.awaitingAgent.value)
+            PlayoutAudioTrack.timestampFrames = completedFrames + 2_400L
+            proof.scheduler.advanceTimeBy(20)
+            proof.scheduler.runCurrent()
+            assertFalse(proof.manager.isSpeaking.value)
+            assertTrue("Earlier audio cannot finish newly admitted work", proof.manager.awaitingAgent.value)
+            assertEquals("Thinking…", proof.manager.statusText.value)
           }
         } finally {
           PlayoutAudioTrack.reset()
@@ -1516,6 +1651,7 @@ class TalkModeManagerTest {
     try {
       withRealtimePlayback { proof ->
         proof.manager.realtimeEvent("""{"relaySessionId":"playback-relay","type":"transcript","role":"user","text":"First question","final":true,"talkEvent":{"turnId":"active-turn"}}""")
+        proof.manager.realtimeEvent("""{"relaySessionId":"playback-relay","type":"responseStarted","turnId":"active-turn"}""")
         if (withAudio) {
           proof.manager.realtimeEvent("""{"relaySessionId":"playback-relay","type":"audio","audioBase64":"${Base64.encodeToString(ByteArray(4_800), Base64.NO_WRAP)}","talkEvent":{"turnId":"active-turn"}}""")
           proof.scheduler.runCurrent()
@@ -1533,19 +1669,20 @@ class TalkModeManagerTest {
           proof.manager.realtimeEvent("""{"relaySessionId":"playback-relay","type":"clear","talkEvent":{"turnId":"active-turn"}}""")
           proof.scheduler.runCurrent()
         }
-        // The relay may retain its active turn while input transcription overlaps old output.
+        // Old output can be queued before the next response starts, even after its input transcript.
         proof.manager.realtimeEvent("""{"relaySessionId":"playback-relay","type":"transcript","role":"user","text":"Second question","final":true,"talkEvent":{"turnId":"active-turn"}}""")
         when (lateEvent) {
           "audio" -> proof.manager.realtimeEvent("""{"relaySessionId":"playback-relay","type":"audio","audioBase64":"${Base64.encodeToString(ByteArray(4_800), Base64.NO_WRAP)}","talkEvent":{"turnId":"active-turn"}}""")
           "final-text" -> proof.manager.realtimeEvent(finalText)
         }
+        proof.manager.realtimeEvent("""{"relaySessionId":"playback-relay","type":"responseStarted","turnId":"next-turn"}""")
         proof.scheduler.runCurrent()
-        assertTrue("Continuation of admitted old output cannot claim a newer user turn", proof.manager.awaitingAgent.value)
+        assertTrue("Queued old output cannot claim a newly admitted response", proof.manager.awaitingAgent.value)
         if (withAudio) PlayoutAudioTrack.timestampFrames = if (lateEvent == "audio") 4_800L else 2_400L
         proof.scheduler.advanceTimeBy(20)
         proof.scheduler.runCurrent()
         assertFalse(proof.manager.isSpeaking.value)
-        assertTrue("Old output completion cannot answer a newer user transcript", proof.manager.awaitingAgent.value)
+        assertTrue("Old output completion cannot finish a newer admitted response", proof.manager.awaitingAgent.value)
         assertEquals("Thinking…", proof.manager.statusText.value)
         if (lateEvent != null) {
           proof.manager.realtimeEvent("""{"relaySessionId":"playback-relay","type":"audio","audioBase64":"${Base64.encodeToString(ByteArray(4_800), Base64.NO_WRAP)}","talkEvent":{"turnId":"next-turn"}}""")

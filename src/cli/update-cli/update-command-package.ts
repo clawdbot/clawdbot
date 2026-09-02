@@ -34,7 +34,7 @@ import {
   resolveNodeRunner,
   runUpdateStep,
 } from "./shared.js";
-import { createUpdateConfigSnapshot } from "./update-command-config.js";
+import { createUpdateConfigSnapshot } from "./update-command-config-snapshot.js";
 import { resolveUpdateTargetEnv } from "./update-command-service-env.js";
 
 const CLI_NAME = resolveCliName();

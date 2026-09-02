@@ -134,7 +134,7 @@ private enum class TalkStatusState {
 }
 
 private class TalkStatusOwner(
-  var entryId: String? = null,
+  val responseTurnId: String? = null,
 )
 
 private data class TalkStatus(
@@ -353,7 +353,7 @@ class TalkModeManager internal constructor(
       onWorking = { session ->
         synchronized(realtimeCapturePauseLock) {
           if (realtimeSessionId == session.relaySessionId) {
-            setStatus(currentStatus.copy(text = nativeText("Thinking…"), state = TalkStatusState.Active, awaitingAgent = true))
+            setStatus(nativeText("Thinking…"), awaitingAgent = true)
           }
         }
       },
@@ -1403,11 +1403,13 @@ class TalkModeManager internal constructor(
       !localMediaPlaybackActive &&
       (!realtimePlayoutDelegate.isInitialized() || !realtimePlayout.isPlaying || realtimeAudioInput?.canCaptureDuringPlayback == true)
 
-  // Gateway output turn IDs retain their status origin across overlapping user transcripts.
+  // Playback retains the response that admitted it, even after newer work starts.
   private fun realtimeOutputStatusOwner(turnId: String?): TalkStatusOwner {
-    // Local transcript replay is unkeyed but still owns the user entry it answered.
     val output = realtimeOutputTurn
-    if (!turnId.isNullOrBlank() && output?.id == turnId) return output.statusOwner
+    // Consult work has no provider response yet. Only subsequent output may adopt it;
+    // a terminal event or a previously queued playback callback cannot finish it.
+    val awaitingOutput = currentStatus.awaitingAgent && currentStatus.owner.responseTurnId == null
+    if (!turnId.isNullOrBlank() && output?.id == turnId && !awaitingOutput) return output.statusOwner
     return currentStatus.owner.also { realtimeOutputTurn = RealtimeOutputTurn(turnId, it) }
   }
 
@@ -1442,6 +1444,13 @@ class TalkModeManager internal constructor(
           _isListening.value = true
         }
 
+        "responseStarted" -> {
+          val responseTurnId = obj["turnId"].asStringOrNull()?.takeIf(String::isNotBlank) ?: return
+          if (realtimeOutputSuppressed || realtimeOutputTurn?.id == responseTurnId) return
+          setStatus(TalkStatus(nativeText("Thinking…"), TalkStatusState.Active, awaitingAgent = true, owner = TalkStatusOwner(responseTurnId)))
+          realtimeOutputStatusOwner(responseTurnId)
+        }
+
         "audio" -> {
           if (realtimeOutputSuppressed) return
           if (turnId.isNullOrBlank()) return
@@ -1456,6 +1465,12 @@ class TalkModeManager internal constructor(
               return
             }
           if (playbackEnabled) afterDispatch = owner?.let { realtimePlayout.audio(it, bytes, statusOwner) }
+        }
+
+        "audioDone" -> {
+          val output = realtimeOutputTurn?.takeIf { !turnId.isNullOrBlank() && it.id == turnId } ?: return
+          // Empty responses settle too; queued PCM still owns its physical drain.
+          afterDispatch = owner?.let { realtimePlayout.refreshState(it, output.statusOwner) }
         }
 
         "clear" -> {
@@ -1820,20 +1835,6 @@ class TalkModeManager internal constructor(
       }
     when (role) {
       VoiceConversationRole.User -> {
-        // The first transcript may follow output. Bind its entry without replacing the
-        // identity already queued for playback; a distinct entry still gets a new owner.
-        val statusOwner = currentStatus.owner.takeIf { it.entryId == null || it.entryId == resolvedEntryId } ?: TalkStatusOwner()
-        statusOwner.entryId = resolvedEntryId
-        if ((entryId == null || isFinal) && realtimeOutputTurn?.statusOwner !== statusOwner) {
-          setStatus(
-            TalkStatus(
-              text = if (isFinal) nativeText("Thinking…") else nativeText("Listening"),
-              state = TalkStatusState.Active,
-              awaitingAgent = isFinal,
-              owner = statusOwner,
-            ),
-          )
-        }
         realtimeUserEntryId = if (isFinal) null else resolvedEntryId
         realtimeUserEntryAwaitingFinal = false
         realtimeUserEntryAwaitingFinalStartedAtMs = null
