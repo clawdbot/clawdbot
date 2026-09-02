@@ -39,6 +39,7 @@ function createExecution(options: { aborted?: boolean; assertContextCurrent?: ()
         activeRunAbort: {
           cleanup: abortCleanup,
           controller,
+          markExecutionStarted: vi.fn(() => true),
           registered: false,
         },
         dispatchTaskTrackingMode: "none",
@@ -140,6 +141,34 @@ describe("startAgentRunExecution Gateway ownership", () => {
     resolveCleanupObserved();
     await expect(borrowedAfterCleanup).resolves.toBeUndefined();
     expect(execution.runtimeRelease).toHaveBeenCalledOnce();
+  });
+
+  it("publishes execution start only after the Gateway work lane admits the run", async () => {
+    const execution = createExecution();
+    let releaseAdmission!: () => void;
+    const admission = new Promise<void>((resolve) => {
+      releaseAdmission = resolve;
+    });
+    execution.params.prepared.activeGatewayWorkAdmission.run = async (run: () => Promise<void>) => {
+      await admission;
+      await run();
+    };
+    const executionStarted = vi.fn();
+    execution.params.io.emitExecutionStarted = executionStarted;
+    dispatchAgentRunFromGateway.mockImplementationOnce((dispatch) => {
+      dispatch.ingressOpts.onExecutionStarted?.();
+    });
+
+    startAgentRunExecution(execution.params);
+    await Promise.resolve();
+
+    expect(dispatchAgentRunFromGateway).not.toHaveBeenCalled();
+    expect(executionStarted).not.toHaveBeenCalled();
+
+    releaseAdmission();
+    await vi.waitFor(() => expect(dispatchAgentRunFromGateway).toHaveBeenCalledOnce());
+
+    expect(executionStarted).toHaveBeenCalledOnce();
   });
 
   it("releases the admitted runtime once when aborted before dispatch", async () => {

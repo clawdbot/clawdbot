@@ -181,6 +181,8 @@ export function setSubagentAnnounceDeliveryDepsForTest(
             params: agentParams,
             expectFinal: options?.expectFinal,
             onAccepted: options?.onAccepted,
+            onSignalAbort: options?.onSignalAbort,
+            signal: options?.signal,
             timeoutMs: options?.timeoutMs,
           })) satisfies typeof dispatchGatewayMethodInProcess)
       : undefined);
@@ -261,6 +263,28 @@ export async function dispatchSubagentAnnounceAgent(
     "agent",
     agentParams,
     options,
+  );
+}
+
+export async function abortSubagentAnnounceAgent(params: {
+  runId: string;
+  sessionKey: string;
+  resolveGatewayContext?: import("../../../gateway/server-methods/types.js").GatewayContextResolver;
+}): Promise<boolean> {
+  const response = await subagentAnnounceDeliveryDeps.dispatchGatewayMethodInProcess<{
+    aborted?: boolean;
+    runIds?: unknown[];
+  }>(
+    "chat.abort",
+    { runId: params.runId, sessionKey: params.sessionKey },
+    {
+      operatorRoleActor: { kind: "system" },
+      resolveGatewayContext: params.resolveGatewayContext,
+    },
+  );
+  return (
+    response.aborted === true &&
+    (response.runIds === undefined || response.runIds.includes(params.runId))
   );
 }
 

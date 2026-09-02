@@ -1,10 +1,10 @@
 // The announce dispatch waits for requester lane admission and then for the
 // announce turn. These cover that the two failures stay distinguishable, which
 // one shared `announceTimeoutMs` could not express.
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
-import { emitAgentEvent, resetAgentEventsForTest } from "../../../infra/agent-events.js";
 import {
+  runAnnounceDeliveryWithRetry,
   resolveSubagentAnnounceAdmissionTimeoutMs,
   resolveSubagentAnnounceRunTimeoutMs,
   resolveSubagentAnnounceTimeoutMs,
@@ -21,16 +21,30 @@ function configWithSubagents(subagents: Record<string, number>): OpenClawConfig 
   return { agents: { defaults: { subagents } } } as OpenClawConfig;
 }
 
-function emitAnnounceRunStart(runId: string): void {
-  emitAgentEvent({
-    runId,
-    stream: "lifecycle",
-    data: { phase: "start", startedAt: Date.now() },
+function rejectsWhenAborted(_timeoutMs: number, signal: AbortSignal): Promise<never> {
+  return new Promise<never>((_resolve, reject) => {
+    const onAbort = () => reject(signal.reason);
+    signal.addEventListener("abort", onAbort, { once: true });
+    if (signal.aborted) {
+      onAbort();
+    }
   });
 }
 
-function neverSettles(): Promise<never> {
-  return new Promise<never>(() => {});
+function createAbortableRun() {
+  let markExecutionStarted: (() => void) | undefined;
+  return {
+    run: (timeoutMs: number, signal: AbortSignal, onExecutionStarted: () => void) => {
+      markExecutionStarted = onExecutionStarted;
+      return rejectsWhenAborted(timeoutMs, signal);
+    },
+    start: () => {
+      if (!markExecutionStarted) {
+        throw new Error("announce dispatch did not publish its admission callback");
+      }
+      markExecutionStarted();
+    },
+  };
 }
 
 describe("announce phase timeout resolution", () => {
@@ -63,14 +77,6 @@ describe("announce phase timeout resolution", () => {
 });
 
 describe("runWithAnnounceSplitDeadlines", () => {
-  beforeEach(() => {
-    resetAgentEventsForTest();
-  });
-
-  afterEach(() => {
-    resetAgentEventsForTest();
-  });
-
   it("returns the dispatch result when it settles inside both budgets", async () => {
     const result = await runWithAnnounceSplitDeadlines({
       runId: ANNOUNCE_RUN_ID,
@@ -82,7 +88,7 @@ describe("runWithAnnounceSplitDeadlines", () => {
     expect(result).toBe("delivered");
   });
 
-  it("hands the dispatch a release backstop past the run budget", async () => {
+  it("hands the dispatch a release backstop past both phase budgets", async () => {
     let dispatchTimeoutMs: number | undefined;
 
     await runWithAnnounceSplitDeadlines({
@@ -95,7 +101,30 @@ describe("runWithAnnounceSplitDeadlines", () => {
       },
     });
 
-    expect(dispatchTimeoutMs).toBeGreaterThan(900_000);
+    expect(dispatchTimeoutMs).toBeGreaterThan(930_000);
+  });
+
+  it("starts the full run budget only after admission", async () => {
+    vi.useFakeTimers();
+    try {
+      const abortable = createAbortableRun();
+      const result = runWithAnnounceSplitDeadlines({
+        runId: ANNOUNCE_RUN_ID,
+        admissionTimeoutMs: 50,
+        runTimeoutMs: 80,
+        run: abortable.run,
+      }).catch((error: unknown) => error);
+
+      await vi.advanceTimersByTimeAsync(40);
+      abortable.start();
+      await vi.advanceTimersByTimeAsync(79);
+      expect(vi.getTimerCount()).toBeGreaterThan(0);
+
+      await vi.advanceTimersByTimeAsync(1);
+      await expect(result).resolves.toBeInstanceOf(AnnounceRunBudgetExceededError);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("fails as not-admitted when the announce turn never starts", async () => {
@@ -103,7 +132,7 @@ describe("runWithAnnounceSplitDeadlines", () => {
       runId: ANNOUNCE_RUN_ID,
       admissionTimeoutMs: 20,
       runTimeoutMs: 900_000,
-      run: neverSettles,
+      run: rejectsWhenAborted,
     });
 
     await expect(call).rejects.toBeInstanceOf(AnnounceNotAdmittedError);
@@ -111,26 +140,42 @@ describe("runWithAnnounceSplitDeadlines", () => {
   });
 
   it("fails as run-budget-exceeded once the announce turn has started", async () => {
+    const abortable = createAbortableRun();
     const call = runWithAnnounceSplitDeadlines({
       runId: ANNOUNCE_RUN_ID,
       admissionTimeoutMs: 20,
       runTimeoutMs: 80,
-      run: neverSettles,
+      run: abortable.run,
     });
-    emitAnnounceRunStart(ANNOUNCE_RUN_ID);
+    abortable.start();
 
     await expect(call).rejects.toBeInstanceOf(AnnounceRunBudgetExceededError);
     await expect(call).rejects.toThrow(/announce run exceeded budget/);
   });
 
-  it("does not treat another run's start event as admission", async () => {
+  it("propagates caller cancellation into the active dispatch", async () => {
+    const caller = new AbortController();
+    const reason = new Error("source delivery cancelled");
+    const call = runWithAnnounceSplitDeadlines({
+      runId: ANNOUNCE_RUN_ID,
+      admissionTimeoutMs: 30_000,
+      runTimeoutMs: 900_000,
+      signal: caller.signal,
+      run: rejectsWhenAborted,
+    });
+
+    caller.abort(reason);
+
+    await expect(call).rejects.toBe(reason);
+  });
+
+  it("does not start the run budget without the facade admission callback", async () => {
     const call = runWithAnnounceSplitDeadlines({
       runId: ANNOUNCE_RUN_ID,
       admissionTimeoutMs: 40,
       runTimeoutMs: 900_000,
-      run: neverSettles,
+      run: rejectsWhenAborted,
     });
-    emitAnnounceRunStart("announce:v1:agent:tank:subagent:other-session:other-run");
 
     await expect(call).rejects.toBeInstanceOf(AnnounceNotAdmittedError);
   });
@@ -140,21 +185,41 @@ describe("runWithAnnounceSplitDeadlines", () => {
       runId: ANNOUNCE_RUN_ID,
       admissionTimeoutMs: 20,
       runTimeoutMs: 900_000,
-      run: neverSettles,
+      run: rejectsWhenAborted,
     }).catch((err: unknown) => err);
     const admittedRunId = `${ANNOUNCE_RUN_ID}:admitted`;
+    const abortable = createAbortableRun();
     const runExceeded = runWithAnnounceSplitDeadlines({
       runId: admittedRunId,
       admissionTimeoutMs: 20,
       runTimeoutMs: 80,
-      run: neverSettles,
+      run: abortable.run,
     }).catch((err: unknown) => err);
-    emitAnnounceRunStart(admittedRunId);
+    abortable.start();
 
     const [first, second] = await Promise.all([notAdmitted, runExceeded]);
 
     expect((first as Error).name).toBe("AnnounceNotAdmittedError");
     expect((second as Error).name).toBe("AnnounceRunBudgetExceededError");
     expect((first as Error).message).not.toBe((second as Error).message);
+  });
+
+  it.each([
+    ["not admitted", () => new AnnounceNotAdmittedError(ANNOUNCE_RUN_ID, 20)],
+    ["run budget exceeded", () => new AnnounceRunBudgetExceededError(ANNOUNCE_RUN_ID, 80)],
+  ])("does not retry a %s phase deadline", async (_name, createError) => {
+    let attempts = 0;
+
+    await expect(
+      runAnnounceDeliveryWithRetry({
+        operation: "split deadline test",
+        run: async () => {
+          attempts += 1;
+          throw createError();
+        },
+      }),
+    ).rejects.toBeInstanceOf(Error);
+
+    expect(attempts).toBe(1);
   });
 });

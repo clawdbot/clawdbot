@@ -5,6 +5,24 @@ import { prepareAgentRequestPreflight } from "./agent-request-preflight.js";
 import { createAgentTurnService } from "./agent-turn-service.js";
 import { createAgentTurnIo } from "./io.js";
 
+it("uses the idempotency key as the lifecycle run id for ordinary agent dispatch", () => {
+  const result = prepareAgentRequestPreflight({
+    request: {
+      message: "announce completion",
+      sessionKey: "agent:main:main",
+      idempotencyKey: "announce:v1:child:run",
+    },
+    io: createAgentTurnIo(vi.fn()),
+    context: {
+      getRuntimeConfig: () => ({}),
+      dedupe: new Map(),
+    },
+    client: null,
+  } as never);
+
+  expect(result?.runId).toBe("announce:v1:child:run");
+});
+
 function runPreflight(
   swarmOutputSchema?: Record<string, unknown>,
   swarmCollector = true,

@@ -9,7 +9,6 @@
  * are bounded separately here and fail with distinct errors so callers, logs,
  * and triage can act on the difference.
  */
-import { onAgentEvent } from "../../../infra/agent-events.js";
 import { addSafeTimeoutDelayGraceMs, setSafeTimeout } from "../../../utils/timer-delay.js";
 
 // The dispatch keeps an outer deadline of its own so an announce this call has
@@ -41,20 +40,28 @@ export class AnnounceRunBudgetExceededError extends Error {
  *
  * `runId` is the gateway run id of the announce turn — the same value the
  * dispatch passes as `idempotencyKey`, which the gateway adopts as its run id
- * (`agent-request-preflight.ts`). The lifecycle `start` event for that run id is
- * the only signal that the turn was admitted rather than queued behind the
- * requester's own turn, so it is what switches this call from the admission
- * budget to the run budget.
+ * (`agent-request-preflight.ts`). The in-process turn facade invokes
+ * `onExecutionStarted` at the production lane-admission boundary, so that
+ * callback switches this call from the admission budget to the run budget.
  */
 export async function runWithAnnounceSplitDeadlines<T>(params: {
   runId: string;
   admissionTimeoutMs: number;
   runTimeoutMs: number;
-  run: (dispatchTimeoutMs: number) => Promise<T>;
+  signal?: AbortSignal;
+  run: (
+    dispatchTimeoutMs: number,
+    signal: AbortSignal,
+    onExecutionStarted: () => void,
+  ) => Promise<T>;
 }): Promise<T> {
   let admitted = false;
   let admissionTimer: NodeJS.Timeout | undefined;
   let runTimer: NodeJS.Timeout | undefined;
+  const controller = new AbortController();
+  const dispatchSignal = params.signal
+    ? AbortSignal.any([params.signal, controller.signal])
+    : controller.signal;
   const clearDeadlines = () => {
     if (admissionTimer) {
       clearTimeout(admissionTimer);
@@ -63,13 +70,16 @@ export async function runWithAnnounceSplitDeadlines<T>(params: {
       clearTimeout(runTimer);
     }
   };
-  const unsubscribe = onAgentEvent((evt) => {
-    if (
-      admitted ||
-      evt.runId !== params.runId ||
-      evt.stream !== "lifecycle" ||
-      evt.data?.phase !== "start"
-    ) {
+  admissionTimer = setSafeTimeout(() => {
+    // A start event landing in the same tick as the timer still counts.
+    if (admitted) {
+      return;
+    }
+    controller.abort(new AnnounceNotAdmittedError(params.runId, params.admissionTimeoutMs));
+  }, params.admissionTimeoutMs);
+  admissionTimer.unref?.();
+  const onExecutionStarted = () => {
+    if (admitted) {
       return;
     }
     admitted = true;
@@ -77,29 +87,22 @@ export async function runWithAnnounceSplitDeadlines<T>(params: {
       clearTimeout(admissionTimer);
       admissionTimer = undefined;
     }
-  });
+    runTimer = setSafeTimeout(() => {
+      controller.abort(new AnnounceRunBudgetExceededError(params.runId, params.runTimeoutMs));
+    }, params.runTimeoutMs);
+    runTimer.unref?.();
+  };
   try {
-    const deadline = new Promise<never>((_resolve, reject) => {
-      admissionTimer = setSafeTimeout(() => {
-        // A start event landing in the same tick as the timer still counts.
-        if (admitted) {
-          return;
-        }
-        reject(new AnnounceNotAdmittedError(params.runId, params.admissionTimeoutMs));
-      }, params.admissionTimeoutMs);
-      admissionTimer.unref?.();
-      runTimer = setSafeTimeout(() => {
-        reject(new AnnounceRunBudgetExceededError(params.runId, params.runTimeoutMs));
-      }, params.runTimeoutMs);
-      runTimer.unref?.();
-    });
     const dispatchTimeoutMs = addSafeTimeoutDelayGraceMs(
-      params.runTimeoutMs,
+      addSafeTimeoutDelayGraceMs(params.admissionTimeoutMs, params.runTimeoutMs),
       ANNOUNCE_DISPATCH_RELEASE_GRACE_MS,
     );
-    return await Promise.race([params.run(dispatchTimeoutMs), deadline]);
+    // The deadline aborts the dispatch rather than merely abandoning its
+    // promise. The dispatch owns cancellation of its accepted/queued Gateway
+    // run before it rejects, so callers can safely choose another delivery
+    // path without a late duplicate.
+    return await params.run(dispatchTimeoutMs, dispatchSignal, onExecutionStarted);
   } finally {
-    unsubscribe();
     clearDeadlines();
   }
 }

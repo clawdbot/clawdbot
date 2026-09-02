@@ -68,6 +68,7 @@ type DispatchGatewayMethodInProcessOptions = {
   nodeInvokeStream?: GatewayNodeInvokeStream;
   nodeInvokeApprovalSessionKey?: string;
   onAccepted?: (payload: unknown) => void;
+  onExecutionStarted?: () => void;
   onSignalAbort?: () => Promise<void> | void;
   operatorRoleActor?: GatewayOperatorRoleActor;
   pluginRuntimeOwnerId?: string;
@@ -349,6 +350,7 @@ export async function dispatchGatewayMethodInProcess<T>(
         ? await facade.dispatch<T>(params as AgentRunRequest, {
             expectFinal: options?.expectFinal,
             onAccepted: options?.onAccepted,
+            onExecutionStarted: options?.onExecutionStarted,
             onSignalAbort: options?.onSignalAbort,
             signal: options?.signal,
             timeoutMs: options?.timeoutMs,

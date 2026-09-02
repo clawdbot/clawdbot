@@ -2231,13 +2231,87 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
         targetSessionId: "requester-session-local",
         idempotencyKey: "announce-local-dispatch",
       },
-      // The dispatch carries the announce run budget plus its release grace, not
-      // the announce deadline itself: admission and run budgets are enforced by
-      // runWithAnnounceSplitDeadlines so their failures stay distinguishable.
-      timeoutMs: 930_000,
+      // The dispatch backstop spans admission + run + release grace. The two
+      // phase-local timers still produce the distinguishable failure reasons.
+      timeoutMs: 960_000,
       resolveGatewayContext,
     });
   });
+
+  it.each([
+    ["confirmed", true, "retryable"],
+    ["unconfirmed", false, "ambiguous"],
+  ] as const)(
+    "cancels a lane-blocked announce before fallback when cancellation is %s",
+    async (_name, abortConfirmed, expectedDisposition) => {
+      const methods: string[] = [];
+      const dispatchGatewayMethodInProcess = vi.fn(
+        async (
+          method: string,
+          params: Record<string, unknown>,
+          options?: Parameters<typeof runtimeDispatchGatewayMethodInProcess>[2],
+        ) => {
+          methods.push(method);
+          if (method === "chat.abort") {
+            return {
+              aborted: abortConfirmed,
+              runIds: abortConfirmed ? [params.runId] : [],
+            };
+          }
+          options?.onAccepted?.({ status: "accepted", runId: params.idempotencyKey });
+          return await new Promise<never>((_resolve, reject) => {
+            const signal = options?.signal;
+            signal?.addEventListener(
+              "abort",
+              () => {
+                void Promise.resolve(options?.onSignalAbort?.()).then(() => reject(signal.reason));
+              },
+              { once: true },
+            );
+          });
+        },
+      ) as unknown as typeof runtimeDispatchGatewayMethodInProcess;
+      testing.setDepsForTest({
+        dispatchGatewayMethodInProcess,
+        getRequesterSessionActivity: () => ({ isActive: false }),
+        getRuntimeConfig: () =>
+          ({
+            agents: {
+              defaults: {
+                subagents: {
+                  announceAdmissionTimeoutMs: 10,
+                  announceRunTimeoutMs: 1_000,
+                },
+              },
+            },
+          }) as never,
+        queueEmbeddedAgentMessageWithOutcome: createQueueOutcomeMock(false),
+      });
+
+      const result = await deliverSubagentAnnouncement({
+        requesterSessionKey: "agent:main:local-session",
+        targetRequesterSessionKey: "agent:main:local-session",
+        triggerMessage: "child done",
+        steerMessage: "child done",
+        requesterIsSubagent: false,
+        expectsCompletionMessage: true,
+        bestEffortDeliver: true,
+        directIdempotencyKey: "announce-cancel-before-fallback",
+        sourceTool: "agent_harness_task",
+      });
+
+      expect(methods).toEqual(["agent", "chat.abort"]);
+      expect(result).toMatchObject({
+        delivered: false,
+        path: "direct",
+        disposition: expectedDisposition,
+      });
+      expect(mockCallArg(dispatchGatewayMethodInProcess, 1, 1)).toEqual({
+        runId: "announce-cancel-before-fallback",
+        sessionKey: "agent:main:local-session",
+      });
+    },
+  );
 
   it("wakes settled descendant runs under restrictive gateway roles", async () => {
     const { cfg, dispatchGatewayMethodInProcess } = createRoleRestrictedInProcessGatewayMock({
