@@ -238,8 +238,8 @@ For a multi-agent roster defined directly in the main config file without a
 legacy `default: true` marker, Doctor adds `agents.ownership: "explicit"` for
 both keyed `agents.entries` and older `agents.list` rosters, including with
 `--fix --non-interactive`. Existing bindings and per-surface owners remain
-unchanged. If an account has no fallback route but its existing narrower bindings
-all target one configured agent, Doctor adds an account-scoped binding for that
+unchanged. If an account has no fallback route but its matchable narrower bindings
+all explicitly name one configured agent, Doctor adds an account-scoped binding for that
 agent. It does not borrow ownership from another account or channel, choose
 between conflicting owners, or assign other unowned surfaces.
 

@@ -368,8 +368,8 @@ That stages grounded durable candidates into the short-term dreaming store while
     - If `channels.<channel>.defaultAccount` is set to an unknown account ID, doctor warns and lists configured account IDs.
 
     In multi-agent configs, `doctor --fix` adds a missing account-scoped routing
-    binding when all existing narrower bindings for that channel/account name
-    one configured agent. Existing routes remain unchanged. Accounts with no
+    binding when all matchable narrower bindings for that channel/account explicitly
+    name one configured agent. Existing routes remain unchanged. Accounts with no
     owner evidence or conflicting owners need an explicit binding; Doctor does
     not infer their owner from roster order or another channel/account.
 

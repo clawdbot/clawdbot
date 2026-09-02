@@ -78,6 +78,7 @@ describe("doctor missing default account binding warning", () => {
 
 type OwnershipRepairCase = {
   name: string;
+  agents?: OpenClawConfig["agents"];
   envToken?: boolean;
   discord: NonNullable<OpenClawConfig["channels"]>["discord"];
   bindings: NonNullable<OpenClawConfig["bindings"]>;
@@ -160,6 +161,21 @@ describe("doctor channel account ownership repair", () => {
       added: [],
     },
     {
+      name: "blank owner even when main is configured",
+      agents: { ownership: "explicit", entries: { main: {}, research: {} } },
+      discord: {},
+      bindings: [{ agentId: "   ", match: { channel: "discord", guildId: "guild-a" } }],
+      added: [],
+    },
+    {
+      name: "empty peer that cannot match a route",
+      discord: {},
+      bindings: [
+        { agentId: "ops", match: { channel: "discord", peer: { kind: "direct", id: " " } } },
+      ],
+      added: [],
+    },
+    {
       name: "ambiguous guild owners",
       discord: {},
       bindings: [
@@ -193,7 +209,7 @@ describe("doctor channel account ownership repair", () => {
       "envToken" in testCase && testCase.envToken ? "synthetic-discord-token" : undefined,
     );
     const config: OpenClawConfig = {
-      agents: { ownership: "explicit", entries: { ops: {}, research: {} } },
+      agents: testCase.agents ?? { ownership: "explicit", entries: { ops: {}, research: {} } },
       channels: { discord },
       bindings,
     };

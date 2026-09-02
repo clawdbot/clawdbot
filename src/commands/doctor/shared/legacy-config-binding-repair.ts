@@ -2,12 +2,13 @@
 import { asNullableRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import { AgentSelectionRequiredError, listAgentIds } from "../../../agents/agent-scope-config.js";
 import { resolveReadOnlyChannelPluginsForConfig } from "../../../channels/plugins/read-only.js";
-import { listRouteBindings } from "../../../config/bindings.js";
 import type { AgentRouteBinding } from "../../../config/types.agents.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { resolveNormalizedAccountEntry } from "../../../routing/account-lookup.js";
-import { normalizeRouteBindingChannelId } from "../../../routing/binding-scope.js";
-import { resolveAgentRoute } from "../../../routing/resolve-route.js";
+import {
+  listChannelAccountRouteBindings,
+  resolveAgentRoute,
+} from "../../../routing/resolve-route.js";
 import {
   DEFAULT_AGENT_ID,
   normalizeAccountId,
@@ -61,7 +62,7 @@ export function repairUnownedChannelAccountBindings(
 ): DoctorConfigMutationResult {
   const agentIds = new Set(listAgentIds(cfg));
   const additions: AgentRouteBinding[] = [];
-  // Leave malformed binding input to config validation; it cannot establish an owner.
+  // Malformed or ownerless bindings cannot establish an explicit repair owner.
   if (
     agentIds.size < 2 ||
     cfg.plugins?.enabled === false ||
@@ -72,13 +73,13 @@ export function repairUnownedChannelAccountBindings(
         isRecord(binding) &&
         isRecord(binding.match) &&
         typeof binding.agentId === "string" &&
+        binding.agentId.trim().length > 0 &&
         typeof binding.match.channel === "string" &&
         (binding.match.accountId === undefined || typeof binding.match.accountId === "string"),
     )
   ) {
     return { config: cfg, changes: [] };
   }
-  const bindings = listRouteBindings(cfg);
   const inventory = resolveReadOnlyChannelPluginsForConfig(cfg, {
     includePersistedAuthState: false,
     includeSetupFallbackPlugins: true,
@@ -90,9 +91,6 @@ export function repairUnownedChannelAccountBindings(
     if (!plugin || channel?.enabled === false) {
       continue;
     }
-    const channelBindings = bindings.filter(
-      (binding) => normalizeRouteBindingChannelId(binding.match.channel) === channelId,
-    );
     const accounts = asNullableRecord(channel?.accounts) ?? undefined;
     const accountIds = [
       ...new Set(plugin.config.listAccountIds(cfg).map(normalizeAccountId)),
@@ -102,8 +100,9 @@ export function repairUnownedChannelAccountBindings(
       if (asNullableRecord(account)?.enabled === false) {
         continue;
       }
+      const routeInput = { cfg, channel: channelId, accountId };
       try {
-        resolveAgentRoute({ cfg, channel: channelId, accountId });
+        resolveAgentRoute(routeInput);
         continue;
       } catch (error) {
         if (!(error instanceof AgentSelectionRequiredError)) {
@@ -111,13 +110,9 @@ export function repairUnownedChannelAccountBindings(
         }
       }
       const owners = new Set(
-        channelBindings
-          .filter(
-            (binding) =>
-              binding.match.accountId?.trim() === "*" ||
-              normalizeAccountId(binding.match.accountId) === accountId,
-          )
-          .map((binding) => normalizeAgentId(binding.agentId)),
+        listChannelAccountRouteBindings(routeInput).map((binding) =>
+          normalizeAgentId(binding.agentId),
+        ),
       );
       const [agentId] = owners;
       if (owners.size === 1 && agentId && agentIds.has(agentId)) {
