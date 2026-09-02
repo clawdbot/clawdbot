@@ -1733,7 +1733,7 @@ jobs:
         with:
           ref: ${{ github.workflow_sha }}
           path: .ci-harness
-          sparse-checkout: .github/actions
+          sparse-checkout: ".github/actions\n.github/zizmor.yml"
           persist-credentials: false
 
       - name: Resolve security diff base
@@ -1779,44 +1779,42 @@ jobs:
           version: "3.97.0@sha256:ff4c95e9df7d645daf2140e3ca1039031c63106268d5fbb25feb43ceca1bcc33"
           extra_args: --results=verified,unknown --fail-on-scan-errors
 
-      - name: Prepare trusted pre-commit config
-        if: github.event_name == 'pull_request'
+      - name: Prepare trusted scanner config
         env:
           BASE_SHA: ${{ steps.diff_base.outputs.sha }}
-          BASE_REF: ${{ github.event.pull_request.base.ref }}
         run: |
           set -euo pipefail
-          trusted_config="$RUNNER_TEMP/pre-commit-base.yaml"
-          if git cat-file -e "${BASE_SHA}^{commit}" 2>/dev/null &&
-            git cat-file -e "${BASE_SHA}:.pre-commit-config.yaml" 2>/dev/null; then
-            git show "${BASE_SHA}:.pre-commit-config.yaml" > "$trusted_config"
-          elif git show "refs/remotes/origin/${BASE_REF}:.pre-commit-config.yaml" \
-            > "$trusted_config" 2>/dev/null; then
-            echo "Base SHA ${BASE_SHA} does not expose .pre-commit-config.yaml; using origin/${BASE_REF} instead."
+          trusted_policy="$RUNNER_TEMP/zizmor.yml"
+          if [ "$GITHUB_EVENT_NAME" = "pull_request" ]; then
+            if ! git show "${BASE_SHA}:.github/zizmor.yml" > "$trusted_policy" 2>/dev/null; then
+              echo "::error title=trusted zizmor policy unavailable::Could not read .github/zizmor.yml from exact base ${BASE_SHA}."
+              exit 1
+            fi
           else
-            echo "::warning title=trusted pre-commit config unavailable::Could not read .pre-commit-config.yaml from ${BASE_SHA} or origin/${BASE_REF}; falling back to the checked-out config."
-            rm -f "$trusted_config"
-            exit 0
+            cp .ci-harness/.github/zizmor.yml "$trusted_policy"
           fi
-          echo "PRE_COMMIT_CONFIG_PATH=$trusted_config" >> "$GITHUB_ENV"
+          cat > "$RUNNER_TEMP/security-fast-pre-commit.yaml" <<EOF
+          repos:
+            - repo: local
+              hooks:
+                - { id: detect-private-key, name: detect private key, entry: detect-private-key, language: system, types: [text], exclude: '(^|/)(\.pre-commit-config\.yaml$|apps/ios/fastlane/Fastfile$|.*\.test\.ts$)' }
+                - id: zizmor
+                  name: zizmor
+                  entry: zizmor
+                  language: system
+                  types: [yaml]
+                  files: '(\.github/(workflows/.*|dependabot.ya?ml))|(action\.ya?ml)$'
+                  require_serial: true
+                  args: [--config, "$trusted_policy", --persona=regular, --min-severity=medium, --min-confidence=medium]
+                  exclude: '^(vendor/|apps/swabble/)'
+          EOF
+          echo "PRE_COMMIT_CONFIG_PATH=$RUNNER_TEMP/security-fast-pre-commit.yaml" >> "$GITHUB_ENV"
 
-      - name: Resolve Python runtime
-        id: setup-python
-        run: |
-          set -euo pipefail
-          python3 --version
-          version="$(python3 - <<'PY'
-          import platform
-          print(platform.python_version())
-          PY
-          )"
-          echo "python-version=${version}" >> "$GITHUB_OUTPUT"
-
-      - name: Install pre-commit
-        run: python3 -m pip install --disable-pip-version-check pre-commit==4.6.2
+      - name: Install security scanners
+        run: python3 --version && python3 -m pip install --disable-pip-version-check pre-commit==4.6.2 pre-commit-hooks==6.0.0 zizmor==1.29.0
 
       - name: Detect committed private keys
-        run: pre-commit run --config "${PRE_COMMIT_CONFIG_PATH:-.pre-commit-config.yaml}" --all-files detect-private-key
+        run: GIT_ALLOW_PROTOCOL=file GIT_CONFIG_COUNT=0 pre-commit run --config "$PRE_COMMIT_CONFIG_PATH" --all-files detect-private-key
 
       - name: Audit changed GitHub workflows with zizmor
         env:
@@ -1843,7 +1841,8 @@ jobs:
           fi
 
           printf 'Auditing workflow files:\n%s\n' "${workflow_files[@]}"
-          pre-commit run --config "${PRE_COMMIT_CONFIG_PATH:-.pre-commit-config.yaml}" zizmor --files "${workflow_files[@]}"
+          GIT_ALLOW_PROTOCOL=file GIT_CONFIG_COUNT=0 \
+            pre-commit run --config "$PRE_COMMIT_CONFIG_PATH" zizmor --files "${workflow_files[@]}"
 
       - name: Setup Node.js
         env:
@@ -3978,7 +3977,10 @@ jobs:
       contents: read
     needs: [preflight]
     if: needs.preflight.outputs.run_check_docs == 'true'
-    runs-on: ${{ (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid') && 'ubuntu-24.04' || (github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && github.run_attempt > 1)) && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || contains(fromJSON('["OWNER","MEMBER","COLLABORATOR","CONTRIBUTOR"]'), github.event.pull_request.author_association)) && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
+    # Always hosted: check-docs clones the ClawHub mirror without lending the
+    # repository token (git-owner boundary), and unauthenticated GitHub fetches
+    # from Blacksmith egress are refused often enough to fail the job.
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
       - *linux_node_checkout_step
@@ -5256,7 +5258,9 @@ jobs:
     # Report failed prerequisites, but let superseded runs release their slot
     # without waiting for an aggregate runner after workflow cancellation.
     if: ${{ !cancelled() && (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}
-    runs-on: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' && github.run_attempt == 1 && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || contains(fromJSON('["OWNER","MEMBER","COLLABORATOR","CONTRIBUTOR"]'), github.event.pull_request.author_association)) && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04' }}
+    # Follow preflight so canonical Blacksmith runs never wait on a second hosted
+    # assignment; security-fast intentionally stays hosted outside hybrid.
+    runs-on: ${{ (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || (vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' && github.run_attempt > 1)) && 'ubuntu-24.04' || (github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && github.run_attempt > 1)) && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || contains(fromJSON('["OWNER","MEMBER","COLLABORATOR","CONTRIBUTOR"]'), github.event.pull_request.author_association)) && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
     timeout-minutes: 5
     steps:
       - name: Verify selected CI lanes
