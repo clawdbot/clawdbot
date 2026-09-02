@@ -676,11 +676,15 @@ describe("prepareEmbeddedAttemptSessionBoundary", () => {
   it("excludes a preserved orphan from this turn's messages without branching", async () => {
     const contextMessages: AgentMessage[] = [
       {
-        role: "assistant",
-        content: [{ type: "text", text: "prior" }],
+        role: "assistant" as const,
+        content: [{ type: "text" as const, text: "prior" }],
         timestamp: 1,
-      } as AgentMessage,
-      { role: "user", content: "old", timestamp: 2 } as AgentMessage,
+      },
+      {
+        role: "user" as const,
+        content: [{ type: "text" as const, text: "old" }],
+        timestamp: 2,
+      },
     ];
     const { activeSession } = createActiveSession([...contextMessages]);
     const branch = vi.fn();
