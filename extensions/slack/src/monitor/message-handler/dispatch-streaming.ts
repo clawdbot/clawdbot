@@ -13,12 +13,9 @@ import {
   stopSlackStream,
   type SlackStreamSession,
 } from "../../streaming.js";
+import { resolveSlackReplyThreadTs } from "../../thread-ts.js";
 import { countSlackTextUtf8Bytes } from "../../truncate.js";
-import {
-  deliverReplies,
-  readSlackReplyBlocks,
-  resolveDeliveredSlackReplyThreadTs,
-} from "../replies.js";
+import { deliverReplies, readSlackReplyBlocks } from "../replies.js";
 import {
   createSlackEventDeliveryTracker,
   resolveSlackStreamRecipientTeamId,
@@ -314,10 +311,11 @@ export function createSlackStreamingDeliveryRuntime(setup: SlackDispatchSetup) {
     if (params.kind === "final") {
       state.observedFinalReplyDelivery = true;
     }
-    const deliveredThreadTs = resolveDeliveredSlackReplyThreadTs({
+    const deliveredThreadTs = resolveSlackReplyThreadTs({
       replyToMode: replyDeliveryMode,
-      payloadReplyToId: params.payload.replyToId,
-      replyThreadTs: deliveryReplyThreadTs,
+      replyToId: params.payload.replyToId,
+      threadId: deliveryReplyThreadTs,
+      replyToCurrent: params.payload.replyToCurrent,
     });
     // Record the thread ts only after confirmed delivery success.
     rememberDeliveredThreadTs(params.kind, deliveredThreadTs);

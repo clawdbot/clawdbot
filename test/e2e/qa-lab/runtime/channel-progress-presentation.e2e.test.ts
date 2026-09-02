@@ -390,13 +390,15 @@ describe("channel progress presentation through an isolated Gateway", () => {
   });
 
   it.each([
-    { channel: "discord" as const, native: false, rejectStop: false },
-    { channel: "slack" as const, native: true, rejectStop: false },
-    { channel: "slack" as const, native: false, rejectStop: false },
-    { channel: "slack" as const, native: true, rejectStop: true },
+    { channel: "discord" as const, native: false, thread: "root", rejectStop: false },
+    { channel: "slack" as const, native: true, thread: "root", rejectStop: false },
+    { channel: "slack" as const, native: false, thread: "root", rejectStop: false },
+    { channel: "slack" as const, native: true, thread: "root", rejectStop: true },
+    { channel: "slack" as const, native: false, thread: "reply", rejectStop: false },
+    { channel: "slack" as const, native: false, thread: "current", rejectStop: false },
   ])(
-    "keeps $channel progress quiet (native=$native, rejectStop=$rejectStop)",
-    async ({ channel, native, rejectStop }) => {
+    "keeps $channel progress quiet (native=$native, thread=$thread, rejectStop=$rejectStop)",
+    async ({ channel, native, thread, rejectStop }) => {
       const directory = await fs.mkdtemp(
         path.join(await fs.realpath(os.tmpdir()), "channel-progress-"),
       );
@@ -489,26 +491,48 @@ describe("channel progress presentation through an isolated Gateway", () => {
         expect(loadSessionEntryReadOnly(target)?.delivery).toEqual({ kind: "none" });
       };
       let expectedThreadTs: unknown;
-      const inbound = adapter.createInbound({
-        input: {
-          conversation: {
-            id: channel === "slack" ? "C12345678" : "123456789012345678",
-            kind: "group",
+      const injectProviderMessage = async (text: string, threadId?: string) => {
+        const inbound = adapter.createInbound({
+          input: {
+            conversation: {
+              id: channel === "slack" ? "C12345678" : "123456789012345678",
+              kind: "group",
+            },
+            senderId: channel === "slack" ? "U12345678" : "123456789012345679",
+            text,
+            ...(threadId ? { threadId } : {}),
           },
-          senderId: channel === "slack" ? "U12345678" : "123456789012345679",
-          text: `Tool progress QA check: call the exec tool exactly once with this exact command before answering: \`sleep 3\`. After that command completes, reply exactly \`${FINAL_MARKER}\`.`,
-        },
-      });
-      const injected = await fetch(inbound.providerUrl, {
-        method: "POST",
-        headers: inbound.providerHeaders,
-        body: JSON.stringify(inbound.providerBody),
-      });
-      expect(injected.ok).toBe(true);
+        });
+        const injected = await fetch(inbound.providerUrl, {
+          method: "POST",
+          headers: inbound.providerHeaders,
+          body: JSON.stringify(inbound.providerBody),
+        });
+        expect(injected.ok).toBe(true);
+        return injected;
+      };
+      let threadId: string | undefined;
+      let inboundMessageId: unknown;
+      if (thread !== "root") {
+        // Seed only the provider's root; the Gateway receives the child below.
+        const root = asRecord(await (await injectProviderMessage("Original Slack thread")).json());
+        threadId = readStringValue(asRecord(root.message).ts);
+        expect(threadId).toEqual(expect.any(String));
+      }
+      const finalText = `${thread === "current" ? "[[reply_to_current]] " : ""}${FINAL_MARKER}`;
+      const injected = await injectProviderMessage(
+        `Tool progress QA check: call the exec tool exactly once with this exact command before answering: \`sleep 3\`. After that command completes, reply exactly \`${finalText}\`.`,
+        threadId,
+      );
       if (adapter.manifest.provider === "slack") {
         const payload = asRecord(await injected.json());
         const event = asRecord(asRecord(payload.event).event);
         expectedThreadTs = event.thread_ts ?? event.ts;
+        inboundMessageId = event.ts;
+        if (threadId) {
+          expect(event.thread_ts).toBe(threadId);
+          expect(inboundMessageId).not.toBe(threadId);
+        }
         const body = JSON.stringify(payload.event);
         const timestamp = String(Math.floor(Date.now() / 1000));
         const signature = createHmac("sha256", adapter.manifest.signingSecret)
@@ -533,6 +557,10 @@ describe("channel progress presentation through an isolated Gateway", () => {
         [...api.messages.values()].filter((message) =>
           (readStringValue(message.text ?? message.content) ?? "").includes(FINAL_MARKER),
         );
+      if (threadId) {
+        await waitForFact(() => finalWrites().length > 0, "thread reply attempt");
+        expect(finalWrites()[0]?.body.thread_ts).toBe(threadId);
+      }
       if (!rejectStop) {
         await waitForFact(() => finalMessages().length > 0, "accepted final answer");
       }
@@ -585,7 +613,7 @@ describe("channel progress presentation through an isolated Gateway", () => {
       );
       expect([...reactionNames]).toEqual([channel === "discord" ? "👀" : "eyes"]);
       const evidenceDir = path.join(process.cwd(), ".artifacts", "channel-progress-presentation");
-      const evidenceName = `${channel}-${native ? "native" : "draft"}${rejectStop ? "-stop-failure" : ""}`;
+      const evidenceName = `${channel}-${native ? "native" : "draft"}-${thread}${rejectStop ? "-stop-failure" : ""}`;
       await fs.mkdir(evidenceDir, { recursive: true });
       await fs.writeFile(
         path.join(evidenceDir, `${evidenceName}-diagnostic.json`),
@@ -633,6 +661,9 @@ describe("channel progress presentation through an isolated Gateway", () => {
         });
         expect(finalWrites()[0]?.accepted).toBeDefined();
       }
+      if (threadId) {
+        expect(finalMessages()[0]?.thread_ts).toBe(threadId);
+      }
       const tasks = writes
         .flatMap((write) => readChunks(write.body.chunks))
         .filter((chunk) => chunk.type === "task_update");
@@ -650,6 +681,9 @@ describe("channel progress presentation through an isolated Gateway", () => {
             native,
             rejectStop,
             originCleared,
+            thread,
+            threadId,
+            inboundMessageId,
             status: "pass",
             progressWrites: progressWrites.length,
             finalWrites: finalWrites().length,
