@@ -26,7 +26,6 @@ scenario:
     - src/infra/outbound/message-action-tts.ts
   execution:
     kind: script
-    parallelSafe: true
     path: test/e2e/qa-lab/runtime/media-talk-gateway.ts
     summary: Starts an isolated Gateway, QA Channel, native Codex app server, and synthetic speech provider. The fixed openai/gpt-5.6-luna fixture model uses only the managed local mock endpoint and catalog; no live credentials or transcription requests are used.
     args:
