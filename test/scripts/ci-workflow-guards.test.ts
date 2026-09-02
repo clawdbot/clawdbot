@@ -2095,7 +2095,7 @@ NODE
       ).toMatch(/^(?:ubuntu|windows|macos)-/u);
     }
 
-    for (const jobName of ["macos-node", "macos-swift", "ios-build"]) {
+    for (const jobName of ["macos-node", "macos-swift"]) {
       expect(
         workflow.jobs[jobName]["runs-on"],
         `${jobName} retries must escape stalled Blacksmith macOS capacity`,
@@ -2188,20 +2188,10 @@ NODE
     },
   );
 
-  it("adds no Blacksmith registration for the parallel iOS Release phase", () => {
-    const expression = readCiWorkflow().jobs["ios-build"]["runs-on"];
-    for (const runnerBackend of ["", "blacksmith", "hybrid", "github"] as const) {
-      for (const eventName of ["push", "pull_request", "workflow_dispatch"] as const) {
-        expect(
-          evaluateWorkflowExpression(expression, {
-            eventName,
-            repository: "openclaw/openclaw",
-            runAttempt: 1,
-            runnerBackend,
-            matrix: { phase: "release" },
-          }),
-        ).toBe("macos-26");
-      }
+  it("starts iOS builds and screenshots directly on verified hosted capacity", () => {
+    const workflow = readCiWorkflow();
+    for (const jobName of ["ios-build", "ios-screenshot-shard"]) {
+      expect(workflow.jobs[jobName]["runs-on"], jobName).toBe("macos-26");
     }
   });
 
@@ -4082,8 +4072,6 @@ NODE
       "checks-ui-e2e-real-gateway": "ubuntu-24.04",
       "control-ui-i18n": "ubuntu-24.04",
       "docker-seed-e2e": "ubuntu-24.04",
-      "ios-build": "macos-26",
-      "ios-screenshot-shard": "macos-26",
       "macos-node": "macos-15",
       "macos-swift": "macos-26",
       "native-i18n": "ubuntu-24.04",
@@ -4110,8 +4098,6 @@ NODE
       "docker-seed-e2e": "blacksmith-16vcpu-ubuntu-2404",
       "qa-smoke-ci-profile": "blacksmith-16vcpu-ubuntu-2404",
       "macos-swift": "blacksmith-12vcpu-macos-26",
-      "ios-build": "blacksmith-12vcpu-macos-26",
-      "ios-screenshot-shard": "blacksmith-12vcpu-macos-26",
       "check-test-types-hosted-core-shard": "blacksmith-32vcpu-ubuntu-2404",
       "checks-ui": "blacksmith-8vcpu-ubuntu-2404",
       "checks-windows": "blacksmith-8vcpu-windows-2025",
@@ -12211,6 +12197,16 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     {
       label: "npm-beta excludes PR screenshots",
       context: { eventName: "pull_request", preflightOutputs: { release_scope: "npm-beta" } },
+      expected: { "ios-screenshot-shard": false },
+    },
+    {
+      label: "npm-stable excludes manual screenshots",
+      context: { preflightOutputs: { release_scope: "npm-stable" } },
+      expected: { "ios-screenshot-shard": false },
+    },
+    {
+      label: "npm-stable excludes PR screenshots",
+      context: { eventName: "pull_request", preflightOutputs: { release_scope: "npm-stable" } },
       expected: { "ios-screenshot-shard": false },
     },
     {
