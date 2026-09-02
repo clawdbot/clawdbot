@@ -399,6 +399,37 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
           .locator(".model-providers__provider-list")
           .evaluate((node) => getComputedStyle(node).rowGap),
       ).toBe("18px");
+      const providerSection = page
+        .locator(".settings-section")
+        .filter({ has: page.locator(".model-providers__updated") });
+      const headerMetrics = await providerSection.evaluate((section) => {
+        const heading = section.querySelector<HTMLElement>(".settings-section__heading");
+        const actions = section.querySelector<HTMLElement>(".settings-section__actions");
+        const updated = section.querySelector<HTMLElement>(".model-providers__updated");
+        const refresh = section.querySelector<HTMLButtonElement>(
+          ".model-providers__refresh-button",
+        );
+        const icon = refresh?.querySelector<SVGElement>("svg");
+        if (!heading || !actions || !updated || !refresh || !icon) {
+          throw new Error("expected configured-provider header controls");
+        }
+        const headingBounds = heading.getBoundingClientRect();
+        const actionsBounds = actions.getBoundingClientRect();
+        const iconBounds = icon.getBoundingClientRect();
+        return {
+          centerOffset: Math.abs(
+            headingBounds.top +
+              headingBounds.height / 2 -
+              (actionsBounds.top + actionsBounds.height / 2),
+          ),
+          iconWidth: iconBounds.width,
+          textSize: Number.parseFloat(getComputedStyle(updated).fontSize),
+          refreshHeight: refresh.getBoundingClientRect().height,
+        };
+      });
+      expect(headerMetrics.centerOffset).toBeLessThanOrEqual(1);
+      expect(headerMetrics.iconWidth).toBeCloseTo(headerMetrics.textSize, 1);
+      expect(headerMetrics.refreshHeight).toBeLessThanOrEqual(20);
     } finally {
       await context.close();
     }
