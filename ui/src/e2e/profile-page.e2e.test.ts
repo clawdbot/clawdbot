@@ -79,6 +79,10 @@ suite.define(() => {
       presenceUsers,
       methodResponses: {
         "users.self": { profile: testProfile },
+        "agents.list": {
+          defaultId: "clipper",
+          agents: [{ id: "clipper", name: "Clipper" }],
+        },
         ...methodResponses,
       },
     });
@@ -98,6 +102,7 @@ suite.define(() => {
       await expect(page.locator(".profile-hero__handle").textContent()).resolves.toContain(
         "test@example.com",
       );
+      await expect(page.locator(".profile-hero").textContent()).resolves.not.toContain("Clipper");
       await page.locator("#settings-profile-identity").waitFor({ timeout: 5_000 });
       await expect(
         page.getByRole("button", { name: /Usage statistics/u }).textContent(),
