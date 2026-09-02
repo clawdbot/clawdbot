@@ -77,11 +77,40 @@ export function resolveSandboxPath(params: { filePath: string; cwd: string; root
     path.isAbsolute(relative) ||
     isWindowsDrivePath(relative)
   ) {
-    throw new Error(
-      `Path escapes sandbox root (${shortenHomePath(rootResolved)}): ${params.filePath}`,
+    throw markHostRootEscape(
+      new Error(`Path escapes sandbox root (${shortenHomePath(rootResolved)}): ${params.filePath}`),
     );
   }
   return { resolved, relative };
+}
+
+/** True when an error is a sandbox/workspace root containment rejection. */
+export function isSandboxRootEscapeError(error: unknown): error is Error {
+  return error instanceof Error && /^Path escapes sandbox root \(/i.test(error.message);
+}
+
+const HOST_ROOT_ESCAPE = Symbol.for("openclaw.hostRootEscape");
+
+/**
+ * Tag a rejection as coming from the host workspace root. Sandbox filesystem bridges
+ * enforce their own mount boundary and leave their rejections untagged, so callers can
+ * tell the two apart without reading the message text.
+ */
+function markHostRootEscape(error: Error): Error {
+  if (Object.isExtensible(error)) {
+    Object.defineProperty(error, HOST_ROOT_ESCAPE, {
+      configurable: true,
+      enumerable: false,
+      value: true,
+      writable: true,
+    });
+  }
+  return error;
+}
+
+/** True when a rejection came from the host workspace root rather than a container mount. */
+export function isHostRootEscapeError(error: unknown): error is Error {
+  return error instanceof Error && Reflect.get(error, HOST_ROOT_ESCAPE) === true;
 }
 
 const realpathNative = promisify(fs.realpath.native);
@@ -142,8 +171,10 @@ async function assertRawParentWithinRoot(params: {
       ? await resolveRawPathViaExistingAncestor(rawAbsolute)
       : path.resolve(parentCanonical, finalSegment);
   if (targetCanonical !== rootCanonical && !isPathInside(rootCanonical, targetCanonical)) {
-    throw new Error(
-      `Path escapes sandbox root (${shortenHomePath(rootCanonical)}): ${params.filePath}`,
+    throw markHostRootEscape(
+      new Error(
+        `Path escapes sandbox root (${shortenHomePath(rootCanonical)}): ${params.filePath}`,
+      ),
     );
   }
   return { rootCanonical, targetCanonical };

@@ -17,7 +17,8 @@ const mocks = vi.hoisted(() => ({
   })),
 }));
 
-vi.mock("./sandbox-paths.js", () => ({
+vi.mock("./sandbox-paths.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./sandbox-paths.js")>()),
   assertSandboxPath: mocks.assertSandboxPath,
 }));
 
