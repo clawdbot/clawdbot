@@ -228,21 +228,42 @@ function collapseConsecutiveDuplicateBlocks(text: string): string {
   if (!trimmed) {
     return text;
   }
-  const blocks = trimmed.split(/\n{2,}/);
-  if (blocks.length < 2) {
+  // Keep the blank-line separators so code blocks rejoin with their original bytes;
+  // a plain split would also cut inside fences on every internal blank line.
+  const parts = trimmed.split(/(\n{2,})/);
+  if (parts.length < 3) {
     return text;
   }
-  const result: string[] = [];
+  const codeRegions = findCodeRegions(trimmed);
+  const overlapsCode = (start: number, end: number): boolean =>
+    codeRegions.some((region) => start < region.end && end > region.start);
+  let offset = 0;
   let lastNormalized: string | null = null;
-  for (const block of blocks) {
+  let lastSeparator: string | null = null;
+  const segments: string[] = [];
+  let removed = false;
+  for (let index = 0; index < parts.length; index += 2) {
+    const block = parts[index] ?? "";
+    const start = offset;
+    const end = start + block.length;
+    offset = end + (parts[index + 1]?.length ?? 0);
+    const inCode = overlapsCode(start, end);
     const normalized = block.trim().replace(/\s+/g, " ");
-    if (lastNormalized && normalized === lastNormalized) {
+    if (lastNormalized && !inCode && normalized === lastNormalized) {
+      removed = true;
+      // The removed block's separators vanish; surviving neighbours rejoin with "\n\n".
+      lastSeparator = null;
       continue;
     }
-    result.push(block.trim());
+    if (segments.length > 0) {
+      segments.push(lastSeparator ?? "\n\n");
+    }
+    // Code is whitespace-sensitive: protected blocks survive byte-for-byte, never re-trimmed.
+    segments.push(inCode ? block : block.trim());
     lastNormalized = normalized;
+    lastSeparator = parts[index + 1] || null;
   }
-  return result.length === blocks.length ? text : result.join("\n\n");
+  return removed ? segments.join("") : text;
 }
 
 export function sanitizeUserFacingText(
