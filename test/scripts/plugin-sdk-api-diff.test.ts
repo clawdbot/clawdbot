@@ -31,7 +31,9 @@ describe("Plugin SDK API diff CLI", () => {
     const runnerTemp = tempDirs.make("plugin-sdk-api-diff-temp-");
     const binDir = tempDirs.make("plugin-sdk-api-diff-bin-");
     const pnpmMarker = join(binDir, "pnpm-started");
+    const invocationCounts = join(runnerTemp, ".git-invocation-counts.json");
     const runnerSentinel = join(runnerTemp, "runner-owned.txt");
+    writeFileSync(invocationCounts, "{}\n");
     writeFileSync(runnerSentinel, "preserve\n");
 
     git(repo, ["init", "--quiet", "--initial-branch=main"]);
@@ -115,6 +117,7 @@ describe("Plugin SDK API diff CLI", () => {
       expect(git(repo, ["worktree", "list"])).not.toContain(runnerTemp);
       // Cleanup owns its temporary root, not runner instrumentation beside it.
       expect(existsSync(temporaryRoot)).toBe(false);
+      expect(existsSync(invocationCounts)).toBe(true);
       expect(readFileSync(runnerSentinel, "utf8")).toBe("preserve\n");
     } finally {
       if (!closed) {

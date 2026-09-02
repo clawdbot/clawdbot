@@ -153,8 +153,8 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
   it("retains a complete measured generation and ignores complementary partial generations", () => {
     const originalTimings = testTimings.readCompactGroupTimings;
     let overlays: Record<"blacksmith" | "github", Readonly<Record<string, number>>> = {
-      blacksmith: {},
-      github: {},
+      blacksmith: { "agentic-agents-support": 165 },
+      github: { "agentic-agents-support": 253 },
     };
     vi.spyOn(testTimings, "readCompactGroupTimings").mockImplementation((profile) => {
       const unrelated = Object.fromEntries(
@@ -177,9 +177,10 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
         .toSorted((left, right) => left.shard_name.localeCompare(right.shard_name));
     const initial = supportGroups(initialPlan);
     expect(initial).toHaveLength(2);
-    overlays.blacksmith = Object.fromEntries(
-      initial.map((group, index) => [group.timing_key!, 247 + index]),
-    );
+    overlays.blacksmith = {
+      ...overlays.blacksmith,
+      ...Object.fromEntries(initial.map((group, index) => [group.timing_key!, 247 + index])),
+    };
 
     const expanded = supportGroups(createNodeTestShardBundles(options));
     expect(expanded).toHaveLength(4);
@@ -294,9 +295,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       const target = createNodeTestShards().find((shard) =>
         shard.includePatterns?.includes(consumer),
       )!;
-      const original = testTimings.readCompactGroupTimings;
       vi.spyOn(testTimings, "readCompactGroupTimings").mockImplementation((profile) => ({
-        ...original(profile),
         [target.shardName]: profile === slowerProfile ? 400 : 100,
       }));
       const plan = createNodeTestShardBundles({
@@ -582,8 +581,10 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       const shardName = "agentic-agents-support-hosted-2";
       let directTimings: Readonly<Record<string, number>> = {};
       vi.spyOn(testTimings, "readCompactGroupTimings").mockImplementation(
-        (runner): Readonly<Record<string, number>> =>
-          runner === timingProfile ? directTimings : {},
+        (runner): Readonly<Record<string, number>> => ({
+          "agentic-agents-support": runner === "blacksmith" ? 165 : 253,
+          ...(runner === timingProfile ? directTimings : {}),
+        }),
       );
       const options = {
         includeReleaseOnlyPluginShards: false,

@@ -200,13 +200,13 @@ const MAX_BUNDLED_NODE_TEST_PATTERNS = 64;
 // Compact bundles trade a little serial work for fewer ephemeral runner registrations.
 // Keep runner classes and subprocess isolation intact while bounding each combined job.
 // Default Blacksmith plans pack the Blacksmith base hints with 200s/276s
-// admission caps. GitHub-hosted plans use direct hosted hints with 90s/107s
+// admission caps. GitHub-hosted plans use direct hosted hints with 94s/114s
 // packing caps. Hybrid keeps the expanded topology but packs its attempt-1
 // Blacksmith rows with the refit Blacksmith estimates below.
 const COMPACT_LARGE_NODE_TEST_JOB_SECONDS = 200;
 const COMPACT_SMALL_NODE_TEST_JOB_SECONDS = 276;
-const COMPACT_GITHUB_LARGE_NODE_TEST_JOB_SECONDS = 90;
-const COMPACT_GITHUB_SMALL_NODE_TEST_JOB_SECONDS = 107;
+const COMPACT_GITHUB_LARGE_NODE_TEST_JOB_SECONDS = 94;
+const COMPACT_GITHUB_SMALL_NODE_TEST_JOB_SECONDS = 114;
 const COMPACT_GITHUB_GROUP_SECONDS_SCALE = 1.6;
 const COMPACT_HYBRID_GROUP_SECONDS_SCALE = 0.87;
 // Split groups above this hosted prediction before packing. Hybrid reuses the
@@ -293,7 +293,10 @@ const COMPACT_GROUP_SECONDS_HINTS = new Map<string, number>([
   ["agentic-agents-embedded-incomplete-turn", 19],
   ["agentic-agents-embedded-overflow-compaction", 20],
   ["agentic-agents-embedded-run", 46],
-  ["agentic-agents-support", 165],
+  // Main runs 33537556582/33537739443/33543106647 totaled 478.25s/450.21s/418.13s
+  // across the complete support inventory. Keep its upper bound as the fallback
+  // when membership changes and exact generation timings no longer match.
+  ["agentic-agents-support", 479],
   ["agentic-agents-tools", 69],
   // The measured 131s pair split per config; apportioned by the hosted
   // per-config walls (139s/67s) until direct Blacksmith samples exist.
@@ -442,7 +445,7 @@ const COMPACT_LARGE_GROUP_STRIPE_SECONDS_HINTS = new Map<string, number>([
   ["agentic-agents-embedded-incomplete-turn", 20],
   ["agentic-agents-embedded-overflow-compaction", 21],
   ["agentic-agents-embedded-run", 47],
-  ["agentic-agents-support", 165],
+  ["agentic-agents-support", 479],
   ["agentic-control-plane-startup-core", 33],
   // Run 31691151297 measured 296.68s for gateway-core and 303.93s for unit-src.
   // Run 31694057974 measured the two isolated UI envelopes at 159.50s and
@@ -619,6 +622,9 @@ const COMPACT_GITHUB_GROUP_SECONDS_HINTS = new Map<string, number>([
 // run 0.64x on Blacksmith, so only the ones that overshoot are pinned here:
 // leaving these low packs partners onto the tallest bins, which set the wall.
 const COMPACT_HYBRID_GROUP_SECONDS_HINTS = new Map<string, number>([
+  // Preserve the observed support budget through inventory growth without
+  // scaling the current Blacksmith evidence by an older whole-suite ratio.
+  ["agentic-agents-support", 479],
   ["agentic-agents-core-models", 81],
   ["agentic-cli-process", 110],
   ["agentic-commands-doctor", 83],

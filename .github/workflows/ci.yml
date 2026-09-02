@@ -1240,12 +1240,14 @@ jobs:
           const runnerProfile = process.env.OPENCLAW_CI_RUNNER_PROFILE ?? "blacksmith";
           const usesHostedRunnerProfile =
             runnerProfile === "github" || runnerProfile === "hybrid";
-          // Control UI E2E is serial Chromium work: 2114s of measured body plus a
-          // ~116s median per-shard floor (checkout, pnpm install, Vitest transform)
-          // that every added row pays again. Sharding is the only lever on the
-          // tallest row -- duration-weighted packing already lands within ~10% of
-          // ideal -- so the count is set from that floor, not from packing slack.
-          const uiE2eShardCount = usesHostedRunnerProfile ? 14 : 4;
+          const supportsUiE2eProjects =
+            existsSync("test/vitest/vitest.ui-e2e.config.ts") &&
+            readFileSync("test/vitest/vitest.ui-e2e.config.ts", "utf8")
+              .includes("ui-e2e-projects-contract-v1");
+          // The registration envelope already charges 14 UI rows on every backend.
+          // Private source servers and resource-sensitive files retain their
+          // single-worker phase inside each weighted Control UI shard.
+          const uiE2eJobCount = supportsUiE2eProjects || usesHostedRunnerProfile ? 14 : 4;
           const qaSmokeCiPartCount = usesHostedRunnerProfile ? 6 : 4;
           const supportsNativeI18n =
             hasPackageScript("native:i18n:check") &&
@@ -1527,17 +1529,15 @@ jobs:
             run_format_check: runFormatCheck,
             run_control_ui_i18n: runControlUiI18n,
             run_ui_tests: runUiTests,
-            ui_e2e_matrix: createMatrix(
-              Array.from({ length: uiE2eShardCount }, (_, index) => {
-                const shard = index + 1;
-                return {
-                  shard,
-                  shard_count: uiE2eShardCount,
-                  task: shard === uiE2eShardCount ? "browser-extension" : "control-ui",
-                  vitest_shard_count: uiE2eShardCount - 1,
-                };
-              }),
-            ),
+            ui_e2e_matrix: createMatrix(Array.from({ length: uiE2eJobCount }, (_, index) => {
+              const shard = index + 1;
+              return {
+                shard,
+                shard_count: uiE2eJobCount,
+                task: shard === uiE2eJobCount ? "browser-extension" : "control-ui",
+                vitest_shard_count: uiE2eJobCount - 1,
+              };
+            })),
             run_native_i18n: runNativeI18n,
             run_skills_python_job: runSkillsPython,
             run_checks_windows: runWindows,
@@ -2375,13 +2375,13 @@ jobs:
     # Hybrid attempt 1 uses Blacksmith; github mode, hybrid retries, manual
     # dispatches, forks, and same-repo PR retries use GitHub-hosted capacity.
     runs-on: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04' || (vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' && github.run_attempt > 1) && 'ubuntu-24.04' || (github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.run_attempt > 1)) && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || contains(fromJSON('["OWNER","MEMBER","COLLABORATOR","CONTRIBUTOR"]'), github.event.pull_request.author_association)) && 'blacksmith-8vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
-    # Keep Chromium ownership serial within each independently required shard.
+    # Source-server and runtime-budget owners retain serial Chromium execution.
     timeout-minutes: 25
     env:
       OPENCLAW_UI_E2E_SKIP_REAL_GATEWAY: "1"
     strategy:
       fail-fast: false
-      max-parallel: ${{ (needs.preflight.outputs.runner_profile == 'github' || needs.preflight.outputs.runner_profile == 'hybrid') && 14 || 4 }}
+      max-parallel: 14
       matrix: ${{ fromJson(needs.preflight.outputs.ui_e2e_matrix) }}
     steps:
       - *linux_node_checkout_step
@@ -2401,13 +2401,13 @@ jobs:
         if: matrix.task == 'control-ui'
         env:
           OPENCLAW_UI_E2E_DIAGNOSTIC_DIR: .artifacts/control-ui-e2e-timeouts/shard-${{ matrix.shard }}-attempt-${{ github.run_attempt }}
-          SHARD_INDEX: ${{ matrix.shard }}
+          VITEST_SHARD_INDEX: ${{ matrix.shard }}
           VITEST_SHARD_COUNT: ${{ matrix.vitest_shard_count }}
-        run: >-
-          node scripts/run-vitest.mjs run
-          --config test/vitest/vitest.ui-e2e.config.ts
-          --configLoader runner
-          --shard "$SHARD_INDEX/$VITEST_SHARD_COUNT"
+        run: |
+          node scripts/run-vitest.mjs run \
+            --config test/vitest/vitest.ui-e2e.config.ts \
+            --configLoader runner \
+            --shard "$VITEST_SHARD_INDEX/$VITEST_SHARD_COUNT"
 
       - name: Upload Control UI E2E timeout diagnostics
         if: failure() && matrix.task == 'control-ui'
@@ -2452,58 +2452,20 @@ jobs:
       - name: Build Control UI bundle for real-Gateway tests
         run: pnpm ui:build
 
-      - name: Test MCP app conformance with a real Gateway
+      - name: Test Control UI suites with a real Gateway
+        env:
+          OPENCLAW_CAPTURE_UI_PROOF: ${{ github.event_name == 'workflow_dispatch' && inputs.capture_ui_proof && '1' || '0' }}
+          OPENCLAW_UI_E2E_ARTIFACT_DIR: .artifacts/control-ui-e2e/real-gateway
         run: >-
           node scripts/run-vitest.mjs run
           --config test/vitest/vitest.ui-e2e.config.ts
           --configLoader runner
           ui/src/e2e/mcp-app-conformance.e2e.test.ts
-
-      - name: Test Control UI auth transports with a real Gateway
-        env:
-          OPENCLAW_CAPTURE_UI_PROOF: ${{ github.event_name == 'workflow_dispatch' && inputs.capture_ui_proof && '1' || '0' }}
-          OPENCLAW_UI_E2E_ARTIFACT_DIR: .artifacts/control-ui-e2e/real-gateway
-        run: >-
-          node scripts/run-vitest.mjs run
-          --config test/vitest/vitest.ui-e2e.config.ts
-          --configLoader runner
           ui/src/e2e/control-ui-auth-transports.e2e.test.ts
-
-      - name: Test Control UI usage sessions owner attribution with a real Gateway
-        env:
-          OPENCLAW_CAPTURE_UI_PROOF: ${{ github.event_name == 'workflow_dispatch' && inputs.capture_ui_proof && '1' || '0' }}
-          OPENCLAW_UI_E2E_ARTIFACT_DIR: .artifacts/control-ui-e2e/real-gateway
-        run: >-
-          node scripts/run-vitest.mjs run
-          --config test/vitest/vitest.ui-e2e.config.ts
-          --configLoader runner
           ui/src/e2e/usage-sessions-owner-attribution.e2e.test.ts
-
-      - name: Test Control UI Logs lifecycle with a real Gateway
-        run: >-
-          node scripts/run-vitest.mjs run
-          --config test/vitest/vitest.ui-e2e.config.ts
-          --configLoader runner
           ui/src/e2e/logs-lifecycle.e2e.test.ts
-
-      - name: Test Control UI agent file lifecycle with a real Gateway
-        env:
-          OPENCLAW_CAPTURE_UI_PROOF: ${{ github.event_name == 'workflow_dispatch' && inputs.capture_ui_proof && '1' || '0' }}
-          OPENCLAW_UI_E2E_ARTIFACT_DIR: .artifacts/control-ui-e2e/real-gateway
-        run: >-
-          node scripts/run-vitest.mjs run
-          --config test/vitest/vitest.ui-e2e.config.ts
-          --configLoader runner
           ui/src/e2e/agent-file-lifecycle.real-gateway.e2e.test.ts
-
-      - name: Test Control UI media transcript replay with a real Gateway
-        env:
-          OPENCLAW_CAPTURE_UI_PROOF: ${{ github.event_name == 'workflow_dispatch' && inputs.capture_ui_proof && '1' || '0' }}
-          OPENCLAW_UI_E2E_ARTIFACT_DIR: .artifacts/control-ui-e2e/real-gateway
-        run: >-
-          node scripts/run-vitest.mjs run
-          --config test/vitest/vitest.ui-e2e.config.ts
-          --configLoader runner
+          ui/src/e2e/session-progress-hovercard.real-gateway.e2e.test.ts
           extensions/qa-lab/src/control-ui-media-transcript.real-gateway.e2e.test.ts
 
       - name: Upload sanitized Control UI real-Gateway proof

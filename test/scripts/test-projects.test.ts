@@ -4234,16 +4234,25 @@ describe("scripts/test-projects full-suite sharding", () => {
   it("keeps shared Vitest config helpers out of whole-config targets", () => {
     const args = ["test/vitest/vitest.shared.config.ts"];
 
-    expect(findUnmatchedExplicitTestTargets(args, process.cwd())).toEqual([
-      {
-        target: "test/vitest/vitest.shared.config.ts",
-        reason: "target-matched-no-test-files",
-        includePattern: "test/vitest/**/*.test.ts",
-      },
-    ]);
+    expect(findUnmatchedExplicitTestTargets(args, process.cwd())).toEqual([]);
     expectSingleVitestRunPlan(buildVitestRunPlans(args, process.cwd()), {
       config: "test/vitest/vitest.tooling.config.ts",
       includePatterns: ["test/vitest/**/*.test.ts"],
+    });
+
+    withTinyFileTree({ "test/vitest/vitest.helper.config.ts": "export default {};\n" }, (cwd) => {
+      const helperArgs = ["test/vitest/vitest.helper.config.ts"];
+      expect(findUnmatchedExplicitTestTargets(helperArgs, cwd)).toEqual([
+        {
+          target: "test/vitest/vitest.helper.config.ts",
+          reason: "target-matched-no-test-files",
+          includePattern: "test/vitest/**/*.test.ts",
+        },
+      ]);
+      expectSingleVitestRunPlan(buildVitestRunPlans(helperArgs, cwd), {
+        config: "test/vitest/vitest.tooling.config.ts",
+        includePatterns: ["test/vitest/**/*.test.ts"],
+      });
     });
   });
 

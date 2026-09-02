@@ -148,7 +148,7 @@ async function readPid(filePath: string, timeoutMs: number): Promise<number> {
 
 async function expectCommandTimeoutAfterReady(
   start: () => Promise<string>,
-  ready: () => Promise<void>,
+  ready: (commandEnded: AbortSignal) => Promise<void>,
   timeoutMs = 500,
 ): Promise<void> {
   const realSetTimeout = globalThis.setTimeout;
@@ -180,13 +180,18 @@ async function expectCommandTimeoutAfterReady(
     } finally {
       timerSpy.mockRestore();
     }
+    const commandEnded = new AbortController();
+    void runPromise.then(
+      () => commandEnded.abort(new Error("Command exited before readiness")),
+      (error: unknown) => commandEnded.abort(error),
+    );
     // Observe rejection before the first await, and join both outcomes before cleanup.
     const results = await Promise.allSettled([
       expect(runPromise).rejects.toThrow(`timed out after ${timeoutMs}ms`),
       (async () => {
         try {
           expect(deadlines).toHaveLength(1);
-          await ready();
+          await ready(commandEnded.signal);
         } finally {
           expire();
         }
@@ -352,7 +357,7 @@ describe("package-openclaw-for-docker", () => {
 
   it.runIf(process.platform === "win32")(
     "kills pnpm.cmd descendants when the package command times out",
-    async () => {
+    async ({ signal }) => {
       const tempDir = tempDirs.make("openclaw-package-pnpm-timeout-");
       const childPidPath = path.join(tempDir, "child.pid");
       const childScriptPath = path.join(tempDir, "child.cjs");
@@ -360,7 +365,9 @@ describe("package-openclaw-for-docker", () => {
         childScriptPath,
         [
           "const fs = require('node:fs');",
-          "fs.writeFileSync(process.env.OPENCLAW_TEST_CHILD_PID, String(process.pid));",
+          "const pidPath = process.env.OPENCLAW_TEST_CHILD_PID;",
+          "fs.writeFileSync(pidPath + '.tmp', String(process.pid));",
+          "fs.renameSync(pidPath + '.tmp', pidPath);",
           "setInterval(() => {}, 1000);",
         ].join("\n"),
       );
@@ -380,6 +387,7 @@ describe("package-openclaw-for-docker", () => {
       env.OPENCLAW_TEST_CHILD_PID = childPidPath;
 
       let childPid = 0;
+      const readiness = fs.watch(tempDir);
       try {
         await expectCommandTimeoutAfterReady(
           () =>
@@ -388,12 +396,18 @@ describe("package-openclaw-for-docker", () => {
               killAfterMs: 25,
               timeoutMs: 500,
             }),
-          async () => {
-            childPid = await readPid(childPidPath, 2_000);
+          async (commandEnded) => {
+            const readinessSignal = AbortSignal.any([signal, commandEnded]);
+            while (!fs.existsSync(childPidPath)) {
+              await once(readiness, "change", { signal: readinessSignal });
+            }
+            childPid = Number(fs.readFileSync(childPidPath, "utf8"));
+            expect(Number.isSafeInteger(childPid) && childPid > 0).toBe(true);
           },
         );
         await waitForDead(childPid, 2_000);
       } finally {
+        readiness.close();
         if (childPid && isProcessAlive(childPid)) {
           process.kill(childPid, "SIGKILL");
         }
@@ -1337,8 +1351,8 @@ describe("package-openclaw-for-docker", () => {
         prepareManifest: preparePackageManifest,
         restoreManifest: restorePackageManifest,
       };
-      const ready = createDeferred<void>();
-      const finishSecond = createDeferred<void>();
+      const ready = createDeferred();
+      const finishSecond = createDeferred();
       let second: Promise<string> | undefined;
       let markerAtCapture: string | undefined;
       const firstError = new Error("first pack failed");
