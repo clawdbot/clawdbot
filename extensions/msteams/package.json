@@ -16,7 +16,7 @@
     "zod": "4.4.3"
   },
   "devDependencies": {
-    "@microsoft/teams.common": "2.0.14",
+    "@microsoft/teams.common": "2.0.15",
     "@openclaw/plugin-sdk": "workspace:*",
     "jose": "6.2.10",
     "openclaw": "workspace:*"

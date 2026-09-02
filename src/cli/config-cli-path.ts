@@ -1,7 +1,7 @@
 import { isRecord as isPlainRecord } from "@openclaw/normalization-core/record-coerce";
 import JSON5 from "json5";
-import { assertBoundedRawJsonNesting, assertBoundedJsonNesting } from "../config/nesting-limit.js";
 import { rejectConfigNonFiniteNumbers } from "../config/io.read-helpers.js";
+import { assertBoundedRawJsonNesting, assertBoundedJsonNesting } from "../config/nesting-limit.js";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import {
   formatConcreteConfigPath,
@@ -56,10 +56,9 @@ export function parseConfigSetValue(raw: string, strictJson: boolean): unknown {
     try {
       // Check raw text nesting depth before parsing
       assertBoundedRawJsonNesting(trimmed);
-      const parsed = JSON.parse(trimmed);
+      parsed = JSON.parse(trimmed);
       // Check parsed structure depth
       assertBoundedJsonNesting(parsed);
-      return parsed;
     } catch (err) {
       throw new Error(formatStrictJsonParseFailure({ value: raw, cause: err }), { cause: err });
     }
@@ -70,10 +69,9 @@ export function parseConfigSetValue(raw: string, strictJson: boolean): unknown {
   try {
     // Check raw text nesting depth before parsing
     assertBoundedRawJsonNesting(trimmed);
-    const parsed = JSON5.parse(trimmed);
+    parsed = JSON5.parse(trimmed);
     // Check parsed structure depth
     assertBoundedJsonNesting(parsed);
-    return parsed;
   } catch {
     return raw;
   }

@@ -1544,8 +1544,8 @@ importers:
         version: 4.4.3
     devDependencies:
       '@microsoft/teams.common':
-        specifier: 2.0.14
-        version: 2.0.14(debug@4.4.3(supports-color@10.2.2))(supports-color@10.2.2)
+        specifier: 2.0.15
+        version: 2.0.15(debug@4.4.3(supports-color@10.2.2))(supports-color@10.2.2)
       '@openclaw/plugin-sdk':
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
@@ -4059,10 +4059,6 @@ packages:
 
   '@microsoft/teams.cards@2.0.15':
     resolution: {integrity: sha512-fmWzBHmhM3++Pl64nbbPWSi1M/sw5Usmnnsea0Wx8G127oaEdrXi7s+uegwyHa6qzssSrluQ/Th2Y2KR2B5xew==}
-    engines: {node: '>=20'}
-
-  '@microsoft/teams.common@2.0.14':
-    resolution: {integrity: sha512-cjf3b/2sr5RqqiOaDuogJQ9fUNRZjDSh9eBEAv6NqkigNNLLjDgEgEl5lLoJsPp4usvc3drwFkx6HayuEbT7vA==}
     engines: {node: '>=20'}
 
   '@microsoft/teams.common@2.0.15':
@@ -11109,13 +11105,6 @@ snapshots:
       - supports-color
 
   '@microsoft/teams.cards@2.0.15': {}
-
-  '@microsoft/teams.common@2.0.14(debug@4.4.3(supports-color@10.2.2))(supports-color@10.2.2)':
-    dependencies:
-      axios: 1.19.0(debug@4.4.3(supports-color@10.2.2))(supports-color@10.2.2)
-    transitivePeerDependencies:
-      - debug
-      - supports-color
 
   '@microsoft/teams.common@2.0.15(debug@4.4.3(supports-color@10.2.2))(supports-color@10.2.2)':
     dependencies:

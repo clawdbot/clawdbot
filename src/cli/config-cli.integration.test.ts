@@ -252,7 +252,9 @@ describe("config cli integration", () => {
       const { parseConfigJson5 } = await import("../config/io.read-helpers.js");
       const result = parseConfigJson5(deepJson);
 
-      expect(result.ok).toBe(false);
+      if (result.ok) {
+        throw new Error("expected deeply nested JSON to be rejected");
+      }
       expect(result.error).toContain("nesting depth exceeds maximum");
     });
   });

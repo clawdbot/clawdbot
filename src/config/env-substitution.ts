@@ -200,7 +200,7 @@ function substituteAny(
   env: NodeJS.ProcessEnv,
   path: string,
   opts?: SubstituteOptions,
-  depth: number = 0,
+  depth = 0,
 ): unknown {
   // Depth limit check to prevent stack overflow from deeply nested structures
   if (depth > MAX_CONFIG_JSON_NESTING_DEPTH) {

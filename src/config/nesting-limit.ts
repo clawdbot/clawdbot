@@ -10,8 +10,6 @@
 
 import { MAX_CONFIG_JSON_NESTING_DEPTH, ConfigNestingDepthError } from "./env-substitution.js";
 
-export { MAX_CONFIG_JSON_NESTING_DEPTH, ConfigNestingDepthError };
-
 /**
  * Scans raw JSON/JSON5 text iteratively to measure maximum nesting depth
  * before parsing, rejecting pathological inputs that would overflow the stack.
@@ -122,8 +120,8 @@ export function assertBoundedRawJsonNesting(
 export function assertBoundedJsonNesting(
   value: unknown,
   maxDepth: number = MAX_CONFIG_JSON_NESTING_DEPTH,
-  path: string = "",
-  currentDepth: number = 0,
+  path = "",
+  currentDepth = 0,
 ): number {
   if (currentDepth > maxDepth) {
     throw new ConfigNestingDepthError(currentDepth, path || "parsed JSON");

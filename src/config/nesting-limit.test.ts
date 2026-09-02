@@ -1,10 +1,6 @@
 import { describe, expect, it } from "vitest";
-import {
-  MAX_CONFIG_JSON_NESTING_DEPTH,
-  ConfigNestingDepthError,
-  assertBoundedRawJsonNesting,
-  assertBoundedJsonNesting,
-} from "./nesting-limit.js";
+import { MAX_CONFIG_JSON_NESTING_DEPTH, ConfigNestingDepthError } from "./env-substitution.js";
+import { assertBoundedRawJsonNesting, assertBoundedJsonNesting } from "./nesting-limit.js";
 
 describe("nesting-limit", () => {
   describe("assertBoundedRawJsonNesting", () => {
@@ -54,7 +50,7 @@ describe("nesting-limit", () => {
     });
 
     it("handles escaped characters in strings", () => {
-      const withEscapes = `["\\\\", "\\"", "\\\""]`;
+      const withEscapes = `["\\\\", "\\"", "\\"]`;
       expect(() => assertBoundedRawJsonNesting(withEscapes)).not.toThrow();
     });
   });

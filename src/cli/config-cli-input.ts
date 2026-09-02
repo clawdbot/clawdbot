@@ -5,8 +5,8 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import JSON5 from "json5";
 import { MAX_CONFIG_JSON_NESTING_DEPTH } from "../config/env-substitution.js";
-import { assertBoundedRawJsonNesting, assertBoundedJsonNesting } from "../config/nesting-limit.js";
 import { rejectConfigNonFiniteNumbers } from "../config/io.read-helpers.js";
+import { assertBoundedRawJsonNesting, assertBoundedJsonNesting } from "../config/nesting-limit.js";
 import {
   coerceSecretRef,
   isValidEnvSecretRefId,
@@ -496,10 +496,9 @@ async function readConfigPatchInput(opts: ConfigPatchOptions): Promise<unknown> 
   try {
     // Check raw text nesting depth before parsing
     assertBoundedRawJsonNesting(raw);
-    const parsed = JSON5.parse(raw);
+    parsed = JSON5.parse(raw);
     // Check parsed structure depth
     assertBoundedJsonNesting(parsed);
-    return parsed;
   } catch (err) {
     throw new Error(`Failed to parse ${sourceLabel} as JSON5: ${String(err)}`, { cause: err });
   }
@@ -553,7 +552,7 @@ function buildConfigPatchOperations(params: {
   const pathKey = (path: PathSegment[]) => JSON.stringify(path);
   const replacePathKeys = new Set(params.replacePaths.map(pathKey));
   const matchedReplacePathKeys = new Set<string>();
-  const visit = (value: unknown, path: PathSegment[], depth: number = 0) => {
+  const visit = (value: unknown, path: PathSegment[], depth = 0) => {
     // Depth limit check to prevent stack overflow from deeply nested structures
     if (depth > MAX_CONFIG_JSON_NESTING_DEPTH) {
       throw new Error(
