@@ -36,7 +36,12 @@ suite.define(() => {
     try {
       await mkdir(state.workspaceDir, { recursive: true });
       await state.writeConfig({
-        agents: { defaults: { workspace: state.workspaceDir } },
+        agents: {
+          defaults: {
+            workspace: state.workspaceDir,
+            model: { primary: "synthetic/plain" },
+          },
+        },
         cron: { enabled: true },
         gateway: {
           auth: { mode: "none" },
@@ -139,7 +144,7 @@ suite.define(() => {
           await expect
             .poll(() => page.locator(".cron-table__name-text").allTextContents())
             .toEqual([]);
-          const persisted = (await loadCronStore(state.path("cron", "jobs.json"))).jobs.find(
+          const persisted = (await loadCronStore(state.statePath("cron", "jobs.json"))).jobs.find(
             (job) => job.name === "Real Gateway Work",
           );
           expect(persisted).toBeDefined();
