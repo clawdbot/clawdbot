@@ -1,3 +1,17 @@
+import { AsyncLocalStorage } from "node:async_hooks";
+
+const ingressCancelCompat = new AsyncLocalStorage<true>();
+
+// Legacy fan-in exposes cancellation through onAbandoned. This context keeps
+// that compatibility call budget-free without weakening genuine abandonment.
+export function runIngressCancelCompat<T>(fn: () => T): T {
+  return ingressCancelCompat.run(true, fn);
+}
+
+export function isIngressCancelCompat(): boolean {
+  return ingressCancelCompat.getStore() === true;
+}
+
 /** Full pre-adoption -> adoption ownership lifecycle for one claimed event. */
 export type ChannelIngressDispatchLifecycle = {
   /** Pre-adoption only. After adopt the drain treats this signal as inert. */
@@ -27,7 +41,8 @@ export type ChannelIngressDispatchLifecycle = {
   onCancelled?: () => void | Promise<void>;
   /**
    * Deferred turn finished without ever owning the reply lane.
-   * Drain releases the claim for retry.
+   * Drain applies the bounded retry disposition unless a legacy fan-in
+   * callback invokes it as cancellation.
    */
   onAbandoned: () => void | Promise<void>;
 };
@@ -39,6 +54,7 @@ export function bindIngressLifecycleToReplyOptions(lifecycle: ChannelIngressDisp
     onAdopted: () => void | Promise<void>;
     onDeferred: () => void;
     onDeferredHeartbeat?: () => void;
+    onCancelled?: () => void | Promise<void>;
     onAbandoned: () => void | Promise<void>;
     abortSignal: AbortSignal;
   };
@@ -49,6 +65,7 @@ export function bindIngressLifecycleToReplyOptions(lifecycle: ChannelIngressDisp
       onAdopted: lifecycle.onAdopted,
       onDeferred: lifecycle.onDeferred,
       onDeferredHeartbeat: lifecycle.onDeferredHeartbeat,
+      ...(lifecycle.onCancelled ? { onCancelled: lifecycle.onCancelled } : {}),
       onAbandoned: lifecycle.onAbandoned,
       abortSignal: lifecycle.abortSignal,
     },

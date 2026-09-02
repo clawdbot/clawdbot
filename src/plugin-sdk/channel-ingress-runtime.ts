@@ -6,6 +6,7 @@
  * group config, then returns sender/route/command/activation projections plus
  * the ordered ingress graph.
  */
+import { runIngressCancelCompat } from "../channels/message/ingress-drain-lifecycle.js";
 import {
   createChannelIngressMonitor,
   type ChannelIngressMonitorDrainOptions,
@@ -168,9 +169,12 @@ export function fanInChannelIngressLifecycles(
   // Omit aggregate cancellation unless every durable source supports it. Callers
   // can then use settle/abandon without an acknowledged-but-unsettled claim.
   const cancelAll = () =>
-    fanOut((lifecycle) =>
-      lifecycle.onCancelled ? lifecycle.onCancelled() : lifecycle.onAbandoned(),
-    );
+    fanOut((lifecycle) => {
+      if (lifecycle.onCancelled) {
+        return lifecycle.onCancelled();
+      }
+      return runIngressCancelCompat(() => lifecycle.onAbandoned());
+    });
   return {
     lifecycle: {
       abortSignal:
