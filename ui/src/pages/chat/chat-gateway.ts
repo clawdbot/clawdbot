@@ -44,6 +44,10 @@ import {
   authoritativeHistoryAppliedForRun,
   rememberLiveTerminalRun,
 } from "./terminal-message-identity.ts";
+import {
+  ERROR_ICON_PREFIX_RE,
+  ERROR_TEXT_PREFIX_RE,
+} from "../../components/error-presentation.ts";
 
 export type { ChatEventPayload } from "./chat-history.ts";
 
@@ -141,14 +145,27 @@ function normalizeFinalAssistantMessage(message: unknown): Record<string, unknow
 }
 
 function stripChatErrorMarker(text: string): string {
-  return text.replace(/^⚠️\s*/u, "");
+  return text.replace(ERROR_ICON_PREFIX_RE, "");
 }
 
-function normalizeChatErrorComparisonText(text: string): string {
-  return stripChatErrorMarker(text)
-    .replace(/^Error:\s*/iu, "")
-    .replace(/\s+/gu, " ")
-    .trim();
+export function normalizeChatErrorComparisonText(text: string): string {
+  // Reuse centralized prefix logic for comparison; keep Error: and
+  // whitespace collapse behavior while handling multi-glyph and
+  // repeated/interleaved prefixes (e.g. "⚠️⚠️ Error: Error: foo").
+  // Trim leading whitespace before prefix stripping so "  ⚠️  foo" normalizes.
+  let normalized = text.trimStart().replace(ERROR_ICON_PREFIX_RE, "");
+  let previous: string;
+  do {
+    previous = normalized;
+    normalized = normalized
+      .replace(ERROR_ICON_PREFIX_RE, "")
+      .replace(ERROR_TEXT_PREFIX_RE, "");
+    // After stripping "Error:" the remaining may start with another icon
+    // preceded by whitespace (e.g. "Error: ⚠️ foo" -> "⚠️ foo" after first
+    // pass). Trim to expose the next prefix.
+    normalized = normalized.trimStart();
+  } while (normalized !== previous);
+  return normalized.replace(/\s+/gu, " ").trim();
 }
 
 function resolveGatewayErrorText(
