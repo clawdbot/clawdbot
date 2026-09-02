@@ -4,6 +4,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { clearAutoFallbackPrimaryProbeSelection } from "../../agents/agent-scope.js";
 import { resolveSessionAuthSelection } from "../../agents/auth-profiles/session-override.js";
 import { resolveAgentHarnessPolicy } from "../../agents/harness/policy.js";
+import { MAIN_SESSION_RECOVERY_WORK_ADMISSION_OWNER } from "../../agents/main-session-recovery/main-session-recovery-admission.js";
 import { hasResolvedThinkingCatalogEntry } from "../../agents/thinking-runtime.js";
 import { resolveCollapsedSessionAuthPinSource } from "../../config/sessions/auth-profile-override-provenance.js";
 import { formatSqliteSessionFileMarker } from "../../config/sessions/legacy-sqlite-marker.js";
@@ -16,7 +17,10 @@ import type { SessionEntry } from "../../config/sessions/types.js";
 import { logVerbose } from "../../globals.js";
 import { isFastTestRuntimeEnv } from "../../infra/env.js";
 import { clearCommandLane, getQueueSize } from "../../process/command-queue.js";
-import { interruptSessionWorkAdmissions } from "../../sessions/session-lifecycle-admission.js";
+import {
+  getSessionWorkAdmissionOwnerRelease,
+  interruptSessionWorkAdmissions,
+} from "../../sessions/session-lifecycle-admission.js";
 import { readSessionInputProfileId } from "../../sessions/session-participant-input.js";
 import { resolveCommandTurnTargetSessionKey } from "../command-turn-context.js";
 import {
@@ -473,15 +477,27 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
     resolveActiveEmbeddedSessionId() ??
     resolveActiveReplyOperationSessionId() ??
     preparedSessionState.sessionId;
+  let recoveryOwnerActive = false;
   const resolveQueueBusyState = () => {
     const embeddedActiveSessionId = resolveActiveEmbeddedSessionId();
     const replyOperationActiveSessionId = resolveActiveReplyOperationSessionId();
+    const recoveryOwnerRelease = storePath
+      ? getSessionWorkAdmissionOwnerRelease({
+          scope: storePath,
+          identities: [sessionKey, preparedSessionState.sessionId],
+          owner: MAIN_SESSION_RECOVERY_WORK_ADMISSION_OWNER,
+        })
+      : undefined;
+    recoveryOwnerActive = recoveryOwnerRelease !== undefined;
     const activeSessionId =
       embeddedActiveSessionId ?? replyOperationActiveSessionId ?? preparedSessionState.sessionId;
-    if (!activeSessionId || (!embeddedAgentRuntime && !replyOperationActiveSessionId)) {
+    if (
+      !activeSessionId ||
+      (!embeddedAgentRuntime && !replyOperationActiveSessionId && !recoveryOwnerActive)
+    ) {
       return { activeSessionId: undefined, isActive: false };
     }
-    if (isOwnPreDispatchOperationSession(activeSessionId)) {
+    if (!recoveryOwnerRelease && isOwnPreDispatchOperationSession(activeSessionId)) {
       return { activeSessionId, isActive: false };
     }
     const replyOperationActive =
@@ -492,7 +508,8 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
       isActive:
         (embeddedActiveSessionId != null &&
           (embeddedAgentRuntime?.isEmbeddedAgentRunActive(embeddedActiveSessionId) ?? false)) ||
-        replyOperationActive,
+        replyOperationActive ||
+        recoveryOwnerActive,
     };
   };
   if (commandTurnContinuationTargetKey && providedReplyOperation) {
@@ -545,14 +562,16 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
     !context.isHeartbeat &&
     !effectiveResetTriggered &&
     !visibleTurnPreemptsHeartbeat &&
+    !recoveryOwnerActive &&
     resolvedQueue.mode === "steer";
   const shouldFollowup =
     !effectiveResetTriggered &&
-    !visibleTurnPreemptsHeartbeat &&
-    ((isRoomEvent && isActive) ||
-      resolvedQueue.mode === "steer" ||
-      resolvedQueue.mode === "followup" ||
-      resolvedQueue.mode === "collect");
+    (recoveryOwnerActive ||
+      (!visibleTurnPreemptsHeartbeat &&
+        ((isRoomEvent && isActive) ||
+          resolvedQueue.mode === "steer" ||
+          resolvedQueue.mode === "followup" ||
+          resolvedQueue.mode === "collect")));
   const activeRunQueueAction = resolveActiveRunQueueAction({
     queueAdmissionState,
     isActive,

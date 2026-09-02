@@ -124,6 +124,7 @@ function createOutputRelay(stream?: Readable) {
 }
 
 export async function createServiceChildRelayAdapter(params: {
+  assertCurrent?: () => void;
   command: string;
   args: string[];
   argv0?: string;
@@ -153,6 +154,7 @@ export async function createServiceChildRelayAdapter(params: {
   const controlFd = useWindowsJobAnchor ? undefined : reserveStdioEntry(stdio, "pipe");
   reserveStdioEntry(stdio, "ipc");
 
+  params.assertCurrent?.();
   const child = spawn(process.execPath, resolveRuntimeWorkerArgv(workerUrl), {
     stdio,
     // Windows must keep its exact Job owner alive long enough to observe host IPC loss.
@@ -162,6 +164,15 @@ export async function createServiceChildRelayAdapter(params: {
   });
   retainedChildren.set(generation, child);
   child.unref();
+  const assertCurrent = () => {
+    try {
+      params.assertCurrent?.();
+    } catch (error) {
+      child.kill("SIGKILL");
+      retainedChildren.delete(generation);
+      throw error;
+    }
+  };
 
   // SAFETY: a defined controlFd was reserved as a pipe in this exact spawn stdio array.
   const control = controlFd === undefined ? null : (child.stdio[controlFd] as Duplex | null);
@@ -195,6 +206,7 @@ export async function createServiceChildRelayAdapter(params: {
   }>();
   const extinctionCompletion = createDeferredCore();
   // Failures can arrive before either public wait is requested.
+  void startup.promise.catch(() => {});
   void resultCompletion.promise.catch(() => {});
   void extinctionCompletion.promise.catch(() => {});
   let startupErrorAckDelivery: Promise<void> | undefined;
@@ -429,6 +441,7 @@ export async function createServiceChildRelayAdapter(params: {
     controlFd,
     windowsShellCommand: params.windowsShellCommand,
   };
+  assertCurrent();
   try {
     await sendChildMessage(start);
   } catch (error) {
@@ -437,6 +450,7 @@ export async function createServiceChildRelayAdapter(params: {
     throw error;
   }
 
+  assertCurrent();
   const [startupResult, secretDeliveryResult] = await Promise.allSettled([
     startup.promise,
     secretDelivery?.deliverTo(child),
@@ -457,6 +471,7 @@ export async function createServiceChildRelayAdapter(params: {
     throw startupError ?? secretDeliveryError;
   }
 
+  assertCurrent();
   const stdin = createManagedChildStdin(child.stdin);
   if (params.input !== undefined) {
     stdin?.write(params.input);
@@ -491,6 +506,7 @@ export async function createServiceChildRelayAdapter(params: {
     pid: commandPid,
     stdin,
     oomScoreWrapperSelected: params.oomScoreWrapperSelected,
+    supportsRawOutput: !useWindowsJobAnchor,
     onStdout: stdoutRelay.subscribe,
     onStderr: stderrRelay.subscribe,
     wait: async () => {

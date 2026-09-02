@@ -213,13 +213,16 @@ export async function withOptionalGitHubAuth<T>(
   }
 }
 
-export async function readGitHubJsonResponse(response: Response): Promise<unknown> {
+export async function readGitHubJsonResponse(
+  response: Response,
+  maxBytes = GITHUB_JSON_MAX_BYTES,
+): Promise<unknown> {
   if (!response.ok) {
     const status = githubResponseErrorStatus(response);
     await discardResponse(response);
     throw new ControlUiGitHubError(status, `GitHub request failed (${response.status})`);
   }
-  const body = await readBoundedResponse(response, GITHUB_JSON_MAX_BYTES);
+  const body = await readBoundedResponse(response, maxBytes);
   try {
     return JSON.parse(body.toString("utf8"));
   } catch {

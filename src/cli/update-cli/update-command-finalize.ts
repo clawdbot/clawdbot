@@ -26,8 +26,8 @@ import {
   type UpdateFinalizeOptions,
 } from "./shared.js";
 import { suppressDeprecations } from "./suppress-deprecations.js";
+import { createUpdateConfigSnapshot } from "./update-command-config-snapshot.js";
 import {
-  createUpdateConfigSnapshot,
   persistRequestedUpdateChannel,
   persistValidatedDowngradeConfig,
   readPostCorePreUpdateSourceConfig,
@@ -132,7 +132,7 @@ export async function updateFinalizeCommand(opts: UpdateFinalizeOptions): Promis
 
   const root = await resolveUpdateRoot();
   const target = { root, env: resolveServiceRefreshEnv(process.env, invocationCwd) };
-  await withUpdateFailureTriage(opts, target, () =>
+  await withUpdateFailureTriage({ ...opts, invocationCwd }, target, () =>
     withUpdateInProgressEnv(invocationCwd, () =>
       updateFinalizeCommandInternal(opts, root, timeoutMs, requestedChannel),
     ),
@@ -257,13 +257,8 @@ async function updateFinalizeCommandInternal(
             configSnapshot,
             configChanged: restoredConfig.changed,
             restoredAuthoredChannels: restoredConfig.authoredChannels,
-            opts: {
-              json: opts.json,
-              timeout: opts.timeout,
-              yes: opts.yes,
-              acceptCapabilities: opts.acceptCapabilities,
-              restart: false,
-            },
+            json: opts.json,
+            acceptCapabilities: opts.acceptCapabilities,
             timeoutMs: timeoutMs ?? DEFAULT_UPDATE_STEP_TIMEOUT_MS,
             pluginInstallRecords,
           }),
@@ -346,6 +341,10 @@ async function updateFinalizeCommandInternal(
     defaultRuntime.writeJson(result);
   } else if (result.status === "ok") {
     defaultRuntime.log(theme.muted("Update finalization completed."));
+  } else if (result.status === "warning") {
+    defaultRuntime.log(theme.warn("Update finalization completed with warnings."));
+  } else {
+    defaultRuntime.log(theme.error("Update finalization failed."));
   }
   if (result.status === "error") {
     throw new UpdateCommandFailure({

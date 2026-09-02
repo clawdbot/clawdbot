@@ -400,7 +400,7 @@ function handleSessionsChangedEvent(
     state.selectedChatSessionArchived = event.archived;
   }
   const result = reconcileSessionEvent(state, payload);
-  if (resetsSelectedSession) {
+  if (resetsSelectedSession || (matchesChat && source?.reason === "compact")) {
     void loadChatHistory(state, { deferBranches: !presented }).finally(() =>
       state.requestUpdate?.(),
     );

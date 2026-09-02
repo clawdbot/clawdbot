@@ -210,6 +210,8 @@ export async function settlePreparedCliRun(params: {
         cleanupError instanceof Error ? cleanupError : new Error(formatErrorMessage(cleanupError));
     }
   }
+  // Retiring a caller is not a provider failure and must not quarantine its credential.
+  runParams.assertCurrent?.();
   // Settle only after backend recovery is exhausted. Recording inside an
   // attempt would quarantine a healthy profile for a recovered session fault.
   if (context.effectiveAuthProfileId && context.authProfileStore) {

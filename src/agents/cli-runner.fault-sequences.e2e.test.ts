@@ -6,7 +6,10 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { onAgentEvent } from "../infra/agent-events.js";
 import type { RunExit } from "../process/supervisor/types.js";
-import { createTestAdmittedRunContext } from "./admitted-run-context.test-support.js";
+import {
+  createTestAdmittedRunContext,
+  withTestRunAdmission,
+} from "./admitted-run-context.test-support.js";
 import { runPreparedCliAgent } from "./cli-runner.js";
 import { buildPreparedCliRunContext } from "./cli-runner.test-helpers.js";
 import { createManagedRun, supervisorSpawnMock } from "./cli-runner/execute.test-support.js";
@@ -49,8 +52,8 @@ vi.mock("./cli-runner.runtime.js", () => ({
 }));
 
 type CliBoundaryParams = Pick<
-  RunCliAgentParams,
-  "model" | "onExecutionPhase" | "provider" | "runId" | "sessionKey"
+  PreparedCliRunContext["params"],
+  "admittedRunContext" | "model" | "onExecutionPhase" | "provider" | "runId" | "sessionKey"
 >;
 
 type ScenarioCounts = {
@@ -71,7 +74,11 @@ type ScenarioHarness = {
 type OuterRunOptions = {
   fallbacks?: string[];
   onError?: (error: unknown) => void;
-  runCandidate?: (provider: string, model: string) => Promise<EmbeddedAgentRunResult>;
+  runCandidate?: (
+    provider: string,
+    model: string,
+    admittedRunContext: CliBoundaryParams["admittedRunContext"],
+  ) => Promise<EmbeddedAgentRunResult>;
 };
 
 const PRIMARY_MODEL = "sonnet-4.6";
@@ -173,6 +180,7 @@ function applyBoundaryParams(
 ): PreparedCliRunContext {
   context.params = {
     ...context.params,
+    admittedRunContext: params.admittedRunContext,
     sessionId: "openclaw-session",
     sessionKey: params.sessionKey ?? "agent:main:cli-fault-e2e",
     sessionFile: path.join(scenarioRoot, "session.jsonl"),
@@ -214,34 +222,45 @@ function buildReusableProcessContext(params: CliBoundaryParams): PreparedCliRunC
 
 async function runOuter(options: OuterRunOptions = {}) {
   harness.wholeTurnRuns += 1;
-  return runWithModelFallback<EmbeddedAgentRunResult>({
-    cfg: fallbackConfig(options.fallbacks),
-    provider: "claude-cli",
-    model: PRIMARY_MODEL,
-    runId: "run-cli-fault-e2e",
-    sessionId: "openclaw-session",
-    sessionKey: "agent:main:cli-fault-e2e",
-    skipAuthProfileRuntime: true,
-    fallbacksOverride: options.fallbacks,
-    onError: ({ error }) => options.onError?.(error),
-    run: async (provider, model) => {
-      harness.outerCandidates.push({ provider, model });
-      return options.runCandidate
-        ? options.runCandidate(provider, model)
-        : testMocks.runCliAgent({
-            admittedRunContext: createTestAdmittedRunContext("run-cli-fault-e2e"),
-            sessionId: "openclaw-session",
-            sessionKey: "agent:main:cli-fault-e2e",
-            sessionFile: path.join(scenarioRoot, "session.jsonl"),
-            workspaceDir: scenarioRoot,
-            prompt: "latest ask",
-            provider,
-            model,
-            timeoutMs: 5_000,
-            runId: "run-cli-fault-e2e",
-          });
+  const runId = "run-cli-fault-e2e";
+  const config = fallbackConfig(options.fallbacks);
+  return withTestRunAdmission(
+    {
+      admittedRunContext: createTestAdmittedRunContext(runId),
+      runId,
+      agentId: "main",
+      config,
     },
-  });
+    (admittedRunContext) =>
+      runWithModelFallback<EmbeddedAgentRunResult>({
+        cfg: config,
+        provider: "claude-cli",
+        model: PRIMARY_MODEL,
+        runId,
+        sessionId: "openclaw-session",
+        sessionKey: "agent:main:cli-fault-e2e",
+        skipAuthProfileRuntime: true,
+        fallbacksOverride: options.fallbacks,
+        onError: ({ error }) => options.onError?.(error),
+        run: async (provider, model) => {
+          harness.outerCandidates.push({ provider, model });
+          return options.runCandidate
+            ? options.runCandidate(provider, model, admittedRunContext)
+            : testMocks.runCliAgent({
+                admittedRunContext,
+                sessionId: "openclaw-session",
+                sessionKey: "agent:main:cli-fault-e2e",
+                sessionFile: path.join(scenarioRoot, "session.jsonl"),
+                workspaceDir: scenarioRoot,
+                prompt: "latest ask",
+                provider,
+                model,
+                timeoutMs: 5_000,
+                runId,
+              });
+        },
+      }),
+  );
 }
 
 function currentCounts(): ScenarioCounts {
@@ -263,9 +282,9 @@ describe("CLI runner fault sequences", () => {
     supervisorSpawnMock.mockResolvedValueOnce(managedRun(successExit("bridge ok")));
 
     const outcome = await runOuter({
-      runCandidate: async (provider, model) =>
+      runCandidate: async (provider, model, admittedRunContext) =>
         runEmbeddedAgent({
-          admittedRunContext: createTestAdmittedRunContext("run-cli-bridge-e2e"),
+          admittedRunContext,
           sessionId: "openclaw-session",
           sessionKey: "agent:main:cli-bridge-e2e",
           workspaceDir: scenarioRoot,
@@ -275,7 +294,7 @@ describe("CLI runner fault sequences", () => {
           provider,
           model,
           timeoutMs: 5_000,
-          runId: "run-cli-bridge-e2e",
+          runId: admittedRunContext.operationalRunInstance.runId,
           cliBackendDispatch: "subscription-auth",
           toolsAllow: ["memory_search"],
         }),

@@ -546,6 +546,7 @@ async function* executeClaudeAgentSdkLiveTurn(
   secretInput?: ClaudeAgentSdkSecretInput,
 ): AsyncIterable<Record<string, unknown>> {
   const { query } = await import("@anthropic-ai/claude-agent-sdk");
+  context.assertCurrent?.();
   let existingHandle = capability.current();
   if (existingHandle && existingHandle.fingerprint !== capability.fingerprint) {
     existingHandle.close("restart");
@@ -559,6 +560,7 @@ async function* executeClaudeAgentSdkLiveTurn(
     await existingHandle.waitForExit();
     session = undefined;
   }
+  context.assertCurrent?.();
   session ??= createClaudeAgentSdkSession(capability);
   session.capability = capability;
   if (session.currentTurn) {
@@ -629,12 +631,14 @@ export async function* executeClaudeAgentSdk(
   context: CliBackendExecuteContext,
   secretInput?: ClaudeAgentSdkSecretInput,
 ): AsyncIterable<Record<string, unknown>> {
+  context.assertCurrent?.();
   if (context.liveSession) {
     yield* executeClaudeAgentSdkLiveTurn(context, context.liveSession, secretInput);
     return;
   }
 
   const { query } = await import("@anthropic-ai/claude-agent-sdk");
+  context.assertCurrent?.();
   const controller = new AbortController();
   let activeTurn: ClaudeAgentSdkTurn | undefined = {
     context,

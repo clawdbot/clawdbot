@@ -160,6 +160,8 @@ type AgentHarnessIsolatedCompletionParams = {
   prompt: string;
   timeoutMs: number;
   abortSignal?: AbortSignal;
+  /** Revalidate after preparation and immediately before credential or model dispatch. */
+  assertCurrent?: () => void;
   thinkLevel?: import("../../auto-reply/thinking.js").ThinkLevel;
   /** Do not recover ambiguous reasoning as visible text; an empty visible result is valid. */
   outputTextPolicy?: "strict-visible";
@@ -516,6 +518,7 @@ export type AgentHarnessModelCatalogParams = {
   agentId: string;
   agentDir: string;
   workspaceDir: string;
+  configuredModelRefs?: readonly import("../model-ref-shared.js").ModelRef[];
 };
 
 type AgentHarnessModelCatalogCapability = {

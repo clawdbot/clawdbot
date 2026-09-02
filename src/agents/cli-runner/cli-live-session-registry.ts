@@ -4,7 +4,7 @@ import type {
   CliBackendLiveSessionCloseReason,
   CliBackendLiveSessionHandle,
 } from "../../plugins/cli-backend.types.js";
-import { resolveAdmittedRunActiveAssertion } from "../admitted-run-context.js";
+import { createCliRunCurrentAssertion } from "./execution-target.js";
 import { createCliFailoverError } from "./exit-error.js";
 import { buildCliLiveSessionFingerprint } from "./live-session-fingerprint.js";
 import { cliBackendLog } from "./log.js";
@@ -157,16 +157,7 @@ export function createCliLiveSessionCapability(params: {
       },
       { code },
     );
-  const assertActive = () => {
-    const assertion = resolveAdmittedRunActiveAssertion(
-      params.context.params.admittedRunContext,
-      params.abortSignal,
-    );
-    if (!assertion) {
-      throw new Error("CLI live session turn is no longer active.");
-    }
-    assertion();
-  };
+  const assertActive = createCliRunCurrentAssertion(params.context.params, params.abortSignal);
   const requireRegisteredRecord = (handle: CliBackendLiveSessionHandle) => {
     assertActive();
     const record = liveSessions.get(ownerKey);

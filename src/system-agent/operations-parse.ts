@@ -16,10 +16,10 @@ import {
 } from "./config-redaction.js";
 import type { SystemAgentOperation } from "./operation-types.js";
 import { INVALID_CONFIG_SET_MESSAGE } from "./operations-internal.js";
-import type { SystemAgentOverview } from "./overview.js";
+import type { loadSystemAgentOverview, SystemAgentOverview } from "./overview.js";
 import { validateSystemAgentPluginInstallSpec } from "./plugin-install-spec.js";
 
-type SystemAgentOverviewLoader = () => Promise<SystemAgentOverview>;
+type SystemAgentOverviewLoader = typeof loadSystemAgentOverview;
 type SystemAgentOverviewFormatter = (overview: SystemAgentOverview) => string;
 
 export type { SystemAgentOperation };

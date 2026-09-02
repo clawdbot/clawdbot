@@ -4,7 +4,9 @@ import { vi } from "vitest";
 import type { requestHeartbeat } from "../../infra/heartbeat-wake.js";
 import type { enqueueSystemEvent } from "../../infra/system-events.js";
 import type { getProcessSupervisor } from "../../process/supervisor/index.js";
+import { withTestRunAdmission } from "../admitted-run-context.test-support.js";
 import { executeDeps } from "./execute-deps.js";
+import type { PreparedCliRunContext } from "./types.js";
 export { buildCliExecLogLine } from "./execute-logging.js";
 
 type ProcessSupervisor = ReturnType<typeof getProcessSupervisor>;
@@ -12,6 +14,23 @@ type SupervisorSpawnFn = ProcessSupervisor["spawn"];
 type EnqueueSystemEventFn = typeof enqueueSystemEvent;
 type RequestHeartbeatFn = typeof requestHeartbeat;
 type UnknownMock = Mock<(...args: unknown[]) => unknown>;
+
+/** Encloses a logical test run, including retries, in the admission preparation normally owns. */
+export function wrapPreparedCliRunWithTestAdmission<Args extends unknown[], T>(
+  run: (context: PreparedCliRunContext, ...args: Args) => Promise<T>,
+): (context: PreparedCliRunContext, ...args: Args) => Promise<T> {
+  return async (context, ...args) => {
+    const original = context.params.admittedRunContext;
+    return await withTestRunAdmission(context.params, async (admitted) => {
+      context.params.admittedRunContext = admitted;
+      try {
+        return await run(context, ...args);
+      } finally {
+        context.params.admittedRunContext = original;
+      }
+    });
+  };
+}
 
 export function setCliRunnerExecuteTestDeps(overrides: Partial<typeof executeDeps>): void {
   Object.assign(executeDeps, overrides);

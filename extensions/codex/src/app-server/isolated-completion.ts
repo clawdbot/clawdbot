@@ -42,6 +42,7 @@ export async function runCodexIsolatedCompletion(
   params: CodexIsolatedCompletionParams,
   options: CodexBoundedTurnOptions,
 ): Promise<AgentHarnessIsolatedCompletionResult> {
+  params.assertCurrent?.();
   const authorization = params.authorization;
   if (authorization.owner !== "harness") {
     throw new Error("Codex native isolated completion requires harness-owned authorization.");
@@ -59,6 +60,7 @@ export async function runCodexIsolatedCompletion(
       "Prepared Codex subscription route requires a scoped native OAuth or token profile.",
     subscriptionProfileUnusableError: `Prepared Codex auth profile "${authorization.plan.forwardedAuthProfileId}" is unusable.`,
   });
+  params.assertCurrent?.();
   const authSelection = authHandoff.preparedAuth
     ? { preparedAuth: authHandoff.preparedAuth }
     : { profile: authHandoff.authProfileId };
@@ -72,6 +74,7 @@ export async function runCodexIsolatedCompletion(
     authRequirement,
     timeoutMs: params.timeoutMs,
     signal: params.abortSignal,
+    assertCurrent: params.assertCurrent,
     agentDir: params.agentDir,
     authProfileStore: authorization.authProfileStore,
     options,
@@ -82,6 +85,7 @@ export async function runCodexIsolatedCompletion(
     isolation: "configured-transport",
     requireNoExternalCapabilities: true,
   });
+  params.assertCurrent?.();
   assertIsolatedCompletionItems(result.items, params.prompt);
   return {
     assistant: createAttributedCodexAssistantMessage(

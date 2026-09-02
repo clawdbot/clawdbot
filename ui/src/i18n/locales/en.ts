@@ -528,7 +528,10 @@ export const en: TranslationMap & {
       waitingForIdle: "Waiting for active work",
     },
     dialog: {
-      restarting: "The Gateway is restarting. This page disconnects and reconnects on its own.",
+      disconnected:
+        "The Gateway disconnected during the update. This page reconnects on its own. If it stays disconnected, run `openclaw triage` on the Gateway host to open a local coding agent for diagnosis and repair.",
+      restarting:
+        "The Gateway is restarting. This page disconnects and reconnects on its own. If it stays disconnected, run `openclaw triage` on the Gateway host to open a local coding agent for diagnosis and repair.",
     },
     channel: {},
     installKind: {},
@@ -545,7 +548,7 @@ export const en: TranslationMap & {
       "The update outcome is unknown. Run `openclaw triage` on the Gateway host and inspect the result before retrying.",
     triage: {
       hostHint:
-        "If Ask OpenClaw is unavailable, run `openclaw triage` on the Gateway host. Diagnose the cause before retrying.",
+        "If Ask OpenClaw is unavailable, run `openclaw triage` on the Gateway host to open a local coding agent for diagnosis and repair. Diagnose the cause before retrying.",
     },
     failureReasons: {
       dirty: "Commit or stash changes, then retry.",
@@ -913,6 +916,9 @@ export const en: TranslationMap & {
     draft: "Draft",
     draftDescription: "Keep this session to yourself until you publish it",
     messagePlaceholder: "What should this session work on?",
+    titlePreparationDisclosure:
+      "When you pause, draft text is sent to your title provider to prepare a session name. Not used in incognito.",
+    preparedTitle: "Session name: {title}",
     dictate: "Dictate",
     readingAttachment: "Reading attachment",
     start: "Start session",
@@ -985,7 +991,7 @@ export const en: TranslationMap & {
     ownerYou: "{name} (You)",
     withParticipant: "with {name}",
     withMoreParticipants: "+{count} more",
-    assignToMe: "Assign to me",
+    assignToMe: "Me",
     assignTo: "Assign to…",
     filterControls: "Session filters",
     filters: "Filters",
@@ -3093,6 +3099,8 @@ export const en: TranslationMap & {
     tryAgain: "Try again",
     loading: "Loading plugins…",
     searching: "Searching ClawHub…",
+    searchResultCountOne: "{count} result",
+    searchResultCount: "{count} results",
     fromClawHub: "From ClawHub",
     noClawHubResultsBody: "ClawHub has no results for “{query}”.",
     noDiscoverMatchTitle: "Nothing to discover matches",
@@ -5097,6 +5105,16 @@ export const en: TranslationMap & {
         stepMode:
           "Use one matching auth mode at a time: gateway token for token mode, password for password mode.",
       },
+      trustedProxy: {
+        title: "Proxy authentication required",
+        summary:
+          "The Gateway is reachable, but it rejected the proxy identity or forwarding information.",
+        stepSignIn:
+          "Open the configured authenticated proxy or SSO dashboard URL and sign in there, rather than visiting the Gateway directly.",
+        stepHeaders:
+          "Ask the Gateway administrator to check for missing identity headers and required-header forwarding on WebSocket upgrade requests, and confirm your account is permitted.",
+        stepNoToken: "A Gateway token cannot replace proxy authentication.",
+      },
       rateLimited: {
         title: "Too many failed attempts",
         summary: "The Gateway is temporarily limiting authentication attempts for this client.",
@@ -5172,6 +5190,7 @@ export const en: TranslationMap & {
     },
     cloudWorkerFailed: "Runner failed: {error}",
     errorDetails: "Error details",
+    details: "Details",
     copyError: "Copy error",
     diskSpace: {
       warningTitle: "Cloud session disk space is low",
@@ -5868,11 +5887,11 @@ export const en: TranslationMap & {
       fastMode: "Fast mode",
       searchModels: "Search models",
       noMatchingModels: "No models match your search",
-      onlyForSession: "Only for this session",
-      selectionTargetSession: "Selection target: This session only",
-      selectionTargetAgent: "Selection target: This agent's default",
-      selectionTargetGlobal: "Selection target: Global default",
-      useDefaultModel: "Use default ({model})",
+      selectionTargetSession: "This session",
+      selectionTargetAgent: "Agent default",
+      selectionTargetGlobal: "Global default",
+      resetSessionModel: "Reset session model",
+      useDefaultModel: "Use default ({model}) for this session",
       defaultWithModel: "Default ({model})",
       defaultWithLevel: "Default ({level})",
       fastHelp: "Faster responses, higher usage of limits.",
@@ -6031,7 +6050,6 @@ export const en: TranslationMap & {
       noMatches: "No matching messages",
     },
     pendingInputs: {
-      queued: "Message received. Waiting for the agent to start it.",
       cancelled:
         "Cancelled before the agent started it. It will not run automatically; copy it and send again.",
       interrupted:
@@ -6045,6 +6063,7 @@ export const en: TranslationMap & {
       badge: "Expired",
     },
     composer: {
+      composerInput: "Chat composer",
       placeholder: "Message {name}",
       emptyHint: "Write a message to send.",
       placeholderWithAttachments: "Add a message or paste more images...",

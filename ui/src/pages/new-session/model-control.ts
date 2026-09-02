@@ -403,7 +403,7 @@ export class NewSessionModelControl {
       if (this.metadataLoading || !this.metadataState.hasSnapshot) {
         return t("chat.modelControls.loadingModels");
       }
-      if (!this.hasEligibleDraftAccountModel()) {
+      if (!this.accountSelectionReady()) {
         return (
           chatModelUnavailableMessage(this.modelUnavailableReason(agent)) ??
           t("chat.modelControls.modelsUnavailable")
@@ -421,10 +421,12 @@ export class NewSessionModelControl {
       : this.selected;
   }
 
-  private hasEligibleDraftAccountModel(): boolean {
+  accountSelectionReady(): boolean {
+    if (!this.draftAccount) {
+      return true;
+    }
     const selection = this.metadataState.accountSelection;
     if (
-      !this.draftAccount ||
       !this.metadataClient ||
       !this.metadataScope ||
       !this.ownsMetadata(this.metadataClient, this.metadataScope) ||

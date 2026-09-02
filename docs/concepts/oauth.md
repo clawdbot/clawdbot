@@ -62,9 +62,22 @@ To reduce that, OpenClaw treats the auth profile store as a **token sink**:
 
 ## Storage (where tokens live)
 
-Shared model credentials live in `~/.openclaw/state/openclaw.sqlite`, in the `authProfiles.store` and `authProfiles.state` entries of `config_machine_state`. Agent-local overrides live in `~/.openclaw/agents/<agentId>/agent/openclaw-agent.sqlite`, in `auth_profile_store` and `auth_profile_state`.
+Credentials use a shared read-through base, while each agent owns its local
+credential overrides and auth-routing state:
 
-Personal accounts connected from Profile use private identity-scoped records in the shared state database: `model-accounts` owns the selected links, and each credential has its own `model-account:<profile-id>` record containing its secret and usage state. Only an explicitly selected personal profile is loaded for a run; ordinary shared-account reads and defaults never enumerate these records. Personal OAuth refresh uses the same refresh manager, writing back to the identity owner rather than a shared or agent-local store.
+- Shared credentials: `~/.openclaw/state/openclaw.sqlite`
+- Agent-local credentials and state:
+  `~/.openclaw/agents/<agentId>/agent/openclaw-agent.sqlite`
+- Agent credential rows: `auth_profile_store`
+- Agent order, last-good, cooldown, and usage rows: `auth_profile_state`
+
+Personal accounts connected from Profile use private identity-scoped records in
+the shared state database: `model-accounts` owns the selected links, and each
+credential has its own `model-account:<profile-id>` record containing its secret
+and usage state. Only a selected personal profile is loaded for a run; ordinary
+shared-account reads never enumerate these records. Personal OAuth refresh
+writes back to that person's account record rather than a shared or agent-local
+credential.
 
 Older installations may still contain `auth-profiles.json`, `auth-state.json`,
 per-agent `auth.json`, or shared `credentials/oauth.json`. Run
@@ -89,12 +102,12 @@ The database and migration sources respect `$OPENCLAW_STATE_DIR`. Full reference
 
 For static secret refs and runtime snapshot activation behavior, see [Secrets Management](/gateway/secrets).
 
-When a secondary agent has no local auth profile, OpenClaw uses read-through
-inheritance from the shared auth store; it does not clone that store on read.
-OAuth refresh tokens are especially sensitive: normal
-copy flows skip them by default because some providers rotate or invalidate
-refresh tokens after use. Configure a separate OAuth login for an agent when
-it needs an independent account.
+When an agent has no local auth profile, OpenClaw reads the shared auth store;
+it does not clone shared credentials into the agent database. OAuth refresh
+tokens are especially sensitive: normal copy flows skip them by default
+because some providers rotate or invalidate refresh tokens after use.
+Configure a separate OAuth login for an agent when it needs an independent
+account.
 
 ## Anthropic Claude CLI reuse
 
@@ -174,10 +187,11 @@ Wizard path is `openclaw onboard` → auth choice `openai`.
 Profiles store an `expires` timestamp. At runtime:
 
 - if `expires` is in the future, use the stored access token
-- if expired, refresh (under a file lock) and overwrite the stored credentials
-- if a secondary agent reads an inherited shared OAuth profile, the
-  refresh writes back to the shared store instead of copying the refresh
-  token into the secondary agent store
+- if expired, refresh and save the new credentials back to the owning SQLite
+  store
+- if an agent reads an OAuth profile from the shared store, the refresh writes
+  back to that shared owner instead of copying the refresh token into the
+  agent store
 - externally managed CLI credentials (Claude CLI, narrow Codex CLI bootstrap;
   see [The token sink](#the-token-sink-why-it-exists)) are re-read instead of
   spending a copied refresh token. If a managed refresh fails, OpenClaw
@@ -213,16 +227,23 @@ Example (session override):
 
 - `/model Opus@anthropic:work -s`
 
-### 3) Multi-user: one profile per person
+### 3) Multi-user: personal accounts
 
-On a shared gateway, each teammate can link one profile per provider to their
-Gateway profile (**Settings → Profile → Model accounts**). Sessions a linked
-person starts prefer their account automatically, while ordered shared accounts
-remain same-provider failover candidates. Personal credentials stay outside the
-shared profile list below. See
+On a shared gateway, each verified person can save several accounts per provider
+in **Settings → Profile → Model accounts** and choose one as their new-chat
+default. The model picker in New session or an existing chat can select an
+account for that chat without changing the default. Ordered shared accounts
+remain same-provider failover candidates; the selection is not a billing
+guarantee. Personal credentials stay outside the shared profile list. See
 [Per-person model accounts](/concepts/multi-user#per-person-model-accounts).
 
-List existing profile IDs with:
+List your saved personal accounts with:
+
+```bash
+openclaw models accounts list
+```
+
+For shared or agent-local profile IDs, use:
 
 ```bash
 openclaw models auth list --provider <id>

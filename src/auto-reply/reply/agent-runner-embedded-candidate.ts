@@ -280,33 +280,14 @@ export async function runEmbeddedFallbackCandidate(
             mediaUrls: payload.mediaUrls,
           };
           const onPartialReply = turn.opts?.onPartialReply;
-          if (!params.preserveProgressCallbackStartOrder) {
-            await turn.typingSignals.signalTextDelta(textForTyping);
-            if (!onPartialReply) {
-              return false;
-            }
-            return await onPartialReply(partialPayload);
-          }
-          if (!onPartialReply) {
-            await turn.typingSignals.signalTextDelta(textForTyping);
-            return false;
-          }
-          return await params.presentation.startPresentationWhileTyping(
+          return await params.presentation.presentWithTyping(
             turn.typingSignals.signalTextDelta(textForTyping),
-            () => onPartialReply(partialPayload),
+            () => (onPartialReply ? onPartialReply(partialPayload) : false),
           );
         },
         onAssistantMessageStart: async () => {
-          if (!params.preserveProgressCallbackStartOrder) {
-            await turn.typingSignals.signalMessageStart();
-            await turn.opts?.onAssistantMessageStart?.();
-            return;
-          }
-          await params.presentation.startPresentationWhileTyping(
-            turn.typingSignals.signalMessageStart(),
-            async () => {
-              await turn.opts?.onAssistantMessageStart?.();
-            },
+          await params.presentation.presentWithTyping(turn.typingSignals.signalMessageStart(), () =>
+            turn.opts?.onAssistantMessageStart?.(),
           );
         },
         onReasoningStream:
@@ -315,26 +296,15 @@ export async function runEmbeddedFallbackCandidate(
                 if (turn.followupRun.run.silentExpected) {
                   return;
                 }
-                if (!params.preserveProgressCallbackStartOrder) {
-                  await turn.typingSignals.signalReasoningDelta();
-                  await turn.opts?.onReasoningStream?.({
-                    text: payload.text,
-                    mediaUrls: payload.mediaUrls,
-                    isReasoningSnapshot: payload.isReasoningSnapshot,
-                    requiresReasoningProgressOptIn: payload.requiresReasoningProgressOptIn,
-                  });
-                  return;
-                }
-                await params.presentation.startPresentationWhileTyping(
+                await params.presentation.presentWithTyping(
                   turn.typingSignals.signalReasoningDelta(),
-                  async () => {
-                    await turn.opts?.onReasoningStream?.({
+                  () =>
+                    turn.opts?.onReasoningStream?.({
                       text: payload.text,
                       mediaUrls: payload.mediaUrls,
                       isReasoningSnapshot: payload.isReasoningSnapshot,
                       requiresReasoningProgressOptIn: payload.requiresReasoningProgressOptIn,
-                    });
-                  },
+                    }),
                 );
               }
             : undefined,

@@ -17,6 +17,7 @@ import {
   tryBeginGatewayRootWorkAdmission,
   tryBeginGatewaySuspendAdmission,
 } from "../../../process/gateway-work-admission.js";
+import { createDeferredCore } from "../../../shared/deferred.js";
 import { SUBAGENT_KILL_TASK_ERROR } from "../../../tasks/detached-task-runtime-contract.js";
 import {
   buildAnnounceIdFromChildRun,
@@ -575,10 +576,6 @@ describe("subagent registry lifecycle hardening", () => {
       terminalReply: { disposition: "silent" } as const,
       resultText: "NO_REPLY",
     },
-    {
-      terminalReply: { disposition: "empty" } as const,
-      resultText: null,
-    },
   ])(
     "persists $terminalReply.disposition producer evidence without transcript inference",
     async ({ terminalReply, resultText }) => {
@@ -603,6 +600,81 @@ describe("subagent registry lifecycle hardening", () => {
       );
     },
   );
+
+  it("records explicit empty success as intentional non-delivery at the lifecycle owner", async () => {
+    const entry = createRunEntry({ expectsCompletionMessage: true });
+    const captureSubagentCompletionReply = vi.fn(async () => "stale transcript reply");
+    const runSubagentAnnounceFlow = vi.fn(async () => "delivered" as const);
+    const maybeWakeRequesterAfterAllChildrenSettled = vi.fn(async () => false);
+    const controller = createLifecycleController({
+      entry,
+      captureSubagentCompletionReply,
+      runSubagentAnnounceFlow,
+      maybeWakeRequesterAfterAllChildrenSettled,
+    });
+
+    await completeRun(controller, entry, {
+      triggerCleanup: true,
+      terminalReply: { disposition: "empty" },
+    });
+    await waitForLifecycleState(() => expect(entry.cleanupCompletedAt).toBeTypeOf("number"));
+
+    expect(captureSubagentCompletionReply).not.toHaveBeenCalled();
+    expect(runSubagentAnnounceFlow).not.toHaveBeenCalled();
+    expect(maybeWakeRequesterAfterAllChildrenSettled).not.toHaveBeenCalled();
+    expect(entry.execution.outcome).toMatchObject({ status: "ok" });
+    expect(entry.completion).toMatchObject({
+      terminalReply: { disposition: "empty" },
+      resultText: null,
+    });
+    expect(entry.requesterSettleWake).toBeUndefined();
+    expect(entry.delivery).toMatchObject({
+      status: "not_required",
+      disposition: "intentional_non_delivery",
+    });
+    expect(entry.suppressCompletionDelivery).toBeUndefined();
+    expectFields(firstCallArg(taskExecutorMocks.completeTaskRunByRunId), {
+      runId: entry.runId,
+      suppressDelivery: true,
+      terminalOutcome: "succeeded",
+    });
+  });
+
+  it("keeps message-tool-required missing output on the requester delivery path", async () => {
+    const entry = createRunEntry({ expectsCompletionMessage: true });
+    const runSubagentAnnounceFlow: LifecycleControllerParams["runSubagentAnnounceFlow"] = vi.fn(
+      async (announceParams) => {
+        announceParams.onDeliveryResult?.({
+          delivered: false,
+          path: "direct",
+          reason: "message_tool_delivery_missing",
+          error: "completion agent did not use the message tool",
+        });
+        return "retryable" as const;
+      },
+    );
+    const controller = createLifecycleController({ entry, runSubagentAnnounceFlow });
+
+    await completeRun(controller, entry, {
+      endedAt: Date.now(),
+      triggerCleanup: true,
+      terminalReply: { disposition: "empty", code: "message-tool-not-called" },
+    });
+    await waitForLifecycleState(() => expect(runSubagentAnnounceFlow).toHaveBeenCalledOnce());
+
+    expect(runSubagentAnnounceFlow).toHaveBeenCalledWith(
+      expect.objectContaining({
+        terminalReply: { disposition: "empty", code: "message-tool-not-called" },
+      }),
+    );
+    expect(entry.suppressCompletionDelivery).toBeUndefined();
+    expect(entry.delivery).toMatchObject({
+      disposition: "retryable",
+      lastError: expect.stringContaining("message tool"),
+    });
+    expect(entry.delivery?.status).not.toBe("not_required");
+    expect(entry.cleanupCompletedAt).toBeUndefined();
+  });
 
   it.each([
     { label: "bound", hasOwner: true },
@@ -3240,7 +3312,7 @@ describe("subagent registry lifecycle hardening", () => {
 
     await completeRun(controller, entry, {
       triggerCleanup: true,
-      terminalReply: { disposition: "empty" },
+      terminalReply: { disposition: "visible", text: "final completion reply" },
     });
     await waitForLifecycleState(() =>
       expect(taskExecutorMocks.setDetachedTaskDeliveryStatusByRunId).toHaveBeenCalledWith({
@@ -5500,7 +5572,7 @@ describe("requester settle wake trigger", () => {
     expect(settleWake).toHaveBeenCalledTimes(1);
   });
 
-  it("keeps settle bookkeeping resilient to a rejecting wake", () => {
+  it("settles bookkeeping after a wake rejects before attempt admission", async () => {
     const entry = createRunEntry({ endedAt: 4_000 });
     const warn = vi.fn();
     const settleWake = vi.fn(async () => {
@@ -5521,9 +5593,69 @@ describe("requester settle wake trigger", () => {
       }),
     ).not.toThrow();
 
-    return waitForLifecycleState(() => {
+    await waitForLifecycleState(() => {
       expect(warn).toHaveBeenCalledWith("requester settle wake failed", expect.anything());
     });
+    expect(entry.requesterSettleWake).toBeUndefined();
+  });
+
+  it("preserves a newer yielded batch when an admitted wake rejects", async () => {
+    const entry = createRunEntry({
+      endedAt: 4_000,
+      expectsCompletionMessage: true,
+      delivery: { status: "delivered" },
+    });
+    const admittedWake = createDeferredCore<boolean>();
+    let wakeCount = 0;
+    const settleWake = vi.fn(
+      async (
+        params: Parameters<
+          LifecycleControllerParams["maybeWakeRequesterAfterAllChildrenSettled"]
+        >[0],
+      ) => {
+        wakeCount += 1;
+        if (wakeCount === 1) {
+          return await admittedWake.promise;
+        }
+        params.completeBatch([entry.runId], entry.requesterSettleWake?.rearmGeneration, {
+          delivered: true,
+          path: "direct",
+        });
+        return true;
+      },
+    );
+    const controller = createLifecycleController({
+      entry,
+      maybeWakeRequesterAfterAllChildrenSettled: settleWake,
+    });
+
+    controller.completeCleanupBookkeeping({
+      runId: entry.runId,
+      entry,
+      cleanup: "keep",
+      completedAt: 5_000,
+    });
+    await waitForLifecycleState(() => expect(settleWake).toHaveBeenCalledOnce());
+
+    entry.requesterTurnRunId = "run-requester";
+    entry.requesterTurnYielded = true;
+    expect(
+      controller.settleRequesterTurnAfterSessionSpawns({
+        requesterSessionKey: entry.requesterSessionKey,
+        requesterTurnRunId: "run-requester",
+        requesterYielded: true,
+        acceptedSessionSpawns: [{ runId: entry.runId, childSessionKey: entry.childSessionKey }],
+      }),
+    ).toBe(true);
+    expect(entry.requesterSettleWake).toMatchObject({
+      requesterYieldBatch: true,
+      afterRequesterYield: true,
+      rearmGeneration: 1,
+    });
+
+    admittedWake.reject(new Error("wake exploded"));
+    await waitForLifecycleState(() => expect(settleWake).toHaveBeenCalledTimes(2));
+    await waitForLifecycleState(() => expect(entry.requesterSettleWake).toBeUndefined());
   });
 
   it("holds the settle wake as tracked root work so restart drain waits for its turn", async () => {

@@ -183,7 +183,6 @@ export function createGatewayAgentModelCatalogProjector(params: ModelsListAuthPr
           const routeVariants = resolveRouteVariants(entry);
           const evaluation = evaluateNative(entry, await evaluateEntry(entry, routeVariants));
           const state = resolveLogicalModelCatalogEntryState({
-            entry,
             evaluation,
             routePolicy: openAIModelCatalogRoutePolicy,
           });
@@ -620,7 +619,6 @@ export async function prepareModelsListResult(
           evaluation.availability === undefined &&
           evaluation.evidence === "synthetic";
         return resolveLogicalModelCatalogEntryState({
-          entry,
           evaluation,
           authBacked: evaluation.availability === true || syntheticLocal,
           routePolicy: openAIModelCatalogRoutePolicy,

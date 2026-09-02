@@ -7,7 +7,7 @@ import {
 import type { resolveSessionAuthSelection } from "../../agents/auth-profiles/session-override.js";
 import type { applyExtraParamsToAgent } from "../../agents/embedded-agent-runner/extra-params.js";
 import type { resolveModelAsync } from "../../agents/embedded-agent-runner/model.js";
-import type { resolveEmbeddedAgentStreamFn } from "../../agents/embedded-agent-runner/stream-resolution.js";
+import type { resolveEmbeddedAgentStream } from "../../agents/embedded-agent-runner/stream-resolution.js";
 import type {
   acquireAgentRunPreparedModelRuntime,
   PreparedModelRuntimeSnapshot,
@@ -48,7 +48,7 @@ type Deps = {
   resolveSessionAuthSelection: typeof resolveSessionAuthSelection;
   resolveModel: typeof resolveModelAsync;
   resolveProviderStream: typeof registerProviderStreamForModel;
-  resolveStream: typeof resolveEmbeddedAgentStreamFn;
+  resolveStream: typeof resolveEmbeddedAgentStream;
 };
 type Execution = WorkerInferenceExecutionParams;
 
@@ -204,7 +204,6 @@ function setup(
     agentDir?: string;
     agentRuntime?: string;
     authProfile?: string;
-    catalogWorkspace?: string;
     preparedModelRuntime?: boolean;
     prepareWorkspace?: string;
   } = {};
@@ -275,7 +274,10 @@ function setup(
   });
   const resolveStream = vi.fn<Deps["resolveStream"]>((streamParams) => {
     scope.authProfile = streamParams.authProfileId;
-    return streamParams.providerStreamFn ?? streamParams.currentStreamFn ?? fallbackStream;
+    return {
+      streamFn: streamParams.providerStreamFn ?? streamParams.currentStreamFn ?? fallbackStream,
+      strategy: "provider",
+    };
   });
   const applyStreamPolicy = vi.fn<Deps["applyStreamPolicy"]>(() => {
     options.observeStage?.("policy", observedRegistry());
@@ -284,7 +286,6 @@ function setup(
   const releaseRuntime = vi.fn();
   const acquireRuntimeLease = vi.fn<Deps["acquireRuntimeLease"]>(async (runtimeParams) => {
     scope.agentDir = runtimeParams.agentDir;
-    scope.catalogWorkspace = WORKSPACE;
     const leased = { ...preparedModelRuntime, agentDir: runtimeParams.agentDir };
     leasedPreparedModelRuntime = leased;
     return {
@@ -516,7 +517,6 @@ describe("worker inference provider runtime", () => {
       agentDir: prepared?.agentDir,
       agentRuntime: "openclaw",
       authProfile: PROFILE,
-      catalogWorkspace: WORKSPACE,
       preparedModelRuntime: true,
       prepareWorkspace: WORKSPACE,
     });

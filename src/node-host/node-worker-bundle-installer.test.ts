@@ -6,7 +6,7 @@ import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import * as tar from "tar";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import * as openclawRoot from "../infra/openclaw-root.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
@@ -17,10 +17,36 @@ import { hashWorkerBundleManifest } from "../shared/worker-bundle-hash.js";
 import type { NodeWorkerBundleInstallInput } from "../worker/node-bundle-install-protocol.js";
 import { NodeWorkerBundleInstaller } from "./node-worker-bundle-installer.js";
 
+type BundleFixtureOptions = {
+  packageShell?: boolean;
+  prewarmMarker?: string;
+  workerSource?: string;
+  fixtureName?: string;
+  bundlePrewarm?: 1;
+  compileCacheDisabled?: boolean;
+};
+
+type BundleFixture = {
+  archive: Buffer;
+  input: NodeWorkerBundleInstallInput;
+};
+
 describe("node worker bundle installer", () => {
   let root: string;
   let server: http.Server | undefined;
   let cleanupPrewarming: (() => Promise<void>) | undefined;
+  let defaultFixture: BundleFixture;
+
+  beforeAll(async () => {
+    const fixtureRoot = await fs.mkdtemp(
+      path.join(await fs.realpath(os.tmpdir()), "openclaw-node-bundle-fixture-"),
+    );
+    try {
+      defaultFixture = await buildBundleFixture(fixtureRoot);
+    } finally {
+      await fs.rm(fixtureRoot, { recursive: true, force: true });
+    }
+  });
 
   beforeEach(async () => {
     root = await fs.mkdtemp(path.join(await fs.realpath(os.tmpdir()), "openclaw-node-bundle-"));
@@ -41,22 +67,24 @@ describe("node worker bundle installer", () => {
     await fs.rm(root, { recursive: true, force: true });
   });
 
-  async function bundleFixture(
-    options: {
-      packageShell?: boolean;
-      prewarmMarker?: string;
-      workerSource?: string;
-      fixtureName?: string;
-      bundlePrewarm?: 1;
-      compileCacheDisabled?: boolean;
-    } = {},
-  ): Promise<{
-    archive: Buffer;
-    input: NodeWorkerBundleInstallInput;
-  }> {
+  async function bundleFixture(options?: BundleFixtureOptions): Promise<BundleFixture> {
+    if (options) {
+      return await buildBundleFixture(root, options);
+    }
+    // Integrity cases deliberately corrupt their inputs; share preparation, not mutable data.
+    return {
+      archive: Buffer.from(defaultFixture.archive),
+      input: structuredClone(defaultFixture.input),
+    };
+  }
+
+  async function buildBundleFixture(
+    fixtureRoot: string,
+    options: BundleFixtureOptions = {},
+  ): Promise<BundleFixture> {
     const fixtureName = options.fixtureName ?? "default";
-    const source = path.join(root, `source-${fixtureName}`);
-    const archivePath = path.join(root, `bundle-${fixtureName}.tgz`);
+    const source = path.join(fixtureRoot, `source-${fixtureName}`);
+    const archivePath = path.join(fixtureRoot, `bundle-${fixtureName}.tgz`);
     await fs.mkdir(source, { recursive: true });
     const compileCacheDisabled =
       options.compileCacheDisabled ?? process.env.NODE_DISABLE_COMPILE_CACHE !== undefined;
@@ -125,7 +153,7 @@ describe("node worker bundle installer", () => {
     return { gatewayUrl: `ws://127.0.0.1:${address.port}`, requests };
   }
 
-  async function prepareLocalArchive(fixture: Awaited<ReturnType<typeof bundleFixture>>) {
+  async function prepareLocalArchive(fixture: BundleFixture) {
     const packageRoot = path.join(root, "runtime-package");
     const archivePath = path.join(
       packageRoot,

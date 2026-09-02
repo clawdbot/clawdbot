@@ -248,7 +248,6 @@ class ChatQuestionDraftLayoutTest {
             showSidebarButton = true,
             onOpenSidebar = {},
             onToggleTalk = {},
-            onOpenSessions = {},
             onOpenDashboard = {},
             onOpenGatewaySettings = {},
           )

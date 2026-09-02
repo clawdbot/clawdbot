@@ -36,7 +36,10 @@ class ChatVoiceNoteAttachmentTest {
                 sentParams = json.parseToJsonElement(paramsJson.orEmpty()) as JsonObject
                 """{"runId":"voice-run","status":"started"}"""
               }
-              else -> "{}"
+
+              else -> {
+                "{}"
+              }
             }
           },
         )

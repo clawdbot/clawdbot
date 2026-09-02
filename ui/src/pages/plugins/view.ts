@@ -1019,23 +1019,36 @@ function renderClawHubGroup(props: PluginsViewProps) {
     return nothing;
   }
   let body: TemplateResult;
-  if (props.searchLoading || (!props.searchResults && !props.searchError)) {
-    body = html`<div class="plugins-search-state" role="status">
-      ${t("pluginsPage.searching")}
-    </div>`;
-  } else if (props.searchError) {
+  if (props.searchError) {
     body = html`<div class="plugins-search-state plugins-search-state--error" role="alert">
       ${props.searchError}
     </div>`;
-  } else if (props.searchResults && props.searchResults.length === 0) {
-    body = html`${renderSettingsEmpty(t("pluginsPage.noClawHubResultsBody", { query }))}`;
   } else {
+    const searching = props.searchLoading || !props.searchResults;
+    const count = props.searchResults?.length ?? 0;
+    // Updating the existing live region lets assistive technology announce completion.
     body = html`
-      ${repeat(
-        props.searchResults ?? [],
-        (item) => item.package.name,
-        (item) => renderClawHubResult(item, props),
-      )}
+      <div
+        class=${searching ? "plugins-search-state" : count === 0 ? "settings-empty" : "sr-only"}
+        role="status"
+        aria-live="polite"
+      >
+        ${searching
+          ? t("pluginsPage.searching")
+          : count === 0
+            ? t("pluginsPage.noClawHubResultsBody", { query })
+            : t(
+                count === 1 ? "pluginsPage.searchResultCountOne" : "pluginsPage.searchResultCount",
+                { count: String(count) },
+              )}
+      </div>
+      ${searching
+        ? nothing
+        : repeat(
+            props.searchResults ?? [],
+            (item) => item.package.name,
+            (item) => renderClawHubResult(item, props),
+          )}
     `;
   }
   return renderSettingsSection(

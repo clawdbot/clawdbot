@@ -5,23 +5,21 @@
  */
 import { isDeepStrictEqual } from "node:util";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { isUserModelAuthProfileId } from "../../state/user-model-account-id.js";
 import { resolveProviderIdForAuth } from "../provider-auth-aliases.js";
 import { normalizeAuthProfileCredential } from "./credential-normalize.js";
 import { dedupeProfileIds, listProfilesForProvider } from "./profile-list.js";
-import {
-  getRuntimeExternalCliProfileIds,
-  getRuntimeLocalProfileIds,
-  removeRuntimeExternalProfileReferences,
-  setRuntimeExternalCliProfileIds,
-  setRuntimeLocalProfileIds,
-} from "./runtime-external-profile-references.js";
+import { removeRuntimeExternalProfileReferences } from "./runtime-external-profile-references.js";
+import { resolveSharedMainAuthAgentDir } from "./shared-main-dir.js";
+import { resolveAuthProfileDatabasePath } from "./sqlite.js";
 import {
   ensureAuthProfileStoreForLocalUpdate,
   isSharedMainAuthProfileAgentDir,
   resolvePersistedAuthProfileOwnerAgentDir,
+  resolveRuntimeAuthProfileAgentDir,
   saveAuthProfileStore,
   updateAuthProfileStoreWithLock,
 } from "./store.js";
@@ -133,10 +131,10 @@ export async function promoteAuthProfileInOrder(params: {
   profileId: string;
   createIfMissing?: boolean;
   createFromOrder?: string[];
-}): Promise<AuthProfileStore | null> {
+}): Promise<Result<AuthProfileStore, "lock-contention">> {
   const providerKey = resolveProviderIdForAuth(params.provider);
   const effectiveStore = ensureAuthProfileStoreForLocalUpdate(params.agentDir);
-  return await updateAuthProfileStoreWithLock({
+  const updated = await updateAuthProfileStoreWithLock({
     agentDir: params.agentDir,
     saveOptions: { preserveOrderProfileIds: [params.profileId, ...(params.createFromOrder ?? [])] },
     updater: (store) => {
@@ -178,6 +176,7 @@ export async function promoteAuthProfileInOrder(params: {
       return true;
     },
   });
+  return updated === null ? err("lock-contention") : ok(updated);
 }
 
 /** Upserts an auth profile immediately into the local store. */
@@ -202,42 +201,53 @@ export async function removeProviderAuthProfilesWithLock(params: {
   agentDir?: string;
   profileIds?: readonly string[];
 }): Promise<AuthProfileStore | null> {
-  if (params.profileIds) {
-    return await removeAuthProfilesWithLock({
-      agentDir: params.agentDir,
-      profileIds: params.profileIds,
-    });
+  const agentDir = resolveRuntimeAuthProfileAgentDir(params.agentDir);
+  const owners: Array<string | undefined> = [agentDir];
+  if (
+    agentDir &&
+    !isSharedMainAuthProfileAgentDir(agentDir) &&
+    resolveAuthProfileDatabasePath(agentDir) ===
+      resolveAuthProfileDatabasePath(resolveSharedMainAuthAgentDir())
+  ) {
+    // Main login writes shared credentials; clear that owner before its local overrides.
+    // Other agents must not erase credentials inherited from the shared store.
+    owners.unshift(undefined);
   }
-  const providerKey = resolveProviderIdForAuth(params.provider);
-  return await updateAuthProfileStoreWithLock({
-    agentDir: params.agentDir,
-    updater: (store) => {
-      const profileIds = listProfilesForProvider(store, params.provider);
-      let changed = false;
-      for (const profileId of profileIds) {
-        if (store.profiles[profileId]) {
-          delete store.profiles[profileId];
-          changed = true;
-        }
-        if (store.usageStats?.[profileId]) {
-          delete store.usageStats[profileId];
-          changed = true;
-        }
-      }
-      if (listProviderAuthStateEntries(store.order, providerKey).length > 0) {
-        store.order = replaceProviderAuthState(store.order, providerKey);
-        changed = true;
-      }
-      if (listProviderAuthStateEntries(store.lastGood, providerKey).length > 0) {
-        store.lastGood = replaceProviderAuthState(store.lastGood, providerKey);
-        changed = true;
-      }
-      if (store.usageStats && Object.keys(store.usageStats).length === 0) {
-        store.usageStats = undefined;
-      }
-      return changed;
-    },
-  });
+  let updated: AuthProfileStore | null = null;
+  for (const owner of owners) {
+    updated = await updateAuthProfileStoreWithLock({
+      agentDir: owner,
+      updater: (store) =>
+        removeProfileReferences(
+          store,
+          new Set(params.profileIds ?? listProfilesForProvider(store, params.provider)),
+          params.profileIds ? undefined : params.provider,
+        ),
+    });
+    if (updated === null) {
+      return null;
+    }
+  }
+  return updated;
+}
+
+function removeProfileReferences(
+  store: AuthProfileStore,
+  profileIds: ReadonlySet<string>,
+  provider?: string,
+): boolean {
+  const next = { ...removeRuntimeExternalProfileReferences({ store, profileIds }) };
+  if (provider !== undefined && next.order) {
+    next.order = replaceProviderAuthState(next.order, provider);
+  }
+  if (provider !== undefined && next.lastGood) {
+    next.lastGood = replaceProviderAuthState(next.lastGood, provider);
+  }
+  if (isDeepStrictEqual(store, next)) {
+    return false;
+  }
+  Object.assign(store, next);
+  return true;
 }
 
 /** Removes selected auth profiles and every state pointer that references them. */
@@ -245,7 +255,7 @@ export async function removeAuthProfilesWithLock(params: {
   profileIds: readonly string[];
   agentDir?: string;
 }): Promise<AuthProfileStore | null> {
-  const profileIds = new Set(dedupeProfileIds([...params.profileIds]));
+  const profileIds = new Set(params.profileIds);
   if ([...profileIds].some(isUserModelAuthProfileId)) {
     throw new Error(
       "Personal model accounts are managed in Settings → Profile → Model accounts. Disconnect the account there instead of removing a shared auth profile.",
@@ -253,24 +263,7 @@ export async function removeAuthProfilesWithLock(params: {
   }
   return await updateAuthProfileStoreWithLock({
     agentDir: params.agentDir,
-    updater: (store) => {
-      const next = removeRuntimeExternalProfileReferences({ store, profileIds });
-      if (isDeepStrictEqual(store, next)) {
-        return false;
-      }
-      Object.assign(store, {
-        profiles: next.profiles,
-        order: next.order,
-        lastGood: next.lastGood,
-        usageStats: next.usageStats,
-        runtimePersistedProfileIds: next.runtimePersistedProfileIds,
-        runtimeExternalProfileIds: next.runtimeExternalProfileIds,
-        runtimeExternalProfileIdsAuthoritative: next.runtimeExternalProfileIdsAuthoritative,
-      });
-      setRuntimeLocalProfileIds(store, getRuntimeLocalProfileIds(next));
-      setRuntimeExternalCliProfileIds(store, getRuntimeExternalCliProfileIds(next));
-      return true;
-    },
+    updater: (store) => removeProfileReferences(store, profileIds),
   });
 }
 

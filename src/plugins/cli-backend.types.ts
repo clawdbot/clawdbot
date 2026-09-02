@@ -251,6 +251,8 @@ export type CliBackendExecuteContext = {
   sessionId?: string;
   useResume: boolean;
   abortSignal?: AbortSignal;
+  /** Revalidate the host-owned run and caller before deferred credential use or dispatch. */
+  assertCurrent?: () => void;
   timeoutMs: number;
   executionMode?: CliBackendExecutionMode;
   toolAvailability?: CliBackendToolAvailability;

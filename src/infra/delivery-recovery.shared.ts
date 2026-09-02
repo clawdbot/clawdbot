@@ -1,3 +1,4 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   resolveDateTimestampMs,
   resolveExpiresAtMsFromDurationMs,
@@ -176,6 +177,42 @@ export function findPlatformMessageRejectedError(
     }
   }
   return undefined;
+}
+
+/**
+ * Returns the typed no-send marker's retry decision after proving the full error graph.
+ * Untyped pre-connect proof stays undefined so caller-specific text policy keeps precedence.
+ */
+export function resolveDeliveryNotSentRetryability(err: unknown): boolean | undefined {
+  const candidates = collectErrorGraphCandidates(err, nestedErrorCandidates);
+  if (
+    !candidates.some(isPlatformMessageNotDispatchedError) ||
+    !isProvenDeliveryNotSentError(err) ||
+    hasDeliverySendEvidence(candidates)
+  ) {
+    return undefined;
+  }
+  return findPlatformMessageRejectedError(err) === undefined;
+}
+
+function hasDeliverySendEvidence(candidates: readonly unknown[]): boolean {
+  return candidates.some(
+    (candidate) =>
+      isRecord(candidate) &&
+      (candidate.sentBeforeError === true ||
+        candidate.visibleReplySent === true ||
+        (isRecord(candidate.deliveryResult) && candidate.deliveryResult.visibleReplySent === true)),
+  );
+}
+
+/** True only when the complete error graph proves a retryable recipient no-send. */
+export function isRetryableDeliveryNotSentError(err: unknown): boolean {
+  const typedRetryability = resolveDeliveryNotSentRetryability(err);
+  return (
+    typedRetryability ??
+    (isProvenDeliveryNotSentError(err) &&
+      !hasDeliverySendEvidence(collectErrorGraphCandidates(err, nestedErrorCandidates)))
+  );
 }
 
 export function computeBackoffMs(retryCount: number): number {

@@ -212,7 +212,7 @@ export async function assembleHarnessContextEngine(params: {
         ? await assemble()
         : await runWithPreparedMemoryPromptSection(
             {
-              availableTools: new Set(params.availableTools),
+              availableTools: params.availableTools ?? new Set(),
               citationsMode: params.citationsMode,
               agentId: params.agentId ?? resolveAgentIdFromSessionKey(params.sessionKey),
               agentSessionKey: params.sessionKey,

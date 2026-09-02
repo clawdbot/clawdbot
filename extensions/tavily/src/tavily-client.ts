@@ -85,6 +85,21 @@ function normalizeTavilyResultUrl(value: unknown): string | undefined {
   }
 }
 
+function normalizeTavilyPublishedDate(value: unknown): string | undefined {
+  if (typeof value !== "string" || value.length > 31) {
+    return undefined;
+  }
+  if (TAVILY_PUBLISHED_DATE_RE.test(value)) {
+    return value;
+  }
+  // Tavily news dates use RFC-style GMT. Exact round-tripping rejects prose,
+  // relative ages, and invalid calendar dates before emitting an unwrapped field.
+  const date = new Date(value);
+  return Number.isFinite(date.getTime()) && date.toUTCString() === value
+    ? date.toISOString()
+    : undefined;
+}
+
 function resolveEndpoint(baseUrl: string, pathname: string): string {
   const trimmed = baseUrl.trim();
   if (!trimmed) {
@@ -221,11 +236,7 @@ export async function runTavilySearch(
     if (!url) {
       return [];
     }
-    const published =
-      typeof entry.published_date === "string" &&
-      TAVILY_PUBLISHED_DATE_RE.test(entry.published_date)
-        ? entry.published_date
-        : undefined;
+    const published = normalizeTavilyPublishedDate(entry.published_date);
     return [
       {
         title: typeof entry.title === "string" ? wrapBoundedSearchContent(entry.title) : "",

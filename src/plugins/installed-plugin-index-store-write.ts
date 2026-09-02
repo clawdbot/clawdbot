@@ -330,6 +330,7 @@ function refreshPersistedPolicyState(
       enabled: resolveEffectiveEnableState({
         id: plugin.pluginId,
         origin: plugin.origin,
+        channelIds: plugin.contributions?.channels,
         config: normalizedConfig,
         rootConfig: activationConfig,
         enabledByDefault: isPluginEnabledByDefaultForPlatform(plugin),

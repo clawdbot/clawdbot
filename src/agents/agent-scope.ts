@@ -47,6 +47,7 @@ export {
   resolveAgentContextLimits,
   resolveAgentDir,
   resolveDefaultAgentDir,
+  resolveAgentRunCwd,
   resolveAgentWorkspaceDir,
   resolveAgentWorkspaceProvisioning,
   tryResolveConfiguredAgentWorkspaceDir,

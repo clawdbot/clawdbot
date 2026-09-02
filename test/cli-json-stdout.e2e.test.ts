@@ -57,7 +57,8 @@ describe("cli json stdout contract", () => {
           const endpoint =
             env.OPENCLAW_TELEMETRY_ENDPOINT ?? "https://telemetry.openclaw.ai/api/latest-version";
           if (format === "JSON") {
-            expect(result.stdout, result.stderr).not.toMatch(/[\u001B\u0007]/u);
+            expect(result.stdout, result.stderr).not.toContain("\u001B");
+            expect(result.stdout, result.stderr).not.toContain("\u0007");
             const payload = JSON.parse(result.stdout);
             expect(payload).toEqual({
               featureStatsEnabled: false,
@@ -212,7 +213,8 @@ describe("cli json stdout contract", () => {
           if ("human" in testCase) {
             expect(result.stdout).toBe("");
           } else {
-            expect(result.stdout, result.stderr).not.toMatch(/[\u001B\u0007]/u);
+            expect(result.stdout, result.stderr).not.toContain("\u001B");
+            expect(result.stdout, result.stderr).not.toContain("\u0007");
             expect(JSON.parse(result.stdout)).toEqual({
               ok: false,
               error: { type: "cli_error", message: testCase.message },
@@ -245,6 +247,44 @@ describe("cli json stdout contract", () => {
         });
       },
       { prefix: "openclaw-json-failure-e2e-" },
+    );
+  });
+
+  it.each([
+    {
+      name: "secrets apply",
+      args: (tempHome: string) => [
+        "secrets",
+        "apply",
+        "--from",
+        path.join(tempHome, "missing-plan.json"),
+        "--json",
+      ],
+      status: 1,
+      message: (tempHome: string) =>
+        `Secrets plan file not found: ${path.join(tempHome, "missing-plan.json")}`,
+    },
+    {
+      name: "secrets store get",
+      args: () => ["secrets", "store", "get", "MISSING_VALUE", "--json"],
+      status: 3,
+      message: () => 'Secret store entry "MISSING_VALUE" was not found.',
+    },
+  ])("keeps $name failures machine-readable", async (testCase) => {
+    await withTempHome(
+      async (tempHome) => {
+        const result = runBuiltCli(tempHome, testCase.args(tempHome), {
+          OPENCLAW_STATE_DIR: path.join(tempHome, "isolated-state"),
+        });
+
+        expect(result.status, result.stderr).toBe(testCase.status);
+        expect(JSON.parse(result.stdout)).toEqual({
+          ok: false,
+          error: { type: "cli_error", message: testCase.message(tempHome) },
+        });
+        expect(result.stdout).not.toContain("[openclaw]");
+      },
+      { prefix: "openclaw-secrets-json-failure-e2e-" },
     );
   });
 
@@ -470,7 +510,8 @@ describe("cli json stdout contract", () => {
         expect(payload.error.message).toBe(
           'OpenClaw sessions has no command "lst".\nDid you mean this?\n  openclaw sessions list\nTry: openclaw sessions --help\nDocs: https://docs.openclaw.ai/cli',
         );
-        expect(payload.error.message).not.toMatch(/[\u001B\u0007]/u);
+        expect(payload.error.message).not.toContain("\u001B");
+        expect(payload.error.message).not.toContain("\u0007");
         expect(result.stdout).not.toContain("\\u001b");
         expect(result.stderr).toContain("\u001B[");
       },

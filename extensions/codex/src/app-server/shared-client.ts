@@ -40,6 +40,7 @@ import {
   isCodexDesktopGenerationCurrent,
   waitForCodexDesktopGeneration,
 } from "./desktop-generation.js";
+import { isCodexAppServerProxyLaunch } from "./launch-args.js";
 import {
   isManagedCodexDesktopCommand,
   resolveManagedCodexAppServerStartOptions,
@@ -58,7 +59,6 @@ type SharedCodexAppServerClientEntry = {
   startup?: SharedCodexAppServerClientStartup;
   activeLeases: number;
   pendingAcquires: number;
-  leaseGeneration: number;
   closeWhenIdle: boolean;
   closeError?: Error;
   startupAbort?: AbortController;
@@ -924,13 +924,14 @@ function createSharedCodexAppServerClientStartup(params: {
   return { initialized: initialized.promise, ready };
 }
 
-/** Starts a non-shared Codex app-server client owned entirely by the caller. */
+/** Starts a caller-owned client; its assertion never binds ordinary shared-client leases. */
 export async function createIsolatedCodexAppServerClient(
-  options?: CodexAppServerClientOptions,
+  options?: CodexAppServerClientOptions & { assertCurrent?: () => void },
 ): Promise<CodexAppServerClient> {
   if (options?.abandonSignal?.aborted) {
     throw new CodexAppServerStartupError("aborted", "codex app-server initialize aborted");
   }
+  options?.assertCurrent?.();
   const acquireStartedAt = Date.now();
   const timeoutMs = options?.timeoutMs ?? 0;
   const {
@@ -968,6 +969,7 @@ export async function createIsolatedCodexAppServerClient(
     config: options?.config,
     timeoutMs: resolveRemainingAcquireTimeout(timeoutMs, acquireStartedAt),
     abandonSignal: options?.abandonSignal,
+    assertCurrent: options?.assertCurrent,
     onStartedClient: (client) => {
       trackIsolatedCodexAppServerClient(client);
       options?.onStartedClient?.(client);
@@ -1000,6 +1002,7 @@ async function startInitializedCodexAppServerClient(params: {
   config?: CodexAppServerClientOptions["config"];
   timeoutMs?: number;
   abandonSignal?: AbortSignal;
+  assertCurrent?: () => void;
   onStartedClient?: (client: CodexAppServerClient) => void;
   onInitializedClient?: () => void;
 }): Promise<CodexAppServerClient> {
@@ -1007,6 +1010,7 @@ async function startInitializedCodexAppServerClient(params: {
   const timeoutMs = params.timeoutMs ?? 0;
   const startOptionsCandidates = resolveManagedFallbackStartOptions(params.startOptions);
   for (const [index, startOptions] of startOptionsCandidates.entries()) {
+    params.assertCurrent?.();
     const desktopGeneration =
       params.desktopGeneration ??
       (isManagedCodexDesktopCommand(startOptions.command)
@@ -1016,7 +1020,8 @@ async function startInitializedCodexAppServerClient(params: {
             params.abandonSignal,
           )
         : undefined);
-    const assertDesktopGenerationCurrent = () => {
+    const assertStartupCurrent = () => {
+      params.assertCurrent?.();
       if (params.abandonSignal?.aborted) {
         throw new CodexAppServerStartupError("aborted", "codex app-server initialize aborted");
       }
@@ -1055,7 +1060,7 @@ async function startInitializedCodexAppServerClient(params: {
         agentDir: params.agentDir,
         pluginConfig: params.pluginConfig,
         ...(desktopGeneration ? { desktopGeneration } : {}),
-        assertCurrent: assertDesktopGenerationCurrent,
+        assertCurrent: assertStartupCurrent,
         ownsIsolatedCodexHome,
       });
     } catch (error) {
@@ -1096,14 +1101,14 @@ async function startInitializedCodexAppServerClient(params: {
       }
       throw new Error("Codex app-server runtime artifact does not match verified inference");
     }
-    assertDesktopGenerationCurrent();
+    assertStartupCurrent();
     let starting: Promise<CodexAppServerClient> | undefined;
     let client: CodexAppServerClient;
     try {
       client = await withCodexAppServerAcquireDeadline(
         resolveRemainingAcquireTimeout(timeoutMs, acquireStartedAt),
         (starting = CodexAppServerClient.start(startOptions, () => {
-          assertDesktopGenerationCurrent();
+          assertStartupCurrent();
           resolveRemainingAcquireTimeout(timeoutMs, acquireStartedAt);
         })),
         params.abandonSignal,
@@ -1148,7 +1153,7 @@ async function startInitializedCodexAppServerClient(params: {
     }
 
     try {
-      assertDesktopGenerationCurrent();
+      assertStartupCurrent();
     } catch (error) {
       client.close();
       throw error;
@@ -1187,7 +1192,7 @@ async function startInitializedCodexAppServerClient(params: {
     });
 
     try {
-      assertDesktopGenerationCurrent();
+      assertStartupCurrent();
       await withCodexAppServerAcquireDeadline(
         resolveRemainingAcquireTimeout(timeoutMs, acquireStartedAt),
         applyCodexAppServerAuthProfile({
@@ -1198,6 +1203,7 @@ async function startInitializedCodexAppServerClient(params: {
           authRequirement: params.authRequirement,
           startOptions,
           config: params.config,
+          assertCurrent: assertStartupCurrent,
           ...(params.authProfileStore ? { authProfileStore: params.authProfileStore } : {}),
         }),
         params.abandonSignal,
@@ -1205,7 +1211,7 @@ async function startInitializedCodexAppServerClient(params: {
       if (runtimeArtifactModule && runtimeArtifact) {
         runtimeArtifactModule.bindCodexAppServerRuntimeArtifact(client, runtimeArtifact);
       }
-      assertDesktopGenerationCurrent();
+      assertStartupCurrent();
       const fenceKey = resolveCodexNativeConfigFenceKey({ client });
       if (fenceKey) {
         client.setThreadSessionRequestGuard(async (options) => {
@@ -1323,12 +1329,17 @@ export function clearSharedCodexAppServerClientIfCurrent(
 export function captureSharedCodexAppServerCatalogLifetime(
   client: CodexAppServerClient,
 ): () => boolean {
+  const isCurrent = captureSharedClientRegistration(client);
+  const revision = client.getModelCatalogRevision();
+  return () => isCurrent() && client.getModelCatalogRevision() === revision;
+}
+
+/** Registration ends on retirement even when sibling leases keep the process alive. */
+function captureSharedClientRegistration(client: CodexAppServerClient): () => boolean {
   const state = getSharedCodexAppServerClientState();
   const entry = state.entriesByClient.get(client);
   const key = [...state.clients].find(([, candidate]) => candidate === entry)?.[0];
   const generation = readCodexAppServerClientDesktopGeneration(client);
-  const revision = client.getModelCatalogRevision();
-  // Detachment retires an owner even while outstanding leases keep its process alive.
   return () =>
     key !== undefined &&
     state.clients.get(key) === entry &&
@@ -1336,7 +1347,6 @@ export function captureSharedCodexAppServerCatalogLifetime(
     !entry.closeWhenIdle &&
     !entry.closeError &&
     !client.getCloseError() &&
-    client.getModelCatalogRevision() === revision &&
     (!generation || isCodexDesktopGenerationCurrent(generation));
 }
 
@@ -1374,35 +1384,37 @@ export function retainSharedCodexAppServerClientByInstanceId(
   return undefined;
 }
 
-/** Captures sole physical-client ownership across awaited configuration adoption. */
-export function captureExclusiveSharedCodexAppServerClient(
+/** Captures physical ownership, independently of unrelated thread and reader leases. */
+export function captureCodexAppServerClientLifetime(
   client: CodexAppServerClient,
+  requiredOwnership: "connection" | "native-process",
 ): () => void {
   const state = getSharedCodexAppServerClientState();
-  for (const [key, entry] of state.clients) {
-    if (entry.client !== client) {
-      continue;
-    }
-    const generation = entry.leaseGeneration;
-    const assertExclusive = () => {
-      // A sibling can resume native children without OpenClaw's thread queue.
-      // Even a completed intervening lease invalidates this configuration proof.
-      if (
-        state.clients.get(key) !== entry ||
-        entry.client !== client ||
-        entry.closeWhenIdle ||
-        entry.closeError ||
-        entry.activeLeases !== 1 ||
-        entry.pendingAcquires !== 0 ||
-        entry.leaseGeneration !== generation
-      ) {
-        throw new CodexAdoptedThreadActiveError();
-      }
-    };
-    assertExclusive();
-    return assertExclusive;
+  // Ordinary refresh needs a process, not a connection to an external server.
+  // Supervision/release require only their original registered connection.
+  const start = getCodexAppServerClientStartMetadata().get(client)?.startOptions;
+  if (
+    requiredOwnership === "native-process" &&
+    (start?.transport !== "stdio" || isCodexAppServerProxyLaunch(start.args))
+  ) {
+    throw new AgentHarnessPreflightError(
+      "Codex ordinary configuration refresh requires an OpenClaw-managed local stdio process, not an external socket or app-server proxy. No turn was sent; reconnect through managed local stdio before continuing.",
+    );
   }
-  throw new CodexAdoptedThreadActiveError();
+  const isolated = requiredOwnership === "native-process" && state.isolatedClients.has(client);
+  const isCurrent = isolated
+    ? () => state.isolatedClients.has(client) && !client.getCloseError()
+    : captureSharedClientRegistration(client);
+  const assertCurrent = () => {
+    if (!isCurrent()) {
+      throw new CodexAdoptedThreadActiveError(
+        "Codex app-server connection changed during thread preparation; reconnect before continuing",
+      );
+    }
+    assertCodexAppServerClientStartSelectionCurrent({ client });
+  };
+  assertCurrent();
+  return assertCurrent;
 }
 
 /**
@@ -1598,7 +1610,6 @@ function getOrCreateSharedClientEntry(
     entry = {
       activeLeases: 0,
       pendingAcquires: 0,
-      leaseGeneration: 0,
       closeWhenIdle: false,
       onStartedClientCallbacks: new Set(),
     };
@@ -1638,7 +1649,6 @@ export function clearSharedCodexAppServerClientIfCurrentAndUnclaimed(
 
 function retainPendingSharedClientAcquire(entry: SharedCodexAppServerClientEntry): () => void {
   let released = false;
-  entry.leaseGeneration += 1;
   entry.pendingAcquires += 1;
   return () => {
     if (released) {
@@ -1653,7 +1663,6 @@ function retainPendingSharedClientAcquire(entry: SharedCodexAppServerClientEntry
 
 function retainSharedClientEntry(entry: SharedCodexAppServerClientEntry): () => void {
   let released = false;
-  entry.leaseGeneration += 1;
   entry.activeLeases += 1;
   return () => {
     if (released) {

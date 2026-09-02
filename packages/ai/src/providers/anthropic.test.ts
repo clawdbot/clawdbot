@@ -516,6 +516,7 @@ describe("Anthropic provider", () => {
       cacheRead: 3,
       cacheWrite: 4,
       totalTokens: 19,
+      contextUsage: { state: "available", promptTokens: 19, totalTokens: 19 },
     });
     expect(result.usage.cost.input).toBeCloseTo(0.00006, 10);
     expect(result.usage.cost.total).toBeGreaterThan(0);

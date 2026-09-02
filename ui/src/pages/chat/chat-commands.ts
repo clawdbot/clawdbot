@@ -189,8 +189,8 @@ function failStaleChatCommand(host: ChatCommandHost): ChatCommandDispatchResult 
   return "failed";
 }
 
-function remoteSlashCommandCacheKey(agentId: string | undefined): string {
-  return agentId ?? "";
+function remoteSlashCommandCacheKey(agentId: string | undefined, sessionKey?: string): string {
+  return JSON.stringify([agentId ?? null, sessionKey ?? null]);
 }
 
 function getRemoteSlashCommandCache(
@@ -207,25 +207,21 @@ function getRemoteSlashCommandCache(
 async function requestRemoteSlashCommands(
   client: GatewayBrowserClient,
   agentId: string | undefined,
-  fallback: SlashCommandDef[] | undefined,
-): Promise<SlashCommandDef[]> {
+  sessionKey?: string,
+): Promise<SlashCommandDef[] | undefined> {
   try {
     const result = await client.request<CommandsListResult>("commands.list", {
       ...(agentId ? { agentId } : {}),
+      ...(sessionKey ? { sessionKey } : {}),
       includeArgs: true,
       scope: "text",
     });
     if (!Array.isArray(result?.commands)) {
-      return buildFallbackSlashCommands();
+      return undefined;
     }
-    const commands = buildSlashCommandsFromEntries(getRemoteCommandEntries(result));
-    getRemoteSlashCommandCache(client).set(remoteSlashCommandCacheKey(agentId), {
-      commands,
-      expiresAt: Date.now() + REMOTE_SLASH_COMMAND_CACHE_TTL_MS,
-    });
-    return commands;
+    return buildSlashCommandsFromEntries(getRemoteCommandEntries(result));
   } catch {
-    return fallback ?? buildFallbackSlashCommands();
+    return undefined;
   }
 }
 
@@ -241,7 +237,7 @@ function loadRemoteSlashCommands(
     return Promise.resolve(buildSlashCommandsFromEntries(getRemoteCommandEntries(metadata)));
   }
   const cache = getRemoteSlashCommandCache(client);
-  const key = remoteSlashCommandCacheKey(agentId);
+  const key = remoteSlashCommandCacheKey(agentId, sessionKey);
   const cached = cache.get(key);
   const now = Date.now();
   if (cached?.commands && cached.expiresAt > now) {
@@ -250,18 +246,36 @@ function loadRemoteSlashCommands(
   if (cached?.inFlight) {
     return cached.inFlight;
   }
-  const inFlight = requestRemoteSlashCommands(client, agentId, cached?.commands).finally(() => {
-    const latest = cache.get(key);
-    if (latest?.inFlight === inFlight) {
-      delete latest.inFlight;
-    }
-  });
-  cache.set(key, {
-    ...(cached?.commands ? { commands: cached.commands } : {}),
+  const entry: RemoteSlashCommandCacheEntry = {
+    commands: cached?.commands,
     expiresAt: cached?.expiresAt ?? 0,
-    inFlight,
-  });
+  };
+  const inFlight = requestRemoteSlashCommands(client, agentId, sessionKey)
+    .then((commands) => {
+      if (commands && cache.get(key) === entry) {
+        entry.commands = commands;
+        entry.expiresAt = Date.now() + REMOTE_SLASH_COMMAND_CACHE_TTL_MS;
+      }
+      return commands ?? cached?.commands ?? buildFallbackSlashCommands();
+    })
+    .finally(() => {
+      if (cache.get(key) === entry) {
+        delete entry.inFlight;
+      }
+    });
+  entry.inFlight = inFlight;
+  cache.set(key, entry);
   return inFlight;
+}
+
+export function invalidateSessionSlashCommands(
+  client: GatewayBrowserClient,
+  scope: { agentId: string; sessionKey: string },
+): void {
+  refreshSeq += 1;
+  remoteSlashCommandCache
+    .get(client)
+    ?.delete(remoteSlashCommandCacheKey(scope.agentId, scope.sessionKey));
 }
 
 export function applyRemoteSlashCommandsResult(params: {

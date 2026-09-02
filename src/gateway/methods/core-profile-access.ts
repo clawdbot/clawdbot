@@ -39,6 +39,7 @@ const PROFILE_DEPENDENT_CORE_PREFIXES = [
   "users.authConnect.",
   "users.prefs.",
   "users.github.",
+  "skills.library.",
 ] as const;
 
 /** Classifies core methods whose behavior reads or mutates durable user/session ownership. */

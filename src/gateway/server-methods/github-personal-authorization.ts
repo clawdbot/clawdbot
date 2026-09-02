@@ -6,8 +6,14 @@ import {
   resolveOperatorRolePolicy,
   resolveOperatorRolePolicyForProfile,
 } from "../operator-role-policy.js";
-import { resolveSessionMutationAuthorization } from "../session-sharing.js";
-import { loadGatewaySessionEntryReadOnly } from "../session-utils.js";
+import {
+  createSessionListEntryFilter,
+  resolveSessionMutationAuthorization,
+} from "../session-sharing.js";
+import {
+  type GatewaySessionStoreDiscoveryCache,
+  loadGatewaySessionEntryReadOnly,
+} from "../session-utils.js";
 import { isGatewayClientProfilePending } from "./gateway-client-identity.js";
 import type { GatewayClient, GatewayRequestHandlerOptions } from "./types.js";
 
@@ -83,7 +89,9 @@ type PersonalEligibility =
   | { kind: "absent" | "ineligible" };
 
 /** Shared reads do not require a person; absence never substitutes for failed authentication. */
-export function prepareGitHubPublicationOptionsRead(options: Request) {
+export function prepareGitHubPublicationOptionsRead(options: Request, sessionKey: string) {
+  // Store discovery is stable within this request; session rows remain live reads.
+  const targetDiscoveryCache: GatewaySessionStoreDiscoveryCache = new Map();
   const resolveEligibility = (): PersonalEligibility => {
     currentGitHubClient(options, "operator.read");
     const client = options.client;
@@ -96,23 +104,49 @@ export function prepareGitHubPublicationOptionsRead(options: Request) {
     return { kind: "eligible", action: preparePersonalGitHubAction(options) };
   };
   const personal = resolveEligibility();
+  const currentClient = () => {
+    const current = resolveEligibility();
+    if (
+      current.kind !== personal.kind ||
+      (current.kind === "eligible" &&
+        personal.kind === "eligible" &&
+        current.action.owner !== personal.action.owner)
+    ) {
+      throw new Error("GitHub profile changed; retry publication options.");
+    }
+    return currentGitHubClient(
+      options,
+      "operator.read",
+      current.kind === "eligible" ? current.action.owner : undefined,
+    );
+  };
+  const readSession = (key: string, agentId?: string) => {
+    const loaded = loadGatewaySessionEntryReadOnly(key, { agentId, targetDiscoveryCache });
+    const filter = createSessionListEntryFilter({
+      cfg: options.context.getRuntimeConfig(),
+      client: currentClient(),
+    });
+    return loaded.entry && filter?.(loaded.canonicalKey, loaded.entry) !== false
+      ? {
+          sessionId: loaded.entry.sessionId,
+          sessionKey: loaded.canonicalKey,
+          agentId: loaded.agentId,
+        }
+      : null;
+  };
+  const session = readSession(sessionKey);
+  if (!session) {
+    throw new Error("GitHub publication session was not found.");
+  }
   return {
     personal,
-    currentClient: () => {
-      const current = resolveEligibility();
-      if (
-        current.kind !== personal.kind ||
-        (current.kind === "eligible" &&
-          personal.kind === "eligible" &&
-          current.action.owner !== personal.action.owner)
-      ) {
-        throw new Error("GitHub profile changed; retry publication options.");
+    session,
+    currentSession: () => {
+      const current = readSession(session.sessionKey, session.agentId);
+      if (!current || current.sessionId !== session.sessionId) {
+        throw new Error("GitHub publication session access changed; select the session again.");
       }
-      return currentGitHubClient(
-        options,
-        "operator.read",
-        current.kind === "eligible" ? current.action.owner : undefined,
-      );
+      return session;
     },
   };
 }
@@ -127,11 +161,8 @@ export function preparePersonalGitHubAction(
     if (
       !client?.connId ||
       client.connect?.role !== "operator" ||
-      client.internal?.syntheticClient ||
-      client.internal?.agentToolCaller ||
-      client.internal?.agentRuntimeIdentity ||
+      isSyntheticCaller(client) ||
       client.internal?.operatorRoleActor ||
-      getGatewayToolCallerIdentity() ||
       options.signal?.aborted ||
       !context.getClientConnIds?.((current) => current === client).has(client.connId)
     ) {
@@ -161,7 +192,8 @@ export function preparePersonalGitHubSessionAction(
   sessionKey: string,
 ): PersonalGitHubAction & { sessionId: string; sessionKey: string; agentId: string } {
   const action = preparePersonalGitHubAction(options, "operator.write");
-  const initial = loadGatewaySessionEntryReadOnly(sessionKey);
+  const targetDiscoveryCache: GatewaySessionStoreDiscoveryCache = new Map();
+  const initial = loadGatewaySessionEntryReadOnly(sessionKey, { targetDiscoveryCache });
   if (!initial.entry?.sessionId) {
     throw new Error("GitHub publication session was not found.");
   }
@@ -170,6 +202,7 @@ export function preparePersonalGitHubSessionAction(
     action.assertCurrent();
     const current = loadGatewaySessionEntryReadOnly(initial.canonicalKey, {
       agentId: initial.agentId,
+      targetDiscoveryCache,
     });
     if (
       current.entry?.sessionId !== sessionId ||

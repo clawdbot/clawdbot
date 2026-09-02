@@ -37,7 +37,6 @@ import {
   renderMessageActionButtons,
   renderReplyButton,
   resolveMessageActionDetails,
-  type AssistantMessageDisclosure,
   type MessageActionDetails,
   type MessageReplyTarget,
 } from "./chat-message-markdown.ts";
@@ -47,6 +46,7 @@ import {
   type StreamGroupOptions,
   type StreamGroupPart,
 } from "./chat-message-stream.ts";
+import type { AssistantMessageDisclosure } from "./chat-message-text.ts";
 import { extractGroupMeta, renderMessageMeta } from "./chat-message-timestamp.ts";
 import type { SidebarContent, SidebarFullMessageLoader } from "./chat-sidebar.ts";
 import {
@@ -176,7 +176,10 @@ function buildGroupedMessageRenderOptions(
   };
 }
 
-function isPeerSenderGroup(group: MessageGroup, userId: string | null | undefined): boolean {
+function isPeerSenderGroup(
+  group: Pick<MessageGroup, "sender">,
+  userId: string | null | undefined,
+): boolean {
   const identity = group.sender?.identity;
   return Boolean(
     group.sender && !(userId && identity?.type === "profile" && identity.id === userId),
@@ -286,7 +289,7 @@ export function renderActivityGroup(
 }
 
 export function resolveMessageGroupSenderLabel(
-  group: MessageGroup,
+  group: Pick<MessageGroup, "role" | "sender" | "senderLabel" | "messages">,
   opts: Pick<RenderMessageGroupOptions, "assistantName" | "userId" | "userName" | "userAvatar">,
 ): string {
   const normalizedRole = normalizeRoleForGrouping(group.role);
@@ -395,7 +398,7 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
     normalizedRole === "user" &&
     Boolean(
       (footerActionDetails?.replyTarget && opts.onReply) ||
-      opts.onRewind ||
+      (opts.onRewind && !opts.rewindDisabled) ||
       footerActionDetails?.markdown,
     );
   const userFooterActions = hasUserFooterActions
@@ -407,9 +410,7 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
           ${footerActionDetails?.replyTarget && opts.onReply
             ? renderReplyButton(footerActionDetails.replyTarget, opts.onReply)
             : nothing}
-          ${opts.onRewind
-            ? renderRewindButton(opts.onRewind, Boolean(opts.rewindDisabled))
-            : nothing}
+          ${opts.onRewind && !opts.rewindDisabled ? renderRewindButton(opts.onRewind) : nothing}
           ${footerActionDetails?.markdown
             ? renderMessageActionButtons(footerActionDetails, {})
             : nothing}

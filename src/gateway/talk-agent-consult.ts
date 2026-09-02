@@ -149,11 +149,10 @@ export async function startTalkRealtimeAgentConsult(
         );
       },
     } satisfies GatewayRequestHandlerOptions;
-    // Keep the caller's tool boundary while hiding generated consult input;
-    // the finalized speech already owns the human transcript.
+    // Speech owns reusable history; keep consult scaffolding only in the lossless archive.
     const chatSendResult = handleTrustedInternalChatSend(chatSendOptions, undefined, {
       toolsAllow: authority.toolsAllow,
-      display: false,
+      transcript: { display: false, excludeFromContext: true },
     });
     void Promise.resolve(chatSendResult).then(
       () => {

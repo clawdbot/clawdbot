@@ -7,6 +7,8 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.ThreadContextElement
+import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.delay
@@ -14,6 +16,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.coroutines.yield
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
@@ -40,8 +43,12 @@ import org.robolectric.annotation.Config
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
+import kotlin.coroutines.AbstractCoroutineContextElement
+import kotlin.coroutines.CoroutineContext
+import kotlin.coroutines.EmptyCoroutineContext
 
 private const val TEST_TIMEOUT_MS = 8_000L
 private const val CONNECT_CHALLENGE_TS = 1_700_000_000_123L
@@ -79,6 +86,44 @@ private class InMemoryDeviceAuthStore : DeviceAuthTokenStore {
     role: String,
   ) {
     tokens.remove("${gatewayId.trim()}|${deviceId.trim()}|${role.trim()}")
+  }
+}
+
+private class RpcCallbackEntryGate :
+  AbstractCoroutineContextElement(Key),
+  ThreadContextElement<Job?> {
+  companion object Key : CoroutineContext.Key<RpcCallbackEntryGate>
+
+  val currentJob = ThreadLocal<Job?>()
+  val select = AtomicReference<(Job) -> Boolean> { false }
+  val paused = CompletableDeferred<Job>()
+  val release = CountDownLatch(1)
+  val released = CompletableDeferred<Boolean>()
+  private val claimed = AtomicBoolean(false)
+
+  override fun updateThreadContext(context: CoroutineContext): Job? {
+    val previous = currentJob.get()
+    val job = context[Job]
+    currentJob.set(job)
+    if (job != null && select.get()(job) && claimed.compareAndSet(false, true)) {
+      paused.complete(job)
+      val opened =
+        try {
+          release.await(TEST_TIMEOUT_MS, TimeUnit.MILLISECONDS)
+        } catch (_: InterruptedException) {
+          Thread.currentThread().interrupt()
+          false
+        }
+      released.complete(opened)
+    }
+    return previous
+  }
+
+  override fun restoreThreadContext(
+    context: CoroutineContext,
+    oldState: Job?,
+  ) {
+    currentJob.set(oldState)
   }
 }
 
@@ -270,7 +315,7 @@ class GatewaySessionInvokeTest {
         },
       ) { webSocket, id, method, frame ->
         when (method) {
-          "connect" ->
+          "connect" -> {
             webSocket.send(
               connectResponseFrame(
                 id,
@@ -278,6 +323,8 @@ class GatewaySessionInvokeTest {
                   mapOf("canvas" to "http://127.0.0.1:18789/__openclaw__/cap/old-token"),
               ),
             )
+          }
+
           expectedMethod -> {
             refreshRequests.incrementAndGet()
             activeDocumentPath.set(documentPaths.last())
@@ -442,7 +489,10 @@ class GatewaySessionInvokeTest {
         startGatewayServer(json) { webSocket, id, method, _ ->
           serverWebSocket.set(webSocket)
           when (method) {
-            "connect" -> webSocket.send(connectResponseFrame(id))
+            "connect" -> {
+              webSocket.send(connectResponseFrame(id))
+            }
+
             "slow.method" -> {
               if (!slowRequestSeen.isCompleted) slowRequestSeen.complete(Unit)
             }
@@ -489,54 +539,95 @@ class GatewaySessionInvokeTest {
   }
 
   @Test
-  fun disconnectReportsUnknownOutcomeForFireAndForgetRpc() {
+  fun disconnectReportsFireAndForgetErrorsAfterAcceptedFramesDrain() =
     runBlocking {
-      val json = testJson()
-      val connected = CompletableDeferred<Unit>()
-      val requestSeen = CompletableDeferred<Unit>()
-      val requestError = CompletableDeferred<GatewaySession.ErrorShape>()
-      val lastDisconnect = AtomicReference("")
-      val serverWebSocket = AtomicReference<WebSocket?>(null)
-      val server =
-        startGatewayServer(json) { webSocket, id, method, _ ->
-          serverWebSocket.set(webSocket)
-          when (method) {
-            "connect" -> webSocket.send(connectResponseFrame(id))
-            "fire.and.forget" -> requestSeen.complete(Unit)
+      for (peerRejects in listOf(false, true)) {
+        val json = testJson()
+        val connected = CompletableDeferred<Unit>()
+        val requestSeen = CompletableDeferred<Pair<WebSocket, String>>()
+        val errors = CopyOnWriteArrayList<GatewaySession.ErrorShape>()
+        val entryGate = RpcCallbackEntryGate()
+        val responsePumpHeld = CompletableDeferred<Job?>()
+        val releaseResponsePump = CountDownLatch(1)
+        val responsePumpReleased = CompletableDeferred<Boolean>()
+        val lastDisconnect = AtomicReference("")
+        val serverWebSocket = AtomicReference<WebSocket?>(null)
+        val server =
+          startGatewayServer(json) { webSocket, id, method, _ ->
+            serverWebSocket.set(webSocket)
+            when (method) {
+              "connect" -> webSocket.send(connectResponseFrame(id))
+              "fire.and.forget" -> requestSeen.complete(webSocket to id)
+            }
           }
+        val harness =
+          createNodeHarness(
+            connected = connected,
+            lastDisconnect = lastDisconnect,
+            extraContext = entryGate,
+            onEvent = { event, _ ->
+              if (event == "test.block.responses") {
+                responsePumpHeld.complete(entryGate.currentJob.get())
+                responsePumpReleased.complete(releaseResponsePump.await(TEST_TIMEOUT_MS, TimeUnit.MILLISECONDS))
+              }
+            },
+          ) { GatewaySession.InvokeResult.ok("""{"handled":true}""") }
+        try {
+          connectNodeSession(harness.session, server.port)
+          awaitConnectedOrThrow(connected, lastDisconnect, server)
+          val lease = requireNotNull(harness.session.captureRequestLease())
+          assertTrue(
+            requireNotNull(serverWebSocket.get()).send("""{"type":"event","event":"test.block.responses","payload":{}}"""),
+          )
+          val pump = requireNotNull(withTimeout(TEST_TIMEOUT_MS) { responsePumpHeld.await() })
+          // Locate the waiter only to schedule this race; the assertions below use the public result and join.
+          val connectionOwner = harness.sessionJob.children.single { owner -> owner.children.any { it === pump } }
+          val previousChildren = connectionOwner.children.toSet()
+          entryGate.select.set { candidate ->
+            candidate !in previousChildren && connectionOwner.children.any { it === candidate }
+          }
+          harness.session.sendRequestFrame(
+            method = "fire.and.forget",
+            paramsJson = null,
+            timeoutMs = 30_000,
+            onError = { errors.add(it) },
+          )
+          val (peer, id) = withTimeout(TEST_TIMEOUT_MS) { requestSeen.await() }
+          val callbackWatcher = withTimeout(TEST_TIMEOUT_MS) { entryGate.paused.await() }
+
+          if (peerRejects) {
+            assertTrue(
+              peer.send("""{"type":"res","id":"$id","ok":false,"error":{"code":"RATE_LIMITED","message":"slow down"}}"""),
+            )
+          }
+          assertTrue(peer.close(1000, "done"))
+          // Peer frame order plus this close checkpoint puts the accepted reply behind the held pump.
+          withTimeout(TEST_TIMEOUT_MS) {
+            while (lease.isCurrent()) yield()
+          }
+          harness.session.disconnect()
+          releaseResponsePump.countDown()
+          // Wait for cancellation to reach this waiter, not just for its owner to start cancelling.
+          withTimeout(TEST_TIMEOUT_MS) {
+            while (!callbackWatcher.isCancelled) yield()
+          }
+          entryGate.release.countDown()
+          withTimeout(TEST_TIMEOUT_MS) { harness.session.disconnectAndJoin() }
+
+          assertTrue("response pump timed out", withTimeout(TEST_TIMEOUT_MS) { responsePumpReleased.await() })
+          assertTrue("callback entry gate timed out", withTimeout(TEST_TIMEOUT_MS) { entryGate.released.await() })
+          assertTrue("app scope must remain alive until after callback verification", harness.sessionJob.isActive)
+          assertEquals("onError must be delivered exactly once; peerRejects=$peerRejects", 1, errors.size)
+          val error = errors.single()
+          assertEquals(if (peerRejects) "RATE_LIMITED" else "UNAVAILABLE", error.code)
+          assertEquals(if (peerRejects) "slow down" else "Gateway disconnected before response", error.message)
+        } finally {
+          releaseResponsePump.countDown()
+          entryGate.release.countDown()
+          shutdownHarness(harness, server)
         }
-      val harness =
-        createNodeHarness(
-          connected = connected,
-          lastDisconnect = lastDisconnect,
-        ) { GatewaySession.InvokeResult.ok("""{"handled":true}""") }
-
-      try {
-        connectNodeSession(harness.session, server.port)
-        awaitConnectedOrThrow(connected, lastDisconnect, server)
-        harness.session.sendRequestFrame(
-          method = "fire.and.forget",
-          paramsJson = null,
-          timeoutMs = 30_000,
-          onError = { requestError.complete(it) },
-        )
-        withTimeout(TEST_TIMEOUT_MS) { requestSeen.await() }
-
-        harness.session.disconnect()
-
-        val error = withTimeout(2_000) { requestError.await() }
-        assertEquals("UNAVAILABLE", error.code)
-        assertEquals("Gateway disconnected before response", error.message)
-        serverWebSocket.get()?.close(1000, "done")
-      } finally {
-        runCatching { serverWebSocket.get()?.close(1000, "done") }
-        delay(100)
-        harness.session.disconnect()
-        harness.sessionJob.cancelAndJoin()
-        server.shutdown()
       }
     }
-  }
 
   @Test
   fun eventsAreDispatchedInWebSocketFrameOrder() =
@@ -607,8 +698,10 @@ class GatewaySessionInvokeTest {
               webSocket.send(connectResponseFrame(id))
               webSocket.send("""{"type":"event","event":"health","payload":null}""")
             }
-            "test.null-payload" ->
+
+            "test.null-payload" -> {
               webSocket.send("""{"type":"res","id":"$id","ok":true,"payload":null}""")
+            }
           }
         }
       val harness =
@@ -871,6 +964,7 @@ class GatewaySessionInvokeTest {
                   )
                   webSocket.close(1000, "retry")
                 }
+
                 else -> {
                   if (!secondConnectAuth.isCompleted) {
                     secondConnectAuth.complete(auth)
@@ -1309,7 +1403,10 @@ class GatewaySessionInvokeTest {
                 """{"type":"event","event":"node.invoke.request","payload":{"id":"invoke-cancelled","nodeId":"node-1","command":"camera.snap","timeoutMs":5000}}""",
               )
             }
-            "node.invoke.result" -> invokeResult.complete(Unit)
+
+            "node.invoke.result" -> {
+              invokeResult.complete(Unit)
+            }
           }
         }
       val harness =
@@ -1344,6 +1441,7 @@ class GatewaySessionInvokeTest {
             "connect" -> {
               webSocket.send(connectResponseFrame(id))
             }
+
             "node.event" -> {
               if (!nodeEventParams.isCompleted) {
                 nodeEventParams.complete(frame["params"]?.jsonObject ?: JsonObject(emptyMap()))
@@ -1395,19 +1493,28 @@ class GatewaySessionInvokeTest {
       val json = testJson()
       val connected = CompletableDeferred<Unit>()
       val nodeEventParams = CompletableDeferred<JsonObject>()
+      val responseQueued = CompletableDeferred<Boolean>()
+      val responsePumpHeld = CompletableDeferred<Unit>()
+      val releaseResponsePump = CountDownLatch(1)
+      val responsePumpReleased = CompletableDeferred<Boolean>()
       val lastDisconnect = AtomicReference("")
+      val serverWebSocket = AtomicReference<WebSocket?>(null)
       val server =
         startGatewayServer(json) { webSocket, id, method, frame ->
+          serverWebSocket.set(webSocket)
           when (method) {
             "connect" -> {
               webSocket.send(connectResponseFrame(id))
             }
+
             "node.event" -> {
               if (!nodeEventParams.isCompleted) {
                 nodeEventParams.complete(frame["params"]?.jsonObject ?: JsonObject(emptyMap()))
               }
-              webSocket.send(
-                """{"type":"res","id":"$id","ok":false,"error":{"code":"RATE_LIMITED","message":"slow down"}}""",
+              responseQueued.complete(
+                webSocket.send(
+                  """{"type":"res","id":"$id","ok":false,"error":{"code":"RATE_LIMITED","message":"slow down"}}""",
+                ),
               )
               webSocket.close(1000, "done")
             }
@@ -1418,22 +1525,44 @@ class GatewaySessionInvokeTest {
         createNodeHarness(
           connected = connected,
           lastDisconnect = lastDisconnect,
+          onEvent = { event, _ ->
+            if (event == "test.block.responses") {
+              responsePumpHeld.complete(Unit)
+              responsePumpReleased.complete(releaseResponsePump.await(TEST_TIMEOUT_MS, TimeUnit.MILLISECONDS))
+            }
+          },
         ) { GatewaySession.InvokeResult.ok("""{"handled":true}""") }
 
       try {
         connectNodeSession(harness.session, server.port)
         awaitConnectedOrThrow(connected, lastDisconnect, server)
+        val lease = requireNotNull(harness.session.captureRequestLease())
+        assertTrue(
+          requireNotNull(serverWebSocket.get()).send("""{"type":"event","event":"test.block.responses","payload":{}}"""),
+        )
+        withTimeout(TEST_TIMEOUT_MS) { responsePumpHeld.await() }
 
         val sent =
-          harness.session.sendNodeEvent(
-            event = "agent.request",
-            payloadJson = """{"message":"restore"}""",
-          )
+          async {
+            harness.session.sendNodeEvent(
+              event = "agent.request",
+              payloadJson = """{"message":"restore"}""",
+            )
+          }
         val params = withTimeout(TEST_TIMEOUT_MS) { nodeEventParams.await() }
+        assertTrue("The response must enter the peer's outgoing queue", withTimeout(TEST_TIMEOUT_MS) { responseQueued.await() })
+        // The held callback prevents loop retirement, so this observes physical close
+        // before the already-received response can leave the message queue.
+        withTimeout(TEST_TIMEOUT_MS) {
+          while (lease.isCurrent()) yield()
+        }
+        releaseResponsePump.countDown()
+        assertTrue("The message-pump gate must be released", withTimeout(TEST_TIMEOUT_MS) { responsePumpReleased.await() })
 
-        assertEquals(true, sent)
+        assertEquals(true, withTimeout(TEST_TIMEOUT_MS) { sent.await() })
         assertEquals("agent.request", params["event"]?.jsonPrimitive?.content)
       } finally {
+        releaseResponsePump.countDown()
         shutdownHarness(harness, server)
       }
     }
@@ -1458,6 +1587,7 @@ class GatewaySessionInvokeTest {
                 webSocket.send(connectResponseFrame(id))
               }
             }
+
             "node.event" -> {
               val event =
                 frame["params"]
@@ -1520,6 +1650,7 @@ class GatewaySessionInvokeTest {
     connected: CompletableDeferred<Unit>,
     lastDisconnect: AtomicReference<String>,
     onEvent: (event: String, payloadJson: String?) -> Unit = { _, _ -> },
+    extraContext: CoroutineContext = EmptyCoroutineContext,
     onInvoke: suspend (GatewaySession.InvokeRequest) -> GatewaySession.InvokeResult,
   ): NodeHarness {
     val app = RuntimeEnvironment.getApplication()
@@ -1527,7 +1658,7 @@ class GatewaySessionInvokeTest {
     val deviceAuthStore = InMemoryDeviceAuthStore()
     val session =
       GatewaySession(
-        scope = CoroutineScope(sessionJob + Dispatchers.Default),
+        scope = CoroutineScope(sessionJob + Dispatchers.Default + extraContext),
         identityStore = testDeviceIdentityStore(app),
         deviceAuthStore = deviceAuthStore,
         onConnected = {
@@ -1635,6 +1766,7 @@ class GatewaySessionInvokeTest {
             webSocket.send(connectResponseFrame(id))
             webSocket.send(invokeEventFrame)
           }
+
           "node.invoke.result" -> {
             if (!invokeResultParams.isCompleted) {
               invokeResultParams.complete(frame["params"]?.toString().orEmpty())
