@@ -1094,7 +1094,9 @@ return sanitized task summaries, not raw runtime state.
     `500`, optional string `cursor`, and optional `sortBy` (`"updatedAt"` or
     `"endedAt"`). Ordering is descending; omitted `sortBy` uses last activity.
     Use `"endedAt"` with terminal status filters when page membership must
-    reflect completion order.
+    reflect completion order. Legacy terminal rows without a stored `endedAt`
+    use their recorded terminal activity time, then creation time, as the
+    canonical completion timestamp before pagination.
   - Result: `{ "tasks": TaskSummary[], "nextCursor"?: string }`.
 - `tasks.get` requires `operator.read`.
   - Params: `{ "taskId": string }`.
