@@ -100,6 +100,9 @@ describe("chat session sharing menu", () => {
     const items = [...root.querySelectorAll<HTMLElement>(".chat-pane__sharing-visibility-item")];
     expect(items).toHaveLength(4);
     expect(items.every((item) => item.querySelector('[slot="icon"]') !== null)).toBe(true);
+    const draftIcon = root.querySelector('[value="visibility:draft"] [slot="icon"]');
+    expect(draftIcon?.querySelector("svg")).not.toBeNull();
+    expect(draftIcon?.textContent?.trim()).toBe("");
     expect(items.map((item) => item.getAttribute("role"))).toEqual(
       items.map(() => "menuitemradio"),
     );
@@ -214,7 +217,9 @@ describe("chat session sharing menu", () => {
       }),
     );
     expect(root.querySelector("wa-dropdown")).toBeNull();
-    expect(root.querySelector(".chat-pane__draft-indicator")?.textContent).toContain("👻");
+    const indicator = root.querySelector(".chat-pane__draft-indicator");
+    expect(indicator?.querySelector("svg")).not.toBeNull();
+    expect(indicator?.textContent?.trim()).toBe("");
   });
 
   it("publishes a manageable draft through the shared visibility callback", () => {
