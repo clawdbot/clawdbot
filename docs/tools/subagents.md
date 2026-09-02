@@ -92,10 +92,10 @@ explicitly unsupported even though the ACP spawn and child are observable.
   <Accordion title="Completion delivery">
     - OpenClaw hands completions back to the requester session through an `agent` turn with a stable idempotency key.
     - If the requester run is still active, OpenClaw first tries to wake/steer that run instead of starting a second visible reply path.
-    - If an active requester cannot be woken, OpenClaw falls back to a requester-agent handoff with the same completion context instead of dropping the announce.
+    - If an active requester cannot accept steering, including a busy CLI run, the handoff waits in the same session lane and starts after the current turn releases its claim. A failed wake does not start a competing turn or discard the completion.
     - A successful parent handoff completes sub-agent delivery even when the parent decides no visible user update is needed.
     - Native sub-agents do not get the message tool. They return plain assistant text to the parent/requester agent; human-visible replies stay owned by the parent/requester agent's normal delivery policy.
-    - If direct handoff cannot be used, delivery falls back to queue routing. A queued completion remains `session_queued`, rather than delivered, until the durable queue settles.
+    - Queue acceptance is not delivery. If direct handoff cannot be used, delivery falls back to queue routing; the completion remains `session_queued`, rather than delivered, until the durable queue settles.
     - Automatic completion delivery retries for up to 30 minutes, starting around 15 seconds and capping the backoff at 5 minutes. Permanent failure or deadline expiry leaves the successful child task visibly blocked instead of discarding its result.
     - Blocked canonical results are retained for 7 days. Operators can retry or intentionally dismiss them from the Tasks page or with `openclaw tasks retry` / `openclaw tasks dismiss`; retry can duplicate a visible result after an ambiguous provider acknowledgement.
     - Delivery keeps the resolved requester route: thread-bound or conversation-bound completion routes win when available. If the completion origin only provides a channel, OpenClaw fills the missing target/account from the requester session's resolved route (`lastChannel` / `lastTo` / `lastAccountId`) so direct delivery still works.
@@ -432,7 +432,7 @@ See [Configuration reference](/gateway/configuration-reference) and
   Block `sessions_spawn` calls that omit `agentId` (forces explicit profile selection). Per-agent override: `agents.entries.*.subagents.requireAgentId`.
 </ParamField>
 <ParamField path="agents.defaults.subagents.announceTimeoutMs" type="number" default="120000">
-  Per-call timeout for gateway `agent` announce delivery attempts. Values are positive integer milliseconds and are clamped to the platform-safe timer maximum. Transient retries can make the total announce wait longer than one configured timeout.
+  Timeout for gateway `agent` announce delivery attempts. Once a handoff is accepted, waiting for the parent session's turn does not consume this budget; the timer starts again when execution begins. Values are positive integer milliseconds and are clamped to the platform-safe timer maximum. Queue waits and transient retries can make total delivery time longer than one configured timeout.
 </ParamField>
 
 If the requester session is sandboxed, `sessions_spawn` rejects targets
@@ -481,7 +481,7 @@ worker sub-sub-agents.
         maxChildrenPerAgent: 5, // max active children per agent session (default: 5, range 1-20)
         maxConcurrent: 8, // global concurrency lane cap (default: 8)
         runTimeoutSeconds: 900, // default timeout for sessions_spawn (0 = no timeout)
-        announceTimeoutMs: 120000, // per-call gateway announce timeout
+        announceTimeoutMs: 120000, // gateway announce timeout, excluding accepted queue waits
       },
     },
   },
