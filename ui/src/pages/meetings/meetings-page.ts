@@ -6,7 +6,6 @@ import type {
 } from "@openclaw/gateway-protocol";
 import { html, nothing, type PropertyValues } from "lit";
 import { property, state } from "lit/decorators.js";
-import { keyed } from "lit/directives/keyed.js";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import { titleForRoute, subtitleForRoute } from "../../app-navigation.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
@@ -40,7 +39,6 @@ class MeetingsPage extends OpenClawLightDomElement {
   @state() private listError: string | null = null;
   @state() private detailError: string | null = null;
   private detailGeneration = 0;
-  private transcriptOpen = false;
   private readonly gateway = new GatewayPageController(this, {
     getGateway: () => this.context?.gateway,
     invalidateRequests: () => {
@@ -65,14 +63,13 @@ class MeetingsPage extends OpenClawLightDomElement {
       this.detail = null;
       this.detailLoading = false;
       this.detailError = null;
-      this.transcriptOpen = false;
       void this.loadDetail();
     }
   }
 
   private refresh() {
     void this.loadList();
-    void this.loadDetail(this.transcriptOpen);
+    void this.loadDetail();
   }
 
   private async loadList() {
@@ -101,7 +98,7 @@ class MeetingsPage extends OpenClawLightDomElement {
     }
   }
 
-  private async loadDetail(includeUtterances = false) {
+  private async loadDetail() {
     const selector = this.selector;
     const client = this.gateway.client;
     const scope = this.gateway.capture();
@@ -118,7 +115,6 @@ class MeetingsPage extends OpenClawLightDomElement {
     try {
       const result = await client.request<TranscriptsGetResult>("transcripts.get", {
         selector,
-        ...(includeUtterances ? { includeUtterances: true } : {}),
       });
       if (current()) {
         this.detail = result;
@@ -139,6 +135,7 @@ class MeetingsPage extends OpenClawLightDomElement {
   }
 
   private renderRow(session: TranscriptSessionSummary) {
+    const silent = session.utteranceCount === 0;
     const participants = session.participants.slice(0, 3).join(", ");
     const extra = session.participants.length - 3;
     const duration = session.stoppedAt
@@ -147,7 +144,9 @@ class MeetingsPage extends OpenClawLightDomElement {
         )
       : null;
     return html`<button
-      class="meetings-row ${this.selector === session.selector ? "selected" : ""}"
+      class="meetings-row ${this.selector === session.selector ? "selected" : ""} ${silent
+        ? "meetings-row--silent"
+        : ""}"
       type="button"
       aria-current=${this.selector === session.selector ? "true" : nothing}
       @click=${() => this.selectMeeting(session.selector)}
@@ -175,8 +174,10 @@ class MeetingsPage extends OpenClawLightDomElement {
       <span class="meetings-row__meta"
         >${t("meetings.utterances", { count: String(session.utteranceCount) })}</span
       >
-      ${session.overview
-        ? html`<span class="meetings-row__overview">${session.overview}</span>`
+      ${silent || session.overview
+        ? html`<span class="meetings-row__overview"
+            >${silent ? t("meetings.noSpeech") : session.overview}</span
+          >`
         : nothing}
     </button>`;
   }
@@ -241,39 +242,6 @@ class MeetingsPage extends OpenClawLightDomElement {
                   </h2>
                   <p>${t("meetings.noNotes")}</p>
                   ${detail.session.active ? html`<p>${t("meetings.activeNotes")}</p>` : nothing}`}
-            ${keyed(
-              detail.session.selector,
-              html`<details
-                class="meetings-transcript"
-                @toggle=${(event: Event) => {
-                  const target = event.currentTarget;
-                  if (!(target instanceof HTMLDetailsElement)) {
-                    return;
-                  }
-                  this.transcriptOpen = target.open;
-                  if (this.transcriptOpen && !this.detail?.utterances && !this.detailLoading) {
-                    void this.loadDetail(true);
-                  }
-                }}
-              >
-                <summary>${t("meetings.transcript")}</summary>
-                ${detail.utterances
-                  ? detail.utterances.length
-                    ? detail.utterances.map(
-                        (utterance) =>
-                          html`<p>
-                            <strong
-                              >${utterance.speakerLabel ||
-                              utterance.speakerId ||
-                              t("meetings.speaker")}:</strong
-                            >
-                            ${utterance.text}
-                          </p>`,
-                      )
-                    : html`<p>${t("meetings.transcriptEmpty")}</p>`
-                  : html`<p>${t("meetings.transcriptLoading")}</p>`}
-              </details>`,
-            )}
           `}
     </section>`;
   }

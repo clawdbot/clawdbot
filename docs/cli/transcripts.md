@@ -218,7 +218,8 @@ Meeting notes use the owning agent's utility model first, then its primary model
 when needed. If no model is available, a request times out, or the model returns
 invalid output, OpenClaw saves deterministic heuristic notes instead. Model
 generation enhances the notes; it does not gate saving them. Notes include an
-overview, participants, the transcript, decisions, action items, and risks.
+overview, participants, decisions, action items, risks, and finally the transcript,
+so bounded readers see the notes before long transcripts.
 Participants come from speaker labels in first-appearance order, not model guesses.
 Summary JSON records `source` as `model` or `heuristic` and, for model notes, the
 model reference used.

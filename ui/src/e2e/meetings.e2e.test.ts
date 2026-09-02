@@ -32,12 +32,12 @@ const detail: TranscriptsGetResult = {
     participants: meeting.participants,
     source: "model",
     markdown:
-      "# Design review\n\n## Overview\nAgreed on a simpler onboarding flow and a focused launch checklist.\n\n## Decisions\n- Keep the first-run setup to three steps.\n- Ship the accessible navigation before launch.\n\n## Action Items\n- Ada: prepare the revised prototype.\n- Sam: review keyboard navigation.\n\n## Risks\n- Leave time for mobile testing.",
+      "# Design review\n\n## Overview\nAgreed on a simpler onboarding flow and a focused launch checklist.\n\n## Participants\n- Ada\n- Sam\n- Jo\n- Alex\n\n## Decisions\n- Keep the first-run setup to three steps.\n- Ship the accessible navigation before launch.\n\n## Action Items\n- Ada: prepare the revised prototype.\n- Sam: review keyboard navigation.\n\n## Risks\n- Leave time for mobile testing.\n\n## Transcript\n- Ada: Let's keep the setup simple.",
   },
 };
 
 suite.define(() => {
-  it("groups meetings, opens shareable notes, and loads transcript only on expansion", async () => {
+  it("groups meetings, marks silent captures, and opens shareable notes without duplicate transcripts", async () => {
     await suite.withPage(
       { viewport: { width: 1440, height: 1000 }, timezoneId: "UTC", colorScheme: "light" },
       async ({ page }) => {
@@ -46,6 +46,18 @@ suite.define(() => {
             "transcripts.list": {
               sessions: [
                 meeting,
+                {
+                  ...meeting,
+                  selector: "2026-08-12/quiet-check-in",
+                  sessionId: "quiet-check-in",
+                  title: "Quiet check-in",
+                  startedAt: "2026-08-12T16:00:00Z",
+                  stoppedAt: "2026-08-12T16:01:00Z",
+                  utteranceCount: 0,
+                  participants: [],
+                  summarySource: "heuristic",
+                  overview: "No transcript captured yet.",
+                },
                 {
                   ...meeting,
                   selector: "2026-08-11/planning",
@@ -58,18 +70,7 @@ suite.define(() => {
               ],
             },
             "transcripts.get": {
-              cases: [
-                {
-                  match: { includeUtterances: true },
-                  response: {
-                    ...detail,
-                    utterances: [
-                      { sequence: 0, speakerLabel: "Ada", text: "Let's keep the setup simple." },
-                    ],
-                  },
-                },
-                { match: { selector: meeting.selector }, response: detail },
-              ],
+              cases: [{ match: { selector: meeting.selector }, response: detail }],
             },
           },
         });
@@ -84,31 +85,49 @@ suite.define(() => {
           { params: { limit: 200 } },
         ]);
         expect(await gateway.getRequests("transcripts.get")).toHaveLength(0);
+        const silentRow = view.getByRole("button", { name: /Quiet check-in/ });
+        expect.soft(await silentRow.textContent()).toContain("No speech captured");
+        expect.soft(await silentRow.textContent()).not.toContain("No transcript captured yet.");
         await view.getByRole("button", { name: /Design review/ }).click();
         await view.getByRole("heading", { name: "Design review", exact: true }).waitFor();
         expect(new URL(page.url()).searchParams.get("selector")).toBe(meeting.selector);
         expect(
           await view.getByText("Ada: prepare the revised prototype.", { exact: true }).isVisible(),
         ).toBe(true);
+        expect.soft(await view.locator("details").count()).toBe(0);
+        expect(await view.getByRole("heading", { name: "Transcript", exact: true }).count()).toBe(
+          1,
+        );
+        expect(
+          await view.getByText("Ada: Let's keep the setup simple.", { exact: true }).isVisible(),
+        ).toBe(true);
         for (const request of await gateway.getRequests("transcripts.get")) {
-          expect(request.params).not.toHaveProperty("includeUtterances", true);
+          expect(request.params).not.toHaveProperty("includeUtterances");
         }
         for (const theme of ["light", "dark"] as const) {
           await page.emulateMedia({ colorScheme: theme });
           await expect.poll(() => page.locator("html").getAttribute("data-theme-mode")).toBe(theme);
+          const mutedColor = await silentRow
+            .locator(".meetings-row__meta")
+            .first()
+            .evaluate((element) => getComputedStyle(element).color);
+          expect
+            .soft(
+              await silentRow
+                .locator(".meetings-row__title")
+                .evaluate((element) => getComputedStyle(element).color),
+            )
+            .toBe(mutedColor);
           await page.screenshot({
             path: path.join(suite.artifactDir, `meetings-${theme}.png`),
             animations: "disabled",
           });
         }
-        await view.locator(".meetings-transcript summary").click();
-        await view.getByText("Let's keep the setup simple.", { exact: false }).waitFor();
-        expect((await gateway.getRequests("transcripts.get")).at(-1)?.params).toEqual({
-          selector: meeting.selector,
-          includeUtterances: true,
-        });
         await page.reload();
         await view.getByRole("heading", { name: "Design review", exact: true }).waitFor();
+        for (const request of await gateway.getRequests("transcripts.get")) {
+          expect(request.params).toEqual({ selector: meeting.selector });
+        }
       },
     );
   });

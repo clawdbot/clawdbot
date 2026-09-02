@@ -119,9 +119,6 @@ export function renderTranscriptsMarkdown(summary: TranscriptsSummary): string {
     // Persisted summaries from before participant metadata remain renderable.
     renderList(summary.participants ?? []),
     "",
-    "## Transcript",
-    renderList(summary.transcript),
-    "",
     "## Decisions",
     renderList(summary.decisions),
     "",
@@ -130,6 +127,10 @@ export function renderTranscriptsMarkdown(summary: TranscriptsSummary): string {
     "",
     "## Risks",
     renderList(summary.risks),
+    "",
+    // Keep notes ahead of the transcript for bounded readers such as tool show.
+    "## Transcript",
+    renderList(summary.transcript),
     "",
     `Transcript utterances: ${summary.utteranceCount}`,
   ].join("\n");

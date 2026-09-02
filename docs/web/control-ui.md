@@ -607,12 +607,15 @@ Open **Meetings** from the sidebar's Pages menu to read durable meeting notes
 across the Gateway. The page lists up to 200 recent captures, grouped by local
 day with newest meetings first. Rows show the title, provider, start time,
 duration or **In progress** state, participants, utterance count, and a short
-overview when notes are available. Use **Refresh** to reload the list.
+overview when notes are available. Captures with zero utterances remain in the
+list with muted styling and **No speech captured** instead of an overview.
+Use **Refresh** to reload the list.
 
 Select a meeting to read its notes. When recorded, **Notes: model** or
-**Notes: heuristic** identifies the summary source. Expand **Transcript** below
-the notes to load the bounded, speaker-labeled transcript. A meeting can appear
-before it has notes, including while capture is active.
+**Notes: heuristic** identifies the summary source. The canonical notes include
+the speaker-labeled **Transcript** at the end, after decisions, action items,
+and risks. A meeting can appear before it has notes, including while capture
+is active.
 
 Meetings reads the same shared SQLite records as `openclaw transcripts`, through
 the read-only `transcripts.list` and `transcripts.get` RPCs. Both require

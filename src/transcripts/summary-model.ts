@@ -150,7 +150,9 @@ export async function summarizeTranscriptsWithModel(params: {
         const visible = [...partitioner.push(completion.text), ...partitioner.flush()]
           .flatMap((delta) => (delta.kind === "text" ? [delta.text] : []))
           .join("");
-        const notes = summarySchema.parse(JSON.parse(visible));
+        // Models may wrap the bounded visible response in fences or explanatory prose.
+        const object = visible.slice(visible.indexOf("{"), visible.lastIndexOf("}") + 1);
+        const notes = summarySchema.parse(JSON.parse(object));
         return {
           ...base,
           ...notes,

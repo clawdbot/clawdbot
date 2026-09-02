@@ -74,8 +74,38 @@ describe("summarizeTranscripts", () => {
     });
     expect(summary.participants).toEqual(["Zoe", "Alex"]);
     expect(renderTranscriptsMarkdown(summary)).toContain(
-      `${summary.overview}\n\n## Participants\n- Zoe\n- Alex\n\n## Transcript`,
+      `${summary.overview}\n\n## Participants\n- Zoe\n- Alex\n\n## Decisions`,
     );
+  });
+
+  it("keeps decisions, actions, and risks ahead of long transcripts for bounded readers", () => {
+    const summary = summarizeTranscripts({
+      session: {
+        sessionId: "long-meeting",
+        source: { providerId: "manual-transcript" },
+        startedAt: "2026-07-17T10:00:00.000Z",
+      },
+      utterances: [
+        { text: "Welcome." },
+        { text: "We agreed on the design." },
+        { text: "Sam will send the prototype." },
+        { text: "The deadline is a risk." },
+        { text: "Discussion. ".repeat(2_000) },
+      ],
+    });
+    const markdown = renderTranscriptsMarkdown(summary);
+    expect(markdown.match(/^## .+$/gm)).toEqual([
+      "## Overview",
+      "## Participants",
+      "## Decisions",
+      "## Action Items",
+      "## Risks",
+      "## Transcript",
+    ]);
+    expect(markdown.slice(0, 12_000)).toContain(
+      "## Decisions\n- We agreed on the design.\n\n## Action Items\n- Sam will send the prototype.\n\n## Risks\n- The deadline is a risk.",
+    );
+    expect(markdown.endsWith("\n\nTranscript utterances: 5")).toBe(true);
   });
 
   it("renders live-provider line breaks and tabs visibly in single-line summary fields", () => {
