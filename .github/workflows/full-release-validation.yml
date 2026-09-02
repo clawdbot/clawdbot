@@ -208,6 +208,7 @@ jobs:
             scripts/github/validate-release-suite-filters.sh
             scripts/full-release-candidate-contract.mjs
             scripts/full-release-validation-policy.mjs
+            scripts/lib/release-context.mjs
             scripts/lib/release-version.mjs
             scripts/lib/record-shared.mjs
             scripts/lib/canonical-json.mjs
