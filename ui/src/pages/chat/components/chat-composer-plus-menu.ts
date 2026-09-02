@@ -17,6 +17,7 @@ import {
   nextWebSearchToolOverrides,
   readOwnEntry,
   resolveToolOverrideState,
+  resolveWebSearchToolOverrideState,
 } from "../../../lib/sessions/tool-overrides.ts";
 import type { ComposerLibraryProps } from "../composer-library-session.ts";
 import {
@@ -129,10 +130,21 @@ function renderRootView(props: ChatComposerPlusMenuProps) {
   ).length;
   const hasSkillOverrides = Object.keys(props.toolOverrides?.skills ?? {}).length > 0;
   const enabledSkillCount = props.skills?.filter((skill) => skill.enabled).length ?? 0;
-  const webSearchEnabled = resolveToolOverrideState(
+  const webSearchEnabled = resolveWebSearchToolOverrideState(
     props.webSearchBaseEnabled,
     props.toolOverrides?.webSearch,
   );
+  const staleWebSearchEnable =
+    !props.webSearchBaseEnabled && props.toolOverrides?.webSearch === true;
+  const webSearchDisabled =
+    props.mutationBlockedReason !== null || (!props.webSearchBaseEnabled && !staleWebSearchEnable);
+  const webSearchTitle =
+    props.mutationBlockedReason ??
+    (staleWebSearchEnable
+      ? t("chat.composer.menu.webSearchClearStaleEnable")
+      : !props.webSearchBaseEnabled
+        ? t("chat.composer.menu.webSearchGloballyDisabled")
+        : "");
   const attachments = renderChatAttachmentMenuOptions(icons.paperclip);
   const rootToggles = props.rootToggles ?? [];
   if (!props.showCapabilities && rootToggles.length === 0) {
@@ -183,8 +195,8 @@ function renderRootView(props: ChatComposerPlusMenuProps) {
             value: "toggle-web-search",
             label: t("chat.composer.menu.webSearch"),
             checked: webSearchEnabled,
-            disabled: props.mutationBlockedReason !== null,
-            title: props.mutationBlockedReason,
+            disabled: webSearchDisabled,
+            title: webSearchTitle,
             icon: icons.globe,
             checkbox: true,
           })}
@@ -476,7 +488,16 @@ function handleMenuSelection(
     if (props.mutationBlockedReason) {
       return;
     }
-    const enabled = resolveToolOverrideState(
+    // Global kill switch: never write webSearch:true; only clear a stale enable override.
+    if (!props.webSearchBaseEnabled) {
+      if (props.toolOverrides?.webSearch === true) {
+        props.onPatchToolOverrides(
+          nextWebSearchToolOverrides(props.toolOverrides, false, props.webSearchBaseEnabled),
+        );
+      }
+      return;
+    }
+    const enabled = resolveWebSearchToolOverrideState(
       props.webSearchBaseEnabled,
       props.toolOverrides?.webSearch,
     );

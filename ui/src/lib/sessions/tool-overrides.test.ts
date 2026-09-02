@@ -7,6 +7,7 @@ import {
   nextWebSearchToolOverrides,
   readOwnEntry,
   resolveToolOverrideState,
+  resolveWebSearchToolOverrideState,
 } from "./tool-overrides.ts";
 
 describe("session tool overrides", () => {
@@ -15,6 +16,13 @@ describe("session tool overrides", () => {
     expect(resolveToolOverrideState(false, undefined)).toBe(false);
     expect(resolveToolOverrideState(true, false)).toBe(false);
     expect(resolveToolOverrideState(false, true)).toBe(true);
+  });
+
+  it("treats global web-search disable as a kill switch for effective state", () => {
+    expect(resolveWebSearchToolOverrideState(true, undefined)).toBe(true);
+    expect(resolveWebSearchToolOverrideState(true, false)).toBe(false);
+    expect(resolveWebSearchToolOverrideState(false, undefined)).toBe(false);
+    expect(resolveWebSearchToolOverrideState(false, true)).toBe(false);
   });
 
   it("reads only own dynamic-key entries", () => {
@@ -47,8 +55,17 @@ describe("session tool overrides", () => {
     const off = nextWebSearchToolOverrides({ skills: { docs: true } }, false);
     expect(off).toEqual({ skills: { docs: true }, webSearch: false });
     expect(nextWebSearchToolOverrides(off, true)).toEqual({ skills: { docs: true } });
-    expect(nextWebSearchToolOverrides({}, true, false)).toEqual({ webSearch: true });
+  });
+
+  it("refuses to persist webSearch:true while the global base is off", () => {
+    expect(nextWebSearchToolOverrides({}, true, false)).toEqual({});
+    expect(nextWebSearchToolOverrides({ webSearch: true }, true, false)).toEqual({});
     expect(nextWebSearchToolOverrides({ webSearch: true }, false, false)).toEqual({});
+    expect(
+      nextWebSearchToolOverrides({ skills: { docs: true }, webSearch: true }, true, false),
+    ).toEqual({
+      skills: { docs: true },
+    });
   });
 
   it("adds sorted MCP tool denials without mutating sibling overrides", () => {

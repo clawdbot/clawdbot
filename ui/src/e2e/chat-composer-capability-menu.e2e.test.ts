@@ -672,6 +672,37 @@ suite.define(() => {
     });
   });
 
+  it("disables turning web search on when tools.web.search.enabled is false", async () => {
+    await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
+      const gateway = await installMockGateway(page, {
+        methodResponses: {
+          "config.get": configResponse({}, false),
+          "sessions.list": sessionsList(),
+          "skills.status": {
+            workspaceDir: "/tmp/openclaw-e2e/workspace",
+            managedSkillsDir: "/tmp/openclaw-e2e/skills",
+            skills: [],
+          },
+        },
+      });
+
+      await page.goto(`${suite.server.baseUrl}chat`);
+      const composer = await openMenu(page);
+      const menu = composer.locator("wa-dropdown.agent-chat__capability-menu");
+      const webSearch = menu.getByRole("menuitemcheckbox", { name: "Web search" });
+      await expect.poll(() => webSearch.isDisabled()).toBe(true);
+      await expect
+        .poll(() => webSearch.getAttribute("title"))
+        .toContain("tools.web.search.enabled");
+      await webSearch.evaluate((item) => {
+        item
+          .closest("wa-dropdown")
+          ?.dispatchEvent(new CustomEvent("wa-select", { bubbles: true, detail: { item } }));
+      });
+      expect(await gateway.getRequests("sessions.patch")).toHaveLength(0);
+    });
+  });
+
   it("shows empty skills and connector states", async () => {
     await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
       await installMockGateway(page, {
