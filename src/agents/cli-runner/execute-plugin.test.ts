@@ -238,6 +238,7 @@ describe("plugin-owned CLI execution host boundary", () => {
       runId: "plugin-user-input",
       nativeTools: ["AskUserQuestion"],
     });
+    context.params.runtimePolicySessionKey = "agent:main:telegram:default:direct:canonical-sender";
     let promptDelivered = createDeferred();
     const onBlockReply = vi.fn(async () => {
       promptDelivered.resolve();
@@ -245,8 +246,13 @@ describe("plugin-owned CLI execution host boundary", () => {
     context.params.onBlockReply = onBlockReply;
     const requests = new Map<string, { questions: Array<{ questionId: string }> }>();
     mockCallGatewayTool.mockImplementation(async (method, _opts, rawParams) => {
-      const params = rawParams as { id: string; questions?: Array<{ questionId: string }> };
+      const params = rawParams as {
+        id: string;
+        questions?: Array<{ questionId: string }>;
+        sessionKey?: string;
+      };
       if (method === "question.request") {
+        expect(params.sessionKey).toBe(context.params.runtimePolicySessionKey);
         requests.set(params.id, { questions: params.questions ?? [] });
         return { id: params.id };
       }
