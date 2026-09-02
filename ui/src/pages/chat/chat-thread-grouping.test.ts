@@ -1,7 +1,11 @@
 // @vitest-environment node
 import { beforeEach, describe, expect, it } from "vitest";
 import type { ChatItem } from "../../lib/chat/chat-types.ts";
-import { groupMessages } from "./chat-thread-grouping.ts";
+import {
+  assistantGroupCanOwnActiveRunStatus,
+  collapseCompletedTurnWork,
+  groupMessages,
+} from "./chat-thread-grouping.ts";
 import { buildCachedChatItems, resetChatThreadState } from "./chat-thread.ts";
 
 function forwardedMessage(sessionKey: string, content = "Forwarded report") {
@@ -26,6 +30,56 @@ function cachedGroups(messages: unknown[]) {
     showToolCalls: true,
   }).filter((item) => item.kind === "group");
 }
+
+describe("reasoning activity boundaries", () => {
+  it.each([
+    { type: "text", text: "Visible answer" },
+    { type: "image", source: { type: "url", url: "https://example.com/result.png" } },
+    {
+      type: "attachment",
+      attachment: { kind: "document", url: "https://example.com/result.pdf", label: "Result" },
+    },
+    {
+      type: "canvas",
+      preview: {
+        kind: "canvas",
+        surface: "assistant_message",
+        render: "url",
+        url: "https://example.com/result",
+      },
+    },
+    { type: "future-visible-block" },
+  ])("preserves mixed reasoning and $type as the visible outcome", (outcome) => {
+    const thinking = { type: "thinking", thinking: "Checking the evidence." };
+    const messages = [
+      { role: "user", content: "Check it.", timestamp: 1_000 },
+      { role: "assistant", content: [thinking], timestamp: 2_000 },
+      { role: "assistant", content: [thinking, outcome], timestamp: 3_000 },
+    ];
+    const groups = groupMessages(
+      messages.map((message, index) => ({
+        kind: "message",
+        key: `message:${index}`,
+        message,
+      })),
+    );
+    expect(
+      collapseCompletedTurnWork(groups, {
+        sessionKey: "agent:main:dashboard:reasoning",
+        runWorking: false,
+      }),
+    ).toMatchObject([
+      { kind: "group", role: "user" },
+      { kind: "work-group", groups: [{ messages: [{ message: messages[1] }] }] },
+      { kind: "group", messages: [{ message: messages[2] }] },
+    ]);
+    const reasoningGroup = groups[1];
+    expect(reasoningGroup?.kind).toBe("group");
+    if (reasoningGroup?.kind === "group") {
+      expect(assistantGroupCanOwnActiveRunStatus(reasoningGroup)).toBe(false);
+    }
+  });
+});
 
 describe("forwarded source-session grouping", () => {
   beforeEach(() => resetChatThreadState());
