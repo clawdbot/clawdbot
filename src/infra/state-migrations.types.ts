@@ -208,7 +208,7 @@ export type LegacyStateMigrationStepReceipt = Omit<LegacyStateMigrationStepPlan,
   refusal?: { code: string; message: string };
 };
 
-export type LegacyStateMigrationCandidate = {
+type LegacyStateMigrationCandidate = {
   root: string;
   version: string;
   artifact:

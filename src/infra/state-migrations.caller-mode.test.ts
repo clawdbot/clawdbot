@@ -23,7 +23,7 @@ import {
 } from "./state-migrations.receipts.js";
 import { resolveLegacyProfileWorkspaceMigrationPaths } from "./state-migrations.state-dir.js";
 import type {
-  LegacyStateMigrationCandidate,
+  LegacyStateMigrationPlan,
   LegacyStateMigrationStepReceipt,
 } from "./state-migrations.types.js";
 
@@ -33,7 +33,7 @@ function sha256(value: string | Buffer): string {
   return `sha256:${createHash("sha256").update(value).digest("hex")}`;
 }
 
-function boundCandidate(root: string, version = "test"): LegacyStateMigrationCandidate {
+function boundCandidate(root: string, version = "test"): LegacyStateMigrationPlan["candidate"] {
   return {
     root,
     version,
@@ -125,7 +125,7 @@ async function makeFixture() {
     plugins: { entries: { "candidate-plugin": { enabled: true } } },
   };
   fs.writeFileSync(configPath, `${JSON.stringify(cfg)}\n`);
-  const env = {
+  const env: NodeJS.ProcessEnv = {
     ...process.env,
     HOME: homeDir,
     OPENCLAW_CONFIG_PATH: configPath,
@@ -340,7 +340,7 @@ describe("legacy state migration caller mode", () => {
 
   it("refuses an invalid staged-candidate artifact digest", async () => {
     const fixture = await makeFixture();
-    const candidate: LegacyStateMigrationCandidate = {
+    const candidate: LegacyStateMigrationPlan["candidate"] = {
       root: fixture.root,
       version: "test",
       artifact: {
@@ -400,11 +400,15 @@ describe("legacy state migration caller mode", () => {
   it("returns a closed refusal when copied-state detection throws", async () => {
     const fixture = await makeFixture();
     const before = snapshotFiles(fixture.root);
-    const legacySessionSurfaces = Object.defineProperty({ surfaces: [] }, "failures", {
-      get() {
-        throw new Error("synthetic copied-state detection failure");
+    const legacySessionSurfaces = Object.defineProperty(
+      { surfaces: [], failures: [] },
+      "failures",
+      {
+        get() {
+          throw new Error("synthetic copied-state detection failure");
+        },
       },
-    }) as typeof EMPTY_LEGACY_SESSION_SURFACES;
+    ) as typeof EMPTY_LEGACY_SESSION_SURFACES;
 
     const plan = await planLegacyStateMigrationsReadOnly({
       mode: "doctor",
@@ -519,7 +523,9 @@ describe("legacy state migration caller mode", () => {
 
   it("executes and receipts Doctor-owned exec and TUI migrations from the same mode", async () => {
     const fixture = await makeFixture();
-    const cfg: OpenClawConfig = { meta: { lastTouchedAt: "2026-09-02T00:00:00.000Z" } };
+    const cfg = {
+      meta: { lastTouchedAt: "2026-09-02T00:00:00.000Z" },
+    } as unknown as OpenClawConfig;
     fs.writeFileSync(fixture.configPath, `${JSON.stringify(cfg)}\n`);
     const { execPath, tuiPath } = writeLegacyDoctorSources(fixture.stateDir, {
       terminal: { sessionKey: "agent:main:tui:execute", updatedAt: 100 },
@@ -821,11 +827,15 @@ describe("legacy state migration caller mode", () => {
     }
     fs.mkdirSync(paths.source, { recursive: true });
     fs.writeFileSync(path.join(paths.source, "AGENTS.md"), "profile workspace");
-    const legacySessionSurfaces = Object.defineProperty({ surfaces: [] }, "failures", {
-      get() {
-        throw new Error("synthetic plugin preparation failure");
+    const legacySessionSurfaces = Object.defineProperty(
+      { surfaces: [], failures: [] },
+      "failures",
+      {
+        get() {
+          throw new Error("synthetic plugin preparation failure");
+        },
       },
-    }) as typeof EMPTY_LEGACY_SESSION_SURFACES;
+    ) as typeof EMPTY_LEGACY_SESSION_SURFACES;
 
     const result = await autoMigrateLegacyState({
       cfg: {},
