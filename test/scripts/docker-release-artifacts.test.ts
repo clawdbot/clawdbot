@@ -255,27 +255,35 @@ async function createPublicationRetry(conclusion = "failure") {
 }
 
 describe("prepared Docker publication", () => {
-  it("binds a complete native build to exact immutable artifacts and its own seal job", async () => {
-    const fixture = await createPreparedRelease();
-    const manifest = verifyDockerReleaseProducer(fixture.manifest, {
-      publisherSha: toolingSha,
-      readApi: fixture.readApi,
-    });
-    expect(manifest.producer.jobId).toBe("7");
-    expect(
-      manifest.architectures.map((entry: { architecture: string }) => entry.architecture),
-    ).toEqual(["amd64", "arm64"]);
-    expect(
-      manifest.architectures.flatMap((entry: { images: { variant: string }[] }) =>
-        entry.images.map((image) => image.variant),
-      ),
-    ).toEqual(["default", "browser", "default", "browser"]);
-    fixture.run.status = "completed";
-    fixture.run.conclusion = "success";
-    expect(
-      verifyDockerReleaseProducer(manifest, { publisherSha: toolingSha, readApi: fixture.readApi }),
-    ).toBe(manifest);
-  });
+  it.each(["full-release-validation", "full-release-artifacts"])(
+    "binds native builds to exact artifacts and the %s seal job",
+    async (workflow) => {
+      const fixture = await createPreparedRelease();
+      fixture.run.path = `.github/workflows/${workflow}.yml`;
+      fixture.manifest.producer.workflowRef = `${repository}/${fixture.run.path}@refs/heads/main`;
+      const manifest = verifyDockerReleaseProducer(fixture.manifest, {
+        publisherSha: toolingSha,
+        readApi: fixture.readApi,
+      });
+      expect(manifest.producer.jobId).toBe("7");
+      expect(
+        manifest.architectures.map((entry: { architecture: string }) => entry.architecture),
+      ).toEqual(["amd64", "arm64"]);
+      expect(
+        manifest.architectures.flatMap((entry: { images: { variant: string }[] }) =>
+          entry.images.map((image) => image.variant),
+        ),
+      ).toEqual(["default", "browser", "default", "browser"]);
+      fixture.run.status = "completed";
+      fixture.run.conclusion = "success";
+      expect(
+        verifyDockerReleaseProducer(manifest, {
+          publisherSha: toolingSha,
+          readApi: fixture.readApi,
+        }),
+      ).toBe(manifest);
+    },
+  );
 
   it.each(["failure", "cancelled", "timed_out"])(
     "reuses its successful preparation when retrying a %s publication attempt",

@@ -370,7 +370,10 @@ def checkout_harness(sha):
     if sha == os.environ["WORKFLOW_SHA"]:
         # Export the workflow revision from the freshly populated index, replacing
         # retained platform files without updating the index or trusting later edits.
-        paths = git_output(workspace, "ls-files", "-z", "--", ".github/actions").split("\0")[:-1]
+        pathspecs = [".github/actions"]
+        if kind == "preflight":
+            pathspecs += ["scripts/lib/release-context.mjs", "scripts/lib/release-version.mjs"]
+        paths = git_output(workspace, "ls-files", "-z", "--", *pathspecs).split("\0")[:-1]
         run_git(workspace, "checkout-index", "--force", f"--prefix={harness}/", "--", *paths)
     else:
         run_git(harness, "init", harness)

@@ -67,7 +67,8 @@ jobs:
     outputs:
       source_check_json: ${{ steps.source_evidence.outputs.bundle_json }}
     steps:
-      - name: Validate canonical preflight caller and phase
+      - &validate_npm_caller
+        name: Validate canonical preflight caller and phase
         env:
           WORKFLOW_REF: ${{ github.workflow_ref }}
           PREFLIGHT_ONLY: ${{ inputs.preflight_only }}
@@ -79,7 +80,8 @@ jobs:
           case "$WORKFLOW_REF" in
             "$GITHUB_REPOSITORY/.github/workflows/openclaw-npm-release.yml@"*|\
             "$GITHUB_REPOSITORY/.github/workflows/full-release-validation.yml@"*|\
-            "$GITHUB_REPOSITORY/.github/workflows/full-release-candidate.yml@"*) ;;
+            "$GITHUB_REPOSITORY/.github/workflows/full-release-candidate.yml@"*|\
+            "$GITHUB_REPOSITORY/.github/workflows/full-release-artifacts.yml@"*) ;;
             *) echo "Only canonical release workflows may call npm preflight." >&2; exit 1 ;;
           esac
           [[ "$PREFLIGHT_ONLY" == true ]] || { echo "Reusable npm preflight cannot publish." >&2; exit 1; }
@@ -90,7 +92,8 @@ jobs:
             *) echo "Unsupported npm preflight phase." >&2; exit 1 ;;
           esac
 
-      - name: Validate release ref input format
+      - &validate_npm_ref
+        name: Validate release ref input format
         env:
           RELEASE_REF: ${{ inputs.tag }}
           PREFLIGHT_ONLY: ${{ inputs.preflight_only }}
@@ -114,20 +117,23 @@ jobs:
             exit 1
           fi
 
-      - name: Forbid preflight artifact promotion on validation-only runs
+      - &forbid_npm_promotion
+        name: Forbid preflight artifact promotion on validation-only runs
         if: ${{ inputs.preflight_only && inputs.preflight_run_id != '' }}
         run: |
           echo "preflight_run_id is only valid for real publish runs."
           exit 1
 
-      - name: Checkout
+      - &checkout_npm_source
+        name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ inputs.tag }}
           fetch-depth: 1
           filter: blob:none
 
-      - name: Checkout trusted package source preflight
+      - &checkout_npm_harness
+        name: Checkout trusted package source preflight
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.workflow_sha }}
@@ -137,7 +143,8 @@ jobs:
           persist-credentials: false
           sparse-checkout: scripts
 
-      - name: Validate npm package source metadata
+      - &validate_npm_source
+        name: Validate npm package source metadata
         env:
           RELEASE_REF: ${{ inputs.tag }}
         run: |
@@ -198,66 +205,10 @@ jobs:
     outputs:
       prepared_bundle_json: ${{ steps.describe.outputs.bundle_json }}
     steps:
-      - name: Validate canonical preflight caller and phase
-        env:
-          WORKFLOW_REF: ${{ github.workflow_ref }}
-          PREFLIGHT_ONLY: ${{ inputs.preflight_only }}
-          PREFLIGHT_PHASE: ${{ inputs.preflight_phase }}
-          PREPARED_BUNDLE_JSON: ${{ inputs.prepared_bundle_json }}
-          SOURCE_CHECK_JSON: ${{ inputs.source_check_json }}
-        run: |
-          set -euo pipefail
-          case "$WORKFLOW_REF" in
-            "$GITHUB_REPOSITORY/.github/workflows/openclaw-npm-release.yml@"*|\
-            "$GITHUB_REPOSITORY/.github/workflows/full-release-validation.yml@"*|\
-            "$GITHUB_REPOSITORY/.github/workflows/full-release-candidate.yml@"*) ;;
-            *) echo "Only canonical release workflows may call npm preflight." >&2; exit 1 ;;
-          esac
-          [[ "$PREFLIGHT_ONLY" == true ]] || { echo "Reusable npm preflight cannot publish." >&2; exit 1; }
-          case "$PREFLIGHT_PHASE" in
-            source|prepare|all)
-              [[ -z "$PREPARED_BUNDLE_JSON" && -z "$SOURCE_CHECK_JSON" ]] || exit 1 ;;
-            verify) [[ -n "$PREPARED_BUNDLE_JSON" ]] || exit 1 ;;
-            *) echo "Unsupported npm preflight phase." >&2; exit 1 ;;
-          esac
-
-      - name: Validate release ref input format
-        env:
-          RELEASE_REF: ${{ inputs.tag }}
-          PREFLIGHT_ONLY: ${{ inputs.preflight_only }}
-          RELEASE_NPM_DIST_TAG: ${{ inputs.npm_dist_tag }}
-        run: |
-          set -euo pipefail
-          if [[ ! "${RELEASE_REF}" =~ ^v[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*((-(alpha|beta)\.[1-9][0-9]*)|(-[1-9][0-9]*))?$ ]] && [[ ! "${RELEASE_REF}" =~ ^[0-9a-fA-F]{40}$ ]]; then
-            echo "Invalid release ref format: ${RELEASE_REF}"
-            exit 1
-          fi
-          if [[ "${RELEASE_REF}" =~ ^[0-9a-fA-F]{40}$ ]] && [[ "${PREFLIGHT_ONLY}" != "true" ]]; then
-            echo "Full commit SHA input is only supported for validation-only preflight runs."
-            exit 1
-          fi
-          if [[ "${RELEASE_REF}" == *"-alpha."* && "${RELEASE_NPM_DIST_TAG}" != "alpha" ]]; then
-            echo "Alpha prerelease tags must publish to npm dist-tag alpha."
-            exit 1
-          fi
-          if [[ "${RELEASE_REF}" == *"-beta."* && "${RELEASE_NPM_DIST_TAG}" != "beta" ]]; then
-            echo "Beta prerelease tags must publish to npm dist-tag beta."
-            exit 1
-          fi
-
-      - name: Forbid preflight artifact promotion on validation-only runs
-        if: ${{ inputs.preflight_only && inputs.preflight_run_id != '' }}
-        run: |
-          echo "preflight_run_id is only valid for real publish runs."
-          exit 1
-
-      - name: Checkout
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ inputs.tag }}
-          fetch-depth: 1
-          filter: blob:none
-
+      - *validate_npm_caller
+      - *validate_npm_ref
+      - *forbid_npm_promotion
+      - *checkout_npm_source
       - name: Validate Tideclaw alpha preflight target
         if: startsWith(github.ref, 'refs/heads/tideclaw/alpha/')
         env:
@@ -281,27 +232,8 @@ jobs:
             exit 1
           fi
 
-      - name: Checkout trusted package source preflight
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ github.workflow_sha }}
-          path: .release-harness
-          fetch-depth: 1
-          filter: blob:none
-          persist-credentials: false
-          sparse-checkout: scripts
-
-      - name: Validate npm package source metadata
-        env:
-          RELEASE_REF: ${{ inputs.tag }}
-        run: |
-          set -euo pipefail
-          args=(--source-dir "$GITHUB_WORKSPACE")
-          if [[ "$RELEASE_REF" =~ ^[0-9a-fA-F]{40}$ ]]; then
-            args+=(--allow-unreleased-changelog)
-          fi
-          node .release-harness/scripts/package-source-preflight.mjs "${args[@]}"
-
+      - *checkout_npm_harness
+      - *validate_npm_source
       - name: Setup Node environment
         id: setup-node-env
         uses: ./.github/actions/setup-node-env
@@ -426,90 +358,28 @@ jobs:
           node .release-harness/scripts/npm-prepared-bundle.mjs describe \
             --input-dir "$RUNNER_TEMP/openclaw-npm-package" \
             --artifact-id "$ARTIFACT_ID" --artifact-digest "$ARTIFACT_DIGEST" \
-            --artifact-name "openclaw-npm-package-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+            --artifact-name "openclaw-npm-package-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
+            > "$RUNNER_TEMP/prepared-npm-bundle.json"
 
-  verify_openclaw_npm:
-    name: Qualify prepared npm package
-    needs: [prepare_openclaw_npm, check_openclaw_npm]
-    if: >-
-      ${{ !cancelled() && (inputs.preflight_phase == 'all' || inputs.preflight_phase == 'verify') &&
-          (needs.prepare_openclaw_npm.result == 'success' || inputs.preflight_phase == 'verify') &&
-          (needs.check_openclaw_npm.result == 'success' || inputs.source_check_json != '') }}
-    # The 2026-09-01 probe delivered 4 CPUs/15 GiB for 16, versus 8 CPUs/31 GiB for 32.
-    # Request 32 to clear parallel-check thresholds; see docs/ci.md#blacksmith-runner-capacity.
+      - name: Upload immutable npm package descriptor
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: openclaw-npm-package-descriptor-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/prepared-npm-bundle.json
+          if-no-files-found: error
+
+  check_sdk_npm:
+    name: Check npm Plugin SDK
+    if: ${{ inputs.preflight_phase == 'all' || inputs.preflight_phase == 'verify' }}
     runs-on: ${{ inputs.use_github_hosted_runners && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404' }}
     outputs:
-      qualified_preflight_bundle_json: ${{ steps.qualified_bundle.outputs.bundle_json }}
+      proof_json: ${{ steps.proof.outputs.proof_json }}
     steps:
-      - name: Validate canonical preflight caller and phase
-        env:
-          WORKFLOW_REF: ${{ github.workflow_ref }}
-          PREFLIGHT_ONLY: ${{ inputs.preflight_only }}
-          PREFLIGHT_PHASE: ${{ inputs.preflight_phase }}
-          PREPARED_BUNDLE_JSON: ${{ inputs.prepared_bundle_json }}
-          SOURCE_CHECK_JSON: ${{ inputs.source_check_json }}
-        run: |
-          set -euo pipefail
-          case "$WORKFLOW_REF" in
-            "$GITHUB_REPOSITORY/.github/workflows/openclaw-npm-release.yml@"*|\
-            "$GITHUB_REPOSITORY/.github/workflows/full-release-validation.yml@"*|\
-            "$GITHUB_REPOSITORY/.github/workflows/full-release-candidate.yml@"*) ;;
-            *) echo "Only canonical release workflows may call npm preflight." >&2; exit 1 ;;
-          esac
-          [[ "$PREFLIGHT_ONLY" == true ]] || { echo "Reusable npm preflight cannot publish." >&2; exit 1; }
-          case "$PREFLIGHT_PHASE" in
-            source|prepare|all)
-              [[ -z "$PREPARED_BUNDLE_JSON" && -z "$SOURCE_CHECK_JSON" ]] || exit 1 ;;
-            verify) [[ -n "$PREPARED_BUNDLE_JSON" ]] || exit 1 ;;
-            *) echo "Unsupported npm preflight phase." >&2; exit 1 ;;
-          esac
-
-      - name: Validate release ref input format
-        env:
-          RELEASE_REF: ${{ inputs.tag }}
-          PREFLIGHT_ONLY: ${{ inputs.preflight_only }}
-          RELEASE_NPM_DIST_TAG: ${{ inputs.npm_dist_tag }}
-        run: |
-          set -euo pipefail
-          if [[ ! "${RELEASE_REF}" =~ ^v[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*((-(alpha|beta)\.[1-9][0-9]*)|(-[1-9][0-9]*))?$ ]] && [[ ! "${RELEASE_REF}" =~ ^[0-9a-fA-F]{40}$ ]]; then
-            echo "Invalid release ref format: ${RELEASE_REF}"
-            exit 1
-          fi
-          if [[ "${RELEASE_REF}" =~ ^[0-9a-fA-F]{40}$ ]] && [[ "${PREFLIGHT_ONLY}" != "true" ]]; then
-            echo "Full commit SHA input is only supported for validation-only preflight runs."
-            exit 1
-          fi
-          if [[ "${RELEASE_REF}" == *"-alpha."* && "${RELEASE_NPM_DIST_TAG}" != "alpha" ]]; then
-            echo "Alpha prerelease tags must publish to npm dist-tag alpha."
-            exit 1
-          fi
-          if [[ "${RELEASE_REF}" == *"-beta."* && "${RELEASE_NPM_DIST_TAG}" != "beta" ]]; then
-            echo "Beta prerelease tags must publish to npm dist-tag beta."
-            exit 1
-          fi
-
-      - name: Forbid preflight artifact promotion on validation-only runs
-        if: ${{ inputs.preflight_only && inputs.preflight_run_id != '' }}
-        run: |
-          echo "preflight_run_id is only valid for real publish runs."
-          exit 1
-
-      - name: Checkout
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ inputs.tag }}
-          fetch-depth: 1
-          filter: blob:none
-
-      - name: Checkout trusted package source preflight
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ github.workflow_sha }}
-          path: .release-harness
-          fetch-depth: 1
-          filter: blob:none
-          persist-credentials: false
-          sparse-checkout: scripts
+      - *validate_npm_caller
+      - *validate_npm_ref
+      - *forbid_npm_promotion
+      - *checkout_npm_source
+      - *checkout_npm_harness
 
       - name: Setup Node environment
         id: setup-node-env
@@ -517,95 +387,9 @@ jobs:
         with:
           cache-mode: restore
           node-version: ${{ env.NODE_VERSION }}
-          install-bun: "true"
+          install-bun: "false"
+          install-deps: "false"
 
-      - name: Acquire exact prepared npm package and source proof
-        id: prepared_bundle
-        env:
-          GH_TOKEN: ${{ github.token }}
-          PREPARED_BUNDLE_JSON: ${{ inputs.prepared_bundle_json || needs.prepare_openclaw_npm.outputs.prepared_bundle_json }}
-          SOURCE_CHECK_JSON: ${{ inputs.source_check_json || needs.check_openclaw_npm.outputs.source_check_json }}
-          WORKFLOW_SHA: ${{ github.workflow_sha }}
-          RELEASE_NPM_DIST_TAG: ${{ inputs.npm_dist_tag }}
-          RELEASE_REF: ${{ inputs.tag }}
-          RELEASE_TAG: ${{ inputs.release_tag }}
-        run: |
-          set -euo pipefail
-          [[ "$(git -C .release-harness rev-parse HEAD)" == "$WORKFLOW_SHA" ]]
-          [[ -z "$(git -C .release-harness status --porcelain)" ]]
-          printf '%s\n' "$PREPARED_BUNDLE_JSON" > "$RUNNER_TEMP/prepared-npm-bundle.json"
-          printf '%s\n' "$SOURCE_CHECK_JSON" > "$RUNNER_TEMP/npm-source-check.json"
-          source_sha="$(git rev-parse HEAD)"
-          release_tag="${RELEASE_TAG:-$RELEASE_REF}"
-          if [[ "$release_tag" =~ ^[a-f0-9]{40}$ ]]; then
-            release_tag="v$(node -p "require('./package.json').version")"
-          fi
-          node .release-harness/scripts/npm-prepared-bundle.mjs verify-source \
-            --descriptor "$RUNNER_TEMP/npm-source-check.json" --repository "$GITHUB_REPOSITORY" \
-            --source-sha "$source_sha" --tooling-sha "$WORKFLOW_SHA"
-          node .release-harness/scripts/npm-prepared-bundle.mjs download \
-            --descriptor "$RUNNER_TEMP/prepared-npm-bundle.json" --repository "$GITHUB_REPOSITORY" \
-            --source-sha "$source_sha" --tooling-sha "$WORKFLOW_SHA" \
-            --output-dir "$RUNNER_TEMP/openclaw-prepared-npm" --npm-dist-tag "$RELEASE_NPM_DIST_TAG" \
-            --release-tag "$release_tag"
-
-      - name: Validate release metadata
-        if: ${{ inputs.preflight_run_id == '' }}
-        env:
-          OPENCLAW_NPM_RELEASE_SKIP_PACK_CHECK: "1"
-          RELEASE_REF: ${{ inputs.tag }}
-          RELEASE_TAG: ${{ inputs.release_tag }}
-          PREFLIGHT_ONLY: ${{ inputs.preflight_only }}
-          WORKFLOW_REF_NAME: ${{ github.ref_name }}
-          OPENCLAW_NPM_PUBLISH_TAG: ${{ inputs.npm_dist_tag }}
-        run: |
-          set -euo pipefail
-          RELEASE_SHA=$(git rev-parse HEAD)
-          # Dependency evidence needs the previous reachable release, including
-          # HEAD's parents; other branch and tooling-tag histories are irrelevant.
-          timeout --signal=TERM --kill-after=10s 120s git fetch --no-tags --filter=blob:none --unshallow origin \
-            "$RELEASE_SHA" "+refs/tags/v*:refs/tags/v*"
-          RELEASE_BRANCH_REF="refs/remotes/origin/${WORKFLOW_REF_NAME}"
-          export RELEASE_SHA RELEASE_BRANCH_REF
-          if [[ "${RELEASE_REF}" =~ ^[0-9a-fA-F]{40}$ ]]; then
-            RELEASE_TAG="${RELEASE_TAG:-v$(node -p "require('./package.json').version")}"
-            export RELEASE_TAG
-            RELEASE_BRANCH_REF="${RELEASE_SHA}"
-            export RELEASE_BRANCH_REF
-            echo "Validation-only SHA mode: using release tag ${RELEASE_TAG} for package metadata checks."
-          else
-            # The workflow runs from trusted main, while beta and stable tags can
-            # point at their frozen release branch after it diverged from main.
-            timeout --signal=TERM --kill-after=10s 120s git fetch --no-tags origin "+refs/heads/${WORKFLOW_REF_NAME}:refs/remotes/origin/${WORKFLOW_REF_NAME}"
-            RELEASE_TAG="${RELEASE_REF}"
-            export RELEASE_TAG
-            if ! git merge-base --is-ancestor "${RELEASE_SHA}" "${RELEASE_BRANCH_REF}"; then
-              if [[ "${RELEASE_REF}" == *"-alpha."* ]]; then
-                echo "Tagged commit is not reachable from ${WORKFLOW_REF_NAME}." >&2
-                exit 1
-              fi
-              # Base-package corrections retain the base branch; separately
-              # versioned corrections own their suffixed release branch.
-              RELEASE_BRANCH_NAME="$(node --input-type=module <<'NODE'
-          import { readFileSync } from 'node:fs';
-          import { releaseBranchForTag } from './.release-harness/scripts/lib/release-context.mjs';
-          import { resolveReleaseTagPackageIdentity } from './.release-harness/scripts/lib/release-version.mjs';
-          const { baseTag } = resolveReleaseTagPackageIdentity(process.env.RELEASE_REF, JSON.parse(readFileSync('package.json', 'utf8')).version);
-          process.stdout.write(releaseBranchForTag(baseTag || process.env.RELEASE_REF));
-          NODE
-              )"
-              RELEASE_BRANCH_REF="refs/remotes/origin/${RELEASE_BRANCH_NAME}"
-              timeout --signal=TERM --kill-after=10s 120s git fetch --no-tags origin "+refs/heads/${RELEASE_BRANCH_NAME}:${RELEASE_BRANCH_REF}"
-              export RELEASE_BRANCH_REF
-            fi
-          fi
-          RELEASE_MAIN_REF="${RELEASE_BRANCH_REF}"
-          export RELEASE_MAIN_REF
-          pnpm release:openclaw:npm:check
-
-      # KEEP THIS LANE LIMITED TO FAST, REPEATABLE RELEASE READINESS CHECKS.
-      # IF A CHECK CAN TAKE A LONG TIME, NEEDS LIVE CREDENTIALS, OR IS KNOWN TO BE FLAKY,
-      # IT BELONGS IN openclaw-release-checks.yml INSTEAD OF BLOCKING npm PUBLISH.
       - name: Checkout trusted Plugin SDK API tooling
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -667,8 +451,8 @@ jobs:
           pnpm --dir "$tooling_dir" install --frozen-lockfile --ignore-scripts --filter openclaw
           diff_args=(
             --head "$target_sha"
-            --evidence "${GITHUB_WORKSPACE}/.artifacts/plugin-sdk-api-release-evidence.json"
-            --json "${GITHUB_WORKSPACE}/.artifacts/plugin-sdk-api-release-diff.json"
+            --evidence "${GITHUB_WORKSPACE}/.artifacts/npm-sdk-proof/plugin-sdk-api-release-evidence.json"
+            --json "${GITHUB_WORKSPACE}/.artifacts/npm-sdk-proof/plugin-sdk-api-release-diff.json"
             --summary "$GITHUB_STEP_SUMMARY"
           )
           if [[ "$(jq 'length' <<< "$bases_json")" == 2 ]]; then
@@ -678,15 +462,245 @@ jobs:
           fi
           pnpm --dir "$tooling_dir" run plugin-sdk:api:diff -- "${diff_args[@]}"
 
-      - name: Upload Plugin SDK API release diff
-        if: always() && hashFiles('.artifacts/plugin-sdk-api-release-evidence.json') != ''
+      - name: Upload npm sdk proof
+        id: artifact
+        if: ${{ always() && hashFiles('.artifacts/npm-sdk-proof/plugin-sdk-api-release-evidence.json') != '' }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
-          name: plugin-sdk-api-release-diff-${{ github.run_id }}-${{ github.run_attempt }}
-          path: |
-            .artifacts/plugin-sdk-api-release-diff.json
-            .artifacts/plugin-sdk-api-release-evidence.json
+          name: openclaw-npm-sdk-proof-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .artifacts/npm-sdk-proof
+          if-no-files-found: error
           retention-days: 30
+
+      - name: Describe npm sdk proof
+        id: proof
+        env: &npm_proof_environment
+          GH_TOKEN: ${{ github.token }}
+          JOB_CONTEXT: ${{ toJSON(job) }}
+          PREFLIGHT_WORKFLOW_REF: ${{ github.workflow_ref }}
+          RELEASE_REF: ${{ inputs.tag }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          RELEASE_NPM_DIST_TAG: ${{ inputs.npm_dist_tag }}
+          ARTIFACT_ID: ${{ steps.artifact.outputs.artifact-id }}
+          ARTIFACT_DIGEST: ${{ steps.artifact.outputs.artifact-digest }}
+        run: |
+          set -euo pipefail
+          [[ "$(git -C .release-harness rev-parse HEAD)" == "$PREFLIGHT_WORKFLOW_SHA" ]]
+          [[ -z "$(git -C .release-harness status --porcelain)" ]]
+          node .release-harness/scripts/npm-prepared-bundle.mjs proof \
+            --proof-kind sdk --source-dir "$GITHUB_WORKSPACE" \
+            --release-ref "$RELEASE_REF" --release-tag "$RELEASE_TAG" --npm-dist-tag "$RELEASE_NPM_DIST_TAG" \
+            --input-dir "$GITHUB_WORKSPACE/.artifacts/npm-sdk-proof" \
+            --artifact-id "$ARTIFACT_ID" --artifact-digest "$ARTIFACT_DIGEST" \
+            --artifact-name "openclaw-npm-sdk-proof-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+
+  check_dependencies_npm:
+    name: Check npm dependencies
+    if: ${{ inputs.preflight_phase == 'all' || inputs.preflight_phase == 'verify' }}
+    runs-on: ${{ inputs.use_github_hosted_runners && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404' }}
+    outputs:
+      proof_json: ${{ steps.proof.outputs.proof_json }}
+    steps:
+      - *validate_npm_caller
+      - *validate_npm_ref
+      - *forbid_npm_promotion
+      - *checkout_npm_source
+      - *checkout_npm_harness
+
+      - name: Setup Node environment
+        id: setup-node-env
+        uses: ./.github/actions/setup-node-env
+        with:
+          cache-mode: restore
+          node-version: ${{ env.NODE_VERSION }}
+          install-bun: "true"
+
+      - name: Validate release metadata
+        if: ${{ inputs.preflight_run_id == '' }}
+        env:
+          OPENCLAW_NPM_RELEASE_SKIP_PACK_CHECK: "1"
+          RELEASE_REF: ${{ inputs.tag }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          PREFLIGHT_ONLY: ${{ inputs.preflight_only }}
+          WORKFLOW_REF_NAME: ${{ github.ref_name }}
+          OPENCLAW_NPM_PUBLISH_TAG: ${{ inputs.npm_dist_tag }}
+        run: |
+          set -euo pipefail
+          RELEASE_SHA=$(git rev-parse HEAD)
+          # Dependency evidence needs the previous reachable release, including
+          # HEAD's parents; other branch and tooling-tag histories are irrelevant.
+          timeout --signal=TERM --kill-after=10s 120s git fetch --no-tags --filter=blob:none --unshallow origin \
+            "$RELEASE_SHA" "+refs/tags/v*:refs/tags/v*"
+          RELEASE_BRANCH_REF="refs/remotes/origin/${WORKFLOW_REF_NAME}"
+          export RELEASE_SHA RELEASE_BRANCH_REF
+          if [[ "${RELEASE_REF}" =~ ^[0-9a-fA-F]{40}$ ]]; then
+            RELEASE_TAG="${RELEASE_TAG:-v$(node -p "require('./package.json').version")}"
+            export RELEASE_TAG
+            RELEASE_BRANCH_REF="${RELEASE_SHA}"
+            export RELEASE_BRANCH_REF
+            echo "Validation-only SHA mode: using release tag ${RELEASE_TAG} for package metadata checks."
+          else
+            # The workflow runs from trusted main, while beta and stable tags can
+            # point at their frozen release branch after it diverged from main.
+            timeout --signal=TERM --kill-after=10s 120s git fetch --no-tags origin "+refs/heads/${WORKFLOW_REF_NAME}:refs/remotes/origin/${WORKFLOW_REF_NAME}"
+            RELEASE_TAG="${RELEASE_REF}"
+            export RELEASE_TAG
+            if ! git merge-base --is-ancestor "${RELEASE_SHA}" "${RELEASE_BRANCH_REF}"; then
+              if [[ "${RELEASE_REF}" == *"-alpha."* ]]; then
+                echo "Tagged commit is not reachable from ${WORKFLOW_REF_NAME}." >&2
+                exit 1
+              fi
+              # Base-package corrections retain the base branch; separately
+              # versioned corrections own their suffixed release branch.
+              RELEASE_BRANCH_NAME="$(node --input-type=module <<'NODE'
+          import { readFileSync } from 'node:fs';
+          import { releaseBranchForTag } from './.release-harness/scripts/lib/release-context.mjs';
+          import { resolveReleaseTagPackageIdentity } from './.release-harness/scripts/lib/release-version.mjs';
+          const { baseTag } = resolveReleaseTagPackageIdentity(process.env.RELEASE_REF, JSON.parse(readFileSync('package.json', 'utf8')).version);
+          process.stdout.write(releaseBranchForTag(baseTag || process.env.RELEASE_REF));
+          NODE
+              )"
+              RELEASE_BRANCH_REF="refs/remotes/origin/${RELEASE_BRANCH_NAME}"
+              timeout --signal=TERM --kill-after=10s 120s git fetch --no-tags origin "+refs/heads/${RELEASE_BRANCH_NAME}:${RELEASE_BRANCH_REF}"
+              export RELEASE_BRANCH_REF
+            fi
+          fi
+          RELEASE_MAIN_REF="${RELEASE_BRANCH_REF}"
+          export RELEASE_MAIN_REF
+          pnpm release:openclaw:npm:check
+
+      # KEEP THIS LANE LIMITED TO FAST, REPEATABLE RELEASE READINESS CHECKS.
+      # IF A CHECK CAN TAKE A LONG TIME, NEEDS LIVE CREDENTIALS, OR IS KNOWN TO BE FLAKY,
+      # IT BELONGS IN openclaw-release-checks.yml INSTEAD OF BLOCKING npm PUBLISH.
+
+      - name: Checkout trusted Plugin SDK API tooling
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: .artifacts/plugin-sdk-release-tooling
+          fetch-depth: 1
+          filter: blob:none
+          sparse-checkout: |
+            src
+            packages
+            patches
+            scripts
+
+      - name: Install trusted qualification dependencies
+        run: pnpm --dir .artifacts/plugin-sdk-release-tooling install --frozen-lockfile --ignore-scripts --filter openclaw
+
+      - name: Generate dependency release evidence
+        id: dependency_evidence
+        env:
+          GH_TOKEN: ${{ github.token }}
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
+          RELEASE_REF: ${{ inputs.tag }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          RELEASE_NPM_DIST_TAG: ${{ inputs.npm_dist_tag }}
+        run: |
+          set -euo pipefail
+          tooling_dir="${GITHUB_WORKSPACE}/.artifacts/plugin-sdk-release-tooling"
+          if [[ "$(git -C "$tooling_dir" rev-parse HEAD)" != "$WORKFLOW_SHA" ]] || [[ -n "$(git -C "$tooling_dir" status --porcelain)" ]]; then
+            echo "Trusted dependency release tooling must match the unmodified workflow SHA." >&2
+            exit 1
+          fi
+          node --import "$tooling_dir/scripts/tsx.mjs" "$tooling_dir/scripts/generate-dependency-release-evidence.mts" \
+            --root "$GITHUB_WORKSPACE" \
+            --release-ref "${RELEASE_TAG:-$RELEASE_REF}" \
+            --npm-dist-tag "$RELEASE_NPM_DIST_TAG" \
+            --output-dir "$RUNNER_TEMP/openclaw-release-dependency-evidence" \
+            --github-output "$GITHUB_OUTPUT" \
+            --github-step-summary "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload npm dependencies proof
+        id: artifact
+        if: ${{ always() && steps.dependency_evidence.outputs.dir != '' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: openclaw-npm-dependencies-proof-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/openclaw-release-dependency-evidence
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Describe npm dependencies proof
+        id: proof
+        env: *npm_proof_environment
+        run: |
+          set -euo pipefail
+          [[ "$(git -C .release-harness rev-parse HEAD)" == "$PREFLIGHT_WORKFLOW_SHA" ]]
+          [[ -z "$(git -C .release-harness status --porcelain)" ]]
+          node .release-harness/scripts/npm-prepared-bundle.mjs proof \
+            --proof-kind dependencies --source-dir "$GITHUB_WORKSPACE" \
+            --release-ref "$RELEASE_REF" --release-tag "$RELEASE_TAG" --npm-dist-tag "$RELEASE_NPM_DIST_TAG" \
+            --input-dir "$RUNNER_TEMP/openclaw-release-dependency-evidence" \
+            --artifact-id "$ARTIFACT_ID" --artifact-digest "$ARTIFACT_DIGEST" \
+            --artifact-name "openclaw-npm-dependencies-proof-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+
+  check_contents_npm:
+    name: Check npm package contents
+    needs: prepare_openclaw_npm
+    if: >-
+      ${{ !cancelled() && (inputs.preflight_phase == 'all' || inputs.preflight_phase == 'verify') &&
+          (needs.prepare_openclaw_npm.result == 'success' || inputs.preflight_phase == 'verify') }}
+    runs-on: ${{ inputs.use_github_hosted_runners && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404' }}
+    outputs:
+      proof_json: ${{ steps.proof.outputs.proof_json }}
+    steps:
+      - *validate_npm_caller
+      - *validate_npm_ref
+      - *forbid_npm_promotion
+      - *checkout_npm_source
+      - *checkout_npm_harness
+
+      - name: Setup Node environment
+        id: setup-node-env
+        uses: ./.github/actions/setup-node-env
+        with:
+          cache-mode: restore
+          node-version: ${{ env.NODE_VERSION }}
+          install-bun: "true"
+
+      - &acquire_prepared_npm
+        name: Acquire exact prepared npm package
+        id: prepared_bundle
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PREPARED_BUNDLE_JSON: ${{ inputs.prepared_bundle_json || needs.prepare_openclaw_npm.outputs.prepared_bundle_json }}
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
+          RELEASE_NPM_DIST_TAG: ${{ inputs.npm_dist_tag }}
+          RELEASE_REF: ${{ inputs.tag }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          set -euo pipefail
+          [[ "$(git -C .release-harness rev-parse HEAD)" == "$WORKFLOW_SHA" ]]
+          [[ -z "$(git -C .release-harness status --porcelain)" ]]
+          printf '%s\n' "$PREPARED_BUNDLE_JSON" > "$RUNNER_TEMP/prepared-npm-bundle.json"
+          source_sha="$(git rev-parse HEAD)"
+          release_tag="${RELEASE_TAG:-$RELEASE_REF}"
+          if [[ "$release_tag" =~ ^[a-f0-9]{40}$ ]]; then
+            release_tag="v$(node -p "require('./package.json').version")"
+          fi
+          node .release-harness/scripts/npm-prepared-bundle.mjs download \
+            --descriptor "$RUNNER_TEMP/prepared-npm-bundle.json" --repository "$GITHUB_REPOSITORY" \
+            --source-sha "$source_sha" --tooling-sha "$WORKFLOW_SHA" \
+            --output-dir "$RUNNER_TEMP/openclaw-prepared-npm" --npm-dist-tag "$RELEASE_NPM_DIST_TAG" \
+            --release-tag "$release_tag"
+
+      - name: Checkout trusted Plugin SDK API tooling
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: .artifacts/plugin-sdk-release-tooling
+          fetch-depth: 1
+          filter: blob:none
+          sparse-checkout: |
+            src
+            packages
+            patches
+            scripts
+
+      - name: Install trusted qualification dependencies
+        run: pnpm --dir .artifacts/plugin-sdk-release-tooling install --frozen-lockfile --ignore-scripts --filter openclaw
 
       - name: Verify final npm package bytes and lifecycle
         env:
@@ -757,27 +771,62 @@ jobs:
           path: ${{ steps.plugin_npm_preflight.outputs.dir }}
           if-no-files-found: error
 
-      - name: Generate dependency release evidence
-        id: dependency_evidence
+      - name: Describe npm contents proof
+        id: proof
         env:
           GH_TOKEN: ${{ github.token }}
-          WORKFLOW_SHA: ${{ github.workflow_sha }}
+          JOB_CONTEXT: ${{ toJSON(job) }}
+          PREFLIGHT_WORKFLOW_REF: ${{ github.workflow_ref }}
           RELEASE_REF: ${{ inputs.tag }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
           RELEASE_NPM_DIST_TAG: ${{ inputs.npm_dist_tag }}
         run: |
           set -euo pipefail
-          tooling_dir="${GITHUB_WORKSPACE}/.artifacts/plugin-sdk-release-tooling"
-          if [[ "$(git -C "$tooling_dir" rev-parse HEAD)" != "$WORKFLOW_SHA" ]] || [[ -n "$(git -C "$tooling_dir" status --porcelain)" ]]; then
-            echo "Trusted dependency release tooling must match the unmodified workflow SHA." >&2
-            exit 1
-          fi
-          node --import "$tooling_dir/scripts/tsx.mjs" "$tooling_dir/scripts/generate-dependency-release-evidence.mts" \
-            --root "$GITHUB_WORKSPACE" \
-            --release-ref "$RELEASE_REF" \
-            --npm-dist-tag "$RELEASE_NPM_DIST_TAG" \
-            --output-dir "$RUNNER_TEMP/openclaw-release-dependency-evidence" \
-            --github-output "$GITHUB_OUTPUT" \
-            --github-step-summary "$GITHUB_STEP_SUMMARY"
+          [[ "$(git -C .release-harness rev-parse HEAD)" == "$PREFLIGHT_WORKFLOW_SHA" ]]
+          [[ -z "$(git -C .release-harness status --porcelain)" ]]
+          node .release-harness/scripts/npm-prepared-bundle.mjs proof \
+            --proof-kind contents --source-dir "$GITHUB_WORKSPACE" \
+            --release-ref "$RELEASE_REF" --release-tag "$RELEASE_TAG" --npm-dist-tag "$RELEASE_NPM_DIST_TAG" \
+            --descriptor "$RUNNER_TEMP/prepared-npm-bundle.json"
+
+  verify_openclaw_npm:
+    name: Qualify prepared npm package
+    needs:
+      [
+        prepare_openclaw_npm,
+        check_openclaw_npm,
+        check_sdk_npm,
+        check_dependencies_npm,
+        check_contents_npm,
+      ]
+    if: >-
+      ${{ !cancelled() && (inputs.preflight_phase == 'all' || inputs.preflight_phase == 'verify') &&
+          (needs.prepare_openclaw_npm.result == 'success' || inputs.preflight_phase == 'verify') &&
+          (needs.check_openclaw_npm.result == 'success' || inputs.source_check_json != '') &&
+          needs.check_sdk_npm.result == 'success' && needs.check_dependencies_npm.result == 'success' &&
+          needs.check_contents_npm.result == 'success' }}
+    runs-on: ${{ inputs.use_github_hosted_runners && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404' }}
+    outputs:
+      qualified_preflight_bundle_json: ${{ steps.qualified_bundle.outputs.bundle_json }}
+    steps:
+      - *validate_npm_caller
+      - *validate_npm_ref
+      - *forbid_npm_promotion
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.tag }}
+          fetch-depth: 1
+          filter: blob:none
+          sparse-checkout: package.json
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+      - *checkout_npm_harness
+      - name: Setup trusted Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - *acquire_prepared_npm
 
       - name: Seal qualified npm publish bundle
         id: packed_tarball
@@ -786,25 +835,42 @@ jobs:
           JOB_CONTEXT: ${{ toJSON(job) }}
           PREFLIGHT_WORKFLOW_REF: ${{ github.workflow_ref }}
           PREFLIGHT_WORKFLOW_SHA: ${{ github.workflow_sha }}
-          DEPENDENCY_EVIDENCE_DIR: ${{ steps.dependency_evidence.outputs.dir }}
+          SOURCE_CHECK_JSON: ${{ inputs.source_check_json || needs.check_openclaw_npm.outputs.source_check_json }}
+          SDK_PROOF_JSON: ${{ needs.check_sdk_npm.outputs.proof_json }}
+          DEPENDENCY_PROOF_JSON: ${{ needs.check_dependencies_npm.outputs.proof_json }}
+          CONTENTS_PROOF_JSON: ${{ needs.check_contents_npm.outputs.proof_json }}
         run: |
           set -euo pipefail
           [[ "$(git -C .release-harness rev-parse HEAD)" == "$PREFLIGHT_WORKFLOW_SHA" ]]
           [[ -z "$(git -C .release-harness status --porcelain)" ]]
+          printf '%s\n' "$SOURCE_CHECK_JSON" > "$RUNNER_TEMP/npm-source-check.json"
+          printf '%s\n' "$SDK_PROOF_JSON" > "$RUNNER_TEMP/npm-sdk-proof.json"
+          printf '%s\n' "$DEPENDENCY_PROOF_JSON" > "$RUNNER_TEMP/npm-dependency-proof.json"
+          printf '%s\n' "$CONTENTS_PROOF_JSON" > "$RUNNER_TEMP/npm-contents-proof.json"
           node .release-harness/scripts/npm-prepared-bundle.mjs qualify \
             --descriptor "$RUNNER_TEMP/prepared-npm-bundle.json" \
             --input-dir "$RUNNER_TEMP/openclaw-prepared-npm" \
             --output-dir "$RUNNER_TEMP/openclaw-npm-preflight" \
-            --plugin-sdk-evidence .artifacts/plugin-sdk-api-release-evidence.json \
-            --dependency-evidence-dir "$DEPENDENCY_EVIDENCE_DIR"
+            --source-check "$RUNNER_TEMP/npm-source-check.json" \
+            --sdk-proof "$RUNNER_TEMP/npm-sdk-proof.json" \
+            --dependency-proof "$RUNNER_TEMP/npm-dependency-proof.json" \
+            --contents-proof "$RUNNER_TEMP/npm-contents-proof.json"
           echo "dir=$RUNNER_TEMP/openclaw-npm-preflight" >> "$GITHUB_OUTPUT"
 
+      - name: Upload Plugin SDK API release diff
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: plugin-sdk-api-release-diff-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/openclaw-prepared-npm/qualification/sdk/plugin-sdk-api-release-diff.json
+            ${{ runner.temp }}/openclaw-prepared-npm/qualification/sdk/plugin-sdk-api-release-evidence.json
+          retention-days: 30
+
       - name: Upload dependency release evidence
-        if: ${{ always() && steps.dependency_evidence.outputs.dir != '' }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: openclaw-release-dependency-evidence-${{ inputs.tag }}
-          path: ${{ steps.dependency_evidence.outputs.dir }}
+          path: ${{ runner.temp }}/openclaw-prepared-npm/qualification/dependencies
           if-no-files-found: error
 
       - name: Upload dependency release evidence tag alias
@@ -812,7 +878,7 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: openclaw-release-dependency-evidence-${{ steps.packed_tarball.outputs.release_tag }}
-          path: ${{ steps.dependency_evidence.outputs.dir }}
+          path: ${{ runner.temp }}/openclaw-prepared-npm/qualification/dependencies
           if-no-files-found: error
 
       - name: Upload prepared npm publish bundle

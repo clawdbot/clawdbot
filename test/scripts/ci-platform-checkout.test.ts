@@ -284,7 +284,7 @@ it.concurrent.each([
         },
       ].map((entry) => Object.assign(entry, { kind: "preflight", retained: false }))),
 ])(
-  "materializes $kind harness actions ($event, workflow=$workflow, target=$target, retained=$retained) without mutating the candidate",
+  "materializes $kind trusted harness ($event, workflow=$workflow, target=$target, retained=$retained) without mutating the candidate",
   async ({ kind, retained, event, workflow, target, code, fetches }) => {
     const linux = kind !== "platform";
     const preflight = kind === "preflight";
@@ -297,10 +297,17 @@ it.concurrent.each([
       ".github/actions/tool/with space.txt": "literal action bytes\n",
       ...(posix ? { [executable]: "#!/bin/sh\nexit 0\n" } : {}),
     };
+    const releasePolicy = Object.fromEntries(
+      ["scripts/lib/release-context.mjs", "scripts/lib/release-version.mjs"].map((name) => [
+        name,
+        readFileSync(name, "utf8"),
+      ]),
+    );
     const candidateFiles = {
       "candidate-only.txt": "candidate stays intact\n",
       "extensions/browser/icon.png": "complete binary path\0\xff",
       "ui/src/i18n/.i18n/de-DE.tm.jsonl": '{"fixture":"complete inventory"}\n',
+      "scripts/lib/candidate-only.mjs": "export const candidate = true;\n",
     };
     let revision = "";
     let workflowRevision = "";
@@ -332,7 +339,11 @@ it.concurrent.each([
             encoding: "utf8",
           }).trim();
         run("init");
-        for (const [name, contents] of Object.entries({ ...files, ...candidateFiles })) {
+        for (const [name, contents] of Object.entries({
+          ...files,
+          ...releasePolicy,
+          ...candidateFiles,
+        })) {
           mkdirSync(path.dirname(path.join(source, name)), { recursive: true });
           writeFileSync(path.join(source, name), contents);
         }
@@ -441,6 +452,14 @@ it.concurrent.each([
         expect(existsSync(path.join(harness, ".git"))).toBe(false);
         for (const [name, contents] of Object.entries(files)) {
           expect(readFileSync(path.join(harness, name), "utf8")).toBe(contents);
+        }
+        for (const [name, contents] of Object.entries(releasePolicy)) {
+          expect(existsSync(path.join(harness, name))).toBe(preflight);
+          if (preflight) {
+            expect(readFileSync(path.join(harness, name), "utf8")).toBe(contents);
+            writeFileSync(path.join(workspace, name), "throw new Error('candidate policy');\n");
+            expect(readFileSync(path.join(harness, name), "utf8")).toBe(contents);
+          }
         }
         if (posix) {
           expect(statSync(path.join(harness, executable)).mode & 0o111).toBe(0o111);

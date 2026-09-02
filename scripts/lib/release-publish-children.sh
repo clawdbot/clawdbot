@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Shared owner for dispatch and completion around the immutable ClawHub receipt.
+# Shared owner for trusted release child dispatch, approval, and completion.
 set -euo pipefail
 
 openclaw_npm_expected_workflow_ref="${GITHUB_REF}"
@@ -11,6 +11,52 @@ is_stable_release() {
 
 is_android_release() {
   [[ "${RELEASE_TAG}" =~ ^v[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*(-[1-9][0-9]*)?$ ]]
+}
+
+resolve_child_workflow_ref() {
+  local workflow_full_ref="$1"
+  local workflow_sha="$2"
+  local workflow_prefix="${workflow_sha:0:12}"
+  local child_workflow_ref matching_ref_prefix matching_refs
+
+  if [[ "${workflow_full_ref}" =~ ^refs/tags/(release-publish/[a-f0-9]{12}-[1-9][0-9]*)$ ]]; then
+    # Request validation already proves this is the exact live
+    # lightweight tag; dispatch revalidates it immediately before use.
+    printf '%s\n' "${BASH_REMATCH[1]}"
+    return 0
+  fi
+
+  if [[ "${workflow_full_ref}" =~ ^refs/heads/(tideclaw/alpha/[0-9]{4}-[0-9]{2}-[0-9]{2}-[0-9]{4}Z)$ ]]; then
+    printf '%s\n' "${BASH_REMATCH[1]}"
+    return 0
+  fi
+
+  if [[ "${workflow_full_ref}" != "refs/heads/main" ]]; then
+    echo "Publish children require trusted main, a protected release-publish tag, or a validated Tideclaw alpha branch." >&2
+    return 1
+  fi
+
+  matching_ref_prefix="$(
+    jq -rn --arg value "tags/release-publish/${workflow_prefix}-" '$value | @uri'
+  )"
+  matching_refs="$(
+    gh api "repos/${GITHUB_REPOSITORY}/git/matching-refs/${matching_ref_prefix}"
+  )"
+  if ! child_workflow_ref="$(
+    jq -er \
+      --arg prefix "${workflow_prefix}" \
+      --arg sha "${workflow_sha}" \
+      '[.[] |
+        select(.ref | test("^refs/tags/release-publish/" + $prefix + "-[1-9][0-9]*$")) |
+        select(.object.type == "commit" and .object.sha == $sha) |
+        .ref | sub("^refs/tags/"; "")
+      ] | sort | last | select(type == "string" and length > 0)' \
+      <<<"${matching_refs}"
+  )"; then
+    echo "Trusted main publication requires a direct protected release-publish tag for ${workflow_sha}." >&2
+    return 1
+  fi
+  printf '%s\n' "${child_workflow_ref}"
 }
 
 verify_child_run_sha() {

@@ -28,6 +28,7 @@ const SEAL_JOB_NAME = "Seal prepared Docker images";
 const WORKFLOW_PATH = ".github/workflows/docker-release-prepare.yml";
 const PRODUCER_WORKFLOWS = new Set([
   ".github/workflows/full-release-validation.yml",
+  ".github/workflows/full-release-artifacts.yml",
   ".github/workflows/openclaw-release-publish.yml",
   ".github/workflows/docker-image-refresh.yml",
   WORKFLOW_PATH,

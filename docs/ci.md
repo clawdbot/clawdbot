@@ -53,8 +53,8 @@ dispatch.
 | `checks-windows`                   | Windows-specific process/path tests plus shared runtime import specifier regressions                                                                                                                                                                                                                     | Windows-relevant changes                               |
 | `macos-node`                       | Focused macOS TypeScript tests: launchd, Homebrew, runtime paths, packaging scripts, process-group wrapper                                                                                                                                                                                               | macOS-relevant changes                                 |
 | `macos-swift`                      | Swift lint and build for the macOS app, plus tests for the app and shared OpenClawKit package                                                                                                                                                                                                            | macOS-relevant changes                                 |
-| `ios-build`                        | Swift lint, Debug and Release builds, and focused simulator lifecycle tests                                                                                                                                                                                                                              | iOS/capture changes                                    |
-| `ios-screenshot-shard`             | Two device-family shards using the locked Ruby/Fastlane bundle: iPhone plus Watch in one job, and 13-inch iPad in the other; scenarios stay serial within each device                                                                                                                                    | Screenshot-risk changes and manual CI                  |
+| `ios-build`                        | Separate Release device build and Debug/simulator test phases; lifecycle and Watch operation tests remain in the test phase                                                                                                                                                                              | iOS/capture changes                                    |
+| `ios-screenshot-shard`             | Two device-family shards using the locked Ruby/Fastlane bundle: iPhone in one job, and 13-inch iPad plus Watch in the other; scenarios stay serial within each device                                                                                                                                    | Screenshot-risk changes and manual CI                  |
 | `ios-screenshot-evidence`          | Hosted reducer that verifies exact artifact/family topology, digests, every OpenClaw-managed capture-attempt outcome (including failed invocations without an xcresult), and run provenance before publishing the canonical release screenshot artifact                                                  | After both screenshot shards                           |
 | `android`                          | Phone and Wear unit tests, debug builds, Android lint, and Kotlin lint                                                                                                                                                                                                                                   | Android-relevant changes                               |
 | `openclaw/ci-gate`                 | Final aggregate: requires preflight and security; rejects selected skips and every downstream failure or cancellation                                                                                                                                                                                    | Every non-draft CI run                                 |
@@ -300,7 +300,7 @@ To use the standalone action from another workflow, pin `openclaw/openclaw/.gith
 
 Scope logic lives in `scripts/ci-changed-scope.mjs` and is covered by unit tests in `src/scripts/ci-changed-scope.test.ts`. Ordinary manual dispatch skips changed-scope detection and makes the preflight manifest act as if every scoped area changed. The exact-head `release_gate` exception evaluates the fetched pull request merge tree and retains its macOS, iOS-build, screenshot-risk, and generated-native-locale decisions while still verifying native sources.
 
-Release screenshot routing is deliberately conservative because an app change can break deterministic App Store capture without breaking compilation. Pull requests and exact-head release gates run the full iPhone, iPad, and Watch matrix when the diff touches `apps/ios/**`, linked OpenClawKit or Swabble code, Apple Swift configuration, or the scripts used by screenshot capture. The two device shards start alongside `ios-build`, because each owns its simulator build and consumes no output from that job. CI keeps scenarios serial within each device and captures Watch evidence in the iPhone shard. The final gate independently requires the build and both screenshot shards. A hosted reducer verifies the exact evidence union before publishing the sole canonical artifact consumed by `openclaw/ci-gate`. Ordinary manual CI and Full Release Validation always run that matrix. The screenshot decision is independent of macOS routing; a pure iOS app change does not select macOS jobs by itself.
+Release screenshot routing is deliberately conservative because an app change can break deterministic App Store capture without breaking compilation. Pull requests and exact-head release gates run the full iPhone, iPad, and Watch matrix when the diff touches `apps/ios/**`, linked OpenClawKit or Swabble code, Apple Swift configuration, or the scripts used by screenshot capture. The two device shards start alongside `ios-build (release)` and `ios-build (tests)`, because each owns its simulator build and consumes no output from those jobs. CI keeps scenarios serial within each device and captures Watch evidence in the iPad shard. The final gate independently requires both build phases and both screenshot shards. Release device compilation uses a separate hosted macOS runner; the test phase retains Debug compilation, Swift lint, lifecycle tests, and Watch operation tests. Frozen compatibility targets retain their existing Debug-only build contract. A hosted reducer verifies the exact evidence union before publishing the sole canonical artifact consumed by `openclaw/ci-gate`. Ordinary manual CI and full-scope release validation run that matrix; `npm-beta` and `npm-stable` defer native qualification. The screenshot decision is independent of macOS routing; a pure iOS app change does not select macOS jobs by itself.
 
 Separate iOS and macOS Periphery workflows enforce a zero-findings dead-code policy. Each runs only when a non-draft pull request touches its native scan scope, or when manually dispatched.
 
@@ -487,7 +487,7 @@ Barnacle treats bug-labeled issues as verification candidates rather than inacti
 
 ## Manual dispatches
 
-Ordinary manual CI dispatches run the same job graph as normal CI but force every non-Android scoped lane on: Linux Node shards, bundled-plugin shards, plugin and channel contract shards, Node 22 compatibility, `check-*`, `check-additional-*`, built-artifact smoke checks, docs checks, Python skills, Windows, macOS, iOS build, and Control UI/native app i18n. Their logical runner profile is always `github`, independent of the physical fallback selected by `runs-on`. Node 22 compatibility runs in Full Release Validation and manual dispatches only; push and pull request CI skip it. The exact-head `release_gate` fallback instead keeps the pull request's macOS, iOS, and generated-native-locale scope, including conservative release screenshot capture for screenshot-pipeline owners. Automatic source PRs and release gates verify native extraction inventory and Android/Apple localization safety without requiring translated or platform-generated output in the same PR. The serialized Native App Locale Refresh workflow rebuilds those artifacts in one isolated PR and enables exact-head auto-merge after required checks pass. Full native parity remains blocking for generated-artifact PRs, generated-scope release gates, ordinary manual CI, Full Release Validation, and release prep. Control UI locale parity remains advisory on automatic PR and `main` runs and blocking on manual/release CI. Standalone manual CI dispatches run Android only with `include_android=true` (the `release_gate` input also forces Android); the full release umbrella enables Android by passing `include_android=true` without setting `release_gate`. Plugin prerelease static checks, the full `agentic-plugins` sweep, the full extension batch sweep, and plugin prerelease Docker lanes are excluded from CI. The Docker prerelease suite runs only when `Full Release Validation` dispatches the separate `Plugin Prerelease` workflow with the release-validation gate enabled.
+Ordinary manual CI dispatches run the same job graph as normal CI but force every non-Android scoped lane on: Linux Node shards, bundled-plugin shards, plugin and channel contract shards, Node 22 compatibility, `check-*`, `check-additional-*`, built-artifact smoke checks, docs checks, Python skills, Windows, macOS, iOS build, and Control UI/native app i18n. Their logical runner profile is always `github`, independent of the physical fallback selected by `runs-on`. Node 22 compatibility runs in Full Release Validation and manual dispatches only; push and pull request CI skip it. The exact-head `release_gate` fallback instead keeps the pull request's macOS, iOS, and generated-native-locale scope, including conservative release screenshot capture for screenshot-pipeline owners. Automatic source PRs and release gates verify native extraction inventory and Android/Apple localization safety without requiring translated or platform-generated output in the same PR. The serialized Native App Locale Refresh workflow rebuilds those artifacts in one isolated PR and enables exact-head auto-merge after required checks pass. Full native parity remains blocking for generated-artifact PRs, generated-scope release gates, ordinary manual CI, full-scope release validation, and release prep. Control UI locale parity remains advisory on automatic PR and `main` runs and blocking on manual/release CI. Standalone manual CI dispatches run Android only with `include_android=true` (the `release_gate` input also forces Android); full-scope release validation enables Android by passing `include_android=true` without setting `release_gate`; npm qualification scopes defer Android. Plugin prerelease static checks, the full `agentic-plugins` sweep, the full extension batch sweep, and plugin prerelease Docker lanes are excluded from CI. The Docker prerelease suite runs only when `Full Release Validation` dispatches the separate `Plugin Prerelease` workflow with the release-validation gate enabled.
 
 PR baseline ratchets derive their comparison state from the checked-out synthetic merge tree and verify its head parent against the event head. The max-lines entry chains the environment-variable budget with the same fork-point ref before the assertion-safety check, so production source growth cannot first surface on `main`. Manual runs use a unique concurrency group so a release-candidate full suite is not cancelled by another push or PR run on the same ref. The optional `target_ref` input lets a trusted caller run that graph against a branch, tag, or full commit SHA while using the workflow file from the selected dispatch ref; ratchet baselines are compared with the target's merge base against the default-branch head resolved for that run. The `release_gate` input is an exact-SHA maintainer fallback for capacity-stalled PR CI: it requires `target_ref` to be a full commit SHA that matches the dispatched branch head and `pull_request_number` to identify the open PR whose merge tree is validated. Release-gate merge-tree lint uses the same five core stripes as hosted PR CI plus one extension stripe, so no single hosted runner owns the full type-aware lint workload.
 
@@ -523,7 +523,7 @@ Runner choice follows contributor trust, not whether a pull request came from a 
 | `blacksmith-32vcpu-ubuntu-2404` | `build-artifacts`, `check-lint`, `check-dependencies`, `check-test-types`, the five `check-test-types-core-*` stripes, `check-additional-extension-package-boundary`, `check-additional-runtime-topology-architecture`, and npm release preflight; these CPU-heavy lanes need the measured capacity described below                                                                                                                                                                                                                                                                                                                                                                                                                                        |
 | `blacksmith-8vcpu-windows-2025` | `checks-windows`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
 | `blacksmith-6vcpu-macos-15`     | `macos-node` on `openclaw/openclaw` when the backend is unset or `blacksmith`; hybrid and existing fallback routes use `macos-15`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
-| `blacksmith-12vcpu-macos-26`    | `macos-swift`, `ios-build`, and the two `ios-screenshot-shard` rows on `openclaw/openclaw`; untrusted authors fall back to `macos-26`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| `blacksmith-12vcpu-macos-26`    | `macos-swift`, `ios-build (tests)`, and the two `ios-screenshot-shard` rows on `openclaw/openclaw`; untrusted authors fall back to `macos-26`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
 
 The Node test planner marks only shards that run the real native grep fixture.
 Those Linux jobs install the `ripgrep` package when the selected runner image
@@ -793,11 +793,17 @@ exact Validation SHA + Tooling SHA tuple and rejects an `expected_sha` mismatch
 before child dispatch. Validation SHA maps to the Code SHA for product
 validation or the Release SHA for changelog-only validation; it is not a third
 release identity. Beta-publish maps to `release_profile=beta` with
-`run_release_soak=false`; its `all` run includes normal CI, Plugin Prerelease,
-package/install/cross-OS checks, performance, and QA parity, but excludes broad
-live/E2E and QA-live. Postpublish-confidence uses the exact published package
-with soak or explicit focused groups. Stable-publish maps to
-`release_profile=stable`.
+`run_release_soak=false`. A canonical beta's `all` run records `npm-beta-v1`:
+it retains Node and Control UI CI, Plugin Prerelease, package/install/cross-OS
+checks, and QA parity, while deferring native apps, performance, and Telegram
+confidence. Broad live/E2E and QA-live remain outside that bounded gate.
+Postpublish-confidence uses the exact published package with soak or explicit
+focused groups. Regular stable releases use `release_profile=stable` and
+`npm-stable-v1`: only native apps are deferred; stable soak, blocking performance,
+Node on all three OS families, Control UI, package acceptance, and QA remain.
+Both npm scopes require an exact release version and validated matching branch
+or tag context. Numeric regular corrections are supported; extended-stable,
+uncontextualized `main`, full profiles, and explicit `ci` groups retain full CI.
 
 See [Full release validation](/reference/full-release-validation) for the
 stage matrix, exact workflow job names, profile differences, artifacts, and
@@ -813,10 +819,17 @@ regular beta and stable publishes from trusted `main` after the release tag
 exists and after the OpenClaw npm preflight has succeeded (the preflight runs
 `pnpm plugins:sync:check` among its checks). The tag still selects the exact
 release commit, including a commit on `release/YYYY.M.PATCH`; Tideclaw alpha
-publishes keep using their matching alpha branch. It requires the saved
-`preflight_run_id` and a successful
-`full_release_validation_run_id` and its exact
-`full_release_validation_run_attempt`, dispatches `Plugin NPM Release` for all
+publishes keep using their matching alpha branch. For current validation runs,
+set `preflight_run_id` and `full_release_validation_run_id` to the same successful
+Full Release Validation run ID and pin `full_release_validation_run_attempt`.
+The publisher resolves the independent `Full Release Artifacts` producer from
+that validation manifest's sealed `publicationArtifacts.npmPreflight` descriptor.
+The producer ID alone does not carry Full Release Validation authorization.
+Historical recovery may still supply a separate successful `OpenClaw NPM Release`
+preflight run ID alongside the matching successful Full Release Validation run
+and attempt.
+
+The publisher dispatches `Plugin NPM Release` for all
 publishable plugin packages, dispatches `Plugin ClawHub Release` for the same
 release SHA, and only then dispatches `OpenClaw NPM Release`. Stable publish also
 requires an exact `windows_node_tag`; the workflow verifies the Windows source
@@ -824,17 +837,29 @@ release and compares its x64/ARM64 installers with the candidate-approved
 `windows_node_installer_digests` input before any publish child, then promotes
 and verifies those same pinned installer digests plus the exact companion asset
 and checksum contract before publishing the GitHub release draft.
+For npm-stable evidence, a separate native qualification job starts full CI for
+the exact release SHA with Android enabled. A successful result is revalidated
+after core publication before the separate Android job creates its existing
+approval receipt and dispatches the tag-owned APK workflow. This keeps frozen
+release tags usable without allowing narrower npm evidence to authorize an
+unqualified native build. Native failure remains visible and prevents Android
+approval; core npm and GitHub release finalization do not wait for it. The whole
+parent can remain active after core publication while native qualification
+finishes. Existing full evidence and macOS's independent validation retain their
+native qualification contracts.
 Focused plugin-only repairs use `plugin_publish_scope=selected` with a nonempty
 package list. Plugin-only `all-publishable` runs require the same immutable npm
 preflight and Full Release Validation evidence as a core publish.
 
 ```bash
+FRV_RUN_ID="<successful-full-release-validation-run-id>"
+FRV_RUN_ATTEMPT="<successful-full-release-validation-run-attempt>"
 gh workflow run openclaw-release-publish.yml \
   --ref main \
   -f tag=vYYYY.M.PATCH-beta.N \
-  -f preflight_run_id=<successful-openclaw-npm-preflight-run-id> \
-  -f full_release_validation_run_id=<successful-full-release-validation-run-id> \
-  -f full_release_validation_run_attempt=<successful-full-release-validation-run-attempt> \
+  -f preflight_run_id="$FRV_RUN_ID" \
+  -f full_release_validation_run_id="$FRV_RUN_ID" \
+  -f full_release_validation_run_attempt="$FRV_RUN_ATTEMPT" \
   -f npm_dist_tag=beta
 ```
 

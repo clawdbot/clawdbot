@@ -683,7 +683,11 @@ describe("FRV same-parent recovery", () => {
     const second = child("pluginPrerelease", "202");
     const green = child("releaseChecks", "303");
     const telegram = child("npmTelegram", "505");
-    const selectedPlan = { ...plan([first, second, green, telegram]), releaseProfile: "full" };
+    const selectedPlan = {
+      ...plan([first, second, green, telegram]),
+      candidate: { producer: { runId: "606" } },
+      releaseProfile: "full",
+    };
     const childRuns = new Map([
       ["101", { attempt: 1, conclusion: "failure" }],
       ["202", { attempt: 1, conclusion: "failure" }],
@@ -693,8 +697,22 @@ describe("FRV same-parent recovery", () => {
     const parent = { attempt: 1, conclusion: "failure" as string | null };
     const events: string[] = [];
     let parentReruns = 0;
+    const controller = controllerClient(selectedPlan.children, childRuns, parent);
     const client = {
-      ...controllerClient(selectedPlan.children, childRuns, parent),
+      ...controller,
+      getParentJobs: async () => [
+        ...(await controller.getParentJobs()),
+        ...[
+          "Prepare release npm artifacts",
+          "Prepare release Docker artifacts",
+          "Acquire full release candidate",
+        ].map((name) => ({
+          name,
+          run_attempt: 1,
+          status: "completed",
+          conclusion: "success",
+        })),
+      ],
       rerunFailed: async (runId: string) => {
         events.push(`child:${runId}`);
         childRuns.set(runId, { attempt: 2, conclusion: "success" });
