@@ -351,7 +351,7 @@ function createGatewayProcessState(
 }
 
 describe("openclaw test instance", () => {
-  it.each(["complete", "overflow"] as const)(
+  it.each(["complete", "overflow", "overflow-close"] as const)(
     "owns complete CLI JSON and diagnostic tails (%s)",
     async (mode) => {
       await withEnvAsync({ OPENAI_API_KEY: "ambient-provider-fixture" }, async () => {
@@ -361,7 +361,7 @@ describe("openclaw test instance", () => {
         const characters =
           mode === "complete" ? 160 * 1024 : resolveMaxOutputBytes(undefined, "stdout") / 2;
         const command = trackOperation(instance.cli([String(characters), mode]));
-        if (mode === "overflow") {
+        if (mode !== "complete") {
           const outcome = await command.then(
             (result) => ({
               code: result.code,
@@ -373,6 +373,7 @@ describe("openclaw test instance", () => {
             throw new Error(`Expected command output overflow failure: ${JSON.stringify(outcome)}`);
           }
           expect(outcome.message).toContain("command stdout exceeded capture limit");
+          expect(outcome.message).toContain('"last":"complete"');
           expect(Buffer.byteLength(outcome.message)).toBeLessThan(600 * 1024);
         } else {
           const result = await command;

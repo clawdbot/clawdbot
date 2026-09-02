@@ -738,6 +738,7 @@ async function runCommand(params: {
   const maxStdoutBytes = resolveMaxOutputBytes(undefined, "stdout");
   const outputLimit = new AbortController();
   const readStdout = () => finalizeCapturedOutput(stdout, "head", true).toString("utf8");
+  const stdoutDiagnostic = createBoundedStringLog();
   const stderr = createBoundedStringLog();
   let child!: ChildProcess;
   try {
@@ -758,6 +759,7 @@ async function runCommand(params: {
         child.stderr?.setEncoding("utf8");
         child.stdout?.on("data", (chunk) => {
           appendCapturedOutput(stdout, chunk, maxStdoutBytes, "head");
+          appendLogChunk(stdoutDiagnostic, chunk);
           if (stdout.truncatedBytes > 0) {
             outputLimit.abort();
           }
@@ -773,7 +775,7 @@ async function runCommand(params: {
         : error instanceof Error
           ? error.message
           : String(error);
-    throw new Error(`${message}\n${formatLogs([readStdout()], stderr)}`, { cause: error });
+    throw new Error(`${message}\n${formatLogs(stdoutDiagnostic, stderr)}`, { cause: error });
   }
   return {
     code: child.exitCode,
