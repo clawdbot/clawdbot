@@ -2759,8 +2759,14 @@ export async function startQaMockOpenAiServer(params?: {
         : {}),
     };
   };
-  const dispatchResponses = (request: Omit<QaMockProviderDispatchRequest, "route">) =>
-    dispatchProvider({ ...request, route: "responses" });
+  const dispatchResponses = async (request: Omit<QaMockProviderDispatchRequest, "route">) => {
+    const dispatched = await dispatchProvider({ ...request, route: "responses" });
+    const created = dispatched.events[0];
+    if (created?.type === "response.created") {
+      created.response.model = typeof request.body.model === "string" ? request.body.model : "";
+    }
+    return dispatched;
+  };
   const server = createServer((req, res) => {
     dispatchQaHttpRequest(res, async () => {
       const url = new URL(req.url ?? "/", "http://127.0.0.1");
