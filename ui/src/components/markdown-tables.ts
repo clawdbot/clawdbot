@@ -16,6 +16,7 @@ const tableCopyResetTimers = new WeakMap<HTMLElement, ReturnType<typeof setTimeo
 type TableOwnerState = {
   release: () => void;
   sync: () => void;
+  closeDialog?: () => void;
 };
 
 function tableInteractionsEnabled(env: unknown): boolean {
@@ -63,7 +64,7 @@ function syncTableOverflow(shell: HTMLElement): void {
   );
 }
 
-function enhanceTableShell(shell: HTMLElement, resizeObserver?: ResizeObserver | null): void {
+function enhanceTableShell(shell: HTMLElement): void {
   if (enhancedTableShells.has(shell)) {
     syncTableOverflow(shell);
     return;
@@ -78,11 +79,10 @@ function enhanceTableShell(shell: HTMLElement, resizeObserver?: ResizeObserver |
   render(toolIcons.maximize, expand);
   render(icons.copy, copy);
   viewport.addEventListener("scroll", () => syncTableOverflow(shell), { passive: true });
-  resizeObserver?.observe(viewport);
   syncTableOverflow(shell);
 }
 
-export function enhanceMarkdownTables(owner: HTMLElement): void {
+export function enhanceMarkdownTables(owner: HTMLElement): TableOwnerState {
   let state = tableOwnerStates.get(owner);
   if (!state) {
     const observedViewports = new Set<HTMLElement>();
@@ -106,9 +106,10 @@ export function enhanceMarkdownTables(owner: HTMLElement): void {
       }
       for (const shell of owner.querySelectorAll<HTMLElement>(tableShellSelector)) {
         const viewport = shell.querySelector<HTMLElement>(tableViewportSelector);
-        enhanceTableShell(shell, resizeObserver);
-        if (viewport) {
+        enhanceTableShell(shell);
+        if (viewport && !observedViewports.has(viewport)) {
           observedViewports.add(viewport);
+          resizeObserver?.observe(viewport);
         }
       }
     };
@@ -124,11 +125,14 @@ export function enhanceMarkdownTables(owner: HTMLElement): void {
     tableOwnerStates.set(owner, state);
   }
   state.sync();
+  return state;
 }
 
 export function releaseMarkdownTables(owner: HTMLElement): void {
-  tableOwnerStates.get(owner)?.release();
+  const state = tableOwnerStates.get(owner);
   tableOwnerStates.delete(owner);
+  state?.release();
+  state?.closeDialog?.();
 }
 
 async function showTableDialog(
@@ -136,49 +140,72 @@ async function showTableDialog(
   trigger: HTMLElement,
   owner: HTMLElement,
 ): Promise<void> {
-  await import("./modal-dialog.ts");
-  if (!owner.isConnected || !trigger.isConnected) {
+  const state = tableOwnerStates.get(owner) ?? enhanceMarkdownTables(owner);
+  if (state.closeDialog) {
     return;
   }
-  const dialog = document.createElement("openclaw-modal-dialog");
-  dialog.className = "markdown-table-modal";
-  dialog.label = t("common.expandedTable");
-  dialog.setReturnFocusTarget(trigger);
-  const close = () => dialog.remove();
-  const dismissLink = (event: Event) => {
-    if (event instanceof KeyboardEvent && event.key !== "Enter" && event.key !== " ") {
+  let dialog: HTMLElementTagNameMap["openclaw-modal-dialog"] | undefined;
+  const close = () => {
+    if (state.closeDialog === close) {
+      delete state.closeDialog;
+    }
+    dialog?.remove();
+  };
+  // Reserve through teardown before loading; reconnect cannot revive this request.
+  state.closeDialog = close;
+  try {
+    await import("./modal-dialog.ts");
+    if (state.closeDialog !== close || !owner.isConnected || !trigger.isConnected) {
       return;
     }
-    if (anchorFromNavigationEvent(event)) {
-      // Listener microtasks can run before ancestor handlers. Wait for the
-      // transcript's keyboard activation decision before dismissing the overlay.
-      setTimeout(() => {
-        if (event.type === "click" || event.defaultPrevented) {
-          close();
-        }
-      }, 0);
-    }
-  };
-  dialog.addEventListener("modal-cancel", close);
-  render(
-    html`
-      <div class="markdown-table-dialog chat-text" @click=${dismissLink} @keydown=${dismissLink}>
-        <button
-          type="button"
-          class="markdown-table-dialog__close"
-          aria-label=${t("common.closeTable")}
-          autofocus
-          @click=${close}
+    dialog = document.createElement("openclaw-modal-dialog");
+    dialog.className = "markdown-table-modal";
+    dialog.label = t("common.expandedTable");
+    dialog.setReturnFocusTarget(trigger);
+    const dismissLink = (event: Event) => {
+      if (event instanceof KeyboardEvent && event.key !== "Enter" && event.key !== " ") {
+        return;
+      }
+      if (anchorFromNavigationEvent(event)) {
+        // Listener microtasks can run before ancestor handlers. Wait for the
+        // transcript's keyboard activation decision before dismissing the overlay.
+        setTimeout(() => {
+          if (event.type === "click" || event.defaultPrevented) {
+            close();
+          }
+        }, 0);
+      }
+    };
+    dialog.addEventListener("modal-cancel", close);
+    render(
+      html`
+        <div
+          class="markdown-table-dialog chat-text"
+          @click=${dismissLink}
+          @auxclick=${dismissLink}
+          @keydown=${dismissLink}
         >
-          ${icons.x}
-        </button>
-        ${table.cloneNode(true)}
-      </div>
-    `,
-    dialog,
-  );
-  // Keep delegated file/session actions and modal teardown with their transcript.
-  owner.append(dialog);
+          <button
+            type="button"
+            class="markdown-table-dialog__close"
+            aria-label=${t("common.closeTable")}
+            autofocus
+            @click=${close}
+          >
+            ${icons.x}
+          </button>
+          ${table.cloneNode(true)}
+        </div>
+      `,
+      dialog,
+    );
+    // Keep delegated file/session actions and modal teardown with their transcript.
+    owner.append(dialog);
+  } finally {
+    if (!dialog) {
+      close();
+    }
+  }
 }
 
 export function handleMarkdownTableInteraction(event: Event): void {

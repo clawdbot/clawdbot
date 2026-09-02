@@ -27,7 +27,7 @@ beforeEach(() => {
 
 const wideTable = `| Service | Owner | Region | Status | Version | Deploy | Incidents | Notes |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| Gateway | Platform | eu-west-1 | Healthy | 2026.8.18 | Complete | 0 | Long operational note that keeps this column wide |`;
+| Gateway | Platform | eu-west-1 | Healthy | 2026.8.18 | Complete | 0 | [Long operational note that keeps this column wide](https://example.com/table-reference) |`;
 
 let browser: Browser;
 let server: ControlUiE2eServer;
@@ -47,7 +47,7 @@ describeControlUiE2e("Control UI Markdown table interactions", () => {
   });
 
   it.each(["chat", "assistant panel"])(
-    "contains overflow, copies TSV, and restores focus after fullscreen in %s",
+    "contains overflow and preserves copy, fullscreen focus, and web links in %s",
     async (surface) => {
       const context = await browser.newContext({
         colorScheme: "dark",
@@ -59,6 +59,9 @@ describeControlUiE2e("Control UI Markdown table interactions", () => {
       await context.grantPermissions(["clipboard-read", "clipboard-write"], {
         origin: new URL(server.baseUrl).origin,
       });
+      await context.route("https://example.com/table-reference", (route) =>
+        route.fulfill({ contentType: "text/html", body: "<h1>Table reference</h1>" }),
+      );
       const page = await context.newPage();
       await installMockGateway(page, {
         ...(surface === "assistant panel"
@@ -143,9 +146,10 @@ describeControlUiE2e("Control UI Markdown table interactions", () => {
         const inlineTable = shell.locator("table");
         const inlineHeader = inlineTable.locator("th").first();
         const inlineCell = inlineTable.locator("td").first();
-        await expand.click();
+        await expand.dblclick();
         const dialog = page.locator(".markdown-table-dialog");
         await dialog.waitFor({ state: "visible" });
+        expect(await page.locator(".markdown-table-modal").count()).toBe(1);
         const fullscreenTable = dialog.locator("table");
         const fullscreenHeader = fullscreenTable.locator("th").first();
         const fullscreenCell = fullscreenTable.locator("td").first();
@@ -206,6 +210,20 @@ describeControlUiE2e("Control UI Markdown table interactions", () => {
           .poll(() => expand.evaluate((element) => element === document.activeElement))
           .toBe(true);
 
+        const sourceUrl = page.url();
+        await expand.click();
+        await dialog.waitFor({ state: "visible" });
+        const popupPromise = context.waitForEvent("page");
+        await dialog
+          .getByRole("link", { name: "Long operational note that keeps this column wide" })
+          .press("Enter");
+        const popup = await popupPromise;
+        await popup.getByRole("heading", { name: "Table reference" }).waitFor();
+        expect(popup.url()).toBe("https://example.com/table-reference");
+        expect(page.url()).toBe(sourceUrl);
+        await popup.close();
+        await dialog.waitFor({ state: "detached" });
+
         await expand.click();
         await dialog.waitFor({ state: "visible" });
         await page.keyboard.press("Escape");
@@ -228,196 +246,299 @@ describeControlUiE2e("Control UI Markdown table interactions", () => {
     },
   );
 
-  it.each([
-    { link: "file", activation: "click" },
-    { link: "session", activation: "Space" },
-  ])("opens a $link from an expanded table with $activation", async ({ link, activation }) => {
-    const sourceKey = "agent:main:dashboard:table-source";
-    const targetKey = "agent:main:dashboard:table-target";
+  it("restores overflow affordances when a retained table viewport narrows", async () => {
     const context = await browser.newContext({
       colorScheme: "dark",
       locale: "en-US",
       serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-      ...(captureProof
-        ? { recordVideo: { dir: artifactDir, size: { height: 900, width: 1280 } } }
-        : {}),
+      viewport: { width: 1280, height: 900 },
+      ...(captureProof ? { recordVideo: { dir: artifactDir } } : {}),
     });
     const page = await context.newPage();
-    page.setDefaultTimeout(15_000);
-    const gateway = await installMockGateway(page, {
-      sessionKey: sourceKey,
-      featureMethods: ["chat.metadata", "chat.startup", "progressCard.get"],
-      sessions: [
-        { key: sourceKey, label: "Table links" },
-        { key: targetKey, label: "Linked task" },
+    await installMockGateway(page, {
+      historyMessages: [
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "text",
+              text: `| Service | Status | Reference |
+| --- | --- | --- |
+| Gateway | Healthy | ABCDEFGHIJKLMNOPQRSTUVWXYZ01234567890123456789 |`,
+            },
+          ],
+          timestamp: 1,
+          __openclaw: { id: "retained-table", seq: 1 },
+        },
       ],
-      sessionTranscripts: {
-        [sourceKey]: {
-          messages: [
-            {
-              role: "assistant",
-              content: [
-                {
-                  type: "text",
-                  text: `| File | Task |
-| --- | --- |
-| \`src/ready.ts:2\` | ${targetKey} |`,
-                },
-              ],
-              timestamp: 1,
-              __openclaw: { id: "table-links", seq: 1 },
-            },
-          ],
-        },
-        [targetKey]: {
-          messages: [
-            {
-              role: "assistant",
-              content: [{ type: "text", text: "Linked task reached." }],
-              timestamp: 2,
-              __openclaw: { id: "linked-task", seq: 1 },
-            },
-          ],
-        },
-      },
-      methodResponses: {
-        "progressCard.get": { card: null },
-        "sessions.files.get": {
-          root: "/workspace",
-          sessionKey: sourceKey,
-          file: {
-            content: "// Workspace file\nexport const ready = true;\n",
-            kind: "read",
-            missing: false,
-            name: "ready.ts",
-            path: "src/ready.ts",
-            workspacePath: "src/ready.ts",
-          },
-        },
-      },
     });
-    const selector =
-      link === "file" ? 'a[data-file-path="src/ready.ts"]' : `a[data-session-key="${targetKey}"]`;
-    const activate = async (scope: ReturnType<typeof page.locator>) => {
-      const anchor = scope.locator(selector);
-      if (activation === "click") {
-        await anchor.click();
-      } else {
-        await anchor.press(activation);
-      }
-    };
-    const expectDestination = async (fileRequestCount: number) => {
-      if (link === "file") {
-        await expect
-          .poll(async () => (await gateway.getRequests("sessions.files.get")).length)
-          .toBe(fileRequestCount);
-        await expect
-          .poll(() => page.locator(".sidebar-file-view").textContent())
-          .toContain("export const ready = true;");
-      } else {
-        await expect.poll(() => page.url()).toBe(controlUiSessionUrl(server.baseUrl, targetKey));
-        await page.locator('[data-entry-id="linked-task"]').waitFor({ state: "visible" });
-      }
-    };
     try {
-      await page.goto(controlUiSessionUrl(server.baseUrl, sourceKey));
-      const shell = page.locator('[data-entry-id="table-links"] .markdown-table');
-      await activate(shell);
-      await expectDestination(1);
-      if (captureProof) {
-        await page.screenshot({ path: path.join(artifactDir, "inline-control.png") });
-      }
-      await page.goto(controlUiSessionUrl(server.baseUrl, sourceKey));
-      await shell.getByRole("button", { name: "Expand table" }).click();
-      const dialog = page.locator(".markdown-table-dialog");
-      await dialog.waitFor({ state: "visible" });
-      if (link === "session") {
-        const sessionLink = dialog.locator(selector);
-        const close = dialog.getByRole("button", { name: "Close expanded table" });
-        await sessionLink.focus();
-        await page.keyboard.press("Tab");
-        await expect
-          .poll(() => close.evaluate((element) => element === document.activeElement))
-          .toBe(true);
-        await page.keyboard.press("Shift+Tab");
-        await expect
-          .poll(() => sessionLink.evaluate((element) => element === document.activeElement))
-          .toBe(true);
-        if (captureProof) {
-          await page.screenshot({ path: path.join(artifactDir, "tab-cycle.png") });
-        }
-        await gateway.setMethodResponse("progressCard.get", {
-          card: {
-            markdown: "[Open build log](https://example.com/build)",
-            revision: 1,
-            sessionKey: targetKey,
-            updatedAt: 1,
-          },
+      await page.goto(`${server.baseUrl}chat`);
+      const shell = page.locator('[data-entry-id="retained-table"] .markdown-table');
+      const viewport = shell.locator(".markdown-table__viewport");
+      await shell.waitFor({ state: "visible" });
+      expect(
+        await viewport.evaluate((element) => element.scrollWidth <= element.clientWidth + 1),
+      ).toBe(true);
+      expect(await shell.getAttribute("class")).not.toContain("can-scroll-right");
+
+      const retained = await page
+        .locator("openclaw-chat-pane")
+        .first()
+        .evaluate((pane) => {
+          const table = pane.querySelector(".markdown-table");
+          const parent = pane.parentNode!;
+          const next = pane.nextSibling;
+          pane.remove();
+          parent.insertBefore(pane, next);
+          return pane.querySelector(".markdown-table") === table;
         });
-        await gateway.emitGatewayEvent("progressCard.changed", {
-          revision: 1,
-          sessionKey: targetKey,
-        });
-        const progressLink = page
-          .locator(".session-progress-hovercard")
-          .getByRole("link", { name: "Open build log" });
-        await progressLink.waitFor({ state: "visible" });
-        if (captureProof) {
-          await page.screenshot({ path: path.join(artifactDir, "progress-before-tab.png") });
-        }
-        await page.keyboard.press("Tab");
-        await expect
-          .poll(() => page.locator(".session-progress-hovercard a:focus").count())
-          .toBe(1);
-        expect(await dialog.isVisible()).toBe(true);
-        if (captureProof) {
-          await page.screenshot({ path: path.join(artifactDir, "progress-after-tab.png") });
-        }
-        await page.keyboard.press("Shift+Tab");
-        await expect
-          .poll(() => sessionLink.evaluate((element) => element === document.activeElement))
-          .toBe(true);
-        const popupPromise = context.waitForEvent("page");
-        await sessionLink.click({ modifiers: ["ControlOrMeta"] });
-        const popup = await popupPromise;
-        await expect.poll(() => popup.url()).toBe(controlUiSessionUrl(server.baseUrl, targetKey));
-        await popup.close();
-        expect(page.url()).toBe(controlUiSessionUrl(server.baseUrl, sourceKey));
-        await dialog.waitFor({ state: "detached" });
-        await shell.getByRole("button", { name: "Expand table" }).click();
-        await dialog.waitFor({ state: "visible" });
-      }
+      expect(retained).toBe(true);
+      await page.evaluate(
+        () =>
+          new Promise<void>((resolve) => {
+            requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+          }),
+      );
+      // Resize only the viewport: a whole-app responsive render also resynchronizes tables.
+      await viewport.evaluate((element) => {
+        element.style.maxWidth = "360px";
+      });
+      expect(
+        await viewport.evaluate((element) => element.scrollWidth - element.clientWidth),
+      ).toBeGreaterThan(1);
+      await expect.poll(() => shell.getAttribute("class")).toContain("can-scroll-right");
       if (captureProof) {
-        await page.screenshot({ path: path.join(artifactDir, "expanded-before-action.png") });
+        await page.screenshot({ path: path.join(artifactDir, "retained-viewport-overflow.png") });
       }
-      const before = (await gateway.getRequests("sessions.files.get")).length;
-      await activate(dialog);
-      await expectDestination(before + 1);
-      await dialog.waitFor({ state: "detached" });
     } finally {
-      if (captureProof) {
-        await page.screenshot({ path: path.join(artifactDir, "expanded-after-action.png") });
-        fs.writeFileSync(
-          path.join(artifactDir, "actions.json"),
-          JSON.stringify(
-            {
-              link,
-              activation,
-              url: page.url(),
-              requests: (await gateway.getRequests()).filter((request) =>
-                ["sessions.files.get", "chat.startup", "chat.history"].includes(request.method),
-              ),
-              expandedTableVisible: await page
-                .getByRole("dialog", { name: "Expanded table" })
-                .isVisible(),
-            },
-            null,
-            2,
-          ) + "\n",
-        );
-      }
       await context.close();
     }
   });
+
+  it.each([
+    { surface: "chat", link: "file", activation: "click" },
+    { surface: "chat", link: "session", activation: "Space" },
+    { surface: "assistant panel", link: "session", activation: "click" },
+    { surface: "assistant panel", link: "session", activation: "Enter" },
+  ])(
+    "opens a $link from an expanded table in $surface with $activation",
+    async ({ surface, link, activation }) => {
+      const sourceKey = "agent:main:dashboard:table-source";
+      const targetKey = "agent:main:dashboard:table-target";
+      const table = `| File | Task |
+| --- | --- |
+| \`src/ready.ts:2\` | ${targetKey} |`;
+      const context = await browser.newContext({
+        colorScheme: "dark",
+        locale: "en-US",
+        serviceWorkers: "block",
+        viewport: { height: 900, width: 1280 },
+        ...(captureProof
+          ? { recordVideo: { dir: artifactDir, size: { height: 900, width: 1280 } } }
+          : {}),
+      });
+      const page = await context.newPage();
+      page.setDefaultTimeout(15_000);
+      const gateway = await installMockGateway(page, {
+        sessionKey: sourceKey,
+        featureMethods: [
+          "chat.metadata",
+          "chat.startup",
+          "chat.history",
+          "chat.send",
+          "progressCard.get",
+          "openclaw.chat",
+          "openclaw.chat.history",
+        ],
+        sessions: [
+          { key: sourceKey, label: "Table links" },
+          { key: targetKey, label: "Linked task" },
+        ],
+        sessionTranscripts: {
+          [sourceKey]: {
+            messages: [
+              {
+                role: "assistant",
+                content: [
+                  {
+                    type: "text",
+                    text: table,
+                  },
+                ],
+                timestamp: 1,
+                __openclaw: { id: "table-links", seq: 1 },
+              },
+            ],
+          },
+          [targetKey]: {
+            messages: [
+              {
+                role: "assistant",
+                content: [{ type: "text", text: "Linked task reached." }],
+                timestamp: 2,
+                __openclaw: { id: "linked-task", seq: 1 },
+              },
+            ],
+          },
+        },
+        methodResponses: {
+          "openclaw.chat": { sessionId: "table-links", reply: "Ready to help.", action: "none" },
+          "openclaw.chat.history": {
+            turns: [{ role: "assistant", text: table, at: 1_700_000_101_000 }],
+          },
+          "progressCard.get": { card: null },
+          "sessions.files.get": {
+            root: "/workspace",
+            sessionKey: sourceKey,
+            file: {
+              content: "// Workspace file\nexport const ready = true;\n",
+              kind: "read",
+              missing: false,
+              name: "ready.ts",
+              path: "src/ready.ts",
+              workspacePath: "src/ready.ts",
+            },
+          },
+        },
+      });
+      const selector =
+        link === "file" ? 'a[data-file-path="src/ready.ts"]' : `a[data-session-key="${targetKey}"]`;
+      const activate = async (scope: ReturnType<typeof page.locator>) => {
+        const anchor = scope.locator(selector);
+        if (activation === "click") {
+          await anchor.click();
+        } else {
+          await anchor.press(activation);
+        }
+      };
+      const expectDestination = async (fileRequestCount: number) => {
+        if (link === "file") {
+          await expect
+            .poll(async () => (await gateway.getRequests("sessions.files.get")).length)
+            .toBe(fileRequestCount);
+          await expect
+            .poll(() => page.locator(".sidebar-file-view").textContent())
+            .toContain("export const ready = true;");
+        } else {
+          await expect.poll(() => page.url()).toBe(controlUiSessionUrl(server.baseUrl, targetKey));
+          await page.locator('[data-entry-id="linked-task"]').waitFor({ state: "visible" });
+        }
+      };
+      const openSource = async () => {
+        await page.goto(controlUiSessionUrl(server.baseUrl, sourceKey));
+        if (surface === "assistant panel") {
+          await page.locator(".sidebar-footer-bar__home").click();
+          await page
+            .locator("openclaw-assistant-panel")
+            .getByRole("button", { name: "Ask OpenClaw", exact: true })
+            .click();
+        }
+      };
+      try {
+        await openSource();
+        const shell = page.locator(
+          surface === "chat"
+            ? '[data-entry-id="table-links"] .markdown-table'
+            : ".custodian__messages .markdown-table",
+        );
+        await activate(shell);
+        await expectDestination(1);
+        if (captureProof) {
+          await page.screenshot({ path: path.join(artifactDir, "inline-control.png") });
+        }
+        await openSource();
+        await shell.getByRole("button", { name: "Expand table" }).click();
+        const dialog = page.locator(".markdown-table-dialog");
+        await dialog.waitFor({ state: "visible" });
+        if (link === "session" && surface === "chat") {
+          const sessionLink = dialog.locator(selector);
+          const close = dialog.getByRole("button", { name: "Close expanded table" });
+          await sessionLink.focus();
+          await page.keyboard.press("Tab");
+          await expect
+            .poll(() => close.evaluate((element) => element === document.activeElement))
+            .toBe(true);
+          await page.keyboard.press("Shift+Tab");
+          await expect
+            .poll(() => sessionLink.evaluate((element) => element === document.activeElement))
+            .toBe(true);
+          if (captureProof) {
+            await page.screenshot({ path: path.join(artifactDir, "tab-cycle.png") });
+          }
+          await gateway.setMethodResponse("progressCard.get", {
+            card: {
+              markdown: "[Open build log](https://example.com/build)",
+              revision: 1,
+              sessionKey: targetKey,
+              updatedAt: 1,
+            },
+          });
+          await gateway.emitGatewayEvent("progressCard.changed", {
+            revision: 1,
+            sessionKey: targetKey,
+          });
+          const progressLink = page
+            .locator(".session-progress-hovercard")
+            .getByRole("link", { name: "Open build log" });
+          await progressLink.waitFor({ state: "visible" });
+          if (captureProof) {
+            await page.screenshot({ path: path.join(artifactDir, "progress-before-tab.png") });
+          }
+          await page.keyboard.press("Tab");
+          await expect
+            .poll(() => page.locator(".session-progress-hovercard a:focus").count())
+            .toBe(1);
+          expect(await dialog.isVisible()).toBe(true);
+          if (captureProof) {
+            await page.screenshot({ path: path.join(artifactDir, "progress-after-tab.png") });
+          }
+          await page.keyboard.press("Shift+Tab");
+          await expect
+            .poll(() => sessionLink.evaluate((element) => element === document.activeElement))
+            .toBe(true);
+          const popupPromise = context.waitForEvent("page");
+          await sessionLink.click({ modifiers: ["ControlOrMeta"] });
+          const popup = await popupPromise;
+          await expect.poll(() => popup.url()).toBe(controlUiSessionUrl(server.baseUrl, targetKey));
+          await popup.close();
+          expect(page.url()).toBe(controlUiSessionUrl(server.baseUrl, sourceKey));
+          await dialog.waitFor({ state: "detached" });
+          await shell.getByRole("button", { name: "Expand table" }).click();
+          await dialog.waitFor({ state: "visible" });
+        }
+        if (captureProof) {
+          await page.screenshot({ path: path.join(artifactDir, "expanded-before-action.png") });
+        }
+        const before = (await gateway.getRequests("sessions.files.get")).length;
+        await activate(dialog);
+        await expectDestination(before + 1);
+        await dialog.waitFor({ state: "detached" });
+      } finally {
+        if (captureProof) {
+          await page.screenshot({ path: path.join(artifactDir, "expanded-after-action.png") });
+          fs.writeFileSync(
+            path.join(artifactDir, "actions.json"),
+            JSON.stringify(
+              {
+                surface,
+                link,
+                activation,
+                url: page.url(),
+                requests: (await gateway.getRequests()).filter((request) =>
+                  ["sessions.files.get", "chat.startup", "chat.history"].includes(request.method),
+                ),
+                expandedTableVisible: await page
+                  .getByRole("dialog", { name: "Expanded table" })
+                  .isVisible(),
+              },
+              null,
+              2,
+            ) + "\n",
+          );
+        }
+        await context.close();
+      }
+    },
+  );
 });

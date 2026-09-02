@@ -760,9 +760,13 @@ Chat error banners, including cloud runner failures, show short messages in full
 ### Markdown tables
 
 Markdown tables scroll horizontally within the conversation. **Copy table** copies
-tab-separated cells, and **Expand table** opens a larger view. Workspace file and
-session links work in either view, including Enter and Space keyboard activation.
-Following a link closes the expanded view so you can use its destination.
+tab-separated cells, and **Expand table** opens a larger view. In Chat, workspace
+file and session links work in either view, including Enter and Space keyboard
+activation. Following a link closes the expanded view so you can use its destination.
+
+The **Ask OpenClaw** panel supports table scrolling, copying, expansion, and web
+links. Its session links open with a click or Enter. Space does not activate
+those links, and workspace-file references do not open a preview.
 
 ### Mermaid diagrams
 

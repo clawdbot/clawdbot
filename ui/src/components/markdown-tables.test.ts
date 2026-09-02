@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { startNativeLinkRouting } from "../app/native-link-routing.ts";
 import { installDialogPolyfill, waitForRenderedModalDialog } from "../test-helpers/modal-dialog.ts";
 import {
   enhanceMarkdownTables,
@@ -57,14 +58,14 @@ class TestResizeObserver {
   }
 }
 
-function interactiveOwner(): {
+function interactiveOwner(content = markdown): {
   owner: HTMLElement;
   shell: HTMLElement;
   viewport: HTMLElement;
 } {
   const owner = document.createElement("div");
   owner.className = "chat-thread";
-  owner.innerHTML = `<div class="chat-text">${toSanitizedMarkdownHtml(markdown, {
+  owner.innerHTML = `<div class="chat-text">${toSanitizedMarkdownHtml(content, {
     progressBars: true,
     sessionLinks: true,
     tableInteractions: "enabled",
@@ -170,8 +171,10 @@ describe("Markdown table interactions", () => {
     const expand = owner.querySelector<HTMLButtonElement>(".markdown-table__expand")!;
     expand.focus();
     expand.click();
+    expand.click();
 
     const { dialog, modal } = await waitForRenderedModalDialog(owner);
+    expect(owner.querySelectorAll(".markdown-table-modal")).toHaveLength(1);
     expect(dialog.hasAttribute("open")).toBe(true);
     expect(modal.querySelector("table")?.textContent).toContain("Alpha");
     dialog.dispatchEvent(new Event("pointerdown", { bubbles: true }));
@@ -183,6 +186,55 @@ describe("Markdown table interactions", () => {
     reopened.modal.querySelector<HTMLButtonElement>(".markdown-table-dialog__close")!.click();
     expect(document.querySelector(".markdown-table-dialog")).toBeNull();
     expect(document.activeElement).toBe(expand);
+  });
+
+  it("cancels a pending expansion when its owner disconnects and reconnects", async () => {
+    const { owner } = interactiveOwner(
+      `${markdown}\n\n| Updated | Value |\n| --- | --- |\n| Beta | Two |`,
+    );
+    const [first, second] = owner.querySelectorAll<HTMLButtonElement>(".markdown-table__expand");
+    first!.click();
+
+    releaseMarkdownTables(owner);
+    owner.remove();
+    document.body.append(owner);
+    enhanceMarkdownTables(owner);
+    second!.focus();
+    second!.click();
+
+    const { modal } = await waitForRenderedModalDialog(owner);
+    expect(owner.querySelectorAll(".markdown-table-modal")).toHaveLength(1);
+    expect(modal.querySelector("table")?.textContent).toContain("Beta");
+    modal.querySelector<HTMLButtonElement>(".markdown-table-dialog__close")!.click();
+    expect(document.activeElement).toBe(second);
+  });
+
+  it("dismisses routed middle-clicks while preserving right-click menus", async () => {
+    const routing = startNativeLinkRouting({ shouldOpenInControlUiBrowser: () => true });
+    const { owner } = interactiveOwner(
+      "| Reference |\n| --- |\n| [Open reference](https://example.com/table) |",
+    );
+    try {
+      owner.querySelector<HTMLButtonElement>(".markdown-table__expand")!.click();
+      const { modal } = await waitForRenderedModalDialog(owner);
+      const link = modal.querySelector("a")!;
+      vi.useFakeTimers();
+      for (const type of ["contextmenu", "auxclick"]) {
+        const event = new MouseEvent(type, { bubbles: true, cancelable: true, button: 2 });
+        link.dispatchEvent(event);
+        await vi.advanceTimersByTimeAsync(0);
+        expect(event.defaultPrevented).toBe(false);
+        expect(modal.isConnected).toBe(true);
+      }
+      const middle = new MouseEvent("auxclick", { bubbles: true, cancelable: true, button: 1 });
+      link.dispatchEvent(middle);
+      expect(middle.defaultPrevented).toBe(true);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(modal.isConnected).toBe(false);
+    } finally {
+      routing.dispose();
+      releaseMarkdownTables(owner);
+    }
   });
 
   it("disconnects observers and removes the dialog with its transcript owner", async () => {
