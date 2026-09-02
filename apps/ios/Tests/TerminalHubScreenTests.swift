@@ -96,7 +96,7 @@ struct TerminalHubScreenTests {
         #expect(script?.contains("\"token\":\"stored-token\"") == true)
     }
 
-    @Test func `auth user script seeds the matching device identity and scoped operator token`() throws {
+    @Test func `auth user script retains configured credentials beside a stored authorization`() throws {
         let gatewayID = "manual|terminal-\(UUID().uuidString)|443"
         let identity = DeviceIdentityStore.loadOrCreate()
         defer {
@@ -113,7 +113,8 @@ struct TerminalHubScreenTests {
             gatewayID: gatewayID).token == "scoped-terminal-token")
         let config = try Self.makeConfig(
             url: #require(URL(string: "wss://gateway.example.com:8443")),
-            token: "stale-configured-token",
+            token: "configured-token",
+            password: "configured-password",
             deviceAuthGatewayID: gatewayID)
 
         let script = TerminalHubScreen.terminalAuthUserScript(config: config)
@@ -124,7 +125,36 @@ struct TerminalHubScreenTests {
         #expect(script?.contains("\"token\":\"scoped-terminal-token\"") == true)
         #expect(script?.contains("operator.read") == true)
         #expect(script?.contains("operator.write") == true)
-        #expect(script?.contains("stale-configured-token") == false)
+        #expect(script?.contains("configured-token") == true)
+        #expect(script?.contains("configured-password") == true)
+    }
+
+    @Test func `auth user script retains configured credentials beside an empty-scope grant`() throws {
+        let gatewayID = "manual|terminal-empty-scope-\(UUID().uuidString)|443"
+        let identity = DeviceIdentityStore.loadOrCreate()
+        defer {
+            DeviceAuthStore.clearToken(
+                deviceId: identity.deviceId,
+                role: "operator",
+                gatewayID: gatewayID)
+        }
+        #expect(DeviceAuthStore.storeToken(
+            deviceId: identity.deviceId,
+            role: "operator",
+            token: "empty-scope-token",
+            scopes: [],
+            gatewayID: gatewayID).token == "empty-scope-token")
+        let config = try Self.makeConfig(
+            url: #require(URL(string: "wss://gateway.example.com:8443")),
+            token: "configured-token",
+            password: "configured-password",
+            deviceAuthGatewayID: gatewayID)
+
+        let script = TerminalHubScreen.terminalAuthUserScript(config: config)
+
+        #expect(script?.contains("empty-scope-token") == true)
+        #expect(script?.contains("configured-token") == true)
+        #expect(script?.contains("configured-password") == true)
     }
 
     @Test func `auth user script honors stored device auth suppression`() throws {

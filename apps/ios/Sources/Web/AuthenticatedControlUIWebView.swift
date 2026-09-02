@@ -75,12 +75,12 @@ enum AuthenticatedControlUI {
                 "scopes": storedAuthorization.entry.scopes,
             ]
         }
-        if storedAuthorization == nil, !token.isEmpty {
+        if !token.isEmpty {
             payload["token"] = token
         } else if storedAuthorization == nil, !storedToken.isEmpty {
             payload["token"] = storedToken
         }
-        if storedAuthorization == nil, !password.isEmpty {
+        if !password.isEmpty {
             payload["password"] = password
         }
         guard payload["token"] != nil || payload["password"] != nil || storedAuthorization != nil else {

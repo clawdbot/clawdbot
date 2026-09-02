@@ -131,12 +131,13 @@ struct RootTabs: View {
 
     private enum PresentedSheet: Identifiable {
         case quickSetup
-        case sessionDashboard(sessionKey: String)
+        case sessionDashboard(sessionKey: String, agentId: String?)
 
         var id: String {
             switch self {
             case .quickSetup: "quick-setup"
-            case let .sessionDashboard(sessionKey): "session-dashboard:\(sessionKey)"
+            case let .sessionDashboard(sessionKey, agentId):
+                "session-dashboard:\(agentId ?? ""):\(sessionKey)"
             }
         }
     }
@@ -754,9 +755,9 @@ struct RootTabs: View {
                     .environment(self.appModel)
                     .environment(self.gatewayController)
                     .openClawSheetChrome()
-                case let .sessionDashboard(sessionKey):
+                case let .sessionDashboard(sessionKey, agentId):
                     NavigationStack {
-                        SessionDashboardScreen(sessionKey: sessionKey)
+                        SessionDashboardScreen(sessionKey: sessionKey, agentId: agentId)
                     }
                 }
             }
@@ -800,7 +801,10 @@ extension RootTabs {
             self.appModel.openChat(sessionKey: session.key)
             self.selectSidebarDestination(.chat)
         case .dashboard:
-            self.presentedSheet = .sessionDashboard(sessionKey: session.key)
+            let target = Self.sidebarDashboardTarget(for: session)
+            self.presentedSheet = .sessionDashboard(
+                sessionKey: target.sessionKey,
+                agentId: target.agentId)
             guard self.shouldCollapseSidebarAfterSelection else { return }
             withAnimation(self.sidebarAnimation) {
                 self.setSidebarVisible(false)

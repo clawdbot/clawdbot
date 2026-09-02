@@ -112,8 +112,17 @@ extension RootTabs {
         case dashboard
     }
 
+    struct SidebarDashboardTarget: Equatable {
+        let sessionKey: String
+        let agentId: String?
+    }
+
     static func sidebarPresentation(for session: OpenClawChatSessionEntry) -> SidebarSessionPresentation {
         session.boardFace == "dashboard" ? .dashboard : .chat
+    }
+
+    static func sidebarDashboardTarget(for session: OpenClawChatSessionEntry) -> SidebarDashboardTarget {
+        SidebarDashboardTarget(sessionKey: session.key, agentId: session.agentId)
     }
 
     static func sidebarLayoutContainerSize(contentSize: CGSize, windowSize: CGSize?) -> CGSize {
