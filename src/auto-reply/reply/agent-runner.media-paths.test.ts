@@ -187,6 +187,7 @@ vi.mock("./agent-runner-memory.js", () => ({
   }),
   runSessionCompactionIfNeeded: async ({ sessionEntry }: { sessionEntry?: unknown }) =>
     sessionEntry,
+  runAgentRequestedCompactionIfNeeded: async () => {},
 }));
 
 vi.mock("./queue.js", () => ({

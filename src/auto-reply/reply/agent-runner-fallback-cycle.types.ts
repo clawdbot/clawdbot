@@ -66,6 +66,8 @@ export type AgentFallbackCycleState = {
   attemptedRuntimeProvider: string;
   attemptedRuntimeModel: string;
   bootstrapPromptWarningSignaturesSeen: string[];
+  /** Last session_compact request observed this turn; cleared execution belongs to the reply owner. */
+  sessionCompactionRequest?: { focus?: string };
   pendingLifecycleTerminal?: {
     provider: string;
     model: string;

@@ -1141,6 +1141,123 @@ export async function runSessionCompactionIfNeeded(params: {
   }
 }
 
+/**
+ * Runs an agent-requested session compaction recorded by the session_compact
+ * tool. The tool only records the request; execution belongs to the reply owner
+ * and runs through the manual compaction pipeline after the turn completed.
+ * Failures never fail the already-recorded reply.
+ */
+export async function runAgentRequestedCompactionIfNeeded(params: {
+  cfg: OpenClawConfig;
+  followupRun: FollowupRun;
+  request?: { focus?: string };
+  sessionEntry?: SessionEntry;
+  sessionStore?: Record<string, SessionEntry>;
+  sessionKey?: string;
+  runtimePolicySessionKey?: string;
+  storePath?: string;
+  isHeartbeat: boolean;
+  abortSignal?: AbortSignal;
+}): Promise<void> {
+  const request = params.request;
+  if (!request || !params.sessionKey) {
+    return;
+  }
+  const entry = params.sessionEntry ?? params.sessionStore?.[params.sessionKey];
+  if (!entry?.sessionId) {
+    return;
+  }
+  const runtimeParams = {
+    cfg: params.cfg,
+    followupRun: params.followupRun,
+    sessionEntry: entry,
+    sessionKey: params.sessionKey,
+  };
+  const runtimeId = resolveFollowupAgentRuntimeId(runtimeParams);
+  if (
+    params.isHeartbeat ||
+    followupUsesCliRuntime(runtimeParams, runtimeId) ||
+    followupOwnsNativeCompaction(runtimeParams, runtimeId)
+  ) {
+    return;
+  }
+  const compactionSessionKey = params.sessionKey;
+  const configuredAgentId = params.followupRun.run.agentId ?? resolveDefaultAgentId(params.cfg);
+  const compactionAgentId = isUnscopedSessionKeySentinel(compactionSessionKey)
+    ? configuredAgentId
+    : resolveAgentIdFromSessionKey(compactionSessionKey, configuredAgentId);
+  const compactionStorePath = resolveSessionStorePathForScope({
+    agentId: compactionAgentId,
+    sessionKey: compactionSessionKey,
+    storePath:
+      params.storePath ??
+      resolveSessionStorePathCore(params.cfg.session?.store, { agentId: compactionAgentId }),
+  });
+  try {
+    const result = await compactEmbeddedAgentSession({
+      sessionId: entry.sessionId,
+      sessionKey: compactionSessionKey,
+      sessionTarget: {
+        agentId: compactionAgentId,
+        sessionId: entry.sessionId,
+        sessionKey: compactionSessionKey,
+        storePath: compactionStorePath,
+      },
+      sandboxSessionKey: params.runtimePolicySessionKey,
+      allowGatewaySubagentBinding: true,
+      messageChannel: params.followupRun.run.messageProvider,
+      clientCaps: params.followupRun.run.clientCaps,
+      conversationToolPolicy: params.followupRun.run.conversationToolPolicy,
+      groupId: entry.groupId ?? params.followupRun.run.groupId,
+      groupChannel: entry.groupChannel ?? params.followupRun.run.groupChannel,
+      groupSpace: entry.space ?? params.followupRun.run.groupSpace,
+      senderId: params.followupRun.run.senderId,
+      senderName: params.followupRun.run.senderName,
+      senderUsername: params.followupRun.run.senderUsername,
+      senderE164: params.followupRun.run.senderE164,
+      inputProvenance: params.followupRun.run.inputProvenance,
+      sessionFile: compactionSessionKey,
+      workspaceDir: params.followupRun.run.workspaceDir,
+      cwd: params.followupRun.run.cwd,
+      agentDir: params.followupRun.run.agentDir,
+      config: params.cfg,
+      agentAccountId: params.followupRun.run.agentAccountId,
+      conversationRoutePeerId: params.followupRun.run.conversationRoutePeerId,
+      chatType: params.followupRun.run.chatType,
+      skillsSnapshot: entry.skillsSnapshot ?? params.followupRun.run.skillsSnapshot,
+      provider: params.followupRun.run.provider,
+      model: params.followupRun.run.model,
+      authProfileId: params.followupRun.run.authProfileId,
+      authProfileIdSource: params.followupRun.run.authProfileIdSource,
+      sessionEntry: entry,
+      agentHarnessId:
+        entry.sessionId === params.followupRun.run.sessionId
+          ? entry.modelSelectionLocked === true
+            ? resolvePersistedSessionRuntimeId(entry)
+            : runtimeId
+          : undefined,
+      modelSelectionLocked: entry.modelSelectionLocked === true,
+      thinkLevel: params.followupRun.run.thinkLevel,
+      bashElevated: params.followupRun.run.bashElevated,
+      trigger: "manual",
+      customInstructions: request.focus,
+      force: true,
+      ownerNumbers: params.followupRun.run.ownerNumbers,
+      abortSignal: params.abortSignal,
+    });
+    if (!result?.ok || !result.compacted) {
+      logVerbose(
+        `agentCompaction skipped: sessionKey=${compactionSessionKey} reason=${result?.reason ?? "not_compacted"}`,
+      );
+    }
+  } catch (err) {
+    if (params.abortSignal?.aborted) {
+      return;
+    }
+    logVerbose(`agentCompaction failed: sessionKey=${compactionSessionKey} error=${String(err)}`);
+  }
+}
+
 type MemoryFlushOutcome = "skipped" | "completed" | "failed" | "exhausted";
 
 type MemoryFlushResult = {

@@ -337,6 +337,9 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
         });
         params.state.bootstrapPromptWarningSignaturesSeen =
           candidate.bootstrapPromptWarningSignaturesSeen;
+        if (candidate.sessionCompactionRequest) {
+          params.state.sessionCompactionRequest = candidate.sessionCompactionRequest;
+        }
         return candidate.result;
       },
     }),

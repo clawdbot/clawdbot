@@ -380,6 +380,8 @@ type OpenClawCodingToolsOptions = {
   authProfileStore?: AuthProfileStore;
   /** Callback invoked when sessions_yield tool is called. */
   onYield?: (message: string, acknowledgment?: string) => Promise<void> | void;
+  /** Callback invoked when session_compact tool is called; absent means the tool is not offered. */
+  onRequestSessionCompaction?: (request: { focus?: string }) => void;
   /** Side-effect-free runtime completion claimant composed with the durable subagent claim. */
   claimYieldCompletion?: () => boolean | Promise<boolean>;
   /** Optional instrumentation callback for tool preparation stage timing. */
@@ -940,6 +942,7 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
             inheritedToolAllowlist,
             inheritedToolDenylist,
             onYield: options?.onYield,
+            onRequestSessionCompaction: options?.onRequestSessionCompaction,
             claimYieldCompletion: options?.claimYieldCompletion,
             allowGatewaySubagentBinding: options?.allowGatewaySubagentBinding,
             recordToolPrepStage: options?.recordToolPrepStage,

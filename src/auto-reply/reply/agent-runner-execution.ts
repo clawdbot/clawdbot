@@ -66,6 +66,7 @@ import {
   executeAgentFallbackCycle,
   type AgentFallbackCycleState,
 } from "./agent-runner-fallback-cycle.js";
+import { runAgentRequestedCompactionIfNeeded } from "./agent-runner-memory.js";
 import { recordMessageToolOnlyRunOutcome } from "./agent-runner-message-tool-outcome.js";
 import { createAgentTurnPresentation } from "./agent-runner-presentation.js";
 import { createAgentTurnTimingTracker } from "./agent-runner-turn-timing.js";
@@ -494,6 +495,20 @@ async function executeAgentTurnInternalLoop(
     ? false
     : (modelPatch.captureFallbackFailure(fallbackAttempts) ?? false);
   await modelPatch.finish(!terminalRunFailed && !patchedModelNeedsRevert);
+  if (!terminalRunFailed) {
+    await runAgentRequestedCompactionIfNeeded({
+      cfg: runtimeConfig,
+      followupRun: params.followupRun,
+      request: fallbackCycleState.sessionCompactionRequest,
+      sessionEntry: params.getActiveSessionEntry(),
+      sessionStore: params.activeSessionStore,
+      sessionKey: params.sessionKey,
+      runtimePolicySessionKey: params.runtimePolicySessionKey,
+      storePath: params.storePath,
+      isHeartbeat: params.isHeartbeat,
+      abortSignal: params.opts?.abortSignal,
+    });
+  }
   const terminalFailurePayload = terminalRunFailed
     ? buildTerminalAgentRunFailureReplyPayload({
         isHeartbeat: params.isHeartbeat,

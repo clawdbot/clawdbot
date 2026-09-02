@@ -163,6 +163,8 @@ export type OpenClawToolsOptions = {
   questionPrompt?: QuestionPromptDelivery;
   onYield?: (message: string, acknowledgment?: string) => Promise<void> | void;
   claimYieldCompletion?: () => boolean | Promise<boolean>;
+  /** Runtime-owned receiver for session_compact requests; when absent the tool is not offered. */
+  onRequestSessionCompaction?: (request: { focus?: string }) => void;
   /** Allow plugin tools for this tool set to late-bind the gateway subagent. */
   allowGatewaySubagentBinding?: boolean;
 } & SpawnedToolContext &

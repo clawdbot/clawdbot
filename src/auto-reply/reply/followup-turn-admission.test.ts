@@ -23,6 +23,7 @@ vi.mock("./agent-runner-auto-fallback.js", () => ({
 
 vi.mock("./agent-runner-memory.js", () => ({
   runSessionCompactionIfNeeded: (...args: unknown[]) => state.preflight(...args),
+  runAgentRequestedCompactionIfNeeded: async () => {},
 }));
 
 vi.mock("./agent-runner-utils.js", () => ({
