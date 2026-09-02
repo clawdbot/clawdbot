@@ -99,41 +99,27 @@ describe("channel dead-letter commands", () => {
     });
   });
 
-  it("does not silently scope a blank --account to the default account", async () => {
-    await withTempState(async () => {
-      // The operator named "ops"; a blank value must not resolve to a different account's queue.
-      const queue = createChannelIngressQueue<{ text: string }>({
-        channelId: "telegram",
-        accountId: "ops",
-      });
-      await queue.enqueue("event-1", { text: "recover me" });
-      const claim = await queue.claim("event-1", { ownerId: "worker" });
-      if (!claim) {
-        throw new Error("Expected a claimed ingress event");
-      }
-      await queue.fail(claim, { reason: "handler-error", failedAt: 20 });
-      const runtime = createRuntime();
-
-      await expect(
-        channelsDeadLettersListCommand({ channel: "telegram", account: "", json: true }, runtime),
-      ).rejects.toThrow("--account must not be blank");
-      expect(runtime.log).not.toHaveBeenCalled();
-    });
-  });
-
-  it.each([
-    { account: "", label: "empty" },
-    { account: " \t ", label: "whitespace" },
-  ])("rejects a $label --account before touching the queue", async ({ account }) => {
+  it.each(
+    [
+      { account: "", label: "empty" },
+      { account: " \t ", label: "whitespace" },
+    ].flatMap((accountCase) => [
+      { ...accountCase, command: "list" as const },
+      { ...accountCase, command: "resubmit" as const },
+    ]),
+  )("rejects a $label --account at the $command boundary", async ({ account, command }) => {
     await withTempState(async () => {
       const runtime = createRuntime();
+      const action =
+        command === "list"
+          ? channelsDeadLettersListCommand({ channel: "telegram", account, json: true }, runtime)
+          : channelsDeadLettersResubmitCommand(
+              "event-1",
+              { channel: "telegram", account },
+              runtime,
+            );
 
-      await expect(
-        channelsDeadLettersListCommand({ channel: "telegram", account, json: true }, runtime),
-      ).rejects.toThrow("--account must not be blank");
-      await expect(
-        channelsDeadLettersResubmitCommand("event-1", { channel: "telegram", account }, runtime),
-      ).rejects.toThrow("--account must not be blank");
+      await expect(action).rejects.toThrow("--account must not be blank");
       expect(runtime.log).not.toHaveBeenCalled();
     });
   });

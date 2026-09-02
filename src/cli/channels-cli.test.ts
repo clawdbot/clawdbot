@@ -115,46 +115,44 @@ describe("registerChannelsCli", () => {
     expect(getChannelSubcommandNames(program, "dead-letters")).toEqual(["list", "resubmit"]);
   });
 
-  // Every dead-letter leaf declares --account with a literal default, so the parser must keep an
-  // omitted flag distinguishable from one the caller supplied blank.
-  it.each([
-    ["omitted", ["channels", "dead-letters", "list", "--channel", "telegram"], "default"],
+  it.each(
     [
-      "explicit blank",
-      ["channels", "dead-letters", "list", "--channel", "telegram", "--account", ""],
-      "",
-    ],
-  ])("distinguishes an %s dead-letters list account", async (_label, args, expectedAccount) => {
-    const program = new Command().name("openclaw").exitOverride();
+      { expected: "ops", label: "parent", leafAccount: undefined, parentAccount: "ops" },
+      { expected: "ops", label: "leaf", leafAccount: "ops", parentAccount: undefined },
+      { expected: "leaf", label: "leaf precedence", leafAccount: "leaf", parentAccount: "parent" },
+      { expected: "", label: "blank parent", leafAccount: undefined, parentAccount: "" },
+      { expected: "", label: "blank leaf", leafAccount: "", parentAccount: undefined },
+    ].flatMap((accountCase) => [
+      { ...accountCase, leaf: "list" as const },
+      { ...accountCase, leaf: "resubmit" as const },
+    ]),
+  )(
+    "passes a $label --account to dead-letters $leaf",
+    async ({ expected, leaf, leafAccount, parentAccount }) => {
+      const args = ["channels", "dead-letters"];
+      if (parentAccount !== undefined) {
+        args.push("--account", parentAccount);
+      }
+      args.push(leaf);
+      if (leaf === "resubmit") {
+        args.push("event-1");
+      }
+      args.push("--channel", "telegram");
+      if (leafAccount !== undefined) {
+        args.push("--account", leafAccount);
+      }
+      const program = new Command().name("openclaw").enablePositionalOptions().exitOverride();
 
-    await registerChannelsCli(program, ["node", "openclaw", ...args]);
-    await program.parseAsync(args, { from: "user" });
+      await registerChannelsCli(program, ["node", "openclaw", ...args]);
+      await program.parseAsync(args, { from: "user" });
 
-    const [options] = channelsDeadLettersMocks.channelsDeadLettersListCommand.mock.calls[0] ?? [];
-    expect(options?.account).toBe(expectedAccount);
-  });
-
-  it.each([
-    [
-      "omitted",
-      ["channels", "dead-letters", "resubmit", "event-1", "--channel", "telegram"],
-      "default",
-    ],
-    [
-      "explicit blank",
-      ["channels", "dead-letters", "resubmit", "event-1", "--channel", "telegram", "--account", ""],
-      "",
-    ],
-  ])("distinguishes an %s dead-letters resubmit account", async (_label, args, expectedAccount) => {
-    const program = new Command().name("openclaw").exitOverride();
-
-    await registerChannelsCli(program, ["node", "openclaw", ...args]);
-    await program.parseAsync(args, { from: "user" });
-
-    const [, options] =
-      channelsDeadLettersMocks.channelsDeadLettersResubmitCommand.mock.calls[0] ?? [];
-    expect(options?.account).toBe(expectedAccount);
-  });
+      const options =
+        leaf === "list"
+          ? channelsDeadLettersMocks.channelsDeadLettersListCommand.mock.calls[0]?.[0]
+          : channelsDeadLettersMocks.channelsDeadLettersResubmitCommand.mock.calls[0]?.[1];
+      expect(options?.account).toBe(expected);
+    },
+  );
 
   it.each([
     ["omitted", ["channels", "logs"], undefined],

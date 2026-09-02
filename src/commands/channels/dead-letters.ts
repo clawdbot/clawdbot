@@ -18,13 +18,12 @@ function resolveScope(options: ChannelsDeadLettersOptions) {
   if (!channelId) {
     throw new Error("--channel is required.");
   }
-  // Commander supplies the "default" account only when --account is omitted, so a blank value here
-  // is one the caller passed. Collapsing it would scope the queue to an account they did not name.
-  const accountId = options.account?.trim();
-  if (options.account !== undefined && !accountId) {
+  // Only omission selects the default queue; an explicit blank selector must not change scope.
+  const accountId = options.account?.trim() ?? "default";
+  if (!accountId) {
     throw new Error("--account must not be blank");
   }
-  return { channelId, accountId: accountId ?? "default" };
+  return { channelId, accountId };
 }
 
 function parseLimit(value: unknown): number {
