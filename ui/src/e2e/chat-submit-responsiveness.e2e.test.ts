@@ -26,6 +26,69 @@ async function withChatPage(run: (page: Page) => Promise<void>): Promise<void> {
 }
 
 suite.define(() => {
+  it("keeps a durably admitted removal retired across the browser input yield", async () => {
+    await withChatPage(async (page) => {
+      const gateway = await installMockGateway(page);
+      await page.goto(`${suite.server.baseUrl}chat`);
+      const composer = page.locator(".agent-chat__composer-combobox textarea");
+      await composer.fill("discard before delivery");
+      await gateway.setOnline(false);
+      await gateway.closeLatest();
+      await composer.evaluate((element) => {
+        const ActualMessageChannel = MessageChannel;
+        window.MessageChannel = class extends ActualMessageChannel {
+          constructor() {
+            super();
+            const post = this.port2.postMessage.bind(this.port2);
+            this.port2.postMessage = () => {
+              window.MessageChannel = ActualMessageChannel;
+              element.setAttribute("data-admission-yielded", "true");
+              document.addEventListener("resume-admitted-send", () => post(undefined), {
+                once: true,
+              });
+            };
+          }
+        };
+      });
+
+      await composer.press("Enter");
+      await expect.poll(() => composer.getAttribute("data-admission-yielded")).toBe("true");
+      const queued = page.locator(".chat-queue__item", { hasText: "discard before delivery" });
+      await queued.waitFor();
+      if (proofDir) {
+        await page.screenshot({ path: path.join(proofDir, "retirement-admitted.png") });
+      }
+      await queued.locator(".chat-queue__remove").evaluate((button: HTMLElement) => button.click());
+      await queued.waitFor({ state: "detached" });
+      await composer.fill("next draft stays mine");
+      await page.evaluate(
+        () =>
+          new Promise<void>((resolve) => {
+            document.dispatchEvent(new Event("resume-admitted-send"));
+            const channel = new MessageChannel();
+            channel.port1.addEventListener(
+              "message",
+              () => {
+                channel.port1.close();
+                channel.port2.close();
+                resolve();
+              },
+              { once: true },
+            );
+            channel.port1.start();
+            channel.port2.postMessage(undefined);
+          }),
+      );
+      if (proofDir) {
+        await page.screenshot({ path: path.join(proofDir, "retirement-resumed.png") });
+      }
+      expect(await page.getByRole("alert").allTextContents()).toEqual([]);
+      expect(await composer.inputValue()).toBe("next draft stays mine");
+      expect(await page.locator(".chat-queue__item").count()).toBe(0);
+      expect(await gateway.getRequests("chat.send")).toHaveLength(0);
+    });
+  });
+
   it("returns to browser input before starting durable chat delivery", async () => {
     await withChatPage(async (page) => {
       const gateway = await installMockGateway(page);
