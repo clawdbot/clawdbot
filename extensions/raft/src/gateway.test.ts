@@ -199,30 +199,32 @@ describe("Raft wake gateway", () => {
     });
     void start.catch(bridge.started.reject);
 
-    const { endpoint: wakeEndpoint, token: bridgeToken } = await withTimeout(
-      bridge.started.promise,
-      500,
-      "Raft bridge startup",
-    );
+    try {
+      const { endpoint: wakeEndpoint, token: bridgeToken } = await withTimeout(
+        bridge.started.promise,
+        500,
+        "Raft bridge startup",
+      );
 
-    // Declared and sent in one write: the shape whose rejection used to race the flush.
-    const result = await postRawWebhook({
-      url: wakeEndpoint,
-      body: JSON.stringify({ deliveryId: "x".repeat(16 * 1024) }),
-      headers: {
-        "content-type": "application/json",
-        "x-raft-bridge-token": bridgeToken,
-      },
-    });
+      // Declared and sent in one write: the shape whose rejection used to race the flush.
+      const result = await postRawWebhook({
+        url: wakeEndpoint,
+        body: JSON.stringify({ deliveryId: "x".repeat(16 * 1024) }),
+        headers: {
+          "content-type": "application/json",
+          "x-raft-bridge-token": bridgeToken,
+        },
+      });
 
-    expect(result.statusLine).toBe("HTTP/1.1 413 Payload Too Large");
-    expect(JSON.parse(result.body)).toEqual({
-      error: "Wake payload exceeds the 16 KiB limit.",
-    });
-    expect(result.closedByServer).toBe(true);
-
-    controller.abort();
-    await start;
+      expect(result.statusLine).toBe("HTTP/1.1 413 Payload Too Large");
+      expect(JSON.parse(result.body)).toEqual({
+        error: "Wake payload exceeds the 16 KiB limit.",
+      });
+      expect(result.closedByServer).toBe(true);
+    } finally {
+      controller.abort();
+      await start;
+    }
   });
 
   it("accepts authenticated content-free wake hints and dedupes retry delivery ids", async () => {

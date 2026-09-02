@@ -11,6 +11,8 @@ import net from "node:net";
 export type RawHttpResult = {
   /** First line of the response, or an empty string when the server sent nothing. */
   statusLine: string;
+  /** Lowercase response header names and their final values. */
+  headers: Record<string, string>;
   /** Response body after the header block. */
   body: string;
   /** True when the server closed the connection rather than leaving it open. */
@@ -98,8 +100,18 @@ export async function postRawWebhook(params: {
         headerEnd === -1 ? raw.toString("latin1") : raw.toString("latin1", 0, headerEnd);
       const rawBody = headerEnd === -1 ? Buffer.alloc(0) : raw.subarray(headerEnd + 4);
       const chunked = /transfer-encoding:\s*chunked/i.test(headBlock);
+      const headers = Object.fromEntries(
+        headBlock
+          .split("\r\n")
+          .slice(1)
+          .map((line) => {
+            const separator = line.indexOf(":");
+            return [line.slice(0, separator).toLowerCase(), line.slice(separator + 1).trim()];
+          }),
+      );
       resolve({
         statusLine: (headBlock.split("\r\n")[0] ?? "").trim(),
+        headers,
         body: (chunked ? decodeChunkedBody(rawBody) : rawBody).toString("utf-8"),
         closedByServer,
       });

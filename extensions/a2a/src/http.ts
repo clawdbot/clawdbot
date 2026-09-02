@@ -277,13 +277,21 @@ export function createA2aHttpHandler(params: A2aHttpHandlerParams) {
         destroyOnLimit: false,
       });
     } catch (error) {
-      if (isRequestBodyLimitError(error, "PAYLOAD_TOO_LARGE")) {
+      const bodyRejection = isRequestBodyLimitError(error, "PAYLOAD_TOO_LARGE")
+        ? { statusCode: 413, body: { error: "Request body exceeds the 1 MiB limit" } }
+        : isRequestBodyLimitError(error, "REQUEST_BODY_TIMEOUT")
+          ? {
+              statusCode: 200,
+              body: createRpcError(null, -32000, "Request body could not be read"),
+            }
+          : undefined;
+      if (bodyRejection) {
         response.setHeader("cache-control", "no-store");
         await sendHttpRequestRejection(
           request,
           response,
-          413,
-          JSON.stringify({ error: "Request body exceeds the 1 MiB limit" }),
+          bodyRejection.statusCode,
+          JSON.stringify(bodyRejection.body),
           "application/json; charset=utf-8",
         );
         return true;

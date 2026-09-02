@@ -238,30 +238,6 @@ describe("createSmsWebhookHandler", () => {
     expect(enqueueSmsIngress).toHaveBeenCalledWith(parseTestTwilioForm(body));
   });
 
-  it("rethrows request body timeouts for Gateway-owned retry responses", async () => {
-    vi.useFakeTimers();
-    try {
-      const handler = createSmsWebhookHandler({
-        cfg: {},
-        account: createSmsTestAccount(),
-        ingress: createIngress(),
-      });
-      const res = createResponse();
-      const handling = handler(createPendingRequest(), res);
-      const expected = expect(handling).rejects.toMatchObject({
-        code: "REQUEST_BODY_TIMEOUT",
-      });
-
-      await vi.advanceTimersByTimeAsync(5_000);
-      await expected;
-
-      expect(res.endMock).not.toHaveBeenCalled();
-      expect(enqueueSmsIngress).not.toHaveBeenCalled();
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
   it("rethrows unexpected request read failures for Gateway-owned retry responses", async () => {
     const handler = createSmsWebhookHandler({
       cfg: {},

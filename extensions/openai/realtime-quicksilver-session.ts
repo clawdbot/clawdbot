@@ -340,10 +340,6 @@ export function createOpenAIQuicksilverBrowserSessionBroker(params: {
       return true;
     }
     if (req.method === "OPTIONS") {
-      if (!corsAllowed) {
-        respondRealtimeOffer(res, 403, "Origin not allowed");
-        return true;
-      }
       res.statusCode = 204;
       res.setHeader("cache-control", "no-store");
       res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
@@ -357,10 +353,6 @@ export function createOpenAIQuicksilverBrowserSessionBroker(params: {
       }
       res.setHeader("Access-Control-Max-Age", "600");
       res.end();
-      return true;
-    }
-    if (!corsAllowed) {
-      respondRealtimeOffer(res, 403, "Origin not allowed");
       return true;
     }
     if (req.method !== "POST") {
