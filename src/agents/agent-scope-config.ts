@@ -93,34 +93,44 @@ function stripNullBytes(s: string): string {
   return s.replaceAll("\0", "");
 }
 
-/** Lists valid configured agent entries from config. */
-export function listAgentEntriesWithSource(cfg: OpenClawConfig): ListedAgentEntry[] {
-  const roster = readAgentRosterProperty(cfg);
-  if (roster?.kind === "entries" && isRecord(roster.value)) {
-    return Object.entries(roster.value).flatMap(([id, entry]) =>
-      isRecord(entry)
-        ? [
-            {
-              entry: { ...entry, id },
-              source: { kind: "entries" as const, key: id },
-            },
-          ]
-        : [],
-    );
-  }
-  if (roster?.kind !== "list" || !Array.isArray(roster.value)) {
-    return [];
-  }
-  return roster.value.flatMap((entry, index) =>
-    entry !== null && typeof entry === "object"
-      ? [{ entry: entry as AgentEntry, source: { kind: "list" as const, index } }]
-      : [],
-  );
-}
+// Config objects are immutable snapshots during a process lifetime (mutation
+// flows rebuild the object instead of editing it in place), so the roster can be
+// memoized per config identity. Startup resolves runtime policy per agent per
+// model ref; without this, each call rebuilds and clones the full roster,
+// making startup O(agents^2 * models) on large configs.
+const listedAgentEntriesByConfig = new WeakMap<object, ListedAgentEntry[]>();
 
-/** Lists valid configured agent entries from either supported representation. */
-export function listAgentEntries(cfg: OpenClawConfig): AgentEntry[] {
-  return listAgentEntriesWithSource(cfg).map(({ entry }) => entry);
+/** Lists valid configured agent entries from config, memoized per config object. */
+export function listAgentEntriesWithSource(cfg: OpenClawConfig): ListedAgentEntry[] {
+  const cached = listedAgentEntriesByConfig.get(cfg);
+  if (cached) {
+    return cached;
+  }
+  const roster = readAgentRosterProperty(cfg);
+  const listed: ListedAgentEntry[] =
+    roster?.kind === "entries" &&
+    roster.value &&
+    typeof roster.value === "object" &&
+    !Array.isArray(roster.value)
+      ? Object.entries(roster.value).flatMap(([id, entry]) =>
+          entry !== null && typeof entry === "object" && !Array.isArray(entry)
+            ? [
+                {
+                  entry: { ...(entry as Omit<AgentEntry, "id">), id },
+                  source: { kind: "entries" as const, key: id },
+                },
+              ]
+            : [],
+        )
+      : roster?.kind !== "list" || !Array.isArray(roster.value)
+        ? []
+        : roster.value.flatMap((entry, index) =>
+            entry !== null && typeof entry === "object"
+              ? [{ entry: entry as AgentEntry, source: { kind: "list" as const, index } }]
+              : [],
+          );
+  listedAgentEntriesByConfig.set(cfg, listed);
+  return listed;
 }
 
 /** Converts either supported roster representation into the canonical keyed shape. */

@@ -4,6 +4,7 @@ import { migratePersistedImplicitMainRoster } from "../config/legacy.roster.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   AgentSelectionRequiredError,
+  listAgentEntries,
   listAgentEntriesWithSource,
   listAgentIds,
   resolveConfiguredAgentId,
@@ -318,6 +319,18 @@ describe("agent roster resolution", () => {
       tools: { allow: ["*"] },
     });
     expect(listedEntry.tools).toBeUndefined();
+  });
+
+  it("memoizes the roster rebuild per config object", () => {
+    const cfg = { agents: { entries: { alpha: {}, beta: {} } } } as OpenClawConfig;
+    // Startup resolves runtime policy per agent per model ref; the roster must
+    // be built once per config identity instead of cloned on every call.
+    expect(listAgentEntriesWithSource(cfg)).toBe(listAgentEntriesWithSource(cfg));
+    expect(listAgentEntries(cfg)).toBe(listAgentEntries(cfg));
+    // A distinct config object is a distinct roster snapshot.
+    expect(
+      listAgentEntriesWithSource({ agents: { entries: { alpha: {}, beta: {} } } } as OpenClawConfig),
+    ).not.toBe(listAgentEntriesWithSource(cfg));
   });
 });
 
