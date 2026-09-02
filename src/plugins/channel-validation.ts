@@ -9,11 +9,25 @@ import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 import type { ChannelMeta } from "../channels/plugins/types.public.js";
 import { GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA } from "../config/bundled-channel-config-metadata.generated.js";
 import type { PluginDiagnostic } from "./manifest-types.js";
+import {
+  getOfficialExternalPluginCatalogManifest,
+  listOfficialExternalChannelCatalogEntries,
+} from "./official-external-plugin-catalog.js";
 
-function resolveBundledChannelMeta(id: string): ChannelMeta | undefined {
+function resolveKnownChannelMeta(id: string): Partial<ChannelMeta> | undefined {
   return (
-    listChatChannels().find((meta) => meta?.id === id) ?? resolveGeneratedBundledChannelMeta(id)
+    listChatChannels().find((meta) => meta?.id === id) ??
+    resolveGeneratedBundledChannelMeta(id) ??
+    resolveOfficialExternalChannelMeta(id)
   );
+}
+
+function resolveOfficialExternalChannelMeta(id: string): Partial<ChannelMeta> | undefined {
+  const normalizedId = id.toLowerCase();
+  const channel = listOfficialExternalChannelCatalogEntries()
+    .map((entry) => getOfficialExternalPluginCatalogManifest(entry)?.channel)
+    .find((candidate) => candidate?.id?.trim().toLowerCase() === normalizedId);
+  return channel?.aliases?.length ? { aliases: channel.aliases } : undefined;
 }
 
 function resolveGeneratedBundledChannelMeta(id: string): ChannelMeta | undefined {
@@ -110,7 +124,7 @@ export function normalizeRegisteredChannelPlugin(params: {
     meta: normalizeChannelMeta({
       id,
       meta: rawMeta,
-      existing: resolveBundledChannelMeta(id),
+      existing: resolveKnownChannelMeta(id),
     }),
   };
 }
