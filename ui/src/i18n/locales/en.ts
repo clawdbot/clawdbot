@@ -5843,7 +5843,6 @@ export const en: TranslationMap & {
     permissionControls: {
       label: "Permissions",
       help: "Choose permissions for this session.",
-      applying: "Applying permissions…",
       default: "Default",
       defaultDescription: "Follow the agent's configured policy.",
       defaultWithMode: "Default ({mode})",

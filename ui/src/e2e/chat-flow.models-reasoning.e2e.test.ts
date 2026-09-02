@@ -1,5 +1,4 @@
 import { expect, it } from "vitest";
-import { t } from "../i18n/lib/translate.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
   chatSessionListResponse,
@@ -147,7 +146,6 @@ suite.define(() => {
         permissionMode: "workspace",
       });
       await waitForRequests(gateway, "sessions.list", firstListCount + 1);
-      expect(await trigger.getAttribute("data-chat-select-value")).toBe("guarded");
 
       await gateway.emitGatewayEvent("sessions.changed", {
         ...session,
@@ -156,11 +154,6 @@ suite.define(() => {
         sessionKey: session.key,
         updatedAt: 3,
       });
-      // The initiating picker owns the previous display until its canonical
-      // patch refresh settles, even when a session event arrives first.
-      expect(await trigger.getAttribute("data-chat-select-value")).toBe("guarded");
-      expect(await trigger.textContent()).toContain("Applying permissions");
-      expect(await trigger.isEnabled()).toBe(false);
       await gateway.resolveDeferred(
         "sessions.list",
         chatSessionListResponse([{ ...session, permissionMode: "workspace", updatedAt: 3 }]),
@@ -179,7 +172,6 @@ suite.define(() => {
         permissionMode: null,
       });
       await waitForRequests(gateway, "sessions.list", secondListCount + 1);
-      expect(await trigger.getAttribute("data-chat-select-value")).toBe("workspace");
 
       await gateway.emitGatewayEvent("sessions.changed", {
         ...session,
@@ -188,8 +180,6 @@ suite.define(() => {
         sessionKey: session.key,
         updatedAt: 4,
       });
-      expect(await trigger.getAttribute("data-chat-select-value")).toBe("workspace");
-      expect(await trigger.isEnabled()).toBe(false);
       await gateway.resolveDeferred(
         "sessions.list",
         chatSessionListResponse([{ ...session, permissionMode: undefined, updatedAt: 4 }]),
@@ -197,26 +187,6 @@ suite.define(() => {
       await expect.poll(() => trigger.getAttribute("data-chat-select-value")).toBe("");
       await expect.poll(() => trigger.isEnabled()).toBe(true);
       expect(await trigger.textContent()).toContain("Default");
-
-      const publishRemoteChange = async (permissionModePending: boolean, updatedAt: number) => {
-        const row = { ...session, permissionMode: "read-only", permissionModePending, updatedAt };
-        // Event-triggered roster refreshes must describe the same remote change.
-        await gateway.setMethodResponse("sessions.list", chatSessionListResponse([row]));
-        await gateway.emitGatewayEvent("sessions.changed", {
-          ...row,
-          reason: "patch",
-          sessionKey: session.key,
-        });
-      };
-      await publishRemoteChange(true, 5);
-      await expect.poll(() => trigger.textContent()).toContain("Applying permissions");
-      expect(await trigger.isEnabled()).toBe(false);
-      await publishRemoteChange(false, 6);
-      await expect.poll(() => trigger.getAttribute("data-chat-select-value")).toBe("read-only");
-      await expect.poll(() => trigger.isEnabled()).toBe(true);
-      expect(await trigger.textContent()).toContain(
-        t("chat.permissionControls.modes.read-only.label"),
-      );
     } finally {
       await suite.closeBrowserContext(context);
     }

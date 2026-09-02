@@ -32,7 +32,7 @@ type SessionActionCallbacks = Pick<
 >;
 
 type PendingPermissionChange = {
-  previousMode: ChatPermissionPickerProps["mode"];
+  nextMode: ChatPermissionPickerProps["mode"];
   ownsSelection: () => boolean;
 };
 
@@ -123,7 +123,6 @@ export function renderChatPaneComposerControls(params: {
     scopedAgentParamsForSession(state, sessionKey).agentId === agentScope.agentId;
   const pendingChange = permissionChanges.get(permissionScopeKey);
   const currentChange = pendingChange?.ownsSelection() ? pendingChange : undefined;
-  const permissionApplying = Boolean(currentChange || selectedSession?.permissionModePending);
   const modelCatalogState = resolveChatModelCatalogState(state);
   const thinkingLevelOverride = state.sessions.think(sessionKey, agentScope.agentId);
   const thinkingSession = thinkingLevelOverride
@@ -183,10 +182,9 @@ export function renderChatPaneComposerControls(params: {
     permissionPicker: {
       canSelectFull,
       defaultMode: agentDefaultPermissionMode,
-      applying: permissionApplying,
-      disabled: !permissionAccess.allowed || permissionApplying,
+      disabled: !permissionAccess.allowed,
       disabledReason: permissionAccess.allowed ? undefined : permissionAccess.reason,
-      mode: currentChange ? currentChange.previousMode : selectedSession?.permissionMode,
+      mode: currentChange ? currentChange.nextMode : selectedSession?.permissionMode,
       onSelect: async (permissionMode) => {
         if (
           !permissionAccess.allowed ||
@@ -196,10 +194,10 @@ export function renderChatPaneComposerControls(params: {
         ) {
           return;
         }
-        // Saved rows can arrive before the runtime ACK. Keep the initiating
-        // picker on its previous mode until the exact update settles.
+        // Keep the selected mode visible while the exact runtime update settles.
+        // The pending owner rejects duplicates; the shared settings tail serializes later work.
         const change: PendingPermissionChange = {
-          previousMode: selectedSession?.permissionMode,
+          nextMode: permissionMode ?? undefined,
           ownsSelection,
         };
         permissionChanges.set(permissionScopeKey, change);
