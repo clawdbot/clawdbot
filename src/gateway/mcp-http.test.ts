@@ -1,6 +1,7 @@
 // MCP HTTP tests cover gateway-scoped tool listing and invocation over the
 // JSON-RPC surface, including hook filtering and context propagation.
-import { request } from "node:http";
+import { EventEmitter } from "node:events";
+import { request, ServerResponse } from "node:http";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import {
@@ -1665,6 +1666,78 @@ describe("mcp loopback server", () => {
     expect(revokeMcpLoopbackClientGrant(grant.token)).toBe(true);
     availability.resolve({ cacheKey: "eligible", isAvailable: () => true });
     expect((await response).status).toBe(401);
+  });
+
+  it("does not dispatch after the HTTP client disconnects during node discovery", async () => {
+    const entered = createDeferred();
+    const availability = createDeferred<{ cacheKey: string; isAvailable: () => boolean }>();
+    loadNodeExecAvailabilityMock.mockImplementationOnce(() => {
+      entered.resolve();
+      return availability.promise;
+    });
+    const execute = vi.fn<MockGatewayTool["execute"]>(async () => ({ content: [] }));
+    mockScopedTools([makeMessageTool({ execute })]);
+    const { runtime, port } = await startLoopbackServerForTest();
+    const captureKey = "node-discovery-disconnect";
+    const grant = mintMcpLoopbackClientGrant({
+      context: {
+        sessionKey: "agent:main:disconnected",
+        senderIsOwner: true,
+        nodeExecAllowed: true,
+      },
+      runtimeOwnerToken: runtime.ownerToken,
+      admittedRunContext: await activeAdmission(captureKey),
+      toolAuth: { store: { version: 1, profiles: {} } },
+    });
+    activateMcpLoopbackClientGrantCapture({
+      token: grant.token,
+      runtimeOwnerToken: runtime.ownerToken,
+      captureKey,
+    });
+    beginMcpLoopbackToolCallCapture({ captureKey, onToolCallResult: vi.fn() });
+    const disconnected = createDeferred();
+    const responseEvents = vi.spyOn(ServerResponse.prototype, "emit").mockImplementation(function (
+      this: ServerResponse,
+      event,
+      ...args
+    ) {
+      const emitted = EventEmitter.prototype.emit.call(this, event, ...args);
+      if (event === "close") {
+        disconnected.resolve();
+      }
+      return emitted;
+    });
+    const req = request({
+      hostname: "127.0.0.1",
+      port,
+      path: "/mcp",
+      method: "POST",
+      headers: jsonHeaders({
+        authorization: `Bearer ${grant.token}`,
+        "x-openclaw-cli-capture-key": captureKey,
+      }),
+    });
+    req.on("error", () => {});
+    req.end(mcpToolCallBody("message"));
+    try {
+      await entered.promise;
+      req.destroy();
+      // Observe the server's close event before releasing discovery, not a timed delay.
+      await disconnected.promise;
+      availability.resolve({ cacheKey: "eligible", isAvailable: () => true });
+      expect(
+        await waitForMcpLoopbackToolCallCaptureIdle(captureKey, {
+          timeoutMs: 1_000,
+          admissionGraceMs: 0,
+        }),
+      ).toBe(true);
+      expect(execute).not.toHaveBeenCalled();
+    } finally {
+      responseEvents.mockRestore();
+      req.destroy();
+      availability.resolve({ cacheKey: "eligible", isAvailable: () => true });
+      clearMcpLoopbackToolCallCapture(captureKey);
+    }
   });
 
   it("carries callable personal Workshop authority outside cloned grant context", async () => {

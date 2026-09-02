@@ -1088,6 +1088,7 @@ export async function prepareCliRunContext(
       ? (
           await resolveProjectedTools({
             cfg: runConfig,
+            signal: params.abortSignal,
             ...mcpProjectionContext,
             ...(skillWorkshop ? { skillWorkshop } : {}),
             ...(mcpToolAuth ? { authProfileStore: mcpToolAuth.store } : {}),

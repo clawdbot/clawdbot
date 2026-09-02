@@ -6,6 +6,7 @@ export async function loadNodeExecAvailability(signal?: AbortSignal) {
     signal?.throwIfAborted();
     return [];
   });
+  signal?.throwIfAborted();
   return {
     // Only matching and execution facts invalidate a cached tool catalog.
     cacheKey: JSON.stringify(

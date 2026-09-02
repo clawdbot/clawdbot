@@ -44,6 +44,7 @@ type McpLoopbackScopeParams = Omit<McpLoopbackRequestContext, "senderIsOwner" | 
   yieldContextCacheKey?: string;
   onYield?: (message: string, acknowledgment?: string) => Promise<void> | void;
   nodeExecAvailability?: Awaited<ReturnType<typeof loadNodeExecAvailability>>;
+  signal?: AbortSignal;
 };
 
 type LoopbackToolsAllowMode = "exact" | "policy";
@@ -83,7 +84,7 @@ async function resolveNodeExecScope(
   ) {
     return params;
   }
-  return { ...params, nodeExecAvailability: await loadNodeExecAvailability() };
+  return { ...params, nodeExecAvailability: await loadNodeExecAvailability(params.signal) };
 }
 
 function resolveMcpLoopbackTools(
@@ -94,6 +95,7 @@ function resolveMcpLoopbackTools(
   workspaceDir?: string;
   tools: McpLoopbackTool[];
 } {
+  params.signal?.throwIfAborted();
   const excludeToolNames = new Set(NATIVE_TOOL_EXCLUDE);
   // Restricted CLI grants use OpenClaw's implementations for coding tools;
   // native CLI tools bypass path, approval, sandbox, and exec policy.
@@ -110,6 +112,7 @@ function resolveMcpLoopbackTools(
     authProfileStoreAgentDir,
     grantToken: _grantToken,
     nodeExecAvailability,
+    signal: _signal,
     ...scopeParams
   } = params;
   const scoped = resolveGatewayScopedTools({
@@ -198,6 +201,7 @@ export class McpLoopbackToolCache {
     const epoch = this.#epoch;
     // Availability belongs to the current connection, not the schema TTL.
     const params = await resolveNodeExecScope(input, "exact");
+    input.signal?.throwIfAborted();
     // Callers differing only in capabilities must not share cached tool lists.
     const clientCapsCacheKey = [...new Set(params.clientCaps ?? [])].toSorted().join(",");
     const cacheKey = [

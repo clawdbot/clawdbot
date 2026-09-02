@@ -343,6 +343,34 @@ describe("McpLoopbackToolCache", () => {
     },
   );
 
+  it("does not cache tools when cancellation overtakes discovery", async () => {
+    const cache = new McpLoopbackToolCache();
+    const params = scopeParams({ nodeExecAllowed: true, grantToken: "cancelled-grant" });
+    const controller = new AbortController();
+    const reason = new Error("synthetic request cancelled");
+    const entered = createDeferred();
+    const inventory = createDeferred<unknown[]>();
+    listNodes.mockImplementationOnce(() => {
+      entered.resolve();
+      return inventory.promise;
+    });
+    const rejected = expect(cache.resolve({ ...params, signal: controller.signal })).rejects.toBe(
+      reason,
+    );
+    await entered.promise;
+    expect(listNodes).toHaveBeenCalledWith(controller.signal);
+    controller.abort(reason);
+    inventory.resolve([]);
+    await rejected;
+    expect(cache.evictGrant("cancelled-grant")).toBe(false);
+    const next = new AbortController();
+    await cache.resolve({ ...params, signal: next.signal });
+    next.abort();
+    await cache.resolve({ ...params, signal: new AbortController().signal });
+    expect(resolveGatewayScopedTools).toHaveBeenCalledOnce();
+    expect(resolveGatewayScopedTools.mock.calls[0]?.[0]).not.toHaveProperty("signal");
+  });
+
   it("refreshes cached bound tools when node matching preferences change", async () => {
     const cache = new McpLoopbackToolCache();
     const params = scopeParams({ nodeExecAllowed: true, execOverrides: { node: "shared-name" } });
