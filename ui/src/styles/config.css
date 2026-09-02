@@ -343,140 +343,155 @@
 }
 
 /* stylelint-disable color-no-hex */
-.settings-theme-card--claw {
+.settings-theme-card--claw,
+.settings-accent-theme--claw {
   --theme-chip-bg: #0e1015;
   --theme-chip-accent: #ff5c5c;
   --theme-chip-accent-2: #14b8a6;
 }
 
-.settings-theme-card--knot {
+.settings-theme-card--knot,
+.settings-accent-theme--knot {
   --theme-chip-bg: #080808;
   --theme-chip-accent: #e5243b;
   --theme-chip-accent-2: #b8bdc4;
 }
 
-.settings-theme-card--dash {
+.settings-theme-card--dash,
+.settings-accent-theme--dash {
   --theme-chip-bg: #1a1210;
   --theme-chip-accent: #cf8b4d;
   --theme-chip-accent-2: #dcb878;
 }
 
-.settings-theme-card--absolutely {
+.settings-theme-card--absolutely,
+.settings-accent-theme--absolutely {
   --theme-chip-bg: #1c1c1a;
   --theme-chip-accent: #d97757;
   --theme-chip-accent-2: #b8926a;
 }
 
-.settings-theme-card--tide {
+.settings-theme-card--tide,
+.settings-accent-theme--tide {
   --theme-chip-bg: #10151b;
   --theme-chip-accent: #5ab6d8;
   --theme-chip-accent-2: #7f9bb5;
 }
 
-.settings-theme-card--beacon {
+.settings-theme-card--beacon,
+.settings-accent-theme--beacon {
   --theme-chip-bg: #000000;
   --theme-chip-accent: #ffc233;
   --theme-chip-accent-2: #8ecdff;
 }
 
-.settings-theme-card--phosphor {
+.settings-theme-card--phosphor,
+.settings-accent-theme--phosphor {
   --theme-chip-bg: #0a0f0a;
   --theme-chip-accent: #4ade80;
   --theme-chip-accent-2: #8fd6a5;
 }
 
-.settings-theme-card--crt {
+.settings-theme-card--crt,
+.settings-accent-theme--crt {
   --theme-chip-bg: #090a09;
   --theme-chip-accent: #e8e8e8;
   --theme-chip-accent-2: #ffcf5c;
 }
 
-.settings-theme-card--manuscript {
+.settings-theme-card--manuscript,
+.settings-accent-theme--manuscript {
   --theme-chip-bg: #211e18;
   --theme-chip-accent: #8fa8e0;
   --theme-chip-accent-2: #cfa85e;
 }
 
-.settings-theme-card--rose {
+.settings-theme-card--rose,
+.settings-accent-theme--rose {
   --theme-chip-bg: #191724;
   --theme-chip-accent: #ebbcba;
   --theme-chip-accent-2: #f6c177;
 }
 
-.settings-theme-card--miami {
+.settings-theme-card--miami,
+.settings-accent-theme--miami {
   --theme-chip-bg: #140f1e;
   --theme-chip-accent: #f472b6;
   --theme-chip-accent-2: #5fd7e8;
 }
 
-:root[data-theme-mode="light"] .settings-theme-card--claw {
+:root[data-theme-mode="light"] :is(.settings-theme-card--claw, .settings-accent-theme--claw) {
   --theme-chip-bg: #faf9f7;
   --theme-chip-accent: #bd4531;
   --theme-chip-accent-2: #0d9488;
 }
 
-:root[data-theme-mode="light"] .settings-theme-card--knot {
+:root[data-theme-mode="light"] :is(.settings-theme-card--knot, .settings-accent-theme--knot) {
   --theme-chip-bg: #f9f9fb;
   --theme-chip-accent: #c41e30;
   --theme-chip-accent-2: #5a626e;
 }
 
-:root[data-theme-mode="light"] .settings-theme-card--dash {
+:root[data-theme-mode="light"] :is(.settings-theme-card--dash, .settings-accent-theme--dash) {
   --theme-chip-bg: #f7f2ec;
   --theme-chip-accent: #8a512c;
   --theme-chip-accent-2: #7d6027;
 }
 
-:root[data-theme-mode="light"] .settings-theme-card--absolutely {
+:root[data-theme-mode="light"]
+  :is(.settings-theme-card--absolutely, .settings-accent-theme--absolutely) {
   --theme-chip-bg: #faf9f5;
   --theme-chip-accent: #a8452a;
   --theme-chip-accent-2: #8a6a44;
 }
 
-:root[data-theme-mode="light"] .settings-theme-card--tide {
+:root[data-theme-mode="light"] :is(.settings-theme-card--tide, .settings-accent-theme--tide) {
   --theme-chip-bg: #f7f9fb;
   --theme-chip-accent: #1f6f8f;
   --theme-chip-accent-2: #3d6d88;
 }
 
-:root[data-theme-mode="light"] .settings-theme-card--beacon {
+:root[data-theme-mode="light"] :is(.settings-theme-card--beacon, .settings-accent-theme--beacon) {
   --theme-chip-bg: #ffffff;
   --theme-chip-accent: #6e4a00;
   --theme-chip-accent-2: #09428d;
 }
 
-:root[data-theme-mode="light"] .settings-theme-card--phosphor {
+:root[data-theme-mode="light"]
+  :is(.settings-theme-card--phosphor, .settings-accent-theme--phosphor) {
   --theme-chip-bg: #f4f7f4;
   --theme-chip-accent: #10693a;
   --theme-chip-accent-2: #2f6b47;
 }
 
-:root[data-theme-mode="light"] .settings-theme-card--crt {
+:root[data-theme-mode="light"] :is(.settings-theme-card--crt, .settings-accent-theme--crt) {
   --theme-chip-bg: #f5f5f4;
   --theme-chip-accent: #1f1f1f;
   --theme-chip-accent-2: #7a5d10;
 }
 
-:root[data-theme-mode="light"] .settings-theme-card--manuscript {
+:root[data-theme-mode="light"]
+  :is(.settings-theme-card--manuscript, .settings-accent-theme--manuscript) {
   --theme-chip-bg: #f6f1e4;
   --theme-chip-accent: #31549b;
   --theme-chip-accent-2: #7d6118;
 }
 
-:root[data-theme-mode="light"] .settings-theme-card--rose {
+:root[data-theme-mode="light"] :is(.settings-theme-card--rose, .settings-accent-theme--rose) {
   --theme-chip-bg: #faf4ed;
   --theme-chip-accent: #9c4f66;
   --theme-chip-accent-2: #286983;
 }
 
-:root[data-theme-mode="light"] .settings-theme-card--miami {
+:root[data-theme-mode="light"] :is(.settings-theme-card--miami, .settings-accent-theme--miami) {
   --theme-chip-bg: #f7f3f6;
   --theme-chip-accent: #b0246f;
   --theme-chip-accent-2: #0f6f7d;
 }
 /* stylelint-enable color-no-hex */
 
-.settings-theme-card--custom {
+.settings-theme-card--custom,
+.settings-accent-theme--custom {
   --theme-chip-bg: var(--bg);
   --theme-chip-accent: var(--accent);
   --theme-chip-accent-2: var(--accent-2);
@@ -567,13 +582,14 @@
   height: 15px;
 }
 
-.settings-accent-swatch--reset {
-  color: var(--muted);
-  background: var(--bg-elevated);
+.settings-accent-swatch__reset {
+  display: inline-flex;
+  width: 16px;
+  height: 16px;
+  color: var(--theme-chip-bg);
 }
 
-.settings-accent-swatch--reset span,
-.settings-accent-swatch--reset svg {
+.settings-accent-swatch__reset svg {
   width: 16px;
   height: 16px;
 }

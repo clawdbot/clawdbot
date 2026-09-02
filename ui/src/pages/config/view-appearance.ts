@@ -108,6 +108,7 @@ const BUILTIN_THEME_OPTIONS: ThemeOption[] = [
 ];
 
 const ACCENT_PRESETS = [
+  { id: "default", hex: undefined, labelKey: "configView.appearance.accents.default" },
   { id: "claw", hex: "#ff5c5c", labelKey: "configView.appearance.accents.claw" },
   { id: "coral", hex: "#ff8066", labelKey: "configView.appearance.accents.coral" },
   { id: "amber", hex: "#f5b942", labelKey: "configView.appearance.accents.amber" },
@@ -271,18 +272,22 @@ export function renderAppearanceSection(
   const themeProvenance = serverUiPrefProvenanceHint(props.themeProvenance);
   const themeModeProvenance = serverUiPrefProvenanceHint(props.themeModeProvenance);
   const accentProvenance = serverUiPrefProvenanceHint(props.accentProvenance);
+  const defaultAccentSelected = props.accent === props.accentResetValue;
   const customAccentSelected = Boolean(
-    props.accent && !ACCENT_PRESETS.some((preset) => preset.hex === props.accent),
+    !defaultAccentSelected &&
+    props.accent &&
+    !ACCENT_PRESETS.some((preset) => preset.hex === props.accent),
   );
-  const selectedAccentPreset = ACCENT_PRESETS.find((preset) => preset.hex === props.accent);
-  const accentSelectionStatus =
-    props.accent == null
-      ? t("configView.appearance.usingInheritedAccent")
-      : t("configView.appearance.usingAccent", {
-          value: selectedAccentPreset
-            ? t(selectedAccentPreset.labelKey)
-            : t("configView.appearance.customAccent"),
-        });
+  const selectedAccentPreset = ACCENT_PRESETS.find(
+    (preset) => preset.hex !== undefined && preset.hex === props.accent,
+  );
+  const accentSelectionStatus = defaultAccentSelected
+    ? t("configView.appearance.usingInheritedAccent")
+    : t("configView.appearance.usingAccent", {
+        value: selectedAccentPreset
+          ? t(selectedAccentPreset.labelKey)
+          : t("configView.appearance.customAccent"),
+      });
   return html`
     <div class="settings-page">
       ${renderLanguageSection(props)}
@@ -445,16 +450,21 @@ export function renderAppearanceSection(
           <div class="settings-row settings-row--stacked">
             <div class="settings-accent-swatches">
               ${ACCENT_PRESETS.map((preset) => {
-                const selected = preset.hex === props.accent;
+                const isDefault = preset.hex === undefined;
+                const selected = isDefault
+                  ? defaultAccentSelected
+                  : !defaultAccentSelected && preset.hex === props.accent;
                 const label = t(preset.labelKey);
+                const defaultColor = props.accentResetValue ?? "var(--theme-chip-accent)";
+                const themeChipScope = isDefault ? ` settings-accent-theme--${props.theme}` : "";
                 return html`
                   <button
                     type="button"
-                    class="settings-accent-swatch ${selected
+                    class="settings-accent-swatch${themeChipScope} ${selected
                       ? "settings-accent-swatch--active"
                       : ""}"
                     style=${styleMap({
-                      "--settings-accent-swatch": preset.hex,
+                      "--settings-accent-swatch": preset.hex ?? defaultColor,
                     })}
                     data-accent-preset=${preset.id}
                     aria-label=${label}
@@ -462,11 +472,15 @@ export function renderAppearanceSection(
                     title=${label}
                     @click=${() => props.setAccent(preset.hex)}
                   >
-                    ${selected
-                      ? html`<span class="settings-accent-swatch__check" aria-hidden="true"
-                          >${icons.check}</span
+                    ${isDefault && !defaultAccentSelected
+                      ? html`<span class="settings-accent-swatch__reset" aria-hidden="true"
+                          >${icons.rotateCcw}</span
                         >`
-                      : nothing}
+                      : selected
+                        ? html`<span class="settings-accent-swatch__check" aria-hidden="true"
+                            >${icons.check}</span
+                          >`
+                        : nothing}
                   </button>
                 `;
               })}
@@ -475,9 +489,9 @@ export function renderAppearanceSection(
                   ? "settings-accent-swatch--active"
                   : ""}"
                 style=${styleMap({
-                  "--settings-accent-swatch": props.accent ?? ACCENT_PRESETS[0].hex,
+                  "--settings-accent-swatch": props.accent ?? ACCENT_PRESETS[1].hex,
                   "--settings-accent-swatch-ink": controlUiAccentInk(
-                    props.accent ?? ACCENT_PRESETS[0].hex,
+                    props.accent ?? ACCENT_PRESETS[1].hex,
                   ),
                 })}
               >
@@ -488,7 +502,7 @@ export function renderAppearanceSection(
                   aria-label=${t("configView.appearance.customAccent")}
                   aria-describedby="settings-accent-status"
                   title=${t("configView.appearance.customAccent")}
-                  .value=${props.accent ?? ACCENT_PRESETS[0].hex}
+                  .value=${props.accent ?? ACCENT_PRESETS[1].hex}
                   @input=${(event: Event & { currentTarget: HTMLInputElement }) =>
                     props.setAccent(event.currentTarget.value)}
                 />
@@ -496,19 +510,6 @@ export function renderAppearanceSection(
                   >${icons.pipette}</span
                 >
               </span>
-              <button
-                type="button"
-                class="settings-accent-swatch settings-accent-swatch--reset ${props.accent == null
-                  ? "settings-accent-swatch--active"
-                  : ""}"
-                data-accent-preset="default"
-                aria-label=${t("configView.appearance.accents.default")}
-                aria-pressed=${String(props.accent == null)}
-                title=${t("configView.appearance.accents.default")}
-                @click=${() => props.setAccent(undefined)}
-              >
-                <span aria-hidden="true">${icons.rotateCcw}</span>
-              </button>
             </div>
           </div>
         </div>

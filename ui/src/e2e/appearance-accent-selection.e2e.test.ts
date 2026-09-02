@@ -72,7 +72,7 @@ const suite = createControlUiE2eSuite({
 });
 
 suite.define(() => {
-  it("persists an accent selection in the active mock Gateway scope", async () => {
+  it("keeps the theme default first and reveals its reset icon only for overrides", async () => {
     await suite.withPage(
       {
         colorScheme: "dark",
@@ -86,11 +86,31 @@ suite.define(() => {
         await waitForControlUiSettingsTakeover(page);
 
         const accentSection = page.locator("#settings-appearance-accent");
+        const swatches = accentSection.locator(".settings-accent-swatch");
+        const defaultSwatch = accentSection.locator('[data-accent-preset="default"]');
         const coralSwatch = accentSection.locator('[data-accent-preset="coral"]');
         await accentSection.scrollIntoViewIfNeeded();
+        expect(await swatches.first().getAttribute("data-accent-preset")).toBe("default");
+        await expect.poll(() => defaultSwatch.getAttribute("aria-pressed")).toBe("true");
+        await expect
+          .poll(() => defaultSwatch.locator(".settings-accent-swatch__reset").count())
+          .toBe(0);
+
+        if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
+          const artifactDir = createControlUiE2eArtifactDir("appearance-accent-selection");
+          await page.screenshot({
+            animations: "disabled",
+            path: path.join(artifactDir, "theme-default-selected.png"),
+          });
+        }
+
         await coralSwatch.click();
 
         await expect.poll(() => coralSwatch.getAttribute("aria-pressed")).toBe("true");
+        await expect.poll(() => defaultSwatch.getAttribute("aria-pressed")).toBe("false");
+        await expect
+          .poll(() => defaultSwatch.locator(".settings-accent-swatch__reset").count())
+          .toBe(1);
         await expect
           .poll(() =>
             page.evaluate(() =>
@@ -112,12 +132,27 @@ suite.define(() => {
           .toMatchObject({ accent: "#ff8066" });
 
         if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
-          const artifactDir = createControlUiE2eArtifactDir("appearance-accent-selection");
+          const artifactDir = createControlUiE2eArtifactDir("appearance-accent-override");
           await page.screenshot({
             animations: "disabled",
-            path: path.join(artifactDir, "coral-selected.png"),
+            path: path.join(artifactDir, "coral-selected-with-reset.png"),
           });
         }
+
+        await defaultSwatch.click();
+        await expect.poll(() => defaultSwatch.getAttribute("aria-pressed")).toBe("true");
+        await expect
+          .poll(() => defaultSwatch.locator(".settings-accent-swatch__reset").count())
+          .toBe(0);
+        await expect.poll(() => coralSwatch.getAttribute("aria-pressed")).toBe("false");
+        await expect
+          .poll(() =>
+            page.evaluate(
+              (key) => JSON.parse(localStorage.getItem(key) ?? "{}"),
+              `openclaw.control.settings.v1:${gatewayScope}`,
+            ),
+          )
+          .not.toHaveProperty("accent");
       },
     );
   });
