@@ -119,6 +119,15 @@ export type ChannelPresentationCapabilities = {
 
 export type ChannelDeliveryCapabilities = {
   pin?: boolean;
+  /**
+   * Whether the channel's sendPayload transport delivers 2+ media items as one
+   * grouped platform message with complete custody of every accepted item
+   * (e.g. Telegram media albums). Channels whose payload helper sends each
+   * attachment separately and returns only the last result must NOT set this:
+   * core routes multi-media payloads through sendPayload only for grouped-
+   * capable channels and keeps per-media fanout for everyone else.
+   */
+  sendPayloadGroupsMedia?: boolean;
   durableFinal?: {
     text?: boolean;
     media?: boolean;

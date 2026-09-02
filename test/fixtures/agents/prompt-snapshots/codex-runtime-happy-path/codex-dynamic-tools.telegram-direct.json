@@ -31,7 +31,7 @@
           "type": "boolean"
         },
         "attachments": {
-          "description": "Attachments; each uses media.",
+          "description": "Attachments; each uses media. Multiple attachments deliver together when the channel supports grouped media, otherwise as individual messages.",
           "items": {
             "properties": {
               "media": {
@@ -93,7 +93,7 @@
           "type": "boolean"
         },
         "media": {
-          "description": "Media URL/path. data: use buffer.",
+          "description": "Single media URL/path. For multiple media use attachments. data: use buffer.",
           "type": "string"
         },
         "message": {

@@ -22,7 +22,7 @@ import {
 } from "./button-types.js";
 import { buildInlineKeyboard } from "./inline-keyboard.js";
 
-const TELEGRAM_CONTROL_ONLY_FALLBACK = "Choose an option.";
+export const TELEGRAM_CONTROL_ONLY_FALLBACK = "Choose an option.";
 
 const TELEGRAM_PRESENTATION_CAPABILITIES = {
   supported: true,

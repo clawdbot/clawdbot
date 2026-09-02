@@ -3336,8 +3336,8 @@ describe("message tool path passthrough", () => {
     const attachmentProperties = attachments?.items?.properties ?? {};
 
     expect(properties).toHaveProperty("media");
-    expect(properties).not.toHaveProperty("mediaUrl");
     expect(properties).not.toHaveProperty("mediaUrls");
+    expect(properties).not.toHaveProperty("mediaUrl");
     expect(properties).not.toHaveProperty("path");
     expect(properties).not.toHaveProperty("filePath");
     expect(properties).not.toHaveProperty("fileUrl");

@@ -13,6 +13,8 @@ export type TelegramSendOpts = {
   accountId?: string;
   verbose?: boolean;
   mediaUrl?: string;
+  /** Multiple media URLs/paths sent together. Telegram groups 2-10 photos/videos into a single album message. */
+  mediaUrls?: readonly string[];
   mediaAccess?: OutboundMediaAccess;
   mediaLocalRoots?: readonly string[];
   mediaReadFile?: (filePath: string) => Promise<Buffer>;

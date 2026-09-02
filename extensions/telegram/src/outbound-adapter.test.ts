@@ -53,15 +53,6 @@ function lastCallOptions(
   return callOptionsAt(mock, mock.mock.calls.length - 1, expectedTo, expectedText);
 }
 
-function callOptionsFromEnd(
-  mock: MockWithCalls,
-  offsetFromEnd: number,
-  expectedTo: string,
-  expectedText: string,
-): Record<string, unknown> {
-  return callOptionsAt(mock, mock.mock.calls.length - offsetFromEnd, expectedTo, expectedText);
-}
-
 describe("telegramOutbound", () => {
   beforeEach(() => {
     pinMessageTelegramMock.mockReset();
@@ -111,10 +102,8 @@ describe("telegramOutbound", () => {
     expect(result).toEqual({ channel: "telegram", messageId: "tg-media" });
   });
 
-  it("sends payload media in sequence and keeps buttons on the first message only", async () => {
-    sendMessageTelegramMock
-      .mockResolvedValueOnce({ messageId: "tg-1", chatId: "12345" })
-      .mockResolvedValueOnce({ messageId: "tg-2", chatId: "12345" });
+  it("groups payload media into a single album send with buttons", async () => {
+    sendMessageTelegramMock.mockResolvedValueOnce({ messageId: "tg-1", chatId: "12345" });
     const mediaAccess = { localRoots: ["/tmp/media"], workspaceDir: "/tmp/media" };
 
     const result = await telegramOutbound.sendPayload!({
@@ -144,32 +133,17 @@ describe("telegramOutbound", () => {
       deps: { sendTelegram: sendMessageTelegramMock },
     });
 
-    expect(sendMessageTelegramMock).toHaveBeenCalledTimes(2);
-    const firstOptions = callOptionsAt(sendMessageTelegramMock, 0, "12345", "Approval required");
-    expect(firstOptions.mediaUrl).toBe("chart.png");
-    expect(firstOptions.mediaAccess).toBe(mediaAccess);
-    expect(firstOptions.mediaLocalRoots).toEqual(["/tmp/media"]);
-    expect(firstOptions.quoteText).toBe("quoted");
-    expect(firstOptions.buttons).toEqual([
+    expect(sendMessageTelegramMock).toHaveBeenCalledTimes(1);
+    const options = callOptionsAt(sendMessageTelegramMock, 0, "12345", "Approval required");
+    expect(options.mediaUrl).toBeUndefined();
+    expect(options.mediaUrls).toEqual(["chart.png", "chart-2.png"]);
+    expect(options.mediaAccess).toBe(mediaAccess);
+    expect(options.mediaLocalRoots).toEqual(["/tmp/media"]);
+    expect(options.quoteText).toBe("quoted");
+    expect(options.buttons).toEqual([
       [{ text: "Allow Once", callback_data: "/approve abc allow-once" }],
     ]);
-    expect(firstOptions.promptContextProjectionPlan).toMatchObject({
-      cursor: {
-        source: {
-          transcriptMessageId: "assistant-media",
-        },
-        nextPartIndex: 0,
-        complete: true,
-      },
-      finalPart: false,
-    });
-    const secondOptions = callOptionsAt(sendMessageTelegramMock, 1, "12345", "");
-    expect(secondOptions.mediaUrl).toBe("chart-2.png");
-    expect(secondOptions.mediaAccess).toBe(mediaAccess);
-    expect(secondOptions.mediaLocalRoots).toEqual(["/tmp/media"]);
-    expect(secondOptions.quoteText).toBe("quoted");
-    expect(secondOptions.buttons).toBeUndefined();
-    expect(secondOptions.promptContextProjectionPlan).toMatchObject({
+    expect(options.promptContextProjectionPlan).toMatchObject({
       cursor: {
         source: {
           transcriptMessageId: "assistant-media",
@@ -179,12 +153,9 @@ describe("telegramOutbound", () => {
       },
       finalPart: true,
     });
-    expect((firstOptions.promptContextProjectionPlan as { cursor: unknown }).cursor).toBe(
-      (secondOptions.promptContextProjectionPlan as { cursor: unknown }).cursor,
-    );
     expect(result).toEqual({
       channel: "telegram",
-      messageId: "tg-2",
+      messageId: "tg-1",
       target: { kind: "chat", id: "12345" },
     });
   });
@@ -914,9 +885,7 @@ describe("telegramOutbound", () => {
       expect(options.silent).toBe(true);
     };
     const proveBatch = async () => {
-      sendMessageTelegramMock
-        .mockResolvedValueOnce({ messageId: "tg-batch-1", chatId: "12345" })
-        .mockResolvedValueOnce({ messageId: "tg-batch-2", chatId: "12345" });
+      sendMessageTelegramMock.mockResolvedValueOnce({ messageId: "tg-batch", chatId: "12345" });
       await telegramOutbound.sendPayload!({
         cfg: {} as never,
         to: "12345",
@@ -927,10 +896,10 @@ describe("telegramOutbound", () => {
         },
         deps: { sendTelegram: sendMessageTelegramMock },
       });
-      const firstOptions = callOptionsFromEnd(sendMessageTelegramMock, 2, "12345", "batch");
-      expect(firstOptions.mediaUrl).toBe("https://example.com/a.png");
-      const secondOptions = callOptionsFromEnd(sendMessageTelegramMock, 1, "12345", "");
-      expect(secondOptions.mediaUrl).toBe("https://example.com/b.png");
+      // Multiple media are handed to the send layer as one mediaUrls array so it
+      // can group them into a Telegram album (or fall back per-media).
+      const options = lastCallOptions(sendMessageTelegramMock, "12345", "batch");
+      expect(options.mediaUrls).toEqual(["https://example.com/a.png", "https://example.com/b.png"]);
     };
 
     await verifyDurableFinalCapabilityProofs({

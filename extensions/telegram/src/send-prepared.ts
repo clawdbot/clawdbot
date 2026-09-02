@@ -67,7 +67,8 @@ export type TelegramPreparedSendPart = {
 };
 
 type TextFallback = { index: number; count: number };
-type AcceptedPart = TelegramPreparedSendPart & { messageId: number };
+export type TelegramPreparedAcceptedPart = TelegramPreparedSendPart & { messageId: number };
+type AcceptedPart = TelegramPreparedAcceptedPart;
 type ObservePart = (part: AcceptedPart) => Promise<void>;
 type PartialDeliveryResult = Parameters<typeof mergeTelegramPartialDeliveryError>[1];
 type Tracking = Omit<
@@ -118,6 +119,11 @@ export function createTelegramPreparedSender(config: {
       fail(error, 0, details?.());
     }
   };
+  // Registers provider-accepted parts without running a fallible observer.
+  // Multi-result sends (media groups) register every accepted item first so a
+  // later observer failure cannot strand accepted siblings outside custody.
+  const register = (part: TelegramPreparedSendPart): TelegramPreparedAcceptedPart =>
+    recordAcceptance(part);
   const request = <T>(
     label: string,
     requestParams: Record<string, unknown>,
@@ -317,7 +323,7 @@ export function createTelegramPreparedSender(config: {
       sender: delivery.sender,
     };
   };
-  return { parts, accept, fail, sendText, sendMedia };
+  return { parts, accept, register, fail, sendText, sendMedia, request };
 }
 
 export type TelegramPreparedSender = ReturnType<typeof createTelegramPreparedSender>;
