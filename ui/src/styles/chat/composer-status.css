@@ -35,7 +35,8 @@
   padding: 6px 12px;
   border: 0;
   border-radius: var(--radius-md);
-  background: none;
+  background: var(--bg);
+  box-shadow: 0 0 12px 8px var(--bg);
   color: var(--muted);
   white-space: normal;
   animation: none;

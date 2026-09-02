@@ -2,6 +2,7 @@ import type { CDPSession } from "@vitest/browser-playwright";
 import { nothing, render } from "lit";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { cdp } from "vitest/browser";
+import "../../../components/tooltip.ts";
 import { renderCompactionIndicator, renderFallbackIndicator } from "./chat-composer-status.ts";
 import baseStyles from "../../../styles/base.css?inline";
 import composerStatusStyles from "../../../styles/chat/composer-status.css?inline";
@@ -34,7 +35,7 @@ describe("chat composer compaction motion", () => {
     await session.send("Emulation.setEmulatedMedia", { features: [] });
   });
 
-  it("folds lines without a spinner or pill, then reveals the completion check", async () => {
+  it("folds lines on a readable borderless scrim, then reveals the completion check", async () => {
     render(
       renderCompactionIndicator({
         phase: "active",
@@ -48,7 +49,8 @@ describe("chat composer compaction motion", () => {
     const lines = Array.from(container.querySelectorAll(".compaction-indicator__line"));
     const check = container.querySelector<SVGElement>(".compaction-indicator__glyph svg")!;
     expect(lines.length).toBeGreaterThan(0);
-    expect(getComputedStyle(indicator).backgroundColor).toBe("rgba(0, 0, 0, 0)");
+    expect(getComputedStyle(indicator).backgroundColor).not.toBe("rgba(0, 0, 0, 0)");
+    expect(getComputedStyle(indicator).boxShadow).not.toBe("none");
     expect(getComputedStyle(indicator).borderTopWidth).toBe("0px");
     expect(getComputedStyle(indicator).animationName).toBe("none");
     expect(getComputedStyle(check).opacity).toBe("0");
@@ -120,7 +122,7 @@ describe("chat composer compaction motion", () => {
     }
   });
 
-  it.each(["active", "cleared"] as const)("preserves the %s fallback pill", (phase) => {
+  it.each(["active", "cleared"] as const)("preserves the %s fallback pill", async (phase) => {
     render(
       renderFallbackIndicator({
         phase,
@@ -131,6 +133,7 @@ describe("chat composer compaction motion", () => {
       }),
       container,
     );
+    await container.querySelector("openclaw-tooltip")!.updateComplete;
     const indicator = container.querySelector<HTMLElement>(".compaction-indicator")!;
     const icon = indicator.querySelector("svg")!;
     expect(getComputedStyle(indicator).borderTopWidth).toBe("1px");
