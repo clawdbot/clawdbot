@@ -67,7 +67,13 @@ function extractTailnetHostFromStatusJson(raw: string): string | null {
   return ips.length > 0 ? (ips[0] ?? null) : null;
 }
 
-function parseLoopbackProxyPort(proxy: string): number | null {
+function parseLoopbackProxyPort(proxy: string, forAdoption: boolean): number | null {
+  // SDK discovery accepts the shipped proxy forms; ownership requires the exact
+  // HTTP loopback root written by previous managed releases.
+  if (forAdoption) {
+    const match = /^http:\/\/(?:127\.0\.0\.1|localhost):(\d+)\/?$/.exec(proxy);
+    return match ? Number(match[1]) : null;
+  }
   const trimmed = proxy.trim();
   if (/^\d+$/.test(trimmed)) {
     return Number.parseInt(trimmed, 10);
@@ -86,50 +92,43 @@ function parseLoopbackProxyPort(proxy: string): number | null {
   }
 }
 
-function collectServeGatewayUrls(
-  config: z.infer<typeof TailscaleServeServiceSchema>,
+export function extractTailscaleServeGatewayUrls(
+  raw: string,
   gatewayPort: number,
-  allowFunnel: Record<string, boolean>,
-): string[] {
-  const urls: string[] = [];
+  forAdoption = false,
+): string[] | null {
+  const start = raw.indexOf("{");
+  const end = raw.lastIndexOf("}");
+  const config =
+    end > start && start >= 0
+      ? safeParseJsonWithSchema(TailscaleServeConfigSchema, raw.slice(start, end + 1))
+      : null;
+  if (!config) {
+    return null;
+  }
+  // Services can load-balance elsewhere; Funnel is not a tailnet discovery URL.
+  // Adoption additionally requires an exclusive root so it can free the port.
+  const urls = new Set<string>();
   for (const [hostPort, webServer] of Object.entries(config.Web ?? {})) {
     const handler = webServer.Handlers["/"];
     if (
-      allowFunnel[hostPort] ||
+      (!forAdoption && config.AllowFunnel?.[hostPort]) ||
+      (forAdoption && Object.keys(webServer.Handlers).length !== 1) ||
       !handler?.Proxy ||
-      parseLoopbackProxyPort(handler.Proxy) !== gatewayPort
+      parseLoopbackProxyPort(handler.Proxy, forAdoption) !== gatewayPort
     ) {
       continue;
     }
     try {
       const endpoint = new URL(`https://${hostPort}`);
-      const port = endpoint.port || "443";
-      if (config.TCP?.[port]?.HTTPS !== true) {
-        continue;
+      if (config.TCP?.[endpoint.port || "443"]?.HTTPS === true) {
+        urls.add(`wss://${endpoint.host}`);
       }
-      urls.push(`wss://${endpoint.host}`);
     } catch {
       continue;
     }
   }
-  return urls;
-}
-
-function extractServeGatewayUrls(raw: string, gatewayPort: number): string[] | null {
-  const start = raw.indexOf("{");
-  const end = raw.lastIndexOf("}");
-  if (start === -1 || end <= start) {
-    return null;
-  }
-  const parsed = safeParseJsonWithSchema(TailscaleServeConfigSchema, raw.slice(start, end + 1));
-  if (!parsed) {
-    return null;
-  }
-  // Service entries can load-balance to another node, while Funnel routes are public.
-  // Gateway route discovery must stay pinned to this node and inside the tailnet.
-  return [
-    ...new Set(collectServeGatewayUrls(parsed, gatewayPort, parsed.AllowFunnel ?? {})),
-  ].toSorted();
+  return [...urls].toSorted();
 }
 
 type TailscaleServeGatewayInspection =
@@ -141,6 +140,7 @@ type TailscaleServeGatewayInspection =
 export async function inspectTailscaleServeGatewayUrlsWithRunner(
   gatewayPort: number,
   runCommandWithTimeout?: TailscaleStatusCommandRunner,
+  forAdoption = false,
 ): Promise<TailscaleServeGatewayInspection> {
   if (!runCommandWithTimeout) {
     return { status: "unavailable" };
@@ -155,7 +155,7 @@ export async function inspectTailscaleServeGatewayUrlsWithRunner(
       if (result.code !== 0 || !result.stdout.trim()) {
         continue;
       }
-      const urls = extractServeGatewayUrls(result.stdout, gatewayPort);
+      const urls = extractTailscaleServeGatewayUrls(result.stdout, gatewayPort, forAdoption);
       if (!urls) {
         sawInvalidStatus = true;
         continue;

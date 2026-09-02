@@ -13,12 +13,8 @@ type DoctorTailscaleMigrationResult = {
   warnings: string[];
 };
 
-function result(
-  config: OpenClawConfig,
-  changes: string[] = [],
-  warnings: string[] = [],
-): DoctorTailscaleMigrationResult {
-  return { config, changes, warnings };
+function result(config: OpenClawConfig, warnings: string[] = []): DoctorTailscaleMigrationResult {
+  return { config, changes: [], warnings };
 }
 
 export async function prepareTailscaleConfigMigration(params: {
@@ -28,12 +24,11 @@ export async function prepareTailscaleConfigMigration(params: {
 }): Promise<DoctorTailscaleMigrationResult> {
   const config = params.cfg;
   const gateway = config.gateway;
-  if (
-    !gateway ||
-    gateway.mode === "remote" ||
-    gateway.bind !== "lan" ||
-    (gateway.tailscale?.mode ?? "off") !== "off"
-  ) {
+  const managed = (gateway?.tailscale?.mode ?? "off") !== "off";
+  if (gateway?.tailscale?.mode === "serve" && gateway.tailscale.preserveFunnel) {
+    return result(config);
+  }
+  if (!gateway || gateway.mode === "remote" || (!managed && gateway.bind !== "lan")) {
     return result(config);
   }
 
@@ -48,31 +43,37 @@ export async function prepareTailscaleConfigMigration(params: {
   const inspection = await inspectTailscaleServeGatewayUrlsWithRunner(
     gatewayPort,
     runCommandWithTimeout,
+    managed,
   );
   if (inspection.status === "unavailable") {
     return result(config);
   }
   if (inspection.status === "invalid") {
-    return result(
-      config,
-      [],
-      [
-        "Tailscale Serve status could not be parsed, so legacy Serve configuration was not changed. Review `tailscale serve status --json`, then rerun Doctor.",
-      ],
-    );
+    return result(config, [
+      "Tailscale Serve status could not be parsed, so legacy Serve configuration was not changed. Review `tailscale serve status --json`, then rerun Doctor.",
+    ]);
   }
   if (inspection.urls.length === 0) {
     return result(config);
   }
 
-  // Tailscale status describes the route but does not prove that OpenClaw owns
-  // it. Gateway startup deliberately fails closed when it cannot prove that
-  // ownership, so Doctor must not persist managed ingress based on shape alone.
-  return result(
-    config,
-    [],
-    [
-      `Legacy Tailscale Serve still targets Gateway port ${gatewayPort}, but Doctor cannot prove that OpenClaw owns the existing route; configuration was not changed. If you confirm it is a stale route from an older OpenClaw release, remove only its root handler with \`tailscale serve --yes --https=443 --set-path=/ off\` or \`tailscale funnel --yes --https=443 --set-path=/ off\`, then configure gateway.bind="loopback" and gateway.tailscale.mode="serve" manually and restart the Gateway. If another service owns the route, leave managed Tailscale ingress off and configure gateway.trustedProxies for that proxy instead.`,
-    ],
-  );
+  if (managed) {
+    return result(
+      config,
+      inspection.urls.some((url) => !new URL(url).port)
+        ? [
+            "The predecessor Tailscale route will be adopted from a previous OpenClaw release when the Gateway starts.",
+          ]
+        : [],
+    );
+  }
+  const cleanup = inspection.urls
+    .map(
+      (url) => `\`tailscale serve --yes --https=${new URL(url).port || "443"} --set-path=/ off\``,
+    )
+    .join(" or ");
+  // Disabled managed ingress is an external-owner choice, not an upgrade signal.
+  return result(config, [
+    `Legacy Tailscale Serve still targets Gateway port ${gatewayPort}, but Doctor cannot prove that OpenClaw owns the existing route; configuration was not changed. If you confirm it is a stale route from an older OpenClaw release, remove only its root handler with ${cleanup}, then configure gateway.bind="loopback" and gateway.tailscale.mode="serve" manually and restart the Gateway. If another service owns the route, leave managed Tailscale ingress off and configure gateway.trustedProxies for that proxy instead.`,
+  ]);
 }
