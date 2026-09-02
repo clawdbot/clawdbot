@@ -134,6 +134,42 @@ it("falls back when the persisted agent is absent from the Gateway roster", asyn
   ).resolves.toEqual({ pathname: "/chat/dummy", search: "", hash: "" });
 });
 
+it("replaces a confirmed-missing remembered session with the agent main route", async () => {
+  const request = vi.fn(async () => ({ ok: false as const }));
+
+  await expect(
+    resolveInitialApplicationLocation({
+      location: { pathname: "/", search: "?draft=hello", hash: "" },
+      basePath: "",
+      sessionKey: "agent:research:thread:12345678-0000-4000-8000-000000000001",
+      gateway: {
+        snapshot: {
+          phase: "connected",
+          client: { request },
+          hello: { snapshot: { sessionDefaults: { defaultAgentId: "main", mainKey: "main" } } },
+        },
+        subscribe: vi.fn(() => () => undefined),
+      } as unknown as ApplicationContext<RouteId>["gateway"],
+      agentsList: () => ({
+        defaultId: "main",
+        mainKey: "main",
+        scope: "per-sender",
+        agents: [{ id: "main" }, { id: "research" }],
+      }),
+      signal: new AbortController().signal,
+    }),
+  ).resolves.toEqual({ pathname: "/chat/research", search: "?draft=hello", hash: "" });
+  expect(request).toHaveBeenCalledExactlyOnceWith(
+    "sessions.resolve",
+    {
+      key: "agent:research:thread:12345678-0000-4000-8000-000000000001",
+      agentId: "research",
+      allowMissing: true,
+    },
+    { signal: expect.any(AbortSignal) },
+  );
+});
+
 it.each([
   { name: "saved target agent", selectedAgentId: "research" },
   { name: "unsaved target agent", selectedAgentId: undefined },
