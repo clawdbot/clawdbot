@@ -2674,12 +2674,19 @@ wa-dropdown-item.sidebar-session-owner-submenu::part(submenu-icon) {
   color: var(--text);
 }
 
+.session-menu__shortcut.sidebar-session-owner-count {
+  min-width: 0;
+  margin-inline-end: -2px;
+  text-align: right;
+}
+
 .session-menu__shortcut.sidebar-session-owner-selection {
   display: inline-flex;
   align-items: center;
   gap: 4px;
   min-width: 0;
   width: auto;
+  margin-inline-end: -2px;
   font-family: inherit;
 }
 

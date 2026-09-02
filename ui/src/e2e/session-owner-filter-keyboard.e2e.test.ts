@@ -57,16 +57,23 @@ suite.define(() => {
       expect(await ownerSubmenu.locator(":scope > .sidebar-session-owner-selection").count()).toBe(
         0,
       );
-      const trailingGap = () =>
-        ownerSubmenu.evaluate((element) => {
+      const trailingGap = (selector: string) =>
+        ownerSubmenu.evaluate((element, contentSelector) => {
           const details = element.querySelector<HTMLElement>(":scope > [slot='details']");
           const chevron = element.shadowRoot?.querySelector<HTMLElement>("[part='submenu-icon']");
-          if (!details || !chevron) {
+          const content = element.querySelector<HTMLElement>(contentSelector);
+          if (!details || !chevron || !content) {
             throw new Error("expected owner trailing content and submenu chevron");
           }
-          return chevron.getBoundingClientRect().left - details.getBoundingClientRect().right;
-        });
-      expect(await trailingGap()).toBeLessThanOrEqual(9);
+          const contentBounds = content.getBoundingClientRect();
+          if (details !== content) {
+            const range = document.createRange();
+            range.selectNodeContents(content);
+            return chevron.getBoundingClientRect().left - range.getBoundingClientRect().right;
+          }
+          return chevron.getBoundingClientRect().left - contentBounds.right;
+        }, selector);
+      expect(await trailingGap(".sidebar-session-owner-count")).toBeLessThanOrEqual(8);
       const focusedTopLevelItem = menu.locator(
         ':scope > wa-dropdown-item:not([slot="submenu"]):focus',
       );
@@ -138,7 +145,7 @@ suite.define(() => {
       await expect
         .poll(() => page.locator('[value="owner:"]').getAttribute("aria-checked"))
         .toBe("false");
-      expect(await trailingGap()).toBeLessThanOrEqual(9);
+      expect(await trailingGap(".sidebar-session-owner-selection__name")).toBeLessThanOrEqual(8);
     } finally {
       await context.close();
     }

@@ -12,7 +12,6 @@ import {
   type SidebarSessionStatusFilter,
 } from "./app-sidebar-session-types.ts";
 import { icons } from "./icons.ts";
-import { menuShortcutHint } from "./menu-shortcuts.ts";
 import {
   renderSessionOwnerAvatar,
   renderSessionOwnerChip,
@@ -109,7 +108,12 @@ function renderSidebarOwnerFilter(
                   >${selectedOwner.label ?? selectedOwner.id}</span
                 >
               </span>`
-            : menuShortcutHint(String(owners.length))}
+            : html`<span
+                slot="details"
+                class="session-menu__shortcut sidebar-session-owner-count"
+                aria-hidden="true"
+                >${owners.length}</span
+              >`}
           ${owners.map((owner) =>
             renderSidebarMenuRadioItem({
               value: `owner:${owner.id}`,
