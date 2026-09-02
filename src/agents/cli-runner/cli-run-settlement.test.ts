@@ -140,7 +140,7 @@ describe("CLI native continuity projection", () => {
   it.each(["blocked", "no-native-id", "native", "stateless"])(
     "projects only explicit native continuity from a %s result",
     (kind) => {
-      const context = buildPreparedCliRunContext({ provider: "fixture-cli" });
+      const context = buildPreparedCliRunContext({ provider: "claude-cli" });
       const result =
         kind === "blocked"
           ? buildBlockedCliRunResult({
@@ -162,16 +162,16 @@ describe("CLI native continuity projection", () => {
       const entry: SessionEntry = {
         sessionId: context.params.sessionId,
         updatedAt: 1,
-        cliSessionBindings: { "fixture-cli": { sessionId: "previous-native-session" } },
+        cliSessionBindings: { "claude-cli": { sessionId: "previous-native-session" } },
       };
 
-      applyCliSessionBindingResult(entry, "fixture-cli", result.meta.agentMeta);
+      applyCliSessionBindingResult(entry, "claude-cli", result.meta.agentMeta);
 
       expect(entry.sessionId).toBe(context.params.sessionId);
       expect(result.meta.agentMeta?.sessionId).toBe(
         kind === "native" ? "next-native-session" : context.params.sessionId,
       );
-      expect(getCliSessionBinding(entry, "fixture-cli")?.sessionId).toBe(
+      expect(getCliSessionBinding(entry, "claude-cli")?.sessionId).toBe(
         kind === "native"
           ? "next-native-session"
           : kind === "stateless"
