@@ -204,7 +204,7 @@ suite.define(() => {
     const context = await createContext();
     const dismissPage = await context.newPage();
     await installMockGateway(dismissPage, { operatorScopes: LIMITED_SCOPES });
-    await dismissPage.goto(`${server.baseUrl}activity`);
+    await dismissPage.goto(`${suite.server.baseUrl}activity`);
     const dismissedItem = await openLimitedAccessItem(await openInbox(dismissPage));
     await dismissedItem.getByRole("button", { name: "Request admin" }).waitFor();
     await dismissedItem.getByRole("button", { name: "Dismiss Limited access" }).click();
@@ -215,13 +215,13 @@ suite.define(() => {
 
     const clearedPage = await context.newPage();
     await installMockGateway(clearedPage, { operatorScopes: FULL_SCOPES });
-    await clearedPage.goto(`${server.baseUrl}activity`);
+    await clearedPage.goto(`${suite.server.baseUrl}activity`);
     await clearedPage.locator(".sidebar-issues-button").waitFor();
     await clearedPage.close();
 
     const recurrencePage = await context.newPage();
     await installMockGateway(recurrencePage, { operatorScopes: LIMITED_SCOPES });
-    await recurrencePage.goto(`${server.baseUrl}activity`);
+    await recurrencePage.goto(`${suite.server.baseUrl}activity`);
 
     const inbox = recurrencePage.locator(".sidebar-issues-button");
     await expect.poll(() => inbox.getAttribute("aria-label")).toBe("1 inbox item");
