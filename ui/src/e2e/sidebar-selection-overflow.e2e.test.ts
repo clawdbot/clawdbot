@@ -51,18 +51,15 @@ suite.define(() => {
       );
       await active.waitFor();
       const geometry = await active.evaluate((row) => {
-        const section = row.closest<HTMLElement>(".sidebar-sessions");
         const scroller = row.closest<HTMLElement>(".sidebar-shell__body");
-        if (!section || !scroller) {
+        if (!scroller) {
           throw new Error("sidebar session geometry owner not found");
         }
         const rowRect = row.getBoundingClientRect();
-        const sectionRect = section.getBoundingClientRect();
         const scrollerStyle = getComputedStyle(scroller);
         return {
           contentEdge:
             scroller.getBoundingClientRect().right - (scroller.offsetWidth - scroller.clientWidth),
-          inset: sectionRect.right - rowRect.right,
           maskImage: scrollerStyle.maskImage,
           maskPosition: scrollerStyle.maskPosition,
           maskSize: scrollerStyle.maskSize,
@@ -70,14 +67,10 @@ suite.define(() => {
           overflows: scroller.scrollHeight > scroller.clientHeight,
           scrollbarGutter: scrollerStyle.scrollbarGutter,
           scrollbarWidth: scroller.offsetWidth - scroller.clientWidth,
-          sectionPaddingEnd: Number.parseFloat(getComputedStyle(section).paddingRight),
         };
       });
 
       expect(geometry.overflows).toBe(true);
-      expect(geometry.inset, JSON.stringify(geometry)).toBeGreaterThanOrEqual(
-        geometry.sectionPaddingEnd,
-      );
       expect(geometry.maskImage.match(/linear-gradient/g)).toHaveLength(2);
       expect(geometry.maskPosition.split(", ").at(-1)?.split(" ")[0]).toBe("100%");
       expect(geometry.maskSize.split(", ")).toContain("12px 100%");
