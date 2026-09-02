@@ -200,6 +200,7 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
     });
     this.consults = new DiscordRealtimeConsults({
       consultPolicy: () => this.consultPolicy,
+      consultTakeover: () => this.realtimeConfig?.consultTakeover === true,
       consultToolPolicy: () => this.consultToolPolicy,
       consultToolsAllow: () => this.consultToolsAllow,
       debounceMs: () => this.realtimeConfig?.debounceMs,

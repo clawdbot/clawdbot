@@ -67,6 +67,7 @@ export class DiscordRealtimeConsults {
   constructor(
     private readonly params: {
       consultPolicy: () => "auto" | "always";
+      consultTakeover: () => boolean;
       consultToolPolicy: () => RealtimeVoiceAgentConsultToolPolicy;
       consultToolsAllow: () => string[] | undefined;
       debounceMs: () => number | undefined;
@@ -409,7 +410,9 @@ export class DiscordRealtimeConsults {
     logger.debug(
       `discord voice: realtime forced agent consult reason=${DISCORD_REALTIME_FORCED_CONSULT_REASON} consultPolicy=${this.params.consultPolicy()} wakeNamePolicy=${this.params.wakeNamePolicy()} requireWakeName=${this.params.isWakeNameRequired()} voiceSession=${this.params.entry.voiceSessionKey} supervisorSession=${this.params.entry.route.sessionKey} agent=${this.params.entry.route.agentId} speaker=${context.speakerLabel}`,
     );
-    if (this.params.playback.hasInterruptibleOutputAudio()) {
+    if (this.params.consultTakeover()) {
+      this.params.playback.beginConsultTakeover();
+    } else if (this.params.playback.hasInterruptibleOutputAudio()) {
       logger.info(
         `discord voice: realtime forced agent consult preserving active playback guild=${this.params.entry.guildId} channel=${this.params.entry.channelId} outputAudioMs=${this.params.playback.outputAudioMs()} outputActive=${this.params.playback.isOutputAudioActive()} playbackChunks=${this.params.harness.outputActivity.snapshot().chunks}`,
       );
@@ -421,6 +424,7 @@ export class DiscordRealtimeConsults {
     );
     const deliveries = this.providerDeliveries.get(state);
     await Promise.all(Array.from(deliveries ?? [], (delivery) => delivery.promise));
+    this.params.playback.endConsultTakeover();
     if (state.providerEpoch !== this.params.providerEpoch() || "status" in result) {
       return;
     }

@@ -42,6 +42,8 @@ function normalizeControlSpeechText(text: string): string {
 
 export type DiscordRealtimePlaybackPort = Pick<
   DiscordRealtimePlayback<unknown>,
+  | "beginConsultTakeover"
+  | "endConsultTakeover"
   | "enqueueExactSpeechMessage"
   | "handleBargeIn"
   | "hasInterruptibleOutputAudio"
@@ -61,6 +63,7 @@ export class DiscordRealtimePlayback<TState> {
   private outputDrainHandler: (() => void) | undefined;
   private queuedExactSpeechMessages: string[] = [];
   private exactSpeechState: RealtimeExactSpeechState = { status: "idle" };
+  private consultTakeoverActive = false;
   private wakeNameAckIndex = 0;
   private lastControlSpeech:
     | { normalizedText: string; sentAt: number; assistantTranscriptCount: number }
@@ -149,6 +152,12 @@ export class DiscordRealtimePlayback<TState> {
   sendOutputAudio(realtimePcm24kMono: Buffer): void {
     this.params.markProviderGenerationObserved();
     if (this.params.stopped()) {
+      return;
+    }
+    if (this.consultTakeoverActive) {
+      logVoiceVerbose(
+        `realtime output audio suppressed during consult takeover: guild ${this.params.entry.guildId} channel ${this.params.entry.channelId}`,
+      );
       return;
     }
     const discordPcm = convertRealtimePcm24kMonoToDiscordPcm48kStereo(realtimePcm24kMono);
@@ -352,7 +361,33 @@ export class DiscordRealtimePlayback<TState> {
     );
   }
 
+  /**
+   * Forced-consult takeover: cancel the provider's in-flight reply (response
+   * cancel + truncate via the force barge-in path), clear its audio, and
+   * suppress further provider output until endConsultTakeover().
+   */
+  beginConsultTakeover(): void {
+    if (this.consultTakeoverActive) {
+      return;
+    }
+    this.consultTakeoverActive = true;
+    this.queuedExactSpeechMessages = [];
+    this.completeExactSpeechResponse("consult-takeover", { drain: false });
+    logger.info(
+      `discord voice: realtime forced agent consult takeover clearing provider output guild=${this.params.entry.guildId} channel=${this.params.entry.channelId} outputAudioMs=${this.outputAudioMs()} outputActive=${this.isOutputAudioActive()} playbackChunks=${this.params.harness.outputActivity.snapshot().chunks}`,
+    );
+    this.params.harness.handleBargeIn(
+      { audioPlaybackActive: true, force: true },
+      () => this.clearOutputAudio("consult-takeover"),
+    );
+  }
+
+  endConsultTakeover(): void {
+    this.consultTakeoverActive = false;
+  }
+
   resetProviderContinuity(reason: string): void {
+    this.consultTakeoverActive = false;
     this.lastControlSpeech = undefined;
     const replayExactSpeech =
       this.exactSpeechState.status === "active" &&

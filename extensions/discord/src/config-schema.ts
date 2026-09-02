@@ -152,6 +152,7 @@ const DiscordVoiceRealtimeSchema = z
     instructions: z.string().min(1).optional(),
     toolPolicy: DiscordVoiceRealtimeToolPolicySchema.optional(),
     consultPolicy: DiscordVoiceRealtimeConsultPolicySchema.optional(),
+    consultTakeover: z.boolean().optional(),
     requireWakeName: z.boolean().optional(),
     wakeNames: z.array(DiscordVoiceRealtimeWakeNameSchema).min(1).optional(),
     bootstrapContextFiles: z.array(DiscordVoiceRealtimeBootstrapContextFileSchema).optional(),

@@ -149,6 +149,10 @@ export const discordChannelConfigUiHints = {
     label: "Discord Realtime Consult Policy",
     help: "Use always to strongly prefer the OpenClaw agent brain for substantive realtime turns. agent-proxy defaults to always.",
   },
+  "voice.realtime.consultTakeover": {
+    label: "Discord Realtime Consult Takeover",
+    help: "When a forced agent consult starts, cancel and clear the provider's in-flight reply and speak only the consult answer. Default: false.",
+  },
   "voice.realtime.requireWakeName": {
     label: "Discord Realtime Require Wake Name",
     help: "Control OpenAI agent-proxy wake-name gating. Unset listens naturally with one human and requires a wake name with two or more; true always requires one and false never does.",
