@@ -47,6 +47,7 @@ import {
   printConfigDryRunResult,
   type ConfigSetDryRunResult,
 } from "./config-set-dryrun.js";
+import type { ConfigSetCurrentExpectation } from "./config-set-input.js";
 import { exitCliAfterOutput } from "./one-shot-exit.js";
 
 const GATEWAY_AUTH_MODE_PATH: PathSegment[] = ["gateway", "auth", "mode"];
@@ -245,11 +246,30 @@ async function loadMutationSchema(): Promise<JsonSchemaRecord | undefined> {
   }
 }
 
+function assertConfigSetCurrentExpectation(params: {
+  authoredConfig: OpenClawConfig;
+  operation: ConfigSetOperation;
+  expectation: ConfigSetCurrentExpectation;
+}): void {
+  const current = getAtPath(params.authoredConfig, params.operation.setPath);
+  const matches =
+    params.expectation.kind === "absent"
+      ? !current.found
+      : current.found && isDeepStrictEqual(current.value, params.expectation.value);
+  if (!matches) {
+    throw new ConfigMutationConflictError(
+      "conditional config set expectation did not match the authored config",
+      { retryable: false },
+    );
+  }
+}
+
 export async function runConfigOperations(params: {
   runtime: RuntimeEnv;
   operations: ConfigSetOperation[];
   options: ConfigMutationOptions;
   successMode: "set" | "patch";
+  currentExpectation?: ConfigSetCurrentExpectation;
   beforePersistentApply?: () => void;
 }) {
   const { runtime, operations, options } = params;
@@ -266,6 +286,21 @@ export async function runConfigOperations(params: {
   }
   const mutationStart = await loadValidConfigForWrite(runtime);
   const { snapshot } = mutationStart;
+  const currentExpectation = params.currentExpectation;
+  let assertCurrentExpectation: (() => void) | undefined;
+  if (currentExpectation) {
+    const expectationOperation = operations[0];
+    if (!expectationOperation) {
+      throw new Error("conditional config set requires one resolved operation");
+    }
+    assertCurrentExpectation = () => {
+      assertConfigSetCurrentExpectation({
+        authoredConfig: snapshot.resolved,
+        operation: expectationOperation,
+        expectation: currentExpectation,
+      });
+    };
+  }
   // Mutate resolved config so runtime defaults never leak into the authored file.
   const next = structuredClone(snapshot.resolved) as Record<string, unknown>;
   const currentConfig = normalizeConfigMutationModelRefs(snapshot.resolved);
@@ -382,6 +417,7 @@ export async function runConfigOperations(params: {
     return;
   }
   if (validation.kind === "unchanged") {
+    assertCurrentExpectation?.();
     runtime.log(info("No change"));
     return;
   }
@@ -393,10 +429,11 @@ export async function runConfigOperations(params: {
     writeOptions: {
       ...mutationStart.writeOptions,
       auditOrigin: "cli",
-      ...(params.beforePersistentApply
+      ...(assertCurrentExpectation || params.beforePersistentApply
         ? {
             assertConfigPathForWrite: () => {
               mutationStart.writeOptions.assertConfigPathForWrite?.();
+              assertCurrentExpectation?.();
               params.beforePersistentApply?.();
             },
           }

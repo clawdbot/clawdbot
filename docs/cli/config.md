@@ -180,6 +180,26 @@ openclaw config set models.providers.ollama.models '[{"id":"llama3.2","name":"Ll
 
 Use `--replace` only when the provided value should intentionally become the complete target value.
 
+### Conditional writes
+
+Use a conditional expectation when automation must update one authored path only if it has not
+changed since the caller last observed it:
+
+```bash
+openclaw config set gateway.port 19001 --strict-json --expect-current-json 18789
+openclaw config set gateway.port 19001 --strict-json --expect-current-absent
+```
+
+`--expect-current-json <json>` uses strict JSON and compares the value by JSON type and structure.
+`null` is an authored value, so it does not satisfy `--expect-current-absent`. The comparison uses
+the effective authored config after includes and environment substitution, before runtime defaults
+are applied.
+
+The two expectation flags are mutually exclusive. They apply only to a single `config set`
+operation and cannot be combined with batch mode or `--dry-run`. A mismatch exits with status 1,
+writes nothing, and does not print either the expected or current value. OpenClaw's config snapshot
+guard still rejects a later race between the expectation check and the final file replacement.
+
 ## `config set` modes
 
 <Tabs>
