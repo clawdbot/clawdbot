@@ -7427,6 +7427,8 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
       prepublish_plugin_registry_json:
         "${{ needs.resolve_target.outputs.package_acceptance_package_spec == '' && needs.prepare_release_package.outputs.prepublish_plugin_registry_json || '' }}",
       suite_profile: "custom",
+      published_upgrade_survivor_baseline:
+        "${{ needs.resolve_target.outputs.frozen_upgrade_baseline && format('openclaw@{0}', needs.resolve_target.outputs.frozen_upgrade_baseline) || 'openclaw@latest' }}",
     });
     expect(packageAcceptanceJob.with?.candidate_artifact_json).toBe(
       "${{ needs.resolve_target.outputs.package_acceptance_package_spec == '' && needs.resolve_target.outputs.candidate_artifact_json || '' }}",
