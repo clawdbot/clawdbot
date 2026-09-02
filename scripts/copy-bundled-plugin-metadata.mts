@@ -210,7 +210,13 @@ function linkSourcePluginDependencies(pluginDir: string, distNodeModules: string
   for (const name of packages) {
     const target = path.join(distNodeModules, name);
     fs.mkdirSync(path.dirname(target), { recursive: true });
-    fs.symlinkSync(fs.realpathSync(path.join(sourceModules, name)), target, "junction");
+    const canonical = fs.realpathSync(path.join(sourceModules, name));
+    // POSIX release checkouts relocate as a unit; Windows junctions require absolute targets.
+    fs.symlinkSync(
+      process.platform === "win32" ? canonical : path.relative(path.dirname(target), canonical),
+      target,
+      "junction",
+    );
   }
 }
 
