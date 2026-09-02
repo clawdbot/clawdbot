@@ -357,12 +357,14 @@ sharing the target snapshot. Publication selects its channel's report and
 acknowledgement without rebuilding. Alpha, beta prerelease, and extended-stable
 targets keep their required channel.
 
-If npm qualification fails after source checks and package preparation succeed,
-rerun the failed qualification job. It reuses the exact successful producer jobs
+For directly dispatched `OpenClaw NPM Release` preflight-only runs, if qualification
+fails after source checks and package preparation succeed, rerun the failed
+qualification job. It reuses the exact successful producer jobs
 and package bytes from the earlier attempt, even if that attempt failed or was
 cancelled. Failed or unfinished producer jobs remain ineligible. Final npm
 publication still requires the qualified preflight attempt to complete
-successfully.
+successfully. FRV-owned standalone producers require fresh all-group validation
+after producer failure or an attempt change.
 
 `docker-release-prepare.yml` builds both native architectures, retains OCI
 indexes and their SBOM/provenance, and runs image smoke checks before approval.

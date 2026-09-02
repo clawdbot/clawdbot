@@ -880,6 +880,7 @@ describe("scripts/test-projects changed-target routing", () => {
         "test/scripts/pr-crabbox-merge-bypass.test.ts",
         "test/scripts/release-tooling-identity.test.ts",
         "test/scripts/run-additional-boundary-checks.test.ts",
+        "test/scripts/validate-release-publish-approval.test.ts",
       ],
     );
   });

@@ -606,6 +606,7 @@ describe("prepared Docker publication", () => {
       fixture.run.path = `.github/workflows/${workflow}.yml`;
       fixture.run.status = "completed";
       fixture.run.conclusion = "success";
+      Object.assign(fixture.attemptRun, structuredClone(fixture.run));
       manifest.producer.workflowRef = `${repository}/${fixture.run.path}@refs/heads/main`;
       const prepared = {
         preparedRunId: runId,
@@ -672,12 +673,19 @@ describe("prepared Docker publication", () => {
         "producer identity mismatch",
       );
       fixture.run.run_attempt += 1;
+      expect(
+        verifyDockerReleaseProducer(manifest, {
+          publisherSha: toolingSha,
+          readApi: fixture.readApi,
+        }),
+      ).toBe(manifest);
+      fixture.attemptRun.conclusion = "failure";
       expect(() =>
         verifyDockerReleaseProducer(manifest, {
           publisherSha: toolingSha,
           readApi: fixture.readApi,
         }),
-      ).toThrow("run/attempt/source mismatch");
+      ).toThrow("Historical Docker producer did not qualify");
     },
   );
 
