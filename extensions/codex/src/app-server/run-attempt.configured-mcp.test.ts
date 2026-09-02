@@ -449,7 +449,9 @@ describe("runCodexAppServerAttempt configured MCP ownership", () => {
         ...params.config!.mcp!.servers,
         unannotated: { url: "https://unannotated.example.test/mcp" },
       };
-      const requestApproval = vi.fn(async () => ({ id: "plugin:mcp-fixture" }));
+      const requestApproval = vi.fn(async (_request: { description?: string }) => ({
+        id: "plugin:mcp-fixture",
+      }));
       const waitForApproval = vi.fn(async () => ({
         decision: "deny" as const,
         terminalReason: "user" as const,
@@ -504,16 +506,16 @@ describe("runCodexAppServerAttempt configured MCP ownership", () => {
 
       expect(responses).toEqual([
         { action: "accept", content: null, _meta: null },
-        {
-          action: testCase.delegate ? "decline" : "accept",
-          content: null,
-          _meta: testCase.delegate
-            ? { message: expect.stringContaining("openclaw mcp configure") }
-            : null,
-        },
+        { action: testCase.delegate ? "decline" : "accept", content: null, _meta: null },
       ]);
       expect(requestApproval).toHaveBeenCalledTimes(testCase.delegate ? 1 : 0);
       expect(waitForApproval).toHaveBeenCalledTimes(testCase.delegate ? 1 : 0);
+      // Codex drops decline meta, so the remedy must reach the operator via the card.
+      if (testCase.delegate) {
+        expect(requestApproval.mock.calls[0]?.[0]?.description).toContain(
+          `openclaw mcp configure ${testCase.source === "bundle" ? "bundled" : "fake"} --approval approve`,
+        );
+      }
       const expectedApprovalPolicy = testCase.delegate
         ? {
             granular: {
