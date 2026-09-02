@@ -1045,7 +1045,7 @@ extensions/qa-lab/src/providers/mock-openai/mock-openai-assistant-text.ts	3
 extensions/qa-lab/src/providers/mock-openai/mock-openai-contracts.ts	2
 extensions/qa-lab/src/providers/mock-openai/mock-openai-directives.ts	4
 extensions/qa-lab/src/providers/mock-openai/mock-openai-events.ts	4
-extensions/qa-lab/src/providers/mock-openai/mock-openai-input.ts	11
+extensions/qa-lab/src/providers/mock-openai/mock-openai-input.ts	6
 extensions/qa-lab/src/providers/mock-openai/mock-openai-responses-websocket.ts	2
 extensions/qa-lab/src/providers/mock-openai/server.ts	16
 extensions/qa-lab/src/providers/shared/auth-store.ts	1
