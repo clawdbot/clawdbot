@@ -60,6 +60,7 @@ export function renderChannels(props: ChannelsProps) {
       .map((warning) => formatUiExternalText(warning)) ?? [];
   const data = buildChannelData(props);
   const selected = props.selectedChannel;
+  const selectedPlugin = selected ? resolveChannelPlugin(props, selected) : undefined;
 
   return html`
     ${renderSettingsPage(html`
@@ -116,6 +117,8 @@ export function renderChannels(props: ChannelsProps) {
       ? renderChannelDetail({
           channelId: selected,
           label: resolveChannelLabel(props, selected),
+          pluginIconUrl: props.pluginIconUrls[selected],
+          preferPluginIcon: selectedPlugin?.hasIcon === true,
           props,
           data,
           onClose: () => props.onCloseDetail(),

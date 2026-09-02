@@ -163,6 +163,7 @@ describe("channels plugin presentation metadata", () => {
       mutationAllowed: true,
     };
     props.pluginIconUrls = { slack: "blob:slack-plugin-icon" };
+    props.selectedChannel = "slack";
     props.wizard = { phase: "error", channel: "slack", message: "Setup failed" };
     const container = document.createElement("div");
 
@@ -174,6 +175,9 @@ describe("channels plugin presentation metadata", () => {
       "OpenClaw Slack channel plugin for channels, DMs, commands, and app events.",
     );
     expect(row?.querySelector("img")?.getAttribute("src")).toBe("blob:slack-plugin-icon");
+    expect(container.querySelector(".channels-detail__header img")?.getAttribute("src")).toBe(
+      "blob:slack-plugin-icon",
+    );
     expect(container.querySelector(".channels-wizard h2")?.textContent).toBe("Set up Slack");
     expect(container.querySelector(".channels-wizard img")?.getAttribute("src")).toBe(
       "blob:slack-plugin-icon",
