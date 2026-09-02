@@ -229,6 +229,8 @@ function readUiCss(): string {
     "ui/src/styles/layout.css",
     "ui/src/styles/option-card.css",
     "ui/src/styles/chat/layout.css",
+    "ui/src/styles/chat/message-layout.css",
+    "ui/src/styles/chat/composer.css",
     "ui/src/styles/settings-controls.css",
     "ui/src/styles/settings.css",
     "ui/src/pages/activity/run-inspector.css",
@@ -261,8 +263,8 @@ async function probeCorners(browser: Browser, fixtureFile: string): Promise<Corn
             const radius =
               corner === "bottomLeft" ? style.borderBottomLeftRadius : style.borderTopLeftRadius;
             const shape = style.getPropertyValue("corner-shape");
-            // CSS defines round as superellipse(1); Chromium versions serialize either form.
-            return [selector, { radius, shape: shape === "round" ? "superellipse(1)" : shape }];
+            // CSS defines round as superellipse(1); Chromium builds serialize both forms.
+            return [selector, { radius, shape: shape === "superellipse(1)" ? "round" : shape }];
           }),
         );
       },
@@ -336,11 +338,11 @@ describeCornerShape("Control UI corner curvature", () => {
         ]),
         ...ROUND_CASES.map((corner) => [
           corner.selector,
-          { radius: corner.superelliptical, shape: "superellipse(1)" },
+          { radius: corner.superelliptical, shape: "round" },
         ]),
         ...EXCLUDED_CASES.map((corner) => [
           corner.selector,
-          { radius: corner.superelliptical, shape: "superellipse(1)" },
+          { radius: corner.superelliptical, shape: "round" },
         ]),
       ]),
     );
@@ -351,10 +353,7 @@ describeCornerShape("Control UI corner curvature", () => {
 
     expect(probe).toEqual(
       Object.fromEntries(
-        ALL_CASES.map((corner) => [
-          corner.selector,
-          { radius: corner.circular, shape: "superellipse(1)" },
-        ]),
+        ALL_CASES.map((corner) => [corner.selector, { radius: corner.circular, shape: "round" }]),
       ),
     );
   });

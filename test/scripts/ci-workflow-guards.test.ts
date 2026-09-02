@@ -8753,11 +8753,15 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     const checkShardStep = parsedWorkflow.jobs["check-shard"].steps.find(
       (step: WorkflowStep) => step.name === "Run check shard",
     );
+    expect(parsedWorkflow.jobs["check-shard"].env.CHECKOUT_BASE_SHA).toBe(
+      "${{ ((matrix.task == 'guards' && github.event_name == 'pull_request') || (matrix.task == 'npm-lock' && github.event_name != 'workflow_dispatch')) && needs.preflight.outputs.diff_base_revision || '' }}",
+    );
     expect(checkShardStep.env.PR_BASE_SHA).toBe(
       "${{ github.event_name == 'pull_request' && needs.preflight.outputs.diff_base_revision || '' }}",
     );
+    expect(checkShardStep.run).not.toContain("--checkout-git");
     expect(checkShardStep.run).toContain(
-      'python3 -I -S "$RUNNER_TEMP/ci-git-owner.py" --checkout-git 120 fetch --no-tags --depth=1 origin "+${PR_BASE_SHA}:refs/remotes/origin/ci-base"',
+      'test "$(git rev-parse refs/remotes/origin/ci-ratchet-base^{commit})" = "$PR_BASE_SHA"',
     );
   });
 
@@ -9260,7 +9264,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       "pull-requests": "read",
     });
     expect(checksFastJob.env.CHECKOUT_BASE_SHA).toBe(
-      "${{ (matrix.task == 'baseline-ratchets' || startsWith(matrix.task, 'release-lint-')) && needs.preflight.outputs.diff_base_revision || '' }}",
+      "${{ (matrix.task == 'baseline-ratchets' || matrix.task == 'bundled-protocol' || startsWith(matrix.task, 'release-lint-')) && needs.preflight.outputs.diff_base_revision || '' }}",
     );
     expect(checkout.env.CHECKOUT_SHA).toBe("${{ needs.preflight.outputs.checkout_revision }}");
     expect(releaseGateMerge.if).toBe(
@@ -9314,8 +9318,9 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       'echo "RATCHET_BASE_REF=${frozen_base_sha}" >> "$GITHUB_ENV"',
     );
     expect(checksFastRun.run).not.toContain("PROTOCOL_MANUAL_BASE_SHA");
+    expect(checksFastRun.run).not.toContain("protocol-since-base");
     expect(checksFastRun.run).toContain(
-      '"+${PROTOCOL_SINCE_BASE_SHA}:refs/remotes/origin/protocol-since-base"',
+      'test "$(git rev-parse refs/remotes/origin/ci-ratchet-base^{commit})" = "$PROTOCOL_SINCE_BASE_SHA"',
     );
     expect(checksFastRun.run).toContain(
       'base_ref="${RATCHET_BASE_REF:-refs/remotes/origin/ci-ratchet-base}"',
