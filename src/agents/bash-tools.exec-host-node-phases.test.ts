@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { GatewayClientRequestError } from "../../packages/gateway-client/src/request-error.js";
 import {
   formatNodeInvokeFailureFollowup,
   invokeNodeSystemRun,
@@ -121,6 +122,25 @@ describe("invokeNodeSystemRun failure classification", () => {
 describe("node execution target resolution", () => {
   beforeEach(() => {
     callGatewayToolMock.mockReset();
+  });
+
+  it("rejects legacy paired-node records without execution capabilities", async () => {
+    callGatewayToolMock
+      .mockRejectedValueOnce(
+        new GatewayClientRequestError({
+          code: "INVALID_REQUEST",
+          message: "unknown method: node.list",
+        }),
+      )
+      .mockResolvedValueOnce({ paired: [{ nodeId: "legacy-node", platform: "linux" }] });
+
+    await expect(resolveNodeExecutionTarget(createDirectNodeRun().request)).rejects.toThrow(
+      /supports system.run/,
+    );
+    expect(callGatewayToolMock.mock.calls.map(([method]) => method)).toEqual([
+      "node.list",
+      "node.pair.list",
+    ]);
   });
 
   it("requires an explicit target when multiple connected nodes support system.run", async () => {

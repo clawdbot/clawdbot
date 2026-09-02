@@ -367,8 +367,9 @@ function messageProjectionDigest(message: unknown): string {
 
 export function buildMessageItems<Message>(
   messages: Message[],
+  resolveSourceKey: (message: Message) => string | null = transcriptMessageSourceKey,
 ): Array<Extract<ChatItem, { kind: "message" }> & { message: Message }> {
-  const sourceKeys = messages.map(transcriptMessageSourceKey);
+  const sourceKeys = messages.map(resolveSourceKey);
   const sourceCounts = new Map<string, number>();
   for (const sourceKey of sourceKeys) {
     if (sourceKey) {

@@ -26,6 +26,15 @@ export const sessionEntryMetadataJson =
   THEN json_remove(entry_json, '$.skillsSnapshot', '$.systemPromptReport')
   ELSE entry_json END`.as("entry_json");
 
+// Canonical writers settle entry_valid; raw writes clear it. Inventory readers need
+// no payload for settled rows, but must retain parser semantics for pending/retained rows.
+export const sessionEntryInventoryJson =
+  /* kysely-allow-raw: reuse the writer-owned validity projection without loading saved prompts. */ sql<
+    string | null
+  >`CASE WHEN entry_valid = 1 THEN NULL ELSE ${sessionEntryMetadataJson.expression} END`.as(
+    "entry_json",
+  );
+
 export function normalizeStatus(value: unknown): SessionEntryStatus | null {
   return value === "running" ||
     value === "done" ||

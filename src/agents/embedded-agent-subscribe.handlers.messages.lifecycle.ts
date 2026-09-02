@@ -1,12 +1,11 @@
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 /**
- * Handles assistant message lifecycle boundaries, final reconciliation, and usage.
+ * Handles assistant message lifecycle boundaries, and final reconciliation.
  */
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import { createInlineCodeState } from "../../packages/markdown-core/src/code-spans.js";
 import { parseReplyDirectives } from "../auto-reply/reply/reply-directives.js";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
-import type { AssistantMessage } from "../llm/types.js";
 import { coerceChatContentText } from "../shared/chat-content.js";
 import {
   parseAssistantTextSignature,
@@ -41,97 +40,6 @@ import {
   promoteThinkingTagsToBlocks,
 } from "./embedded-agent-utils.js";
 import type { AgentEvent, AgentMessage } from "./runtime/index.js";
-import {
-  hasBillableUsage,
-  hasNonzeroUsage,
-  makeZeroUsageSnapshot,
-  normalizeUsage,
-  type NormalizedUsage,
-  type UsageLike,
-} from "./usage.js";
-
-export function preservePendingAssistantUsage(
-  message: AssistantMessage,
-  pendingUsage: NormalizedUsage | undefined,
-): AssistantMessage {
-  if (
-    isSubscribeTranscriptOnlyOpenClawAssistantMessage(message) ||
-    !hasBillableUsage(pendingUsage)
-  ) {
-    return message;
-  }
-  const messageUsage = normalizeUsage((message as { usage?: UsageLike }).usage);
-  if (hasNonzeroUsage(messageUsage)) {
-    if (
-      pendingUsage.cost?.totalOrigin === "provider-billed" &&
-      messageUsage.cost?.totalOrigin !== "provider-billed"
-    ) {
-      message.usage.cost = {
-        ...makeZeroUsageSnapshot().cost,
-        ...message.usage.cost,
-        ...pendingUsage.cost,
-      };
-    }
-    return message;
-  }
-
-  // Pending usage resets at each assistant-message boundary, so it belongs to
-  // this final snapshot. Only replace missing/zero usage; provider totals win.
-  const input = pendingUsage.input ?? 0;
-  const output = pendingUsage.output ?? 0;
-  const cacheRead = pendingUsage.cacheRead ?? 0;
-  const cacheWrite = pendingUsage.cacheWrite ?? 0;
-  message.usage = {
-    ...makeZeroUsageSnapshot(),
-    input,
-    output,
-    cacheRead,
-    cacheWrite,
-    ...(pendingUsage.cacheWrite1h !== undefined ? { cacheWrite1h: pendingUsage.cacheWrite1h } : {}),
-    ...(pendingUsage.contextUsage ? { contextUsage: { ...pendingUsage.contextUsage } } : {}),
-    totalTokens: pendingUsage.total ?? input + output + cacheRead + cacheWrite,
-    ...(pendingUsage.reasoningTokens !== undefined
-      ? { reasoningTokens: pendingUsage.reasoningTokens }
-      : {}),
-  };
-  if (pendingUsage.cost) {
-    Object.assign(message.usage.cost, pendingUsage.cost);
-  }
-  return message;
-}
-
-export function capturePendingAssistantUsage(
-  ctx: EmbeddedAgentSubscribeContext,
-  evt: AgentEvent & { message: AgentMessage; assistantMessageEvent?: unknown },
-): void {
-  const msg = evt.message;
-  if (msg?.role !== "assistant" || isSubscribeTranscriptOnlyOpenClawAssistantMessage(msg)) {
-    return;
-  }
-  const assistantRecord =
-    evt.assistantMessageEvent && typeof evt.assistantMessageEvent === "object"
-      ? (evt.assistantMessageEvent as Record<string, unknown>)
-      : undefined;
-  const evtType = typeof assistantRecord?.type === "string" ? assistantRecord.type : "";
-  if (evtType === "text_end" || evtType === "done" || evtType === "error") {
-    ctx.recordAssistantUsage(assistantRecord);
-    if (evtType !== "text_end") {
-      ctx.commitAssistantUsage();
-    }
-  }
-}
-
-export function resetPendingAssistantUsage(
-  ctx: EmbeddedAgentSubscribeContext,
-  message: AgentMessage,
-): void {
-  if (message?.role !== "assistant" || isSubscribeTranscriptOnlyOpenClawAssistantMessage(message)) {
-    return;
-  }
-  ctx.state.pendingAssistantUsage = undefined;
-  ctx.state.assistantUsageCommitted = false;
-}
-
 export function handleMessageStart(
   ctx: EmbeddedAgentSubscribeContext,
   evt: AgentEvent & { message: AgentMessage },
@@ -141,8 +49,7 @@ export function handleMessageStart(
     return;
   }
 
-  // Providers can deliver late text_end events after message_end. Only a new
-  // message_start opens another message's stream and block replies.
+  // Only message_start opens another message's stream and block replies.
   ctx.resetAssistantMessageState(ctx.state.assistantTexts.length);
   ctx.state.assistantMessageStartIndex = ctx.state.assistantMessageIndex;
   // Use assistant message_start as the earliest "writing" signal for typing.
@@ -180,7 +87,7 @@ export function handleMessageEnd(
       rawText: coerceChatContentText(extractEmbeddedAssistantText(assistantMessage)),
       rawThinking: extractAssistantThinking(assistantMessage),
     }));
-    emitAssistantCommentaryStreamData(ctx, assistantMessage);
+    emitAssistantCommentaryStreamData(ctx, assistantMessage, true);
     // Commentary-tagged tool turns can still carry durable reasoning under /reasoning on.
     const suppressedTrimmedReasoning = ctx.state.includeReasoning
       ? extractAssistantThinking(assistantMessage).trim()
@@ -235,7 +142,7 @@ export function handleMessageEnd(
   ctx.resetPartialReplyDirectives();
   const parsedText = parseReplyDirectives(trimmedText);
   // Final media is emitted after the buffered text drains, never on its first chunk.
-  recordPendingAssistantReplyDirectives(ctx.state, { ...parsedText, mediaUrls: undefined });
+  recordPendingAssistantReplyDirectives(ctx.state, parsedText);
   const cleanedText = parsedText.text;
   const { mediaUrls } = resolveSendableOutboundReplyParts(parsedText);
   const managedMediaUrls = resolveManagedStreamMediaUrls(ctx.state, mediaUrls);
@@ -332,8 +239,7 @@ export function handleMessageEnd(
     // Late text_end events still use the partial lane's tag/inline state.
     const { thinking, final, inlineCode } = ctx.state.partialBlockState;
     ctx.state.partialBlockState = { thinking, final, inlineCode };
-    ctx.state.lastStreamedAssistant = undefined;
-    ctx.state.lastStreamedAssistantCleaned = undefined;
+    ctx.state.assistantStream = undefined;
     ctx.state.reasoningStreamOpen = false;
   };
 

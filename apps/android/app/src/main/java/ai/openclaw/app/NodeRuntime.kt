@@ -1110,7 +1110,7 @@ class NodeRuntime private constructor(
   }
 
   private val deviceHandler: DeviceHandler =
-    DeviceHandler.withPermissionSnapshot(
+    DeviceHandler(
       appContext = appContext,
       smsEnabled = SensitiveFeatureConfig.smsEnabled,
       callLogEnabled = SensitiveFeatureConfig.callLogEnabled,
@@ -5166,12 +5166,8 @@ class NodeRuntime private constructor(
     playbackRendition: Boolean,
   ) = chat.loadMediaArtifact(artifactId, kind, playbackRendition)
 
-  fun loadChat(
-    sessionKey: String,
-    ownerAgentId: String? = null,
-  ) {
-    val key = sessionKey.trim().ifEmpty { resolveMainSessionKey() }
-    chat.load(key, ownerAgentId)
+  fun loadCurrentChat() {
+    chat.loadCurrent(resolveMainSessionKey())
   }
 
   fun refreshChat() {

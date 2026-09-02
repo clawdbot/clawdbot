@@ -38,10 +38,8 @@ const ANSI_COMPAT_SEQUENCE_AT_INDEX_REGEX = new RegExp(
   `${ANSI_OSC_SEQUENCE_PATTERN}|${ANSI_COMPAT_CONTROL_SEQUENCE_PATTERN}`,
   "y",
 );
-const graphemeSegmenter =
-  typeof Intl !== "undefined" && "Segmenter" in Intl
-    ? new Intl.Segmenter(undefined, { granularity: "grapheme" })
-    : null;
+// string-width already requires Intl.Segmenter at module initialization.
+const graphemeSegmenter = new Intl.Segmenter(undefined, { granularity: "grapheme" });
 
 function hasAnsiIntroducer(input: string): boolean {
   return input.includes("\u001B") || input.includes("\u009B") || input.includes("\u009D");
@@ -153,14 +151,7 @@ export function splitGraphemes(input: string): string[] {
   if (!input) {
     return [];
   }
-  if (!graphemeSegmenter) {
-    return Array.from(input);
-  }
-  try {
-    return Array.from(graphemeSegmenter.segment(input), (segment) => segment.segment);
-  } catch {
-    return Array.from(input);
-  }
+  return Array.from(graphemeSegmenter.segment(input), (segment) => segment.segment);
 }
 
 // Construct once without embedding literal controls; DEL and C1 form one range.
@@ -235,73 +226,71 @@ export function truncateToVisibleWidth(input: string, maxWidth: number): string 
       return;
     }
 
-    const graphemes = splitGraphemes(segment);
-    let offset = 0;
-    const offsets = [offset];
-    for (const grapheme of graphemes) {
-      offset += grapheme.length;
-      offsets.push(offset);
-    }
-    let start = 0;
+    const segments = graphemeSegmenter.segment(segment);
+    const measurePrefix = remaining <= width / 2;
+    let current: Intl.SegmentData | undefined;
+    let candidateWidth = 0;
+    let low = 0;
+    let high = segment.length;
+    let end = 0;
     let fittedWidth = 0;
-    if (remaining <= width / 2) {
-      let end = Math.max(
-        1,
-        Math.min(graphemes.length - 1, Math.floor((remaining * graphemes.length) / width)),
-      );
-      let stride = 1;
-      // Estimate the cell boundary first; gallop handles uneven/zero-width clusters.
-      while (end < graphemes.length) {
-        const candidateWidth = textWidth(segment.slice(0, offsets[end]));
-        if (candidateWidth > remaining) {
-          break;
-        }
-        start = end;
-        fittedWidth = candidateWidth;
-        end = Math.min(graphemes.length, end + stride);
-        stride *= 2;
+    const fits = (position: number): boolean => {
+      if (position === segment.length) {
+        return false;
       }
-      while (start + 1 < end) {
-        const middle = Math.floor((start + end) / 2);
-        const candidateWidth = textWidth(segment.slice(0, offsets[middle]));
-        if (candidateWidth <= remaining) {
-          start = middle;
-          fittedWidth = candidateWidth;
-        } else {
-          end = middle;
-        }
+      // containing() keeps UTF-16 probes on whole graphemes without indexing the
+      // entire line. Reuse its result while probing one oversized cluster.
+      if (
+        !current ||
+        position < current.index ||
+        position >= current.index + current.segment.length
+      ) {
+        // SAFETY: the end sentinel returns above; other probes resolve inside this segment.
+        current = segments.containing(position) as Intl.SegmentData;
+        candidateWidth =
+          current.index === 0
+            ? 0
+            : measurePrefix
+              ? textWidth(segment.slice(0, current.index))
+              : width - textWidth(segment.slice(current.index));
       }
-    } else {
-      const overflow = width - remaining;
-      let tooShort = 0;
-      let removed = Math.min(graphemes.length, 1);
-      let removedWidth = width;
-      // Near-end cuts search short complete-grapheme suffixes, not repeated full prefixes.
-      while (removed < graphemes.length) {
-        removedWidth = textWidth(segment.slice(offsets[graphemes.length - removed]));
-        if (removedWidth >= overflow) {
-          break;
-        }
-        tooShort = removed;
-        removed = Math.min(graphemes.length, removed * 2);
+      if (candidateWidth > remaining) {
+        return false;
       }
-      if (removed === graphemes.length) {
-        removedWidth = width;
+      end = current.index;
+      fittedWidth = candidateWidth;
+      return true;
+    };
+    let probe = Math.min(segment.length - 1, Math.floor((remaining * segment.length) / width));
+    let fitting = fits(probe);
+    const initiallyFits = fitting;
+    let stride = 1;
+    // Bracket the estimate before bisecting so small cuts measure short prefixes
+    // or suffixes even when the line contains many variable-width graphemes.
+    while (low < high) {
+      if (fitting) {
+        low = probe;
+      } else {
+        high = probe;
       }
-      while (tooShort + 1 < removed) {
-        const middle = Math.floor((tooShort + removed) / 2);
-        const candidateWidth = textWidth(segment.slice(offsets[graphemes.length - middle]));
-        if (candidateWidth >= overflow) {
-          removed = middle;
-          removedWidth = candidateWidth;
-        } else {
-          tooShort = middle;
-        }
+      if (fitting !== initiallyFits || probe === 0 || probe === segment.length) {
+        break;
       }
-      start = graphemes.length - removed;
-      fittedWidth = width - removedWidth;
+      probe = initiallyFits
+        ? Math.min(segment.length, probe + stride)
+        : Math.max(0, probe - stride);
+      stride *= 2;
+      fitting = fits(probe);
     }
-    out += segment.slice(0, offsets[start]);
+    while (low + 1 < high) {
+      const middle = Math.floor((low + high) / 2);
+      if (fits(middle)) {
+        low = middle;
+      } else {
+        high = middle;
+      }
+    }
+    out += segment.slice(0, end);
     used += fittedWidth;
     budgetSpent = true;
   };

@@ -57,7 +57,7 @@ dispatch.
 | `ios-screenshot-shard`             | Two device-family shards using the locked Ruby/Fastlane bundle: iPhone plus Watch in one job, and 13-inch iPad in the other; scenarios stay serial within each device                                                                                                                                    | Screenshot-risk changes and manual CI                  |
 | `ios-screenshot-evidence`          | Hosted reducer that verifies exact artifact/family topology, digests, every OpenClaw-managed capture-attempt outcome (including failed invocations without an xcresult), and run provenance before publishing the canonical release screenshot artifact                                                  | After both screenshot shards                           |
 | `android`                          | Phone and Wear unit tests, debug builds, Android lint, and Kotlin lint                                                                                                                                                                                                                                   | Android-relevant changes                               |
-| `openclaw/ci-gate`                 | Final aggregate: requires preflight and security; accepts skips only for manifest-disabled downstream lanes                                                                                                                                                                                              | Every non-draft CI run                                 |
+| `openclaw/ci-gate`                 | Final aggregate: requires preflight and security; rejects selected skips and every downstream failure or cancellation                                                                                                                                                                                    | Every non-draft CI run                                 |
 | `openclaw-performance`             | Separate workflow: daily/on-demand Kova runtime performance reports with mock-provider, deep-profile, and GPT 5.6 live lanes                                                                                                                                                                             | Scheduled and manual dispatch                          |
 
 The rare path-triggered `docker-seed-e2e` job selects only the executable
@@ -80,7 +80,7 @@ All four scans use `scripts/install-periphery.sh` to install the checksum-pinned
 2. `security-fast`, `check-*`, `check-additional-*`, `check-docs`, and `skills-python` fail quickly without waiting on the heavier artifact and platform matrix jobs.
 3. `build-artifacts` and the locale checks overlap with the fast Linux lanes. Control UI and native app source PRs exclude generated locale snapshots/resources; their serialized refresh workflows repair and auto-merge isolated generated PRs in the background. Source CI still blocks stale source inventories and unsafe localization calls. Generated PRs, manual CI, and release prep enforce full translated/platform-generated parity. Canonical `release/YYYY.M.PATCH` branches may include release-prep locale repairs with the other generated release output.
 4. Heavier platform and runtime lanes fan out after that: `checks-fast-core`, `checks-fast-contracts-plugins-*`, `checks-fast-contracts-channels-*`, `checks-node-*`, `checks-windows`, `macos-node`, `macos-swift`, `ios-build`, the screenshot shards, and `android`.
-5. `openclaw/ci-gate` waits for every selected lane. Preflight and security must succeed; downstream jobs may skip only when the manifest did not select them. A failed or canceled selected lane fails the aggregate. The aggregate uses `!cancelled()` so failed prerequisites still report, while canceling the workflow skips final reporting and releases its concurrency slot without waiting for another runner.
+5. `openclaw/ci-gate` waits for every selected lane. Preflight and security must succeed; downstream jobs may skip only when unselected by the manifest and existing event, runner, and compatibility conditions. An unexpected selected skip or any failed or canceled downstream job fails the aggregate. The aggregate uses `!cancelled()` so failed prerequisites still report, while canceling the workflow skips final reporting and releases its concurrency slot without waiting for another runner.
 
 The merge coordinator may reuse an authenticated successful `openclaw/ci-gate`
 for the same pull-request head for up to 24 hours. This avoids rewriting a
@@ -191,6 +191,20 @@ resolve the reported failure, and rerun prepare when its artifacts need refreshi
 Malformed required-check evidence and cancelled required checks also stop
 verification. Server-enforced publisher binding and the final pinned-head merge
 request remain intact. Hosted mode adds no bypass.
+
+For a squash message whose GitHub preview contains obsolete prose, use an
+explicit reviewed body with `scripts/pr merge-run <PR> --body-file <path>`.
+The path is relative to the caller, and the native merge owner snapshots its
+regular UTF-8 file before verification. Empty files are valid. It preserves
+operator-provided text and trailers, appending any missing co-authors from the
+current GitHub preview and reviewed source commits. This option requires squash
+and a non-queue PR; all review, CI, exact-head, and admission checks still apply.
+Without the option, the existing GitHub preview behavior is unchanged.
+
+`merge-recover` accepts the same option after its required outcome ID and
+`--confirmed-operator-recovery`. Repeating `merge-run` with a retained outcome
+only reconciles that outcome, even if the original body file was removed; it
+never dispatches another request or changes an accepted message.
 
 ### Recover an existing PR run first
 
@@ -636,9 +650,11 @@ The final Node matrix admits longer estimated jobs first across both compact and
 
 Expanded large/small jobs admit 94/114 predicted seconds and retain the 96-row hybrid and 112-row GitHub compact caps. Plugin fallback contributes at most 78 rows; eligible pairs reduce the emitted count. Exclusive-group admission remains 150 seconds. The PR-only performance lifecycle file uses a 136-second fallback, rounded up from the larger native shard span of 127.288/135.808 seconds in runs 33532741896/33545657559. Canonical main pushes omit that tooling family. Trusted contributor forks select the GitHub planner profile but can still run those rows on Blacksmith, so their unchanged 112-row cap owns the conservative PR bound. The workflow has 87 other potential job rows across backends: 14 nonmatrix rows and 73 matrix rows, including both Swift phases. Count all 87 as Blacksmith admissions, including hosted and skipped rows. This gives a broad-PR bound of `112 + 78 + 87 = 277`; canonical main uses the 96-row hybrid cap without PR fallback descriptors, giving a bound of 183. The command splits fit inside those caps, so their rows are not added again. Two active main slots plus both pending successors and the observed peak of nineteen PR arrivals, including superseded heads, give `4 × 183 + 19 × 277 = 5,995` registrations in five minutes. The live bucket rechecked on 2026-09-01 was 10,000; this is just 5 below the 6,000 operating target. Further fanout needs reductions elsewhere or a narrower, evidenced arrival bound. This is an arrival-envelope estimate, not an organization-wide admission cap: re-evaluate emitted rows, adjacent repositories and queued-run overlap before increasing fanout. An unused registration bucket does not prove physical runner capacity.
 
-`checks-ui-e2e` emits 14 rows on every backend: 13 identical combined Control UI shards and one browser-extension row. The measured 2026-09-01 ordinary inventory contained 321 bundled files and 20 serial files. The shared weighted sequencer charges each file by its measured duration divided by that project's effective worker count, assigns every discovered specification once across the 13 rows, then Vitest completes the two-worker bundled group before the single-worker serial group. The canonical real-Gateway inventory joins the serial project when selected by a full or local run. The serial owner still protects private source servers that share a Vite optimizer cache and the runtime-budget measurement; test cases, deadlines, isolation, and the root-owned production-bundle setup are unchanged. The browser-extension row prepares only its native-host runtime JavaScript and assets through the existing `qaRuntime` build profile rather than rebuilding declarations and the Control UI. All fourteen rows remain inside the conservative registration bound. The `max-parallel` cap is 14: unchanged for hosted runs and increased from 4 for the Blacksmith profile. Physical capacity must be checked separately from the registration bound.
+`checks-ui-e2e` emits 14 rows on every backend: 13 identical combined Control UI shards and one browser-extension row. The 2026-09-01 inventory contains 355 files: 325 parallel bundle consumers, three parallel self-owned files, seven serial bundle consumers, and 20 serial private source/custom-build files. Ordinary CI excludes seven real-Gateway files, leaving 348. Four native projects represent resource ownership without adding jobs or execution phases: `ui-e2e-bundled` and `ui-e2e-standalone` share group 0 with at most two workers total, then `ui-e2e-serial` and `ui-e2e-serial-standalone` share group 1 with one worker. Local throttling and explicit worker limits still apply. The shared weighted sequencer charges each file by its measured duration divided by that project's effective worker count and assigns every discovered specification once across the 13 rows. The root config keeps the complete inventory visible for discovery. Serial scheduling still protects private source servers that share a Vite optimizer cache, real Gateways, and the runtime-budget measurement; test cases, deadlines, and isolation are unchanged.
 
-The dedicated real-Gateway job runs the complete canonical inventory in one Vitest invocation, sharing one preview build and worker preparation. Its workflow guard requires every listed real-Gateway file exactly once, including suites outside the UI source directory. The serial project still isolates files and uses one worker. Enabled manual proof capture uses the shared upload directory, including the MCP and Logs suites.
+Every selected project discovers Chromium. The first selected bundle-consuming project builds one private production bundle/preview and publishes its URL through Vitest's invocation-scoped root context; later consumers share it until invocation teardown. Standalone projects have no bundle setup or URL bridge, so standalone-only selections skip that build. The dedicated real-Gateway job still runs its complete canonical inventory in one Vitest invocation, including suites outside the UI source directory. Its six bundle consumers share the preview; MCP conformance owns a private source server. Both serial resource groups use the same single-worker phase. Enabled manual proof capture uses the shared upload directory, including the MCP and Logs suites.
+
+The browser-extension row prepares only its native-host runtime JavaScript and assets through the existing `qaRuntime` build profile rather than rebuilding declarations and the Control UI. All fourteen rows remain inside the conservative registration bound. The `max-parallel` cap is 14: unchanged for hosted runs and increased from 4 for the Blacksmith profile. Physical capacity must be checked separately from the registration bound.
 
 The previous thirteen-serial-shard layout consumed 4,258 job-seconds in successful [run 33494931388](https://github.com/openclaw/openclaw/actions/runs/33494931388) on 2026-09-01, averaging 327.5 seconds per Control UI row; preflight added 39 seconds and the tail row took 363 seconds. The new split reduces the modeled body through bounded bundled concurrency, but native job and aggregate timings must establish the five-minute target. Queueing, checkout, setup, and the final gate remain part of that measurement.
 
@@ -712,6 +728,13 @@ pnpm test:startup:memory
 pnpm test:extensions:memory -- --json .artifacts/openclaw-performance/source/mock-provider/extension-memory.json
 pnpm perf:kova:summary --report .artifacts/kova/reports/mock-provider/report.json --output .artifacts/kova/summary.md
 ```
+
+The native source gate covers catalog-owned macOS, iOS, and shared Apple source
+roots. Linux-runnable source extraction requires explicit typed localized formats
+(for example, `String(format: String(localized: "Expires in %lld minutes"), minutes)`
+for an `Int`) instead of arbitrary Swift interpolation. Constrained inflected
+count resources are supported on both platforms. Use explicit verbatim text for
+user, system, or already-localized data.
 
 ## OpenClaw Performance
 

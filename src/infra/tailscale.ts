@@ -29,6 +29,10 @@ const TAILSCALE_STATUS_ATTEMPTS = 3;
 const TAILSCALE_STATUS_RETRY_DELAY_MS = 500;
 const TAILSCALE_ROUTE_START_TIMEOUT_MS = 15_000;
 const TAILSCALE_ROUTE_STOP_TIMEOUT_MS = 4_000;
+// Sudo versions phrase `-n` credential failures differently. Require its prefix
+// so an authorized Tailscale retry keeps ownership of every operational error.
+const SUDO_NONINTERACTIVE_AUTH_ERROR =
+  /^sudo: (?:a password is required|no password was provided|a terminal is required|no tty present|no askpass program specified)/im;
 
 function parsePossiblyNoisyJsonObject(stdout: string): Record<string, unknown> {
   const trimmed = stdout.trim();
@@ -409,7 +413,20 @@ export async function claimTailscaleRoute(
     if (!isPermissionDeniedError(error)) {
       throw error;
     }
-    claim = await start("sudo", ["-n", tailscaleBin]);
+    try {
+      claim = await start("sudo", ["-n", tailscaleBin]);
+    } catch (sudoError) {
+      const { stderr, message } = extractExecErrorText(sudoError);
+      const detail = stderr.trim() || message.trim();
+      if (!SUDO_NONINTERACTIVE_AUTH_ERROR.test(detail)) {
+        throw sudoError;
+      }
+      throw new Error(
+        `Tailscale ${mode} needs elevated access and non-interactive sudo failed: ${detail}. ` +
+          "Run `sudo tailscale set --operator=$USER` once so the unprivileged path succeeds.",
+        { cause: sudoError },
+      );
+    }
   }
   if (adopted) {
     info("Tailscale route adopted from a previous OpenClaw release");

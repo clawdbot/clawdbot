@@ -401,6 +401,7 @@ async function runOpenAi(
 async function runAnthropic(
   implementation: "provider" | "transport",
   outcome: ParityFixture["outcome"],
+  events: readonly Record<string, unknown>[] = anthropicEvents,
 ): Promise<ParityOutput> {
   let payload: unknown;
   let stream: AssistantMessageEventStreamLike;
@@ -423,7 +424,7 @@ async function runAnthropic(
                   new Headers(anthropicFailure.headers),
                 );
               }
-              return createAnthropicResponse(anthropicEvents);
+              return createAnthropicResponse(events);
             },
           };
         },
@@ -445,7 +446,7 @@ async function runAnthropic(
           headers: anthropicFailure.headers,
         });
       }
-      return createAnthropicResponse(anthropicEvents);
+      return createAnthropicResponse(events);
     };
     configureAiTransportHost({ ...getAiTransportHost(), buildModelFetch: () => fetchMock });
     stream = await Promise.resolve(
@@ -534,6 +535,84 @@ describe("provider and transport observable parity fixtures", () => {
       path.join(import.meta.dirname, "../test/fixtures/provider-transport-parity", snapshot),
     );
   });
+
+  it.each([
+    {
+      name: "omitted usage after cumulative output updates",
+      updates: [{ output_tokens: 7 }, { output_tokens: 11 }],
+      final: undefined,
+      billing: { input: 37, output: 11, cacheRead: 11, cacheWrite: 5, totalTokens: 64 },
+      contextUsage: { state: "available", promptTokens: 53, totalTokens: 64 },
+    },
+    {
+      name: "omitted usage after compaction iterations",
+      updates: [
+        {
+          iterations: [
+            {
+              type: "compaction",
+              input_tokens: 10,
+              output_tokens: 3,
+              cache_read_input_tokens: 2,
+              cache_creation_input_tokens: 1,
+            },
+            {
+              type: "message",
+              input_tokens: 4,
+              output_tokens: 5,
+              cache_read_input_tokens: 6,
+              cache_creation_input_tokens: 7,
+            },
+          ],
+        },
+      ],
+      final: undefined,
+      billing: { input: 14, output: 8, cacheRead: 8, cacheWrite: 8, totalTokens: 38 },
+      contextUsage: { state: "available", promptTokens: 17, totalTokens: 22 },
+    },
+    {
+      name: "present empty usage after a reported snapshot",
+      updates: [],
+      final: {},
+      billing: { input: 37, output: 2, cacheRead: 11, cacheWrite: 5, totalTokens: 55 },
+      contextUsage: { state: "unavailable" },
+    },
+  ])(
+    "preserves Anthropic accounting for $name",
+    async ({ updates, final, billing, contextUsage }) => {
+      const events = [
+        {
+          type: "message_start",
+          message: {
+            id: "msg_usage_parity",
+            model: anthropicModel.id,
+            usage: {
+              input_tokens: 37,
+              output_tokens: 2,
+              cache_read_input_tokens: 11,
+              cache_creation_input_tokens: 5,
+            },
+          },
+        },
+        { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } },
+        { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "Done." } },
+        { type: "content_block_stop", index: 0 },
+        ...updates.map((usage) => ({ type: "message_delta", delta: {}, usage })),
+        { type: "message_delta", delta: { stop_reason: "end_turn" }, usage: final },
+        { type: "message_stop" },
+      ];
+      for (const implementation of ["provider", "transport"] as const) {
+        const result = await runAnthropic(implementation, "success", events);
+        expect(result.terminal).toMatchObject({
+          stopReason: "stop",
+          content: [{ type: "text", text: "Done." }],
+          usage: { ...billing, contextUsage },
+        });
+        expect(result.eventTrace.at(-1)).toMatchObject({ type: "done" });
+        expect(result.errorFields).toEqual({});
+      }
+    },
+  );
 
   it("marks content interrupted by native reasoning as commentary", async () => {
     for (const implementation of ["provider", "transport"] as const) {

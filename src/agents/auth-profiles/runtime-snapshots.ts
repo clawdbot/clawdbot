@@ -572,6 +572,10 @@ export function getRuntimeAuthProfileStoreCredentialsRevision(): number {
   return runtimeAuthStoreCredentialsRevision;
 }
 
+export function getRuntimeAuthProfileStoreSnapshotsRevision(): number {
+  return runtimeAuthStoreSnapshotsRevision;
+}
+
 /** Process-local generation for one exact runtime snapshot rollback owner. */
 export function getRuntimeAuthProfileStoreSnapshotRevision(agentDir?: string): number {
   return getRuntimeAuthProfileStoreSnapshotRevisionAtDatabasePath(resolveRuntimeStoreKey(agentDir));

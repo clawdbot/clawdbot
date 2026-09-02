@@ -5218,64 +5218,56 @@ jobs:
       - name: Verify selected CI lanes
         shell: bash
         env:
-          REQUIRED_RESULTS: |
-            preflight=${{ needs.preflight.result }}
-            security-fast=${{ needs.security-fast.result }}
-          SELECTED_RESULTS: |
-            pnpm-store-warmup=${{ needs.pnpm-store-warmup.result }}
-            build-artifacts=${{ needs.build-artifacts.result }}
-            native-i18n=${{ needs.native-i18n.result }}
-            checks-ui=${{ needs.checks-ui.result }}
-            checks-ui-e2e=${{ needs.checks-ui-e2e.result }}
-            checks-ui-e2e-real-gateway=${{ needs.checks-ui-e2e-real-gateway.result }}
-            control-ui-i18n=${{ needs.control-ui-i18n.result }}
-            checks-fast-core=${{ needs.checks-fast-core.result }}
-            qa-smoke-ci-profile=${{ needs.qa-smoke-ci-profile.result }}
-            checks-fast-plugin-contracts-shard=${{ needs.checks-fast-plugin-contracts-shard.result }}
-            checks-fast-channel-contracts-shard=${{ needs.checks-fast-channel-contracts-shard.result }}
-            checks-node-compat=${{ needs.checks-node-compat.result }}
-            checks-node-core-test-nondist-shard=${{ needs.checks-node-core-test-nondist-shard.result }}
-            check-shard=${{ needs.check-shard.result }}
-            check-lint-hosted-core-shard=${{ needs.check-lint-hosted-core-shard.result }}
-            check-test-types-hosted-core-shard=${{ needs.check-test-types-hosted-core-shard.result }}
-            check-additional-shard=${{ needs.check-additional-shard.result }}
-            check-docs=${{ needs.check-docs.result }}
-            skills-python=${{ needs.skills-python.result }}
-            checks-windows=${{ needs.checks-windows.result }}
-            macos-node=${{ needs.macos-node.result }}
-            macos-swift=${{ needs.macos-swift.result }}
-            ios-build=${{ needs.ios-build.result }}
-            ios-screenshot-shard=${{ needs.ios-screenshot-shard.result }}
-            ios-screenshot-evidence=${{ needs.ios-screenshot-evidence.result }}
-            android=${{ needs.android.result }}
-            docker-seed-e2e=${{ needs.docker-seed-e2e.result }}
+          JOB_RESULTS: |
+            preflight=${{ needs.preflight.result }}|true
+            security-fast=${{ needs.security-fast.result }}|true
+            pnpm-store-warmup=${{ needs.pnpm-store-warmup.result }}|${{ (needs.preflight.outputs.run_node == 'true' || needs.preflight.outputs.run_check_docs == 'true') && (needs.preflight.outputs.runner_profile == 'github' || needs.preflight.outputs.runner_profile == 'hybrid' || (!(github.repository == 'openclaw/openclaw' && github.event_name == 'push' && github.ref == 'refs/heads/main') && !(github.repository == 'openclaw/openclaw' && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && needs.preflight.outputs.run_node == 'true'))) }}
+            build-artifacts=${{ needs.build-artifacts.result }}|${{ needs.preflight.outputs.run_build_artifacts }}
+            native-i18n=${{ needs.native-i18n.result }}|${{ needs.preflight.outputs.run_native_i18n }}
+            checks-ui=${{ needs.checks-ui.result }}|${{ needs.preflight.outputs.run_ui_tests }}
+            checks-ui-e2e=${{ needs.checks-ui-e2e.result }}|${{ needs.preflight.outputs.run_ui_tests == 'true' && needs.preflight.outputs.compatibility_target != 'true' }}
+            checks-ui-e2e-real-gateway=${{ needs.checks-ui-e2e-real-gateway.result }}|${{ needs.preflight.outputs.run_ui_tests == 'true' && needs.preflight.outputs.compatibility_target != 'true' }}
+            control-ui-i18n=${{ needs.control-ui-i18n.result }}|${{ needs.preflight.outputs.run_control_ui_i18n }}
+            checks-fast-core=${{ needs.checks-fast-core.result }}|${{ needs.preflight.outputs.run_checks_fast_core }}
+            qa-smoke-ci-profile=${{ needs.qa-smoke-ci-profile.result }}|${{ needs.preflight.outputs.run_qa_smoke_ci }}
+            checks-fast-plugin-contracts-shard=${{ needs.checks-fast-plugin-contracts-shard.result }}|${{ needs.preflight.outputs.run_plugin_contracts_shards }}
+            checks-fast-channel-contracts-shard=${{ needs.checks-fast-channel-contracts-shard.result }}|${{ needs.preflight.outputs.run_channel_contracts_shards }}
+            checks-node-compat=${{ needs.checks-node-compat.result }}|${{ needs.preflight.outputs.run_build_artifacts == 'true' && github.event_name == 'workflow_dispatch' }}
+            checks-node-core-test-nondist-shard=${{ needs.checks-node-core-test-nondist-shard.result }}|${{ needs.preflight.outputs.run_checks_node_core_nondist }}
+            check-shard=${{ needs.check-shard.result }}|${{ needs.preflight.outputs.run_check }}
+            check-lint-hosted-core-shard=${{ needs.check-lint-hosted-core-shard.result }}|${{ needs.preflight.outputs.run_check == 'true' && (needs.preflight.outputs.runner_profile == 'github' || needs.preflight.outputs.runner_profile == 'hybrid') && (needs.preflight.outputs.frozen_target != 'true' || needs.preflight.outputs.hosted_runner_profile_contract == 'true') }}
+            check-test-types-hosted-core-shard=${{ needs.check-test-types-hosted-core-shard.result }}|${{ needs.preflight.outputs.run_check == 'true' && (needs.preflight.outputs.runner_profile == 'github' || needs.preflight.outputs.runner_profile == 'hybrid') && (needs.preflight.outputs.frozen_target != 'true' || needs.preflight.outputs.hosted_runner_profile_contract == 'true') }}
+            check-additional-shard=${{ needs.check-additional-shard.result }}|${{ needs.preflight.outputs.run_check_additional }}
+            check-docs=${{ needs.check-docs.result }}|${{ needs.preflight.outputs.run_check_docs }}
+            skills-python=${{ needs.skills-python.result }}|${{ needs.preflight.outputs.run_skills_python_job }}
+            checks-windows=${{ needs.checks-windows.result }}|${{ needs.preflight.outputs.run_checks_windows }}
+            macos-node=${{ needs.macos-node.result }}|${{ needs.preflight.outputs.run_macos_node }}
+            macos-swift=${{ needs.macos-swift.result }}|${{ needs.preflight.outputs.run_macos_swift }}
+            ios-build=${{ needs.ios-build.result }}|${{ needs.preflight.outputs.run_ios_build }}
+            ios-screenshot-shard=${{ needs.ios-screenshot-shard.result }}|${{ needs.preflight.outputs.release_scope != 'npm-beta' && ((github.event_name == 'workflow_dispatch' && (!inputs.release_gate || needs.preflight.outputs.run_ios_screenshots == 'true')) || (github.event_name == 'pull_request' && needs.preflight.outputs.run_ios_screenshots == 'true')) && needs.preflight.outputs.compatibility_target != 'true' }}
+            ios-screenshot-evidence=${{ needs.ios-screenshot-evidence.result }}|${{ needs.preflight.outputs.release_scope != 'npm-beta' && ((github.event_name == 'workflow_dispatch' && (!inputs.release_gate || needs.preflight.outputs.run_ios_screenshots == 'true')) || (github.event_name == 'pull_request' && needs.preflight.outputs.run_ios_screenshots == 'true')) && needs.preflight.outputs.compatibility_target != 'true' }}
+            android=${{ needs.android.result }}|${{ needs.preflight.outputs.run_android_job }}
+            docker-seed-e2e=${{ needs.docker-seed-e2e.result }}|${{ needs.preflight.outputs.run_docker_seed_e2e }}
         run: |
           set -euo pipefail
 
+          # Preserve raw fields: IFS splitting can erase malformed trailing
+          # delimiters and turn invalid results or selection into accepted values.
           failures=0
           while IFS= read -r entry; do
             [[ -n "$entry" ]] || continue
             name="${entry%%=*}"
             result="${entry#*=}"
-            echo "${name}: ${result}"
-            if [[ "$result" != "success" ]]; then
-              echo "::error title=Required CI job did not succeed::${name} finished with ${result}"
-              failures=1
-            fi
-          done <<< "$REQUIRED_RESULTS"
-
-          while IFS= read -r entry; do
-            [[ -n "$entry" ]] || continue
-            name="${entry%%=*}"
-            result="${entry#*=}"
-            echo "${name}: ${result}"
-            case "$result" in
-              success | skipped) ;;
+            selected="${result#*|}"
+            result="${result%%|*}"
+            echo "${name}: ${result} (selected=${selected:-missing})"
+            case "$selected:$result" in
+              true:success | false:success | false:skipped) ;;
               *)
-                echo "::error title=Selected CI job did not succeed::${name} finished with ${result}"
+                echo "::error title=CI job did not succeed::${name} finished with ${result} (selected=${selected:-missing})"
                 failures=1
                 ;;
             esac
-          done <<< "$SELECTED_RESULTS"
+          done <<< "$JOB_RESULTS"
 
           exit "$failures"

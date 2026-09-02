@@ -68,6 +68,8 @@ export async function requestPluginApproval(params: {
   toolName: string;
   toolCallId?: string;
   allowedDecisions?: ExecApprovalDecision[];
+  mcpTool?: { server: string; tool: string };
+  isMcpToolApprovalActive?: () => boolean;
 }): Promise<ApprovalRequestResult | undefined> {
   const timeoutMs = DEFAULT_CODEX_APPROVAL_TIMEOUT_MS;
   return params.hostCapabilities.requestApproval({
@@ -80,6 +82,9 @@ export async function requestPluginApproval(params: {
     severity: params.severity,
     toolName: params.toolName,
     toolCallId: params.toolCallId,
+    ...(params.mcpTool
+      ? { mcpTool: params.mcpTool, isMcpToolApprovalActive: params.isMcpToolApprovalActive }
+      : {}),
     timeoutMs,
     transportTimeoutMs: resolveCodexGatewayTimeoutWithGraceMs(timeoutMs),
     ...(params.allowedDecisions ? { allowedDecisions: params.allowedDecisions } : {}),

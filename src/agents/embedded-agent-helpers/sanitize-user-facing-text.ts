@@ -1,26 +1,39 @@
 /** Strips internal scaffolding from text before user-facing delivery. */
-import { stripPlainTextToolCallBlocks } from "../../../packages/tool-call-repair/src/index.js";
 import { CURRENT_MESSAGE_MARKER, HISTORY_CONTEXT_MARKER } from "../../auto-reply/reply/history.js";
-import { stripInboundMetadata } from "../../auto-reply/reply/strip-inbound-meta.js";
+import {
+  INBOUND_METADATA_MARKERS,
+  stripInboundMetadata,
+} from "../../auto-reply/reply/strip-inbound-meta.js";
 import { coerceChatContentText } from "../../shared/chat-content.js";
 import { escapeRegExp } from "../../shared/regexp.js";
 import {
-  stripAssistantInternalTraceLines,
+  assistantTraceTextFilter,
+  plainToolCallTextFilter,
   stripLegacyBracketToolCallBlocks,
   stripMinimaxToolCallXml,
   stripToolCallXmlTags,
 } from "../../shared/text/assistant-visible-text.js";
-import { findCodeRegions, isInsideCode } from "../../shared/text/code-regions.js";
+import {
+  findCodeRegions,
+  isInsideCode,
+  stripLinesOutsideCode,
+} from "../../shared/text/code-regions.js";
 import { stripFinalTags } from "../../shared/text/final-tags.js";
+import {
+  applyTextFilters,
+  duplicateParagraphTextFilter,
+  leadingEmptyLinesTextFilter,
+  type TextFilter,
+} from "../../shared/text/text-projection.js";
 import { EXEC_NO_OUTPUT_PLACEHOLDER } from "../bash-tools.exec-output.js";
-import { stripInternalRuntimeContext } from "../internal-runtime-context.js";
+import {
+  INTERNAL_RUNTIME_CONTEXT_BEGIN,
+  INTERNAL_RUNTIME_CONTEXT_END,
+  OPENCLAW_RUNTIME_CONTEXT_NOTICE,
+  stripInternalRuntimeContext,
+} from "../internal-runtime-context.js";
 
 const TOOL_CALLS_OMITTED_PLACEHOLDER_LINE_RE = /^[ \t]*\[tool calls omitted\][ \t]*$/i;
-
-function stripFinalTagsFromText(text: unknown): string {
-  const normalized = coerceChatContentText(text);
-  return normalized ? stripFinalTags(normalized) : normalized;
-}
 
 function stripInternalPlaceholderLines(text: string): string {
   if (
@@ -29,26 +42,12 @@ function stripInternalPlaceholderLines(text: string): string {
   ) {
     return text;
   }
-  let protectedRegions: ReturnType<typeof findCodeRegions> | undefined;
-  let result = "";
-  let start = 0;
-  while (start < text.length) {
-    const newlineIndex = text.indexOf("\n", start);
-    const end = newlineIndex === -1 ? text.length : newlineIndex + 1;
-    const chunk = text.slice(start, end);
-    const line = chunk.endsWith("\n") ? chunk.slice(0, -1).replace(/\r$/, "") : chunk;
-    const isInternalPlaceholder =
+  return stripLinesOutsideCode(
+    text,
+    (line) =>
       TOOL_CALLS_OMITTED_PLACEHOLDER_LINE_RE.test(line) ||
-      line.trim() === EXEC_NO_OUTPUT_PLACEHOLDER;
-    if (
-      !isInternalPlaceholder ||
-      isInsideCode(start, (protectedRegions ??= findCodeRegions(text)))
-    ) {
-      result += chunk;
-    }
-    start = end;
-  }
-  return result;
+      line.trim() === EXEC_NO_OUTPUT_PLACEHOLDER,
+  );
 }
 
 const MARKDOWN_LINE_PREFIX =
@@ -223,51 +222,33 @@ export function createVerifiedConversationContextStreamFilter(
   };
 }
 
-function collapseConsecutiveDuplicateBlocks(text: string): string {
-  const trimmed = text.trim();
-  if (!trimmed) {
-    return text;
-  }
-  const parts = text.split(/(\n{2,})/);
-  if (parts.length < 3) {
-    return text;
-  }
-  const codeRegions = findCodeRegions(text);
-  const result: string[] = [];
-  let offset = 0;
-  let previousKeptPart = -1;
-  let previousKeptProtected = false;
-  let lastNormalized: string | null = null;
-  let removed = false;
-  for (let partIndex = 0; partIndex < parts.length; partIndex += 2) {
-    const block = parts[partIndex] ?? "";
-    const end = offset + block.length;
-    const protectedBlock = codeRegions.some((region) => region.start < end && offset < region.end);
-    const normalized = block.trim().replace(/\s+/g, " ");
-    // A code-touched block is one byte-exact barrier. Partial paragraphs around
-    // inline code must never enter the duplicate comparison independently.
-    const duplicate = !protectedBlock && Boolean(lastNormalized && normalized === lastNormalized);
-    const outerWhitespace =
-      !protectedBlock && !normalized && (partIndex === 0 || partIndex === parts.length - 1);
-    removed ||= duplicate;
-    if (!duplicate && !outerWhitespace) {
-      if (previousKeptPart !== -1) {
-        const adjacent = partIndex === previousKeptPart + 2;
-        const separator = parts[partIndex - 1] ?? "\n\n";
-        result.push(adjacent && (protectedBlock || previousKeptProtected) ? separator : "\n\n");
-      }
-      result.push(protectedBlock ? block : block.trim());
-      previousKeptPart = partIndex;
-      previousKeptProtected = protectedBlock;
-    }
-    if (protectedBlock) {
-      lastNormalized = null;
-    } else if (!duplicate && !outerWhitespace) {
-      lastNormalized = normalized;
-    }
-    offset = end + (parts[partIndex + 1]?.length ?? 0);
-  }
-  return removed ? result.join("") : text;
+export function userFacingTextFilters(errorContext = false): TextFilter[] {
+  return [
+    { transform: stripFinalTags, activationTokens: ["<"] },
+    {
+      transform: stripInternalRuntimeContext,
+      activationTokens: [
+        INTERNAL_RUNTIME_CONTEXT_BEGIN,
+        INTERNAL_RUNTIME_CONTEXT_END,
+        OPENCLAW_RUNTIME_CONTEXT_NOTICE,
+      ],
+    },
+    { transform: stripInboundMetadata, activationTokens: INBOUND_METADATA_MARKERS },
+    { transform: stripMinimaxToolCallXml, activationTokens: ["<"] },
+    {
+      transform: (text) => stripToolCallXmlTags(text, { stripFunctionCallsXmlPayloads: true }),
+      activationTokens: ["<"],
+    },
+    {
+      transform: stripInternalPlaceholderLines,
+      activationTokens: [EXEC_NO_OUTPUT_PLACEHOLDER, "[tool calls omitted]"],
+    },
+    ...(errorContext ? [assistantTraceTextFilter] : []),
+    { transform: stripLegacyBracketToolCallBlocks, activationTokens: ["["] },
+    plainToolCallTextFilter,
+    leadingEmptyLinesTextFilter,
+    duplicateParagraphTextFilter,
+  ];
 }
 
 export function sanitizeUserFacingText(
@@ -287,24 +268,5 @@ export function sanitizeUserFacingText(
           opts?.streaming,
         )
       : raw;
-  const stripped = stripInboundMetadata(
-    stripInternalRuntimeContext(stripFinalTagsFromText(withoutConversationContext)),
-  );
-  const withoutToolCallXml = stripToolCallXmlTags(stripMinimaxToolCallXml(stripped), {
-    stripFunctionCallsXmlPayloads: true,
-  });
-  // Replay repair and empty exec output produce placeholders that never belong in visible replies.
-  const withoutPlaceholder = stripInternalPlaceholderLines(withoutToolCallXml);
-  const withoutInternalTraceLines = opts?.errorContext
-    ? stripAssistantInternalTraceLines(withoutPlaceholder)
-    : withoutPlaceholder;
-  const withoutToolCallBlocks = stripPlainTextToolCallBlocks(
-    stripLegacyBracketToolCallBlocks(withoutInternalTraceLines),
-    { resolveProtectedRanges: findCodeRegions },
-  );
-  if (!withoutToolCallBlocks.trim()) {
-    return "";
-  }
-  const withoutLeadingEmptyLines = withoutToolCallBlocks.replace(/^(?:[ \t]*\r?\n)+/, "");
-  return collapseConsecutiveDuplicateBlocks(withoutLeadingEmptyLines);
+  return applyTextFilters(withoutConversationContext, userFacingTextFilters(opts?.errorContext));
 }

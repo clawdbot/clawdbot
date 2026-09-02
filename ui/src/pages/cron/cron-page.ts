@@ -15,7 +15,6 @@ import {
   addCronJob,
   cancelCronEdit,
   createInitialCronState,
-  getVisibleCronJobs,
   hasCronFormErrors,
   loadCronJobsPage,
   loadCronModelSuggestions,
@@ -35,6 +34,7 @@ import {
   type CronModelSuggestionsState,
   type CronState,
 } from "../../lib/cron/index.ts";
+import { formatUiError } from "../../lib/format-error.ts";
 import {
   resolveSessionNavigationAgentId,
   sessionNavigationTarget,
@@ -58,6 +58,7 @@ class CronPage extends OpenClawLightDomElement {
   @state() private detailTab: CronDetailTab = "settings";
 
   private pendingRouteData: ReturnType<typeof resolveCronRouteData> | null = null;
+  private routeJobState: CronState | null = null;
   private highlightedRunId: string | null = null;
   private pendingRunScroll = false;
   private modelSuggestionsState: CronState | null = null;
@@ -72,6 +73,7 @@ class CronPage extends OpenClawLightDomElement {
     ensureInitialData: () => this.ensureInitialData(),
   });
   private readonly observeAgentScope = watchAgentScope((scopeId) => {
+    this.pendingRouteData = null;
     // Replace the mutable request state so responses started for the old
     // scope cannot populate the newly selected agent's page.
     this.resetGatewayState(this.context.gateway.snapshot);
@@ -169,8 +171,10 @@ class CronPage extends OpenClawLightDomElement {
 
   override willUpdate(changed: PropertyValues) {
     if (changed.has("routeSearch")) {
+      this.cron.cronError = null;
       const routeData = resolveCronRouteData(this.routeSearch);
       this.pendingRouteData = routeData.jobId ? routeData : null;
+      this.routeJobState = null;
       this.highlightedRunId = null;
       this.pendingRunScroll = false;
     }
@@ -190,14 +194,26 @@ class CronPage extends OpenClawLightDomElement {
         scroller.scrollTo({ top: 0 });
       }
     }
-    if (this.pendingRouteData && !this.cron.cronLoading && this.cron.cronJobsSnapshotRevision) {
-      // Consume the link only after its inventory arrives so later clicks cannot re-adopt it.
-      const routeData = this.pendingRouteData;
-      this.pendingRouteData = null;
-      const job = this.cron.cronJobs.find((entry) => entry.id === routeData.jobId);
-      if (job) {
-        this.selectJob(job, routeData.runId);
-      }
+    const routeData = this.pendingRouteData;
+    const client = this.cron.client;
+    if (routeData && client && this.cron.connected && this.routeJobState !== this.cron) {
+      this.routeJobState = this.cron;
+      void this.runCronTask(async (current) => {
+        const isCurrent = () =>
+          this.isConnected && this.cron === current && this.pendingRouteData === routeData;
+        try {
+          // Links identify an exact job; a filtered inventory page cannot resolve them.
+          const job = await client.request<CronJob>("cron.get", { id: routeData.jobId });
+          if (isCurrent()) {
+            this.selectJob(job, routeData.runId);
+          }
+        } catch (error) {
+          if (isCurrent()) {
+            this.pendingRouteData = null;
+            current.cronError = formatUiError(error);
+          }
+        }
+      });
     }
     if (this.pendingRunScroll) {
       const run = this.querySelector<HTMLElement>(".cron-run-entry--highlighted");
@@ -276,6 +292,7 @@ class CronPage extends OpenClawLightDomElement {
   }
 
   private selectJob(job: CronJob, runId: string | null = null) {
+    this.pendingRouteData = null;
     this.highlightedRunId = runId;
     this.pendingRunScroll = Boolean(runId);
     if (runId) {
@@ -298,6 +315,7 @@ class CronPage extends OpenClawLightDomElement {
     if (!this.canManageCron) {
       return;
     }
+    this.pendingRouteData = null;
     cancelCronEdit(this.cron, this.context.agentSelection.state.selectedId);
     this.cron.cronCreateOpen = true;
     if (patch) {
@@ -311,6 +329,7 @@ class CronPage extends OpenClawLightDomElement {
     if (!this.canManageCron) {
       return;
     }
+    this.pendingRouteData = null;
     // A clone is a prefilled create: the editor submits cron.add, not update.
     startCronClone(this.cron, job);
     this.cron.cronCreateOpen = true;
@@ -369,6 +388,7 @@ class CronPage extends OpenClawLightDomElement {
   }
 
   private closePanel() {
+    this.pendingRouteData = null;
     cancelCronEdit(this.cron, this.context.agentSelection.state.selectedId);
     this.cron.cronCreateOpen = false;
     this.requestCronUpdate();
@@ -433,7 +453,7 @@ class CronPage extends OpenClawLightDomElement {
           listError: this.cron.cronJobsError,
           canManage,
           status: this.cron.cronStatus,
-          jobs: getVisibleCronJobs(this.cron),
+          jobs: this.cron.cronJobs,
           jobsLoadingMore: this.cron.cronJobsLoadingMore,
           jobsTotal: this.cron.cronJobsTotal,
           jobsHasMore: this.cron.cronJobsHasMore,

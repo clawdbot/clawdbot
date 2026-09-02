@@ -585,8 +585,11 @@ describe("JSON console style process output", () => {
   );
 
   it("preserves structured entry startup tracing across a normal respawn", async () => {
+    // Gateway status skips warning-only respawn. A missing call method exercises
+    // startup respawn without contacting a Gateway.
     const result = await runCliProcess({
-      args: ["gateway", "status"],
+      args: ["gateway", "call"],
+      expectedExitCode: 1,
       allowRespawn: true,
       config: loggingConfig,
       env: { OPENCLAW_GATEWAY_STARTUP_TRACE: "1" },

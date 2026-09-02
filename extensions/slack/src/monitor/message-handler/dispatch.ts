@@ -482,6 +482,17 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
           return await progress.progressDraft.pushToolEvent(payload);
         },
         onItemEvent: async (payload) => {
+          // Slack freezes notification text on the first post. Keep incomplete
+          // preambles out of the compositor until a message actually exists;
+          // later edits may stream. A timer or tool event must not flush "I".
+          if (
+            payload.kind === "preamble" &&
+            (payload.phase === "start" || payload.phase === "update") &&
+            !draftStream?.messageId() &&
+            !delivery.streamSession?.delivered
+          ) {
+            return false;
+          }
           if (progress.isProgressMode && payload.kind === "preamble") {
             if (progress.shouldYieldDraftProgress()) {
               return false;

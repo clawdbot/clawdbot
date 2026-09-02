@@ -154,11 +154,11 @@ type RemoveWorktreeParams = WorktreeMutationGuard & {
   claimToken?: string;
   runEndCleanup?: ManagedWorktreeRunEndCleanup;
 };
-const MAX_WORKTREES = 100;
+const WORKTREE_CLEANUP_TARGET = 100;
 
 /** A bounded default; manual and actively used worktrees remain protected. */
 export function resolveWorktreeCleanupLimits(): WorktreeCleanupLimits {
-  return { maxCount: MAX_WORKTREES };
+  return { maxCount: WORKTREE_CLEANUP_TARGET };
 }
 
 function validateName(name: string): string {
@@ -794,7 +794,7 @@ export class ManagedWorktreeService {
     params: WorktreeMutationGuard,
     run: (guard: WorktreeMutationGuard) => Promise<T>,
   ): Promise<T> {
-    // Count and disk headroom are shared across repositories. Hold one renewable lease
+    // Disk headroom is shared across repositories. Hold one renewable lease
     // through checkout, setup, snapshots, and publication, including CLI processes.
     return await withOpenClawStateLease(
       {
@@ -816,20 +816,6 @@ export class ManagedWorktreeService {
           },
         }),
     );
-  }
-
-  private async requireAllocationCapacity(
-    target: string,
-    repository: ResolvedRepository,
-    bytes = 0,
-  ) {
-    const live = listRegistryWorktrees(this.env).filter((record) => record.removedAt === undefined);
-    if (live.length >= MAX_WORKTREES) {
-      throw new Error(
-        `Managed worktree limit of ${MAX_WORKTREES} reached; archive a session or remove an unused worktree, then retry. Active and manual worktrees are preserved.`,
-      );
-    }
-    this.requireAllocationSpace(target, repository, bytes);
   }
 
   private requireAllocationSpace(target: string, repository: ResolvedRepository, bytes = 0) {
@@ -911,7 +897,7 @@ export class ManagedWorktreeService {
     // Default-base resolution fetches remote refs; it is an effect, not just discovery.
     params.signal?.throwIfAborted();
     params.commitGuard?.();
-    await this.requireAllocationCapacity(worktreePath, repository);
+    this.requireAllocationSpace(worktreePath, repository);
     params.commitGuard?.();
     const base = await resolveWorktreeBase(repository.repoRoot, params.baseRef, params.signal);
     const gitBytes = Math.max(
@@ -1305,7 +1291,7 @@ export class ManagedWorktreeService {
       throw new Error(`source repository no longer exists: ${record.repoRoot}`);
     }
     const repository = await resolveRepository(record.repoRoot);
-    await this.requireAllocationCapacity(record.path, repository);
+    this.requireAllocationSpace(record.path, repository);
     const provisionedState = getRegistryWorktreeProvisionedState(this.env, record.id);
     if (provisionedState === undefined) {
       throw new Error(`worktree ${record.id} snapshot lacks provisioned file metadata`);

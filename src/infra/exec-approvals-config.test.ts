@@ -180,6 +180,35 @@ describe("exec approvals default agent migration", () => {
 });
 
 describe("persisted exec approvals schema", () => {
+  it("round-trips exact MCP grants and tolerates unrelated future agent metadata", () => {
+    const mcpTools = [
+      { server: "project.docs", tool: "write_note", source: "allow-always", addedAt: 123 },
+    ];
+    const file = { version: 1, agents: { main: { mcpTools, futurePolicy: { enabled: true } } } };
+    const parsed = tryParsePersistedExecApprovals(JSON.stringify(file));
+    expect(parsed?.agents?.main).toMatchObject(file.agents.main);
+    expect(tryParsePersistedExecApprovals(JSON.stringify(parsed))?.agents?.main).toMatchObject(
+      file.agents.main,
+    );
+  });
+
+  it("retains MCP grants when merging legacy default and canonical main policy", () => {
+    const grant = {
+      server: "project.docs",
+      tool: "write_note",
+      source: "allow-always",
+      addedAt: 123,
+    };
+    const parsed = tryParsePersistedExecApprovals(
+      JSON.stringify({
+        version: 1,
+        agents: { main: { mcpTools: [grant] }, default: { ask: "off" } },
+      }),
+    );
+    expect(parsed?.agents?.main).toMatchObject({ mcpTools: [grant], ask: "off" });
+    expect(parsed?.agents?.default).toBeUndefined();
+  });
+
   it("keeps legacy string allowlist entries while normalizing them", () => {
     const parsed = tryParsePersistedExecApprovals(
       JSON.stringify({
@@ -194,6 +223,15 @@ describe("persisted exec approvals schema", () => {
   });
 
   it.each([
+    ...[
+      { server: "", tool: "write_note", source: "allow-always", addedAt: 123 },
+      { server: "project.docs", tool: "", source: "allow-always", addedAt: 123 },
+      { server: "project.docs", tool: "write_note", source: "other", addedAt: 123 },
+      { server: "project.docs", tool: "write_note", source: "allow-always", addedAt: -1 },
+    ].map((grant, index) => ({
+      name: `MCP grant ${index}`,
+      value: { version: 1, agents: { main: { mcpTools: [grant] } } },
+    })),
     { name: "version", value: { version: 2 } },
     { name: "socket token", value: { version: 1, socket: { token: 42 } } },
     { name: "policy enum", value: { version: 1, defaults: { security: "none" } } },

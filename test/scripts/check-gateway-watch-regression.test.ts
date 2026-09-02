@@ -93,6 +93,7 @@ describe("check-gateway-watch-regression", () => {
       cpuMs: 0,
       distRuntimeByteGrowth,
       distRuntimeFileGrowth: 0,
+      removedPaths: 0,
       options: {
         cpuFailMs: 8000,
         cpuWarnMs: 1000,
@@ -125,6 +126,38 @@ describe("check-gateway-watch-regression", () => {
     expect(second.text).toHaveLength(8);
     expect(WATCH_LOG_CAPTURE_MAX_CHARS).toBeGreaterThan(1024);
   });
+
+  it.each([
+    { reason: "missing_bundled_plugin_dist_entry", removedPaths: 0 },
+    { reason: null, removedPaths: 2932 },
+    { reason: "dirty_watched_tree", removedPaths: 0 },
+  ])(
+    "rejects prebuilt artifact mutation: $reason / $removedPaths removed",
+    ({ reason, removedPaths }) => {
+      const findings = collectGatewayWatchFindings({
+        cpuMs: 0,
+        distRuntimeByteGrowth: -1024,
+        distRuntimeFileGrowth: 0,
+        removedPaths,
+        options: parseArgs(["--skip-build"]),
+        watchBuildReason: reason,
+        watchTriggeredBuild: reason !== null,
+        watchResult: {
+          idleCpuMs: 0,
+          readyBeforeWindow: true,
+          spawnError: null,
+          timingFileMissing: false,
+        },
+      });
+      expect(findings.failures).toEqual([
+        removedPaths > 0
+          ? "gateway:watch removed 2932 prebuilt artifact paths"
+          : reason === "dirty_watched_tree"
+            ? "gateway:watch invalid local run: dirty watched source tree forced a rebuild during the watch window"
+            : "gateway:watch unexpectedly rebuilt prebuilt artifacts (missing_bundled_plugin_dist_entry)",
+      ]);
+    },
+  );
 
   it("keeps build-regression detection after diagnostic logs truncate", () => {
     const detected = updateWatchBuildDetection(
@@ -195,6 +228,7 @@ describe("check-gateway-watch-regression", () => {
       cpuMs: 0,
       distRuntimeByteGrowth: 0,
       distRuntimeFileGrowth: 0,
+      removedPaths: 0,
       options: {
         cpuFailMs: 8000,
         cpuWarnMs: 1000,
@@ -223,6 +257,7 @@ describe("check-gateway-watch-regression", () => {
       cpuMs: 0,
       distRuntimeByteGrowth: 0,
       distRuntimeFileGrowth: 0,
+      removedPaths: 0,
       options: {
         cpuFailMs: 8000,
         cpuWarnMs: 1000,
@@ -254,6 +289,7 @@ describe("check-gateway-watch-regression", () => {
       cpuMs: 0,
       distRuntimeByteGrowth: 0,
       distRuntimeFileGrowth: 0,
+      removedPaths: 0,
       options: {
         cpuFailMs: 8000,
         cpuWarnMs: 1000,
