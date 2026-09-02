@@ -132,10 +132,11 @@ export function getCronJobPayload(job: CronJob): CronPayload | null {
 }
 
 export function getCronJobGroup(job: CronJob): string {
-  if ("effectiveGroup" in job && typeof job.effectiveGroup === "string") {
-    return job.effectiveGroup;
+  const effectiveGroup = (job as CronJob & { effectiveGroup?: unknown }).effectiveGroup;
+  if (typeof effectiveGroup === "string") {
+    return effectiveGroup;
   }
-  return job.group ?? "Ungrouped";
+  return "Ungrouped";
 }
 
 function hasCronJobPayload(job: CronJob): boolean {
@@ -813,6 +814,8 @@ export function getVisibleCronJobs(
     | "cronJobsTagFilter"
   >,
 ): CronJob[] {
+  const groupFilter = state.cronJobsGroupFilter.trim().toLowerCase();
+  const tagFilter = state.cronJobsTagFilter.trim().toLowerCase();
   return state.cronJobs.filter((job) => {
     const scheduleKind = resolveCronJobScheduleKind(job);
     if (!scheduleKind) {
@@ -837,21 +840,10 @@ export function getVisibleCronJobs(
       return false;
     }
     const group = getCronJobGroup(job);
-    if (
-      state.cronJobsGroupFilter &&
-      normalizeLowercaseStringOrEmpty(group) !==
-        normalizeLowercaseStringOrEmpty(state.cronJobsGroupFilter)
-    ) {
+    if (groupFilter && normalizeLowercaseStringOrEmpty(group) !== groupFilter) {
       return false;
     }
-    if (
-      state.cronJobsTagFilter &&
-      !job.tags?.some(
-        (tag) =>
-          normalizeLowercaseStringOrEmpty(tag) ===
-          normalizeLowercaseStringOrEmpty(state.cronJobsTagFilter),
-      )
-    ) {
+    if (tagFilter && !job.tags?.some((tag) => normalizeLowercaseStringOrEmpty(tag) === tagFilter)) {
       return false;
     }
     return true;

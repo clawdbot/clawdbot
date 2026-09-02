@@ -398,6 +398,40 @@ describe("scheduled tool policy provenance", () => {
     }
   });
 
+  it("converges declarative group and tags metadata and detects no-op resaves", async () => {
+    const { storePath } = await makeStorePath();
+    const state = createOkIsolatedCronState({ storePath, now: Date.now() });
+    const input = {
+      declarationKey: "plugin:test:grouping",
+      name: "declarative grouping",
+      enabled: true,
+      schedule: { kind: "every" as const, everyMs: 60_000 },
+      sessionTarget: "isolated" as const,
+      wakeMode: "now" as const,
+      payload: { kind: "agentTurn" as const, message: "run" },
+      group: "Work",
+      tags: ["reports"],
+    };
+
+    const created = requireDeclarativeAddResult(await add(state, input));
+    expect(created.job).toMatchObject({ group: "Work", tags: ["reports"] });
+
+    const updated = requireDeclarativeAddResult(
+      await add(state, { ...input, group: "Personal", tags: ["home", "errands"] }),
+    );
+    expect(updated.updated).toBe(true);
+    expect(updated.job).toMatchObject({ group: "Personal", tags: ["home", "errands"] });
+
+    const noop = requireDeclarativeAddResult(
+      await add(state, { ...input, group: "Personal", tags: ["home", "errands"] }),
+    );
+    expect(noop.updated).toBe(false);
+    expect(noop.created).toBe(false);
+    if (state.timer) {
+      clearTimeout(state.timer);
+    }
+  });
+
   it("stamps trusted and authenticated-account creates", async () => {
     const { storePath } = await makeStorePath();
     const now = Date.parse("2026-07-23T12:00:00.000Z");

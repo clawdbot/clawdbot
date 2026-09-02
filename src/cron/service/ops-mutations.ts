@@ -293,6 +293,8 @@ function declarativeFields(job: CronStoredJob, includeEnabled: boolean) {
     runtimeAuthorityRecoveryRequired: job.runtimeAuthorityRecoveryRequired,
     delivery: job.delivery,
     displayName: job.displayName,
+    group: job.group,
+    tags: job.tags,
     ...(includeEnabled ? { enabled: job.enabled } : {}),
   };
 }

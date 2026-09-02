@@ -1,4 +1,3 @@
-/* eslint-disable max-lines -- legacy Cron view remains a single render module. */
 import {
   normalizeStringEntries,
   uniqueStrings,

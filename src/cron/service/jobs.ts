@@ -529,6 +529,26 @@ export function applyDeclarativeJobSpec(
   } else {
     delete job.pacing;
   }
+  if (input.group !== undefined) {
+    const group = normalizeCronGroup(input.group);
+    if (group) {
+      job.group = group;
+    } else {
+      delete job.group;
+    }
+  } else {
+    delete job.group;
+  }
+  if (input.tags !== undefined) {
+    const tags = normalizeCronTags(input.tags);
+    if (tags) {
+      job.tags = tags;
+    } else {
+      delete job.tags;
+    }
+  } else {
+    delete job.tags;
+  }
   job.payload =
     input.payload.kind === "script"
       ? normalizeCronScriptPayload(structuredClone(input.payload))

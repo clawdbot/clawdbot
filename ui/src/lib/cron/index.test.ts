@@ -2760,6 +2760,18 @@ describe("cron controller", () => {
     expect(state.cronJobsHasMore).toBe(false);
   });
 
+  it("treats whitespace-only local group and tag filters as unfiltered", () => {
+    const state = createState({
+      cronJobs: [
+        createCronJob({ id: "job-filter", name: "Visible", group: "Work", tags: ["daily"] }),
+      ],
+      cronJobsGroupFilter: "   ",
+      cronJobsTagFilter: "\t",
+    });
+
+    expect(getVisibleCronJobs(state)).toHaveLength(1);
+  });
+
   it("appends jobs only from the accepted snapshot revision", async () => {
     const firstJob = createCronJob({ id: "job-1", name: "First" });
     const secondJob = createCronJob({ id: "job-2", name: "Second" });
