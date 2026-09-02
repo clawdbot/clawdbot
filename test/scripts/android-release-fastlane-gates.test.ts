@@ -53,7 +53,7 @@ describe("Android Fastlane release upload gates", () => {
     expect(validation).not.toContain(":wear:bundleRelease");
   });
 
-  it("preflights and records mobile release refs around Play build upload", () => {
+  it("preflights and finalizes mobile release refs only after Play accepts both builds", () => {
     const fastfile = readFastfile();
     const uploadBuild = functionBody(fastfile, "upload_play_store_build!");
     const atomicUpload = functionBody(fastfile, "upload_play_builds_atomically!");
@@ -66,14 +66,17 @@ describe("Android Fastlane release upload gates", () => {
     expect(fastfile).toContain("repo_root");
     expect(uploadBuild).toContain("release_sha = release_git_sha");
     expect(uploadBuild).toContain("ensure_mobile_release_ref_available!");
-    expect(uploadBuild).toContain("record_mobile_release_ref!");
+    expect(uploadBuild).toContain("finalize_mobile_release_ref!");
     expect(uploadBuild.match(/sha: release_sha/g)).toHaveLength(2);
     expect(uploadBuild.indexOf("ensure_mobile_release_ref_available!")).toBeLessThan(
       uploadBuild.indexOf("upload_play_builds_atomically!("),
     );
-    expect(uploadBuild.indexOf("record_mobile_release_ref!")).toBeGreaterThan(
+    expect(uploadBuild.indexOf("finalize_mobile_release_ref!")).toBeGreaterThan(
       uploadBuild.indexOf("upload_play_builds_atomically!("),
     );
+    expect(uploadBuild).toContain("accepted = upload_play_builds_atomically!(");
+    expect(uploadBuild).toContain("phone_version_code: accepted.fetch(:phone_version_code)");
+    expect(uploadBuild).toContain("wear_version_code: accepted.fetch(:wear_version_code)");
     expect(uploadBuild).toContain("unless play_validate_only?");
     expect(atomicUpload.match(/client\.upload_bundle\(/g)).toHaveLength(2);
     expect(atomicUpload.match(/client\.begin_edit\(/g)).toHaveLength(1);
@@ -81,6 +84,9 @@ describe("Android Fastlane release upload gates", () => {
     expect(atomicUpload).toContain("client.validate_current_edit!");
     expect(atomicUpload).toContain("client.abort_current_edit");
     expect(atomicUpload).toContain("upload_play_listing_assets!");
+    expect(atomicUpload.indexOf("client.commit_current_edit!")).toBeLessThan(
+      atomicUpload.indexOf("phone_version_code: phone_version_code.to_i"),
+    );
     expect(fastfile).toContain("Supply::SCREENSHOT_TYPES.each");
     expect(fastfile).toContain("%w(phoneScreenshots wearScreenshots)");
     expect(booleanEnv).toContain('["1", "yes", "true", "on"]');
@@ -91,6 +97,39 @@ describe("Android Fastlane release upload gates", () => {
     expect(atomicUpload).toContain(
       'fastlane_boolean_env("SUPPLY_RESCUE_CHANGES_NOT_SENT_FOR_REVIEW", default: true)',
     );
+  });
+
+  it("keeps local ref recording as the default and emits a closed intent only in CI mode", () => {
+    const fastfile = readFastfile();
+    const finalizer = functionBody(fastfile, "finalize_mobile_release_ref!");
+
+    expect(finalizer).toContain('ENV.fetch("OPENCLAW_MOBILE_RELEASE_REF_MODE", "").strip');
+    expect(finalizer).toContain("record_mobile_release_ref!(");
+    expect(finalizer).toContain('unless mode == "intent"');
+    expect(finalizer).toContain('"mobile-release-intent.mjs"');
+    expect(finalizer).toContain('"--authority-receipt-digest"');
+    expect(finalizer).toContain('"--gateway-version"');
+    expect(finalizer).toContain('"--version-name"');
+    expect(finalizer).toContain('"--phone-version-code"');
+    expect(finalizer).toContain('"--wear-version-code"');
+    expect(finalizer).toContain('"--target-ref"');
+    expect(finalizer).toContain('"--target-sha"');
+    expect(finalizer).not.toContain('"git"');
+    expect(finalizer).not.toContain("push");
+  });
+
+  it("fails before upload when planned Play codes are already consumed", () => {
+    const fastfile = readFastfile();
+    const auth = functionBody(fastfile, "validate_play_auth!");
+    const preflight = functionBody(fastfile, "validate_android_release_preflight!");
+    const destination = functionBody(fastfile, "validate_ci_play_destination!");
+
+    expect(auth).toContain("client.aab_version_codes.map(&:to_i)");
+    expect(auth).toContain("expected_codes & consumed_codes");
+    expect(auth).toContain("Cut a new mobile release plan before uploading.");
+    expect(preflight).toContain("validate_play_auth!(version_metadata: version_metadata)");
+    expect(destination).toContain('play_track == "internal"');
+    expect(destination).toContain('wear_play_track == "wear:internal"');
   });
 
   it("generates fresh screenshots before building and uploading a release", () => {

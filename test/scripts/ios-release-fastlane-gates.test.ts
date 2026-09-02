@@ -116,6 +116,16 @@ function functionBody(source: string, name: string): string {
   return nextFunction < 0 ? rest : rest.slice(0, nextFunction);
 }
 
+function functionDefinition(source: string, name: string): string {
+  const start = source.indexOf(`def ${name}`);
+  if (start < 0) {
+    throw new Error(`missing Fastfile function ${name}`);
+  }
+  const rest = source.slice(start);
+  const nextFunction = rest.slice(1).search(/\ndef /);
+  return nextFunction < 0 ? rest : rest.slice(0, nextFunction + 1);
+}
+
 function swiftFunctionBody(source: string, name: string): string {
   const startMarker = `func ${name}(`;
   const start = source.indexOf(startMarker);
@@ -463,15 +473,63 @@ describe("iOS Fastlane release upload gates", () => {
     expect(upload).toBeGreaterThan(planRecheck);
   });
 
-  it("waits for Apple build processing without submitting to TestFlight review", () => {
+  it("keeps local upload-only behavior but requires explicit internal distribution in CI", () => {
     const releaseUpload = laneBody(readFastfile(), "release_upload");
 
     expect(releaseUpload).toContain("skip_waiting_for_build_processing: false");
-    expect(releaseUpload).toContain("skip_submission: true");
+    expect(releaseUpload).toContain("upload_options[:skip_submission] = true");
+    expect(releaseUpload).toContain("skip_submission: false");
+    expect(releaseUpload).toContain("submit_beta_review: false");
+    expect(releaseUpload).toContain("distribute_external: false");
+    expect(releaseUpload).toContain("groups: [internal_group.fetch(:group).id]");
     expect(releaseUpload).toContain(
       "wait_processing_timeout_duration: APP_STORE_BUILD_PROCESSING_TIMEOUT_SECONDS",
     );
     expect(releaseUpload).not.toContain("skip_waiting_for_build_processing: true");
+    expect(releaseUpload.indexOf("resolve_ci_testflight_internal_group!")).toBeLessThan(
+      releaseUpload.indexOf("upload_to_testflight(**upload_options)"),
+    );
+    expect(releaseUpload.indexOf("verify_ci_testflight_internal_assignment!")).toBeGreaterThan(
+      releaseUpload.indexOf("upload_to_testflight(**upload_options)"),
+    );
+    expect(releaseUpload.indexOf("finalize_mobile_release_ref!")).toBeGreaterThan(
+      releaseUpload.indexOf("verify_ci_testflight_internal_assignment!"),
+    );
+  });
+
+  it("fails closed for missing, duplicate, or external TestFlight group matches", () => {
+    const selector = functionDefinition(readFastfile(), "select_ci_testflight_internal_group!");
+    const source = `
+module UI
+  def self.user_error!(message)
+    raise message
+  end
+end
+Group = Struct.new(:id, :name, :is_internal_group)
+${selector}
+groups = [
+  Group.new("internal-id", "Internal", true),
+  Group.new("external-id", "External", false),
+  Group.new("duplicate-id", "Internal", true)
+]
+["missing", "Internal", "External", "internal-id"].each do |identity|
+  begin
+    group = select_ci_testflight_internal_group!(groups: groups, identity: identity)
+    puts "ok:#{group.id}"
+  rescue => error
+    puts "error:#{error.message}"
+  end
+end
+`;
+    const result = spawnSync("ruby", ["-e", source], { encoding: "utf8" });
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout.trim().split("\n")).toEqual([
+      "error:Expected exactly one TestFlight group matching the approved identity.",
+      "error:Expected exactly one TestFlight group matching the approved identity.",
+      "error:The approved TestFlight group must be internal.",
+      "ok:internal-id",
+    ]);
   });
 
   it("finishes fallible local release work before mutating App Store metadata", () => {
@@ -708,7 +766,7 @@ describe("iOS Fastlane release upload gates", () => {
     );
   });
 
-  it("preflights and records mobile release refs around TestFlight upload", () => {
+  it("preflights and finalizes mobile release refs only after TestFlight accepts the build", () => {
     const fastfile = readFastfile();
     const releaseUpload = laneBody(fastfile, "release_upload");
 
@@ -723,7 +781,7 @@ describe("iOS Fastlane release upload gates", () => {
     );
     expect(releaseUpload).toContain("release_sha = context[:git_commit]");
     expect(releaseUpload).toContain("ensure_mobile_release_ref_available!");
-    expect(releaseUpload).toContain("record_mobile_release_ref!");
+    expect(releaseUpload).toContain("finalize_mobile_release_ref!");
     expect(releaseUpload).toContain("screenshots(\n          release_version: context[:version]");
     expect(fastfile).toContain("def without_xcode_xcconfig_file");
     expect(releaseUpload).toContain("without_xcode_xcconfig_file do");
@@ -737,9 +795,28 @@ describe("iOS Fastlane release upload gates", () => {
     expect(releaseUpload.indexOf("ensure_mobile_release_ref_available!")).toBeLessThan(
       releaseUpload.indexOf("\n    metadata(\n      release_version: context[:version]"),
     );
-    expect(releaseUpload.indexOf("record_mobile_release_ref!")).toBeGreaterThan(
+    expect(releaseUpload.indexOf("finalize_mobile_release_ref!")).toBeGreaterThan(
       releaseUpload.indexOf("upload_to_testflight("),
     );
+  });
+
+  it("keeps local ref recording as the default and emits a closed intent only in CI mode", () => {
+    const finalizer = functionBody(readFastfile(), "finalize_mobile_release_ref!");
+
+    expect(finalizer).toContain('ENV.fetch("OPENCLAW_MOBILE_RELEASE_REF_MODE", "").strip');
+    expect(finalizer).toContain("record_mobile_release_ref!(");
+    expect(finalizer).toContain('unless mode == "intent"');
+    expect(finalizer).toContain('"mobile-release-intent.mjs"');
+    expect(finalizer).toContain('"--authority-receipt-digest"');
+    expect(finalizer).toContain('"--gateway-version"');
+    expect(finalizer).toContain('"--app-store-version"');
+    expect(finalizer).toContain('"--build-number"');
+    expect(finalizer).toContain('"--internal-group-id"');
+    expect(finalizer).toContain('"--internal-group-name"');
+    expect(finalizer).toContain('"--target-ref"');
+    expect(finalizer).toContain('"--target-sha"');
+    expect(finalizer).not.toContain('"git"');
+    expect(finalizer).not.toContain("push");
   });
 
   it("normalizes Watch screenshots as opaque RGB PNGs for App Store upload", () => {

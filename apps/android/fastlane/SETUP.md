@@ -83,6 +83,35 @@ Upload metadata, release notes, and the Play AAB to the configured Google Play t
 pnpm android:release:upload
 ```
 
+## Protected beta CI
+
+`Android Beta Release` is a separate, manual workflow. Dispatch it from trusted
+`main` with a canonical `release/YYYY.M.PATCH-mobile` branch and that branch's
+exact full commit SHA. The workflow accepts only a candidate that descends from
+the workflow SHA and differs in exactly the five generated mobile release
+metadata files. Approval of the `android-beta-release` environment gates all
+access to signing assets, Google Play credentials, and immutable release-ref
+mutation.
+
+Repository/environment secrets required by name:
+
+- `GH_APP_PRIVATE_KEY`
+- `MATCH_PASSWORD`
+- `GOOGLE_PLAY_JSON_KEY_DATA`
+
+The protected lane uploads the phone AAB to `internal` and the Wear AAB to
+`wear:internal` in one Google Play edit, then commits that edit once. The
+store-returned phone and Wear version codes are included in the signed release
+intent. Production promotion remains manual.
+
+After the committed edit, the workflow records
+`refs/openclaw/mobile-releases/android/<version-name>-<phone-version-code>` at
+the exact candidate SHA. A failed post-upload recording step may be recovered
+with the workflow's `record-only` operation, the original failed run ID, and the
+same release ref/SHA tuple. Recovery enters `android-beta-release`, executes
+only trusted workflow-SHA tooling, and fails on missing artifacts, replay,
+moved refs, mismatched digests, or a conflicting immutable ref.
+
 Direct Fastlane entry point:
 
 ```bash
@@ -105,7 +134,7 @@ Release rules:
 - `apps/android/Config/ReleaseSigning.json` pins the encrypted Android signing assets in the shared signing repo.
 - `apkCertificateSha256` in that manifest pins the upload certificate accepted for standalone release APKs; rotate it only with the encrypted keystore.
 - `MATCH_PASSWORD` enables Fastlane to pull encrypted Android signing assets into `apps/android/build/release-signing/` before release validation or archive builds.
-- Supported pinned Android versions use CalVer: `YYYY.M.D`.
+- Supported pinned Android versions use CalVer: `YYYY.M.PATCH`.
 - Phone `versionCode` uses `YYYYMMDDNN`, where `NN` is `01` through `49`; the matching Wear APK adds `50` and uses `51` through `99`.
 - `scripts/mobile-release-version.ts` is the sole owner that prepares Android version metadata and release notes.
 - `pnpm android:version:pin` and `pnpm android:version:sync` are retired release entry points and fail without writing.
