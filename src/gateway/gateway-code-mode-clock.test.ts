@@ -6,6 +6,7 @@ import { clearConfigCache, clearRuntimeConfigSnapshot } from "../config/config.j
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
 import { setTestEnvValue } from "../test-utils/env.js";
+import { GATEWAY_CLIENT_CAPS } from "../../packages/gateway-protocol/src/client-info.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import {
   createGatewayConfigPath,
@@ -104,6 +105,7 @@ describe("Gateway Code Mode clock rollback", () => {
 
       let responseCount = 0;
       const responseBodies: Array<{ input?: unknown[] }> = [];
+      let approvalId = "";
       const writeSseResponse = (events: Record<string, unknown>[]) =>
         events.map((event) => "data: " + JSON.stringify(event) + "\n\n").join("") +
         "data: [DONE]\n\n";
@@ -277,7 +279,18 @@ describe("Gateway Code Mode clock rollback", () => {
           clientDisplayName: "code-mode-clock-proof",
           mode: GATEWAY_CLIENT_MODES.UI,
           scopes: ["operator.admin", "operator.approvals"],
+          caps: [GATEWAY_CLIENT_CAPS.APPROVALS],
           deviceIdentity,
+          onEvent: (event) => {
+            if (event.event !== "plugin.approval.requested") return;
+            const payload = event.payload;
+            if (!payload || typeof payload !== "object") return;
+            const request = (payload as { request?: unknown }).request;
+            if (!request || typeof request !== "object") return;
+            if ((request as { pluginId?: unknown }).pluginId !== approvalPluginId) return;
+            const id = (payload as { id?: unknown }).id;
+            if (typeof id === "string") approvalId = id;
+          },
         });
         try {
           await server.startupSettled;
@@ -298,15 +311,8 @@ describe("Gateway Code Mode clock rollback", () => {
           expect(started.status).toBe("started");
           expect(started.runId).toBeTruthy();
 
-          let approvalId = "";
           await vi.waitFor(
-            async () => {
-              const pending = (await client.request("plugin.approval.list", {})) as Array<{
-                id?: string;
-                request?: { pluginId?: string };
-              }>;
-              approvalId =
-                pending.find((entry) => entry.request?.pluginId === approvalPluginId)?.id ?? "";
+            () => {
               expect(approvalId).toBeTruthy();
             },
             { timeout: 30_000, interval: 20 },
