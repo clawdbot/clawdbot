@@ -201,10 +201,9 @@ export async function monitorLineProvider(
           : undefined;
 
       try {
-        // Read the limit from the config this turn resolved, not the monitor's
-        // startup snapshot. A `channels.line` edit restarts the monitor, but the new
-        // config is published before that restart runs, so an event admitted in
-        // between answers under it.
+        // Read the limit from the config this turn resolved, not the monitor's startup
+        // snapshot: a `channels.line` edit publishes the new config before it restarts
+        // the monitor, so an event admitted in between answers under the new value.
         const textLimit = resolveLineTextChunkLimit({ cfg: turnConfig, accountId: ctx.accountId });
         const core = getLineRuntime();
         const turnResult = await core.channel.inbound.run({
