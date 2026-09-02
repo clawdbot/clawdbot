@@ -353,27 +353,16 @@ jobs:
           OPENCLAW_CONTROL_UI_RELEASE_BUILD: "1"
         run: pnpm build
 
-      - name: Build Control UI only when the target full build does not own it
+      - name: Ensure Control UI release artifact
         if: steps.dist_build_cache.outputs.cache-hit != 'true'
         env:
           OPENCLAW_CONTROL_UI_RELEASE_BUILD: "1"
         run: |
           set -euo pipefail
-          build_has_ui="$(node --import ./scripts/tsx.mjs --input-type=module <<'NODE'
-          import { existsSync, readFileSync } from "node:fs";
-          import { pathToFileURL } from "node:url";
-          import { resolve } from "node:path";
-          const pkg = JSON.parse(readFileSync("package.json", "utf8"));
-          const owner = ["scripts/build-all.mts", "scripts/build-all.mjs"].find(
-            (path) => pkg.scripts?.build?.includes(path) && existsSync(path),
-          );
-          const build = owner ? await import(pathToFileURL(resolve(owner)).href) : null;
-          console.log(build?.resolveBuildAllSteps?.("full").some((step) => step.label === "ui:build") === true);
-          NODE
-          )"
-          if [[ "$build_has_ui" != true ]]; then
+          if [[ ! -f dist/control-ui/index.html ]]; then
             pnpm ui:build
           fi
+          test -f dist/control-ui/index.html
 
       - name: Save preflight build outputs
         if: steps.setup-node-env.outputs.cache-mode == 'read-write' && steps.dist_build_cache.outputs.cache-hit != 'true'

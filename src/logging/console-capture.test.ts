@@ -130,20 +130,32 @@ describe("enableConsoleCapture", () => {
     expect(firstArg.endsWith(` ${payload}`)).toBe(true);
   });
 
-  it("wraps console passthrough output when console style is JSON", () => {
-    setLoggerOverride({ level: "silent", consoleLevel: "info", consoleStyle: "json" });
-    const warn = vi.fn();
-    console.warn = warn;
-    enableConsoleCapture();
+  it.each(["json", "pretty", "compact"] as const)(
+    "formats %s console passthrough output",
+    (consoleStyle) => {
+      setLoggerOverride({
+        level: consoleStyle === "json" ? "silent" : "info",
+        file: tempLogPath(),
+        consoleLevel: "info",
+        consoleStyle,
+      });
+      const warn = vi.fn();
+      console.warn = warn;
+      enableConsoleCapture();
 
-    console.warn("tool failed", { attempt: 1 });
+      console.warn("tool failed", { attempt: 1 });
 
-    expect(warn).toHaveBeenCalledTimes(1);
-    expect(JSON.parse(firstMockArgAsString(warn))).toMatchObject({
-      level: "warn",
-      message: "tool failed { attempt: 1 }",
-    });
-  });
+      expect(warn).toHaveBeenCalledTimes(1);
+      if (consoleStyle === "json") {
+        expect(JSON.parse(firstMockArgAsString(warn))).toMatchObject({
+          level: "warn",
+          message: "tool failed { attempt: 1 }",
+        });
+      } else {
+        expect(warn).toHaveBeenCalledWith("tool failed { attempt: 1 }");
+      }
+    },
+  );
 
   it("does not rewrap structured subsystem output", () => {
     setLoggerOverride({ level: "info", consoleLevel: "warn", consoleStyle: "json" });
@@ -283,47 +295,8 @@ describe("enableConsoleCapture", () => {
     expect(event.stack).not.toContain("custom-only-secret");
   });
 
-  it("wraps bracket-prefixed root fallback output when console style is JSON", () => {
-    setLoggerOverride({
-      level: "info",
-      file: tempLogPath(),
-      consoleLevel: "error",
-      consoleStyle: "json",
-    });
-    const error = vi.fn();
-    console.error = error;
-    enableConsoleCapture();
-
-    logError("[tools] exec failed");
-
-    expect(error).toHaveBeenCalledTimes(1);
-    expect(JSON.parse(firstMockArgAsString(error))).toMatchObject({
-      level: "error",
-      message: "[tools] exec failed",
-    });
-  });
-
-  it.each(["pretty", "compact"] as const)(
-    "keeps %s console passthrough output unchanged",
-    (consoleStyle) => {
-      setLoggerOverride({
-        level: "info",
-        file: tempLogPath(),
-        consoleLevel: "info",
-        consoleStyle,
-      });
-      const warn = vi.fn();
-      console.warn = warn;
-      enableConsoleCapture();
-
-      console.warn("tool failed", { attempt: 1 });
-
-      expect(warn).toHaveBeenCalledWith("tool failed { attempt: 1 }");
-    },
-  );
-
-  it.each(["pretty", "compact"] as const)(
-    "keeps %s bracket-prefixed root fallback output unchanged",
+  it.each(["json", "pretty", "compact"] as const)(
+    "formats %s bracket-prefixed root fallback output",
     (consoleStyle) => {
       setLoggerOverride({
         level: "info",
@@ -337,7 +310,15 @@ describe("enableConsoleCapture", () => {
 
       logError("[tools] exec failed");
 
-      expect(error).toHaveBeenCalledWith("[tools] exec failed");
+      expect(error).toHaveBeenCalledTimes(1);
+      if (consoleStyle === "json") {
+        expect(JSON.parse(firstMockArgAsString(error))).toMatchObject({
+          level: "error",
+          message: "[tools] exec failed",
+        });
+      } else {
+        expect(error).toHaveBeenCalledWith("[tools] exec failed");
+      }
     },
   );
 

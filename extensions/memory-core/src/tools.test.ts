@@ -622,7 +622,8 @@ describe("memory_search unavailable payloads", () => {
       stale: true,
       warning:
         "Memory index is stale: embedding request timed out. Search results may be incomplete.",
-      action: "Run: openclaw memory status --index --agent main",
+      action:
+        "Run: openclaw memory status --index --agent main. Rebuilding may call the configured embedding provider and can incur provider cost.",
     });
   });
 
@@ -678,6 +679,8 @@ describe("memory_search unavailable payloads", () => {
       indexIdentity: {
         status: "mismatched",
         reason,
+        code: "provider",
+        owner: "configuration",
       },
     });
 
@@ -691,10 +694,9 @@ describe("memory_search unavailable payloads", () => {
 
     expectUnavailableMemorySearchDetails(result.details, {
       error: reason,
-      warning:
-        "Tell the user: memory search is paused because the memory index was built with a different embedding provider/model/settings.",
+      warning: `Tell the user: memory search is paused because the current memory configuration no longer matches the index (${reason}).`,
       action:
-        "Tell the user to run: openclaw memory status --index or openclaw memory index --force.",
+        "Tell the user to run: openclaw memory status --index --agent main. Rebuilding may call the configured embedding provider and can incur provider cost.",
     });
     expect(searchCalls).toBe(1);
     expect(getMemorySyncMockCalls()).toBe(0);

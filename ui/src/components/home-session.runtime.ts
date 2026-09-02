@@ -9,6 +9,7 @@ import { OpenClawLightDomElement } from "../lit/openclaw-element.ts";
 import { formatChatWorkContext, type ChatWorkContext } from "../pages/chat/chat-work-context.ts";
 import "../pages/chat/chat-pane.ts";
 import "../styles/chat.css";
+import "../styles/chat/composer-status.css";
 import { icons } from "./icons.ts";
 
 /** The real Home conversation; its surrounding dock owns placement and focus. */

@@ -3,7 +3,10 @@
 import path from "node:path";
 import { normalizeTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import { MANIFEST_KEY } from "../compat/legacy-names.js";
-import { copyPackageDirInstallTransactionRequest } from "../infra/install-package-dir.js";
+import {
+  copyPackageDirInstallTransactionRequest,
+  hasPackageRuntimeDependencies,
+} from "../infra/install-package-dir.js";
 import { resolveSafeInstallDir, unscopedPackageName } from "../infra/install-safe-path.js";
 import type { NpmIntegrityDrift, NpmSpecResolution } from "../infra/install-source-utils.js";
 import { readRegularFile } from "../infra/regular-file.js";
@@ -35,6 +38,7 @@ type HookPackageManifest = {
   name?: string;
   version?: string;
   dependencies?: Record<string, string>;
+  optionalDependencies?: Record<string, string>;
 } & Partial<Record<typeof MANIFEST_KEY, { extensions?: string[]; hooks?: string[] }>>;
 
 export type InstallHooksResult =
@@ -520,7 +524,8 @@ async function installHookPackageFromDir(
     };
   }
 
-  const installRes = await runtime.installPackageDirWithManifestDeps(
+  const hasDeps = hasPackageRuntimeDependencies(manifest);
+  const installRes = await runtime.installPackageDir(
     copyPackageDirInstallTransactionRequest(params, {
       sourceDir: params.packageDir,
       targetDir,
@@ -529,7 +534,8 @@ async function installHookPackageFromDir(
       logger,
       copyErrorPrefix: "failed to copy hook pack",
       depsLogMessage: "Installing hook pack dependencies…",
-      manifestDependencies: manifest.dependencies,
+      hasDeps,
+      sourceHardlinks: hasDeps ? "package-manager" : "reject",
       beforePersistentApply: params.beforePersistentApply,
       afterInstall: async (installedDir) => {
         const dependencyPolicyFailure = await runHookInstalledDependencyPolicy({

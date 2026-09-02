@@ -2926,15 +2926,15 @@ export async function startQaMockOpenAiServer(params?: {
         return;
       }
       const dispatched = await dispatchProvider({ route: "anthropic-messages", body, raw });
-      const { responseBody, streamEvents } = buildMessagesPayload(dispatched);
-      if (dispatched.failure && dispatched.failure.presentation !== "anthropic-thinking") {
-        writeJson(res, dispatched.failure.status, responseBody);
+      const { status, responseBody, streamEvents } = buildMessagesPayload(dispatched);
+      if (!streamEvents) {
+        writeJson(res, status, responseBody);
         return;
       }
       if (body.stream === true) {
         await writeSse(res, streamEvents, "anthropic");
       } else {
-        writeJson(res, dispatched.failure?.status ?? 200, responseBody);
+        writeJson(res, status, responseBody);
       }
       dispatched.onResponseSent?.();
     });

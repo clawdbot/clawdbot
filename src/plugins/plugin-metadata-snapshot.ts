@@ -260,7 +260,10 @@ export function listPluginOriginsFromMetadataSnapshot(
 
 /** Rebuilds every manifest-derived snapshot fact from one authoritative registry. */
 export function rebasePluginMetadataSnapshotManifestRegistry(
-  snapshot: PluginMetadataSnapshot,
+  snapshot: Omit<
+    PluginMetadataSnapshot,
+    "manifestRegistry" | "plugins" | "diagnostics" | "byPluginId" | "owners"
+  >,
   manifestRegistry: PluginManifestRegistry,
 ): PluginMetadataSnapshot {
   const plugins = manifestRegistry.plugins;
