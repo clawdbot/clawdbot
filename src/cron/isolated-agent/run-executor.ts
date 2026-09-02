@@ -21,7 +21,7 @@ import { resolveCliRuntimeExecutionProvider } from "../../agents/model-runtime-a
 import { resolveConfiguredThinkingDefault } from "../../agents/model-thinking-default.js";
 import { wrapUntrustedPromptDataBlock } from "../../agents/sanitize-for-prompt.js";
 import { resolveScheduledToolPolicyContext } from "../../agents/scheduled-tool-policy.js";
-import { withLocalSessionPlacementTurnAdmission } from "../../agents/session-placement-admission.js";
+import { withLocalSessionPlacementTurnSettlement } from "../../agents/session-placement-admission.js";
 import { resolveSessionRuntimeOverrideForProvider } from "../../agents/session-runtime-compat.js";
 import { hasResolvedThinkingCatalogEntry } from "../../agents/thinking-runtime.js";
 import { withPostAdmissionExecutionOwnerBinding } from "../../audit/execution-owner-binding.js";
@@ -327,6 +327,7 @@ function createCronPromptExecutor(params: {
     toolsAllow: params.agentPayload?.toolsAllow,
     scheduledToolPolicy: validatedScheduledToolPolicy,
     callerOrigin: params.job.toolsAllowProvenance?.callerOrigin,
+    execTarget: params.job.toolsAllowExecTarget,
   });
   const { sourceDelivery } = params;
   const sourceReplyDeliveryMode = sourceDelivery.sourceReplyDeliveryMode;
@@ -377,17 +378,20 @@ function createCronPromptExecutor(params: {
 
   const runPrompt = async (promptText: string) => {
     let candidateStarted = false;
+    const sessionTarget = {
+      agentId: params.agentId,
+      sessionId: params.cronSession.sessionEntry.sessionId,
+      sessionKey: params.runSessionKey,
+      storePath: params.cronSession.storePath,
+    };
     const userTurnTranscriptRecorder =
       pendingUserTurn?.promptText === promptText
         ? pendingUserTurn.recorder
         : createUserTurnTranscriptRecorder({
             input: { text: promptText },
             target: {
-              sessionId: params.cronSession.sessionEntry.sessionId,
-              agentId: params.agentId,
-              sessionKey: params.runSessionKey,
+              ...sessionTarget,
               sessionEntry: params.cronSession.sessionEntry,
-              storePath: params.cronSession.storePath,
               cwd: params.workspaceDir,
               config: params.cfgWithAgentDefaults,
             },
@@ -437,6 +441,7 @@ function createCronPromptExecutor(params: {
         agentId: params.agentId,
         jobId: params.job.id,
         jobConfigRevision: resolveCronJobConfigRevision(params.job),
+        jobName: params.job.name,
       });
     } catch {
       // Non-canonicalizable job config: no grant registration for this run.
@@ -617,7 +622,7 @@ function createCronPromptExecutor(params: {
           // Cron intentionally reuses its durable session id as the run id; turn
           // claims stay unique via per-claim ids and the worker gate handles this
           // via credential rotation (see worker-environments/service.ts fences).
-          const result = await withLocalSessionPlacementTurnAdmission(
+          const result = await withLocalSessionPlacementTurnSettlement(
             {
               sessionId: params.cronSession.sessionEntry.sessionId,
               sessionKey: params.runSessionKey,
@@ -629,6 +634,7 @@ function createCronPromptExecutor(params: {
                 preparedRunAdmission,
                 sessionId: params.cronSession.sessionEntry.sessionId,
                 sessionKey: params.runSessionKey,
+                sessionTarget,
                 sessionEntry: params.cronSession.sessionEntry,
                 contextWindow: params.cronSession.sessionEntry.contextWindow,
                 agentId: params.agentId,
@@ -715,12 +721,7 @@ function createCronPromptExecutor(params: {
           preparedRunAdmission,
           sessionId: params.cronSession.sessionEntry.sessionId,
           sessionKey: params.runSessionKey,
-          sessionTarget: {
-            agentId: params.agentId,
-            sessionId: params.cronSession.sessionEntry.sessionId,
-            sessionKey: params.runSessionKey,
-            storePath: params.cronSession.storePath,
-          },
+          sessionTarget,
           promptCacheKey,
           agentId: params.agentId,
           trigger: "cron",

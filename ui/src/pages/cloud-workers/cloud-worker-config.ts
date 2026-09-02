@@ -147,10 +147,15 @@ export function buildCloudWorkerUpsertPatch(
   }
   const id = editingId ?? draft.id;
   const existing = isRecord(profiles[id]) ? profiles[id] : {};
-  if (editingId && normalizeOptionalString(existing.provider) !== "crabbox") {
+  const existingSettings = profileSettings(existing);
+  // Recheck the authoritative snapshot: a stale rich draft must not overwrite an Advanced profile.
+  if (
+    editingId &&
+    (normalizeOptionalString(existing.provider) !== "crabbox" ||
+      !stringSetting(existingSettings, "class"))
+  ) {
     return { error: "profileMissing" };
   }
-  const existingSettings = profileSettings(existing);
   const settings = {
     ...existingSettings,
     provider: draft.backend.trim(),

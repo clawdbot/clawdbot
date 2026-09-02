@@ -185,7 +185,10 @@ export function rewriteTranscriptEntriesInSessionManager(params: {
 
   // Maintenance rewrites should preserve the exact requested history without
   // re-running persistence hooks or size truncation on replayed messages.
-  const appendMessage = getRawSessionAppendMessage(params.sessionManager);
+  const rawAppendMessage = getRawSessionAppendMessage(params.sessionManager);
+  // Deliberate copies retain ingress keys without adopting their old branch entries.
+  const appendMessage: SessionManagerLike["appendMessage"] = (message) =>
+    rawAppendMessage(message, { idempotencyLookup: "caller-checked" });
   const rewrittenEntryIds = new Map<string, string>();
   // Every re-appended message follows the rewritten prefix, so its prefix-bound checkpoint is stale.
   for (const entry of branch.slice(firstMatchedIndex)) {

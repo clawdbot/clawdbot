@@ -293,22 +293,25 @@ describe("resolveEmbeddedAttemptToolConstructionPlan", () => {
     );
   });
 
-  it("materializes only plugin candidates for plugin-only allowlists", () => {
-    expectConstructionPlan(
-      resolveEmbeddedAttemptToolConstructionPlan({ toolsAllow: ["memory_search"] }),
-      {
-        constructTools: true,
-        includeCoreTools: false,
-        runtimeToolAllowlist: ["memory_search"],
-        coding: {
-          includeBaseCodingTools: false,
-          includeShellTools: false,
-          includeChannelTools: true,
-          includeOpenClawTools: false,
-          includePluginTools: true,
-        },
+  it.each([
+    "memory_search",
+    "strict__strict_probe",
+    "mail-connector__send_message",
+    "calendar-connector__create_event",
+    "plugin__*",
+  ])("materializes plugin candidates for the %s allowlist", (toolName) => {
+    expectConstructionPlan(resolveEmbeddedAttemptToolConstructionPlan({ toolsAllow: [toolName] }), {
+      constructTools: true,
+      includeCoreTools: false,
+      runtimeToolAllowlist: [toolName],
+      coding: {
+        includeBaseCodingTools: false,
+        includeShellTools: false,
+        includeChannelTools: true,
+        includeOpenClawTools: false,
+        includePluginTools: true,
       },
-    );
+    });
   });
 
   it("materializes OpenClaw tools when a plugin-only allowlist forces message", () => {
@@ -623,7 +626,7 @@ describe("resolveEmbeddedAttemptToolConstructionPlan", () => {
     );
   });
 
-  it("skips local construction for the unambiguous bundle-mcp group name", () => {
+  it("skips local construction for the bundle-mcp group", () => {
     expectConstructionPlan(
       resolveEmbeddedAttemptToolConstructionPlan({ toolsAllow: ["bundle-mcp"] }),
       {
@@ -631,26 +634,6 @@ describe("resolveEmbeddedAttemptToolConstructionPlan", () => {
         includeCoreTools: false,
       },
     );
-  });
-
-  it("builds plugin tools for a namespaced allowlist entry a plugin may own", () => {
-    // `<prefix>__<tool>` is the shape bundle MCP uses AND the shape plugins use
-    // for their own registered tools, so it cannot be classified statically.
-    // Treating every `__` entry as bundle-MCP-only used to skip plugin
-    // construction outright, leaving an allowlisted plugin tool absent.
-    for (const toolName of [
-      "strict__strict_probe",
-      "mail-connector__send_message",
-      "calendar-connector__create_event",
-    ]) {
-      expectConstructionPlan(
-        resolveEmbeddedAttemptToolConstructionPlan({ toolsAllow: [toolName] }),
-        {
-          constructTools: true,
-          coding: { includePluginTools: true },
-        },
-      );
-    }
   });
 });
 

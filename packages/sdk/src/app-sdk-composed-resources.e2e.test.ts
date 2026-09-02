@@ -106,6 +106,7 @@ function workerRecord(state: "requested" | "ready" | "destroyed"): WorkerEnviron
   return {
     environmentId: "worker-sdk-e2e",
     providerId: "testbox",
+    profileId: "development",
     leaseId: "lease-sdk-e2e",
     sharedHost: null,
     state,

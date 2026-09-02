@@ -23,6 +23,116 @@ import {
 registerCodexEventProjectorTestLifecycle();
 
 describe("CodexAppServerEventProjector native tool finalization", () => {
+  const mcpItem = {
+    type: "mcpToolCall",
+    id: "mcp-grant-item",
+    server: "docs/raw-name",
+    tool: "lookup.raw",
+    arguments: { query: "exact argument", limit: 3 },
+    status: "inProgress",
+    appContext: null,
+    pluginId: null,
+    readOnlyHint: false,
+    result: null,
+    error: null,
+    durationMs: null,
+  };
+
+  it("correlates only a unique active MCP item using raw server and tool identities", async () => {
+    const projector = await createProjector();
+    expect(projector.getActiveMcpToolCall(mcpItem.server)).toBeUndefined();
+    await projector.handleNotification(forCurrentTurn("item/started", { item: mcpItem }));
+    await projector.handleNotification(
+      forCurrentTurn("item/started", {
+        item: { ...mcpItem, id: "other-server-item", server: "other-server" },
+      }),
+    );
+    expect(projector.getActiveMcpToolCall(mcpItem.server)).toEqual({
+      id: mcpItem.id,
+      server: mcpItem.server,
+      tool: mcpItem.tool,
+      arguments: mcpItem.arguments,
+    });
+
+    const concurrentItem = { ...mcpItem, id: "concurrent-item", tool: "different.tool" };
+    await projector.handleNotification(forCurrentTurn("item/started", { item: concurrentItem }));
+    expect(projector.getActiveMcpToolCall(mcpItem.server)).toBeUndefined();
+    await projector.handleNotification(
+      forCurrentTurn("item/completed", { item: { ...concurrentItem, status: "completed" } }),
+    );
+    expect(projector.getActiveMcpToolCall(mcpItem.server)?.id).toBe(mcpItem.id);
+    await projector.handleNotification(
+      forCurrentTurn("item/completed", { item: { ...mcpItem, status: "completed" } }),
+    );
+    expect(projector.getActiveMcpToolCall(mcpItem.server)).toBeUndefined();
+  });
+
+  it.each([
+    { label: "another thread", params: { threadId: "other-thread" } },
+    { label: "another turn", params: { turnId: "other-turn" } },
+    { label: "completed status", item: { status: "completed" } },
+    { label: "missing raw arguments", item: { arguments: undefined } },
+    { label: "blank raw tool", item: { tool: " " } },
+    { label: "app context", item: { appContext: { resourceUri: "ui://app/view" } } },
+    { label: "plugin context", item: { pluginId: "external-plugin" } },
+  ])("does not correlate an MCP item from $label", async (testCase) => {
+    const projector = await createProjector();
+    await projector.handleNotification(
+      forCurrentTurn("item/started", {
+        ...("params" in testCase ? testCase.params : {}),
+        item: { ...mcpItem, ...("item" in testCase ? testCase.item : {}) },
+      }),
+    );
+    expect(projector.getActiveMcpToolCall(mcpItem.server)).toBeUndefined();
+  });
+
+  it.each([
+    { label: "plugin", item: { pluginId: "external-plugin" } },
+    { label: "app", item: { appContext: { resourceUri: "ui://app/view" } } },
+    { label: "missing tool", item: { tool: undefined } },
+  ])(
+    "counts a $label item before deciding whether same-server correlation is unique",
+    async ({ item }) => {
+      const projector = await createProjector();
+      await projector.handleNotification(forCurrentTurn("item/started", { item: mcpItem }));
+      await projector.handleNotification(
+        forCurrentTurn("item/started", {
+          item: { ...mcpItem, ...item, id: "other-item" },
+        }),
+      );
+      expect(projector.getActiveMcpToolCall(mcpItem.server)).toBeUndefined();
+      await projector.handleNotification(
+        forCurrentTurn("item/completed", {
+          item: { ...mcpItem, ...item, id: "other-item", status: "completed" },
+        }),
+      );
+      expect(projector.getActiveMcpToolCall(mcpItem.server)?.id).toBe(mcpItem.id);
+    },
+  );
+
+  it.each(["closed", "finalized", "turn completed", "aborted", "timed out"])(
+    "does not correlate MCP items after the turn is %s",
+    async (ending) => {
+      const projector = await createProjector();
+      await projector.handleNotification(forCurrentTurn("item/started", { item: mcpItem }));
+      if (ending === "closed") {
+        await projector.closeProjection();
+      } else if (ending === "finalized") {
+        projector.buildResult(buildEmptyToolTelemetry());
+      } else if (ending === "turn completed") {
+        await projector.handleNotification(turnCompleted());
+      } else if (ending === "aborted") {
+        projector.markAborted();
+      } else {
+        projector.markTimedOut();
+      }
+      await projector.handleNotification(
+        forCurrentTurn("item/started", { item: { ...mcpItem, id: "late-item" } }),
+      );
+      expect(projector.getActiveMcpToolCall(mcpItem.server)).toBeUndefined();
+    },
+  );
+
   it("marks only explicitly completed native tool metadata with false", async () => {
     const projector = await createProjector();
     const command = {

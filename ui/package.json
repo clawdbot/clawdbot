@@ -9,7 +9,7 @@
     "test": "vitest run --config vitest.config.ts"
   },
   "dependencies": {
-    "@awesome.me/webawesome": "3.11.0",
+    "@awesome.me/webawesome": "3.12.0",
     "@codemirror/commands": "6.11.0",
     "@codemirror/language": "6.12.4",
     "@codemirror/language-data": "6.5.2",
@@ -27,6 +27,7 @@
     "@openclaw/gateway-protocol": "workspace:*",
     "@openclaw/libterminal": "0.3.2",
     "@openclaw/media-core": "workspace:*",
+    "@openclaw/mermaid-renderer": "workspace:*",
     "@openclaw/model-catalog-core": "workspace:*",
     "@openclaw/net-policy": "workspace:*",
     "@openclaw/normalization-core": "workspace:*",
@@ -56,7 +57,7 @@
     "pako": "3.0.1",
     "playwright": "1.62.1",
     "postcss": "8.5.26",
-    "vite": "8.2.1",
+    "vite": "8.2.2",
     "vitest": "4.1.11"
   }
 }

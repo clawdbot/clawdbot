@@ -1,5 +1,4 @@
 /** Loads bundled channel config schema metadata from source or public surface modules. */
-import fs from "node:fs";
 import path from "node:path";
 import {
   buildChannelConfigSchema,
@@ -17,11 +16,8 @@ import type {
   PluginManifest,
   PluginManifestChannelConfig,
 } from "./manifest.js";
-import {
-  createPluginModuleLoaderCache,
-  getCachedPluginModuleLoader,
-  type PluginModuleLoaderCache,
-} from "./plugin-module-loader-cache.js";
+import { pluginCacheExistsSync } from "./plugin-cache-files.js";
+import { getCachedPluginModuleLoader } from "./plugin-module-loader-cache.js";
 import { PUBLIC_SURFACE_SOURCE_EXTENSIONS } from "./public-surface-runtime.js";
 
 const SOURCE_CONFIG_SCHEMA_CANDIDATES = [
@@ -39,8 +35,6 @@ type ChannelConfigSurface = {
   uiHints?: Record<string, PluginConfigUiHint>;
   runtime?: ChannelConfigRuntimeSchema;
 };
-
-const moduleLoaders: PluginModuleLoaderCache = createPluginModuleLoaderCache();
 
 function isBuiltChannelConfigSchema(value: unknown): value is ChannelConfigSurface {
   if (!value || typeof value !== "object") {
@@ -99,10 +93,10 @@ function resolveConfigSchemaExport(imported: Record<string, unknown>): ChannelCo
   return null;
 }
 
-function getModuleLoader(modulePath: string) {
+function getModuleLoader(modulePath: string, rootDir: string) {
   return getCachedPluginModuleLoader({
-    cache: moduleLoaders,
     modulePath,
+    rootDir,
     importerUrl: import.meta.url,
     preferBuiltDist: true,
     loaderFilename: import.meta.url,
@@ -112,14 +106,14 @@ function getModuleLoader(modulePath: string) {
 function resolveChannelConfigSchemaModulePath(pluginDir: string): string | undefined {
   for (const relativePath of SOURCE_CONFIG_SCHEMA_CANDIDATES) {
     const candidate = path.join(pluginDir, relativePath);
-    if (fs.existsSync(candidate)) {
+    if (pluginCacheExistsSync(candidate)) {
       return candidate;
     }
   }
   for (const basename of PUBLIC_CONFIG_SURFACE_BASENAMES) {
     for (const extension of PUBLIC_SURFACE_SOURCE_EXTENSIONS) {
       const candidate = path.join(pluginDir, `${basename}${extension}`);
-      if (fs.existsSync(candidate)) {
+      if (pluginCacheExistsSync(candidate)) {
         return candidate;
       }
     }
@@ -127,9 +121,12 @@ function resolveChannelConfigSchemaModulePath(pluginDir: string): string | undef
   return undefined;
 }
 
-function loadChannelConfigSurfaceModuleSync(modulePath: string): ChannelConfigSurface | null {
+function loadChannelConfigSurfaceModuleSync(
+  modulePath: string,
+  rootDir: string,
+): ChannelConfigSurface | null {
   try {
-    const imported = getModuleLoader(modulePath)(modulePath) as Record<string, unknown>;
+    const imported = getModuleLoader(modulePath, rootDir)(modulePath) as Record<string, unknown>;
     return resolveConfigSchemaExport(imported);
   } catch {
     return null;
@@ -159,7 +156,9 @@ export function collectBundledChannelConfigsCore(params: {
   }
 
   const surfaceModulePath = resolveChannelConfigSchemaModulePath(params.pluginDir);
-  const surface = surfaceModulePath ? loadChannelConfigSurfaceModuleSync(surfaceModulePath) : null;
+  const surface = surfaceModulePath
+    ? loadChannelConfigSurfaceModuleSync(surfaceModulePath, params.pluginDir)
+    : null;
 
   for (const channelId of channelIds) {
     const existing = existingChannelConfigs[channelId];

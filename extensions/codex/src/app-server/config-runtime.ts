@@ -1,4 +1,5 @@
 import { normalizeTrimmedStringList } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { parse as parseToml } from "smol-toml";
 import type {
   CodexAppServerApprovalPolicySource,
   CodexAppServerCommandSource,
@@ -63,6 +64,7 @@ import {
   readNumberEnv,
   resolveArgs,
 } from "./config-utils.js";
+import { readCodexAppServerConfigOptions } from "./launch-args.js";
 import type { CodexSandboxPolicy } from "./protocol.js";
 
 /**
@@ -326,22 +328,6 @@ export function resolveCodexAppServerRuntimeOptions(
     codeModeOnly: config.codeModeOnly === true,
     loopDetectionPreToolUseRelay: config.loopDetectionPreToolUseRelay !== false,
     requestTimeoutMs: normalizePositiveNumber(config.requestTimeoutMs, 60_000),
-    turnCompletionIdleTimeoutMs: normalizePositiveNumber(
-      config.turnCompletionIdleTimeoutMs,
-      60_000,
-    ),
-    turnAssistantCompletionIdleTimeoutMs: normalizePositiveNumber(
-      config.turnAssistantCompletionIdleTimeoutMs,
-      10_000,
-    ),
-    ...(config.postToolRawAssistantCompletionIdleTimeoutMs !== undefined
-      ? {
-          postToolRawAssistantCompletionIdleTimeoutMs: normalizePositiveNumber(
-            config.postToolRawAssistantCompletionIdleTimeoutMs,
-            60_000,
-          ),
-        }
-      : {}),
     approvalPolicy: forcedPolicy?.approvalPolicy ?? approvalPolicy,
     approvalPolicySource,
     sandbox: resolvedSandbox,
@@ -556,15 +542,8 @@ export function codexSandboxPolicyForTurn(
   }
   let excludeTmpdirEnvVar = false;
   let excludeSlashTmp = false;
-  for (let index = 0; index < nativeArgs.length; index += 1) {
-    const arg = nativeArgs[index];
-    const override =
-      arg === "-c" || arg === "--config"
-        ? nativeArgs[++index]
-        : arg?.startsWith("--config=")
-          ? arg.slice("--config=".length)
-          : undefined;
-    if (!override) {
+  for (const { name, value: override } of readCodexAppServerConfigOptions(nativeArgs)) {
+    if ((name !== "-c" && name !== "--config") || !override) {
       continue;
     }
     const separator = override.indexOf("=");
@@ -572,14 +551,25 @@ export function codexSandboxPolicyForTurn(
       continue;
     }
     const key = override.slice(0, separator).trim();
-    const value = override.slice(separator + 1).trim();
-    if (value !== "true" && value !== "false") {
+    const isTmpdirExclusion = key === "sandbox_workspace_write.exclude_tmpdir_env_var";
+    if (!isTmpdirExclusion && key !== "sandbox_workspace_write.exclude_slash_tmp") {
       continue;
     }
-    if (key === "sandbox_workspace_write.exclude_tmpdir_env_var") {
-      excludeTmpdirEnvVar = value === "true";
-    } else if (key === "sandbox_workspace_write.exclude_slash_tmp") {
-      excludeSlashTmp = value === "true";
+    let value: unknown;
+    try {
+      // Match Codex's TOML value wrapper, including comments after booleans.
+      value = parseToml(`_x_ = ${override.slice(separator + 1).trim()}`)["_x_"];
+    } catch {
+      // Native parse failures become strings, never boolean exclusions.
+      continue;
+    }
+    if (typeof value !== "boolean") {
+      continue;
+    }
+    if (isTmpdirExclusion) {
+      excludeTmpdirEnvVar = value;
+    } else {
+      excludeSlashTmp = value;
     }
   }
   // Native turn/start overrides replace the thread's sandbox. Carry explicit

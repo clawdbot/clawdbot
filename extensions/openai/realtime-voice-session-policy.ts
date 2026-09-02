@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { resolveAgentDir } from "openclaw/plugin-sdk/agent-runtime";
+import { resolveAgentDir } from "openclaw/plugin-sdk/agent-scope-runtime";
 import {
   isProviderAuthProfileConfigured,
   resolveProviderAuthProfileApiKey,
@@ -34,19 +34,9 @@ import {
   resolveOpenAIProviderConfigRecord,
 } from "./realtime-provider-shared.js";
 import { resolveOpenAIChatGptSubscriptionAuth } from "./realtime-quicksilver-session.js";
-import { OPENAI_GPT_LIVE_MODELS } from "./realtime-quicksilver.js";
+import { OPENAI_GPT_LIVE_MODELS, OPENAI_GPT_LIVE_VOICES } from "./realtime-quicksilver.js";
 
-export type OpenAIRealtimeVoice =
-  | "alloy"
-  | "ash"
-  | "ballad"
-  | "cedar"
-  | "coral"
-  | "echo"
-  | "marin"
-  | "sage"
-  | "shimmer"
-  | "verse";
+export type OpenAIRealtimeVoice = (typeof OPENAI_REALTIME_VOICES)[number];
 
 export type OpenAIRealtimeUserMessageOptions = {
   toolChoice?: { type: "function"; name: string };
@@ -55,7 +45,7 @@ export type OpenAIRealtimeUserMessageOptions = {
 export type OpenAIRealtimeVoiceProviderConfig = {
   apiKey?: string;
   model?: string;
-  voice?: OpenAIRealtimeVoice;
+  voice?: string;
   temperature?: number;
   vadThreshold?: number;
   silenceDurationMs?: number;
@@ -97,7 +87,12 @@ export const OPENAI_REALTIME_MODELS = [
   ...OPENAI_GPT_LIVE_MODELS,
 ] as const;
 export const OPENAI_REALTIME_INPUT_TRANSCRIPTION_MODEL = "gpt-4o-mini-transcribe";
-export const OPENAI_REALTIME_CAPABILITIES: RealtimeVoiceProviderCapabilities = {
+export const OPENAI_REALTIME_CAPABILITIES: RealtimeVoiceProviderCapabilities & {
+  voicesByModel: Record<string, readonly string[]>;
+} = {
+  voicesByModel: Object.fromEntries(
+    OPENAI_GPT_LIVE_MODELS.map((model) => [model, OPENAI_GPT_LIVE_VOICES]),
+  ),
   transports: ["webrtc", "gateway-relay"],
   inputAudioFormats: [
     REALTIME_VOICE_AUDIO_FORMAT_G711_ULAW_8KHZ,
@@ -137,7 +132,7 @@ export const OPENAI_REALTIME_VOICES = [
   "verse",
   "marin",
   "cedar",
-] as const satisfies readonly OpenAIRealtimeVoice[];
+] as const;
 
 export function normalizeOpenAIRealtimeVoice(value: unknown): OpenAIRealtimeVoice | undefined {
   if (typeof value !== "string") {
@@ -239,7 +234,8 @@ export function normalizeProviderConfig(
       path: "plugins.entries.voice-call.config.realtime.providers.openai.apiKey",
     }),
     model: normalizeOptionalString(raw?.model),
-    voice: normalizeOpenAIRealtimeVoice(raw?.speakerVoice ?? raw?.voice),
+    // Session creation selects the effective model; an earlier family fallback loses overrides.
+    voice: normalizeOptionalString(raw?.speakerVoice ?? raw?.voice)?.toLowerCase(),
     temperature: asFiniteNumber(raw?.temperature),
     vadThreshold: asUnitInterval(raw?.vadThreshold),
     silenceDurationMs: asSafeIntegerInRange(raw?.silenceDurationMs, { min: 0 }),

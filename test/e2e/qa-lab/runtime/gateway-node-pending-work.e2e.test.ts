@@ -3,8 +3,8 @@ import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 import path from "node:path";
 import { GatewayClient } from "openclaw/plugin-sdk/gateway-runtime";
-import { describe, expect, it, vi } from "vitest";
-import { startQaGatewayChild } from "../../../../extensions/qa-lab/api.js";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { createQaGatewayChild, type QaGatewayChild } from "../../../../extensions/qa-lab/api.js";
 import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
@@ -13,13 +13,21 @@ import {
   loadOrCreateDeviceIdentity,
   type DeviceIdentity,
 } from "../../../../src/infra/device-identity.js";
+import { stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
+
+const gatewayOwners: ReturnType<typeof createQaGatewayChild>[] = [];
+afterEach(async () => {
+  for (const owner of gatewayOwners.splice(0)) {
+    await stopQaGatewayFixture(owner);
+  }
+});
 
 const TEST_TIMEOUT_MS = 180_000;
 const REQUEST_TIMEOUT_MS = 20_000;
 const NODE_DISPLAY_NAME = "QA iPad";
 const NODE_COMMANDS = ["camera.snap"];
 
-type GatewayHandle = Awaited<ReturnType<typeof startQaGatewayChild>>;
+type GatewayHandle = QaGatewayChild;
 type NodeInvokeFrame = {
   id?: string;
   nodeId?: string;
@@ -51,7 +59,9 @@ describe("Gateway node pending work", () => {
     "delivers disconnected work and foreground-only actions after same-pairing reconnects",
     { timeout: TEST_TIMEOUT_MS },
     async () => {
-      const gateway = await startQaGatewayChild({
+      const gatewayOwner = createQaGatewayChild();
+      gatewayOwners.push(gatewayOwner);
+      const gateway = await gatewayOwner.start({
         repoRoot: process.cwd(),
         command: {
           executablePath: process.execPath,
@@ -62,15 +72,14 @@ describe("Gateway node pending work", () => {
         transportBaseUrl: "http://127.0.0.1",
         controlUiEnabled: false,
         runtimeEnvPatch: {
-          OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
           OPENCLAW_SKIP_CHANNELS: "1",
           OPENCLAW_SKIP_PROVIDERS: "1",
           OPENCLAW_TEST_MINIMAL_GATEWAY: "1",
         },
         mutateConfig: (cfg) => {
-          const { plugins: _plugins, ...withoutPlugins } = cfg;
           return {
-            ...withoutPlugins,
+            ...cfg,
+            plugins: { enabled: false },
             gateway: {
               ...cfg.gateway,
               nodes: {

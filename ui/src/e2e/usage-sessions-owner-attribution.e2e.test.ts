@@ -4,7 +4,6 @@ import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import { createOpenClawTestState } from "../../../src/test-utils/openclaw-test-state.ts";
 import { getFreePort } from "../../../src/test-utils/ports.ts";
-import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
@@ -38,123 +37,155 @@ async function capture(page: Page, name: string) {
 }
 
 suite.define(() => {
-  it("attributes the Telegram DM session card to its store owner when another agent has the same sessionId", async () => {
-    const port = await getFreePort();
-    const state = await createOpenClawTestState({
-      label: "usage-sessions-owner-attribution",
-      env: {
-        OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
-        OPENCLAW_SKIP_CANVAS_HOST: "1",
-        OPENCLAW_SKIP_CHANNELS: "1",
-        OPENCLAW_SKIP_CRON: "1",
-        OPENCLAW_SKIP_GMAIL_WATCHER: "1",
-        OPENCLAW_SKIP_PROVIDERS: "1",
-        OPENCLAW_TEST_MINIMAL_GATEWAY: "1",
-        VITEST: "1",
-      },
-    });
-
-    const { startGatewayServer } = await import("../../../src/gateway/server.js");
-    const { persistSessionTranscriptTurn, upsertSessionEntryCore } =
-      await import("../../../src/config/sessions/session-accessor.js");
-
-    let gateway: Awaited<ReturnType<typeof startGatewayServer>> | null = null;
-
-    try {
-      await state.writeConfig({
-        agents: {
-          defaults: { workspace: state.workspaceDir },
-          list: [
-            { id: "main", default: true, workspace: state.workspaceDir },
-            { id: "opus", workspace: state.workspaceDir },
-          ],
-        },
-        gateway: {
-          mode: "local",
-          port,
-          bind: "loopback",
-          auth: { mode: "none" },
-          controlUi: { enabled: false },
-        },
-        plugins: { enabled: false },
-        session: {
-          store: path.join(state.stateDir, "agents", "{agentId}", "sessions", "sessions.json"),
+  it.each([false, true])(
+    "keeps same-id owners separate with an empty current session: %s",
+    async (resetCurrentSession) => {
+      const port = await getFreePort();
+      const state = await createOpenClawTestState({
+        label: "usage-sessions-owner-attribution",
+        env: {
+          OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
+          OPENCLAW_SKIP_CANVAS_HOST: "1",
+          OPENCLAW_SKIP_CHANNELS: "1",
+          OPENCLAW_SKIP_CRON: "1",
+          OPENCLAW_SKIP_GMAIL_WATCHER: "1",
+          OPENCLAW_SKIP_PROVIDERS: "1",
+          OPENCLAW_TEST_MINIMAL_GATEWAY: "1",
+          VITEST: "1",
         },
       });
 
-      for (const agentId of ["main", "opus"]) {
-        const scope = {
-          agentId,
-          sessionId: PROOF_SESSION_ID,
-          sessionKey: agentId === "main" ? PROOF_STORE_KEY : `agent:opus:${PROOF_SESSION_ID}`,
-          storePath: path.join(state.sessionsDir(agentId), "sessions.json"),
-        };
-        const now = Date.now();
-        if (agentId === "main") {
-          await upsertSessionEntryCore(scope, {
+      const { startGatewayServer } = await import("../../../src/gateway/server.js");
+      const { persistSessionTranscriptTurn, upsertSessionEntryCore } =
+        await import("../../../src/config/sessions/session-accessor.js");
+
+      let gateway: Awaited<ReturnType<typeof startGatewayServer>> | null = null;
+
+      try {
+        await state.writeConfig({
+          agents: {
+            ownership: "explicit",
+            defaults: { workspace: state.workspaceDir },
+            entries: {
+              main: { workspace: state.workspaceDir },
+              opus: { workspace: state.workspaceDir },
+            },
+          },
+          gateway: {
+            mode: "local",
+            port,
+            bind: "loopback",
+            auth: { mode: "none" },
+            controlUi: { enabled: false },
+          },
+          plugins: { enabled: false },
+          session: {
+            store: path.join(state.stateDir, "agents", "{agentId}", "sessions", "sessions.json"),
+          },
+        });
+
+        for (const agentId of ["main", "opus"]) {
+          const scope = {
+            agentId,
             sessionId: PROOF_SESSION_ID,
-            label: PROOF_LABEL,
-            updatedAt: now,
+            sessionKey: agentId === "main" ? PROOF_STORE_KEY : `agent:opus:${PROOF_SESSION_ID}`,
+            storePath: path.join(state.sessionsDir(agentId), "sessions.json"),
+          };
+          const now = Date.now();
+          if (agentId === "main") {
+            await upsertSessionEntryCore(scope, {
+              sessionId: PROOF_SESSION_ID,
+              label: PROOF_LABEL,
+              updatedAt: now,
+            });
+          }
+          // Both transcripts must fall inside the dashboard's current date window.
+          await persistSessionTranscriptTurn(scope, {
+            cwd: state.workspaceDir,
+            updateMode: "none",
+            messages: [
+              { message: { role: "user", content: `${agentId} turn`, timestamp: now }, now },
+            ],
           });
         }
-        // Both transcripts must fall inside the dashboard's current date window.
-        await persistSessionTranscriptTurn(scope, {
-          cwd: state.workspaceDir,
-          updateMode: "none",
-          messages: [
-            { message: { role: "user", content: `${agentId} turn`, timestamp: now }, now },
-          ],
+
+        if (resetCurrentSession) {
+          await upsertSessionEntryCore(
+            {
+              agentId: "main",
+              sessionKey: PROOF_STORE_KEY,
+              storePath: path.join(state.sessionsDir("main"), "sessions.json"),
+            },
+            {
+              sessionId: "empty-current-session",
+              label: PROOF_LABEL,
+              updatedAt: Date.now(),
+            },
+          );
+        }
+
+        gateway = await startGatewayServer(port, {
+          auth: { mode: "none" },
+          bind: "loopback",
+          controlUiEnabled: false,
+          sidecarStartup: "defer",
         });
+
+        await suite.withPage(
+          {
+            locale: "en-US",
+            serviceWorkers: "block",
+            viewport,
+          },
+          async ({ page }) => {
+            const pageErrors: string[] = [];
+            page.on("pageerror", (error) => pageErrors.push(String(error)));
+
+            const url = new URL("usage", suite.server.baseUrl);
+            url.searchParams.set("gatewayUrl", `ws://127.0.0.1:${port}`);
+            await page.goto(url.toString());
+            const confirmation = page.locator("openclaw-gateway-url-confirmation");
+            await confirmation.waitFor();
+            await confirmation.getByRole("button", { name: "Confirm", exact: true }).click();
+
+            const otherRow = page.locator(
+              `.session-bar-row[title="agent:opus:${PROOF_SESSION_ID}"]`,
+            );
+            // A rendered usage row proves the handshake and requested report both arrived.
+            await otherRow.waitFor();
+            await expect.poll(() => otherRow.count()).toBe(1);
+            await otherRow.scrollIntoViewIfNeeded();
+            await capture(
+              page,
+              resetCurrentSession ? "02-empty-current-family.png" : "01-same-id-owners.png",
+            );
+
+            // The named family stays visible before its new current instance has a transcript.
+            const row = page.locator(`.session-bar-row[title="${PROOF_STORE_KEY}"]`);
+            await row.waitFor();
+            await expect.poll(() => row.count()).toBe(1);
+            const meta = row.locator(".session-bar-meta");
+            await expect.poll(async () => (await meta.textContent()) ?? "").toContain("agent:main");
+            await expect
+              .poll(async () => (await meta.textContent()) ?? "")
+              .not.toContain("agent:opus");
+            await expect
+              .poll(() => otherRow.locator(".session-bar-meta").textContent())
+              .toContain("agent:opus");
+            await expect.poll(() => page.locator(".session-bar-row").count()).toBe(2);
+
+            await row.scrollIntoViewIfNeeded();
+            await capture(
+              page,
+              resetCurrentSession ? "02-empty-current-family.png" : "01-same-id-owners.png",
+            );
+            expect(pageErrors).toEqual([]);
+          },
+        );
+      } finally {
+        await gateway?.close({ reason: "usage sessions owner attribution e2e cleanup" });
+        await state.cleanup();
       }
-
-      gateway = await startGatewayServer(port, {
-        auth: { mode: "none" },
-        bind: "loopback",
-        controlUiEnabled: false,
-        sidecarStartup: "defer",
-      });
-
-      await suite.withPage(
-        {
-          locale: "en-US",
-          serviceWorkers: "block",
-          viewport,
-        },
-        async ({ page }) => {
-          const pageErrors: string[] = [];
-          page.on("pageerror", (error) => pageErrors.push(String(error)));
-
-          const url = new URL("usage", suite.server.baseUrl);
-          url.searchParams.set("gatewayUrl", `ws://127.0.0.1:${port}`);
-          await page.goto(url.toString());
-          const confirmation = page.locator("openclaw-gateway-url-confirmation");
-          await confirmation.waitFor();
-          await confirmation.getByRole("button", { name: "Confirm", exact: true }).click();
-          await waitForControlUiGatewayReady(page);
-
-          // The Telegram DM row must exist, exactly once, attributed to main.
-          const row = page.locator(`.session-bar-row[title="${PROOF_STORE_KEY}"]`);
-          await row.waitFor();
-          await expect.poll(() => row.count()).toBe(1);
-          const meta = row.locator(".session-bar-meta");
-          await expect.poll(async () => (await meta.textContent()) ?? "").toContain("agent:main");
-          await expect
-            .poll(async () => (await meta.textContent()) ?? "")
-            .not.toContain("agent:opus");
-          const otherRow = page.locator(`.session-bar-row[title="agent:opus:${PROOF_SESSION_ID}"]`);
-          await expect.poll(() => otherRow.count()).toBe(1);
-          await expect
-            .poll(() => otherRow.locator(".session-bar-meta").textContent())
-            .toContain("agent:opus");
-          await expect.poll(() => page.locator(".session-bar-row").count()).toBe(2);
-
-          await capture(page, "01-telegram-dm-owner-attribution-main.png");
-          expect(pageErrors).toEqual([]);
-        },
-      );
-    } finally {
-      await gateway?.close({ reason: "usage sessions owner attribution e2e cleanup" });
-      await state.cleanup();
-    }
-  });
+    },
+  );
 });

@@ -1,4 +1,4 @@
-import { definePage } from "@openclaw/uirouter";
+import { definePage, type RouteLoaderOptions } from "@openclaw/uirouter";
 import { html } from "lit";
 import { routePageSpec } from "../../app-route-paths.ts";
 import type { ApplicationContext } from "../../app/context.ts";
@@ -19,23 +19,40 @@ export type ModelProvidersRouteData = {
 
 async function loadModelProvidersRouteData(
   context: ApplicationContext,
+  options: RouteLoaderOptions,
 ): Promise<ModelProvidersRouteData> {
   const gateway = context.gateway;
   const gatewaySnapshot = gateway.snapshot;
+  let agentId = context.agentSelection.state.selectedId;
   const { EMPTY_MODEL_PROVIDERS_DATA, loadModelProvidersData } = await import("./load.ts");
   const client = gatewaySnapshot.phase === "connected" ? gatewaySnapshot.client : null;
-  if (!context.agentSelection.state.selectedId && client) {
-    await context.agents.ensureList();
+  // Both awaits can outlive the route or its Gateway/agent owner. Metadata-only
+  // snapshot publications preserve the client and hello, so remain valid.
+  const isCurrent = () => {
+    const current = gateway.snapshot;
+    return (
+      options.shouldRun() &&
+      current.phase === "connected" &&
+      current.client === gatewaySnapshot.client &&
+      current.hello === gatewaySnapshot.hello &&
+      context.agentSelection.state.selectedId === agentId
+    );
+  };
+  if (!client || !isCurrent()) {
+    return { gateway, gatewaySnapshot, data: EMPTY_MODEL_PROVIDERS_DATA, client: null, agentId };
   }
-  const selectedAgentId = context.agentSelection.state.selectedId;
-  const agentId = selectedAgentId ? normalizeAgentId(selectedAgentId) : null;
-  if (!client || !agentId) {
+  if (!agentId) {
+    const roster = await context.agents.ensureList();
+    // The roster may initialize selection; never adopt an unrelated user switch.
+    agentId = roster ? normalizeAgentId(roster.defaultId) : null;
+  }
+  if (!agentId || !isCurrent()) {
     return { gateway, gatewaySnapshot, data: EMPTY_MODEL_PROVIDERS_DATA, client: null, agentId };
   }
   return {
     gateway,
     gatewaySnapshot,
-    data: await loadModelProvidersData(client, { agentId }),
+    data: await loadModelProvidersData(client, { agentId, signal: options.signal }),
     client,
     agentId,
   };

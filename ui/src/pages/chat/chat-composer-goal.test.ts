@@ -49,12 +49,12 @@ describe("goal elapsed presentation", () => {
   });
 
   it.each([
-    ["active", "2m"],
-    ["paused", "1m"],
-    ["blocked", "1m"],
-    ["usage_limited", "1m"],
-    ["budget_limited", "1m"],
-    ["complete", "1m"],
+    ["active", "2m 00s"],
+    ["paused", "1m 00s"],
+    ["blocked", "1m 00s"],
+    ["usage_limited", "1m 00s"],
+    ["budget_limited", "1m 00s"],
+    ["complete", "1m 00s"],
   ] as const)("renders elapsed time immediately for %s goals", (status, elapsed) => {
     const view = mountGoal({ ...goal, status });
     expect(view.elapsed()).toBe(elapsed);
@@ -63,7 +63,7 @@ describe("goal elapsed presentation", () => {
   it("replaces a live tick with the authoritative stop time and resumes ticking", () => {
     const view = mountGoal(goal);
     vi.advanceTimersByTime(1_000);
-    expect(view.elapsed()).toBe("2m");
+    expect(view.elapsed()).toBe("2m 01s");
 
     view.draw({ ...goal, status: "paused", pausedAt: 46_000 });
     expect(view.elapsed()).toBe("45s");
@@ -71,14 +71,14 @@ describe("goal elapsed presentation", () => {
     expect(view.elapsed()).toBe("45s");
 
     view.draw(goal);
-    expect(view.elapsed()).toBe("3m");
+    expect(view.elapsed()).toBe("3m 01s");
     vi.advanceTimersByTime(60_000);
-    expect(view.elapsed()).toBe("4m");
+    expect(view.elapsed()).toBe("4m 01s");
 
     view.draw({ ...goal, status: "complete", completedAt: 151_000 });
-    expect(view.elapsed()).toBe("2m");
+    expect(view.elapsed()).toBe("2m 30s");
     vi.advanceTimersByTime(60_000);
-    expect(view.elapsed()).toBe("2m");
+    expect(view.elapsed()).toBe("2m 30s");
   });
 
   it("retires the active timer when the goal is removed", () => {
@@ -95,7 +95,7 @@ describe("goal elapsed presentation", () => {
     expect(vi.getTimerCount()).toBe(0);
     vi.advanceTimersByTime(60_000);
     view.part.setConnected(true);
-    expect(view.elapsed()).toBe("3m");
+    expect(view.elapsed()).toBe("3m 00s");
     expect(vi.getTimerCount()).toBe(1);
   });
 });

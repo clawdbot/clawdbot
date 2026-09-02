@@ -86,6 +86,14 @@ export function createWorkerEnvironmentAccess(options: WorkerEnvironmentAccessOp
     if (!tunnels && !nodeTunnels) {
       throw serviceError("invalid_state", "Worker tunnel runtime is unavailable");
     }
+    // Prepare process-stable metadata outside the lock, then validate the durable
+    // owner once. Credential revocation may happen while this await is pending.
+    let currentBundle: ExpectedWorkerBuild;
+    try {
+      currentBundle = await options.prepareCurrentBundle();
+    } catch {
+      throw serviceError("invalid_state", "Current worker build identity is unavailable");
+    }
     let startup: Promise<WorkerTunnelHandle> | undefined;
     let stopStartup: (() => Promise<void>) | undefined;
     await withLock(request.environmentId, async () => {
@@ -118,17 +126,11 @@ export function createWorkerEnvironmentAccess(options: WorkerEnvironmentAccessOp
       }
       const credential = store.getCredential(request.environmentId);
       if (
+        record.ownerEpoch !== request.ownerEpoch ||
         !credential ||
-        credential.ownerEpoch !== request.ownerEpoch ||
-        credential.expiresAtMs <= now()
+        credential.ownerEpoch !== request.ownerEpoch
       ) {
         throw serviceError("invalid_state", "Worker tunnel owner credential is not current");
-      }
-      let currentBundle: ExpectedWorkerBuild;
-      try {
-        currentBundle = await options.prepareCurrentBundle();
-      } catch {
-        throw serviceError("invalid_state", "Current worker build identity is unavailable");
       }
       if (!verifyWorkerAdmissionHandshake(record.bootstrapReceipt, currentBundle)) {
         throw new StaleWorkerBuildError();
@@ -140,7 +142,12 @@ export function createWorkerEnvironmentAccess(options: WorkerEnvironmentAccessOp
         record.bootstrapReceipt.installKind === "bundle";
       if (nodeBundle) {
         const sessionId = record.attachedSessionIds[0];
-        if (!nodeTunnels || !sessionId) {
+        if (
+          !nodeTunnels ||
+          !sessionId ||
+          record.attachedSessionIds.length !== 1 ||
+          credential.sessionId !== sessionId
+        ) {
           throw serviceError("invalid_state", "Node worker tunnel runtime is unavailable");
         }
         startup = nodeTunnels.start({
@@ -158,6 +165,10 @@ export function createWorkerEnvironmentAccess(options: WorkerEnvironmentAccessOp
         });
         stopStartup = async () => await nodeTunnels.stop(record.environmentId, record.ownerEpoch);
         return;
+      }
+      // Native node workspaces outlive worker RPC admission credentials; SSH does not.
+      if (credential.expiresAtMs <= now()) {
+        throw serviceError("invalid_state", "Worker tunnel owner credential is not current");
       }
       if (!record.sshEndpoint) {
         throw serviceError("invalid_state", "Worker environment has no supported tunnel transport");

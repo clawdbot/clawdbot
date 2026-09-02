@@ -17,7 +17,10 @@ import { SessionMutationAuthorizationChangedError } from "../session-sharing.js"
 import { resolveDevicePlacementEligibility } from "../worker-environments/device-placement-eligibility.js";
 import { selectDevicePlacementCandidates } from "../worker-environments/device-placement-selector.js";
 import { resolveWorkerPlacementDestination } from "../worker-environments/placement-destination.js";
-import { projectWorkerSessionPlacement } from "../worker-environments/placement-projector.js";
+import {
+  projectWorkerSessionPlacement,
+  readWorkerPlacementIdentity,
+} from "../worker-environments/placement-projector.js";
 import type { WorkerSessionPlacementRecord } from "../worker-environments/placement-record.js";
 import {
   resolveWorkerPlacementCapabilities,
@@ -164,11 +167,7 @@ async function validateDispatchExecutionMode(params: {
     return false;
   }
   const environmentService = params.context.workerEnvironmentService;
-  if (
-    (params.executionMode === "worker-turn" && !environmentService?.supportsExecutionMode) ||
-    environmentService?.supportsExecutionMode?.(params.target.profileId, params.executionMode) ===
-      true
-  ) {
+  if (environmentService?.supportsExecutionMode(params.target.profileId, params.executionMode)) {
     return true;
   }
   respondInvalidWorkerSession(
@@ -197,6 +196,7 @@ function respondWorkerPlacement(params: {
         // Canonical fenced runner reader; a node lost after durable provision
         // must project offline here exactly as sessions.list would.
         params.context.workerPlacementRunnerAvailabilityReader?.read(params.placement),
+        readWorkerPlacementIdentity(params.placement, params.context.workerEnvironmentService),
       ),
     },
     undefined,

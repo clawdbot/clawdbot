@@ -20,6 +20,10 @@ import {
   type PreparedModelRuntimeReplacement,
   type PreparedModelRuntimeSnapshot,
 } from "./prepared-model-runtime.owner.js";
+import {
+  preparedPluginGenerationReusesBase,
+  preparedPluginGenerationSupportsSelections,
+} from "./prepared-model-runtime.plugin-generation.js";
 import type { PreparedModelRuntimeCatalogMode } from "./prepared-model-runtime.types.js";
 
 type PreparedModelRuntimeLeaseContext = {
@@ -120,12 +124,17 @@ export async function acquirePreparedModelRuntimeLeaseFromOwners(
           !input.readOnly &&
           !input.loadRuntimePlugins &&
           !input.skipCredentials &&
-          !input.env
+          !input.env &&
+          preparedPluginGenerationSupportsSelections(options.pluginGeneration, input)
         ) {
           // A turn may finish under its still-open parent lease after reload. Its historic
           // generation must never publish over the configured owner for newly admitted work.
           throwIfLeaseAdmissionAborted(options.abortSignal);
-          return { snapshot: borrowed, release: () => {} };
+          return {
+            snapshot: borrowed,
+            pluginGeneration: options.pluginGeneration,
+            release: () => {},
+          };
         }
         throw new PreparedModelRuntimeOwnerNotPublishedError(
           `prepared model runtime plugin generation was superseded for ${input.agentDir}`,
@@ -137,19 +146,6 @@ export async function acquirePreparedModelRuntimeLeaseFromOwners(
       existing?.needsRefresh &&
       !existing.pending &&
       (existing.provenance === "run" || existing.provenance === "ephemeral");
-    const pluginGenerationChanged =
-      options.pluginGeneration !== undefined &&
-      (existing?.pending ? existing.pendingPluginGeneration : existing?.pluginGeneration) !==
-        options.pluginGeneration;
-    if (existing?.pending && pluginGenerationChanged) {
-      // Do not supersede active discovery. Wait for its owner to settle, then retry against
-      // the published identity so same-generation callers still coalesce.
-      await racePromiseWithAbortSignal(
-        existing.pending.catch(() => undefined),
-        options.abortSignal,
-      );
-      continue;
-    }
     if (
       context.getGatewayLifecycleActive() &&
       provenance === "run" &&
@@ -186,8 +182,25 @@ export async function acquirePreparedModelRuntimeLeaseFromOwners(
         // has an owner to rebind. Keep ordinary agent runs fail-closed at this ownership boundary.
       }
     }
+    // A static owner cannot satisfy explicit live discovery; publish a new exact generation.
+    const ownerGenerationChanged =
+      (options.pluginGeneration !== undefined &&
+        !preparedPluginGenerationReusesBase(
+          existing?.pending ? existing.pendingPluginGeneration : existing?.pluginGeneration,
+          options.pluginGeneration,
+        )) ||
+      (options.catalogMode === "live" && existing?.catalogMode === "static");
+    if (existing?.pending && ownerGenerationChanged) {
+      // Do not supersede active discovery. Wait for its owner to settle, then retry against
+      // the published identity so same-generation callers still coalesce.
+      await racePromiseWithAbortSignal(
+        existing.pending.catch(() => undefined),
+        options.abortSignal,
+      );
+      continue;
+    }
     try {
-      if (existing?.pending && !pluginGenerationChanged) {
+      if (existing?.pending && !ownerGenerationChanged) {
         // Matching callers lease the immutable generation they joined even if a queued
         // mismatched caller publishes the next owner immediately after this one settles.
         snapshot = await racePromiseWithAbortSignal(existing.pending, options.abortSignal);
@@ -197,7 +210,7 @@ export async function acquirePreparedModelRuntimeLeaseFromOwners(
         owner = existing;
         break;
       }
-      if (existing && !staleDynamicOwner && !pluginGenerationChanged) {
+      if (existing && !staleDynamicOwner && !ownerGenerationChanged) {
         snapshot = await racePromiseWithAbortSignal(
           context.prepareSnapshot(input),
           options.abortSignal,
@@ -241,8 +254,9 @@ export async function acquirePreparedModelRuntimeLeaseFromOwners(
     break;
   }
   throwIfLeaseAdmissionAborted(options.abortSignal);
+  const pluginGeneration = owner.pluginGeneration!;
   if (owner.provenance !== provenance) {
-    return { snapshot, release: () => {} };
+    return { snapshot, pluginGeneration, release: () => {} };
   }
   throwIfLeaseAdmissionAborted(options.abortSignal);
   if (provenance === "run" && options.retainIdleRunOwner) {
@@ -254,6 +268,7 @@ export async function acquirePreparedModelRuntimeLeaseFromOwners(
   let released = false;
   return {
     snapshot,
+    pluginGeneration,
     release: () => {
       if (released) {
         return;

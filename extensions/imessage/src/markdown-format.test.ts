@@ -62,6 +62,17 @@ describe("extractMarkdownFormatRuns", () => {
         { start: 19, length: 4, styles: ["strikethrough"] },
       ],
     });
+    expect(
+      extractMarkdownFormatRuns(
+        "😀\ud800 **bold `a😀` mid 😀\udfff `b` tail** then _italics `c😀` end \ud800_.",
+      ),
+    ).toEqual({
+      text: "😀\ud800 bold `a😀` mid 😀\udfff `b` tail then italics `c😀` end \ud800.",
+      ranges: [
+        { start: 4, length: 27, styles: ["bold"] },
+        { start: 37, length: 19, styles: ["italic"] },
+      ],
+    });
   });
 
   it("keeps literal markers that CommonMark does not treat as emphasis", () => {

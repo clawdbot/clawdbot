@@ -64,6 +64,16 @@ describe("worker deploy build plugin", () => {
     expect(transformed).not.toContain('requireUndici("undici")');
   });
 
+  it("leaves fs-safe native package resolution to the dependency", () => {
+    const nativePath = path.resolve("node_modules/@openclaw/fs-safe/dist/native.js");
+    const source = fs.readFileSync(nativePath, "utf8");
+    const plugin = createWorkerDeployBuildPlugin();
+
+    const transformed = plugin.transform.call({ error: fail }, source, nativePath);
+
+    expect(transformed).toBeNull();
+  });
+
   it("fails closed when the undici dispatcher bootstrap shape changes", () => {
     const dispatcherPath = path.resolve("src/infra/net/undici-dispatcher-options.ts");
     const source = fs.readFileSync(dispatcherPath, "utf8");

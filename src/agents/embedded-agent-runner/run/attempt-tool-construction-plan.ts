@@ -9,10 +9,7 @@ import {
   resolveCoreToolFactoryFamily,
 } from "../../core-tool-factory-descriptors.js";
 import { mayMatchGlobWithPrefix } from "../../glob-pattern.js";
-import {
-  isRuntimeToolAllowed,
-  isRuntimeToolAllowedForConstruction,
-} from "../../tool-policy-match.js";
+import { createRuntimeToolMatcher } from "../../tool-policy-match.js";
 import {
   attachToolAllowlistIntersection,
   buildPluginToolGroups,
@@ -51,13 +48,6 @@ function isBundleMcpAllowlistName(normalized: string): boolean {
   return normalized === "bundle-mcp" || normalized.includes(TOOL_NAME_SEPARATOR);
 }
 
-// A `__`-separated allowlist entry is ambiguous: bundle MCP tools use that
-// shape, but so does a plugin's own registered tool name. Only the
-// unambiguous "bundle-mcp" group name can be excluded from plugin construction.
-function isBundleMcpConstructionGroupName(normalized: string): boolean {
-  return normalized === "bundle-mcp";
-}
-
 function hasWildcardToolAllowlist(toolsAllow: string[]): boolean {
   return toolsAllow.some((entry) => normalizeToolPolicyName(entry) === "*");
 }
@@ -85,13 +75,17 @@ export function applyEmbeddedAttemptToolsAllow<T extends { name: string }>(
     if (hasWildcardToolAllowlist(restriction)) {
       return currentTools;
     }
+    if (currentTools.length === 0) {
+      return [];
+    }
     const pluginGroups = options?.toolMeta
       ? buildPluginToolGroups({ tools: currentTools, toolMeta: options.toolMeta })
       : undefined;
     const policy = pluginGroups
       ? expandPolicyWithPluginGroups({ allow: restriction }, pluginGroups)
       : { allow: expandShippedCoreToolPolicyNames(restriction) };
-    return currentTools.filter((tool) => isRuntimeToolAllowed(tool.name, policy?.allow));
+    const matches = createRuntimeToolMatcher(policy?.allow);
+    return currentTools.filter((tool) => matches(tool.name));
   }, tools);
 }
 
@@ -144,21 +138,15 @@ function resolveCodingToolConstructionPlanForAllowlist(
   const constructionEntries = restrictions?.flat() ?? toolsAllow;
   const expanded = expandToolGroups(expandShippedCoreToolPolicyNames(constructionEntries));
   const normalized = normalizeToolList(expanded);
-  const constructionRestrictions = restrictions ?? [toolsAllow];
+  // Construction must not select a shell factory only through write -> apply_patch.
+  const constructionMatchers = (restrictions ?? [toolsAllow]).map((restriction) =>
+    createRuntimeToolMatcher(expandShippedCoreToolPolicyNames(restriction), false),
+  );
   // Construct every family containing a tool that the final runtime policy can retain.
   // Otherwise a valid glob can survive filtering after its factory was never run.
   const coreFamilies = new Set<CoreToolFactoryFamily>(
     listCoreToolFactoryDescriptors()
-      .filter(({ name }) =>
-        constructionRestrictions.every(
-          (restriction) =>
-            restriction.length > 0 &&
-            isRuntimeToolAllowedForConstruction(
-              name,
-              expandShippedCoreToolPolicyNames(restriction),
-            ),
-        ),
-      )
+      .filter(({ name }) => constructionMatchers.every((matches) => matches(name)))
       .map(({ family }) => family),
   );
   let includePluginTools = false;
@@ -167,10 +155,8 @@ function resolveCodingToolConstructionPlanForAllowlist(
     if (family) {
       continue;
     }
-    // Plugin ids/tool names are not known to the local factory catalog. Only the
-    // unambiguous bundle-mcp group name is excluded: a `__` entry may still be a
-    // plugin tool, and skipping construction for it would drop the tool.
-    if (!isBundleMcpConstructionGroupName(name)) {
+    // Only bundle-mcp is unambiguous; namespaced entries can belong to plugins.
+    if (name !== "bundle-mcp") {
       includePluginTools = true;
     }
   }

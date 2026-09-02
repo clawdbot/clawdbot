@@ -83,6 +83,11 @@ truncated. The caller's requested URL is preserved.
   </Step>
 </Steps>
 
+Set `tools.web.fetch.cacheTtlMinutes: 0` to bypass OpenClaw's fetch cache for both
+reads and writes. A positive value limits reuse by the current request's TTL;
+cached entries still expire at their original deadline. Provider-side caching,
+such as Firecrawl's `maxAgeMs`, is configured separately.
+
 ## Progress updates
 
 `web_fetch` emits a public progress line only when the fetch is still pending
@@ -95,6 +100,13 @@ Fetching page content...
 Fast cache hits and quick network responses finish before the timer fires, so
 they never show a progress line. Canceling the call clears the timer. The
 progress line is channel UI state only and never contains fetched page content.
+
+OpenClaw passes cancellation to fallback providers. Providers that honor the
+signal can stop their requests; core rejects late results even when a provider
+ignores cancellation. Already-canceled calls reject even when a cached result
+exists. If cancellation occurs during fetching, fallback processing, or
+connection cleanup, OpenClaw rejects the call instead of returning success or
+adding a result to the fetch cache.
 
 ## Config
 
@@ -272,6 +284,7 @@ outbound policy after DNS resolution.
   32000-10000000) before parsing; oversized responses are truncated with a warning
 - Private/internal hostnames are blocked
 - `tools.web.fetch.ssrfPolicy.allowedHostnames` allows exact trusted hosts while leaving other private/internal targets blocked
+- `tools.web.fetch.ssrfPolicy.blockedHostnames` denies exact hosts and wildcard subdomains before DNS and allow rules, including on redirects and with private-network access enabled. For example, `["tracker.example.com", "*.ads.example.com"]` blocks those hosts without requiring a full allowlist. Wildcards do not match the apex; add `ads.example.com` separately to block it. Matching ignores case and trailing dots; use ASCII/Punycode for internationalized domains. Empty or unset adds no denials
 - `tools.web.fetch.ssrfPolicy.dangerouslyAllowPrivateNetwork` broadly permits private-network targets; enable it only when model-selected URLs are trusted in this deployment
 - `tools.web.fetch.ssrfPolicy.allowRfc2544BenchmarkRange` and
   `tools.web.fetch.ssrfPolicy.allowIpv6UniqueLocalRange` are narrow opt-ins

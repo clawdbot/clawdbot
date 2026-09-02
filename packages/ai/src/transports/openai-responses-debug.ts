@@ -202,6 +202,10 @@ type ResponsesFailedNoDetailsObservation = {
 type ResponsesFailedEventSummary = {
   message: string;
   responseId?: string;
+  // Structured provider error code (e.g. "server_error") preserved from
+  // response.failed so downstream failover classification can route on it
+  // instead of guessing from the prose message (#117609).
+  code?: string;
   observation?: ResponsesFailedNoDetailsObservation;
 };
 
@@ -225,11 +229,15 @@ function readResponseFailedString(
 function buildResponsesFailedEventSummary(
   message: string,
   responseId: string | undefined,
+  code?: string,
   observation?: ResponsesFailedNoDetailsObservation,
 ): ResponsesFailedEventSummary {
   const summary: ResponsesFailedEventSummary = { message };
   if (responseId) {
     summary.responseId = responseId;
+  }
+  if (code) {
+    summary.code = code;
   }
   if (observation) {
     summary.observation = observation;
@@ -439,6 +447,7 @@ export function normalizeResponsesFailedEvent(
       return buildResponsesFailedEventSummary(
         `${code || "unknown"}: ${message || "no message"}`,
         responseId,
+        code || undefined,
       );
     }
   }
@@ -452,6 +461,7 @@ export function normalizeResponsesFailedEvent(
   return buildResponsesFailedEventSummary(
     RESPONSE_FAILED_NO_DETAILS_MESSAGE,
     responseId,
+    undefined,
     buildResponsesFailedNoDetailsObservation(event, model, response),
   );
 }
@@ -459,6 +469,7 @@ export function normalizeResponsesFailedEvent(
 export class ResponsesStreamFailure extends Error {
   readonly responseId?: string;
   readonly response: unknown;
+  readonly code?: string;
   readonly observation: ReturnType<typeof normalizeResponsesFailedEvent>["observation"];
 
   constructor(failure: ReturnType<typeof normalizeResponsesFailedEvent>, response: unknown) {
@@ -466,6 +477,7 @@ export class ResponsesStreamFailure extends Error {
     this.name = "ResponsesStreamFailure";
     this.responseId = failure.responseId;
     this.response = response;
+    this.code = failure.code;
     this.observation = failure.observation;
   }
 }

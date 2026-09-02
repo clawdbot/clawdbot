@@ -96,6 +96,7 @@ export const resolveFastModeStateMock = createMock();
 export const getChannelPluginMock = createMock();
 export const retireSessionMcpRuntimeMock = createMock();
 export const cleanupBrowserSessionsForLifecycleEndMock = createMock();
+export const removeCronRunContinuationSessionIfIdleMock = createMock();
 export const callGatewayMock = createMock();
 export const hasUsableWebSearchProviderMock = createMock();
 export const readSessionMessagesAsyncMock = createMock();
@@ -125,11 +126,15 @@ const resolveHookExternalContentSourceMock = createMock();
 const getSkillsSnapshotVersionMock = createMock();
 export const loadModelCatalogMock = createMock();
 export const loadModelCatalogOwnerMock = createMock();
-export const loadAgentRuntimePluginRegistryHandleMock = createMock();
+export const preparedRunPluginRegistryMock = createMock();
+export const acquirePreparedModelRuntimeMock = createMock();
+export const loadPublishedReplyDispatchRuntimeMock = createMock();
 const getRemoteSkillEligibilityMock = createMock();
 
-vi.mock("../../agents/runtime-plugins.js", () => ({
-  loadAgentRuntimePluginRegistryHandle: loadAgentRuntimePluginRegistryHandleMock,
+vi.mock("../../agents/prepared-model-runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../agents/prepared-model-runtime.js")>()),
+  acquireAgentRunPreparedModelRuntime: acquirePreparedModelRuntimeMock,
+  loadPublishedGatewayReplyDispatchRuntime: loadPublishedReplyDispatchRuntimeMock,
 }));
 
 vi.mock("./run.runtime.js", async () => ({
@@ -363,6 +368,10 @@ vi.mock("../../browser-lifecycle-cleanup.js", () => ({
   cleanupBrowserSessionsForLifecycleEnd: cleanupBrowserSessionsForLifecycleEndMock,
 }));
 
+vi.mock("../../tasks/cron-run-continuation-cleanup.js", () => ({
+  removeCronRunContinuationSessionIfIdle: removeCronRunContinuationSessionIfIdleMock,
+}));
+
 vi.mock("../../gateway/call.runtime.js", () => ({
   callGateway: callGatewayMock,
 }));
@@ -579,7 +588,22 @@ function resetRunConfigMocks(): void {
   resolveHookExternalContentSourceMock.mockReturnValue(undefined);
   getSkillsSnapshotVersionMock.mockReturnValue(42);
   loadModelCatalogMock.mockResolvedValue([]);
-  loadAgentRuntimePluginRegistryHandleMock.mockReturnValue(createEmptyPluginRegistry());
+  preparedRunPluginRegistryMock.mockReturnValue(createEmptyPluginRegistry());
+  loadPublishedReplyDispatchRuntimeMock.mockResolvedValue(undefined);
+  acquirePreparedModelRuntimeMock.mockImplementation(async (input, options) => {
+    const registry = preparedRunPluginRegistryMock();
+    const metadata = options?.pluginGeneration?.pluginMetadataSnapshot ??
+      options?.pluginMetadataSnapshot ?? { plugins: [], index: { plugins: [] } };
+    return {
+      snapshot: { ...input, metadataSnapshot: metadata, pluginRegistry: registry },
+      pluginGeneration: {
+        ...options?.pluginGeneration,
+        pluginMetadataSnapshot: metadata,
+        pluginRegistry: registry,
+      },
+      release: vi.fn(),
+    };
+  });
   loadModelCatalogOwnerMock.mockImplementation(
     async (params: {
       agentId?: string;
@@ -782,6 +806,8 @@ function resetRunSessionMocks(): void {
   resolveCronSessionMock.mockReturnValue(makeCronSession());
   callGatewayMock.mockReset();
   callGatewayMock.mockResolvedValue({ ok: true, deleted: true });
+  removeCronRunContinuationSessionIfIdleMock.mockReset();
+  removeCronRunContinuationSessionIfIdleMock.mockResolvedValue(undefined);
   retireSessionMcpRuntimeMock.mockReset();
   retireSessionMcpRuntimeMock.mockResolvedValue(true);
 }

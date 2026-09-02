@@ -426,13 +426,25 @@ describe("CodexAppServerEventProjector reasoning and guardian projection", () =>
   });
 
   it.each([
-    { tier: "priority", model: "ultima-alpha" },
-    { tier: "flex", model: "test-no-tier-model" },
-  ])("logs unsupported $tier tiers without projecting a UI notice", async ({ tier, model }) => {
+    {
+      name: "unsupported service tier",
+      message:
+        "Configured service tier `priority` is not advertised as supported for model `test-no-tier-model` and will be omitted from requests.",
+    },
+    {
+      name: "unsupported flex tier",
+      message:
+        "Configured service tier `flex` is not advertised as supported for model `test-no-tier-model` and will be omitted from requests.",
+    },
+    {
+      name: "host-managed Code Mode metadata",
+      message:
+        "Code Mode is enabled in configuration, but model `gpt-5.6-sol` does not advertise Code Mode support. This may degrade model performance. Disable `features.code_mode` and `features.code_mode_only`, or select a model whose metadata enables Code Mode.",
+    },
+  ])("logs $name warnings without projecting a UI notice", async ({ message }) => {
     const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => {});
     const onAgentEvent = vi.fn();
     const projector = await createProjector({ ...(await createParams()), onAgentEvent });
-    const message = `Configured service tier \`${tier}\` is not advertised as supported for model \`${model}\` and will be omitted from requests.`;
 
     await projector.handleNotification({
       method: "warning",
@@ -446,7 +458,8 @@ describe("CodexAppServerEventProjector reasoning and guardian projection", () =>
   it.each([
     "Project hooks were disabled.",
     "Configured service tier `priority` requires account access.",
-    "Configured service tier `priority` is not advertised as supported for model `ultima-alpha` and will be omitted from requests. Additional action required.",
+    "Configured service tier `priority` is not advertised as supported for model `test-no-tier-model` and will be omitted from requests. Additional action required.",
+    "Code Mode is enabled in configuration, but model `gpt-5.6-sol` does not advertise Code Mode support. This may degrade model performance. Disable `features.code_mode` and `features.code_mode_only`, or select a model whose metadata enables Code Mode. Additional action required.",
   ])("surfaces startup and thread warnings: %s", async (message) => {
     const onAgentEvent = vi.fn();
     const projector = await createProjector({ ...(await createParams()), onAgentEvent });
@@ -555,7 +568,10 @@ describe("CodexAppServerEventProjector reasoning and guardian projection", () =>
     );
     expect(result.toolMetas).toEqual([{ toolName: "sessions_send", isError: false }]);
     expect(result.messagesSnapshot.map((message) => message.role)).toEqual(["user", "assistant"]);
-    expect(JSON.stringify(result.messagesSnapshot[1])).toContain("Codex reasoning");
+    expect(result.messagesSnapshot[1]).toMatchObject({
+      role: "assistant",
+      content: [{ type: "thinking", thinking: "thinking" }],
+    });
     expect(JSON.stringify(result.messagesSnapshot)).not.toContain("Codex plan:");
     expect(result.compactionCount).toBe(1);
     expect(requireRecord(result.itemLifecycle, "item lifecycle")).not.toHaveProperty(

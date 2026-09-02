@@ -63,20 +63,20 @@ export class ChatPaneSessionPanelToggleController {
     void Promise.all([
       customElements.whenDefined("openclaw-chat-sidebar-region"),
       customElements.whenDefined(tagName),
-    ])
-      .then(() => owner.updateComplete)
-      .then(async () => {
-        if (this.options.pending.get(slot) !== event) {
-          return;
-        }
-        const region = owner.renderRoot.querySelector<
-          HTMLElementTagNameMap["openclaw-chat-sidebar-region"]
-        >("openclaw-chat-sidebar-region");
-        await region?.updateComplete;
-        region?.deliverPanelEvent(slot, event);
-        this.options.pending.delete(slot);
-        this.options.requestUpdate();
-      });
+    ]).then(async () => {
+      this.options.requestUpdate();
+      await owner.updateComplete;
+      if (this.options.pending.get(slot) !== event) {
+        return;
+      }
+      const region = owner.renderRoot.querySelector<
+        HTMLElementTagNameMap["openclaw-chat-sidebar-region"]
+      >("openclaw-chat-sidebar-region");
+      await region?.updateComplete;
+      region?.deliverPanelEvent(slot, event);
+      this.options.pending.delete(slot);
+      this.options.requestUpdate();
+    });
     return true;
   }
 

@@ -77,7 +77,6 @@ describe("Claude model contracts", () => {
     ["Anthropic API", { id: "claude-opus-5" }, "claude-opus-5"],
     ["Anthropic alias", { id: "opus" }, "claude-opus-5"],
     ["Anthropic version alias", { id: "opus-5" }, "claude-opus-5"],
-    ["Claude CLI", { id: "claude-opus-5" }, "claude-opus-5"],
     ["Vertex AI", { id: "claude-opus-5@20260701" }, "claude-opus-5@20260701"],
     ["Amazon Bedrock", { id: "global.anthropic.claude-opus-5" }, "claude-opus-5"],
     [
@@ -139,7 +138,7 @@ describe("Claude model contracts", () => {
 
 describe("modelCostsEqual", () => {
   it("matches complete flat rates and rejects missing or stale metadata", () => {
-    expect(modelCostsEqual(EXPECTED_COST, EXPECTED_COST)).toBe(true);
+    expect(modelCostsEqual({ ...EXPECTED_COST }, EXPECTED_COST)).toBe(true);
     expect(modelCostsEqual(undefined, EXPECTED_COST)).toBe(false);
     expect(modelCostsEqual({ ...EXPECTED_COST, output: 15 }, EXPECTED_COST)).toBe(false);
   });

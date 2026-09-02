@@ -393,6 +393,34 @@
   --theme-chip-accent-2: #8fd6a5;
 }
 
+.settings-theme-card--crt,
+.settings-accent-theme--crt {
+  --theme-chip-bg: #090a09;
+  --theme-chip-accent: #e8e8e8;
+  --theme-chip-accent-2: #ffcf5c;
+}
+
+.settings-theme-card--manuscript,
+.settings-accent-theme--manuscript {
+  --theme-chip-bg: #211e18;
+  --theme-chip-accent: #8fa8e0;
+  --theme-chip-accent-2: #cfa85e;
+}
+
+.settings-theme-card--rose,
+.settings-accent-theme--rose {
+  --theme-chip-bg: #191724;
+  --theme-chip-accent: #ebbcba;
+  --theme-chip-accent-2: #f6c177;
+}
+
+.settings-theme-card--miami,
+.settings-accent-theme--miami {
+  --theme-chip-bg: #140f1e;
+  --theme-chip-accent: #f472b6;
+  --theme-chip-accent-2: #5fd7e8;
+}
+
 :root[data-theme-mode="light"] :is(.settings-theme-card--claw, .settings-accent-theme--claw) {
   --theme-chip-bg: #faf9f7;
   --theme-chip-accent: #bd4531;
@@ -435,6 +463,31 @@
   --theme-chip-bg: #f4f7f4;
   --theme-chip-accent: #10693a;
   --theme-chip-accent-2: #2f6b47;
+}
+
+:root[data-theme-mode="light"] :is(.settings-theme-card--crt, .settings-accent-theme--crt) {
+  --theme-chip-bg: #f5f5f4;
+  --theme-chip-accent: #1f1f1f;
+  --theme-chip-accent-2: #7a5d10;
+}
+
+:root[data-theme-mode="light"]
+  :is(.settings-theme-card--manuscript, .settings-accent-theme--manuscript) {
+  --theme-chip-bg: #f6f1e4;
+  --theme-chip-accent: #31549b;
+  --theme-chip-accent-2: #7d6118;
+}
+
+:root[data-theme-mode="light"] :is(.settings-theme-card--rose, .settings-accent-theme--rose) {
+  --theme-chip-bg: #faf4ed;
+  --theme-chip-accent: #9c4f66;
+  --theme-chip-accent-2: #286983;
+}
+
+:root[data-theme-mode="light"] :is(.settings-theme-card--miami, .settings-accent-theme--miami) {
+  --theme-chip-bg: #f7f3f6;
+  --theme-chip-accent: #b0246f;
+  --theme-chip-accent-2: #0f6f7d;
 }
 /* stylelint-enable color-no-hex */
 
@@ -922,7 +975,7 @@
    of which tab is active so its title and actions do not jump by one space. */
 .shell--settings .content:has(.memory-page) .content-header.hub-page-header {
   max-width: 1120px;
-  padding-inline: var(--space-4);
+  padding-inline: var(--settings-header-inline-padding, var(--space-4));
 }
 
 .memory-page__panel .settings-page,
@@ -1003,12 +1056,6 @@
 .mcp-server-message--error {
   background: var(--danger-subtle);
   color: var(--danger);
-}
-
-.mcp-server-loading {
-  padding: var(--space-4);
-  color: var(--muted);
-  font-size: var(--control-ui-text-sm);
 }
 
 /* Advanced Settings accordion navigation, rendered by view.ts. */

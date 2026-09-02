@@ -596,7 +596,10 @@ esac
       await fs.writeFile(path.join(input.bin, "ps"), healthyPs);
       await fs.chmod(path.join(input.bin, "ps"), 0o755);
 
-      expect(await waitForProcessState(child.pid!, /^[^T]/u)).not.toMatch(/^T/u);
+      // SIGCONT precedes lease removal. Wait for the watchdog's terminal state,
+      // including an unreaped zombie, before asserting its completed cleanup.
+      expect(await waitForProcessState(lease.watchdog.pid, /^(?:Z|$)/u)).toMatch(/^(?:Z|$)/u);
+      expect(await processState(child.pid!)).toMatch(/^[^T]/u);
       await expect(fs.stat(leasePath(input.home, input.workspace, nonce))).rejects.toThrow();
     } finally {
       await stopIdleWorker(child);

@@ -11,7 +11,9 @@ import {
   findJsonSchemaShapeError,
 } from "../shared/json-schema-defaults.js";
 import type { JsonSchemaObject } from "../shared/json-schema.types.js";
+import { parseConfigPathArrayIndex } from "../shared/path-array-index.js";
 import { PluginLruCache } from "./plugin-cache-primitives.js";
+import type { PluginOrigin } from "./plugin-origin.types.js";
 
 type TypeBoxValidationError = {
   keyword?: string;
@@ -189,6 +191,15 @@ export type JsonSchemaValidationError = {
   allowedValuesHiddenCount?: number;
 };
 
+export function parseJsonSchemaIssuePath(
+  path: JsonSchemaValidationError["path"],
+): Array<string | number> {
+  if (!path || path === "<root>") {
+    return [];
+  }
+  return path.split(".").map((segment) => parseConfigPathArrayIndex(segment) ?? segment);
+}
+
 function normalizeErrorPath(instancePath: string | undefined): string {
   const path = instancePath?.replace(/^\//, "").replace(/\//g, ".");
   return path && path.length > 0 ? path : "<root>";
@@ -343,6 +354,42 @@ function formatValidationErrors(
         : {}),
     };
   });
+}
+
+/**
+ * Result of validating manifest-sourced input. `schemaError` on the failure branch tells
+ * callers whether the schema itself is unusable (true) versus the value failing a
+ * well-formed schema's constraints (false) — callers that report "config missing" vs.
+ * "config invalid" need this to avoid telling an operator to fill in config that no
+ * value could ever satisfy.
+ */
+type PluginSchemaValidationResult =
+  | { ok: true; value: unknown }
+  | { ok: false; errors: JsonSchemaValidationError[]; schemaError: boolean };
+
+/**
+ * Validate a value against a schema supplied by a plugin manifest.
+ * External manifest schemas are third-party input, so every failure mode becomes
+ * a validation result. Bundled schemas stay on the throwing path because a malformed
+ * repository-owned schema is a programming error and must stay loud.
+ */
+export function validatePluginSchemaValue(
+  params: Parameters<typeof validateJsonSchemaValue>[0] & { origin: PluginOrigin },
+): PluginSchemaValidationResult {
+  const { origin, ...validationParams } = params;
+  if (origin === "bundled") {
+    const result = validateJsonSchemaValue(validationParams);
+    return result.ok ? result : { ...result, schemaError: false };
+  }
+  try {
+    const result = validateJsonSchemaValue(validationParams);
+    return result.ok ? result : { ...result, schemaError: false };
+  } catch (error) {
+    // The thrown text can embed raw manifest content (TypeBox echoes a bad regex
+    // pattern), and callers log it, so it is sanitized like every other error path.
+    const text = sanitizeTerminalText(error instanceof Error ? error.message : String(error));
+    return { ok: false, errors: [{ path: "<root>", message: text, text }], schemaError: true };
+  }
 }
 
 /**

@@ -4,7 +4,6 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { resolveAutoNodeExtraCaCerts } from "../bootstrap/node-extra-ca-certs.js";
-import { inspectGatewayHeapLimit } from "./gateway-heap.js";
 import { buildLaunchAgentPlist } from "./launchd-plist.js";
 import { resolveGatewayStateDir } from "./paths.js";
 import {
@@ -728,14 +727,36 @@ describe("buildServiceEnvironment", () => {
 });
 
 describe("buildServiceEnvironment NODE_OPTIONS", () => {
-  it("sets the adaptive default heap flag", () => {
+  it.each([
+    { capacityMiB: 65536, wrapper: undefined, expected: "--max-old-space-size=8192" },
+    { capacityMiB: 2048, wrapper: undefined, expected: "--max-old-space-size=1536" },
+    { capacityMiB: 65536, wrapper: "/custom/launcher", expected: "" },
+  ])(
+    "retains only direct Bun's prior budget at $capacityMiB MiB (wrapper=$wrapper)",
+    ({ capacityMiB, wrapper, expected }) => {
+      const physical = vi.spyOn(os, "totalmem").mockReturnValue(capacityMiB * 1024 ** 2);
+      const constrained = vi.spyOn(process, "constrainedMemory").mockReturnValue(0);
+      try {
+        expect(
+          buildServiceEnvironment({
+            env: { HOME: "/home/user", OPENCLAW_WRAPPER: wrapper },
+            port: 18789,
+            runtime: "bun",
+          }).NODE_OPTIONS,
+        ).toBe(expected);
+      } finally {
+        physical.mockRestore();
+        constrained.mockRestore();
+      }
+    },
+  );
+
+  it("explicitly clears ambient options when no stored service control exists", () => {
     const env = buildServiceEnvironment({
       env: { HOME: "/home/user" },
       port: 18789,
     });
-    expect(env.NODE_OPTIONS).toBe(
-      `--max-old-space-size=${inspectGatewayHeapLimit(undefined).maxOldSpaceSizeMiB}`,
-    );
+    expect(env.NODE_OPTIONS).toBe("");
   });
 
   it("drops ambient NODE_OPTIONS", () => {

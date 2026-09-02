@@ -1,22 +1,22 @@
 // Session patch applier for gateway session metadata and model/runtime overrides.
 import { randomUUID } from "node:crypto";
-import {
-  normalizeOptionalLowercaseString,
-  normalizeOptionalString,
-} from "@openclaw/normalization-core/string-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   ErrorCodes,
   type ErrorShape,
   errorShape,
-  type SessionCreatedActor,
   type SessionsPatchParams,
 } from "../../packages/gateway-protocol/src/index.js";
-import {
-  normalizeSessionIconValue,
-  SESSION_ICON_GLYPH_IDS,
-} from "../../packages/gateway-protocol/src/session-agent-status.js";
 import { readAcpSessionMetaForEntry } from "../acp/runtime/session-meta.js";
-import { resolveAgentDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
+import {
+  resolveAgentDir,
+  resolveAgentWorkspaceDir,
+  resolveDefaultAgentId,
+} from "../agents/agent-scope.js";
+import {
+  requiresAgentHarnessPluginSelection,
+  resolveAgentHarnessOwnerPluginIds,
+} from "../agents/harness/runtime-plugin-load-plan.js";
 import type { ModelCatalogEntry } from "../agents/model-catalog.js";
 import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
 import {
@@ -36,10 +36,7 @@ import {
   normalizeUsageDisplay,
   resolveSupportedThinkingLevel,
 } from "../auto-reply/thinking.js";
-import type {
-  InternalSessionEntry as SessionEntry,
-  SessionToolOverrides,
-} from "../config/sessions.js";
+import type { InternalSessionEntry as SessionEntry } from "../config/sessions.js";
 import {
   buildSessionCreationStamp,
   type SessionCreatedVia,
@@ -76,12 +73,13 @@ import {
   sessionAgentStatusExpiresAt,
   SESSION_AGENT_STATUS_MAX_TTL_MINUTES,
 } from "../sessions/session-agent-status.js";
-import { parseSessionLabel, SESSION_LABEL_MAX_LENGTH } from "../sessions/session-label.js";
 import {
   isAgentSessionModelPatchOrigin,
   snapshotAgentModelFallback,
 } from "./session-model-patch-origin.js";
+import { normalizeSessionToolOverrides } from "./session-tool-overrides.js";
 import { applySessionContextWindowPatch } from "./sessions-patch-context-window.js";
+import { applySessionsPatchDisplayMetadata } from "./sessions-patch-display-metadata.js";
 import { applySessionsPatchSubagentPolicy } from "./sessions-patch-subagent-policy.js";
 
 function invalid(message: string): { ok: false; error: ErrorShape } {
@@ -90,6 +88,7 @@ function invalid(message: string): { ok: false; error: ErrorShape } {
 
 export function resolveSessionPatchModelSelection(params: {
   cfg: OpenClawConfig;
+  agentId: string;
   catalog: ModelCatalogEntry[];
   raw: string;
   defaultProvider: string;
@@ -101,6 +100,7 @@ export function resolveSessionPatchModelSelection(params: {
   const { model: modelWithoutProfile, profile } = splitTrailingAuthProfile(params.raw);
   const resolved = resolveAllowedModelRef({
     cfg: params.cfg,
+    agentId: params.agentId,
     catalog: params.catalog,
     raw: modelWithoutProfile,
     defaultProvider: params.defaultProvider,
@@ -120,56 +120,10 @@ export function resolveSessionPatchModelSelection(params: {
   };
 }
 
-function normalizeExecSecurity(raw: string): "deny" | "allowlist" | "full" | undefined {
-  const normalized = normalizeOptionalLowercaseString(raw);
-  return normalized === "deny" || normalized === "allowlist" || normalized === "full"
-    ? normalized
-    : undefined;
-}
-
-function normalizeExecAsk(raw: string): "off" | "on-miss" | "always" | undefined {
-  const normalized = normalizeOptionalLowercaseString(raw);
-  return normalized === "off" || normalized === "on-miss" || normalized === "always"
-    ? normalized
-    : undefined;
-}
-
-function normalizeSessionToolOverrides(
-  raw: SessionToolOverrides,
-): SessionToolOverrides | undefined {
-  const normalizeBooleanMap = (value: Record<string, boolean> | undefined) => {
-    const entries = Object.entries(value ?? {}).toSorted(([left], [right]) =>
-      left.localeCompare(right),
-    );
-    return entries.length > 0 ? Object.fromEntries(entries) : undefined;
-  };
-  const mcpToolsDeny = Object.fromEntries(
-    Object.entries(raw.mcpToolsDeny ?? {})
-      .map(
-        ([serverName, toolNames]) =>
-          [
-            serverName,
-            [...new Set(toolNames)].toSorted((left, right) => left.localeCompare(right)),
-          ] as const,
-      )
-      .filter(([, toolNames]) => toolNames.length > 0)
-      .toSorted(([left], [right]) => left.localeCompare(right)),
-  );
-  const mcpServers = normalizeBooleanMap(raw.mcpServers);
-  const skills = normalizeBooleanMap(raw.skills);
-  const normalized: SessionToolOverrides = {
-    ...(mcpServers ? { mcpServers } : {}),
-    ...(Object.keys(mcpToolsDeny).length > 0 ? { mcpToolsDeny } : {}),
-    ...(skills ? { skills } : {}),
-    ...(raw.webSearch === false ? { webSearch: false } : {}),
-  };
-  return Object.keys(normalized).length > 0 ? normalized : undefined;
-}
-
 /** Project a validated gateway session patch for one session entry. */
 export async function projectSessionsPatchEntry(params: {
   cfg: OpenClawConfig;
-  creation?: { via: SessionCreatedVia; actor?: SessionCreatedActor };
+  creation?: { via: SessionCreatedVia; actor?: SessionEntry["createdActor"] };
   existingEntry?: SessionEntry;
   isLabelInUse: (label: string) => boolean;
   storeKey: string;
@@ -177,13 +131,20 @@ export async function projectSessionsPatchEntry(params: {
   patch: SessionsPatchParams;
   /** Canonical root prepared by the trusted create path; never accepted from public patches. */
   preparedSessionRoot?: string;
-  archivedBy?: SessionCreatedActor;
+  /** Trusted catalog runtime must own selection checks before the new row is persisted. */
+  preparedAgentRuntime?: string;
+  archivedBy?: SessionEntry["archivedBy"];
   loadGatewayModelCatalog?: () => Promise<ModelCatalogEntry[]>;
   providerAuthMetadataSnapshot?: Pick<PluginMetadataSnapshot, "plugins">;
   /** Exact harness owner authorized to project its new reserved session row. */
   authorizedAgentHarnessId?: string;
 }): Promise<{ ok: true; entry: SessionEntry } | { ok: false; error: ErrorShape }> {
   const { cfg, storeKey, patch, creation } = params;
+  if ("execSecurity" in patch || "execAsk" in patch) {
+    return invalid(
+      "execSecurity/execAsk are retired; set permissionMode (read-only|guarded|workspace|full) instead, or use /exec for this run only.",
+    );
+  }
   const authorizedHarnessCreation =
     params.existingEntry === undefined &&
     isAgentHarnessSessionKeyOwnedBy(storeKey, params.authorizedAgentHarnessId);
@@ -226,6 +187,7 @@ export async function projectSessionsPatchEntry(params: {
       entry,
     });
     return (
+      params.preparedAgentRuntime ??
       acpMeta?.backend ??
       resolveEffectiveAgentRuntime({
         cfg,
@@ -273,56 +235,13 @@ export async function projectSessionsPatchEntry(params: {
     return invalid(subagentPolicyError);
   }
 
-  if ("label" in patch) {
-    const raw = patch.label;
-    if (raw === null) {
-      delete next.label;
-    } else if (raw !== undefined) {
-      const parsed = parseSessionLabel(raw);
-      if (!parsed.ok) {
-        return invalid(parsed.error);
-      }
-      if (params.isLabelInUse(parsed.label)) {
-        return invalid(`label already in use: ${parsed.label}`);
-      }
-      next.label = parsed.label;
-    }
-  }
-
-  if ("icon" in patch) {
-    const raw = patch.icon;
-    if (raw === null || raw === "") {
-      delete next.icon;
-    } else if (raw !== undefined) {
-      const icon = normalizeSessionIconValue(raw);
-      if (!icon) {
-        return invalid(
-          `icon must be a single emoji or one of: ${SESSION_ICON_GLYPH_IDS.join(", ")}`,
-        );
-      }
-      next.icon = icon;
-    }
-  }
-
-  if ("category" in patch) {
-    const raw = patch.category;
-    if (raw === null) {
-      delete next.category;
-    } else if (raw !== undefined) {
-      // Categories are shared organization buckets, so duplicates are expected (unlike labels).
-      const trimmed = normalizeOptionalString(raw) ?? "";
-      if (!trimmed) {
-        return invalid("invalid category: empty");
-      }
-      if (trimmed.length > SESSION_LABEL_MAX_LENGTH) {
-        return invalid(`invalid category: too long (max ${SESSION_LABEL_MAX_LENGTH})`);
-      }
-      next.category = trimmed;
-    }
-  }
-
-  if ("boardFace" in patch && patch.boardFace !== undefined) {
-    next.boardFace = patch.boardFace;
+  const displayMetadataError = applySessionsPatchDisplayMetadata({
+    patch,
+    next,
+    isLabelInUse: params.isLabelInUse,
+  });
+  if (displayMetadataError) {
+    return invalid(displayMetadataError);
   }
 
   if ("statusNote" in patch || "attention" in patch || "ttlMinutes" in patch) {
@@ -526,32 +445,6 @@ export async function projectSessionsPatchEntry(params: {
     }
   }
 
-  if ("execSecurity" in patch) {
-    const raw = patch.execSecurity;
-    if (raw === null) {
-      delete next.execSecurity;
-    } else if (raw !== undefined) {
-      const normalized = normalizeExecSecurity(raw);
-      if (!normalized) {
-        return invalid('invalid execSecurity (use "deny"|"allowlist"|"full")');
-      }
-      next.execSecurity = normalized;
-    }
-  }
-
-  if ("execAsk" in patch) {
-    const raw = patch.execAsk;
-    if (raw === null) {
-      delete next.execAsk;
-    } else if (raw !== undefined) {
-      const normalized = normalizeExecAsk(raw);
-      if (!normalized) {
-        return invalid('invalid execAsk (use "off"|"on-miss"|"always")');
-      }
-      next.execAsk = normalized;
-    }
-  }
-
   if ("execNode" in patch) {
     if (patch.execNode === null) {
       delete next.execNode;
@@ -586,22 +479,11 @@ export async function projectSessionsPatchEntry(params: {
       : undefined;
     delete next.modelFallback;
     const raw = patch.model;
+    let selection:
+      | { provider: string; model: string; profile?: string; isDefault: boolean }
+      | undefined;
     if (raw === null) {
-      applyModelOverrideWithAuthProfileCompatibility({
-        cfg,
-        agentDir: resolveAgentDir(cfg, sessionAgentId),
-        entry: next,
-        currentProvider: next.providerOverride ?? next.modelProvider ?? resolvedDefault.provider,
-        selection: {
-          provider: resolvedDefault.provider,
-          model: resolvedDefault.model,
-          isDefault: true,
-        },
-        ...(params.providerAuthMetadataSnapshot
-          ? { metadataSnapshot: params.providerAuthMetadataSnapshot }
-          : {}),
-      });
-      delete next.liveModelSwitchPending;
+      selection = { ...resolvedDefault, isDefault: true };
     } else if (raw !== undefined) {
       const trimmed = normalizeOptionalString(raw) ?? "";
       if (!trimmed) {
@@ -619,6 +501,7 @@ export async function projectSessionsPatchEntry(params: {
       }
       const resolved = resolveSessionPatchModelSelection({
         cfg,
+        agentId: sessionAgentId,
         catalog,
         raw: trimmed,
         defaultProvider: resolvedDefault.provider,
@@ -628,22 +511,49 @@ export async function projectSessionsPatchEntry(params: {
       if (!resolved.ok) {
         return invalid(resolved.error);
       }
+      selection = resolved;
+    }
+    if (selection) {
+      // Catalog membership does not guarantee an activatable harness. Reject before
+      // committing the session so sticky defaults cannot retain an unusable selection.
+      const harnessSelection = {
+        provider: selection.provider,
+        modelId: selection.model,
+        runtime: resolveThinkingRuntime(selection.provider, selection.model, next),
+        agentId: sessionAgentId,
+      };
+      if (
+        !readAcpSessionMetaForEntry({
+          sessionKey: storeKey,
+          agentId: sessionAgentId,
+          entry: next,
+        }) &&
+        requiresAgentHarnessPluginSelection(harnessSelection, cfg) &&
+        resolveAgentHarnessOwnerPluginIds({
+          ...harnessSelection,
+          config: cfg,
+          workspaceDir: resolveAgentWorkspaceDir(cfg, sessionAgentId),
+        }).length === 0
+      ) {
+        return invalid(
+          `Model ${selection.provider}/${selection.model} requires agent harness "${harnessSelection.runtime}", but no enabled plugin provides it. Install and enable its plugin, restart the Gateway, then select the model again.`,
+        );
+      }
       applyModelOverrideWithAuthProfileCompatibility({
         cfg,
         agentDir: resolveAgentDir(cfg, sessionAgentId),
         entry: next,
         currentProvider: next.providerOverride ?? next.modelProvider ?? resolvedDefault.provider,
-        selection: {
-          provider: resolved.provider,
-          model: resolved.model,
-          isDefault: resolved.isDefault,
-        },
-        profileOverride: resolved.profile,
+        selection,
+        profileOverride: selection.profile,
         ...(params.providerAuthMetadataSnapshot
           ? { metadataSnapshot: params.providerAuthMetadataSnapshot }
           : {}),
-        markLiveSwitchPending: true,
+        markLiveSwitchPending: raw !== null,
       });
+      if (raw === null) {
+        delete next.liveModelSwitchPending;
+      }
     }
     if (agentModelFallback) {
       next.modelFallback = agentModelFallback;

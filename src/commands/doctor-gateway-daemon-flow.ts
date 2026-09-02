@@ -401,6 +401,7 @@ export async function maybeRepairGatewayDaemon(params: {
             env: process.env,
             port,
             runtime: daemonRuntime,
+            existingCommand: serviceState.command,
             warn: (message, title) => note(message, title),
             config: params.cfg,
           });

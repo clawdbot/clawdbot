@@ -46,6 +46,29 @@ export type PackageRefRow = {
   updated_at_ms: number | bigint;
 };
 
+type PackageRefExtensionSqlParams = Pick<
+  PackageRefRow,
+  | "extension_id"
+  | "extension_format"
+  | "extension_detected_format"
+  | "extension_mapped_json"
+  | "extension_unavailable_json"
+  | "extension_adapter_identity"
+>;
+
+export function toPackageRefExtensionSqlParams(
+  extension: ClawAppliedExtension | undefined,
+): PackageRefExtensionSqlParams {
+  return {
+    extension_id: extension?.id ?? null,
+    extension_format: extension?.format ?? null,
+    extension_detected_format: extension?.detectedFormat ?? null,
+    extension_mapped_json: extension ? JSON.stringify(extension.mapped) : null,
+    extension_unavailable_json: extension ? JSON.stringify(extension.unavailable) : null,
+    extension_adapter_identity: extension?.adapterIdentity ?? null,
+  };
+}
+
 function parsePackageRefExtension(row: PackageRefRow): ClawAppliedExtension | undefined {
   const values = [
     row.extension_id,

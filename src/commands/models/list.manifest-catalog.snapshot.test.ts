@@ -62,7 +62,10 @@ function prepareFixture() {
             ? {
                 aliases: {
                   // A competing declaration must not displace same-name convention rows.
-                  "fixture-direct": { provider: providerId },
+                  "fixture-direct": {
+                    provider: providerId,
+                    baseUrl: "https://competing.example.invalid/v1",
+                  },
                   "fixture-alias": {
                     provider: providerId,
                     api: "openai-responses",

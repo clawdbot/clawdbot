@@ -22,7 +22,7 @@ import {
   resolveUiGlobalAliasAgentId,
   resolveUiSelectedGlobalAgentId,
 } from "../../lib/sessions/session-key.ts";
-import type { ChatHistoryResult } from "./chat-history.ts";
+import type { ChatHistoryResult } from "./chat-history-snapshot.ts";
 import { getPendingChatPickerPatch, patchChatSessionSettings } from "./chat-settings-patches.ts";
 export { getPendingChatPickerPatch };
 
@@ -77,35 +77,6 @@ export function retireChatModelSelectionOwnership(
   for (const key of ownedKeys) {
     host.sessions.retireModelOverride(key);
   }
-  host.requestUpdate?.();
-}
-
-export function applySelectedChatAgent(
-  host:
-    | (Pick<
-        ChatModelSettingsHost,
-        | "agentsList"
-        | "chatModelSwitchPromises"
-        | "hello"
-        | "requestUpdate"
-        | "sessionKey"
-        | "sessions"
-      > & {
-        assistantAgentId?: string | null;
-      })
-    | null
-    | undefined,
-  selectedAgentId: string | null,
-): void {
-  if (
-    !host ||
-    !isUiSelectedGlobalSessionKey(host, host.sessionKey) ||
-    (host.assistantAgentId ?? null) === selectedAgentId
-  ) {
-    return;
-  }
-  retireChatModelSelectionOwnership(host);
-  host.assistantAgentId = selectedAgentId;
   host.requestUpdate?.();
 }
 
@@ -415,6 +386,7 @@ export async function switchChatModel(
     return false;
   }
   const currentOverride = resolveChatModelOverrideValue({
+    activeSession: activeRow,
     chatModelCatalog: host.chatModelCatalog,
     modelOverrides: host.sessions.state.modelOverrides,
     sessionKey: targetSessionKey,

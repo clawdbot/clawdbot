@@ -16,7 +16,7 @@ import type { prepareAndDispatchEmbeddedRunAttempt } from "./attempt-dispatch-pr
 import type { normalizeEmbeddedRunAttempt } from "./attempt-normalization.js";
 import {
   hasAsyncActivity,
-  hasAttemptTerminalState,
+  hasNonToolTerminalState,
   isCurrentAttemptReplaySafe,
 } from "./attempt-terminal-evidence.js";
 import { buildEmbeddedRunBlockedResult } from "./blocked-run-result.js";
@@ -32,7 +32,7 @@ import { recoverEmbeddedRunOverflow } from "./overflow-context-recovery.js";
 import { handleEmbeddedPromptFailure } from "./prompt-failure.js";
 import type { prepareEmbeddedRunRuntime } from "./runtime-preparation.js";
 import type { createEmbeddedRunSessionPromptState } from "./session-prompt-state.js";
-import { isEmbeddedRunTerminalInterrupted } from "./terminal-outcome.js";
+import { isEmbeddedRunTerminalInterrupted, isEmbeddedRunTimeoutFinal } from "./terminal-outcome.js";
 import { recoverEmbeddedRunTimeout } from "./timeout-context-recovery.js";
 
 const MAX_TRANSPORT_DROP_CONTINUATIONS = 2;
@@ -97,7 +97,7 @@ export async function recoverEmbeddedRunAttempt(input: {
           : never
         : never;
     }
-  | { action: "proceed"; shouldSurfaceCodexCompletionTimeout: boolean }
+  | { action: "proceed" }
 > {
   const {
     runInput,
@@ -144,6 +144,11 @@ export async function recoverEmbeddedRunAttempt(input: {
   const settledEvidence = resolveSettledToolBatchEvidence(attempt);
   const midTurnBatchSettled =
     settledEvidence.allToolsProvenSettled || settledEvidence.parkedCodeModeRun;
+  // Failed results need closed lifecycle proof; the parked-run exception is
+  // only safe for a successful Code Mode result that the model can resume via wait.
+  const transportBatchSettled =
+    settledEvidence.allToolsProvenSettled ||
+    (settledEvidence.failedToolNames.size === 0 && settledEvidence.parkedCodeModeRun);
   const canContinueSettledMidTurnOverflow =
     promptErrorSource === "precheck" &&
     attempt.preflightRecovery?.source === "mid-turn" &&
@@ -162,8 +167,9 @@ export async function recoverEmbeddedRunAttempt(input: {
     !aborted &&
     !timedOut &&
     !terminalInterrupted &&
-    !hasAttemptTerminalState(attempt) &&
-    midTurnBatchSettled &&
+    !hasNonToolTerminalState(attempt) &&
+    !settledEvidence.hasUnsettledToolError &&
+    transportBatchSettled &&
     // A parked Code Mode result is persisted same-session state. Continuing is
     // how the model reaches wait; it does not resubmit the prompt or exec call.
     isSilentTransportDropAssistant(currentAttemptAssistant)
@@ -195,11 +201,18 @@ export async function recoverEmbeddedRunAttempt(input: {
         : updates.lastRetryFailoverReason,
     thinkLevel: updates?.thinkLevel ?? runtime.thinkLevel,
   });
-  const replayUnsafeOutcome = {
-    action: "proceed" as const,
-    shouldSurfaceCodexCompletionTimeout:
-      attempt.codexAppServerFailure?.kind === "turn_completion_idle_timeout" && timedOut,
-  };
+  const buildAttemptErrorMeta = () =>
+    buildErrorAgentMeta({
+      sessionId: sessionIdUsed,
+      sessionFile: sessionPromptState.sessionFile,
+      provider: preparedRuntime.provider,
+      model: preparedRuntime.model.id,
+      credentialSource: attempt.modelAttempt?.credentialSource,
+      ...runtime.outerContextTokenMeta,
+      usageAccumulator: input.usageAccumulator,
+      lastRunPromptUsage: input.lastRunPromptUsage,
+      currentAttemptAssistant,
+    });
 
   if (promptErrorSource === "hook:before_agent_run" && !terminalInterrupted) {
     const errorText = formatErrorMessage(promptError);
@@ -212,16 +225,7 @@ export async function recoverEmbeddedRunAttempt(input: {
         errorKind: "hook_block",
         errorMessage: errorText,
         durationMs: Date.now() - runInput.startedAtMs,
-        agentMeta: buildErrorAgentMeta({
-          sessionId: sessionIdUsed,
-          sessionFile: sessionPromptState.sessionFile,
-          provider: preparedRuntime.provider,
-          model: preparedRuntime.model.id,
-          ...runtime.outerContextTokenMeta,
-          usageAccumulator: input.usageAccumulator,
-          lastRunPromptUsage: input.lastRunPromptUsage,
-          currentAttemptAssistant,
-        }),
+        agentMeta: buildAttemptErrorMeta(),
         attempt,
         replayInvalid,
       }),
@@ -232,11 +236,12 @@ export async function recoverEmbeddedRunAttempt(input: {
     !canContinueSettledMidTurnOverflow &&
     !settledTransportDropAssistant
   ) {
-    return replayUnsafeOutcome;
+    return { action: "proceed" };
   }
 
   const requestedSelection = shouldSwitchToLiveModel({
     cfg: params.config,
+    sessionPersistence: params.sessionPersistence,
     sessionKey: runInput.resolvedSessionKey,
     agentId: params.agentId,
     defaultProvider: DEFAULT_PROVIDER,
@@ -306,6 +311,7 @@ export async function recoverEmbeddedRunAttempt(input: {
     }),
     prepareCompactedTranscriptRetry: sessionPromptState.prepareCompactedTranscriptRetry,
     armPostCompactionGuard: input.armPostCompactionGuard,
+    usageAccumulator: input.usageAccumulator,
   };
   if (
     await recoverEmbeddedRunTimeout({
@@ -344,16 +350,7 @@ export async function recoverEmbeddedRunAttempt(input: {
         errorKind: overflowRecovery.kind,
         errorMessage: overflowRecovery.errorText,
         durationMs: Date.now() - runInput.startedAtMs,
-        agentMeta: buildErrorAgentMeta({
-          sessionId: sessionIdUsed,
-          sessionFile: sessionPromptState.sessionFile,
-          provider: preparedRuntime.provider,
-          model: preparedRuntime.model.id,
-          ...runtime.outerContextTokenMeta,
-          usageAccumulator: input.usageAccumulator,
-          lastRunPromptUsage: input.lastRunPromptUsage,
-          currentAttemptAssistant,
-        }),
+        agentMeta: buildAttemptErrorMeta(),
         attempt,
         replayInvalid,
         finalPromptText: attempt.finalPromptText,
@@ -367,7 +364,10 @@ export async function recoverEmbeddedRunAttempt(input: {
   ) {
     runInput.laneController.throwIfAborted();
     recoveryState.transportDropContinuations += 1;
-    sessionPromptState.continueFromCurrentTranscript();
+    sessionPromptState.markOwnedTranscriptRetry();
+    sessionPromptState.continueFromCurrentTranscript({
+      includeToolFailureInstruction: settledEvidence.failedToolNames.size > 0,
+    });
     log.warn(
       `provider transport dropped after a settled tool batch; continuing from the transcript ` +
         `attempt=${recoveryState.transportDropContinuations}/${MAX_TRANSPORT_DROP_CONTINUATIONS} ` +
@@ -381,12 +381,12 @@ export async function recoverEmbeddedRunAttempt(input: {
   // transport-drop recovery. Every path below can replay or replace the original
   // attempt and remains fail-closed.
   if (!currentAttemptReplaySafe) {
-    return replayUnsafeOutcome;
+    return { action: "proceed" };
   }
-  const hasRecoverableCodexAppServerTimeoutOutcome = Boolean(
-    attempt.codexAppServerFailure && attempt.promptTimeoutOutcome,
+  const hasCodexAppServerTimeoutOutcome = Boolean(
+    attempt.codexAppServerFailure &&
+    (attempt.promptTimeoutOutcome || isEmbeddedRunTimeoutFinal(attempt)),
   );
-  let shouldSurfaceCodexCompletionTimeout = false;
   if (promptError && promptErrorSource !== "compaction" && attempt.codexAppServerFailure) {
     const recoveryRetry = resolveCodexAppServerRecoveryRetry({
       attempt,
@@ -401,14 +401,7 @@ export async function recoverEmbeddedRunAttempt(input: {
       );
       return retry({ codexAppServerRecoveryRetries: input.codexAppServerRecoveryRetries + 1 });
     }
-    shouldSurfaceCodexCompletionTimeout =
-      attempt.codexAppServerFailure?.kind === "turn_completion_idle_timeout" &&
-      projectAgentRunAttemptTerminal(attempt.terminal).timedOut;
-    if (
-      attempt.codexAppServerFailure &&
-      !hasRecoverableCodexAppServerTimeoutOutcome &&
-      !shouldSurfaceCodexCompletionTimeout
-    ) {
+    if (!hasCodexAppServerTimeoutOutcome) {
       throw toErrorObject(promptError, "Prompt failed");
     }
   }
@@ -416,8 +409,7 @@ export async function recoverEmbeddedRunAttempt(input: {
     promptError &&
     !terminalInterrupted &&
     promptErrorSource !== "compaction" &&
-    !hasRecoverableCodexAppServerTimeoutOutcome &&
-    !shouldSurfaceCodexCompletionTimeout
+    !hasCodexAppServerTimeoutOutcome
   ) {
     const promptFailureOutcome = await handleEmbeddedPromptFailure({
       runParams: params,
@@ -438,17 +430,7 @@ export async function recoverEmbeddedRunAttempt(input: {
       suspendForFailure: runInput.suspendForFailure,
       resolveReplayInvalid: resolveReplayInvalidForAttempt,
       setTerminalLifecycleMeta,
-      buildErrorAgentMeta: () =>
-        buildErrorAgentMeta({
-          sessionId: sessionIdUsed,
-          sessionFile: sessionPromptState.sessionFile,
-          provider: preparedRuntime.provider,
-          model: preparedRuntime.model.id,
-          ...runtime.outerContextTokenMeta,
-          usageAccumulator: input.usageAccumulator,
-          lastRunPromptUsage: input.lastRunPromptUsage,
-          currentAttemptAssistant,
-        }),
+      buildErrorAgentMeta: buildAttemptErrorMeta,
       startedAtMs: runInput.startedAtMs,
       fallbackConfigured: runInput.fallbackConfigured,
       aborted,
@@ -459,8 +441,8 @@ export async function recoverEmbeddedRunAttempt(input: {
       advanceAuthProfile: failoverRetryController.advanceAuthProfile,
       advanceRateLimitAuthProfile: failoverRetryController.advanceRateLimitAuthProfile,
       maybeMarkAuthProfileFailure: failoverRetryController.maybeMarkAuthProfileFailure,
-      maybeBackoffBeforeOverloadFailover:
-        failoverRetryController.maybeBackoffBeforeOverloadFailover,
+      maybeRetryTransient: failoverRetryController.maybeRetryTransient,
+      getTransientRetryCount: () => failoverRetryController.transientRetryCount,
       attemptedThinking: preparedRuntime.attemptedThinking,
       thinkLevel: runtime.thinkLevel,
       getThinkLevel: () => preparedRuntime.snapshot().thinkLevel,
@@ -477,5 +459,5 @@ export async function recoverEmbeddedRunAttempt(input: {
       thinkLevel: promptFailureOutcome.thinkLevel,
     });
   }
-  return { action: "proceed", shouldSurfaceCodexCompletionTimeout };
+  return { action: "proceed" };
 }

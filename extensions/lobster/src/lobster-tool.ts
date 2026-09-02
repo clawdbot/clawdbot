@@ -268,6 +268,7 @@ export function createLobsterTool(api: OpenClawPluginApi, options?: LobsterToolO
         return resolveManagedFlowToolResult(
           await runManagedLobsterFlow({
             taskFlow: requireTaskFlowRuntime(taskFlow, "run"),
+            config: api.config,
             runner,
             runnerParams,
             controllerId: flowParams.controllerId,
@@ -282,6 +283,7 @@ export function createLobsterTool(api: OpenClawPluginApi, options?: LobsterToolO
         return resolveManagedFlowToolResult(
           await resumeManagedLobsterFlow({
             taskFlow: requireTaskFlowRuntime(taskFlow, "resume"),
+            config: api.config,
             runner,
             runnerParams: flowParams.runnerParams,
             flowId: flowParams.flowId,

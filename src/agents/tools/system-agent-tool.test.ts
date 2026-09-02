@@ -1,8 +1,8 @@
 // OpenClaw ring-zero tool tests: approval gating, action mapping, verification.
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { hashSystemAgentOperation } from "../../system-agent/operator-approval.js";
 import {
   createSystemAgentTool,
-  hashSystemAgentOperation,
   resolveSystemAgentDirectiveTransition,
   resolveSystemAgentProposalTransition,
   type SystemAgentToolDirective,
@@ -452,6 +452,31 @@ describe("openclaw tool", () => {
     expect(directiveRef.current).toEqual({ kind: "open-setup", target: "gateway" });
 
     // Directives are host handoffs, never operation executions.
+    expect(mocks.executeSystemAgentOperation).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { action: "connect_channel", channel: "telegram" },
+    { action: "configure_skills" },
+    { action: "configure_search" },
+    { action: "configure_gateway" },
+    { action: "import_memory" },
+    { action: "configure_model_provider" },
+    { action: "open_agent" },
+    { action: "open_setup", target: "channels" },
+  ])("does not promise a delegated $action handoff", async (args) => {
+    const directiveRef: { current?: SystemAgentToolDirective } = {};
+    const tool = createSystemAgentTool({
+      surface: "gateway",
+      operatorApprovalOnly: true,
+      directiveRef,
+    });
+
+    const text = toolText(await tool.execute("delegated-navigation", args));
+
+    expect(text).toContain("cannot run from a delegated agent request");
+    expect(directiveRef.current).toBeUndefined();
+    expect(resolveSystemAgentDirectiveTransition({ args, resultText: text })).toBeNull();
     expect(mocks.executeSystemAgentOperation).not.toHaveBeenCalled();
   });
 

@@ -1,8 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 import { formatBillingErrorMessage } from "../../agents/embedded-agent-helpers.js";
-import { resolveMaxRunRetryIterations } from "../../agents/embedded-agent-runner/run/helpers.js";
 import { FailoverError } from "../../agents/failover-error.js";
-import { BILLING_ERROR_USER_MESSAGE } from "../../agents/failover/user-copy.js";
+import { AgentHarnessPreflightError } from "../../agents/harness/errors.js";
+import { LiveSessionModelSwitchError } from "../../agents/live-model-switch-error.js";
 import { ProviderAuthError } from "../../agents/model-auth.js";
 import { getReplyPayloadMetadata } from "../reply-payload.js";
 import type { TemplateContext } from "../templating.js";
@@ -76,6 +76,122 @@ function createOpenAiServiceUnavailableError() {
 }
 
 describe("executeAgentTurn: provider failures", () => {
+  it.each(
+    [
+      "Handoff refused after 529 OVERLOADED; reconnect before continuing.",
+      "503 service unavailable; reconnect before continuing.",
+    ].flatMap((message) =>
+      [
+        "direct",
+        "verbose",
+        "verbose full",
+        "group",
+        "channel",
+        "verbose group",
+        "verbose channel",
+        "partial",
+        "disallow",
+        "control UI",
+      ].map((surface) => ({ message, surface })),
+    ),
+  )(
+    "settles preflight diagnostics without replay: $surface / $message",
+    async ({ message, surface }) => {
+      const executeAgentTurn = await getExecuteAgentTurnForTest();
+      vi.useFakeTimers();
+      const error = new AgentHarnessPreflightError(
+        `${message} diagnostic-canary ${"x".repeat(1500)}`,
+        {
+          cause: { status: 529, code: "OVERLOADED" },
+        },
+      );
+      const { replyOperation, failMock } = createMockReplyOperation();
+      const onBlockReply = vi.fn();
+      let partialAccepted = false;
+      const resolveVisibleReplyDelivery = vi.fn(async () => {
+        await Promise.resolve();
+        expect(failMock).not.toHaveBeenCalled();
+        return partialAccepted;
+      });
+      const silentGroup = ["group", "channel", "verbose group", "verbose channel"].includes(
+        surface,
+      );
+      const group = silentGroup || surface === "partial" || surface === "disallow";
+      state.isInternalMessageChannelMock.mockReturnValue(surface === "control UI");
+      state.runEmbeddedAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
+        await params.onPartialReply?.({ text: "accepted partial" });
+        throw error;
+      });
+      state.runWithModelFallbackMock
+        .mockImplementationOnce(async (params: FallbackRunnerParams) => {
+          if (surface === "partial") {
+            return await params.run("anthropic", "claude", initialFallbackAttemptOptions(params));
+          }
+          throw error;
+        })
+        .mockResolvedValueOnce({
+          result: { payloads: [{ text: "unexpected retry" }], meta: {} },
+          provider: "fixture",
+          model: "fixture",
+          attempts: [],
+        });
+      const followupRun = createFollowupRun();
+      if (surface === "disallow") {
+        followupRun.run.config = { agents: { defaults: { silentReply: { group: "disallow" } } } };
+      }
+      const pending = executeAgentTurn({
+        ...createMinimalRunAgentTurnParams({
+          replyOperation,
+          opts: {
+            onBlockReply,
+            onPartialReply: () => {
+              partialAccepted = true;
+              return true;
+            },
+          },
+          sessionCtx: group
+            ? createNonDirectFailureSessionCtx(
+                NON_DIRECT_FAILURE_SURFACE_CASES[surface.includes("channel") ? 1 : 0],
+              )
+            : createDirectFailureSessionCtx(),
+          followupRun,
+        }),
+        resolvedVerboseLevel:
+          surface === "verbose full"
+            ? "full"
+            : surface.startsWith("verbose") || surface === "partial" || surface === "disallow"
+              ? "on"
+              : "off",
+        resolveVisibleReplyDelivery,
+      });
+      await vi.advanceTimersByTimeAsync(30_000);
+      const result = await pending;
+      expect(state.runWithModelFallbackMock).toHaveBeenCalledOnce();
+      expect(failMock).toHaveBeenCalledWith("run_failed", error);
+      expect(result.kind).toBe("final");
+      if (result.kind === "final") {
+        if (silentGroup) {
+          expect(result.payload.text).toBe(SILENT_REPLY_TOKEN);
+          expect(result.payload.isError).toBeUndefined();
+        } else if (surface === "direct") {
+          expect(result.payload.text).toBe(GENERIC_RUN_FAILURE_TEXT);
+          expect(result.payload.text).not.toContain("diagnostic-canary");
+        } else {
+          expect(result.payload.isError).toBe(true);
+          expect(result.payload.text).toContain("Agent failed before reply:");
+          expect(result.payload.text).toContain("reconnect before continuing");
+          if (surface === "control UI") {
+            expect(result.payload.text).toContain("openclaw logs --follow");
+          } else {
+            expect(result.payload.text!.length).toBeLessThanOrEqual(1020);
+          }
+        }
+      }
+      expect(partialAccepted).toBe(surface === "partial");
+      expect(resolveVisibleReplyDelivery).toHaveBeenCalledOnce();
+      expect(onBlockReply).not.toHaveBeenCalled();
+    },
+  );
   it("reports the terminal provider failure to the dispatch owner", async () => {
     const onAgentRunTerminalOutcome = vi.fn();
     state.runEmbeddedAgentMock.mockRejectedValueOnce(new Error("provider returned HTTP 500"));
@@ -87,96 +203,47 @@ describe("executeAgentTurn: provider failures", () => {
     expect(onAgentRunTerminalOutcome).toHaveBeenCalledWith("failed");
   });
 
-  it.each(NON_DIRECT_FAILURE_SURFACE_CASES)(
-    "keeps raw runner failure boilerplate out of $label chats",
-    async (testCase) => {
-      state.runEmbeddedAgentMock.mockRejectedValueOnce(
-        new Error("openai/gpt-5.5 ended with an incomplete terminal response"),
-      );
-
-      const result = await executeTestTurn({
-        sessionCtx: createNonDirectFailureSessionCtx(testCase),
+  it.each(
+    NON_DIRECT_FAILURE_SURFACE_CASES.flatMap((surface) =>
+      ["provider", "live model switch"].map((failure) => ({ surface, failure })),
+    ),
+  )(
+    "surfaces $failure failure after an accepted partial in $surface.label chats",
+    async ({ surface: testCase, failure }) => {
+      let partialDelivered = false;
+      state.runEmbeddedAgentMock.mockImplementation(async (params: EmbeddedAgentParams) => {
+        await params.onPartialReply?.({ text: "partial answer" });
+        throw failure === "provider"
+          ? new Error("model stream failed")
+          : new LiveSessionModelSwitchError({ provider: "openai", model: "gpt-5.4" });
       });
 
-      expect(result.kind).toBe("final");
-      if (result.kind === "final") {
-        expect(result.payload.text).toBe(SILENT_REPLY_TOKEN);
-      }
-    },
-  );
-
-  it.each(["group", "channel"] as const)(
-    "surfaces raw runner failure copy in Discord %s chats when silentReply.group is set to disallow",
-    async (chatType) => {
-      state.runEmbeddedAgentMock.mockRejectedValueOnce(
-        new Error("openai/gpt-5.5 ended with an incomplete terminal response"),
-      );
-
-      const followupRun = createFollowupRun();
-      followupRun.run.config = {
-        agents: {
-          defaults: {
-            silentReply: { group: "disallow" },
+      const result = await executeTestTurn(
+        {
+          sessionCtx: createNonDirectFailureSessionCtx(testCase),
+          opts: {
+            onPartialReply: () => {
+              partialDelivered = true;
+              return true;
+            },
           },
         },
-      };
+        { resolveVisibleReplyDelivery: async () => partialDelivered },
+      );
 
-      const result = await executeTestTurn({
-        followupRun,
-        sessionCtx: {
-          Provider: "discord",
-          Surface: "discord",
-          ChatType: chatType,
-          GroupSubject: "agent group",
-          GroupChannel: "#general",
-          MessageSid: "msg",
-        } as unknown as TemplateContext,
+      expect(result).toMatchObject({
+        kind: "final",
+        payload: {
+          text:
+            failure === "provider"
+              ? GENERIC_RUN_FAILURE_TEXT
+              : expect.stringContaining("Model switch could not be completed"),
+          isError: true,
+        },
       });
-
-      expect(result.kind).toBe("final");
-      if (result.kind === "final") {
-        expect(result.payload.text).not.toBe(SILENT_REPLY_TOKEN);
-        expect(result.payload.text).toBe(GENERIC_RUN_FAILURE_TEXT);
-      }
+      expect(state.runEmbeddedAgentMock).toHaveBeenCalledTimes(failure === "provider" ? 1 : 3);
     },
   );
-
-  it("surfaces raw runner failure copy when per-surface silentReply.group is set to disallow", async () => {
-    state.runEmbeddedAgentMock.mockRejectedValueOnce(
-      new Error("openai/gpt-5.5 ended with an incomplete terminal response"),
-    );
-
-    const followupRun = createFollowupRun();
-    followupRun.run.config = {
-      agents: {
-        defaults: {
-          silentReply: { group: "allow" },
-        },
-      },
-      surfaces: {
-        discord: {
-          silentReply: { group: "disallow" },
-        },
-      },
-    };
-
-    const result = await executeTestTurn({
-      followupRun,
-      sessionCtx: {
-        Provider: "discord",
-        Surface: "discord",
-        ChatType: "group",
-        GroupSubject: "agent group",
-        GroupChannel: "#general",
-        MessageSid: "msg",
-      } as unknown as TemplateContext,
-    });
-
-    expect(result.kind).toBe("final");
-    if (result.kind === "final") {
-      expect(result.payload.text).toBe(GENERIC_RUN_FAILURE_TEXT);
-    }
-  });
 
   it.each(NON_DIRECT_FAILURE_SURFACE_CASES)(
     "keeps default silent behavior in $label chats when silentReply policy is unset",
@@ -256,14 +323,8 @@ describe("executeAgentTurn: provider failures", () => {
     },
   );
 
-  it("retries a provider HTTP 503 before output and delivers the recovered response", async () => {
-    vi.useFakeTimers();
-    state.runEmbeddedAgentMock
-      .mockRejectedValueOnce(createOpenAiServiceUnavailableError())
-      .mockResolvedValueOnce({
-        payloads: [{ text: "Recovered response" }],
-        meta: {},
-      });
+  it("surfaces a provider HTTP 503 without an outer retry", async () => {
+    state.runEmbeddedAgentMock.mockRejectedValueOnce(createOpenAiServiceUnavailableError());
 
     const executeAgentTurn = await getExecuteAgentTurnForTest();
     const resultPromise = executeAgentTurn(
@@ -271,18 +332,16 @@ describe("executeAgentTurn: provider failures", () => {
         sessionCtx: createNonDirectFailureSessionCtx(NON_DIRECT_FAILURE_SURFACE_CASES[0]),
       }),
     );
-    await vi.advanceTimersByTimeAsync(2_500);
     const result = await resultPromise;
 
-    expect(state.runEmbeddedAgentMock).toHaveBeenCalledTimes(2);
-    expect(result.kind).toBe("success");
-    if (result.kind === "success") {
-      expect(result.runResult.payloads).toEqual([{ text: "Recovered response" }]);
+    expect(state.runEmbeddedAgentMock).toHaveBeenCalledTimes(1);
+    expect(result.kind).toBe("final");
+    if (result.kind === "final") {
+      expect(result.payload.text).toBe(PROVIDER_INTERNAL_ERROR_USER_MESSAGE);
     }
   });
 
-  it("surfaces a sanitized provider HTTP 503 notice after the safe retry is exhausted", async () => {
-    vi.useFakeTimers();
+  it("keeps opaque provider HTTP 503 copy safe", async () => {
     state.runEmbeddedAgentMock.mockRejectedValue(createOpenAiServiceUnavailableError());
 
     const executeAgentTurn = await getExecuteAgentTurnForTest();
@@ -291,10 +350,9 @@ describe("executeAgentTurn: provider failures", () => {
         sessionCtx: createNonDirectFailureSessionCtx(NON_DIRECT_FAILURE_SURFACE_CASES[1]),
       }),
     );
-    await vi.advanceTimersByTimeAsync(2_500);
     const result = await resultPromise;
 
-    expect(state.runEmbeddedAgentMock).toHaveBeenCalledTimes(2);
+    expect(state.runEmbeddedAgentMock).toHaveBeenCalledTimes(1);
     expect(result.kind).toBe("final");
     if (result.kind === "final") {
       expect(result.payload.isError).toBe(true);
@@ -431,7 +489,7 @@ describe("executeAgentTurn: provider failures", () => {
   });
 
   it.each(NON_DIRECT_FAILURE_SURFACE_CASES)(
-    "surfaces overloaded fallback copy in $label chats",
+    "surfaces overloaded failure without an outer retry in $label chats",
     async (testCase) => {
       const executeAgentTurn = await getExecuteAgentTurnForTest();
       vi.useFakeTimers();
@@ -445,9 +503,7 @@ describe("executeAgentTurn: provider failures", () => {
       await vi.advanceTimersByTimeAsync(217_500);
       const result = await resultPromise;
 
-      expect(state.runEmbeddedAgentMock).toHaveBeenCalledTimes(11);
-      const wholeTurnReruns = state.runEmbeddedAgentMock.mock.calls.length - 1;
-      expect(wholeTurnReruns * resolveMaxRunRetryIterations(17)).toBe(1_600);
+      expect(state.runEmbeddedAgentMock).toHaveBeenCalledTimes(1);
       expect(result.kind).toBe("final");
       if (result.kind === "final") {
         expect(result.payload.isError).toBe(true);
@@ -457,40 +513,20 @@ describe("executeAgentTurn: provider failures", () => {
     },
   );
 
-  it("retries fallback-wide overloads turn-locally and sends one delayed status notice", async () => {
+  it("does not send an overload status notice from the outer reply layer", async () => {
     const executeAgentTurn = await getExecuteAgentTurnForTest();
     vi.useFakeTimers();
-    for (let attempt = 0; attempt < 4; attempt += 1) {
-      state.runWithModelFallbackMock.mockRejectedValueOnce(createOverloadSummaryError());
-    }
-    state.runEmbeddedAgentMock.mockResolvedValueOnce({
-      payloads: [{ text: "recovered" }],
-      meta: {},
-    });
+    state.runWithModelFallbackMock.mockRejectedValueOnce(createOverloadSummaryError());
     const onBlockReply = vi.fn();
 
     const resultPromise = executeAgentTurn(
       createMinimalRunAgentTurnParams({ opts: { onBlockReply } }),
     );
-    await vi.advanceTimersByTimeAsync(29_999);
-    expect(onBlockReply).not.toHaveBeenCalled();
-    await vi.advanceTimersByTimeAsync(7_501);
     const result = await resultPromise;
 
-    expect(state.runWithModelFallbackMock).toHaveBeenCalledTimes(5);
-    expect(state.runEmbeddedAgentMock).toHaveBeenCalledTimes(1);
-    expect(result.kind).toBe("success");
-    expect(onBlockReply).toHaveBeenCalledTimes(1);
-    const notice = onBlockReply.mock.calls[0]?.[0];
-    expect(notice).toMatchObject({
-      text: "The AI service is temporarily overloaded. I’m still retrying; this may take a few minutes.",
-      replyToId: "msg",
-      replyToCurrent: true,
-      isStatusNotice: true,
-    });
-    expect(getReplyPayloadMetadata(notice)).toMatchObject({
-      deliverDespiteSourceReplySuppression: true,
-    });
+    expect(state.runWithModelFallbackMock).toHaveBeenCalledTimes(1);
+    expect(result.kind).toBe("final");
+    expect(onBlockReply).not.toHaveBeenCalled();
   });
 
   it.each(["tool_execution_started", "assistant_output_started"] as const)(
@@ -640,15 +676,15 @@ describe("executeAgentTurn: provider failures", () => {
         createMinimalRunAgentTurnParams({ opts: { onBlockReply } }),
       );
       await vi.advanceTimersByTimeAsync(30_000);
-      expect(state.runEmbeddedAgentMock).toHaveBeenCalledTimes(2);
+      expect(state.runEmbeddedAgentMock).toHaveBeenCalledTimes(1);
       expect(onBlockReply).not.toHaveBeenCalled();
 
       resolveRetry({ payloads: [{ text: "recovered" }], meta: {} });
-      await expect(resultPromise).resolves.toMatchObject({ kind: "success" });
+      await expect(resultPromise).resolves.toMatchObject({ kind: "final" });
     },
   );
 
-  it("sends the delayed overload notice while a retry provider call is still running", async () => {
+  it("does not send a delayed overload notice", async () => {
     const executeAgentTurn = await getExecuteAgentTurnForTest();
     vi.useFakeTimers();
     let resolveRetry!: (value: unknown) => void;
@@ -664,10 +700,10 @@ describe("executeAgentTurn: provider failures", () => {
       createMinimalRunAgentTurnParams({ opts: { onBlockReply } }),
     );
     await vi.advanceTimersByTimeAsync(29_999);
-    expect(state.runWithModelFallbackMock).toHaveBeenCalledTimes(2);
+    expect(state.runWithModelFallbackMock).toHaveBeenCalledTimes(1);
     expect(onBlockReply).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(1);
-    expect(onBlockReply).toHaveBeenCalledTimes(1);
+    expect(onBlockReply).not.toHaveBeenCalled();
 
     resolveRetry({
       result: { payloads: [{ text: "recovered" }], meta: {} },
@@ -675,14 +711,10 @@ describe("executeAgentTurn: provider failures", () => {
       model: "claude-opus-4-1",
       attempts: [],
     });
-    await expect(resultPromise).resolves.toMatchObject({ kind: "success" });
-    expect(onBlockReply.mock.calls[0]?.[1]).toMatchObject({
-      abortSignal: expect.objectContaining({ aborted: true }),
-      timeoutMs: 5_000,
-    });
+    await expect(resultPromise).resolves.toMatchObject({ kind: "final" });
   });
 
-  it("does not block retry when a slow first overload makes the status notice immediately due", async () => {
+  it("does not schedule an overload retry after a slow failure", async () => {
     const executeAgentTurn = await getExecuteAgentTurnForTest();
     vi.useFakeTimers();
     let rejectInitial!: (error: unknown) => void;
@@ -706,12 +738,12 @@ describe("executeAgentTurn: provider failures", () => {
     rejectInitial(createOverloadSummaryError());
     await vi.advanceTimersByTimeAsync(2_500);
 
-    await expect(resultPromise).resolves.toMatchObject({ kind: "success" });
-    expect(state.runWithModelFallbackMock).toHaveBeenCalledTimes(2);
-    expect(onBlockReply).toHaveBeenCalledTimes(1);
+    await expect(resultPromise).resolves.toMatchObject({ kind: "final" });
+    expect(state.runWithModelFallbackMock).toHaveBeenCalledTimes(1);
+    expect(onBlockReply).not.toHaveBeenCalled();
   });
 
-  it("interrupts overload backoff on abort and cancels the pending status notice", async () => {
+  it("keeps overload failure handling terminal when the turn is aborted", async () => {
     const executeAgentTurn = await getExecuteAgentTurnForTest();
     vi.useFakeTimers();
     state.runEmbeddedAgentMock.mockRejectedValue(new Error("model is overloaded"));
@@ -730,22 +762,21 @@ describe("executeAgentTurn: provider failures", () => {
     abortController.abort();
     await expect(resultPromise).resolves.toMatchObject({
       kind: "final",
-      payload: { text: SILENT_REPLY_TOKEN },
     });
     expect(state.runEmbeddedAgentMock).toHaveBeenCalledTimes(1);
-    expect(onAgentRunTerminalOutcome).not.toHaveBeenCalled();
+    expect(onAgentRunTerminalOutcome).toHaveBeenCalledTimes(1);
     await vi.advanceTimersByTimeAsync(30_000);
     expect(onBlockReply).not.toHaveBeenCalled();
     const agentEvents = await import("../../infra/agent-events.js");
     expect(vi.mocked(agentEvents.emitAgentEvent)).toHaveBeenCalledWith(
       expect.objectContaining({
         stream: "lifecycle",
-        data: expect.objectContaining({ phase: "error", aborted: true }),
+        data: expect.objectContaining({ phase: "error", fallbackExhaustedFailure: true }),
       }),
     );
   });
 
-  it("interrupts the transient HTTP retry backoff on abort", async () => {
+  it("keeps transient HTTP failure handling terminal when the turn is aborted", async () => {
     const executeAgentTurn = await getExecuteAgentTurnForTest();
     vi.useFakeTimers();
     state.runEmbeddedAgentMock.mockRejectedValue(
@@ -763,13 +794,12 @@ describe("executeAgentTurn: provider failures", () => {
     abortController.abort();
     await expect(resultPromise).resolves.toMatchObject({
       kind: "final",
-      payload: { text: SILENT_REPLY_TOKEN },
     });
     expect(state.runEmbeddedAgentMock).toHaveBeenCalledTimes(1);
     expect(vi.getTimerCount()).toBe(0);
   });
 
-  it("cancels the overload notice immediately when a slow retrying turn is aborted", async () => {
+  it("does not leave an overload notice timer after an aborted failure", async () => {
     const executeAgentTurn = await getExecuteAgentTurnForTest();
     vi.useFakeTimers();
     let resolveRetry!: (value: unknown) => void;
@@ -788,7 +818,7 @@ describe("executeAgentTurn: provider failures", () => {
       }),
     );
     await vi.advanceTimersByTimeAsync(2_500);
-    expect(state.runWithModelFallbackMock).toHaveBeenCalledTimes(2);
+    expect(state.runWithModelFallbackMock).toHaveBeenCalledTimes(1);
     await vi.advanceTimersByTimeAsync(27_499);
     abortController.abort();
     await vi.advanceTimersByTimeAsync(1);
@@ -800,7 +830,7 @@ describe("executeAgentTurn: provider failures", () => {
       model: "claude-opus-4-1",
       attempts: [],
     });
-    await expect(resultPromise).resolves.toMatchObject({ kind: "success" });
+    await expect(resultPromise).resolves.toMatchObject({ kind: "final" });
   });
 
   it("surfaces typed overloaded failures without rate-limit cooldown copy", async () => {
@@ -823,7 +853,7 @@ describe("executeAgentTurn: provider failures", () => {
     await vi.advanceTimersByTimeAsync(217_500);
     const result = await resultPromise;
 
-    expect(state.runEmbeddedAgentMock).toHaveBeenCalledTimes(11);
+    expect(state.runEmbeddedAgentMock).toHaveBeenCalledTimes(1);
     expect(result.kind).toBe("final");
     if (result.kind === "final") {
       expect(result.payload.isError).toBe(true);
@@ -927,6 +957,7 @@ describe("executeAgentTurn: provider failures", () => {
 
     const result = await executeTestTurn({
       sessionCtx: createDirectFailureSessionCtx("telegram"),
+      opts: { runId: "direct-provider-request-error" },
     });
 
     expect(result.kind).toBe("final");
@@ -935,6 +966,17 @@ describe("executeAgentTurn: provider failures", () => {
       expect(result.payload.text).not.toContain("/new");
       expect(result.payload.text).not.toBe(GENERIC_RUN_FAILURE_TEXT);
     }
+    const emitAgentEvent = vi.mocked((await import("../../infra/agent-events.js")).emitAgentEvent);
+    const terminal = emitAgentEvent.mock.calls
+      .map(([event]) => event)
+      .find(
+        (event) =>
+          event.runId === "direct-provider-request-error" &&
+          event.stream === "lifecycle" &&
+          event.data.phase === "error",
+      );
+    expect(terminal).toBeDefined();
+    expect(terminal?.data.fallbackExhaustedFailure).not.toBe(true);
   });
 
   it("surfaces billing guidance for Volcengine Coding Plan subscription failures before reply", async () => {
@@ -948,7 +990,7 @@ describe("executeAgentTurn: provider failures", () => {
 
     expect(result.kind).toBe("final");
     if (result.kind === "final") {
-      expect(result.payload.text).toBe(BILLING_ERROR_USER_MESSAGE);
+      expect(result.payload.text).toBe(formatBillingErrorMessage());
       expect(result.payload.text).not.toBe(GENERIC_RUN_FAILURE_TEXT);
     }
   });
@@ -1000,12 +1042,10 @@ describe("executeAgentTurn: provider failures", () => {
     }
   });
 
-  it("formats raw Codex API payloads before forwarding verbose external errors", async () => {
-    state.runEmbeddedAgentMock.mockRejectedValueOnce(
-      new Error(
-        'Codex error: {"type":"error","error":{"type":"server_error","message":"Something exploded"},"sequence_number":2}',
-      ),
-    );
+  it("redacts classified raw Codex API payloads in verbose external errors", async () => {
+    const raw =
+      'Codex error: {"type":"error","error":{"type":"server_error","message":"Something exploded"},"sequence_number":2}';
+    state.runEmbeddedAgentMock.mockRejectedValueOnce(new Error(raw));
 
     const result = await executeTestTurn(undefined, {
       commandBody: "hello",
@@ -1015,8 +1055,10 @@ describe("executeAgentTurn: provider failures", () => {
     expect(result.kind).toBe("final");
     if (result.kind === "final") {
       expect(result.payload.text).toBe(
-        "⚠️ Agent failed before reply: LLM error server_error: Something exploded. Please try again, or use /new to start a fresh session.",
+        "⚠️ LLM request failed (provider internal error). " +
+          "This is usually temporary — try again shortly.",
       );
+      expect(result.payload.text).not.toContain("Something exploded");
     }
   });
 });

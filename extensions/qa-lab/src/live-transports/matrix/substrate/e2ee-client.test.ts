@@ -2,6 +2,7 @@
 import { access, mkdtemp, rm, stat } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import { describe, expect, it, vi } from "vitest";
 import {
   MATRIX_QA_E2EE_SYNC_FILTER,
@@ -9,7 +10,28 @@ import {
   createMatrixQaE2eeObservedEventRecorder,
   prepareMatrixQaE2eeStorage,
 } from "./e2ee-client-internals.js";
+import { createMatrixQaE2eeScenarioClient } from "./e2ee-client.js";
 import { findMatrixQaObservedEventMatch, type MatrixQaObservedEvent } from "./events.js";
+
+const runtimeFixture = vi.hoisted(() => ({
+  logging: undefined as PluginRuntime["logging"] | undefined,
+}));
+
+vi.mock("openclaw/plugin-sdk/qa-runner-runtime", () => ({
+  loadQaRunnerBundledPluginTestApi: async () => ({
+    setMatrixRuntime: (runtime: Pick<PluginRuntime, "logging">) => {
+      runtimeFixture.logging = runtime.logging;
+    },
+    MatrixClient: class {
+      on() {}
+      off() {}
+      async start() {}
+      async drainPendingDecryptions() {}
+      async stopAndPersist() {}
+      async stopWithoutPersist() {}
+    },
+  }),
+}));
 
 const testing = {
   MATRIX_QA_E2EE_SYNC_FILTER,
@@ -20,6 +42,41 @@ const testing = {
 };
 
 describe("matrix qa e2ee client storage", () => {
+  it("provides normal diagnostics without enabling secret-bearing SDK debug output", async () => {
+    const outputDir = await mkdtemp(path.join(os.tmpdir(), "matrix-qa-e2ee-logging-"));
+    const debug = vi.spyOn(console, "debug").mockImplementation(() => {});
+    const info = vi.spyOn(console, "info").mockImplementation(() => {});
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    let client: Awaited<ReturnType<typeof createMatrixQaE2eeScenarioClient>> | undefined;
+    try {
+      client = await createMatrixQaE2eeScenarioClient({
+        accessToken: "fixture-token",
+        actorId: "driver",
+        baseUrl: "http://127.0.0.1:8008",
+        observedEvents: [],
+        outputDir,
+        scenarioId: "matrix-e2ee-qr-verification",
+        timeoutMs: 1_000,
+        userId: "@driver:matrix.test",
+      });
+      expect(runtimeFixture.logging).toBeDefined();
+      const logger = runtimeFixture.logging!.getChildLogger({ module: "matrix:crypto" });
+      logger.debug?.('shared_secret: "fixture-only-qr-secret"');
+      logger.info("verification started");
+      logger.warn("verification warning");
+      logger.error("verification failure");
+      expect(debug).not.toHaveBeenCalled();
+      expect(info).toHaveBeenCalledExactlyOnceWith("verification started");
+      expect(warn).toHaveBeenCalledExactlyOnceWith("verification warning");
+      expect(error).toHaveBeenCalledExactlyOnceWith("verification failure");
+    } finally {
+      await client?.stop();
+      vi.restoreAllMocks();
+      await rm(outputDir, { recursive: true, force: true });
+    }
+  });
+
   function createLifecycleFixture(options?: {
     discard?: () => Promise<void>;
     drain?: () => Promise<void>;

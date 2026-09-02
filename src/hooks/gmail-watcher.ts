@@ -10,6 +10,7 @@ import process from "node:process";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { releaseChildProcessOutputAfterExit } from "../process/child-process.js";
+import { formatCommandResult } from "../process/command-error.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { killProcessTree } from "../process/kill-tree.js";
 import { hasBinary } from "../skills/loading/config.js";
@@ -50,8 +51,7 @@ async function startGmailWatch(
       signal: options.signal,
     });
     if (result.code !== 0) {
-      const message = result.stderr || result.stdout || "gog watch start failed";
-      log.error(`watch start failed: ${message}`);
+      log.error(formatCommandResult("gog gmail watch start", result));
       return false;
     }
     log.info(`watch started for ${cfg.account}`);

@@ -7,6 +7,7 @@ import {
   classifyOAuthRefreshFailureError,
   formatOAuthRefreshFailureLoginCommandMarkdown,
 } from "../../agents/auth-profiles/oauth-refresh-failure.js";
+import { classifyFailoverReason } from "../../agents/embedded-agent-helpers.js";
 import { sanitizeUserFacingText } from "../../agents/embedded-agent-helpers/sanitize-user-facing-text.js";
 import { renderUserFacingText } from "../../agents/embedded-agent-helpers/user-facing-text.js";
 import { classifyCompactionReason } from "../../agents/embedded-agent-runner/compact-reasons.js";
@@ -16,6 +17,7 @@ import {
   findCliTimeoutError,
   isFailoverError,
 } from "../../agents/failover-error.js";
+import { renderAssistantRequestFailureCopy } from "../../agents/failover/assistant-request-failure-copy.js";
 import { classifyProviderRequestFacets } from "../../agents/failover/request-error-facets.js";
 import {
   GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
@@ -23,19 +25,28 @@ import {
   renderAuthProfileFailoverCopy,
   renderBillingReplyCopy,
   renderCliTimeoutReplyCopy,
+  renderFailoverCodeUserCopy,
   renderMissingApiKeyReplyCopy,
   renderRateLimitOrOverloadedCopy,
   renderRateLimitReplyCopy,
   resolveProviderRequestFailureCopy,
   type ReplyFallbackAttempt,
 } from "../../agents/failover/user-copy.js";
+import { isAgentHarnessPreflightError } from "../../agents/harness/errors.js";
 import { isProviderAuthError } from "../../agents/model-auth-runtime-shared.js";
 import { buildProviderAuthRecoveryHint } from "../../agents/provider-auth-recovery-hint.js";
 import { resolveSilentReplyPolicy } from "../../config/silent-reply.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { extractErrorHttpStatus } from "../../shared/assistant-error-format.js";
 import { buildCodexLoginRecovery } from "../codex-login-recovery.js";
-import { markReplyPayloadForSourceSuppressionDelivery } from "../reply-payload.js";
+import {
+  copyReplyPayloadMetadata,
+  getReplyPayloadMetadata,
+  isReplyPayloadTerminalContent,
+  markReplyPayloadForSourceSuppressionDelivery,
+  setReplyPayloadMetadata,
+} from "../reply-payload.js";
 import type { TemplateContext } from "../templating.js";
 import type { VerboseLevel } from "../thinking.js";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../tokens.js";
@@ -43,20 +54,25 @@ import type { ReplyPayload } from "../types.js";
 
 export function resolveReplyFailoverFacts(error: unknown, message: string) {
   const described = describeFailoverError(error);
-  const classification = described.reason
-    ? ({ kind: "reason", reason: described.reason } as const)
-    : null;
+  const status = extractErrorHttpStatus(described.rawError ?? message)?.code ?? described.status;
+  const reason =
+    described.reason ??
+    classifyFailoverReason(described.rawError ?? message, { provider: described.provider });
+  const classification = reason ? ({ kind: "reason", reason } as const) : null;
   return {
     reason: classification?.kind === "reason" ? classification.reason : undefined,
+    code: described.code,
     provider: described.provider,
+    model: described.model,
+    status,
     authMode: described.authMode,
     providerRequestError: resolveProviderRequestFailureCopy({
       classification,
       facet: classifyProviderRequestFacets({
-        status: described.status,
+        status,
         message: described.rawError ?? message,
       }),
-      status: described.status,
+      status,
       technicalMessage: message,
     }),
   };
@@ -111,8 +127,10 @@ export function resolveExternalRunFailureTextForConversation(params: {
   sessionCtx: ExternalFailureConversationContext;
   isGenericRunnerFailure: boolean;
   cfg?: OpenClawConfig;
+  visibleReplyDelivered?: boolean;
 }): string {
-  if (!isNonDirectConversationContext(params.sessionCtx)) {
+  // Group silence must not strand an already-visible partial without its terminal failure.
+  if (params.visibleReplyDelivered || !isNonDirectConversationContext(params.sessionCtx)) {
     return params.text;
   }
   if (!params.isGenericRunnerFailure && !params.text.includes(AGENT_FAILED_BEFORE_REPLY_TEXT)) {
@@ -185,7 +203,7 @@ export function buildAuthProfileFailoverFailureText(error: unknown): string | nu
 }
 
 function formatForwardedExternalRunFailureText(message: string): string {
-  const sanitized = renderUserFacingText(message, { errorContext: true })
+  const sanitized = message
     .trim()
     .replace(/^⚠️\s*/u, "")
     .replace(/\s+/gu, " ");
@@ -212,9 +230,27 @@ export function buildExternalRunFailureReply(
   const message = typeof input === "string" ? input : input.message;
   const error = typeof input === "string" ? undefined : input.error;
   const normalizedMessage = collapseRepeatedFailureDetail(message);
+  // Preflight detail is diagnostic, not provider copy or an assurance that it is
+  // safe to disclose. Verbose opt-in and the shared detail cap still apply.
+  if (isAgentHarnessPreflightError(error)) {
+    return {
+      text: options?.isHeartbeat
+        ? HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT
+        : options?.includeDetails
+          ? formatForwardedExternalRunFailureText(
+              sanitizeUserFacingText(normalizedMessage, { errorContext: true }),
+            )
+          : GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
+      isGenericRunnerFailure: !options?.isHeartbeat,
+    };
+  }
   const failoverFacts =
     options?.failoverFacts ??
     resolveReplyFailoverFacts(error ?? normalizedMessage, normalizedMessage);
+  const failoverCodeCopy = renderFailoverCodeUserCopy(failoverFacts.code);
+  if (failoverCodeCopy) {
+    return { text: failoverCodeCopy, isGenericRunnerFailure: false };
+  }
   const oauthRefreshFailure =
     classifyOAuthRefreshFailureError(error) ?? classifyOAuthRefreshFailure(normalizedMessage);
   const codexLoginRecovery = buildCodexLoginRecovery({
@@ -275,6 +311,9 @@ export function buildExternalRunFailureReply(
   }
   const providerRequestError = failoverFacts.providerRequestError;
   if (providerRequestError) {
+    // Curated facet copy carries recovery guidance (quota/billing ambiguity,
+    // /new for conversation-state, config fix for model_not_found); the
+    // classified summary below is the fallback for facts without a facet.
     return { text: providerRequestError.userMessage, isGenericRunnerFailure: false };
   }
   const authError = isProviderAuthError(error) ? error : undefined;
@@ -293,9 +332,17 @@ export function buildExternalRunFailureReply(
   if (codexAppServerFailure) {
     return { text: codexAppServerFailure, isGenericRunnerFailure: false };
   }
+  const classifiedFailure = renderAssistantRequestFailureCopy(failoverFacts);
+  if (classifiedFailure) {
+    return { text: classifiedFailure, isGenericRunnerFailure: false };
+  }
+  // Only unclassified thrown text reaches this branch. Verbose mode is the
+  // explicit opt-in because sanitization does not make raw provider bodies safe.
   return {
     text: options?.includeDetails
-      ? formatForwardedExternalRunFailureText(normalizedMessage)
+      ? formatForwardedExternalRunFailureText(
+          renderUserFacingText(normalizedMessage, { errorContext: true }),
+        )
       : GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
     isGenericRunnerFailure: true,
   };
@@ -309,6 +356,28 @@ export function markAgentRunFailureReplyPayload<T extends ReplyPayload>(payload:
   return marked;
 }
 
+export function markPostCompactionModelFailurePayload(
+  postCompactionModelFailure: true | undefined,
+  payload: ReplyPayload,
+): ReplyPayload {
+  return postCompactionModelFailure === true &&
+    payload.isError === true &&
+    isReplyPayloadTerminalContent(payload) &&
+    typeof payload.text === "string"
+    ? setReplyPayloadMetadata(payload, { postCompactionModelFailure: true })
+    : payload;
+}
+
+export function renderPostCompactionModelFailurePayload(payload: ReplyPayload): ReplyPayload {
+  return getReplyPayloadMetadata(payload)?.postCompactionModelFailure === true &&
+    typeof payload.text === "string"
+    ? copyReplyPayloadMetadata(payload, {
+        ...payload,
+        text: `⚠️ Context compaction succeeded, but the later model request still failed. ${payload.text.replace(/^⚠️\s*/u, "")}`,
+      })
+    : payload;
+}
+
 export function buildTerminalAgentRunFailureReplyPayload(params: {
   isHeartbeat?: boolean;
   visibleReplyDelivered: boolean;
@@ -318,17 +387,12 @@ export function buildTerminalAgentRunFailureReplyPayload(params: {
   const text = params.isHeartbeat
     ? HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT
     : GENERIC_EXTERNAL_RUN_FAILURE_TEXT;
-  // Once output is visible, hiding its terminal failure leaves a misleading partial reply.
-  // Keep normal group silence only for failures that produced no visible output.
   return markAgentRunFailureReplyPayload({
-    text: params.visibleReplyDelivered
-      ? text
-      : resolveExternalRunFailureTextForConversation({
-          text,
-          sessionCtx: params.sessionCtx,
-          isGenericRunnerFailure: true,
-          cfg: params.cfg,
-        }),
+    text: resolveExternalRunFailureTextForConversation({
+      ...params,
+      text,
+      isGenericRunnerFailure: true,
+    }),
   });
 }
 
@@ -373,6 +437,11 @@ export function buildKnownAgentRunFailureReplyPayload(params: {
   resolvedVerboseLevel: VerboseLevel | undefined;
   cfg?: OpenClawConfig;
 }): ReplyPayload | undefined {
+  // Direct preflight diagnostics are not provider failures; preserve their
+  // identity for the caller's generic settlement and disclosure policy.
+  if (isAgentHarnessPreflightError(params.err)) {
+    return undefined;
+  }
   const message = formatErrorMessage(params.err);
   const failoverFacts = resolveReplyFailoverFacts(params.err, message);
   const fallbackAttempts = readFallbackAttempts(params.err);

@@ -436,6 +436,7 @@ export function createManagerIndexFixture(deps: {
             vector: params.vectorEnabled !== undefined ? { enabled: params.vectorEnabled } : {},
           },
           remote: params.batchEnabled ? { batch: { enabled: true } } : undefined,
+          sync: params.onSearch === undefined ? undefined : { onSearch: params.onSearch },
           query: { minScore: params.minScore ?? 0 },
           cache: params.cacheEnabled ? { enabled: true } : undefined,
           extraPaths: params.extraPaths,

@@ -189,12 +189,16 @@ describe("ttsHandlers", () => {
         {
           id: "openai",
           label: "OpenAI",
+          models: ["openai-speech-model"],
+          voices: ["openai-voice"],
           autoSelectOrder: 1,
           isConfigured: vi.fn(() => false),
         },
         {
           id: "google",
           label: "Google",
+          models: ["google-speech-model"],
+          voices: ["google-voice"],
           autoSelectOrder: 2,
           isConfigured: vi.fn(() => true),
         },
@@ -235,6 +239,27 @@ describe("ttsHandlers", () => {
         true,
         expect.objectContaining({ [providerField]: "google" }),
       );
+      if (method === "tts.providers") {
+        expect(respond).toHaveBeenCalledWith(true, {
+          active: "google",
+          providers: [
+            {
+              id: "openai",
+              name: "OpenAI",
+              configured: false,
+              models: ["openai-speech-model"],
+              voices: ["openai-voice"],
+            },
+            {
+              id: "google",
+              name: "Google",
+              configured: true,
+              models: ["google-speech-model"],
+              voices: ["google-voice"],
+            },
+          ],
+        });
+      }
     },
   );
 

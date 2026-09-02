@@ -1,7 +1,7 @@
 // Control UI tests cover local-provider recovery against a mocked Gateway.
-import { mkdir } from "node:fs/promises";
 import path from "node:path";
-import { expect, it } from "vitest";
+import { beforeEach, expect, it } from "vitest";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -11,7 +11,13 @@ const suite = createControlUiE2eSuite({
   unavailableMessage: (executablePath) => `Playwright Chromium is unavailable at ${executablePath}`,
 });
 
-const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+const artifactRoot = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+let artifactDir: string | undefined;
+beforeEach(() => {
+  artifactDir = artifactRoot
+    ? createControlUiE2eArtifactDir("model-setup-recovery", artifactRoot)
+    : undefined;
+});
 
 suite.define(() => {
   it("shows a failed LM Studio connection with its detected endpoint", async () => {
@@ -89,7 +95,9 @@ suite.define(() => {
         await selectedModel.getByText("LM Studio", { exact: true }).waitFor();
         await selectedModel.getByRole("button", { name: "Check model" }).click();
         await selectedModel.getByText("qwen3-8b-instruct at http://localhost:1234/v1").waitFor();
-        await selectedModel.getByText("LM Studio isn’t responding.").waitFor();
+        await selectedModel
+          .getByText("connect ECONNREFUSED 127.0.0.1:1234", { exact: false })
+          .waitFor();
         await selectedModel.getByRole("button", { name: "Try again" }).waitFor();
         await expect.poll(() => selectedModel.getByText("Change connection").count()).toBe(0);
         await expect
@@ -97,7 +105,6 @@ suite.define(() => {
           .toBe(0);
 
         if (artifactDir) {
-          await mkdir(artifactDir, { recursive: true });
           await page.screenshot({
             animations: "disabled",
             fullPage: true,

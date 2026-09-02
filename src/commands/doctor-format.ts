@@ -51,11 +51,12 @@ export function buildGatewayRuntimeHints(
       return null;
     }
   })();
-  if (platform === "linux" && isSystemdUnavailableDetail(runtime.detail)) {
+  const systemdDetail = runtime.inspectionFailure?.detail ?? runtime.detail;
+  if (platform === "linux" && isSystemdUnavailableDetail(systemdDetail)) {
     hints.push(
       ...renderSystemdUnavailableHints({
         wsl: isWSLEnv(env),
-        kind: classifySystemdUnavailableDetail(runtime.detail),
+        kind: classifySystemdUnavailableDetail(systemdDetail),
         env,
       }),
     );

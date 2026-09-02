@@ -18,12 +18,10 @@ import type { TraceAttempt } from "../types.js";
 import { resolveAuthProfileFailureReason } from "./auth-profile-failure-policy.js";
 import type { PreparedEmbeddedRunInput } from "./execution-context.js";
 import {
-  MAX_SAME_MODEL_RATE_LIMIT_RETRIES,
-  resolveNextSameModelRateLimitRetryCount,
-  resolveOverloadFailoverBackoffMs,
+  MAX_TRANSIENT_RETRIES,
+  resolveTransientRetryDelayMs,
   resolveOverloadProfileRotationLimit,
   resolveRateLimitProfileRotationLimit,
-  resolveSameModelRateLimitRetryDelayMs,
 } from "./helpers.js";
 import type { prepareEmbeddedRunRuntime } from "./runtime-preparation.js";
 
@@ -60,11 +58,15 @@ export function createEmbeddedRunFailoverRetryController(input: {
     fallbackConfigured,
     profileFailureStore,
   } = input;
-  const overloadFailoverBackoffMs = resolveOverloadFailoverBackoffMs();
   const overloadProfileRotationLimit = resolveOverloadProfileRotationLimit();
   const rateLimitProfileRotationLimit = resolveRateLimitProfileRotationLimit();
   let rateLimitProfileRotations = 0;
-  let consecutiveSameModelRateLimitRetries = 0;
+  let transientRetryCount = 0;
+  let transientRetryBudget = MAX_TRANSIENT_RETRIES;
+  // Wall-clock anchor set at the first transient consult so the 90s budget
+  // counts failed-request time, not only backoff sleeps; a slow provider
+  // timeout consumes budget instead of extending the retry window.
+  let transientRetryWindowStartMs: number | null = null;
 
   const sleepForRetry = async (delayMs: number) => {
     try {
@@ -146,14 +148,13 @@ export function createEmbeddedRunFailoverRetryController(input: {
 
   return {
     overloadProfileRotationLimit,
-    get consecutiveSameModelRateLimitRetries() {
-      return consecutiveSameModelRateLimitRetries;
+    get transientRetryCount() {
+      return transientRetryCount;
     },
-    resetSameModelRateLimitRetries: () => {
-      consecutiveSameModelRateLimitRetries = resolveNextSameModelRateLimitRetryCount({
-        retriesSoFar: consecutiveSameModelRateLimitRetries,
-        retriedSameModelRateLimit: false,
-      });
+    // Saved retry.provider.maxRetries keeps its meaning as the transient-retry
+    // attempt budget, now owned here instead of per-SDK-request.
+    setTransientRetryBudget: (maxRetries?: number) => {
+      transientRetryBudget = maxRetries ?? MAX_TRANSIENT_RETRIES;
     },
     advanceAuthProfile: input.advanceAuthProfile,
     advanceRateLimitAuthProfile: async (context: RateLimitAuthProfileContext): Promise<boolean> => {
@@ -218,36 +219,42 @@ export function createEmbeddedRunFailoverRetryController(input: {
           }
         : null;
     },
-    maybeBackoffBeforeOverloadFailover: async (reason: FailoverReason | null) => {
-      if (reason !== "overloaded" || overloadFailoverBackoffMs <= 0) {
-        return;
-      }
-      log.warn(
-        `overload backoff before failover for ${provider}/${modelId}: delayMs=${overloadFailoverBackoffMs}`,
-      );
-      await sleepForRetry(overloadFailoverBackoffMs);
-    },
-    maybeRetrySameModelRateLimit: async (retry?: {
-      retryAfterSeconds?: number;
+    maybeRetryTransient: async (retry: {
+      reason: FailoverReason;
+      retryAfterMs?: number;
     }): Promise<boolean> => {
       if (
-        rateLimitProfileRotations >= rateLimitProfileRotationLimit ||
-        consecutiveSameModelRateLimitRetries >= MAX_SAME_MODEL_RATE_LIMIT_RETRIES
+        retry.reason !== "rate_limit" &&
+        retry.reason !== "overloaded" &&
+        retry.reason !== "server_error" &&
+        retry.reason !== "timeout"
       ) {
         return false;
       }
-      const delayMs = resolveSameModelRateLimitRetryDelayMs({
-        retriesSoFar: consecutiveSameModelRateLimitRetries,
-        retryAfterSeconds: retry?.retryAfterSeconds,
+      if (transientRetryCount >= transientRetryBudget) {
+        return false;
+      }
+      const nowMs = Date.now();
+      transientRetryWindowStartMs ??= nowMs;
+      const delayMs = resolveTransientRetryDelayMs({
+        retryNumber: transientRetryCount + 1,
+        retryAfterMs: retry.retryAfterMs,
+        elapsedMs: nowMs - transientRetryWindowStartMs,
       });
+      if (delayMs === undefined) {
+        // The window in resolveTransientRetryDelayMs outranks the attempt budget when
+        // requests are slow, so record the truncation: a configured maxRetries that
+        // never runs must be diagnosable. Failover is the better recovery past here.
+        log.warn(
+          `transient retry window elapsed for ${sanitizeForLog(provider)}/${sanitizeForLog(modelId)} after ${transientRetryCount}/${transientRetryBudget} retries; failing over`,
+        );
+        return false;
+      }
       log.warn(
-        `rate-limit same-model retry ${consecutiveSameModelRateLimitRetries + 1}/${MAX_SAME_MODEL_RATE_LIMIT_RETRIES} for ${sanitizeForLog(provider)}/${sanitizeForLog(modelId)}: delayMs=${delayMs}`,
+        `transient same-model retry ${transientRetryCount + 1}/${transientRetryBudget} for ${sanitizeForLog(provider)}/${sanitizeForLog(modelId)} reason=${retry.reason}: delayMs=${delayMs}`,
       );
       await sleepForRetry(delayMs);
-      consecutiveSameModelRateLimitRetries = resolveNextSameModelRateLimitRetryCount({
-        retriesSoFar: consecutiveSameModelRateLimitRetries,
-        retriedSameModelRateLimit: true,
-      });
+      transientRetryCount += 1;
       return true;
     },
   };

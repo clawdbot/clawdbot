@@ -1,17 +1,6 @@
-// Control UI module implements app tool stream behavior.
 import { asNullableObjectRecord as readRecord } from "@openclaw/normalization-core/record-coerce";
-import {
-  normalizeNullableString as toTrimmedString,
-  normalizeLowercaseStringOrEmpty,
-} from "@openclaw/normalization-core/string-coerce";
-import { stripInlineDirectiveTagsForDelivery } from "../../../../src/utils/directive-tags.js";
-import type { ExecApprovalRequest } from "../../app/exec-approval.ts";
-import type {
-  ChatGuardianNotice,
-  ChatQueueItem,
-  ChatStreamSegment,
-  ToolApprovalReview,
-} from "../../lib/chat/chat-types.ts";
+import { normalizeNullableString as toTrimmedString } from "@openclaw/normalization-core/string-coerce";
+import type { ChatGuardianNotice, ToolApprovalReview } from "../../lib/chat/chat-types.ts";
 import {
   MAX_TOOL_APPROVAL_REVIEWS,
   normalizeToolApprovalReview,
@@ -21,144 +10,19 @@ import {
   withToolApprovalReviews,
 } from "../../lib/chat/tool-approval-reviews.ts";
 import type { DiffStat } from "../../lib/chat/tool-call-diff.ts";
-import { formatUiError, formatUiExternalText } from "../../lib/format-error.ts";
 import { formatUnknownText, truncateText } from "../../lib/format.ts";
-import type { SessionCapability } from "../../lib/sessions/index.ts";
 import { uiSessionEventMatches } from "../../lib/sessions/session-key.ts";
-import type { ChatRunStartupState } from "./chat-run-startup.ts";
-import { readAssistantStreamSegmentIdentity } from "./chat-thread-run-identity.ts";
+import { reconcileChatRunStartup } from "./chat-run-startup.ts";
 import { rolloverChatStream } from "./stream-causal-boundary.ts";
+import type { AgentEventPayload, ToolStreamEntry, ToolStreamHost } from "./tool-stream-contract.ts";
 import { buildToolStreamIdentity } from "./tool-stream-identity.ts";
+import { handlePreambleProgress } from "./tool-stream-preamble.ts";
+import { handleStreamStatus, resolveAcceptedSession } from "./tool-stream-status.ts";
 
 const TOOL_STREAM_LIMIT = 50;
+const RUN_USAGE_LIMIT = 50;
 const TOOL_STREAM_THROTTLE_MS = 80;
 const TOOL_OUTPUT_CHAR_LIMIT = 120_000;
-
-type AgentEventPayload = {
-  runId: string;
-  seq: number;
-  stream: string;
-  ts: number;
-  sessionKey?: string;
-  agentId?: string;
-  data: Record<string, unknown>;
-};
-
-type SessionOperationEventPayload = {
-  operationId?: string;
-  operation?: string;
-  phase?: string;
-  sessionKey?: string;
-  agentId?: string;
-  ts?: number;
-  completed?: boolean;
-  reason?: string;
-};
-
-export type ToolStreamEntry = {
-  toolCallId: string;
-  runId: string;
-  sessionKey?: string;
-  name: string;
-  args?: unknown;
-  output?: string;
-  /** Structured result details (e.g. edit diff) captured from the result event. */
-  details?: unknown;
-  /** Monotonic edit counts received while the tool arguments stream. */
-  liveDiffStat?: DiffStat;
-  isError?: boolean;
-  exitCode?: number;
-  /** True once a result event landed, even when the output text is empty. */
-  resultReceived?: boolean;
-  startedAt: number;
-  receivedAt: number;
-  message: Record<string, unknown>;
-};
-
-export type ToolStreamHost = {
-  sessionKey: string;
-  assistantAgentId?: string | null;
-  agentsList?: { defaultId?: string | null } | null;
-  hello?: { snapshot?: unknown } | null;
-  chatRunId: string | null;
-  chatMessages?: unknown[];
-  chatRunUsageById?: Map<string, number>;
-  chatStream: string | null;
-  chatStreamStartedAt: number | null;
-  chatRunStartup?: ChatRunStartupState | null;
-  chatStreamSegments: ChatStreamSegment[];
-  toolStreamById: Map<string, ToolStreamEntry>;
-  toolStreamOrder: string[];
-  activityEventSeqById?: Map<string, number>;
-  chatToolMessages: Record<string, unknown>[];
-  guardianNotices?: ChatGuardianNotice[];
-  toolStreamSyncTimer: number | null;
-  knownAgentRunIds?: Set<string>;
-  waitingApprovalStatuses?: Map<string, WaitingApprovalStatus>;
-  waitingApprovalResolvedIds?: Set<string>;
-  requestUpdate?: () => void;
-  sessions: Pick<SessionCapability, "refreshReplacement">;
-};
-
-function resolveModelLabel(provider: unknown, model: unknown): string | null {
-  const modelValue = toTrimmedString(model);
-  if (!modelValue) {
-    return null;
-  }
-  const providerValue = toTrimmedString(provider);
-  if (providerValue) {
-    const prefix = `${providerValue}/`;
-    const trimmedModel = normalizeLowercaseStringOrEmpty(modelValue).startsWith(
-      normalizeLowercaseStringOrEmpty(prefix),
-    )
-      ? modelValue.slice(prefix.length).trim()
-      : modelValue;
-    return `${providerValue}/${trimmedModel || modelValue}`;
-  }
-  const slashIndex = modelValue.indexOf("/");
-  if (slashIndex > 0) {
-    const p = modelValue.slice(0, slashIndex).trim();
-    const m = modelValue.slice(slashIndex + 1).trim();
-    if (p && m) {
-      return `${p}/${m}`;
-    }
-  }
-  return modelValue;
-}
-
-function parseFallbackAttemptSummaries(summaries: unknown, attempts: unknown): string[] {
-  if (Array.isArray(summaries)) {
-    const formatted = summaries
-      .map((entry) => toTrimmedString(entry))
-      .filter((entry): entry is string => Boolean(entry))
-      .map((entry) => formatUiError(entry));
-    if (formatted.length > 0) {
-      return formatted;
-    }
-  }
-  if (!Array.isArray(attempts)) {
-    return [];
-  }
-  const out: string[] = [];
-  for (const entry of attempts) {
-    const item = readRecord(entry);
-    const provider = toTrimmedString(item?.provider);
-    const model = toTrimmedString(item?.model);
-    if (!provider || !model) {
-      continue;
-    }
-    const reason = formatUiError(
-      toTrimmedString(item?.reason)?.replace(/_/g, " ") ??
-        toTrimmedString(item?.code) ??
-        (typeof item?.status === "number" ? `HTTP ${item.status}` : null) ??
-        toTrimmedString(item?.error) ??
-        "error",
-    );
-    const modelRef = resolveModelLabel(provider, model) ?? `${provider}/${model}`;
-    out.push(`${modelRef}: ${formatUiExternalText(reason)}`);
-  }
-  return out;
-}
 
 function extractToolOutputText(value: unknown): string | null {
   const record = readRecord(value);
@@ -424,296 +288,6 @@ function acceptActivityEvent(host: ToolStreamHost, payload: AgentEventPayload): 
   return true;
 }
 
-export type CompactionStatus = {
-  phase: "active" | "retrying" | "complete";
-  runId: string | null;
-  startedAt: number | null;
-  completedAt: number | null;
-};
-
-export type FallbackStatus = {
-  phase?: "active" | "cleared";
-  selected: string;
-  active: string;
-  previous?: string;
-  reason?: string;
-  attempts: string[];
-  occurredAt: number;
-};
-
-export type WaitingApprovalStatus = {
-  approvalId: string;
-  toolCallId: string | null;
-  runId: string;
-};
-
-export function resolveActiveRunOutputTokens(params: {
-  localRunId?: string | null;
-  activeRunIds?: readonly string[];
-  usageByRun?: ReadonlyMap<string, number>;
-}): number | null {
-  const localUsage = params.localRunId ? params.usageByRun?.get(params.localRunId) : undefined;
-  if (localUsage !== undefined) {
-    return localUsage;
-  }
-  for (const runId of params.activeRunIds ?? []) {
-    const usage = params.usageByRun?.get(runId);
-    if (usage !== undefined) {
-      return usage;
-    }
-  }
-  return null;
-}
-
-export function resolveChatProjectionRunId(params: {
-  localRunId?: string | null;
-  activeRunIds?: readonly string[];
-  queue?: readonly ChatQueueItem[];
-}): string | null {
-  if (params.localRunId) {
-    return params.localRunId;
-  }
-  const activeRunIds = new Set(params.activeRunIds ?? []);
-  // A session row can lag local completion. Restore its run identity only when
-  // the durable outbox independently proves that the same send is reconnecting.
-  return (
-    params.queue?.find(
-      (item) =>
-        item.sendState === "waiting-reconnect" &&
-        typeof item.sendRunId === "string" &&
-        activeRunIds.has(item.sendRunId),
-    )?.sendRunId ?? null
-  );
-}
-
-type WaitingApprovalSnapshotHost = Pick<
-  ToolStreamHost,
-  | "sessionKey"
-  | "assistantAgentId"
-  | "agentsList"
-  | "hello"
-  | "knownAgentRunIds"
-  | "waitingApprovalStatuses"
-  | "waitingApprovalResolvedIds"
->;
-
-export function reconcileWaitingApprovalsFromSnapshot(
-  host: WaitingApprovalSnapshotHost,
-  queue: readonly ExecApprovalRequest[],
-): boolean {
-  const waiting = (host.waitingApprovalStatuses ??= new Map());
-  const resolvedIds = (host.waitingApprovalResolvedIds ??= new Set());
-  const allQueuedIds = new Set(queue.map((approval) => approval.id));
-  for (const approvalId of resolvedIds) {
-    if (!allQueuedIds.has(approvalId)) {
-      resolvedIds.delete(approvalId);
-    }
-  }
-  const matchingApprovals = queue.filter(
-    (approval) =>
-      approval.kind === "exec" &&
-      approval.request.sessionKey &&
-      uiSessionEventMatches(host, approval.request.sessionKey, approval.request.agentId),
-  );
-  const queuedIds = new Set(matchingApprovals.map((approval) => approval.id));
-  let changed = false;
-  for (const approvalId of waiting.keys()) {
-    if (!queuedIds.has(approvalId)) {
-      waiting.delete(approvalId);
-      changed = true;
-    }
-  }
-  if (waiting.size > 0) {
-    return changed;
-  }
-  // On a fresh mount the inline approval card still exposes the parked request in the transcript.
-  // Spinner-label hydration across mounts needs an authoritative Gateway run-state contract and
-  // is deliberately deferred.
-  for (const approval of matchingApprovals) {
-    const runId = toTrimmedString(approval.request.runId);
-    if (!runId || !host.knownAgentRunIds?.has(runId) || resolvedIds.has(approval.id)) {
-      continue;
-    }
-    waiting.set(approval.id, {
-      approvalId: approval.id,
-      toolCallId: null,
-      runId,
-    });
-    changed = true;
-  }
-  return changed;
-}
-
-type CompactionHost = ToolStreamHost & {
-  compactionStatus?: CompactionStatus | null;
-  compactionClearTimer?: number | null;
-  fallbackStatus?: FallbackStatus | null;
-  fallbackClearTimer?: number | null;
-};
-
-const COMPACTION_TOAST_DURATION_MS = 5000;
-const COMPACTION_ACTIVE_STALE_TIMEOUT_MS = 5 * 60_000;
-const FALLBACK_TOAST_DURATION_MS = 8000;
-
-function clearCompactionTimer(host: CompactionHost) {
-  if (host.compactionClearTimer != null) {
-    window.clearTimeout(host.compactionClearTimer);
-    host.compactionClearTimer = null;
-  }
-}
-
-function scheduleCompactionClear(
-  host: CompactionHost,
-  delayMs = COMPACTION_TOAST_DURATION_MS,
-  expected?: { phase?: CompactionStatus["phase"]; runId?: string | null },
-) {
-  host.compactionClearTimer = window.setTimeout(() => {
-    const current = host.compactionStatus;
-    if (expected?.phase && current?.phase !== expected.phase) {
-      return;
-    }
-    if (expected?.runId && current?.runId !== expected.runId) {
-      return;
-    }
-    host.compactionStatus = null;
-    host.compactionClearTimer = null;
-    host.requestUpdate?.();
-  }, delayMs);
-}
-
-function setCompactionStatus(
-  host: CompactionHost,
-  runId: string,
-  phase: CompactionStatus["phase"],
-) {
-  const completed = phase === "complete";
-  host.compactionStatus = {
-    phase,
-    runId,
-    startedAt:
-      phase === "active"
-        ? Date.now()
-        : (host.compactionStatus?.startedAt ?? (completed ? null : Date.now())),
-    completedAt: completed ? Date.now() : null,
-  };
-  scheduleCompactionClear(
-    host,
-    completed ? COMPACTION_TOAST_DURATION_MS : COMPACTION_ACTIVE_STALE_TIMEOUT_MS,
-    { phase, runId },
-  );
-}
-
-export function handleSessionOperationEvent(
-  host: ToolStreamHost,
-  payload?: SessionOperationEventPayload,
-) {
-  if (!payload || payload.operation !== "compact") {
-    return;
-  }
-  const sessionKey = toTrimmedString(payload.sessionKey);
-  const agentId = toTrimmedString(payload.agentId) ?? undefined;
-  if (!sessionKey || !uiSessionEventMatches(host, sessionKey, agentId)) {
-    return;
-  }
-
-  const operationId = toTrimmedString(payload.operationId) ?? `session-compact:${sessionKey}`;
-  const compactionHost = host as CompactionHost;
-
-  if (payload.phase === "start") {
-    clearCompactionTimer(compactionHost);
-    setCompactionStatus(compactionHost, operationId, "active");
-    return;
-  }
-
-  if (payload.phase !== "end") {
-    return;
-  }
-  if (
-    compactionHost.compactionStatus?.runId &&
-    compactionHost.compactionStatus.runId !== operationId
-  ) {
-    return;
-  }
-  clearCompactionTimer(compactionHost);
-  if (payload.completed === true) {
-    setCompactionStatus(compactionHost, operationId, "complete");
-    return;
-  }
-  compactionHost.compactionStatus = null;
-}
-
-function handleCompactionEvent(host: CompactionHost, payload: AgentEventPayload) {
-  const data = payload.data ?? {};
-  const phase = typeof data.phase === "string" ? data.phase : "";
-  const completed = data.completed === true;
-
-  clearCompactionTimer(host);
-
-  if (phase === "start") {
-    setCompactionStatus(host, payload.runId, "active");
-    return;
-  }
-  if (phase === "end") {
-    if (data.willRetry === true && completed) {
-      // Compaction already succeeded, but the run is still retrying.
-      // Keep that distinct state until the matching lifecycle end arrives.
-      setCompactionStatus(host, payload.runId, "retrying");
-      return;
-    }
-    if (completed) {
-      setCompactionStatus(host, payload.runId, "complete");
-      return;
-    }
-    host.compactionStatus = null;
-  }
-}
-
-function handleLifecycleCompactionEvent(host: CompactionHost, payload: AgentEventPayload) {
-  const data = payload.data ?? {};
-  const phase = toTrimmedString(data.phase);
-  if (phase !== "end" && phase !== "error") {
-    return;
-  }
-
-  // We scope lifecycle cleanup to the visible chat session first, then
-  // use runId only to match the specific compaction retry we started tracking.
-  const accepted = resolveAcceptedSession(host, payload, { allowSessionScopedWhenIdle: true });
-  if (!accepted.accepted) {
-    return;
-  }
-  if (host.compactionStatus?.phase !== "retrying") {
-    return;
-  }
-  if (host.compactionStatus.runId && host.compactionStatus.runId !== payload.runId) {
-    return;
-  }
-
-  setCompactionStatus(host, payload.runId, "complete");
-}
-
-function resolveAcceptedSession(
-  host: ToolStreamHost,
-  payload: AgentEventPayload,
-  options?: {
-    allowSessionScopedWhenIdle?: boolean;
-  },
-): { accepted: boolean; sessionKey?: string } {
-  const sessionKey = typeof payload.sessionKey === "string" ? payload.sessionKey : undefined;
-  if (sessionKey && !uiSessionEventMatches(host, sessionKey, toTrimmedString(payload.agentId))) {
-    return { accepted: false };
-  }
-  if (!host.chatRunId && options?.allowSessionScopedWhenIdle && sessionKey) {
-    return { accepted: true, sessionKey };
-  }
-  if (host.chatRunId && payload.runId !== host.chatRunId) {
-    return { accepted: false };
-  }
-  if (!host.chatRunId) {
-    return { accepted: false };
-  }
-  return { accepted: true, sessionKey };
-}
-
 function handleUsageEvent(host: ToolStreamHost, payload: AgentEventPayload): boolean {
   if (payload.stream !== "usage") {
     return false;
@@ -735,185 +309,18 @@ function handleUsageEvent(host: ToolStreamHost, payload: AgentEventPayload): boo
     return true;
   }
   const current = host.chatRunUsageById?.get(payload.runId);
-  if (current !== undefined && outputTokens <= current) {
+  if (current && payload.seq <= current.seq) {
     return true;
   }
-  host.chatRunUsageById = new Map(host.chatRunUsageById).set(payload.runId, outputTokens);
-  return true;
-}
-
-function handleLifecycleFallbackEvent(host: CompactionHost, payload: AgentEventPayload) {
-  const data = payload.data ?? {};
-  const phase = payload.stream === "fallback" ? "fallback" : toTrimmedString(data.phase);
-  if (payload.stream === "lifecycle" && phase !== "fallback" && phase !== "fallback_cleared") {
-    return;
+  // Keep the sequence with its count across stream resets and terminal events:
+  // recovery snapshots must not overwrite newer live usage or erase the recap.
+  const usageByRun = new Map(host.chatRunUsageById);
+  usageByRun.delete(payload.runId);
+  usageByRun.set(payload.runId, { outputTokens, seq: payload.seq });
+  for (const staleRunId of [...usageByRun.keys()].slice(0, -RUN_USAGE_LIMIT)) {
+    usageByRun.delete(staleRunId);
   }
-
-  const accepted = resolveAcceptedSession(host, payload, { allowSessionScopedWhenIdle: true });
-  if (!accepted.accepted) {
-    return;
-  }
-
-  const selected =
-    resolveModelLabel(data.selectedProvider, data.selectedModel) ??
-    resolveModelLabel(data.fromProvider, data.fromModel);
-  const active =
-    resolveModelLabel(data.activeProvider, data.activeModel) ??
-    resolveModelLabel(data.toProvider, data.toModel);
-  const previous =
-    resolveModelLabel(data.previousActiveProvider, data.previousActiveModel) ??
-    toTrimmedString(data.previousActiveModel);
-  if (!selected || !active) {
-    return;
-  }
-  if (phase === "fallback" && selected === active) {
-    return;
-  }
-
-  const rawReason = toTrimmedString(data.reasonSummary) ?? toTrimmedString(data.reason);
-  const reason = rawReason ? formatUiError(rawReason) : null;
-  const attempts = parseFallbackAttemptSummaries(data.attemptSummaries, data.attempts);
-
-  if (host.fallbackClearTimer != null) {
-    window.clearTimeout(host.fallbackClearTimer);
-    host.fallbackClearTimer = null;
-  }
-  host.fallbackStatus = {
-    phase: phase === "fallback_cleared" ? "cleared" : "active",
-    selected,
-    active: phase === "fallback_cleared" ? selected : active,
-    previous:
-      phase === "fallback_cleared"
-        ? (previous ?? (active !== selected ? active : undefined))
-        : undefined,
-    reason: reason ?? undefined,
-    attempts,
-    occurredAt: Date.now(),
-  };
-  host.fallbackClearTimer = window.setTimeout(() => {
-    host.fallbackStatus = null;
-    host.fallbackClearTimer = null;
-    host.requestUpdate?.();
-  }, FALLBACK_TOAST_DURATION_MS);
-}
-
-function handleLifecycleApprovalEvent(host: ToolStreamHost, payload: AgentEventPayload): boolean {
-  const phase = toTrimmedString(payload.data?.phase);
-  if (phase !== "waiting-approval" && phase !== "approval-resolved") {
-    return false;
-  }
-  const approvalId = toTrimmedString(payload.data?.approvalId);
-  const sessionKey = toTrimmedString(payload.sessionKey);
-  if (!approvalId || !sessionKey) {
-    return true;
-  }
-  if (phase === "waiting-approval") {
-    const waiting = (host.waitingApprovalStatuses ??= new Map());
-    host.waitingApprovalResolvedIds?.delete(approvalId);
-    waiting.set(approvalId, {
-      approvalId,
-      toolCallId: toTrimmedString(payload.data?.toolCallId),
-      runId: payload.runId,
-    });
-    return true;
-  }
-  (host.waitingApprovalResolvedIds ??= new Set()).add(approvalId);
-  host.waitingApprovalStatuses?.delete(approvalId);
-  return true;
-}
-
-function readPreambleProgressEvent(
-  payload: AgentEventPayload,
-): { text: string; itemId?: string } | null {
-  if (payload.stream !== "item") {
-    return null;
-  }
-  const data = payload.data ?? {};
-  if (data.kind !== "preamble") {
-    return null;
-  }
-  const rawItemId =
-    typeof data.itemId === "string" && data.itemId.trim()
-      ? data.itemId
-      : typeof data.id === "string" && data.id.trim()
-        ? data.id
-        : null;
-  const itemId = rawItemId?.trim();
-  const progressText = normalizePreambleProgressText(data.progressText);
-  if (!progressText && !itemId) {
-    return null;
-  }
-  return {
-    text: progressText,
-    ...(itemId ? { itemId } : {}),
-  };
-}
-
-function normalizePreambleProgressText(value: unknown): string {
-  if (typeof value !== "string") {
-    return "";
-  }
-  const stripped = stripInlineDirectiveTagsForDelivery(value).text.trim();
-  const normalized = stripped.replace(/^[\s*_`~]+|[\s*_`~]+$/gu, "").trim();
-  return /^NO_REPLY$/iu.test(normalized) ? "" : stripped;
-}
-
-function handlePreambleProgressEvent(host: ToolStreamHost, payload: AgentEventPayload): boolean {
-  const progress = readPreambleProgressEvent(payload);
-  if (!progress) {
-    return false;
-  }
-  // Preambles belong to the visible run; a sibling run must never replace,
-  // clear, or persist its commentary into this transcript.
-  if (!resolveAcceptedSession(host, payload, { allowSessionScopedWhenIdle: true }).accepted) {
-    return true;
-  }
-  const persisted =
-    progress.itemId &&
-    host.chatMessages?.some((message) => {
-      const identity = readAssistantStreamSegmentIdentity(message);
-      return identity?.itemId === progress.itemId && identity?.runId === payload.runId;
-    });
-  if (persisted) {
-    // A history snapshot or delayed live event can follow the durable row.
-    // Its exact run/item owner already renders the commentary.
-    host.chatStreamSegments = host.chatStreamSegments.filter(
-      (segment) => segment.itemId !== progress.itemId || segment.runId !== payload.runId,
-    );
-    return true;
-  }
-  if (progress.itemId && !progress.text.trim()) {
-    host.chatStreamSegments = host.chatStreamSegments.filter(
-      (segment) => segment.itemId !== progress.itemId,
-    );
-    return true;
-  }
-  const existingIndex = progress.itemId
-    ? host.chatStreamSegments.findIndex((segment) => segment.itemId === progress.itemId)
-    : -1;
-  if (existingIndex >= 0) {
-    const existing = host.chatStreamSegments[existingIndex];
-    if (!existing) {
-      return true;
-    }
-    host.chatStreamSegments = host.chatStreamSegments.map((segment, index) =>
-      index === existingIndex ? { ...segment, text: progress.text, runId: payload.runId } : segment,
-    );
-    return true;
-  }
-  const last = host.chatStreamSegments[host.chatStreamSegments.length - 1];
-  if (!progress.itemId && last && !last.toolCallId && last.text === progress.text) {
-    return true;
-  }
-  host.chatStreamSegments = [
-    ...host.chatStreamSegments,
-    {
-      text: progress.text,
-      ts: payload.ts,
-      runId: payload.runId,
-      ...(progress.itemId ? { itemId: progress.itemId } : {}),
-    },
-  ];
+  host.chatRunUsageById = usageByRun;
   return true;
 }
 
@@ -1068,36 +475,11 @@ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPaylo
     return true;
   }
 
-  // Handle compaction events
-  if (payload.stream === "compaction") {
-    handleCompactionEvent(host as CompactionHost, payload);
+  if (handleStreamStatus(host, payload)) {
     return true;
   }
 
-  if (payload.stream === "lifecycle") {
-    const phase = payload.data?.phase;
-    if (
-      (phase === "start" || phase === "end" || phase === "error") &&
-      host.chatRunUsageById?.has(payload.runId)
-    ) {
-      const usageByRun = new Map(host.chatRunUsageById);
-      usageByRun.delete(payload.runId);
-      host.chatRunUsageById = usageByRun;
-    }
-    if (handleLifecycleApprovalEvent(host, payload)) {
-      return true;
-    }
-    handleLifecycleCompactionEvent(host as CompactionHost, payload);
-    handleLifecycleFallbackEvent(host as CompactionHost, payload);
-    return true;
-  }
-
-  if (payload.stream === "fallback") {
-    handleLifecycleFallbackEvent(host as CompactionHost, payload);
-    return true;
-  }
-
-  if (handlePreambleProgressEvent(host, payload)) {
+  if (handlePreambleProgress(host, payload)) {
     return true;
   }
 
@@ -1124,7 +506,7 @@ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPaylo
       ? entry.name
       : (toTrimmedString(data.name) ?? entry?.name ?? "tool");
   if (phase === "start" && payload.runId === host.chatRunId) {
-    host.chatRunStartup = { state: "activity", runId: payload.runId };
+    reconcileChatRunStartup(host, { state: "activity", runId: payload.runId });
   }
   const args = phase === "start" ? data.args : undefined;
   const output =
@@ -1216,4 +598,3 @@ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPaylo
   scheduleToolStreamSync(host, phase === "result");
   return true;
 }
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

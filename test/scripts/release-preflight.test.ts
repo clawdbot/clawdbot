@@ -135,6 +135,7 @@ function makeIsolatedPreflightFixture(params: Parameters<typeof makeReleaseFixtu
     "scripts/lib/failed-trailer.mts",
     "scripts/lib/local-check-runtime.mts",
     "scripts/lib/managed-child-process.mts",
+    "scripts/lib/vitest-resource-ownership.mts",
     "scripts/lib/release-version.mjs",
     "scripts/lib/tsx-cli-shim.mjs",
     "scripts/lib/windows-taskkill.mjs",
@@ -192,7 +193,7 @@ describe("scripts/release-preflight.mjs", () => {
     const result = runIsolatedPreflight(["--macos-versions-only", "--check"]);
 
     expect(result.status).toBe(1);
-    expect(result.stderr).toContain("Cannot find module 'tsx'");
+    expect(result.stderr).toContain("Cannot find module 'tsx/esm'");
     expect(result.stderr).toContain("[release-preflight] FAILED (exit 1)");
   });
 

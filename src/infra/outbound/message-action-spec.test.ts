@@ -19,6 +19,7 @@ describe("actionRequiresTarget", () => {
     ["channel-info", true],
     ["broadcast", false],
     ["search", false],
+    ["conversation-open", false],
   ])("returns %s for %s", (action, expected) => {
     expect(actionRequiresTarget(action as never)).toBe(expected);
   });

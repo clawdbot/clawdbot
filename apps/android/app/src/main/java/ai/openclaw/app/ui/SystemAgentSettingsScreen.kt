@@ -97,7 +97,7 @@ internal fun SystemAgentSettingsScreen(
       }
 
       when (state.access) {
-        SystemAgentChatAccess.Ready ->
+        SystemAgentChatAccess.Ready -> {
           SystemAgentConversation(
             state = state,
             onInputChange = viewModel::setSystemAgentChatInput,
@@ -107,7 +107,11 @@ internal fun SystemAgentSettingsScreen(
             onRestart = viewModel::restartSystemAgentChat,
             onOpenChat = viewModel::openSystemAgentChatHandoff,
           )
-        else -> SystemAgentAccessGate(state = state)
+        }
+
+        else -> {
+          SystemAgentAccessGate(state = state)
+        }
       }
     }
   }
@@ -245,7 +249,7 @@ private fun SystemAgentQuestionCard(
 ) {
   ClawPanel(modifier = Modifier.fillMaxWidth()) {
     Column(modifier = Modifier.fillMaxWidth().padding(12.dp), verticalArrangement = Arrangement.spacedBy(9.dp)) {
-      Text(question.header.uppercase(), style = ClawTheme.type.caption, color = ClawTheme.colors.primary)
+      Text(question.header.uppercase(), style = ClawTheme.type.caption, color = ClawTheme.colors.text)
       Text(question.question, style = ClawTheme.type.body, color = ClawTheme.colors.text)
       question.options.forEach { option ->
         ClawSecondaryButton(

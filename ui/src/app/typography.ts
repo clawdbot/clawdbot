@@ -50,6 +50,10 @@ export const THEME_TYPEFACES = {
   tide: { ui: "ibm-plex-sans", chat: "ibm-plex-sans" },
   beacon: { ui: "atkinson-hyperlegible", chat: "atkinson-hyperlegible" },
   phosphor: { ui: "jetbrains-mono", chat: "jetbrains-mono" },
+  crt: { ui: "jetbrains-mono", chat: "jetbrains-mono" },
+  manuscript: { ui: "lora", chat: "lora" },
+  rose: { ui: "dm-sans", chat: "dm-sans" },
+  miami: { ui: "space-grotesk", chat: "space-grotesk" },
   custom: { ui: "system", chat: "system" },
 } satisfies Record<ThemeName, TypefacePair>;
 
@@ -89,6 +93,10 @@ export function syncTypefaceStylesheets(faces: TypefacePair): void {
   }
   loadTypefaceStylesheet(faces.ui);
   loadTypefaceStylesheet(faces.chat);
+  // base.css --mono names JetBrains Mono for every theme's code spans, but only
+  // the @font-face declaration here makes that true; the woff2 itself downloads
+  // lazily on the first rendered code glyph, so this costs one small stylesheet.
+  loadTypefaceStylesheet("jetbrains-mono");
 }
 
 export function loadTypefaceSpecimens(): void {

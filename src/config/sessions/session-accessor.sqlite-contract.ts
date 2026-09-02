@@ -99,17 +99,19 @@ export type TranscriptEventAppendOptions = {
   beforeCommitInTransaction?: () => void;
 };
 
-export type TranscriptEventAppendError =
+export type TranscriptAppendRefusal =
   | {
-      actualSessionId: string;
+      actualSessionIdHash: string;
+      agentIdHash: string;
       code: "session-rebound";
-      expectedSessionId: string;
-      sessionKey: string;
+      expectedSessionIdHash: string;
+      sessionKeyHash: string;
     }
   | {
+      agentIdHash: string;
       code: "session-entry-missing";
-      expectedSessionId: string;
-      sessionKey: string;
+      expectedSessionIdHash: string;
+      sessionKeyHash: string;
     };
 
 export type SessionTranscriptStats = {
@@ -174,6 +176,11 @@ export type LatestTranscriptAssistantMessage = {
 
 export type SessionTranscriptTurnMessageAppend = TranscriptMessageAppendOptions<unknown> & {
   shouldAppend?: (context: SessionTranscriptTurnWriteContext) => Promise<boolean> | boolean;
+  /**
+   * Rechecks the newest assistant row after the write transaction begins.
+   * Direct synchronous writers bypass the process queue, so prepared facts can be stale.
+   */
+  shouldAppendInTransaction?: (latestAssistantMessage: unknown) => boolean;
 };
 
 export type SessionTranscriptTurnWriteContext = {

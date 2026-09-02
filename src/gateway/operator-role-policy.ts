@@ -8,6 +8,7 @@ import type { GatewayOperatorRoleDefinition } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getUserProfileRole } from "../state/user-profiles.js";
+import { bumpGatewayAccessRevision } from "./gateway-access-revision.js";
 import { gatewayClientSessionCreator } from "./server-methods/gateway-client-identity.js";
 import {
   resolveOperatorSessionCreation,
@@ -56,6 +57,7 @@ function readOperatorRoleAssignment(profileId: string): string | null {
 
 /** Drops a changed assignment so subsequent authorization reads the durable owner. */
 export function invalidateOperatorRolePolicy(profileId: string): void {
+  bumpGatewayAccessRevision();
   operatorRoleAssignments.delete(profileId);
   for (const reported of reportedUnknownAssignments) {
     if (reported.startsWith(`${profileId}:`)) {
@@ -69,6 +71,22 @@ export function resolveOperatorRolePolicyForProfile(
   profileId: string | undefined,
   cfg: OpenClawConfig,
 ): GatewayOperatorRoleDefinition | undefined {
+  if (!cfg.gateway?.roles) {
+    return undefined;
+  }
+  return resolveOperatorRolePolicyForAssignment(
+    profileId,
+    profileId ? readOperatorRoleAssignment(profileId) : null,
+    cfg,
+  );
+}
+
+/** Transaction owners supply the authoritative row without consulting the assignment cache. */
+export function resolveOperatorRolePolicyForAssignment(
+  profileId: string | undefined,
+  assignedRole: string | null,
+  cfg: OpenClawConfig,
+): GatewayOperatorRoleDefinition | undefined {
   const roles = cfg.gateway?.roles;
   if (!roles) {
     return undefined;
@@ -76,7 +94,6 @@ export function resolveOperatorRolePolicyForProfile(
   if (!profileId) {
     return deniedOperatorRole;
   }
-  const assignedRole = readOperatorRoleAssignment(profileId);
   if (assignedRole && Object.hasOwn(roles.definitions, assignedRole)) {
     return roles.definitions[assignedRole];
   }
@@ -94,7 +111,7 @@ export function resolveOperatorRolePolicyForProfile(
   return (roles.default ? roles.definitions[roles.default] : undefined) ?? deniedOperatorRole;
 }
 
-/** Derives immutable session isolation only from its authenticated human creator. */
+/** Preserve human-derived restrictions, including ambiguous historical actors; this is not identity proof. */
 export function resolveCreatorSandbox(
   cfg: OpenClawConfig,
   creation: { actor?: SessionCreatedActor } | undefined,

@@ -100,7 +100,7 @@ function renderSidebarOwnerFilter(
 }
 
 export function renderSidebarSessionGroupMenu(params: {
-  menu: SidebarSessionGroupMenuState | null;
+  menu: SidebarSessionGroupMenuState;
   trigger: HTMLElement | null;
   connected: boolean;
   groupDefaultsUnavailable?: boolean;
@@ -109,9 +109,6 @@ export function renderSidebarSessionGroupMenu(params: {
   onClose: (restoreFocus: boolean) => void;
 }) {
   const menu = params.menu;
-  if (!menu) {
-    return nothing;
-  }
   return keyed(
     menu,
     html`
@@ -188,7 +185,7 @@ export function renderSidebarSessionGroupMenu(params: {
 }
 
 export function renderSidebarCatalogViewMenu(params: {
-  position: { x: number; y: number } | null;
+  position: { x: number; y: number };
   trigger: HTMLElement | null;
   grouping: CatalogProjectGrouping;
   owners: readonly SessionOwnerOption[];
@@ -201,9 +198,6 @@ export function renderSidebarCatalogViewMenu(params: {
   onClose: (restoreFocus: boolean) => void;
 }) {
   const position = params.position;
-  if (!position) {
-    return nothing;
-  }
   const groupingOptions = [
     { grouping: "project", label: t("chat.sidebar.catalogGroupByProject") },
     { grouping: "person", label: t("chat.sidebar.catalogGroupByPerson") },
@@ -260,7 +254,7 @@ export function renderSidebarCatalogViewMenu(params: {
 }
 
 export function renderSidebarSessionSortMenu(params: {
-  position: { x: number; y: number } | null;
+  position: { x: number; y: number };
   trigger: HTMLElement | null;
   grouping: SidebarSessionsGrouping;
   sortMode: SidebarSessionSortMode;
@@ -269,6 +263,7 @@ export function renderSidebarSessionSortMenu(params: {
   showCron: boolean;
   showPreview: boolean;
   showSystem: boolean;
+  hideEmptyGroups: boolean;
   owners: readonly SessionOwnerOption[];
   ownerFilterId: string | null;
   involvingMe: boolean;
@@ -280,12 +275,10 @@ export function renderSidebarSessionSortMenu(params: {
   onShowCronChange: (show: boolean) => void;
   onShowPreviewChange: (show: boolean) => void;
   onShowSystemChange: (show: boolean) => void;
+  onHideEmptyGroupsChange: (hide: boolean) => void;
   onClose: (restoreFocus: boolean) => void;
 }) {
   const position = params.position;
-  if (!position) {
-    return nothing;
-  }
   const groupingOptions = [
     { grouping: "category", label: t("sessionsView.groupByCategory") },
     { grouping: "project", label: t("chat.sidebar.catalogGroupByProject") },
@@ -322,6 +315,8 @@ export function renderSidebarSessionSortMenu(params: {
             params.onShowCronChange(!params.showCron);
           } else if (value === "show-system") {
             params.onShowSystemChange(!params.showSystem);
+          } else if (value === "hide-empty-groups") {
+            params.onHideEmptyGroupsChange(!params.hideEmptyGroups);
           }
         }}
         @keydown=${(event: KeyboardEvent) =>
@@ -402,6 +397,17 @@ export function renderSidebarSessionSortMenu(params: {
           <span class="session-menu__text">${t("sessionsView.showSystemSessions")}</span>
           <span slot="details" class="session-menu__check" aria-hidden="true"
             >${params.showSystem ? icons.check : nothing}</span
+          >
+        </wa-dropdown-item>
+        <wa-dropdown-item
+          class="sidebar-session-sort-menu__item"
+          type="checkbox"
+          value="hide-empty-groups"
+          .checked=${params.hideEmptyGroups}
+        >
+          <span class="session-menu__text">${t("sessionsView.hideEmptyGroups")}</span>
+          <span slot="details" class="session-menu__check" aria-hidden="true"
+            >${params.hideEmptyGroups ? icons.check : nothing}</span
           >
         </wa-dropdown-item>
       </wa-dropdown>

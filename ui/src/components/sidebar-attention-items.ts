@@ -30,6 +30,7 @@ type SidebarAttentionContent = Omit<
 
 export function buildSidebarAttentionEntries(params: {
   cronJobs: readonly CronJob[];
+  cronSchedulerEnabled: boolean | null;
   cronOwnerByJobId?: ReadonlyMap<string, string>;
   modelAuthStatus: ModelAuthStatusResult | null;
   modelAuthAgentId?: string | null;
@@ -94,6 +95,7 @@ export function buildSidebarAttentionEntries(params: {
   const overdueCron = params.cronJobs
     .filter(
       (job) =>
+        params.cronSchedulerEnabled !== false &&
         job.enabled &&
         !isCronJobRunning(job) &&
         job.state?.nextRunAtMs != null &&

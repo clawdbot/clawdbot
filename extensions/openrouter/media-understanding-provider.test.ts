@@ -1,8 +1,4 @@
 // Openrouter tests cover media understanding provider plugin behavior.
-import {
-  describeImageWithModel,
-  describeImagesWithModel,
-} from "openclaw/plugin-sdk/media-understanding";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { openrouterMediaUnderstandingProvider } from "./media-understanding-provider.js";
 
@@ -62,8 +58,6 @@ describe("openrouter media understanding provider", () => {
         audio: "openai/whisper-large-v3-turbo",
       },
       autoPriority: { audio: 35 },
-      describeImage: describeImageWithModel,
-      describeImages: describeImagesWithModel,
       transcribeAudio: transcribeOpenRouterAudio,
     });
   });

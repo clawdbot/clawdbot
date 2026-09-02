@@ -17,12 +17,6 @@ export const TRANSCRIPT_EXPORT_FILE_NAMES = new Set([
 
 export function safeTranscriptPathSegment(value: string): string {
   let segment = value.replace(/[^a-zA-Z0-9._-]+/g, "-").replace(/^-+|-+$/g, "");
-  if (segment === ".") {
-    return "%2E";
-  }
-  if (segment === "..") {
-    return "%2E%2E";
-  }
   if (!segment) {
     return "session";
   }

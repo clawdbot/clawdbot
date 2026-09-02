@@ -640,7 +640,7 @@ describe("runNodeHost", () => {
     );
 
     expect(lastCapturedOptions()?.workerRuns).toBeUndefined();
-    expect(stderr).toHaveBeenCalledWith(
+    expect(stderr).toHaveBeenCalledExactlyOnceWith(
       "node host worker hosting disabled: Docker or Podman is unavailable\n",
     );
     stderr.mockRestore();

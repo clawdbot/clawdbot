@@ -5,6 +5,7 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 source "$ROOT_DIR/scripts/lib/docker-e2e-image.sh"
+source "$ROOT_DIR/scripts/e2e/lib/prepublish-plugin-registry.sh"
 
 IMAGE_NAME="$(docker_e2e_resolve_image "openclaw-npm-telegram-live-e2e" OPENCLAW_NPM_TELEGRAM_LIVE_E2E_IMAGE)"
 DOCKER_TARGET="${OPENCLAW_NPM_TELEGRAM_DOCKER_TARGET:-build}"
@@ -34,8 +35,10 @@ resolve_credential_source() {
   if [ -n "${CI:-}" ] && [ -n "${OPENCLAW_QA_CONVEX_SITE_URL:-}" ]; then
     if [ -n "${OPENCLAW_QA_CONVEX_SECRET_CI:-}" ] || [ -n "${OPENCLAW_QA_CONVEX_SECRET_MAINTAINER:-}" ]; then
       printf "convex"
+      return 0
     fi
   fi
+  printf "convex"
 }
 
 resolve_credential_role() {
@@ -156,9 +159,8 @@ else
   validate_openclaw_package_spec "$PACKAGE_SPEC"
 fi
 if [ -n "$resolved_prepublish_plugin_registry_dir" ]; then
-  prepublish_registry_mount_args=(
-    -v "$resolved_prepublish_plugin_registry_dir:/tmp/openclaw-prepublish-plugin-registry:ro"
-  )
+  openclaw_prepublish_plugin_registry_configure_docker_args "$resolved_prepublish_plugin_registry_dir"
+  prepublish_registry_mount_args=("${OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DOCKER_ARGS[@]}")
 fi
 if [ -z "$PACKAGE_LABEL" ]; then
   if [ -n "$resolved_package_tgz" ]; then
@@ -208,24 +210,8 @@ validate_credential_preflight() {
     return 0
   fi
 
-  local missing=()
-  for key in \
-    OPENCLAW_QA_TELEGRAM_GROUP_ID \
-    OPENCLAW_QA_TELEGRAM_DRIVER_BOT_TOKEN \
-    OPENCLAW_QA_TELEGRAM_SUT_BOT_TOKEN; do
-    if [ -z "${!key:-}" ]; then
-      missing+=("$key")
-    fi
-  done
-  if [ "${#missing[@]}" -gt 0 ]; then
-    {
-      echo "Missing required Telegram QA credential env before Docker work: ${missing[*]}"
-      echo "Use one of:"
-      echo "  direct Telegram env: OPENCLAW_QA_TELEGRAM_GROUP_ID, OPENCLAW_QA_TELEGRAM_DRIVER_BOT_TOKEN, OPENCLAW_QA_TELEGRAM_SUT_BOT_TOKEN"
-      echo "  Convex env: OPENCLAW_NPM_TELEGRAM_CREDENTIAL_SOURCE=convex plus OPENCLAW_QA_CONVEX_SITE_URL and a role secret"
-    } >&2
-    exit 1
-  fi
+  echo "Telegram package QA requires Convex credential mode." >&2
+  exit 1
 }
 
 validate_credential_preflight
@@ -275,15 +261,6 @@ fi
 if [ -n "$credential_role" ]; then
   docker_env+=(-e OPENCLAW_QA_CREDENTIAL_ROLE="$credential_role")
 fi
-if [ -n "$resolved_prepublish_plugin_registry_dir" ]; then
-  docker_env+=(
-    -e OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR=/tmp/openclaw-prepublish-plugin-registry
-    -e OPENCLAW_DOCKER_E2E_SELECTED_SHA="${OPENCLAW_DOCKER_E2E_SELECTED_SHA:?missing selected SHA}"
-    -e OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_CANDIDATE_VERSION="${OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_CANDIDATE_VERSION:?missing candidate version}"
-    -e OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_MANIFEST_SHA256="${OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_MANIFEST_SHA256:?missing manifest SHA-256}"
-  )
-fi
-
 for key in \
   OPENAI_API_KEY \
   ANTHROPIC_API_KEY \
@@ -292,9 +269,6 @@ for key in \
   OPENCLAW_LIVE_OPENAI_KEY \
   OPENCLAW_LIVE_ANTHROPIC_KEY \
   OPENCLAW_LIVE_GEMINI_KEY \
-  OPENCLAW_QA_TELEGRAM_GROUP_ID \
-  OPENCLAW_QA_TELEGRAM_DRIVER_BOT_TOKEN \
-  OPENCLAW_QA_TELEGRAM_SUT_BOT_TOKEN \
   OPENCLAW_QA_CONVEX_SITE_URL \
   OPENCLAW_QA_CONVEX_SECRET_CI \
   OPENCLAW_QA_CONVEX_SECRET_MAINTAINER \
@@ -334,6 +308,7 @@ run_logged_print_heartbeat "npm-telegram-package-install" 60 docker_e2e_docker_r
   -e OPENCLAW_NPM_TELEGRAM_PACKAGE_SET="$([ -n "$resolved_package_dir" ] && printf 1 || printf 0)" \
   ${package_mount_args[@]+"${package_mount_args[@]}"} \
   ${registry_helper_mount_args[@]+"${registry_helper_mount_args[@]}"} \
+  ${prepublish_registry_mount_args[@]+"${prepublish_registry_mount_args[@]}"} \
   -v "$npm_prefix_host:/npm-global" \
   -i "$IMAGE_NAME" bash -s <<'EOF'
 set -euo pipefail
@@ -388,7 +363,7 @@ process.stdin.on("end", () => {
   done
   registry_port_file="$(mktemp)"
   registry_log="$(mktemp)"
-  OPENCLAW_NPM_REGISTRY_UPSTREAM=https://registry.npmjs.org \
+  OPENCLAW_NPM_REGISTRY_UPSTREAM="${OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_URL:-https://registry.npmjs.org}" \
     node /tmp/openclaw-e2e/lib/plugins/npm-registry-server.mjs \
     "$registry_port_file" \
     "${registry_args[@]}" >"$registry_log" 2>&1 &
@@ -455,9 +430,9 @@ run_logged_print_heartbeat "npm-telegram-live-suite" 60 docker_e2e_run_with_harn
   -v "$ROOT_DIR/node_modules:/trusted-harness/node_modules:ro" \
   -v "$ROOT_DIR/packages:/app/packages:ro" \
   -v "$ROOT_DIR/extensions:/app/extensions:ro" \
+  -v "$ROOT_DIR/.agents:/app/.agents:ro" \
   -v "$ROOT_DIR/taxonomy.yaml:/app/taxonomy.yaml:ro" \
   -v "$ROOT_DIR/qa/scenarios:/app/qa/scenarios:ro" \
-  -v "$ROOT_DIR/taxonomy.yaml:/app/taxonomy.yaml:ro" \
   ${prepublish_registry_mount_args[@]+"${prepublish_registry_mount_args[@]}"} \
   -v "$npm_prefix_host:/npm-global" \
   -i "$IMAGE_NAME" bash -s <<'EOF'
@@ -484,6 +459,7 @@ dump_hotpath_logs() {
   echo "installed-package onboarding recovery hot path failed with exit code $status" >&2
   for file in \
     /tmp/openclaw-npm-telegram-onboard.json \
+    /tmp/openclaw-npm-telegram-codex-install.log \
     /tmp/openclaw-npm-telegram-channel-add.log \
     /tmp/openclaw-npm-telegram-doctor-fix.log \
     /tmp/openclaw-npm-telegram-doctor-check.log \
@@ -564,6 +540,10 @@ if [ "${OPENCLAW_NPM_TELEGRAM_SKIP_HOTPATH:-0}" != "1" ]; then
     hotpath_model_value="$OPENAI_API_KEY"
   fi
   hotpath_channel_value="$(printf '%s:%s' 123456 "$hotpath_placeholder")"
+  # Non-interactive onboarding cannot approve plugin capabilities. This release
+  # harness explicitly accepts the staged Codex artifact before testing setup.
+  openclaw_e2e_run_command "$sut_command" plugins install @openclaw/codex \
+    --accept-capabilities >/tmp/openclaw-npm-telegram-codex-install.log 2>&1 </dev/null
   OPENAI_API_KEY="$hotpath_model_value" openclaw_e2e_run_command "$sut_command" onboard \
     --non-interactive --accept-risk \
     --mode local \

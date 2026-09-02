@@ -4,12 +4,11 @@ import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import { SIDEBAR_SESSION_ROSTER_LIMIT } from "../../../src/shared/session-list-limits.ts";
 import type { ApplicationContext } from "../app/context.ts";
-import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Control UI warm owner-first refresh" });
 const captureProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
-const proofDir = path.join(process.cwd(), ".artifacts", "control-ui-e2e", "session-owner-warm");
 
 function sessionRow(ownerId: string, key: string, label: string, updatedAt: number) {
   const owner = {
@@ -42,10 +41,10 @@ async function captureSidebar(page: Page, fileName: string) {
   if (!captureProof) {
     return;
   }
-  await mkdir(proofDir, { recursive: true });
+  await mkdir(path.join(suite.artifactDir, "session-owner-warm"), { recursive: true });
   await page.locator(".sidebar-sessions").screenshot({
     animations: "disabled",
-    path: path.join(proofDir, fileName),
+    path: path.join(path.join(suite.artifactDir, "session-owner-warm"), fileName),
   });
 }
 
@@ -54,7 +53,12 @@ suite.define(() => {
     const context = await suite.browser.newContext({
       viewport: { height: 800, width: 1200 },
       ...(captureProof
-        ? { recordVideo: { dir: proofDir, size: { height: 800, width: 1200 } } }
+        ? {
+            recordVideo: {
+              dir: path.join(suite.artifactDir, "session-owner-warm"),
+              size: { height: 800, width: 1200 },
+            },
+          }
         : {}),
     });
     const page = await context.newPage();
@@ -71,7 +75,7 @@ suite.define(() => {
     });
 
     try {
-      await page.goto(`${suite.server?.baseUrl ?? ""}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:ada"));
       const ada = page.locator('[data-session-key="agent:main:ada"]');
       const bob = page.locator('[data-session-key="agent:main:bob"]');
       await ada.waitFor();

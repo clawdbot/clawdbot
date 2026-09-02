@@ -3,8 +3,6 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
-  createEffectiveEnableStateResolver,
-  createPluginEnableStateResolver,
   resolveMemorySlotDecisionShared,
   resolvePluginActivationDecisionShared,
   toPluginActivationState,
@@ -39,11 +37,25 @@ const BUILT_IN_PLUGIN_ALIAS_LOOKUP = new Map<string, string>([
   ...BUILT_IN_PLUGIN_ALIAS_FALLBACKS,
   ...BUILT_IN_PLUGIN_ALIAS_FALLBACKS.map(([, pluginId]) => [pluginId, pluginId] as const),
 ]);
+const RETIRED_PLUGIN_IDS = new Set([
+  "google-antigravity-auth",
+  "google-gemini-cli-auth",
+  "skill-workshop",
+]);
 
 /** Normalizes user/config plugin ids into the canonical lowercase key form. */
 export function normalizePluginId(id: string): string {
   const normalized = normalizeOptionalLowercaseString(id) ?? "";
   return BUILT_IN_PLUGIN_ALIAS_LOOKUP.get(normalized) ?? normalized;
+}
+
+export function isRetiredPluginId(id: string): boolean {
+  return RETIRED_PLUGIN_IDS.has(normalizePluginId(id));
+}
+
+/** Identifies the credential-free marker that records an explicit plugin disable decision. */
+export function isExplicitPluginDisableMarker(value: unknown): boolean {
+  return isRecord(value) && value.enabled === false && Object.keys(value).length === 1;
 }
 
 export const normalizePluginsConfig = (
@@ -199,7 +211,7 @@ export function isTestDefaultMemorySlotDisabled(
   return true;
 }
 
-export function resolvePluginActivationState(params: {
+function resolvePluginActivationState(params: {
   id: string;
   origin: PluginOrigin;
   config: NormalizedPluginsConfig;
@@ -223,10 +235,17 @@ export function resolvePluginActivationState(params: {
   );
 }
 
-export const resolveEnableState = createPluginEnableStateResolver<
-  NormalizedPluginsConfig,
-  PluginOrigin
->(resolvePluginActivationState);
+function toEnableStateResult(state: PluginActivationState): { enabled: boolean; reason?: string } {
+  return state.enabled ? { enabled: true } : { enabled: false, reason: state.reason };
+}
+
+export const resolveEnableState = (
+  id: string,
+  origin: PluginOrigin,
+  config: NormalizedPluginsConfig,
+  enabledByDefault?: boolean,
+): { enabled: boolean; reason?: string } =>
+  toEnableStateResult(resolvePluginActivationState({ id, origin, config, enabledByDefault }));
 
 type EffectiveActivationParams = {
   id: string;
@@ -237,10 +256,10 @@ type EffectiveActivationParams = {
   activationSource?: PluginActivationConfigSource;
 };
 
-export const resolveEffectiveEnableState =
-  createEffectiveEnableStateResolver<EffectiveActivationParams>(
-    resolveEffectivePluginActivationState,
-  );
+export const resolveEffectiveEnableState = (
+  params: EffectiveActivationParams,
+): { enabled: boolean; reason?: string } =>
+  toEnableStateResult(resolveEffectivePluginActivationState(params));
 
 export function resolveEffectivePluginActivationState(params: {
   id: EffectiveActivationParams["id"];

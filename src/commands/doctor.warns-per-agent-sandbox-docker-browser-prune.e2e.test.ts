@@ -82,7 +82,7 @@ describe("doctor command", () => {
 
     await doctorCommand(createDoctorRuntime(), { nonInteractive: true });
 
-    const noteTitles = terminalNoteMock.mock.calls.map(([_, title]) => title);
+    const noteTitles = terminalNoteMock.mock.calls.map(([, title]) => title);
     expect(noteTitles).not.toContain("Extra workspace");
 
     homedirSpy.mockRestore();

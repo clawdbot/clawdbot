@@ -105,6 +105,7 @@ vi.mock("../daemon/service-audit.js", () => ({
     gatewayPathNonMinimal: "gateway-path-nonminimal",
     gatewayPortMismatch: testServiceAuditCodes.gatewayPortMismatch,
     gatewayProxyEnvEmbedded: testServiceAuditCodes.gatewayProxyEnvEmbedded,
+    gatewayRuntimeProbeFailed: "gateway-runtime-probe-failed",
     gatewayTokenDrift: "gateway-token-drift",
     gatewayTokenEmbedded: "gateway-token-embedded",
     gatewayTokenMismatch: testServiceAuditCodes.gatewayTokenMismatch,
@@ -488,18 +489,26 @@ describe("maybeRepairGatewayServiceConfig", () => {
     }
   });
 
-  it("reports the installed Gateway heap limit and derivation", async () => {
-    const command = createGatewayCommand("/opt/openclaw/dist/index.js");
-    command.environment = { NODE_OPTIONS: "--max-old-space-size=6144" };
-    mocks.readCommand.mockResolvedValue(command);
-    mocks.auditGatewayServiceConfig.mockResolvedValue({ ok: true, issues: [] });
-    mocks.buildGatewayInstallPlan.mockResolvedValue(command);
+  it.each(["NODE_OPTIONS", "argv"])(
+    "reports configured Gateway heap controls from %s separately from runtime measurements",
+    async (source) => {
+      const command = createGatewayCommand("/opt/openclaw/dist/index.js");
+      if (source === "NODE_OPTIONS") {
+        command.environment = { NODE_OPTIONS: "--max-old-space-size=6144" };
+      } else {
+        command.programArguments.splice(1, 0, "--max-old-space-size=6144");
+      }
+      mocks.readCommand.mockResolvedValue(command);
+      mocks.auditGatewayServiceConfig.mockResolvedValue({ ok: true, issues: [] });
+      mocks.buildGatewayInstallPlan.mockResolvedValue(command);
 
-    await runRepair({ gateway: {} });
+      await runRepair({ gateway: {} });
 
-    expectNoteContaining("6144 MiB", "Gateway heap");
-    expectNoteContaining("adaptive default", "Gateway heap");
-  });
+      expectNoteContaining(`service ${source}: --max-old-space-size=6144`, "Gateway heap");
+      expectNoteContaining("installer recommendation:", "Gateway heap");
+      expectNoteContaining("runtime V8 ceiling: not measured", "Gateway heap");
+    },
+  );
 
   it("skips service audit and rewrite for a non-default install identity", async () => {
     mocks.isDefaultInstallIdentity.mockReturnValue(false);
@@ -593,7 +602,7 @@ describe("maybeRepairGatewayServiceConfig", () => {
     mocks.resolveSystemNodeInfo.mockResolvedValue({
       path: "/usr/bin/node",
       version: "20.20.2",
-      supported: false,
+      status: "unsupported",
     });
     mocks.renderSystemNodeWarning.mockReturnValue("duplicate doctor runtime warning");
 
@@ -607,6 +616,45 @@ describe("maybeRepairGatewayServiceConfig", () => {
       "Using /home/test/.nvm/versions/node/v22.22.3/bin/node",
     );
   });
+
+  it.each([false, true])(
+    "reports failed Bun probes without runtime migration (other repairable drift: %s)",
+    async (otherDrift) => {
+      const bunCommand = {
+        programArguments: ["/opt/bun", "/usr/local/bin/openclaw", "gateway", "--port", "18789"],
+        environment: {},
+      };
+      mocks.readCommand.mockResolvedValue(bunCommand);
+      mocks.buildGatewayInstallPlan.mockResolvedValue(bunCommand);
+      mocks.auditGatewayServiceConfig.mockResolvedValue({
+        ok: false,
+        issues: [
+          {
+            code: "gateway-runtime-probe-failed",
+            message: "Gateway service Bun runtime probe failed.",
+            detail: "/opt/bun (cwd /root): EACCES",
+          },
+          ...(otherDrift
+            ? [{ code: "gateway-path-nonminimal", message: "Gateway PATH should be regenerated" }]
+            : []),
+        ],
+      });
+      const prompter = makeDoctorPrompts();
+
+      await maybeRepairGatewayServiceConfig({ gateway: {} }, "local", makeDoctorIo(), prompter);
+
+      expectNoteContaining("/opt/bun (cwd /root): EACCES", "Gateway service config");
+      expectNoNoteContaining("unsupported", "Gateway service config");
+      expect(mocks.resolveSystemNodeInfo).not.toHaveBeenCalled();
+      expect(prompter.confirmRuntimeRepair).toHaveBeenCalledTimes(Number(otherDrift));
+      expect(mocks.install).toHaveBeenCalledTimes(Number(otherDrift));
+      for (const [options] of mocks.buildGatewayInstallPlan.mock.calls) {
+        expect(options).toEqual(
+          expect.objectContaining({ runtime: "bun", runtimePath: "/opt/bun" }),
+        );
+      }
+    },
+  );
 
   it("preserves a supported Bun runtime when repairing the Gateway service", async () => {
     const bunPath = "/home/test/.bun/bin/bun";
@@ -662,7 +710,7 @@ describe("maybeRepairGatewayServiceConfig", () => {
     mocks.resolveSystemNodeInfo.mockResolvedValue({
       path: systemNodePath,
       version: "24.15.0",
-      supported: true,
+      status: "supported",
     });
 
     await runRepair({ gateway: {} });
@@ -680,16 +728,26 @@ describe("maybeRepairGatewayServiceConfig", () => {
   it("passes planned managed env keys into service audit for legacy inline secret detection", async () => {
     mockProcessPlatform("linux");
     const managedDefinition = {
-      programArguments: gatewayProgramArguments,
+      programArguments: [
+        "/usr/bin/node",
+        "--max-old-space-size=24576",
+        "--require=/tmp/service-preload.js",
+        ...gatewayProgramArguments.slice(1),
+      ],
       environment: { OPENCLAW_WRAPPER: "/managed-wrapper", TAVILY_API_KEY: "managed" },
       environmentValueSources: { TAVILY_API_KEY: "file" as const },
     };
-    mocks.readCommand.mockResolvedValue({
+    const existingCommand = {
       ...managedDefinition,
-      environment: { OPENCLAW_WRAPPER: "/operator-wrapper", TAVILY_API_KEY: "old-inline-value" },
+      environment: {
+        OPENCLAW_WRAPPER: "/operator-wrapper",
+        TAVILY_API_KEY: "old-inline-value",
+        NODE_OPTIONS: "--max-old-space-size=512",
+      },
       managedDefinition,
-      managedOverrides: { environment: { keys: ["OPENCLAW_WRAPPER"] } },
-    });
+      managedOverrides: { environment: { keys: ["OPENCLAW_WRAPPER", "NODE_OPTIONS"] } },
+    };
+    mocks.readCommand.mockResolvedValue(existingCommand);
     mocks.buildGatewayInstallPlan.mockResolvedValue({
       programArguments: gatewayProgramArguments,
       workingDirectory: "/tmp",
@@ -718,12 +776,15 @@ describe("maybeRepairGatewayServiceConfig", () => {
       "expectedManagedServiceEnvKeys",
       new Set(["TAVILY_API_KEY"]),
     );
-    expect(mocks.buildGatewayInstallPlan).toHaveBeenCalledWith(
-      expect.objectContaining({
-        existingEnvironment: managedDefinition.environment,
-        existingEnvironmentValueSources: managedDefinition.environmentValueSources,
-      }),
-    );
+    for (const [plan] of mocks.buildGatewayInstallPlan.mock.calls) {
+      expect(plan).toEqual(
+        expect.objectContaining({
+          existingCommand,
+          existingEnvironment: managedDefinition.environment,
+          existingEnvironmentValueSources: managedDefinition.environmentValueSources,
+        }),
+      );
+    }
     expect(mocks.install).toHaveBeenCalledTimes(1);
   });
 

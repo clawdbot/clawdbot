@@ -35,6 +35,19 @@ describe("prepareOomScoreAdjustedSpawn", () => {
     });
   });
 
+  it("keeps a distinct child argv0 out of the shell wrapper", () => {
+    const argv0 = "/opt/shims/claude";
+    const options = { ...linux, argv0 };
+
+    expect(prepareOomScoreAdjustedSpawn("/usr/bin/mise", ["-p"], options)).toEqual({
+      command: "/usr/bin/mise",
+      args: ["-p"],
+      argv0,
+      env: {},
+      wrapped: false,
+    });
+  });
+
   it.each(["0", "false", "FALSE", "no", "off"])(
     "respects the OPENCLAW_CHILD_OOM_SCORE_ADJ=%s opt-out",
     (value) => {

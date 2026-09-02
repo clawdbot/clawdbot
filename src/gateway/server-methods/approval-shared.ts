@@ -620,7 +620,9 @@ export async function handleApprovalResolve<
     record: resolved.snapshot,
     event: resolvedEvent,
   });
-  params.context.approvalEvents?.publishResolved(params.approvalKind, resolvedEvent as never);
+  if (params.approvalKind !== "system-agent") {
+    params.context.approvalEvents?.publishResolved(params.approvalKind, resolvedEvent as never);
+  }
 
   const followUps = [
     params.forwardResolved
@@ -630,6 +632,12 @@ export async function handleApprovalResolve<
         }
       : null,
     ...(params.extraResolvedHandlers ?? []),
+    params.context.approvalWebPushDelivery
+      ? {
+          run: params.context.approvalWebPushDelivery.handleResolved,
+          errorLabel: `${params.approvalKind} approvals: Web Push resolve failed`,
+        }
+      : null,
   ].filter(
     (
       entry,

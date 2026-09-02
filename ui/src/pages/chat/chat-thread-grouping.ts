@@ -6,21 +6,32 @@ import {
 } from "../../../../src/chat/tool-content.js";
 import type { ChatItem, MessageGroup } from "../../lib/chat/chat-types.ts";
 import { extractTextCached } from "../../lib/chat/message-extract.ts";
-import { normalizeMessage, normalizeRoleForGrouping } from "../../lib/chat/message-normalizer.ts";
+import { normalizeRoleForGrouping } from "../../lib/chat/message-normalizer.ts";
 import { senderIdentityKey } from "../../lib/chat/sender-label.ts";
 import { isContextCompactionActivity } from "./chat-progress.ts";
+import { prepareMessagesForGrouping } from "./chat-thread-duplicates.ts";
+import { userTurnRunId } from "./chat-thread-items.ts";
 import {
   isKeyedAssistantStreamFallbackMessage,
-  streamPartBoundaryId,
-  streamPartRunId,
   transcriptRunId,
 } from "./chat-thread-run-identity.ts";
 import {
   assistantGroupIsForwardedBoundary,
   chatItemStartsUserTurn,
+  hasForwardedSource,
   safeNormalizeMessage,
 } from "./chat-turn-boundary.ts";
-import { indexTurnContinuations } from "./stream-causal-boundary.ts";
+import { indexTurnContinuations, persistedSteerTargetRunId } from "./stream-causal-boundary.ts";
+
+function assistantMessageKind(message: unknown) {
+  if (isContextCompactionActivity(message)) {
+    return "compaction";
+  }
+  if (isKeyedAssistantStreamFallbackMessage(message)) {
+    return "commentary";
+  }
+  return messageHasVisibleReplyContent(message) ? "reply" : "activity";
+}
 
 function stampReplyAttribution(
   items: Array<ChatItem | MessageGroup>,
@@ -48,6 +59,9 @@ function stampReplyAttribution(
       // A sender-less user group clears attribution: no chip is safer than
       // mislabeling the reply as addressed to the previous participant.
       latestUserSender = item.sender;
+    } else if (item.role === "assistant" && hasForwardedSource(item)) {
+      // Forwarded input starts a turn without a local human reply recipient.
+      latestUserSender = undefined;
     } else if (item.role === "assistant" && latestUserSender) {
       item.replyToSender = latestUserSender;
     }
@@ -57,18 +71,19 @@ function stampReplyAttribution(
 export function groupMessages(items: ChatItem[]): Array<ChatItem | MessageGroup> {
   const result: Array<ChatItem | MessageGroup> = [];
   let currentGroup: MessageGroup | null = null;
+  let currentUserTurnIdentity: string | null = null;
 
-  for (const item of items) {
-    if (item.kind !== "message") {
+  for (const prepared of prepareMessagesForGrouping(items)) {
+    if (prepared.kind !== "message") {
       if (currentGroup) {
         result.push(currentGroup);
         currentGroup = null;
       }
-      result.push(item);
+      result.push(prepared);
       continue;
     }
 
-    const normalized = normalizeMessage(item.message);
+    const { item, normalized } = prepared;
     const role = normalizeRoleForGrouping(normalized.role);
     const senderLabel =
       role === "user" || role === "assistant" ? (normalized.senderLabel ?? null) : null;
@@ -76,39 +91,42 @@ export function groupMessages(items: ChatItem[]): Array<ChatItem | MessageGroup>
     const timestamp = normalized.timestamp || Date.now();
     const runId =
       role === "assistant" || role === "tool" ? transcriptRunId(item.message) : undefined;
+    // Independent sends own separate elapsed boundaries; consecutive steers
+    // before any output keep their target run's original start. Do not stamp
+    // user runIds onto groups: reply-less activity pooling uses that field.
+    const steerTarget = role === "user" ? persistedSteerTargetRunId(item.message) : null;
+    const userTurnIdentity = role === "user" ? (steerTarget ?? userTurnRunId(item.message)) : null;
     const shouldSplitBySender = role === "user" || role === "assistant";
     const startsProjectedTurn =
       asRecord(asRecord(item.message)?.["__openclaw"])?.turnBoundary === true;
-    const splitsAssistantCommentary =
+    const splitsAssistantKind =
       role === "assistant" &&
       currentGroup?.role === "assistant" &&
-      isKeyedAssistantStreamFallbackMessage(currentGroup.messages[0]?.message) !==
-        isKeyedAssistantStreamFallbackMessage(item.message);
-    const splitsRuntimeActivity =
-      role === "assistant" &&
-      currentGroup?.role === "assistant" &&
-      isContextCompactionActivity(currentGroup.messages[0]?.message) !==
-        isContextCompactionActivity(item.message);
+      assistantMessageKind(currentGroup.messages[0]?.message) !==
+        assistantMessageKind(item.message);
 
     if (
       !currentGroup ||
       startsProjectedTurn ||
       currentGroup.role !== role ||
       currentGroup.runId !== runId ||
-      splitsAssistantCommentary ||
-      splitsRuntimeActivity ||
+      currentUserTurnIdentity !== userTurnIdentity ||
+      splitsAssistantKind ||
       (shouldSplitBySender &&
-        (currentGroup.senderLabel !== senderLabel ||
+        ((!sender?.identity && currentGroup.senderLabel !== senderLabel) ||
+          currentGroup.senderSession?.sessionKey !== normalized.senderSession?.sessionKey ||
           senderIdentityKey(currentGroup.sender) !== senderIdentityKey(sender)))
     ) {
       if (currentGroup) {
         result.push(currentGroup);
       }
+      currentUserTurnIdentity = userTurnIdentity;
       currentGroup = {
         kind: "group",
         key: `group:${role}:${item.key}`,
         role,
         senderLabel,
+        ...(normalized.senderSession ? { senderSession: normalized.senderSession } : {}),
         ...(sender ? { sender } : {}),
         messages: [{ message: item.message, key: item.key, duplicateCount: item.duplicateCount }],
         timestamp,
@@ -136,7 +154,7 @@ export type StreamRunRenderItem = {
   key: string;
   runId?: string;
   boundaryId?: string;
-  parts: Array<Extract<ChatItem, { kind: "stream" | "reading-indicator" | "question" }>>;
+  parts: Array<Extract<ChatItem, { kind: "stream" | "reading-indicator" }>>;
 };
 export function coalesceStreamRuns(
   items: RenderChatItem[],
@@ -146,8 +164,7 @@ export function coalesceStreamRuns(
   const flush = () => {
     const [first] = run;
     if (first) {
-      const runId = streamPartRunId(first);
-      const boundaryId = streamPartBoundaryId(first);
+      const { runId, boundaryId } = first;
       result.push({
         kind: "stream-run",
         key: `stream-run:${first.key}`,
@@ -161,10 +178,7 @@ export function coalesceStreamRuns(
   for (const item of items) {
     if (item.kind === "stream" || item.kind === "reading-indicator") {
       const first = run[0];
-      if (
-        first &&
-        (streamPartRunId(first) !== item.runId || streamPartBoundaryId(first) !== item.boundaryId)
-      ) {
+      if (first && (first.runId !== item.runId || first.boundaryId !== item.boundaryId)) {
         flush();
       }
       run.push(item);
@@ -177,7 +191,7 @@ export function coalesceStreamRuns(
   return result;
 }
 
-/** Collapsed rollup of a completed turn's intermediate work (tools, commentary). */
+/** Collapsed rollup of a completed turn's activity (tools, commentary, reasoning). */
 export type WorkGroupRenderItem = {
   kind: "work-group";
   key: string;
@@ -204,20 +218,26 @@ function isCollapsibleWorkGroup(item: TurnRenderItem): item is MessageGroup {
 // Attachment/canvas/media-only replies carry no text but are still the turn's
 // visible outcome; they must never fold into the work rollup. Normalized
 // content passes unknown block types through (e.g. raw image blocks), so
-// anything that is not a tool block counts as visible reply content.
-function groupHasVisibleReplyContent(group: MessageGroup, includeText = true): boolean {
-  return group.messages.some(({ message }) => {
-    if (includeText && extractTextCached(message)?.trim()) {
-      return true;
+// only tool and thinking blocks are activity rather than visible outcomes.
+function messageHasVisibleReplyContent(message: unknown, includeText = true): boolean {
+  if (includeText && extractTextCached(message)?.trim()) {
+    return true;
+  }
+  const content = safeNormalizeMessage(message)?.content ?? [];
+  return content.some((block) => {
+    if (block.type === "text") {
+      return includeText && Boolean(block.text?.trim());
     }
-    const content = safeNormalizeMessage(message)?.content ?? [];
-    return content.some((block) => {
-      if (block.type === "text") {
-        return includeText && Boolean(block.text?.trim());
-      }
-      return !isToolCallContentType(block.type) && !isToolResultContentType(block.type);
-    });
+    return (
+      block.type !== "thinking" &&
+      !isToolCallContentType(block.type) &&
+      !isToolResultContentType(block.type)
+    );
   });
+}
+
+function groupHasVisibleReplyContent(group: MessageGroup, includeText = true): boolean {
+  return group.messages.some(({ message }) => messageHasVisibleReplyContent(message, includeText));
 }
 
 export function assistantGroupCanOwnActiveRunStatus(group: MessageGroup): boolean {

@@ -125,6 +125,50 @@ describe("usage aggregate model identity", () => {
       { provider: "fixture:bedrock", model: "arn" },
     ]);
   });
+
+  it("preserves missing-cost attribution and token ranking when filtering sessions", () => {
+    const session = (agentId: string, model: string, tokens: number): UsageSessionEntry => {
+      const totals = {
+        input: tokens,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: tokens,
+        totalCost: 0,
+        inputCost: 0,
+        outputCost: 0,
+        cacheReadCost: 0,
+        cacheWriteCost: 0,
+        missingCostEntries: 1,
+        missingCostByModel: { [`fixture/${model}`]: 1 },
+      };
+      return {
+        key: `agent:${agentId}:session`,
+        agentId,
+        channel: "webchat",
+        usage: { ...totals, modelUsage: [{ provider: "fixture", model, count: 1, totals }] },
+      };
+    };
+
+    const aggregates = buildAggregatesFromSessions([
+      session("first", "small", 10),
+      session("second", "large", 100),
+    ]);
+
+    expect(aggregates.byProvider[0]?.totals.missingCostByModel).toEqual({
+      "fixture/small": 1,
+      "fixture/large": 1,
+    });
+    expect(aggregates.byAgent.map(({ totals }) => totals.missingCostByModel)).toEqual([
+      { "fixture/small": 1 },
+      { "fixture/large": 1 },
+    ]);
+    expect(aggregates.byChannel[0]?.totals.missingCostByModel).toEqual({
+      "fixture/small": 1,
+      "fixture/large": 1,
+    });
+    expect(aggregates.byModel.map(({ model }) => model)).toEqual(["large", "small"]);
+  });
 });
 
 describe("buildPeakErrorHours", () => {

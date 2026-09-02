@@ -10,6 +10,8 @@ import {
   buildLaunchAgentPlist,
   readLaunchAgentProgramArgumentsFromFile,
 } from "../daemon/launchd-plist.js";
+import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
+import { createPluginManifestRecordFixture } from "../plugins/plugin-metadata.test-support.js";
 
 const mocks = vi.hoisted(() => ({
   hasAnyAuthProfileStoreSource: vi.fn(() => true),
@@ -23,14 +25,12 @@ const mocks = vi.hoisted(() => ({
   resolveOpenClawWrapperPath: vi.fn(),
   assertNoSystemLaunchDaemonOwnership: vi.fn(),
   execLaunchctl: vi.fn(),
-  loadPluginManifestRegistryCore: vi.fn<
-    (...args: unknown[]) => { diagnostics: unknown[]; plugins: unknown[] }
-  >(() => ({
+  loadPluginManifestRegistryCore: vi.fn<(...args: unknown[]) => PluginManifestRegistry>(() => ({
     diagnostics: [],
     plugins: [],
   })),
   loadPluginManifestRegistryForPluginRegistry: vi.fn<
-    (...args: unknown[]) => { diagnostics: unknown[]; plugins: unknown[] }
+    (...args: unknown[]) => PluginManifestRegistry
   >(() => ({
     diagnostics: [],
     plugins: [],
@@ -169,7 +169,7 @@ function mockNodeGatewayPlanFixture(
   mocks.resolveSystemNodeInfo.mockResolvedValue({
     path: "/opt/node",
     version,
-    supported,
+    status: supported ? "supported" : "unsupported",
   });
   mocks.renderSystemNodeWarning.mockReturnValue(warning);
   mocks.buildServiceEnvironment.mockReturnValue(serviceEnvironment);
@@ -240,7 +240,7 @@ async function buildPluginConfigExecSecretRefPlan(home: string) {
   mocks.loadPluginManifestRegistryCore.mockReturnValue({
     diagnostics: [],
     plugins: [
-      {
+      createPluginManifestRecordFixture({
         id: "acme-secrets",
         origin: "global",
         rootDir: pluginRoot,
@@ -253,8 +253,8 @@ async function buildPluginConfigExecSecretRefPlan(home: string) {
             passEnv: ["ACME_SECRETS_TOKEN"],
           },
         },
-      },
-      {
+      }),
+      createPluginManifestRecordFixture({
         id: "acme-plugin",
         origin: "global",
         rootDir: configuredPluginRoot,
@@ -264,13 +264,13 @@ async function buildPluginConfigExecSecretRefPlan(home: string) {
             paths: [{ path: "apiKey", expected: "string" }],
           },
         },
-      },
+      }),
     ],
   });
   mocks.loadPluginManifestRegistryForPluginRegistry.mockReturnValue({
     diagnostics: [],
     plugins: [
-      {
+      createPluginManifestRecordFixture({
         id: "acme-plugin",
         origin: "global",
         rootDir: configuredPluginRoot,
@@ -280,7 +280,7 @@ async function buildPluginConfigExecSecretRefPlan(home: string) {
             paths: [{ path: "apiKey", expected: "string" }],
           },
         },
-      },
+      }),
     ],
   });
 
@@ -397,10 +397,23 @@ describe("buildGatewayInstallPlan", () => {
       wrapperPath: undefined,
     });
     expect(mocks.resolveSystemNodeInfo).not.toHaveBeenCalled();
+    expect(firstMockArg(mocks.buildServiceEnvironment, "buildServiceEnvironment").runtime).toBe(
+      "bun",
+    );
   });
 
-  it("passes only the existing service NODE_OPTIONS to heap resolution", async () => {
+  it("passes override ownership to heap resolution without persisting operator options", async () => {
     mockNodeGatewayPlanFixture();
+    const managedDefinition = {
+      programArguments: ["node", "--max-heap-size=24576", "cli.js", "gateway"],
+      environment: { NODE_OPTIONS: "--max-old-space-size=6144" },
+    };
+    const existingCommand = {
+      ...managedDefinition,
+      environment: { NODE_OPTIONS: "--max-old-space-size=512 --require=/operator/preload.js" },
+      managedDefinition,
+      managedOverrides: { environment: { keys: ["NODE_OPTIONS"] } },
+    };
 
     await buildGatewayInstallPlan({
       env: {
@@ -409,14 +422,15 @@ describe("buildGatewayInstallPlan", () => {
       },
       port: 3000,
       runtime: "node",
-      existingEnvironment: {
-        NODE_OPTIONS: "--max-old-space-size=6144",
-      },
+      existingCommand,
     });
 
     expect(
       firstMockArg(mocks.buildServiceEnvironment, "buildServiceEnvironment").existingNodeOptions,
     ).toBe("--max-old-space-size=6144");
+    expect(mocks.resolveGatewayProgramArguments).toHaveBeenCalledWith(
+      expect.objectContaining({ existingCommand }),
+    );
   });
 
   it("adds the active openclaw command bin directory to the managed service PATH", async () => {
@@ -569,6 +583,9 @@ describe("buildGatewayInstallPlan", () => {
       firstMockArg(mocks.resolveGatewayProgramArguments, "resolveGatewayProgramArguments")
         .wrapperPath,
     ).toBeUndefined();
+    expect(mocks.resolveGatewayProgramArguments).toHaveBeenCalledWith(
+      expect.objectContaining({ runtimePath: "/opt/node" }),
+    );
     expect(mocks.buildServiceEnvironment).toHaveBeenCalledOnce();
     expect(
       firstMockArg(mocks.buildServiceEnvironment, "buildServiceEnvironment").env?.OPENCLAW_WRAPPER,
@@ -953,7 +970,6 @@ describe("buildGatewayInstallPlan", () => {
     expect(plan.environment.OP_CONNECT_TOKEN).toBe("op-connect-token");
     expect(plan.environment.OPENCLAW_SERVICE_MANAGED_ENV_KEYS).toBeUndefined();
   });
-
   it("includes passEnv values for plugin-managed exec SecretRef providers", async () => {
     mockNodeGatewayPlanFixture({
       serviceEnvironment: {
@@ -966,7 +982,7 @@ describe("buildGatewayInstallPlan", () => {
     mocks.loadPluginManifestRegistryCore.mockReturnValue({
       diagnostics: [],
       plugins: [
-        {
+        createPluginManifestRecordFixture({
           id: "acme-secrets",
           origin: "global",
           rootDir: pluginRoot,
@@ -978,7 +994,7 @@ describe("buildGatewayInstallPlan", () => {
               passEnv: ["ACME_SECRETS_ADDR", "ACME_SECRETS_TOKEN"],
             },
           },
-        },
+        }),
       ],
     });
 
@@ -1078,7 +1094,7 @@ describe("buildGatewayInstallPlan", () => {
     mocks.loadPluginManifestRegistryCore.mockReturnValue({
       diagnostics: [],
       plugins: [
-        {
+        createPluginManifestRecordFixture({
           id: "acme-secrets",
           origin: "global",
           rootDir: pluginRoot,
@@ -1090,7 +1106,7 @@ describe("buildGatewayInstallPlan", () => {
               passEnv: ["ACME_SECRETS_ADDR", "ACME_SECRETS_TOKEN"],
             },
           },
-        },
+        }),
       ],
     });
 
@@ -1135,16 +1151,13 @@ describe("buildGatewayInstallPlan", () => {
     expect(plan.environment.OPENCLAW_SERVICE_MANAGED_ENV_KEYS).toBeUndefined();
   });
 
-  it("allows safe inherited passEnv names while blocking dangerous exec SecretRef env", async () => {
-    mockNodeGatewayPlanFixture({
-      serviceEnvironment: {
-        OPENCLAW_PORT: "3000",
-      },
-    });
-
-    const warn = vi.fn();
-    const plan = await buildGatewayInstallPlan({
-      env: isolatedPlanEnv({
+  it.each(["linux", "win32"] as const)(
+    "ignores missing passEnv values while blocking populated dangerous values on %s",
+    async (platform) => {
+      mockNodeGatewayPlanFixture({ serviceEnvironment: { OPENCLAW_PORT: "3000" } });
+      const env = isolatedPlanEnv({
+        SYSTEMROOT: " ",
+        SAFE_PASS_ENV: " safe-value ",
         BASH_ENV: "/tmp/openclaw-test-bashenv",
         XDG_CONFIG_HOME: "/tmp/openclaw-test-xdg-home",
         XDG_CONFIG_DIRS: "/etc/xdg:/opt/xdg",
@@ -1152,64 +1165,84 @@ describe("buildGatewayInstallPlan", () => {
         AWS_ACCESS_KEY_ID: "aws-access-key",
         DOCKER_HOST: "tcp://docker.example.test:2376",
         NODE_TLS_REJECT_UNAUTHORIZED: "0",
-      }),
-      port: 3000,
-      runtime: "node",
-      warn,
-      config: {
-        secrets: {
-          providers: {
-            onepassword: {
-              source: "exec",
-              command: "/usr/bin/op",
-              args: ["read", "op://Private/Discord/password"],
-              passEnv: [
-                "HOME",
-                "BASH_ENV",
-                "XDG_CONFIG_HOME",
-                "XDG_CONFIG_DIRS",
-                "GH_TOKEN",
-                "AWS_ACCESS_KEY_ID",
-                "DOCKER_HOST",
-                "NODE_TLS_REJECT_UNAUTHORIZED",
-              ],
+      });
+      Object.setPrototypeOf(env, { WINDIR: "C:/Inherited" });
+      const warn = vi.fn();
+      const plan = await buildGatewayInstallPlan({
+        env,
+        port: 3000,
+        runtime: "node",
+        platform,
+        warn,
+        config: {
+          secrets: {
+            providers: {
+              onepassword: {
+                source: "exec",
+                command: "/usr/bin/op",
+                args: ["read", "op://Private/Discord/password"],
+                passEnv: [
+                  "HOME",
+                  "NODE_OPTIONS",
+                  "SYSTEMROOT",
+                  "WINDIR",
+                  "SAFE_PASS_ENV",
+                  "BASH_ENV",
+                  "XDG_CONFIG_HOME",
+                  "XDG_CONFIG_DIRS",
+                  "GH_TOKEN",
+                  "AWS_ACCESS_KEY_ID",
+                  "DOCKER_HOST",
+                  "NODE_TLS_REJECT_UNAUTHORIZED",
+                ],
+              },
+            },
+          },
+          channels: {
+            discord: {
+              token: { source: "exec", provider: "onepassword", id: "value" },
             },
           },
         },
-        channels: {
-          discord: {
-            token: { source: "exec", provider: "onepassword", id: "value" },
-          },
-        },
-      },
-    });
+      });
 
-    expect(plan.environment.HOME).toBe(isolatedHome);
-    expect(plan.environment.BASH_ENV).toBeUndefined();
-    expect(plan.environment.XDG_CONFIG_HOME).toBeUndefined();
-    expect(plan.environment.XDG_CONFIG_DIRS).toBeUndefined();
-    expect(plan.environment.GH_TOKEN).toBeUndefined();
-    expect(plan.environment.AWS_ACCESS_KEY_ID).toBeUndefined();
-    expect(plan.environment.DOCKER_HOST).toBeUndefined();
-    expect(plan.environment.NODE_TLS_REJECT_UNAUTHORIZED).toBeUndefined();
-    expect(warn).not.toHaveBeenCalledWith(
-      'Exec SecretRef passEnv ref "HOME" blocked by host-env security policy',
-      "Config SecretRef",
-    );
-    const warningOutput = warn.mock.calls.map(([message]) => message).join("\n");
-    for (const blockedName of [
-      "XDG_CONFIG_HOME",
-      "XDG_CONFIG_DIRS",
-      "BASH_ENV",
-      "GH_TOKEN",
-      "AWS_ACCESS_KEY_ID",
-      "DOCKER_HOST",
-      "NODE_TLS_REJECT_UNAUTHORIZED",
-    ]) {
-      expect(warningOutput).toContain(blockedName);
-    }
-    expect(warn.mock.calls.every(([, title]) => title === "Config SecretRef")).toBe(true);
-  });
+      expect(plan.environment.HOME).toBe(isolatedHome);
+      expect(plan.environment.SAFE_PASS_ENV).toBe("safe-value");
+      for (const blockedName of [
+        "NODE_OPTIONS",
+        "SYSTEMROOT",
+        "WINDIR",
+        "BASH_ENV",
+        "XDG_CONFIG_HOME",
+        "XDG_CONFIG_DIRS",
+        "GH_TOKEN",
+        "AWS_ACCESS_KEY_ID",
+        "DOCKER_HOST",
+        "NODE_TLS_REJECT_UNAUTHORIZED",
+      ]) {
+        expect(plan.environment[blockedName]).toBeUndefined();
+      }
+      const warningOutput = warn.mock.calls.map(([message]) => message).join("\n");
+      for (const silentName of ["HOME", "NODE_OPTIONS", "SYSTEMROOT", "WINDIR"]) {
+        expect(warn).not.toHaveBeenCalledWith(
+          `Exec SecretRef passEnv ref "${silentName}" blocked by host-env security policy`,
+          "Config SecretRef",
+        );
+      }
+      for (const blockedName of [
+        "XDG_CONFIG_HOME",
+        "XDG_CONFIG_DIRS",
+        "BASH_ENV",
+        "GH_TOKEN",
+        "AWS_ACCESS_KEY_ID",
+        "DOCKER_HOST",
+        "NODE_TLS_REJECT_UNAUTHORIZED",
+      ]) {
+        expect(warningOutput).toContain(blockedName);
+      }
+      expect(warn.mock.calls.every(([, title]) => title === "Config SecretRef")).toBe(true);
+    },
+  );
 
   it("blocks dangerous passEnv values for auth-profile exec SecretRef providers", async () => {
     mockNodeGatewayPlanFixture({

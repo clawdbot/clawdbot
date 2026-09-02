@@ -20,17 +20,13 @@
   background: transparent;
 }
 
-.session-hovercard__section + .session-hovercard__section {
-  border-top: 1px solid color-mix(in srgb, var(--border-strong) 68%, transparent);
-}
-
 .session-hovercard__section--header {
   padding-block: 14px 12px;
 }
 
 .session-hovercard__section--metadata,
 .session-hovercard__section--prs {
-  padding-block: 11px;
+  padding-block: 0 11px;
 }
 
 .session-hovercard__section--optional {
@@ -50,7 +46,7 @@
   display: grid;
   width: 100%;
   grid-template-rows: auto auto;
-  gap: var(--space-1);
+  gap: var(--space-2);
   min-width: 0;
 }
 
@@ -64,14 +60,51 @@
   white-space: normal;
 }
 
-.session-hovercard__meta {
+.session-hovercard__attribution {
+  display: inline-flex;
+  align-items: center;
+  justify-self: start;
+  gap: 7px;
+  max-width: 100%;
   min-width: 0;
-  color: var(--muted);
-  font-size: var(--control-ui-text-xs);
+  padding: 3px 8px 3px 3px;
+  border: 1px solid color-mix(in srgb, var(--border-strong) 58%, transparent);
+  border-radius: var(--radius-full);
+  background: color-mix(in srgb, var(--panel-strong) 72%, transparent);
+  color: var(--text);
+  font-size: var(--control-ui-text-sm);
   line-height: 1.35;
-  overflow-wrap: normal;
-  word-break: normal;
-  white-space: normal;
+}
+
+.session-hovercard__attribution-avatars {
+  display: inline-flex;
+  align-items: center;
+  flex: none;
+  order: -1;
+}
+
+.session-hovercard__attribution-avatars .viewer-facepile {
+  margin-left: -5px;
+}
+
+.session-hovercard__attribution-copy {
+  display: flex;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.session-hovercard__attribution-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-weight: 550;
+}
+
+.session-hovercard__attribution-others {
+  flex: none;
+  margin-left: 0.35em;
+  color: var(--muted);
 }
 
 .session-hovercard__no-pr,
@@ -113,6 +146,26 @@
   line-height: 1.4;
 }
 
+.session-hovercard__plan-row {
+  grid-template-columns: var(--session-hovercard-context-icon-size) minmax(0, 1fr) auto;
+}
+
+.session-hovercard__plan-step {
+  display: block;
+  overflow: hidden;
+  color: var(--text);
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.session-hovercard__plan-count {
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
 .session-hovercard__context-icon {
   display: inline-flex;
   align-items: center;
@@ -145,48 +198,6 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.session-hovercard__identity-copy {
-  display: flex;
-  align-items: baseline;
-  gap: 5px;
-  min-width: 0;
-  overflow: hidden;
-  color: var(--text);
-  white-space: nowrap;
-}
-
-.session-hovercard__participants {
-  display: inline-flex;
-  align-items: baseline;
-  gap: 5px;
-  min-width: 0;
-  overflow: hidden;
-  color: var(--text);
-  font-weight: 450;
-  white-space: nowrap;
-}
-
-.session-hovercard__identity-name {
-  flex: none;
-  font-weight: 500;
-}
-
-.session-hovercard__identity-separator {
-  flex: none;
-  color: var(--muted);
-}
-
-.session-hovercard__participant {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.session-hovercard__participants-more {
-  flex: none;
-  color: var(--muted);
 }
 
 .session-hovercard__creator-avatar,
@@ -230,10 +241,23 @@
   place-items: center;
 }
 
-.session-hovercard__pr-row,
+.session-hovercard__attribution .session-hovercard__creator-avatar,
+.session-hovercard__attribution .session-hovercard__creator-avatar .viewer-avatar,
+.session-hovercard__attribution .session-hovercard__creator-avatar .channel-avatar,
+.session-hovercard__attribution .session-hovercard__creator-avatar-fallback {
+  width: 18px;
+  height: 18px;
+}
+
+.session-hovercard__attribution .session-hovercard__creator-avatar .viewer-avatar,
+.session-hovercard__attribution .session-hovercard__creator-avatar .channel-avatar,
+.session-hovercard__attribution .session-hovercard__creator-avatar-fallback {
+  border: 1.5px solid var(--panel-strong);
+}
+
 .session-hovercard__branch-row {
   display: grid;
-  grid-template-columns: var(--session-hovercard-context-icon-size) auto minmax(0, 1fr);
+  grid-template-columns: var(--session-hovercard-context-icon-size) minmax(0, 1fr) auto;
   align-items: center;
   column-gap: var(--space-2);
   min-width: 0;
@@ -243,15 +267,31 @@
   text-decoration: none;
 }
 
-.session-hovercard__pr-row {
-  font-family: var(--mono);
-  font-size: var(--control-ui-text-xs);
-  font-variant-numeric: tabular-nums;
-  line-height: 1.35;
+.session-hovercard__branch-action,
+.session-hovercard__branch-label {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text);
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.session-hovercard__branch-row {
+.session-hovercard__branch-action {
+  text-decoration: none;
+}
+
+.session-hovercard__pr-row {
+  display: grid;
   grid-template-columns: var(--session-hovercard-context-icon-size) minmax(0, 1fr) auto;
+  align-items: center;
+  column-gap: var(--space-2);
+  min-width: 0;
+  /* The row is an anchor: without these it falls back to default link styling. */
+  color: var(--muted);
+  text-decoration: none;
+  font-size: var(--control-ui-text-sm);
+  line-height: 1.4;
 }
 
 .session-hovercard__pr-state-icon,
@@ -298,14 +338,14 @@
   --session-pr-state-color: var(--danger);
 }
 
-.session-hovercard__pr-number,
-.session-hovercard__files {
-  color: currentColor;
-}
-
-.session-hovercard__pr-number {
+.session-hovercard__pr-title {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
   color: var(--text);
-  font-weight: 600;
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .session-hovercard__pr-state-icon {
@@ -313,33 +353,9 @@
 }
 
 .session-hovercard__pr-row .session-hovercard__diff {
-  display: grid;
-  width: 100%;
-  grid-template-columns: minmax(0, 1fr) auto auto;
-  align-items: baseline;
-  column-gap: var(--space-2);
+  gap: 6px;
   justify-self: end;
-  font: inherit;
-}
-
-.session-hovercard__pr-row .session-hovercard__files {
-  grid-column: 1;
-  justify-self: end;
-}
-
-.session-hovercard__pr-row .session-hovercard__additions {
-  grid-column: 2;
-}
-
-.session-hovercard__pr-row .session-hovercard__deletions {
-  grid-column: 3;
-}
-
-.session-hovercard__branch-name {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  font-size: var(--control-ui-text-xs);
 }
 
 .session-hovercard__additions {
@@ -374,19 +390,36 @@
   overflow-wrap: anywhere;
 }
 
-.session-hovercard__progress-footer {
-  padding-block: 12px 14px;
+.session-hovercard__notepad {
+  padding-block: 4px 14px;
   border-radius: 0 0 calc(var(--radius-lg) - 1px) calc(var(--radius-lg) - 1px);
-  background: var(--session-hovercard-progress-surface);
 }
 
-.session-hovercard__progress-footer .session-progress-card__heading {
+.session-hovercard__notepad-title {
+  margin-bottom: var(--space-2);
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+  font-weight: 650;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.session-hovercard__notepad .session-progress-card__progress {
+  display: grid;
+  gap: 5px;
   margin-bottom: var(--space-3);
 }
 
-.session-hovercard__progress-footer .session-progress-card__heading-actions {
-  color: var(--text);
+.session-hovercard__notepad .session-progress-card__progress-label {
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+  font-weight: 550;
   font-variant-numeric: tabular-nums;
+  line-height: 1.35;
+}
+
+.session-hovercard__notepad .session-progress-card__progress progress {
+  margin-top: 0;
 }
 
 .session-progress-card--composer {

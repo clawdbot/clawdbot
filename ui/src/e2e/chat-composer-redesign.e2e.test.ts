@@ -1,5 +1,6 @@
 // Control UI E2E tests cover the redesigned chat composer.
 import { expect, it } from "vitest";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -9,6 +10,162 @@ const suite = createControlUiE2eSuite({
 
 // Browser contexts preserve test isolation; keep one process warm for this file.
 suite.define(() => {
+  it.each([
+    {
+      reason: "missing-auth",
+      blocked: true,
+      message: "No provider credential is configured for this model. Set it up in Model Setup.",
+    },
+    {
+      reason: "auth-failed",
+      blocked: true,
+      message: "Authentication failed. Review the provider credential or sign-in, then retry.",
+    },
+    { reason: "cooldown", blocked: false, message: null },
+    { reason: undefined, blocked: false, message: null },
+  ] as const)(
+    "keeps $reason model availability honest in the composer and picker",
+    async ({ reason, blocked, message }) => {
+      const artifactRoot = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+      const artifactDir = artifactRoot
+        ? createControlUiE2eArtifactDir("chat-composer-redesign", artifactRoot)
+        : undefined;
+      await suite.withPage(
+        {
+          viewport: { width: 1280, height: 900 },
+          ...(artifactDir ? { recordVideo: { dir: artifactDir } } : {}),
+        },
+        async ({ page }) => {
+          const gateway = await installMockGateway(page, {
+            models: [
+              {
+                id: "gpt-5.5",
+                name: "GPT-5.5",
+                provider: "openai",
+                available: false,
+                unavailableReason: reason,
+              },
+            ],
+          });
+          await page.goto(`${suite.server.baseUrl}chat`);
+          await gateway.waitForRequest("chat.startup");
+          const textarea = page.locator(".agent-chat__composer-combobox textarea");
+          await expect.poll(() => textarea.isDisabled()).toBe(blocked);
+          const statusBand = page.locator(".agent-chat__composer-status-band");
+          if (message) {
+            await expect.poll(() => statusBand.textContent()).toContain(message);
+          } else {
+            await expect.poll(() => statusBand.count()).toBe(0);
+            await textarea.fill("Send while availability recovers");
+            await page.getByRole("button", { name: "Send message" }).click();
+            const send = await gateway.waitForRequest("chat.send");
+            expect(send.params).toMatchObject({ message: "Send while availability recovers" });
+            const runId =
+              typeof send.params === "object" &&
+              send.params !== null &&
+              "idempotencyKey" in send.params
+                ? String(send.params.idempotencyKey)
+                : "";
+            await gateway.emitChatFinal({ runId, text: "The run succeeded." });
+            await expect
+              .poll(() => page.getByText("The run succeeded.").count())
+              .toBeGreaterThan(0);
+          }
+          if (artifactDir) {
+            await page.screenshot({
+              path: `${artifactDir}/model-${reason ?? "unknown"}-composer.png`,
+            });
+          }
+          await page.locator('[data-chat-model-select="true"]').click();
+          const option = page.locator('[data-chat-model-option="openai/gpt-5.5"]');
+          await expect.poll(() => option.isVisible()).toBe(true);
+          if (blocked) {
+            await expect.poll(() => option.getAttribute("data-chat-model-setup")).toBe("true");
+            await option.click();
+            await expect.poll(() => page.url()).toContain("model-setup");
+          } else {
+            expect(await option.isDisabled()).toBe(true);
+            expect(await page.locator(".chat-controls__model-menu").textContent()).not.toContain(
+              "Authentication failed",
+            );
+            expect(await option.textContent()).not.toContain("Sign-in needed");
+          }
+        },
+      );
+    },
+  );
+
+  it("does not repeat an auth failure below the composer when the run error is visible", async () => {
+    await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
+      const message =
+        "Your refresh token has already been used to generate a new access token. Please try signing in again.";
+      const gateway = await installMockGateway(page, {
+        inFlightRun: { runId: "auth-failed-run", text: "" },
+        models: [
+          {
+            id: "gpt-5.5",
+            name: "GPT-5.5",
+            provider: "openai",
+            available: false,
+            unavailableReason: "auth-failed",
+          },
+        ],
+      });
+
+      await page.goto(`${suite.server.baseUrl}chat`);
+      await gateway.waitForRequest("chat.startup");
+      await gateway.emitGatewayEvent("chat", {
+        errorDetail: {
+          provider: "openai",
+          failoverReason: "refresh_token_reused",
+          providerRuntimeFailureKind: "auth_refresh",
+          providerErrorType: "invalid_request_error",
+          httpStatus: 401,
+        },
+        errorMessage: `⚠️ ${message}`,
+        runId: "auth-failed-run",
+        sessionKey: "main",
+        state: "error",
+      });
+      await expect.poll(() => page.locator(".chat-error").textContent()).toContain(message);
+      await expect.poll(() => page.locator(".agent-chat__composer-status-band").count()).toBe(0);
+      await expect.poll(() => page.locator(".agent-chat__input textarea").isDisabled()).toBe(true);
+    });
+  });
+
+  it("keeps the loading model picker beside the microphone", async () => {
+    const artifactRoot = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+    const artifactDir = artifactRoot
+      ? createControlUiE2eArtifactDir("chat-composer-redesign", artifactRoot)
+      : undefined;
+    await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
+      const gateway = await installMockGateway(page, {
+        deferredMethods: ["chat.startup"],
+      });
+      await page.goto(`${suite.server.baseUrl}chat`);
+      await gateway.waitForRequest("chat.startup");
+
+      const composer = page.locator(".agent-chat__input");
+      const model = composer.locator('[data-chat-model-select="true"]');
+      const voice = page.getByRole("button", { name: "Start voice input" });
+      await expect.poll(() => model.getAttribute("aria-busy")).toBe("true");
+      await expect.poll(() => voice.isVisible()).toBe(true);
+      if (artifactDir) {
+        await composer.screenshot({
+          animations: "disabled",
+          path: `${artifactDir}/loading-model-picker-spacing.png`,
+        });
+      }
+
+      const measureGap = async () => {
+        const [modelBox, voiceBox] = await Promise.all([model.boundingBox(), voice.boundingBox()]);
+        return modelBox && voiceBox ? voiceBox.x - (modelBox.x + modelBox.width) : null;
+      };
+      await expect.poll(measureGap).toBeGreaterThanOrEqual(0);
+      await expect.poll(measureGap).toBeLessThanOrEqual(16);
+    });
+  });
+
   it("keeps offline status in one bounded composer row", async () => {
     await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
       const gateway = await installMockGateway(page);
@@ -107,7 +264,10 @@ suite.define(() => {
   });
 
   it("keeps the model in the bottom bar, session settings in the header, and holds send beside the microphone in every input state", async () => {
-    const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+    const artifactRoot = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+    const artifactDir = artifactRoot
+      ? createControlUiE2eArtifactDir("chat-composer-redesign", artifactRoot)
+      : undefined;
     const pageOptions = {
       viewport: { width: 1920, height: 1080 },
       ...(artifactDir
@@ -115,6 +275,7 @@ suite.define(() => {
         : {}),
     };
     await suite.withPage(pageOptions, async ({ page }) => {
+      await page.clock.install({ time: new Date("2026-01-01T00:00:00Z") });
       const gateway = await installMockGateway(page, {
         assistantName: "Rosita",
         deferredMethods: ["chat.send"],
@@ -178,7 +339,7 @@ suite.define(() => {
                 contextTokens: 200_000,
                 displayName: "Main",
                 hasActiveRun: false,
-                key: "main",
+                key: "agent:main:main",
                 kind: "direct",
                 label: "Main",
                 model: "gpt-5.5",
@@ -278,11 +439,40 @@ suite.define(() => {
       const pickerWidth = () =>
         microphonePicker.evaluate((node) => node.getBoundingClientRect().width);
       await expect.poll(pickerWidth).toBe(0);
+      await page.emulateMedia({ reducedMotion: "no-preference" });
       await voice.hover();
-      await expect.poll(pickerWidth).toBeGreaterThanOrEqual(12);
-      const voiceBeforeHold = await voice.boundingBox();
+      await expect
+        .poll(() =>
+          microphonePickerShell.evaluate((node) => getComputedStyle(node).transitionDelay),
+        )
+        .toBe("0.75s");
+      await expect
+        .poll(() => microphonePicker.evaluate((node) => getComputedStyle(node).transitionDelay))
+        .toBe("0.75s, 0.75s, 0.82s, 0s, 0s");
+      await page.evaluate(
+        () =>
+          new Promise<void>((resolve) => {
+            requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+          }),
+      );
+      expect(await pickerWidth()).toBe(0);
+      await expect.poll(pickerWidth).toBeGreaterThanOrEqual(27.5);
+      const [voiceBeforeHold, pickerBeforeHold] = await Promise.all([
+        voice.boundingBox(),
+        microphonePicker.boundingBox(),
+      ]);
       expect(voiceBeforeHold).not.toBeNull();
+      expect(pickerBeforeHold).not.toBeNull();
+      expect(
+        Math.abs(
+          (voiceBeforeHold?.x ?? 0) - ((pickerBeforeHold?.x ?? 0) + (pickerBeforeHold?.width ?? 0)),
+        ),
+      ).toBeLessThanOrEqual(0.5);
+      // Measure the arming layout without letting slow browser round trips
+      // cross the 500 ms hold threshold and open the unavailable-device picker.
+      await page.clock.pauseAt(new Date("2026-01-01T01:00:00Z"));
       await page.mouse.down();
+      await page.clock.runFor(150);
       await expect
         .poll(() =>
           voice.evaluate((node) => node.classList.contains("chat-send-btn--dictation-arming")),
@@ -297,6 +487,20 @@ suite.define(() => {
       );
       await page.mouse.up();
       await page.mouse.move(0, 0);
+      await page.clock.resume();
+      await expect.poll(pickerWidth).toBe(0);
+      await voice.hover();
+      await voice.press("Tab");
+      await expect
+        .poll(() => microphonePicker.evaluate((node) => node === document.activeElement))
+        .toBe(true);
+      await expect
+        .poll(() =>
+          microphonePickerShell.evaluate((node) => getComputedStyle(node).transitionDelay),
+        )
+        .toBe("0s, 0s");
+      await expect.poll(pickerWidth).toBeGreaterThanOrEqual(27.5);
+      await textarea.click();
       await expect.poll(pickerWidth).toBe(0);
       await expect
         .poll(() => model.evaluate((node) => node.closest(".agent-chat__composer-footer") != null))
@@ -559,7 +763,7 @@ suite.define(() => {
           timestamp: Date.now(),
         },
         runId,
-        sessionKey: "main",
+        sessionKey: "agent:main:main",
         state: "delta",
       });
       // The working row stays attached with elapsed/token telemetry throughout streaming.
@@ -621,7 +825,7 @@ suite.define(() => {
       const abortRequest = await gateway.waitForRequest("chat.abort");
       expect(abortRequest.params).toMatchObject({
         runId,
-        sessionKey: "main",
+        sessionKey: "agent:main:main",
       });
       await expect.poll(() => stop.count()).toBe(0);
 

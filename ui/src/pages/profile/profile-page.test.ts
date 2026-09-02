@@ -39,6 +39,7 @@ function createContext(
   };
   const subscribe = () => () => undefined;
   return {
+    runtimeConfig: { subscribe, state: {}, ensureLoaded: async () => undefined },
     gateway: {
       snapshot,
       connection: {
@@ -73,6 +74,7 @@ function createConnectedContext(
   const listeners = new Set<(next: ApplicationGatewaySnapshot) => void>();
   const subscribe = () => () => undefined;
   const context = {
+    runtimeConfig: { subscribe, state: {}, ensureLoaded: async () => undefined },
     gateway: {
       get snapshot() {
         return snapshot;
@@ -259,7 +261,7 @@ it("loads and updates co-author consent separately from verified GitHub identity
     }
     if (method === "users.prefs.get") {
       expect(params).toEqual({ keys: [GIT_COAUTHOR_PREFERENCE_KEY] });
-      return { status: "ok", entries: { [GIT_COAUTHOR_PREFERENCE_KEY]: "not-a-boolean" } };
+      return { status: "ok", entries: { [GIT_COAUTHOR_PREFERENCE_KEY]: false } };
     }
     if (method === "users.prefs.set") {
       expect(params).toEqual({ entries: { [GIT_COAUTHOR_PREFERENCE_KEY]: true } });
@@ -296,8 +298,121 @@ it("loads and updates co-author consent separately from verified GitHub identity
   ]);
 });
 
+it("treats a malformed co-author preference as opted out", async () => {
+  const profile: UserProfile = {
+    id: "profile-1",
+    displayName: "Ada",
+    avatarMime: null,
+    mergedInto: null,
+    createdAt: 1,
+    updatedAt: 2,
+    emails: [],
+    githubIdentity: {
+      login: "octocat",
+      profileUrl: "https://github.com/octocat",
+      avatarUrl: "https://avatars.githubusercontent.com/u/583231?v=4",
+    },
+    hasAvatar: false,
+  };
+  const request = vi.fn(async (method: string) => {
+    if (method === "users.self") {
+      return { profile };
+    }
+    if (method === "users.prefs.get") {
+      // The preference API stores arbitrary JSON; a non-boolean row must not publish a trailer.
+      return { status: "ok", entries: { [GIT_COAUTHOR_PREFERENCE_KEY]: "not-a-boolean" } };
+    }
+    throw new Error(`unexpected method: ${method}`);
+  });
+  const harness = createConnectedContext(request as GatewayBrowserClient["request"], {
+    id: profile.id,
+    name: profile.displayName ?? undefined,
+  });
+  const provider = createApplicationContextProvider(harness.context);
+  const page = document.createElement(PROFILE_PAGE_TEST_TAG) as ProfilePageElement;
+  provider.append(page);
+  document.body.append(provider);
+
+  await waitForFast(() => expect(page.querySelector(".settings-account")).not.toBeNull());
+  const toggle = page.querySelector<HTMLElement & { checked: boolean }>("wa-switch");
+  await waitForFast(() => expect(toggle?.checked).toBe(false));
+});
+
+it("keeps co-author credit on until the person opts out", async () => {
+  const profile: UserProfile = {
+    id: "profile-1",
+    displayName: "Ada",
+    avatarMime: null,
+    mergedInto: null,
+    createdAt: 1,
+    updatedAt: 2,
+    emails: [],
+    githubIdentity: {
+      login: "octocat",
+      profileUrl: "https://github.com/octocat",
+      avatarUrl: "https://avatars.githubusercontent.com/u/583231?v=4",
+    },
+    hasAvatar: false,
+  };
+  const request = vi.fn(async (method: string, params?: unknown) => {
+    if (method === "users.self") {
+      return { profile };
+    }
+    if (method === "users.prefs.get") {
+      // No stored row: the verified account is credited without an explicit opt-in.
+      return { status: "ok", entries: {} };
+    }
+    if (method === "users.prefs.set") {
+      expect(params).toEqual({ entries: { [GIT_COAUTHOR_PREFERENCE_KEY]: false } });
+      return { status: "ok" };
+    }
+    throw new Error(`unexpected method: ${method}`);
+  });
+  const harness = createConnectedContext(request as GatewayBrowserClient["request"], {
+    id: profile.id,
+    name: profile.displayName ?? undefined,
+  });
+  const provider = createApplicationContextProvider(harness.context);
+  const page = document.createElement(PROFILE_PAGE_TEST_TAG) as ProfilePageElement;
+  provider.append(page);
+  document.body.append(provider);
+
+  await waitForFast(() => expect(page.querySelector(".settings-account")).not.toBeNull());
+  const toggle = page.querySelector<HTMLElement & { checked: boolean }>("wa-switch");
+  await waitForFast(() => expect(toggle?.checked).toBe(true));
+
+  toggle!.checked = false;
+  toggle?.dispatchEvent(new Event("change", { bubbles: true }));
+
+  await waitForFast(() =>
+    expect(request.mock.calls.filter(([method]) => method === "users.prefs.set")).toHaveLength(1),
+  );
+  await waitForFast(() => expect(toggle?.checked).toBe(false));
+});
+
 it("renders a write-access note without calling users.self for read-only viewers", async () => {
-  const request = vi.fn();
+  const request = vi.fn(async () => ({
+    personal: {
+      state: "disconnected",
+      generation: null,
+      account: null,
+      accessExpiresAtMs: null,
+      refreshState: "not_applicable",
+      pending: null,
+    },
+    system: {
+      source: "system-detected",
+      credentialKind: "native",
+      credentialState: "unavailable",
+      account: null,
+      gitAuthor: { name: null, email: null },
+      evidence: "none",
+      accessExpiresAtMs: null,
+      refreshState: "not_applicable",
+      oauthScopes: [],
+      repositoryGrants: "unknown",
+    },
+  }));
   const harness = createConnectedContext(request as GatewayBrowserClient["request"], {
     id: "profile-1",
     email: "ada@example.test",
@@ -315,7 +430,7 @@ it("renders a write-access note without calling users.self for read-only viewers
   document.body.append(provider);
 
   await page.updateComplete;
-  expect(request).not.toHaveBeenCalled();
+  expect(request.mock.calls).toEqual([["users.github.status", {}]]);
   expect(page.textContent).toContain("Profile editing requires operator.write access.");
   expect(page.querySelector(".identity-name-control")).toBeNull();
 });

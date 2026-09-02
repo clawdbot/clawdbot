@@ -14,7 +14,6 @@ import { typedCases } from "../test-utils/typed-cases.js";
 import { listDeliverableMessageChannels } from "../utils/message-channel.js";
 import { resolveOwnerPromptNumbers } from "./owner-display.js";
 import { resolveAgentPromptSurfaceForSessionKey } from "./prompt-surface.js";
-import { buildSkillWorkshopPromptSection } from "./skill-workshop-prompt.js";
 import { buildSubagentSystemPrompt } from "./subagents/spawn/subagent-system-prompt.js";
 import { buildSystemPromptParams } from "./system-prompt-params.js";
 import { buildAgentSystemPrompt } from "./system-prompt.js";
@@ -196,19 +195,23 @@ describe("buildAgentSystemPrompt", () => {
     expect(tokenA).not.toBe(tokenB);
   });
 
-  it("injects the current model identity into the runtime prompt", () => {
-    const prompt = buildAgentSystemPrompt({
-      workspaceDir: "/tmp/openclaw",
-      runtimeInfo: {
-        agentId: "main",
-        model: "openai/gpt-5.5",
-      },
-    });
+  it.each(["full", "minimal", "none"] as const)(
+    "keeps model identity guidance conditional in %s prompts",
+    (promptMode) => {
+      const prompt = buildAgentSystemPrompt({
+        workspaceDir: "/tmp/openclaw",
+        promptMode,
+        runtimeInfo: {
+          agentId: "main",
+          model: "openai/gpt-5.5",
+        },
+      });
 
-    expect(prompt).toContain(
-      "Current model identity: openai/gpt-5.5. Model question: answer this current-run value.",
-    );
-  });
+      expect(prompt).toContain(
+        "Current model identity: openai/gpt-5.5. If asked what model you are, answer with this value for the current run.",
+      );
+    },
+  );
 
   it("omits extended sections in minimal prompt mode", () => {
     const prompt = buildAgentSystemPrompt({
@@ -510,6 +513,45 @@ describe("buildAgentSystemPrompt", () => {
     },
   );
 
+  it.each([
+    { name: "direct", toolNames: ["secrets"], capabilityToolNames: [], codeModeActive: false },
+    {
+      name: "deferred Code Mode",
+      toolNames: ["exec"],
+      capabilityToolNames: ["secrets"],
+      codeModeActive: true,
+    },
+  ])("teaches protected credential requests for $name tools", (surface) => {
+    const prompt = buildAgentSystemPrompt({ workspaceDir: "/tmp/openclaw", ...surface });
+    expect(prompt).toContain("`secrets`: list metadata first");
+    expect(prompt).toContain("request only missing task-needed credentials: name + reason");
+    expect(prompt).toContain("exact allowedHosts for egress");
+    expect(prompt).toContain("Human masked entry -> protected shared store");
+    expect(prompt).toContain("metadata/ref only");
+    expect(prompt).toContain("returned store SecretRef on supported config fields");
+    expect(prompt).toContain("Gateway egress needs enabled proxy + allowed hosts");
+    expect(prompt).toContain("no plaintext fallback");
+    expect(prompt).toContain("auto-injected opaque env sentinel under stored name");
+    expect(prompt).toContain("No secret templates; never override/print that variable");
+    expect(prompt).toContain("Native shell/sandbox/node: no protected injection");
+    expect(prompt).toContain("late saves need next turn");
+    expect(prompt).toContain(
+      "no_answer: report blocker or continue with best judgment; never ask in chat",
+    );
+  });
+
+  it("omits the named credential route when policy leaves only Code Mode", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      toolNames: ["exec"],
+      capabilityToolNames: [],
+      codeModeActive: true,
+    });
+    expect(prompt).not.toContain("`secrets`");
+    expect(prompt).toContain("host-owned masked credential entry");
+    expect(prompt).toContain("safe external setup");
+  });
+
   it("includes voice hint when provided", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
@@ -637,15 +679,15 @@ describe("buildAgentSystemPrompt", () => {
       promptMode: "minimal",
     });
 
-    expect(defaultPrompt).not.toContain("## Control UI Session Companion");
-    expect(webchatPrompt).toContain("## Control UI Session Companion");
-    expect(webchatPrompt).toContain("read-only rail companion");
+    expect(defaultPrompt).not.toContain("## Control UI Side Chat");
+    expect(webchatPrompt).toContain("## Control UI Side Chat");
+    expect(webchatPrompt).toContain("read-only Side chat");
     expect(webchatPrompt).toContain("do not spawn sub-agents or burn main-thread turns");
     expect(webchatPrompt).toContain(
       "Reserve `sessions_spawn` for delegated work with its own deliverable",
     );
     expect(webchatWithoutSpawn).not.toContain("sessions_spawn");
-    expect(minimalWebchatPrompt).not.toContain("## Control UI Session Companion");
+    expect(minimalWebchatPrompt).not.toContain("## Control UI Side Chat");
   });
 
   it("guides subagent workflows to avoid polling loops", () => {
@@ -914,7 +956,7 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).not.toContain("Native Codex app-server plugin is available");
     expect(prompt).not.toContain("ACP needs agentId");
     expect(prompt).not.toContain("not ACP harness ids");
-    expect(prompt).toContain("- sessions_spawn: Spawn isolated subagent");
+    expect(prompt).toContain('- sessions_spawn: Spawn subagent; clean context: context="isolated"');
     expect(prompt).toContain("- agents_list: List allowed subagent ids");
   });
 
@@ -1279,16 +1321,6 @@ describe("buildAgentSystemPrompt", () => {
   });
 
   it("instructs models to use skill_workshop only when the tool is available", () => {
-    const section = buildSkillWorkshopPromptSection();
-    expect(section).toEqual([
-      "## Skill Workshop",
-      "Durable reusable skill/playbook/workflow work: `skill_workshop`; never write proposal/skill files directly.",
-      "Used skill proved wrong or incomplete: call `skill_workshop` read, then patch it now; the configured autonomous mode disables repair, leaves it pending, or applies it immediately. Capture only durable, evidenced procedure changes—never task artifacts, transient failures, or unresolved guesses.",
-      "Other generated work = pending proposal. Apply/reject/quarantine only explicit user ask.",
-      "proposal_content = complete final skill body, never plan/diff; update/revise preserves unchanged content.",
-      "",
-    ]);
-
     const withoutTool = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
       toolNames: ["read"],
@@ -1300,11 +1332,18 @@ describe("buildAgentSystemPrompt", () => {
       workspaceDir: "/tmp/openclaw",
       toolNames: ["read", "skill_workshop"],
     });
-    expect(withTool).toContain("- skill_workshop: Manage reusable-skill proposals");
+    expect(withTool).toContain("- skill_workshop: Author reusable skills");
     expect(withTool).toContain("## Skill Workshop");
     expect(withTool).toContain("Durable reusable skill/playbook/workflow work");
     expect(withTool).toContain("Used skill proved wrong or incomplete");
-    expect(withTool).toContain("Other generated work = pending proposal");
+    expect(withTool).toContain(
+      "Where supported, autonomous mode may disable repair, stage a proposal, or apply it",
+    );
+    expect(withTool).toContain(
+      "unsolicited improvements stay pending proposals when supported; otherwise describe the suggestion without publishing",
+    );
+    expect(withTool).toContain("Publication-only create/update requires an explicit user request");
+    expect(withTool).not.toContain("patch it now");
   });
 
   it("appends available skills when provided", () => {
@@ -1538,12 +1577,12 @@ describe("buildAgentSystemPrompt", () => {
     expect(messagingPrompt).not.toContain("subagents(action=list)");
 
     expect(spawnOnlyPrompt).toContain(
-      '- Subagents: `sessions_spawn` with objective/output/write-scope/verification; stable handle needs `taskName`, UI title `label`; isolated omits `context`, transcript needs `context:"fork"`.',
+      '- Subagents: `sessions_spawn` with objective/output/write-scope/verification; stable handle needs `taskName`, UI title `label`; clean context needs `context:"isolated"`, transcript needs `context:"fork"`.',
     );
     expect(spawnOnlyPrompt).not.toContain("manage already-spawned children");
 
     expect(orchestrationPrompt).toContain(
-      '- Subagents: `sessions_spawn` with objective/output/write-scope/verification; stable handle needs `taskName`, UI title `label`; isolated omits `context`, transcript needs `context:"fork"`; `subagents(action=list)` only status/debug.',
+      '- Subagents: `sessions_spawn` with objective/output/write-scope/verification; stable handle needs `taskName`, UI title `label`; clean context needs `context:"isolated"`, transcript needs `context:"fork"`; `subagents(action=list)` only status/debug.',
     );
     expect(orchestrationWaitPrompt).toContain("wait via `sessions_yield`");
   });
@@ -1936,6 +1975,7 @@ describe("buildAgentSystemPrompt", () => {
       workspaceDir: "/tmp/openclaw",
       runtimeInfo: {
         agentId: "work",
+        agentName: "Runt",
         sessionKey: "agent:main:main",
         sessionId: "23ae7fce-3c27-4a51-b58e-d800d8ca091f",
         sessionUrl: "https://gateway.example/control/chat/main",
@@ -1947,7 +1987,7 @@ describe("buildAgentSystemPrompt", () => {
       },
     });
 
-    expect(prompt).toContain("agent=work");
+    expect(prompt).toContain("Runtime: name=Runt | agent=work | session=agent:main:main");
     expect(prompt).toContain("session=agent:main:main");
     expect(prompt).toContain("sessionId=23ae7fce-3c27-4a51-b58e-d800d8ca091f");
     expect(prompt).toContain("sessionUrl=https://gateway.example/control/chat/main");
@@ -2065,9 +2105,45 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt.match(/## Conversation Context/g)).toHaveLength(1);
   });
 
+  it("keeps the unsplit workspace prompt byte-identical", () => {
+    const params = { workspaceDir: "/tmp/openclaw" };
+    const prompt = buildAgentSystemPrompt(params);
+    expect(buildAgentSystemPrompt({ ...params, runtimeCwd: params.workspaceDir })).toBe(prompt);
+    expect(prompt).toContain(
+      "## Workspace\nWorking directory: /tmp/openclaw\nSingle global file workspace unless explicitly told otherwise.",
+    );
+    expect(prompt).not.toContain("## Directory Roles");
+  });
+
+  it("keys the stable directory roles by runtime cwd without moving agent files", () => {
+    const params = { workspaceDir: "/tmp/openclaw", fsWorkspaceOnly: true };
+    const prompts = ["/tmp/repo-a", "/tmp/repo-b", "/tmp/repo-a"].map((runtimeCwd) =>
+      buildAgentSystemPrompt({ ...params, runtimeCwd }),
+    );
+    for (const [index, cwd] of ["/tmp/repo-a", "/tmp/repo-b"].entries()) {
+      const prefix = prompts[index]!.split(SYSTEM_PROMPT_CACHE_BOUNDARY)[0];
+      expect(prefix).toContain(
+        `## Directory Roles\nWorking directory: ${cwd} (tools and deliverables).\nAgent workspace: /tmp/openclaw (AGENTS.md/SOUL.md, other agent instructions, MEMORY.md/memory only; use absolute paths).`,
+      );
+      expect(prefix).not.toContain("## Workspace\n");
+      expect(prefix).not.toContain("Single global file workspace");
+      expect(prefix).toContain("file-tool scratch/temp/meta stays in working directory");
+    }
+    expect(prompts[2]).toBe(prompts[0]);
+  });
+
+  it("sanitizes runtime cwd before rendering directory roles", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      runtimeCwd: "/tmp/repo\n\u2028\u202e-injected",
+    });
+    expect(prompt).toContain("Working directory: /tmp/repo-injected (tools and deliverables).");
+  });
+
   it("describes sandboxed runtime and elevated when allowed", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
+      runtimeCwd: "/tmp/task-repo",
       toolNames: ["exec"],
       sandboxInfo: {
         enabled: true,
@@ -2080,6 +2156,7 @@ describe("buildAgentSystemPrompt", () => {
     });
 
     expect(prompt).toContain("Working directory: /workspace");
+    expect(prompt).not.toContain("## Directory Roles");
     expect(prompt).toContain(
       "File tools use host workspace /tmp/openclaw. exec uses container /workspace or relative workdir paths; never host paths.",
     );
@@ -2227,7 +2304,6 @@ describe("buildSubagentSystemPrompt", () => {
   it("renders depth-1 orchestrator guidance, labels, and recovery notes", () => {
     const prompt = buildSubagentSystemPrompt({
       childSessionKey: "agent:main:subagent:abc",
-      task: "research task",
       childDepth: 1,
       maxSpawnDepth: 2,
       acpEnabled: true,
@@ -2260,26 +2336,25 @@ describe("buildSubagentSystemPrompt", () => {
     );
   });
 
-  it("keeps delegated task text out of the system prompt", () => {
-    const task = "line one\n  line two\n  line three";
+  it("selects the current child's task instead of inherited envelopes", () => {
     const prompt = buildSubagentSystemPrompt({
       childSessionKey: "agent:main:subagent:abc",
-      task,
-      childDepth: 1,
-      maxSpawnDepth: 1,
+      requesterSessionKey: "agent:main:subagent:parent",
+      childDepth: 2,
+      maxSpawnDepth: 2,
     });
 
     expect(prompt).toContain("## Your Role");
-    expect(prompt).toContain("First visible `[Subagent Task]`");
-    expect(prompt).not.toContain("line one");
-    expect(prompt).not.toContain("  line two");
-    expect(prompt).not.toContain("  line three");
+    expect(prompt).not.toContain("First visible `[Subagent Task]`");
+    expect(prompt).toMatch(
+      /\[Subagent Task\].*(?:current|your|this) (?:child )?session|(?:current|your|this) (?:child )?session.*\[Subagent Task\]/i,
+    );
+    expect(prompt).toMatch(/inherited[^.\n]*(?:task|envelope)[^.\n]*(?:background|reference)/i);
   });
 
   it("omits ACP spawning guidance when ACP is disabled", () => {
     const prompt = buildSubagentSystemPrompt({
       childSessionKey: "agent:main:subagent:abc",
-      task: "research task",
       childDepth: 1,
       maxSpawnDepth: 2,
       acpEnabled: false,
@@ -2293,7 +2368,6 @@ describe("buildSubagentSystemPrompt", () => {
   it("renders subagent-scoped native command guidance when ACP is disabled", () => {
     const prompt = buildSubagentSystemPrompt({
       childSessionKey: "agent:main:subagent:abc",
-      task: "research task",
       childDepth: 1,
       maxSpawnDepth: 2,
       acpEnabled: false,
@@ -2307,7 +2381,6 @@ describe("buildSubagentSystemPrompt", () => {
   it("omits ACP spawning guidance by default", () => {
     const prompt = buildSubagentSystemPrompt({
       childSessionKey: "agent:main:subagent:abc",
-      task: "research task",
       childDepth: 1,
       maxSpawnDepth: 2,
     });
@@ -2319,7 +2392,6 @@ describe("buildSubagentSystemPrompt", () => {
   it("prefers native Codex commands over Codex ACP when available", () => {
     const prompt = buildSubagentSystemPrompt({
       childSessionKey: "agent:main:subagent:abc",
-      task: "research task",
       childDepth: 1,
       maxSpawnDepth: 2,
       nativeCommandGuidanceLines: [
@@ -2335,7 +2407,6 @@ describe("buildSubagentSystemPrompt", () => {
   it("renders depth-2 leaf guidance with parent orchestrator labels", () => {
     const prompt = buildSubagentSystemPrompt({
       childSessionKey: "agent:main:subagent:abc:subagent:def",
-      task: "leaf task",
       childDepth: 2,
       maxSpawnDepth: 2,
     });
@@ -2353,7 +2424,6 @@ describe("buildSubagentSystemPrompt", () => {
         name: "explicit maxSpawnDepth 1",
         input: {
           childSessionKey: "agent:main:subagent:abc",
-          task: "research task",
           childDepth: 1,
           maxSpawnDepth: 1,
         },
@@ -2363,7 +2433,6 @@ describe("buildSubagentSystemPrompt", () => {
         name: "implicit default depth/maxSpawnDepth",
         input: {
           childSessionKey: "agent:main:subagent:abc",
-          task: "basic task",
         },
         expectMainAgentLabel: true,
       },

@@ -32,6 +32,7 @@ function readUiCss(): string {
     "ui/src/styles/settings-controls.css",
     "ui/src/styles/settings.css",
     "ui/src/styles/sessions.css",
+    "ui/src/styles/capacity-meter.css",
   ];
   return files.map((file) => readStyleSheet(file)).join("\n");
 }

@@ -4,11 +4,10 @@ import {
   readStringValue,
 } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { normalizeControlUiBasePath } from "@openclaw/session-url-contract";
 import { resolveControlUiSessionLinkBase } from "../config/control-ui-link-base.js";
-import { resolveGatewayPort } from "../config/paths.js";
 import { emitAgentActivityEvent, type AgentItemEventData } from "../infra/agent-activity-events.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
+import { isDeliverableMessageChannel } from "../utils/message-channel-normalize.js";
 import { REQUIRED_PARAM_GROUPS, type RequiredParamGroup } from "./agent-tools.params.js";
 import { sanitizeForConsole } from "./console-sanitize.js";
 import { extractMessagingToolSend } from "./embedded-agent-messaging-extraction.js";
@@ -338,7 +337,10 @@ export function handleToolExecutionStart(
       "action" in evt.args &&
       evt.args.action === "request");
   const questionPromptReservation =
-    isQuestionTool && ctx.params.onToolResult
+    isQuestionTool &&
+    ctx.params.onToolResult &&
+    // Native credential cards arrive through question.requested, not a public link.
+    (startToolName === "ask_user" || isDeliverableMessageChannel(ctx.params.messageChannel ?? ""))
       ? reserveQuestionPromptDelivery(
           startToolName === "ask_user" ? "ask_user" : "secrets",
           evt.toolCallId,
@@ -597,50 +599,48 @@ export function handleToolExecutionStart(
       }
     }
 
-    if (isQuestionTool && ctx.params.onToolResult) {
-      const payload = questionPromptReservation;
-      if (payload) {
-        const questionId = payload.questionId;
-        void waitForAskUserPromptReady(questionId)
-          .then((questions) => {
-            if (!questions) {
+    if (questionPromptReservation) {
+      const questionId = questionPromptReservation.questionId;
+      void waitForAskUserPromptReady(questionId)
+        .then(async (questions) => {
+          if (!questions) {
+            return;
+          }
+          if (toolName === "secrets") {
+            const binding = questions[0]?.secretStore;
+            if (!binding) {
               return;
             }
-            if (toolName === "secrets") {
-              const binding = questions[0]?.secretStore;
-              if (!binding) {
-                return;
-              }
-              const config = ctx.params.config;
-              const controlUiBase =
-                resolveControlUiSessionLinkBase(config) ??
-                `http://127.0.0.1:${resolveGatewayPort(config)}${normalizeControlUiBasePath(
-                  config?.gateway?.controlUi?.basePath,
-                )}`;
-              const url = `${controlUiBase}/ask/${encodeURIComponent(questionId)}`;
-              return ctx.params.onToolResult?.({
-                text: `🔑 Agent requests credential ${binding.name} (${binding.kind}). Reply is disabled for secrets — open to provide it: ${url}`,
-              });
+            const controlUiBase = resolveControlUiSessionLinkBase(ctx.params.config);
+            const text = controlUiBase
+              ? `🔑 Agent requests credential ${binding.name} (${binding.kind}). Reply is disabled for secrets — open to provide it: ${controlUiBase}/ask/${encodeURIComponent(questionId)}`
+              : "Credential request unavailable here: no reachable Control UI link. Open a trusted Control UI or native app and retry, or ask the operator to enable Control UI and configure gateway.publicOrigin. Never send credentials in chat.";
+            // Correlation keeps this durable without adding answer controls or a plaintext claim.
+            await ctx.params.onToolResult?.({ text, channelData: { askUser: { questionId } } });
+            if (!controlUiBase) {
+              // A visible blocker is not a delivered entry form; cancel the pending wait.
+              throw new Error(text);
             }
-            return ctx.params.onToolResult?.(
-              buildAgentHarnessQuestionPromptPayload({
-                questionId,
-                questions: questions.map(({ questionId: id, ...question }) => ({
-                  ...question,
-                  id,
-                })),
-                options: { intro: "Question for you:" },
-              }),
-            );
-          })
-          .then(
-            () => settleAskUserPromptDelivery(questionId),
-            (error: unknown) => {
-              settleAskUserPromptDelivery(questionId, error);
-              ctx.log.warn(`failed to deliver ${toolName} prompt: ${String(error)}`);
-            },
+            return;
+          }
+          return ctx.params.onToolResult?.(
+            buildAgentHarnessQuestionPromptPayload({
+              questionId,
+              questions: questions.map(({ questionId: id, ...question }) => ({
+                ...question,
+                id,
+              })),
+              options: { intro: "Question for you:" },
+            }),
           );
-      }
+        })
+        .then(
+          () => settleAskUserPromptDelivery(questionId),
+          (error: unknown) => {
+            settleAskUserPromptDelivery(questionId, error);
+            ctx.log.warn(`failed to deliver ${toolName} prompt: ${String(error)}`);
+          },
+        );
     }
   };
 

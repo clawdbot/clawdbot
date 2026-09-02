@@ -293,9 +293,11 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
         let mode = self.state.connectionMode
         if mode != self.observedConnectionMode {
             self.observedConnectionMode = mode
-            Task { await ConnectionModeCoordinator.shared.apply(mode: mode, paused: self.state.isPaused) }
-            if AppLaunchRuntimePlan.current.allowsAutomaticPresentation {
-                CLIInstallPrompter.shared.checkAndPromptIfNeeded(reason: "connection-mode")
+            Task {
+                await ConnectionModeCoordinator.shared.apply(mode: mode, paused: self.state.isPaused)
+                if self.state.connectionMode == mode, AppLaunchRuntimePlan.current.allowsAutomaticPresentation {
+                    CLIInstallPrompter.shared.checkAndPromptIfNeeded(reason: "connection-mode")
+                }
             }
             BrowserProfileImportModel.shared.handleConnectionModeChange()
         }

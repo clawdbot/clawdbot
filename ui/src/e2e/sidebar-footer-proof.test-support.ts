@@ -1,12 +1,9 @@
-import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import type { Locator, Page } from "playwright";
 import { expect } from "vitest";
 import type { ControlUiBuildInfo } from "../build-info.ts";
 import { installMockGateway, startControlUiE2eServer } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
-
-const proofArtifactRoot = path.join(process.cwd(), ".artifacts", "control-ui-e2e");
 
 const SIDEBAR_PROOF_USER = {
   self: true,
@@ -57,6 +54,7 @@ export async function setSidebarProofTheme(page: Page, mode: "dark" | "light") {
 }
 
 export async function captureUnionProof(
+  owner: { readonly artifactDir: string },
   page: Page,
   directory: string,
   fileName: string,
@@ -95,8 +93,7 @@ export async function captureUnionProof(
     viewport.height,
     Math.max(...boxes.map((box) => box.y + box.height)) + margin,
   );
-  const artifactDir = path.join(proofArtifactRoot, directory);
-  await mkdir(artifactDir, { recursive: true });
+  const artifactDir = path.join(owner.artifactDir, directory);
   await page.screenshot({
     clip: { x, y, width: right - x, height: bottom - y },
     path: path.join(artifactDir, fileName),
