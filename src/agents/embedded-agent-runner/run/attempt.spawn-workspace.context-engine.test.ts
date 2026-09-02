@@ -1221,8 +1221,8 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     expect(hoisted.sessionManager.branch).not.toHaveBeenCalled();
     expect(
       hoisted.sessionManager.clearNextUserMessagePersistenceSuppression,
-    ).toHaveBeenCalledOnce();
-    expect(onUserMessagePersistenceInvalidated).toHaveBeenCalledOnce();
+    ).not.toHaveBeenCalled();
+    expect(onUserMessagePersistenceInvalidated).not.toHaveBeenCalled();
   });
 
   it("targets the latest active prompt after orphan repair reaches the embedded provider", async () => {

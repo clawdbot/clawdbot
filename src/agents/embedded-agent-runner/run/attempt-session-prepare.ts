@@ -453,8 +453,9 @@ export async function prepareEmbeddedAttemptSessionBoundary(input: {
     // Keep the interrupted/queued user leaf on the canonical branch for later
     // turns, but exclude it from this provider turn — its text already rides in
     // the merged (or already-present) active prompt.
-    sessionManager.clearNextUserMessagePersistenceSuppression?.();
-    attempt.onUserMessagePersistenceInvalidated?.();
+    // Keep one-shot user-message persistence suppression: clearing it would
+    // persist the recovery prompt as a second durable user row and duplicate
+    // the interrupted request in later context.
     activeSession.agent.state.messages = excludeOrphanedTrailingUserMessageFromModelContext({
       messages: sanitizeCompactionReplayMessages(sessionManager.buildSessionContext().messages),
       leafMessage: orphanRepair.messageEntry.message,
