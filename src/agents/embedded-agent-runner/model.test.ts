@@ -1105,6 +1105,7 @@ describe("resolveModel", () => {
       allowGatewaySubagentBinding: false,
       config: cfg,
       authModes: {},
+      oauthRefreshProviderIds: [],
       metadataSnapshot: createPluginMetadataSnapshotFixture(),
       modelCatalog: { entries: [], routeVariants: [] },
       configuredRuntimeModels: [
@@ -1147,6 +1148,7 @@ describe("resolveModel", () => {
       allowGatewaySubagentBinding: false,
       config: {},
       authModes: {},
+      oauthRefreshProviderIds: [],
       metadataSnapshot: createPluginMetadataSnapshotFixture(),
       modelCatalog: { entries: [], routeVariants: [] },
       configuredRuntimeModels: [],
@@ -1185,6 +1187,7 @@ describe("resolveModel", () => {
       allowGatewaySubagentBinding: false,
       config: {},
       authModes: {},
+      oauthRefreshProviderIds: [],
       metadataSnapshot,
       modelCatalog: { entries: [], routeVariants: [] },
       configuredRuntimeModels: [],

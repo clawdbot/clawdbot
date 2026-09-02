@@ -290,6 +290,7 @@ function requestModelsList(params: {
       workspaceDir: agentDir,
       config,
       authModes: params.preparedAuthModes ?? {},
+      oauthRefreshProviderIds: [],
       authStore:
         getPreparedRuntimeAuthProfileStoreSnapshot(agentDir) ??
         loadAuthProfileStoreWithoutExternalProfiles(agentDir, { allowKeychainPrompt: false }),

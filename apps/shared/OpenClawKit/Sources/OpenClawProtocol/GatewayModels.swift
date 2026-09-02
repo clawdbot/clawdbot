@@ -12980,6 +12980,70 @@ public struct SystemAgentSetupAuthStartResult: Codable, Sendable {
     }
 }
 
+public struct ModelAuthLoginStartParams: Codable, Sendable {
+    public let agentid: String?
+    public let authchoice: String
+
+    public init(
+        agentid: String? = nil,
+        authchoice: String)
+    {
+        self.agentid = agentid
+        self.authchoice = authchoice
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case agentid = "agentId"
+        case authchoice = "authChoice"
+    }
+}
+
+public struct ModelAuthLoginStartResult: Codable, Sendable {
+    public let sessionid: String
+    public let done: Bool
+    public let step: WizardStep?
+    public let status: AnyCodable?
+    public let error: String?
+    public let channels: [String]?
+    public let accounts: [[String: AnyCodable]]?
+    public let preparedmodelref: String?
+    public let modelactivation: [String: AnyCodable]?
+
+    public init(
+        sessionid: String,
+        done: Bool,
+        step: WizardStep? = nil,
+        status: AnyCodable? = nil,
+        error: String? = nil,
+        channels: [String]? = nil,
+        accounts: [[String: AnyCodable]]? = nil,
+        preparedmodelref: String? = nil,
+        modelactivation: [String: AnyCodable]? = nil)
+    {
+        self.sessionid = sessionid
+        self.done = done
+        self.step = step
+        self.status = status
+        self.error = error
+        self.channels = channels
+        self.accounts = accounts
+        self.preparedmodelref = preparedmodelref
+        self.modelactivation = modelactivation
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case sessionid = "sessionId"
+        case done
+        case step
+        case status
+        case error
+        case channels
+        case accounts
+        case preparedmodelref = "preparedModelRef"
+        case modelactivation = "modelActivation"
+    }
+}
+
 public struct WizardStartParams: Codable, Sendable {
     public let mode: AnyCodable?
     public let workspace: String?
@@ -15440,6 +15504,24 @@ public struct ModelsAuthLogoutParams: Codable, Sendable {
     private enum CodingKeys: String, CodingKey {
         case provider
         case profileids = "profileIds"
+        case agentid = "agentId"
+    }
+}
+
+public struct ModelsAuthRefreshParams: Codable, Sendable {
+    public let operation: AnyCodable
+    public let agentid: String?
+
+    public init(
+        operation: AnyCodable,
+        agentid: String? = nil)
+    {
+        self.operation = operation
+        self.agentid = agentid
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case operation
         case agentid = "agentId"
     }
 }

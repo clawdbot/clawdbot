@@ -8,7 +8,7 @@ describe("createWizardSessionTracker", () => {
     let now = 1_000;
     const tracker = createWizardSessionTracker({ now: () => now });
     const terminal = new WizardSession(async () => {});
-    tracker.wizardSessions.set("finished", terminal);
+    tracker.trackWizardSession(terminal, undefined, "finished");
     await terminal.next();
 
     expect(tracker.findRunningWizard()).toBeNull();
@@ -28,10 +28,10 @@ describe("createWizardSessionTracker", () => {
     const running = new WizardSession(async (prompter) => {
       await prompter.note("waiting");
     });
-    tracker.wizardSessions.set("running", running);
+    tracker.trackWizardSession(running, undefined, "running");
 
     expect(tracker.findRunningWizard()).toBe("running");
-    expect(tracker.wizardSessions.get("running")).toBe(running);
+    expect(tracker.wizardSessions.get("running")?.session).toBe(running);
     running.cancel();
   });
 
@@ -41,7 +41,7 @@ describe("createWizardSessionTracker", () => {
     const cancelled = new WizardSession(async () => {
       await releaseRunner.promise;
     });
-    tracker.wizardSessions.set("cancelled", cancelled);
+    tracker.trackWizardSession(cancelled, undefined, "cancelled");
 
     expect(cancelled.cancel()).toBe(true);
     tracker.purgeWizardSession("cancelled");
@@ -53,5 +53,30 @@ describe("createWizardSessionTracker", () => {
     expect(tracker.findRunningWizard()).toBeNull();
     tracker.purgeWizardSession("cancelled");
     expect(tracker.wizardSessions.has("cancelled")).toBe(false);
+  });
+
+  it("cancels only sessions owned by the disconnected connection", async () => {
+    const tracker = createWizardSessionTracker();
+    const owned = new WizardSession(async (prompter) => {
+      await prompter.note("owned");
+    });
+    const other = new WizardSession(async (prompter) => {
+      await prompter.note("other");
+    });
+    const unowned = new WizardSession(async (prompter) => {
+      await prompter.note("unowned");
+    });
+    tracker.trackWizardSession(owned, "owner-connection", "owned");
+    tracker.trackWizardSession(other, "other-connection", "other");
+    tracker.trackWizardSession(unowned, undefined, "unowned");
+
+    tracker.handleWizardDisconnect("owner-connection");
+
+    await expect.poll(() => owned.getStatus()).toBe("cancelled");
+    expect(other.getStatus()).toBe("running");
+    expect(unowned.getStatus()).toBe("running");
+    other.cancel();
+    unowned.cancel();
+    await Promise.all([other.whenSettled(), unowned.whenSettled()]);
   });
 });

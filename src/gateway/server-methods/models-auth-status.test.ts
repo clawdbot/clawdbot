@@ -158,6 +158,10 @@ const logoutHandler = expectDefined(
   modelsAuthStatusHandlers["models.authLogout"],
   'modelsAuthStatusHandlers["models.authLogout"] test invariant',
 );
+const refreshHandler = expectDefined(
+  modelsAuthStatusHandlers["models.authRefresh"],
+  'modelsAuthStatusHandlers["models.authRefresh"] test invariant',
+);
 
 function createActiveRun(providerId: string, authProviderId?: string, agentId = "main") {
   return {
@@ -214,9 +218,41 @@ function createLogoutOptions(
   } as unknown as GatewayRequestHandlerOptions & { respond: ReturnType<typeof vi.fn> };
 }
 
+function createRefreshOptions(params: Record<string, unknown>) {
+  const respond = vi.fn();
+  const loadGatewayModelCatalogSnapshot = vi.fn(async () => ({
+    agentId: "main",
+    agentDir: "/tmp/agent",
+    workspaceDir: "/tmp/workspace",
+    config: {},
+    entries: [],
+    routeVariants: [],
+    authModes: {},
+    authStore: { version: 1, profiles: {} },
+    authMaterializations: [],
+    oauthRefreshProviderIds: [],
+    metadataSnapshot: { index: { plugins: [] }, manifestRegistry: { plugins: [] }, plugins: [] },
+  }));
+  return {
+    options: {
+      req: { type: "req", id: "req-refresh", method: "models.authRefresh", params },
+      params,
+      client: null,
+      isWebchatConnect: () => false,
+      respond,
+      context: {
+        getRuntimeConfig: mocks.getRuntimeConfig,
+        loadGatewayModelCatalogSnapshot,
+      },
+    } as unknown as GatewayRequestHandlerOptions & { respond: ReturnType<typeof vi.fn> },
+    loadGatewayModelCatalogSnapshot,
+  };
+}
+
 const requireRecord = createRequireRecord("record", "expected-non-array-record");
 let preparedAuthStore: AuthProfileStore = { version: 1, profiles: {} };
 let preparedMetadataSnapshot: unknown;
+let preparedOAuthRefreshProviderIds: string[] = [];
 
 function setPreparedAuthStore(store: AuthProfileStore): void {
   preparedAuthStore = store;
@@ -242,6 +278,7 @@ function createPreparedOwnerSnapshot(agentId: string) {
     authModes: {},
     authStore: preparedAuthStore,
     authMaterializations: [],
+    oauthRefreshProviderIds: preparedOAuthRefreshProviderIds,
     metadataSnapshot: preparedMetadataSnapshot as never,
   };
 }
@@ -292,6 +329,7 @@ function resetAuthStatusMocks(): void {
   );
   mocks.resolveDefaultAgentId.mockReturnValue("main");
   setPreparedAuthStore({ version: 1, profiles: {} });
+  preparedOAuthRefreshProviderIds = [];
   setPreparedMetadataSnapshot(createPluginMetadataSnapshotFixture());
   mocks.readPreparedCatalog.mockImplementation(async (_context, agentId: string) =>
     createPreparedOwnerSnapshot(agentId),
@@ -393,6 +431,30 @@ function createOpenAiCodexOauthHealthSummary(): AuthHealthSummary {
     ],
   };
 }
+
+describe("models.authRefresh", () => {
+  beforeEach(() => {
+    resetAuthStatusMocks();
+    mocks.clearCurrentProviderAuthState.mockClear();
+  });
+
+  it.each([{ operation: "login" }, { operation: "logout" }, { operation: "update" }] as const)(
+    "routes $operation through the canonical refresh owner",
+    async (testCase) => {
+      const { options, loadGatewayModelCatalogSnapshot } = createRefreshOptions({
+        operation: testCase.operation,
+        agentId: "main",
+      });
+
+      await refreshHandler(options);
+
+      expect(firstRespondCall(options)).toEqual([true, { refreshed: true }, undefined]);
+      expect(mocks.refreshActiveProviderAuthRuntimeSnapshot).toHaveBeenCalledOnce();
+      expect(mocks.clearCurrentProviderAuthState).toHaveBeenCalledOnce();
+      expect(loadGatewayModelCatalogSnapshot).not.toHaveBeenCalled();
+    },
+  );
+});
 
 describe("models.authStatus", () => {
   beforeEach(() => {
@@ -608,7 +670,10 @@ describe("models.authStatus", () => {
     expect(result.providers[0]?.profiles[0]?.logoutSupported).toBe(true);
   });
 
-  it("projects provider capabilities from the published lifecycle metadata", async () => {
+  it("projects model-provider access from published lifecycle metadata", async () => {
+    mocks.getRuntimeConfig.mockReturnValue({
+      plugins: { entries: { "workspace-auth": { enabled: true } } },
+    });
     const snapshot = createPluginMetadataSnapshotFixture({
       plugins: [
         {
@@ -629,6 +694,7 @@ describe("models.authStatus", () => {
               method: "oauth",
               choiceId: "openai-oauth",
               choiceLabel: "OpenAI OAuth",
+              appGuidedAuth: "oauth",
             },
             {
               provider: "media-only",
@@ -642,6 +708,21 @@ describe("models.authStatus", () => {
               method: "oauth",
               choiceId: "github-copilot-oauth",
               choiceLabel: "GitHub Copilot OAuth",
+              appGuidedAuth: "device-code",
+            },
+          ],
+        },
+        {
+          id: "workspace-auth",
+          origin: "workspace",
+          providers: ["workspace-provider"],
+          providerAuthChoices: [
+            {
+              provider: "workspace-provider",
+              method: "oauth",
+              choiceId: "workspace-oauth",
+              choiceLabel: "Workspace OAuth",
+              appGuidedAuth: "oauth",
             },
           ],
         },
@@ -656,8 +737,35 @@ describe("models.authStatus", () => {
     const result = await readAuthStatus();
 
     expect(result.providerCapabilities).toEqual([
-      { provider: "github-copilot", apiKeySupported: false, quickApiKeySetup: false },
-      { provider: "openai", apiKeySupported: true, quickApiKeySetup: true },
+      {
+        provider: "github-copilot",
+        apiKeySupported: false,
+        quickApiKeySetup: false,
+        accessOptions: [
+          {
+            id: "github-copilot-oauth",
+            label: "GitHub Copilot OAuth",
+            mode: "login",
+          },
+        ],
+      },
+      {
+        provider: "openai",
+        apiKeySupported: true,
+        quickApiKeySetup: true,
+        accessOptions: [
+          {
+            id: "openai-api-key",
+            label: "OpenAI API key",
+            mode: "login",
+          },
+          {
+            id: "openai-oauth",
+            label: "OpenAI OAuth",
+            mode: "login",
+          },
+        ],
+      },
     ]);
   });
 
@@ -705,6 +813,56 @@ describe("models.authStatus", () => {
     const provider = await firstAuthStatusProvider();
 
     expect(provider?.profiles[0]?.logoutSupported).toBeUndefined();
+  });
+
+  it("reports stored OAuth as signed in across access-token expiry", async () => {
+    const profileId = "xai:falcon";
+    const profile = {
+      profileId,
+      provider: "xai",
+      type: "oauth",
+      status: "expiring",
+      expiresAt: 3,
+      remainingMs: 1,
+      source: "store",
+      label: profileId,
+    } satisfies AuthHealthSummary["profiles"][number];
+    setPreparedAuthStore({
+      version: 1,
+      profiles: {
+        [profileId]: {
+          type: "oauth",
+          provider: "xai",
+          access: "short-lived-access",
+          refresh: "durable-refresh",
+          expires: 3,
+        },
+      },
+    });
+    preparedOAuthRefreshProviderIds = ["xai"];
+    mocks.buildAuthHealthSummary.mockReturnValue({
+      now: 2,
+      warnAfterMs: 2,
+      profiles: [profile],
+      providers: [
+        {
+          provider: "xai",
+          status: "expiring",
+          expiresAt: 3,
+          remainingMs: 1,
+          profiles: [profile],
+        },
+      ],
+    });
+
+    const provider = await firstAuthStatusProvider();
+
+    expect(provider).toMatchObject({
+      provider: "xai",
+      status: "ok",
+      profiles: [{ profileId, status: "expiring" }],
+    });
+    expect(provider?.expiry).toBeUndefined();
   });
 
   it("reports external CLI-managed OAuth as signed in across access-token expiry", async () => {
@@ -984,7 +1142,7 @@ describe("models.authStatus", () => {
     );
   });
 
-  it("preserves expiry when an effective OAuth sibling is not CLI-owned", async () => {
+  it("preserves expiry when an effective OAuth sibling is not refresh-owned", async () => {
     const cliProfileId = "anthropic:claude-cli";
     const manualProfileId = "anthropic:manual";
     const profiles = [cliProfileId, manualProfileId].map(
@@ -1284,6 +1442,27 @@ describe("models.authStatus", () => {
     const provider = await firstAuthStatusProvider();
     expect(provider?.apiKey).toBeUndefined();
     expect(provider?.profiles).toHaveLength(1);
+    expect(provider?.profiles[0]?.logoutSupported).toBeUndefined();
+  });
+
+  it("offers logout for an unbound saved API-key profile", async () => {
+    const profileId = "groq:default";
+    setPreparedAuthStore({
+      version: 1,
+      profiles: {
+        [profileId]: { type: "api_key", provider: "groq", key: "placeholder" },
+      },
+    });
+    mocks.buildAuthHealthSummary.mockReturnValue({
+      now: 0,
+      warnAfterMs: 0,
+      profiles: [createApiKeyProfile("groq")],
+      providers: [createStaticApiKeyProvider("groq")],
+    });
+
+    const provider = await firstAuthStatusProvider();
+
+    expect(provider?.profiles[0]?.logoutSupported).toBe(true);
   });
 
   it("forwards unresolved auth reason codes to status clients", async () => {
@@ -2147,7 +2326,7 @@ describe("models.authLogout", () => {
     expect(mocks.buildAuthHealthSummary).toHaveBeenCalledTimes(2);
   });
 
-  it("removes only requested saved OAuth or token profiles", async () => {
+  it("removes only the requested saved profile", async () => {
     mocks.ensureAuthProfileStoreWithoutExternalProfiles.mockReturnValue({
       version: 1,
       profiles: {
@@ -2168,23 +2347,23 @@ describe("models.authLogout", () => {
     mocks.listProfilesForProvider.mockReturnValue(["openrouter:oauth", "openrouter:api-key"]);
     const opts = createLogoutOptions({
       provider: "openrouter",
-      profileIds: ["openrouter:oauth"],
+      profileIds: ["openrouter:api-key"],
     });
 
     await logoutHandler(opts);
 
     expect(mocks.removeAuthProfilesAcrossOwnerStores).toHaveBeenCalledWith({
-      profileIds: ["openrouter:oauth"],
+      profileIds: ["openrouter:api-key"],
       agentDir: "/tmp/agent",
     });
     expect(mocks.removeProviderAuthProfilesWithLock).not.toHaveBeenCalled();
     const [ok, payload] = firstRespondCall(opts) ?? [];
     expect(ok).toBe(true);
-    expect((payload as ModelAuthLogoutResult).removedProfiles).toEqual(["openrouter:oauth"]);
+    expect((payload as ModelAuthLogoutResult).removedProfiles).toEqual(["openrouter:api-key"]);
   });
 
-  it("rejects targeted logout for config-bound token profiles", async () => {
-    const profileId = "openrouter:token";
+  it("rejects targeted logout for config-bound API-key profiles", async () => {
+    const profileId = "openrouter:api-key";
     mocks.getRuntimeConfig.mockReturnValue({
       models: {
         providers: {
@@ -2195,7 +2374,7 @@ describe("models.authLogout", () => {
     mocks.ensureAuthProfileStoreWithoutExternalProfiles.mockReturnValue({
       version: 1,
       profiles: {
-        [profileId]: { type: "token", provider: "openrouter", token: "placeholder" },
+        [profileId]: { type: "api_key", provider: "openrouter", key: "placeholder" },
       },
     });
     mocks.listProfilesForProvider.mockReturnValue([profileId]);

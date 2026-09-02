@@ -3,7 +3,7 @@ import type {
   loadAuthProfileStoreForRuntime,
   updateAuthProfileStoreWithLock,
 } from "../agents/auth-profiles/store.js";
-import type { readCodexCliActiveApiKey } from "../agents/cli-credentials.js";
+import type { readCodexCliActiveApiKeyAsync } from "../agents/cli-credentials.runtime.js";
 import type { AgentExecutionAuthBinding } from "../agents/execution-auth-binding.js";
 import { DEFAULT_AGENT_WORKSPACE_DIR } from "../agents/workspace-default.js";
 import type {
@@ -98,7 +98,7 @@ export type SetupInferenceDetection = {
   /** Interactive provider-owned browser and device-code sign-in methods. */
   authOptions: SetupInferenceAuthOption[];
   /** Provider-owned app-guided local model setup methods. */
-  prepareOptions?: SetupInferencePrepareOption[];
+  prepareOptions: SetupInferencePrepareOption[];
   /** Curated tools clients can offer when no existing AI access is detected. */
   recommendedInstalls: SetupRecommendedInstall[];
   /** Resolved workspace the setup apply would use (display + default). */
@@ -276,7 +276,7 @@ export type ActivateSetupInferenceDeps = {
   resolveCliRuntimeOwnerFingerprint?: typeof import("../agents/cli-auth-epoch.js").resolveCliRuntimeOwnerFingerprint;
   resolveApiKeyForProvider?: typeof import("../agents/model-auth.js").resolveApiKeyForProviderCore;
   resolvePluginMetadataSnapshot?: typeof import("../plugins/plugin-metadata-snapshot.js").resolvePluginMetadataSnapshot;
-  readCodexCliActiveApiKey?: typeof readCodexCliActiveApiKey;
+  readCodexCliActiveApiKey?: typeof readCodexCliActiveApiKeyAsync;
   loadPluginRegistrySnapshot?: SystemAgentVerifiedInferenceDeps["loadPluginRegistrySnapshot"];
   fingerprintPluginRuntimeArtifact?: SystemAgentVerifiedInferenceDeps["fingerprintPluginRuntimeArtifact"];
   captureSystemAgentOwnerPluginArtifacts?: typeof captureSystemAgentOwnerPluginArtifacts;

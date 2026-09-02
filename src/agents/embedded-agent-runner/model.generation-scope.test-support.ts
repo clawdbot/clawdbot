@@ -114,6 +114,7 @@ export function createModelGenerationFixture(params: {
     activeProjectKeys: [],
     config: params.config,
     authModes: {},
+    oauthRefreshProviderIds: [],
     metadataSnapshot,
     ...(params.withRegistry === false ? {} : { pluginRegistry }),
     allowGatewaySubagentBinding: false,

@@ -148,6 +148,14 @@ openclaw migrate plan codex --from <codex-home> --agent <agent-id> --include-sec
 openclaw migrate apply codex --from <codex-home> --agent <agent-id> --include-secrets --item auth:openai --yes
 ```
 
+For the common ChatGPT OAuth case, an explicit `/login codex` or Control UI
+OpenAI sign-in action runs the same auth-only migration item before it starts a
+new login. This fast path does not scan Codex skills, plugins, memory, or app
+inventory, copy model-cache entries into settings, or run from `/models` and
+catalog discovery. Current subscription models still come from Codex
+`model/list` catalog refreshes. Use the commands above when you need a preview,
+a non-default source path, or full migration reporting.
+
 Running `openclaw migrate codex` in an interactive terminal previews the full plan, then opens checkbox selectors before the final apply confirmation. Skill copy items are prompted first. Use `Toggle all on` or `Toggle all off` for bulk selection. Press Space to toggle rows, or Enter to activate the highlighted row and continue. Planned skills start checked, conflict skills start unchecked, and `Skip for now` skips skill copies for this run while still continuing to plugin selection. When source-installed curated Codex plugins are migratable and `--plugin` was not supplied, migration then prompts for native Codex plugin activation by plugin name. Plugin items start checked unless the target OpenClaw Codex plugin config already has that plugin. Existing target plugins start unchecked and show a conflict hint such as `conflict: plugin exists`; choose `Toggle all off` to migrate no native Codex plugins in that run, or `Skip for now` to stop before applying.
 
 For scripted or exact runs, select one or more skills or plugins explicitly:

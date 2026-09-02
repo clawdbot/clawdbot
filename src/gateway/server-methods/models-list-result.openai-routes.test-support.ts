@@ -71,6 +71,7 @@ export async function listModels(params: {
       workspaceDir: params.workspaceDir ?? "/tmp/models-list-openai-workspace",
       config,
       authModes: params.preparedAuthModes ?? {},
+      oauthRefreshProviderIds: [],
       authStore: loadAuthProfileStoreWithoutExternalProfiles(
         params.agentDir ?? "/tmp/models-list-openai-agent",
         {

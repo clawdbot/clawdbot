@@ -117,6 +117,28 @@ describe("Models route admission", () => {
     vi.restoreAllMocks();
   });
 
+  it.each([
+    ["regular", "?view=connect", false],
+    ["first-run", "?view=connect&firstRun=1", true],
+  ] as const)(
+    "publishes %s connect state without loading Manage data",
+    async (_, search, firstRun) => {
+      const harness = createModelsRouter();
+      await harness.router.navigateLocation(
+        { pathname: "/settings/model-providers", search, hash: "" },
+        harness.context,
+      );
+
+      expect(harness.router.getState().matches[0]?.data).toMatchObject({
+        view: "connect",
+        firstRun,
+        agentId: "main",
+        data: { updatedAt: null },
+      });
+      expect(harness.modelCalls()).toEqual([]);
+    },
+  );
+
   it.each(["navigation", "disconnect", "hello", "client", "set"] as const)(
     "does not dispatch after %s during the deferred import; a new load succeeds",
     async (change) => {

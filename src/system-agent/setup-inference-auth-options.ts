@@ -1,5 +1,11 @@
 import { compareProviderAuthChoiceGroups } from "../plugins/provider-auth-choice-order.js";
 import type { ProviderAuthChoiceMetadata } from "../plugins/provider-auth-choices.js";
+import {
+  listProviderAccessOptions,
+  listProviderLoginOptions,
+  supportsProviderAuthChoiceTextInference,
+  type ProviderLoginOption,
+} from "../plugins/provider-login-options.js";
 
 export type SetupInferenceManualProvider = {
   /** Provider-auth choice id sent back to `openclaw.setup.activate`. */
@@ -14,18 +20,8 @@ export type SetupInferenceManualProvider = {
   website?: string;
 };
 
-export type SetupInferenceAuthOption = {
-  /** Provider-auth choice id sent to `openclaw.setup.auth.start`. */
-  id: string;
-  /** Canonical provider identity for clients with bundled brand artwork. */
-  brandId?: string;
-  label: string;
-  hint?: string;
-  groupLabel?: string;
-  icon?: string;
-  website?: string;
+export type SetupInferenceAuthOption = ProviderLoginOption & {
   kind: "oauth" | "device-code";
-  featured: boolean;
 };
 
 export type SetupInferencePrepareOption = {
@@ -43,7 +39,7 @@ export type SetupInferencePrepareOption = {
 export function supportsSetupTextInference(
   scopes?: ProviderAuthChoiceMetadata["onboardingScopes"],
 ): boolean {
-  return !scopes || scopes.includes("text-inference");
+  return supportsProviderAuthChoiceTextInference(scopes);
 }
 
 export function supportsSetupManualSecret(choice: ProviderAuthChoiceMetadata): boolean {
@@ -83,106 +79,29 @@ export function listSetupInferenceManualProviders(
 export function listSetupInferenceAuthOptions(
   authChoices: readonly ProviderAuthChoiceMetadata[],
 ): SetupInferenceAuthOption[] {
-  const choices = new Map<
-    string,
-    { metadata: ProviderAuthChoiceMetadata; option: SetupInferenceAuthOption }
-  >();
-  for (const choice of authChoices) {
-    const id = choice.choiceId.trim();
-    if (
-      !id ||
-      choices.has(id) ||
-      !supportsSetupTextInference(choice.onboardingScopes) ||
-      choice.assistantVisibility === "manual-only" ||
-      !choice.appGuidedAuth
-    ) {
-      continue;
-    }
-    choices.set(id, {
-      metadata: choice,
-      option: {
-        id,
-        brandId: choice.providerId,
-        label: choice.choiceLabel,
-        ...(choice.choiceHint?.trim() ? { hint: choice.choiceHint.trim() } : {}),
-        ...(choice.groupLabel?.trim() ? { groupLabel: choice.groupLabel.trim() } : {}),
-        ...(choice.icon ? { icon: choice.icon } : {}),
-        ...(choice.website ? { website: choice.website } : {}),
-        kind: choice.appGuidedAuth,
-        featured: choice.onboardingFeatured === true,
-      },
-    });
-  }
-  return [...choices.values()]
-    .toSorted(
-      (a, b) =>
-        Number(b.option.featured) - Number(a.option.featured) ||
-        compareProviderAuthChoiceGroups(
-          {
-            id: a.metadata.groupId ?? a.metadata.providerId,
-            label: a.metadata.groupLabel ?? a.metadata.choiceLabel,
-          },
-          {
-            id: b.metadata.groupId ?? b.metadata.providerId,
-            label: b.metadata.groupLabel ?? b.metadata.choiceLabel,
-          },
-        ) ||
-        (a.metadata.assistantPriority ?? 0) - (b.metadata.assistantPriority ?? 0) ||
-        a.option.label.localeCompare(b.option.label, "en") ||
-        a.option.id.localeCompare(b.option.id, "en"),
-    )
-    .map(({ option }) => option);
+  return listProviderLoginOptions(authChoices).filter(
+    (option): option is SetupInferenceAuthOption =>
+      option.kind === "oauth" || option.kind === "device-code",
+  );
 }
 
 export function listSetupInferencePrepareOptions(
   authChoices: readonly ProviderAuthChoiceMetadata[],
 ): SetupInferencePrepareOption[] {
-  const choices = new Map<
-    string,
-    { metadata: ProviderAuthChoiceMetadata; option: SetupInferencePrepareOption }
-  >();
-  for (const choice of authChoices) {
-    const id = choice.choiceId.trim();
-    if (
-      !id ||
-      choices.has(id) ||
-      !supportsSetupTextInference(choice.onboardingScopes) ||
-      choice.assistantVisibility === "manual-only" ||
-      choice.appGuidedDiscovery !== true
-    ) {
-      continue;
+  return listProviderAccessOptions(authChoices).flatMap((option) => {
+    if (option.mode !== "setup") {
+      return [];
     }
-    choices.set(id, {
-      metadata: choice,
-      option: {
-        id,
-        brandId: choice.providerId,
-        label: choice.choiceLabel,
-        ...(choice.choiceHint?.trim() ? { hint: choice.choiceHint.trim() } : {}),
-        ...(choice.appGuidedActionLabel?.trim()
-          ? { actionLabel: choice.appGuidedActionLabel.trim() }
-          : {}),
-        ...(choice.icon ? { icon: choice.icon } : {}),
-        ...(choice.website ? { website: choice.website } : {}),
+    return [
+      {
+        id: option.id,
+        ...(option.brandId ? { brandId: option.brandId } : {}),
+        label: option.label,
+        ...(option.hint ? { hint: option.hint } : {}),
+        ...(option.actionLabel ? { actionLabel: option.actionLabel } : {}),
+        ...(option.icon ? { icon: option.icon } : {}),
+        ...(option.website ? { website: option.website } : {}),
       },
-    });
-  }
-  return [...choices.values()]
-    .toSorted(
-      (a, b) =>
-        compareProviderAuthChoiceGroups(
-          {
-            id: a.metadata.groupId ?? a.metadata.providerId,
-            label: a.metadata.groupLabel ?? a.metadata.choiceLabel,
-          },
-          {
-            id: b.metadata.groupId ?? b.metadata.providerId,
-            label: b.metadata.groupLabel ?? b.metadata.choiceLabel,
-          },
-        ) ||
-        (a.metadata.assistantPriority ?? 0) - (b.metadata.assistantPriority ?? 0) ||
-        a.option.label.localeCompare(b.option.label, "en") ||
-        a.option.id.localeCompare(b.option.id, "en"),
-    )
-    .map(({ option }) => option);
+    ];
+  });
 }

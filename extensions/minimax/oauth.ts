@@ -7,6 +7,7 @@ import {
   resolvePositiveTimerTimeoutMs,
 } from "openclaw/plugin-sdk/number-runtime";
 import { generatePkceVerifierChallenge, toFormUrlEncoded } from "openclaw/plugin-sdk/provider-auth";
+import type { ProviderAuthContext } from "openclaw/plugin-sdk/provider-auth";
 import {
   readProviderJsonResponse,
   readResponseTextLimited,
@@ -254,6 +255,7 @@ async function parseMiniMaxOAuthTokenResponse(response: Response): Promise<Token
 export async function loginMiniMaxPortalOAuth(params: {
   openUrl: (url: string) => Promise<void>;
   note: (message: string, title?: string) => Promise<void>;
+  deviceCode?: NonNullable<ProviderAuthContext["prompter"]["deviceCode"]>;
   progress: { update: (message: string) => void; stop: (message?: string) => void };
   region?: MiniMaxRegion;
   signal?: AbortSignal;
@@ -271,17 +273,29 @@ export async function loginMiniMaxPortalOAuth(params: {
   });
   const verificationUrl = oauth.verification_uri;
 
-  const noteLines = [
-    `Open ${verificationUrl} to approve access.`,
-    `If prompted, enter the code ${oauth.user_code}.`,
-    `Interval: ${oauth.interval ?? "default (2000ms)"}, Expires at: ${new Date(oauth.expired_in).toISOString()}`,
-  ];
   try {
     await params.openUrl(verificationUrl);
   } catch {
     // Fall back to manual copy/paste if browser open fails.
   }
-  await params.note(noteLines.join("\n"), "MiniMax OAuth");
+  const expiresInMinutes = Math.max(1, Math.ceil((oauth.expired_in - Date.now()) / 60_000));
+  if (params.deviceCode) {
+    await params.deviceCode({
+      title: "MiniMax OAuth",
+      code: oauth.user_code,
+      expiresInMinutes,
+      message: `Open this URL in your browser and enter the code below.\nURL: ${verificationUrl}`,
+    });
+  } else {
+    await params.note(
+      [
+        `Open ${verificationUrl} to approve access.`,
+        `If prompted, enter the code ${oauth.user_code}.`,
+        `Code expires in ${expiresInMinutes} minutes.`,
+      ].join("\n"),
+      "MiniMax OAuth",
+    );
+  }
 
   let pollIntervalMs = resolvePositiveTimerTimeoutMs(oauth.interval, 2000);
   // The authorization endpoint returns an absolute millisecond deadline.

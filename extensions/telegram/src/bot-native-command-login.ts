@@ -1,19 +1,23 @@
 // Telegram plugin module implements native Codex login behavior.
 import type { CommandArgs } from "openclaw/plugin-sdk/command-auth-native";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import { codexChannelLoginRuntime } from "openclaw/plugin-sdk/provider-auth-login-flow-runtime";
+import {
+  decideProviderLoginSessionAdoption,
+  providerChannelLoginRuntime,
+} from "openclaw/plugin-sdk/provider-auth-login-flow-runtime";
 import { danger } from "openclaw/plugin-sdk/runtime-env";
 import {
   resolveStorePath,
   updateSessionStoreEntry,
 } from "openclaw/plugin-sdk/session-store-runtime";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { escapeHtml } from "openclaw/plugin-sdk/text-utility-runtime";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
 import { defaultTelegramNativeCommandDeps } from "./bot-native-command-deps.runtime.js";
 import type { TelegramCommandDispatch } from "./bot-native-command-dispatch.js";
 import { buildTelegramRoutingTarget } from "./bot/helpers.js";
 
-const activeTelegramCodexLoginFlows = codexChannelLoginRuntime.createFlowRegistry();
+const activeTelegramProviderLoginFlows = providerChannelLoginRuntime.createFlowRegistry();
 
 type TelegramLoginDeviceCode = {
   title: string;
@@ -36,18 +40,16 @@ function formatTelegramLoginDeviceCode(params: TelegramLoginDeviceCode): string 
   ].join("\n");
 }
 
-function resolveTelegramCodexLoginProviderInput(commandArgs: CommandArgs | undefined): string {
+function resolveTelegramProviderLoginInput(
+  commandArgs: CommandArgs | undefined,
+): string | undefined {
   const providerValue = commandArgs?.values?.provider;
   return typeof providerValue === "string" && providerValue.trim()
     ? providerValue
-    : (commandArgs?.raw ?? "codex");
+    : commandArgs?.raw;
 }
 
-function buildTelegramCodexLoginFlowKey(params: {
-  dispatch: TelegramCommandDispatch;
-  provider: string;
-}): string {
-  const { dispatch } = params;
+function buildTelegramProviderLoginFlowKey(dispatch: TelegramCommandDispatch): string {
   const threadKey =
     dispatch.threadSpec.id == null
       ? dispatch.threadSpec.scope
@@ -58,13 +60,13 @@ function buildTelegramCodexLoginFlowKey(params: {
     String(dispatch.chatId),
     threadKey,
     dispatch.route.agentId,
-    params.provider,
   ].join(":");
 }
 
 export async function executeTelegramLoginCommand(params: {
   dispatch: TelegramCommandDispatch;
   commandArgs?: CommandArgs;
+  currentProvider?: string;
 }): Promise<boolean> {
   const { dispatch } = params;
   const sendLoginMessage = async (text: string) => {
@@ -98,32 +100,45 @@ export async function executeTelegramLoginCommand(params: {
   };
   if (
     !dispatch.senderIsOwner ||
-    !codexChannelLoginRuntime.hasConfiguredCommandOwnerAllowlist(dispatch.runtimeCfg)
+    !providerChannelLoginRuntime.hasConfiguredCommandOwnerAllowlist(dispatch.runtimeCfg)
   ) {
-    await sendLoginMessage("Only a configured OpenClaw owner can start Codex login from Telegram.");
+    await sendLoginMessage(
+      "Only a configured OpenClaw owner can start provider login from Telegram.",
+    );
     return false;
   }
+  const resolution = providerChannelLoginRuntime.resolveChoice(
+    resolveTelegramProviderLoginInput(params.commandArgs),
+    { config: dispatch.runtimeCfg },
+  );
+  if (resolution.status !== "resolved") {
+    const available = providerChannelLoginRuntime.formatChoices(resolution.choices);
+    await sendLoginMessage(
+      resolution.status === "ambiguous"
+        ? `Choose one provider login: ${available}.`
+        : `Unsupported login provider. Available provider access commands: ${available}.`,
+    );
+    return false;
+  }
+  const loginChoice = resolution.choice;
   if (dispatch.isGroup) {
     await sendLoginMessage(
-      "For safety, Codex login codes are only sent in a private chat with this bot. DM this bot `/login codex` to pair Codex.",
+      `For safety, provider login codes are only sent in a private chat with this bot. DM this bot \`${providerChannelLoginRuntime.formatCommand(loginChoice)}\` to sign in.`,
     );
     return true;
   }
-  const loginProvider = codexChannelLoginRuntime.resolveProvider(
-    resolveTelegramCodexLoginProviderInput(params.commandArgs),
-  );
-  if (!loginProvider) {
-    await sendLoginMessage("Unsupported login provider. Use `/login codex`.");
-    return false;
+  if (loginChoice.mode !== "chat") {
+    await sendLoginMessage(providerChannelLoginRuntime.formatControlUiHandoff(loginChoice));
+    return true;
   }
-  const flowKey = buildTelegramCodexLoginFlowKey({ dispatch, provider: loginProvider });
-  const reservation = codexChannelLoginRuntime.reserveFlow({
-    flows: activeTelegramCodexLoginFlows,
+  const flowKey = buildTelegramProviderLoginFlowKey(dispatch);
+  const reservation = providerChannelLoginRuntime.reserveFlow({
+    flows: activeTelegramProviderLoginFlows,
     flowKey,
   });
   if (reservation.status === "active") {
     await sendLoginMessage(
-      "A Codex login code is already active for this Telegram chat. Complete it, or wait for it to expire before requesting a new one.",
+      `${loginChoice.providerLabel} login is already active for this Telegram chat. Complete it, or wait for it to expire before requesting a new one.`,
     );
     return true;
   }
@@ -135,23 +150,25 @@ export async function executeTelegramLoginCommand(params: {
   // Device-code delivery releases Telegram's serialized chat lane. The
   // reservation and account signal still own polling through completion.
   const completion = (async () => {
-    const sessionSwitchFailedMessage =
-      "Codex login completed, but this Telegram session could not switch to the newly authenticated profile. Retry `/login codex`, or select the profile manually.";
+    const sessionSwitchFailedMessage = providerChannelLoginRuntime.formatSessionSwitchFailed(
+      loginChoice,
+      "Telegram session",
+    );
     let terminalMessage: string;
     const loginFlow =
       dispatch.telegramDeps.runModelsAuthLoginFlow ??
       defaultTelegramNativeCommandDeps.runModelsAuthLoginFlow;
     try {
       if (!loginFlow) {
-        throw new Error("Codex login flow is unavailable.");
+        throw new Error("Provider login flow is unavailable.");
       }
       const targetSessionEntryAtStart = dispatch.nativeCommandRuntime.getSessionEntry({
         agentId: dispatch.route.agentId,
         sessionKey: dispatch.targetSessionKey,
       });
-      const loginResult = await codexChannelLoginRuntime.runDeviceLoginFlow({
+      const loginResult = await providerChannelLoginRuntime.runLoginFlow({
         runLoginFlow: loginFlow,
-        provider: loginProvider,
+        choice: loginChoice,
         agentId: dispatch.route.agentId,
         config: dispatch.runtimeCfg,
         runtime: dispatch.runtime,
@@ -164,21 +181,32 @@ export async function executeTelegramLoginCommand(params: {
           deviceCodeWasDelivered = true;
           deviceCodeDelivered.resolve();
         },
-        unsupportedPromptMessage: "Telegram /login supports only fixed Codex device-code auth.",
+        unsupportedPromptMessage:
+          "This provider needs input that Telegram cannot collect. Open Control UI → Models and choose Sign in.",
       });
       flowSignal.throwIfAborted();
       const nextProfileId = loginResult.profiles.find(
-        (profile) => profile.provider === loginProvider,
+        (profile) =>
+          normalizeLowercaseStringOrEmpty(profile.provider) ===
+          normalizeLowercaseStringOrEmpty(loginChoice.providerId),
       )?.profileId;
-      terminalMessage = "Codex login complete. Try your request again now.";
+      terminalMessage = providerChannelLoginRuntime.formatComplete(
+        loginChoice,
+        loginResult.imported === true,
+        loginResult.modelAccess,
+        loginResult.authRefresh,
+      );
       if (!nextProfileId) {
         terminalMessage = sessionSwitchFailedMessage;
-      } else {
+      } else if (
+        normalizeLowercaseStringOrEmpty(params.currentProvider) ===
+        normalizeLowercaseStringOrEmpty(loginChoice.providerId)
+      ) {
         const storePath = resolveStorePath(dispatch.runtimeCfg.session?.store, {
           agentId: dispatch.route.agentId,
         });
         let entryObserved = false;
-        let adoptionAllowed = false;
+        let adoptionDecision: ReturnType<typeof decideProviderLoginSessionAdoption> | undefined;
         try {
           const persisted = await updateSessionStoreEntry({
             sessionKey: dispatch.targetSessionKey,
@@ -187,46 +215,28 @@ export async function executeTelegramLoginCommand(params: {
             skipMaintenance: true,
             update: (entry) => {
               entryObserved = true;
-              const source =
-                entry.authProfileOverrideSource ??
-                (typeof entry.authProfileOverrideCompactionCount === "number"
-                  ? "auto"
-                  : entry.authProfileOverride
-                    ? "user"
-                    : undefined);
-              if (
-                flowSignal.aborted ||
-                (targetSessionEntryAtStart
-                  ? entry.sessionId !== targetSessionEntryAtStart.sessionId ||
-                    entry.authProfileOverride !== targetSessionEntryAtStart.authProfileOverride ||
-                    entry.authProfileOverrideSource !==
-                      targetSessionEntryAtStart.authProfileOverrideSource ||
-                    entry.authProfileOverrideCompactionCount !==
-                      targetSessionEntryAtStart.authProfileOverrideCompactionCount
-                  : source === "user" && entry.authProfileOverride !== nextProfileId)
-              ) {
+              if (flowSignal.aborted) {
                 return null;
               }
-              adoptionAllowed = true;
-              return entry.authProfileOverride !== nextProfileId ||
-                entry.authProfileOverrideSource !== "user" ||
-                entry.authProfileOverrideCompactionCount !== undefined
-                ? {
-                    authProfileOverride: nextProfileId,
-                    authProfileOverrideSource: "user",
-                    authProfileOverrideCompactionCount: undefined,
-                  }
-                : null;
+              adoptionDecision = decideProviderLoginSessionAdoption({
+                currentModelProvider: params.currentProvider,
+                loginProvider: loginChoice.providerId,
+                nextProfileId,
+                snapshot: targetSessionEntryAtStart,
+                current: entry,
+              });
+              return adoptionDecision.status === "patch" ? adoptionDecision.patch : null;
             },
           });
           flowSignal.throwIfAborted();
           if (
             entryObserved &&
-            (!adoptionAllowed ||
+            (adoptionDecision?.status === "rejected" ||
               !persisted ||
-              persisted.authProfileOverride !== nextProfileId ||
-              persisted.authProfileOverrideSource !== "user" ||
-              persisted.authProfileOverrideCompactionCount !== undefined)
+              (adoptionDecision?.status === "patch" &&
+                (persisted.authProfileOverride !== nextProfileId ||
+                  persisted.authProfileOverrideSource !== "user" ||
+                  persisted.authProfileOverrideCompactionCount !== undefined)))
           ) {
             terminalMessage = sessionSwitchFailedMessage;
           }
@@ -234,7 +244,7 @@ export async function executeTelegramLoginCommand(params: {
           flowSignal.throwIfAborted();
           dispatch.runtime.error?.(
             danger(
-              `telegram /login codex completed but failed to update session auth profile: ${String(
+              `telegram ${providerChannelLoginRuntime.formatCommand(loginChoice)} completed but failed to update session auth profile: ${String(
                 error,
               )}`,
             ),
@@ -246,8 +256,12 @@ export async function executeTelegramLoginCommand(params: {
       if (flowSignal.aborted) {
         return;
       }
-      dispatch.runtime.error?.(danger(`telegram /login codex failed: ${String(error)}`));
-      terminalMessage = "Codex login did not complete. Send `/login codex` to request a new code.";
+      dispatch.runtime.error?.(
+        danger(
+          `telegram ${providerChannelLoginRuntime.formatCommand(loginChoice)} failed: ${String(error)}`,
+        ),
+      );
+      terminalMessage = providerChannelLoginRuntime.formatFailed(loginChoice);
     }
     if (flowSignal.aborted) {
       return;
@@ -256,12 +270,14 @@ export async function executeTelegramLoginCommand(params: {
       await sendLoginResultMessage(terminalMessage);
     } catch (error) {
       dispatch.runtime.error?.(
-        danger(`telegram /login codex result notification failed: ${String(error)}`),
+        danger(
+          `telegram ${providerChannelLoginRuntime.formatCommand(loginChoice)} result notification failed: ${String(error)}`,
+        ),
       );
     }
   })().finally(() => {
-    codexChannelLoginRuntime.releaseFlow({
-      flows: activeTelegramCodexLoginFlows,
+    providerChannelLoginRuntime.releaseFlow({
+      flows: activeTelegramProviderLoginFlows,
       flowKey,
       record: reservation.record,
     });

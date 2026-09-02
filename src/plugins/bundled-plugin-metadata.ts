@@ -42,6 +42,7 @@ type BundledPluginPathPair = {
 /** Metadata collected from a bundled plugin package and manifest. */
 type BundledPluginMetadata = {
   dirName: string;
+  rootDir: string;
   idHint: string;
   source: BundledPluginPathPair;
   setupSource?: BundledPluginPathPair;
@@ -131,6 +132,7 @@ function collectBundledPluginMetadata(
 
     entries.push({
       dirName,
+      rootDir: pluginDir,
       idHint: deriveBundledPluginIdHint({
         entryPath: sourceEntry,
         manifestId: manifestResult.manifest.id,

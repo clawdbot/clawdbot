@@ -130,6 +130,7 @@ const CORE_GATEWAY_HANDLER_MODULES = {
     import("./server-methods/models-auth-status.js").then(
       (module) => module.modelsAuthStatusHandlers,
     ),
+  "model-login": () => import("./server-methods/models-auth-login.js").then((m) => m.handlers),
   models: () => import("./server-methods/models.js").then((module) => module.modelsHandlers),
   "models-probe": () =>
     import("./server-methods/models-probe.js").then((module) => module.modelsProbeHandlers),

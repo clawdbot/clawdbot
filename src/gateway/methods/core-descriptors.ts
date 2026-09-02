@@ -1,5 +1,11 @@
 // Core gateway method descriptors keep handler names, auth scopes, startup availability, and write policy in one table.
 import type { OperatorScope } from "../operator-scopes.js";
+import {
+  type CoreGatewayMethodMetadata,
+  type CoreGatewayMethodSpec,
+  type CoreGatewayMethodSpecRow,
+  normalizeCoreGatewayMethodSpecs,
+} from "./core-descriptor-spec.js";
 import { isCoreGatewayMethodProfileDependent } from "./core-profile-access.js";
 import {
   DYNAMIC_GATEWAY_METHOD_SCOPE,
@@ -8,31 +14,6 @@ import {
   type GatewayMethodHandler,
   type GatewayMethodScope,
 } from "./descriptor.js";
-
-type CoreGatewayMethodSpec = {
-  name: string;
-  family?: string;
-  scope: GatewayMethodScope;
-  since?: string;
-  advertise?: false;
-  startup?: true;
-  controlPlaneWrite?: true;
-  compatibilityRestored?: true;
-  description?: string;
-};
-
-type CoreGatewayMethodMetadata = Pick<CoreGatewayMethodSpec, "name" | "scope" | "since">;
-type CoreGatewayMethodPolicy = Pick<
-  CoreGatewayMethodSpec,
-  "advertise" | "startup" | "controlPlaneWrite" | "compatibilityRestored" | "description"
->;
-type CoreGatewayMethodSpecRow = readonly [
-  name: string,
-  family: string | null,
-  scope: GatewayMethodScope,
-  since: string,
-  policy?: CoreGatewayMethodPolicy,
-];
 
 // This is the canonical core method policy table: every core handler must appear here so
 // listing, authorization, startup availability, and write throttling stay in sync.
@@ -125,6 +106,20 @@ const CORE_GATEWAY_METHOD_SPECS = [
   ["commands.list", "commands", "operator.read", "<=2026.7"],
   ["models.list", "models", "operator.read", "<=2026.7", { startup: true }],
   ["models.authStatus", "models-auth-status", "operator.read", "<=2026.7"],
+  [
+    "models.authRefresh",
+    "models-auth-status",
+    "operator.admin",
+    "2026.8",
+    { controlPlaneWrite: true },
+  ],
+  [
+    "models.authLogin.start",
+    "model-login",
+    "operator.admin",
+    "2026.8",
+    { controlPlaneWrite: true },
+  ],
   [
     "models.authLogout",
     "models-auth-status",
@@ -654,29 +649,7 @@ const CORE_GATEWAY_METHOD_SPECS = [
 export type CoreGatewayHandlerFamily = Exclude<(typeof CORE_GATEWAY_METHOD_SPECS)[number][1], null>;
 
 const CORE_GATEWAY_METHOD_SPEC_LIST: readonly CoreGatewayMethodSpec[] =
-  CORE_GATEWAY_METHOD_SPECS.map(([name, family, scope, since, policy]) => {
-    const spec: CoreGatewayMethodSpec = { name, scope, since };
-    const normalizedPolicy: CoreGatewayMethodPolicy | undefined = policy;
-    if (family) {
-      spec.family = family;
-    }
-    if (normalizedPolicy?.advertise === false) {
-      spec.advertise = false;
-    }
-    if (normalizedPolicy?.startup === true) {
-      spec.startup = true;
-    }
-    if (normalizedPolicy?.controlPlaneWrite === true) {
-      spec.controlPlaneWrite = true;
-    }
-    if (normalizedPolicy?.compatibilityRestored === true) {
-      spec.compatibilityRestored = true;
-    }
-    if (normalizedPolicy?.description) {
-      spec.description = normalizedPolicy.description;
-    }
-    return spec;
-  });
+  normalizeCoreGatewayMethodSpecs(CORE_GATEWAY_METHOD_SPECS);
 
 const CORE_GATEWAY_METHOD_SPEC_BY_NAME: ReadonlyMap<string, CoreGatewayMethodSpec> = new Map(
   CORE_GATEWAY_METHOD_SPEC_LIST.map((spec) => [spec.name, spec]),

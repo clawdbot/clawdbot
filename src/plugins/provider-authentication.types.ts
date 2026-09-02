@@ -161,6 +161,15 @@ export type ProviderAppGuidedSetup = {
   ) => Promise<ProviderAuthResult | null>;
 };
 
+export type ProviderCredentialImport = {
+  /** Plugin migration provider that owns source parsing and destination writes. */
+  migrationProviderId: string;
+  /** Exact migration item to import before starting interactive login. */
+  itemId: string;
+  /** Accept only the credential mode expected by this auth method. */
+  credentialKind: "oauth" | "api_key" | "token";
+};
+
 export type ProviderAuthMethod = {
   id: string;
   label: string;
@@ -168,6 +177,8 @@ export type ProviderAuthMethod = {
   kind: ProviderAuthKind;
   /** Provider-owned model used to validate app-guided secret setup. */
   starterModel?: string;
+  /** Optional one-time import attempted only after the user starts this login method. */
+  credentialImport?: ProviderCredentialImport;
   /**
    * Optional wizard/onboarding metadata for this specific auth method.
    *

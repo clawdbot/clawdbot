@@ -448,7 +448,7 @@ suite.define(() => {
         });
 
         const gatewayErrorText =
-          "⚠️ Model login expired on the gateway for openai. Send `/login codex` from a private chat or Web UI session to pair a new Codex login, or re-auth with `openclaw models auth login --provider openai` in a terminal, then try again.";
+          "⚠️ OpenAI needs a new login. Send `/login codex` from a private chat or Control UI session. Where shown, you can also select **Sign in to OpenAI**. You can also re-auth with `openclaw models auth login --provider openai` on the gateway.";
         const errorText = gatewayErrorText.replace(/^⚠️\s*/u, "");
         await gateway.emitGatewayEvent("chat", {
           errorMessage: gatewayErrorText,

@@ -239,6 +239,21 @@ catalog, API-key auth, and dynamic model resolution.
     Use this only for provider-minted static credentials, not rotating OAuth
     credentials or values already supplied as SecretRefs.
 
+    An auth method can ask OpenClaw to try one exact item from an installed
+    migration provider before interactive login:
+
+    ```typescript
+    credentialImport: {
+      migrationProviderId: "acme-cli",
+      itemId: "auth:acme",
+      credentialKind: "oauth",
+    }
+    ```
+
+    The migration provider remains the only owner of source parsing and auth
+    store writes. OpenClaw runs this import only after the user starts that auth
+    method. Model catalog and `/models` reads never trigger credential import.
+
     ### Live model discovery
 
     If your provider exposes an OpenAI-compatible `/models` API, opt the

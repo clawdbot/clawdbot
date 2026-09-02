@@ -6,6 +6,7 @@ import {
   validateSystemAgentSetupActivateParams,
   validateSystemAgentSetupActivateStartParams,
   validateSystemAgentSetupAuthStartParams,
+  validateModelAuthLoginStartParams,
   validateSystemAgentSetupDetectParams,
   validateSystemAgentSetupVerifyParams,
 } from "../index.js";
@@ -160,6 +161,18 @@ describe("OpenClaw setup detection protocol", () => {
         authChoice: "openai-api-key",
       }),
     ).toBe(true);
+    expect(
+      validateModelAuthLoginStartParams({
+        agentId: "research",
+        authChoice: "xai-oauth",
+      }),
+    ).toBe(true);
+    expect(
+      validateModelAuthLoginStartParams({
+        authChoice: "xai-oauth",
+        workspace: "/tmp/not-accepted",
+      }),
+    ).toBe(false);
     expect(validateSystemAgentSetupDetectParams({ agentId: "research", unknown: true })).toBe(
       false,
     );

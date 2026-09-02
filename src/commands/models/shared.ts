@@ -15,6 +15,7 @@ import {
   readConfigFileSnapshot,
   replaceConfigFile,
 } from "../../config/config.js";
+import type { ConfigWriteOptions } from "../../config/io.js";
 import { formatConfigIssueLines } from "../../config/issue-format.js";
 import { normalizeAgentModelRefForConfig, toAgentModelListLike } from "../../config/model-input.js";
 import type { AgentModelEntryConfig } from "../../config/types.agent-defaults.js";
@@ -61,6 +62,7 @@ export async function updateConfig(
     cfg: OpenClawConfig,
     context: UpdateConfigContext,
   ) => OpenClawConfig | Promise<OpenClawConfig>,
+  options: { writeOptions?: ConfigWriteOptions } = {},
 ): Promise<OpenClawConfig> {
   const snapshot = await readConfigFileSnapshot();
   if (!snapshot.valid) {
@@ -75,6 +77,7 @@ export async function updateConfig(
   await replaceConfigFile({
     nextConfig: next,
     baseHash: snapshot.hash,
+    ...(options.writeOptions ? { writeOptions: options.writeOptions } : {}),
   });
   return next;
 }

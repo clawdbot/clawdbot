@@ -37,6 +37,68 @@
     }
   },
   "modelCatalog": {
+    "providers": {
+      "xai": {
+        "baseUrl": "https://api.x.ai/v1",
+        "api": "openai-responses",
+        "models": [
+          {
+            "id": "grok-4.6",
+            "name": "Grok 4.6",
+            "reasoning": true,
+            "input": ["text", "image"],
+            "cost": { "input": 2, "output": 6, "cacheRead": 0.5, "cacheWrite": 0 },
+            "contextWindow": 500000,
+            "maxTokens": 64000
+          },
+          {
+            "id": "grok-4.5",
+            "name": "Grok 4.5",
+            "reasoning": true,
+            "input": ["text", "image"],
+            "cost": { "input": 2, "output": 6, "cacheRead": 0.3, "cacheWrite": 0 },
+            "contextWindow": 500000,
+            "maxTokens": 64000
+          },
+          {
+            "id": "grok-build-0.1",
+            "name": "Grok Build 0.1",
+            "reasoning": true,
+            "input": ["text", "image"],
+            "cost": { "input": 1, "output": 2, "cacheRead": 0.2, "cacheWrite": 0 },
+            "contextWindow": 256000,
+            "maxTokens": 64000
+          },
+          {
+            "id": "grok-4.3",
+            "name": "Grok 4.3",
+            "reasoning": true,
+            "input": ["text", "image"],
+            "cost": { "input": 1.25, "output": 2.5, "cacheRead": 0.2, "cacheWrite": 0 },
+            "contextWindow": 1000000,
+            "maxTokens": 64000
+          },
+          {
+            "id": "grok-4.20-0309-reasoning",
+            "name": "Grok 4.20 0309 (Reasoning)",
+            "reasoning": true,
+            "input": ["text", "image"],
+            "cost": { "input": 1.25, "output": 2.5, "cacheRead": 0.2, "cacheWrite": 0 },
+            "contextWindow": 1000000,
+            "maxTokens": 30000
+          },
+          {
+            "id": "grok-4.20-0309-non-reasoning",
+            "name": "Grok 4.20 0309 (Non-Reasoning)",
+            "reasoning": false,
+            "input": ["text", "image"],
+            "cost": { "input": 1.25, "output": 2.5, "cacheRead": 0.2, "cacheWrite": 0 },
+            "contextWindow": 1000000,
+            "maxTokens": 30000
+          }
+        ]
+      }
+    },
     "discovery": {
       "xai": "refreshable"
     },
@@ -108,6 +170,7 @@
       "method": "oauth",
       "choiceId": "xai-oauth",
       "appGuidedAuth": "device-code",
+      "channelLogin": {},
       "choiceLabel": "xAI OAuth",
       "choiceHint": "Remote-friendly browser sign-in without a localhost callback",
       "groupId": "xai",

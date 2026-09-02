@@ -123,6 +123,8 @@ const CURRENT_TRAIN_METHODS = [
   "desktop.launch",
   "device.scopes.requestUpgrade",
   "device.scopes.waitUpgrade",
+  "models.authLogin.start",
+  "models.authRefresh",
   "node.runnerInventory.update",
   "portal.list",
   "portal.open",

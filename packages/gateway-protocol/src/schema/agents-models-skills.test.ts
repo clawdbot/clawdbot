@@ -7,6 +7,7 @@ import {
   AgentsListResultSchema,
   AgentsUpdateParamsSchema,
   ModelsAuthLogoutParamsSchema,
+  ModelsAuthRefreshParamsSchema,
   ModelsAuthStatusParamsSchema,
   ModelsListParamsSchema,
   ModelsListResultSchema,
@@ -275,6 +276,21 @@ describe("Models auth params schemas", () => {
       { provider: "openai", agentId: "" },
     );
     expectRejected(ModelsAuthLogoutParamsSchema, { provider: "openai", profileIds: [] });
+  });
+
+  it("accepts closed post-mutation auth refresh requests", () => {
+    expectAccepted(
+      ModelsAuthRefreshParamsSchema,
+      { operation: "login" },
+      { operation: "logout", agentId: "writer" },
+      { operation: "update", agentId: "" },
+    );
+    expectRejected(
+      ModelsAuthRefreshParamsSchema,
+      {},
+      { operation: "refresh" },
+      { operation: "login", refreshCatalog: true },
+    );
   });
 });
 

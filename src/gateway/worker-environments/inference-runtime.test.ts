@@ -216,6 +216,7 @@ function setup(
     workspaceDir: WORKSPACE,
     config,
     authModes: {},
+    oauthRefreshProviderIds: [],
     metadataSnapshot: createEmptyPluginMetadataSnapshot(WORKSPACE),
     pluginRegistry: options.pluginRegistry ?? createEmptyPluginRegistry(),
     modelCatalog: {

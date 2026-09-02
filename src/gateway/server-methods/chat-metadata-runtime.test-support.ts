@@ -37,6 +37,7 @@ export function createChatMetadataOwner(
     activeProjectKeys: [],
     config,
     authModes: resolveUsableAgentCredentialModes(credentials),
+    oauthRefreshProviderIds: [],
     metadataSnapshot: createPluginMetadataSnapshotFixture(),
     allowGatewaySubagentBinding: false,
     modelCatalog: {

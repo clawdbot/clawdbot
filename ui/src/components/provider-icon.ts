@@ -129,7 +129,11 @@ const PROVIDER_ICON_ALIASES: Readonly<Record<string, string>> = {
 // Brand display names for provider ids whose title-cased id reads wrong.
 const PROVIDER_DISPLAY_LABELS: Readonly<Record<string, string>> = {
   anthropic: "Anthropic",
+  "claude-cli": "Claude CLI",
+  codex: "OpenAI Codex",
+  "codex-app-server": "OpenAI Codex",
   google: "Google",
+  "google-gemini-cli": "Gemini CLI",
   "github-copilot": "GitHub",
   "llama-cpp": "llama.cpp",
   lmstudio: "LM Studio",

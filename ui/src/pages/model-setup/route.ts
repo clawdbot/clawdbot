@@ -1,22 +1,24 @@
 import type { RouteLocation } from "@openclaw/uirouter";
-import { definePage } from "@openclaw/uirouter";
-import { html } from "lit";
+import { definePage, redirect } from "@openclaw/uirouter";
+import { nothing } from "lit";
 import { routePageSpec } from "../../app-route-paths.ts";
 import type { ApplicationContext } from "../../app/context.ts";
-import type { ModelSetupRouteData } from "./model-setup-page.ts";
+import { modelsLocation, readModelsRouteState } from "../model-providers/location.ts";
 
 export const page = definePage({
   ...routePageSpec("model-setup"),
-  // Query-only first-run changes need distinct matches so the completion
-  // action cannot retain a cached destination from the previous visit.
-  loaderDeps: (_context: ApplicationContext, location: RouteLocation) => location.search,
-  loader: (_context: ApplicationContext, { location }): ModelSetupRouteData => ({
-    firstRun: new URLSearchParams(location.search).get("firstRun") === "1",
-  }),
-  component: () =>
-    import("./model-setup-page.ts").then(() => ({
-      header: true,
-      render: (data: ModelSetupRouteData | undefined) =>
-        html`<openclaw-model-setup-page .routeData=${data}></openclaw-model-setup-page>`,
-    })),
+  loaderDeps: (_context: ApplicationContext, location: RouteLocation) =>
+    `${location.search}\u0000${location.hash}`,
+  loader: (context: ApplicationContext, { location }) => {
+    const routeState = readModelsRouteState(location);
+    return redirect(
+      modelsLocation(
+        context.basePath,
+        { view: "connect", ...(routeState.firstRun ? { firstRun: true } : {}) },
+        location,
+      ),
+    );
+  },
+  // Redirect routes still require a module by contract, but never render page content.
+  component: async () => ({ header: true, render: () => nothing }),
 });

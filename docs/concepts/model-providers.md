@@ -61,6 +61,8 @@ Open **Settings → Models** in the Control UI to add, replace, or remove provid
 
 Use **Test connection** to run a live provider probe and see latency or a categorized authentication, rate-limit, billing, timeout, or response error. A probe makes a real provider request and may consume a small number of tokens. OAuth and token profiles can also be logged out from the provider card.
 
+Provider cards expose eligible, unambiguous access methods declared by each plugin. **Sign in** runs credential-only browser, device-code, API-key, and token flows without changing or testing the default model. **Set up** runs endpoint, local-runtime, and complex cloud configuration through the same guided dialog while preserving the current default model.
+
 The **Defaults** card manages the primary model, utility model, first fallback, thinking level, and Fast mode from the configured model catalog. Changes save automatically to the existing `agents.defaults` settings. For the utility model, **Auto** leaves the setting unset and **Disabled** stores an empty string to turn utility routing off.
 
 The fallback selector edits the first model in the ordered fallback chain. Replacing it preserves any later fallbacks already configured; selecting **No fallback model** clears the chain. Use `openclaw models fallbacks` to manage the full ordered list.

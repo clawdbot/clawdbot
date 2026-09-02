@@ -20,6 +20,7 @@ import {
   type ChatModelCatalogState,
 } from "../chat/components/chat-model-controls.ts";
 import type { ChatModelPickerTargetGroup } from "../chat/components/chat-model-picker-options.ts";
+import { MODELS_CONNECT_NAVIGATION } from "../model-providers/location.ts";
 import { draftCloudProfileSupportsExecutionMode, type DraftCloudProfile } from "./discovery.ts";
 import { resolveDraftModelTarget } from "./model-target.ts";
 import type { NewSessionPreference } from "./preferences.ts";
@@ -614,7 +615,7 @@ export class NewSessionModelControl {
         this.contextWindow = value;
         this.notify();
       },
-      onModelSetup: () => options.context?.navigate("model-setup"),
+      onModelSetup: () => options.context?.navigate("model-providers", MODELS_CONNECT_NAVIGATION),
       onModelPickerOpen: () => this.retryPickerCatalogs(true),
       onRequestUpdate: this.notify,
     });

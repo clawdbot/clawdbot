@@ -79,6 +79,7 @@ export type {
   ProviderAppGuidedSetupCandidate,
   ProviderAppGuidedSetupContext,
   ProviderAuthContext,
+  ProviderCredentialImport,
   ProviderAuthDoctorHintContext,
   ProviderAuthMethod,
   ProviderAuthMethodNonInteractiveContext,

@@ -510,6 +510,7 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
         context.unsubscribeAllSessionEvents(connId);
         // Detach or kill owned PTY shells; detached sessions remain reattachable until reaped.
         context.terminalSessions?.handleDisconnect(connId);
+        context.handleWizardDisconnect(connId);
         let currentDisconnectedNodeId: string | null = null;
         let disconnectedNodeHistory:
           | Parameters<typeof recordPairedNodeDisconnection>[0]

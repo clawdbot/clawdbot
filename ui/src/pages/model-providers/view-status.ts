@@ -1,7 +1,11 @@
 import { html, nothing } from "lit";
 import { renderSettingsStatus } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
-import type { ModelProviderAuthKind, ModelProviderCard } from "./data.ts";
+import {
+  classifyModelProviderCard,
+  type ModelProviderAuthKind,
+  type ModelProviderCard,
+} from "./data.ts";
 
 const AUTH_KIND_I18N: Record<ModelProviderAuthKind, string> = {
   ok: "modelProviders.status.ok",
@@ -35,52 +39,26 @@ function renderAuthStatus(card: ModelProviderCard) {
   `;
 }
 
-function hasProviderCredentials(card: ModelProviderCard): boolean {
-  return card.hasConfigApiKey || Boolean(card.apiKey) || card.profiles.length > 0;
-}
-
 export function hasVerifiedProvider(card: ModelProviderCard): boolean {
-  return (
-    card.catalogStatus === "ready" &&
-    card.auth?.kind !== "expired" &&
-    card.auth?.kind !== "missing" &&
-    card.auth?.kind !== "expiring"
-  );
+  return classifyModelProviderCard(card).verified;
 }
 
 export function renderProviderStatus(card: ModelProviderCard) {
-  if (
-    card.auth?.kind === "expired" ||
-    card.auth?.kind === "missing" ||
-    card.auth?.kind === "expiring"
-  ) {
-    return renderAuthStatus(card);
+  switch (classifyModelProviderCard(card).status) {
+    case "auth":
+      return renderAuthStatus(card);
+    case "denied":
+      return renderSettingsStatus({ kind: "danger", label: t("modelProviders.status.denied") });
+    case "unavailable":
+      return renderSettingsStatus({ kind: "warn", label: t("common.failed") });
+    case "ready":
+      return renderSettingsStatus({ kind: "ok", label: t("modelProviders.status.ready") });
+    case "not-set-up":
+      return renderSettingsStatus({ kind: "muted", label: t("modelProviders.status.notSetUp") });
+    case "available":
+      return renderSettingsStatus({ kind: "muted", label: t("modelProviders.status.ok") });
+    case "configured":
+      return renderSettingsStatus({ kind: "muted", label: t("modelProviders.status.configured") });
   }
-  if (card.catalogStatus === "auth-rejected") {
-    return renderSettingsStatus({ kind: "danger", label: t("modelProviders.status.denied") });
-  }
-  if (card.catalogStatus === "unavailable") {
-    return renderSettingsStatus({
-      kind: "warn",
-      label: t("common.failed"),
-    });
-  }
-  if (!hasProviderCredentials(card)) {
-    return renderAuthStatus(card);
-  }
-  if (hasVerifiedProvider(card) && card.availableModelCount > 0) {
-    return renderSettingsStatus({
-      kind: "ok",
-      label: t("modelProviders.status.ready"),
-    });
-  }
-  return hasVerifiedProvider(card)
-    ? renderSettingsStatus({
-        kind: "muted",
-        label: t("modelProviders.status.ok"),
-      })
-    : renderSettingsStatus({
-        kind: "muted",
-        label: t("modelProviders.status.configured"),
-      });
+  return nothing;
 }

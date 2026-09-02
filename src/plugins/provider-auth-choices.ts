@@ -3,6 +3,7 @@ import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizePluginsConfig, resolveEffectiveEnableState } from "./config-state.js";
 import { loadManifestMetadataSnapshot } from "./manifest-contract-eligibility.js";
+import { passesManifestOwnerBasePolicy } from "./manifest-owner-policy.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
 import {
   getOfficialExternalPluginCatalogManifest,
@@ -35,6 +36,7 @@ export type ProviderAuthChoiceMetadata = {
   appGuidedActionLabel?: string;
   appGuidedDiscovery?: boolean;
   appGuidedAuth?: "oauth" | "device-code";
+  channelLogin?: { aliases?: string[]; default?: boolean };
   onboardingScopes?: ("text-inference" | "image-generation" | "music-generation")[];
 };
 
@@ -48,6 +50,7 @@ type ProviderOnboardAuthFlag = {
 
 type ProviderAuthChoiceCandidate = ProviderAuthChoiceMetadata & {
   origin: PluginOrigin;
+  manifestDeclared: boolean;
 };
 type ProviderOnboardAuthFlagCandidate = ProviderAuthChoiceCandidate & {
   optionKey: string;
@@ -95,6 +98,7 @@ function toProviderAuthChoiceCandidate(params: {
   return {
     pluginId,
     origin,
+    manifestDeclared: true,
     providerId: choice.provider,
     methodId: choice.method,
     choiceId: choice.choiceId,
@@ -119,6 +123,14 @@ function toProviderAuthChoiceCandidate(params: {
     ...(choice.appGuidedActionLabel ? { appGuidedActionLabel: choice.appGuidedActionLabel } : {}),
     ...(choice.appGuidedDiscovery ? { appGuidedDiscovery: true } : {}),
     ...(choice.appGuidedAuth ? { appGuidedAuth: choice.appGuidedAuth } : {}),
+    ...(choice.channelLogin
+      ? {
+          channelLogin: {
+            ...(choice.channelLogin.aliases ? { aliases: [...choice.channelLogin.aliases] } : {}),
+            ...(choice.channelLogin.default === true ? { default: true } : {}),
+          },
+        }
+      : {}),
     ...(choice.onboardingScopes ? { onboardingScopes: choice.onboardingScopes } : {}),
   };
 }
@@ -155,6 +167,7 @@ function toSetupProviderAuthChoiceCandidate(params: {
   return {
     pluginId: params.plugin.id,
     origin: params.plugin.origin,
+    manifestDeclared: false,
     providerId: params.providerId,
     methodId: params.methodId,
     choiceId: `${params.providerId}-${params.methodId}`,
@@ -191,7 +204,7 @@ function listSetupProviderAuthChoiceCandidates(plugin: PluginManifestRecord) {
 }
 
 function stripChoiceOrigin(choice: ProviderAuthChoiceCandidate): ProviderAuthChoiceMetadata {
-  const { origin: _origin, ...metadata } = choice;
+  const { origin: _origin, manifestDeclared: _manifestDeclared, ...metadata } = choice;
   return metadata;
 }
 
@@ -208,6 +221,9 @@ function resolveManifestProviderAuthChoiceCandidates(
   const registry = metadataSnapshot.manifestRegistry;
   const normalizedConfig = normalizePluginsConfig(params?.config?.plugins);
   return registry.plugins.flatMap((plugin) => {
+    if (!passesManifestOwnerBasePolicy({ plugin, normalizedConfig })) {
+      return [];
+    }
     if (plugin.origin === "workspace" && params?.includeWorkspacePlugins === false) {
       return [];
     }
@@ -238,20 +254,20 @@ function resolveManifestProviderAuthChoiceCandidates(
   });
 }
 
-function pickPreferredManifestAuthChoice(
+function resolvePreferredManifestAuthChoiceCandidates(
   candidates: readonly ProviderAuthChoiceCandidate[],
-): ProviderAuthChoiceCandidate | undefined {
-  let preferred: ProviderAuthChoiceCandidate | undefined;
+): ProviderAuthChoiceCandidate[] {
+  let preferredPriority = Number.MAX_SAFE_INTEGER;
+  const preferred: ProviderAuthChoiceCandidate[] = [];
   for (const candidate of candidates) {
-    if (!preferred) {
-      preferred = candidate;
+    const priority = resolveProviderAuthChoiceOriginPriority(candidate.origin);
+    if (priority < preferredPriority) {
+      preferredPriority = priority;
+      preferred.splice(0, preferred.length, candidate);
       continue;
     }
-    if (
-      resolveProviderAuthChoiceOriginPriority(candidate.origin) <
-      resolveProviderAuthChoiceOriginPriority(preferred.origin)
-    ) {
-      preferred = candidate;
+    if (priority === preferredPriority) {
+      preferred.push(candidate);
     }
   }
   return preferred;
@@ -259,23 +275,22 @@ function pickPreferredManifestAuthChoice(
 
 function resolvePreferredManifestAuthChoicesByChoiceId(
   candidates: readonly ProviderAuthChoiceCandidate[],
+  preserveEqualPriority = false,
 ): ProviderAuthChoiceCandidate[] {
-  const preferredByChoiceId = new Map<string, ProviderAuthChoiceCandidate>();
+  const candidatesByChoiceId = new Map<string, ProviderAuthChoiceCandidate[]>();
   for (const candidate of candidates) {
     const normalizedChoiceId = candidate.choiceId.trim();
     if (!normalizedChoiceId) {
       continue;
     }
-    const existing = preferredByChoiceId.get(normalizedChoiceId);
-    if (
-      !existing ||
-      resolveProviderAuthChoiceOriginPriority(candidate.origin) <
-        resolveProviderAuthChoiceOriginPriority(existing.origin)
-    ) {
-      preferredByChoiceId.set(normalizedChoiceId, candidate);
-    }
+    const grouped = candidatesByChoiceId.get(normalizedChoiceId) ?? [];
+    grouped.push(candidate);
+    candidatesByChoiceId.set(normalizedChoiceId, grouped);
   }
-  return [...preferredByChoiceId.values()];
+  return [...candidatesByChoiceId.values()].flatMap((group) => {
+    const preferred = resolvePreferredManifestAuthChoiceCandidates(group);
+    return preserveEqualPriority ? preferred : preferred.slice(0, 1);
+  });
 }
 
 function resolvePreferredManifestAuthChoiceMetadata(params: {
@@ -285,8 +300,8 @@ function resolvePreferredManifestAuthChoiceMetadata(params: {
   const candidates = resolveManifestProviderAuthChoiceCandidates(params.config).filter(
     params.matches,
   );
-  const preferred = pickPreferredManifestAuthChoice(candidates);
-  return preferred ? stripChoiceOrigin(preferred) : undefined;
+  const preferred = resolvePreferredManifestAuthChoiceCandidates(candidates);
+  return preferred.length === 1 ? stripChoiceOrigin(preferred[0]!) : undefined;
 }
 
 export function resolveManifestProviderAuthChoices(
@@ -294,6 +309,16 @@ export function resolveManifestProviderAuthChoices(
 ): ProviderAuthChoiceMetadata[] {
   return resolvePreferredManifestAuthChoicesByChoiceId(
     resolveManifestProviderAuthChoiceCandidates(params),
+  ).map(stripChoiceOrigin);
+}
+
+/** Resolves only executable auth choices declared by provider manifests. */
+export function resolveManifestDeclaredProviderAuthChoices(
+  params?: ManifestProviderAuthChoiceParams,
+): ProviderAuthChoiceMetadata[] {
+  return resolvePreferredManifestAuthChoicesByChoiceId(
+    resolveManifestProviderAuthChoiceCandidates(params).filter((choice) => choice.manifestDeclared),
+    true,
   ).map(stripChoiceOrigin);
 }
 

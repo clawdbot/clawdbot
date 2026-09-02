@@ -3,6 +3,7 @@ import { routeIdFromPath } from "../../app-routes.ts";
 import type { RouteId } from "../../app-routes.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
+import { MODELS_FIRST_RUN_NAVIGATION } from "../model-providers/location.ts";
 import { persistFirstRunActivationReceipt } from "./first-run-activation-receipt.ts";
 import { isDefaultChatLanding, startModelSetupFirstRunRedirectAfterLocation } from "./first-run.ts";
 
@@ -190,7 +191,7 @@ describe("model setup first-run redirect", () => {
       initialLocationReady: Promise.resolve(defaultLanding),
     });
 
-    expect(replace).toHaveBeenCalledWith("model-setup", { search: "?firstRun=1" });
+    expect(replace).toHaveBeenCalledWith("model-providers", MODELS_FIRST_RUN_NAVIGATION);
     dispose();
   });
 
@@ -243,7 +244,7 @@ describe("model setup first-run redirect", () => {
     expect(request).not.toHaveBeenCalled();
     expect(replace).toHaveBeenCalledTimes(shouldRedirect ? 1 : 0);
     if (shouldRedirect) {
-      expect(replace).toHaveBeenCalledWith("model-setup", { search: "?firstRun=1" });
+      expect(replace).toHaveBeenCalledWith("model-providers", MODELS_FIRST_RUN_NAVIGATION);
     }
     dispose();
   });
@@ -272,7 +273,7 @@ describe("model setup first-run redirect", () => {
     const dispose = await startRedirect(context);
 
     await vi.waitFor(() => {
-      expect(replace).toHaveBeenCalledWith("model-setup", { search: "?firstRun=1" });
+      expect(replace).toHaveBeenCalledWith("model-providers", MODELS_FIRST_RUN_NAVIGATION);
     });
     dispose();
   });

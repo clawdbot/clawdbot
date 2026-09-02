@@ -22,7 +22,7 @@ export type ModelAuthStatusProfile = {
   status: AuthProfileHealthStatus;
   reasonCode?: AuthCredentialReasonCode;
   expiry?: ModelAuthExpiry;
-  /** True only for saved OAuth/token profiles this gateway can remove. */
+  /** True only for saved profiles this gateway can remove. */
   logoutSupported?: boolean;
 };
 
@@ -50,7 +50,11 @@ export type ModelAuthStatusProvider = {
 export type ModelProviderCapability = {
   provider: string;
   apiKeySupported: boolean;
-  quickApiKeySetup: boolean;
+  accessOptions?: Array<{
+    id: string;
+    label: string;
+    mode: "login" | "setup";
+  }>;
 };
 
 export type ModelAuthStatusResult = {

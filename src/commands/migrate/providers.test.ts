@@ -18,20 +18,34 @@ vi.mock("../../plugins/migration-provider-runtime.js", () => ({
 import { buildMigrationProviderOptions, resolveMigrationProvider } from "./providers.js";
 
 describe("resolveMigrationProvider", () => {
-  it("loads the requested bundled provider before resolving it", () => {
+  it("returns a lightweight provider without loading its full runtime", () => {
     const config = {} as OpenClawConfig;
     const provider = {
-      id: "hermes",
-      label: "Hermes",
+      id: "fixture",
+      label: "Fixture",
       plan: vi.fn(),
       apply: vi.fn(),
     } satisfies MigrationProviderPlugin;
     migrationRuntimeMocks.resolveProvider.mockReturnValueOnce(provider);
 
-    expect(resolveMigrationProvider("hermes", config)).toBe(provider);
+    expect(resolveMigrationProvider("fixture", config)).toBe(provider);
+    expect(migrationRuntimeMocks.ensureLoaded).not.toHaveBeenCalled();
+  });
+
+  it("loads an unresolved provider before trying again", () => {
+    const config = {} as OpenClawConfig;
+    const provider = {
+      id: "fixture",
+      label: "Fixture",
+      plan: vi.fn(),
+      apply: vi.fn(),
+    } satisfies MigrationProviderPlugin;
+    migrationRuntimeMocks.resolveProvider.mockReturnValueOnce(undefined).mockReturnValue(provider);
+
+    expect(resolveMigrationProvider("fixture", config)).toBe(provider);
     expect(migrationRuntimeMocks.ensureLoaded).toHaveBeenCalledWith({
       cfg: config,
-      providerId: "hermes",
+      providerId: "fixture",
     });
   });
 });

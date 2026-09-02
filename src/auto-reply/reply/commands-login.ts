@@ -5,8 +5,10 @@ import {
 import { updateSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import {
-  codexChannelLoginRuntime,
+  decideProviderLoginSessionAdoption,
+  providerChannelLoginRuntime,
   type ModelsAuthLoginFlowOptions,
+  type ProviderChannelLoginChoice,
 } from "../../plugin-sdk/provider-auth-login-flow-runtime.js";
 import { defaultRuntime, type RuntimeEnv } from "../../runtime.js";
 import type { ReplyPayload } from "../types.js";
@@ -17,20 +19,18 @@ const PRIVATE_CHAT_TYPES = new Set(["direct", "dm", "im", "private"]);
 const PUBLIC_CHAT_TYPES = new Set(["channel", "forum", "group", "public", "supergroup", "topic"]);
 const WEB_LOGIN_SURFACES = new Set(["control", "control-ui", "dashboard", "internal", "web"]);
 
-const activeCodexLoginFlows = codexChannelLoginRuntime.createFlowRegistry();
+const activeProviderLoginFlows = providerChannelLoginRuntime.createFlowRegistry();
 
 type RunLoginFlow = (opts: ModelsAuthLoginFlowOptions) => Promise<unknown>;
 
-const LOGIN_COMPLETE_MESSAGE = "Codex login complete. Try your request again now.";
-const LOGIN_SESSION_SWITCH_FAILED_MESSAGE =
-  "Codex login completed, but this session could not switch to the newly authenticated profile. Retry `/login codex`, or select the profile manually.";
-
-function parseLoginCommand(commandBodyNormalized: string): { providerInput: string } | null {
+function parseLoginCommand(
+  commandBodyNormalized: string,
+): { providerInput: string | undefined } | null {
   const match = commandBodyNormalized.trim().match(/^\/login(?:\s+(.+))?$/u);
   if (!match) {
     return null;
   }
-  const providerInput = match[1]?.trim() || "codex";
+  const providerInput = match[1]?.trim() || undefined;
   return { providerInput };
 }
 
@@ -41,11 +41,11 @@ function hasInternalAdminScope(params: HandleCommandsParams): boolean {
   );
 }
 
-function canStartCodexLogin(params: HandleCommandsParams): boolean {
+function canStartProviderLogin(params: HandleCommandsParams): boolean {
   return (
     params.command.isAuthorizedSender &&
     params.command.senderIsOwner &&
-    (codexChannelLoginRuntime.hasConfiguredCommandOwnerAllowlist(params.cfg) ||
+    (providerChannelLoginRuntime.hasConfiguredCommandOwnerAllowlist(params.cfg) ||
       hasInternalAdminScope(params))
   );
 }
@@ -107,7 +107,7 @@ function keyPart(value: unknown, fallback: string): string {
   return fallback;
 }
 
-function buildCodexLoginFlowKey(params: HandleCommandsParams, provider: string): string {
+function buildProviderLoginFlowKey(params: HandleCommandsParams, choiceId: string): string {
   const threadId =
     params.ctx.MessageThreadId ?? params.ctx.TransportThreadId ?? params.ctx.ThreadParentId;
   return [
@@ -117,7 +117,7 @@ function buildCodexLoginFlowKey(params: HandleCommandsParams, provider: string):
     keyPart(params.ctx.OriginatingTo ?? params.command.to ?? params.command.channelId, "unknown"),
     keyPart(threadId, "main"),
     params.agentId,
-    provider,
+    choiceId,
   ].join(":");
 }
 
@@ -135,59 +135,65 @@ async function emitLoginMessage(params: HandleCommandsParams, text: string): Pro
 
 async function switchLoginSessionProfile(params: {
   commandParams: HandleCommandsParams;
+  loginProvider: string;
   nextProfileId: string | undefined;
 }): Promise<"unchanged" | "updated" | "failed"> {
-  const { commandParams, nextProfileId } = params;
+  const { commandParams, loginProvider, nextProfileId } = params;
   const currentEntry = commandParams.sessionEntry;
-  if (!currentEntry || !nextProfileId) {
+  if (!nextProfileId) {
+    return "failed";
+  }
+  if (!currentEntry) {
     return "unchanged";
   }
-  const needsUpdate =
-    currentEntry.authProfileOverride !== nextProfileId ||
-    currentEntry.authProfileOverrideSource !== "user" ||
-    currentEntry.authProfileOverrideCompactionCount !== undefined;
+  if (normalizeSurface(commandParams.provider) !== normalizeSurface(loginProvider)) {
+    return "unchanged";
+  }
 
   const sessionStore = commandParams.sessionStore;
   if (!sessionStore) {
     return "failed";
   }
   const liveEntry = sessionStore[commandParams.sessionKey];
-  const matchesLoginSnapshot = (entry: SessionEntry): boolean =>
-    entry.sessionId === currentEntry.sessionId &&
-    entry.authProfileOverride === currentEntry.authProfileOverride &&
-    entry.authProfileOverrideSource === currentEntry.authProfileOverrideSource &&
-    entry.authProfileOverrideCompactionCount === currentEntry.authProfileOverrideCompactionCount;
-  if (!liveEntry || !matchesLoginSnapshot(liveEntry)) {
+  if (!liveEntry) {
     return "failed";
   }
+  const liveDecision = decideProviderLoginSessionAdoption({
+    currentModelProvider: commandParams.provider,
+    loginProvider,
+    nextProfileId,
+    snapshot: currentEntry,
+    current: liveEntry,
+  });
+  if (liveDecision.status === "rejected") {
+    return "failed";
+  }
+  if (liveDecision.status === "unchanged" && !commandParams.storePath) {
+    return "unchanged";
+  }
 
-  const nextEntry = {
-    ...liveEntry,
-    authProfileOverride: nextProfileId,
-    authProfileOverrideSource: "user" as const,
-  };
+  const nextEntry =
+    liveDecision.status === "patch" ? { ...liveEntry, ...liveDecision.patch } : liveEntry;
   delete nextEntry.authProfileOverrideCompactionCount;
   try {
+    let finalDecision = liveDecision;
     let persistedEntry: SessionEntry = nextEntry;
     if (commandParams.storePath) {
-      let snapshotMatched = false;
+      let persistedDecision: ReturnType<typeof decideProviderLoginSessionAdoption> | undefined;
       const persisted = await updateSessionEntry(
         {
           storePath: commandParams.storePath,
           sessionKey: commandParams.sessionKey,
         },
         (entry) => {
-          if (!matchesLoginSnapshot(entry)) {
-            return null;
-          }
-          snapshotMatched = true;
-          return needsUpdate
-            ? {
-                authProfileOverride: nextProfileId,
-                authProfileOverrideSource: "user",
-                authProfileOverrideCompactionCount: undefined,
-              }
-            : null;
+          persistedDecision = decideProviderLoginSessionAdoption({
+            currentModelProvider: commandParams.provider,
+            loginProvider,
+            nextProfileId,
+            snapshot: currentEntry,
+            current: entry,
+          });
+          return persistedDecision.status === "patch" ? persistedDecision.patch : null;
         },
         {
           requireWriteSuccess: true,
@@ -195,19 +201,22 @@ async function switchLoginSessionProfile(params: {
         },
       );
       if (
-        !snapshotMatched ||
+        !persistedDecision ||
+        persistedDecision.status === "rejected" ||
         !persisted ||
-        persisted.authProfileOverride !== nextProfileId ||
-        persisted.authProfileOverrideSource !== "user" ||
-        persisted.authProfileOverrideCompactionCount !== undefined
+        (persistedDecision.status === "patch" &&
+          (persisted.authProfileOverride !== nextProfileId ||
+            persisted.authProfileOverrideSource !== "user" ||
+            persisted.authProfileOverrideCompactionCount !== undefined))
       ) {
         return "failed";
       }
+      finalDecision = persistedDecision;
       persistedEntry = persisted;
     }
     commandParams.sessionEntry = persistedEntry;
     sessionStore[commandParams.sessionKey] = persistedEntry;
-    if (needsUpdate) {
+    if (finalDecision.status === "patch") {
       markCommandSessionMetadataChanged(commandParams);
       return "updated";
     }
@@ -218,60 +227,70 @@ async function switchLoginSessionProfile(params: {
   return "failed";
 }
 
-async function runChannelCodexLogin(params: {
+async function runChannelProviderLogin(params: {
   commandParams: HandleCommandsParams;
-  provider: string;
+  choice: ProviderChannelLoginChoice;
   agentId: string;
   runLoginFlow?: RunLoginFlow;
   runtime?: RuntimeEnv;
 }): Promise<ReplyPayload> {
-  const flowKey = buildCodexLoginFlowKey(params.commandParams, params.provider);
+  const flowKey = buildProviderLoginFlowKey(params.commandParams, params.choice.choiceId);
   if (!params.commandParams.opts?.onBlockReply) {
     return {
-      text: "Codex login needs a live private response path so the code can be shown before it expires. Use the Web UI or a private chat and send `/login codex` again.",
+      text: `${params.choice.providerLabel} login needs a live private response path so the code can be shown before it expires. Use the Control UI or a private chat and send \`${providerChannelLoginRuntime.formatCommand(params.choice)}\` again.`,
     };
   }
 
-  const reservation = codexChannelLoginRuntime.reserveFlow({
-    flows: activeCodexLoginFlows,
+  const reservation = providerChannelLoginRuntime.reserveFlow({
+    flows: activeProviderLoginFlows,
     flowKey,
   });
   if (reservation.status === "active") {
     return {
-      text: "A Codex login code is already active for this chat or channel. Complete it, or wait for it to expire before requesting a new one.",
+      text: `${params.choice.providerLabel} login is already active for this chat or channel. Complete it, or wait for it to expire before requesting a new one.`,
     };
   }
 
   try {
-    const loginResult = await codexChannelLoginRuntime.runDeviceLoginFlow({
-      provider: params.provider,
+    const loginResult = await providerChannelLoginRuntime.runLoginFlow({
+      choice: params.choice,
       agentId: params.agentId,
       config: params.commandParams.cfg,
       runtime: params.runtime ?? defaultRuntime,
       signal: reservation.record.signal,
       sendMessage: async (text) => await emitLoginMessage(params.commandParams, text),
-      unsupportedPromptMessage: "Channel /login supports only fixed Codex device-code auth.",
+      unsupportedPromptMessage:
+        "This provider needs input that chat cannot collect. Open Control UI → Models and choose Sign in.",
       runLoginFlow: params.runLoginFlow,
     });
     const nextProfileId = loginResult.profiles.find(
-      (profile) => profile.provider === params.provider,
+      (profile) =>
+        normalizeSurface(profile.provider) === normalizeSurface(params.choice.providerId),
     )?.profileId;
     if (!nextProfileId) {
-      return { text: LOGIN_SESSION_SWITCH_FAILED_MESSAGE };
+      return { text: providerChannelLoginRuntime.formatSessionSwitchFailed(params.choice) };
     }
     const switchResult = await switchLoginSessionProfile({
       commandParams: params.commandParams,
+      loginProvider: params.choice.providerId,
       nextProfileId,
     });
     return {
       text:
-        switchResult === "failed" ? LOGIN_SESSION_SWITCH_FAILED_MESSAGE : LOGIN_COMPLETE_MESSAGE,
+        switchResult === "failed"
+          ? providerChannelLoginRuntime.formatSessionSwitchFailed(params.choice)
+          : providerChannelLoginRuntime.formatComplete(
+              params.choice,
+              loginResult.imported === true,
+              loginResult.modelAccess,
+              loginResult.authRefresh,
+            ),
     };
   } catch {
-    return { text: "Codex login did not complete. Send `/login codex` to request a new code." };
+    return { text: providerChannelLoginRuntime.formatFailed(params.choice) };
   } finally {
-    codexChannelLoginRuntime.releaseFlow({
-      flows: activeCodexLoginFlows,
+    providerChannelLoginRuntime.releaseFlow({
+      flows: activeProviderLoginFlows,
       flowKey,
       record: reservation.record,
     });
@@ -287,20 +306,29 @@ export const handleLoginCommand: CommandHandler = async (params, allowTextComman
     return null;
   }
 
-  if (!canStartCodexLogin(params)) {
+  if (!canStartProviderLogin(params)) {
     return {
       shouldContinue: false,
       reply: {
-        text: "Only a configured OpenClaw owner/admin can start Codex login from this channel.",
+        text: "Only a configured OpenClaw owner/admin can start provider login from this channel.",
       },
     };
   }
 
-  const provider = codexChannelLoginRuntime.resolveProvider(parsed.providerInput);
-  if (!provider) {
+  const resolution = providerChannelLoginRuntime.resolveChoice(parsed.providerInput, {
+    config: params.cfg,
+    workspaceDir: params.workspaceDir,
+  });
+  if (resolution.status !== "resolved") {
+    const available = providerChannelLoginRuntime.formatChoices(resolution.choices);
     return {
       shouldContinue: false,
-      reply: { text: "Unsupported login provider. Use `/login codex`." },
+      reply: {
+        text:
+          resolution.status === "ambiguous"
+            ? `Choose one provider login: ${available}.`
+            : `Unsupported login provider. Available provider access commands: ${available}.`,
+      },
     };
   }
 
@@ -308,14 +336,21 @@ export const handleLoginCommand: CommandHandler = async (params, allowTextComman
     return {
       shouldContinue: false,
       reply: {
-        text: "Codex login codes are only sent in a private chat or Web UI session. Open a private chat with OpenClaw and send `/login codex` there.",
+        text: `Provider login codes are only sent in a private chat or Control UI session. Open a private chat with OpenClaw and send \`${providerChannelLoginRuntime.formatCommand(resolution.choice)}\` there.`,
       },
     };
   }
 
-  const reply = await runChannelCodexLogin({
+  if (resolution.choice.mode !== "chat") {
+    return {
+      shouldContinue: false,
+      reply: { text: providerChannelLoginRuntime.formatControlUiHandoff(resolution.choice) },
+    };
+  }
+
+  const reply = await runChannelProviderLogin({
     commandParams: params,
-    provider,
+    choice: resolution.choice,
     agentId: params.agentId,
   });
   return { shouldContinue: false, reply };
@@ -323,7 +358,7 @@ export const handleLoginCommand: CommandHandler = async (params, allowTextComman
 
 const commandsLoginTestApi = {
   clearActiveFlows() {
-    activeCodexLoginFlows.clear();
+    activeProviderLoginFlows.clear();
   },
 };
 

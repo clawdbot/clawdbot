@@ -372,17 +372,28 @@ export const SystemAgentSetupActivateResultSchema = closedObject({
   error: Type.Optional(Type.String()),
 });
 
-/** Starts one provider-owned interactive login as a gateway wizard session. */
-export const SystemAgentSetupAuthStartParamsSchema = closedObject({
+const ProviderAuthWizardStartFields = {
   /** Client-generated so cancellation remains possible if the start reply is lost. */
   sessionId: NonEmptyString,
-  /** Agent that owns credentials and model selection created by this setup flow. */
+  /** Agent that owns credentials created by this login flow. */
   agentId: Type.Optional(NonEmptyString),
   authChoice: NonEmptyString,
+};
+
+/** Starts one provider-owned interactive login as a gateway setup wizard session. */
+export const SystemAgentSetupAuthStartParamsSchema = closedObject({
+  ...ProviderAuthWizardStartFields,
   workspace: Type.Optional(Type.String()),
 });
 
 export const SystemAgentSetupAuthStartResultSchema = WizardStartResultSchema;
+
+/** Starts credential-only provider login without selecting or testing a model. */
+export const ModelAuthLoginStartParamsSchema = closedObject({
+  agentId: ProviderAuthWizardStartFields.agentId,
+  authChoice: ProviderAuthWizardStartFields.authChoice,
+});
+export const ModelAuthLoginStartResultSchema = WizardStartResultSchema;
 
 // Wire types derive directly from local schema consts so public d.ts graphs never
 // pull in the ProtocolSchemas registry.
@@ -406,10 +417,11 @@ export type SystemAgentSetupVerifyParams = Static<typeof SystemAgentSetupVerifyP
 export type SystemAgentSetupVerifyResult = Static<typeof SystemAgentSetupVerifyResultSchema>;
 export type SystemAgentSetupAuthStartParams = Static<typeof SystemAgentSetupAuthStartParamsSchema>;
 export type SystemAgentSetupAuthStartResult = Static<typeof SystemAgentSetupAuthStartResultSchema>;
-
 export type SystemAgentSetupActivateStartParams = Static<
   typeof SystemAgentSetupActivateStartParamsSchema
 >;
 export type SystemAgentSetupActivateStartResult = Static<
   typeof SystemAgentSetupActivateStartResultSchema
 >;
+export type ModelAuthLoginStartParams = Static<typeof ModelAuthLoginStartParamsSchema>;
+export type ModelAuthLoginStartResult = Static<typeof ModelAuthLoginStartResultSchema>;

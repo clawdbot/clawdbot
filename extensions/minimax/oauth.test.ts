@@ -274,6 +274,23 @@ afterEach(() => {
 });
 
 describe("loginMiniMaxPortalOAuth", () => {
+  it("emits a structured device code for remote login surfaces", async () => {
+    const deviceCode = vi.fn(async () => undefined);
+    const note = vi.fn(async () => undefined);
+    stubOAuthFetch((_input, init) => authorizationResponse(init), tokenResponse());
+
+    await loginMiniMax({ deviceCode, note });
+
+    expect(deviceCode).toHaveBeenCalledWith(
+      expect.objectContaining({
+        title: "MiniMax OAuth",
+        code: "CODE",
+        message: expect.stringContaining("https://example.com/device"),
+      }),
+    );
+    expect(note).not.toHaveBeenCalled();
+  });
+
   it.each([
     [3600, 1_700_003_600_000],
     [1_700_000_000, 1_700_000_000_000],

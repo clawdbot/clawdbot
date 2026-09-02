@@ -87,6 +87,7 @@ function createEmptyPreparedModelRuntimeSnapshot(
     activeProjectKeys: [],
     config: input.config,
     authModes: {},
+    oauthRefreshProviderIds: [],
     metadataSnapshot: createEmptyPluginMetadataSnapshot(input.workspaceDir),
     pluginRegistry: createEmptyPluginRegistry(),
     allowGatewaySubagentBinding: input.allowGatewaySubagentBinding === true,

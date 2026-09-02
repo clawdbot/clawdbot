@@ -3,6 +3,7 @@ import { sameRouteLocation, type RouteId } from "../../app-routes.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
 import { readSessionDefaults } from "../../lib/sessions/session-key.ts";
+import { MODELS_FIRST_RUN_NAVIGATION } from "../model-providers/location.ts";
 
 export function isDefaultChatLanding(
   location: RouteLocation,
@@ -44,7 +45,7 @@ export async function startModelSetupFirstRunRedirectAfterLocation(params: {
   const { context } = params;
   const isStillDefaultLanding = () => sameRouteLocation(params.history.location(), initialLocation);
   const redirect =
-    params.redirect ?? (() => context.replace("model-setup", { search: "?firstRun=1" }));
+    params.redirect ?? (() => context.replace("model-providers", MODELS_FIRST_RUN_NAVIGATION));
   let initialDecisionSettled = false;
   const settleInitialDecision = () => {
     if (!initialDecisionSettled) {

@@ -6077,6 +6077,9 @@ describe("gateway plugin hot reload handlers", () => {
         events.push(`channel:${targetEnv[envKey]}`);
         return new Map();
       }),
+      refreshChatMetadata: vi.fn(async () => {
+        events.push(`chat-metadata:${targetEnv[envKey]}`);
+      }),
       reloadPlugins,
     });
     try {
@@ -6107,6 +6110,7 @@ describe("gateway plugin hot reload handlers", () => {
         "lookup:candidate:old",
         "cron:candidate",
         "plugin:candidate",
+        "chat-metadata:candidate",
         "channel:candidate",
       ]);
       expect(targetEnv[envKey]).toBe("candidate");

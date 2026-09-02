@@ -338,6 +338,7 @@ export const validateSystemAgentSetupActivateStartParams = compile(
 export const validateSystemAgentSetupAuthStartParams = compile(
   S.SystemAgentSetupAuthStartParamsSchema,
 );
+export const validateModelAuthLoginStartParams = compile(S.ModelAuthLoginStartParamsSchema);
 export const validateWizardStartParams = compile(S.WizardStartParamsSchema);
 export const validateWizardNextParams = compile(S.WizardNextParamsSchema);
 export const validateWizardCancelParams = compile(S.WizardCancelParamsSchema);
@@ -376,6 +377,7 @@ export const validateChannelsStartParams = compile(S.ChannelsStartParamsSchema);
 export const validateChannelsStopParams = compile(S.ChannelsStopParamsSchema);
 export const validateChannelsLogoutParams = compile(S.ChannelsLogoutParamsSchema);
 export const validateModelsAuthLogoutParams = compile(S.ModelsAuthLogoutParamsSchema);
+export const validateModelsAuthRefreshParams = compile(S.ModelsAuthRefreshParamsSchema);
 export const validateModelsAuthStatusParams = compile(S.ModelsAuthStatusParamsSchema);
 export const validateModelsListParams = compile(S.ModelsListParamsSchema);
 export const validateSkillsStatusParams = compile(S.SkillsStatusParamsSchema);

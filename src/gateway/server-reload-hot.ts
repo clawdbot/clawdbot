@@ -596,6 +596,15 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
       return "applied-restart-required";
     }
 
+    try {
+      // The prepared owner publishes before its derived chat projection. Include both in the
+      // config transaction so login cannot report a provider before chat.startup can expose it.
+      await params.refreshChatMetadata?.();
+    } catch (err) {
+      scheduleRecoveryRestart("chat metadata reload", err);
+      return "applied-restart-required";
+    }
+
     if (plan.restartHealthMonitor) {
       try {
         state.channelHealthMonitor?.stop();

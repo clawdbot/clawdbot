@@ -177,6 +177,7 @@ function detection(
     unavailableCandidates: [],
     manualProviders: [],
     authOptions: [],
+    prepareOptions: [],
     recommendedInstalls: [],
     workspace: "/tmp/openclaw-workspace",
     setupComplete: false,
@@ -241,6 +242,7 @@ function setupDeps(params: {
     listManualOptions: vi.fn(async () => ({
       manualProviders: [],
       authOptions: [],
+      prepareOptions: [],
       workspace: "/tmp/openclaw-workspace",
       setupComplete: false,
     })),

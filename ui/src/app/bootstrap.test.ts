@@ -4,6 +4,7 @@ import { CONTROL_UI_BASE_PATH_ATTRIBUTE } from "../../../src/gateway/control-ui-
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import { routeIdFromPath, type RouteId } from "../app-routes.ts";
 import { sessionRefFromPath } from "../app-session-route-paths.ts";
+import { MODELS_FIRST_RUN_NAVIGATION } from "../pages/model-providers/location.ts";
 import {
   isDefaultChatLanding,
   startModelSetupFirstRunRedirectAfterLocation,
@@ -435,7 +436,7 @@ describe("normalizeInitialApplicationLocation", () => {
     connectedListener(gateway.snapshot);
     expect(request).not.toHaveBeenCalled();
     expect(replaceRoute).toHaveBeenCalledOnce();
-    expect(replaceRoute).toHaveBeenCalledWith("model-setup", { search: "?firstRun=1" });
+    expect(replaceRoute).toHaveBeenCalledWith("model-providers", MODELS_FIRST_RUN_NAVIGATION);
   });
 
   it("does not replace a user route with the deferred default chat location", async () => {

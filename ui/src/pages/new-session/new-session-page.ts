@@ -21,6 +21,7 @@ import { focusChatComposerFromPrintableKeydown } from "../chat/chat-pane-shared.
 import { renderChatImageLightbox } from "../chat/components/chat-image-lightbox.ts";
 import { renderChatPermissionPicker } from "../chat/components/chat-permission-picker.ts";
 import { renderWelcomeState } from "../chat/components/chat-welcome.ts";
+import { MODELS_CONNECT_NAVIGATION } from "../model-providers/location.ts";
 import * as catalog from "./catalog-target.ts";
 import { NewSessionDictationControl } from "./composer-dictation-control.ts";
 import { renderDraftError } from "./composer.ts";
@@ -59,9 +60,7 @@ export class NewSessionPage extends OpenClawLightDomElement {
   @consume({ context: applicationContext, subscribe: true })
   private context?: ApplicationContext;
 
-  private openedFor: string | null = null;
-  private openedGroupDefaults = "";
-  private openedAgentId = "";
+  private opened = { key: null as string | null, defaults: "", agentId: "" };
   private messageOwnerKey = "";
   private presenceSignature = "";
   private readonly connectMachine: ConnectMachineSetupState;
@@ -245,7 +244,7 @@ export class NewSessionPage extends OpenClawLightDomElement {
     document.removeEventListener("keydown", this, true);
     document.removeEventListener("pointerdown", this, true);
     window.removeEventListener("beforeunload", this.flushDraft);
-    retainDraft(this.context, this.submission, this.openedFor, this.messageOwnerKey);
+    retainDraft(this.context, this.submission, this.opened.key, this.messageOwnerKey);
     this.subscriptions.clear();
     this.gateway.invalidateDiscovery(
       true,
@@ -281,22 +280,22 @@ export class NewSessionPage extends OpenClawLightDomElement {
     const openKey = this.routeOwnerKey();
     const resolvedAgentId = this.data?.agentId ?? "";
     const groupDefaults = catalog.groupDefaultsKey(this.data);
-    if (this.openedFor !== openKey) {
+    if (this.opened.key !== openKey) {
       const ownedMessage = this.messageOwnerKey === openKey ? this.submission.message : "";
-      this.openedFor = openKey;
-      this.openedGroupDefaults = groupDefaults;
-      this.openedAgentId = resolvedAgentId;
+      this.opened.key = openKey;
+      this.opened.defaults = groupDefaults;
+      this.opened.agentId = resolvedAgentId;
       this.place.setAgentsHydrated(agentsReady);
       this.resetDraft();
       this.messageOwnerKey = restoreDraft(this.context, this.submission, openKey, ownedMessage);
       return;
     }
-    if (this.openedGroupDefaults !== groupDefaults) {
-      this.openedGroupDefaults = groupDefaults;
+    if (this.opened.defaults !== groupDefaults) {
+      this.opened.defaults = groupDefaults;
       this.place.adoptGroupDefaults();
     }
-    if (this.openedAgentId !== resolvedAgentId) {
-      this.openedAgentId = resolvedAgentId;
+    if (this.opened.agentId !== resolvedAgentId) {
+      this.opened.agentId = resolvedAgentId;
       this.place.setAgentsHydrated(false);
     }
     if (!this.place.agentsHydrated && agentsReady) {
@@ -643,7 +642,7 @@ export class NewSessionPage extends OpenClawLightDomElement {
       hideSecondaryContent: this.submission.visibility === "incognito",
       fadeSecondaryContent: this.submission.message.trim().length > 0,
       modelSetupRequired: this.submission.requiresModelSetup(),
-      onModelSetup: () => this.context?.navigate("model-setup"),
+      onModelSetup: () => this.context?.navigate("model-providers", MODELS_CONNECT_NAVIGATION),
       sessions: this.context?.sessions.state.result,
       sessionKey: buildAgentMainSessionKey({
         agentId: this.place.agentId || "main",

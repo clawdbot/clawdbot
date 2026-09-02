@@ -535,27 +535,36 @@ export async function buildCodexMigrationPlan(
     ctx.itemKinds !== undefined &&
     ctx.itemKinds.length > 0 &&
     ctx.itemKinds.every((kind) => kind === "memory");
+  const authOnly =
+    ctx.itemKinds !== undefined &&
+    ctx.itemKinds.length > 0 &&
+    ctx.itemKinds.every((kind) => kind === "auth");
   const source = await discoverCodexSource({
     input: ctx.source,
     memoryOnly,
-    evaluatePluginMigrationEligibility: !memoryOnly,
+    authOnly,
+    evaluatePluginMigrationEligibility: !memoryOnly && !authOnly,
     verifyPluginApps: shouldVerifyPluginApps(ctx),
   });
-  if (!hasCodexSource(source)) {
+  if (!hasCodexSource(source) && !authOnly) {
     throw new Error(
       `Codex state was not found at ${source.root}. Pass --from <path> if it lives elsewhere.`,
     );
   }
   const items: MigrationItem[] = [];
-  items.push(
-    ...(await buildCodexMemoryItems({
-      memoryFiles: source.memoryFiles,
-      workspaceDir: targets.workspaceDir,
-      overwrite: ctx.overwrite,
-    })),
-  );
+  if (!authOnly) {
+    items.push(
+      ...(await buildCodexMemoryItems({
+        memoryFiles: source.memoryFiles,
+        workspaceDir: targets.workspaceDir,
+        overwrite: ctx.overwrite,
+      })),
+    );
+  }
   if (!memoryOnly) {
     items.push(...(await buildCodexAuthItems({ ctx, source, targets })));
+  }
+  if (!memoryOnly && !authOnly) {
     items.push(
       ...(await buildCodexSkillItems({
         skills: source.skills,

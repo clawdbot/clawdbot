@@ -2214,7 +2214,7 @@ describe("createTelegramBot", () => {
         messageId: 10,
         message: {
           reply_markup: {
-            inline_keyboard: [[{ text: "Log in to Codex", callback_data: "tgcmd:/login codex" }]],
+            inline_keyboard: [[{ text: "Sign in to OpenAI", callback_data: "tgcmd:/login codex" }]],
           },
         },
       }),
@@ -2224,7 +2224,7 @@ describe("createTelegramBot", () => {
     expect(replySpy).not.toHaveBeenCalled();
     expect(sendMessageSpy).toHaveBeenCalledWith(
       1234,
-      "Only a configured OpenClaw owner can start Codex login from Telegram.",
+      "Only a configured OpenClaw owner can start provider login from Telegram.",
       {},
     );
   });
@@ -2241,6 +2241,7 @@ describe("createTelegramBot", () => {
         return {
           providerId: "openai",
           methodId: "device-code",
+          modelAccess: "already-visible",
           profiles: [{ profileId: "openai:codex", provider: "openai", mode: "oauth" }],
         };
       });
@@ -2259,7 +2260,9 @@ describe("createTelegramBot", () => {
           messageId: 10,
           message: {
             reply_markup: {
-              inline_keyboard: [[{ text: "Log in to Codex", callback_data: "tgcmd:/login codex" }]],
+              inline_keyboard: [
+                [{ text: "Sign in to OpenAI", callback_data: "tgcmd:/login codex" }],
+              ],
             },
           },
         }),

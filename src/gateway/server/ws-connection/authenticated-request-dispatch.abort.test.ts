@@ -183,42 +183,45 @@ describe("authenticated WebSocket request cancellation", () => {
     },
   );
 
-  it("cancels a session companion ask when its authenticated socket closes", async () => {
-    const socket = new EventEmitter();
-    const { client, dispatcher } = createDispatcher(socket, {
-      id: GATEWAY_CLIENT_IDS.CONTROL_UI,
-      mode: GATEWAY_CLIENT_MODES.UI,
-    });
-    const invoked = createDeferredCore();
-    const abortObserved = createDeferredCore();
-    let observedSignal: AbortSignal | undefined;
-    handleGatewayRequest.mockImplementation(async (options: GatewayRequestOptions) => {
-      observedSignal = options.signal;
-      options.signal?.addEventListener("abort", () => abortObserved.resolve(), { once: true });
-      invoked.resolve();
+  it.each(["sessions.companion.ask", "models.authLogin.start"])(
+    "cancels %s when its authenticated socket closes",
+    async (method) => {
+      const socket = new EventEmitter();
+      const { client, dispatcher } = createDispatcher(socket, {
+        id: GATEWAY_CLIENT_IDS.CONTROL_UI,
+        mode: GATEWAY_CLIENT_MODES.UI,
+      });
+      const invoked = createDeferredCore();
+      const abortObserved = createDeferredCore();
+      let observedSignal: AbortSignal | undefined;
+      handleGatewayRequest.mockImplementation(async (options: GatewayRequestOptions) => {
+        observedSignal = options.signal;
+        options.signal?.addEventListener("abort", () => abortObserved.resolve(), { once: true });
+        invoked.resolve();
+        await abortObserved.promise;
+      });
+
+      await dispatcher.dispatch(
+        {
+          type: "req",
+          id: "disconnect-cancelled-request",
+          method,
+          params: { sessionKey: "agent:main:main", question: "What changed?" },
+        },
+        client,
+      );
+      // Emitting close before the handler registers its abort listener would leave
+      // the already-aborted signal unobserved; wait for the handler first.
+      await invoked.promise;
+      expect(socket.listenerCount("close")).toBe(1);
+
+      socket.emit("close", 1000, Buffer.alloc(0));
+
       await abortObserved.promise;
-    });
-
-    await dispatcher.dispatch(
-      {
-        type: "req",
-        id: "session-companion",
-        method: "sessions.companion.ask",
-        params: { sessionKey: "agent:main:main", question: "What changed?" },
-      },
-      client,
-    );
-    // Emitting close before the handler registers its abort listener would leave
-    // the already-aborted signal unobserved; wait for the handler first.
-    await invoked.promise;
-    expect(socket.listenerCount("close")).toBe(1);
-
-    socket.emit("close", 1000, Buffer.alloc(0));
-
-    await abortObserved.promise;
-    expect(observedSignal?.aborted).toBe(true);
-    await vi.waitFor(() => expect(socket.listenerCount("close")).toBe(0));
-  });
+      expect(observedSignal?.aborted).toBe(true);
+      await vi.waitFor(() => expect(socket.listenerCount("close")).toBe(0));
+    },
+  );
 
   it.each([
     {

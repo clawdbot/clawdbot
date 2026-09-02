@@ -83,7 +83,8 @@ function renderDeviceCode(step: WizardStep) {
   const copyLabel = t("modelSetup.wizard.copy");
   return html`
     <div class="wizard-step__device-code">
-      ${deviceCode.message
+      <div class="muted">${t("modelSetup.wizard.deviceCodeSafety")}</div>
+      ${deviceCode.message && !step.externalUrl
         ? html`<div class="muted">${formatUiExternalText(deviceCode.message)}</div>`
         : nothing}
       <code>${deviceCode.code}</code>
@@ -177,7 +178,7 @@ function renderOption(
 function renderContinueStep(props: WizardStepControlsProps) {
   const step = props.step;
   return html`
-    ${renderMessage(props)}
+    ${step.deviceCode ? nothing : renderMessage(props)}
     ${step.externalUrl
       ? html`<a
           class="btn btn--sm wizard-step__external-link"

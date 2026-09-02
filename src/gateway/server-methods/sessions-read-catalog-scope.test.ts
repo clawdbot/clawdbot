@@ -131,6 +131,7 @@ function preparedOwner(params: {
     config: params.config,
     activeProjectKeys: [],
     authModes: {},
+    oauthRefreshProviderIds: [],
     metadataSnapshot: createPluginMetadataSnapshotFixture(),
     pluginRegistry: params.pluginRegistry,
     allowGatewaySubagentBinding: false,

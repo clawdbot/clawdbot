@@ -105,6 +105,7 @@ vi.mock("../prepared-model-runtime.js", async () => {
       allowGatewaySubagentBinding: false,
       config,
       authModes: {},
+      oauthRefreshProviderIds: [],
       metadataSnapshot: createPluginMetadataSnapshot({
         config,
         manifestRegistry: { plugins: [], diagnostics: [] },

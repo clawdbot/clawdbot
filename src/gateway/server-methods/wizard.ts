@@ -1,6 +1,5 @@
 // Wizard gateway methods manage interactive setup wizard sessions and route
 // start/next/status/cancel RPCs through the wizard runtime.
-import { randomUUID } from "node:crypto";
 import { readStringValue } from "@openclaw/normalization-core/string-coerce";
 import {
   ErrorCodes,
@@ -83,8 +82,9 @@ function findWizardSessionOrRespond(params: {
   context: GatewayRequestContext;
   respond: RespondFn;
   sessionId: string;
+  ownerConnId?: string;
 }): WizardSession | null {
-  const session = params.context.wizardSessions.get(params.sessionId);
+  const session = params.context.findOwnedWizardSession(params.sessionId, params.ownerConnId);
   if (!session) {
     params.respond(
       false,
@@ -100,11 +100,10 @@ function findWizardSessionOrRespond(params: {
 
 /** Gateway handlers for the interactive setup wizard session lifecycle. */
 export const wizardHandlers: GatewayRequestHandlers = {
-  "wizard.start": async ({ params, respond, context }) => {
+  "wizard.start": async ({ params, respond, context, client }) => {
     if (!assertValidParams(params, validateWizardStartParams, "wizard.start", respond)) {
       return;
     }
-    const sessionId = randomUUID();
     const flow = params.flow ?? "setup";
     const createSession = () =>
       flow === "channels"
@@ -141,7 +140,12 @@ export const wizardHandlers: GatewayRequestHandlers = {
       respondSetupAdmissionBusy(respond);
       return;
     }
-    context.wizardSessions.set(sessionId, session);
+    const sessionId = context.trackWizardSession(session, client?.connId);
+    if (!sessionId) {
+      session.cancel();
+      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "wizard session conflict"));
+      return;
+    }
     const result = await session.next();
     if (result.done) {
       // Let the runner release setup admission before the terminal response,
@@ -151,12 +155,17 @@ export const wizardHandlers: GatewayRequestHandlers = {
     }
     respond(true, { sessionId, ...sanitizeWizardResultForClient(result) }, undefined);
   },
-  "wizard.next": async ({ params, respond, context }) => {
+  "wizard.next": async ({ params, respond, context, client }) => {
     if (!assertValidParams(params, validateWizardNextParams, "wizard.next", respond)) {
       return;
     }
     const sessionId = params.sessionId;
-    const session = findWizardSessionOrRespond({ context, respond, sessionId });
+    const session = findWizardSessionOrRespond({
+      context,
+      respond,
+      sessionId,
+      ownerConnId: client?.connId,
+    });
     if (!session) {
       return;
     }
@@ -192,12 +201,17 @@ export const wizardHandlers: GatewayRequestHandlers = {
     }
     respond(true, sanitizeWizardResultForClient(result), undefined);
   },
-  "wizard.cancel": ({ params, respond, context }) => {
+  "wizard.cancel": ({ params, respond, context, client }) => {
     if (!assertValidParams(params, validateWizardCancelParams, "wizard.cancel", respond)) {
       return;
     }
     const sessionId = params.sessionId;
-    const session = findWizardSessionOrRespond({ context, respond, sessionId });
+    const session = findWizardSessionOrRespond({
+      context,
+      respond,
+      sessionId,
+      ownerConnId: client?.connId,
+    });
     if (!session) {
       return;
     }
@@ -211,12 +225,17 @@ export const wizardHandlers: GatewayRequestHandlers = {
     }
     respond(true, status, undefined);
   },
-  "wizard.status": async ({ params, respond, context }) => {
+  "wizard.status": async ({ params, respond, context, client }) => {
     if (!assertValidParams(params, validateWizardStatusParams, "wizard.status", respond)) {
       return;
     }
     const sessionId = params.sessionId;
-    const session = findWizardSessionOrRespond({ context, respond, sessionId });
+    const session = findWizardSessionOrRespond({
+      context,
+      respond,
+      sessionId,
+      ownerConnId: client?.connId,
+    });
     if (!session) {
       return;
     }

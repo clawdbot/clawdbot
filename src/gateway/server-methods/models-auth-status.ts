@@ -2,7 +2,11 @@
 // usage windows, cleanup actions, and auth-state refreshes.
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { asDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
-import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
+import {
+  ErrorCodes,
+  errorShape,
+  validateModelsAuthRefreshParams,
+} from "../../../packages/gateway-protocol/src/index.js";
 import { tryResolveAmbientOwnerAgentId } from "../../agents/agent-scope-config.js";
 import {
   type AuthHealthSummary,
@@ -61,6 +65,7 @@ import type {
 } from "./models-auth-status.types.js";
 import { getProviderUsageRuntimeSnapshot } from "./provider-usage-runtime.js";
 import type { GatewayRequestContext, GatewayRequestHandlers } from "./types.js";
+import { assertValidParams } from "./validation.js";
 
 export type {
   ModelAuthExpiry,
@@ -119,6 +124,21 @@ export function invalidateModelAuthStatusCache(): void {
   // rotation, etc.). Without this, `/models` and pickers keep advertising
   // providers the running gateway can no longer authenticate.
   clearCurrentProviderAuthState();
+}
+
+/** Refresh transient Gateway auth owners after one durable credential mutation. */
+export async function refreshModelAuthStateAfterMutation(
+  context: GatewayRequestContext,
+  operation: "login" | "logout" | "update",
+  _agentId?: string,
+): Promise<void> {
+  invalidateModelAuthStatusCache();
+  await refreshActiveProviderAuthRuntimeSnapshot();
+  void warmCurrentProviderAuthStateOffMainThread(context.getRuntimeConfig()).catch(
+    (err: unknown) => {
+      log.warn(`provider auth state rewarm after ${operation} failed: ${formatForLog(err)}`);
+    },
+  );
 }
 
 async function refreshModelAuthStatusRuntimeState(): Promise<void> {
@@ -282,6 +302,7 @@ function mapProvider(
   apiKeys: ReadonlyMap<string, ModelAuthStatusProvider["apiKey"]>,
   logoutProfileIds: ReadonlySet<string>,
   configBoundProfileIds: ReadonlySet<string>,
+  oauthRefreshProviderIds: ReadonlySet<string>,
   externalCliProfileIds: ReadonlySet<string>,
 ): ModelAuthStatusProvider {
   const usageProfile =
@@ -300,16 +321,18 @@ function mapProvider(
   const refreshableProfiles = effectiveProfiles.filter(
     (profile) => profile.type === "oauth" || profile.type === "token",
   );
-  // External CLI access tokens rotate without operator action. Keep their raw
-  // profile expiry diagnostic, but do not turn it into a provider login warning.
-  const externalCliOwnsOAuthRefresh =
+  // The prepared runtime generation owns this renewal fact. Keep raw profile
+  // expiry diagnostic, but do not turn managed access-token rotation into a login warning.
+  const oauthRenewalOwned =
     refreshableProfiles.length > 0 &&
     refreshableProfiles.every(
-      (profile) => profile.type === "oauth" && externalCliProfileIds.has(profile.profileId),
+      (profile) =>
+        profile.type === "oauth" &&
+        (externalCliProfileIds.has(profile.profileId) ||
+          oauthRefreshProviderIds.has(normalizeProviderId(profile.provider))),
     );
   const rollup: ModelAuthStatusRollup =
-    externalCliOwnsOAuthRefresh &&
-    (rawRollup.status === "expired" || rawRollup.status === "expiring")
+    oauthRenewalOwned && (rawRollup.status === "expired" || rawRollup.status === "expiring")
       ? { status: "ok" }
       : rawRollup;
   const apiKey = apiKeys.get(normalizeProviderId(prov.provider));
@@ -328,9 +351,7 @@ function mapProvider(
       status: prof.status,
       reasonCode: prof.reasonCode,
       expiry: buildExpiry(prof.remainingMs, prof.expiresAt),
-      ...((prof.type === "oauth" || prof.type === "token") &&
-      logoutProfileIds.has(prof.profileId) &&
-      !configBoundProfileIds.has(prof.profileId)
+      ...(logoutProfileIds.has(prof.profileId) && !configBoundProfileIds.has(prof.profileId)
         ? { logoutSupported: true }
         : {}),
     })),
@@ -452,13 +473,7 @@ export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
       const removedProfiles = selection.profileIds ?? availableProfiles;
       if (
         selection.profileIds &&
-        selection.profileIds.some((profileId) => {
-          const profile = store.profiles[profileId];
-          return (
-            !availableProfiles.includes(profileId) ||
-            (profile?.type !== "oauth" && profile?.type !== "token")
-          );
-        })
+        selection.profileIds.some((profileId) => !availableProfiles.includes(profileId))
       ) {
         respond(
           false,
@@ -498,13 +513,7 @@ export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
       }
       // Fence auxiliary usage work that captured the removed profiles before
       // logout. Its later completion must not repopulate the cache.
-      invalidateModelAuthStatusCache();
-      await refreshActiveProviderAuthRuntimeSnapshot();
-      void warmCurrentProviderAuthStateOffMainThread(context.getRuntimeConfig()).catch(
-        (err: unknown) => {
-          log.warn(`provider auth state rewarm after logout failed: ${formatForLog(err)}`);
-        },
-      );
+      await refreshModelAuthStateAfterMutation(context, "logout");
       // A provider-wide abort would terminate runs using credentials this
       // logout preserved (other profiles, tokens, or the config API key). Abort
       // entries do not carry the profile id, so a targeted logout cannot scope
@@ -524,6 +533,30 @@ export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
         abortedRunIds,
       };
       respond(true, result, undefined);
+    } catch (err) {
+      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err)));
+    }
+  },
+  "models.authRefresh": async ({ params, respond, context }) => {
+    if (
+      !assertValidParams(params, validateModelsAuthRefreshParams, "models.authRefresh", respond)
+    ) {
+      return;
+    }
+    const cfg = context.getRuntimeConfig();
+    const scope = resolveModelAuthAgentScope(
+      cfg,
+      params.agentId === undefined || params.agentId === ""
+        ? tryResolveAmbientOwnerAgentId(cfg)
+        : params.agentId,
+    );
+    if (!scope.ok) {
+      respond(false, undefined, modelAuthAgentScopeError(scope));
+      return;
+    }
+    try {
+      await refreshModelAuthStateAfterMutation(context, params.operation, scope.agentId);
+      respond(true, { refreshed: true }, undefined);
     } catch (err) {
       respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err)));
     }
@@ -644,13 +677,10 @@ export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
 
       const externalProfileIds = new Set(store.runtimeExternalProfileIds ?? []);
       const externalCliProfileIds = new Set(getRuntimeExternalCliProfileIds(store));
+      const oauthRefreshProviderIds = new Set(preparedSnapshot.oauthRefreshProviderIds);
       const logoutProfileIds = new Set(
         Object.entries(store.profiles)
-          .filter(
-            ([profileId, profile]) =>
-              !externalProfileIds.has(profileId) &&
-              (profile.type === "oauth" || profile.type === "token"),
-          )
+          .filter(([profileId]) => !externalProfileIds.has(profileId))
           .map(([profileId]) => profileId),
       );
       const configBoundProfileIds = resolveConfigBoundProfileIds(cfg, store, authAliasLookupParams);
@@ -662,6 +692,7 @@ export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
           apiKeys,
           logoutProfileIds,
           configBoundProfileIds,
+          oauthRefreshProviderIds,
           externalCliProfileIds,
         ),
       );

@@ -5,7 +5,10 @@ import type { GatewayRequestContext } from "./server-methods/shared-types.js";
 import type { GatewayModelCatalogSnapshot } from "./server-model-catalog.types.js";
 
 export type PreparedGatewayModelCatalogSnapshot = GatewayModelCatalogSnapshot &
-  Pick<ResolvedPublishedModelCatalogOwner, "authModes" | "authStore" | "metadataSnapshot"> & {
+  Pick<
+    ResolvedPublishedModelCatalogOwner,
+    "authModes" | "authStore" | "metadataSnapshot" | "oauthRefreshProviderIds"
+  > & {
     authMaterializations: readonly RuntimeAuthMaterialization[];
   };
 

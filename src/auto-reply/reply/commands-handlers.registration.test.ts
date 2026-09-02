@@ -66,7 +66,7 @@ describe("command handler registration", () => {
     expect(await dispatch("/login ignored")).toMatchObject({
       shouldContinue: false,
       reply: {
-        text: "Only a configured OpenClaw owner/admin can start Codex login from this channel.",
+        text: "Only a configured OpenClaw owner/admin can start provider login from this channel.",
       },
     });
     expect(plugin).toHaveBeenCalledTimes(1);

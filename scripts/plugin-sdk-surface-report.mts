@@ -338,7 +338,9 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +2: shipped conversation-binding inspection function and result type.
       // +4: canonical node CLI option, envelope, presentation, and error owners.
       // +1: Gateway caller ownership for standalone browser routing.
-      4369,
+      // +1: provider-owned CLI credential import declaration.
+      // +1: active Codex API-key reader for provider-owned credential import.
+      4371,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -451,7 +453,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: shipped read-only conversation-binding inspection function.
       // +4: canonical node CLI option, envelope, presentation, and error owners.
       // +1: Gateway caller ownership for standalone browser routing.
-      2603,
+      // +1: active Codex API-key reader for provider-owned credential import.
+      2604,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(

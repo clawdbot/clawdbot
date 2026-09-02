@@ -103,7 +103,7 @@ suite.define(() => {
           await apiKey.fill("invalid-test-key");
           await page.getByRole("button", { name: "Connect & verify" }).click();
           await page.getByText("401: invalid test API key").waitFor();
-          expect(new URL(page.url()).pathname).toBe("/settings/model-setup");
+          expect(new URL(page.url()).pathname).toBe("/settings/model-providers");
           expect(await gateway.getRequests("openclaw.setup.verify")).toHaveLength(0);
 
           await page
@@ -153,7 +153,7 @@ suite.define(() => {
           }
           await reconnectedGateway.waitForRequest("openclaw.setup.verify");
           await destination.getByText(pendingVerification.error, { exact: false }).waitFor();
-          expect(new URL(destination.url()).pathname).toBe("/settings/model-setup");
+          expect(new URL(destination.url()).pathname).toBe("/settings/model-providers");
           expect(await reconnectedGateway.getRequests("openclaw.chat")).toHaveLength(0);
           if (captureUiProofEnabled) {
             await destination.screenshot({

@@ -48,6 +48,7 @@ vi.resetModules();
 
 const {
   resolveManifestDeprecatedProviderAuthChoice,
+  resolveManifestDeclaredProviderAuthChoices,
   resolveManifestProviderAuthChoice,
   resolveManifestProviderAuthChoices,
   resolveProviderOnboardAuthFlags,
@@ -637,6 +638,51 @@ describe("provider auth choice manifest helpers", () => {
         description: "OpenAI API key",
       },
     ]);
+  });
+
+  it("preserves equal-priority choice ID collisions and refuses singular resolution", () => {
+    setManifestPlugins([
+      {
+        id: "alpha-auth",
+        origin: "bundled",
+        providers: ["alpha"],
+        providerAuthChoices: [
+          {
+            provider: "alpha",
+            method: "oauth",
+            choiceId: "shared-login",
+            choiceLabel: "Alpha login",
+          },
+        ],
+      },
+      {
+        id: "beta-auth",
+        origin: "bundled",
+        providers: ["beta"],
+        providerAuthChoices: [
+          {
+            provider: "beta",
+            method: "device",
+            choiceId: "shared-login",
+            choiceLabel: "Beta login",
+          },
+        ],
+      },
+    ]);
+
+    expect(resolveManifestDeclaredProviderAuthChoices()).toEqual([
+      expect.objectContaining({
+        pluginId: "alpha-auth",
+        providerId: "alpha",
+        choiceId: "shared-login",
+      }),
+      expect.objectContaining({
+        pluginId: "beta-auth",
+        providerId: "beta",
+        choiceId: "shared-login",
+      }),
+    ]);
+    expect(resolveManifestProviderAuthChoice("shared-login")).toBeUndefined();
   });
 
   it("prefers trusted config auth-choice handlers over bundled collisions", () => {

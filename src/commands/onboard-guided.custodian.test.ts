@@ -583,6 +583,7 @@ describe("runGuidedOnboarding custodian flow", () => {
       listManualOptions: vi.fn(async () => ({
         manualProviders: [{ id: "openai-api-key", label: "OpenAI" }],
         authOptions: [],
+        prepareOptions: [],
         workspace: "/tmp/openclaw-workspace",
         setupComplete: false,
       })),
@@ -608,6 +609,7 @@ describe("runGuidedOnboarding custodian flow", () => {
       listManualOptions: vi.fn(async () => ({
         manualProviders: [{ id: "openai-api-key", label: "OpenAI" }],
         authOptions: [],
+        prepareOptions: [],
         workspace: "/tmp/openclaw-workspace",
         setupComplete: false,
       })),

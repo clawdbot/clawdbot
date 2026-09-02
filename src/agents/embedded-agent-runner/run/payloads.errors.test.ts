@@ -137,7 +137,7 @@ describe("buildEmbeddedRunPayloads", () => {
               type: "buttons",
               buttons: [
                 {
-                  label: "Log in to Codex",
+                  label: "Sign in to OpenAI",
                   action: { type: "command", command: "/login codex" },
                 },
               ],

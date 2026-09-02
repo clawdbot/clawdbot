@@ -14,6 +14,7 @@ export type PublishedModelCatalogOwnerCandidate = Readonly<{
   authModes: PreparedAgentCredentialModes;
   authStore?: AuthProfileStore;
   metadataSnapshot: PluginMetadataSnapshot;
+  oauthRefreshProviderIds: readonly string[];
   modelCatalog: ModelCatalogSnapshot;
 }>;
 
@@ -26,5 +27,6 @@ export type ResolvedPublishedModelCatalogOwner = Readonly<{
   authModes: PreparedAgentCredentialModes;
   authStore: AuthProfileStore;
   metadataSnapshot: PluginMetadataSnapshot;
+  oauthRefreshProviderIds: readonly string[];
   modelCatalog: ModelCatalogSnapshot;
 }>;

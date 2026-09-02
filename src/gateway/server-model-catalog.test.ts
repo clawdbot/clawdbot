@@ -8,7 +8,9 @@ import type { PublishedModelCatalogOwnerCandidate } from "../agents/prepared-mod
 import { setPreparedModelRuntimeAuthLoader } from "../agents/prepared-model-runtime-auth.js";
 import { PreparedModelRuntimePublicationSupersededError } from "../agents/prepared-model-runtime.errors.js";
 import { markPreparedModelCatalogFull } from "../agents/prepared-model-runtime.full-catalog.js";
+import { resolvePreparedOAuthRefreshProviderIds } from "../agents/prepared-model-runtime.oauth-refresh.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { createEmptyPluginRegistry } from "../plugins/registry.js";
 import {
   loadDeferredCatalog,
   registerGatewayModelCatalogPrivateAccess,
@@ -57,6 +59,7 @@ function ownerSnapshot(
     agentDir: "/tmp/gateway-agent",
     config,
     authModes: {},
+    oauthRefreshProviderIds: [],
     authStore: { version: 1, profiles: {} },
     metadataSnapshot: { index: { plugins: [] }, plugins: [] } as never,
     modelCatalog,
@@ -64,6 +67,44 @@ function ownerSnapshot(
 }
 
 describe("gateway prepared model catalog", () => {
+  it("projects OAuth refresh owners from the active provider generation", async () => {
+    const config = ownerConfig();
+    const pluginRegistry = createEmptyPluginRegistry();
+    pluginRegistry.providers.push(
+      {
+        pluginId: "xai",
+        source: "test",
+        provider: {
+          id: "xai",
+          label: "xAI",
+          aliases: ["grok"],
+          hookAliases: ["x-ai"],
+          auth: [],
+          refreshOAuth: async (credential) => credential,
+        },
+      },
+      {
+        pluginId: "minimax",
+        source: "test",
+        provider: { id: "minimax-portal", label: "MiniMax", auth: [] },
+      },
+    );
+
+    const prepared = await loadPreparedGatewayModelCatalogSnapshot({
+      getConfig: () => config,
+      loadPublishedPreparedModelCatalogOwnerSnapshot: async () => ({
+        ...ownerSnapshot(config),
+        oauthRefreshProviderIds: resolvePreparedOAuthRefreshProviderIds({
+          oauthProviders: [{ id: "anthropic" }],
+          providerRegistrations: pluginRegistry.providers,
+        }),
+      }),
+    });
+
+    expect(prepared.oauthRefreshProviderIds).toEqual(["anthropic", "grok", "x-ai", "xai"]);
+    expect(prepared.oauthRefreshProviderIds).not.toContain("minimax-portal");
+  });
+
   it("keeps raw pre-roster input distinct from an explicitly empty roster", () => {
     const input = {
       config: {},

@@ -391,7 +391,7 @@ suite.define(() => {
           expect(await choose.isEnabled()).toBe(outcome === "provider timeout");
           expect(await setup.locator("[data-candidate-kind]").count()).toBe(0);
           expect(await page.locator(".model-setup-success").count()).toBe(0);
-          expect(new URL(page.url()).pathname).toBe("/settings/model-setup");
+          expect(new URL(page.url()).pathname).toBe("/settings/model-providers");
           expect(await gateway.getRequests("openclaw.setup.activate.start")).toHaveLength(1);
           expect(await gateway.getRequests("config.set")).toHaveLength(0);
           const next = await gateway.getRequests("wizard.next");

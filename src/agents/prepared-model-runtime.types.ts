@@ -46,6 +46,8 @@ export type PreparedModelRuntimeSnapshot = Readonly<{
   config: OpenClawConfig;
   /** Secret-free usable auth modes captured by this exact lifecycle generation. */
   authModes: PreparedAgentCredentialModes;
+  /** Provider ids whose active runtime owns OAuth token renewal. */
+  oauthRefreshProviderIds: readonly string[];
   metadataSnapshot: PluginMetadataSnapshot;
   messageToolCatalog?: PreparedMessageToolCatalog;
   mediaCapabilityProviders?: ReturnType<typeof prepareMediaCapabilityProviders>;

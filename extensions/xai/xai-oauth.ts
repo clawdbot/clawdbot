@@ -586,7 +586,10 @@ async function noteXaiDeviceCode(
       title: "xAI OAuth",
       code: deviceCode.userCode,
       expiresInMinutes,
-      message: "Enter this one-time code on the xAI sign-in page.",
+      message: [
+        "Open this URL in your LOCAL browser and enter the code below.",
+        `URL: ${deviceCode.verificationUriComplete ?? deviceCode.verificationUri}`,
+      ].join("\n"),
     });
     return;
   }

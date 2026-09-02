@@ -222,6 +222,10 @@
       "method": "device-code",
       "choiceId": "openai-device-code",
       "appGuidedAuth": "device-code",
+      "channelLogin": {
+        "aliases": ["codex"],
+        "default": true
+      },
       "choiceLabel": "ChatGPT Device Pairing",
       "choiceHint": "Pair your ChatGPT account in browser with a device code",
       "assistantPriority": -10,

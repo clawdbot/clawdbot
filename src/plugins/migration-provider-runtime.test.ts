@@ -52,6 +52,7 @@ const mocks = vi.hoisted(() => ({
   })),
   loadPluginRegistryHandle: vi.fn(),
   listBundledPluginMetadata: vi.fn(() => []),
+  resolveBundledMigrationProviderPublicArtifacts: vi.fn(() => []),
 }));
 
 vi.mock("./loader.js", async (importOriginal) => ({
@@ -101,6 +102,11 @@ vi.mock("./bundled-plugin-metadata.js", () => ({
   listBundledPluginMetadata: mocks.listBundledPluginMetadata,
 }));
 
+vi.mock("./migration-provider-public-artifacts.js", () => ({
+  resolveBundledMigrationProviderPublicArtifacts:
+    mocks.resolveBundledMigrationProviderPublicArtifacts,
+}));
+
 let ensureStandaloneMigrationProviderRegistryLoaded: typeof import("./migration-provider-runtime.js").ensureStandaloneMigrationProviderRegistryLoaded;
 let resolvePluginMigrationProvider: typeof import("./migration-provider-runtime.js").resolvePluginMigrationProvider;
 let resolvePluginMigrationProviders: typeof import("./migration-provider-runtime.js").resolvePluginMigrationProviders;
@@ -136,6 +142,7 @@ describe("migration provider runtime", () => {
     mocks.loadPluginRegistrySnapshot.mockReturnValue(createMockPluginIndex([]));
     mocks.loadPluginRegistryHandle.mockReturnValue(createEmptyPluginRegistry());
     mocks.listBundledPluginMetadata.mockReturnValue([]);
+    mocks.resolveBundledMigrationProviderPublicArtifacts.mockReturnValue([]);
     mocks.loadPluginRegistrySnapshotWithMetadata.mockImplementation(
       (params?: MockPluginSnapshotLoadParams) => ({
         source: params?.index ? "provided" : "derived",
@@ -334,6 +341,55 @@ describe("migration provider runtime", () => {
     expect(mocks.resolveRuntimePluginRegistry).toHaveBeenCalledWith({
       onlyPluginIds: ["migrate-hermes"],
     });
+  });
+
+  it("uses a bundled public artifact before a colliding active provider", () => {
+    const provider = createMigrationProvider("codex");
+    const collidingProvider = createMigrationProvider("codex");
+    const active = createEmptyPluginRegistry();
+    active.migrationProviders.push({
+      pluginId: "unrelated-migration",
+      provider: collidingProvider,
+    } as never);
+    mocks.resolveRuntimePluginRegistry.mockReturnValue(active);
+    mocks.listBundledPluginMetadata.mockReturnValue([
+      {
+        manifest: {
+          id: "codex",
+          contracts: { migrationProviders: ["codex"] },
+        },
+      },
+    ] as never);
+    mocks.resolveBundledMigrationProviderPublicArtifacts.mockReturnValue([
+      { pluginId: "codex", provider },
+    ] as never);
+
+    expect(resolvePluginMigrationProvider({ providerId: "codex" })).toBe(provider);
+    expect(collidingProvider.plan).not.toHaveBeenCalled();
+    expect(collidingProvider.apply).not.toHaveBeenCalled();
+    expect(mocks.loadPluginRegistryHandle).not.toHaveBeenCalled();
+  });
+
+  it("cold-loads a migration provider when its active plugin record is still deferred", () => {
+    const provider = createMigrationProvider("codex");
+    const active = createEmptyPluginRegistry();
+    active.plugins.push({ id: "codex" } as never);
+    const loaded = createEmptyPluginRegistry();
+    loaded.migrationProviders.push({ pluginId: "codex", provider } as never);
+    mocks.resolveRuntimePluginRegistry.mockReturnValue(active);
+    mocks.loadPluginRegistryHandle.mockReturnValue(loaded);
+    mocks.listBundledPluginMetadata.mockReturnValue([
+      {
+        manifest: {
+          id: "codex",
+          contracts: { migrationProviders: ["codex"] },
+        },
+      },
+    ] as never);
+
+    ensureStandaloneMigrationProviderRegistryLoaded({ providerId: "codex" });
+
+    expect(resolvePluginMigrationProvider({ providerId: "codex" })).toMatchObject({ id: "codex" });
   });
 
   it.each(["owner", "retired"])(

@@ -94,6 +94,7 @@ function detectResult() {
     ],
     manualProviders: [],
     authOptions: [],
+    prepareOptions: [],
     recommendedInstalls: [],
     workspace: "/gateway/workspace",
     setupComplete: false,
@@ -110,8 +111,8 @@ function exerciseGuidedAdapters(): RunGuidedOnboarding {
     if (detection.unavailableCandidates[0]?.id !== "antigravity-cli") {
       throw new Error("remote detection dropped unavailable integration metadata");
     }
-    if (detection.prepareOptions !== undefined) {
-      throw new Error("remote detection replaced an omitted prepare-options field");
+    if (detection.prepareOptions.length !== 0) {
+      throw new Error("remote detection invented prepare options");
     }
     const selected = detection.candidates[0];
     if (!selected) {

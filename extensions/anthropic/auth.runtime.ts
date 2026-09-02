@@ -73,6 +73,7 @@ export async function runAnthropicSetupTokenAuth(
     normalizeAnthropicSetupTokenInput(
       await ctx.prompter.text({
         message: "Paste Anthropic setup-token",
+        sensitive: true,
         validate: (value) => validateAnthropicSetupToken(normalizeAnthropicSetupTokenInput(value)),
       }),
     );

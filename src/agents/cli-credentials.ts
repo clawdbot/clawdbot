@@ -75,7 +75,17 @@ export type GeminiCliCredential = {
   email?: string;
 };
 
-type ExecSyncFn = typeof execSync;
+type ExecSyncFn = (
+  command: string,
+  options: {
+    encoding: "utf8";
+    timeout: number;
+    stdio: ["pipe", "pipe", "pipe"];
+    env?: NodeJS.ProcessEnv;
+  },
+) => string;
+
+const execSyncUtf8: ExecSyncFn = (command, options) => execSync(command, options);
 
 export function resolveCodexCliHomePath(codexHome?: string, env: NodeJS.ProcessEnv = process.env) {
   const configured = codexHome ?? env.CODEX_HOME;
@@ -162,7 +172,7 @@ function readCachedCliCredential<T>(options: {
   return value;
 }
 
-function computeCodexKeychainAccount(codexHome: string) {
+export function computeCodexKeychainAccount(codexHome: string) {
   const hash = createHash("sha256").update(codexHome).digest("hex");
   return `cli|${hash.slice(0, 16)}`;
 }
@@ -174,7 +184,7 @@ function resolveCodexKeychainParams(options?: {
 }) {
   return {
     platform: options?.platform ?? process.platform,
-    execSyncImpl: options?.execSync ?? execSync,
+    execSyncImpl: options?.execSync ?? execSyncUtf8,
     codexHome: resolveCodexCliHomePath(options?.codexHome),
   };
 }
@@ -241,9 +251,7 @@ function readCodexKeychainAuthRecord(options?: {
         stdio: ["pipe", "pipe", "pipe"],
       },
     ).trim();
-
-    const parsed = JSON.parse(secret) as Record<string, unknown>;
-    return parsed;
+    return JSON.parse(secret) as Record<string, unknown>;
   } catch {
     return null;
   }
@@ -294,6 +302,18 @@ function parseCodexApiKeyCredential(
   }
   const key = typeof data.OPENAI_API_KEY === "string" ? data.OPENAI_API_KEY.trim() : "";
   return key ? { type: "api_key", provider: "openai", key } : null;
+}
+
+/** Reads the file-backed API key only when Codex selected API-key auth. */
+function readCodexCliAuthFileApiKey(options?: {
+  codexHome?: string;
+  env?: NodeJS.ProcessEnv;
+}): CodexCliApiKeyCredential | null {
+  const codexHome = resolveCodexCliHomePath(options?.codexHome, options?.env);
+  const raw = loadJsonFileThroughSymlink(path.join(codexHome, CODEX_CLI_AUTH_FILENAME));
+  return raw && typeof raw === "object"
+    ? parseCodexApiKeyCredential(raw as Record<string, unknown>)
+    : null;
 }
 
 function readCliOauthTokenFields(
@@ -369,13 +389,71 @@ function formatCodexApiKeyForLoginStatus(key: string): string {
   return key.length <= 13 ? "***" : `${key.slice(0, 8)}***${key.slice(-5)}`;
 }
 
-/** Reads an API key only when Codex confirms that exact credential is active. */
-export function readCodexCliActiveApiKey(options?: {
+type CodexCliCredentialLocationOptions = {
   codexHome?: string;
   allowKeychainPrompt?: boolean;
   platform?: NodeJS.Platform;
+};
+
+export type CodexCliCredentialRuntimeOptions = CodexCliCredentialLocationOptions & {
+  signal?: AbortSignal;
+};
+
+type CodexActiveApiKeyOptions = CodexCliCredentialLocationOptions & {
   execSync?: ExecSyncFn;
-}): CodexCliApiKeyCredential | null {
+};
+
+export function readCodexApiKeyStatus(status: string): {
+  activeFingerprint?: string;
+  legacy: boolean;
+} | null {
+  const activeFingerprint = /^Logged in using an API key - (.+)$/mu.exec(status)?.[1]?.trim();
+  const legacy = status.trim() === "Logged in using an API key";
+  return activeFingerprint || legacy ? { activeFingerprint, legacy } : null;
+}
+
+export function resolveCodexActiveApiKey(
+  status: string,
+  codexHome: string,
+  keychainRecord?: Record<string, unknown> | null,
+): CodexCliApiKeyCredential | null {
+  const apiKeyStatus = readCodexApiKeyStatus(status);
+  if (!apiKeyStatus) {
+    return null;
+  }
+
+  const candidates: CodexCliApiKeyCredential[] = [];
+  const fileCredential = readCodexCliAuthFileApiKey({ codexHome });
+  if (fileCredential) {
+    candidates.push(fileCredential);
+  }
+  if (keychainRecord) {
+    const keychainCredential = parseCodexApiKeyCredential(keychainRecord);
+    if (keychainCredential) {
+      candidates.push(keychainCredential);
+    }
+  }
+
+  const matchingKeys = new Set(
+    candidates
+      .filter(
+        (candidate) =>
+          apiKeyStatus.legacy ||
+          formatCodexApiKeyForLoginStatus(candidate.key) === apiKeyStatus.activeFingerprint,
+      )
+      .map((candidate) => candidate.key),
+  );
+  if (matchingKeys.size !== 1) {
+    return null;
+  }
+  const key = [...matchingKeys][0];
+  return key ? { type: "api_key", provider: "openai", key } : null;
+}
+
+/** Synchronous compatibility API; Gateway-owned paths use the async variant below. */
+export function readCodexCliActiveApiKey(
+  options?: CodexActiveApiKeyOptions,
+): CodexCliApiKeyCredential | null {
   const { execSyncImpl, codexHome } = resolveCodexKeychainParams(options);
   let status: string;
   try {
@@ -388,75 +466,28 @@ export function readCodexCliActiveApiKey(options?: {
   } catch {
     return null;
   }
-  const statusMatch = /^Logged in using an API key - (.+)$/mu.exec(status);
-  const activeFingerprint = statusMatch?.[1]?.trim();
-  const legacyApiKeyStatus = status.trim() === "Logged in using an API key";
-  if (!activeFingerprint && !legacyApiKeyStatus) {
+  if (!readCodexApiKeyStatus(status)) {
     return null;
   }
-
-  const candidates: CodexCliApiKeyCredential[] = [];
-  const authPath = path.join(codexHome, CODEX_CLI_AUTH_FILENAME);
-  const raw = loadJsonFileThroughSymlink(authPath);
-  if (raw && typeof raw === "object") {
-    const fileCredential = parseCodexApiKeyCredential(raw as Record<string, unknown>);
-    if (fileCredential) {
-      candidates.push(fileCredential);
-    }
-  }
-  const keychainRecord = readCodexKeychainAuthRecord({
-    codexHome,
-    allowKeychainPrompt: options?.allowKeychainPrompt,
-    platform: options?.platform,
-    execSync: options?.execSync,
-  });
-  if (keychainRecord) {
-    const keychainCredential = parseCodexApiKeyCredential(keychainRecord);
-    if (keychainCredential) {
-      candidates.push(keychainCredential);
-    }
-  }
-
-  const matchingKeys = new Set(
-    candidates
-      .filter(
-        (candidate) =>
-          legacyApiKeyStatus ||
-          formatCodexApiKeyForLoginStatus(candidate.key) === activeFingerprint,
-      )
-      .map((candidate) => candidate.key),
-  );
-  if (matchingKeys.size !== 1) {
-    return null;
-  }
-  const key = [...matchingKeys][0];
-  return key ? { type: "api_key", provider: "openai", key } : null;
+  return resolveCodexActiveApiKey(status, codexHome, readCodexKeychainAuthRecord(options));
 }
 
-/** Reads Codex CLI OAuth credentials from Keychain or CODEX_HOME auth.json. */
-function readCodexCliCredentials(options?: {
-  codexHome?: string;
-  allowKeychainPrompt?: boolean;
-  platform?: NodeJS.Platform;
-  execSync?: ExecSyncFn;
-}): CodexCliCredential | null {
-  const keychainRecord = readCodexKeychainAuthRecord(options);
-  if (keychainRecord) {
-    const lastRefreshRaw = keychainRecord.last_refresh;
-    const lastRefresh =
-      typeof lastRefreshRaw === "string" || typeof lastRefreshRaw === "number"
-        ? new Date(lastRefreshRaw).getTime()
-        : Date.now();
-    const keychainCredential = parseCodexOauthCredential(
-      keychainRecord,
-      resolveCodexFallbackExpiryMs(lastRefresh) ?? resolveCodexFallbackExpiryMs(),
-    );
-    if (keychainCredential) {
-      return keychainCredential;
-    }
-  }
+function parseCodexKeychainOauthCredential(
+  data: Record<string, unknown>,
+): CodexCliCredential | null {
+  const lastRefreshRaw = data.last_refresh;
+  const lastRefresh =
+    typeof lastRefreshRaw === "string" || typeof lastRefreshRaw === "number"
+      ? new Date(lastRefreshRaw).getTime()
+      : Date.now();
+  return parseCodexOauthCredential(
+    data,
+    resolveCodexFallbackExpiryMs(lastRefresh) ?? resolveCodexFallbackExpiryMs(),
+  );
+}
 
-  const authPath = path.join(resolveCodexCliHomePath(options?.codexHome), CODEX_CLI_AUTH_FILENAME);
+function readCodexCliAuthFileOauthCredential(codexHome?: string): CodexCliCredential | null {
+  const authPath = path.join(resolveCodexCliHomePath(codexHome), CODEX_CLI_AUTH_FILENAME);
   const raw = loadJsonFileThroughSymlink(authPath);
   if (!raw || typeof raw !== "object") {
     return null;
@@ -468,6 +499,24 @@ function readCodexCliCredentials(options?: {
     fallbackExpiry = resolveCodexFallbackExpiryMs();
   }
   return parseCodexOauthCredential(raw as Record<string, unknown>, fallbackExpiry);
+}
+
+/** Reads Codex CLI OAuth credentials from Keychain or CODEX_HOME auth.json. */
+function readCodexCliCredentials(options?: {
+  codexHome?: string;
+  allowKeychainPrompt?: boolean;
+  platform?: NodeJS.Platform;
+  execSync?: ExecSyncFn;
+}): CodexCliCredential | null {
+  const keychainRecord = readCodexKeychainAuthRecord(options);
+  if (keychainRecord) {
+    const keychainCredential = parseCodexKeychainOauthCredential(keychainRecord);
+    if (keychainCredential) {
+      return keychainCredential;
+    }
+  }
+
+  return readCodexCliAuthFileOauthCredential(options?.codexHome);
 }
 
 /** Reads Codex CLI credentials with optional short-lived cache and file fingerprinting. */

@@ -11,15 +11,27 @@ import { buildMigrationContext } from "./context.js";
 import type { MigrateCommonOptions } from "./types.js";
 
 /** Resolves a migration provider from the loaded plugin migration registry. */
-export function resolveMigrationProvider(
+export function tryResolveMigrationProvider(
   providerId: string,
   config = getRuntimeConfig(),
-): MigrationProviderPlugin {
+): MigrationProviderPlugin | undefined {
+  const resolved = resolvePluginMigrationProvider({ providerId, cfg: config });
+  if (resolved) {
+    return resolved;
+  }
   ensureStandaloneMigrationProviderRegistryLoaded({
     cfg: config,
     providerId,
   });
-  const provider = resolvePluginMigrationProvider({ providerId, cfg: config });
+  return resolvePluginMigrationProvider({ providerId, cfg: config });
+}
+
+/** Resolves a migration provider or throws with the available provider ids. */
+export function resolveMigrationProvider(
+  providerId: string,
+  config = getRuntimeConfig(),
+): MigrationProviderPlugin {
+  const provider = tryResolveMigrationProvider(providerId, config);
   if (!provider) {
     const available = resolvePluginMigrationProviders({ cfg: config }).map((entry) => entry.id);
     const suffix =

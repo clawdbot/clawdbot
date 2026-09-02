@@ -158,6 +158,7 @@ export function startManagedGatewayConfigReloader(
     getState: params.getState,
     setState: params.setState,
     getPluginMetadataSnapshot: params.getPluginMetadataSnapshot,
+    ...(params.refreshChatMetadata ? { refreshChatMetadata: params.refreshChatMetadata } : {}),
     startChannel: params.startChannel,
     stopChannel: params.stopChannel,
     pruneInactiveChannelAccountState: params.channelManager.pruneInactiveChannelAccountState,

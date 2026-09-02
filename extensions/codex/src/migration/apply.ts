@@ -48,7 +48,7 @@ import {
   releaseLeasedSharedCodexAppServerClient,
 } from "../app-server/shared-client.js";
 import { codexPluginActivationReportState, sanitizeAppsNeedingAuth } from "./apply-report.js";
-import { applyCodexAuthItems, type CodexAuthSource } from "./auth.js";
+import { applyCodexAuthItems, resolveCodexConfigPatchMode, type CodexAuthSource } from "./auth.js";
 import {
   buildCodexMigrationPlan,
   buildCodexPluginsConfigValue,
@@ -62,7 +62,6 @@ import { resolveCodexMigrationTargets } from "./targets.js";
 
 const CODEX_PLUGIN_AUTH_REQUIRED_REASON = "auth_required";
 const CODEX_PLUGIN_NOT_SELECTED_REASON = "not selected for migration";
-const CODEX_CONFIG_PATCH_MODE_RETURN = "return";
 const CODEX_PLUGIN_LOAD_WARNING =
   "Some Codex plugins could not be migrated. Run `openclaw migrate codex` after onboarding.";
 const TARGET_CODEX_MARKETPLACE_DISCOVERY_POLL_MS = 250;
@@ -82,7 +81,7 @@ class CodexPluginConfigConflictError extends Error {
 }
 
 function shouldReturnCodexPluginConfigPatch(ctx: MigrationProviderContext): boolean {
-  return ctx.providerOptions?.configPatchMode === CODEX_CONFIG_PATCH_MODE_RETURN;
+  return resolveCodexConfigPatchMode(ctx) === "return";
 }
 
 export function prepareTargetCodexAppServer(

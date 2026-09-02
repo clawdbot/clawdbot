@@ -11,7 +11,7 @@ const mocks = vi.hoisted(() => ({
   loadModelsConfig: vi.fn(),
   updateConfig: vi.fn(),
   logConfigUpdated: vi.fn(),
-  refreshRunningGatewayAuthState: vi.fn(async () => undefined),
+  refreshRunningGatewayAuthState: vi.fn(async () => "refreshed" as const),
   confirm: vi.fn(async () => true),
 }));
 
@@ -126,7 +126,7 @@ describe("models auth logout", () => {
       agentDir: "/tmp/agent-poe",
       profileIds: ["openai:manual"],
     });
-    expect(mocks.refreshRunningGatewayAuthState).toHaveBeenCalledWith("poe");
+    expect(mocks.refreshRunningGatewayAuthState).toHaveBeenCalledWith("poe", "logout");
     expect(runtime.logs).toContain("Removed auth profile: openai:manual (openai/oauth)");
     expect(runtime.logs.some((line) => line.includes("No auth profiles remain for openai"))).toBe(
       true,

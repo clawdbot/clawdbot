@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
 import { installSafeLocalStorageForTesting } from "../../test-helpers/storage.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
+import { MODELS_CONNECT_NAVIGATION } from "../model-providers/location.ts";
 import { createContext } from "./custodian-page.test-harness.ts";
 import { CustodianSessionStore } from "./custodian-session-store.ts";
 import { custodianErrorMessage } from "./transcript.ts";
@@ -644,7 +645,7 @@ describe("CustodianSessionStore", () => {
     await Promise.resolve();
 
     expect(context.navigate).toHaveBeenCalledTimes(1);
-    expect(context.navigate).toHaveBeenCalledWith("model-setup");
+    expect(context.navigate).toHaveBeenCalledWith("model-providers", MODELS_CONNECT_NAVIGATION);
     expect(context.agents.refreshList).not.toHaveBeenCalled();
   });
 

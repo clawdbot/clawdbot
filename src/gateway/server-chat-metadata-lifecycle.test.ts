@@ -87,6 +87,7 @@ describe("gateway chat metadata lifecycle", () => {
       activeProjectKeys: [],
       config,
       authModes: {},
+      oauthRefreshProviderIds: [],
       metadataSnapshot: createPluginMetadataSnapshot({
         config,
         manifestRegistry: { plugins: [], diagnostics: [] },

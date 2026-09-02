@@ -55,6 +55,7 @@ export class ModelSetupPage extends OpenClawLightDomElement {
   private context!: ApplicationContext;
 
   @property({ attribute: false }) routeData: ModelSetupRouteData | undefined;
+  @property({ type: Boolean }) embedded = false;
 
   @state() private pageState: ModelSetupPageState = { phase: "loading" };
   @state() private activationState: ModelSetupActivationState = { phase: "idle" };
@@ -68,6 +69,7 @@ export class ModelSetupPage extends OpenClawLightDomElement {
   @state() private moreSignInOpen = false;
   @state() private iconUrls: Record<string, string> = {};
   @state() private setupRefreshWarning: string | null = null;
+  @state() private prepareMessage: string | null = null;
 
   private observedConnection:
     | (ModelSetupConnection & { connected: boolean; firstRun: boolean })
@@ -318,6 +320,7 @@ export class ModelSetupPage extends OpenClawLightDomElement {
     if (!this.canUseSetup(client)) {
       return null;
     }
+    this.prepareMessage = null;
     this.resetVerify();
     this.pageState = { phase: "loading" };
     const token = {};
@@ -353,6 +356,7 @@ export class ModelSetupPage extends OpenClawLightDomElement {
     if (!this.canUseSetup(client) || this.actionsDisabled() || this.firstRun.unresolved) {
       return;
     }
+    this.prepareMessage = null;
     this.manualError = null;
     this.activationState = { phase: "testing", targetId };
     this.pendingPrepareOption = null;
@@ -463,19 +467,21 @@ export class ModelSetupPage extends OpenClawLightDomElement {
       return;
     }
     if (prepareOption) {
+      const candidate = findPreparedModelCandidate(result, prepareOption.id);
+      if (!candidate) {
+        this.pageState = { phase: "ready", result };
+        this.wizard.close();
+        this.prepareMessage = t("modelSetup.prepare.configured", {
+          provider: prepareOption.label,
+        });
+        return;
+      }
       // Provider setup can persist a model before the live activation check.
       // Keep that unverified config out of the ready surface until activation succeeds.
       this.pageState = {
         phase: "ready",
         result: { ...result, configuredModel: undefined, setupComplete: false },
       };
-      const candidate = findPreparedModelCandidate(result, prepareOption.id);
-      if (!candidate) {
-        this.wizard.fail(
-          t("modelSetup.prepare.providerNotReady", { provider: prepareOption.label }),
-        );
-        return;
-      }
       this.wizard.close();
       this.activateCandidate(candidate);
       return;
@@ -609,6 +615,7 @@ export class ModelSetupPage extends OpenClawLightDomElement {
       modelConfigured: readSessionDefaults(snapshot)?.modelConfigured === true,
       gatewayTooOld,
       refreshWarning: this.setupRefreshWarning,
+      prepareMessage: this.prepareMessage,
       activationUnresolved: this.firstRun.unresolved,
       onUseCurrentModel: () => void this.firstRun.useCurrentModel(),
       actionsDisabled: this.actionsDisabled(),
@@ -617,6 +624,7 @@ export class ModelSetupPage extends OpenClawLightDomElement {
       manualError: this.manualError,
       moreSignInOpen: this.moreSignInOpen,
       firstRun: this.routeData?.firstRun === true,
+      embedded: this.embedded,
       iconUrls: this.iconUrls,
       onDetect: () => {
         if (this.firstRun.retryDetection()) {
@@ -626,11 +634,13 @@ export class ModelSetupPage extends OpenClawLightDomElement {
       onVerify: () => void this.firstRun.verify(),
       onActivateCandidate: (candidate) => this.activateCandidate(candidate),
       onStartAuth: (option) => {
+        this.prepareMessage = null;
         this.pendingPrepareOption = null;
         this.wizardMode = "auth";
         void this.runWizardMutation(() => this.wizard.start(option.id));
       },
       onStartPrepare: (option: ModelSetupPrepareOption) => {
+        this.prepareMessage = null;
         this.pendingPrepareOption = option;
         this.wizardMode = "prepare";
         void this.runWizardMutation(() =>

@@ -402,6 +402,7 @@ export async function finishGatewayStartup(params: {
       }
     },
     getPluginMetadataSnapshot,
+    refreshChatMetadata: chatMetadataLifecycle.refresh,
     startChannel,
     stopChannel,
     getChannelAutostartSuppression: channelManager.getAutostartSuppression,

@@ -116,6 +116,7 @@ function createUndetectedFallback(): SetupInferenceDetection {
     unavailableCandidates: [],
     manualProviders: [],
     authOptions: [],
+    prepareOptions: [],
     recommendedInstalls: listRecommendedToolInstalls(),
     workspace: DEFAULT_AGENT_WORKSPACE_DIR,
     setupComplete: false,
