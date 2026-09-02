@@ -2,12 +2,9 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { normalizeProfileName, resolveProfileStateDir } from "./cli/profile-utils.js";
 import { pathExists as fsSafePathExists } from "./infra/fs-safe.js";
-import {
-  resolveEffectiveHomeDir,
-  resolveRequiredHomeDir,
-  resolveUserPath,
-} from "./infra/home-dir.js";
+import { resolveEffectiveHomeDir, resolveUserPath } from "./infra/home-dir.js";
 import { shortenPathWithHome } from "./infra/home-display.js";
 import { isPlainObject } from "./infra/plain-object.js";
 import { escapeRegExp as escapeRegExpValue } from "./shared/regexp.js";
@@ -73,16 +70,11 @@ export function resolveConfigDir(
   if (configPath) {
     return path.dirname(resolveUserPath(configPath, env, homedir));
   }
-  const newDir = path.join(resolveRequiredHomeDir(env, homedir), ".openclaw");
-  try {
-    const hasNew = fs.existsSync(newDir);
-    if (hasNew) {
-      return newDir;
-    }
-  } catch {
-    // best-effort
-  }
-  return newDir;
+  return resolveProfileStateDir(
+    normalizeProfileName(env.OPENCLAW_PROFILE) ?? "default",
+    env,
+    homedir,
+  );
 }
 
 /** Resolves the effective OpenClaw home directory, if one can be determined. */

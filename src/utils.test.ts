@@ -134,6 +134,19 @@ describe("normalizeE164", () => {
 });
 
 describe("resolveConfigDir", () => {
+  it.each([
+    { profile: "work", directory: ".openclaw-work" },
+    { profile: " work ", directory: ".openclaw-work" },
+    { profile: "dev", directory: ".openclaw-dev" },
+    { profile: "Default", directory: ".openclaw" },
+    { profile: "bad profile", directory: ".openclaw" },
+  ])("selects the configuration root for ambient profile '$profile'", ({ profile, directory }) => {
+    const home = path.resolve("/tmp/openclaw-config-home");
+    expect(resolveConfigDir({ HOME: home, OPENCLAW_PROFILE: profile })).toBe(
+      path.join(home, directory),
+    );
+  });
+
   it("prefers ~/.openclaw when legacy dir is missing", async () => {
     await withTestDir({ prefix: "openclaw-config-dir-" }, async (root) => {
       const newDir = path.join(root, ".openclaw");
@@ -147,6 +160,8 @@ describe("resolveConfigDir", () => {
     const env = {
       HOME: "/tmp/openclaw-home",
       OPENCLAW_STATE_DIR: "~/state",
+      OPENCLAW_CONFIG_PATH: "~/custom/config.json",
+      OPENCLAW_PROFILE: "work",
     } as NodeJS.ProcessEnv;
 
     expect(resolveConfigDir(env)).toBe(path.resolve("/tmp/openclaw-home", "state"));
@@ -156,6 +171,7 @@ describe("resolveConfigDir", () => {
     const env = {
       HOME: "/tmp/openclaw-home",
       OPENCLAW_CONFIG_PATH: "~/profiles/dev/openclaw.json",
+      OPENCLAW_PROFILE: "work",
     } as NodeJS.ProcessEnv;
 
     expect(resolveConfigDir(env)).toBe(path.resolve("/tmp/openclaw-home", "profiles", "dev"));
@@ -172,6 +188,10 @@ describe("resolveConfigDir", () => {
         }),
       ).toBe(selectedConfigDir);
       expect(CONFIG_DIR).toBe(selectedConfigDir);
+      const profileHome = path.resolve("/tmp/openclaw-profile-config-home");
+      const profileDir = path.join(profileHome, ".openclaw-work");
+      expect(pinConfigDir({ HOME: profileHome, OPENCLAW_PROFILE: "work" })).toBe(profileDir);
+      expect(CONFIG_DIR).toBe(profileDir);
     } finally {
       pinConfigDir({
         OPENCLAW_STATE_DIR: originalConfigDir,

@@ -444,6 +444,46 @@ describe("openclaw launcher", () => {
     },
   );
 
+  it.each([
+    { command: "", profile: "work", expected: "RUNTIME ENTRY\n" },
+    { command: "nodes", profile: "work", expected: "RUNTIME ENTRY\n" },
+    { command: "nodes", profile: "dev", expected: "RUNTIME ENTRY\n" },
+    { command: "nodes", profile: " work ", expected: "RUNTIME ENTRY\n" },
+    { command: "", profile: "default", expected: "PRECOMPUTED help\n" },
+    { command: "nodes", profile: "Default", expected: "PRECOMPUTED help\n" },
+    { command: "models", profile: "work", expected: "PRECOMPUTED help\n" },
+  ])(
+    "selects $command help with ambient profile '$profile'",
+    async ({ command, profile, expected }) => {
+      const fixtureRoot = await makeLauncherFixture(fixtureRoots);
+      await fs.writeFile(
+        path.join(fixtureRoot, "dist", "cli-startup-metadata.json"),
+        JSON.stringify({
+          rootHelpText: "PRECOMPUTED help\n",
+          nodesHelpText: "PRECOMPUTED help\n",
+          subcommandHelpText: { models: "PRECOMPUTED help\n" },
+        }),
+        "utf8",
+      );
+      await fs.writeFile(
+        path.join(fixtureRoot, "dist", "entry.js"),
+        "process.stdout.write('RUNTIME ENTRY\\n');\n",
+        "utf8",
+      );
+      const result = spawnSync(
+        process.execPath,
+        [path.join(fixtureRoot, "openclaw.mjs"), ...(command ? [command] : []), "--help"],
+        {
+          cwd: fixtureRoot,
+          env: launcherEnv({ HOME: fixtureRoot, OPENCLAW_PROFILE: profile }),
+          encoding: "utf8",
+        },
+      );
+      expect(result.status).toBe(0);
+      expect(result.stdout).toBe(expected);
+    },
+  );
+
   it("uses precomputed subcommand help with leading root options", async () => {
     const fixtureRoot = await makeLauncherFixture(fixtureRoots);
     await fs.writeFile(

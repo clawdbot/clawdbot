@@ -554,7 +554,9 @@ const resolveLauncherConfigPaths = () => {
 };
 
 const shouldDeferRootHelpToRuntimeEntry = () => {
+  const profile = process.env.OPENCLAW_PROFILE?.trim();
   if (
+    (profile && profile.toLowerCase() !== "default") ||
     process.env.OPENCLAW_BUNDLED_PLUGINS_DIR?.trim() ||
     process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS?.trim()
   ) {

@@ -77,26 +77,23 @@ export function resolveStateDir(
   if (override) {
     return resolveUserPath(override, env, effectiveHomedir);
   }
+  const profile = normalizeProfileName(env.OPENCLAW_PROFILE);
+  if (profile) {
+    return resolveProfileStateDir(profile, env, effectiveHomedir);
+  }
   const newDir = newStateDir(effectiveHomedir);
-  if (isFastTestRuntimeEnv(env)) {
+  if (isFastTestRuntimeEnv(env) || fs.existsSync(newDir)) {
     return newDir;
   }
-  const legacyDirs = legacyStateDirs(effectiveHomedir);
-  const hasNew = fs.existsSync(newDir);
-  if (hasNew) {
-    return newDir;
-  }
-  const existingLegacy = legacyDirs.find((dir) => {
-    try {
-      return fs.existsSync(dir);
-    } catch {
-      return false;
-    }
-  });
-  if (existingLegacy) {
-    return existingLegacy;
-  }
-  return newDir;
+  return (
+    legacyStateDirs(effectiveHomedir).find((dir) => {
+      try {
+        return fs.existsSync(dir);
+      } catch {
+        return false;
+      }
+    }) ?? newDir
+  );
 }
 
 function normalizePathForComparison(candidate: string): string {
@@ -116,8 +113,8 @@ export function isDefaultStateDir(
 ): boolean {
   const override = env.OPENCLAW_STATE_DIR?.trim();
   if (!override) {
-    // Preserve the default install path, including automatic legacy-state discovery.
-    return true;
+    // Named profiles do not inherit default-profile workspaces or personal skills.
+    return !normalizeProfileName(env.OPENCLAW_PROFILE);
   }
   const effectiveHomedir = () => resolveRequiredHomeDir(env, homedir);
   return (
@@ -381,6 +378,11 @@ export function resolveDefaultConfigCandidates(
     return [resolveUserPath(explicit, env, effectiveHomedir)];
   }
 
+  if (normalizeProfileName(env.OPENCLAW_PROFILE)) {
+    // A missing profile config must never select another profile's authored state.
+    const stateDir = resolveStateDir(env, effectiveHomedir);
+    return [CONFIG_FILENAME, ...LEGACY_CONFIG_FILENAMES].map((name) => path.join(stateDir, name));
+  }
   const candidates: string[] = [];
   const openclawStateDir = env.OPENCLAW_STATE_DIR?.trim();
   if (openclawStateDir) {
@@ -389,12 +391,11 @@ export function resolveDefaultConfigCandidates(
     candidates.push(...LEGACY_CONFIG_FILENAMES.map((name) => path.join(resolved, name)));
   }
 
-  const defaultDirs = [newStateDir(effectiveHomedir), ...legacyStateDirs(effectiveHomedir)];
-  for (const dir of defaultDirs) {
-    candidates.push(path.join(dir, CONFIG_FILENAME));
-    candidates.push(...LEGACY_CONFIG_FILENAMES.map((name) => path.join(dir, name)));
-  }
-  return candidates;
+  return candidates.concat(
+    [newStateDir(effectiveHomedir), ...legacyStateDirs(effectiveHomedir)].flatMap((dir) =>
+      [CONFIG_FILENAME, ...LEGACY_CONFIG_FILENAMES].map((name) => path.join(dir, name)),
+    ),
+  );
 }
 
 export const DEFAULT_GATEWAY_PORT = 18789;

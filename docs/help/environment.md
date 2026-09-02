@@ -38,6 +38,8 @@ The variables below are the supported environment contract for operators. Undocu
 | `OPENCLAW_GIT_DIR`       | Override the source checkout used by development-channel updates. |
 | `OPENCLAW_INCLUDE_ROOTS` | Allow `$include` to resolve from additional roots.                |
 
+A named `OPENCLAW_PROFILE` uses `~/.openclaw-<profile>` for state and config defaults, including when that profile has no config file yet. Explicit `OPENCLAW_STATE_DIR` and `OPENCLAW_CONFIG_PATH` values still take precedence. An explicit CLI `--profile` selects the requested profile as described in [Global flags](/cli#global-flags).
+
 ### Gateway and authentication
 
 | Variable                    | Purpose                                                         |
