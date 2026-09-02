@@ -1,12 +1,13 @@
-// Lists available agents for subagent spawn and focus commands.
+// Lists available agents and conversation bindings.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { buildSubagentRunReadIndex } from "../../../agents/subagents/registry/subagent-registry-read.js";
+import { buildSubagentRunView } from "../../../agents/subagents/registry/subagent-run-view.js";
 import { getChannelPlugin, normalizeChannelId } from "../../../channels/plugins/index.js";
 import { getSessionBindingService } from "../../../infra/outbound/session-binding-service.js";
 import { resolveChannelAccountId, resolveCommandSurfaceChannel } from "../channel-context.js";
 import { commandReply } from "../command-gates.js";
 import type { CommandHandlerResult } from "../commands-types.js";
-import { formatRunLabel, sortSubagentRuns } from "../subagents-utils.js";
+import { formatRunLabel } from "../subagents-utils.js";
 import { RECENT_WINDOW_MINUTES, type SubagentsCommandContext } from "./shared.js";
 
 function formatConversationBindingText(params: { conversationId: string }): string {
@@ -49,44 +50,18 @@ export function handleSubagentsAgentsAction(ctx: SubagentsCommandContext): Comma
     return resolved;
   };
 
-  const dedupedRuns: typeof runs = [];
-  const seenChildSessionKeys = new Set<string>();
-  for (const entry of sortSubagentRuns(runs)) {
-    if (seenChildSessionKeys.has(entry.childSessionKey)) {
-      continue;
-    }
-    seenChildSessionKeys.add(entry.childSessionKey);
-    dedupedRuns.push(entry);
-  }
-
-  const recentCutoff = Date.now() - RECENT_WINDOW_MINUTES * 60_000;
-  const numericOrder = [
-    ...dedupedRuns.filter(
-      (entry) =>
-        !entry.execution.endedAt || readIndex.countPendingDescendantRuns(entry.childSessionKey) > 0,
-    ),
-    ...dedupedRuns.filter(
-      (entry) =>
-        entry.execution.endedAt &&
-        readIndex.countPendingDescendantRuns(entry.childSessionKey) === 0 &&
-        entry.execution.endedAt >= recentCutoff,
-    ),
-  ];
+  const { latest, active, recent } = buildSubagentRunView({
+    runs,
+    recentMinutes: RECENT_WINDOW_MINUTES,
+    countPendingDescendantRuns: (sessionKey) => readIndex.countPendingDescendantRuns(sessionKey),
+  });
   const indexByChildSessionKey = new Map(
-    numericOrder.map((entry, idx) => [entry.childSessionKey, idx + 1] as const),
+    [...active, ...recent].map((entry, idx) => [entry.childSessionKey, idx + 1] as const),
   );
-
-  const visibleRuns: typeof dedupedRuns = [];
-  for (const entry of dedupedRuns) {
-    const visible =
-      !entry.execution.endedAt ||
-      readIndex.countPendingDescendantRuns(entry.childSessionKey) > 0 ||
-      resolveSessionBindings(entry.childSessionKey).length > 0;
-    if (!visible) {
-      continue;
-    }
-    visibleRuns.push(entry);
-  }
+  const activeRuns = new Set(active);
+  const visibleRuns = latest.filter(
+    (entry) => activeRuns.has(entry) || resolveSessionBindings(entry.childSessionKey).length > 0,
+  );
 
   const lines = ["agents:", "-----"];
   if (visibleRuns.length === 0) {

@@ -6,6 +6,10 @@ import {
 } from "../config/model-provider-config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ProviderModelRouteCandidate } from "../plugin-sdk/provider-model-types.js";
+import {
+  PREPARED_THINKING_POLICY,
+  type ThinkingCatalogPolicyCarrier,
+} from "../plugins/provider-thinking-catalog.js";
 import type { ModelCatalogEntry } from "./model-catalog.types.js";
 import { splitTrailingAuthProfile } from "./model-ref-profile.js";
 
@@ -167,18 +171,21 @@ export function projectModelCatalogEntryForRoute(params: {
   }
 
   const { policy, route } = params.projection;
-  const donor = findModelCatalogRouteDonor({
-    entry: params.entry,
-    route,
-    policy,
-    catalog: params.catalog,
-  });
+  const donor: (ModelCatalogEntry & ThinkingCatalogPolicyCarrier) | undefined =
+    findModelCatalogRouteDonor({
+      entry: params.entry,
+      route,
+      policy,
+      catalog: params.catalog,
+    });
   const projected = logicalIdentity(
     params.entry,
     identity.id,
     donor?.name ?? params.entry.name,
     donor ?? params.entry,
   );
+  // Only the selected physical donor can supply its prepared policy owner.
+  const thinkingPolicy = donor?.[PREPARED_THINKING_POLICY];
   return applyLogicalOverrides(
     {
       ...projected,
@@ -188,6 +195,10 @@ export function projectModelCatalogEntryForRoute(params: {
       ...(donor?.contextTokens !== undefined ? { contextTokens: donor.contextTokens } : {}),
       ...(donor?.reasoning !== undefined ? { reasoning: donor.reasoning } : {}),
       ...(donor?.thinkingLevelMap ? { thinkingLevelMap: donor.thinkingLevelMap } : {}),
+      ...(donor?.thinkingPolicyProvider
+        ? { thinkingPolicyProvider: donor.thinkingPolicyProvider }
+        : {}),
+      ...(thinkingPolicy !== undefined ? { [PREPARED_THINKING_POLICY]: thinkingPolicy } : {}),
       ...(donor?.input !== undefined ? { input: donor.input } : {}),
     },
     params.overrides,

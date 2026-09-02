@@ -151,13 +151,16 @@ describe("node worker launch wire", () => {
           key: SESSION_KEY,
           agentId: "qa",
           worktree: true,
+          // Worktree creation alone inherits tool policy; this probe needs explicit containment.
+          permissionMode: "workspace",
           worktreeName: "node-worker-launch-wire",
           worktreeBaseRef: "main",
           cwd: published.source,
         });
         const created = (await gateway.call("sessions.describe", { key: SESSION_KEY })) as {
-          session?: { execCwd?: string; spawnedCwd?: string };
+          session?: { execCwd?: string; spawnedCwd?: string; permissionMode?: string };
         };
+        expect(created.session?.permissionMode).toBe("workspace");
         const localWorkspaceDir = created.session?.execCwd ?? created.session?.spawnedCwd;
         expect(localWorkspaceDir).toBeTruthy();
         await fs.writeFile(
@@ -261,6 +264,15 @@ describe("node worker launch wire", () => {
           "device result\n",
         );
 
+        for (const marker of [
+          "worker-permission-in-root.txt",
+          "../worker-permission-outside.txt",
+          "worker-exec-escaped.txt",
+        ]) {
+          await expect(fs.access(path.resolve(remoteWorkspaceDir, marker))).rejects.toMatchObject({
+            code: "ENOENT",
+          });
+        }
         const permissionRunId = `node-worker-permission-${Date.now()}`;
         await expect(
           operator.request<{ runId?: string; status?: string }>("chat.send", {

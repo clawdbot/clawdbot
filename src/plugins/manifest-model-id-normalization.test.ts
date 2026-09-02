@@ -1,10 +1,12 @@
 // Verifies model IDs declared by plugin manifests are normalized.
 import fs from "node:fs";
 import path from "node:path";
+import { normalizeConfiguredProviderCatalogModelId } from "@openclaw/model-catalog-core/provider-model-id-normalization";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
 import { withPluginMetadataSnapshotScope } from "./current-plugin-metadata-snapshot.js";
+import { setCurrentPluginMetadataSnapshot } from "./current-plugin-metadata.test-support.js";
 import { writePersistedInstalledPluginIndexSync } from "./installed-plugin-index-store-write.js";
 import { listOpenClawPluginManifestMetadata } from "./manifest-metadata-scan.js";
 import { normalizeProviderModelIdWithManifest } from "./manifest-model-id-normalization.js";
@@ -119,6 +121,7 @@ describe("manifest model id normalization", () => {
     deleteTestEnvValue("OPENCLAW_BUNDLED_PLUGINS_DIR");
     const snapshot = resolvePluginMetadataSnapshot({ config: {}, env: process.env });
     const narrowed = projectPluginMetadataSnapshot(snapshot, []);
+    setCurrentPluginMetadataSnapshot(snapshot, { config: {}, env: process.env });
     const normalize = (view: typeof snapshot) =>
       withPluginMetadataSnapshotScope(view, () => normalizeDemoModel(), {
         trustConfigIdentity: true,
@@ -126,6 +129,16 @@ describe("manifest model id normalization", () => {
 
     expect(normalize(snapshot)).toBe("scoped/demo-model");
     expect(normalize(narrowed)).toBeUndefined();
+    expect(normalizeConfiguredProviderCatalogModelId("demo", "demo-model")).toBe(
+      "scoped/demo-model",
+    );
+    expect(
+      normalizeConfiguredProviderCatalogModelId(
+        "demo",
+        "demo-model",
+        narrowed.owners.modelIdNormalizationPolicies,
+      ),
+    ).toBe("demo-model");
     expect(normalize(snapshot)).toBe("scoped/demo-model");
   });
 

@@ -240,6 +240,27 @@ describe("broadcast serialization failures", () => {
 });
 
 describe("presence recipient projection", () => {
+  it("delivers credential-free metadata invalidations only to readable operators", () => {
+    const readers = [makeClient("reader"), makeClient("admin")];
+    readers[1]!.client.connect.scopes = ["operator.admin"];
+    const denied = [makeClient("no-scope"), makeClient("node")];
+    denied[0]!.client.connect.scopes = [];
+    denied[1]!.client.connect.role = "node";
+    const { broadcast } = createGatewayBroadcaster({
+      clients: new Set([...readers, ...denied].map(({ client }) => client)),
+    });
+    broadcast("chat.metadata.changed", {});
+    for (const peer of readers) {
+      expect(JSON.parse(peer.socket.send.mock.lastCall![0])).toMatchObject({
+        event: "chat.metadata.changed",
+        payload: {},
+      });
+    }
+    for (const peer of denied) {
+      expect(peer.socket.send).not.toHaveBeenCalled();
+    }
+  });
+
   it("preserves scoped sentinels, recipient ordering, and current visibility without changing the source", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       let cfg: OpenClawConfig = { agents: { entries: { main: {}, work: {} } } };
@@ -265,7 +286,8 @@ describe("presence recipient projection", () => {
             sessionId: `${agentId}-${sessionKey}`,
             updatedAt: 1,
             visibility,
-            createdActor: { type: "human", id: "creator" },
+            createdVia: "operator",
+            createdActor: { type: "human", source: "profile", id: "creator" },
           },
         );
       }
@@ -373,7 +395,8 @@ describe("presence recipient projection", () => {
           sessionId: "private",
           updatedAt: 1,
           visibility: "draft",
-          createdActor: { type: "human", id: "creator" },
+          createdVia: "operator",
+          createdActor: { type: "human", source: "profile", id: "creator" },
         },
       );
       const person = {

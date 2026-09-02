@@ -40,6 +40,7 @@ import {
   isCodexDesktopGenerationCurrent,
   waitForCodexDesktopGeneration,
 } from "./desktop-generation.js";
+import { isCodexAppServerProxyLaunch } from "./launch-args.js";
 import {
   isManagedCodexDesktopCommand,
   resolveManagedCodexAppServerStartOptions,
@@ -1075,14 +1076,10 @@ async function startInitializedCodexAppServerClient(params: {
     const runtimeArtifactModule = params.runtimeArtifactMode
       ? await import("./runtime-artifact.js")
       : undefined;
-    const nativeCommandBeforeStart =
-      startOptions.commandSource === "resolved-managed"
-        ? resolveManagedCodexNativeCommand(startOptions.command)
-        : undefined;
     const runtimeArtifactBeforeStart = runtimeArtifactModule
       ? await runtimeArtifactModule.captureCodexAppServerRuntimeArtifactBeforeStart({
           startOptions,
-          spawnIdentity: resolveCodexAppServerSpawnIdentity(startOptions, nativeCommandBeforeStart),
+          spawnIdentity: resolveCodexAppServerSpawnIdentity(startOptions),
           signal: params.runtimeArtifactSignal,
         })
       : undefined;
@@ -1101,7 +1098,26 @@ async function startInitializedCodexAppServerClient(params: {
       throw new Error("Codex app-server runtime artifact does not match verified inference");
     }
     assertDesktopGenerationCurrent();
-    const client = CodexAppServerClient.start(startOptions);
+    let starting: Promise<CodexAppServerClient> | undefined;
+    let client: CodexAppServerClient;
+    try {
+      client = await withCodexAppServerAcquireDeadline(
+        resolveRemainingAcquireTimeout(timeoutMs, acquireStartedAt),
+        (starting = CodexAppServerClient.start(startOptions, () => {
+          assertDesktopGenerationCurrent();
+          resolveRemainingAcquireTimeout(timeoutMs, acquireStartedAt);
+        })),
+        params.abandonSignal,
+      );
+    } catch (error) {
+      // A timed-out registration may settle later; it cannot publish a live
+      // client after the acquisition owner has already released its claim.
+      void starting?.then(
+        (lateClient) => lateClient.close(),
+        () => {},
+      );
+      throw error;
+    }
     const nativeCommandAtStart =
       startOptions.commandSource === "resolved-managed"
         ? resolveManagedCodexNativeCommand(startOptions.command)
@@ -1143,14 +1159,10 @@ async function startInitializedCodexAppServerClient(params: {
     let runtimeArtifact: AgentHarnessRuntimeArtifactBinding | undefined;
     try {
       if (runtimeArtifactModule && runtimeArtifactBeforeStart) {
-        const nativeCommand =
-          startOptions.commandSource === "resolved-managed"
-            ? resolveManagedCodexNativeCommand(startOptions.command)
-            : undefined;
         runtimeArtifact = await runtimeArtifactModule.finalizeCodexAppServerRuntimeArtifact({
           before: runtimeArtifactBeforeStart,
           startOptions,
-          spawnIdentity: resolveCodexAppServerSpawnIdentity(startOptions, nativeCommand),
+          spawnIdentity: resolveCodexAppServerSpawnIdentity(startOptions),
           runtimeIdentity: client.getRuntimeIdentity(),
           signal: params.runtimeArtifactSignal,
         });
@@ -1363,11 +1375,34 @@ export function retainSharedCodexAppServerClientByInstanceId(
   return undefined;
 }
 
-/** Captures sole physical-client ownership across awaited configuration adoption. */
+/** Captures the required connection or native-process ownership across awaited work. */
 export function captureExclusiveSharedCodexAppServerClient(
   client: CodexAppServerClient,
+  requiredOwnership: "connection" | "native-process",
 ): () => void {
   const state = getSharedCodexAppServerClientState();
+  // Ordinary refresh needs a process, not a connection to an external server.
+  // Supervision/release retain their existing shared connection-lease contract.
+  const start = getCodexAppServerClientStartMetadata().get(client)?.startOptions;
+  if (
+    requiredOwnership === "native-process" &&
+    (start?.transport !== "stdio" || isCodexAppServerProxyLaunch(start.args))
+  ) {
+    throw new AgentHarnessPreflightError(
+      "Codex ordinary configuration refresh requires an OpenClaw-managed local stdio process, not an external socket or app-server proxy. No turn was sent; reconnect through managed local stdio before continuing.",
+    );
+  }
+  if (requiredOwnership === "native-process" && state.isolatedClients.has(client)) {
+    // Worker clients already have a sole per-attempt owner, not a shared-pool lease.
+    // Host/placement authority is checked by the caller across every awaited handoff.
+    const assertIsolated = () => {
+      if (!state.isolatedClients.has(client) || client.getCloseError()) {
+        throw new CodexAdoptedThreadActiveError();
+      }
+    };
+    assertIsolated();
+    return assertIsolated;
+  }
   for (const [key, entry] of state.clients) {
     if (entry.client !== client) {
       continue;

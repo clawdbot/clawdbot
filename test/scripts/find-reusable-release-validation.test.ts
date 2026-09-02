@@ -62,6 +62,7 @@ interface ParentTuple {
 
 interface ChildTuple {
   conclusion: string;
+  policyPassed?: boolean;
   dispatchNonce: string;
   displayTitle: string;
   event: string;
@@ -221,12 +222,14 @@ function normalizedEvidence(options: {
   const trustedWorkflowFullRef = protectedTagRoute
     ? `refs/tags/${trustedWorkflowRef}`
     : "refs/heads/main";
-  const validationInputs =
+  const validationInputs: Record<string, string> | null =
     options.validationInputs === undefined ? DEFAULT_INPUTS : options.validationInputs;
+  const npmBetaCoverage = validationInputs?.coveragePolicy === "npm-beta-v1";
   const npmTelegramRequired =
+    !npmBetaCoverage &&
     validationInputs !== null &&
-    (validationInputs.npmTelegramPackageSpec.length > 0 ||
-      validationInputs.releasePackageSpec.length > 0);
+    !validationInputs.telegramWaiver &&
+    Boolean(validationInputs.npmTelegramPackageSpec || validationInputs.releasePackageSpec);
   const manifest = {
     version: 4,
     workflowName: "Full Release Validation",
@@ -243,7 +246,7 @@ function normalizedEvidence(options: {
     runReleaseSoak: String(soak),
     validationInputs,
     controls: {
-      performanceBlocking: true,
+      performanceBlocking: !npmBetaCoverage,
       performanceReportPublication: "artifact-only",
       stableSoakRequired: releaseProfile === "stable" || releaseProfile === "full",
     },
@@ -255,9 +258,9 @@ function normalizedEvidence(options: {
       releaseChecksIndependent: "203",
       releaseChecksCandidate: "207",
       productPerformance: {
-        blocking: true,
-        conclusion: "success",
-        runId: "204",
+        blocking: !npmBetaCoverage,
+        conclusion: npmBetaCoverage ? "" : "success",
+        runId: npmBetaCoverage ? "" : "204",
       },
     },
   };
@@ -346,11 +349,13 @@ function normalizedEvidence(options: {
       : []),
     ["productPerformance", "204", 3, 2, "OpenClaw Performance", "openclaw-performance.yml", ""],
   ] as const;
-  const children = roles.map(
-    ([role, childRunId, runAttempt, sourceParentAttempt, name, workflow, suffix]) =>
+  const children = roles
+    .filter(([role]) => !npmBetaCoverage || role !== "productPerformance")
+    .map(([role, childRunId, runAttempt, sourceParentAttempt, name, workflow, suffix]) =>
       Object.assign(
         {
           conclusion: "success",
+          policyPassed: true,
           dispatchNonce: `full-release-validation-${runId}-${sourceParentAttempt}${suffix}`,
           displayTitle: `${name} full-release-validation-${runId}-${sourceParentAttempt}${suffix}`,
           event: "workflow_dispatch",
@@ -368,7 +373,7 @@ function normalizedEvidence(options: {
         },
         role === "productPerformance" ? { reportPublication: "artifact-only" } : {},
       ),
-  );
+    );
   return {
     children,
     conclusions: {
@@ -428,6 +433,7 @@ exec cat "\${fixture}.json"
 const FAKE_VALIDATOR = `#!/usr/bin/env node
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { isDeepStrictEqual } from "node:util";
 
 const runIndex = process.argv.indexOf("--validate-run");
 const repoIndex = process.argv.indexOf("--repo");
@@ -436,6 +442,7 @@ const trustedFullRefIndex = process.argv.indexOf("--trusted-workflow-full-ref");
 const trustedShaIndex = process.argv.indexOf("--trusted-workflow-sha");
 const verifierShaIndex = process.argv.indexOf("--verifier-source-sha");
 const verifierFileIndex = process.argv.indexOf("--verifier-source-file");
+const reuseRequestIndex = process.argv.indexOf("--reuse-request-json");
 if (
   runIndex < 0 ||
   repoIndex < 0 ||
@@ -444,6 +451,8 @@ if (
   trustedShaIndex < 0 ||
   verifierShaIndex < 0 ||
   verifierFileIndex < 0 ||
+  reuseRequestIndex < 0 ||
+  !isDeepStrictEqual(JSON.parse(process.argv[reuseRequestIndex + 1]), JSON.parse(process.env.FAKE_REUSE_REQUEST)) ||
   process.argv[repoIndex + 1] !== "openclaw/openclaw" ||
   process.argv[trustedRefIndex + 1] !== process.env.FAKE_TRUSTED_WORKFLOW_REF ||
   process.argv[trustedFullRefIndex + 1] !== process.env.FAKE_TRUSTED_WORKFLOW_FULL_REF ||
@@ -607,6 +616,12 @@ function runResolver(args: {
         FAKE_TRUSTED_WORKFLOW_REF: trustedWorkflowRef,
         FAKE_TRUSTED_WORKFLOW_SHA: trustedWorkflowSha,
         FAKE_VALIDATOR_FIXTURES: args.fixtures,
+        FAKE_REUSE_REQUEST: JSON.stringify({
+          targetSha: args.targetSha,
+          releaseProfile: args.releaseProfile ?? "full",
+          runReleaseSoak: args.runReleaseSoak ?? "true",
+          validationInputs: args.inputs === undefined ? DEFAULT_INPUTS : args.inputs,
+        }),
         FAKE_VERIFIER_SHA: verifierSha,
         GITHUB_OUTPUT: "",
         OPENCLAW_RELEASE_CI_SUMMARY_VALIDATOR: args.validatorPath,
@@ -657,35 +672,47 @@ describe("scripts/github/find-reusable-release-validation.sh", () => {
     });
   });
 
-  it("reuses strict evidence through the exact lightweight protected tooling tag", () => {
-    const { clone, priorSha } = getSharedRepo();
-    const trustedWorkflowRef = `release-publish/${VERIFIER_SHA.slice(0, 12)}-456`;
-    const producerRef = `release-ci/${VERIFIER_SHA.slice(0, 12)}-122`;
-    const record = normalizedEvidence({
-      producerSha: VERIFIER_SHA,
-      targetSha: priorSha,
-      trustedWorkflowRef,
-      workflowRef: producerRef,
-    });
-    const { binDir, fixtures, validatorPath } = setUpFixtures([{ record, runId: "111" }]);
+  it.each(["", "2026.8.1-owner-approved"])(
+    "reuses strict protected-tag evidence with Telegram waiver %j",
+    (telegramWaiver) => {
+      const { clone, priorSha } = getSharedRepo();
+      const trustedWorkflowRef = `release-publish/${VERIFIER_SHA.slice(0, 12)}-456`;
+      const producerRef = `release-ci/${VERIFIER_SHA.slice(0, 12)}-122`;
+      const record = normalizedEvidence({
+        producerSha: VERIFIER_SHA,
+        targetSha: priorSha,
+        trustedWorkflowRef,
+        workflowRef: producerRef,
+        validationInputs: telegramWaiver
+          ? {
+              ...DEFAULT_INPUTS,
+              telegramWaiver,
+              targetVersion: "2026.8.1",
+              releasePackageSpec: "openclaw@2026.8.1",
+            }
+          : DEFAULT_INPUTS,
+      });
+      const { binDir, fixtures, validatorPath } = setUpFixtures([{ record, runId: "111" }]);
 
-    const result = runResolver({
-      binDir,
-      fixtures,
-      repoDir: clone,
-      targetSha: priorSha,
-      trustedWorkflowRef,
-      validatorPath,
-      verifierOnMain: false,
-      workflowRef: `release-ci/${VERIFIER_SHA.slice(0, 12)}-123`,
-    });
+      const result = runResolver({
+        binDir,
+        fixtures,
+        repoDir: clone,
+        targetSha: priorSha,
+        inputs: record.validationInputs,
+        trustedWorkflowRef,
+        validatorPath,
+        verifierOnMain: false,
+        workflowRef: `release-ci/${VERIFIER_SHA.slice(0, 12)}-123`,
+      });
 
-    expect(result.status).toBe(0);
-    expect(parseOutput(result.stdout)).toMatchObject({
-      evidence_run_id: "111",
-      reuse: "true",
-    });
-  });
+      expect(result.status).toBe(0);
+      expect(parseOutput(result.stdout)).toMatchObject({
+        evidence_run_id: "111",
+        reuse: "true",
+      });
+    },
+  );
 
   it("reuses strict evidence produced by an ancestor of the protected tooling tag", () => {
     const { clone, priorSha } = getSharedRepo();
@@ -824,6 +851,40 @@ describe("scripts/github/find-reusable-release-validation.sh", () => {
       reuse: "true",
     });
   });
+
+  it.each(["beta", "stable", "full"])(
+    "reuses %s Telegram failures only when the strict verifier accepted their policy",
+    (releaseProfile) => {
+      const { clone, priorSha } = getSharedRepo();
+      const validationInputs = {
+        ...DEFAULT_INPUTS,
+        npmTelegramPackageSpec: "openclaw@2026.7.1",
+      };
+      const record = normalizedEvidence({ targetSha: priorSha, validationInputs, releaseProfile });
+      for (const child of record.children) {
+        if (
+          ["npmTelegram", "releaseChecksIndependent", "releaseChecksCandidate"].includes(child.role)
+        ) {
+          child.conclusion = "failure";
+          record.conclusions.children[child.role] = "failure";
+        }
+      }
+      const { binDir, fixtures, validatorPath } = setUpFixtures([{ record, runId: "111" }]);
+
+      const result = runResolver({
+        binDir,
+        fixtures,
+        inputs: validationInputs,
+        releaseProfile,
+        repoDir: clone,
+        targetSha: priorSha,
+        validatorPath,
+      });
+
+      expect(result.status).toBe(0);
+      expect(parseOutput(result.stdout)).toMatchObject({ evidence_run_id: "111", reuse: "true" });
+    },
+  );
 
   it("rejects noncanonical release refs and workflow SHAs outside trusted main", () => {
     const { clone, priorSha } = getSharedRepo();
@@ -1050,9 +1111,23 @@ describe("scripts/github/find-reusable-release-validation.sh", () => {
       },
     },
     {
-      label: "failed child",
+      label: "child rejected by canonical policy",
       mutate(record: NormalizedEvidence) {
-        expectDefined(record.children[0], "failed reusable release child").conclusion = "failure";
+        const child = expectDefined(record.children[0], "failed reusable release child");
+        child.conclusion = "failure";
+        child.policyPassed = false;
+      },
+    },
+    {
+      label: "successful child rejected by canonical policy",
+      mutate(record: NormalizedEvidence) {
+        expectDefined(record.children[0], "reusable release child").policyPassed = false;
+      },
+    },
+    {
+      label: "child without canonical policy evidence",
+      mutate(record: NormalizedEvidence) {
+        delete expectDefined(record.children[0], "reusable release child").policyPassed;
       },
     },
     {
@@ -1162,6 +1237,18 @@ describe("scripts/github/find-reusable-release-validation.sh", () => {
     },
     {
       expected: "validation inputs differ",
+      label: "owner-waived Telegram evidence for an unwaived request",
+      recordOptions: {
+        validationInputs: {
+          ...DEFAULT_INPUTS,
+          telegramWaiver: "2026.8.1-owner-approved",
+          targetVersion: "2026.8.1",
+        },
+      },
+      resolverOptions: {},
+    },
+    {
+      expected: "validation inputs differ",
       label: "different unreleased changelog policy",
       recordOptions: {
         validationInputs: { ...DEFAULT_INPUTS, allowUnreleasedChangelog: "true" },
@@ -1199,6 +1286,36 @@ describe("scripts/github/find-reusable-release-validation.sh", () => {
       expect(result.status).toBe(0);
       expect(parseOutput(result.stdout)).toMatchObject({ reuse: "false" });
       expect(result.stderr).toContain(expected);
+    },
+  );
+
+  it.each(["matching", "legacy-request", "legacy-receipt"])(
+    "requires identical npm beta coverage for reuse: %s",
+    (coverage) => {
+      const { clone, priorSha } = getSharedRepo();
+      const inputs = {
+        ...DEFAULT_INPUTS,
+        coveragePolicy: "npm-beta-v1",
+        skipPackageTelegramE2e: "true",
+        targetVersion: "2026.8.28-beta.1",
+      };
+      const record = normalizedEvidence({
+        releaseProfile: "beta",
+        soak: false,
+        targetSha: priorSha,
+        validationInputs: coverage === "legacy-receipt" ? DEFAULT_INPUTS : inputs,
+      });
+      const fixtures = setUpFixtures([{ record, runId: "111" }]);
+      const result = runResolver({
+        ...fixtures,
+        inputs: coverage === "legacy-request" ? DEFAULT_INPUTS : inputs,
+        releaseProfile: "beta",
+        repoDir: clone,
+        runReleaseSoak: "false",
+        targetSha: priorSha,
+      });
+      expect(result.status).toBe(0);
+      expect(parseOutput(result.stdout).reuse).toBe(coverage === "matching" ? "true" : "false");
     },
   );
 

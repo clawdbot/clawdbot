@@ -63,3 +63,16 @@ export function mountChatPaneHeader(
   render(html`${renderChatPaneHeader(props)}`, container);
   return { container, props };
 }
+
+export function mockWorkspaceIconFetch() {
+  const workspaceFetch = vi.fn<typeof fetch>();
+  vi.spyOn(globalThis, "fetch").mockImplementation((input, init) => {
+    // Other header elements fetch assets asynchronously. They must not consume
+    // workspace retry responses or count as authenticated icon requests.
+    if (typeof input === "string" && input.startsWith("/__openclaw__/workspace-icon/")) {
+      return workspaceFetch(input, init);
+    }
+    return Promise.resolve(new Response(null, { status: 404 }));
+  });
+  return workspaceFetch;
+}

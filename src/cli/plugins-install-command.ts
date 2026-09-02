@@ -73,6 +73,9 @@ async function runPluginInstallCommandUnlocked(
   assertConfigWriteAllowedInCurrentMode();
 
   const runtime = params.runtime ?? defaultRuntime;
+  const persistentApplyOptions = params.beforePersistentApply
+    ? { beforePersistentApply: params.beforePersistentApply }
+    : {};
   const invalidateRuntimeCache = params.invalidateRuntimeCache ?? true;
   const { raw, opts, installMode, request } = preflight;
   if (opts.dangerouslyForceUnsafeInstall) {
@@ -129,6 +132,7 @@ async function runPluginInstallCommandUnlocked(
       logger: createPluginInstallLogger(runtime),
       invalidateRuntimeCache,
       runtime,
+      ...persistentApplyOptions,
     });
     if (!result.ok) {
       if (!isClawHubBlockedCliFailure(result)) {
@@ -203,6 +207,7 @@ async function runPluginInstallCommandUnlocked(
         logger: createPluginInstallLogger(runtime),
         invalidateRuntimeCache,
         runtime,
+        ...persistentApplyOptions,
       });
       if (result.ok) {
         return;
@@ -237,6 +242,7 @@ async function runPluginInstallCommandUnlocked(
         logger: createPluginInstallLogger(runtime),
         invalidateRuntimeCache,
         runtime,
+        ...persistentApplyOptions,
       });
       if (!result.ok) {
         runtime.error(result.error);
@@ -254,6 +260,7 @@ async function runPluginInstallCommandUnlocked(
             snapshot,
             invalidateRuntimeCache,
             runtime,
+            ...persistentApplyOptions,
           }),
         {
           command: "install",
@@ -269,6 +276,23 @@ async function runPluginInstallCommandUnlocked(
     }
 
     case "official": {
+      const primary = sourceRequest.installSources?.[0];
+      if (primary?.source === "clawhub") {
+        const result = await installManagedPluginSource({
+          request: sourceRequest,
+          snapshot,
+          ...capabilityConsent,
+          safetyOverrides,
+          logger: createPluginInstallLogger(runtime),
+          invalidateRuntimeCache,
+          runtime,
+        });
+        if (!result.ok) {
+          runtime.error(result.error);
+          return runtime.exit(1);
+        }
+        return;
+      }
       const result = await tryInstallPluginOrHookPackFromNpmSpec({
         snapshot,
         installMode,
@@ -278,9 +302,9 @@ async function runPluginInstallCommandUnlocked(
         capabilityConsent,
         allowBundledFallback: false,
         expectedPluginId: sourceRequest.pluginId,
-        expectedIntegrity: sourceRequest.expectedIntegrity,
+        expectedIntegrity: primary?.expectedIntegrity ?? sourceRequest.expectedIntegrity,
         trustedSourceLinkedOfficialInstall: true,
-        official: true,
+        officialRequest: sourceRequest,
         invalidateRuntimeCache,
         runtime,
       });
@@ -308,6 +332,7 @@ async function runPluginInstallCommandUnlocked(
           logger: createPluginInstallLogger(runtime),
           invalidateRuntimeCache,
           runtime,
+          ...persistentApplyOptions,
         });
         if (!result.ok) {
           if (!isClawHubBlockedCliFailure(result)) {

@@ -4,6 +4,7 @@ import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { enableNodeSqliteKyselyStatementCache } from "../infra/kysely-sync.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
+import { isPathInside } from "../infra/path-guards.js";
 import type { SqliteFileGeneration } from "../infra/sqlite-file-generation.js";
 import { quarantineOrphanedSqliteSidecars } from "../infra/sqlite-files.js";
 import {
@@ -654,20 +655,12 @@ export function disposeOpenClawAgentDatabaseByPath(
   return true;
 }
 
-/** Close all cached agent database handles. */
-export function closeOpenClawAgentDatabases(): void {
-  unregisterExitClose?.();
-  unregisterExitClose = null;
-  const removedIncognito = [...cachedDatabases.values()].some(
-    (database) => database.db.isOpen && incognitoDatabases.has(database),
-  );
-  for (const database of cachedDatabases.values()) {
-    closeCachedOpenClawAgentDatabase(database);
-  }
-  cachedDatabases.clear();
-  cachedDatabaseOpenFailures.clear();
-  if (removedIncognito) {
-    incognitoDatabaseGeneration += 1;
+/** Close cached agent handles, optionally restricted to one runtime root. */
+export function closeOpenClawAgentDatabases(rootPath?: string): void {
+  for (const pathname of cachedDatabases.keys()) {
+    if (rootPath === undefined || isPathInside(rootPath, pathname)) {
+      closeOpenClawAgentDatabaseByPath(pathname);
+    }
   }
 }
 
@@ -682,6 +675,7 @@ export function withAgentDatabaseMaintenanceLease<T>(
       database: { scope: "shared", options },
       leaseMs: 60_000,
       waitMs: 5_000,
+      heartbeat: "worker",
       leaseLabel: "agent database maintenance lease",
       operationLabel: "agent.database.maintenance.lease",
     },

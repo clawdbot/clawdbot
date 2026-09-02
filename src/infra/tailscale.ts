@@ -1,8 +1,7 @@
 // Integrates with the local Tailscale CLI for tailnet setup and sharing.
 import { fork } from "node:child_process";
 import { existsSync } from "node:fs";
-import path from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 import {
   asDateTimestampMs,
   resolveExpiresAtMsFromDurationMs,
@@ -17,6 +16,8 @@ import { signalProcessTree } from "../process/kill-tree.js";
 import { isVitestRuntimeEnv } from "./env.js";
 import { toErrorObject } from "./errors.js";
 import { retryAsync } from "./retry.js";
+import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.js";
+import { resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
 import {
   TAILSCALE_ROUTE_OWNER_ARG,
   type TailscaleRouteOwnerMessage,
@@ -220,19 +221,6 @@ type TailscaleRouteClaim = {
   stop: () => Promise<void>;
 };
 
-function resolveTailscaleRouteOwnerUrl(currentModuleUrl = import.meta.url): URL {
-  const currentPath = fileURLToPath(currentModuleUrl);
-  const normalized = currentPath.replaceAll(path.sep, "/");
-  const distMarker = "/dist/";
-  const distIndex = normalized.lastIndexOf(distMarker);
-  if (distIndex >= 0) {
-    const distRoot = currentPath.slice(0, distIndex + distMarker.length);
-    return pathToFileURL(path.join(distRoot, "infra", "tailscale-route-owner.worker.js"));
-  }
-  const extension = path.extname(currentPath) || ".js";
-  return new URL(`./tailscale-route-owner.worker${extension}`, currentModuleUrl);
-}
-
 type TailscaleRouteOwnerFailure = Pick<
   Extract<TailscaleRouteOwnerMessage, { type: "failed" }>,
   "code" | "stdout" | "stderr"
@@ -272,7 +260,7 @@ function waitWithTimeout(promise: Promise<void>, timeoutMs: number): Promise<boo
 }
 
 async function startTailscaleRouteOwner(argv: string[]): Promise<TailscaleRouteClaim> {
-  const workerUrl = resolveTailscaleRouteOwnerUrl();
+  const workerUrl = resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.tailscaleRouteOwner);
   const execArgv = workerUrl.pathname.endsWith(".ts") ? ["--import", "tsx"] : undefined;
   const worker = fork(
     fileURLToPath(workerUrl),

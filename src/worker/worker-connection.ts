@@ -19,6 +19,10 @@ import type {
   WorkerTranscriptCommitResponseFrame,
 } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
 import type {
+  WorkerComputerParams,
+  WorkerComputerResponseFrame,
+} from "../../packages/gateway-protocol/src/schema/worker-computer.js";
+import type {
   WorkerInferenceCancelParams,
   WorkerInferenceCancelResponseFrame,
   WorkerInferenceEventFrame,
@@ -26,6 +30,10 @@ import type {
   WorkerInferenceStartResponseFrame,
   WorkerInferenceTerminalFrame,
 } from "../../packages/gateway-protocol/src/schema/worker-inference.js";
+import type {
+  WorkerSkillWorkshopParams,
+  WorkerSkillWorkshopResponseFrame,
+} from "../../packages/gateway-protocol/src/schema/worker-skill-workshop.js";
 import { computeBackoff, sleepWithAbort, type BackoffPolicy } from "../infra/backoff.js";
 import { notifyListeners } from "../shared/listeners.js";
 import {
@@ -238,6 +246,17 @@ export class WorkerConnection {
 
   requestPortal(params: WorkerPortalParams): Promise<WorkerPortalResponseFrame> {
     return this.frames.request("portal", params);
+  }
+  requestSkillWorkshop(
+    params: WorkerSkillWorkshopParams,
+  ): Promise<WorkerSkillWorkshopResponseFrame> {
+    return this.frames.request("skill-workshop", params);
+  }
+
+  requestComputer(params: WorkerComputerParams): Promise<WorkerComputerResponseFrame> {
+    // Desktop input is not a durable session operation. A lost response cannot
+    // automatically replay clicks or typing on a reconnected transport.
+    return this.frames.request("computer", params, undefined, params.timeoutMs);
   }
 
   private async requestDurableSessionOperation<T>(request: () => Promise<T>): Promise<T> {

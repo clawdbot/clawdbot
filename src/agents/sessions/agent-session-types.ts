@@ -113,6 +113,8 @@ export interface PromptOptions {
   source?: InputSource;
   /** Internal RPC hook for prompt preflight acceptance or rejection. */
   preflightResult?: (success: boolean) => void;
+  /** Internal identity for a current user turn that is already durable. */
+  persistedUserIdempotencyKey?: string;
 }
 
 /** Result from cycling the active model. */

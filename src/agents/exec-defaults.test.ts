@@ -58,44 +58,74 @@ describe("resolveExecDefaults", () => {
     expect(defaults.canRequestNode).toBe(false);
   });
 
-  it.each(["gateway", "node"] as const)(
-    "keeps required sessions sandboxed and hides nodes despite configured host=%s",
-    async (host) => {
-      const sessionKey = "agent:main:guest";
+  it.each([
+    { host: "gateway", sessionKey: "agent:main:guest" },
+    { host: "node", sessionKey: "agent:main:guest" },
+    { host: "gateway", sessionKey: "global" },
+    { host: "node", sessionKey: "global" },
+  ] as const)(
+    "keeps required $sessionKey sandboxed and hides nodes despite configured host=$host",
+    async ({ host, sessionKey }) => {
       const storePath = path.join(execStoreDirs.make("openclaw-required-exec-"), "sessions.json");
       const sessionEntry = {
         sessionId: "guest-session",
         updatedAt: 1,
         sandbox: "required" as const,
       };
-      await replaceSessionEntry({ sessionKey, storePath }, sessionEntry);
-      const cfg = withDefaultAgent({
+      await replaceSessionEntry({ agentId: "main", sessionKey, storePath }, sessionEntry);
+      const cfg: OpenClawConfig = {
         session: { store: storePath },
-        agents: { defaults: { sandbox: { mode: "off" } } },
+        agents: {
+          ownership: "explicit",
+          defaults: { sandbox: { mode: "off" } },
+          entries: { main: {}, worker: {} },
+        },
         tools: { exec: { host } },
-      });
+      };
+      const owner = { cfg, agentId: "main", sandboxAvailable: true };
 
-      expect(resolveExecDefaults({ cfg, sessionKey, sandboxAvailable: true })).toMatchObject({
+      expect(resolveExecDefaults({ ...owner, sessionKey })).toMatchObject({
         host: "auto",
         effectiveHost: "sandbox",
         canRequestNode: false,
       });
-      expect(resolveExecDefaults({ cfg, sessionEntry, sandboxAvailable: true })).toMatchObject({
+      expect(resolveExecDefaults({ ...owner, sessionEntry })).toMatchObject({
         host: "auto",
         effectiveHost: "sandbox",
         canRequestNode: false,
       });
       expect(
         resolveExecDefaults({
-          cfg,
+          ...owner,
           sessionKey,
-          sandboxAvailable: true,
           elevatedRequested: true,
         }).effectiveHost,
       ).toBe("sandbox");
-      expect(resolveNodeExecEligibility({ cfg, sessionKey, sandboxAvailable: true }).canExec).toBe(
-        false,
-      );
+      expect(resolveNodeExecEligibility({ ...owner, sessionKey }).canExec).toBe(false);
+    },
+  );
+
+  it.each([
+    { agentId: "isolated", effectiveHost: "sandbox", canExec: false },
+    { agentId: "direct", effectiveHost: "gateway", canExec: true },
+  ])(
+    "uses $agentId sandbox policy for global exec defaults",
+    ({ agentId, effectiveHost, canExec }) => {
+      const storeRoot = execStoreDirs.make("openclaw-global-exec-");
+      const cfg: OpenClawConfig = {
+        session: { store: path.join(storeRoot, "{agentId}", "sessions.json") },
+        agents: {
+          ownership: "explicit",
+          entries: {
+            isolated: { sandbox: { mode: "all" } },
+            direct: { sandbox: { mode: "off" } },
+          },
+        },
+      };
+      const params = { cfg, agentId, sessionKey: "global" };
+
+      expect(resolveExecDefaults(params)).toMatchObject({ effectiveHost, canRequestNode: canExec });
+      expect(resolveNodeExecEligibility(params)).toEqual({ canExec });
     },
   );
 
@@ -304,6 +334,120 @@ describe("resolveExecDefaults", () => {
       ask: "off",
     });
   });
+
+  it.each([
+    {
+      permissionMode: "guarded",
+      override: { security: "deny" },
+      security: "deny",
+      ask: "on-miss",
+      mode: "deny",
+    },
+    {
+      permissionMode: "guarded",
+      override: { ask: "always" },
+      security: "allowlist",
+      ask: "always",
+      mode: "ask",
+    },
+    {
+      permissionMode: "guarded",
+      override: { mode: "deny" },
+      security: "deny",
+      ask: "on-miss",
+      mode: "deny",
+    },
+    {
+      permissionMode: "guarded",
+      override: { security: "full", ask: "off" },
+      security: "allowlist",
+      ask: "on-miss",
+      mode: "ask",
+    },
+    {
+      permissionMode: "guarded",
+      override: { mode: "full" },
+      security: "allowlist",
+      ask: "on-miss",
+      mode: "ask",
+    },
+    {
+      permissionMode: "guarded",
+      override: undefined,
+      security: "allowlist",
+      ask: "on-miss",
+      mode: "ask",
+    },
+    {
+      permissionMode: "read-only",
+      override: { mode: "deny" },
+      security: "deny",
+      ask: "off",
+      mode: "deny",
+    },
+    {
+      permissionMode: "guarded",
+      override: { mode: "ask" },
+      security: "allowlist",
+      ask: "on-miss",
+      mode: "ask",
+    },
+    {
+      permissionMode: "workspace",
+      override: { mode: "auto" },
+      security: "allowlist",
+      ask: "on-miss",
+      mode: "auto",
+    },
+    {
+      permissionMode: "full",
+      override: { mode: "full" },
+      security: "full",
+      ask: "off",
+      mode: "full",
+    },
+    {
+      permissionMode: "workspace",
+      override: { mode: "auto", security: "deny", ask: "always" },
+      security: "deny",
+      ask: "always",
+      mode: "deny",
+    },
+  ] as const)(
+    "only tightens $permissionMode with $override",
+    ({ permissionMode, override, ...expected }) => {
+      expect(
+        resolveExecDefaults({
+          sessionEntry: { permissionMode },
+          execOverrides: override,
+          sandboxAvailable: false,
+        }),
+      ).toMatchObject(expected);
+    },
+  );
+
+  it.each([
+    {
+      override: { mode: "full", security: "allowlist" },
+      security: "deny",
+      ask: "always",
+      mode: "deny",
+    },
+    { override: { mode: "full", ask: "on-miss" }, security: "full", ask: "on-miss", mode: "full" },
+    { override: { mode: "full" }, security: "full", ask: "off", mode: "full" },
+  ] as const)(
+    "bounds tightened full sessions with host floors for $override",
+    ({ override, ...expected }) => {
+      expect(
+        resolveExecDefaults({
+          sessionEntry: { permissionMode: "full" },
+          execOverrides: override,
+          execApprovals: { version: 1, defaults: { security: "deny", ask: "always" } },
+          sandboxAvailable: false,
+        }),
+      ).toMatchObject(expected);
+    },
+  );
 
   it("keeps agent mode overrides ahead of the global mode", () => {
     expect(

@@ -17,10 +17,10 @@ import { createCronContinuationController } from "../server-methods/agent-cron-c
 import { runAgentResetPhase } from "../server-methods/agent-reset-phase.js";
 import { buildAgentSessionPatch } from "../server-methods/agent-session-patch.js";
 import { prepareAgentSession } from "../server-methods/agent-session-prepare.js";
-import { handleChatAbortRequest } from "../server-methods/chat-abort-handler.js";
 import { resolveAgentRunSessionCreation } from "../server-methods/session-creation-provenance.js";
 import type { GatewayRequestHandlerOptions, RespondFn } from "../server-methods/shared-types.js";
 import { authorizeResolvedSessionMutation } from "../session-sharing.js";
+import { prepareSkillLibrarySessionCreation } from "../skill-library-session.js";
 import { createAgentAdmissionController } from "./agent-admission-controller.js";
 import { prepareAgentContentPhase } from "./agent-content-phase.js";
 import { createAgentDedupeLifecycle } from "./agent-dedupe-lifecycle.js";
@@ -433,7 +433,11 @@ export function createAgentTurnService(
           canonicalSessionKey,
           sessionAgentId,
           mainSessionKey,
-          creation: resolveAgentRunSessionCreation(principal),
+          creation: prepareSkillLibrarySessionCreation(
+            principal,
+            () => context.getRuntimeConfig(),
+            resolveAgentRunSessionCreation(principal),
+          ),
           ...(principal?.authenticatedUserProfile
             ? { requestingOperatorProfileId: principal.authenticatedUserProfile.profileId }
             : {}),
@@ -710,9 +714,5 @@ export function createAgentTurnService(
     };
   };
 
-  const abortTurn = async (options: GatewayRequestHandlerOptions): Promise<void> => {
-    await handleChatAbortRequest({ ...options, context, isWebchatConnect });
-  };
-
-  return { startTurn, waitForTurn, abortTurn };
+  return { startTurn, waitForTurn };
 }

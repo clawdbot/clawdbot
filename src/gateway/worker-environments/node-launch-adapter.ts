@@ -1,4 +1,5 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
+import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { computeBackoff, sleepWithAbort } from "../../infra/backoff.js";
 import {
   NODE_WORKER_CAPACITY_EXHAUSTED_ERROR_CODE,
@@ -23,6 +24,8 @@ import {
   parseWorkerAdmissionDeadlineResult,
   WORKER_ADMISSION_DEADLINE_MS,
 } from "../../worker/worker-connection-contract.js";
+import { measureWorkerProcessTurnBytes } from "../../worker/worker-process-protocol.js";
+import { buildNodeInvokeRequest, serializeNodeEvent } from "../node-invoke-request.js";
 import type {
   NodeWorkerSupervisorNodeProof,
   NodeWorkerSupervisorTransport,
@@ -76,7 +79,6 @@ type NodeWorkerLaunchAdapterOptions = {
 };
 
 type OperationDeadline = {
-  expiresAtMs: number;
   signal: AbortSignal;
   remainingMs: () => number;
   dispose: () => void;
@@ -110,6 +112,47 @@ function snapshotLaunchInput(input: NodeWorkerLaunchInput): NodeWorkerLaunchInpu
     throw new Error("node worker launch input is not serializable");
   }
   return parseNodeWorkerLaunchInput(encoded);
+}
+
+function rearmNodeWorkerLaunchInput(
+  input: NodeWorkerLaunchInput,
+  attempt: number,
+): NodeWorkerLaunchInput {
+  const launchId = createHash("sha256")
+    .update(`${input.launchId}:admission-rearm:${attempt}`)
+    .digest("hex");
+  return {
+    ...input,
+    launchId,
+    descriptor: {
+      ...input.descriptor,
+      assignment: { ...input.descriptor.assignment, turnId: launchId },
+    },
+  };
+}
+
+export function measureNodeWorkerLaunchBytes(nodeId: string, input: NodeWorkerLaunchInput): number {
+  // Re-arms replace a UUID with a SHA-256 hex turn ID. Measure both without changing
+  // the original plan; the registry bounds timeouts and always generates UUID request IDs.
+  return Math.max(
+    ...[input, rearmNodeWorkerLaunchInput(input, 1)].flatMap((attempt) => [
+      Buffer.byteLength(
+        serializeNodeEvent(
+          "node.invoke.request",
+          buildNodeInvokeRequest({
+            id: randomUUID(),
+            nodeId,
+            command: NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND,
+            params: attempt,
+            timeoutMs: MAX_TIMER_TIMEOUT_MS,
+            idempotencyKey: attempt.launchId,
+          }),
+        ),
+        "utf8",
+      ),
+      measureWorkerProcessTurnBytes(attempt.descriptor),
+    ]),
+  );
 }
 
 function expectedIdentity(input: NodeWorkerLaunchInput): NodeWorkerSupervisorIdentity {
@@ -172,25 +215,36 @@ function createDeadline(params: {
   now: () => number;
   timeoutMs: number;
   signal?: AbortSignal;
+  parent?: OperationDeadline;
   label: string;
 }): OperationDeadline {
   if (!Number.isFinite(params.timeoutMs) || params.timeoutMs <= 0) {
     throw new Error(`${params.label} timeout must be a positive finite number`);
   }
   const controller = new AbortController();
-  const timer = setTimeout(
-    () => controller.abort(new Error(`${params.label} timed out`)),
-    params.timeoutMs,
-  );
-  timer.unref?.();
-  const signal = params.signal
-    ? AbortSignal.any([params.signal, controller.signal])
-    : controller.signal;
   const expiresAtMs = params.now() + params.timeoutMs;
+  const expire = () => {
+    params.parent?.remainingMs();
+    controller.abort(new Error(`${params.label} timed out`));
+  };
+  const timer = setTimeout(expire, params.timeoutMs);
+  timer.unref?.();
+  const parentSignal = params.parent?.signal ?? params.signal;
+  const signal = parentSignal
+    ? AbortSignal.any([parentSignal, controller.signal])
+    : controller.signal;
   return {
-    expiresAtMs,
     signal,
-    remainingMs: () => Math.max(0, expiresAtMs - params.now()),
+    remainingMs: () => {
+      // Clock reads can observe expiry before timers run. Publish the same abort,
+      // synchronizing the parent first so a launch timeout retains precedence.
+      params.parent?.remainingMs();
+      const remainingMs = Math.max(0, expiresAtMs - params.now());
+      if (remainingMs === 0) {
+        expire();
+      }
+      return remainingMs;
+    },
     dispose: () => clearTimeout(timer),
   };
 }
@@ -247,9 +301,7 @@ export function createNodeWorkerLaunchAdapter(options: NodeWorkerLaunchAdapterOp
       );
     }
     const remainingMs = params.deadline.remainingMs();
-    if (remainingMs <= 0 || params.deadline.signal.aborted) {
-      throw params.deadline.signal.reason ?? new Error("node worker operation timed out");
-    }
+    params.deadline.signal.throwIfAborted();
     const transport = options.getTransport();
     if (!transport) {
       throw new NodeWorkerLaunchTransportError(
@@ -340,9 +392,7 @@ export function createNodeWorkerLaunchAdapter(options: NodeWorkerLaunchAdapterOp
     deadline: OperationDeadline;
   }): Promise<number> => {
     const remainingMs = params.deadline.remainingMs();
-    if (remainingMs <= 0 || params.deadline.signal.aborted) {
-      throw params.deadline.signal.reason ?? new Error("node worker operation timed out");
-    }
+    params.deadline.signal.throwIfAborted();
     await raceNodeWorkerOperation(
       sleep(Math.min(params.delayMs, remainingMs), params.deadline.signal),
       params.deadline.signal,
@@ -404,7 +454,6 @@ export function createNodeWorkerLaunchAdapter(options: NodeWorkerLaunchAdapterOp
   ): Promise<TerminalNodeWorkerSupervisorReceipt> => {
     const originalInput = snapshotLaunchInput(request.input);
     let input = originalInput;
-    const originalLaunchId = input.launchId;
     const stableRequest = { ...request, input };
     let expected = expectedIdentity(input);
     let admissionAttempts = 1;
@@ -417,7 +466,7 @@ export function createNodeWorkerLaunchAdapter(options: NodeWorkerLaunchAdapterOp
     const availabilityDeadline = createDeadline({
       now,
       timeoutMs: DEFAULT_AVAILABILITY_TIMEOUT_MS,
-      signal: deadline.signal,
+      parent: deadline,
       label: "node worker availability",
     });
     let mayHaveLaunched = false;
@@ -488,19 +537,9 @@ export function createNodeWorkerLaunchAdapter(options: NodeWorkerLaunchAdapterOp
                   delayMs: rearmDelayMs,
                   deadline,
                 });
-                const launchId = createHash("sha256")
-                  .update(`${originalLaunchId}:admission-rearm:${admissionAttempts++}`)
-                  .digest("hex");
                 // Deterministic IDs make a replay of this adapter find the same journal
                 // rows, never another child for an already completed retry.
-                input = {
-                  ...originalInput,
-                  launchId,
-                  descriptor: {
-                    ...originalInput.descriptor,
-                    assignment: { ...originalInput.descriptor.assignment, turnId: launchId },
-                  },
-                };
+                input = rearmNodeWorkerLaunchInput(originalInput, admissionAttempts++);
                 expected = expectedIdentity(input);
                 pollStatus = false;
                 delayMs = pollIntervalMs;

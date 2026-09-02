@@ -10,7 +10,6 @@ import {
   type ArchiveEntryKind,
 } from "openclaw/plugin-sdk/archive";
 import { saveMediaBuffer } from "openclaw/plugin-sdk/media-store";
-import { asBoolean } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { appendFileTransferAudit } from "../shared/audit.js";
 import { IMAGE_MIME_INLINE_SET, mimeFromExtension } from "../shared/mime.js";
 import { humanSize, readClampedInt } from "../shared/params.js";
@@ -42,13 +41,8 @@ const TAR_UNPACK_MAX_ENTRIES = 5000;
 const DIR_FETCH_MAX_UNCOMPRESSED_BYTES = 64 * 1024 * 1024;
 const DIR_FETCH_MAX_SINGLE_FILE_BYTES = 16 * 1024 * 1024;
 
-function filterDirFetchArchiveEntry(entry: {
-  path: string;
-  kind: ArchiveEntryKind;
-}): "extract" | "skip" {
-  return (entry.kind === "file" || entry.kind === "directory") && !entry.path.includes("\\")
-    ? "extract"
-    : "skip";
+function filterDirFetchArchiveEntry(entry: { kind: ArchiveEntryKind }): "extract" | "skip" {
+  return entry.kind === "file" || entry.kind === "directory" ? "extract" : "skip";
 }
 
 function classifyArchiveFailure(error: unknown): {
@@ -135,7 +129,6 @@ export function createDirFetchTool(): AnyAgentTool {
         hardMin: 1,
         hardMax: DIR_FETCH_HARD_MAX_BYTES,
       });
-      const includeDotfiles = asBoolean(params.includeDotfiles) ?? false;
 
       const { nodeId, nodeDisplayName, payload, startedAt } = await invokeNodeToolPayload({
         node,
@@ -144,7 +137,6 @@ export function createDirFetchTool(): AnyAgentTool {
         commandParams: {
           path: dirPath,
           maxBytes,
-          includeDotfiles,
         },
         requestedPath: dirPath,
       });

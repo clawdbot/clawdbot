@@ -66,14 +66,14 @@ async function withTaskFlowMaintenanceStateDir(
     },
     async (state) => {
       resetTaskRegistryDeliveryRuntimeForTests();
-      resetTaskRegistryForTests();
-      resetTaskFlowRegistryForTests();
+      resetTaskRegistryForTests({ persist: false });
+      resetTaskFlowRegistryForTests({ persist: false });
       try {
         await run(state.stateDir);
       } finally {
         resetTaskRegistryDeliveryRuntimeForTests();
-        resetTaskRegistryForTests();
-        resetTaskFlowRegistryForTests();
+        resetTaskRegistryForTests({ persist: false });
+        resetTaskFlowRegistryForTests({ persist: false });
       }
     },
   );
@@ -83,8 +83,8 @@ describe("task-flow-registry maintenance", () => {
   afterEach(() => {
     ORIGINAL_ENV.restore();
     resetTaskRegistryDeliveryRuntimeForTests();
-    resetTaskRegistryForTests();
-    resetTaskFlowRegistryForTests();
+    resetTaskRegistryForTests({ persist: false });
+    resetTaskFlowRegistryForTests({ persist: false });
   });
 
   it("finalizes cancel-requested managed flows once no child tasks remain active", async () => {

@@ -203,6 +203,7 @@ export async function resolveSubagentChildPlan(params: {
   const requesterRuntime = resolveSandboxRuntimeStatus({
     cfg: params.cfg,
     sessionKey: params.requesterInternalKey,
+    agentId: params.requesterAgentId,
   });
   const childRuntime = resolveSandboxRuntimeStatus({
     cfg: params.cfg,
@@ -233,11 +234,15 @@ export async function resolveSubagentChildPlan(params: {
   const targetAgentDir = resolveAgentDir(params.cfg, params.targetAgentId);
   const requesterAgentConfig = resolveAgentConfig(params.cfg, params.requesterAgentId);
   const targetAgentConfig = resolveAgentConfig(params.cfg, params.targetAgentId);
-  const callerThinkingRaw = readRequesterThinkingLevel({
-    cfg: params.cfg,
-    requesterInternalKey: params.requesterInternalKey,
-    requesterAgentId: params.requesterAgentId,
-  });
+  // The active turn owns inherited effort; saved preferences may already describe
+  // a later turn and cannot represent one-shot overrides.
+  const callerThinkingRaw =
+    params.ctx.requesterThinkingLevel ??
+    readRequesterThinkingLevel({
+      cfg: params.cfg,
+      requesterInternalKey: params.requesterInternalKey,
+      requesterAgentId: params.requesterAgentId,
+    });
   const inheritedFastMode =
     params.swarmEnabled && params.request.fastMode === undefined
       ? readRequesterFastMode({
@@ -308,7 +313,7 @@ export async function resolveSubagentChildPlan(params: {
       creationPolicy: inheritSessionCreationPolicy(
         {
           sandbox: requesterRuntime.sandboxRequired ? "required" : undefined,
-          createdActor: { type: "human", id: requesterRuntime.sandboxPrincipalId },
+          createdActor: requesterRuntime.createdActor,
         },
         { type: "agent", id: params.requesterAgentId },
       ),

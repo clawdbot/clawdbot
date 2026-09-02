@@ -3,6 +3,7 @@
 import { asNullableRecord as readRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   normalizeSessionProjectionRunId,
+  readAssistantStreamSegmentIdentity,
   readSessionMessageIdentity,
   readSessionProjectionString as readNonemptyString,
   type SessionMessageEnvelope,
@@ -12,6 +13,7 @@ import { reduceSessionProjectionRunEventImpl } from "./session-projection-run-ev
 
 export {
   normalizeSessionProjectionRunId,
+  readAssistantStreamSegmentIdentity,
   readSessionMessageIdentity,
   readSessionMessageSequence,
 } from "./session-projection-message-identity.js";
@@ -239,19 +241,34 @@ function entryMatches(
   const provisionalEntry = durableEntry === left ? right : durableEntry === right ? left : null;
   const durableMetadata = readRecord(readRecord(durableEntry?.message)?.["__openclaw"]);
   if (
-    durableEntry?.live &&
-    provisionalEntry?.live &&
-    durableEntry.identity?.role === "assistant" &&
-    provisionalEntry.identity?.role === "assistant" &&
+    durableEntry?.identity?.role === "assistant" &&
+    provisionalEntry?.identity?.role === "assistant" &&
     !durableEntry.identity.isImported &&
     !provisionalEntry.identity.isImported &&
-    !provisionalEntry.identity.id &&
-    durableEntry.identity.runId &&
-    durableEntry.identity.runId === provisionalEntry.identity.runId &&
-    (readNonemptyString(durableMetadata?.mirrorOrigin) === null ||
-      durableMetadata?.runTerminal === true)
+    !provisionalEntry.identity.id
   ) {
-    return true;
+    const durableSegment = readAssistantStreamSegmentIdentity(durableEntry.message);
+    const provisionalSegment = readAssistantStreamSegmentIdentity(provisionalEntry.message);
+    // Terminal cleanup can materialize commentary before cursor history catches up.
+    // Adopt its exact item/run without joining distinct durable rows or equal prose.
+    if (
+      provisionalEntry.identity.sequence === null &&
+      durableSegment?.runId &&
+      durableSegment.runId === provisionalSegment?.runId &&
+      durableSegment.itemId === provisionalSegment.itemId
+    ) {
+      return true;
+    }
+    if (
+      durableEntry.live &&
+      provisionalEntry.live &&
+      durableEntry.identity.runId &&
+      durableEntry.identity.runId === provisionalEntry.identity.runId &&
+      (readNonemptyString(durableMetadata?.mirrorOrigin) === null ||
+        durableMetadata?.runTerminal === true)
+    ) {
+      return true;
+    }
   }
   const persisted = left.identity;
   const observed = right.identity;
@@ -295,7 +312,7 @@ function entryMatches(
     !pending.identity.isImported &&
     !authoritative.identity.isImported &&
     pending.pendingRunId &&
-    pending.pendingRunId === authoritative.identity.runId &&
+    pending.pendingRunId === (authoritative.identity.sendId ?? authoritative.identity.runId) &&
     (pending.identity.sequence === null ||
       authoritative.identity.sequence === null ||
       pending.identity.sequence === authoritative.identity.sequence),

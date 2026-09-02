@@ -99,6 +99,7 @@ type ProcessGatewayAllowlistParams = {
   command: string;
   workdir: string;
   env: Record<string, string>;
+  githubProfileDir?: string;
   pathPrepend?: string[];
   requestedEnv?: Record<string, string>;
   pty: boolean;
@@ -106,6 +107,7 @@ type ProcessGatewayAllowlistParams = {
   defaultTimeoutSec: number;
   security: ExecSecurity;
   ask: ExecAsk;
+  bypassHostApprovalFloors?: boolean;
   autoReview?: boolean;
   autoReviewer?: ExecAutoReviewer;
   signal?: AbortSignal;
@@ -493,6 +495,7 @@ export async function processGatewayAllowlist(
     agentId: params.agentId,
     security: params.security,
     ask: params.ask,
+    bypassHostApprovalFloors: params.bypassHostApprovalFloors,
     host: "gateway",
   });
   const cwdAuthorizationBound = hostSecurity === "allowlist" || hostAsk !== "off";
@@ -670,6 +673,7 @@ export async function processGatewayAllowlist(
         source: options.source,
         security: options.source === "ask-fallback" ? fallbackSecurity : hostSecurity,
         ask: hostAsk,
+        bypassHostApprovalFloors: params.bypassHostApprovalFloors,
         allowlistSatisfied: allowlistAuthorizationSatisfied || durableApprovalSatisfied,
         ...(delayedAuthorization ? { policySnapshot: evaluationPolicySnapshot } : {}),
         requireAutoAllowSkills:
@@ -1498,6 +1502,7 @@ export async function processGatewayAllowlist(
               execCommand: approvalDecision.execCommandOverride,
               workdir: params.workdir,
               env: params.env,
+              githubProfileDir: params.githubProfileDir,
               pathPrepend: params.pathPrepend,
               sandbox: undefined,
               containerWorkdir: null,
@@ -1537,7 +1542,7 @@ export async function processGatewayAllowlist(
           // Suspension must observe one side of this handoff at every instant.
           markBackgrounded(run.session);
           return { status: "started" as const, run };
-        });
+        }, "exec-host:approval");
       } catch (error) {
         if (
           error instanceof GatewayDrainingError ||

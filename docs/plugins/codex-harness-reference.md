@@ -151,8 +151,13 @@ enumeration errors, cycles, or safety-limit exhaustion. Confirmation still
 covers unknown native clients and the status-to-archive race. A supervised
 model-locked Chat cannot be deleted while it protects the native binding.
 Active sources cannot create a branch or be archived, but an existing supervised
-Chat can still be opened. Every paired-node row stays read-only; the node
-transport does not yet provide the streaming lifecycle needed by the harness.
+Chat can still be opened. Paired-node continuation requires `operator.admin`, a
+stored or idle interactive thread, and a connected node advertising and
+permitting the catalog list, transcript read, and `codex.cli.session.resume`
+commands. It binds Chat to native CLI resume on that node, not the local branch
+flow or a streaming App Server harness. Other paired-node rows remain readable,
+and paired-node archive is unavailable. See
+[paired-node limits](/plugins/codex-supervision#understand-paired-node-limits).
 
 `appServer.homeScope: "user"` alone changes which Codex home a managed harness
 process uses; it does not publish the fleet catalog. Enabling supervision does
@@ -172,7 +177,7 @@ flags, and plugin allow/deny references into this block. Explicit canonical
 ## App-server transport
 
 For ordinary harness turns, OpenClaw starts the managed Codex binary shipped
-with the official plugin (currently `@openai/codex` `0.150.1`):
+with the official plugin (currently `@openai/codex` `0.151.0`):
 
 ```bash
 codex app-server --listen stdio://
@@ -317,7 +322,7 @@ If the normal app-server runtime would be `danger-full-access`, enabling
 permission profile instead. Codex-managed network enforcement is sandboxed
 networking, so a full-access profile would not protect outbound traffic.
 
-The plugin manages stable Codex app-server `0.150.1`. Explicit custom
+The plugin manages stable Codex app-server `0.151.0`. Explicit custom
 executables, remote app-servers, and macOS desktop binaries must report a
 parseable semantic version of `0.149.0` or newer. Older, malformed, and
 unversioned handshakes are rejected. Newer versions log a compatibility warning
@@ -446,7 +451,7 @@ The stable default is fail-closed: active OpenClaw sandboxing disables native
 Codex execution surfaces that would otherwise run from the Codex app-server
 host. Use `appServer.experimental.sandboxExecServer: true` only when you want
 to try Codex's remote environment support with OpenClaw's sandbox backend.
-This preview path uses the pinned Codex `0.150.1` app-server.
+This preview path uses the pinned Codex `0.151.0` app-server.
 
 ```json5
 {
@@ -785,6 +790,13 @@ points `appServer.command` at a different Codex binary. Availability can also
 be account-scoped. Use `/codex models` on a running gateway to see the live
 catalog for that harness and account.
 
+Automatic discovery and hosted-search model selection use visible picker entries.
+Bounded turns with an explicit model selection, including image understanding,
+structured extraction, isolated completion, and settled-turn finalization, also
+look up hidden entries returned by `model/list`. The model must still be listed
+and support the required input modalities. Listing does not prove account
+entitlement.
+
 Native discovery reads `model/list` and `account/read` from the same scoped
 app-server client. An API-key account remains API-key authentication; model
 listing does not imply a ChatGPT transport or endpoint. Picker readiness is
@@ -836,30 +848,28 @@ response remains authoritative even if it contains no visible models; HTTP
 `401` and `403` return an empty catalog rather than exposing fallback models.
 
 <Note>
-The current bundled harness is `@openai/codex` `0.150.1`. A live `model/list`
-probe against the official `0.150.1` app-server returned these public picker
-rows:
+The current bundled harness is `@openai/codex` `0.151.0`. A live `model/list`
+probe against the official `0.151.0` app-server verified this public subset of
+picker rows:
 
-| Model id        | Input modalities | Reasoning efforts               |
-| --------------- | ---------------- | ------------------------------- |
-| `gpt-5.5`       | text, image      | low, medium, high, xhigh        |
-| `gpt-5.6`       | text, image      | low, medium, high, xhigh, ultra |
-| `gpt-5.6-luna`  | text, image      | low, medium, high, xhigh, ultra |
-| `gpt-5.6-terra` | text, image      | low, medium, high, xhigh, ultra |
-| `gpt-5.6-sol`   | text, image      | low, medium, high, xhigh, ultra |
-| `gpt-5.4`       | text, image      | low, medium, high, xhigh        |
-| `gpt-5.4-mini`  | text, image      | low, medium, high, xhigh        |
-| `gpt-5.3-codex` | text, image      | low, medium, high, xhigh        |
-| `gpt-5.2`       | text, image      | low, medium, high, xhigh        |
+| Model id        | Input modalities | Reasoning efforts                    |
+| --------------- | ---------------- | ------------------------------------ |
+| `gpt-5.4`       | text, image      | low, medium, high, xhigh             |
+| `gpt-5.4-mini`  | text, image      | low, medium, high, xhigh             |
+| `gpt-5.5`       | text, image      | low, medium, high, xhigh             |
+| `gpt-5.6-luna`  | text, image      | low, medium, high, xhigh, max        |
+| `gpt-5.6-sol`   | text, image      | low, medium, high, xhigh, max, ultra |
+| `gpt-5.6-terra` | text, image      | low, medium, high, xhigh, max, ultra |
 
 Available model IDs, input modalities, and reasoning efforts remain
 account-scoped. Run `/codex models` after starting or upgrading the gateway to
 inspect the actual public picker for your account.
 
-The app-server catalog can report `ultra`; OpenClaw reasoning controls for the
-Codex runtime currently expose levels through `max`. Hidden models can also
-appear in the app-server catalog for internal or specialized flows without being
-normal model-picker choices.
+OpenClaw reasoning controls preserve supported native levels, including `ultra`.
+Codex owns Ultra's proactive delegation and model-specific inference effort;
+Platform API effort metadata does not downgrade the selected runtime mode.
+Hidden models can also appear in the app-server catalog for internal or
+specialized flows without being normal model-picker choices.
 </Note>
 
 Tune discovery under `plugins.entries.codex.config.discovery`:
@@ -950,6 +960,19 @@ document budget to zero. These modes are separate inputs even when their final
 thread configuration overlaps.
 
 ## Workspace bootstrap files
+
+The full generic developer policy, including a `before_prompt_build.systemPrompt`
+replacement, remains native session configuration for compaction and native-child
+inheritance. Ordinary persistent cold or changed-configuration resumes require an
+uninterrupted managed local stdio process owner and observed native unload before OpenClaw injects the full
+current policy. Merely sending `developerInstructions` on `thread/resume` does not
+refresh the model-visible policy on stock Codex. Explicit `systemPrompt: ""` sends
+a withdrawal, not a fallback to older instructions.
+
+Ordinary incognito turns can reuse unchanged generic policy, but changed or emptied
+policy is rejected without sending another native turn or discarding the live
+conversation. Turn-scoped collaboration instructions remain a separate surface.
+See [Hook boundaries](/plugins/codex-harness-runtime#hook-boundaries) for recovery.
 
 Codex normally handles `AGENTS.md` itself through native project-doc discovery.
 OpenClaw does not write synthetic Codex project-doc files or depend on Codex

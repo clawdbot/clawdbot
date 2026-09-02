@@ -1,11 +1,9 @@
-// MCP CLI JSON failure-envelope tests cover --json error output contracts.
+import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { withTempHome } from "../config/home-env.test-harness.js";
 import {
   cleanupMcpCliTestState,
-  createWorkspace,
-  lastErrorLine,
   lastLogLine,
   mockError,
   mockLog,
@@ -13,7 +11,7 @@ import {
   runMcpCommand,
 } from "./mcp-cli.test-harness.js";
 
-describe("mcp cli --json failure envelope", () => {
+describe("mcp cli JSON failures", () => {
   beforeEach(() => {
     resetMcpCliTestState();
   });
@@ -22,39 +20,43 @@ describe("mcp cli --json failure envelope", () => {
     await cleanupMcpCliTestState();
   });
 
-  it("prints a JSON failure envelope when show --json targets an unknown server", async () => {
-    await withTempHome("openclaw-cli-mcp-home-", async (home) => {
-      const workspaceDir = await createWorkspace();
-      const configPath = path.join(home, ".openclaw", "openclaw.json");
-      vi.spyOn(process, "cwd").mockReturnValue(workspaceDir);
+  it.each(["show", "probe", "doctor"])(
+    "emits one JSON failure for an unknown server in %s",
+    async (command) => {
+      await withTempHome("openclaw-cli-mcp-json-", async () => {
+        await expect(runMcpCommand(["mcp", command, "missing", "--json"])).rejects.toThrow(
+          "__exit__:1",
+        );
 
-      mockLog.mockClear();
-      await expect(runMcpCommand(["mcp", "show", "missing", "--json"])).rejects.toThrow(
-        "__exit__:1",
-      );
-      expect(JSON.parse(lastLogLine())).toEqual({
-        ok: false,
-        error: {
-          type: "cli_error",
-          message: `No MCP server named "missing" in ${configPath}. Run openclaw mcp list to see configured servers.`,
-        },
+        expect(mockLog).toHaveBeenCalledTimes(1);
+        expect(mockError).not.toHaveBeenCalled();
+        expect(JSON.parse(lastLogLine())).toMatchObject({
+          ok: false,
+          error: {
+            type: "cli_error",
+            message: expect.stringContaining('No MCP server named "missing"'),
+          },
+        });
       });
-      expect(mockError).not.toHaveBeenCalled();
-    });
-  });
+    },
+  );
 
-  it("keeps the human stderr failure when show targets an unknown server without --json", async () => {
-    await withTempHome("openclaw-cli-mcp-home-", async (home) => {
-      const workspaceDir = await createWorkspace();
-      const configPath = path.join(home, ".openclaw", "openclaw.json");
-      vi.spyOn(process, "cwd").mockReturnValue(workspaceDir);
+  it.each(["list", "show", "status", "probe", "doctor"])(
+    "emits one JSON failure for invalid config in %s",
+    async (command) => {
+      await withTempHome("openclaw-cli-mcp-invalid-json-", async (home) => {
+        await fs.writeFile(path.join(home, ".openclaw", "openclaw.json"), "{ invalid");
+        await expect(runMcpCommand(["mcp", command, "--json"])).rejects.toThrow("__exit__:1");
 
-      mockLog.mockClear();
-      await expect(runMcpCommand(["mcp", "show", "missing"])).rejects.toThrow("__exit__:1");
-      expect(lastErrorLine()).toBe(
-        `No MCP server named "missing" in ${configPath}. Run openclaw mcp list to see configured servers.`,
-      );
-      expect(mockLog).not.toHaveBeenCalled();
-    });
-  });
+        expect(mockLog).toHaveBeenCalledTimes(1);
+        expect(JSON.parse(lastLogLine())).toEqual({
+          ok: false,
+          error: {
+            type: "cli_error",
+            message: "Config file is invalid; fix it before using MCP config commands.",
+          },
+        });
+      });
+    },
+  );
 });

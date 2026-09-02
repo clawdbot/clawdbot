@@ -321,7 +321,7 @@ export async function setCodexConversationPermissions(params: {
   if (!updated) {
     throw new Error("Codex session changed while applying the permission mode.");
   }
-  return `Codex permissions set to ${params.mode === "yolo" ? "full access" : "default"}.`;
+  return `Codex permissions set to ${params.mode === "yolo" ? "full access" : "guarded"}.`;
 }
 
 export function parseCodexFastModeArg(arg: string | undefined): boolean | undefined {

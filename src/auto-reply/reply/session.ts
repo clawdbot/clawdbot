@@ -11,6 +11,7 @@ import { clearAllCliSessions, getCliSessionBinding } from "../../agents/cli-sess
 import { resetRegisteredAgentHarnessSessions } from "../../agents/harness/registry.js";
 import { cleanupBrowserSessionsForLifecycleEnd } from "../../browser-lifecycle-cleanup.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
+import { resolveSessionParentSessionKey } from "../../channels/plugins/session-conversation.js";
 import { conversationRouteContextFromMsgContext } from "../../config/sessions/conversation-route-context.js";
 import { resolveGroupSessionKey } from "../../config/sessions/group.js";
 import {
@@ -58,11 +59,17 @@ import {
   forgetActiveSessionForShutdown,
   noteActiveSessionForShutdown,
 } from "../../gateway/active-sessions-shutdown-tracker.js";
+import {
+  captureSessionMemoryTranscript,
+  type SessionMemoryTranscript,
+} from "../../hooks/bundled/session-memory/capture.js";
+import { hasInternalHookListeners } from "../../hooks/internal-hooks.js";
 import { emitSessionAutoResetHook } from "../../hooks/session-auto-reset.js";
 import { isDiagnosticFlagEnabled } from "../../infra/diagnostic-flags.js";
 import { getSessionBindingService } from "../../infra/outbound/session-binding-service.js";
 import { deliverSessionMaintenanceWarning } from "../../infra/session-maintenance-warning.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { isPluginOwnedSessionBindingRecord } from "../../plugins/conversation-binding-metadata.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import type { PluginHookSessionEndReason } from "../../plugins/hook-types.js";
 import { runWithGatewayIndependentRootWorkContinuation } from "../../process/gateway-work-admission.js";
@@ -91,6 +98,7 @@ import {
   classifySessionStateActor,
   registerMainSessionGroupWatch,
 } from "../../sessions/session-state-events.js";
+import { assertPreparedSkillLibrarySelection } from "../../skills/library/selection.js";
 import {
   deliveryContextFromSession,
   normalizeSessionDeliveryState,
@@ -105,6 +113,7 @@ import type {
   MsgContext,
 } from "../templating.js";
 import { resolveEffectiveResetTargetSessionKey } from "./acp-reset-target.js";
+import { readBeforeResetMessages } from "./commands-reset-hooks.js";
 import { resolveConversationBindingContextFromMessage } from "./conversation-binding-input.js";
 import { normalizeInboundTextNewlines } from "./inbound-text.js";
 import { replyRunRegistry } from "./reply-run-registry.js";
@@ -187,6 +196,8 @@ export type SessionInitResult = {
   sessionEntry: SessionEntry;
   initialSessionEntry?: SessionEntry;
   previousSessionEntry?: SessionEntry;
+  previousSessionMemory?: SessionMemoryTranscript;
+  previousSessionResetMessages?: unknown[];
   sessionEntryHandle: ReplySessionEntryHandle;
   sessionStore: Record<string, SessionEntry>;
   sessionKey: string;
@@ -284,9 +295,10 @@ function resolveBoundConversationSessionKey(params: {
     return undefined;
   }
   if (params.touch !== false) {
-    getSessionBindingService().touch(binding.bindingId);
+    getSessionBindingService().touch(binding.bindingId, undefined, binding.conversation);
   }
-  return binding.targetSessionKey;
+  // Plugins own their target handoff; escaped commands still initialize the core session.
+  return isPluginOwnedSessionBindingRecord(binding) ? undefined : binding.targetSessionKey;
 }
 
 function resolveInitSessionStateAttemptContext(
@@ -295,8 +307,7 @@ function resolveInitSessionStateAttemptContext(
 ): InitSessionStateAttemptContext {
   const { cfg, ctx } = params;
   // Automated system events must not reset sessions or retarget conversation bindings.
-  const isSystemEvent =
-    ctx.Provider === "heartbeat" || ctx.Provider === "cron-event" || ctx.Provider === "exec-event";
+  const isSystemEvent = ctx.InternalTurnSource !== undefined;
   const conversationBindingContext = isSystemEvent
     ? null
     : resolveSessionConversationBindingContext(cfg, ctx);
@@ -354,6 +365,7 @@ export function resolveReplySessionPreprocessingState(
       params.cfg.session?.scope ?? "per-sender",
       attemptContext.sessionCtxForState,
       normalizeMainKey(params.cfg.session?.mainKey),
+      attemptContext.agentId,
     ),
   });
   const sessionEntry = loadReplySessionInitializationSnapshot({
@@ -575,10 +587,18 @@ async function initSessionStateAttemptLocked(
   // mtime granularity may miss rapid writes) can cause incorrect sessionId
   // generation, leading to orphaned transcript files. See #17971.
   const sessionStoreLoadStartMs = ingressTimingEnabled ? Date.now() : 0;
+  const relatedSessionKeys = [
+    buildAgentMainSessionKey({ agentId, mainKey }),
+    ctx.ParentSessionKey,
+    ctx.ModelParentSessionKey,
+    ctx.CommandTargetSessionKey,
+    resolveSessionParentSessionKey(sessionKey),
+  ].filter((key): key is string => typeof key === "string");
   const initializationSnapshot = loadReplySessionInitializationSnapshot({
     agentId,
     storePath,
     sessionKey,
+    relatedSessionKeys,
   });
   if (ingressTimingEnabled) {
     log.info(
@@ -999,11 +1019,20 @@ async function initSessionStateAttemptLocked(
       : { context: "preserve-tail", reason: continuityReason }
     : undefined;
   const resetBoundaryAppended = resetBoundary !== undefined;
+  let previousSessionMemory: SessionMemoryTranscript | undefined;
+  let previousSessionResetMessages: unknown[] | undefined;
   const committed = await commitReplySessionInitialization({
+    commitGuard: !entry
+      ? () => {
+          params.signal?.throwIfAborted();
+          assertPreparedSkillLibrarySelection(ctx.SessionCreation?.skillLibrarySelections);
+        }
+      : undefined,
     activeSessionKey: sessionKey,
     agentId,
     archivePreviousTranscript: false,
     expectedRevision: initializationSnapshot.revision,
+    relatedSessionKeys,
     maintenanceConfig,
     onArchiveError: (error, sourcePath) => {
       log.warn(
@@ -1035,9 +1064,34 @@ async function initSessionStateAttemptLocked(
       });
     },
     ...(resetBoundary ? { resetBoundary } : {}),
-    beforeEntryMutation: ({ currentEntry, sessionEntry: entryToCommit }) => {
+    beforeEntryMutation: async ({ currentEntry, sessionEntry: entryToCommit }) => {
       if (!previousSessionEntry || !currentEntry) {
         return;
+      }
+      const memoryEvent = resetTriggered ? "command" : "session";
+      const memoryAction = resetTriggered ? (previousSessionEndReason ?? "new") : "auto-reset";
+      if (hasInternalHookListeners(memoryEvent, memoryAction)) {
+        // Capture before the same-identity reset changes the visible window.
+        // Only the successful lifecycle commit publishes this bounded snapshot.
+        previousSessionMemory = captureSessionMemoryTranscript(
+          {
+            agentId,
+            sessionId: currentEntry.sessionId,
+            sessionKey,
+            storePath,
+          },
+          cfg,
+        );
+      }
+      if (resetTriggered && getGlobalHookRunner()?.hasHooks("before_reset")) {
+        // Plugin observers retain their full-message contract independently of
+        // the bounded memory excerpt. This preparation runs outside the commit.
+        previousSessionResetMessages = await readBeforeResetMessages({
+          agentId,
+          sessionId: currentEntry.sessionId,
+          sessionKey,
+          storePath,
+        });
       }
       if (resetBoundaryAppended) {
         clearAllCliSessions(entryToCommit);
@@ -1131,6 +1185,7 @@ async function initSessionStateAttemptLocked(
       agentId,
       workspaceDir: previousSessionEntry.spawnedWorkspaceDir,
       storePath,
+      previousSessionMemory,
     });
   }
 
@@ -1167,7 +1222,7 @@ async function initSessionStateAttemptLocked(
         onWarn: (message) => log.warn(message),
         onError: (error) => log.warn(`browser tab cleanup failed: ${String(error)}`),
       });
-    }).catch((error: unknown) => {
+    }, "session:browser-cleanup").catch((error: unknown) => {
       log.warn(`browser tab cleanup admission failed: ${String(error)}`);
     });
   }
@@ -1203,7 +1258,7 @@ async function initSessionStateAttemptLocked(
         });
         void runWithGatewayIndependentRootWorkContinuation(async () => {
           await hookRunner.runSessionEnd(payload.event, payload.context);
-        }).catch(() => {});
+        }, "hooks:session-end").catch(() => {});
       }
     }
 
@@ -1230,7 +1285,7 @@ async function initSessionStateAttemptLocked(
       });
       void runWithGatewayIndependentRootWorkContinuation(async () => {
         await hookRunner.runSessionStart(payload.event, payload.context);
-      }).catch(() => {});
+      }, "hooks:session-start").catch(() => {});
     }
   }
 
@@ -1242,6 +1297,8 @@ async function initSessionStateAttemptLocked(
       sessionEntryHandle,
       previousSessionEntry,
       sessionStore,
+      previousSessionMemory,
+      previousSessionResetMessages,
       sessionKey,
       sessionId: sessionId ?? crypto.randomUUID(),
       isNewSession: isFirstSessionTurn,

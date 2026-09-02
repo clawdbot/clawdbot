@@ -195,6 +195,7 @@ export function createContext(
     basePath: "",
     gateway,
     sessions,
+    placementStartup: { pause: vi.fn() },
     agents: { state: { agentsList: null }, subscribe },
     agentIdentity: { get: () => undefined, ensure: vi.fn(), subscribe },
     agentSelection: {

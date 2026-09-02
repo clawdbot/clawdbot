@@ -9,27 +9,36 @@ import { applyAuthHeaderOverride, applyLocalNoAuthHeaderOverride } from "../../m
 import { appendProgressCardSystemPrompt } from "../../progress-card-system-prompt.js";
 import type { AgentRunSessionTarget } from "../../run-session-target.js";
 import type { AgentRuntimePlan } from "../../runtime-plan/types.js";
-import { resolveSandboxContext } from "../../sandbox/context.js";
 import { resolveSessionPermissionExecMode } from "../../session-permission-exec-mode.js";
 import { resolveSessionPlacementSandbox } from "../../session-placement-admission.js";
+import { resolveSessionSkillResourceSnapshot } from "../../session-placement-skill-resources.js";
 import { createToolTerminalObserver } from "../../tool-terminal-outcome.js";
 import {
   createAdmittedGatewayToolCallerIdentity,
   withGatewayToolCallerIdentity,
 } from "../../tools/gateway-caller-context.js";
 import type { SystemAgentToolOptions } from "../../tools/system-agent-tool.js";
+import {
+  resolveSandboxSkillRuntimeInputs,
+  mapSandboxSkillUsagePaths,
+  remapSkillReferencePaths,
+} from "../sandbox-skills.js";
 import { prepareExecApprovalContinuationForAttempt } from "./attempt-exec-approval-continuation.js";
-import { prepareEmbeddedAttemptPromptExecution } from "./attempt-prompt-submit.js";
 import { applyResolvedToolPromptFinalizer } from "./attempt-prompt-support.js";
 import { resolveAttemptWorkspaceSandbox } from "./attempt-setup.js";
 import { runEmbeddedAttemptWithBackend } from "./backend.js";
-import type { RunEmbeddedAgentInternalParams } from "./internal-params.js";
+import type {
+  EmbeddedRunAttemptInternalParams,
+  RunEmbeddedAgentInternalParams,
+} from "./internal-params.js";
 import {
   EMBEDDED_RUN_LANE_HEARTBEAT_MS,
   EMBEDDED_RUN_LANE_TIMEOUT_GRACE_MS,
 } from "./lane-runtime.js";
 import type { RunEmbeddedAgentParams } from "./params.js";
+import { prepareEmbeddedAttemptPromptExecution } from "./prompt-image-preparation.js";
 import { resolveSkillWorkshopAttemptParams } from "./skill-workshop-attempt-params.js";
+import type { CodeModeRecoveryState } from "./terminal-retry-state.js";
 import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptTrajectoryRecorder } from "./types.js";
 
 type InternalRunParams = RunEmbeddedAgentInternalParams & {
@@ -117,6 +126,8 @@ type AttemptControl = {
 
 export async function dispatchEmbeddedRunAttempt(input: {
   params: InternalRunParams;
+  codeModeRecovery?: Exclude<CodeModeRecoveryState, { kind: "idle" }>;
+  permissionChange?: EmbeddedRunAttemptParams["permissionChange"];
   /** Run-owned start timestamp captured before admission; projected on recovery. */
   runStartedAtMs: number;
   runtime: AttemptRuntime;
@@ -201,26 +212,27 @@ export async function dispatchEmbeddedRunAttempt(input: {
     modelMaxTokens: runtime.model.maxTokens,
     userTurnTranscriptRecorder: params.userTurnTranscriptRecorder,
   });
-  const promptMedia = control.pluginHarnessOwnsTransport
-    ? await (async () => {
-        const workspace = await resolveAttemptWorkspaceSandbox({
-          ...params,
-          cwd: undefined,
-          sessionId: runtime.sessionId,
-          sessionKey: runtime.sessionKey,
-          workspaceDir: runtime.workspaceDir,
-        });
-        return await prepareEmbeddedAttemptPromptExecution({
-          attempt: { ...params, model: runtime.model },
-          mediaOwnerAgentId: workspace.sessionAgentId,
-          effectiveFsWorkspaceOnly: workspace.effectiveFsWorkspaceOnly,
-          effectiveWorkspace: workspace.effectiveWorkspace,
-          prompt: "",
-          sandbox: workspace.sandbox,
-          skipPromptSubmission: false,
-          pluginHarness: true,
-        });
-      })()
+  const pluginWorkspace = control.pluginHarnessOwnsTransport
+    ? await resolveAttemptWorkspaceSandbox({
+        ...params,
+        agentId: runtime.agentId,
+        cwd: undefined,
+        sessionId: runtime.sessionId,
+        sessionKey: runtime.sessionKey,
+        workspaceDir: runtime.workspaceDir,
+      })
+    : undefined;
+  const promptMedia = pluginWorkspace
+    ? await prepareEmbeddedAttemptPromptExecution({
+        attempt: { ...params, model: runtime.model },
+        mediaOwnerAgentId: pluginWorkspace.sessionAgentId,
+        effectiveFsWorkspaceOnly: pluginWorkspace.effectiveFsWorkspaceOnly,
+        effectiveWorkspace: pluginWorkspace.effectiveWorkspace,
+        prompt: "",
+        sandbox: pluginWorkspace.sandbox,
+        skipPromptSubmission: false,
+        pluginHarness: true,
+      })
     : { images: params.images, imageOrder: params.imageOrder, media: params.media };
   // Plugin harnesses own their tool materialization, so the host cannot attest
   // a message tool. Finalize conservatively instead of leaking phantom guidance.
@@ -239,12 +251,7 @@ export async function dispatchEmbeddedRunAttempt(input: {
         sessionId: runtime.sessionId,
         sessionKey: runtime.sessionKey,
         workspaceDir: runtime.workspaceDir,
-      })) ??
-      (await resolveSandboxContext({
-        config: params.config,
-        sessionKey: params.sandboxSessionKey ?? runtime.sessionKey ?? runtime.sessionId,
-        workspaceDir: runtime.workspaceDir,
-      })))
+      })) ?? pluginWorkspace?.sandbox)
     : undefined;
   if (!params.admittedRunContext) {
     throw new Error("embedded attempt reached dispatch without an admitted run context");
@@ -270,7 +277,27 @@ export async function dispatchEmbeddedRunAttempt(input: {
     sessionKey: params.sessionKey,
     toolsAllow: params.toolsAllow,
   });
-  const attemptParams: EmbeddedRunAttemptParams = {
+  let skillsSnapshot = resolveSessionSkillResourceSnapshot(params.skillsSnapshot);
+  let skillReferencePaths: import("../../../skills/types.js").SkillUsagePath[] | undefined;
+  if (
+    pluginSandbox?.enabled &&
+    !pluginSandbox.readOnlyResourceMounts?.length &&
+    skillsSnapshot?.librarySelections?.length
+  ) {
+    const prepared = resolveSandboxSkillRuntimeInputs({
+      sandbox: pluginSandbox,
+      skillsAnchorWorkspace: runtime.bootstrapWorkspaceDir ?? runtime.workspaceDir,
+      skillsSnapshot,
+    });
+    skillsSnapshot = prepared.skillsSnapshot;
+    skillReferencePaths = mapSandboxSkillUsagePaths({
+      paths: pluginSandbox.skillUsagePaths,
+      skillsWorkspaceDir: prepared.skillsWorkspaceDir,
+      skillsPromptWorkspaceDir: prepared.skillsPromptWorkspaceDir,
+    });
+  }
+  const attemptParams: EmbeddedRunAttemptInternalParams = {
+    permissionChange: input.permissionChange,
     admittedRunContext: params.admittedRunContext,
     startedAtMs: input.runStartedAtMs,
     contextEngineAgentId: runtime.contextEngineAgentId,
@@ -281,6 +308,7 @@ export async function dispatchEmbeddedRunAttempt(input: {
     conversationRecall: params.conversationRecall,
     promptCacheKey: params.promptCacheKey,
     sandboxSessionKey: params.sandboxSessionKey,
+    sandboxAgentId: params.sandboxAgentId,
     trigger: params.trigger,
     memoryFlushWritePath: params.memoryFlushWritePath,
     messageChannel: params.messageChannel,
@@ -291,6 +319,7 @@ export async function dispatchEmbeddedRunAttempt(input: {
     githubPublicationAvailable: params.githubPublicationAvailable,
     chatType: params.chatType,
     agentAccountId: params.agentAccountId,
+    conversationRoutePeerId: params.conversationRoutePeerId,
     messageTo: params.messageTo,
     messageThreadId: params.messageThreadId,
     conversationToolPolicy: params.conversationToolPolicy,
@@ -343,8 +372,11 @@ export async function dispatchEmbeddedRunAttempt(input: {
     ...(runtime.authoredContextTokenCap === undefined
       ? {}
       : { authoredContextTokenCap: runtime.authoredContextTokenCap }),
-    skillsSnapshot: params.skillsSnapshot,
-    prompt: pluginHarnessPrompt ?? preparedExecApprovalContinuation.prompt,
+    skillsSnapshot,
+    prompt: remapSkillReferencePaths(
+      pluginHarnessPrompt ?? preparedExecApprovalContinuation.prompt,
+      skillReferencePaths,
+    ),
     transcriptPrompt:
       pluginHarnessPrompt !== undefined && params.transcriptPrompt === undefined
         ? preparedExecApprovalContinuation.prompt
@@ -494,14 +526,18 @@ export async function dispatchEmbeddedRunAttempt(input: {
     // Authorized prompt enrichment needs the exact prepared turn policy identity.
     toolAuthorityFingerprint: params.toolAuthorityFingerprint,
     sessionPersistence: params.sessionPersistence,
+    // The host loop settles all completed counts, including default/SDK runs.
+    compactionCountOwner: "caller",
+    onContextAccountingEvent: params.onContextAccountingEvent,
     ...(params.systemAgentTool ? { systemAgentTool: params.systemAgentTool } : {}),
     cleanupBundleMcpOnRunEnd: params.cleanupBundleMcpOnRunEnd,
     disableMessageTool: params.disableMessageTool,
     swarmCollector: params.swarmCollector,
     swarmOutputSchema: params.swarmOutputSchema,
+    codeModeRecovery: input.codeModeRecovery,
     forceRestartSafeTools: params.forceRestartSafeTools,
-    forceCodeModeReconciliationTools: params.forceCodeModeReconciliationTools,
     forceCodeModeTools: params.forceCodeModeTools,
+    codeModeOverride: params.codeModeOverride,
     forceMessageTool: params.forceMessageTool,
     enableHeartbeatTool: params.enableHeartbeatTool,
     forceHeartbeatTool: params.forceHeartbeatTool,
@@ -520,6 +556,7 @@ export async function dispatchEmbeddedRunAttempt(input: {
     onUserMessagePersisted: control.onUserMessagePersisted,
     onUserMessagePersistenceInvalidated: control.onUserMessagePersistenceInvalidated,
     onAssistantErrorMessagePersisted: params.onAssistantErrorMessagePersisted,
+    prepareAssistantTranscriptMessage: params.prepareAssistantTranscriptMessage,
   };
   const callerIdentity = createAdmittedGatewayToolCallerIdentity({
     admittedRunContext: attemptParams.admittedRunContext,

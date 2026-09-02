@@ -259,13 +259,39 @@ describe("memory.search gateway method", () => {
     );
   });
 
-  it("qualifies results from a dirty index", async () => {
+  it("does not qualify routine pending index work as a search failure", async () => {
     const cfg = createConfig(testState.workspaceDir);
     const manager = createStubManager();
     manager.status.mockReturnValue({
       backend: "builtin",
       provider: "none",
       dirty: true,
+      custom: { searchMode: "fts-only" },
+    });
+    getActiveMemorySearchManagerCore.mockResolvedValue({ manager });
+
+    const respond = await invokeMemorySearch({ query: "hidden codeword" }, cfg);
+
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      {
+        agentId: "main",
+        provider: "none",
+        searchMode: "fts-only",
+        results: [],
+      },
+      undefined,
+    );
+  });
+
+  it("qualifies results after automatic indexing fails", async () => {
+    const cfg = createConfig(testState.workspaceDir);
+    const manager = createStubManager();
+    manager.status.mockReturnValue({
+      backend: "builtin",
+      provider: "none",
+      dirty: true,
+      lastSyncError: "embedding request timed out",
       custom: { searchMode: "fts-only" },
     });
     getActiveMemorySearchManagerCore.mockResolvedValue({ manager });
@@ -280,34 +306,9 @@ describe("memory.search gateway method", () => {
         searchMode: "fts-only",
         results: [],
         stale: true,
-        warning: "Memory index is dirty. Search results may be incomplete.",
+        warning:
+          "Memory index is stale: embedding request timed out. Search results may be incomplete.",
         action: "Run: openclaw memory status --index --agent main",
-      },
-      undefined,
-    );
-  });
-
-  it("does not qualify results while session-only catch-up is in progress", async () => {
-    const cfg = createConfig(testState.workspaceDir);
-    const manager = createStubManager();
-    manager.status.mockReturnValue({
-      backend: "builtin",
-      provider: "none",
-      dirty: true,
-      pendingSyncSources: ["sessions"],
-      custom: { searchMode: "fts-only" },
-    });
-    getActiveMemorySearchManagerCore.mockResolvedValue({ manager });
-
-    const respond = await invokeMemorySearch({ query: "hidden codeword" }, cfg);
-
-    expect(respond).toHaveBeenCalledWith(
-      true,
-      {
-        agentId: "main",
-        provider: "none",
-        searchMode: "fts-only",
-        results: [],
       },
       undefined,
     );

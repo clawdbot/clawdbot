@@ -860,7 +860,7 @@ describe("tool display details", () => {
     const detail = formatToolDetail(
       resolveToolDisplay({ name: "exec", args: { command }, detailMode: "explain" }),
     );
-    expect(detail).toBe("show <<EOF → run tests → run build");
+    expect(detail).toBe("show output → run tests → run build");
 
     expect(splitTopLevelStages("echo foo\\ #bar && npm test")).toEqual([
       "echo foo\\ #bar",
@@ -928,7 +928,7 @@ describe("tool display details", () => {
       }),
     );
 
-    expect(detail).toBe("show > → run email_preview_new → run email_preview_new");
+    expect(detail).toBe("show output → run email_preview_new → run email_preview_new");
   });
 
   it("consumes same-line heredocs in declaration order before splitting later stages", () => {

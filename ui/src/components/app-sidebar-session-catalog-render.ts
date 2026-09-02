@@ -7,6 +7,7 @@ import type {
   SessionCatalogHost,
   SessionCatalogSession,
 } from "../../../packages/gateway-protocol/src/index.ts";
+import { normalizeSessionColorValue } from "../../../packages/gateway-protocol/src/session-agent-status.js";
 import type { GatewaySessionRow } from "../api/types.ts";
 import type { NavigationRouteId } from "../app-navigation.ts";
 import { withSidebarNavCollapseIntent } from "../app-session-route-paths.ts";
@@ -176,8 +177,8 @@ function catalogErrorMessages(catalog: SessionCatalog): string[] {
 }
 
 export function renderSessionCatalogGroups(params: SessionCatalogGroupsParams) {
-  // Adopted rows reuse the live session row so activity, unread state, and
-  // the session menu behave exactly like the regular list.
+  // Adopted rows use canonical local labels and title snapshots; native catalog
+  // refreshes must not rename them or replace the regular session presentation.
   const liveRowsByKey = new Map<string, GatewaySessionRow>();
   const liveOwnerIdBySessionKey = new Map<string, string | undefined>();
   for (const row of params.liveRows) {
@@ -278,7 +279,9 @@ export function renderSessionCatalogGroups(params: SessionCatalogGroupsParams) {
                   >${collapsed ? icons.chevronRight : icons.chevronDown}</span
                 >
               </span>
-              <span class="sidebar-recent-sessions__label-text">${catalog.label}</span>
+              <span class="sidebar-recent-sessions__label-text hover-marquee"
+                >${catalog.label}</span
+              >
               ${renderCatalogHeaderStatus(hasActiveRun, hasUnread)}
               ${hasError || (collapsed && rows.length > 0)
                 ? html`<span
@@ -469,14 +472,12 @@ function renderCatalogSessionRow(
     threadId: session.threadId,
   } satisfies CatalogSessionKey;
   const identityKey = buildCatalogSessionKey(catalogKey);
-  const key = session.sessionKey ?? identityKey;
+  const key = session.sessionKey ?? buildCatalogSessionKey(catalogKey, params.newSessionAgentId);
   const menuOpen = params.isMenuOpen(catalogKey);
   const rowRef = catalogRowRef(identityKey, key, catalogKey, menuOpen, params);
   const adoptedRow = session.sessionKey ? liveRowsByKey.get(session.sessionKey) : undefined;
   if (adoptedRow) {
-    const label = session.name || session.threadId;
     return params.renderLiveRow(adoptedRow, {
-      label,
       catalogIdentityKey: identityKey,
       catalogMenuOpen: menuOpen,
       ...(rowRef ? { rowRef } : {}),
@@ -485,6 +486,7 @@ function renderCatalogSessionRow(
   }
   const label = session.name || session.threadId;
   const meta = formatSidebarTimestamp(timestamp);
+  const color = normalizeSessionColorValue(session.color ?? "");
   const routeId = "chat";
   const target = sessionNavigationTarget({
     face: routeId,
@@ -494,7 +496,7 @@ function renderCatalogSessionRow(
     mainKey: params.mainKey,
   });
   const { href, options: navigation } = target;
-  const active = params.routeSessionKey !== "" && key === params.routeSessionKey;
+  const active = key === params.routeSessionKey;
   const running = session.status === "active" || session.status === "running";
   const stateDescription = running ? t("sessionsView.activeRun") : "";
   const stateId = running ? sidebarSessionStateId(key) : undefined;
@@ -533,11 +535,12 @@ function renderCatalogSessionRow(
   return html`
     <div
       ${rowRef ? ref(rowRef) : nothing}
-      class="sidebar-recent-session session-row-host sidebar-recent-session--single-line ${active
-        ? "sidebar-recent-session--active"
-        : ""} ${projectChild ? "sidebar-recent-session--catalog-project-child" : ""} ${running
-        ? "session-row-host--running"
-        : ""}"
+      class="sidebar-recent-session session-row-host sidebar-recent-session--single-line ${color
+        ? "sidebar-recent-session--colored"
+        : ""} ${active ? "sidebar-recent-session--active" : ""} ${projectChild
+        ? "sidebar-recent-session--catalog-project-child"
+        : ""} ${running ? "session-row-host--running" : ""}"
+      style=${color ? `--session-color: var(--session-color-${color})` : nothing}
       data-session-key=${key}
       data-catalog-session-key=${identityKey}
       data-session-row-action-count="1"
@@ -570,7 +573,6 @@ function renderCatalogSessionRow(
           <span class="sidebar-recent-session__details">
             <span class="sidebar-recent-session__details-endcap">
               ${renderSessionRowBadges({
-                hasAutomation: false,
                 pullRequest: session.pullRequest,
               })}
               ${running

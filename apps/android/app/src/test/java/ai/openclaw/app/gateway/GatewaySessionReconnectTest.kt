@@ -18,6 +18,7 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.Response
 import okhttp3.WebSocket
@@ -144,17 +145,76 @@ private data class ReconnectServer(
     get() = server.requestCount
 
   fun shutdown() {
-    sockets.forEach { runCatching { it.cancel() } }
-    runCatching { server.shutdown() }
-      .onFailure { err ->
-        if (err.message != "Gave up waiting for queue to shut down") throw err
-      }
+    server.shutdown()
   }
 }
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
 class GatewaySessionReconnectTest {
+  @Test
+  fun serverAcknowledgesPeerCloseBeforeTeardown() =
+    runBlocking {
+      val opened = CompletableDeferred<Unit>()
+      val peerClosed = CompletableDeferred<Pair<Int, String>>()
+      val serverClosed = CompletableDeferred<Unit>()
+      val terminalCallbacks = AtomicInteger()
+      val server =
+        startGatewayServer(
+          json = Json,
+          onClosed = {
+            terminalCallbacks.incrementAndGet()
+            serverClosed.complete(Unit)
+          },
+        ) { _, _, _ -> }
+      val client = OkHttpClient()
+      val socket =
+        client.newWebSocket(
+          Request.Builder().url("ws://127.0.0.1:${server.port}/").build(),
+          object : WebSocketListener() {
+            override fun onOpen(
+              webSocket: WebSocket,
+              response: Response,
+            ) {
+              opened.complete(Unit)
+            }
+
+            override fun onClosed(
+              webSocket: WebSocket,
+              code: Int,
+              reason: String,
+            ) {
+              peerClosed.complete(code to reason)
+            }
+
+            override fun onFailure(
+              webSocket: WebSocket,
+              t: Throwable,
+              response: Response?,
+            ) {
+              opened.completeExceptionally(t)
+              peerClosed.completeExceptionally(t)
+            }
+          },
+        )
+
+      try {
+        withTimeout(LIFECYCLE_TEST_TIMEOUT_MS) { opened.await() }
+        assertTrue(socket.close(1000, "test complete"))
+        assertEquals(1000 to "test complete", withTimeout(LIFECYCLE_TEST_TIMEOUT_MS) { peerClosed.await() })
+        withTimeout(LIFECYCLE_TEST_TIMEOUT_MS) { serverClosed.await() }
+        server.shutdown()
+        assertEquals(1, terminalCallbacks.get())
+      } finally {
+        // A missing acknowledgment must fail the test without leaving the server writer open.
+        server.sockets.forEach { it.close(1000, "test complete") }
+        socket.cancel()
+        client.dispatcher.executorService.shutdown()
+        client.connectionPool.evictAll()
+        server.shutdown()
+      }
+    }
+
   @Test
   fun sequenceGapSignalsRecoveryBeforeAdmittingTheNextEvent() =
     runBlocking {
@@ -429,7 +489,7 @@ class GatewaySessionReconnectTest {
     runBlocking {
       val json = Json { ignoreUnknownKeys = true }
       val hello = CompletableDeferred<GatewayHelloSummary>()
-      val capabilities = setOf("session-unread-ack-contract")
+      val capabilities = setOf("session-unread-ack-contract", "session-scoped-chat-metadata")
       val server =
         startGatewayServer(json = json) { webSocket, id, method ->
           if (method == "connect") {
@@ -495,12 +555,8 @@ class GatewaySessionReconnectTest {
         connectNodeSession(harness.session, server.port)
         withTimeout(LIFECYCLE_TEST_TIMEOUT_MS) { connected.await() }
         val connection = readField<Any>(harness.session, "currentConnection")
-        val listener = readField<WebSocketListener>(connection, "listener")
         val socket = readField<WebSocket>(connection, "socket")
-        val failure =
-          launch(Dispatchers.IO) {
-            listener.onFailure(socket, IOException("test failure"), null)
-          }
+        socket.cancel()
         assertTrue(
           terminalCallbackStarted.await(LIFECYCLE_TEST_TIMEOUT_MS, TimeUnit.MILLISECONDS),
         )
@@ -511,7 +567,6 @@ class GatewaySessionReconnectTest {
 
         allowTerminalCallback.countDown()
         withTimeout(LIFECYCLE_TEST_TIMEOUT_MS) { disconnect.await() }
-        failure.join()
       } finally {
         allowTerminalCallback.countDown()
         shutdownReconnectHarness(harness, server)
@@ -608,6 +663,7 @@ class GatewaySessionReconnectTest {
       val terminalCallback = CompletableDeferred<TerminalCallbackObservation>()
       val allowTerminalCallback = CountDownLatch(1)
       val retiredInvokeCount = AtomicInteger()
+      var clientSocket: WebSocket? = null
       val server =
         startGatewayServer(json = json) { _, id, method ->
           if (method == "connect") connectRequestId.complete(id)
@@ -647,7 +703,7 @@ class GatewaySessionReconnectTest {
         val requestId = withTimeout(LIFECYCLE_TEST_TIMEOUT_MS) { connectRequestId.await() }
         val connection = readField<Any>(harness.session, "currentConnection")
         val listener = readField<WebSocketListener>(connection, "listener")
-        val socket = readField<WebSocket>(connection, "socket")
+        val socket = readField<WebSocket>(connection, "socket").also { clientSocket = it }
         listener.onMessage(socket, """{"type":"event","event":"block","payload":{}}""")
         assertTrue(blockEventStarted.await(LIFECYCLE_TEST_TIMEOUT_MS, TimeUnit.MILLISECONDS))
         listener.onMessage(
@@ -676,6 +732,8 @@ class GatewaySessionReconnectTest {
       } finally {
         allowBlockEvent.countDown()
         allowTerminalCallback.countDown()
+        // The synthetic failure bypasses OkHttp cleanup and lets the session forget this socket.
+        clientSocket?.cancel()
         shutdownReconnectHarness(harness, server)
       }
     }
@@ -691,7 +749,10 @@ class GatewaySessionReconnectTest {
       val server =
         startGatewayServer(json = json) { webSocket, id, method ->
           when (method) {
-            "connect" -> webSocket.send(connectResponseFrame(id))
+            "connect" -> {
+              webSocket.send(connectResponseFrame(id))
+            }
+
             "node.event" -> {
               receivedNodeEventCount.incrementAndGet()
               receivedNodeEvent.complete(Unit)
@@ -1220,13 +1281,17 @@ class GatewaySessionReconnectTest {
       val server =
         startGatewayServer(json = json) { webSocket, id, method ->
           when (method) {
-            "connect" -> webSocket.send(connectResponseFrame(id))
-            "question.list" ->
+            "connect" -> {
+              webSocket.send(connectResponseFrame(id))
+            }
+
+            "question.list" -> {
               webSocket.send(
                 """
                 {"type":"res","id":"$id","ok":false,"error":{"code":"FORBIDDEN","message":"permission denied","details":{"code":"MISSING_SCOPE","missingScope":"operator.questions","requiredScopes":["operator.questions"]}}}
                 """.trimIndent(),
               )
+            }
           }
         }
       val harness = createReconnectHarness(onConnected = { connected.complete(Unit) })
@@ -1320,9 +1385,16 @@ class GatewaySessionReconnectTest {
     harness: ReconnectHarness,
     vararg servers: ReconnectServer,
   ) {
-    harness.session.disconnect()
-    harness.sessionJob.cancelAndJoin()
-    servers.forEach { it.shutdown() }
+    val failures = mutableListOf<Throwable>()
+    runCatching { harness.session.disconnectAndJoin() }.exceptionOrNull()?.let(failures::add)
+    runCatching { harness.sessionJob.cancelAndJoin() }.exceptionOrNull()?.let(failures::add)
+    servers.forEach { server ->
+      runCatching { server.shutdown() }.exceptionOrNull()?.let(failures::add)
+    }
+    failures.firstOrNull()?.let { failure ->
+      failures.drop(1).forEach(failure::addSuppressed)
+      throw failure
+    }
   }
 
   private fun connectResponseFrame(
@@ -1375,7 +1447,8 @@ class GatewaySessionReconnectTest {
                     code: Int,
                     reason: String,
                   ) {
-                    onClosed()
+                    // Acknowledge the peer so MockWebServer can close both streams and drain its queue.
+                    webSocket.close(code, reason)
                   }
 
                   override fun onClosed(

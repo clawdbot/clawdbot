@@ -258,7 +258,8 @@ function primeCalendarUpdate(workspaceDir = "/tmp/workspace"): void {
   ]);
 }
 
-vi.mock("../runtime.js", () => ({
+vi.mock("../runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../runtime.js")>()),
   defaultRuntime: mocks.defaultRuntime,
 }));
 

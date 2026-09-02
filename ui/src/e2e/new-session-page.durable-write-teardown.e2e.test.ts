@@ -271,6 +271,7 @@ suite.define(() => {
       await expect.poll(() => message.inputValue()).toBe("main route draft");
 
       await page.getByRole("switch", { name: "Incognito" }).click();
+      await waitForCommittedNewSessionDraft(page, null, 0);
       await page.reload();
       await expect.poll(() => message.inputValue()).toBe("");
       await navigateInApp(page, "new-session", "?agent=writer");

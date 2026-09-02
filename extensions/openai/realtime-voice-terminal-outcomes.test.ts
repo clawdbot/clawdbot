@@ -1,6 +1,8 @@
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { RealtimeVoiceResponseOutcome } from "openclaw/plugin-sdk/realtime-voice";
+import { withTimeout } from "openclaw/plugin-sdk/text-utility-runtime";
 import { describe, expect, it } from "vitest";
 import type WebSocket from "ws";
 import { WebSocketServer } from "ws";
@@ -15,28 +17,6 @@ type CapturedOutcome = {
   connected: boolean;
 };
 
-function signal() {
-  let resolve = () => {};
-  const promise = new Promise<void>((done) => {
-    resolve = done;
-  });
-  return { promise, resolve };
-}
-
-async function waitFor(promise: Promise<void>, label: string): Promise<void> {
-  let timeout: ReturnType<typeof setTimeout> | undefined;
-  try {
-    await Promise.race([
-      promise,
-      new Promise<never>((_, reject) => {
-        timeout = setTimeout(() => reject(new Error(`timed out waiting for ${label}`)), 2_000);
-      }),
-    ]);
-  } finally {
-    clearTimeout(timeout);
-  }
-}
-
 async function capture(
   terminalEvent: Record<string, unknown>,
   options: { completeFollowup?: boolean; queueFollowup?: boolean; throwCallback?: boolean } = {},
@@ -49,10 +29,10 @@ async function capture(
     tools: [],
     connected: false,
   };
-  const responseCreated = signal();
-  const terminalProcessed = signal();
-  const followupCreated = signal();
-  const followupCompleted = signal();
+  const responseCreated = createDeferred<void>();
+  const terminalProcessed = createDeferred<void>();
+  const followupCreated = createDeferred<void>();
+  const followupCompleted = createDeferred<void>();
   const server = createServer();
   const sockets = new Set<WebSocket>();
   const wss = new WebSocketServer({ noServer: true, maxPayload: 1024 * 1024 });
@@ -122,17 +102,25 @@ async function capture(
       throw new Error("expected a connected fixture socket");
     }
     socket.send(JSON.stringify({ type: "response.created", response: { id: "response_1" } }));
-    await waitFor(responseCreated.promise, "response.created");
+    await withTimeout(responseCreated.promise, 2_000, {
+      message: "timed out waiting for response.created",
+    });
     if (options.queueFollowup) {
       bridge.sendUserMessage?.("Continue after the terminal response.");
     }
     socket.send(JSON.stringify(terminalEvent));
-    await waitFor(terminalProcessed.promise, "terminal response");
+    await withTimeout(terminalProcessed.promise, 2_000, {
+      message: "timed out waiting for terminal response",
+    });
     if (options.queueFollowup) {
-      await waitFor(followupCreated.promise, "queued response.create");
+      await withTimeout(followupCreated.promise, 2_000, {
+        message: "timed out waiting for queued response.create",
+      });
     }
     if (options.completeFollowup) {
-      await waitFor(followupCompleted.promise, "completed follow-up");
+      await withTimeout(followupCompleted.promise, 2_000, {
+        message: "timed out waiting for completed follow-up",
+      });
     }
     captured.connected = bridge.isConnected();
     return captured;

@@ -270,11 +270,20 @@ describe("package Telegram live Docker E2E", () => {
     ).rejects.toThrow("OPENCLAW_NPM_TELEGRAM_SUT_COMMAND must resolve inside NPM_CONFIG_PREFIX.");
   });
 
-  it("mounts the QA taxonomy without exposing the repository root", () => {
+  it("mounts the QA taxonomy and userbot skill without exposing the repository root", () => {
     const script = readFileSync(DOCKER_SCRIPT_PATH, "utf8");
 
     expect(script).toContain('-v "$ROOT_DIR/taxonomy.yaml:/app/taxonomy.yaml:ro"');
+    expect(script).toContain('-v "$ROOT_DIR/.agents:/app/.agents:ro"');
     expect(script).not.toContain('-v "$ROOT_DIR:/app');
+  });
+
+  it("requires Convex leases instead of static Telegram credentials", () => {
+    const script = readFileSync(DOCKER_SCRIPT_PATH, "utf8");
+
+    expect(script).toContain("Telegram package QA requires Convex credential mode.");
+    expect(script).not.toContain("OPENCLAW_QA_TELEGRAM_DRIVER_BOT_TOKEN");
+    expect(script).not.toContain("OPENCLAW_QA_TELEGRAM_SUT_BOT_TOKEN");
   });
 
   it("mounts configured output paths before entering the container", () => {
@@ -571,7 +580,16 @@ describe("package Telegram live Docker E2E", () => {
       });
       const config = {
         agents: {
-          defaults: { workspace: "/tmp/qa" },
+          defaults: {
+            workspace: "/tmp/qa",
+            models: {
+              "openai/gpt-5.6-luna": {
+                alias: "qa",
+                agentRuntime: { id: "openclaw" },
+              },
+            },
+            modelPolicy: { allow: ["openai/gpt-5.6-luna"] },
+          },
           entries: {
             qa: {
               default: true,
@@ -592,7 +610,15 @@ describe("package Telegram live Docker E2E", () => {
 
       expect(mutateConfig?.(config)).toEqual({
         agents: {
-          defaults: { workspace: "/tmp/qa" },
+          defaults: {
+            workspace: "/tmp/qa",
+            models: {
+              "openai/gpt-5.6-luna": {
+                alias: "qa",
+                agentRuntime: { id: "openclaw" },
+              },
+            },
+          },
           list: [
             {
               default: true,
@@ -640,6 +666,7 @@ describe("package Telegram live Docker E2E", () => {
             image: "mock-openai/image",
             audio: "mock-openai/audio",
           },
+          modelPolicy: { allow: ["mock-openai/qa"] },
           workspace: "/tmp/qa",
         },
         entries: {

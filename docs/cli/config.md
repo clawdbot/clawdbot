@@ -63,6 +63,16 @@ Within a batch, a submitted list keeps its order across subsequent keyed edits,
 including when agent IDs are numeric strings. Existing roster-deletion and
 `$include` ownership protections still apply.
 
+When a legacy roster expands a single-agent installation in the root config file,
+writes retire its `default` marker and preserve the existing agent's responsibilities
+with explicit owners. An explicitly authored `ownership: "explicit"` cannot be
+combined with a legacy `default: true` marker.
+
+For root-file writes, changing `session.store` clears a copied
+`agents.defaults.sessionStore.agentId` because that owner belongs to the previous
+store. To assign the destination store's owner, set that owner path explicitly in
+the same batch.
+
 ### `config get`
 
 Reads a value from the redacted config snapshot (secrets never print). `--json` prints the same redacted value as JSON; otherwise strings/numbers/booleans print bare and objects/arrays print as formatted JSON.

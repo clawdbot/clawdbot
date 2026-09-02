@@ -42,6 +42,10 @@ export class PluginLoaderCacheState<T> {
     this.#registryCache.set(cacheKey, state);
   }
 
+  deleteValue(state: T): void {
+    this.#registryCache.deleteValue(state);
+  }
+
   isLoadInFlight(cacheKey: string): boolean {
     return this.#inFlightLoads.has(cacheKey);
   }

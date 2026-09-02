@@ -34,6 +34,7 @@ on:
       - "scripts/plugin-npm-release-check.ts"
       - "scripts/plugin-npm-release-plan.ts"
       - "scripts/verify-plugin-npm-published-runtime.mts"
+      - "src/plugins/package-entrypoints.ts"
   workflow_dispatch:
     inputs:
       publish_scope:
@@ -111,6 +112,9 @@ jobs:
       matrix: ${{ steps.plan.outputs.matrix }}
       all_matrix: ${{ steps.plan.outputs.all_matrix }}
     steps:
+      - name: Prepare Git owner
+        uses: openclaw/openclaw/.github/actions/git-owner@dd4528b6393e7d00063067a080ca7241b48ce475
+
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -119,22 +123,27 @@ jobs:
           fetch-depth: 0
           filter: blob:none
 
-      - name: Checkout trusted preflight tooling
-        if: github.event_name == 'workflow_dispatch' && inputs.preflight_only
+      - name: Checkout trusted planning tooling
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           ref: ${{ github.workflow_sha }}
           path: .release-tooling
           fetch-depth: 1
-          sparse-checkout: |
-            scripts/lib/record-shared.mjs
-            scripts/release-tooling-identity.mjs
-          sparse-checkout-cone-mode: false
 
       - name: Resolve checked-out ref
         id: ref
-        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+        run: |
+          set -euo pipefail
+          exec python3 -I -S "$CI_GIT_OWNER" --policy - <<'PYTHON'
+          import os
+
+          from ci_git_owner import git_output
+
+          head_sha = git_output(os.environ["GITHUB_WORKSPACE"], "rev-parse", "HEAD").rstrip("\n")
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+              output.write(f"sha={head_sha}\n")
+          PYTHON
 
       - name: Verify trusted preflight tooling identity
         if: github.event_name == 'workflow_dispatch' && inputs.preflight_only
@@ -165,72 +174,146 @@ jobs:
           WORKFLOW_SHA: ${{ github.workflow_sha }}
         run: |
           set -euo pipefail
-          if [[ "${TRUSTED_PUBLISHER_PREFLIGHT}" == "true" && "${PREFLIGHT_ONLY}" != "true" ]]; then
-            echo "trusted_publisher_preflight requires preflight_only=true." >&2
-            exit 1
-          fi
-          if [[ "${PREFLIGHT_ONLY}" == "true" ]]; then
-            if [[ ! "${SOURCE_REF}" =~ ^[0-9a-fA-F]{40}$ ]] || [[ "$(git rev-parse HEAD)" != "$(git rev-parse "${SOURCE_REF}^{commit}")" ]]; then
-              echo "Plugin npm preflight requires ref to be the exact 40-character source SHA." >&2
-              exit 1
-            fi
-            if [[ -n "${RELEASE_PUBLISH_RUN_ID// }" || -n "${RELEASE_PUBLISH_RUN_ATTEMPT// }" ]]; then
-              echo "Plugin npm preflight must not include a release publish parent run tuple." >&2
-              exit 1
-            fi
-          fi
-          if [[ -n "${RELEASE_PUBLISH_RUN_ID// }" && ! "${RELEASE_PUBLISH_RUN_ATTEMPT}" =~ ^[1-9][0-9]*$ ]]; then
-            echo "release_publish_run_id requires the exact positive release_publish_run_attempt." >&2
-            exit 1
-          fi
-          if [[ "${NPM_DIST_TAG}" == "extended-stable" ]]; then
-            if [[ "${PUBLISH_SCOPE}" != "all-publishable" || -n "${RELEASE_PLUGINS// }" ]]; then
-              echo "Extended-stable plugin publication requires publish_scope=all-publishable without an explicit plugin list." >&2
-              exit 1
-            fi
-            if [[ ! "${SOURCE_REF}" =~ ^[0-9a-f]{40}$ ]] || [[ "$(git rev-parse HEAD)" != "$(git rev-parse "${SOURCE_REF}^{commit}")" ]]; then
-              echo "Extended-stable plugin publication requires ref to be the exact 40-character source SHA." >&2
-              exit 1
-            fi
-            package_version="$(jq -er '.version | strings' package.json)"
-            if [[ ! "${package_version}" =~ ^([0-9]{4})\.([1-9]|1[0-2])\.([1-9][0-9]*)$ ]] || (( 10#${BASH_REMATCH[3]:-0} < 33 )); then
-              echo "Extended-stable plugin publication requires a final YYYY.M.PATCH version with PATCH >= 33." >&2
-              exit 1
-            fi
-            release_year="${BASH_REMATCH[1]}"
-            release_month="${BASH_REMATCH[2]}"
-            extended_stable_branch="extended-stable/${release_year}.${release_month}.33"
-            timeout --signal=TERM --kill-after=10s 120s git fetch --no-tags origin "+refs/heads/${extended_stable_branch}:refs/remotes/origin/${extended_stable_branch}"
-            if [[ "${WORKFLOW_REF}" == "refs/heads/${extended_stable_branch}" ]] && [[ "$(git rev-parse HEAD)" == "$(git rev-parse "refs/remotes/origin/${extended_stable_branch}")" ]]; then
-              exit 0
-            fi
-            echo "Extended-stable plugin npm publishes must run from ${extended_stable_branch} at its exact branch tip." >&2
-            exit 1
-          fi
-          timeout --signal=TERM --kill-after=10s 120s git fetch --no-tags origin \
-            +refs/heads/main:refs/remotes/origin/main \
-            '+refs/heads/release/*:refs/remotes/origin/release/*'
-          if git merge-base --is-ancestor HEAD origin/main; then
-            exit 0
-          fi
-          while IFS= read -r release_ref; do
-            if git merge-base --is-ancestor HEAD "${release_ref}"; then
-              exit 0
-            fi
-          done < <(git for-each-ref --format='%(refname)' refs/remotes/origin/release)
-          if [[ "${PREFLIGHT_ONLY}" == "true" ]]; then
-            echo "Plugin npm preflight target must be reachable from main or release/*." >&2
-            exit 1
-          fi
-          if [[ "${WORKFLOW_REF}" =~ ^refs/heads/tideclaw/alpha/[0-9]{4}-[0-9]{2}-[0-9]{2}-[0-9]{4}Z$ ]]; then
-            alpha_branch="${WORKFLOW_REF#refs/heads/}"
-            timeout --signal=TERM --kill-after=10s 120s git fetch --no-tags origin "+refs/heads/${alpha_branch}:refs/remotes/origin/${alpha_branch}"
-            if git merge-base --is-ancestor HEAD "refs/remotes/origin/${alpha_branch}"; then
-              exit 0
-            fi
-          fi
-          echo "Plugin npm publishes must target a commit reachable from main, release/*, or the matching Tideclaw alpha branch." >&2
-          exit 1
+          exec python3 -I -S "$CI_GIT_OWNER" --policy - <<'PYTHON'
+          import json
+          import os
+          import re
+          import sys
+
+          from ci_git_owner import GitFailure, git_output, run_git
+
+          workspace = os.environ["GITHUB_WORKSPACE"]
+
+          def fail(message):
+              print(message, file=sys.stderr)
+              raise SystemExit(1)
+
+          def exact_ref_match(left_ref, right_ref):
+              try:
+                  left = git_output(workspace, "rev-parse", left_ref).rstrip("\n")
+                  right = git_output(workspace, "rev-parse", right_ref).rstrip("\n")
+              except GitFailure:
+                  return False
+              return left == right
+
+          def is_ancestor(ref):
+              try:
+                  run_git(workspace, "merge-base", "--is-ancestor", "HEAD", ref)
+                  return True
+              except GitFailure as error:
+                  if error.code == 1:
+                      return False
+                  raise
+
+          preflight = os.environ["PREFLIGHT_ONLY"] == "true"
+          if os.environ["TRUSTED_PUBLISHER_PREFLIGHT"] == "true" and not preflight:
+              fail("trusted_publisher_preflight requires preflight_only=true.")
+          source_ref = os.environ["SOURCE_REF"]
+          run_id = os.environ["RELEASE_PUBLISH_RUN_ID"]
+          run_attempt = os.environ["RELEASE_PUBLISH_RUN_ATTEMPT"]
+          if preflight:
+              if not re.fullmatch(r"[0-9a-fA-F]{40}", source_ref) or not exact_ref_match(
+                  "HEAD",
+                  f"{source_ref}^{{commit}}",
+              ):
+                  fail("Plugin npm preflight requires ref to be the exact 40-character source SHA.")
+              if run_id.strip() or run_attempt.strip():
+                  fail("Plugin npm preflight must not include a release publish parent run tuple.")
+          if run_id.strip() and not re.fullmatch(r"[1-9][0-9]*", run_attempt):
+              fail("release_publish_run_id requires the exact positive release_publish_run_attempt.")
+
+          if os.environ["NPM_DIST_TAG"] == "extended-stable":
+              if os.environ["PUBLISH_SCOPE"] != "all-publishable" or os.environ[
+                  "RELEASE_PLUGINS"
+              ].strip():
+                  fail(
+                      "Extended-stable plugin publication requires publish_scope=all-publishable "
+                      "without an explicit plugin list."
+                  )
+              if not re.fullmatch(r"[0-9a-f]{40}", source_ref) or not exact_ref_match(
+                  "HEAD",
+                  f"{source_ref}^{{commit}}",
+              ):
+                  fail(
+                      "Extended-stable plugin publication requires ref to be the exact "
+                      "40-character source SHA."
+                  )
+              with open(os.path.join(workspace, "package.json"), encoding="utf-8") as source:
+                  package_version = json.load(source).get("version")
+              version = (
+                  re.fullmatch(r"([0-9]{4})\.([1-9]|1[0-2])\.([1-9][0-9]*)", package_version)
+                  if isinstance(package_version, str)
+                  else None
+              )
+              if version is None or int(version.group(3)) < 33:
+                  fail(
+                      "Extended-stable plugin publication requires a final YYYY.M.PATCH version "
+                      "with PATCH >= 33."
+                  )
+              extended_branch = f"extended-stable/{version.group(1)}.{version.group(2)}.33"
+              run_git(
+                  workspace,
+                  "fetch",
+                  "--no-tags",
+                  "origin",
+                  f"+refs/heads/{extended_branch}:refs/remotes/origin/{extended_branch}",
+                  timeout=120,
+                  reclaim_locks=True,
+              )
+              if os.environ["WORKFLOW_REF"] == f"refs/heads/{extended_branch}" and exact_ref_match(
+                  "HEAD",
+                  f"refs/remotes/origin/{extended_branch}",
+              ):
+                  raise SystemExit(0)
+              fail(
+                  f"Extended-stable plugin npm publishes must run from {extended_branch} at "
+                  "its exact branch tip."
+              )
+
+          run_git(
+              workspace,
+              "fetch",
+              "--no-tags",
+              "origin",
+              "+refs/heads/main:refs/remotes/origin/main",
+              "+refs/heads/release/*:refs/remotes/origin/release/*",
+              timeout=120,
+              reclaim_locks=True,
+          )
+          if is_ancestor("origin/main"):
+              raise SystemExit(0)
+          release_refs = git_output(
+              workspace,
+              "for-each-ref",
+              "--format=%(refname)",
+              "refs/remotes/origin/release",
+          ).splitlines()
+          if any(is_ancestor(ref) for ref in release_refs):
+              raise SystemExit(0)
+          if preflight:
+              fail("Plugin npm preflight target must be reachable from main or release/*.")
+          workflow_ref = os.environ["WORKFLOW_REF"]
+          if re.fullmatch(
+              r"refs/heads/tideclaw/alpha/[0-9]{4}-[0-9]{2}-[0-9]{2}-[0-9]{4}Z",
+              workflow_ref,
+          ):
+              alpha_branch = workflow_ref.removeprefix("refs/heads/")
+              run_git(
+                  workspace,
+                  "fetch",
+                  "--no-tags",
+                  "origin",
+                  f"+refs/heads/{alpha_branch}:refs/remotes/origin/{alpha_branch}",
+                  timeout=120,
+                  reclaim_locks=True,
+              )
+              if is_ancestor(f"refs/remotes/origin/{alpha_branch}"):
+                  raise SystemExit(0)
+          fail(
+              "Plugin npm publishes must target a commit reachable from main, release/*, "
+              "or the matching Tideclaw alpha branch."
+          )
+          PYTHON
 
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
@@ -241,6 +324,7 @@ jobs:
 
       - name: Validate publishable plugin metadata
         env:
+          TSX_TSCONFIG_PATH: ${{ github.workspace }}/.release-tooling/tsconfig.json
           PUBLISH_SCOPE: ${{ github.event_name == 'workflow_dispatch' && inputs.publish_scope || '' }}
           RELEASE_PLUGINS: ${{ github.event_name == 'workflow_dispatch' && inputs.plugins || '' }}
           BASE_REF: ${{ github.event_name != 'workflow_dispatch' && github.event.before || '' }}
@@ -256,16 +340,17 @@ jobs:
             if [[ "${NPM_DIST_TAG}" == "extended-stable" ]]; then
               release_args+=(--npm-dist-tag "${NPM_DIST_TAG}")
             fi
-            pnpm release:plugins:npm:check -- "${release_args[@]}"
+            node --import tsx .release-tooling/scripts/plugin-npm-release-check.ts "${release_args[@]}"
           elif [[ -n "${BASE_REF}" ]]; then
-            pnpm release:plugins:npm:check -- --base-ref "${BASE_REF}" --head-ref "${HEAD_REF}"
+            node --import tsx .release-tooling/scripts/plugin-npm-release-check.ts --base-ref "${BASE_REF}" --head-ref "${HEAD_REF}"
           else
-            pnpm release:plugins:npm:check
+            node --import tsx .release-tooling/scripts/plugin-npm-release-check.ts
           fi
 
       - name: Resolve plugin release plan
         id: plan
         env:
+          TSX_TSCONFIG_PATH: ${{ github.workspace }}/.release-tooling/tsconfig.json
           PUBLISH_SCOPE: ${{ github.event_name == 'workflow_dispatch' && inputs.publish_scope || '' }}
           RELEASE_PLUGINS: ${{ github.event_name == 'workflow_dispatch' && inputs.plugins || '' }}
           BASE_REF: ${{ github.event_name != 'workflow_dispatch' && github.event.before || '' }}
@@ -283,11 +368,11 @@ jobs:
             if [[ "${NPM_DIST_TAG}" == "extended-stable" ]]; then
               plan_args+=(--npm-dist-tag "${NPM_DIST_TAG}")
             fi
-            node --import tsx scripts/plugin-npm-release-plan.ts "${plan_args[@]}" > .local/plugin-npm-release-plan.json
+            node --import tsx .release-tooling/scripts/plugin-npm-release-plan.ts "${plan_args[@]}" > .local/plugin-npm-release-plan.json
           elif [[ -n "${BASE_REF}" ]]; then
-            node --import tsx scripts/plugin-npm-release-plan.ts --base-ref "${BASE_REF}" --head-ref "${HEAD_REF}" > .local/plugin-npm-release-plan.json
+            node --import tsx .release-tooling/scripts/plugin-npm-release-plan.ts --base-ref "${BASE_REF}" --head-ref "${HEAD_REF}" > .local/plugin-npm-release-plan.json
           else
-            node --import tsx scripts/plugin-npm-release-plan.ts > .local/plugin-npm-release-plan.json
+            node --import tsx .release-tooling/scripts/plugin-npm-release-plan.ts > .local/plugin-npm-release-plan.json
           fi
 
           cat .local/plugin-npm-release-plan.json
@@ -672,6 +757,9 @@ jobs:
       matrix:
         plugin: ${{ fromJson(inputs.preflight_only && !inputs.trusted_publisher_preflight && needs.preview_plugins_npm.outputs.all_matrix || needs.preview_plugins_npm.outputs.matrix) }}
     steps:
+      - name: Prepare Git owner
+        uses: openclaw/openclaw/.github/actions/git-owner@dd4528b6393e7d00063067a080ca7241b48ce475
+
       - name: Checkout trusted npm preflight tooling
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -684,6 +772,43 @@ jobs:
         with:
           name: plugin-npm-package-source-${{ needs.preview_plugins_npm.outputs.ref_revision }}-${{ matrix.plugin.extensionId }}
           path: ${{ runner.temp }}/plugin-npm-preflight-readback
+
+      - name: Read exact npm preflight source package
+        env:
+          EXTENSION_ID: ${{ matrix.plugin.extensionId }}
+          PACKAGE_DIR: ${{ matrix.plugin.packageDir }}
+          SOURCE_SHA: ${{ needs.preview_plugins_npm.outputs.ref_revision }}
+        run: |
+          set -euo pipefail
+          exec python3 -I -S "$CI_GIT_OWNER" --policy - <<'PYTHON'
+          import os
+
+          from ci_git_owner import git_output, run_git
+
+          workspace = os.environ["GITHUB_WORKSPACE"]
+          source_sha = os.environ["SOURCE_SHA"]
+          run_git(
+              workspace,
+              "fetch",
+              "--no-tags",
+              "--depth=1",
+              "origin",
+              source_sha,
+              timeout=120,
+              reclaim_locks=True,
+          )
+          package_json = git_output(
+              workspace,
+              "show",
+              f"{source_sha}:{os.environ['PACKAGE_DIR']}/package.json",
+          )
+          target = os.path.join(
+              os.environ["RUNNER_TEMP"],
+              f"{os.environ['EXTENSION_ID']}-source-package.json",
+          )
+          with open(target, "w", encoding="utf-8", errors="surrogateescape") as output:
+              output.write(package_json)
+          PYTHON
 
       - name: Validate npm preflight artifact readback
         id: publication_artifact
@@ -707,10 +832,7 @@ jobs:
           RUN_ATTEMPT: ${{ github.run_attempt }}
         run: |
           set -euo pipefail
-          timeout --signal=TERM --kill-after=10s 120s git fetch --no-tags --depth=1 origin "${SOURCE_SHA}"
           source_package_json="${RUNNER_TEMP}/${EXTENSION_ID}-source-package.json"
-          git show "${SOURCE_SHA}:${PACKAGE_DIR}/package.json" > "${source_package_json}"
-
           artifacts_json="${RUNNER_TEMP}/${EXTENSION_ID}-artifacts.json"
           gh api --paginate \
             "repos/${GITHUB_REPOSITORY}/actions/runs/${RUN_ID}/artifacts?per_page=100" |
@@ -1138,6 +1260,9 @@ jobs:
       matrix:
         plugin: ${{ fromJson(needs.preview_plugins_npm.outputs.matrix) }}
     steps:
+      - name: Prepare Git owner
+        uses: openclaw/openclaw/.github/actions/git-owner@dd4528b6393e7d00063067a080ca7241b48ce475
+
       - name: Checkout trusted publication tooling
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -1150,22 +1275,18 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
 
-      - name: Consume immutable npm publication evidence
-        id: publication_evidence
+      - name: Resolve immutable npm publication artifact
         env:
           ARTIFACT_NAME_PREFIX: plugin-npm-package-${{ matrix.plugin.extensionId }}-${{ matrix.plugin.version }}
           EXTENSION_ID: ${{ matrix.plugin.extensionId }}
           GH_TOKEN: ${{ github.token }}
-          PACKAGE_DIR: ${{ matrix.plugin.packageDir }}
           PACKAGE_NAME: ${{ matrix.plugin.packageName }}
           PACKAGE_VERSION: ${{ matrix.plugin.version }}
-          PUBLISH_TAG: ${{ matrix.plugin.publishTag }}
           RELEASE_PUBLISH_PARENT_STATE_POLICY: ${{ inputs.release_publish_run_id != '' && (github.actor == 'github-actions[bot]' && 'active-or-failure' || 'manual-recovery') || '' }}
           RELEASE_PUBLISH_REF: ${{ inputs.release_publish_branch }}
           RELEASE_PUBLISH_FULL_REF: ${{ inputs.release_publish_full_ref }}
           RELEASE_PUBLISH_RUN_ATTEMPT: ${{ inputs.release_publish_run_attempt }}
           RELEASE_PUBLISH_RUN_ID: ${{ inputs.release_publish_run_id }}
-          TARGET_SHA: ${{ needs.preview_plugins_npm.outputs.ref_revision }}
           WORKFLOW_HEAD_BRANCH: ${{ github.ref_name }}
           WORKFLOW_REF: ${{ github.ref }}
           WORKFLOW_SHA: ${{ github.workflow_sha }}
@@ -1266,9 +1387,80 @@ jobs:
             "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/artifacts/${artifact_id}/zip" \
             -o "$artifact_zip"
 
-          timeout --signal=TERM --kill-after=10s 120s git fetch --no-tags --depth=1 origin "$TARGET_SHA"
+      - name: Read exact npm publication source package
+        env:
+          EXTENSION_ID: ${{ matrix.plugin.extensionId }}
+          PACKAGE_DIR: ${{ matrix.plugin.packageDir }}
+          TARGET_SHA: ${{ needs.preview_plugins_npm.outputs.ref_revision }}
+        run: |
+          set -euo pipefail
+          exec python3 -I -S "$CI_GIT_OWNER" --policy - <<'PYTHON'
+          import os
+
+          from ci_git_owner import git_output, run_git
+
+          workspace = os.environ["GITHUB_WORKSPACE"]
+          target_sha = os.environ["TARGET_SHA"]
+          run_git(
+              workspace,
+              "fetch",
+              "--no-tags",
+              "--depth=1",
+              "origin",
+              target_sha,
+              timeout=120,
+              reclaim_locks=True,
+          )
+          package_json = git_output(
+              workspace,
+              "show",
+              f"{target_sha}:{os.environ['PACKAGE_DIR']}/package.json",
+          )
+          target = os.path.join(
+              os.environ["RUNNER_TEMP"],
+              f"{os.environ['EXTENSION_ID']}-source-package.json",
+          )
+          with open(target, "w", encoding="utf-8", errors="surrogateescape") as output:
+              output.write(package_json)
+          PYTHON
+
+      - name: Consume immutable npm publication evidence
+        id: publication_evidence
+        env:
+          EXTENSION_ID: ${{ matrix.plugin.extensionId }}
+          PACKAGE_DIR: ${{ matrix.plugin.packageDir }}
+          PACKAGE_NAME: ${{ matrix.plugin.packageName }}
+          PACKAGE_VERSION: ${{ matrix.plugin.version }}
+          PUBLISH_TAG: ${{ matrix.plugin.publishTag }}
+          TARGET_SHA: ${{ needs.preview_plugins_npm.outputs.ref_revision }}
+          WORKFLOW_HEAD_BRANCH: ${{ github.ref_name }}
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
+        run: |
+          set -euo pipefail
+          artifact_metadata="${RUNNER_TEMP}/${EXTENSION_ID}-publication-artifact.json"
+          publication_matches="${RUNNER_TEMP}/${EXTENSION_ID}-publication-matches.json"
+          artifact_name="$(jq -er '.name' "$artifact_metadata")"
+          publish_route="$(jq -er '.[0].publish_route' "$publication_matches")"
+          producer_attempt="$(jq -er '.[0].producer_attempt' "$publication_matches")"
+          artifact_id="$(jq -er '.id' "$artifact_metadata")"
+          artifact_digest="$(jq -er '.digest' "$artifact_metadata")"
+          artifact_size="$(jq -er '.size_in_bytes' "$artifact_metadata")"
+          [[ "$publish_route" =~ ^npm-(oidc|token-bootstrap|mirror|tag-repair|readback)$ ]] || {
+            echo "Unsupported immutable npm publication route: ${publish_route}." >&2
+            exit 1
+          }
+          [[ "$artifact_id" =~ ^[1-9][0-9]*$ && "$artifact_digest" =~ ^sha256:[0-9a-f]{64}$ && "$artifact_size" =~ ^[1-9][0-9]*$ ]] || {
+            echo "Immutable npm publication artifact metadata is invalid." >&2
+            exit 1
+          }
+          (( artifact_size <= 268435456 )) || {
+            echo "Immutable npm publication artifact exceeds 256 MiB." >&2
+            exit 1
+          }
+          workflow_run="${RUNNER_TEMP}/${EXTENSION_ID}-publication-run.json"
+          workflow_jobs="${RUNNER_TEMP}/${EXTENSION_ID}-publication-jobs.json"
+          artifact_zip="${RUNNER_TEMP}/${EXTENSION_ID}-publication.zip"
           source_package_json="${RUNNER_TEMP}/${EXTENSION_ID}-source-package.json"
-          git show "${TARGET_SHA}:${PACKAGE_DIR}/package.json" > "$source_package_json"
           source_package_json_sha256="$(sha256sum "$source_package_json" | awk '{print $1}')"
           policy_sha256="$(sha256sum .github/workflows/plugin-npm-release.yml | awk '{print $1}')"
           output_dir="${RUNNER_TEMP}/${EXTENSION_ID}-verified-publication"
@@ -1321,24 +1513,6 @@ jobs:
           esac
 
       - name: Setup trusted publication dependencies
-        if: steps.publication_evidence.outputs.publish_route == 'npm-token-bootstrap' || steps.publication_evidence.outputs.publish_route == 'npm-readback'
-        uses: ./.github/actions/setup-node-env
-        with:
-          cache-mode: restore
-          node-version: ${{ env.NODE_VERSION }}
-          install-bun: "false"
-
-      - name: Checkout OIDC publication target
-        if: steps.publication_evidence.outputs.publish_route == 'npm-oidc'
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-          ref: ${{ needs.preview_plugins_npm.outputs.ref_revision }}
-          path: .publication-target
-          fetch-depth: 1
-
-      - name: Setup trusted OIDC packaging dependencies
-        if: steps.publication_evidence.outputs.publish_route == 'npm-oidc'
         uses: ./.github/actions/setup-node-env
         with:
           cache-mode: restore
@@ -1364,20 +1538,43 @@ jobs:
         if: steps.publication_evidence.outputs.publish_route == 'npm-oidc' && steps.npm_package_version.outputs.already_published != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
-          OPENCLAW_NPM_PUBLISH_AUTH_MODE: trusted-publisher
-          OPENCLAW_PLUGIN_NPM_PUBLISH_TAG: ${{ inputs.npm_dist_tag == 'extended-stable' && inputs.npm_dist_tag || '' }}
+          TARBALL_PATH: ${{ steps.publication_evidence.outputs.tarball_path }}
+          PUBLISH_TAG: ${{ steps.publication_evidence.outputs.publish_tag }}
           OPENCLAW_RELEASE_PUBLISH_RUN_ID: ${{ inputs.release_publish_run_id }}
           OPENCLAW_RELEASE_PUBLISH_RUN_ATTEMPT: ${{ inputs.release_publish_run_attempt }}
           OPENCLAW_RELEASE_PUBLISH_REF: ${{ inputs.release_publish_branch }}
           OPENCLAW_RELEASE_PUBLISH_FULL_REF: ${{ inputs.release_publish_full_ref }}
           OPENCLAW_RELEASE_PUBLISH_PARENT_STATE_POLICY: ${{ inputs.release_publish_run_id != '' && (github.actor == 'github-actions[bot]' && 'active-or-failure' || 'manual-recovery') || '' }}
-          OPENCLAW_RELEASE_TOOLING_ALLOW_PREVALIDATED_REF: "true"
           OPENCLAW_RELEASE_TOOLING_FULL_REF: ${{ github.ref }}
-          OPENCLAW_RELEASE_TOOLING_IDENTITY_REQUIRED: "true"
           OPENCLAW_RELEASE_TOOLING_REF: ${{ github.ref_name }}
           OPENCLAW_RELEASE_TOOLING_REPOSITORY: ${{ github.repository }}
           OPENCLAW_RELEASE_TOOLING_SHA: ${{ github.workflow_sha }}
-        run: bash scripts/plugin-npm-publish.sh --repo-root .publication-target --publish "${{ matrix.plugin.packageDir }}"
+        run: |
+          set -euo pipefail
+          unset NODE_AUTH_TOKEN NPM_TOKEN NODE_OPTIONS
+          # npm requires distinct user and global config sources, even when both are empty.
+          npmrc="$(mktemp "${RUNNER_TEMP}/plugin-npm-oidc.XXXXXX")"
+          trap 'rm -f "$npmrc"' EXIT
+          # Publish the attested bytes; rebuilding here loses the candidate's patched install.
+          node scripts/release-tooling-identity.mjs verify \
+            --repository "$OPENCLAW_RELEASE_TOOLING_REPOSITORY" \
+            --workflow-ref "$OPENCLAW_RELEASE_TOOLING_REF" \
+            --workflow-full-ref "$OPENCLAW_RELEASE_TOOLING_FULL_REF" \
+            --workflow-sha "$OPENCLAW_RELEASE_TOOLING_SHA" \
+            --release-publish-run-id "$OPENCLAW_RELEASE_PUBLISH_RUN_ID" \
+            --release-publish-run-attempt "$OPENCLAW_RELEASE_PUBLISH_RUN_ATTEMPT" \
+            --release-publish-ref "$OPENCLAW_RELEASE_PUBLISH_REF" \
+            --release-publish-full-ref "$OPENCLAW_RELEASE_PUBLISH_FULL_REF" \
+            --release-publish-parent-state-policy "$OPENCLAW_RELEASE_PUBLISH_PARENT_STATE_POLICY" \
+            --allow-prevalidated-ref
+          NPM_CONFIG_USERCONFIG="$npmrc" \
+            NPM_CONFIG_GLOBALCONFIG=/dev/null \
+            NPM_CONFIG_REGISTRY=https://registry.npmjs.org/ \
+            timeout --signal=TERM --kill-after=10s 300s npm publish "$TARBALL_PATH" \
+              --access public \
+              --ignore-scripts \
+              --provenance \
+              --tag "$PUBLISH_TAG"
 
       - name: Verify OIDC published runtime
         if: steps.publication_evidence.outputs.publish_route == 'npm-oidc'

@@ -472,7 +472,7 @@ async function resolveCodexBoundedTurnModel(params: {
 }): Promise<{ catalogId: string; runtimeModelId: string }> {
   const result = await params.client.request<unknown>(
     "model/list",
-    { limit: null, cursor: null, includeHidden: false },
+    { limit: null, cursor: null, includeHidden: params.selection.mode === "required" },
     { timeoutMs: Math.min(params.timeoutMs, 5_000), signal: params.signal },
   );
   const listed = readModelListResult(result).models;

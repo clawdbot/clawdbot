@@ -1,19 +1,25 @@
 // Doctor config-flow steps for legacy compatibility and unknown-key cleanup.
 import { isDeepStrictEqual } from "node:util";
+import { restoreEnvVarRefs } from "../../../config/env-preserve.js";
+import { resolveConfigIncludes } from "../../../config/includes.js";
+import { projectAuthoredAgentRosterForWrite } from "../../../config/io.write-prepare.js";
 import { formatConfigIssueLines } from "../../../config/issue-format.js";
+import { createMergePatch } from "../../../config/merge-patch.js";
+import { resolveIncludeRoots } from "../../../config/paths.js";
+import type { ConfigFileSnapshot, OpenClawConfig } from "../../../config/types.openclaw.js";
 import { protectActiveAuthProfileConfig } from "../../doctor-auth-profile-config.js";
 import { stripUnknownConfigKeys } from "../../doctor-config-analysis.js";
-import type { DoctorConfigPreflightResult } from "../../doctor-config-preflight.js";
 import type { DoctorConfigMutationState } from "./config-mutation-state.js";
 import {
   classifyOtelGrpcMigrationOwnership,
   containsAuthoredInclude,
 } from "./include-migration-ownership.js";
+import { applyLegacyDoctorMigrations } from "./legacy-config-compat.js";
 import { migrateLegacyConfig } from "./legacy-config-migrate.js";
 
 /** Apply legacy config migrations and update preview/fix state for doctor config flow. */
 export function applyLegacyCompatibilityStep(params: {
-  snapshot: DoctorConfigPreflightResult["snapshot"];
+  snapshot: ConfigFileSnapshot;
   state: DoctorConfigMutationState;
   shouldRepair: boolean;
   doctorFixCommand: string;
@@ -132,4 +138,34 @@ export function applyUnknownConfigKeyStep(params: {
     repairs: protectedAuth.repairs,
     warnings: protectedAuth.warnings,
   };
+}
+
+/** Restore references moved by Doctor while keeping resolved values for its state repairs. */
+export function restoreDoctorConfigEnvRefs(
+  candidate: OpenClawConfig,
+  snapshot: ConfigFileSnapshot,
+  env?: NodeJS.ProcessEnv,
+): OpenClawConfig {
+  const authored = resolveConfigIncludes(snapshot.parsed, snapshot.path, undefined, {
+    allowedRoots: resolveIncludeRoots(env),
+  });
+  // The roster key must use the resolved identity from this same snapshot, while
+  // migrated leaves retain authored references for the canonical writer to match.
+  const canonicalAuthored = projectAuthoredAgentRosterForWrite({
+    rootAuthoredConfig: authored,
+    sourceConfigBeforeMigrations: snapshot.sourceConfigBeforeMigrations,
+  });
+  const migrated = applyLegacyDoctorMigrations(canonicalAuthored, {
+    authoredRaw: snapshot.parsed,
+    resolvedRaw: snapshot.sourceConfig,
+  });
+  // Only moved references need help here. The writer owns unchanged paths, and
+  // value comparison prevents restoring an alias that Doctor deliberately changed.
+  const restored = restoreEnvVarRefs(
+    candidate,
+    createMergePatch(authored, migrated.next ?? canonicalAuthored),
+    env,
+  );
+  // SAFETY: Restoring string leaves preserves the candidate's config structure.
+  return restored as OpenClawConfig;
 }

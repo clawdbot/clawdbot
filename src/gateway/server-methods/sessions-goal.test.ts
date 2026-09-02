@@ -189,7 +189,7 @@ describe("typed Goal management RPCs", () => {
         const viewer = ensureProfileForEmail("goal-viewer@example.test");
         await seedSession({
           visibility: "read-only",
-          createdActor: { type: "human", id: owner.id },
+          createdActor: { type: "human", source: "profile", id: owner.id },
         });
         const request = operation(method === "sessions.goal.clear" ? "clear" : "resume");
         const readOnly = await invoke(request, {

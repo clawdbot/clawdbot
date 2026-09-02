@@ -2,6 +2,7 @@
 import { type ChildProcess, execFileSync, spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
+  copyFileSync,
   existsSync,
   linkSync,
   mkdirSync,
@@ -13,10 +14,11 @@ import {
   symlinkSync,
   writeFileSync,
 } from "node:fs";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
+import { buildSystemdUnit } from "../../src/daemon/systemd-unit.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -30,6 +32,7 @@ const OPENCLAW_E2E_INSTANCE_HELPER_PATH = "scripts/lib/openclaw-e2e-instance.sh"
 const COMPOSE_SETUP_E2E_PATH = "scripts/e2e/compose-setup.sh";
 const CLI_INSTALLER_DISTRIBUTION_E2E_PATH = "scripts/e2e/cli-installer-distribution-docker.sh";
 const DOCKER_PACKAGE_INSTALL_E2E_PATH = "scripts/e2e/docker-package-install.sh";
+// Preserve the published 2026.8.1 query; the systemd fixture tests use the current reader.
 const SURVIVOR_SERVICE_SHOW_ARGS = [
   "--user",
   "show",
@@ -365,7 +368,10 @@ function writeTermIgnoringDescendant(workDir: string): string {
     descendantPath,
     `import fs from "node:fs";
 process.on("SIGTERM", () => {});
-fs.writeFileSync(process.env.DESCENDANT_PID_FILE, String(process.pid));
+// Readers use file existence as readiness; publish the complete PID atomically.
+const pendingPid = process.env.DESCENDANT_PID_FILE + ".pending";
+fs.writeFileSync(pendingPid, String(process.pid));
+fs.renameSync(pendingPid, process.env.DESCENDANT_PID_FILE);
 setInterval(() => {}, 1_000);
 `,
   );
@@ -380,10 +386,7 @@ async function forEachUpgradeSurvivorSystemctlShim(
   }) => void | Promise<void>,
   targetPid?: number,
 ): Promise<void> {
-  for (const scriptPath of [
-    UPGRADE_SURVIVOR_RUN_SCRIPT,
-    UPGRADE_SURVIVOR_UPDATE_RESTART_AUTH_PATH,
-  ]) {
+  for (const scriptPath of [UPGRADE_SURVIVOR_UPDATE_RESTART_AUTH_PATH]) {
     const workDir = tempDirs.make("openclaw-systemctl-shim-");
     const binDir = join(workDir, "bin");
     const pidPath = join(workDir, "gateway.pid");
@@ -616,12 +619,78 @@ fi
     expect(runner).toContain('-v "$DOCKER_SOCKET:/var/run/docker.sock"');
     expect(runner).toContain('-v "$SCENARIO_ROOT:$SCENARIO_ROOT"');
     expect(runner).toContain("scripts/docker/sandbox/Dockerfile.browser");
-    expect(runner).toContain("remove_prefixed_containers");
     expect(scenario).toContain('from "openclaw/plugin-sdk/agent-harness-runtime"');
-    expect(scenario).toContain("Promise.all([");
     expect(scenario).toContain('"sandbox", "list", "--browser", "--json"');
-    expect(scenario).toContain('"sandbox", "recreate", "--browser", "--session"');
     expect(scenario).not.toMatch(/from\s+["'][.]{1,2}\/.*src\//u);
+  });
+
+  it("cleans only the sidecar task's containers when the runner exits early", () => {
+    const workDir = realpathSync(tempDirs.make("openclaw-sidecar-cleanup-"));
+    const binDir = join(workDir, "bin");
+    const scenarioRoot = join(workDir, "scenario");
+    const buildRoot = join(workDir, "build");
+    const containersPath = join(workDir, "containers.json");
+    const sessionKey = "agent:main:sandbox-browser-sidecar";
+    const workspaceHash = createHash("sha256")
+      .update(join(scenarioRoot, "workspace"))
+      .digest("hex")
+      .slice(0, 32);
+    const scopeKey = `${sessionKey}:workspace:${workspaceHash}`;
+    const unrelated = { name: "other-workspace", scopeKey: `${sessionKey}:workspace:other` };
+    writeFileSync(
+      containersPath,
+      JSON.stringify([
+        { name: "short-normal-sandbox", scopeKey },
+        { name: "short-browser-sidecar", scopeKey },
+        unrelated,
+      ]),
+    );
+    writeExecutables(binDir, {
+      mktemp: `#!/usr/bin/env node
+const fs = require("node:fs");
+const args = process.argv.slice(2);
+const template = args.at(-1);
+const target = template.includes("sandbox-browser-sidecar-build.")
+  ? ${JSON.stringify(buildRoot)}
+  : template.includes("sandbox-browser-sidecar.") ? ${JSON.stringify(scenarioRoot)} : undefined;
+if (target) {
+  fs.mkdirSync(target, { recursive: true });
+  console.log(target);
+} else {
+  process.stdout.write(require("node:child_process").execFileSync("/usr/bin/mktemp", args));
+}
+`,
+      docker: `#!/usr/bin/env node
+const fs = require("node:fs");
+const file = ${JSON.stringify(containersPath)};
+const containers = JSON.parse(fs.readFileSync(file, "utf8"));
+const args = process.argv.slice(2);
+if (args[0] === "ps") {
+  const filterIndex = args.indexOf("--filter");
+  const filter = filterIndex < 0 ? undefined : args[filterIndex + 1];
+  for (const container of containers) {
+    if (!filter || filter === "label=openclaw.sessionKey=" + container.scopeKey) console.log(container.name);
+  }
+} else if (args[0] === "rm") {
+  fs.writeFileSync(file, JSON.stringify(containers.filter((container) => !args.slice(1).includes(container.name))));
+}
+`,
+    });
+
+    const result = spawnSync("bash", [SANDBOX_BROWSER_SIDECAR_DOCKER_E2E_PATH], {
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        PATH: `${binDir}:${process.env.PATH ?? ""}`,
+        OPENCLAW_DOCKER_SOCKET: join(workDir, "missing.sock"),
+      },
+    });
+
+    expect(result.status, result.stderr).toBe(1);
+    expect(result.stderr).toContain("Docker socket not found:");
+    expect(JSON.parse(readFileSync(containersPath, "utf8"))).toEqual([unrelated]);
+    expect(existsSync(scenarioRoot)).toBe(false);
+    expect(existsSync(buildRoot)).toBe(false);
   });
 
   it("gives cleanup-smoke builds enough Node heap while preserving explicit callers", () => {
@@ -911,7 +980,7 @@ print_log_tail "$LOG_PATH"
 
     expect(buildIndex).toBeGreaterThanOrEqual(0);
     expect(unsetIndex).toBeGreaterThan(buildIndex);
-    expect(script).toContain("host/testbox mode flags that can change packaged behavior");
+    expect(unsetIndex).toBeLessThan(script.indexOf("docker_e2e_run_with_harness"));
   });
 
   it("wraps centralized Docker builds with the timeout helper", () => {
@@ -2765,24 +2834,13 @@ docker_e2e_docker_run_cmd run demo
       expect(script).not.toContain('\nexport FEISHU_APP_SECRET="upgrade-survivor-feishu-secret"\n');
     }
     expectTextToIncludeAll(publishedRunner, [
-      "park_prepublish_authored_config",
-      "park-prepublish",
+      "park-restart-probe",
       "assert_prepublish_fixture_idle",
       "assert-no-requests",
-      "restore_prepublish_authored_config",
       "config-parking.mjs",
       "'^(GATEWAY_AUTH_TOKEN_REF|OPENCLAW_CLAWHUB_URL)='",
       "OPENCLAW_CLAWHUB_URL=%s",
     ]);
-    expect(publishedRunner.indexOf("park_prepublish_authored_config")).toBeLessThan(
-      publishedRunner.lastIndexOf("assert_prepublish_fixture_idle"),
-    );
-    expect(publishedRunner.lastIndexOf("assert_prepublish_fixture_idle")).toBeLessThan(
-      publishedRunner.lastIndexOf("restore_prepublish_authored_config"),
-    );
-    expect(publishedRunner.lastIndexOf("restore_prepublish_authored_config")).toBeLessThan(
-      publishedRunner.lastIndexOf("write_update_restart_service_env"),
-    );
     for (const script of [runner, updateRestartAuth]) {
       expect(script).not.toContain("assert-no-requests");
     }
@@ -2835,18 +2893,19 @@ docker_e2e_docker_run_cmd run demo
     expect(inner.status, inner.stderr).toBe(0);
   });
 
-  it("selects the live model test runner shipped by the staged candidate", () => {
+  it("routes staged live suites through the candidate entrypoint resolver", () => {
     for (const scriptPath of [
+      "scripts/test-live-acp-bind-docker.sh",
+      "scripts/test-live-cli-backend-docker.sh",
+      "scripts/test-live-codex-harness-docker.sh",
       "scripts/test-live-gateway-models-docker.sh",
       "scripts/test-live-models-docker.sh",
+      "scripts/test-live-subagent-announce-docker.sh",
     ]) {
       const script = readFileSync(scriptPath, "utf8");
-      const legacyRunnerIndex = script.indexOf("node scripts/test-live.mjs --");
-      const currentRunnerIndex = script.indexOf("node --import tsx scripts/test-live.mts --");
 
-      expect(script).toContain("if [[ -f scripts/test-live.mjs ]]; then");
-      expect(legacyRunnerIndex).toBeGreaterThan(-1);
-      expect(currentRunnerIndex).toBeGreaterThan(legacyRunnerIndex);
+      expect(script).toContain("openclaw_live_run_staged_script scripts/test-live --");
+      expect(script).not.toContain("node --import tsx scripts/test-live.mts --");
     }
   });
 
@@ -3055,6 +3114,45 @@ docker_e2e_docker_run_cmd run demo
     }
   });
 
+  it("propagates HTTP probe failures through command substitution", () => {
+    const source = readFileSync(UPGRADE_SURVIVOR_RUN_SCRIPT, "utf8");
+    const probeStart = source.indexOf("probe_gateway_endpoint() {");
+    const probe = source.slice(probeStart, source.indexOf("\nstart_gateway()", probeStart));
+    for (const exitCode of [0, 43]) {
+      const result = spawnSync(
+        "bash",
+        [
+          "-c",
+          `set -eu
+node() {
+  if [ "$1" = scripts/e2e/lib/upgrade-survivor/probe-gateway.mjs ]; then
+    return "$SURVIVOR_TEST_PROBE_EXIT"
+  fi
+  command "$SURVIVOR_TEST_NODE" "$@"
+}
+${probe}
+seconds="$(probe_gateway_endpoint /healthz live unused.json)"
+printf '%s\\n' "$seconds"
+`,
+        ],
+        {
+          encoding: "utf8",
+          env: {
+            ...process.env,
+            SURVIVOR_TEST_NODE: process.execPath,
+            SURVIVOR_TEST_PROBE_EXIT: String(exitCode),
+          },
+        },
+      );
+      expect(result.status, result.stderr).toBe(exitCode);
+      if (exitCode === 0) {
+        expect(result.stdout).toMatch(/^\d+\n$/);
+      } else {
+        expect(result.stdout).toBe("");
+      }
+    }
+  });
+
   it("records an interrupted upgrade survivor phase as failed", async () => {
     const workDir = tempDirs.make("openclaw-upgrade-survivor-signal-");
     const binDir = join(workDir, "bin");
@@ -3252,9 +3350,6 @@ fi
       'budget="$(openclaw_e2e_read_positive_int_env OPENCLAW_UPGRADE_SURVIVOR_STATUS_BUDGET_SECONDS 30)"',
     );
     expect(publishedRunner).toContain(
-      'openclaw_e2e_maybe_timeout "$COMMAND_TIMEOUT" env -u OPENCLAW_GATEWAY_TOKEN',
-    );
-    expect(publishedRunner).toContain(
       'openclaw_e2e_maybe_timeout "$COMMAND_TIMEOUT" openclaw --version',
     );
     expect(publishedRunner).toContain(
@@ -3267,8 +3362,9 @@ fi
       'openclaw_e2e_maybe_timeout "$COMMAND_TIMEOUT" "${root_cli_env[@]}" openclaw',
     );
     expect(publishedRunner).toContain(
-      'openclaw_e2e_maybe_timeout "$COMMAND_TIMEOUT" openclaw doctor --fix --non-interactive',
+      'openclaw_e2e_maybe_timeout "$COMMAND_TIMEOUT" openclaw update repair',
     );
+    expect(publishedRunner).toContain("--accept-capabilities --yes --no-restart --json");
     expect(publishedRunner).toContain(
       'openclaw_e2e_maybe_timeout "$COMMAND_TIMEOUT" openclaw config validate',
     );
@@ -3276,21 +3372,213 @@ fi
       'openclaw_e2e_maybe_timeout "$COMMAND_TIMEOUT" openclaw gateway status',
     );
     expect(publishedRunner).toContain('openclaw gateway --port "$port" --bind loopback');
-    expect(publishedRunner).toContain("start_gateway legacy-ready-log-ok");
-    expect(publishedRunner).toContain(
-      'openclaw_e2e_wait_gateway_ready "$gateway_pid" "$GATEWAY_LOG" 360 "$port" "${1:-strict}"',
-    );
 
     expect(updateRestartAuth).toContain(
       'command_timeout="${OPENCLAW_UPGRADE_SURVIVOR_COMMAND_TIMEOUT:-900s}"',
     );
-    expect(updateRestartAuth).toContain(
-      'openclaw_e2e_maybe_timeout "$command_timeout" env -u OPENCLAW_GATEWAY_TOKEN',
+    expectTextToIncludeAll(updateRestartAuth, [
+      "command=(env -u OPENCLAW_GATEWAY_TOKEN -u OPENCLAW_GATEWAY_PASSWORD openclaw gateway install --force --json)",
+      'openclaw_e2e_maybe_timeout "$command_timeout" "${command[@]}"',
+    ]);
+  });
+
+  it.skipIf(process.platform !== "linux").each(["published", "current"])(
+    "starts the %s auth probe under the manager that owns its restart and stop",
+    async (lane) => {
+      const workDir = tempDirs.make("survivor-managed-probe-");
+      const artifacts = join(workDir, "artifacts");
+      const stateDir = join(workDir, "state");
+      mkdirSync(artifacts);
+      mkdirSync(stateDir);
+      const configPath = join(stateDir, "openclaw.json");
+      const authored = '{"gateway":{"mode":"local","port":18789},"channels":{"whatsapp":{}}}\n';
+      writeFileSync(configPath, authored);
+      const childPath = join(workDir, "listener.mjs");
+      const startsPath = join(workDir, "starts.jsonl");
+      const portPath = join(workDir, "port");
+      writeFileSync(
+        childPath,
+        `import fs from "node:fs";
+import http from "node:http";
+const identity = { pid: process.pid, managed: process.env.OPENCLAW_SYSTEMD_UNIT === "openclaw-gateway.service" };
+const server = http.createServer((_req, res) => res.end(JSON.stringify(identity)));
+const port = fs.existsSync(process.env.PORT_FILE) ? Number(fs.readFileSync(process.env.PORT_FILE, "utf8")) : 0;
+server.listen(port, "127.0.0.1", () => {
+  fs.writeFileSync(process.env.PORT_FILE, String(server.address().port));
+  fs.appendFileSync(process.env.STARTS_FILE, JSON.stringify(identity) + "\\n");
+  console.log("[gateway] ready on 127.0.0.1:" + server.address().port);
+});
+`,
+      );
+      const executable = join(workDir, "bin", "openclaw");
+      const stagedUnit = join(workDir, "staged.service");
+      writeFileSync(
+        stagedUnit,
+        buildSystemdUnit({
+          programArguments: [process.execPath, executable, "gateway"],
+          environment: { OPENCLAW_SYSTEMD_UNIT: "openclaw-gateway.service" },
+        }),
+      );
+      writeExecutables(join(workDir, "bin"), {
+        openclaw: `#!${process.execPath}
+const fs = require("node:fs"), path = require("node:path"), { spawn, spawnSync } = require("node:child_process");
+if (process.argv[2] === "doctor") process.exit(0);
+if (process.argv[3] === "install") {
+  const unit = path.join(process.env.HOME, ".config/systemd/user/openclaw-gateway.service");
+  fs.mkdirSync(path.dirname(unit), { recursive: true });
+  fs.copyFileSync(process.env.STAGED_UNIT, unit);
+  for (const args of [["daemon-reload"], ["enable", "openclaw-gateway.service"], ["restart", "openclaw-gateway.service"]]) {
+    const result = spawnSync("systemctl", ["--user", ...args], { stdio: "inherit" });
+    if (result.status !== 0) process.exit(result.status ?? 1);
+  }
+  process.exit(0);
+}
+const child = spawn(process.execPath, [process.env.LISTENER_SCRIPT], { stdio: "inherit" });
+child.once("exit", () => process.exit(0));
+// A wrapper exit must not strand the listening child outside its service owner.
+process.on("SIGTERM", () => {
+  if (!process.env.OPENCLAW_SYSTEMD_UNIT) process.exit(0);
+});
+`,
+      });
+      const env = {
+        ...process.env,
+        HOME: workDir,
+        PATH: `${join(workDir, "bin")}:${process.env.PATH}`,
+        npm_config_prefix: workDir,
+        OPENCLAW_STATE_DIR: stateDir,
+        OPENCLAW_CONFIG_PATH: configPath,
+        OPENCLAW_UPGRADE_SURVIVOR_BASELINE: "openclaw@2026.3.13",
+        OPENCLAW_UPGRADE_SURVIVOR_UPDATE_RESTART_MODE: "auto-auth",
+        OPENCLAW_UPGRADE_SURVIVOR_RUNTIME_ROOT: join(workDir, "runtime"),
+        OPENCLAW_UPGRADE_SURVIVOR_SUMMARY_JSON: join(artifacts, "summary.json"),
+        OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_PID_FILE: join(artifacts, "systemctl-shim.pid"),
+        OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_LOG: join(artifacts, "systemctl-shim.log"),
+        OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_DAEMON_LOG: join(
+          artifacts,
+          "systemctl-shim-gateway.log",
+        ),
+        OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SERVICE_INSTALL_JSON: join(artifacts, "install.json"),
+        OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SERVICE_INSTALL_ERR: join(artifacts, "install.err"),
+        OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR: join(workDir, "registry"),
+        GATEWAY_AUTH_TOKEN_REF: "survivor-fixture-token",
+        STAGED_UNIT: stagedUnit,
+        LISTENER_SCRIPT: childPath,
+        STARTS_FILE: startsPath,
+        PORT_FILE: portPath,
+      };
+      const source = readFileSync(UPGRADE_SURVIVOR_RUN_SCRIPT, "utf8");
+      const setup =
+        lane === "published"
+          ? source.slice(0, source.indexOf("phase storage-preflight"))
+          : `source ${shellQuote(OPENCLAW_E2E_INSTANCE_HELPER_PATH)}\nsource ${shellQuote(UPGRADE_SURVIVOR_UPDATE_RESTART_AUTH_PATH)}`;
+      const script = `${setup}
+trap - EXIT ERR INT TERM
+seed_update_restart_probe_device_auth() { :; }
+assert_prepublish_fixture_idle() { :; }
+assert_baseline_state() { :; }
+check_gateway_status() { :; }
+# This fixture chooses an ephemeral port; retain the actual readiness implementation.
+eval "$(declare -f openclaw_e2e_wait_gateway_ready | sed '1s/openclaw_e2e_wait_gateway_ready/fixture_wait_gateway_ready/')"
+openclaw_e2e_wait_gateway_ready() {
+  for _ in {1..200}; do [ -s "$PORT_FILE" ] && break; sleep 0.01; done
+  fixture_wait_gateway_ready "$1" "$2" 20 "$(cat "$PORT_FILE")" "\${5:-strict}"
+}
+${lane === "published" ? "prepare_update_restart_probe" : 'prepare_update_restart_probe_current_install 18789 "$OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_DAEMON_LOG"'}
+`;
+      const systemctlPath = join(
+        lane === "published" ? join(artifacts, "npm-prefix") : workDir,
+        "bin",
+        "systemctl",
+      );
+      const systemctl = (...args: string[]) =>
+        spawnSync(systemctlPath, ["--user", ...args], {
+          env,
+          encoding: "utf8",
+          timeout: 40_000,
+        });
+      const records = (): Array<{ pid: number; managed: boolean }> =>
+        existsSync(startsPath)
+          ? readFileSync(startsPath, "utf8")
+              .split("\n")
+              .slice(0, -1)
+              .filter(Boolean)
+              .map((line) => JSON.parse(line))
+          : [];
+      try {
+        const result = spawnSync("bash", ["-c", script], {
+          env,
+          encoding: "utf8",
+          timeout: 45_000,
+        });
+        expect(result.status, result.stdout + result.stderr).toBe(0);
+        expect(readFileSync(configPath, "utf8")).toBe(authored);
+        const url = `http://127.0.0.1:${readFileSync(portPath, "utf8")}/readyz`;
+        if (lane === "published") {
+          expect(systemctl("is-active", "openclaw-gateway.service").status).toBe(3);
+          expect(records()).toHaveLength(1);
+          expect(isProcessRunning(records()[0]!.pid)).toBe(false);
+          await expect(fetch(url, { signal: AbortSignal.timeout(1_000) })).rejects.toThrow();
+          expect(systemctl("start", "openclaw-gateway.service").status).toBe(0);
+          for (let attempt = 0; attempt < 200 && records().length < 2; attempt++) await delay(10);
+          expect(records()).toHaveLength(2);
+        }
+        const initial = (await (
+          await fetch(url, { signal: AbortSignal.timeout(1_000) })
+        ).json()) as { pid: number; managed: boolean };
+        expect(initial.managed).toBe(true);
+        expect(systemctl("restart", "openclaw-gateway.service").status).toBe(0);
+        const expectedStarts = lane === "published" ? 3 : 2;
+        for (let attempt = 0; attempt < 200 && records().length < expectedStarts; attempt++)
+          await delay(10);
+        expect(records()).toHaveLength(expectedStarts);
+        const replacement = (await (
+          await fetch(url, { signal: AbortSignal.timeout(1_000) })
+        ).json()) as { pid: number; managed: boolean };
+        expect(replacement.managed).toBe(true);
+        expect(replacement.pid).not.toBe(initial.pid);
+        expect(isProcessRunning(initial.pid)).toBe(false);
+        expect(systemctl("stop", "openclaw-gateway.service").status).toBe(0);
+        await expect(fetch(url, { signal: AbortSignal.timeout(1_000) })).rejects.toThrow();
+      } finally {
+        systemctl("stop", "openclaw-gateway.service");
+        for (const { pid } of records()) {
+          try {
+            process.kill(pid, "SIGKILL");
+          } catch {}
+        }
+      }
+    },
+    60_000,
+  );
+
+  it("returns the gateway readiness failure when startup is called conditionally", () => {
+    const workDir = tempDirs.make("survivor-start-failure-");
+    writeExecutables(join(workDir, "bin"), { openclaw: "#!/bin/sh\nexit 17\n" });
+    const source = readFileSync(UPGRADE_SURVIVOR_RUN_SCRIPT, "utf8");
+    const start = source.slice(
+      source.indexOf("start_gateway() {"),
+      source.indexOf("\nensure_gateway_started()"),
     );
-    expect(updateRestartAuth).toContain('openclaw gateway --port "$port" --bind loopback');
-    expect(updateRestartAuth).toContain(
-      'openclaw_e2e_wait_gateway_ready "$gateway_pid" "$log_file" 360 "$port"',
+    const result = spawnSync(
+      "bash",
+      [
+        "-c",
+        repoShell(workDir)`
+export PATH="$TMPDIR/bin:$PATH"
+source "$ROOT_DIR/${OPENCLAW_E2E_INSTANCE_HELPER_PATH}"
+GATEWAY_LOG="$TMPDIR/gateway.log"
+UPDATE_RESTART_MODE=manual
+${start}
+trap 'kill "$gateway_pid" 2>/dev/null || true; wait "$gateway_pid" 2>/dev/null || true' EXIT
+start_status=0
+start_gateway || start_status=$?
+exit "$start_status"
+`,
+      ],
+      { encoding: "utf8" },
     );
+    expect(result.status, result.stdout + result.stderr).toBe(1);
   });
 
   it("scopes candidate device identity doctor markers to the doctor process", () => {
@@ -3317,6 +3605,7 @@ printf '%s\n' '{"gateway":{"mode":"local"}}' >"$OPENCLAW_CONFIG_PATH"
 unset OPENCLAW_UPDATE_IN_PROGRESS
 unset OPENCLAW_UPDATE_DEFER_CONFIGURED_PLUGIN_INSTALL_REPAIR
 unset OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE
+source "$ROOT_DIR/${OPENCLAW_E2E_INSTANCE_HELPER_PATH}"
 source "$ROOT_DIR/${UPGRADE_SURVIVOR_UPDATE_RESTART_AUTH_PATH}"
 install_update_restart_systemctl_shim() { :; }
 seed_update_restart_probe_device_auth() { :; }
@@ -3375,14 +3664,17 @@ fi
         openclaw: `#!/usr/bin/env bash
 set -euo pipefail
 printf '%s %s\n' "$OPENCLAW_CONFIG_PATH" "$*" >>"$CAPTURE_DIR/openclaw-calls"
-if [ "$FAILURE_STAGE" = doctor ] && [ "\${1:-}" = doctor ]; then
-  exit 41
+if [ "\${1:-}" = doctor ]; then
+  [ "$FAILURE_STAGE" != doctor ] || exit 41
+  exit 0
 fi
 if [ "\${1:-}" = gateway ] && [ "\${2:-}" = install ]; then
   [ "$FAILURE_STAGE" != install ] || exit 44
+  sleep 30 >/dev/null 2>&1 &
+  printf '%s\\n' "$!" >"$OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_PID_FILE"
   exit 0
 fi
-sleep 30
+exec sleep 30
 `,
       });
 
@@ -3394,12 +3686,14 @@ export OPENCLAW_STATE_DIR="$TMPDIR/state"
 export OPENCLAW_CONFIG_PATH="$OPENCLAW_STATE_DIR/openclaw.json"
 export OPENCLAW_UPGRADE_SURVIVOR_CONFIG_PARKING_HELPER="$ROOT_DIR/${UPGRADE_SURVIVOR_CONFIG_PARKING_PATH}"
 export OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_PID_FILE="$TMPDIR/gateway.pid"
+export OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_DAEMON_LOG="$TMPDIR/service.log"
 export OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SERVICE_INSTALL_JSON="$TMPDIR/install.json"
 export OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SERVICE_INSTALL_ERR="$TMPDIR/install.err"
 export GATEWAY_AUTH_TOKEN_REF=upgrade-survivor-token
 mkdir -p "$OPENCLAW_STATE_DIR"
 authored_config='{"channels":{"discord":{"dm":{"policy":"allowlist","allowFrom":["123"]}}}}'
 printf '%s\n' "$authored_config" >"$OPENCLAW_CONFIG_PATH"
+source "$ROOT_DIR/${OPENCLAW_E2E_INSTANCE_HELPER_PATH}"
 source "$ROOT_DIR/${UPGRADE_SURVIVOR_UPDATE_RESTART_AUTH_PATH}"
 install_update_restart_systemctl_shim() { :; }
 seed_update_restart_probe_device_auth() { :; }
@@ -3464,6 +3758,7 @@ export REAL_CONFIG_PARKING_HELPER="$ROOT_DIR/${UPGRADE_SURVIVOR_CONFIG_PARKING_P
 export OPENCLAW_UPGRADE_SURVIVOR_CONFIG_PARKING_HELPER="$TMPDIR/bin/config-parking-wrapper.mjs"
 mkdir -p "$OPENCLAW_STATE_DIR"
 printf '%s\n' '{"channels":{"discord":{"dm":{"policy":"allowlist"}}}}' >"$OPENCLAW_CONFIG_PATH"
+source "$ROOT_DIR/${OPENCLAW_E2E_INSTANCE_HELPER_PATH}"
 source "$ROOT_DIR/${UPGRADE_SURVIVOR_UPDATE_RESTART_AUTH_PATH}"
 install_update_restart_systemctl_shim() { :; }
 seed_update_restart_probe_device_auth() { :; }
@@ -3511,11 +3806,10 @@ printf '%s\n' "$status" >"$TMPDIR/status"
     const publishedRunner = readFileSync(UPGRADE_SURVIVOR_RUN_SCRIPT, "utf8");
     const updateRestartAuth = readFileSync(UPGRADE_SURVIVOR_UPDATE_RESTART_AUTH_PATH, "utf8");
 
-    for (const script of [publishedRunner, updateRestartAuth]) {
+    for (const script of [updateRestartAuth]) {
       expectTextToIncludeAll(script, [
         'supervisor_script="${pid_file}.supervisor.mjs"',
         'OPENCLAW_SYSTEMCTL_SHIM_EXEC_START="$exec_start"',
-        'nohup node "$supervisor_script"',
         'if (key.startsWith("OPENCLAW_UPDATE_")) {',
         "delete childEnv.OPENCLAW_COMPATIBILITY_HOST_VERSION;",
         'process.on("SIGTERM", stop);',
@@ -3619,6 +3913,9 @@ process.exit(${code});
       // The historical parent removes the handoff directory before attempting restart.
       rmSync(resultDir, { recursive: true });
       expect(existsSync(join(artifacts, "diagnostics", "post-core.json"))).toBe(true);
+      expect(
+        JSON.parse(readFileSync(join(artifacts, "diagnostics", "post-core.json"), "utf8")),
+      ).toMatchObject({ artifactRoot: realpathSync(artifacts), childExitCode: code });
       const captured = runSurvivorDiagnostics("capture", artifacts, ["update-candidate", "1"], env);
       expect(captured.status, captured.stderr).toBe(0);
       const uploaded = join(workDir, "public");
@@ -3827,27 +4124,147 @@ exit "$lane_exit"
         },
       );
       expect(result.status, result.stdout + result.stderr).toBe(78);
-      const snapshot = JSON.parse(
-        readFileSync(join(artifacts, "diagnostics", "post-core.json"), "utf8"),
-      );
-      expect(snapshot).toMatchObject({ childExitCode: 0, result: { status: "error" } });
       const calls = readFileSync(join(workDir, "invocations.jsonl"), "utf8")
         .trim()
         .split("\n")
         .map((line) => JSON.parse(line));
+      const observationRoot = calls[0].artifactRoot;
+      expect(observationRoot).toEqual(
+        published ? expect.stringMatching(`${artifacts}/update-observation\\.[^/]+$`) : artifacts,
+      );
+      const snapshot = JSON.parse(
+        readFileSync(join(observationRoot, "diagnostics", "post-core.json"), "utf8"),
+      );
+      expect(snapshot).toMatchObject({
+        artifactRoot: realpathSync(observationRoot),
+        childExitCode: 0,
+        result: { status: "error" },
+      });
       expect(calls[0].argv).toEqual([
         "update",
         "--tag",
         join(workDir, "candidate.tgz"),
         "--yes",
         "--json",
+        ...(published ? ["--no-restart"] : []),
       ]);
       expect(calls[1].options).toBe(calls[0].options);
       expect(calls[0].options).toContain("--no-warnings --import=");
-      expect(calls.map((call) => call.artifactRoot)).toEqual(calls.map(() => artifacts));
+      expect(calls[1].artifactRoot).toBe(observationRoot);
       for (const call of calls.slice(2)) {
         expect(call.options).toBe("--no-warnings");
+        expect(call.artifactRoot).toBe(artifacts);
       }
+    },
+  );
+
+  it("exposes the published survivor service through the manager fixture", () => {
+    const workDir = tempDirs.make("openclaw-published-survivor-manager-");
+    const unitDir = join(workDir, ".config", "systemd", "user");
+    mkdirSync(unitDir, { recursive: true });
+    writeFileSync(
+      join(unitDir, "openclaw-gateway.service"),
+      "[Service]\nExecStart=/usr/bin/node /fixture/gateway.mjs\n",
+    );
+    const source = readFileSync(UPGRADE_SURVIVOR_RUN_SCRIPT, "utf8");
+    const definitions = source.slice(0, source.indexOf("phase storage-preflight"));
+    const result = spawnSync(
+      "bash",
+      [
+        "-c",
+        `${definitions}
+trap - EXIT ERR INT TERM
+install_update_restart_systemctl_shim
+test -x "$npm_config_prefix/bin/busctl"
+"$npm_config_prefix/bin/busctl" --user --json=short call org.freedesktop.systemd1 /org/freedesktop/systemd1 org.freedesktop.systemd1.Manager LoadUnit s openclaw-gateway.service
+`,
+      ],
+      {
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          HOME: workDir,
+          OPENCLAW_UPGRADE_SURVIVOR_BASELINE: "openclaw@2026.4.15",
+          OPENCLAW_UPGRADE_SURVIVOR_SUMMARY_JSON: join(workDir, "artifacts", "summary.json"),
+          OPENCLAW_UPGRADE_SURVIVOR_RUNTIME_ROOT: join(workDir, "runtime"),
+        },
+      },
+    );
+    expect(result.status, result.stdout + result.stderr).toBe(0);
+    expect(JSON.parse(result.stdout.trim())).toEqual({
+      type: "o",
+      data: ["/org/freedesktop/systemd1/unit/openclaw_2dgateway_2eservice"],
+    });
+  });
+
+  it.each(["unchanged", "pid-only", "request-only", "replaced"])(
+    "requires an update-owned service replacement after consent recovery (%s)",
+    (mode) => {
+      const workDir = tempDirs.make("openclaw-survivor-recovery-restart-");
+      const artifacts = join(workDir, "artifacts");
+      const bin = join(workDir, "bin");
+      mkdirSync(artifacts);
+      const pidFile = join(artifacts, "supervisor.pid");
+      const logFile = join(artifacts, "systemctl.log");
+      const invocation = join(artifacts, "update-invoked");
+      writeFileSync(pidFile, "12345\n");
+      // An earlier baseline restart must not count for the recovery invocation.
+      writeFileSync(logFile, "--user restart openclaw-gateway.service\n");
+      writeExecutables(bin, {
+        systemctl: "#!/usr/bin/env bash\nexit 0\n",
+        openclaw: `#!${process.execPath}
+const fs = require("node:fs");
+if (process.argv[2] !== "update") throw new Error("expected updater invocation");
+fs.writeFileSync(${JSON.stringify(invocation)}, "update\\n");
+if (["pid-only", "replaced"].includes(process.env.RESTART_TEST_MODE)) fs.writeFileSync(process.env.OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_PID_FILE, "23456\\n");
+if (["request-only", "replaced"].includes(process.env.RESTART_TEST_MODE)) fs.appendFileSync(process.env.OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_LOG, "--user restart openclaw-gateway.service\\n");
+console.log(JSON.stringify({status:"ok",after:{version:"2026.8.1"},steps:[{name:"global update",exitCode:0}]}));
+`,
+      });
+      const source = readFileSync(UPGRADE_SURVIVOR_RUN_SCRIPT, "utf8");
+      const update = source.slice(
+        source.indexOf("update_candidate() {"),
+        source.indexOf("\nassert_root_managed_vps_cli_usable()"),
+      );
+      const result = spawnSync(
+        "bash",
+        [
+          "-c",
+          `set -eu
+source ${shellQuote(UPGRADE_SURVIVOR_UPDATE_RESTART_AUTH_PATH)}
+openclaw_e2e_maybe_timeout() { shift; "$@"; }
+candidate_update_spec() { printf '%s' fixture.tgz; }
+read_installed_version() { printf '%s' 2026.8.1; }
+ARTIFACT_ROOT=${shellQuote(artifacts)}
+SYSTEMCTL_SHIM_PID_FILE=${shellQuote(pidFile)}
+SYSTEMCTL_SHIM_LOG=${shellQuote(logFile)}
+UPDATE_JSON="$ARTIFACT_ROOT/update.json"
+UPDATE_ERR="$ARTIFACT_ROOT/update.err"
+COMMAND_TIMEOUT=900s
+ROOT_MANAGED_VPS=0
+UPDATE_RESTART_MODE=auto-auth
+SCENARIO=base
+update_repair_required=1
+baseline_spec=openclaw@2026.4.15
+candidate_version=2026.8.1
+CANDIDATE_KIND=tarball
+${update}
+update_candidate 1
+`,
+        ],
+        {
+          encoding: "utf8",
+          env: {
+            ...process.env,
+            PATH: `${bin}:${process.env.PATH ?? ""}`,
+            RESTART_TEST_MODE: mode,
+            OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_PID_FILE: pidFile,
+            OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_LOG: logFile,
+          },
+        },
+      );
+      expect(result.status, result.stdout + result.stderr).toBe(mode === "replaced" ? 0 : 1);
+      expect(readFileSync(invocation, "utf8")).toBe("update\n");
     },
   );
 
@@ -4079,9 +4496,9 @@ ${storage === "wal" ? 'process.kill(process.pid, "SIGKILL");' : ""}`,
     }
   });
 
-  it.each([UPGRADE_SURVIVOR_RUN_SCRIPT, UPGRADE_SURVIVOR_UPDATE_RESTART_AUTH_PATH])(
-    "retains a failed service child and only sanitized diagnostics from %s",
-    async (scriptPath) => {
+  it.each([false, true])(
+    "retains a failed service child and only sanitized diagnostics (candidate redactor: %s)",
+    async (candidateRedactorPresent) => {
       const workDir = tempDirs.make("openclaw-survivor-diagnostics-");
       const artifacts = join(workDir, "artifacts");
       const state = join(workDir, "home", ".openclaw");
@@ -4100,7 +4517,7 @@ ${storage === "wal" ? 'process.kill(process.pid, "SIGKILL");' : ""}`,
       writeFileSync(join(state, "logs", "gateway-restart.log"), `restart: token=${secret}\n`);
       writeFileSync(
         join(unitDir, "openclaw-gateway.service"),
-        `ExecStart=node gateway --token ${secret}\nWorkingDirectory=/safe/service\nEnvironment="API_KEY=${secret}"\n`,
+        `[Service]\nExecStart=${process.execPath} gateway --token ${secret}\nWorkingDirectory=/safe/service\nEnvironment="API_KEY=${secret}"\n`,
       );
       writeFileSync(join(artifacts, "doctor.log"), `doctor: token=${secret}\n`);
       writeFileSync(join(artifacts, "update.err"), `post-core failure: token=${secret}\n`);
@@ -4114,7 +4531,9 @@ ${storage === "wal" ? 'process.kill(process.pid, "SIGKILL");' : ""}`,
       const supervisorPath = join(workDir, "supervisor.mjs");
       writeFileSync(
         supervisorPath,
-        extractUpgradeSurvivorSupervisor(readFileSync(scriptPath, "utf8")),
+        extractUpgradeSurvivorSupervisor(
+          readFileSync(UPGRADE_SURVIVOR_UPDATE_RESTART_AUTH_PATH, "utf8"),
+        ),
       );
       const supervisor = spawn(process.execPath, [supervisorPath], {
         env: {
@@ -4130,12 +4549,19 @@ ${storage === "wal" ? 'process.kill(process.pid, "SIGKILL");' : ""}`,
       const shimPath = join(workDir, "systemctl");
       writeFileSync(
         shimPath,
-        extractUpgradeSurvivorSystemctlShim(readFileSync(scriptPath, "utf8")),
+        extractUpgradeSurvivorSystemctlShim(
+          readFileSync(UPGRADE_SURVIVOR_UPDATE_RESTART_AUTH_PATH, "utf8"),
+        ),
+      );
+      writeFileSync(
+        join(workDir, "systemd-fixture.mjs"),
+        readFileSync("scripts/e2e/lib/upgrade-survivor/systemd-fixture.mjs"),
       );
       const shown = spawnSync("bash", [shimPath, ...SURVIVOR_SERVICE_SHOW_ARGS], {
         encoding: "utf8",
         env: {
           ...process.env,
+          HOME: join(workDir, "home"),
           OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_DAEMON_LOG: logPath,
           OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_LOG: join(artifacts, "systemctl-shim.log"),
           OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_PID_FILE: join(workDir, "missing.pid"),
@@ -4150,7 +4576,7 @@ ${storage === "wal" ? 'process.kill(process.pid, "SIGKILL");' : ""}`,
         npm_config_prefix: join(artifacts, "npm-prefix"),
       };
       // One candidate is absent; the other has a redactor that must never execute.
-      if (scriptPath === UPGRADE_SURVIVOR_UPDATE_RESTART_AUTH_PATH) {
+      if (candidateRedactorPresent) {
         const candidate = join(artifacts, "npm-prefix", "lib", "node_modules", "openclaw");
         mkdirSync(join(candidate, "dist", "plugin-sdk"), { recursive: true });
         writeFileSync(join(candidate, "package.json"), '{"type":"module"}');
@@ -4209,7 +4635,7 @@ ${storage === "wal" ? 'process.kill(process.pid, "SIGKILL");' : ""}`,
     },
   );
 
-  it.each([UPGRADE_SURVIVOR_RUN_SCRIPT, UPGRADE_SURVIVOR_UPDATE_RESTART_AUTH_PATH])(
+  it.each([UPGRADE_SURVIVOR_UPDATE_RESTART_AUTH_PATH])(
     "retains supervisor bootstrap stderr without inventing a child exit in %s",
     async (scriptPath) => {
       const workDir = tempDirs.make("openclaw-survivor-bootstrap-");
@@ -4381,6 +4807,268 @@ exit ${exitCode}
     },
   );
 
+  it.each([
+    ["target overlap", "busy", 0],
+    ["target settlement", "busy", 0],
+    ["target overlap", "legacy", 1],
+    ["target settlement", "other-detail", 1],
+    ["target overlap", "not-retryable", 1],
+    ["target overlap", "wrong-type", 1],
+    ["target overlap", "success", 1],
+    ["source overlap", "legacy", 0],
+    ["source overlap", "legacy-stderr", 0],
+  ] as const)(
+    "checks self-upgrade %s against its package contract: %s",
+    (phase, fixture, exitCode) => {
+      const workDir = tempDirs.make("openclaw-self-upgrade-wizard-");
+      const source = readFileSync(
+        "scripts/e2e/lib/upgrade-survivor/update-run-package-self-upgrade.sh",
+        "utf8",
+      );
+      const assertions = source.slice(
+        source.indexOf("assert_gateway_call_error_message() {"),
+        source.indexOf("\ngateway_call channels.status"),
+      );
+      const targetStart = source.indexOf("CURRENT_PHASE=target-wizard");
+      const waitStart = source.indexOf("wait_for_target_wizard_start() {", targetStart);
+      const waitEnd = source.indexOf("\n}\n", waitStart) + 3;
+      const overlapStart = source.indexOf(
+        "if gateway_call wizard.start",
+        phase === "source overlap" ? 0 : waitEnd,
+      );
+      const overlapEnd = source.indexOf("\ngateway_call wizard.cancel", overlapStart);
+      const invocation =
+        phase === "target settlement"
+          ? 'wait_for_target_wizard_start "$OUTPUT" "$ERROR_OUTPUT" "target settlement"'
+          : source.slice(overlapStart, overlapEnd);
+      const error = fixture.startsWith("legacy")
+        ? { type: "gateway_request_error", code: "UNAVAILABLE", message: "wizard already running" }
+        : {
+            type: fixture === "wrong-type" ? "transport_error" : "gateway_request_error",
+            code: "UNAVAILABLE",
+            message: "Setup admission is busy.",
+            details: {
+              code: fixture === "other-detail" ? "OTHER_FAILURE" : "SETUP_ADMISSION_BUSY",
+            },
+            retryable: fixture !== "not-retryable",
+          };
+      writeFileSync(
+        join(workDir, "response.json"),
+        JSON.stringify({ ok: fixture === "success", error }),
+      );
+      writeFileSync(join(workDir, "calls"), "");
+      const result = spawnSync(
+        "bash",
+        [
+          "-c",
+          `set -euo pipefail
+${assertions}
+${source.slice(targetStart, waitEnd)}
+openclaw_e2e_print_log() { cat "$1"; }
+gateway_call() {
+  printf '%s\\n' "$1" >>"$PROBE_CALLS"
+  : >"$4"
+  if [ "$(wc -l <"$PROBE_CALLS")" -eq 1 ]; then
+    if [ "$PROBE_FIXTURE" = legacy-stderr ]; then
+      : >"$3"
+      printf 'wizard already running\\n' >"$4"
+    else
+      cat "$PROBE_RESPONSE" >"$3"
+    fi
+    [ "$PROBE_FIXTURE" = success ]
+  else
+    printf '{"sessionId":"replacement","done":false,"status":"running","step":{"id":"ready"}}\\n' >"$3"
+  fi
+}
+${invocation}
+`,
+        ],
+        {
+          encoding: "utf8",
+          env: {
+            ...process.env,
+            PROBE_CALLS: join(workDir, "calls"),
+            PROBE_RESPONSE: join(workDir, "response.json"),
+            PROBE_FIXTURE: fixture,
+            OUTPUT: join(workDir, "output.json"),
+            ERROR_OUTPUT: join(workDir, "error.txt"),
+            TARGET_WIZARD_DUPLICATE_JSON: join(workDir, "output.json"),
+            TARGET_WIZARD_DUPLICATE_ERR: join(workDir, "error.txt"),
+            WIZARD_DUPLICATE_JSON: join(workDir, "output.json"),
+            WIZARD_DUPLICATE_ERR: join(workDir, "error.txt"),
+          },
+        },
+      );
+      expect(result.status, result.stdout + result.stderr).toBe(exitCode);
+      const expectedCalls = phase === "target settlement" && exitCode === 0 ? 2 : 1;
+      expect(readFileSync(join(workDir, "calls"), "utf8").trim().split("\n")).toEqual(
+        Array(expectedCalls).fill("wizard.start"),
+      );
+      if (phase === "target settlement" && exitCode === 0) {
+        expect(result.stdout).toMatch(/replacement\t2\s*$/u);
+      }
+    },
+  );
+
+  it.each([
+    ["direct failure", 42, false],
+    ["substitution failure", 42, false],
+    ["assertion after success", 43, false],
+    ["signal after success", 143, false],
+    ["expected negative", 0, false],
+    ["direct failure", 42, true],
+  ] as const)(
+    "retains self-upgrade RPC evidence through the actual launcher: %s (exit %s, blocked publication: %s)",
+    (scenario, expectedStatus, blockedPublication) => {
+      const workDir = tempDirs.make("openclaw-self-upgrade-diagnostics-");
+      const artifacts = join(workDir, "private");
+      const publicRoot = join(workDir, "public");
+      const fixtureRoot = join(workDir, "historical");
+      const pluginRoot = join(fixtureRoot, "dist/extensions/qa-channel");
+      mkdirSync(join(fixtureRoot, "extensions/qa-channel"), { recursive: true });
+      mkdirSync(pluginRoot, { recursive: true });
+      writeFileSync(
+        join(fixtureRoot, "extensions/qa-channel/package.json"),
+        '{"version":"2026.4.25"}',
+      );
+      for (const file of ["package.json", "openclaw.plugin.json", "index.js", "setup-entry.js"]) {
+        writeFileSync(join(pluginRoot, file), "{}");
+      }
+      if (blockedPublication) {
+        writeFileSync(publicRoot, "not a directory");
+      }
+      const source = readFileSync(
+        "scripts/e2e/lib/upgrade-survivor/update-run-package-self-upgrade.sh",
+        "utf8",
+      );
+      const setup = source.split('\necho "Installing declared source package')[0];
+      const rpcStart = source.indexOf("gateway_call() {");
+      const rpcEnd = source.indexOf("\n}\n", rpcStart);
+      expect(rpcStart).toBeGreaterThan(0);
+      expect(rpcEnd).toBeGreaterThan(rpcStart);
+      const rpc = source.slice(rpcStart, rpcEnd + 3);
+      const call = 'gateway_call wizard.start \'{}\' "$WIZARD_START_JSON" "$WIZARD_START_ERR"';
+      const invocation =
+        scenario === "expected negative"
+          ? `if ${call}; then exit 99; fi\nprintf continued >"$ARTIFACT_DIR/continued"\nrun_completed=1`
+          : scenario === "substitution failure"
+            ? `result="$( ${call} )"`
+            : `${call}\nCURRENT_PHASE=assert-source-wizard\n${scenario === "signal after success" ? 'kill -TERM "$$"' : "exit 43"}`;
+      writeFileSync(
+        join(workDir, "inner-probe.sh"),
+        `${setup}\n${rpc}\n
+cleanup() { printf "cleanup replacement\\n" >"$WIZARD_START_ERR"; }
+CURRENT_PHASE=source-wizard
+${invocation}
+`,
+      );
+      const rpcStatus = scenario.includes("after success") ? 0 : 42;
+      const binDir = join(workDir, "bin");
+      writeExecutables(binDir, {
+        git: `#!/usr/bin/env bash
+case " $* " in
+  *" archive "*) exec tar -C "$TEST_FIXTURE_ROOT" -cf - . ;;
+  *" rev-parse "*) printf 'be8c24633aaa7ef0425ae1178f096ee8dd6226c0\\n' ;;
+esac
+`,
+        corepack: "#!/bin/sh\nexit 0\n",
+        openclaw: `#!/bin/sh
+printf '{"ok":${rpcStatus === 0},"fixture":"named RPC response"}\\n'
+printf 'controlled RPC stderr token=SELF_UPGRADE_SECRET\\n' >&2
+exit ${rpcStatus}
+`,
+        docker: `#!/usr/bin/env bash
+if [ "$1" = run ]; then
+  printf '%s\\n' "$@" >"$TMPDIR/docker-args"
+  cd "$TEST_REPO_ROOT"
+  exec bash "$TMPDIR/inner-probe.sh"
+fi
+exit 0
+`,
+      });
+      const result = spawnSync(
+        "bash",
+        [join(process.cwd(), "scripts/e2e/update-run-package-self-upgrade-docker.sh")],
+        {
+          encoding: "utf8",
+          cwd: workDir,
+          env: {
+            ...process.env,
+            HOME: workDir,
+            TMPDIR: workDir,
+            PATH: `${binDir}:${process.env.PATH ?? ""}`,
+            TEST_REPO_ROOT: process.cwd(),
+            TEST_FIXTURE_ROOT: fixtureRoot,
+            OPENCLAW_SKIP_DOCKER_BUILD: "1",
+            OPENCLAW_QA_ALLOW_UPDATE_RUN_SELF: "1",
+            OPENCLAW_UPDATE_RUN_SELF_UPGRADE_ARTIFACT_DIR: artifacts,
+            OPENCLAW_UPDATE_RUN_SELF_UPGRADE_RUNTIME_ROOT: join(workDir, "runtime"),
+            OPENCLAW_DOCKER_ALL_LOG_DIR: publicRoot,
+          },
+        },
+      );
+      expect(result.status, result.stdout + result.stderr).toBe(expectedStatus);
+      expect(readFileSync(join(artifacts, "wizard-start.err"), "utf8")).toBe(
+        "cleanup replacement\n",
+      );
+      expect(readFileSync(join(workDir, "docker-args"), "utf8")).not.toContain(publicRoot);
+      if (expectedStatus === 0) {
+        expect(readFileSync(join(artifacts, "continued"), "utf8")).toBe("continued");
+        expect(existsSync(publicRoot)).toBe(false);
+        expect(existsSync(join(artifacts, "diagnostics/raw.json"))).toBe(false);
+      } else if (blockedPublication) {
+        expect(result.stderr).toContain("diagnostics missing");
+      } else {
+        expect(existsSync(publicRoot)).toBe(true);
+        const directories = readdirSync(publicRoot);
+        expect(directories).toHaveLength(1);
+        const uploaded = join(publicRoot, directories[0]!);
+        expect(readdirSync(uploaded)).toEqual(["failure.json"]);
+        const text = readFileSync(join(uploaded, "failure.json"), "utf8");
+        expect(text).not.toContain("SELF_UPGRADE_SECRET");
+        expect(text).not.toContain("cleanup replacement");
+        const report = JSON.parse(text);
+        expect(report).toMatchObject({
+          phase: scenario.includes("after success") ? "assert-source-wizard" : "source-wizard",
+          exitStatus: expectedStatus,
+          signal: scenario === "signal after success" ? "SIGTERM" : null,
+          lastRpc: {
+            name: "wizard-start",
+            stdout: expect.stringContaining("named RPC response"),
+            stderr: expect.stringContaining("controlled RPC stderr"),
+          },
+        });
+      }
+    },
+  );
+
+  it.each(["config-recipe", "../config-recipe", "wizard-not-a-declared-rpc"])(
+    "rejects candidate-selected private RPC evidence: %s",
+    (rpcName) => {
+      const workDir = tempDirs.make("openclaw-rpc-diagnostics-contract-");
+      const artifacts = join(workDir, "private");
+      mkdirSync(join(artifacts, "diagnostics"), { recursive: true });
+      writeFileSync(join(artifacts, "diagnostics/last-rpc"), rpcName);
+      writeFileSync(join(artifacts, "config-recipe.json"), "PRIVATE_RPC_SELECTION_SENTINEL");
+      const captured = runSurvivorDiagnostics("capture", artifacts, ["source-wizard", "42"]);
+      expect(captured.status, captured.stderr).toBe(0);
+      const rawPath = join(artifacts, "diagnostics/raw.json");
+      const raw = readFileSync(rawPath, "utf8");
+      expect(raw).not.toContain("PRIVATE_RPC_SELECTION_SENTINEL");
+      const snapshot = JSON.parse(raw);
+      expect(snapshot.lastRpc).toBeUndefined();
+      // Revalidate at publication too: candidate-authored snapshots cannot broaden the contract.
+      snapshot.lastRpc = { name: rpcName, stdout: "PRIVATE_RPC_SELECTION_SENTINEL", stderr: "" };
+      writeFileSync(rawPath, JSON.stringify(snapshot));
+      const uploaded = join(workDir, "public");
+      const published = runSurvivorDiagnostics("publish", artifacts, [uploaded]);
+      expect(published.status, published.stderr).toBe(0);
+      const text = readFileSync(join(uploaded, "failure.json"), "utf8");
+      expect(text).not.toContain("PRIVATE_RPC_SELECTION_SENTINEL");
+      expect(JSON.parse(text).lastRpc).toBeUndefined();
+    },
+  );
+
   it.each([false, true])(
     "publishes only on the host and preserves Docker outcomes (published baseline: %s)",
     (publishedBaseline) => {
@@ -4474,10 +5162,7 @@ exit 0
 
   it("stops supervised gateway restarts after the systemd burst limit", async () => {
     const workDir = tempDirs.make("openclaw-update-restart-supervisor-");
-    const scripts = [
-      readFileSync(UPGRADE_SURVIVOR_RUN_SCRIPT, "utf8"),
-      readFileSync(UPGRADE_SURVIVOR_UPDATE_RESTART_AUTH_PATH, "utf8"),
-    ];
+    const scripts = [readFileSync(UPGRADE_SURVIVOR_UPDATE_RESTART_AUTH_PATH, "utf8")];
 
     for (const [index, script] of scripts.entries()) {
       const supervisorPath = join(workDir, `supervisor-${index}.mjs`);
@@ -4511,10 +5196,7 @@ exit 0
 
   it("allows a supervised gateway to drain within the systemd stop timeout", async () => {
     const workDir = tempDirs.make("openclaw-update-restart-graceful-stop-");
-    const scripts = [
-      readFileSync(UPGRADE_SURVIVOR_RUN_SCRIPT, "utf8"),
-      readFileSync(UPGRADE_SURVIVOR_UPDATE_RESTART_AUTH_PATH, "utf8"),
-    ];
+    const scripts = [readFileSync(UPGRADE_SURVIVOR_UPDATE_RESTART_AUTH_PATH, "utf8")];
 
     for (const [index, script] of scripts.entries()) {
       const supervisorPath = join(workDir, `graceful-supervisor-${index}.mjs`);
@@ -4566,10 +5248,7 @@ const starts = fs.readFileSync(process.env.URLS_FILE, "utf8").trim().split("\\n"
 process.exit(starts === 1 ? 1 : 78);
 `,
     );
-    const scripts = [
-      readFileSync(UPGRADE_SURVIVOR_RUN_SCRIPT, "utf8"),
-      readFileSync(UPGRADE_SURVIVOR_UPDATE_RESTART_AUTH_PATH, "utf8"),
-    ];
+    const scripts = [readFileSync(UPGRADE_SURVIVOR_UPDATE_RESTART_AUTH_PATH, "utf8")];
 
     for (const [index, script] of scripts.entries()) {
       const supervisorPath = join(workDir, `clawhub-env-supervisor-${index}.mjs`);
@@ -4631,10 +5310,7 @@ const ready = setInterval(() => {
 setInterval(() => {}, 1_000);
 `,
       );
-      const scripts = [
-        readFileSync(UPGRADE_SURVIVOR_RUN_SCRIPT, "utf8"),
-        readFileSync(UPGRADE_SURVIVOR_UPDATE_RESTART_AUTH_PATH, "utf8"),
-      ];
+      const scripts = [readFileSync(UPGRADE_SURVIVOR_UPDATE_RESTART_AUTH_PATH, "utf8")];
 
       for (const [index, script] of scripts.entries()) {
         const supervisorPath = join(workDir, `process-group-supervisor-${index}.mjs`);
@@ -4718,10 +5394,7 @@ if (starts === 1) {
 }
 `,
       );
-      const scripts = [
-        readFileSync(UPGRADE_SURVIVOR_RUN_SCRIPT, "utf8"),
-        readFileSync(UPGRADE_SURVIVOR_UPDATE_RESTART_AUTH_PATH, "utf8"),
-      ];
+      const scripts = [readFileSync(UPGRADE_SURVIVOR_UPDATE_RESTART_AUTH_PATH, "utf8")];
 
       for (const [index, script] of scripts.entries()) {
         const supervisorPath = join(workDir, `restart-group-supervisor-${index}.mjs`);
@@ -4783,6 +5456,7 @@ if (starts === 1) {
   it("bounds upgrade survivor failure log diagnostics", () => {
     const runner = readFileSync(UPGRADE_SURVIVOR_DOCKER_E2E_PATH, "utf8");
     const publishedRunner = readFileSync(UPGRADE_SURVIVOR_RUN_SCRIPT, "utf8");
+    const updateRestartAuth = readFileSync(UPGRADE_SURVIVOR_UPDATE_RESTART_AUTH_PATH, "utf8");
 
     expectTextToIncludeInOrder(runner, [
       "update_status=$?",
@@ -4798,17 +5472,28 @@ if (starts === 1) {
     ]);
     expectTextToIncludeInOrder(publishedRunner, [
       "local update_status=0",
-      'openclaw "${update_args[@]}" >"$UPDATE_JSON" 2>"$UPDATE_ERR" || update_status=$?',
-      'if [ "$update_status" -ne 0 ]; then',
-      'echo "openclaw update failed" >&2',
+      'openclaw "${update_args[@]}" >"$update_json" 2>"$update_err" || update_status=$?',
+      "assert-recoverable-update-json",
+      "assert-successful-update-json",
+      'echo "openclaw update failed before the recoverable post-core boundary" >&2',
       'openclaw config validate --json >"$POST_UPDATE_VALIDATE_JSON"',
       'echo "post-update config validation probe status=$validate_status" >&2',
       'openclaw_e2e_print_log "$POST_UPDATE_VALIDATE_ERR" >&2 || true',
       'openclaw_e2e_print_log "$POST_UPDATE_VALIDATE_JSON" >&2 || true',
-      'openclaw_e2e_print_log "$UPDATE_ERR" >&2 || true',
-      'openclaw_e2e_print_log "$UPDATE_JSON" >&2 || true',
+      'openclaw_e2e_print_log "$update_err" >&2 || true',
+      'openclaw_e2e_print_log "$update_json" >&2 || true',
       'return "$update_status"',
     ]);
+    expect(publishedRunner).not.toContain("update_args+=(--accept-capabilities)");
+    expectTextToIncludeInOrder(publishedRunner, [
+      "phase doctor run_doctor",
+      "phase assert-survival assert_survival",
+      "phase fixture-plugin-consent repair_fixture_plugin_consent",
+      "phase transcript-export node scripts/e2e/lib/upgrade-survivor/assertions.mjs assert-meeting-transcript-export",
+      "phase gateway-start ensure_gateway_started",
+    ]);
+    expect(publishedRunner).not.toContain("systemctl --user restart openclaw-gateway.service");
+    expect(publishedRunner).toContain("phase recovery-update-restart update_candidate 1");
 
     expectTextToIncludeAll(runner, [
       'openclaw_e2e_print_log "$OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_ROOT/update.err"',
@@ -4841,10 +5526,10 @@ if (starts === 1) {
 
     expect(publishedRunner).toContain('openclaw_e2e_print_log "$BASELINE_INSTALL_LOG"');
     expect(publishedRunner).toContain('openclaw_e2e_print_log "$BASELINE_CONFIG_VALIDATE_LOG"');
-    expect(publishedRunner).toContain('openclaw_e2e_print_log "$BASELINE_SERVICE_INSTALL_ERR"');
-    expect(publishedRunner).toContain('openclaw_e2e_print_log "$BASELINE_SERVICE_INSTALL_JSON"');
-    expect(publishedRunner).toContain('openclaw_e2e_print_log "$UPDATE_ERR"');
-    expect(publishedRunner).toContain('openclaw_e2e_print_log "$UPDATE_JSON"');
+    expect(updateRestartAuth).toContain('openclaw_e2e_print_log "$result_err"');
+    expect(updateRestartAuth).toContain('openclaw_e2e_print_log "$result_out"');
+    expect(publishedRunner).toContain('openclaw_e2e_print_log "$update_err"');
+    expect(publishedRunner).toContain('openclaw_e2e_print_log "$update_json"');
     expect(publishedRunner).toContain('openclaw_e2e_print_log "$DOCTOR_LOG"');
     expect(publishedRunner).toContain('openclaw_e2e_print_log "$GATEWAY_LOG"');
     expect(publishedRunner).toContain('openclaw_e2e_print_log "$STATUS_ERR"');
@@ -4852,8 +5537,8 @@ if (starts === 1) {
     expect(publishedRunner).toContain('openclaw_e2e_print_log "$log_file"');
     expect(publishedRunner).not.toContain('cat "$BASELINE_INSTALL_LOG"');
     expect(publishedRunner).not.toContain('cat "$BASELINE_CONFIG_VALIDATE_LOG"');
-    expect(publishedRunner).not.toContain('cat "$BASELINE_SERVICE_INSTALL_ERR"');
-    expect(publishedRunner).not.toContain('cat "$BASELINE_SERVICE_INSTALL_JSON"');
+    expect(updateRestartAuth).not.toContain('cat "$result_err"');
+    expect(updateRestartAuth).not.toContain('cat "$result_out"');
     expect(publishedRunner).not.toContain('cat "$UPDATE_ERR"');
     expect(publishedRunner).not.toContain('cat "$UPDATE_JSON"');
     expect(publishedRunner).not.toContain('cat "$DOCTOR_LOG"');
@@ -4939,7 +5624,6 @@ grep -Fxq preserved "$TMPDIR/caller-fd"
 
   it("wires the Codex npm plugin live assertion boundary into Docker", () => {
     const runner = readFileSync(CODEX_NPM_PLUGIN_LIVE_DOCKER_E2E_PATH, "utf8");
-    const assertions = readFileSync("scripts/e2e/lib/codex-npm-plugin-live/assertions.mjs", "utf8");
     expectTextToIncludeAll(runner, [
       "docker_e2e_print_log /tmp/openclaw-codex-plugin-pack.log",
       "scripts/e2e/lib/plugins/npm-registry-server.mjs",
@@ -4951,6 +5635,7 @@ grep -Fxq preserved "$TMPDIR/caller-fd"
       "assert-agent-error",
       "assert-followthrough",
       "followthrough-turn.mjs",
+      "if openclaw_e2e_run_command node scripts/e2e/lib/codex-npm-plugin-live/followthrough-turn.mjs",
       "docker_e2e_read_positive_int_env OPENCLAW_CODEX_NPM_PLUGIN_AGENT_TIMEOUT_SECONDS 420",
       'docker_e2e_read_positive_int_env OPENCLAW_CODEX_NPM_PLUGIN_AGENT_TIMEOUT_SECONDS "$AGENT_TURN_TIMEOUT_SECONDS"',
       '-e "OPENCLAW_CODEX_NPM_PLUGIN_AGENT_TIMEOUT_SECONDS=$AGENT_TURN_TIMEOUT_SECONDS"',
@@ -4970,11 +5655,6 @@ grep -Fxq preserved "$TMPDIR/caller-fd"
       "final=true and send exactly",
     ]);
     expect(runner).not.toContain("--timeout 420");
-    expectTextToIncludeAll(assertions, [
-      'Requested agent harness "codex" is not registered',
-      "Unknown model: codex/",
-      'Agent harness runtime "codex" is not present in the prepared registry.',
-    ]);
   });
 
   it("prints the OpenAI chat-tools gateway log when startup exits early", () => {
@@ -5021,6 +5701,18 @@ grep -Fxq preserved "$TMPDIR/caller-fd"
     expect(result.status, result.stderr).toBe(0);
     expect(result.stderr).toBe("");
     expect(result.stdout).toContain("unexpected subsystem output");
+    const phases = result.stdout
+      .split("\n")
+      .filter((line) => line.startsWith('{"phase":"followthrough:'))
+      .map((line) => JSON.parse(line).phase);
+    expect(phases).toEqual([
+      "followthrough:import-start",
+      "followthrough:import-complete",
+      "followthrough:turn-start",
+      "followthrough:turn-and-cleanup-complete",
+      "followthrough:result-written",
+      "followthrough:before-exit",
+    ]);
     expect(JSON.parse(readFileSync(outputPath, "utf8"))).toEqual({
       captured: expect.objectContaining({
         sessionId: "followthrough-session",
@@ -5995,20 +6687,43 @@ source "$ROOT_DIR/scripts/lib/docker-e2e-logs.sh"
     expect(runner).not.toMatch(/openclaw_e2e_probe_tcp[^\n]*\|\|[^\n]*gateway-net-e2e\.log/u);
   });
 
-  it("copies root lifecycle inputs before cleanup-smoke installs dependencies", () => {
-    const dockerfile = readFileSync(CLEANUP_SMOKE_DOCKERFILE_PATH, "utf8");
-    const installIndex = dockerfile.indexOf("pnpm install --frozen-lockfile");
-
-    for (const input of [
-      "node-version.mjs",
-      "scripts/preinstall-package-manager-warning.mjs",
-      "scripts/postinstall-bundled-plugins.mjs",
-      "scripts/prepare-git-hooks.mjs",
-    ]) {
-      const copyIndex = dockerfile.indexOf(input);
-
-      expect(copyIndex, input).toBeGreaterThanOrEqual(0);
-      expect(copyIndex, input).toBeLessThan(installIndex);
+  it.each([
+    ["Dockerfile", " AS dependency-inputs\n"],
+    [CLEANUP_SMOKE_DOCKERFILE_PATH, "WORKDIR /repo\n"],
+  ])("runs root lifecycles from the dependency inputs copied by %s", (file, stageMarker) => {
+    const dockerfile = readFileSync(file, "utf8");
+    const stageStart = dockerfile.indexOf(stageMarker);
+    expect(stageStart).toBeGreaterThanOrEqual(0);
+    const installIndex = dockerfile.indexOf("pnpm install --frozen-lockfile", stageStart);
+    expect(installIndex).toBeGreaterThan(stageStart);
+    const root = tempDirs.make("openclaw-docker-lifecycle-");
+    // Execute with the image's explicit file inputs, without the later full-source COPY.
+    const copies = dockerfile.slice(stageStart, installIndex).matchAll(/^COPY (.+)$/gm);
+    for (const [, instruction] of copies) {
+      const paths = instruction!.trim().split(/\s+/);
+      if (paths[0]!.startsWith("--")) {
+        continue;
+      }
+      const destination = paths.pop()!;
+      for (const source of paths) {
+        if (!statSync(source).isFile()) {
+          continue;
+        }
+        const target = join(root, destination, destination.endsWith("/") ? basename(source) : "");
+        mkdirSync(dirname(target), { recursive: true });
+        copyFileSync(source, target);
+      }
+    }
+    const manifest = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
+    for (const lifecycle of ["preinstall", "postinstall", "prepare"]) {
+      const [command, ...args] = manifest.scripts[lifecycle].split(/\s+/);
+      expect(command).toBe("node");
+      const result = spawnSync(process.execPath, args, {
+        cwd: root,
+        encoding: "utf8",
+        env: { PATH: process.env.PATH, HOME: join(root, "home"), npm_config_user_agent: "pnpm/12" },
+      });
+      expect(result.status, `${file} ${lifecycle}: ${result.stderr}`).toBe(0);
     }
   });
 
@@ -6158,12 +6873,8 @@ done
       'if [ "$UPDATE_FAILED" -ne 0 ]; then',
       'if [ "$GATEWAY_START_FAILED" -ne 0 ]; then',
       'if [ "$GATEWAY_HEALTH_FAILED" -ne 0 ]; then',
-      'printf "%s\\n" "\\$!" >"$GATEWAY_PID_FILE"',
-      'printf "ActiveState=active\\nSubState=running',
       'status.service?.runtime?.status !== "running"',
       "FAIL: gateway service was not running before update",
-      "OPENCLAW_NO_RESPAWN=1",
-      "is-enabled)",
       "/healthz",
       "FAIL: gateway install failed before update",
     ]);
@@ -6253,10 +6964,6 @@ done
       "scripts/e2e/lib/doctor-install-switch/scenario.sh",
     );
     expectTextToIncludeAll(doctorScenario, [
-      "cp scripts/e2e/lib/doctor-install-switch/shims/systemctl",
-      "cp scripts/e2e/lib/doctor-install-switch/shims/loginctl",
-      "cp scripts/e2e/lib/doctor-install-switch/shims/busctl",
-      "cp scripts/e2e/lib/doctor-install-switch/shims/systemd-exec-start.mjs",
       "OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_SERVICE_REPAIR=1",
       "scripts/e2e/lib/package-compat.mjs",
     ]);
@@ -6525,7 +7232,6 @@ done
       'openclaw_e2e_maybe_timeout "$command_timeout" bash -c "$install_cmd"',
       'openclaw_e2e_maybe_timeout "$command_timeout" bash -c "$doctor_cmd"',
       'openclaw_e2e_maybe_timeout "$command_timeout" "$npm_bin" gateway install --wrapper "$wrapper" --force',
-      'openclaw_e2e_maybe_timeout "$command_timeout" node "$git_cli" doctor --repair --force --yes',
     ]);
 
     expect(
@@ -6614,6 +7320,8 @@ done
   it("prepares pnpm workspace package fixtures without package dependencies", () => {
     const root = tempDirs.make("openclaw-update-channel-fixture-");
     mkdirSync(join(root, "patches"));
+    mkdirSync(join(root, "dist"));
+    writeFileSync(join(root, "dist/build-info.json"), JSON.stringify({ version: "2026.5.6" }));
     writeFileSync(
       join(root, "package.json"),
       `${JSON.stringify({ name: "openclaw", version: "2026.5.6", scripts: {} }, null, 2)}\n`,
@@ -6875,9 +7583,13 @@ done
     const runner = readFileSync(AGENTS_DELETE_SHARED_WORKSPACE_DOCKER_E2E_PATH, "utf8");
     expectTextToIncludeAll(runner, [
       'entry="$(openclaw_e2e_resolve_entrypoint)"',
+      'node "$entry" agents add alpha --workspace "$SHARED_WORKSPACE" --non-interactive',
+      'node "$entry" agents add ops --workspace "$SHARED_WORKSPACE" --non-interactive',
       'gateway_pid="$(openclaw_e2e_start_gateway "$entry" 18789 "$gateway_log")"',
       'openclaw_e2e_wait_gateway_ready "$gateway_pid" "$gateway_log" 300 18789',
       'node "$entry" agents delete ops --force --json > "$output_file"',
+      'node "$entry" agents list --json > "$agents_file"',
+      'node scripts/e2e/lib/fixture.mjs agents-delete-assert "$output_file" "$agents_file"',
       'openclaw_e2e_terminate_gateways "${gateway_pid:-}"',
       'openclaw_e2e_print_log "$gateway_log" >&2',
       "trap cleanup EXIT",

@@ -3,8 +3,19 @@
 # textual OIDs in a blob alone would not keep historical proof alive through GC.
 merge_outcome_stop() {
   echo "Merge outcome: $*" >&2
-  echo "No merge retry. Repeated merge-run only reconciles a recorded attempt. Inspect the PR timeline, main history, and $MERGE_OUTCOME_REF; unresolved uncertainty requires operator action outside this automatic path." >&2
+  echo "No automatic merge retry. Repeated merge-run only reconciles a recorded attempt. Inspect the PR timeline, main history, and $MERGE_OUTCOME_REF; a new attempt requires explicit operator recovery through merge-recover." >&2
   return 1
+}
+
+merge_outcome_repo_identity() {
+  # gh returns the repository's REST database id as a JSON number while PR ids are
+  # GraphQL node strings. Accept either scalar so a current gh cannot fail admission
+  # closed; nameWithOwner and the url suffix still pin which repository this is.
+  jq -ce '
+    . as $repo | select((.id | (type == "string" and length > 0) or type == "number") and
+      (.nameWithOwner | test("^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")) and
+      (.url | test("^https://[A-Za-z0-9.-]+/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$") and endswith("/" + $repo.nameWithOwner)))
+  '
 }
 
 merge_outcome_init() {
@@ -12,15 +23,20 @@ merge_outcome_init() {
   is_canonical_pr_number "$pr" || return 1
   MERGE_OUTCOME_REF="refs/openclaw/pr-merge-outcomes/$pr"
   identity=$(gh_plain repo view --json id,nameWithOwner,url) || return 1
-  MERGE_REPO=$(printf '%s\n' "$identity" | jq -ce '
-    . as $repo | select((.id | type == "string" and length > 0) and
-      (.nameWithOwner | test("^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")) and
-      (.url | test("^https://[A-Za-z0-9.-]+/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$") and endswith("/" + $repo.nameWithOwner)))
-  ') || { merge_outcome_stop "invalid repository identity"; return 1; }
+  MERGE_REPO=$(printf '%s\n' "$identity" | merge_outcome_repo_identity) || { merge_outcome_stop "invalid repository identity"; return 1; }
   MERGE_REPO_URL=$(printf '%s\n' "$MERGE_REPO" | jq -r .url)
   MERGE_REPO_HOST="${MERGE_REPO_URL#https://}"
   MERGE_REPO_HOST="${MERGE_REPO_HOST%%/*}"
   MERGE_REPO_NAME=$(printf '%s\n' "$MERGE_REPO" | jq -r .nameWithOwner)
+  merge_outcome_load_local "$pr" "$MERGE_REPO"
+}
+
+# Cleanup validates retained proof without remote reads. Merge admission also
+# supplies the freshly resolved repository identity; local validity is not reconciliation.
+merge_outcome_load_local() {
+  local pr="$1" expected_repo="${2:-null}"
+  is_canonical_pr_number "$pr" || return 1
+  MERGE_OUTCOME_REF="refs/openclaw/pr-merge-outcomes/$pr"
   MERGE_OUTCOME_OID=""
   MERGE_OUTCOME_RECORD=""
   if git symbolic-ref -q "$MERGE_OUTCOME_REF" >/dev/null 2>&1; then
@@ -32,9 +48,9 @@ merge_outcome_init() {
     local parents retained
     [ "$(git cat-file -t "$MERGE_OUTCOME_OID")" = commit ] || { merge_outcome_stop "outcome ref is not a commit"; return 1; }
     MERGE_OUTCOME_RECORD=$(git show "$MERGE_OUTCOME_OID:outcome.json" | jq -ce \
-      --argjson repo "$MERGE_REPO" --argjson pr "$pr" '
+      --argjson repo "$expected_repo" --argjson pr "$pr" '
       def oid: type == "string" and test("^[0-9a-f]{40}$");
-      select(.version == 1 and .repo == $repo and .pr == $pr and .base == "main" and
+      select(.version == 1 and ($repo == null or .repo == $repo) and .pr == $pr and .base == "main" and
         (.prId | type == "string" and length > 0) and (.head | oid) and (.main | oid) and
         (.attempt | test("^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")) and
         (.method == "squash" or .method == "merge" or .method == "rebase") and
@@ -43,6 +59,9 @@ merge_outcome_init() {
         (if .phase == "intent" then .landed == null else
           (.phase == "merged" or .phase == "commenting" or .phase == "commented" or .phase == "complete") and (.landed | oid) end))
     ') || { merge_outcome_stop "corrupt or mismatched retained record"; return 1; }
+    printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -c .repo | merge_outcome_repo_identity >/dev/null || {
+      merge_outcome_stop "invalid retained repository identity"; return 1;
+    }
     parents=$(git cat-file commit "$MERGE_OUTCOME_OID" | awk 'NF == 0 {exit} $1 == "parent" {printf "%s ", $2}') || return 1
     for retained in $(printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -r '[.head,.main,.landed] | .[] | select(. != null)'); do
       case " $parents " in *" $retained "*) ;; *) merge_outcome_stop "record does not retain required commit $retained"; return 1 ;; esac
@@ -78,11 +97,15 @@ merge_outcome_read_remote() {
   local response
   response=$(gh_plain api graphql --hostname "$MERGE_REPO_HOST" \
     -f owner="${MERGE_REPO_NAME%/*}" -f name="${MERGE_REPO_NAME#*/}" -F number="$1" \
-    -f 'query=query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){id url nameWithOwner ref(qualifiedName:"refs/heads/main"){target{oid}} pullRequest(number:$number){id number url state headRefOid baseRefName isDraft mergeCommit{oid} autoMergeRequest{mergeMethod} isInMergeQueue isMergeQueueEnabled mergeable mergeStateStatus}}}') || return 1
+    -f 'query=query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){id databaseId url nameWithOwner ref(qualifiedName:"refs/heads/main"){target{oid}} pullRequest(number:$number){id number url state headRefOid baseRefName isDraft mergeCommit{oid} autoMergeRequest{mergeMethod} isInMergeQueue isMergeQueueEnabled mergeable mergeStateStatus}}}') || return 1
   printf '%s\n' "$response" | jq -ce --argjson repo "$MERGE_REPO" --argjson pr "$1" '
     def oid: type == "string" and test("^[0-9a-f]{40}$");
     select(.errors == null) | .data.repository |
-    select({id,url,nameWithOwner} == $repo and (.ref.target.oid | oid)) |
+    # gh reports the repository id as its REST database id while GraphQL reports the node
+    # id, so the two sources never compare equal on identity alone. Match whichever
+    # representation gh supplied; url and nameWithOwner still pin the repository exactly.
+    select(.url == $repo.url and .nameWithOwner == $repo.nameWithOwner and
+      ($repo.id == .id or $repo.id == .databaseId) and (.ref.target.oid | oid)) |
     {main:.ref.target.oid, pr:.pullRequest} |
     select(.pr.number == $pr and (.pr.id | type == "string" and length > 0) and
       .pr.url == ($repo.url + "/pull/" + ($pr|tostring)) and
@@ -193,7 +216,7 @@ merge_outcome_resume() {
     marker="<!-- openclaw-merge:$(printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -r .attempt) -->"
     # Absence never permits a second POST: the first response may have been lost.
     if comments=$(gh_plain api --hostname "$MERGE_REPO_HOST" --paginate --slurp \
-      "repos/$MERGE_REPO_NAME/issues/$pr/comments?per_page=100") &&
+      "repos/$MERGE_REPO_NAME/issues/$pr/comments?per_page=100" -H 'Cache-Control: max-age=0') &&
       comment_url=$(printf '%s\n' "$comments" | jq -er --arg marker "$marker" \
         '[.[][] | select(.body | contains($marker))] | select(length == 1) | .[0].html_url | select(type == "string" and length > 0)'); then
       echo "Completion comment observed: $comment_url"

@@ -53,7 +53,6 @@ export async function prepareCodexAttemptContext(
     contextSessionKey,
     activeContextEngine,
     initialStartupBindingHadInactiveThreadBootstrap,
-    sandboxSessionKey,
     effectiveWorkspace,
     effectiveCwd,
     agentDir,
@@ -100,7 +99,7 @@ export async function prepareCodexAttemptContext(
   const hookContext = {
     runId: params.runId,
     agentId: sessionAgentId,
-    sessionKey: sandboxSessionKey,
+    sessionKey: contextSessionKey,
     sessionId: params.sessionId,
     workspaceDir: params.workspaceDir,
     messageProvider: params.messageProvider ?? undefined,

@@ -546,8 +546,37 @@ describe("gateway server cron", () => {
       expect(withoutContext.payload).toMatchObject({
         sessionTarget: "isolated",
         delivery: { mode: "announce" },
+        deliveryPreview: {
+          label: "announce -> last",
+          detail: expect.stringContaining("last -> no route, will fail-closed"),
+        },
       });
     } finally {
+      await cleanupCronTestRun({ cronState, prevSkipCron });
+    }
+  });
+
+  test("does not persist cron.add when the delivery preview cannot be resolved", async () => {
+    const { prevSkipCron, dir } = await setupCronTestRun({
+      tempPrefix: "openclaw-gw-cron-preview-failure-",
+      cronEnabled: false,
+    });
+    testState.sessionStorePath = path.join(dir, "invalid.sqlite");
+    await fs.writeFile(testState.sessionStorePath, "not a SQLite database");
+    const cronState = await createDirectCronState();
+
+    try {
+      const response = await directCronReq(cronState, "cron.add", {
+        name: "preview failure",
+        schedule: { kind: "every", everyMs: 60_000 },
+        payload: { kind: "agentTurn", message: "check status" },
+      });
+
+      expect(response.ok).toBe(false);
+      expect(await cronState.cron.list({ includeDisabled: true })).toHaveLength(0);
+    } finally {
+      testState.sessionStorePath = undefined;
+      resetConfigRuntimeState();
       await cleanupCronTestRun({ cronState, prevSkipCron });
     }
   });
@@ -568,7 +597,7 @@ describe("gateway server cron", () => {
           updatedAt: 2,
           createdAt: 1,
           createdVia: "operator",
-          createdActor: { type: "human", id: "profile-ada", label: "Ada" },
+          createdActor: { type: "human", source: "profile", id: "profile-ada", label: "Ada" },
         },
         [unattributedSessionKey]: {
           sessionId: "session-unattributed",
@@ -608,7 +637,7 @@ describe("gateway server cron", () => {
       expect(unattributed.ok, JSON.stringify(unattributed.error ?? null)).toBe(true);
       const jobs = (await loadCronStore(cronState.storePath)).jobs;
       expect(jobs.find((job) => job.name === "attributed")).toMatchObject({
-        createdActor: { type: "human", id: "profile-ada" },
+        createdActor: { type: "human", source: "profile", id: "profile-ada" },
       });
       expect(jobs.find((job) => job.name === "unattributed")).not.toHaveProperty("createdActor");
     } finally {
@@ -640,6 +669,12 @@ describe("gateway server cron", () => {
       expect(addRes.ok).toBe(true);
       const dailyJobId = (addRes.payload as { id?: unknown } | null)?.id;
       expect(typeof dailyJobId).toBe("string");
+      expect(addRes.payload).toMatchObject({
+        deliveryPreview: {
+          label: "webhook:https://example.invalid/cron-finished",
+          detail: "webhook",
+        },
+      });
 
       const internalJob = cronState.cron.getJob(String(dailyJobId));
       expect(internalJob).toBeDefined();

@@ -497,7 +497,6 @@ export async function appendNavigatedPageState(params: {
   proxyRequest: BrowserProxyRequest | null;
   signal?: AbortSignal;
 }): Promise<AgentToolResult<unknown>> {
-  const hostFallbackWasActive = params.proxyRequest?.isHostFallbackActive?.() ?? false;
   let snapshot: AgentToolResult<unknown>;
   try {
     snapshot = await executeSnapshotAction({
@@ -522,12 +521,6 @@ export async function appendNavigatedPageState(params: {
         includeWarning: false,
       }),
     );
-  }
-  if (!hostFallbackWasActive && params.proxyRequest?.isHostFallbackActive?.()) {
-    // The node became unreachable between the action and this snapshot and the
-    // proxy fell back to the Gateway host browser: that snapshot describes a
-    // different browser, so presenting it as the navigated page misleads the model.
-    return withPageStateUnavailableHint(params.result, "the browser node became unreachable");
   }
   const baseDetails =
     params.result.details && typeof params.result.details === "object"

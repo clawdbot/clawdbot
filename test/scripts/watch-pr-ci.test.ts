@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { chmodSync, readFileSync, writeFileSync } from "node:fs";
 import { delimiter, join } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
   buildFindRunArgs,
@@ -19,11 +20,38 @@ import placeholderFixture from "../fixtures/watch-pr-ci-queued-placeholder.json"
 
 const sha = "a".repeat(40);
 
-function runWatcher(ghScript: string, headSha = sha, options: string[] = []) {
+function runWatcher(
+  ghScript: string,
+  headSha = sha,
+  options: string[] = [],
+  clock: "poll" | "wall" = "poll",
+) {
   return withTempDir("openclaw-watch-pr-ci-", async (binDir) => {
     const ghPath = join(binDir, "gh");
     writeFileSync(ghPath, ghScript);
     chmodSync(ghPath, 0o755);
+    const clockPath = join(binDir, "poll-clock.mjs");
+    // Evidence fixtures advance polling only, independent of fake gh startup cost.
+    // Deadline coverage explicitly retains the real clock and child timeout.
+    // NODE_OPTIONS reaches the implementation through its unmodified CLI wrapper.
+    writeFileSync(
+      clockPath,
+      `import { syncBuiltinESMExports } from "node:module";
+import timers from "node:timers/promises";
+if (process.argv[1] === ${JSON.stringify(fileURLToPath(new URL("../../scripts/watch-pr-ci.mts", import.meta.url)))}) {
+  const now = ${clock === "wall" ? "Date.now" : "() => 0"};
+  const realSleep = timers.setTimeout;
+  let waitedMs = 0;
+  Date.now = () => now() + waitedMs;
+  timers.setTimeout = async (milliseconds, value, options) => {
+    const result = await realSleep(0, value, options);
+    waitedMs += milliseconds;
+    return result;
+  };
+  syncBuiltinESMExports();
+}
+`,
+    );
     return await new Promise<{ status: number; stdout: string; stderr: string }>(
       (resolve, reject) => {
         execFile(
@@ -42,7 +70,11 @@ function runWatcher(ghScript: string, headSha = sha, options: string[] = []) {
           ],
           {
             encoding: "utf8",
-            env: { ...process.env, PATH: `${binDir}${delimiter}${process.env.PATH ?? ""}` },
+            env: {
+              ...process.env,
+              NODE_OPTIONS: `${process.env.NODE_OPTIONS ?? ""} --import=${pathToFileURL(clockPath).href}`,
+              PATH: `${binDir}${delimiter}${process.env.PATH ?? ""}`,
+            },
           },
           (error, stdout, stderr) => {
             const exitCode = error ? error.code : 0;
@@ -68,6 +100,7 @@ function replayPlaceholder(
     merged?: boolean;
     watchTimeout?: number;
     delayFirstAlias?: boolean;
+    clock?: "poll" | "wall";
     afterAliasScan?: unknown;
   } = {},
 ) {
@@ -108,7 +141,10 @@ else if (args[1]?.startsWith(runPath + "/attempts/3/jobs?per_page=100&page=")) {
 else if (args[1]?.startsWith("repos/openclaw/openclaw/actions/jobs/")) {
   const jobIds = ${JSON.stringify(fixture.directJobs.map((job) => job.id))};
   const jobId = Number(args[1].split("/").at(-1));
-  if (fixture.delayFirstAlias && jobId === jobIds[0]) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 2_000);
+  if (fixture.delayFirstAlias && jobId === jobIds[0]) {
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 2_000);
+    fs.appendFileSync(${JSON.stringify(calls)}, JSON.stringify(["slow-alias-completed"]) + "\\n");
+  }
   value = fixture.directJobs[jobIds.indexOf(jobId)];
   if (value === undefined) throw new Error("missing direct job response");
 }
@@ -116,7 +152,10 @@ else throw new Error("unexpected gh invocation: " + JSON.stringify(args));
 console.log(JSON.stringify(value));
 `,
       placeholderFixture.run.head_sha,
-      evidence.watchTimeout === undefined ? [] : ["--timeout", String(evidence.watchTimeout)],
+      evidence.watchTimeout === undefined
+        ? []
+        : ["--timeout", String(evidence.watchTimeout), "--interval", String(evidence.watchTimeout)],
+      evidence.clock,
     );
     return { ...result, calls: readFileSync(calls, "utf8") };
   });
@@ -327,6 +366,7 @@ esac
     it("bounds a slow alias read by the remaining watcher deadline", async () => {
       const result = await replayPlaceholder(structuredClone(placeholderFixture), {
         delayFirstAlias: true,
+        clock: "wall",
       });
       expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(16);
       expect(result.stdout).toContain("pending=1");
@@ -336,6 +376,7 @@ esac
         .split("\n")
         .map((line) => JSON.parse(line));
       expect(calls.filter((call) => call[1]?.includes("/actions/jobs/"))).toHaveLength(1);
+      expect(result.calls).not.toContain('"slow-alias-completed"');
     });
 
     it.each([
@@ -505,7 +546,7 @@ esac
       expect(result.calls).toContain("/attempts/3/jobs?per_page=100&page=1");
     });
 
-    // Independent rejection fixtures can overlap their real deadline waits.
+    // Independent rejection fixtures keep their own CLI process and clock state.
     // Keep successful scans and short-deadline job scans serial.
     it.concurrent.each([
       ["assigned queued job", { runner_id: 123 }],

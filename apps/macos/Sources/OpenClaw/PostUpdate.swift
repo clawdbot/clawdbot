@@ -347,7 +347,7 @@ final class PostUpdateController: NSObject, NSWindowDelegate {
             return
         }
         let connectionMode = AppStateStore.shared.connectionMode
-        guard CLIInstallPrompter.shouldManageCLI(connectionMode: connectionMode) else {
+        guard connectionMode != .unconfigured else {
             self.finishSilently()
             return
         }

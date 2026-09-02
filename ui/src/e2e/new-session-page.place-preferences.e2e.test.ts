@@ -71,6 +71,11 @@ suite.define(() => {
       const picker = page.locator("wa-popover.new-session-page__where-popover");
       await picker.locator('[data-value="device:writer-runner"]').waitFor();
       expect(await picker.locator('[data-value="cloud:aws"]').count()).toBe(0);
+      await page.keyboard.press("Escape");
+      await page.locator(".new-session-page__message").fill("start locally");
+      await expect
+        .poll(() => page.getByRole("button", { name: "Start session" }).isEnabled())
+        .toBe(true);
     } finally {
       await context.close();
     }

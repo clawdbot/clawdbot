@@ -9,6 +9,7 @@ import {
   resolveInboundSessionEnvelopeContext,
   toInboundMediaFactsWithMetadata,
   toLocationContext,
+  type BuildChannelInboundEventContextParams,
   type ChannelInboundMediaInput,
 } from "openclaw/plugin-sdk/channel-inbound";
 import type {
@@ -25,7 +26,11 @@ import {
 import type { HistoryEntry } from "openclaw/plugin-sdk/reply-history";
 import { resolveAgentRoute, resolveInboundLastRouteSessionKey } from "openclaw/plugin-sdk/routing";
 import { logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  normalizeOptionalString,
+  normalizeStringEntries,
+  readNonEmptyStringPreservingWhitespace,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { normalizeAllowFrom } from "./bot-access.js";
 import { resolveLineGroupConfigEntry } from "./group-keys.js";
@@ -40,6 +45,10 @@ type StickerEventMessage = webhook.StickerMessageContent;
 
 type MediaRef = Pick<ChannelInboundMediaInput, "contentType" | "fileName"> & { path: string };
 
+export type LineInboundMentionAccess = NonNullable<
+  NonNullable<BuildChannelInboundEventContextParams["access"]>["mentions"]
+>;
+
 interface BuildLineMessageContextParams {
   event: MessageEvent;
   allMedia: MediaRef[];
@@ -50,8 +59,8 @@ interface BuildLineMessageContextParams {
   resolveChannelIngress?: (
     contextBinding: ChannelIngressContextBinding,
   ) => Promise<ResolvedChannelMessageIngress>;
-  channelIngress?: ResolvedChannelMessageIngress;
   inboundHistory?: HistoryEntry[];
+  mentions?: LineInboundMentionAccess;
   buildContext?: typeof buildChannelInboundEventContext;
 }
 
@@ -177,39 +186,38 @@ async function resolveLineInboundRoute(params: {
   return { userId, groupId, roomId, isGroup, peerId, route };
 }
 
-const STICKER_PACKAGES: Record<string, string> = {
-  "1": "Moon & James",
-  "2": "Cony & Brown",
-  "3": "Brown & Friends",
-  "4": "Moon Special",
-  "789": "LINE Characters",
-  "6136": "Cony's Happy Life",
-  "6325": "Brown's Life",
-  "6359": "Choco",
-  "6362": "Sally",
-  "6370": "Edward",
-  "11537": "Cony",
-  "11538": "Brown",
-  "11539": "Moon",
-};
+/**
+ * Describe a sticker from what its webhook actually carries: LINE sends up to
+ * 15 keywords for the sticker, and a message sticker also carries the sender's
+ * own text. The package name is not among those facts and cannot be derived
+ * from the package id, so it is not part of the description.
+ */
+function describeLineSticker(sticker: StickerEventMessage): string {
+  // Sender-authored text is authoritative; LINE's experimental keywords are a
+  // random selection and only describe stickers that carry no sender text.
+  const description =
+    readNonEmptyStringPreservingWhitespace(sticker.text) ??
+    normalizeStringEntries(sticker.keywords ?? [])
+      .slice(0, 3)
+      .join(", ");
+  return description ? `[Sent a sticker: ${description}]` : "[Sent a sticker]";
+}
 
-function describeStickerKeywords(sticker: StickerEventMessage): string {
-  const keywords = (sticker as StickerEventMessage & { keywords?: string[] }).keywords;
-  if (keywords && keywords.length > 0) {
-    return keywords.slice(0, 3).join(", ");
+export function readLineTextMessageBody(message: webhook.TextMessageContent): string {
+  let text = message.text;
+  // LINE can send an empty "()" alternative; retain meaningful alternatives.
+  // Replace from the end so LINE's UTF-16 offsets survive earlier replacements.
+  for (const { index, length } of (message.emojis ?? []).toSorted((a, b) => b.index - a.index)) {
+    if (index >= 0 && length === 2 && text.slice(index, index + length) === "()") {
+      text = `${text.slice(0, index)}[emoji]${text.slice(index + length)}`;
+    }
   }
-
-  const stickerText = (sticker as StickerEventMessage & { text?: string }).text;
-  if (stickerText) {
-    return stickerText;
-  }
-
-  return "";
+  return text;
 }
 
 function extractMessageText(message: MessageEvent["message"]): string {
   if (message.type === "text") {
-    return message.text;
+    return readLineTextMessageBody(message);
   }
   if (message.type === "location") {
     const loc = message;
@@ -223,14 +231,7 @@ function extractMessageText(message: MessageEvent["message"]): string {
     );
   }
   if (message.type === "sticker") {
-    const sticker = message;
-    const packageName = STICKER_PACKAGES[sticker.packageId] ?? "sticker";
-    const keywords = describeStickerKeywords(sticker);
-
-    if (keywords) {
-      return `[Sent a ${packageName} sticker: ${keywords}]`;
-    }
-    return `[Sent a ${packageName} sticker]`;
+    return describeLineSticker(message);
   }
   return "";
 }
@@ -272,6 +273,7 @@ async function finalizeLineInboundContext(params: {
   locationContext?: ReturnType<typeof toLocationContext>;
   verboseLog: { kind: "inbound" | "postback"; mediaCount?: number };
   inboundHistory?: Pick<HistoryEntry, "sender" | "body" | "timestamp">[];
+  mentions?: LineInboundMentionAccess;
   buildContext?: typeof buildChannelInboundEventContext;
 }) {
   const senderId = params.source.userId ?? "unknown";
@@ -308,6 +310,13 @@ async function finalizeLineInboundContext(params: {
     : params.source.roomId
       ? `line:room:${params.source.roomId}`
       : `line:${params.source.userId ?? params.source.peerId}`;
+
+  const groupConfig = params.source.isGroup
+    ? resolveLineGroupConfigEntry(params.account.config.groups, {
+        groupId: params.source.groupId,
+        roomId: params.source.roomId,
+      })
+    : undefined;
 
   const { storePath, envelopeOptions, previousTimestamp } = resolveInboundSessionEnvelopeContext({
     cfg: params.cfg,
@@ -359,21 +368,14 @@ async function finalizeLineInboundContext(params: {
       commandBody: params.commandBody ?? params.rawBody,
       inboundHistory: params.inboundHistory,
     },
-    access: { commands: { authorized: params.commandAuthorized } },
+    access: { commands: { authorized: params.commandAuthorized }, mentions: params.mentions },
     media,
     extra: {
       ...params.locationContext,
       GroupSubject: params.source.isGroup
         ? (groupName ?? params.source.groupId ?? params.source.roomId)
         : undefined,
-      GroupSystemPrompt: params.source.isGroup
-        ? normalizeOptionalString(
-            resolveLineGroupConfigEntry(params.account.config.groups, {
-              groupId: params.source.groupId,
-              roomId: params.source.roomId,
-            })?.systemPrompt,
-          )
-        : undefined,
+      GroupSystemPrompt: normalizeOptionalString(groupConfig?.systemPrompt),
     },
   });
 
@@ -403,6 +405,8 @@ async function finalizeLineInboundContext(params: {
   return {
     ctxPayload,
     replyToken: (params.event as { replyToken: string }).replyToken,
+    // A group's configured skill scope belongs to the turn that answers it.
+    skillFilter: groupConfig?.skills,
     turn: {
       storePath,
       record: {
@@ -499,18 +503,17 @@ export async function buildLineMessageContext(params: BuildLineMessageContextPar
     // The agent still reads the message as sent; only command parsing drops the
     // mention, which LINE requires before a group message reaches the bot.
     commandBody: resolveLineMentionStrippedText(message) || rawBody,
+    mentions: params.mentions,
     timestamp,
     messageSid: messageId,
     commandAuthorized,
     // Configured conversation bindings can replace the base route; bind only to the final route.
-    channelIngress: params.resolveChannelIngress
-      ? await params.resolveChannelIngress({
-          agentId: route.agentId,
-          sessionKey: route.sessionKey,
-          messageId,
-          inboundEventKind: "user_request",
-        })
-      : params.channelIngress,
+    channelIngress: await params.resolveChannelIngress?.({
+      agentId: route.agentId,
+      sessionKey: route.sessionKey,
+      messageId,
+      inboundEventKind: "user_request",
+    }),
     buildContext: params.buildContext,
     media: mediaFacts,
     locationContext,
@@ -521,6 +524,7 @@ export async function buildLineMessageContext(params: BuildLineMessageContextPar
   return {
     ctxPayload: finalized.ctxPayload,
     turn: finalized.turn,
+    skillFilter: finalized.skillFilter,
     event,
     userId,
     groupId,
@@ -540,7 +544,6 @@ export async function buildLinePostbackContext(params: {
   resolveChannelIngress?: (
     contextBinding: ChannelIngressContextBinding,
   ) => Promise<ResolvedChannelMessageIngress>;
-  channelIngress?: ResolvedChannelMessageIngress;
   buildContext?: typeof buildChannelInboundEventContext;
 }) {
   const { event, cfg, account, commandAuthorized } = params;
@@ -588,14 +591,12 @@ export async function buildLinePostbackContext(params: {
     messageSid,
     commandAuthorized,
     // Configured conversation bindings can replace the base route; bind only to the final route.
-    channelIngress: params.resolveChannelIngress
-      ? await params.resolveChannelIngress({
-          agentId: route.agentId,
-          sessionKey: route.sessionKey,
-          messageId: messageSid,
-          inboundEventKind: "user_request",
-        })
-      : params.channelIngress,
+    channelIngress: await params.resolveChannelIngress?.({
+      agentId: route.agentId,
+      sessionKey: route.sessionKey,
+      messageId: messageSid,
+      inboundEventKind: "user_request",
+    }),
     buildContext: params.buildContext,
     media: [],
     verboseLog: { kind: "postback" },
@@ -604,6 +605,7 @@ export async function buildLinePostbackContext(params: {
   return {
     ctxPayload: finalized.ctxPayload,
     turn: finalized.turn,
+    skillFilter: finalized.skillFilter,
     event,
     userId,
     groupId,

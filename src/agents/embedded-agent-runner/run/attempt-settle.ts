@@ -13,7 +13,10 @@ import {
 import { sanitizeCompactionReplayMessages } from "../../compaction-replay.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import { SessionManager } from "../../sessions/index.js";
-import { settleRequesterAfterSessionSpawns } from "../../subagents/registry/subagent-registry.js";
+import {
+  markRequesterTurnYielded,
+  settleRequesterAfterSessionSpawns,
+} from "../../subagents/registry/subagent-registry.js";
 import type { NormalizedUsage } from "../../usage.js";
 import { log } from "../logger.js";
 import type { PromptCacheBreak, PromptCacheChange } from "../prompt-cache-observability.js";
@@ -37,6 +40,7 @@ import {
 import type { prepareEmbeddedAttemptStream } from "./attempt-stream-prepare.js";
 import { settleEmbeddedAttemptStream } from "./attempt-stream-settle.js";
 import type { installEmbeddedAttemptStreamGuards } from "./attempt-stream.js";
+import { shouldContinueInteractiveAcceptedSessionSpawns } from "./attempt-terminal-evidence.js";
 import type { prepareEmbeddedAttemptTimeout } from "./attempt-timeout-prepare.js";
 import type { EmbeddedAttemptDeferredLifecycleOwner } from "./deferred-lifecycle-owner.js";
 import { buildPromptImageFailureNotice } from "./images.js";
@@ -134,8 +138,7 @@ export async function runEmbeddedAttemptSettledPhase(
     agentSession: {
       activeSession,
       clientToolCallSlots,
-      coreReadAuthorized,
-      getCodeModeReconciliationCandidate,
+      getCodeModeRecoveryCandidate,
       hasDeliveredSourceReply,
       hookRunner,
       setCodeModeReconciliationReadAuthorized,
@@ -162,9 +165,9 @@ export async function runEmbeddedAttemptSettledPhase(
   const { boundaryTimezone, includeBoundaryTimestamp, orphanRepair } = sessionBoundary;
   const { runtimeInfo, systemPromptReport } = systemPrompt;
   const { bootstrapPromptWarning, shouldRecordCompletedBootstrapTurn } = bootstrap;
-  const { effectiveTools, emptyExplicitToolAllowlistError, toolSearch } = toolCatalog;
+  const { effectiveTools, toolSearch } = toolCatalog;
   const { tools, uncompactedEffectiveTools } = bundleTools;
-  const { toolSearchTargetTranscriptProjections } = toolBase;
+  const { nestedToolActivities } = toolBase;
   const hookAgentId = input.setup.sessionAgentId;
   let yieldAborted = false;
   const preparedStreamRuntime = input.preparedStreamRuntime;
@@ -212,10 +215,6 @@ export async function runEmbeddedAttemptSettledPhase(
       error !== null && error !== undefined ? { error, source: source ?? "prompt" } : null,
     );
   };
-  const promptToolPolicyBaseline = {
-    activeToolNames: activeSession.getActiveToolNames(),
-    catalogEntries: [...(toolBase.toolSearchCatalogRef?.current?.entries ?? [])],
-  };
 
   try {
     const { promptStartedAt } = await runEmbeddedAttemptPromptPhase({
@@ -224,7 +223,9 @@ export async function runEmbeddedAttemptSettledPhase(
       sessionManager,
       withOwnedTranscriptWrite: input.sessionLock.withOwnedTranscriptWrite,
       getCompactionReserveTokens: () => settingsManager.getCompactionReserveTokens(),
-      ...(emptyExplicitToolAllowlistError ? { emptyExplicitToolAllowlistError } : {}),
+      get emptyExplicitToolAllowlistError() {
+        return toolCatalog.emptyExplicitToolAllowlistError ?? undefined;
+      },
       assembly: {
         hookRunner,
         hookAgentId,
@@ -281,21 +282,10 @@ export async function runEmbeddedAttemptSettledPhase(
         transport: effectiveAgentTransport,
         uncompactedEffectiveTools,
       },
-      toolPolicy: {
-        baseline: promptToolPolicyBaseline,
-        effectiveTools,
-        uncompactedEffectiveTools,
-        tools,
-        codeModeControlsEnabled: toolBase.codeModeControlsEnabledForRun,
-        coreReadAuthorized,
-        toolSearchCatalogRef: toolBase.toolSearchCatalogRef,
-        forceToolNames: [
-          ...(toolBase.forceDirectMessageTool ? ["message"] : []),
-          ...(attempt.swarmCollector && attempt.swarmOutputSchema ? ["structured_output"] : []),
-        ],
-      },
+      toolPolicy: input.prepared.promptToolPolicy,
       preflight: {
         ...(input.activeContextEngine ? { activeContextEngine: input.activeContextEngine } : {}),
+        compactionReplayEnabled: sessionRuntime.transport.compactionReplayEnabled,
         contextEngineAssemblySucceeded,
         contextEnginePromptAuthority,
         includeBoundaryTimestamp,
@@ -470,7 +460,7 @@ export async function runEmbeddedAttemptSettledPhase(
           onBlockReplyFlush,
           abortable,
           prePromptMessageCount: sessionRuntimeState.prePromptMessageCount,
-          toolSearchTargetTranscriptProjections,
+          nestedToolActivities,
           cache: {
             observabilityEnabled: cacheObservabilityEnabled,
             changesForTurn: promptCacheChangesForTurn,
@@ -551,6 +541,7 @@ export async function runEmbeddedAttemptSettledPhase(
         sessionIdUsed: settledStream.sessionIdUsed,
         sessionFileUsed,
         messagesSnapshot: settledStream.messagesSnapshot,
+        nestedToolActivities,
         prePromptMessageCount: sessionRuntimeState.prePromptMessageCount,
         contextEngineAfterTurnCheckpoint: contextGuards.getAfterTurnCheckpoint(),
         lastCallUsage: settledStream.lastCallUsage,
@@ -631,7 +622,7 @@ export async function runEmbeddedAttemptSettledPhase(
       lastAssistant,
       currentAttemptAssistant,
       currentAttemptCompletedAssistant,
-      codeModeReconciliationCandidate: getCodeModeReconciliationCandidate(),
+      codeModeRecoveryCandidate: getCodeModeRecoveryCandidate(),
       successfulNestedToolNames,
       attemptUsage,
       promptCache: sessionRuntimeState.promptCache,
@@ -656,13 +647,28 @@ export async function runEmbeddedAttemptSettledPhase(
   });
   state.trajectoryEndRecorded = true;
   if (attempt.sessionKey && result.acceptedSessionSpawns?.length) {
-    settleRequesterAfterSessionSpawns({
-      requesterSessionKey: attempt.sessionKey,
-      requesterAgentId: input.setup.sessionAgentId,
-      requesterTurnRunId: attempt.runId,
-      requesterYielded: result.yieldDetected === true,
-      acceptedSessionSpawns: result.acceptedSessionSpawns,
+    const implicitContinuation = shouldContinueInteractiveAcceptedSessionSpawns({
+      attempt: result,
+      run: attempt,
     });
+    if (implicitContinuation) {
+      const marked = markRequesterTurnYielded({
+        requesterSessionKey: attempt.sessionKey,
+        requesterAgentId: input.setup.sessionAgentId,
+        requesterTurnRunId: attempt.runId,
+      });
+      if (marked === 0) {
+        throw new Error("accepted continuation children were not durably registered");
+      }
+    } else {
+      settleRequesterAfterSessionSpawns({
+        requesterSessionKey: attempt.sessionKey,
+        requesterAgentId: input.setup.sessionAgentId,
+        requesterTurnRunId: attempt.runId,
+        requesterYielded: result.yieldDetected === true,
+        acceptedSessionSpawns: result.acceptedSessionSpawns,
+      });
+    }
   }
   return result;
 }

@@ -4,10 +4,17 @@ import { icons } from "./icons.ts";
 import type { SessionOwnerOption } from "./session-owner-chip.ts";
 import { renderSessionOwnerAssignmentOptions } from "./session-owner-menu.ts";
 
-export type CompactSessionMenuView = "root" | "open-in" | "assign-owner" | "icon" | "group";
+export type CompactSessionMenuView =
+  | "root"
+  | "copy"
+  | "open-in"
+  | "assign-owner"
+  | "icon"
+  | "group";
 
 const COMPACT_SESSION_MENU_VIEW_BY_VALUE: Record<string, CompactSessionMenuView> = {
   "compact:back": "root",
+  "compact:open-copy": "copy",
   "compact:open-assign-owner": "assign-owner",
   "compact:open-group": "group",
   "compact:open-icon": "icon",
@@ -69,6 +76,7 @@ export function renderCompactSessionMenuView(params: {
   assignOwnerDisabled: boolean;
   assignOwnerDisabledReason?: string;
   renderOpenIn: () => TemplateResult;
+  renderCopy: () => TemplateResult;
   renderIcon: () => TemplateResult;
   renderGroup: () => TemplateResult;
 }) {
@@ -76,20 +84,22 @@ export function renderCompactSessionMenuView(params: {
     return nothing;
   }
   const body =
-    params.view === "open-in"
-      ? params.renderOpenIn()
-      : params.view === "assign-owner"
-        ? renderSessionOwnerAssignmentOptions(
-            {
-              ownerOptions: params.ownerOptions,
-              currentOwnerId: params.currentOwnerId,
-              disabled: params.assignOwnerDisabled,
-              disabledReason: params.assignOwnerDisabledReason,
-            },
-            true,
-          )
-        : params.view === "icon"
-          ? params.renderIcon()
-          : params.renderGroup();
+    params.view === "copy"
+      ? params.renderCopy()
+      : params.view === "open-in"
+        ? params.renderOpenIn()
+        : params.view === "assign-owner"
+          ? renderSessionOwnerAssignmentOptions(
+              {
+                ownerOptions: params.ownerOptions,
+                currentOwnerId: params.currentOwnerId,
+                disabled: params.assignOwnerDisabled,
+                disabledReason: params.assignOwnerDisabledReason,
+              },
+              true,
+            )
+          : params.view === "icon"
+            ? params.renderIcon()
+            : params.renderGroup();
   return renderCompactSessionMenuFrame(body);
 }

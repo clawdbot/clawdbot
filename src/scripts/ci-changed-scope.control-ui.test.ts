@@ -27,9 +27,43 @@ it("runs Chromium UI tests for browser copilot extension changes", () => {
   );
 });
 
-it.each(["package.json", ".github/workflows/ci.yml"])(
-  "runs Chromium UI tests when %s can change the browser copilot CI route",
-  (changedPath) => {
-    expect(detectChangedScope([changedPath]).runUiTests).toBe(true);
-  },
-);
+it.each([
+  "packages/mermaid-renderer/package.json",
+  "packages/mermaid-renderer/vite.config.ts",
+  "packages/mermaid-renderer/native/index.html",
+  "packages/mermaid-renderer/src/renderer.ts",
+  "packages/mermaid-renderer/src/frame.js",
+  "packages/mermaid-renderer/src/native.ts",
+  "packages/normalization-core/src/record-coerce.ts",
+  "packages/normalization-core/package.json",
+  "tsconfig.json",
+])("runs browser proof and Android asset builds for %s", (changedPath) => {
+  expect(detectChangedScope([changedPath])).toMatchObject({
+    runNode: true,
+    runUiTests: true,
+    runAndroid: true,
+    runMacos: false,
+    runIosBuild: false,
+    runControlUiI18n: false,
+  });
+});
+
+it.each([
+  "packages/normalization-core/src/string-normalization.ts",
+  "packages/normalization-core/src/record-coerce.test.ts",
+])("keeps unrelated normalization changes out of Mermaid asset builds: %s", (changedPath) => {
+  expect(detectChangedScope([changedPath])).toMatchObject({
+    runNode: true,
+    runAndroid: false,
+    runUiTests: false,
+  });
+});
+
+it.each([
+  "package.json",
+  ".github/workflows/ci.yml",
+  "test/vitest/vitest.ui-paths.mjs",
+  "test/vitest/vitest.ui-browser.config.ts",
+])("runs Chromium UI tests when %s can change the browser copilot CI route", (changedPath) => {
+  expect(detectChangedScope([changedPath]).runUiTests).toBe(true);
+});

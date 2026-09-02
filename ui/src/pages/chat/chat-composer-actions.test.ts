@@ -21,7 +21,7 @@ afterEach(async () => {
 
 function pressComposerEnter(
   container: Element,
-  modifiers: Pick<KeyboardEventInit, "altKey" | "ctrlKey" | "metaKey" | "shiftKey"> = {},
+  modifiers: Pick<KeyboardEventInit, "altKey" | "ctrlKey" | "metaKey" | "shiftKey" | "repeat"> = {},
 ) {
   const textarea = container.querySelector<HTMLTextAreaElement>("textarea");
   if (!textarea) {
@@ -287,7 +287,32 @@ describe("renderChatComposer controls", () => {
     expect(onAbort).toHaveBeenCalledOnce();
   });
 
-  it("steers the oldest visible-queue message when Enter is pressed on empty", () => {
+  it("offers Steer only for eligible queued messages during an active run", () => {
+    const onQueueSteer = vi.fn();
+    const { container } = renderComposer({
+      canAbort: true,
+      onAbort: vi.fn(),
+      onQueueSteer,
+      queue: [
+        { id: "queued-1", text: "tighten the plan", createdAt: 1 },
+        { id: "pending-1", text: "already sent", createdAt: 2, pendingRunId: "run-1" },
+        { id: "local-1", text: "/status", createdAt: 3, localCommandName: "status" },
+        {
+          id: "waiting-idle-1",
+          text: "queued during the run",
+          createdAt: 4,
+          sendState: "waiting-idle",
+        },
+      ],
+    });
+    const steer = [...container.querySelectorAll<HTMLButtonElement>(".chat-queue__action")];
+    expect(steer).toHaveLength(2);
+    steer[0]?.click();
+    steer[1]?.click();
+    expect(onQueueSteer.mock.calls).toEqual([["queued-1"], ["waiting-idle-1"]]);
+  });
+
+  it.each([false, true])("steers empty Enter only on a new press (repeat=%s)", (repeat) => {
     const onQueueSteer = vi.fn();
     const onSend = vi.fn();
     const { container } = renderComposer({
@@ -309,12 +334,10 @@ describe("renderChatComposer controls", () => {
         },
       ],
     });
-    const event = new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true });
-
-    container.querySelector("textarea")?.dispatchEvent(event);
+    const event = pressComposerEnter(container, { repeat });
 
     expect(event.defaultPrevented).toBe(true);
-    expect(onQueueSteer).toHaveBeenCalledWith("pending-unscoped");
+    expect(onQueueSteer.mock.calls).toEqual(repeat ? [] : [["pending-unscoped"]]);
     expect(onSend).not.toHaveBeenCalled();
   });
 
@@ -415,6 +438,10 @@ describe("renderChatComposer controls", () => {
 
         expect(onSend).toHaveBeenCalledOnce();
         expect(onSend).toHaveBeenCalledWith(alternateMode, action);
+
+        const held = pressComposerEnter(container, { ...modifiers, repeat: true });
+        expect(held.defaultPrevented).toBe(true);
+        expect(onSend).toHaveBeenCalledOnce();
       },
     );
   });
@@ -479,22 +506,30 @@ describe("renderChatComposer controls", () => {
     expect(onSend).not.toHaveBeenCalled();
   });
 
-  it("keeps Shift+modified Enter as a newline", () => {
-    const onSend = vi.fn();
-    const { container } = renderComposer({
-      canAbort: true,
-      draft: "Keep editing",
-      followUpMode: "queue",
-      onAbort: vi.fn(),
-      onSend,
-      sendShortcut: "enter",
-    });
+  it.each(["enter", "modifier-enter"] as const)(
+    "keeps newline keys, including repeats, for %s",
+    (sendShortcut) => {
+      const onSend = vi.fn();
+      const { container } = renderComposer({
+        canAbort: true,
+        draft: "Keep editing",
+        followUpMode: "queue",
+        onAbort: vi.fn(),
+        onSend,
+        sendShortcut,
+      });
 
-    const event = pressComposerEnter(container, { ctrlKey: true, shiftKey: true });
-
-    expect(event.defaultPrevented).toBe(false);
-    expect(onSend).not.toHaveBeenCalled();
-  });
+      for (const repeat of [false, true]) {
+        const event = pressComposerEnter(container, {
+          ctrlKey: sendShortcut === "enter",
+          shiftKey: sendShortcut === "enter",
+          repeat,
+        });
+        expect(event.defaultPrevented).toBe(false);
+      }
+      expect(onSend).not.toHaveBeenCalled();
+    },
+  );
 
   it.each([
     ["queue", "Queue ⏎ · Steer ⌘/Ctrl+Enter"],
@@ -616,15 +651,57 @@ describe("renderChatComposer controls", () => {
     expect(onAbort).not.toHaveBeenCalled();
   });
 
-  it("renders failed local commands as retryable and running commands as inert", () => {
+  it("renders the queued author's avatar before the turn is submitted", async () => {
+    const { container } = renderComposer({
+      queue: [
+        {
+          id: "waiting-idle-1",
+          text: "queued during the run",
+          createdAt: 4,
+          sendState: "waiting-idle",
+          sender: { id: "profile_123", name: "Alice Example" },
+        },
+      ],
+    });
+
+    await vi.waitFor(() => {
+      expect(
+        container.querySelector(".chat-queue__item .chat-author-avatar__initials")?.textContent,
+      ).toContain("AE");
+    });
+  });
+
+  it("renders reconnect waits as compact badges without the raw transport error", () => {
+    const { container } = renderComposer({
+      queue: [
+        {
+          id: "reconnect-1",
+          text: "send me once the gateway is back",
+          createdAt: 1,
+          sendError: "chat.send unavailable during gateway restart",
+          sendState: "waiting-reconnect",
+        },
+      ],
+    });
+    const item = container.querySelector(".chat-queue__item");
+    expect(item?.classList.contains("chat-queue__item--reconnect")).toBe(true);
+    expect(
+      item?.querySelector('.chat-queue__icon path[d="M21 5v12a2 2 0 0 1-2 2h-6"]'),
+    ).not.toBeNull();
+    expect(item?.querySelector(".chat-queue__error")).toBeNull();
+    const state = item?.querySelector(".chat-queue__badge--reconnect");
+    expect(state?.textContent?.trim()).toBe("Waiting for reconnect");
+    expect(state?.getAttribute("title")).toBe("chat.send unavailable during gateway restart");
+  });
+
+  it("renders failed sends as retryable and running commands as inert", () => {
     const onQueueRetry = vi.fn();
     let view = renderComposer({
       onQueueRetry,
       queue: [
         {
           id: "failed-1",
-          localCommandName: "compact",
-          text: "/compact",
+          text: "still recoverable",
           createdAt: 1,
           sendError: "send blocked by session policy",
           sendRunId: "run-failed-1",

@@ -10,6 +10,7 @@
   },
   "include": ["src/**/*", "packages/**/*"],
   "exclude": [
+    "packages/mermaid-renderer/**",
     "node_modules",
     "dist",
     "**/dist/**",

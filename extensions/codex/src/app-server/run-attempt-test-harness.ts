@@ -17,10 +17,16 @@ import { clearInternalHooks, resetGlobalHookRunner } from "openclaw/plugin-sdk/h
 import { clearMemoryPluginState } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import { clearPluginCommands } from "openclaw/plugin-sdk/plugin-runtime";
 import { createAgentHarnessHostCapabilitiesForTest } from "openclaw/plugin-sdk/plugin-test-runtime";
+import {
+  deleteSessionEntry,
+  resolveStorePath,
+  upsertSessionEntry,
+} from "openclaw/plugin-sdk/session-store-runtime";
+import { closeOpenClawAgentDatabasesForTest } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { afterEach, beforeEach, expect, vi } from "vitest";
 import { defaultCodexAppInventoryCache } from "./app-inventory-cache.js";
-import type { CodexAppServerClient } from "./client.js";
+import { CodexAppServerClient } from "./client.js";
 import {
   mockClientRuntimeMethods as createMockClientRuntimeMethods,
   threadStartResult as createThreadStartResult,
@@ -46,6 +52,7 @@ import {
   createCodexTestToolTerminalObserver,
   type CodexTestAppServerClientFactory,
 } from "./test-support.js";
+import { createCodexLifecycleTurnHarness } from "./thread-lifecycle.test-fixtures.js";
 import { CODEX_APP_SERVER_VERSION } from "./version.js";
 import { codexWorkspaceDirCache } from "./workspace-dir-cache.js";
 
@@ -103,6 +110,7 @@ vi.mock("openclaw/plugin-sdk/exec-approvals-runtime", async (importOriginal) => 
 });
 
 export let tempDir: string;
+const seededSessionOwnersForTest: Array<Parameters<typeof deleteSessionEntry>[0]> = [];
 let codexAppServerClientFactoryForTest: CodexAppServerClientFactory | undefined;
 const multiplexedTestClients = new WeakSet<CodexAppServerClient>();
 export const fastWait = { interval: 1, timeout: 5_000 } as const;
@@ -139,7 +147,9 @@ export function setCodexAppServerClientFactoryForTest(
     // Narrow test doubles still need the client lifecycle hook installed by
     // the keyed router, even when the test never simulates transport closure.
     testClient.addCloseHandler ??= () => () => undefined;
-    multiplexCodexTestClientHandlers(client);
+    if (!(client instanceof CodexAppServerClient)) {
+      multiplexCodexTestClientHandlers(client);
+    }
     return client;
   });
 }
@@ -303,6 +313,17 @@ export function createTestParams(): EmbeddedRunAttemptParams {
   return createParams(path.join(tempDir, "session.jsonl"), path.join(tempDir, "workspace"));
 }
 
+/** Models the core owner required for a reusable stable-key Codex binding. */
+export async function seedRunSessionOwnerForTest(sessionId: string, sessionKey: string) {
+  const scope = {
+    agentId: "main",
+    sessionKey,
+    storePath: resolveStorePath(undefined, { agentId: "main" }),
+  };
+  await upsertSessionEntry({ ...scope, entry: { sessionId, updatedAt: Date.now() } });
+  seededSessionOwnersForTest.push({ ...scope, expectedSessionId: sessionId });
+}
+
 /** Replaces the lightweight default with the admitted host boundary used in production. */
 export async function bindProductionHarnessHostCapabilitiesForTest(
   params: EmbeddedRunAttemptParams,
@@ -323,36 +344,10 @@ export async function bindProductionHarnessHostCapabilitiesForTest(
   return close;
 }
 
-export function setCodexTestModelSupportsTools(
-  params: EmbeddedRunAttemptParams,
-  supportsTools: boolean,
-): void {
-  params.model = {
-    ...params.model,
-    compat: { ...params.model.compat, supportsTools },
-  } as EmbeddedRunAttemptParams["model"] & { compat: { supportsTools: boolean } };
-}
-
-export function createCodexRuntimePlanFixture(): NonNullable<
-  EmbeddedRunAttemptParams["runtimePlan"]
-> {
-  return {
-    auth: {},
-    observability: {
-      resolvedRef: "codex/gpt-5.4-codex",
-      provider: "codex",
-      modelId: "gpt-5.4-codex",
-      harnessId: "codex",
-    },
-    prompt: {
-      resolveSystemPromptContribution: () => undefined,
-    },
-    tools: {
-      normalize: (tools: unknown[]) => tools,
-      logDiagnostics: () => undefined,
-    },
-  } as unknown as NonNullable<EmbeddedRunAttemptParams["runtimePlan"]>;
-}
+export {
+  setCodexTestModelSupportsTools,
+  createCodexRuntimePlanFixture,
+} from "./thread-lifecycle.test-fixtures.js";
 
 export function assistantMessage(text: string, timestamp: number) {
   return {
@@ -441,6 +436,7 @@ export function createAppServerHarness(
     options?: { signal?: AbortSignal },
   ) => Promise<unknown>,
   options: {
+    persistedThreads?: string[];
     onStart?: (
       authProfileId: string | undefined,
       agentDir: string | undefined,
@@ -448,6 +444,21 @@ export function createAppServerHarness(
     ) => void;
   } = {},
 ) {
+  if (options.persistedThreads) {
+    const harness = createCodexLifecycleTurnHarness({
+      respond: requestImpl,
+      persistedThreads: options.persistedThreads,
+      agentDir: path.join(tempDir, "wire-agent"),
+      wait: appServerHarnessWait,
+    });
+    setCodexAppServerClientFactoryForTest(
+      async (_start, auth, agentDir, _config, clientOptions) => {
+        options.onStart?.(auth, agentDir, clientOptions);
+        return await harness.acquire(clientOptions);
+      },
+    );
+    return harness;
+  }
   const requests: Array<{ method: string; params: unknown }> = [];
   const notificationHandlers = new Set<
     (notification: CodexServerNotification) => Promise<void> | void
@@ -601,6 +612,7 @@ export function createStartedThreadHarness(
     options?: { signal?: AbortSignal },
   ) => Promise<unknown> = async () => undefined,
   options: {
+    persistedThreads?: string[];
     onStart?: (
       authProfileId: string | undefined,
       agentDir: string | undefined,
@@ -625,28 +637,34 @@ export function createStartedThreadHarness(
     if (method === "turn/start") {
       return turnStartResult();
     }
+    if (method === "thread/backgroundTerminals/list") {
+      return { data: [], nextCursor: null };
+    }
     return {};
   }, options);
 }
 
-export function createResumeHarness() {
-  return createAppServerHarness(async (method, params) => {
-    if (method === "configRequirements/read") {
-      return { requirements: null };
-    }
-    if (method === "config/read") {
-      return { config: {}, origins: {} };
-    }
-    if (method === "thread/resume") {
-      // Resume must echo the requested thread; a different id is rejected as
-      // an unsafe subscription.
-      return threadStartResult((params as { threadId?: string })?.threadId ?? "thread-existing");
-    }
-    if (method === "turn/start") {
-      return turnStartResult();
-    }
-    return {};
-  });
+export function createResumeHarness(threadId = "thread-existing") {
+  return createAppServerHarness(
+    async (method, params) => {
+      if (method === "configRequirements/read") {
+        return { requirements: null };
+      }
+      if (method === "config/read") {
+        return { config: {}, origins: {} };
+      }
+      if (method === "thread/resume") {
+        // Resume must echo the requested thread; a different id is rejected as
+        // an unsafe subscription.
+        return threadStartResult((params as { threadId?: string })?.threadId ?? "thread-existing");
+      }
+      if (method === "turn/start") {
+        return turnStartResult();
+      }
+      return {};
+    },
+    { persistedThreads: [threadId] },
+  );
 }
 
 type RuntimeDynamicToolForTest = Parameters<
@@ -690,6 +708,9 @@ export function setupRunAttemptTestHooks(): void {
     vi.stubEnv("CODEX_API_KEY", "");
     vi.stubEnv("OPENAI_API_KEY", "");
     tempDir = await fs.mkdtemp(path.join(resolvePreferredOpenClawTmpDir(), "openclaw-codex-run-"));
+    // createParams models an ordinary durable session; seeded native bindings
+    // must have the same authoritative core owner as a real resumed conversation.
+    await seedRunSessionOwnerForTest("session-1", "agent:main:session-1");
   });
 
   afterEach(async () => {
@@ -716,6 +737,10 @@ export function setupRunAttemptTestHooks(): void {
     vi.useRealTimers();
     vi.unstubAllEnvs();
     await sandboxExecServerRegistry.closeAll();
+    for (const owner of seededSessionOwnersForTest.splice(0)) {
+      await deleteSessionEntry(owner);
+    }
+    closeOpenClawAgentDatabasesForTest();
     await fs.rm(tempDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   });
 }

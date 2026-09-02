@@ -1,5 +1,4 @@
 // Xai provider module implements model/runtime integration.
-import { resolveDefaultAgentDir } from "openclaw/plugin-sdk/agent-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   coerceSecretRef,
@@ -180,14 +179,6 @@ function resolveXaiToolSearchConfig(ctx: {
   );
 }
 
-function resolveXaiWebSearchCredential(searchConfig?: Record<string, unknown>): string | undefined {
-  return resolveWebSearchProviderCredential({
-    credentialValue: getScopedCredentialValue(searchConfig, "grok"),
-    path: "plugins.entries.xai.config.webSearch.apiKey",
-    envVars: ["XAI_API_KEY"],
-  });
-}
-
 function resolveConfiguredXaiWebSearchCredential(
   searchConfig?: Record<string, unknown>,
 ): string | undefined {
@@ -217,12 +208,10 @@ async function resolveXaiProviderAuthCredential(params: {
 }): Promise<XaiResolvedWebSearchAuth | undefined> {
   try {
     const config = params.config as OpenClawConfig | undefined;
-    const agentDir =
-      params.agentDir?.trim() || (config ? resolveDefaultAgentDir(config) : undefined);
     const resolved = await resolveApiKeyForProvider({
       provider: XAI_PROVIDER_ID,
       cfg: config,
-      ...(agentDir ? { agentDir } : {}),
+      agentDir: params.agentDir,
       ...(params.profileId
         ? {
             profileId: params.profileId,
@@ -424,7 +413,6 @@ export const testing = {
   buildXaiWebSearchPayload,
   resolveXaiToolSearchConfig,
   resolveXaiInlineCitations,
-  resolveXaiWebSearchCredential,
   resolveXaiWebSearchModel,
   resolveXaiWebSearchTimeoutSeconds,
 };

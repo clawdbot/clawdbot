@@ -115,6 +115,7 @@ internal data class CachedSessionEntity(
   val agentId: String,
   val sessionKey: String,
   val displayName: String?,
+  val color: String?,
   val updatedAtMs: Long?,
   val status: String?,
   val startedAt: Long?,
@@ -307,6 +308,7 @@ class RoomChatTranscriptCache internal constructor(
         updatedAtMs = row.updatedAtMs,
         ownerAgentId = agent,
         displayName = row.displayName,
+        color = row.color,
         status = row.status,
         startedAt = row.startedAt,
         endedAt = row.endedAt,
@@ -393,6 +395,7 @@ class RoomChatTranscriptCache internal constructor(
               agentId = agent,
               sessionKey = entry.key,
               displayName = entry.displayName,
+              color = entry.color,
               updatedAtMs = entry.updatedAtMs,
               status = entry.status,
               startedAt = entry.startedAt,
@@ -414,6 +417,7 @@ class RoomChatTranscriptCache internal constructor(
             agentId = agent,
             sessionKey = session.key,
             displayName = session.displayName,
+            color = session.color,
             updatedAtMs = session.updatedAtMs,
             status = session.status,
             startedAt = session.startedAt,
@@ -451,9 +455,11 @@ class RoomChatTranscriptCache internal constructor(
           val content =
             message.content.mapNotNull { part ->
               when {
-                part.type == "text" && !part.text.isNullOrBlank() ->
+                part.type == "text" && !part.text.isNullOrBlank() -> {
                   CachedMessageContent(type = "text", text = part.text)
-                part.type == "image" && !part.artifactId.isNullOrBlank() && !part.url.isNullOrBlank() ->
+                }
+
+                part.type == "image" && !part.artifactId.isNullOrBlank() && !part.url.isNullOrBlank() -> {
                   CachedMessageContent(
                     type = "image",
                     mimeType = part.mimeType,
@@ -466,7 +472,9 @@ class RoomChatTranscriptCache internal constructor(
                     height = part.height,
                     sizeBytes = part.sizeBytes,
                   )
-                part.type == "audio" || part.type == "video" || part.type == "file" ->
+                }
+
+                part.type == "audio" || part.type == "video" || part.type == "file" -> {
                   CachedMessageContent(
                     type = part.type,
                     mimeType = part.mimeType,
@@ -481,7 +489,11 @@ class RoomChatTranscriptCache internal constructor(
                     durationMs = part.durationMs,
                     playback = part.playback,
                   )
-                else -> null
+                }
+
+                else -> {
+                  null
+                }
               }
             }
           if (content.isEmpty() && message.provenance == null && message.transcriptMarker == null) return@mapNotNull null
@@ -534,6 +546,7 @@ class RoomChatTranscriptCache internal constructor(
               agentId = agent,
               sessionKey = key,
               displayName = null,
+              color = null,
               updatedAtMs = null,
               status = null,
               startedAt = null,

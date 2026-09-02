@@ -675,6 +675,7 @@ CREATE TABLE IF NOT EXISTS session_transcript_active_events (
   active_position INTEGER NOT NULL CHECK (active_position >= 0),
   event_seq INTEGER NOT NULL,
   message_position INTEGER CHECK (message_position IS NULL OR message_position >= 0),
+  context_eligible INTEGER,
   PRIMARY KEY (session_id, active_position),
   FOREIGN KEY (session_id, event_seq) REFERENCES transcript_events(session_id, seq) ON DELETE CASCADE
 ) STRICT;
@@ -685,6 +686,10 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_transcript_active_event_seq
 CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_transcript_active_messages
   ON session_transcript_active_events(session_id, message_position)
   WHERE message_position IS NOT NULL;
+
+CREATE INDEX IF NOT EXISTS idx_agent_transcript_context_pending
+  ON session_transcript_active_events(session_id)
+  WHERE context_eligible IS NULL;
 
 CREATE VIRTUAL TABLE IF NOT EXISTS session_transcript_fts USING fts5(
   text,
@@ -747,3 +752,25 @@ CREATE INDEX IF NOT EXISTS idx_memory_index_chunks_path
 
 CREATE INDEX IF NOT EXISTS idx_memory_index_chunks_source
   ON memory_index_chunks(source);
+
+-- Accepted input stays outside the active transcript until its exact turn owns execution.
+CREATE TABLE IF NOT EXISTS session_pending_inputs (
+  seq INTEGER PRIMARY KEY AUTOINCREMENT,
+  input_id TEXT NOT NULL UNIQUE,
+  session_key TEXT NOT NULL,
+  session_id TEXT NOT NULL,
+  idempotency_key TEXT NOT NULL,
+  run_id TEXT NOT NULL,
+  request_hash TEXT NOT NULL,
+  message_json TEXT NOT NULL,
+  lifecycle_generation TEXT NOT NULL,
+  state TEXT NOT NULL CHECK (state IN ('queued', 'interrupted', 'cancelled')),
+  accepted_at INTEGER NOT NULL,
+  consumed_event_id TEXT,
+  UNIQUE (session_id, idempotency_key),
+  FOREIGN KEY (session_key) REFERENCES session_nodes(session_key) ON DELETE CASCADE,
+  FOREIGN KEY (session_id) REFERENCES session_windows(session_id) ON DELETE CASCADE
+) STRICT;
+
+CREATE INDEX IF NOT EXISTS idx_agent_session_pending_inputs_session
+  ON session_pending_inputs(session_key, session_id, seq DESC);

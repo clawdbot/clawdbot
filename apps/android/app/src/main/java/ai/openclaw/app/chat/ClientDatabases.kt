@@ -76,7 +76,7 @@ internal interface ClientStateControlDao {
 /** Disposable gateway-derived projections. Schema mismatches and corruption rebuild this file. */
 @Database(
   entities = [CachedSessionEntity::class, CachedMessageEntity::class, CachedGatewayOwnerEntity::class],
-  version = 2,
+  version = 3,
   exportSchema = true,
 )
 internal abstract class GatewayCacheDatabase : RoomDatabase() {
@@ -436,11 +436,21 @@ private class OpenedAndroidClientDatabases private constructor(
   private suspend fun resolvePendingGatewayRemovals(registeredGatewayIds: Set<String>?) {
     for (removal in clientState.controlDao().gatewayRemovals()) {
       when {
-        removal.phase == GATEWAY_REMOVAL_CACHE_PENDING -> completeCacheRemoval(removal.gatewayId, propagateFailure = false)
-        removal.phase == GATEWAY_REMOVAL_COMMITTING -> commitGatewayRemoval(removal.gatewayId)
-        registeredGatewayIds != null && removal.gatewayId !in registeredGatewayIds ->
+        removal.phase == GATEWAY_REMOVAL_CACHE_PENDING -> {
+          completeCacheRemoval(removal.gatewayId, propagateFailure = false)
+        }
+
+        removal.phase == GATEWAY_REMOVAL_COMMITTING -> {
           commitGatewayRemoval(removal.gatewayId)
-        registeredGatewayIds != null -> cancelGatewayRemoval(removal.gatewayId)
+        }
+
+        registeredGatewayIds != null && removal.gatewayId !in registeredGatewayIds -> {
+          commitGatewayRemoval(removal.gatewayId)
+        }
+
+        registeredGatewayIds != null -> {
+          cancelGatewayRemoval(removal.gatewayId)
+        }
       }
     }
   }
@@ -716,31 +726,21 @@ private class DeferredChatCommandOutbox(
     lease: ChatOutboxMutationLease?,
   ): ChatOutboxBranchState? = ready().commandOutbox.demoteSessionMutationToReconciliationState(gatewayId, scope, lease)
 
-  override suspend fun updateLastActiveLeafEntryId(
-    gatewayId: String,
-    scope: ChatOutboxScope,
-    leafEntryId: String,
-    expectedEpoch: Int,
-    expectedRevision: Int,
-  ): Boolean = ready().commandOutbox.updateLastActiveLeafEntryId(gatewayId, scope, leafEntryId, expectedEpoch, expectedRevision)
-
   override suspend fun reconcileBranchScope(
     gatewayId: String,
     scope: ChatOutboxScope,
-    previousState: ChatOutboxBranchState,
+    evidence: ChatOutboxBranchEvidence,
     activeLeafEntryId: String?,
-    branchLeafEntryIds: Set<String>,
     activeTranscriptEntryIds: Set<String>,
     lastError: String,
-  ): Boolean =
+  ): ChatOutboxBranchState? =
     ready()
       .commandOutbox
       .reconcileBranchScope(
         gatewayId,
         scope,
-        previousState,
+        evidence,
         activeLeafEntryId,
-        branchLeafEntryIds,
         activeTranscriptEntryIds,
         lastError,
       )

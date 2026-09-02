@@ -97,6 +97,112 @@ describe("openclaw-github-link-hovercard-provider", () => {
     vi.restoreAllMocks();
   });
 
+  it("stacks co-author faces after the author and counts the rest", async () => {
+    const avatar =
+      "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9WlY9Z8AAAAASUVORK5CYII=";
+    const request = vi.fn().mockResolvedValue({
+      additions: 71,
+      avatarDataUrl: avatar,
+      changedFiles: 8,
+      coAuthorCount: 5,
+      coAuthors: [
+        { login: "steipete", avatarDataUrl: avatar },
+        { login: "ada", avatarDataUrl: avatar },
+        { login: "mira", avatarDataUrl: avatar },
+      ],
+      createdAt: "2026-07-04T05:03:47Z",
+      deletions: 109,
+      kind: "pull",
+      login: "roboclaw-bot",
+      mergedAt: "2026-07-04T09:53:52Z",
+      number: 131440,
+      owner: "OpenClaw",
+      repo: "OpenClaw",
+      state: "closed",
+      title: "fix(ui): open people cards from one row",
+      updatedAt: "2026-07-05T09:55:00Z",
+    });
+    const { anchor, provider } = createLink(
+      "https://github.com/openclaw/openclaw/pull/131440",
+      "#131440",
+    );
+    provider.client = { request } as unknown as GatewayBrowserClient;
+
+    await hover(anchor);
+
+    const stack = document.querySelector<HTMLElement>(".github-link-hovercard__coauthors");
+    expect(stack?.querySelectorAll("img")).toHaveLength(3);
+    // Two co-authors beyond the three fetched faces.
+    expect(stack?.querySelector(".github-link-hovercard__coauthors-more")?.textContent).toBe("+2");
+    expect(stack?.getAttribute("title")).toBe("Co-authored by steipete, ada, mira");
+    // Faces are decorative; the group is the only thing assistive tech can read.
+    expect(stack?.getAttribute("role")).toBe("img");
+    expect(stack?.getAttribute("aria-label")).toBe("Co-authored by steipete, ada, mira");
+    expect([...(stack?.querySelectorAll("img") ?? [])].every((img) => img.alt === "")).toBe(true);
+    // The stack sits after the author, never inside the metrics.
+    expect(stack?.previousElementSibling?.classList.contains("github-link-hovercard__author")).toBe(
+      true,
+    );
+  });
+
+  it("counts a co-author whose avatar failed to inline into the overflow", async () => {
+    const avatar =
+      "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9WlY9Z8AAAAASUVORK5CYII=";
+    const request = vi.fn().mockResolvedValue({
+      createdAt: "2026-07-04T05:03:47Z",
+      coAuthorCount: 5,
+      coAuthors: [
+        { login: "steipete", avatarDataUrl: avatar },
+        { login: "ada", avatarDataUrl: avatar },
+        // Avatar inlining is optional and can fail for one person.
+        { login: "mira" },
+      ],
+      kind: "pull",
+      login: "roboclaw-bot",
+      number: 131442,
+      owner: "OpenClaw",
+      repo: "OpenClaw",
+      state: "open",
+      title: "fix(ui): one row",
+      updatedAt: "2026-07-05T09:55:00Z",
+    });
+    const { anchor, provider } = createLink(
+      "https://github.com/openclaw/openclaw/pull/131442",
+      "#131442",
+    );
+    provider.client = { request } as unknown as GatewayBrowserClient;
+
+    await hover(anchor);
+
+    const stack = document.querySelector<HTMLElement>(".github-link-hovercard__coauthors");
+    expect(stack?.querySelectorAll("img")).toHaveLength(2);
+    // Two faces plus "+3" accounts for all five; "+2" would drop the faceless one.
+    expect(stack?.querySelector(".github-link-hovercard__coauthors-more")?.textContent).toBe("+3");
+  });
+
+  it("omits the co-author stack when a pull request has none", async () => {
+    const request = vi.fn().mockResolvedValue({
+      createdAt: "2026-07-04T05:03:47Z",
+      kind: "pull",
+      login: "roboclaw-bot",
+      number: 131441,
+      owner: "OpenClaw",
+      repo: "OpenClaw",
+      state: "open",
+      title: "fix(ui): one row",
+      updatedAt: "2026-07-05T09:55:00Z",
+    });
+    const { anchor, provider } = createLink(
+      "https://github.com/openclaw/openclaw/pull/131441",
+      "#131441",
+    );
+    provider.client = { request } as unknown as GatewayBrowserClient;
+
+    await hover(anchor);
+
+    expect(document.querySelector(".github-link-hovercard__coauthors")).toBeNull();
+  });
+
   it("renders and caches pull request details without changing the link", async () => {
     const request = vi.fn().mockResolvedValue({
       additions: 101,
@@ -118,7 +224,10 @@ describe("openclaw-github-link-hovercard-provider", () => {
       updatedAt: "2026-07-05T09:55:00Z",
     });
     const href = "https://github.com/openclaw/openclaw/pull/99816";
-    const { anchor, provider } = createLink(href, "#99816");
+    const { anchor, provider } = createLink(
+      "HTTPS://GITHUB.COM:443/openclaw/openclaw/pull/99816",
+      "#99816",
+    );
     provider.client = { request } as unknown as GatewayBrowserClient;
 
     await hover(anchor);
@@ -132,7 +241,7 @@ describe("openclaw-github-link-hovercard-provider", () => {
     expect(card?.textContent).toContain("steipete");
     expect(card?.textContent).toContain("+101");
     expect(card?.textContent).toContain("−12");
-    expect(card?.textContent).toContain("3 files");
+    expect(card?.textContent).not.toContain("3 files");
     expect(card?.textContent).toContain("5m ago");
     expect(anchor.href).toBe(href);
     // A card that owns a link is an interactive popover, never an ARIA tooltip.
@@ -143,20 +252,25 @@ describe("openclaw-github-link-hovercard-provider", () => {
     expect(anchor.getAttribute("aria-haspopup")).toBe("dialog");
     expect(anchor.getAttribute("aria-expanded")).toBe("true");
     expect(anchor.getAttribute("aria-controls")).toBe(card?.id);
-    // Title, repo reference, author and the files chip are all real links, which
-    // is what makes the card a popover rather than a tooltip.
+    // Title, repo reference, and author are real links, which is what makes the
+    // card a popover rather than a tooltip.
     const cardLink = (selector: string) =>
       card?.querySelector<HTMLAnchorElement>(`.github-link-hovercard__${selector}`);
     expect(cardLink("title")?.getAttribute("href")).toBe(href);
     expect(cardLink("repo")?.getAttribute("href")).toBe(href);
     expect(cardLink("author")?.getAttribute("href")).toBe("https://github.com/steipete");
-    expect(cardLink("metric--files")?.getAttribute("href")).toBe(`${href}/files`);
-    for (const selector of ["title", "repo", "author", "metric--files"]) {
+    expect(card?.querySelector(".github-link-hovercard__metric--files")).toBeNull();
+    for (const selector of ["title", "repo", "author"]) {
       expect(cardLink(selector)?.target).toBe("_blank");
       expect(cardLink(selector)?.rel.split(/\s+/)).toEqual(
         expect.arrayContaining(["noopener", "noreferrer"]),
       );
     }
+    const diffMetrics = card?.querySelector(".github-link-hovercard__metrics--diff");
+    expect(diffMetrics?.children).toHaveLength(2);
+    expect([...(diffMetrics?.children ?? [])].every((metric) => metric.tagName === "SPAN")).toBe(
+      true,
+    );
     expect(request).toHaveBeenCalledWith(
       "controlUi.githubPreview",
       {
@@ -320,6 +434,9 @@ describe("openclaw-github-link-hovercard-provider", () => {
   it.each([
     "http://github.com/openclaw/openclaw/issues/99815",
     "https://user:password@github.com/openclaw/openclaw/issues/99815",
+    "https://github.com:8443/openclaw/openclaw/issues/99815",
+    "https://github.com.example.com/openclaw/openclaw/issues/99815",
+    "blob:https://github.com/issues/99815",
     "https://example.com/openclaw/openclaw/issues/99815",
     "javascript:alert(1)",
   ])("does not preview an untrusted item URL: %s", async (href) => {

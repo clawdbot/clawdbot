@@ -12,12 +12,17 @@ import ai.openclaw.app.chat.ChatQuestionPrompt
 import ai.openclaw.app.chat.ChatQuestionStatus
 import ai.openclaw.app.gateway.QuestionListResult
 import ai.openclaw.app.gateway.QuestionRecord
+import ai.openclaw.app.gateway.QuestionSecretStore
+import ai.openclaw.app.gateway.QuestionSecretStoreExisting
 import ai.openclaw.app.ui.design.ClawDesignTheme
 import android.content.Context
 import android.os.Looper
 import android.provider.Settings
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.size
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.semantics.SemanticsActions
@@ -107,6 +112,41 @@ class ChatQuestionDraftLayoutTest {
     AndroidScreenshotFixture.configure(AndroidScreenshotScene.Home)
     Settings.Global.putString(app.contentResolver, Settings.Global.ANIMATOR_DURATION_SCALE, originalAnimatorScale)
     shadowOf(Looper.getMainLooper()).idle()
+  }
+
+  @Test
+  fun credentialCardShowsConsentAndKeepsEditedInput() {
+    val secret =
+      question.questions.first().copy(
+        options = emptyList(),
+        isSecret = true,
+        secretStore = QuestionSecretStore("TASK_TOKEN", "secret", listOf("api.example.test"), "Deploy the approved change"),
+        secretStoreExisting = QuestionSecretStoreExisting(1_000, "operator"),
+      )
+    var prompt by mutableStateOf(ChatQuestionPrompt(question.copy(questions = listOf(secret), agentId = "requester", sessionKey = "agent:requester:main")))
+    var submitted: Map<String, List<String>>? = null
+    composeRule.setContent {
+      ClawDesignTheme {
+        ChatQuestionCard(
+          prompt = prompt,
+          onDraftChanged = { _, update -> prompt = prompt.copy(draft = update(prompt.draft)) },
+          onSubmit = { _, answers -> submitted = answers },
+          onSkip = {},
+        )
+      }
+    }
+    composeRule.onNodeWithText("Requested by requester", substring = true).assertIsDisplayed()
+    composeRule.onNodeWithText("agent:requester:main", substring = true).assertIsDisplayed()
+    composeRule.onNodeWithText("Stores TASK_TOKEN as Protected secret").assertIsDisplayed()
+    composeRule.onNodeWithText("Deploy the approved change").assertIsDisplayed()
+    composeRule.onNodeWithText("Replaces TASK_TOKEN", substring = true).assertIsDisplayed()
+    composeRule.onNodeWithText("Updated by operator").assertIsDisplayed()
+    val hosts = composeRule.onNode(hasSetTextAction() and hasText("Allowed HTTPS hosts"))
+    hosts.assertTextContains("api.example.test").performTextReplacement("uploads.example.test, api.example.test")
+    hosts.assertTextContains("uploads.example.test, api.example.test")
+    composeRule.onNode(hasSetTextAction() and hasText("Secret value")).performTextReplacement("  synthetic-value  ")
+    composeRule.onNodeWithText("Submit").performClick()
+    assertEquals(mapOf(secret.questionId to listOf("  synthetic-value  ")), submitted)
   }
 
   @Test

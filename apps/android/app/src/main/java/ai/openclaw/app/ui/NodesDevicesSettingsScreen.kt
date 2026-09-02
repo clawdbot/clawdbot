@@ -104,18 +104,22 @@ internal fun NodesDevicesSettingsScreen(
       }
     }
     when {
-      !isConnected ->
+      !isConnected -> {
         ClawPanel {
           Text(text = nativeString("Connect the gateway to load nodes and paired devices."), style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
         }
-      summary.isEmpty() && summary.devicePairingAvailable && pairingCapabilities.canManage ->
+      }
+
+      summary.isEmpty() && summary.devicePairingAvailable && pairingCapabilities.canManage -> {
         ClawPanel {
           Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
             Text(text = nativeString("No nodes or paired devices."), style = ClawTheme.type.section, color = ClawTheme.colors.text)
             Text(text = nativeString("Linked phones and node hosts will appear here after pairing."), style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
           }
         }
-      else ->
+      }
+
+      else -> {
         NodesDevicesPanel(
           summary = summary,
           pairingCapabilities = pairingCapabilities,
@@ -126,6 +130,7 @@ internal fun NodesDevicesSettingsScreen(
           onReject = viewModel::rejectDevicePairing,
           onRemove = viewModel::removePairedDevice,
         )
+      }
     }
   }
 }
@@ -151,10 +156,17 @@ private fun NodesDevicesPanel(
       onConfirm = {
         confirmation = null
         when (pending) {
-          is DevicePairingConfirmation.Approve ->
+          is DevicePairingConfirmation.Approve -> {
             onApprove(pending.device.requestId, pending.device.deviceId)
-          is DevicePairingConfirmation.Reject -> onReject(pending.device.requestId)
-          is DevicePairingConfirmation.Remove -> onRemove(pending.device.deviceId)
+          }
+
+          is DevicePairingConfirmation.Reject -> {
+            onReject(pending.device.requestId)
+          }
+
+          is DevicePairingConfirmation.Remove -> {
+            onRemove(pending.device.deviceId)
+          }
         }
       },
     )
@@ -287,10 +299,14 @@ private fun DevicePairingConfirmationDialog(
             }
           }
         }
-        is DevicePairingConfirmation.Reject ->
+
+        is DevicePairingConfirmation.Reject -> {
           Text(nativeString("Reject the pairing request from this device?"))
-        is DevicePairingConfirmation.Remove ->
+        }
+
+        is DevicePairingConfirmation.Remove -> {
           Text(nativeString("This device will lose its trusted Gateway access."))
+        }
       }
     },
     confirmButton = {
@@ -508,10 +524,12 @@ private fun nodeStatusText(node: GatewayNodeSummary): String =
 private fun nodeStatus(node: GatewayNodeSummary): ClawStatus =
   when (node.approvalState) {
     GatewayNodeApprovalState.Approved -> if (node.connected) ClawStatus.Success else ClawStatus.Warning
+
     GatewayNodeApprovalState.PendingApproval,
     GatewayNodeApprovalState.PendingReapproval,
     GatewayNodeApprovalState.Unapproved,
     -> ClawStatus.Warning
+
     GatewayNodeApprovalState.Loading,
     GatewayNodeApprovalState.Unsupported,
     -> if (node.connected) ClawStatus.Neutral else ClawStatus.Warning
@@ -520,9 +538,13 @@ private fun nodeStatus(node: GatewayNodeSummary): ClawStatus =
 private fun nodeApprovalSubtitle(approvalState: GatewayNodeApprovalState): String? =
   when (approvalState) {
     GatewayNodeApprovalState.Approved -> nativeString("Approved")
+
     GatewayNodeApprovalState.PendingApproval -> nativeString("Capability approval pending")
+
     GatewayNodeApprovalState.PendingReapproval -> nativeString("Capability reapproval pending")
+
     GatewayNodeApprovalState.Unapproved -> nativeString("Capability unapproved")
+
     GatewayNodeApprovalState.Loading,
     GatewayNodeApprovalState.Unsupported,
     -> null
@@ -576,13 +598,20 @@ internal fun formatDeviceList(
   kind: DeviceListKind,
 ): String? =
   when (values.size) {
-    0 -> null
-    1 -> values.first()
-    else ->
+    0 -> {
+      null
+    }
+
+    1 -> {
+      values.first()
+    }
+
+    else -> {
       when (kind) {
         DeviceListKind.Role -> nativeString("\${values.size} roles", values.size)
         DeviceListKind.Scope -> nativeString("\${values.size} scopes", values.size)
       }
+    }
   }
 
 private fun nodeBadge(value: String): String =

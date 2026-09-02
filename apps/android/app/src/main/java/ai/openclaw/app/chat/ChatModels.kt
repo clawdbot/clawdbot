@@ -219,6 +219,7 @@ internal fun parseChatPlanSteps(element: JsonElement?): List<ChatPlanStep> {
             }
           ChatPlanStep(step = step, status = status)
         }
+
         is JsonPrimitive -> {
           val step =
             entry
@@ -229,7 +230,10 @@ internal fun parseChatPlanSteps(element: JsonElement?): List<ChatPlanStep> {
               ?: return@mapNotNull null
           ChatPlanStep(step = step, status = ChatPlanStepStatus.Pending)
         }
-        else -> return@mapNotNull null
+
+        else -> {
+          return@mapNotNull null
+        }
       }
     if (parsed.status == ChatPlanStepStatus.InProgress) {
       if (hasInProgressStep) return@mapNotNull null
@@ -342,6 +346,8 @@ data class ChatSessionEntry(
   val derivedTitle: String? = null,
   val label: String? = null,
   val category: String? = null,
+  val color: String? = null,
+  val hasColorMetadata: Boolean = color != null,
   val pinned: Boolean? = null,
   val archived: Boolean? = null,
   val unread: Boolean? = null,

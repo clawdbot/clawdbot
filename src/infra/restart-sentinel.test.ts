@@ -30,6 +30,11 @@ vi.mock("../state/openclaw-state-db.js", async (importOriginal) => {
   };
 });
 
+vi.mock("../version.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../version.js")>();
+  return { ...actual, resolveRuntimeServiceCommit: () => "aaaaaaa" };
+});
+
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
   closeOpenClawStateDatabaseForTest,
@@ -510,6 +515,27 @@ describe("restart sentinel", () => {
     });
   });
 
+  it("uses the loaded build commit when finalizing an update", async () => {
+    await withRestartSentinelStateDir(async () => {
+      await writeRestartSentinel({
+        kind: "update",
+        status: "ok",
+        ts: Date.now(),
+        stats: {
+          mode: "git",
+          root: process.cwd(),
+          after: { sha: "aaaaaaa", version: "actual-version" },
+        },
+      });
+
+      await finalizeUpdateRestartSentinelRunningVersion("actual-version");
+
+      await expect(readRestartSentinel()).resolves.toMatchObject({
+        payload: { status: "ok" },
+      });
+    });
+  });
+
   it("does not rewrite update sentinels when the running version is already current", async () => {
     await withRestartSentinelStateDir(async () => {
       const ts = Date.now();
@@ -795,6 +821,31 @@ describe("restart success continuation", () => {
 });
 
 describe("control-plane update restart sentinel", () => {
+  it.each([
+    { serviceRestartSafe: false, reason: "runtime-verification-failed" },
+    { serviceRestartSafe: true, version: "1.0.0", service: "failed" },
+    {
+      serviceRestartSafe: true,
+      version: "1.0.0",
+      buildId: "restored-git-build",
+      service: "healthy",
+    },
+    { serviceRestartSafe: false, reason: "state-migration-started" },
+  ] as const)(
+    "preserves recovery through the typed sentinel round trip ($serviceRestartSafe)",
+    async (recovery) => {
+      await withRestartSentinelStateDir(async () => {
+        await writeRestartSentinel(
+          buildUpdateRestartSentinelPayload({
+            result: { status: "error", mode: "npm", recovery, steps: [], durationMs: 1 },
+            meta: {},
+          }),
+        );
+        expect((await readRestartSentinel())?.payload.stats?.recovery).toEqual(recovery);
+      });
+    },
+  );
+
   it("reports a successful same-revision Git run as already current", () => {
     const payload = buildUpdateRestartSentinelPayload({
       result: {

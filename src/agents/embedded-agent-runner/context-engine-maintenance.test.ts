@@ -17,7 +17,6 @@ import {
 } from "../../process/command-queue.js";
 import * as commandQueueModule from "../../process/command-queue.js";
 import { resetCommandQueueStateForTest } from "../../process/command-queue.test-support.js";
-import { onSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import { createQueuedTaskRunCore as createQueuedTaskRunOrNull } from "../../tasks/task-executor.js";
 import { getTaskFlowById } from "../../tasks/task-flow-registry.js";
 import { getTaskById, listTasksForOwnerKey } from "../../tasks/task-registry.js";
@@ -268,99 +267,6 @@ describe("runContextEngineMaintenance", () => {
     });
   });
 
-  it("forces background maintenance rewrites through the runtime target even when a session manager exists", async () => {
-    const maintain = vi.fn(async (params?: unknown) => {
-      await (
-        params as { runtimeContext?: ContextEngineRuntimeContext } | undefined
-      )?.runtimeContext?.rewriteTranscriptEntries?.({
-        replacements: [
-          {
-            entryId: "entry-1",
-            message: castAgentMessage({
-              role: "assistant",
-              content: [{ type: "text", text: "done" }],
-              timestamp: 2,
-            }),
-          },
-        ],
-      });
-      return {
-        changed: false,
-        bytesFreed: 0,
-        rewrittenEntries: 0,
-      };
-    });
-    const sessionManager = { appendMessage: vi.fn() } as unknown as Parameters<
-      typeof runContextEngineMaintenance
-    >[0]["sessionManager"];
-    const transcriptUpdateListener = vi.fn();
-    const cleanupTranscriptUpdateListener = onSessionTranscriptUpdate(transcriptUpdateListener);
-
-    try {
-      await runContextEngineMaintenance({
-        contextEngine: {
-          info: { id: "test", name: "Test Engine", turnMaintenanceMode: "background" },
-          ingest: async () => ({ ingested: true }),
-          assemble: async ({ messages }) => ({ messages, estimatedTokens: 0 }),
-          compact: async () => ({ ok: true, compacted: false }),
-          maintain,
-        },
-        sessionId: "session-background-file-rewrite",
-        sessionKey: "agent:main:session-background-file-rewrite",
-        sessionTarget: {
-          agentId: "custom-agent",
-          sessionId: "custom-session",
-          sessionKey: "agent:custom-agent:custom-session",
-          storePath: "/tmp/custom-agent.sqlite",
-        },
-        sessionFile: "/tmp/session-background-file-rewrite.jsonl",
-        reason: "turn",
-        executionMode: "background",
-        sessionManager,
-        config: {},
-      });
-    } finally {
-      cleanupTranscriptUpdateListener();
-    }
-
-    expect(resolveRuntimeTranscriptReadTargetMock).toHaveBeenCalledWith({
-      agentId: "custom-agent",
-      sessionId: "custom-session",
-      sessionKey: "agent:custom-agent:custom-session",
-      sessionFile: "/tmp/session-background-file-rewrite.jsonl",
-      storePath: "/tmp/custom-agent.sqlite",
-    });
-    expect(sessionManagerOpenMock).toHaveBeenCalledWith({
-      agentId: "custom-agent",
-      sessionId: "custom-session",
-      sessionKey: "agent:custom-agent:custom-session",
-      storePath: "/tmp/custom-agent.sqlite",
-    });
-    expect(rewriteTranscriptEntriesInSessionManagerMock).toHaveBeenCalledWith({
-      sessionManager: openedSessionManager,
-      replacements: [
-        {
-          entryId: "entry-1",
-          message: castAgentMessage({
-            role: "assistant",
-            content: [{ type: "text", text: "done" }],
-            timestamp: 2,
-          }),
-        },
-      ],
-    });
-    expect(transcriptUpdateListener).toHaveBeenCalledWith({
-      agentId: "custom-agent",
-      sessionId: "custom-session",
-      sessionKey: "agent:custom-agent:custom-session",
-      target: {
-        agentId: "custom-agent",
-        sessionId: "custom-session",
-        sessionKey: "agent:custom-agent:custom-session",
-      },
-    });
-  });
-
   it("locks foreground maintenance rewrites that use the active session manager", async () => {
     const events: string[] = [];
     const maintain = vi.fn(async (params?: unknown) => {
@@ -379,9 +285,10 @@ describe("runContextEngineMaintenance", () => {
         rewrittenEntries: 0,
       };
     });
-    const sessionManager = { appendMessage: vi.fn() } as unknown as Parameters<
-      typeof runContextEngineMaintenance
-    >[0]["sessionManager"];
+    const sessionManager = {
+      appendMessage: vi.fn(),
+      getSessionTarget: () => undefined,
+    } as unknown as Parameters<typeof runContextEngineMaintenance>[0]["sessionManager"];
     rewriteTranscriptEntriesInSessionManagerMock.mockImplementationOnce((_params?: unknown) => {
       events.push("rewrite");
       return {
@@ -422,6 +329,47 @@ describe("runContextEngineMaintenance", () => {
       ],
     });
     expect(sessionManagerOpenMock).not.toHaveBeenCalled();
+  });
+
+  it("does not resolve or open a durable transcript when the rewrite owner rejects", async () => {
+    const denied = new Error("detached recovery has no caller-owned transcript to rewrite");
+    const withSessionManagerRewriteLock = vi.fn(async () => {
+      throw denied;
+    });
+    let rewrite: ContextEngineRuntimeContext["rewriteTranscriptEntries"];
+    await runContextEngineMaintenance({
+      contextEngine: {
+        info: { id: "test", name: "Test Engine" },
+        ingest: async () => ({ ingested: true }),
+        assemble: async ({ messages }) => ({ messages, estimatedTokens: 0 }),
+        compact: async () => ({ ok: true, compacted: false }),
+        maintain: async ({ runtimeContext }) => {
+          rewrite = runtimeContext?.rewriteTranscriptEntries;
+          return { changed: false, bytesFreed: 0, rewrittenEntries: 0 };
+        },
+      },
+      sessionId: "detached-session",
+      sessionKey: "agent:main:detached-session",
+      sessionFile: "agent:main:detached-session",
+      reason: "compaction",
+      withSessionManagerRewriteLock,
+    });
+    if (!rewrite) {
+      throw new Error("expected the host-owned rewrite capability");
+    }
+
+    await expect(
+      rewrite({
+        replacements: [
+          { entryId: "entry-1", message: { role: "user", content: "replacement", timestamp: 1 } },
+        ],
+      }),
+    ).rejects.toBe(denied);
+
+    expect(withSessionManagerRewriteLock).toHaveBeenCalledOnce();
+    expect(resolveRuntimeTranscriptReadTargetMock).not.toHaveBeenCalled();
+    expect(sessionManagerOpenMock).not.toHaveBeenCalled();
+    expect(rewriteTranscriptEntriesInSessionManagerMock).not.toHaveBeenCalled();
   });
 
   it("defers turn maintenance to a hidden background task when enabled", async () => {

@@ -148,10 +148,10 @@ function isNodeRunnablePnpmExecPath(value: string) {
 export function resolvePnpmRunner(params: PnpmRunnerParams = {}): PnpmRunner {
   const pnpmArgs = params.pnpmArgs ?? [];
   const nodeArgs = params.nodeArgs ?? [];
-  const npmExecPath = params.npmExecPath ?? process.env.npm_execpath;
+  const env = params.env ?? process.env;
+  const npmExecPath = params.npmExecPath ?? env.npm_execpath;
   const nodeExecPath = params.nodeExecPath ?? process.execPath;
   const platform = params.platform ?? process.platform;
-  const env = params.env ?? process.env;
   const comSpec = params.comSpec ?? (platform === "win32" ? resolveWindowsCmdExePath(env) : "");
   const envPath = env[platform === "win32" ? resolvePathEnvKey(env) : "PATH"];
   const cwd = params.cwd ?? process.cwd();

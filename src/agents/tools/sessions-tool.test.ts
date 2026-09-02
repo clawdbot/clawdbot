@@ -16,6 +16,7 @@ import { GatewayClientRequestError } from "../../gateway/client.js";
 import { isAgentSessionModelPatchOrigin } from "../../gateway/session-model-patch-origin.js";
 import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admission.js";
 import { withTestDir } from "../../test-helpers/temp-dir.js";
+import * as failoverErrors from "../failover-error.js";
 import { createAgentPatchedSessionModelRunGuard } from "../session-model-auto-revert.js";
 import { withGatewayToolCallerIdentity } from "./gateway-caller-context.js";
 import type { AgentToolGatewayRequestCaller } from "./in-process-gateway.js";
@@ -207,9 +208,9 @@ describe("sessions tool", () => {
             "named icon: braces, book, monitor, bot, kanban, coins",
           ),
         },
-        category: {
+        group: {
           anyOf: [{ type: "string" }, { type: "null" }],
-          description: expect.stringContaining("This assigns one session"),
+          description: expect.stringContaining("creates the group"),
         },
         statusNote: { type: "string", maxLength: 120 },
         attention: {
@@ -606,28 +607,26 @@ describe("sessions tool", () => {
         session: { store: storePath },
         agents: { defaults: { model: { primary: "openai/good" } } },
       };
-      await upsertSessionEntryCore(
-        { agentId: "main", sessionKey, storePath },
-        {
-          sessionId: "session-main",
-          updatedAt: 1,
-          model: "good",
-          modelProvider: "openai",
-          modelOverride: "good",
-          providerOverride: "openai",
-          modelOverrideSource: "auto",
-          modelOverrideFallbackOriginProvider: "openai",
-          modelOverrideFallbackOriginModel: "primary",
-          authProfileOverride: "good-profile",
-          authProfileOverrideSource: "user",
-          thinkingLevel: "high",
-        },
-      );
+      const sessionScope = { agentId: "main", sessionKey, storePath };
+      await upsertSessionEntryCore(sessionScope, {
+        sessionId: "session-main",
+        updatedAt: 1,
+        model: "good",
+        modelProvider: "openai",
+        modelOverride: "good",
+        providerOverride: "openai",
+        modelOverrideSource: "auto",
+        modelOverrideFallbackOriginProvider: "openai",
+        modelOverrideFallbackOriginModel: "primary",
+        authProfileOverride: "good-profile",
+        authProfileOverrideSource: "user",
+        thinkingLevel: "high",
+      });
       const callGateway = vi.fn(
         async (request: { method: string; params: Record<string, unknown> }) => {
           expect(request.method).toBe("sessions.patch");
           expect(isAgentSessionModelPatchOrigin()).toBe(true);
-          await patchSessionEntryCore({ agentId: "main", sessionKey, storePath }, () => ({
+          await patchSessionEntryCore(sessionScope, () => ({
             label: request.params.label as string,
             model: "bad",
             modelProvider: "broken",
@@ -662,12 +661,9 @@ describe("sessions tool", () => {
         config: cfg,
         callGateway: callGateway as never,
       });
-      const currentRunGuard = createAgentPatchedSessionModelRunGuard({
-        cfg,
-        agentId: "main",
-        sessionKey,
-        storePath,
-      });
+      const guardParams = { cfg, ...sessionScope };
+      const currentRunGuard = createAgentPatchedSessionModelRunGuard(guardParams);
+      const failedCurrentRunGuard = createAgentPatchedSessionModelRunGuard(guardParams);
 
       await tool.execute("patch-model", {
         action: "patch",
@@ -683,7 +679,7 @@ describe("sessions tool", () => {
           model: "broken/bad",
         },
       });
-      expect(loadSessionEntry({ agentId: "main", sessionKey, storePath })).toMatchObject({
+      expect(loadSessionEntry(sessionScope)).toMatchObject({
         label: "Research",
         modelFallback: {
           prevModel: "good",
@@ -697,18 +693,36 @@ describe("sessions tool", () => {
         },
       });
       await currentRunGuard.finish(true);
-      expect(loadSessionEntry({ agentId: "main", sessionKey, storePath })).toHaveProperty(
-        "modelFallback",
-      );
+      expect(loadSessionEntry(sessionScope)).toHaveProperty("modelFallback");
 
-      const runGuard = createAgentPatchedSessionModelRunGuard({
-        cfg,
-        agentId: "main",
-        sessionKey,
-        storePath,
-      });
-      await runGuard.fail({ status: 404, message: "No endpoints found for broken/bad." });
-      expect(loadSessionEntry({ agentId: "main", sessionKey, storePath })).toMatchObject({
+      const failure = { status: 404, message: "No endpoints found for broken/bad." };
+      const entryBeforeFailure = loadSessionEntry(sessionScope);
+      const transcriptScope = { ...sessionScope, sessionId: "session-main" };
+      const transcriptBeforeFailure = await loadTranscriptEvents(transcriptScope);
+      const classifyFailure = vi
+        .spyOn(failoverErrors, "resolveFailoverReasonFromError")
+        .mockImplementation(() => {
+          throw new Error("An unarmed model-patch guard must not classify failures");
+        });
+      try {
+        expect(failedCurrentRunGuard.captureFallbackFailure([])).toBeUndefined();
+        expect(failedCurrentRunGuard.captureFailure(failure)).toBe(false);
+        expect(
+          failedCurrentRunGuard.captureFallbackFailure([
+            { error: failure.message, reason: "model_not_found" },
+          ]),
+        ).toBe(false);
+        await failedCurrentRunGuard.fail(failure);
+        expect(classifyFailure).not.toHaveBeenCalled();
+      } finally {
+        classifyFailure.mockRestore();
+      }
+      expect(loadSessionEntry(sessionScope)).toEqual(entryBeforeFailure);
+      expect(await loadTranscriptEvents(transcriptScope)).toEqual(transcriptBeforeFailure);
+
+      const runGuard = createAgentPatchedSessionModelRunGuard(guardParams);
+      await runGuard.fail(failure);
+      expect(loadSessionEntry(sessionScope)).toMatchObject({
         model: "good",
         modelProvider: "openai",
         modelOverrideSource: "auto",
@@ -717,15 +731,8 @@ describe("sessions tool", () => {
         authProfileOverride: "good-profile",
         thinkingLevel: "high",
       });
-      expect(loadSessionEntry({ agentId: "main", sessionKey, storePath })).not.toHaveProperty(
-        "modelFallback",
-      );
-      const events = await loadTranscriptEvents({
-        agentId: "main",
-        sessionId: "session-main",
-        sessionKey,
-        storePath,
-      });
+      expect(loadSessionEntry(sessionScope)).not.toHaveProperty("modelFallback");
+      const events = await loadTranscriptEvents(transcriptScope);
       expect(events).toContainEqual(
         expect.objectContaining({
           message: expect.objectContaining({
@@ -1024,25 +1031,33 @@ describe("sessions tool", () => {
     expect(callGateway).not.toHaveBeenCalled();
   });
 
-  it("denies patch targets outside a non-main caller's session tree", async () => {
-    const callGateway = vi.fn(async () => ({ sessions: [] }));
-    const tool = createSessionsTool({
-      agentSessionKey: "agent:main:dashboard:caller",
-      callGateway: callGateway as never,
-    });
-
-    await expect(
-      tool.execute("patch-other", {
+  it.each([undefined, "tree"] as const)(
+    "applies %s visibility when a non-main session categorizes a sibling",
+    async (visibility) => {
+      const callGateway = vi.fn(async () => ({ sessions: [] }));
+      const tool = createSessionsTool({
+        agentSessionKey: "agent:main:cron:organize",
+        config: { tools: { sessions: { visibility } } },
+        callGateway: callGateway as never,
+      });
+      const patch = tool.execute("patch-other", {
         action: "patch",
         sessionKey: "agent:main:other",
-        category: "Private",
-        expectedSessionId: "other-session",
-        archived: true,
-      }),
-    ).rejects.toThrow("Session status visibility is restricted");
-    expect(callGateway).not.toHaveBeenCalledWith({
-      method: "sessions.patch",
-      params: expect.objectContaining({ key: "agent:main:other" }),
-    });
-  });
+        group: "Projects",
+      });
+      if (visibility === "tree") {
+        await expect(patch).rejects.toThrow("Session status visibility is restricted");
+        expect(callGateway).not.toHaveBeenCalledWith({
+          method: "sessions.patch",
+          params: expect.objectContaining({ key: "agent:main:other" }),
+        });
+      } else {
+        await patch;
+        expect(callGateway).toHaveBeenCalledWith({
+          method: "sessions.patch",
+          params: { key: "agent:main:other", category: "Projects" },
+        });
+      }
+    },
+  );
 });

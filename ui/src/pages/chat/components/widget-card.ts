@@ -25,7 +25,6 @@ import {
 } from "../../../lib/chat/tool-display.ts";
 import { showToast } from "../../../lib/toast.ts";
 import { installWidgetThemeObserver, postWidgetTheme } from "../../../lib/widget-theme.ts";
-import type { SidebarContent } from "./chat-sidebar.ts";
 import { exportWidget } from "./widget-export.ts";
 import "./browser-tab-card.ts";
 
@@ -33,7 +32,6 @@ export { WIDGET_PROMPT_EVENT };
 export type { WidgetPromptEventDetail };
 
 type WidgetCardOptions = {
-  onOpenSidebar?: (content: SidebarContent) => void;
   rawText?: string | null;
   canvasPluginSurfaceUrl?: string | null;
   embedSandboxMode?: EmbedSandboxMode;
@@ -142,7 +140,11 @@ const WIDGET_PROMPT_MESSAGE_TYPE = "openclaw:widget-prompt";
 const WIDGET_PROMPT_HOST_READY_MESSAGE_TYPE = "openclaw:widget-prompt-host-ready";
 const WIDGET_CHAT_HOST_MESSAGE_TYPE = "openclaw:widget-chat-host";
 const WIDGET_FRAME_MIN_HEIGHT = 48;
-const WIDGET_FRAME_MAX_HEIGHT = 1200;
+// The ceiling is an abuse bound, not a layout preference: a widget that reports
+// a runaway size cannot blow up the transcript, but ordinary tall widgets must
+// fit their content here — a frame shorter than its document scrolls inside the
+// row, which hides content behind a nested scrollbar the transcript cannot see.
+const WIDGET_FRAME_MAX_HEIGHT = 8000;
 // Preview frames render inside lit shadow roots, so a document query cannot
 // find them; frames register themselves on load and are dropped once detached.
 const widgetFrameRegistry = new Set<HTMLIFrameElement>();
@@ -529,7 +531,7 @@ function renderWidgetActions(preview: CanvasToolPreview, hasRawDetails: boolean)
 
 function renderWidgetCard(
   preview: ToolPreview | undefined,
-  surface: "chat_tool" | "chat_message" | "sidebar",
+  surface: "chat_tool" | "chat_message",
   options?: WidgetCardOptions,
 ) {
   if (!preview) {
@@ -544,11 +546,7 @@ function renderWidgetCard(
         ></openclaw-browser-tab-card>`
       : nothing;
   }
-  if (
-    preview.kind !== "canvas" ||
-    surface === "chat_tool" ||
-    (preview.mcpApp && surface !== "chat_message")
-  ) {
+  if (preview.kind !== "canvas" || surface === "chat_tool") {
     return nothing;
   }
   if (preview.surface !== "assistant_message") {

@@ -340,8 +340,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 await ConnectionModeCoordinator.shared.apply(
                     mode: state.connectionMode,
                     paused: state.isPaused)
-                guard shouldWaitForConnection, launchPlan.allowsAutomaticPresentation else { return }
-                await self.scheduleFirstRunOnboardingIfNeeded()
+                guard launchPlan.allowsAutomaticPresentation else { return }
+                if shouldWaitForConnection {
+                    await self.scheduleFirstRunOnboardingIfNeeded()
+                }
+                // Attachment must settle before deciding whether this app needs to install a CLI.
+                if !PostUpdateController.shared.startIfNeeded() {
+                    CLIInstallPrompter.shared.checkAndPromptIfNeeded(reason: "launch")
+                }
             }
         }
         TerminationSignalWatcher.shared.start()
@@ -361,13 +367,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         Task { await HealthStore.shared.refresh(onDemand: true) }
         Task { await PortGuardian.shared.reapOrphanedTunnels() }
         AppStateStore.shared.applyComputerControlHostState()
-        if launchPlan.allowsAutomaticPresentation {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
-                if !PostUpdateController.shared.startIfNeeded() {
-                    CLIInstallPrompter.shared.checkAndPromptIfNeeded(reason: "launch")
-                }
-            }
-        }
         if launchPlan.allowsAutomaticPresentation {
             Task {
                 try? await Task.sleep(for: .seconds(2))
@@ -428,6 +427,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard self.terminationCleanupTask == nil else {
             return .terminateLater
         }
+        // AppKit will not tear down onboarding while its sheet remains attached.
+        // Retire it before terminateLater starts the asynchronous cleanup loop.
+        OnboardingController.shared.close()
         self.terminationCleanupTask = Task { @MainActor [weak self] in
             async let processCleanupResult: Void = Self.cleanUpProcesses()
             async let bridgeCleanupResult: Void = PeekabooBridgeHostCoordinator.shared.shutdown()

@@ -12,7 +12,7 @@ import type {
   BrowserProfileConfig,
   OpenClawConfig,
 } from "openclaw/plugin-sdk/config-contracts";
-import { resolveGatewayPort } from "openclaw/plugin-sdk/core";
+import { resolveGatewayPort } from "openclaw/plugin-sdk/gateway-config-runtime";
 import { mergeSsrFPolicies } from "openclaw/plugin-sdk/ssrf-policy";
 import { isLoopbackHost, type SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
 import {

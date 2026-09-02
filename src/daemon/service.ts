@@ -222,7 +222,7 @@ export async function readGatewayServiceState(
     args.requireEffective
       ? service
           .readDefinitionMutationCapability?.({ env: baseEnv, environment: env, timeoutMs })
-          .catch(() => ({ kind: "unknown" as const, detail: "Cannot inspect service definition." }))
+          .catch(() => ({ kind: "unknown", reason: "inspection-failed" }) as const)
       : undefined,
   ]);
   return {

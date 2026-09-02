@@ -3,6 +3,7 @@ import { Type } from "typebox";
 import { closedObject } from "./closed-object.js";
 import { PluginJsonValueSchema } from "./plugins.js";
 import { NonEmptyString } from "./primitives.js";
+import { SessionParticipantSchema } from "./session-participant.js";
 import { SessionCreatedActorSchema } from "./sessions-row.js";
 
 const SessionCatalogErrorSchema = closedObject({ code: NonEmptyString, message: NonEmptyString });
@@ -25,6 +26,17 @@ export const SessionCatalogCapabilitiesSchema = closedObject({
     }),
   ),
   openTerminal: Type.Optional(Type.Boolean()),
+});
+
+export const SessionCatalogShareRouteSchema = closedObject({
+  kind: Type.Literal("thread-id-prefix"),
+  routeSegment: Type.String({ pattern: "^[a-z][a-z0-9-]*$" }),
+  hostId: NonEmptyString,
+  identifierAlphabet: Type.Literal("lowercase-hex"),
+  fullLength: Type.Literal(32),
+  minPrefixLength: Type.Literal(12),
+  lookup: Type.Literal("catalog-list-search-by-thread-id-prefix"),
+  ambiguity: Type.Literal("multiple-results-or-next-cursor"),
 });
 
 export const SessionCatalogDescriptorSchema = closedObject({
@@ -51,6 +63,8 @@ export const SessionCatalogSessionSchema = closedObject({
   threadId: NonEmptyString,
   sourceHomeId: Type.Optional(NonEmptyString),
   name: Type.Optional(Type.String()),
+  /** Named tint imported from the source CLI session (SESSION_COLOR_IDS). */
+  color: Type.Optional(Type.String()),
   cwd: Type.Optional(Type.String()),
   status: NonEmptyString,
   createdAt: Type.Optional(Type.Number()),
@@ -85,6 +99,7 @@ export const SessionCatalogSchema = closedObject({
   id: NonEmptyString,
   label: NonEmptyString,
   capabilities: SessionCatalogCapabilitiesSchema,
+  shareRoute: Type.Optional(SessionCatalogShareRouteSchema),
   hosts: Type.Array(SessionCatalogHostSchema),
   error: Type.Optional(SessionCatalogErrorSchema),
 });
@@ -131,6 +146,8 @@ export const SessionCatalogTranscriptItemSchema = closedObject({
   text: Type.Optional(Type.String()),
   timestamp: Type.Optional(Type.String()),
   model: Type.Optional(Type.String()),
+  /** Source-supplied attribution, independent of the viewer and session adopter. */
+  sender: Type.Optional(SessionParticipantSchema),
   truncated: Type.Optional(Type.Boolean()),
   raw: Type.Optional(PluginJsonValueSchema),
 });
@@ -149,9 +166,7 @@ export const SessionsCatalogReadResultSchema = closedObject({
   nextCursor: Type.Optional(Type.String()),
 });
 
-export const SessionsCatalogContinueParamsSchema = closedObject({
-  ...SessionCatalogLocatorSchema.properties,
-});
+export const SessionsCatalogContinueParamsSchema = SessionCatalogLocatorSchema;
 
 export const SessionsCatalogContinueResultSchema = closedObject({ sessionKey: NonEmptyString });
 
@@ -181,6 +196,7 @@ export const SessionsCatalogStartTerminalResultSchema = closedObject({
 });
 
 export type SessionCatalogCapabilities = Static<typeof SessionCatalogCapabilitiesSchema>;
+export type SessionCatalogShareRoute = Static<typeof SessionCatalogShareRouteSchema>;
 export type SessionCatalogLocator = Static<typeof SessionCatalogLocatorSchema>;
 export type SessionCatalogDescriptor = Static<typeof SessionCatalogDescriptorSchema>;
 export type SessionCatalogPullRequestSummary = Static<

@@ -7,6 +7,12 @@ import type {
   TranscriptMessageAppendOptions,
   TranscriptMessageAppendResult,
 } from "./session-accessor.sqlite-contract.js";
+import { readSessionEntryRow } from "./session-accessor.sqlite-entry-store.js";
+import {
+  consumeSessionPendingInput,
+  resolveSessionPendingInputAppend,
+} from "./session-accessor.sqlite-pending-inputs.js";
+import { readTranscriptIdentityByEventId } from "./session-accessor.sqlite-read.js";
 import type { ResolvedTranscriptScope } from "./session-accessor.sqlite-scope.js";
 import { readActiveTranscriptEntryAnchorInTransaction } from "./session-accessor.sqlite-transcript-anchor.js";
 import { resolveTranscriptMessageAppendParent } from "./session-accessor.sqlite-transcript-parent.js";
@@ -14,7 +20,6 @@ import {
   appendTranscriptEventInTransaction,
   ensureTranscriptHeader,
   readMessageIdempotencyKey,
-  readTranscriptIdentityByEventId,
   readTranscriptMessageByEventId,
   readTranscriptMessageByScopedIdempotencyKey,
   redactTranscriptMessageForStorage,
@@ -44,6 +49,13 @@ export function appendTranscriptMessageInTransaction<TMessage>(
   resolved: ResolvedTranscriptScope,
   options: TranscriptMessageAppendOptions<TMessage> & { messageAlreadyRedacted?: boolean },
 ): TranscriptMessageAppendResult<TMessage> | undefined {
+  const pending = resolveSessionPendingInputAppend(database, resolved, options.message);
+  if (
+    pending &&
+    readSessionEntryRow(database, resolved.sessionKey)?.entry.sessionId !== resolved.sessionId
+  ) {
+    throw new Error("Pending input session changed before transcript promotion");
+  }
   const serializeForStorage = (message: TMessage): TMessage =>
     options.messageAlreadyRedacted ? message : redactTranscriptMessageForStorage(message, options);
   const readAnchor = (params: {
@@ -58,6 +70,20 @@ export function appendTranscriptMessageInTransaction<TMessage>(
     });
   const existingAppendResult = (found: { message: unknown; messageId: string }) => {
     const anchor = readAnchor(found);
+    if (pending) {
+      if (
+        found.messageId !== pending.inputId ||
+        !messagesMatchForIdempotentReplay(found.message, pending.message)
+      ) {
+        throw new TranscriptTurnAdmissionConflictError(pending.inputId);
+      }
+      // A consumed receipt permits terminal mirroring only while its exact user
+      // remains on the active path; it cannot revive a replaced transcript branch.
+      if (!anchor) {
+        throw new Error("Pending input is no longer active in its admitted transcript");
+      }
+      consumeSessionPendingInput(database, pending);
+    }
     return {
       appended: false as const,
       ...(anchor ? { anchor } : {}),
@@ -87,16 +113,26 @@ export function appendTranscriptMessageInTransaction<TMessage>(
     }
   }
 
-  const prepared = options.prepareMessageAfterIdempotencyCheck
-    ? options.prepareMessageAfterIdempotencyCheck(options.message)
-    : options.message;
+  if (pending?.alreadyPromoted) {
+    const committed = readTranscriptMessageByEventId(database, resolved, pending.inputId);
+    if (!committed) {
+      throw new Error("Pending input custody ended before transcript promotion");
+    }
+    return existingAppendResult(committed);
+  }
+  // Pending input already passed the hook and redaction before acknowledgment.
+  const prepared = pending
+    ? (pending.message as TMessage) // SAFETY: exact private custody supplies this keyed user's approved storage bytes.
+    : options.prepareMessageAfterIdempotencyCheck
+      ? options.prepareMessageAfterIdempotencyCheck(options.message)
+      : options.message;
   if (prepared === undefined) {
     return undefined;
   }
 
-  const messageId = options.eventId ?? randomUUID();
+  const messageId = pending?.inputId ?? options.eventId ?? randomUUID();
   const now = options.now ?? Date.now();
-  const finalMessage = serializeForStorage(prepared);
+  const finalMessage = pending ? prepared : serializeForStorage(prepared);
   ensureTranscriptHeader(database, resolved, options.cwd);
   const parentId = resolveTranscriptMessageAppendParent(database, resolved.sessionId, options);
   const event = {
@@ -107,9 +143,12 @@ export function appendTranscriptMessageInTransaction<TMessage>(
     message: finalMessage,
   };
   const appended = appendTranscriptEventInTransaction(database, resolved, event, {
-    dedupeByMessageIdempotency:
-      options.idempotencyLookup !== "caller-checked" &&
-      options.idempotencyLookup !== "scan-assistant",
+    idempotencyKeyMode:
+      options.idempotencyLookup === "caller-checked"
+        ? "relocate-owner"
+        : options.idempotencyLookup === "scan-assistant"
+          ? "preserve-owner"
+          : "dedupe",
   });
   if (!appended && idempotencyKey && options.idempotencyLookup !== "caller-checked") {
     const existing = readTranscriptMessageByScopedIdempotencyKey(
@@ -144,6 +183,9 @@ export function appendTranscriptMessageInTransaction<TMessage>(
     throw new Error(`SQLite transcript append did not insert message ${messageId}.`);
   }
   const anchor = readAnchor({ message: finalMessage, messageId });
+  if (pending) {
+    consumeSessionPendingInput(database, pending);
+  }
   return {
     appended: true,
     ...(anchor ? { anchor } : {}),

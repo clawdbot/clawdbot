@@ -109,7 +109,8 @@ export type ActionDownloadCapture = {
 export type PageState = {
   console: BrowserConsoleMessage[];
   errors: BrowserPageError[];
-  requests: BrowserNetworkRequest[];
+  requests: Map<string, BrowserNetworkRequest>;
+  // Strong Request keys would retain disposed Playwright page/context graphs.
   requestIds: WeakMap<Request, string>;
   nextRequestId: number;
   armIdUpload: number;

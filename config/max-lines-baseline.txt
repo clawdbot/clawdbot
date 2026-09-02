@@ -194,7 +194,6 @@ extensions/qa-lab/src/live-transports/slack/slack-live.runtime.test.ts
 extensions/qa-lab/src/live-transports/whatsapp/whatsapp-live.runtime.test.ts
 extensions/qa-lab/src/mantis/slack-desktop-smoke.runtime.test.ts
 extensions/qa-lab/src/mantis/slack-desktop-smoke.runtime.ts
-extensions/qa-lab/src/mantis/telegram-desktop-builder.runtime.ts
 extensions/qa-lab/src/mantis/visual-task.runtime.ts
 extensions/qa-lab/src/providers/mock-openai/server.test.ts
 extensions/qa-lab/src/providers/mock-openai/server.ts
@@ -338,7 +337,6 @@ src/agents/embedded-agent-runner.run-embedded-agent.auth-profile-rotation.e2e.te
 src/agents/embedded-agent-runner.sanitize-session-history.test.ts
 src/agents/embedded-agent-runner/compact.hooks.harness.ts
 src/agents/embedded-agent-runner/compact.hooks.test.ts
-src/agents/embedded-agent-runner/compact.queued.ts
 src/agents/embedded-agent-runner/context-engine-maintenance.test.ts
 src/agents/embedded-agent-runner/extra-params.ts
 src/agents/embedded-agent-runner/model.provider-runtime.test-support.ts
@@ -358,7 +356,6 @@ src/agents/embedded-agent-runner/transcript-file-state.test.ts
 src/agents/embedded-agent-subscribe.handlers.lifecycle.test.ts
 src/agents/embedded-agent-subscribe.handlers.tools.test.ts
 src/agents/embedded-agent-subscribe.subscribe-embedded-agent-session.subscribeembeddedagentsession.test.ts
-src/agents/failover-error.ts
 src/agents/harness/native-hook-relay.test.ts
 src/agents/harness/selection.test.ts
 src/agents/harness/selection.ts
@@ -392,7 +389,6 @@ src/agents/subagents/announce/subagent-announce-delivery.test.ts
 src/agents/subagents/announce/subagent-announce.format.e2e.test.ts
 src/agents/subagents/registry/subagent-control.test.ts
 src/agents/subagents/registry/subagent-registry-lifecycle.test.ts
-src/agents/subagents/registry/subagent-registry.steer-restart.test.ts
 src/agents/subagents/registry/subagent-registry.test.ts
 src/agents/subagents/spawn/acp-spawn-parent-stream.test.ts
 src/agents/subagents/spawn/acp-spawn.test.ts
@@ -410,7 +406,6 @@ src/agents/tools/image-tool.ts
 src/agents/tools/media-generate-background-shared.test.ts
 src/agents/tools/message-tool.test.ts
 src/agents/tools/music-generate-tool.test.ts
-src/agents/tools/music-generate-tool.ts
 src/agents/tools/session-status-tool.ts
 src/agents/tools/sessions-send-tool.ts
 src/agents/tools/sessions-spawn-tool.test.ts
@@ -498,7 +493,6 @@ src/cli/run-main.ts
 src/cli/skills-cli.commands.test.ts
 src/cli/skills-cli.ts
 src/cli/update-cli.test.ts
-src/cli/update-cli/update-command-service.ts
 src/commands/agent-via-gateway.test.ts
 src/commands/agent-via-gateway.ts
 src/commands/agent.test.ts
@@ -516,7 +510,6 @@ src/commands/doctor-gateway-services.ts
 src/commands/doctor-legacy-config.migrations.test.ts
 src/commands/doctor-memory-search.test.ts
 src/commands/doctor-memory-search.ts
-src/commands/doctor-session-sqlite-migration-run.ts
 src/commands/doctor-session-sqlite.test.ts
 src/commands/doctor-session-sqlite.ts
 src/commands/doctor-state-integrity.ts
@@ -672,7 +665,6 @@ src/gateway/session-create-service.ts
 src/gateway/session-message-events.test.ts
 src/gateway/session-reset-service.ts
 src/gateway/session-utils.fs.test.ts
-src/gateway/session-utils.fs.ts
 src/gateway/session-utils.subagent.test.ts
 src/gateway/session-utils.test.ts
 src/gateway/sessions-history-http.test.ts
@@ -859,18 +851,15 @@ ui/src/pages/agents/panels-tools-skills.ts
 ui/src/pages/chat/chat-command-executor.test.ts
 ui/src/pages/chat/chat-command-executor.ts
 ui/src/pages/chat/chat-gateway.test.ts
-ui/src/pages/chat/chat-history.ts
 ui/src/pages/chat/chat-responsive.browser.test.ts
 ui/src/pages/chat/chat-send.test.ts
 ui/src/pages/chat/chat-state.test.ts
 ui/src/pages/chat/chat-thread.test.ts
 ui/src/pages/chat/chat-view.test.ts
 ui/src/pages/chat/components/chat-message.test.ts
-ui/src/pages/chat/components/chat-tool-cards.ts
 ui/src/pages/chat/composer-persistence.test.ts
 ui/src/pages/chat/composer-persistence.ts
 ui/src/pages/chat/realtime-talk-gateway-relay.test.ts
-ui/src/pages/chat/tool-stream.ts
 ui/src/pages/config/config-page.ts
 ui/src/pages/config/view.browser.test.ts
 ui/src/pages/cron/view.ts

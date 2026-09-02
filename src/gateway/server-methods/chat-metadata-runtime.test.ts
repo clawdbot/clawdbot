@@ -1,185 +1,74 @@
 import { describe, expect, test, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import {
-  resolveUsableAgentCredentialModes,
-  type AgentCredentialMap,
-} from "../../agents/agent-auth-credentials.js";
+import type { AgentCredentialMap } from "../../agents/agent-auth-credentials.js";
 import type { AuthProfileStore } from "../../agents/auth-profiles.js";
-import type { ModelCatalogEntry, ModelCatalogSnapshot } from "../../agents/model-catalog.types.js";
-import {
-  setPreparedModelFullCatalogAuth,
-  setPreparedModelRuntimeAuthStore,
-} from "../../agents/prepared-model-runtime-auth.js";
+import type { ModelCatalogSnapshot } from "../../agents/model-catalog.types.js";
+import { setPreparedModelFullCatalogAuth } from "../../agents/prepared-model-runtime-auth.js";
 import { markPreparedModelCatalogFull } from "../../agents/prepared-model-runtime.full-catalog.js";
-import type { PreparedModelRuntimeSnapshot } from "../../agents/prepared-model-runtime.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { createGatewayChatMetadataRuntime } from "./chat-metadata-runtime.js";
-import type { GatewayRequestContext } from "./types.js";
-
-function createOwner(
-  config: OpenClawConfig,
-  id: string,
-  credentials: AgentCredentialMap = {},
-  provider = "test",
-  api?: ModelCatalogEntry["api"],
-): PreparedModelRuntimeSnapshot {
-  const model = { id, name: id, provider, ...(api ? { api } : {}) };
-  const authStore: AuthProfileStore = {
-    version: 1,
-    profiles: Object.fromEntries(
-      Object.entries(credentials).map(([credentialProvider, credential]) => [
-        `${credentialProvider}:prepared`,
-        { ...credential, provider: credentialProvider },
-      ]),
-    ),
-  };
-  const owner: PreparedModelRuntimeSnapshot = {
-    agentId: "main",
-    agentDir: `/tmp/${id}/agent`,
-    workspaceDir: `/tmp/${id}/workspace`,
-    activeProjectKeys: [],
-    config,
-    authModes: resolveUsableAgentCredentialModes(credentials),
-    metadataSnapshot: { index: { plugins: [] }, plugins: [] } as never,
-    allowGatewaySubagentBinding: false,
-    modelCatalog: {
-      entries: [model],
-      routeVariants: api ? [model] : [],
-    },
-    configuredRuntimeModels: [],
-    inlineProviderModels: [],
-    createStores: () => ({
-      authStorage: { getAll: () => credentials } as never,
-      modelRegistry: {} as never,
-    }),
-  };
-  setPreparedModelRuntimeAuthStore(owner, authStore);
-  return owner;
-}
-
-function createHarness(
-  initialConfig: OpenClawConfig = { agents: { list: [{ id: "main", default: true }] } },
-  runtimeOptions: {
-    beforeRefresh?: () => Promise<void>;
-    refreshOnRead?: boolean;
-    useDefaultProjection?: boolean;
-  } = {},
-) {
-  const { useDefaultProjection = false, ...gatewayRuntimeOptions } = runtimeOptions;
-  let config = initialConfig;
-  let owner = createOwner(config, "first");
-  let skillsVersion = 1;
-  let pluginRegistryVersion = 1;
-  let authStore: AuthProfileStore | undefined = { version: 1, profiles: {} };
-  let authStoreRevision = 1;
-  const invalidProjections = new WeakSet<object>();
-  const getPreparedOwner = vi.fn((): PreparedModelRuntimeSnapshot | undefined => owner);
-  const getPreparedAuthStore = vi.fn(() => authStore);
-  const getAuthStoreRevision = vi.fn(() => authStoreRevision);
-  const getSkillsVersion = vi.fn(() => skillsVersion);
-  const getPluginRegistryVersion = vi.fn(() => pluginRegistryVersion);
-  const buildCommands = vi.fn(async () => ({
-    commands: [{ name: `command-${skillsVersion}-${pluginRegistryVersion}` }],
-  }));
-  const buildProjection = vi.fn(
-    async ({
-      facts,
-    }: {
-      facts: {
-        authStore: AuthProfileStore;
-        modelCatalog: ModelCatalogSnapshot;
-        owner: PreparedModelRuntimeSnapshot;
-      };
-    }) => {
-      const modelCatalog = facts.modelCatalog;
-      return {
-        modelCatalog: modelCatalog.entries,
-        models: modelCatalog.entries,
-      };
-    },
-  );
-  const context = {
-    getRuntimeConfig: () => config,
-    loadGatewayModelCatalogSnapshot: async (params?: { readOnly?: boolean }) => {
-      const modelCatalog =
-        params?.readOnly === false && owner.loadFullModelCatalog
-          ? await owner.loadFullModelCatalog()
-          : owner.modelCatalog;
-      return {
-        ...modelCatalog,
-        agentId: owner.agentId,
-        agentDir: owner.agentDir,
-        workspaceDir: owner.workspaceDir,
-        config: owner.config,
-      };
-    },
-    logGateway: {
-      debug: vi.fn(),
-      info: vi.fn(),
-      warn: vi.fn(),
-      error: vi.fn(),
-    },
-  } as unknown as GatewayRequestContext;
-  const runtime = createGatewayChatMetadataRuntime({
-    getConfig: () => config,
-    getContext: () => context,
-    log: context.logGateway,
-    ...gatewayRuntimeOptions,
-    deps: {
-      getPreparedOwner,
-      getPreparedAuthStore,
-      getAuthStoreRevision,
-      getSkillsVersion,
-      getPluginRegistryVersion,
-      buildCommands,
-      ...(useDefaultProjection
-        ? {}
-        : {
-            buildProjection: async (params) => {
-              const projection = await buildProjection(params);
-              return {
-                read: () => projection,
-                isCurrent: () => !invalidProjections.has(projection),
-              };
-            },
-          }),
-    },
-  });
-  return {
-    buildCommands,
-    buildProjection,
-    getPluginRegistryVersion,
-    getAuthStoreRevision,
-    getPreparedAuthStore,
-    getPreparedOwner,
-    getSkillsVersion,
-    invalidProjections,
-    runtime,
-    setConfig(next: OpenClawConfig) {
-      config = next;
-    },
-    setAuthStore(next: AuthProfileStore | undefined) {
-      authStore = next;
-    },
-    setAuthStoreRevision(next: number) {
-      authStoreRevision = next;
-    },
-    setOwner(next: PreparedModelRuntimeSnapshot) {
-      owner = next;
-    },
-    setPluginRegistryVersion(next: number) {
-      pluginRegistryVersion = next;
-    },
-    setSkillsVersion(next: number) {
-      skillsVersion = next;
-    },
-  };
-}
+import {
+  createChatMetadataHarness,
+  createChatMetadataOwner,
+} from "./chat-metadata-runtime.test-support.js";
 
 describe("gateway chat metadata runtime", () => {
+  test("notifies once per settlement, including same-epoch recovery, without an unavailable-read loop", async () => {
+    const onChanged = vi.fn();
+    const harness = createChatMetadataHarness(undefined, { onChanged });
+    const owner = harness.getPreparedOwner();
+    harness.getPreparedOwner.mockReturnValue(undefined);
+    await expect(harness.runtime.refresh()).rejects.toThrow("owner is unavailable");
+    for (let read = 0; read < 3; read += 1) {
+      await expect(harness.runtime.read({ agentId: "main" })).rejects.toThrow(
+        "owner is unavailable",
+      );
+    }
+    expect(onChanged).toHaveBeenCalledTimes(1);
+    harness.getPreparedOwner.mockReturnValue(owner);
+    await harness.runtime.read({ agentId: "main" });
+    await harness.runtime.refresh();
+    expect(onChanged).toHaveBeenCalledTimes(2);
+    harness.runtime.invalidate();
+    harness.runtime.fail(new Error("replacement failed"));
+    await expect(harness.runtime.read({ agentId: "main" })).rejects.toThrow("replacement failed");
+    expect(onChanged).toHaveBeenCalledTimes(3);
+  });
+
+  test.each(["resolve", "reject"] as const)(
+    "never announces an obsolete build's %s after terminal failure",
+    async (settlement) => {
+      const onChanged = vi.fn();
+      const harness = createChatMetadataHarness(undefined, { onChanged });
+      const gate = createDeferred();
+      harness.buildProjection.mockImplementationOnce(async ({ facts }) => {
+        await gate.promise;
+        if (settlement === "reject") {
+          throw new Error("obsolete build");
+        }
+        return { models: facts.modelCatalog.entries, modelCatalog: facts.modelCatalog.entries };
+      });
+      const build = harness.runtime.refresh();
+      await vi.waitFor(() => expect(harness.buildProjection).toHaveBeenCalledOnce());
+      harness.runtime.fail(new Error("owner failed"));
+      gate.resolve();
+      await build;
+      expect(onChanged).toHaveBeenCalledOnce();
+      await expect(harness.runtime.read({ agentId: "main" })).rejects.toThrow("owner failed");
+      await harness.runtime.refresh();
+      expect(onChanged).toHaveBeenCalledTimes(2);
+      await expect(harness.runtime.read({ agentId: "main" })).resolves.toMatchObject({
+        models: [expect.objectContaining({ id: "first" })],
+      });
+    },
+  );
+
   test("refreshes lazily on the first read when configured", async () => {
     const beforeRefresh = vi.fn(async () => {});
-    const harness = createHarness(undefined, { beforeRefresh, refreshOnRead: true });
+    const harness = createChatMetadataHarness(undefined, { beforeRefresh, refreshOnRead: true });
 
     expect(harness.buildProjection).not.toHaveBeenCalled();
     await expect(harness.runtime.read({ agentId: "main" })).resolves.toMatchObject({
@@ -191,7 +80,7 @@ describe("gateway chat metadata runtime", () => {
   });
 
   test("single-flights equivalent refreshes and reads", async () => {
-    const harness = createHarness();
+    const harness = createChatMetadataHarness();
     const releaseModels = createDeferred();
     harness.buildProjection.mockImplementationOnce(async ({ facts }) => {
       await releaseModels.promise;
@@ -219,7 +108,7 @@ describe("gateway chat metadata runtime", () => {
   });
 
   test("serves published metadata without request-time generation reads", async () => {
-    const harness = createHarness();
+    const harness = createChatMetadataHarness();
     await harness.runtime.refresh();
     harness.getPreparedOwner.mockClear();
     harness.getPreparedAuthStore.mockClear();
@@ -239,7 +128,7 @@ describe("gateway chat metadata runtime", () => {
   });
 
   test("serves startup projections from the published generation", async () => {
-    const harness = createHarness();
+    const harness = createChatMetadataHarness();
     await harness.runtime.refresh();
     harness.getPreparedOwner.mockClear();
     harness.getPreparedAuthStore.mockClear();
@@ -255,7 +144,7 @@ describe("gateway chat metadata runtime", () => {
     ]);
     expect(second).toEqual(first);
     expect(first?.defaultModelCatalog).toBe(first?.sessionModelCatalog);
-    expect(first?.metadata.models).toEqual(first?.sessionModelCatalog);
+    expect(first?.metadata?.models).toEqual(first?.sessionModelCatalog);
     expect(harness.buildProjection).toHaveBeenCalledTimes(1);
     expect(harness.getPreparedOwner).not.toHaveBeenCalled();
     expect(harness.getPreparedAuthStore).not.toHaveBeenCalled();
@@ -264,10 +153,33 @@ describe("gateway chat metadata runtime", () => {
     expect(harness.getPluginRegistryVersion).not.toHaveBeenCalled();
   });
 
+  test("reads settled history catalogs without projecting public model metadata", async () => {
+    const harness = createChatMetadataHarness();
+    await harness.runtime.refresh();
+    harness.readProjection.mockClear();
+
+    for (let read = 0; read < 3; read += 1) {
+      const projection = await harness.runtime.readStartup({
+        agentId: "main",
+        readPolicy: "ready",
+      });
+      expect(projection?.sessionModelCatalog).toEqual([
+        expect.objectContaining({ id: "first", provider: "test" }),
+      ]);
+      expect(projection?.defaultModelCatalog).toBe(projection?.sessionModelCatalog);
+      expect(projection).not.toHaveProperty("metadata");
+    }
+
+    expect(harness.readProjection).not.toHaveBeenCalled();
+    const startup = await harness.runtime.readStartup({ agentId: "main" });
+    expect(startup?.metadata?.models).toEqual(startup?.sessionModelCatalog);
+    expect(harness.readProjection).toHaveBeenCalledOnce();
+  });
+
   test("keeps large-roster neutral projections prepared outside the session cache", async () => {
     const defaultAgentId = "agent-0";
     const agentIds = Array.from({ length: 65 }, (_, index) => `agent-${index}`);
-    const harness = createHarness({
+    const harness = createChatMetadataHarness({
       agents: {
         list: agentIds.map((id) => ({
           id,
@@ -300,7 +212,7 @@ describe("gateway chat metadata runtime", () => {
   });
 
   test("caches a session auth projection separately from the neutral projection", async () => {
-    const harness = createHarness();
+    const harness = createChatMetadataHarness();
     await harness.runtime.refresh();
 
     const sessionEntry = {
@@ -327,7 +239,7 @@ describe("gateway chat metadata runtime", () => {
   });
 
   test("ready reads never prepare or await a cold or pending exact profile", async () => {
-    const harness = createHarness(undefined, { refreshOnRead: true });
+    const harness = createChatMetadataHarness(undefined, { refreshOnRead: true });
     const sessionEntry = {
       authProfileOverride: "test:session",
       authProfileOverrideSource: "user" as const,
@@ -360,7 +272,11 @@ describe("gateway chat metadata runtime", () => {
       await Promise.all([canonical, optional]);
     }
     const ready = await harness.runtime.readStartup(params);
-    expect(ready).toEqual(await canonical);
+    const startup = await canonical;
+    expect(ready).toEqual({
+      sessionModelCatalog: startup?.sessionModelCatalog,
+      defaultModelCatalog: startup?.defaultModelCatalog,
+    });
     expect(ready?.sessionModelCatalog).toBe(profileCatalog);
     expect(ready?.defaultModelCatalog).toEqual([expect.objectContaining({ id: "first" })]);
     for (const other of [
@@ -376,7 +292,7 @@ describe("gateway chat metadata runtime", () => {
   test.each(["neutral", "profile"] as const)(
     "ready reads omit an invalid %s wrapper until a canonical read refreshes it",
     async (invalid) => {
-      const harness = createHarness();
+      const harness = createChatMetadataHarness();
       const sessionEntry = {
         authProfileOverride: "test:session",
         authProfileOverrideSource: "user" as const,
@@ -407,7 +323,10 @@ describe("gateway chat metadata runtime", () => {
       for (let read = 0; read < 2; read++) {
         await expect(
           harness.runtime.readStartup({ ...params, readPolicy: "ready" }),
-        ).resolves.toEqual(canonical);
+        ).resolves.toEqual({
+          sessionModelCatalog: canonical?.sessionModelCatalog,
+          defaultModelCatalog: canonical?.defaultModelCatalog,
+        });
       }
       expect(harness.buildProjection).toHaveBeenCalledTimes(3);
     },
@@ -416,7 +335,7 @@ describe("gateway chat metadata runtime", () => {
   test.each(["invalidate", "pending refresh", "failed", "stale facts"] as const)(
     "ready reads omit projections after %s without starting replacement work",
     async (state) => {
-      const harness = createHarness(undefined, { refreshOnRead: true });
+      const harness = createChatMetadataHarness(undefined, { refreshOnRead: true });
       const sessionEntry = { authProfileOverride: "test:session" };
       await harness.runtime.refresh();
       await harness.runtime.readStartup({ agentId: "main", sessionEntry });
@@ -458,7 +377,7 @@ describe("gateway chat metadata runtime", () => {
   test.each(["resolve", "reject"] as const)(
     "an evicted profile's late %s cannot replace or delete its newer ready entry",
     async (settlement) => {
-      const harness = createHarness();
+      const harness = createChatMetadataHarness();
       await harness.runtime.refresh();
       const sessionEntry = { authProfileOverride: "test:evicted" };
       const release = createDeferred();
@@ -490,7 +409,10 @@ describe("gateway chat metadata runtime", () => {
             sessionEntry,
             readPolicy: "ready",
           }),
-        ).resolves.toEqual(newer);
+        ).resolves.toEqual({
+          sessionModelCatalog: newer?.sessionModelCatalog,
+          defaultModelCatalog: newer?.defaultModelCatalog,
+        });
         await expect(
           harness.runtime.readStartup({ agentId: "main", sessionEntry }),
         ).resolves.toEqual(newer);
@@ -517,7 +439,7 @@ describe("gateway chat metadata runtime", () => {
       locked: false,
     },
   ])("projects $name provenance", async ({ sessionEntry, locked }) => {
-    const harness = createHarness();
+    const harness = createChatMetadataHarness();
     await harness.runtime.refresh();
 
     await harness.runtime.readStartup({
@@ -543,7 +465,7 @@ describe("gateway chat metadata runtime", () => {
   });
 
   test("reuses the prepared generation for an equivalent config replacement", async () => {
-    const harness = createHarness();
+    const harness = createChatMetadataHarness();
     await harness.runtime.refresh();
     const first = await harness.runtime.read({ agentId: "main" });
 
@@ -559,7 +481,7 @@ describe("gateway chat metadata runtime", () => {
   });
 
   test("rebuilds after an auth store publishes a newer revision", async () => {
-    const harness = createHarness();
+    const harness = createChatMetadataHarness();
     harness.setAuthStore(undefined);
     harness.buildProjection.mockImplementation(async ({ facts }) => ({
       modelCatalog: facts.owner.modelCatalog.entries,
@@ -590,9 +512,9 @@ describe("gateway chat metadata runtime", () => {
   test.each(["before", "after"] as const)(
     "converges to models.list availability when owner auth publishes %s attachment",
     async (publicationOrder) => {
-      const harness = createHarness(undefined, { useDefaultProjection: true });
+      const harness = createChatMetadataHarness(undefined, { useDefaultProjection: true });
       harness.setAuthStore({ version: 1, profiles: {} });
-      const preparedOwner = createOwner(
+      const preparedOwner = createChatMetadataOwner(
         harness.getPreparedOwner()!.config,
         "gpt-5.4",
         {
@@ -624,6 +546,40 @@ describe("gateway chat metadata runtime", () => {
     },
   );
 
+  test("publishes hydrated marker-shaped credentials through the shared model projection", async () => {
+    const sourceConfig = {
+      agents: { defaults: { models: { "vllm/discovered": {} } } },
+      models: {
+        providers: {
+          vllm: {
+            baseUrl: "https://vllm.example/v1",
+            apiKey: { source: "store", provider: "default", id: "CATALOG_KEY" },
+            models: [],
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+    const runtimeConfig: OpenClawConfig = {
+      ...sourceConfig,
+      models: {
+        providers: {
+          vllm: { ...sourceConfig.models.providers.vllm, apiKey: "ollama-local" },
+        },
+      },
+    };
+    setRuntimeConfigSnapshot(runtimeConfig, sourceConfig);
+    const harness = createChatMetadataHarness(runtimeConfig, { useDefaultProjection: true });
+    harness.setOwner(createChatMetadataOwner(runtimeConfig, "discovered", {}, "vllm"));
+    try {
+      await harness.runtime.refresh();
+      await expect(harness.runtime.read({ agentId: "main" })).resolves.toMatchObject({
+        models: [expect.objectContaining({ id: "discovered", provider: "vllm", available: true })],
+      });
+    } finally {
+      clearRuntimeConfigSnapshot();
+    }
+  });
+
   test("keeps live provider discovery off chat metadata projection", async () => {
     const config = {
       agents: {
@@ -634,7 +590,7 @@ describe("gateway chat metadata runtime", () => {
         list: [{ id: "main", default: true }],
       },
     } as OpenClawConfig;
-    const harness = createHarness(config, { useDefaultProjection: true });
+    const harness = createChatMetadataHarness(config, { useDefaultProjection: true });
     const credentials: AgentCredentialMap = {
       openai: {
         type: "oauth",
@@ -643,7 +599,7 @@ describe("gateway chat metadata runtime", () => {
         expires: Date.now() + 30 * 60_000,
       },
     };
-    const owner = createOwner(
+    const owner = createChatMetadataOwner(
       config,
       "gpt-5.6-sol",
       credentials,
@@ -680,6 +636,52 @@ describe("gateway chat metadata runtime", () => {
     expect(loadFullModelCatalog).not.toHaveBeenCalled();
   });
 
+  test("keeps a locked session unavailable while the neutral prepared route is usable", async () => {
+    const harness = createChatMetadataHarness(
+      {
+        agents: {
+          defaults: {
+            model: { primary: "openai/gpt-5.6-sol" },
+            models: { "openai/gpt-5.6-sol": {} },
+          },
+          list: [{ id: "main", default: true }],
+        },
+      },
+      { useDefaultProjection: true },
+    );
+    harness.setOwner(
+      createChatMetadataOwner(
+        harness.getPreparedOwner()!.config,
+        "gpt-5.6-sol",
+        {
+          openai: {
+            type: "oauth",
+            access: "synthetic-access",
+            refresh: "synthetic-refresh",
+            expires: Date.now() + 60_000,
+          },
+        },
+        "openai",
+        "openai-chatgpt-responses",
+      ),
+    );
+    harness.setAuthStore({ version: 1, profiles: {} });
+    await harness.runtime.refresh();
+    const sessionEntry = {
+      authProfileOverride: "openai:missing-lock",
+      authProfileOverrideSource: "user" as const,
+    };
+    const startup = await harness.runtime.readStartup({ agentId: "main", sessionEntry });
+    const scoped = await harness.runtime.read({ agentId: "main", sessionEntry });
+    expect(scoped).toEqual(startup?.metadata);
+    expect(scoped.models).toEqual([
+      expect.objectContaining({ available: false, unavailableReason: "auth-failed" }),
+    ]);
+    await expect(harness.runtime.read({ agentId: "main" })).resolves.toMatchObject({
+      models: [expect.objectContaining({ available: true })],
+    });
+  });
+
   test("adopts discovered wildcard models without restarting provider discovery", async () => {
     const config = {
       agents: {
@@ -698,8 +700,8 @@ describe("gateway chat metadata runtime", () => {
         expires: Date.now() + 30 * 60_000,
       },
     };
-    const harness = createHarness(config, { useDefaultProjection: true });
-    const owner = createOwner(
+    const harness = createChatMetadataHarness(config, { useDefaultProjection: true });
+    const owner = createChatMetadataOwner(
       config,
       "gpt-5.6-sol",
       credentials,
@@ -755,7 +757,7 @@ describe("gateway chat metadata runtime", () => {
   });
 
   test("rejects a completed catalog without its matching prepared auth generation", async () => {
-    const harness = createHarness();
+    const harness = createChatMetadataHarness();
     const owner = harness.getPreparedOwner()!;
     const unpairedCatalog = markPreparedModelCatalogFull({ ...owner.modelCatalog });
     harness.setOwner({ ...owner, readFullModelCatalog: () => unpairedCatalog });
@@ -766,7 +768,7 @@ describe("gateway chat metadata runtime", () => {
   });
 
   test("retains a generation while auth store revisions are unchanged", async () => {
-    const harness = createHarness();
+    const harness = createChatMetadataHarness();
     harness.getPreparedAuthStore.mockImplementation(() => ({ version: 1, profiles: {} }));
     await harness.runtime.refresh();
     const first = await harness.runtime.read({ agentId: "main" });
@@ -781,7 +783,7 @@ describe("gateway chat metadata runtime", () => {
   });
 
   test("refreshes config, catalog-auth, skills, and plugin generations", async () => {
-    const harness = createHarness();
+    const harness = createChatMetadataHarness();
     await harness.runtime.refresh();
     const first = await harness.runtime.read({ agentId: "main" });
 
@@ -800,7 +802,7 @@ describe("gateway chat metadata runtime", () => {
       tools: { swarm: { enabled: true } },
     };
     harness.setConfig(nextConfig);
-    harness.setOwner(createOwner(nextConfig, "second"));
+    harness.setOwner(createChatMetadataOwner(nextConfig, "second"));
     harness.runtime.invalidate();
     await harness.runtime.refresh();
     const configAndOwnerChanged = await harness.runtime.read({ agentId: "main" });
@@ -816,7 +818,7 @@ describe("gateway chat metadata runtime", () => {
   });
 
   test("waits for replacement only for canonical metadata and session auth projections", async () => {
-    const harness = createHarness();
+    const harness = createChatMetadataHarness();
     await harness.runtime.refresh();
 
     harness.runtime.invalidate();
@@ -856,7 +858,7 @@ describe("gateway chat metadata runtime", () => {
       tools: { swarm: { enabled: true } },
     };
     harness.setConfig(nextConfig);
-    harness.setOwner(createOwner(nextConfig, "replacement"));
+    harness.setOwner(createChatMetadataOwner(nextConfig, "replacement"));
     await harness.runtime.refresh();
 
     await expect(read).resolves.toMatchObject({
@@ -873,7 +875,7 @@ describe("gateway chat metadata runtime", () => {
   });
 
   test("retries a session projection invalidated while it is awaiting", async () => {
-    const harness = createHarness();
+    const harness = createChatMetadataHarness();
     await harness.runtime.refresh();
     const releaseProjection = createDeferred();
     harness.buildProjection.mockImplementationOnce(async ({ facts }) => {
@@ -898,7 +900,7 @@ describe("gateway chat metadata runtime", () => {
       tools: { swarm: { enabled: true } },
     };
     harness.setConfig(nextConfig);
-    harness.setOwner(createOwner(nextConfig, "replacement"));
+    harness.setOwner(createChatMetadataOwner(nextConfig, "replacement"));
     harness.runtime.invalidate();
     await harness.runtime.refresh();
 
@@ -910,7 +912,7 @@ describe("gateway chat metadata runtime", () => {
   });
 
   test("discards a projection failure from an invalidated generation", async () => {
-    const harness = createHarness();
+    const harness = createChatMetadataHarness();
     await harness.runtime.refresh();
     const releaseProjection = createDeferred();
     harness.buildProjection.mockImplementationOnce(async () => {
@@ -932,7 +934,7 @@ describe("gateway chat metadata runtime", () => {
       tools: { swarm: { enabled: true } },
     };
     harness.setConfig(nextConfig);
-    harness.setOwner(createOwner(nextConfig, "replacement"));
+    harness.setOwner(createChatMetadataOwner(nextConfig, "replacement"));
     harness.runtime.invalidate();
     await harness.runtime.refresh();
 
@@ -944,7 +946,7 @@ describe("gateway chat metadata runtime", () => {
   });
 
   test("resolves the replacement gate after a coalesced second invalidation", async () => {
-    const harness = createHarness();
+    const harness = createChatMetadataHarness();
     await harness.runtime.refresh();
     const releaseCommands = createDeferred();
     harness.buildCommands.mockImplementationOnce(async () => {
@@ -972,7 +974,7 @@ describe("gateway chat metadata runtime", () => {
   });
 
   test("retries an unavailable owner on the next read once it is published again", async () => {
-    const harness = createHarness();
+    const harness = createChatMetadataHarness();
     await harness.runtime.refresh();
 
     harness.getPreparedOwner.mockReturnValue(undefined);
@@ -983,7 +985,7 @@ describe("gateway chat metadata runtime", () => {
       'prepared chat metadata owner is unavailable for agent "main"',
     );
 
-    const recovered = createOwner(
+    const recovered = createChatMetadataOwner(
       { agents: { list: [{ id: "main", default: true }] } },
       "recovered",
     );
@@ -996,7 +998,7 @@ describe("gateway chat metadata runtime", () => {
   });
 
   test("rejects replacement waiters on failure and recovers on a later generation", async () => {
-    const harness = createHarness();
+    const harness = createChatMetadataHarness();
     await harness.runtime.refresh();
 
     harness.runtime.invalidate();
@@ -1007,7 +1009,7 @@ describe("gateway chat metadata runtime", () => {
 
     const nextConfig = { agents: { list: [{ id: "main", default: true }] } };
     harness.setConfig(nextConfig);
-    harness.setOwner(createOwner(nextConfig, "recovered"));
+    harness.setOwner(createChatMetadataOwner(nextConfig, "recovered"));
     harness.runtime.invalidate();
     await harness.runtime.refresh();
 
@@ -1017,7 +1019,7 @@ describe("gateway chat metadata runtime", () => {
   });
 
   test("omits failed command preparation without losing models", async () => {
-    const harness = createHarness();
+    const harness = createChatMetadataHarness();
     harness.buildCommands.mockRejectedValueOnce(new Error("skill scan failed"));
 
     await harness.runtime.refresh();
@@ -1028,7 +1030,7 @@ describe("gateway chat metadata runtime", () => {
   });
 
   test("does not publish a generation whose neutral projection failed", async () => {
-    const harness = createHarness();
+    const harness = createChatMetadataHarness();
     harness.buildProjection.mockRejectedValueOnce(new Error("startup projection failed"));
 
     await expect(harness.runtime.refresh()).rejects.toThrow("startup projection failed");

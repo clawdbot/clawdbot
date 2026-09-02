@@ -27,6 +27,7 @@ import {
   readEmbeddedGatewayToken,
   SERVICE_AUDIT_CODES,
 } from "../daemon/service-audit.js";
+import { mergeGatewayServiceEnv } from "../daemon/service-env-merge.js";
 import { SERVICE_PROXY_ENV_KEYS } from "../daemon/service-env.js";
 import { summarizeGatewayServiceLayout } from "../daemon/service-layout.js";
 import {
@@ -35,6 +36,7 @@ import {
 } from "../daemon/service-managed-env.js";
 import type { GatewayServiceRuntime } from "../daemon/service-runtime.js";
 import {
+  assertServiceDefinitionWritable,
   hasGatewayServiceEnvironmentOverride,
   hasGatewayServiceLauncherOverride,
   resolveManagedGatewayServiceCommand,
@@ -64,11 +66,11 @@ import {
   EXTERNAL_SERVICE_REPAIR_NOTE,
   isServiceRepairExternallyManaged,
   resolveServiceRepairPolicy,
+  resolveUpdateParentGatewayActivation,
   shouldManageGatewayService,
 } from "./doctor-service-repair-policy.js";
 import {
   UPDATE_IN_PROGRESS_ENV,
-  UPDATE_PARENT_ALLOWS_GATEWAY_ACTIVATION_ENV,
   UPDATE_PARENT_ALLOWS_GATEWAY_SERVICE_REPAIR_ENV,
   UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE_ENV,
   UPDATE_PARENT_SUPPORTS_GATEWAY_RESTART_ENV,
@@ -90,9 +92,9 @@ function shouldSkipLegacyUpdateRepairConfigWrite(env: NodeJS.ProcessEnv): boolea
 }
 
 function updateParentAllowsGatewayActivation(env: NodeJS.ProcessEnv): boolean {
-  const activationPolicy = env[UPDATE_PARENT_ALLOWS_GATEWAY_ACTIVATION_ENV];
+  const activationPolicy = resolveUpdateParentGatewayActivation(env);
   if (activationPolicy !== undefined) {
-    return isTruthyEnvValue(activationPolicy);
+    return activationPolicy;
   }
   // Shipped parents predate the marker. Recover their explicit CLI policy from
   // the direct parent; unreadable ancestry stays staged rather than disrupting it.
@@ -773,6 +775,24 @@ export async function maybeRepairGatewayServiceConfig(
         "Gateway service config",
       );
     }
+    return cfg;
+  }
+  try {
+    // Installed and planned environments can select different state files. Check
+    // both before token persistence; native publication still revalidates under locks.
+    for (const environment of [
+      mergeGatewayServiceEnv(serviceInstallEnv, command),
+      expectedRuntimePlan.environment,
+    ]) {
+      const capability = await service
+        .readDefinitionMutationCapability?.({ env: serviceInstallEnv, environment })
+        .catch(() => ({ kind: "unknown", reason: "inspection-failed" }) as const);
+      if (capability) {
+        assertServiceDefinitionWritable(capability);
+      }
+    }
+  } catch (err) {
+    runtime.error(`Gateway service repair blocked: ${String(err)}`);
     return cfg;
   }
   const serviceEmbeddedToken = readEmbeddedGatewayToken(managedDefinition);

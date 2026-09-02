@@ -12,6 +12,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { WebSocket, WebSocketServer, type RawData } from "ws";
 import {
   validateWorkerGitHubPublishParams,
+  validateWorkerComputerParams,
   validateWorkerPortalParams,
   validateWorkerSessionsSendParams,
   validateWorkerSessionsSpawnParams,
@@ -36,6 +37,7 @@ import {
   WorkerTranscriptCommitRequestFrameSchema,
   type WorkerTranscriptMessage,
 } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
+import type { WorkerComputerParams } from "../../packages/gateway-protocol/src/schema/worker-computer.js";
 import {
   type WorkerInferenceCancelRequestFrame,
   WorkerInferenceCancelRequestFrameSchema,
@@ -47,6 +49,7 @@ import {
   type WorkerInferenceTerminalFrame,
   type WorkerInferenceTerminalOutcome,
 } from "../../packages/gateway-protocol/src/schema/worker-inference.js";
+import { createNoisyPngBuffer, createSolidPngBuffer } from "../../test/helpers/image-fixtures.js";
 import { createDeferred, withTestTimeout } from "../../test/helpers/promise.js";
 import { createOperationalRunInstanceRef } from "../agents/admitted-run-context.js";
 import {
@@ -57,7 +60,11 @@ import {
 import { runExecProcess } from "../agents/bash-tools.exec-runtime.js";
 import { saveExecApprovals, type ExecApprovalsFile } from "../infra/exec-approvals.js";
 import { getProcessSupervisor } from "../process/supervisor/index.js";
-import { buildWorkerConnectParams, type WorkerLaunchDescriptor } from "./launch-descriptor.js";
+import {
+  buildWorkerConnectParams,
+  parseWorkerLaunchDescriptor,
+  type WorkerLaunchDescriptor,
+} from "./launch-descriptor.js";
 import { WORKER_PROVIDER_REPLAY_LOCAL_RETRY_MESSAGE } from "./transcript-message.js";
 import { runWorkerCommand } from "./worker-command.runtime.js";
 import {
@@ -118,12 +125,14 @@ const WORKER_INFERENCE_START_TIMEOUT_MS = 90_000;
 
 type InferencePlan =
   | "text"
+  | "read-image"
   | "tool"
   | "safe-tool"
   | "background-tool"
   | "process-poll"
   | "process-kill"
   | "session-tool"
+  | "computer"
   | "hold"
   | "fence"
   | "error"
@@ -153,6 +162,8 @@ type FakeGatewayOptions = {
   liveFailure?: "capacity-exceeded";
   heartbeatFailure?: "credential-expired";
   heartbeatIntervalMs?: number;
+  computerSnapshot?: string;
+  computerCleanupFailure?: boolean;
 };
 
 function assistantMessage(
@@ -203,6 +214,7 @@ class FakeWorkerGateway {
   readonly sessionSendRequests: WorkerSessionsSendParams[] = [];
   readonly githubPublishRequests: WorkerGitHubPublishParams[] = [];
   readonly portalRequests: WorkerPortalParams[] = [];
+  readonly computerRequests: WorkerComputerParams[] = [];
   readonly applicationOrder: string[] = [];
 
   waitForInferenceStart(): Promise<void> {
@@ -220,6 +232,7 @@ class FakeWorkerGateway {
   }
 
   async start(): Promise<void> {
+    // Leave room for the isolated test temp root within macOS Unix socket limits.
     this.rootDir = await mkdtemp(path.join(tmpdir(), "oc-wg-"));
     this.socketPath = path.join(this.rootDir, "gateway.sock");
     const listening = once(this.webSocketServer, "listening");
@@ -277,6 +290,45 @@ class FakeWorkerGateway {
       return;
     }
     if (isRecord(parsed) && parsed.type === "req" && typeof parsed.id === "string") {
+      if (parsed.method === "worker.computer" && validateWorkerComputerParams(parsed.params)) {
+        this.computerRequests.push(parsed.params);
+        const closing = parsed.params.command === "computer.act";
+        this.applicationOrder.push(closing ? "computer:close" : "computer:snapshot");
+        this.send(
+          socket,
+          this.options.computerCleanupFailure && closing
+            ? {
+                type: "res",
+                id: parsed.id,
+                ok: false,
+                error: {
+                  code: "UNAVAILABLE",
+                  message: "fixture desktop cleanup failed",
+                  details: { reason: "gateway-unavailable" },
+                },
+              }
+            : {
+                type: "res",
+                id: parsed.id,
+                ok: true,
+                payload: {
+                  resultJson: JSON.stringify(
+                    closing
+                      ? { ok: true }
+                      : {
+                          format: "png",
+                          base64: this.options.computerSnapshot,
+                          width: 512,
+                          height: 512,
+                          displayFrameId: "worker-frame",
+                          screenIndex: 0,
+                        },
+                  ),
+                },
+              },
+        );
+        return;
+      }
       const sessionToolMethod =
         parsed.method === "worker.sessions.spawn" &&
         validateWorkerSessionsSpawnParams(parsed.params)
@@ -550,6 +602,14 @@ class FakeWorkerGateway {
     });
     const plan = this.options.inferencePlans?.[this.inferencePlanIndex] ?? "text";
     this.inferencePlanIndex += 1;
+    if (plan === "read-image") {
+      this.sendToolCallTurn(socket, frame.params, {
+        args: { path: "attachment.png" },
+        toolCallId: "read-attachment",
+        toolName: "read",
+      });
+      return;
+    }
     if (plan === "hold") {
       return;
     }
@@ -589,6 +649,14 @@ class FakeWorkerGateway {
     }
     if (plan === "session-tool") {
       this.sendSessionToolTurn(socket, frame.params);
+      return;
+    }
+    if (plan === "computer") {
+      this.sendToolCallTurn(socket, frame.params, {
+        toolCallId: "worker-screenshot",
+        toolName: "computer",
+        args: { action: "screenshot" },
+      });
       return;
     }
     if (plan === "burst-text") {
@@ -876,6 +944,84 @@ afterEach(async () => {
 });
 
 describe("worker runtime", () => {
+  it("sends current image and scanned PDF page content through remote inference exactly once", async () => {
+    const { gateway, launch } = await setup();
+    const images = [
+      {
+        type: "image" as const,
+        data: createNoisyPngBuffer(320, 240).toString("base64"),
+        mimeType: "image/png",
+      },
+      {
+        type: "image" as const,
+        data: createSolidPngBuffer(2, 2, { r: 0, g: 128, b: 255 }).toString("base64"),
+        mimeType: "image/png",
+      },
+    ];
+    const prompt = [
+      { type: "text" as const, text: "Inspect the attached image and PDF page." },
+      ...images,
+    ];
+    launch.assignment.prompt = prompt;
+    launch.assignment.suppressPromptTranscript = true;
+
+    await expect(runWorkerDescriptor(parseWorkerLaunchDescriptor(launch))).resolves.toMatchObject({
+      status: "completed",
+    });
+
+    expect(gateway.inferenceRequests[0]?.context.messages).toEqual([
+      {
+        role: "user",
+        content: prompt,
+        timestamp: expect.any(Number),
+      },
+    ]);
+    expect(
+      gateway.transcriptRequests.flatMap((request) =>
+        request.messages.map((message) => message.role),
+      ),
+    ).toEqual(["assistant"]);
+  });
+  it.each(["input", "tool"] as const)(
+    "settles a real image above 64 KiB through %s",
+    async (source) => {
+      const { gateway, workspaceDir, launch } = await setup({
+        inferencePlans: ["read-image", "text"],
+      });
+      const png = createNoisyPngBuffer(256, 256);
+      expect(png.length).toBeGreaterThan(64 * 1024);
+      const image = { type: "image" as const, data: png.toString("base64"), mimeType: "image/png" };
+      await writeFile(path.join(workspaceDir, "attachment.png"), png);
+      if (source === "input") {
+        launch.assignment.prompt = [image];
+        launch.assignment.initialMessages = [{ role: "user", content: [image], timestamp: 1 }];
+      }
+
+      const result = await runWorkerDescriptor(parseWorkerLaunchDescriptor(launch));
+
+      expect(result.status).toBe("completed");
+      expect(gateway.inferenceRequests).toHaveLength(2);
+      if (source === "input") {
+        expect(
+          gateway.inferenceRequests[0]?.context.messages
+            .filter((message) => message.role === "user")
+            .map((message) => message.content),
+        ).toEqual([[image], [image]]);
+      }
+      const messages = gateway.acceptedTranscriptRequests.flatMap((request) => request.messages);
+      const toolResult = messages.find((message) => message.role === "toolResult");
+      expect(toolResult).toMatchObject({ role: "toolResult", toolName: "read", isError: false });
+      expect(toolResult?.content).toContainEqual(image);
+      expect(gateway.inferenceRequests[1]?.context.messages).toContainEqual(toolResult);
+      expect(messages.at(-1)?.role).toBe("assistant");
+      expect(
+        gateway.applicationOrder.findIndex((entry) => entry === "live:lifecycle:finishing"),
+      ).toBeGreaterThan(
+        gateway.applicationOrder.findLastIndex((entry) => entry.startsWith("transcript:")),
+      );
+    },
+  );
+
   it("runs a full embedded turn through remote inference, live events, and transcript commits", async () => {
     const { gateway, workspaceDir, launch } = await setup();
     await writeFile(path.join(workspaceDir, "AGENTS.md"), "worker-bootstrap-marker", "utf8");
@@ -1018,6 +1164,72 @@ describe("worker runtime", () => {
     });
     expect(browserRuntimeMocks.dispose).toHaveBeenCalledOnce();
   });
+
+  it.each([false, true])(
+    "keeps desktop images through RPC, transcript, and inference before closing (cleanup failure: %s)",
+    async (computerCleanupFailure) => {
+      const computerSnapshot = createNoisyPngBuffer(512, 512).toString("base64");
+      expect(computerSnapshot.length).toBeGreaterThan(64 * 1024);
+      const { gateway, launch } = await setup({
+        inferencePlans: ["computer", "text"],
+        computerSnapshot,
+        computerCleanupFailure,
+      });
+      launch.assignment.toolAuthority.allowedToolNames = ["computer"];
+      launch.assignment.computer = {
+        nodeId: "worker-desktop",
+        computerUse: {
+          contractVersion: 2,
+          provider: { id: "fixture", label: "Fixture", generation: "generation-1" },
+          actions: ["screenshot"],
+          targets: ["screen"],
+          deliveryModes: ["foreground"],
+          observations: ["image"],
+          features: { recording: false, agentCursor: false, multiDisplay: false },
+        },
+      };
+
+      await expect(runWorkerDescriptor(launch)).resolves.toMatchObject({
+        status: computerCleanupFailure ? "failed" : "completed",
+      });
+
+      expect(gateway.computerRequests.map((request) => request.command)).toEqual([
+        "screen.snapshot",
+        "computer.act",
+      ]);
+      expect(JSON.parse(gateway.computerRequests[1]!.paramsJson)).toMatchObject({
+        action: "__close_execution",
+      });
+      const screenshot = gateway.acceptedTranscriptRequests
+        .flatMap((request) => request.messages)
+        .find((message) => message.role === "toolResult" && message.toolName === "computer");
+      expect(screenshot).toMatchObject({
+        isError: false,
+        content: expect.arrayContaining([expect.objectContaining({ type: "image" })]),
+      });
+      const image = screenshot?.content.find((part) => part.type === "image");
+      expect(image?.type === "image" && image.data.length).toBeGreaterThan(64 * 1024);
+      expect(gateway.inferenceRequests[1]?.context.messages).toContainEqual(screenshot);
+      const computer = gateway.inferenceRequests[0]?.context.tools?.find(
+        (tool) => tool.name === "computer",
+      );
+      expect(computer?.parameters).not.toHaveProperty("properties.node");
+      expect(computer?.parameters).not.toHaveProperty("properties.gatewayToken");
+      expect(gateway.applicationOrder.indexOf("computer:close")).toBeLessThan(
+        gateway.applicationOrder.indexOf("live:lifecycle:finishing"),
+      );
+      if (computerCleanupFailure) {
+        expect(gateway.liveEventRequests.at(-1)?.event).toMatchObject({
+          kind: "lifecycle",
+          payload: {
+            phase: "finishing",
+            stopReason: "error",
+            error: "computer: session desktop cleanup failed",
+          },
+        });
+      }
+    },
+  );
 
   it.each([
     { authority: ["browser"] as const, browser: undefined },

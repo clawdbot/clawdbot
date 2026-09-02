@@ -88,7 +88,7 @@ function executionIdentityFailureMessage(error: unknown): string {
   return "audit execution identity persistence failed";
 }
 
-/** Start one bounded queue on the current process's cached shared-state connection owner. */
+/** Start one bounded queue; retain the owner environment or claimed state rejects its writes. */
 export function createAuditEventWriter(
   options: {
     stateDir?: string;
@@ -98,7 +98,7 @@ export function createAuditEventWriter(
   } = {},
 ): AuditEventWriter {
   const database = {
-    env: { OPENCLAW_STATE_DIR: options.stateDir ?? resolveStateDir(process.env) },
+    env: { ...process.env, OPENCLAW_STATE_DIR: options.stateDir ?? resolveStateDir(process.env) },
   };
   const maxPending = Math.max(1, Math.floor(options.maxPending ?? MAX_PENDING_AUDIT_EVENTS));
   const queue: AuditWriterRequest[] = [];

@@ -14,6 +14,7 @@ import {
 } from "../plugins/official-external-plugin-catalog.js";
 import { createColdPluginFixture } from "../plugins/test-helpers/cold-plugin-fixtures.js";
 import { withTempDir } from "../test-utils/temp-dir.js";
+import { VERSION } from "../version.js";
 import {
   applyExclusiveSlotSelectionMock,
   buildPluginSnapshotReportMock,
@@ -46,12 +47,25 @@ import {
   writePersistedInstalledPluginIndexInstallRecordsWithLeaseMock,
 } from "./plugins-cli-test-helpers.js";
 
+// Default-selector assertions describe a stable build; beta cases set their own identity.
+const coreVersion = vi.hoisted(() => ({ value: "2026.8.1" }));
+vi.mock("../version.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../version.js")>()),
+  get VERSION() {
+    return coreVersion.value;
+  },
+}));
+
 const CLI_STATE_ROOT = "/tmp/openclaw-state";
 const ORIGINAL_OPENCLAW_STATE_DIR = process.env.OPENCLAW_STATE_DIR;
 const ORIGINAL_OPENCLAW_NIX_MODE = process.env.OPENCLAW_NIX_MODE;
 const ORIGINAL_STDIN_TTY = Object.getOwnPropertyDescriptor(process.stdin, "isTTY");
 const ORIGINAL_STDOUT_TTY = Object.getOwnPropertyDescriptor(process.stdout, "isTTY");
 const PROFILE_STATE_ROOT = "/tmp/openclaw-ledger-profile";
+
+function expectedNpmInstallSpec(spec: string): string {
+  return VERSION.includes("-beta.") ? `${spec.replace(/@latest$/, "")}@${VERSION}` : spec;
+}
 
 const OFFICIAL_EXTERNAL_NPM_INSTALLS_WITHOUT_INTEGRITY = listOfficialExternalPluginCatalogEntries()
   .map((entry) => {
@@ -624,6 +638,7 @@ describe("plugins cli install", () => {
   });
 
   afterEach(() => {
+    coreVersion.value = "2026.8.1";
     if (ORIGINAL_OPENCLAW_STATE_DIR === undefined) {
       delete process.env.OPENCLAW_STATE_DIR;
     } else {
@@ -1605,22 +1620,26 @@ describe("plugins cli install", () => {
     },
   );
 
-  it("installs the beta artifact for an official ClawHub plugin on a beta gateway", async () => {
-    primeSuccessfulClawHubPluginInstall();
-    parseClawHubPluginSpecMock.mockReturnValue({ name: "@openclaw/brave-plugin" });
-    pluginCliConfigMock.mockReturnValue({
-      ...createEmptyPluginConfig(),
-      update: { channel: "beta" },
-    } as OpenClawConfig);
+  it.each(["clawhub:@openclaw/brave-plugin", "clawhub:@openclaw/brave-plugin@latest"])(
+    "installs the beta artifact for official ClawHub intent %s",
+    async (spec) => {
+      primeSuccessfulClawHubPluginInstall();
+      parseClawHubPluginSpecMock.mockReturnValue({
+        name: "@openclaw/brave-plugin",
+        ...(spec.endsWith("@latest") ? { version: "latest" } : {}),
+      });
+      pluginCliConfigMock.mockReturnValue({
+        ...createEmptyPluginConfig(),
+        update: { channel: "beta" },
+      } as OpenClawConfig);
 
-    await runCapabilityAcceptedPluginsInstallCommand([
-      "plugins",
-      "install",
-      "clawhub:@openclaw/brave-plugin",
-    ]);
+      await runCapabilityAcceptedPluginsInstallCommand(["plugins", "install", spec]);
 
-    expect(clawHubInstallCall().spec).toBe("clawhub:@openclaw/brave-plugin@beta");
-  });
+      expect(clawHubInstallCall().spec).toBe("clawhub:@openclaw/brave-plugin@beta");
+      expect(installPluginFromNpmSpecMock).not.toHaveBeenCalled();
+      expect(persistedInstallRecord("demo").spec).toBe(spec);
+    },
+  );
 
   it("does not install a stable ClawHub release when no beta release exists", async () => {
     primeSuccessfulClawHubPluginInstall();
@@ -1971,27 +1990,41 @@ describe("plugins cli install", () => {
     expect(configWriteMock).toHaveBeenCalledWith(enabledCfg);
   });
 
-  it.each([
-    { label: "plugin id", arg: "brave" },
-    { label: "npm package name", arg: "@openclaw/brave-plugin" },
-  ])(
-    "installs the beta artifact for an official plugin on a beta gateway by $label",
-    async ({ arg }) => {
+  it.each(
+    [
+      { version: "2026.8.1", channel: "beta", installSelector: "beta" },
+      { version: "2026.8.1-beta.4", channel: undefined, installSelector: "2026.8.1-beta.4" },
+      { version: "2026.8.1-beta.4", channel: "stable", installSelector: "2026.8.1-beta.4" },
+      { version: "2026.7.33", channel: "extended-stable", installSelector: "2026.7.33" },
+    ].flatMap(({ version, channel, installSelector }) =>
+      [
+        "brave",
+        "@openclaw/brave-plugin",
+        "@openclaw/brave-plugin@latest",
+        "npm:@openclaw/brave-plugin@latest",
+      ].map((arg) => ({ version, channel, installSelector, arg })),
+    ),
+  )(
+    "installs $installSelector for $arg on core $version with channel $channel",
+    async ({ version, channel, installSelector, arg }) => {
+      coreVersion.value = version;
       primeSuccessfulPluginPersistence("brave");
       pluginCliConfigMock.mockReturnValue({
         ...createEmptyPluginConfig(),
-        update: { channel: "beta" },
+        ...(channel ? { update: { channel } } : {}),
       } as OpenClawConfig);
       findBundledPluginSourceMock.mockReturnValue(undefined);
       installPluginFromNpmSpecMock.mockResolvedValue(createNpmPluginInstallResult("brave"));
 
       await runCapabilityAcceptedPluginsInstallCommand(["plugins", "install", arg]);
 
-      expect(npmInstallCall().spec).toBe("@openclaw/brave-plugin@beta");
+      expect(npmInstallCall().spec).toBe(`@openclaw/brave-plugin@${installSelector}`);
       expect(npmInstallCall().trustedSourceLinkedOfficialInstall).toBe(true);
       // The record keeps the operator's selector so a later channel change is
       // not silently pinned to the beta dist-tag.
-      expect(persistedInstallRecord("brave").spec).toBe("@openclaw/brave-plugin");
+      expect(persistedInstallRecord("brave").spec).toBe(
+        arg.endsWith("@latest") ? "@openclaw/brave-plugin@latest" : "@openclaw/brave-plugin",
+      );
     },
   );
 
@@ -2020,6 +2053,7 @@ describe("plugins cli install", () => {
   });
 
   it("passes third-party external catalog integrity with catalog install trust", async () => {
+    coreVersion.value = "2026.8.1-beta.4";
     primeSuccessfulPluginPersistence("wecom-openclaw-plugin");
     findBundledPluginSourceMock.mockReturnValue(undefined);
     installPluginFromNpmSpecMock.mockResolvedValue(
@@ -2036,9 +2070,76 @@ describe("plugins cli install", () => {
     expect(npmInstallCall().trustedSourceLinkedOfficialInstall).toBe(true);
   });
 
-  it.each(OFFICIAL_EXTERNAL_NPM_INSTALLS_WITHOUT_INTEGRITY)(
-    "keeps official external npm installs trusted without integrity for $pluginId",
-    async ({ pluginId, npmSpec }) => {
+  it.each(
+    [false, true].flatMap((npmAbsent) =>
+      ["matrix", "@openclaw/matrix@latest"].map((arg) => ({ npmAbsent, arg })),
+    ),
+  )(
+    "uses the declared ClawHub secondary for $arg only when npm is absent ($npmAbsent)",
+    async ({ npmAbsent, arg }) => {
+      primeSuccessfulPluginPersistence("matrix");
+      parseClawHubPluginSpecMock.mockReturnValue({ name: "@openclaw/matrix" });
+      findBundledPluginSourceMock.mockReturnValue(undefined);
+      installPluginFromNpmSpecMock.mockResolvedValue(
+        npmAbsent
+          ? { ok: false, error: "npm error E404 package not found", code: "npm_package_not_found" }
+          : createNpmPluginInstallResult("matrix"),
+      );
+      installPluginFromClawHubMock.mockResolvedValue(
+        createClawHubInstallResult({
+          pluginId: "matrix",
+          packageName: "@openclaw/matrix",
+          version: "1.2.3",
+          channel: "latest",
+        }),
+      );
+
+      await runCapabilityAcceptedPluginsInstallCommand(["plugins", "install", arg]);
+
+      const spec = arg.endsWith("@latest") ? "@openclaw/matrix@latest" : "@openclaw/matrix";
+      expect(npmInstallCall().spec).toBe(spec);
+      if (npmAbsent) {
+        expect(clawHubInstallCall().spec).toBe(`clawhub:${spec}`);
+      }
+      expect(persistedInstallRecord("matrix").spec).toBe(npmAbsent ? `clawhub:${spec}` : spec);
+      expect(installPluginFromClawHubMock).toHaveBeenCalledTimes(npmAbsent ? 1 : 0);
+      expect(persistedInstallRecord("matrix").source).toBe(npmAbsent ? "clawhub" : "npm");
+      expect(installHooksFromNpmSpecMock).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
+    { code: "incompatible_plugin_api", error: "incompatible artifact" },
+    { code: "security_scan_blocked", error: "untrusted package" },
+    { error: "integrity mismatch" },
+    { error: "capability consent refused" },
+  ])(
+    "does not change source or probe hooks after official install refusal ($error)",
+    async (failure) => {
+      findBundledPluginSourceMock.mockReturnValue(undefined);
+      installPluginFromNpmSpecMock.mockResolvedValue({ ok: false, ...failure });
+
+      await expect(runPluginsCommand(["plugins", "install", "matrix"])).rejects.toThrow(
+        "__exit__:1",
+      );
+
+      expect(installPluginFromClawHubMock).not.toHaveBeenCalled();
+      expect(installHooksFromNpmSpecMock).not.toHaveBeenCalled();
+      expect(configWriteMock).not.toHaveBeenCalled();
+      expect(runtimeErrors.at(-1)).toContain(failure.error);
+    },
+  );
+
+  it.each([
+    ...OFFICIAL_EXTERNAL_NPM_INSTALLS_WITHOUT_INTEGRITY.map((entry) => ({
+      ...entry,
+      version: "2026.8.1",
+    })),
+    { ...OFFICIAL_EXTERNAL_NPM_INSTALLS_WITHOUT_INTEGRITY[0]!, version: "2026.8.1-beta.4" },
+  ])(
+    "keeps official external npm installs trusted without integrity for $pluginId on $version",
+    async ({ pluginId, npmSpec, version }) => {
+      coreVersion.value = version;
       await withTempDir("openclaw-official-plugin-install-", async (cwd) => {
         const cwdSpy = vi.spyOn(process, "cwd").mockReturnValue(cwd);
         try {
@@ -2052,7 +2153,7 @@ describe("plugins cli install", () => {
             lookup: { kind: "pluginId", value: pluginId },
           });
           expect(installPluginFromClawHubMock).not.toHaveBeenCalled();
-          expect(npmInstallCall().spec).toBe(npmSpec);
+          expect(npmInstallCall().spec).toBe(expectedNpmInstallSpec(npmSpec));
           expect(npmInstallCall().expectedPluginId).toBe(pluginId);
           expect(npmInstallCall().trustedSourceLinkedOfficialInstall).toBe(true);
           expect(npmInstallCall().expectedIntegrity).toBeUndefined();
@@ -2262,28 +2363,37 @@ describe("plugins cli install", () => {
     expect(runtimeLogsContain("npm:@openclaw/discord@2026.5.20")).toBe(true);
   });
 
-  it("marks catalog npm package installs with alternate selectors as trusted", async () => {
-    primeSuccessfulPluginPersistence("wecom-openclaw-plugin");
-    findBundledPluginSourceMock.mockReturnValue(undefined);
-    installPluginFromNpmSpecMock.mockResolvedValue(
-      createNpmPluginInstallResult("wecom-openclaw-plugin"),
-    );
+  it.each([
+    { version: "2026.8.1", selector: "latest", installSelector: "latest" },
+    { version: "2026.8.1-beta.4", selector: "latest", installSelector: "2026.8.1-beta.4" },
+    { version: "2026.8.1-beta.4", selector: "next", installSelector: "next" },
+    { version: "2026.8.1-beta.4", selector: "2026.6.1", installSelector: "2026.6.1" },
+  ])(
+    "trusts catalog npm @$selector on core $version",
+    async ({ version, selector, installSelector }) => {
+      coreVersion.value = version;
+      primeSuccessfulPluginPersistence("wecom-openclaw-plugin");
+      findBundledPluginSourceMock.mockReturnValue(undefined);
+      installPluginFromNpmSpecMock.mockResolvedValue(
+        createNpmPluginInstallResult("wecom-openclaw-plugin"),
+      );
 
-    await runCapabilityAcceptedPluginsInstallCommand([
-      "plugins",
-      "install",
-      "@wecom/wecom-openclaw-plugin@latest",
-    ]);
+      await runCapabilityAcceptedPluginsInstallCommand([
+        "plugins",
+        "install",
+        `@wecom/wecom-openclaw-plugin@${selector}`,
+      ]);
 
-    // Alternate selectors stay trusted by catalog package name, but must not
-    // inherit catalog integrity unless the install spec matches exactly.
-    expect(npmInstallCall().spec).toBe("@wecom/wecom-openclaw-plugin@latest");
-    expect(npmInstallCall().expectedPluginId).toBe("wecom-openclaw-plugin");
-    expect(npmInstallCall().trustedSourceLinkedOfficialInstall).toBe(true);
-    expect(npmInstallCall().expectedIntegrity).toBeUndefined();
-    expect(runtimeLogsContain("outside ClawHub review")).toBe(false);
-    expect(installPluginFromClawHubMock).not.toHaveBeenCalled();
-  });
+      // Alternate selectors stay trusted by catalog package name, but must not
+      // inherit catalog integrity unless the install spec matches exactly.
+      expect(npmInstallCall().spec).toBe(`@wecom/wecom-openclaw-plugin@${installSelector}`);
+      expect(npmInstallCall().expectedPluginId).toBe("wecom-openclaw-plugin");
+      expect(npmInstallCall().trustedSourceLinkedOfficialInstall).toBe(true);
+      expect(npmInstallCall().expectedIntegrity).toBeUndefined();
+      expect(runtimeLogsContain("outside ClawHub review")).toBe(false);
+      expect(installPluginFromClawHubMock).not.toHaveBeenCalled();
+    },
+  );
 
   it("passes the active profile extensions dir to npm installs", async () => {
     const extensionsDir = useProfileExtensionsDir();

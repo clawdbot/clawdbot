@@ -222,6 +222,7 @@ export async function resolveExecHostApprovalContext(params: {
   security: ExecSecurity;
   ask: ExecAsk;
   host: "gateway" | "node";
+  bypassHostApprovalFloors?: boolean;
 }): Promise<ExecHostApprovalContext> {
   const approvals = await resolveExecApprovalsLocked(params.agentId, {
     security: params.security,
@@ -229,9 +230,15 @@ export async function resolveExecHostApprovalContext(params: {
   });
   // Session/config tool policy is the caller's requested contract. The host file
   // may tighten that contract, but it must not silently broaden it.
-  const hostSecurity = minSecurity(params.security, approvals.agent.security);
-  const hostAsk = maxAsk(params.ask, approvals.agent.ask);
-  const askFallback = minSecurity(hostSecurity, approvals.agent.askFallback);
+  const hostSecurity = params.bypassHostApprovalFloors
+    ? params.security
+    : minSecurity(params.security, approvals.agent.security);
+  const hostAsk = params.bypassHostApprovalFloors
+    ? params.ask
+    : maxAsk(params.ask, approvals.agent.ask);
+  const askFallback = params.bypassHostApprovalFloors
+    ? "deny"
+    : minSecurity(hostSecurity, approvals.agent.askFallback);
   if (hostSecurity === "deny") {
     throw new Error(`exec denied: host=${params.host} security=deny`);
   }

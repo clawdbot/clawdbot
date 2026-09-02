@@ -10,10 +10,8 @@ import type {
   SandboxFsBridgeContext,
 } from "./backend-handle.types.js";
 import { SANDBOX_FILE_IDENTITY } from "./file-mutation-identity.js";
-import {
-  SANDBOX_CREATE_EXISTS_EXIT_CODE,
-  SANDBOX_PINNED_MUTATION_PYTHON,
-} from "./fs-bridge-mutation-helper.js";
+import { SANDBOX_PINNED_MUTATION_PYTHON_SHELL_LITERAL } from "./fs-bridge-mutation-helper.js";
+import { SANDBOX_CREATE_EXISTS_EXIT_CODE } from "./fs-bridge-mutation-python.js";
 import { createWritableRenameTargetResolver } from "./fs-bridge-rename-targets.js";
 import {
   hasMultipleHardlinks,
@@ -428,6 +426,14 @@ class RemoteShellSandboxFsBridge implements SandboxFsBridge {
         }),
       );
     }
+    for (const resource of this.sandbox.readOnlyResourceMounts ?? []) {
+      mounts.push({
+        localRoot: resource.hostPath,
+        containerRoot: resource.containerPath,
+        writable: false,
+        source: "protectedSkill",
+      });
+    }
     return mounts;
   }
 
@@ -697,9 +703,8 @@ class RemoteShellSandboxFsBridge implements SandboxFsBridge {
     return await this.runtime.runRemoteShellScript({
       script: [
         "set -eu",
-        "python3 /dev/fd/3 \"$@\" 3<<'PY'",
-        SANDBOX_PINNED_MUTATION_PYTHON,
-        "PY",
+        `python_script=${SANDBOX_PINNED_MUTATION_PYTHON_SHELL_LITERAL}`,
+        'python3 -c "$python_script" "$@"',
       ].join("\n"),
       args: params.args,
       stdin: params.stdin,

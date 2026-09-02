@@ -4,7 +4,7 @@ import type { SessionCapability } from "../../lib/sessions/index.ts";
 import {
   disposeSelectedSessionMessageSubscription,
   syncSelectedSessionMessageSubscription,
-} from "./chat-history.ts";
+} from "./chat-history-subscription.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
 
 type Subscription = { key: string; agentId: null };
@@ -177,5 +177,124 @@ describe("visible chat message subscription failures", () => {
     expect(state.lastError).toBeNull();
     expect(state.chatError).toBeNull();
     expect(state.requestUpdate).not.toHaveBeenCalled();
+  });
+});
+
+describe("selected agent subscription changes", () => {
+  it("clears stale approvals while switching the selected global agent", async () => {
+    const previous = { key: "global", agentId: "main", includeApprovals: true as const };
+    let resolveSubscribe!: (subscription: {
+      key: string;
+      agentId: string;
+      includeApprovals: true;
+      approvalReplay: { sessionKey: string; updatedAtMs: number; approvals: []; truncated: false };
+    }) => void;
+    const subscribeMessages = vi.fn(
+      () =>
+        new Promise<{
+          key: string;
+          agentId: string;
+          includeApprovals: true;
+          approvalReplay: {
+            sessionKey: string;
+            updatedAtMs: number;
+            approvals: [];
+            truncated: false;
+          };
+        }>((resolve) => {
+          resolveSubscribe = resolve;
+        }),
+    );
+    const state = {
+      ...makeChatHost({ requestHandlers: {}, sessionKey: "global" }),
+      assistantAgentId: "research",
+      chatSessionMessageSubscriptionRequestedKey: "global",
+      chatSessionMessageSubscription: previous,
+      chatSessionApprovalQueue: [
+        {
+          id: "stale-main-approval",
+          kind: "exec" as const,
+          request: { command: "echo stale", agentId: "main", sessionKey: "global" },
+          createdAtMs: 1,
+          expiresAtMs: 10_000,
+        },
+      ],
+      connectionEpoch: 1,
+      sessions: {
+        subscribeMessages,
+        unsubscribeMessages: vi.fn(async () => undefined),
+      },
+      requestUpdate: vi.fn(),
+    };
+
+    const sync = syncSelectedSessionMessageSubscription(state as never);
+    await Promise.resolve();
+    const queueWhileReplacementIsPending = [...state.chatSessionApprovalQueue];
+    resolveSubscribe({
+      key: "global",
+      agentId: "research",
+      includeApprovals: true,
+      approvalReplay: {
+        sessionKey: "agent:research:global",
+        updatedAtMs: 2,
+        approvals: [],
+        truncated: false,
+      },
+    });
+    await sync;
+
+    expect(queueWhileReplacementIsPending).toEqual([]);
+    expect(subscribeMessages).toHaveBeenCalledWith("global", {
+      agentId: "research",
+      includeApprovals: true,
+    });
+  });
+
+  it("keeps the latest selection when pending release retries settle out of order", async () => {
+    const previous = { key: "agent:main:previous", agentId: null };
+    let resolveSecondRetry: () => void = () => undefined;
+    let resolveLatestRetry: () => void = () => undefined;
+    const secondRetry = new Promise<void>((resolve) => {
+      resolveSecondRetry = resolve;
+    });
+    const latestRetry = new Promise<void>((resolve) => {
+      resolveLatestRetry = resolve;
+    });
+    const unsubscribeMessages = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("previous release failed"))
+      .mockRejectedValueOnce(new Error("replacement release failed"))
+      .mockReturnValueOnce(secondRetry)
+      .mockReturnValueOnce(latestRetry)
+      .mockResolvedValue(undefined);
+    const subscribeMessages = vi.fn(async (key: string) => ({ key, agentId: null }));
+    const state = {
+      ...makeChatHost({ requestHandlers: {}, sessionKey: "agent:main:first" }),
+      chatSessionMessageSubscriptionRequestedKey: previous.key,
+      chatSessionMessageSubscription: previous,
+      connectionEpoch: 1,
+      sessions: { subscribeMessages, unsubscribeMessages },
+      requestUpdate: vi.fn(),
+    };
+    await syncSelectedSessionMessageSubscription(state as never);
+
+    state.sessionKey = "agent:main:second";
+    const secondSync = syncSelectedSessionMessageSubscription(state as never);
+    await Promise.resolve();
+    state.sessionKey = "agent:main:latest";
+    const latestSync = syncSelectedSessionMessageSubscription(state as never);
+    await Promise.resolve();
+
+    resolveLatestRetry();
+    await latestSync;
+    resolveSecondRetry();
+    await secondSync;
+
+    expect(state.chatSessionMessageSubscriptionRequestedKey).toBe("agent:main:latest");
+    expect(state.chatSessionMessageSubscription).toEqual({
+      key: "agent:main:latest",
+      agentId: null,
+    });
+    expect(subscribeMessages).not.toHaveBeenCalledWith("agent:main:second", expect.anything());
   });
 });

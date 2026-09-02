@@ -25,7 +25,7 @@ import {
 import type { ToolDefinition, ToolRenderResultOptions } from "../extensions/types.js";
 import type { BashOperations } from "./bash-operations.js";
 import { OutputAccumulator } from "./output-accumulator.js";
-import { getTextOutput, invalidArgText, str } from "./render-utils.js";
+import { getTextOutput, invalidArgText, reuseTextComponent, str } from "./render-utils.js";
 import { formatFullOutputFooter, type BashToolDetails } from "./tool-contracts.js";
 import { wrapToolDefinition } from "./tool-definition-wrapper.js";
 import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, formatSize } from "./truncate.js";
@@ -493,9 +493,7 @@ export function createBashToolDefinition(
         state.startedAt = Date.now();
         state.endedAt = undefined;
       }
-      const text = (context.lastComponent as Text | undefined) ?? new Text("", 0, 0);
-      text.setText(formatBashCall(args));
-      return text;
+      return reuseTextComponent(context.lastComponent, formatBashCall(args));
     },
     renderResult(result, optionsLocal, themeLocal, context) {
       void themeLocal;

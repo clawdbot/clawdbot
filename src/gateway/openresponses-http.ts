@@ -14,6 +14,7 @@ import { isClientToolNameConflictError } from "../agents/agent-tool-definition-a
 import type { ImageContent } from "../agents/command/types.js";
 import type { ClientToolDefinition } from "../agents/embedded-agent-runner/run/params.js";
 import { toOpenAiResponsesUsage } from "../agents/usage.js";
+import { readAgentRunTerminalOutcome } from "../channels/turn/agent-run-terminal-outcome.js";
 import { createDefaultDeps } from "../cli/deps.js";
 import type { CliDeps } from "../cli/deps.types.js";
 import { agentCommandFromGatewayIngress } from "../commands/agent.js";
@@ -82,7 +83,7 @@ import {
   type Usage,
 } from "./open-responses.schema.js";
 import { resolveAgentRunUsage } from "./openai-agent-run-usage.js";
-import { isFailedOpenAiAgentRun, resolveOpenAiCompatError } from "./openai-compat-errors.js";
+import { resolveOpenAiCompatError } from "./openai-compat-errors.js";
 import {
   isToolChoiceConstraintSatisfied,
   resolveUnsatisfiedToolChoiceMessage,
@@ -753,7 +754,7 @@ export async function handleOpenResponsesHttpRequest(
       }
 
       const meta = (result as { meta?: { error?: unknown; stopReason?: unknown } } | null)?.meta;
-      if (isFailedOpenAiAgentRun(result)) {
+      if (readAgentRunTerminalOutcome(result) === "failed") {
         throw new Error("agent run failed");
       }
       const assistantText = resolveResponsePayloadText(result);
@@ -1182,7 +1183,7 @@ export async function handleOpenResponsesHttpRequest(
         return;
       }
 
-      if (isFailedOpenAiAgentRun(result)) {
+      if (readAgentRunTerminalOutcome(result) === "failed") {
         terminalLifecyclePhase = "error";
         rememberResponseSession();
         finalizeFailedResponse(

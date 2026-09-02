@@ -7,6 +7,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { chromium, type Browser, type Page } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import type { ApplicationRuntime } from "../app/bootstrap.ts";
 import {
   canRunPlaywrightChromium,
   resolvePlaywrightChromiumExecutablePath,
@@ -155,6 +156,22 @@ async function readMenuColors(page: Page): Promise<{ background: string; foregro
 let browser: Browser;
 let fixtureServer: FixtureServer;
 
+async function requestPreviewGateway(
+  page: Page,
+  requests: Array<{ method: string; params?: unknown }>,
+): Promise<unknown[]> {
+  return page.evaluate((batch) => {
+    const app = document.querySelector<HTMLElement & { runtime?: ApplicationRuntime }>(
+      "openclaw-app",
+    );
+    const client = app?.runtime?.context.gateway.snapshot.client;
+    if (!client) {
+      throw new Error("Preview Gateway client is unavailable");
+    }
+    return Promise.all(batch.map(({ method, params }) => client.request(method, params)));
+  }, requests);
+}
+
 describeStandaloneMockServer("standalone Control UI mock server", () => {
   beforeAll(async () => {
     fixtureServer = await startFixtureServer();
@@ -164,6 +181,181 @@ describeStandaloneMockServer("standalone Control UI mock server", () => {
   afterAll(async () => {
     await browser?.close();
     await stopFixtureServer(fixtureServer);
+  });
+
+  it("correlates concurrent caretaker replies with their original requests", async () => {
+    const page = await browser.newPage();
+    try {
+      await page.goto(new URL("/chat", fixtureServer.url).toString());
+      await page.getByRole("textbox", { name: "Message Molty" }).waitFor();
+      const replies = await requestPreviewGateway(page, [
+        { method: "openclaw.chat", params: { sessionId: "delayed", message: "hello" } },
+        { method: "openclaw.chat", params: { sessionId: "welcome" } },
+      ]);
+      expect(replies).toMatchObject([
+        { sessionId: "delayed", reply: expect.stringContaining("demo turn 0") },
+        { sessionId: "welcome", reply: expect.stringContaining("system caretaker") },
+      ]);
+    } finally {
+      await page.close();
+    }
+  });
+
+  it("keeps renamed preview groups authoritative across reads and reloads", async () => {
+    const page = await browser.newPage();
+    try {
+      await page.goto(new URL("/chat", fixtureServer.url).toString());
+      await page.getByRole("textbox", { name: "Message Molty" }).waitFor();
+      await requestPreviewGateway(page, [
+        { method: "sessions.groups.rename", params: { name: "Research", to: "Reviewed" } },
+      ]);
+      for (const reload of [false, true]) {
+        if (reload) {
+          await page.reload();
+          await page.getByRole("textbox", { name: "Message Molty" }).waitFor();
+        }
+        expect(await requestPreviewGateway(page, [{ method: "sessions.groups.list" }])).toEqual([
+          { groups: [{ name: "Reviewed", position: 0 }], sectionOrder: [] },
+        ]);
+      }
+    } finally {
+      await page.close();
+    }
+  });
+
+  it.each([
+    { task: 1, user: "Map the run-status", assistant: "Tracing task events" },
+    { task: 2, user: "Audit the gateway", assistant: "Comparing requester" },
+  ])(
+    "serves background task $task through both chat entry points",
+    async ({ task, user, assistant }) => {
+      const page = await browser.newPage();
+      try {
+        await page.goto(new URL("/chat", fixtureServer.url).toString());
+        await page.getByRole("textbox", { name: "Message Molty" }).waitFor();
+        const sessionKey = `agent:openclaw-mock:subagent:mock-task-${task}`;
+        const [description] = (await requestPreviewGateway(page, [
+          { method: "sessions.describe", params: { key: sessionKey } },
+        ])) as Array<{ session: { sessionId: string } }>;
+        expect(description).toMatchObject({
+          session: { key: sessionKey, sessionId: expect.any(String) },
+        });
+        const replies = await requestPreviewGateway(
+          page,
+          ["chat.history", "chat.startup"].map((method) => ({
+            method,
+            params: { sessionKey },
+          })),
+        );
+        for (const reply of replies) {
+          expect(reply).toMatchObject({
+            sessionId: description!.session.sessionId,
+            sessionInfo: description!.session,
+            messages: [
+              { role: "user", content: [{ text: expect.stringContaining(user) }] },
+              {
+                role: "assistant",
+                content: [{ text: expect.stringContaining(assistant) }],
+              },
+            ],
+          });
+        }
+      } finally {
+        await page.close();
+      }
+    },
+  );
+
+  it("keeps the main preview run active when hydrating canonical session metadata", async () => {
+    const page = await browser.newPage();
+    try {
+      await page.goto(new URL("/chat", fixtureServer.url).toString());
+      await page.getByRole("textbox", { name: "Message Molty" }).waitFor();
+      expect(
+        await requestPreviewGateway(page, [
+          { method: "chat.startup", params: { sessionKey: "agent:main:main" } },
+        ]),
+      ).toMatchObject([
+        {
+          sessionInfo: { hasActiveRun: true, status: "running", activeRunIds: ["mock-plan-run"] },
+          inFlightRun: { runId: "mock-plan-run" },
+        },
+      ]);
+      await page.getByRole("button", { name: "Stop generating" }).waitFor();
+    } finally {
+      await page.close();
+    }
+  });
+
+  it("keeps generated search-session metadata in the canonical fixture catalog", async () => {
+    const page = await browser.newPage();
+    try {
+      await page.goto(new URL("/chat", fixtureServer.url).toString());
+      await page.getByRole("textbox", { name: "Message Molty" }).waitFor();
+      const replies = await requestPreviewGateway(
+        page,
+        ["telegram", "claude"].map((search) => ({
+          method: "sessions.list",
+          params: { search },
+        })),
+      );
+      expect(replies).toMatchObject([
+        {
+          sessions: expect.arrayContaining([
+            expect.objectContaining({ label: "Telegram investigation 001", model: "gpt-5.6-luna" }),
+          ]),
+        },
+        {
+          sessions: expect.arrayContaining([
+            expect.objectContaining({
+              label: "Model search result 001",
+              model: "claude-sonnet-4-6",
+            }),
+          ]),
+        },
+      ]);
+    } finally {
+      await page.close();
+    }
+  });
+
+  it("keeps synthetic avatar requests on the preview origin across reloads", async () => {
+    const context = await browser.newContext();
+    const previewOrigin = new URL(fixtureServer.url).origin;
+    const externalRequests: string[] = [];
+    const avatarRequests: string[] = [];
+    try {
+      // A failing regression must never reach a developer's real Gateway.
+      await context.route("**/*", (route) => {
+        const url = route.request().url();
+        if (new URL(url).origin !== previewOrigin) {
+          externalRequests.push(url);
+          return route.abort();
+        }
+        return route.continue();
+      });
+      const page = await context.newPage();
+      page.on("request", (request) => {
+        if (new URL(request.url()).pathname === "/api/users/presence-riley/avatar") {
+          avatarRequests.push(request.url());
+        }
+      });
+      await page.goto(`${previewOrigin}/chat/main?skillLibrary=collaborator&nav=collapsed`);
+      for (const reload of [false, true]) {
+        if (reload) {
+          avatarRequests.length = 0;
+          await page.reload();
+        }
+        await page.getByRole("textbox", { name: "Message Molty" }).waitFor();
+        await expect.poll(() => avatarRequests.length).toBeGreaterThan(0);
+        expect([...new Set(avatarRequests.map((url) => new URL(url).origin))]).toEqual([
+          previewOrigin,
+        ]);
+        expect(externalRequests).toEqual([]);
+      }
+    } finally {
+      await context.close();
+    }
   });
 
   for (const mode of ["dark", "light"] as const) {

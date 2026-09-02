@@ -26,7 +26,8 @@ vi.mock("./command-rpc.js", () => ({
 vi.mock("./app-server/request.js", () => ({
   requestCodexAppServerClientJson: pinnedConnectionMocks.request,
 }));
-vi.mock("./app-server/shared-client.js", () => ({
+vi.mock("./app-server/shared-client.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./app-server/shared-client.js")>()),
   getLeasedSharedCodexAppServerClient: pinnedConnectionMocks.getClient,
   releaseLeasedSharedCodexAppServerClient: pinnedConnectionMocks.releaseClient,
 }));

@@ -9,6 +9,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ThinkLevel } from "../thinking.js";
 import type { AgentLifecycleTerminalBackstop } from "./agent-lifecycle-terminal.js";
 import type {
+  AgentTurnCompaction,
   AgentTurnInternalResult,
   AgentTurnParams,
   EmbeddedAgentRunResult,
@@ -31,6 +32,7 @@ export type AgentFallbackCandidateCommonParams = {
   runId: string;
   runAbortSignal?: AbortSignal;
   runLane: RunEmbeddedAgentParams["lane"];
+  isFallbackRetry: boolean;
   isFinalFallbackAttempt?: boolean;
   suppressQueuedUserPersistenceForCandidate: boolean;
   userTurnTranscriptRecorder: RunEmbeddedAgentParams["userTurnTranscriptRecorder"];
@@ -56,7 +58,11 @@ export type AgentFallbackCandidateCommonParams = {
 export type AgentFallbackCycleState = {
   deferredLifecycle: DeferredEmbeddedRunLifecycleManager;
   lifecycleGeneration: string;
-  autoCompactionCount: number;
+  /** Turn admission time; terminal backstops must not stamp failure time as the start. */
+  turnStartedAtMs: number;
+  compaction: AgentTurnCompaction;
+  /** Failure attribution only; model start does not prove current token freshness. */
+  postCompactionModelAttempted: boolean;
   attemptedRuntimeProvider: string;
   attemptedRuntimeModel: string;
   bootstrapPromptWarningSignaturesSeen: string[];
@@ -79,7 +85,7 @@ type CompletedFallbackCycle = {
 
 export type AgentFallbackCycleResult =
   | CompletedFallbackCycle
-  | Extract<AgentTurnInternalResult, { kind: "final" }>;
+  | Extract<AgentTurnInternalResult, { kind: "final" | "aborted" }>;
 
 type AgentFallbackModelPatch = {
   captureFallbackFailure: (attempts: RuntimeFallbackAttempt[]) => boolean | undefined;

@@ -567,10 +567,14 @@ describe("getCachedPluginModuleLoader", () => {
     expect(createJiti).not.toHaveBeenCalled();
     expect(fromSourceTransformer).not.toHaveBeenCalled();
     expectNativeOptions(nativeStub, "/repo/dist/extensions/demo/api.js");
-    const options = callArg(nativeStub, 0, 1, "native options") as {
-      aliasMap?: Record<string, string>;
-    };
-    expect(options.aliasMap?.["openclaw/plugin-sdk/core"]).toBe("/repo/dist/plugin-sdk/core.js");
+    const options = callArg(nativeStub, 0, 1, "native options") as NonNullable<
+      Parameters<typeof import("./native-module-require.js").tryNativeRequireJavaScriptModule>[1]
+    >;
+    const target =
+      typeof options.aliasMap === "function"
+        ? options.aliasMap("openclaw/plugin-sdk/core")
+        : options.aliasMap?.["openclaw/plugin-sdk/core"];
+    expect(target).toBe("/repo/dist/plugin-sdk/core.js");
     expectStats(getPluginModuleLoaderStats(), {
       calls: 1,
       nativeHits: 1,

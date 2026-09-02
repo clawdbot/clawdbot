@@ -12,16 +12,6 @@ import {
   setupAgentRunnerExecutionTestState,
 } from "./agent-runner-execution.test-support.js";
 
-// The fixture registers its plugin directly; disk discovery is outside this handoff.
-vi.mock("../../plugins/loader.js", () => ({
-  loadAndActivateRootPluginRegistry: vi.fn(() => {
-    throw new Error("unexpected plugin discovery");
-  }),
-  loadOpenClawPlugins: vi.fn(() => {
-    throw new Error("unexpected plugin discovery");
-  }),
-}));
-
 vi.mock("../../agents/agent-tools.js", () => ({
   createOpenClawCodingTools: vi.fn(() => {
     throw new Error("unexpected coding tool construction");
@@ -98,7 +88,8 @@ describe("webchat admission to plugin node duplex authority", () => {
       const { createEmptyPluginRegistry } = await import("../../plugins/registry-empty.js");
       const { withPluginRuntimePluginScope, withPluginRuntimeRegistryScope } =
         await import("../../plugins/runtime/gateway-request-scope.js");
-      const { setActivePluginRegistry } = await import("../../plugins/runtime.js");
+      const { getActivePluginRegistry, getActivePluginRegistryVersion, setActivePluginRegistry } =
+        await import("../../plugins/runtime.js");
       const {
         attachedEnvironment,
         createWorkerSessionTurnPlacementProvider,
@@ -186,6 +177,7 @@ describe("webchat admission to plugin node duplex authority", () => {
       preparedRegistry.nodeHostCommands.push(...registry.nodeHostCommands);
       const scopedRegistry = mode === "shared" ? registry : preparedRegistry;
       setActivePluginRegistry(registry);
+      const activeRegistryVersion = getActivePluginRegistryVersion();
       const methodRegistry = createGatewayMethodRegistry(
         [
           {
@@ -225,7 +217,6 @@ describe("webchat admission to plugin node duplex authority", () => {
       const tunnel: WorkerTunnelHandle = {
         environmentId: ENVIRONMENT_ID,
         ownerEpoch: OWNER_EPOCH,
-        launchTurn: vi.fn(),
         runWorkspaceCommand: vi.fn(),
         syncWorkspace: vi.fn(),
         quiesceWorkspace: async () => ({ assertActive: async () => {}, resume: async () => {} }),
@@ -415,6 +406,9 @@ describe("webchat admission to plugin node duplex authority", () => {
           },
         },
       );
+      // Error classification may load provider hooks, but must not replace the node-policy registry.
+      expect(getActivePluginRegistry()).toBe(registry);
+      expect(getActivePluginRegistryVersion()).toBe(activeRegistryVersion);
       if (mode !== "placement" && mode !== "session") {
         expect(reply).toMatchObject({ kind: "success" });
       }

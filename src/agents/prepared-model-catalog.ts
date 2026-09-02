@@ -8,7 +8,9 @@ import {
   resolveAmbientOwnerAgentId,
 } from "./agent-scope.js";
 import { resolveLegacyInheritedAuthDir } from "./legacy-inherited-auth-dir.js";
+import { findModelInCatalog } from "./model-catalog-lookup.js";
 import type { ModelCatalogEntry, ModelCatalogSnapshot } from "./model-catalog.types.js";
+import { modelTransportRoutesMatch } from "./model-compat-catalog.js";
 import { resolvePublishedModelCatalogOwner } from "./prepared-model-catalog-owner.js";
 import { PreparedModelCatalogConfigReplacedError } from "./prepared-model-catalog.errors.js";
 import type { ResolvedPublishedModelCatalogOwner } from "./prepared-model-catalog.types.js";
@@ -29,6 +31,7 @@ import {
   prepareModelRuntimeSnapshot,
   PreparedModelRuntimeOwnerNotPublishedError,
   preparedModelRuntimeConfigsMatch,
+  refreshStalePreparedModelRuntimeCatalog,
   type PreparedModelRuntimeInput,
   type PreparedModelRuntimeSnapshot,
 } from "./prepared-model-runtime.js";
@@ -72,9 +75,13 @@ async function materializeRequestedModelCatalog(
   if (!snapshot.loadFullModelCatalog) {
     return snapshot;
   }
+  const staleCatalog =
+    readOnly === true && refreshFullCatalog === true
+      ? await refreshStalePreparedModelRuntimeCatalog(snapshot)
+      : undefined;
   const modelCatalog =
     readOnly === true
-      ? snapshot.readFullModelCatalog?.()
+      ? (staleCatalog ?? snapshot.readFullModelCatalog?.())
       : await snapshot.loadFullModelCatalog({ refresh: refreshFullCatalog === true });
   if (!modelCatalog) {
     return snapshot;
@@ -123,16 +130,17 @@ function resolveInputs(params: LoadPreparedModelCatalogParams = {}): {
   const agentDir =
     params.agentDir ?? resolveAgentDir(config, explicitOrDefaultAgentId as string, params.env);
   const matchingAgentIds =
-    params.agentDir === undefined
+    explicitOrDefaultAgentId !== undefined
       ? []
       : listAgentIds(config).filter(
-          (candidateAgentId) => resolveAgentDir(config, candidateAgentId) === agentDir,
+          (candidateAgentId) => resolveAgentDir(config, candidateAgentId, params.env) === agentDir,
         );
   const agentId =
     explicitOrDefaultAgentId ?? (matchingAgentIds.length === 1 ? matchingAgentIds[0] : undefined);
   const explicitWorkspaceDir = params.workspaceDir === undefined ? undefined : params.workspaceDir;
   const activationWorkspaceDir =
-    explicitWorkspaceDir ?? (agentId ? resolveAgentWorkspaceDir(config, agentId) : undefined);
+    explicitWorkspaceDir ??
+    (agentId ? resolveAgentWorkspaceDir(config, agentId, params.env) : undefined);
   const full: PreparedModelRuntimeInput = {
     ...(agentId ? { agentId } : {}),
     agentDir,
@@ -316,7 +324,7 @@ async function loadScopedReadOnlyModelCatalog(
     try {
       const prepared = await prepareModelRuntimeSnapshot(candidate);
       if (!preparedModelRuntimeConfigsMatch(prepared.config, candidate.config)) {
-        throw new PreparedModelCatalogConfigReplacedError(candidate.agentDir);
+        continue;
       }
       if (isPreparedModelCatalogFull(prepared.modelCatalog)) {
         return prepared.modelCatalog;
@@ -346,6 +354,8 @@ export async function loadProviderScopedThinkingCatalog(params: {
   agentId?: string;
   agentDir?: string;
   workspaceDir?: string;
+  /** Input preparation must resolve modalities for this route, independently of reasoning. */
+  requiredInputRoute?: Pick<ModelCatalogEntry, "api" | "baseUrl">;
 }): Promise<ModelCatalogEntry[]> {
   const scopedParams = {
     config: params.config,
@@ -355,8 +365,19 @@ export async function loadProviderScopedThinkingCatalog(params: {
     readOnly: true,
     providerDiscoveryProviderIds: [params.provider],
   } satisfies LoadPreparedModelCatalogParams;
-  const entryResolved = (catalog: readonly ModelCatalogEntry[]) =>
-    hasResolvedThinkingCatalogEntry({ catalog, provider: params.provider, model: params.model });
+  const entryResolved = (catalog: readonly ModelCatalogEntry[]) => {
+    if (params.requiredInputRoute === undefined) {
+      return hasResolvedThinkingCatalogEntry({
+        catalog,
+        provider: params.provider,
+        model: params.model,
+      });
+    }
+    const entry = findModelInCatalog(catalog, params.provider, params.model);
+    return (
+      entry?.input !== undefined && modelTransportRoutesMatch(entry, params.requiredInputRoute)
+    );
+  };
   const augmentHarnessCatalog = async (snapshot: ModelCatalogSnapshot) => {
     const agentId = params.agentId ?? resolveAmbientOwnerAgentId(params.config);
     const { augmentModelCatalogWithAgentHarness } = await import("./harness/model-catalog.js");
@@ -372,9 +393,10 @@ export async function loadProviderScopedThinkingCatalog(params: {
       defaultModel: `${params.provider}/${params.model}`,
       snapshot,
     });
-    return normalizeThinkingCatalogProviders(augmented.entries);
+    const entries = normalizeThinkingCatalogProviders(augmented.entries);
+    return params.requiredInputRoute !== undefined && !entryResolved(entries) ? [] : entries;
   };
-  const publishedCatalog = getPreparedModelCatalogSnapshot(scopedParams);
+  const publishedCatalog = getAvailablePreparedModelCatalogSnapshot(scopedParams);
   if (publishedCatalog && entryResolved(publishedCatalog.entries)) {
     return await augmentHarnessCatalog(publishedCatalog);
   }

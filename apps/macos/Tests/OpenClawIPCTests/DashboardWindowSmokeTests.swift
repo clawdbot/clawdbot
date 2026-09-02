@@ -538,7 +538,9 @@ struct DashboardWindowSmokeTests {
             isMainFrame: false,
             dashboardURL: dashboard))
     }
+}
 
+extension DashboardWindowSmokeTests {
     @Test func `dashboard link browser tabs preserve isolation and lifecycle`() async throws {
         let server = try await DashboardHTTPFixture.start()
         defer { server.stop() }
@@ -1142,7 +1144,10 @@ struct DashboardWindowSmokeTests {
         let authGate = DashboardRouteAuthGate(token: "route-a-device-token")
         let manager = DashboardManager._testMake(
             authTokenProvider: { _ in await authGate.authToken() },
-            routeProbe: { await authGate.probe() })
+            routeProbe: { purpose in
+                #expect(purpose == .authentication)
+                await authGate.probe()
+            })
         manager._testSetController(controller)
         defer { manager._testController()?.closeDashboard() }
         let socketURL = server.websocketURL("")
@@ -1193,7 +1198,7 @@ struct DashboardWindowSmokeTests {
         controller.show()
         let manager = DashboardManager._testMake(
             authTokenProvider: { _ in nil },
-            routeProbe: {})
+            routeProbe: { purpose in #expect(purpose == .authentication) })
         manager._testSetController(controller)
         defer { manager._testController()?.closeDashboard() }
 

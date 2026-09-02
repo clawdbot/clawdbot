@@ -186,13 +186,18 @@ ollama list
 openclaw models list
 ```
 
-Setting `models.providers.ollama` with an explicit `models` array, or a
-custom provider with `api: "ollama"` and a non-loopback `baseUrl`, disables
-auto-discovery; models must then be defined manually (see
-[Configuration](#configuration)). A `models.providers.ollama` entry pointed at
-hosted `https://ollama.com` also skips discovery, since Ollama Cloud models
-are provider-managed. Loopback custom providers such as
-`http://127.0.0.2:11434` still count as local and keep auto-discovery.
+A **nonempty** `models.providers.ollama.models` list selects manual models and
+skips discovery. When Ollama is in the agent's model scope, an explicit
+self-hosted endpoint with `models: []` remains eligible for discovery;
+`models.providers.ollama.apiKey` alone does not select that provider for Gateway
+model browsing.
+
+Hosted `https://ollama.com` entries skip discovery because Ollama Cloud models
+are provider-managed. Without an explicit Ollama endpoint, a custom provider
+with `api: "ollama"` and a non-loopback `baseUrl` suppresses ambient localhost
+discovery; list that custom provider's models manually (see
+[Configuration](#configuration)). Loopback custom providers such as
+`http://127.0.0.2:11434` keep ambient local discovery eligible.
 
 You can use a full ref such as `ollama/<pulled-model>:latest` without a
 hand-written `models.json` entry; OpenClaw resolves it live. For signed-in
@@ -514,7 +519,7 @@ capability.
   </Tab>
 
   <Tab title="Custom base URL">
-    Explicit config disables auto-discovery, so models must be listed:
+    This example uses a nonempty manual model list, so it skips discovery:
 
     ```json5
     {
@@ -564,7 +569,8 @@ Replace model IDs with exact names from `ollama list` or
     openclaw models set ollama/gemma4
     ```
 
-    Do not add a `models.providers.ollama` block unless you need manual models.
+    Leave `models.providers.ollama` unset to use the default local endpoint, or
+    configure a self-hosted endpoint with `models: []` to keep discovery eligible.
 
   </Accordion>
 
@@ -965,14 +971,20 @@ For full setup and behavior, see [Ollama Web Search](/tools/ollama-search).
     Per-model `contextWindow` declares native window metadata, and per-model
     `contextTokens` caps active input. Provider-level `maxTokens` remains an
     output-token default; a model entry can override it. Native
-    `/api/chat` requests leave `options.num_ctx` unset unless you set
-    `params.num_ctx` explicitly, so Ollama applies its own model,
-    `OLLAMA_CONTEXT_LENGTH`, or VRAM-based default; invalid, zero, negative,
-    or non-finite `params.num_ctx` values are ignored. After upgrading an older
-    configuration, run `openclaw doctor --fix`, then set `params.num_ctx`
-    explicitly when you need to force native request context. The
+    `/api/chat` requests set `options.num_ctx` from a positive `params.num_ctx`
+    first, then from the effective model `contextTokens` when present. Local
+    discovery normally caps `contextTokens` at 32,768 (or the model's smaller
+    native window), so OpenClaw can override a smaller Modelfile context even
+    without an explicit `params.num_ctx`. Invalid, zero, negative, or non-finite
+    `params.num_ctx` values are ignored. Only when neither value is available
+    does Ollama choose its own model, Modelfile, `OLLAMA_CONTEXT_LENGTH`, or
+    VRAM-based default; the native adapter does not fall back directly to the
+    advertised `contextWindow`. After upgrading an older configuration, run
+    `openclaw doctor --fix`. Use `params.num_ctx` to override the native request
+    context explicitly. The
     OpenAI-compatible adapter still injects `options.num_ctx` by default from
-    `params.num_ctx` or the matching model entry's `contextWindow`; disable with
+    `params.num_ctx`, then the matching model entry's `contextTokens` or
+    `contextWindow`; disable with
     `injectNumCtxForOpenAICompat: false` if the upstream rejects `options`.
 
     Native model entries also accept common Ollama runtime options under
@@ -1181,8 +1193,10 @@ For full setup and behavior, see [Ollama Web Search](/tools/ollama-search).
   </Accordion>
 
   <Accordion title="Ollama not detected">
-    Confirm Ollama is running, `OLLAMA_API_KEY` (or an auth profile) is set,
-    and `models.providers.ollama` is **not** defined explicitly:
+    Confirm Ollama is running and is in the agent's model scope. For ambient
+    localhost discovery, set `OLLAMA_API_KEY` (or an auth profile). A nonempty
+    manual model list skips discovery; an explicit self-hosted endpoint with
+    `models: []` does not:
 
     ```bash
     ollama serve
@@ -1301,8 +1315,8 @@ For full setup and behavior, see [Ollama Web Search](/tools/ollama-search).
 
   <Accordion title="Large-context model is too slow or runs out of memory">
     Many models advertise contexts larger than your hardware can run
-    comfortably. Native Ollama uses its own runtime default unless
-    `params.num_ctx` is set. Cap both OpenClaw's budget and Ollama's request
+    comfortably. Native requests forward the effective `contextTokens` unless
+    `params.num_ctx` overrides it. Cap both OpenClaw's budget and Ollama's request
     context for predictable first-token latency:
 
     ```json5

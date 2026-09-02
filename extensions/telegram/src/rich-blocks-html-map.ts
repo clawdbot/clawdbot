@@ -196,7 +196,13 @@ function listToBlock(node: Extract<HtmlNode, { kind: "element" }>): InputRichBlo
   };
 }
 
-const CELL_ALIGN_VALUES = new Set(["left", "center", "right"]);
+function resolveTableCellAlign(value: string | undefined): RichBlockTableCell["align"] {
+  return value === "center" || value === "right" ? value : "left";
+}
+
+function resolveTableCellValign(value: string | undefined): RichBlockTableCell["valign"] {
+  return value === "top" || value === "bottom" ? value : "middle";
+}
 
 function tableCellFromElement(
   node: Extract<HtmlNode, { kind: "element" }>,
@@ -207,14 +213,14 @@ function tableCellFromElement(
   const colspan = strictNumber(attrs.get("colspan"), /^\d+$/u) ?? Number.NaN;
   const rowspan = strictNumber(attrs.get("rowspan"), /^\d+$/u) ?? Number.NaN;
   const align = attrs.get("align")?.toLowerCase();
+  const valign = attrs.get("valign")?.toLowerCase();
   return {
+    align: resolveTableCellAlign(align),
+    valign: resolveTableCellValign(valign),
     ...(text !== "" ? { text } : {}),
     ...(node.name === "th" || inHeader ? { is_header: true as const } : {}),
     ...(Number.isSafeInteger(colspan) && colspan > 1 ? { colspan } : {}),
     ...(Number.isSafeInteger(rowspan) && rowspan > 1 ? { rowspan } : {}),
-    ...(align && CELL_ALIGN_VALUES.has(align)
-      ? { align: align as RichBlockTableCell["align"] }
-      : {}),
   };
 }
 

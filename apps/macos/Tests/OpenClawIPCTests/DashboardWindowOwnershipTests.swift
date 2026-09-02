@@ -1,5 +1,6 @@
 import AppKit
 import Foundation
+import OpenClawKit
 import Testing
 import WebKit
 @testable import OpenClaw
@@ -533,8 +534,11 @@ struct DashboardWindowOwnershipTests {
         let dataStore = WKWebsiteDataStore.nonPersistent()
         let endpointURL = server.websocketURL("/")
         let gate = DashboardWindowOwnershipPresentationGate()
+        let probes = AsyncStream<DashboardRouteProbePurpose>.makeStream()
+        defer { probes.continuation.finish() }
         let manager = DashboardManager._testMake(
             websiteDataStore: dataStore,
+            routeProbe: { probes.continuation.yield($0) },
             primaryEndpointProvider: { _ in
                 await gate.waitForRelease()
                 return GatewayConnection.EndpointSnapshot(
@@ -559,6 +563,7 @@ struct DashboardWindowOwnershipTests {
         #expect(controller.isWindowOpen)
         #expect(controller.currentURL.absoluteString ==
             server.url("/#token=shared").absoluteString)
+        try await self.expectPresentationProbe(from: probes.stream)
 
         let autosaveName = try #require(controller.window?.frameAutosaveName)
         #expect(autosaveName.hasPrefix("OpenClawDashboardWindow-Test-"))
@@ -585,5 +590,47 @@ struct DashboardWindowOwnershipTests {
         #expect(recovered.window?.frameAutosaveName == autosaveName)
         recovered._testOpenLinkBrowser(server.url("/reader/recovered"))
         #expect(recovered._testLinkBrowserDataStore === dataStore)
+    }
+
+    @Test func `configured presentation uses its owned health probe`() async throws {
+        let server = try await DashboardHTTPFixture.start()
+        defer { server.stop() }
+        let configPath = TestIsolation.tempConfigPath()
+        defer { try? FileManager.default.removeItem(atPath: configPath) }
+        let config = """
+        {"gateway":{"remote":{"transport":"direct","url":"\(server.websocketURL())","token":"configured"}}}
+        """
+        try Data(config.utf8).write(to: URL(fileURLWithPath: configPath))
+        try await TestIsolation.withEnvValues([
+            "OPENCLAW_CONFIG_PATH": configPath,
+            "OPENCLAW_GATEWAY_TOKEN": nil,
+            "OPENCLAW_GATEWAY_PASSWORD": nil,
+        ]) {
+            let state = AppStateStore.shared
+            let originalMode = state.connectionMode
+            state.connectionMode = .remote
+            defer { state.connectionMode = originalMode }
+            let probes = AsyncStream<DashboardRouteProbePurpose>.makeStream()
+            defer { probes.continuation.finish() }
+            let manager = DashboardManager._testMake(
+                routeProbe: { probes.continuation.yield($0) },
+                gatewayEntriesProvider: { [Self.primaryGateway] })
+            defer { manager.close() }
+
+            #expect(manager.showConfiguredWindowIfPossible())
+            let controller = try #require(manager._testController())
+            #expect(controller.isWindowOpen)
+            #expect(controller.currentURL.absoluteString ==
+                server.url("/#token=configured").absoluteString)
+            try await self.expectPresentationProbe(from: probes.stream)
+        }
+    }
+
+    private func expectPresentationProbe(from probes: AsyncStream<DashboardRouteProbePurpose>) async throws {
+        let purpose = try await AsyncTimeout.withTimeout(
+            seconds: 3,
+            onTimeout: { NSError(domain: "DashboardPresentationProbe", code: 1) },
+            operation: { await probes.first(where: { _ in true }) })
+        #expect(purpose == .presentation)
     }
 }

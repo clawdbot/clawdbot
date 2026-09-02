@@ -163,6 +163,7 @@ const runtimePostBuildWatchedPaths = [
   "scripts/stage-bundled-plugin-runtime.mjs",
   "scripts/stage-bundled-plugin-runtime.mts",
   "scripts/windows-cmd-helpers.mjs",
+  "scripts/write-build-info.ts",
   "scripts/write-official-channel-catalog.mjs",
   "scripts/write-official-channel-catalog.mts",
   BUNDLED_PLUGIN_ROOT_DIR,

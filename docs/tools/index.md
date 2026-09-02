@@ -97,6 +97,12 @@ semantics, use [Tools and custom providers](/gateway/config-tools).
 | Media                   | Analyze, generate, or speak media                                                            | `view_image`, `image_generate`, `music_generate`, `video_generate`, `tts`                                           | [Media overview](/tools/media-overview)                                                                                |
 | Large OpenClaw catalogs | Search, call, and combine many eligible tools without sending every schema to the model      | `exec`, `wait`, `tool_search_code`, `tool_search`, `tool_describe`                                                  | [Code Mode](/tools/code-mode), [Tool Search](/tools/tool-search)                                                       |
 
+The `edit` tool supports targeted formatting changes, including removing trailing
+spaces or replacing Unicode quotes, dashes, and spaces. These changes are applied
+even when the old and new text would compare equal after fuzzy normalization.
+Identical replacement requests and edits that produce unchanged content still
+report no changes.
+
 <Note>
 Code Mode and Tool Search are experimental OpenClaw agent surfaces. Codex
 harness runs use Codex-native code mode, native tool search, deferred dynamic
@@ -168,6 +174,10 @@ Choose the extension path by the job you need OpenClaw to do:
   contracts.
 
 ## Troubleshoot missing tools
+
+Configured `tools.exec` and `tools.fs` sections do not grant tool access. The
+profile migration warning suggests `alsoAllow` entries only when other active
+global, agent, and provider policies permit those tools.
 
 If the model cannot see or call a tool, start with the effective policy for
 the current turn:

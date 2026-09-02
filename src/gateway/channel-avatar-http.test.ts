@@ -138,6 +138,28 @@ describe("handleChannelAvatarHttpRequest", () => {
     expect(mocks.readMedia).toHaveBeenCalledTimes(1);
   });
 
+  it("releases superseded avatars without evicting another session's cached image", async () => {
+    const stable = await fetch(avatarRoute("agent:main:stable-avatar"));
+    await stable.arrayBuffer();
+
+    for (let revision = 0; revision < 130; revision++) {
+      const reference = `/state/media/inbound/rotating-avatar-${revision}.png`;
+      const buffer = Buffer.concat([PNG_BYTES, Buffer.from(String(revision))]);
+      mocks.loadEntry.mockReturnValue({ entry: avatarEntry(reference) });
+      mocks.readMedia.mockResolvedValue({ buffer });
+      const response = await fetch(avatarRoute("agent:main:rotating-avatar"));
+      expect(Buffer.from(await response.arrayBuffer()).equals(buffer)).toBe(true);
+    }
+
+    mocks.loadEntry.mockReturnValue({ entry: avatarEntry() });
+    mocks.readMedia.mockResolvedValue({ buffer: PNG_BYTES });
+    const readsBeforeRevisit = mocks.readMedia.mock.calls.length;
+    const revisited = await fetch(avatarRoute("agent:main:stable-avatar"));
+
+    expect(Buffer.from(await revisited.arrayBuffer()).equals(PNG_BYTES)).toBe(true);
+    expect(mocks.readMedia).toHaveBeenCalledTimes(readsBeforeRevisit);
+  });
+
   it("keeps representation headers but omits bytes on HEAD", async () => {
     const response = await fetch(avatarRoute("agent:main:head"), { method: "HEAD" });
 
