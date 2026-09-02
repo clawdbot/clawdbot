@@ -2,7 +2,7 @@
 // fetch path; kept free of bot-content dependencies so send.ts can import it
 // without a cycle.
 import { parseStrictNonNegativeInteger } from "openclaw/plugin-sdk/number-runtime";
-import { escapeHtml } from "openclaw/plugin-sdk/text-utility-runtime";
+import { escapeHtml, truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { normalizeFeishuExternalKey } from "./external-keys.js";
 import { parseInteractiveCardContent } from "./interactive-message-content.js";
 import { parsePostContent } from "./post.js";
@@ -57,6 +57,10 @@ function formatSubMessageContent(content: string, contentType: string): string {
 export function parseMergeForwardContent(params: { content: string; log?: FeishuLogger }): string {
   const { content, log } = params;
   const maxMessages = 50;
+  // A quoted expansion rides into agent context alongside the reply; keep the
+  // rendered body bounded so one large merged-forward cannot crowd out the
+  // conversation budget.
+  const maxRenderedChars = 4_000;
   log?.("feishu: parsing merge_forward sub-messages from API response");
 
   let items: Array<{
@@ -100,5 +104,5 @@ export function parseMergeForwardContent(params: { content: string; log?: Feishu
   if (subMessages.length > maxMessages) {
     lines.push(`... and ${subMessages.length - maxMessages} more messages`);
   }
-  return lines.join("\n");
+  return truncateUtf16Safe(lines.join("\n"), maxRenderedChars);
 }

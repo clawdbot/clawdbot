@@ -310,14 +310,17 @@ export async function getMessageFeishu(params: {
 
     // A merged-forward message get returns the container plus every forwarded
     // child in data.items. The container alone renders as a placeholder, so
-    // expand the same ordered children the direct receive path produces.
+    // expand the same ordered children the direct receive path produces. The
+    // container is located by its markers, not by response position.
     const items = response.data?.items;
-    const firstItem = items?.[0];
-    if (items && items.length > 1 && firstItem) {
-      // SAFETY: the item shape is widened only to read the two container markers.
-      const first = firstItem as { msg_type?: string; upper_message_id?: string };
-      if (first.msg_type === "merge_forward" && !first.upper_message_id) {
-        const info = parseFeishuMessageItem(firstItem, messageId);
+    if (items && items.length > 1) {
+      const container = items.find(
+        (entry) =>
+          entry.msg_type === "merge_forward" &&
+          !("upper_message_id" in entry && entry.upper_message_id !== undefined),
+      );
+      if (container) {
+        const info = parseFeishuMessageItem(container, container.message_id ?? messageId);
         return {
           ...info,
           content: parseMergeForwardContent({ content: JSON.stringify(items) }),

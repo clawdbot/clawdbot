@@ -69,6 +69,30 @@ describe("getMessageFeishu quoted merged-forward expansion", () => {
     expect(info?.senderId).toBe("ou_sender");
   });
 
+  it("expands when the container is not the first response item", async () => {
+    mockGetResponse([childItem("first", "1002"), containerItem(), childItem("second", "1001")]);
+
+    const info = await getMessageFeishu({ cfg: baseConfig, messageId: "om_container" });
+
+    expect(info?.content).toBe(
+      ["[Merged and Forwarded Messages]", "- second", "- first"].join("\n"),
+    );
+    expect(info?.messageId).toBe("om_container");
+  });
+
+  it("bounds the expanded quoted body to a context-safe size", async () => {
+    const longText = "x".repeat(600);
+    mockGetResponse([
+      containerItem(),
+      ...Array.from({ length: 20 }, (_, i) => childItem(longText, String(1000 + i))),
+    ]);
+
+    const info = await getMessageFeishu({ cfg: baseConfig, messageId: "om_container" });
+
+    expect(info?.content.length).toBeLessThanOrEqual(4_000);
+    expect(info!.content.length).toBeLessThanOrEqual(4_000);
+  });
+
   it("keeps single-item placeholder behavior for plain quoted messages", async () => {
     mockGetResponse([childItem("plain text", "1001")]);
 
