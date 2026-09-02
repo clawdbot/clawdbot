@@ -70,6 +70,17 @@ describe("system disk snapshots", () => {
     ]);
   });
 
+  it.each(["tmpfs tmpfs", "nfs server:/root", "nfs4 server:/root"])(
+    "excludes a non-local Linux root (%s) without hiding local data disks",
+    async (filesystem) => {
+      mocks.readFile.mockResolvedValue(
+        `1 0 0:5 / / rw - ${filesystem} rw\n2 1 8:1 / /data rw - ext4 /dev/sdb rw`,
+      );
+      const { readSystemDisks } = await import("./system-disks.js");
+      expect((await readSystemDisks())?.map((disk) => disk.path)).toEqual(["/data"]);
+    },
+  );
+
   it("keeps macOS root and browsable volumes without duplicating hidden APFS volumes", async () => {
     mocks.platform.mockReturnValue("darwin");
     mocks.runCommandWithTimeout.mockResolvedValueOnce({

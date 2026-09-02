@@ -102,7 +102,13 @@ async function collectSystemInfo(context: GatewayRequestContext): Promise<System
     ...(loadAverage.some((value) => value !== 0) ? { loadAverage } : {}),
     memoryTotalBytes: os.totalmem(),
     memoryFreeBytes: os.freemem(),
-    ...(disks ? { disks } : {}),
+    // Keep the existing state-volume reading when native discovery is unavailable;
+    // an empty successful discovery intentionally stays empty.
+    disks:
+      disks ??
+      (disk?.totalBytes != null && disk.totalBytes > 0
+        ? [{ path: stateDir, totalBytes: disk.totalBytes, availableBytes: disk.availableBytes }]
+        : undefined),
     ...(disk?.totalBytes != null
       ? {
           diskTotalBytes: disk.totalBytes,

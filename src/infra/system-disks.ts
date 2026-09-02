@@ -14,7 +14,7 @@ const windowsVolumeSchema = z.object({
 const commandOptions = { timeoutMs: 3_000, maxOutputBytes: 1024 * 1024 };
 let snapshot: { expiresAt: number; pending: Promise<SystemDisk[] | undefined> } | undefined;
 
-async function readMountedDiskPaths(platform: NodeJS.Platform): Promise<string[]> {
+async function readMountedDiskPaths(platform: NodeJS.Platform): Promise<string[] | undefined> {
   if (platform === "linux") {
     const mounts = await fs.readFile("/proc/self/mountinfo", "utf8");
     const devices = new Map<string, { path: string; root: string }>();
@@ -26,7 +26,10 @@ async function readMountedDiskPaths(platform: NodeJS.Platform): Promise<string[]
         continue;
       }
       const mountPath = decodeMountInfoPath(encodedPath);
-      if (mountPath !== "/" && !source.startsWith("/dev/") && type !== "zfs") {
+      // Containers expose their writable storage through overlay at /; other
+      // roots must meet the same local-disk predicate as ordinary mounts.
+      const localDisk = source.startsWith("/dev/") || type === "zfs";
+      if (!localDisk && !(mountPath === "/" && type === "overlay")) {
         continue;
       }
       const existing = devices.get(device);
@@ -45,7 +48,10 @@ async function readMountedDiskPaths(platform: NodeJS.Platform): Promise<string[]
     return [...devices.values()].map((entry) => entry.path);
   }
 
-  const { stdout } = await runCommandWithTimeout(["mount"], commandOptions);
+  const { stdout, code } = await runCommandWithTimeout(["mount"], commandOptions);
+  if (code !== 0) {
+    return undefined;
+  }
   return stdout.split("\n").flatMap((line) => {
     const match = /^\/dev\/\S+ on (.+) \(([^)]+)\)$/.exec(line);
     if (!match) {
@@ -100,14 +106,14 @@ async function collectSystemDisks(): Promise<SystemDisk[] | undefined> {
     return undefined;
   }
   const paths = await readMountedDiskPaths(platform);
-  if (paths.length === 0) {
-    return [];
+  if (!paths?.length) {
+    return paths ? [] : undefined;
   }
-  const { stdout } = await runCommandWithTimeout(["df", "-kP", ...paths], {
+  const { stdout, code } = await runCommandWithTimeout(["df", "-kP", ...paths], {
     ...commandOptions,
     env: { LC_ALL: "C" },
   });
-  return stdout.split("\n").flatMap((line) => {
+  const disks = stdout.split("\n").flatMap((line) => {
     const match = /^.+?\s+(\d+)\s+\d+\s+(-?\d+)\s+\d+%\s+(.+)$/.exec(line);
     if (!match) {
       return [];
@@ -123,6 +129,9 @@ async function collectSystemDisks(): Promise<SystemDisk[] | undefined> {
       ? [{ path: mountPath, totalBytes, availableBytes }]
       : [];
   });
+  // Preserve completed rows from a partial df failure, but distinguish a
+  // failed probe from successful discovery of no eligible disks.
+  return code !== 0 && disks.length === 0 ? undefined : disks;
 }
 
 export function readSystemDisks(): Promise<SystemDisk[] | undefined> {
