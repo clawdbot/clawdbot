@@ -583,6 +583,7 @@ export class ChatPane extends ChatPaneLayoutRender {
           search: `?session=${encodeURIComponent(state.sessionKey)}${status}`,
         });
       },
+      onUseSystemDefaultMicrophone: state.realtimeTalkUseSystemDefault ?? undefined,
       onToggleRealtimeTalk: () => void state.toggleRealtimeTalk(),
       onToggleRealtimeCamera: () => void state.toggleRealtimeTalkCamera(),
       onSwitchRealtimeCamera: () => void state.switchRealtimeTalkCamera(),
