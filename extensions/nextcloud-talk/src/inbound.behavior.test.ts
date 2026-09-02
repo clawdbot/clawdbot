@@ -150,6 +150,21 @@ describe("nextcloud-talk inbound behavior", () => {
     warnMissingProviderGroupPolicyFallbackOnceMock.mockReturnValue(undefined);
   });
 
+  it("logs the drop when an inbound message has an empty body", async () => {
+    const runtime = createRuntimeEnv();
+    await handleNextcloudTalkInbound({
+      message: createMessage({ text: "", mediaType: "application/pdf" }),
+      account: createAccount(),
+      config: { channels: { "nextcloud-talk": {} } } as CoreConfig,
+      runtime,
+    });
+
+    expect(runtime.log).toHaveBeenCalledWith(
+      "nextcloud-talk: drop empty message body (mediaType=application/pdf) target=user-1",
+    );
+    expect(sendMessageNextcloudTalkMock).not.toHaveBeenCalled();
+  });
+
   it("issues a DM pairing challenge and sends the challenge text", async () => {
     const issueChallenge = vi.fn(
       async (params: { sendPairingReply: (text: string) => Promise<void> }) => {

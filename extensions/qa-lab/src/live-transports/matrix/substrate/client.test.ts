@@ -529,6 +529,14 @@ describe("matrix driver client", () => {
     const fetchImpl: typeof fetch = async (input, init) => {
       const url = resolveRequestUrl(input);
       const body = parseJsonRequestBody(init);
+      if (url.endsWith("/_matrix/client/v3/login")) {
+        const userId = (body.identifier as { user: string }).user;
+        return Response.json({
+          access_token: `observation-token-${userId}`,
+          device_id: `observation-device-${userId}`,
+          user_id: userId,
+        });
+      }
       if (url.endsWith("/_matrix/client/v3/register")) {
         const username = typeof body.username === "string" ? body.username : "";
         const auth = typeof body.auth === "object" && body.auth ? body.auth : undefined;
@@ -646,6 +654,14 @@ describe("matrix driver client", () => {
     const fetchImpl: typeof fetch = async (input, init) => {
       const url = resolveRequestUrl(input);
       const body = parseJsonRequestBody(init);
+      if (url.endsWith("/_matrix/client/v3/login")) {
+        const userId = (body.identifier as { user: string }).user;
+        return Response.json({
+          access_token: `observation-token-${userId}`,
+          device_id: `observation-device-${userId}`,
+          user_id: userId,
+        });
+      }
       if (url.endsWith("/_matrix/client/v3/register")) {
         registerCount += 1;
         const role = ["driver", "sut", "observer"][registerCount - 1];

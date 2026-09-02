@@ -536,6 +536,69 @@ describe("buildLineMessageContext", () => {
     expect(context?.ctxPayload.GroupSystemPrompt).toBe("Use the prefixed room config");
   });
 
+  it("carries a group's configured skill scope on the inbound context", async () => {
+    const event = createMessageEvent({ type: "group", groupId: "group-1", userId: "user-1" });
+
+    const context = await buildLineMessageContext({
+      event,
+      allMedia: [],
+      cfg,
+      account: {
+        ...account,
+        config: {
+          groups: {
+            "group-1": { skills: ["triage"], systemPrompt: "Stay on triage" },
+          },
+        },
+      },
+      commandAuthorized: true,
+    });
+
+    expect(context?.skillFilter).toEqual(["triage"]);
+    expect(context?.ctxPayload.GroupSystemPrompt).toBe("Stay on triage");
+  });
+
+  it("keeps an empty group skill scope as a scope rather than dropping it", async () => {
+    const event = createMessageEvent({ type: "group", groupId: "group-1", userId: "user-1" });
+
+    const context = await buildLineMessageContext({
+      event,
+      allMedia: [],
+      cfg,
+      account: { ...account, config: { groups: { "group-1": { skills: [] } } } },
+      commandAuthorized: true,
+    });
+
+    expect(context?.skillFilter).toEqual([]);
+  });
+
+  it("carries the same group skill scope when a postback answers the group", async () => {
+    const event = createPostbackEvent({ type: "group", groupId: "group-1", userId: "user-1" });
+
+    const context = await buildLinePostbackContext({
+      event,
+      cfg,
+      account: { ...account, config: { groups: { "group-1": { skills: ["triage"] } } } },
+      commandAuthorized: true,
+    });
+
+    expect(context?.skillFilter).toEqual(["triage"]);
+  });
+
+  it("leaves a direct chat without a group skill scope", async () => {
+    const event = createMessageEvent({ type: "user", userId: "user-1" });
+
+    const context = await buildLineMessageContext({
+      event,
+      allMedia: [],
+      cfg,
+      account: { ...account, config: { groups: { "group-1": { skills: ["triage"] } } } },
+      commandAuthorized: true,
+    });
+
+    expect(context?.skillFilter).toBeUndefined();
+  });
+
   it("keeps non-text message contexts fail-closed for command auth", async () => {
     const event = createMessageEvent(
       { type: "user", userId: "user-audio" },
@@ -884,4 +947,70 @@ describe("buildLineMessageContext", () => {
       expect.objectContaining({ groupId: "C5aeb18d690759492f1a8c391c37549a0" }),
     );
   });
+
+  it.each<{
+    text: string;
+    spans: [number, number][];
+    expected: string;
+    mention?: webhook.TextMessageContent["mention"];
+  }>([
+    { text: "()hello", spans: [[0, 2]], expected: "[emoji]hello" },
+    { text: "(hello)", spans: [[0, 7]], expected: "(hello)" },
+    {
+      text: "😂() (hello)",
+      spans: [
+        [2, 2],
+        [5, 7],
+      ],
+      expected: "😂[emoji] (hello)",
+    },
+    { text: "call foo()", spans: [], expected: "call foo()" },
+    {
+      text: "()a()",
+      spans: [
+        [0, 2],
+        [3, 2],
+      ],
+      expected: "[emoji]a[emoji]",
+    },
+    { text: "call foo() now ()", spans: [[15, 2]], expected: "call foo() now [emoji]" },
+    {
+      text: "@openclaw3 ()",
+      spans: [[11, 2]],
+      expected: "@openclaw3 [emoji]",
+      mention: { mentionees: [{ type: "user" as const, index: 0, length: 10, isSelf: true }] },
+    },
+  ])(
+    "projects LINE emoji metadata without losing text: $text",
+    async ({ text, spans, expected, mention }) => {
+      const context = await buildLineMessageContext({
+        event: createMessageEvent(
+          { type: "user", userId: "user-1" },
+          {
+            message: {
+              id: "emoji-message",
+              type: "text",
+              text,
+              quoteToken: "quote-token",
+              emojis: spans.map(([index, length]) => ({
+                index,
+                length,
+                productId: "emoji-set",
+                emojiId: "1",
+              })),
+              mention,
+            },
+          },
+        ),
+        allMedia: [],
+        cfg,
+        account,
+        commandAuthorized: true,
+      });
+
+      expect(context?.ctxPayload.BodyForAgent).toBe(expected);
+      expect(context?.ctxPayload.RawBody).toBe(expected);
+      expect(context?.ctxPayload.CommandBody).toBe(mention ? "()" : text);
+    },
+  );
 });

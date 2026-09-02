@@ -99,17 +99,19 @@ export type TranscriptEventAppendOptions = {
   beforeCommitInTransaction?: () => void;
 };
 
-export type TranscriptEventAppendError =
+export type TranscriptAppendRefusal =
   | {
-      actualSessionId: string;
+      actualSessionIdHash: string;
+      agentIdHash: string;
       code: "session-rebound";
-      expectedSessionId: string;
-      sessionKey: string;
+      expectedSessionIdHash: string;
+      sessionKeyHash: string;
     }
   | {
+      agentIdHash: string;
       code: "session-entry-missing";
-      expectedSessionId: string;
-      sessionKey: string;
+      expectedSessionIdHash: string;
+      sessionKeyHash: string;
     };
 
 export type SessionTranscriptStats = {

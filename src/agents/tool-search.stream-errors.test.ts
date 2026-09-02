@@ -32,6 +32,7 @@ vi.mock("node:child_process", async () => {
 
 const spawnMock = vi.mocked(spawn);
 let toolSearch: typeof import("./tool-search.js");
+let toolSearchRuntime: typeof import("./tool-search-runtime.js");
 let testing: (typeof import("./tool-search.test-support.js"))["testing"];
 
 async function rejectedMessage(promise: Promise<unknown>): Promise<string> {
@@ -50,6 +51,7 @@ async function rejectedMessage(promise: Promise<unknown>): Promise<string> {
 describe("tool-search code-mode stream errors", () => {
   beforeAll(async () => {
     toolSearch = await import("./tool-search.js");
+    toolSearchRuntime = await import("./tool-search-runtime.js");
     testing = (await import("./tool-search.test-support.js")).testing;
   });
 
@@ -59,7 +61,7 @@ describe("tool-search code-mode stream errors", () => {
     const { child, stderr } = createMockSpawnChild();
     spawnMock.mockReturnValueOnce(child as unknown as ChildProcess);
     const config = { ...toolSearch.resolveToolSearchConfig({}), codeTimeoutMs: 1000 };
-    const runtime = new toolSearch.ToolSearchRuntime({}, config);
+    const runtime = new toolSearchRuntime.ToolSearchRuntime({}, config);
     const promise = testing.runCodeModeChild({
       code: "return 7;",
       config,

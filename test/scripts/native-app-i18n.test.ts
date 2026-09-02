@@ -3,6 +3,7 @@ import { readFile, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
+import { buildMacosCatalog } from "../../scripts/apple-app-i18n.ts";
 import {
   assignNativeI18nIds,
   collectNativeI18nEntries,
@@ -125,6 +126,25 @@ describe("native app i18n inventory", () => {
     expect(isConditionalBranchIdentifier(`a${"A".repeat(4_096)}!`)).toBe(false);
   });
 
+  it("preserves the typed expiry key from Swift extraction through macOS catalog projection", () => {
+    const entries = assignNativeI18nIds(
+      extractNativeI18nCandidates(
+        "apple",
+        "apps/macos/Sources/OpenClaw/Expiry.swift",
+        [
+          "let minutes: Int = 3",
+          'Label(String(format: String(localized: "Expires in %lld minutes"), minutes), systemImage: "clock")',
+          'Text(verbatim: "\\(name) — \\(minutes)")',
+        ].join("\n"),
+      ),
+    );
+    const { catalog } = buildMacosCatalog({}, { version: 2, entries }, []);
+    expect(Object.keys(catalog.strings ?? {})).toEqual(["Expires in %lld minutes"]);
+    expect(catalog.strings?.["Expires in %lld minutes"]?.localizations?.en?.stringUnit?.value).toBe(
+      "Expires in %lld minutes",
+    );
+  });
+
   it("joins adjacent literals across supported Swift and Kotlin UI expressions", () => {
     const swift = extractNativeI18nCandidates(
       "apple",
@@ -163,6 +183,7 @@ describe("native app i18n inventory", () => {
         fun Fixture() {
           Text("Kotlin first " + "argument")
           Text(text = "Named " + "argument")
+          Text(if (enabled) "Kotlin enabled " + "now" else "Kotlin disabled " + "now")
           Icon(contentDescription = if (enabled) "Open \${row.title}" else row.title)
         }
 
@@ -194,6 +215,8 @@ describe("native app i18n inventory", () => {
         "Switch ready",
         "Switch waiting",
         "Kotlin first argument",
+        "Kotlin enabled now",
+        "Kotlin disabled now",
         "Open ${row.title}",
         "When ready",
         "When waiting",
@@ -212,6 +235,8 @@ describe("native app i18n inventory", () => {
           "Switch ",
           "Swift first ",
           "Kotlin first ",
+          "Kotlin enabled ",
+          "Kotlin disabled ",
           "When ",
           "Return ",
         ].includes(source),
@@ -384,7 +409,6 @@ describe("native app i18n inventory", () => {
       ]),
     );
     expect(entries.some((entry) => entry.source === "Save Profile")).toBe(true);
-    expect(entries.some((entry) => entry.source === "Mute")).toBe(true);
     expect(entries.some((entry) => entry.source === "Creating...")).toBe(true);
     expect(entries.some((entry) => entry.source === "Permission required")).toBe(true);
     expect(entries.some((entry) => entry.source === "Needs setup")).toBe(true);
@@ -540,12 +564,7 @@ describe("native app i18n inventory", () => {
           entry.source === '\\(day.entryCount) \\(day.entryCount == 1 ? "entry" : "entries")',
       ),
     ).toBe(false);
-    expect(
-      entries.some(
-        (entry) =>
-          entry.source === 'Missing binaries: \\(self.missingBins.joined(separator: ", "))',
-      ),
-    ).toBe(true);
+    expect(entries.some((entry) => entry.source === "Missing binaries: %@")).toBe(true);
     expect(
       entries.some(
         (entry) =>
@@ -607,7 +626,7 @@ describe("native app i18n inventory", () => {
     expect(entries.some((entry) => entry.source === "ws")).toBe(false);
     expect(entries.some((entry) => entry.source === '{"includeSecrets":true}')).toBe(false);
     expect(entries.some((entry) => entry.source === "builtIn")).toBe(false);
-    expect(entries.some((entry) => entry.source === "State:  \\(stateDir)")).toBe(true);
+    expect(entries.some((entry) => entry.source === "State:  %@")).toBe(true);
     expect(
       entries.some(
         (entry) =>
@@ -764,6 +783,33 @@ describe("native app i18n inventory", () => {
       cleanupTempDirs(tempDirs);
     }
   });
+  it("rejects invalid native placeholders inside the translation batch", async () => {
+    const tempDirs: string[] = [];
+    const translationsDir = makeTempDir(tempDirs, "openclaw-native-i18n-");
+    const entry = testEntry("native.apple.progress", "apple", "Processed %lld of %@");
+    let translatorReturned = false;
+
+    try {
+      await expect(
+        syncNativeLocale("sv", [entry], {
+          glossary: [],
+          translationsDir,
+          translate: async (_pending, locale, _glossary, validateTranslation) => {
+            const translated = "Bearbetade %@";
+            validateTranslation?.(entry.source, translated, entry.id, locale);
+            translatorReturned = true;
+            return new Map([[entry.id, translated]]);
+          },
+        }),
+      ).rejects.toThrow(
+        `native translation changed placeholders or line breaks for sv:${entry.id}`,
+      );
+      expect(translatorReturned).toBe(false);
+    } finally {
+      cleanupTempDirs(tempDirs);
+    }
+  });
+
   it("rejects native printf placeholder drift", async () => {
     const tempDirs: string[] = [];
     const translationsDir = makeTempDir(tempDirs, "openclaw-native-i18n-");
@@ -867,14 +913,14 @@ describe("native app i18n inventory", () => {
         }),
       },
       {
-        expected: "translation changed structural tokens or line breaks",
+        expected: `native translation changed placeholders or line breaks for sv:${greeting.id}`,
         mutate: (artifact) => ({
           ...artifact,
           translations: { ...artifact.translations, [greeting.id]: "Hej\nNästa" },
         }),
       },
       {
-        expected: "translation changed structural tokens or line breaks",
+        expected: `native translation changed placeholders or line breaks for sv:${greeting.id}`,
         mutate: (artifact) => ({
           ...artifact,
           translations: { ...artifact.translations, [greeting.id]: "Hej ${name} Nästa" },

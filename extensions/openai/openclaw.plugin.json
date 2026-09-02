@@ -1,7 +1,15 @@
 {
   "id": "openai",
+  "sessionRouteStateOwners": [
+    {
+      "id": "openai",
+      "label": "OpenAI",
+      "providerIds": ["openai"],
+      "authProfilePrefixes": ["openai:"]
+    }
+  ],
   "activation": {
-    "onStartup": false
+    "onStartup": true
   },
   "enabledByDefault": true,
   "providers": ["openai"],

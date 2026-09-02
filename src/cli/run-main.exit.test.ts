@@ -8,6 +8,8 @@ import { CommanderError } from "commander";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { GATEWAY_SERVICE_RUNTIME_PID_ENV } from "../daemon/constants.js";
+import { flushDiagnosticsTimeline } from "../infra/diagnostics-timeline.js";
+import { createNewerSqliteSchemaVersionError } from "../infra/sqlite-user-version.js";
 import { setLoggerOverride } from "../logging/logger.js";
 import { loggingState } from "../logging/state.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -89,6 +91,7 @@ const loadRootHelpRenderOptionsForConfigSensitivePluginsMock = vi.hoisted(() =>
 );
 const tryOutputSetupOnboardConfigureHelpMock = vi.hoisted(() => vi.fn(async () => true));
 const buildProgramMock = vi.hoisted(() => vi.fn());
+const parkCurrentLaunchAgentForMaintenanceMock = vi.hoisted(() => vi.fn(async () => true));
 const getProgramContextMock = vi.hoisted(() => vi.fn(() => null));
 const registerCoreCliByNameMock = vi.hoisted(() => vi.fn());
 const registerSubCliByNameMock = vi.hoisted(() => vi.fn());
@@ -141,24 +144,18 @@ const runTuiCliActionMock = vi.hoisted(() =>
   vi.fn<(target: string | undefined, opts: unknown) => Promise<void>>(async () => {}),
 );
 const probeGatewayConfiguredModelMock = vi.hoisted(() =>
-  vi.fn<
-    () => Promise<{
-      kind: "configured" | "missing-configured-model" | "reachable-unverified" | "unreachable";
-      detail?: string;
-    }>
-  >(async () => ({ kind: "configured" })),
+  vi.fn<typeof import("../commands/onboard-helpers.js").probeGatewayConfiguredModel>(async () => ({
+    kind: "configured",
+  })),
 );
 const readActiveGatewayLockPortMock = vi.hoisted(() =>
   vi.fn(async (): Promise<number | undefined> => undefined),
 );
-const loadGatewayTlsRuntimeMock = vi.hoisted(() =>
-  vi.fn<
-    () => Promise<{
-      enabled: boolean;
-      required: boolean;
-      fingerprintSha256?: string;
-    }>
-  >(async () => ({ enabled: false, required: false })),
+const inspectGatewayTlsCertificateMock = vi.hoisted(() =>
+  vi.fn<typeof import("../infra/tls/gateway.js").inspectGatewayTlsCertificate>(async () => ({
+    ok: false,
+    error: "gateway tls is disabled",
+  })),
 );
 const resolveControlUiLinksMock = vi.hoisted(() =>
   vi.fn(() => ({
@@ -246,12 +243,17 @@ vi.mock("./gateway-cli/run-command.js", () => ({
   addGatewayRunCommand: addGatewayRunCommandMock,
 }));
 
+vi.mock("../daemon/launchd.js", () => ({
+  parkCurrentLaunchAgentForMaintenance: parkCurrentLaunchAgentForMaintenanceMock,
+}));
+
 vi.mock("./command-execution-startup.js", () => ({
   ensureCliExecutionBootstrap: ensureCliExecutionBootstrapMock,
 }));
 
 vi.mock("../version.js", () => ({
   VERSION: "9.9.9-test",
+  resolveRuntimeServiceCommit: () => null,
 }));
 
 vi.mock("./banner.js", () => ({
@@ -312,7 +314,7 @@ vi.mock("../infra/gateway-lock.js", async (importOriginal) => ({
 
 vi.mock("../infra/tls/gateway.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../infra/tls/gateway.js")>()),
-  loadGatewayTlsRuntime: loadGatewayTlsRuntimeMock,
+  inspectGatewayTlsCertificate: inspectGatewayTlsCertificateMock,
 }));
 
 vi.mock("../utils.js", async (importOriginal) => ({
@@ -592,9 +594,9 @@ describe("runCli exit behavior", () => {
     readLocalOnboardingStateMock.mockReset().mockReturnValue(undefined);
     probeGatewayConfiguredModelMock.mockResolvedValue({ kind: "configured" });
     readActiveGatewayLockPortMock.mockReset().mockResolvedValue(undefined);
-    loadGatewayTlsRuntimeMock.mockReset().mockResolvedValue({
-      enabled: false,
-      required: false,
+    inspectGatewayTlsCertificateMock.mockReset().mockResolvedValue({
+      ok: false,
+      error: "gateway tls is disabled",
     });
     resolveControlUiLinksMock.mockReturnValue({
       httpUrl: "http://127.0.0.1:18789/",
@@ -683,6 +685,70 @@ describe("runCli exit behavior", () => {
     await runCli(["node", "openclaw", "--log-level", "debug", "gateway", "run"]);
     expect(parseAsync).toHaveBeenCalledTimes(1);
     expect(getPluginCache()).toBe(owner);
+  });
+
+  it.each(["environment selection", "full Commander preaction"])(
+    "parks the managed Gateway when a newer schema blocks %s",
+    async (phase) => {
+      const error = createNewerSqliteSchemaVersionError(
+        "OpenClaw state database",
+        "/tmp/openclaw-startup/state/openclaw.sqlite",
+        14,
+        13,
+      );
+      const argv = ["node", "openclaw", "--log-level", "debug", "gateway", "run"];
+      if (phase === "environment selection") {
+        readConfigFileSnapshotMock.mockRejectedValueOnce(error);
+      } else {
+        buildProgramMock.mockReturnValueOnce({
+          commands: [{ name: () => "gateway", aliases: () => [] }],
+          parseAsync: vi.fn().mockRejectedValueOnce(error),
+        });
+        tryRouteCliMock.mockResolvedValueOnce(false);
+      }
+      const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+      const exitSpy = vi.spyOn(process, "exit").mockImplementation(((code?: number) => {
+        throw new Error(`exit:${code}`);
+      }) as never);
+      try {
+        await expect(runCli(argv)).rejects.toThrow("exit:78");
+
+        expect(parkCurrentLaunchAgentForMaintenanceMock).toHaveBeenCalledOnce();
+        expect(exitSpy).toHaveBeenCalledWith(78);
+        expect(errorSpy.mock.calls.flat().join("\n")).toContain(error.message);
+        expect(addGatewayRunCommandMock).not.toHaveBeenCalled();
+        if (phase === "environment selection") {
+          expect(buildProgramMock).not.toHaveBeenCalled();
+        } else {
+          expect(buildProgramMock).toHaveBeenCalledOnce();
+        }
+      } finally {
+        errorSpy.mockRestore();
+        exitSpy.mockRestore();
+      }
+    },
+  );
+
+  it.each([
+    { label: "Gateway help", args: ["gateway", "--help"] },
+    { label: "another command", args: ["status"] },
+  ])("does not park the Gateway for a newer-schema failure during $label", async ({ args }) => {
+    const error = createNewerSqliteSchemaVersionError(
+      "OpenClaw state database",
+      "/tmp/openclaw-startup/state/openclaw.sqlite",
+      14,
+      13,
+    );
+    buildProgramMock.mockReturnValueOnce({
+      commands: [{ name: () => args[0], aliases: () => [] }],
+      parseAsync: vi.fn().mockRejectedValueOnce(error),
+    });
+
+    await withEnvAsync({ OPENCLAW_DISABLE_CLI_STARTUP_HELP_FAST_PATH: "1" }, async () => {
+      await expect(runCli(["node", "openclaw", ...args])).rejects.toBe(error);
+    });
+
+    expect(parkCurrentLaunchAgentForMaintenanceMock).not.toHaveBeenCalled();
   });
 
   it("does not load inactive provider cleanup modules for cold help", async () => {
@@ -783,7 +849,8 @@ describe("runCli exit behavior", () => {
     disposeRegisteredAgentHarnessesMock.mockImplementationOnce(async () => {
       order.push("harnesses");
     });
-    stopManagedProviderLocalServicesMock.mockImplementationOnce(() => {
+    stopManagedProviderLocalServicesMock.mockImplementationOnce(async () => {
+      await Promise.resolve();
       order.push("provider-local-services");
     });
     closeProviderTransportDispatcherPoolMock.mockImplementationOnce(async () => {
@@ -2554,6 +2621,33 @@ describe("runCli exit behavior", () => {
   });
 
   it.each([
+    ["worker", { observe: false, pluginValidation: "core-only" }],
+    ["run", { observe: false, skipPluginValidation: true }],
+  ])(
+    "preserves node %s config ownership when startup tracing is enabled",
+    async (subcommand, readOptions) => {
+      const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-node-timeline-"));
+      const timelinePath = path.join(root, "timeline.jsonl");
+      tryRouteCliMock.mockResolvedValueOnce(true);
+      loadConfigMock.mockResolvedValueOnce({ diagnostics: { flags: ["timeline"] } });
+      try {
+        await withEnvAsync(
+          { OPENCLAW_DIAGNOSTICS: "", OPENCLAW_DIAGNOSTICS_TIMELINE_PATH: timelinePath },
+          async () => {
+            await runCli(["node", "openclaw", "node", subcommand]);
+          },
+        );
+        expect(loadConfigMock).toHaveBeenCalledWith(readOptions);
+        flushDiagnosticsTimeline();
+        expect(await fs.readFile(timelinePath, "utf8")).toContain("cli.main.argv");
+      } finally {
+        flushDiagnosticsTimeline();
+        await fs.rm(root, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it.each([
     ["root command", ["node", "openclaw", "update", "--dry-run", "--json"]],
     ["root shorthand", ["node", "openclaw", "--update", "--dry-run", "--json"]],
   ])("reads source-only proxy config for the update dry-run %s", async (_name, argv) => {
@@ -3834,40 +3928,47 @@ describe("runCli exit behavior", () => {
     });
   });
 
-  it("configures missing inference on the selected remote Gateway", async () => {
-    const sourceConfig = {
-      agents: { defaults: { model: { primary: "openai/local-only-model" } } },
-      gateway: {
-        mode: "remote",
-        remote: {
-          url: "wss://gateway.example/ws",
-          token: "missing-inference-remote-auth",
-          tlsFingerprint: `sha256:${TLS_FINGERPRINT.toUpperCase()}`,
+  it.each(["wss://gateway.example/ws", "ws://127.0.0.1:18789"])(
+    "configures missing inference on the selected remote Gateway: %s",
+    async (url) => {
+      const sourceConfig = {
+        agents: { defaults: { model: { primary: "openai/local-only-model" } } },
+        gateway: {
+          mode: "remote",
+          remote: {
+            url,
+            token: "missing-inference-remote-auth",
+            tlsFingerprint: `sha256:${TLS_FINGERPRINT.toUpperCase()}`,
+          },
         },
-      },
-    };
-    readConfigFileSnapshotMock.mockResolvedValueOnce({
-      exists: true,
-      valid: true,
-      sourceConfig,
-    });
-    probeGatewayConfiguredModelMock.mockResolvedValueOnce({
-      kind: "missing-configured-model",
-      detail: "Gateway default agent has no configured model",
-    });
+      };
+      readConfigFileSnapshotMock.mockResolvedValueOnce({
+        exists: true,
+        valid: true,
+        sourceConfig,
+      });
+      probeGatewayConfiguredModelMock.mockImplementationOnce(async (options) =>
+        options.url === "ws://127.0.0.1:18789" && !options.originScopedDeviceAuth
+          ? { kind: "reachable-unverified", detail: "missing scope: operator.read" }
+          : {
+              kind: "missing-configured-model",
+              detail: "Gateway default agent has no configured model",
+            },
+      );
 
-    await runBareCli();
+      await runBareCli();
 
-    expect(setupWizardCommandMock).not.toHaveBeenCalled();
-    expect(readLocalOnboardingStateMock).not.toHaveBeenCalled();
-    expect(runRemoteGatewayInferenceOnboardingMock).toHaveBeenCalledWith({
-      config: sourceConfig,
-      gatewayUrl: "wss://gateway.example/ws",
-      token: "missing-inference-remote-auth",
-      tlsFingerprint: TLS_FINGERPRINT,
-    });
-    expect(runTuiMock).not.toHaveBeenCalled();
-  });
+      expect(setupWizardCommandMock).not.toHaveBeenCalled();
+      expect(readLocalOnboardingStateMock).not.toHaveBeenCalled();
+      expect(runRemoteGatewayInferenceOnboardingMock).toHaveBeenCalledWith({
+        config: sourceConfig,
+        gatewayUrl: url,
+        token: "missing-inference-remote-auth",
+        tlsFingerprint: TLS_FINGERPRINT,
+      });
+      expect(runTuiMock).not.toHaveBeenCalled();
+    },
+  );
 
   it("keeps missing inference setup local for a local Gateway", async () => {
     primeBareRootConfig({
@@ -3953,10 +4054,9 @@ describe("runCli exit behavior", () => {
         auth: { mode: "token", token: "configured-token" },
       },
     });
-    loadGatewayTlsRuntimeMock.mockResolvedValueOnce({
-      enabled: true,
-      required: true,
-      fingerprintSha256: TLS_FINGERPRINT,
+    inspectGatewayTlsCertificateMock.mockResolvedValueOnce({
+      ok: true,
+      value: { cert: "public-certificate", fingerprintSha256: TLS_FINGERPRINT },
     });
 
     await runBareCli();
@@ -4325,6 +4425,7 @@ describe("runCli exit behavior", () => {
 
     expect(probeGatewayConfiguredModelMock).toHaveBeenCalledWith({
       url,
+      originScopedDeviceAuth: true,
       token: "loopback-remote-auth",
     });
     expect(setupWizardCommandMock).not.toHaveBeenCalled();
@@ -4349,6 +4450,7 @@ describe("runCli exit behavior", () => {
 
     expect(probeGatewayConfiguredModelMock).toHaveBeenCalledWith({
       url,
+      originScopedDeviceAuth: true,
       config,
       token: "test-token",
     });
@@ -4373,6 +4475,7 @@ describe("runCli exit behavior", () => {
 
     expect(probeGatewayConfiguredModelMock).toHaveBeenCalledWith({
       url,
+      originScopedDeviceAuth: true,
       password: "configured-remote-password",
     });
     expectBoundTui({ url, password: "configured-remote-password" });
@@ -4411,7 +4514,10 @@ describe("runCli exit behavior", () => {
       },
     );
 
-    expect(probeGatewayConfiguredModelMock).toHaveBeenCalledWith({ url });
+    expect(probeGatewayConfiguredModelMock).toHaveBeenCalledWith({
+      url,
+      originScopedDeviceAuth: true,
+    });
     expect(setupWizardCommandMock).not.toHaveBeenCalled();
     expectBoundTui({ url });
   });
@@ -4434,6 +4540,7 @@ describe("runCli exit behavior", () => {
 
     expect(probeGatewayConfiguredModelMock).toHaveBeenCalledWith({
       url,
+      originScopedDeviceAuth: true,
       token: "private-remote-auth",
     });
     expect(setupWizardCommandMock).not.toHaveBeenCalled();
@@ -4456,6 +4563,7 @@ describe("runCli exit behavior", () => {
 
     expect(probeGatewayConfiguredModelMock).toHaveBeenCalledWith({
       url: "wss://gateway.example.com:18789",
+      originScopedDeviceAuth: true,
       token: "tls-remote-auth",
       tlsFingerprint: TLS_FINGERPRINT,
     });

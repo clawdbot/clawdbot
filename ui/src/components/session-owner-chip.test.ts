@@ -3,16 +3,7 @@
 import { afterEach, expect, it, vi } from "vitest";
 import type { SessionParticipant } from "../../../packages/gateway-protocol/src/schema/session-participant.js";
 import { setAvatarGatewayOrigin } from "../lib/identity-avatar-context.ts";
-import { listAssignableSessionOwners, type SessionCreatedActor } from "./session-owner-chip.ts";
-
-type OwnerChipElement = HTMLElement & {
-  owner: SessionCreatedActor | null;
-  participants: readonly SessionParticipant[];
-  participantCount: number;
-  attribution: "created" | "owned" | "archived";
-  size: "row" | "header";
-  updateComplete: Promise<boolean>;
-};
+import { listAssignableSessionOwners } from "./session-owner-chip.ts";
 
 afterEach(() => {
   document.body.replaceChildren();
@@ -20,7 +11,7 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-async function waitForChipUpdate(chip: OwnerChipElement) {
+async function waitForChipUpdate(chip: HTMLElementTagNameMap["openclaw-session-owner-chip"]) {
   await chip.updateComplete;
   // The parent's update does not include the nested avatar's render.
   await Promise.all(
@@ -29,8 +20,7 @@ async function waitForChipUpdate(chip: OwnerChipElement) {
 }
 
 async function mount(params: { participants?: SessionParticipant[]; participantCount?: number }) {
-  // SAFETY: the imported module registers this custom element with these reactive properties.
-  const chip = document.createElement("openclaw-session-owner-chip") as OwnerChipElement;
+  const chip = document.createElement("openclaw-session-owner-chip");
   chip.owner = { type: "human", id: "profile-ada", label: "Ada" };
   chip.attribution = "owned";
   chip.size = "row";

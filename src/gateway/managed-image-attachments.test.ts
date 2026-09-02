@@ -62,6 +62,13 @@ const resolvePlaybackTranscodeMock = vi.fn(
 );
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
+beforeEach(() => {
+  resolvePlaybackModeForSourceMock.mockReset();
+  resolvePlaybackModeForSourceMock.mockImplementation(async ({ mimeType }) =>
+    mimeType === "audio/x-caf" ? "transcode" : "native",
+  );
+});
+
 vi.mock("../config/config.js", () => ({
   getRuntimeConfig: getRuntimeConfigMock,
 }));
@@ -92,14 +99,8 @@ vi.mock("../media/media-probe.js", () => ({
 
 vi.mock("../media/playback-transcode.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../media/playback-transcode.js")>();
-  const testApi = (globalThis as Record<PropertyKey, unknown>)[
-    Symbol.for("openclaw.playbackTranscodeTestApi")
-  ] as {
-    PLAYBACK_TRANSCODE_POLICY: Record<"audio" | "video", unknown>;
-    resolvePlaybackMode(mimeType: string, policy: unknown): "native" | "transcode" | undefined;
-  };
-  resolvePlaybackModeForSourceMock.mockImplementation(async (params) =>
-    testApi.resolvePlaybackMode(params.mimeType, testApi.PLAYBACK_TRANSCODE_POLICY[params.kind]),
+  resolvePlaybackModeForSourceMock.mockImplementation(async ({ mimeType }) =>
+    mimeType === "audio/x-caf" ? "transcode" : "native",
   );
   return {
     ...actual,
@@ -1189,7 +1190,8 @@ describe("handleManagedOutgoingImageHttpRequest", () => {
     const transcriptMessages = [
       {
         __openclaw: { id: "msg-1" },
-        content: [
+        content: [{ type: "text", text: "Managed image" }],
+        openclawDisplayContent: [
           {
             type: "image",
             url: `/api/chat/media/outgoing/${encodeURIComponent(sessionKey)}/${attachmentId}/full`,
@@ -2337,6 +2339,31 @@ describe("createManagedOutgoingImageBlocks", () => {
       mimeType: "application/pdf",
       sizeBytes: 16,
     });
+  });
+
+  it("prepares advertised PowerPoint documents as managed attachments", async () => {
+    const pptxPath = path.join(stateDir, "deck.pptx");
+    await fs.writeFile(pptxPath, Buffer.from("PK\x03\x04 pptx placeholder"));
+
+    const blocks = await createManagedOutgoingImageBlocks({
+      sessionKey: "agent:main:main",
+      mediaUrls: [pptxPath],
+      stateDir,
+      localRoots: [stateDir],
+      allowLocalNonImage: true,
+      messageId: "msg-pptx",
+    });
+
+    expect(blocks).toEqual([
+      {
+        type: "attachment",
+        attachment: expect.objectContaining({
+          kind: "document",
+          label: "deck.pptx",
+          mimeType: "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        }),
+      },
+    ]);
   });
 
   it("does not apply the configured image cap to managed audio", async () => {

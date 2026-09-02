@@ -21,7 +21,26 @@ const agentRuntimePath = path.join(
   "plugin-sdk",
   "agent-runtime.js",
 );
+const startedAt = Date.now();
+const markPhase = (phase) => {
+  const resources = new Map();
+  for (const type of process.getActiveResourcesInfo()) {
+    resources.set(type, (resources.get(type) ?? 0) + 1);
+  }
+  console.log(
+    JSON.stringify({
+      phase,
+      elapsedMs: Date.now() - startedAt,
+      resources: Object.fromEntries(
+        [...resources].toSorted(([left], [right]) => left.localeCompare(right)).slice(0, 32),
+      ),
+    }),
+  );
+};
+process.once("beforeExit", () => markPhase("followthrough:before-exit"));
+markPhase("followthrough:import-start");
 const { agentCommandFromIngress } = await import(pathToFileURL(agentRuntimePath).href);
+markPhase("followthrough:import-complete");
 if (typeof agentCommandFromIngress !== "function") {
   throw new Error(
     `package agent runtime did not export agentCommandFromIngress: ${agentRuntimePath}`,
@@ -35,6 +54,7 @@ const quietRuntime = {
     throw new Error(`agent runtime exited with code ${code}`);
   },
 };
+markPhase("followthrough:turn-start");
 const result = await agentCommandFromIngress(
   {
     agentId: "main",
@@ -56,4 +76,8 @@ const result = await agentCommandFromIngress(
   },
   quietRuntime,
 );
+markPhase("followthrough:turn-and-cleanup-complete");
 fs.writeFileSync(outputPath, `${JSON.stringify(result)}\n`);
+markPhase("followthrough:result-written");
+// Observe lingering resources without keeping a completed one-shot process alive.
+setTimeout(() => markPhase("followthrough:resources-after-result"), 1_000).unref();

@@ -3,12 +3,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
 } from "@openclaw/normalization-core/string-coerce";
-
-const INLINE_HORIZONTAL_WHITESPACE_RE = /[^\S\n]+/g;
-
-function collapseInlineHorizontalWhitespace(value: string): string {
-  return value.replace(INLINE_HORIZONTAL_WHITESPACE_RE, " ");
-}
+import { removeDirectiveSpan } from "./directive-parsing.js";
 
 const INLINE_SIMPLE_COMMAND_ALIASES = new Map<string, string>([
   ["/help", "/help"],
@@ -16,9 +11,9 @@ const INLINE_SIMPLE_COMMAND_ALIASES = new Map<string, string>([
   ["/whoami", "/whoami"],
   ["/id", "/whoami"],
 ]);
-const INLINE_SIMPLE_COMMAND_RE = /(?:^|\s)\/(help|commands|whoami|id)(?=$|\s|:)/i;
+const INLINE_SIMPLE_COMMAND_RE = /(?<!\S)\/(help|commands|whoami|id)(?=$|\s|:)/i;
+const INLINE_STATUS_RE = /(?<!\S)\/status(?=$|\s|:)(?:\s*:)?/i;
 
-const INLINE_STATUS_RE = /(?:^|\s)\/status(?=$|\s|:)(?:\s*:\s*)?/gi;
 export function getStandaloneSlashCommandName(body: string): string | null {
   const match = body.trim().match(/^\/([^\s/:]+)(?::|\s|$)/u);
   return normalizeOptionalLowercaseString(match?.[1]) ?? null;
@@ -40,20 +35,31 @@ export function extractInlineSimpleCommand(body?: string): {
   if (!command) {
     return null;
   }
-  const cleaned = collapseInlineHorizontalWhitespace(body.replace(match[0], " ")).trim();
+  const cleaned = removeDirectiveSpan(body, match.index, match.index + match[0].length);
   return { command, cleaned };
+}
+
+export function extractStatusDirective(body = ""): {
+  cleaned: string;
+  hasDirective: boolean;
+} {
+  const match = INLINE_STATUS_RE.exec(body);
+  return {
+    cleaned: match ? removeDirectiveSpan(body, match.index, match.index + match[0].length) : body,
+    hasDirective: Boolean(match),
+  };
 }
 
 export function stripInlineStatus(body: string): {
   cleaned: string;
   didStrip: boolean;
 } {
-  const trimmed = body.trim();
-  if (!trimmed) {
-    return { cleaned: "", didStrip: false };
+  let cleaned = body;
+  for (;;) {
+    const parsed = extractStatusDirective(cleaned);
+    if (!parsed.hasDirective) {
+      return { cleaned, didStrip: cleaned !== body };
+    }
+    cleaned = parsed.cleaned;
   }
-  // Use [^\S\n]+ instead of \s+ to only collapse horizontal whitespace,
-  // preserving newlines so multi-line messages keep their paragraph structure.
-  const cleaned = collapseInlineHorizontalWhitespace(trimmed.replace(INLINE_STATUS_RE, " ")).trim();
-  return { cleaned, didStrip: cleaned !== trimmed };
 }

@@ -5,7 +5,7 @@ maintainer decisions and review-binding invariants, not incidental
 implementation details. Also read `extensions/AGENTS.md` for the plugin
 boundary rules.
 
-Verified against Telegram Bot API 10.2, July 14 2026.
+Verified against Telegram Bot API 10.3, August 24 2026.
 
 ## Reliability Invariants
 

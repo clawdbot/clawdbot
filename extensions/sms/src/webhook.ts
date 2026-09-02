@@ -6,6 +6,8 @@ import {
   isRequestBodyLimitError,
   resolveRequestClientIp,
 } from "openclaw/plugin-sdk/webhook-ingress";
+import { sendHttpRequestRejection } from "openclaw/plugin-sdk/webhook-request-guards";
+import { assertSmsCredentialOwnerAvailable } from "./credential-availability.js";
 import {
   createSmsDeliveryRecorder,
   isTwilioDeliveryStatusForm,
@@ -17,6 +19,7 @@ import {
   resolveTwilioInboundSender,
   resolveTwilioMessageSid,
   resolveTwilioWebhookSignatureUrl,
+  TWIML_CONTENT_TYPE,
   verifyTwilioSignature,
 } from "./twilio.js";
 import type { ResolvedSmsAccount } from "./types.js";
@@ -117,7 +120,6 @@ export function createSmsWebhookHandler(params: SmsWebhookHandlerParams) {
       respondTwiml(res, 405, "Method not allowed");
       return true;
     }
-
     const clientAddress = resolvedClientAddress({ cfg: params.cfg, req });
     const clientAddressKey = rateLimitKey({ account: params.account, subject: clientAddress });
     const invalidRequestRateLimited = invalidRequestRateLimiter.isRateLimited(clientAddressKey);
@@ -127,11 +129,24 @@ export function createSmsWebhookHandler(params: SmsWebhookHandlerParams) {
       form = await readTwilioWebhookForm(req);
     } catch (error) {
       if (isRequestBodyLimitError(error, "PAYLOAD_TOO_LARGE")) {
-        respondTwiml(res, 413, "Payload too large");
+        await sendHttpRequestRejection(req, res, 413, "Payload too large", TWIML_CONTENT_TYPE);
+        return true;
+      }
+      if (isRequestBodyLimitError(error, "REQUEST_BODY_TIMEOUT")) {
+        // Twilio retries 5xx responses. Keep that outcome while the shared owner closes in order.
+        res.setHeader("cache-control", "no-store");
+        await sendHttpRequestRejection(
+          req,
+          res,
+          500,
+          "Internal Server Error",
+          "text/plain; charset=utf-8",
+        );
         return true;
       }
       throw error;
     }
+    assertSmsCredentialOwnerAvailable(params.account);
 
     if (!params.account.dangerouslyDisableSignatureValidation) {
       const ok = verifyTwilioSignature({

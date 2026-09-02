@@ -4,12 +4,15 @@ import type { OpenClawConfig } from "../config/config.js";
 import { resolveRememberAcrossConversations } from "../memory-host-sdk/host/config-utils.js";
 import {
   clearEmbeddingProviders,
-  listRegisteredEmbeddingProviders,
   registerEmbeddingProvider,
-  restoreRegisteredEmbeddingProviders,
-  type RegisteredEmbeddingProvider,
 } from "../plugins/embedding-providers.js";
 import type { MemoryEmbeddingProviderAdapter } from "../plugins/memory-embedding-providers.js";
+import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import {
+  captureActivePluginRegistrySnapshot,
+  rollbackStagedPluginRegistry,
+  stageActivePluginRegistry,
+} from "../plugins/runtime.js";
 import {
   SecretSurfaceUnavailableError,
   setActiveDegradedSecretOwners,
@@ -24,7 +27,6 @@ const asConfig = (cfg: OpenClawConfig): OpenClawConfig => ({
   // to its integration tests and would turn these pure config cases into cold scans.
   plugins: cfg.plugins ?? { enabled: false },
 });
-let registeredEmbeddingProvidersSnapshot: RegisteredEmbeddingProvider[];
 
 function registerTestMemoryAdapter(adapter: MemoryEmbeddingProviderAdapter): void {
   registerEmbeddingProvider(adapter);
@@ -85,15 +87,15 @@ function registerBaseMemoryEmbeddingProviders(options?: { includeGemini?: boolea
 }
 
 describe("memory search config", () => {
-  beforeEach(() => {
-    registeredEmbeddingProvidersSnapshot = listRegisteredEmbeddingProviders();
-    clearEmbeddingProviders();
+  beforeEach(({ onTestFinished }) => {
+    const previous = captureActivePluginRegistrySnapshot();
+    onTestFinished(() => rollbackStagedPluginRegistry(previous));
+    stageActivePluginRegistry(createEmptyPluginRegistry(), null, "default");
     registerBaseMemoryEmbeddingProviders();
   });
 
   afterEach(() => {
     setActiveDegradedSecretOwners([]);
-    restoreRegisteredEmbeddingProviders(registeredEmbeddingProvidersSnapshot);
   });
 
   it("bounds the embedding cache with a built-in default", () => {

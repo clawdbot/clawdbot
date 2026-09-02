@@ -20,7 +20,7 @@ export function createStreamIteratorWrapper<T>(params: {
   onThrow?: IteratorHandler<T>;
 }): AsyncIterableIterator<T> {
   const wrapper: AsyncIterableIterator<T> = {
-    async next() {
+    next() {
       return params.next(params.iterator);
     },
     async return(value?: unknown) {

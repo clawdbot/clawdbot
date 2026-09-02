@@ -132,6 +132,7 @@ private func makeTestGatewayConnection() -> (GatewayConnection, GatewayTestWebSo
 }
 
 private func makeRecordingGatewayConnection(
+    capabilities: [String] = [],
     responseData: @escaping @Sendable (String) -> Data) -> (GatewayConnection, WebSocketMessageRecorder)
 {
     let recorder = WebSocketMessageRecorder()
@@ -142,6 +143,14 @@ private func makeRecordingGatewayConnection(
                   let id = GatewayWebSocketTestSupport.requestID(from: message)
             else { return }
             task.emitReceiveSuccess(.data(responseData(id)))
+        }, receiveHook: { task, receiveIndex in
+            if receiveIndex == 0 {
+                return .data(GatewayWebSocketTestSupport.connectChallengeData())
+            }
+            let id = task.snapshotConnectRequestID() ?? "connect"
+            return .data(GatewayWebSocketTestSupport.connectOkData(
+                id: id,
+                capabilities: capabilities))
         })
     })
     let connection = GatewayConnection(
@@ -998,18 +1007,25 @@ private func assertConfigLookupCannotRecreateRoute(
         #expect(params?["voiceWakeTrigger"] as? String == "")
     }
 
-    @Test func `chat send carries routing precondition and omits inherited thinking`() async throws {
-        let (connection, recorder) = makeRecordingGatewayConnection {
+    @Test func `chat send carries route bound routing and settings preconditions`() async throws {
+        let (connection, recorder) = makeRecordingGatewayConnection(
+            capabilities: [GatewayServerCapability.sessionSettingsCAS.rawValue])
+        {
             Self.chatSendOkResponseData(id: $0)
         }
+        let route = try await connection.acquireServerLease().route
 
         _ = try await connection.chatSend(
             sessionKey: "main",
             expectedSessionRoutingContract: "per-sender|main|main",
+            expectedSessionSettings: OpenClawChatSessionSettingsExpectation(
+                permissionMode: .guarded,
+                toolOverrides: OpenClawChatSessionToolOverrides(webSearch: false)),
             message: "hello",
             thinking: nil,
             idempotencyKey: "chat-1",
-            attachments: [])
+            attachments: [],
+            ifCurrentRoute: route)
         await connection.shutdown()
 
         guard let chatMessage = recorder.snapshot().reversed().first(where: { message in
@@ -1031,6 +1047,8 @@ private func assertConfigLookupCannotRecreateRoute(
         let params = json?["params"] as? [String: Any]
         #expect(params?["thinking"] == nil)
         #expect(params?["expectedSessionRoutingContract"] as? String == "per-sender|main|main")
+        #expect(params?["expectedPermissionMode"] as? String == "guarded")
+        #expect((params?["expectedToolOverrides"] as? [String: Any])?["webSearch"] as? Bool == false)
         #expect(params?["timeoutMs"] == nil)
     }
 
@@ -1087,8 +1105,9 @@ private func assertConfigLookupCannotRecreateRoute(
         try Data(#"{"gateway":{"mode":"local","port":\#(port)}}"#.utf8).write(to: configURL)
         defer { try? FileManager.default.removeItem(at: isolatedState) }
 
+        // Profiles and their reserved ports live for the process; a temporary
+        // profile here would permanently change later tests' ownership checks.
         return try await TestIsolation.withEnvValues([
-            "OPENCLAW_PROFILE": "autoqa-185-tests",
             "OPENCLAW_CONFIG_PATH": configURL.path,
             "OPENCLAW_STATE_DIR": isolatedState.path,
         ]) {
@@ -1245,6 +1264,7 @@ private func assertConfigLookupCannotRecreateRoute(
                     routeAuthority: nil,
                     deviceAuthGatewayID: route.owner)
             },
+            supportsSharedEndpointRecovery: false,
             activationBindingKeyProvider: { nil },
             sessionBox: WebSocketSessionBox(session: session))
         _ = try await connection.request(

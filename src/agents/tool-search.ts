@@ -51,11 +51,8 @@ import {
 import { jsonResult, type AnyAgentTool } from "./tools/common.js";
 
 export {
-  addClientToolsToToolCatalog,
-  applyToolCatalogCompaction,
   clearToolSearchCatalog,
   collectUniqueCatalogToolNames,
-  compactToolSearchCatalogEntry,
   createToolSearchCatalogRef,
   registerHeadlessToolSearchCatalog,
   restrictToolSearchCatalog,
@@ -65,8 +62,6 @@ export {
   buildToolSchemaDirectoryPrompt,
   resolveToolSearchCatalogTool,
 } from "./tool-search-directory.js";
-export { ToolSearchRuntime } from "./tool-search-runtime.js";
-export { projectToolSearchTargetTranscriptMessages } from "./tool-search-transcript.js";
 export {
   TOOL_CALL_RAW_TOOL_NAME,
   TOOL_DESCRIBE_RAW_TOOL_NAME,
@@ -78,7 +73,6 @@ export type {
   ToolSearchCatalogRef,
   ToolSearchCatalogToolExecutor,
   ToolSearchConfig,
-  ToolSearchTargetTranscriptProjection,
   ToolSearchToolContext,
 } from "./tool-search-types.js";
 

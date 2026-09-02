@@ -128,7 +128,8 @@ export function createWorkerDesktopTunnels(deps: {
           ssh: request.ssh,
           pinnedHostKey: request.ssh.hostKey,
           resolveIdentity: request.resolveIdentity,
-          temporaryDirectoryPrefix: "openclaw-worker-desktop-",
+          // macOS Unix sockets allow 103 bytes; share one short private directory with SSH credentials.
+          temporaryDirectoryPrefix: "/tmp/openclaw-worker-desktop-",
         });
         if (!isCurrent()) {
           await prepared.dispose();

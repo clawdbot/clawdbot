@@ -1,7 +1,7 @@
 import type { Result } from "@openclaw/normalization-core/result";
 import type { TSchema } from "typebox";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { PluginToolMcpMeta } from "../plugins/tools.js";
+import type { PluginToolMcpMeta } from "../plugins/tool-metadata.js";
 import type { HookContext } from "./agent-tools.before-tool-call.js";
 import type { CodeModeSkill } from "./code-mode-skills.js";
 import type { AgentToolResult, AgentToolUpdateCallback } from "./runtime/index.js";
@@ -71,17 +71,6 @@ export type ToolSearchCatalogToolExecutor = (params: {
     result: AgentToolResult<unknown>,
   ) => Promise<AgentToolResult<unknown>>;
 }) => Promise<AgentToolResult<unknown>>;
-
-/** Transcript projection for target tool calls made through Tool Search. */
-export type ToolSearchTargetTranscriptProjection = {
-  parentToolCallId?: string;
-  toolCallId: string;
-  toolName: string;
-  input: unknown;
-  result: AgentToolResult<unknown>;
-  isError: boolean;
-  timestamp?: number;
-};
 
 /** Resolved Tool Search config after defaults, limits, and runtime support checks. */
 export type ToolSearchConfig = {

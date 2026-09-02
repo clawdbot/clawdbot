@@ -85,6 +85,26 @@ const BUILTIN_THEME_OPTIONS: ThemeOption[] = [
     labelKey: "configView.themes.phosphor.label",
     descriptionKey: "configView.themes.phosphor.description",
   },
+  {
+    id: "crt",
+    labelKey: "configView.themes.crt.label",
+    descriptionKey: "configView.themes.crt.description",
+  },
+  {
+    id: "manuscript",
+    labelKey: "configView.themes.manuscript.label",
+    descriptionKey: "configView.themes.manuscript.description",
+  },
+  {
+    id: "rose",
+    labelKey: "configView.themes.rose.label",
+    descriptionKey: "configView.themes.rose.description",
+  },
+  {
+    id: "miami",
+    labelKey: "configView.themes.miami.label",
+    descriptionKey: "configView.themes.miami.description",
+  },
 ];
 
 const ACCENT_PRESETS = [
@@ -417,8 +437,6 @@ export function renderAppearanceSection(
         </div>
       </section>
 
-      ${renderTypography(props, themeOptions.find((option) => option.id === props.theme)!.label)}
-
       <section id=${APPEARANCE_SETTINGS_TARGET_IDS.accent} class="settings-section">
         <div class="settings-section__header">
           <h2 class="settings-section__heading">${t("configView.appearance.accent")}</h2>
@@ -493,6 +511,8 @@ export function renderAppearanceSection(
           <span class="settings-accent-status__scope">${accentProvenance}</span>
         </p>
       </section>
+
+      ${renderTypography(props, themeOptions.find((option) => option.id === props.theme)!.label)}
 
       <section id=${APPEARANCE_SETTINGS_TARGET_IDS.textSize} class="settings-section">
         <div class="settings-section__header">

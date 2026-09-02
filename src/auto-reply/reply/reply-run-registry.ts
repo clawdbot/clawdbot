@@ -6,9 +6,7 @@ export {
   ReplyRunSuccessorAdmissionBlockedError,
 } from "./reply-run-registry.contracts.js";
 export type {
-  ReplyBackendMessageInjection,
   ReplyBackendQueueMessageOptions,
-  ReplyBackendQueueMessageResult,
   ReplyMessageInjectionAttempt,
   ReplyMessageInjectionTarget,
   ReplyOperation,

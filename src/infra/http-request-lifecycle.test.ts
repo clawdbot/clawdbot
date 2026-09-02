@@ -340,24 +340,26 @@ describe("bounded HTTP rejection transport", () => {
     );
   });
 
-  it("retains the SDK limiter until a peer ignoring the half-close is retired", async () => {
+  it("retains SDK capacity and Gateway admission until a peer ignoring the half-close is retired", async () => {
     const limiter = createWebhookInFlightLimiter({ maxInFlightPerKey: 1 });
     const retired = createDeferredCore();
     let socket: Socket | undefined;
     await withServer(
       async (req, res) => {
-        const pipeline = beginWebhookRequestPipelineOrReject({
-          req,
-          res,
-          inFlightLimiter: limiter,
-          inFlightKey: "test",
+        await runWithGatewayHttpWorkAdmission(res, () => {
+          const pipeline = beginWebhookRequestPipelineOrReject({
+            req,
+            res,
+            inFlightLimiter: limiter,
+            inFlightKey: "test",
+          });
+          expect(pipeline.ok).toBe(true);
+          installRequestBodyLimitGuard(req, res, { maxBytes });
+          if (pipeline.ok) {
+            pipeline.release();
+          }
+          return true;
         });
-        expect(pipeline.ok).toBe(true);
-        installRequestBodyLimitGuard(req, res, { maxBytes });
-        if (pipeline.ok) {
-          pipeline.release();
-        }
-        await waitForHttpRequestRejection(req);
         retired.resolve();
       },
       async (port) => {
@@ -367,8 +369,10 @@ describe("bounded HTTP rejection transport", () => {
         socket.write(postHeaders(`Content-Length: ${maxBytes + 1}`));
         await once(socket, "end");
         expect(limiter.tryAcquire("test")).toBe(false);
+        expect(getActiveGatewayRootWorkCount()).toBe(1);
         await retired.promise;
         expect(limiter.tryAcquire("test")).toBe(true);
+        expect(getActiveGatewayRootWorkCount()).toBe(0);
         limiter.release("test");
         socket.end();
         await closed;
@@ -387,34 +391,6 @@ describe("bounded HTTP rejection transport", () => {
         expect(result.wire).not.toContain("413");
         expect(result.wire).not.toContain("rejected");
         expect(result.wire).not.toContain("0\r\n\r\n");
-      },
-    );
-  });
-
-  it("retains a Gateway admission while an installed guard completes bounded cleanup", async () => {
-    const retired = createDeferredCore();
-    await withServer(
-      async (req, res) => {
-        await runWithGatewayHttpWorkAdmission(res, async () => {
-          installRequestBodyLimitGuard(req, res, { maxBytes });
-          return true;
-        });
-        retired.resolve();
-      },
-      async (port) => {
-        const socket = connect({ host: "127.0.0.1", port, allowHalfOpen: true });
-        const closed = once(socket, "close");
-        socket.on("data", () => {});
-        try {
-          socket.write(postHeaders(`Content-Length: ${maxBytes + 1}`));
-          await once(socket, "end");
-          expect(getActiveGatewayRootWorkCount()).toBe(1);
-          await retired.promise;
-          expect(getActiveGatewayRootWorkCount()).toBe(0);
-        } finally {
-          socket.end();
-          await closed;
-        }
       },
     );
   });

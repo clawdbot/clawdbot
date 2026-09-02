@@ -119,12 +119,18 @@ describeShimmer("Control UI shimmer", () => {
             running: element
               .getAnimations({ subtree: true })
               .some((item) => item.playState === "running"),
+            settledTransform: highlight.transform,
+            width: element.clientWidth,
           };
         });
 
         expect(animation.iterations).toBe("1");
         expect(Number.parseFloat(animation.duration)).toBeLessThanOrEqual(0.00001);
         expect(animation.running).toBe(false);
+        // The collapsed animation must leave the highlight parked offscreen, not
+        // settled over the block as a static band.
+        const settledX = Number.parseFloat(animation.settledTransform.split(",")[4] ?? "NaN");
+        expect(Math.abs(settledX + animation.width)).toBeLessThanOrEqual(1);
       }
     } finally {
       await page.close().catch(() => {});

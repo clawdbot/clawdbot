@@ -1972,18 +1972,6 @@ describe("applyExtraParamsToAgent", () => {
       expected: "websocket",
     },
     {
-      name: "passes configured websocket transport through stream options for openai gpt-5.4",
-      cfg: buildModelConfig("openai/gpt-5.4", { transport: "websocket" }),
-      modelId: "gpt-5.4",
-      model: {
-        api: "openai-chatgpt-responses",
-        provider: "openai",
-        id: "gpt-5.4",
-      } as Model<"openai-chatgpt-responses">,
-      options: {},
-      expected: "websocket",
-    },
-    {
       name: "defaults Codex transport to auto (WebSocket-first)",
       cfg: undefined,
       modelId: "gpt-5.4",
@@ -3152,19 +3140,6 @@ describe("applyExtraParamsToAgent", () => {
   it.each([
     {
       name: "maps MiniMax /fast to the matching highspeed model",
-      applyProvider: "minimax",
-      applyModelId: "MiniMax-M2.7",
-      fastMode: true,
-      model: {
-        api: "anthropic-messages",
-        provider: "minimax",
-        id: "MiniMax-M2.7",
-        baseUrl: "https://api.minimax.io/anthropic",
-      } as Model<"anthropic-messages">,
-      expectedModelId: "MiniMax-M2.7-highspeed",
-    },
-    {
-      name: "maps MiniMax M2.7 /fast to the matching highspeed model",
       applyProvider: "minimax",
       applyModelId: "MiniMax-M2.7",
       fastMode: true,

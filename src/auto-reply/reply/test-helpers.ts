@@ -1,5 +1,7 @@
 /** Shared test fixtures for reply queue and typing-controller tests. */
-import { vi } from "vitest";
+import path from "node:path";
+import { onTestFinished, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { FollowupRun } from "./queue.js";
 import type { ReplyOperation } from "./reply-run-registry.js";
 import type { TypingController } from "./typing.js";
@@ -109,6 +111,7 @@ export function createMockTypingController(
 export function createMockFollowupRun(
   overrides: Partial<Omit<FollowupRun, "run">> & { run?: Partial<FollowupRun["run"]> } = {},
 ): FollowupRun {
+  const rootDir = useAutoCleanupTempDirTracker(onTestFinished).make("openclaw-mock-followup-");
   const skipProviderRuntimeHints = process.env.OPENCLAW_TEST_FAST === "1";
   const base: FollowupRun = {
     prompt: "hello",
@@ -117,13 +120,13 @@ export function createMockFollowupRun(
     originatingTo: "channel:C1",
     run: {
       agentId: "main",
-      agentDir: "/tmp/agent",
+      agentDir: path.join(rootDir, "agent"),
       sessionId: "session",
       sessionKey: "main",
       messageProvider: "whatsapp",
       agentAccountId: "primary",
-      sessionFile: "/tmp/session.jsonl",
-      workspaceDir: "/tmp",
+      sessionFile: path.join(rootDir, "session.jsonl"),
+      workspaceDir: rootDir,
       config: {},
       skillsSnapshot: {
         prompt: "",
@@ -131,6 +134,13 @@ export function createMockFollowupRun(
       },
       provider: "anthropic",
       model: "claude",
+      thinkingCatalog: [
+        {
+          provider: overrides.run?.provider ?? "anthropic",
+          id: overrides.run?.model ?? "claude",
+          input: ["text"],
+        },
+      ],
       verboseLevel: "off",
       elevatedLevel: "off",
       bashElevated: {

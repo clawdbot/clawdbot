@@ -19,11 +19,7 @@ import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-run
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { resolveOutboundMediaUrls } from "openclaw/plugin-sdk/reply-payload";
 import { sanitizeAssistantVisibleText } from "openclaw/plugin-sdk/text-chunking";
-import {
-  buildLineMediaMessage,
-  hasLineSpecificMediaOptions,
-  resolveLineOutboundMedia,
-} from "./outbound-media.js";
+import { buildLineMediaMessage } from "./outbound-media.js";
 import { buildLineQuickReplyFallbackText } from "./quick-reply-fallback.js";
 import {
   createLineQuickReply,
@@ -160,9 +156,8 @@ export const lineOutboundAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>
         ? runtime.channel.text.chunkMarkdownText(processed.text, chunkLimit)
         : [];
     const mediaUrls = resolveOutboundMediaUrls(payload);
-    const useLineSpecificMedia = hasLineSpecificMediaOptions(lineData);
     const mediaOptions = {
-      mediaKind: useLineSpecificMedia ? lineData.mediaKind : ("image" as const),
+      mediaKind: lineData.mediaKind,
       previewImageUrl: lineData.previewImageUrl,
       durationMs: lineData.durationMs,
       trackingId: lineData.trackingId,
@@ -174,24 +169,11 @@ export const lineOutboundAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>
         if (!trimmed) {
           continue;
         }
-        if (!useLineSpecificMedia) {
-          await recordResult(
-            (lineRuntime?.sendMessageLine ?? outboundRuntime.sendMessageLine)(to, "", {
-              ...sendOptions,
-              mediaUrl: trimmed,
-            }),
-          );
-          continue;
-        }
-        const resolved = await resolveLineOutboundMedia(trimmed, mediaOptions);
         await recordResult(
           (lineRuntime?.sendMessageLine ?? outboundRuntime.sendMessageLine)(to, "", {
             ...sendOptions,
-            mediaUrl: resolved.mediaUrl,
-            mediaKind: resolved.mediaKind,
-            previewImageUrl: resolved.previewImageUrl,
-            durationMs: resolved.durationMs,
-            trackingId: resolved.trackingId,
+            ...mediaOptions,
+            mediaUrl: trimmed,
           }),
         );
       }

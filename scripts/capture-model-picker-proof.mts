@@ -1,11 +1,11 @@
 #!/usr/bin/env node
+import path from "node:path";
+import { chromium } from "playwright";
 // Captures chat model-picker proof shots: the open picker inheriting the agent
 // default, the same picker with a session override, and the picker after a
 // failed catalog refresh. Also reports the x offset between the provider
 // heading label and the model row name (the row-alignment change).
-import { mkdir } from "node:fs/promises";
-import path from "node:path";
-import { chromium } from "playwright";
+import { createControlUiE2eArtifactDir } from "../ui/src/test-helpers/control-ui-e2e-artifacts.ts";
 import {
   canRunPlaywrightChromium,
   installMockGateway,
@@ -23,7 +23,8 @@ function readOption(name: string): string | undefined {
   return index >= 0 ? process.argv[index + 1] : undefined;
 }
 
-const outputDir = path.resolve(
+const outputDir = createControlUiE2eArtifactDir(
+  "model-picker-proof",
   readOption("output-dir") ?? ".artifacts/control-ui-e2e/model-picker-proof",
 );
 const label = readOption("label") ?? "after";
@@ -46,7 +47,6 @@ const models = [
   { id: "claude-opus-4-6", name: "Claude Opus 4.6", provider: "anthropic", contextWindow: 200_000 },
 ];
 
-await mkdir(outputDir, { recursive: true });
 const server = await startControlUiE2eServer(undefined, { source: true });
 const browser = await chromium.launch({ executablePath });
 const context = await browser.newContext({

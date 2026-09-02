@@ -134,18 +134,18 @@ export function prepareModelRunCapabilities(
 
 /** Returns whether a catalog entry declares support for an input modality. */
 export function modelSupportsInput(
-  entry: ModelCatalogEntry | undefined,
+  entry: { input?: readonly ModelInputType[] } | undefined,
   input: ModelInputType,
 ): boolean {
   return entry?.input?.includes(input) ?? false;
 }
 
 /** Finds a provider-qualified model entry in a catalog. */
-export function findModelInCatalog(
-  catalog: ModelCatalogEntry[],
+export function findModelInCatalog<T extends Pick<ModelCatalogEntry, "provider" | "id">>(
+  catalog: readonly T[],
   provider: string,
   modelId: string,
-): ModelCatalogEntry | undefined {
+): T | undefined {
   const normalizedProvider = normalizeProviderId(provider);
   const normalizedModelId = normalizeLowercaseStringOrEmpty(modelId);
   return catalog.find(

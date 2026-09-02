@@ -11,33 +11,9 @@ import * as cliCoreApiModule from "./core-api.js";
 
 const { defaultRuntime: runtime, resetRuntimeCapture } = createCliRuntimeCapture();
 
-const gatewayMocks = vi.hoisted(() => ({
-  callGatewayFromCli: vi.fn(async () => ({
-    ok: true,
-    format: "ai",
-    targetId: "t1",
-    url: "https://example.com",
-    snapshot: "ok",
-  })),
+const configMocks = vi.hoisted(() => ({
+  getRuntimeConfig: vi.fn(() => ({ browser: {} })),
 }));
-
-vi.mock("../sdk-node-runtime.js", async () => {
-  const actual =
-    await vi.importActual<typeof import("../sdk-node-runtime.js")>("../sdk-node-runtime.js");
-  return {
-    ...actual,
-    callGatewayFromCli: gatewayMocks.callGatewayFromCli,
-  };
-});
-
-const configMocks = vi.hoisted(() => {
-  const loadConfig = vi.fn(() => ({ browser: {} }));
-  return {
-    getRuntimeConfig: loadConfig,
-    loadConfig,
-  };
-});
-vi.mock("../config/config.js", () => configMocks);
 
 const sharedMocks = vi.hoisted(() => ({
   callBrowserRequest: vi.fn(
@@ -84,7 +60,7 @@ function installInspectSpies() {
     vi
       .spyOn(browserCliSharedModule, "callBrowserRequest")
       .mockImplementation(sharedMocks.callBrowserRequest),
-    vi.spyOn(cliCoreApiModule, "getRuntimeConfig").mockImplementation(configMocks.loadConfig),
+    vi.spyOn(cliCoreApiModule, "getRuntimeConfig").mockImplementation(configMocks.getRuntimeConfig),
     vi.spyOn(cliCoreApiModule.defaultRuntime, "log").mockImplementation(runtime.log),
     vi.spyOn(cliCoreApiModule.defaultRuntime, "writeJson").mockImplementation(runtime.writeJson),
     vi.spyOn(cliCoreApiModule.defaultRuntime, "error").mockImplementation(runtime.error),
@@ -123,7 +99,7 @@ describe("browser cli snapshot defaults", () => {
     vi.clearAllMocks();
     restoreInspectSpies();
     resetRuntimeCapture();
-    configMocks.loadConfig.mockReturnValue({ browser: {} });
+    configMocks.getRuntimeConfig.mockReturnValue({ browser: {} });
   });
 
   it.each([
@@ -226,19 +202,9 @@ describe("browser cli snapshot defaults", () => {
       expectMode: undefined,
     },
   ])("$label", async ({ args, expectMode }) => {
-    configMocks.loadConfig.mockReturnValue({
+    configMocks.getRuntimeConfig.mockReturnValue({
       browser: { snapshotDefaults: { mode: "efficient" } },
     });
-
-    if (args.includes("--format") && args.includes("aria")) {
-      gatewayMocks.callGatewayFromCli.mockResolvedValueOnce({
-        ok: true,
-        format: "aria",
-        targetId: "t1",
-        url: "https://example.com",
-        snapshot: "ok",
-      });
-    }
 
     const params = await runSnapshot(args);
     expect(params?.path).toBe("/snapshot");
@@ -251,13 +217,13 @@ describe("browser cli snapshot defaults", () => {
   });
 
   it("does not set mode when config defaults are absent", async () => {
-    configMocks.loadConfig.mockReturnValue({ browser: {} });
+    configMocks.getRuntimeConfig.mockReturnValue({ browser: {} });
     const params = await runSnapshot([]);
     expect((params?.query as { mode?: unknown } | undefined)?.mode).toBeUndefined();
   });
 
   it("applies explicit efficient mode without config defaults", async () => {
-    configMocks.loadConfig.mockReturnValue({ browser: {} });
+    configMocks.getRuntimeConfig.mockReturnValue({ browser: {} });
     const params = await runSnapshot(["--efficient"]);
     expect(params?.query?.format).toBe("ai");
     expect(params?.query?.mode).toBe("efficient");

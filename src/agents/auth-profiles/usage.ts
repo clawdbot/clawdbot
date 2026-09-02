@@ -18,7 +18,10 @@ import { readProviderJsonResponse } from "../provider-http-errors.js";
 import { resolveProviderRequestHeaders } from "../provider-request-config.js";
 import { notifyAuthProfileFailureHook, setAuthProfileFailureHook } from "./failure-hook.js";
 import { logAuthProfileFailureStateChange } from "./state-observation.js";
-import { updateAuthProfileStoreWithLock } from "./store.js";
+import {
+  resolvePersistedAuthProfileOwnerAgentDir,
+  updateAuthProfileStoreWithLock,
+} from "./store.js";
 import type {
   AuthProfileBlockedSource,
   AuthProfileCooldownClassification,
@@ -73,6 +76,32 @@ function logDroppedAuthProfileBookkeeping(kind: string, profileId: string): void
     profileId,
     tags: ["auth_profiles", "persistence"],
   });
+}
+
+async function updateOwnedAuthProfileUsage(
+  store: AuthProfileStore,
+  profileId: string,
+  update: Parameters<typeof updateAuthProfileStoreWithLock>[0],
+) {
+  // Inherited credentials exist only in the owner's SQLite store. A child lock
+  // cannot persist their health state, so resolve the owner before the write.
+  let changed = false;
+  const updated = await authProfileUsageDeps.updateAuthProfileStoreWithLock({
+    ...update,
+    agentDir: resolvePersistedAuthProfileOwnerAgentDir({
+      agentDir: update.agentDir,
+      profileId,
+    }),
+    updater: (freshStore) => {
+      changed = update.updater(freshStore);
+      return changed;
+    },
+  });
+  const usage = changed ? updated?.usageStats?.[profileId] : undefined;
+  if (usage) {
+    store.usageStats = { ...store.usageStats, [profileId]: usage };
+  }
+  return updated;
 }
 
 const INLINE_API_KEY_USAGE_ID_PREFIX = "inline-api-key:";
@@ -462,7 +491,7 @@ async function claimWhamHalfOpenReprobe(params: {
   startedAt: number;
 }): Promise<WhamBlockGeneration | null> {
   let generation: WhamBlockGeneration | undefined;
-  const updated = await authProfileUsageDeps.updateAuthProfileStoreWithLock({
+  const updated = await updateOwnedAuthProfileUsage(params.store, params.profileId, {
     agentDir: params.agentDir,
     updater: (freshStore) => {
       const currentProfile = freshStore.profiles[params.profileId];
@@ -496,7 +525,6 @@ async function claimWhamHalfOpenReprobe(params: {
     },
   });
   if (updated && generation) {
-    params.store.usageStats = updated.usageStats;
     return generation;
   }
   if (updated === null) {
@@ -521,8 +549,7 @@ async function runWhamHalfOpenReprobe(params: {
   if (!result || (!result.available && !result.blockedUntil)) {
     return;
   }
-  let applied = false;
-  const updated = await authProfileUsageDeps.updateAuthProfileStoreWithLock({
+  const updated = await updateOwnedAuthProfileUsage(params.store, params.profileId, {
     agentDir: params.agentDir,
     updater: (freshStore) => {
       const currentProfile = freshStore.profiles[params.profileId];
@@ -560,13 +587,10 @@ async function runWhamHalfOpenReprobe(params: {
         }
         return existing ?? {};
       });
-      applied = true;
       return true;
     },
   });
-  if (updated && applied) {
-    params.store.usageStats = updated.usageStats;
-  } else if (updated === null) {
+  if (updated === null) {
     logDroppedAuthProfileBookkeeping("wham_half_open_reprobe", params.profileId);
   }
 }
@@ -1015,7 +1039,7 @@ export async function markAuthProfileFailure(params: {
   let nextStats: ProfileUsageStats | undefined;
   let previousStats: ProfileUsageStats | undefined;
   let updateTime = 0;
-  const updated = await authProfileUsageDeps.updateAuthProfileStoreWithLock({
+  const updated = await updateOwnedAuthProfileUsage(store, profileId, {
     agentDir,
     updater: (freshStore) => {
       const profileValue = freshStore.profiles[profileId];
@@ -1058,7 +1082,6 @@ export async function markAuthProfileFailure(params: {
     },
   });
   if (updated) {
-    store.usageStats = updated.usageStats;
     if (nextStats) {
       logAuthProfileFailureStateChange({
         runId,
@@ -1141,7 +1164,7 @@ export async function markAuthProfileBlockedUntil(params: {
   let nextStats: ProfileUsageStats | undefined;
   let previousStats: ProfileUsageStats | undefined;
   let updateTime = 0;
-  const updated = await authProfileUsageDeps.updateAuthProfileStoreWithLock({
+  const updated = await updateOwnedAuthProfileUsage(store, profileId, {
     agentDir,
     updater: (freshStore) => {
       const profileLocal = freshStore.profiles[profileId];
@@ -1166,7 +1189,6 @@ export async function markAuthProfileBlockedUntil(params: {
     },
   });
   if (updated) {
-    store.usageStats = updated.usageStats;
     if (nextStats) {
       logAuthProfileFailureStateChange({
         runId,
@@ -1276,7 +1298,7 @@ export async function clearAuthProfileCooldown(params: {
   agentDir?: string;
 }): Promise<void> {
   const { store, profileId, agentDir } = params;
-  const updated = await authProfileUsageDeps.updateAuthProfileStoreWithLock({
+  const updated = await updateOwnedAuthProfileUsage(store, profileId, {
     agentDir,
     updater: (freshStore) => {
       if (!freshStore.usageStats?.[profileId]) {
@@ -1288,7 +1310,6 @@ export async function clearAuthProfileCooldown(params: {
     },
   });
   if (updated) {
-    store.usageStats = updated.usageStats;
     return;
   }
   if (updated === null) {

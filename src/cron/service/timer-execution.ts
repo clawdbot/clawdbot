@@ -7,7 +7,11 @@ import {
   isRetryableHeartbeatSkipReason,
 } from "../../infra/heartbeat-wake.js";
 import type { CommandLaneTaskMarker } from "../../process/command-queue.js";
-import { type CronActiveJobMarker, isCronActiveJobMarkerCurrent } from "../active-jobs.js";
+import {
+  type CronActiveJobMarker,
+  isCronActiveJobMarkerCurrent,
+  markCronJobWaitingForHeartbeat,
+} from "../active-jobs.js";
 import { resolveCronJobEffectiveAgentId } from "../agent-id.js";
 import { isHeartbeatTaskCronJob } from "../heartbeat-task.js";
 import { createCronRunDiagnosticsFromError } from "../run-diagnostics.js";
@@ -204,35 +208,58 @@ export async function executeJobCore(
   if (effectiveJob.payload.kind === "heartbeat" || heartbeatTask) {
     // Monitors and migrated tasks share the wake bus, keeping coalescing,
     // quiet hours, cooldown, flood, and busy guards in the heartbeat runner.
-    requestCronHeartbeat(
-      state,
-      heartbeatTask
-        ? {
-            source: "interval",
-            intent: "task",
-            reason: `heartbeat-task:${heartbeatTask.id}`,
-            agentId: heartbeatTask.agentId,
-            tasks: [
-              {
-                jobId: heartbeatTask.id,
-                name: heartbeatTask.name,
-                prompt: heartbeatTask.payload.text,
-              },
-            ],
-          }
-        : {
-            source: "interval",
-            intent: "scheduled",
-            reason: "interval",
-            agentId: effectiveJob.agentId,
-            scheduledEveryMs:
-              effectiveJob.schedule.kind === "every" ? effectiveJob.schedule.everyMs : undefined,
-          },
+    const agentId = resolveCronJobEffectiveAgentId(
+      effectiveJob,
+      state.deps.resolveDefaultAgentId?.() ?? state.deps.defaultAgentId,
     );
-    const result = {
-      status: "ok" as const,
-      summary: heartbeatTask ? "heartbeat task wake requested" : "heartbeat wake requested",
-    };
+    const heartbeatWake = heartbeatTask
+      ? {
+          source: "interval" as const,
+          intent: "task" as const,
+          reason: `heartbeat-task:${heartbeatTask.id}`,
+          agentId,
+          tasks: [
+            {
+              jobId: heartbeatTask.id,
+              name: heartbeatTask.name,
+              prompt: heartbeatTask.payload.text,
+            },
+          ],
+        }
+      : {
+          source: "interval" as const,
+          intent: "scheduled" as const,
+          reason: "interval",
+          agentId,
+          scheduledEveryMs:
+            effectiveJob.schedule.kind === "every" ? effectiveJob.schedule.everyMs : undefined,
+        };
+    options?.onHeartbeatExecutionStarted?.(heartbeatWake);
+    const releaseHeartbeatWait = markCronJobWaitingForHeartbeat(
+      options?.activeJobMarker,
+      options?.owningCronLaneTaskMarker,
+    );
+    let heartbeatResult: HeartbeatRunResult;
+    try {
+      heartbeatResult = await (state.deps.requestHeartbeatAndWait?.(
+        heartbeatWake,
+        abortSignal ? { abortSignal } : {},
+      ) ?? { status: "failed", reason: "heartbeat wake settlement unavailable" });
+    } finally {
+      releaseHeartbeatWait();
+    }
+    if (abortSignal?.aborted) {
+      return resolveAbortError();
+    }
+    const result =
+      heartbeatResult.status === "ran"
+        ? {
+            status: "ok" as const,
+            summary: heartbeatTask ? "heartbeat task completed" : "heartbeat completed",
+          }
+        : heartbeatResult.status === "failed"
+          ? { status: "error" as const, error: `heartbeat failed: ${heartbeatResult.reason}` }
+          : { status: "skipped" as const, error: `heartbeat skipped: ${heartbeatResult.reason}` };
     return triggerEval ? { ...result, triggerEval } : result;
   }
   if (effectiveJob.sessionTarget === "main") {
@@ -241,6 +268,7 @@ export async function executeJobCore(
       effectiveJob,
       abortSignal,
       waitWithAbort,
+      options?.onHeartbeatExecutionStarted,
       options?.activeJobMarker,
       options?.owningCronLaneTaskMarker,
     );
@@ -262,6 +290,7 @@ async function executeMainSessionCronJob(
   job: CronJob,
   abortSignal: AbortSignal | undefined,
   waitWithAbort: (ms: number) => Promise<void>,
+  onHeartbeatExecutionStarted?: ExecuteJobCoreOptions["onHeartbeatExecutionStarted"],
   activeJobMarker?: CronActiveJobMarker,
   owningCronLaneTaskMarker?: CommandLaneTaskMarker,
 ): Promise<
@@ -306,6 +335,7 @@ async function executeMainSessionCronJob(
   const removeQueuedSystemEvent = () =>
     removeQueuedSystemEventHandle(state, job, queuedSystemEvent);
   if (job.wakeMode === "now" && state.deps.runHeartbeatOnce) {
+    onHeartbeatExecutionStarted?.(heartbeatWake);
     const maxWaitMs = state.deps.wakeNowHeartbeatBusyMaxWaitMs ?? 2 * 60_000;
     const retryDelayMs = state.deps.wakeNowHeartbeatBusyRetryDelayMs ?? 250;
     const waitStartedAt = state.deps.nowMs();

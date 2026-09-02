@@ -1,4 +1,5 @@
-import { listAgentIds, resolveSessionAgentIds } from "openclaw/plugin-sdk/agent-runtime";
+import { listAgentIds } from "openclaw/plugin-sdk/agent-runtime";
+import { resolveSessionAgentIdsStrict } from "openclaw/plugin-sdk/agent-scope-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { OpenClawPluginNodeHostCommand } from "openclaw/plugin-sdk/plugin-entry";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
@@ -46,7 +47,6 @@ import {
 import {
   codexNodeTerminalCapability,
   createCodexTerminalNodeHostCommand,
-  requireCatalogEligibleThread,
   type CodexTerminalConfigSources,
 } from "./session-catalog-terminal.js";
 import type {
@@ -192,7 +192,7 @@ export async function listCodexSessionCatalog(params: {
   includeLocal?: boolean;
   localHomes?: CodexCatalogHome[];
 }): Promise<CodexSessionCatalogResult> {
-  const agentId = resolveSessionAgentIds({
+  const agentId = resolveSessionAgentIdsStrict({
     config: params.config ?? {},
     agentId: params.agentId,
   }).sessionAgentId;
@@ -310,7 +310,10 @@ export function createCodexSessionCatalogNodeHostCommands(
     }
     const requestedAgentId = readBoundedOptionalString(parsed, "agentId", MAX_SESSION_ID_LENGTH);
     const config = configSources.getRuntimeConfig() ?? {};
-    const agentId = resolveSessionAgentIds({ config, agentId: requestedAgentId }).sessionAgentId;
+    const agentId = resolveSessionAgentIdsStrict({
+      config,
+      agentId: requestedAgentId,
+    }).sessionAgentId;
     if (!listAgentIds(config).includes(agentId)) {
       throw new CatalogParamsError(`unknown Codex session catalog agent: ${agentId}`);
     }
@@ -373,7 +376,7 @@ export function createCodexSessionCatalogNodeHostCommands(
         const request = bindRequest(paramsJSON);
         const action = readNodeTranscriptParams(request.params);
         try {
-          await requireCatalogEligibleThread(request.control, action.threadId);
+          await request.control.requireEligibleThread(action.threadId);
           const page = parseTranscriptPage(
             await request.control.listTurnPage({
               threadId: action.threadId,
@@ -447,7 +450,7 @@ export async function readCodexSessionTranscript(params: {
   source?: CodexCatalogHome;
 }): Promise<CodexSessionTranscriptPage> {
   if (params.source || params.hostId === CODEX_LOCAL_SESSION_HOST_ID) {
-    await requireCatalogEligibleThread(params.control, params.threadId);
+    await params.control.requireEligibleThread(params.threadId);
     const listParams = {
       threadId: params.threadId,
       limit: params.limit,

@@ -769,7 +769,7 @@ export function startGatewayConfigReloader(opts: {
       await commitReloadBaseline();
       // The accepted restart owns snapshot republication at next startup.
       markPluginMetadataRefreshApplied();
-      application?.settle("failed");
+      application?.settle("restart-pending");
       return;
     }
     if (plan.restartGateway) {
@@ -777,7 +777,7 @@ export function startGatewayConfigReloader(opts: {
       await prepareRestart(plan, nextConfig, ownership, nextSourceConfig);
       await commitReloadBaseline();
       markPluginMetadataRefreshApplied();
-      application?.settle("failed");
+      application?.settle("restart-pending");
       return;
     }
 

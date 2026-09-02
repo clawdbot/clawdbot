@@ -5,38 +5,41 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { Type } from "typebox";
 import { Value } from "typebox/value";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import {
   initializeGlobalHookRunner,
   resetGlobalHookRunner,
 } from "../plugins/hook-runner-global.js";
 import { createMockPluginRegistry } from "../plugins/hooks.test-fixtures.js";
-import { setPluginToolMeta } from "../plugins/tools.js";
+import { setPluginToolMeta } from "../plugins/tool-metadata.js";
 import { materializeBundleMcpToolsForRun } from "./agent-bundle-mcp-materialize.js";
 import type { McpToolCatalog, SessionMcpRuntime } from "./agent-bundle-mcp-types.js";
 import { toToolDefinitions } from "./agent-tool-definition-adapter.js";
-import { wrapToolWithAbortSignal } from "./agent-tools.abort.js";
+import { raceWithAbortSignal, wrapToolWithAbortSignal } from "./agent-tools.abort.js";
 import {
+  finalizeToolTerminalPresentation,
   isToolWrappedWithBeforeToolCallHook,
+  type ToolOutcomeObservation,
   wrapToolWithBeforeToolCallHook,
 } from "./agent-tools.before-tool-call.js";
 import { resetAdjustedParamsByToolCallIdForTests } from "./agent-tools.before-tool-call.state.js";
 import { finalizeAgentTools } from "./agent-tools.finalize.js";
-import { filterToolsByPolicy } from "./agent-tools.policy.js";
 import { normalizeAgentRuntimeTools } from "./runtime-plan/tools.js";
+import { filterToolsByPolicy } from "./tool-policy-match.js";
 import {
   formatToolExecutionErrorMessage,
   resolveToolExecutionErrorKind,
 } from "./tool-result-error.js";
+import { compactToolSearchCatalogEntry } from "./tool-search-catalog.js";
+import { ToolSearchRuntime } from "./tool-search-runtime.js";
 import {
   addClientToolsToToolSearchCatalog as addRunClientToolsToToolSearchCatalog,
   applyToolSearchCatalog as applyRunToolSearchCatalog,
   applyToolSchemaDirectoryCatalog as applyRunToolSchemaDirectoryCatalog,
   buildToolSchemaDirectoryPrompt as buildRunToolSchemaDirectoryPrompt,
   clearToolSearchCatalog as clearRunToolSearchCatalog,
-  compactToolSearchCatalogEntry,
   createToolSearchCatalogRef,
   createToolSearchTools as createRunToolSearchTools,
-  projectToolSearchTargetTranscriptMessages,
   registerHeadlessToolSearchCatalog,
   restrictToolSearchCatalog,
   resolveToolSearchConfig,
@@ -46,9 +49,9 @@ import {
   TOOL_SEARCH_CODE_MODE_TOOL_NAME,
   TOOL_SEARCH_RAW_TOOL_NAME,
   type ToolSearchCatalogRef,
-  ToolSearchRuntime,
 } from "./tool-search.js";
 import { testing } from "./tool-search.test-support.js";
+import { setToolTerminalPresentation } from "./tool-terminal-presentation.js";
 import { jsonResult, type AnyAgentTool } from "./tools/common.js";
 import { createGatewayTool } from "./tools/gateway-tool.js";
 import { createOpenClawDelegateToolsForRun } from "./tools/openclaw-delegate-tool.js";
@@ -182,6 +185,45 @@ function mockCall(mock: { mock: { calls: unknown[][] } }, index = 0): unknown[] 
     throw new Error(`Expected mock call ${index}`);
   }
   return call;
+}
+
+function observedRuntimeFixture(params: {
+  name: string;
+  ordinal: number;
+  execute?: AnyAgentTool["execute"];
+  executeTool?: NonNullable<ConstructorParameters<typeof ToolSearchRuntime>[0]["executeTool"]>;
+  formatter?: Parameters<typeof setToolTerminalPresentation>[1];
+}) {
+  const catalogRef = createToolSearchCatalogRef();
+  const outcomes: ToolOutcomeObservation[] = [];
+  const runId = `run-${params.name}`;
+  const target = fakeTool(params.name, params.name);
+  if (params.execute) {
+    target.execute = params.execute;
+  }
+  if (params.formatter) {
+    setToolTerminalPresentation(target, params.formatter);
+  }
+  registerHeadlessToolSearchCatalog({
+    catalogRef,
+    tools: [target],
+    hookContext: {
+      runId,
+      sessionId: `session-${params.name}`,
+      onToolOutcome: (outcome) => outcomes.push(outcome),
+      allocateToolOutcomeOrdinal: () => params.ordinal,
+    },
+  });
+  const runtime = new ToolSearchRuntime(
+    {
+      catalogRef,
+      runId,
+      sessionId: `session-${params.name}`,
+      ...(params.executeTool ? { executeTool: params.executeTool } : {}),
+    },
+    resolveToolSearchConfig(),
+  );
+  return { outcomes, runId, runtime };
 }
 
 describe("Tool Search", () => {
@@ -1428,6 +1470,154 @@ describe("Tool Search", () => {
     await expect(runtime.callValue("orchard_empty_details")).resolves.toBeUndefined();
   });
 
+  it("finalizes a direct target once with its original model-call ordinal", async () => {
+    let toolCallId: string | undefined;
+    const fixture = observedRuntimeFixture({
+      name: "orchard_direct_terminal",
+      ordinal: 4,
+      execute: async (id) => {
+        toolCallId = id;
+        return jsonResult({ ok: true });
+      },
+    });
+
+    const call = await fixture.runtime.call("orchard_direct_terminal");
+
+    expect(fixture.outcomes).toHaveLength(2);
+    expect(fixture.outcomes[1]).toEqual(
+      expect.objectContaining({
+        toolCallOrdinal: 4,
+        terminalPresentation: undefined,
+        presentationOnly: true,
+      }),
+    );
+    finalizeToolTerminalPresentation({
+      toolCallId: expectDefined(toolCallId, "direct terminal tool call"),
+      runId: fixture.runId,
+      result: call.result,
+      isError: false,
+    });
+    expect(fixture.outcomes).toHaveLength(2);
+  });
+
+  it("formats the result accepted by a supplied executor", async () => {
+    const fixture = observedRuntimeFixture({
+      name: "orchard_accepted_terminal",
+      ordinal: 6,
+      execute: async () => jsonResult({ status: 200 }),
+      formatter: (_params, result) => ({
+        text: `Status ${(result.details as { status: number }).status}`,
+      }),
+      executeTool: async (params) => {
+        await params.tool.execute(
+          params.toolCallId,
+          params.input,
+          params.signal,
+          params.onUpdate,
+          undefined as never,
+        );
+        return await params.acceptResultBeforeProjection(jsonResult({ status: 201 }));
+      },
+    });
+
+    await fixture.runtime.call("orchard_accepted_terminal");
+
+    expect(fixture.outcomes.map((outcome) => outcome.terminalPresentation)).toEqual([
+      "Status 200",
+      "Status 201",
+    ]);
+    expect(fixture.outcomes.map((outcome) => outcome.toolCallOrdinal)).toEqual([6, 6]);
+  });
+
+  it("clears a raw summary when a supplied executor rejects after source success", async () => {
+    const executorError = new Error("synthetic post-source rejection");
+    const fixture = observedRuntimeFixture({
+      name: "orchard_rejected_terminal",
+      ordinal: 8,
+      execute: async () => jsonResult({ ok: true }),
+      formatter: () => ({ text: "Source completed" }),
+      executeTool: async (params) => {
+        const raw = await params.tool.execute(
+          params.toolCallId,
+          params.input,
+          params.signal,
+          params.onUpdate,
+          undefined as never,
+        );
+        await params.acceptResultBeforeProjection(raw);
+        throw executorError;
+      },
+    });
+
+    await expect(fixture.runtime.call("orchard_rejected_terminal")).rejects.toBe(executorError);
+    expect(fixture.outcomes).toHaveLength(2);
+    expect(fixture.outcomes[0]?.terminalPresentation).toBe("Source completed");
+    expect(fixture.outcomes[1]).toEqual(
+      expect.objectContaining({
+        toolCallOrdinal: 8,
+        terminalPresentation: undefined,
+        presentationOnly: true,
+      }),
+    );
+  });
+
+  it("does not publish terminal state after an aborted cancellation-ignoring source", async () => {
+    const sourceResult = jsonResult({ ok: true });
+    const sourceStarted = createDeferred();
+    const source = createDeferred<typeof sourceResult>();
+    let toolCallId: string | undefined;
+    let sourceCompletion: Promise<unknown> | undefined;
+    const fixture = observedRuntimeFixture({
+      name: "orchard_aborted_late_terminal",
+      ordinal: 13,
+      execute: async (id) => {
+        toolCallId = id;
+        sourceStarted.resolve();
+        return await source.promise;
+      },
+      executeTool: async (params) => {
+        const execution = params.tool.execute(
+          params.toolCallId,
+          params.input,
+          params.signal,
+          params.onUpdate,
+          undefined as never,
+        );
+        sourceCompletion = execution;
+        return await raceWithAbortSignal(
+          execution.then(params.acceptResultBeforeProjection),
+          expectDefined(params.signal, "abort-race signal"),
+        );
+      },
+    });
+    const controller = new AbortController();
+    const call = fixture.runtime.call(
+      "orchard_aborted_late_terminal",
+      {},
+      { signal: controller.signal },
+    );
+    await sourceStarted.promise;
+    controller.abort();
+
+    await expect(call).rejects.toMatchObject({ name: "AbortError" });
+    expect(fixture.outcomes).toHaveLength(0);
+    source.resolve(sourceResult);
+    await expectDefined(sourceCompletion, "late source completion");
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+    expect(fixture.outcomes).toHaveLength(1);
+    expect(fixture.outcomes[0]?.toolCallOrdinal).toBe(13);
+
+    finalizeToolTerminalPresentation({
+      toolCallId: expectDefined(toolCallId, "aborted late terminal tool call"),
+      runId: fixture.runId,
+      result: sourceResult,
+      isError: false,
+    });
+    expect(fixture.outcomes).toHaveLength(1);
+  });
+
   it("rejects final catalog details that drift from a declared output schema", async () => {
     const catalogRef = createToolSearchCatalogRef();
     const target = pluginTool("orchard_bad_output", "Return a bad orchard result");
@@ -1472,6 +1662,34 @@ describe("Tool Search", () => {
     );
 
     await expect(runtime.callValue("orchard_mutated_output")).rejects.toThrow(
+      "returned details that do not match its declared outputSchema",
+    );
+  });
+
+  it("revalidates accepted snapshots after executor-side schema mutation", async () => {
+    const catalogRef = createToolSearchCatalogRef();
+    const target = pluginTool("orchard_mutated_schema", "Return a mutable orchard schema");
+    const idSchema = { type: "string" };
+    target.outputSchema = {
+      type: "object",
+      properties: { id: idSchema },
+      required: ["id"],
+      additionalProperties: false,
+    } as never;
+    registerHeadlessToolSearchCatalog({ catalogRef, tools: [target] });
+    const runtime = new ToolSearchRuntime(
+      {
+        catalogRef,
+        executeTool: async (params) => {
+          const accepted = await params.acceptResultBeforeProjection(jsonResult({ id: "P-1" }));
+          idSchema.type = "number";
+          return accepted;
+        },
+      },
+      resolveToolSearchConfig({ tools: { toolSearch: { mode: "tools" } } } as never),
+    );
+
+    await expect(runtime.callValue("orchard_mutated_schema")).rejects.toThrow(
       "returned details that do not match its declared outputSchema",
     );
   });
@@ -1639,7 +1857,10 @@ describe("Tool Search", () => {
       callCount?: number;
     };
     expect(telemetry.catalogSize).toBe(2);
-    expect(telemetry.counterScope).toMatch(/^[A-Za-z0-9_-]{16}$/);
+    // The lowercase-hex alphabet is a contract: a wider alphabet can emit
+    // credential-shaped scopes (e.g. hf_…) that tool-payload redaction rewrites,
+    // breaking byte-exact persistence of results embedding the telemetry.
+    expect(telemetry.counterScope).toMatch(/^[0-9a-f]{24}$/);
     expect(telemetry.searchCount).toBe(1);
     expect(telemetry.describeCount).toBe(1);
     expect(telemetry.callCount).toBe(1);
@@ -3197,81 +3418,6 @@ describe("Tool Search", () => {
     expect(secondExecuteInput.onUpdate).toBe(onUpdate);
   });
 
-  it("projects target tool calls after their Tool Search wrapper result", () => {
-    const messages = [
-      {
-        role: "assistant",
-        content: [
-          {
-            type: "toolCall",
-            id: "wrapper-call",
-            name: TOOL_CALL_RAW_TOOL_NAME,
-            arguments: { id: "fake_target", args: { value: "ok" } },
-          },
-        ],
-      },
-      {
-        role: "toolResult",
-        toolCallId: "wrapper-call",
-        toolName: TOOL_CALL_RAW_TOOL_NAME,
-        content: [{ type: "text", text: "wrapped" }],
-      },
-      {
-        role: "assistant",
-        content: [{ type: "text", text: "done" }],
-      },
-    ];
-
-    const projected = projectToolSearchTargetTranscriptMessages(messages as never, [
-      {
-        parentToolCallId: "wrapper-call",
-        toolCallId: "tool_search_code:wrapper-call:fake_target:1",
-        toolName: "fake_target",
-        input: { value: "ok" },
-        result: jsonResult({ ok: true }),
-        isError: false,
-        timestamp: 123,
-      },
-    ]);
-
-    expect(projected).toHaveLength(5);
-    const projectedToolCall = projected[2] as {
-      role?: string;
-      content?: Array<{
-        type?: string;
-        id?: string;
-        name?: string;
-        arguments?: unknown;
-        input?: unknown;
-      }>;
-    };
-    expect(projectedToolCall.role).toBe("assistant");
-    expect(projectedToolCall.content).toEqual([
-      {
-        type: "toolCall",
-        id: "tool_search_code:wrapper-call:fake_target:1",
-        name: "fake_target",
-        arguments: { value: "ok" },
-        input: { value: "ok" },
-      },
-    ]);
-    const projectedToolResult = projected[3] as {
-      role?: string;
-      toolCallId?: string;
-      toolName?: string;
-      isError?: boolean;
-      content?: unknown;
-    };
-    expect(projectedToolResult.role).toBe("toolResult");
-    expect(projectedToolResult.toolCallId).toBe("tool_search_code:wrapper-call:fake_target:1");
-    expect(projectedToolResult.toolName).toBe("fake_target");
-    expect(projectedToolResult.isError).toBe(false);
-    expect(projectedToolResult.content).toEqual([
-      { type: "text", text: JSON.stringify({ ok: true }, null, 2) },
-    ]);
-    expect(projected[4]).toBe(messages[2]);
-  });
-
   it("does not execute fire-and-forget bridged calls after code returns", async () => {
     const codeTool = fakeTool(TOOL_SEARCH_CODE_MODE_TOOL_NAME, "code mode");
     const target = pluginTool("fake_fire_and_forget", "Should not run unless awaited");
@@ -3711,7 +3857,7 @@ describe("Tool Search", () => {
     expect(abortCount).toBe(1);
   });
 
-  it("reuses an unchanged catalog within the same run", () => {
+  it("reuses an unchanged catalog only on the same ref", () => {
     const codeTool = fakeTool(TOOL_SEARCH_CODE_MODE_TOOL_NAME, "code mode");
     const alpha = pluginTool("fake_reuse_alpha", "Alpha tool");
     const beta = pluginTool("fake_reuse_beta", "Beta tool");
@@ -3751,7 +3897,7 @@ describe("Tool Search", () => {
       sessionKey: "agent:main:tool-search-reuse",
       catalogRef: laterRef,
     });
-    expect(later.catalogReused).toBe(true);
+    expect(later.catalogReused).toBe(false);
     expect(laterRef.current).not.toBe(catalogAfterFirst);
     expect(laterRef.current?.entries).not.toBe(catalogAfterFirst.entries);
     expect(laterRef.current?.entries).toEqual(catalogAfterFirst.entries);
@@ -3778,7 +3924,7 @@ describe("Tool Search", () => {
   });
 
   it.each(["fresh", "same"] as const)(
-    "restores an unchanged catalog after run cleanup on a %s ref",
+    "registers a fresh catalog after run cleanup on a %s ref",
     async (refMode) => {
       const codeTool = fakeTool(TOOL_SEARCH_CODE_MODE_TOOL_NAME, "code mode");
       const alpha = pluginTool("fake_xrun_alpha", "Alpha tool");
@@ -3819,49 +3965,49 @@ describe("Tool Search", () => {
       expect(firstRef.current).toBeUndefined();
       expect(firstRuntime.telemetry()).toMatchObject(firstCounters);
 
-      const restoredRef = refMode === "same" ? firstRef : createToolSearchCatalogRef();
+      const nextRef = refMode === "same" ? firstRef : createToolSearchCatalogRef();
       const second = applyToolSearchCatalog({
         tools: [codeTool, alpha, beta],
         config,
         sessionId,
         runId: "run-2",
-        catalogRef: restoredRef,
+        catalogRef: nextRef,
       });
       expect(second.catalogRegistered).toBe(true);
-      expect(second.catalogReused).toBe(true);
-      const restoredCatalog = expectDefined(restoredRef.current, "restored run catalog");
-      const restoredAlphaEntry = expectDefined(
-        restoredCatalog.entries.find((entry) => entry.name === alpha.name),
-        "restored alpha entry",
+      expect(second.catalogReused).toBe(false);
+      const nextCatalog = expectDefined(nextRef.current, "next run catalog");
+      const nextAlphaEntry = expectDefined(
+        nextCatalog.entries.find((entry) => entry.name === alpha.name),
+        "next run alpha entry",
       );
-      expect(restoredAlphaEntry).not.toBe(firstAlphaEntry);
-      expect(restoredAlphaEntry).toEqual(firstAlphaEntry);
-      expect(restoredAlphaEntry.tool).toBe(alpha);
-      expect(restoredCatalog.counterScope).not.toBe(firstCatalog.counterScope);
-      expect(restoredCatalog.searchCount).toBe(0);
-      const restoredRuntime = new ToolSearchRuntime(
-        { catalogRef: restoredRef },
+      expect(nextAlphaEntry).not.toBe(firstAlphaEntry);
+      expect(nextAlphaEntry).toEqual(firstAlphaEntry);
+      expect(nextAlphaEntry.tool).toBe(alpha);
+      expect(nextCatalog.counterScope).not.toBe(firstCatalog.counterScope);
+      expect(nextCatalog.searchCount).toBe(0);
+      const nextRuntime = new ToolSearchRuntime(
+        { catalogRef: nextRef },
         resolveToolSearchConfig(config),
       );
-      const restoredCounters = {
-        counterScope: restoredCatalog.counterScope,
+      const nextCounters = {
+        counterScope: nextCatalog.counterScope,
         searchCount: 0,
         describeCount: 0,
         callCount: 0,
       };
       for (const phase of ["active", "closed"] as const) {
         if (phase === "closed") {
-          clearToolSearchCatalog({ sessionId, catalogRef: restoredRef });
+          clearToolSearchCatalog({ sessionId, catalogRef: nextRef });
         }
-        expect(restoredRuntime.telemetry(), phase).toMatchObject(restoredCounters);
+        expect(nextRuntime.telemetry(), phase).toMatchObject(nextCounters);
         expect(firstRuntime.telemetry(), phase).toMatchObject(
-          refMode === "same" ? restoredCounters : firstCounters,
+          refMode === "same" ? nextCounters : firstCounters,
         );
       }
     },
   );
 
-  it("notifies catalog-ref lifecycle hooks across snapshot restore and disposal", () => {
+  it("notifies catalog-ref lifecycle hooks across registration and disposal", () => {
     const codeTool = fakeTool(TOOL_SEARCH_CODE_MODE_TOOL_NAME, "code mode");
     const alpha = pluginTool("fake_lifecycle_alpha", "Alpha tool");
     const config = { tools: { toolSearch: true } } as never;
@@ -3896,14 +4042,14 @@ describe("Tool Search", () => {
       runId: "run-lifecycle-2",
       catalogRef: secondRef,
     });
-    expect(second.catalogReused).toBe(true);
+    expect(second.catalogReused).toBe(false);
     expect(secondChange).toHaveBeenCalledOnce();
   });
 
-  it("applies Code Mode projection filtering to restored catalogs", async () => {
+  it("applies Code Mode projection filtering to a newly registered catalog", async () => {
     const codeTool = fakeTool(TOOL_SEARCH_CODE_MODE_TOOL_NAME, "code mode");
     // The unprojected tool is the stronger match for the query; only projection
-    // filtering can keep it out of a one-result search on the restored catalog.
+    // filtering can keep it out of a one-result search on the next run's catalog.
     const shadowing = pluginTool("fake_projection_probe", "Projection probe projection probe");
     shadowing.execute = vi.fn(async () => jsonResult({ marker: "shadowing" }));
     const projected = pluginTool("fake_projection_secondary", "Projection probe secondary");
@@ -3929,11 +4075,11 @@ describe("Tool Search", () => {
       runId: "run-projection-2",
       catalogRef: secondRef,
     });
-    expect(second.catalogReused).toBe(true);
-    const restored = expectDefined(secondRef.current, "restored projection catalog");
+    expect(second.catalogReused).toBe(false);
+    const nextCatalog = expectDefined(secondRef.current, "next projection catalog");
     const projectedId = expectDefined(
-      restored.entries.find((entry) => entry.name === projected.name),
-      "restored projected entry",
+      nextCatalog.entries.find((entry) => entry.name === projected.name),
+      "next projected entry",
     ).id;
 
     const runtime = new ToolSearchRuntime(
@@ -3953,7 +4099,7 @@ describe("Tool Search", () => {
     expect(shadowing.execute).not.toHaveBeenCalled();
   });
 
-  it("does not reuse snapshots for prewrapped input tools across runs", async () => {
+  it("binds prewrapped input tools to their current run", async () => {
     const codeTool = fakeTool(TOOL_SEARCH_CODE_MODE_TOOL_NAME, "code mode");
     const config = { tools: { toolSearch: true } } as never;
     const sessionId = "session-prewrapped-tool";
@@ -4074,7 +4220,7 @@ describe("Tool Search", () => {
     ]);
   });
 
-  it("reuses fresh MCP wrappers while executing the current run wrapper", async () => {
+  it("registers fresh MCP wrappers and executes the current run wrapper", async () => {
     const codeTool = fakeTool(TOOL_SEARCH_CODE_MODE_TOOL_NAME, "code mode");
     const config = { tools: { toolSearch: true } } as never;
     const sessionId = "session-mcp-wrapper-reuse";
@@ -4158,7 +4304,7 @@ describe("Tool Search", () => {
       catalogRef: secondRef,
       toolHookContext: { sessionId, runId: "run-mcp-2" },
     });
-    expect(second.catalogReused).toBe(true);
+    expect(second.catalogReused).toBe(false);
 
     const runtime = new ToolSearchRuntime(
       { catalogRef: secondRef },
@@ -4227,7 +4373,7 @@ describe("Tool Search", () => {
     expect(second.catalogReused).toBe(false);
   });
 
-  it("degrades to a miss when a tool disappears from the current run", () => {
+  it("registers only tools present in the current run", () => {
     const codeTool = fakeTool(TOOL_SEARCH_CODE_MODE_TOOL_NAME, "code mode");
     const config = { tools: { toolSearch: true } } as never;
     const sessionId = "session-tool-removed";

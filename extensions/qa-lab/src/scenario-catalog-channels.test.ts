@@ -3,7 +3,6 @@ import { createQaBusState } from "./bus-state.js";
 import {
   readQaScenarioById,
   readQaScenarioExecutionConfig,
-  readQaScenarioPack,
   validateQaScenarioExecutionConfig,
 } from "./scenario-catalog.js";
 import { runLoadedScenarioFlow } from "./scenario-flow-runner.test-support.js";
@@ -70,15 +69,6 @@ function runTelegramStreamingFinalScenario(params: {
 
 describe("qa scenario catalog channel contracts", () => {
   const agentRuntime = "agent-runtime";
-
-  it("classifies every current module flow intrinsically", () => {
-    const moduleFlows = readQaScenarioPack().scenarios.filter(
-      (scenario) => scenario.execution.flowKind === "module",
-    );
-
-    expect(moduleFlows).toHaveLength(146);
-    expect(moduleFlows.every((scenario) => scenario.execution.flow)).toBe(true);
-  });
 
   it("routes native command session targeting through Crabline Telegram", () => {
     const scenario = readQaScenarioById("native-command-session-target");
@@ -194,6 +184,7 @@ describe("qa scenario catalog channel contracts", () => {
       "matrix-mxid-prefixed-command-block",
       "slack-codex-approval-exec-native",
       "slack-codex-approval-plugin-native",
+      "slack-progress-commentary-verbose-full",
     ]) {
       const scenario = requireFlowScenario(readQaScenarioById(scenarioId));
       expect(scenario.execution.flowKind, scenarioId).toBe("module");
@@ -202,6 +193,29 @@ describe("qa scenario catalog channel contracts", () => {
         scenarioId,
       ).toBeUndefined();
     }
+  });
+
+  it("binds current-source thread receipt proof to the QA Gateway lane", () => {
+    const scenario = requireFlowScenario(
+      readQaScenarioById("thread-reply-current-source-delivery"),
+    );
+    const flow = JSON.stringify(scenario.execution.flow);
+
+    expect(scenario.execution.channel).toBe("qa-channel");
+    expect(scenario.gatewayConfigPatch).toMatchObject({
+      messages: { groupChat: { visibleReplies: "automatic" } },
+      tools: { alsoAllow: ["message"] },
+      agents: { entries: { qa: { tools: { alsoAllow: ["message"] } } } },
+    });
+    expect(scenario.execution.config).toMatchObject({ duplicateWindowMs: 2000 });
+    expect(flow).toContain("request.plannedToolArgs?.action === 'thread-reply'");
+    expect(flow).toContain("readSessionTranscriptSummary");
+    expect(flow).toContain("summary.currentSourceToolDeliveries?.find");
+    expect(flow).toContain("turnOutbound.length === 1");
+    expect(flow).toContain("divergentOutbound.length === 2");
+    expect(flow).toContain("return messages.length === 2 ? messages : undefined");
+    expect(flow).toContain("QA-THREAD-RECEIPT-TOOL-OK");
+    expect(flow).toContain("QA-THREAD-RECEIPT-FINAL-OK");
   });
 
   it("keeps the Teams final-dedupe proof on the real Gateway transport", () => {
@@ -284,15 +298,29 @@ describe("qa scenario catalog channel contracts", () => {
     expect(flow).toContain("env.gateway.call('tasks.list'");
     expect(flow).toContain("task.title === `qa-terminal-${caseName}`");
     expect(flow).toContain("terminalTask.status === 'completed'");
-    expect(flow).toContain("emptyTask.status === 'completed'");
-    expect(flow).toContain("emptyTask.terminalOutcome === 'blocked'");
     expect(flow).toContain("task.deliveryStatus === 'delivered'");
     expect(flow).toContain("readSettledTerminalTask('restart')");
-    expect(flow).toContain("readSettledTerminalTask('empty')");
     expect(flow).toContain("postRestartUnexpectedPayloads.length === 0");
     expect(flow).toContain("env.providerMode === config.requiredProviderMode");
     expect(flow).not.toContain("interrupted by a gateway restart");
-    expect(flow).toContain("verdicts.length === 5");
+    expect(flow).toContain("verdicts.length === 4");
+    expect(flow).not.toContain('"call":"sleep"');
+  });
+
+  it("proves empty subagent completion from durable non-delivery state", () => {
+    const scenario = requireFlowScenario(
+      readQaScenarioById("subagent-empty-completion-non-delivery"),
+    );
+    const flow = JSON.stringify(scenario.execution.flow);
+
+    expect(scenario.execution.providerMode).toBe("mock-openai");
+    expect(flow).toContain("task.deliveryStatus === 'not_applicable'");
+    expect(flow).toContain("task.terminalOutcome === 'succeeded'");
+    expect(flow).toContain("emptyTerminalOutbound.length === 0");
+    expect(flow).toContain('"saveAs":"requesterAcknowledgements"');
+    expect(flow).toContain("requesterAcknowledgements.length === 1");
+    expect(flow).toContain("request.plannedToolName === 'write'");
+    expect(flow).toContain("postRestartCompletionRequests.length === 0");
     expect(flow).not.toContain('"call":"sleep"');
   });
 

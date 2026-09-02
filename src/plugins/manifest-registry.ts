@@ -45,12 +45,10 @@ import {
   normalizeManifestChannelCommandDefaults,
 } from "./manifest.js";
 import { checkMinHostVersion } from "./min-host-version.js";
-import { resolveTrustedSourceLinkedOfficialClawHubInstall } from "./official-external-install-records.js";
+import { isTrustedOfficialPluginInstallRecord } from "./official-external-install-records.js";
 import {
   getOfficialExternalPluginCatalogEntryForPackage,
   getOfficialExternalPluginCatalogManifest,
-  resolveOfficialExternalPluginId,
-  resolveOfficialExternalPluginInstall,
 } from "./official-external-plugin-catalog.js";
 import { satisfiesPluginApiRange, resolvePackagePluginApiRange } from "./package-compat.js";
 import { isPathInside } from "./path-safety.js";
@@ -428,6 +426,7 @@ function buildRecord(params: {
     id: pluginId,
     backupResources: params.manifest.backupResources,
     doctorContract: params.manifest.doctorContract,
+    doctorHealthChecks: params.manifest.doctorHealthChecks,
     sessionRouteStateOwners: params.manifest.sessionRouteStateOwners,
     name: normalizeOptionalString(params.manifest.name) ?? params.candidate.packageName,
     description:
@@ -627,16 +626,21 @@ function pushManifestCompatibilityDiagnostics(params: {
   pushNonBundledChannelConfigDescriptorDiagnostic(params);
 }
 
-function dedupePluginDiagnostics(diagnostics: PluginDiagnostic[]): PluginDiagnostic[] {
+function dedupePluginDiagnostics(
+  diagnostics: PluginDiagnostic[],
+  discoveryDiagnostics: ReadonlySet<PluginDiagnostic>,
+): PluginDiagnostic[] {
   const seen = new Set<string>();
   const deduped: PluginDiagnostic[] = [];
   for (const diagnostic of diagnostics) {
-    // Errors belong to their failed source; equivalent compatibility warnings remain owner-deduped.
+    // Discovery diagnostics belong to package roots; generated compatibility warnings belong to ids.
     const key = JSON.stringify([
       diagnostic.level,
       diagnostic.pluginId ?? "",
       diagnostic.message,
-      diagnostic.level === "error" ? (diagnostic.source ?? "") : "",
+      diagnostic.level === "error" || discoveryDiagnostics.has(diagnostic)
+        ? (diagnostic.source ?? "")
+        : "",
     ]);
     if (seen.has(key)) {
       continue;
@@ -712,17 +716,6 @@ function matchesInstalledPluginRecord(params: {
   );
 }
 
-function npmSpecMatchesPackage(value: string | undefined, packageName: string): boolean {
-  const normalized = value?.trim();
-  if (!normalized) {
-    return false;
-  }
-  if (normalized === packageName) {
-    return true;
-  }
-  return normalized.startsWith(`${packageName}@`);
-}
-
 function isTrustedOfficialPluginInstall(params: {
   pluginId: string;
   candidate: PluginCandidate;
@@ -747,42 +740,15 @@ function isTrustedOfficialPluginInstall(params: {
   if (!packageName) {
     return false;
   }
-  const catalogEntry = getOfficialExternalPluginCatalogEntryForPackage(packageName);
-  if (!catalogEntry || resolveOfficialExternalPluginId(catalogEntry) !== installOwner) {
-    return false;
-  }
-  const officialInstall = resolveOfficialExternalPluginInstall(catalogEntry);
   const installRecord = params.installRecords[installOwner];
-  if (!installRecord) {
-    return false;
-  }
-  const officialClawHubInstall =
-    installRecord.source === "clawhub"
-      ? resolveTrustedSourceLinkedOfficialClawHubInstall({
-          pluginId: installOwner,
-          record: installRecord,
-        })
-      : undefined;
-  // Local npm-pack archives also persist source="npm". Only registry installs
-  // may inherit catalog trust; local artifacts and source links stay untrusted.
-  if (
-    installRecord.source === "npm" &&
-    installRecord.artifactKind === undefined &&
-    installRecord.sourcePath === undefined &&
-    officialInstall?.npmSpec === packageName &&
-    [
-      installRecord.resolvedName,
-      installRecord.spec,
-      installRecord.resolvedSpec,
-      params.candidate.packageName,
-    ].some((value) => npmSpecMatchesPackage(value, packageName))
-  ) {
-    return true;
-  }
-  if (installRecord.source === "clawhub" && officialClawHubInstall) {
-    return true;
-  }
-  return false;
+  return Boolean(
+    installRecord &&
+    isTrustedOfficialPluginInstallRecord({
+      pluginId: installOwner,
+      packageName,
+      record: installRecord,
+    }),
+  );
 }
 
 function resolveDuplicatePrecedenceRank(params: {
@@ -919,7 +885,8 @@ export function loadPluginManifestRegistryCore(
         env,
         installRecords: getInstallRecords(),
       }));
-  const diagnostics: PluginDiagnostic[] = [...discovery.diagnostics];
+  const discovered = new Set(discovery.diagnostics);
+  const diagnostics: PluginDiagnostic[] = [...discovered];
   const candidates: PluginCandidate[] = discovery.candidates;
   const records: PluginManifestRecord[] = [];
   const seenIds = new Map<string, SeenIdEntry>();
@@ -1172,7 +1139,7 @@ export function loadPluginManifestRegistryCore(
   }
 
   const plugins = rejectCaseFoldedIdCollisions(records, diagnostics);
-  const registry = { plugins, diagnostics: dedupePluginDiagnostics(diagnostics) };
+  const registry = { plugins, diagnostics: dedupePluginDiagnostics(diagnostics, discovered) };
   return registry;
 }
 

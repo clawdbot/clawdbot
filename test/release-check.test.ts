@@ -36,7 +36,6 @@ import {
   createPackedPluginSdkTypescriptSmokeProject,
   createPackedCompletionSmokeEnv,
   createPackedCliSmokeEnv,
-  createPackedBundledPluginPostinstallEnv,
   MAX_CRITICAL_PLUGIN_SDK_ENTRYPOINT_BYTES,
   PACKED_BUNDLED_RUNTIME_DEPS_REPAIR_ARGS,
   PACKED_CLI_SMOKE_COMMANDS,
@@ -886,7 +885,6 @@ describe("createPackedPluginSdkTypescriptSmokeProject", () => {
       expect(source).toContain('"openclaw/plugin-sdk/channel-entry-contract"');
       expect(source).toContain('"openclaw/plugin-sdk/config-contracts"');
       expect(source).toContain('"openclaw/plugin-sdk/runtime-env"');
-      expect(source).toContain('"openclaw/plugin-sdk/conversation-binding-inspection-runtime"');
       expect(source).toContain("type PublicPluginSdkModules = [");
       expect(source).not.toContain("TelegramAccountConfig");
       expect(source).not.toContain("openclaw/plugin-sdk/channel-contract-testing");
@@ -1009,14 +1007,5 @@ describe("collectCriticalPluginSdkEntrypointSizeErrors", () => {
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
-  });
-});
-
-describe("createPackedBundledPluginPostinstallEnv", () => {
-  it("keeps packed postinstall on the lazy bundled dependency path", () => {
-    expect(createPackedBundledPluginPostinstallEnv({ PATH: "/usr/bin" })).toEqual({
-      PATH: "/usr/bin",
-      OPENCLAW_DISABLE_BUNDLED_ENTRY_SOURCE_FALLBACK: "1",
-    });
   });
 });

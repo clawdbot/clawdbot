@@ -117,8 +117,6 @@ describe("opencode-go provider plugin", () => {
     }
     expect(mediaProvider.capabilities).toEqual(["image"]);
     expect(mediaProvider.defaultModels).toEqual({ image: "kimi-k2.6" });
-    expect(typeof mediaProvider.describeImage).toBe("function");
-    expect(typeof mediaProvider.describeImages).toBe("function");
   });
 
   it("owns passthrough-gemini replay policy for Gemini-backed models", async () => {

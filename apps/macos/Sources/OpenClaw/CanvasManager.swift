@@ -263,17 +263,3 @@ final class CanvasManager {
         return fm.fileExists(atPath: b.path)
     }
 }
-
-#if DEBUG
-extension CanvasManager {
-    var _testPanelWindowIsVisible: Bool? {
-        self.panelController?.window?.isVisible
-    }
-
-    func _testResetPanel() {
-        self.panelController?.close()
-        self.panelController = nil
-        self.panelSessionKey = nil
-    }
-}
-#endif

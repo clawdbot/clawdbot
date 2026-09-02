@@ -1,6 +1,6 @@
 // Process supervisor tests cover lifecycle, restart, and termination behavior.
 import { performance } from "node:perf_hooks";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { mockProcessPlatform } from "../../test-utils/vitest-spies.js";
 import {
@@ -28,9 +28,12 @@ vi.mock("./adapters/pty.js", () => ({
 let createProcessSupervisor: typeof import("./supervisor.js").createProcessSupervisor;
 
 describe("process supervisor", () => {
-  beforeEach(async () => {
+  beforeAll(async () => {
     vi.resetModules();
     ({ createProcessSupervisor } = await import("./supervisor.js"));
+  });
+
+  beforeEach(() => {
     createChildAdapterMock.mockReset();
     createPtyAdapterMock.mockReset();
     vi.useRealTimers();
@@ -181,7 +184,7 @@ describe("process supervisor", () => {
               sessionId: "cancel-starting",
               backendId: "test",
               mode: "pty",
-              ptyCommand: "printf cancelled",
+              argv: ["/bin/sh", "-c", "printf cancelled"],
               scopeKey: "scope:cancel-starting",
             })
           : spawnChild(supervisor, {
@@ -208,6 +211,69 @@ describe("process supervisor", () => {
       });
     },
   );
+
+  it("fences new runs and drains an unscoped startup during shutdown", async () => {
+    const adapter = createStubChildAdapter({
+      onKill: (signal, current) => {
+        current.settle(null, signal ?? "SIGTERM");
+      },
+    });
+    const startup = createDeferred<StubChildAdapter>();
+    createChildAdapterMock.mockReturnValueOnce(startup.promise);
+    const supervisor = createProcessSupervisor();
+    const pendingRun = spawnChild(supervisor, {
+      runId: "shutdown-starting",
+      sessionId: "shutdown-starting",
+      argv: createSilentIdleArgv(),
+    });
+
+    const shutdown = supervisor.shutdown();
+    await expect(
+      spawnChild(supervisor, {
+        runId: "shutdown-late",
+        sessionId: "shutdown-late",
+        argv: createSilentIdleArgv(),
+      }),
+    ).rejects.toThrow("process supervisor is shut down");
+    expect(createChildAdapterMock).toHaveBeenCalledTimes(1);
+
+    startup.resolve(adapter);
+    const run = await pendingRun;
+    await expect(shutdown).resolves.toBeUndefined();
+
+    expect(adapter.killMock).toHaveBeenCalledWith("SIGTERM");
+    await expect(run.wait()).resolves.toMatchObject({ reason: "manual-cancel" });
+  });
+
+  it("keeps shutdown fenced when live ownership extinction fails", async () => {
+    const extinction = createDeferred();
+    const adapter = createStubChildAdapter({
+      onKill: (signal, current) => {
+        current.settle(null, signal ?? "SIGTERM");
+      },
+    });
+    adapter.waitForExtinction = () => extinction.promise;
+    createChildAdapterMock.mockResolvedValueOnce(adapter);
+    const supervisor = createProcessSupervisor();
+    await spawnChild(supervisor, {
+      runId: "shutdown-failed-extinction",
+      sessionId: "shutdown-failed-extinction",
+      argv: createSilentIdleArgv(),
+    });
+
+    const shutdown = supervisor.shutdown();
+    extinction.reject(new Error("owner extinction failed"));
+
+    await expect(shutdown).rejects.toThrow("owner extinction failed");
+    await expect(
+      spawnChild(supervisor, {
+        runId: "shutdown-after-failed-extinction",
+        sessionId: "shutdown-after-failed-extinction",
+        argv: createSilentIdleArgv(),
+      }),
+    ).rejects.toThrow("process supervisor is shut down");
+    expect(createChildAdapterMock).toHaveBeenCalledOnce();
+  });
 
   it("cancels every starting scoped process without canceling a later arrival", async () => {
     const runCount = 16;

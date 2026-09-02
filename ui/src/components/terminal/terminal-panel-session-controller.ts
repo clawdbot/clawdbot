@@ -217,6 +217,9 @@ export class TerminalPanelSessionController
       this.host.client !== null &&
       this.host.client === this.activeClient &&
       this.host.available &&
+      // A lazy upgrade also mounts the closed shell. Only the visible owner
+      // may consume intent; a viewport-less boot would discard it as failed.
+      this.host.terminalPanelOpen &&
       this.host.isConnected
     );
   }

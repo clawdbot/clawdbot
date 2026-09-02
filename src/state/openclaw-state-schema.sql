@@ -39,6 +39,47 @@ CREATE TABLE IF NOT EXISTS skill_usage (
 CREATE INDEX IF NOT EXISTS idx_skill_usage_key
   ON skill_usage(skill_key, skill_file);
 
+-- Profile-owned skill library: additive, absent until first publication/import.
+CREATE TABLE IF NOT EXISTS skill_library_entries (
+  skill_id TEXT NOT NULL PRIMARY KEY,
+  owner_profile_id TEXT,
+  author_profile_id TEXT NOT NULL,
+  slug TEXT NOT NULL,
+  current_revision TEXT NOT NULL,
+  shared INT NOT NULL,
+  enabled INT NOT NULL,
+  removed INT NOT NULL,
+  created_at INT NOT NULL,
+  updated_at INT NOT NULL
+) STRICT;
+CREATE TABLE IF NOT EXISTS skill_library_revisions (
+  skill_id TEXT NOT NULL,
+  revision TEXT NOT NULL,
+  description TEXT NOT NULL,
+  files_json TEXT NOT NULL,
+  created_at INT NOT NULL,
+  PRIMARY KEY (skill_id, revision)
+) STRICT;
+CREATE TABLE IF NOT EXISTS skill_library_events (
+  event_id TEXT NOT NULL PRIMARY KEY,
+  skill_id TEXT NOT NULL,
+  revision TEXT NOT NULL,
+  action TEXT NOT NULL,
+  actor_profile_id TEXT NOT NULL,
+  created_at INT NOT NULL
+) STRICT;
+CREATE TABLE IF NOT EXISTS skill_library_uploads (
+  upload_id TEXT NOT NULL PRIMARY KEY,
+  owner_profile_id TEXT NOT NULL,
+  slug TEXT NOT NULL,
+  size_bytes INT NOT NULL,
+  sha256 TEXT NOT NULL,
+  archive_blob BLOB NOT NULL,
+  expires_at INT NOT NULL,
+  published_skill_id TEXT
+) STRICT;
+-- End profile-owned skill library.
+
 CREATE TABLE IF NOT EXISTS skill_workshop_proposals (
   proposal_id TEXT NOT NULL PRIMARY KEY,
   record_json TEXT NOT NULL,
@@ -804,12 +845,29 @@ CREATE TABLE IF NOT EXISTS web_push_subscriptions (
   endpoint TEXT NOT NULL,
   p256dh TEXT NOT NULL,
   auth TEXT NOT NULL,
+  device_id TEXT,
+  user_profile_id TEXT,
+  preferences_json TEXT,
   created_at_ms INTEGER NOT NULL,
   updated_at_ms INTEGER NOT NULL
 ) STRICT;
 
 CREATE INDEX IF NOT EXISTS idx_web_push_subscriptions_updated
   ON web_push_subscriptions(updated_at_ms DESC, subscription_id);
+
+CREATE TABLE IF NOT EXISTS web_push_approval_deliveries (
+  approval_id TEXT NOT NULL
+    REFERENCES operator_approvals(approval_id) ON DELETE CASCADE,
+  subscription_id TEXT NOT NULL
+    REFERENCES web_push_subscriptions(subscription_id) ON DELETE CASCADE,
+  device_id TEXT NOT NULL,
+  user_profile_id TEXT,
+  prepared_at_ms INTEGER NOT NULL,
+  PRIMARY KEY (approval_id, subscription_id)
+) STRICT;
+
+CREATE INDEX IF NOT EXISTS idx_web_push_approval_deliveries_subscription
+  ON web_push_approval_deliveries(subscription_id, approval_id);
 
 CREATE TABLE IF NOT EXISTS apns_registrations (
   node_id TEXT NOT NULL PRIMARY KEY,
@@ -1549,8 +1607,6 @@ CREATE INDEX IF NOT EXISTS idx_subagent_runs_controller_session_key
 CREATE TABLE IF NOT EXISTS current_conversation_bindings (
   binding_key TEXT NOT NULL PRIMARY KEY,
   binding_id TEXT NOT NULL,
-  target_agent_id TEXT NOT NULL,
-  target_session_id TEXT,
   target_session_key TEXT NOT NULL,
   channel TEXT NOT NULL,
   account_id TEXT NOT NULL,
@@ -1567,7 +1623,7 @@ CREATE TABLE IF NOT EXISTS current_conversation_bindings (
 ) STRICT;
 
 CREATE INDEX IF NOT EXISTS idx_current_conversation_bindings_target
-  ON current_conversation_bindings(target_agent_id, target_session_key, updated_at DESC, binding_key);
+  ON current_conversation_bindings(target_session_key, updated_at DESC, binding_key);
 CREATE INDEX IF NOT EXISTS idx_current_conversation_bindings_conversation
   ON current_conversation_bindings(channel, account_id, conversation_kind, conversation_id);
 CREATE INDEX IF NOT EXISTS idx_current_conversation_bindings_expires
@@ -2159,6 +2215,55 @@ CREATE TABLE IF NOT EXISTS github_publication_requests (
 
 CREATE INDEX IF NOT EXISTS idx_github_publication_requests_pending
   ON github_publication_requests(status, updated_at_ms, request_id);
+
+-- Personal requests cannot be interpreted or resumed by older shared publishers.
+CREATE TABLE IF NOT EXISTS github_personal_publication_requests (
+  request_id TEXT NOT NULL PRIMARY KEY CHECK (length(request_id) = 36),
+  owner_profile_id TEXT NOT NULL CHECK (length(owner_profile_id) BETWEEN 1 AND 128),
+  connection_generation TEXT NOT NULL CHECK (length(connection_generation) = 36),
+  idempotency_key TEXT NOT NULL CHECK (length(idempotency_key) BETWEEN 1 AND 128),
+  request_digest TEXT NOT NULL CHECK (length(request_digest) = 64),
+  session_id TEXT NOT NULL CHECK (length(session_id) BETWEEN 1 AND 128),
+  session_key TEXT NOT NULL CHECK (length(session_key) BETWEEN 1 AND 1024),
+  agent_id TEXT NOT NULL CHECK (length(agent_id) BETWEEN 1 AND 128),
+  worktree_id TEXT NOT NULL CHECK (length(worktree_id) BETWEEN 1 AND 128),
+  repository_fingerprint TEXT NOT NULL CHECK (length(repository_fingerprint) BETWEEN 1 AND 256),
+  identity_source TEXT NOT NULL CHECK (identity_source = 'personal'),
+  identity_profile_id TEXT NOT NULL CHECK (length(identity_profile_id) = 36),
+  identity_account_id INTEGER NOT NULL CHECK (identity_account_id >= 1),
+  identity_login TEXT NOT NULL CHECK (length(identity_login) BETWEEN 1 AND 39),
+  title TEXT CHECK (title IS NULL OR length(title) BETWEEN 1 AND 256),
+  body TEXT CHECK (body IS NULL OR length(body) BETWEEN 1 AND 8192),
+  status TEXT NOT NULL CHECK (status IN ('requested', 'publishing', 'needs_confirmation', 'published', 'failed')),
+  gateway_instance_id TEXT CHECK (gateway_instance_id IS NULL OR length(gateway_instance_id) BETWEEN 1 AND 128),
+  execution_id TEXT CHECK (execution_id IS NULL OR length(execution_id) = 36),
+  last_effect TEXT CHECK (last_effect IS NULL OR last_effect IN ('push', 'pull_request')),
+  effect_state TEXT CHECK (effect_state IS NULL OR effect_state IN ('dispatched', 'observed')),
+  push_repository TEXT NOT NULL CHECK (length(push_repository) BETWEEN 3 AND 256),
+  repository TEXT NOT NULL CHECK (length(repository) BETWEEN 3 AND 256),
+  branch TEXT NOT NULL CHECK (length(branch) BETWEEN 1 AND 256),
+  base_branch TEXT NOT NULL CHECK (length(base_branch) BETWEEN 1 AND 256),
+  source_head_commit TEXT NOT NULL CHECK (length(source_head_commit) IN (40, 64)),
+  source_index_tree TEXT NOT NULL CHECK (length(source_index_tree) IN (40, 64)),
+  workspace_tree TEXT NOT NULL CHECK (length(workspace_tree) IN (40, 64)),
+  head_commit TEXT CHECK (head_commit IS NULL OR length(head_commit) IN (40, 64)),
+  pull_request_url TEXT CHECK (pull_request_url IS NULL OR length(pull_request_url) BETWEEN 1 AND 2048),
+  error_code TEXT CHECK (error_code IS NULL OR length(error_code) BETWEEN 1 AND 64),
+  next_action TEXT CHECK (next_action IS NULL OR length(next_action) BETWEEN 1 AND 1024),
+  created_at_ms INTEGER NOT NULL CHECK (created_at_ms >= 0),
+  updated_at_ms INTEGER NOT NULL CHECK (updated_at_ms >= created_at_ms),
+  reported_at_ms INTEGER,
+  UNIQUE (owner_profile_id, session_id, idempotency_key),
+  CHECK ((status = 'publishing' AND gateway_instance_id IS NOT NULL AND execution_id IS NOT NULL) OR status <> 'publishing'),
+  CHECK ((last_effect IS NULL AND effect_state IS NULL) OR (last_effect IS NOT NULL AND effect_state IS NOT NULL)),
+  CHECK ((status = 'published' AND pull_request_url IS NOT NULL AND head_commit IS NOT NULL AND error_code IS NULL AND next_action IS NULL)
+    OR (status = 'failed' AND error_code IS NOT NULL AND next_action IS NOT NULL)
+    OR (status IN ('requested', 'publishing', 'needs_confirmation') AND error_code IS NULL AND next_action IS NULL))
+) STRICT;
+CREATE INDEX IF NOT EXISTS idx_github_personal_publication_owner_session
+  ON github_personal_publication_requests(owner_profile_id, session_id, created_at_ms);
+CREATE INDEX IF NOT EXISTS idx_github_personal_publication_pending
+  ON github_personal_publication_requests(status, updated_at_ms, request_id);
 
 -- One active, opaque admission credential per worker environment. Plaintext
 -- may be retried until delivery acknowledgement but never enters durable state.

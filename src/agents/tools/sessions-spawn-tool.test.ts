@@ -518,24 +518,30 @@ describe("sessions_spawn tool", () => {
     };
 
     expect(schema.properties?.visible?.description).toBe(
-      "Durable visible session: coding/multi-step/keepable results; works without UI; subagent only; omit mode/thread/thinking/lightContext/attachments/attachAs.",
+      "Durable visible session: coding/multi-step/keepable results; works without UI; subagent only. Default run mode and empty attachment fields are accepted; no thread/thinking/lightContext or attachment staging.",
     );
     expect(schema.properties?.cwd?.description).toContain(
       "outside configured agent workspaces require operator.admin",
     );
     expect(tool.description).toContain("`visible=true`: durable visible session");
     expect(tool.description).toContain("Default for coding, multi-step work");
-    expect(tool.description).toContain('no `mode="run"`');
+    expect(tool.description).toContain('`mode="run"` is also accepted');
+    expect(tool.description).toContain(
+      "`attachments=[]` and omitted/blank `attachAs.mountPath` are accepted",
+    );
+    expect(tool.description).toContain("nonempty attachment staging is unsupported");
     expect(tool.description).toContain("inherits the caller tool-policy ceiling");
     expect(tool.description).toContain("session URL on the first line");
     expect(tool.description).toContain("`Owner: <label>` on the second line");
     expect(tool.description).toContain("`tools.sessions.visibility`");
     expect(schema.properties?.runtime?.description).toContain("visible=true");
-    expect(schema.properties?.mode?.description).toContain("Omit with visible=true");
+    expect(schema.properties?.mode?.description).toContain('accept omitted/default "run"');
     expect(schema.properties?.lightContext?.description).toContain("unavailable with visible=true");
-    expect(schema.properties?.attachments?.description).toContain("unavailable with visible=true");
-    expect(schema.properties?.attachAs?.description).toContain("unavailable with visible=true");
-    expect(schema.properties?.category?.description).toContain("leave it ungrouped");
+    expect(schema.properties?.attachments?.description).toContain("accepts only an empty array");
+    expect(schema.properties?.attachAs?.description).toContain(
+      "only an omitted or blank mountPath",
+    );
+    expect(schema.properties?.group?.description).toContain("leave it ungrouped");
     expect(schema.properties?.mode?.enum).toEqual(["run"]);
     expect(schema.properties?.mode?.anyOf).toBeUndefined();
     expect(schema.properties?.worktree).toBeDefined();
@@ -577,7 +583,7 @@ describe("sessions_spawn tool", () => {
           await tool.execute("visible", {
             task: "inspect issue",
             label: "Issue review",
-            category: "P1 issues from beta feedback",
+            group: "P1 issues from beta feedback",
             model: "anthropic/claude-sonnet-4-6",
             cwd: dir,
             context: "fork",
@@ -680,34 +686,46 @@ describe("sessions_spawn tool", () => {
     },
   );
 
-  it.each([{ category: undefined }, { category: "" }, { category: " \t\n " }])(
-    "keeps a visible session ungrouped when category is $category",
-    async ({ category }) => {
-      const callGateway = vi.fn(async () => ({
-        key: "agent:main:dashboard:child",
-        runStarted: true,
-        runId: "run-visible",
-      }));
-      const tool = createSessionsSpawnTool({
-        agentSessionKey: "agent:main:main",
-        config: { agents: { list: [{ id: "main" }] } },
-        callGateway: callGateway as never,
-        registerRun: vi.fn(),
-        countActiveRuns: () => 0,
-      });
-
-      await tool.execute("visible-ungrouped", {
-        task: "inspect issue",
-        visible: true,
-        ...(category !== undefined ? { category } : {}),
-      });
-
-      expect(callGateway).toHaveBeenCalledWith(
-        "sessions.create",
-        expect.not.objectContaining({ category: expect.anything() }),
-      );
+  it.each([
+    { label: "omitted", optional: {} },
+    { label: "empty group", optional: { group: "" } },
+    { label: "whitespace group", optional: { group: " \t\n " } },
+    { label: "empty attachment hint", optional: { mode: "run", attachments: [], attachAs: {} } },
+    {
+      label: "empty attachment mount path",
+      optional: { mode: "run", attachments: [], attachAs: { mountPath: "" } },
     },
-  );
+    {
+      label: "whitespace attachment mount path",
+      optional: { mode: "run", attachments: [], attachAs: { mountPath: " \t\n " } },
+    },
+  ])("creates an ungrouped visible session with $label optional values", async ({ optional }) => {
+    const callGateway = vi.fn(async () => ({
+      key: "agent:main:dashboard:child",
+      runStarted: true,
+      runId: "run-visible",
+    }));
+    const tool = createSessionsSpawnTool({
+      agentSessionKey: "agent:main:main",
+      config: { agents: { list: [{ id: "main" }] } },
+      callGateway: callGateway as never,
+      registerRun: vi.fn(),
+      countActiveRuns: () => 0,
+    });
+
+    const result = await tool.execute("visible-ungrouped", {
+      task: "inspect issue",
+      visible: true,
+      ...optional,
+    });
+
+    expect(result.details).toMatchObject({ status: "accepted", runId: "run-visible" });
+    expect(callGateway).toHaveBeenCalledOnce();
+    expect(callGateway).toHaveBeenCalledWith(
+      "sessions.create",
+      expect.not.objectContaining({ category: expect.anything() }),
+    );
+  });
 
   it("explains an out-of-workspace visible cwd denial without suggesting a CLI fallback", async () => {
     await withTestDir({ prefix: "openclaw-visible-spawn-external-cwd-" }, async (workspace) => {
@@ -857,10 +875,10 @@ describe("sessions_spawn tool", () => {
       other: hoisted.spawnAcpDirectMock,
     },
     { runtime: "acp", spawn: hoisted.spawnAcpDirectMock, other: hoisted.spawnSubagentDirectMock },
-  ])("$runtime category preflight", ({ runtime, spawn, other }) => {
+  ])("$runtime group preflight", ({ runtime, spawn, other }) => {
     beforeEach(() => registerAcpBackendForTest());
 
-    it.each([undefined, "", " \t\n "])("dispatches once with category %j", async (category) => {
+    it.each([undefined, "", " \t\n "])("dispatches once with group %j", async (group) => {
       const callGateway = vi.fn();
       const tool = createSessionsSpawnTool({ agentSessionKey: "agent:main:main", callGateway });
       const request = {
@@ -872,10 +890,10 @@ describe("sessions_spawn tool", () => {
         mode: "run",
       };
 
-      const result = await tool.execute("hidden-category", {
+      const result = await tool.execute("hidden-group", {
         ...request,
         visible: false,
-        ...(category !== undefined ? { category } : {}),
+        ...(group !== undefined ? { group } : {}),
       });
 
       expect(result.details).toMatchObject({ status: "accepted", runId: `run-${runtime}` });
@@ -888,7 +906,7 @@ describe("sessions_spawn tool", () => {
     });
 
     it.each([
-      { category: "Projects" },
+      { group: "Projects" },
       { worktree: true },
       { worktreeName: "repair" },
       { worktreeBaseRef: "main" },
@@ -1166,7 +1184,7 @@ describe("sessions_spawn tool", () => {
         runtime: "acp",
         thinking: "high",
         thread: true,
-        mode: "run",
+        mode: "session",
         lightContext: true,
         attachments: [{ name: "note.txt", content: "hello" }],
         attachAs: { mountPath: "inputs" },
@@ -1255,6 +1273,107 @@ describe("sessions_spawn tool", () => {
     });
     expect(callGateway).not.toHaveBeenCalled();
   });
+
+  it.each(["inherit", "require"] as const)(
+    "admits a required parent's visible child with sandbox=%s while agent sandboxing is off",
+    async (sandbox) => {
+      await withTestDir({ prefix: "openclaw-visible-required-parent-" }, async (dir) => {
+        const storePath = path.join(dir, "sessions.json");
+        const parentSessionKey = "agent:main:main";
+        await upsertSessionEntryCore(
+          { agentId: "main", sessionKey: parentSessionKey, storePath },
+          {
+            sessionId: "required-parent",
+            updatedAt: 1,
+            createdVia: "operator",
+            createdActor: { type: "human", source: "profile", id: "guest-profile" },
+            sandbox: "required",
+          },
+        );
+        hoisted.inProcessCreationMock.mockResolvedValue({
+          key: "agent:main:dashboard:required-child",
+          runStarted: true,
+          runId: "required-visible-run",
+        });
+        const tool = createSessionsSpawnTool({
+          agentSessionKey: parentSessionKey,
+          config: {
+            session: { store: storePath },
+            agents: {
+              defaults: { sandbox: { mode: "off" } },
+              entries: { main: { workspace: dir } },
+            },
+          },
+          countActiveRuns: () => 0,
+        });
+
+        const result = await tool.execute("required-visible-spawn", {
+          task: "inspect the project in an isolated child",
+          visible: true,
+          sandbox,
+        });
+
+        expect(result.details).toMatchObject({
+          status: "accepted",
+          childSessionKey: "agent:main:dashboard:required-child",
+        });
+        expect(hoisted.inProcessCreationMock).toHaveBeenCalledWith(
+          "sessions.create",
+          expect.objectContaining({ parentSessionKey }),
+          expect.objectContaining({ requesterSessionKey: parentSessionKey }),
+        );
+      });
+    },
+  );
+
+  it.each(["off", "all"] as const)(
+    "uses the global requester sandbox mode %s for visible children",
+    async (sandboxMode) => {
+      const callGateway = vi.fn().mockResolvedValue({
+        key: "agent:worker:dashboard:global-child",
+        runStarted: true,
+        runId: "global-visible-run",
+      });
+      const tool = createSessionsSpawnTool({
+        agentSessionKey: "global",
+        requesterAgentIdOverride: "research",
+        config: {
+          session: { scope: "global" },
+          agents: {
+            ownership: "explicit",
+            entries: {
+              research: { sandbox: { mode: sandboxMode }, subagents: { allowAgents: ["worker"] } },
+              worker: {},
+            },
+          },
+        },
+        callGateway,
+        registerRun: vi.fn(),
+        countActiveRuns: () => 0,
+      });
+
+      const result = await tool.execute("global-visible", {
+        task: "inspect",
+        visible: true,
+        agentId: "worker",
+      });
+
+      expect(result.details).toMatchObject({
+        status: sandboxMode === "all" ? "forbidden" : "accepted",
+      });
+      if (sandboxMode === "all") {
+        expect(result.details).toMatchObject({
+          error: "Sandboxed sessions cannot spawn unsandboxed sessions.",
+        });
+        expect(callGateway).not.toHaveBeenCalled();
+      } else {
+        expect(callGateway).toHaveBeenCalledWith(
+          "sessions.create",
+          expect.objectContaining({ agentId: "worker", parentSessionKey: "global" }),
+        );
+      }
+    },
+  );
 
   it("reserves visible child capacity before session creation", async () => {
     let resolveCreate!: (value: { key: string; runStarted: true; runId: string }) => void;
@@ -2570,13 +2689,14 @@ describe("sessions_spawn tool", () => {
     expect(runContext.agentSessionKey).toBe(runSessionKey);
   });
 
-  it("passes completionOwnerKey through to spawnSubagentDirect separately from agentSessionKey", async () => {
+  it("passes completion ownership and active thinking separately from agentSessionKey", async () => {
     const tool = createSessionsSpawnTool({
       agentSessionKey: "agent:main:telegram:default:direct:456",
       completionOwnerKey: "agent:main:main",
       agentChannel: "telegram",
       agentAccountId: "default",
       agentTo: "telegram:direct:456",
+      requesterThinkingLevel: "ultra",
     });
 
     await tool.execute("call-completion-owner", { task: "background work" });
@@ -2584,6 +2704,7 @@ describe("sessions_spawn tool", () => {
     const spawnContext = mockCallArg(hoisted.spawnSubagentDirectMock, 0, 1, "spawnSubagentDirect");
     expect(spawnContext.agentSessionKey).toBe("agent:main:telegram:default:direct:456");
     expect(spawnContext.completionOwnerKey).toBe("agent:main:main");
+    expect(spawnContext.requesterThinkingLevel).toBe("ultra");
   });
 
   it("forwards completionOwnerKey to the ACP registration pipeline", async () => {

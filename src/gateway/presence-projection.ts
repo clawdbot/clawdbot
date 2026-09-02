@@ -5,7 +5,7 @@ import { parseAgentSessionKey } from "../routing/session-key.js";
 import { authorizeOperatorScopesForRequiredScope, READ_SCOPE } from "./method-scopes.js";
 import { isGatewayClientProfilePending } from "./server-methods/gateway-client-identity.js";
 import type { GatewayClient } from "./server-methods/types.js";
-import { createSessionListEntryFilter, isGatewayAdmin } from "./session-sharing.js";
+import { isGatewayAdmin, prepareSessionSharing } from "./session-sharing.js";
 import {
   resolveGatewaySessionStoreTargetWithStore,
   type GatewaySessionStoreDiscoveryCache,
@@ -57,7 +57,7 @@ export function createPresenceRecipientProjection(params: {
       // Match session reads: an established admin grant does not depend on profile verification.
       isGatewayAdmin(client) || !isGatewayClientProfilePending(client);
     const entryFilter = canReadSessions
-      ? createSessionListEntryFilter({ cfg: params.cfg, client })
+      ? prepareSessionSharing({ cfg: params.cfg, client }).entryFilter
       : undefined;
     return params.presence.map((row) => {
       if (!row.watchedSessions) {

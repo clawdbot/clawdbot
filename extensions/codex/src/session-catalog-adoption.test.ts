@@ -3,6 +3,12 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   commandRpcMocks,
+  pinnedConnectionMocks,
+  createCodexSessionCatalogControlFactory,
+  fs,
+  os,
+  path,
+  tempDirs,
   transcriptMirrorMocks,
   CODEX_APP_SERVER_THREADS_LIST_COMMAND,
   listCodexSessionCatalog,
@@ -225,6 +231,69 @@ describe("Codex supervision catalog", () => {
 });
 
 describe("Codex supervision actions", () => {
+  it("imports an exact local source when broad native listing times out", async () => {
+    const home = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "codex-exact-import-")));
+    tempDirs.push(home);
+    const sessionsRoot = path.join(home, "sessions");
+    await fs.mkdir(sessionsRoot);
+    const rollout = path.join(sessionsRoot, "source.jsonl");
+    await fs.writeFile(
+      rollout,
+      `${JSON.stringify({
+        type: "session_meta",
+        payload: {
+          id: "thread-source",
+          source: "cli",
+          originator: "codex_cli_rs",
+        },
+      })}\n`,
+    );
+    const sourceThread = idleThread({
+      id: "thread-source",
+      source: "cli",
+      path: rollout,
+      turns: [],
+    });
+    let indexed = false;
+    pinnedConnectionMocks.request.mockImplementation(async ({ method, requestParams }) => {
+      if (method === "thread/read") {
+        indexed = true;
+        return { thread: sourceThread };
+      }
+      if (method === "thread/list" && requestParams.useStateDbOnly === true) {
+        return { data: indexed ? [sourceThread] : [] };
+      }
+      throw new Error("thread/list timed out");
+    });
+    const factory = createCodexSessionCatalogControlFactory({
+      getPluginConfig: () => ({}),
+      getRuntimeConfig: () => config,
+      env: { CODEX_HOME: home },
+    });
+    const source = factory.homesForAgent("main")[0]!;
+    const { runtime, createSessionEntry } = createRuntime();
+    const { api } = createGatewayApi(runtime);
+    await expect(
+      continueLocalCodexSession({
+        api,
+        bindingStore: createCodexTestBindingStore(),
+        config,
+        control: factory.forRequest("main", source),
+        threadId: sourceThread.id,
+        sourceHomeId: source.sourceHomeId,
+      }),
+    ).resolves.toMatchObject({ disposition: "forked" });
+    expect(createSessionEntry).toHaveBeenCalledOnce();
+    expect(transcriptMirrorMocks.importCodexThreadHistoryToTranscript).toHaveBeenCalledWith(
+      expect.objectContaining({ thread: sourceThread }),
+    );
+    expect(pinnedConnectionMocks.request.mock.calls.map(([request]) => request.method)).toEqual([
+      "thread/read",
+      "thread/list",
+      "thread/read",
+    ]);
+  });
+
   it("lists and adopts a local session under the retained compatibility owner", async () => {
     const runtimeConfig = compatibilityOwnerConfig();
     const { runtime, createSessionEntry } = createRuntime();
@@ -313,11 +382,12 @@ describe("Codex supervision actions", () => {
     ]);
     expect(control.withPinnedConnection).toHaveBeenCalledTimes(2);
     expect(createSessionEntry).toHaveBeenCalledOnce();
+    expect(createSessionEntry.mock.calls[0]?.[0]).not.toHaveProperty("label");
     expect(createSessionEntry).toHaveBeenCalledWith(
       expect.objectContaining({
         cfg: config,
         key: supervisionSessionInputKey("thread-1"),
-        label: "Continue native task",
+        displayName: "Continue native task",
         spawnedCwd: "/workspace/project",
         afterCreate: expect.any(Function),
         initialEntry: {
@@ -336,9 +406,10 @@ describe("Codex supervision actions", () => {
       }),
     );
     expect(transcriptMirrorMocks.importCodexThreadHistoryToTranscript).toHaveBeenCalledWith({
+      assertCurrent: expect.any(Function),
       thread: sourceThread,
       storePath: resolveStorePath(undefined, { agentId: "main" }),
-      sessionId: "openclaw-session-1",
+      sessionId: runtime.agent.session.getSessionEntry({ sessionKey: first.sessionKey })!.sessionId,
       sessionKey: first.sessionKey,
       agentId: "main",
       cwd: "/workspace/project",
@@ -349,7 +420,8 @@ describe("Codex supervision actions", () => {
     await expect(
       bindingStore.read(
         sessionBindingIdentity({
-          sessionId: "openclaw-session-1",
+          sessionId: runtime.agent.session.getSessionEntry({ sessionKey: first.sessionKey })!
+            .sessionId,
           sessionKey: first.sessionKey,
           config,
         }),
@@ -607,7 +679,8 @@ describe("Codex supervision actions", () => {
     expect(control.archiveThread).not.toHaveBeenCalled();
 
     const identity = sessionBindingIdentity({
-      sessionId: "openclaw-session-1",
+      sessionId: runtime.agent.session.getSessionEntry({ sessionKey: continued.sessionKey })!
+        .sessionId,
       sessionKey: continued.sessionKey,
       config,
     });

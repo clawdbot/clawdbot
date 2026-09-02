@@ -26,7 +26,6 @@ type GatewayChatUserTurnController = {
   persistBestEffort: () => Promise<void>;
   recorder: UserTurnTranscriptRecorder;
   replyContextFieldsPromise?: Promise<ChatSendReplyContextFields>;
-  setAcceptedSessionId: (sessionId: string) => void;
   setInputPromise: (input: Promise<UserTurnInput>) => void;
 };
 
@@ -35,6 +34,7 @@ export function createGatewayChatUserTurnController(params: {
   client: GatewayClient | null;
   request: NormalizedChatSendRequest;
   session: PreparedChatSendSession;
+  transcript?: Pick<UserTurnInput, "display" | "excludeFromContext">;
   startedAt: number;
   warn: (message: string) => void;
   assertGoalCurrent?: () => void;
@@ -45,6 +45,7 @@ export function createGatewayChatUserTurnController(params: {
       ? undefined
       : gatewayClientSenderFields(params.client).sender;
   const baseInput: UserTurnInput = {
+    ...params.transcript,
     ...(request.goalOperation?.action === "resume" ? { display: false } : {}),
     text: request.rawMessage,
     timestamp: session.now,
@@ -81,7 +82,6 @@ export function createGatewayChatUserTurnController(params: {
         }),
       )
     : Promise.resolve(baseInput);
-  let acceptedSessionId = admission.admittedSessionId;
   const recorder = createUserTurnTranscriptRecorder({
     ...(request.goalOperation
       ? {
@@ -96,21 +96,21 @@ export function createGatewayChatUserTurnController(params: {
     input: baseInput,
     resolveInput: () => inputPromise,
     target: () => {
-      const { storePath, store, entry } = loadSessionEntry(
-        session.sessionKey,
-        session.sessionLoadOptions,
-      );
-      const targetEntry = entry ?? admission.initialSessionEntry;
-      if (!targetEntry?.sessionId || targetEntry.sessionId !== acceptedSessionId) {
+      // Retain only the current binding; transcript writers recheck it at commit.
+      const { storePath, entry } = loadSessionEntry(session.sessionKey, {
+        ...session.sessionLoadOptions,
+        clone: false,
+      });
+      const sessionId = (entry ?? admission.initialSessionEntry)?.sessionId;
+      if (!sessionId || sessionId !== admission.sessionBinding.sessionId) {
         return undefined;
       }
       return {
-        sessionId: targetEntry.sessionId,
-        expectedSessionId: targetEntry.sessionId,
+        sessionId,
+        expectedSessionId: sessionId,
         initialSessionEntry: admission.initialSessionEntry,
         sessionKey: session.sessionKey,
-        sessionEntry: targetEntry,
-        sessionStore: store,
+        sessionEntry: undefined,
         storePath,
         agentId: session.agentId,
         config: session.cfg,
@@ -146,9 +146,6 @@ export function createGatewayChatUserTurnController(params: {
     },
     recorder,
     replyContextFieldsPromise,
-    setAcceptedSessionId: (sessionId) => {
-      acceptedSessionId = sessionId;
-    },
     setInputPromise: (input) => {
       const previousInputPromise = inputPromise;
       inputPromise = Promise.all([previousInputPromise, input]).then(([previous, next]) => ({

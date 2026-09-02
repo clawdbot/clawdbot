@@ -37,6 +37,11 @@ Choose the outcome from live GitHub state, current `main`, affected source and t
 2. **Confirmed issue:** Reproduce or otherwise prove the defect, trace the violated invariant to its producer or lifecycle owner, and implement the architectural root-cause fix when repair is authorized. Cover the original failure and affected sibling paths with focused regression tests and realistic behavior proof. Do not settle for a downstream guard, workaround, speculative fallback, or passing test that leaves the owner broken.
 3. **Confirmed bug-fix PR:** Independently prove both the defect and whether the proposed change repairs the root cause without regressions. If the PR is already the clean owner-boundary fix, verify and land it when authorized. If it is incomplete, in the wrong layer, needlessly complex, or only masks symptoms, rewrite/refactor the editable PR into the correct fix; verify the rewritten head and then land it. If the source branch cannot safely be edited, create an authorized replacement PR, preserve the original author's credit, and close the source only after the replacement exists. Never merge a speculative or merely plausible patch.
 
+Never squash a contributor-owned PR after maintainers replace its ancestry.
+Create a maintainer-owned replacement PR, link the original, and credit
+contributors with their public GitHub noreply address. Merge and rebase are not
+policy escapes.
+
 Prefer cleanup, deletion, coherent refactoring, and one canonical flow over additional branches, wrappers, fallbacks, or compatibility shims. Target net-neutral or net-negative **production** LOC; tests are counted separately and useful regression tests may grow freely. Inspect `git diff --numstat` before landing, report production and test deltas separately, and justify any unavoidable production growth with a concrete capability, ownership boundary, security invariant, or public/dependency contract.
 
 Honor the requested action boundary: a fix request authorizes scoped investigation, local edits, and verification; an explicit ship/land/merge request or autonomous repair sweep also authorizes the scoped publication, closing, and landing needed to finish it. An explicit request to autonomously process, resolve, or fix-and-land a named maintainer issue/PR queue is an authorized autonomous repair sweep, including necessary evidence-backed comments, closures, root-cause fixes, pushes, and landing for those items. Ordinary review-only, triage-only, listing, or landable-shortlist requests are read-only: they authorize neither local source edits nor GitHub writes, including labels, assignments, public comments, closures, pushes, or landing, unless separately authorized. For authorized end-to-end landing work, a review summary or unlanded local patch is not completion: finish with a proven already-fixed close, a verified root-cause repair landed, or a specific evidence, ownership, product, safety, or authorization blocker.
@@ -209,11 +214,11 @@ Output only qualifying candidates, with: ref, surface, proof, cause, fix sketch,
 - Then list findings first. If none, say `No blocking findings` or `No findings`.
 - Show size near the top as `Production LOC: +<additions>/-<deletions> (net <delta>) | Tests: +<additions>/-<deletions>`, classifying per-file `git diff --numstat` or live PR file stats. Optional aggregate PR totals never replace the production/test split; justify positive production growth.
 - Always answer: bug/behavior being fixed, PR/issue URL and affected surface, provenance for regressions when traceable, and best-fix verdict.
-- For bug/regression fixes, include a compact `Provenance:` line after cause/root-cause when a bounded history pass can identify it. Use `git log -S/-G`, `git blame`, linked PRs/issues, and tests.
-- Provenance must separate roles when they differ: blamed code author username, blamed PR author username, blamed PR merger/committer username, automerge trigger when known, current PR author username, PR number, and date. Do not collapse them into one "introduced by" actor.
-- If the blamed PR was merged by `clawsweeper[bot]` or another automation, identify the human trigger when practical. Check live PR timeline/comments first; if rate-limited, use gitcrawl/cache or public PR HTML. Look for maintainer command comments such as `@clawsweeper automerge`, `/landpr`, labels/events that armed automerge, and ClawSweeper status comments. Report `automerge triggered by @login`; if not found, say trigger unknown rather than naming the bot as the human decision-maker.
-- For any confirmed bug, run `git blame` on the implicated line(s) after identifying the root cause. Report who broke it as the blamed PR merger/committer, and also name the blamed code author. Include the PR number. If no PR is traceable, use the blamed commit as the provenance: commit SHA, date, and author username. Do not guess a merger or frame missing PR metadata as a separate finding.
-- Phrase provenance as `introduced by`, `made visible by`, or `carried forward by`, with confidence (`clear`, `likely`, `unknown`). If unclear, say what evidence is missing instead of guessing. For features, docs, and refactors, use `Provenance: N/A` or omit it when no broken behavior is being fixed.
+- For bug/regression fixes, include a compact `Provenance:` line after root cause. Use `git log -S/-G`, `git blame` on implicated lines, and linked PRs/issues to locate candidates, not prove introduction. Before saying `introduced by`, inspect raw parents with `git --no-replace-objects cat-file -p <sha>` and verify that `git --no-replace-objects diff --no-ext-diff --no-textconv <raw-parent> <sha> -- <path>` changed the implicated behavior, using tests/repro when feasible. A genuine root needs raw-header proof that it has no parents.
+- Blame `^sha`, porcelain `boundary`, and shallow/grafted history alone are not introduction proof. `--root` can hide boundary markers; `git show` and `rev-list --parents` can disguise a shallow boundary as a root. An available raw parent permits explicit comparison even at a shallow boundary; missing parents or an unverifiable patch require `unknown` with the gap. Apply this bar to summaries and owner hints as well as structured provenance.
+- Keep code author, introducing PR author, merger, committer, automerge trigger, and current PR author separate; none of those roles alone proves who introduced a bug. Cite the verified commit/PR/date. If no PR is traceable, use the verified commit and known author identity; leave unverified identities unknown, and do not make missing PR metadata a separate finding.
+- For automation merges, identify the human trigger only from explicit timeline/comment/event evidence, such as `@clawsweeper automerge`, `/landpr`, or an arming label. Check live evidence first, then gitcrawl/cache when needed. Report `automerge triggered by @login` only when verified; otherwise say trigger unknown. Triggering or merging is not proof of authorship or introduction.
+- Use `made visible by` only for a verified trigger and `carried forward by` only for verified preexisting behavior, with confidence (`clear`, `likely`, `unknown`). Unknown provenance does not invalidate an independently proven bug. For features, docs, and refactors, use `Provenance: N/A` or omit it when no broken behavior is being fixed.
 - Keep summaries compact, but include enough proof that the verdict is auditable without rereading the PR.
 
 LOC proof:
@@ -276,7 +281,7 @@ If the best-fix answer is only "maybe", keep reading or state the missing eviden
 - Before landing, require:
   1. symptom evidence such as a repro, logs, or a failing test
   2. a verified root cause in code with file/line
-  3. blame-backed provenance for regressions when traceable, including blamed PR merger and automerge trigger when known, or commit SHA/date when no PR is traceable
+  3. patch-verified regression provenance when traceable, with author, merger, committer, and trigger roles separate; otherwise explicit `unknown` and the evidence gap
   4. a fix that touches the implicated code path
   5. a regression test when feasible, or explicit manual verification plus a reason no test was added
 - If the claim is unsubstantiated or likely wrong, obtain the missing evidence or make authorized owner-boundary repairs; never merge without proof.
@@ -324,6 +329,41 @@ gh search issues --repo openclaw/openclaw --match title,body --limit 50 \
   --json number,title,state,url,updatedAt -- "auto update" \
   --jq '.[] | "\(.number) | \(.state) | \(.title) | \(.url)"'
 ```
+
+## Choose a writable landing checkout
+
+Before `review-init`, compare the editor's writable workspace with the Git
+common-directory parent. `scripts/pr` intentionally creates its worktree at
+`<canonical-repo>/.worktrees/pr-<PR>`; running it from a linked checkout does not
+put review artifacts under that caller. Shell access or a directory grant alone
+may not make those artifacts editable in an isolated session.
+
+When the canonical PR worktree lies outside the permitted workspace, start from
+a fresh ordinary checkout **inside** that workspace. Use the verified repository
+URL and normal Git, not another linked worktree pointing at the same outside
+common directory. Keep full history and blobs: shallow history breaks provenance
+checks, and blob filters can turn journaled historical restores into serial
+network fetches.
+
+```bash
+git clone --single-branch <verified-repository-url> <permitted-workspace>/landing-checkout
+```
+
+Verify its origin and Git root, then use that checkout's trusted `main` wrapper
+for the unchanged review/prepare/merge sequence. Its native PR worktrees now stay
+inside the permitted tree. Initialize review templates and verify editor access
+before investing in proof. Preserve the original checkout and unique work; never
+use symlinks, shell-mediated writes to denied paths, or weaker isolation flags.
+
+This is fresh workspace selection, not recovery: if another checkout has an
+active operation, uncertain merge capture/outcome, or pending auto/queue request
+for this PR, reconcile that original state first. Never clone away retained evidence or retry
+an uncertain dispatch from a new repository's independent lock/ref namespace.
+
+Keep the generated first line of `review.md` byte-for-byte, and keep `review.json`
+`pr.number`/`pr.headSha` aligned with the initialized metadata. Put descriptive
+prose below that line. Run native artifact validation before calling the review
+ready; regenerated templates, not hand-edited stamps, own head changes.
 
 ## Follow PR review and landing hygiene
 

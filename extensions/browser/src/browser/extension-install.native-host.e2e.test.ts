@@ -2,32 +2,20 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import { relayTestKey } from "../../chrome-extension/relay-key.test-support.js";
 import { chromeProductRoots, installStableChromeExtension } from "./extension-install-layout.js";
 import { installChromeExtensionBootstrap } from "./extension-install.js";
 import {
   predictedId,
   useExtensionInstallFixture,
-  writeSecurePreferences,
+  useNativeHostLaunchFixture,
+  writeChromePreferences,
 } from "./extension-install.test-support.js";
 
 const BUILT_NATIVE_HOST_PATH = path.resolve("dist/extensions/browser/native-host-entry.js");
 const fixture = useExtensionInstallFixture();
-const fileModesToRestore: Array<{ target: string; mode: number }> = [];
-
-afterEach(async () => {
-  await Promise.all(fileModesToRestore.splice(0).map(({ target, mode }) => fs.chmod(target, mode)));
-});
-
-async function makeTestFilePrivate(target: string): Promise<void> {
-  if (process.platform === "win32") {
-    return;
-  }
-  const mode = (await fs.stat(target)).mode & 0o777;
-  fileModesToRestore.push({ target, mode });
-  await fs.chmod(target, mode & ~0o022);
-}
+const nativeHostFixture = useNativeHostLaunchFixture();
 
 // Automatic native script launchers are POSIX-only; Windows uses manual pairing.
 describe.skipIf(process.platform === "win32")("native host registration", () => {
@@ -35,20 +23,13 @@ describe.skipIf(process.platform === "win32")("native host registration", () => 
     const value = await fixture();
     const stateDir = path.join(value.root, "custom state's dir");
     const configPath = path.join(value.root, "custom config's dir", "openclaw.json");
-    const nativeHostPath = BUILT_NATIVE_HOST_PATH;
-    // Keep shared-library Node installs in place, without changing a hosted
-    // interpreter's permissions. The installed launcher still targets a private file.
-    const nodeExecutable = `'${process.execPath.replaceAll("'", `'"'"'`)}'`;
-    await fs.writeFile(value.deps.nodePath, `#!/bin/sh\nexec ${nodeExecutable} "$@"\n`, {
-      mode: 0o700,
-    });
-    await makeTestFilePrivate(nativeHostPath);
+    const launchFixture = await nativeHostFixture(value.root, BUILT_NATIVE_HOST_PATH);
     const relayPort = 19_031;
     const token = relayTestKey(4);
     const deps = {
       ...value.deps,
       stateDir,
-      nativeHostPath,
+      ...launchFixture,
       env: {
         ...value.deps.env,
         OPENCLAW_STATE_DIR: stateDir,
@@ -73,7 +54,7 @@ describe.skipIf(process.platform === "win32")("native host registration", () => 
       throw new Error("missing Chromium fixture root");
     }
     const extensionId = await predictedId(installed, deps.platform);
-    await writeSecurePreferences({
+    await writeChromePreferences({
       userDataDir: chromium.userDataDir,
       profile: "Default",
       entries: { [extensionId]: { location: 4, path: installed } },
@@ -101,7 +82,7 @@ describe.skipIf(process.platform === "win32")("native host registration", () => 
     requestBody.copy(requestFrame, 4);
     const host = spawnSync(manifest.path, [`chrome-extension://${extensionId}/`], {
       input: requestFrame,
-      env: { HOME: value.homeDir },
+      env: { HOME: value.homeDir, TMPDIR: os.tmpdir() },
       timeout: 10_000,
     });
     expect(host.status, host.stderr.toString("utf8")).toBe(0);

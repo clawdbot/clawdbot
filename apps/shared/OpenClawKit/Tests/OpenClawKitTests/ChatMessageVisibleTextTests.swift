@@ -156,17 +156,23 @@ struct ChatMessageVisibleTextTests {
             tokensAfter: 9000))
     }
 
-    @Test func `transcript metadata survives message coding round trip`() throws {
-        let original = OpenClawChatMessage(
-            role: "assistant",
-            content: [textContent("short\n...(truncated)...")],
-            timestamp: 1,
-            transcriptMessageID: "msg-round-trip",
-            isTruncated: true)
+    @Test @MainActor func `transcript metadata survives message coding round trip`() throws {
+        let original = try JSONDecoder().decode(
+            OpenClawChatMessage.self,
+            from: Data(
+                #"{"role":"assistant","content":"short","timestamp":1,"__openclaw":{"id":"msg-round-trip","runId":"run-round-trip","truncated":true}}"#
+                    .utf8))
 
+        let adopted = OpenClawChatViewModel.adoptingCanonicalMessage(
+            original,
+            over: OpenClawChatMessage(role: "assistant", content: [textContent("short")], timestamp: 0))
+        let cacheable = try #require(OpenClawChatSQLiteTranscriptCache.cacheableMessages([adopted]).first)
+        let encoded = try JSONEncoder().encode(cacheable)
         let decoded = try JSONDecoder().decode(
             OpenClawChatMessage.self,
-            from: JSONEncoder().encode(original))
+            from: encoded)
+        let encodedObject = try #require(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
+        let encodedMetadata = encodedObject["__openclaw"] as? [String: Any]
         let systemRow = OpenClawChatMessage(
             role: "system",
             content: [],
@@ -184,6 +190,7 @@ struct ChatMessageVisibleTextTests {
             from: JSONEncoder().encode(systemRow))
 
         #expect(decoded.transcriptMessageID == "msg-round-trip")
+        #expect(encodedMetadata?["runId"] as? String == "run-round-trip")
         #expect(decoded.isTruncated)
         #expect(decodedSystemRow.provenance == systemRow.provenance)
         #expect(decodedSystemRow.historyMarker == systemRow.historyMarker)

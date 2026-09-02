@@ -263,6 +263,10 @@ describe("unwrapKnownDispatchWrapperInvocation", () => {
       expected: { kind: "blocked", wrapper: "flock" },
     },
     {
+      argv: ["flock", "/tmp/openclaw.lock", "--", "bash", "-lc", "echo hi"],
+      expected: { kind: "blocked", wrapper: "flock" },
+    },
+    {
       argv: ["flock", "-un", "/tmp/openclaw.lock", "bash", "-lc", "echo hi"],
       expected: { kind: "blocked", wrapper: "flock" },
     },
@@ -279,15 +283,20 @@ describe("unwrapKnownDispatchWrapperInvocation", () => {
       expected: { kind: "blocked", wrapper: "arch" },
     },
     {
-      argv: ["arch", "-arch", "bogus", "bash", "-lc", "echo hi"],
-      expected: { kind: "blocked", wrapper: "arch" },
-    },
-    {
       argv: ["xcrun", "--sdk", "macosx", "bash", "-lc", "echo hi"],
       expected: { kind: "blocked", wrapper: "xcrun" },
     },
   ])("unwraps known dispatch wrappers for %j", ({ argv, expected }) => {
     expect(unwrapKnownDispatchWrapperInvocation(argv)).toEqual(expected);
+  });
+
+  test("keeps the transcript operand after the script option separator", () => {
+    expect(
+      unwrapKnownDispatchWrapperInvocation(
+        ["script", "--", "/tmp/session.log", "bash", "-lc", "echo hi"],
+        "darwin",
+      ),
+    ).toEqual({ kind: "unwrapped", wrapper: "script", argv: ["bash", "-lc", "echo hi"] });
   });
 
   test("blocks arch dispatch unwrapping outside macOS", () => {
@@ -397,6 +406,11 @@ describe("resolveDispatchWrapperTrustPlan", () => {
     },
     {
       argv: ["flock", "--no-fork", "/tmp/openclaw.lock", "bash", "-lc", "echo hi"],
+      wrapper: "flock",
+      effectiveArgv: ["bash", "-lc", "echo hi"],
+    },
+    {
+      argv: ["flock", "--", "/tmp/openclaw.lock", "bash", "-lc", "echo hi"],
       wrapper: "flock",
       effectiveArgv: ["bash", "-lc", "echo hi"],
     },

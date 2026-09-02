@@ -5,15 +5,15 @@ import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient, GatewayEventListener } from "../../api/gateway.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
+import type { DesktopClient, DesktopConnectionHandle } from "./desktop-client.ts";
 import "./desktop-panel.ts";
 
 type DesktopPanelElement = HTMLElement & {
   available: boolean;
   documentMode: boolean;
+  documentControl: boolean;
   client: GatewayBrowserClient | null;
-  desktopClientFactory: () => {
-    connect(options: { onConnect: () => void }): Promise<{ disconnect(): void }>;
-  };
+  desktopClientFactory: () => Pick<DesktopClient, "connect">;
   embedded: boolean;
   handleToggleRequest(event: Event): void;
   presented: boolean;
@@ -83,9 +83,9 @@ describe("embedded desktop panel presentation", () => {
       };
     });
     const disconnect = vi.fn();
-    const connect = vi.fn(async (options: { onConnect: () => void }) => {
-      options.onConnect();
-      return { disconnect };
+    const connect = vi.fn(async (options: Parameters<DesktopClient["connect"]>[0]) => {
+      options.onConnect?.();
+      return { disconnect, disableInput: vi.fn() };
     });
     const panel = createPanel();
     panel.client = { gatewayUrl: "ws://gateway.test", request } as unknown as GatewayBrowserClient;
@@ -153,9 +153,9 @@ describe("embedded desktop panel presentation", () => {
       };
     });
     const disconnect = vi.fn();
-    const connect = vi.fn(async (options: { onConnect: () => void }) => {
-      options.onConnect();
-      return { disconnect };
+    const connect = vi.fn(async (options: Parameters<DesktopClient["connect"]>[0]) => {
+      options.onConnect?.();
+      return { disconnect, disableInput: vi.fn() };
     });
     const panel = createPanel();
     panel.client = {
@@ -222,6 +222,198 @@ describe("embedded desktop panel presentation", () => {
     expect(unsubscribe).toHaveBeenCalledOnce();
   });
 
+  it.each([
+    { initialControl: false, handleTiming: "before" },
+    { initialControl: false, handleTiming: "after" },
+    { initialControl: true, handleTiming: "before" },
+    { initialControl: true, handleTiming: "after" },
+  ] as const)(
+    "retains control=$initialControl until RFB connects with the handle $handleTiming the callback",
+    async ({ initialControl, handleTiming }) => {
+      const observe = createDeferred<unknown>();
+      const replacement = createDeferred<DesktopConnectionHandle>();
+      const previous = { disconnect: vi.fn(), disableInput: vi.fn(), sendKeyboardEvent: vi.fn() };
+      const next = { disconnect: vi.fn(), disableInput: vi.fn(), sendKeyboardEvent: vi.fn() };
+      let pending: Parameters<DesktopClient["connect"]>[0] | undefined;
+      const request = vi.fn(async (method: string, params?: { control?: boolean }) => {
+        if (method === "environments.list") {
+          return { environments: [desktopEnvironment] };
+        }
+        if (params?.control !== initialControl) {
+          return observe.promise;
+        }
+        return { transport: "rfb", wsPath: "/view", control: initialControl };
+      });
+      const connect = vi.fn(async (options: Parameters<DesktopClient["connect"]>[0]) => {
+        if (options.viewOnly !== !initialControl) {
+          pending = options;
+          return replacement.promise;
+        }
+        options.onConnect?.();
+        return previous;
+      });
+      const panel = createPanel();
+      panel.client = {
+        gatewayUrl: "ws://gateway.test",
+        request,
+      } as unknown as GatewayBrowserClient;
+      panel.available = true;
+      panel.documentMode = true;
+      panel.documentControl = initialControl;
+      panel.embedded = true;
+      panel.presented = true;
+      panel.requestedSource = desktopEnvironment.id;
+      panel.desktopClientFactory = () => ({ connect });
+      document.body.append(panel);
+      try {
+        await waitForFast(() => expect(connect).toHaveBeenCalledOnce());
+        await settleTasks();
+        const toggle = panel.renderRoot.querySelector<HTMLButtonElement>(
+          `button[aria-label="${initialControl ? "Switch to view only" : "Take control"}"]`,
+        );
+        if (!toggle) {
+          throw new Error("expected the desktop control toggle");
+        }
+        toggle.click();
+        await waitForFast(() =>
+          expect(
+            request.mock.calls.filter(([method]) => method === "desktop.observe"),
+          ).toHaveLength(2),
+        );
+        expect(previous.disconnect).not.toHaveBeenCalled();
+        expect(previous.disableInput).toHaveBeenCalledOnce();
+        observe.resolve({ transport: "rfb", wsPath: "/control", control: !initialControl });
+        await waitForFast(() => expect(connect).toHaveBeenCalledTimes(2));
+        if (handleTiming === "before") {
+          replacement.resolve(next);
+          await settleTasks();
+        }
+        expect(previous.disconnect).not.toHaveBeenCalled();
+        const input =
+          panel.renderRoot.querySelector<HTMLTextAreaElement>(".desktop-keyboard-input");
+        if (!input) {
+          throw new Error("expected the mobile keyboard input");
+        }
+        const sendKey = () =>
+          input.dispatchEvent(
+            new KeyboardEvent("keydown", { key: "x", code: "KeyX", bubbles: true }),
+          );
+        sendKey();
+        expect(previous.sendKeyboardEvent).not.toHaveBeenCalled();
+        expect(next.sendKeyboardEvent).not.toHaveBeenCalled();
+        if (!pending?.onConnect) {
+          throw new Error("replacement must expose the RFB connected callback");
+        }
+        pending.onConnect();
+        expect(previous.disconnect).toHaveBeenCalledOnce();
+        replacement.resolve(next);
+        await settleTasks();
+        expect(next.disconnect).not.toHaveBeenCalled();
+        sendKey();
+        expect(next.sendKeyboardEvent).toHaveBeenCalledTimes(initialControl ? 0 : 1);
+        expect(previous.sendKeyboardEvent).not.toHaveBeenCalled();
+        panel.remove();
+        expect(next.disconnect).toHaveBeenCalledOnce();
+      } finally {
+        observe.resolve({ transport: "rfb", wsPath: "/control", control: !initialControl });
+        replacement.resolve(next);
+        panel.remove();
+        await settleTasks();
+      }
+    },
+  );
+
+  it.each([
+    "observe failure",
+    "credentials",
+    "security failure",
+    "transport failure",
+    "hide",
+    "source change",
+    "unmount",
+  ] as const)("releases the retained viewer and pending replacement on %s", async (outcome) => {
+    const observe = createDeferred<unknown>();
+    const previous = { disconnect: vi.fn(), disableInput: vi.fn() };
+    const next = { disconnect: vi.fn(), disableInput: vi.fn() };
+    let pending: Parameters<DesktopClient["connect"]>[0] | undefined;
+    const request = vi.fn(async (method: string, params?: { control?: boolean }) => {
+      if (method === "environments.list") {
+        return { environments: [desktopEnvironment] };
+      }
+      return params?.control
+        ? observe.promise
+        : { transport: "rfb", wsPath: "/view", control: false };
+    });
+    const connect = vi.fn(async (options: Parameters<DesktopClient["connect"]>[0]) => {
+      if (!options.viewOnly) {
+        pending = options;
+        return next;
+      }
+      options.onConnect?.();
+      return previous;
+    });
+    const panel = createPanel();
+    panel.client = { gatewayUrl: "ws://gateway.test", request } as unknown as GatewayBrowserClient;
+    panel.available = true;
+    panel.embedded = true;
+    panel.presented = true;
+    panel.requestedSource = desktopEnvironment.id;
+    panel.desktopClientFactory = () => ({ connect });
+    document.body.append(panel);
+    try {
+      await waitForFast(() => expect(connect).toHaveBeenCalledOnce());
+      await settleTasks();
+      panel.renderRoot.querySelector<HTMLButtonElement>(".desktop-stage__take-control")?.click();
+      await waitForFast(() =>
+        expect(request.mock.calls.filter(([method]) => method === "desktop.observe")).toHaveLength(
+          2,
+        ),
+      );
+      expect(previous.disconnect).not.toHaveBeenCalled();
+      if (outcome === "observe failure" || outcome === "credentials") {
+        observe.reject(
+          outcome === "credentials"
+            ? { details: { code: "DESKTOP_CREDENTIALS_REQUIRED", auth: "vnc-password" } }
+            : new Error("observer capacity reached"),
+        );
+      } else {
+        observe.resolve({ transport: "rfb", wsPath: "/control", control: true });
+        await waitForFast(() => expect(connect).toHaveBeenCalledTimes(2));
+        await settleTasks();
+        expect(previous.disconnect).not.toHaveBeenCalled();
+        expect(pending?.isCurrent()).toBe(true);
+        if (outcome === "security failure") {
+          pending?.onSecurityFailure?.({ reason: "authentication rejected" });
+          pending?.onDisconnect?.({ code: 1008, reason: "authentication rejected" });
+        } else if (outcome === "transport failure") {
+          pending?.onDisconnect?.({ code: 1000, reason: "desktop stream closed" });
+        } else if (outcome === "hide") {
+          panel.presented = false;
+        } else if (outcome === "source change") {
+          panel.requestedSource = null;
+        } else {
+          panel.remove();
+        }
+      }
+      await settleTasks();
+      expect(previous.disconnect).toHaveBeenCalledOnce();
+      if (pending) {
+        expect(pending.isCurrent()).toBe(false);
+        expect(next.disconnect).toHaveBeenCalledOnce();
+        pending.onConnect?.();
+        await settleTasks();
+        expect(previous.disconnect).toHaveBeenCalledOnce();
+        expect(next.disconnect).toHaveBeenCalledOnce();
+      } else {
+        expect(next.disconnect).not.toHaveBeenCalled();
+      }
+    } finally {
+      observe.resolve({ transport: "rfb", wsPath: "/control", control: true });
+      panel.remove();
+      await settleTasks();
+    }
+  });
+
   it("keeps a hidden embedded mount dormant even when the standalone dock was open", async () => {
     localStorage.setItem(
       "openclaw.desktopPanel",
@@ -261,9 +453,9 @@ describe("embedded desktop panel presentation", () => {
       };
     });
     const disconnect = vi.fn();
-    const connect = vi.fn(async (options: { onConnect: () => void }) => {
-      options.onConnect();
-      return { disconnect };
+    const connect = vi.fn(async (options: Parameters<DesktopClient["connect"]>[0]) => {
+      options.onConnect?.();
+      return { disconnect, disableInput: vi.fn() };
     });
     const panel = createPanel();
     panel.client = { gatewayUrl: "ws://gateway.test", request } as unknown as GatewayBrowserClient;
@@ -312,7 +504,7 @@ describe("embedded desktop panel presentation", () => {
       }
       return observe;
     });
-    const connect = vi.fn(async () => ({ disconnect: vi.fn() }));
+    const connect = vi.fn(async () => ({ disconnect: vi.fn(), disableInput: vi.fn() }));
     const panel = createPanel();
     panel.client = { gatewayUrl: "ws://gateway.test", request } as unknown as GatewayBrowserClient;
     panel.available = true;

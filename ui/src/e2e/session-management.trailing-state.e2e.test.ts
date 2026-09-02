@@ -1,6 +1,7 @@
 import { expect, it } from "vitest";
 import { CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT } from "../../../src/gateway/control-ui-contract.js";
 import { SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD } from "../lib/session-pull-requests.ts";
+import { createControlUiSessionRow as sessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import {
   actionOpacity,
   captureUiProof,
@@ -8,7 +9,6 @@ import {
   createSessionManagementE2eSuite,
   installMockGateway,
   requireRecord,
-  sessionRow,
   sessionsListResponse,
 } from "./session-management.test-support.ts";
 
@@ -51,7 +51,7 @@ suite.define(() => {
       const pin = row.getByRole("button", { name: "Unpin session" });
       const menu = row.getByRole("button", { name: "Open session menu" });
       await expect.poll(() => actionOpacity(pin)).toBe("1");
-      await captureUiProof(page, "sidebar-session-actions-centered.png");
+      await captureUiProof(suite, page, "sidebar-session-actions-centered.png");
 
       const [rowBounds, subtitleBounds, pinBounds, menuBounds] = await Promise.all([
         row.boundingBox(),
@@ -79,7 +79,7 @@ suite.define(() => {
           return title && details ? title.y + title.height - details.y : Number.POSITIVE_INFINITY;
         })
         .toBeLessThanOrEqual(0.5);
-      await captureUiProof(page, "sidebar-session-text-scale-140.png");
+      await captureUiProof(suite, page, "sidebar-session-text-scale-140.png");
     } finally {
       await context.close();
     }
@@ -152,6 +152,21 @@ suite.define(() => {
       const menu = row.getByRole("button", { name: "Open session menu" });
       await expect.poll(() => state.locator(".session-run-spinner").isVisible()).toBe(true);
       await expect.poll(() => actionOpacity(state)).toBe("1");
+      await page.mouse.move(500, 500);
+      await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+      await captureUiProof(suite, page, "sidebar-session-title-icon-gap.png");
+
+      const [restingNameBounds, restingStateBounds] = await Promise.all([
+        row.locator(".sidebar-recent-session__name").boundingBox(),
+        state.boundingBox(),
+      ]);
+      if (!restingNameBounds || !restingStateBounds) {
+        throw new Error("Expected visible title and trailing state geometry");
+      }
+      expect(restingStateBounds.x - (restingNameBounds.x + restingNameBounds.width)).toBeCloseTo(
+        16,
+        1,
+      );
 
       await row.hover();
       await expect.poll(() => actionOpacity(state)).toBe("1");
@@ -256,7 +271,7 @@ suite.define(() => {
     }
   });
 
-  it("keeps the trailing unread dot on one axis with and without a pull-request icon", async () => {
+  it("aligns trailing unread dots and trades unread/PR icons for hover actions", async () => {
     const plainKey = "agent:main:unread-plain";
     const pullRequestKey = "agent:main:unread-pr";
     const context = await suite.browser.newContext({
@@ -265,6 +280,9 @@ suite.define(() => {
       viewport: { height: 900, width: 1280 },
     });
     const page = await context.newPage();
+    await page.addInitScript(() => {
+      localStorage.setItem("openclaw:sidebar:sessions:show-preview", "false");
+    });
     const gateway = await installMockGateway(page, {
       featureMethods: ["chat.metadata", "chat.startup", SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD],
       methodResponses: {
@@ -346,6 +364,23 @@ suite.define(() => {
         await dotInsetFromRowRight(plainRow),
         0,
       );
+      const pullRequestIcon = pullRequestRow.locator("[data-pull-request-state='merged']");
+      const unreadDot = pullRequestRow.locator(".session-unread-dot");
+      const trailingState = pullRequestRow.locator(".session-row-state");
+      await captureUiProof(suite, page, "sidebar-pr-before-hover.png");
+      await pullRequestRow.hover();
+      await captureUiProof(suite, page, "sidebar-pr-hover.png");
+      await pullRequestIcon.waitFor({ state: "hidden" });
+      await unreadDot.waitFor({ state: "hidden" });
+      await trailingState.waitFor({ state: "hidden" });
+      await page.mouse.move(0, 0);
+      await pullRequestIcon.waitFor({ state: "visible" });
+      await unreadDot.waitFor({ state: "visible" });
+      await pullRequestRow.getByRole("button", { name: "Open session menu" }).focus();
+      await trailingState.waitFor({ state: "hidden" });
+      await codingToggle.focus();
+      await pullRequestIcon.waitFor({ state: "visible" });
+      await unreadDot.waitFor({ state: "visible" });
     } finally {
       await context.close();
     }

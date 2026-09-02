@@ -1,4 +1,5 @@
 // Openai provider module implements model/runtime integration.
+import { bufferToBlobPart } from "openclaw/plugin-sdk/blob-runtime";
 import {
   downloadGeneratedVideoAsset,
   resolveGeneratedMediaMaxBytes,
@@ -68,12 +69,6 @@ function readOpenAIVideoFailureMessage(payload: OpenAIVideoResponse): string | u
     : undefined;
 }
 
-function toBlobBytes(buffer: Buffer): ArrayBuffer {
-  const arrayBuffer = new ArrayBuffer(buffer.byteLength);
-  new Uint8Array(arrayBuffer).set(buffer);
-  return arrayBuffer;
-}
-
 function resolveDurationSeconds(durationSeconds: number | undefined): "4" | "8" | "12" | undefined {
   if (typeof durationSeconds !== "number" || !Number.isFinite(durationSeconds)) {
     return undefined;
@@ -139,7 +134,7 @@ function resolveReferenceAsset(req: VideoGenerationRequest): OpenAIReferenceAsse
     `${kind === "video" ? "reference-video" : "reference-image"}.${extension}`;
   return {
     kind,
-    file: new File([toBlobBytes(asset.buffer)], fileName, { type: mimeType }),
+    file: new File([bufferToBlobPart(asset.buffer)], fileName, { type: mimeType }),
   };
 }
 
