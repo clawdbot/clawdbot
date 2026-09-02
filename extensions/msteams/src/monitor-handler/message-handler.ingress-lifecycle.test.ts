@@ -258,25 +258,33 @@ describe("Microsoft Teams drain claim ownership", () => {
       const threshold = createIntegratedIngress();
       threshold.start();
       await threshold.accept(incoming);
-      const thresholdAttempt = await expectPendingAttempt(DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS);
+      const failedCeiling = {
+        id: "activity-abandon",
+        reason: "retry-limit-exceeded",
+        message: "turn-abandoned",
+        // fail() never increments; the claim-time budget is what is retained.
+        attempts: DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS - 1,
+      };
+      await vi.waitFor(async () => {
+        expect(await queue.listPending({ limit: "all" })).toEqual([]);
+        expect(await queue.listFailed?.({ limit: "all" })).toEqual([
+          expect.objectContaining(failedCeiling),
+        ]);
+      });
       expect(dispatchMock).toHaveBeenCalledTimes(3);
       await threshold.stop();
 
-      vi.setSystemTime(thresholdAttempt.lastAttemptAt + 128_001);
+      vi.setSystemTime(secondAttempt.lastAttemptAt + 192_001);
       const beyond = createIntegratedIngress();
       beyond.start();
       await beyond.accept(incoming);
-      const beyondAttempt = await expectPendingAttempt(DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS + 1);
-      expect(dispatchMock).toHaveBeenCalledTimes(4);
-      await beyond.stop();
-
-      vi.setSystemTime(beyondAttempt.lastAttemptAt + 1_000);
-      const blockedRestart = createIntegratedIngress();
-      blockedRestart.start();
-      await blockedRestart.accept(incoming);
       await vi.advanceTimersByTimeAsync(0);
-      expect(dispatchMock).toHaveBeenCalledTimes(4);
-      await blockedRestart.stop();
+      expect(dispatchMock).toHaveBeenCalledTimes(3);
+      expect(await queue.listPending({ limit: "all" })).toEqual([]);
+      expect(await queue.listFailed?.({ limit: "all" })).toEqual([
+        expect.objectContaining(failedCeiling),
+      ]);
+      await beyond.stop();
     } finally {
       dispatchMock.mockReset();
       if (priorImplementation) {
