@@ -11,10 +11,7 @@ import {
   parseAssistantTextSignature,
   type AssistantPhase,
 } from "../shared/chat-message-content.js";
-import {
-  sanitizeAssistantFinalAnswerText,
-  sanitizeAssistantVisibleText,
-} from "../shared/text/assistant-visible-text.js";
+import { sanitizeAssistantVisibleTextWithProfile } from "../shared/text/assistant-visible-text.js";
 import { sanitizeUserFacingText } from "./embedded-agent-helpers/sanitize-user-facing-text.js";
 import { renderUserFacingText } from "./embedded-agent-helpers/user-facing-text.js";
 import type { AgentMessage } from "./runtime/index.js";
@@ -26,10 +23,12 @@ export function isAssistantMessage(msg: AgentMessage | undefined): msg is Assist
   return msg?.role === "assistant";
 }
 
-function sanitizeAssistantText(text: string, phase?: AssistantPhase): string {
-  return phase === "final_answer"
-    ? sanitizeAssistantFinalAnswerText(text)
-    : sanitizeAssistantVisibleText(text);
+function sanitizeAssistantText(text: string, phase?: AssistantPhase, streaming = false): string {
+  return sanitizeAssistantVisibleTextWithProfile(
+    text,
+    phase === "final_answer" ? "final-answer-delivery" : "delivery",
+    streaming && phase === "final_answer",
+  );
 }
 
 function isAssistantTextContentBlockType(value: unknown): boolean {
@@ -37,7 +36,7 @@ function isAssistantTextContentBlockType(value: unknown): boolean {
 }
 
 export function sanitizeAssistantVisibleStreamText(text: string, phase?: AssistantPhase): string {
-  return sanitizeUserFacingText(sanitizeAssistantText(text, phase), { errorContext: false });
+  return sanitizeUserFacingText(sanitizeAssistantText(text, phase, true), { errorContext: false });
 }
 
 function finalizeAssistantExtraction(msg: AssistantMessage, extracted: string): string {

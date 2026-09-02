@@ -273,6 +273,11 @@ export function handleMessageUpdate(
   // parsing so long parallel subagent streams do not monopolize the event loop.
   const skipLiveStream = ctx.params.suppressLiveStreamOutput === true;
   const shouldUsePhaseAwareBlockReply = Boolean(deliveryPhase);
+  const reprojectBlockReply =
+    shouldUsePhaseAwareBlockReply &&
+    !ctx.params.enforceFinalTag &&
+    !ctx.state.blockState.textIsVisible &&
+    ctx.blockChunker.consumedLength === 0;
   const finalText = evtType === "text_end";
 
   // A completions stream cannot classify text interrupted by later reasoning
@@ -344,23 +349,24 @@ export function handleMessageUpdate(
     next = undefined;
   }
   let nextRawStreamText = next;
-  if (
-    shouldUsePhaseAwareBlockReply &&
-    next === undefined &&
-    deliveryPhase === "final_answer" &&
-    chunk
-  ) {
-    visibleDelta = ctx.params.enforceFinalTag
-      ? ctx.stripBlockTags(chunk, ctx.state.partialBlockState, { final: finalText })
-      : chunk;
-    nextRawStreamText = `${ctx.state.lastStreamedAssistant ?? ""}${visibleDelta}`;
+  if (next === undefined && deliveryPhase === "final_answer" && (reprojectBlockReply || chunk)) {
+    // A late phase can reveal inline examples; retain already scoped snapshots above.
+    const previousRawText = reprojectBlockReply ? "" : (ctx.state.lastStreamedAssistant ?? "");
+    visibleDelta = reprojectBlockReply
+      ? ctx.state.deltaBuffer
+      : ctx.params.enforceFinalTag
+        ? ctx.stripBlockTags(chunk, ctx.state.partialBlockState, { final: finalText })
+        : chunk;
+    nextRawStreamText = `${previousRawText}${visibleDelta}`;
     const sanitizerPhase = ctx.params.enforceFinalTag ? undefined : deliveryPhase;
-    const previousVisibleText = sanitizeAssistantVisibleStreamText(
-      ctx.state.lastStreamedAssistant ?? "",
-      sanitizerPhase,
-    ).trim();
     next = sanitizeAssistantVisibleStreamText(nextRawStreamText, sanitizerPhase).trim();
-    visibleDelta = resolveTextAppendDelta(previousVisibleText, next);
+    visibleDelta = resolveTextAppendDelta(
+      sanitizeAssistantVisibleStreamText(previousRawText, sanitizerPhase).trim(),
+      next,
+    );
+    if (reprojectBlockReply) {
+      ctx.resetPartialReplyDirectives();
+    }
   } else if (next === undefined && deliveryPhase !== "final_answer") {
     const pendingTagFragment = ctx.state.partialBlockState.pendingTagFragment;
     const shouldRecomputeFullStream = Boolean(pendingTagFragment) || REASONING_TAG_RE.test(chunk);
@@ -491,17 +497,16 @@ export function handleMessageUpdate(
         ctx.state.streamBlockOffset =
           snapshot.parts.find((part) => part.index === streamContentIndex)?.offset ?? 0;
       }
-    } else if (replace) {
-      // A visible correction does not change the source coordinates of chunks
-      // already drained; generic buffers still count the raw provider bytes.
+    } else if (reprojectBlockReply || replace) {
+      // Consumed scopes keep their coordinate domain; only undrained input can switch.
+      if (reprojectBlockReply) {
+        ctx.state.blockState.textIsVisible = true;
+      }
       replaceBlockReplyBuffer(
         ctx,
         ctx.state.blockState.textIsVisible ? cleanedText : ctx.state.deltaBuffer,
       );
     } else if (shouldUsePhaseAwareBlockReply) {
-      if (!ctx.params.enforceFinalTag && ctx.blockChunker.consumedLength === 0) {
-        ctx.state.blockState.textIsVisible = true;
-      }
       ctx.blockChunker.append(
         ctx.params.enforceFinalTag || ctx.state.blockState.textIsVisible ? deltaText : chunk,
       );
@@ -551,23 +556,17 @@ export function handleMessageUpdate(
   }
 
   if (
-    !ctx.params.silentExpected &&
-    !suppressDeterministicApprovalOutput &&
-    !suppressMessageToolOnlySourceReplyOutput &&
-    ctx.params.onBlockReply &&
-    ctx.blockChunking &&
-    ctx.state.blockReplyBreak === "text_end"
+    ctx.params.silentExpected ||
+    suppressDeterministicApprovalOutput ||
+    suppressMessageToolOnlySourceReplyOutput ||
+    ctx.state.blockReplyBreak !== "text_end"
   ) {
+    return undefined;
+  }
+  if (ctx.params.onBlockReply && ctx.blockChunking) {
     ctx.blockChunker.drain({ force: false, emit: ctx.emitBlockChunk });
   }
-
-  if (
-    !ctx.params.silentExpected &&
-    !suppressDeterministicApprovalOutput &&
-    !suppressMessageToolOnlySourceReplyOutput &&
-    evtType === "text_end" &&
-    ctx.state.blockReplyBreak === "text_end"
-  ) {
+  if (evtType === "text_end") {
     const assistantMessageIndex = ctx.state.assistantMessageIndex;
     const onFlushError = (err: unknown) => {
       ctx.log.debug(`text_end block reply flush failed: ${String(err)}`);
