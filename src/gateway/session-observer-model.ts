@@ -225,7 +225,7 @@ export const SESSION_OBSERVER_SYSTEM_PROMPT = [
   "Do not transcribe the activity log. Summarize what it is doing and how it is going.",
   "Use American English and present tense. Do not use markdown in string values.",
   'Set health to exactly one of "on-track", "grinding", "stuck", "waiting-on-user", "wrapping-up", "done", or "failed".',
-  'Return strict JSON only, for example: {"headline":"Checking the fix","assessment":"Tests are passing.","health":"on-track","planProgress":{"completed":2,"total":3}}. Omit optional fields instead of setting them to null.',
+  'Return one raw JSON object only, without Markdown fences or surrounding text, for example: {"headline":"Checking the fix","assessment":"Tests are passing.","health":"on-track","planProgress":{"completed":2,"total":3}}. Omit optional fields instead of setting them to null.',
 ].join(" ");
 
 const ModelDigestSchema = z
