@@ -38,7 +38,6 @@ export {
 } from "./host/read-file-shared.js";
 export { resolveMemoryBackendConfig } from "./host/backend-config.js";
 export {
-  formatMemoryIndexIdentityReason,
   formatMemoryIndexRebuildGuidance,
   isAutomaticMemoryEntryEligible,
   isMemoryOriginEligibleForAutomaticInjection,

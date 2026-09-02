@@ -219,7 +219,7 @@ export type MemoryIndexIdentityState =
 
 export type MemoryIndexIdentityDiagnostic = Exclude<MemoryIndexIdentityState, { status: "valid" }>;
 
-function readMemoryIndexIdentityReason(
+export function resolveMemoryIndexIdentityReason(
   status: Pick<MemoryProviderStatus, "custom">,
 ): string | undefined {
   const identity = asNullableRecord(status.custom?.indexIdentity);
@@ -270,16 +270,6 @@ export function resolveMemoryIndexIdentityDiagnostic(
   return undefined;
 }
 
-export function resolveMemoryIndexIdentityReason(
-  status: Pick<MemoryProviderStatus, "custom">,
-): string | undefined {
-  return readMemoryIndexIdentityReason(status);
-}
-
-export function formatMemoryIndexIdentityReason(diagnostic: MemoryIndexIdentityDiagnostic): string {
-  return `${diagnostic.reason} (owner: ${diagnostic.owner}, code: ${diagnostic.code})`;
-}
-
 export function formatMemoryIndexRebuildGuidance(
   status: Partial<Pick<MemoryProviderStatus, "provider" | "requestedProvider">>,
   agentId?: string,
@@ -300,7 +290,7 @@ export function resolveMemorySearchStaleness(
 ): { stale: true; warning: string; action: string } | null {
   const diagnostic = resolveMemoryIndexIdentityDiagnostic(status);
   const reason = diagnostic
-    ? formatMemoryIndexIdentityReason(diagnostic)
+    ? `${diagnostic.reason} (owner: ${diagnostic.owner}, code: ${diagnostic.code})`
     : status.lastSyncError?.trim();
   if (!reason) {
     return null;

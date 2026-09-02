@@ -51,7 +51,6 @@ export {
   retryTransientMemoryRead,
   remapChunkLines,
   requireNodeSqlite,
-  formatMemoryIndexIdentityReason,
   formatMemoryIndexRebuildGuidance,
   resolveMemoryBackendConfig,
   resolveMemoryIndexIdentityDiagnostic,

@@ -1,5 +1,4 @@
 import {
-  formatMemoryIndexIdentityReason,
   formatMemoryIndexRebuildGuidance,
   resolveMemoryIndexIdentityDiagnostic,
   type MemoryEmbeddingProbeResult,
@@ -73,7 +72,7 @@ function formatMemoryIndexIdentityWarning(
     return null;
   }
   return {
-    reason: formatMemoryIndexIdentityReason(diagnostic),
+    reason: `${diagnostic.reason} (owner: ${diagnostic.owner}, code: ${diagnostic.code})`,
     fix: `Run: ${formatMemoryIndexRebuildGuidance(status, agentId)}`,
   };
 }
