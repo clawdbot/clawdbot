@@ -7,7 +7,6 @@ import {
   scoreTriggerMatch,
   resolveTriggerRecall,
   selectStrongTriggerMatches,
-  STRONG_TRIGGER_MATCH_SCORE,
 } from "./trigger-recall.js";
 
 const hoisted = vi.hoisted(() => ({
@@ -51,12 +50,9 @@ describe("active-memory trigger recall", () => {
     ).toBeLessThan(0.65);
     // Single-word concept triggers (the promotion writer's output) cap at
     // 0.85 * 0.8 = 0.68 with zero relevance; the 0.65 threshold must admit them.
-    expect(
-      scoreTriggerMatch("Project status", result({ score: 0, triggers: "project" })),
-    ).toBeCloseTo(0.68);
-    expect(
-      scoreTriggerMatch("Project status", result({ score: 0, triggers: "project" })),
-    ).toBeGreaterThanOrEqual(STRONG_TRIGGER_MATCH_SCORE);
+    const singleWordTrigger = result({ score: 0, triggers: "project" });
+    expect(scoreTriggerMatch("Project status", singleWordTrigger)).toBeCloseTo(0.68);
+    expect(selectStrongTriggerMatches("Project status", [singleWordTrigger])).toHaveLength(1);
   });
 
   it("limits automatic injection to curated or trusted-origin entries", () => {

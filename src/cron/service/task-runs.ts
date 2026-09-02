@@ -1,5 +1,4 @@
 /** Detached task-ledger integration for cron runs. */
-import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 import {
@@ -62,18 +61,6 @@ function requireCronAgentId(agentId: string | undefined): string {
 
 function resolveCurrentDefaultAgentId(state: CronServiceState): string | undefined {
   return state.deps.resolveDefaultAgentId?.() ?? state.deps.defaultAgentId;
-}
-
-const activeCronTaskRunId = new AsyncLocalStorage<string>();
-
-/** Keeps the detached task id on the async execution that owns it. */
-export function withCronTaskRunId<T>(taskRunId: string | undefined, run: () => T): T {
-  const normalizedRunId = taskRunId?.trim();
-  return normalizedRunId ? activeCronTaskRunId.run(normalizedRunId, run) : run();
-}
-
-export function getActiveCronTaskRunId(): string | undefined {
-  return activeCronTaskRunId.getStore();
 }
 
 /** Carries exact admission into the first post-admission owner lifecycle phase. */
@@ -153,21 +140,37 @@ export function tryCreateCronTaskRunHandle(params: {
   state: CronServiceState;
   job: CronJob;
   startedAt: number;
+  runReceipt?: CronRunReceiptHandle;
   publicRunId?: string;
-}): { runId: string; taskId: string; flowId?: string } | undefined {
-  const runId = createCronTaskRunId(params.job.id, params.startedAt, params.publicRunId);
-  return tryCreateCronTaskRunRecord({
-    state: params.state,
-    job: params.job,
-    jobId: params.job.id,
-    startedAt: params.startedAt,
-    runId,
-  });
+}): { runId: string; taskId?: string; flowId?: string } {
+  const runId = createCronTaskRunId(
+    params.job.id,
+    params.startedAt,
+    params.runReceipt?.receiptId,
+    params.publicRunId,
+  );
+  return (
+    tryCreateCronTaskRunRecord({
+      state: params.state,
+      job: params.job,
+      jobId: params.job.id,
+      startedAt: params.startedAt,
+      runId,
+    }) ?? { runId }
+  );
 }
 
-function createCronTaskRunId(jobId: string, startedAt: number, publicRunId?: string): string {
-  const discriminator = publicRunId?.trim() || randomUUID();
-  return `${createCronExecutionId(jobId, startedAt)}:${discriminator}`;
+function createCronTaskRunId(
+  jobId: string,
+  startedAt: number,
+  receiptId?: string,
+  publicRunId?: string,
+): string {
+  const receipt = receiptId?.trim();
+  const publicId = publicRunId?.trim();
+  const discriminator = receipt || publicId || randomUUID();
+  const publicSuffix = publicId && publicId !== discriminator ? `:${publicId}` : "";
+  return `${createCronExecutionId(jobId, startedAt)}:${discriminator}${publicSuffix}`;
 }
 
 function findLatestCronTaskRunForRecoveryFromRecords(
@@ -175,25 +178,33 @@ function findLatestCronTaskRunForRecoveryFromRecords(
   jobId: string,
   startedAt: number,
   storeKey: string,
+  receiptId?: string,
 ): TaskRecord | undefined {
   const executionRunId = createCronExecutionId(jobId, startedAt);
   const prefix = `${executionRunId}:`;
+  const receiptRunId = receiptId ? `${prefix}${receiptId}` : undefined;
   return records
     .filter((task) => {
       if (task.runtime !== "cron" || task.sourceId !== jobId) {
         return false;
       }
       const taskStoreKey = cronTaskRecordStoreKey(task);
+      if (receiptRunId) {
+        // Receipt recovery accepts only its owner-native identity; legacy rows
+        // without that receipt prefix are ambiguous when runs share a millisecond.
+        return (
+          taskStoreKey === storeKey &&
+          (task.runId === receiptRunId || task.runId?.startsWith(`${receiptRunId}:`))
+        );
+      }
       if (taskStoreKey === undefined) {
         // Exact match covers detail-less pre-discriminator rows from older releases.
         return task.runId === executionRunId;
       }
+      // A matching timestamp cannot authorize adopting an unrelated task row.
       return (
         taskStoreKey === storeKey &&
-        (task.runId === executionRunId ||
-          task.runId?.startsWith(prefix) ||
-          // Released reservation-keyed rows still record the authoritative execution start.
-          task.startedAt === startedAt)
+        (task.runId === executionRunId || task.runId?.startsWith(prefix))
       );
     })
     .toSorted(
@@ -253,12 +264,14 @@ export function findCronTaskRunRecoveryInDatabase(params: {
   jobId: string;
   startedAt: number;
   storeKey: string;
+  receiptId?: string;
 }): { taskRunId?: string; finalized?: FinalizedCronTaskRun } {
   const task = findLatestCronTaskRunForRecoveryFromRecords(
     listTaskRecordsByRuntimeSourceIdInDatabase(params.database, "cron", params.jobId),
     params.jobId,
     params.startedAt,
     params.storeKey,
+    params.receiptId,
   );
   const finalized = finalizedCronTaskRun(task, params.jobId);
   return {
@@ -440,10 +453,14 @@ export function tryFinishCronTaskRun(
         status,
         endedAt: entry.ts,
         lastEventAt: entry.ts,
-        error: entry.error,
-        clearError: entry.error === undefined,
-        terminalSummary: entry.summary ?? null,
-        preserveTerminalSummary: true,
+        ...(status === "cancelled"
+          ? {}
+          : {
+              error: entry.error,
+              clearError: entry.error === undefined,
+              terminalSummary: entry.summary ?? null,
+              preserveTerminalSummary: true,
+            }),
         childSessionKey: entry.sessionKey ?? null,
         detail,
       });
@@ -451,7 +468,7 @@ export function tryFinishCronTaskRun(
     if (updated.length === 0) {
       const existing = findTaskByRunId(taskRunId);
       if (existing?.runtime === "cron" && existing.status === "cancelled") {
-        // Operator cancellation owns task status, but its finished event still owns history detail.
+        // Operator cancellation owns task status and reason; its finished event owns history detail.
         updated = finalize(taskRunId, "cancelled");
       } else if (
         existing?.runtime === "cron" &&

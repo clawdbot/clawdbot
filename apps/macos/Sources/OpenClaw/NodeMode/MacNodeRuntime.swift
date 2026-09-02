@@ -232,7 +232,9 @@ actor MacNodeRuntime {
                  MacNodeClaudeSessionCatalogContract.readCommand:
                 return try await self.handleClaudeSessionInvoke(req)
             default:
-                if let nodeHostWorker, await nodeHostWorker.supports(command) {
+                // Private supervisor controls are not public pairing capabilities.
+                // The shared dispatcher owns their validation and local hosting consent.
+                if let nodeHostWorker {
                     return await nodeHostWorker.invoke(req)
                 }
                 return Self.errorResponse(req, code: .invalidRequest, message: "INVALID_REQUEST: unknown command")
@@ -802,20 +804,7 @@ extension MacNodeRuntime {
         let delivery = params.delivery.flatMap { NotificationDelivery(rawValue: $0.rawValue) } ?? .system
         let manager = NotificationManager()
 
-        switch delivery {
-        case .system:
-            let ok = await manager.send(
-                title: title,
-                body: body,
-                sound: params.sound,
-                priority: priority)
-            return ok
-                ? BridgeInvokeResponse(id: req.id, ok: true)
-                : Self.errorResponse(req, code: .unavailable, message: "NOT_AUTHORIZED: notifications")
-        case .overlay:
-            await NotifyOverlayController.shared.present(title: title, body: body)
-            return BridgeInvokeResponse(id: req.id, ok: true)
-        case .auto:
+        if delivery != .overlay {
             let ok = await manager.send(
                 title: title,
                 body: body,
@@ -824,9 +813,16 @@ extension MacNodeRuntime {
             if ok {
                 return BridgeInvokeResponse(id: req.id, ok: true)
             }
-            await NotifyOverlayController.shared.present(title: title, body: body)
-            return BridgeInvokeResponse(id: req.id, ok: true)
+            try Task.checkCancellation()
+            if delivery == .system {
+                return Self.errorResponse(req, code: .unavailable, message: "NOT_AUTHORIZED: notifications")
+            }
         }
+        try await MainActor.run {
+            try Task.checkCancellation()
+            NotifyOverlayController.shared.present(title: title, body: body)
+        }
+        return BridgeInvokeResponse(id: req.id, ok: true)
     }
 }
 

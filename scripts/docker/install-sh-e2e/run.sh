@@ -128,15 +128,12 @@ resolve_npm_versions() {
     echo "ERROR: unable to resolve openclaw@${INSTALL_TAG} version" >&2
     return 2
   fi
-  if [[ -n "$E2E_PREVIOUS_VERSION" ]]; then
+  if [[ "$SKIP_PREVIOUS" == "1" ]]; then
+    PREVIOUS_VERSION="$EXPECTED_VERSION"
+  elif [[ -n "$E2E_PREVIOUS_VERSION" ]]; then
     PREVIOUS_VERSION="$E2E_PREVIOUS_VERSION"
   else
-    PREVIOUS_VERSION="$(VERSIONS_JSON="$(quiet_npm view openclaw versions --json)" node - <<'NODE'
-const versions = JSON.parse(process.env.VERSIONS_JSON || "[]");
-if (!Array.isArray(versions) || versions.length === 0) process.exit(1);
-process.stdout.write(versions.length >= 2 ? versions[versions.length - 2] : versions[0]);
-NODE
-    )"
+    PREVIOUS_VERSION="$(resolve_previous_npm_version openclaw "$EXPECTED_VERSION")" || return
   fi
   echo "expected=$EXPECTED_VERSION previous=$PREVIOUS_VERSION"
 }

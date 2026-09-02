@@ -329,54 +329,59 @@ describe("applyFileBackedSessionStoreMaintenance", () => {
     });
   });
 
-  it("forced cleanup prunes stale model-run probes before the cap evicts real sessions", async () => {
-    const now = Date.now();
-    const staleProbe = "agent:main:explicit:model-run-123e4567-e89b-12d3-a456-426614174099";
-    const store: Record<string, SessionEntry> = {
-      [staleProbe]: makeEntry(now - 2 * DAY_MS),
-    };
-    for (let i = 0; i < 50; i++) {
-      store[`agent:main:explicit:real-${i}`] = makeEntry(now - 3 * DAY_MS);
-    }
-    let report: { modelRunPruned: number; pruned: number; capped: number } | undefined;
+  it.each([
+    { modelRunPruneAfterMs: DAY_MS, modelRunPruned: 1, capped: 0, probePresent: false },
+    { modelRunPruneAfterMs: 0, modelRunPruned: 0, capped: 1, probePresent: true },
+    { modelRunPruneAfterMs: -DAY_MS, modelRunPruned: 0, capped: 1, probePresent: true },
+  ])(
+    "applies model-run retention $modelRunPruneAfterMs before forced capping",
+    async ({ modelRunPruneAfterMs, modelRunPruned, capped, probePresent }) => {
+      const now = Date.now();
+      const staleProbe = "agent:main:explicit:model-run-123e4567-e89b-12d3-a456-426614174099";
+      const store: Record<string, SessionEntry> = {
+        [staleProbe]: makeEntry(now - 2 * DAY_MS),
+      };
+      for (let i = 0; i < 50; i++) {
+        store[`agent:main:explicit:real-${i}`] = makeEntry(now - 3 * DAY_MS);
+      }
+      let report: { modelRunPruned: number; pruned: number; capped: number } | undefined;
 
-    const result = await applyFileBackedSessionStoreMaintenance({
-      storePath: "/tmp/openclaw-sessions/sessions.json",
-      store,
-      maintenanceConfig: {
-        mode: "enforce",
-        pruneAfterMs: 7 * DAY_MS,
-        maxEntries: 50,
-        modelRunPruneAfterMs: DAY_MS,
-        resetArchiveRetentionMs: null,
-        maxDiskBytes: null,
-        highWaterBytes: null,
-      },
-      maintenanceOverride: { mode: "enforce" },
-      onMaintenanceApplied: (applied) => {
-        report = {
-          modelRunPruned: applied.modelRunPruned,
-          pruned: applied.pruned,
-          capped: applied.capped,
-        };
-      },
-      log: { warn: () => {}, info: () => {} },
-      artifacts: {
-        archiveRemovedSessionTranscripts: async () => new Set(),
-        removeRemovedSessionTrajectoryArtifacts: async () => {},
-        cleanupArchivedSessionTranscripts: async () => {},
-      },
-    });
+      const result = await applyFileBackedSessionStoreMaintenance({
+        storePath: "/tmp/openclaw-sessions/sessions.json",
+        store,
+        maintenanceConfig: {
+          mode: "enforce",
+          pruneAfterMs: 7 * DAY_MS,
+          maxEntries: 50,
+          modelRunPruneAfterMs,
+          resetArchiveRetentionMs: null,
+          maxDiskBytes: null,
+          highWaterBytes: null,
+        },
+        maintenanceOverride: { mode: "enforce" },
+        onMaintenanceApplied: (applied) => {
+          report = {
+            modelRunPruned: applied.modelRunPruned,
+            pruned: applied.pruned,
+            capped: applied.capped,
+          };
+        },
+        log: { warn: () => {}, info: () => {} },
+        artifacts: {
+          archiveRemovedSessionTranscripts: async () => new Set(),
+          removeRemovedSessionTrajectoryArtifacts: async () => {},
+          cleanupArchivedSessionTranscripts: async () => {},
+        },
+      });
 
-    expect(result.changedStore).toBe(true);
-    expect(report?.modelRunPruned).toBe(1);
-    expect(report?.capped).toBe(0);
-    expect(store[staleProbe]).toBeUndefined();
-    expect(Object.keys(store)).toHaveLength(50);
-    for (let i = 0; i < 50; i++) {
-      expect(store).toHaveProperty(`agent:main:explicit:real-${i}`);
-    }
-  });
+      expect(result.changedStore).toBe(true);
+      expect(report?.modelRunPruned).toBe(modelRunPruned);
+      expect(report?.capped).toBe(capped);
+      expect(store[staleProbe] != null).toBe(probePresent);
+      expect(Object.keys(store)).toHaveLength(50);
+      expect(Object.keys(store).filter((key) => key.includes(":real-"))).toHaveLength(50 - capped);
+    },
+  );
 
   it("counts protected sessions when triggering capping but never evicts them", async () => {
     const now = Date.now();
@@ -604,6 +609,10 @@ describe("pruneStaleModelRunEntries", () => {
     ).toBe(0);
     expect(store).toHaveProperty(staleModelRun);
     expect(pruneStaleModelRunEntries(store, null)).toBe(0);
+    expect(store).toHaveProperty(staleModelRun);
+    expect(pruneStaleModelRunEntries(store, 0)).toBe(0);
+    expect(store).toHaveProperty(staleModelRun);
+    expect(pruneStaleModelRunEntries(store, -DAY_MS)).toBe(0);
     expect(store).toHaveProperty(staleModelRun);
   });
 

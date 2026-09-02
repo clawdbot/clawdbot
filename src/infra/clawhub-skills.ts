@@ -179,6 +179,7 @@ export type ClawHubSkillSecurityVerdictItem = {
   createdAt?: number | null;
   checkedAt?: number | null;
   skillUrl?: string | null;
+  overview?: string | null;
   securityAuditUrl?: string | null;
   security?: unknown;
   error?: {

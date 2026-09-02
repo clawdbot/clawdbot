@@ -69,28 +69,16 @@ export function findPane(
 ): { column: ChatSplitColumn; columnIndex: number; pane: ChatSplitPane; paneIndex: number } | null {
   for (const [columnIndex, column] of layout.columns.entries()) {
     const paneIndex = column.panes.findIndex((pane) => pane.id === paneId);
-    if (paneIndex >= 0) {
-      const selectedPane = column.panes[paneIndex];
-      if (!selectedPane) {
-        continue;
-      }
-      return {
-        column: {
-          ...column,
-          panes: column.panes.map((pane) => ({ ...pane })),
-          paneWeights: [...column.paneWeights],
-        },
-        columnIndex,
-        pane: { ...selectedPane },
-        paneIndex,
-      };
+    const pane = column.panes[paneIndex];
+    if (pane) {
+      return { column, columnIndex, pane, paneIndex };
     }
   }
   return null;
 }
 
 export function panesOf(layout: ChatSplitLayout): ChatSplitPane[] {
-  return layout.columns.flatMap((column) => column.panes.map((pane) => ({ ...pane })));
+  return layout.columns.flatMap((column) => column.panes);
 }
 
 /** Panes actually rendered at the current viewport width. */
@@ -184,7 +172,7 @@ export function setPaneSession(
   sessionKey: string,
 ): ChatSplitLayout {
   const next = cloneLayout(layout);
-  const pane = next.columns.flatMap((column) => column.panes).find((entry) => entry.id === paneId);
+  const pane = findPane(next, paneId)?.pane;
   if (pane) {
     pane.sessionKey = sessionKey;
   }
@@ -193,7 +181,7 @@ export function setPaneSession(
 
 export function setActivePane(layout: ChatSplitLayout, paneId: string): ChatSplitLayout {
   const next = cloneLayout(layout);
-  if (panesOf(layout).some((pane) => pane.id === paneId)) {
+  if (findPane(layout, paneId)) {
     next.activePaneId = paneId;
   }
   return next;

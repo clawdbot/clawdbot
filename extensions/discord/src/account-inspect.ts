@@ -1,14 +1,18 @@
 // Discord plugin module implements account inspect behavior.
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
+import type { DiscordAccountConfig, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { normalizeSecretInputString } from "openclaw/plugin-sdk/secret-input";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { inspectDiscordAccountTokenState } from "./account-token-inspect.js";
 import {
+  inspectDiscordAccountTokenState,
+  resolveDiscordAccountAvailability,
+} from "./account-token-inspect.js";
+import {
+  listDiscordAccountIds,
   mergeDiscordAccountConfig,
   resolveDefaultDiscordAccountId,
   resolveDiscordAccountConfig,
 } from "./accounts.js";
-import type { DiscordAccountConfig, OpenClawConfig } from "./runtime-api.js";
 import type { DiscordCredentialStatus } from "./token.js";
 
 export type InspectedDiscordAccount = {
@@ -19,10 +23,11 @@ export type InspectedDiscordAccount = {
   tokenSource: "env" | "config" | "none";
   tokenStatus: DiscordCredentialStatus;
   configured: boolean;
+  stateReason?: string;
   config: DiscordAccountConfig;
 };
 
-export function inspectDiscordAccount(params: {
+function inspectDiscordAccountPrimary(params: {
   cfg: OpenClawConfig;
   accountId?: string | null;
   envToken?: string | null;
@@ -58,4 +63,21 @@ export function inspectDiscordAccount(params: {
       };
     },
   });
+}
+
+export function inspectDiscordAccount(
+  params: Parameters<typeof inspectDiscordAccountPrimary>[0],
+): InspectedDiscordAccount {
+  const account = inspectDiscordAccountPrimary(params);
+  return {
+    ...account,
+    // Keep the injected inspection environment; never switch to runtime-resolved secrets here.
+    ...resolveDiscordAccountAvailability({
+      account,
+      resolveAccounts: () =>
+        listDiscordAccountIds(params.cfg).map((accountId) =>
+          inspectDiscordAccountPrimary({ ...params, accountId }),
+        ),
+    }),
+  };
 }

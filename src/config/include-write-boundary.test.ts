@@ -250,6 +250,24 @@ describe("resolveIncludeWriteBoundary", () => {
     ).toBeNull();
   });
 
+  it("declines every nested boundary beneath a sole-owner root include", () => {
+    expect(
+      resolveIncludeWriteBoundary({
+        provenance: [
+          alphaInclude,
+          {
+            path: [],
+            kind: "single" as const,
+            hasSiblingOverrides: false,
+            hasArrayAncestor: false,
+            targetPath: "/cfg/base.json5",
+          },
+        ],
+        changed: { paths: [["agents", "entries", "alpha", "model"]], rootChanged: false },
+      }),
+    ).toBeNull();
+  });
+
   it("declines an array-entry include", () => {
     expect(
       resolveIncludeWriteBoundary({

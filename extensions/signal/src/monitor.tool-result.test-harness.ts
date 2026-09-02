@@ -2,11 +2,11 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import type { PluginRuntime } from "openclaw/plugin-sdk/core";
 import {
   closeOpenClawStateDatabaseForTest,
   createChannelIngressQueueForTests,
-} from "openclaw/plugin-sdk/plugin-state-test-runtime";
+} from "openclaw/plugin-sdk/channel-ingress-test-runtime";
+import type { PluginRuntime } from "openclaw/plugin-sdk/core";
 import type { MockFn } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { closeOpenClawAgentDatabasesForTest } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, beforeEach, vi } from "vitest";
@@ -246,11 +246,15 @@ vi.mock("openclaw/plugin-sdk/security-runtime", async () => {
   };
 });
 
-vi.mock("./client.js", () => ({
-  streamSignalEvents: (...args: unknown[]) => streamMock(...args),
-  signalCheck: (...args: unknown[]) => signalCheckMock(...args),
-  signalRpcRequest: (...args: unknown[]) => signalRpcRequestMock(...args),
-}));
+vi.mock("./client.js", async () => {
+  const actual = await vi.importActual<typeof import("./client.js")>("./client.js");
+  return {
+    ...actual,
+    streamSignalEvents: (...args: unknown[]) => streamMock(...args),
+    signalCheck: (...args: unknown[]) => signalCheckMock(...args),
+    signalRpcRequest: (...args: unknown[]) => signalRpcRequestMock(...args),
+  };
+});
 
 vi.mock("./client-adapter.js", () => ({
   streamSignalEvents: (...args: unknown[]) => streamMock(...args),

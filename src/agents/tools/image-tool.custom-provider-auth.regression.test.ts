@@ -125,6 +125,7 @@ describe("image custom provider auth regression", () => {
       }),
       resolveAutoMediaKeyProviders: () => [],
       resolveDefaultMediaModel: () => undefined,
+      resolveRegisteredMediaUnderstandingProvider: () => undefined,
       resolveModelAsync: async () => ({
         model: {} as never,
         authStorage: {} as never,

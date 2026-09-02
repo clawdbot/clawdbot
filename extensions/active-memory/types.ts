@@ -249,10 +249,12 @@ type ActiveRecallResult =
       searchDebug?: ActiveMemorySearchDebug;
     };
 
+type ActiveMemoryPartialTimeoutData = Partial<RecallSubagentResult> & {
+  cleanupFailed?: boolean;
+};
+
 type ActiveMemoryPartialTimeoutError = Error & {
-  activeMemoryPartialReply?: string;
-  activeMemorySearchDebug?: ActiveMemorySearchDebug;
-  activeMemoryUnavailableMemorySearch?: boolean;
+  activeMemoryPartialData?: ActiveMemoryPartialTimeoutData;
 };
 
 type TranscriptReadLimits = {
@@ -387,6 +389,7 @@ export type {
   ActiveMemoryChatType,
   ActiveMemoryMode,
   ActiveMemoryFastMode,
+  ActiveMemoryPartialTimeoutData,
   ActiveMemoryPartialTimeoutError,
   ActiveMemoryPromptStyle,
   ActiveMemorySearchDebug,

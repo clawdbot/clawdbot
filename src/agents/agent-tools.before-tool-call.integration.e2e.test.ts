@@ -8,6 +8,7 @@ import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions.js";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
@@ -28,12 +29,13 @@ import { addTestHook, createMockPluginRegistry } from "../plugins/hooks.test-fix
 import { patchPluginSessionExtension } from "../plugins/host-hook-state.js";
 import { createEmptyPluginRegistry } from "../plugins/registry.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
-import { setPluginToolMeta } from "../plugins/tools.js";
+import { setPluginToolMeta } from "../plugins/tool-metadata.js";
 import type { PluginHookRegistration } from "../plugins/types.js";
 import {
   authorizeClientVoiceConfirmation,
   bindAuthorizedClientVoiceConfirmation,
   checkClientVoiceToolConfirmationPolicy,
+  deactivateClientVoiceConfirmationSession,
   noteClientVoiceConfirmationUtterance,
 } from "../talk/client-voice-confirmation.js";
 import { resetClientVoiceConfirmationStateForTest } from "../talk/client-voice-confirmation.test-support.js";
@@ -148,9 +150,8 @@ function installVoiceRunBinding(runId: string): void {
   vi.spyOn(clientVoiceSession, "isClientVoiceSessionConfirmable").mockReturnValue(true);
 }
 
-function approveVoiceToolParams(runId: string, toolParams: unknown): void {
+function authorizeVoiceToolParams(runId: string, toolParams: unknown, now = Date.now()) {
   const voiceSessionId = `voice-${runId}`;
-  const now = Date.now();
   const challenge = checkClientVoiceToolConfirmationPolicy({
     agentId: "main",
     voiceSessionId,
@@ -179,6 +180,11 @@ function approveVoiceToolParams(runId: string, toolParams: unknown): void {
     confirmationId,
     now: now + 2,
   });
+  return { confirmationId, grant, voiceSessionId };
+}
+
+function approveVoiceToolParams(runId: string, toolParams: unknown): void {
+  const { grant } = authorizeVoiceToolParams(runId, toolParams);
   bindAuthorizedClientVoiceConfirmation({ grant, runId });
 }
 
@@ -196,6 +202,7 @@ describe("before_tool_call hook integration", () => {
   afterEach(() => {
     setActivePluginRegistry(createEmptyPluginRegistry());
     resetClientVoiceConfirmationStateForTest();
+    vi.useRealTimers();
     vi.restoreAllMocks();
   });
 
@@ -1476,7 +1483,10 @@ describe("before_tool_call hook deduplication (#15502)", () => {
         );
 
         if (replacement === "return 3;") {
-          expect(result.details).toMatchObject({ status: "completed", value: 3 });
+          expect(result.details, JSON.stringify(result.details)).toMatchObject({
+            status: "completed",
+            value: 3,
+          });
         } else {
           expect(result.details).toEqual({
             status: "error",
@@ -1757,57 +1767,103 @@ describe("before_tool_call hook deduplication (#15502)", () => {
     expect(beforeToolCallHook).toHaveBeenCalledTimes(1);
   });
 
-  it("emits a tool-authored terminal presentation with the recorded outcome", async () => {
+  it("isolates terminal presentation arguments while using the final middleware result", async () => {
     const onToolOutcome = vi.fn();
+    let executedParams: { request: { url: string } } | undefined;
     const sourceTool = setToolTerminalPresentation(
       asAgentTool({
         name: "web_fetch",
         description: "fetch",
         parameters: {},
         resultContentSource: "network",
-        execute: vi.fn().mockResolvedValue({
-          content: [],
-          details: { status: 200 },
+        execute: vi.fn(async (_id, params: { request: { url: string } }) => {
+          executedParams = params;
+          return { content: [], details: { status: 200 } };
         }),
       }),
-      (_params, result) => ({
-        text: `Fetched with status ${(result.details as { status: number }).status}`,
-      }),
+      (params, result) => {
+        const url = (params as { request: { url: string } }).request.url;
+        return {
+          text: `Fetched ${url} with status ${(result.details as { status: number }).status}`,
+        };
+      },
     );
     const tool = expectDefined(
       wrapToolWithBeforeToolCallHook(
         normalizeToolParameters(sourceTool, { modelProvider: "openai" }),
         {
           sessionId: "session-terminal-presentation",
+          runId: "run-terminal-presentation",
           onToolOutcome,
         },
       ),
       "wrapToolWithBeforeToolCallHook( normalizeToolParameters(sourceTool, {... test invariant",
     );
     await tool.execute("call-terminal-presentation", {
-      url: "https://example.com",
+      request: { url: "https://example.com" },
     });
 
     expect(onToolOutcome).toHaveBeenCalledWith(
       expect.objectContaining({
         toolName: "web_fetch",
         resultContentSource: "network",
-        terminalPresentation: "Fetched with status 200",
+        terminalPresentation: "Fetched https://example.com with status 200",
+      }),
+    );
+
+    expectDefined(executedParams, "executed formatter arguments").request.url =
+      "https://changed.example";
+    finalizeToolTerminalPresentation({
+      toolCallId: "call-terminal-presentation",
+      runId: "run-terminal-presentation",
+      result: { content: [], details: { status: 201 } },
+      isError: false,
+    });
+    expect(onToolOutcome).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        presentationOnly: true,
+        terminalPresentation: "Fetched https://example.com with status 201",
       }),
     );
   });
 
-  it("keeps the later model-ordered result when parallel tools finish out of order", async () => {
+  it("does not publish terminal presentation state when raw outcome observation fails", async () => {
+    const observerError = new Error("observer failed");
+    const onToolOutcome = vi.fn(() => {
+      throw observerError;
+    });
+    const tool = wrapToolWithBeforeToolCallHook(
+      asAgentTool({
+        name: "read_file",
+        description: "read",
+        parameters: {},
+        execute: vi.fn().mockResolvedValue({ content: [], details: { ok: true } }),
+      }),
+      {
+        sessionId: "session-terminal-observer-error",
+        runId: "run-terminal-observer-error",
+        onToolOutcome,
+      },
+    );
+
+    await expect(tool.execute("call-terminal-observer-error", {})).rejects.toBe(observerError);
+    const callsBeforeFinalization = onToolOutcome.mock.calls.length;
+    expect(() =>
+      finalizeToolTerminalPresentation({
+        toolCallId: "call-terminal-observer-error",
+        runId: "run-terminal-observer-error",
+        result: { content: [], details: { ok: true } },
+        isError: false,
+      }),
+    ).not.toThrow();
+    expect(onToolOutcome).toHaveBeenCalledTimes(callsBeforeFinalization);
+  });
+
+  it("clears a prior summary for large uncloneable plain-tool input and fences stale finalizers", async () => {
     type ToolResult = { content: []; details: { ok?: boolean; status?: number } };
-    let resolvePresentation!: (result: ToolResult) => void;
-    let resolvePlain!: (result: ToolResult) => void;
-    const presentationExecution = new Promise<ToolResult>((resolve) => {
-      resolvePresentation = resolve;
-    });
-    const plainExecution = new Promise<ToolResult>((resolve) => {
-      resolvePlain = resolve;
-    });
-    let terminalPresentation: string | undefined;
+    const presentationExecution = createDeferred<ToolResult>();
+    const plainExecution = createDeferred<ToolResult>();
+    let terminalPresentation: string | undefined = "Previous tool summary";
     let latestOrdinal = -1;
     const onToolOutcome = vi.fn(
       (outcome: { toolCallOrdinal?: number; terminalPresentation?: string }) => {
@@ -1831,26 +1887,33 @@ describe("before_tool_call hook deduplication (#15502)", () => {
           name: "web_fetch",
           description: "fetch",
           parameters: {},
-          execute: vi.fn(() => presentationExecution),
+          execute: vi.fn(() => presentationExecution.promise),
         }),
         () => ({ text: "Fetched with status 200" }),
       ),
       hookContext,
     );
     const plainTool = wrapToolWithBeforeToolCallHook(
-      asAgentTool({
-        name: "read_file",
-        description: "read",
-        parameters: {},
-        execute: vi.fn(() => plainExecution),
-      }),
+      {
+        ...asAgentTool({
+          name: "read_file",
+          description: "read",
+          parameters: {},
+          execute: vi.fn(() => plainExecution.promise),
+        }),
+        // Tool-owned preparation can carry private, non-JSON execution state.
+        finalizeBeforeToolCallParams: () => ({
+          content: Array.from({ length: 16_384 }, (_, index) => index),
+          privateCallback: () => undefined,
+        }),
+      },
       hookContext,
     );
 
     const presentationResultPromise = presentationTool.execute("call-presentation", {});
     const plainResultPromise = plainTool.execute("call-plain", {});
 
-    resolvePlain({ content: [], details: { ok: true } });
+    plainExecution.resolve({ content: [], details: { ok: true } });
     const plainResult = await plainResultPromise;
     finalizeToolTerminalPresentation({
       toolCallId: "call-plain",
@@ -1860,7 +1923,7 @@ describe("before_tool_call hook deduplication (#15502)", () => {
     });
     expect(terminalPresentation).toBeUndefined();
 
-    resolvePresentation({ content: [], details: { status: 200 } });
+    presentationExecution.resolve({ content: [], details: { status: 200 } });
     const presentationResult = await presentationResultPromise;
     finalizeToolTerminalPresentation({
       toolCallId: "call-presentation",
@@ -2010,6 +2073,100 @@ describe("before_tool_call adapter and client tool integration", () => {
 
       expect(hook.didObserveAbort()).toBe(true);
       expect(execute).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(
+    (["wrapped", "adapter", "client-hosted"] as const).flatMap((pathKind) =>
+      (["supersession", "refusal", "close", "expiry"] as const).map(
+        (invalidator) => [pathKind, invalidator] as const,
+      ),
+    ),
+  )(
+    "blocks invalidated voice grants through the %s path after %s",
+    async (pathKind, invalidator) => {
+      vi.useFakeTimers();
+      vi.setSystemTime(100);
+      const runId = `run-voice-invalidated-${pathKind}-${invalidator}`;
+      const toolParams = { action: "send", to: "target-a", message: "cancelled body" };
+      installVoiceRunBinding(runId);
+      const { grant, voiceSessionId } = authorizeVoiceToolParams(runId, toolParams, 100);
+      vi.setSystemTime(103);
+
+      if (invalidator === "supersession") {
+        checkClientVoiceToolConfirmationPolicy({
+          agentId: "main",
+          voiceSessionId,
+          runId,
+          toolName: "message",
+          toolParams: { ...toolParams, message: "successor body" },
+          isConfirmable: () => true,
+          now: 103,
+        });
+      } else if (invalidator === "refusal") {
+        noteClientVoiceConfirmationUtterance({
+          agentId: "main",
+          voiceSessionId,
+          text: "no",
+          timestamp: 103,
+        });
+      } else if (invalidator === "close") {
+        deactivateClientVoiceConfirmationSession("main", voiceSessionId);
+      } else {
+        vi.advanceTimersByTime(120_001);
+      }
+
+      expect(bindAuthorizedClientVoiceConfirmation({ grant, runId })).toBe(false);
+
+      const dispatch = vi.fn().mockResolvedValue({ content: [], details: { ok: true } });
+      const hookContext = { runId, agentId: "main", sessionKey: "agent:main:voice" };
+      const definition =
+        pathKind === "client-hosted"
+          ? expectDefined(
+              toClientToolDefinitions(
+                [
+                  {
+                    type: "function",
+                    function: {
+                      name: "message",
+                      description: "client-hosted message tool",
+                      parameters: { type: "object", properties: {} },
+                    },
+                  },
+                ],
+                dispatch,
+                hookContext,
+              )[0],
+              "client-hosted invalidated voice tool definition",
+            )
+          : expectDefined(
+              toToolDefinitions(
+                [
+                  pathKind === "wrapped"
+                    ? wrapToolWithBeforeToolCallHook(
+                        asAgentTool({ name: "message", execute: dispatch }),
+                        hookContext,
+                      )
+                    : asAgentTool({ name: "message", execute: dispatch }),
+                ],
+                hookContext,
+              )[0],
+              `${pathKind} invalidated voice tool definition`,
+            );
+
+      const result = await definition.execute(
+        `call-voice-invalidated-${pathKind}-${invalidator}`,
+        toolParams,
+        undefined,
+        undefined,
+        {} as ExtensionContext,
+      );
+
+      expect(result.details).toMatchObject({
+        status: "blocked",
+        deniedReason: "client-voice-confirmation",
+      });
+      expect(dispatch).not.toHaveBeenCalled();
     },
   );
 

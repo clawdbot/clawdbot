@@ -5,11 +5,13 @@ import type { ExtraGatewayService } from "../daemon/inspect.js";
 import * as launchd from "../daemon/launchd.js";
 import type { GatewayRestartHandoff } from "../infra/restart-handoff.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import { buildGatewayInstallPlan } from "./daemon-install-helpers.js";
 import { createDoctorPrompter } from "./doctor-prompter.js";
 import {
   EXTERNAL_SERVICE_REPAIR_NOTE,
   SERVICE_REPAIR_POLICY_ENV,
 } from "./doctor-service-repair-policy.js";
+import { resolveGatewayInstallToken } from "./gateway-install-token.js";
 
 const service = vi.hoisted(() => ({
   isLoaded: vi.fn(),
@@ -39,6 +41,11 @@ const formatGatewayRuntimeSummary = vi.hoisted(() => vi.fn((): string | null => 
 const renderSystemdUnavailableHints = vi.hoisted(() => vi.fn((): string[] => []));
 const isDefaultInstallIdentity = vi.hoisted(() => vi.fn(() => true));
 const isContainerEnvironment = vi.hoisted(() => vi.fn(() => false));
+const findInstalledSystemdGatewayScope = vi.hoisted(() =>
+  vi.fn<(typeof import("../daemon/systemd.js"))["findInstalledSystemdGatewayScope"]>(
+    async () => null,
+  ),
+);
 const resolveGatewayBindHost = vi.hoisted(() => vi.fn(async () => "127.0.0.1"));
 
 vi.mock("../config/config.js", async () => {
@@ -86,6 +93,11 @@ vi.mock("../daemon/service.js", async () => {
     resolveGatewayService: () => service,
   };
 });
+
+vi.mock("../daemon/systemd.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../daemon/systemd.js")>()),
+  findInstalledSystemdGatewayScope,
+}));
 
 vi.mock("../daemon/systemd-hints.js", () => ({
   renderSystemdUnavailableHints,
@@ -171,6 +183,7 @@ describe("maybeRepairGatewayDaemon", () => {
     vi.clearAllMocks();
     formatGatewayClosedDiagnostic.mockReset();
     formatGatewayClosedDiagnostic.mockReturnValue(undefined);
+    findInstalledSystemdGatewayScope.mockReset().mockResolvedValue(null);
     service.isLoaded.mockResolvedValue(true);
     service.readRuntime.mockResolvedValue({ status: "running" });
     service.readCommand.mockResolvedValue(null);
@@ -341,13 +354,14 @@ describe("maybeRepairGatewayDaemon", () => {
   });
 
   it.each([
-    { environment: "detected container", detected: true, kubernetes: false },
-    { environment: "Kubernetes pod without container markers", detected: false, kubernetes: true },
+    { environment: "container without an OpenClaw service", detected: true },
+    { environment: "Kubernetes pod without container markers", kubernetes: true },
+    { environment: "globally external supervisor", external: true },
   ])(
     "keeps port diagnostics but never probes host services in a $environment",
     async (scenario) => {
       setPlatform("linux");
-      isContainerEnvironment.mockReturnValue(scenario.detected);
+      isContainerEnvironment.mockReturnValue(scenario.detected === true);
       inspectPortUsage.mockResolvedValueOnce({
         port: 18789,
         status: "busy",
@@ -359,16 +373,15 @@ describe("maybeRepairGatewayDaemon", () => {
         {
           KUBERNETES_SERVICE_HOST: scenario.kubernetes ? "10.96.0.1" : undefined,
           KUBERNETES_SERVICE_PORT: scenario.kubernetes ? "443" : undefined,
+          OPENCLAW_SUPERVISOR_MODE: scenario.external ? "external" : undefined,
         },
         runNonInteractiveRepair,
       );
 
       expect(inspectPortUsage).toHaveBeenCalledOnce();
       expect(note).toHaveBeenCalledWith("Port 18789 is already in use.", "Gateway port");
-      expect(note).toHaveBeenCalledWith(
-        "Container lifecycle is externally managed; skipping host service installation.",
-        "Gateway",
-      );
+      expect(note).toHaveBeenCalledWith(EXTERNAL_SERVICE_REPAIR_NOTE, "Gateway");
+      expect(findInstalledSystemdGatewayScope).toHaveBeenCalledTimes(scenario.detected ? 1 : 0);
       expect(service.isLoaded).not.toHaveBeenCalled();
       expect(service.readRuntime).not.toHaveBeenCalled();
       expect(service.readCommand).not.toHaveBeenCalled();
@@ -377,6 +390,22 @@ describe("maybeRepairGatewayDaemon", () => {
       expect(findSystemGatewayServices).not.toHaveBeenCalled();
     },
   );
+
+  it("inspects an installed OpenClaw service through a reachable Docker systemd manager", async () => {
+    setPlatform("linux");
+    isContainerEnvironment.mockReturnValue(true);
+    findInstalledSystemdGatewayScope.mockResolvedValue({
+      scope: "user",
+      unitName: "openclaw-gateway.service",
+      unitPath: "/home/alice/.config/systemd/user/openclaw-gateway.service",
+    });
+
+    await runNonInteractiveRepair();
+
+    expect(service.isLoaded).toHaveBeenCalledWith({ env: process.env, timeoutMs: 5_000 });
+    expect(service.readRuntime).toHaveBeenCalledOnce();
+    expect(note).not.toHaveBeenCalledWith(EXTERNAL_SERVICE_REPAIR_NOTE, "Gateway");
+  });
 
   it("reports recent restart handoffs during deep doctor", async () => {
     vi.useFakeTimers();
@@ -648,6 +677,50 @@ describe("maybeRepairGatewayDaemon", () => {
 
     expect(service.install).not.toHaveBeenCalled();
     expect(service.restart).not.toHaveBeenCalled();
+  });
+
+  it("retains operator heap ownership when reinstalling a disabled service", async () => {
+    setPlatform("linux");
+    service.isLoaded.mockResolvedValue(false);
+    service.readRuntime.mockResolvedValue({ status: "stopped" });
+    const managedDefinition = {
+      programArguments: ["node", "/opt/openclaw/dist/index.js", "gateway"],
+      environment: { NODE_OPTIONS: "", UNRELATED: "not-persisted" },
+    };
+    const existingCommand = {
+      ...managedDefinition,
+      environment: { NODE_OPTIONS: "--max-old-space-size=512" },
+      managedDefinition,
+      managedOverrides: { environment: { keys: ["NODE_OPTIONS"] } },
+    };
+    service.readCommand.mockResolvedValue(existingCommand);
+    vi.mocked(resolveGatewayInstallToken).mockResolvedValueOnce({
+      tokenRefConfigured: false,
+      warnings: [],
+    });
+    vi.mocked(buildGatewayInstallPlan).mockResolvedValueOnce({
+      programArguments: managedDefinition.programArguments,
+      environment: { NODE_OPTIONS: "" },
+    });
+    const prompter = createPrompter(() => true);
+    prompter.select.mockResolvedValue("node");
+
+    await maybeRepairGatewayDaemon({
+      cfg: { gateway: {} },
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+      prompter,
+      options: { deep: false },
+      gatewayDetailsMessage: "details",
+      healthOk: false,
+    });
+
+    expect(buildGatewayInstallPlan).toHaveBeenCalledWith(
+      expect.objectContaining({ existingCommand }),
+    );
+    expect(vi.mocked(buildGatewayInstallPlan).mock.calls[0]?.[0]).not.toHaveProperty(
+      "existingEnvironment",
+    );
+    expect(service.install).toHaveBeenCalledOnce();
   });
 
   it("skips gateway install during non-interactive doctor repairs", async () => {

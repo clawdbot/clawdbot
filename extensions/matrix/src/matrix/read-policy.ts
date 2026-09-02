@@ -1,10 +1,10 @@
 import { normalizeAccountId } from "openclaw/plugin-sdk/account-id";
+import { ToolAuthorizationError } from "openclaw/plugin-sdk/channel-actions";
 import type { ChannelMessageActionContext } from "openclaw/plugin-sdk/channel-contract";
 import {
   resolveAllowlistProviderRuntimeGroupPolicy,
   resolveDefaultGroupPolicy,
-  ToolAuthorizationError,
-} from "../runtime-api.js";
+} from "openclaw/plugin-sdk/runtime-group-policy";
 import type { CoreConfig } from "../types.js";
 import { resolveMatrixBaseConfig } from "./account-config.js";
 import { resolveMatrixAccount } from "./accounts.js";

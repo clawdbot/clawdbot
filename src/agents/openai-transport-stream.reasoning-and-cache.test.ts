@@ -229,7 +229,7 @@ describe("openai transport stream", () => {
     expect(params).not.toHaveProperty("store");
   });
 
-  it("uses system role for xAI default-route responses providers without relying on baseUrl host sniffing", () => {
+  it("carries the system prompt via top-level instructions for xAI default-route responses providers", () => {
     const params = buildOpenAIResponsesParams(
       makeResponsesModel({
         id: "grok-4.1-fast",
@@ -239,8 +239,126 @@ describe("openai transport stream", () => {
       }),
       emptyContext(),
       undefined,
-    ) as { input?: Array<{ role?: string }> };
+    ) as { instructions?: string };
 
-    expect(params.input?.[0]?.role).toBe("system");
+    expect(params.instructions).toBe("system");
+  });
+
+  it.each([
+    { supportsDeveloperRole: undefined, role: "developer" },
+    { supportsDeveloperRole: true, role: "developer" },
+    { supportsDeveloperRole: false, role: "system" },
+  ])(
+    "keeps the $role prompt role when instructions are disabled",
+    ({ supportsDeveloperRole, role }) => {
+      const params = buildOpenAIResponsesParams(
+        makeResponsesModel({
+          id: "custom-model",
+          provider: "custom-provider",
+          baseUrl: "https://proxy.example.com/v1",
+          compat: { supportsInstructions: false, supportsDeveloperRole },
+        }),
+        emptyContext(),
+        undefined,
+      ) as { instructions?: string; input?: Array<{ role?: string; content?: unknown }> };
+
+      expect(params).not.toHaveProperty("instructions");
+      expect(params.input?.[0]).toMatchObject({
+        role,
+        content: [{ type: "input_text", text: "system" }],
+      });
+    },
+  );
+
+  it("embeds the system prompt in input by default for an unverified custom proxy route", () => {
+    const params = buildOpenAIResponsesParams(
+      {
+        id: "custom-model",
+        name: "Custom Model",
+        api: "openai-responses",
+        provider: "custom-provider",
+        baseUrl: "https://proxy.example.com/v1",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 8192,
+      } as never,
+      emptyContext(),
+      undefined,
+    ) as { instructions?: string; input?: Array<{ role?: string }> };
+
+    expect(params).not.toHaveProperty("instructions");
+    expect(params.input?.[0]?.role).toBe("developer");
+  });
+
+  it("carries the system prompt via instructions for an unverified proxy route with an explicit opt-in", () => {
+    const params = buildOpenAIResponsesParams(
+      {
+        id: "custom-model",
+        name: "Custom Model",
+        api: "openai-responses",
+        provider: "custom-provider",
+        baseUrl: "https://proxy.example.com/v1",
+        compat: { supportsInstructions: true },
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 8192,
+      } as never,
+      emptyContext(),
+      undefined,
+    ) as { instructions?: string };
+
+    expect(params.instructions).toBe("system");
+  });
+
+  it("embeds the system prompt in input by default for a bundled-but-unverified named route (GitHub Copilot)", () => {
+    const params = buildOpenAIResponsesParams(
+      makeResponsesModel({
+        id: "gpt-5.4",
+        name: "GPT-5.4",
+        provider: "github-copilot",
+        baseUrl: "https://api.githubcopilot.com/v1",
+      }),
+      emptyContext(),
+      undefined,
+    ) as { instructions?: string; input?: Array<{ role?: string }> };
+
+    expect(params).not.toHaveProperty("instructions");
+    expect(params.input?.[0]?.role).toBe("developer");
+  });
+
+  it("embeds the system prompt in input by default for a bundled-but-unverified named route (OpenCode)", () => {
+    const params = buildOpenAIResponsesParams(
+      makeResponsesModel({
+        id: "gpt-5.4",
+        name: "GPT-5.4",
+        provider: "opencode",
+        baseUrl: "https://opencode.ai/zen/v1",
+      }),
+      emptyContext(),
+      undefined,
+    ) as { instructions?: string; input?: Array<{ role?: string }> };
+
+    expect(params).not.toHaveProperty("instructions");
+    expect(params.input?.[0]?.role).toBe("developer");
+  });
+
+  it("embeds the system prompt in input by default for Azure OpenAI, unlike native OpenAI", () => {
+    const params = buildOpenAIResponsesParams(
+      makeResponsesModel({
+        id: "gpt-5.4",
+        name: "GPT-5.4",
+        provider: "azure-openai",
+        baseUrl: "https://example.openai.azure.com/openai/responses",
+      }),
+      emptyContext(),
+      undefined,
+    ) as { instructions?: string; input?: Array<{ role?: string }> };
+
+    expect(params).not.toHaveProperty("instructions");
+    expect(params.input?.[0]?.role).toBe("developer");
   });
 });

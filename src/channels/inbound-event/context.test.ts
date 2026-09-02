@@ -261,6 +261,7 @@ describe("buildChannelInboundEventContext", () => {
       SenderUsername: "userone",
       SenderTag: "User#0001",
       SenderIsBot: true,
+      SenderIsSelf: undefined,
       MemberRoleIds: ["admin"],
       Timestamp: 123,
       Provider: "test-provider",
@@ -309,6 +310,18 @@ describe("buildChannelInboundEventContext", () => {
     });
     expect(ctx.Body).not.toContain("customSenderField");
     expect(ctx.BodyForAgent).not.toContain("customSenderField");
+  });
+
+  it("projects the ingress from-me sender fact as SenderIsSelf", () => {
+    const ctx = buildTestInboundEventContext({
+      sender: {
+        id: "u1",
+        name: "User One",
+        isSelf: true,
+      },
+    });
+
+    expect(ctx.SenderIsSelf).toBe(true);
   });
 
   it("uses resolved command authorization", async () => {

@@ -203,9 +203,21 @@ describe("CodexAppServerEventProjector commentary projection", () => {
     ).toBeUndefined();
   });
 
-  it("streams commentary agent messages as keyed progress events", async () => {
+  it("streams commentary with a distinct completion even when the last delta has the same text", async () => {
     const onAgentEvent = vi.fn();
     const onPartialReply = vi.fn();
+    const commentaryText = [
+      "Checking the app-server stream",
+      "",
+      "| Intent | Command |",
+      "| --- | --- |",
+      "| Session only | `/model opus` |",
+      "",
+      "```text",
+      "BEFORE  /model opus  → persistent",
+      "AFTER   /model opus  → session only",
+      "```",
+    ].join("\n");
     const projector = await createProjector({
       ...(await createParams()),
       onAgentEvent,
@@ -224,7 +236,19 @@ describe("CodexAppServerEventProjector commentary projection", () => {
     );
     await projector.handleNotification(agentMessageDelta("Checking", "msg-commentary"));
     await projector.handleNotification(
-      agentMessageDelta(" the app-server stream", "msg-commentary"),
+      agentMessageDelta(commentaryText.slice("Checking".length), "msg-commentary"),
+    );
+    // The completion boundary lets channels buffer their first notification;
+    // text-only dedupe must not erase it after the final identical snapshot.
+    await projector.handleNotification(
+      forCurrentTurn("item/completed", {
+        item: {
+          type: "agentMessage",
+          id: "msg-commentary",
+          phase: "commentary",
+          text: commentaryText,
+        },
+      }),
     );
     await projector.handleNotification(
       turnCompleted([
@@ -232,7 +256,7 @@ describe("CodexAppServerEventProjector commentary projection", () => {
           type: "agentMessage",
           id: "msg-commentary",
           phase: "commentary",
-          text: "Checking the app-server stream",
+          text: commentaryText,
         },
         {
           type: "agentMessage",
@@ -262,7 +286,15 @@ describe("CodexAppServerEventProjector commentary projection", () => {
         kind: "preamble",
         title: "Preamble",
         phase: "update",
-        progressText: "Checking the app-server stream",
+        progressText: commentaryText,
+        source: "codex-app-server",
+      },
+      {
+        itemId: "msg-commentary",
+        kind: "preamble",
+        title: "Preamble",
+        phase: "end",
+        progressText: commentaryText,
         source: "codex-app-server",
       },
     ]);
@@ -276,9 +308,9 @@ describe("CodexAppServerEventProjector commentary projection", () => {
     );
     expect(commentary).toMatchObject({
       role: "assistant",
-      content: [{ type: "text", text: "Checking the app-server stream" }],
+      content: [{ type: "text", text: commentaryText }],
       openclawStreamFallback: {
-        replacementText: "Checking the app-server stream",
+        replacementText: commentaryText,
         source: "segment",
         itemId: "msg-commentary",
       },
@@ -419,7 +451,10 @@ describe("CodexAppServerEventProjector commentary projection", () => {
       .map((call) => call[0])
       .filter((event) => event.stream === "item" && event.data.kind === "preamble");
 
-    expect(preambles.map((event) => event.data.progressText)).toEqual(["Checking the workspace"]);
+    expect(preambles.map((event) => [event.data.phase, event.data.progressText])).toEqual([
+      ["update", "Checking the workspace"],
+      ["end", "Checking the workspace"],
+    ]);
     expect(preambles.every((event) => event.data.itemId === "msg-commentary")).toBe(true);
   });
 
@@ -494,8 +529,10 @@ describe("CodexAppServerEventProjector commentary projection", () => {
 
     expect(preambles.map((event) => event.data.itemId)).toEqual([
       "msg-commentary",
+      "msg-commentary",
       "raw-assistant-2",
     ]);
+    expect(preambles.map((event) => event.data.phase)).toEqual(["update", "end", "end"]);
   });
 
   it("pairs a raw commentary echo after a rewritten typed completion", async () => {

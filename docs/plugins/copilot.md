@@ -182,7 +182,7 @@ Precedence, applied per agent during `runCopilotAttempt`:
 Each agent gets its own `copilotHome` so Copilot CLI tokens, sessions, and
 config never leak between agents on the same machine. Default:
 `<agentDir>/copilot` (keeps SDK state out of the same directory as
-OpenClaw's `models.json` / `auth-profiles.json`), or
+OpenClaw's `models.json` / `openclaw-agent.sqlite`), or
 `~/.openclaw/agents/<agentId>/copilot` when no agent directory is supplied.
 Override with `copilotHome: <path>` on the attempt input for a custom
 location (for example, a shared mount for migration).

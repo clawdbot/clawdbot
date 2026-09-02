@@ -14,6 +14,7 @@ import {
 import { isForbiddenBrowserProxyMutation } from "../node-browser-proxy-policy.js";
 import { isNodeCommandAllowed, resolveNodeCommandAllowlist } from "../node-command-policy.js";
 import { applyPluginNodeInvokePolicy } from "../node-invoke-plugin-policy.js";
+import { invokeNodeWithReadinessRetry } from "../node-invoke-readiness.js";
 import { sanitizeNodeInvokeParamsForForwarding } from "../node-invoke-sanitize.js";
 import { enqueuePendingNodeAction, removePendingNodeAction } from "../node-runtime-state.js";
 import {
@@ -28,7 +29,6 @@ import { nodeInvokePolicy } from "./nodes-policy.js";
 import { handleNodeInvokeProgress } from "./nodes.handlers.invoke-progress.js";
 import { handleNodeInvokeResult } from "./nodes.handlers.invoke-result.js";
 import {
-  respondInvalidParams,
   respondUnavailableOnNodeInvokeErrorWithProvenance,
   respondUnavailableOnThrow,
   parseGatewayPayload,
@@ -55,29 +55,14 @@ import {
   waitForNodeReconnect,
 } from "./nodes.wake.js";
 import type { GatewayRequestHandlers } from "./types.js";
+import { assertValidParams } from "./validation.js";
 
 export const nodeInvokeHandlers: GatewayRequestHandlers = {
   "node.invoke": async ({ params, respond, context, client, req, signal }) => {
-    if (!validateNodeInvokeParams(params)) {
-      respondInvalidParams({
-        respond,
-        method: "node.invoke",
-        validator: validateNodeInvokeParams,
-      });
+    if (!assertValidParams(params, validateNodeInvokeParams, "node.invoke", respond)) {
       return;
     }
-    const p = params as {
-      nodeId: string;
-      command: string;
-      params?: unknown;
-      timeoutMs?: number;
-      idempotencyKey: string;
-      sessionKey?: string;
-      turnSourceChannel?: string;
-      turnSourceTo?: string;
-      turnSourceAccountId?: string;
-      turnSourceThreadId?: string | number;
-    };
+    const p = params;
     const nodeId = normalizeOptionalString(p.nodeId) ?? "";
     const command = normalizeOptionalString(p.command) ?? "";
     const sessionKey = normalizeOptionalString(p.sessionKey);
@@ -575,7 +560,7 @@ export const nodeInvokeHandlers: GatewayRequestHandlers = {
           );
           return;
         }
-        const res = await context.nodeRegistry.invoke({
+        const res = await invokeNodeWithReadinessRetry(context.nodeRegistry, {
           nodeId,
           expectedConnId: nodeSession.connId,
           expectedPairingGeneration: generation.key,

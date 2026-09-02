@@ -2,7 +2,7 @@
 import { access, mkdtemp, readFile, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { InProcessGatewayCaller } from "../agents/tools/in-process-gateway.js";
 import { createTestBoardStore } from "../boards/board-store.test-support.js";
 import { createBoardHandlers } from "../gateway/server-methods/board.js";
@@ -16,12 +16,17 @@ import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.j
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { resolveCanvasDocumentsDir } from "./documents.js";
 import { createShowWidgetTool } from "./widget-tool.js";
+import { createBoardPutCaller } from "./widget-tool.test-support.js";
 import { buildWidgetDocument } from "./wrap.js";
 
 const WIDGET_CODE_MAX_CHARS = 262_144;
 const PINNED_WIDGET_MAX_UTF8_BYTES = 256 * 1024;
 const WIDGET_MAX_PER_SCOPE = 32;
 const tempDirs: string[] = [];
+
+beforeEach(() => {
+  resetPluginRuntimeStateForTest();
+});
 
 afterEach(async () => {
   vi.useRealTimers();
@@ -60,31 +65,15 @@ function registerDiagramContentKind(): void {
   setActivePluginRegistry(registry);
 }
 
-function createBoardPutCaller() {
-  const mock = vi.fn(async (_method: string, params: Record<string, unknown>) => ({
-    sessionKey: params.sessionKey,
-    revision: 1,
-    tabs: [{ tabId: "main", title: "Main", position: 0, chatDock: "right" }],
-    widgets: [
-      {
-        name: params.name,
-        tabId: "main",
-        contentKind: "plugin",
-        pluginKind: "diagram:diagram",
-        sizeW: 6,
-        sizeH: 4,
-        position: 0,
-        grantState: "none",
-        revision: 1,
-      },
-    ],
-    resolvedWidgetName: params.name,
-  }));
-  const callGateway: InProcessGatewayCaller = async <T>(
-    method: string,
-    params: Record<string, unknown>,
-  ): Promise<T> => (await mock(method, params)) as T;
-  return { mock, callGateway };
+function createLiveBoardTestContext(
+  broadcast: ReturnType<typeof vi.fn> = vi.fn(),
+): GatewayRequestContext {
+  const context = {
+    broadcast,
+    getRuntimeConfig: () => ({ agents: { list: [{ id: "main" }] } }),
+  } as unknown as GatewayRequestContext;
+  context.resolveGatewayContext = () => context;
+  return context;
 }
 
 function resolveCanvasDocumentDir(stateDir: string, documentId: string): string {
@@ -233,6 +222,7 @@ describe("show_widget", () => {
     expect(JSON.parse(text ?? "null")).toEqual({
       status: "pinned",
       boardWidgetName: "diagram",
+      capabilityState: "none",
       text: "Widget pinned to dashboard tab main as diagram",
     });
     expect(callGatewayMock).toHaveBeenCalledExactlyOnceWith(
@@ -704,10 +694,7 @@ describe("show_widget", () => {
         client: null,
         isWebchatConnect: () => false,
         respond,
-        context: {
-          broadcast,
-          getRuntimeConfig: () => ({ agents: { list: [{ id: "main" }] } }),
-        } as unknown as GatewayRequestContext,
+        context: createLiveBoardTestContext(broadcast),
       });
       if (failure) {
         throw failure;
@@ -731,12 +718,18 @@ describe("show_widget", () => {
     const result = await pinWidget("<p>ready</p>", true);
     const pinnedTitle = Array.from(title).slice(0, 80).join("");
 
-    expect(store.readWidgetHtml("agent:main:pinned", "release-status")).toMatchObject({
+    expect(
+      store.readWidgetHtml({ sessionKey: "agent:main:pinned" }, "release-status"),
+    ).toMatchObject({
       html: buildWidgetDocument(pinnedTitle, "<p>ready</p>"),
       revision: 1,
     });
-    expect(store.getSnapshot("agent:main:pinned").widgets[0]?.title).toBe(pinnedTitle);
-    expect(store.getSnapshot("agent:main:pinned").widgets[0]?.presentation).toBe("frameless");
+    expect(store.getSnapshot({ sessionKey: "agent:main:pinned" }).widgets[0]?.title).toBe(
+      pinnedTitle,
+    );
+    expect(store.getSnapshot({ sessionKey: "agent:main:pinned" }).widgets[0]?.presentation).toBe(
+      "frameless",
+    );
     expect(result.resultText).toContain("pinned to dashboard tab main as release-status (lg)");
     expect(result.boardWidgetName).toBe("release-status");
     expect(broadcast).toHaveBeenCalledWith("board.changed", {
@@ -752,11 +745,15 @@ describe("show_widget", () => {
         content: { kind: "plugin", pluginKind: "workboard:card" },
       }),
     ).rejects.toThrow(/same content kind.*remove/i);
-    expect(store.readWidgetHtml("agent:main:pinned", "release-status")?.revision).toBe(1);
+    expect(
+      store.readWidgetHtml({ sessionKey: "agent:main:pinned" }, "release-status")?.revision,
+    ).toBe(1);
 
     const refreshed = await pinWidget("<p>refreshed</p>");
 
-    expect(store.readWidgetHtml("agent:main:pinned", "release-status")).toMatchObject({
+    expect(
+      store.readWidgetHtml({ sessionKey: "agent:main:pinned" }, "release-status"),
+    ).toMatchObject({
       html: buildWidgetDocument(pinnedTitle, "<p>refreshed</p>"),
       revision: 2,
     });
@@ -790,10 +787,7 @@ describe("show_widget", () => {
             failure = new Error(error?.message ?? "board request failed");
           }
         },
-        context: {
-          broadcast: vi.fn(),
-          getRuntimeConfig: () => ({ agents: { list: [{ id: "main" }] } }),
-        } as unknown as GatewayRequestContext,
+        context: createLiveBoardTestContext(),
       });
       if (failure) {
         throw failure;
@@ -817,11 +811,11 @@ describe("show_widget", () => {
       path.join(resolveCanvasDocumentDir(stateDir, result.viewId), "index.html"),
       "utf8",
     );
-    const pinned = store.readWidgetHtml("agent:main:weather", "weather");
+    const pinned = store.readWidgetHtml({ sessionKey: "agent:main:weather" }, "weather");
 
     expect(inlineHtml).toContain("connect-src 'none'");
     expect(pinned).toMatchObject({
-      grantState: "pending",
+      grantState: "granted",
       declared: {
         netOrigins: ["https://api.open-meteo.com"],
         tools: ["health", "prompt"],
@@ -922,10 +916,7 @@ describe("show_widget", () => {
             failure = new Error(error?.message ?? "board request failed");
           }
         },
-        context: {
-          broadcast: vi.fn(),
-          getRuntimeConfig: () => ({ agents: { list: [{ id: "main" }] } }),
-        } as unknown as GatewayRequestContext,
+        context: createLiveBoardTestContext(),
       });
       if (failure) {
         throw failure;
@@ -952,7 +943,7 @@ describe("show_widget", () => {
       }),
     ]);
     expect(new Set([slash.boardWidgetName, plus.boardWidgetName]).size).toBe(2);
-    expect(store.getSnapshot(sessionKey).widgets).toHaveLength(2);
+    expect(store.getSnapshot({ sessionKey }).widgets).toHaveLength(2);
 
     const composed = await executeWidget({
       stateDir,
@@ -971,7 +962,7 @@ describe("show_widget", () => {
       callGateway,
     });
     expect(decomposed.boardWidgetName).toBe(composed.boardWidgetName);
-    expect(store.readWidgetHtml(sessionKey, composed.boardWidgetName ?? "")).toMatchObject({
+    expect(store.readWidgetHtml({ sessionKey }, composed.boardWidgetName ?? "")).toMatchObject({
       revision: 2,
     });
   });

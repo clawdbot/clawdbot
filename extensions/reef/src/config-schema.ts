@@ -1,7 +1,14 @@
 import { z } from "zod";
+import { GUARD_RULES_MAX_CHARS } from "../protocol/guard.js";
 import type { ReefAutonomy } from "./friend-types.js";
 
 const HandleSchema = z.string().regex(/^[a-z0-9][a-z0-9_-]{0,62}$/);
+// No trim transform: the raw text is hashed into the policy identity, and the
+// manifest JSON Schemas must express identical validity (non-blank via \S).
+const GuardRuleTextSchema = z
+  .string()
+  .max(GUARD_RULES_MAX_CHARS)
+  .regex(/\S/, "rules text must not be blank");
 const RelayUrlSchema = z
   .string()
   .regex(
@@ -24,6 +31,13 @@ export const ReefChannelConfigSchema = z
         apiKeyEnv: z.string().regex(/^[A-Z_][A-Z0-9_]*$/),
         policyVersion: z.string().min(1),
         timeoutMs: z.number().int().min(100).max(120_000),
+        rules: z
+          .object({
+            outbound: GuardRuleTextSchema.optional(),
+            inbound: GuardRuleTextSchema.optional(),
+          })
+          .strict()
+          .optional(),
       })
       .strict()
       .optional(),

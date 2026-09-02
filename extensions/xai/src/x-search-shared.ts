@@ -1,5 +1,4 @@
 // Xai plugin module implements x search shared behavior.
-import { wrapWebContent } from "openclaw/plugin-sdk/provider-web-search";
 import { XAI_DEFAULT_MODEL_ID } from "../model-definitions.js";
 import {
   requestXaiResponsesTool,
@@ -11,7 +10,7 @@ import {
   resolveNormalizedXaiToolModel,
   resolvePositiveIntegerToolConfig,
 } from "./tool-config-shared.js";
-import type { XaiWebSearchResponse } from "./web-search-shared.js";
+import { buildXaiWebSearchPayload, type XaiWebSearchResponse } from "./web-search-shared.js";
 
 export const XAI_DEFAULT_X_SEARCH_MODEL = XAI_DEFAULT_MODEL_ID;
 const XAI_X_SEARCH_MAX_CONTENT_CHARS = 20_000;
@@ -87,20 +86,7 @@ export function buildXaiXSearchPayload(params: {
   options?: XaiXSearchOptions;
 }): Record<string, unknown> {
   return {
-    query: params.query,
-    provider: "xai",
-    model: params.model,
-    tookMs: params.tookMs,
-    externalContent: {
-      untrusted: true,
-      source: "x_search",
-      provider: "xai",
-      wrapped: true,
-    },
-    content: wrapWebContent(params.content, "web_search"),
-    citations: params.citations,
-    ...(params.inlineCitations ? { inlineCitations: params.inlineCitations } : {}),
-    ...(params.truncated ? { truncated: true } : {}),
+    ...buildXaiWebSearchPayload({ ...params, provider: "xai", source: "x_search" }),
     ...(params.options?.allowedXHandles?.length
       ? { allowedXHandles: params.options.allowedXHandles }
       : {}),

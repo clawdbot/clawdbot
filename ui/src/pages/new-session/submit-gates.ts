@@ -2,12 +2,18 @@
 // can be blocked. canSubmit, the Start tooltip, and blocked-Enter notices all
 // derive from this walk, so a gate cannot block silently.
 import { t } from "../../i18n/index.ts";
-import type { SessionMethodAccess } from "../../lib/session-method-access.ts";
+import { chatModelUnavailableMessage } from "../../lib/chat/model-select-state.ts";
+import {
+  readSessionMethodAccess,
+  type SessionMethodAccess,
+} from "../../lib/session-method-access.ts";
 import type { SessionPlacementTarget } from "../../lib/sessions/session-placement-recovery.ts";
+import { sessionPlacementDispatchParams } from "../../lib/sessions/session-placement-startup.ts";
 import * as catalog from "./catalog-target.ts";
 import { isWorktreeNameValid } from "./create-params.ts";
 import type { DraftGatewayState } from "./draft-gateway-state.ts";
 import type { DraftPlaceState } from "./draft-place-state.ts";
+import { resolveDraftSessionPlacement } from "./draft-session-placement.ts";
 import type { DraftSubmissionSnapshot } from "./draft-submission-contract.ts";
 import type {
   PendingSessionPlacementRecoveryState,
@@ -50,6 +56,59 @@ export const PAGE_RENDERED_GATES: ReadonlySet<string> = new Set([
   "worktree-name",
 ]);
 
+export function resolveCloudPlacementDisabledReason(place: DraftPlaceState): string | undefined {
+  const runtimeReason = place.modelControl.cloudRuntimeUnsupportedReason();
+  if (runtimeReason) {
+    return runtimeReason;
+  }
+  if (place.repository.kind === "checking") {
+    return t("newSession.checkingGit");
+  }
+  if (place.repository.kind === "unavailable") {
+    return t("newSession.gitCheckUnavailable");
+  }
+  return place.worktreeAvailable() ? undefined : t("newSession.cloudRequiresWorktree");
+}
+
+export function readNewSessionSubmissionAccess(
+  gateway: Parameters<typeof readSessionMethodAccess>[0],
+  place: DraftPlaceState,
+  pending: PendingSessionPlacementRecoveryState,
+  createParams: Record<string, unknown>,
+  hasInitialTurn: boolean,
+): SessionMethodAccess {
+  const pendingPlacement = Boolean(pending.sessionKey);
+  const { target } = resolveDraftSessionPlacement(pending, place);
+  const remoteProject = target || !hasInitialTurn ? place.browser.remoteProject : null;
+  if (!pendingPlacement && remoteProject && !remoteProject.projectId) {
+    const projectAccess = readSessionMethodAccess(gateway, {
+      method: "projects.add",
+      requiredScope: "operator.write",
+    });
+    if (!projectAccess.allowed) {
+      return projectAccess;
+    }
+  }
+  if (!target || !pendingPlacement || pending.phase === "creating") {
+    const createAccess = readSessionMethodAccess(gateway, {
+      method: "sessions.create",
+      params: createParams,
+    });
+    if (!createAccess.allowed || !target) {
+      return createAccess;
+    }
+  }
+  return readSessionMethodAccess(gateway, {
+    method: "sessions.dispatch",
+    requiredScope: target.kind === "profile" ? "operator.admin" : "operator.write",
+    params: sessionPlacementDispatchParams({
+      key: pending.sessionKey,
+      agentId: pending.agentId || place.agentId,
+      target,
+    }),
+  });
+}
+
 /** Facts the gate walk reads from DraftSubmissionFlow, kept read-only. */
 type SubmitGateHost = {
   readonly gatewayState: DraftGatewayState;
@@ -84,7 +143,7 @@ export function resolveNewSessionSubmitBlock(
   if (
     gateway.preferenceLoading ||
     place.modelControl.isRestoringPreference() ||
-    !place.worktreePreferenceReady
+    !place.placementPreferenceReady
   ) {
     return { gate: "preference-restore", reason: t("newSession.restoringPreferences") };
   }
@@ -94,11 +153,11 @@ export function resolveNewSessionSubmitBlock(
   if (catalog.isRoutePending(snapshot.data, snapshot.context?.sessions)) {
     return { gate: "route-pending", reason: t("newSession.catalogUnavailable") };
   }
-  if (place.modelControl.isModelUnavailable(place.selectedAgent())) {
-    return {
-      gate: "model-unavailable",
-      reason: `${t("modelSetup.failure.auth")}. ${t("modelSetup.failureGuidance.auth")}`,
-    };
+  const modelUnavailableMessage = chatModelUnavailableMessage(
+    place.modelControl.modelUnavailableReason(place.selectedAgent()),
+  );
+  if (modelUnavailableMessage) {
+    return { gate: "model-unavailable", reason: modelUnavailableMessage };
   }
   if (host.pendingAttachmentReads > 0) {
     return { gate: "attachment-reads", reason: t("newSession.readingAttachment") };
@@ -166,16 +225,16 @@ export function resolveNewSessionSubmitBlock(
     return { gate: "device-runtime", reason: deviceRuntimeUnsupportedReason };
   }
   const placementTarget = host.placementTargetForSubmission();
-  if (placementTarget && (!client.recoveryScope || !client.recoveryScopeReady)) {
+  if (
+    placementTarget &&
+    (!client.recoveryScope || !client.recoveryScopeReady || gateway.cloudProfilesPending)
+  ) {
     return { gate: "placement-recovery", reason: t("newSession.placementNotReady") };
   }
   const cloudProfileId = placementTarget?.kind === "profile" ? placementTarget.profileId : "";
   if (
     cloudProfileId &&
-    (!client.recoveryScope ||
-      !client.recoveryScopeReady ||
-      !gateway.cloudProfilesReady ||
-      gateway.cloudProfilesPending ||
+    (!gateway.cloudProfilesReady ||
       !place.worktree ||
       !gateway.cloudProfiles.some((profile) => profile.id === cloudProfileId) ||
       Boolean(host.cloudRuntimeUnsupportedReason()))

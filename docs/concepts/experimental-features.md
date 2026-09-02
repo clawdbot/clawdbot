@@ -37,6 +37,11 @@ Cloud Worker Desktop. Message audit metadata and Cloud Worker Desktop require a
 Gateway restart; the other switches normally take effect for future agent runs
 without restarting.
 
+Code Mode remains disabled until you turn on its Labs switch or explicitly set
+`tools.codeMode` to `true` or `"auto"`. The Labs switch writes `"auto"`, so it
+engages only for models marked as preferred Code Mode performers; it does not
+force Code Mode on for every model.
+
 ## Local model lean mode
 
 `agents.defaults.experimental.localModelLean: true` drops heavyweight optional tools from the agent's direct surface every turn: `browser`, `cron`, `message`, `image_generate`, `music_generate`, `video_generate`, `tts`, and `pdf`. Explicitly allowed or delivery-required tools remain available, though Tool Search may catalog them instead of exposing them directly. Lean mode also defaults plugin/MCP/client catalogs to structured Tool Search (`tool_search`, `tool_describe`, `tool_call`) when `tools.toolSearch` is not already set. Use `agents.entries.*.experimental.localModelLean` to scope this to one agent.

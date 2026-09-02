@@ -2,7 +2,7 @@ module github.com/openclaw/openclaw/scripts/docs-i18n
 
 go 1.26.0
 
-toolchain go1.26.6
+toolchain go1.27.0
 
 require (
 	github.com/yuin/goldmark v1.8.5

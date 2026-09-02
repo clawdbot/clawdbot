@@ -4,6 +4,7 @@ import { normalizeUniqueStringEntries } from "@openclaw/normalization-core/strin
 import { normalizeProfileName } from "../cli/profile-utils.js";
 import { resolveStateDir } from "../config/paths.js";
 import { quoteCmdScriptArg } from "../daemon/cmd-argv.js";
+import { renderCmdSetAssignment } from "../daemon/cmd-set.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { writeTextAtomic } from "./json-files.js";
 import {
@@ -27,15 +28,31 @@ function quotePosixArgument(value: string): string {
 
 function renderPosixShim(invocation: OpenClawCliInvocation, profile: string | null): string {
   const args = [...invocation.args, ...(profile ? ["--profile", profile] : [])];
+  const environment = Object.entries(invocation.env ?? {}).map(
+    ([key, value]) => `export ${key}=${quotePosixArgument(value)}`,
+  );
   return `#!/bin/sh
 set -eu
+${environment.join("\n")}
 exec ${[invocation.command, ...args].map(quotePosixArgument).join(" ")} "$@"
 `;
 }
 
 function renderWindowsShim(invocation: OpenClawCliInvocation, profile: string | null): string {
   const args = [...invocation.args, ...(profile ? ["--profile", profile] : [])];
-  return `@echo off\r\n${[invocation.command, ...args].map(quoteCmdScriptArg).join(" ")} %*\r\n`;
+  const context = { delayedExpansion: false };
+  const environment = Object.entries(invocation.env ?? {}).map(([key, value]) =>
+    renderCmdSetAssignment(key, value, context),
+  );
+  const command = [invocation.command, ...args].map((arg) => quoteCmdScriptArg(arg, context));
+  // Own expansion before assigning source paths or forwarding literal user bangs.
+  return [
+    "@echo off",
+    "setlocal DisableDelayedExpansion",
+    ...environment,
+    `${command.join(" ")} %*`,
+    "",
+  ].join("\r\n");
 }
 
 /**

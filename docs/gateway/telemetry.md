@@ -43,8 +43,10 @@ document.
 The output shows whether feature statistics are enabled, why they are enabled
 or disabled, the request endpoint, and the last successful check. When feature
 statistics are enabled, it prints the exact JSON payload the next request would
-send. When they are disabled, it shows the update-only request and its
-`User-Agent` header instead.
+send. When only feature statistics are disabled, it shows the update-only request
+and its `User-Agent` header instead. When automation or update-check policy
+disables all requests, it shows `Request: none` with the reason (`request: null`
+in JSON).
 
 ## Daily update check
 
@@ -62,7 +64,7 @@ tracking identifier.
 
 The service responds with the latest version and, optionally, a short
 operator-facing note. OpenClaw displays an available update and its note through
-the existing update notice. Unreachable services, timeouts, invalid responses,
+the existing update notice. Unreachable services, timeouts, oversized or invalid responses,
 and other failed checks do not interrupt startup or normal operation.
 
 A successful response and its timestamp are cached in the existing shared state

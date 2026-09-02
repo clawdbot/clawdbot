@@ -80,3 +80,25 @@ it("rejects an in-flight identity after that agent is invalidated", async () => 
   await current;
   expect(capability.get("main")?.name).toBe("Current");
 });
+
+it("publishes each fetched snapshot once under overlapping roster and stream updates", async () => {
+  const pending = deferred<AgentIdentityResult>();
+  const ids = Array.from({ length: 24 }, (_, index) => `agent-${index}`);
+  const request = vi.fn((_method: string, { agentId }: { agentId: string }) =>
+    pending.promise.then(() => ({ agentId, name: agentId })),
+  );
+  const capability = createAgentIdentityCapability({
+    snapshot: { client: { request } as unknown as GatewayBrowserClient, phase: "connected" },
+    subscribe: () => () => undefined,
+  });
+  const publish = vi.fn();
+  capability.subscribe(publish);
+  const updates = Array.from({ length: 40 }, () => capability.ensure(ids));
+  pending.resolve({ agentId: ids[0], name: ids[0] } as AgentIdentityResult);
+  await Promise.all(updates);
+  expect(request).toHaveBeenCalledTimes(ids.length);
+  expect(capability.entries()).toHaveLength(ids.length);
+  expect(publish).toHaveBeenCalledTimes(1);
+  await capability.ensure(ids);
+  expect(publish).toHaveBeenCalledTimes(1);
+});

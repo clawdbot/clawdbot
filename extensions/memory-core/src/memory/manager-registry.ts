@@ -19,7 +19,19 @@ const MEMORY_INDEX_MANAGER_GLOBAL_LIFECYCLE_KEY = Symbol.for(
 );
 const log = createSubsystemLogger("memory");
 
-export type MemoryIndexManagerPurpose = "default" | "status" | "cli";
+export type MemoryIndexManagerPurpose = "default" | "status" | "cli" | "maintenance";
+
+export function isTransientMemoryIndexManagerPurpose(purpose: MemoryIndexManagerPurpose): boolean {
+  return purpose !== "default";
+}
+
+export function normalizeMemoryIndexManagerPurpose(
+  purpose: MemoryIndexManagerPurpose | undefined,
+): MemoryIndexManagerPurpose {
+  return purpose === "status" || purpose === "cli" || purpose === "maintenance"
+    ? purpose
+    : "default";
+}
 
 type ClosableMemoryManager = {
   close(): Promise<void>;
@@ -27,7 +39,6 @@ type ClosableMemoryManager = {
 
 type PreparedMemoryManager<T extends ClosableMemoryManager> = {
   key: string;
-  transient: boolean;
   create: () => Promise<T> | T;
   reuse: (manager: T) => boolean;
 };
@@ -84,6 +95,14 @@ export class MemoryManagerRegistry<T extends ClosableMemoryManager> {
     params: { agentId: string; purpose: MemoryIndexManagerPurpose },
     callbacks: MemoryManagerRegistryCallbacks<T>,
   ): Promise<T | null> {
+    // A detached search handoff may race global teardown. Decline late
+    // maintenance acquisition so closing the default manager cannot wait on itself.
+    if (
+      params.purpose === "maintenance" &&
+      (this.globalLifecycle.closePromise || this.globalLifecycle.closeFailed)
+    ) {
+      return null;
+    }
     return await this.runScopeOperation(params, async () => {
       if (this.globalLifecycle.closeFailed) {
         await this.retryFailedGlobalClose(callbacks.close);
@@ -92,15 +111,16 @@ export class MemoryManagerRegistry<T extends ClosableMemoryManager> {
       if (!prepared) {
         return null;
       }
+      const transient = isTransientMemoryIndexManagerPurpose(params.purpose);
       const getOrCreate = async () =>
         await getOrCreateManagedCacheEntry({
           cache: this.cache,
           pending: this.pending,
           key: prepared.key,
-          bypassCache: prepared.transient,
+          bypassCache: transient,
           create: prepared.create,
         });
-      if (prepared.transient) {
+      if (transient) {
         return await getOrCreate();
       }
       const cachedManager = this.cache.get(prepared.key);

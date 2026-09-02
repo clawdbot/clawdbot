@@ -7,6 +7,61 @@ import { describe, expect, it, vi } from "vitest";
 import { createDownloadCaptureForPage } from "./pw-download-capture.js";
 
 describe("Playwright download capture cancellation", () => {
+  it.each(["explicit", "passive"] as const)(
+    "enforces the %s download deadline after its event arrives",
+    async (mode) => {
+      vi.useFakeTimers();
+      const page = new EventEmitter();
+      const state = { downloadWaiterDepth: 0 };
+      const controller = new AbortController();
+      const validation = createDeferred<void>();
+      const saveAs = vi.fn(async () => {});
+      const cancel = vi.fn(async () => {});
+      const timeoutMessage =
+        mode === "passive"
+          ? "Timeout waiting for navigation download"
+          : "Timeout waiting for download";
+      const capture = createDownloadCaptureForPage(page, state, 25, {
+        mode,
+        signal: controller.signal,
+        timeoutMessage,
+        beforeSave: async () => {
+          await validation.promise;
+        },
+      });
+      const outcome = capture.promise.then(
+        () => "resolved" as const,
+        (error: unknown) => error,
+      );
+
+      try {
+        page.emit("download", {
+          url: () => "https://example.com/export.csv",
+          suggestedFilename: () => "export.csv",
+          saveAs,
+          cancel,
+        });
+        await vi.advanceTimersByTimeAsync(25);
+
+        await expect(Promise.race([outcome, Promise.resolve("pending")])).resolves.toMatchObject({
+          message: timeoutMessage,
+        });
+        expect(cancel).toHaveBeenCalledOnce();
+        validation.resolve();
+        await vi.advanceTimersByTimeAsync(0);
+
+        expect(saveAs).not.toHaveBeenCalled();
+        expect(state.downloadWaiterDepth).toBe(0);
+        expect(page.listenerCount("download")).toBe(0);
+      } finally {
+        controller.abort(new Error("download test cleanup"));
+        validation.resolve();
+        await outcome;
+        vi.useRealTimers();
+      }
+    },
+  );
+
   it("cancels a captured download before delayed validation can save bytes", async () => {
     const page = new EventEmitter();
     const state = { downloadWaiterDepth: 0 };
@@ -114,6 +169,58 @@ describe("Playwright download capture cancellation", () => {
     }
   });
 
+  it("cancels a timed-out in-progress download without publishing staged output", async () => {
+    const outputRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-download-timeout-"));
+    const outputPath = path.join(outputRoot, "timed-out.bin");
+    vi.useFakeTimers();
+    const page = new EventEmitter();
+    const state = { downloadWaiterDepth: 0 };
+    const saveGate = createDeferred<void>();
+    const saveStarted = createDeferred<string>();
+    const saveAs = vi.fn(async (tempPath: string) => {
+      await fs.writeFile(tempPath, "timed-out partial contents", "utf8");
+      saveStarted.resolve(tempPath);
+      await saveGate.promise;
+    });
+    const cancel = vi.fn(async () => {
+      saveGate.resolve();
+    });
+    const capture = createDownloadCaptureForPage(page, state, 25, {
+      mode: "explicit",
+      outputPath,
+      outputRoot,
+    });
+    const outcome = capture.promise.then(
+      () => "resolved" as const,
+      (error: unknown) => error,
+    );
+
+    try {
+      page.emit("download", {
+        url: () => "https://example.com/timed-out.bin",
+        suggestedFilename: () => "timed-out.bin",
+        saveAs,
+        cancel,
+      });
+      const partialPath = await saveStarted.promise;
+      await vi.advanceTimersByTimeAsync(25);
+
+      await expect(Promise.race([outcome, Promise.resolve("pending")])).resolves.toMatchObject({
+        message: "Timeout waiting for download",
+      });
+      expect(cancel).toHaveBeenCalledOnce();
+      await vi.waitFor(async () => {
+        await expect(fs.access(partialPath)).rejects.toMatchObject({ code: "ENOENT" });
+      });
+      await expect(fs.access(outputPath)).rejects.toMatchObject({ code: "ENOENT" });
+    } finally {
+      saveGate.resolve();
+      await outcome;
+      vi.useRealTimers();
+      await fs.rm(outputRoot, { recursive: true, force: true });
+    }
+  });
+
   it("finishes atomic publication when cancellation arrives after its commit boundary", async () => {
     const outputRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-download-publish-"));
     const outputPath = path.join(outputRoot, "published.bin");
@@ -175,6 +282,66 @@ describe("Playwright download capture cancellation", () => {
       await renameFinished.promise;
       await outcome;
       rename.mockRestore();
+      await fs.rm(outputRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("finishes atomic publication after its download deadline retires", async () => {
+    const outputRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-download-deadline-"));
+    const outputPath = path.join(outputRoot, "published.bin");
+    vi.useFakeTimers();
+    const renameStarted = createDeferred<void>();
+    const releaseRename = createDeferred<void>();
+    const renameFinished = createDeferred<void>();
+    const originalRename = fs.rename.bind(fs);
+    const rename = vi.spyOn(fs, "rename").mockImplementation(async (source, destination) => {
+      if (String(destination).endsWith(`${path.sep}published.bin`)) {
+        renameStarted.resolve();
+        await releaseRename.promise;
+      }
+      try {
+        await originalRename(source, destination);
+      } finally {
+        renameFinished.resolve();
+      }
+    });
+    const page = new EventEmitter();
+    const state = { downloadWaiterDepth: 0 };
+    const cancel = vi.fn(async () => {});
+    const capture = createDownloadCaptureForPage(page, state, 25, {
+      mode: "explicit",
+      outputPath,
+      outputRoot,
+    });
+    const outcome = capture.promise.then(
+      (result) => result,
+      (error: unknown) => error,
+    );
+
+    try {
+      page.emit("download", {
+        url: () => "https://example.com/published.bin",
+        suggestedFilename: () => "published.bin",
+        saveAs: async (tempPath: string) => {
+          await fs.writeFile(tempPath, "completed download", "utf8");
+        },
+        cancel,
+      });
+      await renameStarted.promise;
+      await vi.advanceTimersByTimeAsync(25);
+
+      expect(await Promise.race([outcome, Promise.resolve("pending")])).toBe("pending");
+      expect(cancel).not.toHaveBeenCalled();
+      releaseRename.resolve();
+
+      await expect(capture.promise).resolves.toMatchObject({ path: outputPath });
+      await expect(fs.readFile(outputPath, "utf8")).resolves.toBe("completed download");
+    } finally {
+      releaseRename.resolve();
+      await renameFinished.promise;
+      await outcome;
+      rename.mockRestore();
+      vi.useRealTimers();
       await fs.rm(outputRoot, { recursive: true, force: true });
     }
   });

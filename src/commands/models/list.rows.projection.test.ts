@@ -1,3 +1,4 @@
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { describe, expect, it, vi } from "vitest";
 import type { ModelProviderConfig } from "../../config/types.models.js";
 import type { Model } from "../../llm/types.js";
@@ -53,10 +54,10 @@ describe("appendDiscoveredRows projection", () => {
       authIndex: {
         evaluateModelAuth: () => ({ availability: true, routeResolution: null }),
       },
+      canonicalizeProvider: normalizeProviderId,
       configuredByKey: new Map(),
       discoveredKeys: new Set(["bench/model-1"]),
       filter: {},
-      skipRuntimeModelSuppression: true,
     };
 
     await appendDiscoveredRows({

@@ -9,6 +9,7 @@ import "./board-widget-cell.ts";
 function callbacks(): BoardWidgetCellCallbacks {
   const noAction = vi.fn(async () => undefined);
   return {
+    appViewGeneration: () => 0,
     grant: noAction,
     movePointerDown: vi.fn(),
     resizePointerDown: vi.fn(),

@@ -137,13 +137,18 @@ internal fun parseMobileUiActRequest(paramsJson: String?): MobileUiActRequest? {
   val type = actionParams.requiredString("type") ?: return null
   val action =
     when (type) {
-      "activate" -> MobileUiAction.Activate(actionParams.requiredString("ref") ?: return null)
-      "set_text" ->
+      "activate" -> {
+        MobileUiAction.Activate(actionParams.requiredString("ref") ?: return null)
+      }
+
+      "set_text" -> {
         MobileUiAction.SetText(
           ref = actionParams.requiredString("ref") ?: return null,
           text = actionParams.string("text") ?: return null,
         )
-      "scroll" ->
+      }
+
+      "scroll" -> {
         MobileUiAction.Scroll(
           ref = actionParams.requiredString("ref") ?: return null,
           direction =
@@ -153,12 +158,16 @@ internal fun parseMobileUiActRequest(paramsJson: String?): MobileUiActRequest? {
               else -> return null
             },
         )
-      "tap" ->
+      }
+
+      "tap" -> {
         MobileUiAction.Tap(
           x = actionParams.int("x") ?: return null,
           y = actionParams.int("y") ?: return null,
         )
-      "swipe" ->
+      }
+
+      "swipe" -> {
         MobileUiAction.Swipe(
           x1 = actionParams.int("x1") ?: return null,
           y1 = actionParams.int("y1") ?: return null,
@@ -166,7 +175,9 @@ internal fun parseMobileUiActRequest(paramsJson: String?): MobileUiActRequest? {
           y2 = actionParams.int("y2") ?: return null,
           durationMs = actionParams.long("durationMs") ?: return null,
         )
-      "global_action" ->
+      }
+
+      "global_action" -> {
         MobileUiAction.GlobalAction(
           when (actionParams.requiredString("name")) {
             "back" -> GlobalActionName.Back
@@ -176,8 +187,15 @@ internal fun parseMobileUiActRequest(paramsJson: String?): MobileUiActRequest? {
             else -> return null
           },
         )
-      "wait" -> MobileUiAction.Wait(actionParams.long("ms") ?: return null)
-      else -> return null
+      }
+
+      "wait" -> {
+        MobileUiAction.Wait(actionParams.long("ms") ?: return null)
+      }
+
+      else -> {
+        return null
+      }
     }
   return MobileUiActRequest(snapshotId = snapshotId, action = action)
 }

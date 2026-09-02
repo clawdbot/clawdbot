@@ -76,7 +76,12 @@ class DashboardsPage extends OpenClawLightDomElement {
   }
 
   override render() {
-    return renderDashboards(this.data);
+    return renderDashboards(this.data, () => {
+      const context = this.context;
+      if (context?.gateway.snapshot.phase === "connected") {
+        void context.sessions.refreshList({ ...dashboardSessionListQuery(context), force: true });
+      }
+    });
   }
 }
 

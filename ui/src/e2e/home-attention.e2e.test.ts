@@ -1,8 +1,8 @@
-import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import type { QuestionRecord } from "@openclaw/gateway-protocol";
-import { expect, it } from "vitest";
+import { beforeEach, expect, it } from "vitest";
 import type { GatewaySessionRow, SessionsListResult } from "../api/types.ts";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
   controlUiSessionUrl,
   installMockGateway,
@@ -21,13 +21,12 @@ const suite = createControlUiE2eSuite({
 const mainSessionKey = "agent:main:main";
 const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 const proofVariant = process.env.OPENCLAW_HOME_ATTENTION_PROOF_VARIANT || "candidate";
-const proofDir = path.join(
-  process.cwd(),
-  ".artifacts",
-  "control-ui-e2e",
-  "home-attention",
-  proofVariant,
-);
+let proofDir: string;
+beforeEach(() => {
+  if (captureUiProof) {
+    proofDir = path.join(createControlUiE2eArtifactDir("home-attention"), proofVariant);
+  }
+});
 
 function sessionsList(row: GatewaySessionRow): SessionsListResult {
   return {
@@ -90,9 +89,6 @@ async function captureState(
 
 suite.define(() => {
   it("projects question, failure, and agent-declared attention onto Home", async () => {
-    if (captureUiProof) {
-      await mkdir(proofDir, { recursive: true });
-    }
     const context = await suite.newBrowserContext({
       locale: "en-US",
       serviceWorkers: "block",

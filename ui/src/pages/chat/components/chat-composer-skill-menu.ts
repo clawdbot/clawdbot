@@ -1,4 +1,5 @@
 import { html, nothing, type TemplateResult } from "lit";
+import { ref } from "lit/directives/ref.js";
 import { icons } from "../../../components/icons.ts";
 import { t } from "../../../i18n/index.ts";
 import {
@@ -7,9 +8,20 @@ import {
   getSlashCommandDescription,
   type SlashCommandDef,
 } from "../../../lib/chat/commands.ts";
-import { paneDomId, scrollActiveMenuOptionIntoView } from "./chat-composer-dom.ts";
+import {
+  paneDomId,
+  scrollActiveMenuOptionIntoView,
+  syncComposerMenuScroll,
+} from "./chat-composer-dom.ts";
 
 const SKILL_MENTION_CHAR = /[-a-zA-Z0-9_:]/u;
+
+function renderSkillName(name: string, query: string): TemplateResult {
+  const matchLength = name.toLowerCase().startsWith(query.toLowerCase()) ? query.length : 0;
+  return matchLength === 0
+    ? html`${name}`
+    : html`<mark>${name.slice(0, matchLength)}</mark>${name.slice(matchLength)}`;
+}
 
 type SkillMentionTarget = {
   start: number;
@@ -288,7 +300,14 @@ export function renderSkillMenu(
       role="listbox"
       aria-label=${t("chat.skills.menu")}
     >
-      <div class="slash-menu__scroll">
+      <div
+        class="slash-menu__scroll"
+        ${ref(syncComposerMenuScroll)}
+        @scroll=${(event: Event) =>
+          syncComposerMenuScroll(
+            event.currentTarget instanceof Element ? event.currentTarget : undefined,
+          )}
+      >
         ${state.skillCommandRefreshPending || state.skillMenuItems.length === 0
           ? html`<div class="slash-menu-group">
               <div class="slash-menu-group__label">${t("chat.skills.loading")}</div>
@@ -311,11 +330,14 @@ export function renderSkillMenu(
                       requestUpdate();
                     }}
                   >
-                    <span class="slash-menu-leading">
-                      <span class="slash-menu-icon">${icons.zap}</span>
-                      <span class="slash-menu-name">${getSkillDisplayName(command)}</span>
-                    </span>
-                    <span class="slash-menu-trailing">
+                    <span class="slash-menu-icon">${icons.pencilSparkles}</span>
+                    <span class="slash-menu-copy">
+                      <span class="slash-menu-name"
+                        >${renderSkillName(
+                          getSkillDisplayName(command),
+                          state.skillMenuTarget?.query ?? "",
+                        )}</span
+                      >
                       <span class="slash-menu-desc">${getSlashCommandDescription(command)}</span>
                     </span>
                   </div>

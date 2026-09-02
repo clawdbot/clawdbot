@@ -89,17 +89,18 @@ export function resolveIncludeWriteBoundary(params: {
   if (!provenance || params.changed.rootChanged || params.changed.paths.length === 0) {
     return null;
   }
+  // A root-level $include is read-only for OpenClaw-owned writes (documented
+  // contract): its file shapes every section, so no nested boundary beneath it
+  // may absorb a write even when both are sole owners.
+  if (provenance.some((entry) => entry.path.length === 0)) {
+    return null;
+  }
   let best: IncludeWriteBoundary | null = null;
   let bestDepth = 0;
   for (const entry of provenance) {
     // Array-entry includes own a position inside a merged array, which a keyed
     // subtree write cannot express. Numeric object keys remain ordinary keys.
-    if (
-      !isSoleOwner(entry) ||
-      !entry.targetPath ||
-      entry.path.length === 0 ||
-      entry.hasArrayAncestor
-    ) {
+    if (!isSoleOwner(entry) || !entry.targetPath || entry.hasArrayAncestor) {
       continue;
     }
     const enclosingMerges = provenance.some(

@@ -105,7 +105,8 @@ vi.mock("../../globals.js", () => ({
   setVerbose: mocks.setVerbose,
 }));
 
-vi.mock("../../runtime.js", () => ({
+vi.mock("../../runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../runtime.js")>()),
   defaultRuntime: mocks.runtime,
 }));
 
@@ -330,6 +331,54 @@ describe("registerStatusHealthSessionsCommands", () => {
     expectCommandOptions(sessionsCommand, {
       allAgents: true,
     });
+  });
+
+  it.each([
+    { name: "bare sessions", args: ["sessions", "--store", ""], owner: sessionsCommand },
+    { name: "list leaf", args: ["sessions", "list", "--store", ""], owner: sessionsCommand },
+    { name: "list parent", args: ["sessions", "--store", "", "list"], owner: sessionsCommand },
+    {
+      name: "cleanup leaf",
+      args: ["sessions", "cleanup", "--store", ""],
+      owner: sessionsCleanupCommand,
+    },
+    {
+      name: "cleanup parent",
+      args: ["sessions", "--store", "", "cleanup"],
+      owner: sessionsCleanupCommand,
+    },
+    { name: "tail leaf", args: ["sessions", "tail", "--store", ""], owner: sessionsTailCommand },
+    { name: "tail parent", args: ["sessions", "--store", "", "tail"], owner: sessionsTailCommand },
+    {
+      name: "trajectory export leaf",
+      args: ["sessions", "export-trajectory", "--store", ""],
+      owner: exportTrajectoryCommand,
+    },
+    {
+      name: "trajectory export parent",
+      args: ["sessions", "--store", "", "export-trajectory"],
+      owner: exportTrajectoryCommand,
+    },
+  ])("preserves an explicit blank store at the $name boundary", async ({ args, owner }) => {
+    await runCli(args);
+
+    expectCommandOptions(owner, { store: "" });
+  });
+
+  it.each([
+    { name: "bare sessions", args: ["sessions"], owner: sessionsCommand },
+    { name: "list", args: ["sessions", "list"], owner: sessionsCommand },
+    { name: "cleanup", args: ["sessions", "cleanup"], owner: sessionsCleanupCommand },
+    { name: "tail", args: ["sessions", "tail"], owner: sessionsTailCommand },
+    {
+      name: "trajectory export",
+      args: ["sessions", "export-trajectory"],
+      owner: exportTrajectoryCommand,
+    },
+  ])("preserves omitted store at the $name boundary", async ({ args, owner }) => {
+    await runCli(args);
+
+    expectCommandOptions(owner, { store: undefined });
   });
 
   it("dispatches sessions list as an alias for bare sessions (regression for #81139)", async () => {

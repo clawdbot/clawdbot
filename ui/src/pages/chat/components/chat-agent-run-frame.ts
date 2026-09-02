@@ -1,5 +1,4 @@
 import { html, nothing } from "lit";
-import type { QuestionPrompt } from "../../../app/question-prompt.ts";
 import type { MessageGroup } from "../../../lib/chat/chat-types.ts";
 import {
   agentRunFrameActiveStatusParts,
@@ -16,11 +15,11 @@ import {
   renderWorkGroupSummary,
   type StreamGroupOptions,
 } from "./chat-message.ts";
+import { renderBrowserTabPreviews } from "./chat-tool-cards.ts";
 
 type MessageGroupRenderOptions = Parameters<typeof renderMessageGroup>[1];
 
 type AgentRunFrameOptions = {
-  questionPrompts: ReadonlyMap<string, QuestionPrompt>;
   streamOptions: StreamGroupOptions;
   renderGroupOptions: (group: MessageGroup) => MessageGroupRenderOptions;
   isWorkExpanded: (key: string) => boolean;
@@ -31,10 +30,7 @@ type AgentRunFrameOptions = {
 export function renderAgentRunFrame(frame: AgentRunFrameRenderItem, opts: AgentRunFrameOptions) {
   const statusParts = agentRunFrameActiveStatusParts(frame);
   if (statusParts) {
-    return renderStreamGroup(statusParts, {
-      ...opts.streamOptions,
-      questionPrompts: opts.questionPrompts,
-    });
+    return renderStreamGroup(statusParts, opts.streamOptions);
   }
   const groups = agentRunFrameGroups(frame);
   const firstAssistant = groups.find((group) => group.role === "assistant");
@@ -50,6 +46,7 @@ export function renderAgentRunFrame(frame: AgentRunFrameRenderItem, opts: AgentR
     senderLabel: firstAssistant?.senderLabel,
     replyToSender: firstAssistant?.replyToSender,
     messages: representative?.messages ?? [],
+    visibleContent: representative?.visibleContent ?? "none",
     timestamp: Math.min(...groups.map((group) => group.timestamp), ...streamStarts, Date.now()),
     isStreaming: frame.outcome.kind === "active",
     runId: frame.runId,
@@ -69,6 +66,7 @@ export function renderAgentRunFrame(frame: AgentRunFrameRenderItem, opts: AgentR
           expanded,
           onToggle: () => opts.onToggleWork(part.key, expanded),
           presentation: "continuation",
+          browserTabPreviews: renderBrowserTabPreviews(part.groups, opts.renderGroupOptions(shell)),
         })}
         ${expanded ? part.groups.map(renderFrameGroup) : nothing}
       `;

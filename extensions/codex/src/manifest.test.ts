@@ -44,10 +44,10 @@ describe("codex package manifest", () => {
     const lockfile = fs.readFileSync(new URL("../../../pnpm-lock.yaml", import.meta.url), "utf8");
 
     expect(workspace).toContain(
-      `"@agentclientprotocol/codex-acp@1.4.0>@openai/codex": ${CODEX_APP_SERVER_VERSION}`,
+      `"@agentclientprotocol/codex-acp@1.6.2>@openai/codex": ${CODEX_APP_SERVER_VERSION}`,
     );
     expect(lockfile).toContain(
-      `'@agentclientprotocol/codex-acp@1.4.0>@openai/codex': ${CODEX_APP_SERVER_VERSION}`,
+      `'@agentclientprotocol/codex-acp@1.6.2>@openai/codex': ${CODEX_APP_SERVER_VERSION}`,
     );
     const lockedCodexVersions = new Set(
       [...lockfile.matchAll(/@openai\/codex@(\d+\.\d+\.\d+)/g)].map((match) => match[1]),

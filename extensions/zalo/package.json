@@ -32,8 +32,7 @@
       "configuredState": {
         "env": {
           "anyOf": [
-            "ZALO_BOT_TOKEN",
-            "ZALO_WEBHOOK_SECRET"
+            "ZALO_BOT_TOKEN"
           ]
         }
       },

@@ -411,6 +411,10 @@ describe("attachGatewayWsConnectionHandler", () => {
 
     expect(socket.send).not.toHaveBeenCalled();
     expect(socket.close).toHaveBeenCalledWith(1008, "slow consumer");
+    expect(socket.terminate).toHaveBeenCalledOnce();
+    expect(socket.close.mock.invocationCallOrder[0]).toBeLessThan(
+      socket.terminate.mock.invocationCallOrder[0]!,
+    );
   });
 
   it.each([

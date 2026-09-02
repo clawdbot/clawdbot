@@ -9,11 +9,17 @@ import android.content.pm.ProviderInfo
 import android.database.Cursor
 import android.database.sqlite.SQLiteDatabase
 import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.graphics.Canvas
+import android.graphics.Color
+import android.graphics.Paint
 import android.net.Uri
 import android.os.Bundle
 import android.os.CancellationSignal
 import android.os.ParcelFileDescriptor
 import android.provider.MediaStore
+import android.util.Base64
+import androidx.exifinterface.media.ExifInterface
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.int
 import kotlinx.serialization.json.jsonArray
@@ -26,9 +32,11 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.robolectric.RuntimeEnvironment
 import org.robolectric.Shadows.shadowOf
+import org.robolectric.annotation.GraphicsMode
 import org.robolectric.shadows.ShadowContentResolver
 import java.io.File
 
+@GraphicsMode(GraphicsMode.Mode.NATIVE)
 class PhotosHandlerTest : NodeHandlerRobolectricTest() {
   private val photoStores = mutableListOf<TestPhotoStore>()
 
@@ -39,7 +47,7 @@ class PhotosHandlerTest : NodeHandlerRobolectricTest() {
 
   @Test
   fun handlePhotosLatest_requiresPermission() {
-    val handler = PhotosHandler.forTesting(appContext(), FakePhotosDataSource(hasPermission = false))
+    val handler = PhotosHandler(appContext(), FakePhotosDataSource(hasPermission = false))
 
     val result = handler.handlePhotosLatest(null)
 
@@ -49,7 +57,7 @@ class PhotosHandlerTest : NodeHandlerRobolectricTest() {
 
   @Test
   fun handlePhotosLatest_rejectsInvalidJson() {
-    val handler = PhotosHandler.forTesting(appContext(), FakePhotosDataSource(hasPermission = true))
+    val handler = PhotosHandler(appContext(), FakePhotosDataSource(hasPermission = true))
 
     val result = handler.handlePhotosLatest("[]")
 
@@ -71,19 +79,26 @@ class PhotosHandlerTest : NodeHandlerRobolectricTest() {
               height = 480,
               createdAt = "2026-02-28T00:00:00Z",
             ),
+            EncodedPhotoPayload(
+              format = "jpeg",
+              base64 = "xyz789",
+              width = 320,
+              height = 240,
+              createdAt = null,
+            ),
           ),
       )
-    val handler = PhotosHandler.forTesting(appContext(), source)
+    val handler = PhotosHandler(appContext(), source)
 
-    val result = handler.handlePhotosLatest("""{"limit":1}""")
+    val result = handler.handlePhotosLatest("""{"limit":2}""")
 
     assertTrue(result.ok)
-    val payload = Json.parseToJsonElement(result.payloadJson ?: error("missing payload")).jsonObject
-    val photos = payload.getValue("photos").jsonArray
-    assertEquals(1, photos.size)
-    val first = photos.first().jsonObject
-    assertEquals("jpeg", first.getValue("format").jsonPrimitive.content)
-    assertEquals(640, first.getValue("width").jsonPrimitive.int)
+    assertEquals(
+      Json.parseToJsonElement(
+        """{"photos":[{"format":"jpeg","base64":"abc123","width":640,"height":480,"createdAt":"2026-02-28T00:00:00Z"},{"format":"jpeg","base64":"xyz789","width":320,"height":240}]}""",
+      ),
+      Json.parseToJsonElement(result.payloadJson ?: error("missing payload")),
+    )
   }
 
   @Test
@@ -150,6 +165,103 @@ class PhotosHandlerTest : NodeHandlerRobolectricTest() {
     assertEquals(320, photo.getValue("width").jsonPrimitive.int)
   }
 
+  @Test
+  fun handlePhotosLatest_normalizesEveryExifOrientationBeforeEncoding() {
+    val cases =
+      listOf(
+        OrientationCase(ExifInterface.ORIENTATION_NORMAL, Color.RED, Color.GREEN, Color.BLUE, Color.YELLOW),
+        OrientationCase(ExifInterface.ORIENTATION_FLIP_HORIZONTAL, Color.GREEN, Color.RED, Color.YELLOW, Color.BLUE),
+        OrientationCase(ExifInterface.ORIENTATION_ROTATE_180, Color.YELLOW, Color.BLUE, Color.GREEN, Color.RED),
+        OrientationCase(ExifInterface.ORIENTATION_FLIP_VERTICAL, Color.BLUE, Color.YELLOW, Color.RED, Color.GREEN),
+        OrientationCase(ExifInterface.ORIENTATION_TRANSPOSE, Color.RED, Color.BLUE, Color.GREEN, Color.YELLOW, true),
+        OrientationCase(ExifInterface.ORIENTATION_ROTATE_90, Color.BLUE, Color.RED, Color.YELLOW, Color.GREEN, true),
+        OrientationCase(ExifInterface.ORIENTATION_TRANSVERSE, Color.YELLOW, Color.GREEN, Color.BLUE, Color.RED, true),
+        OrientationCase(ExifInterface.ORIENTATION_ROTATE_270, Color.GREEN, Color.YELLOW, Color.RED, Color.BLUE, true),
+      )
+
+    cases.forEach { expected ->
+      val handler =
+        systemPhotosHandler(
+          TestPhotoRow(
+            id = expected.orientation.toLong(),
+            dateTakenMs = 100_000,
+            dateAddedSeconds = 100,
+            width = 120,
+            height = 80,
+            orientation = expected.orientation,
+          ),
+        )
+
+      val photo = onlyPhoto(handler.handlePhotosLatest(null))
+      val encoded = Base64.decode(photo.getValue("base64").jsonPrimitive.content, Base64.DEFAULT)
+      val decoded = requireNotNull(BitmapFactory.decodeByteArray(encoded, 0, encoded.size))
+      try {
+        assertEquals("orientation ${expected.orientation} width", if (expected.transposed) 80 else 120, decoded.width)
+        assertEquals("orientation ${expected.orientation} height", if (expected.transposed) 120 else 80, decoded.height)
+        assertEquals(decoded.width, photo.getValue("width").jsonPrimitive.int)
+        assertEquals(decoded.height, photo.getValue("height").jsonPrimitive.int)
+        assertPixel(expected.orientation, decoded.getPixel(decoded.width / 4, decoded.height / 4), expected.topLeft)
+        assertPixel(expected.orientation, decoded.getPixel(decoded.width * 3 / 4, decoded.height / 4), expected.topRight)
+        assertPixel(expected.orientation, decoded.getPixel(decoded.width / 4, decoded.height * 3 / 4), expected.bottomLeft)
+        assertPixel(expected.orientation, decoded.getPixel(decoded.width * 3 / 4, decoded.height * 3 / 4), expected.bottomRight)
+      } finally {
+        decoded.recycle()
+      }
+    }
+  }
+
+  @Test
+  fun handlePhotosLatest_capsWidthAfterExifRotation() {
+    val handler =
+      systemPhotosHandler(
+        TestPhotoRow(
+          id = 1,
+          dateTakenMs = 100_000,
+          dateAddedSeconds = 100,
+          width = 320,
+          height = 2400,
+          orientation = ExifInterface.ORIENTATION_ROTATE_90,
+        ),
+      )
+
+    val photo = onlyPhoto(handler.handlePhotosLatest("""{"maxWidth":800}"""))
+
+    assertEquals(800, photo.getValue("width").jsonPrimitive.int)
+    assertEquals(107, photo.getValue("height").jsonPrimitive.int)
+  }
+
+  @Test
+  fun handlePhotosLatest_doesNotDownsampleTallUnrotatedPhotos() {
+    val handler =
+      systemPhotosHandler(
+        TestPhotoRow(id = 1, dateTakenMs = 100_000, dateAddedSeconds = 100, width = 320, height = 2400),
+      )
+
+    val photo = onlyPhoto(handler.handlePhotosLatest("""{"maxWidth":800}"""))
+
+    assertEquals(320, photo.getValue("width").jsonPrimitive.int)
+    assertEquals(2400, photo.getValue("height").jsonPrimitive.int)
+  }
+
+  private fun assertPixel(
+    orientation: Int,
+    actual: Int,
+    expected: Int,
+  ) {
+    assertTrue("orientation $orientation red", kotlin.math.abs(Color.red(actual) - Color.red(expected)) <= 40)
+    assertTrue("orientation $orientation green", kotlin.math.abs(Color.green(actual) - Color.green(expected)) <= 40)
+    assertTrue("orientation $orientation blue", kotlin.math.abs(Color.blue(actual) - Color.blue(expected)) <= 40)
+  }
+
+  private data class OrientationCase(
+    val orientation: Int,
+    val topLeft: Int,
+    val topRight: Int,
+    val bottomLeft: Int,
+    val bottomRight: Int,
+    val transposed: Boolean = false,
+  )
+
   private fun systemPhotosHandler(vararg rows: TestPhotoRow): PhotosHandler {
     shadowOf(RuntimeEnvironment.getApplication()).grantPermissions(Manifest.permission.READ_MEDIA_IMAGES)
     val store = TestPhotoStore(appContext(), rows.toList()).also(photoStores::add)
@@ -185,6 +297,8 @@ private data class TestPhotoRow(
   val dateTakenMs: Long?,
   val dateAddedSeconds: Long,
   val width: Int = 640,
+  val height: Int = 32,
+  val orientation: Int? = null,
 )
 
 private class TestPhotoStore(
@@ -212,11 +326,29 @@ private class TestPhotoStore(
         },
       )
       val image = File.createTempFile("photos-handler-${row.id}-", ".jpg", context.cacheDir)
-      val bitmap = Bitmap.createBitmap(row.width, 32, Bitmap.Config.ARGB_8888)
+      val bitmap =
+        Bitmap.createBitmap(row.width, row.height, Bitmap.Config.ARGB_8888).apply {
+          eraseColor(Color.RED)
+          Canvas(this).apply {
+            val paint = Paint()
+            paint.color = Color.GREEN
+            drawRect(width / 2f, 0f, width.toFloat(), height / 2f, paint)
+            paint.color = Color.BLUE
+            drawRect(0f, height / 2f, width / 2f, height.toFloat(), paint)
+            paint.color = Color.YELLOW
+            drawRect(width / 2f, height / 2f, width.toFloat(), height.toFloat(), paint)
+          }
+        }
       try {
         image.outputStream().use { output -> check(bitmap.compress(Bitmap.CompressFormat.JPEG, 90, output)) }
       } finally {
         bitmap.recycle()
+      }
+      row.orientation?.let { orientation ->
+        ExifInterface(image.absolutePath).apply {
+          setAttribute(ExifInterface.TAG_ORIENTATION, orientation.toString())
+          saveAttributes()
+        }
       }
       images[row.id] = image
     }

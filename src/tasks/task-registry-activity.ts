@@ -15,6 +15,7 @@ import type { TaskActivityOverlayState } from "./task-registry.process-state.js"
 import type { TaskRecord } from "./task-registry.types.js";
 
 const MAX_ACTIVITY_CHARS = 200;
+const ACTIVITY_LINE_PREFIX = new RegExp(`^(?:\\s*\\S){1,${MAX_ACTIVITY_CHARS + 1}}`);
 const STREAM_TEXT_BUFFER_CHARS = 4_000;
 const ACTIVITY_FLUSH_MS = 1_000;
 const MAX_PENDING_DIFFS = 64;
@@ -49,33 +50,16 @@ function activityFor(task: TaskRecord): TaskActivityOverlayState {
 }
 
 function lastLineSnippet(text: string): string | undefined {
-  const lines = text.split(/\r\n|\r|\n/);
-  for (let index = lines.length - 1; index >= 0; index -= 1) {
-    const line = lines[index]?.replace(/\s+/g, " ").trim();
-    if (line) {
-      return truncateUtf16Safe(line, MAX_ACTIVITY_CHARS);
-    }
-  }
-  return undefined;
-}
-
-function updateStreamText(
-  activity: TaskActivityOverlayState,
-  stream: "assistant" | "thinking",
-  data: Record<string, unknown>,
-): string | undefined {
-  const key = stream === "assistant" ? "assistantText" : "thinkingText";
-  let cumulative: string;
-  if (typeof data.text === "string") {
-    cumulative = data.text;
-  } else if (typeof data.delta === "string") {
-    cumulative = activity[key] + data.delta;
-  } else {
-    return undefined;
-  }
-  // Retain only a suffix for delta-only producers; full snapshots remain authoritative.
-  activity[key] = sliceUtf16Safe(cumulative, -STREAM_TEXT_BUFFER_CHARS);
-  return lastLineSnippet(cumulative);
+  const line = text
+    .trimEnd()
+    .split(/\r\n|\r|\n/)
+    .at(-1);
+  // Normalize only the prefix; the extra nonspace unit preserves a surrogate pair
+  // crossing the truncation boundary without copying the whole growing line.
+  const prefix = line?.match(ACTIVITY_LINE_PREFIX)?.[0];
+  return prefix
+    ? truncateUtf16Safe(prefix.replace(/\s+/g, " ").trim(), MAX_ACTIVITY_CHARS)
+    : undefined;
 }
 
 function scheduleFlush(taskId: string, activity: TaskActivityOverlayState): void {
@@ -98,22 +82,30 @@ function markChanged(taskId: string, activity: TaskActivityOverlayState): void {
 
 /** Folds streaming-only fields and returns true when durable task mutation should be skipped. */
 export function recordTaskActivityEvent(task: TaskRecord, event: AgentEventPayload): boolean {
-  const textStream =
-    event.stream === "assistant"
-      ? "assistant"
-      : event.stream === "thinking"
-        ? "thinking"
-        : undefined;
-  if (textStream) {
+  const textStream = event.stream;
+  if (textStream === "assistant" || textStream === "thinking") {
     const activity = activityFor(task);
-    const snippet = updateStreamText(activity, textStream, event.data);
+    if (textStream === "thinking" && activity.hasAssistantActivity) {
+      return true;
+    }
+    const key = textStream === "assistant" ? "assistantText" : "thinkingText";
+    let cumulative: string;
+    if (typeof event.data.text === "string") {
+      cumulative = event.data.text;
+    } else if (typeof event.data.delta === "string") {
+      cumulative = activity[key] + event.data.delta;
+    } else {
+      return true;
+    }
+    // Retain only a suffix for delta-only producers; full snapshots remain authoritative.
+    activity[key] = sliceUtf16Safe(cumulative, -STREAM_TEXT_BUFFER_CHARS);
+    const snippet = lastLineSnippet(cumulative);
     if (!snippet) {
       return true;
     }
     if (textStream === "assistant") {
       activity.hasAssistantActivity = true;
-    } else if (activity.hasAssistantActivity) {
-      return true;
+      activity.thinkingText = "";
     }
     if (activity.lastActivity !== snippet) {
       activity.lastActivity = snippet;

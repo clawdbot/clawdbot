@@ -18,6 +18,24 @@ function hasFindingWithSeverity(
 }
 
 describe("security audit gateway config findings", () => {
+  it.each([
+    { bind: "loopback", allowTailscale: true, missingAuth: false },
+    { bind: "loopback", allowTailscale: false, missingAuth: true },
+    { bind: "lan", allowTailscale: true, missingAuth: true },
+  ] as const)("limits Tailscale auth to its enabled loopback path: %j", (testCase) => {
+    const cfg: OpenClawConfig = {
+      gateway: {
+        bind: testCase.bind,
+        auth: { allowTailscale: testCase.allowTailscale },
+        tailscale: { mode: "serve" },
+      },
+    };
+    const findings = collectGatewayConfigFindings(cfg, cfg, {});
+    const checkId =
+      testCase.bind === "loopback" ? "gateway.loopback_no_auth" : "gateway.bind_no_auth";
+    expect(hasFindingWithSeverity(checkId, "critical", findings)).toBe(testCase.missingAuth);
+  });
+
   it("evaluates gateway auth presence and rate-limit guardrails", async () => {
     await Promise.all([
       withEnvAsync(

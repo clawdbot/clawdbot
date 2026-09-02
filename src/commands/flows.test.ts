@@ -4,7 +4,10 @@ import { visibleWidth } from "../../packages/terminal-core/src/ansi.js";
 import { runCommandWithRuntime } from "../cli/cli-utils.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { createRunningTaskRunCore as createRunningTaskRunOrNull } from "../tasks/task-executor.js";
-import { createManagedTaskFlow as createManagedTaskFlowOrNull } from "../tasks/task-flow-registry.js";
+import {
+  createManagedTaskFlow as createManagedTaskFlowOrNull,
+  getTaskFlowById,
+} from "../tasks/task-flow-registry.js";
 import type { TaskFlowRecord } from "../tasks/task-flow-registry.types.js";
 import * as taskFlowRuntime from "../tasks/task-flow-runtime-internal.js";
 import { markTaskLostById, markTaskTerminalById } from "../tasks/task-registry.js";
@@ -225,12 +228,22 @@ describe("flows commands", () => {
         createdAt: 100,
         updatedAt: 200,
       });
+      createManagedTaskFlow({
+        ownerKey: "agent:main:main",
+        controllerId: "tests/flows-command-ended-blocked",
+        goal: "Completed blocked work",
+        status: "blocked",
+        cancelRequestedAt: 150,
+        createdAt: 100,
+        updatedAt: 150,
+        endedAt: 150,
+      });
 
       const runtime = createRuntime();
       await flowsListCommand({}, runtime);
 
       expect(vi.mocked(runtime.log).mock.calls.map(([line]) => String(line))).toContain(
-        "TaskFlow pressure: 1 active · 0 blocked · 1 cancel-requested · 1 total",
+        "TaskFlow pressure: 1 active · 1 blocked · 1 cancel-requested · 2 total",
       );
     });
   });
@@ -371,6 +384,48 @@ describe("flows commands", () => {
           failures: 0,
         },
       });
+    });
+  });
+
+  it("shows and cancels live work before newer terminal history", async () => {
+    await withTaskFlowCommandStateDir(async () => {
+      const ownerKey = "agent:main:main";
+      const olderRunning = createManagedTaskFlow({
+        ownerKey,
+        controllerId: "tests/flows-command-owner-lookup",
+        goal: "Older live flow",
+        status: "running",
+        createdAt: 100,
+        updatedAt: 100,
+      });
+      const newerTerminal = createManagedTaskFlow({
+        ownerKey,
+        controllerId: "tests/flows-command-owner-lookup",
+        goal: "Newer terminal flow",
+        status: "succeeded",
+        createdAt: 200,
+        updatedAt: 200,
+        endedAt: 200,
+      });
+
+      const showRuntime = createRuntime();
+      await flowsShowCommand({ lookup: ownerKey, json: true }, showRuntime);
+      expect(vi.mocked(showRuntime.writeJson).mock.calls[0]?.[0]).toMatchObject({
+        flowId: olderRunning.flowId,
+        status: "running",
+      });
+
+      const cancelRuntime = createRuntime();
+      await flowsCancelCommand({ lookup: ownerKey }, cancelRuntime);
+      expect(vi.mocked(cancelRuntime.log)).toHaveBeenCalledWith(
+        `Cancelled ${olderRunning.flowId} (managed) with status cancelled.`,
+      );
+      expect(getTaskFlowById(olderRunning.flowId)).toMatchObject({
+        status: "cancelled",
+        cancelRequestedAt: expect.any(Number),
+      });
+      expect(getTaskFlowById(newerTerminal.flowId)).toMatchObject({ status: "succeeded" });
+      expect(getTaskFlowById(newerTerminal.flowId)?.cancelRequestedAt).toBeUndefined();
     });
   });
 

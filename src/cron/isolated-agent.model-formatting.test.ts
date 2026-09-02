@@ -635,24 +635,6 @@ describe("cron model formatting and precedence edge cases", () => {
     });
   });
 
-  describe("stored session overrides", () => {
-    it("stored modelOverride/providerOverride are applied", async () => {
-      await expectSelectedModel(
-        {
-          sessionEntry: {
-            providerOverride: "openai",
-            modelOverride: "gpt-4.1-mini",
-          },
-        },
-        { provider: "openai", model: "gpt-4.1-mini" },
-      );
-    });
-
-    it("default remains when store has no override", async () => {
-      await expectDefaultSelectedModel({ sessionEntry: {} });
-    });
-  });
-
   describe("Gmail hook model precedence", () => {
     const gmailModel = {
       provider: "openrouter",

@@ -183,7 +183,9 @@ function describeReplyContext(message: IMessagePayload): IMessageReplyContext | 
   if (!body) {
     return null;
   }
-  const id = normalizeReplyField(message.reply_to_id);
+  const id =
+    normalizeReplyField(message.thread_originator_guid) ??
+    normalizeReplyField(message.reply_to_guid);
   const sender = normalizeReplyField(message.reply_to_sender);
   return { body, id, sender };
 }
@@ -994,10 +996,16 @@ export async function buildIMessageInboundContext(params: {
   const imessageTo = decision.isGroup
     ? chatTarget || `imessage:${decision.sender}`
     : `${directService}:${decision.sender}`;
-  // Async follow-ups can resume from the stored origin instead of the immediate
-  // reply target. Keep direct SMS origins service-qualified the same way as To,
-  // or the final resumed message can fall back to imessage:<phone>.
+  // Async follow-ups need a service-qualified durable origin. Immediate direct replies use the
+  // provider's exact chat ID instead, so service auto-detection cannot erase the current binding.
   const imessageFrom = decision.isGroup ? `imessage:group:${chatId ?? "unknown"}` : imessageTo;
+  const replyTarget = decision.isGroup
+    ? imessageTo
+    : chatId != null
+      ? `chat_id:${chatId}`
+      : decision.chatGuid
+        ? `chat_guid:${decision.chatGuid}`
+        : imessageTo;
   const inboundHistory =
     !decision.isGroup && params.dmHistory?.inboundHistory
       ? params.dmHistory.inboundHistory
@@ -1032,6 +1040,7 @@ export async function buildIMessageInboundContext(params: {
     sender: {
       id: decision.sender,
       name: decision.senderNormalized,
+      isSelf: params.message.is_from_me === true,
     },
     conversation: {
       kind: decision.isGroup ? "group" : "direct",
@@ -1053,7 +1062,7 @@ export async function buildIMessageInboundContext(params: {
       routeSessionKey: decision.route.sessionKey,
     },
     reply: {
-      to: imessageTo,
+      to: replyTarget,
     },
     message: {
       body: combinedBody,

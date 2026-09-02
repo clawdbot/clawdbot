@@ -31,6 +31,7 @@ import { extractToolResultText, truncateLiveExecOutput } from "./embedded-agent-
 import type { ProcessTerminalDiagnostic } from "./tool-error-summary.js";
 import { readToolResultDetails } from "./tool-result-error.js";
 import { createToolTerminalObserver } from "./tool-terminal-outcome.js";
+import { getCoreTtsToolResultMediaUrls } from "./tools/tts-tool-result-provenance.js";
 
 type ExecApprovalReplyModule = typeof import("../infra/exec-approval-reply.js");
 
@@ -460,6 +461,7 @@ function queuePendingToolMedia(
   ctx: ToolHandlerContext,
   mediaReply: NonNullable<ReturnType<typeof extractToolResultMediaArtifact>>,
   allowedMediaUrls: string[],
+  autoDeliveryMediaUrls: ReadonlySet<string>,
 ) {
   const indexByUrl = new Map(
     ctx.state.pendingToolMediaUrls.map((url, index) => [url.trim(), index]),
@@ -479,6 +481,12 @@ function queuePendingToolMedia(
       ctx.state.pendingToolMediaTrustByUrl.set(normalized, true);
     } else if (!ctx.state.pendingToolMediaTrustByUrl.has(normalized)) {
       ctx.state.pendingToolMediaTrustByUrl.set(normalized, false);
+    }
+    if (autoDeliveryMediaUrls.has(normalized)) {
+      ctx.state.toolAutoDeliveryMediaUrls.add(normalized);
+    } else {
+      // One shared URL with mixed provenance must never inherit auto-delivery.
+      ctx.state.toolAutoDeliveryMediaUrls.delete(normalized);
     }
     const attachment = attachmentsByUrl.get(normalized);
     const existingIndex = indexByUrl.get(normalized);
@@ -608,7 +616,7 @@ export async function emitToolResultOutput(params: {
       failure: { error: `Approval prompt delivery failed: ${message}` },
     });
     ctx.state.lastToolError = terminal.lastToolError;
-    ctx.state.deterministicApprovalPromptSent = false;
+    // A later delivery failure does not undo an already delivered pending prompt.
   };
   const hasStructuredMedia = Boolean(
     result &&
@@ -655,7 +663,7 @@ export async function emitToolResultOutput(params: {
     if (!ctx.params.onToolResult) {
       return;
     }
-    ctx.state.deterministicApprovalPromptPending = true;
+    // Setup notices are progress, not pending prompts that replace the final answer.
     try {
       const { buildExecApprovalUnavailableReplyPayload } = await loadExecApprovalReply();
       await ctx.params.onToolResult?.(
@@ -670,16 +678,12 @@ export async function emitToolResultOutput(params: {
           nodeId: approvalUnavailable.nodeId,
         }),
       );
-      ctx.state.deterministicApprovalPromptSent = true;
     } catch (error) {
       recordApprovalPromptDeliveryFailure(error);
-    } finally {
-      ctx.state.deterministicApprovalPromptPending = false;
     }
     return;
   }
 
-  const outputText = extractToolResultText(sanitizedResult);
   const mediaReply = isToolError ? undefined : extractToolResultMediaArtifact(result);
   const mediaUrls = mediaReply
     ? filterToolResultMediaUrls(
@@ -698,6 +702,7 @@ export async function emitToolResultOutput(params: {
       builtinToolNames: ctx.builtinToolNames,
     }) && ctx.shouldEmitToolOutput();
   if (shouldEmitOutput) {
+    const outputText = extractToolResultText(sanitizedResult);
     if (outputText) {
       ctx.emitToolOutput(rawToolName, meta, outputText, hasStructuredMedia ? undefined : result);
     }
@@ -716,5 +721,8 @@ export async function emitToolResultOutput(params: {
   if (mediaUrls.length === 0) {
     return;
   }
-  queuePendingToolMedia(ctx, mediaReply, mediaUrls);
+  const autoDeliveryMediaUrls = new Set(
+    mediaReply.trustedLocalMedia === true ? getCoreTtsToolResultMediaUrls(result) : [],
+  );
+  queuePendingToolMedia(ctx, mediaReply, mediaUrls, autoDeliveryMediaUrls);
 }

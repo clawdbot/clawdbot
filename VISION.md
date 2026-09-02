@@ -14,6 +14,10 @@ It evolved through several names and shells: Warelay -> Clawdbot -> Moltbot -> O
 
 The goal: a personal assistant that is easy to use, supports a wide range of platforms, and respects privacy and security.
 
+OpenClaw is a great personal assistant and a great team assistant.
+A personal install is yours alone; a shared Gateway is a place people work together, so the same session can carry several humans, their credit, and their history.
+We build OpenClaw with OpenClaw on [team.openclaw.ai](https://team.openclaw.ai), and we sometimes invite visitors there.
+
 The current focus is:
 
 Priority:
@@ -59,7 +63,8 @@ Canonical security policy and reporting:
 We prioritize secure defaults, but also expose clear knobs for trusted high-power workflows.
 
 Privacy follows the same default rule.
-OpenClaw sends no usage analytics, tracking identifiers, or attribution tags unless the operator turned that on themselves.
+OpenClaw sends no usage analytics, tracking identifiers, or telemetry attribution to the project unless the operator turned that on themselves.
+This rule governs what leaves your install. It is not a rule about shared Gateways: when you join a team Gateway, the people you share it with see the work you do there, and features like Git co-author credit exist to attribute that work to you.
 The setup wizard offers optional anonymous feature statistics, with no selected by default; the daily update check reports version and platform and can be disabled.
 See [Usage telemetry and update checks](https://docs.openclaw.ai/gateway/telemetry).
 
@@ -130,6 +135,7 @@ It is widely known, fast to iterate in, and easy to read, modify, and extend.
 - New core skills when they can live on [ClawHub](https://clawhub.ai/)
 - Full-doc translation sets for all docs (deferred; we plan AI-generated translations later)
 - Commercial service integrations that do not clearly fit the model-provider category
+- Cloud-based sandbox providers as OpenClaw plugins; implement provider support in [Crabbox](https://github.com/openclaw/crabbox) instead
 - Wrapper channels around already supported channels without a clear capability or security gap
 - MCP work that duplicates existing MCP, ACPX, plugin, or ClawHub paths without a clear product or security gap
 - Heavy orchestration layers that duplicate existing agent and tool infrastructure

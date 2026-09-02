@@ -110,13 +110,64 @@ describe("Ollama non-interactive onboarding", () => {
     expect(runtime.error).toHaveBeenCalledWith(error);
     expect(runtime.error).toHaveBeenCalledWith(
       [
-        "No Ollama models are available at http://127.0.0.1:11434.",
-        "Pull a model first, then re-run setup.",
+        "No Ollama chat models are available at http://127.0.0.1:11434.",
+        "Pull a chat model first, then re-run setup.",
       ].join("\n"),
     );
     expect(runtime.exit).toHaveBeenCalledWith(1);
     expect(upsertAuthProfileWithLock).not.toHaveBeenCalled();
     expect(result).toBe(nextConfig);
+  });
+
+  it.each([
+    { description: "an installed chat model", embeddings: 0, chat: true },
+    { description: "only an embedding model", embeddings: 1, chat: false },
+    { description: "embedding models before chat", embeddings: 201, chat: true },
+  ])("handles $description when a requested download fails", async ({ embeddings, chat }) => {
+    const embeddingNames = Array.from({ length: embeddings }, (_, index) => `embedding-${index}`);
+    const fetchMock = createOllamaFetchMock({
+      tags: [...embeddingNames, ...(chat ? ["qwen2.5-coder:7b"] : [])],
+      capabilities: {
+        ...Object.fromEntries(embeddingNames.map((name) => [name, ["embedding", "tools"]])),
+        "qwen2.5-coder:7b": ["tools"],
+      },
+      pullResponse: new Response('{"error":"disk full"}\n', { status: 200 }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const runtime = createRuntime();
+
+    const nextConfig = {
+      agents: {
+        defaults: {
+          model: {
+            primary: "openai/gpt-5.6-luna",
+            fallbacks: ["anthropic/claude-sonnet-4-6"],
+          },
+        },
+      },
+    };
+    const result = await configureOllamaNonInteractive({
+      nextConfig,
+      opts: {
+        customBaseUrl: "http://127.0.0.1:11434",
+        customModelId: "missing-model",
+      },
+      runtime,
+    });
+
+    expect(runtime.error).toHaveBeenCalledWith("Download failed: disk full");
+    if (!chat) {
+      expect(result).toEqual(nextConfig);
+      expect(runtime.exit).toHaveBeenCalledWith(1);
+      expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("chat model"));
+      return;
+    }
+    expect(result.agents?.defaults?.model).toEqual({
+      primary: "ollama/qwen2.5-coder:7b",
+      fallbacks: ["anthropic/claude-sonnet-4-6"],
+    });
+    expect(result.models?.providers?.ollama?.apiKey).toBe("ollama-local");
+    expect(upsertAuthProfileWithLock).not.toHaveBeenCalled();
   });
 
   it("persists only installed local models when selecting a discovered custom model", async () => {

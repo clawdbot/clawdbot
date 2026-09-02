@@ -166,7 +166,7 @@ describe("telegram inbound media", () => {
           },
         },
         {
-          name: "skips when file_path is missing",
+          name: "reports unavailable media when file_path is missing",
           messageId: 2,
           getFile: async () => ({}),
           setupFetch: () => watchTelegramFetch(),
@@ -178,7 +178,7 @@ describe("telegram inbound media", () => {
             expect(params.fetchSpy).not.toHaveBeenCalled();
             expect(params.replySpy).toHaveBeenCalledTimes(1);
             expect(replyPayload(params.replySpy)).toMatchObject({
-              BodyForAgent: "",
+              BodyForAgent: "[media unavailable: download failed]",
               MediaTypes: ["image"],
               RawBody: "",
             });

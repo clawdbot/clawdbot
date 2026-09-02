@@ -1,6 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { GatewayRequestError } from "../../api/gateway.ts";
-import { buildSessionUsageDateParams, requestSessionUsage } from "./usage.ts";
+import {
+  buildSessionUsageDateParams,
+  requestSessionUsage,
+  requestSessionUsageContextWeight,
+} from "./usage.ts";
 
 describe("buildSessionUsageDateParams", () => {
   afterEach(() => {
@@ -28,6 +32,39 @@ describe("buildSessionUsageDateParams", () => {
 });
 
 describe("requestSessionUsage", () => {
+  it.each([
+    { key: "agent:main:detail", agentId: undefined },
+    { key: "global", agentId: "research" },
+  ])("scopes selected context for $key without an all-agent request", async ({ key, agentId }) => {
+    const request = vi.fn().mockResolvedValue({ sessions: [] });
+    const signal = new AbortController().signal;
+    await requestSessionUsageContextWeight(
+      { request } as never,
+      {
+        startDate: "2026-07-01",
+        endDate: "2026-07-28",
+        scope: "family",
+        timeZone: "utc",
+        agentId,
+      },
+      key,
+      signal,
+    );
+    expect(request).toHaveBeenCalledWith(
+      "sessions.usage",
+      {
+        startDate: "2026-07-01",
+        endDate: "2026-07-28",
+        mode: "utc",
+        groupBy: "family",
+        key,
+        limit: 1,
+        includeContextWeight: true,
+        ...(agentId ? { agentId } : {}),
+      },
+      { signal },
+    );
+  });
   it("requests canonical family grouping", async () => {
     const result = { sessions: [] };
     const request = vi.fn().mockResolvedValue(result);
@@ -47,7 +84,7 @@ describe("requestSessionUsage", () => {
       mode: "utc",
       groupBy: "family",
       limit: 1000,
-      includeContextWeight: true,
+      includeContextWeight: false,
     });
   });
 

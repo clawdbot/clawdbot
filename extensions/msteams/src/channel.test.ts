@@ -1,12 +1,14 @@
 // Msteams tests cover channel plugin behavior.
 import fs from "node:fs";
 import path from "node:path";
+import { CHANNEL_APPROVAL_NATIVE_RUNTIME_CONTEXT_CAPABILITY } from "openclaw/plugin-sdk/approval-handler-adapter-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { withTempDir } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { MSTeamsConfigSchema } from "../config-api.js";
 import { msteamsDirectoryContractPlugin } from "../directory-contract-api.js";
 import { msTeamsApprovalAuth } from "./approval-auth.js";
+import { msTeamsApprovalCapability } from "./approval-native.js";
 import { msteamsPlugin } from "./channel.js";
 import { msteamsSetupPlugin } from "./channel.setup.js";
 
@@ -241,8 +243,23 @@ describe("msteamsPlugin", () => {
     },
   );
 
-  it("exposes approval auth through approvalCapability", () => {
-    expect(msteamsPlugin.approvalCapability).toBe(msTeamsApprovalAuth);
+  it("exposes native approval delivery without replacing existing approval authorization", () => {
+    const authorization = {
+      cfg: createConfiguredMSTeamsCfg(),
+      senderId: "40a1a0ed-4ff2-4164-a219-55518990c197",
+      action: "approve",
+      approvalKind: "exec",
+    } as const;
+
+    expect(msteamsPlugin.approvalCapability).toBe(msTeamsApprovalCapability);
+    expect(msteamsPlugin.approvalCapability?.authorizeActorAction?.(authorization)).toEqual(
+      msTeamsApprovalAuth.authorizeActorAction?.(authorization),
+    );
+    expect(msteamsPlugin.approvalCapability?.nativeRuntime?.eventKinds).toEqual([
+      "exec",
+      "plugin",
+      "system-agent",
+    ]);
   });
 
   it("advertises legacy and group-management message-tool actions together", () => {
@@ -269,6 +286,66 @@ describe("msteamsPlugin", () => {
       "removeParticipant",
       "renameGroup",
     ]);
+  });
+
+  it("registers the approval runtime before monitor startup only when native delivery is enabled", async () => {
+    const monitorModule = await import("./index.js");
+    const monitor = vi.spyOn(monitorModule, "monitorMSTeamsProvider").mockResolvedValue({
+      app: null,
+      shutdown: async () => {},
+    });
+    const register = vi.fn(() => ({ dispose: vi.fn() }));
+    const controller = new AbortController();
+    const cfg: OpenClawConfig = {
+      ...createConfiguredMSTeamsCfg(),
+      approvals: { exec: { enabled: true } },
+      channels: {
+        msteams: {
+          ...createConfiguredMSTeamsCfg().channels?.msteams,
+          allowFrom: ["40a1a0ed-4ff2-4164-a219-55518990c197"],
+        },
+      },
+    };
+    const startAccount = async (config: OpenClawConfig) =>
+      await msteamsPlugin.gateway?.startAccount?.({
+        cfg: config,
+        accountId: "default",
+        account: msteamsPlugin.config.resolveAccount(config, "default"),
+        runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+        abortSignal: controller.signal,
+        getStatus: () => ({ accountId: "default" }),
+        setStatus: vi.fn(),
+        channelRuntime: {
+          runtimeContexts: {
+            register,
+            get: () => undefined,
+            watch: () => () => {},
+          },
+        },
+      });
+
+    try {
+      await startAccount(cfg);
+
+      expect(register).toHaveBeenCalledWith({
+        channelId: "msteams",
+        accountId: "default",
+        capability: CHANNEL_APPROVAL_NATIVE_RUNTIME_CONTEXT_CAPABILITY,
+        context: {},
+        abortSignal: controller.signal,
+      });
+      expect(register.mock.invocationCallOrder[0]).toBeLessThan(
+        monitor.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
+      );
+
+      await startAccount({ ...cfg, approvals: { exec: { enabled: false } } });
+
+      expect(register).toHaveBeenCalledOnce();
+      expect(monitor).toHaveBeenCalledTimes(2);
+    } finally {
+      controller.abort();
+      monitor.mockRestore();
+    }
   });
 
   it("reuses the shared Teams target-id matcher for explicit targets", () => {

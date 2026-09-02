@@ -346,29 +346,27 @@ export function createWatchNodeHttpRuntime(options: WatchNodeHttpRuntimeOptions)
         : undefined;
     const disconnectedNodeId = options.nodeRegistry.unregister(session.connId);
     if (disconnectedNodeId) {
-      void (async () => {
-        try {
-          if (disconnectHistory && disconnectHistory.nodeId === disconnectedNodeId) {
-            await recordPairedNodeDisconnection({
-              nodeId: disconnectHistory.nodeId,
-              connectedAtMs: disconnectHistory.connectedAtMs,
-              disconnectedAtMs: now(),
-              expectedPairingGeneration: {
-                nodeId: disconnectHistory.nodeId,
-                key: disconnectHistory.pairingGeneration,
-              },
-              baseDir: options.pairingBaseDir,
-            });
-          }
-        } catch (error) {
-          options.onError?.("watch node disconnect persistence failed", error);
-        }
-        try {
-          options.onNodeDisconnected?.(disconnectedNodeId, reason);
-        } catch (error) {
-          options.onError?.("watch node disconnect cleanup failed", error);
-        }
-      })();
+      const disconnectedAtMs = now();
+      // Finish node-owned cleanup before persistence yields to a replacement connection.
+      try {
+        options.onNodeDisconnected?.(disconnectedNodeId, reason);
+      } catch (error) {
+        options.onError?.("watch node disconnect cleanup failed", error);
+      }
+      if (disconnectHistory && disconnectHistory.nodeId === disconnectedNodeId) {
+        void recordPairedNodeDisconnection({
+          nodeId: disconnectHistory.nodeId,
+          connectedAtMs: disconnectHistory.connectedAtMs,
+          disconnectedAtMs,
+          expectedPairingGeneration: {
+            nodeId: disconnectHistory.nodeId,
+            key: disconnectHistory.pairingGeneration,
+          },
+          baseDir: options.pairingBaseDir,
+        }).catch((error: unknown) =>
+          options.onError?.("watch node disconnect persistence failed", error),
+        );
+      }
     }
   };
 
@@ -495,8 +493,31 @@ export function createWatchNodeHttpRuntime(options: WatchNodeHttpRuntimeOptions)
       sendUnauthorized(res);
       return null;
     }
-    touchSession(session);
     return session;
+  };
+
+  const withCurrentSession = async (
+    req: IncomingMessage,
+    res: ServerResponse,
+    operation: (session: WatchNodeSession) => undefined,
+  ): Promise<void> => {
+    const session = await getSession(req, res);
+    if (!session) {
+      return;
+    }
+    // Pairing verification yields. Commit only while both transport owners
+    // still hold this exact connection, without another await before the effect.
+    if (
+      session.invalidatedReason ||
+      sessionsByToken.get(session.token) !== session ||
+      options.nodeRegistry.get(session.nodeId)?.connId !== session.connId
+    ) {
+      closeSession(session, session.invalidatedReason ?? "node connection changed");
+      sendUnauthorized(res);
+      return;
+    }
+    touchSession(session);
+    operation(session);
   };
 
   const handleChallenge = (req: IncomingMessage, res: ServerResponse) => {
@@ -1038,39 +1059,37 @@ export function createWatchNodeHttpRuntime(options: WatchNodeHttpRuntimeOptions)
       sendMethodNotAllowed(res);
       return;
     }
-    const session = await getSession(req, res);
-    if (!session) {
-      return;
-    }
-    const queued = session.queue.shift();
-    if (queued) {
-      session.queuedBytes -= queued.byteLength;
-      if (!sendQueuedEvent(res, queued)) {
-        closeSession(session, "event delivery failed");
-      }
-      return;
-    }
-    if (session.waiter) {
-      clearTimeout(session.waiter.timer);
-      sendJson(session.waiter.res, 409, { ok: false, reason: "superseded poll" });
-    }
-    const timer = setTimeout(() => {
-      if (session.waiter?.res !== res) {
+    await withCurrentSession(req, res, (session) => {
+      const queued = session.queue.shift();
+      if (queued) {
+        session.queuedBytes -= queued.byteLength;
+        if (!sendQueuedEvent(res, queued)) {
+          closeSession(session, "event delivery failed");
+        }
         return;
       }
-      session.waiter = undefined;
-      if (!res.writableEnded) {
-        sendJson(res, 200, { ok: true, event: null });
-      }
-    }, POLL_TIMEOUT_MS);
-    timer.unref?.();
-    session.waiter = { res, timer };
-    res.once("close", () => {
-      if (!res.writableEnded && session.waiter?.res === res) {
+      if (session.waiter) {
         clearTimeout(session.waiter.timer);
-        session.waiter = undefined;
-        closeSession(session, "poll connection closed");
+        sendJson(session.waiter.res, 409, { ok: false, reason: "superseded poll" });
       }
+      const timer = setTimeout(() => {
+        if (session.waiter?.res !== res) {
+          return;
+        }
+        session.waiter = undefined;
+        if (!res.writableEnded) {
+          sendJson(res, 200, { ok: true, event: null });
+        }
+      }, POLL_TIMEOUT_MS);
+      timer.unref?.();
+      session.waiter = { res, timer };
+      res.once("close", () => {
+        if (!res.writableEnded && session.waiter?.res === res) {
+          clearTimeout(session.waiter.timer);
+          session.waiter = undefined;
+          closeSession(session, "poll connection closed");
+        }
+      });
     });
   };
 
@@ -1079,12 +1098,10 @@ export function createWatchNodeHttpRuntime(options: WatchNodeHttpRuntimeOptions)
       sendMethodNotAllowed(res);
       return;
     }
-    const session = await getSession(req, res);
-    if (!session) {
-      return;
-    }
-    closeSession(session, "watch disconnected");
-    sendJson(res, 200, { ok: true });
+    await withCurrentSession(req, res, (session) => {
+      closeSession(session, "watch disconnected");
+      sendJson(res, 200, { ok: true });
+    });
   };
 
   const handleResult = async (req: IncomingMessage, res: ServerResponse) => {
@@ -1092,8 +1109,7 @@ export function createWatchNodeHttpRuntime(options: WatchNodeHttpRuntimeOptions)
       sendMethodNotAllowed(res);
       return;
     }
-    const session = await getSession(req, res);
-    if (!session) {
+    if (!(await getSession(req, res))) {
       return;
     }
     const body = await readJsonBodyOrError(req, res, MAX_BODY_BYTES);
@@ -1104,29 +1120,26 @@ export function createWatchNodeHttpRuntime(options: WatchNodeHttpRuntimeOptions)
       sendInvalidRequest(res, "invalid node invoke result");
       return;
     }
-    const error = isRecord(body.error)
-      ? {
-          ...(typeof body.error.code === "string" ? { code: body.error.code } : {}),
-          ...(typeof body.error.message === "string" ? { message: body.error.message } : {}),
-        }
-      : null;
-    // Body upload can yield long enough for an external pairing mutation.
-    // Recheck the exact HTTP transport before committing its invoke result.
-    if (!(await options.nodeRegistry.isConnectionCurrentPairingState(session.connId))) {
-      closeSession(session, "node pairing changed");
-      sendUnauthorized(res);
-      return;
-    }
-    const accepted = options.nodeRegistry.handleInvokeResult({
+    const result = {
       id: body.id,
-      nodeId: session.nodeId,
-      connId: session.connId,
       ok: body.ok,
       payload: body.payload,
       payloadJSON: typeof body.payloadJSON === "string" ? body.payloadJSON : null,
-      error,
+      error: isRecord(body.error)
+        ? {
+            ...(typeof body.error.code === "string" ? { code: body.error.code } : {}),
+            ...(typeof body.error.message === "string" ? { message: body.error.message } : {}),
+          }
+        : null,
+    };
+    await withCurrentSession(req, res, (session) => {
+      const accepted = options.nodeRegistry.handleInvokeResult({
+        ...result,
+        nodeId: session.nodeId,
+        connId: session.connId,
+      });
+      sendJson(res, 200, accepted ? { ok: true } : { ok: true, ignored: true });
     });
-    sendJson(res, 200, accepted ? { ok: true } : { ok: true, ignored: true });
   };
 
   const handleRequest = async (req: IncomingMessage, res: ServerResponse): Promise<boolean> => {

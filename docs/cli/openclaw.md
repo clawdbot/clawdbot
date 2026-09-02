@@ -110,11 +110,25 @@ Starting a guided setup flow also runs immediately: channel setup (`connect tele
 
 Persistent operations require conversational approval (or `--yes` for a direct command): write config, `config set`, `config set-ref`, setup/onboarding bootstrap, change the default model, start/stop/restart the Gateway, create agents, and install plugins.
 
+Changes delegated by a regular agent, including requests from messaging channels,
+require approval in the OpenClaw operator UI. Replying "yes" in that chat cannot
+approve the change. Run `openclaw dashboard` on the Gateway host to review the
+pending approval, or run the change directly with `openclaw setup` there.
+Interactive setup and agent handoffs require a direct operator session;
+delegated chat cannot start a wizard, even when a model proposes it.
+
 Configured agents can ask OpenClaw to create another agent through their
 `openclaw` tool. The request enters the same typed create-agent operation and
 operator approval flow used by Ask OpenClaw; the approval summary names the
 requesting agent. OpenClaw remains the executor, and approved creation records
 that requesting agent as the new agent's creator.
+
+Delegated creation remains tied to the requesting run. If that run ends or loses
+authority during preparation, OpenClaw stops before starting the next persistent
+write. A write already in progress may finish, and workspace files created earlier
+are not automatically removed. Check `openclaw agents list` before retrying from
+an active run; an agent whose creation already completed is not removed when its
+requesting run ends.
 
 Doctor repairs are unavailable inside OpenClaw because they can rewrite the provider, authentication, or default-agent inference route powering the session. Exit OpenClaw and run `openclaw doctor --fix` in a terminal. Read-only `doctor` remains available inside OpenClaw.
 
@@ -203,6 +217,16 @@ setup workspace ~/Projects/work
 
 `setup` preserves the verified effective model. It does not configure or
 replace inference.
+
+Delegated setup remains tied to the requesting run through configuration,
+workspace, and session preparation. If that run ends or loses authority,
+OpenClaw stops before starting the next persistent effect. Earlier completed
+effects remain, including an agent whose creation already finished; setup may
+still be incomplete. Check `openclaw agents list` and `status`, then request
+setup again from an active run and approve the new request, or finish directly
+with `openclaw setup` on the Gateway host. If cancellation deferred legacy
+history migration for a newly named agent, the next Gateway startup retries it;
+use `openclaw doctor --fix` on the same state/config to finish it sooner.
 
 If inference is missing or its live check fails, leave OpenClaw and run `openclaw onboard`. Guided onboarding tries the configured model first, then authenticated subscription CLIs, API keys, and remaining supported CLIs; it asks each candidate for a real reply and persists only a passing route. OpenClaw starts immediately after that boundary and can then configure the workspace, Gateway, channels, agents, plugins, and other optional features.
 

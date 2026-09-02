@@ -50,6 +50,20 @@ describe("zai model definitions", () => {
     });
   });
 
+  it("uses official multimodal GLM-5.3 Flash catalog metadata", () => {
+    expectZaiModelFields({
+      id: "glm-5.3-flash",
+      reasoning: true,
+      input: ["text", "image"],
+      contextWindow: 1_048_576,
+      maxTokens: 131_072,
+      cost: { input: 0.15, output: 0.5, cacheRead: 0.03, cacheWrite: 0 },
+    });
+    expect(buildZaiCatalogModels().find((model) => model.id === "glm-5.3-flash")?.compat).toEqual({
+      codeMode: "preferred",
+    });
+  });
+
   it("uses official GLM-5.2 Coding Plan metadata", () => {
     expectZaiModelFields({
       id: "glm-5.2",

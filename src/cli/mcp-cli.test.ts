@@ -692,7 +692,13 @@ describe("mcp cli", () => {
       );
 
       const checksBlocked = createDeferred();
+      const firstBatchStarted = createDeferred();
+      let startedChecks = 0;
       readMcpOAuthCredentialsStatus.mockImplementation(async () => {
+        startedChecks += 1;
+        if (startedChecks === 4) {
+          firstBatchStarted.resolve();
+        }
         await checksBlocked.promise;
         return {
           state: "unauthenticated",
@@ -700,18 +706,18 @@ describe("mcp cli", () => {
       });
 
       const doctorPromise = runMcpCommand(["mcp", "doctor", "--json"]);
-      await vi.waitFor(() => {
-        expect(readMcpOAuthCredentialsStatus.mock.calls.length).toBeGreaterThanOrEqual(4);
-      });
-      await new Promise<void>((resolve) => {
-        setImmediate(resolve);
-      });
-      const startedBeforeRelease = readMcpOAuthCredentialsStatus.mock.calls.length;
-      checksBlocked.resolve();
-      await doctorPromise;
+      try {
+        await Promise.race([firstBatchStarted.promise, doctorPromise]);
+        await new Promise<void>((resolve) => {
+          setImmediate(resolve);
+        });
+        expect(startedChecks).toBe(4);
+      } finally {
+        checksBlocked.resolve();
+        await doctorPromise;
+      }
 
       expect(readMcpOAuthCredentialsStatus).toHaveBeenCalledTimes(6);
-      expect(startedBeforeRelease).toBe(4);
       expect(
         JSON.parse(lastLogLine()).servers.map((server: { name: string }) => server.name),
       ).toEqual(["server-0", "server-1", "server-2", "server-3", "server-4", "server-5"]);
@@ -1030,13 +1036,13 @@ describe("mcp cli", () => {
       mockLog.mockClear();
       await runMcpCommand(["mcp", "probe", "memory"]);
       expect(mockLog.mock.calls.map(([line]) => String(line)).join("\n")).toContain(
-        "tools have no safety annotations; calls will require interactive approval",
+        "tools have no safety annotations; calls require approval in prompting session postures",
       );
 
       mockLog.mockClear();
       await runMcpCommand(["mcp", "doctor", "memory", "--probe"]);
       expect(mockLog.mock.calls.map(([line]) => String(line)).join("\n")).toContain(
-        "tools have no safety annotations; calls will require interactive approval",
+        "tools have no safety annotations; calls require approval in prompting session postures",
       );
     });
   });

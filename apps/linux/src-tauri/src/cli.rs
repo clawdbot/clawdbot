@@ -4,11 +4,14 @@ use std::ffi::OsString;
 use std::fmt;
 use std::path::PathBuf;
 use std::process::{Command, Output, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 
 #[derive(Clone, Debug)]
 pub struct OpenClawCli {
     executable: PathBuf,
     openclaw_home: PathBuf,
+    available: Arc<AtomicBool>,
 }
 
 #[derive(Debug)]
@@ -61,7 +64,12 @@ impl OpenClawCli {
         Self {
             executable,
             openclaw_home,
+            available: Arc::new(AtomicBool::new(true)),
         }
+    }
+
+    pub fn is_available(&self) -> bool {
+        self.available.load(Ordering::Acquire)
     }
 
     fn verify(&self) -> Result<(), CliError> {
@@ -92,9 +100,15 @@ impl OpenClawCli {
         I: IntoIterator<Item = S>,
         S: AsRef<std::ffi::OsStr>,
     {
-        self.command(args)?
-            .output()
-            .map_err(|error| CliError::Spawn(format!("Failed to run OpenClaw CLI: {error}")))
+        let mut command = self.command(args)?;
+        command.stdout(Stdio::piped()).stderr(Stdio::piped());
+        let child = command.spawn().map_err(|error| {
+            self.available.store(false, Ordering::Release);
+            CliError::Spawn(format!("Failed to run OpenClaw CLI: {error}"))
+        })?;
+        child.wait_with_output().map_err(|error| {
+            CliError::Spawn(format!("Failed to read OpenClaw CLI output: {error}"))
+        })
     }
 
     pub fn json<T, I, S>(&self, args: I) -> Result<(T, Output), CliError>
@@ -159,7 +173,8 @@ pub fn openclaw_home() -> Result<PathBuf, CliError> {
 
 #[cfg(test)]
 mod tests {
-    use super::output_tail;
+    use super::{output_tail, OpenClawCli};
+    use std::path::PathBuf;
 
     #[test]
     fn output_tail_keeps_the_last_twelve_nonempty_lines() {
@@ -174,5 +189,17 @@ mod tests {
 
         assert_eq!(output_tail(output.as_bytes()), Some(expected));
         assert_eq!(output_tail(b"\n  \n"), None);
+    }
+
+    #[test]
+    fn missing_executable_invalidates_the_cached_cli() {
+        let cli = OpenClawCli::new(
+            PathBuf::from("openclaw-test-executable-that-does-not-exist"),
+            PathBuf::new(),
+        );
+
+        assert!(cli.is_available());
+        assert!(cli.output(["--version"]).is_err());
+        assert!(!cli.is_available());
     }
 }

@@ -1,3 +1,18 @@
+export const MAX_RELEASE_ARTIFACT_BYTES: number;
+export function serializeReleaseArtifact(payload: unknown): string;
+export function normalizeReleaseCoveragePolicy(
+  input: ReleaseRecord,
+): "npm-beta-v1" | "npm-stable-v1" | undefined;
+export function validateReleaseCoveragePolicyBinding(
+  plan: ReleaseRecord | undefined,
+  validationInputs?: ReleaseRecord,
+): void;
+export function normalizeReleaseTelegramWaiver(input: ReleaseRecord): string;
+export function validateReleaseTelegramWaiverBinding(
+  plan: ReleaseRecord | undefined,
+  validationInputs?: ReleaseRecord,
+): void;
+
 export interface ReleaseRecord {
   [key: string]: unknown;
 }
@@ -19,8 +34,29 @@ export interface ReleaseStateArtifact extends ReleaseRecord {
   sourceParentRunAttempt: number;
   state: string;
 }
-export type ReleaseGhTransportErrorClass = "hard" | "transient";
+export interface ReleaseChildSpec {
+  dispatchName: string;
+  displayName: string;
+  key: string;
+  parentJobName: string;
+  rerunGroups: string[];
+  suffix: string;
+  workflow: string;
+}
+export type ReleaseGhTransportErrorClass = "ambiguous" | "hard" | "transient";
 export function classifyReleaseGhTransportError(error: unknown): ReleaseGhTransportErrorClass;
+export function isReleaseGhArtifactMissingError(error: unknown): boolean;
+export function releaseChildSpec(key: string): ReleaseChildSpec;
+export function validateReleaseChildRunProvenance(
+  run: ReleaseRecord,
+  expected?: ReleaseRecord,
+): {
+  dispatchActor: string;
+  effectiveRunAttempt: number;
+  repository: string;
+  triggeringActor: string;
+};
+export function validateReleaseChildDispatchBinding(input: ReleaseRecord): void;
 export function buildReleaseExecutionPlan(input: ReleaseRecord): {
   children: ReleaseChild[];
   gates: ReleaseRecord[];
@@ -31,6 +67,22 @@ export function validateReleaseExecutionPlanArtifact(
   expected?: Record<string, unknown>,
 ): ReleaseExecutionPlan;
 export function releaseExecutionPlanSha256(plan: ReleaseRecord): string;
+export function releaseCompositeJobsSha256(value: ReleaseRecord): string;
+export function compareReleaseJobsByName(left: { name: string }, right: { name: string }): number;
+export function composeReleaseAttemptJobs(
+  attempts: Array<{ jobs: ReleaseRecord[]; runAttempt: number }>,
+  expected: { effectiveRunAttempt: number; plannedRunAttempt: number },
+): {
+  effectiveRunAttempt: number;
+  jobs: ReleaseRecord[];
+  plannedRunAttempt: number;
+  sha256: string;
+};
+export function composeReleaseChildAttemptEvidence(input: {
+  attempts: Array<{ jobs: ReleaseRecord[]; runAttempt: number }>;
+  expected: ReleaseRecord;
+  run: ReleaseRecord;
+}): ReleaseRecord;
 
 export function terminalPolicyPass(
   child: ReleaseRecord,
@@ -77,6 +129,7 @@ export function selectReleaseStateArtifacts(
   };
 };
 export function formatReleaseStateOutcome(payload: ReleaseRecord): string;
+export function releaseStateChildEvidence(child: ReleaseRecord): ReleaseRecord;
 export function affectedActiveRunIds(
   children: ReleaseRecord[],
   blockers: ReleaseRecord[],

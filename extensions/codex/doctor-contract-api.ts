@@ -2,7 +2,10 @@
  * Doctor contract hooks for Codex plugin config and state migrations.
  */
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import type { PluginDoctorStateMigration } from "openclaw/plugin-sdk/runtime-doctor-migrations";
 import { asNullableRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { codexOrphanedSessionBindingMigration } from "./src/migration/session-binding-orphans.js";
+import { stateMigrations as legacyStateMigrations } from "./src/migration/session-binding-sidecars.js";
 
 type LegacyConfigRule = {
   path: string[];
@@ -33,6 +36,21 @@ function hasRetiredApprovalPolicy(value: unknown): boolean {
   return approvalPolicy === "on-failure" || approvalPolicy === "untrusted";
 }
 
+// These keys shipped in v2026.8.1; only Doctor consumes them after retirement.
+const RETIRED_TURN_IDLE_TIMEOUT_KEYS = [
+  "turnCompletionIdleTimeoutMs",
+  "turnAssistantCompletionIdleTimeoutMs",
+  "postToolRawAssistantCompletionIdleTimeoutMs",
+] as const;
+
+function hasRetiredTurnIdleTimeout(value: unknown): boolean {
+  const appServer = asNullableRecord(value);
+  return (
+    appServer !== null &&
+    RETIRED_TURN_IDLE_TIMEOUT_KEYS.some((key) => Object.hasOwn(appServer, key))
+  );
+}
+
 /** Legacy Codex config keys that doctor should report or repair. */
 export const legacyConfigRules: LegacyConfigRule[] = [
   {
@@ -53,6 +71,12 @@ export const legacyConfigRules: LegacyConfigRule[] = [
       'plugins.entries.codex.config.appServer.approvalPolicy values "on-failure" and "untrusted" are retired; use "on-request". Run "openclaw doctor --fix".',
     match: hasRetiredApprovalPolicy,
   },
+  {
+    path: ["plugins", "entries", "codex", "config", "appServer"],
+    message:
+      'Codex app-server turn idle timeouts are retired; native Codex owns provider liveness and turn completion. The existing agents.defaults.timeoutSeconds run limit remains unchanged. Run "openclaw doctor --fix" to remove the old settings.',
+    match: hasRetiredTurnIdleTimeout,
+  },
 ];
 
 /**
@@ -70,11 +94,13 @@ export function normalizeCompatibilityConfig({ cfg }: { cfg: OpenClawConfig }): 
     rawPluginConfig !== null && hasRetiredDynamicToolsProfile(rawPluginConfig);
   const shouldRewriteDestructivePolicy = hasLegacyPluginDestructivePolicy(rawCodexPlugins);
   const shouldRewriteApprovalPolicy = hasRetiredApprovalPolicy(rawAppServer);
+  const shouldRemoveTurnIdleTimeouts = hasRetiredTurnIdleTimeout(rawAppServer);
   if (
     !rawPluginConfig ||
     (!shouldRemoveDynamicToolsProfile &&
       !shouldRewriteDestructivePolicy &&
-      !shouldRewriteApprovalPolicy)
+      !shouldRewriteApprovalPolicy &&
+      !shouldRemoveTurnIdleTimeouts)
   ) {
     return { config: cfg, changes: [] };
   }
@@ -115,8 +141,19 @@ export function normalizeCompatibilityConfig({ cfg }: { cfg: OpenClawConfig }): 
     );
   }
 
+  const nextAppServer = asNullableRecord(nextPluginConfig.appServer);
+  if (nextAppServer && shouldRemoveTurnIdleTimeouts) {
+    for (const key of RETIRED_TURN_IDLE_TIMEOUT_KEYS) {
+      if (Object.hasOwn(nextAppServer, key)) {
+        delete nextAppServer[key];
+        changes.push(
+          `Removed retired plugins.entries.codex.config.appServer.${key}; native Codex owns provider liveness and turn completion. agents.defaults.timeoutSeconds was not changed.`,
+        );
+      }
+    }
+  }
+
   if (shouldRewriteApprovalPolicy) {
-    const nextAppServer = asNullableRecord(nextPluginConfig.appServer);
     if (
       nextAppServer?.approvalPolicy === "on-failure" ||
       nextAppServer?.approvalPolicy === "untrusted"
@@ -134,4 +171,7 @@ export function normalizeCompatibilityConfig({ cfg }: { cfg: OpenClawConfig }): 
   };
 }
 
-export { stateMigrations } from "./src/migration/session-binding-sidecars.js";
+export const stateMigrations: PluginDoctorStateMigration[] = [
+  ...legacyStateMigrations,
+  codexOrphanedSessionBindingMigration,
+];

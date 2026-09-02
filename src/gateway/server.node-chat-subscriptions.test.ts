@@ -1,7 +1,9 @@
 // Real gateway WebSocket coverage for canonical node chat subscriptions and reconnects.
 import { describe, expect, test, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { registerAgentRunContext } from "../infra/agent-run-registry.js";
+import * as devicePairingNode from "../infra/device-pairing-node.js";
 import { approveNodePairing, requestNodePairing } from "../infra/device-pairing-node.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { pairDeviceIdentity } from "./device-authz.test-helpers.js";
@@ -61,6 +63,9 @@ describe("gateway node chat subscriptions", () => {
       const reconnectEvents: ReceivedNodeEvent[] = [];
       let first: Awaited<ReturnType<typeof connectGatewayClient>> | undefined;
       let reconnected: Awaited<ReturnType<typeof connectGatewayClient>> | undefined;
+      const disconnectHistoryPending = createDeferred();
+      const recordDisconnection = devicePairingNode.recordPairedNodeDisconnection;
+      const disconnectHistory = vi.spyOn(devicePairingNode, "recordPairedNodeDisconnection");
       const connectNode = (events: ReceivedNodeEvent[]) =>
         connectGatewayClient({
           url: `ws://127.0.0.1:${getStarted().port}`,
@@ -87,8 +92,13 @@ describe("gateway node chat subscriptions", () => {
         emitCompletedSessionRun("canonical-node-first", "agent:main:main");
         await expectNodeChatEvent(firstEvents, "canonical-node-first", "agent:main:main");
 
+        disconnectHistory.mockImplementationOnce(async (params) => {
+          await disconnectHistoryPending.promise;
+          return recordDisconnection(params);
+        });
         await first.stopAndWait();
         first = undefined;
+        await vi.waitFor(() => expect(disconnectHistory).toHaveBeenCalledOnce());
 
         reconnected = await connectNode(reconnectEvents);
         await reconnected.request("node.event", {
@@ -97,6 +107,16 @@ describe("gateway node chat subscriptions", () => {
         });
         emitCompletedSessionRun("canonical-node-reconnect", "agent:main:main");
         await expectNodeChatEvent(reconnectEvents, "canonical-node-reconnect", "agent:main:main");
+
+        // Completing the old connection's history must not retire its replacement's observer.
+        disconnectHistoryPending.resolve();
+        await disconnectHistory.mock.results[0]?.value;
+        emitCompletedSessionRun("canonical-node-after-disconnect-history", "agent:main:main");
+        await expectNodeChatEvent(
+          reconnectEvents,
+          "canonical-node-after-disconnect-history",
+          "agent:main:main",
+        );
 
         await reconnected.request("node.event", {
           event: "chat.subscribe",
@@ -125,6 +145,9 @@ describe("gateway node chat subscriptions", () => {
           }),
         );
       } finally {
+        disconnectHistoryPending.resolve();
+        await disconnectHistory.mock.results[0]?.value;
+        disconnectHistory.mockRestore();
         await first?.stopAndWait();
         await reconnected?.stopAndWait();
       }

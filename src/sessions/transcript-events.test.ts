@@ -5,6 +5,7 @@ import {
   emitSessionTranscriptUpdate,
   onInternalSessionTranscriptUpdate,
   onSessionTranscriptUpdate,
+  readSessionTranscriptRunId,
   resolveTerminalAssistantTranscriptRunId,
 } from "./transcript-events.js";
 
@@ -31,6 +32,18 @@ describe("transcript events", () => {
     const message = { role: "user", content: "prompt" };
 
     expect(attachSessionTranscriptRunId(message, "run-owned")).toBe(message);
+  });
+
+  it.each([
+    [
+      "attached assistant row",
+      { role: "assistant", __openclaw: { runId: "run-owned" } },
+      "run-owned",
+    ],
+    ["blank attached run id", { role: "assistant", __openclaw: { runId: "  " } }, undefined],
+    ["row without the marker", { role: "assistant", content: [] }, undefined],
+  ])("reads back stored run ownership from %s", (_name, message, expected) => {
+    expect(readSessionTranscriptRunId(message)).toBe(expected);
   });
 
   it("emits trimmed archive file updates only to internal listeners", () => {

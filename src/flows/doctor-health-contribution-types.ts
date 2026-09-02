@@ -20,6 +20,7 @@ type DoctorConfigResult = {
   sourceLastTouchedVersion?: string;
   skipPluginValidationOnWrite?: boolean;
   explicitSetPaths?: readonly (readonly string[])[];
+  persistCanonicalAgentRoster?: boolean;
   skipWizardMetadataForIncludeWrite?: boolean;
   preservedLegacyRootKeys?: readonly string[];
   shouldRepairCronCodexModelRefsAfterConfigWrite?: boolean;
@@ -43,7 +44,7 @@ export type DoctorHealthFlowContext = {
   /** The finalized config-flow candidate crossed the atomic writer boundary. */
   configResultWriteCommitted?: boolean;
   /** The requested config write was refused; later repairs must not consume its candidate. */
-  configWriteRefusal?: "validation" | "cron-owner-safety";
+  configWriteRefusal?: "validation" | "cron-owner-safety" | "include-ownership";
   /** One-shot repairs that require a durable config write have completed. */
   postConfigWriteRepairsCommitted?: boolean;
   sourceConfigValid: boolean;
@@ -51,6 +52,8 @@ export type DoctorHealthFlowContext = {
   /** Whether the selected state directory already existed before doctor startup work. */
   stateDirExistedAtStart?: boolean;
   env?: NodeJS.ProcessEnv;
+  /** State migration owns service activation until final readiness passes. */
+  gatewayMaintenanceActive?: boolean;
   gatewayDetails?: ReturnType<typeof buildGatewayConnectionDetails>;
   healthOk?: boolean;
   gatewayHealthAuthenticated?: boolean;

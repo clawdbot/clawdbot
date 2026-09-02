@@ -10,6 +10,7 @@ import {
   resolveSendableOutboundReplyParts,
 } from "openclaw/plugin-sdk/reply-payload";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { resolveMatrixExtraContent } from "../../outbound.js";
 import type { CoreConfig, MatrixStreamingMode, ReplyToMode } from "../../types.js";
 import type { MatrixClient } from "../sdk.js";
 import type { createMatrixDraftController } from "./handler-draft-controller.js";
@@ -48,13 +49,11 @@ export function createMatrixReplyDispatcher(config: {
   client: MatrixClient;
   roomId: string;
   runtime: RuntimeEnv;
-  textLimit: number;
   replyToMode: ReplyToMode;
   threadTarget?: string;
   replyToEventId?: string;
   accountId: string;
   mediaLocalRoots: readonly string[];
-  tableMode: Parameters<typeof deliverMatrixReplies>[0]["tableMode"];
   logVerboseMessage: (message: string) => void;
 }) {
   const {
@@ -68,13 +67,11 @@ export function createMatrixReplyDispatcher(config: {
     client,
     roomId,
     runtime,
-    textLimit,
     replyToMode,
     threadTarget,
     replyToEventId,
     accountId,
     mediaLocalRoots,
-    tableMode,
     logVerboseMessage,
   } = config;
   const quietDraftStreaming = streaming === "quiet" || streaming === "progress";
@@ -172,23 +169,20 @@ export function createMatrixReplyDispatcher(config: {
               roomId,
               client,
               runtime,
-              textLimit,
               replyToMode,
               hasRepliedRef,
               threadId: threadTarget,
               replyToId: threadTarget ?? replyToEventId ?? undefined,
               accountId,
               mediaLocalRoots,
-              tableMode,
             }),
           );
         }
 
-        const payloadReplyToId = normalizeOptionalString(payload.replyToId);
         const payloadReplyMismatch =
-          replyToMode !== "off" &&
           !threadTarget &&
-          payloadReplyToId !== draftController.currentReplyToId();
+          (replyToMode !== "off" || payload.replyToTag || payload.replyToCurrent) &&
+          normalizeOptionalString(payload.replyToId) !== draftController.currentReplyToId();
         let mustDeliverFinalNormally = draftStream.mustDeliverFinalNormally();
         const canPotentiallyFinalizeDraft =
           Boolean(payload.text?.trim()) &&
@@ -248,15 +242,24 @@ export function createMatrixReplyDispatcher(config: {
                 discardPending: async () => {},
                 id: () => draftEventId,
               },
-              buildFinalEdit: () => ({
-                text: finalPreviewText,
-                finalizeLive: !(
-                  quietDraftStreaming || !draftStream.matchesPreparedText(finalPreviewText)
-                ),
-                ...(quietDraftStreaming
-                  ? { extraContent: buildMatrixFinalizedPreviewContent() }
-                  : {}),
-              }),
+              buildFinalEdit: () => {
+                // Finalizing the live draft in place keeps that event's fields, so a reply
+                // whose controls live in event content has to finalize through an edit.
+                const presentationContent = resolveMatrixExtraContent(payload);
+                const extraContent = {
+                  ...(quietDraftStreaming ? buildMatrixFinalizedPreviewContent() : {}),
+                  ...presentationContent,
+                };
+                return {
+                  text: finalPreviewText,
+                  finalizeLive: !(
+                    quietDraftStreaming ||
+                    Boolean(presentationContent) ||
+                    !draftStream.matchesPreparedText(finalPreviewText)
+                  ),
+                  ...(Object.keys(extraContent).length > 0 ? { extraContent } : {}),
+                };
+              },
               editFinal: async (_draftEventId, edit) => {
                 if (edit.finalizeLive) {
                   if (!(await draftStream.finalizeLive())) {
@@ -295,14 +298,12 @@ export function createMatrixReplyDispatcher(config: {
                     roomId,
                     client,
                     runtime,
-                    textLimit,
                     replyToMode,
                     hasRepliedRef,
                     threadId: threadTarget,
                     replyToId: threadTarget ?? replyToEventId ?? undefined,
                     accountId,
                     mediaLocalRoots,
-                    tableMode,
                   }),
               });
               return fallbackResult.visibleReplySent;
@@ -396,14 +397,12 @@ export function createMatrixReplyDispatcher(config: {
               roomId,
               client,
               runtime,
-              textLimit,
               replyToMode,
               hasRepliedRef,
               threadId: threadTarget,
               replyToId: threadTarget ?? replyToEventId ?? undefined,
               accountId,
               mediaLocalRoots,
-              tableMode,
             });
           if (reusesDraftAsFinalText) {
             draftController.markDraftConsumed();
@@ -441,14 +440,12 @@ export function createMatrixReplyDispatcher(config: {
             roomId,
             client,
             runtime,
-            textLimit,
             replyToMode,
             hasRepliedRef,
             threadId: threadTarget,
             replyToId: threadTarget ?? replyToEventId ?? undefined,
             accountId,
             mediaLocalRoots,
-            tableMode,
           });
         const draftContent = draftStream.content();
         if (shouldRedactDraft && draftEventId && draftContent) {
@@ -469,14 +466,12 @@ export function createMatrixReplyDispatcher(config: {
           roomId,
           client,
           runtime,
-          textLimit,
           replyToMode,
           hasRepliedRef,
           threadId: threadTarget,
           replyToId: threadTarget ?? replyToEventId ?? undefined,
           accountId,
           mediaLocalRoots,
-          tableMode,
         }),
       );
     },

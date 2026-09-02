@@ -1,7 +1,8 @@
 /** Resolves the doctor-contract artifact shared by loading and installed-index hashing. */
-import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { pluginCacheExistsSync } from "./plugin-cache-files.js";
+import { getPluginCacheRoot } from "./plugin-cache.js";
 
 const CONTRACT_API_EXTENSIONS = [".js", ".mjs", ".cjs", ".ts", ".mts", ".cts"] as const;
 const CURRENT_MODULE_PATH = fileURLToPath(import.meta.url);
@@ -10,6 +11,18 @@ const RUNNING_FROM_BUILT_ARTIFACT =
   CURRENT_MODULE_PATH.includes(`${path.sep}dist-runtime${path.sep}`);
 
 export function resolvePluginDoctorContractArtifactPath(rootDir: string): string | null {
+  const artifacts = getPluginCacheRoot(rootDir).artifacts;
+  const key = `doctor-contract:${RUNNING_FROM_BUILT_ARTIFACT}`;
+  const cached = artifacts.get(key);
+  if (cached !== undefined) {
+    return cached?.modulePath ?? null;
+  }
+  const modulePath = resolvePluginDoctorContractArtifactPathUncached(rootDir);
+  artifacts.set(key, modulePath ? { modulePath, boundaryRoot: rootDir } : null);
+  return modulePath;
+}
+
+function resolvePluginDoctorContractArtifactPathUncached(rootDir: string): string | null {
   const orderedExtensions = RUNNING_FROM_BUILT_ARTIFACT
     ? CONTRACT_API_EXTENSIONS
     : ([...CONTRACT_API_EXTENSIONS.slice(3), ...CONTRACT_API_EXTENSIONS.slice(0, 3)] as const);
@@ -19,7 +32,7 @@ export function resolvePluginDoctorContractArtifactPath(rootDir: string): string
     for (const extension of orderedExtensions) {
       for (const baseDir of [rootDir, path.join(rootDir, "dist")]) {
         const candidate = path.join(baseDir, `${basename}${extension}`);
-        if (fs.existsSync(candidate)) {
+        if (pluginCacheExistsSync(candidate)) {
           return candidate;
         }
       }

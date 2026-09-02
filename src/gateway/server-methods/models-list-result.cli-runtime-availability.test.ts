@@ -1,7 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { testing as cliBackendsTesting } from "../../agents/cli-backends.test-support.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { loadManifestMetadataSnapshot } from "../../plugins/manifest-contract-eligibility.js";
-import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import {
   listModels,
   providerCatalogEntry,
@@ -24,50 +23,134 @@ const config = {
 
 async function listClaudeCliModel(
   params: {
+    authenticated?: boolean;
+    providerApiKey?: boolean;
+    pluginDisabled?: boolean;
     cfg?: OpenClawConfig;
-    metadataSnapshot?: PluginMetadataSnapshot;
   } = {},
 ) {
   return await listModels({
     catalog: [],
     staticEntries: [providerCatalogEntry("anthropic", "claude-opus-5")],
-    cfg: params.cfg ?? config,
-    ...(params.metadataSnapshot ? { metadataSnapshot: params.metadataSnapshot } : {}),
+    cfg:
+      params.cfg ??
+      (params.pluginDisabled
+        ? { ...config, plugins: { entries: { anthropic: { enabled: false } } } }
+        : config),
+    preparedAuthModes: params.authenticated ? { "claude-cli": "api_key" } : {},
+    catalogComplete: true,
     view: "configured",
+  });
+}
+
+async function listDirectClaudeCliModel(params: {
+  authenticated: boolean;
+  pluginDisabled?: boolean;
+}) {
+  const cfg = params.pluginDisabled
+    ? { ...config, plugins: { entries: { anthropic: { enabled: false } } } }
+    : config;
+  return await listModels({
+    catalog: [providerCatalogEntry("claude-cli", "claude-opus-5")],
+    cfg,
+    preparedAuthModes:
+      params.authenticated && !params.pluginDisabled ? { "claude-cli": "oauth" } : {},
+    catalogComplete: true,
+    view: "all",
   });
 }
 
 describe("models.list CLI runtime availability", () => {
   beforeEach(() => {
     vi.stubEnv("ANTHROPIC_API_KEY", "");
+    // Prepared runtime metadata must not cold-load the plugin's executable setup entry.
+    cliBackendsTesting.setDepsForTest({
+      resolveRuntimeCliBackends: () => [
+        {
+          id: "claude-cli",
+          modelProvider: "anthropic",
+          pluginId: "anthropic",
+          config: { command: "claude" },
+        },
+      ],
+    });
   });
 
   afterEach(() => {
+    cliBackendsTesting.resetDepsForTest();
     vi.unstubAllEnvs();
   });
 
-  it("marks a Claude CLI runtime model available through bundled synthetic auth", async () => {
-    await expect(listClaudeCliModel()).resolves.toEqual({
-      models: [expect.objectContaining({ id: "claude-opus-5", available: true })],
-    });
-  });
+  it.each([
+    { authenticated: true, available: true, reason: undefined },
+    { authenticated: false, available: false, reason: "missing-auth" },
+    {
+      authenticated: true,
+      pluginDisabled: true,
+      available: false,
+      reason: "missing-auth",
+    },
+  ])(
+    "reports direct Claude CLI auth=$authenticated and plugin disabled=$pluginDisabled",
+    async (scenario) => {
+      const result = await listDirectClaudeCliModel(scenario);
 
-  it("does not use synthetic auth from an explicitly disabled Anthropic plugin", async () => {
-    await expect(
-      listClaudeCliModel({
-        cfg: {
-          ...config,
-          plugins: { entries: { anthropic: { enabled: false } } },
-        },
-      }),
-    ).resolves.toEqual({
-      models: [expect.objectContaining({ id: "claude-opus-5", available: false })],
-    });
-  });
+      expect(result.models).toEqual([
+        expect.objectContaining({
+          provider: "claude-cli",
+          id: "claude-opus-5",
+          available: scenario.available,
+          ...(scenario.reason ? { unavailableReason: scenario.reason } : {}),
+        }),
+      ]);
+    },
+  );
 
+  it.each([
+    {
+      authenticated: true,
+      providerApiKey: false,
+      pluginDisabled: false,
+      available: true,
+      reason: undefined,
+    },
+    {
+      authenticated: false,
+      providerApiKey: false,
+      pluginDisabled: false,
+      available: false,
+      reason: "missing-auth",
+    },
+    {
+      authenticated: false,
+      providerApiKey: true,
+      pluginDisabled: false,
+      available: false,
+      reason: "missing-auth",
+    },
+    {
+      authenticated: true,
+      providerApiKey: false,
+      pluginDisabled: true,
+      available: false,
+      reason: "missing-auth",
+    },
+  ])(
+    "reports native login=$authenticated, provider key=$providerApiKey, and plugin disabled=$pluginDisabled",
+    async (scenario) => {
+      vi.stubEnv("ANTHROPIC_API_KEY", scenario.providerApiKey ? "test-key" : "");
+      const result = await listClaudeCliModel(scenario);
+      expect(result).toEqual({
+        models: [expect.objectContaining({ id: "claude-opus-5", available: scenario.available })],
+      });
+      expect(result.models[0]?.unavailableReason).toBe(scenario.reason);
+      expect(result.models[0]?.unavailableUntil).toBeUndefined();
+    },
+  );
   it("does not use synthetic auth when plugins are globally disabled", async () => {
     await expect(
       listClaudeCliModel({
+        authenticated: true,
         cfg: {
           ...config,
           plugins: { enabled: false },
@@ -78,36 +161,11 @@ describe("models.list CLI runtime availability", () => {
     });
   });
 
-  it("does not choose between multiple active runtime owners", async () => {
-    const metadataSnapshot = loadManifestMetadataSnapshot({ config, env: process.env });
-    const anthropic = metadataSnapshot.plugins.find((plugin) => plugin.id === "anthropic");
-    if (!anthropic) {
-      throw new Error("Anthropic manifest missing from model availability fixture");
-    }
-    const duplicate = { ...anthropic, id: "anthropic-duplicate" };
-    const providerOwners = new Map(metadataSnapshot.owners.providers);
-    providerOwners.set("anthropic", [...(providerOwners.get("anthropic") ?? []), duplicate.id]);
-    const cliBackendOwners = new Map(metadataSnapshot.owners.cliBackends);
-    cliBackendOwners.set("claude-cli", [
-      ...(cliBackendOwners.get("claude-cli") ?? []),
-      duplicate.id,
-    ]);
+  it("does not use provider auth when the native runtime plugin is disabled", async () => {
+    vi.stubEnv("ANTHROPIC_API_KEY", "test-key");
 
-    await expect(
-      listClaudeCliModel({
-        metadataSnapshot: {
-          ...metadataSnapshot,
-          plugins: [...metadataSnapshot.plugins, duplicate],
-          byPluginId: new Map([...metadataSnapshot.byPluginId, [duplicate.id, duplicate]]),
-          owners: {
-            ...metadataSnapshot.owners,
-            providers: providerOwners,
-            cliBackends: cliBackendOwners,
-          },
-        },
-      }),
-    ).resolves.toEqual({
-      models: [expect.objectContaining({ id: "claude-opus-5", available: false })],
-    });
+    const result = await listClaudeCliModel({ authenticated: true, pluginDisabled: true });
+
+    expect(result.models[0]).toMatchObject({ available: false, unavailableReason: "missing-auth" });
   });
 });

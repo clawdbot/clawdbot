@@ -17,7 +17,7 @@ export function createCommandTerminationController(params: {
   cancelController: AbortController;
   baseEnv?: NodeJS.ProcessEnv;
   env?: NodeJS.ProcessEnv;
-  killProcessTree?: boolean;
+  processTree?: { mode: "graceful" } | { mode: "force" };
   killGraceMs: number;
   isChildExited: () => boolean;
   isCommandSettled: () => boolean;
@@ -97,14 +97,17 @@ export function createCommandTerminationController(params: {
       // target an unrelated tree; stronger ownership requires a spawn-time Job Object.
       return false;
     }
-    if (params.killProcessTree && typeof childPid === "number") {
-      processTreeSettleAt ??= Date.now() + params.killGraceMs;
+    if (params.processTree && typeof childPid === "number") {
+      const force = params.processTree.mode === "force";
+      if (!force) {
+        processTreeSettleAt ??= Date.now() + params.killGraceMs;
+      }
       if (process.platform === "win32") {
-        startWindowsTermination(childPid, true);
+        startWindowsTermination(childPid, !force);
         return true;
       }
       terminateProcessTree(childPid, {
-        graceMs: params.killGraceMs,
+        ...(force ? { force: true } : { graceMs: params.killGraceMs }),
         detached: true,
       });
       return false;
@@ -124,7 +127,7 @@ export function createCommandTerminationController(params: {
       await windowsTerminationPromise;
     }
     if (
-      !params.killProcessTree ||
+      params.processTree?.mode !== "graceful" ||
       processTreeSettleAt === undefined ||
       typeof params.child.pid !== "number"
     ) {

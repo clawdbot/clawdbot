@@ -1,5 +1,6 @@
 // Google tests cover transport stream plugin behavior.
 import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import { createServer } from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { gzipSync } from "node:zlib";
@@ -802,6 +803,266 @@ describe("google transport stream", () => {
 
   it.each([
     {
+      provider: "google",
+      requested: "gemini-2.5-pro",
+      returned: ["gemini-2.5-pro-002"],
+      expected: "gemini-2.5-pro-002",
+    },
+    {
+      provider: "google-vertex",
+      requested: "gemini-2.5-pro",
+      returned: ["gemini-2.5-pro-002"],
+      expected: "gemini-2.5-pro-002",
+    },
+    {
+      provider: "google",
+      requested: "gemini-2.5-pro",
+      returned: ["gemini-2.5-pro"],
+    },
+    {
+      provider: "google",
+      requested: "google/gemini-2.5-pro",
+      returned: ["gemini-2.5-pro"],
+    },
+    {
+      provider: "google",
+      requested: "models/gemini-2.5-pro",
+      returned: ["gemini-2.5-pro"],
+    },
+    {
+      provider: "google",
+      requested: "gemini-2.5-pro",
+      returned: ["models/gemini-2.5-pro"],
+    },
+    {
+      provider: "google",
+      requested: "gemini-2.5-pro",
+      returned: ["google/gemini-2.5-pro"],
+    },
+    {
+      provider: "google",
+      requested: "tunedModels/fixture-gemini",
+      returned: ["tunedModels/fixture-gemini"],
+    },
+    {
+      provider: "google-vertex",
+      requested: "google/gemini-2.5-pro",
+      returned: ["gemini-2.5-pro"],
+    },
+    {
+      provider: "google-vertex",
+      requested: "gemini-2.5-pro",
+      returned: ["publishers/google/models/gemini-2.5-pro"],
+    },
+    {
+      provider: "google-vertex",
+      requested: "gemini-2.5-pro",
+      returned: [
+        "projects/fixture-project/locations/global/publishers/google/models/gemini-2.5-pro",
+      ],
+    },
+    {
+      provider: "google-vertex",
+      requested: "publishers/google/models/gemini-2.5-pro",
+      returned: ["gemini-2.5-pro"],
+    },
+    {
+      provider: "google-vertex",
+      requested:
+        "projects/fixture-project/locations/global/publishers/google/models/gemini-2.5-pro",
+      returned: ["gemini-2.5-pro"],
+    },
+    {
+      provider: "google-vertex",
+      requested: "gemini-2.5-pro",
+      returned: ["publishers/meta/models/gemini-2.5-pro"],
+      expected: "publishers/meta/models/gemini-2.5-pro",
+    },
+    {
+      provider: "google-vertex",
+      requested: "gemini-2.5-pro",
+      returned: ["tunedModels/gemini-2.5-pro"],
+      expected: "tunedModels/gemini-2.5-pro",
+    },
+    {
+      provider: "google",
+      requested: "gemini-2.5-pro",
+      returned: [undefined, "", "   "],
+    },
+    {
+      provider: "google",
+      requested: "gemini-2.5-pro",
+      returned: ["", "gemini-2.5-pro-002", "gemini-2.5-pro-003"],
+      expected: "gemini-2.5-pro-002",
+    },
+  ])(
+    "retains the concrete provider-returned model only when it actually differs ($provider, $requested)",
+    async ({ provider, requested, returned, expected }) => {
+      vi.stubEnv("GOOGLE_CLOUD_PROJECT", "fixture-google-project");
+      vi.stubEnv("GOOGLE_CLOUD_LOCATION", "global");
+      guardedFetchMock.mockResolvedValueOnce(
+        buildSseResponse(
+          returned.map((modelVersion, index) => ({
+            ...(modelVersion === undefined ? {} : { modelVersion }),
+            ...(index === returned.length - 1
+              ? {
+                  responseId: "actual-google-response",
+                  candidates: [
+                    { content: { parts: [{ text: "actual response" }] }, finishReason: "STOP" },
+                  ],
+                }
+              : {}),
+          })),
+        ),
+      );
+
+      const model =
+        provider === "google"
+          ? buildGeminiModel({ id: requested })
+          : buildGoogleVertexModel({ id: requested });
+      const { buildGoogleProvider } = await import("./provider-registration.js");
+      const streamFn = buildGoogleProvider().createStreamFn?.({
+        provider,
+        modelId: requested,
+        model,
+      });
+      if (!streamFn) {
+        throw new Error(`Missing registered ${provider} stream`);
+      }
+      const stream = await Promise.resolve(
+        streamFn(
+          model,
+          { messages: [{ role: "user", content: "hello", timestamp: 0 }] },
+          {
+            apiKey: "fixture-google-api-key",
+          },
+        ),
+      );
+      const result = await stream.result();
+
+      expect(result.responseId).toBe("actual-google-response");
+      expect(result.stopReason).toBe("stop");
+      if (expected) {
+        expect(result.responseModel).toBe(expected);
+      } else {
+        expect(result).not.toHaveProperty("responseModel");
+      }
+    },
+  );
+
+  it.each([
+    {
+      provider: "google",
+      requested: "google/gemini-2.5-pro",
+      returned: "gemini-2.5-pro-002",
+      expected: "gemini-2.5-pro-002",
+    },
+    {
+      provider: "google-vertex",
+      requested: "google/gemini-2.5-pro",
+      returned: "gemini-2.5-pro-002",
+      expected: "gemini-2.5-pro-002",
+    },
+    {
+      provider: "google",
+      requested: "models/gemini-2.5-pro",
+      returned: "gemini-2.5-pro",
+    },
+    {
+      provider: "google-vertex",
+      requested: "gemini-2.5-pro",
+      returned: "publishers/google/models/gemini-2.5-pro",
+    },
+    {
+      provider: "google-vertex",
+      requested: "gemini-2.5-pro",
+      returned: "projects/fixture-project/locations/global/publishers/google/models/gemini-2.5-pro",
+    },
+  ])(
+    "keeps the registered $provider model identity across actual localhost HTTP SSE",
+    async ({ provider, requested, returned, expected }) => {
+      vi.stubEnv("GOOGLE_CLOUD_PROJECT", "fixture-google-project");
+      vi.stubEnv("GOOGLE_CLOUD_LOCATION", "global");
+      const observedRequests: Array<{ method?: string; url?: string }> = [];
+      const server = createServer((request, response) => {
+        observedRequests.push({ method: request.method, url: request.url });
+        response.writeHead(200, { "content-type": "text/event-stream" });
+        response.end(
+          `data: ${JSON.stringify({
+            responseId: "loopback-google-response",
+            modelVersion: returned,
+            candidates: [
+              { content: { parts: [{ text: "actual response" }] }, finishReason: "STOP" },
+            ],
+          })}\n\ndata: [DONE]\n\n`,
+        );
+      });
+      await new Promise<void>((resolve, reject) => {
+        server.once("error", reject);
+        server.listen(0, "127.0.0.1", () => {
+          server.off("error", reject);
+          resolve();
+        });
+      });
+
+      try {
+        const address = server.address();
+        if (!address || typeof address === "string") {
+          throw new Error("Missing Google loopback server address");
+        }
+        buildGuardedModelFetchMock.mockReturnValue(fetch);
+        const model =
+          provider === "google"
+            ? buildGeminiModel({
+                id: requested,
+                baseUrl: `http://127.0.0.1:${address.port}/v1beta`,
+              })
+            : buildGoogleVertexModel({
+                id: requested,
+                baseUrl: `http://127.0.0.1:${address.port}`,
+              });
+        const { buildGoogleProvider } = await import("./provider-registration.js");
+        const streamFn = buildGoogleProvider().createStreamFn?.({
+          provider,
+          modelId: requested,
+          model,
+        });
+        if (!streamFn) {
+          throw new Error(`Missing registered ${provider} stream`);
+        }
+        const stream = await Promise.resolve(
+          streamFn(
+            model,
+            { messages: [{ role: "user", content: "hello", timestamp: 0 }] },
+            {
+              apiKey: "fixture-google-api-key",
+            },
+          ),
+        );
+        const result = await stream.result();
+
+        expect(observedRequests).toEqual([
+          { method: "POST", url: expect.stringContaining(":streamGenerateContent?alt=sse") },
+        ]);
+        expect(result).toMatchObject({
+          responseId: "loopback-google-response",
+          stopReason: "stop",
+        });
+        if (expected) {
+          expect(result.responseModel).toBe(expected);
+        } else {
+          expect(result).not.toHaveProperty("responseModel");
+        }
+      } finally {
+        await new Promise<void>((resolve, reject) => {
+          server.close((error) => (error ? reject(error) : resolve()));
+        });
+      }
+    },
+  );
+
+  it.each([
+    {
       name: "includes billed tool-result prompt tokens in input accounting",
       usageMetadata: {
         promptTokenCount: 10,
@@ -1341,6 +1602,110 @@ describe("google transport stream", () => {
       errorMessage: expect.stringContaining("quota exceeded"),
     });
   });
+
+  it.each([
+    { api: "google-generative-ai", prefix: "data: ", framing: "framed" },
+    { api: "google-generative-ai", prefix: "", framing: "bare" },
+    { api: "google-vertex", prefix: "data: ", framing: "framed" },
+    { api: "google-vertex", prefix: "", framing: "bare" },
+  ] as const)(
+    "preserves an undelimited $framing terminal provider error from $api",
+    async ({ api, prefix }) => {
+      if (api === "google-vertex") {
+        vi.stubEnv("GOOGLE_CLOUD_PROJECT", "vertex-project");
+        vi.stubEnv("GOOGLE_CLOUD_LOCATION", "global");
+        await useGoogleAuthLibraryCredentials("unterminated-error", "ya29.vertex-token");
+      }
+      guardedFetchMock.mockResolvedValueOnce(
+        buildRawSseResponse(
+          'data: {"candidates":[{"finishReason":"STOP"}]}\n\n' +
+            `${prefix}{"error":{"code":429,"status":"RESOURCE_EXHAUSTED","message":"quota exhausted"}}`,
+        ),
+      );
+      const result =
+        api === "google-vertex"
+          ? await runGoogleVertexStreamResult({ fetch: guardedFetchMock })
+          : await runGeminiStreamResult({ options: { apiKey: "gemini-api-key" } });
+
+      expect(result).toMatchObject({
+        stopReason: "error",
+        errorCode: "RESOURCE_EXHAUSTED",
+        errorMessage: expect.stringContaining("quota exhausted"),
+      });
+    },
+  );
+
+  it.each([
+    { prefix: "data: ", framing: "framed" },
+    { prefix: "", framing: "bare" },
+  ])(
+    "preserves an undelimited $framing error over a real Google HTTP/SSE stream",
+    async ({ prefix }) => {
+      const server = createServer((request, response) => {
+        request.resume();
+        request.on("end", () => {
+          response.writeHead(200, { "content-type": "text/event-stream" });
+          response.write('data: {"candidates":[{"finishReason":"STOP"}]}\n\n');
+          response.end(
+            `${prefix}{"error":{"code":429,"status":"RESOURCE_EXHAUSTED","message":"live quota exhausted"}}`,
+          );
+        });
+      });
+      await new Promise<void>((resolve) => {
+        server.listen(0, "127.0.0.1", resolve);
+      });
+
+      try {
+        const address = server.address();
+        if (!address || typeof address === "string") {
+          throw new Error("Missing Google loopback server address");
+        }
+        guardedFetchMock.mockImplementation((_url, init) =>
+          fetch(`http://127.0.0.1:${address.port}/stream`, init),
+        );
+        const result = await runGeminiStreamResult({ options: { apiKey: "test-google-key" } });
+
+        expect(result).toMatchObject({
+          stopReason: "error",
+          errorCode: "RESOURCE_EXHAUSTED",
+          errorMessage: expect.stringContaining("live quota exhausted"),
+        });
+      } finally {
+        await new Promise<void>((resolve, reject) => {
+          server.close((error) => (error ? reject(error) : resolve()));
+        });
+      }
+    },
+  );
+
+  it.each(["google-generative-ai", "google-vertex"] as const)(
+    "keeps an unspecified %s finish reason nonterminal",
+    async (api) => {
+      if (api === "google-vertex") {
+        vi.stubEnv("GOOGLE_CLOUD_PROJECT", "vertex-project");
+        vi.stubEnv("GOOGLE_CLOUD_LOCATION", "global");
+        await useGoogleAuthLibraryCredentials("unspecified-finish", "ya29.vertex-token");
+      }
+      guardedFetchMock.mockResolvedValueOnce(
+        buildSseResponse([
+          {
+            candidates: [
+              {
+                content: { parts: [{ text: "partial" }] },
+                finishReason: "FINISH_REASON_UNSPECIFIED",
+              },
+            ],
+          },
+        ]),
+      );
+      const result =
+        api === "google-vertex"
+          ? await runGoogleVertexStreamResult({ fetch: guardedFetchMock })
+          : await runGeminiStreamResult({ options: { apiKey: "gemini-api-key" } });
+
+      expect(result).toMatchObject({ stopReason: "error", errorCode: "STREAM_INCOMPLETE" });
+    },
+  );
 
   it.each([
     { label: "carriage-return-only", delimiter: "\r\r" },
@@ -2331,9 +2696,37 @@ describe("google transport stream", () => {
       parts: [
         {
           thoughtSignature: signature,
-          functionCall: { name: "lookup", args: { q: "hello" } },
+          functionCall: { id: "call_1", name: "lookup", args: { q: "hello" } },
         },
       ],
+    });
+  });
+
+  it("preserves matching provider call identities on same-route Gemini replay", () => {
+    const model = buildGeminiModel({ id: "gemini-3.1-pro-preview" });
+    const params = buildGoogleGenerativeAiParams(model, {
+      messages: [
+        googleToolCallAssistantTurn({ id: "provider_call_42" }),
+        {
+          role: "toolResult",
+          toolCallId: "provider_call_42",
+          toolName: "lookup",
+          content: [{ type: "text", text: "ok" }],
+          isError: false,
+          timestamp: 1,
+        },
+      ],
+    } as never);
+
+    expect(getFirstModelTurn(params.contents).parts[0]?.functionCall).toMatchObject({
+      id: "provider_call_42",
+    });
+    const responseTurn = expectDefined(
+      params.contents[1],
+      "matching Google tool response turn",
+    ) as GoogleTestContentTurn;
+    expect(responseTurn.parts[0]?.functionResponse).toMatchObject({
+      id: "provider_call_42",
     });
   });
 
@@ -3101,6 +3494,9 @@ describe("google transport stream", () => {
         role: "user",
         parts: ["screenshot", "weather"].map((name) => ({
           functionResponse: {
+            ...(modelId === "gemini-2.5-flash"
+              ? { id: name === "screenshot" ? "call_1" : "call_2" }
+              : {}),
             name,
             response:
               name === "screenshot" ? { output: "(see attached image)" } : { output: "Sunny, 21C" },

@@ -20,6 +20,7 @@ import type {
   MusicGenerationSourceImage,
 } from "../../music-generation/types.js";
 import { readSnakeCaseParamRaw } from "../../param-key.js";
+import { readBooleanParam } from "../../plugin-sdk/boolean-param.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
 import {
@@ -46,26 +47,24 @@ import {
   buildMediaReferenceDetails,
   buildTaskRunDetails,
   createCapabilityProviderRuntimeDeps,
+  hasExplicitMediaModel,
   hasGenerationToolAvailability,
   loadMediaToolReferences,
   normalizeMediaReferenceInputs,
-  readBooleanToolParam,
+  resolveMediaToolSandboxConfig,
   resolveCapabilityModelConfigForTool,
   resolveGenerateAction,
   resolveRemoteMediaSsrfPolicy,
   resolveSelectedCapabilityProvider,
+  type MediaToolSandbox,
 } from "./media-tool-shared.js";
-import {
-  coerceToolModelConfig,
-  hasToolModelConfig,
-  type ToolModelConfig,
-} from "./model-config.helpers.js";
+import type { ToolModelConfig } from "./model-config.helpers.js";
 import {
   createMusicGenerateDuplicateGuardResult,
   createMusicGenerateListActionResult,
   createMusicGenerateStatusActionResult,
 } from "./music-generate-tool.actions.js";
-import type { AnyAgentTool, SandboxFsBridge, ToolFsPolicy } from "./tool-runtime.helpers.js";
+import type { AnyAgentTool, ToolFsPolicy } from "./tool-runtime.helpers.js";
 
 const log = createSubsystemLogger("agents/tools/music-generate");
 const MAX_INPUT_IMAGES = 10;
@@ -128,26 +127,6 @@ const MusicGenerateToolSchema = Type.Object({
   ),
 });
 
-function resolveMusicGenerationModelConfigForTool(params: {
-  cfg?: OpenClawConfig;
-  workspaceDir?: string;
-  agentDir?: string;
-  authStore?: AuthProfileStore;
-}): ToolModelConfig | null {
-  return resolveCapabilityModelConfigForTool({
-    cfg: params.cfg,
-    workspaceDir: params.workspaceDir,
-    agentDir: params.agentDir,
-    authStore: params.authStore,
-    modelConfig: params.cfg?.agents?.defaults?.mediaModels?.music,
-    providers: () => listRuntimeMusicGenerationProviders({ config: params.cfg }),
-  });
-}
-
-function hasExplicitMusicGenerationModelConfig(cfg?: OpenClawConfig): boolean {
-  return hasToolModelConfig(coerceToolModelConfig(cfg?.agents?.defaults?.mediaModels?.music));
-}
-
 function resolveSelectedMusicGenerationProvider(params: {
   config?: OpenClawConfig;
   providers?: MusicGenerationProvider[];
@@ -159,14 +138,6 @@ function resolveSelectedMusicGenerationProvider(params: {
     modelConfig: params.musicGenerationModelConfig,
     modelOverride: params.modelOverride,
     parseModelRef: parseMusicGenerationModelRef,
-  });
-}
-
-function resolveAction(args: Record<string, unknown>): "generate" | "list" | "status" {
-  return resolveGenerateAction({
-    args,
-    allowed: ["generate", "status", "list"],
-    defaultAction: "generate",
   });
 }
 
@@ -227,10 +198,7 @@ function validateMusicGenerationCapabilities(params: {
   }
 }
 
-type MusicGenerateSandboxConfig = {
-  root: string;
-  bridge: SandboxFsBridge;
-};
+type MusicGenerateSandboxConfig = MediaToolSandbox;
 
 type MusicGenerationTimeoutNormalization = {
   requested: number;
@@ -275,8 +243,9 @@ const defaultScheduleMusicGenerateBackgroundWork = createDefaultMediaGenerateBac
 
 async function loadReferenceImages(params: {
   inputs: string[];
+  maxBytes: number;
   workspaceDir?: string;
-  sandboxConfig: { root: string; bridge: SandboxFsBridge; workspaceOnly: boolean } | null;
+  sandboxConfig: ReturnType<typeof resolveMediaToolSandboxConfig>;
   ssrfPolicy?: SsrFPolicy;
   timeoutMs?: number;
   signal?: AbortSignal;
@@ -293,6 +262,7 @@ async function loadReferenceImages(params: {
     expectedKind: "image",
     sandbox: params.sandboxConfig,
     workspaceDir: params.workspaceDir,
+    maxBytes: params.maxBytes,
     ssrfPolicy: params.ssrfPolicy,
     timeoutMs: params.timeoutMs,
     signal: params.signal,
@@ -549,13 +519,10 @@ export function createMusicGenerateTool(options?: {
     return null;
   }
 
-  const sandboxConfig = options?.sandbox
-    ? {
-        root: options.sandbox.root,
-        bridge: options.sandbox.bridge,
-        workspaceOnly: options.fsPolicy?.workspaceOnly === true,
-      }
-    : null;
+  const sandboxConfig = resolveMediaToolSandboxConfig(
+    options?.sandbox,
+    options?.fsPolicy?.workspaceOnly,
+  );
   const scheduleBackgroundWork =
     options?.scheduleBackgroundWork ?? defaultScheduleMusicGenerateBackgroundWork;
 
@@ -568,7 +535,7 @@ export function createMusicGenerateTool(options?: {
     parameters: MusicGenerateToolSchema,
     execute: async (_toolCallId, rawArgs, signal) => {
       const args = rawArgs as Record<string, unknown>;
-      const action = resolveAction(args);
+      const action = resolveGenerateAction(args);
 
       if (action === "list") {
         return createMusicGenerateListActionResult(cfg, {
@@ -585,16 +552,20 @@ export function createMusicGenerateTool(options?: {
         );
       }
 
-      const musicGenerationModelConfig = resolveMusicGenerationModelConfigForTool({
+      const model = readToolStringParam(args, "model");
+      const musicGenerationModelConfig = resolveCapabilityModelConfigForTool({
         cfg,
         workspaceDir: options?.workspaceDir,
         agentDir: options?.agentDir,
         authStore: options?.authProfileStore,
+        modelConfig: cfg.agents?.defaults?.mediaModels?.music,
+        modelOverride: model,
+        providers: () => listRuntimeMusicGenerationProviders({ config: cfg }),
       });
       if (!musicGenerationModelConfig) {
         throw new ToolInputError("No music-generation model configured.");
       }
-      const explicitModelConfig = hasExplicitMusicGenerationModelConfig(cfg);
+      const explicitModelConfig = hasExplicitMediaModel(cfg.agents?.defaults?.mediaModels?.music);
       const effectiveCfg =
         applyAgentDefaultModelConfig(cfg, "music", musicGenerationModelConfig) ?? cfg;
       const prompt = readToolStringParam(args, "prompt", { required: true });
@@ -608,8 +579,7 @@ export function createMusicGenerateTool(options?: {
       }
 
       const lyrics = readToolStringParam(args, "lyrics");
-      const instrumental = readBooleanToolParam(args, "instrumental");
-      const model = readToolStringParam(args, "model");
+      const instrumental = readBooleanParam(args, "instrumental");
       const durationSeconds = readNumberParam(args, "durationSeconds", {
         positiveInteger: true,
         strict: true,
@@ -668,6 +638,7 @@ export function createMusicGenerateTool(options?: {
       const remoteMediaSsrfPolicy = resolveRemoteMediaSsrfPolicy(effectiveCfg);
       const loadedReferenceImages = await loadReferenceImages({
         inputs: imageInputs,
+        maxBytes: resolveGeneratedMediaMaxBytes(effectiveCfg, "image"),
         workspaceDir: options?.workspaceDir,
         sandboxConfig,
         ssrfPolicy: remoteMediaSsrfPolicy,
@@ -742,4 +713,3 @@ export function createMusicGenerateTool(options?: {
     },
   };
 }
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

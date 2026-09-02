@@ -1,8 +1,14 @@
+import { toErrorObject } from "@openclaw/normalization-core";
 import { property, state } from "lit/decorators.js";
 import {
   localEditorFilePath,
   observeNativeGateway,
 } from "../../../app/native-editor-locality.runtime.ts";
+import {
+  isStaleChunkImportError,
+  retryStaleChunkReloadWhenReachable,
+  scheduleStaleChunkReload,
+} from "../../../app/stale-chunk-reload.ts";
 import type { ImageLightboxItem } from "../../../components/image-lightbox.ts";
 import type { SessionLinkTarget } from "../../../components/markdown-session-links.ts";
 import { t } from "../../../i18n/index.ts";
@@ -11,7 +17,8 @@ import { copyToClipboard } from "../../../lib/clipboard.ts";
 import { type EditorId, openEditor } from "../../../lib/editor-links.ts";
 import { formatUiError } from "../../../lib/format-error.ts";
 import { OpenClawLightDomElement } from "../../../lit/openclaw-element.ts";
-import type { SidebarContent } from "./chat-sidebar-content-types.ts";
+import { releaseChatMediaResourceSubscriber } from "./chat-message-media.ts";
+import type { AttachmentSidebarRuntime, SidebarContent } from "./chat-sidebar-content-types.ts";
 import {
   buildRawContent,
   handleSidebarClick,
@@ -33,6 +40,9 @@ type ChatDetailPanelContent = Exclude<SidebarContent, { kind: "task" }>;
 class ChatDetailPanel extends OpenClawLightDomElement {
   @property({ attribute: false }) content: ChatDetailPanelContent | null = null;
   @property({ attribute: false }) execNode: string | null = null;
+  @property({ attribute: false }) attachmentRuntime: AttachmentSidebarRuntime = {
+    localMediaPreviewRoots: [],
+  };
   @property() basePath = "";
   @property() canvasPluginSurfaceUrl: string | null = null;
   @property() embedSandboxMode: EmbedSandboxMode = "scripts";
@@ -47,7 +57,7 @@ class ChatDetailPanel extends OpenClawLightDomElement {
   @property({ attribute: false }) onOpenImage?: ((item: ImageLightboxItem) => void) | null = null;
 
   @state() private visibleContent: ChatDetailPanelContent | null = null;
-  @state() private error: string | null = null;
+  @state() private error: Error | null = null;
   @state() private fileSearchOpen = false;
   @state() private fileSearchQuery = "";
   @state() private fileSearchMatchIndex = 0;
@@ -75,6 +85,7 @@ class ChatDetailPanel extends OpenClawLightDomElement {
     FileCopyAction,
     ReturnType<typeof globalThis.setTimeout>
   >();
+  private readonly requestAttachmentUpdate = () => this.requestUpdate();
 
   constructor() {
     super();
@@ -91,13 +102,24 @@ class ChatDetailPanel extends OpenClawLightDomElement {
     document.removeEventListener("pointerdown", this.handleDocumentPointerDown);
     this.destroyFileEditor();
     this.clearFileCopyFeedback();
+    releaseChatMediaResourceSubscriber(this.requestAttachmentUpdate);
     super.disconnectedCallback();
   }
 
   protected override willUpdate(changed: Map<string, unknown>) {
+    const previousRuntime = changed.get("attachmentRuntime");
+    if (
+      previousRuntime &&
+      typeof previousRuntime === "object" &&
+      "connectionEpoch" in previousRuntime &&
+      previousRuntime.connectionEpoch !== this.attachmentRuntime.connectionEpoch
+    ) {
+      releaseChatMediaResourceSubscriber(this.requestAttachmentUpdate);
+    }
     if (!changed.has("content")) {
       return;
     }
+    releaseChatMediaResourceSubscriber(this.requestAttachmentUpdate);
     this.visibleContent = this.content;
     this.error = null;
     this.showingRawText = false;
@@ -146,7 +168,7 @@ class ChatDetailPanel extends OpenClawLightDomElement {
 
   protected override updated(changed: Map<string, unknown>) {
     const visibleContent = this.visibleContent;
-    if (visibleContent?.kind === "file" && !this.showingRawText) {
+    if (visibleContent?.kind === "file" && !this.showingRawText && !this.error) {
       void this.ensureFileEditor().then(() => {
         this.syncFileEditor();
         if (changed.has("content") && visibleContent.line != null) {
@@ -226,6 +248,16 @@ class ChatDetailPanel extends OpenClawLightDomElement {
           }
         });
       })
+      .catch((error: unknown) => {
+        if (version !== this.fileOperationVersion || !this.isConnected) {
+          return;
+        }
+        // A failed load is terminal for this selection; renders must not retry it.
+        this.error = toErrorObject(error, t("lazyView.errorTitle"));
+        if (isStaleChunkImportError(this.error)) {
+          void scheduleStaleChunkReload();
+        }
+      })
       .finally(() => {
         if (version === this.fileOperationVersion) {
           this.fileEditorLoad = null;
@@ -234,6 +266,19 @@ class ChatDetailPanel extends OpenClawLightDomElement {
       });
     return this.fileEditorLoad;
   }
+
+  private readonly retryFileEditor = () => {
+    const error = this.error;
+    const version = this.fileOperationVersion;
+    if (isStaleChunkImportError(error)) {
+      void retryStaleChunkReloadWhenReachable({
+        canReload: () =>
+          this.isConnected && this.error === error && version === this.fileOperationVersion,
+      });
+    } else {
+      this.error = null;
+    }
+  };
 
   private syncFileEditor() {
     const content = this.visibleContent;
@@ -578,6 +623,7 @@ class ChatDetailPanel extends OpenClawLightDomElement {
       return;
     }
     this.showingRawText = true;
+    this.destroyFileEditor();
     this.visibleContent = rawContent;
     this.error = null;
   };
@@ -598,6 +644,7 @@ class ChatDetailPanel extends OpenClawLightDomElement {
     return renderSidebarPanel({
       content: this.visibleContent,
       error: this.error,
+      onRetry: this.retryFileEditor,
       fileView: {
         copyFeedback: this.fileCopyFeedback,
         currentMatchIndex,
@@ -638,6 +685,8 @@ class ChatDetailPanel extends OpenClawLightDomElement {
       onViewRawText: this.showRawText,
       onClick: this.handlePanelClick,
       onKeydown: this.handlePanelKeyDown,
+      onAttachmentUpdate: this.requestAttachmentUpdate,
+      attachmentRuntime: this.attachmentRuntime,
     });
   }
 }

@@ -22,8 +22,8 @@ describe("SessionRowSchema", () => {
         assignedAt: 42,
       },
       participants: [
-        { type: "human", id: "profile-bob", label: "Bob" },
-        { type: "agent", id: "research", label: "Research" },
+        { identity: { type: "profile", id: "profile-bob" }, label: "Bob" },
+        { identity: { type: "agent", id: "research" }, label: "Research" },
       ],
       participantCount: 2,
       archivedBy: { type: "human", id: "profile-bob", label: "Bob" },
@@ -45,8 +45,7 @@ describe("SessionRowSchema", () => {
       Value.Check(SessionRowSchema, {
         ...roundTripped,
         participants: Array.from({ length: 5 }, (_, index) => ({
-          type: "human",
-          id: `profile-${index}`,
+          identity: { type: "profile", id: `profile-${index}` },
         })),
       }),
     ).toBe(false);
@@ -82,5 +81,25 @@ describe("SessionRowSchema", () => {
 
     expect(accepted.every(validateSessionsAssignOwnerParams)).toBe(true);
     expect(rejected.every((value) => !validateSessionsAssignOwnerParams(value))).toBe(true);
+  });
+
+  it.each(["user", "auto", null] as const)("accepts model override source %s", (source) => {
+    expect(
+      Value.Check(SessionRowSchema, {
+        key: "agent:main:main",
+        kind: "global",
+        modelOverrideSource: source,
+      }),
+    ).toBe(true);
+  });
+
+  it("rejects an invalid model override source", () => {
+    expect(
+      Value.Check(SessionRowSchema, {
+        key: "agent:main:main",
+        kind: "global",
+        modelOverrideSource: "session",
+      }),
+    ).toBe(false);
   });
 });

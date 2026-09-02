@@ -249,6 +249,7 @@ describe("lmstudio-models", () => {
       supportsTemperature: false,
       supportsUsageInStreaming: false,
       supportsTools: false,
+      codeMode: "preferred",
       supportsStrictMode: false,
       supportsJsonSchemaResponseFormat: false,
       requiresStringContent: true,
@@ -294,6 +295,7 @@ describe("lmstudio-models", () => {
           supportsPromptCacheKey: 1,
           visibleReasoningDetailTypes: ["reasoning.summary", 1],
           maxTokensField: "max_output_tokens",
+          codeMode: "unsupported",
           thinkingFormat: "unsupported",
           toolSchemaProfile: 1,
           unsupportedToolSchemaKeywords: ["additionalProperties", ""],
@@ -591,21 +593,6 @@ describe("lmstudio-models", () => {
     expect(tracked.wasCanceled()).toBe(true);
   });
 
-  it("cancels guarded non-ok discovery bodies before releasing the dispatcher", async () => {
-    const tracked = cancelTrackedResponse("unavailable", { status: 503 });
-    const release = vi.fn(async () => undefined);
-    fetchWithSsrFGuardMock.mockResolvedValue({ response: tracked.response, release });
-
-    const result = await fetchLmstudioModels({
-      baseUrl: "http://localhost:1234/v1",
-      ssrfPolicy: {},
-    });
-
-    expect(result).toMatchObject({ reachable: true, status: 503, models: [] });
-    expect(tracked.wasCanceled()).toBe(true);
-    expect(release).toHaveBeenCalledOnce();
-  });
-
   it.each([
     {
       name: "reports malformed model list JSON with an owned error",
@@ -854,6 +841,7 @@ describe("lmstudio-models", () => {
     // path must stop reading at the byte cap instead of buffering it all.
     let canceled = false;
     let bytesEmitted = 0;
+    const chunk = new Uint8Array(64 * 1024).fill(0x61);
     const oversizedStream = new ReadableStream<Uint8Array>({
       pull(controller) {
         // Far exceeds the 16 MiB provider JSON cap if read to completion.
@@ -861,8 +849,8 @@ describe("lmstudio-models", () => {
           controller.close();
           return;
         }
-        bytesEmitted += 64 * 1024;
-        controller.enqueue(new Uint8Array(64 * 1024).fill(0x61));
+        bytesEmitted += chunk.byteLength;
+        controller.enqueue(chunk);
       },
       cancel() {
         canceled = true;

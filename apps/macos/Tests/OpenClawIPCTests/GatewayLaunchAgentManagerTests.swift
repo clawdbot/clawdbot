@@ -224,6 +224,46 @@ struct GatewayLaunchAgentManagerTests {
         }
     }
 
+    @Test(arguments: ["failure-with-hints", "failure-hints-only", "failure-without-hints", "success"])
+    func `gateway daemon failures preserve actionable recovery hints`(_ scenario: String) async {
+        await TestIsolation.withIsolatedState {
+            let marker = FileManager.default.temporaryDirectory
+                .appendingPathComponent("openclaw-no-disable-marker-\(UUID().uuidString)")
+            defer {
+                GatewayLaunchAgentManager.setTestingDisableLaunchAgentMarkerURL(nil)
+                GatewayLaunchAgentManager.setTestingInterceptDaemonCommands(false)
+                GatewayLaunchAgentManager.setTestingDaemonStatusPayload(nil)
+            }
+
+            let payload = switch scenario {
+            case "failure-with-hints":
+                """
+                {"ok":false,"error":"Gateway service not installed.",
+                "hints":["openclaw gateway install","openclaw gateway start","third hint"]}
+                """
+            case "failure-hints-only":
+                #"{"ok":false,"hints":["openclaw gateway install","openclaw gateway start"]}"#
+            case "failure-without-hints":
+                #"{"ok":false,"error":"Gateway service not installed."}"#
+            default:
+                #"{"ok":true,"message":"Gateway already started."}"#
+            }
+            let expected: String? = switch scenario {
+            case "failure-with-hints":
+                "Gateway service not installed. (openclaw gateway install · openclaw gateway start)"
+            case "failure-hints-only": "openclaw gateway install · openclaw gateway start"
+            case "failure-without-hints": "Gateway service not installed."
+            default: nil
+            }
+
+            GatewayLaunchAgentManager.setTestingDisableLaunchAgentMarkerURL(marker)
+            GatewayLaunchAgentManager.setTestingInterceptDaemonCommands(true)
+            GatewayLaunchAgentManager.setTestingDaemonStatusPayload(payload)
+
+            #expect(await GatewayLaunchAgentManager.kickstart() == expected)
+        }
+    }
+
     @Test func `launch agent plist snapshot parses args and env`() throws {
         let url = FileManager().temporaryDirectory
             .appendingPathComponent("openclaw-launchd-\(UUID().uuidString).plist")

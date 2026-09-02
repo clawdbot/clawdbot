@@ -35,7 +35,8 @@ scenario:
             alsoAllow: [message]
   successCriteria:
     - A QA Channel reply records queued, platform-started, and delivered as attribution-only owner-native receipts.
-    - A message-tool metadata echo records one exact intentional-suppression fact without a visible outbound message.
+    - A message-tool metadata echo records one exact private suppression fact without a visible outbound message.
+    - Public inspection reports the private generic fact as explicitly unknown without exposing its reason.
     - JSON and human CLI inspection expose no raw sender, conversation, message content, or platform message id.
     - Both receipt sets remain stable after a lifecycle-owned Gateway restart.
   docsRefs:
@@ -125,26 +126,26 @@ flow:
                 async: true
                 expr: >-
                   runQaCli(env, ['audit', '--run', deliveryRunId, '--explain', '--json'], { timeoutMs: 60000, json: true }).then((value) => {
-                    const decisions = Array.isArray(value.decisions) ? value.decisions : [];
-                    const receiptIds = decisions.map((receipt) => receipt.receiptId);
+                    const decisions = Array.isArray(value.decisionDisplays) ? value.decisionDisplays : [];
+                    const selectorIds = decisions.map((receipt) => receipt.selectorId);
                     const exactLifecycle = ['message_queued', 'message_platform_started', 'message_delivered'].every((reason) => decisions.filter((receipt) => receipt.decision?.reasonCode === reason).length === 1);
-                    const uniqueReceiptIds = receiptIds.every((id) => typeof id === 'string' && id.length > 0) && new Set(receiptIds).size === decisions.length;
-                    return exactLifecycle && uniqueReceiptIds ? value : undefined;
+                    const uniqueSelectorIds = selectorIds.every((id) => typeof id === 'string' && id.length > 0) && new Set(selectorIds).size === decisions.length;
+                    return exactLifecycle && uniqueSelectorIds ? value : undefined;
                   }).catch(() => undefined)
             - 60000
             - 250
         - set: deliveryMessageReceipts
           value:
-            expr: "deliveryInspect.decisions.filter((receipt) => receipt.action?.family === 'message')"
-        - set: deliveryReceiptIds
+            expr: "deliveryInspect.decisionDisplays.filter((receipt) => receipt.action?.family === 'message')"
+        - set: deliverySelectorIds
           value:
-            expr: "deliveryInspect.decisions.map((receipt) => receipt.receiptId)"
+            expr: "deliveryInspect.decisionDisplays.map((receipt) => receipt.selectorId)"
         - assert:
-            expr: "['message_queued', 'message_platform_started', 'message_delivered'].every((reason) => deliveryInspect.decisions.filter((receipt) => receipt.decision?.reasonCode === reason).length === 1)"
+            expr: "['message_queued', 'message_platform_started', 'message_delivered'].every((reason) => deliveryInspect.decisionDisplays.filter((receipt) => receipt.decision?.reasonCode === reason).length === 1)"
             message: delivery lifecycle receipt cardinality was not exactly one per required stage
         - assert:
-            expr: "deliveryReceiptIds.every((id) => typeof id === 'string' && id.length > 0) && new Set(deliveryReceiptIds).size === deliveryInspect.decisions.length"
-            message: delivery receipt ids were empty or duplicated
+            expr: "deliverySelectorIds.every((id) => typeof id === 'string' && id.length > 0) && new Set(deliverySelectorIds).size === deliveryInspect.decisionDisplays.length"
+            message: delivery selector ids were empty or duplicated
         - set: deliveryText
           value:
             expr: "await runQaCli(env, ['audit', '--run', deliveryRunId, '--explain'], { timeoutMs: 60000 })"
@@ -154,7 +155,7 @@ flow:
         - assert:
             expr: "deliveryPrivacySentinels.every((sentinel) => !JSON.stringify(deliveryInspect).includes(sentinel) && !deliveryText.includes(sentinel))"
             message: delivery JSON or human inspection exposed a raw sender, conversation, message id, or content sentinel
-      detailsExpr: "`delivery lifecycle counts=1/1/1; receiptIds=nonempty-unique; privacy=json+human-pass`"
+      detailsExpr: "`delivery lifecycle counts=1/1/1; selectorIds=nonempty-unique; privacy=json+human-pass`"
 
     - name: records intentional message-tool suppression
       actions:
@@ -196,48 +197,48 @@ flow:
                 async: true
                 expr: >-
                   runQaCli(env, ['audit', '--run', suppressionRunId, '--explain', '--json'], { timeoutMs: 60000, json: true }).then((value) => {
-                    const decisions = Array.isArray(value.decisions) ? value.decisions : [];
-                    const suppression = decisions.filter((receipt) => receipt.decision?.reasonCode === 'message_suppressed_inbound_metadata_echo');
-                    const receiptIds = decisions.map((receipt) => receipt.receiptId);
-                    const uniqueReceiptIds = receiptIds.every((id) => typeof id === 'string' && id.length > 0) && new Set(receiptIds).size === decisions.length;
-                    return suppression.length === 1 && suppression[0]?.action?.family === 'message' && suppression[0]?.decision?.outcome === 'not-applicable' && suppression[0]?.enforcement?.coverageState === 'attribution-only' && uniqueReceiptIds ? value : undefined;
+                    const decisions = Array.isArray(value.decisionDisplays) ? value.decisionDisplays : [];
+                    const selectorIds = decisions.map((receipt) => receipt.selectorId);
+                    const uniqueSelectorIds = selectorIds.every((id) => typeof id === 'string' && id.length > 0) && new Set(selectorIds).size === decisions.length;
+                    const unverified = decisions.filter((receipt) => receipt.provenance?.state === 'unverified' && receipt.decision?.outcome === 'unknown' && receipt.decision?.reasonCode === 'decision_fact_display_unverified' && receipt.enforcement?.coverageState === 'unknown');
+                    return value.coverage?.state === 'unknown' && value.coverage?.missingEvidence?.includes('decision.display_provenance') && unverified.length > 0 && uniqueSelectorIds ? value : undefined;
                   }).catch(() => undefined)
             - 60000
             - 250
-        - set: suppressionReceipts
+        - set: suppressionStorage
           value:
-            expr: "suppressionInspect.decisions.filter((receipt) => receipt.decision?.reasonCode === 'message_suppressed_inbound_metadata_echo')"
-        - set: suppressionReceiptIds
+            expr: "inspectQaExecutionIdentityStorage(env, { runId: suppressionRunId, actionFamily: 'message', reasonCode: 'message_suppressed_inbound_metadata_echo' })"
+        - set: suppressionSelectorIds
           value:
-            expr: "suppressionInspect.decisions.map((receipt) => receipt.receiptId)"
+            expr: "suppressionInspect.decisionDisplays.map((receipt) => receipt.selectorId)"
         - assert:
-            expr: "suppressionReceipts.length === 1 && suppressionReceipts[0].action?.family === 'message' && suppressionReceipts[0].decision?.outcome === 'not-applicable' && suppressionReceipts[0].enforcement?.coverageState === 'attribution-only'"
-            message: suppression receipt cardinality or semantics were incorrect
+            expr: "suppressionStorage.decisionCount === 1 && suppressionInspect.coverage.state === 'unknown' && suppressionInspect.coverage.missingEvidence.includes('decision.display_provenance')"
+            message: suppression fact cardinality or public unknown coverage was incorrect
         - assert:
-            expr: "suppressionReceiptIds.every((id) => typeof id === 'string' && id.length > 0) && new Set(suppressionReceiptIds).size === suppressionInspect.decisions.length"
-            message: suppression receipt ids were empty or duplicated
+            expr: "suppressionSelectorIds.every((id) => typeof id === 'string' && id.length > 0) && new Set(suppressionSelectorIds).size === suppressionInspect.decisionDisplays.length"
+            message: suppression selector ids were empty or duplicated
         - set: suppressionText
           value:
             expr: "await runQaCli(env, ['audit', '--run', suppressionRunId, '--explain'], { timeoutMs: 60000 })"
         - assert:
-            expr: "suppressionText.includes('message_suppressed_inbound_metadata_echo')"
-            message: intentional suppression receipt missing from JSON or human output
+            expr: "suppressionText.includes('decision_fact_display_unverified') && !suppressionText.includes('message_suppressed_inbound_metadata_echo') && !JSON.stringify(suppressionInspect).includes('message_suppressed_inbound_metadata_echo')"
+            message: public inspection did not keep the private suppression reason explicitly unknown
         - assert:
             expr: "suppressionPrivacySentinels.every((sentinel) => !JSON.stringify(suppressionInspect).includes(sentinel) && !suppressionText.includes(sentinel))"
             message: suppression JSON or human inspection exposed a raw sender, conversation, inbound message id, or content sentinel
         - assert:
             expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound').length === suppressionOutboundStart"
             message: suppression path did not retain exact zero visible outbound messages
-      detailsExpr: "`suppression receipts=1; receiptIds=nonempty-unique; visibleOutbound=0; privacy=json+human-pass`"
+      detailsExpr: "`suppression facts=1; publicCoverage=unknown; selectorIds=nonempty-unique; visibleOutbound=0; privacy=json+human-pass`"
 
     - name: preserves delivery and suppression receipts across restart
       actions:
         - set: deliveryDecisionsBeforeRestart
           value:
-            expr: "JSON.stringify(deliveryInspect.decisions)"
+            expr: "JSON.stringify(deliveryInspect.decisionDisplays)"
         - set: suppressionDecisionsBeforeRestart
           value:
-            expr: "JSON.stringify(suppressionInspect.decisions)"
+            expr: "JSON.stringify(suppressionInspect.decisionDisplays)"
         - assert:
             expr: "typeof env.gateway.restartAfterStateMutation === 'function'"
             message: QA Gateway does not expose lifecycle-owned restart
@@ -257,6 +258,9 @@ flow:
         - set: suppressionAfterRestart
           value:
             expr: "await runQaCli(env, ['audit', '--run', suppressionRunId, '--explain', '--json'], { timeoutMs: 60000, json: true })"
+        - set: suppressionStorageAfterRestart
+          value:
+            expr: "inspectQaExecutionIdentityStorage(env, { runId: suppressionRunId, actionFamily: 'message', reasonCode: 'message_suppressed_inbound_metadata_echo' })"
         - set: deliveryTextAfterRestart
           value:
             expr: "await runQaCli(env, ['audit', '--run', deliveryRunId, '--explain'], { timeoutMs: 60000 })"
@@ -264,18 +268,18 @@ flow:
           value:
             expr: "await runQaCli(env, ['audit', '--run', suppressionRunId, '--explain'], { timeoutMs: 60000 })"
         - assert:
-            expr: "JSON.stringify(deliveryAfterRestart.decisions) === deliveryDecisionsBeforeRestart && JSON.stringify(suppressionAfterRestart.decisions) === suppressionDecisionsBeforeRestart && deliveryTextAfterRestart.includes('message_delivered') && suppressionTextAfterRestart.includes('message_suppressed_inbound_metadata_echo')"
+            expr: "JSON.stringify(deliveryAfterRestart.decisionDisplays) === deliveryDecisionsBeforeRestart && JSON.stringify(suppressionAfterRestart.decisionDisplays) === suppressionDecisionsBeforeRestart && deliveryTextAfterRestart.includes('message_delivered') && suppressionTextAfterRestart.includes('decision_fact_display_unverified') && !suppressionTextAfterRestart.includes('message_suppressed_inbound_metadata_echo')"
             message: message delivery decisions changed across Gateway restart
         - assert:
-            expr: "['message_queued', 'message_platform_started', 'message_delivered'].every((reason) => deliveryAfterRestart.decisions.filter((receipt) => receipt.decision?.reasonCode === reason).length === 1) && deliveryAfterRestart.decisions.every((receipt) => typeof receipt.receiptId === 'string' && receipt.receiptId.length > 0) && new Set(deliveryAfterRestart.decisions.map((receipt) => receipt.receiptId)).size === deliveryAfterRestart.decisions.length"
-            message: restarted delivery inspection lost exact lifecycle cardinality or unique receipt ids
+            expr: "['message_queued', 'message_platform_started', 'message_delivered'].every((reason) => deliveryAfterRestart.decisionDisplays.filter((receipt) => receipt.decision?.reasonCode === reason).length === 1) && deliveryAfterRestart.decisionDisplays.every((receipt) => typeof receipt.selectorId === 'string' && receipt.selectorId.length > 0) && new Set(deliveryAfterRestart.decisionDisplays.map((receipt) => receipt.selectorId)).size === deliveryAfterRestart.decisionDisplays.length"
+            message: restarted delivery inspection lost exact lifecycle cardinality or unique selector ids
         - assert:
-            expr: "suppressionAfterRestart.decisions.filter((receipt) => receipt.decision?.reasonCode === 'message_suppressed_inbound_metadata_echo' && receipt.action?.family === 'message' && receipt.decision?.outcome === 'not-applicable' && receipt.enforcement?.coverageState === 'attribution-only').length === 1 && suppressionAfterRestart.decisions.every((receipt) => typeof receipt.receiptId === 'string' && receipt.receiptId.length > 0) && new Set(suppressionAfterRestart.decisions.map((receipt) => receipt.receiptId)).size === suppressionAfterRestart.decisions.length"
-            message: restarted suppression inspection lost exact receipt semantics or unique receipt ids
+            expr: "suppressionStorageAfterRestart.decisionCount === 1 && suppressionAfterRestart.coverage.state === 'unknown' && suppressionAfterRestart.coverage.missingEvidence.includes('decision.display_provenance') && suppressionAfterRestart.decisionDisplays.some((receipt) => receipt.provenance?.state === 'unverified' && receipt.decision?.reasonCode === 'decision_fact_display_unverified') && suppressionAfterRestart.decisionDisplays.every((receipt) => typeof receipt.selectorId === 'string' && receipt.selectorId.length > 0) && new Set(suppressionAfterRestart.decisionDisplays.map((receipt) => receipt.selectorId)).size === suppressionAfterRestart.decisionDisplays.length"
+            message: restarted suppression inspection lost exact private fact, explicit unknown coverage, or unique selector ids
         - assert:
             expr: "deliveryPrivacySentinels.every((sentinel) => !JSON.stringify(deliveryAfterRestart).includes(sentinel) && !deliveryTextAfterRestart.includes(sentinel)) && suppressionPrivacySentinels.every((sentinel) => !JSON.stringify(suppressionAfterRestart).includes(sentinel) && !suppressionTextAfterRestart.includes(sentinel))"
             message: restarted JSON or human inspection exposed a raw sender, conversation, message id, or content sentinel
         - assert:
             expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound').length === suppressionOutboundStart"
             message: suppression path produced a visible outbound message after restart
-      detailsExpr: "`restart-stable decisions=byte-identical; receiptIds=nonempty-unique; privacy=json+human-pass`"
+      detailsExpr: "`restart-stable decisions=byte-identical; selectorIds=nonempty-unique; privacy=json+human-pass`"

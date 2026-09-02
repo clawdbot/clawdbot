@@ -3,14 +3,7 @@
  * ids to current Anthropic runtime refs while preserving auth-profile suffixes.
  */
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { CLAUDE_CLI_BACKEND_ID, CLAUDE_CLI_MODEL_ALIASES } from "./cli-constants.js";
-
-const DEFAULT_CLAUDE_MODEL_BY_FAMILY: Record<string, string> = {
-  opus: "claude-opus-5",
-  sonnet: "claude-sonnet-5",
-  fable: "claude-fable-5",
-  haiku: "claude-haiku-4-5",
-};
+import { CLAUDE_CLI_BACKEND_ID, CLAUDE_MODEL_ID_ALIASES } from "./cli-constants.js";
 
 /** Normalized Claude CLI selection plus runtime refs used by setup migrations. */
 type ClaudeCliAnthropicModelRefs = {
@@ -98,14 +91,8 @@ function canonicalizeKnownClaudeCliModelId(modelId: string): string | null {
   if (normalized.startsWith("claude-")) {
     return attachModelAuthProfile(trimmed, split.profile);
   }
-  const defaultModel = DEFAULT_CLAUDE_MODEL_BY_FAMILY[normalized];
-  if (defaultModel) {
-    return attachModelAuthProfile(defaultModel, split.profile);
-  }
-  const aliasedModel = CLAUDE_CLI_MODEL_ALIASES[normalized];
-  return aliasedModel?.startsWith("claude-")
-    ? attachModelAuthProfile(aliasedModel, split.profile)
-    : null;
+  const aliasedModel = CLAUDE_MODEL_ID_ALIASES.get(normalized);
+  return aliasedModel ? attachModelAuthProfile(aliasedModel, split.profile) : null;
 }
 
 function upgradeOldClaudeModelId(normalized: string): string | null {

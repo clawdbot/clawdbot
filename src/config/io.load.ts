@@ -39,8 +39,18 @@ export function loadConfigFromContext(
       // A missing config is the fresh-install default path: materialize the
       // same runtime defaults an empty {} config gets, or out-of-box behavior
       // (compaction safeguard, session/cron defaults) silently diverges.
+      const config = coerceConfig(migratePersistedImplicitMainRoster({}).config);
+      const metadata = context.createValidationPluginMetadataSnapshotLoader({
+        effectiveConfigRaw: config,
+        env: deps.env,
+      });
       return context.finalizeLoadedRuntimeConfig(
-        materializeRuntimeConfig(coerceConfig(migratePersistedImplicitMainRoster({}).config)),
+        materializeRuntimeConfig(
+          config,
+          context.options.pluginValidation === "core-only"
+            ? { manifestRegistry: { plugins: [] } }
+            : { loadManifestRegistry: () => metadata.load(config).manifestRegistry },
+        ),
       );
     }
     const raw = deps.fs.readFileSync(configPath, "utf-8");
@@ -53,7 +63,10 @@ export function loadConfigFromContext(
     const contextBudgetMigration = migrateLegacyContextBudgetConfig(
       readResolution.resolvedConfigRaw,
     );
-    const rosterMigration = migratePersistedImplicitMainRoster(contextBudgetMigration.config);
+    const rosterMigration = migratePersistedImplicitMainRoster(contextBudgetMigration.config, {
+      env: deps.env,
+      homedir: deps.homedir,
+    });
     const effectiveConfigRaw = rosterMigration.config;
     const validationConfigRaw = effectiveConfigRaw;
     const snapshotRaw = raw;

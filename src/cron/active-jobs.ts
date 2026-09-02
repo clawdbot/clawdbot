@@ -1,5 +1,7 @@
 /** Tracks in-process cron executions so schedulers and wake paths avoid duplicate runs. */
+import type { CommandLaneTaskMarker } from "../process/command-queue.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import type { CronPayload } from "./types.js";
 
 type CronActiveJobState = {
   activeJobs: Map<string, CronActiveJobMarker>;
@@ -12,6 +14,7 @@ const CRON_ACTIVE_JOB_STATE_KEY = Symbol.for("openclaw.cron.activeJobs");
 
 export type CronActiveJobMarker = {
   jobId: string;
+  payloadKind?: CronPayload["kind"];
   generation: number;
   token: number;
   cancellation?:
@@ -23,6 +26,9 @@ export type CronActiveJobMarker = {
   preserveAcrossGenerationAdvance?: boolean;
   onInactive?: Set<() => void>;
   inactiveNotified?: true;
+  heartbeatWait?: {
+    owningCronLaneTaskMarker?: CommandLaneTaskMarker;
+  };
 };
 
 function getCronActiveJobState(): CronActiveJobState {
@@ -88,7 +94,7 @@ function notifyCronJobInactive(marker: CronActiveJobMarker) {
 /** Marks a cron job id as currently executing for duplicate-run suppression. */
 export function markCronJobActive(
   jobId: string,
-  opts?: { preserveAcrossGenerationAdvance?: boolean },
+  opts?: { payloadKind?: CronPayload["kind"]; preserveAcrossGenerationAdvance?: boolean },
 ): CronActiveJobMarker | undefined {
   if (!jobId) {
     return undefined;
@@ -98,6 +104,7 @@ export function markCronJobActive(
   state.nextToken += 1;
   const marker: CronActiveJobMarker = {
     jobId,
+    ...(opts?.payloadKind ? { payloadKind: opts.payloadKind } : {}),
     generation: state.generation,
     token,
     ...(opts?.preserveAcrossGenerationAdvance ? { preserveAcrossGenerationAdvance: true } : {}),
@@ -178,6 +185,23 @@ export function requestActiveCronJobCancellation(jobId: string, reason: string):
   }
 }
 
+/** Revokes every active run admitted from one payload family. */
+export function requestActiveCronJobCancellationByPayloadKind(
+  payloadKind: CronPayload["kind"],
+  reason: string,
+): void {
+  const state = getCronActiveJobState();
+  for (const marker of state.activeJobs.values()) {
+    if (
+      marker.payloadKind !== payloadKind ||
+      !isMarkerActiveInGeneration(marker, state.generation)
+    ) {
+      continue;
+    }
+    requestCronActiveJobMarkerCancellation(marker, reason);
+  }
+}
+
 /** Returns whether the given cron job id is currently executing in this process. */
 export function isCronJobActive(jobId: string) {
   if (!jobId) {
@@ -217,20 +241,53 @@ export function hasActiveCronJobs() {
   return getActiveCronJobCountForGeneration(getCronActiveJobState()) > 0;
 }
 
-/**
- * Ignore only the caller's own marker. Unrelated runs must still block its wake,
- * because cron jobs may execute concurrently.
- */
-export function hasActiveCronJobsExceptMarker(markerToIgnore: CronActiveJobMarker) {
+/** Ignores only the exact cron executions represented by one coalesced heartbeat wake. */
+export function hasActiveCronJobsExceptMarkers(markersToIgnore: readonly CronActiveJobMarker[]) {
   const state = getCronActiveJobState();
+  const ignoredMarkers = new Set(markersToIgnore);
   for (const marker of state.activeJobs.values()) {
-    const isIgnoredMarker =
-      marker.jobId === markerToIgnore.jobId && marker.token === markerToIgnore.token;
-    if (!isIgnoredMarker && isMarkerActiveInGeneration(marker, state.generation)) {
+    if (!ignoredMarkers.has(marker) && isMarkerActiveInGeneration(marker, state.generation)) {
       return true;
     }
   }
   return false;
+}
+
+/** Records that an exact cron execution is idle until its heartbeat wake settles. */
+export function markCronJobWaitingForHeartbeat(
+  marker: CronActiveJobMarker | undefined,
+  owningCronLaneTaskMarker?: CommandLaneTaskMarker,
+): () => void {
+  if (!marker || !isCronActiveJobMarkerCurrent(marker)) {
+    return () => {};
+  }
+  const heartbeatWait = owningCronLaneTaskMarker ? { owningCronLaneTaskMarker } : {};
+  marker.heartbeatWait = heartbeatWait;
+  return () => {
+    if (marker.heartbeatWait === heartbeatWait) {
+      delete marker.heartbeatWait;
+    }
+  };
+}
+
+/** Returns exact live cron and lane owners currently waiting on heartbeat settlement. */
+export function listCronHeartbeatWaitOwners(): {
+  activeJobMarkers: CronActiveJobMarker[];
+  owningCronLaneTaskMarkers: CommandLaneTaskMarker[];
+} {
+  const state = getCronActiveJobState();
+  const activeJobMarkers: CronActiveJobMarker[] = [];
+  const owningCronLaneTaskMarkers: CommandLaneTaskMarker[] = [];
+  for (const marker of state.activeJobs.values()) {
+    if (!marker.heartbeatWait || !isMarkerActiveInGeneration(marker, state.generation)) {
+      continue;
+    }
+    activeJobMarkers.push(marker);
+    if (marker.heartbeatWait.owningCronLaneTaskMarker) {
+      owningCronLaneTaskMarkers.push(marker.heartbeatWait.owningCronLaneTaskMarker);
+    }
+  }
+  return { activeJobMarkers, owningCronLaneTaskMarkers };
 }
 
 /** Returns the number of active cron runs in this process. */

@@ -7,7 +7,6 @@ import type {
   ChatCommandDefinition,
   CommandArgChoiceContext,
   CommandCategory,
-  CommandScope,
   CommandTier,
 } from "./commands-registry.types.js";
 import { BASE_THINKING_LEVELS, type ThinkLevel } from "./thinking.shared.js";
@@ -26,86 +25,19 @@ const BROWSER_SAFE_THINKING_LEVELS: ThinkLevel[] = [
   "max",
 ];
 
-type DefineChatCommandInput = {
-  key: string;
-  nativeName?: string;
-  nativeAliases?: string[];
-  nativeProviders?: string[];
-  description: string;
-  args?: ChatCommandDefinition["args"];
-  argsParsing?: ChatCommandDefinition["argsParsing"];
-  formatArgs?: ChatCommandDefinition["formatArgs"];
-  argsMenu?: ChatCommandDefinition["argsMenu"];
-  acceptsArgs?: boolean;
-  textAlias?: string;
-  textAliases?: string[];
-  scope?: CommandScope;
-  category?: CommandCategory;
-  /** Progressive disclosure tier. Defaults to "standard". */
-  tier?: CommandTier;
-};
-
 /**
- * Keep simple model selections on fast client-side patch paths. Multi-token
- * forms can carry runtime selectors or a prompt, so the server directive parser
- * must own the full atomic transaction.
+ * Keep simple model selections on fast client-side patch paths. Semantic reset
+ * and multi-token forms require the server directive parser to own the full
+ * atomic transaction.
  */
 export function shouldForwardModelCommandToServer(rawArgs: string): boolean {
   const args = rawArgs.trim();
   const normalized = args.toLowerCase();
-  return normalized === "list" || normalized === "status" || /\s/u.test(args);
-}
-
-/** Defines one command with normalized aliases, scope, and argument parsing defaults. */
-export function defineChatCommand(command: DefineChatCommandInput): ChatCommandDefinition {
-  const aliases = (command.textAliases ?? (command.textAlias ? [command.textAlias] : []))
-    .map((alias) => alias.trim())
-    .filter(Boolean);
-  const scope =
-    command.scope ?? (command.nativeName ? (aliases.length ? "both" : "native") : "text");
-  const acceptsArgs = command.acceptsArgs ?? Boolean(command.args?.length);
-  const argsParsing = command.argsParsing ?? (command.args?.length ? "positional" : "none");
-  return {
-    key: command.key,
-    nativeName: command.nativeName,
-    nativeAliases: command.nativeAliases
-      ? normalizeStringEntries(command.nativeAliases)
-      : undefined,
-    nativeProviders: command.nativeProviders
-      ? normalizeStringEntries(command.nativeProviders)
-      : undefined,
-    description: command.description,
-    acceptsArgs,
-    args: command.args,
-    argsParsing,
-    formatArgs: command.formatArgs,
-    argsMenu: command.argsMenu,
-    textAliases: aliases,
-    scope,
-    category: command.category,
-    tier: command.tier,
-  };
-}
-
-function registerAlias(commands: ChatCommandDefinition[], key: string, ...aliases: string[]): void {
-  const command = commands.find((entry) => entry.key === key);
-  if (!command) {
-    throw new Error(`registerAlias: unknown command key: ${key}`);
-  }
-  const existing = new Set(command.textAliases.map((alias) => alias.toLowerCase()));
-  for (const alias of aliases) {
-    const trimmed = alias.trim();
-    const lowered = normalizeOptionalLowercaseString(trimmed);
-    if (!lowered || existing.has(lowered)) {
-      continue;
-    }
-    existing.add(lowered);
-    command.textAliases.push(trimmed);
-  }
+  return ["default", "list", "status"].includes(normalized) || /\s/u.test(args);
 }
 
 /** Validates command registry uniqueness and text/native surface invariants. */
-export function assertCommandRegistry(commands: ChatCommandDefinition[]): void {
+function assertCommandRegistry(commands: ChatCommandDefinition[]): void {
   const keys = new Set<string>();
   const nativeNames = new Set<string>();
   const textAliases = new Set<string>();
@@ -161,20 +93,9 @@ type BuiltinCommandArgumentOptions = Omit<
   "name" | "description" | "type"
 > & { type?: BuiltinCommandArgument["type"] };
 type BuiltinCommandOptions = Omit<
-  DefineChatCommandInput,
-  "key" | "description" | "category" | "tier" | "nativeName" | "textAlias"
-> & { nativeName?: string | false };
-type BuiltinCommandDescriptor = readonly [
-  key: string,
-  description: string,
-  category: CommandCategory,
-  tier: CommandTier,
-  options?: BuiltinCommandOptions,
-];
-
-function defineBuiltinCommand(...definition: BuiltinCommandDescriptor): BuiltinCommandDescriptor {
-  return definition;
-}
+  ChatCommandDefinition,
+  "key" | "description" | "category" | "tier" | "nativeName" | "textAliases" | "scope"
+> & { nativeName?: string | false; textAliases?: string[] };
 
 function defineCommandArgument(
   name: string,
@@ -184,24 +105,39 @@ function defineCommandArgument(
   return { name, description, type: "string", ...options };
 }
 
-function defineBuiltinChatCommand([
-  key,
-  description,
-  category,
-  tier,
-  options = {},
-]: BuiltinCommandDescriptor): ChatCommandDefinition {
-  const { nativeName = key, textAliases, ...fields } = options;
-  return defineChatCommand({
+/** Defines a built-in command with its aliases and argument parsing defaults. */
+function defineBuiltinCommand(
+  key: string,
+  description: string,
+  category: CommandCategory,
+  tier: CommandTier,
+  options: BuiltinCommandOptions = {},
+): ChatCommandDefinition {
+  const { nativeName = key } = options;
+  return {
     key,
     nativeName: nativeName === false ? undefined : nativeName,
+    nativeAliases: options.nativeAliases
+      ? normalizeStringEntries(options.nativeAliases)
+      : undefined,
+    nativeProviders: options.nativeProviders
+      ? normalizeStringEntries(options.nativeProviders)
+      : undefined,
     description,
-    textAlias: textAliases ? undefined : `/${key}`,
-    textAliases,
+    ...(options.descriptionLocalizations
+      ? { descriptionLocalizations: options.descriptionLocalizations }
+      : {}),
+    acceptsArgs: options.acceptsArgs ?? Boolean(options.args?.length),
+    args: options.args,
+    argsParsing: options.argsParsing ?? (options.args?.length ? "positional" : "none"),
+    formatArgs: options.formatArgs,
+    argsMenu: options.argsMenu,
+    textAliases: (options.textAliases ?? [`/${key}`]).map((alias) => alias.trim()).filter(Boolean),
+    scope: nativeName === false ? "text" : "both",
     category,
     tier,
-    ...fields,
-  });
+    activeRunSafe: options.activeRunSafe,
+  };
 }
 
 /** Builds the built-in command list with context-aware thinking choices. */
@@ -214,7 +150,7 @@ export function buildBuiltinChatCommands(
     const levels = configuredThinkingLevels(provider, model, catalog, agentRuntime);
     return ["default", ...levels.filter((level) => level !== "default")];
   };
-  const definitions: BuiltinCommandDescriptor[] = [
+  const commands: ChatCommandDefinition[] = [
     defineBuiltinCommand("help", "Show available commands.", "status", "essential"),
     defineBuiltinCommand("commands", "List all slash commands.", "status", "power"),
     defineBuiltinCommand("tools", "List available runtime tools.", "status", "standard", {
@@ -258,6 +194,7 @@ export function buildBuiltinChatCommands(
     ),
     defineBuiltinCommand("status", "Show current status.", "status", "essential", {
       acceptsArgs: true,
+      activeRunSafe: true,
     }),
     defineBuiltinCommand("goal", "Show or control the current goal.", "status", "standard", {
       args: [
@@ -384,15 +321,19 @@ export function buildBuiltinChatCommands(
           "• Help – Show usage guide",
       },
     }),
-    defineBuiltinCommand("whoami", "Show your sender id.", "status", "power"),
+    defineBuiltinCommand("whoami", "Show your sender id.", "status", "power", {
+      textAliases: ["/whoami", "/id"],
+    }),
     defineBuiltinCommand(
       "session",
-      "Manage session-level settings (for example /session idle).",
+      "Manage conversation bindings and session lifecycle settings.",
       "session",
       "power",
       {
         args: [
-          defineCommandArgument("action", "idle | max-age", { choices: ["idle", "max-age"] }),
+          defineCommandArgument("action", "idle | max-age | unbind", {
+            choices: ["idle", "max-age", "unbind"],
+          }),
           defineCommandArgument("value", "Duration (24h, 90m) or off", { captureRemaining: true }),
         ],
         argsMenu: "auto",
@@ -444,25 +385,6 @@ export function buildBuiltinChatCommands(
       argsMenu: "auto",
     }),
     defineBuiltinCommand(
-      "focus",
-      "Bind this thread (Discord) or topic/conversation (Telegram) to a session target.",
-      "management",
-      "power",
-      {
-        args: [
-          defineCommandArgument("target", "Subagent label/index or session key/id/label", {
-            captureRemaining: true,
-          }),
-        ],
-      },
-    ),
-    defineBuiltinCommand(
-      "unfocus",
-      "Remove the current thread (Discord) or topic/conversation (Telegram) binding.",
-      "management",
-      "power",
-    ),
-    defineBuiltinCommand(
       "agents",
       "List thread-bound agents for this session.",
       "management",
@@ -474,6 +396,7 @@ export function buildBuiltinChatCommands(
       "management",
       "standard",
       {
+        textAliases: ["/steer", "/tell"],
         args: [defineCommandArgument("message", "Steering message", { captureRemaining: true })],
       },
     ),
@@ -535,7 +458,9 @@ export function buildBuiltinChatCommands(
       ],
       argsMenu: "auto",
     }),
-    defineBuiltinCommand("stop", "Stop the current run.", "session", "essential"),
+    defineBuiltinCommand("stop", "Stop the current run.", "session", "essential", {
+      activeRunSafe: true,
+    }),
     defineBuiltinCommand("restart", "Restart OpenClaw.", "tools", "power"),
     defineBuiltinCommand("activation", "Set group activation mode.", "management", "power", {
       args: [
@@ -572,6 +497,8 @@ export function buildBuiltinChatCommands(
       ],
     }),
     defineBuiltinCommand("think", "Set thinking level.", "options", "essential", {
+      textAliases: ["/think", "/thinking", "/t"],
+      activeRunSafe: true,
       args: [
         defineCommandArgument("level", "Thinking level", {
           choices: ({ provider, model, catalog, agentRuntime }) =>
@@ -581,6 +508,7 @@ export function buildBuiltinChatCommands(
       argsMenu: "auto",
     }),
     defineBuiltinCommand("verbose", "Toggle verbose mode.", "options", "standard", {
+      textAliases: ["/verbose", "/v"],
       args: [defineCommandArgument("mode", "on, off, or full", { choices: ["on", "off", "full"] })],
     }),
     defineBuiltinCommand("trace", "Toggle plugin trace lines.", "options", "power", {
@@ -607,12 +535,14 @@ export function buildBuiltinChatCommands(
       argsMenu: "auto",
     }),
     defineBuiltinCommand("reasoning", "Toggle reasoning visibility.", "options", "standard", {
+      textAliases: ["/reasoning", "/reason"],
       args: [
         defineCommandArgument("mode", "on, off, or stream", { choices: ["on", "off", "stream"] }),
       ],
       argsMenu: "auto",
     }),
     defineBuiltinCommand("elevated", "Toggle elevated mode.", "options", "power", {
+      textAliases: ["/elevated", "/elev"],
       args: [
         defineCommandArgument("mode", "on, off, ask, or full", {
           choices: ["on", "off", "ask", "full"],
@@ -638,11 +568,16 @@ export function buildBuiltinChatCommands(
     }),
     defineBuiltinCommand(
       "model",
-      "Show or set the model; direct owner/admin selections request a default update.",
+      "Show or set the model; use -s, -a, or -g to choose scope.",
       "options",
       "essential",
       {
-        args: [defineCommandArgument("model", "Model id; add -s to change only this session")],
+        args: [
+          defineCommandArgument(
+            "model",
+            "Model id; add -s for session, -a for agent, or -g for global scope",
+          ),
+        ],
       },
     ),
     defineBuiltinCommand("models", "List model providers/models.", "options", "standard", {
@@ -665,14 +600,6 @@ export function buildBuiltinChatCommands(
       args: [defineCommandArgument("command", "Shell command", { captureRemaining: true })],
     }),
   ];
-  const commands = definitions.map(defineBuiltinChatCommand);
-
-  registerAlias(commands, "whoami", "/id");
-  registerAlias(commands, "think", "/thinking", "/t");
-  registerAlias(commands, "verbose", "/v");
-  registerAlias(commands, "reasoning", "/reason");
-  registerAlias(commands, "elevated", "/elev");
-  registerAlias(commands, "steer", "/tell");
   assertCommandRegistry(commands);
   return commands;
 }

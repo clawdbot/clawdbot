@@ -3,11 +3,11 @@ import {
   type RoleRefMap,
   type RoleSnapshotIdentityMode,
 } from "./pw-role-snapshot.js";
-import type { BrowserRouteContext } from "./server-context.types.js";
+import type { BrowserRouteContext, BrowserServerState } from "./server-context.types.js";
 
 /**
- * Process-local snapshot delta state owned by one Browser control-server context.
- * Each tab/options family keeps one bounded previous-key slot; restart or tab close drops it.
+ * Process-local snapshot delta state owned by one browser control runtime.
+ * Each tab/options family keeps one previous-key slot; restart or tab close drops it.
  */
 const SNAPSHOT_DELTA_CACHE_MAX_ENTRIES = 32;
 
@@ -29,15 +29,15 @@ type SnapshotDeltaEntry = {
   keys: Set<string>;
 };
 
-const cacheByContext = new WeakMap<BrowserRouteContext, Map<string, SnapshotDeltaEntry>>();
+const cacheByState = new WeakMap<BrowserServerState, Map<string, SnapshotDeltaEntry>>();
 
 function getCache(ctx: BrowserRouteContext): Map<string, SnapshotDeltaEntry> {
-  const existing = cacheByContext.get(ctx);
+  const existing = cacheByState.get(ctx.state());
   if (existing) {
     return existing;
   }
   const cache = new Map<string, SnapshotDeltaEntry>();
-  cacheByContext.set(ctx, cache);
+  cacheByState.set(ctx.state(), cache);
   return cache;
 }
 
@@ -108,7 +108,7 @@ export function clearSnapshotKeysForTab(
   profile: string,
   targetId: string,
 ): void {
-  const cache = cacheByContext.get(ctx);
+  const cache = cacheByState.get(ctx.state());
   if (!cache) {
     return;
   }

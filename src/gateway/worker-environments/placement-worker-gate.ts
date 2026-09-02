@@ -1,4 +1,5 @@
 import {
+  placementTurnOwner,
   projectWorkerSessionTurnClaim,
   serializeWorkerSessionTurnClaim,
   type WorkerSessionPlacementRecord,
@@ -22,6 +23,7 @@ export type WorkerSessionPlacementGate = {
   getExecutionIdentityCapability?(
     claim: WorkerSessionTurnClaim,
   ): WorkerTurnExecutionIdentityCapability | undefined;
+  readWorkerTurnLiveAckCursor(claim: WorkerSessionTurnClaim): number;
   validateWorkerTurn(claim: WorkerSessionTurnClaim): boolean;
   isWorkerTurnToolAuthorized(claim: WorkerSessionTurnClaim, toolName: string): boolean;
   updateAckCursors(input: {
@@ -29,6 +31,7 @@ export type WorkerSessionPlacementGate = {
     transcriptSeq?: number;
     liveSeq?: number;
   }): void;
+  prepareWorkspaceResultOwnerRevocation(binding: WorkerPlacementBinding, error: Error): void;
   registerTurnClaimClosedHandler(handler: (claim: WorkerSessionTurnClaim) => void): () => void;
 };
 
@@ -42,6 +45,27 @@ function claimForBinding(
     claim.owner.ownerEpoch === binding.ownerEpoch
     ? claim
     : undefined;
+}
+
+function claimForOwnerRevocation(
+  record: WorkerSessionPlacementRecord | undefined,
+  binding: WorkerPlacementBinding,
+): WorkerSessionTurnClaim | undefined {
+  if (
+    (record?.state !== "active" && record?.state !== "draining") ||
+    record.environmentId !== binding.environmentId ||
+    record.activeOwnerEpoch !== binding.ownerEpoch ||
+    !record.turnClaim
+  ) {
+    return undefined;
+  }
+  return {
+    sessionId: record.sessionId,
+    claimId: record.turnClaim.claimId,
+    runId: record.turnClaim.runId,
+    placementGeneration: record.turnClaim.generation,
+    owner: placementTurnOwner(record),
+  };
 }
 
 export function createWorkerSessionPlacementGate(
@@ -73,6 +97,17 @@ export function createWorkerSessionPlacementGate(
       getWorkerTurnExecutionIdentityCapability(store, claim),
     validateWorkerTurn,
 
+    readWorkerTurnLiveAckCursor(claim): number {
+      if (!validateWorkerTurn(claim)) {
+        throw new Error(`Cannot read ACK cursor for stale worker turn ${claim.sessionId}`);
+      }
+      const placement = store.get(claim.sessionId);
+      if (!placement) {
+        throw new Error(`Worker placement disappeared for session ${claim.sessionId}`);
+      }
+      return placement.lastLiveEventAckCursor ?? 0;
+    },
+
     isWorkerTurnToolAuthorized(claim, toolName): boolean {
       return validateWorkerTurn(claim) && store.isWorkerTurnToolAuthorized(claim, toolName);
     },
@@ -86,6 +121,36 @@ export function createWorkerSessionPlacementGate(
         ...(input.transcriptSeq === undefined ? {} : { transcript: input.transcriptSeq }),
         ...(input.liveSeq === undefined ? {} : { liveEvent: input.liveSeq }),
       });
+    },
+
+    prepareWorkspaceResultOwnerRevocation(binding, error): void {
+      const claim = claimForOwnerRevocation(store.get(binding.sessionId), binding);
+      if (!claim) {
+        return;
+      }
+      const pending = store
+        .listPendingWorkspaceResults()
+        .find(
+          (candidate) =>
+            candidate.sessionId === claim.sessionId &&
+            candidate.claimId === claim.claimId &&
+            candidate.runId === claim.runId,
+        );
+      if (!pending) {
+        return;
+      }
+      if (pending.gatewayInstanceId !== store.workspaceResultInstanceId()) {
+        return;
+      }
+      if (
+        claim.owner.kind === "local" &&
+        pending.stagedResultRef === null &&
+        pending.workspaceAcceptedAtMs === null
+      ) {
+        store.failWorkspaceResultAndReleaseTurn(pending, error);
+        return;
+      }
+      store.handoffWorkspaceResultRecovery(claim);
     },
 
     registerTurnClaimClosedHandler: (handler) => store.registerTurnClaimClosedHandler(handler),

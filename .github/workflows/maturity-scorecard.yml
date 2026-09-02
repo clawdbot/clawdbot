@@ -202,6 +202,9 @@ jobs:
             exit 1
           fi
 
+      - name: Prepare Git owner
+        uses: openclaw/openclaw/.github/actions/git-owner@dd4528b6393e7d00063067a080ca7241b48ce475
+
       - name: Checkout selected ref
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -220,113 +223,107 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          exec python3 -I -S "$CI_GIT_OWNER" --policy - <<'PYTHON'
+          import hashlib
+          import os
+          import re
+          import subprocess
+          from ci_git_owner import run_git, git_output, GitFailure, FetchTimeout, check_cancelled
 
-          selected_revision="$(git rev-parse HEAD)"
-          expected_sha="$(printf '%s' "$EXPECTED_SHA" | tr '[:upper:]' '[:lower:]')"
-          branch_candidate="${INPUT_REF#refs/heads/}"
-          floating_default_branch=false
-          trusted_reason=""
+          workspace = os.getcwd()
+          def git(*args, **kwargs):
+              run_git(workspace, *args, reclaim_locks=True, **kwargs)
 
-          if [[ -n "${expected_sha// }" && ! "$expected_sha" =~ ^[0-9a-f]{40}$ ]]; then
-            echo "expected_sha must be a full 40-character SHA; got: ${EXPECTED_SHA}" >&2
-            exit 1
-          fi
-          if [[ -n "${expected_sha// }" && "$selected_revision" != "$expected_sha" ]]; then
-            echo "Ref '${INPUT_REF}' resolved to ${selected_revision}, expected ${EXPECTED_SHA}." >&2
-            exit 1
-          fi
+          def probe(*args, quiet=False):
+              try:
+                  git(*args, stdout=subprocess.DEVNULL if quiet else None,
+                      stderr=subprocess.DEVNULL if quiet else None)
+                  return True
+              except GitFailure as error:
+                  if error.code != 1:
+                      raise
+                  return False
 
-          git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
-          if [[ -z "${expected_sha// }" && "$branch_candidate" == "$DEFAULT_BRANCH" ]]; then
-            # A direct main dispatch may wait while checkout fetches full history. Freeze the
-            # latest fetched main here so later reusable jobs never receive a moving branch.
-            floating_default_branch=true
-            selected_revision="$(git rev-parse refs/remotes/origin/main)"
-          fi
+          def revision(ref):
+              return git_output(workspace, "rev-parse", ref).rstrip("\n")
 
-          if git merge-base --is-ancestor "$selected_revision" refs/remotes/origin/main; then
-            trusted_reason="main-ancestor"
-          elif git tag --points-at "$selected_revision" | grep -Eq '^v'; then
-            trusted_reason="release-tag"
-          elif [[ "$branch_candidate" =~ ^release/[0-9]{4}\.[0-9]+\.[0-9]+$ ]]; then
-            git fetch --no-tags origin "+refs/heads/${branch_candidate}:refs/remotes/origin/${branch_candidate}"
-            release_branch_sha="$(git rev-parse "refs/remotes/origin/${branch_candidate}")"
-            if [[ "$selected_revision" == "$release_branch_sha" ]]; then
-              trusted_reason="release-branch-head"
-            fi
-          fi
+          def fail(*messages, code=1):
+              import sys
+              for message in messages:
+                  print(message, file=sys.stderr)
+              raise SystemExit(code)
 
-          if [[ -z "$trusted_reason" ]]; then
-            echo "Ref '${INPUT_REF}' resolved to $selected_revision, which is not trusted for this secret-bearing maturity scorecard run." >&2
-            echo "Allowed refs must be on main, point to a release tag, or match a release branch head." >&2
-            exit 1
-          fi
+          selected_revision = revision("HEAD")
+          expected_sha = os.environ["EXPECTED_SHA"].lower()
+          input_ref = os.environ["INPUT_REF"]
+          branch_candidate = input_ref.removeprefix("refs/heads/")
+          default_branch = os.environ["DEFAULT_BRANCH"]
+          evidence_run_id = os.environ["EVIDENCE_RUN_ID"]
+          publish_pull_request = os.environ["PUBLISH_PULL_REQUEST"] == "true"
+          floating_default_branch = False
+          trusted_reason = ""
+          if expected_sha.replace(" ", "") and not re.fullmatch(r"[0-9a-f]{40}", expected_sha):
+              fail(f"expected_sha must be a full 40-character SHA; got: {os.environ['EXPECTED_SHA']}")
+          if expected_sha.replace(" ", "") and selected_revision != expected_sha:
+              fail(f"Ref '{input_ref}' resolved to {selected_revision}, expected {os.environ['EXPECTED_SHA']}.")
 
-          if [[ ! "$EVIDENCE_RUN_ID" =~ ^[0-9]+$ ]]; then
-            echo "qa_evidence_run_id must be a numeric GitHub Actions run id." >&2
-            exit 1
-          fi
-          publication_base="${DEFAULT_BRANCH}"
-          publication_head=""
-          if [[ "$PUBLISH_PULL_REQUEST" == "true" ]]; then
-            if [[ ! "$INPUT_REF" =~ ^refs/tags/ && ! "$INPUT_REF" =~ ^[0-9a-fA-F]{40}$ ]] &&
-              git check-ref-format "refs/heads/${branch_candidate}" >/dev/null 2>&1; then
-              set +e
-              timeout --signal=TERM --kill-after=10s 60s \
-                git ls-remote --exit-code --heads origin "refs/heads/${branch_candidate}" \
-                >/dev/null 2>&1
-              branch_lookup_status="$?"
-              set -e
-              case "$branch_lookup_status" in
-                0) publication_base="$branch_candidate" ;;
-                2) ;;
-                *)
-                  echo "Unable to determine whether '${INPUT_REF}' is a remote branch (status ${branch_lookup_status})." >&2
-                  exit "$branch_lookup_status"
-                  ;;
-              esac
-            fi
-            git fetch --no-tags origin "+refs/heads/${publication_base}:refs/remotes/origin/${publication_base}"
-            publication_ref="refs/remotes/origin/${publication_base}"
-            if [[ "$floating_default_branch" == "true" && "$publication_base" == "$DEFAULT_BRANCH" ]]; then
-              selected_revision="$(git rev-parse "$publication_ref")"
-            fi
-            if ! git merge-base --is-ancestor "$selected_revision" "$publication_ref"; then
-              echo "Ref '${INPUT_REF}' is not an ancestor of pull request base '${publication_base}'." >&2
-              echo "Historical divergent refs remain available through artifact-only workflow calls." >&2
-              exit 1
-            fi
-            if ! git diff --quiet "$selected_revision" "$publication_ref" -- \
-              . \
-              ':(exclude)qa/maturity-scores.yaml' \
-              ':(exclude)docs/maturity/scorecard.md' \
-              ':(exclude)docs/maturity/taxonomy.md'; then
-              echo "Pull request base '${publication_base}' changed maturity inputs after '${INPUT_REF}' resolved." >&2
-              echo "Dispatch again from the latest base before generating release evidence." >&2
-              exit 1
-            fi
-            publication_key="$(printf '%s\n%s\n%s\n' \
-              "$EVIDENCE_RUN_ID" "$publication_base" "$selected_revision" | sha256sum | cut -c1-16)"
-            publication_head="automation/maturity-scorecard-${EVIDENCE_RUN_ID}-${publication_key}"
-          fi
-
-          echo "publication_base=$publication_base" >> "$GITHUB_OUTPUT"
-          echo "publication_head=$publication_head" >> "$GITHUB_OUTPUT"
-          echo "selected_revision=$selected_revision" >> "$GITHUB_OUTPUT"
-          echo "trusted_reason=$trusted_reason" >> "$GITHUB_OUTPUT"
-          {
-            echo "### Target"
-            echo
-            echo "- Requested ref: \`${INPUT_REF}\`"
-            echo "- Resolved SHA: \`$selected_revision\`"
-            echo "- Trust reason: \`$trusted_reason\`"
-            if [[ "$PUBLISH_PULL_REQUEST" == "true" ]]; then
-              echo "- Pull request base: \`$publication_base\`"
-              echo "- Automation branch: \`$publication_head\`"
-            else
-              echo "- Pull request: disabled for artifact-only rendering"
-            fi
-          } >> "$GITHUB_STEP_SUMMARY"
+          git("fetch", "--no-tags", "origin", "+refs/heads/main:refs/remotes/origin/main")
+          if not expected_sha.replace(" ", "") and branch_candidate == default_branch:
+              # Freeze fetched main before handing the immutable revision to reusable jobs.
+              floating_default_branch = True
+              selected_revision = revision("refs/remotes/origin/main")
+          if probe("merge-base", "--is-ancestor", selected_revision, "refs/remotes/origin/main"):
+              trusted_reason = "main-ancestor"
+          elif any(tag.startswith("v") for tag in git_output(workspace, "tag", "--points-at", selected_revision).splitlines()):
+              trusted_reason = "release-tag"
+          elif re.fullmatch(r"release/[0-9]{4}\.[0-9]+\.[0-9]+", branch_candidate):
+              git("fetch", "--no-tags", "origin", f"+refs/heads/{branch_candidate}:refs/remotes/origin/{branch_candidate}")
+              if selected_revision == revision(f"refs/remotes/origin/{branch_candidate}"):
+                  trusted_reason = "release-branch-head"
+          if not trusted_reason:
+              fail(f"Ref '{input_ref}' resolved to {selected_revision}, which is not trusted for this secret-bearing maturity scorecard run.",
+                   "Allowed refs must be on main, point to a release tag, or match a release branch head.")
+          if not re.fullmatch(r"[0-9]+", evidence_run_id):
+              fail("qa_evidence_run_id must be a numeric GitHub Actions run id.")
+          publication_base = default_branch
+          publication_head = ""
+          if publish_pull_request:
+              if (not input_ref.startswith("refs/tags/") and not re.fullmatch(r"[0-9a-fA-F]{40}", input_ref)
+                      and probe("check-ref-format", f"refs/heads/{branch_candidate}", quiet=True)):
+                  try:
+                      git("ls-remote", "--exit-code", "--heads", "origin", f"refs/heads/{branch_candidate}",
+                          timeout=60, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                      publication_base = branch_candidate
+                  except (GitFailure, FetchTimeout) as error:
+                      # Only a drained ordinary status 2 means absent; status collisions
+                      # cannot turn owner failure or cancellation into the default branch.
+                      code = 124 if isinstance(error, FetchTimeout) else error.code
+                      if code != 2:
+                          fail(f"Unable to determine whether '{input_ref}' is a remote branch (status {code}).", code=code)
+              publication_ref = f"refs/remotes/origin/{publication_base}"
+              git("fetch", "--no-tags", "origin", f"+refs/heads/{publication_base}:{publication_ref}")
+              if floating_default_branch and publication_base == default_branch:
+                  selected_revision = revision(publication_ref)
+              if not probe("merge-base", "--is-ancestor", selected_revision, publication_ref):
+                  fail(f"Ref '{input_ref}' is not an ancestor of pull request base '{publication_base}'.",
+                       "Historical divergent refs remain available through artifact-only workflow calls.")
+              if not probe("diff", "--quiet", selected_revision, publication_ref, "--", ".",
+                           ":(exclude)qa/maturity-scores.yaml", ":(exclude)docs/maturity/scorecard.md",
+                           ":(exclude)docs/maturity/taxonomy.md"):
+                  fail(f"Pull request base '{publication_base}' changed maturity inputs after '{input_ref}' resolved.",
+                       "Dispatch again from the latest base before generating release evidence.")
+              publication_key = hashlib.sha256(f"{evidence_run_id}\n{publication_base}\n{selected_revision}\n".encode()).hexdigest()[:16]
+              publication_head = f"automation/maturity-scorecard-{evidence_run_id}-{publication_key}"
+          check_cancelled()
+          with open(os.environ["GITHUB_OUTPUT"], "a") as output:
+              output.write(f"publication_base={publication_base}\npublication_head={publication_head}\nselected_revision={selected_revision}\ntrusted_reason={trusted_reason}\n")
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as output:
+              output.write(f"### Target\n\n- Requested ref: `{input_ref}`\n- Resolved SHA: `{selected_revision}`\n- Trust reason: `{trusted_reason}`\n")
+              if publish_pull_request:
+                  output.write(f"- Pull request base: `{publication_base}`\n- Automation branch: `{publication_head}`\n")
+              else:
+                  output.write("- Pull request: disabled for artifact-only rendering\n")
+          PYTHON
 
   publisher_preflight:
     name: Verify generated PR App permissions
@@ -806,11 +803,7 @@ jobs:
             qa/maturity-scores.yaml
             docs/maturity/scorecard.md
             docs/maturity/taxonomy.md
-          invalidation-paths: |
-            .
-            :(exclude)qa/maturity-scores.yaml
-            :(exclude)docs/maturity/scorecard.md
-            :(exclude)docs/maturity/taxonomy.md
+          invalidation-paths: ""
           overlap-policy: fail
           pr-body: |
             ## What Problem This Solves

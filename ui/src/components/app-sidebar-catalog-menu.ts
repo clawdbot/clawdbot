@@ -63,14 +63,12 @@ export class SidebarCatalogMenuController {
     if (!(element instanceof HTMLElement) || !this.isOpenFor(key)) {
       return;
     }
-    // A catalog refresh can replace the owning row while popup focus is elsewhere.
-    // Retarget only after the old trigger disconnects so dismissal has a live focus anchor.
+    // Catalog adoption replaces the trigger while popup focus is elsewhere.
     queueMicrotask(() => {
-      if (!element.isConnected || this.trigger?.isConnected || !this.isOpenFor(key)) {
-        return;
+      if (element.isConnected && !this.trigger?.isConnected && this.isOpenFor(key)) {
+        this.trigger = element;
+        this.hooks.requestUpdate();
       }
-      this.trigger = element;
-      this.hooks.requestUpdate();
     });
   }
 

@@ -7,8 +7,8 @@ import path from "node:path";
  * Covers approval registration ids, follow-up idempotency, and approved
  * node/gateway invocation behavior.
  */
-import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createRequireRecord } from "../../test/helpers/record.js";
 import {
   loadExecApprovals,
   saveExecApprovals,
@@ -35,6 +35,7 @@ vi.mock("./tools/nodes-utils.js", () => ({
     {
       nodeId: "node-1",
       commands: ["system.run", "system.run.prepare"],
+      connected: true,
       platform: "darwin",
     },
   ]),
@@ -719,6 +720,9 @@ describe("exec approvals", () => {
     vi.mocked(callGatewayTool).mockImplementation(async (method, _opts, params) => {
       if (method === "node.invoke") {
         const invoke = params as { command?: string };
+        if (invoke.command === "system.run.prepare") {
+          return buildPreparedSystemRunPayload(params);
+        }
         if (invoke.command === "system.run") {
           return { payload: { success: true, stdout: "node-ok" } };
         }
@@ -1622,7 +1626,8 @@ describe("exec approvals", () => {
 
     const approvalRequest = requireExecApprovalRequestCall();
     expect(approvalRequest.options.expectFinal).toBe(false);
-    expect(approvalRequest.params.suppressDelivery).toBe(true);
+    expect(approvalRequest.params.suppressDelivery).toBeUndefined();
+    expect(approvalRequest.params.deliverToApprovalClientsOnly).toBe(true);
     expect(
       vi
         .mocked(callGatewayTool)
@@ -1691,6 +1696,7 @@ describe("exec approvals", () => {
     expect(result.details.status).toBe("completed");
     expect(getResultText(result)).toContain("cron-node-ok");
     expect(requireExecApprovalRequestCall().params.suppressDelivery).toBe(true);
+    expect(requireExecApprovalRequestCall().params.deliverToApprovalClientsOnly).toBeUndefined();
     const systemRun = requireRecord(systemRunInvoke, "system.run invoke");
     expect(systemRun.command).toBe("system.run");
     const params = requireRecord(systemRun.params, "system.run params");
@@ -1722,7 +1728,8 @@ describe("exec approvals", () => {
         command: "echo cron-denied",
       }),
     ).rejects.toThrow("Automation runs cannot wait for interactive exec approval");
-    expect(requireExecApprovalRequestCall().params.suppressDelivery).toBe(true);
+    expect(requireExecApprovalRequestCall().params.suppressDelivery).toBeUndefined();
+    expect(requireExecApprovalRequestCall().params.deliverToApprovalClientsOnly).toBe(true);
   });
 
   it("denies node cron no-route approvals when askFallback is deny", async () => {
@@ -1761,6 +1768,7 @@ describe("exec approvals", () => {
       }),
     ).rejects.toThrow("Automation runs cannot wait for interactive exec approval");
     expect(requireExecApprovalRequestCall().params.suppressDelivery).toBe(true);
+    expect(requireExecApprovalRequestCall().params.deliverToApprovalClientsOnly).toBeUndefined();
     expect(
       vi
         .mocked(callGatewayTool)

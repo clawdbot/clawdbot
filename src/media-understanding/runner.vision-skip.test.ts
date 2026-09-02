@@ -231,45 +231,78 @@ describe("runCapability image skip", () => {
     );
   });
 
-  it("markers remote-url-only images instead of claiming native handoff", async () => {
-    await withMediaFixture(
-      {
-        filePrefix: "openclaw-image-url-only-no-handoff",
-        extension: "png",
-        mediaType: "image/png",
-        fileContents: Buffer.from("image"),
-      },
-      async ({ ctx, mediaPath }) => {
-        const msgCtx = ctx as MsgContext;
-        msgCtx.Body = "please inspect both images";
-        msgCtx.media = [
-          { path: mediaPath, contentType: "image/png" },
-          { url: "https://cdn.example.test/photos/second.png", contentType: "image/png" },
-        ];
+  it.each([
+    {
+      label: "selected",
+      policy: { mode: "all", maxAttachments: 4 },
+      selectedIndexes: [0, 1, 2, 3],
+    },
+    { label: "dropped by default", policy: undefined, selectedIndexes: [0] },
+    {
+      label: "dropped when preferring the last image",
+      policy: { mode: "all", maxAttachments: 1, prefer: "last" },
+      selectedIndexes: [3],
+    },
+  ] as const)(
+    "markers $label remote-url-only images instead of claiming native handoff",
+    async ({ policy, selectedIndexes }) => {
+      await withMediaFixture(
+        {
+          filePrefix: "openclaw-image-url-only-no-handoff",
+          extension: "png",
+          mediaType: "image/png",
+          fileContents: Buffer.from("image"),
+        },
+        async ({ ctx, mediaPath }) => {
+          const msgCtx = ctx as MsgContext;
+          msgCtx.Body = "please inspect these images";
+          msgCtx.media = [
+            { path: mediaPath, contentType: "image/png" },
+            { url: "https://cdn.example.test/photos/second.png", contentType: "image/png" },
+            { path: mediaPath, contentType: "image/png" },
+            { url: "media://inbound/fourth.png", contentType: "image/png" },
+          ];
 
-        const result = await applyMediaUnderstanding({
-          ctx: msgCtx,
-          cfg: {
-            tools: { media: { image: { attachments: { mode: "all", maxAttachments: 4 } } } },
-          } as unknown as OpenClawConfig,
-          agentDir: "/tmp",
-          workspaceDir: path.dirname(mediaPath),
-          activeModel: { provider: "openai", model: "gpt-4.1" },
-        });
+          const result = await applyMediaUnderstanding({
+            ctx: msgCtx,
+            cfg: {
+              tools: { media: { image: { attachments: policy } } },
+            },
+            agentDir: "/tmp",
+            workspaceDir: path.dirname(mediaPath),
+            activeModel: { provider: "openai", model: "gpt-4.1" },
+          });
 
-        const imageDecision = result.decisions.find((decision) => decision.capability === "image");
-        expect(imageDecision?.outcome).toBe("skipped");
-        expect(imageDecision?.attachmentDispositions).toMatchObject({
-          0: { kind: "handed-to-native-vision" },
-          1: { kind: "failed" },
-        });
-        // Local image stays suppressed (native hydration owns it); the
-        // remote-url image renders its failure despite nativeVisionActive.
-        expect(msgCtx.Body).toContain("[Image attachment could not be analyzed]");
-        expect(msgCtx.Body).not.toContain("not processed");
-      },
-    );
-  });
+          const imageDecision = result.decisions.find(
+            (decision) => decision.capability === "image",
+          );
+          expect(msgCtx.Body).toContain("[Image attachment could not be analyzed]");
+          expect(msgCtx.BodyForAgent).toContain("[Image attachment could not be analyzed]");
+          expect(imageDecision?.outcome).toBe("skipped");
+          expect(imageDecision?.attachments.map(({ attachmentIndex }) => attachmentIndex)).toEqual(
+            selectedIndexes,
+          );
+          expect(imageDecision?.attachmentDispositions).toEqual(
+            Object.fromEntries(
+              [0, 1, 2, 3].map((index) => [
+                index,
+                index === 1
+                  ? { kind: "failed", reason: "remote-url image is not natively deliverable" }
+                  : {
+                      kind: (selectedIndexes as readonly number[]).includes(index)
+                        ? "handed-to-native-vision"
+                        : "not-selected",
+                    },
+              ]),
+            ),
+          );
+          // Native hydration owns local paths and media-store refs, even when
+          // understanding drops them. Only the remote URL needs a failure marker.
+          expect(msgCtx.Body).not.toContain("not processed");
+        },
+      );
+    },
+  );
 
   it("runs explicit image models untouched by native-vision probe failure", async () => {
     await withMediaFixture(

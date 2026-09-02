@@ -56,7 +56,6 @@ const lowLevelHistoryHelpers = [
 const legacyReplyHistoryCompatibilityFiles = new Set([
   "extensions/mattermost/runtime-api.ts",
   "extensions/mattermost/src/mattermost/runtime-api.ts",
-  "extensions/mattermost/src/runtime-api.ts",
 ]);
 
 const skippedExtensionScanDirs = new Set([

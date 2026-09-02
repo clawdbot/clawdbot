@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" role="img" aria-label="Unknown file overlay">
+  <circle cx="12" cy="12" r="8" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M9.75 9.25A2.4 2.4 0 0 1 12.1 7.5c1.45 0 2.65.92 2.65 2.25 0 1.55-1.28 2.03-2.15 2.72-.47.37-.6.73-.6 1.28" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="12" cy="17" r="1.1" fill="currentColor"/>
+</svg>

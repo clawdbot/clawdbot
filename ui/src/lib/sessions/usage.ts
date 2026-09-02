@@ -4,7 +4,7 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 
 type SessionRequestClient = Pick<GatewayBrowserClient, "request">;
 
-type SessionUsageQuery = {
+export type SessionUsageQuery = {
   startDate: string;
   endDate: string;
   scope: "instance" | "family";
@@ -33,23 +33,44 @@ export function buildSessionUsageDateParams(timeZone: "local" | "utc") {
       };
 }
 
-function buildSessionUsageParams(query: SessionUsageQuery): Record<string, unknown> {
+function buildSessionUsageParams(query: SessionUsageQuery, key?: string): Record<string, unknown> {
   return {
     startDate: query.startDate,
     endDate: query.endDate,
-    ...(query.agentId ? { agentId: query.agentId } : { agentScope: "all" }),
+    ...(query.agentId ? { agentId: query.agentId } : key ? {} : { agentScope: "all" }),
     ...buildSessionUsageDateParams(query.timeZone),
     groupBy: query.scope,
-    limit: 1000,
-    includeContextWeight: true,
+    ...(key ? { key, limit: 1 } : { limit: 1000 }),
+    includeContextWeight: false,
   };
 }
 
 export function requestSessionUsage(
   client: SessionRequestClient,
   query: SessionUsageQuery,
+  options?: { key?: string; includeContextWeight?: boolean; signal?: AbortSignal },
 ): Promise<SessionsUsageResult> {
-  return client.request<SessionsUsageResult>("sessions.usage", buildSessionUsageParams(query));
+  const params = {
+    ...buildSessionUsageParams(query, options?.key),
+    includeContextWeight: options?.includeContextWeight === true,
+  };
+  return options?.signal
+    ? client.request<SessionsUsageResult>("sessions.usage", params, { signal: options.signal })
+    : client.request<SessionsUsageResult>("sessions.usage", params);
+}
+
+export async function requestSessionUsageContextWeight(
+  client: SessionRequestClient,
+  query: SessionUsageQuery,
+  key: string,
+  signal: AbortSignal,
+) {
+  const result = await requestSessionUsage(client, query, {
+    key,
+    includeContextWeight: true,
+    signal,
+  });
+  return result.sessions[0]?.contextWeight;
 }
 
 export function requestSessionUsageTimeSeries(

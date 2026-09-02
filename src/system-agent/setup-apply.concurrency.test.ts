@@ -1,109 +1,76 @@
 import fs from "node:fs/promises";
-import path from "node:path";
-import { withTempHome } from "openclaw/plugin-sdk/test-env";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { resolveAgentDir } from "../agents/agent-scope.js";
+import * as onboarding from "../commands/onboard-agent.js";
 import { readConfigFileSnapshot, resetConfigRuntimeState } from "../config/config.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
+import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { applySystemAgentSetup } from "./setup-apply.js";
 
 const runtime: RuntimeEnv = {
   log: () => {},
   error: () => {},
-  exit: ((code: number) => {
+  exit: (code) => {
     throw new Error(`exit:${code}`);
-  }) as RuntimeEnv["exit"],
+  },
 };
-
-const sourceConfig = {
-  agents: { defaults: { model: "openai/gpt-5.5" } },
-} satisfies OpenClawConfig;
-
-async function writeConcurrentRoster(pathname: string, agentId: string): Promise<void> {
-  await fs.writeFile(
-    pathname,
-    JSON.stringify({
-      agents: {
-        defaults: { model: "openai/gpt-5.5" },
-        entries: { [agentId]: {} },
-      },
-    }),
-  );
-  resetConfigRuntimeState();
-}
-
-async function writeInitialConfig() {
-  const absent = await readConfigFileSnapshot();
-  await fs.mkdir(path.dirname(absent.path), { recursive: true });
-  await fs.writeFile(absent.path, JSON.stringify(sourceConfig));
-  resetConfigRuntimeState();
-  return await readConfigFileSnapshot();
-}
+const model = "openai/gpt-5.6-luna";
 
 afterEach(() => {
+  vi.restoreAllMocks();
   resetConfigRuntimeState();
 });
 
 describe("applySystemAgentSetup first-agent concurrency", () => {
-  it("rejects a same-route agent switch after the controlled first-agent handoff", async () => {
-    await withTempHome(async () => {
-      const initial = await writeInitialConfig();
-      const initialRuntime = initial.runtimeConfig ?? initial.config;
-      let commitCount = 0;
+  it.each([
+    { phase: "before", agentId: "concurrent", error: /config changed before first-agent creation/ },
+    { phase: "after", agentId: "other", error: /config changed|default agent changed/ },
+  ] as const)(
+    "rejects a roster changed $phase first-agent creation",
+    async ({ phase, agentId, error }) => {
+      const state = await createOpenClawTestState({ label: "setup-first-agent-race" });
+      try {
+        await state.writeConfig({ agents: { defaults: { model } } });
+        const initial = await readConfigFileSnapshot();
+        const initialRuntime = initial.runtimeConfig ?? initial.config;
+        const ensureOnboardingAgent = onboarding.ensureOnboardingAgent;
+        const replaceRoster = async () => {
+          await state.writeConfig({ agents: { defaults: { model }, entries: { [agentId]: {} } } });
+          resetConfigRuntimeState();
+        };
+        vi.spyOn(onboarding, "ensureOnboardingAgent").mockImplementationOnce(async (params) => {
+          if (phase === "before") {
+            await replaceRoster();
+          }
+          const created = await ensureOnboardingAgent(params);
+          if (phase === "after") {
+            await replaceRoster();
+          }
+          return created;
+        });
 
-      await expect(
-        applySystemAgentSetup(
-          {
-            workspace: "/tmp/openclaw-first-agent-race",
+        await expect(
+          applySystemAgentSetup({
+            workspace: state.workspaceDir,
             firstAgent: { name: "robby" },
             expectedAgentId: "main",
             expectedAgentDir: resolveAgentDir(initialRuntime, "main"),
-            expectedModelRef: "openai/gpt-5.5",
-            surface: "gateway",
-            runtime,
-          },
-          {
-            commit: async (effect) => {
-              commitCount += 1;
-              if (commitCount === 2) {
-                await writeConcurrentRoster(initial.path, "other");
-              }
-              return await effect();
-            },
-          },
-        ),
-      ).rejects.toThrow(/config changed|default agent changed/);
-
-      const after = await readConfigFileSnapshot();
-      expect(after.sourceConfig?.agents?.entries).toEqual({ other: {} });
-    });
-  });
-
-  it("rejects a roster written before the conditional first-agent create", async () => {
-    await withTempHome(async () => {
-      const initial = await writeInitialConfig();
-
-      await expect(
-        applySystemAgentSetup(
-          {
-            workspace: "/tmp/openclaw-first-agent-race",
-            firstAgent: { name: "robby" },
+            expectedModelRef: model,
             expectedConfigHash: initial.hash ?? null,
             surface: "gateway",
             runtime,
-          },
-          {
-            commit: async (effect) => {
-              await writeConcurrentRoster(initial.path, "concurrent");
-              return await effect();
-            },
-          },
-        ),
-      ).rejects.toThrow("config changed before first-agent creation");
+          }),
+        ).rejects.toThrow(error);
 
-      const after = await readConfigFileSnapshot();
-      expect(after.sourceConfig?.agents?.entries).toEqual({ concurrent: {} });
-    });
-  });
+        const after: unknown = JSON.parse(await fs.readFile(state.configPath, "utf8"));
+        expect(after).toHaveProperty("agents.entries", { [agentId]: {} });
+      } finally {
+        closeOpenClawAgentDatabasesForTest();
+        closeOpenClawStateDatabaseForTest();
+        await state.cleanup();
+      }
+    },
+  );
 });

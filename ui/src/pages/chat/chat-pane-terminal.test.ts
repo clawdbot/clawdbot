@@ -43,6 +43,7 @@ describe("chat pane terminal action", () => {
             false,
             undefined,
             false,
+            null,
           ),
           container,
         );
@@ -106,6 +107,7 @@ describe("chat pane terminal action", () => {
         false,
         undefined,
         false,
+        null,
       ),
       container,
     );
@@ -144,6 +146,7 @@ describe("chat pane terminal action", () => {
           false,
           undefined,
           false,
+          null,
         ),
         container,
       );
@@ -182,6 +185,7 @@ describe("chat pane terminal action", () => {
           false,
           undefined,
           false,
+          null,
         ),
         container,
       );
@@ -208,6 +212,7 @@ describe("chat pane terminal action", () => {
           false,
           undefined,
           false,
+          null,
         ),
         container,
       );
@@ -233,17 +238,6 @@ describe("chat pane terminal action", () => {
           name: "node",
           session: { ...localSession, execNode: "  paired-node  " },
         },
-        {
-          name: "reclaimed",
-          session: {
-            ...localSession,
-            execNode: " reclaimed-node ",
-            placement: {
-              state: "reclaimed",
-              environmentId: "former-worker",
-            } as GatewaySessionRow["placement"],
-          },
-        },
       ];
       for (const testCase of targetCases) {
         renderDesktopHeader(testCase.session);
@@ -257,13 +251,18 @@ describe("chat pane terminal action", () => {
         onToggleDesktop.mockClear();
       }
 
-      renderDesktopHeader({
-        ...localSession,
-        execNode: "must-not-fall-back",
-        placement: { state: "requested" } as GatewaySessionRow["placement"],
-      });
-      expect(container.querySelector('[aria-label="Toggle desktop panel"]')).toBeNull();
-      expect(panelActionIds()).not.toContain("desktop");
+      for (const placement of [
+        { state: "requested" },
+        { state: "reclaimed", environmentId: "former-worker" },
+      ]) {
+        renderDesktopHeader({
+          ...localSession,
+          execNode: "must-not-fall-back",
+          placement: placement as GatewaySessionRow["placement"],
+        });
+        expect(container.querySelector('[aria-label="Toggle desktop panel"]')).toBeNull();
+        expect(panelActionIds()).not.toContain("desktop");
+      }
 
       renderDesktopHeader(undefined);
       expect(container.querySelector('[aria-label="Toggle desktop panel"]')).toBeNull();
@@ -298,6 +297,7 @@ describe("chat pane terminal action", () => {
           false,
           undefined,
           false,
+          null,
         ),
         container,
       );
@@ -325,6 +325,7 @@ describe("chat pane terminal action", () => {
         false,
         undefined,
         false,
+        null,
       ),
       container,
     );
