@@ -3780,6 +3780,7 @@
     {"id":"native.apple.94ceefa933744b07","source":"Speech error: %@","surface":"apple","sites":[{"kind":"ui-localized-call","path":"apps/ios/Sources/Voice/TalkModeManager.swift"}]},
     {"id":"native.apple.d33742884171fcb6","source":"Speech recognition","surface":"apple","sites":[{"kind":"ui-localized-call","path":"apps/ios/Sources/Voice/TalkModeManager.swift"},{"kind":"ui-localized-call","path":"apps/ios/Sources/Voice/VoiceWakeManager.swift"}]},
     {"id":"native.apple.aed8b232944118ee","source":"Speech recognizer unavailable","surface":"apple","sites":[{"kind":"ui-localized-call","path":"apps/ios/Sources/Voice/VoiceWakeManager.swift"}]},
+    {"id":"native.apple.9cd3d02a42d41ca0","source":"Spoken reply timed out. Check Chat on iPhone.","surface":"apple","sites":[{"kind":"ui-localized-call","path":"apps/ios/WatchApp/Sources/WatchVoiceTurnTracker.swift"}]},
     {"id":"native.apple.875f9991a9ec5b8b","source":"Stable","surface":"apple","sites":[{"kind":"conditional-branch","path":"apps/macos/Sources/OpenClaw/CLIInstaller.swift"}]},
     {"id":"native.apple.e743425f84b8c003","source":"Stagger (milliseconds)","surface":"apple","sites":[{"kind":"ui-localized-call","path":"apps/ios/Sources/Design/AgentAutomationDetailScreen.swift"}]},
     {"id":"native.apple.44c771ed7cd80202","source":"Stagger must be a non-negative number of milliseconds.","surface":"apple","sites":[{"kind":"ui-localized-call","path":"apps/ios/Sources/Design/AgentAutomationModels.swift"}]},

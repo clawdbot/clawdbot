@@ -192,6 +192,7 @@ import WatchKit
     {
         self.defaults = defaults
         self.restorePersistedState()
+        self.expireVoiceTurnIfNeeded(nowMs: Self.nowMs())
         if [self.replyStatus?.code, self.appSnapshotStatus?.code, self.appCommandStatus?.code].contains(.sending) {
             // Attempt ownership never survives app restoration, so interrupted sends must be retryable.
             if self.replyStatus?.code == .sending {
@@ -1420,7 +1421,6 @@ extension WatchInboxStore {
             ?? state.appCommandStatusText.flatMap(
                 WatchAppCommandStatus.decodeLegacyLocalizedText)
         self.voiceTurnState = state.voiceTurnState ?? WatchVoiceTurnState()
-        self.voiceTurnState.expireIfNeeded(nowMs: Self.nowMs())
         self.deferredGatewayPayloads = Array(
             (state.deferredGatewayPayloads ?? []).suffix(Self.maxDeferredGatewayPayloads))
         self.execApprovalTerminalTombstones = state.execApprovalTerminalTombstones ?? []
