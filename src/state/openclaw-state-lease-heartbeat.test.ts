@@ -148,7 +148,7 @@ describe("maintenance lease heartbeat", () => {
         const spawned = once(process, "worker") as Promise<[Worker]>;
         let retained: OpenClawStateLeaseContext | undefined;
         const operation = withOpenClawStateLease(
-          options(state.env, controller.signal),
+          { ...options(state.env, controller.signal), leaseMs: 10_000 },
           async (lease) => {
             retained = lease;
             if (ending === "abort") {
