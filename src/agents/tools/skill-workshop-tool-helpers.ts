@@ -1,6 +1,7 @@
 import { autonomousSkillSizeError } from "../../skills/workshop/collection-contracts.js";
 import {
   readProposalFrontmatter,
+  resolveSkillProposalName,
   stripProposalFrontmatterForSkill,
 } from "../../skills/workshop/frontmatter.js";
 import { prepareSkillProposalDraft } from "../../skills/workshop/proposal-draft.js";
@@ -102,7 +103,7 @@ function completionResult() {
 }
 
 export function proposalMutationText(action: string, record: SkillProposalRecord): string {
-  return `${action} ${record.id} (${record.status}) for ${record.target.skillKey}.`;
+  return `${action} ${record.id} (${record.status}) for ${resolveSkillProposalName(record.kind, record.target)}.`;
 }
 
 export function actionResult(
