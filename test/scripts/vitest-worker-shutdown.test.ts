@@ -52,7 +52,10 @@ it
       const compilerCanceled = path.join(root, "compiler-canceled");
       const admitted = path.join(root, "verification-ready");
       const borrowerClosed = path.join(root, "borrower-closed");
-      const signaled = path.join(root, "signal-observed");
+      const borrowerExit = path.join(root, "borrower-exit");
+      const ownerIdle = path.join(root, "owner-idle");
+      const loopRequest = path.join(root, "loop-request");
+      const responsive = path.join(root, "loop-responsive");
       const abort = new AbortController();
       const release = () => fs.writeFileSync(released, "release");
       const compiler = writeFixture(
@@ -89,13 +92,17 @@ fs.writeFileSync(path.join(directory,'manifest.json'),JSON.stringify({
         root,
         "borrower.mjs",
         `
+import fs from 'node:fs';
 import {requestVitestWorkerArtifacts} from ${JSON.stringify(pathToFileURL(path.join(repoRoot, "scripts/lib/vitest-worker-artifacts.mts")).href)};
+const exitWatcher=${JSON.stringify(phase)}==='admission' ? fs.watch(${JSON.stringify(root)},()=>{
+  if(fs.existsSync(${JSON.stringify(borrowerExit)})) process.exit(1);
+}) : undefined;
 try {
   await requestVitestWorkerArtifacts();
   console.log('fixture borrower completed');
 } catch(error) {
   console.error(error);process.exitCode=1;
-} finally {process.disconnect();}
+} finally {exitWatcher?.close();process.disconnect();}
 `,
       );
       const preload = writeFixture(
@@ -125,13 +132,20 @@ cp.spawn=(bin,args,options)=>{
   const bootstrap=args.indexOf(${JSON.stringify(path.join(repoRoot, "scripts/lib/vitest-worker-bootstrap.mts"))});
   if(bootstrap<0) return spawn(bin,args,options);
   const child=spawn(bin,[${JSON.stringify(borrower)}],options);
-  child.once('close',()=>{borrowerClosed=true;publish('borrower-closed',{pid:child.pid});});
+  child.once('close',(code,signal)=>{borrowerClosed=true;publish('borrower-closed',{pid:child.pid,code,signal});});
   generation=args[bootstrap+1];
   publish('owner.json',{owner:process.pid,borrower:child.pid,generation});
   return child;
 };
+// Node can cache process.emit before a preload replaces it. Probe held I/O
+// directly; adding a signal listener could rescue a broken wrapper instead.
 const waitForRelease=()=>new Promise(resolve=>{
+  let idle=false, responsive=false;
   const check=()=>{
+    if(borrowerClosed && !idle) {idle=true;publish('owner-idle',{owner:process.pid});}
+    if(!responsive && fs.existsSync(${JSON.stringify(loopRequest)})) {
+      responsive=true;publish('loop-responsive',{owner:process.pid});
+    }
     if(fs.existsSync(${JSON.stringify(released)})) {watcher.close();resolve();}
   };
   const watcher=fs.watch(root,check);
@@ -163,14 +177,6 @@ fs.rmSync=(filename,...args)=>{
     while(!fs.existsSync(${JSON.stringify(released)})) Atomics.wait(wait,0,0,10);
   }
   return rmSync(filename,...args);
-};
-// Observe delivery without adding a signal listener: a missing wrapper handler
-// must still take Node's default termination path, not be rescued by this fixture.
-const emit=process.emit;
-process.emit=function(event,...args) {
-  const result=emit.call(this,event,...args);
-  if(event===${JSON.stringify(shutdownSignal)} && borrowerClosed) publish('signal-observed',{owner:process.pid});
-  return result;
 };
 syncBuiltinESMExports();
 `,
@@ -242,16 +248,24 @@ syncBuiltinESMExports();
         } else {
           expect(JSON.parse(fs.readFileSync(admitted, "utf8"))).toEqual({ owner: owner.owner });
           if (phase === "admission") {
-            process.kill(owner.borrower, shutdownSignal);
+            // An ordinary borrower failure cannot supply the owner's signal status.
+            // Observe a loop turn after close before interrupting the retained owner.
+            fs.writeFileSync(borrowerExit, "exit");
             await waitForReceipt(borrowerClosed);
+            expect(JSON.parse(fs.readFileSync(borrowerClosed, "utf8"))).toMatchObject({
+              code: 1,
+              signal: null,
+            });
+            await waitForReceipt(ownerIdle);
           }
           expect(isProcessAlive(owner.borrower)).toBe(false);
           expect(isProcessAlive(compilerPid)).toBe(false);
           expect(fs.existsSync(path.join(owner.generation, "manifest.json"))).toBe(true);
 
           process.kill(owner.owner, shutdownSignal);
-          await waitForReceipt(signaled);
-          expect(JSON.parse(fs.readFileSync(signaled, "utf8"))).toEqual({ owner: owner.owner });
+          fs.writeFileSync(loopRequest, "probe");
+          await waitForReceipt(responsive);
+          expect(JSON.parse(fs.readFileSync(responsive, "utf8"))).toEqual({ owner: owner.owner });
           expect(isProcessAlive(owner.owner)).toBe(true);
           expect(fs.existsSync(owner.generation)).toBe(true);
           expect(fs.existsSync(released)).toBe(false);
