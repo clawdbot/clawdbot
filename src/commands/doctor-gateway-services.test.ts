@@ -108,7 +108,9 @@ vi.mock("../daemon/service-audit.js", () => ({
     gatewayRuntimeProbeFailed: "gateway-runtime-probe-failed",
     gatewayTokenDrift: "gateway-token-drift",
     gatewayTokenEmbedded: "gateway-token-embedded",
+    gatewayPasswordEmbedded: "gateway-password-embedded",
     gatewayTokenMismatch: testServiceAuditCodes.gatewayTokenMismatch,
+    systemdUnitBackupUnsafe: "systemd-unit-backup-unsafe",
   },
 }));
 
@@ -523,6 +525,33 @@ describe("maybeRepairGatewayServiceConfig", () => {
       "service management skipped: non-default state dir or config path",
       "Gateway",
     );
+  });
+
+  it("reports an orphaned unsafe systemd backup without an active service command", async () => {
+    mocks.readCommand.mockResolvedValue(null);
+    mocks.auditGatewayServiceConfig.mockResolvedValue({
+      ok: false,
+      issues: [
+        {
+          code: "systemd-unit-backup-unsafe",
+          message: "Systemd service backup exposes gateway credentials.",
+          detail: "/home/test/.config/systemd/user/openclaw-gateway.service.bak",
+          level: "recommended",
+        },
+      ],
+    });
+
+    await runRepair({ gateway: {} });
+
+    expect(mocks.auditGatewayServiceConfig).toHaveBeenCalledWith(
+      expect.objectContaining({ command: null, platform: process.platform }),
+    );
+    expectNoteContaining(
+      "Systemd service backup exposes gateway credentials",
+      "Gateway service config",
+    );
+    expect(mocks.stage).not.toHaveBeenCalled();
+    expect(mocks.install).not.toHaveBeenCalled();
   });
 
   it("treats gateway.auth.token as source of truth for service token repairs", async () => {
