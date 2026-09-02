@@ -1,6 +1,8 @@
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { RealtimeVoiceResponseOutcome } from "openclaw/plugin-sdk/realtime-voice";
+import { withTimeout } from "openclaw/plugin-sdk/text-utility-runtime";
 import { describe, expect, it } from "vitest";
 import type WebSocket from "ws";
 import { WebSocketServer } from "ws";
@@ -20,38 +22,15 @@ type CaptureRealtimeOutcomeOptions = {
   throwOnResponseDone?: boolean;
 };
 
-async function waitForFixtureEvent(promise: Promise<void>, label: string): Promise<void> {
-  let timeout: ReturnType<typeof setTimeout> | undefined;
-  try {
-    await Promise.race([
-      promise,
-      new Promise<never>((_, reject) => {
-        timeout = setTimeout(() => reject(new Error(`timed out waiting for ${label}`)), 2_000);
-      }),
-    ]);
-  } finally {
-    clearTimeout(timeout);
-  }
-}
-
 async function captureRealtimeOutcome(
   eventInput: Record<string, unknown> | Record<string, unknown>[],
   options: CaptureRealtimeOutcomeOptions = {},
 ): Promise<RealtimeOutcome> {
   const events = Array.isArray(eventInput) ? eventInput : [eventInput];
   const outcome: RealtimeOutcome = { errors: [], outcomes: [], transcripts: [], tools: [] };
-  let markServerEventHandled: () => void = () => {};
-  const serverEventHandled = new Promise<void>((resolve) => {
-    markServerEventHandled = resolve;
-  });
-  let markResponseCreatedHandled: () => void = () => {};
-  const responseCreatedHandled = new Promise<void>((resolve) => {
-    markResponseCreatedHandled = resolve;
-  });
-  let markQueuedResponseCompleted: () => void = () => {};
-  const queuedResponseCompleted = new Promise<void>((resolve) => {
-    markQueuedResponseCompleted = resolve;
-  });
+  const serverEventHandled = createDeferred<void>();
+  const responseCreatedHandled = createDeferred<void>();
+  const queuedResponseCompleted = createDeferred<void>();
   const server = createServer();
   const sockets = new Set<WebSocket>();
   let queuedTurnTriggered = false;
@@ -75,7 +54,7 @@ async function captureRealtimeOutcome(
               }),
             );
           }
-          markServerEventHandled();
+          serverEventHandled.resolve();
           return;
         }
         if (
@@ -114,7 +93,7 @@ async function captureRealtimeOutcome(
     onResponseDone: (responseOutcome) => {
       outcome.outcomes.push(responseOutcome);
       if (responseOutcome.responseId === "response_2") {
-        markQueuedResponseCompleted();
+        queuedResponseCompleted.resolve();
       }
       if (options.throwOnResponseDone && responseOutcome.responseId === "response_1") {
         throw new Error("consumer callback failed");
@@ -124,11 +103,11 @@ async function captureRealtimeOutcome(
     onToolCall: (tool) => outcome.tools.push(tool),
     onEvent: (observed) => {
       if (observed.direction === "server" && observed.type === "response.created") {
-        markResponseCreatedHandled();
+        responseCreatedHandled.resolve();
       }
       if (observed.direction === "server" && observed.type === events.at(-1)?.type) {
         if (!options.queuedUserMessage) {
-          markServerEventHandled();
+          serverEventHandled.resolve();
         }
       }
     },
@@ -137,14 +116,20 @@ async function captureRealtimeOutcome(
   try {
     await bridge.connect();
     if (options.queuedUserMessage) {
-      await waitForFixtureEvent(responseCreatedHandled, "response.created");
+      await withTimeout(responseCreatedHandled.promise, 2_000, {
+        message: "timed out waiting for response.created",
+      });
       bridge.sendUserMessage?.(options.queuedUserMessage);
-      await waitForFixtureEvent(serverEventHandled, "the queued response.create");
+      await withTimeout(serverEventHandled.promise, 2_000, {
+        message: "timed out waiting for the queued response.create",
+      });
       if (options.completeQueuedResponse) {
-        await waitForFixtureEvent(queuedResponseCompleted, "the completed queued response");
+        await withTimeout(queuedResponseCompleted.promise, 2_000, {
+          message: "timed out waiting for the completed queued response",
+        });
       }
     } else {
-      await serverEventHandled;
+      await serverEventHandled.promise;
     }
     return outcome;
   } finally {

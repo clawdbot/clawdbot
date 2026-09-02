@@ -71,6 +71,30 @@ function openclawTranscriptAssistant(model: "delivery-mirror" | "gateway-injecte
 }
 
 describe("normalizeAssistantReplayContent", () => {
+  it("removes persisted attachment display blocks before model replay", () => {
+    const damaged = bedrockAssistant(
+      [
+        { type: "text", text: "Slides ready" },
+        { type: "attachment", attachment: { label: "slides.pptx" } },
+        { type: "attachment_error", attachment: { label: "missing.txt" } },
+      ],
+      "stop",
+      { output: 1, totalTokens: 1 },
+    );
+
+    expect(normalizeAssistantReplayContent([damaged, userMessage("continue")])).toEqual([
+      { ...damaged, content: [{ type: "text", text: "Slides ready" }] },
+      userMessage("continue"),
+    ]);
+  });
+
+  it("preserves unknown assistant blocks outside the managed display contract", () => {
+    const unknown = { customType: "legacy_data", data: "preserve me" };
+    const message = bedrockAssistant([unknown], "stop", { output: 1, totalTokens: 1 });
+
+    expect(normalizeAssistantReplayContent([message])).toEqual([message]);
+  });
+
   it("keeps bare marked late-media turns alive while rejecting whitespace-only media fields", () => {
     const blankString = {
       role: "user",
@@ -369,10 +393,8 @@ describe("normalizeAssistantReplayContent", () => {
     ]);
   });
 
-  it.each([
-    ["tool calls", { type: "toolCall", id: "call_1", name: "exec", arguments: {} }],
-    ["unknown blocks", { customType: "legacy_data", data: "preserve me" }],
-  ])("preserves silent-reply turns with %s", (_label, companion) => {
+  it("preserves silent-reply turns with tool calls", () => {
+    const companion = { type: "toolCall", id: "call_1", name: "exec", arguments: {} };
     const messages = [
       userMessage("hi"),
       bedrockAssistant(

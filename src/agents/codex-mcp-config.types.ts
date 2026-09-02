@@ -26,6 +26,8 @@ export type CodexBundleMcpThreadConfig = {
 /** Inputs used to load a Codex bundle-MCP thread config patch. */
 export type LoadCodexBundleMcpThreadConfigParams = {
   workspaceDir: string;
+  /** Read-only initialization cannot provision data directories or requester transports. */
+  preparationOnly?: true;
   cfg?: OpenClawConfig;
   toolsEnabled?: boolean;
   disableTools?: boolean;

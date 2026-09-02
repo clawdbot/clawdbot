@@ -27,6 +27,7 @@ import {
   resolveOwningPluginIdsForProviderRef,
 } from "./providers.js";
 import { getActivePluginRegistryWorkspaceDir } from "./runtime.js";
+import { getPluginRuntimeGenerationRegistry } from "./runtime/generation-scope.js";
 import {
   buildPluginRuntimeLoadOptionsFromValues,
   createPluginRuntimeLoaderLogger,
@@ -342,23 +343,32 @@ export function resolvePluginProvidersCore(params: {
     );
   }
   const loadState = resolveRuntimeProviderPluginLoadState(params, base, snapshot);
-  if (params.skipIfLoadInFlight && isPluginRegistryLoadInFlight(loadState.loadOptions)) {
+  const generationRegistry = getPluginRuntimeGenerationRegistry();
+  if (
+    !generationRegistry &&
+    params.skipIfLoadInFlight &&
+    isPluginRegistryLoadInFlight(loadState.loadOptions)
+  ) {
     return [];
   }
+  const onlyPluginIds = loadState.loadOptions.onlyPluginIds;
+  // Prepared discovery must retain its exact runtime artifacts, including an empty selection.
   const registry =
-    loadState.loadOptions.onlyPluginIds?.length === 0
+    onlyPluginIds?.length === 0
       ? undefined
-      : (getLoadedRuntimePluginRegistry({
+      : (generationRegistry ??
+        getLoadedRuntimePluginRegistry({
           env: base.env,
           loadOptions: loadState.loadOptions,
           workspaceDir: base.workspaceDir,
-          requiredPluginIds: loadState.loadOptions.onlyPluginIds,
-        }) ?? getRuntimePluginRegistryForLoadOptions(loadState.loadOptions));
+          requiredPluginIds: onlyPluginIds,
+        }) ??
+        getRuntimePluginRegistryForLoadOptions(loadState.loadOptions));
   if (!registry) {
     return [];
   }
 
-  return registry.providers.map((entry) =>
-    Object.assign({}, entry.provider, { pluginId: entry.pluginId }),
-  );
+  return registry.providers
+    .filter((entry) => !onlyPluginIds || onlyPluginIds.includes(entry.pluginId))
+    .map((entry) => Object.assign({}, entry.provider, { pluginId: entry.pluginId }));
 }

@@ -444,7 +444,6 @@ describe("wrapCopilotAnthropicStream", () => {
     try {
       const stream = await requireStreamFn(wrapCopilotTestStream(streamSimple))(model, context, {
         apiKey: "copilot-token",
-        maxRetries: 0,
         headers: { "COPILOT-INTEGRATION-ID": "caller-identity" },
       });
       const result = await stream.result();

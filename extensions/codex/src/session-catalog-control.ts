@@ -25,6 +25,7 @@ import { requestCodexAppServerClientJson } from "./app-server/request.js";
 import {
   getLeasedSharedCodexAppServerClient,
   releaseLeasedSharedCodexAppServerClient,
+  retireSharedCodexAppServerClientIfCurrent,
 } from "./app-server/shared-client.js";
 import { withTimeout } from "./app-server/timeout.js";
 import { codexControlRequest } from "./command-rpc.js";
@@ -86,9 +87,12 @@ type CodexSessionCatalogRequestSnapshot = {
   requestTimeoutMs: number;
   listThreads(params: CodexThreadListParams, timeoutMs: number): Promise<CodexThreadListResponse>;
   listThreadTurns(params: CodexThreadTurnsListParams): Promise<CodexThreadTurnsListResponse>;
-  forkThread(params: CodexThreadForkParams): Promise<CodexThreadForkResponse>;
+  forkThread(
+    params: CodexThreadForkParams,
+    assertCurrent?: () => void,
+  ): Promise<CodexThreadForkResponse>;
   readThread(threadId: string, includeTurns: boolean, timeoutMs?: number): Promise<CodexThread>;
-  archiveThread(threadId: string): Promise<void>;
+  archiveThread(threadId: string, assertCurrent?: () => void): Promise<void>;
 };
 
 type CodexCatalogRequestMethod =
@@ -102,6 +106,7 @@ type CodexCatalogRequest = <M extends CodexCatalogRequestMethod>(
   method: M,
   requestParams: CodexAppServerRequestParams<M>,
   timeoutMs?: number,
+  assertCurrent?: () => void,
 ) => Promise<CodexAppServerRequestResult<M>>;
 
 function createCodexCatalogRequestSnapshot(
@@ -113,19 +118,26 @@ function createCodexCatalogRequestSnapshot(
     listThreads: (params, timeoutMs) =>
       request(CODEX_CONTROL_METHODS.listThreads, params, timeoutMs),
     listThreadTurns: (params) => request(CODEX_CONTROL_METHODS.listThreadTurns, params),
-    forkThread: (params) =>
-      request(CODEX_CONTROL_METHODS.forkThread, assertCodexThreadForkParams(params)),
+    forkThread: (params, assertCurrent) =>
+      request(
+        CODEX_CONTROL_METHODS.forkThread,
+        assertCodexThreadForkParams(params),
+        undefined,
+        assertCurrent,
+      ),
     readThread: async (threadId, includeTurns, timeoutMs) =>
       (await request(CODEX_CONTROL_METHODS.readThread, { threadId, includeTurns }, timeoutMs))
         .thread,
-    archiveThread: async (threadId) => {
-      await request(CODEX_CONTROL_METHODS.archiveThread, { threadId });
+    archiveThread: async (threadId, assertCurrent) => {
+      await request(CODEX_CONTROL_METHODS.archiveThread, { threadId }, undefined, assertCurrent);
     },
   };
 }
 
 function createCodexSessionCatalogControlFromRequests(params: {
+  forkContext?: CodexSessionCatalogControl["forkContext"];
   clientId?: string;
+  retireConnection?: () => void;
   connectionFingerprint?: string;
   createRequestSnapshot: () => CodexSessionCatalogRequestSnapshot;
   localSessionsRoot?: string;
@@ -135,6 +147,7 @@ function createCodexSessionCatalogControlFromRequests(params: {
   withPinnedConnection: CodexSessionCatalogControl["withPinnedConnection"];
 }): CodexSessionCatalogControl {
   return {
+    forkContext: params.forkContext,
     ...(params.clientId ? { clientId: params.clientId } : {}),
     ...(params.connectionFingerprint
       ? { connectionFingerprint: params.connectionFingerprint }
@@ -233,6 +246,7 @@ function createCodexSessionCatalogControlFromRequests(params: {
         unverified,
       );
     },
+    retireConnection: params.retireConnection,
     async listPage(pageParams) {
       const limit = normalizeLimit(pageParams.limit, "limit");
       // App Server search also matches transcript previews. Scan native pages
@@ -319,11 +333,11 @@ function createCodexSessionCatalogControlFromRequests(params: {
       const response = await params.createRequestSnapshot().listThreadTurns(listParams);
       return response;
     },
-    async forkThread(forkParams) {
-      return await params.createRequestSnapshot().forkThread(forkParams);
+    async forkThread(forkParams, assertCurrent) {
+      return await params.createRequestSnapshot().forkThread(forkParams, assertCurrent);
     },
-    async archiveThread(threadId) {
-      await params.createRequestSnapshot().archiveThread(threadId);
+    async archiveThread(threadId, assertCurrent) {
+      await params.createRequestSnapshot().archiveThread(threadId, assertCurrent);
     },
   };
 }
@@ -398,9 +412,10 @@ export function createCodexSessionCatalogControl(params: {
     const requestOptions = resolveRequestOptions(runtime.start, agentId, source);
     return createCodexCatalogRequestSnapshot(
       runtime.requestTimeoutMs,
-      async (method, requestParams, timeoutMs) =>
+      async (method, requestParams, timeoutMs, assertCurrent) =>
         await codexControlRequest(pluginConfig, method, requestParams, {
           ...requestOptions,
+          assertCurrent,
           ...(timeoutMs === undefined ? {} : { timeoutMs }),
         }),
     );
@@ -431,6 +446,7 @@ export function createCodexSessionCatalogControl(params: {
             method: M,
             requestParams: CodexAppServerRequestParams<M>,
             timeoutMs?: number,
+            assertCurrent?: () => void,
           ): Promise<CodexAppServerRequestResult<M>> =>
             await requestCodexAppServerClientJson<CodexAppServerRequestResult<M>>({
               client,
@@ -438,11 +454,22 @@ export function createCodexSessionCatalogControl(params: {
               requestParams,
               config: runtimeConfig,
               timeoutMs: timeoutMs ?? runtime.requestTimeoutMs,
+              assertCurrent,
             }),
         );
         const pinnedControl: CodexSessionCatalogControl =
           createCodexSessionCatalogControlFromRequests({
+            forkContext: {
+              client,
+              appServer: runtime,
+              pluginConfig,
+              agentDir,
+              localSessionsRoot: source?.localSessionsRoot,
+            },
             clientId: resolveCodexAppServerClientInstanceId(client),
+            retireConnection: () => {
+              retireSharedCodexAppServerClientIfCurrent(client);
+            },
             connectionFingerprint: buildCodexAppServerConnectionFingerprint(runtime, agentDir),
             createRequestSnapshot: () => requests,
             ...(source?.localSessionsRoot ? { localSessionsRoot: source.localSessionsRoot } : {}),

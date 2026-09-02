@@ -39,10 +39,10 @@
 }
 
 .chat-message-disclosure:not(.is-expanded) .chat-message-disclosure__content {
-  display: -webkit-box;
+  /* Legacy line clamp compresses hidden blocks that browser descendant reveal can
+     expose as overlapping text. Clip the natural Markdown layout instead. */
+  max-height: calc(var(--chat-text-size) * 1.5 * 5);
   overflow: hidden;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 5;
 }
 
 .chat-message-disclosure__toggle {

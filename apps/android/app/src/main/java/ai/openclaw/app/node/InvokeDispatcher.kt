@@ -48,12 +48,16 @@ internal fun smsSearchAvailabilityError(
   ) {
     SmsSearchAvailabilityReason.Available,
     SmsSearchAvailabilityReason.PermissionRequired,
-    -> null
-    SmsSearchAvailabilityReason.Unavailable ->
+    -> {
+      null
+    }
+
+    SmsSearchAvailabilityReason.Unavailable -> {
       GatewaySession.InvokeResult.error(
         code = "SMS_UNAVAILABLE",
         message = "SMS_UNAVAILABLE: SMS not available on this device",
       )
+    }
   }
 
 /**
@@ -119,73 +123,154 @@ class InvokeDispatcher(
     // Command strings come from OpenClawProtocolConstants; the registry above owns advertised availability.
     return when (command) {
       // Camera commands
-      OpenClawCameraCommand.List.rawValue -> cameraHandler.handleList(paramsJson)
-      OpenClawCameraCommand.Snap.rawValue -> cameraHandler.handleSnap(paramsJson)
-      OpenClawCameraCommand.Clip.rawValue -> cameraHandler.handleClip(paramsJson)
+      OpenClawCameraCommand.List.rawValue -> {
+        cameraHandler.handleList(paramsJson)
+      }
+
+      OpenClawCameraCommand.Snap.rawValue -> {
+        cameraHandler.handleSnap(paramsJson)
+      }
+
+      OpenClawCameraCommand.Clip.rawValue -> {
+        cameraHandler.handleClip(paramsJson)
+      }
 
       // Location command
-      OpenClawLocationCommand.Get.rawValue -> locationHandler.handleLocationGet(paramsJson)
+      OpenClawLocationCommand.Get.rawValue -> {
+        locationHandler.handleLocationGet(paramsJson)
+      }
 
       // Device commands
-      OpenClawDeviceCommand.Status.rawValue -> deviceHandler.handleDeviceStatus(paramsJson)
-      OpenClawDeviceCommand.Info.rawValue -> deviceHandler.handleDeviceInfo(paramsJson)
-      OpenClawDeviceCommand.Permissions.rawValue -> deviceHandler.handleDevicePermissions(paramsJson)
-      OpenClawDeviceCommand.Health.rawValue -> deviceHandler.handleDeviceHealth(paramsJson)
-      OpenClawDeviceCommand.Apps.rawValue -> deviceHandler.handleDeviceApps(paramsJson)
+      OpenClawDeviceCommand.Status.rawValue -> {
+        deviceHandler.handleDeviceStatus(paramsJson)
+      }
+
+      OpenClawDeviceCommand.Info.rawValue -> {
+        deviceHandler.handleDeviceInfo(paramsJson)
+      }
+
+      OpenClawDeviceCommand.Permissions.rawValue -> {
+        deviceHandler.handleDevicePermissions(paramsJson)
+      }
+
+      OpenClawDeviceCommand.Health.rawValue -> {
+        deviceHandler.handleDeviceHealth(paramsJson)
+      }
+
+      OpenClawDeviceCommand.Apps.rawValue -> {
+        deviceHandler.handleDeviceApps(paramsJson)
+      }
 
       // Notifications command
-      OpenClawNotificationsCommand.List.rawValue -> notificationsHandler.handleNotificationsList(paramsJson)
-      OpenClawNotificationsCommand.Actions.rawValue -> notificationsHandler.handleNotificationsActions(paramsJson)
+      OpenClawNotificationsCommand.List.rawValue -> {
+        notificationsHandler.handleNotificationsList(paramsJson)
+      }
+
+      OpenClawNotificationsCommand.Actions.rawValue -> {
+        notificationsHandler.handleNotificationsActions(paramsJson)
+      }
 
       // System command
-      OpenClawSystemCommand.Notify.rawValue -> systemHandler.handleSystemNotify(paramsJson)
+      OpenClawSystemCommand.Notify.rawValue -> {
+        systemHandler.handleSystemNotify(paramsJson)
+      }
 
       // Talk commands
-      OpenClawTalkCommand.PttStart.rawValue -> talkHandler.handlePttStart(paramsJson)
-      OpenClawTalkCommand.PttStop.rawValue -> talkHandler.handlePttStop(paramsJson)
-      OpenClawTalkCommand.PttCancel.rawValue -> talkHandler.handlePttCancel(paramsJson)
-      OpenClawTalkCommand.PttOnce.rawValue -> talkHandler.handlePttOnce(paramsJson)
+      OpenClawTalkCommand.PttStart.rawValue -> {
+        talkHandler.handlePttStart(paramsJson)
+      }
+
+      OpenClawTalkCommand.PttStop.rawValue -> {
+        talkHandler.handlePttStop(paramsJson)
+      }
+
+      OpenClawTalkCommand.PttCancel.rawValue -> {
+        talkHandler.handlePttCancel(paramsJson)
+      }
+
+      OpenClawTalkCommand.PttOnce.rawValue -> {
+        talkHandler.handlePttOnce(paramsJson)
+      }
 
       // Photos command
-      ai.openclaw.app.protocol.OpenClawPhotosCommand.Latest.rawValue ->
+      ai.openclaw.app.protocol.OpenClawPhotosCommand.Latest.rawValue -> {
         photosHandler.handlePhotosLatest(
           paramsJson,
         )
+      }
 
       // Contacts command
-      OpenClawContactsCommand.Search.rawValue -> contactsHandler.handleContactsSearch(paramsJson)
-      OpenClawContactsCommand.Add.rawValue -> contactsHandler.handleContactsAdd(paramsJson)
+      OpenClawContactsCommand.Search.rawValue -> {
+        contactsHandler.handleContactsSearch(paramsJson)
+      }
+
+      OpenClawContactsCommand.Add.rawValue -> {
+        contactsHandler.handleContactsAdd(paramsJson)
+      }
 
       // Calendar command
-      OpenClawCalendarCommand.Events.rawValue -> calendarHandler.handleCalendarEvents(paramsJson)
-      OpenClawCalendarCommand.Add.rawValue -> calendarHandler.handleCalendarAdd(paramsJson)
+      OpenClawCalendarCommand.Events.rawValue -> {
+        calendarHandler.handleCalendarEvents(paramsJson)
+      }
+
+      OpenClawCalendarCommand.Add.rawValue -> {
+        calendarHandler.handleCalendarAdd(paramsJson)
+      }
 
       // Motion command
-      OpenClawMotionCommand.Activity.rawValue -> motionHandler.handleMotionActivity(paramsJson)
-      OpenClawMotionCommand.Pedometer.rawValue -> motionHandler.handleMotionPedometer(paramsJson)
+      OpenClawMotionCommand.Activity.rawValue -> {
+        motionHandler.handleMotionActivity(paramsJson)
+      }
+
+      OpenClawMotionCommand.Pedometer.rawValue -> {
+        motionHandler.handleMotionPedometer(paramsJson)
+      }
 
       // SMS command
-      OpenClawSmsCommand.Send.rawValue -> smsHandler.handleSmsSend(paramsJson)
-      OpenClawSmsCommand.Search.rawValue -> smsHandler.handleSmsSearch(paramsJson)
+      OpenClawSmsCommand.Send.rawValue -> {
+        smsHandler.handleSmsSend(paramsJson)
+      }
+
+      OpenClawSmsCommand.Search.rawValue -> {
+        smsHandler.handleSmsSearch(paramsJson)
+      }
 
       // CallLog command
-      OpenClawCallLogCommand.Search.rawValue -> callLogHandler.handleCallLogSearch(paramsJson)
+      OpenClawCallLogCommand.Search.rawValue -> {
+        callLogHandler.handleCallLogSearch(paramsJson)
+      }
 
       // Mobile accessibility commands
-      OpenClawMobileUiCommand.Observe.rawValue -> mobileUiHandler.handleObserve(paramsJson)
-      OpenClawMobileUiCommand.Act.rawValue -> mobileUiHandler.handleAct(paramsJson)
+      OpenClawMobileUiCommand.Observe.rawValue -> {
+        mobileUiHandler.handleObserve(paramsJson)
+      }
+
+      OpenClawMobileUiCommand.Act.rawValue -> {
+        mobileUiHandler.handleAct(paramsJson)
+      }
 
       // Debug commands
-      "debug.ed25519" -> debugHandler.handleEd25519()
-      "debug.logs" -> debugHandler.handleLogs()
-      else -> GatewaySession.InvokeResult.error(code = "INVALID_REQUEST", message = "INVALID_REQUEST: unknown command")
+      "debug.ed25519" -> {
+        debugHandler.handleEd25519()
+      }
+
+      "debug.logs" -> {
+        debugHandler.handleLogs()
+      }
+
+      else -> {
+        GatewaySession.InvokeResult.error(code = "INVALID_REQUEST", message = "INVALID_REQUEST: unknown command")
+      }
     }
   }
 
   private fun availabilityError(availability: InvokeCommandAvailability): GatewaySession.InvokeResult? =
     when (availability) {
-      InvokeCommandAvailability.Always -> null
-      InvokeCommandAvailability.CameraEnabled ->
+      InvokeCommandAvailability.Always -> {
+        null
+      }
+
+      InvokeCommandAvailability.CameraEnabled -> {
         if (cameraEnabled()) {
           null
         } else {
@@ -194,7 +279,9 @@ class InvokeDispatcher(
             message = "CAMERA_DISABLED: enable Camera in Settings",
           )
         }
-      InvokeCommandAvailability.LocationEnabled ->
+      }
+
+      InvokeCommandAvailability.LocationEnabled -> {
         if (locationEnabled()) {
           null
         } else {
@@ -203,7 +290,9 @@ class InvokeDispatcher(
             message = "LOCATION_DISABLED: enable Location in Settings",
           )
         }
-      InvokeCommandAvailability.MotionActivityAvailable ->
+      }
+
+      InvokeCommandAvailability.MotionActivityAvailable -> {
         if (motionActivityAvailable()) {
           null
         } else {
@@ -212,7 +301,9 @@ class InvokeDispatcher(
             message = "MOTION_UNAVAILABLE: accelerometer not available",
           )
         }
-      InvokeCommandAvailability.MotionPedometerAvailable ->
+      }
+
+      InvokeCommandAvailability.MotionPedometerAvailable -> {
         if (motionPedometerAvailable()) {
           null
         } else {
@@ -221,7 +312,9 @@ class InvokeDispatcher(
             message = "PEDOMETER_UNAVAILABLE: step counter not available",
           )
         }
-      InvokeCommandAvailability.SendSmsAvailable ->
+      }
+
+      InvokeCommandAvailability.SendSmsAvailable -> {
         if (sendSmsAvailable()) {
           null
         } else {
@@ -230,16 +323,20 @@ class InvokeDispatcher(
             message = "SMS_UNAVAILABLE: SMS not available on this device",
           )
         }
+      }
+
       InvokeCommandAvailability.ReadSmsAvailable,
       InvokeCommandAvailability.RequestableSmsSearchAvailable,
-      ->
+      -> {
         // SMS search may still be advertised as promptable; runtime invoke fails only on permanent unavailability.
         smsSearchAvailabilityError(
           readSmsAvailable = readSmsAvailable(),
           smsFeatureEnabled = smsFeatureEnabled(),
           smsTelephonyAvailable = smsTelephonyAvailable(),
         )
-      InvokeCommandAvailability.CallLogAvailable ->
+      }
+
+      InvokeCommandAvailability.CallLogAvailable -> {
         if (callLogAvailable()) {
           null
         } else {
@@ -248,7 +345,9 @@ class InvokeDispatcher(
             message = "CALL_LOG_UNAVAILABLE: call log not available on this build",
           )
         }
-      InvokeCommandAvailability.PhotosAvailable ->
+      }
+
+      InvokeCommandAvailability.PhotosAvailable -> {
         if (photosAvailable()) {
           null
         } else {
@@ -257,7 +356,9 @@ class InvokeDispatcher(
             message = "PHOTOS_UNAVAILABLE: photos not available on this build",
           )
         }
-      InvokeCommandAvailability.InstalledAppsSharingEnabled ->
+      }
+
+      InvokeCommandAvailability.InstalledAppsSharingEnabled -> {
         if (installedAppsSharingEnabled()) {
           null
         } else {
@@ -266,7 +367,9 @@ class InvokeDispatcher(
             message = "INSTALLED_APPS_SHARING_DISABLED: enable Installed Apps in Settings",
           )
         }
-      InvokeCommandAvailability.DebugBuild ->
+      }
+
+      InvokeCommandAvailability.DebugBuild -> {
         if (debugBuild()) {
           null
         } else {
@@ -275,7 +378,9 @@ class InvokeDispatcher(
             message = "INVALID_REQUEST: unknown command",
           )
         }
-      InvokeCommandAvailability.MobileUiAvailable ->
+      }
+
+      InvokeCommandAvailability.MobileUiAvailable -> {
         if (mobileUiAvailable()) {
           null
         } else {
@@ -284,6 +389,7 @@ class InvokeDispatcher(
             message = "MOBILE_UI_UNAVAILABLE: accessibility service is not connected",
           )
         }
+      }
     }
 }
 

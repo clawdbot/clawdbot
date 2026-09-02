@@ -107,6 +107,8 @@ const CLEAR_ENV_ALLOWLIST = new Set([
 ]);
 
 export type ClaudeCliNodeRunParams = {
+  /** Opt-in to the negotiated invocation-owned resource and Workshop duplex. */
+  skillRuntime?: true;
   argv: string[];
   stdin?: string;
   cwd?: string;
@@ -205,7 +207,19 @@ function validateTimeout(value: unknown, label: string, min: number, max: number
   return value as number;
 }
 
-/** Decode the narrow, binary-free request accepted by the Claude node command. */
+/** Select framing before the command handler validates the complete narrow request. */
+export function requestsClaudeNodeSkillRuntime(raw?: string | null): boolean {
+  if (!raw || Buffer.byteLength(raw, "utf8") > MAX_REQUEST_BYTES) {
+    return false;
+  }
+  try {
+    return asRecord(JSON.parse(raw))?.skillRuntime === true;
+  } catch {
+    return false;
+  }
+}
+
+/** Resource bytes use the negotiated duplex, never argv or node filesystem paths. */
 export async function decodeClaudeCliNodeRunParams(
   raw?: string | null,
 ): Promise<ClaudeCliNodeRunParams> {
@@ -229,12 +243,16 @@ export async function decodeClaudeCliNodeRunParams(
     "systemRunPlan",
     "idleTimeoutMs",
     "timeoutMs",
+    "skillRuntime",
   ]);
   const unknown = Object.keys(value).find((key) => !allowed.has(key));
   if (unknown) {
     throw new Error(`INVALID_REQUEST: unknown Claude CLI parameter: ${unknown}`);
   }
   const argv = validateArgs(value.argv);
+  if (value.skillRuntime !== undefined && value.skillRuntime !== true) {
+    throw new Error("INVALID_REQUEST: skillRuntime must be true when supplied");
+  }
   const stdin =
     value.stdin === undefined
       ? undefined
@@ -306,6 +324,7 @@ export async function decodeClaudeCliNodeRunParams(
   }
   return {
     argv,
+    ...(value.skillRuntime === true ? { skillRuntime: true as const } : {}),
     ...(stdin !== undefined ? { stdin } : {}),
     ...(systemPrompt !== undefined ? { systemPrompt } : {}),
     ...(agentId ? { agentId } : {}),

@@ -602,6 +602,16 @@ describe("callGateway url resolution", () => {
     expect(lastClientOptions?.deviceIdentity).toBeNull();
   });
 
+  it("keeps device identity for dotted-localhost shared-token auth", async () => {
+    await callGateway({
+      method: "health",
+      url: "ws://localhost.:18789",
+      token: "explicit-token",
+    });
+
+    expect(lastClientOptions?.deviceIdentity).toEqual(deviceIdentityState.value);
+  });
+
   it("fails before opening a websocket when backend token auth has no shared or paired credential", async () => {
     setGatewayConfig({ mode: "local", bind: "loopback", auth: { mode: "token" } });
     setGatewayNetworkDefaults();

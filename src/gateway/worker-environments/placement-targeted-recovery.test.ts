@@ -53,6 +53,7 @@ function createDispatch(
       reportWorkspaceResultConflict: async () => {},
       resolveWorkspaceResultConflict: async () => undefined,
     }),
+    (_request, run) => run(),
   );
 }
 
@@ -150,7 +151,7 @@ describe("targeted worker placement recovery", () => {
       },
       target: { kind: "gateway" },
     });
-    const dispatch = coordinateWorkerPlacementDispatch(harness.service);
+    const dispatch = coordinateWorkerPlacementDispatch(harness.service, (_request, run) => run());
     const targeted = dispatch.reconcileActive("worker-unrelated");
     let first;
     let retainedAfterTarget;

@@ -1,3 +1,4 @@
+import { setImmediate } from "node:timers/promises";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { WorkerProvider } from "openclaw/plugin-sdk/plugin-entry";
 import { describe, expect, it, vi } from "vitest";
@@ -109,6 +110,78 @@ describe("Crabbox project snapshot provisioning", () => {
       expect(calls.filter(({ argv }) => argv[2] === "create")).toHaveLength(1);
       expect(options.beginNodeEnrollment).toHaveBeenCalledOnce();
       expect(listCrabboxWarmImages()[0]?.capture).toBeUndefined();
+    },
+  );
+
+  it.each(["project transfer", "runtime grant", "runtime setup", "enrollment setup"] as const)(
+    "cancels explicit Stop during %s without replacing its narrower grant signal",
+    async (phase) => {
+      const events: string[] = [];
+      const controller = new AbortController();
+      const reason = new DOMException("Stop snapshot provisioning", "AbortError");
+      const entered = createDeferred<void>();
+      const release = createDeferred<void>();
+      const { options, observe } = projectOptions(events);
+      const provisionOptions = { ...options, signal: controller.signal };
+      let commandSignal: AbortSignal | undefined;
+      const { provider, calls } = createWarmProvider(async (call) => {
+        observe(call);
+        const input = call.options.input?.toString();
+        const currentPhase =
+          input === "project-checkout"
+            ? "project transfer"
+            : call.argv[1] === "run" && call.argv.includes("CRABBOX_WORKER_BOOTSTRAP_TOKEN")
+              ? events.includes("enrollment-begun")
+                ? "enrollment setup"
+                : "runtime setup"
+              : undefined;
+        if (currentPhase !== phase) {
+          return undefined;
+        }
+        commandSignal = call.options.signal;
+        entered.resolve();
+        await release.promise;
+        return commandResult({ code: 7, stderr: "command interrupted" });
+      });
+      if (phase === "runtime grant") {
+        options.prepareNodeRuntime.mockImplementationOnce(async () => {
+          entered.resolve();
+          await release.promise;
+          return {
+            nodeBootstrap: createNodeBootstrapFixture(),
+            workerBundle: createWorkerArchiveFixture(),
+            signal: options.project.signal,
+          };
+        });
+      }
+      let settled = false;
+      const operation = provider
+        .provision(PROFILE, `stop-${phase}`, provisionOptions)
+        .catch((error: unknown) => error)
+        .finally(() => {
+          settled = true;
+        });
+      await entered.promise;
+      const commandCount = calls.length;
+      try {
+        controller.abort(reason);
+        await setImmediate();
+        expect(options.project.signal.aborted).toBe(false);
+        if (phase !== "runtime grant") {
+          expect(commandSignal?.aborted).toBe(true);
+        }
+        expect(settled).toBe(false);
+        expect(calls).toHaveLength(commandCount);
+      } finally {
+        release.resolve();
+        await operation;
+      }
+      expect(await operation).toBe(reason);
+      expect(calls).toHaveLength(commandCount);
+      if (phase !== "enrollment setup") {
+        expect(options.beginNodeEnrollment).not.toHaveBeenCalled();
+      }
+      expect(calls.some(({ argv }) => argv[1] === "stop" || argv[1] === "heartbeat")).toBe(false);
     },
   );
 

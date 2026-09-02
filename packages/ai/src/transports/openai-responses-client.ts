@@ -191,7 +191,6 @@ async function postOpenAIResponsesCompaction(params: {
   const response = await params.client.post<unknown>("/responses/compact", {
     ...buildOpenAISdkRequestOptions(params.model, params.options?.signal, {
       timeoutMs: params.options?.timeoutMs,
-      maxRetries: params.options?.maxRetries,
     }),
     body: { model: params.request.model, input: compactInput },
   });
@@ -416,7 +415,6 @@ function createResponsesTransportExecutor(config: ResponsesTransportExecutorOpti
         const requestOptions = buildOpenAISdkRequestOptions(model, firstEvent.signal, {
           stream: config.streamRequest,
           timeoutMs: options?.timeoutMs,
-          maxRetries: options?.maxRetries,
         });
         const websocketSignal = combineWebSocketTimeoutSignal(
           firstEvent.signal,

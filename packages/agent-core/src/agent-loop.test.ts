@@ -2103,6 +2103,82 @@ describe("agentLoop tool termination", () => {
     expect(events.slice(agentEnd + 1)).toEqual([]);
   });
 
+  it.each(["parallel", "sequential"] as const)(
+    "delivers loop warnings after raw outcome hooks in %s batches",
+    async (toolExecution) => {
+      const executed: string[] = [];
+      const requestMessages: Message[][] = [];
+      const rawOutcomes: AgentToolResult<unknown>[] = [];
+      const streamFn = createTurnSequenceStream(
+        [
+          [
+            { type: "toolCall", id: "warned", name: "read", arguments: {} },
+            { type: "toolCall", id: "sibling", name: "list", arguments: {} },
+          ],
+          [{ type: "toolCall", id: "next", name: "read", arguments: {} }],
+          [{ type: "text", text: "done" }],
+        ],
+        requestMessages,
+      );
+      const events = await collectEvents(
+        agentLoop(
+          [{ role: "user", content: "run", timestamp: 1 }],
+          {
+            systemPrompt: "",
+            messages: [],
+            tools: [makeTool("read", executed), makeTool("list", executed)],
+          },
+          {
+            ...config,
+            toolExecution,
+            beforeToolBatch: async ({ calls }) => ({
+              warnings: calls
+                .filter(({ toolCall }) => toolCall.id === "warned")
+                .map(({ toolCall }) => ({
+                  kind: "tool-loop-warning" as const,
+                  toolCallId: toolCall.id,
+                  count: 10,
+                })),
+            }),
+            afterToolCall: async ({ result }) => {
+              rawOutcomes.push(result);
+            },
+            afterToolOutcome: async ({ result }) => {
+              rawOutcomes.push(result);
+              return { content: [...result.content, { type: "text", text: "outcome hook" }] };
+            },
+          },
+          undefined,
+          streamFn,
+        ),
+      );
+      expect(rawOutcomes.every((result) => result.content.length === 1)).toBe(true);
+      const results = requestMessages.at(-1)?.filter((message) => message.role === "toolResult");
+      expect(results?.map((message) => message.content)).toEqual([
+        [
+          { type: "text", text: "read result" },
+          { type: "text", text: "outcome hook" },
+          {
+            type: "text",
+            text: "[System note: Tool-loop warning after 10 repeated calls. Change your approach or stop if you are not making progress.]",
+          },
+        ],
+        [
+          { type: "text", text: "list result" },
+          { type: "text", text: "outcome hook" },
+        ],
+        [
+          { type: "text", text: "read result" },
+          { type: "text", text: "outcome hook" },
+        ],
+      ]);
+      expect(
+        events.filter((event) => event.type === "tool_execution_end").map((event) => event.result),
+      ).toEqual(results?.map((message) => expect.objectContaining({ content: message.content })));
+      expect(executed).toEqual(["read", "list", "read"]);
+    },
+  );
+
   it("gives the model one recovery turn with the normal tool catalog", async () => {
     const executed: string[] = [];
     const providerToolNames: string[][] = [];
@@ -2622,6 +2698,9 @@ describe("agentLoop tool termination", () => {
       { systemPrompt: "", messages: [], tools: [tool] },
       {
         ...config,
+        beforeToolBatch: async () => ({
+          warnings: [{ kind: "tool-loop-warning", toolCallId: "commit-probe", count: 10 }],
+        }),
         afterToolCall: async () => ({ details: { phase: "after-call" } }),
         afterToolOutcome: async () => ({ details: { phase: "after-outcome" } }),
       },
@@ -2945,7 +3024,7 @@ describe("agentLoop tool termination", () => {
     expect(events.at(-1)).toMatchObject({ type: "agent_end" });
   });
 
-  it("normalizes a tool result with missing content before the next model turn", async () => {
+  it.each([false, true])("normalizes missing tool content with loop warning=%s", async (warn) => {
     const contexts: Context[] = [];
     const streamFn = createTurnSequenceStream(
       [
@@ -2969,7 +3048,14 @@ describe("agentLoop tool termination", () => {
       agentLoop(
         [{ role: "user", content: "run", timestamp: 1 }],
         { systemPrompt: "", messages: [], tools: [tool] },
-        config,
+        {
+          ...config,
+          beforeToolBatch: async () => ({
+            warnings: warn
+              ? [{ kind: "tool-loop-warning", toolCallId: "call-empty", count: 10 }]
+              : [],
+          }),
+        },
         undefined,
         streamFn,
       ),
@@ -2980,7 +3066,9 @@ describe("agentLoop tool termination", () => {
       expect.objectContaining({
         role: "toolResult",
         toolName: "empty",
-        content: [],
+        content: warn
+          ? [{ type: "text", text: expect.stringContaining("Tool-loop warning after 10") }]
+          : [],
       }),
     );
   });

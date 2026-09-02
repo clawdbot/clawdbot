@@ -137,7 +137,7 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
   const preparedShellEnvironment = preparedEnvironment
     ? {
         ...preparedEnvironment.credentialScrubEnv,
-        ...(!remoteExec ? preparedEnvironment.localIdentityEnv : undefined),
+        ...(sandbox?.enabled || remoteExec ? undefined : preparedEnvironment.localIdentityEnv),
         ...preparedEnvironment.localProcessEnv,
       }
     : undefined;
@@ -178,13 +178,9 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
     : undefined;
   const isInactiveThreadBootstrapBinding = (binding: CodexAppServerThreadBinding | undefined) =>
     !activeContextEngine && binding?.contextEngine?.projection?.mode === "thread_bootstrap";
-  // The public runner carries a resolved store target. Its durable row must
-  // authorize a stable-key fence before an old generation can read its binding.
-  if (
-    bindingIdentity.kind === "session" &&
-    bindingIdentity.sessionKey &&
-    (params.sessionTarget?.storePath || params.config?.session?.store)
-  ) {
+  // Only a durable session row authorizes stable-key ownership. Caller-owned
+  // transcripts omit a store target, so classify them against the default store too.
+  if (bindingIdentity.kind === "session" && bindingIdentity.sessionKey) {
     const authority = resolveCodexRunSessionBindingAuthority({
       identity: bindingIdentity,
       config: params.config,

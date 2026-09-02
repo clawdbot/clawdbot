@@ -708,35 +708,43 @@ struct MacNodeHostWorkerTests {
     }
 
     @Test func `worker drains stdout while a large stdin frame is backpressured`() async throws {
+        let directory = try makeTempDirForTests()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let firstReceived = directory.appendingPathComponent("first-received.pid")
         let worker = MacNodeHostWorker(session: GatewayNodeSession())
         let script = """
         printf '%s\\n' '{"type":"ready","version":"test","manifest":{"caps":["system"],"commands":["system.run"],"pathEnv":"/usr/bin:/bin"},"inventory":{"skills":null,"pluginTools":[]}}'
         IFS= read -r first
+        printf '%s\\n' "$$" > "$1"
+        # Wait for the large write to begin before filling stdout. Neither pipe
+        # can finish unless the app drains output independently of its writer.
+        head -c 1 >/dev/null
         printf '{"type":"invoke-result","generation":0,"result":{"id":"first","ok":true,"payload":{"blob":"'
         head -c 2097152 /dev/zero | tr '\\000' x
         printf '"}}}\\n'
-        IFS= read -r second
+        # Buffer the remaining frame instead of timing the shell's large-line read.
+        head -n 1 >/dev/null
         printf '%s\\n' '{"type":"invoke-result","generation":0,"result":{"id":"second","ok":true,"payload":{"done":true}}}'
+        while IFS= read -r line; do :; done
         """
         _ = try await worker.start(launch: MacNodeHostWorkerLaunch(
-            command: ["/bin/sh", "-c", script]))
-
-        let first = Task {
-            await worker.invoke(BridgeInvokeRequest(
-                id: "first",
-                command: "system.run",
-                paramsJSON: #"{"command":["/usr/bin/true"]}"#))
-        }
-        try await Task.sleep(for: .milliseconds(20))
-        let largeParams = #"{"blob":""# + String(repeating: "x", count: 2 * 1024 * 1024) + #""}"#
-        let second = Task {
-            await worker.invoke(BridgeInvokeRequest(
-                id: "second",
-                command: "system.run",
-                paramsJSON: largeParams))
-        }
+            command: ["/bin/sh", "-c", script, "worker", firstReceived.path]))
 
         do {
+            let first = Task {
+                await worker.invoke(BridgeInvokeRequest(
+                    id: "first",
+                    command: "system.run",
+                    paramsJSON: #"{"command":["/usr/bin/true"]}"#))
+            }
+            _ = try await TestProcessSupport.waitForPID(in: firstReceived)
+            let largeParams = #"{"blob":""# + String(repeating: "x", count: 2 * 1024 * 1024) + #""}"#
+            let second = Task {
+                await worker.invoke(BridgeInvokeRequest(
+                    id: "second",
+                    command: "system.run",
+                    paramsJSON: largeParams))
+            }
             let responses = try await AsyncTimeout.withTimeout(
                 seconds: 5,
                 onTimeout: { WorkerBackpressureTimeout() },
@@ -744,6 +752,8 @@ struct MacNodeHostWorkerTests {
             await worker.stop()
             let allResponsesSucceeded = responses.allSatisfy(\.ok)
             #expect(allResponsesSucceeded)
+            let firstPayload = try #require(responses[0].payload?.value as? [String: Any])
+            #expect((firstPayload["blob"] as? String)?.count == 2 * 1024 * 1024)
         } catch {
             await worker.stop()
             throw error

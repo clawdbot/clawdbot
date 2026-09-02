@@ -14,6 +14,7 @@ import os from "node:os";
 import path from "node:path";
 import { isPathInside } from "@openclaw/fs-safe/path";
 import { decodeMountInfoPath } from "../packages/normalization-core/src/mountinfo-path.ts";
+import { BUNDLED_PLUGIN_BUILD_ENV_NAMES } from "./lib/bundled-plugin-build-entries.mjs";
 import { BUNDLED_PLUGIN_PATH_PREFIX } from "./lib/bundled-plugin-paths.mjs";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
 import {
@@ -104,6 +105,7 @@ export const TSDOWN_DECLARATION_TOOL_INPUTS = [
   "scripts/lib/build-artifact-cache.mts",
   "scripts/lib/dist-artifact-ownership.mts",
   "scripts/lib/managed-child-process.mts",
+  "scripts/lib/vitest-resource-ownership.mts",
   "scripts/lib/direct-run.mjs",
   "scripts/lib/repo-root.mjs",
   "scripts/lib/local-check-runtime.mts",
@@ -126,29 +128,9 @@ export const TSDOWN_PACKAGES_CACHE_INPUT = {
   extensions: TSDOWN_SOURCE_EXTENSIONS,
   excludeDirectories: ["dist", "node_modules"],
 };
-export const TSDOWN_UNIFIED_CACHE_INPUTS = [
-  ...TSDOWN_DECLARATION_TOOL_INPUTS,
-  "tsdown.config.ts",
-  "scripts/lib/runtime-process-build-entries.mts",
-  "scripts/lib/vitest-worker-artifacts.mts",
-  "scripts/lib/fs-safe-native-assets.mts",
-  {
-    // Unified entry types can import scripts, test helpers and root declarations.
-    // Restricting this to runtime folders leaves those transitive edits unstamped.
-    path: ".",
-    extensions: TSDOWN_SOURCE_EXTENSIONS,
-    excludeDirectories: [
-      "dist",
-      "dist-runtime",
-      "node_modules",
-      ".artifacts",
-      ".cache",
-      ".git",
-      ".local",
-      ".agents",
-      ".claude",
-    ],
-  },
+export const TSDOWN_UNIFIED_CACHE_ENV = [
+  "OPENCLAW_BUILD_PRIVATE_QA",
+  ...BUNDLED_PLUGIN_BUILD_ENV_NAMES,
 ];
 
 type OutputRootParams = {
@@ -289,8 +271,6 @@ export function cleanTsdownOutputRoots(params: OutputRootParams = {}) {
       ? listExistingDeclarationOutputPaths(cwd, fsImpl, roots)
       : new Set<string>();
   const protectedPaths = new Set([
-    // Vite owns and cleans this subtree; runtime-only builds cannot recreate it.
-    path.resolve(cwd, "dist/control-ui"),
     ...protectedDeclarationPaths,
     ...listExistingPreservedOutputPaths(cwd, env, fsImpl),
   ]);
@@ -353,7 +333,8 @@ function listExistingDeclarationOutputPaths(cwd: string, fsImpl: typeof fs, root
 }
 
 function listExistingPreservedOutputPaths(cwd: string, env: NodeJS.ProcessEnv, fsImpl: typeof fs) {
-  const protectedPaths = new Set<string>();
+  // Vite owns and cleans this subtree; tsdown cannot recreate its assets.
+  const protectedPaths = new Set([path.resolve(cwd, "dist/control-ui")]);
   // Mac packaging owns replacement of signed bundles. Rebuilding its JS must
   // leave the previous app (including its private runtime) usable on failure.
   const pendingDirectories = [path.join(cwd, "dist")];
@@ -388,6 +369,26 @@ function listExistingPreservedOutputPaths(cwd: string, env: NodeJS.ProcessEnv, f
     }
   }
   return protectedPaths;
+}
+
+/** Full declaration publication shares the runtime cleaner's protected subtrees. */
+export function listReplaceableTsdownDeclarationOutputs(params: OutputRootParams = {}) {
+  const cwd = path.resolve(params.cwd ?? process.cwd());
+  const fsImpl = params.fs ?? fs;
+  const roots = params.roots ?? listTsdownOutputRoots();
+  assertTsdownCleanOutputRoots({ ...params, cwd, fs: fsImpl, roots });
+  const protectedPaths = [
+    ...listExistingPreservedOutputPaths(cwd, params.env ?? process.env, fsImpl),
+  ];
+  return [...listExistingDeclarationOutputPaths(cwd, fsImpl, roots)]
+    .filter(
+      (file) =>
+        !protectedPaths.some(
+          (protectedPath) =>
+            file === protectedPath || file.startsWith(`${protectedPath}${path.sep}`),
+        ),
+    )
+    .toSorted();
 }
 
 function collectDeclarationOutputPaths(

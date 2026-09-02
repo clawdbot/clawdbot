@@ -181,7 +181,7 @@ describe("node worker provider provisioning", () => {
         },
       };
       let runtimeSignal: AbortSignal | undefined;
-      const prepareNodeRuntime = vi.fn(async (_record, signal?: AbortSignal) => {
+      const prepareNodeRuntime = vi.fn(async (_record, _bundle, signal?: AbortSignal) => {
         runtimeSignal = signal;
         return outcome === "runtime-timeout" ? await finishRuntime.promise : runtime;
       });
@@ -479,7 +479,7 @@ describe("node worker provider provisioning", () => {
       sharedHost: true,
       ownerEpoch: 1,
     });
-    expect(support.testState.prepareInstallation).not.toHaveBeenCalled();
+    expect(support.testState.prepareInstallation).toHaveBeenCalledExactlyOnceWith("bundle");
     expect(support.testState.bootstrapWorker).not.toHaveBeenCalled();
     const credential = workerService.takeMintedCredential({
       environmentId: result.environmentId,

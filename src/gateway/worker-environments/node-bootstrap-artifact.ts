@@ -12,6 +12,7 @@ import {
   PACKAGE_LIFECYCLE_PENDING_RELATIVE_PATH,
 } from "../../../scripts/lib/package-lifecycle-marker.mjs";
 import { validateBundledPackageDependencyAlignment } from "../../../scripts/package-source-dependencies.mjs";
+import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import {
   collectPackageDistInventory,
   PACKAGE_DIST_INVENTORY_RELATIVE_PATH,
@@ -476,7 +477,8 @@ export function createNodeBootstrapArtifactProvider(options: ArtifactOptions) {
           throw error;
         }
       })();
-      const artifact = await prepared;
+      // Cancellation releases this consumer; process shutdown still drains the shared producer.
+      const artifact = await racePromiseWithAbortSignal(prepared, signal);
       signal?.throwIfAborted();
       if (closed) {
         throw new Error("Node bootstrap artifact provider is closed");

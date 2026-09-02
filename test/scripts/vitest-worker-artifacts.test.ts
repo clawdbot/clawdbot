@@ -1,7 +1,5 @@
 import { spawn } from "node:child_process";
-import { createHash } from "node:crypto";
 import fs from "node:fs";
-import { createRequire } from "node:module";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { setImmediate as nextTurn } from "node:timers/promises";
@@ -20,6 +18,7 @@ import { resolveVitestSpawnParams, spawnWatchedVitestProcess } from "../../scrip
 import { createVitestProcessCompletion } from "../../scripts/vitest-process-group.mts";
 import { resolveRuntimeWorkerArgv } from "../../src/infra/runtime-worker-url.js";
 import { createDeferred } from "../helpers/promise.js";
+import { copyFsSafePackageFixture } from "./fs-safe-package.test-support.js";
 import {
   createWorkerArtifactTest,
   preparationClient,
@@ -35,32 +34,23 @@ const compilerEntry = "scripts/lib/vitest-worker-compiler.mts";
 const artifactsModule = "scripts/lib/vitest-worker-artifacts.mts";
 
 describe.concurrent("fresh compiled subprocess invocation", () => {
-  it("carries native fs-safe writes and verifies every copied target", ({ workerArtifacts }) =>
+  it("uses installed fs-safe packages from compiled subprocesses", ({ workerArtifacts }) =>
     workerArtifacts.fixtureLifetime.run(async () => {
       const { node, prepareWorkers } = workerArtifacts.createFixtureCommands();
-      const source = path.join(
-        path.dirname(createRequire(import.meta.url).resolve("@openclaw/fs-safe/package.json")),
-        "dist/native",
-      );
-      const assets = fs
-        .readdirSync(source, { recursive: true, encoding: "utf8" })
-        .filter((name) => name.endsWith(".node"))
-        .toSorted()
-        .map((name) => ({ name, bytes: fs.readFileSync(path.join(source, name)) }));
-      expect(assets).toHaveLength(7);
       const owner = createVitestWorkerRun();
       const directory = owner.descriptor.directory;
-      const native = path.join(directory, "dist/native");
+      const relocated = fs.realpathSync(
+        workerArtifacts.fixtureLifetime.createTempDir("worker-package-proof-"),
+      );
+      const native = path.join(relocated, "node_modules/@openclaw/fs-safe/node_modules");
       try {
-        const manifest = await prepareWorkers(owner);
-        for (const { name, bytes } of assets) {
-          expect(manifest.outputs[path.join("native", name)]).toBe(
-            createHash("sha256").update(bytes).digest("hex"),
-          );
-          expect(fs.readFileSync(path.join(native, name)).equals(bytes), name).toBe(true);
-        }
+        await prepareWorkers(owner);
+        fs.cpSync(path.join(directory, "dist"), path.join(relocated, "dist"), { recursive: true });
+        fs.writeFileSync(path.join(relocated, "package.json"), '{"type":"module"}');
+        const { nativePackages } = copyFsSafePackageFixture(relocated);
+        expect(nativePackages.length).toBeGreaterThan(0);
         const probe = async (name: string, mode: string | undefined, outcome: string) => {
-          const rootDir = path.join(directory, name);
+          const rootDir = path.join(relocated, name);
           fs.mkdirSync(rootDir);
           const result = await node(
             [
@@ -93,21 +83,21 @@ describe.concurrent("fresh compiled subprocess invocation", () => {
             if (loaded.length) assert(loaded[0].startsWith(native+path.sep));
             console.log(JSON.stringify({node:process.version,platform:process.platform,arch:process.arch,outcome,loaded}));
             `,
-              path.join(directory, "dist/plugin-sdk/file-access-runtime.js"),
+              path.join(relocated, "dist/plugin-sdk/file-access-runtime.js"),
               rootDir,
               outcome,
               native,
             ],
-            directory,
+            relocated,
             {
               PATH: process.env.PATH,
               SystemRoot: process.env.SystemRoot,
               WINDIR: process.env.WINDIR,
-              HOME: directory,
-              USERPROFILE: directory,
-              TMPDIR: directory,
-              TMP: directory,
-              TEMP: directory,
+              HOME: relocated,
+              USERPROFILE: relocated,
+              TMPDIR: relocated,
+              TMP: relocated,
+              TEMP: relocated,
               OPENCLAW_FS_SAFE_NATIVE_MODE: mode,
             },
           );
@@ -129,85 +119,63 @@ describe.concurrent("fresh compiled subprocess invocation", () => {
             probe(mode, mode, mode === "off" ? "fallback" : "native"),
           ),
         ]);
-        // All targets are pinned above; one damaged copy exercises the shared
-        // verifier without rehashing the whole source graph for every platform.
-        // Never execute a deliberately damaged binary.
-        const { name, bytes } = assets[0]!;
-        const filename = path.join(native, name);
-        try {
-          fs.appendFileSync(filename, "altered copy");
-          expect(() => verifyVitestWorkerArtifacts(directory)).toThrow(
-            "Compiled subprocess artifact changed",
-          );
-          fs.rmSync(filename);
-          expect(() => verifyVitestWorkerArtifacts(directory)).toThrow("ENOENT");
-        } finally {
-          fs.writeFileSync(filename, bytes);
+        for (const nativePackage of nativePackages) {
+          fs.rmSync(nativePackage.root, { recursive: true });
         }
-        const savedNative = path.join(directory, "saved-native");
-        fs.renameSync(native, savedNative);
-        try {
-          await joinProbes([
-            probe("missing-require", "require", "missing"),
-            ...["off", "auto"].map((mode) => probe(`missing-${mode}`, mode, "fallback")),
-          ]);
-        } finally {
-          fs.renameSync(savedNative, native);
-        }
+        await joinProbes([
+          probe("missing-require", "require", "missing"),
+          ...["off", "auto"].map((mode) => probe(`missing-${mode}`, mode, "fallback")),
+        ]);
       } finally {
         await owner.dispose();
       }
       expect(fs.existsSync(directory)).toBe(false);
     }));
 
-  it.for(["native", "compiler"])(
-    "rejects %s output altered during the real copy phase before publishing a manifest",
-    (target, { workerArtifacts }) =>
-      workerArtifacts.fixtureLifetime.run(async () => {
-        const { node } = workerArtifacts.createFixtureCommands();
-        const directory = workerArtifacts.fixtureDirectory();
-        const altered = path.join(directory, "altered");
-        const preload = writeFixture(
-          directory,
-          "copy-fault.mjs",
-          `
+  it("rejects output altered after the real compiler returns before publishing a manifest", ({
+    workerArtifacts,
+  }) =>
+    workerArtifacts.fixtureLifetime.run(async () => {
+      const { node } = workerArtifacts.createFixtureCommands();
+      const directory = workerArtifacts.fixtureDirectory();
+      const altered = path.join(directory, "altered");
+      const preload = writeFixture(
+        directory,
+        "compiler-fault.mjs",
+        `
         import fs from 'node:fs';
-        import fsp from 'node:fs/promises';
         import path from 'node:path';
-        import {syncBuiltinESMExports} from 'node:module';
-        const copy = fsp.cp;
-        fsp.cp = async (from,to,options) => {
-          await copy(from,to,options);
-          if (path.basename(to) !== 'native') return;
-          const filename = ${JSON.stringify(target)} === 'native'
-            ? path.join(to,fs.readdirSync(to,{recursive:true}).find(file=>file.endsWith('.node')))
-            : path.join(path.dirname(to),'infra/runtime-process-entrypoints.js');
-          fs.appendFileSync(filename,'altered during copy');
-          fs.writeFileSync(${JSON.stringify(altered)},'real copy boundary executed');
+        import Module from 'node:module';
+        const load=Module._load;
+        Module._load=function(id,...args) {
+          const mod=load.call(this,id,...args);
+          if(id!=='tsdown') return mod;
+          return {...mod,async build(options) {
+            const result=await mod.build(options);
+            fs.appendFileSync(path.join(options.outDir,'infra/runtime-process-entrypoints.js'),'altered after compiler');
+            fs.writeFileSync(${JSON.stringify(altered)},'real compiler returned');
+            return result;
+          }};
         };
-        syncBuiltinESMExports();
-        `,
-        );
-        const owner = createVitestWorkerRun();
-        try {
-          // Inject only into the actual native compiler entry, never the parent's
-          // module cache or a production build flag. node() joins this direct child.
-          const result = await node([
-            "--import",
-            pathToFileURL(preload).href,
-            path.join(root, compilerEntry),
-            owner.descriptor.directory,
-          ]);
-          expect(result.code).not.toBe(0);
-          expect(result.stderr).toContain("Compiled subprocess artifact changed");
-          expect(fs.readFileSync(altered, "utf8")).toBe("real copy boundary executed");
-          expect(fs.existsSync(path.join(owner.descriptor.directory, "manifest.json"))).toBe(false);
-        } finally {
-          await owner.dispose();
-        }
-        expect(fs.existsSync(owner.descriptor.directory)).toBe(false);
-      }),
-  );
+      `,
+      );
+      const owner = createVitestWorkerRun();
+      try {
+        const result = await node([
+          "--import",
+          pathToFileURL(preload).href,
+          path.join(root, compilerEntry),
+          owner.descriptor.directory,
+        ]);
+        expect(result.code).not.toBe(0);
+        expect(result.stderr).toContain("Compiled subprocess artifact changed");
+        expect(fs.readFileSync(altered, "utf8")).toBe("real compiler returned");
+        expect(fs.existsSync(path.join(owner.descriptor.directory, "manifest.json"))).toBe(false);
+      } finally {
+        await owner.dispose();
+      }
+      expect(fs.existsSync(owner.descriptor.directory)).toBe(false);
+    }));
 
   it
     .runIf(process.platform !== "win32")
@@ -222,13 +190,12 @@ describe.concurrent("fresh compiled subprocess invocation", () => {
           "compiler-lifetime.mjs",
           `
       import fs from 'node:fs';
-      import fsp from 'node:fs/promises';
       import path from 'node:path';
       import {spawn} from 'node:child_process';
-      import {syncBuiltinESMExports} from 'node:module';
+      import Module, {syncBuiltinESMExports} from 'node:module';
       const directory=${JSON.stringify(directory)}, mode=${JSON.stringify(mode)};
       const record=(name,value)=>fs.writeFileSync(path.join(directory,name),value);
-      const copy=fsp.cp, write=fs.writeFileSync;
+      const load=Module._load, write=fs.writeFileSync;
       const gate=()=>new Promise(resolve=>{
         const poll=setInterval(()=>{
           if(fs.existsSync(path.join(directory,'release'))) {clearInterval(poll);resolve();}
@@ -238,9 +205,11 @@ describe.concurrent("fresh compiled subprocess invocation", () => {
           clearInterval(poll);process.exit(0);
         });
       });
-      fsp.cp=async (...args)=>{
-        await copy(...args);
-        if(path.basename(args[1])!=='native') return;
+      Module._load=function(id,...args) {
+        const mod=load.call(this,id,...args);
+        if(id!=='tsdown') return mod;
+        return {...mod,async build(options) {
+          const result=await mod.build(options);
         if(mode==='cancel while compiling') {
           record('compiling',String(process.pid));
           await gate();
@@ -262,6 +231,8 @@ describe.concurrent("fresh compiled subprocess invocation", () => {
           await new Promise((resolve,reject)=>{leaf.once('message',resolve);leaf.once('error',reject);});
           leaf.unref();
         }
+          return result;
+        }};
       };
       fs.writeFileSync=(filename,...args)=>{
         const result=write(filename,...args);
@@ -284,7 +255,12 @@ describe.concurrent("fresh compiled subprocess invocation", () => {
       import {syncBuiltinESMExports} from 'node:module';
       import {setTimeout as tick} from 'node:timers/promises';
       import {inspectManagedProcessGroup} from ${JSON.stringify(pathToFileURL(path.join(root, "scripts/lib/managed-child-process.mts")).href)};
+      import {createVitestResourceOwner} from ${JSON.stringify(pathToFileURL(path.join(root, "scripts/lib/vitest-resource-ownership.mts")).href)};
       const directory=${JSON.stringify(directory)}, mode=${JSON.stringify(mode)};
+      // Only the deliberately escaped writer has a fixture-owned namespace.
+      // Other compiler failures must still retain the outer runner's claims.
+      const resources=mode==='uncertain output'?createVitestResourceOwner(directory):undefined;
+      if(resources) Object.assign(process.env,{TMPDIR:directory,TMP:directory,TEMP:directory});
       const file=name=>path.join(directory,name);
       fs.writeFileSync(file('input'),'compiler input');
       const spawn=cp.spawn;
@@ -338,6 +314,7 @@ describe.concurrent("fresh compiled subprocess invocation", () => {
             if(mode==='uncertain output') {
               assert.equal(fs.existsSync(generation),true);
               process.kill(leafPid,0);
+              assert.throws(()=>resources.assertReleased(),/Unreleased Vitest resource claim/);
               fs.writeFileSync(file('leaf-release'),'release');
               while(!fs.existsSync(file('leaf-read'))) await tick(5);
               assert.equal(fs.readFileSync(file('leaf-read'),'utf8'),'retained input');
@@ -351,6 +328,11 @@ describe.concurrent("fresh compiled subprocess invocation", () => {
         child.kill('SIGTERM');
         await completion.catch(()=>{});
         await owner.dispose().catch(()=>{});
+        assert.equal(inspectManagedProcessGroup(child,{errorPolicy:'indeterminate'}),'dead');
+        if(compiler) {
+          assert.equal(closed,true);
+          assert.equal(inspectManagedProcessGroup(compiler,{errorPolicy:'indeterminate'}),'dead');
+        }
         if(fs.existsSync(file('leaf-pid'))) {
           leafPid=Number(fs.readFileSync(file('leaf-pid'),'utf8'));
           try {process.kill(leafPid,'SIGKILL');} catch(error) {if(error.code!=='ESRCH') throw error;}
@@ -363,7 +345,15 @@ describe.concurrent("fresh compiled subprocess invocation", () => {
       }
     `,
         );
-        const result = await node([driver]);
+        const command = node([driver]);
+        await workerArtifacts.fixtureLifetime.verifyCleanup(async () => {
+          const result = await command;
+          // Driver death must not turn its private pending claims into disposable inputs.
+          expect(result.stdout.split("\n")).toContain(
+            JSON.stringify({ mode, cleanup: "joined", generationRemoved: true }),
+          );
+        });
+        const result = await command;
         console.log(result.stdout);
         expect(result.code, result.stderr + result.stdout).toBe(0);
       }),
@@ -522,7 +512,7 @@ describe.concurrent("fresh compiled subprocess invocation", () => {
         fs.readFileSync(path.join(directory, "generations.jsonl"), "utf8").trim(),
       );
       expect(fileURLToPath(generation)).toBe(
-        path.join(root, "src/infra/runtime-process-entrypoints.ts"),
+        path.join(root, "src/infra/sqlite-readonly-location.worker.ts"),
       );
     }));
 
@@ -576,18 +566,20 @@ describe.concurrent("fresh compiled subprocess invocation", () => {
       expect(fs.existsSync(owner.descriptor.directory)).toBe(false);
     }));
 
-  it("preserves scoped and prepared provider hooks in source and compiled TUI payloads", ({
-    workerArtifacts,
-  }) =>
-    workerArtifacts.fixtureLifetime.run(async () => {
-      const { node, prepareWorkers } = workerArtifacts.createFixtureCommands();
-      const owner = createVitestWorkerRun();
-      try {
-        const manifest = await prepareWorkers(owner);
-        console.log(
-          JSON.stringify({ preparationMs: manifest.durationMs, identity: manifest.identity }),
-        );
-        for (const mode of ["source", "compiled"] as const) {
+  it.for(["source", "compiled"] as const)(
+    "preserves scoped and prepared provider hooks in %s TUI payloads",
+    (mode, { workerArtifacts }) =>
+      workerArtifacts.fixtureLifetime.run(async () => {
+        const { node, prepareWorkers } = workerArtifacts.createFixtureCommands();
+        // Each mode owns its cold-process budget; source probes need no compiled generation.
+        const owner = mode === "compiled" ? createVitestWorkerRun() : undefined;
+        try {
+          if (owner) {
+            const manifest = await prepareWorkers(owner);
+            console.log(
+              JSON.stringify({ preparationMs: manifest.durationMs, identity: manifest.identity }),
+            );
+          }
           for (const scope of ["scoped", "prepared"] as const) {
             const directory = workerArtifacts.fixtureDirectory();
             const events = path.join(directory, "provider-events.jsonl");
@@ -629,6 +621,9 @@ describe.concurrent("fresh compiled subprocess invocation", () => {
             import {createEmptyPluginRegistry} from ${JSON.stringify(pathToFileURL(path.join(root, "src/plugins/registry-empty.ts")).href)};
             import {getPluginRegistryState} from ${JSON.stringify(pathToFileURL(path.join(root, "src/plugins/runtime-state.ts")).href)};
             import {withPluginRuntimeRegistryScope} from ${JSON.stringify(pathToFileURL(path.join(root, "src/plugins/runtime/gateway-request-scope.ts")).href)};
+            import {clearActivePluginRegistry,setActivePluginRegistry} from ${JSON.stringify(pathToFileURL(path.join(root, "src/plugins/runtime.ts")).href)};
+            import {withPluginRuntimeGenerationScope} from ${JSON.stringify(pathToFileURL(path.join(root, "src/plugins/runtime/generation-scope.ts")).href)};
+            import {createPluginMetadataSnapshot} from ${JSON.stringify(pathToFileURL(path.join(root, "src/config/plugin-auto-enable.test-helpers.ts")).href)};
             const events = ${JSON.stringify(events)};
             const observed = () => fs.existsSync(events) ? fs.readFileSync(events,'utf8').trim().split('\\n').map(line=>JSON.parse(line)) : [];
             const started = performance.now();
@@ -646,11 +641,11 @@ describe.concurrent("fresh compiled subprocess invocation", () => {
             registry.providers.push({pluginId:'fixture-hook',provider:{id:'fixture-provider',label:'Fixture',auth:[],
               classifyFailoverReason(context) {
                 assert.equal(context.provider,'fixture-provider');assert.equal(context.status,403);
-                scopedCalls++;return 'overloaded';
+                scopedCalls++;return ${JSON.stringify(scope === "prepared" ? "billing" : "overloaded")};
               },
             }});
             const unprepared = buildEmbeddedRunPayloads(input('403 fixture refusal'));
-            assert.ok(unprepared.some(payload=>payload.isError), 'an unprepared error still needs a visible outcome');
+            assert.deepEqual(unprepared,[{text:'⚠️ fixture-provider/fixture-model request failed (authentication failed, HTTP 403). Re-authenticate the provider and try again.',isError:true}], 'an unprepared error must retain safe provider, model and status facts');
             assert.deepEqual(observed(),[], 'error formatting must not materialize the provider');
             const providerOwner = ${scope === "prepared" ? "resolveProviderRuntimePluginHandle({provider:'fixture-provider'}).plugin" : "undefined"};
             if (${scope === "prepared"}) {
@@ -658,14 +653,17 @@ describe.concurrent("fresh compiled subprocess invocation", () => {
               assert.deepEqual(observed(),[{event:'import'},{event:'register',mode:'discovery'}]);
             }
             const callStarted = performance.now();
+            const render = providerOwner => buildEmbeddedRunPayloads({...input('403 fixture refusal'),providerOwner});
+            const prepare = () => resolveProviderRuntimePluginHandle({provider:'fixture-provider'}).plugin;
             const call = () => {
-              const activeProviderOwner = ${scope === "scoped" ? "resolveProviderRuntimePluginHandle({provider:'fixture-provider'}).plugin" : "providerOwner"};
+              const activeProviderOwner = ${scope === "scoped" ? "prepare()" : "providerOwner"};
               if (${scope === "scoped"}) {
                 assert.equal(activeProviderOwner?.classifyFailoverReason,registry.providers[0].provider.classifyFailoverReason,'preparation must retain the scoped provider hook identity');
               }
-              return buildEmbeddedRunPayloads({...input('403 fixture refusal'),providerOwner:activeProviderOwner});
+              assert.deepEqual(render(),unprepared,'ownerless presentation must ignore loaded provider policy');
+              return render(activeProviderOwner);
             };
-            const payloads = ${scope === "scoped" ? "withPluginRuntimeRegistryScope(registry,call)" : "call()"};
+            const payloads = withPluginRuntimeRegistryScope(registry,call);
             const callMs = performance.now()-callStarted;
             const records = observed();
             if (${scope === "scoped"}) {
@@ -679,28 +677,48 @@ describe.concurrent("fresh compiled subprocess invocation", () => {
             }
             assert.ok(payloads.some(payload=>payload.isError && payload.text.includes('temporarily overloaded')));
             assert.equal(getPluginRegistryState()?.activeRegistry ?? null,null,'preparation and error handling must not install a global registry');
+            if (${scope === "scoped"}) {
+              const config = {};
+              const metadataSnapshot = createPluginMetadataSnapshot({config,manifestRegistry:{plugins:[],diagnostics:[]}});
+              setActivePluginRegistry(registry,'fixture-active');
+              try {
+                assert.deepEqual(call(),payloads,'preparation must select the active loaded provider');
+                withPluginRuntimeGenerationScope({metadataSnapshot,pluginRegistry:registry},()=>{
+                  assert.deepEqual(call(),payloads,'preparation must select the generation provider');
+                  const callsBeforeEmptyGeneration = scopedCalls;
+                  withPluginRuntimeGenerationScope({metadataSnapshot},()=>{
+                    withPluginRuntimeRegistryScope(registry,()=>{
+                      const absentOwner = prepare();
+                      assert.equal(absentOwner,undefined,'an empty generation must fence request and active providers');
+                      assert.deepEqual(render(absentOwner),unprepared);
+                      assert.equal(scopedCalls,callsBeforeEmptyGeneration);
+                    });
+                  });
+                  assert.deepEqual(call(),payloads,'the outer generation must be restored');
+                });
+              } finally {await clearActivePluginRegistry();}
+              assert.deepEqual(render(),unprepared,'presentation outside the scope still needs an explicit owner');
+              assert.deepEqual(observed(),[],'loaded lookups must not import the fixture plugin');
+            }
             console.log(JSON.stringify({pid:process.pid,mode:${JSON.stringify(mode)},scope:${JSON.stringify(scope)},importMs:imported-started,callMs,scopedCalls,records,payloads,rss:process.memoryUsage().rss}));
           `,
             );
             const url = pathToFileURL(
-              mode === "source"
-                ? path.join(root, "src/agents/embedded-agent-runner/run/payloads.ts")
-                : path.join(
+              owner
+                ? path.join(
                     owner.descriptor.directory,
                     "dist/agents/embedded-agent-runner/run/payloads.js",
-                  ),
+                  )
+                : path.join(root, "src/agents/embedded-agent-runner/run/payloads.ts"),
             );
             const result = await node(
               [
                 ...resolveRuntimeWorkerArgv(pathToFileURL(probe)),
                 url.href,
                 pathToFileURL(
-                  mode === "source"
-                    ? path.join(root, "src/plugins/provider-hook-runtime.ts")
-                    : path.join(
-                        owner.descriptor.directory,
-                        "dist/plugins/provider-hook-runtime.js",
-                      ),
+                  owner
+                    ? path.join(owner.descriptor.directory, "dist/plugins/provider-hook-runtime.js")
+                    : path.join(root, "src/plugins/provider-hook-runtime.ts"),
                 ).href,
               ],
               root,
@@ -713,12 +731,14 @@ describe.concurrent("fresh compiled subprocess invocation", () => {
             console.log(result.stdout);
             expect(result.code, result.stderr + result.stdout).toBe(0);
           }
+        } finally {
+          await owner?.dispose();
         }
-      } finally {
-        await owner.dispose();
-      }
-      expect(fs.existsSync(owner.descriptor.directory)).toBe(false);
-    }));
+        if (owner) {
+          expect(fs.existsSync(owner.descriptor.directory)).toBe(false);
+        }
+      }),
+  );
 
   it.each([
     { args: ["run", "--", "--help"], metadata: false },
@@ -858,7 +878,7 @@ describe.concurrent("fresh compiled subprocess invocation", () => {
           ]).result;
           expect(refused.code).not.toBe(0);
           expect(refused.stderr).toContain("ENOENT");
-          expect(refused.stderr.trim().split("\n").at(-1)).toBe("[test] FAILED (exit 1)");
+          expect(refused.stderr).not.toContain("FAILED (exit");
           expect(
             fs.readFileSync(path.join(directory, "generations.jsonl"), "utf8").trim().split("\n"),
           ).toHaveLength(1);
@@ -909,7 +929,7 @@ describe.concurrent("fresh compiled subprocess invocation", () => {
           expect(result.code).not.toBe(0);
           if (action === "owner disconnect") {
             expect(result.stderr).toContain("owner disconnected");
-            expect(result.stderr.trim().split("\n").at(-1)).toBe("[test] FAILED (exit 1)");
+            expect(result.stderr).not.toContain("FAILED (exit");
           }
           await owner.dispose();
           expect(fs.existsSync(new URL(generation))).toBe(false);
@@ -1032,6 +1052,9 @@ describe.concurrent("fresh compiled subprocess invocation", () => {
       expect(result.code).not.toBe(0);
       expect(result.stderr).toContain("Compiled subprocess artifact changed");
       expect(result.stderr).not.toContain("[test] passed");
+      expect(result.stderr.match(/^\[.*\] FAILED \(exit \d+\)$/gmu)).toEqual([
+        "[test] FAILED (exit 1)",
+      ]);
       expect(result.stderr.trim().split("\n").at(-1)).toBe("[test] FAILED (exit 1)");
     }));
 
@@ -1260,6 +1283,9 @@ describe.concurrent("fresh compiled subprocess invocation", () => {
           expect(failed.code).not.toBe(0);
           expect(failed.stderr).toContain("owner refused:");
           expect(failed.stderr).toContain(error!);
+          expect(failed.stderr.match(/^\[.*\] FAILED \(exit \d+\)$/gmu)).toEqual([
+            "[test] FAILED (exit 1)",
+          ]);
           expect(failed.stderr.trim().split("\n").at(-1)).toBe("[test] FAILED (exit 1)");
           expect(fs.readdirSync(parent).toSorted()).toEqual(before);
         }

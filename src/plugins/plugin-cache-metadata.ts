@@ -12,6 +12,8 @@ type CurrentPluginMetadataCacheState = {
   snapshot: unknown;
   owner: "gateway" | "operation";
   configFingerprint: string | undefined;
+  envFingerprint: string | undefined;
+  defaultDiscoveryCompatible: boolean;
   compatiblePolicyHashes: readonly string[] | undefined;
   compatibleConfigFingerprints: readonly string[] | undefined;
   modelIdNormalizationPolicies:
@@ -53,6 +55,8 @@ export function createPluginCacheMetadata(): PluginCacheMetadata {
         snapshot: undefined,
         owner: "operation",
         configFingerprint: undefined,
+        envFingerprint: undefined,
+        defaultDiscoveryCompatible: false,
         compatiblePolicyHashes: undefined,
         compatibleConfigFingerprints: undefined,
         modelIdNormalizationPolicies: undefined,

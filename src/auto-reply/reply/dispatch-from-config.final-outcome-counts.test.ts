@@ -1,9 +1,41 @@
 // Tests settled dispatcher outcome accounting for dispatch-from-config runs.
 import { describe, expect, it } from "vitest";
 import { PlatformMessageNotDispatchedError } from "../../infra/outbound/deliver-types.js";
-import { createReplyDispatcher } from "./reply-dispatcher.js";
+import {
+  attachReplyDispatchUndeliveredFallback,
+  captureReplyDispatchDeliveryOutcome,
+  createReplyDispatcher,
+} from "./reply-dispatcher.js";
 
 describe("settled dispatcher final outcomes", () => {
+  it.each(["channel_transform", "no_visible_result"])(
+    "keeps %s distinct when a payload has an undelivered alternative",
+    async (reason) => {
+      const delivered: string[] = [];
+      const payload = { text: "primary" };
+      const outcome = captureReplyDispatchDeliveryOutcome(payload);
+      attachReplyDispatchUndeliveredFallback(payload, { text: "alternative" });
+      const dispatcher = createReplyDispatcher({
+        deliver: async (reply) => {
+          delivered.push(reply.text ?? "");
+          return reply.text === "primary"
+            ? { visibleReplySent: false, suppression: { reason } }
+            : { visibleReplySent: true };
+        },
+      });
+
+      dispatcher.sendFinalReply(payload);
+      dispatcher.markComplete();
+      const receipt = await dispatcher.waitForIdle();
+
+      const suppressed = reason === "channel_transform";
+      expect(delivered).toEqual(suppressed ? ["primary"] : ["primary", "alternative"]);
+      await expect(outcome.promise).resolves.toBe(suppressed ? "channel-transform" : "delivered");
+      expect(receipt?.anyVisibleDelivered).toBe(!suppressed);
+      expect(receipt?.counts.final.deliveredNotVisible).toBe(suppressed ? 1 : 0);
+    },
+  );
+
   it("rethrows an opted-in proven no-send failure when nothing was visible", async () => {
     const error = new PlatformMessageNotDispatchedError("offline before dispatch", {
       cause: new Error("offline"),

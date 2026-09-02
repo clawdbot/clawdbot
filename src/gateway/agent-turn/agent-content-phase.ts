@@ -133,6 +133,7 @@ export async function prepareAgentContentPhase(params: {
       } = loadSessionEntry(params.requestedSessionKeyRaw, {
         ...(agentId ? { agentId } : {}),
         clone: false,
+        projection: "list",
       });
       catalogAgentId = sessionAgentId;
       const modelRef = resolveSessionModelRef(cfg, entry, sessionAgentId);
@@ -172,6 +173,7 @@ export async function prepareAgentContentPhase(params: {
         const { cfg, canonicalKey } = loadSessionEntry(params.requestedSessionKeyRaw!, {
           ...(agentId ? { agentId } : {}),
           clone: false,
+          projection: "list",
         });
         const routedAgentId = resolveAgentIdFromSessionKey(canonicalKey, agentId);
         const compatibilityOwner = tryResolveSessionCompatibilityOwnerAgentId(cfg, canonicalKey);
@@ -204,7 +206,10 @@ export async function prepareAgentContentPhase(params: {
         }
       } else if ("sessionKey" in route) {
         if (classifySessionKeyShape(route.sessionKey) !== "malformed_agent") {
-          const canonicalKey = loadSessionEntry(route.sessionKey, { clone: false }).canonicalKey;
+          const canonicalKey = loadSessionEntry(route.sessionKey, {
+            clone: false,
+            projection: "list",
+          }).canonicalKey;
           const routedAgentId = resolveAgentIdFromSessionKey(canonicalKey);
           if (params.knownAgents.includes(routedAgentId)) {
             requestedSessionKey = canonicalKey;

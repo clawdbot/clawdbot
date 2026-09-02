@@ -13,16 +13,18 @@ import {
   loadSqliteVecExtension,
   MEMORY_INDEX_CHUNK_RECALL_METADATA_TABLE,
   MEMORY_INDEX_PATHS_FTS_TABLE,
+  MEMORY_INDEX_DERIVED_TABLES,
+  MEMORY_INDEX_STATE_TABLE,
+  MEMORY_INDEX_VECTOR_TABLE,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import {
   ensureOpenClawAgentDatabaseSchema,
   openNodeSqliteDatabase,
   runSqliteImmediateTransactionSync,
 } from "openclaw/plugin-sdk/sqlite-runtime";
-import {
-  tryAcquireMemoryReindexLock,
-  type MemoryReindexLockHandle,
-} from "./manager-reindex-lock.js";
+import { withMemoryWorkspaceLock } from "../memory-workspace-lock.js";
+import { withMemoryIndexPublishGeneration } from "./manager-index-generation-lease.js";
+import { waitForMemoryReindexLock } from "./manager-reindex-lock.js";
 
 const MEMORY_REINDEX_SCHEMA = "memory_reindex";
 const MEMORY_INDEX_STATE_ID = 1;
@@ -93,6 +95,79 @@ export function readMemoryDatabaseRevision(db: DatabaseSync): number {
     throw new Error("Memory index revision is missing or invalid");
   }
   return row.revision;
+}
+
+/** Reset derived content without replacing the shared agent database or its schema. */
+export async function resetMemoryDatabase(params: {
+  targetDb: DatabaseSync;
+  dbPath: string;
+  workspaceDir: string;
+  vectorExtensionPath?: string;
+}): Promise<boolean> {
+  const db = params.targetDb;
+  const lock = await waitForMemoryReindexLock(params.dbPath);
+  try {
+    return await withMemoryWorkspaceLock(params.workspaceDir, async () =>
+      withMemoryIndexPublishGeneration(params.dbPath, async () => {
+        if (tableExists(db, "main", MEMORY_INDEX_VECTOR_TABLE) && !hasSqliteVecExtension(db)) {
+          const loaded = await loadSqliteVecExtension({
+            db,
+            extensionPath: params.vectorExtensionPath,
+          });
+          if (!loaded.ok) {
+            throw new Error(
+              `Memory reset requires sqlite-vec to clear the vector index: ${loaded.error}`,
+            );
+          }
+        }
+        return runSqliteImmediateTransactionSync(db, () => {
+          const tables = MEMORY_INDEX_DERIVED_TABLES.filter((table) =>
+            tableExists(db, "main", table),
+          );
+          if (
+            !tables.some(
+              (table) =>
+                table !== MEMORY_INDEX_STATE_TABLE &&
+                db.prepare(`SELECT 1 FROM ${table} LIMIT 1`).get(),
+            )
+          ) {
+            return false;
+          }
+          const revision = readMemoryDatabaseRevision(db);
+          const schema = tables.flatMap(
+            (table) =>
+              db
+                .prepare(
+                  "SELECT type, name, sql FROM main.sqlite_schema WHERE tbl_name = ? AND sql IS NOT NULL ORDER BY name",
+                )
+                // SAFETY: SQLite's catalog has text type/name/sql; the query excludes null SQL.
+                .all(table) as Array<{ type: string; name: string; sql: string }>,
+          );
+          // Drop triggers before their targets; recreate every table before its indexes/triggers.
+          // Keeping exact FTS/vector definitions also protects already-open manager handles.
+          for (const entry of schema.filter((candidate) => candidate.type === "trigger")) {
+            db.exec(`DROP TRIGGER "${entry.name.replaceAll('"', '""')}"`);
+          }
+          for (const table of tables) {
+            db.exec(`DROP TABLE main.${table}`);
+          }
+          for (const type of ["table", "index", "trigger"]) {
+            for (const entry of schema.filter((candidate) => candidate.type === type)) {
+              db.exec(entry.sql);
+            }
+          }
+          // Missing metadata requests a rebuild; never reuse an old revision (ABA).
+          db.prepare(`INSERT INTO ${MEMORY_INDEX_STATE_TABLE} (id, revision) VALUES (?, ?)`).run(
+            MEMORY_INDEX_STATE_ID,
+            revision + 1,
+          );
+          return true;
+        });
+      }),
+    );
+  } finally {
+    lock.release();
+  }
 }
 
 function replaceVirtualTable(params: {
@@ -262,78 +337,58 @@ export function removeMemoryDatabaseFiles(dbPath: string): void {
   }
 }
 
-/** Remove crash-left shadow databases only when no full reindex is active. */
+/** Remove crash-left shadows while the caller owns the reindex lease. */
 export function cleanupAgedMemoryReindexTempFiles(dbPath: string, nowMs = Date.now()): void {
   if (!isRegularFile(dbPath)) {
     return;
   }
-
-  let reindexLock: MemoryReindexLockHandle | undefined;
+  const dir = path.dirname(dbPath);
+  const databaseBaseName = path.basename(dbPath);
+  const shadowBaseNames = new Set<string>();
+  let entries: fs.Dirent[];
   try {
-    reindexLock = tryAcquireMemoryReindexLock(dbPath);
+    entries = fs.readdirSync(dir, { withFileTypes: true });
   } catch {
     return;
   }
-  if (!reindexLock) {
-    return;
+
+  for (const entry of entries) {
+    if (!entry.isFile()) {
+      continue;
+    }
+    const shadowBaseName = resolveMemoryReindexBaseName(databaseBaseName, entry.name);
+    if (shadowBaseName) {
+      shadowBaseNames.add(shadowBaseName);
+    }
   }
 
-  try {
-    const dir = path.dirname(dbPath);
-    const databaseBaseName = path.basename(dbPath);
-    const shadowBaseNames = new Set<string>();
-    let entries: fs.Dirent[];
-    try {
-      entries = fs.readdirSync(dir, { withFileTypes: true });
-    } catch {
-      return;
-    }
-
-    for (const entry of entries) {
-      if (!entry.isFile()) {
-        continue;
-      }
-      const shadowBaseName = resolveMemoryReindexBaseName(databaseBaseName, entry.name);
-      if (shadowBaseName) {
-        shadowBaseNames.add(shadowBaseName);
-      }
-    }
-
-    for (const shadowBaseName of shadowBaseNames) {
-      const filePaths = MEMORY_DATABASE_FILE_SUFFIXES.map((suffix) =>
-        path.join(dir, `${shadowBaseName}${suffix}`),
-      );
-      const stats: fs.Stats[] = [];
-      let hasUnknownFileState = false;
-      for (const filePath of filePaths) {
-        try {
-          stats.push(fs.statSync(filePath));
-        } catch (err) {
-          if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
-            hasUnknownFileState = true;
-            break;
-          }
+  for (const shadowBaseName of shadowBaseNames) {
+    const filePaths = MEMORY_DATABASE_FILE_SUFFIXES.map((suffix) =>
+      path.join(dir, `${shadowBaseName}${suffix}`),
+    );
+    const stats: fs.Stats[] = [];
+    let hasUnknownFileState = false;
+    for (const filePath of filePaths) {
+      try {
+        stats.push(fs.statSync(filePath));
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
+          hasUnknownFileState = true;
+          break;
         }
       }
-      if (hasUnknownFileState || stats.length === 0) {
-        continue;
-      }
-      if (
-        nowMs - Math.max(...stats.map((stat) => stat.mtimeMs)) <
-        MEMORY_REINDEX_ORPHAN_MIN_AGE_MS
-      ) {
-        continue;
-      }
-      for (const filePath of filePaths) {
-        try {
-          fs.rmSync(filePath, { force: true });
-        } catch {}
-      }
     }
-  } finally {
-    try {
-      reindexLock.release();
-    } catch {}
+    if (hasUnknownFileState || stats.length === 0) {
+      continue;
+    }
+    if (nowMs - Math.max(...stats.map((stat) => stat.mtimeMs)) < MEMORY_REINDEX_ORPHAN_MIN_AGE_MS) {
+      continue;
+    }
+    for (const filePath of filePaths) {
+      try {
+        fs.rmSync(filePath, { force: true });
+      } catch {}
+    }
   }
 }
 

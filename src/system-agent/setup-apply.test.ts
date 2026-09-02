@@ -957,6 +957,33 @@ describe("applySystemAgentSetup transaction boundaries", () => {
     expect(mocks.waitForGatewayReachable).not.toHaveBeenCalled();
   });
 
+  it.each([
+    { reason: "explicit", installDaemon: false, line: "Gateway: will run in the foreground." },
+    {
+      reason: "systemd-unavailable",
+      installDaemon: false,
+      line: "Gateway: will run in the foreground.",
+    },
+    {
+      reason: "explicit",
+      installDaemon: undefined,
+      line: "Gateway: service install skipped — say `start gateway` when you want it running.",
+    },
+  ])("reports $reason service setup with installDaemon=$installDaemon", async (scenario) => {
+    const gateway = { status: "skipped", reason: scenario.reason };
+    mocks.ensureGatewayService.mockResolvedValueOnce({ gateway });
+    const result = await applySystemAgentSetup(
+      baseParams({ surface: "cli", installDaemon: scenario.installDaemon }),
+    );
+
+    expect(mocks.ensureGatewayService).toHaveBeenCalledWith(
+      expect.objectContaining({ opts: { installDaemon: scenario.installDaemon } }),
+    );
+    expect(result.gateway).toEqual(gateway);
+    expect(result.lines).toContain(scenario.line);
+    expect(mocks.waitForGatewayReachable).not.toHaveBeenCalled();
+  });
+
   it.each(
     (["linux", "win32"] as const).flatMap((platform) =>
       (["installed", "started", "restarted", "restart-scheduled", "reused"] as const).map(

@@ -29,13 +29,13 @@ import {
   emitSkillUsedDiagnostic,
   emitToolBlockedSecurityEvent,
   findSkillUsageMatch,
+  prepareToolTerminalPresentation,
   reconcileLoopCallExecutionParams,
   recordLoopOutcome,
   rememberPendingTerminalPresentation,
   resolveToolDiagnosticIdentity,
   resolveToolErrorDiagnostic,
   resolveToolResultTerminalDiagnostic,
-  resolveToolTerminalPresentation,
   summarizeToolParams,
 } from "./agent-tools.before-tool-call.diagnostics.js";
 import {
@@ -83,7 +83,10 @@ import {
   normalizeCodeModeExecBeforeHookParams,
   reconcileCodeModeExecBeforeHookParams,
 } from "./code-mode-control-tools.js";
-import { attachInternalToolExecutionPreparer } from "./runtime/internal-hooks.js";
+import {
+  appendToolLoopWarning,
+  attachInternalToolExecutionPreparer,
+} from "./runtime/internal-hooks.js";
 import { buildToolMutationState } from "./tool-mutation.js";
 import { normalizeToolPolicyName } from "./tool-policy.js";
 import {
@@ -218,8 +221,7 @@ export function recordAdjustedParamsForToolCall(
   if (!cloneResult.ok) {
     return;
   }
-  const adjustedParamsKey = buildAdjustedParamsKey({ runId, toolCallId });
-  adjustedParamsByToolCallId.set(adjustedParamsKey, cloneResult.value);
+  adjustedParamsByToolCallId.set(buildAdjustedParamsKey({ runId, toolCallId }), cloneResult.value);
   pruneMapToMaxSize(adjustedParamsByToolCallId, MAX_TRACKED_ADJUSTED_PARAMS);
 }
 
@@ -286,10 +288,6 @@ export function buildBlockedToolResult(params: {
   preExecutionBlockedToolResults.add(result);
   return result;
 }
-
-// Build the private (trusted-listener-only) tool content payload for a tool
-// execution diagnostic event. Raw args/results never ride the public event bus;
-// consumers (e.g. diagnostics-otel) bound and redact before export.
 
 export function wrapToolWithBeforeToolCallHook(
   tool: AnyAgentTool,
@@ -555,10 +553,12 @@ export function wrapToolWithBeforeToolCallHook(
             : error;
         }
         const durationMs = Date.now() - startedAt;
-        const terminalPresentation = resolveToolTerminalPresentation({
+        const preparedTerminalPresentation = prepareToolTerminalPresentation({
+          ctx,
           tool,
           toolParams: executeParams,
-          result,
+          toolCallId,
+          toolCallOrdinal,
         });
         await recordLoopOutcome({
           ctx,
@@ -568,15 +568,12 @@ export function wrapToolWithBeforeToolCallHook(
           result,
           resultContentSource: tool.resultContentSource,
           toolCallOrdinal,
-          terminalPresentation,
+          terminalPresentation: preparedTerminalPresentation?.project?.(result),
         });
-        rememberPendingTerminalPresentation({
-          ctx,
-          tool,
-          toolParams: executeParams,
-          toolCallId,
-          toolCallOrdinal,
-        });
+        // A harness abort can settle before a cancellation-ignoring source returns.
+        if (!signal?.aborted) {
+          rememberPendingTerminalPresentation(preparedTerminalPresentation, ctx?.runId, toolCallId);
+        }
         const skillMatch = findSkillUsageMatch({
           toolName: normalizedToolName,
           toolParams: executeParams,
@@ -600,11 +597,10 @@ export function wrapToolWithBeforeToolCallHook(
               toolCallId,
             });
           }
-          const terminalEvent = resolveToolResultTerminalDiagnostic(result, durationMs);
           emitTrustedDiagnosticEventWithPrivateData(
             {
               ...eventBase,
-              ...terminalEvent,
+              ...resolveToolResultTerminalDiagnostic(result, durationMs),
             },
             buildToolContentPrivateData(toolContentPolicy, {
               input: executeParams,
@@ -613,7 +609,8 @@ export function wrapToolWithBeforeToolCallHook(
             }),
           );
         }
-        return result;
+        // Keep loop hashes and diagnostics on the raw outcome; this note is model feedback only.
+        return outcome.loopWarning ? appendToolLoopWarning(result, outcome.loopWarning) : result;
       } catch (err) {
         if (hookOptions.emitDiagnostics) {
           emitTrustedDiagnosticEventWithPrivateData(

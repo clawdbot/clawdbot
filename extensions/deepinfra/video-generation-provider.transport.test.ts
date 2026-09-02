@@ -244,7 +244,12 @@ describe("deepinfra video generation provider transport", () => {
           baseUrl: `${baseUrl}/v1/openai`,
           request,
         }),
-      ).rejects.toThrow();
+      ).rejects.toThrow(
+        expect.objectContaining({
+          name: "SsrFBlockedError",
+          message: expect.stringContaining("private/internal/special-use IP address"),
+        }),
+      );
       expect(requests).toHaveLength(0);
     });
   });

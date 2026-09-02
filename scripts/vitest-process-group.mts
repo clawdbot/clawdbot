@@ -584,7 +584,8 @@ export function createVitestProcessCompletion(params: CompletionParams) {
   const exitCompletion = waitForChildCompletionEvent(params.child, "exit");
   const platform = params.platform ?? process.platform;
   if (!params.detached || !shouldUseDetachedVitestProcessGroup(platform)) {
-    return exitCompletion;
+    const closeCompletion = waitForChildCompletionEvent(params.child, "close");
+    return Promise.all([exitCompletion, closeCompletion]).then(([result]) => result);
   }
 
   const closeCompletion = waitForChildCompletionEvent(params.child, "close");

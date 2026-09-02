@@ -1,6 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 import { findChatSubmissionMessage } from "../lib/chat/history-message-identity.ts";
+import { shouldDisplayChatSubmission } from "../pages/chat/history-merge.ts";
 import { buildInitialChatSubmission } from "../pages/chat/user-message-content.ts";
 import { createChatSubmissions, type RetainedChatSubmission } from "./chat-submissions.ts";
 
@@ -37,7 +38,7 @@ describe("retained chat submissions", () => {
       expect(read(1)?.message.content).toEqual([{ type: "text", text: "1" }]);
       const replacement = expectDefined(retain(1), "retained submission");
       expect(
-        submissions.shouldDisplay(
+        shouldDisplayChatSubmission(
           replacement,
           findChatSubmissionMessage(
             [

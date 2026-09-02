@@ -1,47 +1,24 @@
 // Exercises npm-spec plugin install behavior through the CLI path.
-import { execFile, execFileSync } from "node:child_process";
+import { execFile } from "node:child_process";
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
-import http from "node:http";
+import type http from "node:http";
 import path from "node:path";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
+import { runNodeScript } from "../../test/helpers/run-node-script.js";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolvePluginNpmProjectDir } from "./install-paths.js";
 import { installPluginFromNpmSpec, PLUGIN_INSTALL_ERROR_CODE } from "./install.js";
-
-type PackedVersion = {
-  archive: Buffer;
-  dependencies?: Record<string, string>;
-  integrity: string;
-  openclaw?: Record<string, unknown>;
-  optionalDependencies?: Record<string, string>;
-  peerDependencies?: Record<string, string>;
-  peerDependenciesMeta?: Record<string, { optional?: boolean }>;
-  shasum: string;
-  tarballName: string;
-  version: string;
-};
-
-type PackPluginParams = {
-  dependencies?: Record<string, string>;
-  indexJs?: string;
-  openclaw?: Record<string, unknown>;
-  optionalDependencies?: Record<string, string>;
-  packageName: string;
-  peerDependencies?: Record<string, string>;
-  peerDependenciesMeta?: Record<string, { optional?: boolean }>;
-  pluginId?: string;
-  rootDir: string;
-  version?: string;
-};
-
-type RegistryPackage = {
-  latest: string;
-  packageName: string;
-  versions: PackedVersion[];
-};
+import {
+  packPlugin,
+  registryPackage,
+  startStaticRegistry,
+  startMutableRegistry,
+  type RegistryPackage,
+} from "./test-helpers/npm-registry-fixtures.js";
 
 const tempDirs = createTempDirTracker();
 const servers: http.Server[] = [];
@@ -131,174 +108,8 @@ function pluginNpmProjectRoot(npmRoot: string, packageName: string): string {
   return resolvePluginNpmProjectDir({ npmDir: npmRoot, packageName });
 }
 
-async function packPlugin(params: PackPluginParams): Promise<PackedVersion> {
-  const version = params.version ?? "1.0.0";
-  const packageDir = path.join(params.rootDir, `package-${params.packageName}-${version}`);
-  const peerDependenciesMeta = params.peerDependencies
-    ? (params.peerDependenciesMeta ??
-      Object.fromEntries(
-        Object.keys(params.peerDependencies).map((name) => [name, { optional: true }]),
-      ))
-    : undefined;
-  await fs.mkdir(path.join(packageDir, "dist"), { recursive: true });
-  await fs.writeFile(
-    path.join(packageDir, "package.json"),
-    `${JSON.stringify(
-      {
-        name: params.packageName,
-        version,
-        type: "module",
-        openclaw: params.openclaw ?? { extensions: ["./dist/index.js"] },
-        ...(params.dependencies ? { dependencies: params.dependencies } : {}),
-        ...(params.optionalDependencies
-          ? { optionalDependencies: params.optionalDependencies }
-          : {}),
-        ...(params.peerDependencies
-          ? {
-              peerDependencies: params.peerDependencies,
-              ...(peerDependenciesMeta ? { peerDependenciesMeta } : {}),
-            }
-          : {}),
-      },
-      null,
-      2,
-    )}\n`,
-    "utf8",
-  );
-  await fs.writeFile(
-    path.join(packageDir, "openclaw.plugin.json"),
-    `${JSON.stringify(
-      {
-        id: params.pluginId ?? params.packageName,
-        name: params.pluginId ?? params.packageName,
-        configSchema: { type: "object" },
-      },
-      null,
-      2,
-    )}\n`,
-    "utf8",
-  );
-  await fs.writeFile(
-    path.join(packageDir, "dist", "index.js"),
-    params.indexJs ?? "export {};\n",
-    "utf8",
-  );
-
-  const packOutput = execFileSync(
-    "npm",
-    ["pack", "--json", "--ignore-scripts", "--pack-destination", params.rootDir],
-    { cwd: packageDir, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
-  );
-  const parsed = JSON.parse(packOutput) as Array<{ filename: string }>;
-  const tarballName = parsed[0]?.filename;
-  if (!tarballName) {
-    throw new Error(`npm pack did not return a tarball for ${params.packageName}`);
-  }
-  const archive = await fs.readFile(path.join(params.rootDir, tarballName));
-  return {
-    archive,
-    ...(params.dependencies ? { dependencies: params.dependencies } : {}),
-    integrity: `sha512-${crypto.createHash("sha512").update(archive).digest("base64")}`,
-    ...(params.openclaw ? { openclaw: params.openclaw } : {}),
-    ...(params.optionalDependencies ? { optionalDependencies: params.optionalDependencies } : {}),
-    ...(params.peerDependencies ? { peerDependencies: params.peerDependencies } : {}),
-    ...(peerDependenciesMeta ? { peerDependenciesMeta } : {}),
-    shasum: crypto.createHash("sha1").update(archive).digest("hex"),
-    tarballName,
-    version,
-  };
-}
-
-async function registryPackage(
-  params: PackPluginParams & { latest?: string },
-): Promise<RegistryPackage> {
-  const version = params.version ?? "1.0.0";
-  return {
-    packageName: params.packageName,
-    latest: params.latest ?? version,
-    versions: [await packPlugin({ ...params, version })],
-  };
-}
-
-async function startStaticRegistry(packages: RegistryPackage[]): Promise<string> {
-  const packageEntries = packages.map((pkg) => ({
-    ...pkg,
-    encodedPackageName: encodeURIComponent(pkg.packageName).replace("%40", "@"),
-    versionsByVersion: new Map(pkg.versions.map((entry) => [entry.version, entry])),
-  }));
-  const server = http.createServer((request, response) => {
-    const url = new URL(request.url ?? "/", "http://127.0.0.1");
-    const baseUrl = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
-    if (request.method !== "GET") {
-      response.writeHead(405, { "content-type": "text/plain" });
-      response.end("method not allowed");
-      return;
-    }
-
-    for (const pkg of packageEntries) {
-      if (url.pathname === `/${pkg.encodedPackageName}`) {
-        response.writeHead(200, { "content-type": "application/json" });
-        response.end(
-          `${JSON.stringify({
-            name: pkg.packageName,
-            "dist-tags": { latest: pkg.latest },
-            versions: Object.fromEntries(
-              [...pkg.versionsByVersion.entries()].map(([version, entry]) => [
-                version,
-                {
-                  name: pkg.packageName,
-                  version,
-                  ...(entry.openclaw ? { openclaw: entry.openclaw } : {}),
-                  ...(entry.dependencies ? { dependencies: entry.dependencies } : {}),
-                  ...(entry.optionalDependencies
-                    ? { optionalDependencies: entry.optionalDependencies }
-                    : {}),
-                  ...(entry.peerDependencies ? { peerDependencies: entry.peerDependencies } : {}),
-                  ...(entry.peerDependenciesMeta
-                    ? { peerDependenciesMeta: entry.peerDependenciesMeta }
-                    : {}),
-                  dist: {
-                    integrity: entry.integrity,
-                    shasum: entry.shasum,
-                    tarball: `${baseUrl}/${pkg.encodedPackageName}/-/${entry.tarballName}`,
-                  },
-                },
-              ]),
-            ),
-          })}\n`,
-        );
-        return;
-      }
-
-      const tarballPrefix = `/${pkg.encodedPackageName}/-/`;
-      if (url.pathname.startsWith(tarballPrefix)) {
-        const entry = [...pkg.versionsByVersion.values()].find((candidate) =>
-          url.pathname.endsWith(`/${candidate.tarballName}`),
-        );
-        if (entry) {
-          response.writeHead(200, {
-            "content-length": String(entry.archive.length),
-            "content-type": "application/octet-stream",
-          });
-          response.end(entry.archive);
-          return;
-        }
-      }
-    }
-
-    response.writeHead(404, { "content-type": "text/plain" });
-    response.end(`not found: ${url.pathname}`);
-  });
-
-  await new Promise<void>((resolve) => {
-    server.listen(0, "127.0.0.1", resolve);
-  });
-  servers.push(server);
-  return `http://127.0.0.1:${(server.address() as { port: number }).port}`;
-}
-
 async function useStaticRegistry(packages: RegistryPackage[]): Promise<string> {
-  const registry = await startStaticRegistry(packages);
+  const registry = await startStaticRegistry(packages, servers);
   useRegistry(registry);
   return registry;
 }
@@ -348,88 +159,182 @@ async function installProjectDependencies(
   );
 }
 
-async function startMutableRegistry(params: {
-  packageName: string;
-  initialLatest: string;
-  laterLatest: string;
-  versions: PackedVersion[];
-}): Promise<string> {
-  let latestVersion = params.initialLatest;
-  let metadataRequests = 0;
-  const versions = new Map(params.versions.map((entry) => [entry.version, entry]));
-  const encodedPackageName = encodeURIComponent(params.packageName).replace("%40", "@");
-
-  const server = http.createServer((request, response) => {
-    const url = new URL(request.url ?? "/", "http://127.0.0.1");
-    const baseUrl = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
-    if (request.method !== "GET") {
-      response.writeHead(405, { "content-type": "text/plain" });
-      response.end("method not allowed");
-      return;
-    }
-
-    if (url.pathname === `/${encodedPackageName}`) {
-      metadataRequests += 1;
-      const metadataLatest = latestVersion;
-      if (metadataRequests === 1) {
-        latestVersion = params.laterLatest;
-      }
-      response.writeHead(200, { "content-type": "application/json" });
-      response.end(
-        `${JSON.stringify({
-          name: params.packageName,
-          "dist-tags": { latest: metadataLatest },
-          versions: Object.fromEntries(
-            [...versions.entries()].map(([version, entry]) => [
-              version,
-              {
-                name: params.packageName,
-                version,
-                ...(entry.openclaw ? { openclaw: entry.openclaw } : {}),
-                ...(entry.peerDependencies ? { peerDependencies: entry.peerDependencies } : {}),
-                ...(entry.peerDependenciesMeta
-                  ? { peerDependenciesMeta: entry.peerDependenciesMeta }
-                  : {}),
-                dist: {
-                  integrity: entry.integrity,
-                  shasum: entry.shasum,
-                  tarball: `${baseUrl}/${encodedPackageName}/-/${entry.tarballName}`,
-                },
-              },
-            ]),
-          ),
-        })}\n`,
-      );
-      return;
-    }
-
-    const tarballPrefix = `/${encodedPackageName}/-/`;
-    if (url.pathname.startsWith(tarballPrefix)) {
-      const entry = [...versions.values()].find((candidate) =>
-        url.pathname.endsWith(`/${candidate.tarballName}`),
-      );
-      if (entry) {
-        response.writeHead(200, {
-          "content-length": String(entry.archive.length),
-          "content-type": "application/octet-stream",
-        });
-        response.end(entry.archive);
-        return;
-      }
-    }
-
-    response.writeHead(404, { "content-type": "text/plain" });
-    response.end(`not found: ${url.pathname}`);
-  });
-
-  await new Promise<void>((resolve) => {
-    server.listen(0, "127.0.0.1", resolve);
-  });
-  servers.push(server);
-  return `http://127.0.0.1:${(server.address() as { port: number }).port}`;
-}
-
 describe("installPluginFromNpmSpec e2e", () => {
+  it.each(["plugin", "hook pack"] as const)(
+    "does not persist an npm %s when delegated authority closes during download",
+    { timeout: 180_000 },
+    async (kind) => {
+      const { rootDir } = await makeInstallFixture("npm-delegated-install-e2e");
+      const packageName = uniquePackageName("delegated-install");
+      const downloadBarrier = { requested: createDeferred(), released: createDeferred() };
+      const registry = await startStaticRegistry(
+        [
+          await registryPackage({
+            packageName,
+            rootDir,
+            ...(kind === "hook pack" ? { hookName: "cancel-test-hook" } : {}),
+          }),
+        ],
+        servers,
+        downloadBarrier,
+      );
+      const stateDir = path.join(rootDir, "state");
+      const configPath = path.join(stateDir, "openclaw.json");
+      const reportPath = path.join(rootDir, "install-result.json");
+      const npmConfigPath = path.join(rootDir, "empty.npmrc");
+      const npmGlobalConfigPath = path.join(rootDir, "global.npmrc");
+      await fs.writeFile(npmConfigPath, "");
+      await fs.writeFile(npmGlobalConfigPath, "");
+      // Import in a fresh process so the hook payload owner resolves this isolated state root.
+      const script = `
+        import { existsSync } from "node:fs";
+        import fs from "node:fs/promises";
+        import path from "node:path";
+        import { randomUUID } from "node:crypto";
+        import { runPluginInstallCommand } from ${JSON.stringify(new URL("../cli/plugins-install-command.ts", import.meta.url).href)};
+        import { writeConfigFile } from ${JSON.stringify(new URL("../config/config.ts", import.meta.url).href)};
+        import { readHookInstalls } from ${JSON.stringify(new URL("../hooks/installs.ts", import.meta.url).href)};
+        import { readPersistedInstalledPluginIndexInstallRecords } from ${JSON.stringify(new URL("./installed-plugin-index-records.ts", import.meta.url).href)};
+        import {
+          claimAgentRunDelegatedAuthority,
+          releaseAgentRunDelegatedAuthority,
+          validateAgentRunDelegatedAuthority,
+        } from ${JSON.stringify(new URL("../infra/agent-run-registry.ts", import.meta.url).href)};
+        const [packageName, registry, reportPath] = JSON.parse(process.argv[1]);
+        await writeConfigFile({});
+        const configBefore = await fs.readFile(process.env.OPENCLAW_CONFIG_PATH, "utf8");
+        const observations = {};
+        for (const stage of ["cancelled", "active"]) {
+          const authority = claimAgentRunDelegatedAuthority(Object.freeze({
+            instanceId: randomUUID(), runId: randomUUID(),
+          }));
+          const errors = [];
+          let exitCode = 0;
+          let authorityClosed = false;
+          const cancellationAbort = new AbortController();
+          const cancellation = stage === "cancelled"
+            ? (async () => {
+                await fetch(registry + "/-/test/authority-close", {
+                  signal: cancellationAbort.signal,
+                }).then((response) => response.text());
+                authorityClosed = releaseAgentRunDelegatedAuthority(authority)
+                  && !validateAgentRunDelegatedAuthority(authority);
+                if (!authorityClosed) throw new Error("Failed to close delegated authority");
+                await fetch(registry + "/-/test/authority-closed").then((response) => response.text());
+              })().catch((error) => errors.push(String(error)))
+            : Promise.resolve();
+          try {
+            await runPluginInstallCommand({
+              raw: "npm:" + packageName + "@1.0.0",
+              opts: { force: true, acceptCapabilities: true },
+              allowInstallPolicyWarningPrompt: false,
+              beforePersistentApply: () => {
+                if (!validateAgentRunDelegatedAuthority(authority)) {
+                  throw new Error("Delegated install authority closed");
+                }
+              },
+              runtime: {
+                log() {},
+                error: (...args) => errors.push(args.join(" ")),
+                exit: (code) => { exitCode = code; },
+              },
+            });
+          } catch (error) {
+            exitCode = 1;
+            errors.push(String(error));
+          }
+          cancellationAbort.abort();
+          await cancellation;
+          const npmEntries = await fs.readdir(path.join(process.env.OPENCLAW_STATE_DIR, "npm"), {
+            recursive: true,
+          }).catch((error) => {
+            if (error.code === "ENOENT") return [];
+            throw error;
+          });
+          observations[stage] = {
+            exitCode, authorityClosed, error: errors.join("\\n"),
+            configUnchanged: configBefore === await fs.readFile(process.env.OPENCLAW_CONFIG_PATH, "utf8"),
+            pluginInstalls: await readPersistedInstalledPluginIndexInstallRecords() ?? {},
+            hookInstalls: readHookInstalls(),
+            npmPayloads: npmEntries.filter((entry) => entry.endsWith(path.join("node_modules", packageName))),
+            hookPayload: existsSync(path.join(process.env.OPENCLAW_STATE_DIR, "hooks", packageName)),
+          };
+          releaseAgentRunDelegatedAuthority(authority);
+        }
+        await fs.writeFile(reportPath, JSON.stringify(observations));
+      `;
+      try {
+        const result = await runNodeScript(
+          [
+            "--import",
+            "tsx",
+            "--input-type=module",
+            "--eval",
+            script,
+            JSON.stringify([packageName, registry, reportPath]),
+          ],
+          {
+            ...process.env,
+            OPENCLAW_STATE_DIR: stateDir,
+            OPENCLAW_CONFIG_PATH: configPath,
+            OPENCLAW_HOME: rootDir,
+            OPENCLAW_AGENT_DIR: undefined,
+            NPM_CONFIG_REGISTRY: registry,
+            npm_config_registry: registry,
+            NPM_CONFIG_CACHE: path.join(rootDir, "npm-cache"),
+            npm_config_cache: path.join(rootDir, "npm-cache"),
+            NPM_CONFIG_USERCONFIG: npmConfigPath,
+            npm_config_userconfig: npmConfigPath,
+            NPM_CONFIG_GLOBALCONFIG: npmGlobalConfigPath,
+            npm_config_globalconfig: npmGlobalConfigPath,
+          },
+          150_000,
+          { maxBuffer: 64 * 1024, requireProcessTreeExit: true },
+        );
+        expect(result.error, result.stderr).toBeUndefined();
+        expect(result.status, result.stderr).toBe(0);
+        const observations = await readJson<
+          Record<
+            "cancelled" | "active",
+            {
+              exitCode: number;
+              authorityClosed: boolean;
+              error: string;
+              configUnchanged: boolean;
+              pluginInstalls: Record<string, unknown>;
+              hookInstalls: Record<string, unknown>;
+              npmPayloads: string[];
+              hookPayload: boolean;
+            }
+          >
+        >(reportPath);
+        expect(observations.cancelled.error).toContain("Delegated install authority closed");
+        expect(observations.cancelled).toMatchObject({
+          exitCode: 1,
+          authorityClosed: true,
+          configUnchanged: true,
+          npmPayloads: [],
+          hookPayload: false,
+        });
+        expect(observations.cancelled.pluginInstalls).toEqual({});
+        expect(observations.cancelled.hookInstalls).toEqual({});
+        // The same artifact still installs under a fresh live claim; rejection is not a broken fixture.
+        expect(observations.active.exitCode, observations.active.error).toBe(0);
+        expect(observations.active.configUnchanged).toBe(false);
+        if (kind === "plugin") {
+          expect(Object.keys(observations.active.pluginInstalls)).toEqual([packageName]);
+          expect(observations.active.npmPayloads).toHaveLength(1);
+        } else {
+          expect(Object.keys(observations.active.hookInstalls)).toEqual([packageName]);
+          expect(observations.active.hookPayload).toBe(true);
+        }
+      } finally {
+        downloadBarrier.requested.resolve();
+        downloadBarrier.released.resolve();
+      }
+    },
+  );
+
   it("installs the newest compatible stable package when npm latest requires a newer plugin API", async () => {
     const { rootDir, npmRoot } = await makeInstallFixture("npm-plugin-compatible-version-e2e");
     const packageName = uniquePackageName("compatible-plugin");
@@ -981,12 +886,15 @@ describe("installPluginFromNpmSpec e2e", () => {
       await packPlugin({ packageName, version: "1.0.0", rootDir }),
       await packPlugin({ packageName, version: "2.0.0", rootDir }),
     ];
-    const registry = await startMutableRegistry({
-      packageName,
-      initialLatest: "1.0.0",
-      laterLatest: "2.0.0",
-      versions,
-    });
+    const registry = await startMutableRegistry(
+      {
+        packageName,
+        initialLatest: "1.0.0",
+        laterLatest: "2.0.0",
+        versions,
+      },
+      servers,
+    );
     useRegistry(registry);
 
     const result = await installNpmPlugin({

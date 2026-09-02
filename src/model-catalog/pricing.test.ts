@@ -1,3 +1,6 @@
+import fs from "node:fs/promises";
+import path from "node:path";
+import * as staticNormalization from "@openclaw/model-catalog-core/provider-model-id-normalization";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -12,6 +15,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import * as manifestNormalization from "../plugins/manifest-model-id-normalization.js";
 import { normalizeManifestModelPricing } from "../plugins/manifest-model-provider-normalizers.js";
 import * as pluginMetadata from "../plugins/plugin-metadata-snapshot.js";
+import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import { buildStatusMessageParts } from "../status/status-message.js";
 import {
   estimateAggregateUsageCost,
@@ -42,6 +46,8 @@ beforeEach(() => {
         openai: {
           models: [
             { id: "gpt-catalog", cost: { input: 1, output: 2 } },
+            { id: "pricing-model", cost: { input: 1, output: 2 } },
+            { id: "openai/pricing-model", cost: { input: 3, output: 6 } },
             {
               id: "gpt-authored",
               cost: {
@@ -69,6 +75,10 @@ beforeEach(() => {
         },
       },
       pricing: {
+        "openai/pricing-model": { input: 91, output: 92 },
+        "openai/openai/pricing-model": { input: 93, output: 94 },
+        "openai/pricing-hosted": { input: 4, output: 8 },
+        "openai/openai/pricing-hosted": { input: 5, output: 10 },
         "openai/gpt-external": { input: 2.5, output: 10, cacheRead: 1.25 },
         "openai/gpt-zero-hosted": {
           input: 0,
@@ -111,6 +121,235 @@ function configFor(baseUrl: string): OpenClawConfig {
 }
 
 describe("hosted model pricing", () => {
+  it("keeps normalized indexes scoped to their policy while observing configured price changes", async () => {
+    const model = {
+      id: "alias",
+      name: "Alias",
+      reasoning: false,
+      input: ["text" as const],
+      cost: { input: 3, output: 0, cacheRead: 0, cacheWrite: 0 },
+      maxTokens: 8192,
+    };
+    const providers = { fixture: { baseUrl: "https://fixture.invalid", models: [model] } };
+    const firstConfig: OpenClawConfig = { models: { providers } };
+    const secondConfig: OpenClawConfig = { models: { providers } };
+    const enumeratePolicies = vi.fn(Reflect.ownKeys);
+    const snapshotFor = (canonicalModel: string) =>
+      createPluginMetadataSnapshotFixture({
+        plugins: [
+          {
+            id: "fixture",
+            providers: ["fixture"],
+            modelIdNormalization: {
+              providers: new Proxy(
+                { fixture: { aliases: { alias: canonicalModel } } },
+                { ownKeys: (target) => enumeratePolicies(target) },
+              ),
+            },
+          },
+        ],
+      });
+    const metadataSpy = vi
+      .spyOn(pluginMetadata, "resolvePluginMetadataSnapshot")
+      .mockReturnValueOnce(snapshotFor("first"))
+      .mockReturnValueOnce(snapshotFor("second"));
+    enumeratePolicies.mockClear();
+    const agentDir = tempDirs.make("openclaw-policy-pricing-");
+    const lookup = () =>
+      [firstConfig, secondConfig].flatMap((config) =>
+        ["first", "second"].map(
+          (modelId) =>
+            resolveModelCostConfig({ config, agentDir, provider: "fixture", model: modelId })
+              ?.input,
+        ),
+      );
+    expect(lookup()).toEqual([3, undefined, undefined, 3]);
+    expect(lookup()).toEqual([3, undefined, undefined, 3]);
+
+    model.cost.input = 9;
+    expect(lookup()).toEqual([9, undefined, undefined, 9]);
+    model.cost = { input: 11, output: 0, cacheRead: 0, cacheWrite: 0 };
+    expect(lookup()).toEqual([11, undefined, undefined, 11]);
+    model.id = "unaliased";
+    expect(lookup()).toEqual([undefined, undefined, undefined, undefined]);
+    providers.fixture.models.push({ ...model, id: "alias" });
+    expect(lookup()).toEqual([11, undefined, undefined, 11]);
+
+    const fileModel = { ...model, id: "alias", cost: { ...model.cost, input: 17 } };
+    await fs.writeFile(
+      path.join(agentDir, "models.json"),
+      JSON.stringify({ providers: { fixture: { ...providers.fixture, models: [fileModel] } } }),
+    );
+    expect(lookup()).toEqual([17, undefined, undefined, 17]);
+    expect(metadataSpy).toHaveBeenCalledTimes(2);
+    expect(enumeratePolicies).not.toHaveBeenCalled();
+  });
+
+  it.each(["config", "models.json"] as const)(
+    "reuses normalized pricing indexes for repeated fallbacks from %s",
+    async (source) => {
+      const agentDir = tempDirs.make("openclaw-repeated-pricing-");
+      const providers = {
+        custom: {
+          baseUrl: "https://pricing.example/v1",
+          models: Array.from({ length: 500 }, (_, index) => ({
+            id: `model-${index}`,
+            name: `Model ${index}`,
+            reasoning: false,
+            input: ["text" as const],
+            cost: { input: index + 1, output: 0, cacheRead: 0, cacheWrite: 0 },
+            maxTokens: 8192,
+          })),
+        },
+      };
+      const config: OpenClawConfig = {
+        models: {
+          providers: {
+            openai: { baseUrl: "https://api.openai.com/v1", models: [] },
+            ...(source === "config" ? providers : {}),
+          },
+        },
+      };
+      if (source === "models.json") {
+        await fs.writeFile(path.join(agentDir, "models.json"), JSON.stringify({ providers }));
+      }
+      const lookup = () =>
+        ["gpt-external", "unknown-model"].map(
+          (model) => resolveModelCostConfig({ config, agentDir, provider: "openai", model })?.input,
+        );
+      let prices = lookup();
+      const normalizeKey = vi.spyOn(
+        staticNormalization,
+        "normalizeStaticProviderModelIdWithPolicies",
+      );
+      for (let repeat = 0; repeat < 20; repeat += 1) {
+        prices = lookup();
+      }
+      expect(prices).toEqual([2.5, undefined]);
+      expect(normalizeKey.mock.calls.length).toBeLessThanOrEqual(100);
+    },
+  );
+
+  it("resolves catalog and hosted prices without activating provider runtime", () => {
+    const runtimeSpy = vi.spyOn(runtimeNormalization, "normalizeProviderModelIdWithRuntime");
+    const config = configFor("https://api.openai.com/v1");
+    const agentDir = tempDirs.make("openclaw-static-pricing-");
+    expect(
+      ["gpt-catalog", "gpt-external"].map(
+        (model) => resolveModelCostConfig({ config, agentDir, provider: "openai", model })?.input,
+      ),
+    ).toEqual([1, 2.5]);
+    expect(runtimeSpy).not.toHaveBeenCalled();
+  });
+
+  it.each(["config", "models.json"] as const)(
+    "keeps exact pricing namespaces distinct in %s",
+    async (source) => {
+      const agentDir = tempDirs.make("openclaw-exact-pricing-");
+      const config: OpenClawConfig = {
+        models: {
+          providers: {
+            custom: {
+              baseUrl: "https://custom.example/v1",
+              models: ["model", "custom/model"].map((id, index) => ({
+                id,
+                name: id,
+                reasoning: false,
+                input: ["text" as const],
+                cost: { input: index + 1, output: 0, cacheRead: 0, cacheWrite: 0 },
+                maxTokens: 8192,
+              })),
+            },
+          },
+        },
+      };
+      if (source === "models.json") {
+        await fs.writeFile(path.join(agentDir, "models.json"), JSON.stringify(config.models));
+      }
+
+      expect(
+        ["model", "custom/model"].map(
+          (model) =>
+            resolveModelCostConfig({
+              config: source === "config" ? config : undefined,
+              agentDir,
+              provider: "custom",
+              model,
+              allowPluginNormalization: false,
+            })?.input,
+        ),
+      ).toEqual([1, 2]);
+    },
+  );
+
+  it.each([
+    { provider: "openrouter", model: "openrouter/auto", shortModel: "auto" },
+    { provider: "nvidia", model: "nvidia/nemotron", shortModel: "nemotron" },
+  ])("retains static pricing aliases for $provider", ({ provider, model, shortModel }) => {
+    const agentDir = tempDirs.make("openclaw-static-pricing-alias-");
+    const config: OpenClawConfig = {
+      models: {
+        providers: {
+          [provider]: {
+            baseUrl: "https://pricing.example/v1",
+            models: [
+              {
+                id: model,
+                name: model,
+                reasoning: false,
+                input: ["text"],
+                cost: { input: 3, output: 0, cacheRead: 0, cacheWrite: 0 },
+                maxTokens: 8192,
+              },
+            ],
+          },
+        },
+      },
+    };
+
+    expect(
+      [model, shortModel].map(
+        (modelId) =>
+          resolveModelCostConfig({
+            config,
+            agentDir,
+            provider,
+            model: modelId,
+            allowPluginNormalization: false,
+          })?.input,
+      ),
+    ).toEqual([3, 3]);
+  });
+
+  it.each([
+    { source: "catalog", model: "pricing-model", expected: [1, 3] },
+    { source: "hosted", model: "pricing-hosted", expected: [4, 5] },
+  ])("keeps exact pricing namespaces distinct in $source", ({ model, expected }) => {
+    const config = configFor("https://api.openai.com/v1");
+    const agentDir = tempDirs.make("openclaw-catalog-namespaces-");
+    expect(
+      [model, `openai/${model}`].map(
+        (modelId) =>
+          resolveModelCostConfig({ config, agentDir, provider: "openai", model: modelId })?.input,
+      ),
+    ).toEqual(expected);
+  });
+
+  it("checks the exact model endpoint before applying hosted pricing", () => {
+    const config = configFor("https://api.openai.com/v1");
+    const models = expectDefined(config.models?.providers?.openai?.models, "endpoint models");
+    const entry = expectDefined(models[0], "metadata-only endpoint model");
+    entry.id = "pricing-hosted";
+    models.push({ ...entry, id: "openai/pricing-hosted", baseUrl: "http://127.0.0.1:8080/v1" });
+
+    const agentDir = tempDirs.make("openclaw-exact-endpoint-pricing-");
+    expect(
+      ["pricing-hosted", "openai/pricing-hosted"].map(
+        (model) => resolveModelCostConfig({ config, agentDir, provider: "openai", model })?.input,
+      ),
+    ).toEqual([4, undefined]);
+  });
+
   it.each([
     { name: "native owner", policy: { venice: { provider: "venice" } }, known: true },
     { name: "other native source", policy: { openCode: { provider: "upstream" } }, known: true },

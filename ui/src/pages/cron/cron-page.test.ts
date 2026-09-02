@@ -178,6 +178,32 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+describe("CronPage header", () => {
+  it("uses the shared settings header with concise context and scope actions", async () => {
+    const gateway = createGateway(
+      { request: createRequest() } as unknown as GatewayBrowserClient,
+      false,
+    );
+    const context = createContext(gateway);
+    context.agents.state.agentsList = {
+      defaultId: "main",
+      mainKey: "main",
+      scope: "global",
+      agents: [{ id: "main" }, { id: "research" }],
+    };
+    const page = createPage(context, { render: true });
+
+    await page.updateComplete;
+
+    expect(page.querySelector(".page-title")?.textContent).toBe("Automations");
+    expect(page.querySelector(".content-header--settings")).not.toBeNull();
+    expect(page.querySelector(".page-subtitle")?.textContent).toBe(
+      "Scheduled tasks and recurring agent runs.",
+    );
+    expect(page.querySelector(".page-header-actions .agent-scope-control")).not.toBeNull();
+  });
+});
+
 describe("CronPage editor state sync", () => {
   it("opens a linked job's history after its jobs load and highlights the linked run", async () => {
     const job: CronJob = {
@@ -529,7 +555,7 @@ describe("CronPage editor state sync", () => {
     });
   });
 
-  it("scopes list, stats, and run history requests to the selected agent", async () => {
+  it("scopes list and run history requests to the selected agent", async () => {
     const request = createRequest();
     const gateway = createGateway({ request } as unknown as GatewayBrowserClient, true);
     createPage(createContext(gateway, "writer"));
@@ -590,25 +616,6 @@ describe("CronPage editor state sync", () => {
     await waitForCronPage(() => expect(page.cron.cronCreateOpen).toBe(false));
     await waitForCronPage(() =>
       expect(page.textContent).toContain("Run queued. Run ID: run-fresh"),
-    );
-  });
-
-  it("drills from the failing stat into run history filtered to errors", async () => {
-    const request = createRequest();
-    const client = { request } as unknown as GatewayBrowserClient;
-    const gateway = createGateway(client, true);
-    const page = createPage(createContext(gateway), { render: true });
-
-    await waitForCronPage(() =>
-      expect(page.querySelector('[data-test-id="cron-stat-failing"]')).not.toBeNull(),
-    );
-    (page.querySelector('[data-test-id="cron-stat-failing"]') as HTMLButtonElement).click();
-
-    await waitForCronPage(() => expect(page.querySelector(".cron-activity")).not.toBeNull());
-    expect(page.cron.cronRunsStatuses).toEqual(["error"]);
-    expect(request).toHaveBeenCalledWith(
-      "cron.runs",
-      expect.objectContaining({ statuses: ["error"] }),
     );
   });
 

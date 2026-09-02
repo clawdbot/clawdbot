@@ -1,8 +1,9 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { withEnvAsync } from "openclaw/plugin-sdk/test-env";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker, withEnvAsync } from "openclaw/plugin-sdk/test-env";
+import { withTimeout } from "openclaw/plugin-sdk/text-utility-runtime";
+import { afterAll, describe, expect, it, vi } from "vitest";
 import { relayTestKey } from "../../chrome-extension/relay-key.test-support.js";
 import { parseBrowserNativeHostOrigins, runBrowserNativeHost } from "./extension-native-host.js";
 import {
@@ -21,7 +22,8 @@ const OTHER_ORIGIN = `chrome-extension://${"p".repeat(32)}/`;
 const NONCE = Buffer.alloc(16, 7).toString("base64url");
 const PAIRING = `ws://127.0.0.1:18799/extension#${relayTestKey(1)}`;
 const REQUEST_MAX_BYTES = 4 * 1024;
-const tempRoots: string[] = [];
+const tempDirs = useAutoCleanupTempDirTracker(afterAll);
+let defaultFixture: ReturnType<typeof nativeFixture> | undefined;
 
 function frame(payload: Buffer | string): Buffer {
   const body = typeof payload === "string" ? Buffer.from(payload) : payload;
@@ -44,12 +46,6 @@ async function* chunks(...values: Buffer[]) {
     yield value;
   }
 }
-
-afterEach(async () => {
-  await Promise.all(
-    tempRoots.splice(0).map((root) => fs.rm(root, { recursive: true, force: true })),
-  );
-});
 
 describe("native messaging framing", () => {
   it("reads a fragmented native-endian frame exactly", async () => {
@@ -95,12 +91,11 @@ describe("native messaging framing", () => {
         };
       },
     };
-    const result = await Promise.race([
+    const result = await withTimeout(
       readBrowserNativeFrame(openPipe),
-      new Promise<"timeout">((resolve) => {
-        setTimeout(() => resolve("timeout"), 100);
-      }),
-    ]);
+      100,
+      "native frame without closing stdin",
+    );
 
     expect(result).toEqual(expected);
   });
@@ -170,8 +165,7 @@ describe("native bootstrap request schema", () => {
 });
 
 async function nativeFixture() {
-  const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-native-host-")));
-  tempRoots.push(root);
+  const root = tempDirs.make("openclaw-native-host-");
   const stateDir = path.join(root, "state");
   const managedDir = path.join(stateDir, "browser", "native-messaging");
   const manifestDir = path.join(root, "chrome", "NativeMessagingHosts");
@@ -195,7 +189,8 @@ async function nativeFixture() {
 }
 
 async function invokeHost(overrides: Partial<Parameters<typeof runBrowserNativeHost>[0]> = {}) {
-  const fixture = await nativeFixture();
+  // Callers that mutate manifests or credentials supply their own private fixture.
+  const fixture = await (defaultFixture ??= nativeFixture());
   const writes: Buffer[] = [];
   const response = await runBrowserNativeHost({
     ...fixture,

@@ -7,7 +7,7 @@ import { CHAT_PENDING_INPUT_MESSAGE_PREFIX } from "../../../../../packages/gatew
 import { renderCopyAsMarkdownButton } from "../../../components/copy-button.ts";
 import { icons } from "../../../components/icons.ts";
 import type { MarkdownRenderOptions } from "../../../components/markdown-render-options.ts";
-import { toSanitizedMarkdownHtml, toStreamingMarkdownHtml } from "../../../components/markdown.ts";
+import { toSanitizedMarkdownHtml, toStreamingMarkdownParts } from "../../../components/markdown.ts";
 import { t } from "../../../i18n/index.ts";
 import type { NormalizedMessage } from "../../../lib/chat/chat-types.ts";
 import {
@@ -17,6 +17,7 @@ import {
 import { stripThinkingTags } from "../../../lib/strip-thinking-tags.ts";
 import { detectTextDirection } from "../../../lib/text-direction.ts";
 import { persistedMessageEntryId, type AssistantMessageExpansionState } from "../chat-thread.ts";
+import { extractMessageMediaText } from "./chat-message-media.ts";
 
 export type MessageReplyTarget = {
   messageId: string;
@@ -84,18 +85,6 @@ export type MessageActionDetails = {
   replyTarget?: MessageReplyTarget;
 };
 
-function resolveNormalizedMessageMarkdown(normalizedMessage: NormalizedMessage): string {
-  return normalizedMessage.content
-    .reduce<string[]>((lines, item) => {
-      if (item.type === "text" && typeof item.text === "string") {
-        lines.push(item.text);
-      }
-      return lines;
-    }, [])
-    .join("\n")
-    .trim();
-}
-
 /** Keep internal oversized-history markers out of every user-visible text surface. */
 export function resolveMessageDisplayMarkdown(
   message: unknown,
@@ -105,15 +94,21 @@ export function resolveMessageDisplayMarkdown(
   if (metadata?.truncated === true && metadata.reason === "oversized") {
     return t("chat.messages.tooLargeToDisplay");
   }
-  const markdown = resolveNormalizedMessageMarkdown(normalizedMessage);
+  const markdown = normalizedMessage.content
+    .flatMap((item) => (item.type === "text" && typeof item.text === "string" ? [item.text] : []))
+    .join("\n");
   return normalizeRoleForGrouping(normalizedMessage.role) === "assistant"
     ? stripThinkingTags(markdown).trim()
     : markdown.trim();
 }
 
-export function resolveMessageReplyText(message: unknown): string {
-  const normalizedMessage = normalizeMessage(message);
-  return resolveMessageDisplayMarkdown(message, normalizedMessage);
+// An explicit Markdown value is the displayed expansion, even when it is empty.
+export function resolveMessageReplyText(
+  message: unknown,
+  normalizedMessage = normalizeMessage(message),
+  markdown = resolveMessageDisplayMarkdown(message, normalizedMessage),
+): string {
+  return markdown || extractMessageMediaText(message, normalizedMessage.content);
 }
 
 export function resolveMessageActionDetails(params: {
@@ -154,7 +149,10 @@ export function resolveMessageActionDetails(params: {
   const visibleMarkdown =
     role === "assistant" ? stripThinkingTags(expandedMarkdown).trim() : expandedMarkdown;
   const markdown = role === "assistant" || pendingInput ? visibleMarkdown : undefined;
-  const replyText = onReply && !pendingInput ? truncateUtf16Safe(visibleMarkdown, 500) : "";
+  const replyText =
+    onReply && !pendingInput
+      ? truncateUtf16Safe(resolveMessageReplyText(message, normalizedMessage, visibleMarkdown), 500)
+      : "";
   if (!markdown && !replyText && !fullMessage) {
     return null;
   }
@@ -333,13 +331,17 @@ function renderMarkdownText(
   duplicateSuffix?: DuplicateSuffix,
   streamKey?: string,
 ) {
-  const rendered = isStreaming
-    ? toStreamingMarkdownHtml(markdown, markdownRenderOptions, streamKey)
-    : toSanitizedMarkdownHtml(markdown, markdownRenderOptions);
-  const content = duplicateSuffix ? appendDuplicateSuffix(rendered, duplicateSuffix) : rendered;
-  return html`
-    <div class="chat-text" dir="${detectTextDirection(markdown)}">${unsafeHTML(content)}</div>
-  `;
+  const parts: [string, string] = isStreaming
+    ? toStreamingMarkdownParts(markdown, markdownRenderOptions, streamKey)
+    : [toSanitizedMarkdownHtml(markdown, markdownRenderOptions), ""];
+  if (duplicateSuffix) {
+    const terminalPart = parts[1].trim() ? 1 : 0;
+    parts[terminalPart] = appendDuplicateSuffix(parts[terminalPart], duplicateSuffix);
+  }
+  // Separate Lit parts preserve completed code controls and diagrams while the
+  // streaming tail changes; the Markdown splitter still owns container boundaries.
+  const content = parts.map((part) => unsafeHTML(part));
+  return html` <div class="chat-text" dir="${detectTextDirection(markdown)}">${content}</div> `;
 }
 
 function appendDuplicateSuffix(rendered: string, suffix: DuplicateSuffix): string {

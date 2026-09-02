@@ -238,6 +238,18 @@ LINE IDs are case-sensitive. Valid IDs look like:
 - Group: `C` + 32 hex chars
 - Room: `R` + 32 hex chars
 
+## Directory
+
+`openclaw directory peers list --channel line` lists user IDs from the selected
+account's `allowFrom`, `groupAllowFrom`, and per-group `allowFrom` entries.
+`openclaw directory groups list --channel line` lists configured group and room
+IDs. Prefixes normalize to sendable IDs, duplicates appear once, and `*` and
+`accessGroup:<name>` entries are omitted. Use `--account`, `--query`, `--limit`,
+and `--json` as described in [Directory](/cli/directory).
+
+These lists read configuration; they do not fetch a live LINE contact roster or
+include approvals stored through pairing.
+
 ## Group join introductions
 
 When the bot joins an allowed group or multi-person room, it posts one
@@ -280,6 +292,15 @@ as untrusted.
 Use the shared message presentation fields for portable choices. LINE renders
 `buttons` blocks as Flex controls and `select` blocks as quick replies. A two-button
 block is the portable confirm-style form.
+
+A `buttons` block renders a Flex card that carries the presentation's title and
+text. A presentation whose only control is a `select` renders no card, because
+quick replies attach to the reply's own text message; its title and text blocks
+are appended to that text instead. LINE draws at most 13 quick replies on one
+message, counted across every `select` block in the reply rather than per block.
+Each select keeps its prompt and any overflow options together in that text.
+Prompts and overflow option names remain complete; only native quick-reply button
+labels are shortened to LINE's 20-character limit.
 
 ```json5
 {
@@ -354,6 +375,14 @@ The LINE plugin also ships a `/card` command for Flex message presets:
 ```text
 /card info "Welcome" "Thanks for joining!"
 ```
+
+Card images and icons must use HTTPS. OpenClaw removes images with malformed or
+non-HTTPS URLs and adds an "Image unavailable" note when it fits within LINE's
+30 KB bubble and 50 KB carousel limits. Video
+heroes keep their required alternative content: an unusable video or preview URL
+falls back to that content, and an unusable alternative image becomes a text box.
+Invalid template thumbnails are removed; carousel thumbnails are removed together
+so every column keeps the same image layout. Text and action buttons stay intact.
 
 ## ACP support
 

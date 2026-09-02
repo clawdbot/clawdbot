@@ -333,6 +333,7 @@ export function prepareEmbeddedAttemptToolBase(params: {
               proposalReviewCompletion: attempt.skillWorkshopProposalReviewCompletion,
               collectionReconcile: attempt.skillWorkshopCollectionReconcile,
               proposalRevision: attempt.skillWorkshopProposalRevision,
+              libraryAuthoring: attempt.skillLibraryAuthoring,
             },
             modelCompat: extractModelCompat(attempt.model),
             modelApi: attempt.model.api,

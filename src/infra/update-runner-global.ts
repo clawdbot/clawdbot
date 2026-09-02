@@ -11,6 +11,7 @@ import {
 import { resolveExtendedStablePackage } from "./update-check.js";
 import {
   createGlobalInstallEnv,
+  verifyPackageUpdateRecovery,
   resolveGlobalInstallSpec,
   resolveGlobalInstallTarget,
   type GlobalInstallManager,
@@ -57,7 +58,7 @@ export async function runGlobalUpdate(params: {
       mode: globalManager,
       root: pkgRoot,
       reason: EXTENDED_STABLE_TAG_UNSUPPORTED_REASON,
-      recovery: { serviceRestartSafe: true },
+      recovery: await verifyPackageUpdateRecovery(pkgRoot),
       before: { version: beforeVersion },
       steps: [],
       durationMs: Date.now() - startedAt,
@@ -82,7 +83,7 @@ export async function runGlobalUpdate(params: {
       mode: globalManager,
       root: pkgRoot,
       reason: extendedStable.reason,
-      recovery: { serviceRestartSafe: true },
+      recovery: await verifyPackageUpdateRecovery(pkgRoot),
       before: { version: beforeVersion },
       steps: [],
       durationMs: Date.now() - startedAt,

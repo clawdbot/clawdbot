@@ -17,8 +17,6 @@ import {
 } from "../infra/cli-root-options.js";
 import { isTruthyEnvValue, normalizeEnv } from "../infra/env.js";
 import type { ProxyHandle } from "../infra/net/proxy/proxy-lifecycle.js";
-import { ensureOpenClawCliOnPath } from "../infra/path-env.js";
-import { assertSupportedRuntime } from "../infra/runtime-guard.js";
 import { tryProcessCwd } from "../infra/safe-cwd.js";
 import type { PluginCliLoadSession } from "../plugins/cli-registry-loader.js";
 import { createPluginCache, getPluginCache, withPluginCache } from "../plugins/plugin-cache.js";
@@ -68,6 +66,8 @@ import {
   shouldUseRootHelpFastPath,
   shouldUseSetupOnboardConfigureHelpFastPath,
 } from "./run-main-policy.js";
+import { withCliCommandCleanup, type CliHarnessCleanup } from "./runtime-cleanup-scope.js";
+import { closeCliResources } from "./runtime-cleanup.js";
 import { registerSignalExitBarrier, waitForSignalExitBarriers } from "./signal-exit-barrier.js";
 import {
   configureGatewayStartupTraceConsoleFormatting,
@@ -263,57 +263,6 @@ async function tryRunGatewayRunFastPath(
     process.exitCode = error.exitCode;
   }
   return true;
-}
-
-async function closeCliResources(): Promise<void> {
-  const finalizers = [
-    async () => {
-      const { listRegisteredAgentHarnesses, disposeRegisteredAgentHarnesses } =
-        await import("../agents/harness/registry.js");
-      if (listRegisteredAgentHarnesses().length > 0) {
-        await disposeRegisteredAgentHarnesses();
-      }
-    },
-    async () => {
-      const { hasManagedProviderLocalServices } =
-        await import("../agents/provider-runtime-lifecycle.js");
-      if (hasManagedProviderLocalServices()) {
-        const { stopManagedProviderLocalServices } =
-          await import("../agents/provider-local-service.js");
-        stopManagedProviderLocalServices();
-      }
-    },
-    async () => {
-      const { hasProviderTransportDispatcherPool } =
-        await import("../agents/provider-runtime-lifecycle.js");
-      if (hasProviderTransportDispatcherPool()) {
-        const { closeProviderTransportDispatcherPool } =
-          await import("../agents/provider-transport-dispatcher-pool.js");
-        await closeProviderTransportDispatcherPool();
-      }
-    },
-    async () => {
-      const { getActiveMcpLoopbackRuntime } =
-        await import("../gateway/mcp-http.loopback-runtime.js");
-      if (getActiveMcpLoopbackRuntime()) {
-        const { closeMcpLoopbackServer } = await import("../gateway/mcp-http.js");
-        await closeMcpLoopbackServer();
-      }
-    },
-    async () => {
-      const { hasMemoryRuntime } = await import("../plugins/memory-state.js");
-      if (hasMemoryRuntime()) {
-        const { closeActiveMemorySearchManagersCore } =
-          await import("../plugins/memory-runtime.js");
-        await closeActiveMemorySearchManagersCore();
-      }
-    },
-  ];
-  // Teardown is sequential and best-effort so one stale lazy chunk or plugin
-  // failure cannot mask the CLI command's result or skip later resources.
-  for (const finalize of finalizers) {
-    await finalize().catch(() => undefined);
-  }
 }
 
 function isUnconfiguredConfigSnapshot(
@@ -1078,11 +1027,12 @@ export async function runCli(
   return await withConsoleLogsRoutedToStderrForJson(
     originalArgv,
     () => {
-      const run = async () => {
+      const run = async (harnessCleanup?: CliHarnessCleanup) => {
         try {
           return await runCliWithPreparedOutputMode(originalArgv, {
             ...options,
             builtInMachineOutput,
+            harnessCleanup,
           });
         } catch (error) {
           // Selection and Commander preactions run before the Gateway action's failure boundary.
@@ -1101,9 +1051,10 @@ export async function runCli(
       };
       // Nested registrars and late actions share this lightweight owner, even when no
       // top-level plugin preparation is needed. Gateway retains its boot/process owner.
-      return isGatewayRunInvocationArgv(originalArgv)
-        ? run()
-        : withPluginCache(createPluginCache(), run);
+      const gatewayRun = isGatewayRunInvocationArgv(originalArgv);
+      return withCliCommandCleanup(gatewayRun, (cleanup) =>
+        gatewayRun ? run() : withPluginCache(createPluginCache(), () => run(cleanup)),
+      );
     },
     {
       machineOutput: builtInMachineOutput,
@@ -1118,6 +1069,7 @@ async function runCliWithPreparedOutputMode(
   options: {
     additionalStartupTrace?: ReturnType<typeof createGatewayDispatchStartupTrace>;
     builtInMachineOutput: boolean;
+    harnessCleanup?: CliHarnessCleanup;
   },
 ) {
   const startupTrace = createGatewayDispatchStartupTrace(originalArgv, "cli.main");
@@ -1200,6 +1152,7 @@ async function runCliWithPreparedOutputMode(
   startupTrace.mark("argv");
 
   // Enforce the minimum supported runtime before gateway selection can read or recover config.
+  const { assertSupportedRuntime } = await import("../infra/runtime-guard.js");
   assertSupportedRuntime();
 
   if (
@@ -1231,6 +1184,7 @@ async function runCliWithPreparedOutputMode(
   }
   normalizeEnv();
   if (shouldEnsureCliPath(normalizedArgv)) {
+    const { ensureOpenClawCliOnPath } = await import("../infra/path-env.js");
     ensureOpenClawCliOnPath();
   }
   // Cheap import gate only. Session-ref owns the authoritative URL/options parse.
@@ -1763,7 +1717,7 @@ async function runCliWithPreparedOutputMode(
     pluginCliSession?.close();
     uninstallGatewayRunRuntimeHooks?.();
     await stopStartedProxy();
-    await closeCliResources();
+    await closeCliResources(options.harnessCleanup);
     pauseNonTtyStdinForCliExit();
   }
 }

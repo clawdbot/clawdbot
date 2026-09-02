@@ -188,6 +188,7 @@ export function createCrabboxWarmImageManager(dependencies: {
         timeoutMs,
       );
     } catch (error) {
+      assertCurrent(context);
       if (matches(openStore().lookup(key))) {
         warnOnce(
           `checkpoint retirement (${operation.checkpointId} deletion obligation retained; retry during periodic maintenance or next warm-image-enabled worker teardown; inspect with openclaw crabbox warm-images)`,
@@ -327,6 +328,7 @@ export function createCrabboxWarmImageManager(dependencies: {
           await deleteImage(context, key, observed);
         }
       } catch (error) {
+        assertCurrent(context);
         available = false;
         warnOnce("verification", error);
       }

@@ -3,6 +3,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { ResponseInput, ResponseOutputItem } from "openai/resources/responses/responses.js";
 import { getAiTransportHost, resolveAiTransportHeaderSentinels } from "../host.js";
 import { registerSessionResourceCleanup } from "../session-resources.js";
+import { parseJsonObjectPreservingUnsafeIntegers } from "./json-unsafe-integers.js";
 import { sha256Hex } from "./transport-utils.js";
 
 const HTTP_CONTINUATION_IDLE_TTL_MS = 5 * 60 * 1000;
@@ -34,18 +35,12 @@ function jsonValuesEqual(left: object, right: object): boolean {
 }
 
 function requestWithoutInput(request: ResponsesContinuationRequest): ResponsesContinuationRequest {
-  // `instructions` (like `input`) carries the system prompt for every
-  // non-Codex Responses request now, rebuilt fresh from live runtime state
-  // on every attempt -- see resolveOpenAIResponsesInstructions in
-  // openai-responses-params-internal.ts. It is sent on the wire on every
-  // request regardless of continuation status (spread from the original
-  // request below), so excluding it here loses no freshness; comparing it
-  // would just move the same false-positive rejection this module already
-  // guards against in `input` into `request_changed` instead.
+  // Instructions and tools apply to the current response and remain on every wire request.
   const {
     input: _input,
     previous_response_id: _previousResponseId,
     instructions: _instructions,
+    tools: _tools,
     ...rest
   } = request;
   if (!isRecord(rest.metadata)) {
@@ -59,7 +54,7 @@ function requestWithoutInput(request: ResponsesContinuationRequest): ResponsesCo
   return { ...rest, metadata };
 }
 
-function normalizeAssistantReplayInput(input: readonly unknown[]): unknown[] {
+function normalizeAssistantReplayInput(input: readonly unknown[], fromResponse = false): unknown[] {
   return input.map((item) => {
     if (!isRecord(item)) {
       return item;
@@ -71,6 +66,11 @@ function normalizeAssistantReplayInput(input: readonly unknown[]): unknown[] {
       return item;
     }
     const { id: _id, status: _status, ...stableItem } = item;
+    if (fromResponse && item.type === "function_call") {
+      // Only provider output crosses terminal admission; sent arguments must retain real type edits.
+      const args = parseJsonObjectPreservingUnsafeIntegers(stableItem.arguments);
+      stableItem.arguments = args ? JSON.stringify(args) : stableItem.arguments;
+    }
     if (item.type === "message" && Array.isArray(stableItem.content)) {
       stableItem.content = stableItem.content.map((part) => {
         if (!isRecord(part) || part.type !== "output_text") {
@@ -112,7 +112,7 @@ export function resolveResponsesContinuationRequest(
     ) ||
     !jsonValuesEqual(
       normalizeAssistantReplayInput(currentInput.slice(previousInput.length, baselineLength)),
-      normalizeAssistantReplayInput(continuation.lastResponseItems),
+      normalizeAssistantReplayInput(continuation.lastResponseItems, true),
     )
   ) {
     return { request, continuationStatus: "history_changed" };
