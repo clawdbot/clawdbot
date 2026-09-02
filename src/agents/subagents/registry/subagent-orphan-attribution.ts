@@ -261,6 +261,10 @@ export function formatSubagentOrphanErrorMessage(attribution: SubagentOrphanAttr
 const BOOT_SEGMENT_CACHE_TTL_MS = 60_000;
 // Boot lifecycle rows are pruned at 24h; look back far enough to see all of them.
 const BOOT_SEGMENT_LOOKBACK_MS = 48 * 60 * 60_000;
+// Attribution needs the complete retained window. The shared reader defaults to
+// 64 for ordinary diagnostics, which can omit the owning boot after a rapid
+// crash/restart sequence.
+const BOOT_SEGMENT_ATTRIBUTION_LIMIT = 2_147_483_647;
 let cachedBootSegments: { loadedAtMs: number; segments: GatewayBootLifecycleSegment[] } | undefined;
 
 export function loadGatewayBootSegmentsForAttribution(
@@ -271,6 +275,7 @@ export function loadGatewayBootSegmentsForAttribution(
   }
   const segments = readGatewayBootLifecycleSegments({
     sinceMs: nowMs - BOOT_SEGMENT_LOOKBACK_MS,
+    limit: BOOT_SEGMENT_ATTRIBUTION_LIMIT,
   });
   cachedBootSegments = { loadedAtMs: nowMs, segments };
   return segments;
