@@ -41,7 +41,11 @@ const HOME_SESSION_ELEMENT = {
   get label() {
     return t("assistantPanel.home");
   },
-  loadModule: () => import("./home-session.runtime.ts"),
+  loadModule: () =>
+    Promise.all([
+      import("./home-session.runtime.ts"),
+      import("../styles/chat/composer-status.css"),
+    ]),
 };
 
 type AssistantDestination = "home" | "custodian";
