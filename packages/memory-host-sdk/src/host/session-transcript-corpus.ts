@@ -365,10 +365,21 @@ export function listSessionTranscriptCorpusEntriesForAgentSync(
         storePath,
       })
     : [];
+  const artifactPaths: string[] = [];
+  const scannedArtifactPaths = new Set<string>();
+  for (const artifactDir of artifactDirsByPath.values()) {
+    for (const artifactPath of listSessionTranscriptArtifactFiles(artifactDir)) {
+      const normalizedArtifactPath = normalizeRealComparablePath(artifactPath);
+      if (!scannedArtifactPaths.has(normalizedArtifactPath)) {
+        scannedArtifactPaths.add(normalizedArtifactPath);
+        artifactPaths.push(artifactPath);
+      }
+    }
+  }
   const archivedIdentitiesByName = new Map(
     listSessionTranscriptArchivesReadOnly({
       agentId: normalizedAgentId,
-      includeAll: true,
+      archiveNames: artifactPaths.map((artifactPath) => path.basename(artifactPath)),
       storePath,
     }).map((archive) => [archive.archiveName, archive]),
   );
@@ -439,41 +450,33 @@ export function listSessionTranscriptCorpusEntriesForAgentSync(
       }
     }
   }
-  const scannedArtifactPaths = new Set<string>();
-  for (const artifactDir of artifactDirsByPath.values()) {
-    for (const artifactPath of listSessionTranscriptArtifactFiles(artifactDir)) {
-      const normalizedArtifactPath = normalizeRealComparablePath(artifactPath);
-      if (scannedArtifactPaths.has(normalizedArtifactPath)) {
-        continue;
-      }
-      scannedArtifactPaths.add(normalizedArtifactPath);
-      const artifactName = path.basename(artifactPath);
-      const archivedIdentity = archivedIdentitiesByName.get(artifactName);
-      const primarySessionId =
-        archivedIdentity?.sessionId ?? parseUsageCountedSessionIdFromFileName(artifactName);
-      if (!primarySessionId) {
-        continue;
-      }
-      const primaryEntry = activeEntriesBySessionId.get(primarySessionId);
-      const primaryOwner = entryOwnersBySessionId.get(primarySessionId);
-      if (primaryOwner && primaryOwner !== normalizedAgentId) {
-        continue;
-      }
-      if (!primaryOwner && !includeUnownedArtifacts) {
-        continue;
-      }
-      corpusEntries.push({
-        ...toArtifactCorpusEntry(
-          normalizedAgentId,
-          artifactPath,
-          primarySessionId,
-          primaryEntry,
-          includeContentRevision,
-        ),
-        ...(archivedIdentity?.sessionKey ? { sessionKey: archivedIdentity.sessionKey } : {}),
-        ...(archivedIdentity ? { storePath } : {}),
-      });
+  for (const artifactPath of artifactPaths) {
+    const artifactName = path.basename(artifactPath);
+    const archivedIdentity = archivedIdentitiesByName.get(artifactName);
+    const primarySessionId =
+      archivedIdentity?.sessionId ?? parseUsageCountedSessionIdFromFileName(artifactName);
+    if (!primarySessionId) {
+      continue;
     }
+    const primaryEntry = activeEntriesBySessionId.get(primarySessionId);
+    const primaryOwner = entryOwnersBySessionId.get(primarySessionId);
+    if (primaryOwner && primaryOwner !== normalizedAgentId) {
+      continue;
+    }
+    if (!primaryOwner && !archivedIdentity && !includeUnownedArtifacts) {
+      continue;
+    }
+    corpusEntries.push({
+      ...toArtifactCorpusEntry(
+        normalizedAgentId,
+        artifactPath,
+        primarySessionId,
+        primaryEntry,
+        includeContentRevision,
+      ),
+      ...(archivedIdentity?.sessionKey ? { sessionKey: archivedIdentity.sessionKey } : {}),
+      ...(archivedIdentity ? { storePath } : {}),
+    });
   }
   return corpusEntries;
 }

@@ -60,8 +60,7 @@ describe("reset-generation session search visibility", () => {
   it("resolves bounded archive filenames through canonical SQLite identity", async () => {
     const archivedSessionId = `oversized-${"x".repeat(300)}`;
     const sessionKey = "agent:main:telegram:direct:owner";
-    const archiveName =
-      "session-aa13e98ac2c9f443812f1871d56ffcb3.jsonl.reset.2026-08-11T08-00-00.000Z.zst";
+    const archiveName = `session-${"a".repeat(64)}.jsonl.reset.2026-08-11T08-00-00.000Z.zst`;
     combinedSessionStore = {
       [sessionKey]: {
         sessionId: "current-after-reset",
@@ -94,6 +93,7 @@ describe("reset-generation session search visibility", () => {
     expect(engineSessions.loadArchivedSessions).toHaveBeenCalledWith({
       agentId: "main",
       archiveNames: [archiveName],
+      storePath: "(test)",
     });
   });
 

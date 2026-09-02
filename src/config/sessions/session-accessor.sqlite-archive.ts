@@ -13,7 +13,11 @@ import {
   readSessionArchiveContentSync,
   SESSION_ARCHIVE_ZSTD_SUFFIX,
 } from "./archive-compression.js";
-import { formatSessionArchiveTimestamp, type SessionArchiveReason } from "./artifacts.js";
+import {
+  formatSessionArchiveTimestamp,
+  isSessionArchiveArtifactName,
+  type SessionArchiveReason,
+} from "./artifacts.js";
 import type { SessionLifecycleArchivedTranscript } from "./session-accessor.sqlite-contract.js";
 import {
   readSessionStateDeleteSnapshot,
@@ -61,13 +65,15 @@ export type TranscriptArchiveWorkerMessage = {
 
 export const MAX_MATERIALIZED_ARCHIVE_BATCH_BYTES = 256 * 1024 * 1024;
 
-const MAX_ARCHIVE_SESSION_ID_BYTES = 96;
+// Leave room under the 255-byte component limit for timestamps, generations,
+// compression suffixes, and staging UUIDs. Raising this can break publication.
+const MAX_REGISTERED_ARCHIVE_SESSION_ID_BYTES = 96;
 
-function resolveArchiveSessionIdComponent(sessionId: string): string {
-  if (Buffer.byteLength(sessionId, "utf8") <= MAX_ARCHIVE_SESSION_ID_BYTES) {
+function resolveRegisteredArchiveSessionIdComponent(sessionId: string): string {
+  if (Buffer.byteLength(sessionId, "utf8") <= MAX_REGISTERED_ARCHIVE_SESSION_ID_BYTES) {
     return sessionId;
   }
-  return `session-${createHash("sha256").update(sessionId).digest("hex").slice(0, 32)}`;
+  return `session-${createHash("sha256").update(sessionId).digest("hex")}`;
 }
 
 export type TranscriptArchivePublishPlan = {
@@ -93,15 +99,20 @@ export type TranscriptArchivePublishWorkerMessage = {
 export function resolveSqliteTranscriptArchivePath(params: {
   archiveDirectory: string;
   generation?: string;
+  identityOwner: "filename" | "registry";
   reason: SessionArchiveReason;
   sessionId: string;
   nowMs?: number;
 }): string {
   const archiveDirectory = path.resolve(params.archiveDirectory);
   const generationSuffix = params.generation ? `.${params.generation}` : "";
+  const sessionIdComponent =
+    params.identityOwner === "registry"
+      ? resolveRegisteredArchiveSessionIdComponent(params.sessionId)
+      : params.sessionId;
   const archivePath = path.resolve(
     archiveDirectory,
-    `${resolveArchiveSessionIdComponent(params.sessionId)}.jsonl.${params.reason}.${formatSessionArchiveTimestamp(params.nowMs)}${generationSuffix}`,
+    `${sessionIdComponent}.jsonl.${params.reason}.${formatSessionArchiveTimestamp(params.nowMs)}${generationSuffix}`,
   );
   if (path.dirname(archivePath) !== archiveDirectory) {
     throw new Error(`Cannot archive SQLite transcript outside ${archiveDirectory}`);
@@ -109,30 +120,23 @@ export function resolveSqliteTranscriptArchivePath(params: {
   return archivePath;
 }
 
-export function encodeMaterializedSessionTranscriptArchive(params: {
-  archiveDirectory: string;
-  content: string;
+export function resolveRegisteredSqliteTranscriptArchiveName(params: {
+  createdAt: number;
+  encoding: "identity" | "zstd";
   generation: string;
   reason: SessionArchiveReason;
   sessionId: string;
-  nowMs?: number;
-}): MaterializedSessionTranscriptArchive {
-  const encoded = encodeSessionArchiveContent(params.content);
-  const createdAt = params.nowMs ?? Date.now();
-  const archivedPath = `${resolveSqliteTranscriptArchivePath({
-    archiveDirectory: params.archiveDirectory,
-    generation: params.generation,
-    reason: params.reason,
-    sessionId: params.sessionId,
-    nowMs: createdAt,
-  })}${encoded.suffix}`;
-  return {
-    archiveName: path.basename(archivedPath),
-    bytes: encoded.bytes,
-    createdAt,
-    encoding: encoded.suffix ? "zstd" : "identity",
-    sha256: createHash("sha256").update(encoded.bytes).digest("hex"),
-  };
+}): string {
+  return path.basename(
+    `${resolveSqliteTranscriptArchivePath({
+      archiveDirectory: ".",
+      generation: params.generation,
+      identityOwner: "registry",
+      reason: params.reason,
+      sessionId: params.sessionId,
+      nowMs: params.createdAt,
+    })}${params.encoding === "zstd" ? SESSION_ARCHIVE_ZSTD_SUFFIX : ""}`,
+  );
 }
 
 function findMatchingSqliteTranscriptArchive(params: {
@@ -147,9 +151,9 @@ function findMatchingSqliteTranscriptArchive(params: {
   } catch {
     return null;
   }
-  const prefix = `${resolveArchiveSessionIdComponent(params.sessionId)}.jsonl.${params.reason}.`;
+  const prefix = `${params.sessionId}.jsonl.${params.reason}.`;
   for (const entry of entries) {
-    if (!entry.startsWith(prefix) || entry.endsWith(".tmp")) {
+    if (!entry.startsWith(prefix) || !isSessionArchiveArtifactName(entry)) {
       continue;
     }
     const archivePath = path.join(params.archiveDirectory, entry);
@@ -190,6 +194,7 @@ export function writeTranscriptArchive(params: {
   for (let attempt = 0; attempt < 10; attempt += 1) {
     const archivePath = `${resolveSqliteTranscriptArchivePath({
       archiveDirectory: params.archiveDirectory,
+      identityOwner: "filename",
       reason: params.reason,
       sessionId: params.sessionId,
       nowMs: Date.now() + attempt,

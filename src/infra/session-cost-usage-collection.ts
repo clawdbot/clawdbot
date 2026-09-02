@@ -15,7 +15,6 @@ import {
   type SqliteSessionFileMarker,
 } from "../config/sessions/legacy-sqlite-marker.js";
 import {
-  resolveDefaultSessionStorePath,
   resolveSessionFilePathCore,
   resolveSessionTranscriptsDirForAgent,
 } from "../config/sessions/paths.js";
@@ -27,6 +26,7 @@ import {
   readTranscriptStatsSync,
 } from "../config/sessions/session-accessor.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
+import { resolveSessionStorePathForScope } from "../config/sessions/session-store-path.js";
 import { streamSessionTranscriptLines } from "../config/sessions/transcript-stream.js";
 import { selectVisibleTranscriptEvents } from "../config/sessions/transcript-visible-events.js";
 import type { SessionEntry } from "../config/sessions/types.js";
@@ -53,16 +53,19 @@ export type UsageCostTranscriptFile = {
 function resolveUsageCostSessionStorePath(params: {
   agentId: string;
   sessionsDir?: string;
+  storePath?: string;
 }): string {
-  return params.sessionsDir
-    ? path.join(params.sessionsDir, "sessions.json")
-    : resolveDefaultSessionStorePath(params.agentId);
+  return (
+    params.storePath ??
+    (params.sessionsDir
+      ? path.join(params.sessionsDir, "sessions.json")
+      : resolveSessionStorePathForScope({ agentId: params.agentId }))
+  );
 }
 
 async function resolveUsageCostJsonlFile(
   sourcePath: string,
   sourceStats: fs.Stats,
-  canonicalSessionId?: string,
 ): Promise<UsageCostTranscriptFile> {
   // Identity and freshness belong to the source; incremental offsets and
   // byte signatures must describe the decompressed file used by readers.
@@ -72,10 +75,7 @@ async function resolveUsageCostJsonlFile(
     filePath,
     sourcePath,
     kind: "jsonl",
-    sessionId:
-      canonicalSessionId ??
-      parseUsageCountedSessionIdFromFileName(path.basename(sourcePath)) ??
-      undefined,
+    sessionId: parseUsageCountedSessionIdFromFileName(path.basename(sourcePath)) ?? undefined,
     size: stats.size,
     mtimeMs: sourceStats.mtimeMs,
     device: stats.dev,
@@ -86,7 +86,6 @@ async function resolveUsageCostJsonlFile(
 async function listUsageCountedTranscriptFileStats(
   agentId: string,
   params?: {
-    archiveSessionIds?: ReadonlyMap<string, string>;
     minMtimeMs?: number;
     sessionsDir?: string;
   },
@@ -110,11 +109,7 @@ async function listUsageCountedTranscriptFileStats(
         if (params?.minMtimeMs !== undefined && stats.mtimeMs < params.minMtimeMs) {
           return undefined;
         }
-        return await resolveUsageCostJsonlFile(
-          filePath,
-          stats,
-          params?.archiveSessionIds?.get(entry.name),
-        );
+        return await resolveUsageCostJsonlFile(filePath, stats);
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code === "ENOENT") {
           return undefined;
@@ -134,19 +129,16 @@ async function listUsageCountedTranscriptFileStats(
 
 function listUsageCountedSqliteTranscriptStats(
   agentId: string,
-  params?: { minMtimeMs?: number; sessionsDir?: string },
+  params: { minMtimeMs?: number; storePath: string },
 ): UsageCostTranscriptFile[] {
-  const storePath = resolveUsageCostSessionStorePath({
-    agentId,
-    ...(params?.sessionsDir ? { sessionsDir: params.sessionsDir } : {}),
-  });
+  const storePath = params.storePath;
   const files: UsageCostTranscriptFile[] = [];
   // This scan reads transcript identity/timestamps only; clone:false avoids
   // cloning every current entry before the history projection and SQL rollups.
   for (const instance of listSessionTranscriptInstances({ agentId, storePath, clone: false })) {
     const marker = { agentId, sessionId: instance.sessionId, storePath };
     const mtimeMs = instance.updatedAtMs;
-    if (params?.minMtimeMs !== undefined && mtimeMs < params.minMtimeMs) {
+    if (params.minMtimeMs !== undefined && mtimeMs < params.minMtimeMs) {
       continue;
     }
     // Usage scans run across every session on hot paths; byte sizes come from
@@ -180,20 +172,35 @@ function formatCanonicalUsageCostSqliteMarker(marker: SqliteSessionFileMarker): 
 
 export async function listUsageCountedTranscriptStats(
   agentId: string,
-  params?: { minMtimeMs?: number; sessionsDir?: string },
+  params?: { minMtimeMs?: number; sessionsDir?: string; storePath?: string },
 ): Promise<UsageCostTranscriptFile[]> {
+  const storePath = resolveUsageCostSessionStorePath({
+    agentId,
+    ...(params?.sessionsDir ? { sessionsDir: params.sessionsDir } : {}),
+    ...(params?.storePath ? { storePath: params.storePath } : {}),
+  });
+  const sessionsDir = params?.sessionsDir ?? path.dirname(storePath);
+  const fileBacked = await listUsageCountedTranscriptFileStats(agentId, {
+    ...(params?.minMtimeMs !== undefined ? { minMtimeMs: params.minMtimeMs } : {}),
+    sessionsDir,
+  });
   const archiveSessionIds = new Map(
     listSessionTranscriptArchivesReadOnly({
       agentId,
-      includeAll: true,
-      ...(params?.sessionsDir ? { storePath: path.join(params.sessionsDir, "sessions.json") } : {}),
+      archiveNames: fileBacked.map((file) => path.basename(file.sourcePath)),
+      storePath,
     }).map((archive) => [archive.archiveName, archive.sessionId]),
   );
-  const fileBacked = await listUsageCountedTranscriptFileStats(agentId, {
-    ...params,
-    archiveSessionIds,
+  for (const file of fileBacked) {
+    const sessionId = archiveSessionIds.get(path.basename(file.sourcePath));
+    if (sessionId) {
+      file.sessionId = sessionId;
+    }
+  }
+  const sqliteBacked = listUsageCountedSqliteTranscriptStats(agentId, {
+    ...(params?.minMtimeMs !== undefined ? { minMtimeMs: params.minMtimeMs } : {}),
+    storePath,
   });
-  const sqliteBacked = listUsageCountedSqliteTranscriptStats(agentId, params);
   const sqliteSessionIds = new Set(sqliteBacked.map((file) => file.sessionId).filter(Boolean));
   const canonicalFileBacked = fileBacked.filter(
     (file) => !file.sessionId || !sqliteSessionIds.has(file.sessionId),

@@ -214,6 +214,24 @@ export async function filterMemorySearchHitsBySessionVisibility(params: {
     params.cfg,
     scopedAgentId ? { agentId: scopedAgentId } : {},
   );
+  const archiveNames = [
+    ...new Set(
+      params.hits.flatMap((hit) => {
+        const identity =
+          hit.source === "sessions"
+            ? extractTranscriptIdentityFromSessionsMemoryHit(hit.path)
+            : undefined;
+        const archiveName = hit.path.replace(/\\/g, "/").split("/").at(-1);
+        return identity?.archived && archiveName ? [archiveName] : [];
+      }),
+    ),
+  ];
+  const archivedSessionsByName = new Map(
+    loadArchivedSessions({ agentId: scopedAgentId, archiveNames, storePath }).map((archive) => [
+      archive.archiveName,
+      archive,
+    ]),
+  );
 
   const conversationRecall = params.conversationRecall;
   const trustedAgentScope = Boolean(
@@ -377,10 +395,7 @@ export async function filterMemorySearchHitsBySessionVisibility(params: {
       ? (identity.ownerAgentId ?? scopedAgentId)
       : undefined;
     const canonicalArchive = identity.archived
-      ? loadArchivedSessions({
-          agentId: identity.ownerAgentId ?? scopedAgentId,
-          archiveNames: [hit.path.replace(/\\/g, "/").split("/").at(-1) ?? ""],
-        })[0]
+      ? archivedSessionsByName.get(hit.path.replace(/\\/g, "/").split("/").at(-1) ?? "")
       : undefined;
     const resolvedKeys = canonicalArchive?.sessionKey
       ? [canonicalArchive.sessionKey]

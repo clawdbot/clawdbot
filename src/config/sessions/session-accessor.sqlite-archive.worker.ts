@@ -147,15 +147,16 @@ function stageTranscriptArchiveContent(
   const fd = fs.openSync(stagedPath, "wx", 0o600);
   let rowCount = 0;
   try {
-    const rows = database
-      .prepare("SELECT event_json FROM transcript_events WHERE session_id = ? ORDER BY seq ASC")
+    const query = "SELECT event_json FROM transcript_events WHERE session_id = ? ORDER BY seq ASC";
+    const rows = database /* sqlite-allow-raw: the iterator keeps one row in memory at a time. */
+      .prepare(query)
       .iterate(sessionId);
     for (const row of rows) {
       if (typeof row.event_json !== "string") {
         throw new Error(`Invalid transcript event row for ${sessionId}`);
       }
-      fs.writeSync(fd, row.event_json);
-      fs.writeSync(fd, "\n");
+      fs.writeFileSync(fd, row.event_json);
+      fs.writeFileSync(fd, "\n");
       rowCount += 1;
     }
     fs.fsyncSync(fd);
@@ -205,6 +206,7 @@ async function encodeStagedTranscriptArchive(params: {
   const archivePath = `${resolveSqliteTranscriptArchivePath({
     archiveDirectory: params.archiveDirectory,
     generation: params.generation,
+    identityOwner: "registry",
     reason: params.reason,
     sessionId: params.sessionId,
     nowMs: createdAt,
@@ -245,6 +247,7 @@ export async function materializeTranscriptArchiveInWorker(
   const stagedPath = `${resolveSqliteTranscriptArchivePath({
     archiveDirectory: plan.archiveDirectory,
     generation: plan.snapshot.generation ?? undefined,
+    identityOwner: "registry",
     reason: plan.reason,
     sessionId: plan.sessionId,
   })}.${randomUUID()}.jsonl-stage`;

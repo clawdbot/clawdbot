@@ -107,13 +107,12 @@ export function listTranscriptInstancesFromDatabase(params: {
 export function listSessionTranscriptArchivesReadOnly(
   scope: Pick<SessionAccessScope, "agentId" | "env" | "storePath"> & {
     archiveNames?: readonly string[];
-    includeAll?: boolean;
     sessionIds?: readonly string[];
   },
 ) {
   const selectors = [...new Set(scope.sessionIds ?? [])];
   const archiveNames = [...new Set(scope.archiveNames ?? [])];
-  if (selectors.length === 0 && archiveNames.length === 0 && !scope.includeAll) {
+  if (selectors.length === 0 && archiveNames.length === 0) {
     return [];
   }
   const resolved = resolveSqliteReadScope(scope);
@@ -128,19 +127,14 @@ export function listSessionTranscriptArchivesReadOnly(
       ])
       .orderBy("created_at")
       .orderBy("session_id");
-    if (!scope.includeAll) {
-      query = query.where((expression) =>
-        expression.or([
-          ...(selectors.length > 0
-            ? [
-                expression("session_id", "in", selectors),
-                expression("session_key", "in", selectors),
-              ]
-            : []),
-          ...(archiveNames.length > 0 ? [expression("archive_name", "in", archiveNames)] : []),
-        ]),
-      );
-    }
+    query = query.where((expression) =>
+      expression.or([
+        ...(selectors.length > 0
+          ? [expression("session_id", "in", selectors), expression("session_key", "in", selectors)]
+          : []),
+        ...(archiveNames.length > 0 ? [expression("archive_name", "in", archiveNames)] : []),
+      ]),
+    );
     const rows = executeSqliteQuerySync(db, query).rows;
     return rows.filter(
       (row) => resolveAgentIdFromSessionKey(row.sessionKey, agentId) === resolved.agentId,
