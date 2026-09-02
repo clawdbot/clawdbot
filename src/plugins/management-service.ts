@@ -1562,12 +1562,10 @@ async function installResolvedManagedPluginSource(
   const extensionsDir = resolveDefaultPluginExtensionsDir(env);
   if (request.source === "bundled") {
     const result = await installBundledPluginSource({
-      snapshot: params.snapshot,
+      ...params,
       rawSpec: request.rawSpec,
       bundledSource: request.bundledSource,
       warning: request.warning,
-      invalidateRuntimeCache: params.invalidateRuntimeCache,
-      runtime: params.runtime,
     });
     return {
       ok: true,
@@ -1606,6 +1604,7 @@ async function installResolvedManagedPluginSource(
     config: params.snapshot.config,
     extensionsDir,
     logger: params.logger,
+    beforePersistentApply: params.beforePersistentApply,
     ...(capabilityConsent
       ? { onBeforePluginArtifactCommit: capabilityConsent.onBeforePluginArtifactCommit }
       : {}),
