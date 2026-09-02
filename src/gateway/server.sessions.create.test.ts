@@ -1903,9 +1903,12 @@ test("sessions.create runs an existing managed worktree cwd for initial and foll
     .spyOn(acpManagerModule, "getAcpSessionManager")
     .mockReturnValue({ resolveSession: () => null } as never);
   const { defaultRuntime } = await import("../runtime.js");
+  const actualConfig = await vi.importActual<typeof import("../config/io.js")>("../config/io.js");
+  const prepareInitialRun = createDeferredCore();
   const preparedRuntime = vi.fn<(params: { cwd?: string; workspaceDir?: string }) => void>();
   const mockPreparedRuntime = () =>
     mockGetReplyFromConfigOnce(async (ctx, opts) => {
+      await prepareInitialRun.promise;
       const sessionKey = requireNonEmptyString(ctx.SessionKey, "prepared session key");
       const loaded = loadSessionEntry({ agentId: "roboclaw", sessionKey, storePath });
       const workspaceDir =
@@ -1969,7 +1972,12 @@ test("sessions.create runs an existing managed worktree cwd for initial and foll
       }),
     ).resolves.toContainEqual(expect.objectContaining({ cwd: requestedCwd, type: "session" }));
     const createRunId = requireNonEmptyString(created.payload?.runId, "roboclaw create run id");
-    const createWait = await rpcReq(ws, "agent.wait", { runId: createRunId, timeoutMs: 10_000 });
+    const pendingCreateWait = rpcReq(ws, "agent.wait", { runId: createRunId, timeoutMs: 10_000 });
+    // Real-IO readers can run after the RPC fixture refresh, before the admitted turn
+    // prepares. They must see the same roster as creation, not pin the disk-only config.
+    actualConfig.getRuntimeConfig();
+    prepareInitialRun.resolve();
+    const createWait = await pendingCreateWait;
     expect(createWait, JSON.stringify(createWait)).toMatchObject({
       ok: true,
       payload: { status: "ok" },
@@ -2003,6 +2011,7 @@ test("sessions.create runs an existing managed worktree cwd for initial and foll
       payload: { status: "ok" },
     });
   } finally {
+    prepareInitialRun.resolve();
     ws.close();
     getAcpSessionManager.mockRestore();
     await managedWorktrees.remove({
