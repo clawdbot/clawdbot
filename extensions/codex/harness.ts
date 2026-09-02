@@ -115,6 +115,22 @@ export function createCodexAppServerAgentHarness(
       visibleReplies: "message_tool",
     },
     authBootstrap: "harness",
+    resolveSessionRuntimeOwnership: async (params) => {
+      const assertCurrent = () => {
+        params.assertCurrent();
+        if (disposed) {
+          throw new Error("Codex agent harness is disposed");
+        }
+      };
+      assertCurrent();
+      const { sessionBindingIdentity } = await import("./src/app-server/session-binding.js");
+      assertCurrent();
+      const binding = await options.bindingStore.read(sessionBindingIdentity(params));
+      assertCurrent();
+      return binding?.preserveNativeModel === true
+        ? { model: "native", auth: binding.connectionScope === "supervision" ? "native" : "host" }
+        : undefined;
+    },
     ...(sessionCatalogControlFactory && sessionRuntime
       ? {
           sessionFork: {

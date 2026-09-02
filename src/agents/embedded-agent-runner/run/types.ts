@@ -158,8 +158,10 @@ export type EmbeddedRunAttemptParams = EmbeddedRunAttemptBase & {
   delegationCapability?: DelegationCapability;
   /** Concrete degraded-runtime reason for this attempt, when known. */
   degradedReason?: string | null;
-  /** Session-pinned embedded harness id. Prevents runtime hot-switching. */
+  /** Final prepared harness for this attempt; not evidence of native session/model ownership. */
   agentHarnessId?: string;
+  /** Non-authorizing expectation; the harness must verify its current private binding. */
+  expectedSessionRuntimeOwnership?: { model: "native"; auth: "native" | "host" };
   /** Capture a local harness implementation only for setup/verified continuations. */
   captureRuntimeArtifact?: boolean;
   /** Exact implementation that must own the attempt before it creates a native thread. */

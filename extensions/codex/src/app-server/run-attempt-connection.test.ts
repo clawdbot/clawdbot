@@ -7,6 +7,7 @@ import * as appServerPolicy from "./app-server-policy.js";
 import { applyCodexAppServerAuthProfile } from "./auth-bridge.js";
 import * as bindingConnection from "./binding-connection.js";
 import * as codexRequirements from "./config-requirements.js";
+import { resolveCodexAppServerRuntimeOptions } from "./config.js";
 import { prepareCodexAttemptConnection } from "./run-attempt-connection.js";
 import {
   createCodexRuntimePlanFixture,
@@ -16,6 +17,7 @@ import {
 } from "./run-attempt-test-harness.js";
 import { createSandboxContext } from "./sandbox-exec-server.test-helpers.js";
 import {
+  readCodexAppServerBinding,
   registerCodexTestSessionIdentity,
   testCodexAppServerBindingStore,
   writeCodexAppServerBinding,
@@ -24,10 +26,115 @@ import {
   createIsolatedCodexAppServerClient,
   getLeasedSharedCodexAppServerClient,
 } from "./shared-client.js";
+import { withCodexThreadLifecycleBinding } from "./thread-lifecycle-adoption.js";
 
 setupRunAttemptTestHooks();
 
 describe("prepareCodexAttemptConnection", () => {
+  it.each(["missing", "ordinary", "auth-changed"] as const)(
+    "rejects %s expected native ownership before reclaim or connection preparation",
+    async (state) => {
+      const sessionFile = path.join(tempDir, "expected-ownership.jsonl");
+      const workspaceDir = path.join(tempDir, "expected-ownership-workspace");
+      const params = createParams(sessionFile, workspaceDir);
+      params.expectedSessionRuntimeOwnership = {
+        model: "native",
+        auth: state === "auth-changed" ? "native" : "host",
+      };
+      registerCodexTestSessionIdentity(sessionFile, params.sessionId, params.sessionKey);
+      if (state !== "missing") {
+        await writeCodexAppServerBinding(sessionFile, {
+          threadId: "thread-existing",
+          cwd: workspaceDir,
+          ...(state === "auth-changed" ? { preserveNativeModel: true } : {}),
+        });
+      }
+      const before = await readCodexAppServerBinding(sessionFile);
+      const reclaim = vi.spyOn(testCodexAppServerBindingStore, "prepareSessionGenerationReclaim");
+      const connect = vi.spyOn(bindingConnection, "resolveCodexBindingAppServerConnection");
+
+      await expect(
+        prepareCodexAttemptConnection({
+          params,
+          options: { bindingStore: testCodexAppServerBindingStore },
+        }),
+      ).rejects.toMatchObject({
+        name: "AgentHarnessPreflightError",
+        message: expect.stringContaining("Reattach the original native session"),
+      });
+      expect(reclaim).not.toHaveBeenCalled();
+      expect(connect).not.toHaveBeenCalled();
+      await expect(readCodexAppServerBinding(sessionFile)).resolves.toEqual(before);
+    },
+  );
+
+  it.each(["preserved", "missing", "ordinary", "auth-changed"] as const)(
+    "rechecks %s native ownership after acquiring the lifecycle binding lease",
+    async (state) => {
+      const sessionFile = path.join(tempDir, "leased-ownership.jsonl");
+      const workspaceDir = path.join(tempDir, "leased-ownership-workspace");
+      const params = createParams(sessionFile, workspaceDir);
+      params.expectedSessionRuntimeOwnership = { model: "native", auth: "host" };
+      registerCodexTestSessionIdentity(sessionFile, params.sessionId, params.sessionKey);
+      await writeCodexAppServerBinding(sessionFile, {
+        threadId: "thread-existing",
+        cwd: workspaceDir,
+        preserveNativeModel: true,
+      });
+      const bindingStore = testCodexAppServerBindingStore;
+      const withLease = bindingStore.withLease.bind(bindingStore);
+      vi.spyOn(bindingStore, "withLease").mockImplementationOnce(async (identity, run) => {
+        // The initial snapshot is valid; simulate retirement/replacement while awaiting its lease.
+        if (state === "missing") {
+          await bindingStore.mutate(identity, { kind: "clear", threadId: "thread-existing" });
+        } else if (state !== "preserved") {
+          await bindingStore.mutate(identity, {
+            kind: "patch",
+            threadId: "thread-existing",
+            patch:
+              state === "ordinary"
+                ? { preserveNativeModel: undefined }
+                : {
+                    connectionScope: "supervision",
+                    supervisionSourceThreadId: "native-source",
+                    conversationSourceTransferComplete: true,
+                    model: "native-model",
+                    modelProvider: "native-provider",
+                  },
+          });
+        }
+        return withLease(identity, run);
+      });
+      const execute = vi.fn<Parameters<typeof withCodexThreadLifecycleBinding>[1]>(
+        async (_identity, binding) => {
+          if (!binding) {
+            throw new Error("native execution received no binding");
+          }
+          return { ...binding, lifecycle: { action: "resumed" } };
+        },
+      );
+      const operation = withCodexThreadLifecycleBinding(
+        {
+          params,
+          bindingStore,
+          client: {} as never,
+          cwd: workspaceDir,
+          dynamicTools: [],
+          appServer: resolveCodexAppServerRuntimeOptions({ env: {}, requirementsToml: null }),
+        },
+        execute,
+      );
+
+      if (state === "preserved") {
+        await expect(operation).resolves.toMatchObject({ preserveNativeModel: true });
+        expect(execute).toHaveBeenCalledOnce();
+      } else {
+        await expect(operation).rejects.toMatchObject({ name: "AgentHarnessPreflightError" });
+        expect(execute).not.toHaveBeenCalled();
+      }
+    },
+  );
+
   it.each([
     "local",
     "loopback-server",

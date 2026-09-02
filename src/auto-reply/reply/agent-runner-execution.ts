@@ -145,7 +145,10 @@ async function executeAgentTurnInternalLoop(
           config: runtimeConfig,
         };
   let liveModelSwitchRuntimeEntry:
-    | Pick<SessionEntry, "agentHarnessId" | "agentRuntimeOverride" | "modelSelectionLocked">
+    | Pick<
+        SessionEntry,
+        "agentHarnessId" | "agentRuntimeOverride" | "modelSelectionLocked" | "pluginOwnerId"
+      >
     | undefined;
   const applyLiveModelSwitchToRun = (
     run: FollowupRun["run"],

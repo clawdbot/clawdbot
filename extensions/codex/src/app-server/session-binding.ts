@@ -3,9 +3,11 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { createHash, randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import {
+  AgentHarnessPreflightError,
   AgentHarnessSessionSupersededError,
   embeddedAgentLog,
   type AgentHarnessSessionDeletionMutation,
+  type EmbeddedRunAttemptParamsV2,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   ensureAuthProfileStore,
@@ -365,7 +367,14 @@ export class CodexSupervisionBindingReplacementError extends Error {
 export function assertCodexBindingMayBeReplaced(
   binding: CodexAppServerThreadBinding | undefined,
   operation: string,
+  expected?: EmbeddedRunAttemptParamsV2["expectedSessionRuntimeOwnership"],
 ): void {
+  // A native-prepared attempt has no host-selected model for a replacement thread.
+  if (expected) {
+    throw new AgentHarnessPreflightError(
+      `Codex native model ownership prevents ${operation}. Continue or compact the original session in its native runtime, or create a new chat with a concrete model; the original binding was preserved.`,
+    );
+  }
   if (binding?.connectionScope === "supervision") {
     throw new CodexSupervisionBindingReplacementError(binding.threadId, operation);
   }

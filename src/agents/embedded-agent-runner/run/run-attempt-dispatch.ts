@@ -32,6 +32,7 @@ import type {
   RunEmbeddedAgentInternalParams,
 } from "./internal-params.js";
 import type { createEmbeddedRunLaneController } from "./lane-controller.js";
+import type { PreparedNativeSessionRuntime } from "./model-setup.js";
 import type { RunEmbeddedAgentParams } from "./params.js";
 import { prepareEmbeddedAttemptPromptExecution } from "./prompt-image-preparation.js";
 import { resolveSkillWorkshopAttemptParams } from "./skill-workshop-attempt-params.js";
@@ -65,6 +66,7 @@ type AttemptRuntime = {
   fallbackActive: boolean;
   fallbackReason: string | null;
   agentHarnessId: string;
+  nativeSessionRuntime?: PreparedNativeSessionRuntime;
   expectedRuntimeArtifact?: AgentHarnessRuntimeArtifactBinding;
   runtimePlan: AgentRuntimePlan;
   model: EmbeddedRunAttemptParams["model"];
@@ -361,6 +363,14 @@ export async function dispatchEmbeddedRunAttempt(input: {
     agentHarnessId: runtime.agentHarnessId,
     agentHarnessRuntimeOverride: runtime.agentHarnessId,
     modelSelectionLocked: params.modelSelectionLocked,
+    ...(runtime.nativeSessionRuntime
+      ? {
+          expectedSessionRuntimeOwnership: {
+            model: "native",
+            auth: runtime.nativeSessionRuntime.auth,
+          },
+        }
+      : {}),
     ...(runtime.captureRuntimeArtifact ? { captureRuntimeArtifact: true } : {}),
     ...(runtime.expectedRuntimeArtifact
       ? { expectedRuntimeArtifact: runtime.expectedRuntimeArtifact }
@@ -513,7 +523,7 @@ export async function dispatchEmbeddedRunAttempt(input: {
     turnSourceThreadId: params.currentThreadTs,
   });
   const rawAttempt = await withGatewayToolCallerIdentity(callerIdentity, () =>
-    runEmbeddedAttemptWithBackend(attemptParams),
+    runEmbeddedAttemptWithBackend(attemptParams, runtime.nativeSessionRuntime),
   )
     .catch((err: unknown): never => {
       throw control.getPostCompactionAbortError() ?? err;

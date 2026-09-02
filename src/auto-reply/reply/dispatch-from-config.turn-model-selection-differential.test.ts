@@ -100,6 +100,39 @@ describe("turn model selection harness-path differential", () => {
     expect(observeHarnessSelection(fixture)).toEqual(fixture.expected.harness);
   });
 
+  it.each([
+    { pluginOwnerId: "model-owner", expectedPin: undefined, expectedOverride: "openclaw" },
+    { pluginOwnerId: undefined, expectedPin: "codex", expectedOverride: "codex" },
+  ])(
+    "preserves the delivery-policy owner with pluginOwnerId=$pluginOwnerId",
+    ({ pluginOwnerId, expectedPin, expectedOverride }) => {
+      selectAgentHarnessMock.mockClear();
+      resolveVisibleRepliesPolicy({
+        cfg: {
+          agents: { defaults: { model: { primary: "openai/dispatch-model" } } },
+        },
+        chatType: "direct",
+        ctx: buildTestCtx({ Provider: "openai" }),
+        entry: {
+          sessionId: "owned-session",
+          updatedAt: 100,
+          agentHarnessId: "codex",
+          agentRuntimeOverride: "openclaw",
+          modelSelectionLocked: true,
+          pluginOwnerId,
+        },
+        sessionAgentId: "main",
+      });
+
+      expect(selectAgentHarnessMock).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          agentHarnessId: expectedPin,
+          agentHarnessRuntimeOverride: expectedOverride,
+        }),
+      );
+    },
+  );
+
   it("resolves turn aliases in the session agent scope", () => {
     const sessionKey = "agent:worker:telegram:group:selection";
     const cfg = {

@@ -18,7 +18,10 @@ import {
   resolveCodexAppServerAuthProfileIdForAgent,
   resolveCodexAppServerPreparedAuthHandoff,
 } from "./auth-bridge.js";
-import { resolveCodexBindingAppServerConnection } from "./binding-connection.js";
+import {
+  assertCodexSessionRuntimeOwnership,
+  resolveCodexBindingAppServerConnection,
+} from "./binding-connection.js";
 import {
   canUseCodexModelBackedApprovalsReviewerForModel,
   isCodexPairedNodeRemoteExecPlacementSandbox,
@@ -207,6 +210,7 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
     }
   }
   let startupBinding = await bindingStore.read(bindingIdentity);
+  assertCodexSessionRuntimeOwnership(startupBinding, params.expectedSessionRuntimeOwnership);
   if (!startupBinding && bindingIdentity.kind === "session" && bindingIdentity.sessionKey) {
     const reclaimed = await reclaimCurrentCodexSessionGeneration({
       bindingStore,
@@ -428,6 +432,7 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
     codexHome: appServer.start.env?.CODEX_HOME,
     config: params.config,
     contextEngineActive: Boolean(activeContextEngine),
+    expectedSessionRuntimeOwnership: params.expectedSessionRuntimeOwnership,
   });
   startupBinding = startupBindingResolution.binding;
   const initialInactiveThreadBootstrapBindingForcedFreshStart =

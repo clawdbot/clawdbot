@@ -3606,6 +3606,45 @@ describe("Codex app-server adopted thread lifecycle", () => {
     vi.restoreAllMocks();
   });
 
+  it.each(["native-tools", "delegation"] as const)(
+    "preserves expected native ownership instead of starting a fresh %s-restricted thread",
+    async (restriction) => {
+      const workspaceDir = path.join(tempDir, "workspace");
+      const params = createThreadLifecycleParams(path.join(tempDir, "session.jsonl"), workspaceDir);
+      const { identity, threadId } = await seedAdoptedThreadBinding(params, workspaceDir);
+      params.expectedSessionRuntimeOwnership = { model: "native", auth: "host" };
+      if (restriction === "delegation") {
+        params.delegationCapability = "report_only";
+      }
+      const before = await testCodexAppServerBindingStore.read(identity);
+      const fixture = await createLeasedCodexLifecycleHarness({
+        agentDir: path.join(tempDir, "agent"),
+        persistedThreads: [threadId],
+        respond: (method) => {
+          throw new Error(`unexpected method: ${method}`);
+        },
+      });
+      try {
+        await expect(
+          startOrResumeThread({
+            client: fixture.client,
+            params,
+            cwd: workspaceDir,
+            dynamicTools: [],
+            appServer: createThreadLifecycleAppServerOptions(),
+            ...(restriction === "native-tools" ? { nativeCodeModeEnabled: false } : {}),
+          }),
+        ).rejects.toMatchObject({ name: "AgentHarnessPreflightError" });
+        expect(fixture.request.mock.calls.some(([method]) => method === "thread/start")).toBe(
+          false,
+        );
+        await expect(testCodexAppServerBindingStore.read(identity)).resolves.toEqual(before);
+      } finally {
+        fixture.client.close();
+      }
+    },
+  );
+
   it("keeps OpenClaw from overriding App Server model selection across resumes", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
@@ -3913,6 +3952,7 @@ describe("Codex app-server supervised branch lifecycle", () => {
       `rollout-${finalThreadId}.jsonl`,
     );
     attempt.modelId = "outer-global-default";
+    attempt.expectedSessionRuntimeOwnership = { model: "native", auth: "native" };
     const identity = await seedPendingSupervisionBinding({
       attempt,
       cwd: workspaceDir,

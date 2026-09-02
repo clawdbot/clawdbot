@@ -387,6 +387,14 @@ type AgentHarnessRunCapability<
    */
   conversationToolPolicySafeDenyTools?: readonly string[];
   supports(ctx: AgentHarnessSupportContext): AgentHarnessSupport;
+  /** Reads private model/auth ownership; execution still validates the bound native connection. */
+  resolveSessionRuntimeOwnership?(params: {
+    config?: OpenClawConfig;
+    agentId?: string;
+    sessionId: string;
+    sessionKey?: string;
+    assertCurrent: () => void;
+  }): Promise<{ model: "native"; auth: "native" | "host" } | undefined>;
   /** Lets this harness resolve forwarded profiles or its own native credentials. */
   authBootstrap?: "harness";
   runAttempt(params: TAttemptParams): Promise<AgentHarnessAttemptResult>;

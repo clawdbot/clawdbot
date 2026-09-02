@@ -31,9 +31,10 @@ WebSocket model APIs, build a [provider plugin](/plugins/sdk-provider-plugins).
 
 ## What core still owns
 
-Before a harness is selected, OpenClaw has already resolved:
+For ordinary concrete-model turns, OpenClaw prepares these inputs before
+calling `runAttempt`:
 
-- provider and model
+- provider and model, including discovery and concrete request parameters
 - runtime auth state, unless the harness declares that it owns auth bootstrap
 - thinking level and context budget
 - the OpenClaw transcript/session file
@@ -42,7 +43,11 @@ Before a harness is selected, OpenClaw has already resolved:
 - model fallback and live model switching policy
 
 A harness runs a prepared attempt; it does not pick providers, replace channel
-delivery, or silently switch models.
+delivery, or silently switch models. Locking a concrete model chat does not skip
+model discovery, auth preparation, or Responses parameters. An explicit
+`pluginOwnerId` owns session control; a later producing `agentHarnessId` is an
+observation, not a native ownership claim. Bound native sessions use the separate
+ownership contract below.
 
 ### Native tool-policy enforcement
 
@@ -74,15 +79,60 @@ rejected by core and are not covered by this declaration.
 
 By default, core resolves provider credentials before calling a harness. A
 trusted harness that can authenticate through its own native runtime may set
-`authBootstrap: "harness"` on its static `AgentHarness` registration. Core then
-skips its generic provider credential bootstrap and missing-credential failure
-for every attempt claimed by that harness.
+`authBootstrap: "harness"` on its static `AgentHarness` registration. Core can
+then delegate credential bootstrap instead of rejecting a route merely because
+generic provider credentials are absent. Prepared route and explicit profile
+requirements still apply.
 
 Core still forwards a compatible, explicitly selected or ordered OpenClaw auth
 profile and its scoped store when one exists. The harness must resolve that
 profile or its native credentials before issuing model requests, keep secrets
 scoped to the attempt, and surface actionable authentication failures. Do not
 set this capability on a harness that only sometimes owns authentication.
+This static bootstrap capability is distinct from ownership of an already-bound
+native session's model and connection.
+
+### Bound native session ownership
+
+The optional `resolveSessionRuntimeOwnership({ config, agentId, sessionId,
+sessionKey, assertCurrent })` callback reports private binding ownership. Core
+calls it only on the exact pinned harness after validating the durable session
+identity. `sessionId` and `assertCurrent` are required; `config`, `agentId`, and
+`sessionKey` are optional. Return a Promise of:
+
+- `{ model: "native", auth: "native" }` when the binding owns both model selection
+  and authentication through its native connection.
+- `{ model: "native", auth: "host" }` when it owns model selection but still needs
+  host auth preparation.
+- `undefined` when no matching native-model binding exists. For a validated
+  native harness pin, an implemented callback returning `undefined` is an
+  unavailable-owner error: fail visibly, without ordinary discovery or a fresh
+  native thread. Reattach the original native session before retrying.
+
+Omitting the callback preserves normal concrete model/auth preparation for
+third-party harnesses. Concrete plugin-owned chats never query it; a runtime
+request or model lock alone cannot establish native ownership. Paired-node
+Codex sessions use their owning node handler; a missing local binding must not
+turn a misrouted continuation into a local run.
+
+Read the existing private binding only. Call `assertCurrent()` before and after
+awaited work. Do not reclaim a generation, start a client, authenticate, or
+mutate the binding from this callback. Its result does not authorize execution.
+
+The Codex implementation reports native model ownership from `preserveNativeModel`.
+It reports native auth only for the separate private supervision connection;
+preserving a model on a managed connection leaves auth with the host. A
+native-auth binding uses its verified connection instead of testing irrelevant
+outer model route/auth metadata or forwarding a host profile. Native connection
+policy still applies. Explicit per-run provider stream parameters are rejected
+rather than dropped; use a concrete model chat to apply them.
+
+Core carries the result into the attempt as optional
+`expectedSessionRuntimeOwnership`. This is a nonauthorizing comparison, not a
+binding, credential, or retained capability. The harness must revalidate its
+actual binding during preflight and again under its binding lease before native
+execution. If the expected ownership disappears or changes, fail closed; never
+replace the lost native session with a fresh thread.
 
 ### Verified setup runtime artifacts
 
@@ -311,14 +361,19 @@ checks. Plugins opt into the scope but never name the harness owner on the
 error. Do not use harness scope after a request or tool action may have produced
 side effects.
 
-Configured runtime policy remains authoritative about the desired runtime. A
-locked session `agentHarnessId` keeps ownership of its native transcript
-while route/auth preparation is still pending. Neither makes an incompatible
-route compatible: once prepared facts exist, the selected or pinned harness
-must support them, declare the exact-request OpenClaw fallback, or the run fails
-closed. Next-turn metadata uses the same registered support decision and retains
-its model/provider/session source. An unlocked historical producer does not pin
-the next turn. Projection never loads a harness or reads credentials.
+Configured runtime policy remains authoritative about the desired runtime.
+A durable native harness pin retains its transcript owner; an observed harness
+on a plugin-owned concrete model chat does not become a pin, even when model
+selection is locked. For concrete-model execution, neither a request nor a pin
+makes an incompatible route compatible: the harness must support the prepared
+facts, declare the exact-request OpenClaw fallback, or fail closed.
+[Bound native session ownership](/plugins/sdk-agent-harness#bound-native-session-ownership) separately
+identifies sessions whose verified native connection owns model and auth, so
+unrelated outer route metadata does not replace that connection.
+
+Next-turn metadata uses the registered support decision and retains its
+model/provider/session source. Historical producer observations do not pin the
+next turn. Projection never loads a harness or reads credentials.
 Prepared status is explicit: missing `runtimePolicy` stays undeclared instead
 of being inferred from whichever transport fields happen to be present.
 When harness-owned auth leaves multiple physical routes unresolved, the
@@ -348,8 +403,8 @@ The bundled Codex plugin follows this pattern:
 - compatibility refs: legacy `codex/gpt-*` refs remain accepted, but new
   configs should not use them as normal provider/model refs
 - harness id: `codex`
-- auth: synthetic provider availability, because the Codex harness owns the
-  native Codex login/session
+- auth: prepared OpenAI route/profile policy for concrete requests; verified
+  native-auth bindings use their native connection
 - app-server request: OpenClaw sends the bare model id to Codex and lets the
   harness talk to the native app-server protocol
 

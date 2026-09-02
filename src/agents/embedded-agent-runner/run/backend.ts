@@ -34,8 +34,9 @@ export function resolveRuntimeModelAttempt(
  */
 export async function runEmbeddedAttemptWithBackend(
   params: EmbeddedRunAttemptParams,
+  nativeSessionRuntime?: Parameters<typeof runAgentHarnessAttempt>[1],
 ): Promise<EmbeddedRunAttemptResult> {
-  const result = await runAgentHarnessAttempt(params);
+  const result = await runAgentHarnessAttempt(params, nativeSessionRuntime);
   if (
     result.agentHarnessId !== "openclaw" &&
     params.sessionKey &&
