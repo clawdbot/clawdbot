@@ -46,6 +46,10 @@ const SUPPORTED_CONSTRAINT_ONLY_KEYS = new Set([
   "minLength",
   "maxLength",
   "pattern",
+  // Zod .url()/z.email()/.datetime() emit `format`; the shared TypeBox validator
+  // checks known formats like `pattern`, and the Gateway validates every write.
+  // Rejecting the keyword sends every such string field to Raw mode.
+  "format",
   "minItems",
   "maxItems",
   "uniqueItems",
