@@ -1,4 +1,3 @@
-import fs from "node:fs/promises";
 import path from "node:path";
 import { withTimeout } from "../../infra/fs-safe.js";
 import { registerSecretValueForRedaction } from "../../logging/secret-redaction-registry.js";
@@ -31,7 +30,6 @@ import {
 
 const PASSWORD_READ_TIMEOUT_MS = 20_000;
 const APP_LAUNCH_TIMEOUT_MS = 30_000;
-const WORKER_DESKTOP_SOCKET_ROOT = "/tmp";
 
 const REMOTE_DESKTOP_READY_SCRIPT = String.raw`set -eu
 printf '%s\n' '${WORKER_TUNNEL_READY_MARKER}'
@@ -48,14 +46,6 @@ type DesktopAcquireRequest = {
 };
 
 type DesktopAcquireResult = { attachment: DesktopRfbAttachment; vncPassword?: string };
-type WorkerDesktopTunnelFileSystem = {
-  mkdtemp: (prefix: string) => Promise<string>;
-  chmod: (
-    target: Parameters<typeof fs.chmod>[0],
-    mode: Parameters<typeof fs.chmod>[1],
-  ) => Promise<void>;
-  rm: (target: Parameters<typeof fs.rm>[0], options: Parameters<typeof fs.rm>[1]) => Promise<void>;
-};
 
 type DesktopAppLaunchEntry = {
   environmentId: string;
@@ -84,10 +74,8 @@ export function createWorkerDesktopTunnels(deps: {
   registry?: DesktopSessionRegistry;
   lingerMs?: number;
   platform?: NodeJS.Platform;
-  filesystem?: WorkerDesktopTunnelFileSystem;
 }) {
   const platform = deps.platform ?? process.platform;
-  const filesystem = deps.filesystem ?? fs;
   const sessions = deps.registry ?? createDesktopSessionRegistry({ lingerMs: deps.lingerMs });
   const appLaunches = new Map<string, DesktopAppLaunchEntry>();
 
@@ -132,7 +120,6 @@ export function createWorkerDesktopTunnels(deps: {
     let prepared: PreparedWorkerSsh | undefined;
     let child: WorkerSshProcess | undefined;
     let stoppedChild: WorkerSshProcess | undefined;
-    let socketDirectory: string | undefined;
     let startSettled = false;
 
     const start = async (isCurrent: () => boolean): Promise<DesktopAcquireResult> => {
@@ -141,26 +128,15 @@ export function createWorkerDesktopTunnels(deps: {
           ssh: request.ssh,
           pinnedHostKey: request.ssh.hostKey,
           resolveIdentity: request.resolveIdentity,
-          temporaryDirectoryPrefix: "openclaw-worker-desktop-",
+          // macOS Unix sockets allow 103 bytes; share one short private directory with SSH credentials.
+          temporaryDirectoryPrefix: "/tmp/openclaw-worker-desktop-",
         });
         if (!isCurrent()) {
           await prepared.dispose();
           prepared = undefined;
           throw new Error("Worker desktop tunnel stopped before connecting");
         }
-        socketDirectory = await filesystem.mkdtemp(path.join(WORKER_DESKTOP_SOCKET_ROOT, "oc-wd-"));
-        await filesystem.chmod(socketDirectory, 0o700);
-        // Socket setup yields to Stop/replacement; clean late allocations before publishing SSH.
-        if (!isCurrent()) {
-          await filesystem
-            .rm(socketDirectory, { recursive: true, force: true })
-            .catch(() => undefined);
-          socketDirectory = undefined;
-          await prepared.dispose().catch(() => undefined);
-          prepared = undefined;
-          throw new Error("Worker desktop tunnel stopped before connecting");
-        }
-        const localSocketPath = path.join(socketDirectory, "desktop.sock");
+        const localSocketPath = path.join(path.dirname(prepared.knownHostsPath), "desktop.sock");
         child = deps.runner.start(
           [
             "ssh",
@@ -244,12 +220,6 @@ export function createWorkerDesktopTunnels(deps: {
       if (child && child !== stoppedChild) {
         stoppedChild = child;
         await child?.stop().catch(() => undefined);
-      }
-      if (socketDirectory) {
-        await filesystem
-          .rm(socketDirectory, { recursive: true, force: true })
-          .catch(() => undefined);
-        socketDirectory = undefined;
       }
       await prepared?.dispose().catch(() => undefined);
       prepared = undefined;

@@ -151,7 +151,7 @@ export async function prepareWorkerSsh(params: {
     )
     .join("");
   const temporaryDir = await fs.mkdtemp(
-    path.join(os.tmpdir(), params.temporaryDirectoryPrefix ?? "openclaw-worker-ssh-"),
+    path.resolve(os.tmpdir(), params.temporaryDirectoryPrefix ?? "openclaw-worker-ssh-"),
   );
   try {
     const identity = await params.resolveIdentity(params.ssh.keyRef);

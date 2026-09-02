@@ -1,4 +1,4 @@
-import fs, { access } from "node:fs/promises";
+import { access, mkdir, mkdtemp, rm, stat } from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { WorkerDesktopEndpoint, WorkerSshEndpoint } from "../../plugins/types.js";
@@ -132,6 +132,44 @@ async function waitForStarts(starts: unknown[], count: number) {
 afterEach(() => vi.useRealTimers());
 
 describe("worker desktop tunnels", () => {
+  it.skipIf(process.platform === "win32")(
+    "keeps the socket and credentials in one short private directory despite a long temp root",
+    async ({ onTestFinished }) => {
+      const root = await mkdtemp("/tmp/oc-desktop-test-");
+      const ambient = path.join(root, "long-temporary-root-" + "x".repeat(120));
+      const fake = fakeRunner();
+      const manager = createWorkerDesktopTunnels({ runner: fake.runner });
+      onTestFinished(async () => {
+        await manager.stopAll();
+        vi.unstubAllEnvs();
+        await rm(root, { recursive: true, force: true });
+      });
+      await mkdir(ambient);
+      vi.stubEnv("TMPDIR", ambient);
+      const starting = manager.acquire({
+        environmentId: "worker:long-path",
+        ownerEpoch: 1,
+        ssh: SSH,
+        desktop: { protocol: "rfb", port: 5900 },
+        resolveIdentity: async () => ({ kind: "material", contents: "synthetic-identity" }),
+      });
+      await waitForStarts(fake.starts, 1);
+      fake.starts[0]!.process.becomeReady();
+      const { attachment } = await starting;
+      if (attachment.kind !== "unix-socket") {
+        throw new Error("expected an SSH desktop socket");
+      }
+      expect(Buffer.byteLength(attachment.socketPath)).toBeLessThanOrEqual(103);
+      const directory = path.dirname(attachment.socketPath);
+      expect((await stat(directory)).mode & 0o777).toBe(0o700);
+      for (const name of ["identity", "known_hosts"]) {
+        expect((await stat(path.join(directory, name))).mode & 0o777).toBe(0o600);
+      }
+      await manager.stopAll();
+      await expect(access(directory)).rejects.toMatchObject({ code: "ENOENT" });
+    },
+  );
+
   it("creates one pinned local forward per epoch and caches the password", async () => {
     const fake = fakeRunner();
     const manager = createWorkerDesktopTunnels({ runner: fake.runner });
@@ -142,10 +180,9 @@ describe("worker desktop tunnels", () => {
     expect(start.argv).toContain("StreamLocalBindMask=0177");
     expect(start.argv).toContain("ServerAliveInterval=15");
     expect(start.argv).toContain("ServerAliveCountMax=3");
-    const forward = start.argv[start.argv.indexOf("-L") + 1]!;
-    expect(forward).toMatch(/^\/tmp\/oc-wd-.+\/desktop\.sock:127\.0\.0\.1:5900$/u);
-    const socketPath = forward.slice(0, forward.indexOf(":127.0.0.1:"));
-    expect(Buffer.byteLength(socketPath)).toBeLessThan(104);
+    expect(start.argv[start.argv.indexOf("-L") + 1]).toMatch(
+      /openclaw-worker-desktop-.+\/desktop\.sock:127\.0\.0\.1:5900$/u,
+    );
     expect(start.options.input).toContain("OPENCLAW_WORKER_TUNNEL_READY");
     start.process.becomeReady();
     const result = await starting;
@@ -183,64 +220,6 @@ describe("worker desktop tunnels", () => {
     expect(fake.starts[0]!.process.stopCount).toBe(1);
     await manager.stopAll();
     await expect(access(identityDirectory)).rejects.toMatchObject({ code: "ENOENT" });
-  });
-
-  it("removes the short socket directory when tunnel startup fails", async () => {
-    let forward = "";
-    const runner: WorkerSshRunner = {
-      start(argv) {
-        forward = argv[argv.indexOf("-L") + 1] ?? "";
-        throw new Error("synthetic SSH startup failure");
-      },
-      async run() {
-        return success();
-      },
-    };
-    const manager = createWorkerDesktopTunnels({ runner, platform: "linux" });
-
-    await expect(acquire(manager)).rejects.toThrow("synthetic SSH startup failure");
-    const socketPath = forward.slice(0, forward.indexOf(":127.0.0.1:"));
-    expect(socketPath).toMatch(/^\/tmp\/oc-wd-.+\/desktop\.sock$/u);
-    await vi.waitFor(async () => {
-      await expect(access(path.dirname(socketPath))).rejects.toMatchObject({ code: "ENOENT" });
-    });
-  });
-
-  it("does not start SSH after stop wins during socket setup", async ({ onTestFinished }) => {
-    const fake = fakeRunner();
-    const chmodStarted = deferred<void>();
-    const continueChmod = deferred<void>();
-    let socketDirectory = "";
-    const manager = createWorkerDesktopTunnels({
-      runner: fake.runner,
-      platform: "linux",
-      filesystem: {
-        async mkdtemp(prefix) {
-          socketDirectory = await fs.mkdtemp(prefix);
-          return socketDirectory;
-        },
-        rm: fs.rm.bind(fs),
-        async chmod(target, mode) {
-          await fs.chmod(target, mode);
-          chmodStarted.resolve();
-          await continueChmod.promise;
-        },
-      },
-    });
-    onTestFinished(async () => {
-      continueChmod.resolve();
-      await manager.stopAll();
-    });
-
-    const starting = acquire(manager);
-    await chmodStarted.promise;
-    const stopping = manager.stop("worker:one", 1);
-    continueChmod.resolve();
-
-    await expect(starting).rejects.toThrow("stopped before connecting");
-    await stopping;
-    expect(fake.starts).toEqual([]);
-    await expect(access(socketDirectory)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it("fences an older epoch before starting its replacement", async () => {
