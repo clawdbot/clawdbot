@@ -17,27 +17,18 @@ it("exits after a stop frame while the supervisor keeps stdin open", async () =>
     ...process.env,
     HOME: root,
     USERPROFILE: root,
+    NODE_DISABLE_COMPILE_CACHE: "1",
     OPENCLAW_CONFIG_PATH: configPath,
     OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+    OPENCLAW_NO_RESPAWN: "1",
     OPENCLAW_STATE_DIR: stateDir,
   };
   delete env.VITEST;
   delete env.VITEST_POOL_ID;
   delete env.VITEST_WORKER_ID;
-  const workerUrl = new URL("./worker.ts", import.meta.url).href;
-  const finalizerUrl = new URL("../cli/one-shot-exit.ts", import.meta.url).href;
-  const script = `
-    import { runCliWithExitFinalization } from ${JSON.stringify(finalizerUrl)};
-    import { runNodeHostWorker } from ${JSON.stringify(workerUrl)};
-    await runCliWithExitFinalization({
-      run: runNodeHostWorker,
-      onError: (error) => { throw error; },
-    });
-  `;
-
   try {
     const result = await runCliProcessChild({
-      nodeArgs: ["--import", "tsx", "--input-type=module", "--eval", script],
+      nodeArgs: [path.resolve("openclaw.mjs"), "node", "worker"],
       env,
       interact: async (child) => {
         let stdout = "";
