@@ -1,4 +1,3 @@
-# syntax=docker/dockerfile:1
 #
 # riscv64-specific Dockerfile.
 #
@@ -133,11 +132,13 @@ LABEL org.opencontainers.image.source="https://github.com/openclaw/openclaw" \
   org.opencontainers.image.title="OpenClaw" \
   org.opencontainers.image.description="OpenClaw gateway and CLI runtime container image (linux/riscv64)"
 
-# Runtime utilities (mirrors the main runtime image) plus cmake/g++ so native
-# addons without a riscv64 prebuilt (e.g. node-llama-cpp) can compile from source.
+# Runtime utilities mirroring the main runtime image -- libgomp1 for managed
+# llama.cpp's OpenMP and openssh-client for the sandbox backend -- plus xz-utils
+# to unpack the Node tarball and cmake/g++/make so native addons without a
+# riscv64 prebuilt (e.g. node-llama-cpp) can compile from source.
 RUN apt-get update && \
     DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-      ca-certificates curl git hostname lsof openssl procps python3 tini xz-utils \
+      ca-certificates curl git hostname libgomp1 lsof openssh-client openssl procps python3 tini xz-utils \
       cmake g++ make && \
     tarball="node-v${NODE_VERSION}-linux-riscv64.tar.xz" && \
     curl -fsSLO "https://unofficial-builds.nodejs.org/download/release/v${NODE_VERSION}/${tarball}" && \
@@ -212,6 +213,6 @@ ENV PLAYWRIGHT_BROWSERS_PATH=/home/node/.cache/ms-playwright
 USER node
 
 HEALTHCHECK --interval=3m --timeout=10s --start-period=15s --retries=3 \
-  CMD node -e "fetch('http://127.0.0.1:18789/healthz').then((r)=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+  CMD ["node", "dist/docker-healthcheck.js"]
 ENTRYPOINT ["tini", "-s", "--"]
 CMD ["node", "openclaw.mjs", "gateway"]
