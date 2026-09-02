@@ -1947,8 +1947,9 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     expectRecordFields(result, {
       delivered: false,
       path: "direct",
-      reason: "visible_reply_missing",
-      error: "completion agent did not produce a visible reply",
+      reason: "source_output_empty",
+      error: "child produced no output (nothing to announce)",
+      disposition: "permanent_failure",
     });
     expect(sendMessage).not.toHaveBeenCalled();
   });
@@ -2847,7 +2848,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     expect(sendMessage).not.toHaveBeenCalled();
   });
 
-  it("preserves visible_reply_missing when completion direct delivery fails and fallback steering drops", async () => {
+  it("stops before fallback steering when the child produced no output", async () => {
     const callGateway = createPayloadGatewayMock();
     const sendMessage = createSendMessageMock();
     const queueEmbeddedAgentMessageWithOutcome = createQueueOutcomeMock(false);
@@ -2867,27 +2868,21 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     expectRecordFields(result, {
       delivered: false,
       path: "direct",
-      error: "completion agent did not produce a visible reply",
-      reason: "visible_reply_missing",
+      error: "child produced no output (nothing to announce)",
+      reason: "source_output_empty",
+      disposition: "permanent_failure",
       phases: [
         {
           phase: "direct-primary",
           delivered: false,
           path: "direct",
-          reason: "visible_reply_missing",
-          error: "completion agent did not produce a visible reply",
-        },
-        {
-          phase: "steer-fallback",
-          delivered: false,
-          path: "none",
-          reason: "steer_dropped",
-          error: undefined,
+          reason: "source_output_empty",
+          error: "child produced no output (nothing to announce)",
         },
       ],
     });
     expect(result.terminal).toBeUndefined();
-    expect(queueEmbeddedAgentMessageWithOutcome).toHaveBeenCalled();
+    expect(queueEmbeddedAgentMessageWithOutcome).toHaveBeenCalledTimes(1);
     expect(sendMessage).not.toHaveBeenCalled();
   });
 
@@ -3837,8 +3832,9 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       expected: {
         delivered: false,
         path: "direct",
-        reason: "visible_reply_missing",
-        error: "completion agent did not produce a visible reply",
+        reason: "source_output_empty",
+        error: "child produced no output (nothing to announce)",
+        disposition: "permanent_failure",
       },
     },
     {
@@ -3850,15 +3846,15 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       expected: {
         delivered: false,
         path: "direct",
-        reason: "visible_reply_missing",
-        error: "completion agent did not produce a visible reply",
+        reason: "source_output_empty",
+        error: "child produced no output (nothing to announce)",
         disposition: "permanent_failure",
         phases: [
           {
             phase: "direct-primary",
             delivered: false,
             path: "direct",
-            error: "completion agent did not produce a visible reply",
+            error: "child produced no output (nothing to announce)",
           },
         ],
       },
@@ -3988,8 +3984,8 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       expectRecordFields(result, {
         delivered: false,
         path: "direct",
-        reason: "visible_reply_missing",
-        error: "completion agent did not produce a visible reply",
+        reason: "source_output_empty",
+        error: "child produced no output (nothing to announce)",
         disposition: "permanent_failure",
       });
       expectGatewayAgentParams(callGateway, {
@@ -4056,8 +4052,9 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       expectRecordFields(result, {
         delivered: false,
         path: "direct",
-        reason: "visible_reply_missing",
-        error: "completion agent did not produce a visible reply",
+        reason: "source_output_empty",
+        error: "child produced no output (nothing to announce)",
+        disposition: "permanent_failure",
       });
       expectGatewayAgentParams(callGateway, {
         deliver: false,
@@ -4143,8 +4140,8 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       expected: {
         delivered: false,
         path: "direct",
-        reason: "visible_reply_missing",
-        error: "completion agent did not produce a visible reply",
+        reason: "source_output_empty",
+        error: "child produced no output (nothing to announce)",
         disposition: "permanent_failure",
       },
     },
@@ -4154,8 +4151,8 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       expected: {
         delivered: false,
         path: "direct",
-        reason: "visible_reply_missing",
-        error: "completion agent did not produce a visible reply",
+        reason: "source_output_empty",
+        error: "child produced no output (nothing to announce)",
         disposition: "permanent_failure",
       },
     },
@@ -4165,8 +4162,8 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       expected: {
         delivered: false,
         path: "direct",
-        reason: "visible_reply_missing",
-        error: "completion agent did not produce a visible reply",
+        reason: "source_output_empty",
+        error: "child produced no output (nothing to announce)",
         disposition: "permanent_failure",
       },
     },

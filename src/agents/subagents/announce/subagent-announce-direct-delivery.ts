@@ -70,6 +70,16 @@ import {
 } from "./subagent-announce-origin.js";
 import { resolveRequesterStoreKey } from "./subagent-requester-store-key.js";
 
+function emptySubagentOutputResult(): SubagentAnnounceDeliveryResult {
+  return {
+    delivered: false,
+    path: "direct",
+    reason: "source_output_empty",
+    error: "child produced no output (nothing to announce)",
+    disposition: "permanent_failure",
+  };
+}
+
 async function runAnnounceAgentCall(params: {
   agentParams: Record<string, unknown>;
   delegatedToolPolicyHandoff?: SubagentCompletionToolHandoffRegistration;
@@ -502,12 +512,7 @@ export async function sendSubagentAnnounceDirectly(params: {
         return textDelivery;
       }
       if (hasRequiredSubagentNoOutputCompletion && !hasCompletionSideEffect) {
-        return {
-          delivered: false,
-          path: "direct",
-          reason: "visible_reply_missing",
-          error: "completion agent did not produce a visible reply",
-        };
+        return emptySubagentOutputResult();
       }
     }
     if (
@@ -515,13 +520,7 @@ export async function sendSubagentAnnounceDirectly(params: {
       !hasVisibleRequiredCompletionReply &&
       hasCompletionSideEffect
     ) {
-      return {
-        delivered: false,
-        path: "direct",
-        reason: "visible_reply_missing",
-        error: "completion agent did not produce a visible reply",
-        disposition: "permanent_failure",
-      };
+      return emptySubagentOutputResult();
     }
     if (
       params.expectsCompletionMessage &&
@@ -532,12 +531,7 @@ export async function sendSubagentAnnounceDirectly(params: {
         hasRequiredSubagentNoOutputCompletion)
     ) {
       if (hasRequiredSubagentNoOutputCompletion) {
-        return {
-          delivered: false,
-          path: "direct",
-          reason: "visible_reply_missing",
-          error: "completion agent did not produce a visible reply",
-        };
+        return emptySubagentOutputResult();
       }
       if (subagentDirectMessageCompletionRequiresMessageTool) {
         const textDelivery = await tryTextCompletionDirectDelivery();

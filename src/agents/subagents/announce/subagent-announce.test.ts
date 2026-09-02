@@ -10,7 +10,8 @@ type AgentCallResponse = {
   runId?: string;
   status: string;
   error?: string;
-  disposition?: "ambiguous";
+  reason?: "source_output_empty";
+  disposition?: "ambiguous" | "permanent_failure";
 };
 
 const agentSpy = vi.fn(
@@ -168,13 +169,19 @@ vi.mock("./subagent-announce-delivery.js", () => ({
               threadId: effectiveOrigin?.threadId,
             }),
       },
-    })) as { status?: string; error?: string; disposition?: "ambiguous" };
+    })) as {
+      status?: string;
+      error?: string;
+      reason?: "source_output_empty";
+      disposition?: "ambiguous" | "permanent_failure";
+    };
 
     if (response.status === "error") {
       return {
         delivered: false,
         path: "direct",
         error: response.error ?? "agent delivery failed",
+        ...(response.reason ? { reason: response.reason } : {}),
         ...(response.disposition ? { disposition: response.disposition } : {}),
       };
     }
@@ -700,6 +707,39 @@ describe("subagent announce seam flow", () => {
     expect(didAnnounce).toBe("retryable");
     expect(logSpy).toHaveBeenCalledWith(
       "[warn] Subagent completion direct announce failed for run run-direct-failure-log: Outbound not configured for slack",
+    );
+    logSpy.mockRestore();
+  });
+
+  it("attributes empty output to the child and returns a non-retryable outcome", async () => {
+    const logSpy = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
+    agentSpy.mockResolvedValueOnce({
+      status: "error",
+      reason: "source_output_empty",
+      error: "child produced no output (nothing to announce)",
+      disposition: "permanent_failure",
+    });
+
+    const didAnnounce = await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:empty",
+      childRunId: "run-empty-child",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      requesterOrigin: { channel: "slack", to: "C123" },
+      task: "deliver completion",
+      timeoutMs: 10,
+      cleanup: "keep",
+      waitForCompletion: false,
+      startedAt: 10,
+      endedAt: 20,
+      outcome: { status: "ok" },
+      roundOneReply: "(no output)",
+      expectsCompletionMessage: true,
+    });
+
+    expect(didAnnounce).toBe("permanent_failure");
+    expect(logSpy).toHaveBeenCalledWith(
+      "[warn] Subagent child produced no output for run run-empty-child; nothing to announce",
     );
     logSpy.mockRestore();
   });

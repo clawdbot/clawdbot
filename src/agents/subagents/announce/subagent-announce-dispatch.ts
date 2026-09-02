@@ -20,6 +20,7 @@ type SubagentAnnounceDeliveryFailureReason =
   | "message_tool_delivery_missing"
   | "requester_abandoned"
   | "source_owner_changed"
+  | "source_output_empty"
   | "steer_dropped"
   | "visible_reply_missing";
 
