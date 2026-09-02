@@ -1,5 +1,6 @@
 // Line plugin module implements bot message context behavior.
 import type { webhook } from "@line/bot-sdk";
+import { resolveAccessGroupAllowFromState } from "openclaw/plugin-sdk/access-groups";
 import { isSenderIdAllowed } from "openclaw/plugin-sdk/allow-from";
 import { recordChannelActivity } from "openclaw/plugin-sdk/channel-activity-runtime";
 import {
@@ -268,28 +269,35 @@ function extractNativeMediaKind(
 type LineRouteInfo = ReturnType<typeof resolveAgentRoute>;
 type LineSourceInfoWithPeerId = LineSourceInfo & { peerId: string };
 
-/**
- * Matches a quoted message's author against the group allowlist as configured
- * right now. The bot's own message needs no entry; an id the store no longer
- * resolves has no author to match and stays out of a restricted prompt.
- */
-function isLineQuoteSenderAllowed(
-  allowFrom: readonly string[],
-  quoted: LineQuotedMessage | undefined,
-): boolean {
-  if (!quoted) {
-    return false;
-  }
-  if (quoted.fromBot) {
-    return true;
-  }
+function isLineSenderNamedBy(allowFrom: readonly string[], senderId: string | undefined): boolean {
   // An empty group allowlist under an allowlist policy names nobody, so an
   // unresolvable sender stays out rather than defaulting open.
   return isSenderIdAllowed(
     normalizeAllowFrom([...allowFrom]),
-    quoted.senderId ? normalizeLineAllowEntry(quoted.senderId) : undefined,
+    senderId ? normalizeLineAllowEntry(senderId) : undefined,
     false,
   );
+}
+
+/**
+ * Matches a quoted message's author against the group allowlist as configured
+ * right now. The bot's own message needs no entry; an id the store no longer
+ * resolves has no author to match and stays out of a restricted prompt.
+ * `viaAccessGroup` carries the same group expansion admission ran for the
+ * turn's own sender, which an exact-match list cannot do on a symbolic entry.
+ */
+function isLineQuoteSenderAllowed(
+  allowFrom: readonly string[],
+  quoted: LineQuotedMessage | undefined,
+  viaAccessGroup: boolean,
+): boolean {
+  if (!quoted) {
+    return false;
+  }
+  if (quoted.fromBot || viaAccessGroup) {
+    return true;
+  }
+  return isLineSenderNamedBy(allowFrom, quoted.senderId);
 }
 
 async function finalizeLineInboundContext(params: {
@@ -343,10 +351,28 @@ async function finalizeLineInboundContext(params: {
           roomId: params.source.roomId,
         }).then((profile) => profile?.displayName)
       : undefined;
-  const [senderName, groupName, quotedSenderName] = await Promise.all([
+  // `groupAllowFrom` can name a group instead of a person. Admission expands
+  // that for the turn's own sender, so the quoted author needs the same
+  // expansion or a member authorized only through their group reads as unnamed.
+  const resolveQuotedSenderAccessGroup = async () => {
+    if (!params.quote || !quoted?.senderId || quoted.fromBot) {
+      return false;
+    }
+    const state = await resolveAccessGroupAllowFromState({
+      accessGroups: params.cfg.accessGroups,
+      allowFrom: [...params.quote.allowFrom],
+      channel: "line",
+      accountId: params.account.accountId,
+      senderId: quoted.senderId,
+      isSenderAllowed: (memberId, groupMembers) => isLineSenderNamedBy(groupMembers, memberId),
+    });
+    return state.hasMatch;
+  };
+  const [senderName, groupName, quotedSenderName, quotedSenderViaAccessGroup] = await Promise.all([
     resolveDisplayName(params.source.userId),
     params.source.groupId ? getLineGroupName(params.source.groupId, clientOpts) : undefined,
     resolveDisplayName(quoted?.senderId),
+    resolveQuotedSenderAccessGroup(),
   ]);
   // An unreachable LINE profile must not erase the author: the quoted sender
   // degrades to the raw id the same way the turn's own sender does below.
@@ -363,7 +389,8 @@ async function finalizeLineInboundContext(params: {
           isGroup: params.source.isGroup,
           groupPolicy: params.quote.groupPolicy,
           allowFrom: params.quote.allowFrom,
-          isSenderAllowed: (allowFrom) => isLineQuoteSenderAllowed(allowFrom, quoted),
+          isSenderAllowed: (allowFrom) =>
+            isLineQuoteSenderAllowed(allowFrom, quoted, quotedSenderViaAccessGroup),
         }),
         // A quote of the bot's own message keeps its linkage without a body:
         // the store holds no outbound text, matching the core default that

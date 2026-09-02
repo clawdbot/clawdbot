@@ -173,6 +173,64 @@ describe("buildLineMessageContext quotes", () => {
     expect(context?.ctxPayload.ReplyToId).toBeUndefined();
   });
 
+  it("keeps a quote from a sender named only through a static access group", async () => {
+    recordLineAgentVisibleMessage(account.accountId, {
+      id: "m-quoted",
+      conversationId: "group-quote",
+      body: "staging is on 10.0.0.5",
+      senderId: "U-teammate",
+    });
+
+    const context = await buildLineMessageContext({
+      groupPolicy: "allowlist",
+      // The allowlist names a group, never the author directly. Admission
+      // expands that for the asking sender, so the quoted author must get the
+      // same expansion or their message reads as coming from a stranger.
+      groupAllowFrom: ["accessGroup:oncall", "user-asking"],
+      event: quotingEvent("m-quoted", "what about this?"),
+      allMedia: [],
+      cfg: {
+        ...cfg,
+        accessGroups: {
+          oncall: { type: "message.senders", members: { line: ["U-teammate"] } },
+        },
+        channels: { defaults: { contextVisibility: "allowlist" } },
+      },
+      account,
+      commandAuthorized: true,
+    });
+
+    expect(context?.ctxPayload.ReplyToBody).toBe("staging is on 10.0.0.5");
+  });
+
+  it("hides a quote from a sender no access group names", async () => {
+    recordLineAgentVisibleMessage(account.accountId, {
+      id: "m-quoted",
+      conversationId: "group-quote",
+      body: "staging is on 10.0.0.5",
+      senderId: "U-stranger",
+    });
+
+    const context = await buildLineMessageContext({
+      groupPolicy: "allowlist",
+      groupAllowFrom: ["accessGroup:oncall", "user-asking"],
+      event: quotingEvent("m-quoted", "what about this?"),
+      allMedia: [],
+      cfg: {
+        ...cfg,
+        accessGroups: {
+          oncall: { type: "message.senders", members: { line: ["U-teammate"] } },
+        },
+        channels: { defaults: { contextVisibility: "allowlist" } },
+      },
+      account,
+      commandAuthorized: true,
+    });
+
+    expect(context?.ctxPayload.RawBody).toBe("what about this?");
+    expect(context?.ctxPayload.ReplyToBody).toBeUndefined();
+  });
+
   it("reads contextVisibility from the LINE channel, not only from the defaults", async () => {
     recordLineAgentVisibleMessage(account.accountId, {
       id: "m-quoted",
