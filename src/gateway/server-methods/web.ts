@@ -17,13 +17,20 @@ import { assertValidParams } from "./validation.js";
 const WEB_LOGIN_METHODS = new Set(["web.login.start", "web.login.wait"]);
 
 /** Resolves the channel plugin that currently owns web QR-login methods. */
-const resolveWebLoginProvider = () =>
-  listChannelPlugins().find((plugin) =>
-    [
-      ...(plugin.gatewayMethods ?? []),
-      ...(plugin.gatewayMethodDescriptors ?? []).map((descriptor) => descriptor.name),
-    ].some((method) => WEB_LOGIN_METHODS.has(method)),
-  ) ?? null;
+const resolveWebLoginProvider = (channelId?: string) => {
+  const plugins = listChannelPlugins();
+  if (channelId) {
+    return plugins.find((plugin) => plugin.id === channelId) ?? null;
+  }
+  return (
+    plugins.find((plugin) =>
+      [
+        ...(plugin.gatewayMethods ?? []),
+        ...(plugin.gatewayMethodDescriptors ?? []).map((descriptor) => descriptor.name),
+      ].some((method) => WEB_LOGIN_METHODS.has(method)),
+    ) ?? null
+  );
+};
 
 type WebLoginProvider = NonNullable<ReturnType<typeof resolveWebLoginProvider>>;
 type WebLoginGateway = NonNullable<WebLoginProvider["gateway"]>;
@@ -32,6 +39,12 @@ type WebLoginGatewayMethod = "loginWithQrStart" | "loginWithQrWait";
 function resolveAccountId(params: unknown): string | undefined {
   return typeof (params as { accountId?: unknown }).accountId === "string"
     ? (params as { accountId?: string }).accountId
+    : undefined;
+}
+
+function resolveChannelId(params: unknown): string | undefined {
+  return typeof (params as { channel?: unknown }).channel === "string"
+    ? (params as { channel?: string }).channel
     : undefined;
 }
 
@@ -92,7 +105,7 @@ function resolveWebLoginRequest<TMethod extends WebLoginGatewayMethod>(params: {
   run: NonNullable<WebLoginGateway[TMethod]>;
 } | null {
   const accountId = resolveAccountId(params.rawParams);
-  const provider = resolveWebLoginProvider();
+  const provider = resolveWebLoginProvider(resolveChannelId(params.rawParams));
   if (!provider) {
     respondProviderUnavailable({
       respond: params.respond,
@@ -197,6 +210,7 @@ export const webHandlers: GatewayRequestHandlers = {
       const result = await run({
         timeoutMs: typeof params.timeoutMs === "number" ? params.timeoutMs : undefined,
         accountId,
+        sessionKey: typeof params.sessionKey === "string" ? params.sessionKey : undefined,
         currentQrDataUrl:
           typeof params.currentQrDataUrl === "string" ? params.currentQrDataUrl : undefined,
       });
