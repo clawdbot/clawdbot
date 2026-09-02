@@ -75,7 +75,10 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
 import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
+import org.robolectric.annotation.Implementation
+import org.robolectric.annotation.Implements
 import org.robolectric.shadows.ShadowAudioEffect
+import org.robolectric.shadows.ShadowAudioManager
 import org.robolectric.shadows.ShadowAudioRecord
 import org.robolectric.shadows.ShadowAudioTrack
 import org.robolectric.shadows.ShadowLog
@@ -1754,6 +1757,54 @@ class TalkModeManagerTest {
   }
 
   @Test
+  @Config(shadows = [ShadowFocusStackAudioManager::class])
+  fun localPlaybackCompletionHandsFocusBackToTheRealtimeOwner() =
+    runTest {
+      // The lifecycle the predicate tests above bypass. Local assistant audio requests focus in
+      // front of the realtime owner's request; the platform tells the owner it lost focus and full
+      // duplex closes. Only an abandon of the local request makes the platform send the GAIN that
+      // reopens it -- and ordinary completion, unlike an explicit stop, never abandoned.
+      ShadowFocusStackAudioManager.stack.clear()
+      val synthesizer = FakeTalkSpeechSynthesizer()
+      val talkAudioPlayer = FakeTalkAudioPlayer()
+      val manager = createManager(talkSpeakClient = synthesizer, talkAudioPlayer = talkAudioPlayer)
+      val audioManager = audioManagerForTest()
+      val owner = readPrivateField(manager, "realtimeCommunicationAudio") as RealtimeCommunicationAudioOwner
+      assertTrue(enterCommunicationModeForTest(manager, audioManager) != RealtimeCommunicationAudioOwner.NO_OWNER)
+      setRealtimeAecEnabled(manager, true)
+      startPlaybackForTest(manager)
+      assertTrue("precondition: realtime playout alone keeps the uplink open", shouldAppendRealtimeCapturedFrame(manager, 4_800))
+      assertEquals("precondition: the realtime owner is the only focus holder", 1, ShadowFocusStackAudioManager.stack.size)
+
+      val playback = launch { manager.speakAssistantReply("hello") }
+      synthesizer.requested.await()
+      synthesizer.result.complete(
+        TalkSpeakResult.Success(
+          TalkSpeakAudio(
+            bytes = byteArrayOf(1, 2, 3),
+            provider = "test",
+            outputFormat = "mp3_44100_128",
+            voiceCompatible = true,
+            mimeType = "audio/mpeg",
+            fileExtension = ".mp3",
+          ),
+        ),
+      )
+      talkAudioPlayer.started.await()
+
+      assertEquals("the local request sits in front of the realtime owner", 2, ShadowFocusStackAudioManager.stack.size)
+      assertFalse("the platform revoked the realtime owner's focus", owner.communicationAudioEligible)
+      assertFalse(shouldAppendRealtimeCapturedFrame(manager, 4_800))
+
+      talkAudioPlayer.finished.complete(Unit)
+      playback.join()
+
+      assertEquals("completion must abandon the local request", 1, ShadowFocusStackAudioManager.stack.size)
+      assertTrue("the platform handed focus back to the realtime owner", owner.communicationAudioEligible)
+      assertTrue("forwarding resumes once local playback and its focus are gone", shouldAppendRealtimeCapturedFrame(manager, 4_800))
+    }
+
+  @Test
   fun theSpeakingProjectionStaysTheUnionOfBothSourcesWhileTheGateSeesThemApart() {
     // #130868's invariant is a UI fact and must not be narrowed by this repair; the forwarding
     // policy simply stops using it as the answer to a question it never answered.
@@ -2711,5 +2762,46 @@ private class FakeTalkAudioPlayer : TalkAudioPlaying {
   override fun stop() {
     stopCalls += 1
     stopped = true
+  }
+}
+
+/**
+ * The part of the platform's focus arbitration the lifecycle tests need: a stack of holders, where
+ * a new request tells the holder in front of it that it lost focus, and abandoning the front entry
+ * tells the next one it has focus again. Requests that register the same listener share one entry,
+ * as they do on the platform.
+ */
+@Implements(AudioManager::class)
+class ShadowFocusStackAudioManager : ShadowAudioManager() {
+  @Implementation
+  override fun requestAudioFocus(audioFocusRequest: android.media.AudioFocusRequest): Int {
+    val listener = listenerOf(audioFocusRequest) ?: return super.requestAudioFocus(audioFocusRequest)
+    val previousTop = stack.lastOrNull()
+    stack.removeAll { it === listener }
+    stack.add(listener)
+    if (previousTop != null && previousTop !== listener) {
+      previousTop.onAudioFocusChange(AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK)
+    }
+    return super.requestAudioFocus(audioFocusRequest)
+  }
+
+  @Implementation
+  override fun abandonAudioFocusRequest(audioFocusRequest: android.media.AudioFocusRequest): Int {
+    val listener = listenerOf(audioFocusRequest) ?: return super.abandonAudioFocusRequest(audioFocusRequest)
+    val wasTop = stack.lastOrNull() === listener
+    stack.removeAll { it === listener }
+    if (wasTop) stack.lastOrNull()?.onAudioFocusChange(AudioManager.AUDIOFOCUS_GAIN)
+    return super.abandonAudioFocusRequest(audioFocusRequest)
+  }
+
+  companion object {
+    @JvmStatic val stack = mutableListOf<AudioManager.OnAudioFocusChangeListener>()
+
+    // The public getter is hidden from the SDK stubs; the request keeps the listener in this field.
+    private fun listenerOf(request: android.media.AudioFocusRequest): AudioManager.OnAudioFocusChangeListener? {
+      val field = android.media.AudioFocusRequest::class.java.getDeclaredField("mFocusListener")
+      field.isAccessible = true
+      return field.get(request) as? AudioManager.OnAudioFocusChangeListener
+    }
   }
 }

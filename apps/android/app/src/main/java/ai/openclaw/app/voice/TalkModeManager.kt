@@ -558,7 +558,15 @@ class TalkModeManager internal constructor(
     val token: Long,
     val job: Job,
     var phase: PlaybackPhase = PlaybackPhase.Preparing,
-  )
+  ) {
+    /**
+     * The media-path focus request this lease took when its audio started, so the lease that asked
+     * for focus is the one that gives it back. Focus is lease-scoped: a request left standing after
+     * playback completes stays in front of the realtime owner's request in the platform's stack,
+     * and the GAIN that would restore that owner's full-duplex eligibility never arrives.
+     */
+    var focusRequest: AudioFocusRequest? = null
+  }
 
   private var localPlayback: PlaybackLease? = null
   private var realtimePlaying = false
@@ -3558,6 +3566,9 @@ class TalkModeManager internal constructor(
           failure?.let { setStatus(it) }
         }
       }
+      // However the lease ended -- completion, failure, or cancellation -- the focus it took goes
+      // back with it, so the platform can hand focus on to the request behind it.
+      releaseLocalPlaybackAudioFocus(lease)
       if (shouldResumeAfterSpeak) {
         withContext(NonCancellable) {
           onAfterSpeak()
@@ -3605,16 +3616,42 @@ class TalkModeManager internal constructor(
   }
 
   private fun markAudioPlaybackStarting(playbackToken: Long) {
-    synchronized(playbackLock) {
-      ensurePlaybackActive(playbackToken)
-      val lease = localPlayback
-      if (lease?.token != playbackToken || !lease.job.isActive) throw CancellationException("assistant speech cancelled")
-      lease.phase = PlaybackPhase.Playing
-      publishSpeakingState()
-      setStatus(nativeText("Speaking…"))
-    }
+    val lease =
+      synchronized(playbackLock) {
+        ensurePlaybackActive(playbackToken)
+        val lease = localPlayback
+        if (lease?.token != playbackToken || !lease.job.isActive) throw CancellationException("assistant speech cancelled")
+        lease.phase = PlaybackPhase.Playing
+        publishSpeakingState()
+        setStatus(nativeText("Speaking…"))
+        lease
+      }
     ensureInterruptListener()
-    requestAudioFocusForTts()
+    // The request is a binder call and stays outside the lock; the binding to the lease does not.
+    val request = requestAudioFocusForTts() ?: return
+    val unowned =
+      synchronized(playbackLock) {
+        when {
+          localPlayback === lease -> {
+            lease.focusRequest = request
+            audioFocusRequest = request
+            null
+          }
+
+          // Cancelled while the request was in flight, and nothing has re-requested since: this
+          // request has no lease to give it back, so it is given back here.
+          audioFocusRequest == null -> {
+            request
+          }
+
+          // A replacement already re-requested. All local requests register one listener, so the
+          // platform holds one entry for them, and it is the replacement's to abandon now.
+          else -> {
+            null
+          }
+        }
+      }
+    unowned?.let(::abandonAudioFocusRequest)
   }
 
   fun stopTts() {
@@ -3687,6 +3724,29 @@ class TalkModeManager internal constructor(
     abandonAudioFocus()
   }
 
+  /**
+   * Gives back the focus [lease] took, and only that.
+   *
+   * Local playback's request sits in front of the realtime owner's in the platform's focus stack,
+   * and the platform sends that owner its GAIN only when the entry in front of it is abandoned.
+   * Abandoning on the explicit stop path alone left a completed playback's request standing, which
+   * kept the realtime session's full-duplex eligibility revoked for the rest of the session.
+   *
+   * Guarded against a replacement: a lease that finishes after its replacement has requested
+   * focus must not drop the entry the replacement now owns.
+   */
+  private fun releaseLocalPlaybackAudioFocus(lease: PlaybackLease) {
+    val request =
+      synchronized(playbackLock) {
+        val request = lease.focusRequest ?: return
+        lease.focusRequest = null
+        if (audioFocusRequest !== request) return
+        audioFocusRequest = null
+        request
+      }
+    abandonAudioFocusRequest(request)
+  }
+
   internal fun shouldAllowSpeechInterrupt(): Boolean = !finalizeInFlight && !isRealtimeCapturePaused()
 
   private fun clearListenWatchdog() {
@@ -3694,8 +3754,9 @@ class TalkModeManager internal constructor(
     listenWatchdogJob = null
   }
 
-  private fun requestAudioFocusForTts(): Boolean {
-    val am = context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager ?: return true
+  /** Registers a media-path focus request and returns it; the caller decides which lease owns it. */
+  private fun requestAudioFocusForTts(): AudioFocusRequest? {
+    val am = context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager ?: return null
     val req =
       AudioFocusRequest
         .Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK)
@@ -3707,19 +3768,23 @@ class TalkModeManager internal constructor(
             .build(),
         ).setOnAudioFocusChangeListener(audioFocusListener)
         .build()
-    audioFocusRequest = req
     val result = am.requestAudioFocus(req)
     Log.d(tag, "audio focus request result=$result")
-    return result == AudioManager.AUDIOFOCUS_REQUEST_GRANTED || result == AudioManager.AUDIOFOCUS_REQUEST_DELAYED
+    // Returned even when refused: the platform keeps the listener registered on refusal, and the
+    // abandon that follows is what unregisters it.
+    return req
   }
 
+  /** Drops whatever local request is standing, for the explicit stop path. */
   private fun abandonAudioFocus() {
+    val request = synchronized(playbackLock) { audioFocusRequest.also { audioFocusRequest = null } } ?: return
+    abandonAudioFocusRequest(request)
+  }
+
+  private fun abandonAudioFocusRequest(request: AudioFocusRequest) {
     val am = context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager ?: return
-    audioFocusRequest?.let {
-      am.abandonAudioFocusRequest(it)
-      Log.d(tag, "audio focus abandoned")
-    }
-    audioFocusRequest = null
+    am.abandonAudioFocusRequest(request)
+    Log.d(tag, "audio focus abandoned")
   }
 
   private fun shouldInterrupt(transcript: String): Boolean {
