@@ -1,6 +1,7 @@
 // Line type declarations define plugin contracts.
 import type { BaseProbeResult } from "openclaw/plugin-sdk/channel-contract";
 import type { MessageReceipt } from "openclaw/plugin-sdk/channel-outbound";
+import type { ContextVisibilityMode } from "openclaw/plugin-sdk/config-contracts";
 import type { MediaKind } from "openclaw/plugin-sdk/media-runtime";
 
 export type LineTokenSource = "config" | "env" | "file" | "none";
@@ -30,6 +31,7 @@ interface LineAccountBaseConfig {
   groupAllowFrom?: Array<string | number>;
   dmPolicy?: "open" | "allowlist" | "pairing" | "disabled";
   groupPolicy?: "open" | "allowlist" | "disabled";
+  contextVisibility?: ContextVisibilityMode;
   responsePrefix?: string;
   mediaMaxMb?: number;
   historyLimit?: number;
