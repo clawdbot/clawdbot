@@ -6787,6 +6787,12 @@ button.chat-pr__diff {
   font-size: 12px;
 }
 
+.chat-controls__model-provenance > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .chat-controls__model-catalog-state {
   display: flex;
   align-items: center;
@@ -6848,9 +6854,11 @@ button.chat-pr__diff {
 
 .chat-controls__model-reset {
   display: inline-flex;
+  flex-shrink: 0;
   align-items: center;
   justify-content: center;
   min-height: 24px;
+  margin-left: auto;
   padding: 0 7px;
   border: none;
   border-radius: 4px;
@@ -6859,6 +6867,7 @@ button.chat-pr__diff {
   cursor: var(--cursor-action);
   font-size: 12px;
   font-weight: 600;
+  white-space: nowrap;
 }
 
 .chat-controls__model-reset:hover:not(:disabled) {
