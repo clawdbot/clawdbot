@@ -38,18 +38,19 @@ async function withNewSessionPage(run: (page: Page) => Promise<void>): Promise<v
   }
 }
 
-async function expectDecodedThumbnail(image: Locator) {
+async function expectDecodedThumbnail(image: Locator, expectedNaturalWidth?: number) {
   await image.waitFor({ state: "visible" });
   await image.scrollIntoViewIfNeeded();
   await expect
     .poll(() =>
-      image.evaluate(async (element) => {
+      image.evaluate(async (element, expectedWidth) => {
         if (!(element instanceof HTMLImageElement)) {
           return false;
         }
         await element.decode();
         const bounds = element.getBoundingClientRect();
         return (
+          (expectedWidth === undefined || element.naturalWidth === expectedWidth) &&
           Math.min(element.naturalWidth, element.naturalHeight, bounds.width, bounds.height) >=
             32 &&
           bounds.top >= 0 &&
@@ -57,7 +58,7 @@ async function expectDecodedThumbnail(image: Locator) {
           bounds.bottom <= window.innerHeight &&
           bounds.right <= window.innerWidth
         );
-      }),
+      }, expectedNaturalWidth),
     )
     .toBe(true);
 }
@@ -550,13 +551,7 @@ suite.define(() => {
         await expect.poll(() => userRow.count()).toBe(1);
         await expect.poll(() => userImage.count()).toBe(1);
         await expect.poll(() => userImage.getAttribute("src")).toMatch(/^data:image\/png;base64,/u);
-        await expect
-          .poll(() =>
-            userImage.evaluate((image) =>
-              image instanceof HTMLImageElement && image.complete ? image.naturalWidth : 0,
-            ),
-          )
-          .toBe(180);
+        await expectDecodedThumbnail(userImage, 180);
         const initialImageSrc = await userImage.getAttribute("src");
         const initialPixels = await userImage.screenshot({ animations: "disabled" });
         await userImage.evaluate((image) => image.setAttribute("data-initial-image-node", "true"));
@@ -607,13 +602,7 @@ suite.define(() => {
         await pollLocatorText(userRow).not.toContain("Attached image");
         releaseMedia();
         await expect.poll(() => userImage.getAttribute("src")).toContain("initial-prompt-ticket");
-        await expect
-          .poll(() =>
-            userImage.evaluate((image) =>
-              image instanceof HTMLImageElement && image.complete ? image.naturalWidth : 0,
-            ),
-          )
-          .toBe(180);
+        await expectDecodedThumbnail(userImage, 180);
         expect(await userImage.getAttribute("data-initial-image-node")).toBe("true");
         expect((await userImage.screenshot({ animations: "disabled" })).equals(initialPixels)).toBe(
           true,
