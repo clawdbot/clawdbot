@@ -1218,7 +1218,7 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     expect(JSON.stringify(seen.modelMessages)).toContain("dynamic hook tail");
     expect(JSON.stringify(seen.messages)).not.toContain("dynamic hook context");
     expect(JSON.stringify(result.messagesSnapshot)).not.toContain("dynamic hook tail");
-    expect(hoisted.sessionManager.branch).toHaveBeenCalledWith("parent-leaf");
+    expect(hoisted.sessionManager.branch).not.toHaveBeenCalled();
     expect(
       hoisted.sessionManager.clearNextUserMessagePersistenceSuppression,
     ).toHaveBeenCalledOnce();
@@ -1286,10 +1286,10 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     );
     expect(finalAssistant.content).toBe(`stub-provider-target=${latestPrompt}`);
     expect(finalAssistant.content).not.toContain("OLD_TURN");
-    expect(hoisted.sessionManager.branch).toHaveBeenCalledWith("parent-leaf");
+    expect(hoisted.sessionManager.branch).not.toHaveBeenCalled();
   });
 
-  it("repairs an orphaned user message behind non-message session metadata before the provider", async () => {
+  it("keeps trailing session metadata in place when preserving an orphaned user leaf", async () => {
     const marker =
       "[Queued user message from a previous active turn; preserved as context only. Continue with the active prompt below.]";
     const olderPrompt = "OLD_TURN_76888: answer the orphaned queued turn";
@@ -1390,13 +1390,10 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
       "final assistant",
     );
     expect(finalAssistant.content).toBe(`stub-provider-target=${latestPrompt}`);
-    expect(hoisted.sessionManager.branch).toHaveBeenCalledWith("parent-leaf");
-    expect(replayedEntries).toEqual([
-      "thinking:high",
-      "model:deepseek/deepseek-chat",
-      `custom:model-snapshot:${JSON.stringify(modelSnapshotData)}`,
-      "label:replayed-custom/model snapshot",
-    ]);
+    expect(hoisted.sessionManager.branch).not.toHaveBeenCalled();
+    // Preserving the leaf leaves thinking/model/label rows on the existing
+    // branch, so orphan repair must not replay them onto a forked tip.
+    expect(replayedEntries).toEqual([]);
   });
 
   it("does not abort orphan repair for a dangling trailing label", async () => {
@@ -1463,11 +1460,11 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
       "final assistant",
     );
     expect(finalAssistant.content).toBe(`stub-provider-target=${latestPrompt}`);
-    expect(hoisted.sessionManager.branch).toHaveBeenCalledWith("parent-leaf");
+    expect(hoisted.sessionManager.branch).not.toHaveBeenCalled();
     expect(hoisted.sessionManager.appendLabelChange).not.toHaveBeenCalled();
   });
 
-  it("removes the repaired orphan from assembled history when the context engine appends the active prompt", async () => {
+  it("excludes the preserved orphan from assembled history when the context engine appends the active prompt", async () => {
     const marker =
       "[Queued user message from a previous active turn; preserved as context only. Continue with the active prompt below.]";
     const olderPrompt = "OLD_TURN_76888: stale assembled history";
@@ -1503,7 +1500,6 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
       sessionKey,
       tempPaths,
       sessionMessages: [{ role: "user", content: olderPrompt, timestamp: 1 } as AgentMessage],
-      sessionMessagesAfterRepair: [],
       attemptOverrides: {
         prompt: latestPrompt,
       },
@@ -1522,7 +1518,7 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     expect(JSON.stringify(seen.assembledMessages)).not.toContain(olderPrompt);
     expect(JSON.stringify(seen.messages)).not.toContain(olderPrompt);
     expect(JSON.stringify(seen.messages)).toContain(latestPrompt);
-    expect(hoisted.sessionManager.branch).toHaveBeenCalledWith("parent-leaf");
+    expect(hoisted.sessionManager.branch).not.toHaveBeenCalled();
   });
 
   it("keeps hidden runtime context hidden when orphan repair merges a transcript prompt", async () => {
@@ -1569,7 +1565,7 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     );
     expect(runtimeContext.content).toContain("secret runtime context");
     expect(JSON.stringify(result.messagesSnapshot)).not.toContain("secret runtime context");
-    expect(hoisted.sessionManager.branch).toHaveBeenCalledWith("parent-leaf");
+    expect(hoisted.sessionManager.branch).not.toHaveBeenCalled();
   });
 
   it("keeps bootstrap truncation warnings out of WebChat runtime context", async () => {
@@ -2014,7 +2010,7 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     expect(runtimeContext.content).toContain("internal heartbeat event");
     expect(contextCompiled?.data?.systemPrompt).not.toContain("internal heartbeat event");
     expect(JSON.stringify(result.messagesSnapshot)).not.toContain("internal heartbeat event");
-    expect(hoisted.sessionManager.branch).toHaveBeenCalledWith("parent-leaf");
+    expect(hoisted.sessionManager.branch).not.toHaveBeenCalled();
   });
 
   it("keeps current inbound context visible on runtime-only turns", async () => {

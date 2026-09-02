@@ -29,6 +29,7 @@ import {
   buildActiveMusicGenerationTaskPromptContextForSession,
   buildActiveVideoGenerationTaskPromptContextForSession,
 } from "../../media-generation-task-status.js";
+import type { AgentMessage } from "../../runtime/index.js";
 import { resolveEffectiveToolFsWorkspaceOnly } from "../../tool-fs-policy.js";
 import { deriveContextPromptTokens, type NormalizedUsage } from "../../usage.js";
 import { buildEmbeddedCompactionRuntimeContext } from "../compaction-runtime-context.js";
@@ -396,8 +397,13 @@ function shouldDropStaleInternalOrphanedUserPrompt(params: {
 
 /**
  * Merges a trailing user message that was queued in transcript history but not
- * present in the active prompt. The leaf is removed whether merged or already
- * present so the transcript cannot submit the same user turn twice.
+ * present in the active prompt.
+ *
+ * External user leaves stay on the canonical session branch (`removeLeaf:
+ * false`) so later turns still see them in model context. This turn still
+ * folds their text into the active prompt and the session boundary excludes
+ * them from assembled history, which keeps the no-duplicate provider-turn
+ * invariant. Empty or stale internal leaves are still detached.
  */
 export function mergeOrphanedTrailingUserPrompt(params: {
   prompt: string;
@@ -408,9 +414,6 @@ export function mergeOrphanedTrailingUserPrompt(params: {
   if (!orphanText) {
     return { prompt: params.prompt, merged: false, removeLeaf: true };
   }
-  if (promptAlreadyIncludesQueuedUserMessage(params.prompt, orphanText)) {
-    return { prompt: params.prompt, merged: false, removeLeaf: true };
-  }
   if (
     shouldDropStaleInternalOrphanedUserPrompt({
       prompt: params.prompt,
@@ -419,12 +422,45 @@ export function mergeOrphanedTrailingUserPrompt(params: {
   ) {
     return { prompt: params.prompt, merged: false, removeLeaf: true };
   }
+  if (promptAlreadyIncludesQueuedUserMessage(params.prompt, orphanText)) {
+    // Text is already in the active prompt; keep the leaf for later turns.
+    return { prompt: params.prompt, merged: false, removeLeaf: false };
+  }
 
   return {
     prompt: [QUEUED_USER_MESSAGE_MARKER, orphanText, "", params.prompt].join("\n"),
     merged: true,
-    removeLeaf: true,
+    removeLeaf: false,
   };
+}
+
+/**
+ * Drops the repaired trailing user leaf from this turn's assembled messages
+ * without detaching it from the session tree. Used when orphan text was merged
+ * into the active prompt (or already present there) but must remain canonical
+ * history for subsequent turns.
+ */
+export function excludeOrphanedTrailingUserMessageFromModelContext(params: {
+  messages: AgentMessage[];
+  leafMessage: { content?: unknown };
+}): AgentMessage[] {
+  const orphanText = extractUserMessagePromptText(params.leafMessage.content);
+  if (!orphanText || params.messages.length === 0) {
+    return params.messages;
+  }
+  for (let index = params.messages.length - 1; index >= 0; index -= 1) {
+    const message = params.messages[index];
+    if ((message as { role?: unknown }).role !== "user") {
+      continue;
+    }
+    const messageText = extractUserMessagePromptText((message as { content?: unknown }).content);
+    if (messageText === orphanText) {
+      return [...params.messages.slice(0, index), ...params.messages.slice(index + 1)];
+    }
+    // Only consider the newest trailing user row; older history stays intact.
+    break;
+  }
+  return params.messages;
 }
 
 export function resolveAttemptFsWorkspaceOnly(params: {
