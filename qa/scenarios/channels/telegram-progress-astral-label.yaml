@@ -1,0 +1,139 @@
+title: Telegram astral progress label
+
+scenario:
+  id: telegram-progress-astral-label
+  surface: channels
+  coverage:
+    primary:
+      - telegram.conversation-routing-and-delivery
+    secondary:
+      - agent-runtime.streaming-replies-delivery
+  objective: Preserve complete words and Unicode code points in Telegram progress labels bound to the current ingress under first-reply routing.
+  gatewayConfigPatch:
+    channels:
+      telegram:
+        accounts:
+          $selectedAccount:
+            replyToMode: first
+            streaming:
+              mode: progress
+              progress:
+                label: "𠮷𠮷𠮷𠮷𠮷𠮷𠮷𠮷𠮷𠮷𠮷𠮷𠮷𠮷𠮷𠮷𠮷𠮷𠮷𠮷𠮷𠮷𠮷𠮷𠮷𠮷𠮷𠮷𠮷𠮷𠮷𠮷𠮷𠮷𠮷𠮷𠮷𠮷𠮷𠮷 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+  successCriteria:
+    - A native Telegram progress message or edit replies to this ingress and contains the exact expected 120-code-point label before the final answer.
+    - A successful tool reads an unpredictable value from the owned workspace and the ordinary final reply delivers that value.
+    - The turn settles; draft deletion is outside the current QA adapter observation contract.
+  regressionRefs:
+    - openclaw/openclaw#135277
+  docsRefs:
+    - docs/channels/telegram.md
+    - docs/concepts/streaming.md
+  codeRefs:
+    - src/shared/text-truncate.ts
+    - src/channels/streaming.ts
+    - extensions/telegram/src/bot-message-dispatch-progress.ts
+    - extensions/telegram/src/progress-draft-preview.ts
+  execution:
+    kind: flow
+    channel: telegram
+    providerMode: live-frontier
+    retryCount: 0
+    suiteIsolation: isolated
+    isolationReason: Each case needs its own progress label, first-reply routing, workspace, and Telegram session.
+    config:
+      conversationId: "telegram-progress-astral-label"
+      expectedLabel: "𠮷𠮷𠮷𠮷𠮷𠮷𠮷𠮷𠮷𠮷𠮷𠮷𠮷𠮷𠮷𠮷𠮷𠮷𠮷𠮷𠮷𠮷𠮷𠮷𠮷𠮷𠮷𠮷𠮷𠮷𠮷𠮷𠮷𠮷𠮷𠮷𠮷𠮷𠮷𠮷 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx…"
+      expectedUtf16Units: 160
+flow:
+  steps:
+    - name: shows the bounded label before the tool-backed final
+      actions:
+        - assert:
+            expr: "env.providerMode === 'live-frontier' && transport.id === 'telegram'"
+            message: this scenario requires the live Telegram Test Server adapter and provider
+        - resetTransport: true
+        - set: sinceCursor
+          value:
+            expr: "state.getSnapshot().events.at(-1)?.cursor ?? 0"
+        - set: finalMarker
+          value:
+            expr: "'QA-TELEGRAM-PROGRESS-' + randomUUID()"
+        - set: fixturePath
+          value:
+            expr: "path.join(env.gateway.workspaceDir, scenario.id + '.txt')"
+        - set: delivery
+          value:
+            expr: "transport.buildAgentDelivery({ target: 'group:' + config.conversationId })"
+        - set: sessionKey
+          value:
+            expr: "buildAgentSessionKey({ agentId: 'qa', channel: delivery.channel, accountId: transport.accountId, peer: { kind: 'group', id: delivery.replyTo }, dmScope: env.cfg.session?.dmScope, identityLinks: env.cfg.session?.identityLinks })"
+        - call: fs.writeFile
+          args:
+            - ref: fixturePath
+            - expr: "finalMarker + '\\n'"
+            - utf8
+        - try:
+            actions:
+              - sendInbound:
+                  conversation:
+                    id: { ref: config.conversationId }
+                    kind: group
+                    title: QA Progress Label
+                  senderId: "100001"
+                  senderName: QA Progress Operator
+                  text:
+                    expr: "'@openclaw Read the file ' + fixturePath + ' using a file or shell tool. Reply directly with its exact contents and nothing else. Do not use a message tool.'"
+                saveAs: inbound
+              - call: waitForOutboundMessage
+                saveAs: outbound
+                args:
+                  - ref: state
+                  - lambda:
+                      params: [candidate]
+                      expr: "candidate.direction === 'outbound' && candidate.accountId === transport.accountId && candidate.conversation.id === config.conversationId && candidate.text.trim() === finalMarker"
+                  - expr: "liveTurnTimeoutMs(env, 60000)"
+              - call: waitForCondition
+                args:
+                  - lambda:
+                      async: true
+                      params: []
+                      expr: "env.gateway.call('sessions.list', {}, { timeoutMs: 30000 }).then((result) => result.sessions?.find((session) => session.key === sessionKey && session.hasActiveRun === false))"
+                  - expr: "liveTurnTimeoutMs(env, 60000)"
+              - call: readSessionTranscriptSummary
+                saveAs: transcriptSummary
+                args: [{ ref: env }, { ref: sessionKey }]
+              - assert:
+                  expr: "Object.values(transcriptSummary.successfulToolCallCounts).some((count) => count > 0) && !transcriptSummary.successfulToolCallCounts.message && transcriptSummary.finalText.trim() === finalMarker"
+                  message: the agent must read the unknown fixture contents with a successful tool and return them through its final reply
+              - waitForOutboundSequence:
+                  conversationId: { ref: config.conversationId }
+                  sinceCursor: { ref: sinceCursor }
+                  finalTextIncludes: { ref: finalMarker }
+                  minimumPreviewEvents: 1
+                  timeoutMs: { expr: "liveTurnTimeoutMs(env, 60000)" }
+                saveAs: sequence
+              - assert:
+                  expr: "sequence.final.text.trim() === finalMarker"
+                  message: the native final must still contain only the fixture contents after the turn settles
+              - set: finalEvent
+                value:
+                  expr: "sequence.events.find((event) => event.kind !== 'deleted' && event.message.id === sequence.final.id && event.message.text.trim() === finalMarker)"
+              - set: labelEvent
+                value:
+                  expr: "sequence.events.find((event) => event.kind !== 'deleted' && event.cursor < finalEvent.cursor && event.message.replyToId === inbound.id && event.message.text.split('\\n')[0] === config.expectedLabel)"
+              - assert:
+                  expr: "Boolean(labelEvent)"
+                  message:
+                    expr: "'Expected native label replying to this ingress before final: ' + JSON.stringify({ inboundBusMessageId: inbound.id, expected: config.expectedLabel, events: sequence.events.map((event) => ({ cursor: event.cursor, kind: event.kind, replyToId: event.message.replyToId, text: event.message.text })) })"
+              - assert:
+                  expr: "Array.from(labelEvent.message.text.split('\\n')[0]).length === 120 && labelEvent.message.text.split('\\n')[0].length === config.expectedUtf16Units"
+                  message: the visible label must respect its code-point cap without treating astral UTF-16 units as separate characters
+            finally:
+              - call: fs.rm
+                args: [{ ref: fixturePath }, { force: true }]
+              - call: fs.writeFile
+                args:
+                  - expr: "path.join(env.outputDir, scenario.id + '-native-timeline.json')"
+                  - expr: "JSON.stringify({ scenarioId: scenario.id, observer: 'Telegram Test Server TDLib message/edit bus', replyToMode: 'first', inboundBusMessageId: typeof inbound === 'undefined' ? null : inbound.id, expectedLabel: config.expectedLabel, expectedFinal: finalMarker, draftDeletionObserved: null, events: state.getSnapshot().events.filter((event) => event.cursor > sinceCursor && ['outbound-message', 'message-edited'].includes(event.kind) && event.message.accountId === transport.accountId && event.message.conversation.id === config.conversationId).map((event) => ({ cursor: event.cursor, kind: event.kind, busMessageId: event.message.id, replyToId: event.message.replyToId ?? null, timestamp: event.message.timestamp, text: event.message.text, firstLineCodePoints: Array.from(event.message.text.split('\\n')[0]).length, firstLineUtf16Units: event.message.text.split('\\n')[0].length })) }, null, 2) + '\\n'"
+                  - utf8
+      detailsExpr: "JSON.stringify({ nativeObserver: 'Telegram TDLib', replyToMode: 'first', inboundBusMessageId: inbound.id, progressBusMessageId: labelEvent.message.id, progressReplyToId: labelEvent.message.replyToId, label: labelEvent.message.text.split('\\n')[0], codePoints: 120, utf16Units: config.expectedUtf16Units, final: sequence.final.text, successfulToolCallCounts: transcriptSummary.successfulToolCallCounts, turnSettled: true, deletion: 'not exposed by the QA adapter' })"

@@ -19,6 +19,7 @@ import type {
   TextChunkMode,
 } from "../config/types.base.js";
 import { DEFAULT_PROGRESS_DRAFT_LABELS, selectProgressLabel } from "../shared/progress-labels.js";
+import { truncateCodePointsAtWordBoundary } from "../shared/text-truncate.js";
 import { asBoolean } from "../utils/boolean.js";
 import {
   getChannelStreamingConfigObject,
@@ -969,10 +970,6 @@ export function resolveChannelProgressDraftMaxLineChars(
   return configured && configured > 0 ? configured : defaultValue;
 }
 
-function sliceCodePoints(value: string, start: number, end?: number): string {
-  return Array.from(value).slice(start, end).join("");
-}
-
 function compactProgressLineDetail(detail: string, maxChars: number): string {
   const chars = Array.from(detail);
   if (chars.length <= maxChars) {
@@ -1015,20 +1012,10 @@ function repairCompactedProgressMarkdown(value: string): string {
 }
 
 function compactChannelProgressDraftNarration(text: string): string {
-  const normalized = text.replace(/\s+/g, " ").trim();
-  if (Array.from(normalized).length <= PROGRESS_DRAFT_NARRATION_MAX_CHARS) {
-    return normalized;
-  }
-  return compactPlainProgressLine(normalized, PROGRESS_DRAFT_NARRATION_MAX_CHARS);
-}
-
-function compactPlainProgressLine(line: string, maxChars: number): string {
-  const head = sliceCodePoints(line, 0, maxChars - 1).trimEnd();
-  const boundary = head.search(/\s+\S*$/u);
-  if (boundary > Math.floor(maxChars * 0.6)) {
-    return `${head.slice(0, boundary).trimEnd()}…`;
-  }
-  return `${head}…`;
+  return truncateCodePointsAtWordBoundary(
+    text.replace(/\s+/g, " ").trim(),
+    PROGRESS_DRAFT_NARRATION_MAX_CHARS,
+  );
 }
 
 function compactChannelProgressDraftLine(line: string, maxChars: number): string {
@@ -1075,7 +1062,7 @@ function compactChannelProgressDraftLine(line: string, maxChars: number): string
     }
   }
 
-  return repairCompactedProgressMarkdown(compactPlainProgressLine(normalized, maxChars));
+  return repairCompactedProgressMarkdown(truncateCodePointsAtWordBoundary(normalized, maxChars));
 }
 
 export function formatPlanChecklistLines(

@@ -345,8 +345,8 @@ Limit how many lines stay visible (default 8):
 Progress lines are compacted automatically to reduce chat-bubble reflow while
 the draft is edited, and OpenClaw truncates long lines so repeated draft edits
 do not wrap differently on every update. The default per-line budget is 120
-characters; prose cuts at a word boundary, while long details such as paths or
-raw commands are shortened with a middle ellipsis so the suffix stays visible.
+Unicode code points; prose uses word-aware truncation, while long details such as
+paths or raw commands use a middle ellipsis so the suffix stays visible.
 
 Tune the per-line budget:
 

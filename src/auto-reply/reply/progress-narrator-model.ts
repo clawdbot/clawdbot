@@ -6,6 +6,7 @@ import {
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
 import type { TextContent } from "../../llm/types.js";
+import { truncateCodePointsAtWordBoundary } from "../../shared/text-truncate.js";
 
 const NARRATION_TIMEOUT_MS = 10_000;
 const NOTES_IN_PROMPT = 15;
@@ -33,24 +34,8 @@ function isTextContentBlock(block: { type: string }): block is TextContent {
   return block.type === "text";
 }
 
-export function truncateAtWordBoundary(text: string, maxChars: number): string {
-  const chars = Array.from(text);
-  if (chars.length <= maxChars) {
-    return text;
-  }
-  const head = chars
-    .slice(0, maxChars - 1)
-    .join("")
-    .trimEnd();
-  const boundary = head.search(/\s+\S*$/u);
-  if (boundary > Math.floor(maxChars * 0.6)) {
-    return `${head.slice(0, boundary).trimEnd()}…`;
-  }
-  return `${head}…`;
-}
-
 function buildNarrationUserPrompt(input: ProgressNarrationInput): string {
-  const request = truncateAtWordBoundary(
+  const request = truncateCodePointsAtWordBoundary(
     input.userMessage.replace(/\s+/g, " ").trim(),
     USER_MESSAGE_PROMPT_CHARS,
   );

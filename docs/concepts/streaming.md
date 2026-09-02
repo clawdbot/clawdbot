@@ -367,12 +367,12 @@ Supported surfaces:
 Progress-mode drafts (`streaming.progress.*`) are bounded and configurable per
 channel:
 
-| Key                               | Default       | Behavior                                                       |
-| --------------------------------- | ------------- | -------------------------------------------------------------- |
-| `streaming.progress.maxLines`     | `8`           | Max compact progress lines kept below the draft label          |
-| `streaming.progress.maxLineChars` | `120`         | Max characters per compact line before truncation (word-aware) |
-| `streaming.progress.label`        | `"auto"`      | Draft title; a custom string, or `false` to hide it            |
-| `streaming.progress.labels`       | built-in pool | Candidate labels used when `label: "auto"`                     |
+| Key                               | Default       | Behavior                                                |
+| --------------------------------- | ------------- | ------------------------------------------------------- |
+| `streaming.progress.maxLines`     | `8`           | Max compact progress lines kept below the draft label   |
+| `streaming.progress.maxLineChars` | `120`         | Max Unicode code points per line; word-aware truncation |
+| `streaming.progress.label`        | `"auto"`      | Draft title; a custom string, or `false` to hide it     |
+| `streaming.progress.labels`       | built-in pool | Candidate labels used when `label: "auto"`              |
 
 Slack always renders progress mode as its fixed session-card layout; these
 limits still bound the activity rows and plan text inside that card.

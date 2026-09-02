@@ -1,4 +1,5 @@
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { withServer } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it } from "vitest";
 import { RequestClient } from "../internal/discord.js";
 import { createDiscordDraftPreviewController } from "./message-handler.draft-preview.js";
@@ -21,6 +22,65 @@ function createPreviewController(rest: RequestClient) {
 }
 
 describe("Discord draft preview REST lifecycle", () => {
+  it.each([
+    {
+      lane: "narration",
+      input: "review ".repeat(38) + "manifest.json next",
+      expected: "review ".repeat(38) + "manifest.json…",
+    },
+    {
+      lane: "reasoning",
+      input: "𠮷".repeat(40) + " " + "x".repeat(100),
+      expected: "𠮷".repeat(40) + " " + "x".repeat(76) + "…",
+    },
+  ])("posts $lane progress through loopback HTTP", async ({ lane, input, expected }) => {
+    const writes: Array<{ method: string; route: string; body: string }> = [];
+    await withServer(
+      (request, response) => {
+        const chunks: Buffer[] = [];
+        request.on("data", (chunk: Buffer) => chunks.push(chunk));
+        request.on("end", () => {
+          writes.push({
+            method: request.method ?? "GET",
+            route: request.url ?? "/",
+            body: Buffer.concat(chunks).toString("utf8"),
+          });
+          const deleting = request.method === "DELETE";
+          response.writeHead(deleting ? 204 : 200, {
+            "content-type": "application/json",
+            connection: "close",
+          });
+          response.end(deleting ? undefined : JSON.stringify({ id: "preview-progress" }));
+        });
+      },
+      async (baseUrl) => {
+        const controller = createPreviewController(new RequestClient("test-token", { baseUrl }));
+        try {
+          if (lane === "narration") {
+            await controller.pushNarrationProgress(input);
+          } else {
+            await controller.pushReasoningProgress(input, { snapshot: true });
+          }
+          await controller.pushPlanProgress([
+            { step: "Check retained context", status: "in_progress" },
+          ]);
+          await controller.flush();
+
+          const messages = writes
+            .filter(
+              (write) => write.method === "POST" && write.route === "/v10/channels/c1/messages",
+            )
+            .map((write) => JSON.parse(write.body));
+          expect(messages).toEqual([
+            expect.objectContaining({ content: expect.stringContaining(expected) }),
+          ]);
+        } finally {
+          await controller.cleanup();
+        }
+      },
+    );
+  });
+
   it("retains the progress draft after an error final is delivered", async () => {
     const requests: string[] = [];
     const rest = new RequestClient("test-token", {

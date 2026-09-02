@@ -339,6 +339,56 @@ describe("streaming config resolution", () => {
 });
 
 describe("progress narration", () => {
+  it.each([
+    {
+      name: "retains a complete filename at the line limit",
+      line: "review ".repeat(15) + "important.json next",
+      expected: "review ".repeat(15) + "important.json…",
+    },
+    {
+      name: "measures the word-backoff threshold in code points",
+      line: "𠮷".repeat(40) + " " + "x".repeat(100),
+      expected: "𠮷".repeat(40) + " " + "x".repeat(78) + "…",
+    },
+    {
+      name: "keeps a hard cut at the exact backoff threshold",
+      line: "a".repeat(72) + " " + "x".repeat(70),
+      expected: "a".repeat(72) + " " + "x".repeat(46) + "…",
+    },
+    {
+      name: "backs off beyond the threshold",
+      line: "a".repeat(73) + " " + "x".repeat(70),
+      expected: "a".repeat(73) + "…",
+    },
+    {
+      name: "hard-cuts CJK text without whitespace",
+      line: "界".repeat(130),
+      expected: "界".repeat(119) + "…",
+    },
+    {
+      name: "hard-cuts an unbroken ASCII word",
+      line: "x".repeat(130),
+      expected: "x".repeat(119) + "…",
+    },
+    {
+      name: "continues to count combining marks as code points",
+      line: "e\u0301".repeat(70),
+      expected: "e\u0301".repeat(59) + "e…",
+    },
+    {
+      name: "keeps short text unchanged",
+      line: "Keep café and 𠮷.",
+      expected: "Keep café and 𠮷.",
+    },
+  ])("$name", ({ line, expected }) => {
+    expect(
+      formatChannelProgressDraftText({
+        entry: { streaming: { mode: "progress", progress: { label: false } } },
+        lines: [line],
+      }),
+    ).toBe(`• ${expected}`);
+  });
+
   it("renders plan markers and keeps the checklist under narration", () => {
     const plan = [
       { step: "Inspect", status: "completed" as const },
@@ -465,17 +515,25 @@ describe("progress narration", () => {
     expect(text).toBe("Counting lines in the workspace files.");
   });
 
-  it("compacts narration at a word boundary instead of line width", () => {
-    const narration = Array.from({ length: 60 }, (_value, index) => `word${index}`).join(" ");
-    const text = formatChannelProgressDraftText({
-      entry: { streaming: { mode: "progress", progress: { label: false } } },
-      lines: [],
-      narration,
-    });
-
-    expect(text.endsWith("…")).toBe(true);
-    expect(Array.from(text).length).toBeLessThanOrEqual(280);
-    expect(text).not.toContain("\n");
+  it.each([
+    {
+      name: "retains the complete filename at the narration limit",
+      narration: "review ".repeat(38) + "manifest.json next",
+      expected: "review ".repeat(38) + "manifest.json…",
+    },
+    {
+      name: "uses code-point positions for narration word backoff",
+      narration: "𠮷".repeat(90) + " " + "x".repeat(300),
+      expected: "𠮷".repeat(90) + " " + "x".repeat(188) + "…",
+    },
+  ])("$name", ({ narration, expected }) => {
+    expect(
+      formatChannelProgressDraftText({
+        entry: { streaming: { mode: "progress", progress: { label: false } } },
+        lines: [],
+        narration,
+      }),
+    ).toBe(expected);
   });
 
   it("honors the caller's mode when resolving commentary", () => {

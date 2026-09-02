@@ -64,3 +64,29 @@ describe("progress narration completion cancellation", () => {
     },
   );
 });
+
+describe("progress narration request context", () => {
+  it.each([
+    {
+      name: "retains the complete filename at the request limit",
+      userMessage: "review ".repeat(70) + "file.conf next",
+      expected: "review ".repeat(70) + "file.conf…",
+    },
+    {
+      name: "measures the word-backoff threshold in code points",
+      userMessage: "𠮷".repeat(160) + " " + "x".repeat(400),
+      expected: "𠮷".repeat(160) + " " + "x".repeat(338) + "…",
+    },
+  ])("$name", async ({ userMessage, expected }) => {
+    await generateNarrationWithUtilityModel({
+      cfg: {},
+      prepared,
+      input: { userMessage, activityNotes: [], previousText: "" },
+    });
+
+    expect(complete).toHaveBeenCalledOnce();
+    expect(complete.mock.calls[0]?.[0].context.messages[0].content).toContain(
+      `Request:\n${expected}\n\n`,
+    );
+  });
+});

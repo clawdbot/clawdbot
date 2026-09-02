@@ -1,5 +1,6 @@
 // Progress-draft status text normalization for reasoning, preamble, and commentary lanes.
 import { formatReasoningMessage } from "../agents/embedded-agent-utils.js";
+import { truncateCodePointsAtWordBoundary } from "../shared/text-truncate.js";
 import { findCodeRegions, isInsideCode } from "../shared/text/code-regions.js";
 import { stripInlineDirectiveTagsForDelivery } from "../utils/directive-tags.js";
 
@@ -120,23 +121,7 @@ export function formatReasoningProgressDisplayLine(text: string, maxChars: numbe
 }
 
 function compactReasoningProgressDisplayLine(text: string, maxChars: number): string {
-  const normalized = text.replace(/\s+/g, " ").trim();
-  const chars = Array.from(normalized);
-  if (chars.length <= maxChars) {
-    return normalized;
-  }
-  if (maxChars <= 1) {
-    return "…";
-  }
-  const head = chars
-    .slice(0, maxChars - 1)
-    .join("")
-    .trimEnd();
-  const boundary = head.search(/\s+\S*$/u);
-  if (boundary > Math.floor(maxChars * 0.6)) {
-    return `${head.slice(0, boundary).trimEnd()}…`;
-  }
-  return `${head}…`;
+  return truncateCodePointsAtWordBoundary(text.replace(/\s+/g, " ").trim(), maxChars);
 }
 
 export function sanitizeProgressStatusText(text: string): string {

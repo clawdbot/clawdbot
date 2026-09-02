@@ -246,7 +246,7 @@ describe("processDiscordMessage draft streaming reasoning", () => {
     const lastUpdate = draftStream.update.mock.calls.at(-1)?.[0];
     const reasoningLine = lastUpdate?.split("\n").at(-1);
 
-    expect(reasoningLine).toBe("Thinking through a very…");
+    expect(reasoningLine).toBe("Thinking through a very detailed…");
   });
 
   it("replaces reasoning snapshots instead of appending duplicates", async () => {

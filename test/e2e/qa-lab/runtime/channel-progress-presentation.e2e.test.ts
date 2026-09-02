@@ -285,10 +285,11 @@ function progressConfig(
   config: OpenClawConfig,
   channel: "discord" | "slack",
   native: boolean,
+  label: string,
 ): OpenClawConfig {
   const streaming = {
     mode: "progress" as const,
-    progress: { label: HEADLINE },
+    progress: { label },
   };
   return {
     ...config,
@@ -366,12 +367,44 @@ describe("channel progress presentation through an isolated Gateway", () => {
   });
 
   it.each([
-    { channel: "discord" as const, native: false },
-    { channel: "slack" as const, native: true },
-    { channel: "slack" as const, native: false },
+    {
+      channel: "discord" as const,
+      native: false,
+      labelCase: "short",
+      label: HEADLINE,
+      expectedLabel: HEADLINE,
+    },
+    {
+      channel: "slack" as const,
+      native: true,
+      labelCase: "short",
+      label: HEADLINE,
+      expectedLabel: HEADLINE,
+    },
+    {
+      channel: "slack" as const,
+      native: false,
+      labelCase: "short",
+      label: HEADLINE,
+      expectedLabel: HEADLINE,
+    },
+    {
+      channel: "discord" as const,
+      native: false,
+      labelCase: "complete-word",
+      label: "review ".repeat(15) + "important.json next",
+      expectedLabel: "review ".repeat(15) + "important.json…",
+    },
+    {
+      channel: "discord" as const,
+      native: false,
+      labelCase: "astral",
+      label: "𠮷".repeat(40) + " " + "x".repeat(100),
+      expectedLabel: "𠮷".repeat(40) + " " + "x".repeat(78) + "…",
+    },
   ])(
-    "keeps $channel progress quiet (native=$native)",
-    async ({ channel, native }) => {
+    "keeps $channel progress quiet (native=$native, label=$labelCase)",
+    async ({ channel, native, labelCase, label, expectedLabel }) => {
       const directory = await fs.mkdtemp(
         path.join(await fs.realpath(os.tmpdir()), "channel-progress-"),
       );
@@ -409,7 +442,7 @@ describe("channel progress presentation through an isolated Gateway", () => {
         },
         runtimeEnvPatch: environment,
         mutateConfig: (config) => {
-          const configured = progressConfig(config, channel, native);
+          const configured = progressConfig(config, channel, native, label);
           if (channel === "discord") {
             configured.channels!.discord!.proxy = api.proxyUrl;
           }
@@ -503,7 +536,6 @@ describe("channel progress presentation through an isolated Gateway", () => {
                 .join("\n"),
         )
         .join("\n");
-      expect(progressText).toContain(HEADLINE);
       expect(progressText).not.toMatch(synthesizedDecoration);
       const reactionAdds = writes.filter((write) =>
         channel === "discord"
@@ -519,9 +551,12 @@ describe("channel progress presentation through an isolated Gateway", () => {
       );
       expect([...reactionNames]).toEqual([channel === "discord" ? "👀" : "eyes"]);
       const evidenceDir = path.join(process.cwd(), ".artifacts", "channel-progress-presentation");
+      const artifactName =
+        `${channel}-${native ? "native" : "draft"}` +
+        (labelCase === "short" ? "" : `-${labelCase}`);
       await fs.mkdir(evidenceDir, { recursive: true });
       await fs.writeFile(
-        path.join(evidenceDir, `${channel}-${native ? "native" : "draft"}-diagnostic.json`),
+        path.join(evidenceDir, `${artifactName}-diagnostic.json`),
         JSON.stringify(
           {
             writes: writes.slice(-80).map(({ at, method, route, body, accepted }) => ({
@@ -552,6 +587,7 @@ describe("channel progress presentation through an isolated Gateway", () => {
           2,
         ),
       );
+      expect(progressText).toContain(expectedLabel);
       expect(finalWrites()).toHaveLength(1);
       expect(finalMessages()).toHaveLength(1);
       const tasks = writes
@@ -563,12 +599,14 @@ describe("channel progress presentation through an isolated Gateway", () => {
         expect(tasks.at(-1)?.status).toBe("complete");
       }
       await fs.writeFile(
-        path.join(evidenceDir, `${channel}-${native ? "native" : "draft"}.json`),
+        path.join(evidenceDir, `${artifactName}.json`),
         JSON.stringify(
           {
             kind: "mock-gateway",
             channel,
             native,
+            labelCase,
+            expectedLabel,
             status: "pass",
             progressWrites: progressWrites.length,
             finalWrites: finalWrites().length,
