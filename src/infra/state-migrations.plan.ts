@@ -82,6 +82,15 @@ async function digestDirectory(directory: string): Promise<string> {
     ) {
       throw new Error(`Snapshot directory changed while hashing: ${current}`);
     }
+    const after = await fs.lstat(current);
+    if (
+      !after.isDirectory() ||
+      stat.dev !== after.dev ||
+      stat.ino !== after.ino ||
+      stat.mtimeMs !== after.mtimeMs
+    ) {
+      throw new Error(`Snapshot directory changed while hashing: ${current}`);
+    }
   };
   await visit(directory, "");
   return `sha256:${hash.digest("hex")}`;

@@ -99,8 +99,10 @@ import {
   migrateLegacyNodeHostConfig,
 } from "./state-migrations.node-host.js";
 import {
+  captureLegacyStateSnapshotIdentity,
   createLegacyStateMigrationPlanEnv,
   createLegacyStateMigrationPlan,
+  refuseLegacyStateMigrationPlan,
   type PreparedLegacyStateMigrationStep,
 } from "./state-migrations.plan.js";
 import {
@@ -873,22 +875,35 @@ export async function detectLegacyStateMigrations(params: {
   };
 }
 
-function migrateLegacyStateSchema(
-  detected: LegacyStateDetection,
-  env: NodeJS.ProcessEnv,
-): {
-  changes: string[];
-  warnings: string[];
-} {
-  return repairOpenClawStateDatabaseSchema({
-    env: { ...env, OPENCLAW_STATE_DIR: detected.stateDir },
-  });
-}
-
 type LegacyStateMigrationStep = PreparedLegacyStateMigrationStep & {
   collectNotices?: boolean;
   run: () => MigrationMessages | Promise<MigrationMessages>;
 };
+
+function createStateSchemaMigrationStep(params: {
+  stateDir: string;
+  env: NodeJS.ProcessEnv;
+  mode: LegacyStateMigrationMode;
+  requiredness: PreparedLegacyStateMigrationStep["requiredness"];
+}): LegacyStateMigrationStep {
+  const stateEnv = { ...params.env, OPENCLAW_STATE_DIR: params.stateDir };
+  const database: LegacyStateMigrationEndpoint = {
+    kind: "sqlite",
+    path: resolveOpenClawStateSqlitePath(stateEnv),
+  };
+  return {
+    id: "state-schema",
+    phase: "shared",
+    source: [database],
+    target: [database],
+    requiredness: params.requiredness,
+    reversibility: "checkpoint-required",
+    run: () =>
+      params.mode === "doctor"
+        ? repairOpenClawStateDatabaseSchema({ env: stateEnv })
+        : repairOpenClawStateDatabaseSchemaIfNeeded({ env: stateEnv }),
+  };
+}
 
 type LegacyStateMigrationExecutionPlan = {
   mode: LegacyStateMigrationMode;
@@ -1312,6 +1327,12 @@ function buildLegacyStateMigrationSteps(
   }
 
   return [
+    createStateSchemaMigrationStep({
+      stateDir,
+      env,
+      mode: params.mode,
+      requiredness: detected.stateSchema.hasLegacy ? "required" : "conditional",
+    }),
     ...eagerStateSteps,
     ...managedWorktreePrelude,
     ...sharedSteps,
@@ -1345,15 +1366,59 @@ export async function planLegacyStateMigrationsReadOnly(params: {
   initialWarnings?: readonly string[];
   legacySessionSurfaces?: PreparedLegacySessionSurfaces;
 }): Promise<LegacyStateMigrationPlan> {
-  const stateDir = path.resolve(params.snapshot.stateDir);
-  const env = createLegacyStateMigrationPlanEnv({ env: params.env, snapshot: params.snapshot });
+  const expectedConfigDigest = params.snapshot.configDigest;
+  const expectedStateDigest = params.snapshot.stateDigest;
+  const requestedSnapshot = {
+    homeDir: path.resolve(params.snapshot.homeDir),
+    configPath: path.resolve(params.snapshot.configPath),
+    stateDir: path.resolve(params.snapshot.stateDir),
+  };
+  // This exported boundary authorizes the paths recorded in the plan. Capture
+  // their identity here so direct callers cannot substitute a symlink or digest.
+  const identityBefore = await captureLegacyStateSnapshotIdentity(requestedSnapshot);
+  const snapshot = {
+    ...requestedSnapshot,
+    ...(identityBefore.configDigest ? { configDigest: identityBefore.configDigest } : {}),
+    ...(identityBefore.stateDigest ? { stateDigest: identityBefore.stateDigest } : {}),
+  };
+  if (identityBefore.warnings.length > 0) {
+    return createLegacyStateMigrationPlan({
+      mode: params.mode,
+      candidate: params.candidate,
+      snapshot,
+      steps: [],
+      warnings: [...(params.initialWarnings ?? []), ...identityBefore.warnings],
+      refusal: {
+        code: "snapshot-identity-unavailable",
+        message: identityBefore.warnings.join("\n"),
+      },
+    });
+  }
+  const mismatchedSnapshotDigests = [
+    expectedConfigDigest && expectedConfigDigest !== identityBefore.configDigest
+      ? "config"
+      : undefined,
+    expectedStateDigest && expectedStateDigest !== identityBefore.stateDigest ? "state" : undefined,
+  ].filter((label): label is string => label !== undefined);
+  if (mismatchedSnapshotDigests.length > 0) {
+    const message = `Caller-provided copied ${mismatchedSnapshotDigests.join(" and ")} digest did not match the observed snapshot.`;
+    return createLegacyStateMigrationPlan({
+      mode: params.mode,
+      candidate: params.candidate,
+      snapshot,
+      steps: [],
+      warnings: [...(params.initialWarnings ?? []), message],
+      refusal: { code: "snapshot-identity-mismatch", message },
+    });
+  }
+  const env = createLegacyStateMigrationPlanEnv({ env: params.env, snapshot });
   const doctorOnlyStateMigrations = params.mode === "doctor";
   const legacySessionSurfaces = params.legacySessionSurfaces ?? EMPTY_LEGACY_SESSION_SURFACES;
   const detected = await detectLegacyStateMigrations({
     cfg: params.cfg,
     mode: params.mode,
     env,
-    homedir: () => path.resolve(params.snapshot.homeDir),
+    homedir: () => snapshot.homeDir,
     pluginSessionStoreAgentIds: [],
     doctorOnlyStateMigrations,
     pluginPlanning: "deferred",
@@ -1402,13 +1467,30 @@ export async function planLegacyStateMigrationsReadOnly(params: {
       message: "Plugin-owned migration planning is deferred to candidate plugin validation.",
     };
   }
-  return createLegacyStateMigrationPlan({
+  const plan = createLegacyStateMigrationPlan({
     mode: params.mode,
     candidate: params.candidate,
-    snapshot: { ...params.snapshot, stateDir },
+    snapshot,
     steps,
     warnings: planningWarnings,
   });
+  const identityAfter = await captureLegacyStateSnapshotIdentity(snapshot);
+  if (identityAfter.warnings.length > 0) {
+    return refuseLegacyStateMigrationPlan(plan, {
+      code: "snapshot-identity-unavailable",
+      message: identityAfter.warnings.join("\n"),
+    });
+  }
+  if (
+    identityBefore.configDigest !== identityAfter.configDigest ||
+    identityBefore.stateDigest !== identityAfter.stateDigest
+  ) {
+    return refuseLegacyStateMigrationPlan(plan, {
+      code: "snapshot-identity-changed",
+      message: "Copied config or state changed while migration planning was in progress.",
+    });
+  }
+  return plan;
 }
 
 function completedStepReceipt(
@@ -1536,30 +1618,38 @@ export async function runLegacyStateMigrations(params: {
   const env = params.env ?? process.env;
   const config = params.config ?? ({} as OpenClawConfig);
   const legacySessionSurfaces = params.legacySessionSurfaces;
-  const stateSchema = migrateLegacyStateSchema(detected, env);
-  if (detected.stateSchema.hasLegacy && stateSchema.warnings.length > 0) {
-    return { ...stateSchema, mode: "doctor", stepReceipts: [] };
+  const [stateSchemaStep, ...remainingSteps] = buildLegacyStateMigrationSteps({
+    mode: "doctor",
+    detected,
+    config,
+    env,
+    now: params.now,
+    recoverCorruptTargetStore: params.recoverCorruptTargetStore,
+    legacySessionSurfaces,
+  });
+  if (!stateSchemaStep || stateSchemaStep.id !== "state-schema") {
+    throw new Error("legacy state migration plan is missing its state-schema prelude");
   }
-
-  const migrations = await runLegacyStateMigrationSteps(
-    buildLegacyStateMigrationSteps({
-      mode: "doctor",
-      detected,
-      config,
-      env,
-      now: params.now,
-      recoverCorruptTargetStore: params.recoverCorruptTargetStore,
-      legacySessionSurfaces,
-    }),
+  const stateSchemaMigration = await runLegacyStateMigrationSteps(
+    [stateSchemaStep],
     params.onStepReceipt,
   );
+  const stateSchema = stateSchemaMigration.entries[0]?.result ?? {
+    changes: [],
+    warnings: [],
+  };
+  if (detected.stateSchema.hasLegacy && stateSchema.warnings.length > 0) {
+    return { ...stateSchema, mode: "doctor", stepReceipts: stateSchemaMigration.receipts };
+  }
+
+  const migrations = await runLegacyStateMigrationSteps(remainingSteps, params.onStepReceipt);
   const notices = mergeNotices([
     ...migrations.sharedNoticeSources,
     ...migrations.finalNoticeSources,
   ]);
   return {
     mode: "doctor",
-    stepReceipts: migrations.receipts,
+    stepReceipts: [...stateSchemaMigration.receipts, ...migrations.receipts],
     changes: [...stateSchema.changes, ...migrations.sources.flatMap((source) => source.changes)],
     warnings: [
       ...new Set([
@@ -1622,10 +1712,29 @@ export async function autoMigrateLegacyState(params: {
   const stateDir = resolveStateDir(env, homedir);
   autoMigrateChecked.add(`${path.resolve(stateDir)}\0${mode}`);
   const stateSchemaOptions = { env: { ...env, OPENCLAW_STATE_DIR: stateDir } };
-  const stateSchema =
-    mode === "doctor"
-      ? repairOpenClawStateDatabaseSchema(stateSchemaOptions)
-      : repairOpenClawStateDatabaseSchemaIfNeeded(stateSchemaOptions);
+  let stateSchemaRequiredness: PreparedLegacyStateMigrationStep["requiredness"] = "conditional";
+  try {
+    if (detectOpenClawStateDatabaseSchemaMigrations(stateSchemaOptions).length > 0) {
+      stateSchemaRequiredness = "required";
+    }
+  } catch {
+    // The repair step owns diagnostics for unreadable or unsupported schemas.
+  }
+  const stateSchemaMigration = await runLegacyStateMigrationSteps(
+    [
+      createStateSchemaMigrationStep({
+        stateDir,
+        env,
+        mode,
+        requiredness: stateSchemaRequiredness,
+      }),
+    ],
+    params.onStepReceipt,
+  );
+  const stateSchema = stateSchemaMigration.entries[0]?.result ?? {
+    changes: [],
+    warnings: [],
+  };
   if (stateSchema.warnings.length > 0) {
     // A failed canonical schema repair is an error: runtime cannot safely open this store.
     if (mode !== "doctor") {
@@ -1637,7 +1746,7 @@ export async function autoMigrateLegacyState(params: {
       skipped: false,
       changes: [...stateDirResult.changes, ...stateSchema.changes],
       warnings: [...stateDirResult.warnings, ...stateSchema.warnings],
-      stepReceipts: [],
+      stepReceipts: stateSchemaMigration.receipts,
       ...(stateDirResult.notices?.length ? { notices: stateDirResult.notices } : {}),
     };
   }
@@ -1683,7 +1792,7 @@ export async function autoMigrateLegacyState(params: {
         ...transcriptDirectives.warnings,
         ...mediaPersistence.warnings,
       ],
-      stepReceipts: [],
+      stepReceipts: stateSchemaMigration.receipts,
       ...(stateDirResult.notices?.length ? { notices: stateDirResult.notices } : {}),
     };
   }
@@ -1755,7 +1864,7 @@ export async function autoMigrateLegacyState(params: {
     skipAgentScopedMigrations: Boolean(hasCustomAgentDir),
     allowLegacyDeviceIdentityImport: params.allowLegacyDeviceIdentityImport,
     legacySessionSurfaces,
-  });
+  }).filter((step) => step.id !== "state-schema");
   const eagerMigrationStepIds = new Set(["device-auth", "device-identity", "meeting-transcripts"]);
   const eagerMigrations = await runLegacyStateMigrationSteps(
     migrationSteps.filter((step) => eagerMigrationStepIds.has(step.id)),
@@ -1849,7 +1958,11 @@ export async function autoMigrateLegacyState(params: {
       skipped: false,
       changes,
       warnings,
-      stepReceipts: [...eagerMigrations.receipts, ...fastPathMigrations.receipts],
+      stepReceipts: [
+        ...stateSchemaMigration.receipts,
+        ...eagerMigrations.receipts,
+        ...fastPathMigrations.receipts,
+      ],
       ...(notices.length > 0 ? { notices } : {}),
     };
   }
@@ -1896,7 +2009,11 @@ export async function autoMigrateLegacyState(params: {
     skipped: Boolean(hasCustomAgentDir),
     changes,
     warnings,
-    stepReceipts: [...eagerMigrations.receipts, ...migrations.receipts],
+    stepReceipts: [
+      ...stateSchemaMigration.receipts,
+      ...eagerMigrations.receipts,
+      ...migrations.receipts,
+    ],
     ...(notices.length > 0 ? { notices } : {}),
   };
 }

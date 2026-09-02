@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { pluginDoctorContractRegistryLoaderState } from "../plugins/doctor-contract-registry-loader-state.js";
@@ -123,7 +124,6 @@ describe("legacy state migration caller mode", () => {
         configPath: fixture.configPath,
         configDigest: sha256(fixture.configBytes),
         stateDir: fixture.stateDir,
-        stateDigest: "sha256:copied-state",
       },
       env: fixture.env,
     });
@@ -148,7 +148,7 @@ describe("legacy state migration caller mode", () => {
         configPath: fixture.configPath,
         configDigest: sha256(fixture.configBytes),
         stateDir: fixture.stateDir,
-        stateDigest: "sha256:copied-state",
+        stateDigest: expect.stringMatching(/^sha256:[0-9a-f]{64}$/u),
       },
     });
     expect(plan.planDigest).toMatch(/^sha256:[0-9a-f]{64}$/u);
@@ -201,7 +201,6 @@ describe("legacy state migration caller mode", () => {
         configPath: fixture.configPath,
         configDigest: sha256(configBytes),
         stateDir: fixture.stateDir,
-        stateDigest: "sha256:copied-state",
       },
       env: fixture.env,
     });
@@ -256,7 +255,6 @@ describe("legacy state migration caller mode", () => {
         configPath: fixture.configPath,
         configDigest: sha256(fixture.configBytes),
         stateDir: fixture.stateDir,
-        stateDigest: "sha256:copied-state",
       },
       env: fixture.env,
     });
@@ -285,7 +283,6 @@ describe("legacy state migration caller mode", () => {
         configPath: fixture.configPath,
         configDigest: sha256(fixture.configBytes),
         stateDir: fixture.stateDir,
-        stateDigest: "sha256:copied-state",
       },
       env: fixture.env,
       legacySessionSurfaces: { surfaces: [], failures: ["session surface unavailable"] },
@@ -298,6 +295,67 @@ describe("legacy state migration caller mode", () => {
       refusal: { code: "migration-planning-warning" },
     });
     expect(snapshotFiles(fixture.root)).toEqual(before);
+  });
+
+  it.runIf(process.platform !== "win32")(
+    "refuses a symlinked state snapshot before migration detection",
+    async () => {
+      const fixture = await makeFixture();
+      const linkedStateDir = path.join(fixture.root, "linked-state");
+      fs.symlinkSync(fixture.stateDir, linkedStateDir, "dir");
+      const pluginLoader = vi.fn(() => {
+        throw new Error("snapshot refusal must precede plugin detection");
+      });
+      pluginDoctorContractRegistryLoaderState.moduleLoaderFactory = pluginLoader;
+
+      const plan = await planLegacyStateMigrationsReadOnly({
+        cfg: fixture.cfg,
+        mode: "doctor",
+        candidate: boundCandidate(fixture.root),
+        snapshot: {
+          homeDir: fixture.homeDir,
+          configPath: fixture.configPath,
+          stateDir: linkedStateDir,
+        },
+        env: fixture.env,
+      });
+
+      expect(plan).toMatchObject({
+        mutationAllowed: false,
+        outcome: "refused",
+        refusal: { code: "snapshot-identity-unavailable" },
+        snapshot: { stateDir: linkedStateDir },
+        steps: [],
+      });
+      expect(plan.snapshot.stateDigest).toBeUndefined();
+      expect(pluginLoader).not.toHaveBeenCalled();
+    },
+  );
+
+  it("refuses a caller-supplied snapshot digest that does not match observed bytes", async () => {
+    const fixture = await makeFixture();
+
+    const plan = await planLegacyStateMigrationsReadOnly({
+      cfg: fixture.cfg,
+      mode: "doctor",
+      candidate: boundCandidate(fixture.root),
+      snapshot: {
+        homeDir: fixture.homeDir,
+        configPath: fixture.configPath,
+        stateDir: fixture.stateDir,
+        stateDigest: `sha256:${"b".repeat(64)}`,
+      },
+      env: fixture.env,
+    });
+
+    expect(plan).toMatchObject({
+      mutationAllowed: false,
+      outcome: "refused",
+      refusal: { code: "snapshot-identity-mismatch" },
+      steps: [],
+    });
+    expect(plan.snapshot.stateDigest).toMatch(/^sha256:[0-9a-f]{64}$/u);
+    expect(plan.snapshot.stateDigest).not.toBe(`sha256:${"b".repeat(64)}`);
   });
 
   it("executes and receipts Doctor-owned exec and TUI migrations from the same mode", async () => {
@@ -322,6 +380,35 @@ describe("legacy state migration caller mode", () => {
         },
       })}\n`,
     );
+    const stateDatabasePath = resolveOpenClawStateSqlitePath(fixture.env);
+    fs.mkdirSync(path.dirname(stateDatabasePath), { recursive: true });
+    const database = new DatabaseSync(stateDatabasePath);
+    try {
+      database.exec(`
+        PRAGMA user_version = 1;
+        CREATE TABLE audit_events (
+          sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+          event_id TEXT NOT NULL UNIQUE,
+          source_id TEXT NOT NULL UNIQUE,
+          source_sequence INTEGER NOT NULL,
+          occurred_at INTEGER NOT NULL,
+          kind TEXT NOT NULL,
+          action TEXT NOT NULL,
+          status TEXT NOT NULL,
+          error_code TEXT,
+          actor_type TEXT NOT NULL,
+          actor_id TEXT NOT NULL,
+          agent_id TEXT NOT NULL,
+          session_key TEXT,
+          session_id TEXT,
+          run_id TEXT NOT NULL,
+          tool_call_id TEXT,
+          tool_name TEXT
+        );
+      `);
+    } finally {
+      database.close();
+    }
     const plan = await planLegacyStateMigrationsReadOnly({
       cfg: {},
       mode: "doctor",
@@ -331,7 +418,6 @@ describe("legacy state migration caller mode", () => {
         configPath: fixture.configPath,
         configDigest: sha256(fixture.configBytes),
         stateDir: fixture.stateDir,
-        stateDigest: "sha256:copied-state",
       },
       env: fixture.env,
     });
@@ -345,6 +431,7 @@ describe("legacy state migration caller mode", () => {
     });
 
     expect(result.mode).toBe("doctor");
+    expect(result.warnings).toEqual([]);
     expect(result.stepReceipts.map((receipt) => receipt.id)).toEqual(
       plan.steps.map((step) => step.id),
     );
@@ -358,6 +445,22 @@ describe("legacy state migration caller mode", () => {
     expect(plan.steps.findIndex((step) => step.id === "device-auth")).toBeLessThan(
       plan.steps.findIndex((step) => step.id === "tui-last-session"),
     );
+    expect(plan.steps[0]).toMatchObject({
+      id: "state-schema",
+      phase: "shared",
+      source: [{ kind: "sqlite", path: stateDatabasePath }],
+      target: [{ kind: "sqlite", path: stateDatabasePath }],
+      requiredness: "required",
+      reversibility: "checkpoint-required",
+      outcome: "planned",
+    });
+    expect(result.stepReceipts[0]).toMatchObject({
+      id: "state-schema",
+      source: [{ kind: "sqlite", path: stateDatabasePath }],
+      target: [{ kind: "sqlite", path: stateDatabasePath }],
+      outcome: "completed",
+      warnings: [],
+    });
     expect(result.stepReceipts.find((receipt) => receipt.id === "device-auth")).toMatchObject({
       source: [{ kind: "path", path: deviceAuthPath }],
       outcome: "completed",

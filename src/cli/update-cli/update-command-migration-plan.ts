@@ -124,8 +124,8 @@ async function createUpdateMigrationPlan(params: {
 export async function updateMigrationPlanCommand(
   opts: UpdateMigrationPlanCommandOptions,
 ): Promise<void> {
-  // The staged-candidate owner supplies an immutable root. This command records
-  // the root and version observed from the candidate process itself.
+  // Root and version are observations only. The staged-candidate owner must
+  // supply an immutable artifact digest through the planner API.
   const root = await resolveUpdateRoot();
   const version = await readPackageVersion(root);
   const plan = await createUpdateMigrationPlan({

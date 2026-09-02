@@ -1862,6 +1862,10 @@ describe("state migrations", () => {
     const repaired = await runLegacyStateMigrations({ detected, config: cfg, env });
     expect(repaired.warnings).toStrictEqual([]);
     expect(repaired.changes).toContain("doctor-only plugin state migrated");
+    expect(repaired.stepReceipts.find((receipt) => receipt.id === "state-schema")).toMatchObject({
+      source: [{ kind: "sqlite", path: resolveOpenClawStateSqlitePath(env) }],
+      target: [{ kind: "sqlite", path: resolveOpenClawStateSqlitePath(env) }],
+    });
     expect(
       repaired.stepReceipts.find((receipt) => receipt.id === "plugin-doctor-state"),
     ).toMatchObject({
