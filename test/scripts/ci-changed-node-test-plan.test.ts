@@ -193,6 +193,27 @@ describe("CI changed Node test plan", () => {
     ]);
   });
 
+  it("keeps an exact default-unit change focused while retaining boundary coverage", () => {
+    const target = "src/node-host/node-worker-bundle-installer.test.ts";
+    expect(createChangedNodeTestShards([target])).toEqual([
+      {
+        checkName: "checks-node-changed",
+        configs: [],
+        requiresDist: false,
+        runner: "blacksmith-8vcpu-ubuntu-2404",
+        shardName: "changed",
+        targets: [target],
+      },
+      {
+        checkName: "checks-node-changed-boundary",
+        configs: ["test/vitest/vitest.boundary.config.ts"],
+        requiresDist: false,
+        runner: "blacksmith-8vcpu-ubuntu-2404",
+        shardName: "changed-boundary",
+      },
+    ]);
+  });
+
   it("keeps boundary coverage on test-only diffs without the build-artifacts lane", () => {
     // Test-only diffs skip build-artifacts (which hosts the full boundary
     // gate), so the plan carries its own nondist boundary shard instead.
