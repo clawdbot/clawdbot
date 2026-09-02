@@ -831,11 +831,11 @@ struct GatewayDiscoverySelectionSupportTests {
                 try self.requireOnlyAuth(
                     try await self.connectAuth(source: source),
                     key: "token",
-                    value: "configured-token")
+                    value: "ambient-token")
                 try self.requireOnlyAuth(
                     try await self.connectNodeAuth(source: source),
                     key: "token",
-                    value: "configured-token")
+                    value: "ambient-token")
             }
         }
     }
