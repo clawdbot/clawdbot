@@ -12,7 +12,6 @@ import {
 } from "../test-projects.test-support.mts";
 import { listAvailableExtensionIds } from "./changed-extensions.mts";
 import {
-  COMPACT_EXPANDED_LARGE_NODE_TEST_JOB_SECONDS,
   createNodeTestShards,
   isPolicyTestOwnedPath,
   packNodeTestGroups,
@@ -55,6 +54,8 @@ const MAX_CHANGED_NODE_TEST_TARGETS = 96;
 // Each target runs in its own child process (isolation contract), so bound the
 // serial tail per job; the shard runner overlaps two children at a time.
 const CHANGED_NODE_TEST_TARGETS_PER_JOB = 12;
+const CHANGED_EXTENSION_FALLBACK_JOB_SECONDS = 150;
+const MAX_CHANGED_EXTENSION_FALLBACK_JOBS = 50;
 // Memory Core targets perform real SQLite/indexing work. Two concurrent Vitest
 // processes starve each other on 4-vCPU runners and push otherwise healthy
 // integration tests past the global timeout.
@@ -491,20 +492,22 @@ export function createChangedExtensionFallbackShards(
     shards.toSorted(
       (a, b) => b.predictedSeconds - a.predictedSeconds || a.shardName.localeCompare(b.shardName),
     ),
-    // Config averages can hide slow process-bounded chunks. Keep those and
-    // runtime preparation separate; pair only whole/native config envelopes.
+    // Each envelope retains its own child process. Share only the checkout;
+    // runtime preparation stays separate from other configs' readers.
     (bin, shard) =>
       bin.length === 1 &&
       !bin[0].pretestBuildMode &&
       !shard.pretestBuildMode &&
-      !bin[0].configs.some((config) => shouldSplitExtensionTestProcesses(config)) &&
-      !shard.configs.some((config) => shouldSplitExtensionTestProcesses(config)) &&
       bin[0].configs[0] !== shard.configs[0] &&
       bin[0].runner === shard.runner &&
       bin[0].requiresDist === shard.requiresDist &&
-      bin[0].predictedSeconds + shard.predictedSeconds <=
-        COMPACT_EXPANDED_LARGE_NODE_TEST_JOB_SECONDS,
+      bin[0].predictedSeconds + shard.predictedSeconds <= CHANGED_EXTENSION_FALLBACK_JOB_SECONDS,
   );
+  if (bins.length > MAX_CHANGED_EXTENSION_FALLBACK_JOBS) {
+    throw new Error(
+      `changed plugin fallback exceeds ${MAX_CHANGED_EXTENSION_FALLBACK_JOBS} jobs (${bins.length} planned)`,
+    );
+  }
   // Singleton objects keep their full metadata and original relative order.
   return bins
     .toSorted((a, b) => shards.indexOf(a[0]) - shards.indexOf(b[0]))

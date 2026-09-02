@@ -178,7 +178,9 @@ class MainActivityLifecycleTest {
     releaseResolver.countDown()
 
     assertTrue(waitUntil { app.chatShareDraftQueue.size() == 1 })
-    val draft = requireNotNull(app.chatShareDraftQueue.head.value)
+    val draft =
+      app.chatShareDraftQueue.queued.value
+        .single()
     assertEquals(listOf(sharedUri), draft.attachments.map(SharedAttachment::uri))
     assertEquals(expectedOwner, app.chatShareDraftQueue.ownerOf(draft.id))
   }

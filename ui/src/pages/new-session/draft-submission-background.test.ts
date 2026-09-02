@@ -20,11 +20,6 @@ function nativeBackgroundFixture(options: Parameters<typeof createDraftFixture>[
   const nativeNotifications = createNativeNotificationsCapability();
   const fixture = createDraftFixture(options);
   Object.assign(fixture.context, { nativeNotifications, basePath: "" });
-  window.dispatchEvent(
-    new CustomEvent("openclaw:native-notifications-status", {
-      detail: { permission: "granted", test: null },
-    }),
-  );
   vi.mocked(fixture.context.sessions.createResult).mockResolvedValue({
     key: "agent:main:dashboard:background",
     initialRun: { status: "started", runId: "run-background" },
@@ -56,7 +51,7 @@ function failedPlacement(
 }
 
 describe("DraftSubmissionFlow background completion", () => {
-  it("delivers an accepted background completion to the native dashboard bridge", async () => {
+  it("delivers an accepted background completion before the first native status reply", async () => {
     const { context, flow, postMessage, dispose } = nativeBackgroundFixture({
       request: async (method) => (method === "agent.wait" ? { status: "ok", endedAt: 1 } : {}),
     });

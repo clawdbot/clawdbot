@@ -166,19 +166,15 @@ export function main(argv = process.argv.slice(2), baseEnv = process.env) {
     }),
     homeMode: resolveVitestHomeSelection(buildTestLivePnpmArgs(args), { env }),
   });
-  let forwardedSignal: NodeJS.Signals | null = null;
-  const teardownChildCleanup = installVitestProcessGroupCleanup({
+  const childCleanup = installVitestProcessGroupCleanup({
     child,
     forceSignal: "SIGKILL",
     forceSignalDelayMs: 100,
-    onSignal: (signal) => {
-      forwardedSignal ??= signal;
-    },
   });
 
   const teardown = () => {
     clearInterval(heartbeat);
-    teardownChildCleanup();
+    childCleanup.teardown();
   };
 
   const noteOutput = () => {
@@ -225,6 +221,7 @@ export function main(argv = process.argv.slice(2), baseEnv = process.env) {
 
   completion.finally(teardown).then(
     ({ code, signal }) => {
+      const forwardedSignal = childCleanup.getForwardedSignal();
       if (forwardedSignal) {
         process.kill(process.pid, forwardedSignal);
         return;

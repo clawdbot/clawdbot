@@ -1217,7 +1217,6 @@ export function spawnWatchedVitestProcess({
   if (homeMode !== "tooling") {
     assertTestHomeSelection(env, homeMode);
   }
-  let forwardedSignal: NodeSignal | null = null;
   let diagnosticsCompletion: Promise<void> | null = null;
   const directNodeArgs = resolveDirectNodeVitestArgs(pnpmArgs);
   if (workerRun && directNodeArgs) {
@@ -1254,13 +1253,10 @@ export function spawnWatchedVitestProcess({
       : createPnpmRunnerSpawnSpec({ pnpmArgs, ...childSpawnParams })),
     homeMode,
   });
-  const teardownChildCleanup = installVitestProcessGroupCleanup({
+  const childCleanup = installVitestProcessGroupCleanup({
     child,
     forceSignal: "SIGKILL",
     forceSignalDelayMs: 100,
-    onSignal: (signal) => {
-      forwardedSignal ??= signal;
-    },
   });
   const teardownNoOutputWatchdog = installVitestNoOutputWatchdog({
     streams: [child.stdout, child.stderr],
@@ -1300,7 +1296,7 @@ export function spawnWatchedVitestProcess({
   ]);
 
   const teardown = () => {
-    teardownChildCleanup();
+    childCleanup.teardown();
     teardownNoOutputWatchdog();
   };
   const completion = Promise.all([childCompletion, forwardedOutput])
@@ -1317,7 +1313,7 @@ export function spawnWatchedVitestProcess({
   return {
     child,
     completion: workerRun ? workerRun.borrow(child, completion) : completion,
-    getForwardedSignal: () => forwardedSignal,
+    getForwardedSignal: childCleanup.getForwardedSignal,
     teardown,
   };
 }

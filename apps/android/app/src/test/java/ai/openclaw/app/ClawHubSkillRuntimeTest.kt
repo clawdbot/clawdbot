@@ -5,10 +5,17 @@ import ai.openclaw.app.gateway.GatewayErrorDetails
 import ai.openclaw.app.gateway.GatewayRequestOutcomeUnknown
 import ai.openclaw.app.gateway.GatewayRequestRejected
 import ai.openclaw.app.gateway.GatewaySession
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.job
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.json.Json
+import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -28,6 +35,8 @@ import java.util.concurrent.atomic.AtomicInteger
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
 class ClawHubSkillRuntimeTest {
+  private val runtimes = mutableListOf<NodeRuntime>()
+
   @Before
   fun clearPlainPrefs() {
     RuntimeEnvironment
@@ -36,6 +45,11 @@ class ClawHubSkillRuntimeTest {
       .edit()
       .clear()
       .commit()
+  }
+
+  @After
+  fun closeRuntimes() {
+    runtimes.forEach(::closeNodeRuntimeTestFixture)
   }
 
   @Test
@@ -170,6 +184,67 @@ class ClawHubSkillRuntimeTest {
   }
 
   @Test
+  fun installReadbackSurvivesNewerSkillsRefresh() =
+    runBlocking {
+      val outcomes =
+        listOf(
+          GatewayRequestOutcomeUnknown("response lost"),
+          GatewayRequestRejected(
+            GatewaySession.ErrorShape(code = "UNAVAILABLE", message = "Install still running", details = null),
+          ),
+          null,
+        )
+      for (outcome in outcomes) {
+        val runtime = createTestRuntime()
+        seedConnectedAdminRuntime(runtime)
+        val installCalls = AtomicInteger()
+        val statusRequests = Channel<Pair<CompletableDeferred<String>, Job>>(Channel.UNLIMITED)
+        runtime.gatewayDataRequestOverrideForTests = { _, method, _ ->
+          when (method) {
+            "skills.install" -> {
+              installCalls.incrementAndGet()
+              outcome?.let { throw it }
+              """{"message":"Installed registry-slug."}"""
+            }
+
+            "skills.status" -> {
+              val response = CompletableDeferred<String>()
+              statusRequests.send(response to currentCoroutineContext().job)
+              response.await()
+            }
+
+            else -> {
+              error("unexpected method $method")
+            }
+          }
+        }
+
+        val install = runtime.installClawHubSkill("registry-slug", version = "1.2.3") ?: error("install job missing")
+        val (readback, _) = withTimeout(2_000) { statusRequests.receive() }
+        runtime.refreshSkills()
+        val (newerResponse, newerRefresh) = withTimeout(2_000) { statusRequests.receive() }
+        try {
+          newerResponse.complete(skillsStatus(installed = false))
+          withTimeout(2_000) { newerRefresh.join() }
+          readback.complete(skillsStatus(installed = true))
+          withTimeout(2_000) { install.join() }
+
+          assertEquals("Installed registry-slug.", runtime.clawHubSkillSearchState.value.messageText)
+          assertNull(runtime.clawHubSkillSearchState.value.errorText)
+          assertTrue(
+            runtime.skillsState.value.summary.skills
+              .isEmpty(),
+          )
+          assertEquals(1, installCalls.get())
+        } finally {
+          readback.complete("{}")
+          newerResponse.complete("{}")
+          statusRequests.close()
+        }
+      }
+    }
+
+  @Test
   fun staleGatewayCannotClaimAnInstallAfterGatewaySwitch() {
     val runtime = createTestRuntime()
     seedConnectedAdminRuntime(runtime)
@@ -215,7 +290,7 @@ class ClawHubSkillRuntimeTest {
         "openclaw.node.secure.test.${UUID.randomUUID()}",
         android.content.Context.MODE_PRIVATE,
       )
-    return NodeRuntime(app, SecurePrefs(app, securePrefsOverride = securePrefs))
+    return NodeRuntime(app, SecurePrefs(app, securePrefsOverride = securePrefs)).also(runtimes::add)
   }
 
   private fun seedConnectedAdminRuntime(runtime: NodeRuntime) {
