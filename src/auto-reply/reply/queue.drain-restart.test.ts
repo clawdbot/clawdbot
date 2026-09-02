@@ -420,12 +420,15 @@ describe("followup queue drain restart after idle window", () => {
     const firstFailed = createDeferred();
     const delivered = createDeferred();
     let attempts = 0;
-    let signal: ReturnType<typeof beginGatewayRestartSignalAdmission>;
+    let signal: ReturnType<typeof beginGatewayRestartSignalAdmission> = null;
 
     const runFollowup = async () => {
       attempts += 1;
       if (attempts === 1) {
         signal = beginGatewayRestartSignalAdmission();
+        if (!signal) {
+          throw new Error("expected restart-signal fence");
+        }
         firstFailed.resolve();
         throw new GatewayDrainingError();
       }
