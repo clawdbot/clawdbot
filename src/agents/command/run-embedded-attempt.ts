@@ -501,8 +501,6 @@ export async function runEmbeddedAgentAttempt(params: {
               isFallbackRetry: runOptions.isFallbackRetry,
               classifyResult: runOptions.classifyResult,
               preserveCliSessionBinding:
-                providerOverride !== provider ||
-                modelOverride !== model ||
                 isHeartbeatLifecycleRunKind(logicalTurnOpts.bootstrapContextRunKind) ||
                 params.preserveUserFacingSessionModelState,
               modelRoutingProvenance: runOptions.modelRoutingProvenance,

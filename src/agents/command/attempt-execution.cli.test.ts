@@ -386,7 +386,8 @@ vi.mock("../cli-runner/cli-live-session-registry.js", () => ({
   hasCliLiveSession: hasClaudeSessionMock,
 }));
 
-vi.mock("../model-selection.js", () => ({
+vi.mock("../model-selection.js", async () => ({
+  ...(await vi.importActual<typeof import("../model-selection.js")>("../model-selection.js")),
   isCliProvider: (provider: string, _cfg?: OpenClawConfig) => {
     const normalized = provider.trim().toLowerCase();
     return (
@@ -1002,78 +1003,237 @@ describe("CLI attempt execution", () => {
     );
   }
 
-  it.each(["accepted", "rejected", "rejected-clear"])(
-    "settles a cold %s CLI binding before the next queued command starts",
-    async (outcome) => {
-      const sessionKey = "agent:main:cli-binding-settlement";
-      const sessionEntry = makeSessionEntry("binding-settlement-session");
-      if (outcome === "rejected-clear") {
-        sessionEntry.cliSessionBindings = {
-          "claude-cli": { sessionId: "previous-native-session" },
-        };
-        await writeClaudeCliAssistantTranscript(
-          "previous-native-session",
-          path.join(tmpDir, "cold-home"),
-        );
+  async function runOuterCliFallback(params: {
+    suppression?: "heartbeat" | "preserved-state";
+    sessionKey: string;
+    sessionEntry: SessionEntry;
+    sessionStore: Record<string, SessionEntry>;
+    runId: string;
+  }) {
+    const [
+      { getAcpSessionManager },
+      { prepareAgentCommandExecutionIdentity },
+      { runEmbeddedAgentAttempt },
+      { createModelVisibilityPolicy },
+    ] = await Promise.all([
+      import("../../acp/control-plane/manager.js"),
+      import("../agent-command-execution-identity.js"),
+      import("./run-embedded-attempt.js"),
+      import("../model-visibility-policy.js"),
+    ]);
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: { model: { primary: "claude-cli/sonnet", fallbacks: ["claude-cli/opus"] } },
+      },
+    };
+    const opts = {
+      message: "outer fallback",
+      modelFallbacksOverride: ["claude-cli/opus"],
+      bootstrapContextRunKind: params.suppression === "heartbeat" ? "heartbeat" : undefined,
+    } satisfies RunAgentAttemptParams["opts"];
+    const lifecycleGeneration = getAgentEventLifecycleGeneration();
+    const prepared: Parameters<typeof runEmbeddedAgentAttempt>[0]["prepared"] = {
+      ...params,
+      opts,
+      cfg,
+      body: opts.message,
+      transcriptBody: opts.message,
+      configuredThinkingCatalog: [],
+      normalizedSpawned: {},
+      agentCfg: undefined,
+      thinkOverride: undefined,
+      thinkOnce: undefined,
+      verboseOverride: undefined,
+      timeoutMs: 10_000,
+      runTimeoutOverrideMs: undefined,
+      sessionId: params.sessionEntry.sessionId,
+      storePath,
+      isNewSession: false,
+      previousSessionId: undefined,
+      persistedThinking: undefined,
+      persistedVerbose: undefined,
+      sessionAgentId: "main",
+      outboundSession: undefined,
+      workspaceDir: tmpDir,
+      cwd: undefined,
+      agentDir,
+      pluginsEnabled: false,
+      manifestMetadataSnapshot: undefined,
+      modelManifestContext: { manifestPlugins: [] },
+      isSubagentLane: false,
+      acpManager: getAcpSessionManager(),
+      acpResolution: null,
+      runLease: undefined,
+    };
+    const admission = prepareAgentCommandExecutionIdentity({
+      opts,
+      prepared,
+      ingress: { kind: "system", boundary: "cold-cli-fallback-test", state: "present" },
+      lifecycleGeneration,
+    });
+    try {
+      const attempt = await runEmbeddedAgentAttempt({
+        preparedRunAdmission: admission,
+        prepared,
+        opts,
+        sessionEntry: params.sessionEntry,
+        lifecycleGeneration,
+        onLifecycleGenerationChanged: () => {},
+        suppressVisibleSessionEffects: false,
+        preserveUserFacingSessionModelState: params.suppression === "preserved-state",
+        trackInternalModelRunTarget: () => {},
+        embeddedSessionState: {
+          sessionEntry: params.sessionEntry,
+          requestedThinkLevel: "off",
+          resolvedVerboseLevel: undefined,
+          skillsSnapshot: { prompt: "", skills: [] },
+          runContext: {},
+        },
+        modelSelection: {
+          sessionEntry: params.sessionEntry,
+          provider: "claude-cli",
+          model: "sonnet",
+          requestedRouteResolution: "resolved",
+          defaultProvider: "claude-cli",
+          defaultModel: "sonnet",
+          configuredDefaultAuthProfileId: undefined,
+          providerForAuthProfileValidation: "claude-cli",
+          visibilityPolicy: createModelVisibilityPolicy({
+            cfg,
+            catalog: [],
+            defaultProvider: "claude-cli",
+            defaultModel: "sonnet",
+          }),
+          hasExplicitRunOverride: false,
+          storedProviderOverride: undefined,
+          storedModelOverride: undefined,
+          storedModelOverrideSource: undefined,
+          hasStoredAutoFallbackProvenance: false,
+          autoFallbackPrimaryProbe: undefined,
+          sessionEntryForAttempt: params.sessionEntry,
+          thinkingCatalog: [],
+          immutableThinkLevel: "off",
+          effectiveTurnThinkLevel: "off",
+          sessionFile: path.join(tmpDir, "session.jsonl"),
+        },
+      });
+      try {
+        await attempt.fallbackTrajectoryRecorder?.flush();
+        return attempt;
+      } finally {
+        await attempt.deferredLifecycle.complete();
       }
-      const sessionStore = { [sessionKey]: sessionEntry };
-      await writeSessionStoreSeed(sessionStore);
+    } finally {
+      await admission.finish();
+    }
+  }
+
+  it.each([
+    "accepted",
+    "rejected",
+    "rejected-clear",
+    "outer-fallback",
+    "heartbeat",
+    "preserved-state",
+  ])("settles a cold %s CLI binding before the next queued command starts", async (outcome) => {
+    const suppression =
+      outcome === "heartbeat" || outcome === "preserved-state" ? outcome : undefined;
+    const outerFallback = outcome === "outer-fallback" || suppression !== undefined;
+    const accepted = outcome === "accepted" || outerFallback;
+    const previousBinding = { sessionId: "previous-native-session" };
+    const sessionKey = "agent:main:cli-binding-settlement";
+    const sessionEntry = makeSessionEntry("binding-settlement-session");
+    if (outcome === "rejected-clear" || suppression) {
+      sessionEntry.cliSessionBindings = { "claude-cli": previousBinding };
       await writeClaudeCliAssistantTranscript(
-        "settled-native-session",
+        "previous-native-session",
         path.join(tmpDir, "cold-home"),
       );
-      const firstStarted = createDeferredCore();
-      const finishFirst = createDeferredCore();
-      const binding = {
-        sessionId: "settled-native-session",
-        authProfileId: "anthropic:claude-cli",
-      };
-      runCliAgentMock
-        .mockImplementationOnce(async () => {
-          firstStarted.resolve();
-          await finishFirst.promise;
-          const result = makeCliResult("parent completed");
-          if (outcome !== "accepted") {
-            result.payloads = [{ text: GENERIC_EXTERNAL_RUN_FAILURE_TEXT }];
-            result.meta.finalAssistantVisibleText = GENERIC_EXTERNAL_RUN_FAILURE_TEXT;
-          }
-          if (outcome === "rejected-clear") {
-            result.meta.agentMeta!.clearCliSessionBinding = true;
-          }
-          result.meta.agentMeta!.cliSessionBinding = binding;
-          result.meta.agentMeta!.sessionId = binding.sessionId;
-          return result;
-        })
-        .mockResolvedValueOnce(makeCliResult("follow-up completed"));
-      const run = (runId: string) =>
-        runClaudeCliAttempt({
+    }
+    const sessionStore = { [sessionKey]: sessionEntry };
+    await writeSessionStoreSeed(sessionStore);
+    await writeClaudeCliAssistantTranscript(
+      "settled-native-session",
+      path.join(tmpDir, "cold-home"),
+    );
+    const firstStarted = createDeferredCore();
+    const finishFirst = createDeferredCore();
+    const binding = {
+      sessionId: "settled-native-session",
+      authProfileId: "anthropic:claude-cli",
+    };
+    if (outerFallback) {
+      runCliAgentMock.mockRejectedValueOnce(
+        new FailoverError("primary capacity", {
+          reason: "rate_limit",
+          provider: "claude-cli",
+          model: "sonnet",
+        }),
+      );
+    }
+    runCliAgentMock
+      .mockImplementationOnce(async () => {
+        firstStarted.resolve();
+        await finishFirst.promise;
+        const result = makeCliResult("parent completed");
+        if (!accepted) {
+          result.payloads = [{ text: GENERIC_EXTERNAL_RUN_FAILURE_TEXT }];
+          result.meta.finalAssistantVisibleText = GENERIC_EXTERNAL_RUN_FAILURE_TEXT;
+        }
+        if (outcome === "rejected-clear") {
+          result.meta.agentMeta!.clearCliSessionBinding = true;
+        }
+        result.meta.agentMeta!.cliSessionBinding = binding;
+        result.meta.agentMeta!.sessionId = binding.sessionId;
+        return result;
+      })
+      .mockResolvedValueOnce(makeCliResult("follow-up completed"));
+    const run = (runId: string) =>
+      runClaudeCliAttempt({
+        sessionKey,
+        sessionEntry,
+        sessionStore,
+        body: runId,
+        runId,
+        classifyResult: (result) =>
+          classifyEmbeddedAgentRunResultForModelFallback({
+            result,
+            provider: "claude-cli",
+            model: "opus",
+          }),
+      });
+    const first = outerFallback
+      ? runOuterCliFallback({
           sessionKey,
           sessionEntry,
           sessionStore,
-          body: runId,
-          runId,
-          classifyResult: (result) =>
-            classifyEmbeddedAgentRunResultForModelFallback({
-              result,
-              provider: "claude-cli",
-              model: "opus",
-            }),
-        });
-      const first = run("binding-parent");
-      await firstStarted.promise;
-      if (outcome === "rejected-clear") {
-        expect(firstRunCliAgentArg().cliSessionId).toBe("previous-native-session");
-      }
-      const second = run("binding-follow-up");
-      finishFirst.resolve();
-      await Promise.all([first, second]);
+          runId: "binding-parent",
+          suppression,
+        })
+      : run("binding-parent");
+    await Promise.race([
+      firstStarted.promise,
+      first.then(() => {
+        throw new Error("first command settled before its CLI started");
+      }),
+    ]);
+    if (outcome === "rejected-clear") {
+      expect(firstRunCliAgentArg().cliSessionId).toBe("previous-native-session");
+    }
+    const second = run("binding-follow-up");
+    finishFirst.resolve();
+    await Promise.all([first, second]);
 
-      expect(firstRunCliAgentArg(1)).toMatchObject({
-        cliSessionId: outcome === "accepted" ? binding.sessionId : undefined,
-        cliSessionBinding: outcome === "accepted" ? binding : undefined,
-      });
-    },
-  );
+    if (outerFallback) {
+      expect(firstRunCliAgentArg(0).model).toBe("sonnet");
+      expect(firstRunCliAgentArg(1).model).toBe("opus");
+    }
+    const expectedBinding = suppression ? previousBinding : accepted ? binding : undefined;
+    expect(firstRunCliAgentArg(outerFallback ? 2 : 1)).toMatchObject({
+      cliSessionId: expectedBinding?.sessionId,
+      cliSessionBinding: expectedBinding,
+    });
+  });
 
   function makeClaudeCliSessionEntry(
     openclawSessionId: string,
