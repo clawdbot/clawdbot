@@ -233,7 +233,13 @@ describe("createCliJsonlStreamingParser", () => {
       frames: [claudeTextDelta("streamed answer")] as unknown[],
       expected: { text: "streamed answer", sessionId: "hook-stopped", usage: undefined },
     },
-  ])("$name", ({ frames, expected }) => {
+    {
+      name: "does not classify a backgrounded turn as a stop",
+      frames: [] as unknown[],
+      terminalReason: "background_requested",
+      expected: { text: "", sessionId: "hook-stopped", usage: undefined },
+    },
+  ])("$name", ({ frames, expected, terminalReason }) => {
     const parser = createCliJsonlStreamingParser({
       backend: {
         command: "claude",
@@ -254,7 +260,7 @@ describe("createCliJsonlStreamingParser", () => {
           is_error: false,
           session_id: "hook-stopped",
           stop_reason: "tool_use",
-          terminal_reason: "hook_stopped",
+          terminal_reason: terminalReason ?? "hook_stopped",
           result: "",
           num_turns: 4,
         },

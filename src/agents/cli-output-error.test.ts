@@ -65,6 +65,41 @@ describe("formatCliOutputError", () => {
 });
 
 describe("parseCliJsonl errors", () => {
+  it("keeps an explicit Claude execution error that also reports a terminal reason", () => {
+    const result = parseCliJsonl(
+      [
+        JSON.stringify({
+          type: "stream_event",
+          event: { type: "content_block_delta", delta: { type: "text_delta", text: "partial" } },
+        }),
+        JSON.stringify({
+          type: "result",
+          subtype: "error_during_execution",
+          is_error: true,
+          session_id: "claude-execution-error",
+          stop_reason: "error",
+          terminal_reason: "error_during_execution",
+          result: "",
+          errors: ["API Error: 529 Overloaded"],
+        }),
+      ].join("\n"),
+      {
+        command: "claude",
+        output: "jsonl",
+        jsonlDialect: "claude-stream-json",
+        sessionIdFields: ["session_id"],
+      },
+      "claude-cli",
+    );
+
+    expect(result).toEqual({
+      text: "",
+      sessionId: "claude-execution-error",
+      usage: undefined,
+      errorText: "API Error: 529 Overloaded",
+    });
+  });
+
   it("keeps detailed Gemini stream-json result errors over generic error events", () => {
     const result = parseCliJsonl(
       [

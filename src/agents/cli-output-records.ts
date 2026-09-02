@@ -309,11 +309,16 @@ function readClaudeTerminalFailure(
     // Any other non-completed terminal reason is the CLI reporting that it
     // ended the turn itself. Only a reply-less result is a failure: a stopped
     // turn that still delivered text stays a normal answer.
+    // A backgrounded turn continues and reports its answer later, and a result
+    // that already carries an explicit CLI error keeps that error's own
+    // classification (an API failure must stay failover-able, not terminal).
     if (
       parsed.type !== "result" ||
       !terminalReason ||
       terminalReason === "completed" ||
-      unwrapNestedCliResultText(collectCliText(parsed.result)).trim()
+      terminalReason === "background_requested" ||
+      unwrapNestedCliResultText(collectCliText(parsed.result)).trim() ||
+      collectExplicitCliErrorText(parsed)
     ) {
       return undefined;
     }
