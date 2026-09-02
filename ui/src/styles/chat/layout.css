@@ -4422,20 +4422,11 @@ button.chat-pr__diff {
     background-clip: text;
     color: transparent;
     -webkit-text-fill-color: transparent;
-    animation-name: chat-dictation-listening-shimmer;
+    animation-name: text-shimmer;
     animation-duration: 2s;
     animation-timing-function: linear;
     animation-iteration-count: infinite;
     animation-direction: normal;
-  }
-}
-
-@keyframes chat-dictation-listening-shimmer {
-  from {
-    background-position: 100% 0;
-  }
-  to {
-    background-position: -100% 0;
   }
 }
 
