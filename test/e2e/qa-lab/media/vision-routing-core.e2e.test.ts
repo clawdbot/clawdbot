@@ -119,7 +119,7 @@ describe("core vision routing product proof", () => {
       } satisfies MediaUnderstandingProvider,
     };
 
-    const applied = await applyMediaUnderstanding({
+    await applyMediaUnderstanding({
       ctx,
       cfg,
       agentId: "qa-vision-native",
@@ -152,8 +152,7 @@ describe("core vision routing product proof", () => {
         },
       },
     ]);
-    expect(applied.appliedImage).toBe(false);
-    expect(applied.outputs).toHaveLength(0);
+    expect(ctx.MediaUnderstanding).toBeUndefined();
     expect(summarizerCalls).toBe(0);
     expect(ctx.Body).not.toContain(SUMMARY_TEXT);
     expect(ctx.Body).not.toContain("[Image]");
@@ -223,7 +222,7 @@ describe("core vision routing product proof", () => {
       } satisfies MediaUnderstandingProvider,
     };
 
-    const applied = await applyMediaUnderstanding({
+    await applyMediaUnderstanding({
       ctx,
       cfg,
       agentId: "qa-vision-fallback",
@@ -256,7 +255,7 @@ describe("core vision routing product proof", () => {
       model: FALLBACK_MODEL,
       outcome: "success",
     });
-    expect(applied.outputs).toEqual([
+    expect(ctx.MediaUnderstanding).toEqual([
       {
         kind: "image.description",
         attachmentIndex: 0,
@@ -265,8 +264,6 @@ describe("core vision routing product proof", () => {
         model: FALLBACK_MODEL,
       },
     ]);
-    expect(applied.appliedImage).toBe(true);
-    expect(ctx.MediaUnderstanding).toEqual(applied.outputs);
     expect(occurrenceCount(ctx.Body, SUMMARY_TEXT)).toBe(1);
 
     const projection = buildInboundMediaNoteProjection(ctx);

@@ -2582,13 +2582,7 @@ describe("tryDispatchAcpReplyCore", () => {
     };
     acpAttachmentBuffers.set(currentPath, currentImage);
     mediaUnderstandingMocks.applyMediaUnderstanding.mockResolvedValueOnce({
-      outputs: [],
-      decisions: [],
       extractedFileImages: [pdfPage],
-      appliedImage: false,
-      appliedAudio: false,
-      appliedVideo: false,
-      appliedFile: true,
     });
 
     await runDispatch({
@@ -2633,13 +2627,7 @@ describe("tryDispatchAcpReplyCore", () => {
       ctx.MediaUnderstanding = [description];
       acpAttachmentBuffers.delete(undescribedPath);
       return {
-        outputs: [description],
-        decisions: [],
         extractedFileImages: [pdfPage],
-        appliedImage: true,
-        appliedAudio: false,
-        appliedVideo: false,
-        appliedFile: true,
       };
     });
 
@@ -2681,13 +2669,7 @@ describe("tryDispatchAcpReplyCore", () => {
       ctx.MediaUnderstanding = [description];
       ctx.agentText = `${ctx.agentText}\n\n[Image 1]\n${description.text}`;
       return {
-        outputs: [description],
-        decisions: [],
         extractedFileImages: [],
-        appliedImage: true,
-        appliedAudio: false,
-        appliedVideo: false,
-        appliedFile: false,
       };
     });
 

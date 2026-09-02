@@ -19,9 +19,9 @@ describe("audio preflight attachment handoff", () => {
       CommandBody: "typed caption",
     };
     const before = { ...ctx };
-    const result = await applyMediaUnderstanding({ ctx, cfg: { plugins: { enabled: false } } });
+    await applyMediaUnderstanding({ ctx, cfg: { plugins: { enabled: false } } });
 
-    expect(result.outputs).toEqual([]);
+    expect(ctx.MediaUnderstanding).toBeUndefined();
     expect(ctx).toMatchObject(before);
     expect(ctx.rawText).toBeUndefined();
     expect(ctx.commandText).toBeUndefined();

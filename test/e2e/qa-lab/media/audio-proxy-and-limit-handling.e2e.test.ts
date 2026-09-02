@@ -282,7 +282,7 @@ describe("media.audio-proxy-and-limit-handling", () => {
         },
         async () => {
           const accepted = await createAudioContext("accepted.wav", 2048);
-          const acceptedResult = await applyMediaUnderstanding({
+          await applyMediaUnderstanding({
             ctx: accepted.ctx,
             cfg: createConfig(`${provider.url}/v1`, 4096),
             workspaceDir: accepted.workspaceDir,
@@ -290,7 +290,7 @@ describe("media.audio-proxy-and-limit-handling", () => {
           });
 
           const acceptedEvidence = JSON.stringify({
-            decisions: acceptedResult.decisions,
+            decisions: accepted.ctx.MediaUnderstandingDecisions,
             providerRequests: providerRequests.map((request) => ({
               method: request.method,
               remotePort: request.remotePort,
@@ -301,8 +301,7 @@ describe("media.audio-proxy-and-limit-handling", () => {
               url: request.url,
             })),
           });
-          expect(acceptedResult.appliedAudio, acceptedEvidence).toBe(true);
-          expect(accepted.ctx.Transcript).toBe("proxied audio transcript");
+          expect(accepted.ctx.Transcript, acceptedEvidence).toBe("proxied audio transcript");
           expect(proxyRequests).toHaveLength(1);
           expect(providerRequests).toHaveLength(1);
           expect(proxyRequests[0]?.method).toBe("CONNECT");
@@ -318,15 +317,17 @@ describe("media.audio-proxy-and-limit-handling", () => {
           proxyUpstreamPorts.clear();
 
           const oversized = await createAudioContext("oversized.wav", 4097);
-          const oversizedResult = await applyMediaUnderstanding({
+          await applyMediaUnderstanding({
             ctx: oversized.ctx,
             cfg: createConfig(`${provider.url}/v1`, 4096),
             workspaceDir: oversized.workspaceDir,
             providers: { openai: openaiMediaUnderstandingProvider },
           });
 
-          expect(oversizedResult.appliedAudio).toBe(false);
-          expect(JSON.stringify(oversizedResult.decisions)).toContain("exceeds maxBytes 4096");
+          expect(oversized.ctx.MediaUnderstanding).toBeUndefined();
+          expect(JSON.stringify(oversized.ctx.MediaUnderstandingDecisions)).toContain(
+            "exceeds maxBytes 4096",
+          );
           expect(proxyRequests).toHaveLength(0);
           expect(providerRequests).toHaveLength(0);
         },

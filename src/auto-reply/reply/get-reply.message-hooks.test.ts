@@ -216,13 +216,7 @@ async function runLocalPathSelfServeCase(params: {
   const ctx = buildCtx(params.ctx);
   const enableLocalPathSelfServe = vi.fn();
   mocks.applyMediaUnderstanding.mockResolvedValueOnce({
-    outputs: [],
-    decisions: [],
     extractedFileImages: [],
-    appliedImage: false,
-    appliedAudio: false,
-    appliedVideo: false,
-    appliedFile: true,
     enableLocalPathSelfServe,
   });
   mocks.initSessionState.mockResolvedValueOnce(
@@ -687,13 +681,7 @@ describe("getReplyFromConfig message hooks", () => {
       params.ctx.CommandBody = enrichedBody;
       params.ctx.RawBody = enrichedBody;
       return {
-        outputs: params.ctx.MediaUnderstanding,
-        decisions: [],
         extractedFileImages: [extractedPdfPage],
-        appliedImage: true,
-        appliedAudio: false,
-        appliedVideo: false,
-        appliedFile: true,
       };
     });
     mocks.resolveReplyDirectives.mockResolvedValueOnce(

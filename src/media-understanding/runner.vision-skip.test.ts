@@ -199,7 +199,7 @@ describe("runCapability image skip", () => {
           },
         } as unknown as OpenClawConfig;
 
-        const result = await applyMediaUnderstanding({
+        await applyMediaUnderstanding({
           ctx: msgCtx,
           cfg,
           agentDir: "/tmp",
@@ -217,9 +217,10 @@ describe("runCapability image skip", () => {
           activeModel: { provider: "openai", model: "gpt-4.1" },
         });
 
-        const imageDecision = result.decisions.find((decision) => decision.capability === "image");
+        const imageDecision = msgCtx.MediaUnderstandingDecisions?.find(
+          (decision) => decision.capability === "image",
+        );
         const attempt = imageDecision?.attachments[0]?.attempts[0];
-        expect(result.appliedImage).toBe(false);
         expect(imageDecision?.outcome).toBe("skipped");
         expect(imageDecision).toMatchObject({ nativeVisionActive: true });
         expect(attempt?.outcome).toBe("skipped");
@@ -263,7 +264,7 @@ describe("runCapability image skip", () => {
             { url: "media://inbound/fourth.png", contentType: "image/png" },
           ];
 
-          const result = await applyMediaUnderstanding({
+          await applyMediaUnderstanding({
             ctx: msgCtx,
             cfg: {
               tools: { media: { image: { attachments: policy } } },
@@ -273,7 +274,7 @@ describe("runCapability image skip", () => {
             activeModel: { provider: "openai", model: "gpt-4.1" },
           });
 
-          const imageDecision = result.decisions.find(
+          const imageDecision = msgCtx.MediaUnderstandingDecisions?.find(
             (decision) => decision.capability === "image",
           );
           expect(msgCtx.Body).toContain("[Image attachment could not be analyzed]");
@@ -335,7 +336,7 @@ describe("runCapability image skip", () => {
             throw new Error("catalog unavailable");
           },
           async () => {
-            const result = await applyMediaUnderstanding({
+            await applyMediaUnderstanding({
               ctx: msgCtx,
               cfg,
               agentDir: "/tmp",
@@ -353,12 +354,12 @@ describe("runCapability image skip", () => {
               activeModel: { provider: "openai", model: "gpt-4.1" },
             });
 
-            const imageDecision = result.decisions.find(
+            const imageDecision = msgCtx.MediaUnderstandingDecisions?.find(
               (decision) => decision.capability === "image",
             );
             // The lone selected attachment leaves nothing to marker, so the
             // probe never fires and catalog failure cannot reach this path.
-            expect(result.appliedImage).toBe(true);
+            expect(msgCtx.Body).toContain(plantedVisionSentinel);
             expect(imageDecision?.outcome).toBe("success");
             expect(imageDecision?.attachmentDispositions).toEqual({ 0: { kind: "handled" } });
             expect(imageDecision).not.toHaveProperty("nativeVisionActive");
@@ -379,13 +380,15 @@ describe("runCapability image skip", () => {
         throw new Error("catalog unavailable");
       },
       async () => {
-        const result = await applyMediaUnderstanding({
+        await applyMediaUnderstanding({
           ctx,
           cfg: { tools: { media: { image: { enabled: false } } } },
           activeModel: { provider: "openai", model: "gpt-4.1" },
         });
 
-        const imageDecision = result.decisions.find((d) => d.capability === "image");
+        const imageDecision = ctx.MediaUnderstandingDecisions?.find(
+          (d) => d.capability === "image",
+        );
         expect(imageDecision).toMatchObject({
           outcome: "disabled",
           attachmentDispositions: { 0: { kind: "capability-disabled" } },
@@ -403,12 +406,12 @@ describe("runCapability image skip", () => {
       media: [{ path: "/tmp/image.png", contentType: "image/png" }],
     };
 
-    const result = await applyMediaUnderstanding({
+    await applyMediaUnderstanding({
       ctx,
       cfg: { tools: { media: { image: { enabled: false } } } },
     });
 
-    expect(result.decisions).toContainEqual(
+    expect(ctx.MediaUnderstandingDecisions).toContainEqual(
       expect.objectContaining({
         capability: "image",
         outcome: "disabled",
@@ -449,7 +452,7 @@ describe("runCapability image skip", () => {
           },
         } as unknown as OpenClawConfig;
 
-        const result = await applyMediaUnderstanding({
+        await applyMediaUnderstanding({
           ctx: msgCtx,
           cfg,
           agentDir: "/tmp",
@@ -467,9 +470,10 @@ describe("runCapability image skip", () => {
           activeModel: { provider: "minimax", model: "MiniMax-M3" },
         });
 
-        const imageDecision = result.decisions.find((decision) => decision.capability === "image");
+        const imageDecision = msgCtx.MediaUnderstandingDecisions?.find(
+          (decision) => decision.capability === "image",
+        );
         const attempt = imageDecision?.attachments[0]?.attempts[0];
-        expect(result.appliedImage).toBe(false);
         expect(imageDecision?.outcome).toBe("skipped");
         expect(attempt?.outcome).toBe("skipped");
         expect(attempt?.reason).toBe("primary model supports vision natively");
@@ -509,7 +513,7 @@ describe("runCapability image skip", () => {
           },
         } as unknown as OpenClawConfig;
 
-        const result = await applyMediaUnderstanding({
+        await applyMediaUnderstanding({
           ctx: msgCtx,
           cfg,
           agentDir: "/tmp",
@@ -527,8 +531,9 @@ describe("runCapability image skip", () => {
           activeModel: { provider: "openai", model: "gpt-4.1" },
         });
 
-        const imageDecision = result.decisions.find((decision) => decision.capability === "image");
-        expect(result.appliedImage).toBe(true);
+        const imageDecision = msgCtx.MediaUnderstandingDecisions?.find(
+          (decision) => decision.capability === "image",
+        );
         expect(imageDecision?.outcome).toBe("success");
         expect(imageDecision).toMatchObject({
           nativeVisionActive: true,

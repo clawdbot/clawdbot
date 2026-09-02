@@ -107,7 +107,7 @@ describe("QA media audio selection product proof", () => {
 
     const firstModeCalls: string[] = [];
     const firstModeCtx: MsgContext = { Body: "", media };
-    const firstModeResult = await applyMediaUnderstanding({
+    await applyMediaUnderstanding({
       ctx: firstModeCtx,
       cfg: createSelectionConfig({ mode: "first", prefer: "last", maxAttachments: 3 }),
       providers: { "qa-stt": createAudioProvider(firstModeCalls) },
@@ -116,12 +116,12 @@ describe("QA media audio selection product proof", () => {
     });
 
     expect(firstModeCalls).toEqual(["third.ogg"]);
-    expect(firstModeResult.outputs.map((output) => output.attachmentIndex)).toEqual([3]);
+    expect(firstModeCtx.MediaUnderstanding?.map((output) => output.attachmentIndex)).toEqual([3]);
     expect(firstModeCtx.Transcript).toBe("transcript:third.ogg");
 
     const allModeCalls: string[] = [];
     const allModeCtx: MsgContext = { Body: "", media };
-    const allModeResult = await applyMediaUnderstanding({
+    await applyMediaUnderstanding({
       ctx: allModeCtx,
       cfg: createSelectionConfig({ mode: "all", prefer: "last", maxAttachments: 2 }),
       providers: { "qa-stt": createAudioProvider(allModeCalls) },
@@ -130,9 +130,9 @@ describe("QA media audio selection product proof", () => {
     });
 
     expect(allModeCalls).toEqual(["third.ogg", "second.ogg"]);
-    expect(allModeResult.outputs.map((output) => output.attachmentIndex)).toEqual([3, 2]);
+    expect(allModeCtx.MediaUnderstanding?.map((output) => output.attachmentIndex)).toEqual([3, 2]);
     expect(
-      allModeResult.decisions.find((decision) => decision.capability === "audio"),
+      allModeCtx.MediaUnderstandingDecisions?.find((decision) => decision.capability === "audio"),
     ).toMatchObject({
       outcome: "success",
       attachments: [{ attachmentIndex: 3 }, { attachmentIndex: 2 }],
@@ -189,7 +189,7 @@ describe("QA media audio selection product proof", () => {
       },
     };
 
-    const result = await applyMediaUnderstanding({
+    await applyMediaUnderstanding({
       ctx,
       cfg,
       providers: {
@@ -211,7 +211,7 @@ describe("QA media audio selection product proof", () => {
     expect(await fs.readFile(executable.markerPath, "utf8")).toBe(await fs.realpath(audioPath));
     expect(ctx.Transcript).toBe("cli transcript:fallback.wav");
     const cliProvider = path.parse(executable.command).name;
-    expect(result.outputs).toEqual([
+    expect(ctx.MediaUnderstanding).toEqual([
       expect.objectContaining({
         attachmentIndex: 0,
         kind: "audio.transcription",
@@ -220,7 +220,9 @@ describe("QA media audio selection product proof", () => {
         text: "cli transcript:fallback.wav",
       }),
     ]);
-    expect(result.decisions.find((decision) => decision.capability === "audio")).toMatchObject({
+    expect(
+      ctx.MediaUnderstandingDecisions?.find((decision) => decision.capability === "audio"),
+    ).toMatchObject({
       outcome: "success",
       attachments: [
         {

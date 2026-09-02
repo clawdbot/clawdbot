@@ -152,12 +152,11 @@ describe("inbound media-store references in the attachment url field", () => {
       };
 
       try {
-        const result = await applyMediaUnderstanding({
+        await applyMediaUnderstanding({
           ctx,
           cfg: createUrlDisabledFileCfg(),
         });
 
-        expect(result.appliedFile).toBe(true);
         expect(ctx.Body).toContain("stored document text");
         expect(fetchSpy).not.toHaveBeenCalled();
       } finally {
@@ -180,12 +179,11 @@ describe("inbound media-store references in the attachment url field", () => {
     };
 
     try {
-      const result = await applyMediaUnderstanding({
+      await applyMediaUnderstanding({
         ctx,
         cfg: createUrlDisabledFileCfg(),
       });
 
-      expect(result.appliedFile).toBe(true);
       expect(ctx.Body).toContain("[Attachment skipped: URL file sources are disabled]");
       expect(fetchSpy).not.toHaveBeenCalled();
     } finally {
@@ -207,12 +205,11 @@ describe("inbound media-store references in the attachment url field", () => {
     };
 
     try {
-      const result = await applyMediaUnderstanding({
+      await applyMediaUnderstanding({
         ctx,
         cfg: createUrlDisabledFileCfg(),
       });
 
-      expect(result.appliedFile).toBe(true);
       expect(ctx.Body).toContain("[Attachment skipped: URL file sources are disabled]");
       expect(ctx.Body).toContain('name="report.docx"');
       expect(ctx.Body).not.toContain("SECRETSIG");
