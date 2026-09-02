@@ -166,24 +166,73 @@ describe("echo cache — backward compat for channels without messageId", () => 
 describe("reply-parent echo matching — #135704", () => {
   it.each([
     {
-      name: "drops matching text linked to the cached parent",
+      name: "drops matching text linked to the cached parent in a verified self-chat",
       cachedScope: SELF_CHAT_SCOPE,
-      inboundText: "Agent reply",
+      message: selfChatMessage({
+        id: 200,
+        guid: "p:0/GUID-inbound",
+        reply_to_guid: "p:0/GUID-outbound",
+        text: "Agent reply",
+        is_from_me: false,
+      }),
       expected: { kind: "drop", reason: "echo" },
     },
     {
-      name: "keeps different text linked to the cached parent",
+      name: "keeps different text linked to the cached parent in a verified self-chat",
       cachedScope: SELF_CHAT_SCOPE,
-      inboundText: "Human follow-up",
+      message: selfChatMessage({
+        id: 200,
+        guid: "p:0/GUID-inbound",
+        reply_to_guid: "p:0/GUID-outbound",
+        text: "Human follow-up",
+        is_from_me: false,
+      }),
       expected: { kind: "dispatch" },
     },
     {
-      name: "keeps matching text in a different conversation scope",
-      cachedScope: "default:imessage:+15550000000",
-      inboundText: "Agent reply",
+      name: "keeps a matching inline reply in a normal direct message",
+      cachedScope: SELF_CHAT_SCOPE,
+      message: {
+        id: 200,
+        guid: "p:0/GUID-inbound",
+        reply_to_guid: "p:0/GUID-outbound",
+        sender: SELF_CHAT_HANDLE,
+        chat_identifier: SELF_CHAT_HANDLE,
+        destination_caller_id: "+15557654321",
+        text: "Agent reply",
+        is_from_me: false,
+        is_group: false,
+      },
       expected: { kind: "dispatch" },
     },
-  ])("$name", async ({ cachedScope, inboundText, expected }) => {
+    {
+      name: "keeps a matching inline reply in a group",
+      cachedScope: "default:chat_id:42",
+      message: {
+        id: 200,
+        guid: "p:0/GUID-inbound",
+        reply_to_guid: "p:0/GUID-outbound",
+        sender: SELF_CHAT_HANDLE,
+        chat_id: 42,
+        text: "Agent reply",
+        is_from_me: false,
+        is_group: true,
+      },
+      expected: { kind: "dispatch" },
+    },
+    {
+      name: "keeps matching text in a different self-chat scope",
+      cachedScope: "default:imessage:+15550000000",
+      message: selfChatMessage({
+        id: 200,
+        guid: "p:0/GUID-inbound",
+        reply_to_guid: "p:0/GUID-outbound",
+        text: "Agent reply",
+        is_from_me: false,
+      }),
+      expected: { kind: "dispatch" },
+    },
+  ])("$name", async ({ cachedScope, message, expected }) => {
     const echoCache = createSentMessageCache();
     echoCache.remember(cachedScope, {
       text: "Agent reply",
@@ -191,14 +240,7 @@ describe("reply-parent echo matching — #135704", () => {
     });
 
     const decision = await resolveDecision({
-      message: {
-        id: 200,
-        guid: "p:0/GUID-inbound",
-        reply_to_guid: "p:0/GUID-outbound",
-        sender: SELF_CHAT_HANDLE,
-        text: inboundText,
-        is_from_me: false,
-      },
+      message,
       echoCache,
     });
 

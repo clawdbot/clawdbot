@@ -733,7 +733,7 @@ export async function resolveIMessageInboundDecision(params: {
         text: bodyText || undefined,
         media: mediaFacts[0],
         messageIds: inboundMessageIds,
-        replyParentId: normalizeReplyField(params.message.reply_to_guid),
+        replyParentId: isSelfChat ? normalizeReplyField(params.message.reply_to_guid) : undefined,
         includePendingText: isSelfChat,
       })
     ) {
