@@ -9,14 +9,17 @@ import { setTestEnvValue } from "../test-utils/env.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import {
   createGatewayConfigPath,
-  getGatewayE2ePortBlock,
   nextGatewayId,
   removeGatewayTempHome,
   resetGatewayTestState,
   setupGatewayTempHome,
 } from "./gateway.test-support.js";
 import { startGatewayServer } from "./server.js";
-import { connectGatewayClient, disconnectGatewayClient } from "./test-helpers.e2e.js";
+import {
+  connectGatewayClient,
+  disconnectGatewayClient,
+  getGatewayE2ePortBlock,
+} from "./test-helpers.e2e.js";
 import { buildMockOpenAiResponsesProvider } from "./test-openai-responses-model.js";
 
 describe("Gateway Code Mode clock rollback", () => {
@@ -100,6 +103,7 @@ describe("Gateway Code Mode clock rollback", () => {
       );
 
       let responseCount = 0;
+      const responseBodies: Array<{ input?: unknown[] }> = [];
       const writeSseResponse = (events: Record<string, unknown>[]) =>
         events.map((event) => "data: " + JSON.stringify(event) + "\n\n").join("") +
         "data: [DONE]\n\n";
@@ -117,6 +121,7 @@ describe("Gateway Code Mode clock rollback", () => {
             input?: unknown[];
           };
           responseCount += 1;
+          responseBodies.push(body);
           const hasToolOutput = body.input?.some(
             (item) =>
               item &&
@@ -270,7 +275,7 @@ describe("Gateway Code Mode clock rollback", () => {
           token,
           clientName: GATEWAY_CLIENT_NAMES.TUI,
           clientDisplayName: "code-mode-clock-proof",
-          mode: GATEWAY_CLIENT_MODES.TUI,
+          mode: GATEWAY_CLIENT_MODES.UI,
           scopes: ["operator.admin", "operator.approvals"],
           deviceIdentity,
         });
@@ -334,6 +339,17 @@ describe("Gateway Code Mode clock rollback", () => {
           });
           expect(JSON.stringify(history.messages)).toContain("CODE_MODE_APPROVAL_COMPLETE");
           expect(responseCount).toBe(2);
+          const secondRequest = responseBodies[1];
+          const completedCodeModeOutput = secondRequest?.input?.find(
+            (item) =>
+              item &&
+              typeof item === "object" &&
+              (item as { type?: unknown }).type === "function_call_output",
+          );
+          expect(completedCodeModeOutput).toMatchObject({
+            type: "function_call_output",
+            output: expect.stringContaining('"status":"completed"'),
+          });
         } finally {
           await disconnectGatewayClient(client);
           await server.close({ reason: "Code Mode clock rollback proof complete" });
