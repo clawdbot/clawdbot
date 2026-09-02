@@ -66,6 +66,7 @@ export type SessionProjectionRunTransition = {
 export type SessionProjectionEntry = {
   message: unknown;
   identity: SessionMessageIdentity | null;
+  afterSequence?: number | null;
   live: boolean;
   pending: boolean;
   pendingRunId: string | null;
@@ -145,6 +146,7 @@ function createEntry(
   return {
     message,
     identity,
+    afterSequence: options?.envelope?.afterSequence,
     live: options?.live === true,
     pending: pendingRunId !== null,
     pendingRunId,
@@ -264,6 +266,10 @@ function entryMatches(
     if (
       provisionalEntry.live &&
       provisionalEntry.identity.sequence === null &&
+      (provisionalEntry.afterSequence === undefined ||
+        (provisionalEntry.afterSequence !== null &&
+          durableEntry.identity.sequence !== null &&
+          durableEntry.identity.sequence > provisionalEntry.afterSequence)) &&
       durableEntry.identity.runId &&
       durableEntry.identity.runId === provisionalEntry.identity.runId &&
       (readNonemptyString(durableMetadata?.mirrorOrigin) === null ||

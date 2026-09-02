@@ -469,6 +469,37 @@ describe("session transcript projection", () => {
     },
   );
 
+  it.each(["live", "history"])(
+    "keeps a post-boundary tail until its own durable row arrives through %s",
+    (arrival) => {
+      const prefix = createMessage("assistant", "saved prefix", {
+        id: "prefix",
+        seq: 2,
+        runId: "active-run",
+      });
+      const steer = createMessage("user", "continue", { id: "steer", seq: 3 });
+      const tail = createMessage("assistant", "unseen tail");
+      const savedTail = createMessage("assistant", "unseen tail", {
+        id: "tail",
+        seq: 4,
+        runId: "active-run",
+      });
+      let state = projectLiveSessionMessage(
+        createSessionProjection(primaryScope, [prefix, steer]),
+        tail,
+        { runId: "active-run", afterSequence: 3 },
+      );
+      state = reconcileSessionProjectionSnapshot(state, [prefix, steer], primaryScope);
+      expect(state.messages).toEqual([prefix, steer, tail]);
+
+      state =
+        arrival === "live"
+          ? projectLiveSessionMessage(state, savedTail)
+          : reconcileSessionProjectionSnapshot(state, [prefix, steer, savedTail], primaryScope);
+      expect(state.messages).toEqual([prefix, steer, savedTail]);
+    },
+  );
+
   it("does not adopt an ambiguous synthetic final across distinct same-run assistants", () => {
     const synthetic = createMessage("assistant", "delta-only final", {
       idempotencyKey: "final-run",

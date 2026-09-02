@@ -11,18 +11,20 @@ const suite = createChatFlowE2eSuite();
 
 suite.define(() => {
   it.each([
-    { order: "before hydration", tool: false },
-    { order: "after hydration", tool: false },
-    { order: "replayed after hydration", tool: false },
-    { order: "before hydration", tool: true },
+    { order: "before hydration", tool: false, steer: false },
+    { order: "after hydration", tool: false, steer: false },
+    { order: "replayed after hydration", tool: false, steer: false },
+    { order: "before hydration", tool: true, steer: false },
+    { order: "before hydration", tool: false, steer: true },
   ])(
-    "renders one durable answer when persistence arrives $order (tool: $tool)",
-    async ({ order, tool }) => {
+    "reconciles persistence $order (tool: $tool, steer: $steer)",
+    async ({ order, tool, steer }) => {
       await suite.withPage(
         { locale: "en-US", serviceWorkers: "block", viewport: { height: 900, width: 1280 } },
         async ({ page }) => {
           const runId = "hydrated-answer-run";
           const text = "The workspace check is complete.";
+          const tailText = "The follow-up check is complete.";
           const toolEvent = {
             sessionKey: "agent:main:main",
             runId,
@@ -41,6 +43,23 @@ suite.define(() => {
             content: [{ type: "text", text }],
             __openclaw: { id: "hydrated-answer", seq: 2, runId },
           };
+          const historyMessages = [
+            message,
+            ...(steer
+              ? [
+                  {
+                    role: "user",
+                    content: [{ type: "text", text: "Check the follow-up." }],
+                    __openclaw: {
+                      id: "follow-up",
+                      seq: 3,
+                      idempotencyKey: "follow-up:user",
+                      steerTargetRunId: runId,
+                    },
+                  },
+                ]
+              : []),
+          ];
           const sessionInfo = {
             key: "agent:main:main",
             hasActiveRun: true,
@@ -49,7 +68,7 @@ suite.define(() => {
           const inFlightRun = {
             runId,
             startedAt: 1_000,
-            text,
+            text: steer ? `${text} Checking the follow-up.` : text,
             ...(tool ? { events: [toolEvent] } : {}),
           };
           const gateway = await installMockGateway(page, {
@@ -88,7 +107,7 @@ suite.define(() => {
             await persist();
           }
           await gateway.resolveDeferred("chat.startup", {
-            messages: [message],
+            messages: historyMessages,
             inFlightRun,
             sessionInfo,
             thinkingLevel: null,
@@ -110,21 +129,33 @@ suite.define(() => {
             state: "final",
             message: {
               role: "assistant",
-              content: [{ type: "text", text: tool ? `Checking the workspace.\n\n${text}` : text }],
+              content: [
+                {
+                  type: "text",
+                  text: steer
+                    ? `${text} ${tailText}`
+                    : tool
+                      ? `Checking the workspace.\n\n${text}`
+                      : text,
+                },
+              ],
             },
           });
           await page.getByRole("button", { name: "Stop generating" }).waitFor({ state: "hidden" });
           if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
             await page.screenshot({
               fullPage: true,
-              path: path.join(suite.artifactDir, "hydrated-answer.png"),
+              path: path.join(
+                suite.artifactDir,
+                steer ? "hydrated-continuation.png" : "hydrated-answer.png",
+              ),
             });
           }
           expect(
             (await page.locator(".chat-group.assistant .chat-text").allTextContents()).map(
               (value) => value.trim(),
             ),
-          ).toEqual([text]);
+          ).toEqual(steer ? [text, tailText] : [text]);
           expect(await page.locator(".chat-duplicate-count").count()).toBe(0);
           if (tool) {
             expect(await page.locator(".chat-tool-msg-summary").count()).toBe(1);
