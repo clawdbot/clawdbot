@@ -172,6 +172,31 @@ describe("parseCliJson", () => {
       },
     },
     {
+      name: "bounds the CLI-controlled terminal reason it repeats back",
+      input: {
+        type: "result",
+        subtype: "success",
+        session_id: "session-json-long-reason",
+        terminal_reason: "x".repeat(200),
+        stop_reason: "y".repeat(200),
+        result: "",
+      },
+      command: "claude",
+      sessionIdFields: ["session_id"],
+      providerId: "claude-cli",
+      expected: {
+        text: "",
+        sessionId: "session-json-long-reason",
+        usage: undefined,
+        errorText: `Claude CLI ended the turn without a reply (terminal_reason: ${"x".repeat(64)}, stop_reason: ${"y".repeat(64)}).`,
+        terminalFailure: {
+          reason: "turn_stopped",
+          terminalReason: "x".repeat(64),
+          stopReason: "y".repeat(64),
+        },
+      },
+    },
+    {
       name: "keeps a stopped Claude turn that still delivered result text",
       input: {
         type: "result",

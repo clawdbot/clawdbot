@@ -1,6 +1,7 @@
 import { extractBalancedJsonFragments } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { CliBackendConfig } from "../plugins/cli-backend.types.js";
 import type { CliOutput, CliTerminalFailure, CliUsage } from "./cli-output-contracts.js";
 import { normalizeUsage, type UsageLike } from "./usage.js";
@@ -291,6 +292,8 @@ export function collectExplicitCliErrorText(parsed: Record<string, unknown>): st
   return "";
 }
 
+const CLI_TERMINAL_REASON_MAX_CHARS = 64;
+
 export function describeClaudeTurnStop(failure: {
   terminalReason: string;
   stopReason?: string;
@@ -323,10 +326,14 @@ function readClaudeTerminalFailure(
       return undefined;
     }
     const stopReason = typeof parsed.stop_reason === "string" ? parsed.stop_reason.trim() : "";
+    // Both fields reach operator- and model-visible failure text, so cap the
+    // CLI-controlled strings here rather than injecting unbounded backend text.
     return {
       reason: "turn_stopped",
-      terminalReason,
-      ...(stopReason ? { stopReason } : {}),
+      terminalReason: truncateUtf16Safe(terminalReason, CLI_TERMINAL_REASON_MAX_CHARS),
+      ...(stopReason
+        ? { stopReason: truncateUtf16Safe(stopReason, CLI_TERMINAL_REASON_MAX_CHARS) }
+        : {}),
     };
   }
   const errors = Array.isArray(parsed.errors) ? parsed.errors : [];
