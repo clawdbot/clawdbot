@@ -10,6 +10,8 @@ import {
 } from "./subagent-lifecycle-events.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
+export { settleSubagentRunFromSessionStore } from "./subagent-session-reconciliation.js";
+
 type DeferredCleanupDecision =
   | {
       kind: "defer-descendants";
