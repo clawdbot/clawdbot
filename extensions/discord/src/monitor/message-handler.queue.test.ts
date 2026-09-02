@@ -35,12 +35,6 @@ import { createDiscordMessageRunQueue } from "./message-run-queue.js";
 type SetStatusFn = (patch: Record<string, unknown>) => void;
 type MockCallSource = { mock: { calls: Array<Array<unknown>> } };
 
-function createIngressClient() {
-  return {
-    getGatewayChannelInfo: () => undefined,
-  } as never;
-}
-
 function mockCalls(source: MockCallSource): Array<Array<unknown>> {
   return source.mock.calls;
 }
@@ -495,7 +489,7 @@ describe("createDiscordMessageHandler queue behavior", () => {
     const params = createDiscordHandlerParams();
     const handler = createDurableDiscordMessageHandler({
       ...params,
-      client: createIngressClient(),
+      client: {} as never,
       testing: {
         createIngressMonitor: vi.fn(() => ({ accept, start, stop })),
       },
@@ -534,7 +528,7 @@ describe("createDiscordMessageHandler queue behavior", () => {
         const params = createDiscordHandlerParams();
         const handler = createDurableDiscordMessageHandler({
           ...params,
-          client: createIngressClient(),
+          client: {} as never,
           testing: {
             preflightDiscordMessage: preflight as never,
             createIngressMonitor: (monitorParams) =>
@@ -617,7 +611,7 @@ describe("createDiscordMessageHandler queue behavior", () => {
         const processed: string[] = [];
         const handler = createDurableDiscordMessageHandler({
           ...createDiscordHandlerParams(),
-          client: createIngressClient(),
+          client: {} as never,
           testing: {
             preflightDiscordMessage: (async (preflightParams: DiscordMessagePreflightParams) => ({
               ...createPreflightContextForMessage(preflightParams.data),
@@ -670,7 +664,7 @@ describe("createDiscordMessageHandler queue behavior", () => {
       firstParams.cfg.messages = { inbound: { debounceMs: 60_000 } };
       const first = createDurableDiscordMessageHandler({
         ...firstParams,
-        client: createIngressClient(),
+        client: {} as never,
         testing: {
           preflightDiscordMessage: firstPreflight as never,
           createIngressMonitor: (monitorParams) =>
@@ -695,7 +689,7 @@ describe("createDiscordMessageHandler queue behavior", () => {
       const replacementParams = createDiscordHandlerParams();
       const replacement = createDurableDiscordMessageHandler({
         ...replacementParams,
-        client: createIngressClient(),
+        client: {} as never,
         testing: {
           preflightDiscordMessage: replacementPreflight as never,
           createIngressMonitor: (monitorParams) =>
@@ -748,7 +742,7 @@ describe("createDiscordMessageHandler queue behavior", () => {
         const params = createDiscordHandlerParams();
         const handler = createDurableDiscordMessageHandler({
           ...params,
-          client: createIngressClient(),
+          client: {} as never,
           testing: {
             preflightDiscordMessage: (async (preflightParams: {
               abortSignal?: AbortSignal;
@@ -785,7 +779,7 @@ describe("createDiscordMessageHandler queue behavior", () => {
         });
         const replacement = createDiscordIngressMonitor({
           accountId: "default",
-          client: createIngressClient(),
+          client: {} as never,
           runtime: params.runtime,
           queue,
           dispatch: recovered,
@@ -830,7 +824,7 @@ describe("createDiscordMessageHandler queue behavior", () => {
       const skipped = createDeferred<void>();
       const monitor = createDiscordIngressMonitor({
         accountId: "default",
-        client: createIngressClient(),
+        client: {} as never,
         runtime: params.runtime,
         queue,
         dispatch: async (_event, lifecycle) => {
@@ -868,7 +862,7 @@ describe("createDiscordMessageHandler queue behavior", () => {
       });
       const replacement = createDiscordIngressMonitor({
         accountId: "default",
-        client: createIngressClient(),
+        client: {} as never,
         runtime: params.runtime,
         queue,
         dispatch: recovered,

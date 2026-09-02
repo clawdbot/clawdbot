@@ -132,7 +132,7 @@ export function createDiscordIngressMonitor(params: {
     payload: {
       version: DISCORD_INGRESS_PAYLOAD_VERSION,
       serialize: (rawMessage, { receivedAt }) => {
-        const channelInfo = params.client.getGatewayChannelInfo(rawMessage.channel_id);
+        const channelInfo = params.client.getGatewayChannelInfo?.(rawMessage.channel_id);
         const channelKind = resolveDiscordIngressChannelKind(channelInfo?.type);
         return { receivedAt, rawMessage, ...(channelKind ? { channelKind } : {}) };
       },
@@ -166,7 +166,7 @@ export function createDiscordIngressMonitor(params: {
     drain: {
       resolvePendingDisposition: createDiscordStaleAmbientPendingDisposition({
         ...params,
-        resolveChannelInfo: (channelId) => params.client.getGatewayChannelInfo(channelId),
+        resolveChannelInfo: (channelId) => params.client.getGatewayChannelInfo?.(channelId),
       }),
       retryPolicy: {
         maxAttempts: DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS,

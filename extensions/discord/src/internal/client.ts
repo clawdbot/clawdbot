@@ -61,6 +61,20 @@ export type DiscordGatewayChannelInfo = {
   type: number;
 };
 
+const GATEWAY_READY_EVENT: string = GatewayDispatchEvents.Ready;
+const GATEWAY_GUILD_CREATE_EVENT: string = GatewayDispatchEvents.GuildCreate;
+const GATEWAY_GUILD_DELETE_EVENT: string = GatewayDispatchEvents.GuildDelete;
+const GATEWAY_CHANNEL_UPSERT_EVENTS = new Set<string>([
+  GatewayDispatchEvents.ChannelCreate,
+  GatewayDispatchEvents.ChannelUpdate,
+  GatewayDispatchEvents.ThreadCreate,
+  GatewayDispatchEvents.ThreadUpdate,
+]);
+const GATEWAY_CHANNEL_DELETE_EVENTS = new Set<string>([
+  GatewayDispatchEvents.ChannelDelete,
+  GatewayDispatchEvents.ThreadDelete,
+]);
+
 export class Client {
   routes: Route[] = [];
   plugins: Array<{ id: string; plugin: Plugin }> = [];
@@ -214,7 +228,7 @@ export class Client {
 
   private updateGatewayChannelTypes(type: string, data: unknown): void {
     const record = isRecord(data) ? data : undefined;
-    if (type === GatewayDispatchEvents.Ready) {
+    if (type === GATEWAY_READY_EVENT) {
       // READY starts a new authoritative guild snapshot. RESUMED intentionally
       // retains the prior inventory until Discord sends incremental updates.
       this.gatewayChannels.clear();
@@ -223,7 +237,7 @@ export class Client {
     if (!record) {
       return;
     }
-    if (type === GatewayDispatchEvents.GuildCreate) {
+    if (type === GATEWAY_GUILD_CREATE_EVENT) {
       const guildId = typeof record.id === "string" ? record.id : undefined;
       if (!guildId) {
         return;
@@ -238,18 +252,13 @@ export class Client {
       }
       return;
     }
-    if (type === GatewayDispatchEvents.GuildDelete) {
+    if (type === GATEWAY_GUILD_DELETE_EVENT) {
       if (typeof record.id === "string") {
         this.deleteGatewayGuildChannels(record.id);
       }
       return;
     }
-    if (
-      type === GatewayDispatchEvents.ChannelCreate ||
-      type === GatewayDispatchEvents.ChannelUpdate ||
-      type === GatewayDispatchEvents.ThreadCreate ||
-      type === GatewayDispatchEvents.ThreadUpdate
-    ) {
+    if (GATEWAY_CHANNEL_UPSERT_EVENTS.has(type)) {
       const channel = this.readGatewayChannel(record);
       if (channel) {
         const { id, ...info } = channel;
@@ -261,10 +270,7 @@ export class Client {
       }
       return;
     }
-    if (
-      type === GatewayDispatchEvents.ChannelDelete ||
-      type === GatewayDispatchEvents.ThreadDelete
-    ) {
+    if (GATEWAY_CHANNEL_DELETE_EVENTS.has(type)) {
       if (typeof record.id === "string") {
         this.gatewayChannels.delete(record.id);
       }
