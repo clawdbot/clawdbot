@@ -200,6 +200,35 @@ suite.define(() => {
     await availableItem.getByRole("button", { name: "Request admin" }).waitFor();
   });
 
+  it("resurfaces Request admin after a dismissed incident clears between app lifetimes", async () => {
+    const context = await createContext();
+    const dismissPage = await context.newPage();
+    await installMockGateway(dismissPage, { operatorScopes: LIMITED_SCOPES });
+    await dismissPage.goto(`${server.baseUrl}activity`);
+    const dismissedItem = await openLimitedAccessItem(await openInbox(dismissPage));
+    await dismissedItem.getByRole("button", { name: "Request admin" }).waitFor();
+    await dismissedItem.getByRole("button", { name: "Dismiss Limited access" }).click();
+    await expect
+      .poll(() => dismissPage.locator(".sidebar-issues-button").getAttribute("aria-label"))
+      .toBe("0 inbox items");
+    await dismissPage.close();
+
+    const clearedPage = await context.newPage();
+    await installMockGateway(clearedPage, { operatorScopes: FULL_SCOPES });
+    await clearedPage.goto(`${server.baseUrl}activity`);
+    await clearedPage.locator(".sidebar-issues-button").waitFor();
+    await clearedPage.close();
+
+    const recurrencePage = await context.newPage();
+    await installMockGateway(recurrencePage, { operatorScopes: LIMITED_SCOPES });
+    await recurrencePage.goto(`${server.baseUrl}activity`);
+
+    const inbox = recurrencePage.locator(".sidebar-issues-button");
+    await expect.poll(() => inbox.getAttribute("aria-label")).toBe("1 inbox item");
+    const recurrentItem = await openLimitedAccessItem(await openInbox(recurrencePage));
+    await recurrentItem.getByRole("button", { name: "Request admin" }).waitFor();
+  });
+
   it("keeps a pending admin request while Inbox presenters change", async () => {
     const context = await createContext();
     const page = await context.newPage();

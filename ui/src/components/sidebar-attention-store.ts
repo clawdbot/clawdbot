@@ -249,6 +249,7 @@ export class SidebarAttentionStoreController implements StoreController {
       this.onChange();
       return;
     }
+    this.reconcileScopeUpgradeDismissal();
     const owner = this.owner();
     const agentScope = this.sources.agentSelection.state;
     const ownerChanged = this.loadedOwner !== null && !this.ownerEquals(owner, this.loadedOwner);
@@ -280,7 +281,7 @@ export class SidebarAttentionStoreController implements StoreController {
     this.load();
   }
 
-  private synchronizeScopeUpgrade(): void {
+  private reconcileScopeUpgradeDismissal(): void {
     if (this.dismissedScope) {
       const snapshot = this.sources.gateway.snapshot;
       const entry = buildScopeUpgradeInboxEntry({
@@ -291,6 +292,10 @@ export class SidebarAttentionStoreController implements StoreController {
         this.dismissed = clearSidebarAttentionDismissal(this.dismissedScope, "scopeUpgrade");
       }
     }
+  }
+
+  private synchronizeScopeUpgrade(): void {
+    this.reconcileScopeUpgradeDismissal();
     this.onChange();
   }
 
