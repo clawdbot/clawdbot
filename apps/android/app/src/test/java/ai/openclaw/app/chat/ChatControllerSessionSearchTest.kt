@@ -126,6 +126,49 @@ class ChatControllerSessionSearchTest {
     }
 
   @Test
+  fun pagedSessionRefreshKeepsActiveSettingsAndItsQueryLimit() =
+    runTest {
+      val activeKey = "agent:main:older"
+      val gateway = ScriptedGateway(json)
+      gateway.respondWith(
+        "chat.history",
+        """{"sessionId":"older-id","messages":[],"sessionInfo":{"key":"$activeKey","modelProvider":"openai","model":"reasoner"}}""",
+      )
+      gateway.respond("sessions.list") { params ->
+        val limit = requireNotNull(paramField(params, "limit")).toInt()
+        val rows = (1..limit).map { sessionRowJson("agent:main:recent-$it", updatedAt = 500L - it) }
+        buildJsonObject {
+          put("sessions", JsonArray(rows))
+          put("totalCount", JsonPrimitive(500))
+          put("hasMore", JsonPrimitive(true))
+        }.toString()
+      }
+      val controller = newController(gateway)
+      controller.load(activeKey)
+      advanceUntilIdle()
+      assertEquals("openai/reasoner", controller.selectedModelRef.value)
+
+      // Lifecycle snapshots intentionally omit catalog-backed model fields.
+      controller.handleGatewayEvent(
+        "sessions.changed",
+        """{"sessionKey":"$activeKey","agentId":"main","phase":"start","runId":"remote-run","session":{"key":"$activeKey","sessionId":"older-id","hasActiveRun":true,"activeRunIds":["remote-run"],"permissionMode":null,"permissionModePending":false}}""",
+      )
+      assertEquals("openai/reasoner", controller.selectedModelRef.value)
+
+      controller.refreshSessions(limit = 2)
+      advanceUntilIdle()
+      repeat(2) {
+        controller.handleGatewayEvent(
+          "sessions.changed",
+          """{"sessionKey":"agent:main:roster-invalidated","agentId":"main"}""",
+        )
+        advanceUntilIdle()
+        assertEquals("2", paramField(gateway.calls.last { it.method == "sessions.list" }.paramsJson, "limit"))
+        assertEquals("openai/reasoner", controller.selectedModelRef.value)
+      }
+    }
+
+  @Test
   fun fetchSessionListFallsBackToLocalFilterWhenOffline() =
     runTest {
       val gateway = ScriptedGateway(json)

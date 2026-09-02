@@ -19,7 +19,7 @@ OpenClaw Android is the officially released Google Play app. It connects to an O
 
 ## Session colors
 
-Long-press a row on the Sessions screen and choose **Color**, then select a swatch or **Default** to clear it. The eight colors are red, blue, green, yellow, purple, orange, pink, and cyan. Colored sessions show a narrow leading stripe in the sidebar and Sessions screen, plus a dot beside the open chat title. Unset colors add no indicator. Colors sync through the Gateway and remain visible in the local session cache while offline.
+Long-press a row on the **Threads** page and choose **Color**, then select a swatch or **Default** to clear it. The eight colors are red, blue, green, yellow, purple, orange, pink, and cyan. Colored sessions show a narrow leading stripe in the sidebar and Threads page, plus a colored ring around the agent avatar in the open chat header. Unset colors add no indicator. Colors sync through the Gateway and remain visible in the local session cache while offline.
 
 ## Wear OS companion
 
