@@ -146,6 +146,8 @@ export type ChatItem =
   | {
       kind: "divider";
       key: string;
+      compaction?: "active" | "complete";
+      compactionId?: string;
       label: string;
       icon?: keyof typeof toolIcons;
       metric?: string;

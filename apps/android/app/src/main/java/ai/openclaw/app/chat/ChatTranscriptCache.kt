@@ -39,23 +39,9 @@ private data class CachedMessageContent(
 @Serializable
 private data class CachedMessagePayload(
   val content: List<CachedMessageContent>,
-  val provenance: CachedMessageProvenance? = null,
-  @SerialName("__openclaw") val transcriptMarker: CachedTranscriptMarker? = null,
+  val provenance: ChatMessageProvenance? = null,
+  @SerialName("__openclaw") val transcriptMarker: ChatTranscriptMarker? = null,
   val senderLabel: String? = null,
-)
-
-@Serializable
-private data class CachedMessageProvenance(
-  val kind: String,
-  val sourceTool: String? = null,
-)
-
-@Serializable
-private data class CachedTranscriptMarker(
-  val kind: String,
-  val id: String? = null,
-  val tokensBefore: Double? = null,
-  val tokensAfter: Double? = null,
 )
 
 /**
@@ -355,19 +341,8 @@ class RoomChatTranscriptCache internal constructor(
         idempotencyKey = row.idempotencyKey,
         // Canonical tree ids stay live-only; cached rows regain actions after history refresh.
         entryId = null,
-        provenance =
-          payload.provenance?.let {
-            ChatMessageProvenance(kind = it.kind, sourceTool = it.sourceTool)
-          },
-        transcriptMarker =
-          payload.transcriptMarker?.let {
-            ChatTranscriptMarker(
-              kind = it.kind,
-              id = it.id,
-              tokensBefore = it.tokensBefore,
-              tokensAfter = it.tokensAfter,
-            )
-          },
+        provenance = payload.provenance,
+        transcriptMarker = payload.transcriptMarker,
         senderLabel = payload.senderLabel,
       )
     }
@@ -389,44 +364,15 @@ class RoomChatTranscriptCache internal constructor(
       val retainedEntry = if (needsRetainedRow) sessions.firstOrNull { it.key == retainedKey } else null
       val retainedRow =
         if (needsRetainedRow) {
-          retainedEntry?.let { entry ->
-            CachedSessionEntity(
-              gatewayId = gateway,
-              agentId = agent,
-              sessionKey = entry.key,
-              displayName = entry.displayName,
-              color = entry.color,
-              updatedAtMs = entry.updatedAtMs,
-              status = entry.status,
-              startedAt = entry.startedAt,
-              endedAt = entry.endedAt,
-              runtimeMs = entry.runtimeMs,
-              outputTokens = entry.outputTokens,
-              hasRunMetadata = entry.hasRunMetadata,
-              rowOrder = 0,
-            )
-          } ?: dao.session(gateway, agent, retainedKey)
+          retainedEntry?.toCachedSession(gateway, agent, rowOrder = 0)
+            ?: dao.session(gateway, agent, retainedKey)
         } else {
           null
         }
       val listedSessionLimit = MAX_CACHED_SESSIONS - if (retainedRow == null) 0 else 1
       val rows =
         sessions.take(listedSessionLimit).mapIndexed { index, session ->
-          CachedSessionEntity(
-            gatewayId = gateway,
-            agentId = agent,
-            sessionKey = session.key,
-            displayName = session.displayName,
-            color = session.color,
-            updatedAtMs = session.updatedAtMs,
-            status = session.status,
-            startedAt = session.startedAt,
-            endedAt = session.endedAt,
-            runtimeMs = session.runtimeMs,
-            outputTokens = session.outputTokens,
-            hasRunMetadata = session.hasRunMetadata,
-            rowOrder = index,
-          )
+          session.toCachedSession(gateway, agent, rowOrder = index)
         }
       dao.deleteSessions(gateway, agent)
       dao.insertSessions(rows)
@@ -454,27 +400,14 @@ class RoomChatTranscriptCache internal constructor(
           val role = normalizeVisibleChatMessageRole(message.role) ?: return@mapNotNull null
           val content =
             message.content.mapNotNull { part ->
+              val isImage = part.type == "image"
               when {
                 part.type == "text" && !part.text.isNullOrBlank() -> {
                   CachedMessageContent(type = "text", text = part.text)
                 }
 
-                part.type == "image" && !part.artifactId.isNullOrBlank() && !part.url.isNullOrBlank() -> {
-                  CachedMessageContent(
-                    type = "image",
-                    mimeType = part.mimeType,
-                    fileName = part.fileName,
-                    artifactId = part.artifactId,
-                    url = part.url,
-                    openUrl = part.openUrl,
-                    alt = part.alt,
-                    width = part.width,
-                    height = part.height,
-                    sizeBytes = part.sizeBytes,
-                  )
-                }
-
-                part.type == "audio" || part.type == "video" || part.type == "file" -> {
+                (isImage && !part.artifactId.isNullOrBlank() && !part.url.isNullOrBlank()) ||
+                  part.type == "audio" || part.type == "video" || part.type == "file" -> {
                   CachedMessageContent(
                     type = part.type,
                     mimeType = part.mimeType,
@@ -486,8 +419,8 @@ class RoomChatTranscriptCache internal constructor(
                     width = part.width,
                     height = part.height,
                     sizeBytes = part.sizeBytes,
-                    durationMs = part.durationMs,
-                    playback = part.playback,
+                    durationMs = part.durationMs.takeUnless { isImage },
+                    playback = part.playback.takeUnless { isImage },
                   )
                 }
 
@@ -500,19 +433,8 @@ class RoomChatTranscriptCache internal constructor(
           val payload =
             CachedMessagePayload(
               content = content,
-              provenance =
-                message.provenance?.let {
-                  CachedMessageProvenance(kind = it.kind, sourceTool = it.sourceTool)
-                },
-              transcriptMarker =
-                message.transcriptMarker?.let {
-                  CachedTranscriptMarker(
-                    kind = it.kind,
-                    id = it.id,
-                    tokensBefore = it.tokensBefore,
-                    tokensAfter = it.tokensAfter,
-                  )
-                },
+              provenance = message.provenance,
+              transcriptMarker = message.transcriptMarker,
               senderLabel = message.senderLabel,
             )
           Triple(message, role, payload)
@@ -541,21 +463,8 @@ class RoomChatTranscriptCache internal constructor(
       dao.insertSessions(
         listOf(
           currentSession
-            ?: CachedSessionEntity(
-              gatewayId = gateway,
-              agentId = agent,
-              sessionKey = key,
-              displayName = null,
-              color = null,
-              updatedAtMs = null,
-              status = null,
-              startedAt = null,
-              endedAt = null,
-              runtimeMs = null,
-              outputTokens = null,
-              hasRunMetadata = false,
-              rowOrder = dao.nextSessionRowOrder(gateway, agent),
-            ),
+            ?: ChatSessionEntry(key = key, updatedAtMs = null)
+              .toCachedSession(gateway, agent, rowOrder = dao.nextSessionRowOrder(gateway, agent)),
         ),
       )
       dao.evictSessionsBeyondKeeping(gateway, agent, keepSessionKey = key, keep = MAX_CACHED_SESSIONS - 1)
@@ -607,3 +516,24 @@ class RoomChatTranscriptCache internal constructor(
       CachedMessagePayload(content = content)
     }
 }
+
+private fun ChatSessionEntry.toCachedSession(
+  gatewayId: String,
+  agentId: String,
+  rowOrder: Int,
+): CachedSessionEntity =
+  CachedSessionEntity(
+    gatewayId = gatewayId,
+    agentId = agentId,
+    sessionKey = key,
+    displayName = displayName,
+    color = color,
+    updatedAtMs = updatedAtMs,
+    status = status,
+    startedAt = startedAt,
+    endedAt = endedAt,
+    runtimeMs = runtimeMs,
+    outputTokens = outputTokens,
+    hasRunMetadata = hasRunMetadata,
+    rowOrder = rowOrder,
+  )

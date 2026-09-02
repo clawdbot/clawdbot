@@ -1076,10 +1076,11 @@ describe("qa mock openai server", () => {
     expect(visibleEvents.map((event) => event.type)).toEqual([
       "response.created",
       "response.output_item.added",
+      "response.content_part.added",
       "response.output_text.delta",
       "response.failed",
     ]);
-    expect(visibleEvents[2]).toMatchObject({
+    expect(visibleEvents[3]).toMatchObject({
       type: "response.output_text.delta",
       delta: "TELEGRAM-VISIBLE-PARTIAL-BEFORE-FAILURE",
     });
@@ -5871,10 +5872,11 @@ Update and merge these partial structured summaries.`,
       "response.created",
       "response.output_item.added",
       "response.custom_tool_call_input.delta",
+      "response.custom_tool_call_input.done",
       "response.output_item.done",
       "response.completed",
     ]);
-    const [created, added, delta, done, completed] = events;
+    const [created, added, delta, inputDone, done, completed] = events;
     expect(created?.response?.id).toBe(completed?.response?.id);
     expect(added?.item).toMatchObject({
       type: "custom_tool_call",
@@ -5891,6 +5893,7 @@ Update and merge these partial structured summaries.`,
     expect(delta?.item_id).toBe(done?.item?.id);
     expect(delta?.call_id).toBe(done?.item?.call_id);
     expect(delta?.delta).toBe(done?.item?.input);
+    expect(inputDone).toMatchObject({ item_id: done?.item?.id, input: done?.item?.input });
     expect(delta?.delta).toContain("runtime-tool-fixture-patch.txt");
     expect(completed?.response?.output).toEqual([done?.item]);
     for (const item of [added?.item, done?.item, completed?.response?.output?.[0]]) {
@@ -6552,18 +6555,22 @@ Update and merge these partial structured summaries.`,
     const events: StreamEvent[] = [
       {
         type: "response.output_item.added",
+        output_index: 0,
         item: { type: "function_call", name: "read", call_id: nativeId, arguments: "{}" },
       },
       {
         type: "response.output_item.done",
+        output_index: 0,
         item: { type: "function_call", name: "read", call_id: nativeId, arguments: "{}" },
       },
       {
         type: "response.output_item.added",
+        output_index: 1,
         item: { type: "function_call", name: "read", call_id: generatedId, arguments: "{}" },
       },
       {
         type: "response.output_item.done",
+        output_index: 1,
         item: { type: "function_call", name: "read", call_id: generatedId, arguments: "{}" },
       },
       {

@@ -296,8 +296,6 @@ const rootDependencyOptions = withExternalPackageSubpaths({
     "@larksuiteoapi/node-sdk",
     "@matrix-org/matrix-sdk-crypto-nodejs",
     "@openclaw/ai",
-    // Its crypto loader uses createRequire(import.meta.url) for package-owned dependencies.
-    "@openclaw/crabline",
     // Its native loader resolves optional platform packages from the package scope.
     "@openclaw/fs-safe",
     "@slack/bolt",

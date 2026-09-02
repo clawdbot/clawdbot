@@ -1,5 +1,9 @@
 package ai.openclaw.app.ui
 
+import ai.openclaw.app.NodeRuntime
+import ai.openclaw.app.R
+import ai.openclaw.app.gateway.GatewayEndpoint
+import ai.openclaw.app.gateway.GatewayTlsProbeFailure
 import ai.openclaw.app.ui.design.ClawDesignTheme
 import ai.openclaw.app.ui.design.MascotMood
 import android.content.Context
@@ -10,11 +14,14 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.test.DeviceConfigurationOverride
 import androidx.compose.ui.test.FontScale
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.getUnclippedBoundsInRoot
 import androidx.compose.ui.test.hasScrollAction
+import androidx.compose.ui.test.hasSetTextAction
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
@@ -162,6 +169,47 @@ class InitialOnboardingLayoutTest {
     primaryAction.assertIsDisplayed().performClick()
     assertTrue(setupCodeClicked)
   }
+
+  @Test
+  fun capturedGatewayTrustKeepsPinSystemTrustAndDeclineActionsDistinct() {
+    val accepted = mutableListOf<String?>()
+    var systemTrustCount = 0
+    var declineCount = 0
+    composeRule.setContent {
+      ClawDesignTheme {
+        GatewayTrustDialog(
+          prompt =
+            gatewayTrustPrompt.copy(
+              fingerprintSha256 = "ab".repeat(32),
+              previousFingerprintSha256 = "cd".repeat(32),
+              systemTrustAvailable = true,
+            ),
+          confirmLabel = stringResource(R.string.trust_and_continue),
+          cancelLabel = stringResource(R.string.cancel),
+          onAccept = { accepted.add(it) },
+          onUseSystemTrust = { systemTrustCount++ },
+          onDecline = { declineCount++ },
+        )
+      }
+    }
+
+    composeRule.onNode(hasSetTextAction()).assertDoesNotExist()
+    composeRule.onNodeWithText("Old SHA-256:", substring = true).assertIsDisplayed()
+    composeRule.onNodeWithText("Trust and continue").assertIsEnabled().performClick()
+    composeRule.onNodeWithText("Use system trust").performClick()
+    composeRule.onNodeWithText("Cancel").performClick()
+    assertEquals(listOf<String?>(null), accepted)
+    assertEquals(1, systemTrustCount)
+    assertEquals(1, declineCount)
+  }
+
+  private val gatewayTrustPrompt =
+    NodeRuntime.GatewayTrustPrompt(
+      endpoint = GatewayEndpoint(stableId = "test-gateway", name = "Test gateway", host = "gateway.test", port = 443),
+      fingerprintSha256 = null,
+      auth = NodeRuntime.GatewayConnectAuth(token = null, bootstrapToken = null, password = null),
+      probeFailure = GatewayTlsProbeFailure.TLS_HANDSHAKE_TIMEOUT,
+    )
 
   private fun setContent(
     fontScale: Float,

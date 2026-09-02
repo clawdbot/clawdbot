@@ -12,6 +12,7 @@ import {
   getActiveGatewayRootWorkCount,
   resetGatewayWorkAdmission,
 } from "../../process/gateway-work-admission.js";
+import { isSessionWorkAdmissionActive } from "../../sessions/session-lifecycle-admission.js";
 import { withTestDir } from "../../test-helpers/temp-dir.js";
 import { createSyntheticPluginRuntimeClient } from "../server-plugin-runtime-client.js";
 import { registerSubagentCompletionToolHandoff } from "../subagent-completion-tool-handoff.js";
@@ -1704,6 +1705,15 @@ describe("gateway agent handler", () => {
         flushDispatch: false,
       },
     );
+    let admissionActiveAtFinalResponse: boolean | undefined;
+    first.mockImplementation((ok, payload) => {
+      if (ok && payload && typeof payload === "object" && "status" in payload) {
+        admissionActiveAtFinalResponse = isSessionWorkAdmissionActive("/tmp/sessions.json", [
+          sessionKey,
+          "run-1",
+        ]);
+      }
+    });
     await waitForAgentCommandCall();
     expect(
       expectDefined(store[sessionKey], "store[sessionKey] test invariant").cronRunContinuation,
@@ -1748,8 +1758,61 @@ describe("gateway agent handler", () => {
         basePersisted: true,
       });
     });
+    await waitForAssertion(() => expect(admissionActiveAtFinalResponse).toBe(false));
     expect(first).toHaveBeenCalledWith(true, expect.objectContaining({ status: "ok" }), undefined, {
       runId: "cron-media-first",
+    });
+  });
+
+  it("rejects terminal continuation settlement after its Gateway owner generation changes", async () => {
+    mocks.agentCommand.mockClear();
+    const { sessionKey, store } = setupCronContinuationReleaseFixture();
+    mocks.updateSessionStore.mockImplementation(async (_path, updater) => await updater(store));
+    let finishTurn: (result: { payloads: Array<{ text: string }> }) => void = () => {};
+    mocks.agentCommand.mockImplementationOnce(
+      async () =>
+        await new Promise<{ payloads: Array<{ text: string }> }>((resolve) => {
+          finishTurn = resolve;
+        }),
+    );
+
+    const respond = await invokeAgent(
+      {
+        message: "media completion",
+        sessionKey,
+        internalEvents: [cronMediaCompletionEvent()],
+        idempotencyKey: "cron-media-owner-generation-changed",
+      },
+      {
+        reqId: "cron-media-owner-generation-changed",
+        client: cronContinuationGatewayClient(),
+        flushDispatch: false,
+      },
+    );
+    await waitForAgentCommandCall();
+    const marker = expectDefined(
+      store[sessionKey]?.cronRunContinuation,
+      "cron continuation marker test invariant",
+    );
+    marker.ownerLifecycleGeneration = "retired-gateway-generation";
+
+    finishTurn({ payloads: [{ text: "continued" }] });
+
+    await waitForAssertion(() => {
+      expect(respond).toHaveBeenLastCalledWith(
+        false,
+        expect.objectContaining({
+          status: "error",
+          summary: "failed to persist cron continuation settlement",
+        }),
+        expect.objectContaining({ code: ErrorCodes.UNAVAILABLE }),
+        { runId: "cron-media-owner-generation-changed", error: expect.any(String) },
+      );
+    });
+    expect(store[sessionKey]?.cronRunContinuation).toMatchObject({
+      phase: "continuing",
+      ownerRunId: "cron-media-owner-generation-changed",
+      ownerLifecycleGeneration: "retired-gateway-generation",
     });
   });
 

@@ -1045,7 +1045,7 @@ extensions/qa-lab/src/providers/mock-openai/mock-openai-assistant-text.ts	3
 extensions/qa-lab/src/providers/mock-openai/mock-openai-contracts.ts	2
 extensions/qa-lab/src/providers/mock-openai/mock-openai-directives.ts	4
 extensions/qa-lab/src/providers/mock-openai/mock-openai-events.ts	4
-extensions/qa-lab/src/providers/mock-openai/mock-openai-input.ts	11
+extensions/qa-lab/src/providers/mock-openai/mock-openai-input.ts	6
 extensions/qa-lab/src/providers/mock-openai/mock-openai-responses-websocket.ts	2
 extensions/qa-lab/src/providers/mock-openai/server.ts	16
 extensions/qa-lab/src/providers/shared/auth-store.ts	1
@@ -2422,7 +2422,7 @@ src/commands/auth-choice-prompt.ts	1
 src/commands/auth-choice.apply.api-providers.ts	1
 src/commands/backup-git.ts	1
 src/commands/backup-restore.ts	1
-src/commands/backup-schedule.ts	2
+src/commands/backup-schedule.ts	1
 src/commands/backup-shared.ts	1
 src/commands/backup-verify.ts	2
 src/commands/channel-setup/config-compatibility.ts	2
@@ -3997,7 +3997,6 @@ ui/src/pages/chat/chat-session-companion.ts	5
 ui/src/pages/chat/chat-state-events.ts	6
 ui/src/pages/chat/chat-state-page.ts	5
 ui/src/pages/chat/chat-state-route.ts	1
-ui/src/pages/chat/chat-thread-build.ts	1
 ui/src/pages/chat/chat-thread-grouping.ts	2
 ui/src/pages/chat/chat-thread-items.ts	3
 ui/src/pages/chat/components/chat-audio-player.ts	1
@@ -4010,7 +4009,7 @@ ui/src/pages/chat/components/chat-header-session-menu.ts	1
 ui/src/pages/chat/components/chat-message-attachment-availability.ts	1
 ui/src/pages/chat/components/chat-message-bubble.ts	2
 ui/src/pages/chat/components/chat-message-confirmation.ts	2
-ui/src/pages/chat/components/chat-message-markdown.ts	2
+ui/src/pages/chat/components/chat-message-markdown.ts	1
 ui/src/pages/chat/components/chat-message-media.ts	13
 ui/src/pages/chat/components/chat-message-timestamp.ts	4
 ui/src/pages/chat/components/chat-model-picker-options.ts	2

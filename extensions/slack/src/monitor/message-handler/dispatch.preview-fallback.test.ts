@@ -307,7 +307,7 @@ function createDraftStreamStub() {
       await editFinal();
       return true;
     }),
-    messageId: () => "171234.567",
+    messageId: (): string | undefined => "171234.567",
     channelId: () => "C123",
   };
 }
@@ -4121,6 +4121,118 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     expect(capturedReplyOptions?.suppressDefaultToolProgressMessages).toBe(true);
     await requireCapturedItemEventHandler()({ progressText: "hidden progress" });
   });
+
+  it.each([undefined, "compact"] as const)(
+    "buffers the first notifying preamble but streams later edits (style=%s)",
+    async (style) => {
+      const checkpoint = vi.fn();
+      let postedMessageId: string | undefined;
+      const draftStream = {
+        ...createDraftStreamStub(),
+        messageId: () => postedMessageId,
+      };
+      draftStream.flush.mockImplementation(async () => {
+        if (draftStream.update.mock.calls.length > 0) {
+          postedMessageId = "171234.567";
+        }
+      });
+      createSlackDraftStreamMock.mockReturnValueOnce(draftStream);
+      finalizeSlackPreviewEditMock.mockResolvedValueOnce(undefined);
+      mockedSlackStreamingMode = "progress";
+      mockedDispatchSequence = [{ kind: "final", payload: { text: FINAL_REPLY_TEXT } }];
+      mockedReplyOptionEvents = [
+        { kind: "item", itemKind: "preamble", itemId: "p1", phase: "update", progressText: "I" },
+        {
+          kind: "checkpoint",
+          run: async () => {
+            // Even a timer/flush must not post the first token: Slack freezes
+            // its push notification at creation, then edits do not re-notify.
+            checkpoint();
+            await draftStream.flush();
+            expect(draftStream.update).not.toHaveBeenCalled();
+            expect(postedMessageId).toBeUndefined();
+          },
+        },
+        {
+          kind: "item",
+          itemKind: "preamble",
+          itemId: "p1",
+          phase: "update",
+          progressText: "I will check the result.",
+        },
+        {
+          kind: "checkpoint",
+          run: async () => {
+            checkpoint();
+            expect(draftStream.update).not.toHaveBeenCalled();
+          },
+        },
+        {
+          kind: "item",
+          itemKind: "preamble",
+          itemId: "p1",
+          phase: "end",
+          progressText: "I will check the result.",
+        },
+        {
+          kind: "checkpoint",
+          run: async () => {
+            checkpoint();
+            expect(postedMessageId).toBe("171234.567");
+            expect(draftUpdateTexts(draftStream)).toEqual(["_I will check the result._"]);
+          },
+        },
+        {
+          kind: "item",
+          itemKind: "preamble",
+          itemId: "p2",
+          phase: "update",
+          progressText: "The result",
+        },
+        {
+          kind: "checkpoint",
+          run: async () => {
+            checkpoint();
+            expectLastDraftUpdateText(draftStream, "_The result_");
+          },
+        },
+        {
+          kind: "item",
+          itemKind: "preamble",
+          itemId: "p2",
+          phase: "end",
+          progressText: "The result is ready.",
+        },
+      ];
+
+      await dispatchPreparedSlackMessage(
+        createPreparedSlackMessage({
+          accountConfig: {
+            streaming: {
+              mode: "progress",
+              progress: {
+                style,
+                label: false,
+                commentary: true,
+                toolProgress: false,
+                maxLines: 1,
+              },
+            },
+          },
+        }),
+      );
+
+      // Assert the intermediate observations ran; the final text alone cannot
+      // prove that Slack never received a first-token notification.
+      expect(checkpoint).toHaveBeenCalledTimes(4);
+      expectLastDraftUpdateText(draftStream, "_The result is ready._");
+      expectMockCallArgFields(finalizeSlackPreviewEditMock, 0, "same-message final edit", {
+        messageId: "171234.567",
+        text: FINAL_REPLY_TEXT,
+      });
+      expect(deliverRepliesMock).not.toHaveBeenCalled();
+    },
+  );
 
   it("keeps only the latest Slack commentary when tool progress is disabled", async () => {
     const draftStream = createDraftStreamStub();

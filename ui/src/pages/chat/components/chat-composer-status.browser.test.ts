@@ -3,13 +3,16 @@ import { nothing, render } from "lit";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { cdp } from "vitest/browser";
 import "../../../components/tooltip.ts";
-import { renderCompactionIndicator, renderFallbackIndicator } from "./chat-composer-status.ts";
+import { buildCompactionDividerItem } from "../chat-progress.ts";
+import { renderFallbackIndicator } from "./chat-composer-status.ts";
+import { renderChatDivider } from "./chat-divider.ts";
 import baseStyles from "../../../styles/base.css?inline";
 import composerStatusStyles from "../../../styles/chat/composer-status.css?inline";
+import groupedStyles from "../../../styles/chat/grouped.css?inline";
 import chatLayoutStyles from "../../../styles/chat/layout.css?inline";
 import componentStyles from "../../../styles/components.css?inline";
 
-describe("chat composer compaction motion", () => {
+describe("inline compaction motion", () => {
   let container: HTMLDivElement;
   let styles: HTMLStyleElement;
   let session: CDPSession;
@@ -20,9 +23,13 @@ describe("chat composer compaction motion", () => {
       features: [{ name: "prefers-reduced-motion", value: "no-preference" }],
     });
     styles = document.createElement("style");
-    styles.textContent = [baseStyles, componentStyles, chatLayoutStyles, composerStatusStyles].join(
-      "\n",
-    );
+    styles.textContent = [
+      baseStyles,
+      componentStyles,
+      groupedStyles,
+      chatLayoutStyles,
+      composerStatusStyles,
+    ].join("\n");
     document.head.append(styles);
     container = document.createElement("div");
     document.body.append(container);
@@ -35,22 +42,14 @@ describe("chat composer compaction motion", () => {
     await session.send("Emulation.setEmulatedMedia", { features: [] });
   });
 
-  it("folds lines on a readable borderless scrim, then reveals the completion check", async () => {
-    render(
-      renderCompactionIndicator({
-        phase: "active",
-        runId: "run-motion",
-        startedAt: Date.now(),
-        completedAt: null,
-      }),
-      container,
-    );
-    const indicator = container.querySelector<HTMLElement>(".compaction-indicator")!;
-    const lines = Array.from(container.querySelectorAll(".compaction-indicator__line"));
-    const check = container.querySelector<SVGElement>(".compaction-indicator__glyph svg")!;
+  it("folds lines inline without a floating scrim, then reveals the completion check", async () => {
+    render(renderChatDivider(buildCompactionDividerItem({}, 1_000, 0, "active")), container);
+    const indicator = container.querySelector<HTMLElement>(".chat-compaction")!;
+    const lines = Array.from(container.querySelectorAll(".chat-compaction__line"));
+    const check = container.querySelector<SVGElement>(".chat-compaction__glyph svg")!;
     expect(lines.length).toBeGreaterThan(0);
-    expect(getComputedStyle(indicator).backgroundColor).not.toBe("rgba(0, 0, 0, 0)");
-    expect(getComputedStyle(indicator).boxShadow).not.toBe("none");
+    expect(getComputedStyle(indicator).backgroundColor).toBe("rgba(0, 0, 0, 0)");
+    expect(getComputedStyle(indicator).boxShadow).toBe("none");
     expect(getComputedStyle(indicator).borderTopWidth).toBe("0px");
     expect(getComputedStyle(indicator).animationName).toBe("none");
     expect(getComputedStyle(check).opacity).toBe("0");
@@ -62,15 +61,7 @@ describe("chat composer compaction motion", () => {
       expect(getComputedStyle(element).animationName).not.toContain("spin");
     }
 
-    render(
-      renderCompactionIndicator({
-        phase: "complete",
-        runId: "run-motion",
-        startedAt: Date.now(),
-        completedAt: Date.now(),
-      }),
-      container,
-    );
+    render(renderChatDivider(buildCompactionDividerItem({}, 1_000, 0, "complete")), container);
     for (const line of lines) {
       expect(getComputedStyle(line).visibility).toBe("hidden");
       expect(getComputedStyle(line).animationName).toBe("none");
@@ -85,24 +76,16 @@ describe("chat composer compaction motion", () => {
       .toBe(false);
   });
 
-  it("keeps active, retrying, and complete states readable without reduced-motion animations", async () => {
+  it("keeps active and complete states readable without reduced-motion animations", async () => {
     await session.send("Emulation.setEmulatedMedia", {
       features: [{ name: "prefers-reduced-motion", value: "reduce" }],
     });
     expect(matchMedia("(prefers-reduced-motion: reduce)").matches).toBe(true);
-    for (const phase of ["active", "retrying", "complete"] as const) {
-      render(
-        renderCompactionIndicator({
-          phase,
-          runId: "run-static",
-          startedAt: Date.now(),
-          completedAt: phase === "complete" ? Date.now() : null,
-        }),
-        container,
-      );
-      const indicator = container.querySelector<HTMLElement>(".compaction-indicator")!;
-      const label = container.querySelector<HTMLElement>(".compaction-indicator__label")!;
-      const check = container.querySelector<SVGElement>(".compaction-indicator__glyph svg")!;
+    for (const phase of ["active", "complete"] as const) {
+      render(renderChatDivider(buildCompactionDividerItem({}, 1_000, 0, phase)), container);
+      const indicator = container.querySelector<HTMLElement>(".chat-compaction")!;
+      const label = container.querySelector<HTMLElement>(".chat-divider__title")!;
+      const check = container.querySelector<SVGElement>(".chat-compaction__glyph svg")!;
       expect(label.textContent?.trim()).not.toBe("");
       expect(getComputedStyle(label).webkitTextFillColor).not.toBe("rgba(0, 0, 0, 0)");
       expect(getComputedStyle(label).backgroundImage).toBe("none");

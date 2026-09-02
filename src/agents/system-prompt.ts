@@ -69,6 +69,7 @@ import type {
 import type { PromptMode, SilentReplyPromptMode } from "./system-prompt.types.js";
 import { AUTOMATIONS_TOOL_NAME } from "./tools/automations-tool-name.js";
 import { buildCredentialSafetyPrompt } from "./transcript-credential-safety.js";
+import { buildUiPresentationPrompt } from "./ui-presentation-prompt.js";
 import {
   buildWatchedSessionsPromptLines,
   type PreparedWatchedSessionsPrompt,
@@ -1477,6 +1478,19 @@ export function buildAgentSystemPrompt(params: {
           }),
         ]),
     ...buildUserIdentitySection(ownerLine, isMinimal),
+    ...(!isMinimal
+      ? [
+          buildUiPresentationPrompt({
+            showWidgetToolName: availableTools.has("show_widget")
+              ? resolveToolName("show_widget")
+              : undefined,
+            dashboardToolName: availableTools.has("dashboard")
+              ? resolveToolName("dashboard")
+              : undefined,
+            portalToolName: availableTools.has("portal") ? resolveToolName("portal") : undefined,
+          }),
+        ]
+      : []),
     ...buildWebchatCanvasSection({
       isMinimal,
       runtimeChannel,

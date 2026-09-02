@@ -323,9 +323,6 @@ export function renderChatModelPicker(params: ChatModelPickerParams) {
         : params.modelSelectionTarget === "global"
           ? t("chat.modelControls.selectionTargetGlobal")
           : undefined;
-  const sessionPinProvenanceLabel = params.sessionModelPinned
-    ? t("chat.modelControls.onlyForSession")
-    : undefined;
   const selectModel = (entry: ChatModelPickerOption, event: MouseEvent) => {
     event.stopPropagation();
     if (params.disabled || params.modelSelectionLocked || entry.disabled) {
@@ -595,31 +592,24 @@ export function renderChatModelPicker(params: ChatModelPickerParams) {
                         ? renderContextWindowControl(params.contextWindow, params.sessionKey)
                         : nothing}
                       ${selectionTargetLabel ||
-                      sessionPinProvenanceLabel ||
                       (params.sessionModelPinned && params.modelOptions.length > 0)
                         ? html`<footer class="chat-controls__model-provenance">
-                            ${selectionTargetLabel || sessionPinProvenanceLabel
-                              ? html`<span>
-                                  ${selectionTargetLabel
-                                    ? html`<span data-chat-model-selection-target>
-                                        ${selectionTargetLabel}
-                                      </span>`
-                                    : nothing}
-                                  ${selectionTargetLabel && sessionPinProvenanceLabel
-                                    ? html`<br />`
-                                    : nothing}
-                                  ${sessionPinProvenanceLabel
-                                    ? html`<span data-chat-model-pin-provenance>
-                                        ${sessionPinProvenanceLabel}
-                                      </span>`
-                                    : nothing}
+                            ${selectionTargetLabel
+                              ? html`<span
+                                  data-chat-model-selection-target
+                                  title=${selectionTargetLabel}
+                                >
+                                  ${selectionTargetLabel}
                                 </span>`
                               : nothing}
                             ${params.sessionModelPinned && params.modelOptions.length > 0
                               ? html`<button
-                                  class="chat-controls__model-reset"
+                                  class="btn btn--ghost btn--xs chat-controls__model-reset"
                                   data-chat-model-reset="true"
                                   type="button"
+                                  title=${t("chat.modelControls.useDefaultModel", {
+                                    model: params.defaultModelLabel,
+                                  })}
                                   ?disabled=${params.disabled}
                                   @click=${(event: MouseEvent) => {
                                     event.stopPropagation();
@@ -644,9 +634,7 @@ export function renderChatModelPicker(params: ChatModelPickerParams) {
                                     }
                                   }}
                                 >
-                                  ${t("chat.modelControls.useDefaultModel", {
-                                    model: params.defaultModelLabel,
-                                  })}
+                                  ${t("chat.modelControls.resetSessionModel")}
                                 </button>`
                               : nothing}
                           </footer>`

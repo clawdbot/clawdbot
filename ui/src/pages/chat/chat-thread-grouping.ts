@@ -4,7 +4,6 @@ import type { ChatItem, MessageGroup } from "../../lib/chat/chat-types.ts";
 import { normalizeRoleForGrouping } from "../../lib/chat/message-normalizer.ts";
 import { resolveMessageVisibleContent } from "../../lib/chat/message-visibility.ts";
 import { senderIdentityKey } from "../../lib/chat/sender-label.ts";
-import { isContextCompactionActivity } from "./chat-progress.ts";
 import { prepareMessagesForGrouping } from "./chat-thread-duplicates.ts";
 import { userTurnRunId } from "./chat-thread-items.ts";
 import {
@@ -19,9 +18,6 @@ import {
 import { indexTurnContinuations, persistedSteerTargetRunId } from "./stream-causal-boundary.ts";
 
 function assistantMessageKind(message: unknown, visibleContent: MessageGroup["visibleContent"]) {
-  if (isContextCompactionActivity(message)) {
-    return "compaction";
-  }
   if (isKeyedAssistantStreamFallbackMessage(message)) {
     return "commentary";
   }
@@ -225,7 +221,6 @@ export function assistantGroupCanOwnActiveRunStatus(group: MessageGroup): boolea
   return (
     group.role.toLowerCase() === "assistant" &&
     !assistantGroupIsForwardedBoundary(group) &&
-    !group.messages.every(({ message }) => isContextCompactionActivity(message)) &&
     groupHasVisibleReplyContent(group)
   );
 }

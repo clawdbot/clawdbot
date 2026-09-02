@@ -683,8 +683,7 @@ export async function runDoctorConfigPreflight(
       configSnapshotRead = persistedSnapshotRead;
       migrationCheckpointIdentity = persistedIdentity;
     }
-    await completeStartupMigrationPreflight({
-      baseConfig,
+    configSnapshotRead = await completeStartupMigrationPreflight({
       freshConfigGuardAllowed,
       gatewayStartupCheckpointRequired,
       migrationCheckpoint,
@@ -693,13 +692,15 @@ export async function runDoctorConfigPreflight(
       readConfigSnapshotForPreflight,
       shouldRecordStartupCheckpoint,
       shouldRecordStateCheckpoint,
-      snapshot,
+      snapshotRead: configSnapshotRead,
       startupMigrationEnv,
       startupMigrationHeartbeatError,
       startupMigrationLease,
       startupMigrationWarnings,
       stateMigrationsAllowed,
     });
+    snapshot = configSnapshotRead.snapshot;
+    baseConfig = snapshot.sourceConfig ?? snapshot.config ?? {};
 
     return {
       snapshot,

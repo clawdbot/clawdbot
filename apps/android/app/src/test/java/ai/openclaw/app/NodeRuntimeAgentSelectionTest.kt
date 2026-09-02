@@ -57,6 +57,43 @@ class NodeRuntimeAgentSelectionTest {
   }
 
   @Test
+  fun currentChatHydrationPreservesSelectionPublishedWhileItWaits() =
+    runBlocking {
+      val runtime = createConnectedRuntime()
+      val loaded = CompletableDeferred<Unit>()
+      val loader =
+        Thread {
+          try {
+            runtime.loadCurrentChat()
+            loaded.complete(Unit)
+          } catch (err: Throwable) {
+            loaded.completeExceptionally(err)
+          }
+        }
+      try {
+        val chat = ReflectionHelpers.getField<ChatController>(runtime, "chat")
+        val publicationLock = ReflectionHelpers.getField<Any>(chat, "gatewayScopeApplyLock")
+        synchronized(publicationLock) {
+          loader.start()
+          val deadline = System.nanoTime() + 2_000_000_000L
+          while (loader.state != Thread.State.BLOCKED && !loaded.isCompleted && System.nanoTime() < deadline) {
+            Thread.yield()
+          }
+          assertEquals("Hydration must wait for the selection owner", Thread.State.BLOCKED, loader.state)
+          // New publishes through the controller, independently of the runtime navigation lock.
+          chat.switchSession("selected-after-mount", "scout")
+        }
+        withTimeout(2_000) { loaded.await() }
+
+        assertEquals("selected-after-mount", runtime.chatSessionKey.value)
+        assertEquals("scout", runtime.chatSessionOwnerAgentId.value)
+      } finally {
+        loader.join(2_000)
+        closeNodeRuntimeTestFixture(runtime)
+      }
+    }
+
+  @Test
   fun manualSessionSelectionWinsOverLateCatalogContinuation() =
     runBlocking {
       val runtime = createConnectedRuntime()

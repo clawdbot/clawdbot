@@ -116,6 +116,7 @@ export function projectChatTranscript(
     sessionKey: props.sessionKey,
     archiveNotice,
     runId: props.runId ?? null,
+    compactionStatus: props.compactionStatus,
     locale,
     messages: props.messages,
     toolMessages: props.toolMessages,

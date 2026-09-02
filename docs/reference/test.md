@@ -163,6 +163,12 @@ verify lease cleanup; never stop the operator's Gateway.
 2. `pnpm test <path-or-filter>` for one file, directory, or explicit target.
 3. `pnpm test` only when you intentionally need the full local Vitest suite.
 
+An existing UI directory target stays scoped to that directory, including when
+combined with explicit E2E test files. Tests retain their owning shared, isolated,
+or browser lane. UI source/support-file targets that need whole-lane coverage
+(such as shared styles or setup files) still use that broader fallback; use a
+directory or explicit test files when you want a bounded run.
+
 When a one-shot routed run targets only explicit test-file paths, each selected
 Vitest invocation must discover at least one test file. Excluding every selected
 file fails even when the lane normally permits empty runs. To allow that outcome

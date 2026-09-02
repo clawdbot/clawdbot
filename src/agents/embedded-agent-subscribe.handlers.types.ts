@@ -70,6 +70,7 @@ type AssistantStreamDelivery = {
   data: AssistantStreamData;
   eventData?: AssistantStreamData;
   emitPartialReply: boolean;
+  finalMessage?: boolean;
 };
 
 /** Incremental tag and Markdown parsing state, owned by one stream lane. */
