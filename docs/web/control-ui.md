@@ -601,6 +601,27 @@ Run inspection requires `operator.read` and a Gateway that advertises `audit.run
 
 The audit ledger is best-effort operational evidence, not a lossless compliance archive. A missing or expired record does not prove that a run or action did not occur. The inspector never displays prompt or message text, command bodies, arguments, file paths, credentials, environment values, raw source identifiers, or arbitrary plugin data. See [Audit history](/gateway/audit) for collection, privacy, retention, and CLI inspection details.
 
+## Meetings page
+
+Open **Meetings** from the sidebar's Pages menu to read durable meeting notes
+across the Gateway. The page lists up to 200 recent captures, grouped by local
+day with newest meetings first. Rows show the title, provider, start time,
+duration or **In progress** state, participants, utterance count, and a short
+overview when notes are available. Use **Refresh** to reload the list.
+
+Select a meeting to read its notes. When recorded, **Notes: model** or
+**Notes: heuristic** identifies the summary source. Expand **Transcript** below
+the notes to load the bounded, speaker-labeled transcript. A meeting can appear
+before it has notes, including while capture is active.
+
+Meetings reads the same shared SQLite records as `openclaw transcripts`, through
+the read-only `transcripts.list` and `transcripts.get` RPCs. Both require
+`operator.read` within one trusted Gateway domain; the page is not restricted to
+the selected agent's captures. It does not start capture or regenerate notes.
+Discord voice and the Google Meet, Microsoft Teams, and Zoom meeting plugins
+populate this store. See [Transcripts CLI](/cli/transcripts) for capture setup,
+agent reads, and exports.
+
 ## Operator terminal
 
 The operator terminal is enabled by default; set `gateway.terminal.enabled: false` and restart the Gateway to opt out. The terminal requires an `operator.admin` connection and opens a host PTY in the active agent workspace. New tabs follow the currently selected chat agent.

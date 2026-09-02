@@ -4,6 +4,7 @@ read_when:
   - You want to read stored transcript summaries from the terminal
   - You need the path to a transcripts markdown summary
   - You are debugging the core transcripts storage layout
+  - You want an agent or the Control UI to read past meeting notes
 title: "Transcripts CLI"
 ---
 
@@ -94,19 +95,49 @@ The selector is the safest value to pass back to `show` or `path`.
 
 ## Tool selectors
 
+### Reading notes from any session
+
+Ask an agent to list past meetings and read their notes with the `transcripts`
+tool. Reads are not tied to the agent session that captured the meeting.
+Operator callers can read all meetings on the Gateway. Channel callers can read
+only meetings allowed by the source provider; Discord voice reads remain within
+the caller's guild. These read permissions do not change capture or summary
+write permissions.
+
+```json validate=false
+{ "action": "list", "limit": 20 }
+```
+
+`list` returns newest meetings first, with a selector, start time, title or
+provider name, utterance count, and participants. `limit` defaults to 20 and
+accepts integers from 1 to 50. The text is bounded; structured results are in
+`details.sessions`.
+
+```json validate=false
+{ "action": "show", "selector": "2026-05-22/notes-room-one" }
+```
+
+`show` returns the stored notes Markdown and session details. Its text is capped
+at 12,000 characters; a truncation marker points to
+`openclaw transcripts show <selector>` for the full notes. A capture without a
+summary reports that notes are not available yet, including whether it is active.
+Reading notes does not regenerate the summary or export artifacts.
+
+### Selecting a capture
+
 The `transcripts` tool returns both the unchanged raw `sessionId` and a canonical
 `selector` from start, import, stop, and summarize. Authorized `status` results
 include selectors for active captures and entries awaiting finalization. Its
 model-facing text shows up to three complete selectors, prioritizing captures
 awaiting finalization and reporting any omitted count. Structured status details
-retain the full authorized list. Prefer `selector` for subsequent stop or
-summarize calls:
+retain the full authorized list. Prefer `selector` for subsequent show, stop,
+or summarize calls:
 
 ```json validate=false
 { "action": "summarize", "selector": "2026-05-22/notes-room-one" }
 ```
 
-Stop and summarize require exactly one of `selector` or `sessionId`. Other
+Show, stop, and summarize require exactly one of `selector` or `sessionId`. Other
 actions reject `selector`; start and import continue to accept raw IDs through
 `sessionId`. Explicit `selector` input accepts canonical selectors and the
 historical date/raw-ID form above, but never falls back to the whole input as a
@@ -115,15 +146,42 @@ raw ID.
 Legacy `sessionId` input considers qualified and raw/slug meanings together. If
 they identify different captures, the tool reports ambiguity without listing
 candidate details. This stays ambiguous after a capture ends. Use a selector
-returned by start, import, or authorized status, or inspect `openclaw transcripts
+returned by start, import, or authorized list/status, or inspect `openclaw transcripts
 list` locally and pass the desired value in the `selector` field. Both sides of
 a raw-ID/selector collision remain addressable by their own canonical selector.
 
 Without a conflicting qualified meaning or a different raw-ID/slug candidate,
-legacy `sessionId` selects the current exact raw-ID capture for both stop and
+legacy `sessionId` selects the current exact raw-ID capture for stop and
 summarize, even when historical captures reuse that ID. With no current capture,
 repeated historical IDs require a dated selector. An explicit selector for an
 older capture does not stop its newer same-ID sibling.
+
+`show` selects and authorizes the durable capture, using live state only to report
+whether capture is active. Repeated historical IDs require a dated selector even
+when one capture is active.
+
+## Gateway and Control UI reads
+
+Open **Meetings** in the [Control UI](/web/control-ui#meetings-page) to browse
+captured meetings and notes without a terminal. The page and other Gateway
+clients use two read-only RPC methods:
+
+| Method             | Parameters                                            | Result                                                                                                                                                    |
+| ------------------ | ----------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `transcripts.list` | Optional `limit` (1–200, default 50) and `providerId` | Newest-first `sessions`, including participants, utterance counts, active state, summary availability, and an overview preview of at most 280 characters. |
+| `transcripts.get`  | Required `selector`; optional `includeUtterances`     | One `session`, stored `summary` and its Markdown when available, and optional bounded `utterances`.                                                       |
+
+Both methods require `operator.read` and expose meetings across one trusted
+Gateway domain, not just the current agent or chat session. Use separate Gateway
+domains when readers need isolation. Source locators contain only `providerId`,
+`accountId`, `guildId`, `channelId`, and `meetingUrl` when present, never arbitrary
+capture metadata. See [Gateway protocol](/gateway/protocol).
+
+The stored summary Markdown is the canonical notes text, matching the CLI's
+`show` output. RPC reads do not materialize files. Utterances are omitted unless
+requested and bounded by the capture limit of 2,000; each utterance text is also
+sanitized and bounded. Summary participants and model/heuristic provenance are
+shown when available; older summaries need not contain them.
 
 ## JSON output
 
