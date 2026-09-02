@@ -60,8 +60,9 @@ independently of the sidebar, keeping permission and capability controls reachab
 
 ## Updates
 
-If the Gateway rejects the app's protocol version, the app shows an update alert
-and keeps the explanation in its connection status. The message names the app
+If the primary Gateway connection rejects the app's protocol version, the app
+shows an update alert and keeps the explanation in its connection status.
+Remote setup and connection probes show the same guidance inline. The message names the app
 release and both protocol versions, and tells you which side needs updating:
 run `openclaw update` on an older Gateway host, or install a newer Mac app from
 the [download options](#download). A rejected handshake may not report the

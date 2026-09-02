@@ -1,3 +1,4 @@
+import ConcurrencyExtras
 import CryptoKit
 import Foundation
 import OpenClawChatUI
@@ -148,7 +149,7 @@ actor GatewayConnection {
 
     private struct ConfiguredConnection {
         let client: GatewayChannelActor
-        let endpoint: EndpointSnapshot
+        var endpoint: EndpointSnapshot
         let tlsMetadataProvider: (any GatewayTLSRouteMetadataProviding)?
         let shutdownGeneration: UInt64
         let activationBindingKey: SymmetricKey?
@@ -168,7 +169,11 @@ actor GatewayConnection {
         }
     }
 
-    private var configuredConnection: ConfiguredConnection?
+    private nonisolated let connectedRevision = LockIsolated<UInt64?>(nil)
+    private var configuredConnection: ConfiguredConnection? {
+        didSet { self.publishConnectedEndpointRevision() }
+    }
+
     private var highestEndpointRevision: UInt64?
     private var routeGeneration: UInt64 = 0
     /// Unbound operations capture this before their first suspension. Shutdown
@@ -183,7 +188,21 @@ actor GatewayConnection {
     var realtimeTalkSubscribers: [
         UInt64: [UUID: AsyncStream<GatewayPush>.Continuation]
     ] = [:]
-    var lastSnapshot: HelloOk?
+    var lastSnapshot: HelloOk? {
+        didSet { self.publishConnectedEndpointRevision() }
+    }
+
+    nonisolated var connectedEndpointRevision: UInt64? {
+        self.connectedRevision.value
+    }
+
+    private func publishConnectedEndpointRevision() {
+        // Publish the admitted handshake's owner, not an untagged queued snapshot.
+        // Clearing either connection state also retires this synchronous UI fact.
+        let revision = self.lastSnapshot == nil ? nil : self.configuredConnection?.endpoint.revision
+        self.connectedRevision.withValue { $0 = revision }
+    }
+
     var canvasPluginSurfaceURL: String?
 
     struct CanvasPluginSurfaceRefresh {
@@ -923,6 +942,11 @@ extension GatewayConnection {
                   endpoint: endpoint,
                   shutdownGeneration: shutdownGeneration)
         else { return nil }
+        // Equivalent routes can acquire a new endpoint revision without reconnecting.
+        // An older waiter must not roll the recorded connection owner backward.
+        if endpoint.revision == self.highestEndpointRevision {
+            self.configuredConnection?.endpoint = endpoint
+        }
         return connection.client
     }
 
