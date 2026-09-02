@@ -94,15 +94,18 @@ fs.writeFileSync(path.join(directory,'manifest.json'),JSON.stringify({
         `
 import fs from 'node:fs';
 import {requestVitestWorkerArtifacts} from ${JSON.stringify(pathToFileURL(path.join(repoRoot, "scripts/lib/vitest-worker-artifacts.mts")).href)};
-const exitWatcher=${JSON.stringify(phase)}==='admission' ? fs.watch(${JSON.stringify(root)},()=>{
-  if(fs.existsSync(${JSON.stringify(borrowerExit)})) process.exit(1);
-}) : undefined;
+const exitFile=${JSON.stringify(borrowerExit)};
+const exitCheck=()=>{if(fs.existsSync(exitFile)) process.exit(1);};
+if(${JSON.stringify(phase)}==='admission') {
+  fs.watchFile(exitFile,{interval:50},exitCheck);
+  exitCheck();
+}
 try {
   await requestVitestWorkerArtifacts();
   console.log('fixture borrower completed');
 } catch(error) {
   console.error(error);process.exitCode=1;
-} finally {exitWatcher?.close();process.disconnect();}
+} finally {fs.unwatchFile(exitFile,exitCheck);process.disconnect();}
 `,
       );
       const preload = writeFixture(
@@ -115,6 +118,13 @@ import fsp from 'node:fs/promises';
 import path from 'node:path';
 import {syncBuiltinESMExports} from 'node:module';
 const root=${JSON.stringify(root)}, input=${JSON.stringify(input)};
+// CI workspaces need not provide native directory notifications. Control-file
+// readiness must remain observable without that optional filesystem facility.
+const nativeWatch=fs.watch;
+fs.watch=(directory,...args)=>{
+  if(directory===root) throw new Error('Native fixture notifications unavailable');
+  return nativeWatch(directory,...args);
+};
 const publish=(name,value)=>{
   const filename=path.join(root,name);
   fs.writeFileSync(filename+'.tmp',JSON.stringify(value));
@@ -141,14 +151,18 @@ cp.spawn=(bin,args,options)=>{
 // directly; adding a signal listener could rescue a broken wrapper instead.
 const waitForRelease=()=>new Promise(resolve=>{
   let idle=false, responsive=false;
+  const controls=${JSON.stringify([borrowerClosed, loopRequest, released])};
   const check=()=>{
     if(borrowerClosed && !idle) {idle=true;publish('owner-idle',{owner:process.pid});}
     if(!responsive && fs.existsSync(${JSON.stringify(loopRequest)})) {
       responsive=true;publish('loop-responsive',{owner:process.pid});
     }
-    if(fs.existsSync(${JSON.stringify(released)})) {watcher.close();resolve();}
+    if(fs.existsSync(${JSON.stringify(released)})) {
+      for(const filename of controls) fs.unwatchFile(filename,check);
+      resolve();
+    }
   };
-  const watcher=fs.watch(root,check);
+  for(const filename of controls) fs.watchFile(filename,{interval:50},check);
   check();
 });
 const readFile=fsp.readFile;
