@@ -81,6 +81,24 @@ import { createTestRegistry } from "../../src/test-utils/channel-plugins.js";
 const repoRoot = path.resolve(fileURLToPath(new URL("../..", import.meta.url)));
 const GROUPS_MODULE_RELATIVE_PATH = "src/auto-reply/reply/groups.ts";
 const DEFAULT_BASELINE_REF = "3dd3003f49ce71f38c0ecf84dbdbc95023498a69";
+const PROCESS_TEMP_DIRS = new Set<string>();
+
+function createProcessTempDir(prefix: string): string {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+  PROCESS_TEMP_DIRS.add(directory);
+  return directory;
+}
+
+function cleanupProcessTempDirs(): void {
+  for (const directory of PROCESS_TEMP_DIRS) {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+  PROCESS_TEMP_DIRS.clear();
+}
+
+// `skip()` exits directly, so a synchronous exit handler is the single owner that cleans
+// proof-global scratch state on success, failure, or a clean preflight skip.
+process.once("exit", cleanupProcessTempDirs);
 
 const { values } = parseArgs({
   options: {
@@ -215,10 +233,7 @@ async function loadBaselineGroupsModule(baseRef: string): Promise<GroupsModule> 
       /(import\(\s*")(\.\.?\/[^"]+)("\s*\))/g,
       (_m, head, spec, tail) => head + absolutize(spec) + tail,
     );
-  const file = path.join(
-    fs.mkdtempSync(path.join(os.tmpdir(), "mto-appserver-baseline-")),
-    "groups.ts",
-  );
+  const file = path.join(createProcessTempDir("mto-appserver-baseline-"), "groups.ts");
   fs.writeFileSync(file, rewritten, "utf8");
   return (await import(pathToFileURL(file).href)) as GroupsModule;
 }
@@ -234,7 +249,7 @@ function skip(reason: string): never {
 
 // Keep every byte this proof writes inside a throwaway directory; it must never touch a
 // developer's real OpenClaw state.
-const PROOF_STATE_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "mto-appserver-state-"));
+const PROOF_STATE_DIR = createProcessTempDir("mto-appserver-state-");
 process.env.OPENCLAW_STATE_DIR = PROOF_STATE_DIR;
 
 const apiKey = process.env.OPENAI_API_KEY?.trim();
