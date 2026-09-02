@@ -27,6 +27,24 @@ describe("toPublicCronJob", () => {
     expect(job.state.forcePreservedNextRunAtMs).toBe(2_000);
   });
 
+  it("strips the failure-alert attempt identity while keeping the audit outcome", () => {
+    const job = makeCronJob({
+      state: {
+        nextRunAtMs: 2_000,
+        lastFailureNotificationDelivered: true,
+        lastFailureNotificationDeliveryStatus: "delivered",
+        lastFailureNotificationAttemptId: "attempt-uuid",
+      },
+    });
+
+    const publicJob = toPublicCronJob(job);
+
+    expect(publicJob.state.lastFailureNotificationAttemptId).toBeUndefined();
+    expect(publicJob.state.lastFailureNotificationDelivered).toBe(true);
+    expect(publicJob.state.lastFailureNotificationDeliveryStatus).toBe("delivered");
+    expect(job.state.lastFailureNotificationAttemptId).toBe("attempt-uuid");
+  });
+
   it("projects script payload fields without exposing scheduler-only state", () => {
     const job = makeCronJob({
       sessionTarget: "isolated",

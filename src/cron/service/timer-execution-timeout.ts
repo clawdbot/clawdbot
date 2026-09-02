@@ -68,6 +68,9 @@ export type TimedCronRunOutcome = CronRunOutcome &
 export type CronJobRunResult = CronRunOutcome &
   Pick<CronRunTelemetry, "provider"> & {
     completionStatus?: CronCompletionStatus;
+    // Present on timed execution outcomes so the deferred failure-alert
+    // completion can settle the same fact on the run-history row.
+    taskRunId?: string;
     deliveryState?: CronResolvedDeliveryState;
     deliveryError?: string;
     deliverySuppressionReason?: NormalizeReplySkipReason;

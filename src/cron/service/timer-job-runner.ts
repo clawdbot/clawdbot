@@ -483,5 +483,11 @@ export async function executeJobCoreWithTimeout(
   opts?: CronCoreRunOptions,
 ) {
   const result = await executeJobCoreWithTimeoutUnfinalized(state, job, opts);
-  return authorCronRunCompletion(state, job, result);
+  // The task-ledger identity rides on the completion outcome so the deferred
+  // failure-alert completion can settle the same run's history row; callers
+  // that finalize history separately would otherwise lose it here.
+  return {
+    ...authorCronRunCompletion(state, job, result),
+    ...(opts?.runId ? { taskRunId: opts.runId } : {}),
+  };
 }

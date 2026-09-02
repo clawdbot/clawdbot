@@ -799,7 +799,7 @@ describe("CronService persists delivered status", () => {
     expect(capturedEvent?.failureNotificationDelivery).toBeUndefined();
   });
 
-  it("persists scheduler-authorized alert intent as delivery unknown", async () => {
+  it("persists scheduler-authorized alert intent, then the transportless outcome", async () => {
     let failureNotificationDelivery: { delivered?: boolean; status: string; error?: string };
     const job = buildAnnounceIsolatedAgentTurnJob("authorized-failure-notification");
     job.failureAlert = { after: 1 };
@@ -813,8 +813,10 @@ describe("CronService persists delivered status", () => {
       },
     });
 
-    expect(updated?.state.lastFailureNotificationDelivered).toBeUndefined();
-    expect(updated?.state.lastFailureNotificationDeliveryStatus).toBe("unknown");
+    // With no failure-alert transport configured, the detached outcome write
+    // records not-delivered once the fallback re-queue settles.
+    expect(updated?.state.lastFailureNotificationDelivered).toBe(false);
+    expect(updated?.state.lastFailureNotificationDeliveryStatus).toBe("not-delivered");
     expect(updated?.state.lastFailureNotificationDeliveryError).toBeUndefined();
     expect(failureNotificationDelivery!).toEqual({ status: "unknown" });
   });

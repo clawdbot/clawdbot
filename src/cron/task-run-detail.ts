@@ -310,6 +310,17 @@ export function cronTaskRecordToScriptRunResult(
   };
 }
 
+/** Returns the cron-run detail with the settled failure-alert delivery fact applied. */
+export function cronTaskDetailWithFailureAlertOutcome(
+  task: TaskRecord,
+  delivery: NonNullable<CronRunLogEntry["failureNotificationDelivery"]>,
+): JsonValue | undefined {
+  if (!isJsonObject(task.detail) || task.detail.kind !== CRON_TASK_DETAIL_KIND) {
+    return undefined;
+  }
+  return { ...task.detail, failureNotificationDelivery: delivery };
+}
+
 /** Maps the cron outcome vocabulary onto generic task terminal states. */
 export function cronRunStatusToTaskStatus(
   entry: Pick<CronRunLogEntry, "status" | "error"> & Partial<CronRunLogEntry>,

@@ -17,5 +17,6 @@ export function toPublicCronJob(job: CronStoredJob): CronJob {
   delete state.startupCatchupAtMs;
   delete state.pacedNextRunAtMs;
   delete state.forcePreservedNextRunAtMs;
+  delete state.lastFailureNotificationAttemptId;
   return { ...publicJob, state };
 }
