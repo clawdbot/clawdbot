@@ -185,6 +185,9 @@ jobs:
       selected_revision: ${{ steps.validate.outputs.selected_revision }}
       trusted_reason: ${{ steps.validate.outputs.trusted_reason }}
     steps:
+      - name: Prepare Git owner
+        uses: openclaw/openclaw/.github/actions/git-owner@a8fe1a587bb86ffece5dd20d2b8091c82658030f
+
       - name: Checkout selected ref
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -209,11 +212,30 @@ jobs:
             exit 1
           fi
 
-          git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+          # Checkout intentionally removes credentials. Refresh trust refs through
+          # the pinned owner, with authentication scoped to this repository only.
+          fetch_selected_refs() {
+            python3 -I -S "$CI_GIT_OWNER" --policy - "$@" <<'PYTHON'
+          import os
+          import sys
+          from ci_git_owner import git_auth_environment, git_output, run_git
+
+          directory = os.getcwd()
+          token = os.environ.pop("GH_TOKEN")
+          repository_url = f"{os.environ['GITHUB_SERVER_URL'].rstrip('/')}/{os.environ['GITHUB_REPOSITORY']}"
+          remote = git_output(directory, "remote", "get-url", "origin").strip()
+          if not token or remote not in (repository_url, repository_url + ".git"):
+              raise ValueError("Selected checkout origin must match the workflow repository")
+          run_git(directory, "fetch", *sys.argv[3:], timeout=120, reclaim_locks=True,
+                  env=git_auth_environment(remote, token))
+          PYTHON
+          }
+
+          fetch_selected_refs --no-tags origin +refs/heads/main:refs/remotes/origin/main
 
           if [[ -n "${EXPECTED_SHA}" ]]; then
-            git fetch --no-tags origin '+refs/heads/*:refs/remotes/origin/*'
-            git fetch --tags origin '+refs/tags/*:refs/tags/*'
+            fetch_selected_refs --no-tags origin '+refs/heads/*:refs/remotes/origin/*'
+            fetch_selected_refs --tags origin '+refs/tags/*:refs/tags/*'
             if git tag --points-at "$selected_revision" | grep -Eq '^v'; then
               trusted_reason="release-tag"
             elif git for-each-ref --format='%(refname:short)' --contains "$selected_revision" refs/remotes/origin | grep -Eq '^origin/'; then
@@ -224,7 +246,7 @@ jobs:
           elif git tag --points-at "$selected_revision" | grep -Eq '^v'; then
             trusted_reason="release-tag"
           elif [[ "$INPUT_REF" =~ ^release/[0-9]{4}\.[0-9]+\.[0-9]+$ ]]; then
-            git fetch --no-tags origin "+refs/heads/${INPUT_REF}:refs/remotes/origin/${INPUT_REF}"
+            fetch_selected_refs --no-tags origin "+refs/heads/${INPUT_REF}:refs/remotes/origin/${INPUT_REF}"
             release_branch_sha="$(git rev-parse "refs/remotes/origin/${INPUT_REF}")"
             if [[ "$selected_revision" == "$release_branch_sha" ]]; then
               trusted_reason="release-branch-head"
