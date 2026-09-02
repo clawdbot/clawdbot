@@ -247,10 +247,11 @@ describe("Codex node exec-server", () => {
   it.each([
     { host: "paired device", nodeId: "paired-node" },
     { host: "cloud worker", nodeId: "cloud-worker-node" },
-  ])("requires critical one-time approval on a $host", async ({ nodeId }) => {
+  ])("requires critical scoped approval on a $host", async ({ nodeId }) => {
     const policy = createCodexNodeExecServerInvokePolicy();
     expect(policy.commands).toEqual([CODEX_NODE_EXEC_SERVER_COMMAND]);
     expect(policy.dangerous).toBe(true);
+    expect(policy.standingApproval).toEqual({ kind: "placement", scope: "codex.exec-server" });
     expect(policy.defaultPlatforms).toBeUndefined();
     expect(policy.classifyRisk?.({ command: CODEX_NODE_EXEC_SERVER_COMMAND, params: {} })).toEqual({
       level: "high",
@@ -279,16 +280,7 @@ describe("Codex node exec-server", () => {
           ok: false,
           code: "CODEX_NODE_EXEC_APPROVAL_DENIED",
           message:
-            "Codex node execution was denied. Retry the action and choose Allow once to continue.",
-        },
-      },
-      {
-        decision: "allow-always",
-        result: {
-          ok: false,
-          code: "CODEX_NODE_EXEC_APPROVAL_INVALID",
-          message:
-            "Codex node execution cannot use permanent approval. Retry the action and choose Allow once.",
+            "Codex node execution was denied. Retry the action and choose Allow once or Allow always to continue.",
         },
       },
       {
@@ -319,6 +311,14 @@ describe("Codex node exec-server", () => {
     });
     expect(invokeNode).not.toHaveBeenCalled();
 
+    request.mockResolvedValueOnce({ decision: "allow-always" });
+    await expect(policy.handle(context)).resolves.toEqual({
+      ok: true,
+      payload: { connected: true },
+    });
+    expect(invokeNode).toHaveBeenCalledOnce();
+    invokeNode.mockClear();
+
     const approvedPlacement = { ...placement };
     request.mockImplementationOnce(async () => {
       placement.cwd = path.parse(process.cwd()).root;
@@ -341,15 +341,18 @@ describe("Codex node exec-server", () => {
     });
     expect(request).toHaveBeenCalledWith(
       expect.objectContaining({
-        title: "Run Codex execution on node",
+        title: "Run Codex on this node placement",
         description: expect.stringContaining(`${nodeId}: ${approvedPlacement.cwd}`),
         severity: "critical",
-        allowedDecisions: ["allow-once"],
+        allowedDecisions: ["allow-once", "allow-always"],
       }),
     );
     // Gateway approval descriptions are bounded to 256 characters.
     expect(request.mock.lastCall?.[0].description.slice(0, 256)).toContain(
       "arbitrary processes and filesystem access across the node account, not only this workspace",
+    );
+    expect(request.mock.lastCall?.[0].description.slice(0, 256)).toContain(
+      "Allow always applies only while this exact placement remains active",
     );
   });
 

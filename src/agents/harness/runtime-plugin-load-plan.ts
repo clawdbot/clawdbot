@@ -172,7 +172,7 @@ export function createAgentRuntimeMetadataPluginIdScope(params: {
   workspaceDir: string;
   selections: readonly AgentHarnessPluginSelection[];
   shorthandModelIds?: readonly string[];
-}): PluginMetadataSnapshotPluginIdScope {
+}): PluginMetadataSnapshotPluginIdScope & { key: string } {
   return {
     key: hashJson({
       kind: "agent-runtime",
@@ -296,7 +296,7 @@ export function resolveSelectedAgentHarnessRuntime(
 }
 
 // Returns whether a selection needs a plugin-owned harness in its prepared generation.
-function requiresAgentHarnessPluginSelection(
+export function requiresAgentHarnessPluginSelection(
   selection: AgentHarnessPluginSelection,
   config?: OpenClawConfig,
 ): boolean {

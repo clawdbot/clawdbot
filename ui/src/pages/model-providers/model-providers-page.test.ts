@@ -240,7 +240,20 @@ describe("ModelProvidersPage agent scope", () => {
     expect(link?.href).toBe("https://docs.openclaw.ai/concepts/model-providers");
   });
 
-  it("patches thinking and fast mode through the shared config draft", async () => {
+  it("opens model setup from the Configure Models action", async () => {
+    const { context } = createHarness("main");
+    const page = appendPage(context);
+    await page.updateComplete;
+
+    const action = [
+      ...page.querySelectorAll<HTMLButtonElement>(".page-header-actions button"),
+    ].find((button) => button.textContent?.includes("Configure Models"));
+    expect(action?.querySelector("svg")).not.toBeNull();
+    action?.click();
+    expect(context.navigate).toHaveBeenCalledWith("model-setup");
+  });
+
+  it("autosaves model behavior changes", async () => {
     const { context, runtimeConfig } = createHarness("main");
     const page = appendPage(context);
     await waitForFast(() => expect(page.querySelector("#settings-model-behavior")).not.toBeNull());
@@ -249,22 +262,81 @@ describe("ModelProvidersPage agent scope", () => {
     expect(groups).toHaveLength(2);
     groups[0]!.value = "high";
     groups[0]!.dispatchEvent(new Event("change", { bubbles: true }));
-    groups[1]!.value = "off";
-    groups[1]!.dispatchEvent(new Event("change", { bubbles: true }));
-
-    expect(runtimeConfig.patchForm).toHaveBeenNthCalledWith(
-      1,
-      ["agents", "defaults", "thinkingDefault"],
-      "high",
-    );
-    expect(runtimeConfig.patchForm).toHaveBeenNthCalledWith(
-      2,
-      ["agents", "defaults", "fastModeDefault"],
-      false,
-    );
+    await waitForFast(() => expect(runtimeConfig.patch).toHaveBeenCalledOnce());
+    expect(runtimeConfig.patchForm).not.toHaveBeenCalled();
+    expect(runtimeConfig.patch).toHaveBeenCalledWith({
+      raw: {
+        agents: {
+          defaults: {
+            fastModeDefault: "auto",
+            thinkingDefault: "high",
+          },
+        },
+      },
+      note: "Update defaults from Control UI",
+      replacePaths: ["agents.defaults.model.fallbacks"],
+    });
   });
 
-  it("removes thinking and fast overrides through the shared config draft", async () => {
+  it("preserves trailing fallbacks when replacing the visible fallback", async () => {
+    const { context, runtimeConfig } = createHarness("main");
+    const model = {
+      primary: "openai/gpt-5",
+      fallbacks: ["anthropic/claude-sonnet", "google/gemini-pro"],
+    };
+    Object.assign(runtimeConfig.state.configForm.agents.defaults, { model });
+    const page = appendPage(context);
+    await waitForFast(() => expect(page.data?.config).toEqual({}));
+    page.data = {
+      ...EMPTY_MODEL_PROVIDERS_DATA,
+      config: runtimeConfig.state.configForm,
+      models: [
+        { id: "gpt-5", name: "GPT-5", provider: "openai", available: true },
+        {
+          id: "claude-sonnet",
+          name: "Claude Sonnet",
+          provider: "anthropic",
+          available: true,
+        },
+        { id: "gemini-pro", name: "Gemini Pro", provider: "google", available: true },
+        { id: "grok", name: "Grok", provider: "xai", available: true },
+      ],
+    };
+    page.requestUpdate();
+    await page.updateComplete;
+    runtimeConfig.patch.mockClear();
+
+    const fallback = [
+      ...page.querySelectorAll<HTMLElement & { value: string; updateComplete: Promise<unknown> }>(
+        "wa-select",
+      ),
+    ].find((select) => select.querySelector('[slot="label"]')?.textContent === "Fallback Model");
+    expect(fallback).toBeDefined();
+    fallback!.value = "xai/grok";
+    await fallback!.updateComplete;
+    fallback!.dispatchEvent(new Event("change", { bubbles: true }));
+
+    await waitForFast(() => expect(runtimeConfig.patch).toHaveBeenCalledOnce());
+    expect(runtimeConfig.patch).toHaveBeenCalledWith({
+      raw: {
+        agents: {
+          defaults: {
+            model: {
+              primary: "openai/gpt-5",
+              fallbacks: ["xai/grok", "google/gemini-pro"],
+            },
+            utilityModel: null,
+            thinkingDefault: "low",
+            fastModeDefault: "auto",
+          },
+        },
+      },
+      note: "Update defaults from Control UI",
+      replacePaths: ["agents.defaults.model.fallbacks"],
+    });
+  });
+
+  it("autosaves removal of inherited behavior overrides", async () => {
     const { context, runtimeConfig } = createHarness("main");
     const page = appendPage(context);
     await waitForFast(() => expect(page.querySelector("#settings-model-behavior")).not.toBeNull());
@@ -275,21 +347,52 @@ describe("ModelProvidersPage agent scope", () => {
     expect(groups).toHaveLength(2);
     groups[0]!.value = "";
     groups[0]!.dispatchEvent(new Event("change", { bubbles: true }));
-    groups[1]!.value = "";
-    groups[1]!.dispatchEvent(new Event("change", { bubbles: true }));
-
-    expect(runtimeConfig.removeFormValue).toHaveBeenNthCalledWith(1, [
-      "agents",
-      "defaults",
-      "thinkingDefault",
-    ]);
-    expect(runtimeConfig.removeFormValue).toHaveBeenNthCalledWith(2, [
-      "agents",
-      "defaults",
-      "fastModeDefault",
-    ]);
+    await waitForFast(() => expect(runtimeConfig.patch).toHaveBeenCalledOnce());
+    expect(runtimeConfig.patch).toHaveBeenCalledWith({
+      raw: {
+        agents: {
+          defaults: {
+            fastModeDefault: "auto",
+            thinkingDefault: null,
+          },
+        },
+      },
+      note: "Update defaults from Control UI",
+      replacePaths: ["agents.defaults.model.fallbacks"],
+    });
   });
 
+  it("keeps invalid explicit thinking and fast values resettable", async () => {
+    const { context, runtimeConfig } = createHarness("main");
+    runtimeConfig.state.configForm = {
+      agents: { defaults: { thinkingDefault: 42, fastModeDefault: "bogus" } },
+    } as unknown as typeof runtimeConfig.state.configForm;
+    const page = appendPage(context);
+    await waitForFast(() => expect(page.querySelector("#settings-model-behavior")).not.toBeNull());
+
+    const behavior = page.querySelector("#settings-model-behavior")!;
+    const groups = behavior.querySelectorAll<HTMLElement & { value: string }>("wa-radio-group");
+    expect([...groups].map((group) => group.value)).toEqual(["", ""]);
+    const defaults = behavior.querySelectorAll<HTMLElement>('wa-radio[value=""]');
+    expect(defaults).toHaveLength(2);
+    defaults[0]?.click();
+    await waitForFast(() => expect(runtimeConfig.patch).toHaveBeenCalledOnce());
+  });
+
+  it("disables defaults without showing an admin warning when config patches are unavailable", async () => {
+    const { context, runtimeConfig } = createHarness("main");
+    runtimeConfig.canPatch = false;
+    const page = appendPage(context);
+    await waitForFast(() => expect(page.data?.config).toEqual({}));
+    const defaults = page.querySelector(".model-providers__defaults");
+
+    expect(
+      [...(defaults?.querySelectorAll("wa-select, wa-radio-group") ?? [])].every((control) =>
+        control.hasAttribute("disabled"),
+      ),
+    ).toBe(true);
+    expect(page.textContent).not.toContain("operator.admin access");
+  });
   it("keeps a committed provider-key save successful when config refresh fails", async () => {
     const { context, runtimeConfig } = createHarness("main");
     runtimeConfig.refresh.mockImplementationOnce(async () => {
@@ -348,13 +451,13 @@ describe("ModelProvidersPage agent scope", () => {
     };
     page.defaultsDraft = selection;
 
-    await page.saveDefaultModels();
+    await page.saveDefaults();
 
     expect(runtimeConfig.patch).toHaveBeenCalledOnce();
     expect(page.defaultsDraft).toBe(selection);
     expect(page.messages.defaults).toEqual({
       kind: "success",
-      text: "Default models saved.",
+      text: "Defaults saved.",
       warning: "config.get failed after saving default models",
     });
   });
@@ -372,7 +475,7 @@ describe("ModelProvidersPage agent scope", () => {
     };
     page.defaultsDraft = selection;
 
-    const saving = page.saveDefaultModels();
+    const saving = page.saveDefaults();
     await vi.waitFor(() => expect(runtimeConfig.ensureLoaded).toHaveBeenCalledOnce());
     agentSelection.state.selectedId = "writer";
     agentSelection.state.scopeId = "writer";
@@ -633,9 +736,7 @@ describe("ModelProvidersPage agent scope", () => {
     expect(context.agents.ensureList).not.toHaveBeenCalled();
     expect(page.textContent).toContain("Agent roster unavailable");
 
-    [...page.querySelectorAll<HTMLButtonElement>("button")]
-      .find((button) => button.textContent?.trim() === "Refresh")
-      ?.click();
+    page.querySelector<HTMLButtonElement>('button[aria-label="Refresh"]')?.click();
     expect(context.agents.refreshList).toHaveBeenCalledOnce();
   });
 

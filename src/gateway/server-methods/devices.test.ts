@@ -916,7 +916,7 @@ describe("deviceHandlers", () => {
       deviceId: "device-1",
       role: "node",
       scopes: undefined,
-      callerScopes: ["operator.admin"],
+      callerScopes: undefined,
     });
     expect(opts.context.disconnectClientsForDevice).not.toHaveBeenCalled();
     expectRespondedErrorMessage(opts, "device token rotation denied");

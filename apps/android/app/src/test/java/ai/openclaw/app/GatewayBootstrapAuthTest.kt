@@ -199,14 +199,18 @@ class GatewayBootstrapAuthTest {
         val initialNodeListRead = CompletableDeferred<Job>()
         runtime.gatewayDataRequestOverrideForTests = { _, method, _ ->
           when (method) {
-            "node.list" ->
+            "node.list" -> {
               if (runtime.nodeConnected.value) {
                 """{"nodes":[{"nodeId":"$deviceId","paired":true,"connected":true,"approvalState":"approved"}]}"""
               } else {
                 initialNodeListRead.complete(requireNotNull(currentCoroutineContext()[Job]))
                 """{"nodes":[]}"""
               }
-            else -> "{}"
+            }
+
+            else -> {
+              "{}"
+            }
           }
         }
         val hello =

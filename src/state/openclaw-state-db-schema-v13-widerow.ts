@@ -47,12 +47,6 @@ function reprojectLegacyCronJson(db: DatabaseSync): void {
       continue;
     }
     let changed = false;
-    if (typeof job.enabled !== "boolean") {
-      // Early cron rows kept the effective flag only in this retained projection.
-      // Fold it into canonical JSON before schema v13 removes the other projections.
-      job.enabled = row.enabled !== 0;
-      changed = true;
-    }
     const delivery = asNullableRecord(job.delivery);
     const destination = asNullableRecord(delivery?.failureDestination);
     if (
@@ -73,6 +67,12 @@ function reprojectLegacyCronJson(db: DatabaseSync): void {
         nextDelivery.failureDestination = nextDestination;
         job.delivery = nextDelivery;
       }
+    }
+    if (typeof job.enabled !== "boolean") {
+      // Early cron rows kept this flag only in the retained projection.
+      // Restore it after delivery so its change flag cannot create a delivery object.
+      job.enabled = row.enabled !== 0;
+      changed = true;
     }
     const hasLegacyStatus = Object.hasOwn(state, "lastStatus");
     if (

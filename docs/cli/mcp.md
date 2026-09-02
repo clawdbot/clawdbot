@@ -551,6 +551,8 @@ These examples save server definitions only. Run `openclaw mcp doctor --probe` a
 
 Use `--json` for scripts and dashboards. Field sets can grow over time, so consumers should ignore unknown keys.
 
+Read commands report invalid config, unknown servers, and disabled named probes as `{ "ok": false, "error": { "type": "cli_error", "message": "..." } }` with a nonzero exit. Once `doctor` or `probe` produces a report, errors remain in that report rather than producing a second JSON document.
+
 <AccordionGroup>
   <Accordion title="status --json">
     ```json

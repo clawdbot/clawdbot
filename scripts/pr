@@ -287,9 +287,11 @@ Usage:
     --auto-merge selects pinned immediate squash for MERGEABLE/CLEAN, auto for MERGEABLE/BEHIND.
     OPENCLAW_PR_AUTO_MERGE=1 is equivalent.
     Repeated merge-run reconciles retained outcomes; it never retries an uncertain dispatch.
-  scripts/pr merge-recover <PR> <OUTCOME_OID> --confirmed-operator-recovery
+  scripts/pr merge-recover <PR> <OUTCOME_OID> --confirmed-operator-recovery [--replacement-head <SHA>]
     Explicitly authorize one new attempt after inspecting the retained outcome and remote history.
-    Keeps prior evidence and reruns admission; requires the same head/method and no auto/queue/admin route.
+    Defaults to the retained head; replacement requires an explicitly approved full lowercase 40-character SHA,
+    freshly authored exact-head review/preparation and completed CI proof. Never rebases automatically.
+    Keeps prior evidence and reruns admission; requires the same method and no auto/queue/admin route.
 
   --dev-wrapper permits a mismatched local wrapper only for subcommands
   classified advisory. OPENCLAW_PR_DEV_WRAPPER=1 is equivalent.
@@ -387,7 +389,9 @@ main() {
       fi
       ;;
     merge-recover)
-      [ "$#" -eq 3 ] && [[ "$2" =~ ^[0-9a-f]{40}$ ]] && [ "$3" = "--confirmed-operator-recovery" ] || { usage; exit 2; }
+      { [ "$#" -eq 3 ] || { [ "$#" -eq 5 ] && [ "$4" = "--replacement-head" ] && [[ "$5" =~ ^[0-9a-f]{40}$ ]]; }; } &&
+        is_canonical_pr_number "$1" && [[ "$2" =~ ^[0-9a-f]{40}$ ]] &&
+        [ "$3" = "--confirmed-operator-recovery" ] || { usage; exit 2; }
       ;;
     review-init | review-checkout-main | review-checkout-pr | review-claim | review-guard | review-artifacts-init | review-validate-artifacts | prepare-init | prepare-validate-commit | prepare-gates | prepare-push | prepare-sync-head | prepare-run | ci-dispatch | merge-verify)
       [ "$#" -ge 1 ] || { usage; exit 2; }
@@ -520,7 +524,7 @@ main() {
       merge_run "$pr" "$auto_merge"
       ;;
     merge-recover)
-      merge_run "$1" false "$2"
+      merge_run "$1" false "$2" "${5:-}"
       ;;
     *)
       usage

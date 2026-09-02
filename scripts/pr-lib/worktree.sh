@@ -77,6 +77,8 @@ require_no_ignored_transition_paths() {
   local source="$2"
   local target="$3"
   local file
+  # Keep ls-files' literal subtree matching: check-ignore on a directory misses
+  # ignored descendants that restore would delete. Bound argv; skip empty diffs.
   git diff --name-only --no-renames -z "$source" "$target" |
     while IFS= read -r -d '' file; do
       case "$file" in
@@ -85,19 +87,20 @@ require_no_ignored_transition_paths() {
           return 1
           ;;
       esac
-    done || return 1
-
-  # Ask Git about every transition path at once. Per-path ignored-file scans
-  # become prohibitively slow when a PR is far behind main.
-  git diff --name-only --no-renames -z "$source" "$target" |
-    { git check-ignore -z --stdin || [ "$?" -eq 1 ]; } |
+      printf ':(literal)%s\0' "$file"
+      # A file or symlink ancestor would also be replaced; ordinary directories
+      # may contain unrelated ignored data and must not widen the query.
+      while [[ "$file" == */* ]]; do
+        file=${file%/*}
+        if [ -L "$file" ] || { [ -e "$file" ] && [ ! -d "$file" ]; }; then
+          printf ':(literal)%s\0' "$file"
+        fi
+      done
+    done |
+    xargs -0 -r -s 32768 git ls-files --others --ignored --exclude-standard -z -- |
     while IFS= read -r -d '' file; do
-      # check-ignore also reports paths that do not exist. Only an existing
-      # ignored entry can be overwritten by the transition.
-      if [ -e "$file" ] || [ -L "$file" ]; then
-        refuse_review_transition "$pr" "ignored file '$file' would be overwritten by the journaled transition."
-        return 1
-      fi
+      refuse_review_transition "$pr" "ignored file '$file' would be overwritten by the journaled transition."
+      return 1
     done
 }
 
@@ -165,8 +168,8 @@ recover_review_transition() {
     return 1
   }
   IFS=$'\t' read -r source target mode branch <<<"$fields"
-  if ! git cat-file -e "$source^{commit}" 2>/dev/null ||
-    ! git cat-file -e "$target^{commit}" 2>/dev/null ||
+  if ! GIT_NO_LAZY_FETCH=1 git cat-file -e "$source^{commit}" 2>/dev/null ||
+    ! GIT_NO_LAZY_FETCH=1 git cat-file -e "$target^{commit}" 2>/dev/null ||
     { [ "$mode" = "branch" ] && [ "$branch" != "temp/pr-$pr" ]; }
   then
     refuse_review_transition "$pr" "the transition journal names an invalid endpoint or branch."

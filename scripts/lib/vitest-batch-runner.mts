@@ -1,8 +1,10 @@
 // Runs grouped batches through the repository's installed Vitest entrypoint.
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import type { TestHomeSelection } from "../../test/test-home-policy.mts";
 import { resolveVitestCliEntry, resolveVitestNodeArgs } from "../run-vitest.mts";
 import { installVitestProcessGroupCleanup } from "../vitest-process-group.mts";
+import { resolveVitestHomeSelection } from "./vitest-home-selection.mts";
 import { spawnOwnedVitestProcess } from "./vitest-process.mts";
 import type { VitestReportOutcome } from "./vitest-report-owner.mts";
 
@@ -10,6 +12,8 @@ export type VitestBatchRunParams = {
   args: string[];
   config: string;
   env?: NodeJS.ProcessEnv;
+  // Owner-generated report configs retain their validated original selection.
+  homeMode?: TestHomeSelection;
   targets: string[];
   onComplete?: (outcome: VitestReportOutcome) => void;
 };
@@ -26,6 +30,12 @@ export async function runVitestBatch(params: VitestBatchRunParams): Promise<numb
     let forwardedSignal: NodeJS.Signals | undefined;
     // Match project runs: installed tooling must not rediscover pnpm in an isolated HOME.
     const { child, completion } = spawnOwnedVitestProcess({
+      homeMode:
+        params.homeMode ??
+        resolveVitestHomeSelection(["--config", params.config, ...params.args, ...params.targets], {
+          cwd: repoRoot,
+          env: params.env,
+        }),
       command: process.execPath,
       args: [
         ...resolveVitestNodeArgs(params.env),

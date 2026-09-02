@@ -35,7 +35,6 @@ import {
   resolveFallbackCurrentProviderId,
   resolveMemoryFallbackProviderRequest,
 } from "./manager-provider-state.js";
-import { type MemoryReindexLockHandle, waitForMemoryReindexLock } from "./manager-reindex-lock.js";
 import {
   MEMORY_INDEX_PROVENANCE_VERSION,
   resolveConfiguredScopeHash,
@@ -155,236 +154,231 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
   }
 
   protected async runSync(params?: MemorySyncParams) {
+    const hasTargetSessionRequest = this.hasRequestedTargetSessionSync(params);
+    let needsFullReindex = Boolean(params?.force && !hasTargetSessionRequest);
     try {
-      await this.runSyncPass(params);
-    } finally {
-      // Run after every sync path and after any shadow reindex scope has ended,
-      // so the cap is enforced once against the published live database.
-      this.pruneEmbeddingCacheIfNeeded?.();
-    }
-  }
+      // An unavailable configured provider must not replace semantic vectors
+      // with FTS-only rows; fresh and already-FTS-only indexes remain safe.
+      this.assertFtsOnlySyncAllowed();
 
-  private async runSyncPass(params?: MemorySyncParams) {
-    // Guard: if an embedding provider is configured but currently unavailable,
-    // abort sync to prevent silently degrading an existing semantic vector index
-    // to fts-only and wiping existing semantic vectors.
-    // This only protects existing semantic indexes; fresh or already-fts-only
-    // indexes can safely sync without an embedding provider.
-    this.assertFtsOnlySyncAllowed();
+      const syncProvider = this.syncProviderGeneration
+        ? this.syncProviderGeneration.provider
+        : this.provider;
 
-    const syncProvider = this.syncProviderGeneration
-      ? this.syncProviderGeneration.provider
-      : this.provider;
-
-    const progress = params?.progress ? this.createSyncProgress(params.progress) : undefined;
-    if (progress) {
-      progress.report({
-        completed: progress.completed,
-        total: progress.total,
-        label: "Loading vector extension…",
-      });
-    }
-    // Keyword-only generations never write vectors, so they must not wait for
-    // the vector extension before text and FTS indexing can proceed.
-    const vectorReady = syncProvider ? await this.ensureVectorReady() : false;
-    const meta = this.readMeta();
-    // Resolve and index a targeted session against one corpus snapshot. A reset
-    // between separate enumerations could otherwise replace the chosen identity.
-    const targetSessionSync = this.hasRequestedTargetSessionSync(params)
-      ? await this.resolveTargetSessionSyncPlan({
-          sessions: params?.sessions,
-          archiveFiles: params?.archiveFiles,
-        })
-      : null;
-    const targetArchiveFiles = targetSessionSync?.targetArchiveFiles ?? null;
-    const hasTargetArchiveFiles = targetArchiveFiles !== null;
-    if (this.hasRequestedTargetSessionSync(params) && !hasTargetArchiveFiles) {
-      return;
-    }
-    if (params?.reason === "cli" && !params.force && !hasTargetArchiveFiles) {
-      await this.markSessionStartupCatchupDirtyFiles();
-    }
-    const syncProviderKey = this.syncProviderGeneration
-      ? this.syncProviderGeneration.providerKey
-      : this.providerKey;
-    const syncProviderIdentities =
-      this.syncProviderGeneration?.identities ?? this.resolveProviderIndexIdentities();
-    const indexIdentity = resolveMemoryIndexIdentityState({
-      meta,
-      // Also detects provider→FTS-only transitions so orphaned old-model FTS rows are cleaned up.
-      provider: syncProvider ? { id: syncProvider.id, model: syncProvider.model } : null,
-      providerKey: syncProviderKey ?? undefined,
-      providerAliases: syncProviderIdentities.slice(1),
-      configuredSources: resolveConfiguredSourcesForMeta(this.sources),
-      configuredScopeHash: resolveConfiguredScopeHash({
-        workspaceDir: this.workspaceDir,
-        extraPaths: this.settings.extraPaths,
-        multimodal: {
-          enabled: this.settings.multimodal.enabled,
-          modalities: this.settings.multimodal.modalities,
-          maxFileBytes: this.settings.multimodal.maxFileBytes,
-        },
-      }),
-      chunkTokens: this.settings.chunking.tokens,
-      chunkOverlap: this.settings.chunking.overlap,
-      vectorReady,
-      hasIndexedChunks: this.hasIndexedChunks(),
-      ftsTokenizer: this.settings.store.fts.tokenizer,
-    });
-    const hasIndexedChunks = this.hasIndexedChunks();
-    const needsInitialIndex = indexIdentity.status !== "valid" && !hasIndexedChunks;
-    // Missing metadata cannot prove whether existing chunks were semantic.
-    // Wait for the configured provider before replacing them with a rebuilt index,
-    // unless every existing chunk is FTS-only — in that case rebuilding as
-    // FTS-only is safe even without a provider because no semantic data is lost.
-    // Gate the chunk-model scan: only compute when identity is missing,
-    // chunks exist, and the provider is unavailable (no target session files
-    // is already checked by needsMissingIdentityReindex below).
-    const needsFtsOnlyClassification =
-      indexIdentity.status === "missing" &&
-      hasIndexedChunks &&
-      syncProvider === null &&
-      Boolean(this.settings.provider) &&
-      this.settings.provider !== "none";
-    const hasOnlyFtsChunks = needsFtsOnlyClassification && !this.hasSemanticChunks();
-    const canRebuildMissingIdentity =
-      syncProvider !== null ||
-      !this.settings.provider ||
-      this.settings.provider === "none" ||
-      hasOnlyFtsChunks;
-    const needsMissingIdentityReindex =
-      indexIdentity.status === "missing" && !hasTargetArchiveFiles && canRebuildMissingIdentity;
-    const needsExplicitIdentityReindex =
-      params?.reason === "cli" && indexIdentity.status !== "valid" && !hasTargetArchiveFiles;
-    // Source hashes do not reflect chunk boundaries, so an implementation
-    // upgrade must rebuild the shadow index instead of attempting dirty sync.
-    const needsChunkingVersionReindex =
-      meta !== null && meta.chunkingVersion !== MEMORY_CHUNKING_VERSION && !hasTargetArchiveFiles;
-    const canRunRetryFullReindex =
-      indexIdentity.status !== "missing" || needsInitialIndex || canRebuildMissingIdentity;
-    const needsFullReindex =
-      (params?.force && !hasTargetArchiveFiles) ||
-      needsInitialIndex ||
-      needsMissingIdentityReindex ||
-      needsExplicitIdentityReindex ||
-      needsChunkingVersionReindex ||
-      (this.memoryFullRetryDirty && canRunRetryFullReindex) ||
-      (this.sessionsFullRetryDirty && indexIdentity.status !== "valid" && canRunRetryFullReindex);
-    const needsFullSessionReindex = needsFullReindex || this.sessionsFullRetryDirty;
-    if (indexIdentity.status !== "valid" && !needsFullReindex) {
-      this.dirty = true;
-      const sessionsDirty = markMemoryTargetArchiveFilesDirty({
-        sessionsDirtyFiles: this.sessionsDirtyFiles,
-        targetArchiveFiles,
-      });
-      if (sessionsDirty) {
-        this.sessionsDirty = true;
+      const progress = params?.progress ? this.createSyncProgress(params.progress) : undefined;
+      if (progress) {
+        progress.report({
+          completed: progress.completed,
+          total: progress.total,
+          label: "Loading vector extension…",
+        });
       }
-      return;
-    }
-    if (!needsFullSessionReindex) {
-      const targetedSessionSync = await runMemoryTargetedSessionSync({
-        hasSessionSource: this.sources.has("sessions"),
-        targetArchiveFiles,
-        reason: params?.reason,
-        progress: progress ?? undefined,
-        sessionsFullRetryDirty: this.sessionsFullRetryDirty,
-        sessionsReconcileDirty: this.sessionsReconcileDirty,
-        sessionsDirtyFiles: this.sessionsDirtyFiles,
-        syncArchiveFiles: async (targetedParams) => {
-          await this.syncArchiveFiles({
-            ...targetedParams,
-            corpusEntries: targetSessionSync?.corpusEntries,
-          });
-        },
-        shouldFallbackOnError: (err) => this.shouldFallbackOnError(err),
-        activateFallbackProvider: async (reason) => {
-          this.endSyncProviderGeneration();
-          return await this.activateFallbackProvider(reason);
-        },
+      // Keyword-only generations never write vectors, so they must not wait for
+      // the vector extension before text and FTS indexing can proceed.
+      const vectorReady = syncProvider ? await this.ensureVectorReady() : false;
+      const meta = this.readMeta();
+      // Resolve and index a targeted session against one corpus snapshot. A reset
+      // between separate enumerations could otherwise replace the chosen identity.
+      const targetSessionSync = hasTargetSessionRequest
+        ? await this.resolveTargetSessionSyncPlan({
+            sessions: params?.sessions,
+            archiveFiles: params?.archiveFiles,
+          })
+        : null;
+      const targetArchiveFiles = targetSessionSync?.targetArchiveFiles ?? null;
+      const hasTargetArchiveFiles = targetArchiveFiles !== null;
+      if (hasTargetSessionRequest && !hasTargetArchiveFiles) {
+        return;
+      }
+      if (params?.reason === "cli" && !params.force && !hasTargetArchiveFiles) {
+        await this.markSessionStartupCatchupDirtyFiles();
+      }
+      const syncProviderKey = this.syncProviderGeneration
+        ? this.syncProviderGeneration.providerKey
+        : this.providerKey;
+      const syncProviderIdentities =
+        this.syncProviderGeneration?.identities ?? this.resolveProviderIndexIdentities();
+      const indexIdentity = resolveMemoryIndexIdentityState({
+        meta,
+        // Also detects provider→FTS-only transitions so orphaned old-model FTS rows are cleaned up.
+        provider: syncProvider ? { id: syncProvider.id, model: syncProvider.model } : null,
+        providerKey: syncProviderKey ?? undefined,
+        providerAliases: syncProviderIdentities.slice(1),
+        configuredSources: resolveConfiguredSourcesForMeta(this.sources),
+        configuredScopeHash: resolveConfiguredScopeHash({
+          workspaceDir: this.workspaceDir,
+          extraPaths: this.settings.extraPaths,
+          multimodal: {
+            enabled: this.settings.multimodal.enabled,
+            modalities: this.settings.multimodal.modalities,
+            maxFileBytes: this.settings.multimodal.maxFileBytes,
+          },
+        }),
+        chunkTokens: this.settings.chunking.tokens,
+        chunkOverlap: this.settings.chunking.overlap,
+        vectorReady,
+        hasIndexedChunks: this.hasIndexedChunks(),
+        ftsTokenizer: this.settings.store.fts.tokenizer,
       });
-      if (targetedSessionSync.handled) {
-        this.sessionsDirty = targetedSessionSync.sessionsDirty;
-        if (targetedSessionSync.failure) {
-          this.syncOutcomes.recordActiveFailure(targetedSessionSync.failure.error);
+      const hasIndexedChunks = this.hasIndexedChunks();
+      const needsInitialIndex = indexIdentity.status !== "valid" && !hasIndexedChunks;
+      // Missing metadata cannot prove whether existing chunks were semantic.
+      // Wait for the configured provider before replacing them with a rebuilt index,
+      // unless every existing chunk is FTS-only — in that case rebuilding as
+      // FTS-only is safe even without a provider because no semantic data is lost.
+      // Gate the chunk-model scan: only compute when identity is missing,
+      // chunks exist, and the provider is unavailable (no target session files
+      // is already checked by needsMissingIdentityReindex below).
+      const needsFtsOnlyClassification =
+        indexIdentity.status === "missing" &&
+        hasIndexedChunks &&
+        syncProvider === null &&
+        Boolean(this.settings.provider) &&
+        this.settings.provider !== "none";
+      const hasOnlyFtsChunks = needsFtsOnlyClassification && !this.hasSemanticChunks();
+      const canRebuildMissingIdentity =
+        syncProvider !== null ||
+        !this.settings.provider ||
+        this.settings.provider === "none" ||
+        hasOnlyFtsChunks;
+      const needsMissingIdentityReindex =
+        indexIdentity.status === "missing" && !hasTargetArchiveFiles && canRebuildMissingIdentity;
+      const needsExplicitIdentityReindex =
+        params?.reason === "cli" && indexIdentity.status !== "valid" && !hasTargetArchiveFiles;
+      // Source hashes do not reflect chunk boundaries, so an implementation
+      // upgrade must rebuild the shadow index instead of attempting dirty sync.
+      const needsChunkingVersionReindex =
+        meta !== null && meta.chunkingVersion !== MEMORY_CHUNKING_VERSION && !hasTargetArchiveFiles;
+      const canRunRetryFullReindex =
+        indexIdentity.status !== "missing" || needsInitialIndex || canRebuildMissingIdentity;
+      needsFullReindex =
+        (params?.force && !hasTargetArchiveFiles) ||
+        needsInitialIndex ||
+        needsMissingIdentityReindex ||
+        needsExplicitIdentityReindex ||
+        needsChunkingVersionReindex ||
+        (this.memoryFullRetryDirty && canRunRetryFullReindex) ||
+        (this.sessionsFullRetryDirty && indexIdentity.status !== "valid" && canRunRetryFullReindex);
+      const needsFullSessionReindex = needsFullReindex || this.sessionsFullRetryDirty;
+      if (indexIdentity.status !== "valid" && !needsFullReindex) {
+        this.dirty = true;
+        const sessionsDirty = markMemoryTargetArchiveFilesDirty({
+          sessionsDirtyFiles: this.sessionsDirtyFiles,
+          targetArchiveFiles,
+        });
+        if (sessionsDirty) {
+          this.sessionsDirty = true;
         }
         return;
       }
-    }
-    try {
-      if (needsFullReindex) {
-        await this.runInPlaceReindex({
+      if (!needsFullSessionReindex) {
+        const targetedSessionSync = await runMemoryTargetedSessionSync({
+          hasSessionSource: this.sources.has("sessions"),
+          targetArchiveFiles,
           reason: params?.reason,
-          force: params?.force,
           progress: progress ?? undefined,
+          sessionsFullRetryDirty: this.sessionsFullRetryDirty,
+          sessionsReconcileDirty: this.sessionsReconcileDirty,
+          sessionsDirtyFiles: this.sessionsDirtyFiles,
+          syncArchiveFiles: async (targetedParams) => {
+            await this.syncArchiveFiles({
+              ...targetedParams,
+              corpusEntries: targetSessionSync?.corpusEntries,
+            });
+          },
+          shouldFallbackOnError: (err) => this.shouldFallbackOnError(err),
+          activateFallbackProvider: async (reason) => {
+            this.endSyncProviderGeneration();
+            return await this.activateFallbackProvider(reason);
+          },
         });
-        return;
+        if (targetedSessionSync.handled) {
+          this.sessionsDirty = targetedSessionSync.sessionsDirty;
+          if (targetedSessionSync.failure) {
+            this.syncOutcomes.recordActiveFailure(targetedSessionSync.failure.error);
+          }
+          return;
+        }
       }
-
-      const shouldSyncMemory =
-        this.sources.has("memory") &&
-        ((!hasTargetArchiveFiles && params?.force) || needsFullReindex || this.dirty);
-      const shouldSyncSessions = this.shouldSyncSessions(params, needsFullReindex);
-
-      if (this.shouldDeferSourceWideBatch()) {
-        await this.executeSourceWideSync({
-          shouldSyncMemory,
-          shouldSyncSessions,
-          needsFullReindex,
-          needsFullSessionReindex,
-          targetArchiveFiles: targetArchiveFiles ? Array.from(targetArchiveFiles) : undefined,
-          progress: progress ?? undefined,
-        });
-        if (shouldSyncMemory) {
-          this.clearMemoryRetryState();
-        }
-        if (shouldSyncSessions) {
-          this.clearSessionRetryState();
-        } else {
-          this.refreshSessionDirtyFlag();
-        }
-      } else {
-        if (shouldSyncMemory) {
-          await this.syncMemoryFiles({ needsFullReindex, progress: progress ?? undefined });
-          this.clearMemoryRetryState();
+      try {
+        if (needsFullReindex) {
+          await this.runInPlaceReindex({
+            reason: params?.reason,
+            force: params?.force,
+            progress: progress ?? undefined,
+          });
+          return;
         }
 
-        if (shouldSyncSessions) {
-          await this.syncArchiveFiles({
-            needsFullReindex: needsFullSessionReindex,
+        const shouldSyncMemory = this.sources.has("memory") && this.dirty;
+        const shouldSyncSessions = this.shouldSyncSessions(params, needsFullReindex);
+
+        if (this.shouldDeferSourceWideBatch()) {
+          await this.executeSourceWideSync({
+            shouldSyncMemory,
+            shouldSyncSessions,
+            needsFullReindex,
+            needsFullSessionReindex,
             targetArchiveFiles: targetArchiveFiles ? Array.from(targetArchiveFiles) : undefined,
             progress: progress ?? undefined,
           });
-          this.clearSessionRetryState();
+          if (shouldSyncMemory) {
+            this.clearMemoryRetryState();
+          }
+          if (shouldSyncSessions) {
+            this.clearSessionRetryState();
+          } else {
+            this.refreshSessionDirtyFlag();
+          }
         } else {
-          this.refreshSessionDirtyFlag();
+          if (shouldSyncMemory) {
+            await this.syncMemoryFiles({ needsFullReindex, progress: progress ?? undefined });
+            this.clearMemoryRetryState();
+          }
+
+          if (shouldSyncSessions) {
+            await this.syncArchiveFiles({
+              needsFullReindex: needsFullSessionReindex,
+              targetArchiveFiles: targetArchiveFiles ? Array.from(targetArchiveFiles) : undefined,
+              progress: progress ?? undefined,
+            });
+            this.clearSessionRetryState();
+          } else {
+            this.refreshSessionDirtyFlag();
+          }
         }
-      }
-    } catch (err) {
-      const reason = formatErrorMessage(err);
-      const shouldFallback = this.shouldFallbackOnError(err);
-      if (shouldFallback) {
-        // A failed generation cannot wait on its own sync lease while activating fallback.
-        this.endSyncProviderGeneration();
-      }
-      const activated = shouldFallback && (await this.activateFallbackProvider(reason));
-      if (activated) {
-        if (needsFullReindex && !hasTargetArchiveFiles) {
-          this.beginSyncProviderGeneration();
-          await this.runInPlaceReindex({
-            reason: params?.reason ?? "fallback",
-            force: true,
-            progress: progress ?? undefined,
-          });
+      } catch (err) {
+        const reason = formatErrorMessage(err);
+        const shouldFallback = this.shouldFallbackOnError(err);
+        if (shouldFallback) {
+          // A failed generation cannot wait on its own sync lease while activating fallback.
+          this.endSyncProviderGeneration();
         }
-        return;
+        const activated = shouldFallback && (await this.activateFallbackProvider(reason));
+        if (activated) {
+          if (needsFullReindex && !hasTargetArchiveFiles) {
+            this.beginSyncProviderGeneration();
+            await this.runInPlaceReindex({
+              reason: params?.reason ?? "fallback",
+              force: true,
+              progress: progress ?? undefined,
+            });
+          }
+          return;
+        }
+        if (!this.provider && this.fts.enabled && this.shouldFallbackOnError(err)) {
+          this.syncOutcomes.recordActiveFailure(err);
+          log.warn(`memory embeddings unavailable; leaving memory index dirty: ${reason}`);
+          return;
+        }
+        throw err;
       }
-      if (!this.provider && this.fts.enabled && this.shouldFallbackOnError(err)) {
-        this.syncOutcomes.recordActiveFailure(err);
-        log.warn(`memory embeddings unavailable; leaving memory index dirty: ${reason}`);
-        return;
+    } finally {
+      // Ordinary sync exits retain live cleanup, including preflight/no-op exits.
+      // Full rebuild failures (including forced preflight) leave the primary alone.
+      if (!needsFullReindex) {
+        this.pruneEmbeddingCacheIfNeeded();
       }
-      throw err;
     }
   }
 
@@ -524,7 +518,6 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
     const dbPath = resolveUserPath(this.settings.store.databasePath);
     const tempDbPath = `${dbPath}.memory-reindex-${randomUUID()}`;
     const originalDb = this.db;
-    let reindexLock: MemoryReindexLockHandle | undefined;
     let tempDb: DatabaseSync | undefined;
     let tempDbClosed = false;
     const originalRetryState = this.snapshotReindexRetryState();
@@ -535,7 +528,6 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
     );
     try {
       cleanupAgedMemoryReindexTempFiles(dbPath);
-      reindexLock = await waitForMemoryReindexLock(dbPath);
       const originalRevision = readMemoryDatabaseRevision(originalDb);
       tempDb = openMemoryDatabaseAtPath(tempDbPath, this.settings.store.vector.enabled);
       const shadow = new MemoryIndexDatabase(tempDb);
@@ -614,6 +606,9 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
           }
 
           this.writeMeta(nextMeta);
+          // Bound the cache before copying it into the shared agent database;
+          // deleting overflow afterward does not undo primary-file growth.
+          this.pruneEmbeddingCacheIfNeeded();
           return { nextMeta, vectorIndexComplete };
         } finally {
           // Escaped continuations must fail closed, never write to the live DB.
@@ -668,11 +663,6 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
         removeMemoryDatabaseFiles(tempDbPath);
       } catch (err) {
         log.warn(`failed to remove memory reindex shadow database: ${formatErrorMessage(err)}`);
-      }
-      try {
-        reindexLock?.release();
-      } catch (err) {
-        log.warn(`failed to release memory reindex lock for ${dbPath}: ${formatErrorMessage(err)}`);
       }
     }
   }

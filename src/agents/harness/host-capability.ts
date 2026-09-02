@@ -56,7 +56,7 @@ import {
   registerAgentHarnessScheduledToolProjectionCapability,
   registerAgentHarnessTtsProvenanceTransferCapability,
 } from "./host-private-capabilities.js";
-import { createSessionNodeInvocation } from "./node-execution-authority.js";
+import { createSessionNodeAuthorities } from "./node-execution-authority.js";
 
 type AgentHarnessHostAttempt = Partial<EmbeddedRunAttemptParams> &
   Pick<EmbeddedRunAttemptParams, "admittedRunContext" | "runId">;
@@ -653,23 +653,25 @@ export function createAgentHarnessHostCapabilities(params: {
   });
   return {
     capabilities,
-    runWithScope: (run) =>
-      withPluginRuntimeGatewayRequestScope(
+    runWithScope: (run) => {
+      const nodeAuthorities = createSessionNodeAuthorities(
+        attempt,
+        params.pluginId,
+        requiredNodeCommands,
+        assertActive,
+        attempt.abortSignal
+          ? AbortSignal.any([attempt.abortSignal, capabilityAbortController.signal])
+          : capabilityAbortController.signal,
+      );
+      return withPluginRuntimeGatewayRequestScope(
         {
           isWebchatConnect: () => false,
           ...getPluginRuntimeGatewayRequestScope(),
-          invokeWithSessionNodeAuthority: createSessionNodeInvocation(
-            attempt,
-            params.pluginId,
-            requiredNodeCommands,
-            assertActive,
-            attempt.abortSignal
-              ? AbortSignal.any([attempt.abortSignal, capabilityAbortController.signal])
-              : capabilityAbortController.signal,
-          ),
+          ...nodeAuthorities,
         },
         run,
-      ),
+      );
+    },
     close: () => {
       if (!active) {
         return;

@@ -54,6 +54,7 @@ const TOOLING_CLOSURE = [
   "scripts/release-validation-intent.mjs",
   "scripts/release-tooling-identity.mjs",
   "scripts/lib/npm-publish-plan.mjs",
+  "scripts/lib/npm-core-release-packages.json",
   "scripts/lib/plugin-publication-candidates.ts",
   "scripts/lib/plugin-publication-collector.ts",
   "scripts/lib/pnpm-lockfile-documents.mjs",
@@ -229,24 +230,6 @@ function buildFixtureRepo(root: string, version: string, options: FixtureOptions
       ...(options.conflictingPlatformId
         ? ["  publish_windows:", "    uses: ./.github/workflows/docker-release.yml"]
         : []),
-      "",
-    ].join("\n"),
-  );
-  writeFixture(
-    root,
-    ".github/workflows/openclaw-npm-release.yml",
-    [
-      "name: NPM Release",
-      "jobs:",
-      "  preflight:",
-      "    steps:",
-      "      - name: Pack publishable core packages",
-      "        env:",
-      "          CORE_PACKAGE_DIRS: packages/ai packages/gateway-protocol packages/gateway-client",
-      "        run: |",
-      '          if [[ "$package_dir" == "packages/ai" ]] && ! node -e \'const pkg = require("./package.json"); process.exit(pkg.dependencies?.["@openclaw/ai"] ? 0 : 1)\'; then',
-      "            exit 0",
-      "          fi",
       "",
     ].join("\n"),
   );
@@ -606,7 +589,14 @@ describe("release plan producer", () => {
         (_, index) => `100644 blob ${blob}\truntime-${index}-${"x".repeat(180)}.ts\n`,
       ).join(""),
     );
-    const pluginsTree = git(["mktree"], `040000 tree ${runtimeTree}\tnoise\n`);
+    const directoryLeaves = git(
+      ["mktree"],
+      `040000 tree ${runtimeTree}\tpackage.json\n040000 tree ${runtimeTree}\tREADME.md\n`,
+    );
+    const pluginsTree = git(
+      ["mktree"],
+      `040000 tree ${runtimeTree}\tnoise\n040000 tree ${directoryLeaves}\tdirectory-leaves\n120000 blob ${blob}\tlinked-noise\n`,
+    );
     const rootTree = git(
       ["mktree"],
       `${git(["ls-tree", fixture.candidateSha])}\n040000 tree ${pluginsTree}\textensions\n`,
@@ -638,6 +628,65 @@ describe("release plan producer", () => {
       "candidate package inventory must not contain symbolic links",
     );
   });
+
+  it.each([
+    ["package.json", "100644", true, Buffer.from([0xff])],
+    ["README.md", "100644", true, Buffer.from([0xff])],
+    ["package.json", "120000", true, Buffer.from([0xff])],
+    ["runtime.ts", "100644", false, Buffer.from([0xff])],
+    ["package.json", "160000", false, Buffer.from([0xff])],
+    ["README.md", "100644", false, Buffer.from("tab\tname")],
+  ] as const)(
+    "preserves candidate metadata path bytes: %s/%s/%s",
+    (name, mode, rejectsPath, directory) => {
+      const fixture = createFixtureRepo();
+      const expected = produceReleasePlan(sourceParams(fixture)).inventory;
+      const tree = (input: Buffer) =>
+        execFileSync("git", ["mktree", "-z"], {
+          cwd: fixture.root,
+          input,
+          encoding: "utf8",
+        }).trim();
+      const blob = execFileSync("git", ["hash-object", "-w", "--stdin"], {
+        cwd: fixture.root,
+        input: "outside-inventory",
+        encoding: "utf8",
+      }).trim();
+      const entry =
+        mode === "160000" ? `160000 commit ${fixture.candidateSha}` : `${mode} blob ${blob}`;
+      const child = tree(Buffer.from(`${entry}\t${name}\0`));
+      const extensions = tree(
+        Buffer.concat([Buffer.from(`040000 tree ${child}\tname-`), directory, Buffer.from([0])]),
+      );
+      const candidateTree = tree(
+        Buffer.concat([
+          execFileSync("git", ["ls-tree", "-z", fixture.candidateSha], { cwd: fixture.root }),
+          Buffer.from(`040000 tree ${extensions}\textensions\0`),
+        ]),
+      );
+      fixture.candidateSha = execFileSync(
+        "git",
+        [
+          "-c",
+          "user.name=OpenClaw Test",
+          "-c",
+          "user.email=test@example.invalid",
+          "commit-tree",
+          candidateTree,
+          "-p",
+          fixture.candidateSha,
+          "-m",
+          "candidate with byte paths",
+        ],
+        { cwd: fixture.root, encoding: "utf8" },
+      ).trim();
+      if (rejectsPath) {
+        expect(() => produceReleasePlan(sourceParams(fixture))).toThrow();
+      } else {
+        expect(produceReleasePlan(sourceParams(fixture)).inventory).toEqual(expected);
+      }
+    },
+  );
 
   it("requires the final tag only for postpublish confidence", () => {
     const fixture = createFixtureRepo();
@@ -929,9 +978,6 @@ describe("release plan producer", () => {
 exports.parse = source => {
   if (source.includes("rerun_group")) {
     return { on: { workflow_dispatch: { inputs: { rerun_group: { options: ["package", "all", "ci"] } } } } };
-  }
-  if (source.includes("CORE_PACKAGE_DIRS")) {
-    return { jobs: { preflight: { steps: [{ env: { CORE_PACKAGE_DIRS: "packages/ai packages/gateway-protocol packages/gateway-client" } }] } } };
   }
   return {
     jobs: {

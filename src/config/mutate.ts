@@ -147,6 +147,8 @@ export type TransformConfigFileParams<T> = {
   transform: (
     currentConfig: OpenClawConfig,
     context: ConfigMutationContext,
+    // Read-time env stays with host transforms, outside public mutation callbacks.
+    preservation: Pick<ConfigWriteOptions, "envSnapshotForRestore">,
   ) => Promise<ConfigTransformResult<T>> | ConfigTransformResult<T>;
 };
 
@@ -757,7 +759,11 @@ async function tryWriteSingleTopLevelIncludeMutation(params: {
       const currentIncludedValue = resolveConfigEnvVars(authoredIncludeValue, envForRestore, {
         onMissing: () => {},
       });
-      const snapshotIncludedValue = (params.snapshot.sourceConfig as Record<string, unknown>)[key];
+      // Compare source with source: the snapshot may already have converted a
+      // legacy roster even though the conflict-checked include bytes are unchanged.
+      const snapshotSource =
+        params.snapshot.sourceConfigBeforeMigrations ?? params.snapshot.sourceConfig;
+      const snapshotIncludedValue = (snapshotSource as Record<string, unknown>)[key];
       if (!isDeepStrictEqual(currentIncludedValue, snapshotIncludedValue)) {
         throw new ConfigMutationConflictError("included config changed since last load");
       }
@@ -1164,7 +1170,11 @@ async function transformConfigFileAttempt<T>(
   const afterWrite = resolveConfigWriteAfterWrite(
     params.afterWrite ?? params.writeOptions?.afterWrite,
   );
-  const transformed = await params.transform(baseConfig, { snapshot, previousHash, attempt });
+  const transformed = await params.transform(
+    baseConfig,
+    { snapshot, previousHash, attempt },
+    { envSnapshotForRestore: writeOptions.envSnapshotForRestore },
+  );
   const committed = await (params.commit ?? commitPreparedConfigMutation)({
     nextConfig: transformed.nextConfig,
     snapshot,

@@ -6,7 +6,6 @@ import { icons } from "./icons.ts";
 import { menuShortcutHint } from "./menu-shortcuts.ts";
 import { renderSessionAppearancePicker } from "./session-icon-picker.ts";
 import {
-  compactSessionOwnerOptions,
   renderCompactSessionMenuNavigationItem,
   renderCompactSessionMenuView,
   type CompactSessionMenuView,
@@ -394,7 +393,7 @@ export class SessionMenuActions {
       ${batch
         ? nothing
         : state.compact
-          ? compactSessionOwnerOptions(state.ownerOptions, state.selfOwner).length > 0
+          ? state.selfOwner || state.ownerOptions.length > 0
             ? renderCompactSessionMenuNavigationItem({
                 view: "assign-owner",
                 label: t("sessionsView.assignTo"),
@@ -481,7 +480,8 @@ export class SessionMenuActions {
     const state = this.readState();
     return renderCompactSessionMenuView({
       view,
-      ownerOptions: compactSessionOwnerOptions(state.ownerOptions, state.selfOwner),
+      ownerOptions: state.ownerOptions,
+      selfOwner: state.selfOwner,
       currentOwnerId: state.currentOwnerId,
       assignOwnerDisabled: this.actionDisabled("assign-owner"),
       assignOwnerDisabledReason: state.actionDisabledReasons["assign-owner"],

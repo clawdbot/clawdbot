@@ -96,6 +96,7 @@ export const resolveFastModeStateMock = createMock();
 export const getChannelPluginMock = createMock();
 export const retireSessionMcpRuntimeMock = createMock();
 export const cleanupBrowserSessionsForLifecycleEndMock = createMock();
+export const removeCronRunContinuationSessionIfIdleMock = createMock();
 export const callGatewayMock = createMock();
 export const hasUsableWebSearchProviderMock = createMock();
 export const readSessionMessagesAsyncMock = createMock();
@@ -365,6 +366,10 @@ vi.mock("../../agents/agent-bundle-mcp-tools.js", () => ({
 
 vi.mock("../../browser-lifecycle-cleanup.js", () => ({
   cleanupBrowserSessionsForLifecycleEnd: cleanupBrowserSessionsForLifecycleEndMock,
+}));
+
+vi.mock("../../tasks/cron-run-continuation-cleanup.js", () => ({
+  removeCronRunContinuationSessionIfIdle: removeCronRunContinuationSessionIfIdleMock,
 }));
 
 vi.mock("../../gateway/call.runtime.js", () => ({
@@ -801,6 +806,8 @@ function resetRunSessionMocks(): void {
   resolveCronSessionMock.mockReturnValue(makeCronSession());
   callGatewayMock.mockReset();
   callGatewayMock.mockResolvedValue({ ok: true, deleted: true });
+  removeCronRunContinuationSessionIfIdleMock.mockReset();
+  removeCronRunContinuationSessionIfIdleMock.mockResolvedValue(undefined);
   retireSessionMcpRuntimeMock.mockReset();
   retireSessionMcpRuntimeMock.mockResolvedValue(true);
 }

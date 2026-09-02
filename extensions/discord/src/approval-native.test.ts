@@ -35,6 +35,10 @@ function writeStore(store: Record<string, unknown>) {
 }
 
 describe("createDiscordNativeApprovalAdapter", () => {
+  it("subscribes the native runtime to system-agent approval events", () => {
+    expect(getDiscordApprovalCapability().nativeRuntime?.eventKinds).toContain("system-agent");
+  });
+
   it("keeps approval availability enabled when approvers exist but native delivery is off", () => {
     const adapter = createDiscordNativeApprovalAdapter();
     const cfg = {

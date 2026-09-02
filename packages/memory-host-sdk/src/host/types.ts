@@ -158,6 +158,8 @@ export type MemoryProviderStatus = {
     source: MemorySource;
     files: number;
     chunks: number;
+    /** Stored chunk text and JSON embedding bytes, excluding cache and index overhead. */
+    chunkBytes?: number;
     eligible?: number | null;
     issues?: string[];
   }>;

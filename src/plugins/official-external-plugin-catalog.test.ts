@@ -2656,7 +2656,7 @@ describe("official external plugin catalog", () => {
     });
   });
 
-  it("lists Matrix as an official external ClawHub channel after cutover", () => {
+  it("lists Matrix as an official external npm-first channel after cutover", () => {
     const ids = new Set<string>();
     for (const entry of listOfficialExternalPluginCatalogEntries()) {
       const pluginId = resolveOfficialExternalPluginId(entry);
@@ -2670,7 +2670,7 @@ describe("official external plugin catalog", () => {
     expect(resolveOfficialExternalPluginInstall(expectCatalogEntry("matrix"))).toEqual({
       clawhubSpec: "clawhub:@openclaw/matrix",
       npmSpec: "@openclaw/matrix",
-      defaultChoice: "clawhub",
+      defaultChoice: "npm",
       minHostVersion: ">=2026.4.10",
       allowInvalidConfigRecovery: true,
     });

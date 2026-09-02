@@ -1,6 +1,7 @@
 /** Doctor-owned migration of plaintext model-catalog credentials into agent SQLite. */
 import fs from "node:fs";
 import path from "node:path";
+import { isDeepStrictEqual } from "node:util";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { note } from "../../packages/terminal-core/src/note.js";
@@ -11,10 +12,12 @@ import {
   loadPersistedSharedAuthProfileStore,
   mergeAuthProfileStores,
 } from "../agents/auth-profiles/persisted.js";
+import { removeRuntimeExternalProfileReferences } from "../agents/auth-profiles/runtime-external-profile-references.js";
 import { resolveSharedMainAuthAgentDir } from "../agents/auth-profiles/shared-main-dir.js";
 import { updateAuthProfileStoreWithLock } from "../agents/auth-profiles/store.js";
 import type { AuthProfileCredential, AuthProfileStore } from "../agents/auth-profiles/types.js";
 import { isNonSecretApiKeyMarker } from "../agents/model-auth-markers.js";
+import { resolveProviderConfigSecretInput } from "../agents/model-auth-provider-config.js";
 import { parseModelCatalogJson } from "../agents/model-catalog-json.js";
 import {
   isGeneratedPluginModelCatalog,
@@ -51,10 +54,36 @@ function credentialMatches(
   );
 }
 
+function matchesProviderEnvRefMarker(
+  cfg: OpenClawConfig,
+  provider: string,
+  value: string,
+): boolean {
+  const ref = resolveProviderConfigSecretInput(cfg, provider).ref;
+  if (ref?.source !== "env") {
+    return false;
+  }
+  // Generated env markers are provider-scoped. Treating every uppercase value
+  // as a marker would discard valid literal credentials.
+  const id = ref.id.trim();
+  const candidate = value.trim();
+  return candidate === id || candidate === `$${id}` || candidate === `\${${id}}`;
+}
+
+function findProviderSecretRefProfiles(store: AuthProfileStore, cfg: OpenClawConfig) {
+  return Object.entries(store.profiles).filter(
+    ([, credential]) =>
+      credential.type === "api_key" &&
+      credential.key &&
+      matchesProviderEnvRefMarker(cfg, credential.provider, credential.key),
+  );
+}
+
 function collectCredentials(
   providers: unknown,
   store: AuthProfileStore,
   blockedStores: readonly AuthProfileStore[] = [],
+  cfg?: OpenClawConfig,
 ): PlaintextCredential[] {
   if (!isRecord(providers)) {
     return [];
@@ -67,6 +96,8 @@ function collectCredentials(
     const credential = { provider, key };
     if (
       !key.trim() ||
+      // An authored SecretRef owns this provider; generated catalog copies are never fallbacks.
+      (cfg && resolveProviderConfigSecretInput(cfg, provider).ref) ||
       isNonSecretApiKeyMarker(key) ||
       store.profiles[key] !== undefined ||
       findMatchingProfileId(store, credential, blockedStores) !== undefined
@@ -133,20 +164,37 @@ async function persistCredentials(params: {
   blockedStores?: readonly AuthProfileStore[];
   credentials: readonly PlaintextCredential[];
   inheritedStore?: AuthProfileStore;
+  invalidProfiles: ReadonlyArray<[string, AuthProfileCredential]>;
   stateDir: string;
-}): Promise<number> {
+}): Promise<{ migrated: number; removed: number }> {
   const credentials = uniqueCredentials(params.credentials);
-  if (credentials.length === 0) {
-    return 0;
+  const { invalidProfiles } = params;
+  if (credentials.length === 0 && invalidProfiles.length === 0) {
+    return { migrated: 0, removed: 0 };
   }
   const blockedStores = params.blockedStores ?? [];
   const profileIds = new Map<string, PlaintextCredential>();
   let added = 0;
+  let removedProfiles: [string, AuthProfileCredential][] = [];
   const updated = await updateAuthProfileStoreWithLock({
     agentDir: params.agentDir,
     stateDir: params.stateDir,
     saveOptions: { filterExternalAuthProfiles: false, syncExternalCli: false },
     updater: (localStore) => {
+      // Confirmation can pause while another writer replaces a marker. Only remove
+      // the exact credential observed before prompting, including its references.
+      removedProfiles = invalidProfiles.filter(([profileId, credential]) =>
+        isDeepStrictEqual(localStore.profiles[profileId], credential),
+      );
+      if (removedProfiles.length > 0) {
+        Object.assign(
+          localStore,
+          removeRuntimeExternalProfileReferences({
+            store: localStore,
+            profileIds: new Set(removedProfiles.map(([profileId]) => profileId)),
+          }),
+        );
+      }
       const effectiveStore = params.inheritedStore
         ? mergeAuthProfileStores(params.inheritedStore, localStore)
         : localStore;
@@ -166,7 +214,7 @@ async function persistCredentials(params: {
         effectiveStore.profiles[profileId] = localStore.profiles[profileId];
         added += 1;
       }
-      return added > 0;
+      return added > 0 || removedProfiles.length > 0;
     },
   });
   if (!updated) {
@@ -181,12 +229,17 @@ async function persistCredentials(params: {
   const effectivePersisted = params.inheritedStore
     ? mergeAuthProfileStores(params.inheritedStore, persisted ?? emptyStore())
     : persisted;
+  for (const [profileId, credential] of removedProfiles) {
+    if (isDeepStrictEqual(persisted?.profiles[profileId], credential)) {
+      throw new Error(`credential cleanup verification failed for profile "${profileId}"`);
+    }
+  }
   for (const [profileId, credential] of profileIds) {
     if (!credentialMatches(effectivePersisted?.profiles[profileId], credential)) {
       throw new Error(`credential verification failed for provider "${credential.provider}"`);
     }
   }
-  return added;
+  return { migrated: added, removed: removedProfiles.length };
 }
 
 function collectAgentCatalogs(agentDir: string, warnings: string[]): AgentCatalogs {
@@ -234,7 +287,7 @@ export async function maybeMigrateModelCatalogCredentials(params: {
   env?: NodeJS.ProcessEnv;
   prompter: DoctorPrompter;
   runtime: RuntimeEnv;
-}): Promise<{ detected: number; migrated: number; warnings: string[] }> {
+}): Promise<{ detected: number; migrated: number; removed: number; warnings: string[] }> {
   const warnings: string[] = [];
   const env = params.env ?? process.env;
   const stateDir = resolveStateDir(env);
@@ -260,45 +313,67 @@ export async function maybeMigrateModelCatalogCredentials(params: {
     params.cfg.models?.providers,
     mainStore,
     childStores,
+    params.cfg,
   );
   const catalogCredentials = catalogs.map((catalog, index) =>
     uniqueCredentials(
       catalog.providers.flatMap((providers) =>
-        collectCredentials(providers, effectiveStores[index] ?? mainStore),
+        collectCredentials(providers, effectiveStores[index] ?? mainStore, [], params.cfg),
       ),
     ),
   );
+  const invalidMainProfiles = findProviderSecretRefProfiles(mainStore, params.cfg);
+  const invalidCatalogProfiles = catalogs.map((catalog) =>
+    catalog.agentDir === mainAgentDir
+      ? []
+      : findProviderSecretRefProfiles(catalog.localStore, params.cfg),
+  );
   const detected =
     configCredentials.length + catalogCredentials.reduce((sum, entries) => sum + entries.length, 0);
+  const removable =
+    invalidMainProfiles.length +
+    invalidCatalogProfiles.reduce((sum, profiles) => sum + profiles.length, 0);
 
   for (const warning of warnings) {
     params.runtime.error(warning);
   }
-  if (detected === 0) {
-    return { detected, migrated: 0, warnings };
+  if (detected === 0 && removable === 0) {
+    return { detected, migrated: 0, removed: 0, warnings };
   }
 
-  note(
-    `Found ${detected} plaintext model credential${detected === 1 ? "" : "s"}. Run openclaw doctor --fix to copy and verify them in agent SQLite before plaintext catalog authentication is retired.`,
-    "Model catalog credentials",
-  );
+  if (detected > 0) {
+    note(
+      `Found ${detected} plaintext model credential${detected === 1 ? "" : "s"}. Run openclaw doctor --fix to copy and verify them in agent SQLite before plaintext catalog authentication is retired.`,
+      "Model catalog credentials",
+    );
+  }
+  if (removable > 0) {
+    note(
+      `Found ${removable} stored unresolved model credential marker${removable === 1 ? "" : "s"}. Run openclaw doctor --fix to remove them from agent SQLite.`,
+      "Model catalog credentials",
+    );
+  }
   const shouldRepair =
     params.prompter.shouldRepair ||
     (await params.prompter.confirmAutoFix({
-      message: "Copy model credentials into agent SQLite now?",
+      message: "Repair model credentials in agent SQLite now?",
       initialValue: true,
     }));
   if (!shouldRepair) {
-    return { detected, migrated: 0, warnings };
+    return { detected, migrated: 0, removed: 0, warnings };
   }
 
   let migrated = 0;
+  let removed = 0;
   try {
-    migrated += await persistCredentials({
+    const result = await persistCredentials({
       blockedStores: childStores,
       credentials: configCredentials,
+      invalidProfiles: invalidMainProfiles,
       stateDir,
     });
+    migrated += result.migrated;
+    removed += result.removed;
   } catch (error) {
     const warning = `Could not migrate configured model credentials: ${error instanceof Error ? error.message : String(error)}`;
     warnings.push(warning);
@@ -308,12 +383,15 @@ export async function maybeMigrateModelCatalogCredentials(params: {
   const migratedMainStore = loadPersistedSharedAuthProfileStore(env) ?? mainStore;
   for (const [index, catalog] of catalogs.entries()) {
     try {
-      migrated += await persistCredentials({
+      const result = await persistCredentials({
         ...(catalog.agentDir === mainAgentDir ? {} : { agentDir: catalog.agentDir }),
         credentials: catalogCredentials[index] ?? [],
+        invalidProfiles: invalidCatalogProfiles[index] ?? [],
         ...(catalog.agentDir === mainAgentDir ? {} : { inheritedStore: migratedMainStore }),
         stateDir,
       });
+      migrated += result.migrated;
+      removed += result.removed;
     } catch (error) {
       const warning = `Could not migrate model credentials for ${shortenHomePath(catalog.agentDir)}: ${error instanceof Error ? error.message : String(error)}`;
       warnings.push(warning);
@@ -327,5 +405,11 @@ export async function maybeMigrateModelCatalogCredentials(params: {
       "Doctor changes",
     );
   }
-  return { detected, migrated, warnings };
+  if (removed > 0) {
+    note(
+      `Removed ${removed} unresolved model credential marker${removed === 1 ? "" : "s"} from agent SQLite.`,
+      "Doctor changes",
+    );
+  }
+  return { detected, migrated, removed, warnings };
 }

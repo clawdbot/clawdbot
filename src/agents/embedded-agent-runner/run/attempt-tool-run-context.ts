@@ -1,3 +1,4 @@
+import type { ThinkLevel } from "../../../auto-reply/thinking.js";
 import type { GroupToolPolicyConfig } from "../../../config/types.tools.js";
 import {
   freezeDiagnosticTraceContext,
@@ -10,6 +11,7 @@ import type { EmbeddedRunTrigger } from "./params.js";
  * Builds the stable tool-run context forwarded into an embedded-attempt execution.
  */
 export function buildEmbeddedAttemptToolRunContext(params: {
+  thinkLevel?: ThinkLevel;
   trigger?: EmbeddedRunTrigger;
   jobId?: string;
   memoryFlushWritePath?: string;
@@ -27,6 +29,7 @@ export function buildEmbeddedAttemptToolRunContext(params: {
       params.swarmCollector && params.swarmOutputSchema ? ["structured_output"] : undefined,
   });
   return {
+    requesterThinkingLevel: params.thinkLevel,
     trigger: params.trigger,
     jobId: params.jobId,
     memoryFlushWritePath: params.memoryFlushWritePath,

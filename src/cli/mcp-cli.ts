@@ -43,6 +43,7 @@ import { defaultRuntime } from "../runtime.js";
 import { createLazyRuntimeMethod } from "../shared/lazy-runtime.js";
 import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
 import { formatCliCommand } from "./command-format.js";
+import { formatCliJsonFailure } from "./failure-output.js";
 import { resolveGatewayAuthOptions } from "./gateway-secret-options.js";
 import { requestExitAfterOneShotOutput } from "./one-shot-exit.js";
 import { applyParentDefaultHelpAction } from "./program/parent-default-help.js";
@@ -56,8 +57,12 @@ const disposeAllSessionMcpRuntimes = createLazyRuntimeMethod(
   (runtime) => runtime.disposeAllSessionMcpRuntimes,
 );
 
-function fail(message: string): never {
-  defaultRuntime.error(message);
+function fail(message: string, json?: boolean): never {
+  if (json) {
+    printJson(formatCliJsonFailure(message));
+  } else {
+    defaultRuntime.error(message);
+  }
   defaultRuntime.exit(1);
   throw new Error(message);
 }
@@ -700,7 +705,7 @@ export function registerMcpCli(program: Command) {
     .action(async (opts: { json?: boolean }) => {
       const loaded = await listConfiguredMcpServers();
       if (!loaded.ok) {
-        fail(loaded.error);
+        fail(loaded.error, opts.json);
       }
       if (opts.json) {
         printJson(loaded.mcpServers);
@@ -736,12 +741,13 @@ export function registerMcpCli(program: Command) {
     .action(async (name: string | undefined, opts: { json?: boolean }) => {
       const loaded = await listConfiguredMcpServers();
       if (!loaded.ok) {
-        fail(loaded.error);
+        fail(loaded.error, opts.json);
       }
       const value = name ? loaded.mcpServers[name] : loaded.mcpServers;
       if (name && !value) {
         fail(
           `No MCP server named "${name}" in ${loaded.path}. Run ${formatCliCommand("openclaw mcp list")} to see configured servers.`,
+          opts.json,
         );
       }
       if (opts.json) {
@@ -764,7 +770,7 @@ export function registerMcpCli(program: Command) {
     .action(async (opts: { json?: boolean; verbose?: boolean }) => {
       const loaded = await listConfiguredMcpServers();
       if (!loaded.ok) {
-        fail(loaded.error);
+        fail(loaded.error, opts.json);
       }
       const status = await buildMcpStatusEntries(loaded.mcpServers);
       if (opts.json) {
@@ -821,7 +827,7 @@ export function registerMcpCli(program: Command) {
     .action(async (name: string | undefined, opts: { json?: boolean }) => {
       const loaded = await listConfiguredMcpServers();
       if (!loaded.ok) {
-        fail(loaded.error);
+        fail(loaded.error, opts.json);
       }
       const servers = name
         ? loaded.mcpServers[name]
@@ -831,11 +837,13 @@ export function registerMcpCli(program: Command) {
       if (!servers) {
         fail(
           `No MCP server named "${name}" in ${loaded.path}. Run ${formatCliCommand("openclaw mcp list")} to see configured servers.`,
+          opts.json,
         );
       }
       if (name && loaded.mcpServers[name]?.enabled === false) {
         fail(
           `MCP server "${name}" is disabled in ${loaded.path}. Run ${formatCliCommand(`openclaw mcp configure ${name} --enable`)} before probing it.`,
+          opts.json,
         );
       }
       // Without this the human output is a bare header: both probe loops are empty,
@@ -892,7 +900,7 @@ export function registerMcpCli(program: Command) {
     .action(async (name: string | undefined, opts: { probe?: boolean; json?: boolean }) => {
       const loaded = await listConfiguredMcpServers();
       if (!loaded.ok) {
-        fail(loaded.error);
+        fail(loaded.error, opts.json);
       }
       const selected = name
         ? loaded.mcpServers[name]
@@ -902,6 +910,7 @@ export function registerMcpCli(program: Command) {
       if (!selected) {
         fail(
           `No MCP server named "${name}" in ${loaded.path}. Run ${formatCliCommand("openclaw mcp list")} to see configured servers.`,
+          opts.json,
         );
       }
       const tasks = Object.entries(selected)

@@ -55,6 +55,25 @@ Provider and channel execution paths must use the active runtime config snapshot
 
 ## Reusable runtime utilities
 
+Channel plugins that deliver agent replies directly can call
+`renderPresentationForDelivery(handler, payload)` from
+`openclaw/plugin-sdk/interactive-runtime` in their `preparePayload` hook. Supply
+the channel's `presentationCapabilities` and `renderPresentation` callback; the
+callback receives a payload with a normalized, adapted `presentation`. This
+shares core outbound rendering's fallback-text policy and removes the portable
+presentation fields after rendering. The callback may be synchronous or async.
+
+Use `attachErrorDiagnostic(error, text)` from `openclaw/plugin-sdk/error-runtime`
+to attach supplemental operator diagnostics to a thrown error without changing
+its identity, message, or failure classification. Mask opaque credentials first;
+the helper also redacts recognized secrets and retains at most 2,048 characters.
+`formatErrorMessageForDisplay(error)` includes the nearest attached diagnostic
+through nested causes and aggregates. Use it only at terminal display boundaries,
+never for retry or authentication decisions. Agent lifecycle errors and terminal
+CLI logs render these diagnostics automatically; successful runs remain quiet.
+Native RPC error messages retain their original text; `agent.wait` renders the
+supplemental diagnostic at its terminal result boundary.
+
 Channel plugins must admit authenticated agent turns through their injected
 `api.runtime.agent.runCommandFromIngress(options, runtime)` capability. The host
 accepts owner authority only from the exact active, trusted plugin registered for
@@ -678,6 +697,8 @@ snapshots; OpenClaw owns all persistence and lifecycle coordination.
     successful plugin result does not prove that the node action occurred.
 
     Plugins that expose node-hosted agent tools can set `agentTool.defaultPlatforms` for non-dangerous commands that should be allowlisted by default. Omit it when operators must opt in with `gateway.nodes.commands.allow`. Dangerous node-host commands should register a node-invoke policy with `api.registerNodeInvokePolicy(...)`; the policy runs in the Gateway after command allowlist checks and before the command is forwarded to the node, so direct `node.invoke` calls, node-hosted plugin tools, and higher-level plugin tools share the same enforcement path.
+
+    `allow-always` remains one policy decision unless the node-invoke policy explicitly declares `standingApproval: { kind: "placement", scope: "<capability>" }`. That opt-in permits later launches only for a high-risk command on the same current managed placement, node pairing, environment owner, workspace, and semantic capability scope, for at most 30 days and never across Gateway restart. Use a stable, content-free scope for a capability whose approval deliberately covers later argument changes. Do not opt in when the approved target or other request arguments must remain exact.
 
     A node command may declare `prepare(context)` for asynchronous native startup.
     Node-host initialization awaits it before publishing the initial manifest or

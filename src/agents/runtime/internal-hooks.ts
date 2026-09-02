@@ -1,5 +1,6 @@
 export {
   acknowledgeInternalToolResult,
+  appendToolLoopWarning,
   attachInternalToolBatchLifecycle,
   attachInternalToolExecutionPreparer,
   attachInternalToolResultAcknowledgement,

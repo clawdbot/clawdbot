@@ -153,7 +153,7 @@ async function resolveInstallPublishTarget(params: {
   };
 }
 
-type PackageDirInstallTransaction = {
+export type PackageDirInstallTransaction = {
   commit(): Promise<void>;
   rollback(): Promise<void>;
 };
@@ -170,6 +170,15 @@ export function requestDeferredPackageDirInstall<T extends object>(params: T): T
     value: true,
   });
   return params;
+}
+
+export function copyPackageDirInstallTransactionRequest<T extends object>(
+  source: object,
+  target: T,
+): T {
+  return isPackageDirInstallCommitDeferred(source)
+    ? requestDeferredPackageDirInstall(target)
+    : target;
 }
 
 function isPackageDirInstallCommitDeferred(params: object): boolean {
@@ -220,6 +229,7 @@ export async function installPackageDir<
   afterCopy?: (installedDir: string) => void | Promise<void>;
   afterInstall?: (installedDir: string) => Promise<InstallPackageDirSuccess | TAfterInstallFailure>;
   afterBackup?: (backupDir: string) => Promise<InstallPackageDirSuccess | TAfterInstallFailure>;
+  beforePersistentApply?: () => void;
 }): Promise<InstallPackageDirSuccess | InstallPackageDirFailure | TAfterInstallFailure> {
   const deferCommit = isPackageDirInstallCommitDeferred(params);
   params.logger?.info?.(`Installing to ${params.targetDir}…`);
@@ -360,17 +370,20 @@ export async function installPackageDir<
 
   if (params.mode === "update" && (await pathExists(canonicalTargetDir))) {
     const backupRoot = path.join(installBaseRealPath, ".openclaw-install-backups");
-    backupDir = path.join(backupRoot, `${path.basename(canonicalTargetDir)}-${Date.now()}`);
+    const backupPath = path.join(backupRoot, `${path.basename(canonicalTargetDir)}-${Date.now()}`);
     try {
       await fs.mkdir(backupRoot, { recursive: true });
       await assertInstallBoundaryPaths({
         installBaseDir: installBaseRealPath,
-        candidatePaths: [backupDir],
+        candidatePaths: [backupPath],
       });
       await assertInstallBaseStable({
         installBaseDir,
         expectedRealPath: installBaseRealPath,
       });
+      // Moving the current install is a mutation too; do not displace it after ownership closes.
+      params.beforePersistentApply?.();
+      backupDir = backupPath;
       await movePathWithCopyFallback({
         from: canonicalTargetDir,
         sourceHardlinks,
@@ -400,6 +413,7 @@ export async function installPackageDir<
       installBaseDir,
       expectedRealPath: installBaseRealPath,
     });
+    params.beforePersistentApply?.();
     await movePathWithCopyFallback({
       from: stageDir,
       sourceHardlinks,
@@ -483,6 +497,7 @@ export async function installPackageDirWithManifestDeps<
   afterCopy?: (installedDir: string) => void | Promise<void>;
   afterInstall?: (installedDir: string) => Promise<InstallPackageDirSuccess | TAfterInstallFailure>;
   afterBackup?: (backupDir: string) => Promise<InstallPackageDirSuccess | TAfterInstallFailure>;
+  beforePersistentApply?: () => void;
 }): Promise<InstallPackageDirSuccess | InstallPackageDirFailure | TAfterInstallFailure> {
   const hasDeps = Object.keys(params.manifestDependencies ?? {}).length > 0;
   return installPackageDir<TAfterInstallFailure>({

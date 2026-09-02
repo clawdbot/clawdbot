@@ -1,6 +1,8 @@
 import { asNullableRecord as readRecord } from "@openclaw/normalization-core/record-coerce";
 
 export type SessionMessageEnvelope = {
+  /** An unsequenced continuation follows this row; null denotes an unsequenced boundary. */
+  afterSequence?: number | null;
   messageId?: unknown;
   messageSeq?: unknown;
   clientRunId?: unknown;
@@ -100,4 +102,21 @@ export function readSessionMessageIdentity(
         ? JSON.stringify([importedFrom, cliSessionId, externalId])
         : null,
   };
+}
+
+/** A commentary item's display identity is separate from the transcript row that later owns it. */
+export function readAssistantStreamSegmentIdentity(
+  message: unknown,
+): { itemId: string; runId?: string } | undefined {
+  const record = readRecord(message);
+  if (readSessionProjectionString(record?.role)?.toLowerCase() !== "assistant") {
+    return undefined;
+  }
+  const fallback = readRecord(record?.openclawStreamFallback);
+  const itemId = readSessionProjectionString(fallback?.itemId);
+  const runId =
+    readSessionMessageIdentity(message)?.runId ??
+    readSessionProjectionString(record?.runId) ??
+    readSessionProjectionString(fallback?.runId);
+  return itemId ? { itemId, ...(runId ? { runId } : {}) } : undefined;
 }

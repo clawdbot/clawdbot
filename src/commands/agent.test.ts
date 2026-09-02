@@ -28,11 +28,16 @@ import { parseSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-m
 import {
   listSessionEntriesCore,
   loadSessionEntry,
+  loadTranscriptEvents,
   replaceSessionEntry,
+  replaceTranscriptEvents,
 } from "../config/sessions/session-accessor.js";
+import { addSessionMember, listSessionMembers } from "../config/sessions/session-sharing-store.js";
 import { clearSessionStoreCacheForTest } from "../config/sessions/store-writer-state.js";
 import type { InternalSessionEntry as SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { getBootEchoContextForSession } from "../gateway/boot-echo-guard.js";
+import { runBootOnce } from "../gateway/boot.js";
 import { emitAgentEvent, onAgentEvent, resetAgentEventsForTest } from "../infra/agent-events.js";
 import { buildOutboundBaseSessionKey } from "../infra/outbound/base-session-key.js";
 import { loadEnabledClaudeBundleCommands } from "../plugins/bundle-commands.js";
@@ -594,6 +599,78 @@ beforeEach(() => {
 });
 
 describe("agentCommand", () => {
+  it.each([false, true])(
+    "runs BOOT.md with an existing SQLite boot session and cleans up after failure=%s",
+    async (fail) => {
+      await withTempHome(async (home) => {
+        const storePath = path.join(home, "sessions.json");
+        const cfg = mockConfig(home, storePath, undefined, undefined, [
+          { id: "main", default: true },
+        ]);
+        const workspaceDir = path.join(home, "openclaw");
+        fs.mkdirSync(workspaceDir, { recursive: true });
+        fs.writeFileSync(path.join(workspaceDir, "BOOT.md"), "Check status.");
+        const priorScope = { storePath, sessionKey: "agent:main:boot", sessionId: "previous-boot" };
+        await replaceSessionEntry(priorScope, {
+          sessionId: priorScope.sessionId,
+          updatedAt: Date.now(),
+          label: "Previous boot",
+          visibility: "read-only",
+        });
+        const transcript = [
+          { type: "session", id: priorScope.sessionId, cwd: workspaceDir },
+          {
+            type: "message",
+            id: "old-message",
+            parentId: null,
+            message: { role: "user", content: "Keep this history." },
+          },
+        ];
+        await replaceTranscriptEvents(priorScope, transcript);
+        const priorEntry = loadSessionEntry(priorScope);
+        const { member } = addSessionMember(priorScope, {
+          identityId: "boot-history-reader",
+          addedBy: "operator",
+        });
+        const bootSessions = new Map<string, string>();
+        vi.mocked(runEmbeddedAgent).mockImplementation(async (params) => {
+          const sessionKey = expectDefined(params.sessionKey, "boot session key");
+          expect(params.sessionId).not.toBe(priorScope.sessionId);
+          expect(getBootEchoContextForSession(sessionKey)).toContain("Check status.");
+          bootSessions.set(sessionKey, params.sessionId);
+          await replaceTranscriptEvents({ storePath, sessionKey, sessionId: params.sessionId }, [
+            { type: "session", id: params.sessionId, cwd: workspaceDir },
+          ]);
+          if (fail) {
+            throw new Error("boot runtime failed");
+          }
+          return createDefaultAgentResult();
+        });
+
+        for (let restart = 0; restart < 2; restart++) {
+          const result = await runBootOnce({ cfg, deps: {}, workspaceDir });
+          expect(result).toEqual(
+            fail
+              ? { status: "failed", reason: "agent run failed: boot runtime failed" }
+              : { status: "ran" },
+          );
+          expect(vi.mocked(runEmbeddedAgent).mock.calls).toHaveLength(restart + 1);
+          expect(loadSessionEntry(priorScope)).toEqual(priorEntry);
+          expect(await loadTranscriptEvents(priorScope)).toEqual(transcript);
+          expect(listSessionMembers(priorScope)).toEqual([member]);
+          expect(listSessionEntriesCore({ storePath }).map(({ sessionKey }) => sessionKey)).toEqual(
+            [priorScope.sessionKey],
+          );
+          for (const [sessionKey, sessionId] of bootSessions) {
+            expect(getBootEchoContextForSession(sessionKey)).toBeUndefined();
+            expect(await loadTranscriptEvents({ storePath, sessionKey, sessionId })).toEqual([]);
+          }
+        }
+        expect(bootSessions.size).toBe(2);
+      });
+    },
+  );
+
   it.each([
     { name: "completed stop", meta: { stopReason: "stop" }, outcome: "completed" },
     {
@@ -1488,7 +1565,7 @@ describe("agentCommand", () => {
           },
           runtime,
         ),
-      ).rejects.toThrow(`Session "${sessionKey}" changed while starting work. Retry.`);
+      ).rejects.toMatchObject({ code: "SESSION_WORK_START_CHANGED" });
       expect(runEmbeddedAgent).not.toHaveBeenCalled();
     });
   });

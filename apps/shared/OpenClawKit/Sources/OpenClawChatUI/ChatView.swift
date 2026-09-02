@@ -383,11 +383,11 @@ public struct OpenClawChatView: View {
                     self.messageListRows
 
                     Color.clear
-                    #if os(macOS)
-                        .frame(height: Layout.messageListPaddingBottom)
-                    #else
-                        .frame(height: Layout.messageListPaddingBottom + 1)
-                    #endif
+                        #if os(macOS)
+                            .frame(height: Layout.messageListPaddingBottom)
+                        #else
+                            .frame(height: Layout.messageListPaddingBottom + 1)
+                        #endif
                         .id(self.scrollerBottomID)
                 }
                 // Use scroll targets for stable auto-scroll without ScrollViewReader relayout glitches.
@@ -817,7 +817,8 @@ public struct OpenClawChatView: View {
     }
 
     private var activeErrorText: String? {
-        guard let text = viewModel.errorText?
+        let activeError = self.viewModel.composerModelAvailabilityMessage ?? self.viewModel.errorText
+        guard let text = activeError?
             .trimmingCharacters(in: .whitespacesAndNewlines),
             !text.isEmpty
         else {

@@ -234,7 +234,7 @@ describe("handleCommands /plugins install", () => {
 
   it.each([
     { version: "2026.8.1", installSpec: "@openclaw/brave-plugin" },
-    { version: "2026.8.1-beta.4", installSpec: "@openclaw/brave-plugin@beta" },
+    { version: "2026.8.1-beta.4", installSpec: "@openclaw/brave-plugin@2026.8.1-beta.4" },
   ])("allows official catalog npm installs on core $version", async ({ version, installSpec }) => {
     coreVersion.value = version;
     const policyConfig: OpenClawConfig = {
@@ -288,7 +288,7 @@ describe("handleCommands /plugins install", () => {
 
   it.each([
     { version: "2026.8.1", installSpec: "@openclaw/discord" },
-    { version: "2026.8.1-beta.4", installSpec: "@openclaw/discord@beta" },
+    { version: "2026.8.1-beta.4", installSpec: "@openclaw/discord@2026.8.1-beta.4" },
   ])("allows bundled-manifest npm installs on core $version", async ({ version, installSpec }) => {
     coreVersion.value = version;
     mockNpmPluginInstall("discord", "@openclaw/discord");
@@ -1027,7 +1027,7 @@ describe("handleCommands /plugins install", () => {
 
   it.each([
     { version: "2026.8.1", installSpec: "@wecom/wecom-openclaw-plugin@latest" },
-    { version: "2026.8.1-beta.4", installSpec: "@wecom/wecom-openclaw-plugin@beta" },
+    { version: "2026.8.1-beta.4", installSpec: "@wecom/wecom-openclaw-plugin@2026.8.1-beta.4" },
   ])(
     "allows catalog npm @latest chat installs on core $version",
     async ({ version, installSpec }) => {

@@ -7,6 +7,10 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { readPluginInstallIndex } from "../plugin-index-sqlite.mjs";
 import { readPostCoreSnapshot } from "./diagnostics.mjs";
+import {
+  assertExecApprovalPolicySurvived,
+  seedLegacyExecApprovalPolicy,
+} from "./exec-approval-fixture.mjs";
 import { assertUpgradeVolumeMigrated, seedUpgradeVolume } from "./sqlite-volume.mjs";
 
 const command = process.argv[2];
@@ -373,6 +377,7 @@ function seedState() {
   });
   // Volume imports start in per-agent JSON; other scenarios cover the older shared-store move.
   seedLegacySessionMetadata(stateDir, scenario === "sqlite-volume");
+  seedLegacyExecApprovalPolicy(stateDir);
   if (scenario === "meeting-transcripts-sqlite") {
     seedLegacyMeetingTranscripts(stateDir);
   }
@@ -1285,10 +1290,6 @@ function assertRecoverableUpdateJson([file, expectedVersion, observationRoot, ba
   }
   const plugins = result.postUpdate?.plugins;
   assertStrict.equal(plugins?.status, result.status === "error" ? "error" : "warning");
-  assertStrict.equal(
-    plugins?.reason,
-    result.status === "error" ? "post-plugin-doctor-invalid-config" : undefined,
-  );
   assertStrict.deepEqual(plugins.integrityDrifts, []);
   // These are the reviewed packages in the base and scenario recipes.
   // Any other plugin or failure needs investigation before accepting it.
@@ -1305,6 +1306,15 @@ function assertRecoverableUpdateJson([file, expectedVersion, observationRoot, ba
       assertStrict.equal(outcome.nextVersion, expectedVersion);
     }
   }
+  // Typed consent errors survive post-plugin validation without a Doctor reason.
+  // Check before warnings contribute IDs; prose alone cannot admit this shape.
+  const typedConsentOnly = plugins.reason === undefined && denied.size > 0;
+  assertStrict.equal(
+    plugins.reason,
+    result.status === "error" && !typedConsentOnly
+      ? "post-plugin-doctor-invalid-config"
+      : undefined,
+  );
   assertStrict.ok(Array.isArray(plugins.sync?.errors));
   assertStrict.ok(Array.isArray(plugins.warnings));
   for (const warning of [
@@ -1533,6 +1543,11 @@ if (command === "list-scenarios") {
   process.stdout.write(`${JSON.stringify([...SCENARIOS])}\n`);
 } else if (command === "seed") {
   seedState();
+} else if (command === "assert-exec-approvals") {
+  assertExecApprovalPolicySurvived(
+    requireEnv("OPENCLAW_STATE_DIR"),
+    process.env.OPENCLAW_UPGRADE_SURVIVOR_ASSERT_STAGE || "survival",
+  );
 } else if (command === "seed-volume") {
   assert(getScenario() === "sqlite-volume", "seed-volume requires the sqlite-volume scenario");
   const stateDir = requireEnv("OPENCLAW_STATE_DIR");

@@ -11,7 +11,7 @@ import type {
 import {
   formatUpdateCampaignLabel,
   formatUpdateTargetLabel,
-} from "../../app/update-overlay-helpers.ts";
+} from "../../app/update-schedule-projection.ts";
 import { icons } from "../../components/icons.ts";
 import {
   renderSettingsPage,
@@ -23,7 +23,10 @@ import {
   renderSettingsValue,
 } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
+import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import { formatDateTimeMs, formatTimeAgo } from "../../lib/format.ts";
+
+registerSettingsEnglish();
 
 type UpdatesChannel = "stable" | "beta" | "dev" | "extended-stable";
 
@@ -136,11 +139,11 @@ function renderRecordedAttempt(props: UpdatesViewProps) {
     }),
     renderSettingsRow({
       title: t("updates.page.cliFallback"),
+      description: t("updates.triage.hostHint"),
       stacked: true,
       control: html`<details class="updates-attempt-details">
         <summary>${t("updates.page.showCliFallback")}</summary>
-        <pre><code>openclaw update status --json
-openclaw update</code></pre>
+        <pre><code>openclaw triage</code></pre>
       </details>`,
     }),
   ]);

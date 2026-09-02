@@ -349,6 +349,14 @@ lanes are intentionally reserved for the separate `Plugin Prerelease` child so
 PRs, main pushes, and ad hoc broad CI checks do not spend Docker/package time or
 all-plugin runtime time on release-only product coverage.
 
+`Plugin Prerelease` performs a supplemental scan of checked-in npm package input
+as inert data; it never runs candidate lifecycle, asset, build, install, or
+replacement scanner code. This scan does not approve post-build or publication
+bytes. A future publisher redesign must scan the exact final bytes and publish
+that identical digest before this can become a publication gate; the current
+publisher does not provide that guarantee. Ingestion stays fail-slow so one
+malformed package cannot hide other package reports.
+
 Use one operator, one foreground owner, and at most one investigator for the
 current failed surface. Do not start `release-ci-summary --watch` while the
 SHA-pinned helper is already watching the same parent. Parent timeout or

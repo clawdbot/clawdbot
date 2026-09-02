@@ -164,7 +164,7 @@ export async function loadSessionCostSummariesFromCache(params: {
     const file = files[index];
     const stored = file ? rollups.get(file.filePath) : undefined;
     if (!file || !stored || !isUsageCostRollupFresh({ stored, file })) {
-      staleFiles.add(file?.filePath ?? session.sessionFile);
+      staleFiles.add(file?.sourcePath ?? session.sessionFile);
       return null;
     }
     cachedFiles += 1;

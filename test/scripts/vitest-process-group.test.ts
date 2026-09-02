@@ -353,7 +353,7 @@ describe("vitest process group helpers", () => {
   it.each([
     ["Windows", { detached: true, platform: "win32" as const }],
     ["non-detached POSIX", { detached: false, platform: "darwin" as const }],
-  ])("keeps %s completion on direct-child exit", async (_label, params) => {
+  ])("joins %s child exit and pipes without claiming a group join", async (_label, params) => {
     const child = Object.assign(new EventEmitter(), { pid: 4200 });
     const kill = vi.fn(() => true as const);
     const completion = createVitestProcessCompletion({
@@ -363,7 +363,13 @@ describe("vitest process group helpers", () => {
     });
 
     child.emit("exit", 0, null);
-
+    let completed = false;
+    void completion.then(() => {
+      completed = true;
+    });
+    await Promise.resolve();
+    expect(completed).toBe(false);
+    child.emit("close", 0, null);
     await expect(completion).resolves.toEqual({ code: 0, signal: null });
     expect(kill).not.toHaveBeenCalled();
   });
