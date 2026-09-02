@@ -45,6 +45,72 @@ We cap at **20 open PRs per author**. If you exceed this, the `r: too-many-prs` 
 
 For coordinated change sets that genuinely need more than 20 PRs, join the **#clawtributors** channel in Discord and talk to maintainers first.
 
+## Publication security preflight
+
+The repository includes an **opt-in local** `pre-push` review hook. It is not a
+publication security boundary: local hooks can be bypassed, so remote branch
+protection and CI remain authoritative. To enable the convenience gate for one
+source checkout, run this command from the repo root:
+
+```bash
+node scripts/prepare-git-hooks.mjs --install
+```
+
+For non-interactive source-checkout setup, the exact-value environment opt-in is
+equivalent:
+
+```bash
+OPENCLAW_INSTALL_GIT_HOOKS=1 node scripts/prepare-git-hooks.mjs
+```
+
+Prefer the explicit `--install` flag for manual setup. Values other than `1` do
+not enable the optional publication preflight; either command still installs the
+maintained hook path.
+
+Verify the installation with `git config --get core.hooksPath`; it must print
+`git-hooks`. Also verify `test -f "$(git rev-parse --git-path
+publication-preflight.enabled)"` succeeds. Package preparation keeps the
+maintained hook path installed even when this optional pre-push gate is not
+enabled. The opt-in marker and publication manifest are worktree-local, so
+enabling one worktree does not change push behavior in another. Before pushing a
+PR branch, prepare a per-worktree publication manifest from the exact staged file
+allowlist:
+
+```bash
+node scripts/publication-preflight.mjs prepare \
+  --path path/to/changed-file
+```
+
+By default, `prepare` uses your authenticated `gh` session to collect the full
+open-PR inventory and every changed path. This can take time in a repository
+with many open PRs. The optional `--inventory-file` flag is only for trusted
+tooling that has already produced a complete snapshot in the script's canonical
+array shape (`number`, `repository`, `author`, `branch`, `title`, `url`, and
+`paths` for every open PR); do not pass a placeholder or a partial hand-written
+file.
+
+The manifest records the target repository, remote, base/upstream, feature branch,
+allowed paths, approved GitHub no-reply identity, and open-PR overlap strategy. Run
+the normal validation and review, then approve only the exact reviewed commit:
+
+```bash
+node scripts/publication-preflight.mjs check
+node scripts/publication-preflight.mjs approve
+git push origin HEAD
+```
+
+The local hook rechecks the remote, branch ancestry, merge-free history, staged and
+committed diff, identity, secret/privacy scan, changed-path allowlist, open-PR
+overlap strategy, whitespace, and exact approved `HEAD`. It blocks the local push
+when the manifest is missing, stale, incomplete, or not explicitly approved. It
+never publishes or edits unrelated working-tree files.
+
+If the local hook blocks a push, read the first
+finding, correct or explicitly review the affected change, rerun `check`, and then
+run `approve` again because approval is bound to the exact `HEAD`. False positives
+should be reduced by using placeholders and the approved GitHub no-reply identity;
+do not add private values to an allowlist merely to silence a finding.
+
 ## Before You PR
 
 - Use **Node 24.15+** for source checkouts when possible. OpenClaw also supports Node 22.22.3+ and Node 25.9+, but Node 23, Node 22 before 22.22.3, and Node 24 before 24.15 are below the repository engine floor and can fail before `pnpm` commands run. See [Node install guidance](docs/install/node.md) if your local version is too old.
