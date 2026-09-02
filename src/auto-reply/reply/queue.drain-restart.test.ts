@@ -7,8 +7,10 @@ import {
   withPreparedModelRuntimePluginGenerationScope,
 } from "../../agents/prepared-model-runtime-generation-scope.js";
 import {
+  GatewayDrainingError,
   getActiveGatewayRootWorkCount,
   isGatewaySubordinateWorkAdmissionClosed,
+  markGatewayRestartDraining,
   resetGatewayWorkAdmission,
   tryBeginGatewayRootWorkAdmission,
   tryBeginGatewaySuspendAdmission,
@@ -377,6 +379,37 @@ describe("followup queue drain restart after idle window", () => {
     expect(calls).toHaveLength(2);
     expect(calls[0]?.prompt).toBe("wait-for-lane");
     expect(calls[1]?.prompt).toBe("wait-for-lane");
+  });
+
+  it("does not reschedule a drain after an active restart-drain rejection", async () => {
+    resetGatewayWorkAdmission();
+    const key = `test-restart-drain-rejection-${Date.now()}`;
+    const settings: QueueSettings = { mode: "followup", debounceMs: 0, cap: 50 };
+    const firstFailed = createDeferred();
+    let attempts = 0;
+
+    const runFollowup = async () => {
+      attempts += 1;
+      if (attempts === 1) {
+        markGatewayRestartDraining();
+        firstFailed.resolve();
+        throw new GatewayDrainingError();
+      }
+    };
+
+    try {
+      enqueueFollowupRun(key, createRun({ prompt: "queued during restart" }), settings);
+      scheduleFollowupDrain(key, runFollowup);
+      await firstFailed.promise;
+      await vi.waitFor(() => {
+        expect(getActiveGatewayRootWorkCount()).toBe(0);
+      });
+      expect(attempts).toBe(1);
+      expect(getExistingFollowupQueue(key)?.items).toHaveLength(1);
+    } finally {
+      clearSessionQueues([key]);
+      resetGatewayWorkAdmission();
+    }
   });
 
   it("refreshes the callback used by a deferred active-drain retry", async () => {

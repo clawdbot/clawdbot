@@ -17,7 +17,10 @@ import {
   channelRouteCompactKey,
   channelRouteDedupeKey,
 } from "../../../plugin-sdk/channel-route.js";
-import { runWithGatewayIndependentRootWorkContinuation } from "../../../process/gateway-work-admission.js";
+import {
+  isGatewayRestartDrainError,
+  runWithGatewayIndependentRootWorkContinuation,
+} from "../../../process/gateway-work-admission.js";
 import { defaultRuntime } from "../../../runtime.js";
 import {
   buildPersistedUserTurnMediaInputsFromFields,
@@ -1428,6 +1431,7 @@ export function scheduleFollowupDrain(
   const drainQueuedFollowups = async (): Promise<void> => {
     let retryDeferred = false;
     let waitingForSteer = false;
+    let restartDrainRejected = false;
     try {
       const collectState = { forceIndividualCollect: false };
       while (queue.items.length > 0 || queue.droppedCount > 0) {
@@ -1664,6 +1668,11 @@ export function scheduleFollowupDrain(
       queue.lastEnqueuedAt = Date.now();
       if (isFollowupRunDeferredError(err)) {
         retryDeferred = true;
+      } else if (isGatewayRestartDrainError(err)) {
+        // Restart drain is one-way; another generation cannot succeed.
+        // Persistence/replay stays with that owner. Rescheduling here
+        // keeps the dying process alive until SIGKILL.
+        restartDrainRejected = true;
       } else {
         defaultRuntime.error?.(`followup queue drain failed for ${key}: ${String(err)}`);
       }
@@ -1675,17 +1684,19 @@ export function scheduleFollowupDrain(
         queue.draining = false;
         delete queue.drainOwner;
         const hasPendingQueueWork = queue.items.length > 0 || queue.droppedCount > 0;
-        if (waitingForSteer && hasPendingQueueWork) {
-          if (!queue.items.some((item) => item.steerPending)) {
+        if (!restartDrainRejected) {
+          if (waitingForSteer && hasPendingQueueWork) {
+            if (!queue.items.some((item) => item.steerPending)) {
+              scheduleFollowupDrain(key, effectiveRunFollowup);
+            }
+          } else if (retryDeferred && hasPendingQueueWork) {
+            scheduleFollowupDrain(key, effectiveRunFollowup);
+          } else if (!hasPendingQueueWork) {
+            FOLLOWUP_QUEUES.delete(key);
+            clearFollowupDrainCallback(key);
+          } else {
             scheduleFollowupDrain(key, effectiveRunFollowup);
           }
-        } else if (retryDeferred && hasPendingQueueWork) {
-          scheduleFollowupDrain(key, effectiveRunFollowup);
-        } else if (!hasPendingQueueWork) {
-          FOLLOWUP_QUEUES.delete(key);
-          clearFollowupDrainCallback(key);
-        } else {
-          scheduleFollowupDrain(key, effectiveRunFollowup);
         }
       }
     }
