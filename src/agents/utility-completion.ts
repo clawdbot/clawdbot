@@ -1,6 +1,6 @@
 import { resolveSimpleCompletionSelectionForAgent } from "./simple-completion-runtime.js";
 
-/** Capture model identity only; the isolated execution owner resolves its own auth. */
+/** Keep visible-text retry/fallback in callers; the runtime owns authentication. */
 export async function prepareUtilityCompletionForAgent(
   params: Parameters<typeof resolveSimpleCompletionSelectionForAgent>[0] & {
     preferredProfile?: string;
@@ -15,6 +15,7 @@ export async function prepareUtilityCompletionForAgent(
     provider: selection.provider,
     model: selection.modelId,
     authProfileId: selection.profileId ?? params.preferredProfile,
+    outputTextPolicy: "strict-visible" as const,
     agentId: params.agentId,
     agentDir: selection.agentDir,
   };

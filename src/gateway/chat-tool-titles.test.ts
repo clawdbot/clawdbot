@@ -27,6 +27,7 @@ function mockPreparedModel(): void {
     config: {},
     provider: "openai",
     model: "gpt-test",
+    outputTextPolicy: "strict-visible",
     agentId: AGENT_ID,
     agentDir: "/tmp/openclaw-agent",
   });

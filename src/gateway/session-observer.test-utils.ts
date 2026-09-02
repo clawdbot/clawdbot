@@ -55,6 +55,7 @@ export function preparedModel() {
     config: cfg,
     provider: "openai",
     model: "gpt-test",
+    outputTextPolicy: "strict-visible" as const,
     agentId: "main",
     agentDir: "/tmp/agent",
   };

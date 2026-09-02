@@ -11,6 +11,7 @@ import {
 const runtimeMocks = vi.hoisted(() => ({
   prepareDirect: vi.fn(),
   completeDirect: vi.fn(),
+  selectModel: vi.fn(),
   prepareUtility: vi.fn(),
   completeIsolated: vi.fn(),
 }));
@@ -18,6 +19,7 @@ const runtimeMocks = vi.hoisted(() => ({
 vi.mock("../agents/simple-completion-runtime.js", () => ({
   prepareSimpleCompletionModelForAgent: runtimeMocks.prepareDirect,
   completeWithPreparedSimpleCompletionModel: runtimeMocks.completeDirect,
+  resolveSimpleCompletionSelectionForAgent: runtimeMocks.selectModel,
 }));
 vi.mock("../agents/utility-completion.js", () => ({
   prepareUtilityCompletionForAgent: runtimeMocks.prepareUtility,
@@ -34,7 +36,7 @@ afterEach(() => {
 
 describe("session observer model preparation", () => {
   it.each(["claude-cli", "anthropic"])(
-    "publishes a digest from a runtime-owned %s utility completion without API auth",
+    "publishes a digest from a runtime-owned %s utility completion after empty output without API auth",
     async (provider) => {
       vi.useFakeTimers();
       vi.setSystemTime(0);
@@ -61,13 +63,31 @@ describe("session observer model preparation", () => {
       runtimeMocks.completeDirect
         .mockReset()
         .mockRejectedValue(new Error("HTTP 401 invalid credential"));
-      runtimeMocks.prepareUtility.mockResolvedValue(prepared);
-      runtimeMocks.completeIsolated.mockReset().mockResolvedValue({
+      const { prepareUtilityCompletionForAgent } = await vi.importActual<
+        typeof import("../agents/utility-completion.js")
+      >("../agents/utility-completion.js");
+      runtimeMocks.selectModel.mockReturnValue({
+        provider,
+        modelId: prepared.model,
+        agentDir: prepared.agentDir,
+      });
+      runtimeMocks.prepareUtility.mockImplementation(prepareUtilityCompletionForAgent);
+      const completion = {
         text: JSON.stringify({ headline: "Reviewing the implementation", health: "on-track" }),
         provider: "anthropic",
         model: prepared.model,
         owner: { kind: "cli", id: "claude-cli" },
-      });
+      };
+      runtimeMocks.completeIsolated
+        .mockReset()
+        .mockImplementationOnce(async (request) => {
+          // The isolated owner rejects empty output unless its caller owns visible-text recovery.
+          if (request.outputTextPolicy !== "strict-visible") {
+            throw new Error("Isolated completion returned empty output.");
+          }
+          return { ...completion, text: "" };
+        })
+        .mockResolvedValueOnce(completion);
       const harness = createHarness({
         config,
         utilityModelRef: config.agents.defaults.utilityModel,
@@ -80,6 +100,7 @@ describe("session observer model preparation", () => {
       await flushObserver();
 
       expect(runtimeMocks.completeDirect).not.toHaveBeenCalled();
+      expect(runtimeMocks.completeIsolated).toHaveBeenCalledTimes(2);
       expect(runtimeMocks.completeIsolated).toHaveBeenCalledWith(
         expect.objectContaining({
           ...prepared,
