@@ -198,6 +198,10 @@ if (kind === "cli") {
     setInterval(() => {}, 1_000);
     await new Promise(() => {});
   }
+  if (argv[0] === "drain") {
+    spawn(process.execPath, ["-e", 'setTimeout(() => console.log("drained cli output"), 50)'], { stdio: ["ignore", "inherit", "inherit"] });
+    process.exit(0);
+  }
   process.exit(Number(argv[0]));
 }
 const refusal = ${JSON.stringify(MIGRATION_CONVERGENCE_REFUSAL)};
@@ -297,6 +301,7 @@ describe("openclaw test instance", () => {
   it.each([
     { mode: "0", prepare: false },
     { mode: "7", prepare: false },
+    { mode: "drain", prepare: false },
     { mode: "wait", prepare: false },
     { mode: "0", prepare: true },
   ])("releases the CLI deadline after $mode (prepare=$prepare)", async ({ mode, prepare }) => {
@@ -325,9 +330,12 @@ describe("openclaw test instance", () => {
         await expect(command).rejects.toThrow(`command timed out after ${timeoutMs}ms`);
       } else {
         await expect(command).resolves.toEqual({
-          code: Number(mode),
+          code: mode === "drain" ? 0 : Number(mode),
           signal: null,
-          stdout: "fake gateway attempt 1\n",
+          stdout:
+            mode === "drain"
+              ? "fake gateway attempt 1\ndrained cli output\n"
+              : "fake gateway attempt 1\n",
           stderr: "cli diagnostic\n",
         });
       }
