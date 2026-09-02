@@ -3,6 +3,7 @@
  * approval tool and maps gateway decisions back to Codex outcomes.
  */
 import type { EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { formatMcpCodexApprovalRemedy } from "openclaw/plugin-sdk/codex-mcp-projection";
 import { isApprovalNotFoundError, toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { resolveCodexGatewayTimeoutWithGraceMs } from "./attempt-timeouts.js";
@@ -39,8 +40,9 @@ const CODEX_APPROVAL_TIMEOUT_SUBJECTS: Record<CodexApprovalKind, string> = {
   other: "Approval",
 };
 
-export function codexApprovalTimeoutText(kind: CodexApprovalKind): string {
-  return `${CODEX_APPROVAL_TIMEOUT_SUBJECTS[kind]} timed out before an operator responded.`;
+export function codexApprovalTimeoutText(kind: CodexApprovalKind, mcpServerName?: string): string {
+  const message = `${CODEX_APPROVAL_TIMEOUT_SUBJECTS[kind]} timed out before an operator responded.`;
+  return mcpServerName ? `${message} ${formatMcpCodexApprovalRemedy(mcpServerName)}` : message;
 }
 
 /** Normalized Codex app-server approval outcome after a gateway decision. */

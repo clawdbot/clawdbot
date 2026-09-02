@@ -1,8 +1,14 @@
 // Codex plugin module implements elicitation bridge behavior.
 import {
   embeddedAgentLog,
+  type CodexBundleMcpThreadConfig,
   type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import {
+  formatMcpCodexApprovalRemedy,
+  requiresMcpCodexToolApproval,
+  resolveProjectedMcpCodexToolApprovalMode,
+} from "openclaw/plugin-sdk/codex-mcp-projection";
 import { sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { formatCodexDisplayText } from "../command-formatters.js";
 import {
@@ -40,6 +46,7 @@ type BridgeableApprovalElicitation = {
   meta: JsonObject;
   persistHintsMode?: "legacy" | "explicit";
   allowedDecisions?: ExecApprovalDecision[];
+  serverName?: string;
 };
 
 type ElicitationApprovalOutcome = AppServerApprovalOutcome | "timed-out";
@@ -87,6 +94,8 @@ export async function routeCodexAppServerElicitationRequest(params: {
   turnId: string;
   pluginAppPolicyContext?: PluginAppPolicyContext;
   computerUseMcpServerName?: string;
+  autoApproveMcpTools?: boolean;
+  projectedMcpServers?: NonNullable<CodexBundleMcpThreadConfig["configPatch"]>["mcp_servers"];
   signal?: AbortSignal;
 }): Promise<CodexApprovalElicitationResult> {
   const requestParams = isJsonObject(params.requestParams) ? params.requestParams : undefined;
@@ -137,11 +146,30 @@ export async function routeCodexAppServerElicitationRequest(params: {
     );
   }
 
-  const approvalPrompt =
-    readComputerUseApprovalElicitation(requestParams, params.computerUseMcpServerName) ??
-    readBridgeableApprovalElicitation(requestParams);
+  const computerUsePrompt = readComputerUseApprovalElicitation(
+    requestParams,
+    params.computerUseMcpServerName,
+  );
+  const approvalPrompt = computerUsePrompt ?? readBridgeableApprovalElicitation(requestParams);
   if (!approvalPrompt) {
     return handled(createCodexElicitationResponse("decline"));
+  }
+  if (!computerUsePrompt) {
+    // App elicitation delegation changes Codex's policy; custom MCP servers still
+    // follow the original operator posture unless their server config overrides it.
+    const serverName = readNonBlankStringField(requestParams, "serverName");
+    const server = serverName ? params.paramsForRun.config?.mcp?.servers?.[serverName] : undefined;
+    const mode = serverName
+      ? resolveProjectedMcpCodexToolApprovalMode(
+          serverName,
+          server ?? {},
+          params.projectedMcpServers?.[serverName],
+        )
+      : undefined;
+    if (!requiresMcpCodexToolApproval({ mode, fullPermission: params.autoApproveMcpTools })) {
+      params.paramsForRun.hostCapabilities.assertActive();
+      return handled(buildElicitationResponse(approvalPrompt, "approved-once"));
+    }
   }
 
   const outcome = await requestPluginApprovalOutcome({
@@ -336,10 +364,7 @@ async function buildPluginPolicyElicitationResponse(params: {
       allowedDecisions: allowedPluginPolicyApprovalDecisions(mode, approvalPrompt),
       signal: params.signal,
     });
-    return buildElicitationResponse(
-      approvalPrompt,
-      mode === "ask" && outcome === "approved-session" ? "approved-once" : outcome,
-    );
+    return buildElicitationResponse(approvalPrompt, outcome);
   }
   logPluginElicitationDecline("unmappable_schema", params.requestParams);
   return createCodexElicitationResponse("decline");
@@ -406,14 +431,22 @@ function readPluginApprovalElicitation(
 function buildApprovalAllowedDecisions(
   requestedSchema: JsonObject,
   meta: JsonObject,
+  allowSession = false,
 ): ExecApprovalDecision[] {
-  return canMapPersistentApproval(requestedSchema, meta)
+  return canMapPersistentApproval(requestedSchema, meta, allowSession)
     ? ["allow-once", "allow-always", "deny"]
     : ["allow-once", "deny"];
 }
 
-function canMapPersistentApproval(requestedSchema: JsonObject, meta: JsonObject): boolean {
+function canMapPersistentApproval(
+  requestedSchema: JsonObject,
+  meta: JsonObject,
+  allowSession: boolean,
+): boolean {
   const persistHints = readPersistHints(meta, "explicit");
+  if (allowSession) {
+    return choosePersistHint(persistHints) !== undefined;
+  }
   if (persistHints.length > 0) {
     return persistHints.includes("always");
   }
@@ -472,6 +505,9 @@ function readBridgeableApprovalElicitation(
     }),
     requestedSchema,
     meta: requestParams["_meta"],
+    persistHintsMode: "explicit",
+    allowedDecisions: buildApprovalAllowedDecisions(requestedSchema, requestParams["_meta"], true),
+    serverName: readNonBlankStringField(requestParams, "serverName"),
   };
 }
 
@@ -703,7 +739,12 @@ async function requestPluginApprovalOutcome(params: {
     if (approvalResult?.terminalReason === "timeout") {
       return "timed-out";
     }
-    return mapExecDecisionToOutcome(approvalResult?.decision);
+    const decision = approvalResult?.decision;
+    return mapExecDecisionToOutcome(
+      decision === "allow-always" && params.allowedDecisions?.includes("allow-always") === false
+        ? "allow-once"
+        : decision,
+    );
   } catch {
     return params.signal?.aborted ? "cancelled" : "denied";
   }
@@ -712,7 +753,7 @@ async function requestPluginApprovalOutcome(params: {
 function buildElicitationResponse(
   approvalPrompt: Pick<
     BridgeableApprovalElicitation,
-    "requestedSchema" | "meta" | "persistHintsMode"
+    "requestedSchema" | "meta" | "persistHintsMode" | "serverName"
   >,
   outcome: ElicitationApprovalOutcome,
 ): CodexElicitationResponse {
@@ -722,11 +763,19 @@ function buildElicitationResponse(
   }
   if (outcome === "timed-out") {
     return createCodexElicitationResponse("decline", null, {
-      message: codexApprovalTimeoutText("other"),
+      message: codexApprovalTimeoutText("other", approvalPrompt.serverName),
     });
   }
   if (outcome === "denied" || outcome === "unavailable") {
-    return createCodexElicitationResponse("decline");
+    return createCodexElicitationResponse(
+      "decline",
+      null,
+      approvalPrompt.serverName
+        ? {
+            message: `MCP tool approval ${outcome}. ${formatMcpCodexApprovalRemedy(approvalPrompt.serverName)}`,
+          }
+        : null,
+    );
   }
 
   const content = buildAcceptedContent(approvalPrompt, outcome);
@@ -774,7 +823,11 @@ function buildAcceptedContent(
     }
     const property = { name, schema, required: required.has(name) };
     const next =
-      readApprovalFieldValue(property, outcome) ??
+      readApprovalFieldValue(
+        property,
+        outcome,
+        choosePersistHint(readPersistHints(meta, approvalPrompt.persistHintsMode)),
+      ) ??
       readPersistFieldValue(property, meta, outcome, approvalPrompt.persistHintsMode ?? "legacy") ??
       readFallbackFieldValue(property, outcome);
 
@@ -800,6 +853,7 @@ function buildAcceptedContent(
 function readApprovalFieldValue(
   property: ApprovalPropertyContext,
   outcome: AppServerApprovalOutcome,
+  persist: "always" | "session" | undefined,
 ): JsonValue | undefined {
   if (!isApprovalField(property)) {
     return undefined;
@@ -813,12 +867,14 @@ function readApprovalFieldValue(
     return undefined;
   }
 
-  const sessionChoice = options.find((option) => isSessionApprovalOption(option));
   const acceptChoice = options.find((option) => isPositiveApprovalOption(option));
   if (outcome === "approved-session") {
-    return sessionChoice?.value ?? acceptChoice?.value;
+    return (
+      options.find((option) => isPersistentApprovalOption(option, persist))?.value ??
+      acceptChoice?.value
+    );
   }
-  return acceptChoice?.value ?? sessionChoice?.value;
+  return acceptChoice?.value;
 }
 
 function readPersistFieldValue(
@@ -958,11 +1014,16 @@ function isPositiveApprovalOption(option: { value: string; label: string }): boo
   return /\b(allow|approve|accept|yes|continue|proceed|true)\b/.test(haystack);
 }
 
-function isSessionApprovalOption(option: { value: string; label: string }): boolean {
+function isPersistentApprovalOption(
+  option: { value: string; label: string },
+  persist: "always" | "session" | undefined,
+): boolean {
   const haystack = `${option.value} ${option.label}`.toLowerCase();
-  return (
-    /\b(session|always|persistent)\b/.test(haystack) && /\b(allow|approve|accept)\b/.test(haystack)
-  );
+  const scopeMatches =
+    persist === "always"
+      ? /\b(always|persistent)\b|\bdon't ask me again\b/.test(haystack)
+      : persist === "session" && /\bsession\b/.test(haystack);
+  return scopeMatches && /\b(allow|approve|accept)\b/.test(haystack);
 }
 
 function readNonBlankStringField(record: JsonObject | undefined, key: string): string | undefined {
