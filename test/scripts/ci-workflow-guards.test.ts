@@ -129,6 +129,7 @@ function evaluateWorkflowExpression(
     hostedRunnerProfileContract?: boolean;
     matrix?: Record<string, unknown>;
     preflightOutputs?: Record<string, string>;
+    ref?: string;
     resolveTargetOutputs?: Record<string, string>;
     releaseGate?: boolean;
     repository: string;
@@ -170,6 +171,7 @@ function evaluateWorkflowExpression(
     github: {
       event_name: context.eventName,
       repository: context.repository,
+      ref: context.ref ?? "refs/heads/main",
       run_attempt: context.runAttempt,
       workflow_sha: context.workflowSha,
       event:
@@ -210,7 +212,7 @@ function evaluateWorkflowExpression(
   });
 }
 
-function runCiGateFixture(requiredResults: string, selectedResults: string) {
+function runCiGateFixture(jobResults: string) {
   const gateStep = readCiWorkflow().jobs["ci-gate"].steps.find(
     (step: WorkflowStep) => step.name === "Verify selected CI lanes",
   );
@@ -218,9 +220,44 @@ function runCiGateFixture(requiredResults: string, selectedResults: string) {
     encoding: "utf8",
     env: {
       ...process.env,
-      REQUIRED_RESULTS: requiredResults,
-      SELECTED_RESULTS: selectedResults,
+      JOB_RESULTS: jobResults,
     },
+  });
+}
+
+function renderCiGateEnvironment(
+  context: Partial<Parameters<typeof evaluateWorkflowExpression>[1]> = {},
+  results: Record<string, string> = {},
+) {
+  const workflow = readCiWorkflow();
+  const step = workflow.jobs["ci-gate"].steps.find(
+    (candidate: WorkflowStep) => candidate.name === "Verify selected CI lanes",
+  );
+  const preflightOutputs = {
+    ...Object.fromEntries(
+      Object.keys(workflow.jobs.preflight.outputs)
+        .filter((key) => key.startsWith("run_"))
+        .map((key) => [key, "true"]),
+    ),
+    compatibility_target: "false",
+    release_scope: "full",
+    ...context.preflightOutputs,
+  };
+  const jobResults: string = step.env.JOB_RESULTS;
+  return jobResults.replace(/\$\{\{[\s\S]*?\}\}/gu, (expression) => {
+    const result = expression.match(/^\$\{\{\s*needs\.([\w-]+)\.result\s*\}\}$/u);
+    if (result) {
+      return results[expectDefined(result[1], expression)] ?? "success";
+    }
+    return String(
+      evaluateWorkflowExpression(expression, {
+        eventName: "workflow_dispatch",
+        repository: "openclaw/openclaw",
+        runAttempt: 1,
+        ...context,
+        preflightOutputs,
+      }) ?? "",
+    );
   });
 }
 
@@ -2077,9 +2114,11 @@ NODE
     const gateStep = workflow.jobs["ci-gate"].steps.find(
       (step: WorkflowStep) => step.name === "Verify selected CI lanes",
     );
-    expect(gateStep.env.SELECTED_RESULTS).toContain("macos-swift=${{ needs.macos-swift.result }}");
+    expect(gateStep.env.JOB_RESULTS).toContain("macos-swift=${{ needs.macos-swift.result }}");
     for (const conclusion of ["failure", "cancelled"]) {
-      expect(runCiGateFixture("preflight=success", `macos-swift=${conclusion}`).status).toBe(1);
+      expect(
+        runCiGateFixture(`preflight=success|true\nmacos-swift=${conclusion}|true`).status,
+      ).toBe(1);
     }
   });
 
@@ -11814,19 +11853,15 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     const verifyStep = gate.steps.find(
       (step: WorkflowStep) => step.name === "Verify selected CI lanes",
     );
-    expect(Object.keys(verifyStep.env).toSorted()).toEqual([
-      "REQUIRED_RESULTS",
-      "SELECTED_RESULTS",
-    ]);
-    for (const job of requiredJobs) {
-      expect(verifyStep.env.REQUIRED_RESULTS).toContain(`${job}=\${{ needs.${job}.result }}`);
-    }
+    expect(Object.keys(verifyStep.env)).toEqual(["JOB_RESULTS"]);
+    const resultRows: string[] = verifyStep.env.JOB_RESULTS.trim().split("\n");
+    expect(resultRows.slice(0, requiredJobs.length)).toEqual(
+      requiredJobs.map((job) => `${job}=\${{ needs.${job}.result }}|true`),
+    );
     for (const job of selectedJobs) {
-      expect(verifyStep.env.SELECTED_RESULTS).toContain(`${job}=\${{ needs.${job}.result }}`);
+      expect(verifyStep.env.JOB_RESULTS).toContain(`${job}=\${{ needs.${job}.result }}|`);
     }
-    expect(verifyStep.run).toContain("Required CI job did not succeed");
-    expect(verifyStep.run).toContain("success | skipped");
-    expect(verifyStep.run).toContain("Selected CI job did not succeed");
+    expect(resultRows).toHaveLength(gate.needs.length);
   });
 
   it("does not admit the final gate for cancelled workflows or draft pull requests", () => {
@@ -11849,6 +11884,214 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     }
   });
 
+  it("ci-gate selection projections match their owning job predicates", () => {
+    const workflow = readCiWorkflow();
+    const step = workflow.jobs["ci-gate"].steps.find(
+      (candidate: WorkflowStep) => candidate.name === "Verify selected CI lanes",
+    );
+    const rows: string[] = step.env.JOB_RESULTS.trim().split("\n").slice(2);
+    for (const row of rows) {
+      const match = expectDefined(
+        row.match(/^([\w-]+)=\$\{\{ needs\.([\w-]+)\.result \}\}\|\$\{\{ (.+) \}\}$/u),
+        row,
+      );
+      const job = expectDefined(match[1], row);
+      const selection = expectDefined(match[3], row);
+      expect(match[2], row).toBe(job);
+      // Gate inputs duplicate eligibility, never dependency status or cancellation.
+      // Bind that projection to its owner so a routing change cannot leave stale selection.
+      const eligible = workflow.jobs[job].if
+        .replace(/^\$\{\{\s*|\s*\}\}$/gu, "")
+        .replace(/!cancelled\(\)\s*&&\s*always\(\)\s*&&\s*/gu, "")
+        .replace(/\s+/gu, " ")
+        .trim();
+      const projected = /^needs\.preflight\.outputs\.\w+$/u.test(selection)
+        ? `${selection} == 'true'`
+        : selection;
+      expect(projected, job).toBe(eligible);
+    }
+  });
+
+  it.skipIf(process.platform === "win32").each<{
+    label: string;
+    context: Partial<Parameters<typeof evaluateWorkflowExpression>[1]>;
+    expected: Record<string, boolean>;
+  }>([
+    {
+      label: "same-repo Blacksmith PR",
+      context: { eventName: "pull_request" },
+      expected: {
+        "pnpm-store-warmup": false,
+        "checks-node-compat": false,
+        "ios-screenshot-shard": true,
+      },
+    },
+    {
+      label: "fork PR",
+      context: { eventName: "pull_request", headRepository: "contributor/fork" },
+      expected: { "pnpm-store-warmup": true },
+    },
+    {
+      label: "same-repo docs-only PR",
+      context: { eventName: "pull_request", preflightOutputs: { run_node: "false" } },
+      expected: { "pnpm-store-warmup": true },
+    },
+    {
+      label: "no Node or docs scope",
+      context: { preflightOutputs: { run_node: "false", run_check_docs: "false" } },
+      expected: { "pnpm-store-warmup": false },
+    },
+    {
+      label: "canonical Blacksmith push",
+      context: { eventName: "push" },
+      expected: {
+        "pnpm-store-warmup": false,
+        "checks-node-compat": false,
+        "ios-screenshot-shard": false,
+      },
+    },
+    {
+      label: "non-main push",
+      context: { eventName: "push", ref: "refs/heads/topic" },
+      expected: { "pnpm-store-warmup": true },
+    },
+    {
+      label: "fork repository push",
+      context: { eventName: "push", repository: "contributor/fork" },
+      expected: { "pnpm-store-warmup": true },
+    },
+    {
+      label: "GitHub push",
+      context: { eventName: "push", runnerProfile: "github" },
+      expected: {
+        "pnpm-store-warmup": true,
+        "check-lint-hosted-core-shard": true,
+        "check-test-types-hosted-core-shard": true,
+      },
+    },
+    {
+      label: "hybrid PR",
+      context: { eventName: "pull_request", runnerProfile: "hybrid" },
+      expected: { "pnpm-store-warmup": true, "check-lint-hosted-core-shard": true },
+    },
+    {
+      label: "Blacksmith has no hosted stripes",
+      context: { frozenTarget: true },
+      expected: {
+        "check-lint-hosted-core-shard": false,
+        "check-test-types-hosted-core-shard": false,
+      },
+    },
+    {
+      label: "frozen target without hosted capability",
+      context: { frozenTarget: true, hostedRunnerProfileContract: false, runnerProfile: "github" },
+      expected: {
+        "check-lint-hosted-core-shard": false,
+        "check-test-types-hosted-core-shard": false,
+      },
+    },
+    {
+      label: "frozen target with hosted capability",
+      context: { frozenTarget: true, runnerProfile: "hybrid" },
+      expected: {
+        "check-lint-hosted-core-shard": true,
+        "check-test-types-hosted-core-shard": true,
+      },
+    },
+    {
+      label: "current target needs no capability fallback",
+      context: { hostedRunnerProfileContract: false, runnerProfile: "github" },
+      expected: { "check-lint-hosted-core-shard": true },
+    },
+    {
+      label: "hosted checks out of scope",
+      context: { runnerProfile: "github", preflightOutputs: { run_check: "false" } },
+      expected: {
+        "check-shard": false,
+        "check-lint-hosted-core-shard": false,
+        "check-test-types-hosted-core-shard": false,
+      },
+    },
+    {
+      label: "compatibility target",
+      context: { preflightOutputs: { compatibility_target: "true" } },
+      expected: {
+        "checks-ui": true,
+        "checks-ui-e2e": false,
+        "checks-ui-e2e-real-gateway": false,
+        "ios-screenshot-shard": false,
+      },
+    },
+    {
+      label: "current target",
+      context: {},
+      expected: {
+        "checks-ui-e2e": true,
+        "checks-ui-e2e-real-gateway": true,
+        "ios-screenshot-shard": true,
+        "checks-node-compat": true,
+      },
+    },
+    {
+      label: "manual Node 22 without artifacts",
+      context: { preflightOutputs: { run_build_artifacts: "false" } },
+      expected: { "checks-node-compat": false },
+    },
+    {
+      label: "ordinary manual screenshot override",
+      context: { preflightOutputs: { run_ios_screenshots: "false" } },
+      expected: { "ios-screenshot-shard": true },
+    },
+    {
+      label: "release gate respects screenshot scope",
+      context: { releaseGate: true, preflightOutputs: { run_ios_screenshots: "false" } },
+      expected: { "ios-screenshot-shard": false },
+    },
+    {
+      label: "release gate selects screenshots",
+      context: { releaseGate: true },
+      expected: { "ios-screenshot-shard": true },
+    },
+    {
+      label: "npm-beta excludes manual screenshots",
+      context: { preflightOutputs: { release_scope: "npm-beta" } },
+      expected: { "ios-screenshot-shard": false },
+    },
+    {
+      label: "npm-beta excludes PR screenshots",
+      context: { eventName: "pull_request", preflightOutputs: { release_scope: "npm-beta" } },
+      expected: { "ios-screenshot-shard": false },
+    },
+    {
+      label: "PR screenshot scope off",
+      context: { eventName: "pull_request", preflightOutputs: { run_ios_screenshots: "false" } },
+      expected: { "ios-screenshot-shard": false },
+    },
+  ])("ci-gate preserves eligibility: $label", ({ context, expected }) => {
+    const jobResults = renderCiGateEnvironment(context);
+    const selections = Object.fromEntries(
+      jobResults
+        .trim()
+        .split("\n")
+        .map((row) => {
+          const [job, , selected] = row.split(/[=|]/u);
+          return [expectDefined(job, row), expectDefined(selected, row)];
+        }),
+    );
+    for (const [job, selected] of Object.entries(expected)) {
+      expect(selections[job], job).toBe(String(selected));
+    }
+    expect(selections["ios-screenshot-evidence"]).toBe(selections["ios-screenshot-shard"]);
+    const results = Object.fromEntries(
+      Object.entries(selections).map(([job, selected]) => [
+        job,
+        selected === "true" ? "success" : "skipped",
+      ]),
+    );
+    const outcome = runCiGateFixture(renderCiGateEnvironment(context, results));
+    expect(outcome.status, `${outcome.stdout}\n${outcome.stderr}`).toBe(0);
+  });
+
   it("runs Node 22 compatibility only from manual CI dispatches", () => {
     const workflow = readCiWorkflow();
     const compatibilityJob = workflow.jobs["checks-node-compat"];
@@ -11866,36 +12109,102 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(fullReleaseDispatch.run).toContain('-f target_ref="$TARGET_SHA"');
   });
 
+  it.skipIf(process.platform === "win32")("ci-gate rejects an unexpected selected skip", () => {
+    const result = runCiGateFixture(renderCiGateEnvironment({}, { "checks-ui": "skipped" }));
+    expect(result.stdout).toContain("checks-ui: skipped");
+    expect(result.status, result.stdout).toBe(1);
+  });
+
+  it.skipIf(process.platform === "win32").each([
+    [true, "success", 0],
+    [true, "skipped", 1],
+    [true, "failure", 1],
+    [true, "cancelled", 1],
+    [true, "", 1],
+    [true, "unknown", 1],
+    [false, "success", 0],
+    [false, "skipped", 0],
+    [false, "failure", 1],
+    [false, "cancelled", 1],
+    [false, "", 1],
+    [false, "unknown", 1],
+  ] as const)(
+    "ci-gate checks all downstream lanes (selected=%s, result=%s)",
+    (selected, result, exit) => {
+      const workflow = readCiWorkflow();
+      const jobs: string[] = workflow.jobs["ci-gate"].needs.slice(2);
+      const jobResults = renderCiGateEnvironment(
+        {
+          eventName: selected ? "workflow_dispatch" : "pull_request",
+          runnerProfile: "github",
+          preflightOutputs: Object.fromEntries(
+            Object.keys(workflow.jobs.preflight.outputs)
+              .filter((key) => key.startsWith("run_"))
+              .map((key) => [key, String(selected)]),
+          ),
+        },
+        Object.fromEntries(jobs.map((job) => [job, result])),
+      );
+      const outcome = runCiGateFixture(jobResults);
+      expect(outcome.status, `${outcome.stdout}\n${outcome.stderr}`).toBe(exit);
+      for (const job of jobs) {
+        expect(jobResults).toContain(`${job}=${result}|${selected}\n`);
+        expect(outcome.stdout).toContain(`${job}: ${result} (selected=${selected})`);
+        if (exit !== 0) {
+          expect(outcome.stdout).toContain(`${job} finished with ${result} (selected=${selected})`);
+        }
+      }
+    },
+  );
+
+  it
+    .skipIf(process.platform === "win32")
+    .each(["failure", "cancelled", "skipped", "", "unknown", "success="])(
+    "ci-gate rejects required result %s independently of downstream success",
+    (result) => {
+      const outcome = runCiGateFixture(
+        renderCiGateEnvironment({}, { preflight: result, "security-fast": result }),
+      );
+      expect(outcome.status, outcome.stdout).toBe(1);
+      for (const job of ["preflight", "security-fast"]) {
+        expect(outcome.stdout).toContain(`${job} finished with ${result} (selected=true)`);
+      }
+    },
+  );
+
+  it
+    .skipIf(process.platform === "win32")
+    .each(["", "unknown", "TRUE", "true|false", "true|", "false="])(
+    "ci-gate rejects missing or malformed selection %s even after success",
+    (selection) => {
+      const outcome = runCiGateFixture(
+        renderCiGateEnvironment({ preflightOutputs: { run_ui_tests: selection } }),
+      );
+      expect(outcome.status, outcome.stdout).toBe(1);
+      expect(outcome.stdout).toContain(
+        `checks-ui finished with success (selected=${selection || "missing"})`,
+      );
+    },
+  );
+
   it.skipIf(process.platform === "win32")(
-    "accepts only successful required jobs and successful or skipped selected jobs",
+    "ci-gate reports failed upstream and selected dependent skips",
     () => {
-      const passing = runCiGateFixture(
-        "preflight=success\nsecurity-fast=success",
-        "checks-ui=success\nmacos-swift=skipped",
+      const jobResults = renderCiGateEnvironment(
+        {},
+        {
+          "ios-screenshot-shard": "failure",
+          "ios-screenshot-evidence": "skipped",
+        },
       );
-      expect(passing.status, `${passing.stdout}\n${passing.stderr}`).toBe(0);
-
-      const skippedRequired = runCiGateFixture(
-        "preflight=skipped\nsecurity-fast=success",
-        "checks-ui=skipped",
+      const outcome = runCiGateFixture(jobResults);
+      expect(outcome.status, outcome.stdout).toBe(1);
+      expect(outcome.stdout).toContain(
+        "ios-screenshot-shard finished with failure (selected=true)",
       );
-      expect(skippedRequired.status).not.toBe(0);
-      expect(skippedRequired.stdout).toContain("preflight finished with skipped");
-
-      const failedSelected = runCiGateFixture(
-        "preflight=success\nsecurity-fast=success",
-        "checks-ui=failure\nmacos-swift=cancelled",
+      expect(outcome.stdout).toContain(
+        "ios-screenshot-evidence finished with skipped (selected=true)",
       );
-      expect(failedSelected.status).not.toBe(0);
-      expect(failedSelected.stdout).toContain("checks-ui finished with failure");
-      expect(failedSelected.stdout).toContain("macos-swift finished with cancelled");
-
-      const failedUiE2e = runCiGateFixture(
-        "preflight=success\nsecurity-fast=success",
-        "checks-ui=success\nchecks-ui-e2e=failure",
-      );
-      expect(failedUiE2e.status).not.toBe(0);
-      expect(failedUiE2e.stdout).toContain("checks-ui-e2e finished with failure");
     },
   );
 
