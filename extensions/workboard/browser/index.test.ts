@@ -24,9 +24,10 @@ it("opens an existing reassigned session card after fresh activation without vis
     scopeId: "writer",
   });
   const boards = [{ id: "ops", total: 1, active: 1, archived: 0, byStatus: { todo: 1 } }];
+  let currentCard = card;
   const request = vi.fn(async (method: string) => {
     if (method === "workboard.cards.list") {
-      return { cards: [card], boards };
+      return { cards: [currentCard], boards };
     }
     if (method === "workboard.boards.list") {
       return { boards };
@@ -49,18 +50,29 @@ it("opens an existing reassigned session card after fresh activation without vis
     const mounted = accessory.mount(container, createViewContext(host, context));
     disposeAccessory = () => mounted?.dispose?.();
     await vi.waitFor(() => expect(container.textContent).toContain(card.title));
+    expect(request.mock.calls).toEqual([["workboard.cards.list", {}]]);
+
+    // Activation shares a catalog; an action still needs current card and task state.
+    currentCard = {
+      ...card,
+      title: "Current captured conversation",
+      updatedAt: card.updatedAt + 1,
+    };
+    request.mockClear();
     const action = registrations.get("action/capture-current-session") as ControlUiAction;
     await action.run({ ...context, host, signal: host.signal });
 
+    expect(request.mock.calls).toEqual([
+      ["workboard.cards.list", {}],
+      ["tasks.list", { limit: 500 }],
+    ]);
+    expect(container.textContent).toContain(currentCard.title);
     expect(host.navigation.openPage).toHaveBeenCalledWith({ id: "workboard", path: ["ops"] });
     expect(host.agents.scopeId).toBeNull();
     expect(host.agents.selectedId).toBe("writer");
     expect(
       request.mock.calls.filter(([method]) => method === "workboard.cards.captureSession"),
     ).toHaveLength(0);
-    expect(request.mock.calls.filter(([method]) => method === "workboard.cards.list")).toHaveLength(
-      1,
-    );
   } finally {
     disposeAccessory();
     dispose?.();

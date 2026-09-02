@@ -1,4 +1,4 @@
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type {
   WorkboardAutomation,
   WorkboardDiagnosticAction,

@@ -10,7 +10,7 @@ import { findUiSessionRow } from "../lib/sessions/route-navigation.ts";
 import { OpenClawLightDomContentsElement } from "../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../lit/subscriptions-controller.ts";
 import { runControlUiPluginAction } from "./control-ui-actions.ts";
-import type { ControlUiRegistration } from "./control-ui-runtime.ts";
+import type { ControlUiRegistration } from "./control-ui-capability.ts";
 import { renderPluginContribution } from "./control-ui-view.ts";
 
 class ControlUiPluginContributions extends OpenClawLightDomContentsElement {

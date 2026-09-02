@@ -69,6 +69,20 @@ describe("native plugin browser builds", () => {
     ).toEqual(first);
   });
 
+  it("bundles browser-safe primitive SDK exports", async () => {
+    const project = await fixture();
+    await fs.writeFile(
+      path.join(project.rootDir, project.source),
+      'export { asDateTimestampMs, truncateUtf16Safe } from "openclaw/plugin-sdk/string-coerce-runtime";',
+    );
+    const artifact = await buildPluginControlUi(project);
+    const built = await import(pathToFileURL(path.join(project.rootDir, artifact.entry)).href);
+    expect(built.asDateTimestampMs(0)).toBe(0);
+    expect(built.asDateTimestampMs("0")).toBeUndefined();
+    expect(built.asDateTimestampMs(Number.POSITIVE_INFINITY)).toBeUndefined();
+    expect(built.truncateUtf16Safe("A😀B", 2)).toBe("A");
+  });
+
   it.each([
     {
       name: "dynamic import",

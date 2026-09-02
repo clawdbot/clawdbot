@@ -2,9 +2,9 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import {
   buildPluginControlUi,
-  controlUiSource,
   writePluginBuildManifest,
 } from "../src/cli/plugins-control-ui-build.js";
+import { controlUiSource } from "../src/plugins/package-manifest.js";
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
 
 const rootDir = process.cwd();

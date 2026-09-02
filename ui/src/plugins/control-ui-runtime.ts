@@ -1,23 +1,22 @@
 import { CONTROL_UI_PLUGIN_AUTH_GRANT_TTL_MS } from "../../../src/gateway/control-ui-plugin-frame-contract.js";
 import type {
-  ControlUiAction,
-  ControlUiAccessory,
   ControlUiDisposer,
   ControlUiHost,
-  ControlUiNavigationItem,
-  ControlUiPage,
-  ControlUiPanel,
   ControlUiPlugin,
   ControlUiReplacement,
   ControlUiSurface,
-  ControlUiWidget,
 } from "../../../src/plugin-sdk/control-ui.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
-import type { RouteId } from "../app-routes.ts";
+import type { RouteId } from "../app-route-paths.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import { readGatewayOperatorAccess } from "../app/operator-access.ts";
 import { formatUiError } from "../lib/format-error.ts";
 import { isGatewayMethodAdvertised } from "../lib/gateway-methods.ts";
+import type {
+  ControlUiContributions,
+  ControlUiPluginCapability,
+  ControlUiRegistration,
+} from "./control-ui-capability.ts";
 
 type PluginAsset = {
   pluginId: string;
@@ -32,31 +31,16 @@ type PluginCatalog = {
   diagnostics: { pluginId: string; message: string }[];
 };
 
-export type ControlUiRegistration<T> = {
-  key: `${string}/${string}`;
-  pluginId: string;
-  value: T;
-  host: ControlUiHost;
-  signal: AbortSignal;
-};
-
-type Contributions = {
-  pages: ControlUiPage;
-  navigation: ControlUiNavigationItem;
-  panels: ControlUiPanel;
-  actions: ControlUiAction;
-  accessories: ControlUiAccessory;
-  widgets: ControlUiWidget;
-  replacements: ControlUiReplacement;
-};
-
 export type ControlUiPluginOwner = {
   descriptor: PluginAsset;
   client: GatewayBrowserClient;
   abort: AbortController;
   disposers: Set<ControlUiDisposer>;
   contributions: {
-    [K in keyof Contributions]: Map<string, { value: Contributions[K]; signal: AbortSignal }>;
+    [K in keyof ControlUiContributions]: Map<
+      string,
+      { value: ControlUiContributions[K]; signal: AbortSignal }
+    >;
   };
   selections: Map<ControlUiSurface, string | null>;
   host: ControlUiHost;
@@ -65,7 +49,7 @@ export type ControlUiPluginOwner = {
 const CONTRIBUTION_ID = /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$/;
 const ACTIVATION_TIMEOUT_MS = 15_000;
 
-export class ControlUiPluginRuntime {
+export class ControlUiPluginRuntime implements ControlUiPluginCapability {
   private readonly owners = new Map<string, ControlUiPluginOwner>();
   private readonly selected = new Map<ControlUiSurface, { key: string; signal: AbortSignal }>();
   private readonly listeners = new Set<() => void>();
@@ -498,10 +482,10 @@ export class ControlUiPluginRuntime {
     return !this.disposed && !owner.abort.signal.aborted && this.client === owner.client;
   }
 
-  register<K extends keyof Contributions>(
+  register<K extends keyof ControlUiContributions>(
     owner: Omit<ControlUiPluginOwner, "host">,
     kind: K,
-    value: Contributions[K],
+    value: ControlUiContributions[K],
   ): ControlUiDisposer {
     if (!this.isCurrent(owner)) {
       throw new Error("This plugin UI activation has ended.");
@@ -539,8 +523,10 @@ export class ControlUiPluginRuntime {
     return dispose;
   }
 
-  registrations<K extends keyof Contributions>(kind: K): ControlUiRegistration<Contributions[K]>[] {
-    const values: ControlUiRegistration<Contributions[K]>[] = [];
+  registrations<K extends keyof ControlUiContributions>(
+    kind: K,
+  ): ControlUiRegistration<ControlUiContributions[K]>[] {
+    const values: ControlUiRegistration<ControlUiContributions[K]>[] = [];
     for (const owner of this.owners.values()) {
       for (const [id, entry] of owner.contributions[kind]) {
         values.push({

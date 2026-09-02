@@ -1,9 +1,10 @@
-import type { RelativeTimeUnit } from "@openclaw/normalization-core";
-import { asDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
-import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { asDateTimestampMs, truncateUtf16Safe } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { workboardLocale } from "../host.ts";
 import { t } from "../i18n/index.ts";
-function formatUnit(value: number, unit: RelativeTimeUnit | "millisecond"): string {
+function formatUnit(
+  value: number,
+  unit: "millisecond" | "second" | "minute" | "hour" | "day",
+): string {
   return new Intl.NumberFormat(workboardLocale(), {
     style: "unit",
     unit,

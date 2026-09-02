@@ -1,11 +1,11 @@
 import type { BoardGetParams } from "@openclaw/gateway-protocol";
 import type { ControlUiAction, ControlUiSession } from "../../../src/plugin-sdk/control-ui.js";
 import type { PluginSessionMenuAction } from "../components/session-menu.ts";
-import type { ControlUiPluginRuntime } from "./control-ui-runtime.ts";
+import type { ControlUiPluginCapability } from "./control-ui-capability.ts";
 import { scopeControlUiHost } from "./control-ui-scope.ts";
 
 export function pluginSessionMenuActions(
-  runtime: ControlUiPluginRuntime,
+  runtime: ControlUiPluginCapability,
   session: ControlUiSession,
 ): PluginSessionMenuAction[] {
   return runtime
@@ -36,7 +36,7 @@ export function pluginSessionMenuActions(
 
 export async function runControlUiPluginAction(
   params: BoardGetParams & {
-    runtime: ControlUiPluginRuntime;
+    runtime: ControlUiPluginCapability;
     id: string;
     placement: ControlUiAction["placement"];
     session?: ControlUiSession;

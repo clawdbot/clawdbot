@@ -1,5 +1,5 @@
 import type { SessionsCreateParams, SessionsCreateResult } from "@openclaw/gateway-protocol";
-import { normalizeOptionalString as stringValue } from "@openclaw/normalization-core/string-coerce";
+import { normalizeOptionalString as stringValue } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 
 export type SessionCreateOutcome = {

@@ -14,7 +14,7 @@ import { applicationContext, type ApplicationContext } from "../app/context.ts";
 import { t } from "../i18n/index.ts";
 import { OpenClawLightDomContentsElement } from "../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../lit/subscriptions-controller.ts";
-import type { ControlUiPluginRuntime, ControlUiRegistration } from "./control-ui-runtime.ts";
+import type { ControlUiPluginCapability, ControlUiRegistration } from "./control-ui-capability.ts";
 import { scopeControlUiHost } from "./control-ui-scope.ts";
 
 type ViewKind = "pages" | "panels" | "accessories" | "widgets" | "replacements";
@@ -269,7 +269,7 @@ if (!customElements.get("openclaw-plugin-view")) {
 class PluginSurfaceDirective extends AsyncDirective {
   private host?: LitElement;
   private consumer?: ContextConsumer<typeof applicationContext, LitElement>;
-  private runtime?: ControlUiPluginRuntime;
+  private runtime?: ControlUiPluginCapability;
   private unsubscribe?: () => void;
   private args?: [ControlUiSurface, unknown, unknown, boolean];
   private pending = false;

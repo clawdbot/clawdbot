@@ -80,15 +80,17 @@ export async function buildPluginBundle(
               sideEffects: false,
             }));
             if (backend) {
-              // Lazy CJS modules keep generated bindings hygienic while preserving
-              // Node's require export conditions and dependency evaluation order.
+              // Builtins keep Node's CJS exports. Host imports must pass through
+              // the plugin loader's SDK aliases even when it transforms source.
               build.onResolve({ filter: /.*/ }, ({ path, kind }) =>
                 kind === "require-call" && isPluginBundleHostImport(path)
                   ? { path, namespace: "plugin-bundle-host" }
                   : undefined,
               );
               build.onLoad({ filter: /.*/, namespace: "plugin-bundle-host" }, ({ path }) => ({
-                contents: `import load from "${moduleLocationImport}"; module.exports = load(${JSON.stringify(path)});`,
+                contents: isBuiltin(path)
+                  ? `import load from "${moduleLocationImport}"; module.exports = load(${JSON.stringify(path)});`
+                  : `import * as host from ${JSON.stringify(path)}; module.exports = host;`,
                 loader: "js",
               }));
             }

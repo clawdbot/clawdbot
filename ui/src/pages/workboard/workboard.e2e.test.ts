@@ -444,6 +444,10 @@ suite.define(() => {
       await expect.poll(() => createDialog.isVisible()).toBe(true);
       await createDialog.click({ position: { x: 4, y: 4 } });
       await expect.poll(() => createDialog.isVisible()).toBe(true);
+      await writableGateway.setMethodResponse(
+        "workboard.cards.list",
+        cardsListResponse([createdCard]),
+      );
       await writableGateway.resolveDeferred("workboard.cards.create", { card: createdCard });
       await cardInColumn(writable.page, "Todo", createdCard.title).waitFor({ state: "visible" });
       await captureScreenshot(writable.page, artifacts, "03-created-card");
@@ -476,6 +480,10 @@ suite.define(() => {
           title: editedCard.title,
         },
       });
+      await writableGateway.setMethodResponse(
+        "workboard.cards.list",
+        cardsListResponse([editedCard]),
+      );
       await writableGateway.resolveDeferred("workboard.cards.update", { card: editedCard });
       await cardInColumn(writable.page, "Todo", editedCard.title).waitFor({ state: "visible" });
       await captureScreenshot(writable.page, artifacts, "04-edited-card");
@@ -522,6 +530,10 @@ suite.define(() => {
         id: editedCard.id,
         status: "running",
       });
+      await writableGateway.setMethodResponse(
+        "workboard.cards.list",
+        cardsListResponse([runningCard]),
+      );
       await writableGateway.resolveDeferred("workboard.cards.move", { card: runningCard });
       await cardInColumn(writable.page, "Running", editedCard.title).waitFor({
         state: "visible",
@@ -531,6 +543,12 @@ suite.define(() => {
       const updateBeforeLifecycle = (await writableGateway.getRequests("workboard.cards.update"))
         .length;
       const sessionListBeforeSync = (await writableGateway.getRequests("sessions.list")).length;
+      await writableGateway.setMethodResponse(
+        "sessions.list",
+        sessionsListResponse([
+          sessionRow({ hasActiveRun: false, status: "done", updatedAt: baseTime + 4 }),
+        ]),
+      );
       await writableGateway.deferNext("sessions.list");
       await writableGateway.emitGatewayEvent("sessions.changed", {
         ...sessionRow({
@@ -543,12 +561,7 @@ suite.define(() => {
         ts: baseTime + 4,
       });
       await waitForNextRequest(writableGateway, "sessions.list", sessionListBeforeSync);
-      await writableGateway.resolveDeferred(
-        "sessions.list",
-        sessionsListResponse([
-          sessionRow({ hasActiveRun: false, status: "done", updatedAt: baseTime + 4 }),
-        ]),
-      );
+      await writableGateway.resolveDeferred("sessions.list");
       await writable.page.waitForTimeout(250);
       expect(await writableGateway.getRequests("workboard.cards.update")).toHaveLength(
         updateBeforeLifecycle,
@@ -556,16 +569,18 @@ suite.define(() => {
 
       const listBeforeLifecycle = (await writableGateway.getRequests("workboard.cards.list"))
         .length;
+      // Catalog and page refreshes read the same committed server state after the event.
+      await writableGateway.setMethodResponse(
+        "workboard.cards.list",
+        cardsListResponse([reviewedCard]),
+      );
       await writableGateway.deferNext("workboard.cards.list");
       await writableGateway.emitGatewayEvent(WORKBOARD_CHANGED_EVENT, {
         epoch: "workboard-e2e",
         revision: 1,
       });
       await waitForNextRequest(writableGateway, "workboard.cards.list", listBeforeLifecycle);
-      await writableGateway.resolveDeferred(
-        "workboard.cards.list",
-        cardsListResponse([reviewedCard]),
-      );
+      await writableGateway.resolveDeferred("workboard.cards.list");
       const reviewedCardSurface = cardInColumn(writable.page, "Review", editedCard.title);
       await reviewedCardSurface.waitFor({ state: "visible" });
       await reviewedCardSurface.getByRole("button", { name: "View details", exact: true }).click();
@@ -582,6 +597,10 @@ suite.define(() => {
       await expect.poll(() => editDialog.isVisible()).toBe(true);
       const listBeforeLiveRefresh = (await writableGateway.getRequests("workboard.cards.list"))
         .length;
+      await writableGateway.setMethodResponse(
+        "workboard.cards.list",
+        cardsListResponse([liveRefreshedCard]),
+      );
       await writableGateway.deferNext("workboard.cards.list");
       await writableGateway.emitGatewayEvent(WORKBOARD_CHANGED_EVENT, {
         epoch: "workboard-e2e",
@@ -596,10 +615,7 @@ suite.define(() => {
         .getByRole("button", { name: "Cancel", exact: true })
         .click();
       await waitForNextRequest(writableGateway, "workboard.cards.list", listBeforeLiveRefresh);
-      await writableGateway.resolveDeferred("workboard.cards.list", {
-        cards: [liveRefreshedCard],
-        statuses: WORKBOARD_STATUSES,
-      });
+      await writableGateway.resolveDeferred("workboard.cards.list");
       await writable.page
         .getByText("Acceptance: live Gateway invalidation refreshed this card")
         .waitFor({ state: "visible" });
@@ -617,10 +633,7 @@ suite.define(() => {
         .getByRole("button", { name: /^Refresh$/u })
         .click();
       await waitForNextRequest(writableGateway, "workboard.cards.list", listBeforeReload);
-      await writableGateway.resolveDeferred("workboard.cards.list", {
-        cards: [liveRefreshedCard],
-        statuses: WORKBOARD_STATUSES,
-      });
+      await writableGateway.resolveDeferred("workboard.cards.list");
       await cardInColumn(writable.page, "Review", editedCard.title).waitFor({ state: "visible" });
       await writable.page
         .getByText("Acceptance: live Gateway invalidation refreshed this card")

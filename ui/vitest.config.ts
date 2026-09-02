@@ -46,14 +46,9 @@ const workspaceSourceAliases = [
     find: "../logging/redact.js",
     replacement: path.resolve(here, "src/lib/browser-redact.ts"),
   },
-  {
-    find: "openclaw/plugin-sdk/control-ui",
-    replacement: path.resolve(repoRoot, "src/plugin-sdk/control-ui.ts"),
-  },
-  {
-    find: "openclaw/plugin-sdk/test-fixtures",
-    replacement: path.resolve(repoRoot, "src/plugin-sdk/test-fixtures.ts"),
-  },
+  ...sharedVitestConfig.resolve.alias.filter(
+    (alias) => typeof alias.find === "string" && alias.find.startsWith("openclaw/plugin-sdk/"),
+  ),
   {
     find: /^@openclaw\/model-catalog-core\/(.+)$/u,
     replacement: path.resolve(repoRoot, "packages/model-catalog-core/src/$1.ts"),

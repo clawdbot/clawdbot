@@ -6,6 +6,9 @@ import { pathToFileURL } from "node:url";
 import { build } from "esbuild";
 import { extract } from "tar";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createPluginCache, withPluginCache } from "../plugins/plugin-cache.js";
+import { getCachedPluginSourceModuleLoader } from "../plugins/plugin-module-loader-cache.js";
+import { buildPluginLoaderAliasMap } from "../plugins/sdk-alias.js";
 import { defaultRuntime } from "../runtime.js";
 import { execNodeEvalSync } from "../test-utils/node-process.js";
 import {
@@ -96,6 +99,33 @@ describe("plugin artifact authoring", () => {
     });
     expect(loaded.metadata.id).toBe("draft-review");
     expect(loaded.metadata.tools.map((tool) => tool.name)).toEqual(["draft_review_analyze"]);
+    const sourceExtracted = path.join(parent, "source-extracted");
+    await fs.mkdir(sourceExtracted);
+    await extract({ file: archive, cwd: sourceExtracted, strict: true });
+    const sourcePackageRoot = path.join(sourceExtracted, "package");
+    const sourceEntryPath = path.join(sourcePackageRoot, "dist/index.js");
+    // A separate extraction keeps Node's module cache from masking the source
+    // loader's SDK aliases, even when the host also has built SDK artifacts.
+    const sourceLoaded = withPluginCache(createPluginCache(), () =>
+      getCachedPluginSourceModuleLoader({
+        modulePath: sourceEntryPath,
+        rootDir: sourcePackageRoot,
+        importerUrl: import.meta.url,
+        aliasMap: buildPluginLoaderAliasMap(
+          sourceEntryPath,
+          process.argv[1],
+          import.meta.url,
+          "src",
+        ),
+        transformOpenClawDependencies: true,
+      })(sourceEntryPath),
+    );
+    expect(sourceLoaded).toMatchObject({
+      __openclawCreateRequire: 1,
+      createRequire: "author",
+      globalThis: "author-global",
+      default: { id: "draft-review" },
+    });
     await fs.writeFile(path.join(rootDir, "src/control-ui.ts"), "export default null;");
     expect(await fs.readFile(archive)).toEqual(bytes);
   });
