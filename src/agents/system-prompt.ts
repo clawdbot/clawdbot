@@ -782,6 +782,7 @@ export function appendModelIdentitySystemPrompt(params: {
 
 export function buildAgentSystemPrompt(params: {
   workspaceDir: string;
+  runtimeCwd?: string;
   defaultThinkLevel?: ThinkLevel;
   reasoningLevel?: ReasoningLevel;
   extraSystemPrompt?: string;
@@ -1081,6 +1082,8 @@ export function buildAgentSystemPrompt(params: {
     : (params.silentReplyPromptMode ?? "generic");
   const sandboxContainerWorkspace = params.sandboxInfo?.containerWorkspaceDir?.trim();
   const sanitizedWorkspaceDir = sanitizeForPromptLiteral(params.workspaceDir);
+  const runtimeCwd = params.runtimeCwd ?? params.workspaceDir;
+  const hasSeparateRuntimeCwd = !sandboxedRuntime && runtimeCwd !== params.workspaceDir;
   const sanitizedSandboxContainerWorkspace = sandboxContainerWorkspace
     ? sanitizeForPromptLiteral(sandboxContainerWorkspace)
     : "";
@@ -1099,8 +1102,15 @@ export function buildAgentSystemPrompt(params: {
       : "Single global file workspace unless explicitly told otherwise.";
   const workspaceOnlyGuidance =
     params.fsWorkspaceOnly === true
-      ? "tools.fs.workspaceOnly ON: file-tool scratch/temp/meta stays in workspace, preferably `.openclaw/tmp/`. If file tools need it later, never exec-write `/tmp`; use workspace path."
+      ? `tools.fs.workspaceOnly ON: file-tool scratch/temp/meta stays in ${hasSeparateRuntimeCwd ? "working directory" : "workspace"}, preferably \`.openclaw/tmp/\`. If file tools need it later, never exec-write \`/tmp\`; use ${hasSeparateRuntimeCwd ? "working directory" : "workspace"} path.`
       : "";
+  const directorySection = hasSeparateRuntimeCwd
+    ? [
+        "## Directory Roles",
+        `Working directory: ${sanitizeForPromptLiteral(runtimeCwd)} (tools and deliverables).`,
+        `Agent workspace: ${sanitizedWorkspaceDir} (AGENTS.md/SOUL.md, other agent instructions, MEMORY.md/memory only; use absolute paths).`,
+      ]
+    : ["## Workspace", `Working directory: ${displayWorkspaceDir}`, workspaceGuidance];
   const safetySection = [
     "## Safety",
     "No independent goals, self-preservation, replication, resource acquisition, power-seeking, or plans beyond user request.",
@@ -1164,6 +1174,7 @@ export function buildAgentSystemPrompt(params: {
   });
   const stablePrefixCacheKey = hashStablePromptInput({
     workspaceDir: params.workspaceDir,
+    runtimeCwd,
     promptMode,
     promptSurface,
     toolLines,
@@ -1342,9 +1353,7 @@ export function buildAgentSystemPrompt(params: {
         ? params.modelAliasLines.join("\n")
         : "",
       params.modelAliasLines && params.modelAliasLines.length > 0 && !isMinimal ? "" : "",
-      "## Workspace",
-      `Working directory: ${displayWorkspaceDir}`,
-      workspaceGuidance,
+      ...directorySection,
       workspaceOnlyGuidance,
       ...workspaceNotes,
       "",

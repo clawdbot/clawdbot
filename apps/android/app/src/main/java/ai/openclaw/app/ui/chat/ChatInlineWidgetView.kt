@@ -55,6 +55,9 @@ import androidx.webkit.ProfileStore
 import androidx.webkit.WebViewCompat
 import androidx.webkit.WebViewFeature
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -70,6 +73,16 @@ private const val INLINE_WIDGET_DOCUMENT_MAX_BYTES = 2L * 1024 * 1024
 private const val INLINE_WIDGET_FETCH_TIMEOUT_SECONDS = 8L
 private const val HTTP_HEADER_ACCEPT = "Accept"
 private const val HTTP_HEADER_CACHE_CONTROL = "Cache-Control"
+
+// Socket closure may block and must finish after the widget's composition is gone.
+private val inlineWidgetCleanupScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
+internal fun closePinnedWidgetClientAsync(client: OkHttpClient) {
+  inlineWidgetCleanupScope.launch {
+    client.dispatcher.cancelAll()
+    client.connectionPool.evictAll()
+  }
+}
 
 @Composable
 internal fun ChatInlineWidget(
@@ -372,8 +385,7 @@ private class InlineWidgetWebViewClient(
   }
 
   private fun closePinnedClient() {
-    pinnedClient?.dispatcher?.cancelAll()
-    pinnedClient?.connectionPool?.evictAll()
+    pinnedClient?.let(::closePinnedWidgetClientAsync)
   }
 
   override fun onPageCommitVisible(

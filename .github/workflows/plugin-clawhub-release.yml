@@ -55,7 +55,8 @@ on:
         type: boolean
 
 concurrency:
-  group: plugin-clawhub-release-${{ github.event_name == 'workflow_dispatch' && inputs.ref || github.sha }}
+  # Validation gets its own slot; real publication remains serialized by target.
+  group: plugin-clawhub-release-${{ inputs.dry_run && format('dry-run-{0}', github.run_id) || github.event_name == 'workflow_dispatch' && inputs.ref || github.sha }}
   cancel-in-progress: false
 
 env:
@@ -511,9 +512,6 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           install-bun: "true"
           install-deps: "true"
-
-      - name: Verify package-local runtime build
-        run: node --import tsx scripts/check-plugin-npm-runtime-builds.mts --package "${{ matrix.plugin.packageDir }}"
 
       - name: Install pinned ClawHub CLI wrapper
         run: |

@@ -820,13 +820,15 @@ private fun SessionRow(
             menuExpanded = false
             onRename()
           }
-          SessionMenuItem(
-            nativeString(
-              if (session.hasActiveRun == true) "Fork from last completed message" else "Fork",
-            ),
-          ) {
-            menuExpanded = false
-            onFork()
+          if (session.modelSelectionLocked != true) {
+            SessionMenuItem(
+              nativeString(
+                if (session.hasActiveRun == true) "Fork from last completed message" else "Fork",
+              ),
+            ) {
+              menuExpanded = false
+              onFork()
+            }
           }
           SessionMenuItem(nativeString("Move to group")) { submenu = SessionRowSubmenu.Group }
           if (canChangeArchived) {

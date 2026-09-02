@@ -165,7 +165,6 @@ class ChatFullMessageOwnershipLayoutTest {
             showSidebarButton = true,
             onOpenSidebar = {},
             onToggleTalk = {},
-            onOpenSessions = {},
             onOpenDashboard = {},
             onOpenGatewaySettings = {},
           )

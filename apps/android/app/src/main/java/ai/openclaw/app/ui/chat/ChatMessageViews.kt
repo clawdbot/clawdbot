@@ -342,12 +342,12 @@ fun ChatOutboxBubble(
         modifier = Modifier.weight(1f),
       )
       if (failed && retryEnabled) {
-        ChatOutboxAction(label = nativeString("Retry"), color = ClawTheme.colors.accent, onClick = onRetry)
+        ChatOutboxAction(label = nativeString("Retry"), borderColor = ClawTheme.colors.accent, onClick = onRetry)
       }
       // Sending rows are mid-dispatch and accepted rows may already be delivered; both stay
       // action-free until reconciliation resolves them, so a delete can never race a send.
       if (item.status == ChatOutboxStatus.Queued || failed) {
-        ChatOutboxAction(label = nativeString("Delete"), color = ClawTheme.colors.textMuted, onClick = onDelete)
+        ChatOutboxAction(label = nativeString("Delete"), borderColor = ClawTheme.colors.textMuted, onClick = onDelete)
       }
     }
   }
@@ -356,15 +356,15 @@ fun ChatOutboxBubble(
 @Composable
 private fun ChatOutboxAction(
   label: String,
-  color: Color,
+  borderColor: Color,
   onClick: () -> Unit,
 ) {
   Surface(
     onClick = onClick,
     shape = RoundedCornerShape(8.dp),
     color = Color.Transparent,
-    contentColor = color,
-    border = BorderStroke(1.dp, color.copy(alpha = 0.5f)),
+    contentColor = ClawTheme.colors.text,
+    border = BorderStroke(1.dp, borderColor.copy(alpha = 0.5f)),
   ) {
     Text(
       text = label,
@@ -529,11 +529,10 @@ fun ChatCodeBlock(
   isComplete: Boolean = true,
 ) {
   val display = code.trimEnd()
-  // Syntax roles reuse semantic colors that keep at least 4.5:1 contrast against codeBg;
-  // changing these mappings can make highlighted code less readable than plain code.
+  // A custom accent may be too light for keywords on the code surface.
   val tokenColors =
     CodeTokenColors(
-      keyword = ClawTheme.colors.accent,
+      keyword = ClawTheme.colors.codeText,
       string = ClawTheme.colors.success,
       comment = ClawTheme.colors.textMuted,
       number = ClawTheme.colors.danger,

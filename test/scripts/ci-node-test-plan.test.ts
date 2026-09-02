@@ -293,26 +293,39 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       const target = createNodeTestShards().find((shard) =>
         shard.includePatterns?.includes(consumer),
       )!;
-      vi.spyOn(testTimings, "readCompactGroupTimings").mockImplementation((profile) => ({
-        [target.shardName]: profile === slowerProfile ? 400 : 100,
-      }));
-      const plan = createNodeTestShardBundles({
-        compactMode: "pull-request",
-        runnerBackend,
-        includeReleaseOnlyPluginShards: false,
-      });
-      const groups = plan
-        .flatMap((job) => job.groups)
-        .filter((group) => group.shard_name.startsWith(`${target.shardName}-hosted-`));
-      expect(groups).toHaveLength(3);
-      expect(
-        groups
-          .filter((group) => group.pretestBuildMode === "runtime")
-          .map((group) => group.includePatterns?.includes(consumer)),
-      ).toEqual([true]);
-      expect(groups.flatMap((group) => group.includePatterns ?? []).toSorted()).toEqual(
-        target.includePatterns!.toSorted(),
-      );
+      const originalShards = fullSuiteVitestShards.slice();
+      // Exercise this owner's split without consuming unrelated suite families' job budget.
+      const fixtureShards = originalShards
+        .map((shard) => ({
+          ...shard,
+          projects: shard.projects.filter((config) => target.configs.includes(config)),
+        }))
+        .filter((shard) => shard.projects.length > 0);
+      fullSuiteVitestShards.splice(0, fullSuiteVitestShards.length, ...fixtureShards);
+      try {
+        vi.spyOn(testTimings, "readCompactGroupTimings").mockImplementation((profile) => ({
+          [target.shardName]: profile === slowerProfile ? 400 : 100,
+        }));
+        const plan = createNodeTestShardBundles({
+          compactMode: "pull-request",
+          runnerBackend,
+          includeReleaseOnlyPluginShards: false,
+        });
+        const groups = plan
+          .flatMap((job) => job.groups)
+          .filter((group) => group.shard_name.startsWith(`${target.shardName}-hosted-`));
+        expect(groups).toHaveLength(3);
+        expect(
+          groups
+            .filter((group) => group.pretestBuildMode === "runtime")
+            .map((group) => group.includePatterns?.includes(consumer)),
+        ).toEqual([true]);
+        expect(groups.flatMap((group) => group.includePatterns ?? []).toSorted()).toEqual(
+          target.includePatterns!.toSorted(),
+        );
+      } finally {
+        fullSuiteVitestShards.splice(0, fullSuiteVitestShards.length, ...originalShards);
+      }
     },
   );
   afterEach(() => {

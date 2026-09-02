@@ -2105,9 +2105,45 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt.match(/## Conversation Context/g)).toHaveLength(1);
   });
 
+  it("keeps the unsplit workspace prompt byte-identical", () => {
+    const params = { workspaceDir: "/tmp/openclaw" };
+    const prompt = buildAgentSystemPrompt(params);
+    expect(buildAgentSystemPrompt({ ...params, runtimeCwd: params.workspaceDir })).toBe(prompt);
+    expect(prompt).toContain(
+      "## Workspace\nWorking directory: /tmp/openclaw\nSingle global file workspace unless explicitly told otherwise.",
+    );
+    expect(prompt).not.toContain("## Directory Roles");
+  });
+
+  it("keys the stable directory roles by runtime cwd without moving agent files", () => {
+    const params = { workspaceDir: "/tmp/openclaw", fsWorkspaceOnly: true };
+    const prompts = ["/tmp/repo-a", "/tmp/repo-b", "/tmp/repo-a"].map((runtimeCwd) =>
+      buildAgentSystemPrompt({ ...params, runtimeCwd }),
+    );
+    for (const [index, cwd] of ["/tmp/repo-a", "/tmp/repo-b"].entries()) {
+      const prefix = prompts[index]!.split(SYSTEM_PROMPT_CACHE_BOUNDARY)[0];
+      expect(prefix).toContain(
+        `## Directory Roles\nWorking directory: ${cwd} (tools and deliverables).\nAgent workspace: /tmp/openclaw (AGENTS.md/SOUL.md, other agent instructions, MEMORY.md/memory only; use absolute paths).`,
+      );
+      expect(prefix).not.toContain("## Workspace\n");
+      expect(prefix).not.toContain("Single global file workspace");
+      expect(prefix).toContain("file-tool scratch/temp/meta stays in working directory");
+    }
+    expect(prompts[2]).toBe(prompts[0]);
+  });
+
+  it("sanitizes runtime cwd before rendering directory roles", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      runtimeCwd: "/tmp/repo\n\u2028\u202e-injected",
+    });
+    expect(prompt).toContain("Working directory: /tmp/repo-injected (tools and deliverables).");
+  });
+
   it("describes sandboxed runtime and elevated when allowed", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
+      runtimeCwd: "/tmp/task-repo",
       toolNames: ["exec"],
       sandboxInfo: {
         enabled: true,
@@ -2120,6 +2156,7 @@ describe("buildAgentSystemPrompt", () => {
     });
 
     expect(prompt).toContain("Working directory: /workspace");
+    expect(prompt).not.toContain("## Directory Roles");
     expect(prompt).toContain(
       "File tools use host workspace /tmp/openclaw. exec uses container /workspace or relative workdir paths; never host paths.",
     );

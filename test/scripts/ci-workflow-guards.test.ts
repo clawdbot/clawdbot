@@ -2208,7 +2208,7 @@ NODE
       contents: "read",
       packages: "write",
     });
-    expect(releaseWorkflow.jobs.approve_docker_publish.environment).toBe("docker-release");
+    expect(releaseWorkflow.jobs.publish.environment).toBe("docker-release");
   });
 
   it("forbids moving reusable workflow references", () => {
@@ -3469,7 +3469,11 @@ NODE
     expect(step.run).toContain('"$comparison_status" != "ahead"');
     expect(step.run).toContain('"$comparison_status" != "identical"');
 
-    for (const contextRef of ["release/2026.8.1", "extended-stable/2026.8.33"]) {
+    for (const contextRef of [
+      "release/2026.8.1",
+      "release/2026.8.1-1",
+      "extended-stable/2026.8.33",
+    ]) {
       for (const comparisonStatus of ["ahead", "identical"]) {
         const result = runTargetContextValidation(contextRef, targetSha, comparisonStatus);
         expect(result.status, `${contextRef}: ${result.output}`).toBe(0);
@@ -4392,7 +4396,7 @@ NODE
           step: expect.objectContaining({ name: "Setup Node environment" }),
         },
         {
-          file: ".github/workflows/openclaw-npm-release.yml",
+          file: ".github/workflows/openclaw-npm-preflight.yml",
           mode: "read-write",
           step: expect.objectContaining({ name: "Setup Node environment" }),
         },

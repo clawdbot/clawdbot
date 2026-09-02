@@ -277,6 +277,17 @@ the container normally.
 
 `openclaw doctor --fix` is the only owner for persistent file-to-SQLite migrations. It validates and claims each recognized source, writes and verifies canonical rows, records a migration receipt, then removes the retired source. Runtime code does not perform lazy imports or fallback reads.
 
+For legacy workspace setup files, an existing canonical SQLite setup record wins,
+including milestones that are absent in SQLite. Doctor does not replay stale
+milestones over it. Before removing a validated setup file or interrupted claim,
+Doctor preserves its exact bytes beside the original as
+`<source>.migrated.<sha256>.<unique-id>`. The SQLite migration receipt records that archive
+path and one line per differing milestone (`legacy=... canonical=...`), which
+Doctor also prints. With no canonical setup record, Doctor imports the legacy
+milestones normally. A successful repair removes the runtime blocker; the next
+run has no workspace setup migration to repeat. Invalid files and workspace
+identity/version conflicts remain blocked for inspection.
+
 Doctor reports interrupted auth-profile archive recovery even when no new migration remains or you decline another migration. If recovery cannot finish, its warning includes the failure cause and leaves the pending source for recovery; do not delete it to silence the warning.
 
 `doctor --fix` also repairs an inconsistent completed auth migration only when its old receipt has no credential fingerprints, none of the migrated credentials remain in the current canonical store, and the preserved archive still matches the recorded source hash. Doctor reimports through the normal verified migration flow. Completed receipts with fingerprints, surviving migrated credentials, or no archive remain untouched, so removing credentials after a verified migration does not restore them from backup.

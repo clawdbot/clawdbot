@@ -468,9 +468,11 @@ fun OnboardingFlow(
   modifier: Modifier = Modifier,
 ) {
   val appearanceThemeMode by viewModel.appearanceThemeMode.collectAsState()
+  val appearanceThemeFamily by viewModel.appearanceThemeFamily.collectAsState()
+  val appearanceAccentArgb by viewModel.appearanceAccentArgb.collectAsState()
   val gatewayAccentArgb by viewModel.gatewayAccentArgb.collectAsState()
   val onboardingDark = appearanceThemeMode.isDark(systemDark = isSystemInDarkTheme())
-  ClawDesignTheme(dark = onboardingDark, accentArgb = gatewayAccentArgb) {
+  ClawDesignTheme(dark = onboardingDark, family = appearanceThemeFamily, accentArgb = appearanceAccentArgb ?: gatewayAccentArgb) {
     val context = LocalContext.current
     val gatewayConnectionDisplay by viewModel.gatewayConnectionDisplay.collectAsState()
     val statusText = gatewayConnectionDisplay.statusText
@@ -1396,9 +1398,9 @@ private fun GatewayPrerequisites(onOpenSetupGuide: () -> Unit) {
     )
     Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
       TextButton(onClick = onOpenSetupGuide) {
-        Icon(imageVector = Icons.Default.Link, contentDescription = null, modifier = Modifier.size(16.dp), tint = ClawTheme.colors.primary)
+        Icon(imageVector = Icons.Default.Link, contentDescription = null, modifier = Modifier.size(16.dp))
         Spacer(modifier = Modifier.width(7.dp))
-        Text(text = nativeString("Android setup guide"), style = ClawTheme.type.label, color = ClawTheme.colors.primary)
+        Text(text = nativeString("Android setup guide"), style = ClawTheme.type.label)
       }
     }
   }
