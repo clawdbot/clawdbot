@@ -45,8 +45,15 @@ built entries:
   entry; OpenClaw does not silently fall back to source.
 - Without an explicit runtime entry, package discovery through
   `plugins.load.paths` or global roots looks for matching JavaScript peers under
-  `dist/` first, then beside the TypeScript source entry, trying `.js`, `.mjs`,
-  and `.cjs` in that order at each location.
+  `dist/` first, then beside the TypeScript source entry. For `src/` entries,
+  it checks both flattened `dist/` output and output retaining `dist/src/`.
+  At each location, `.mts` prefers `.mjs` and `.cts` prefers `.cjs`; `.ts` and
+  `.tsx` try `.js`, `.mjs`, then `.cjs`. Installation, discovery, setup, runtime
+  loading, and published-package verification use the same candidate order.
+- A `plugins.load.paths` entry that resolves inside the host's own bundled
+  plugin tree is discovered as that bundled plugin, so it keeps the bundled
+  entry point and bundled provenance whether or not compiled output exists
+  beside the source. Selecting a bundled plugin's own path never reclassifies it.
 - Package installation and managed installed-package discovery require compiled
   output for TypeScript extension and setup entries. Missing compiled output is
   a packaging error, not a reason to fall back to TypeScript.
@@ -197,6 +204,12 @@ export default definePluginEntry({
   limit and set `nextCursor` when more may exist. The Control UI resolves only
   one result with no next page; multiple rows or `nextCursor` are explicitly
   ambiguous and never select the first row.
+
+  Named share links use `/<routeSegment>/<title-slug>-<id-prefix>` with the same
+  bounded slug as regular session links. Return the title in the catalog row's
+  `name`; the Control UI uses it to refresh the decorative slug. Only the id
+  suffix selects the transcript. Bare-id and stale-title links remain valid,
+  and titles never resolve an ambiguous id.
 
   `routeSegment` must not use the first segment of a built-in Control UI route
   or alias, and it must be unique across active session catalogs. Invalid,

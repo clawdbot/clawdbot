@@ -105,6 +105,7 @@ function createMetrics(startupJsGzipBytes: number) {
         brotliBytes: 12,
       },
     },
+    mermaidRenderer: [],
   };
 }
 
@@ -199,6 +200,70 @@ describe("Control UI performance budgets", () => {
     );
   });
 
+  it.each([
+    { name: "accepts the capped deferred renderer", gzipBytes: 960 * 1024, violations: [] },
+    {
+      name: "rejects renderer growth above its cap",
+      gzipBytes: 960 * 1024 + 1,
+      violations: ["isolated Mermaid JS gzip"],
+    },
+    {
+      name: "rejects duplicate renderer artifacts",
+      gzipBytes: 200_000,
+      duplicate: true,
+      violations: ["isolated Mermaid JS assets"],
+    },
+    {
+      name: "rejects the renderer in startup preloads",
+      gzipBytes: 200_000,
+      startup: true,
+      violations: ["startup Mermaid JS assets"],
+    },
+    {
+      name: "retains the ordinary chunk cap beside the renderer",
+      gzipBytes: 200_000,
+      ordinaryGzipBytes: 215 * 1024 + 1,
+      violations: ["largest JS gzip"],
+    },
+    {
+      name: "does not exempt similarly named chunks",
+      gzipBytes: 960 * 1024,
+      rendererName: "mermaid-extra-a.js",
+      violations: ["largest JS gzip"],
+    },
+  ])("$name", ({ gzipBytes, duplicate, startup, ordinaryGzipBytes, rendererName, violations }) => {
+    const { distDir, writeAsset } = createDistFixture();
+    fs.writeFileSync(
+      path.join(distDir, "index.html"),
+      '<script type="module" src="./assets/index-a.js"></script>\n' +
+        '<link rel="stylesheet" href="./assets/index-c.css">\n' +
+        (startup ? '<link rel="modulepreload" href="./assets/mermaid.min-a.js">\n' : ""),
+    );
+    writeAsset("index-a.js", { rawBytes: 100, gzipBytes: 40, brotliBytes: 30 });
+    writeAsset("lazy-b.js", {
+      rawBytes: 200,
+      gzipBytes: ordinaryGzipBytes ?? 70,
+      brotliBytes: 55,
+    });
+    writeAsset("index-c.css", { rawBytes: 50, gzipBytes: 15, brotliBytes: 12 });
+    writeAsset(rendererName ?? "mermaid.min-a.js", { rawBytes: 200, gzipBytes, brotliBytes: 100 });
+    if (duplicate) {
+      writeAsset("mermaid.min-b.js", { rawBytes: 200, gzipBytes, brotliBytes: 100 });
+    }
+
+    const metrics = collectControlUiPerformanceMetrics(distDir);
+    expect(evaluateControlUiPerformanceBudgets(metrics).map((entry) => entry.metric)).toEqual(
+      violations,
+    );
+    expect(metrics.total.js.gzipBytes).toBe(
+      40 + (ordinaryGzipBytes ?? 70) + gzipBytes * (duplicate ? 2 : 1),
+    );
+    if (!rendererName) {
+      expect(metrics.largest.js.file).toBe("assets/lazy-b.js");
+      expect(formatControlUiPerformanceReport(metrics)).toContain("isolated Mermaid JS:");
+    }
+  });
+
   it("includes exact bytes when rounded violation values collide", () => {
     const metrics = {
       schemaVersion: 1 as const,
@@ -227,6 +292,7 @@ describe("Control UI performance budgets", () => {
           brotliBytes: 12,
         },
       },
+      mermaidRenderer: [],
     } satisfies ReturnType<typeof collectControlUiPerformanceMetrics>;
     const budgets = {
       startupJsRequests: 1,

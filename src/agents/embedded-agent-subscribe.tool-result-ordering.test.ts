@@ -6,6 +6,10 @@ import {
   createSubscribedSessionHarness,
   emitAssistantTextDeltaAndEnd,
 } from "./embedded-agent-subscribe.e2e-harness.js";
+import {
+  createOpenAiResponsesPartial,
+  createOpenAiResponsesTextBlock,
+} from "./embedded-agent-subscribe.openai-responses.test-helpers.js";
 import type { SubscribeEmbeddedAgentSessionParams } from "./embedded-agent-subscribe.types.js";
 
 describe("subscribeEmbeddedAgentSession tool result ordering", () => {
@@ -79,6 +83,11 @@ describe("subscribeEmbeddedAgentSession tool result ordering", () => {
 
         emit({ type: "message_start", message: { role: "assistant", content: [] } });
         emitAssistantTextDeltaAndEnd({ emit, text: answer });
+        // Model facts are captured at ingress while visible delivery waits for the notice.
+        expect(subscription.getCurrentAttemptAssistant()).toMatchObject({
+          role: "assistant",
+          content: [{ type: "text", text: answer }],
+        });
         emit({ type: "agent_end", messages: [], willRetry: false });
         const drain = subscription.waitForPendingEvents().then(() => {
           order.push("drained");
@@ -88,7 +97,6 @@ describe("subscribeEmbeddedAgentSession tool result ordering", () => {
         await setImmediate();
         expect([...order]).toEqual(["notice entered"]);
         expect(subscription.assistantTexts).toEqual([]);
-        expect(subscription.getCurrentAttemptAssistant()).toBeUndefined();
         expect(onAgentEvent.mock.calls.filter(([event]) => event.stream === "assistant")).toEqual(
           [],
         );
@@ -140,6 +148,103 @@ describe("subscribeEmbeddedAgentSession tool result ordering", () => {
         ).toEqual([expect.objectContaining({ text: answer })]);
       } finally {
         notice.resolve();
+        await subscription.waitForPendingEvents();
+        subscription.unsubscribe();
+      }
+    },
+  );
+
+  it.each(["live", "terminal-only"] as const)(
+    "suppresses assistant blocks after an approval prompt (%s boundary)",
+    async (boundary) => {
+      const onToolResult = vi.fn();
+      const onBlockReply = vi.fn();
+      const onPartialReply = vi.fn();
+      const onAgentEvent =
+        vi.fn<NonNullable<SubscribeEmbeddedAgentSessionParams["onAgentEvent"]>>();
+      const { emit, subscription } = createSubscribedSessionHarness({
+        runId: `run-approval-${boundary}`,
+        onToolResult,
+        onBlockReply,
+        onPartialReply,
+        onAgentEvent,
+        blockReplyBreak: "message_end",
+      });
+      const approvalId = "12345678-1234-1234-1234-123456789012";
+      const first = createOpenAiResponsesPartial({
+        text: "Approval is needed.",
+        id: "approval-first",
+        signaturePhase: "final_answer",
+      });
+      const final = {
+        ...first,
+        content: [
+          ...first.content,
+          createOpenAiResponsesTextBlock({
+            text: "Please approve the command.",
+            id: "approval-second",
+            phase: "final_answer",
+          }),
+        ],
+      };
+
+      try {
+        emit({ type: "tool_execution_start", toolName: "exec", toolCallId: "approval", args: {} });
+        emit({
+          type: "tool_execution_end",
+          toolName: "exec",
+          toolCallId: "approval",
+          isError: false,
+          result: {
+            details: {
+              status: "approval-pending",
+              approvalId,
+              approvalSlug: "12345678",
+              host: "gateway",
+              command: "echo pending",
+              expiresAtMs: Date.now() + 60_000,
+            },
+          },
+        });
+        await subscription.waitForPendingEvents();
+        expect(onToolResult).toHaveBeenCalledExactlyOnceWith(
+          expect.objectContaining({
+            channelData: expect.objectContaining({
+              execApproval: expect.objectContaining({ approvalId }),
+            }),
+          }),
+        );
+        expect(subscription.didSendDeterministicApprovalPrompt()).toBe(true);
+
+        emit({ type: "message_start", message: first });
+        for (const [contentIndex, block] of final.content.entries()) {
+          if (contentIndex > 0 && boundary === "terminal-only") {
+            break;
+          }
+          const partial = { ...final, content: final.content.slice(0, contentIndex + 1) };
+          emit({
+            type: "message_update",
+            message: partial,
+            assistantMessageEvent: {
+              type: "text_delta",
+              contentIndex,
+              delta: block.text,
+              partial,
+            },
+          });
+        }
+        await subscription.waitForPendingEvents();
+        expect(onBlockReply).not.toHaveBeenCalled();
+
+        emit({ type: "message_end", message: final });
+        emit({ type: "agent_end", messages: [final] });
+        await subscription.waitForPendingEvents();
+        expect(onBlockReply).not.toHaveBeenCalled();
+        expect(onPartialReply).not.toHaveBeenCalled();
+        expect(onAgentEvent.mock.calls.filter(([event]) => event.stream === "assistant")).toEqual(
+          [],
+        );
+      } finally {
         await subscription.waitForPendingEvents();
         subscription.unsubscribe();
       }

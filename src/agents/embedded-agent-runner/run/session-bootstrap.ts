@@ -7,7 +7,7 @@ import {
 } from "../../../config/sessions.js";
 import { parseSqliteSessionFileMarker } from "../../../config/sessions/legacy-sqlite-marker.js";
 import {
-  listSessionEntriesCore,
+  listSessionEntriesReadOnly,
   loadSessionEntry,
   loadSessionEntryReadOnly,
   patchSessionEntryCore,
@@ -66,14 +66,14 @@ export function buildContextEngineCompactionSessionTarget(params: {
   const candidateKeyAgentId = parseAgentSessionKey(candidateSessionKey)?.agentId;
   const suppliedEntry =
     marker && candidateSessionKey
-      ? loadSessionEntry({
+      ? loadSessionEntryReadOnly({
           agentId: marker.agentId,
           sessionKey: candidateSessionKey,
           storePath: marker.storePath,
         })
       : undefined;
   const markerMatches = marker
-    ? listSessionEntriesCore({
+    ? listSessionEntriesReadOnly({
         agentId: marker.agentId,
         storePath: marker.storePath,
       }).filter(({ entry }) => entry.sessionId === marker.sessionId)
@@ -218,7 +218,6 @@ export function backfillSessionKey(params: {
       : resolveSessionKeyForRequestCore({
           cfg: params.config,
           sessionId: params.sessionId,
-          clone: false,
         });
     return normalizeOptionalString(resolved.sessionKey);
   } catch (err) {

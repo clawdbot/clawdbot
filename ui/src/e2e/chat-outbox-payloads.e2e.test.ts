@@ -1,4 +1,3 @@
-import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { Page } from "playwright";
 import { assert, expect, it } from "vitest";
@@ -15,9 +14,9 @@ import {
   requireRecord,
   readOutboxPayloadAttachments,
 } from "./chat-flow.test-support.ts";
+import { waitForCommittedComposerDraft } from "./settle.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
-const proofDir = path.resolve(".artifacts/control-ui-e2e/outbox-capacity/after");
 const file = {
   name: "mock-original.txt",
   mimeType: "text/plain",
@@ -87,6 +86,7 @@ suite.define(() => {
         { serviceWorkers: "block", locale: "en-US", viewport: { width: 1280, height: 900 } },
         async ({ page }) => {
           const destination = legacySessionKey === "global" ? "agent:main:main" : legacySessionKey;
+          const draftScope = `chat:v3:${destination}\u0000agent:main`;
           const gateway = await installMockGateway(page, {
             sessionKey: destination,
             sessions: [
@@ -109,6 +109,12 @@ suite.define(() => {
           await gateway.setOnline(false);
           await waitForControlUiGatewayReconnecting(page);
           await stage(page, "Mock Gateway: retained v3 Blob submission");
+          await waitForCommittedComposerDraft(
+            page,
+            draftScope,
+            "Mock Gateway: retained v3 Blob submission",
+            [file.name],
+          );
           await paneFor(page).getByRole("button", { name: "Send message", exact: true }).click();
           await expect.poll(async () => (await readQueue(page)).length).toBe(1);
           const original = (await readQueue(page))[0]!;
@@ -117,6 +123,8 @@ suite.define(() => {
             reference,
             "Admission must own the complete Blob before seeding the legacy envelope",
           );
+          // Finish the durable clear before deleting v4's revision fence for the legacy seed.
+          await waitForCommittedComposerDraft(page, draftScope, null, 0);
           await page.route("**/outbox-legacy-seed", (route) =>
             route.fulfill({ contentType: "text/html", body: "Synthetic v3 metadata seed" }),
           );
@@ -181,6 +189,10 @@ suite.define(() => {
             await notice.getByRole("button", { name: "Restore here for review" }).click();
             const dialog = page.locator("openclaw-modal-dialog");
             await dialog.getByText(`${destination} (main)`, { exact: true }).waitFor();
+            await page.screenshot({
+              path: path.join(suite.artifactDir, "v3-global-destination-confirmation.png"),
+              animations: "disabled",
+            });
             await dialog.getByRole("button", { name: "Restore here for review" }).click();
           }
           await paneFor(page).getByText("Delivery unconfirmed", { exact: true }).waitFor();
@@ -198,10 +210,9 @@ suite.define(() => {
             file.buffer.toString("base64"),
           ]);
           await expectRequestCountStable(gateway, "chat.send", 0);
-          await mkdir(proofDir, { recursive: true });
           await page.screenshot({
             path: path.join(
-              proofDir,
+              suite.artifactDir,
               `v3-${legacySessionKey === "global" ? "recovered" : "named"}-paused.png`,
             ),
             fullPage: true,
@@ -242,7 +253,7 @@ suite.define(() => {
       {
         serviceWorkers: "block",
         viewport: { width: 1280, height: 900 },
-        recordVideo: { dir: path.join(proofDir, "lifecycle-video") },
+        recordVideo: { dir: path.join(suite.artifactDir, "lifecycle-video") },
       },
       async ({ page }) => {
         const gateway = await installMockGateway(page, {
@@ -288,7 +299,7 @@ suite.define(() => {
         await expectRequestCountStable(gateway, "chat.send", 0);
         expect((await readQueue(page))[0]?.sendRunId).toBe(queued.sendRunId);
         await page.screenshot({
-          path: path.join(proofDir, "reload-unconfirmed.png"),
+          path: path.join(suite.artifactDir, "reload-unconfirmed.png"),
           fullPage: true,
           animations: "disabled",
         });
@@ -567,9 +578,8 @@ suite.define(() => {
           expect((await readQueue(duplicate))[0]?.attachmentPayload).toEqual(reference);
           const row = paneFor(duplicate).locator(".chat-queue__item");
           await expect.poll(() => row.count()).toBe(1);
-          await mkdir(proofDir, { recursive: true });
           await duplicate.screenshot({
-            path: path.join(proofDir, "duplicate-before-claim-removal.png"),
+            path: path.join(suite.artifactDir, "duplicate-before-claim-removal.png"),
             fullPage: true,
             animations: "disabled",
           });
@@ -604,7 +614,7 @@ suite.define(() => {
           });
           await page.bringToFront();
           await page.screenshot({
-            path: path.join(proofDir, "source-after-duplicate-removal.png"),
+            path: path.join(suite.artifactDir, "source-after-duplicate-removal.png"),
             fullPage: true,
             animations: "disabled",
           });
@@ -746,17 +756,9 @@ suite.define(() => {
       await row.dblclick();
       await row.locator(".chat-queue__edit-input").fill("Mock Gateway: edited with original bytes");
       await row.locator(".chat-queue__edit-submit").click();
-      try {
-        await expect
-          .poll(async () => (await readQueue(page))[0]?.text)
-          .toBe("Mock Gateway: edited with original bytes");
-      } catch (error) {
-        const bodyText = await page.locator("body").textContent();
-        assert(bodyText !== null, "Expected a body for the failure capture");
-        await writeFile(path.join(proofDir, "upgrade-failure.txt"), bodyText);
-        await page.screenshot({ path: path.join(proofDir, "upgrade-failure.png"), fullPage: true });
-        throw error;
-      }
+      await expect
+        .poll(async () => (await readQueue(page))[0]?.text)
+        .toBe("Mock Gateway: edited with original bytes");
       expect((await readQueue(page))[0]?.attachmentPayload).toBeDefined();
       expect(await composerFor(page).inputValue()).toBe("Mock Gateway: newer independent draft");
       expect(await paneFor(page).locator(".chat-attachment-thumb").count()).toBe(1);
@@ -916,7 +918,7 @@ suite.define(() => {
       await expectRequestCountStable(gateway, "chat.send", 0);
       expect((await readQueue(page))[0]?.id).toBe(original.id);
       await page.screenshot({
-        path: path.join(proofDir, "corrupt-payload-retained.png"),
+        path: path.join(suite.artifactDir, "corrupt-payload-retained.png"),
         animations: "disabled",
         fullPage: true,
       });

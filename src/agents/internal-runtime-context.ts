@@ -253,7 +253,13 @@ export function stripInternalRuntimeContext(
   text: string,
   options: { preserveSurroundingWhitespace?: boolean; separator?: string } = {},
 ): string {
-  if (!text) {
+  // All removable formats contain a delimiter or the exact runtime notice.
+  // Skip regex construction and line parsing for ordinary display text.
+  if (
+    !text.includes(INTERNAL_RUNTIME_CONTEXT_BEGIN) &&
+    !text.includes(INTERNAL_RUNTIME_CONTEXT_END) &&
+    !text.includes(OPENCLAW_RUNTIME_CONTEXT_NOTICE)
+  ) {
     return text;
   }
   const withoutDelimitedBlocks = stripStandaloneDelimitedTokenLines(

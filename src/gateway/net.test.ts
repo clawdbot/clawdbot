@@ -10,6 +10,7 @@ import {
   defaultGatewayBindMode,
   isContainerEnvironment,
   isLocalishHost,
+  isLoopbackGatewayUrl,
   isLoopbackHost,
   isPrivateOrLoopbackAddress,
   isPrivateOrLoopbackHost,
@@ -86,6 +87,24 @@ describe("isLoopbackHost", () => {
   it("accepts localhost absolute-form hostnames", () => {
     expect(isLoopbackHost("localhost.")).toBe(true);
     expect(isLoopbackHost("LOCALHOST...")).toBe(true);
+  });
+});
+
+describe("isLoopbackGatewayUrl", () => {
+  it.each([
+    ["ws://LOCALHOST:18789", true],
+    ["ws://localhost.:18789", false],
+    ["ws://127.42.0.1:18789", true],
+    ["ws://[::1]:18789", true],
+    ["ws://[0:0:0:0:0:0:0:1]:18789", true],
+    ["ws://[::ffff:127.0.0.1]:18789", true],
+    ["ws://192.168.1.2:18789", false],
+    ["not-a-url", false],
+    ["/relative", false],
+    ["http://localhost:18789", true],
+    ["https://localhost:18789", true],
+  ] as const)("classifies %s as %s", (url, expected) => {
+    expect(isLoopbackGatewayUrl(url)).toBe(expected);
   });
 });
 

@@ -10,8 +10,18 @@ import {
   isPidDefinitelyDead,
 } from "./pid-alive.js";
 
+const readWindowsProcessStartTimeSyncMock = vi.hoisted(() =>
+  vi.fn<(pid: number) => number | null>(() => null),
+);
+
+vi.mock("../infra/windows-process-start.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/windows-process-start.js")>()),
+  readWindowsProcessStartTimeSync: readWindowsProcessStartTimeSyncMock,
+}));
+
 afterEach(() => {
   vi.restoreAllMocks();
+  readWindowsProcessStartTimeSyncMock.mockReset();
 });
 
 function mockProcReads(entries: Record<string, string>) {
@@ -223,25 +233,67 @@ describe("process start times", () => {
     });
   });
 
-  it("reads a bounded Windows PowerShell process start identity", () => {
-    const execSpy = vi
-      .spyOn(childProcess, "execFileSync")
-      .mockReturnValue("2026-07-06T12:34:56.7890000Z\n");
+  it("reads Windows file-lock identity through the canonical reader", () => {
+    readWindowsProcessStartTimeSyncMock.mockReturnValue(1_752_000_000_123);
 
     return withMockedPlatform("win32", async () => {
       expect(getProcessStartTime(42)).toBeNull();
-      expect(getFileLockProcessStartTime(42)).toBe(Date.UTC(2026, 6, 6, 12, 34, 56, 789));
-      expect(execSpy).toHaveBeenCalledWith(
-        "powershell.exe",
-        [
-          "-NoProfile",
-          "-NonInteractive",
-          "-Command",
-          "(Get-Process -Id 42).StartTime.ToString('o')",
-        ],
-        expect.objectContaining({ timeout: 1000, windowsHide: true }),
-      );
-      execSpy.mockReturnValueOnce("invalid\n");
+      expect(getFileLockProcessStartTime(42)).toBe(1_752_000_000_123);
+      expect(readWindowsProcessStartTimeSyncMock).toHaveBeenCalledWith(42);
+    });
+  });
+
+  it.each(["darwin", "linux", "win32"] as const)(
+    "retries failed self probes and keeps foreign %s identities fresh",
+    async (platform) => {
+      const identity = platform === "linux" ? 0 : 1_752_000_000;
+      const foreignPid = process.pid + 1;
+      const probe = vi
+        .fn<(pid: number) => number | null>()
+        .mockReturnValueOnce(null)
+        .mockReturnValueOnce(identity)
+        .mockReturnValueOnce(111)
+        .mockReturnValueOnce(222);
+      readWindowsProcessStartTimeSyncMock.mockImplementation(probe);
+      vi.spyOn(childProcess, "execFileSync").mockImplementation((_file, args) => {
+        const value = probe(Number(args?.[3]));
+        if (value === null) {
+          throw new Error("process start time unavailable");
+        }
+        return new Date(value * 1000).toUTCString();
+      });
+      const originalReadFileSync = fsSync.readFileSync;
+      vi.spyOn(fsSync, "readFileSync").mockImplementation((filePath, encoding) => {
+        const pid = /^\/proc\/(\d+)\/stat$/.exec(String(filePath))?.[1];
+        if (!pid) {
+          return originalReadFileSync(filePath as never, encoding as never) as never;
+        }
+        const value = probe(Number(pid));
+        if (value === null) {
+          throw new Error("process start time unavailable");
+        }
+        return `${pid} (node) S ${"0 ".repeat(18)}${value}` as never;
+      });
+
+      await withMockedPlatform(platform, async () => {
+        // Each simulated platform needs a fresh module's process-lifetime state.
+        vi.resetModules();
+        const { getFileLockProcessStartTime: readIdentity } = await import("./pid-alive.js");
+        expect(readIdentity(process.pid)).toBeNull();
+        expect(readIdentity(process.pid)).toBe(identity);
+        expect(readIdentity(process.pid)).toBe(identity);
+        expect(readIdentity(foreignPid)).toBe(111);
+        expect(readIdentity(foreignPid)).toBe(222);
+        expect(readIdentity(process.pid)).toBe(identity);
+        expect(probe).toHaveBeenCalledTimes(4);
+      });
+    },
+  );
+
+  it("fails closed when the Windows identity reader finds nothing", () => {
+    readWindowsProcessStartTimeSyncMock.mockReturnValue(null);
+
+    return withMockedPlatform("win32", async () => {
       expect(getFileLockProcessStartTime(42)).toBeNull();
     });
   });

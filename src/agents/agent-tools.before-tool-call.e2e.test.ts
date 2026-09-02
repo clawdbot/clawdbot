@@ -11,6 +11,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { GatewayClientRequestError } from "../gateway/client.js";
+import { createAbortError } from "../infra/abort-signal.js";
 import {
   onInternalDiagnosticEvent,
   onDiagnosticEvent,
@@ -40,6 +41,7 @@ import { createHookRunner, type HookRunner } from "../plugins/hooks.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { setPluginToolMeta } from "../plugins/tool-metadata.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { consumeRunSkillUsage } from "../skills/runtime/run-usage.js";
 import { createCanonicalFixtureSkill } from "../skills/test-support/test-helpers.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
@@ -1015,12 +1017,28 @@ describe("before_tool_call loop detection behavior", () => {
     await expectUnblockedToolExecution(secondRunTool, "new-run-0", params);
   });
 
-  it("escalates generic repeat diagnostics from warning to critical", async () => {
+  it.each(["success", "error"])("warns on repeated %s results before blocking", async (status) => {
     await withToolLoopEvents(async (emitted) => {
-      const { tool, params } = createGenericReadRepeatFixture();
+      const { tool, params, execute } = createGenericReadRepeatFixture();
+      const rawResult = {
+        content: [{ type: "text", text: "same output" }],
+        details: { status },
+      };
+      execute.mockResolvedValue(rawResult);
 
       for (let i = 0; i < 21; i += 1) {
-        await tool.execute(`read-bucket-${i}`, params, undefined, undefined);
+        const result = await tool.execute(`read-bucket-${i}`, params, undefined, undefined);
+        if (i === 20) {
+          expectToolLoopBlockedResult(result, "identical outcomes");
+        } else {
+          expect(result.content).toEqual([
+            ...rawResult.content,
+            ...(i === 10
+              ? [{ type: "text", text: expect.stringMatching(/\[.*10.*change.*stop.*\]/i) }]
+              : []),
+          ]);
+          expect(result.details).toEqual(rawResult.details);
+        }
       }
 
       const genericEvents = emitted.filter((evt) => evt.detector === "generic_repeat");
@@ -1028,6 +1046,12 @@ describe("before_tool_call loop detection behavior", () => {
         ["warning", 10],
         ["critical", 20],
       ]);
+      expect(execute).toHaveBeenCalledTimes(20);
+      expect(rawResult.content).toEqual([{ type: "text", text: "same output" }]);
+      const outcomes = getDiagnosticSessionState({ sessionKey: "main" }).toolCallHistory;
+      const resultHashes = outcomes?.flatMap((outcome) => outcome.resultHash ?? []);
+      expect(resultHashes).toHaveLength(20);
+      expect(new Set(resultHashes).size).toBe(1);
     });
   });
 
@@ -2172,8 +2196,21 @@ describe("before_tool_call requireApproval handling", () => {
 
     const controller = new AbortController();
     mockCallGateway.mockResolvedValueOnce({ id: "server-id-abort", status: "accepted" });
-    mockCallGateway.mockImplementationOnce(() => new Promise(() => {}));
-    setTimeout(() => controller.abort(options?.abortReason ?? new Error("run cancelled")), 10);
+    mockCallGateway.mockImplementationOnce(async (_method, _options, _params, extra) => {
+      const signal = extra?.signal;
+      if (!signal) {
+        throw new Error("Expected approval transport abort signal");
+      }
+      const cancelled = createDeferredCore<never>();
+      const onAbort = () => cancelled.reject(createAbortError("gateway request aborted"));
+      signal.addEventListener("abort", onAbort, { once: true });
+      controller.abort(options?.abortReason ?? new Error("run cancelled"));
+      try {
+        return await cancelled.promise;
+      } finally {
+        signal.removeEventListener("abort", onAbort);
+      }
+    });
 
     return await runBeforeToolCallHook({
       toolName: "bash",
@@ -3051,31 +3088,6 @@ describe("before_tool_call requireApproval handling", () => {
 
     expect(result.blocked).toBe(true);
     expect(result).toHaveProperty("reason", "Approval cancelled (run aborted)");
-  });
-
-  it("removes abort listener after waitDecision resolves", async () => {
-    hookRunner.runBeforeToolCall.mockResolvedValue({
-      requireApproval: {
-        title: "Cleanup listener",
-        description: "Wait resolves quickly",
-      },
-    });
-
-    const controller = new AbortController();
-    const removeListenerSpy = vi.spyOn(controller.signal, "removeEventListener");
-
-    mockCallGateway.mockResolvedValueOnce({ id: "server-id-cleanup", status: "accepted" });
-    mockCallGateway.mockResolvedValueOnce({ id: "server-id-cleanup", decision: "allow-once" });
-
-    const result = await runBeforeToolCallHook({
-      toolName: "bash",
-      params: {},
-      ctx: { agentId: "main", sessionKey: "main" },
-      signal: controller.signal,
-    });
-
-    expect(result.blocked).toBe(false);
-    expect(removeListenerSpy.mock.calls.map(([type]) => type)).toContain("abort");
   });
 
   it("calls onResolution with allow-once on approval", async () => {

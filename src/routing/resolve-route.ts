@@ -1,4 +1,3 @@
-// Route resolution helpers map user targets to configured channel routes.
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import {
   AgentSelectionRequiredError,
@@ -560,7 +559,8 @@ function resolveRouteCacheForConfig(cfg: OpenClawConfig): Map<string, ResolvedAg
 }
 
 function formatRouteCachePeer(peer: RoutePeer | null): string {
-  if (!peer || !peer.id) {
+  // Empty IDs still enable kind-specific wildcard routing, so only a missing peer is peerless.
+  if (!peer) {
     return "-";
   }
   return `${peer.kind}:${peer.id}`;

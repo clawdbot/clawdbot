@@ -60,6 +60,7 @@ type DispatchGatewayMethodInProcessOptions = {
   allowSyntheticCronRunContinuation?: boolean;
   agentToolCaller?: TrustedAgentToolCaller;
   agentRunTracking?: GatewayAgentRunTaskOwner;
+  cancelOnDeadline?: boolean;
   disableSyntheticClient?: boolean;
   expectFinal?: boolean;
   forceSyntheticClient?: boolean;
@@ -347,6 +348,7 @@ export async function dispatchGatewayMethodInProcess<T>(
       });
       return method === "agent"
         ? await facade.dispatch<T>(params as AgentRunRequest, {
+            cancelOnDeadline: options?.cancelOnDeadline,
             expectFinal: options?.expectFinal,
             onAccepted: options?.onAccepted,
             onSignalAbort: options?.onSignalAbort,

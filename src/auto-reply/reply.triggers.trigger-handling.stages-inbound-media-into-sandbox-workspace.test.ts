@@ -79,6 +79,33 @@ async function writeInboundMedia(
 }
 
 describe("stageSandboxMedia", () => {
+  it("stages global-session media with the prepared agent owner", async () => {
+    await withSandboxMediaTempHome("openclaw-staging-global-", async (home) => {
+      const { ensureSandboxWorkspaceForSession } = await vi.importActual<
+        typeof import("../agents/sandbox/context.js")
+      >("../agents/sandbox/context.js");
+      sandboxMocks.ensureSandboxWorkspaceForSession.mockImplementation(
+        ensureSandboxWorkspaceForSession,
+      );
+      const mediaPath = await writeInboundMedia(home, "global.png", "image-bytes");
+      const { ctx, sessionCtx } = createSandboxMediaContexts(mediaPath);
+      const workspaceDir = join(home, "workspace");
+
+      const result = await stageSandboxMedia({
+        ctx,
+        sessionCtx,
+        cfg: { agents: { ownership: "explicit", entries: { main: {}, other: {} } } },
+        agentId: "main",
+        sessionKey: "global",
+        workspaceDir,
+      });
+
+      const stagedPath = result.staged.get(0)!;
+      expect(ctx.media?.[0]).toMatchObject({ path: stagedPath, workspaceDir, staged: true });
+      await expect(fs.readFile(stagedPath, "utf8")).resolves.toBe("image-bytes");
+    });
+  });
+
   it("stages managed inbound media URIs into the sandbox workspace", async () => {
     await withSandboxMediaTempHome("openclaw-triggers-", async (home) => {
       const { cfg, workspaceDir, sandboxDir } = await setupSandboxWorkspace(home);

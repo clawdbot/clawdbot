@@ -7,7 +7,7 @@ import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { prefixSystemMessage } from "../infra/system-message.js";
 
 const DEFAULT_THREAD_BINDING_FAREWELL_TEXT =
-  "Session ended. Messages here will no longer be routed.";
+  "This conversation is no longer bound to that session.";
 
 function normalizeThreadBindingDurationMs(raw: unknown): number {
   if (typeof raw !== "number" || !Number.isFinite(raw)) {
@@ -107,7 +107,7 @@ export function resolveThreadBindingFarewellText(params: {
       normalizeThreadBindingDurationMs(params.idleTimeoutMs),
     );
     return prefixSystemMessage(
-      `Session ended automatically after ${label} of inactivity. Messages here will no longer be routed.`,
+      `Conversation binding expired after ${label} of inactivity. Messages here will no longer go to that session.`,
     );
   }
 
@@ -116,7 +116,7 @@ export function resolveThreadBindingFarewellText(params: {
       normalizeThreadBindingDurationMs(params.maxAgeMs),
     );
     return prefixSystemMessage(
-      `Session ended automatically at max age of ${label}. Messages here will no longer be routed.`,
+      `Conversation binding expired at max age of ${label}. Messages here will no longer go to that session.`,
     );
   }
 

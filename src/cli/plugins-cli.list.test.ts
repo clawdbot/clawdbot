@@ -1,5 +1,5 @@
 // Plugins CLI list tests cover plugin listing output and installed-state formatting.
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type {
   ConfigFileSnapshot,
   ConfigValidationIssue,
@@ -25,6 +25,7 @@ import {
 const cleanDoctorMessage =
   "Plugin discovery, module loading, compatibility, and configuration checks passed. " +
   'Run "openclaw health" to check the running Gateway, including runtime quarantines and fallbacks.';
+const originalExitCode = process.exitCode;
 
 async function mockPluginDoctorValidationWarnings(warnings: ConfigValidationIssue[]) {
   const config: OpenClawConfig = {
@@ -60,6 +61,11 @@ async function mockPluginDoctorValidationWarnings(warnings: ConfigValidationIssu
 describe("plugins cli list", () => {
   beforeEach(() => {
     resetPluginsCliTestState();
+    process.exitCode = undefined;
+  });
+
+  afterEach(() => {
+    process.exitCode = originalExitCode;
   });
 
   it("distinguishes plugin load errors from disabled reasons across list formats", async () => {
@@ -234,7 +240,12 @@ describe("plugins cli list", () => {
   it.each([
     { severity: "info", code: "hook-only", healthy: true, args: [] },
     { severity: "info", code: "hook-only", healthy: true, args: ["--json"] },
-    { severity: "warn", code: "removed-session-transcript-file-api", healthy: false, args: [] },
+    {
+      severity: "warn",
+      code: "removed-session-transcript-file-api",
+      healthy: false,
+      args: [],
+    },
     {
       severity: "warn",
       code: "removed-session-transcript-file-api",
@@ -252,6 +263,8 @@ describe("plugins cli list", () => {
       buildPluginCompatibilityNoticesMock.mockReturnValue([notice]);
 
       await runPluginsCommand(["plugins", "doctor", ...args]);
+
+      expect(process.exitCode).toBe(healthy ? 0 : 1);
 
       if (args.length > 0) {
         expect(JSON.parse(pluginsCliRuntimeLogs[0] ?? "null")).toMatchObject({
@@ -275,6 +288,25 @@ describe("plugins cli list", () => {
     },
   );
 
+  it("updates the doctor exit status as health changes in one process", async () => {
+    buildPluginDiagnosticsReportMock.mockReturnValue({
+      plugins: [createPluginRecord({ id: "compatible-plugin" })],
+      diagnostics: [],
+    });
+    const compatibilityNotice = (code: "hook-only" | "removed-session-transcript-file-api") =>
+      createCompatibilityNotice({ pluginId: "compatible-plugin", code });
+
+    for (const [code, exitCode] of [
+      ["hook-only", 0],
+      ["removed-session-transcript-file-api", 1],
+      ["hook-only", 0],
+    ] as const) {
+      buildPluginCompatibilityNoticesMock.mockReturnValue([compatibilityNotice(code)]);
+      await runPluginsCommand(["plugins", "doctor"]);
+      expect(process.exitCode).toBe(exitCode);
+    }
+  });
+
   it.each([
     { format: "human", args: [] },
     { format: "JSON", args: ["--json"] },
@@ -289,6 +321,8 @@ describe("plugins cli list", () => {
       ]);
 
       await runPluginsCommand(["plugins", "doctor", ...args]);
+
+      expect(process.exitCode).toBe(1);
 
       const warning =
         "- plugins.entries.google: plugin disabled (not in allowlist) but config is present";
@@ -879,6 +913,13 @@ describe("plugins cli list", () => {
     inspectPluginRegistryMock.mockResolvedValue({
       state: "stale",
       refreshReasons: ["stale-manifest"],
+      differences: [
+        {
+          pluginId: "demo",
+          persistedSource: "/plugins/demo/index.js",
+          derivedSource: "/plugins/demo/dist/index.js",
+        },
+      ],
       persisted: {
         plugins: [{ pluginId: "demo", enabled: true }],
       },
@@ -897,6 +938,9 @@ describe("plugins cli list", () => {
     expect(pluginsCliRuntimeLogs.join("\n")).toContain("State:");
     expect(pluginsCliRuntimeLogs.join("\n")).toContain("stale");
     expect(pluginsCliRuntimeLogs.join("\n")).toContain("Refresh reasons:");
+    expect(pluginsCliRuntimeLogs.join("\n")).toContain(
+      "demo: persisted /plugins/demo/index.js; derived /plugins/demo/dist/index.js",
+    );
     expect(pluginsCliRuntimeLogs.join("\n")).toContain("openclaw plugins registry --refresh");
   });
 
@@ -907,6 +951,13 @@ describe("plugins cli list", () => {
         { pluginId: "off", enabled: false },
       ],
     });
+    inspectPluginRegistryMock.mockResolvedValue({
+      state: "fresh",
+      refreshReasons: [],
+      differences: [],
+      persisted: { plugins: [] },
+      current: { plugins: [] },
+    });
 
     await runPluginsCommand(["plugins", "registry", "--refresh"]);
 
@@ -914,7 +965,62 @@ describe("plugins cli list", () => {
       config: {},
       reason: "manual",
     });
-    expect(inspectPluginRegistryMock).not.toHaveBeenCalled();
+    expect(inspectPluginRegistryMock).toHaveBeenCalledWith({ config: {} });
     expect(pluginsCliRuntimeLogs.join("\n")).toContain("Plugin registry refreshed: 1/2 enabled");
+  });
+
+  it("fails a registry refresh when the persisted replacement stays stale", async () => {
+    refreshPluginRegistryMock.mockResolvedValue({ plugins: [] });
+    inspectPluginRegistryMock.mockResolvedValue({
+      state: "stale",
+      refreshReasons: ["source-changed"],
+      differences: [
+        {
+          pluginId: "demo",
+          persistedSource: "/plugins/demo/index.js",
+          derivedSource: "/plugins/demo/dist/index.js",
+        },
+      ],
+      persisted: { plugins: [] },
+      current: { plugins: [] },
+    });
+
+    await expect(runPluginsCommand(["plugins", "registry", "--refresh"])).rejects.toThrow(
+      /demo: persisted \/plugins\/demo\/index\.js; derived \/plugins\/demo\/dist\/index\.js.*openclaw plugins registry --refresh/su,
+    );
+  });
+
+  it("returns registry differences when a JSON refresh stays stale", async () => {
+    refreshPluginRegistryMock.mockResolvedValue({ plugins: [] });
+    inspectPluginRegistryMock.mockResolvedValue({
+      state: "stale",
+      refreshReasons: ["source-changed"],
+      differences: [
+        {
+          pluginId: "demo",
+          persistedSource: "/plugins/demo/index.js",
+          derivedSource: "/plugins/demo/dist/index.js",
+        },
+      ],
+      persisted: { plugins: [] },
+      current: { plugins: [] },
+    });
+
+    await expect(
+      runPluginsCommand(["plugins", "registry", "--refresh", "--json"]),
+    ).rejects.toThrow();
+    expect(JSON.parse(pluginsCliRuntimeLogs.at(-1) ?? "null")).toMatchObject({
+      ok: false,
+      refreshed: false,
+      state: "stale",
+      refreshReasons: ["source-changed"],
+      differences: [
+        {
+          pluginId: "demo",
+          persistedSource: "/plugins/demo/index.js",
+          derivedSource: "/plugins/demo/dist/index.js",
+        },
+      ],
+    });
   });
 });

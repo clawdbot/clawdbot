@@ -81,12 +81,63 @@ afterEach(() => {
 describe.skipIf(!hasBrowserLayout)("openclaw-board-view browser layout", () => {
   it("lays out adjacent first-fit cells without pixel overlap", async () => {
     const view = await mount();
+    view.style.width = "1200px";
     const cells = [...view.querySelectorAll<HTMLElement>('[data-test-id="board-widget"]')];
     expect(cells).toHaveLength(2);
     const [first, second] = cells.map((cell) => cell.getBoundingClientRect());
     expect(first?.width).toBeGreaterThan(0);
     expect(second?.left).toBeGreaterThanOrEqual((first?.right ?? 0) + BOARD_GRID_GAP - 1);
     expect(Math.round(first?.height ?? 0)).toBe(BOARD_GRID_ROW_HEIGHT * 3 + BOARD_GRID_GAP * 2);
+  });
+
+  it.each([354, 560])(
+    "stacks a %ipx board without changing stored sizes or frame identity",
+    async (width) => {
+      const view = await mount();
+      view.style.width = `${width}px`;
+      const cells = [...view.querySelectorAll("openclaw-board-widget-cell")];
+      const frames = cells.map((cell) => cell.querySelector("iframe"));
+      const snapshot = structuredClone(source);
+      snapshot.widgets[0]!.position = 1;
+      snapshot.widgets[0]!.sizeH = 0;
+      snapshot.widgets[1]!.position = 0;
+      snapshot.widgets[1]!.heightMode = "fixed";
+      view.snapshot = snapshot;
+      await view.updateComplete;
+      await Promise.all(cells.map((cell) => cell.updateComplete));
+      const grid = view.querySelector<HTMLElement>(".board-grid")!.getBoundingClientRect();
+      const [first, second] = cells.map((cell) =>
+        cell.querySelector("section")!.getBoundingClientRect(),
+      );
+      expect(first!.width).toBeCloseTo(grid.width, 0);
+      expect(second!.width).toBeCloseTo(grid.width, 0);
+      expect(first!.top).toBeGreaterThanOrEqual(second!.bottom + BOARD_GRID_GAP - 1);
+      expect(first!.height).toBeGreaterThanOrEqual(BOARD_GRID_ROW_HEIGHT);
+      expect(second!.height).toBe(BOARD_GRID_ROW_HEIGHT * 3 + BOARD_GRID_GAP * 2);
+      expect(view.snapshot).toEqual(snapshot);
+      expect([...view.querySelectorAll("openclaw-board-widget-cell")]).toEqual(cells);
+      expect(cells.map((cell) => cell.querySelector("iframe"))).toEqual(frames);
+      view.style.width = "1200px";
+      expect(cells[0]!.querySelector("section")!.getBoundingClientRect().width).toBeLessThan(600);
+    },
+  );
+
+  it("moves a narrow card onto the visible target's logical position", async () => {
+    const applyOps = vi.fn(async () => undefined);
+    const view = await mount(applyOps);
+    view.style.width = "354px";
+    const cards = [...view.querySelectorAll<HTMLElement>(".board-widget")];
+    const target = cards[0]!.getBoundingClientRect();
+    pointer(cards[1]!.querySelector(".board-widget__drag-handle")!, "pointerdown", 81);
+    pointer(window, "pointermove", 81, target.right - 3, target.top + target.height / 2);
+    await view.updateComplete;
+    await Promise.all(
+      [...view.querySelectorAll("openclaw-board-widget-cell")].map((cell) => cell.updateComplete),
+    );
+    pointer(window, "pointerup", 81, target.right - 3, target.top + target.height / 2);
+    await vi.waitFor(() =>
+      expect(applyOps).toHaveBeenCalledWith([{ kind: "widget_move", name: "second", position: 0 }]),
+    );
   });
 
   it("hides widget chrome by default on fine-pointer devices", async () => {
@@ -108,14 +159,18 @@ describe.skipIf(!hasBrowserLayout)("openclaw-board-view browser layout", () => {
     return sink;
   }
 
+  function finishDocumentAnimations(): void {
+    for (const animation of document.getAnimations()) {
+      animation.finish();
+    }
+  }
+
   // Headless CI renderers can stall the animation timeline, leaving the 120ms
   // hide transition permanently mid-flight; finishing transitions asserts the
   // target visibility state instead of the renderer's clock. A genuinely
   // matching reveal selector still fails: its finished end state is visible.
   function expectChromeHidden(widget: HTMLElement, bar: HTMLElement): void {
-    for (const animation of document.getAnimations()) {
-      animation.finish();
-    }
+    finishDocumentAnimations();
     const revealState = JSON.stringify({
       hover: widget.matches(":hover"),
       focusWithin: widget.matches(":focus-within"),
@@ -192,6 +247,7 @@ describe.skipIf(!hasBrowserLayout)("openclaw-board-view browser layout", () => {
 
   it("strips the pill to move + menu on widgets too narrow for the reservation", async () => {
     const view = await mount();
+    view.style.width = "700px";
     view.snapshot = {
       ...structuredClone(source),
       widgets: [
@@ -359,8 +415,10 @@ describe.skipIf(!hasBrowserLayout)("openclaw-board-view browser layout", () => {
     expect(getComputedStyle(cardBody!).paddingTop).toBe("12px");
     expect(second.classList.contains("board-widget--frameless")).toBe(true);
     expect(getComputedStyle(second).backgroundColor).toBe("rgba(0, 0, 0, 0)");
+    finishDocumentAnimations();
     expect(getComputedStyle(second).borderTopColor).toBe("rgba(0, 0, 0, 0)");
     second.focus();
+    finishDocumentAnimations();
     expect(getComputedStyle(second).borderTopColor).not.toBe("rgba(0, 0, 0, 0)");
   });
 
@@ -413,9 +471,10 @@ describe.skipIf(!hasBrowserLayout)("openclaw-board-view browser layout", () => {
     expect(applyOps).not.toHaveBeenCalled();
   });
 
-  it("offers an append drop zone after the final widget", async () => {
+  it.each([354, 700])("offers an append drop zone on a %ipx board", async (width) => {
     const applyOps = vi.fn(async () => undefined);
     const view = await mount(applyOps);
+    view.style.width = `${width}px`;
     view.snapshot = {
       ...structuredClone(source),
       widgets: source.widgets.map((widget) => ({ ...widget, sizeW: 12 })),

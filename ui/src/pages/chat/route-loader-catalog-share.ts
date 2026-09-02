@@ -16,10 +16,19 @@ import { missingSessionRouteData } from "./route-loader-session-reference.ts";
 import type { ChatRouteData } from "./session-route-data.ts";
 
 function targetFromLocation(context: ApplicationContext, location: RouteLocation) {
-  const matchPath = (pathname: string) =>
-    matchControlUiCatalogSharePath({ pathname, basePath: context.basePath });
-  const internalPath = new URLSearchParams(location.search).get(INTERNAL_SESSION_PATH_PARAM);
-  return (internalPath ? matchPath(internalPath) : null) ?? matchPath(location.pathname);
+  const search = new URLSearchParams(location.search);
+  const internalPath = search.get(INTERNAL_SESSION_PATH_PARAM);
+  const pathname = internalPath || location.pathname;
+  const target = matchControlUiCatalogSharePath({ pathname, basePath: context.basePath });
+  if (!target || !internalPath) {
+    return target ? { target, location } : null;
+  }
+  search.delete(INTERNAL_SESSION_PATH_PARAM);
+  const serializedSearch = search.toString();
+  return {
+    target,
+    location: { ...location, pathname, search: serializedSearch ? `?${serializedSearch}` : "" },
+  };
 }
 
 function routeError(message: string): Extract<ChatRouteData, { kind: "route-error" }> {
@@ -31,10 +40,11 @@ export async function loadCatalogShareRouteFromLocation(
   location: RouteLocation,
   signal: AbortSignal,
 ): Promise<ChatRouteData | null> {
-  const target = targetFromLocation(context, location);
-  if (!target) {
+  const resolved = targetFromLocation(context, location);
+  if (!resolved) {
     return null;
   }
+  const { target, location: sourceLocation } = resolved;
   try {
     const client = await waitForGatewayClient(context.gateway, signal);
     signal.throwIfAborted();
@@ -83,6 +93,7 @@ export async function loadCatalogShareRouteFromLocation(
         const href = buildControlUiCatalogSharePath({
           shareRoute,
           threadId: session.threadId,
+          displayName: session.name,
           basePath: context.basePath,
           prefixLength: shareRoute.fullLength,
         });
@@ -105,20 +116,18 @@ export async function loadCatalogShareRouteFromLocation(
         face: "chat",
       };
     }
-    if (matches.length === 0) {
-      return missingSessionRouteData(context, "chat", agentId);
-    }
     const session = matches[0];
     if (!session) {
-      return routeError(t("chat.sessionRoute.catalogShareUnavailable"));
+      return missingSessionRouteData(context, "chat", agentId);
     }
-    if (
-      !buildControlUiCatalogSharePath({
-        shareRoute,
-        threadId: session.threadId,
-        prefixLength: shareRoute.fullLength,
-      })
-    ) {
+    const pathname = buildControlUiCatalogSharePath({
+      shareRoute,
+      threadId: session.threadId,
+      displayName: session.name,
+      basePath: context.basePath,
+      prefixLength: target.shortId.length,
+    });
+    if (!pathname) {
       return routeError(t("chat.sessionRoute.catalogShareUnavailable"));
     }
     return {
@@ -130,6 +139,13 @@ export async function loadCatalogShareRouteFromLocation(
       agentId,
       draft: undefined,
       face: "chat",
+      // Names can change on later uploads; the id resolves the same transcript.
+      ...(pathname !== sourceLocation.pathname
+        ? {
+            canonicalLocation: { ...sourceLocation, pathname },
+            canonicalLocationSource: sourceLocation,
+          }
+        : {}),
     };
   } catch (error) {
     signal.throwIfAborted();

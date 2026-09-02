@@ -6,6 +6,7 @@ import { pinSurvivorWorkspaceForRosterCollapse } from "./agent-workspace-roster-
 import { getConfigValueAtPath, setConfigValueAtPath } from "./config-paths.js";
 import { prepareAuthInheritanceOwnerForWrite } from "./io.auth-inheritance-owner.js";
 import { assertAutomaticBindingsWriteAllowed } from "./io.ownership-write-guard.js";
+import { coerceConfig } from "./io.read-helpers.js";
 import { prepareSessionStoreOwnershipForWrite } from "./io.session-store-owner.js";
 import type {
   ConfigWriteOptions,
@@ -20,15 +21,20 @@ import { materializeLegacyAgentOwnershipForActiveChannelsResult } from "./valida
 export function prepareConfigWriteTopology(
   params: ReadConfigFileSnapshotWithPluginMetadataResult & {
     nextConfig: OpenClawConfig;
-    options: Pick<ConfigWriteOptions, "explicitSetPaths" | "explicitSetValueSource">;
+    options: Pick<
+      ConfigWriteOptions,
+      "explicitSetPaths" | "explicitSetValueSource" | "persistCanonicalAgentRoster"
+    >;
     unsetPaths: readonly (readonly string[])[];
     env: NodeJS.ProcessEnv;
+    homedir?: () => string;
   },
 ) {
-  const { snapshot, options, unsetPaths, env, pluginMetadataSnapshot } = params;
+  const { snapshot, options, unsetPaths, env, homedir, pluginMetadataSnapshot } = params;
   let nextConfig = params.nextConfig;
   const sourceRosterMigration = migratePersistedImplicitMainRoster(
     snapshot.sourceConfigBeforeMigrations ?? snapshot.parsed,
+    { env, homedir },
   );
   const retainedLegacyDefaultAgentId = sourceRosterMigration.retainedLegacyDefaultAgentId;
   const previousEntries = listAgentEntries(snapshot.config);
@@ -40,6 +46,7 @@ export function prepareConfigWriteTopology(
     previousSoleAgentId && nextAgentIds.has(normalizeAgentId(previousSoleAgentId)),
   );
   const writesOwnershipTopology =
+    options.persistCanonicalAgentRoster === true ||
     !isDeepStrictEqual(previousEntries, nextEntries) ||
     [...(options.explicitSetPaths ?? []), ...unsetPaths].some(
       (writePath) =>
@@ -55,6 +62,13 @@ export function prepareConfigWriteTopology(
   const stampOwnership =
     (persistOwnership || keepOwnership) && nextConfig.agents?.ownership === undefined;
   if (stampOwnership) {
+    if (nextEntries.some((entry) => entry.default === true)) {
+      // This writer owns role transitions; retire only the submitted roster marker.
+      nextConfig = coerceConfig(
+        migratePersistedImplicitMainRoster(nextConfig, { materializeRoles: false, env, homedir })
+          .config,
+      );
+    }
     nextConfig = {
       ...nextConfig,
       agents: { ...nextConfig.agents, ownership: "explicit" },
@@ -98,7 +112,7 @@ export function prepareConfigWriteTopology(
         ownerAgentId,
         env,
         pluginMetadataSnapshot?.manifestRegistry.plugins,
-        { materializeSessionStore: sameFixedSessionStore, materializeWorkspace: true },
+        { materializeSessionStore: sameFixedSessionStore, materializeWorkspace: true, homedir },
       )
     : { config: nextConfig, insertedPaths: [] };
   nextConfig = ownershipMaterialization.config;
@@ -117,7 +131,7 @@ export function prepareConfigWriteTopology(
       : []),
     ...ownershipMaterialization.insertedPaths.concat(workspaceCollapse.insertedPaths),
     ...authInheritanceOwnership.insertedPaths, // Persisting explicit ownership must replace the authored legacy roster too.
-    ...(persistOwnership ? [["agents", "entries"]] : []), // Otherwise projection restores the retired default marker.
+    ...sessionStoreOwnership.ownershipPaths, // Parent writes must not restore a removed fixed-store owner.
     ...(stampOwnership ? [["agents", "ownership"]] : []),
   ];
 
@@ -168,6 +182,8 @@ export function prepareConfigWriteTopology(
     nextConfig,
     explicitSetPaths,
     explicitSetValueSource,
+    persistCanonicalAgentRoster:
+      options.persistCanonicalAgentRoster === true || persistOwnership || stampOwnership,
     preserveLegacyAgentRoster: Boolean(retainedLegacyDefaultAgentId) && !writesOwnershipTopology,
     cronOwner: persistOwnership
       ? retainedFleetOwner

@@ -1,7 +1,7 @@
-import fs from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
 import type { ApplicationContext } from "../app/context.ts";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { installMockGateway, waitForControlUiRoute } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -103,9 +103,11 @@ suite.define(() => {
             .locator(".chat-group.user")
             .filter({ hasText: "The imported author's question." });
           await message.waitFor();
-          const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+          const artifactRoot = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+          const artifactDir = artifactRoot
+            ? createControlUiE2eArtifactDir("external-session-catalogs", artifactRoot)
+            : undefined;
           if (artifactDir && catalogId === "beam") {
-            await fs.mkdir(artifactDir, { recursive: true });
             await page.screenshot({ path: path.join(artifactDir, `beam-author-${viewer}.png`) });
           }
           expect(await message.locator(".chat-sender-name").textContent()).toBe("User");
@@ -433,15 +435,14 @@ suite.define(() => {
   );
 
   it("keeps old Beam links working and opens pretty shares under a non-main default agent", async () => {
-    const artifactDir = path.resolve(".artifacts/control-ui-e2e/beam-share-url");
-    await fs.mkdir(artifactDir, { recursive: true });
+    const artifactDir = createControlUiE2eArtifactDir("beam-named-share-url");
     const context = await suite.newBrowserContext({
       recordVideo: { dir: artifactDir, size: { width: 1280, height: 720 } },
       viewport: { width: 1280, height: 720 },
     });
     const page = await context.newPage();
     const fullId = "0123456789abcdef0123456789abcdef";
-    const prettyPath = "/openclaw/beam/0123456789ab";
+    const prettyPath = "/openclaw/beam/pretty-beam-route-0123456789ab";
     const queryPath = `/openclaw/chat/research?catalog=beam&host=gateway&thread=${fullId}`;
     const gateway = await installMockGateway(page, {
       basePath: "/openclaw",
@@ -573,6 +574,14 @@ suite.define(() => {
         path: path.join(artifactDir, "beam-pretty-route.png"),
         fullPage: true,
       });
+
+      // Both previously shared IDs and stale names retain their transcript after a rename.
+      for (const reference of ["0123456789ab", "old-title-0123456789ab"]) {
+        await page.goto(new URL(`/openclaw/beam/${reference}`, suite.server.baseUrl).href);
+        await transcript.waitFor();
+        await assertCatalogOwner();
+        await expect.poll(() => new URL(page.url()).pathname).toBe(prettyPath);
+      }
 
       await page.goto(new URL("/openclaw/chat/other", suite.server.baseUrl).href);
       const beamRow = page.locator("a", { hasText: "Pretty Beam route" }).first();
@@ -706,9 +715,11 @@ suite.define(() => {
     );
     expect(await gateway.getRequests("sessions.catalog.read")).toHaveLength(2);
 
-    const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+    const artifactRoot = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+    const artifactDir = artifactRoot
+      ? createControlUiE2eArtifactDir("external-session-catalogs", artifactRoot)
+      : undefined;
     if (artifactDir) {
-      await fs.mkdir(artifactDir, { recursive: true });
       await page.screenshot({
         path: path.join(artifactDir, "external-session-catalogs.png"),
         fullPage: true,

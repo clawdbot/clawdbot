@@ -512,6 +512,74 @@ describe("normalizeProviders", () => {
     ]);
   });
 
+  const duplicateCatalogCost = {
+    input: 10,
+    output: 50,
+    cacheRead: 1,
+    cacheWrite: 2,
+    tieredPricing: [
+      { input: 20, output: 100, cacheRead: 2, cacheWrite: 4, range: [0] as [number] },
+    ],
+  };
+  const duplicateFlatCost = { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 };
+  const duplicateAuthoredTieredCost = {
+    ...duplicateFlatCost,
+    tieredPricing: [{ ...duplicateFlatCost, range: [0] as [number] }],
+  };
+
+  it.each([
+    {
+      name: "omitted cost inherits the lower-priority schedule",
+      firstCost: undefined,
+      expectedCost: duplicateCatalogCost,
+    },
+    {
+      name: "empty cost inherits the lower-priority schedule",
+      firstCost: {},
+      expectedCost: duplicateCatalogCost,
+    },
+    {
+      name: "partial flat cost inherits missing rates without tiers",
+      firstCost: { input: 3 },
+      expectedCost: { input: 3, output: 50, cacheRead: 1, cacheWrite: 2 },
+    },
+    {
+      name: "flat cost excludes lower-priority tiers",
+      firstCost: duplicateFlatCost,
+      expectedCost: duplicateFlatCost,
+    },
+    {
+      name: "zero cost excludes lower-priority tiers",
+      firstCost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      expectedCost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    },
+    {
+      name: "authored tiers replace lower-priority tiers",
+      firstCost: duplicateAuthoredTieredCost,
+      expectedCost: duplicateAuthoredTieredCost,
+    },
+    {
+      name: "empty tiers retain flat pricing",
+      firstCost: { ...duplicateFlatCost, tieredPricing: [] },
+      expectedCost: { ...duplicateFlatCost, tieredPricing: [] },
+    },
+  ])("merges duplicate pricing: $name", ({ firstCost, expectedCost }) => {
+    const providers = {
+      custom: {
+        baseUrl: "https://models.example/v1",
+        models: [
+          { ...createModel({ id: "duplicate" }), cost: firstCost },
+          createModel({ id: "duplicate", cost: duplicateCatalogCost }),
+        ],
+      },
+      // SAFETY: config schema accepts partial costs before catalog publication completes them.
+    } as unknown as NonNullable<NonNullable<OpenClawConfig["models"]>["providers"]>;
+
+    const models = normalizeProviderCatalogModelsForConfig(providers)?.custom?.models;
+    expect(models).toHaveLength(1);
+    expect(models?.[0]?.cost).toEqual(expectedCost);
+  });
+
   it("canonicalizes LM Studio baseUrl after merge-style explicit overwrite", async () => {
     const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-agent-"));
     try {

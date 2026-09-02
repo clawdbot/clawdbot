@@ -13,6 +13,7 @@ import {
   type PreparedMessageToolCatalog,
 } from "../../plugins/prepared-message-tool-catalog.js";
 import { defaultRuntime } from "../../runtime.js";
+import type { ChatType } from "../chat-type.js";
 import { normalizeAnyChannelId } from "../registry.js";
 import { getChannelPlugin, getLoadedChannelPlugin, listChannelPlugins } from "./index.js";
 import type { ChannelMessageCapability } from "./message-capabilities.js";
@@ -41,6 +42,7 @@ export const listMessageActionDiscoveryChannels = (
 export type ChannelMessageActionDiscoveryInput = {
   cfg?: OpenClawConfig;
   channel?: string | null;
+  chatType?: ChatType | null;
   currentChannelProvider?: string | null;
   currentChannelId?: string | null;
   currentThreadTs?: string | null;
@@ -82,6 +84,7 @@ export function createMessageActionDiscoveryContext(
   );
   return {
     cfg: params.cfg ?? ({} as OpenClawConfig),
+    ...(params.chatType ? { chatType: params.chatType } : {}),
     currentChannelId: params.currentChannelId,
     currentChannelProvider,
     currentThreadTs: params.currentThreadTs,

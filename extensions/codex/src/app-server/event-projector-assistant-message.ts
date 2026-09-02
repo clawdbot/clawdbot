@@ -149,15 +149,15 @@ export function createAssistantAsyncMessage(
   };
 }
 
-export function createAssistantMirrorMessage(
+export function createAssistantReasoningMessage(
   params: CodexAssistantMessageParams,
-  title: string,
   text: string,
 ): AssistantMessage {
   const attribution = resolveCodexLocalRuntimeAttribution(params);
   return {
     role: "assistant",
-    content: [{ type: "text", text: `${title}:\n${text}` }],
+    // Shared history and visibility controls need reasoning, not final-answer text.
+    content: [{ type: "thinking", thinking: text }],
     api: attribution.api ?? "openai-chatgpt-responses",
     provider: attribution.provider,
     model: params.modelId,

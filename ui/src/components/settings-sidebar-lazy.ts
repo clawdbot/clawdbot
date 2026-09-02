@@ -32,17 +32,29 @@ export function renderLazySettingsSidebar(
       </button>
       <h1 class="settings-sidebar__title">${t("nav.settings")}</h1>
     </header>
-    <div class="settings-sidebar__empty" role=${failed ? "alert" : "status"}>
-      ${failed ? t("nav.settingsLoadFailed") : t("common.loading")}
-      ${failed
-        ? html`<button
+    ${failed
+      ? html`<div class="settings-sidebar__empty" role="alert">
+          ${t("nav.settingsLoadFailed")}
+          <button
             class="btn btn--sm"
             type="button"
             @click=${() => host.retrySettingsSidebarRenderer()}
           >
             ${t("common.retry")}
-          </button>`
-        : nothing}
-    </div>
+          </button>
+        </div>`
+      : html`<div
+          class="settings-loading-skeleton settings-sidebar__loading"
+          role="status"
+          aria-busy="true"
+          aria-label=${t("common.loading")}
+        >
+          <div class="settings-sidebar__loading-rows" aria-hidden="true">
+            ${Array.from(
+              { length: 7 },
+              () => html`<span class="skeleton settings-sidebar__loading-row"></span>`,
+            )}
+          </div>
+        </div>`}
   </aside>`;
 }

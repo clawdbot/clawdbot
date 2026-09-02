@@ -3,6 +3,8 @@ import {
   formatErrorMessage,
   isHostScopedAgentToolActive,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { resolveAgentDir } from "openclaw/plugin-sdk/agent-runtime";
+import { resolveSessionAgentIdsStrict } from "openclaw/plugin-sdk/agent-scope-runtime";
 import { buildCodexUserMcpServersThreadConfigPatchForRun } from "openclaw/plugin-sdk/codex-mcp-projection";
 import { getCodexAppServerClientInstanceId } from "./client.js";
 import { assertCodexModelBackedReviewerEffectiveConfig } from "./config-reviewer.js";
@@ -14,6 +16,7 @@ import { assertCodexNativeHookRelayAllowed } from "./native-hook-relay.js";
 import { resolveCodexNativeSkillIsolation } from "./native-skill-isolation.js";
 import { isCodexAppServerProfilerEnabled } from "./profiler-flag.js";
 import { flattenCodexDynamicToolFunctions } from "./protocol.js";
+import { readScheduledCodexAppManagedRequirementsFingerprint } from "./scheduled-app-authority.js";
 import { hashCodexAppServerBindingFingerprint } from "./session-binding.js";
 import { buildContextEngineBinding } from "./thread-context-engine.js";
 import {
@@ -32,6 +35,19 @@ import {
   readCodexInheritedMcpServerNames,
 } from "./thread-requests.js";
 import { resolveCodexWebSearchPlan } from "./web-search.js";
+
+export function resolveCodexThreadAgentDir(params: CodexStartOrResumeThreadParams): string {
+  const agentId = resolveSessionAgentIdsStrict({
+    config: params.params.config,
+    sessionKey: params.params.sessionKey,
+    agentId: params.agentId ?? params.params.agentId,
+  }).sessionAgentId;
+  return (
+    params.agentDir ??
+    params.params.agentDir ??
+    resolveAgentDir(params.params.config ?? {}, agentId)
+  );
+}
 
 export async function prepareCodexThreadLifecyclePreflight(params: CodexStartOrResumeThreadParams) {
   await assertCodexModelBackedReviewerEffectiveConfig({
@@ -119,6 +135,11 @@ export async function prepareCodexThreadLifecyclePreflight(params: CodexStartOrR
     ringZeroActive ||
     messageOnlySourceReply ||
     params.params.pluginHarnessToolPolicyRestricted === true;
+  const allowConfiguredManagedHooks =
+    params.params.pluginHarnessToolPolicyRestricted === true &&
+    !ringZeroActive &&
+    !messageOnlySourceReply &&
+    params.params.scheduledRuntimeAuthority === undefined;
   const imageGenerationDenied =
     params.params.pluginHarnessToolPolicySafeDeniedTools?.includes("image_generate") === true;
   if (restrictedToolSurface && params.nativeCodeModeEnabled !== false) {
@@ -136,6 +157,13 @@ export async function prepareCodexThreadLifecyclePreflight(params: CodexStartOrR
         {
           restrictedToolSurface,
           additionalDeniedFeatures: imageGenerationDenied ? ["image_generation"] : undefined,
+          allowedManagedRequirementsFingerprint:
+            readScheduledCodexAppManagedRequirementsFingerprint(
+              params.params.scheduledRuntimeAuthority,
+            ),
+          // Plugin policy restricts model-visible tools, while configured hooks are
+          // administrator policy. Stricter and detached surfaces remain fail closed.
+          allowConfiguredManagedHooks,
         },
         params.signal,
       ),

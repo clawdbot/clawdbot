@@ -3,6 +3,11 @@ name: Install Smoke (Reusable)
 on:
   workflow_call:
     inputs:
+      allow_frozen_target_scenario_omissions:
+        description: Allow trusted compatibility omissions for a canonical frozen release target
+        required: false
+        default: false
+        type: boolean
       allow_unreleased_changelog:
         description: Allow Unreleased changelog notes when packaging the current tree
         required: false
@@ -550,8 +555,11 @@ jobs:
 
       - name: Run Docker gateway network e2e
         env:
+          OPENCLAW_ALLOW_FROZEN_TARGET_SCENARIO_OMISSIONS: ${{ inputs.allow_frozen_target_scenario_omissions && '1' || '0' }}
           OPENCLAW_GATEWAY_NETWORK_E2E_IMAGE: ${{ needs.root_dockerfile_image.outputs.image_ref }}
           OPENCLAW_GATEWAY_NETWORK_E2E_SKIP_BUILD: "1"
+          OPENCLAW_SELECTED_SHA: ${{ needs.preflight.outputs.target_sha }}
+          OPENCLAW_TOOLING_SHA: ${{ steps.workflow.outputs.sha }}
         run: bash .release-harness/scripts/e2e/gateway-network-docker.sh
 
       - name: Smoke test Dockerfile with matrix extension build arg
@@ -706,9 +714,12 @@ jobs:
               package_args=(
                 --source-dir "$source_dir"
                 --output-dir /output
-                --pack-json /output/pack.json
+                --output-name candidate.tgz
               )
-              if [[ "$ALLOW_UNRELEASED_CHANGELOG" == "true" ]]; then
+              # The TypeScript implementation is the capability boundary for this
+              # newer option; frozen Node-native packers intentionally omit it.
+              if [[ "$ALLOW_UNRELEASED_CHANGELOG" == "true" ]] && \
+                grep -Fq -- '--allow-unreleased-changelog' scripts/package-openclaw-for-docker.mts; then
                 package_args+=(--allow-unreleased-changelog)
               fi
               node scripts/package-openclaw-for-docker.mjs "${package_args[@]}"

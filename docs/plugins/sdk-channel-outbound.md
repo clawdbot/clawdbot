@@ -303,3 +303,20 @@ Assemble inbound reply dispatch through `dispatchChannelInboundReply(...)`
 from `channel-inbound`. Keep platform delivery in the delivery adapter; use
 `channel-outbound` for message adapters, durable sends, receipts, live
 preview, and reply pipeline options.
+
+### Migrating from channel-message
+
+`openclaw/plugin-sdk/channel-message` is a deprecated compatibility entrypoint.
+It still re-exports `channel-outbound` and preserves three dispatch aliases.
+Migrate those aliases to `openclaw/plugin-sdk/channel-inbound`:
+
+| Deprecated alias                   | Replacement                         |
+| ---------------------------------- | ----------------------------------- |
+| `hasFinalChannelTurnDispatch`      | `hasFinalInboundReplyDispatch`      |
+| `hasVisibleChannelTurnDispatch`    | `hasVisibleInboundReplyDispatch`    |
+| `resolveChannelTurnDispatchCounts` | `resolveInboundReplyDispatchCounts` |
+
+Follow the dated removal-eligibility window in [Migration](/plugins/sdk-migration).
+This subpath is not tied to the next Plugin SDK major, and eligibility does not
+itself remove an export. External imports do not emit a runtime warning; update
+plugin imports rather than waiting for one.

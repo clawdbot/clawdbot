@@ -56,7 +56,7 @@ const SESSION_DESCRIPTIONS = [
   {
     tool: "sessions_search",
     describe: describeSessionsSearchTool,
-    original: "Search your own past sessions for matching user and assistant text.",
+    original: "Search visible past sessions for matching user and assistant text.",
   },
 ] as const;
 
@@ -79,5 +79,7 @@ describe("sessions_send tool description", () => {
     expect(describeSessionsSendTool()).toContain("not an external address");
     expect(describeSessionsSendTool()).not.toContain("conversations_");
     expect(describeSessionsSendTool()).toContain("reply may still announce");
+    expect(describeSessionsSendTool()).toContain('`targetDisposition: "queued"` or `"steered"`');
+    expect(describeSessionsSendTool()).toContain("neither proves target completion");
   });
 });

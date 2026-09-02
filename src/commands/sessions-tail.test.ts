@@ -149,6 +149,49 @@ describe("sessionsTailCommand", () => {
     expect(output).not.toContain("SECRET");
   });
 
+  it.each<[string, TrajectoryEvent["data"], string]>([
+    ["provider failure", { stopReason: "error", aborted: false, timedOut: false }, "error"],
+    [
+      "tool turn without delivery",
+      { stopReason: "toolUse", terminalError: "non_deliverable_terminal_turn" },
+      "error",
+    ],
+    [
+      "empty terminal reply",
+      { stopReason: "stop", terminalError: "non_deliverable_terminal_turn" },
+      "error",
+    ],
+    ["assistant interruption", { stopReason: "aborted", aborted: false }, "aborted"],
+    ["prompt failure", { promptError: "sensitive failure detail" }, "error"],
+    [
+      "timeout with abort and failure",
+      { timedOut: true, aborted: true, promptError: "sensitive failure detail" },
+      "timeout",
+    ],
+    ["abort with failure", { aborted: true, promptError: "sensitive failure detail" }, "aborted"],
+    ["normal stop", { stopReason: "stop" }, "done"],
+    ["normal end turn", { stopReason: "end_turn" }, "done"],
+    ["delivered partial reply", { stopReason: "length" }, "done"],
+    ["unspecified completion", undefined, "done"],
+  ])("renders the recorded terminal outcome for %s", async (_name, data, expected) => {
+    const runtime = makeRuntime();
+    await writeSessionEntry();
+    await appendEvents([
+      makeEvent({
+        type: "model.completed",
+        ts: "2026-05-18T12:04:29.000Z",
+        provider: "openai",
+        modelId: "gpt-5.2",
+        data,
+      }),
+    ]);
+
+    await sessionsTailCommand({ agent: "main", store: storePath, sessionKey }, runtime);
+
+    expect(runtimeOutput(runtime)).toContain(`openai/gpt-5.2 ${expected}`);
+    expect(runtimeOutput(runtime)).not.toContain("sensitive failure detail");
+  });
+
   it.each([
     ["ASCII", "incident", "incident"],
     ["CJK", "中文", "中文"],
@@ -362,6 +405,31 @@ describe("sessionsTailCommand", () => {
     const output = runtimeOutput(runtime);
     expect(output).toContain("tool.result");
     expect(output).toContain("sqlite ok");
+  });
+
+  it("exits unsuccessfully when the followed trajectory store becomes unreadable", async () => {
+    vi.useFakeTimers();
+    const runtime = makeRuntime();
+    await writeSessionEntry();
+    await appendEvents([makeEvent({ type: "session.started", ts: "2026-05-18T12:04:17.000Z" })]);
+
+    const run = sessionsTailCommand(
+      { agent: "main", store: storePath, sessionKey, tail: "0", follow: true },
+      runtime,
+    );
+    closeOpenClawAgentDatabasesForTest();
+    fs.writeFileSync(storePath, "not a SQLite database");
+    try {
+      await vi.advanceTimersByTimeAsync(1_000);
+    } finally {
+      process.emit("SIGTERM", "SIGTERM");
+      await run;
+    }
+
+    expect(runtime.error).toHaveBeenCalledWith(
+      expect.stringContaining(`Failed to read trajectory progress for ${sessionKey}`),
+    );
+    expect(runtime.exit).toHaveBeenCalledWith(1);
   });
 
   it("resolves the target store from a fully qualified non-default agent session key", async () => {

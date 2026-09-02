@@ -44,6 +44,7 @@ export type SandboxFsBridgeContext = {
   workspaceDir: string;
   agentWorkspaceDir: string;
   skillsWorkspaceDir?: string;
+  readOnlyResourceMounts?: Array<{ hostPath: string; containerPath: string }>;
   workspaceAccess: "none" | "ro" | "rw";
   containerName: string;
   containerWorkdir: string;

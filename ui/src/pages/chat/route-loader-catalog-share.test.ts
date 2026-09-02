@@ -1,5 +1,6 @@
 // @vitest-environment node
 import { describe, expect, it, vi } from "vitest";
+import { INTERNAL_SESSION_PATH_PARAM } from "../../app-route-paths.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { loadChatRoute } from "./route-loader.ts";
 
@@ -90,34 +91,52 @@ describe("catalog share route resolution", () => {
     });
   });
 
-  it("resolves a base-path share independently of the default agent id", async () => {
-    const request = vi.fn(async (method: string) => {
-      if (method !== "sessions.catalog.list") {
-        throw new Error(`Unexpected gateway request: ${method}`);
+  it.each(["0123456789ab", "old-title-0123456789ab", "pretty-beam-route-0123456789ab"])(
+    "resolves %s by id and canonicalizes the title under the default agent",
+    async (reference) => {
+      const request = vi.fn(async (method: string) => {
+        if (method !== "sessions.catalog.list") {
+          throw new Error(`Unexpected gateway request: ${method}`);
+        }
+        return beamCatalog([{ threadId: fullId, name: "Pretty Beam route" }]);
+      });
+
+      const loaded = await loadChatRoute(
+        catalogContext(request, "/openclaw"),
+        { pathname: `/openclaw/beam/${reference}`, search: "", hash: "" },
+        "chat",
+        new AbortController().signal,
+      );
+
+      expect(loaded).toMatchObject({
+        kind: "session",
+        sessionKey: `agent:research:catalog:beam:gateway:${fullId}`,
+        agentId: "research",
+        face: "chat",
+      });
+      if (reference === "pretty-beam-route-0123456789ab") {
+        expect(loaded).not.toHaveProperty("canonicalLocation");
+      } else {
+        expect(loaded).toMatchObject({
+          canonicalLocation: {
+            pathname: "/openclaw/beam/pretty-beam-route-0123456789ab",
+            search: "",
+            hash: "",
+          },
+          canonicalLocationSource: {
+            pathname: `/openclaw/beam/${reference}`,
+            search: "",
+            hash: "",
+          },
+        });
       }
-      return beamCatalog([{ threadId: fullId, name: "Pretty Beam route" }]);
-    });
-
-    const loaded = await loadChatRoute(
-      catalogContext(request, "/openclaw"),
-      { pathname: "/openclaw/beam/0123456789ab", search: "", hash: "" },
-      "chat",
-      new AbortController().signal,
-    );
-
-    expect(loaded).toMatchObject({
-      kind: "session",
-      sessionKey: `agent:research:catalog:beam:gateway:${fullId}`,
-      agentId: "research",
-      face: "chat",
-    });
-    expect(loaded).not.toHaveProperty("canonicalLocation");
-    expect(request).toHaveBeenCalledWith("sessions.catalog.list", {
-      agentId: "research",
-      search: "0123456789ab",
-      limitPerHost: 2,
-    });
-  });
+      expect(request).toHaveBeenCalledWith("sessions.catalog.list", {
+        agentId: "research",
+        search: "0123456789ab",
+        limitPerHost: 2,
+      });
+    },
+  );
 
   it("keeps ambiguity, invalid ids, and disabled route owners visible", async () => {
     const ids = ["0123456789ab00000000000000000000", "0123456789abffffffffffffffffffff"];
@@ -137,14 +156,14 @@ describe("catalog share route resolution", () => {
     await expect(
       loadChatRoute(
         context,
-        { pathname: "/beam/0123456789ab", search: "", hash: "" },
+        { pathname: "/beam/candidate-0123456789ab", search: "", hash: "" },
         "chat",
         new AbortController().signal,
       ),
     ).resolves.toMatchObject({
       kind: "ambiguous",
       shortId: "0123456789ab",
-      candidates: [{ href: `/beam/${ids[0]}` }, { href: `/beam/${ids[1]}` }],
+      candidates: [{ href: `/beam/candidate-${ids[0]}` }, { href: `/beam/candidate-${ids[1]}` }],
       truncated: true,
     });
 
@@ -233,5 +252,35 @@ describe("catalog share route resolution", () => {
         new AbortController().signal,
       ),
     ).resolves.toMatchObject({ kind: "route-error" });
+  });
+
+  it("preserves full-id links while canonicalizing an internally bridged stale name", async () => {
+    const request = vi.fn(async () => beamCatalog([{ threadId: fullId, name: "Renamed session" }]));
+    const originalPath = `/openclaw/beam/old-name-${fullId}`;
+    const loaded = await loadChatRoute(
+      catalogContext(request, "/openclaw"),
+      {
+        pathname: "/openclaw/chat",
+        search: `?${new URLSearchParams({ [INTERNAL_SESSION_PATH_PARAM]: originalPath })}`,
+        hash: "",
+      },
+      "chat",
+      new AbortController().signal,
+    );
+    expect(loaded).toMatchObject({
+      kind: "session",
+      sessionKey: `agent:research:catalog:beam:gateway:${fullId}`,
+      canonicalLocation: {
+        pathname: `/openclaw/beam/renamed-session-${fullId}`,
+        search: "",
+        hash: "",
+      },
+      canonicalLocationSource: { pathname: originalPath, search: "", hash: "" },
+    });
+    expect(request).toHaveBeenCalledWith("sessions.catalog.list", {
+      agentId: "research",
+      search: fullId,
+      limitPerHost: 2,
+    });
   });
 });

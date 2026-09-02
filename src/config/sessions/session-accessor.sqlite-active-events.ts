@@ -1,12 +1,14 @@
 import { sql } from "kysely";
-import type { TranscriptDisplayPosition } from "../../chat/transcript-display-position.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
 } from "../../infra/kysely-sync.js";
 import {
   getActiveTranscriptKysely,
+  parseActiveTranscriptMessageRow,
+  readTranscriptProjectionGeneration,
   withCurrentProjectionSnapshot,
+  type SessionTranscriptMessageEvent,
 } from "./session-accessor.sqlite-active-projection.js";
 import type {
   SessionTranscriptVisibleMessageDeltaLimits,
@@ -15,10 +17,10 @@ import type {
   TranscriptEvent,
 } from "./session-accessor.sqlite-contract.js";
 import {
-  readTranscriptProjectionGeneration,
+  iterateVisibleMessageRange,
+  readVisibleMessageMetadata,
   readVisibleMessageRange,
   readVisibleTranscriptStats,
-  resolveVisibleMessagePositionRange,
   resolveVisibleMessagePositions,
 } from "./session-accessor.sqlite-reset-window.js";
 import {
@@ -40,13 +42,7 @@ export {
   isSessionTranscriptProjectionUnavailableError,
   SessionTranscriptProjectionUnavailableError,
 } from "./session-transcript-projection-error.js";
-
-export type SessionTranscriptMessageEvent = {
-  event: TranscriptEvent;
-  eventSeq: number;
-  seq: number;
-  displayPosition?: TranscriptDisplayPosition;
-};
+export type { SessionTranscriptMessageEvent } from "./session-accessor.sqlite-active-projection.js";
 
 export type SessionTranscriptMessageEventPage = {
   activeLeafEntryId?: string | null;
@@ -74,23 +70,6 @@ export type SessionTranscriptBoundedMessageTailPage = SessionTranscriptMessageEv
   };
 };
 
-function parseMessageEventRow(row: {
-  event_seq: number;
-  event_json: string;
-  message_position: number | null;
-}): SessionTranscriptMessageEvent {
-  if (row.message_position === null) {
-    throw new Error("Active transcript message row is missing its message position");
-  }
-  return {
-    event: JSON.parse(row.event_json) as TranscriptEvent,
-    eventSeq: row.event_seq,
-    // Gateway cursors use the visible-message ordinal, matching the JSONL index.
-    // Raw event seq includes headers/control rows and would make pages overlap.
-    seq: row.message_position + 1,
-  };
-}
-
 /** Reads every message event on the active path. Full callers remain intentionally O(output). */
 export function readSessionTranscriptMessageEvents(
   scope: SessionTranscriptReadScope,
@@ -98,6 +77,20 @@ export function readSessionTranscriptMessageEvents(
   return withCurrentProjectionSnapshot(scope, (projection) => {
     const visible = resolveVisibleMessagePositions(projection);
     return readVisibleMessageRange(projection, 0, visible.total);
+  });
+}
+
+/** Visits messages synchronously inside one active-path read snapshot. */
+export function visitSessionTranscriptMessageEvents(
+  scope: SessionTranscriptReadScope,
+  visit: (entry: SessionTranscriptMessageEvent) => void,
+): void {
+  withCurrentProjectionSnapshot(scope, (projection) => {
+    const visible = resolveVisibleMessagePositions(projection);
+    // Keep cursors inside the snapshot; for-of closes them on visitor or parse failure.
+    for (const entry of iterateVisibleMessageRange(projection, 0, visible.total)) {
+      visit(entry);
+    }
   });
 }
 
@@ -191,13 +184,7 @@ export function readSessionTranscriptVisibleMessageDeltaCore(
       database: projection.database,
       ...projection.resolved,
     });
-    const generation = executeSqliteQueryTakeFirstSync(
-      projection.database.db,
-      db
-        .selectFrom("transcript_rewrite_watermarks")
-        .select("generation")
-        .where("session_id", "=", projection.resolved.sessionId),
-    )?.generation;
+    const generation = readTranscriptProjectionGeneration(projection);
     if (!generation) {
       return { kind: "missing" };
     }
@@ -378,27 +365,25 @@ export function readRecentSessionTranscriptMessageEvents(
       1024,
       Math.floor(Number.isFinite(options.maxBytes) ? options.maxBytes : 8 * 1024 * 1024),
     );
-    const candidates = readVisibleMessageRange(
+    const candidates = readVisibleMessageMetadata(
       projection,
-      Math.max(0, visible.total - maxLines),
+      Math.max(0, visible.total - Math.min(maxLines, maxMessages)),
       visible.total,
     );
-    const selected: SessionTranscriptMessageEvent[] = [];
+    let selectedStart = visible.total;
     let bytes = 0;
-    for (const event of candidates.toReversed()) {
-      const eventBytes = Buffer.byteLength(JSON.stringify(event.event)) + 1;
-      if (
-        selected.length >= maxMessages ||
-        (selected.length > 0 && bytes + eventBytes > maxBytes)
-      ) {
+    for (const row of candidates.toReversed()) {
+      // Keep the newest event even when oversized, then a contiguous suffix. Size stored JSONL
+      // before loading payloads so a small usage budget cannot materialize the entire line window.
+      if (selectedStart < visible.total && bytes + row.serialized_bytes > maxBytes) {
         break;
       }
-      selected.push(event);
-      bytes += eventBytes;
+      selectedStart = row.logicalPosition;
+      bytes += row.serialized_bytes;
     }
     return {
       activeLeafEntryId: projection.state.leafEventId,
-      events: selected.toReversed(),
+      events: readVisibleMessageRange(projection, selectedStart, visible.total),
       totalMessages: visible.total,
     };
   });
@@ -456,45 +441,28 @@ export function readSessionTranscriptBoundedMessageTailPage(
     );
     const endExclusive = Math.max(0, totalMessages - offset);
     const start = Math.max(0, endExclusive - maxMessages);
-    const positions = resolveVisibleMessagePositionRange(projection, start, endExclusive);
-    if (positions.length === 0 || maxBytes === 0) {
+    const scannedMessages = endExclusive - start;
+    if (scannedMessages === 0 || maxBytes === 0) {
       return {
         activeLeafEntryId: projection.state.leafEventId,
         events: [],
         newestContiguousEventCount: 0,
-        scannedMessages: positions.length,
+        scannedMessages,
         serializedBytes: 0,
         snapshot,
         totalMessages,
       };
     }
     const db = getActiveTranscriptKysely(projection.database);
-    const metadata = executeSqliteQuerySync(
-      projection.database.db,
-      db
-        .selectFrom("session_transcript_active_events as active")
-        .innerJoin("transcript_events as event", (join) =>
-          join
-            .onRef("event.session_id", "=", "active.session_id")
-            .onRef("event.seq", "=", "active.event_seq"),
-        )
-        .select([
-          "active.message_position",
-          /* kysely-allow-raw: byte budget covers the exact newline-terminated JSON event. */
-          sql<number>`OCTET_LENGTH(event.event_json) + 1`.as("serialized_bytes"),
-        ])
-        .where("active.session_id", "=", projection.resolved.sessionId)
-        .where("active.message_position", "in", positions)
-        .orderBy("active.message_position", "desc"),
-    ).rows;
-    if (metadata.length !== positions.length) {
+    const metadata = readVisibleMessageMetadata(projection, start, endExclusive).toReversed();
+    if (metadata.length !== scannedMessages) {
       throw new Error("Active transcript bounded message page is incomplete");
     }
     const selectedPositions: number[] = [];
     let newestContiguousEventCount: number | undefined;
     let serializedBytes = 0;
     for (const row of metadata) {
-      if (row.message_position === null || serializedBytes + row.serialized_bytes > maxBytes) {
+      if (serializedBytes + row.serialized_bytes > maxBytes) {
         newestContiguousEventCount ??= selectedPositions.length;
         continue;
       }
@@ -517,12 +485,12 @@ export function readSessionTranscriptBoundedMessageTailPage(
               .where("active.session_id", "=", projection.resolved.sessionId)
               .where("active.message_position", "in", selectedPositions)
               .orderBy("active.message_position", "asc"),
-          ).rows.map(parseMessageEventRow);
+          ).rows.map(parseActiveTranscriptMessageRow);
     return {
       activeLeafEntryId: projection.state.leafEventId,
       events,
       newestContiguousEventCount: newestContiguousEventCount ?? selectedPositions.length,
-      scannedMessages: positions.length,
+      scannedMessages,
       serializedBytes,
       snapshot,
       totalMessages,

@@ -1,5 +1,14 @@
 import type { ErrorShape } from "@openclaw/gateway-protocol";
 
+const gatewayResponseErrors = new WeakSet<Error>();
+
+/** Distinguishes correlated Gateway responses from locally constructed transport errors. */
+export function isGatewayProtocolResponseError(
+  error: unknown,
+): error is GatewayProtocolRequestError {
+  return error instanceof Error && gatewayResponseErrors.has(error);
+}
+
 export type GatewayProtocolRequestOptions = {
   timeoutMs?: number | null;
   expectFinal?: boolean;
@@ -32,6 +41,7 @@ export function retainGatewayResponsePayload(
   error: GatewayProtocolRequestError,
   payload: unknown,
 ): void {
+  gatewayResponseErrors.add(error);
   Object.defineProperty(error, "responsePayload", {
     value: payload,
     enumerable: false,

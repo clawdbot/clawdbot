@@ -23,8 +23,6 @@ export function hasDeadcodeScannedSource(changedPaths: string[]): boolean {
 
 const SCRIPTS_TYPECHECK_PATH_RE =
   /^(?:scripts\/.*\.(?:[cm]?ts|[cm]?tsx)|tsconfig\.scripts\.json)$/u;
-const TEST_ROOT_TYPECHECK_PATH_RE =
-  /^(?:test\/(?!fixtures\/).*\.(?:[cm]?ts|[cm]?tsx)|test\/tsconfig\/tsconfig\.test\.root\.json)$/u;
 /** @internal Shared repository-script contract. */
 export const LIVE_DOCKER_AUTH_SHELL_TARGETS = [
   "scripts/lib/live-docker-auth.sh",
@@ -161,7 +159,11 @@ export function detectChangedLanes(
     if (SCRIPTS_TYPECHECK_PATH_RE.test(changedPath)) {
       lanes.scripts = true;
     }
-    if (TEST_ROOT_TYPECHECK_PATH_RE.test(changedPath)) {
+    if (
+      facts.isRootTestSource ||
+      changedPath === "test/tsconfig.json" ||
+      changedPath === "test/tsconfig/tsconfig.test.root.json"
+    ) {
       lanes.testRoot = true;
     }
 
@@ -216,6 +218,23 @@ export function detectChangedLanes(
         lanes.extensionTests = true;
         reasons.push(`${changedPath}: extension production`);
       }
+      continue;
+    }
+
+    // Shared inputs retain their Node/tooling owner as well as browser checks.
+    if (
+      changedPath === "tsconfig.json" ||
+      /^packages\/normalization-core\/(?:package\.json|src\/record-coerce\.ts)$/u.test(changedPath)
+    ) {
+      lanes.ui = true;
+      reasons.push(`${changedPath}: shared browser renderer input`);
+    }
+
+    // Native hosts bundle this DOM runtime; the Node-only core graph cannot own it.
+    if (changedPath.startsWith("packages/mermaid-renderer/")) {
+      lanes.ui = true;
+      lanes.coreTests = true;
+      reasons.push(`${changedPath}: shared browser renderer`);
       continue;
     }
 

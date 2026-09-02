@@ -2,6 +2,7 @@ import { uniqueStrings } from "@openclaw/normalization-core/string-normalization
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
+  iterateSqliteQuerySync,
 } from "../../infra/kysely-sync.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
 import {
@@ -39,7 +40,10 @@ import type {
 import { coerceSqliteNumber } from "./session-accessor.sqlite-normalize.js";
 import { collectSessionStateIdsForEntry } from "./session-accessor.sqlite-references.js";
 import { cloneSessionEntry, getSessionKysely } from "./session-accessor.sqlite-scope.js";
-import { parseSessionEntryJson as parseSessionEntryRow } from "./session-accessor.sqlite-status.js";
+import {
+  parseSessionEntryJson as parseSessionEntryRow,
+  sessionEntryMetadataJson,
+} from "./session-accessor.sqlite-status.js";
 import { deleteSessionTranscriptIndexInTransaction } from "./session-transcript-index.js";
 import type { SessionEntry } from "./types.js";
 
@@ -160,10 +164,12 @@ export function readReferencedSessionIds(
   excludedSessionKeys: ReadonlySet<string> = new Set(),
 ): Set<string> {
   const db = getSessionKysely(database.db);
-  const rows = executeSqliteQuerySync(
+  const rows = iterateSqliteQuerySync(
     database.db,
-    db.selectFrom("session_nodes").select(["entry_json", "current_session_id", "session_key"]),
-  ).rows;
+    db
+      .selectFrom("session_nodes")
+      .select([sessionEntryMetadataJson, "current_session_id", "session_key"]),
+  );
   const sessionIds = new Set<string>();
   for (const row of rows) {
     if (excludedSessionKeys.has(row.session_key)) {
@@ -228,7 +234,12 @@ export function deleteMaterializedSessionStatePlans(
   plans: readonly MaterializedSessionStateDeletePlan[],
   protectedSessionIds?: ReadonlySet<string>,
   excludedSessionKeys?: ReadonlySet<string>,
+  /** Synchronous mutation notification; durable completion still belongs to COMMIT. */
+  onDeleted?: () => void,
 ): SessionLifecycleArchivedTranscript[] {
+  if (plans.length === 0) {
+    return [];
+  }
   const archivedTranscripts: SessionLifecycleArchivedTranscript[] = [];
   const referencedSessionIds = readReferencedSessionIds(database, excludedSessionKeys);
   for (const sessionId of protectedSessionIds ?? []) {
@@ -245,7 +256,9 @@ export function deleteMaterializedSessionStatePlans(
     if (plan.archive) {
       persistSessionTranscriptArchive(database, plan);
     }
-    deleteSqliteSessionStateRows(database, plan.sessionId);
+    if (deleteSqliteSessionStateRows(database, plan.sessionId)) {
+      onDeleted?.();
+    }
     if (plan.snapshot.lastSeq !== null && plan.archivedTranscript) {
       archivedTranscripts.push(plan.archivedTranscript);
     }
@@ -316,8 +329,13 @@ export async function projectSessionEntryLifecycleMutation(
   const removalDatabase = openOpenClawAgentDatabase(databaseOptions);
   const store = readSessionEntryStore(removalDatabase, {
     allowCanonicalRepair: params.allowCanonicalRepair === true,
+    sessionKeys: [
+      ...params.removals.map((removal) =>
+        removal.exactStoredKey ? removal.sessionKey : removal.sessionKey.trim(),
+      ),
+      ...params.upserts.map((upsert) => upsert.sessionKey.trim()),
+    ],
   });
-  const removedEntries: Array<{ archiveTranscript: boolean; entry: SessionEntry }> = [];
   const removedKeysToArchive = new Set<string>();
   const changedSessionKeys = new Set<string>();
   const projectedRemovals: ProjectedLifecycleMutation["removals"] = [];
@@ -351,13 +369,11 @@ export async function projectSessionEntryLifecycleMutation(
       }
     }
     projectedRemovals.push({
+      // Capture each archive decision before an async builder can change its input.
+      archiveTranscript: removal.archiveRemovedTranscript === true,
       expectedEntry: cloneSessionEntry(entry),
       removal,
       sessionKey,
-    });
-    removedEntries.push({
-      archiveTranscript: removal.archiveRemovedTranscript === true,
-      entry,
     });
     if (removal.archiveRemovedTranscript === true) {
       removedKeysToArchive.add(sessionKey);
@@ -391,7 +407,6 @@ export async function projectSessionEntryLifecycleMutation(
         : await upsert.buildEntry({
             currentEntry: expectedEntry ? cloneSessionEntry(expectedEntry) : undefined,
             sessionKey,
-            store,
           });
     if (!entry) {
       continue;
@@ -407,6 +422,9 @@ export async function projectSessionEntryLifecycleMutation(
       ...(upsert.resetBoundary ? { resetBoundary: upsert.resetBoundary } : {}),
     });
   }
+  if (projectedRemovals.length === 0) {
+    return { deletePlans: [], removals: projectedRemovals, upsertedEntries };
+  }
   // openclaw-agent-db.ts cache rule: LRU eviction may close idle handles during buildEntry awaits.
   const database = openOpenClawAgentDatabase(databaseOptions);
   const referencedSessionIds = collectProjectedReferencedSessionIds({
@@ -414,7 +432,7 @@ export async function projectSessionEntryLifecycleMutation(
     excludedSessionKeys: changedSessionKeys,
     projectedStore: store,
   });
-  const deletePlans = removedEntries.flatMap(({ archiveTranscript, entry }) =>
+  const deletePlans = projectedRemovals.flatMap(({ archiveTranscript, expectedEntry: entry }) =>
     planSessionStateAfterEntryRemoval({
       archiveDirectory: params.archiveDirectory,
       archiveTranscript,
@@ -479,15 +497,16 @@ export function collectProjectedReferencedSessionIds(params: {
 
 export { collectSessionStateIdsForEntry };
 
-function deleteSqliteSessionStateRows(database: OpenClawAgentDatabase, sessionId: string): void {
+function deleteSqliteSessionStateRows(database: OpenClawAgentDatabase, sessionId: string): boolean {
   const db = getSessionKysely(database.db);
   // The window row cascades canonical transcript tables, but FTS is virtual;
   // clear its projection before dropping the owner row.
   deleteSessionTranscriptIndexInTransaction(database.db, sessionId);
-  executeSqliteQuerySync(
+  const deleted = executeSqliteQuerySync(
     database.db,
     db.deleteFrom("session_windows").where("session_id", "=", sessionId),
   );
+  return Number(deleted.numAffectedRows ?? 0n) > 0;
 }
 
 // Plans orphan cleanup without file writes or row deletion; finalization
@@ -694,4 +713,18 @@ export function assertPlannedLifecycleArtifactEntriesUnchanged(
       throw new Error(`SQLite lifecycle cleanup entry changed for ${planned.sessionKey}`);
     }
   }
+}
+
+/** Partition only optimistic entry conflicts; database and parse failures stay fatal. */
+export function partitionUnchangedPlannedLifecycleArtifactEntries(
+  database: OpenClawAgentDatabase,
+  entries: readonly SessionEntryRemovalPlan[],
+): { changed: SessionEntryRemovalPlan[]; unchanged: SessionEntryRemovalPlan[] } {
+  const changed: SessionEntryRemovalPlan[] = [];
+  const unchanged: SessionEntryRemovalPlan[] = [];
+  for (const planned of entries) {
+    const current = readExactSessionEntryRow(database, planned.sessionKey)?.entry;
+    (sqliteSessionEntriesEqual(current, planned.expectedEntry) ? unchanged : changed).push(planned);
+  }
+  return { changed, unchanged };
 }

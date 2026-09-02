@@ -291,6 +291,13 @@ describe("parseControlUiSessionPath", () => {
 describe("matchControlUiCatalogSharePath", () => {
   it.each([
     ["/beam/0123456789ab", undefined, "0123456789ab"],
+    ["/beam/fix-upload-flow-0123456789ab", undefined, "0123456789ab"],
+    ["/beam/old-title-0123456789ab", undefined, "0123456789ab"],
+    [
+      "/openclaw/beam/fix-upload-flow-0123456789abcdef0123456789abcdef",
+      "/openclaw",
+      "0123456789abcdef0123456789abcdef",
+    ],
     [
       "/openclaw/beam/0123456789abcdef0123456789abcdef",
       "/openclaw",

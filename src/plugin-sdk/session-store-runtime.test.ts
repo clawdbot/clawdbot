@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   appendTranscriptEvent,
   appendTranscriptMessage,
@@ -56,11 +56,10 @@ describe("session-store-runtime compatibility surface", () => {
   });
 
   async function seedSessionEntry(sessionKey: string, entry: SessionEntry): Promise<void> {
-    await upsertSessionEntry({
-      agentId: "main",
-      sessionKey,
-      storePath,
-      entry,
+    await patchInternalSessionEntry({ agentId: "main", sessionKey, storePath }, () => entry, {
+      fallbackEntry: entry,
+      replaceEntry: true,
+      skipMaintenance: true,
     });
   }
 
@@ -850,9 +849,9 @@ describe("session-store-runtime compatibility surface", () => {
         update: () => ({ model: "gpt-5.5" }),
       });
 
-      expect(getSessionEntry({ sessionKey: staleSessionKey, storePath }) != null).toBe(
-        staleSessionPresent,
-      );
+      const hasStaleEntry = () =>
+        getSessionEntry({ sessionKey: staleSessionKey, storePath }) != null;
+      await vi.waitFor(() => expect(hasStaleEntry()).toBe(staleSessionPresent), { timeout: 5_000 });
     },
   );
 

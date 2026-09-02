@@ -33,6 +33,7 @@ import {
   deliveryContextFromSession,
   sessionDeliveryRoute,
 } from "../../utils/delivery-context.shared.js";
+import type { OpenClawConfig } from "../types.openclaw.js";
 import {
   applySessionEntryReplacements,
   applySessionPatchProjections,
@@ -76,12 +77,13 @@ import {
   resolveSessionTranscriptRuntimeTarget,
   trimSessionTranscriptForManualCompact,
   updateSessionEntry,
+  updateResolvedSessionEntry,
   updateSessionLastRoute,
   upsertSessionEntryCore,
 } from "./session-accessor.js";
 import {
   readSessionEntryCount,
-  readSessionEntryKeys,
+  iterateSessionEntryKeys,
 } from "./session-accessor.sqlite-entry-store.js";
 import * as sessionEntryStore from "./session-accessor.sqlite-entry-store.js";
 import { loadExactSessionEntry, replaceSessionEntrySync } from "./session-accessor.sqlite-entry.js";
@@ -321,7 +323,7 @@ describe("session accessor seam", () => {
     const database = openOpenClawAgentDatabase({ agentId: "main", path: databasePath });
 
     expect(readSessionEntryCount(database)).toBe(1);
-    expect(readSessionEntryKeys(database)).toEqual(["agent:main:logical-entry"]);
+    expect([...iterateSessionEntryKeys(database)]).toEqual(["agent:main:logical-entry"]);
     expect(countSessionEntryRowsReadOnly({ agentId: "main", storePath })).toBe(2);
   });
 
@@ -1252,6 +1254,112 @@ describe("session accessor seam", () => {
     });
   });
 
+  it.each(["global", "main", "agent:main:main"])(
+    "keeps explicit logical owner reads and updates isolated for %s",
+    async (sessionKey) => {
+      const cfg: OpenClawConfig = {
+        session: {
+          store: path.join(tempDir, "{agentId}.json"),
+          scope: sessionKey === "global" ? "global" : undefined,
+        },
+        agents: { entries: { research: {}, ops: {} } },
+      };
+      const canonicalKey = sessionKey === "global" ? "global" : "agent:research:main";
+      for (const agentId of ["research", "ops"]) {
+        await upsertSessionEntryCore(
+          {
+            agentId,
+            sessionKey: sessionKey === "global" ? "global" : `agent:${agentId}:main`,
+            storePath: path.join(tempDir, `${agentId}.json`),
+          },
+          { sessionId: `${agentId}-session`, updatedAt: 1, label: agentId },
+        );
+      }
+      const scope = { cfg, sessionKey, agentId: "research" };
+
+      expect(resolveSessionEntryAccessTarget(scope)).toMatchObject({
+        agentId: "research",
+        canonicalKey,
+        entry: { sessionId: "research-session", label: "research" },
+      });
+      const updated = await updateResolvedSessionEntry(scope, (entry) => {
+        entry.label = "updated research";
+        return entry.sessionId;
+      });
+
+      expect(updated).toMatchObject({ found: true, result: "research-session", canonicalKey });
+      expect(resolveSessionEntryAccessTarget(scope).entry?.label).toBe("updated research");
+      expect(
+        loadSessionEntry({
+          agentId: "ops",
+          sessionKey: sessionKey === "global" ? "global" : "agent:ops:main",
+          storePath: path.join(tempDir, "ops.json"),
+        })?.label,
+      ).toBe("ops");
+    },
+  );
+
+  it.each([
+    { sessionKey: "agent:ops:main", storeOwner: undefined, message: 'belongs to "ops"' },
+    { sessionKey: "global", storeOwner: "ops", message: 'belongs to "ops"' },
+    { sessionKey: "main", storeOwner: "retired", message: "retired" },
+  ])(
+    "rejects conflicting logical owner for $sessionKey and $storeOwner",
+    ({ sessionKey, storeOwner, message }) => {
+      const cfg: OpenClawConfig = {
+        session: { store: storePath, scope: "global" },
+        agents: {
+          entries: { research: {}, ops: {} },
+          defaults: storeOwner ? { sessionStore: { agentId: storeOwner } } : undefined,
+        },
+      };
+      const scope = { cfg, sessionKey, agentId: "research" };
+
+      expect(() => resolveSessionEntryAccessTarget(scope)).toThrow(message);
+    },
+  );
+
+  it.each(
+    ["ops", "retired"].flatMap((storeOwner) =>
+      ["agent:research:main", "agent:main:main"].map((sessionKey) => ({ storeOwner, sessionKey })),
+    ),
+  )(
+    "preserves fixed global owner $storeOwner after canonicalizing $sessionKey",
+    async ({ storeOwner, sessionKey }) => {
+      const sharedStorePath = path.join(tempDir, "shared.sqlite");
+      const storedScope = {
+        agentId: storeOwner,
+        defaultAgentId: storeOwner,
+        storePath: sharedStorePath,
+        sessionKey: "global",
+      };
+      await upsertSessionEntryCore(storedScope, {
+        sessionId: `${storeOwner}-session`,
+        updatedAt: 1,
+        label: "original owner label",
+      });
+      const cfg: OpenClawConfig = {
+        session: { store: sharedStorePath, scope: "global" },
+        agents: {
+          entries: { research: {}, ops: {} },
+          defaults: { sessionStore: { agentId: storeOwner } },
+        },
+      };
+      const scope = { cfg, sessionKey, agentId: "research" };
+      const expectedError = storeOwner === "retired" ? "retired" : 'belongs to "ops"';
+
+      expect.soft(() => resolveSessionEntryAccessTarget(scope)).toThrow(expectedError);
+      await expect
+        .soft(
+          updateResolvedSessionEntry(scope, (entry) => {
+            entry.label = "wrong owner mutation";
+          }),
+        )
+        .rejects.toThrow(expectedError);
+      expect(loadSessionEntry(storedScope)?.label).toBe("original owner label");
+    },
+  );
+
   it("creates durable session ids for metadata-only inserts", async () => {
     const scope = {
       sessionKey: "agent:main:main",
@@ -1357,10 +1465,10 @@ describe("session accessor seam", () => {
       messages: [
         {
           message: { role: "user", content: "rotate-hello", timestamp: Date.now() },
-          shouldAppend: async () => {
+          shouldAppend: () => {
             // Simulate a concurrent reset rotating the session id between target
-            // resolution and the transcript append.
-            await replaceSessionEntry(
+            // resolution and the transcript append. Sync writers bypass the process queue.
+            replaceSessionEntrySync(
               { sessionKey: scope.sessionKey, storePath },
               { sessionId: "new-rotate-session", updatedAt: Date.now() },
             );
@@ -1404,8 +1512,8 @@ describe("session accessor seam", () => {
       messages: [
         {
           message: { role: "user", content: "default-rotate-hello", timestamp: Date.now() },
-          shouldAppend: async () => {
-            await replaceSessionEntry(
+          shouldAppend: () => {
+            replaceSessionEntrySync(
               { sessionKey: scope.sessionKey, storePath: expectedStorePath },
               { sessionId: "new-default-rotate", updatedAt: Date.now() },
             );
@@ -1529,8 +1637,8 @@ describe("session accessor seam", () => {
       messages: [
         {
           message: { role: "user", content: "durable-fallback-hello", timestamp: Date.now() },
-          shouldAppend: async () => {
-            await replaceSessionEntry(
+          shouldAppend: () => {
+            replaceSessionEntrySync(
               { sessionKey: scope.sessionKey, storePath },
               { sessionId: "new-durable-fallback", updatedAt: Date.now() },
             );

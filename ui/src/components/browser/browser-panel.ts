@@ -13,7 +13,7 @@ import { t } from "../../i18n/index.ts";
 import { OpenClawLitElement } from "../../lit/openclaw-element.ts";
 import { scrollbarShadowStyles } from "../../lit/scrollbar-styles.ts";
 import { DockLayoutController, dockPanelStyles } from "../dock-layout-controller.ts";
-import { createDockPanelLayout } from "../dock-panel-layout.ts";
+import { browserPanelLayout } from "../dock-panel-layout.ts";
 import { panelTabStripStyles } from "../panel-tab-strip.ts";
 import {
   BROWSER_PANEL_TOGGLE_EVENT,
@@ -27,16 +27,6 @@ import { renderBrowserPanelChrome, type BrowserPanelDock } from "./browser-panel
 import { browserPanelStyles } from "./browser-panel.styles.ts";
 import { browserTabKey, readBrowserTabTarget, type BrowserTabSelection } from "./browser-target.ts";
 import { normalizeBrowserUrlDraft } from "./browser-url.ts";
-
-const panelLayout = createDockPanelLayout({
-  storageKey: "openclaw.browser.panel.v1",
-  minHeight: 240,
-  minWidth: 380,
-  defaultDock: "right",
-  supportedDocks: ["bottom", "right"],
-  defaultHeight: 420,
-  defaultWidth: 560,
-});
 
 /** `<openclaw-browser-panel>` — the dockable gateway browser surface. */
 class OpenClawBrowserPanel extends OpenClawLitElement implements BrowserPanelControllerHost {
@@ -64,7 +54,7 @@ class OpenClawBrowserPanel extends OpenClawLitElement implements BrowserPanelCon
   private consumedPreferredRevision?: string;
   private readonly browserPanelController = new BrowserPanelController(this);
   private readonly dockLayout = new DockLayoutController(this, {
-    layout: panelLayout,
+    layout: browserPanelLayout,
     reservationPrefix: "browser",
     isAvailable: () => this.available,
   });

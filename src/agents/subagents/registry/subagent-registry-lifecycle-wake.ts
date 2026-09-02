@@ -8,6 +8,7 @@ import { defaultRuntime } from "../../../runtime.js";
 import { retireSessionMcpRuntimeForSessionKey } from "../../agent-bundle-mcp-tools.js";
 import { removeInternalSessionEffectsSession } from "../../internal-session-effects.js";
 import type { SubagentAnnounceDeliveryResult } from "../announce/subagent-announce-dispatch.js";
+import { blockSubagentCompletionDelivery } from "../completion/subagent-completion-admission.store.js";
 import { ensureDeliveryState } from "./subagent-delivery-state.js";
 import { SUBAGENT_ENDED_REASON_KILLED } from "./subagent-lifecycle-events.js";
 import { shouldSuppressSubagentRecoverySessionEffects } from "./subagent-recovery-state.js";
@@ -17,12 +18,12 @@ import type {
 } from "./subagent-registry-lifecycle-context.js";
 import {
   buildSafeLifecycleErrorMeta,
+  markRequesterSettleWakePending,
   maskLifecycleIdentifier,
-  safeMarkRequiredCompletionDeliveryBlocked,
   safeSetSubagentTaskDeliveryStatus,
 } from "./subagent-registry-lifecycle-delivery.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
-import type { RequesterSettleWakeState, SubagentRunRecord } from "./subagent-registry.types.js";
+import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import { hasSubagentRunEnded } from "./subagent-run-liveness.js";
 
 type RequesterSettleWakeBatchState =
@@ -90,10 +91,10 @@ const completeRequesterSettleWakeBatch = (
     if (
       outcome &&
       entry.expectsCompletionMessage === true &&
-      entry.delivery?.status !== "delivered"
+      ["pending", "in_progress"].includes(entry.delivery?.status ?? "pending")
     ) {
-      const delivery = ensureDeliveryState(entry);
       if (outcome.delivered) {
+        const delivery = ensureDeliveryState(entry);
         const deliveredAt = outcome.deliveredAt ?? Date.now();
         delivery.status = "delivered";
         delivery.disposition = "delivered";
@@ -102,12 +103,17 @@ const completeRequesterSettleWakeBatch = (
         delivery.lastError = undefined;
         delivery.lastDropReason = undefined;
       } else {
-        delivery.status = "failed";
-        delivery.disposition = outcome.disposition ?? delivery.disposition;
-        delivery.lastError = outcome.error ?? outcome.reason ?? "requester settle wake failed";
-        delivery.deliveredAt = undefined;
-        delivery.announcedAt = undefined;
-        entry.suppressCompletionDelivery = true;
+        const error = outcome.error ?? outcome.reason ?? "requester settle wake failed";
+        if (
+          !blockSubagentCompletionDelivery({
+            subagent: entry,
+            taskId: params.resolveSubagentTask(entry).task?.taskId ?? "",
+            reason: error,
+            disposition: outcome.disposition,
+          })
+        ) {
+          throw new Error(`subagent completion owner changed before settlement: ${runId}`);
+        }
       }
       settledDeliveries.push(entry);
     }
@@ -130,10 +136,12 @@ const completeRequesterSettleWakeBatch = (
     entries.forEach(([runId, entry], index) => {
       const previous = previousStates[index];
       params.runs.set(runId, entry);
-      entry.delivery = previous?.delivery;
+      if (outcome?.delivered !== false || !settledDeliveries.includes(entry)) {
+        entry.delivery = previous?.delivery;
+        entry.suppressCompletionDelivery = previous?.suppressCompletionDelivery;
+      }
       entry.requesterSettleWake = previous?.requesterSettleWake;
       entry.retireAfterRequesterTurn = previous?.retireAfterRequesterTurn;
-      entry.suppressCompletionDelivery = previous?.suppressCompletionDelivery;
     });
     throw error;
   }
@@ -148,14 +156,6 @@ const completeRequesterSettleWakeBatch = (
         entry,
         deliveryStatus: "delivered",
       });
-    } else if (outcome) {
-      const error = outcome.error ?? outcome.reason ?? "requester settle wake failed";
-      safeSetSubagentTaskDeliveryStatus(params, {
-        entry,
-        deliveryStatus: "failed",
-        deliveryError: error,
-      });
-      safeMarkRequiredCompletionDeliveryBlocked(params, { entry, reason: error });
     }
   }
   for (const [runId, entry] of entries) {
@@ -175,29 +175,6 @@ const completeRequesterSettleWakeBatch = (
       scheduleRequesterSettleWake(context, runId, entry);
     }
   }
-};
-
-export const markRequesterSettleWakePending = (
-  entry: SubagentRunRecord,
-  options?: { retireAfterSettle?: boolean },
-) => {
-  const existing = entry.requesterSettleWake;
-  entry.requesterSettleWake = {
-    status: existing?.status ?? "pending",
-    attemptCount: existing?.attemptCount ?? 0,
-    ...(existing?.replayCount !== undefined ? { replayCount: existing.replayCount } : {}),
-    ...(existing?.nextAttemptAt !== undefined ? { nextAttemptAt: existing.nextAttemptAt } : {}),
-    ...(existing?.batchRunIds ? { batchRunIds: [...existing.batchRunIds] } : {}),
-    ...(existing?.requesterYieldBatch === true ? { requesterYieldBatch: true } : {}),
-    ...(existing?.afterRequesterYield === true ? { afterRequesterYield: true } : {}),
-    ...(existing?.rearmGeneration !== undefined
-      ? { rearmGeneration: existing.rearmGeneration }
-      : {}),
-    ...(existing?.lastError !== undefined ? { lastError: existing.lastError } : {}),
-    ...(existing?.retireAfterSettle === true || options?.retireAfterSettle === true
-      ? { retireAfterSettle: true }
-      : {}),
-  } satisfies RequesterSettleWakeState;
 };
 
 const persistRequesterSettleWakePending = (
@@ -243,7 +220,7 @@ const persistRequesterSettleWakePending = (
 // blocks on the wake, but the wake must run as tracked root work: a live
 // cleanup parent reserves the root synchronously, so restart or suspend
 // cannot reach quiescence between scheduling and the wake's gateway turn.
-// Failures are logged only.
+// Failures settle only the exact admitted wake so a newer requester-yield rearm survives.
 function retainScheduledRequesterSettleWakeTimer(
   context: SubagentLifecycleWakeContext,
   runId: string,
@@ -306,6 +283,7 @@ export function scheduleRequesterSettleWake(
   entry: SubagentRunRecord,
 ): void {
   const params = context.options;
+  const admittedWake = entry.requesterSettleWake;
   const requesterSessionKey = entry.requesterSessionKey?.trim();
   // A replayed lifecycle start can retain an older endedAt; require both
   // terminal status and end evidence so a live child never wakes its requester.
@@ -314,7 +292,7 @@ export function scheduleRequesterSettleWake(
     entry.execution.status === "running" ||
     !hasSubagentRunEnded(entry) ||
     !requesterSessionKey ||
-    (entry.requesterTurnRunId && entry.requesterTurnYielded === true) ||
+    (entry.requesterTurnRunId && entry.expectsCompletionMessage === true) ||
     context.hasScheduledRequesterSettleWakeRun(runId)
   ) {
     return;
@@ -340,23 +318,44 @@ export function scheduleRequesterSettleWake(
   // Wake turns outlive their spawning attempt; clear its owner before both
   // dispatch and chained re-arms so transcript writes acquire a fresh lock.
   runWithoutOwnedSessionTranscriptWrites(() => {
-    void runWithGatewayIndependentRootWorkContinuation(() =>
-      params.maybeWakeRequesterAfterAllChildrenSettled({
-        requesterSessionKey,
-        requesterOrigin: entry.requesterOrigin,
-        settledEntry: entry,
-        transitionBatch: (runIds, state) =>
-          transitionRequesterSettleWakeBatch(context, runIds, state),
-        completeBatch: (runIds, rearmGeneration, outcome) =>
-          completeRequesterSettleWakeBatch(context, runIds, rearmGeneration, outcome),
-      }),
+    void runWithGatewayIndependentRootWorkContinuation(
+      () =>
+        params.maybeWakeRequesterAfterAllChildrenSettled({
+          requesterSessionKey,
+          requesterOrigin: entry.requesterOrigin,
+          settledEntry: entry,
+          transitionBatch: (runIds, state) =>
+            transitionRequesterSettleWakeBatch(context, runIds, state),
+          completeBatch: (runIds, rearmGeneration, outcome) =>
+            completeRequesterSettleWakeBatch(context, runIds, rearmGeneration, outcome),
+        }),
+      "subagents:lifecycle-wake",
     )
       .catch((error: unknown) => {
+        const safeError = buildSafeLifecycleErrorMeta(error);
         params.warn("requester settle wake failed", {
-          error: buildSafeLifecycleErrorMeta(error),
+          error: safeError,
           runId: maskLifecycleIdentifier(runId, "run"),
           requesterSessionKey: maskLifecycleIdentifier(requesterSessionKey, "session"),
         });
+        const current = params.runs.get(runId);
+        if (!admittedWake || current !== entry || current.requesterSettleWake !== admittedWake) {
+          return;
+        }
+        try {
+          completeRequesterSettleWakeBatch(
+            context,
+            admittedWake.batchRunIds ?? [runId],
+            admittedWake.rearmGeneration,
+            { delivered: false, path: "none", error: safeError.message },
+          );
+        } catch (settleError) {
+          params.warn("failed to persist requester settle wake rejection", {
+            error: buildSafeLifecycleErrorMeta(settleError),
+            runId: maskLifecycleIdentifier(runId, "run"),
+            requesterSessionKey: maskLifecycleIdentifier(requesterSessionKey, "session"),
+          });
+        }
       })
       .finally(() => {
         context.unmarkRequesterSettleWakeRunScheduled(runId);
@@ -385,11 +384,13 @@ export function completeCleanupBookkeeping(
   const runCleanupTail = (label: string, run: () => Promise<unknown>) => {
     // These best-effort tails can outlive the durable registry transition,
     // but they still mutate session-owned resources and must block snapshots.
-    void runWithGatewayIndependentRootWorkAdmission(run).catch((error: unknown) => {
-      defaultRuntime.log(
-        `[warn] subagent ${label} failed (${cleanupParams.runId}): ${String(error)}`,
-      );
-    });
+    void runWithGatewayIndependentRootWorkAdmission(run, "subagents:lifecycle-cleanup").catch(
+      (error: unknown) => {
+        defaultRuntime.log(
+          `[warn] subagent ${label} failed (${cleanupParams.runId}): ${String(error)}`,
+        );
+      },
+    );
   };
   const scheduleCleanupTails = (options: {
     allowRetiredRow: boolean;

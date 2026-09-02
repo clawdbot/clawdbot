@@ -71,6 +71,26 @@ afterEach(async () => {
 });
 
 describe("signalRpcRequest", () => {
+  it.each([{ bytes: [0xff] }, { bytes: [0xc3] }])(
+    "rejects malformed UTF-8 bytes $bytes before JSON parsing",
+    async ({ bytes }) => {
+      const baseUrl = await withSignalServer((_req, res) => {
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(
+          Buffer.concat([
+            Buffer.from('{"jsonrpc":"2.0","result":{"version":"'),
+            Buffer.from(bytes),
+            Buffer.from('"},"id":"test-id"}'),
+          ]),
+        );
+      });
+
+      await expect(signalRpcRequest("version", undefined, { baseUrl })).rejects.toBeInstanceOf(
+        TypeError,
+      );
+    },
+  );
+
   it("returns parsed RPC result", async () => {
     const baseUrl = await withSignalServer(async (req, res) => {
       expect(req.method).toBe("POST");
@@ -263,6 +283,15 @@ describe("signalRpcRequest", () => {
 });
 
 describe("signalCheck", () => {
+  it("uses only the status when the unused response body is malformed UTF-8", async () => {
+    const baseUrl = await withSignalServer((_req, res) => {
+      res.writeHead(200);
+      res.end(Buffer.from([0xff]));
+    });
+
+    await expect(signalCheck(baseUrl)).resolves.toEqual({ ok: true, status: 200, error: null });
+  });
+
   it("returns ok for a healthy signal-cli check", async () => {
     const baseUrl = await withSignalServer((req, res) => {
       expect(req.method).toBe("GET");

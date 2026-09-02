@@ -946,7 +946,7 @@ suite.define(() => {
       expect(await link.getAttribute("aria-current")).toBe("page");
       expect(await link.getAttribute("aria-describedby")).toBeNull();
       expect(await link.ariaSnapshot()).toContain(`link "${readableTitle}"`);
-      await captureSessionAccessibilityProof(page, "after-derived-title");
+      await captureSessionAccessibilityProof(suite, page, "after-derived-title");
 
       const listCountBeforePatch = (await gateway.getRequests("sessions.list")).length;
       await row.hover();
@@ -966,7 +966,7 @@ suite.define(() => {
       await expect.poll(() => label.textContent()).toBe(readableTitle);
       expect(await link.getAttribute("aria-current")).toBe("page");
       expect(await link.ariaSnapshot()).toContain(`link "${readableTitle}"`);
-      await captureSessionAccessibilityProof(page, "after-patch-refresh");
+      await captureSessionAccessibilityProof(suite, page, "after-patch-refresh");
     } finally {
       await suite.closeBrowserContext(context);
     }

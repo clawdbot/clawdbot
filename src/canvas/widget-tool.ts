@@ -16,6 +16,7 @@ import {
   listBoardWidgetContentKinds,
   resolveBoardWidgetContentKind,
 } from "../plugins/board-widget-content-kinds.js";
+import { describeDashboardCapabilities } from "../plugins/dashboard-capabilities.js";
 import type {
   WidgetPresentationError,
   WidgetPresentationSuccess,
@@ -44,6 +45,7 @@ export function hasRegisteredShowWidgetKinds(): boolean {
 function createShowWidgetToolSchema(
   kinds: readonly string[],
   presenters: readonly WidgetPresenter[],
+  capabilityGuidance: string,
 ) {
   const presenterTargets = presenters.flatMap((presenter) =>
     presenter.target === "current_channel" ? [] : [presenter.target],
@@ -108,8 +110,7 @@ function createShowWidgetToolSchema(
         ),
         tools: Type.Optional(
           Type.Array(Type.String(), {
-            description:
-              "Pinned widget host tools, such as prompt, sessions.list, or cron.trigger:<jobId>",
+            description: `Pinned widget host tools: prompt or cron.trigger:<jobId>; grant each read/action ID below unless a scoped grant is specified. ${capabilityGuidance}`,
           }),
         ),
       }),
@@ -278,7 +279,11 @@ export function createShowWidgetTool(options: ShowWidgetToolOptions = {}): AnyAg
     label: "Show Widget",
     name: "show_widget",
     description: `Visual helps? Make widget. Do not wait for ask. Keep one ad hoc visualization inline; pin for explicit dashboard request or multiple non-code visualizations. Update HTML by name. Use for comparisons, trends, timelines, flows, hierarchies, dashboards, status, progress, layouts, and choices. Text clearer? Skip. Show a widget on the user's current surface; kind defaults to html${advertisedRegisteredKinds.length ? ` and registered kinds are ${advertisedRegisteredKinds.join(", ")}` : ""}. ${inlineHostEnabled ? "Set pin=true to also place it on this session's dashboard" : "Inline hosting is disabled; set pin=true to place it on this session's dashboard"}; reuse the same explicit name with pin=true and new widget_code to update pinned content. Use name for a stable widget id, tab for a tab slug, size sm|md|lg|xl|full, presentation.frame card|full-bleed|frameless, and after for a sibling widget anchor. Pinned widgets may declare capabilities.netOrigins and capabilities.tools for operator approval. HTML widgets are self-contained HTML or SVG. Dashboard host APIs: openclaw.prompt.send(text), openclaw.state.emit(payload), openclaw.data.read(bindingId, params?), openclaw.action.run(actionId, params?), and openclaw.cron.trigger(jobId). openclaw.host.controlUiBaseUrl is the Control UI origin plus base path after dashboard host initialization, otherwise null; read it at click time. Open links in a new tab with target="_blank" and rel="noopener noreferrer". \`title\` is host metadata. Start directly with content; do not repeat the title or recreate dashboard chrome. HTML is pre-themed with --surface --card --elevated --text --text-strong --muted --border --border-strong --accent --accent-fill --accent-fg --ok --warn --danger --info --radius --font-body --font-mono.${presenterPrompt}`,
-    parameters: createShowWidgetToolSchema(kinds, explicitPresenters),
+    parameters: createShowWidgetToolSchema(
+      kinds,
+      explicitPresenters,
+      describeDashboardCapabilities(currentPluginRegistry()),
+    ),
     ...(currentChannelPresenter ? {} : { requiredClientCaps: SHOW_WIDGET_REQUIRED_CLIENT_CAPS }),
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
@@ -361,6 +366,7 @@ export function createShowWidgetTool(options: ShowWidgetToolOptions = {}): AnyAg
       );
       let pinnedText = "";
       let pinnedWidgetName: string | undefined;
+      let capabilityState: BoardWidgetPutResult["widgets"][number]["grantState"] | undefined;
       if (pinSessionKey) {
         const sessionKey = pinSessionKey;
         const explicitName = readToolStringParam(params, "name");
@@ -403,15 +409,36 @@ export function createShowWidgetTool(options: ShowWidgetToolOptions = {}): AnyAg
         const widget = snapshot.widgets.find(
           (candidate) => candidate.name === snapshot.resolvedWidgetName,
         );
-        pinnedText = `pinned to dashboard tab ${widget?.tabId ?? tab ?? "main"} as ${
+        if (!widget) {
+          throw new WidgetHtmlInputError(
+            "Dashboard did not return the pinned widget; read the board and retry.",
+          );
+        }
+        capabilityState = widget.grantState;
+        pinnedText = `pinned to dashboard tab ${widget.tabId} as ${
           snapshot.resolvedWidgetName
         }${size ? ` (${size})` : ""}`;
+        if (capabilityState === "pending") {
+          pinnedText +=
+            "; capabilities pending: ask the operator to review and approve the dashboard permission card";
+        }
+        if (capabilityState === "rejected") {
+          pinnedText +=
+            "; capabilities rejected: review the requested access and session permission policy with the operator before retrying";
+        }
+        if (capabilityState === "granted") {
+          pinnedText += "; capabilities granted";
+        }
       }
       const hasPresentationRoute = inlineAvailable || wantsCurrentChannel || wantsNodePanel;
       if (!hasPresentationRoute) {
         return jsonResult({
-          status: "pinned",
+          status:
+            capabilityState === "pending" || capabilityState === "rejected"
+              ? capabilityState
+              : "pinned",
           boardWidgetName: pinnedWidgetName,
+          capabilityState,
           text: `Widget ${pinnedText}`,
         });
       }
@@ -462,6 +489,7 @@ export function createShowWidgetTool(options: ShowWidgetToolOptions = {}): AnyAg
             receipt,
           },
           ...(pinnedWidgetName ? { boardWidgetName: pinnedWidgetName } : {}),
+          ...(capabilityState ? { capabilityState } : {}),
           text: `Widget presented in the current channel${messageId ? ` as message ${messageId}` : ""}${pinnedText ? `; ${pinnedText}` : ""}`,
         });
       }
@@ -472,6 +500,7 @@ export function createShowWidgetTool(options: ShowWidgetToolOptions = {}): AnyAg
           return jsonResult({
             status: "partial",
             boardWidgetName: pinnedWidgetName,
+            capabilityState,
             presentation: {
               target: requestedTarget === "node_panel" ? "node_panel" : "current_channel",
               status: "failed",
@@ -496,6 +525,7 @@ export function createShowWidgetTool(options: ShowWidgetToolOptions = {}): AnyAg
           : "";
       return jsonResult({
         kind: "canvas",
+        ...(capabilityState ? { capabilityState } : {}),
         presentation: {
           target,
           title,

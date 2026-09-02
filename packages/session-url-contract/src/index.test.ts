@@ -83,6 +83,21 @@ describe("buildControlUiCatalogSessionUrl", () => {
 
 describe("buildControlUiCatalogSharePath", () => {
   it.each([
+    ["Fix: upload flow!", "fix-upload-flow-"],
+    ["Deploy face deadbeef", "deploy-"],
+    ["🦞", ""],
+    ["x".repeat(60), `${"x".repeat(48)}-`],
+  ])("uses the session title slug for %s", (displayName, prefix) => {
+    expect(
+      buildControlUiCatalogSharePath({
+        shareRoute: SHARE_ROUTE,
+        threadId: "0123456789abcdef0123456789abcdef",
+        displayName,
+      }),
+    ).toBe(`/beam/${prefix}0123456789ab`);
+  });
+
+  it.each([
     {
       label: "root path",
       basePath: undefined,

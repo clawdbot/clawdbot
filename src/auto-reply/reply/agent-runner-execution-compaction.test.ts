@@ -17,7 +17,7 @@ import type {
 } from "./agent-runner-execution.test-support.js";
 import type { AgentTurnParams } from "./agent-runner-execution.types.js";
 
-const state = setupAgentRunnerExecutionTestState();
+const state = await setupAgentRunnerExecutionTestState();
 
 async function executeTestTurn(
   params?: Parameters<typeof createMinimalRunAgentTurnParams>[0],

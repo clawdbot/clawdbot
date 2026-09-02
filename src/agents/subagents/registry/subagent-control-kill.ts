@@ -1,4 +1,4 @@
-/** Authorized single-run, tree, and admin subagent kill orchestration. */
+/** Authorized tree and admin subagent kill orchestration. */
 import { resolveSubagentLabel } from "../../../auto-reply/reply/subagents-utils.js";
 import { loadExactSessionEntryReadOnly } from "../../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
@@ -28,10 +28,7 @@ import {
   type ResolvedSubagentController,
 } from "./subagent-control-scope.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
-import {
-  getLatestLiveSubagentRunByChildSessionKey,
-  listSubagentRunsForController,
-} from "./subagent-registry-read.js";
+import { listSubagentRunsForController } from "./subagent-registry-read.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import { compareSubagentRunGeneration } from "./subagent-run-generation.js";
 
@@ -463,97 +460,6 @@ export async function killAllControlledSubagentRuns(params: {
     };
   }
   return { status: "ok" as const, killed: result.killed, labels: result.labels };
-}
-
-function alreadyFinishedSubagent(entry: SubagentRunRecord) {
-  const label = resolveSubagentLabel(entry);
-  return {
-    status: "done" as const,
-    runId: entry.runId,
-    sessionKey: entry.childSessionKey,
-    label,
-    text: `${label} is already finished.`,
-  };
-}
-
-/** Kills one controlled subagent run and any active descendants. */
-export async function killControlledSubagentRun(params: {
-  cfg: OpenClawConfig;
-  controller: ResolvedSubagentController;
-  entry: SubagentRunRecord;
-  suppressTaskDelivery?: boolean;
-}) {
-  if (params.controller.controlScope !== "children") {
-    return {
-      status: "forbidden" as const,
-      runId: params.entry.runId,
-      sessionKey: params.entry.childSessionKey,
-      error: "Leaf subagents cannot control other sessions.",
-    };
-  }
-  const currentEntry = getLatestLiveSubagentRunByChildSessionKey(params.entry.childSessionKey);
-  if (!currentEntry || !isSameSubagentRunGeneration(currentEntry, params.entry)) {
-    return alreadyFinishedSubagent(params.entry);
-  }
-  const ownershipError = ensureSubagentControllerOwnsRun({
-    cfg: params.cfg,
-    controller: params.controller,
-    entry: currentEntry,
-  });
-  if (ownershipError) {
-    return {
-      status: "forbidden" as const,
-      runId: currentEntry.runId,
-      sessionKey: currentEntry.childSessionKey,
-      error: ownershipError,
-    };
-  }
-  return withSubagentKillScope(
-    { cfg: params.cfg, runs: [currentEntry], controller: params.controller },
-    async (scope, [tree]) => {
-      if (!tree) {
-        return alreadyFinishedSubagent(params.entry);
-      }
-      const stopped = await killSubagentRoot({
-        cfg: params.cfg,
-        tree,
-        scope,
-        suppressTaskDelivery: params.suppressTaskDelivery,
-      });
-      const { result: stopResult, cascade } = stopped;
-      const { errors } = collectKillErrors([tree], tree);
-      if (errors.length > 0) {
-        return {
-          status: "error" as const,
-          runId: params.entry.runId,
-          sessionKey: params.entry.childSessionKey,
-          error: errors.join("; "),
-          ...(stopResult.killed ? { killed: true as const } : {}),
-          cascadeKilled: cascade.killed,
-          cascadeLabels: cascade.killed > 0 ? cascade.labels : undefined,
-        };
-      }
-      if (!stopResult.killed && cascade.killed === 0) {
-        return alreadyFinishedSubagent(params.entry);
-      }
-      const cascadeText =
-        cascade.killed > 0
-          ? ` (+ ${cascade.killed} descendant${cascade.killed === 1 ? "" : "s"})`
-          : "";
-      return {
-        status: "ok" as const,
-        runId: params.entry.runId,
-        sessionKey: params.entry.childSessionKey,
-        label: resolveSubagentLabel(params.entry),
-        ...(stopResult.killed ? { killed: true as const } : {}),
-        cascadeKilled: cascade.killed,
-        cascadeLabels: cascade.killed > 0 ? cascade.labels : undefined,
-        text: stopResult.killed
-          ? `killed ${resolveSubagentLabel(params.entry)}${cascadeText}.`
-          : `killed ${cascade.killed} descendant${cascade.killed === 1 ? "" : "s"} of ${resolveSubagentLabel(params.entry)}.`,
-      };
-    },
-  );
 }
 
 /** Admin kill path for a subagent session key, bypassing caller ownership checks. */

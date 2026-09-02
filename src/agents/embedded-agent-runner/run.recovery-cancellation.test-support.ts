@@ -123,7 +123,6 @@ describe("recovery cancellation through the public run owner", () => {
           owner === "caller"
             ? runEmbeddedAgent({
                 ...runParams,
-                compactionCountOwner: "caller",
                 onCompactionAccounting,
               })
             : runEmbeddedAgent(runParams);
@@ -395,7 +394,6 @@ describe("recovery cancellation through the public run owner", () => {
 
     const result = await runEmbeddedAgent({
       ...runParams,
-      compactionCountOwner: "caller",
       onCompactionAccounting: facts,
     });
 
@@ -420,8 +418,6 @@ describe("recovery cancellation through the public run owner", () => {
       session = await createSharedRunIntegrationSession();
       const { runParams } = session;
       const { sessionId, sessionKey, sessionTarget } = runParams;
-      const { createAgentCommandSessionWorkingCopy } =
-        await import("../command/session-helpers.js");
       const { createCommandCompactionAccounting } =
         await import("../command/compaction-accounting.js");
       const { updateSessionStoreAfterAgentRun } = await import("../command/session-store.js");
@@ -438,14 +434,11 @@ describe("recovery cancellation through the public run owner", () => {
         totalTokensVersion: SESSION_TOTAL_TOKENS_VERSION,
       };
       await sessionAccessor.replaceSessionEntry(sessionTarget, initialEntry);
-      const { sessionEntry, sessionStore } = createAgentCommandSessionWorkingCopy({
-        sessionKey,
-        sessionEntry: initialEntry,
-        sessionStore: { [sessionKey]: initialEntry },
-      });
-      if (!sessionEntry || !sessionStore) {
+      const sessionEntry = sessionAccessor.loadExactSessionEntryReadOnly(sessionTarget)?.entry;
+      if (!sessionEntry) {
         throw new Error("The command must retain its pre-claim working copy");
       }
+      const sessionStore = { [sessionKey]: sessionEntry };
       const accounting = createCommandCompactionAccounting({
         sessionStore,
         persistCounts: true,
@@ -485,7 +478,6 @@ describe("recovery cancellation through the public run owner", () => {
         ...runParams,
         provider: "openai",
         model: "gpt-5.6-luna",
-        compactionCountOwner: "caller",
         onCompactionAccounting: candidate.observe,
       });
       await candidate.finish(sessionEntry);

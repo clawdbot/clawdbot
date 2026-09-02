@@ -25,7 +25,10 @@ import {
   assertValidCronCreateDelivery,
   assertValidCronFailureAlert,
 } from "../../cron/delivery-channel-validation.js";
-import { resolveCronDeliveryPreviews } from "../../cron/delivery-preview.js";
+import {
+  resolveCronDeliveryPreview,
+  resolveCronDeliveryPreviews,
+} from "../../cron/delivery-preview.js";
 import { assertCronDeliveryInputNonBlankFields } from "../../cron/delivery-target-validation.js";
 import { resolveCronListSnapshotRevision } from "../../cron/list-snapshot-revision.js";
 import { normalizeCronJobCreate, normalizeCronJobPatch } from "../../cron/normalize.js";
@@ -44,7 +47,12 @@ import {
   readCronTaskRunHistoryPage,
 } from "../../cron/task-run-history.js";
 import { cronJobUsesToolRuntime } from "../../cron/tools-allow.js";
-import type { CronJob, CronJobCreate, CronJobPatch } from "../../cron/types.js";
+import type {
+  CronDeliveryPreview,
+  CronJob,
+  CronJobCreate,
+  CronJobPatch,
+} from "../../cron/types.js";
 import { validateScheduleTimestamp } from "../../cron/validate-timestamp.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { resolveTargetPrefixedChannel } from "../../infra/outbound/channel-target-prefix.js";
@@ -217,6 +225,25 @@ function cronJobReadView(job: CronJob) {
     lastFailureNotificationDelivered: job.state.lastFailureNotificationDelivered,
     lastFailureNotificationDeliveryStatus: job.state.lastFailureNotificationDeliveryStatus,
     lastFailureNotificationDeliveryError: job.state.lastFailureNotificationDeliveryError,
+  };
+}
+
+function cronAddPayloadWithDeliveryPreview(params: {
+  result: CronJob | { created: boolean; updated?: boolean; job: CronJob };
+  deliveryPreview: CronDeliveryPreview;
+}) {
+  const job = "job" in params.result ? params.result.job : params.result;
+  if ("job" in params.result) {
+    return {
+      created: params.result.created,
+      ...(params.result.updated === undefined ? {} : { updated: params.result.updated }),
+      job: cronJobReadView(job),
+      deliveryPreview: params.deliveryPreview,
+    };
+  }
+  return {
+    ...cronJobReadView(job),
+    deliveryPreview: params.deliveryPreview,
   };
 }
 
@@ -854,15 +881,14 @@ export const cronHandlers: GatewayRequestHandlers = {
     }
     const callerScope = readCronCallerScope(client);
     const operatorActor = callerScope ? undefined : resolveOperatorSessionCreation(client).actor;
+    const creatorSession = callerScope?.sessionKey
+      ? loadGatewaySessionEntryReadOnly(callerScope.sessionKey, {
+          agentId: callerScope.agentId,
+        }).entry
+      : undefined;
     // Agent-tool clients own one exact signed session. Read that session's creator instead of
     // reclassifying spawn context as the automation creator; params never carry this provenance.
-    const actor =
-      operatorActor ??
-      (callerScope?.sessionKey
-        ? loadGatewaySessionEntryReadOnly(callerScope.sessionKey, {
-            agentId: callerScope.agentId,
-          }).entry?.createdActor
-        : undefined);
+    const actor = operatorActor ?? creatorSession?.createdActor;
     const actorId = normalizeOptionalString(actor?.id);
     const createdActor = actor ? { ...actor, ...(actorId ? { id: actorId } : {}) } : undefined;
     let captureRuntimeAuthority: (() => CronRuntimeAuthority | undefined) | undefined;
@@ -872,7 +898,25 @@ export const cronHandlers: GatewayRequestHandlers = {
       respondInvalidCronParams(respond, "cron.add", formatErrorMessage(err));
       return;
     }
-    const commitGuard = resolveCronMutationCommitGuard(client, context);
+    const assertMutationCurrent = resolveCronMutationCommitGuard(client, context);
+    const selectionIdentity = JSON.stringify(creatorSession?.skillLibrarySelections);
+    const commitGuard = () => {
+      assertMutationCurrent?.();
+      if (creatorSession && callerScope?.sessionKey) {
+        const latest = loadGatewaySessionEntryReadOnly(callerScope.sessionKey, {
+          agentId: callerScope.agentId,
+        }).entry;
+        if (
+          latest?.sessionId !== creatorSession.sessionId ||
+          latest.lifecycleRevision !== creatorSession.lifecycleRevision ||
+          JSON.stringify(latest.skillLibrarySelections) !== selectionIdentity
+        ) {
+          throw new Error(
+            "Creator session changed before scheduling; retry from the current turn.",
+          );
+        }
+      }
+    };
     const jobCreate = applyCronCreateCallerScopeDefault(candidate as CronJobCreate, callerScope);
     const cfg = context.getRuntimeConfig();
     try {
@@ -921,12 +965,22 @@ export const cronHandlers: GatewayRequestHandlers = {
       );
       return;
     }
+    // Resolve before the durable add. A preview failure after commit would make a safe retry
+    // create a duplicate job.
+    const deliveryPreview = await resolveCronDeliveryPreview({
+      cfg,
+      defaultAgentId: context.cron.getDefaultAgentId(),
+      job: jobCreate,
+    });
     let result: Awaited<ReturnType<typeof context.cron.add>>;
     try {
       result = await context.cron.add(jobCreate, {
         enabledExplicit,
         ...(createdActor ? { createdActor } : {}),
-        ...(commitGuard ? { commitGuard } : {}),
+        ...(creatorSession?.skillLibrarySelections
+          ? { skillLibrarySelections: creatorSession.skillLibrarySelections }
+          : {}),
+        commitGuard,
         ...(captureRuntimeAuthority ? { captureRuntimeAuthority } : {}),
         matchesExisting: (job) =>
           cronJobMatchesDeclarationScope({
@@ -973,13 +1027,10 @@ export const cronHandlers: GatewayRequestHandlers = {
     });
     respond(
       true,
-      "job" in result
-        ? {
-            created: result.created,
-            ...(result.updated === undefined ? {} : { updated: result.updated }),
-            job: cronJobReadView(job),
-          }
-        : cronJobReadView(job),
+      cronAddPayloadWithDeliveryPreview({
+        result,
+        deliveryPreview,
+      }),
       undefined,
     );
   },
@@ -1348,51 +1399,18 @@ export const cronHandlers: GatewayRequestHandlers = {
           .filter((job) => typeof job.id === "string" && typeof job.name === "string")
           .map((job) => [job.id, job.name]),
       );
-      let page = readCronTaskRunHistoryPage({
+      const visibleJobIds = new Set(jobs.map((job) => job.id));
+      const page = readCronTaskRunHistoryPage({
         storeKey: cronStoreKey(context.cronStorePath),
         ...cronRunLogPageFilters(p),
         agentId: p.agentId,
         jobNameById,
+        entryFilter: cronVisibility
+          ? (entry) =>
+              visibleJobIds.has(entry.jobId) &&
+              (!entry.sessionKey || cronVisibility(entry.sessionKey, p.agentId))
+          : undefined,
       });
-      if (cronVisibility) {
-        const visibleJobIds = new Set(jobs.map((job) => job.id));
-        const visibleEntries: typeof page.entries = [];
-        let sourceOffset = 0;
-        for (;;) {
-          const sourcePage = readCronTaskRunHistoryPage({
-            storeKey: cronStoreKey(context.cronStorePath),
-            ...cronRunLogPageFilters(p),
-            offset: sourceOffset,
-            limit: 200,
-            agentId: p.agentId,
-            jobNameById,
-          });
-          visibleEntries.push(
-            ...sourcePage.entries.filter(
-              (entry) =>
-                visibleJobIds.has(entry.jobId) &&
-                (!entry.sessionKey || cronVisibility(entry.sessionKey, p.agentId)),
-            ),
-          );
-          if (!sourcePage.hasMore || sourcePage.nextOffset === null) {
-            break;
-          }
-          sourceOffset = sourcePage.nextOffset;
-        }
-        const total = visibleEntries.length;
-        const offset = Math.max(0, Math.min(total, Math.floor(p.offset ?? 0)));
-        const limit = Math.max(1, Math.min(200, Math.floor(p.limit ?? 50)));
-        const entries = visibleEntries.slice(offset, offset + limit);
-        const nextOffset = offset + entries.length;
-        page = {
-          entries,
-          total,
-          offset,
-          limit,
-          hasMore: nextOffset < total,
-          nextOffset: nextOffset < total ? nextOffset : null,
-        };
-      }
       respond(true, page, undefined);
       return;
     }
@@ -1428,26 +1446,15 @@ export const cronHandlers: GatewayRequestHandlers = {
         matchedJob && typeof matchedJob.name === "string"
           ? { [jobId]: matchedJob.name }
           : undefined;
-      let page = readCronTaskRunHistoryPage({
+      const page = readCronTaskRunHistoryPage({
         storeKey,
         jobId,
         ...cronRunLogPageFilters(p),
         jobNameById,
+        entryFilter: cronVisibility
+          ? (entry) => !entry.sessionKey || cronVisibility(entry.sessionKey, matchedJob?.agentId)
+          : undefined,
       });
-      if (cronVisibility) {
-        const visibleEntries = page.entries.filter(
-          (entry) => !entry.sessionKey || cronVisibility(entry.sessionKey, matchedJob?.agentId),
-        );
-        const total = visibleEntries.length;
-        page = {
-          ...page,
-          entries: visibleEntries,
-          total,
-          offset: Math.min(page.offset, total),
-          hasMore: false,
-          nextOffset: null,
-        };
-      }
       respond(true, page, undefined);
     } catch (err) {
       if (!isInvalidCronTaskRunJobIdError(err)) {

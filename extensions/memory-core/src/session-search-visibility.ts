@@ -1,6 +1,9 @@
 import { resolveSessionAgentIdStrict } from "openclaw/plugin-sdk/agent-scope-runtime";
 // Memory Core plugin module implements session search visibility behavior.
-import { buildSessionEntry } from "openclaw/plugin-sdk/memory-core-host-engine-sessions";
+import {
+  buildSessionEntry,
+  loadArchivedSessions,
+} from "openclaw/plugin-sdk/memory-core-host-engine-sessions";
 import {
   resolveCanonicalMainSessionKey,
   type OpenClawConfig,
@@ -211,6 +214,24 @@ export async function filterMemorySearchHitsBySessionVisibility(params: {
     params.cfg,
     scopedAgentId ? { agentId: scopedAgentId } : {},
   );
+  const archiveNames = [
+    ...new Set(
+      params.hits.flatMap((hit) => {
+        const identity =
+          hit.source === "sessions"
+            ? extractTranscriptIdentityFromSessionsMemoryHit(hit.path)
+            : undefined;
+        const archiveName = hit.path.replace(/\\/g, "/").split("/").at(-1);
+        return identity?.archived && archiveName ? [archiveName] : [];
+      }),
+    ),
+  ];
+  const archivedSessionsByName = new Map(
+    loadArchivedSessions({ agentId: scopedAgentId, archiveNames, storePath }).map((archive) => [
+      archive.archiveName,
+      archive,
+    ]),
+  );
 
   const conversationRecall = params.conversationRecall;
   const trustedAgentScope = Boolean(
@@ -373,11 +394,16 @@ export async function filterMemorySearchHitsBySessionVisibility(params: {
     const archivedOwnerAgentId = archivedOwnerMatchesScope
       ? (identity.ownerAgentId ?? scopedAgentId)
       : undefined;
-    const resolvedKeys = resolveTranscriptStemToSessionKeys({
-      store: combinedSessionStore,
-      stem: identity.stem,
-      ...(archivedOwnerAgentId ? { archivedOwnerAgentId } : {}),
-    });
+    const canonicalArchive = identity.archived
+      ? archivedSessionsByName.get(hit.path.replace(/\\/g, "/").split("/").at(-1) ?? "")
+      : undefined;
+    const resolvedKeys = canonicalArchive?.sessionKey
+      ? [canonicalArchive.sessionKey]
+      : resolveTranscriptStemToSessionKeys({
+          store: combinedSessionStore,
+          stem: canonicalArchive?.sessionId ?? identity.stem,
+          ...(archivedOwnerAgentId ? { archivedOwnerAgentId } : {}),
+        });
     const keys = filterSessionKeysByScopedAgent({
       cfg: params.cfg,
       scopedAgentId,

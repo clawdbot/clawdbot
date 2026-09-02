@@ -43,6 +43,8 @@ export type TelegramSendOpts = {
   quoteText?: string;
   /** Forum topic thread ID (for forum supergroups) */
   messageThreadId?: number;
+  /** Channel Direct Messages topic ID. */
+  directMessagesTopicId?: number;
   /** Inline keyboard buttons (reply markup). */
   buttons?: TelegramInlineButtons;
   /** Send image as document to avoid Telegram compression. Defaults to false. */
@@ -51,6 +53,8 @@ export type TelegramSendOpts = {
   onDeliveryResult?: (result: TelegramSendResult) => Promise<void> | void;
   /** @internal Revalidate durable custody before a send operation, not after throttle waits. */
   onPlatformSendDispatch?: () => Promise<void>;
+  /** @internal Synchronously fence custody after refresh and immediately before Telegram I/O. */
+  assertPlatformSendAuthorized?: () => void;
 };
 
 export type TelegramApiCallOpts = Pick<
@@ -82,4 +86,5 @@ export type TelegramLocationSendOpts = TelegramThreadedSendOpts &
     | "silent"
     | "onDeliveryResult"
     | "onPlatformSendDispatch"
+    | "assertPlatformSendAuthorized"
   >;

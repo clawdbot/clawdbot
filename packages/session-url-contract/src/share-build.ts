@@ -1,5 +1,5 @@
 import { normalizeNullableString } from "@openclaw/normalization-core/string-coerce";
-import { normalizeControlUiBasePath } from "./grammar.js";
+import { controlUiSessionSlug, normalizeControlUiBasePath } from "./grammar.js";
 import { isControlUiReservedRouteSegment, type ControlUiCatalogShareRoute } from "./share.js";
 
 // Keep this subpath out of index.ts: the eager routing barrel would pull share
@@ -21,6 +21,7 @@ export function isControlUiCatalogShareId(
 export function buildControlUiCatalogSharePath(params: {
   shareRoute: ControlUiCatalogShareRoute;
   threadId: string;
+  displayName?: string;
   basePath?: string;
   prefixLength?: number;
 }): string | null {
@@ -42,5 +43,6 @@ export function buildControlUiCatalogSharePath(params: {
       Math.floor(params.prefixLength ?? shareRoute.minPrefixLength),
     ),
   );
-  return `${normalizeControlUiBasePath(params.basePath)}/${shareRoute.routeSegment}/${threadId.slice(0, length)}`;
+  const slug = controlUiSessionSlug(params.displayName);
+  return `${normalizeControlUiBasePath(params.basePath)}/${shareRoute.routeSegment}/${slug ? `${slug}-` : ""}${threadId.slice(0, length)}`;
 }
