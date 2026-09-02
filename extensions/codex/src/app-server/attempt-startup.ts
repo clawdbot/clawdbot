@@ -169,6 +169,8 @@ export async function startCodexAttemptThread(params: {
   nativeHookRelayGeneration?: string;
   nativeHookRelayRequired?: boolean;
   bundleMcpThreadConfig: CodexBundleMcpThreadConfig;
+  /** Static configured MCP is present on the dynamic surface, so native MCP stays absent. */
+  configuredMcpDynamicSurface?: boolean;
   /** OpenClaw owns configured MCP dynamically for this scheduled turn. */
   configuredMcpOwnershipVersion?: 1;
   nativeToolSurfaceEnabled: boolean;
@@ -212,7 +214,7 @@ export async function startCodexAttemptThread(params: {
       },
       operation: async () => {
         const threadConfig = mergeCodexThreadConfigs(
-          params.configuredMcpOwnershipVersion === 1
+          params.configuredMcpDynamicSurface
             ? undefined
             : (params.bundleMcpThreadConfig?.configPatch as JsonObject | undefined),
         );
@@ -492,17 +494,14 @@ export async function startCodexAttemptThread(params: {
                 nativeCodeModeEnabled: params.nativeToolSurfaceEnabled,
                 nativeProviderWebSearchSupport: params.nativeProviderWebSearchSupport,
                 nativeCodeModeOnlyEnabled: params.appServer.codeModeOnly,
-                userMcpServersEnabled:
-                  params.configuredMcpOwnershipVersion === 1
-                    ? false
-                    : params.nativeToolSurfaceEnabled,
-                mcpServersFingerprint:
-                  params.configuredMcpOwnershipVersion === 1
-                    ? undefined
-                    : params.bundleMcpThreadConfig.fingerprint,
+                userMcpServersEnabled: params.configuredMcpDynamicSurface
+                  ? false
+                  : params.nativeToolSurfaceEnabled,
+                mcpServersFingerprint: params.configuredMcpDynamicSurface
+                  ? undefined
+                  : params.bundleMcpThreadConfig.fingerprint,
                 mcpServersFingerprintEvaluated:
-                  params.configuredMcpOwnershipVersion === 1 ||
-                  params.bundleMcpThreadConfig.evaluated,
+                  params.configuredMcpDynamicSurface || params.bundleMcpThreadConfig.evaluated,
                 configuredMcpOwnershipVersion: params.configuredMcpOwnershipVersion,
                 environmentSelection: startupEnvironmentSelection,
                 appServerRuntimeFingerprint,
