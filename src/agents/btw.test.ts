@@ -827,7 +827,17 @@ describe("runBtwSideQuestion", () => {
       makeAsyncEvents([
         {
           type: "text_delta",
-          delta: "Side answer.",
+          delta: "# Side answer\n\n",
+          partial: {
+            role: "assistant",
+            content: [],
+            provider: "anthropic",
+            model: "claude-sonnet-4-6",
+          },
+        },
+        {
+          type: "text_delta",
+          delta: "First paragraph.",
           partial: {
             role: "assistant",
             content: [],
@@ -837,7 +847,7 @@ describe("runBtwSideQuestion", () => {
         },
         {
           type: "text_end",
-          content: "Side answer.",
+          content: "# Side answer\n\nFirst paragraph.",
           contentIndex: 0,
           partial: {
             role: "assistant",
@@ -851,7 +861,7 @@ describe("runBtwSideQuestion", () => {
           reason: "stop",
           message: {
             role: "assistant",
-            content: [{ type: "text", text: "Side answer." }],
+            content: [{ type: "text", text: "# Side answer\n\nFirst paragraph." }],
             provider: "anthropic",
             api: "anthropic-messages",
             model: "claude-sonnet-4-6",
@@ -887,6 +897,7 @@ describe("runBtwSideQuestion", () => {
         minChars: 1,
         maxChars: 200,
         breakPreference: "paragraph",
+        flushOnParagraph: true,
       },
       resolvedBlockStreamingBreak: "text_end",
       opts: { onBlockReply },
@@ -894,10 +905,10 @@ describe("runBtwSideQuestion", () => {
     });
 
     expect(result).toBeUndefined();
-    expect(onBlockReply).toHaveBeenCalledWith({
-      text: "Side answer.",
-      btw: { question: DEFAULT_QUESTION },
-    });
+    expect(onBlockReply.mock.calls.map(([payload]) => payload)).toEqual([
+      { text: "# Side answer", btw: { question: DEFAULT_QUESTION } },
+      { text: "\n\nFirst paragraph.", btw: { question: DEFAULT_QUESTION } },
+    ]);
   });
 
   it("returns a final payload when block streaming is unavailable", async () => {

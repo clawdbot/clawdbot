@@ -1,6 +1,7 @@
 // Tests reply delivery routing, payload persistence, and send suppression.
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { getReplyPayloadMetadata, setReplyPayloadMetadata } from "../reply-payload.js";
 import type { ReplyPayload } from "../types.js";
 import { buildReplyPayloads } from "./agent-runner-payloads.js";
@@ -341,6 +342,80 @@ describe("createBlockReplyDeliveryHandler", () => {
     });
   });
 
+  it("admits concurrently normalized blocks in source order with paragraph boundaries", async () => {
+    const firstNormalization = createDeferred();
+    const secondNormalization = createDeferred();
+    const enqueue = vi.fn();
+    const handler = createBlockReplyDeliveryHandler({
+      onBlockReply: vi.fn(async () => {}),
+      normalizeStreamingText: (payload) => ({ text: payload.text, skip: false }),
+      applyReplyToMode: (payload) => payload,
+      normalizeMediaPaths: async (payload) => {
+        if (payload.text?.includes("First block")) {
+          await firstNormalization.promise;
+        } else {
+          await secondNormalization.promise;
+        }
+        return payload;
+      },
+      typingSignals: {
+        signalTextDelta: vi.fn(async () => {}),
+      } as unknown as TypingSignaler,
+      blockStreamingEnabled: true,
+      blockReplyPipeline: { enqueue } as unknown as BlockReplyPipelineLike,
+      directlySentBlockKeys: new Set(),
+      directlySentBlockPayloads: [],
+    });
+
+    const first = handler({ text: "First block" });
+    const second = handler({ text: "\n\nSecond block" });
+    secondNormalization.resolve();
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 0);
+    });
+
+    expect(enqueue).not.toHaveBeenCalled();
+
+    firstNormalization.resolve();
+    await Promise.all([first, second]);
+
+    expect(enqueue.mock.calls.map(([payload]) => payload.text)).toEqual([
+      "First block",
+      "\n\nSecond block",
+    ]);
+  });
+
+  it("continues source-ordered admission after media normalization rejects", async () => {
+    const enqueue = vi.fn();
+    let normalizationCount = 0;
+    const handler = createBlockReplyDeliveryHandler({
+      onBlockReply: vi.fn(async () => {}),
+      normalizeStreamingText: (payload) => ({ text: payload.text, skip: false }),
+      applyReplyToMode: (payload) => payload,
+      normalizeMediaPaths: async (payload) => {
+        normalizationCount += 1;
+        if (normalizationCount === 1) {
+          throw new Error("media normalization failed");
+        }
+        return payload;
+      },
+      typingSignals: {
+        signalTextDelta: vi.fn(async () => {}),
+      } as unknown as TypingSignaler,
+      blockStreamingEnabled: true,
+      blockReplyPipeline: { enqueue } as unknown as BlockReplyPipelineLike,
+      directlySentBlockKeys: new Set(),
+      directlySentBlockPayloads: [],
+    });
+
+    const first = handler({ text: "First block" });
+    const second = handler({ text: "\n\nSecond block" });
+
+    await expect(first).rejects.toThrow("media normalization failed");
+    await expect(second).resolves.toBeUndefined();
+    expect(enqueue.mock.calls.map(([payload]) => payload.text)).toEqual(["Second block"]);
+  });
+
   it("suppresses implicit current-message threading for block replies when reply threading denies it", async () => {
     const blockReplyPipeline = {
       enqueue: vi.fn(),
@@ -554,7 +629,7 @@ describe("createBlockReplyDeliveryHandler", () => {
     });
   });
 
-  it("records concurrent direct block deliveries in emission order", async () => {
+  it("admits direct block deliveries in source order", async () => {
     const resolvers: Array<() => void> = [];
     const directlySentBlockPayloads: Array<ReplyPayload | undefined> = [];
     const handler = createBlockReplyDeliveryHandler({
@@ -575,10 +650,16 @@ describe("createBlockReplyDeliveryHandler", () => {
 
     const first = handler({ text: "first" });
     const second = handler({ text: "second" });
-    resolvers[1]?.();
-    await second;
+    await Promise.resolve();
+    expect(resolvers).toHaveLength(1);
+
     resolvers[0]?.();
     await first;
+    await Promise.resolve();
+    expect(resolvers).toHaveLength(2);
+
+    resolvers[1]?.();
+    await second;
 
     expect(directlySentBlockPayloads.map((payload) => payload?.text)).toEqual(["first", "second"]);
   });
