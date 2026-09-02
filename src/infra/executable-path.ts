@@ -51,7 +51,10 @@ function resolveWindowsExecutableExtensions(
     ".EXE;.CMD;.BAT;.COM"
   )
     .split(";")
-    .map((ext) => normalizeLowercaseStringOrEmpty(ext));
+    .map((ext) => normalizeLowercaseStringOrEmpty(ext))
+    // PATHEXT commonly ends in ";", and an empty entry would put "" back into the
+    // list, matching an extensionless file the caller asked to exclude.
+    .filter(Boolean);
   return includeExtensionless ? ["", ...extensions] : extensions;
 }
 

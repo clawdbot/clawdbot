@@ -94,6 +94,30 @@ describe("executable path helpers", () => {
     });
   });
 
+  it("does not match an extensionless file when PATHEXT has a trailing separator", async () => {
+    await withMockedPlatform("win32", async () => {
+      await withTestDir({ prefix: "openclaw-exec-path-" }, async (base) => {
+        const binDir = path.join(base, "bin");
+        await fs.mkdir(binDir, { recursive: true });
+        const executable = path.join(binDir, "runner");
+        await fs.writeFile(executable, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+
+        const originalPathext = process.env.PATHEXT;
+        // Real Windows PATHEXT values often end in ";", which splits to an empty entry.
+        process.env.PATHEXT = ".EXE;.CMD;";
+        try {
+          expect(
+            resolveExecutableFromPathEnv("runner", binDir, undefined, {
+              includeExtensionless: false,
+            }),
+          ).toBeUndefined();
+        } finally {
+          restoreEnvValue("PATHEXT", originalPathext);
+        }
+      });
+    });
+  });
+
   it("slides PATH hit and miss expiry for steady pollers", async () => {
     await withTestDir({ prefix: "openclaw-exec-path-" }, async (base) => {
       const binDir = path.join(base, "bin");
