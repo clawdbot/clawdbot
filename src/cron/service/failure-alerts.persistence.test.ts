@@ -24,6 +24,8 @@ type SendCronFailureAlert = NonNullable<
   Parameters<typeof createCronServiceState>[0]["sendCronFailureAlert"]
 >;
 
+type FailureAlertTransportParams = Parameters<SendCronFailureAlert>[0];
+
 function createAlertJob(params: { id: string; dueAt: number; includeSkipped?: boolean }): CronJob {
   const job = createDueIsolatedJob({
     id: params.id,
@@ -480,5 +482,74 @@ describe("cron failure alert persistence", () => {
         lastFailureNotificationDeliveryStatus: "not-requested",
       },
     });
+  });
+
+  it.each<{
+    name: string;
+    attempt: (alert: FailureAlertTransportParams) => Promise<void>;
+    expected: { delivered: boolean; deliveredField?: boolean; status: string; errorKey?: string };
+  }>([
+    {
+      name: "records a delivered alert after the send acknowledges the recipient",
+      attempt: async (alert) => alert.onDeliveryAttempt?.(true),
+      expected: { delivered: true, deliveredField: true, status: "delivered" },
+    },
+    {
+      name: "records an attempted-but-unconfirmed alert when delivery is uncertain",
+      attempt: async (alert) => alert.onDeliveryAttempt?.(false),
+      expected: { delivered: false, deliveredField: false, status: "not-delivered" },
+    },
+    {
+      name: "records a failed alert when the send rejects",
+      attempt: async () => {
+        throw new Error("target channel unreachable");
+      },
+      expected: {
+        delivered: false,
+        deliveredField: false,
+        status: "not-delivered",
+        errorKey: "target channel unreachable",
+      },
+    },
+  ])("persists the $name outcome onto the job", async ({ attempt, expected }) => {
+    const store = fixtures.makeStorePath();
+    const dueAt = Date.parse("2026-08-01T15:02:00.000Z");
+    const job = createAlertJob({ id: "failure-alert-outcome-persisted", dueAt });
+    await saveCronStore(store.storePath, { version: 1, jobs: [job] });
+
+    const sendCronFailureAlert = vi.fn<SendCronFailureAlert>(
+      async (alert: FailureAlertTransportParams) => {
+        await attempt(alert);
+      },
+    );
+    const state = createAlertState({
+      storePath: store.storePath,
+      nowMs: () => dueAt + 10,
+      sendCronFailureAlert,
+    });
+
+    await finalizeAlertOutcome({
+      state,
+      job,
+      status: "error",
+      error: "provider unavailable",
+      startedAt: dueAt,
+      endedAt: dueAt + 10,
+    });
+    expect(sendCronFailureAlert).toHaveBeenCalledOnce();
+
+    await vi.waitFor(async () => {
+      const storedState = (await loadCronStore(store.storePath)).jobs[0]?.state;
+      if (expected.deliveredField !== undefined) {
+        expect(storedState?.lastFailureNotificationDelivered).toBe(expected.deliveredField);
+      }
+    });
+    const persisted = (await loadCronStore(store.storePath)).jobs[0]?.state;
+    expect(persisted?.lastFailureNotificationDeliveryStatus).toBe(expected.status);
+    if (expected.errorKey) {
+      expect(persisted?.lastFailureNotificationDeliveryError).toContain(expected.errorKey);
+    } else {
+      expect(persisted?.lastFailureNotificationDeliveryError).toBeUndefined();
+    }
   });
 });

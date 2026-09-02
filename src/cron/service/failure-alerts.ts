@@ -19,7 +19,9 @@ import type {
   CronJob,
   CronMessageChannel,
 } from "../types.js";
+import { locked } from "./locked.js";
 import type { CronServiceState, DeferredCronNotifications } from "./state.js";
+import { persistOrRestore, snapshotStoreForRollback } from "./store.js";
 import { enqueueCronNotification } from "./wake.js";
 
 const DEFAULT_FAILURE_ALERT_AFTER = 2;
@@ -192,6 +194,36 @@ export function resolveFailureAlert(
   };
 }
 
+/** Persists the last failure-alert delivery outcome onto the live cron job. */
+function recordFailureAlertDeliveryOutcome(
+  state: CronServiceState,
+  jobId: string,
+  outcome: CronFailureNotificationDelivery,
+): void {
+  // Serialize with other cron operations for this store partition. The send is
+  // detached and outlives run finalization, so the persist is best-effort: a
+  // failed durable write must not fan out a second alert.
+  void locked(state, async () => {
+    const liveJob = state.store?.jobs.find((candidate) => candidate.id === jobId);
+    if (!liveJob) {
+      // Job was removed/replaced before the detached send settled; nothing to persist.
+      return;
+    }
+    // Snapshot under the lock so a failed durable write restores the store to
+    // exactly the durable-pre-write state, never a newer concurrent mutation.
+    const snapshot = snapshotStoreForRollback(state);
+    liveJob.state.lastFailureNotificationDelivered = outcome.delivered;
+    liveJob.state.lastFailureNotificationDeliveryStatus = outcome.status;
+    liveJob.state.lastFailureNotificationDeliveryError = outcome.error;
+    await persistOrRestore(state, snapshot);
+  }).catch((err: unknown) => {
+    state.deps.log.warn(
+      { jobId, err: String(err) },
+      "cron: failed to persist failure-alert delivery outcome",
+    );
+  });
+}
+
 function transportFailureAlert(
   state: CronServiceState,
   params: {
@@ -202,12 +234,19 @@ function transportFailureAlert(
   },
 ): void {
   let pendingFallback = true;
-  const fallback = (reachedRecipient = false) => {
-    if (pendingFallback && !reachedRecipient) {
+  let reachedRecipient: boolean | undefined;
+  const fallback = (reached = false) => {
+    if (pendingFallback && !reached) {
       enqueueCronNotification(state, params.job, params.payload.text ?? "", "failure-alert");
     }
     pendingFallback = false;
   };
+  const recordOutcome = (delivered: boolean, error?: string) =>
+    recordFailureAlertDeliveryOutcome(state, params.job.id, {
+      delivered,
+      status: delivered ? "delivered" : "not-delivered",
+      ...(error ? { error } : {}),
+    });
   if (!state.deps.sendCronFailureAlert) {
     fallback();
     return;
@@ -223,7 +262,18 @@ function transportFailureAlert(
       accountId: params.route.accountId,
       threadId: params.route.threadId,
       ...(params.route.alternateRoute ? { inheritSessionThread: false as const } : {}),
-      onDeliveryAttempt: fallback,
+      onDeliveryAttempt: (reached) => {
+        reachedRecipient = reached;
+        fallback(reached);
+      },
+    })
+    .then(() => {
+      // A concrete outcome is only persisted once the delivery path signals an
+      // attempt. If the send resolved without one (no reach signal), the prior
+      // "unknown" state is the truthful record and must not be downgraded.
+      if (reachedRecipient !== undefined) {
+        recordOutcome(reachedRecipient);
+      }
     })
     .catch((err: unknown) => {
       state.deps.log.warn(
@@ -231,6 +281,7 @@ function transportFailureAlert(
         "cron: failure alert delivery failed",
       );
       fallback();
+      recordOutcome(false, String(err));
     });
 }
 
