@@ -21,9 +21,9 @@ import { createCombinedSessionMcpRuntime } from "./agent-bundle-mcp-combined.js"
 import {
   completeDeferredSessionMcpRuntimeRetirement,
   getOrCreateRequesterScopedMcpRuntime,
-  getSessionMcpRuntimeManagerForTesting,
 } from "./agent-bundle-mcp-manager-api.js";
 import { runWithSessionMcpRequestSignal } from "./agent-bundle-mcp-request-context.js";
+import { SESSION_MCP_RUNTIME_MANAGER_KEY } from "./agent-bundle-mcp-runtime-shared.js";
 import {
   createBundleMcpJsonSchemaValidator,
   createSessionMcpRuntime,
@@ -3458,7 +3458,6 @@ process.on("SIGINT", shutdown);`,
     let firstTools: Awaited<ReturnType<typeof materializeRequesterScopedMcpToolsForHarnessRun>>;
     let secondTools: Awaited<ReturnType<typeof materializeRequesterScopedMcpToolsForHarnessRun>>;
     let nowMs = 100_000;
-    const clock = vi.spyOn(Date, "now").mockImplementation(() => nowMs);
     let resolveCount = 0;
     const releaseResolution = createDeferred();
     const resolutionStarted = createDeferred();
@@ -3490,6 +3489,14 @@ process.on("SIGINT", shutdown);`,
       },
       "proof-requester",
     );
+    const singletonStore = globalThis as Record<PropertyKey, unknown>;
+    const hadRuntimeManager = Object.hasOwn(singletonStore, SESSION_MCP_RUNTIME_MANAGER_KEY);
+    const previousRuntimeManager = singletonStore[SESSION_MCP_RUNTIME_MANAGER_KEY];
+    const manager = testing.createSessionMcpRuntimeManager({
+      now: () => nowMs,
+      enableIdleSweepTimer: false,
+    });
+    singletonStore[SESSION_MCP_RUNTIME_MANAGER_KEY] = manager;
 
     try {
       firstTools = expectDefined(
@@ -3512,7 +3519,6 @@ process.on("SIGINT", shutdown);`,
       const secondRequest = materializeRequesterScopedMcpToolsForHarnessRun(params);
       await resolutionStarted.promise;
 
-      const manager = getSessionMcpRuntimeManagerForTesting();
       const idleTtlMs = 10 * 60 * 1000;
       nowMs += idleTtlMs;
       expect(await manager.sweepIdleRuntimes()).toBe(0);
@@ -3537,7 +3543,11 @@ process.on("SIGINT", shutdown);`,
       releaseResolution.resolve();
       await Promise.allSettled([firstTools?.dispose(), secondTools?.dispose()]);
       await testing.resetSessionMcpRuntimeManager();
-      clock.mockRestore();
+      if (hadRuntimeManager) {
+        singletonStore[SESSION_MCP_RUNTIME_MANAGER_KEY] = previousRuntimeManager;
+      } else {
+        delete singletonStore[SESSION_MCP_RUNTIME_MANAGER_KEY];
+      }
       await proof.close();
     }
   });
