@@ -31,13 +31,11 @@ describeShimmer("Control UI shimmer", () => {
         ${readStyleSheet("ui/src/styles/chat/layout.css")}
         ${readStyleSheet("ui/src/styles/memory-import.css")}
         ${readStyleSheet("ui/src/styles/usage.css")}
-        ${readStyleSheet("ui/src/styles/panel-loading-skeleton.css")}
       </style></head><body>
         <div class="skeleton skeleton-line"></div>
         <div class="skeleton usage-skeleton-block"></div>
         <div class="skeleton memory-import__skeleton"></div>
         <div class="skeleton chat-controls__model-trigger-skeleton"></div>
-        <openclaw-panel-loading-skeleton><div class="skeleton panel-skeleton__line panel-skeleton__line--long"></div></openclaw-panel-loading-skeleton>
       </body></html>`);
 
       for (const [selector, duration] of [
@@ -45,7 +43,6 @@ describeShimmer("Control UI shimmer", () => {
         [".usage-skeleton-block", "1.35s"],
         [".memory-import__skeleton", "1.4s"],
         [".chat-controls__model-trigger-skeleton", "1.45s"],
-        [".panel-skeleton__line", "1.5s"],
       ] as const) {
         const styles = await page.locator(selector).evaluate((element) => {
           const host = getComputedStyle(element);
@@ -98,13 +95,11 @@ describeShimmer("Control UI shimmer", () => {
         ${readStyleSheet("ui/src/styles/chat/layout.css")}
         ${readStyleSheet("ui/src/styles/memory-import.css")}
         ${readStyleSheet("ui/src/styles/usage.css")}
-        ${readStyleSheet("ui/src/styles/panel-loading-skeleton.css")}
       </style></head><body>
         <div class="skeleton skeleton-line"></div>
         <div class="skeleton usage-skeleton-block"></div>
         <div class="skeleton memory-import__skeleton"></div>
         <div class="skeleton chat-controls__model-trigger-skeleton"></div>
-        <openclaw-panel-loading-skeleton><div class="skeleton panel-skeleton__line panel-skeleton__line--long"></div></openclaw-panel-loading-skeleton>
       </body></html>`);
 
       for (const selector of [
@@ -112,7 +107,6 @@ describeShimmer("Control UI shimmer", () => {
         ".usage-skeleton-block",
         ".memory-import__skeleton",
         ".chat-controls__model-trigger-skeleton",
-        ".panel-skeleton__line",
       ]) {
         const animation = await page.locator(selector).evaluate(async (element) => {
           const highlight = getComputedStyle(element, "::after");

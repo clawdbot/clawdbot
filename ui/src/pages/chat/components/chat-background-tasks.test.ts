@@ -141,7 +141,7 @@ it("renders task-shaped placeholders while the initial task list loads", async (
   expect(skeleton).toBeInstanceOf(HTMLElement);
   await (skeleton as HTMLElement & { updateComplete: Promise<unknown> }).updateComplete;
   expect(skeleton?.getAttribute("data-panel-skeleton")).toBe("tasks");
-  expect(skeleton?.querySelectorAll(".skeleton").length).toBeGreaterThan(3);
+  expect(skeleton?.shadowRoot?.querySelectorAll(".skeleton").length).toBeGreaterThan(3);
   expect(container.textContent).not.toContain("Loading tasks");
 });
 

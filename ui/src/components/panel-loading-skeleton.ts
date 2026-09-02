@@ -1,7 +1,6 @@
-import { html, type TemplateResult } from "lit";
+import { css, html, type TemplateResult } from "lit";
 import { property } from "lit/decorators.js";
-import { OpenClawLightDomElement } from "../lit/openclaw-element.ts";
-import "../styles/panel-loading-skeleton.css";
+import { OpenClawLitElement } from "../lit/openclaw-element.ts";
 
 export type PanelLoadingSkeletonVariant =
   | "browser"
@@ -13,7 +12,7 @@ export type PanelLoadingSkeletonVariant =
   | "tasks"
   | "terminal";
 
-class PanelLoadingSkeleton extends OpenClawLightDomElement {
+class PanelLoadingSkeleton extends OpenClawLitElement {
   @property({ reflect: true, attribute: "data-panel-skeleton" })
   variant: PanelLoadingSkeletonVariant = "files";
 
@@ -21,19 +20,226 @@ class PanelLoadingSkeleton extends OpenClawLightDomElement {
 
   @property({ type: Boolean, reflect: true }) overlay = false;
 
+  static override styles = css`
+    :host {
+      display: block;
+      box-sizing: border-box;
+      width: 100%;
+      min-height: 100%;
+      padding: 14px;
+      color: var(--muted);
+    }
+
+    :host([compact]) {
+      min-height: 0;
+      padding: 8px;
+    }
+
+    :host([overlay]) {
+      position: absolute;
+      inset: 0;
+      z-index: 2;
+      min-height: 0;
+      background: color-mix(in srgb, var(--bg, #0e1015) 92%, transparent);
+      pointer-events: none;
+    }
+
+    :host([compact]) .viewport,
+    :host([compact]) .terminal,
+    :host([compact]) .discussion-frame {
+      min-height: 72px;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    /* Terminal/desktop/browser hosts use shadow roots, so base.css's .skeleton
+       and global reduced-motion gate cannot reach here. Keep this primitive
+       declaration-identical to base.css; the unit test guards against drift. */
+    .skeleton {
+      position: relative;
+      overflow: hidden;
+      background: var(--skeleton-base, var(--bg-muted));
+      border-radius: var(--radius-md);
+    }
+
+    .skeleton::after {
+      position: absolute;
+      inset: 0;
+      background: linear-gradient(
+        90deg,
+        transparent 25%,
+        var(--skeleton-highlight, var(--bg-hover)) 50%,
+        transparent 75%
+      );
+      content: "";
+      animation: shimmer var(--skeleton-duration, 1.5s) ease-in-out infinite;
+      will-change: transform;
+    }
+
+    .line {
+      height: 10px;
+    }
+
+    .short {
+      width: 36%;
+    }
+
+    .medium {
+      width: 62%;
+    }
+
+    .long {
+      width: 88%;
+    }
+
+    .row,
+    .toolbar,
+    .bubble,
+    .card,
+    .summary {
+      display: flex;
+      gap: 10px;
+      align-items: center;
+    }
+
+    .rows,
+    .conversation,
+    .code {
+      display: grid;
+      gap: 12px;
+    }
+
+    .toolbar {
+      padding-bottom: 12px;
+      border-bottom: 1px solid var(--border);
+      margin-bottom: 14px;
+    }
+
+    .icon {
+      width: 18px;
+      height: 18px;
+      flex: 0 0 auto;
+      border-radius: 5px;
+    }
+
+    .copy {
+      display: grid;
+      flex: 1;
+      gap: 6px;
+    }
+
+    .meta {
+      height: 7px;
+      width: 28%;
+    }
+
+    .viewport {
+      min-height: 220px;
+      border-radius: 8px;
+    }
+
+    .address {
+      height: 28px;
+      flex: 1;
+      border-radius: 7px;
+    }
+
+    .button {
+      width: 28px;
+      height: 28px;
+      flex: 0 0 auto;
+    }
+
+    .card {
+      min-height: 58px;
+      padding: 10px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+    }
+
+    .summary {
+      margin-bottom: 16px;
+    }
+
+    .pill {
+      width: 64px;
+      height: 24px;
+      border-radius: 999px;
+    }
+
+    .file-heading {
+      height: 30px;
+      margin-bottom: 14px;
+    }
+
+    .code .line {
+      height: 9px;
+      border-radius: 3px;
+    }
+
+    .terminal {
+      display: grid;
+      gap: 11px;
+      padding: 12px;
+      min-height: 220px;
+      align-content: start;
+      border-radius: 8px;
+      background: color-mix(in srgb, var(--bg) 76%, transparent);
+    }
+
+    .bubble {
+      width: 82%;
+      min-height: 58px;
+      padding: 12px;
+      align-items: flex-start;
+      border-radius: 12px;
+      background: color-mix(in srgb, var(--bg-muted) 76%, transparent);
+    }
+
+    .bubble.user {
+      width: 58%;
+      margin-left: auto;
+    }
+
+    .discussion-frame {
+      min-height: 280px;
+      padding: 18px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+    }
+
+    @keyframes shimmer {
+      from {
+        transform: translateX(-100%);
+      }
+      to {
+        transform: translateX(100%);
+      }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      .skeleton::after {
+        animation-duration: 0.01ms;
+        animation-iteration-count: 1;
+      }
+    }
+  `;
+
   private line(width: "short" | "medium" | "long" = "long") {
-    return html`<div class="skeleton panel-skeleton__line panel-skeleton__line--${width}"></div>`;
+    return html`<div class="skeleton line ${width}"></div>`;
   }
 
   private rows(count: number) {
     return Array.from(
       { length: count },
       (_, index) => html`
-        <div class="panel-skeleton__row">
-          <div class="skeleton panel-skeleton__icon"></div>
-          <div class="panel-skeleton__copy">
+        <div class="row">
+          <div class="skeleton icon"></div>
+          <div class="copy">
             ${this.line(index % 2 === 0 ? "long" : "medium")}
-            <div class="skeleton panel-skeleton__meta"></div>
+            <div class="skeleton meta"></div>
           </div>
         </div>
       `,
@@ -44,76 +250,68 @@ class PanelLoadingSkeleton extends OpenClawLightDomElement {
     switch (this.variant) {
       case "browser":
         return html`
-          <div class="panel-skeleton__toolbar">
-            <div class="skeleton panel-skeleton__button"></div>
-            <div class="skeleton panel-skeleton__button"></div>
-            <div class="skeleton panel-skeleton__address"></div>
+          <div class="toolbar">
+            <div class="skeleton button"></div>
+            <div class="skeleton button"></div>
+            <div class="skeleton address"></div>
           </div>
-          <div class="skeleton panel-skeleton__viewport"></div>
+          <div class="skeleton viewport"></div>
         `;
       case "chat":
         return html`
-          <div class="panel-skeleton__conversation">
-            <div class="panel-skeleton__bubble">
-              <div class="panel-skeleton__copy">${this.line()}${this.line("medium")}</div>
-            </div>
-            <div class="panel-skeleton__bubble panel-skeleton__bubble--user">
-              <div class="panel-skeleton__copy">${this.line("medium")}</div>
-            </div>
-            <div class="panel-skeleton__bubble">
-              <div class="panel-skeleton__copy">${this.line()}${this.line("short")}</div>
-            </div>
+          <div class="conversation">
+            <div class="bubble"><div class="copy">${this.line()}${this.line("medium")}</div></div>
+            <div class="bubble user"><div class="copy">${this.line("medium")}</div></div>
+            <div class="bubble"><div class="copy">${this.line()}${this.line("short")}</div></div>
           </div>
         `;
       case "desktop":
         return html`
-          <div class="panel-skeleton__toolbar">${this.line("medium")}</div>
-          <div class="panel-skeleton__rows">
-            ${this.rows(3).map((row) => html`<div class="panel-skeleton__card">${row}</div>`)}
-          </div>
+          <div class="toolbar">${this.line("medium")}</div>
+          <div class="rows">${this.rows(3).map((row) => html`<div class="card">${row}</div>`)}</div>
         `;
       case "discussion":
         return html`
-          <div class="panel-skeleton__discussion-frame">
-            <div class="panel-skeleton__conversation">
+          <div class="discussion-frame">
+            <div class="conversation">
               ${this.line("medium")} ${this.line()} ${this.line("long")} ${this.line("short")}
             </div>
           </div>
         `;
       case "review":
         return html`
-          <div class="panel-skeleton__summary">
-            <div class="skeleton panel-skeleton__pill"></div>
-            <div class="skeleton panel-skeleton__pill"></div>
+          <div class="summary">
+            <div class="skeleton pill"></div>
+            <div class="skeleton pill"></div>
           </div>
-          <div class="skeleton panel-skeleton__file-heading"></div>
-          <div class="panel-skeleton__code">
+          <div class="skeleton file-heading"></div>
+          <div class="code">
             ${this.line()} ${this.line("long")} ${this.line("medium")} ${this.line()}
             ${this.line("short")}
           </div>
         `;
       case "terminal":
         return html`
-          <div class="panel-skeleton__toolbar">
-            <div class="skeleton panel-skeleton__pill"></div>
-            <div class="skeleton panel-skeleton__pill"></div>
+          <div class="toolbar">
+            <div class="skeleton pill"></div>
+            <div class="skeleton pill"></div>
           </div>
-          <div class="panel-skeleton__terminal">
+          <div class="terminal">
             ${this.line("medium")} ${this.line()} ${this.line("short")} ${this.line("long")}
           </div>
         `;
       case "tasks":
         return html`
-          <div class="panel-skeleton__toolbar">${this.line("short")}</div>
-          <div class="panel-skeleton__rows">${this.rows(4)}</div>
+          <div class="toolbar">${this.line("short")}</div>
+          <div class="rows">${this.rows(4)}</div>
         `;
       default:
         return html`
-          <div class="panel-skeleton__toolbar">
-            <div class="skeleton panel-skeleton__address"></div>
-            <div class="skeleton panel-skeleton__button"></div>
+          <div class="toolbar">
+            <div class="skeleton address"></div>
+            <div class="skeleton button"></div>
           </div>
-          <div class="panel-skeleton__rows">${this.rows(5)}</div>
+          <div class="rows">${this.rows(5)}</div>
         `;
     }
   }

@@ -40,7 +40,7 @@ Defined in `ui/src/styles/base.css`:
 
 ## `prefers-reduced-motion` Pattern
 
-Every animation or transition **must** be suppressed when the user has requested reduced motion. Use the global reset already present in `base.css` — do not add per-component overrides unless you need to preserve a non-animated state change (e.g. instant opacity change is acceptable, instant position snap is acceptable).
+Every animation or transition **must** be suppressed when the user has requested reduced motion. Use the global reset already present in `base.css` for light DOM. Shadow roots need a local guard because the global reset cannot reach them. Otherwise, add per-component overrides only to preserve a non-animated state change (e.g. instant opacity change is acceptable, instant position snap is acceptable).
 
 ```css
 /* Already in base.css — covers animations and transitions in light DOM */
@@ -56,7 +56,7 @@ Every animation or transition **must** be suppressed when the user has requested
 }
 ```
 
-The global gate already collapses every animation in light DOM, including infinite loaders and their `::after` highlights. Components must not re-declare shimmer inside shadow DOM, where the global gate cannot reach it. Use `OpenClawLightDomElement` with the shared `.skeleton` primitive instead.
+Light-DOM components get the `.skeleton` primitive and reduced-motion gate from `base.css`. A component rendered inside shadow roots, such as the panel loading skeleton hosted by the terminal, desktop, and browser panels, carries a declaration-identical copy of the primitive plus its own reduced-motion guard. `ui/src/components/panel-loading-skeleton.test.ts` guards the primitive against drift.
 
 Opt-in decorative motion that should vanish entirely, such as text shimmers, belongs inside `@media (prefers-reduced-motion: no-preference)`. Reduced-motion users keep plain static text.
 
