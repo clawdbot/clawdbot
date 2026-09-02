@@ -354,7 +354,10 @@ describe("resolveEffectivePluginActivationState", () => {
 
   it.each<{
     name: string;
-    params: Pick<ActivationParams, "id" | "origin" | "enabledByDefault" | "autoEnabledReason">;
+    params: Pick<
+      ActivationParams,
+      "id" | "origin" | "enabledByDefault" | "autoEnabledReason" | "channelIds"
+    >;
     rawConfig?: ActivationParams["rootConfig"];
     effectiveConfig?: ActivationParams["rootConfig"];
     expected: ReturnType<typeof resolveEffectivePluginActivationState>;
@@ -494,6 +497,23 @@ describe("resolveEffectivePluginActivationState", () => {
       rawConfig: {
         channels: { telegram: { enabled: false } },
         plugins: { entries: { telegram: { enabled: true } } },
+      },
+      expected: {
+        enabled: false,
+        activated: false,
+        explicitlyEnabled: true,
+        source: "disabled",
+        reason: "channel disabled in config",
+      },
+    },
+    {
+      name: "resolves an explicit channel disable through manifest-owned channel ids",
+      // QQ Bot style: plugin id `openclaw-demo` owns `channels.demo`, which the built-in
+      // catalog cannot map from the plugin id alone.
+      params: { id: "openclaw-demo", origin: "bundled", channelIds: ["demo"] },
+      rawConfig: {
+        channels: { demo: { enabled: false } },
+        plugins: { entries: { "openclaw-demo": { enabled: true } } },
       },
       expected: {
         enabled: false,

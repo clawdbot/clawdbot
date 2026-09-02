@@ -205,6 +205,7 @@ function resolvePluginActivationState(params: {
   enabledByDefault?: boolean;
   activationSource?: PluginActivationConfigSource;
   autoEnabledReason?: string;
+  channelIds?: readonly string[];
 }): PluginActivationState {
   return toPluginActivationState(
     resolvePluginActivationDecisionShared({
@@ -240,6 +241,7 @@ type EffectiveActivationParams = {
   rootConfig?: OpenClawConfig;
   enabledByDefault?: boolean;
   activationSource?: PluginActivationConfigSource;
+  channelIds?: readonly string[];
 };
 
 export const resolveEffectiveEnableState = (
@@ -255,6 +257,7 @@ export function resolveEffectivePluginActivationState(params: {
   enabledByDefault?: EffectiveActivationParams["enabledByDefault"];
   activationSource?: EffectiveActivationParams["activationSource"];
   autoEnabledReason?: string;
+  channelIds?: EffectiveActivationParams["channelIds"];
 }): PluginActivationState {
   return resolvePluginActivationState(params);
 }

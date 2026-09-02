@@ -98,9 +98,12 @@ function resolveExplicitPluginSelectionShared<TRootConfig>(params: {
   origin: string;
   config: PluginActivationConfigLike;
   rootConfig?: TRootConfig;
+  /** Manifest-owned channel ids; the plugin id alone cannot resolve `channels.<id>` for every owner. */
+  channelIds?: readonly string[];
   resolveChannelConfigEnablement: (
     rootConfig: TRootConfig | undefined,
     pluginId: string,
+    channelIds?: readonly string[],
   ) => boolean | undefined;
 }): { explicitlyEnabled: boolean; cause?: PluginExplicitSelectionCause } {
   const policyId = normalizePluginPolicyId(params.id);
@@ -109,7 +112,7 @@ function resolveExplicitPluginSelectionShared<TRootConfig>(params: {
   }
   if (
     params.origin === "bundled" &&
-    params.resolveChannelConfigEnablement(params.rootConfig, params.id) === true
+    params.resolveChannelConfigEnablement(params.rootConfig, params.id, params.channelIds) === true
   ) {
     return { explicitlyEnabled: true, cause: "bundled-channel-enabled-in-config" };
   }
@@ -134,9 +137,12 @@ export function resolvePluginActivationDecisionShared<TRootConfig>(params: {
   activationSource?: PluginActivationConfigSourceLike<TRootConfig>;
   autoEnabledReason?: string;
   allowBundledChannelExplicitBypassesAllowlist?: boolean;
+  /** Manifest-owned channel ids; the plugin id alone cannot resolve `channels.<id>` for every owner. */
+  channelIds?: readonly string[];
   resolveChannelConfigEnablement: (
     rootConfig: TRootConfig | undefined,
     pluginId: string,
+    channelIds?: readonly string[],
   ) => boolean | undefined;
 }): PluginActivationDecision {
   const activationSource = params.activationSource ?? {
@@ -148,6 +154,7 @@ export function resolvePluginActivationDecisionShared<TRootConfig>(params: {
     origin: params.origin,
     config: activationSource.plugins,
     rootConfig: activationSource.rootConfig,
+    channelIds: params.channelIds,
     resolveChannelConfigEnablement: params.resolveChannelConfigEnablement,
   });
 
@@ -181,6 +188,7 @@ export function resolvePluginActivationDecisionShared<TRootConfig>(params: {
     params.resolveChannelConfigEnablement(
       activationSource.rootConfig ?? params.rootConfig,
       params.id,
+      params.channelIds,
     ) === false
   ) {
     return decision("disabled", { cause: "channel-disabled-in-config" });
@@ -220,7 +228,7 @@ export function resolvePluginActivationDecisionShared<TRootConfig>(params: {
   }
   if (
     params.origin === "bundled" &&
-    params.resolveChannelConfigEnablement(params.rootConfig, params.id) === true
+    params.resolveChannelConfigEnablement(params.rootConfig, params.id, params.channelIds) === true
   ) {
     return decision("auto", { explicitlyEnabled: false, cause: "bundled-channel-configured" });
   }

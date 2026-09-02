@@ -140,6 +140,17 @@ describe("plugin loader records", () => {
       expected: "Error: boom",
     },
     {
+      name: "survives a nested throwing code accessor without rethrowing",
+      error: new Error("wrapped", {
+        cause: Object.defineProperty(new Error("nested"), "code", {
+          get(): never {
+            throw new Error("code exploded");
+          },
+        }),
+      }),
+      expected: "Error: wrapped",
+    },
+    {
       name: "survives a throwing cause accessor without rethrowing",
       error: Object.defineProperty(new Error("hostile"), "cause", {
         get(): never {

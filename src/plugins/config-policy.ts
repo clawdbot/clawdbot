@@ -34,6 +34,7 @@ type PolicyEffectiveActivationParams = {
   sourceConfig?: NormalizedPluginsConfig;
   sourceRootConfig?: OpenClawConfig;
   autoEnabledReason?: string;
+  channelIds?: readonly string[];
 };
 
 export function resolvePolicyPluginActivationState(

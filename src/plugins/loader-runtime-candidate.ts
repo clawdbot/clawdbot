@@ -120,6 +120,7 @@ export function loadRuntimePluginCandidate(params: {
         config: context.normalized,
         rootConfig: context.cfg,
         enabledByDefault: isPluginEnabledByDefaultForPlatform(manifestRecord),
+        channelIds: manifestRecord.channels,
         activationSource: context.activationSource,
         autoEnabledReason: formatAutoEnabledActivationReason(context.autoEnabledReasons[pluginId]),
       });
@@ -146,6 +147,7 @@ export function loadRuntimePluginCandidate(params: {
         config: context.normalized,
         rootConfig: context.cfg,
         enabledByDefault: isPluginEnabledByDefaultForPlatform(manifestRecord),
+        channelIds: manifestRecord.channels,
         activationSource: context.activationSource,
       });
   const entry = context.normalized.entries[policyId];

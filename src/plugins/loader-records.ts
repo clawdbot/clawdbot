@@ -146,12 +146,22 @@ export function formatAutoEnabledActivationReason(
   return reasons.join("; ");
 }
 
-// A plugin-thrown error may expose a throwing `cause` accessor; diagnostics must not rethrow it.
+// A plugin-thrown error may expose throwing `cause`/`code` accessors; diagnostics inside the
+// loader's catch handler must classify without rethrowing.
 function readCauseOrNothing(node: unknown): unknown[] {
   try {
     return [readErrorCause(node)];
   } catch {
     return [];
+  }
+}
+
+function isMissingModuleNode(node: unknown): boolean {
+  try {
+    const code = extractErrorCode(node);
+    return code === "MODULE_NOT_FOUND" || code === "ERR_MODULE_NOT_FOUND";
+  } catch {
+    return false;
   }
 }
 
@@ -184,10 +194,7 @@ export function recordPluginError(params: {
   // Native-require failures rewrap the Node error, so the missing-module code can sit on a cause.
   const missingDependencyHint =
     params.missingDependencyHint &&
-    collectErrorGraphCandidates(params.error, readCauseOrNothing).some((node) => {
-      const code = extractErrorCode(node);
-      return code === "MODULE_NOT_FOUND" || code === "ERR_MODULE_NOT_FOUND";
-    })
+    collectErrorGraphCandidates(params.error, readCauseOrNothing).some(isMissingModuleNode)
       ? params.missingDependencyHint
       : null;
   // Rewrite the common removed-API failure into an actionable migration hint while preserving detail.

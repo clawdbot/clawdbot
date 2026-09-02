@@ -32,9 +32,11 @@ import {
   type PluginLoadConfig,
   useNoBundledPlugins,
   writePlugin,
+  writePluginMetadata,
 } from "./loader.test-fixtures.js";
 import {
   cachedBundledTelegramDir,
+  channelPluginSource,
   listRegisteredAgentHarnessIdsForTest,
   countMatching,
   updatePluginManifest,
@@ -821,6 +823,41 @@ describe("loadOpenClawPlugins", () => {
         config,
       });
       assert(registry);
+    },
+  );
+
+  it.each([
+    { channelEnabled: false, status: "disabled", error: "channel disabled in config" },
+    { channelEnabled: true, status: "loaded", error: undefined },
+  ])(
+    "resolves channels.<id>.enabled=$channelEnabled through the manifest channel id when it differs from the plugin id",
+    ({ channelEnabled, status, error }) => {
+      const dir = makePluginLoaderTempDir();
+      writePlugin({
+        id: "openclaw-demo",
+        dir,
+        body: channelPluginSource({
+          pluginId: "openclaw-demo",
+          channelId: "demo",
+          label: "Demo",
+          docsPath: "/channels/demo",
+          blurb: "demo channel",
+        }),
+      });
+      writePluginMetadata({ dir, id: "openclaw-demo", channels: ["demo"] });
+      const registry = withEnv({ OPENCLAW_BUNDLED_PLUGINS_DIR: dir }, () =>
+        loadOpenClawPlugins({
+          cache: false,
+          workspaceDir: dir,
+          config: {
+            channels: { demo: { enabled: channelEnabled } },
+            plugins: { entries: { "openclaw-demo": { enabled: true } } },
+          },
+        }),
+      );
+      const plugin = registry.plugins.find((entry) => entry.id === "openclaw-demo");
+      expect(plugin?.status).toBe(status);
+      expect(plugin?.error).toBe(error);
     },
   );
 

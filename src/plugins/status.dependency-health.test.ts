@@ -55,7 +55,9 @@ function createDependencyHealthRegistry(
   });
 }
 
-function createDependencyHealthFixture(identity: { pluginId?: string; packageName?: string } = {}) {
+function createDependencyHealthFixture(
+  identity: { pluginId?: string; packageName?: string; bundledDist?: false } = {},
+) {
   const rootDir = makeTrackedTempDir("openclaw-plugin-dependency-health", tempDirs);
   const pluginRoot = path.join(rootDir, "plugin");
   const bundledRoot = path.join(rootDir, "bundled");
@@ -70,6 +72,14 @@ function createDependencyHealthFixture(identity: { pluginId?: string; packageNam
       optionalDependencies: { "optional-runtime": "2.0.0" },
     },
   });
+  if (identity.bundledDist === false) {
+    const packageJsonPath = path.join(pluginRoot, "package.json");
+    const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, "utf8")) as {
+      openclaw: Record<string, unknown>;
+    };
+    packageJson.openclaw.build = { bundledDist: false };
+    fs.writeFileSync(packageJsonPath, JSON.stringify(packageJson, null, 2), "utf8");
+  }
   return {
     fixture,
     reportParams: {
@@ -135,6 +145,21 @@ describe("plugin dependency health projection", () => {
     expect(report.plugins[0]?.dependencyStatus).toBeUndefined();
     expect(report.plugins[0]?.status).toBe("loaded");
     expect(report.diagnostics).toEqual([]);
+  });
+
+  it("projects runtime dependency health onto generic source-external bundled plugins", () => {
+    const { fixture, reportParams } = createDependencyHealthFixture({ bundledDist: false });
+    loaderState.registry = createDependencyHealthRegistry(fixture.pluginId, {
+      dependencyStatus: undefined,
+      origin: "bundled",
+    });
+
+    const report = buildPluginDiagnosticsReport(reportParams);
+
+    expect(report.plugins[0]?.dependencyStatus).toEqual(
+      expect.objectContaining({ requiredInstalled: false, missing: ["missing-runtime"] }),
+    );
+    expect(report.plugins[0]?.status).toBe("error");
   });
 
   it("projects dependency health onto bundled official plugins distributed externally", () => {

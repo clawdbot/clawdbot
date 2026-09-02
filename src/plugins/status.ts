@@ -234,6 +234,10 @@ function buildPluginReport(
           workspaceDir,
         };
   const manifestByPluginId = metadataSnapshot.byPluginId;
+  // Runtime records drop package build metadata; the installed index still owns it.
+  const packageBuildByPluginId = new Map(
+    metadataSnapshot.index.plugins.map((plugin) => [plugin.pluginId, plugin.packageBuild]),
+  );
   const config = context.config;
 
   // Apply bundled-provider allowlist compat so that `plugins list` and `doctor`
@@ -330,6 +334,7 @@ function buildPluginReport(
             origin: plugin.origin,
             pluginId: plugin.id,
             packageName: plugin.packageName ?? manifestByPluginId.get(plugin.id)?.packageName,
+            packageBuild: packageBuildByPluginId.get(plugin.id),
           })
             ? buildPluginDependencyStatus({
                 rootDir: plugin.rootDir,
