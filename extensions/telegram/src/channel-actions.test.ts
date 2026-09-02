@@ -250,6 +250,24 @@ describe("telegramMessageActions", () => {
     }
   });
 
+  it("ties dice availability to the send gate", () => {
+    // Dice has no gate of its own: it is an ordinary outbound message, so disabling sending
+    // must withdraw it rather than leave it reachable through the tool surface.
+    const actionsFor = (cfg: OpenClawConfig) =>
+      telegramMessageActions.describeMessageTool?.({ cfg })?.actions ?? [];
+
+    expect(actionsFor({ channels: { telegram: { botToken: "tok" } } } as OpenClawConfig)).toContain(
+      "dice",
+    );
+    expect(
+      actionsFor({
+        channels: {
+          telegram: { botToken: "tok", actions: { sendMessage: false } },
+        },
+      } as OpenClawConfig),
+    ).not.toContain("dice");
+  });
+
   it("lists sticker actions only when enabled by config", () => {
     const cases = [
       {

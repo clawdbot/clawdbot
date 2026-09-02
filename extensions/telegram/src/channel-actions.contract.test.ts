@@ -19,6 +19,7 @@ describe("telegram actions contract", () => {
         } as OpenClawConfig,
         expectedActions: [
           "send",
+          "dice",
           "poll",
           "react",
           "emoji-list",

@@ -92,6 +92,99 @@ type TelegramPollOpts = TelegramThreadedSendOpts &
     isAnonymous?: boolean;
   };
 
+/** Emoji accepted by Telegram's sendDice, with the value range each one resolves to. */
+const TELEGRAM_DICE_EMOJI = ["🎲", "🎯", "🏀", "⚽", "🎳", "🎰"] as const;
+
+type TelegramDiceEmoji = (typeof TELEGRAM_DICE_EMOJI)[number];
+
+type TelegramDiceOpts = TelegramThreadedSendOpts &
+  Pick<TelegramSendOpts, "assertPlatformSendAuthorized" | "onPlatformSendDispatch" | "silent">;
+
+export type TelegramDiceSendResult = TelegramSendResult & {
+  emoji: TelegramDiceEmoji;
+  /** Server-rolled outcome. Telegram picks it; it cannot be requested. */
+  value?: number;
+};
+
+const TELEGRAM_DICE_EMOJI_SET: ReadonlySet<string> = new Set(TELEGRAM_DICE_EMOJI);
+
+// Keyboards and models routinely append the emoji presentation selector (⚽️ vs ⚽), which
+// Telegram does not accept for sendDice. Strip it before the allowlist lookup, the same way
+// the reaction path does, so a legitimate face is not rejected locally.
+function normalizeTelegramDiceEmoji(value: string | undefined): string {
+  return (value ?? "").trim().replace(/[\uFE0E\uFE0F]/gu, "") || "🎲";
+}
+
+function isTelegramDiceEmoji(value: string): value is TelegramDiceEmoji {
+  return TELEGRAM_DICE_EMOJI_SET.has(value);
+}
+
+/**
+ * Send an animated dice/dart/basketball/football/bowling/slot roll.
+ * The outcome is chosen by Telegram and returned in the sent message, so the
+ * caller learns the value immediately even though it cannot influence it.
+ * @param to - Chat ID or username (e.g., "123456789" or "@username")
+ * @param emoji - One of TELEGRAM_DICE_EMOJI; defaults to 🎲
+ * @param opts - Optional configuration
+ */
+export async function sendDiceTelegram(
+  to: string,
+  emoji: string | undefined,
+  opts: TelegramDiceOpts,
+): Promise<TelegramDiceSendResult> {
+  const normalized = normalizeTelegramDiceEmoji(emoji);
+  if (!isTelegramDiceEmoji(normalized)) {
+    throw new Error(
+      `Unsupported Telegram dice emoji "${normalized}". Use one of: ${TELEGRAM_DICE_EMOJI.join(" ")}`,
+    );
+  }
+
+  return withTelegramApiContext(opts, async (context): Promise<TelegramDiceSendResult> =>
+    sendDiceTelegramWithContext(to, normalized, opts, context),
+  );
+}
+
+async function sendDiceTelegramWithContext(
+  to: string,
+  emoji: TelegramDiceEmoji,
+  opts: TelegramDiceOpts,
+  context: TelegramApiContext,
+): Promise<TelegramDiceSendResult> {
+  const { api } = context;
+  const prepared = await prepareTelegramOutbound({
+    to,
+    context,
+    opts,
+    thread: {
+      messageThreadId: opts.messageThreadId,
+      replyToMessageId: opts.replyToMessageId,
+    },
+    request: { kind: "nonIdempotent", useApiErrorLogging: false },
+  });
+  const diceParams = {
+    ...prepared.threadParams,
+    ...(opts.silent ? { disable_notification: true } : {}),
+  };
+
+  const result = await prepared.request(
+    () =>
+      api.sendDice(
+        prepared.chatId,
+        emoji,
+        Object.keys(diceParams).length > 0 ? diceParams : undefined,
+      ),
+    "dice",
+  );
+  const finalized = await finalizeTelegramOutbound({
+    context,
+    prepared,
+    result,
+    resultContext: "dice send",
+  });
+  const value = typeof result?.dice?.value === "number" ? result.dice.value : undefined;
+  return { ...finalized, emoji, value };
+}
+
 /**
  * Send a poll to a Telegram chat.
  * @param to - Chat ID or username (e.g., "123456789" or "@username")

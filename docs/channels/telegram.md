@@ -619,8 +619,9 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
     - `deleteMessage` (`chatId`, `messageId`)
     - `editMessage` (`chatId`, `messageId`, `content` or `caption`, optional `presentation` inline buttons; button-only edits update reply markup)
     - `createForumTopic` (`chatId`, `name`, optional `iconColor`, `iconCustomEmojiId`)
+    - `sendDice` (`to`, optional `diceEmoji`, `replyToMessageId`, `messageThreadId`)
 
-    Ergonomic aliases: `send`, `react`, `delete`, `edit`, `sticker`, `sticker-search`, `topic-create`.
+    Ergonomic aliases: `send`, `react`, `delete`, `edit`, `sticker`, `sticker-search`, `dice`, `topic-create`.
 
     Gating: `channels.telegram.actions.sendMessage`, `deleteMessage`, `reactions`, `sticker` (default: disabled). `reactions` controls both `react` and `emoji-list`. `edit`, `createForumTopic`, and `editForumTopic` are enabled by default with no dedicated toggle.
     Runtime sends use the active config/secrets snapshot from startup/reload, so action paths do not re-resolve `SecretRef` values per send.
@@ -640,6 +641,20 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
     Pass a Unicode identifier or numeric custom emoji identifier directly to `react`. Chats without reaction restrictions return the known standard Telegram reactions and a `note` explaining that all standard reactions are allowed. When Telegram rejects a reaction, the error includes a short sample of allowed standard reactions and numeric custom emoji identifiers. If the allowed-reaction lookup fails, the error omits the sample.
 
     Reaction removal semantics: [/tools/reactions](/tools/reactions).
+
+  </Accordion>
+
+  <Accordion title="Dice rolls">
+    Telegram's `sendDice` plays an animated roll and picks the outcome server-side. The value cannot be requested, which is the point: neither the agent nor the operator can influence it, so a roll shown in chat is verifiable by everyone who sees the animation.
+
+    It rides the same gate as ordinary sending, so no separate switch is needed: wherever the
+    bot may post, it may roll. Call the message tool with `action: "dice"`:
+
+```json
+{ "action": "dice", "to": "-1001234567890", "diceEmoji": "🎲" }
+```
+
+    `diceEmoji` accepts 🎲 🎯 🏀 ⚽ 🎳 🎰 and defaults to 🎲; it carries its own name so the dice group does not retitle the `emoji` parameter reactions use. A trailing emoji presentation selector (⚽️) is accepted and normalized; any other value is rejected before the request is sent. Each emoji has its own value range (1-6 for 🎲 🎯 🎳, 1-5 for 🏀 ⚽, 1-64 for 🎰). The result carries `messageId`, `chatId`, `emoji`, and the rolled `value`, so the caller learns the outcome immediately without re-reading the chat.
 
   </Accordion>
 

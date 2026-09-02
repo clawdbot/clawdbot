@@ -82,6 +82,8 @@ const CHANNEL_MESSAGE_ACTION_READ_POLICIES = {
   search: CONVERSATION_READ,
   sticker: NO_CONVERSATION_READ,
   "sticker-search": BUNDLED_CURRENT_CONTEXT_CACHE_READ,
+  // A dice roll is an outbound send to an explicit target; it reads no conversation.
+  dice: NO_CONVERSATION_READ,
   "member-info": CONVERSATION_READ,
   "role-info": CONVERSATION_READ,
   "emoji-list": CONVERSATION_READ,

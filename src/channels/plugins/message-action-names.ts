@@ -31,6 +31,7 @@ export const CHANNEL_MESSAGE_ACTION_NAMES = [
   "search",
   "sticker",
   "sticker-search",
+  "dice",
   "member-info",
   "role-info",
   "emoji-list",
