@@ -76,6 +76,7 @@ import {
   kickSessionHistoryDiskBudgetMaintenance,
 } from "./session-history-eviction.js";
 import { buildSessionResetBoundaryEvent } from "./session-reset-boundary-event.js";
+import { resolveResetBoundaryHeaderCwd } from "./transcript-header.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
 
 // Single-target lifecycle owner: cleanup, reset, guarded delete, and trusted rollback.
@@ -260,8 +261,13 @@ export async function resetSessionEntryLifecycle(
             // event, and ensureTranscriptHeader only writes a header to an
             // *empty* transcript -- so the first message append would skip it and
             // the session would stay permanently headerless, rejected on every
-            // later load as a legacy transcript before the model runs.
-            ensureTranscriptHeader(transactionDb, boundaryScope, params.resetBoundaryCwd);
+            // later load as a legacy transcript before the model runs. The
+            // header belongs to the prior row, so that row's workspace wins.
+            ensureTranscriptHeader(
+              transactionDb,
+              boundaryScope,
+              resolveResetBoundaryHeaderCwd(current.entry, params.resetBoundaryCwd),
+            );
             const event = buildSessionResetBoundaryEvent({
               events: loadTranscriptEventsFromDatabase(transactionDb, current.entry.sessionId, {
                 projection: "reset-boundary",

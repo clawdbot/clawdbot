@@ -294,6 +294,49 @@ describe("resetReplyRunSession", () => {
     expect(filtered.files.map((file) => file.path)).toEqual(["after-reset.txt"]);
   });
 
+  it("keeps a custom session workspace in the header when a reset lands on an empty window", async () => {
+    const workspace = await initializeGitWorkspace(rootDir);
+    const customWorkspace = path.join(rootDir, "custom-session-workspace");
+    await fs.mkdir(customWorkspace, { recursive: true });
+    const storePath = path.join(rootDir, "sessions.json");
+    // The stored row runs somewhere other than the run's configured workspace.
+    const sessionEntry: SessionEntry = {
+      lifecycleRevision: "before-reset",
+      sessionId: "session",
+      spawnedCwd: customWorkspace,
+      updatedAt: 1,
+    };
+    const sessionStore = { [sessionKey]: sessionEntry };
+    await writeTestSessionStore(storePath, sessionKey, sessionEntry);
+
+    await expect(
+      resetReplyRunSession({
+        options: {
+          failureLabel: "memory flush exhaustion",
+          buildLogMessage: (next) => `reset ${next}`,
+        },
+        sessionKey,
+        queueKey: "main",
+        activeSessionEntry: sessionEntry,
+        activeSessionStore: sessionStore,
+        storePath,
+        followupRun: createTestFollowupRun({ workspaceDir: workspace }),
+        onActiveSessionEntry: () => {},
+        onNewSession: () => {},
+      }),
+    ).resolves.toBe(true);
+
+    const events = await loadTranscriptEvents({
+      agentId: "main",
+      sessionId: "session",
+      sessionKey,
+      storePath,
+    });
+    // The prior row's own workspace wins over the run's configured workspace.
+    expect(events[0]).toMatchObject({ type: "session", version: 3, cwd: customWorkspace });
+    expect(events[1]).toMatchObject({ type: "reset", reason: "reset" });
+  });
+
   it("records the runner workspace in the header when a reset lands on an empty window", async () => {
     const workspace = await initializeGitWorkspace(rootDir);
     const storePath = path.join(rootDir, "sessions.json");

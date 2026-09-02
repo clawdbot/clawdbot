@@ -88,6 +88,7 @@ import {
 import { buildSessionResetBoundaryEvent } from "./session-reset-boundary-event.js";
 import { resolveMaintenanceConfig } from "./store-maintenance-runtime.js";
 import type { ResolvedSessionMaintenanceConfig } from "./store-maintenance.js";
+import { resolveResetBoundaryHeaderCwd } from "./transcript-header.js";
 import type { SessionEntry } from "./types.js";
 
 type SessionArchiveRuntime = typeof import("../../gateway/session-archive.runtime.js");
@@ -410,7 +411,12 @@ export async function applySessionEntryLifecycleMutation(params: {
           // Same empty-window hazard as the single-target reset path: the
           // boundary must not become seq 0, or the window stays permanently
           // headerless and is rejected as a legacy transcript on every load.
-          ensureTranscriptHeader(transactionDb, boundaryScope, resetBoundaryCwd);
+          // The header belongs to the prior row, so that row's workspace wins.
+          ensureTranscriptHeader(
+            transactionDb,
+            boundaryScope,
+            resolveResetBoundaryHeaderCwd(expectedEntry, resetBoundaryCwd),
+          );
           const event = buildSessionResetBoundaryEvent({
             events: loadTranscriptEventsFromDatabase(transactionDb, expectedEntry.sessionId, {
               projection: "reset-boundary",

@@ -23,3 +23,23 @@ export function createSessionTranscriptHeader(params: SessionTranscriptHeaderPar
     ...(params.parentSession ? { parentSession: params.parentSession } : {}),
   };
 }
+
+/** Session-row fields that record where a session actually runs. */
+type ResetHeaderCwdSource = {
+  spawnedCwd?: string;
+  spawnedWorkspaceDir?: string;
+};
+
+/**
+ * Picks the cwd for a transcript header created by a reset boundary landing on
+ * an empty window. The prior session row owns that value: a custom-workspace
+ * session must keep its own cwd even when the reset caller only knows the
+ * configured agent workspace. The caller value is a fallback for rows that
+ * never recorded one.
+ */
+export function resolveResetBoundaryHeaderCwd(
+  priorEntry: ResetHeaderCwdSource | undefined,
+  fallbackCwd: string | undefined,
+): string | undefined {
+  return priorEntry?.spawnedCwd ?? priorEntry?.spawnedWorkspaceDir ?? fallbackCwd;
+}

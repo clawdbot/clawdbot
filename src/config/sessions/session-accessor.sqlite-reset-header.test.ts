@@ -55,7 +55,7 @@ describe("SQLite reset boundary transcript header", () => {
         .select(["seq", "event_json"])
         .where("session_id", "=", sessionId)
         .orderBy("seq", "asc"),
-    ).rows.map((row) => JSON.parse(String(row.event_json)));
+    ).rows.map((row) => JSON.parse(row.event_json));
   }
 
   // Regression: a session window can exist with a still-empty transcript when a
@@ -110,6 +110,66 @@ describe("SQLite reset boundary transcript header", () => {
     const events = readEvents("projection-window");
     expect(events[0]?.type).toBe("session");
     expect(events[0]?.cwd).toBe("/tmp/projection-session-workspace");
+    expect(events[1]?.type).toBe("reset");
+  });
+
+  // The header is written for the prior row's session, so a custom-workspace
+  // session keeps its own cwd even when the reset caller only knows the
+  // configured agent workspace. Otherwise later transcript cut/fork paths would
+  // carry the wrong workspace forward.
+  it("prefers the prior row's spawned cwd over the caller workspace", async () => {
+    const sessionKey = "agent:main:custom-workspace-reset";
+    await replaceSessionEntry(
+      { sessionKey, storePath },
+      {
+        sessionId: "custom-window",
+        updatedAt: 10,
+        spawnedWorkspaceDir: "/tmp/custom-session-workspace",
+        spawnedCwd: "/tmp/custom-session-workspace/task",
+      },
+    );
+
+    await resetSessionEntryLifecycle({
+      storePath,
+      target: { canonicalKey: sessionKey, storeKeys: [sessionKey] },
+      resetBoundary: { context: "clear", reason: "new" },
+      resetBoundaryCwd: "/tmp/agent-default-workspace",
+      buildNextEntry: () => ({ sessionId: "next-custom", updatedAt: 20 }),
+    });
+
+    const events = readEvents("custom-window");
+    expect(events[0]?.type).toBe("session");
+    expect(events[0]?.cwd).toBe("/tmp/custom-session-workspace/task");
+    expect(events[1]?.type).toBe("reset");
+  });
+
+  it("prefers the prior row's spawned workspace via the batched upsert path too", async () => {
+    const sessionKey = "agent:main:custom-projection-reset";
+    await replaceSessionEntry(
+      { sessionKey, storePath },
+      {
+        sessionId: "custom-projection-window",
+        updatedAt: 10,
+        spawnedWorkspaceDir: "/tmp/custom-projection-workspace",
+      },
+    );
+
+    await applySessionEntryLifecycleMutation({
+      storePath,
+      upserts: [
+        {
+          sessionKey,
+          entry: { sessionId: "next-custom-projection", updatedAt: 20 },
+          resetBoundary: { context: "clear", reason: "new" },
+          resetBoundaryCwd: "/tmp/agent-default-workspace",
+        },
+      ],
+      skipMaintenance: true,
+    });
+
+    const events = readEvents("custom-projection-window");
+    expect(events[0]?.type).toBe("session");
+    expect(events[0]?.cwd).toBe("/tmp/custom-projection-workspace");
     expect(events[1]?.type).toBe("reset");
   });
 

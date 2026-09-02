@@ -113,12 +113,6 @@ export async function resetReplyRunSession(params: {
   transitionMainSessionRecovery(nextEntry, { kind: "clear" });
   const agentId = params.followupRun.run.agentId;
   const nextSessionFile = params.sessionKey;
-  // The runner's effective workspace: the same value the diff baseline settles
-  // against below. An empty-window reset creates the transcript header inside
-  // the lifecycle transaction, so it must record this workspace rather than the
-  // service process cwd.
-  const effectiveWorkspaceDir =
-    nextEntry.spawnedCwd ?? nextEntry.spawnedWorkspaceDir ?? params.followupRun.run.workspaceDir;
   params.activeSessionStore[params.sessionKey] = nextEntry;
   try {
     await deps.persistSessionResetLifecycle({
@@ -126,7 +120,11 @@ export async function resetReplyRunSession(params: {
       nextEntry,
       nextSessionFile,
       previousEntry: prevEntry,
-      resetBoundaryCwd: effectiveWorkspaceDir,
+      // An empty-window reset creates the transcript header inside the
+      // lifecycle transaction. The prior row's own workspace wins there; the
+      // run workspace only covers rows that never recorded one, so the header
+      // never falls back to the service process cwd.
+      resetBoundaryCwd: params.followupRun.run.workspaceDir,
       sessionKey: params.sessionKey,
       storePath: params.storePath,
     });
@@ -143,7 +141,10 @@ export async function resetReplyRunSession(params: {
   try {
     if (nextEntry.sessionDiffBaselineCapture) {
       settledEntry = await ensureSessionDiffBaseline({
-        cwd: effectiveWorkspaceDir,
+        cwd:
+          nextEntry.spawnedCwd ??
+          nextEntry.spawnedWorkspaceDir ??
+          params.followupRun.run.workspaceDir,
         entry: nextEntry,
         isNewSession: false,
         sessionKey: params.sessionKey,
