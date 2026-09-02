@@ -40,7 +40,7 @@ type UninstallActions = PluginConfigUninstallActions & {
 };
 
 export const UNINSTALL_ACTION_LABELS = {
-  entry: "config entry",
+  entry: "plugin settings",
   install: "install record",
   allowlist: "allowlist entry",
   denylist: "denylist entry",

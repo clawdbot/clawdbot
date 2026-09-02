@@ -268,7 +268,7 @@ function createSingleNpmInstallConfig(installPath: string): OpenClawConfig {
   });
 }
 
-it("stages only runtime child entries while a package directory removal is pending", () => {
+it("disables only runtime child entries for a package uninstall", () => {
   const staged = prepareConfigForDisabledPluginSet(
     {
       plugins: {

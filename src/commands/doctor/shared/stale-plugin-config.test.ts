@@ -106,6 +106,24 @@ describe("doctor stale plugin config helpers", () => {
     });
   });
 
+  it("preserves an explicit disable marker while removing stale disabled settings", () => {
+    const result = maybeRepairStalePluginConfig({
+      plugins: {
+        entries: {
+          "explicitly-disabled": { enabled: false },
+          "disabled-with-settings": { enabled: false, config: { stale: true } },
+        },
+      },
+    } as OpenClawConfig);
+
+    expect(result.changes).toEqual([
+      "- plugins.entries: removed 1 stale plugin entry (disabled-with-settings)",
+    ]);
+    expect(result.config.plugins?.entries).toEqual({
+      "explicitly-disabled": { enabled: false },
+    });
+  });
+
   it.each(["thread-ownership", "open-prose"])(
     "removes retired %s config while retaining valid plugin ids",
     (retiredPluginId) => {

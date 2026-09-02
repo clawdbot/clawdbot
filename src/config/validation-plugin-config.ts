@@ -3,6 +3,7 @@ import { isPathInside } from "../infra/path-guards.js";
 import {
   normalizePluginsConfig,
   normalizePluginId,
+  isExplicitPluginDisableMarker,
   resolveEffectivePluginActivationState,
   resolveMemorySlotDecision,
 } from "../plugins/config-state.js";
@@ -289,8 +290,8 @@ export function validateExplicitPluginConfig(params: {
   const pluginsConfig = config.plugins;
   const entries = pluginsConfig?.entries;
   if (entries && isRecord(entries)) {
-    for (const pluginId of Object.keys(entries)) {
-      if (!knownIds.has(pluginId)) {
+    for (const [pluginId, entry] of Object.entries(entries)) {
+      if (!knownIds.has(pluginId) && !isExplicitPluginDisableMarker(entry)) {
         // Keep gateway startup resilient when plugins are removed/renamed across upgrades.
         pushMissingPluginIssue(`plugins.entries.${pluginId}`, pluginId, { warnOnly: true });
       }

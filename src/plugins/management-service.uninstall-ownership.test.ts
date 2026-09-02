@@ -129,7 +129,7 @@ describe("plugin management uninstall channel ownership", () => {
         }),
       );
       expect(result.removed).toEqual([
-        "config entry",
+        "plugin settings",
         "install record",
         ...(ownedChannelIds.length > 0 ? ["channel config"] : []),
       ]);

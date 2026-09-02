@@ -44,6 +44,11 @@ export function normalizePluginId(id: string): string {
   return BUILT_IN_PLUGIN_ALIAS_LOOKUP.get(normalized) ?? normalized;
 }
 
+/** Identifies the credential-free marker that records an explicit plugin disable decision. */
+export function isExplicitPluginDisableMarker(value: unknown): boolean {
+  return isRecord(value) && value.enabled === false && Object.keys(value).length === 1;
+}
+
 export const normalizePluginsConfig = (
   config?: OpenClawConfig["plugins"],
 ): NormalizedPluginsConfig => {
