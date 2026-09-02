@@ -148,6 +148,7 @@ describe("AppSidebar session attention", () => {
     const questionAttention = sidebar.querySelector('[data-session-attention="question"]');
     expect(questionAttention).not.toBeNull();
     expect(questionAttention?.getAttribute("aria-label")).toBe("Waiting for your answer");
+    expect(questionAttention?.getAttribute("tabindex")).toBe("0");
     expect(
       (
         questionAttention?.closest("openclaw-tooltip") as

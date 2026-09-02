@@ -426,6 +426,15 @@ suite.define(() => {
       .locator(`[data-session-key="${questionSessionKey}"] [data-session-attention="question"]`)
       .hover();
     await expect.poll(() => page.locator("openclaw-tooltip wa-tooltip[open]").count()).toBe(1);
+    await page.mouse.move(400, 50);
+    await expect.poll(() => page.locator("openclaw-tooltip wa-tooltip[open]").count()).toBe(0);
+    await page
+      .locator(`[data-session-key="${questionSessionKey}"] [data-session-attention="question"]`)
+      .focus();
+    await expect.poll(() => page.locator("openclaw-tooltip wa-tooltip[open]").count()).toBe(1);
+    await expect
+      .poll(() => page.locator('.session-progress-hovercard[data-open="true"]').count())
+      .toBe(0);
     await screenshot(page, "01-question-pending.png");
 
     await panel.locator(".chat-question-panel__collapse").click();

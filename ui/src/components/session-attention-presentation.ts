@@ -5,6 +5,11 @@ import { formatWebUiIconErrorText } from "./error-presentation.ts";
 import { icons } from "./icons.ts";
 import { resolveSessionAttentionIcon } from "./session-attention-icon-registry.ts";
 
+function keepQuestionFocusOnTooltip(event: FocusEvent) {
+  // The hand is its own tooltip target; bubbling would also open the row hovercard.
+  event.stopPropagation();
+}
+
 export function renderSessionAttentionIcon(
   attention: SidebarSessionAttention,
   showQuestionTooltip = false,
@@ -27,6 +32,8 @@ export function renderSessionAttentionIcon(
     role=${questionLabel ? "img" : nothing}
     aria-label=${questionLabel ?? nothing}
     aria-hidden=${questionLabel ? nothing : "true"}
+    tabindex=${questionLabel ? "0" : nothing}
+    @focusin=${questionLabel ? keepQuestionFocusOnTooltip : nothing}
     >${icon}</span
   >`;
   return showQuestionTooltip && questionLabel
