@@ -1,3 +1,4 @@
+import { resolveGlobalSingleton } from "openclaw/plugin-sdk/global-singleton";
 import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
 import {
   CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS,
@@ -19,7 +20,12 @@ import type {
 } from "./session-binding.js";
 import { retainSharedCodexAppServerClientByInstanceId } from "./shared-client.js";
 
-const nativeThreadOwners = new KeyedAsyncQueue();
+// Dist and source copies share physical clients, so their lifecycle queues must
+// share ownership too. Settled entries drain naturally; never clear active tails.
+const nativeThreadOwners = resolveGlobalSingleton(
+  Symbol.for("openclaw.codexNativeThreadOwners"),
+  () => new KeyedAsyncQueue(),
+);
 
 /** Serialize OpenClaw-owned lifecycle changes, not native-internal thread controllers. */
 export async function withCodexAppServerThreadMutation<T>(

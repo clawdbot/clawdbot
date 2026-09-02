@@ -99,11 +99,9 @@ export function registerCodexTestSessionIdentity(
 }
 
 export function seedCodexTestBinding(locator: string, binding: CodexAppServerThreadBinding): void {
-  const identity = testIdentity(locator);
-  sharedStateStore.register(bindingStoreKey(identity), {
+  sharedStateStore.register(bindingStoreKey(testIdentity(locator)), {
     version: 1,
     state: "active",
-    sessionId: identity.sessionId,
     binding,
   });
 }

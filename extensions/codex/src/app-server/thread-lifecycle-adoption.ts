@@ -30,7 +30,10 @@ import type {
   CodexThreadRequestContext,
 } from "./thread-lifecycle-types.js";
 import { releaseCodexConsumedLiveThread } from "./thread-lifecycle-warm.js";
-import { withExclusiveCodexAppServerThread } from "./thread-ownership.js";
+import {
+  withCodexAppServerThreadMutation,
+  withExclusiveCodexAppServerThread,
+} from "./thread-ownership.js";
 import { assertCodexSupervisionThreadLineage } from "./thread-policy.js";
 
 /** Passive refusal must precede releasing or acquiring any native subscription. */
@@ -86,14 +89,18 @@ export async function withCodexThreadLifecycleBinding(
       params.signal?.throwIfAborted();
       return await run(identity, binding);
     });
-  return snapshot
+  // Ordinary resumes own their binding key even when a legacy row omits sessionId.
+  // Foreign-owner rejection belongs to adoption, not an upgrade of that same binding.
+  return snapshot?.pendingResumeConfiguration
     ? await withExclusiveCodexAppServerThread({
         bindingStore: params.bindingStore,
         identity,
         threadId: snapshot.threadId,
         run: runWithLease,
       })
-    : await runWithLease();
+    : snapshot
+      ? await withCodexAppServerThreadMutation(snapshot.threadId, runWithLease)
+      : await runWithLease();
 }
 
 type PendingResumeContext = CodexThreadRequestContext & {
