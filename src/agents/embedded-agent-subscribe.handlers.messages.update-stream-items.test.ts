@@ -309,7 +309,7 @@ describe("handleMessageUpdate text signatures", () => {
     const finalPartial = createPartial("Working...");
 
     for (const event of [
-      { type: "text_start", partial: startPartial },
+      { type: "text_start" as "text_delta", partial: startPartial },
       { type: "text_delta", delta: "Work", partial: startPartial },
       { type: "text_delta", delta: "ing...", partial: finalPartial },
       { type: "text_end", content: "Working...", partial: finalPartial },
@@ -363,7 +363,7 @@ describe("handleMessageUpdate text signatures", () => {
     const extendedPartial = createPartial("Working now", "item-2");
 
     for (const event of [
-      { type: "text_start", partial: firstPartial },
+      { type: "text_start" as "text_delta", partial: firstPartial },
       { type: "text_end", content: "Working", partial: firstPartial },
       { type: "text_end", content: "Working now", partial: extendedPartial },
     ] as const) {
@@ -434,7 +434,7 @@ describe("handleMessageUpdate reasoning stream control for reasoning-capable mod
     await updateMessage(
       context,
       createTextUpdateEvent({
-        type: "text_start",
+        type: "text_start" as "text_delta",
         text: "<thinking>Let me solve this step by step...</thinking>Hello!",
         delta: "",
       }),
@@ -507,7 +507,9 @@ describe("handleMessageUpdate reasoning stream control for reasoning-capable mod
     (context as unknown as Record<string, unknown>).openReasoningStream = openReasoningStream;
 
     // Non-reasoning model
-    (context.params.catalog as unknown) = [{ provider: "openai", id: "gpt-4o", reasoning: false }];
+    (context.params as unknown as Record<string, unknown>).catalog = [
+      { provider: "openai", id: "gpt-4o", reasoning: false },
+    ];
     (context.params.session as unknown as Record<string, unknown>) = {
       provider: "openai",
       model: "gpt-4o",
@@ -518,7 +520,7 @@ describe("handleMessageUpdate reasoning stream control for reasoning-capable mod
     await updateMessage(
       context,
       createTextUpdateEvent({
-        type: "text_start",
+        type: "text_start" as "text_delta",
         text: "Hello!",
         delta: "",
       }),
@@ -542,7 +544,7 @@ describe("handleMessageUpdate reasoning stream control for reasoning-capable mod
     });
     (context as unknown as Record<string, unknown>).openReasoningStream = openReasoningStream;
 
-    (context.params.catalog as unknown) = [
+    (context.params as unknown as Record<string, unknown>).catalog = [
       { provider: "ollama", id: "glm-5.3:cloud", reasoning: true },
     ];
     (context.params.session as unknown as Record<string, unknown>) = {
@@ -555,7 +557,7 @@ describe("handleMessageUpdate reasoning stream control for reasoning-capable mod
     await updateMessage(
       context,
       createTextUpdateEvent({
-        type: "text_start",
+        type: "text_start" as "text_delta",
         text: "Hello!",
         delta: "",
       }),

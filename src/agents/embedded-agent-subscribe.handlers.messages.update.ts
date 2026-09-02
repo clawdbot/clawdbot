@@ -132,10 +132,10 @@ export function handleMessageUpdate(
       )?.reasoning === true);
   const thinkingEnabled = session?.thinkingLevel && session.thinkingLevel !== "off";
   // Use ctx.openReasoningStream if available (for test injection), otherwise use the imported function.
+  const ctxOverride = ctx as { openReasoningStream?: typeof openReasoningStream };
   const openReasoning: typeof openReasoningStream =
-    typeof (ctx as unknown as Record<string, unknown>).openReasoningStream === "function"
-      ? ((ctx as unknown as Record<string, unknown>)
-          .openReasoningStream as typeof openReasoningStream)
+    typeof ctxOverride.openReasoningStream === "function"
+      ? ctxOverride.openReasoningStream!
       : openReasoningStream;
   if (
     evtType === "text_start" &&
