@@ -29,7 +29,11 @@ import {
   type EmbeddingProviderRuntime,
 } from "./embeddings.js";
 import { MemoryManagerDatabaseContext } from "./manager-database-context.js";
-import { openMemoryDatabaseAtPath } from "./manager-db.js";
+import {
+  isMemoryDatabaseReadOnly,
+  openMemoryDatabaseAtPath,
+  openMemoryDatabaseReadOnlyAtPath,
+} from "./manager-db.js";
 import {
   resolveMemoryPrimaryProviderRequest,
   type MemoryProviderLifecycleState,
@@ -513,7 +517,7 @@ export abstract class MemoryManagerSyncBase extends MemoryManagerDatabaseContext
         this.markConfiguredSourcesForFullReindex();
         return false;
       }
-      if (this.dropLegacyVectorTable()) {
+      if (!isMemoryDatabaseReadOnly(this.db) && this.dropLegacyVectorTable()) {
         // A broad dirty sync can skip unchanged files whose source hashes were
         // migrated. Force the next sync to republish the derived vector rows.
         this.dirty = true;
@@ -624,9 +628,12 @@ export abstract class MemoryManagerSyncBase extends MemoryManagerDatabaseContext
     return buildMemorySourceFilter(alias, sources);
   }
 
-  protected openDatabase(): DatabaseSync {
+  protected openDatabase(readOnly = false): DatabaseSync {
     const dbPath = resolveUserPath(this.settings.store.databasePath);
-    return openMemoryDatabaseAtPath(dbPath, this.settings.store.vector.enabled, this.agentId);
+    const vectorEnabled = this.settings.store.vector.enabled;
+    return readOnly
+      ? openMemoryDatabaseReadOnlyAtPath(dbPath, vectorEnabled, this.agentId)
+      : openMemoryDatabaseAtPath(dbPath, vectorEnabled, this.agentId);
   }
 
   protected async seedEmbeddingCache(sourceDb: DatabaseSync): Promise<void> {

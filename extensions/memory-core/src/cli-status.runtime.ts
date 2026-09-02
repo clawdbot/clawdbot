@@ -163,7 +163,7 @@ export async function runMemoryStatus(
     agent: opts.agent,
     allAgents: true,
     diagnosticsToStderr: Boolean(opts.json),
-    purpose: opts.index ? "cli" : "status",
+    purpose: opts.index || opts.fix ? "cli" : "status",
     inspectSources: true,
     ...hostOptions,
     run: async ({ manager, agentId }) => {
