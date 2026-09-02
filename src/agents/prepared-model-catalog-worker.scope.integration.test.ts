@@ -1,7 +1,12 @@
 import fs from "node:fs";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { expectDefined } from "@openclaw/normalization-core";
+import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { modelsHandlers } from "../gateway/server-methods/models.js";
+import type { GatewayRequestContext, RespondFn } from "../gateway/server-methods/types.js";
+import { registerGatewayModelCatalogPrivateAccess } from "../gateway/server-model-catalog-auth.js";
+import type { PreparedGatewayModelCatalogSnapshot } from "../gateway/server-model-catalog-auth.js";
 import { unregisterResolvedAgentDir } from "./agent-dir-registry.js";
 import { replaceRuntimeAuthProfileStoreSnapshots } from "./auth-profiles/runtime-snapshots.js";
 import { preparePublishedModelCatalogOwnerIdentity } from "./prepared-model-catalog-owner.js";
@@ -16,13 +21,14 @@ import {
   writeFixturePlugin,
   writeUnrelatedFixturePlugin,
 } from "./prepared-model-catalog-worker.test-support.js";
+import { getPreparedModelRuntimeAuthStore } from "./prepared-model-runtime-auth.js";
 import { startSerializedSnapshotBuildBatch } from "./prepared-model-runtime.build.js";
 import { usePreparedCatalogWorkerFixtures } from "./test-helpers/prepared-model-catalog-worker-fixture.js";
 
 const { makeTempDir, retireAfterTest } = usePreparedCatalogWorkerFixtures();
 
 describe("prepared model catalog worker plugin scope", () => {
-  it("keeps catalog contributors without importing unrelated plugins", async () => {
+  it("keeps catalog contributors on the models.list route without importing unrelated plugins", async () => {
     const root = makeTempDir("openclaw-model-catalog-scope-worker-");
     const stateDir = path.join(root, "state");
     const agentDir = path.join(stateDir, "agents", "main", "agent");
@@ -42,6 +48,7 @@ describe("prepared model catalog worker plugin scope", () => {
             [`${PROVIDER_ID}/sqlite-model`]: { agentRuntime: { id: HARNESS_ID } },
           },
         },
+        list: [{ id: "main", default: true, agentDir, workspace: workspaceDir }],
       },
       plugins: {
         allow: [PLUGIN_ID, UNRELATED_PLUGIN_ID],
@@ -91,10 +98,70 @@ describe("prepared model catalog worker plugin scope", () => {
         "static",
       ).pending
     )[0];
-    const catalog = await prepared?.snapshot.loadFullModelCatalog?.();
+    if (!prepared) {
+      throw new Error("prepared runtime produced no snapshot");
+    }
+    const authStore = getPreparedModelRuntimeAuthStore(prepared.snapshot);
+    if (!authStore) {
+      throw new Error("prepared runtime produced no auth store");
+    }
+    const projectSnapshot = async (full: boolean): Promise<PreparedGatewayModelCatalogSnapshot> => {
+      const modelCatalog = full
+        ? await prepared.snapshot.loadFullModelCatalog!()
+        : prepared.snapshot.modelCatalog;
+      return {
+        ...modelCatalog,
+        agentId: "main",
+        agentDir,
+        workspaceDir,
+        config,
+        catalogComplete: full,
+        authModes: prepared.snapshot.authModes,
+        authStore,
+        metadataSnapshot: prepared.snapshot.metadataSnapshot,
+        authMaterializations: [],
+      };
+    };
+    const loadGatewayModelCatalogSnapshot: GatewayRequestContext["loadGatewayModelCatalogSnapshot"] =
+      async (params) => {
+        const {
+          authModes: _authModes,
+          authStore: _authStore,
+          metadataSnapshot: _metadataSnapshot,
+          authMaterializations: _authMaterializations,
+          ...snapshot
+        } = await projectSnapshot(params?.readOnly === false);
+        return snapshot;
+      };
+    registerGatewayModelCatalogPrivateAccess(loadGatewayModelCatalogSnapshot, {
+      loadDeferred: async (params) => await projectSnapshot(params?.readOnly === false),
+      readPrepared: async () => await projectSnapshot(false),
+    });
+    const respond = vi.fn();
+    await expectDefined(
+      modelsHandlers["models.list"],
+      'modelsHandlers["models.list"] test invariant',
+    )({
+      req: { type: "req", id: "models-list-worker-scope", method: "models.list", params: {} },
+      params: { view: "all" },
+      respond: respond as RespondFn,
+      client: null,
+      isWebchatConnect: () => false,
+      context: {
+        getRuntimeConfig: () => config,
+        loadGatewayModelCatalogSnapshot,
+        logGateway: { debug: vi.fn(), warn: vi.fn() },
+      } as GatewayRequestContext,
+    });
 
-    expect(catalog?.entries).toContainEqual(
-      expect.objectContaining({ provider: PROVIDER_ID, id: "plugin-generation-v1" }),
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({
+        models: expect.arrayContaining([
+          expect.objectContaining({ provider: PROVIDER_ID, id: "plugin-generation-v1" }),
+        ]),
+      }),
+      undefined,
     );
     expect(fs.existsSync(unrelatedMarker)).toBe(false);
   });
