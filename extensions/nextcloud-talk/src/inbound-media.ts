@@ -27,7 +27,8 @@ export type NextcloudTalkMediaOutcomeReason =
   | "media_unavailable"
   | "media_unsupported"
   | "media_fetch_failed"
-  | "media_stage_failed";
+  | "media_stage_failed"
+  | "media_cleanup_failed";
 
 export type NextcloudTalkAttachmentReferenceResult =
   | { ok: true; origin: string; hostname: string; fileName: string }

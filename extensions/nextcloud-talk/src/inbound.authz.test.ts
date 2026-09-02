@@ -62,7 +62,8 @@ const TEST_ATTACHMENT = {
 } as const;
 
 describe("nextcloud-talk inbound authz", () => {
-  it("revalidates paired DM access after attachment I/O before dispatch", async () => {
+  it("revalidates paired DM access after metadata lookup before staging", async () => {
+    resolveNextcloudTalkAuthenticatedMediaSourceMock.mockReset();
     let paired = true;
     const readAllowFromStore = vi.fn(async () => (paired ? ["paired-user"] : []));
     const coreRuntime = createPluginRuntimeMock();
@@ -120,12 +121,89 @@ describe("nextcloud-talk inbound authz", () => {
     });
 
     expect(resolveNextcloudTalkAuthenticatedMediaSourceMock).toHaveBeenCalledTimes(1);
-    expect(coreRuntime.channel.media.saveRemoteMedia).toHaveBeenCalledTimes(1);
+    expect(coreRuntime.channel.media.saveRemoteMedia).not.toHaveBeenCalled();
     expect(readAllowFromStore).toHaveBeenCalledTimes(3);
     expect(coreRuntime.channel.inbound.buildContext).not.toHaveBeenCalled();
     expect(coreRuntime.channel.inbound.dispatch).not.toHaveBeenCalled();
     expect(runtime.log).toHaveBeenCalledWith(
       "nextcloud-talk: drop DM room-revoked (authorization changed)",
+    );
+  });
+
+  it("deletes staged media when paired DM access changes during download", async () => {
+    resolveNextcloudTalkAuthenticatedMediaSourceMock.mockReset();
+    let paired = true;
+    const readAllowFromStore = vi.fn(async () => (paired ? ["paired-user"] : []));
+    const coreRuntime = createPluginRuntimeMock();
+    const deleteMediaBuffer = vi.fn(async () => undefined);
+    Object.assign(coreRuntime.channel.media, { deleteMediaBuffer });
+    coreRuntime.channel.pairing.readAllowFromStore = readAllowFromStore;
+    coreRuntime.channel.media.saveRemoteMedia = vi.fn(async () => {
+      paired = false;
+      return {
+        id: "staged-revoked.pdf",
+        path: "/tmp/staged-revoked.pdf",
+        size: 1_024,
+        contentType: "application/pdf",
+      };
+    });
+    setNextcloudTalkRuntime(coreRuntime as unknown as PluginRuntime);
+    resolveNextcloudTalkAuthenticatedMediaSourceMock.mockResolvedValueOnce({
+      ok: true,
+      url: "https://cloud.example.com/remote.php/dav/files/test-user/Talk/receipt.pdf",
+      origin: "https://cloud.example.com",
+      hostname: "cloud.example.com",
+      fileName: "receipt.pdf",
+      authorization: "Basic redacted-test-credential",
+    });
+    const runtime = createTestRuntimeEnv();
+
+    await handleNextcloudTalkInbound({
+      message: {
+        messageId: "m-revoked-during-download",
+        roomToken: "room-revoked-during-download",
+        roomName: "Revoked During Download",
+        senderId: "paired-user",
+        senderName: "Paired User",
+        text: "inspect this",
+        mediaType: "text/plain",
+        timestamp: Date.now(),
+        isGroupChat: false,
+        attachment: TEST_ATTACHMENT,
+      },
+      account: {
+        accountId: "default",
+        enabled: true,
+        baseUrl: "https://cloud.example.com",
+        secret: "",
+        secretSource: "none",
+        config: {
+          dmPolicy: "pairing",
+          allowFrom: [],
+          groupPolicy: "allowlist",
+          groupAllowFrom: [],
+          mediaAllowFrom: ["paired-user"],
+        },
+      },
+      config: {
+        channels: {
+          "nextcloud-talk": {
+            dmPolicy: "pairing",
+            allowFrom: [],
+          },
+        },
+      },
+      runtime,
+    });
+
+    expect(resolveNextcloudTalkAuthenticatedMediaSourceMock).toHaveBeenCalledTimes(1);
+    expect(coreRuntime.channel.media.saveRemoteMedia).toHaveBeenCalledTimes(1);
+    expect(readAllowFromStore).toHaveBeenCalledTimes(4);
+    expect(deleteMediaBuffer).toHaveBeenCalledWith("staged-revoked.pdf");
+    expect(coreRuntime.channel.inbound.buildContext).not.toHaveBeenCalled();
+    expect(coreRuntime.channel.inbound.dispatch).not.toHaveBeenCalled();
+    expect(runtime.log).toHaveBeenCalledWith(
+      "nextcloud-talk: drop DM room-revoked-during-download (authorization changed)",
     );
   });
 

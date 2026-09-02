@@ -186,6 +186,7 @@ export function createPluginRuntimeMediaMock(
     saveMediaBuffer: vi
       .fn<PluginRuntimeMediaMock["saveMediaBuffer"]>()
       .mockResolvedValue(TEST_SAVED_MEDIA),
+    deleteMediaBuffer: vi.fn<PluginRuntimeMediaMock["deleteMediaBuffer"]>().mockResolvedValue(),
     ...overrides,
   };
 }

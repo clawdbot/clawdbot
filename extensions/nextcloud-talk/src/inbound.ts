@@ -350,6 +350,7 @@ export async function handleNextcloudTalkInbound(params: {
   }
 
   let stagedMedia: { path: string; contentType?: string } | undefined;
+  let stagedMediaId: string | undefined;
   let authorizedMediaUnavailable = false;
   let performedAsyncMediaWork = false;
   const mediaSenderAllowed =
@@ -444,6 +445,15 @@ export async function handleNextcloudTalkInbound(params: {
               : { status: authenticatedSource.status }),
           });
         } else {
+          access = await resolveAccess(isGroup ? wasMentioned : undefined, contextBinding);
+          if (access.ingress.admission !== "dispatch") {
+            runtime.log?.(
+              isGroup && access.activationAccess.shouldSkip
+                ? `nextcloud-talk: drop room ${roomToken} (no mention)`
+                : `nextcloud-talk: drop ${isGroup ? "room" : "DM"} ${roomToken} (authorization changed)`,
+            );
+            return;
+          }
           try {
             const saved = await saveNextcloudTalkInboundMedia({
               saveRemoteMedia: core.channel.media.saveRemoteMedia,
@@ -456,6 +466,7 @@ export async function handleNextcloudTalkInbound(params: {
               mimeType: authenticatedSource.contentTypeOverride ?? message.attachment.mimeType,
               authorization: authenticatedSource.authorization,
             });
+            stagedMediaId = saved.id;
             stagedMedia = {
               path: saved.path,
               ...(authenticatedSource.contentTypeOverride
@@ -485,6 +496,19 @@ export async function handleNextcloudTalkInbound(params: {
   if (performedAsyncMediaWork) {
     access = await resolveAccess(isGroup ? wasMentioned : undefined, contextBinding);
     if (access.ingress.admission !== "dispatch") {
+      if (stagedMediaId) {
+        try {
+          await core.channel.media.deleteMediaBuffer(stagedMediaId);
+        } catch {
+          logNextcloudTalkMediaNonOutcome({
+            log: (messageLocal) => runtime.log?.(messageLocal),
+            reason: "media_cleanup_failed",
+            accountId: account.accountId,
+            messageId: message.messageId,
+            senderId,
+          });
+        }
+      }
       runtime.log?.(
         isGroup && access.activationAccess.shouldSkip
           ? `nextcloud-talk: drop room ${roomToken} (no mention)`
