@@ -32,13 +32,18 @@ it("registers fresh fixture work after clean release and module reset", async ()
   vi.resetModules();
   const { createFixtureLifetime: createFreshLifetime } =
     await import("../helpers/fixture-lifetime.js");
-  const fresh = createFreshLifetime();
-  for (const lifetime of [fixture, fresh]) {
+  const nestedOwner = createVitestResourceOwner(tempDirs.make("fixture-explicit-owner-"));
+  const fresh = createFreshLifetime(nestedOwner.root);
+  for (const [lifetime, expectedOwner] of [
+    [fixture, owner],
+    [fresh, nestedOwner],
+  ] as const) {
     const root = lifetime.createTempDir("fixture-fresh-");
-    expect(() => owner.assertReleased()).toThrow("Unreleased Vitest resource claim");
+    expect(path.dirname(root)).toBe(expectedOwner.root);
+    expect(() => expectedOwner.assertReleased()).toThrow("Unreleased Vitest resource claim");
     await lifetime.cleanup();
     expect(fs.existsSync(root)).toBe(false);
-    expect(() => owner.assertReleased()).not.toThrow();
+    expect(() => expectedOwner.assertReleased()).not.toThrow();
   }
 });
 

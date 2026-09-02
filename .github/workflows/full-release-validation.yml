@@ -611,6 +611,7 @@ jobs:
             scripts/lib/failed-trailer.mts
             scripts/lib/error-format.mts
             scripts/lib/managed-child-process.mts
+            scripts/lib/vitest-resource-ownership.mts
             scripts/lib/windows-taskkill.mjs
             scripts/lib/release-version.mjs
             .github/actions/setup-pnpm-store-cache/ensure-node.sh

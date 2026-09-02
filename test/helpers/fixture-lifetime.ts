@@ -18,14 +18,14 @@ function hasUnjoinedWork(value: unknown): boolean {
   );
 }
 
-/** Own whole fixture bodies as well as commands that can outlive a failed assertion. */
-export function createFixtureLifetime() {
+/** Own whole fixture bodies; an explicit root scopes deliberate retention without changing env. */
+export function createFixtureLifetime(ownerRoot?: string) {
   const roots = new Set<string>();
   const claims = new Map<string, () => void>();
   let pendingCleanup: Promise<void> | undefined;
   const work: { completion: Promise<unknown>; cleanup: boolean }[] = [];
 
-  function register(root?: string) {
+  function register(root = ownerRoot) {
     const owner = findVitestResourceOwner(root);
     if (owner && !claims.has(owner.root)) {
       claims.set(owner.root, owner.claim());
@@ -101,7 +101,7 @@ export function createFixtureLifetime() {
       register();
       return track(Promise.resolve().then(body), true);
     },
-    createTempDir: (prefix: string, root?: string) => {
+    createTempDir: (prefix: string, root = ownerRoot) => {
       register(root);
       return makeTempDir(roots, prefix, root);
     },
