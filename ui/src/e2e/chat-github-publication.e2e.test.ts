@@ -62,8 +62,14 @@ suite.define(() => {
       expect(accountBounds).not.toBeNull();
       expect(accountBounds!.x).toBeGreaterThanOrEqual(0);
       expect(accountBounds!.x + accountBounds!.width).toBeLessThanOrEqual(width);
+      await expect
+        .poll(() =>
+          account.evaluate((element) => element.closest("wa-popover") === document.activeElement),
+        )
+        .toBe(true);
       await page.keyboard.press("Escape");
       await expect.poll(() => arrow.getAttribute("aria-expanded")).toBe("false");
+      await account.waitFor({ state: "hidden" });
       await expect
         .poll(() => arrow.evaluate((element) => element === document.activeElement))
         .toBe(true);
