@@ -19,8 +19,10 @@ export function renderChannelIcon(
   const style = `${variant === "picker" ? "--channels-art-size:24px;" : ""}${
     art ? "" : `--channels-art-a:${from};--channels-art-b:${to}`
   }`;
+  const packageCoverClass =
+    variant === "cover" && options.pluginIconUrl ? " channels-cover--icon" : "";
   return html`<span
-    class=${`channels-${artVariant}${art ? "" : ` channels-${artVariant}--fallback`}`}
+    class=${`channels-${artVariant}${packageCoverClass}${art ? "" : ` channels-${artVariant}--fallback`}`}
     style=${style}
     aria-hidden="true"
   >

@@ -175,9 +175,10 @@ describe("channels plugin presentation metadata", () => {
       "OpenClaw Slack channel plugin for channels, DMs, commands, and app events.",
     );
     expect(row?.querySelector("img")?.getAttribute("src")).toBe("blob:slack-plugin-icon");
-    expect(container.querySelector(".channels-detail__header img")?.getAttribute("src")).toBe(
-      "blob:slack-plugin-icon",
+    const detailIcon = container.querySelector(
+      ".channels-detail__header .channels-cover--icon img",
     );
+    expect(detailIcon?.getAttribute("src")).toBe("blob:slack-plugin-icon");
     expect(container.querySelector(".channels-wizard h2")?.textContent).toBe("Set up Slack");
     expect(container.querySelector(".channels-wizard img")?.getAttribute("src")).toBe(
       "blob:slack-plugin-icon",
