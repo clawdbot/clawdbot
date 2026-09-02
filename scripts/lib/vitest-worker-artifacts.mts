@@ -18,6 +18,8 @@ export const vitestWorkerDeclarationEntries = {
   "node-host/config-runtime.test-support": "src/node-host/config-runtime.test-support.ts",
   "skills/library/persistence-runtime.test-support":
     "src/skills/library/persistence-runtime.test-support.ts",
+  "state/openclaw-state-lease-runtime.test-support":
+    "src/state/openclaw-state-lease-runtime.test-support.ts",
   "tui/tui-pty-runtime-test-support": "src/tui/tui-pty-runtime-test-support.ts",
 };
 

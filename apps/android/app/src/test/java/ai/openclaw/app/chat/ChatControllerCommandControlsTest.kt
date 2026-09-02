@@ -975,6 +975,58 @@ class ChatControllerCommandControlsTest {
     }
 
   @Test
+  fun newChatKeepsSpinnerWhenPreviousSessionListFinishes() =
+    runTest {
+      val key = "agent:main:dashboard:fresh"
+      val sessionsEntered = CompletableDeferred<Unit>()
+      val releaseSessions = CompletableDeferred<Unit>()
+      val createEntered = CompletableDeferred<Unit>()
+      val releaseCreate = CompletableDeferred<Unit>()
+      val gateway = ScriptedGateway(json)
+      var sessionsRequests = 0
+      gateway.respond("sessions.list") {
+        if (sessionsRequests++ == 0) {
+          sessionsEntered.complete(Unit)
+          releaseSessions.await()
+        }
+        """{"sessions":[]}"""
+      }
+      gateway.respond("sessions.create") {
+        createEntered.complete(Unit)
+        releaseCreate.await()
+        """{"ok":true,"key":"$key"}"""
+      }
+      gateway.respond("chat.history") { params ->
+        historyResponse(if (gateway.sessionKeyOf(params) == key) "fresh-session" else "parent-session", emptyList())
+      }
+      gateway.respondWith("sessions.branches.list", """{"branches":[]}""")
+      val controller = createChatController(cacheScope = { ChatCacheScope("gateway-a", 1) }, requestGateway = gateway::request)
+      controller.load("main")
+      sessionsEntered.await()
+
+      val create = async { controller.startNewChatAwait() }
+      try {
+        createEntered.await()
+        assertEquals("parent-session", controller.sessionId.value)
+        assertTrue(controller.healthOk.value)
+        assertTrue(controller.historyLoading.value)
+        releaseSessions.complete(Unit)
+        runCurrent()
+
+        assertTrue("A completed history tail must not clear the later New request's spinner", controller.historyLoading.value)
+        releaseCreate.complete(Unit)
+        assertTrue(create.await())
+        assertEquals(key, controller.sessionKey.value)
+        assertEquals("fresh-session", controller.sessionId.value)
+        assertFalse(controller.historyLoading.value)
+      } finally {
+        releaseSessions.complete(Unit)
+        releaseCreate.complete(Unit)
+        create.cancelAndJoin()
+      }
+    }
+
+  @Test
   fun startNewChatSelectsCreatedSessionAfterConcurrentSameSessionHistoryLoad() =
     runTest {
       for (refreshLoadedParent in listOf(false, true)) {
@@ -1240,7 +1292,7 @@ class ChatControllerCommandControlsTest {
     }
 
   @Test
-  fun startNewChatCancellationClearsOnlyItsOwnFreshHistoryLoad() =
+  fun startNewChatCancellationKeepsSelectedHydrationAlive() =
     runTest {
       for (refreshBeforeCancellation in listOf(false, true)) {
         val firstHistoryEntered = CompletableDeferred<Unit>()
@@ -1271,14 +1323,14 @@ class ChatControllerCommandControlsTest {
 
           assertTrue(create.isCancelled)
           assertEquals("agent:main:dashboard:fresh", controller.sessionKey.value)
-          assertEquals("Only a newer history request may retain loading", refreshBeforeCancellation, controller.historyLoading.value)
+          assertTrue("Selected history stays loading until its controller-owned request finishes", controller.historyLoading.value)
           assertNull(controller.errorText.value)
 
           releaseHistory.complete(Unit)
-          if (!refreshBeforeCancellation) controller.refresh()
           advanceUntilIdle()
           assertEquals("fresh-session", controller.sessionId.value)
           assertFalse(controller.historyLoading.value)
+          assertTrue(controller.healthOk.value)
         } finally {
           releaseHistory.complete(Unit)
           create.cancelAndJoin()

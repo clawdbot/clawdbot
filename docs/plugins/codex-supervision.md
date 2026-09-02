@@ -172,6 +172,35 @@ Discovery** to disable discovery without disabling Codex. For
 the detailed cause identifies the pairing-store, node-registry, permission, or
 Gateway lifecycle failure that needs repair.
 
+## Start a new native Codex CLI
+
+Select **+** beside **Codex**, choose a native host and folder, then press
+**Start in terminal** or Enter. This launches a new interactive Codex CLI, not
+a model-locked OpenClaw Chat or an adopted native thread. Codex owns its native
+account, model, configuration, and session identity. The optional prompt is
+passed as text, never as CLI options. Local catalog sources preserve their
+selected Codex home, including opaque secondary local host IDs.
+
+Terminal creation requires `operator.admin`, `gateway.cliAgents.enabled`, the
+installed CLI, and the active catalog plugin. Terminals are enabled by default;
+`gateway.terminal.enabled: false` blocks creation.
+It does not require an eligible OpenClaw model. A paired headless node must
+advertise and permit **`codex.terminal.start.v1`**; the existing
+`codex.terminal.resume.v1` alone does not support fresh starts. The node chooses
+its own installed Codex executable and native account/configuration. The Gateway
+agent remains the authorization context; it need not exist in the node's
+OpenClaw configuration.
+
+Local starts support the Gateway folder/worktree chooser. Node starts require
+an existing absolute directory on that node and never substitute the node's
+home if it disappears. Commands accept only cwd, an optional prompt, and terminal
+dimensions, not caller-supplied executables, argv, environment, or credentials.
+Closing the terminal cancels its node invocation; disconnects and stale pairing
+or connection generations are handled by the same terminal relay as resume.
+See [native CLI creation](/web/control-ui#start-a-native-coding-cli) for UI controls
+and prerequisites. Existing catalog viewing, resume, and Chat continuation keep
+their separate ownership contracts.
+
 ## Use the operator CLI
 
 The terminal CLI exposes the same non-archived catalog and Gateway-local branch

@@ -52,7 +52,11 @@ import {
   sessionAttentionSubtitle,
 } from "./session-attention-presentation.ts";
 import { renderSessionGlyph, renderSessionUnreadBadge } from "./session-glyph.ts";
-import { renderSessionRowBadges, renderSidebarConnectionStatus } from "./session-row-badges.ts";
+import {
+  renderSessionRowBadges,
+  renderSidebarConnectionStatus,
+  resolveSidebarConnectionStatus,
+} from "./session-row-badges.ts";
 import { formatSidebarBuildSubtitle } from "./sidebar-build-chip-format.ts";
 
 type AppSidebarRenderHost = AppSidebarSessionNavigationElement & {
@@ -366,6 +370,7 @@ export function renderAppSidebarOnline(host: AppSidebarRenderHost) {
 
 /** Zone 5: product chrome recedes to one slim footer bar. */
 export function renderAppSidebarFooterBar(host: AppSidebarRenderHost) {
+  const connectionStatus = resolveSidebarConnectionStatus(host);
   const selfUser = resolveCurrentSelfUser({
     snapshotUser: host.sessionDataContext?.gateway.snapshot.selfUser,
     presenceEntries: readPresenceEntries(host.sessionData.presencePayload),
@@ -404,9 +409,9 @@ export function renderAppSidebarFooterBar(host: AppSidebarRenderHost) {
           <span class="sidebar-identity-card__name" title=${selfLabel}>${selfLabel}</span>
         </span>
       </button>
-      ${host.restartPending || host.offline
+      ${connectionStatus
         ? renderSidebarConnectionStatus({
-            kind: host.restartPending ? "restarting" : "offline",
+            kind: connectionStatus,
             queuedOutboxCount: host.queuedOutboxCount,
             title: host.lastError
               ? redactLoginFailureError(host.lastError)

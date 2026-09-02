@@ -52,35 +52,59 @@ async function open(f: Fixture) {
   await expect.poll(() => count(f, "wa-after-show")).toBe(before + 1);
 }
 
-// Run in the animation-start task, not after a host RPC that can outlast the animation.
+// Hold a real CSS animation at an active sample: delayed animationstart events
+// can arrive after native completion has already removed the animation class.
 async function duringElementAnimation(
   element: HTMLElement,
   state: "show" | "hide",
   request: () => unknown,
-  action: () => void,
+  action: () => void | Promise<void>,
 ) {
-  let observed = false;
-  const listener = (event: AnimationEvent) => {
-    if (event.target !== element || !element.classList.contains(state)) {
-      return;
-    }
-    element.removeEventListener("animationstart", listener);
-    expect(element.getAnimations().some((animation) => animation.playState === "running")).toBe(
-      true,
-    );
-    observed = true;
-    action();
-  };
-  element.addEventListener("animationstart", listener);
+  const playState = element.style.animationPlayState;
+  let animation: CSSAnimation | undefined;
+  let playbackRate: number | undefined;
+  element.style.animationPlayState = "paused";
   try {
     await request();
-    await expect.poll(() => observed).toBe(true);
+    await expect
+      .poll(() => {
+        animation = element.classList.contains(state)
+          ? element.getAnimations().find((entry) => entry instanceof CSSAnimation)
+          : undefined;
+        return animation;
+      })
+      .toBeDefined();
+    const active = animation!;
+    playbackRate = active.playbackRate;
+    await active.ready;
+    expect(active.playState).toBe("paused");
+    const { activeDuration } = active.effect!.getComputedTiming();
+    expect(activeDuration).toBeGreaterThan(0);
+    expect(Number.isFinite(activeDuration)).toBe(true);
+    active.currentTime = Number(activeDuration) / 2;
+    // Zero rate keeps native playState running without advancing the sample.
+    active.playbackRate = 0;
+    active.play();
+    await active.ready;
+    expect(active.pending).toBe(false);
+    expect(active.playState).toBe("running");
+    const { progress } = active.effect!.getComputedTiming();
+    expect(progress).toBeGreaterThan(0);
+    expect(progress).toBeLessThan(1);
+    await action();
   } finally {
-    element.removeEventListener("animationstart", listener);
+    element.style.animationPlayState = playState;
+    if (animation && playbackRate !== undefined) {
+      animation.playbackRate = playbackRate;
+    }
   }
 }
 
-async function duringAnimation(f: Fixture, state: "show" | "hide", action: () => void) {
+async function duringAnimation(
+  f: Fixture,
+  state: "show" | "hide",
+  action: () => void | Promise<void>,
+) {
   await duringElementAnimation(f.menu, state, () => (f.dropdown.open = state === "show"), action);
 }
 
@@ -427,16 +451,18 @@ describe.runIf(browserMode)("Web Awesome dropdown lifecycle", () => {
       if (phase !== "show") {
         await open(f);
       }
-      const disconnect = () =>
-        requestAnimationFrame(() => {
-          expect(
-            f.menu.getAnimations().some((animation) => animation.playState === "running"),
-          ).toBe(true);
-          if (phase === "reopen") {
-            f.dropdown.open = true;
-          }
-          f.dropdown.remove();
-        });
+      const disconnect = async () => {
+        const animation = f.menu.getAnimations()[0]!;
+        const time = animation.currentTime;
+        await frame();
+        expect(animation.pending).toBe(false);
+        expect(animation.playState).toBe("running");
+        expect(animation.currentTime).toBe(time);
+        if (phase === "reopen") {
+          f.dropdown.open = true;
+        }
+        f.dropdown.remove();
+      };
       await duringAnimation(f, phase === "show" ? "show" : "hide", disconnect);
       await expect.poll(() => f.dropdown.isConnected).toBe(false);
       const completions = f.events.filter((event) => event.type.startsWith("wa-after"));

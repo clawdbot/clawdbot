@@ -10,12 +10,14 @@ import type {
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
-import { createChatAttachmentHandoff } from "../../app/chat-attachment-handoff.ts";
-import { createChatSubmissions } from "../../app/chat-submissions.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
 import { ChatPaneBase } from "./chat-pane-base.ts";
-import { createTestChatPane, type TestChatPane } from "./chat-pane.test-support.ts";
+import {
+  createInitializationContext,
+  createTestChatPane,
+  type TestChatPane,
+} from "./chat-pane.test-support.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { applySelectedChatAgent } from "./chat-state-refresh.ts";
 import {
@@ -87,36 +89,8 @@ describe("chat pane first-turn attachment lifecycle", () => {
       addEventListener: vi.fn(() => vi.fn()),
       request: vi.fn(),
     } as unknown as GatewayBrowserClient;
-    const context = {
-      basePath: "",
-      gateway: {
-        snapshot: { client, hello: null },
-        subscribe: vi.fn(() => vi.fn()),
-        subscribeEvents: vi.fn(() => vi.fn()),
-      },
-      config: {
-        current: {
-          assistantIdentity: {
-            agentId: null,
-            name: "Assistant",
-            avatar: null,
-            avatarSource: null,
-            avatarStatus: null,
-            avatarReason: null,
-          },
-          serverVersion: null,
-          localMediaPreviewRoots: [],
-          embedSandboxMode: "strict",
-          allowExternalEmbedUrls: false,
-          terminalEnabled: false,
-        },
-      },
-      agentSelection: { state: { selectedId: "main" } },
-      agents: { state: { agentsList: null } },
-      chatSubmissions: createChatSubmissions(),
-      chatAttachmentHandoff: createChatAttachmentHandoff(),
-      sessions: {},
-    } as unknown as ApplicationContext;
+    const context = createInitializationContext();
+    context.gateway.snapshot.client = client;
     context.chatSubmissions.retain(
       buildInitialChatSubmission(
         targetSessionKey,

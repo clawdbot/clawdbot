@@ -923,6 +923,18 @@ export const en: TranslationMap & {
     readingAttachment: "Reading attachment",
     start: "Start session",
     startInTerminal: "Start in terminal",
+    nativeTerminalHint:
+      "Start the native CLI on the selected machine using its own account and configuration. This does not create an OpenClaw Chat.",
+    chooseNativeHost: "Choose a native CLI host",
+    nativeTerminalPrompt: "Optional initial prompt for the native CLI",
+    terminalNodeFolder: "Existing absolute folder on this node",
+    terminalHostUnavailable:
+      "Native CLI host unavailable. Check that the CLI is installed and the node is connected with its fresh-start command approved, then retry the catalog.",
+    terminalDisabled: "Enable CLI agents and terminals in Gateway settings to start a native CLI.",
+    terminalAttachmentsUnsupported:
+      "Remove attachments before starting a native CLI. Add files from the terminal after it opens.",
+    terminalPlacementUnsupported:
+      "Native CLI sessions use a specific host, not OpenClaw worker placement. Reset this draft and choose a native host.",
     starting: "Starting…",
     createFailed: "Couldn't create the session.",
     createOutcomeUnknown:
@@ -4167,6 +4179,8 @@ export const en: TranslationMap & {
     queuedCount: "{count} queued",
     reconnecting: "Reconnecting…",
     restarting: "Restarting…",
+    suspending: "Suspending…",
+    suspended: "Suspended",
     retryNow: "Retry now",
     actionsUnavailable: "Actions are unavailable while the Gateway reconnects.",
     settingsChangesUnavailable:
@@ -5021,6 +5035,15 @@ export const en: TranslationMap & {
         stepRetry: "Retry shortly.",
         stepAdmin:
           "If this continues, ask a Gateway administrator to check the identity provider and GitHub API credential.",
+      },
+      verifiedUserRequired: {
+        title: "Verified identity required",
+        summary:
+          "This Gateway has named roles enabled. Device and setup tokens cannot identify a person.",
+        stepIdentity:
+          "Reconnect through the trusted proxy or Tailscale so the Gateway can verify your identity.",
+        stepSharedSecret:
+          "For trusted local operator access, use the shared Gateway token or password.",
       },
       authRequired: {
         title: "Auth required",

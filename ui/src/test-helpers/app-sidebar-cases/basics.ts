@@ -128,7 +128,7 @@ describe("AppSidebar new session navigation", () => {
         capabilities: {
           continueSession: true,
           archive: false,
-          createSession: { model: "anthropic/claude-opus-4-8" },
+          startTerminal: true,
         },
         hosts: [],
       },
