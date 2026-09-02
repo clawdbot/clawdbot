@@ -8,6 +8,7 @@ import {
   isDiagnosticsEnabled,
   setDiagnosticsEnabledForProcess,
 } from "../infra/diagnostic-events.js";
+import { resolveStateDir } from "../config/paths.js";
 import { upsertPresence } from "../infra/system-presence.js";
 import { startDiagnosticHeartbeat, stopDiagnosticHeartbeat } from "../logging/diagnostic.js";
 import type { createSubsystemLogger } from "../logging/subsystem.js";
@@ -230,6 +231,7 @@ export async function prepareGatewayLifecycle(params: {
     }),
     gatewayMethods: listActiveGatewayMethods(pluginRuntime.baseGatewayMethods),
     taskLanesConfig: cfgAtStart.taskLanes,
+    stateDir: resolveStateDir(),
   });
   const runtimeState = runtimeStateRef.current;
   const pluginRuntimeGeneration = createGatewayPluginRuntimeGeneration({

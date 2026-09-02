@@ -36,9 +36,13 @@ export function createGatewayServerLiveState(params: {
   cronState: GatewayCronState;
   gatewayMethods: string[];
   taskLanesConfig?: TaskLanesConfig;
+  /** Base for state-dir-relative task lane rootDir config values. */
+  stateDir?: string;
 }): GatewayServerLiveState {
   const taskLanes = createTaskLaneGatewayService();
-  registerConfiguredTaskLaneProviders(taskLanes, params.taskLanesConfig);
+  registerConfiguredTaskLaneProviders(taskLanes, params.taskLanesConfig, {
+    stateDir: params.stateDir,
+  });
   return {
     ...createGatewayServerMutableState(),
     hooksConfig: params.hooksConfig,

@@ -37,6 +37,31 @@ describe("registerConfiguredTaskLaneProviders", () => {
     }
   });
 
+  it("resolves a relative rootDir against the state directory, not the process cwd", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "task-lanes-state-"));
+    try {
+      await fs.mkdir(path.join(stateDir, "lanes"), { recursive: true });
+      await fs.writeFile(
+        path.join(stateDir, "lanes", "board.json"),
+        JSON.stringify(LANE_DOC),
+        "utf8",
+      );
+      const service = createTaskLaneGatewayService();
+      registerConfiguredTaskLaneProviders(
+        service,
+        { providers: [{ id: "relative-board", rootDir: "lanes", filePath: "board.json" }] },
+        { stateDir },
+      );
+      const snapshot = await service.snapshot();
+      expect(snapshot.lanes.map((lane) => lane.id)).toEqual(["release"]);
+      expect(snapshot.diagnostics).toEqual([
+        { providerId: "relative-board", ok: true, laneCount: 1, itemCount: 1 },
+      ]);
+    } finally {
+      await fs.rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
   it("registers nothing when the section is absent", async () => {
     const service = createTaskLaneGatewayService();
     registerConfiguredTaskLaneProviders(service, undefined);
