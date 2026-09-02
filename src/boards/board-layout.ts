@@ -291,9 +291,9 @@ export function insertBoardWidget(
   const next = cloneLayout(layout);
   const index = next.widgets.findIndex((candidate) => candidate.name === widget.name);
   const existing = next.widgets[index];
-  // A put carries the widget's whole record, so replace the stored entry rather
-  // than merging into it: a field this put leaves off (plugin props, declared
-  // capabilities) must not survive from the previous revision.
+  // The producer fully materializes the replacement widget. Preserve position
+  // only because layout movement is explicit below; omitted optional metadata
+  // must not survive from the previous revision.
   const inserted: BoardWidget = { ...widget, tabId: placement.tabId };
   if (existing) {
     inserted.position = existing.position;
