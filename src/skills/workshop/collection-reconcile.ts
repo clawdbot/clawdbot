@@ -13,6 +13,7 @@ import {
   prepareWorkspaceSkillMutation,
   type PreparedWorkspaceSkillMutation,
 } from "../lifecycle/workspace-skill-write.js";
+import { loadSingleSkillDirectory } from "../loading/local-loader.js";
 import { bumpSkillsSnapshotVersion } from "../runtime/refresh-state.js";
 import {
   commitCollectionBackup,
@@ -308,18 +309,37 @@ export async function restoreLatestSkillCollectionBackup(params: {
       const affectedDirs = [...new Set([...manifest.skillDirs, ...manifest.resultSkillDirs])];
       const shouldDispatch = hasCommittedSkillChangeHooks();
       const before = new Map<string, PluginHookSkillArtifact | undefined>();
-      const beforeExists = new Set<string>();
+      const affectedSkills: Array<{
+        relativeDir: string;
+        skillDir: string;
+        skillKey: string;
+        liveExists: boolean;
+      }> = [];
       for (const relativeDir of affectedDirs) {
         const skillDir = path.join(skillsRoot, relativeDir);
-        if (await pathExists(skillDir)) {
-          beforeExists.add(relativeDir);
+        const liveExists = await pathExists(skillDir);
+        const keySourceDir = liveExists ? skillDir : path.join(backupDir, "skills", relativeDir);
+        const loaded = loadSingleSkillDirectory({
+          skillDir: keySourceDir,
+          source: "openclaw-workshop",
+          rootRealPath: await fs.realpath(keySourceDir),
+        });
+        if (!loaded) {
+          throw new Error(`Could not load Workshop skill: ${relativeDir}`);
         }
+        const affectedSkill = {
+          relativeDir,
+          skillDir,
+          skillKey: loaded.skill.name,
+          liveExists,
+        };
+        affectedSkills.push(affectedSkill);
         if (shouldDispatch) {
           before.set(
             relativeDir,
             await snapshotCommittedSkillArtifactBestEffort({
               skillDir,
-              skillKey: path.basename(relativeDir),
+              skillKey: affectedSkill.skillKey,
               source: "workshop",
             }),
           );
@@ -338,39 +358,32 @@ export async function restoreLatestSkillCollectionBackup(params: {
       }
       const changes: SkillCollectionChange[] = [];
       if (shouldDispatch) {
-        for (const relativeDir of affectedDirs) {
-          const skillDir = path.join(skillsRoot, relativeDir);
-          const afterExists = await pathExists(skillDir);
-          if (!beforeExists.has(relativeDir) && !afterExists) {
+        for (const affectedSkill of affectedSkills) {
+          const afterExists = await pathExists(affectedSkill.skillDir);
+          if (!affectedSkill.liveExists && !afterExists) {
             continue;
           }
           changes.push({
-            action: !beforeExists.has(relativeDir)
-              ? "created"
-              : afterExists
-                ? "updated"
-                : "removed",
-            before: before.get(relativeDir),
+            action: !affectedSkill.liveExists ? "created" : afterExists ? "updated" : "removed",
+            before: before.get(affectedSkill.relativeDir),
             after: afterExists
               ? await snapshotCommittedSkillArtifactBestEffort({
-                  skillDir,
-                  skillKey: path.basename(relativeDir),
+                  skillDir: affectedSkill.skillDir,
+                  skillKey: affectedSkill.skillKey,
                   source: "workshop",
                 })
               : undefined,
           });
         }
       }
-      const restored = manifest.skillDirs.map((relativeDir) => path.basename(relativeDir));
+      // affectedSkills keeps manifest order: restored dirs first, then result-only dirs.
       const restoredDirs = new Set(manifest.skillDirs);
+      const skillKeys = (restored: boolean) =>
+        affectedSkills
+          .filter((affectedSkill) => restoredDirs.has(affectedSkill.relativeDir) === restored)
+          .map((affectedSkill) => affectedSkill.skillKey);
       return {
-        result: {
-          backupId,
-          restored,
-          removed: manifest.resultSkillDirs
-            .filter((relativeDir) => !restoredDirs.has(relativeDir))
-            .map((relativeDir) => path.basename(relativeDir)),
-        },
+        result: { backupId, restored: skillKeys(true), removed: skillKeys(false) },
         changes,
       };
     },
@@ -446,13 +459,13 @@ async function assertCollectionResultUnchanged(
   const resultDirs = new Set(manifest.resultSkillDirs);
   for (const relativeDir of manifest.skillDirs) {
     if (!resultDirs.has(relativeDir) && (await pathExists(path.join(skillsRoot, relativeDir)))) {
-      throw new Error(`Skill collection changed after cleanup: ${path.basename(relativeDir)}`);
+      throw new Error(`Skill collection changed after cleanup: ${relativeDir}`);
     }
   }
   for (const relativeDir of manifest.resultSkillDirs) {
     const currentHash = await readSkillProposalTargetTreeSha256(path.join(skillsRoot, relativeDir));
     if (currentHash !== manifest.resultSkillHashes[relativeDir]) {
-      throw new Error(`Skill collection changed after cleanup: ${path.basename(relativeDir)}`);
+      throw new Error(`Skill collection changed after cleanup: ${relativeDir}`);
     }
   }
 }

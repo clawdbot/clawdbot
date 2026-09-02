@@ -78,12 +78,12 @@ afterEach(async () => {
 });
 
 describe("skill collection backup and restore", () => {
-  it("restores grouped Workshop skills and rejects escaping backup paths", async () => {
-    const nestedDir = path.join(skillsRoot, "group", "nested");
+  it("restores grouped Workshop skills under their declared keys and rejects escaping backup paths", async () => {
+    const nestedDir = path.join(skillsRoot, "group", "folder-name");
     await fs.mkdir(nestedDir, { recursive: true });
     await fs.writeFile(
       path.join(nestedDir, "SKILL.md"),
-      "---\nname: nested\ndescription: Nested procedure\n---\n\n# Nested\n",
+      "---\nname: declared-name\ndescription: Nested procedure\n---\n\n# Nested\n",
       "utf8",
     );
 
@@ -91,15 +91,26 @@ describe("skill collection backup and restore", () => {
       workspaceDir,
       env: testState.env,
       ...(await readCollectionReceipt()),
-      plan: [{ action: "drop", name: "nested", reason: "Test restore" }],
+      plan: [{ action: "drop", name: "declared-name", reason: "Test restore" }],
     });
     await expect(fs.access(nestedDir)).rejects.toThrow();
 
     await expect(
       restoreLatestSkillCollectionBackup({ workspaceDir, env: testState.env }),
-    ).resolves.toMatchObject({ restored: ["nested"] });
+    ).resolves.toMatchObject({ restored: ["declared-name"] });
     await expect(fs.readFile(path.join(nestedDir, "SKILL.md"), "utf8")).resolves.toContain(
       "# Nested",
+    );
+    expect(snapshotCommittedSkillArtifactBestEffort).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ skillKey: "declared-name" }),
+    );
+    expect(snapshotCommittedSkillArtifactBestEffort).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ skillKey: "declared-name" }),
+    );
+    expect(snapshotCommittedSkillArtifactBestEffort).toHaveBeenLastCalledWith(
+      expect.objectContaining({ skillKey: "declared-name" }),
     );
 
     const manifestPath = path.join(

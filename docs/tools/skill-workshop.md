@@ -511,7 +511,7 @@ proposals.
 ## Storage
 
 ```text
-<OPENCLAW_STATE_DIR>/
+<config-dir>/
   workshop-skills/<skill-name>/
     SKILL.md
     assets/
@@ -519,6 +519,7 @@ proposals.
     references/
     scripts/
     templates/
+<state-dir>/
   state/openclaw.sqlite
   skill-workshop/proposals/<proposal-id>/
     generations/<generation-id>/
@@ -530,7 +531,7 @@ proposals.
       templates/
 ```
 
-Default state directory: `~/.openclaw`.
+Unless overridden, both `<config-dir>` and `<state-dir>` are `~/.openclaw`.
 
 - `state/openclaw.sqlite`: canonical proposal records and provenance, the active
   generation reference, proposal status, recorded skill usage, collection and
