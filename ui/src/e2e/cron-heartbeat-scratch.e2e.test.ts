@@ -77,31 +77,21 @@ suite.define(() => {
     );
   });
 
-  it("drops a pending response after admin access is lost", async () => {
+  it("does not request admin-only scratch for a read-only operator", async () => {
     await suite.withPage(
       { locale: "en-US", serviceWorkers: "block", viewport: { height: 900, width: 1_280 } },
       async ({ page }) => {
         const gateway = await installMockGateway(page, {
           methodResponses: methodResponses(),
+          operatorScopes: ["operator.read"],
         });
         await page.goto(`${suite.server.baseUrl}cron`);
         const row = page.locator(`[data-test-id="cron-row-${job.id}"]`);
         await row.waitFor();
-        await gateway.deferNext("cron.scratch.get", { id: job.id });
         await row.locator(".cron-table__name-text").click();
-        await gateway.waitForRequest("cron.scratch.get");
-
-        await gateway.setOperatorScopes(["operator.read"]);
-        await gateway.resolveDeferred("cron.scratch.get", scratchResponse);
         const monitor = page.locator("#cron-payload-text");
         await expect.poll(() => monitor.inputValue()).toBe("");
-
-        await page.locator('[data-test-id="cron-back"]').click();
-        await row.waitFor();
-        await row.locator(".cron-table__name-text").click();
-        await expect
-          .poll(async () => (await gateway.getRequests("cron.scratch.get")).length)
-          .toBe(1);
+        expect(await gateway.getRequests("cron.scratch.get")).toEqual([]);
         for (const method of ["cron.add", "cron.update", "cron.scratch.set"]) {
           expect(await gateway.getRequests(method)).toEqual([]);
         }

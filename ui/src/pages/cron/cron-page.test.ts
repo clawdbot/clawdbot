@@ -413,6 +413,67 @@ describe("CronPage editor state sync", () => {
     },
   );
 
+  it("drops pending heartbeat scratch when admin access is removed", async () => {
+    const job = createCronViewJob("heartbeat-job", {
+      name: "Heartbeat monitor",
+      payload: { kind: "heartbeat" },
+      sessionTarget: "main",
+      state: {},
+    });
+    const scratch = createDeferred<{
+      scratch: { content: string; revision: number; updatedAtMs: number };
+      currentRevision: number;
+      maxBytes: number;
+    }>();
+    const fallbackRequest = createRequest();
+    const request = vi.fn(async (method: string) => {
+      if (method === "cron.list") {
+        return cronListResponse([job]);
+      }
+      if (method === "cron.scratch.get") {
+        return scratch.promise;
+      }
+      return fallbackRequest(method);
+    });
+    const gateway = createGateway({ request } as unknown as GatewayBrowserClient, true);
+    const page = createPage(createContext(gateway), { render: true });
+
+    await waitForCronPage(() =>
+      expect(page.querySelector(`[data-test-id="cron-row-${job.id}"]`)).not.toBeNull(),
+    );
+    (
+      page.querySelector(
+        `[data-test-id="cron-row-${job.id}"] .cron-table__name-text`,
+      ) as HTMLElement
+    ).click();
+    await waitForCronPage(() =>
+      expect(request.mock.calls.filter(([method]) => method === "cron.scratch.get")).toHaveLength(
+        1,
+      ),
+    );
+
+    gateway.emitSnapshot({
+      hello: {
+        type: "hello-ok",
+        protocol: 4,
+        auth: { role: "operator", scopes: ["operator.read"] },
+      } as ApplicationGatewaySnapshot["hello"],
+    });
+    await page.updateComplete;
+    scratch.resolve({
+      scratch: { content: "private checklist", revision: 1, updatedAtMs: 1 },
+      currentRevision: 1,
+      maxBytes: 262_144,
+    });
+    await scratch.promise;
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    await page.updateComplete;
+
+    const monitor = page.querySelector("#cron-payload-text") as HTMLTextAreaElement;
+    expect(monitor.value).toBe("");
+    expect(page.cron.cronForm.payloadText).toBe("");
+  });
+
   it.each([
     { scenario: "an unsaved enable edit", active: false, edited: true, saved: false },
     { scenario: "an unsaved disable edit", active: true, edited: false, saved: false },
