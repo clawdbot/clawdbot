@@ -5,6 +5,7 @@ import type { GatewayBrowserClient, GatewayEventListener } from "../../api/gatew
 import type { CronJob, CronJobsListResult } from "../../api/types.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import type { CronState } from "../../lib/cron/index.ts";
+import { createCronViewJob } from "./view.test-support.ts";
 import "./cron-page.ts";
 
 type CronTestPage = HTMLElement & {
@@ -205,75 +206,212 @@ describe("CronPage header", () => {
 });
 
 describe("CronPage editor state sync", () => {
-  it("opens a linked job's history after its jobs load and highlights the linked run", async () => {
-    const job: CronJob = {
-      id: "linked-job",
-      name: "Linked automation",
-      enabled: true,
-      createdAtMs: 0,
-      updatedAtMs: 0,
-      schedule: { kind: "every", everyMs: 60_000 },
-      sessionTarget: "isolated",
-      wakeMode: "now",
-      payload: { kind: "agentTurn", message: "digest" },
-      state: {},
-    };
-    const jobs = createDeferred<CronJobsListResult>();
+  it.each(["visible", "later page", "another agent"])(
+    "opens a linked job's history when the job is on %s",
+    async (placement) => {
+      const job: CronJob = {
+        id: "linked-job",
+        agentId: placement === "another agent" ? "writer" : "main",
+        name: "Linked automation",
+        enabled: true,
+        createdAtMs: 0,
+        updatedAtMs: 0,
+        schedule: { kind: "every", everyMs: 60_000 },
+        sessionTarget: "isolated",
+        wakeMode: "now",
+        payload: { kind: "agentTurn", message: "digest" },
+        state: {},
+      };
+      const jobs = createDeferred<CronJobsListResult>();
+      const request = vi.fn(async (method: string, params?: unknown) => {
+        if (method === "cron.list") {
+          return jobs.promise;
+        }
+        if (method === "cron.get") {
+          return job;
+        }
+        if (method === "cron.status") {
+          return { enabled: true, jobs: 1, triggersEnabled: true };
+        }
+        if (method === "cron.runs") {
+          const filter = params as { id?: string; agentId?: string };
+          if (filter.id === job.id && filter.agentId && filter.agentId !== job.agentId) {
+            throw new Error("Automation not found");
+          }
+          const entries =
+            (params as { id?: string }).id === job.id
+              ? [
+                  {
+                    ts: 2,
+                    jobId: job.id,
+                    action: "finished",
+                    runId: "cron:linked-job:2",
+                    summary: "Another run",
+                  },
+                  {
+                    ts: 1,
+                    jobId: job.id,
+                    action: "finished",
+                    runId: "cron:linked-job:1",
+                    summary: "Linked run",
+                  },
+                ]
+              : [];
+          return { entries, total: entries.length, offset: 0, hasMore: false };
+        }
+        if (method === "models.list") {
+          return { models: [] };
+        }
+        return {};
+      });
+      const gateway = createGateway({ request } as unknown as GatewayBrowserClient, true);
+      const page = createPage(createContext(gateway), { render: true });
+      page.routeSearch = "?job=linked-job&run=cron%3Alinked-job%3A1";
+
+      await waitForCronPage(() => expect(page.cron.cronLoading).toBe(true));
+      const inventory = cronListResponse(
+        placement === "visible"
+          ? [job]
+          : Array.from({ length: 50 }, (_, index) => ({
+              ...job,
+              id: `other-${index}`,
+              name: `Other automation ${index}`,
+            })),
+      );
+      if (placement === "later page") {
+        inventory.total = 51;
+        inventory.hasMore = true;
+        inventory.nextOffset = 50;
+      }
+      jobs.resolve(inventory);
+
+      await waitForCronPage(() => {
+        expect(page.cron.cronEditingJobId).toBe(job.id);
+        expect(
+          page
+            .querySelector('[data-test-id="cron-detail-tab-history"]')
+            ?.getAttribute("aria-selected"),
+        ).toBe("true");
+        expect(page.querySelector(".cron-run-entry--highlighted")?.textContent).toContain(
+          "Linked run",
+        );
+      });
+      expect(page.querySelectorAll(".cron-run-entry--highlighted")).toHaveLength(1);
+    },
+  );
+
+  it.each([
+    "selecting another job",
+    "changing agent scope",
+    "opening another link",
+    "disconnecting",
+  ])("ignores a pending job link after %s", async (action) => {
+    const linked = createCronViewJob("linked-job", { state: {} });
+    const selected = createCronViewJob("selected-job", { state: {} });
+    const pending = createDeferred<CronJob>();
+    const fallbackRequest = createRequest();
     const request = vi.fn(async (method: string, params?: unknown) => {
+      if (method === "cron.get") {
+        return (params as { id: string }).id === linked.id ? pending.promise : selected;
+      }
       if (method === "cron.list") {
-        return jobs.promise;
+        return cronListResponse([selected]);
       }
-      if (method === "cron.status") {
-        return { enabled: true, jobs: 1, triggersEnabled: true };
+      return fallbackRequest(method);
+    });
+    const gateway = createGateway({ request } as unknown as GatewayBrowserClient, true);
+    const context = createContext(gateway);
+    const page = createPage(context, { render: true });
+    page.routeSearch = "?job=linked-job";
+    await waitForCronPage(() =>
+      expect(request).toHaveBeenCalledWith("cron.get", { id: linked.id }),
+    );
+    await waitForCronPage(() =>
+      expect(page.querySelector('[data-test-id="cron-row-selected-job"]')).not.toBeNull(),
+    );
+
+    if (action === "selecting another job") {
+      (page.querySelector('[data-test-id="cron-row-selected-job"]') as HTMLElement).click();
+    } else if (action === "changing agent scope") {
+      context.agentSelection.setScope("writer");
+    } else if (action === "opening another link") {
+      page.routeSearch = "?job=selected-job";
+    } else {
+      gateway.emitSnapshot({ phase: "stopped" });
+    }
+    const expectedJobId =
+      action === "selecting another job" || action === "opening another link" ? selected.id : null;
+    await waitForCronPage(() => expect(page.cron.cronEditingJobId).toBe(expectedJobId));
+    pending.resolve(linked);
+    // Drain the held response and its page update before checking the user's selection.
+    await pending.promise;
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 0);
+    });
+    await page.updateComplete;
+    expect(page.cron.cronEditingJobId).toBe(expectedJobId);
+    expect(page.cron.cronError).toBeNull();
+  });
+
+  it("shows an exact job lookup failure instead of silently discarding the link", async () => {
+    const fallbackRequest = createRequest();
+    const request = vi.fn(async (method: string) => {
+      if (method === "cron.get") {
+        throw new Error("Automation no longer exists");
       }
-      if (method === "cron.runs") {
-        const entries =
-          (params as { id?: string }).id === job.id
-            ? [
-                {
-                  ts: 2,
-                  jobId: job.id,
-                  action: "finished",
-                  runId: "cron:linked-job:2",
-                  summary: "Another run",
-                },
-                {
-                  ts: 1,
-                  jobId: job.id,
-                  action: "finished",
-                  runId: "cron:linked-job:1",
-                  summary: "Linked run",
-                },
-              ]
-            : [];
-        return { entries, total: entries.length, offset: 0, hasMore: false };
-      }
-      if (method === "models.list") {
-        return { models: [] };
-      }
-      return {};
+      return fallbackRequest(method);
     });
     const gateway = createGateway({ request } as unknown as GatewayBrowserClient, true);
     const page = createPage(createContext(gateway), { render: true });
-    page.routeSearch = "?job=linked-job&run=cron%3Alinked-job%3A1";
+    page.routeSearch = "?job=removed-job";
 
-    await waitForCronPage(() => expect(page.cron.cronLoading).toBe(true));
+    await waitForCronPage(() => expect(page.textContent).toContain("Automation no longer exists"));
     expect(page.cron.cronEditingJobId).toBeNull();
-    jobs.resolve(cronListResponse([job]));
-
-    await waitForCronPage(() => {
-      expect(page.cron.cronEditingJobId).toBe(job.id);
-      expect(
-        page
-          .querySelector('[data-test-id="cron-detail-tab-history"]')
-          ?.getAttribute("aria-selected"),
-      ).toBe("true");
-      expect(page.querySelector(".cron-run-entry--highlighted")?.textContent).toContain(
-        "Linked run",
-      );
-    });
-    expect(page.querySelectorAll(".cron-run-entry--highlighted")).toHaveLength(1);
+    expect(request.mock.calls.filter(([method]) => method === "cron.get")).toHaveLength(1);
   });
+
+  it.each(["another link", "another row", "a new task"])(
+    "clears a failed job link when opening %s",
+    async (destination) => {
+      const job = createCronViewJob("current-job", { state: {} });
+      const fallbackRequest = createRequest();
+      const request = vi.fn(async (method: string, params?: unknown) => {
+        if (method === "cron.get") {
+          if ((params as { id: string }).id === "removed-job") {
+            throw new Error("Automation no longer exists");
+          }
+          return job;
+        }
+        if (method === "cron.list") {
+          return cronListResponse([job]);
+        }
+        return fallbackRequest(method);
+      });
+      const gateway = createGateway({ request } as unknown as GatewayBrowserClient, true);
+      const page = createPage(createContext(gateway), { render: true });
+      page.routeSearch = "?job=removed-job";
+      await waitForCronPage(() =>
+        expect(page.textContent).toContain("Automation no longer exists"),
+      );
+
+      if (destination === "another link") {
+        page.routeSearch = "?job=current-job";
+      } else {
+        const selector =
+          destination === "another row"
+            ? '[data-test-id="cron-row-current-job"]'
+            : '[data-test-id="cron-new-task"]';
+        (page.querySelector(selector) as HTMLElement).click();
+      }
+      await waitForCronPage(() =>
+        expect(
+          destination === "a new task" ? page.cron.cronCreateOpen : page.cron.cronEditingJobId,
+        ).toBe(destination === "a new task" ? true : job.id),
+      );
+      expect(page.cron.cronError).toBeNull();
+      expect(page.textContent).not.toContain("Automation no longer exists");
+    },
+  );
 
   it.each([
     { scenario: "an unsaved enable edit", active: false, edited: true, saved: false },

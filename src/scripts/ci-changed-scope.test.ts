@@ -12,6 +12,7 @@ const {
   detectNodeFastScope,
   listChangedPaths,
   parseArgs,
+  shouldRunIosScreenshots,
   shouldRunNativeI18n,
   writeGitHubOutput,
 } = await import("../../scripts/ci-changed-scope.mjs");
@@ -95,6 +96,9 @@ describe("parseArgs", () => {
     expect(() => parseArgs(["--head"])).toThrow("--head requires a value");
     expect(() => parseArgs(["--head", "-h"])).toThrow("--head requires a value");
     expect(() => parseArgs(["--base", ""])).toThrow("--base requires a value");
+    expect(() => parseArgs([])).toThrow("--base is required");
+    expect(() => parseArgs(["--head", "HEAD"])).toThrow("--base is required");
+    expect(() => parseArgs(["--base", "HEAD", "--mystery"])).toThrow("Unknown argument: --mystery");
   });
 });
 
@@ -252,6 +256,7 @@ describe("detectChangedScope", () => {
       "scripts/install-swift-tools.sh",
       "scripts/install-xcodegen.sh",
       "scripts/lint-swift.sh",
+      "scripts/prepare-apple-mermaid.mjs",
     ]) {
       expect(detectChangedScope([toolingPath])).toEqual({
         runNode: true,
@@ -265,6 +270,7 @@ describe("detectChangedScope", () => {
         runControlUiI18n: false,
         runUiTests: false,
       });
+      expect(shouldRunIosScreenshots([toolingPath])).toBe(true);
     }
   });
 
@@ -406,6 +412,8 @@ describe("detectChangedScope", () => {
     "scripts/notarize-mac-artifact.sh",
     "scripts/package-mac-app.sh",
     "scripts/package-mac-dist.sh",
+    "scripts/build-and-run-mac.sh",
+    "scripts/prepush-ci.sh",
     "scripts/stage-mac-node-worker.sh",
     "scripts/restart-mac.sh",
     "scripts/lib/mac-app-bundle.sh",
@@ -940,7 +948,9 @@ describe("detectChangedScope", () => {
     expect(parseGitHubOutput(fs.readFileSync(outputPath, "utf8")).changed_paths_json).toBe("null");
   });
 
-  it.each([
+  it.each<[string, string, string, boolean, string[]?]>([
+    ["missing base", "", "missing", true, ["--head", "HEAD"]],
+    ["unknown option", "", "missing", true, ["--base", "HEAD", "--head", "HEAD", "--mystery"]],
     ["empty diff without a manifest", "", "missing", false],
     ["declared native test", "src/process/exec.windows.integration.test.ts", "valid", false],
     ["Mac fixture helper", "test/scripts/mac-script-fixture.test-support.ts", "valid", false],
@@ -948,70 +958,78 @@ describe("detectChangedScope", () => {
     ["missing manifest", "src/process/exec.test.ts", "missing", true],
     ["invalid manifest", "src/process/exec.test.ts", "invalid", true],
     ["empty native inventory", "src/process/exec.test.ts", "empty", true],
-  ])("runs zero-install scope detection for %s", (_label, changedPath, manifest, failSafe) => {
-    const repoDir = fs.realpathSync(
-      fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-ci-scope-empty-")),
-    );
-    tempDirs.push(repoDir);
-    const outputPath = path.join(repoDir, "github-output.txt");
-    const scriptPath = path.join(repoDir, "scripts/ci-changed-scope.mjs");
+  ])(
+    "runs zero-install scope detection for %s",
+    (_label, changedPath, manifest, failSafe, cliArgs) => {
+      const repoDir = fs.realpathSync(
+        fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-ci-scope-empty-")),
+      );
+      tempDirs.push(repoDir);
+      const outputPath = path.join(repoDir, "github-output.txt");
+      const scriptPath = path.join(repoDir, "scripts/ci-changed-scope.mjs");
 
-    execFileSync("git", ["init", "-b", "main"], { cwd: repoDir });
-    execFileSync("git", ["config", "user.email", "ci@example.invalid"], { cwd: repoDir });
-    execFileSync("git", ["config", "user.name", "CI"], { cwd: repoDir });
-    for (const sourcePath of [
-      "scripts/ci-changed-scope.mjs",
-      "scripts/lib/arg-utils.runtime.mjs",
-      "scripts/lib/changed-path-facts.mjs",
-      "scripts/lib/direct-run.mjs",
-      "scripts/lib/merge-head-diff-base.mjs",
-    ]) {
-      writeRepoFile(repoDir, sourcePath, fs.readFileSync(path.resolve(sourcePath), "utf8"));
-    }
-    fs.writeFileSync(path.join(repoDir, "README.md"), "test\n", "utf8");
-    execFileSync("git", ["add", "README.md"], { cwd: repoDir });
-    execFileSync("git", ["commit", "-m", "test"], { cwd: repoDir });
-
-    if (manifest !== "missing") {
-      const contents =
-        manifest === "valid"
-          ? fs.readFileSync("package.json", "utf8")
-          : manifest === "invalid"
-            ? "{"
-            : JSON.stringify({ scripts: { "test:windows:ci:1": "" } });
-      writeRepoFile(repoDir, "package.json", contents);
-    }
-    if (changedPath) {
-      writeRepoFile(repoDir, changedPath, "export {};\n");
-      git(repoDir, ["add", changedPath]);
-      git(repoDir, ["commit", "-m", "changed test"]);
-    }
-    const base = changedPath ? "HEAD^" : "HEAD";
-    expect(fs.existsSync(path.join(repoDir, "node_modules"))).toBe(false);
-    execFileSync(process.execPath, [scriptPath, "--base", base, "--head", "HEAD"], {
-      cwd: repoDir,
-      env: { ...process.env, GITHUB_OUTPUT: outputPath },
-    });
-
-    const output = parseGitHubOutput(fs.readFileSync(outputPath, "utf8"));
-    expect(Object.keys(output).toSorted()).toEqual(
-      "changed_paths_json run_android run_changed_smoke run_control_ui_i18n run_fast_install_smoke run_full_install_smoke run_ios_build run_ios_screenshots run_macos run_macos_node run_native_i18n run_node run_node_fast_ci_routing run_node_fast_only run_node_fast_plugin_contracts run_skills_python run_ui_tests run_windows strict_control_ui_i18n strict_native_i18n".split(
-        " ",
-      ),
-    );
-    expect(output.changed_paths_json).toBe(
-      failSafe ? "null" : JSON.stringify(changedPath ? [changedPath] : []),
-    );
-    for (const [key, value] of Object.entries(output)) {
-      if (key !== "changed_paths_json") {
-        const selected =
-          (failSafe && !key.startsWith("run_node_fast")) ||
-          (key === "run_node" && Boolean(changedPath)) ||
-          (key === "run_macos_node" &&
-            changedPath === "test/scripts/mac-script-fixture.test-support.ts") ||
-          (key === "run_windows" && changedPath === "src/process/exec.windows.integration.test.ts");
-        expect(value, key).toBe(String(selected));
+      execFileSync("git", ["init", "-b", "main"], { cwd: repoDir });
+      execFileSync("git", ["config", "user.email", "ci@example.invalid"], { cwd: repoDir });
+      execFileSync("git", ["config", "user.name", "CI"], { cwd: repoDir });
+      for (const sourcePath of [
+        "scripts/ci-changed-scope.mjs",
+        "scripts/lib/arg-utils.runtime.mjs",
+        "scripts/lib/changed-path-facts.mjs",
+        "scripts/lib/direct-run.mjs",
+        "scripts/lib/merge-head-diff-base.mjs",
+      ]) {
+        writeRepoFile(repoDir, sourcePath, fs.readFileSync(path.resolve(sourcePath), "utf8"));
       }
-    }
-  });
+      fs.writeFileSync(path.join(repoDir, "README.md"), "test\n", "utf8");
+      execFileSync("git", ["add", "README.md"], { cwd: repoDir });
+      execFileSync("git", ["commit", "-m", "test"], { cwd: repoDir });
+
+      if (manifest !== "missing") {
+        const contents =
+          manifest === "valid"
+            ? fs.readFileSync("package.json", "utf8")
+            : manifest === "invalid"
+              ? "{"
+              : JSON.stringify({ scripts: { "test:windows:ci:1": "" } });
+        writeRepoFile(repoDir, "package.json", contents);
+      }
+      if (changedPath) {
+        writeRepoFile(repoDir, changedPath, "export {};\n");
+        git(repoDir, ["add", changedPath]);
+        git(repoDir, ["commit", "-m", "changed test"]);
+      }
+      const base = changedPath ? "HEAD^" : "HEAD";
+      expect(fs.existsSync(path.join(repoDir, "node_modules"))).toBe(false);
+      execFileSync(
+        process.execPath,
+        [scriptPath, ...(cliArgs ?? ["--base", base, "--head", "HEAD"])],
+        {
+          cwd: repoDir,
+          env: { ...process.env, GITHUB_OUTPUT: outputPath },
+        },
+      );
+
+      const output = parseGitHubOutput(fs.readFileSync(outputPath, "utf8"));
+      expect(Object.keys(output).toSorted()).toEqual(
+        "changed_paths_json run_android run_changed_smoke run_control_ui_i18n run_fast_install_smoke run_full_install_smoke run_ios_build run_ios_screenshots run_macos run_macos_node run_native_i18n run_node run_node_fast_ci_routing run_node_fast_only run_node_fast_plugin_contracts run_skills_python run_ui_tests run_windows strict_control_ui_i18n strict_native_i18n".split(
+          " ",
+        ),
+      );
+      expect(output.changed_paths_json).toBe(
+        failSafe ? "null" : JSON.stringify(changedPath ? [changedPath] : []),
+      );
+      for (const [key, value] of Object.entries(output)) {
+        if (key !== "changed_paths_json") {
+          const selected =
+            (failSafe && !key.startsWith("run_node_fast")) ||
+            (key === "run_node" && Boolean(changedPath)) ||
+            (key === "run_macos_node" &&
+              changedPath === "test/scripts/mac-script-fixture.test-support.ts") ||
+            (key === "run_windows" &&
+              changedPath === "src/process/exec.windows.integration.test.ts");
+          expect(value, key).toBe(String(selected));
+        }
+      }
+    },
+  );
 });

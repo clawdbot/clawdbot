@@ -395,13 +395,13 @@ function applyHeartbeatTargetHints(
   return next;
 }
 
-function applyExtensionSchemas(
+/** Mutate a caller-owned schema; cached inputs must be cloned before merging. */
+function mergeExtensionSchemas(
   schema: ConfigSchema,
   channels: ChannelUiMetadata[],
   plugins?: PluginUiMetadata[],
 ): ConfigSchema {
-  const next = cloneSchema(schema);
-  const root = asSchemaObject(next);
+  const root = asSchemaObject(schema);
   const pluginsNode = asSchemaObject(root?.properties?.plugins);
   const entriesNode = asSchemaObject(pluginsNode?.properties?.entries);
   const entryBase = asSchemaObject(entriesNode?.additionalProperties);
@@ -439,7 +439,7 @@ function applyExtensionSchemas(
 
   const channelsNode = asSchemaObject(root?.properties?.channels);
   if (!channelsNode) {
-    return next;
+    return schema;
   }
   const channelProps = channelsNode.properties ?? {};
   channelsNode.properties = channelProps;
@@ -457,7 +457,7 @@ function applyExtensionSchemas(
     }
   }
 
-  return next;
+  return schema;
 }
 
 let cachedBase: ConfigSchemaResponse | null = null;
@@ -557,7 +557,7 @@ function buildBaseConfigSchema(): ConfigSchemaResponse {
       collectExtensionHintKeys(mergedWithoutSensitiveHints, [], bundledChannels),
     ),
   );
-  const mergedSchema = applyExtensionSchemas(generated.schema, bundledChannels);
+  const mergedSchema = mergeExtensionSchemas(generated.schema, bundledChannels);
   const next = {
     ...generated,
     schema: mergedSchema,
@@ -603,7 +603,7 @@ export function buildConfigSchemaCore(params?: {
       extensionHintKeys,
     ),
   );
-  const mergedSchema = applyExtensionSchemas(base.schema, channels, plugins);
+  const mergedSchema = mergeExtensionSchemas(cloneSchema(base.schema), channels, plugins);
   const merged = {
     ...base,
     schema: mergedSchema,

@@ -364,13 +364,13 @@ describe("startup run repair auto-disable", () => {
     });
 
     expect(restored?.shouldDelete).toBe(completionStatus === "succeeded");
-    expect(job).toMatchObject({
-      enabled: false,
-      state: {
-        lastRunStatus: "ok",
-        consecutiveErrors: 0,
-      },
+    expect(job.state).toMatchObject({
+      lastRunStatus: "ok",
+      consecutiveErrors: 0,
     });
+    if (!restored?.shouldDelete) {
+      expect(job.enabled).toBe(false);
+    }
     expect(job.state.nextRunAtMs).toBeUndefined();
     expect(deferredNotifications).toEqual([]);
     expect(state.deps.sendCronFailureAlert).not.toHaveBeenCalled();
@@ -438,51 +438,6 @@ describe("startup run repair auto-disable", () => {
     expect(enqueueSystemEvent).not.toHaveBeenCalled();
     expect(requestHeartbeat).not.toHaveBeenCalled();
     expect(deferredNotifications).toHaveLength(1);
-  });
-
-  it("preserves one-shot retry scheduling when startup restores a pre-execution claim conflict (#131490)", () => {
-    const runningAtMs = Date.parse("2026-08-01T16:00:00.000Z");
-    const endedAt = runningAtMs + 2_000;
-    const state = createCronServiceState({
-      storePath: "/tmp/startup-run-repair-claim-retry.json",
-      cronEnabled: true,
-      log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
-      nowMs: () => endedAt,
-      enqueueSystemEvent: vi.fn(),
-      requestHeartbeat: vi.fn(),
-      runIsolatedAgentJob: vi.fn(),
-    });
-    const job: CronJob = {
-      id: "startup-pre-execution-claim",
-      name: "startup pre-execution claim",
-      enabled: true,
-      createdAtMs: runningAtMs - 60_000,
-      updatedAtMs: runningAtMs,
-      schedule: { kind: "at", at: new Date(runningAtMs).toISOString() },
-      sessionTarget: "isolated",
-      wakeMode: "next-heartbeat",
-      payload: { kind: "agentTurn", message: "retry me" },
-      state: { nextRunAtMs: runningAtMs, runningAtMs },
-    };
-
-    restoreFinalizedStartupRun({
-      state,
-      job,
-      runningAtMs,
-      entry: {
-        ts: endedAt,
-        jobId: job.id,
-        action: "finished",
-        status: "error",
-        error: 'Session "agent:main:cron:job-1" changed while starting work. Retry.',
-        runAtMs: runningAtMs,
-        durationMs: endedAt - runningAtMs,
-      },
-    });
-
-    expect(job.enabled).toBe(true);
-    expect(job.state.nextRunAtMs).toBe(endedAt + 30_000);
-    expect(job.state.consecutiveErrors).toBe(1);
   });
 
   it.each(["runAtMs", "ts"] as const)(

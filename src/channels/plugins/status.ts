@@ -106,7 +106,7 @@ export async function resolveChannelAccountSnapshot<ResolvedAccount>(params: {
   probe?: unknown;
   audit?: unknown;
 }): Promise<ChannelAccountSnapshot> {
-  const unavailable = resolveUnavailableChannelAccountSnapshot({
+  const unavailable = resolveUnavailableChannelAccountSnapshot(params.cfg, {
     channelId: params.plugin.id,
     accountId: params.accountId,
     runtime: params.runtime,

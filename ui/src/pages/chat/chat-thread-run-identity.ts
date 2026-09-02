@@ -6,7 +6,11 @@ import { asNullableRecord as asRecord } from "@openclaw/normalization-core/recor
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { ChatItem } from "../../lib/chat/chat-types.ts";
 import { normalizeRoleForGrouping } from "../../lib/chat/message-normalizer.ts";
-import { userTurnRunId, type TurnInsertionBounds } from "./chat-thread-items.ts";
+import {
+  userTurnRunId,
+  type ChatProjection,
+  type TurnInsertionBounds,
+} from "./chat-thread-items.ts";
 import { chatItemStartsUserTurn, safeNormalizeMessage } from "./chat-turn-boundary.ts";
 import { readLiveTerminalRunId } from "./terminal-message-identity.ts";
 import { buildToolStreamIdentity, extractToolMessageRefs } from "./tool-stream-identity.ts";
@@ -38,19 +42,32 @@ export function optionalBoundaryIdentity(value: unknown): { boundaryId: string }
   return runId ? { boundaryId: `send:${runId}` } : undefined;
 }
 
-export function streamPartRunId(
-  part: Extract<ChatItem, { kind: "stream" | "reading-indicator" | "question" }>,
-): string | undefined {
-  return part.kind === "question" ? undefined : part.runId;
+export function createToolCallLookup<Value>() {
+  const exact = new Map<string, Value>();
+  const unique = new Map<string, Value | null>();
+  return {
+    add(runId: string | undefined, callId: string | undefined, value: Value) {
+      if (!callId) {
+        return;
+      }
+      if (runId) {
+        exact.set(buildToolStreamIdentity(runId, callId), value);
+      }
+      // Ambiguity belongs to each fact, not the whole call. Even equal values
+      // from two occurrences cannot identify an unscoped owner.
+      unique.set(callId, unique.has(callId) ? null : value);
+    },
+    get(runId: string | undefined, callId: string | undefined): Value | undefined {
+      return callId
+        ? ((runId ? exact.get(buildToolStreamIdentity(runId, callId)) : undefined) ??
+            unique.get(callId) ??
+            undefined)
+        : undefined;
+    },
+  };
 }
 
-export function streamPartBoundaryId(
-  part: Extract<ChatItem, { kind: "stream" | "reading-indicator" | "question" }>,
-): string | undefined {
-  return part.kind === "question" ? undefined : part.boundaryId;
-}
-
-function isUserChatItem(item: ChatItem): boolean {
+function isUserChatItem(item: ChatItem): item is Extract<ChatItem, { kind: "message" }> {
   if (item.kind !== "message") {
     return false;
   }
@@ -59,26 +76,39 @@ function isUserChatItem(item: ChatItem): boolean {
 }
 
 export function findCurrentTurnBounds(items: ChatItem[]): TurnInsertionBounds | null {
-  const index = items.findLastIndex(isUserChatItem);
-  const item = items[index];
-  return index >= 0 && item ? { afterKey: item.key } : null;
+  const item = items.findLast(isUserChatItem);
+  return item ? { afterKey: item.key } : null;
 }
 
-export function findRunTurnBounds(items: ChatItem[], runId: string): TurnInsertionBounds | null {
-  const index = items.findIndex(
-    (item) =>
-      item.kind === "message" && isUserChatItem(item) && userTurnRunId(item.message) === runId,
-  );
-  const item = items[index];
-  if (index < 0 || !item) {
-    return null;
-  }
-  const nextUser = items.slice(index + 1).find(isUserChatItem);
-  return { afterKey: item.key, ...(nextUser ? { beforeKey: nextUser.key } : {}) };
+export function createRunTurnLookup(items: ChatItem[]) {
+  let bounds: Map<string, TurnInsertionBounds> | undefined;
+  return (runId: string): TurnInsertionBounds | null => {
+    if (!bounds) {
+      bounds = new Map();
+      let nextUserKey: string | undefined;
+      // Keys survive canvas splices. Rebuild after user rows are filtered or
+      // inserted; the earliest user for a run owns its next-user ceiling.
+      for (let index = items.length - 1; index >= 0; index--) {
+        const item = items[index]!;
+        if (!isUserChatItem(item)) {
+          continue;
+        }
+        const owner = userTurnRunId(item.message);
+        if (owner !== null) {
+          bounds.set(owner, {
+            afterKey: item.key,
+            ...(nextUserKey ? { beforeKey: nextUserKey } : {}),
+          });
+        }
+        nextUserKey = item.key;
+      }
+    }
+    return bounds.get(runId) ?? null;
+  };
 }
 
 export function resolveRunInsertionBounds(
-  items: ChatItem[],
+  findRunBounds: ReturnType<typeof createRunTurnLookup>,
   runId: unknown,
   currentRunId: string | null | undefined,
   currentTurnBounds: TurnInsertionBounds | null,
@@ -86,7 +116,7 @@ export function resolveRunInsertionBounds(
   if (typeof runId !== "string" || !runId.trim()) {
     return currentRunId != null ? currentTurnBounds : null;
   }
-  const runBounds = findRunTurnBounds(items, runId);
+  const runBounds = findRunBounds(runId);
   if (runId === currentRunId) {
     // Active runs can span steers: the original prompt is a floor, not a ceiling.
     return runBounds ? { afterKey: runBounds.afterKey } : currentTurnBounds;
@@ -102,9 +132,11 @@ export function resolveRunInsertionBounds(
 /** A persisted invocation owns its live echo's interval even without a user send key. */
 export function applyPersistedToolInvocationBounds(
   items: ChatItem[],
-  tools: Array<{ key: string; message: unknown }>,
-  insertionBounds: Map<string, TurnInsertionBounds>,
+  tools: Array<ChatProjection<Extract<ChatItem, { kind: "message" }>>>,
 ): void {
+  if (tools.length === 0) {
+    return;
+  }
   const invocations = new Map<string, TurnInsertionBounds | null>();
   let bounds: TurnInsertionBounds = {};
   for (const item of items) {
@@ -129,13 +161,13 @@ export function applyPersistedToolInvocationBounds(
     }
   }
   for (const tool of tools) {
-    const refs = extractToolMessageRefs(tool.message);
+    const refs = extractToolMessageRefs(tool.item.message);
     const matching = refs.map((ref) =>
       ref.runId ? invocations.get(buildToolStreamIdentity(ref.runId, ref.id)) : undefined,
     );
     const [first] = matching;
     if (first && matching.every((candidate) => candidate === first)) {
-      insertionBounds.set(tool.key, first);
+      tool.bounds = first;
     }
   }
 }

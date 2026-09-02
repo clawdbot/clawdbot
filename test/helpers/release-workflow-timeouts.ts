@@ -63,7 +63,7 @@ export function pluginPrereleaseTimeoutComponents(params: {
   requireWorkflowNeeds(jobs.dockerSuite, ["preflight"]);
   requireWorkflowNeeds(jobs.prepareImage, ["validate_selected_ref"], true);
   requireWorkflowNeeds(jobs.dockerLanes, ["prepare_docker_e2e_image"]);
-  requireWorkflowNeeds(jobs.suite, ["plugin-prerelease-docker-suite"]);
+  requireWorkflowNeeds(jobs.suite, ["plugin-npm-security-scan", "plugin-prerelease-docker-suite"]);
   const timeout = (job: ReleaseWorkflowJob) =>
     releaseTimeoutForProfile(job["timeout-minutes"], params.profile);
   return {

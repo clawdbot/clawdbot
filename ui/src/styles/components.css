@@ -1984,60 +1984,6 @@ select.input {
   overflow-wrap: anywhere;
 }
 
-/* Compaction indicator */
-.compaction-indicator {
-  align-self: center;
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 13px;
-  line-height: 1.2;
-  padding: 6px 14px;
-  margin-bottom: 8px;
-  border-radius: var(--radius-full);
-  border: 1px solid var(--border);
-  background: var(--panel-strong);
-  color: var(--text);
-  white-space: nowrap;
-  user-select: none;
-  animation: fade-in 0.2s var(--ease-out);
-}
-
-.compaction-indicator svg {
-  width: 16px;
-  height: 16px;
-  stroke: currentColor;
-  fill: none;
-  stroke-width: 1.5px;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-  flex-shrink: 0;
-}
-
-.compaction-indicator--active {
-  color: var(--info);
-  border-color: color-mix(in srgb, var(--info) 35%, transparent);
-}
-
-.compaction-indicator--active svg {
-  animation: compaction-spin 1s linear infinite;
-}
-
-.compaction-indicator--complete {
-  color: var(--ok);
-  border-color: color-mix(in srgb, var(--ok) 35%, transparent);
-}
-
-.compaction-indicator--fallback {
-  color: var(--warn-strong);
-  border-color: color-mix(in srgb, var(--warn-strong) 35%, transparent);
-}
-
-.compaction-indicator--fallback-cleared {
-  color: var(--ok);
-  border-color: color-mix(in srgb, var(--ok) 35%, transparent);
-}
-
 @keyframes compaction-spin {
   to {
     transform: rotate(360deg);
@@ -3700,13 +3646,18 @@ td.data-table-key-col {
   min-width: 0;
 }
 
-.agent-scope-control__label {
+.agent-scope-control__label,
+.agent-scope-control .agent-select__menu-title {
   color: var(--muted);
   font-size: 11px;
   font-weight: 650;
   letter-spacing: 0.06em;
   text-transform: uppercase;
   white-space: nowrap;
+}
+
+.agent-scope-control .agent-select__menu-title {
+  padding: 4px 8px 2px;
 }
 
 .agent-scope-control openclaw-agent-select {
@@ -3749,6 +3700,9 @@ td.data-table-key-col {
   background: var(--bg-elevated);
   box-shadow: var(--overlay-shadow);
   color: var(--text);
+  /* Keep page content from showing through Web Awesome's menu fade.
+   * The scale animation still communicates that the picker opened. */
+  opacity: 1 !important;
 }
 
 .agent-select__trigger {

@@ -145,8 +145,17 @@ function parseMediaType(value: string, allowQuality: boolean): ParsedMediaType |
   return { type, subtype, parameters, quality };
 }
 
-function matchesRepresentation(range: ParsedMediaType, representation: ParsedMediaType): boolean {
-  if (range.type !== representation.type || range.subtype !== representation.subtype) {
+function matchesRepresentation(
+  range: ParsedMediaType,
+  representation: ParsedMediaType,
+  allowWildcards: boolean,
+): boolean {
+  const exact = range.type === representation.type && range.subtype === representation.subtype;
+  const wildcard =
+    allowWildcards &&
+    range.subtype === "*" &&
+    (range.type === "*" || range.type === representation.type);
+  if (!exact && !wildcard) {
     return false;
   }
   for (const [name, value] of range.parameters) {
@@ -157,13 +166,11 @@ function matchesRepresentation(range: ParsedMediaType, representation: ParsedMed
   return true;
 }
 
-/**
- * Checks for an explicit, positive-quality media range in an Accept field.
- * Wildcards intentionally do not opt callers into long-lived streaming responses.
- */
-export function hasExplicitAcceptableMediaRange(
+/** Checks the quality of the most specific range matching the offered representation. */
+export function acceptsMediaType(
   accept: string | undefined,
   expectedRepresentation: string,
+  allowWildcards = true,
 ): boolean {
   if (!accept) {
     return false;
@@ -177,23 +184,34 @@ export function hasExplicitAcceptableMediaRange(
   if (!ranges) {
     return false;
   }
-  let bestSpecificity = -1;
-  let bestExplicitQuality = 0;
+  let bestMediaSpecificity = -1;
+  let bestParameterSpecificity = -1;
+  let bestQuality = 0;
   for (const range of ranges) {
-    if (!trimHttpOptionalWhitespace(range)) {
-      continue;
-    }
     const parsedRange = parseMediaType(range, true);
-    if (!parsedRange || !matchesRepresentation(parsedRange, representation)) {
+    if (!parsedRange || !matchesRepresentation(parsedRange, representation, allowWildcards)) {
       continue;
     }
-    const specificity = parsedRange.parameters.size;
-    if (specificity > bestSpecificity) {
-      bestSpecificity = specificity;
-      bestExplicitQuality = parsedRange.quality;
-    } else if (specificity === bestSpecificity) {
-      bestExplicitQuality = Math.max(bestExplicitQuality, parsedRange.quality);
+    // Exact types outrank parameterized wildcards; parameters only break type ties.
+    const mediaSpecificity = parsedRange.type === "*" ? 0 : parsedRange.subtype === "*" ? 1 : 2;
+    const parameterSpecificity = parsedRange.parameters.size;
+    const comparison =
+      mediaSpecificity - bestMediaSpecificity || parameterSpecificity - bestParameterSpecificity;
+    if (comparison > 0) {
+      bestMediaSpecificity = mediaSpecificity;
+      bestParameterSpecificity = parameterSpecificity;
+      bestQuality = parsedRange.quality;
+    } else if (comparison === 0) {
+      bestQuality = Math.max(bestQuality, parsedRange.quality);
     }
   }
-  return bestSpecificity >= 0 && bestExplicitQuality > 0;
+  return bestQuality > 0;
+}
+
+/** Wildcards cannot opt callers into long-lived streaming responses. */
+export function hasExplicitAcceptableMediaRange(
+  accept: string | undefined,
+  expectedRepresentation: string,
+): boolean {
+  return acceptsMediaType(accept, expectedRepresentation, false);
 }

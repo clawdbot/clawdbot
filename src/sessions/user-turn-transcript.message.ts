@@ -109,6 +109,7 @@ export function buildPersistedUserTurnMessage(params: UserTurnInput): PersistedU
   const message: PersistedUserTurnMessage = {
     role: "user",
     ...(params.display === false ? { display: false } : {}),
+    ...(params.excludeFromContext ? { excludeFromContext: true } : {}),
     content: text,
     timestamp: params.timestamp ?? Date.now(),
     ...(params.idempotencyKey ? { idempotencyKey: params.idempotencyKey } : {}),

@@ -720,6 +720,7 @@ describe("runDoctorLintCli", () => {
     const configPath = path.join(stateDir, "openclaw.json");
     const config = {
       gateway: { mode: "local" },
+      agents: { defaults: { model: { primary: "openai/gpt-5.5" } } },
       memory: { search: { provider: "local", fallback: "none" } },
     } satisfies OpenClawConfig;
     fs.mkdirSync(stateDir, { recursive: true });

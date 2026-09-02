@@ -433,6 +433,7 @@ export function reduceReasoningText(
 type ReasoningTagStripOptions = {
   mode: "strict" | "preserve";
   scope: "all" | "leading";
+  recoverUnclosed?: boolean;
 };
 
 /** Strips reasoning tags using the same reducer as streamed partitioning. */
@@ -443,7 +444,12 @@ export function stripReasoningTagsFromMarkdown(
   const state: ReductionState = { depth: 0, visibleEver: false };
   return reduceReasoningText(text, findMarkdownCodeSpans(text), state, {
     final: true,
-    mode: options.mode === "preserve" ? "static-preserve" : "static-strict",
+    mode:
+      options.recoverUnclosed === false
+        ? "hide"
+        : options.mode === "preserve"
+          ? "static-preserve"
+          : "static-strict",
     scope: options.scope,
   })
     .filter((delta) => delta.kind === "text")

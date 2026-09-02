@@ -1,4 +1,6 @@
 // Gateway Protocol schema module defines protocol validation shapes.
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { Static } from "typebox";
 import { Type } from "typebox";
 import {
@@ -332,13 +334,61 @@ export const ChatAbortedEventSchema = closedObject({
   stopReason: Type.Optional(Type.String()),
 });
 
-/** Terminal event for failed chat runs with an optional normalized failure kind. */
+const CHAT_ERROR_DETAIL_MAX_CHARS = 300;
+const ChatErrorDetailTextSchema = Type.Optional(
+  Type.String({ maxLength: CHAT_ERROR_DETAIL_MAX_CHARS }),
+);
+const ChatErrorDetailSchema = closedObject({
+  provider: ChatErrorDetailTextSchema,
+  model: ChatErrorDetailTextSchema,
+  failoverReason: ChatErrorDetailTextSchema,
+  providerRuntimeFailureKind: ChatErrorDetailTextSchema,
+  providerErrorType: ChatErrorDetailTextSchema,
+  httpStatus: Type.Optional(Type.Integer({ minimum: 100, maximum: 599 })),
+  providerErrorMessagePreview: ChatErrorDetailTextSchema,
+});
+
+type ChatErrorDetail = Static<typeof ChatErrorDetailSchema>;
+
+/** Bounds already-redacted provider facts before lifecycle and chat publication. */
+export function projectChatErrorDetail(observation: unknown): ChatErrorDetail | undefined {
+  const source = asOptionalRecord(observation);
+  if (!source) {
+    return undefined;
+  }
+  const readText = (value: unknown) =>
+    typeof value === "string" && value.trim()
+      ? truncateUtf16Safe(value.trim(), CHAT_ERROR_DETAIL_MAX_CHARS)
+      : undefined;
+  const httpStatus = typeof source.httpStatus === "number" ? source.httpStatus : undefined;
+  // Only the observation owner's redacted facts cross this boundary; raw previews,
+  // bodies, and correlation hashes remain outside the closed chat contract.
+  const detail: ChatErrorDetail = {
+    provider: readText(source.provider),
+    model: readText(source.model),
+    failoverReason: readText(source.failoverReason),
+    providerRuntimeFailureKind: readText(source.providerRuntimeFailureKind),
+    providerErrorType: readText(source.providerErrorType),
+    httpStatus:
+      httpStatus !== undefined &&
+      Number.isInteger(httpStatus) &&
+      httpStatus >= 100 &&
+      httpStatus <= 599
+        ? httpStatus
+        : undefined,
+    providerErrorMessagePreview: readText(source.providerErrorMessagePreview),
+  };
+  return Object.values(detail).some((value) => value !== undefined) ? detail : undefined;
+}
+
+/** Terminal event for failed chat runs with optional sanitized provider diagnostics. */
 export const ChatErrorEventSchema = closedObject({
   ...ChatEventBaseSchema,
   state: Type.Literal("error"),
   message: Type.Optional(Type.Unknown()),
   errorMessage: Type.Optional(Type.String()),
   errorKind: Type.Optional(ChatEventErrorKindSchema),
+  errorDetail: Type.Optional(ChatErrorDetailSchema),
   usage: Type.Optional(Type.Unknown()),
   stopReason: Type.Optional(Type.String()),
 });

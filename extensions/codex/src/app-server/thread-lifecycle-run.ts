@@ -32,9 +32,8 @@ import {
   shouldStartTransientNoToolThread,
 } from "./thread-fingerprints.js";
 import {
-  assertAdoptedCodexThreadResumeAllowed,
   resumePendingCodexThread,
-  prepareSupervisedCodexThreadResume,
+  prepareCodexThreadResume,
   withCodexThreadLifecycleBinding,
 } from "./thread-lifecycle-adoption.js";
 import { CodexThreadBindingConflictError } from "./thread-lifecycle-errors.js";
@@ -630,28 +629,6 @@ export async function startOrResumeThread(
           );
           await clearCurrentBinding("rotating a stale thread binding");
         }
-      } else if (incognito) {
-        if (
-          binding.clientId &&
-          binding.clientId === clientId &&
-          ((await buildLoadedPluginThreadConfig(binding))?.fingerprint ??
-            binding.pluginAppsFingerprint) === binding.pluginAppsFingerprint
-        ) {
-          // Ephemeral threads have no cold-resume source; reuse only the live client that started it.
-          params.buildFinalConfigPatch?.({ action: "resume", binding });
-          throwIfAborted();
-          lifecycleTiming.mark("thread-ready");
-          lifecycleTiming.logSummary({
-            runId: params.params.runId,
-            sessionId: params.params.sessionId,
-            sessionKey: params.params.sessionKey,
-            threadId: binding.threadId,
-            action: "resumed",
-          });
-          return { ...binding, lifecycle: { action: "resumed" } };
-        }
-        await clearCurrentBinding("rotating an unavailable ephemeral thread binding");
-        binding = undefined;
       } else {
         const warmReuse = await tryReuseCodexLiveThread({
           ...requestContext,
@@ -663,31 +640,24 @@ export async function startOrResumeThread(
         if (warmReuse.kind === "ready") {
           return warmReuse.binding;
         }
-        if (warmReuse.kind === "rotate") {
+        if (incognito || warmReuse.kind === "rotate") {
           throwIfAborted();
-          await clearCurrentBinding("rotating a stale plugin app binding");
+          await clearCurrentBinding(
+            incognito
+              ? "rotating an unavailable ephemeral thread binding"
+              : "rotating a stale plugin app binding",
+          );
         } else {
           // Native adoption must be checked before releasing any retained owner;
           // a passive refusal neither acquires nor authorizes dropping a subscription.
-          const adoptedThread =
-            binding.preserveNativeModel === true
-              ? await assertAdoptedCodexThreadResumeAllowed(
-                  params,
-                  binding.threadId,
-                  requestContext,
-                )
-              : undefined;
-          const configuration =
-            adoptedThread && binding.connectionScope === "supervision"
-              ? prepareSupervisedCodexThreadResume(params, binding, adoptedThread)
-              : undefined;
+          const configuration = await prepareCodexThreadResume(params, binding, requestContext);
           try {
             await releaseRetainedThread(
               binding.threadId,
               binding.clientId,
-              configuration?.assertCurrent,
+              configuration.assertCurrent,
             );
-            configuration?.assertCurrent();
+            configuration.assertCurrent();
             const resumed = await resumeExistingCodexThread(params, {
               ...requestContext,
               binding,
@@ -695,14 +665,14 @@ export async function startOrResumeThread(
               prebuiltFinalConfigPatch: warmReuse.prebuiltFinalConfigPatch,
               prebuiltPluginThreadConfig,
               buildLoadedPluginThreadConfig,
-              assertResumeOwnership: configuration?.assertCurrent,
-              assertResumeConfiguration: configuration?.assertConfigured,
+              assertResumeOwnership: configuration.assertCurrent,
+              assertResumeConfiguration: configuration.assertConfigured,
             });
             if (resumed) {
               return resumed;
             }
           } finally {
-            configuration?.dispose();
+            configuration.dispose();
           }
         }
       }

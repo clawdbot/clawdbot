@@ -1,6 +1,8 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { Worker } from "node:worker_threads";
+import { getAiTransportHost } from "@openclaw/ai";
+import { streamOpenAIResponses } from "@openclaw/ai/internal/openai";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
@@ -63,6 +65,7 @@ beforeAll(async () => {
 afterEach(() => {
   closeOpenClawAgentDatabasesForTest();
   closeOpenClawStateDatabaseForTest();
+  vi.restoreAllMocks();
   vi.unstubAllEnvs();
   tempRoots.cleanup();
   runAttempt.mockReset();
@@ -155,22 +158,19 @@ describe("embedded retry transcript ownership", () => {
       const callerOwned = suppliedManager || sessionPersistence === "detached";
       const callerManager = suppliedManager ? SessionManager.inMemory(workspaceDir) : undefined;
       const toolCalls = ["call_1", "call_2"];
-      const erroredAssistant = buildEmbeddedRunnerAssistant({
-        stopReason: "error",
-        errorMessage: "WebSocket error",
-        diagnostics: [
-          {
-            type: "provider_transport_failure",
-            timestamp: 1,
-            error: { message: "WebSocket error" },
-            details: { phase: "after_message_stream_start" },
-          },
-        ],
-        content: [{ type: "thinking", thinking: "checking the results" }],
-      });
+      const model = {
+        ...createResolvedEmbeddedRunnerModel("openai", "gpt-5.6-luna").model,
+        api: "openai-responses" as const,
+        input: ["text" as const],
+      };
+      const fetchMock = vi
+        .fn<typeof fetch>()
+        .mockRejectedValue(Object.assign(new Error("socket hang up"), { code: "ECONNRESET" }));
+      vi.spyOn(getAiTransportHost(), "buildModelFetch").mockReturnValue(fetchMock);
       const history = [
         { role: "user", content: "Check the results.", timestamp: 1 },
         buildEmbeddedRunnerAssistant({
+          model: model.id,
           stopReason: "toolUse",
           content: toolCalls.map((id) => ({ type: "toolCall", id, name: "exec", arguments: {} })),
         }),
@@ -182,8 +182,14 @@ describe("embedded retry transcript ownership", () => {
           isError: false,
           timestamp: 2,
         })),
-        erroredAssistant,
       ] satisfies EmbeddedRunAttemptResult["messagesSnapshot"];
+      const erroredAssistant = await streamOpenAIResponses(
+        model,
+        { messages: history },
+        { apiKey: "synthetic-transport-key" },
+      ).result();
+      expect(fetchMock).toHaveBeenCalledOnce();
+      history.push(erroredAssistant);
       const waiting = createDeferred();
       const secondAttempt = createDeferred();
       const waitForProjection = reconciliation.waitForSessionTranscriptProjection;
@@ -199,6 +205,7 @@ describe("embedded retry transcript ownership", () => {
       const controller = new AbortController();
       runAttempt
         .mockImplementationOnce(async (attempt) => {
+          expect(attempt).toMatchObject({ provider: model.provider, modelId: model.id });
           firstManager = attempt.sessionManager;
           if (callerOwned) {
             expect(firstManager).toBeDefined();
@@ -233,6 +240,7 @@ describe("embedded retry transcript ownership", () => {
         })
         .mockImplementationOnce(async (attempt) => {
           secondAttempt.resolve();
+          expect(attempt).toMatchObject({ provider: model.provider, modelId: model.id });
           expect(attempt.prompt).toContain("Continue from the current transcript");
           expect(attempt.suppressNextUserMessagePersistence).toBe(true);
           expect(attempt.skipPreparedUserTurnMessage).toBe(true);
@@ -250,6 +258,7 @@ describe("embedded retry transcript ownership", () => {
             sessionIdUsed: target.sessionId,
             assistantTexts: ["Verified."],
             lastAssistant: buildEmbeddedRunnerAssistant({
+              model: model.id,
               content: [{ type: "text", text: "Verified." }],
             }),
           });
@@ -267,12 +276,12 @@ describe("embedded retry transcript ownership", () => {
           ...target,
           agentDir,
           workspaceDir,
-          config: createEmbeddedAgentRunnerOpenAiConfig(["mock-1"]),
+          config: createEmbeddedAgentRunnerOpenAiConfig([model.id]),
           sessionPersistence,
           sessionManager: callerManager,
           prompt: "Check the results.",
-          provider: "openai",
-          model: "mock-1",
+          provider: model.provider,
+          model: model.id,
           timeoutMs: 5_000,
           runId: "retry-projection-run",
           abortSignal: controller.signal,
@@ -306,6 +315,7 @@ describe("embedded retry transcript ownership", () => {
           result: { payloads: [{ text: "Verified." }] },
         });
         expect(runAttempt).toHaveBeenCalledTimes(2);
+        expect(fetchMock).toHaveBeenCalledOnce();
         if (projection === "absent") {
           await expect(fs.access(path.join(stateDir, "agents"))).rejects.toThrow();
         }

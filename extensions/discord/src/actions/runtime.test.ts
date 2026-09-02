@@ -2,6 +2,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 // Discord tests cover runtime plugin behavior.
 import {
   ChannelType,
+  ComponentType,
   MessageFlags,
   PermissionFlagsBits,
   type RESTGetAPIGuildEmojisResult,
@@ -2270,7 +2271,22 @@ describe("handleDiscordMessagingAction", () => {
         {
           to: "channel:123",
           content: "fallback text",
-          components: JSON.stringify({ blocks: [{ type: "text", text: "Gateway proof" }] }),
+          components: JSON.stringify({
+            blocks: [
+              { type: "text", text: "Gateway proof" },
+              {
+                type: "actions",
+                select: {
+                  type: "string",
+                  options: [{ label: "One", value: "one" }],
+                },
+              },
+              { type: "actions", select: { type: "user" } },
+              { type: "actions", select: { type: "role" } },
+              { type: "actions", select: { type: "mentionable" } },
+              { type: "actions", select: { type: "channel" } },
+            ],
+          }),
         },
         enableAllActions,
       );
@@ -2279,14 +2295,21 @@ describe("handleDiscordMessagingAction", () => {
       expect(post).toBeDefined();
       const body = JSON.parse(post?.body ?? "{}") as Record<string, unknown>;
       expect(body.flags).toBe(MessageFlags.IsComponentsV2);
-      expect(body.components).toEqual([
-        {
-          type: 17,
-          components: [
-            { type: 10, content: "fallback text" },
-            { type: 10, content: "Gateway proof" },
-          ],
-        },
+      const container = (body.components as Array<{ components?: unknown[] }>)[0];
+      expect(container?.components?.slice(0, 2)).toEqual([
+        { type: ComponentType.TextDisplay, content: "fallback text" },
+        { type: ComponentType.TextDisplay, content: "Gateway proof" },
+      ]);
+      expect(
+        container?.components
+          ?.slice(2)
+          .map((row) => (row as { components?: Array<{ type?: number }> }).components?.[0]?.type),
+      ).toEqual([
+        ComponentType.StringSelect,
+        ComponentType.UserSelect,
+        ComponentType.RoleSelect,
+        ComponentType.MentionableSelect,
+        ComponentType.ChannelSelect,
       ]);
     } finally {
       await loopback.close();

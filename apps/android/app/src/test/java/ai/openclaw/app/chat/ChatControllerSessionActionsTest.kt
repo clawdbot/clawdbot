@@ -300,7 +300,7 @@ class ChatControllerSessionActionsTest {
     }
 
   @Test
-  fun forkReturnsCreatedKeyEditorTextAndAttachments() =
+  fun forkReturnsCreatedKeyEditorTextAndAttachmentsForLockedNativeSession() =
     runTest {
       val gateway = ScriptedGateway(json)
       gateway.respondWith(
@@ -308,6 +308,10 @@ class ChatControllerSessionActionsTest {
         """{"sessionKey":"agent:main:forked","editorText":"continue here","editorAttachments":[{"mimeType":"image/webp","data":"Zm9yaw=="}]}""",
       )
       val controller = controller(this, gateway)
+      controller.handleGatewayEvent(
+        "sessions.changed",
+        """{"sessionKey":"main","agentId":"main","phase":"message","session":{"key":"main","modelSelectionLocked":true,"agentRuntime":{"id":"codex","source":"session"}}}""",
+      )
 
       assertEquals(
         SessionForkResult(

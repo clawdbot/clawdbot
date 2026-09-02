@@ -155,7 +155,7 @@ export async function elevenLabsTTS(params: ElevenLabsTtsRequestParams): Promise
   try {
     await assertOkOrThrowProviderError(response, "ElevenLabs API error");
 
-    return Buffer.from(await readProviderBinaryResponse(response, "ElevenLabs API error", "audio"));
+    return await readProviderBinaryResponse(response, "ElevenLabs API error", "audio");
   } finally {
     await release();
   }

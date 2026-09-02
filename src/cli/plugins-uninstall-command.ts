@@ -26,6 +26,8 @@ type PluginUninstallOptions = {
   invalidateRuntimeCache?: boolean;
   /** True when a Claw lifecycle caller already owns the package lease. */
   clawManaged?: boolean;
+  /** Synchronous authority guard at each final plugin/config mutation. */
+  beforePersistentApply?: () => void;
 };
 
 function isPromptInputClosedError(
@@ -85,7 +87,7 @@ async function runPluginUninstallCommandUnlocked(
     resolveUninstallChannelConfigKeys,
     UNINSTALL_ACTION_LABELS,
   } = await import("../plugins/uninstall.js");
-  const { prepareConfigForPendingPluginDirectoryRemovalSet, recordPluginPackageUninstallPlan } =
+  const { prepareConfigForDisabledPluginSet, recordPluginPackageUninstallPlan } =
     await import("../plugins/uninstall-package-plan.js");
   const { commitPluginInstallRecordsWithConfig } =
     await import("../plugins/install-record-commit.js");
@@ -282,14 +284,21 @@ async function runPluginUninstallCommandUnlocked(
   }
 
   const uninstall = async () => {
+    const guardedWriteOptions = (writeOptions: typeof mutationWriteOptions) =>
+      opts.beforePersistentApply
+        ? {
+            ...writeOptions,
+            assertConfigPathForWrite: () => {
+              writeOptions.assertConfigPathForWrite?.();
+              opts.beforePersistentApply?.();
+            },
+          }
+        : writeOptions;
     let finalBaseHash = snapshot.hash;
     let finalWriteOptions = mutationWriteOptions;
     let directoryResult = { directoryRemoved: false, warnings: [] as string[] };
     if (plan.directoryRemoval) {
-      const disabledConfig = prepareConfigForPendingPluginDirectoryRemovalSet(
-        sourceConfig,
-        policyPluginIds,
-      );
+      const disabledConfig = prepareConfigForDisabledPluginSet(sourceConfig, policyPluginIds);
       const disabledCommit = await tracePluginLifecyclePhaseAsync(
         "config disable",
         () =>
@@ -297,13 +306,14 @@ async function runPluginUninstallCommandUnlocked(
             nextConfig: disabledConfig,
             ...(snapshot.hash !== undefined ? { baseHash: snapshot.hash } : {}),
             writeOptions: {
-              ...mutationWriteOptions,
+              ...guardedWriteOptions(mutationWriteOptions),
               afterWrite: { mode: "auto" },
             },
           }),
         { command: "uninstall" },
       );
       finalBaseHash = disabledCommit?.persistedHash ?? snapshot.hash;
+      opts.beforePersistentApply?.();
       directoryResult = await applyPluginUninstallDirectoryRemoval(plan.directoryRemoval);
       for (const warning of directoryResult.warnings) {
         runtime.log(theme.warn(warning));
@@ -357,7 +367,7 @@ async function runPluginUninstallCommandUnlocked(
           nextConfig,
           ...(finalBaseHash !== undefined ? { baseHash: finalBaseHash } : {}),
           writeOptions: {
-            ...finalWriteOptions,
+            ...guardedWriteOptions(finalWriteOptions),
             allowConfigSizeDrop: true,
             afterWrite: { mode: "restart", reason: "plugin source changed" },
           },

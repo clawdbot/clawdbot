@@ -38,8 +38,7 @@ const MAX_SIGNAL_SSE_EVENT_DATA_BYTES = 1_048_576;
 
 type SignalHttpResponse = {
   status: number;
-  statusText: string;
-  text: string;
+  body: Buffer;
 };
 
 function createSignalSseAbortError(): Error {
@@ -116,7 +115,7 @@ function normalizeSignalSseTimeoutMs(timeoutMs: number): number | null {
   return resolveTimerTimeoutMs(timeoutMs, DEFAULT_TIMEOUT_MS);
 }
 
-function requestSignalHttpText(
+function requestSignalHttp(
   url: URL,
   options: {
     method: "GET" | "POST";
@@ -181,8 +180,7 @@ function requestSignalHttpText(
         res.on("end", () => {
           resolveOnce({
             status: res.statusCode ?? 0,
-            statusText: res.statusMessage || "error",
-            text: Buffer.concat(chunks).toString("utf8"),
+            body: Buffer.concat(chunks),
           });
         });
       },
@@ -210,7 +208,7 @@ export async function signalRpcRequest<T = unknown>(
     params,
     id,
   });
-  const res = await requestSignalHttpText(resolveSignalEndpointUrl(opts.baseUrl, "/api/v1/rpc"), {
+  const res = await requestSignalHttp(resolveSignalEndpointUrl(opts.baseUrl, "/api/v1/rpc"), {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -223,10 +221,12 @@ export async function signalRpcRequest<T = unknown>(
   if (res.status === 201) {
     return undefined as T;
   }
-  if (!res.text) {
+  // Decode JSON bodies here; health checks use status without interpreting their bytes.
+  const text = new TextDecoder("utf-8", { fatal: true }).decode(res.body);
+  if (!text) {
     throw new Error(`Signal RPC empty response (status ${res.status})`);
   }
-  const parsed = parseSignalRpcResponse<T>(res.text, res.status);
+  const parsed = parseSignalRpcResponse<T>(text, res.status);
   if (parsed.error) {
     const code = parsed.error.code ?? "unknown";
     const msg = parsed.error.message ?? "Signal RPC error";
@@ -240,7 +240,7 @@ export async function signalCheck(
   timeoutMs = DEFAULT_TIMEOUT_MS,
 ): Promise<{ ok: boolean; status?: number | null; error?: string | null }> {
   try {
-    const res = await requestSignalHttpText(resolveSignalEndpointUrl(baseUrl, "/api/v1/check"), {
+    const res = await requestSignalHttp(resolveSignalEndpointUrl(baseUrl, "/api/v1/check"), {
       method: "GET",
       timeoutMs,
     });

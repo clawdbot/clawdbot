@@ -55,7 +55,8 @@ on:
         type: boolean
 
 concurrency:
-  group: plugin-clawhub-release-${{ github.event_name == 'workflow_dispatch' && inputs.ref || github.sha }}
+  # Validation gets its own slot; real publication remains serialized by target.
+  group: plugin-clawhub-release-${{ inputs.dry_run && format('dry-run-{0}', github.run_id) || github.event_name == 'workflow_dispatch' && inputs.ref || github.sha }}
   cancel-in-progress: false
 
 env:
@@ -276,6 +277,14 @@ jobs:
           raise SystemExit(1)
           PYTHON
 
+      - name: Checkout trusted planning tooling
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ github.workflow_sha }}
+          path: .release-tooling
+          fetch-depth: 1
+
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
         with:
@@ -285,6 +294,7 @@ jobs:
 
       - name: Validate publishable plugin metadata
         env:
+          TSX_TSCONFIG_PATH: ${{ github.workspace }}/.release-tooling/tsconfig.json
           PUBLISH_SCOPE: ${{ github.event_name == 'workflow_dispatch' && inputs.publish_scope || '' }}
           RELEASE_PLUGINS: ${{ github.event_name == 'workflow_dispatch' && inputs.plugins || '' }}
           BASE_REF: ${{ github.event_name != 'workflow_dispatch' && github.event.before || '' }}
@@ -296,16 +306,17 @@ jobs:
             if [[ -n "${RELEASE_PLUGINS}" ]]; then
               release_args+=(--plugins "${RELEASE_PLUGINS}")
             fi
-            pnpm release:plugins:clawhub:check -- "${release_args[@]}"
+            node --import tsx .release-tooling/scripts/plugin-clawhub-release-check.ts "${release_args[@]}"
           elif [[ -n "${BASE_REF}" ]]; then
-            pnpm release:plugins:clawhub:check -- --base-ref "${BASE_REF}" --head-ref "${HEAD_REF}"
+            node --import tsx .release-tooling/scripts/plugin-clawhub-release-check.ts --base-ref "${BASE_REF}" --head-ref "${HEAD_REF}"
           else
-            pnpm release:plugins:clawhub:check
+            node --import tsx .release-tooling/scripts/plugin-clawhub-release-check.ts
           fi
 
       - name: Resolve plugin release plan
         id: plan
         env:
+          TSX_TSCONFIG_PATH: ${{ github.workspace }}/.release-tooling/tsconfig.json
           PUBLISH_SCOPE: ${{ github.event_name == 'workflow_dispatch' && inputs.publish_scope || '' }}
           RELEASE_PLUGINS: ${{ github.event_name == 'workflow_dispatch' && inputs.plugins || '' }}
           BASE_REF: ${{ github.event_name != 'workflow_dispatch' && github.event.before || '' }}
@@ -319,11 +330,11 @@ jobs:
             if [[ -n "${RELEASE_PLUGINS}" ]]; then
               plan_args+=(--plugins "${RELEASE_PLUGINS}")
             fi
-            node --import tsx scripts/plugin-clawhub-release-plan.ts "${plan_args[@]}" > .local/plugin-clawhub-release-plan.json
+            node --import tsx .release-tooling/scripts/plugin-clawhub-release-plan.ts "${plan_args[@]}" > .local/plugin-clawhub-release-plan.json
           elif [[ -n "${BASE_REF}" ]]; then
-            node --import tsx scripts/plugin-clawhub-release-plan.ts --base-ref "${BASE_REF}" --head-ref "${HEAD_REF}" > .local/plugin-clawhub-release-plan.json
+            node --import tsx .release-tooling/scripts/plugin-clawhub-release-plan.ts --base-ref "${BASE_REF}" --head-ref "${HEAD_REF}" > .local/plugin-clawhub-release-plan.json
           else
-            node --import tsx scripts/plugin-clawhub-release-plan.ts > .local/plugin-clawhub-release-plan.json
+            node --import tsx .release-tooling/scripts/plugin-clawhub-release-plan.ts > .local/plugin-clawhub-release-plan.json
           fi
 
           cat .local/plugin-clawhub-release-plan.json
@@ -502,9 +513,6 @@ jobs:
           install-bun: "true"
           install-deps: "true"
 
-      - name: Verify package-local runtime build
-        run: node --import tsx scripts/check-plugin-npm-runtime-builds.mts --package "${{ matrix.plugin.packageDir }}"
-
       - name: Install pinned ClawHub CLI wrapper
         run: |
           set -euo pipefail
@@ -627,7 +635,8 @@ jobs:
       tags: ${{ matrix.plugin.publishTag }}
       source_repo: ${{ github.repository }}
       source_commit: ${{ needs.preview_plugins_clawhub.outputs.ref_revision }}
-      source_ref: ${{ inputs.release_tag != '' && format('refs/tags/{0}', inputs.release_tag) || github.ref }}
+      # ClawHub requires the token's candidate SHA in both fields, not a mutable tag or tooling ref.
+      source_ref: ${{ needs.preview_plugins_clawhub.outputs.ref_revision }}
       source_path: ${{ matrix.plugin.packageDir }}
       inspector_artifact_name: ${{ matrix.plugin.artifactName }}-inspector
       publish_json_artifact_name: ${{ matrix.plugin.artifactName }}-publish-json

@@ -47,6 +47,12 @@ architecture or nonportable native dependency fails packaging. Node downloads
 and package installation need network access. The larger app includes its
 complete private runtime; it does not update an independently managed Gateway.
 
+Packaging builds the MLX voice helper with Swift Build (`--build-system swiftbuild`)
+and copies its SwiftPM resource bundles into `Contents/Resources`. The native
+SwiftPM backend does not compile MLX's Metal shaders. Packaging fails if the
+helper's `mlx-swift_Cmlx.bundle/Contents/Resources/default.metallib` is missing,
+rather than shipping a helper that fails on its first speech request.
+
 The private worker uses read-only core config bootstrap rather than Gateway-wide
 Doctor preflight. Node plugin validation, MCP lifecycle, and node-owned identity
 and exec-approval startup migrations remain enabled. See

@@ -325,6 +325,12 @@ export async function projectSessionEntryLifecycleMutation(
   const removalDatabase = openOpenClawAgentDatabase(databaseOptions);
   const store = readSessionEntryStore(removalDatabase, {
     allowCanonicalRepair: params.allowCanonicalRepair === true,
+    sessionKeys: [
+      ...params.removals.map((removal) =>
+        removal.exactStoredKey ? removal.sessionKey : removal.sessionKey.trim(),
+      ),
+      ...params.upserts.map((upsert) => upsert.sessionKey.trim()),
+    ],
   });
   const removedKeysToArchive = new Set<string>();
   const changedSessionKeys = new Set<string>();
@@ -397,7 +403,6 @@ export async function projectSessionEntryLifecycleMutation(
         : await upsert.buildEntry({
             currentEntry: expectedEntry ? cloneSessionEntry(expectedEntry) : undefined,
             sessionKey,
-            store,
           });
     if (!entry) {
       continue;

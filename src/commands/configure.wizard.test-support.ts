@@ -101,7 +101,7 @@ vi.mock("../config/config.js", () => ({
           ? (snapshot.runtimeConfig ?? snapshot.config)
           : (snapshot.sourceConfig ?? snapshot.config);
       try {
-        const transformed = await params.transform(config, { snapshot, previousHash, attempt });
+        const transformed = await params.transform(config, { snapshot, previousHash, attempt }, {});
         const committed = await params.commit!({
           nextConfig: transformed.nextConfig,
           snapshot,

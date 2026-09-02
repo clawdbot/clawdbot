@@ -176,12 +176,11 @@ async function runIsolatedAnnounceJobAndWait(params: {
   status: "ok" | "error";
 }) {
   const { job, runAt } = await addDefaultIsolatedAnnounceJob(params.cron, params.name);
-  const finished = params.events.waitFor(
+  vi.setSystemTime(runAt);
+  await vi.runOnlyPendingTimersAsync();
+  await params.events.waitFor(
     (evt) => evt.jobId === job.id && evt.action === "finished" && evt.status === params.status,
   );
-  vi.setSystemTime(runAt);
-  await vi.advanceTimersToNextTimerAsync();
-  await finished;
   return job;
 }
 

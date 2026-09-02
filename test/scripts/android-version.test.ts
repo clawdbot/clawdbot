@@ -14,6 +14,10 @@ import {
   syncAndroidVersioning,
 } from "../../scripts/lib/android-version.ts";
 import {
+  parseVersionQueryArgs,
+  parseVersionSyncArgs,
+} from "../../scripts/lib/version-script-args.ts";
+import {
   installAndroidFixtureCleanup,
   writeAndroidFixture,
 } from "./android-version.test-support.ts";
@@ -21,6 +25,20 @@ import {
 installAndroidFixtureCleanup();
 
 describe("resolveAndroidVersion", () => {
+  it("preserves mobile parser ordering and platform-specific revision support", () => {
+    expect(
+      parseVersionQueryArgs(["--shell", "--", "--json", "--field", "canonicalVersion"]),
+    ).toMatchObject({ field: "canonicalVersion", format: "json" });
+    expect(parseVersionSyncArgs(["--check", "--write"])).toMatchObject({ mode: "write" });
+    expect(() => parseVersionQueryArgs(["--field=canonicalVersion"])).toThrow(
+      "Unknown argument: --field=canonicalVersion",
+    );
+    expect(() => parseVersionSyncArgs(["--revision"])).toThrow("Unknown argument: --revision");
+    expect(
+      parseVersionSyncArgs(["--revision", "1"], { allowAppStoreRevision: true }),
+    ).toMatchObject({ appStoreRevision: "1" });
+  });
+
   it("rejects missing CLI option values before reading version files", () => {
     const result = spawnSync(
       process.execPath,

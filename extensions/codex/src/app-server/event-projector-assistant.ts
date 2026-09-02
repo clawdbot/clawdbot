@@ -6,7 +6,6 @@ import {
   createAssistantAsyncMessage as buildAssistantAsyncMessage,
   createAssistantCommentaryMessage as buildAssistantCommentaryMessage,
   createAssistantMessage as buildAssistantMessage,
-  createAssistantMirrorMessage as buildAssistantMirrorMessage,
   type AssistantMessageOptions,
 } from "./event-projector-assistant-message.js";
 import { shouldClearTerminalPresentationForNativeItem } from "./event-projector-items.js";
@@ -23,11 +22,8 @@ export class CodexAssistantProjection {
   private readonly assistantTimestampByItem = new Map<string, number>();
   private readonly assistantPhaseByItem = new Map<string, string>();
   private readonly assistantDeliveryByItem = new Map<string, string>();
-  private latestCompletedItemId: string | undefined;
-  private latestCompletedTerminalAssistantItemId: string | undefined;
   private latestTerminalAssistantCandidateItemId: string | undefined;
   private latestTerminalAssistantCandidateSuperseded = false;
-  private latestTerminalAssistantCandidateCanReleaseAfterToolHandoff = false;
   private terminalAssistantCandidateEarlierActiveItemIds = new Set<string>();
   private pendingRawTerminalAssistantEchoItemId: string | undefined;
   private readonly lastCommentaryProgressTextByItem = new Map<string, string>();
@@ -64,45 +60,6 @@ export class CodexAssistantProjection {
       entry: CodexTranscriptCheckpointEntry,
     ) => void,
   ) {}
-
-  hasCompletedTerminalAssistantText(completedItemIds: ReadonlySet<string>): boolean {
-    const latestCompletedItemId = this.latestCompletedTerminalAssistantItemId;
-    if (!latestCompletedItemId) {
-      return false;
-    }
-    const finalItem = this.resolveFinalAssistantTextItem();
-    return (
-      this.latestCompletedItemId === latestCompletedItemId &&
-      finalItem?.itemId === latestCompletedItemId &&
-      completedItemIds.has(latestCompletedItemId)
-    );
-  }
-
-  getLatestTerminalAssistantCandidate(): { itemId: string; hasText: boolean } | undefined {
-    const itemId = this.latestTerminalAssistantCandidateItemId;
-    if (!itemId) {
-      return undefined;
-    }
-    const text = this.assistantTextByItem.get(itemId)?.trim();
-    return {
-      itemId,
-      hasText: Boolean(text && !this.isToolProgressEchoText(itemId, text)),
-    };
-  }
-
-  hasLatestTerminalAssistantCandidateText(): boolean {
-    return (
-      !this.latestTerminalAssistantCandidateSuperseded &&
-      this.getLatestTerminalAssistantCandidate()?.hasText === true
-    );
-  }
-
-  canReleaseLatestTerminalAssistantAfterToolHandoff(): boolean {
-    return (
-      this.latestTerminalAssistantCandidateCanReleaseAfterToolHandoff &&
-      this.hasLatestTerminalAssistantCandidateText()
-    );
-  }
 
   handleNotification(method: string, params: JsonObject): void {
     if (method === "model/rerouted") {
@@ -221,11 +178,7 @@ export class CodexAssistantProjection {
     ) {
       this.pendingRawTerminalAssistantEchoItemId = undefined;
     }
-    if (itemId && !this.isNonTerminalAssistantItem(itemId)) {
-      this.latestCompletedItemId = itemId;
-    }
     if (item?.type === "agentMessage" && !this.isNonTerminalAssistantItem(item.id)) {
-      this.latestCompletedTerminalAssistantItemId = item.id;
       this.markLatestTerminalAssistantCandidate(item.id, activeItemIds);
       this.pendingRawTerminalAssistantEchoItemId = item.id;
     } else if (itemId && !this.isNonTerminalAssistantItem(itemId)) {
@@ -284,7 +237,6 @@ export class CodexAssistantProjection {
       this.pendingRawTerminalAssistantEchoItemId = undefined;
     }
     if (!isPendingTerminalAssistantEcho) {
-      this.latestCompletedItemId = undefined;
       this.markTerminalAssistantCandidateSupersededBy(rawItemId);
     }
     if (role !== "assistant") {
@@ -344,9 +296,7 @@ export class CodexAssistantProjection {
     if (phase === "commentary") {
       this.emitCommentaryProgress({ itemId, text });
     } else {
-      this.markLatestTerminalAssistantCandidate(itemId, activeItemIds, {
-        canReleaseAfterToolHandoff: isIdlessTerminalAssistantAfterCompletedWork,
-      });
+      this.markLatestTerminalAssistantCandidate(itemId, activeItemIds);
     }
   }
 
@@ -521,10 +471,6 @@ export class CodexAssistantProjection {
     return this.responseModel ? { ...message, responseModel: this.responseModel } : message;
   }
 
-  createAssistantMirrorMessage(title: string, text: string): AssistantMessage {
-    return buildAssistantMirrorMessage(this.params, title, text);
-  }
-
   private rememberAssistantPhase(item: CodexThreadItem | undefined): void {
     if (item?.type !== "agentMessage") {
       return;
@@ -623,12 +569,9 @@ export class CodexAssistantProjection {
   private markLatestTerminalAssistantCandidate(
     itemId: string,
     activeItemIds: ReadonlySet<string>,
-    options?: { canReleaseAfterToolHandoff?: boolean },
   ): void {
     this.latestTerminalAssistantCandidateItemId = itemId;
     this.latestTerminalAssistantCandidateSuperseded = false;
-    this.latestTerminalAssistantCandidateCanReleaseAfterToolHandoff =
-      options?.canReleaseAfterToolHandoff === true;
     this.terminalAssistantCandidateEarlierActiveItemIds = new Set(activeItemIds);
   }
 
@@ -648,7 +591,6 @@ export class CodexAssistantProjection {
       return;
     }
     this.latestTerminalAssistantCandidateSuperseded = true;
-    this.latestTerminalAssistantCandidateCanReleaseAfterToolHandoff = false;
     this.terminalAssistantCandidateEarlierActiveItemIds.clear();
     this.supersedeVisibleAnswerCandidate();
   }

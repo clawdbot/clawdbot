@@ -31,7 +31,6 @@ import {
   isCronJobActive,
   markCronJobActive,
 } from "../active-jobs.js";
-import { CRON_SETUP_TIMEOUT_ERROR } from "../execution-error-constants.js";
 import * as schedule from "../schedule.js";
 import { loadCronStore, saveCronStore } from "../store.js";
 import { cronStoreKey } from "../store/key.js";
@@ -3414,66 +3413,6 @@ describe("cron service timer regressions", () => {
     expect(job.state.lastErrorReason).toBe("timeout");
     expect(job.state.nextRunAtMs).toBe(endedAt + 30_000);
     expect(job.enabled).toBe(true);
-  });
-
-  it("retries one-shot lifecycle claim conflicts instead of disabling (#131490)", () => {
-    const startedAt = Date.parse("2026-07-21T12:00:00.000Z");
-    const endedAt = startedAt + 500;
-    const job = createIsolatedRegressionJob({
-      id: "one-shot-lifecycle-claim-retry",
-      name: "one-shot lifecycle claim retry",
-      scheduledAt: startedAt,
-      schedule: { kind: "at", at: new Date(startedAt).toISOString() },
-      payload: { kind: "agentTurn", message: "ping" },
-      state: { runningAtMs: startedAt },
-    });
-    const state = createRunningCronServiceState({
-      storePath: "/tmp/cron-one-shot-lifecycle-claim-retry.json",
-      log: noopLogger,
-      nowMs: () => endedAt,
-      jobs: [job],
-    });
-
-    applyJobResult(state, job, {
-      status: "error",
-      error: 'Session "agent:main:cron:job-1" changed while starting work. Retry.',
-      startedAt,
-      endedAt,
-    });
-
-    expect(job.enabled).toBe(true);
-    expect(job.state.nextRunAtMs).toBe(endedAt + 30_000);
-    expect(job.state.consecutiveErrors).toBe(1);
-  });
-
-  it("retries one-shot isolated setup timeouts instead of disabling (#131490)", () => {
-    const startedAt = Date.parse("2026-07-21T12:00:00.000Z");
-    const endedAt = startedAt + 500;
-    const job = createIsolatedRegressionJob({
-      id: "one-shot-setup-timeout-retry",
-      name: "one-shot setup timeout retry",
-      scheduledAt: startedAt,
-      schedule: { kind: "at", at: new Date(startedAt).toISOString() },
-      payload: { kind: "agentTurn", message: "ping" },
-      state: { runningAtMs: startedAt },
-    });
-    const state = createRunningCronServiceState({
-      storePath: "/tmp/cron-one-shot-setup-timeout-retry.json",
-      log: noopLogger,
-      nowMs: () => endedAt,
-      jobs: [job],
-    });
-
-    applyJobResult(state, job, {
-      status: "error",
-      error: CRON_SETUP_TIMEOUT_ERROR,
-      startedAt,
-      endedAt,
-    });
-
-    expect(job.enabled).toBe(true);
-    expect(job.state.nextRunAtMs).toBe(endedAt + 30_000);
-    expect(job.state.lastErrorReason).toBe("timeout");
   });
 
   it("force run preserves 'every' anchor while recording manual lastRunAtMs", () => {

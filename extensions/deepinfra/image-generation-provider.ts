@@ -1,4 +1,5 @@
 // Deepinfra provider module implements model/runtime integration.
+import { bufferToBlobPart } from "openclaw/plugin-sdk/blob-runtime";
 import {
   createOpenAiCompatibleImageGenerationProvider,
   imageSourceUploadFileName,
@@ -82,7 +83,7 @@ export function buildDeepInfraImageGenerationProvider(options?: {
       const mimeType = normalizeOptionalString(image.mimeType) ?? "image/png";
       form.append(
         "image",
-        new Blob([new Uint8Array(image.buffer)], { type: mimeType }),
+        new Blob([bufferToBlobPart(image.buffer)], { type: mimeType }),
         imageSourceUploadFileName({ image, index: 0 }),
       );
       return { kind: "multipart", form };

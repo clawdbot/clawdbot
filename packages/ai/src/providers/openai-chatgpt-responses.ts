@@ -33,6 +33,7 @@ import {
   createOpenAIResponseHook,
 } from "../transports/openai-transport-shared.js";
 import {
+  assignTransportErrorDetails,
   notifyProviderStreamOpened,
   transportAbortError,
   withProviderResponseHook,
@@ -56,7 +57,6 @@ import {
 import { AssistantMessageEventStream } from "../utils/event-stream.js";
 import { headersToRecord } from "../utils/headers.js";
 import { resolveOpenAICodexAccountId } from "../utils/oauth/openai-chatgpt-jwt.js";
-import { projectProviderError } from "../utils/provider-error.js";
 import {
   createFirstStreamEventAbortController,
   getFirstStreamEventTimeoutHandler,
@@ -589,7 +589,7 @@ export const streamOpenAICodexResponses: StreamFunction<
         // partialJson is only a streaming scratch buffer; never persist it.
         delete (block as { partialJson?: string }).partialJson;
       }
-      const terminal = projectProviderError(normalizedError, options?.signal);
+      const terminal = assignTransportErrorDetails(output, normalizedError, options?.signal);
       // Log only locally-derived facts: timing and a fixed failure category. No
       // projected provider field (message, body, code, type, name) is logged —
       // all of them are provider-controlled text that can carry prompt- or
@@ -603,7 +603,6 @@ export const streamOpenAICodexResponses: StreamFunction<
         stopReason: terminal.stopReason,
         failureKind: classifyStreamFailure(error, options?.signal, requestTimedOut),
       });
-      Object.assign(output, terminal);
       stream.push({ type: "error", reason: terminal.stopReason, error: output });
       stream.end();
     } finally {
