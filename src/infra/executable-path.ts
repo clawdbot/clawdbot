@@ -45,16 +45,7 @@ function resolveWindowsExecutableExtensions(
   if (path.extname(executable).length > 0) {
     return [""];
   }
-  const extensions = (
-    resolveEnvironmentValue(env, "PATHEXT") ??
-    resolveEnvironmentValue(process.env, "PATHEXT") ??
-    ".EXE;.CMD;.BAT;.COM"
-  )
-    .split(";")
-    .map((ext) => normalizeLowercaseStringOrEmpty(ext))
-    // PATHEXT commonly ends in ";", and an empty entry would put "" back into the
-    // list, matching an extensionless file the caller asked to exclude.
-    .filter(Boolean);
+  const extensions = [...resolveWindowsExecutableExtSet(env)];
   return includeExtensionless ? ["", ...extensions] : extensions;
 }
 

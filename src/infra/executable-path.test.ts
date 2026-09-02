@@ -94,29 +94,33 @@ describe("executable path helpers", () => {
     });
   });
 
-  it("does not match an extensionless file when PATHEXT has a trailing separator", async () => {
-    await withMockedPlatform("win32", async () => {
-      await withTestDir({ prefix: "openclaw-exec-path-" }, async (base) => {
-        const binDir = path.join(base, "bin");
-        await fs.mkdir(binDir, { recursive: true });
-        const executable = path.join(binDir, "runner");
-        await fs.writeFile(executable, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+  it.each([".EXE;.CMD;", ";.EXE;.CMD", ".EXE;;.CMD", ".EXE; ;.CMD", "", ";;"])(
+    "keeps extensionless lookup explicit with PATHEXT %j",
+    async (pathext) => {
+      await withMockedPlatform("win32", async () => {
+        await withTestDir({ prefix: "openclaw-exec-path-" }, async (binDir) => {
+          const barePath = path.join(binDir, "runner");
+          const commandPath = path.join(binDir, "runner.cmd");
+          const env = { PATHEXT: pathext };
+          await fs.writeFile(barePath, "bare file\n");
 
-        const originalPathext = process.env.PATHEXT;
-        // Real Windows PATHEXT values often end in ";", which splits to an empty entry.
-        process.env.PATHEXT = ".EXE;.CMD;";
-        try {
           expect(
-            resolveExecutableFromPathEnv("runner", binDir, undefined, {
+            resolveExecutableFromPathEnv("runner", binDir, env, { includeExtensionless: false }),
+          ).toBeUndefined();
+          expect(
+            resolveExecutableFromPathEnv("runner", binDir, env, { includeExtensionless: true }),
+          ).toBe(barePath);
+
+          await fs.writeFile(commandPath, "@echo off\n");
+          expect(
+            resolveExecutableFromPathEnv("runner.cmd", binDir, env, {
               includeExtensionless: false,
             }),
-          ).toBeUndefined();
-        } finally {
-          restoreEnvValue("PATHEXT", originalPathext);
-        }
+          ).toBe(commandPath);
+        });
       });
-    });
-  });
+    },
+  );
 
   it("slides PATH hit and miss expiry for steady pollers", async () => {
     await withTestDir({ prefix: "openclaw-exec-path-" }, async (base) => {
