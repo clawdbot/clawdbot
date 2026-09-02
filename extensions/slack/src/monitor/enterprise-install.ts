@@ -237,13 +237,14 @@ export function resolveSlackInstallationIdentity(params: {
   const isEnterpriseInstall = auth.is_enterprise_install === true;
   const apiAppId = normalizeOptionalString(auth.app_id);
   const enterpriseId = normalizeOptionalString(auth.enterprise_id);
+  // Slack auth.test does not return app_id for bot tokens. Socket Mode derives it
+  // from the app token; HTTP authenticates the signed event that carries api_app_id.
+  // Durable Agent View and managed-thread markers only persist under this app id.
+  const transportApiAppId = normalizeOptionalString(params.transportApiAppId);
   if (isEnterpriseInstall) {
     if (!enterpriseId) {
       throw new Error("Slack org-wide auth.test returned no enterprise_id");
     }
-    // Slack auth.test does not guarantee app_id. Socket Mode can derive it from the
-    // app token; HTTP authenticates the signed event that carries api_app_id.
-    const transportApiAppId = normalizeOptionalString(params.transportApiAppId);
     if (apiAppId && transportApiAppId && apiAppId !== transportApiAppId) {
       throw new Error(
         `Slack token mismatch: bot token app_id=${apiAppId} but transport app_id=${transportApiAppId}`,
@@ -261,11 +262,12 @@ export function resolveSlackInstallationIdentity(params: {
     throw new Error("Slack workspace auth.test returned no team_id");
   }
   const teamName = normalizeOptionalString(auth.team);
+  const workspaceApiAppId = apiAppId ?? transportApiAppId;
   return {
     kind: "workspace",
     teamId,
     ...(teamName ? { teamName } : {}),
-    ...(apiAppId ? { apiAppId } : {}),
+    ...(workspaceApiAppId ? { apiAppId: workspaceApiAppId } : {}),
     ...(enterpriseId ? { enterpriseId } : {}),
   };
 }

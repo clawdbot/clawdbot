@@ -39,6 +39,7 @@ import { isSlackChannelAllowedByPolicy } from "./policy.js";
 import { isGovSlackClient } from "./slack-client-kind.js";
 import {
   type SlackSuggestedPromptsInput,
+  type SlackSuggestedPromptsOutcome,
   updateSlackSuggestedPrompts,
 } from "./suggested-prompts.js";
 import { createSlackSystemEventRouteResolver } from "./system-event-session.js";
@@ -170,7 +171,9 @@ export type SlackMonitorContext = {
     context: Omit<SlackAssistantThreadContext, "updatedAt">,
     eventScope?: SlackEventScope,
   ) => void;
-  setSlackSuggestedPrompts: (params: SlackSuggestedPromptsInput) => Promise<boolean>;
+  setSlackSuggestedPrompts: (
+    params: SlackSuggestedPromptsInput,
+  ) => Promise<SlackSuggestedPromptsOutcome>;
   recordSlackAgentView: () => Promise<void>;
   isSlackAgentView: () => Promise<boolean>;
   recordSlackManagedViewThread: (channelId: string, threadTs: string) => Promise<void>;
