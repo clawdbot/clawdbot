@@ -136,7 +136,7 @@ function decideAndRecordMigration(params: {
   const runId = `${sourceKey}:${params.snapshot.sha256.slice(0, 16)}`;
   const now = Date.now();
   const legacy = params.emptyStub
-    ? ok(params.emptyStub.file)
+    ? ok<ExecApprovalsFile, string>(params.emptyStub.file)
     : params.snapshot.raw === null
       ? err<never, string>("invalid UTF-8 encoding")
       : parsePersistedExecApprovals(normalizeLegacyNullableUsageMetadata(params.snapshot.raw));
