@@ -3,7 +3,6 @@
  * approval tool and maps gateway decisions back to Codex outcomes.
  */
 import type { EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { formatMcpCodexApprovalRemedy } from "openclaw/plugin-sdk/codex-mcp-projection";
 import { isApprovalNotFoundError, toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { resolveCodexGatewayTimeoutWithGraceMs } from "./attempt-timeouts.js";
@@ -12,7 +11,9 @@ type AgentHarnessHostCapabilities = EmbeddedRunAttemptParams["hostCapabilities"]
 
 const DEFAULT_CODEX_APPROVAL_TIMEOUT_MS = 120_000;
 const MAX_PLUGIN_APPROVAL_TITLE_LENGTH = 80;
-const MAX_PLUGIN_APPROVAL_DESCRIPTION_LENGTH = 256;
+// Matches the gateway protocol's PLUGIN_APPROVAL_DESCRIPTION_MAX_LENGTH; the card
+// must fit the MCP server line, the operator remedy, and the tool parameters.
+const MAX_PLUGIN_APPROVAL_DESCRIPTION_LENGTH = 512;
 const ANSI_OSC_SEQUENCE_RE = new RegExp(
   String.raw`(?:\u001b]|\u009d)[^\u001b\u009c\u0007]*(?:\u0007|\u001b\\|\u009c)`,
   "g",
@@ -40,9 +41,8 @@ const CODEX_APPROVAL_TIMEOUT_SUBJECTS: Record<CodexApprovalKind, string> = {
   other: "Approval",
 };
 
-export function codexApprovalTimeoutText(kind: CodexApprovalKind, mcpServerName?: string): string {
-  const message = `${CODEX_APPROVAL_TIMEOUT_SUBJECTS[kind]} timed out before an operator responded.`;
-  return mcpServerName ? `${message} ${formatMcpCodexApprovalRemedy(mcpServerName)}` : message;
+export function codexApprovalTimeoutText(kind: CodexApprovalKind): string {
+  return `${CODEX_APPROVAL_TIMEOUT_SUBJECTS[kind]} timed out before an operator responded.`;
 }
 
 /** Normalized Codex app-server approval outcome after a gateway decision. */

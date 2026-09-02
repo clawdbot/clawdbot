@@ -17,7 +17,6 @@ import {
 } from "./elicitation-response.js";
 import {
   approvalRequestExplicitlyUnavailable,
-  codexApprovalTimeoutText,
   mapExecDecisionToOutcome,
   requestPluginApproval,
   sanitizeCodexApprovalVisibleText,
@@ -46,7 +45,6 @@ type BridgeableApprovalElicitation = {
   meta: JsonObject;
   persistHintsMode?: "legacy" | "explicit";
   allowedDecisions?: ExecApprovalDecision[];
-  serverName?: string;
 };
 
 type ElicitationApprovalOutcome = AppServerApprovalOutcome | "timed-out";
@@ -495,19 +493,22 @@ function readBridgeableApprovalElicitation(
   const title =
     sanitizeDisplayText(readNonBlankStringField(requestParams, "message") ?? "") ||
     "Codex MCP tool approval";
+  const serverName = readNonBlankStringField(requestParams, "serverName");
   return {
     title,
     description: buildApprovalDescription({
       title,
       meta: requestParams["_meta"],
       requestedSchema,
-      serverName: sanitizeOptionalDisplayText(readNonBlankStringField(requestParams, "serverName")),
+      serverName: sanitizeOptionalDisplayText(serverName),
+      // Only OpenClaw-configured servers have a `mcp configure` remedy; plugin
+      // and computer-use prompts are governed by their own policies.
+      remedy: serverName ? formatMcpCodexApprovalRemedy(serverName) : undefined,
     }),
     requestedSchema,
     meta: requestParams["_meta"],
     persistHintsMode: "explicit",
     allowedDecisions: buildApprovalAllowedDecisions(requestedSchema, requestParams["_meta"], true),
-    serverName: readNonBlankStringField(requestParams, "serverName"),
   };
 }
 
@@ -557,6 +558,7 @@ function buildApprovalDescription(params: {
   meta: JsonObject;
   requestedSchema: JsonObject;
   serverName: string | undefined;
+  remedy?: string;
 }): string {
   const connectorName = sanitizeOptionalDisplayText(
     readNonBlankStringField(params.meta, MCP_TOOL_APPROVAL_CONNECTOR_NAME_KEY),
@@ -571,6 +573,9 @@ function buildApprovalDescription(params: {
     connectorName && `App: ${connectorName}`,
     toolTitle && `Tool: ${toolTitle}`,
     params.serverName && `MCP server: ${params.serverName}`,
+    // Before the tool description: card text is truncated at 256 chars and the
+    // remedy is the line the operator must not lose.
+    params.remedy,
     toolDescription,
   ].filter((line): line is string => Boolean(line));
   const paramLines = readDisplayParamLines(params.meta);
@@ -753,7 +758,7 @@ async function requestPluginApprovalOutcome(params: {
 function buildElicitationResponse(
   approvalPrompt: Pick<
     BridgeableApprovalElicitation,
-    "requestedSchema" | "meta" | "persistHintsMode" | "serverName"
+    "requestedSchema" | "meta" | "persistHintsMode"
   >,
   outcome: ElicitationApprovalOutcome,
 ): CodexElicitationResponse {
@@ -761,21 +766,10 @@ function buildElicitationResponse(
   if (outcome === "cancelled") {
     return createCodexElicitationResponse("cancel");
   }
-  if (outcome === "timed-out") {
-    return createCodexElicitationResponse("decline", null, {
-      message: codexApprovalTimeoutText("other", approvalPrompt.serverName),
-    });
-  }
-  if (outcome === "denied" || outcome === "unavailable") {
-    return createCodexElicitationResponse(
-      "decline",
-      null,
-      approvalPrompt.serverName
-        ? {
-            message: `MCP tool approval ${outcome}. ${formatMcpCodexApprovalRemedy(approvalPrompt.serverName)}`,
-          }
-        : null,
-    );
+  // Codex reads no response meta on decline (0.151.0 maps every decline to
+  // "user rejected MCP tool call"), so remedy text belongs on the operator card.
+  if (outcome === "timed-out" || outcome === "denied" || outcome === "unavailable") {
+    return createCodexElicitationResponse("decline");
   }
 
   const content = buildAcceptedContent(approvalPrompt, outcome);

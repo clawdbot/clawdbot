@@ -406,14 +406,11 @@ describe("Codex app-server elicitation bridge", () => {
       ...codexTestTurnIds(),
     });
 
-    expect(result).toEqual({
-      action: "decline",
-      content: null,
-      _meta: {
-        message: expect.stringContaining(
-          "openclaw mcp configure codex_apps__github --approval approve",
-        ),
-      },
+    expect(result).toEqual({ action: "decline", content: null, _meta: null });
+    expect(gatewayToolArg(0, 2)).toMatchObject({
+      description: expect.stringContaining(
+        "openclaw mcp configure codex_apps__github --approval approve",
+      ),
     });
     expect(mockCallGatewayTool.mock.calls.map(([method]) => method)).toEqual([
       "plugin.approval.request",
@@ -421,7 +418,7 @@ describe("Codex app-server elicitation bridge", () => {
     ]);
   });
 
-  it("declines timed-out MCP approvals with explanatory metadata", async () => {
+  it("declines timed-out MCP approvals without response meta Codex would drop", async () => {
     mockCallGatewayTool
       .mockResolvedValueOnce({ id: "plugin:approval-timeout", status: "accepted" })
       .mockResolvedValueOnce({
@@ -436,15 +433,7 @@ describe("Codex app-server elicitation bridge", () => {
       ...codexTestTurnIds(),
     });
 
-    expect(result).toEqual({
-      action: "decline",
-      content: null,
-      _meta: {
-        message: expect.stringContaining(
-          "openclaw mcp configure codex_apps__github --approval approve",
-        ),
-      },
-    });
+    expect(result).toEqual({ action: "decline", content: null, _meta: null });
   });
 
   it("does not treat inherited request-time MCP decisions as final", async () => {
@@ -697,6 +686,7 @@ describe("Codex app-server elicitation bridge", () => {
     };
     expect(approvalRequest.title).toBe("Computer Use approval");
     expect(approvalRequest.description).toContain("MCP server: computer-use");
+    expect(approvalRequest.description).not.toContain("openclaw mcp configure");
     expect(approvalRequest.description).not.toContain("\u009b");
   });
 
@@ -1831,7 +1821,7 @@ describe("Codex app-server elicitation bridge", () => {
     expect(typeof approvalRequest.title).toBe("string");
     expect(typeof approvalRequest.description).toBe("string");
     expect(approvalRequest.title.length).toBeLessThanOrEqual(80);
-    expect(approvalRequest.description.length).toBeLessThanOrEqual(256);
+    expect(approvalRequest.description.length).toBeLessThanOrEqual(512);
   });
 
   it("fails closed when the approval route is unavailable", async () => {
@@ -1843,15 +1833,7 @@ describe("Codex app-server elicitation bridge", () => {
       ...codexTestTurnIds(),
     });
 
-    expect(result).toEqual({
-      action: "decline",
-      content: null,
-      _meta: {
-        message: expect.stringContaining(
-          "openclaw mcp configure codex_apps__github --approval approve",
-        ),
-      },
-    });
+    expect(result).toEqual({ action: "decline", content: null, _meta: null });
   });
 
   it("ignores non-approval elicitation requests", async () => {
