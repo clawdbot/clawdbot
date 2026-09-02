@@ -863,6 +863,43 @@ describe("legacy state migration caller mode", () => {
     expect(fs.readFileSync(path.join(paths.target, "AGENTS.md"), "utf8")).toBe("profile workspace");
   });
 
+  it("continues required Doctor repairs after a conditional profile refusal", async () => {
+    const fixture = await makeFixture();
+    fixture.env.OPENCLAW_PROFILE = "work";
+    const paths = resolveLegacyProfileWorkspaceMigrationPaths({
+      env: fixture.env,
+      homedir: () => fixture.homeDir,
+    });
+    if (!paths) {
+      throw new Error("named profile did not resolve migration paths");
+    }
+    fs.mkdirSync(paths.source, { recursive: true });
+    fs.mkdirSync(paths.target, { recursive: true });
+    const { execPath } = writeLegacyDoctorSources(fixture.stateDir, {});
+
+    const result = await autoMigrateLegacyState({
+      cfg: {},
+      doctorOnlyStateMigrations: true,
+      env: fixture.env,
+      homedir: () => fixture.homeDir,
+      legacySessionSurfaces: EMPTY_LEGACY_SESSION_SURFACES,
+    });
+
+    expect(result.stepReceipts.find((receipt) => receipt.id === "profile-workspace")).toMatchObject(
+      {
+        requiredness: "conditional",
+        outcome: "refused",
+      },
+    );
+    expect(result.stepReceipts.find((receipt) => receipt.id === "exec-approvals")).toMatchObject({
+      requiredness: "required",
+      outcome: "completed",
+    });
+    expect(fs.existsSync(execPath)).toBe(false);
+    expect(fs.existsSync(paths.source)).toBe(true);
+    expect(fs.existsSync(paths.target)).toBe(true);
+  });
+
   it("halts direct Doctor execution after an unanticipated state-schema refusal", async () => {
     const fixture = await makeFixture();
     const voiceWakePath = path.join(fixture.stateDir, "settings", "voicewake.json");

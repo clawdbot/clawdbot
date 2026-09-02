@@ -932,7 +932,7 @@ function createAgentTargetDiscoveryStep(params: {
       { kind: "path", path: path.join(params.stateDir, "agents") },
     ],
     target: [],
-    requiredness: "conditional",
+    requiredness: "required",
     reversibility: "not-applicable",
     ...(params.refusal ? { refusal: params.refusal } : {}),
     run: params.run,
@@ -971,7 +971,7 @@ function createMigrationDetectionStep(params: {
       { kind: "path", path: params.stateDir },
     ],
     target: [],
-    requiredness: "conditional",
+    requiredness: "required",
     reversibility: "not-applicable",
     ...(params.refusal ? { refusal: params.refusal } : {}),
     run: params.run,
@@ -997,7 +997,7 @@ function createPluginMigrationPreparationStep(params: {
       ),
     ],
     target: [],
-    requiredness: "conditional",
+    requiredness: "required",
     reversibility: "not-applicable",
     ...(params.refusal ? { refusal: params.refusal } : {}),
     run: params.run,
@@ -2010,7 +2010,7 @@ async function runLegacyStateMigrationSteps(
     if (step.collectNotices) {
       (step.phase === "shared" ? sharedNoticeSources : finalNoticeSources).push(result);
     }
-    if (receipt.outcome === "refused") {
+    if (receipt.outcome === "refused" && step.requiredness === "required") {
       halted = true;
       break;
     }
