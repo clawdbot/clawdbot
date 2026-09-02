@@ -423,6 +423,7 @@ export function createSlackCommandHandler(params: {
     threadTs?: string;
     eventTs?: string;
     builtInCommand?: "stop";
+    onAdmitted?: () => void;
     ack: SlackCommandMiddlewareArgs["ack"];
     respond: SlackCommandMiddlewareArgs["respond"];
     responseTransport?: "response-url" | "web-api";
@@ -856,6 +857,9 @@ export function createSlackCommandHandler(params: {
               NON_PLUGIN_COMMAND_DISPATCH,
           }
         : undefined;
+      if (commandAuthorized) {
+        p.onAdmitted?.();
+      }
       await dispatchChannelInboundTurn({
         cfg,
         channel: "slack",

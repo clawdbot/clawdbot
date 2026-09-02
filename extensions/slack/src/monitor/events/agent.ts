@@ -59,8 +59,6 @@ export function registerSlackAgentEvents(params: {
       return;
     }
     const slackClient = eventScope?.client ?? ctx.app.client;
-    // Slack has already halted these streams. Record that before abort cleanup runs.
-    markSlackStreamsStopped(slackClient, event.channel, event.streaming_message_ts);
     const command = {
       user_id: event.user,
       user_name: event.user,
@@ -82,6 +80,11 @@ export function registerSlackAgentEvents(params: {
       eventScope,
       prompt: "/stop",
       builtInCommand: "stop",
+      onAdmitted: () => {
+        // Mark before abort cleanup, but only after authorization: denied Stops must
+        // leave fallback delivery available for streams Slack already halted.
+        markSlackStreamsStopped(slackClient, event.channel, event.streaming_message_ts);
+      },
       threadTs: event.thread_ts,
       eventTs: event.event_ts,
     });

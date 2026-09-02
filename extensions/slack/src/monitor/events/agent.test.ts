@@ -1,17 +1,18 @@
 import { expectDefined } from "@openclaw/normalization-core";
+import { WebClient } from "@slack/web-api";
 import type { PluginRuntime } from "openclaw/plugin-sdk/channel-core";
 import { PLUGIN_COMMAND_DISPATCH } from "openclaw/plugin-sdk/plugin-command-runtime";
 import { clearRuntimeConfigSnapshot } from "openclaw/plugin-sdk/runtime-config-snapshot";
 // Slack tests cover Agent View lifecycle handling.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { appendSlackStream, markSlackStreamsStopped, startSlackStream } from "../../streaming.js";
 import { deliverSlackSlashReplies } from "../replies.js";
 import { getSlackSlashMocks, resetSlackSlashMocks } from "../slash.test-harness.js";
 import { registerSlackAgentEvents } from "./agent.js";
 import { createSlackSystemEventTestHarness } from "./system-event-test-harness.js";
 
-const { patchSessionEntry, markSlackStreamsStopped } = vi.hoisted(() => ({
+const { patchSessionEntry } = vi.hoisted(() => ({
   patchSessionEntry: vi.fn<PluginRuntime["agent"]["session"]["patchSessionEntry"]>(),
-  markSlackStreamsStopped: vi.fn(),
 }));
 
 vi.mock("../../runtime.js", async (importOriginal) => ({
@@ -19,17 +20,21 @@ vi.mock("../../runtime.js", async (importOriginal) => ({
   getSlackRuntime: () => ({ agent: { session: { patchSessionEntry } } }),
 }));
 
-vi.mock("../../streaming.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../streaming.js")>()),
-  markSlackStreamsStopped,
-}));
+vi.mock("../../streaming.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../streaming.js")>();
+  return { ...actual, markSlackStreamsStopped: vi.fn(actual.markSlackStreamsStopped) };
+});
 
 const slashMocks = getSlackSlashMocks();
 
 function createSessionEventHarness(channelType: "im" | "channel" = "im") {
   const harness = createSlackSystemEventTestHarness({ channelType, allowFrom: ["*"] });
-  const postMessage = vi.fn(async () => ({ ok: true, ts: "1712345679.000001" }));
-  const postEphemeral = vi.fn(async () => ({ ok: true }));
+  const client = new WebClient("xoxb-synthetic");
+  const postMessage = vi.spyOn(client.chat, "postMessage").mockResolvedValue({
+    ok: true,
+    ts: "1712345679.000001",
+  });
+  const postEphemeral = vi.spyOn(client.chat, "postEphemeral").mockResolvedValue({ ok: true });
   const setSlackSessionStatus = vi.fn(async () => {});
   const recordSlackSessionTitle = vi.fn();
   Object.assign(harness.ctx, {
@@ -43,7 +48,7 @@ function createSessionEventHarness(channelType: "im" | "channel" = "im") {
     setSlackSessionStatus,
     recordSlackSessionTitle,
   });
-  Object.assign(harness.ctx.app, { client: { chat: { postMessage, postEphemeral } } });
+  Object.assign(harness.ctx.app, { client });
   registerSlackAgentEvents({ ctx: harness.ctx });
   return { ...harness, postMessage, postEphemeral, setSlackSessionStatus, recordSlackSessionTitle };
 }
@@ -152,14 +157,18 @@ describe("registerSlackAgentEvents", () => {
           }),
         }),
       );
-      expect(markSlackStreamsStopped).toHaveBeenCalledWith(harness.ctx.app.client, channel, [
-        "1712345678.000002",
-      ]);
+      expect(markSlackStreamsStopped).toHaveBeenCalledExactlyOnceWith(
+        harness.ctx.app.client,
+        channel,
+        ["1712345678.000002"],
+      );
       const dispatchOrder = expectDefined(
         slashMocks.dispatchMock.mock.invocationCallOrder[0],
         "stop command dispatch",
       );
-      expect(markSlackStreamsStopped.mock.invocationCallOrder[0]).toBeLessThan(dispatchOrder);
+      expect(vi.mocked(markSlackStreamsStopped).mock.invocationCallOrder[0]).toBeLessThan(
+        dispatchOrder,
+      );
       expect(harness.postMessage).toHaveBeenCalledWith(
         expect.objectContaining({ channel, thread_ts: "1712345678.000001", text: "Stopped." }),
       );
@@ -178,32 +187,55 @@ describe("registerSlackAgentEvents", () => {
     },
   );
 
-  it("applies native slash authorization to the stopping user", async () => {
-    const harness = createSessionEventHarness();
-    harness.ctx.dmPolicy = "allowlist";
-    harness.ctx.allowFrom = ["U_OWNER"];
+  it.each(["im", "channel"] as const)(
+    "keeps streams deliverable after a denied %s Stop",
+    async (channelType) => {
+      const harness = createSessionEventHarness(channelType);
+      const channel = channelType === "im" ? "D123" : "C123";
+      harness.ctx.dmPolicy = "allowlist";
+      harness.ctx.allowFrom = ["U_OWNER"];
+      harness.ctx.useAccessGroups = true;
+      const client = harness.ctx.app.client;
+      vi.spyOn(client.chat, "startStream").mockResolvedValue({ ok: true, ts: "1712345678.000002" });
+      const appendError = new Error("Slack rejected the append");
+      vi.spyOn(client.chat, "appendStream").mockRejectedValue(appendError);
+      const session = await startSlackStream({
+        client,
+        channel,
+        threadTs: "1712345678.000001",
+        text: "Visible reply",
+        chunks: [],
+      });
 
-    await harness.getHandler("agent_session_stopped")?.({
-      event: {
-        type: "agent_session_stopped",
-        channel: "D123",
-        thread_ts: "1712345678.000001",
-        user: "U_OTHER",
-        event_ts: "1712345679.000001",
-        streaming_message_ts: [],
-      },
-      body: {},
-    });
+      await harness.getHandler("agent_session_stopped")?.({
+        event: {
+          type: "agent_session_stopped",
+          channel,
+          thread_ts: "1712345678.000001",
+          user: "U_OTHER",
+          event_ts: "1712345679.000001",
+          streaming_message_ts: ["1712345678.000002"],
+        },
+        body: {},
+      });
 
-    expect(slashMocks.dispatchMock).not.toHaveBeenCalled();
-    expect(harness.postEphemeral).toHaveBeenCalledWith(
-      expect.objectContaining({
-        user: "U_OTHER",
-        text: "You are not authorized to use this command.",
-        thread_ts: "1712345678.000001",
-      }),
-    );
-  });
+      expect(slashMocks.dispatchMock).not.toHaveBeenCalled();
+      expect(harness.postEphemeral).toHaveBeenCalledWith(
+        expect.objectContaining({
+          user: "U_OTHER",
+          text: "You are not authorized to use this command.",
+          thread_ts: "1712345678.000001",
+        }),
+      );
+      expect(session.stopped).toBe(false);
+      expect(markSlackStreamsStopped).not.toHaveBeenCalled();
+      // A server-side halt must surface to normal fallback delivery, not discard the tail.
+      await expect(
+        appendSlackStream({ session, text: "Remaining reply", chunks: [] }),
+      ).rejects.toBe(appendError);
+      expect(session.pendingText).toBe("Remaining reply");
+    },
+  );
 
   it("patches the thread display name without changing its operator label and records the title", async () => {
     const harness = createSessionEventHarness();
