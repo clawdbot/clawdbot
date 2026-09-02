@@ -298,43 +298,36 @@ export async function getMessageFeishu(params: {
   }
 
   const client = createFeishuClient(account);
+  const response = (await client.im.message.get({
+    params: { card_msg_content_type: "user_card_content" },
+    path: { message_id: messageId },
+  })) as FeishuGetMessageResponse;
 
-  try {
-    const response = (await client.im.message.get({
-      params: { card_msg_content_type: "user_card_content" },
-      path: { message_id: messageId },
-    })) as FeishuGetMessageResponse;
+  assertFeishuApiSuccess(response, "Feishu message fetch failed");
 
-    if (response.code !== 0) {
-      return null;
-    }
-
-    // Support both list shape (including flattened merged forwards) and single-object shape.
-    const responseItems = response.data?.items;
-    const rawItem =
-      responseItems?.find((item) => item.msg_type === "merge_forward" && !item.upper_message_id) ??
-      responseItems?.[0] ??
-      response.data;
-    const item =
-      rawItem &&
-      (rawItem.body !== undefined || (rawItem as { message_id?: string }).message_id !== undefined)
-        ? rawItem
-        : null;
-    if (!item) {
-      return null;
-    }
-
-    const parsedItem = parseFeishuMessageItem(item, messageId);
-    if (parsedItem.contentType === "merge_forward" && responseItems) {
-      return {
-        ...parsedItem,
-        content: parseMergeForwardContent({ content: JSON.stringify(responseItems) }),
-      };
-    }
-    return parsedItem;
-  } catch {
+  // Support both list shape (including flattened merged forwards) and single-object shape.
+  const responseItems = response.data?.items;
+  const rawItem =
+    responseItems?.find((item) => item.msg_type === "merge_forward" && !item.upper_message_id) ??
+    responseItems?.[0] ??
+    response.data;
+  const item =
+    rawItem &&
+    (rawItem.body !== undefined || (rawItem as { message_id?: string }).message_id !== undefined)
+      ? rawItem
+      : null;
+  if (!item) {
     return null;
   }
+
+  const parsedItem = parseFeishuMessageItem(item, messageId);
+  if (parsedItem.contentType === "merge_forward" && responseItems) {
+    return {
+      ...parsedItem,
+      content: parseMergeForwardContent({ content: JSON.stringify(responseItems) }),
+    };
+  }
+  return parsedItem;
 }
 
 type FeishuThreadMessageInfo = {

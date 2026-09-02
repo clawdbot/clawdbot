@@ -568,6 +568,20 @@ describe("getMessageFeishu", () => {
     });
   });
 
+  it("surfaces Feishu message API failures to callers", async () => {
+    mockClientGet.mockResolvedValueOnce({
+      code: 230001,
+      msg: "message not found",
+    });
+
+    await expect(
+      getMessageFeishu({
+        cfg: {} as ClawdbotConfig,
+        messageId: "om_missing",
+      }),
+    ).rejects.toThrow("Feishu message fetch failed: message not found");
+  });
+
   it("reuses the same content parsing for thread history messages", async () => {
     mockClientList.mockResolvedValueOnce({
       code: 0,

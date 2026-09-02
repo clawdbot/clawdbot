@@ -273,7 +273,7 @@ describe("Feishu message content over the real Lark SDK", () => {
 
       await expect(
         getMessageFeishu({ cfg, messageId: "om_loopback_vendor_error" }),
-      ).resolves.toBeNull();
+      ).rejects.toThrow("Feishu message fetch failed: message not found");
 
       const loggedValues = mockLogVerbose.mock.calls.flat().map(String).join("\n");
       for (const { content } of sensitiveContentByMessageId.values()) {
