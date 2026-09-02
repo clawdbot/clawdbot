@@ -101,26 +101,38 @@ describe("restoreLoginShellServicePath", () => {
   });
 
   it.skipIf(process.platform === "win32")(
-    "keeps the service PATH ahead of a profile that resets it in a real login shell",
+    "keeps the service PATH ahead of the login shell's own startup files",
     () => {
-      // The bug is a shell-startup interaction, so drive a real login shell
-      // against a profile that overwrites PATH the way Debian /etc/profile does.
+      // The bug is a shell-startup interaction, so drive a real login shell and
+      // compare its child PATH with and without the rewrite. Which startup files
+      // a given /bin/sh sources varies by host, so assert the two invariants the
+      // fix owns rather than a specific profile's behavior: the service PATH
+      // leads, and nothing the startup files contributed is dropped.
       const home = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-profile-")));
       const serviceBin = path.join(home, "service-bin");
       fs.mkdirSync(serviceBin);
-      fs.writeFileSync(path.join(home, ".profile"), 'PATH="/usr/local/bin:/usr/bin:/bin"\n');
       const probe = path.join(serviceBin, "openclaw-path-probe");
       fs.writeFileSync(probe, "#!/bin/sh\nprintf ok\n", { mode: 0o755 });
       try {
-        const command = buildNodeShellCommand("command -v openclaw-path-probe", "linux");
-        const baseEnv = { HOME: home, PATH: `${serviceBin}:/usr/bin:/bin` };
-        const run = (argv: string[], env: Record<string, string>) =>
-          execFileSync(argv[0] ?? "", argv.slice(1), { env, encoding: "utf8" }).trim();
+        const servicePath = `${serviceBin}:/usr/bin:/bin`;
+        const baseEnv = { HOME: home, PATH: servicePath };
+        const run = (command: string, env: Record<string, string>, rewrite: boolean) => {
+          const built = buildNodeShellCommand(command, "linux");
+          const { argv, env: spawnEnv } = rewrite
+            ? restoreLoginShellServicePath(built, env)
+            : { argv: built, env };
+          return execFileSync(argv[0] ?? "", argv.slice(1), {
+            env: spawnEnv,
+            encoding: "utf8",
+          }).trim();
+        };
 
-        expect(() => run(command, baseEnv)).toThrow();
-
-        const restored = restoreLoginShellServicePath(command, baseEnv);
-        expect(run(restored.argv, restored.env ?? {})).toBe(probe);
+        const startupPath = run('printf %s "$PATH"', baseEnv, false);
+        const restoredPath = run('printf %s "$PATH"', baseEnv, true);
+        // Mirrors the `${PATH:+:$PATH}` guard: an empty startup PATH must not
+        // leave a trailing `:`, which a shell reads as the current directory.
+        expect(restoredPath).toBe(startupPath ? `${servicePath}:${startupPath}` : servicePath);
+        expect(run("command -v openclaw-path-probe", baseEnv, true)).toBe(probe);
       } finally {
         fs.rmSync(home, { recursive: true, force: true });
       }
