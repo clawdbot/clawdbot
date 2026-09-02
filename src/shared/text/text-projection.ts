@@ -42,7 +42,8 @@ function createActivatedProjector(
   };
 }
 
-export function applyTextFilters(text: string, filters: readonly TextFilter[]): string {
+export function applyTextFilters(input: string, filters: readonly TextFilter[]): string {
+  let text = input;
   for (const filter of filters) {
     text = filter.transform(text);
   }
@@ -55,7 +56,8 @@ export function createTextProjection(filters: readonly TextFilter[]) {
   }));
   let source = "";
   let text = "";
-  const project = (input: TextProjection) => {
+  const project = (value: TextProjection) => {
+    let input = value;
     for (const stage of stages) {
       // Replacements can expose earlier syntax, so every downstream probe starts fresh.
       if (!stage.projector || input.delta === null) {
